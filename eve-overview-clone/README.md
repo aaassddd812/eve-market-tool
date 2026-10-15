@@ -21,6 +21,9 @@ eve-overview-clone/
 ├── index-v2.html        # v2 页面结构（导航/侧栏/工具栏/详情/市场数据表）
 ├── css/modern-style.css # 全部样式
 ├── js/modern-app.js     # 数据 + 交互逻辑
+├── js/star-map.js       # 星图（进入星图页时按需加载）
+├── map-data.json        # 星图静态数据（build_map.mjs 生成）
+├── npc-names-zh.json    # 官方中文名称表（build_npc_names.mjs 生成）
 ├── catalog.json         # 物品目录（含官方中文名称）
 └── type-names-zh.json   # 物品中文名数据
 ```
@@ -59,6 +62,7 @@ eve-overview-clone/
 | `F` | 收藏 / 取消收藏 |
 | `1` `2` `3` | 切换订单簿 / 价格走势 / 历史数据 |
 | `Esc` | 关闭弹窗 / 抽屉，清空搜索 |
+| `?` | 快捷键帮助（各页面通用，顶栏键盘图标也可打开） |
 
 ## 个人中心（v3.1）
 
@@ -74,6 +78,28 @@ eve-overview-clone/
 ```bash
 # 下载并解压 https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip
 node build_npc_names.mjs <解压目录> --verify
+```
+
+## 星图（v7 · 旧版 3D 星图）
+
+- **布局**：使用 CCP SDE 的三维坐标 `position`，以 three.js（WebGL）渲染，还原旧版游戏 3D 星图；收录 5485 个有星门连接的星系（常规空间与波赫文）与 6989 条星门连接，虫洞空间不收录
+- **图层（12 个，分三组）**：
+  - 基础：安全等级、星域、跳数距离（以选中星系为起点，默认吉他）、NPC 空间站数量
+  - 势力：势力划分（ESI 主权）、军事指数（主权枢纽 ADM 1–6）、主权争夺（进行中的争夺战）、势力战争
+  - 活动（过去 1 小时）：玩家击杀、NPC 击杀、跳跃、入侵
+  - 图例可点击高亮对应星系
+- **星系详情**：安全等级、星域与星座、主权归属（游戏标志）、1 小时击杀与跳跃、恒星图标与行星数、NPC 空间站（官方中文名）、入侵与势力战争状态、相邻星系
+- **星域详情**：安全等级分布、主要势力、游戏内官方中文简介，可一键高亮整个星域
+- **我的位置**：绑定 ESI 后可定位到角色当前所在星系，并在其他星系详情中显示与自己的跳数
+- **分享链接**：选中星系后地址栏为 `#map=星系ID`，打开链接直接定位；星系详情可跳转 zKillboard
+- **路线规划**：ESI 路线接口，支持最短 / 安全优先 / 低安优先，路线绘制在星图上并逐跳列出，可复制整条路线
+- **操作**：左键拖动旋转、右键拖动平移、滚轮缩放（以光标为中心）、双击聚焦星系；手机单指旋转、双指缩放平移；`+` / `-` 缩放、`0` 全图、`T` 俯视；星图区域固定深色，与游戏一致
+- **依赖**：three.js 0.160.0 通过 import map 从 jsDelivr 加载，仅在进入星图页时请求
+
+星图静态数据由 `build_map.mjs` 从 SDE 生成：
+
+```bash
+node build_map.mjs <SDE 解压目录>   # 输出 eve-overview-clone/map-data.json
 ```
 
 ## 数据说明

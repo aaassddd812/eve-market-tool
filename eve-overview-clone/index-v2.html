@@ -14,7 +14,16 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v5r3">
+  <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+  <link rel="stylesheet" href="css/modern-style.css?v=v8r1">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -34,6 +43,10 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
           <span>市场中心</span>
         </button>
+        <button class="nav-btn" data-view="map" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2.5"/><circle cx="5" cy="6" r="1.8"/><circle cx="19" cy="7" r="1.8"/><circle cx="6" cy="18" r="1.8"/><circle cx="18" cy="18" r="1.8"/><path d="M6.5 7.2 10 10.5M17.4 8.2 14 10.6M7.4 16.8 10.2 13.6M16.6 16.8 13.8 13.6"/></svg>
+          <span>星图</span>
+        </button>
         <button class="nav-btn" data-view="profile" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
           <span>个人中心</span>
@@ -45,6 +58,9 @@
           <span class="status-dot"></span>
           <span class="status-text" id="serverStatusText">宁静 · 检测中</span>
         </div>
+        <button class="icon-btn" id="shortcutHelpBtn" title="快捷键 (?)" aria-label="快捷键">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
+        </button>
         <button class="icon-btn" id="themeToggle" title="切换主题" aria-label="切换主题">
           <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
           <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
@@ -282,6 +298,82 @@
         </main>
       </div>
 
+      <!-- 星图视图 -->
+      <div class="view-container" id="mapView" hidden>
+        <aside class="sidebar map-sidebar" id="mapSidebar" aria-label="星图控制">
+          <div class="sidebar-header">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <input type="search" id="mapSearch" placeholder="搜索星系 / 星域" autocomplete="off" spellcheck="false" aria-label="搜索星系或星域">
+            </div>
+            <button class="collapse-btn" id="mapSidebarCollapse" title="收起侧边栏 ([)" aria-label="收起侧边栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+          </div>
+          <div class="sidebar-content map-sidebar-content">
+            <div class="map-search-results" id="mapSearchResults" hidden></div>
+            <section class="map-panel">
+              <div class="map-panel-head">
+                <h4>图层</h4>
+                <button class="icon-btn small" id="mapRefresh" title="刷新实时数据" aria-label="刷新实时数据">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                </button>
+              </div>
+              <div class="layer-list" id="layerList"></div>
+            </section>
+            <section class="map-panel">
+              <h4>图例</h4>
+              <div class="map-legend" id="mapLegend"><p class="legend-empty">载入中…</p></div>
+            </section>
+            <section class="map-panel">
+              <h4>路线规划</h4>
+              <div class="route-form">
+                <div class="route-field">
+                  <input type="text" id="routeFrom" placeholder="起点星系" autocomplete="off" aria-label="起点星系">
+                  <div class="route-suggest" id="routeFromList" hidden></div>
+                </div>
+                <button class="icon-btn small route-swap" id="routeSwap" title="交换起点和终点" aria-label="交换起点和终点">⇅</button>
+                <div class="route-field">
+                  <input type="text" id="routeTo" placeholder="终点星系" autocomplete="off" aria-label="终点星系">
+                  <div class="route-suggest" id="routeToList" hidden></div>
+                </div>
+                <div class="route-actions">
+                  <select id="routeFlag" class="plain-select" aria-label="路线偏好"></select>
+                  <button class="btn btn-primary" id="routePlan">规划</button>
+                  <button class="btn btn-ghost" id="routeClear">清除</button>
+                </div>
+              </div>
+              <div id="routeResult"></div>
+            </section>
+            <p class="map-updated" id="mapUpdated"></p>
+          </div>
+        </aside>
+        <div class="map-stage" id="mapStage">
+          <button class="sidebar-reopen" id="mapSidebarReopen" title="展开侧边栏 ([)" aria-label="展开侧边栏" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <canvas id="mapCanvas"></canvas>
+          <canvas id="mapLabels" aria-hidden="true"></canvas>
+          <div class="map-loading" id="mapLoading"><span class="spinner"></span>载入星图…</div>
+          <div class="map-tooltip" id="mapTooltip" hidden></div>
+          <div class="map-zoom" role="group" aria-label="缩放">
+            <button id="mapZoomIn" title="放大 (+)" aria-label="放大">+</button>
+            <button id="mapZoomOut" title="缩小 (-)" aria-label="缩小">−</button>
+            <button id="mapMyLocation" title="定位到我的角色位置" aria-label="我的位置" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7"/></svg>
+            </button>
+            <button id="mapTopView" title="俯视 (T)" aria-label="俯视">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+            <button id="mapZoomReset" title="显示全部 (0)" aria-label="显示全部">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+            </button>
+          </div>
+          <p class="map-hint">左键拖动旋转 · 右键拖动平移 · 滚轮缩放 · 点击星系查看详情 · 双击聚焦</p>
+          <aside class="map-info" id="mapInfo" hidden></aside>
+        </div>
+      </div>
+
       <!-- 个人中心视图 -->
       <div class="view-container" id="profileView" hidden>
         <aside class="sidebar profile-sidebar" id="profileSidebar" aria-label="个人中心导航">
@@ -363,6 +455,52 @@
     <!-- Toast 通知 -->
     <div class="toast-stack" id="toastStack" aria-live="polite"></div>
 
+    <!-- 快捷键帮助 -->
+    <div class="modal" id="shortcutModal" hidden role="dialog" aria-modal="true" aria-labelledby="shortcutTitle">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content shortcut-content">
+        <div class="modal-header">
+          <h3 id="shortcutTitle">快捷键</h3>
+          <button class="modal-close" data-close-shortcuts aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="modal-body shortcut-body">
+          <section>
+            <h4>通用</h4>
+            <dl>
+              <dt><kbd>?</kbd></dt><dd>显示 / 关闭快捷键帮助</dd>
+              <dt><kbd>[</kbd></dt><dd>收起 / 展开侧边栏</dd>
+              <dt><kbd>Esc</kbd></dt><dd>关闭弹窗、抽屉或详情面板</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>市场中心</h4>
+            <dl>
+              <dt><kbd>/</kbd></dt><dd>搜索物品</dd>
+              <dt><kbd>↑</kbd> <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd></dt><dd>在物品目录中移动 / 展开 / 收起</dd>
+              <dt><kbd>R</kbd></dt><dd>刷新当前物品行情</dd>
+              <dt><kbd>F</kbd></dt><dd>收藏 / 取消收藏</dd>
+              <dt><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd></dt><dd>订单簿 / 价格走势 / 历史数据</dd>
+            </dl>
+          </section>
+          <section>
+            <h4>星图</h4>
+            <dl>
+              <dt><kbd>/</kbd></dt><dd>搜索星系或星域</dd>
+              <dt>左键拖动</dt><dd>旋转视角</dd>
+              <dt>右键拖动</dt><dd>平移</dd>
+              <dt>滚轮</dt><dd>以光标为中心缩放</dd>
+              <dt>双击</dt><dd>聚焦星系</dd>
+              <dt><kbd>+</kbd> <kbd>-</kbd></dt><dd>放大 / 缩小</dd>
+              <dt><kbd>0</kbd></dt><dd>显示全图</dd>
+              <dt><kbd>T</kbd></dt><dd>俯视</dd>
+            </dl>
+          </section>
+        </div>
+      </div>
+    </div>
+
     <!-- ESI 绑定模态框 -->
     <div class="modal" id="esiModal" hidden role="dialog" aria-modal="true" aria-labelledby="esiModalTitle">
       <div class="modal-backdrop"></div>
@@ -403,6 +541,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v5r3" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v8r1" type="module" data-cfasync="false"></script>
 </body>
 </html>

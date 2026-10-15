@@ -208,7 +208,7 @@ async function loadServerStatus() {
     const data = await fetchESI('/status/');
     el.classList.remove('offline');
     $('serverStatusText').textContent = '宁静 · ' + formatNumber(data.players) + ' 在线';
-    el.title = '宁静服务器在线，开服时间 ' + new Date(data.start_time).toLocaleString('zh-CN', { hour12: false });
+    el.title = '宁静服务器在线 · ' + formatNumber(data.players) + ' 人 · 开服时间 ' + new Date(data.start_time).toLocaleString('zh-CN', { hour12: false });
   } catch {
     el.classList.add('offline');
     $('serverStatusText').textContent = '宁静 · 无法连接';
@@ -245,9 +245,40 @@ function switchView(view) {
   });
   $('marketView').hidden = view !== 'market';
   $('profileView').hidden = view !== 'profile';
-  $('menuToggle').title = view === 'market' ? '物品目录' : '个人中心导航';
+  $('mapView').hidden = view !== 'map';
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制' }[view];
   closeDrawer();
   if (view === 'profile') loadProfile();
+  if (view === 'map') openStarMap();
+  else {
+    starMapModule?.hideStarMap();
+    if (location.hash.startsWith('#map')) history.replaceState(null, '', location.pathname);
+  }
+}
+
+// 星图模块较大，首次进入星图时才加载
+let starMapModule = null;
+async function openStarMap() {
+  try {
+    if (!starMapModule) {
+      starMapModule = await import('./star-map.js?v=v8r1');
+      starMapModule.initStarMap({
+        fetchESI, esc, formatNumber, loadNpcNames, officialName, resolveNames,
+        showToast, copyText, store, debounce, isTypingTarget,
+        hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+        // 角色当前所在星系（需要 esi-location.read_location.v1）
+        getMyLocation: async () => {
+          const token = await ensureEsiToken();
+          const loc = await esiAuthFetch('/characters/' + token.character_id + '/location/');
+          return loc.solar_system_id;
+        }
+      });
+    }
+    await starMapModule.showStarMap();
+  } catch (error) {
+    console.error('星图加载失败:', error);
+    showToast('星图加载失败：' + error.message, 'error', 4000);
+  }
 }
 
 // ===== 侧边栏（桌面：可收起；移动端：抽屉）=====
@@ -260,7 +291,8 @@ function setSidebarCollapsed(sidebarId, reopenId, collapsed, storageKey) {
 // 两个视图的侧栏行为一致：桌面端收起/展开（记住状态），移动端为抽屉
 const SIDEBARS = {
   market: { id: 'sidebar', reopen: 'sidebarReopen', key: 'eve-sidebar-collapsed' },
-  profile: { id: 'profileSidebar', reopen: 'profileSidebarReopen', key: 'eve-profile-sidebar-collapsed' }
+  profile: { id: 'profileSidebar', reopen: 'profileSidebarReopen', key: 'eve-profile-sidebar-collapsed' },
+  map: { id: 'mapSidebar', reopen: 'mapSidebarReopen', key: 'eve-map-sidebar-collapsed' }
 };
 
 function currentSidebar() {
@@ -296,6 +328,9 @@ const toggleMarketSidebar = () => toggleSidebar('market');
 function initSidebar() {
   if (store.get('eve-sidebar-collapsed') === '1') setSidebarCollapsed('sidebar', 'sidebarReopen', true);
   if (store.get('eve-profile-sidebar-collapsed') === '1') setSidebarCollapsed('profileSidebar', 'profileSidebarReopen', true);
+  if (store.get('eve-map-sidebar-collapsed') === '1') setSidebarCollapsed('mapSidebar', 'mapSidebarReopen', true);
+  $('mapSidebarCollapse').addEventListener('click', () => toggleSidebar('map'));
+  $('mapSidebarReopen').addEventListener('click', () => toggleSidebar('map'));
 
   $('sidebarCollapse').addEventListener('click', toggleMarketSidebar);
   $('sidebarReopen').addEventListener('click', toggleMarketSidebar);
@@ -1170,15 +1205,32 @@ function initHashRouting() {
   });
 }
 
+// ===== 快捷键帮助 =====
+function toggleShortcutHelp(show = $('shortcutModal').hidden) {
+  $('shortcutModal').hidden = !show;
+}
+
 // ===== 全局快捷键 =====
 function initShortcuts() {
+  $('shortcutHelpBtn').addEventListener('click', () => toggleShortcutHelp(true));
+  $('shortcutModal').addEventListener('click', (e) => {
+    if (e.target.closest('.modal-backdrop, [data-close-shortcuts]')) toggleShortcutHelp(false);
+  });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      if (!$('shortcutModal').hidden) { toggleShortcutHelp(false); return; }
       if (!$('esiModal').hidden) { closeEsiModal(); return; }
       if (isDrawerOpen()) { closeDrawer(); return; }
     }
     if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target) || !$('esiModal').hidden) return;
+    if (event.key === '?') { toggleShortcutHelp(); event.preventDefault(); return; }
     if (event.key === '[') { toggleSidebar(); event.preventDefault(); return; }
+    if (event.key === '/' && state.currentView === 'map') {
+      if (MOBILE_QUERY.matches) openDrawer();
+      $('mapSearch').focus();
+      event.preventDefault();
+      return;
+    }
     if (state.currentView !== 'market') return;
     switch (event.key) {
       case '/':
@@ -2504,6 +2556,7 @@ function init() {
   initHashRouting();
   initShortcuts();
   handleEsiCallbackRedirect();
+  if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);
