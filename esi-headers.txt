@@ -1,0 +1,19 @@
+HTTP/1.1 200 OK
+Date: Mon, 12 Oct 2026 15:25:19 GMT
+Content-Type: application/openapi+json
+Transfer-Encoding: chunked
+Connection: keep-alive
+Access-Control-Allow-Origin: *
+Access-Control-Expose-Headers: Etag, Retry-After, X-Compatibility-Date, X-Esi-Error-Limit-Remain, X-Esi-Error-Limit-Reset, X-Pages, X-Ratelimit-Group, X-Ratelimit-Limit, X-Ratelimit-Remaining, X-Ratelimit-Used
+Cache-Control: public, max-age=600
+Content-Language: en
+Strict-Transport-Security: max-age=31536000
+Vary: X-Tenant
+Vary: Accept-Language
+Vary: X-Compatibility-Date
+X-Compatibility-Date: 2020-01-01
+X-Ratelimit-Group: meta
+X-Ratelimit-Limit: 150/15m
+X-Ratelimit-Remaining: 148
+X-Ratelimit-Used: 2
+

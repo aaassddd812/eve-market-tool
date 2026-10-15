@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EVE 市场总览 - 现代化版本</title>
+  <link rel="stylesheet" href="css/modern-style.css?v=v2r7">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <!-- 顶部导航栏 -->
+    <header class="app-header">
+      <div class="header-brand">
+        <div class="brand-icon">
+          <svg viewBox="0 0 32 32" fill="currentColor">
+            <defs>
+              <linearGradient id="iconGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+                <stop offset="100%" style="stop-color:#06b6d4;stop-opacity:1" />
+              </linearGradient>
+            </defs>
+            <path fill="url(#iconGrad)" d="M16 2L4 8v8c0 7.5 5.2 14.5 12 16 6.8-1.5 12-8.5 12-16V8L16 2zm0 3.2l9 4.5v6.3c0 5.9-4.1 11.4-9 12.8-4.9-1.4-9-6.9-9-12.8V9.7l9-4.5z"/>
+            <circle fill="url(#iconGrad)" cx="16" cy="16" r="4"/>
+          </svg>
+        </div>
+        <span class="brand-name">EVE Market</span>
+      </div>
+
+      <nav class="header-nav">
+        <button class="nav-btn active" data-view="market">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="1" x2="12" y2="23"></line>
+            <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+          </svg>
+          市场中心
+        </button>
+        <button class="nav-btn" data-view="profile">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+          </svg>
+          个人中心
+        </button>
+      </nav>
+
+      <div class="header-actions">
+        <div class="server-status">
+          <span class="status-dot"></span>
+          <span class="status-text">宁静在线</span>
+        </div>
+        <button class="icon-btn" id="themeToggle" title="切换主题">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <div class="app-body">
+      <!-- 市场视图 -->
+      <div class="view-container" id="marketView">
+        <!-- 侧边栏 -->
+        <aside class="sidebar" id="sidebar">
+          <div class="sidebar-header">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"></circle>
+                <path d="m21 21-4.35-4.35"></path>
+              </svg>
+              <input type="search" id="itemSearch" placeholder="搜索物品..." autocomplete="off">
+            </div>
+            <button class="collapse-btn" id="sidebarCollapse" title="收起侧边栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+            </button>
+          </div>
+
+          <div class="sidebar-tabs">
+            <button class="tab-btn active" data-tab="catalog">物品目录</button>
+            <button class="tab-btn" data-tab="favorites">收藏夹</button>
+          </div>
+
+          <div class="sidebar-content">
+            <div class="tab-pane active" id="catalogPane">
+              <div class="catalog-tree" id="catalogTree">
+                <div class="loading">载入中...</div>
+              </div>
+            </div>
+            <div class="tab-pane" id="favoritesPane">
+              <div class="empty-state">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                </svg>
+                <p>暂无收藏物品</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+
+        <!-- 主内容 -->
+        <main class="main-content">
+          <!-- 空状态 -->
+          <div class="empty-view" id="emptyView">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+                <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+              </svg>
+            </div>
+            <h2>选择一个物品开始查看</h2>
+            <p>从左侧目录选择物品，查看实时市场数据</p>
+          </div>
+
+          <!-- 详情视图 -->
+          <div class="detail-view" id="detailView" hidden>
+            <!-- 物品头部 -->
+            <div class="detail-header">
+              <div class="item-info">
+                <div class="item-icon">
+                  <img id="itemIcon" src="" alt="">
+                </div>
+                <div class="item-meta">
+                  <div class="item-breadcrumb">
+                    <span id="itemCategory">分类</span>
+                    <span class="sep">/</span>
+                    <span id="itemTypeId">Type ID</span>
+                  </div>
+                  <h1 id="itemName">物品名称</h1>
+                  <div class="item-tags">
+                    <span class="tag" id="regionTag">伏尔戈</span>
+                    <span class="tag" id="updateTag">刚刚更新</span>
+                  </div>
+                </div>
+              </div>
+
+              <div class="detail-actions">
+                <select id="regionSelect" class="region-select">
+                  <option value="10000002">伏尔戈 (The Forge)</option>
+                </select>
+                <button class="btn btn-primary" id="refreshBtn">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <polyline points="1 20 1 14 7 14"></polyline>
+                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                  </svg>
+                  刷新
+                </button>
+              </div>
+            </div>
+
+            <!-- 数据卡片 -->
+            <div class="stats-grid">
+              <div class="stat-card primary">
+                <div class="stat-label">最低卖价</div>
+                <div class="stat-value" id="minSellPrice">-</div>
+                <div class="stat-meta" id="minSellMeta">等待数据</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">最高买价</div>
+                <div class="stat-value" id="maxBuyPrice">-</div>
+                <div class="stat-meta" id="maxBuyMeta">等待数据</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">价差</div>
+                <div class="stat-value" id="spreadValue">-</div>
+                <div class="stat-meta" id="spreadMeta">买卖差价</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">全服均价</div>
+                <div class="stat-value" id="avgPrice">-</div>
+                <div class="stat-meta">ESI 市场数据</div>
+              </div>
+            </div>
+
+            <!-- 内容标签页 -->
+            <div class="content-tabs">
+              <div class="tabs-header">
+                <button class="tab-link active" data-content="orders">订单簿</button>
+                <button class="tab-link" data-content="history">历史数据</button>
+                <button class="tab-link" data-content="chart">价格走势</button>
+              </div>
+
+              <div class="tabs-content">
+                <!-- 订单簿 -->
+                <div class="tab-content active" id="ordersContent">
+                  <div class="orders-container">
+                    <div class="orders-section sell-orders">
+                      <div class="orders-header">
+                        <h3>
+                          <span class="dot sell-dot"></span>
+                          卖单
+                          <span class="count" id="sellCount">0</span>
+                        </h3>
+                        <span class="orders-subtitle">按价格从低到高</span>
+                      </div>
+                      <div class="orders-table">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>价格</th>
+                              <th>数量</th>
+                              <th>总额</th>
+                              <th>地点</th>
+                            </tr>
+                          </thead>
+                          <tbody id="sellOrdersBody">
+                            <tr class="empty-row"><td colspan="4">载入中...</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+
+                    <div class="orders-section buy-orders">
+                      <div class="orders-header">
+                        <h3>
+                          <span class="dot buy-dot"></span>
+                          买单
+                          <span class="count" id="buyCount">0</span>
+                        </h3>
+                        <span class="orders-subtitle">按价格从高到低</span>
+                      </div>
+                      <div class="orders-table">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>价格</th>
+                              <th>数量</th>
+                              <th>总额</th>
+                              <th>地点</th>
+                            </tr>
+                          </thead>
+                          <tbody id="buyOrdersBody">
+                            <tr class="empty-row"><td colspan="4">载入中...</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 历史数据 -->
+                <div class="tab-content" id="historyContent">
+                  <div class="history-table">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>日期</th>
+                          <th>均价</th>
+                          <th>最高价</th>
+                          <th>最低价</th>
+                          <th>成交量</th>
+                          <th>订单数</th>
+                        </tr>
+                      </thead>
+                      <tbody id="historyTableBody">
+                        <tr class="empty-row"><td colspan="6">暂无数据</td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <!-- 价格走势 -->
+                <div class="tab-content" id="chartContent">
+                  <div class="chart-container">
+                    <canvas id="priceChart"></canvas>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+
+      <!-- 个人中心视图 -->
+      <div class="view-container" id="profileView" hidden>
+        <aside class="sidebar profile-sidebar" id="profileSidebar">
+          <div class="sidebar-header profile-sidebar-header">
+            <span class="profile-sidebar-title">个人中心</span>
+            <button class="collapse-btn" id="profileSidebarCollapse" title="收起侧边栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="15 18 9 12 15 6"></polyline>
+              </svg>
+            </button>
+          </div>
+          <div class="sidebar-content profile-sidebar-content">
+            <nav class="profile-nav" id="profileNav" aria-label="个人中心导航">
+              <button class="profile-nav-btn active" data-profile="info">角色概览</button>
+              <button class="profile-nav-btn" data-profile="assets">资产估值</button>
+              <div class="profile-nav-group">
+                <div class="profile-nav-group-title">空间站资产</div>
+                <div id="profileStationNav"><span class="profile-nav-empty">绑定后显示空间站</span></div>
+              </div>
+              <button class="profile-nav-btn" data-profile="orders">市场订单</button>
+              <button class="profile-nav-btn" data-profile="wallet">钱包流水</button>
+            </nav>
+          </div>
+        </aside>
+        <div class="profile-container">
+          <div class="profile-empty" id="profileEmpty">
+            <div class="profile-icon">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                <circle cx="12" cy="7" r="4"></circle>
+              </svg>
+            </div>
+            <h2>尚未绑定 ESI</h2>
+            <p>绑定 ESI 后可查看角色信息、资产、订单等数据</p>
+            <button class="btn btn-primary" id="bindEsiBtn">绑定 ESI</button>
+          </div>
+
+          <div class="profile-content" id="profileContent" hidden>
+            <div class="profile-header">
+              <img class="profile-avatar" id="profileAvatar" src="" alt="">
+              <div class="profile-info">
+                <h2 id="profileName">角色名称</h2>
+                <p id="profileCorp">军团名称</p>
+              </div>
+              <div class="profile-actions">
+                <button class="btn" id="refreshProfileBtn">刷新数据</button>
+                <button class="btn btn-danger" id="unbindEsiBtn">解绑</button>
+              </div>
+            </div>
+
+            <div class="profile-tabs">
+              <button class="tab-link active" data-profile="info">基本信息</button>
+              <button class="tab-link" data-profile="assets">资产</button>
+              <button class="tab-link" data-profile="orders">订单</button>
+              <button class="tab-link" data-profile="wallet">钱包</button>
+            </div>
+
+            <div class="profile-data" id="profileData">
+              <p class="text-muted">选择标签页查看数据</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast 通知 -->
+    <div class="toast" id="toast" role="alert"></div>
+
+    <!-- ESI 绑定模态框 -->
+    <div class="modal" id="esiModal" hidden>
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>绑定 ESI</h3>
+          <button class="modal-close" id="closeEsiModal">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted">授权后将在本地缓存角色数据，不上传至服务器。</p>
+          <button class="btn btn-primary btn-block" id="generateAuthBtn">生成授权链接</button>
+          <div id="authLinkBox" class="auth-link-box" hidden>
+            <label for="authLink">授权链接</label>
+            <div class="input-group">
+              <input type="text" id="authLink" readonly>
+              <button class="btn" id="copyAuthBtn">复制</button>
+              <a class="btn btn-primary" id="openAuthBtn" href="#" target="_blank">打开</a>
+            </div>
+          </div>
+          <div class="callback-box">
+            <label for="callbackUrl">授权回调地址</label>
+            <div class="input-group">
+              <input type="text" id="callbackUrl" placeholder="粘贴登录后的完整地址">
+              <button class="btn btn-primary" id="bindCallbackBtn">绑定</button>
+            </div>
+          </div>
+          <div class="status-msg" id="esiStatus"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v2r7" type="module" data-cfasync="false"></script>
+</body>
+</html>

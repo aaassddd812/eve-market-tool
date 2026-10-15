@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+Thumbs.db
+desktop.ini
+*.tar.gz
+.deploy-cleanup.sh
+.repo-create.json

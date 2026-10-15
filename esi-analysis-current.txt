@@ -1,0 +1,148 @@
+TOTAL_OPERATIONS=202
+METHOD_COUNTS
+DELETE=7
+GET=167
+POST=21
+PUT=7
+TAG_COUNTS
+Alliance=4
+Assets=6
+Calendar=4
+Character=14
+Clones=2
+Contacts=9
+Contracts=9
+Corporation=22
+Corporation Projects=4
+Dogma=5
+Faction Warfare=8
+Fittings=3
+Fleets=14
+Incursions=1
+Industry=8
+Insurance=1
+Killmails=3
+Location=3
+Loyalty=2
+Mail=9
+Market=11
+Meta=3
+Planetary Interaction=4
+Routes=1
+Search=1
+Skills=3
+Sovereignty=3
+Status=1
+Universe=30
+User Interface=5
+Wallet=6
+Wars=3
+NON_GET_OPERATIONS
+POST	Assets	/characters/{character_id}/assets/locations	Get character asset locations	esi-assets.read_assets.v1
+POST	Assets	/characters/{character_id}/assets/names	Get character asset names	esi-assets.read_assets.v1
+POST	Assets	/corporations/{corporation_id}/assets/locations	Get corporation asset locations	esi-assets.read_corporation_assets.v1
+POST	Assets	/corporations/{corporation_id}/assets/names	Get corporation asset names	esi-assets.read_corporation_assets.v1
+PUT	Calendar	/characters/{character_id}/calendar/{event_id}	Respond to an event	esi-calendar.respond_calendar_events.v1
+POST	Character	/characters/{character_id}/cspa	Calculate a CSPA charge cost	esi-characters.read_contacts.v1
+POST	Character	/characters/affiliation	Character affiliation	
+DELETE	Contacts	/characters/{character_id}/contacts	Delete contacts	esi-characters.write_contacts.v1
+POST	Contacts	/characters/{character_id}/contacts	Add contacts	esi-characters.write_contacts.v1
+PUT	Contacts	/characters/{character_id}/contacts	Edit contacts	esi-characters.write_contacts.v1
+DELETE	Fittings	/characters/{character_id}/fittings/{fitting_id}	Delete fitting	esi-fittings.write_fittings.v1
+POST	Fittings	/characters/{character_id}/fittings	Create fitting	esi-fittings.write_fittings.v1
+DELETE	Fleets	/fleets/{fleet_id}/members/{member_id}	Kick fleet member	esi-fleets.write_fleet.v1
+DELETE	Fleets	/fleets/{fleet_id}/squads/{squad_id}	Delete fleet squad	esi-fleets.write_fleet.v1
+DELETE	Fleets	/fleets/{fleet_id}/wings/{wing_id}	Delete fleet wing	esi-fleets.write_fleet.v1
+POST	Fleets	/fleets/{fleet_id}/members	Create fleet invitation	esi-fleets.write_fleet.v1
+POST	Fleets	/fleets/{fleet_id}/wings	Create fleet wing	esi-fleets.write_fleet.v1
+POST	Fleets	/fleets/{fleet_id}/wings/{wing_id}/squads	Create fleet squad	esi-fleets.write_fleet.v1
+PUT	Fleets	/fleets/{fleet_id}	Update fleet	esi-fleets.write_fleet.v1
+PUT	Fleets	/fleets/{fleet_id}/members/{member_id}	Move fleet member	esi-fleets.write_fleet.v1
+PUT	Fleets	/fleets/{fleet_id}/squads/{squad_id}	Rename fleet squad	esi-fleets.write_fleet.v1
+PUT	Fleets	/fleets/{fleet_id}/wings/{wing_id}	Rename fleet wing	esi-fleets.write_fleet.v1
+DELETE	Mail	/characters/{character_id}/mail/{mail_id}	Delete a mail	esi-mail.organize_mail.v1
+DELETE	Mail	/characters/{character_id}/mail/labels/{label_id}	Delete a mail label	esi-mail.organize_mail.v1
+POST	Mail	/characters/{character_id}/mail	Send a new mail	esi-mail.send_mail.v1
+POST	Mail	/characters/{character_id}/mail/labels	Create a mail label	esi-mail.organize_mail.v1
+PUT	Mail	/characters/{character_id}/mail/{mail_id}	Update metadata about a mail	esi-mail.organize_mail.v1
+POST	Routes	/route/{origin_system_id}/{destination_system_id}	Get route between two systems	
+POST	Universe	/universe/ids	Bulk names to IDs	
+POST	Universe	/universe/names	Get names and categories for a set of IDs	
+POST	User Interface	/ui/autopilot/waypoint	Set Autopilot Waypoint	esi-ui.write_waypoint.v1
+POST	User Interface	/ui/openwindow/contract	Open Contract Window	esi-ui.open_window.v1
+POST	User Interface	/ui/openwindow/information	Open Information Window	esi-ui.open_window.v1
+POST	User Interface	/ui/openwindow/marketdetails	Open Market Details	esi-ui.open_window.v1
+POST	User Interface	/ui/openwindow/newmail	Open New Mail Window	esi-ui.open_window.v1
+SECURITY_SCOPES
+esi-access.read_lists.v1	esi-access.read_lists.v1
+esi-activities.read_character.v1	esi-activities.read_character.v1
+esi-alliances.read_contacts.v1	esi-alliances.read_contacts.v1
+esi-assets.read_assets.v1	esi-assets.read_assets.v1
+esi-assets.read_corporation_assets.v1	esi-assets.read_corporation_assets.v1
+esi-calendar.read_calendar_events.v1	esi-calendar.read_calendar_events.v1
+esi-calendar.respond_calendar_events.v1	esi-calendar.respond_calendar_events.v1
+esi-characters.read_agents_research.v1	esi-characters.read_agents_research.v1
+esi-characters.read_blueprints.v1	esi-characters.read_blueprints.v1
+esi-characters.read_contacts.v1	esi-characters.read_contacts.v1
+esi-characters.read_corporation_roles.v1	esi-characters.read_corporation_roles.v1
+esi-characters.read_fatigue.v1	esi-characters.read_fatigue.v1
+esi-characters.read_freelance_jobs.v1	esi-characters.read_freelance_jobs.v1
+esi-characters.read_fw_stats.v1	esi-characters.read_fw_stats.v1
+esi-characters.read_loyalty.v1	esi-characters.read_loyalty.v1
+esi-characters.read_medals.v1	esi-characters.read_medals.v1
+esi-characters.read_notifications.v1	esi-characters.read_notifications.v1
+esi-characters.read_standings.v1	esi-characters.read_standings.v1
+esi-characters.read_titles.v1	esi-characters.read_titles.v1
+esi-characters.write_contacts.v1	esi-characters.write_contacts.v1
+esi-clones.read_clones.v1	esi-clones.read_clones.v1
+esi-clones.read_implants.v1	esi-clones.read_implants.v1
+esi-contracts.read_character_contracts.v1	esi-contracts.read_character_contracts.v1
+esi-contracts.read_corporation_contracts.v1	esi-contracts.read_corporation_contracts.v1
+esi-corporations.read_blueprints.v1	esi-corporations.read_blueprints.v1
+esi-corporations.read_contacts.v1	esi-corporations.read_contacts.v1
+esi-corporations.read_container_logs.v1	esi-corporations.read_container_logs.v1
+esi-corporations.read_corporation_membership.v1	esi-corporations.read_corporation_membership.v1
+esi-corporations.read_divisions.v1	esi-corporations.read_divisions.v1
+esi-corporations.read_facilities.v1	esi-corporations.read_facilities.v1
+esi-corporations.read_freelance_jobs.v1	esi-corporations.read_freelance_jobs.v1
+esi-corporations.read_fw_stats.v1	esi-corporations.read_fw_stats.v1
+esi-corporations.read_medals.v1	esi-corporations.read_medals.v1
+esi-corporations.read_projects.v1	esi-corporations.read_projects.v1
+esi-corporations.read_standings.v1	esi-corporations.read_standings.v1
+esi-corporations.read_starbases.v1	esi-corporations.read_starbases.v1
+esi-corporations.read_structures.v1	esi-corporations.read_structures.v1
+esi-corporations.read_titles.v1	esi-corporations.read_titles.v1
+esi-corporations.track_members.v1	esi-corporations.track_members.v1
+esi-fittings.read_fittings.v1	esi-fittings.read_fittings.v1
+esi-fittings.write_fittings.v1	esi-fittings.write_fittings.v1
+esi-fleets.read_fleet.v1	esi-fleets.read_fleet.v1
+esi-fleets.write_fleet.v1	esi-fleets.write_fleet.v1
+esi-industry.read_character_jobs.v1	esi-industry.read_character_jobs.v1
+esi-industry.read_character_mining.v1	esi-industry.read_character_mining.v1
+esi-industry.read_corporation_jobs.v1	esi-industry.read_corporation_jobs.v1
+esi-industry.read_corporation_mining.v1	esi-industry.read_corporation_mining.v1
+esi-killmails.read_corporation_killmails.v1	esi-killmails.read_corporation_killmails.v1
+esi-killmails.read_killmails.v1	esi-killmails.read_killmails.v1
+esi-location.read_location.v1	esi-location.read_location.v1
+esi-location.read_online.v1	esi-location.read_online.v1
+esi-location.read_ship_type.v1	esi-location.read_ship_type.v1
+esi-mail.organize_mail.v1	esi-mail.organize_mail.v1
+esi-mail.read_mail.v1	esi-mail.read_mail.v1
+esi-mail.send_mail.v1	esi-mail.send_mail.v1
+esi-markets.read_character_orders.v1	esi-markets.read_character_orders.v1
+esi-markets.read_corporation_orders.v1	esi-markets.read_corporation_orders.v1
+esi-markets.structure_markets.v1	esi-markets.structure_markets.v1
+esi-planets.manage_planets.v1	esi-planets.manage_planets.v1
+esi-planets.read_customs_offices.v1	esi-planets.read_customs_offices.v1
+esi-search.search_structures.v1	esi-search.search_structures.v1
+esi-skills.read_skillqueue.v1	esi-skills.read_skillqueue.v1
+esi-skills.read_skills.v1	esi-skills.read_skills.v1
+esi-structures.read_character.v1	esi-structures.read_character.v1
+esi-structures.read_corporation.v1	esi-structures.read_corporation.v1
+esi-ui.open_window.v1	esi-ui.open_window.v1
+esi-ui.write_waypoint.v1	esi-ui.write_waypoint.v1
+esi-universe.read_structures.v1	esi-universe.read_structures.v1
+esi-wallet.read_character_wallet.v1	esi-wallet.read_character_wallet.v1
+esi-wallet.read_corporation_wallets.v1	esi-wallet.read_corporation_wallets.v1
+esi.activity.char:read	esi.activity.char:read
+esi.cosmetic.char:read	esi.cosmetic.char:read
