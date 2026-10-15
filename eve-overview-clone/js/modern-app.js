@@ -245,7 +245,7 @@ function switchView(view) {
   });
   $('marketView').hidden = view !== 'market';
   $('profileView').hidden = view !== 'profile';
-  $('menuToggle').hidden = view !== 'market';
+  $('menuToggle').title = view === 'market' ? '物品目录' : '个人中心导航';
   closeDrawer();
   if (view === 'profile') loadProfile();
 }
@@ -257,25 +257,41 @@ function setSidebarCollapsed(sidebarId, reopenId, collapsed, storageKey) {
   if (storageKey) store.set(storageKey, collapsed ? '1' : '0');
 }
 
+// 两个视图的侧栏行为一致：桌面端收起/展开（记住状态），移动端为抽屉
+const SIDEBARS = {
+  market: { id: 'sidebar', reopen: 'sidebarReopen', key: 'eve-sidebar-collapsed' },
+  profile: { id: 'profileSidebar', reopen: 'profileSidebarReopen', key: 'eve-profile-sidebar-collapsed' }
+};
+
+function currentSidebar() {
+  return SIDEBARS[state.currentView] || SIDEBARS.market;
+}
+
 function openDrawer() {
-  $('sidebar').classList.add('drawer-open');
+  $(currentSidebar().id).classList.add('drawer-open');
   $('sidebarBackdrop').hidden = false;
-  setTimeout(() => $('itemSearch').focus(), 50);
+  if (state.currentView === 'market') setTimeout(() => $('itemSearch').focus(), 50);
 }
 
 function closeDrawer() {
-  $('sidebar').classList.remove('drawer-open');
+  Object.values(SIDEBARS).forEach((s) => $(s.id).classList.remove('drawer-open'));
   $('sidebarBackdrop').hidden = true;
 }
 
-function toggleMarketSidebar() {
+function isDrawerOpen() {
+  return Object.values(SIDEBARS).some((s) => $(s.id).classList.contains('drawer-open'));
+}
+
+function toggleSidebar(view = state.currentView) {
+  const sb = SIDEBARS[view];
   if (MOBILE_QUERY.matches) {
-    if ($('sidebar').classList.contains('drawer-open')) closeDrawer(); else openDrawer();
+    if ($(sb.id).classList.contains('drawer-open')) closeDrawer(); else openDrawer();
     return;
   }
-  const collapsed = !$('sidebar').classList.contains('collapsed');
-  setSidebarCollapsed('sidebar', 'sidebarReopen', collapsed, 'eve-sidebar-collapsed');
+  setSidebarCollapsed(sb.id, sb.reopen, !$(sb.id).classList.contains('collapsed'), sb.key);
 }
+
+const toggleMarketSidebar = () => toggleSidebar('market');
 
 function initSidebar() {
   if (store.get('eve-sidebar-collapsed') === '1') setSidebarCollapsed('sidebar', 'sidebarReopen', true);
@@ -283,25 +299,40 @@ function initSidebar() {
 
   $('sidebarCollapse').addEventListener('click', toggleMarketSidebar);
   $('sidebarReopen').addEventListener('click', toggleMarketSidebar);
-  $('menuToggle').addEventListener('click', toggleMarketSidebar);
+  $('menuToggle').addEventListener('click', () => toggleSidebar());
   $('sidebarBackdrop').addEventListener('click', closeDrawer);
   MOBILE_QUERY.addEventListener('change', closeDrawer);
 
-  $('profileSidebarCollapse').addEventListener('click', () =>
-    setSidebarCollapsed('profileSidebar', 'profileSidebarReopen', true, 'eve-profile-sidebar-collapsed'));
-  $('profileSidebarReopen').addEventListener('click', () =>
-    setSidebarCollapsed('profileSidebar', 'profileSidebarReopen', false, 'eve-profile-sidebar-collapsed'));
+  $('profileSidebarCollapse').addEventListener('click', () => toggleSidebar('profile'));
+  $('profileSidebarReopen').addEventListener('click', () => toggleSidebar('profile'));
+
+  // 「空间站资产」分组可折叠，状态持久化
+  const setStationGroup = (open) => {
+    $('stationGroup').classList.toggle('expanded', open);
+    $('stationGroupToggle').setAttribute('aria-expanded', String(open));
+    store.set('eve-station-group-open', open ? '1' : '0');
+  };
+  setStationGroup(store.get('eve-station-group-open') !== '0');
+  $('stationGroupToggle').addEventListener('click', () => setStationGroup(!$('stationGroup').classList.contains('expanded')));
 
   $('profileNav').addEventListener('click', (event) => {
-    const station = event.target.closest('[data-station-index]');
+    const station = event.target.closest('[data-station-id]');
     const link = event.target.closest('[data-profile]');
     if (!link) return;
-    switchProfileTab(link.dataset.profile, station?.dataset.stationIndex);
-    if (station) {
-      requestAnimationFrame(() => {
-        const target = document.querySelector('.asset-group-row[data-station-index="' + station.dataset.stationIndex + '"]');
-        target?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-      });
+    switchProfileTab(link.dataset.profile, station?.dataset.stationId);
+    if (MOBILE_QUERY.matches) closeDrawer();
+  });
+
+  // 资产表的位置分组行：点击折叠/展开
+  $('profileData').addEventListener('click', (event) => {
+    const row = event.target.closest('.asset-group-row');
+    if (row) setAssetGroupExpanded(row, !row.classList.contains('expanded'));
+  });
+  $('profileData').addEventListener('keydown', (event) => {
+    const row = event.target.closest('.asset-group-row');
+    if (row && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      setAssetGroupExpanded(row, !row.classList.contains('expanded'));
     }
   });
 
@@ -743,9 +774,15 @@ async function loadMarketData(typeId) {
 }
 
 async function resolveLocations(orders) {
+  await loadNpcNames();
   const ids = [...new Set(orders.map((o) => o.location_id))].filter((id) => id && !state.locationCache.has(id));
-  ids.filter((id) => id >= 1e12).forEach((id) => state.locationCache.set(id, '玩家建筑 #' + id));
-  const npc = ids.filter((id) => id < 1e12);
+  // NPC 空间站用官方中文名；玩家建筑名称为玩家自定义，公开接口拿不到时显示 ID
+  ids.forEach((id) => {
+    const official = officialName(id);
+    if (official) state.locationCache.set(id, official);
+    else if (id >= 1e12) state.locationCache.set(id, '玩家建筑 #' + id);
+  });
+  const npc = ids.filter((id) => !state.locationCache.has(id));
   for (let i = 0; i < npc.length; i += 500) {
     try {
       const names = await fetchESI('/universe/names/', {
@@ -1103,9 +1140,10 @@ function initShortcuts() {
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
       if (!$('esiModal').hidden) { closeEsiModal(); return; }
-      if ($('sidebar').classList.contains('drawer-open')) { closeDrawer(); return; }
+      if (isDrawerOpen()) { closeDrawer(); return; }
     }
     if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target) || !$('esiModal').hidden) return;
+    if (event.key === '[') { toggleSidebar(); event.preventDefault(); return; }
     if (state.currentView !== 'market') return;
     switch (event.key) {
       case '/':
@@ -1114,7 +1152,6 @@ function initShortcuts() {
         $('itemSearch').focus();
         $('itemSearch').select();
         break;
-      case '[': toggleMarketSidebar(); break;
       case 'r': case 'R': refreshCurrent(); break;
       case 'f': case 'F': if (state.selectedItem) toggleFavorite(state.selectedItem.id); break;
       case '1': switchContentTab('orders'); break;
@@ -1184,7 +1221,12 @@ const ASSET_FLAG_ZH = {
   PlanetaryCommodityHold: '行星货物仓', FuelBay: '燃料仓', SpecialFuelBay: '特殊燃料仓',
   OreHold: '矿石仓', GasHold: '气体仓', MineralHold: '矿物仓', IceProductHold: '冰制品仓',
   IntermediateProductHold: '中间品仓', AutoFit: '自动装配', Blocked: '已锁定',
-  SkillTraining: '训练中', Impounded: '被扣押', LootContainer: '战利品箱'
+  SkillTraining: '训练中', Impounded: '被扣押', LootContainer: '战利品箱',
+  Unlocked: '未锁定', Locked: '已锁定', AssetSafety: '资产安全', CorpDeliveries: '军团交付仓',
+  Implant: '植入体', Skill: '技能', SubSystemBay: '子系统舱', QuafeBay: '酷菲舱',
+  StructureFuel: '建筑燃料仓', ShipOffline: '离线舰船', FighterBay: '铁骑舰载机库',
+  BoosterBay: '增效剂舱', CorporationGoalDeliveries: '军团目标交付仓', InfrastructureHangar: '基础设施机库',
+  MoonMaterialBay: '卫星材料舱', MobileDepotHold: '移动仓库舱', ColonyResourcesHold: '殖民地资源舱'
 };
 
 // 全服均价表约 1 MB，整个会话只请求一次，并发调用共享同一个 Promise
@@ -1225,7 +1267,14 @@ const JOURNAL_REF_ZH = {
   office_rental_fee: '办公室租金', factory_rental_fee: '工厂租金', repair_bill: '维修费', cloning: '克隆费用',
   jump_clone_deposit: '跳跃克隆押金', insurance: '保险', war_fee: '战争费用', sovereignity_bill: '主权账单',
   structure_gate_jump: '建筑跳跃', asset_safety_wrapping: '资产安全转移', perfect_mission_escalation: '任务奖励',
-  project_logistics_transport: '物流运输', industry_job_tax: '工业税', reprocessing_tax: '再处理税', planetary_import_tax: '行星进口税', planetary_export_tax: '行星出口税'
+  project_logistics_transport: '物流运输', industry_job_tax: '工业税', reprocessing_tax: '再处理税', planetary_import_tax: '行星进口税', planetary_export_tax: '行星出口税',
+  agent_mission_reward: '任务报酬', agent_mission_time_bonus_reward: '任务时间奖励', agent_mission_collateral_paid: '任务抵押金',
+  agent_mission_collateral_refunded: '任务抵押金退还', ess_escrow_transfer: 'ESS 托管转账', daily_goal_payouts: '每日目标奖励',
+  corporate_reward_payout: '军团奖励', corporation_account_withdrawal: '军团账户取款', brokers_fee: '经纪费',
+  manufacturing: '制造', researching_time_productivity: '时间效率研究', researching_material_productivity: '材料效率研究',
+  copying: '拷贝', reaction: '反应', skill_purchase: '技能购买', item_trader_payment: '物品交易', market_escrow: '市场托管',
+  market_fine_paid: '市场罚款', lp_store: 'LP 商店', kill_right_fee: '击杀权费用', medal_creation: '勋章制作',
+  medal_issued: '颁发勋章', docking_fee: '停靠费', office_rental_fee_refund: '办公室租金退还', insurance_payout: '保险赔付'
 };
 function zhLabel(map, key, fallback) {
   const k = String(key ?? '');
@@ -1245,7 +1294,7 @@ async function fetchNameBatch(list) {
 }
 
 // 分批 + 整批失败二分重试：单个坏 ID（血统/物品实例等）不会拖垮整批。
-// 注意 /universe/names/ 不支持中文（NPC军团/星系返回英文），中文在管线后续单独升级。
+// /universe/names/ 只返回英文，这里只用于玩家军团/联盟/角色等官方表里没有的名字。
 async function resolveNames(ids) {
   const unique = [...new Set(ids.map(Number).filter((id) => id > 0))].slice(0, 2000);
   const names = new Map();
@@ -1271,6 +1320,35 @@ async function resolveNames(ids) {
   return { names, categories };
 }
 
+// ===== 官方中文名称表（build_npc_names.mjs 由 CCP SDE 生成）=====
+// NPC 空间站 / NPC 军团 / NPC 角色 / 星系 / 星座 / 星域；玩家自定义的名字不在表中，保留原名。
+function loadNpcNames() {
+  if (!state.npcNamesPromise) {
+    state.npcNamesPromise = fetch('./npc-names-zh.json?v=v3r2')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+      .then((data) => { state.npcNames = data; return data; })
+      .catch((error) => {
+        console.error('官方中文名称表加载失败:', error);
+        state.npcNamesPromise = null;
+        return null;
+      });
+  }
+  return state.npcNamesPromise;
+}
+
+const NPC_TABLES = ['stations', 'systems', 'corporations', 'characters', 'constellations', 'regions'];
+
+function officialName(id) {
+  const data = state.npcNames;
+  if (!data || !id) return null;
+  const key = String(id);
+  for (const table of NPC_TABLES) {
+    const hit = data[table]?.[key];
+    if (hit) return hit;
+  }
+  return null;
+}
+
 // 物品中文名：本地目录（ESI language=zh 生成的官方中文）优先，缺的逐个走 /universe/types/{id}/?language=zh
 function catalogTypeNames() {
   if (!state.catalogTypeMap) {
@@ -1289,7 +1367,7 @@ async function resolveTypeNames(ids) {
   for (const id of [...new Set(ids.map(Number).filter(Boolean))]) {
     const hit = local.get(id);
     if (hit) names.set(id, hit);
-    else if (missing.length < 120) missing.push(id);
+    else if (missing.length < 200) missing.push(id);
   }
   for (let i = 0; i < missing.length; i += 10) {
     const chunk = missing.slice(i, i + 10);
@@ -1299,19 +1377,6 @@ async function resolveTypeNames(ids) {
     ));
     results.forEach((info, idx) => { if (info?.name) names.set(chunk[idx], info.name); });
   }
-  return names;
-}
-
-// 星系官方中文名（吉他 等）
-async function upgradeSystemNamesZh(systemIds) {
-  const names = new Map();
-  const ids = [...new Set(systemIds.map(Number).filter(Boolean))].slice(0, 60);
-  await Promise.all(ids.map(async (id) => {
-    try {
-      const info = await fetch(ESI_BASE + '/universe/systems/' + id + '/?datasource=tranquility&language=zh').then((r) => (r.ok ? r.json() : null));
-      if (info?.name) names.set(id, info.name);
-    } catch { /* 失败保留英文名 */ }
-  }));
   return names;
 }
 
@@ -1326,57 +1391,65 @@ async function universeTable(path) {
   return state.universeTables[path];
 }
 
-// 位置 ID 解析：批量接口 → /assets/locations/ 兜底（支持船/集装箱等物品ID）→ 空间站补查。
-// 结果写入共享的 names/categories；返回别名映射（物品ID → 星系ID）供中文升级使用。
-async function resolveLocationNames(ids, me, names, categories) {
-  const unique = [...new Set(ids.map(Number).filter((id) => id > 0))];
-  const todo = unique.filter((id) => !names.has(id));
-  if (todo.length) {
-    const batch = await resolveNames(todo);
-    for (const [key, value] of batch.names) {
-      names.set(key, value);
-      if (batch.categories.has(key)) categories.set(key, batch.categories.get(key));
+// 角色资产接口分页（X-Pages），每页 1000 条
+async function esiAuthFetchPaged(path, maxPages = 20) {
+  const token = await ensureEsiToken();
+  const get = async (page) => {
+    const url = ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=tranquility&page=' + page;
+    const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token.access_token } });
+    if (!res.ok) throw new Error('ESI ' + res.status);
+    return res;
+  };
+  const first = await get(1);
+  const pages = Math.min(Number(first.headers.get('X-Pages')) || 1, maxPages);
+  const all = [await first.json()];
+  for (let page = 2; page <= pages; page += 1) all.push(await (await get(page)).json());
+  return all.flat();
+}
+
+// 资产可能装在舰船/集装箱里：沿 location_id 向上找到真正的位置（空间站/玩家建筑/星系）
+function buildAssetLocations(assets) {
+  const byItem = new Map(assets.map((a) => [a.item_id, a]));
+  for (const asset of assets) {
+    let cur = asset;
+    let depth = 0;
+    asset.parent = byItem.get(asset.location_id) || null;
+    while (byItem.has(cur.location_id) && depth < 10) {
+      cur = byItem.get(cur.location_id);
+      depth += 1;
     }
+    asset.rootId = Number(cur.location_id);
+    asset.rootType = cur.location_type;
   }
-  const sysAlias = new Map();
-  const unresolved = unique.filter((id) => !names.has(id)).slice(0, 100);
-  if (unresolved.length) {
+}
+
+const ASSET_SAFETY_ID = 2004;
+
+// 位置名称：官方中文表（NPC 空间站/星系）→ 玩家建筑原名 → ID 兜底
+function locationName(id) {
+  const official = officialName(id);
+  if (official) return official;
+  if (id === ASSET_SAFETY_ID) return '资产安全';
+  const known = state.esiNames?.get(Number(id));
+  if (known) return known;
+  return id >= 1e12 ? '玩家建筑 #' + id : '位置 #' + id;
+}
+
+// 玩家建筑名称需要 esi-universe.read_structures.v1 授权；没有该权限时保留 ID 显示
+async function resolveStructureNames(ids) {
+  const list = [...new Set(ids)].filter((id) => id >= 1e12).slice(0, 30);
+  await Promise.all(list.map(async (id) => {
     try {
-      const locInfo = await esiAuthFetch('/characters/' + me + '/assets/locations/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(unresolved)
-      });
-      const stationQuery = new Map();
-      const systemQuery = new Map();
-      for (const loc of (Array.isArray(locInfo) ? locInfo : [])) {
-        const itemId = Number(loc.item_id);
-        if (!itemId) continue;
-        if (loc.station_name) names.set(itemId, loc.station_name);
-        else if (loc.station_id) stationQuery.set(Number(loc.station_id), itemId);
-        else if (loc.solar_system_name) names.set(itemId, loc.solar_system_name);
-        else if (loc.solar_system_id) systemQuery.set(Number(loc.solar_system_id), itemId);
-        else if (loc.structure_id) names.set(itemId, '玩家建筑 ' + loc.structure_id);
-      }
-      if (systemQuery.size) {
-        const sys = await resolveNames([...systemQuery.keys()]);
-        for (const [key, value] of sys.names) {
-          names.set(key, value);
-          if (sys.categories.has(key)) categories.set(key, sys.categories.get(key));
-        }
-        for (const [sysId, itemId] of systemQuery) {
-          if (names.has(sysId)) { names.set(itemId, names.get(sysId)); sysAlias.set(itemId, sysId); }
-        }
-      }
-      for (const [stationId, itemId] of [...stationQuery.entries()].slice(0, 80)) {
-        try {
-          const station = await fetch(ESI_BASE + '/universe/stations/' + stationId + '/?datasource=tranquility').then((r) => (r.ok ? r.json() : null));
-          if (station?.name) names.set(itemId, station.name);
-        } catch { /* 单站失败跳过 */ }
-      }
-    } catch { /* 解析失败则显示 ID */ }
-  }
-  return sysAlias;
+      const info = await esiAuthFetch('/universe/structures/' + id + '/');
+      if (info?.name) state.esiNames.set(id, info.name);
+    } catch { /* 无权限或无法访问 */ }
+  }));
+}
+
+// 显示名：官方中文优先，玩家军团/联盟/角色保留原名
+function displayName(id) {
+  if (!id) return '—';
+  return officialName(id) || state.esiNames?.get(Number(id)) || 'ID ' + id;
 }
 
 function loadProfile() {
@@ -1384,6 +1457,7 @@ function loadProfile() {
   if (!token) {
     $('profileEmpty').hidden = false;
     $('profileContent').hidden = true;
+    renderProfileStationNav([]);
     return;
   }
   $('profileEmpty').hidden = true;
@@ -1408,59 +1482,47 @@ async function loadCharacterData() {
     character: '/characters/' + id + '/',
     wallet: '/characters/' + id + '/wallet/',
     skills: '/characters/' + id + '/skills/',
-    assets: '/characters/' + id + '/assets/?page=1',
     orders: '/characters/' + id + '/orders/',
     journal: '/characters/' + id + '/wallet/journal/?page=1',
     location: '/characters/' + id + '/location/',
     ship: '/characters/' + id + '/ship/'
   };
-  const entries = await Promise.all(Object.entries(paths).map(async ([key, path]) => {
-    try { return [key, await esiAuthFetch(path)]; } catch (error) { return [key, { __error: error.message }]; }
-  }));
+  const [entries, assets] = await Promise.all([
+    Promise.all(Object.entries(paths).map(async ([key, path]) => {
+      try { return [key, await esiAuthFetch(path)]; } catch (error) { return [key, { __error: error.message }]; }
+    })),
+    esiAuthFetchPaged('/characters/' + id + '/assets/').catch((error) => ({ __error: error.message })),
+    loadNpcNames()
+  ]);
   state.characterData = Object.fromEntries(entries);
+  state.characterData.assets = assets;
   const ch = state.characterData.character || {};
-  const assetsList = Array.isArray(state.characterData.assets) ? state.characterData.assets : [];
+  const assetsList = Array.isArray(assets) ? assets : [];
   const ordersList = Array.isArray(state.characterData.orders) ? state.characterData.orders : [];
   const journalList = Array.isArray(state.characterData.journal) ? state.characterData.journal : [];
+  buildAssetLocations(assetsList);
 
-  // ── 名称解析管线（物品/星系/种族血统取官方中文；军团/联盟/玩家名官方无中文，保留原名）──
+  // ── 名称解析：官方内容（NPC 空间站/军团/角色、星系、物品、种族血统）用官方中文；玩家自定义名字保留原名 ──
   state.esiNames = new Map();
-  state.esiCategories = new Map();
-  // 实体池：军团/联盟/玩家/星系，走批量接口
   const entityIds = [
     ch.corporation_id, ch.alliance_id,
-    state.characterData.location?.solar_system_id,
-    ...journalList.flatMap((j) => [j.first_party_id, j.second_party_id].filter(Boolean))
-  ];
+    ...journalList.flatMap((j) => [j.first_party_id, j.second_party_id])
+  ].filter((eid) => eid && !officialName(eid));
   const entity = await resolveNames(entityIds);
-  for (const [key, value] of entity.names) {
-    state.esiNames.set(key, value);
-    if (entity.categories.has(key)) state.esiCategories.set(key, entity.categories.get(key));
-  }
-  // 位置池：资产/订单的 location_id 可能是空间站、玩家建筑或物品（船/箱子），走兜底管线
-  const sysAlias = await resolveLocationNames([
-    ...assetsList.map((a) => a.location_id),
+  for (const [key, value] of entity.names) state.esiNames.set(key, value);
+
+  await resolveStructureNames([
+    ...assetsList.map((a) => a.rootId),
     ...ordersList.map((o) => o.location_id)
-  ], id, state.esiNames, state.esiCategories);
-  // 物品类型：本地中文目录 + ESI 单查兜底（都是官方中文）
+  ]);
+
   const typeNames = await resolveTypeNames([
     state.characterData.ship?.ship_type_id,
     ...ordersList.map((o) => o.type_id),
     ...assetsList.map((a) => a.type_id)
   ]);
-  for (const [key, value] of typeNames) {
-    state.esiNames.set(key, value);
-    state.esiCategories.set(key, 'inventory_type');
-  }
-  // 星系升级为官方中文（含位置别名）
-  const systemIds = [...state.esiCategories.entries()].filter(([, cat]) => cat === 'solar_system').map(([sid]) => sid);
-  if (systemIds.length) {
-    const zh = await upgradeSystemNamesZh(systemIds);
-    for (const [sid, zhName] of zh) {
-      state.esiNames.set(sid, zhName);
-      for (const [alias, target] of sysAlias) if (target === sid) state.esiNames.set(alias, zhName);
-    }
-  }
+  state.typeNames = typeNames;
+
   // 种族/血统不在批量接口支持范围，查静态全表
   if (ch.race_id || ch.bloodline_id) {
     try {
@@ -1474,9 +1536,13 @@ async function loadCharacterData() {
     } catch { /* 拿不到就不显示 */ }
   }
 
-  const nameOf = (nid) => state.esiNames.get(Number(nid)) || (nid ? 'ID ' + nid : '--');
-  $('profileCorp').textContent = ch.corporation_id ? (nameOf(ch.corporation_id)) : (ch.race_name || '');
+  $('profileCorp').textContent = ch.corporation_id ? displayName(ch.corporation_id) : (ch.race_name || '');
+  renderProfileStationNav(stationSummaries());
   renderProfileTab(activeProfileTab());
+}
+
+function typeName(typeId) {
+  return state.typeNames?.get(Number(typeId)) || 'Type ' + typeId;
 }
 
 function activeProfileTab() {
@@ -1484,8 +1550,201 @@ function activeProfileTab() {
   return active ? active.dataset.profile : 'info';
 }
 
-function profileRow(cells) {
-  return '<tr>' + cells.map((c) => '<td>' + c + '</td>').join('') + '</tr>';
+function profileRow(cells, attrs = '') {
+  return '<tr' + attrs + '>' + cells.map((c) => '<td>' + c + '</td>').join('') + '</tr>';
+}
+
+// ===== 资产估值：所选星域交易中心的最低卖价 / 最高收购价 =====
+function valuationRegion() {
+  const id = Number(store.get('eve-valuation-region')) || state.regionId;
+  return REGIONS.find((r) => r.id === id) || REGIONS[0];
+}
+
+// regionId:typeId -> { sell, buy }，会话内缓存；点「刷新行情」清空
+state.hubPriceCache = new Map();
+state.stationOpen = new Map();
+
+async function fetchHubPrices(region, typeIds, onProgress) {
+  const todo = typeIds.filter((t) => !state.hubPriceCache.has(region.id + ':' + t));
+  let done = typeIds.length - todo.length;
+  onProgress?.(done, typeIds.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < todo.length) {
+      const typeId = todo[cursor++];
+      let entry = { sell: null, buy: null };
+      try {
+        const orders = await fetchESIPaged(`/markets/${region.id}/orders/?order_type=all&type_id=${typeId}`);
+        for (const o of orders) {
+          if (o.location_id !== region.hub.id) continue;
+          if (o.is_buy_order) entry.buy = entry.buy === null ? o.price : Math.max(entry.buy, o.price);
+          else entry.sell = entry.sell === null ? o.price : Math.min(entry.sell, o.price);
+        }
+      } catch { entry = { sell: null, buy: null, failed: true }; }
+      state.hubPriceCache.set(region.id + ':' + typeId, entry);
+      onProgress?.(++done, typeIds.length);
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+}
+
+function hubPrice(region, typeId) {
+  return state.hubPriceCache.get(region.id + ':' + typeId);
+}
+
+// 按位置汇总资产，供侧栏站点树和表格分组使用
+function stationSummaries() {
+  const assets = Array.isArray(state.characterData?.assets) ? state.characterData.assets : [];
+  const region = valuationRegion();
+  const map = new Map();
+  for (const a of assets) {
+    if (!map.has(a.rootId)) map.set(a.rootId, { id: a.rootId, name: locationName(a.rootId), assets: [], sell: 0, buy: 0 });
+    const group = map.get(a.rootId);
+    group.assets.push(a);
+    const p = a.is_blueprint_copy ? null : hubPrice(region, a.type_id);
+    const qty = valuationQuantity(a.quantity);
+    if (p?.sell != null) group.sell += p.sell * qty;
+    if (p?.buy != null) group.buy += p.buy * qty;
+  }
+  return [...map.values()].sort((x, y) => y.sell - x.sell || y.assets.length - x.assets.length);
+}
+
+const ASSET_ROW_LIMIT = 300; // 每个位置最多展开的行数
+
+function assetSlotLabel(asset) {
+  const flag = zhLabel(ASSET_FLAG_ZH, asset.location_flag, asset.location_flag || '');
+  return asset.parent ? flag + ' · ' + typeName(asset.parent.type_id) : flag;
+}
+
+async function renderAssetsTab(box) {
+  const data = state.characterData;
+  const assets = Array.isArray(data.assets) ? data.assets : null;
+  if (!assets) { box.innerHTML = '<p class="text-muted">资产读取失败或权限不足' + (data.assets?.__error ? '：' + esc(data.assets.__error) : '') + '</p>'; return; }
+  if (!assets.length) { box.innerHTML = '<p class="text-muted">暂无资产记录</p>'; return; }
+
+  const region = valuationRegion();
+  // 蓝图副本无法在市场出售；没有全服均价的物品基本不可交易，不发起行情查询
+  const avgMap = await getMarketPriceMap();
+  if (activeProfileTab() !== 'assets') return;
+  const qtyByType = new Map();
+  assets.forEach((a) => { if (!a.is_blueprint_copy) qtyByType.set(a.type_id, (qtyByType.get(a.type_id) || 0) + valuationQuantity(a.quantity)); });
+  const tradable = [...qtyByType.keys()].filter((t) => avgMap.size === 0 || avgMap.has(t))
+    .sort((x, y) => (avgMap.get(y) || 0) * qtyByType.get(y) - (avgMap.get(x) || 0) * qtyByType.get(x))
+    .slice(0, 1500);
+
+  const pending = tradable.some((t) => !state.hubPriceCache.has(region.id + ':' + t));
+  if (pending) {
+    box.innerHTML = '<div class="loading-block"><span class="spinner"></span><span id="priceProgress">正在查询 ' + esc(region.hub.name) + ' 行情…</span></div>';
+    const seq = (state.assetRenderSeq = (state.assetRenderSeq || 0) + 1);
+    await fetchHubPrices(region, tradable, (done, total) => {
+      const el = $('priceProgress');
+      if (el) el.textContent = '正在查询 ' + region.hub.name + ' 行情 ' + done + ' / ' + total;
+    });
+    if (seq !== state.assetRenderSeq || activeProfileTab() !== 'assets') return;
+  }
+
+  const orders = Array.isArray(data.orders) ? data.orders : [];
+  const sellOrders = orders.filter((o) => !o.is_buy_order);
+  const buyOrders = orders.filter((o) => o.is_buy_order);
+  const sellOrderTotal = sellOrders.reduce((s, o) => s + o.price * o.volume_remain, 0);
+  const buyOrderTotal = buyOrders.reduce((s, o) => s + o.price * o.volume_remain, 0);
+
+  const groups = stationSummaries();
+  renderProfileStationNav(groups);
+  const assetSell = groups.reduce((s, g) => s + g.sell, 0);
+  const assetBuy = groups.reduce((s, g) => s + g.buy, 0);
+  const nonBpc = assets.filter((a) => !a.is_blueprint_copy);
+  const sellPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.sell != null).length;
+  const buyPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.buy != null).length;
+  const failed = tradable.filter((t) => hubPrice(region, t)?.failed).length;
+
+  const collapsedAll = assets.length > ASSET_ROW_LIMIT;
+  let rows = '';
+  for (const group of groups) {
+    const expanded = state.stationOpen.has(group.id) ? state.stationOpen.get(group.id) : !collapsedAll;
+    rows += `<tr class="asset-group-row${expanded ? ' expanded' : ''}" data-station-id="${group.id}" tabindex="0">
+        <td colspan="7">${ICONS.chevron}<strong>${esc(group.name)}</strong>
+          <span class="group-sum">${group.assets.length} 项 · 卖 ${group.sell ? formatISK(group.sell) : '—'} · 收 ${group.buy ? formatISK(group.buy) : '—'}</span></td></tr>`;
+    const list = [...group.assets].sort((x, y) => {
+      const px = hubPrice(region, x.type_id)?.sell ?? 0;
+      const py = hubPrice(region, y.type_id)?.sell ?? 0;
+      return py * valuationQuantity(y.quantity) - px * valuationQuantity(x.quantity);
+    });
+    rows += list.slice(0, ASSET_ROW_LIMIT).map((a) => {
+      const qty = valuationQuantity(a.quantity);
+      const p = a.is_blueprint_copy ? null : hubPrice(region, a.type_id);
+      const cell = (v, mult) => v == null ? '<span class="muted-cell">—</span>' : formatPrice(v * mult);
+      return profileRow([
+        esc(typeName(a.type_id)) + (a.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : ''),
+        formatNumber(a.quantity ?? 1),
+        cell(p?.sell, 1),
+        '<strong class="down">' + (p?.sell == null ? '—' : formatISK(p.sell * qty)) + '</strong>',
+        cell(p?.buy, 1),
+        '<strong class="up">' + (p?.buy == null ? '—' : formatISK(p.buy * qty)) + '</strong>',
+        esc(assetSlotLabel(a))
+      ], ` class="asset-row" data-group="${group.id}"${expanded ? '' : ' hidden'}`);
+    }).join('');
+    if (list.length > ASSET_ROW_LIMIT) {
+      rows += `<tr class="asset-row more-row" data-group="${group.id}"${expanded ? '' : ' hidden'}><td colspan="7">另有 ${list.length - ASSET_ROW_LIMIT} 项未显示（已计入合计）</td></tr>`;
+    }
+  }
+
+  box.innerHTML =
+    '<div class="valuation-toolbar">' +
+      '<label class="select-wrap" title="估价使用的交易中心">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>' +
+        '<select id="valuationRegion" class="region-select" aria-label="估价市场">' +
+          REGIONS.map((r) => `<option value="${r.id}"${r.id === region.id ? ' selected' : ''}>${esc(r.hub.name)} · ${esc(r.name)}</option>`).join('') +
+        '</select></label>' +
+      '<button class="btn" id="refreshPricesBtn" title="清除缓存并重新查询行情">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新行情</span></button>' +
+      '<span class="toolbar-spacer"></span>' +
+      '<button class="link-btn" id="expandAllAssets">全部展开</button><button class="link-btn" id="collapseAllAssets">全部折叠</button>' +
+    '</div>' +
+    '<div class="valuation-grid">' +
+      valuationCard('资产估值 · 最低卖价', formatISK(assetSell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
+      valuationCard('资产估值 · 最高收价', formatISK(assetBuy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
+      valuationCard('我的卖单', formatISK(sellOrderTotal) + ' ISK', sellOrders.length + ' 笔 · 剩余数量 × 委托价') +
+      valuationCard('我的收单', formatISK(buyOrderTotal) + ' ISK', buyOrders.length + ' 笔 · 剩余数量 × 委托价') +
+      valuationCard('资产 + 订单合计', formatISK(assetSell + sellOrderTotal + buyOrderTotal) + ' ISK',
+        '按收价：' + formatISK(assetBuy + sellOrderTotal + buyOrderTotal) + ' ISK · 不含钱包', 'is-total') +
+    '</div>' +
+    '<p class="text-muted valuation-note">价格取 ' + esc(region.hub.name) + ' 空间站内的最低卖单价与最高收购价；蓝图副本不可上架、无行情的物品不计入。' +
+      (failed ? ' <span class="down">' + failed + ' 种物品行情查询失败，可点「刷新行情」重试。</span>' : '') + '</p>' +
+    '<div class="table-scroll"><table class="pc-mini-table asset-table"><thead><tr>' +
+      '<th>物品</th><th>数量</th><th>最低卖价</th><th>卖价估值</th><th>最高收价</th><th>收价估值</th><th>槽位</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+
+  $('valuationRegion').addEventListener('change', (e) => {
+    store.set('eve-valuation-region', e.target.value);
+    renderProfileTab('assets');
+  });
+  $('refreshPricesBtn').addEventListener('click', () => {
+    for (const key of [...state.hubPriceCache.keys()]) if (key.startsWith(region.id + ':')) state.hubPriceCache.delete(key);
+    renderProfileTab('assets');
+  });
+  $('expandAllAssets').addEventListener('click', () => box.querySelectorAll('.asset-group-row').forEach((r) => setAssetGroupExpanded(r, true)));
+  $('collapseAllAssets').addEventListener('click', () => box.querySelectorAll('.asset-group-row').forEach((r) => setAssetGroupExpanded(r, false)));
+  if (state.pendingStationScroll != null) {
+    scrollToStation(state.pendingStationScroll);
+    state.pendingStationScroll = null;
+  }
+}
+
+function setAssetGroupExpanded(row, expanded) {
+  const id = Number(row.dataset.stationId);
+  row.classList.toggle('expanded', expanded);
+  $('profileData').querySelectorAll(`.asset-row[data-group="${id}"]`).forEach((r) => { r.hidden = !expanded; });
+  state.stationOpen.set(id, expanded); // 记住用户手动展开/折叠的位置，重新渲染时保持
+}
+
+function scrollToStation(stationId) {
+  const row = $('profileData').querySelector(`.asset-group-row[data-station-id="${stationId}"]`);
+  if (!row) return;
+  setAssetGroupExpanded(row, true);
+  row.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  row.classList.add('flash');
+  setTimeout(() => row.classList.remove('flash'), 1200);
 }
 
 async function renderProfileTab(tab) {
@@ -1493,31 +1752,30 @@ async function renderProfileTab(tab) {
   const data = state.characterData || {};
   const ch = data.character || {};
   if (ch.__error) { box.innerHTML = '<p class="text-muted">角色信息读取失败：' + esc(ch.__error) + '</p>'; return; }
-  const names = state.esiNames || new Map();
-  const nameOf = (id) => names.get(Number(id)) || (id ? 'ID ' + id : '--');
   const card = (label, value) => '<div class="info-card"><span>' + label + '</span><strong>' + value + '</strong></div>';
 
   if (tab === 'info') {
-    const walletOk = data.wallet && !data.wallet.__error;
+    const walletOk = typeof data.wallet === 'number';
     const skillsOk = data.skills && !data.skills.__error;
-    const assetsN = data.assets && !data.assets.__error ? data.assets.length : null;
-    const ordersN = data.orders && !data.orders.__error ? data.orders.length : null;
+    const assetsN = Array.isArray(data.assets) ? data.assets.length : null;
+    const ordersN = Array.isArray(data.orders) ? data.orders.length : null;
     const ship = data.ship && !data.ship.__error ? data.ship : null;
     const loc = data.location && !data.location.__error ? data.location : null;
     const skillCount = skillsOk ? (data.skills.skills || []).length : null;
     const totalSp = skillsOk ? data.skills.total_sp : null;
+    const where = loc ? displayName(loc.solar_system_id) + (loc.station_id ? ' · ' + locationName(loc.station_id) : loc.structure_id ? ' · ' + locationName(loc.structure_id) : '') : '未公开';
     box.innerHTML = '<div class="info-grid">' +
       card('种族', esc(ch.race_name || '—')) +
       card('血统', esc(ch.bloodline_name || '—')) +
       card('性别', esc(zhLabel(GENDER_ZH, ch.gender, ch.gender || '—'))) +
       card('生日', ch.birthday ? new Date(ch.birthday).toLocaleDateString('zh-CN') : '—') +
-      card('军团', ch.corporation_id ? esc(nameOf(ch.corporation_id)) : '—') +
-      card('联盟', ch.alliance_id ? esc(nameOf(ch.alliance_id)) : '无') +
-      card('当前位置', loc ? esc(nameOf(loc.solar_system_id)) : '未公开') +
-      card('当前舰船', ship ? esc(nameOf(ship.ship_type_id)) : '未公开') +
+      card('军团', ch.corporation_id ? esc(displayName(ch.corporation_id)) : '—') +
+      card('联盟', ch.alliance_id ? esc(displayName(ch.alliance_id)) : '无') +
+      card('当前位置', esc(where)) +
+      card('当前舰船', ship ? esc(typeName(ship.ship_type_id)) + (ship.ship_name ? '（' + esc(ship.ship_name) + '）' : '') : '未公开') +
       card('安全等级', ch.security_status !== undefined ? Number(ch.security_status).toFixed(2) : '—') +
       card('技能', skillCount === null ? '权限不足' : (skillCount + ' 项 / ' + (totalSp ? totalSp.toLocaleString('zh-CN') : '0') + ' SP')) +
-      card('钱包余额', walletOk ? formatISK(data.wallet.balance) + ' ISK' : '权限不足') +
+      card('钱包余额', walletOk ? formatISK(data.wallet) + ' ISK' : '权限不足') +
       card('资产 / 订单', (assetsN === null ? '?' : assetsN) + ' / ' + (ordersN === null ? '?' : ordersN)) +
       '</div>' +
       (ch.title ? '<p class="text-muted">头衔：' + esc(ch.title) + '</p>' : '');
@@ -1525,80 +1783,18 @@ async function renderProfileTab(tab) {
   }
 
   if (tab === 'assets') {
-    const assets = data.assets && !data.assets.__error ? data.assets : null;
-    if (!assets) { renderProfileStationNav([]); box.innerHTML = '<p class="text-muted">资产读取失败或权限不足</p>'; return; }
-    if (!assets.length) { renderProfileStationNav([]); box.innerHTML = '<p class="text-muted">暂无资产记录</p>'; return; }
-    const orders = data.orders && !data.orders.__error ? data.orders : [];
-    if (!(state.marketPriceMap instanceof Map)) box.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取全服均价…</div>';
-    const marketPrices = await getMarketPriceMap();
-    if (activeProfileTab() !== 'assets') return;
-    const pricedAssets = assets.map((asset) => {
-      const marketPrice = marketPrices.get(Number(asset.type_id));
-      const value = marketPrice === undefined ? null : valuationQuantity(asset.quantity) * marketPrice;
-      return { asset, marketPrice, value };
-    });
-    const pricedAssetCount = pricedAssets.filter((row) => row.value !== null).length;
-    const assetTotal = pricedAssets.reduce((sum, row) => sum + (row.value ?? 0), 0);
-    const sellOrders = orders.filter((order) => !order.is_buy_order);
-    const buyOrders = orders.filter((order) => order.is_buy_order);
-    const buyTotal = buyOrders.reduce((sum, order) => sum + Number(order.price || 0) * Number(order.volume_remain || 0), 0);
-    const sellValuations = sellOrders.map((order) => {
-      const marketPrice = marketPrices.get(Number(order.type_id));
-      return marketPrice === undefined ? null : marketPrice * Number(order.volume_remain || 0);
-    });
-    const pricedSellCount = sellValuations.filter((value) => value !== null).length;
-    const sellTotal = sellValuations.reduce((sum, value) => sum + (value ?? 0), 0);
-    const orderTotal = buyTotal + sellTotal;
-    const combinedTotal = assetTotal + orderTotal;
-    const assetValueText = pricedAssetCount ? formatISK(assetTotal) + ' ISK' : '暂无行情';
-    const sellValueText = sellOrders.length && !pricedSellCount ? '暂无行情' : formatISK(sellTotal) + ' ISK';
-    const orderValueText = orders.length && !buyOrders.length && !pricedSellCount ? '暂无行情' : formatISK(orderTotal) + ' ISK';
-    const combinedValueText = pricedAssetCount || buyOrders.length || pricedSellCount ? formatISK(combinedTotal) + ' ISK' : '暂无行情';
-    const shown = assets.slice(0, 200);
-    const groups = new Map();
-    shown.forEach((asset, index) => {
-      const row = pricedAssets[index];
-      const station = nameOf(asset.location_id);
-      if (!groups.has(station)) groups.set(station, []);
-      groups.get(station).push(row);
-    });
-    let assetRows = '';
-    const stations = [...groups.keys()];
-    for (const [stationIndex, station] of stations.entries()) {
-      const rows = groups.get(station);
-      const groupTotal = rows.reduce((sum, row) => sum + (row.value ?? 0), 0);
-      const groupPriced = rows.filter((row) => row.value !== null).length;
-      assetRows += '<tr class="asset-group-row" data-station-index="' + stationIndex + '"><td colspan="5"><strong>' + esc(station) + '</strong><span>' + rows.length + ' 项 · ' + (groupPriced ? formatISK(groupTotal) + ' ISK' : '暂无行情') + '</span></td></tr>';
-      assetRows += rows.map(({ asset, marketPrice, value }) => profileRow([
-        esc(nameOf(asset.type_id)) + (asset.is_blueprint_copy ? '（蓝图副本）' : ''),
-        (asset.quantity ?? 1).toLocaleString('zh-CN'),
-        marketPrice === undefined ? '<span class="muted-cell">暂无行情</span>' : formatISK(marketPrice) + ' ISK',
-        value === null ? '<span class="muted-cell">—</span>' : formatISK(value) + ' ISK',
-        esc(zhLabel(ASSET_FLAG_ZH, asset.location_flag, asset.location_flag || ''))
-      ])).join('');
-    }
-    renderProfileStationNav(stations);
-    box.innerHTML = '<div class="valuation-grid">' +
-      valuationCard('资产市场估值', assetValueText, pricedAssetCount + '/' + assets.length + ' 项有 ESI 全服均价', 'is-primary') +
-      valuationCard('卖单市场估值', sellValueText, pricedSellCount + '/' + sellOrders.length + ' 笔按市场均价', 'is-sell') +
-      valuationCard('买单占用资金', formatISK(buyTotal) + ' ISK', buyOrders.length + ' 笔按剩余数量 × 委托价', 'is-buy') +
-      valuationCard('买卖订单合计', orderValueText, '卖单按市场均价，买单按委托价') +
-      valuationCard('资产 + 订单合计', combinedValueText, '不含钱包余额', 'is-total') +
-      '</div>' +
-      '<p class="text-muted valuation-note">资产按空间站/位置分组；市场单价来自 ESI 全服均价，缺少行情的项目不计入估值。当前接口读取资产第一页' + (assets.length > 200 ? '，表格仅显示前 200 项' : '') + '。</p>' +
-      '<div class="table-scroll"><table class="pc-mini-table asset-table"><thead><tr><th>物品</th><th>数量</th><th>市场单价</th><th>市场估值</th><th>槽位</th></tr></thead><tbody>' + assetRows + '</tbody></table></div>' +
-      (assets.length > 200 ? '<p class="text-muted">共读取 ' + assets.length + ' 项，表格仅显示前 200 项。</p>' : '');
+    await renderAssetsTab(box);
     return;
   }
 
   if (tab === 'orders') {
-    const orders = data.orders && !data.orders.__error ? data.orders : null;
+    const orders = Array.isArray(data.orders) ? data.orders : null;
     if (!orders || !orders.length) { box.innerHTML = '<p class="text-muted">暂无有效市场订单</p>'; return; }
     box.innerHTML = '<div class="table-scroll"><table class="pc-mini-table orders-mini"><thead><tr><th>物品</th><th>方向</th><th>位置</th><th>范围</th><th>单价</th><th>剩余/总量</th></tr></thead><tbody>' +
       orders.map((o) => profileRow([
-        esc(nameOf(o.type_id)),
+        esc(typeName(o.type_id)),
         o.is_buy_order ? '<span class="pill buy">收购</span>' : '<span class="pill sell">出售</span>',
-        esc(nameOf(o.location_id)),
+        esc(locationName(o.location_id)),
         esc(rangeLabel(o.range || '')),
         formatPrice(o.price),
         formatNumber(o.volume_remain) + ' / ' + formatNumber(o.volume_total)
@@ -1607,15 +1803,15 @@ async function renderProfileTab(tab) {
   }
 
   if (tab === 'wallet') {
-    const journal = data.journal && !data.journal.__error ? data.journal : null;
-    const walletOk = data.wallet && !data.wallet.__error;
-    let html = '<div class="info-grid"><div class="info-card"><span>钱包余额</span><strong>' + (walletOk ? formatISK(data.wallet.balance) + ' ISK' : '权限不足') + '</strong></div></div>';
+    const journal = Array.isArray(data.journal) ? data.journal : null;
+    const walletOk = typeof data.wallet === 'number'; // ESI /wallet/ 直接返回余额数字
+    let html = '<div class="info-grid"><div class="info-card"><span>钱包余额</span><strong>' + (walletOk ? formatPrice(data.wallet) + ' ISK' : '权限不足') + '</strong></div></div>';
     if (journal && journal.length) {
       html += '<div class="table-scroll"><table class="pc-mini-table wallet-mini"><thead><tr><th>时间</th><th>类型</th><th>对方</th><th>金额</th></tr></thead><tbody>' +
         journal.slice(0, 50).map((j) => profileRow([
           j.date ? new Date(j.date).toLocaleString('zh-CN', { hour12: false }) : '',
           esc(zhLabel(JOURNAL_REF_ZH, j.ref_type, j.ref_type || '')),
-          esc(nameOf(j.first_party_id)),
+          esc(displayName(j.first_party_id)),
           '<span class="' + (j.amount >= 0 ? 'up' : 'down') + '">' + (j.amount >= 0 ? '+' : '') + formatISK(j.amount) + '</span>'
         ])).join('') + '</tbody></table></div>' +
         (journal.length > 50 ? '<p class="text-muted">仅显示最近 50 条（共 ' + journal.length + ' 条）</p>' : '');
@@ -1626,21 +1822,38 @@ async function renderProfileTab(tab) {
   }
 }
 
-function switchProfileTab(tab, stationIndex) {
+function switchProfileTab(tab, stationId) {
   $$('.profile-tabs .tab-link').forEach((link) => link.classList.toggle('active', link.dataset.profile === tab));
-  $$('#profileNav .profile-nav-btn').forEach((link) => link.classList.toggle('active', link.dataset.profile === tab && stationIndex === undefined));
-  $$('#profileNav .profile-nav-station').forEach((link) => link.classList.toggle('active', link.dataset.stationIndex === stationIndex));
-  if (state.characterData) renderProfileTab(tab);
+  $$('#profileNav .profile-nav-btn').forEach((link) => link.classList.toggle('active', link.dataset.profile === tab && stationId === undefined));
+  $$('#profileNav .profile-nav-station').forEach((link) => link.classList.toggle('active', link.dataset.stationId === stationId));
+  if (!state.characterData) return;
+  // 已在资产页时直接定位，不重新渲染
+  const onAssets = tab === 'assets' && $('profileData').querySelector('.asset-table');
+  if (stationId !== undefined && onAssets && state.renderedProfileTab === 'assets') {
+    scrollToStation(stationId);
+    return;
+  }
+  if (stationId !== undefined) state.pendingStationScroll = stationId;
+  state.renderedProfileTab = tab;
+  renderProfileTab(tab);
 }
 
+// 侧栏「空间站资产」站点树：可整体折叠，按卖价估值排序
 function renderProfileStationNav(stations) {
   const nav = $('profileStationNav');
   if (!nav) return;
+  $('stationCount').textContent = stations.length;
+  $('stationCount').hidden = !stations.length;
   if (!stations.length) {
-    nav.innerHTML = '<span class="profile-nav-empty">暂无空间站资产</span>';
+    nav.innerHTML = '<span class="profile-nav-empty">' + (state.characterData ? '暂无空间站资产' : '绑定后显示空间站') + '</span>';
     return;
   }
-  nav.innerHTML = stations.map((station, index) => '<button class="profile-nav-station" data-profile="assets" data-station-index="' + index + '" title="' + esc(station) + '">' + esc(station) + '</button>').join('');
+  const hasPrices = stations.some((s) => s.sell > 0);
+  nav.innerHTML = stations.map((s) =>
+    `<button class="profile-nav-station" data-profile="assets" data-station-id="${s.id}" title="${esc(s.name)}">
+        <span class="station-name">${esc(s.name)}</span>
+        <span class="station-meta">${s.assets.length} 项${hasPrices && s.sell ? ' · ' + formatISK(s.sell) : ''}</span>
+      </button>`).join('');
 }
 
 // ===== ESI 绑定 =====

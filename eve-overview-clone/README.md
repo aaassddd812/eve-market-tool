@@ -60,6 +60,20 @@ eve-overview-clone/
 | `1` `2` `3` | 切换订单簿 / 价格走势 / 历史数据 |
 | `Esc` | 关闭弹窗 / 抽屉，清空搜索 |
 
+## 个人中心（v3.1）
+
+- **侧栏**：与市场中心一致，可收起（`[`）/展开，移动端为抽屉；「空间站资产」分组可折叠，按估值排序并显示每个位置的物品数与卖价估值
+- **位置名称**：装在舰船/集装箱里的资产会沿 `location_id` 向上找到真正所在的空间站；NPC 空间站、星系、NPC 军团、NPC 角色显示官方中文名（`npc-names-zh.json`），玩家军团/联盟/建筑等玩家自定义名称保留原名
+- **资产估值**：可选交易中心（默认吉他 4-4），分别按站内**最低卖价**和**最高收购价**估值；行情按物品逐个查询 ESI 并在会话内缓存，可「刷新行情」；蓝图副本与无行情物品不计入
+- **资产表**：按位置分组，分组行可点击折叠；资产读取全部分页
+
+官方中文名称表由 `build_npc_names.mjs` 从 CCP 官方 SDE 生成（生成时会用 ESI 校验全部 5210 个 NPC 空间站的拼名规则）：
+
+```bash
+# 下载并解压 https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip
+node build_npc_names.mjs <解压目录> --verify
+```
+
 ## 数据说明
 
 目录来自 ESI 市场组接口，`catalog.json` 中的物品名称来自 ESI `/universe/types/{type_id}/?language=zh`，当前目录包含 19,957 个物品的官方中文名称。

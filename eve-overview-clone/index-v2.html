@@ -14,7 +14,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v3r1">
+  <link rel="stylesheet" href="css/modern-style.css?v=v3r2">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -290,7 +290,7 @@
         <aside class="sidebar profile-sidebar" id="profileSidebar" aria-label="个人中心导航">
           <div class="sidebar-header profile-sidebar-header">
             <span class="profile-sidebar-title">个人中心</span>
-            <button class="collapse-btn" id="profileSidebarCollapse" title="收起侧边栏" aria-label="收起侧边栏">
+            <button class="collapse-btn" id="profileSidebarCollapse" title="收起侧边栏 ([)" aria-label="收起侧边栏">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
             </button>
           </div>
@@ -298,9 +298,13 @@
             <nav class="profile-nav" id="profileNav">
               <button class="profile-nav-btn active" data-profile="info">角色概览</button>
               <button class="profile-nav-btn" data-profile="assets">资产估值</button>
-              <div class="profile-nav-group">
-                <div class="profile-nav-group-title">空间站资产</div>
-                <div id="profileStationNav"><span class="profile-nav-empty">绑定后显示空间站</span></div>
+              <div class="profile-nav-group expanded" id="stationGroup">
+                <button class="profile-nav-group-title" id="stationGroupToggle" aria-expanded="true" aria-controls="profileStationNav">
+                  <svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                  <span>空间站资产</span>
+                  <span class="category-count" id="stationCount" hidden>0</span>
+                </button>
+                <div class="profile-station-list" id="profileStationNav"><span class="profile-nav-empty">绑定后显示空间站</span></div>
               </div>
               <button class="profile-nav-btn" data-profile="orders">市场订单</button>
               <button class="profile-nav-btn" data-profile="wallet">钱包流水</button>
@@ -308,7 +312,7 @@
           </div>
         </aside>
         <div class="profile-scroll">
-          <button class="sidebar-reopen" id="profileSidebarReopen" title="展开侧边栏" aria-label="展开侧边栏" hidden>
+          <button class="sidebar-reopen" id="profileSidebarReopen" title="展开侧边栏 ([)" aria-label="展开侧边栏" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
           </button>
           <div class="profile-container">
@@ -396,6 +400,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v3r1" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v3r2" type="module" data-cfasync="false"></script>
 </body>
 </html>

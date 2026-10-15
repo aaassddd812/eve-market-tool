@@ -1118,7 +1118,7 @@ td.loc {
   margin: 0 auto;
 }
 
-.profile-sidebar { --sidebar-w: 232px; }
+.profile-sidebar { --sidebar-w: 280px; }
 .profile-sidebar-header { justify-content: space-between; min-height: 63px; }
 .profile-sidebar-title { color: var(--text-primary); font-size: 0.9375rem; font-weight: 600; padding-left: 4px; }
 .profile-sidebar-content { overflow-y: auto; }
@@ -1139,10 +1139,46 @@ td.loc {
 
 .profile-nav-btn:hover, .profile-nav-station:hover { color: var(--text-primary); background: var(--bg-hover); }
 .profile-nav-btn.active, .profile-nav-station.active { color: var(--accent-primary); background: var(--accent-soft); font-weight: 600; }
-.profile-nav-group { margin: 6px 0 4px; padding: 8px 0 4px; border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); }
-.profile-nav-group-title { padding: 0 12px 4px; color: var(--text-muted); font-size: 0.75rem; }
-.profile-nav-station { padding-left: 22px; font-size: 0.8125rem; }
-.profile-nav-empty { display: block; padding: 4px 12px 6px 22px; color: var(--text-muted); font-size: 0.75rem; }
+.profile-nav-group { margin: 6px 0 4px; padding: 6px 0; border-top: 1px solid var(--border-primary); border-bottom: 1px solid var(--border-primary); }
+
+/* 「空间站资产」分组：与市场目录树一致的折叠交互 */
+.profile-nav-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  text-align: left;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+.profile-nav-group-title:hover { color: var(--text-primary); background: var(--bg-hover); }
+.profile-nav-group-title > span:first-of-type { flex: 1; }
+.profile-nav-group.expanded > .profile-nav-group-title { color: var(--text-primary); }
+.profile-nav-group.expanded > .profile-nav-group-title .category-chevron { transform: rotate(90deg); }
+
+.profile-station-list {
+  display: none;
+  margin: 2px 0 0 14px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border-primary);
+}
+.profile-nav-group.expanded > .profile-station-list { display: block; }
+
+.profile-nav-station {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
+  white-space: normal;
+}
+.station-name { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.35; }
+.station-meta { font-size: 0.6875rem; color: var(--text-muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+.profile-nav-empty { display: block; padding: 4px 10px 6px; color: var(--text-muted); font-size: 0.75rem; }
 
 .profile-empty {
   display: flex;
@@ -1223,7 +1259,7 @@ td.loc {
   min-height: 360px;
 }
 
-.profile-data > .text-muted { text-align: center; padding: var(--spacing-xl) 0; }
+.profile-data > .text-muted:not(.valuation-note) { text-align: center; padding: var(--spacing-xl) 0; }
 
 .loading-block {
   display: flex;
@@ -1273,8 +1309,22 @@ td.loc {
 .valuation-note { margin: 8px 0 0; line-height: 1.6; }
 .asset-table th:nth-child(2), .asset-table th:nth-child(3), .asset-table th:nth-child(4),
 .asset-table td:nth-child(2), .asset-table td:nth-child(3), .asset-table td:nth-child(4) { text-align: right; }
-.asset-group-row td { padding: 9px 12px; color: var(--accent-primary); background: var(--accent-soft); scroll-margin-top: 12px; }
-.asset-group-row td span { float: right; color: var(--text-muted); font-size: 0.75rem; font-weight: 400; }
+.asset-group-row { cursor: pointer; user-select: none; }
+.asset-group-row td { padding: 9px 12px; color: var(--accent-primary); background: var(--accent-soft); scroll-margin-top: 12px; white-space: normal; }
+.asset-group-row:hover td { background: var(--accent-ring); }
+.asset-group-row .category-chevron { display: inline-block; vertical-align: -2px; margin-right: 6px; color: var(--accent-primary); }
+.asset-group-row.expanded .category-chevron { transform: rotate(90deg); }
+.asset-group-row .group-sum { float: right; margin-left: 12px; color: var(--text-secondary); font-size: 0.75rem; font-weight: 400; font-variant-numeric: tabular-nums; }
+.asset-group-row.flash td { animation: flash 1.2s ease-out; }
+@keyframes flash { 0%, 40% { background: var(--accent-ring); } }
+.asset-table td:nth-child(5), .asset-table td:nth-child(6), .asset-table th:nth-child(5), .asset-table th:nth-child(6) { text-align: right; }
+.asset-table td:last-child { color: var(--text-secondary); }
+.more-row td { text-align: center; color: var(--text-muted); font-size: 0.75rem; }
+.pill:not(.buy):not(.sell) { color: var(--text-secondary); background: var(--bg-tertiary); }
+
+.valuation-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.valuation-toolbar .region-select { min-width: 200px; }
+.toolbar-spacer { flex: 1; }
 .muted-cell { color: var(--text-muted); }
 
 /* ===== Toast ===== */
@@ -1461,8 +1511,8 @@ td.loc {
   .server-status { padding: 0 10px; }
   .server-status .status-text { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
 
-  /* 物品目录变为左侧抽屉 */
-  #sidebar {
+  /* 两个视图的侧栏都变为左侧抽屉 */
+  #sidebar, #profileSidebar {
     position: absolute;
     top: 0;
     left: 0;
@@ -1474,11 +1524,10 @@ td.loc {
     box-shadow: var(--shadow-lg);
   }
 
-  #sidebar.collapsed > * { visibility: visible; }
-  #sidebar.drawer-open { transform: none; }
-  #sidebarReopen { display: none !important; }
-
-  .profile-sidebar, #profileSidebarReopen { display: none !important; }
+  #sidebar.collapsed > *, #profileSidebar.collapsed > * { visibility: visible; }
+  #sidebar.drawer-open, #profileSidebar.drawer-open { transform: none; }
+  .sidebar-reopen { display: none !important; }
+  .profile-sidebar-content, .profile-sidebar-header { min-width: 0; }
 
   .detail-view, .profile-container { padding: var(--spacing-md); }
 
