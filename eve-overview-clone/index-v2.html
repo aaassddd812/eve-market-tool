@@ -14,7 +14,7 @@
       document.documentElement.setAttribute('data-theme', t);
     })();
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v3r2">
+  <link rel="stylesheet" href="css/modern-style.css?v=v5r3">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -25,12 +25,7 @@
       </button>
 
       <div class="header-brand">
-        <div class="brand-icon">
-          <svg viewBox="0 0 32 32" fill="#fff">
-            <path d="M16 2L4 8v8c0 7.5 5.2 14.5 12 16 6.8-1.5 12-8.5 12-16V8L16 2zm0 3.2l9 4.5v6.3c0 5.9-4.1 11.4-9 12.8-4.9-1.4-9-6.9-9-12.8V9.7l9-4.5z"/>
-            <circle cx="16" cy="16" r="4"/>
-          </svg>
-        </div>
+        <div class="brand-icon"><img src="https://images.evetech.net/types/44992/icon?size=64" alt="" width="32" height="32"></div>
         <span class="brand-name">EVE Market</span>
       </div>
 
@@ -166,20 +161,22 @@
                 <div class="stat-value" id="maxBuyPrice">—</div>
                 <div class="stat-meta" id="maxBuyMeta">等待数据</div>
               </button>
-              <div class="stat-card">
+              <div class="stat-card tone-amber">
                 <div class="stat-label">买卖价差</div>
                 <div class="stat-value" id="spreadValue">—</div>
                 <div class="stat-meta" id="spreadMeta">—</div>
               </div>
-              <div class="stat-card">
+              <div class="stat-card tone-violet">
                 <div class="stat-label">日均成交 (30天)</div>
                 <div class="stat-value" id="volumeValue">—</div>
                 <div class="stat-meta" id="volumeMeta">—</div>
+                <svg class="sparkline" id="volumeSpark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"></svg>
               </div>
               <div class="stat-card">
                 <div class="stat-label">全服均价</div>
                 <div class="stat-value" id="avgPrice">—</div>
                 <div class="stat-meta" id="avgMeta">ESI 调整均价</div>
+                <svg class="sparkline" id="priceSpark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"></svg>
               </div>
             </div>
 
@@ -307,6 +304,7 @@
                 <div class="profile-station-list" id="profileStationNav"><span class="profile-nav-empty">绑定后显示空间站</span></div>
               </div>
               <button class="profile-nav-btn" data-profile="orders">市场订单</button>
+              <button class="profile-nav-btn" data-profile="contracts">合同查询</button>
               <button class="profile-nav-btn" data-profile="wallet">钱包流水</button>
             </nav>
           </div>
@@ -327,10 +325,12 @@
 
             <div class="profile-content" id="profileContent" hidden>
               <div class="profile-header">
-                <img class="profile-avatar" id="profileAvatar" src="data:," alt="">
+                <div class="profile-hero-main">
+                <div class="avatar-ring"><img class="profile-avatar" id="profileAvatar" src="data:," alt=""></div>
                 <div class="profile-info">
                   <h2 id="profileName">角色名称</h2>
-                  <p id="profileCorp">军团名称</p>
+                  <p id="profileCorp"></p>
+                  <div class="profile-chips" id="profileChips"></div>
                 </div>
                 <div class="profile-actions">
                   <button class="btn" id="refreshProfileBtn">
@@ -339,12 +339,15 @@
                   </button>
                   <button class="btn btn-danger-ghost" id="unbindEsiBtn">解绑</button>
                 </div>
+                </div>
+                <div class="profile-hero-stats" id="profileHeroStats" hidden></div>
               </div>
 
               <div class="profile-tabs" role="tablist">
                 <button class="tab-link active" data-profile="info">基本信息</button>
                 <button class="tab-link" data-profile="assets">资产</button>
                 <button class="tab-link" data-profile="orders">订单</button>
+                <button class="tab-link" data-profile="contracts">合同</button>
                 <button class="tab-link" data-profile="wallet">钱包</button>
               </div>
 
@@ -400,6 +403,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v3r2" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v5r3" type="module" data-cfasync="false"></script>
 </body>
 </html>

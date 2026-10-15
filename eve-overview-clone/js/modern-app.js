@@ -323,16 +323,23 @@ function initSidebar() {
     if (MOBILE_QUERY.matches) closeDrawer();
   });
 
-  // 资产表的位置分组行：点击折叠/展开
-  $('profileData').addEventListener('click', (event) => {
-    const row = event.target.closest('.asset-group-row');
-    if (row) setAssetGroupExpanded(row, !row.classList.contains('expanded'));
-  });
+  // 资产总估值表：点击空间站进入该站；空间站页的返回按钮
+  const openFromData = (target) => {
+    const row = target.closest('[data-open-station]');
+    if (row) { switchProfileTab('assets', row.dataset.openStation); return true; }
+    if (target.closest('[data-back-assets]')) { switchProfileTab('assets'); return true; }
+    const contract = target.closest('[data-contract-id]');
+    if (contract) { openContract(Number(contract.dataset.contractId)); return true; }
+    if (target.closest('[data-back-contracts]')) { openContract(null); return true; }
+    const ctype = target.closest('[data-ctype]');
+    if (ctype) { state.contractView.type = ctype.dataset.ctype; renderProfileTab('contracts'); return true; }
+    return false;
+  };
+  $('profileData').addEventListener('click', (event) => openFromData(event.target));
   $('profileData').addEventListener('keydown', (event) => {
-    const row = event.target.closest('.asset-group-row');
-    if (row && (event.key === 'Enter' || event.key === ' ')) {
+    if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('[data-open-station], [data-contract-id]')) {
       event.preventDefault();
-      setAssetGroupExpanded(row, !row.classList.contains('expanded'));
+      openFromData(event.target);
     }
   });
 
@@ -806,9 +813,34 @@ function sideOrders(isBuy) {
   return state.orders.filter((o) => o.is_buy_order === isBuy && (!state.hubOnly || o.location_id === hubId));
 }
 
-function setStat(id, text, metaId, meta) {
-  $(id).textContent = text;
+// 数值后附带较小的单位；占位符（— / …）不加单位
+function setStat(id, text, metaId, meta, unit = 'ISK') {
+  const el = $(id);
+  if (unit && text !== '—' && text !== '…') el.innerHTML = esc(text) + '<span class="unit">' + esc(unit) + '</span>';
+  else el.textContent = text;
   if (metaId) $(metaId).textContent = meta;
+}
+
+// 卡片迷你图：values 按时间正序
+function renderSparkline(svgId, values, type) {
+  const svg = $(svgId);
+  if (!svg) return;
+  const data = values.filter((v) => Number.isFinite(v));
+  if (data.length < 2) { svg.innerHTML = ''; return; }
+  const max = Math.max(...data);
+  const min = type === 'bar' ? 0 : Math.min(...data);
+  const range = max - min || 1;
+  const y = (v) => 30 - ((v - min) / range) * 28 - 1;
+  if (type === 'bar') {
+    const w = 100 / data.length;
+    svg.innerHTML = data.map((v, i) => {
+      const h = Math.max(1, ((v - min) / range) * 30);
+      return `<rect class="spark-bar${i === data.length - 1 ? ' last' : ''}" x="${(i * w + w * 0.15).toFixed(2)}" y="${(30 - h).toFixed(2)}" width="${(w * 0.7).toFixed(2)}" height="${h.toFixed(2)}" rx="0.6"/>`;
+    }).join('');
+  } else {
+    const pts = data.map((v, i) => `${((i / (data.length - 1)) * 100).toFixed(2)},${y(v).toFixed(2)}`);
+    svg.innerHTML = `<path class="spark-area" d="M0,30 L${pts.join(' L')} L100,30 Z"/><path class="spark-line" d="M${pts.join(' L')}"/>`;
+  }
 }
 
 function renderStats() {
@@ -842,10 +874,13 @@ function renderStats() {
       const pct = ((curAvg - prevAvg) / prevAvg) * 100;
       trend = ` · 均价${pct >= 0 ? '↑' : '↓'}${Math.abs(pct).toFixed(1)}%`;
     }
-    setStat('volumeValue', formatISK(avgVolume), 'volumeMeta', `近 ${recent.length} 天${trend}`);
+    setStat('volumeValue', formatISK(avgVolume), 'volumeMeta', `近 ${recent.length} 天${trend}`, '件');
   } else {
     setStat('volumeValue', '—', 'volumeMeta', '暂无成交记录');
   }
+  const chrono = recent.slice().reverse();
+  renderSparkline('volumeSpark', chrono.map((d) => d.volume), 'bar');
+  renderSparkline('priceSpark', chrono.map((d) => d.average), 'line');
   renderAvgPrice(state.selectedItem?.id);
 }
 
@@ -994,7 +1029,7 @@ function initDetailActions() {
   $('itemIcon').addEventListener('error', (e) => e.target.classList.add('broken'));
   // 部分物品（蓝图、技能等）没有图标，隐藏破图
   document.addEventListener('error', (e) => {
-    if (e.target.tagName === 'IMG' && e.target.closest('.search-hit, .mini-item, .quick-chip')) e.target.classList.add('broken');
+    if (e.target.tagName === 'IMG' && e.target.closest('.search-hit, .mini-item, .quick-chip, .info-icon, .chip')) e.target.classList.add('broken');
   }, true);
 }
 
@@ -1088,7 +1123,7 @@ function renderChart() {
       animation: { duration: 250 },
       interaction: { mode: 'index', intersect: false },
       plugins: {
-        legend: { position: 'top', align: 'end', labels: { color: textColor, usePointStyle: true, boxWidth: 8, padding: 14, font: { size: 12 } } },
+        legend: { position: 'top', align: 'end', labels: { color: textColor, usePointStyle: true, boxWidth: 7, boxHeight: 7, padding: 14, font: { size: 12 } } },
         tooltip: {
           backgroundColor: cssVar('--bg-elevated'), titleColor: cssVar('--text-primary'), bodyColor: textColor,
           borderColor: gridColor, borderWidth: 1, padding: 10,
@@ -1257,7 +1292,10 @@ function valuationQuantity(quantity) {
 }
 
 function valuationCard(label, value, detail, kind = '') {
-  return '<div class="valuation-card ' + kind + '"><span class="valuation-label">' + label + '</span><strong class="valuation-value">' + value + '</strong><span class="valuation-detail">' + detail + '</span></div>';
+  // 「1.23B ISK」拆成数值 + 较小的单位
+  const m = /^(.*\S)\s+(ISK)$/.exec(value);
+  const shown = m ? m[1] + '<span class="unit">' + m[2] + '</span>' : value;
+  return '<div class="valuation-card ' + kind + '"><span class="valuation-label">' + label + '</span><strong class="valuation-value">' + shown + '</strong><span class="valuation-detail">' + detail + '</span></div>';
 }
 const JOURNAL_REF_ZH = {
   player_donation: '玩家转账', market_transaction: '市场交易', transaction_tax: '交易税', broker_fee: '经纪费',
@@ -1477,6 +1515,8 @@ async function loadCharacterData() {
   $('profileAvatar').src = 'https://images.evetech.net/characters/' + id + '/portrait?size=128';
   $('profileName').textContent = token.character_name || ('角色 ' + id);
   $('profileCorp').textContent = '数据读取中…';
+  $('profileChips').innerHTML = '';
+  $('profileHeroStats').hidden = true;
   $('profileData').innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取角色数据…</div>';
   const paths = {
     character: '/characters/' + id + '/',
@@ -1495,6 +1535,9 @@ async function loadCharacterData() {
     loadNpcNames()
   ]);
   state.characterData = Object.fromEntries(entries);
+  state.contracts = null;
+  state.contractItems.clear();
+  state.contractBids.clear();
   state.characterData.assets = assets;
   const ch = state.characterData.character || {};
   const assetsList = Array.isArray(assets) ? assets : [];
@@ -1533,12 +1576,97 @@ async function loadCharacterData() {
       const bl = (Array.isArray(bloodlines) ? bloodlines : []).find((b) => b.bloodline_id === ch.bloodline_id);
       ch.race_name = race?.name || '';
       ch.bloodline_name = bl?.name || '';
+      ch.race_faction_id = race?.alliance_id || null;      // 种族所属阵营，如 加达里 → 500001
+      ch.bloodline_corp_id = bl?.corporation_id || null;   // 血统所属 NPC 军团
     } catch { /* 拿不到就不显示 */ }
   }
+  state.locationIconType = await resolveLocationIconType(state.characterData.location);
 
-  $('profileCorp').textContent = ch.corporation_id ? displayName(ch.corporation_id) : (ch.race_name || '');
+  renderProfileHero();
   renderProfileStationNav(stationSummaries());
   renderProfileTab(activeProfileTab());
+}
+
+// ===== 游戏内图标（EVE 官方图片服务器）=====
+const EVE_IMAGES = 'https://images.evetech.net';
+const GAME_ICON = {
+  capsule: 670,        // 太空舱：飞行员诞生
+  skillbook: 3300,     // 技能书
+  structure: 35832,    // 星城（玩家建筑类型需授权才能查询，统一用空堡图标）
+  concord: 1000125     // 统合部
+};
+
+function gameImage(path, size = 64) {
+  return EVE_IMAGES + '/' + path + '?size=' + size;
+}
+
+// 当前位置图标：空间站 → 空间站建筑类型；玩家建筑 → 星城；太空中 → 所在星系的恒星
+async function resolveLocationIconType(loc) {
+  if (!loc || loc.__error) return null;
+  try {
+    if (loc.station_id) return (await fetchESI('/universe/stations/' + loc.station_id + '/')).type_id;
+    if (loc.structure_id) return GAME_ICON.structure;
+    const system = await fetchESI('/universe/systems/' + loc.solar_system_id + '/');
+    return (await fetchESI('/universe/stars/' + system.star_id + '/')).type_id;
+  } catch {
+    return null;
+  }
+}
+
+// ===== 角色主视觉：军团/联盟/安全等级标签 + 关键数字 =====
+const ICON_PATHS = {
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  award: '<circle cx="12" cy="8" r="7"/><polyline points="8.21 13.89 7 23 12 20 17 23 15.79 13.88"/>',
+  building: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01M12 6h.01M16 6h.01M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01"/>',
+  flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
+  pin: '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+  rocket: '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+};
+
+function icon(name) {
+  return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (ICON_PATHS[name] || '') + '</svg>';
+}
+
+// image 为图片服务器路径（如 corporations/1000035/logo）；没有可用的游戏图标时退回线条图标
+function infoCard(image, label, value, wide = false, fallback = 'user') {
+  const iconHtml = image
+    ? `<div class="info-icon game"><img src="${gameImage(image)}" alt="" loading="lazy" width="40" height="40"></div>`
+    : `<div class="info-icon">${icon(fallback)}</div>`;
+  return `<div class="info-card${wide ? ' wide' : ''}">${iconHtml}<div class="info-text"><span>${label}</span><strong>${value}</strong></div></div>`;
+}
+
+function infoSection(title, body) {
+  return `<section class="info-section"><h4 class="info-section-title">${title}</h4><div class="info-grid">${body}</div></section>`;
+}
+
+function renderProfileHero() {
+  const data = state.characterData || {};
+  const ch = data.character || {};
+  const chips = [];
+  const logo = (path) => `<img src="${gameImage(path, 32)}" alt="" width="16" height="16">`;
+  if (ch.corporation_id) chips.push(`<span class="chip" title="军团">${logo('corporations/' + ch.corporation_id + '/logo')}${esc(displayName(ch.corporation_id))}</span>`);
+  if (ch.alliance_id) chips.push(`<span class="chip" title="联盟">${logo('alliances/' + ch.alliance_id + '/logo')}${esc(displayName(ch.alliance_id))}</span>`);
+  if (ch.security_status !== undefined) {
+    const sec = Number(ch.security_status);
+    const cls = sec >= 0 ? 'sec-high' : sec > -5 ? 'sec-low' : 'sec-null';
+    chips.push(`<span class="chip ${cls}" title="角色安全等级">${logo('corporations/' + GAME_ICON.concord + '/logo')}安全等级 ${sec.toFixed(2)}</span>`);
+  }
+  $('profileChips').innerHTML = chips.join('');
+  $('profileCorp').textContent = chips.length ? '' : (ch.race_name || '');
+
+  const stat = (label, value, sub = '') => `<div class="hero-stat"><span class="hero-stat-label">${label}</span><span class="hero-stat-value">${value}${sub ? '<span class="hero-stat-sub">' + sub + '</span>' : ''}</span></div>`;
+  const assets = Array.isArray(data.assets) ? data.assets : null;
+  const orders = Array.isArray(data.orders) ? data.orders : null;
+  const skillsOk = data.skills && !data.skills.__error;
+  const locations = assets ? new Set(assets.map((a) => a.rootId)).size : 0;
+  const sells = orders ? orders.filter((o) => !o.is_buy_order).length : 0;
+  $('profileHeroStats').innerHTML =
+    stat('钱包余额', typeof data.wallet === 'number' ? formatISK(data.wallet) : '—', typeof data.wallet === 'number' ? 'ISK' : '') +
+    stat('技能点', skillsOk ? formatISK(data.skills.total_sp) : '—', skillsOk ? 'SP' : '') +
+    stat('资产', assets ? formatNumber(assets.length) + ' 项' : '—', assets ? locations + ' 个位置' : '') +
+    stat('市场订单', orders ? orders.length + ' 笔' : '—', orders ? sells + ' 卖 · ' + (orders.length - sells) + ' 收' : '');
+  $('profileHeroStats').hidden = false;
 }
 
 function typeName(typeId) {
@@ -1562,7 +1690,7 @@ function valuationRegion() {
 
 // regionId:typeId -> { sell, buy }，会话内缓存；点「刷新行情」清空
 state.hubPriceCache = new Map();
-state.stationOpen = new Map();
+state.profileStation = null; // 当前查看的空间站（null 表示资产总估值）
 
 async function fetchHubPrices(region, typeIds, onProgress) {
   const todo = typeIds.filter((t) => !state.hubPriceCache.has(region.id + ':' + t));
@@ -1609,11 +1737,67 @@ function stationSummaries() {
   return [...map.values()].sort((x, y) => y.sell - x.sell || y.assets.length - x.assets.length);
 }
 
-const ASSET_ROW_LIMIT = 300; // 每个位置最多展开的行数
+const ASSET_ROW_LIMIT = 500; // 单个空间站最多显示的行数（估值仍按全部物品计算）
+
+// 装配槽位：HiSlot0 → 高槽 1，RigSlot2 → 改装件槽 3
+const FITTING_SLOT_ZH = { Hi: '高槽', Med: '中槽', Lo: '低槽', Rig: '改装件槽', SubSystem: '子系统槽', Service: '服务槽' };
+
+function assetFlagLabel(flag) {
+  const m = /^(Hi|Med|Lo|Rig|SubSystem|Service)Slot(\d)$/.exec(flag || '');
+  if (m) return FITTING_SLOT_ZH[m[1]] + ' ' + (Number(m[2]) + 1);
+  return zhLabel(ASSET_FLAG_ZH, flag, flag || '');
+}
 
 function assetSlotLabel(asset) {
-  const flag = zhLabel(ASSET_FLAG_ZH, asset.location_flag, asset.location_flag || '');
+  const flag = assetFlagLabel(asset.location_flag);
   return asset.parent ? flag + ' · ' + typeName(asset.parent.type_id) : flag;
+}
+
+// 确保当前估价市场的行情已查询完毕；渲染已过期（切走/换站）时返回 null
+async function ensureAssetPrices(box, assets, seq) {
+  const region = valuationRegion();
+  // 蓝图副本无法在市场出售；没有全服均价的物品基本不可交易，不发起行情查询
+  const avgMap = await getMarketPriceMap();
+  if (seq !== state.assetRenderSeq) return null;
+  const qtyByType = new Map();
+  assets.forEach((a) => { if (!a.is_blueprint_copy) qtyByType.set(a.type_id, (qtyByType.get(a.type_id) || 0) + valuationQuantity(a.quantity)); });
+  const tradable = [...qtyByType.keys()].filter((t) => avgMap.size === 0 || avgMap.has(t))
+    .sort((x, y) => (avgMap.get(y) || 0) * qtyByType.get(y) - (avgMap.get(x) || 0) * qtyByType.get(x))
+    .slice(0, 1500);
+  if (tradable.some((t) => !state.hubPriceCache.has(region.id + ':' + t))) {
+    box.innerHTML = '<div class="loading-block"><span class="spinner"></span><span id="priceProgress">正在查询 ' + esc(region.hub.name) + ' 行情…</span></div>';
+    await fetchHubPrices(region, tradable, (done, total) => {
+      const el = $('priceProgress');
+      if (el) el.textContent = '正在查询 ' + region.hub.name + ' 行情 ' + done + ' / ' + total;
+    });
+    if (seq !== state.assetRenderSeq) return null;
+  }
+  return { region, tradable };
+}
+
+function assetToolbar(region, extra = '') {
+  return '<div class="valuation-toolbar">' + extra +
+    '<span class="toolbar-spacer"></span>' +
+    '<label class="select-wrap" title="估价使用的交易中心">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>' +
+      '<select id="valuationRegion" class="region-select" aria-label="估价市场">' +
+        REGIONS.map((r) => `<option value="${r.id}"${r.id === region.id ? ' selected' : ''}>${esc(r.hub.name)} · ${esc(r.name)}</option>`).join('') +
+      '</select></label>' +
+    '<button class="btn" id="refreshPricesBtn" title="清除缓存并重新查询行情">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新行情</span></button>' +
+  '</div>';
+}
+
+// 估价市场选择 + 刷新行情；资产页与合同详情共用
+function bindAssetToolbar(region, tab = 'assets') {
+  $('valuationRegion').addEventListener('change', (e) => {
+    store.set('eve-valuation-region', e.target.value);
+    renderProfileTab(tab);
+  });
+  $('refreshPricesBtn').addEventListener('click', () => {
+    for (const key of [...state.hubPriceCache.keys()]) if (key.startsWith(region.id + ':')) state.hubPriceCache.delete(key);
+    renderProfileTab(tab);
+  });
 }
 
 async function renderAssetsTab(box) {
@@ -1622,35 +1806,28 @@ async function renderAssetsTab(box) {
   if (!assets) { box.innerHTML = '<p class="text-muted">资产读取失败或权限不足' + (data.assets?.__error ? '：' + esc(data.assets.__error) : '') + '</p>'; return; }
   if (!assets.length) { box.innerHTML = '<p class="text-muted">暂无资产记录</p>'; return; }
 
-  const region = valuationRegion();
-  // 蓝图副本无法在市场出售；没有全服均价的物品基本不可交易，不发起行情查询
-  const avgMap = await getMarketPriceMap();
-  if (activeProfileTab() !== 'assets') return;
-  const qtyByType = new Map();
-  assets.forEach((a) => { if (!a.is_blueprint_copy) qtyByType.set(a.type_id, (qtyByType.get(a.type_id) || 0) + valuationQuantity(a.quantity)); });
-  const tradable = [...qtyByType.keys()].filter((t) => avgMap.size === 0 || avgMap.has(t))
-    .sort((x, y) => (avgMap.get(y) || 0) * qtyByType.get(y) - (avgMap.get(x) || 0) * qtyByType.get(x))
-    .slice(0, 1500);
+  const seq = (state.assetRenderSeq = (state.assetRenderSeq || 0) + 1);
+  const ctx = await ensureAssetPrices(box, assets, seq);
+  if (!ctx || activeProfileTab() !== 'assets') return;
 
-  const pending = tradable.some((t) => !state.hubPriceCache.has(region.id + ':' + t));
-  if (pending) {
-    box.innerHTML = '<div class="loading-block"><span class="spinner"></span><span id="priceProgress">正在查询 ' + esc(region.hub.name) + ' 行情…</span></div>';
-    const seq = (state.assetRenderSeq = (state.assetRenderSeq || 0) + 1);
-    await fetchHubPrices(region, tradable, (done, total) => {
-      const el = $('priceProgress');
-      if (el) el.textContent = '正在查询 ' + region.hub.name + ' 行情 ' + done + ' / ' + total;
-    });
-    if (seq !== state.assetRenderSeq || activeProfileTab() !== 'assets') return;
-  }
+  const groups = stationSummaries();
+  const station = state.profileStation == null ? null : groups.find((g) => g.id === state.profileStation);
+  if (!station) state.profileStation = null;
+  renderProfileStationNav(groups);
+  if (station) renderStationAssets(box, station, groups, ctx);
+  else renderAssetsOverview(box, groups, ctx);
+  bindAssetToolbar(ctx.region);
+}
 
+// 「资产估值」：总估值 + 各空间站汇总
+function renderAssetsOverview(box, groups, { region, tradable }) {
+  const data = state.characterData;
+  const assets = data.assets;
   const orders = Array.isArray(data.orders) ? data.orders : [];
   const sellOrders = orders.filter((o) => !o.is_buy_order);
   const buyOrders = orders.filter((o) => o.is_buy_order);
   const sellOrderTotal = sellOrders.reduce((s, o) => s + o.price * o.volume_remain, 0);
   const buyOrderTotal = buyOrders.reduce((s, o) => s + o.price * o.volume_remain, 0);
-
-  const groups = stationSummaries();
-  renderProfileStationNav(groups);
   const assetSell = groups.reduce((s, g) => s + g.sell, 0);
   const assetBuy = groups.reduce((s, g) => s + g.buy, 0);
   const nonBpc = assets.filter((a) => !a.is_blueprint_copy);
@@ -1658,93 +1835,85 @@ async function renderAssetsTab(box) {
   const buyPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.buy != null).length;
   const failed = tradable.filter((t) => hubPrice(region, t)?.failed).length;
 
-  const collapsedAll = assets.length > ASSET_ROW_LIMIT;
-  let rows = '';
-  for (const group of groups) {
-    const expanded = state.stationOpen.has(group.id) ? state.stationOpen.get(group.id) : !collapsedAll;
-    rows += `<tr class="asset-group-row${expanded ? ' expanded' : ''}" data-station-id="${group.id}" tabindex="0">
-        <td colspan="7">${ICONS.chevron}<strong>${esc(group.name)}</strong>
-          <span class="group-sum">${group.assets.length} 项 · 卖 ${group.sell ? formatISK(group.sell) : '—'} · 收 ${group.buy ? formatISK(group.buy) : '—'}</span></td></tr>`;
-    const list = [...group.assets].sort((x, y) => {
-      const px = hubPrice(region, x.type_id)?.sell ?? 0;
-      const py = hubPrice(region, y.type_id)?.sell ?? 0;
-      return py * valuationQuantity(y.quantity) - px * valuationQuantity(x.quantity);
-    });
-    rows += list.slice(0, ASSET_ROW_LIMIT).map((a) => {
-      const qty = valuationQuantity(a.quantity);
-      const p = a.is_blueprint_copy ? null : hubPrice(region, a.type_id);
-      const cell = (v, mult) => v == null ? '<span class="muted-cell">—</span>' : formatPrice(v * mult);
-      return profileRow([
-        esc(typeName(a.type_id)) + (a.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : ''),
-        formatNumber(a.quantity ?? 1),
-        cell(p?.sell, 1),
-        '<strong class="down">' + (p?.sell == null ? '—' : formatISK(p.sell * qty)) + '</strong>',
-        cell(p?.buy, 1),
-        '<strong class="up">' + (p?.buy == null ? '—' : formatISK(p.buy * qty)) + '</strong>',
-        esc(assetSlotLabel(a))
-      ], ` class="asset-row" data-group="${group.id}"${expanded ? '' : ' hidden'}`);
-    }).join('');
-    if (list.length > ASSET_ROW_LIMIT) {
-      rows += `<tr class="asset-row more-row" data-group="${group.id}"${expanded ? '' : ' hidden'}><td colspan="7">另有 ${list.length - ASSET_ROW_LIMIT} 项未显示（已计入合计）</td></tr>`;
-    }
-  }
+  const rows = groups.map((g) => {
+    const share = assetSell ? (g.sell / assetSell) * 100 : 0;
+    return `<tr class="station-summary-row" data-open-station="${g.id}" tabindex="0" title="查看该空间站的资产">
+        <td><span class="station-link">${esc(g.name)}</span></td>
+        <td>${formatNumber(g.assets.length)}</td>
+        <td class="down">${g.sell ? formatISK(g.sell) : '—'}</td>
+        <td class="up">${g.buy ? formatISK(g.buy) : '—'}</td>
+        <td><span class="share-bar"><i style="width:${share.toFixed(1)}%"></i></span>${share ? share.toFixed(1) + '%' : '—'}</td>
+      </tr>`;
+  }).join('');
 
   box.innerHTML =
-    '<div class="valuation-toolbar">' +
-      '<label class="select-wrap" title="估价使用的交易中心">' +
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>' +
-        '<select id="valuationRegion" class="region-select" aria-label="估价市场">' +
-          REGIONS.map((r) => `<option value="${r.id}"${r.id === region.id ? ' selected' : ''}>${esc(r.hub.name)} · ${esc(r.name)}</option>`).join('') +
-        '</select></label>' +
-      '<button class="btn" id="refreshPricesBtn" title="清除缓存并重新查询行情">' +
-        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新行情</span></button>' +
-      '<span class="toolbar-spacer"></span>' +
-      '<button class="link-btn" id="expandAllAssets">全部展开</button><button class="link-btn" id="collapseAllAssets">全部折叠</button>' +
-    '</div>' +
+    assetToolbar(region, '<h3 class="asset-view-title">资产总估值</h3>') +
     '<div class="valuation-grid">' +
       valuationCard('资产估值 · 最低卖价', formatISK(assetSell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
       valuationCard('资产估值 · 最高收价', formatISK(assetBuy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
-      valuationCard('我的卖单', formatISK(sellOrderTotal) + ' ISK', sellOrders.length + ' 笔 · 剩余数量 × 委托价') +
-      valuationCard('我的收单', formatISK(buyOrderTotal) + ' ISK', buyOrders.length + ' 笔 · 剩余数量 × 委托价') +
+      valuationCard('我的卖单', formatISK(sellOrderTotal) + ' ISK', sellOrders.length + ' 笔 · 剩余数量 × 委托价', 'is-order') +
+      valuationCard('我的收单', formatISK(buyOrderTotal) + ' ISK', buyOrders.length + ' 笔 · 剩余数量 × 委托价', 'is-order') +
       valuationCard('资产 + 订单合计', formatISK(assetSell + sellOrderTotal + buyOrderTotal) + ' ISK',
         '按收价：' + formatISK(assetBuy + sellOrderTotal + buyOrderTotal) + ' ISK · 不含钱包', 'is-total') +
     '</div>' +
-    '<p class="text-muted valuation-note">价格取 ' + esc(region.hub.name) + ' 空间站内的最低卖单价与最高收购价；蓝图副本不可上架、无行情的物品不计入。' +
+    '<p class="text-muted valuation-note">价格取 ' + esc(region.hub.name) + ' 空间站内的最低卖单价与最高收购价；蓝图副本不可上架、无行情的物品不计入。共 ' +
+      formatNumber(assets.length) + ' 项资产，分布在 ' + groups.length + ' 个位置。' +
       (failed ? ' <span class="down">' + failed + ' 种物品行情查询失败，可点「刷新行情」重试。</span>' : '') + '</p>' +
+    '<div class="table-scroll"><table class="pc-mini-table station-summary"><thead><tr>' +
+      '<th>空间站</th><th>物品数</th><th>卖价估值</th><th>收价估值</th><th>占比（按卖价）</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+
+// 单个空间站：只显示本站物品与本站估值
+function renderStationAssets(box, station, groups, { region }) {
+  const total = groups.reduce((s, g) => s + g.sell, 0);
+  const list = [...station.assets].sort((x, y) => {
+    const px = x.is_blueprint_copy ? 0 : hubPrice(region, x.type_id)?.sell ?? 0;
+    const py = y.is_blueprint_copy ? 0 : hubPrice(region, y.type_id)?.sell ?? 0;
+    return py * valuationQuantity(y.quantity) - px * valuationQuantity(x.quantity);
+  });
+  const nonBpc = list.filter((a) => !a.is_blueprint_copy);
+  const sellPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.sell != null).length;
+  const buyPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.buy != null).length;
+  const kinds = new Set(list.map((a) => a.type_id)).size;
+
+  const rows = list.slice(0, ASSET_ROW_LIMIT).map((a) => {
+    const qty = valuationQuantity(a.quantity);
+    const p = a.is_blueprint_copy ? null : hubPrice(region, a.type_id);
+    const name = typeName(a.type_id);
+    return profileRow([
+      esc(name) + (a.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : ''),
+      formatNumber(a.quantity ?? 1),
+      p?.sell == null ? '<span class="muted-cell">—</span>' : formatPrice(p.sell),
+      '<strong class="down">' + (p?.sell == null ? '—' : formatISK(p.sell * qty)) + '</strong>',
+      p?.buy == null ? '<span class="muted-cell">—</span>' : formatPrice(p.buy),
+      '<strong class="up">' + (p?.buy == null ? '—' : formatISK(p.buy * qty)) + '</strong>',
+      esc(assetSlotLabel(a))
+    ], ` data-filter="${esc(name.toLowerCase())}"`);
+  }).join('');
+
+  box.innerHTML =
+    assetToolbar(region,
+      '<button class="btn btn-ghost" data-back-assets title="返回资产总估值">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg><span>资产估值</span></button>' +
+      '<h3 class="asset-view-title" title="' + esc(station.name) + '">' + esc(station.name) + '</h3>') +
+    '<div class="valuation-grid station-grid">' +
+      valuationCard('本站估值 · 最低卖价', formatISK(station.sell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
+      valuationCard('本站估值 · 最高收价', formatISK(station.buy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
+      valuationCard('物品', formatNumber(list.length) + ' 项', kinds + ' 种物品') +
+      valuationCard('占总资产', total ? ((station.sell / total) * 100).toFixed(1) + '%' : '—', '按最低卖价估值') +
+    '</div>' +
+    '<div class="station-filter search-box"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' +
+      '<input type="search" id="stationFilter" placeholder="筛选本站物品" autocomplete="off" aria-label="筛选本站物品"></div>' +
     '<div class="table-scroll"><table class="pc-mini-table asset-table"><thead><tr>' +
       '<th>物品</th><th>数量</th><th>最低卖价</th><th>卖价估值</th><th>最高收价</th><th>收价估值</th><th>槽位</th>' +
-    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    (list.length > ASSET_ROW_LIMIT ? '<p class="text-muted valuation-note">另有 ' + (list.length - ASSET_ROW_LIMIT) + ' 项未显示（已计入本站估值）。</p>' : '');
 
-  $('valuationRegion').addEventListener('change', (e) => {
-    store.set('eve-valuation-region', e.target.value);
-    renderProfileTab('assets');
-  });
-  $('refreshPricesBtn').addEventListener('click', () => {
-    for (const key of [...state.hubPriceCache.keys()]) if (key.startsWith(region.id + ':')) state.hubPriceCache.delete(key);
-    renderProfileTab('assets');
-  });
-  $('expandAllAssets').addEventListener('click', () => box.querySelectorAll('.asset-group-row').forEach((r) => setAssetGroupExpanded(r, true)));
-  $('collapseAllAssets').addEventListener('click', () => box.querySelectorAll('.asset-group-row').forEach((r) => setAssetGroupExpanded(r, false)));
-  if (state.pendingStationScroll != null) {
-    scrollToStation(state.pendingStationScroll);
-    state.pendingStationScroll = null;
-  }
-}
-
-function setAssetGroupExpanded(row, expanded) {
-  const id = Number(row.dataset.stationId);
-  row.classList.toggle('expanded', expanded);
-  $('profileData').querySelectorAll(`.asset-row[data-group="${id}"]`).forEach((r) => { r.hidden = !expanded; });
-  state.stationOpen.set(id, expanded); // 记住用户手动展开/折叠的位置，重新渲染时保持
-}
-
-function scrollToStation(stationId) {
-  const row = $('profileData').querySelector(`.asset-group-row[data-station-id="${stationId}"]`);
-  if (!row) return;
-  setAssetGroupExpanded(row, true);
-  row.scrollIntoView({ block: 'start', behavior: 'smooth' });
-  row.classList.add('flash');
-  setTimeout(() => row.classList.remove('flash'), 1200);
+  $('stationFilter').addEventListener('input', debounce((e) => {
+    const q = e.target.value.trim().toLowerCase();
+    box.querySelectorAll('.asset-table tbody tr').forEach((tr) => { tr.hidden = !!q && !tr.dataset.filter.includes(q); });
+  }, 120));
 }
 
 async function renderProfileTab(tab) {
@@ -1752,38 +1921,41 @@ async function renderProfileTab(tab) {
   const data = state.characterData || {};
   const ch = data.character || {};
   if (ch.__error) { box.innerHTML = '<p class="text-muted">角色信息读取失败：' + esc(ch.__error) + '</p>'; return; }
-  const card = (label, value) => '<div class="info-card"><span>' + label + '</span><strong>' + value + '</strong></div>';
 
   if (tab === 'info') {
-    const walletOk = typeof data.wallet === 'number';
     const skillsOk = data.skills && !data.skills.__error;
-    const assetsN = Array.isArray(data.assets) ? data.assets.length : null;
-    const ordersN = Array.isArray(data.orders) ? data.orders.length : null;
     const ship = data.ship && !data.ship.__error ? data.ship : null;
     const loc = data.location && !data.location.__error ? data.location : null;
     const skillCount = skillsOk ? (data.skills.skills || []).length : null;
-    const totalSp = skillsOk ? data.skills.total_sp : null;
     const where = loc ? displayName(loc.solar_system_id) + (loc.station_id ? ' · ' + locationName(loc.station_id) : loc.structure_id ? ' · ' + locationName(loc.structure_id) : '') : '未公开';
-    box.innerHTML = '<div class="info-grid">' +
-      card('种族', esc(ch.race_name || '—')) +
-      card('血统', esc(ch.bloodline_name || '—')) +
-      card('性别', esc(zhLabel(GENDER_ZH, ch.gender, ch.gender || '—'))) +
-      card('生日', ch.birthday ? new Date(ch.birthday).toLocaleDateString('zh-CN') : '—') +
-      card('军团', ch.corporation_id ? esc(displayName(ch.corporation_id)) : '—') +
-      card('联盟', ch.alliance_id ? esc(displayName(ch.alliance_id)) : '无') +
-      card('当前位置', esc(where)) +
-      card('当前舰船', ship ? esc(typeName(ship.ship_type_id)) + (ship.ship_name ? '（' + esc(ship.ship_name) + '）' : '') : '未公开') +
-      card('安全等级', ch.security_status !== undefined ? Number(ch.security_status).toFixed(2) : '—') +
-      card('技能', skillCount === null ? '权限不足' : (skillCount + ' 项 / ' + (totalSp ? totalSp.toLocaleString('zh-CN') : '0') + ' SP')) +
-      card('钱包余额', walletOk ? formatISK(data.wallet) + ' ISK' : '权限不足') +
-      card('资产 / 订单', (assetsN === null ? '?' : assetsN) + ' / ' + (ordersN === null ? '?' : ordersN)) +
-      '</div>' +
-      (ch.title ? '<p class="text-muted">头衔：' + esc(ch.title) + '</p>' : '');
+    const sec = ch.security_status;
+    const corpLogo = ch.corporation_id ? 'corporations/' + ch.corporation_id + '/logo' : null;
+    const charId = (state.esiToken || readEsiToken())?.character_id;
+    box.innerHTML =
+      infoSection('身份',
+        infoCard(ch.race_faction_id ? 'corporations/' + ch.race_faction_id + '/logo' : null, '种族', esc(ch.race_name || '—')) +
+        infoCard(ch.bloodline_corp_id ? 'corporations/' + ch.bloodline_corp_id + '/logo' : null, '血统', esc(ch.bloodline_name || '—'), false, 'users') +
+        infoCard(charId ? 'characters/' + charId + '/portrait' : null, '性别', esc(zhLabel(GENDER_ZH, ch.gender, ch.gender || '—'))) +
+        infoCard('types/' + GAME_ICON.capsule + '/icon', '生日', ch.birthday ? new Date(ch.birthday).toLocaleDateString('zh-CN') : '—') +
+        (ch.title ? infoCard(corpLogo, '头衔', esc(ch.title), false, 'award') : '')) +
+      infoSection('所属',
+        infoCard(corpLogo, '军团', ch.corporation_id ? esc(displayName(ch.corporation_id)) : '—', false, 'building') +
+        infoCard(ch.alliance_id ? 'alliances/' + ch.alliance_id + '/logo' : null, '联盟', ch.alliance_id ? esc(displayName(ch.alliance_id)) : '无', false, 'flag') +
+        infoCard('corporations/' + GAME_ICON.concord + '/logo', '安全等级', sec !== undefined ? Number(sec).toFixed(2) : '—')) +
+      infoSection('当前状态',
+        infoCard(state.locationIconType ? 'types/' + state.locationIconType + '/icon' : null, '当前位置', esc(where), true, 'pin') +
+        infoCard(ship ? 'types/' + ship.ship_type_id + '/icon' : null, '当前舰船', ship ? esc(typeName(ship.ship_type_id)) + (ship.ship_name ? '（' + esc(ship.ship_name) + '）' : '') : '未公开', false, 'rocket') +
+        infoCard('types/' + GAME_ICON.skillbook + '/icon', '技能', skillCount === null ? '权限不足' : skillCount + ' 项'));
     return;
   }
 
   if (tab === 'assets') {
     await renderAssetsTab(box);
+    return;
+  }
+
+  if (tab === 'contracts') {
+    await renderContractsTab(box);
     return;
   }
 
@@ -1805,7 +1977,13 @@ async function renderProfileTab(tab) {
   if (tab === 'wallet') {
     const journal = Array.isArray(data.journal) ? data.journal : null;
     const walletOk = typeof data.wallet === 'number'; // ESI /wallet/ 直接返回余额数字
-    let html = '<div class="info-grid"><div class="info-card"><span>钱包余额</span><strong>' + (walletOk ? formatPrice(data.wallet) + ' ISK' : '权限不足') + '</strong></div></div>';
+    const income = journal ? journal.filter((j) => j.amount > 0).reduce((t, j) => t + j.amount, 0) : 0;
+    const spend = journal ? journal.filter((j) => j.amount < 0).reduce((t, j) => t + j.amount, 0) : 0;
+    let html = '<div class="valuation-grid wallet-grid">' +
+      valuationCard('钱包余额', walletOk ? formatPrice(data.wallet) + ' ISK' : '权限不足', '当前角色钱包') +
+      valuationCard('近期收入', formatISK(income) + ' ISK', '最近 ' + (journal ? journal.length : 0) + ' 条流水', 'is-buy') +
+      valuationCard('近期支出', formatISK(Math.abs(spend)) + ' ISK', '同一时间段', 'is-sell') +
+      '</div>';
     if (journal && journal.length) {
       html += '<div class="table-scroll"><table class="pc-mini-table wallet-mini"><thead><tr><th>时间</th><th>类型</th><th>对方</th><th>金额</th></tr></thead><tbody>' +
         journal.slice(0, 50).map((j) => profileRow([
@@ -1822,20 +2000,26 @@ async function renderProfileTab(tab) {
   }
 }
 
+// 与市场中心选物品一致：选中空间站只看本站，选「资产估值」看总估值
 function switchProfileTab(tab, stationId) {
+  state.profileStation = tab === 'assets' && stationId != null ? Number(stationId) : null;
+  if (tab === 'contracts') state.contractView.id = null;
   $$('.profile-tabs .tab-link').forEach((link) => link.classList.toggle('active', link.dataset.profile === tab));
-  $$('#profileNav .profile-nav-btn').forEach((link) => link.classList.toggle('active', link.dataset.profile === tab && stationId === undefined));
-  $$('#profileNav .profile-nav-station').forEach((link) => link.classList.toggle('active', link.dataset.stationId === stationId));
-  if (!state.characterData) return;
-  // 已在资产页时直接定位，不重新渲染
-  const onAssets = tab === 'assets' && $('profileData').querySelector('.asset-table');
-  if (stationId !== undefined && onAssets && state.renderedProfileTab === 'assets') {
-    scrollToStation(stationId);
-    return;
-  }
-  if (stationId !== undefined) state.pendingStationScroll = stationId;
-  state.renderedProfileTab = tab;
-  renderProfileTab(tab);
+  syncProfileNavActive(tab);
+  document.querySelector('.profile-scroll')?.scrollTo({ top: 0 });
+  if (state.characterData) renderProfileTab(tab);
+}
+
+function openContract(contractId) {
+  state.contractView.id = contractId;
+  document.querySelector('.profile-scroll')?.scrollTo({ top: 0 });
+  renderProfileTab('contracts');
+}
+
+function syncProfileNavActive(tab = activeProfileTab()) {
+  const station = state.profileStation;
+  $$('#profileNav .profile-nav-btn').forEach((link) => link.classList.toggle('active', link.dataset.profile === tab && station == null));
+  $$('#profileNav .profile-nav-station').forEach((link) => link.classList.toggle('active', Number(link.dataset.stationId) === station));
 }
 
 // 侧栏「空间站资产」站点树：可整体折叠，按卖价估值排序
@@ -1854,6 +2038,340 @@ function renderProfileStationNav(stations) {
         <span class="station-name">${esc(s.name)}</span>
         <span class="station-meta">${s.assets.length} 项${hasPrices && s.sell ? ' · ' + formatISK(s.sell) : ''}</span>
       </button>`).join('');
+  syncProfileNavActive();
+}
+
+// ===== 合同查询 =====
+// 类别与游戏内「合同」窗口一致：物品交换 / 拍卖 / 快递（租借为旧类型，有记录时才显示）
+const CONTRACT_TYPE_ZH = { item_exchange: '物品交换', auction: '拍卖', courier: '快递', loan: '租借', unknown: '未知' };
+const CONTRACT_TYPE_ORDER = ['item_exchange', 'auction', 'courier', 'loan', 'unknown'];
+const CONTRACT_STATUS_ZH = {
+  outstanding: '待接受', in_progress: '进行中', finished_issuer: '已完成', finished_contractor: '已完成',
+  finished: '已完成', cancelled: '已取消', rejected: '已拒绝', failed: '已失败', deleted: '已删除', reversed: '已撤销'
+};
+const CONTRACT_AVAILABILITY_ZH = { public: '公开', personal: '私人', corporation: '军团', alliance: '联盟' };
+// 状态筛选分组；「已过期」= 到期仍未被接受
+const CONTRACT_STATUS_GROUPS = [
+  ['all', '全部状态'], ['outstanding', '待接受'], ['in_progress', '进行中'], ['finished', '已完成'],
+  ['expired', '已过期'], ['closed', '已取消 / 拒绝 / 失败']
+];
+const CONTRACT_ROLES = [['all', '全部合同'], ['issuer', '我发起的'], ['acceptor', '我接受的'], ['assignee', '指派给我的']];
+
+state.contracts = null;              // 合同列表（或 { __error }）
+state.contractItems = new Map();     // contract_id -> items
+state.contractBids = new Map();      // contract_id -> bids
+state.contractView = { type: 'all', status: 'all', role: 'all', id: null };
+
+function myCharacterId() {
+  return (state.esiToken || readEsiToken())?.character_id;
+}
+
+function contractStatusKey(c) {
+  if (c.status === 'outstanding' && c.date_expired && new Date(c.date_expired) < new Date()) return 'expired';
+  if (['finished', 'finished_issuer', 'finished_contractor'].includes(c.status)) return 'finished';
+  if (['cancelled', 'rejected', 'failed', 'deleted', 'reversed'].includes(c.status)) return 'closed';
+  return c.status;
+}
+
+function contractStatusPill(c) {
+  const key = contractStatusKey(c);
+  const text = key === 'expired' ? '已过期' : zhLabel(CONTRACT_STATUS_ZH, c.status, c.status);
+  return `<span class="pill status-${key}">${esc(text)}</span>`;
+}
+
+function contractRoles(c, me) {
+  const roles = [];
+  if (c.issuer_id === me) roles.push('issuer');
+  if (c.acceptor_id === me) roles.push('acceptor');
+  if (c.assignee_id === me) roles.push('assignee');
+  return roles;
+}
+
+// 合同金额摘要：物品交换看价格/报酬，快递看报酬，拍卖看起拍价/一口价
+function contractAmount(c) {
+  if (c.type === 'courier') return `<strong>${formatISK(c.reward)}</strong><span class="cell-sub">抵押 ${formatISK(c.collateral)}</span>`;
+  if (c.type === 'auction') return `<strong>${formatISK(c.price)}</strong>${c.buyout ? `<span class="cell-sub">一口价 ${formatISK(c.buyout)}</span>` : ''}`;
+  if (c.price > 0) return `<strong>${formatISK(c.price)}</strong>${c.reward > 0 ? `<span class="cell-sub">另付 ${formatISK(c.reward)}</span>` : ''}`;
+  if (c.reward > 0) return `<strong class="up">+${formatISK(c.reward)}</strong><span class="cell-sub">发起方支付</span>`;
+  return '<span class="muted-cell">—</span>';
+}
+
+function contractLocation(c) {
+  if (c.type === 'courier' && c.end_location_id && c.end_location_id !== c.start_location_id) {
+    return esc(locationName(c.start_location_id)) + ' <span class="route-arrow">→</span> ' + esc(locationName(c.end_location_id));
+  }
+  return esc(locationName(c.start_location_id));
+}
+
+async function loadContracts() {
+  const me = myCharacterId();
+  try {
+    state.contracts = await esiAuthFetchPaged('/characters/' + me + '/contracts/');
+  } catch (error) {
+    state.contracts = { __error: error.message };
+    return;
+  }
+  // 玩家/军团/联盟名称保留原名；地点用官方中文站名，玩家建筑尝试读取名称
+  const parties = state.contracts.flatMap((c) => [c.issuer_id, c.acceptor_id, c.assignee_id, c.issuer_corporation_id])
+    .filter((id) => id && !officialName(id) && !state.esiNames.has(id));
+  const named = await resolveNames(parties);
+  for (const [key, value] of named.names) state.esiNames.set(key, value);
+  await resolveStructureNames(state.contracts.flatMap((c) => [c.start_location_id, c.end_location_id]));
+}
+
+async function renderContractsTab(box) {
+  if (!state.contracts) {
+    box.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取合同记录…</div>';
+    await loadContracts();
+    if (activeProfileTab() !== 'contracts') return;
+  }
+  if (state.contracts.__error) {
+    box.innerHTML = '<p class="text-muted">合同读取失败或权限不足：' + esc(state.contracts.__error) + '</p>';
+    return;
+  }
+  const contract = state.contractView.id != null && state.contracts.find((c) => c.contract_id === state.contractView.id);
+  if (contract) await renderContractDetail(box, contract);
+  else { state.contractView.id = null; renderContractList(box); }
+}
+
+function renderContractList(box) {
+  const me = myCharacterId();
+  const view = state.contractView;
+  const all = [...state.contracts].sort((a, b) => new Date(b.date_issued) - new Date(a.date_issued));
+  const byRoleStatus = all.filter((c) =>
+    (view.role === 'all' || contractRoles(c, me).includes(view.role)) &&
+    (view.status === 'all' || contractStatusKey(c) === view.status));
+  const counts = { all: byRoleStatus.length };
+  byRoleStatus.forEach((c) => { counts[c.type] = (counts[c.type] || 0) + 1; });
+  const types = CONTRACT_TYPE_ORDER.filter((t) => t !== 'unknown' && t !== 'loan' || counts[t]);
+  const list = byRoleStatus.filter((c) => view.type === 'all' || c.type === view.type);
+
+  const select = (id, options, value) => `<select id="${id}" class="plain-select">` +
+    options.map(([v, label]) => `<option value="${v}"${v === value ? ' selected' : ''}>${label}</option>`).join('') + '</select>';
+
+  const rows = list.map((c) => {
+    const roles = contractRoles(c, me);
+    const roleText = roles.includes('issuer') ? '我发起' : roles.includes('acceptor') ? '我接受' : roles.includes('assignee') ? '指派给我' : '';
+    const counterpart = roles.includes('issuer') ? (c.acceptor_id || c.assignee_id) : c.issuer_id;
+    return `<tr class="contract-row" data-contract-id="${c.contract_id}" tabindex="0">
+        <td><span class="pill type-${c.type}">${esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))}</span></td>
+        <td class="contract-title"><strong><span class="pill type-${c.type} type-inline">${esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))}</span>${esc(c.title || '（无标题）')}</strong><span class="cell-sub">#${c.contract_id}${roleText ? ' · ' + roleText : ''}</span></td>
+        <td>${contractStatusPill(c)}</td>
+        <td>${counterpart ? esc(displayName(counterpart)) : '<span class="muted-cell">—</span>'}</td>
+        <td class="num">${contractAmount(c)}</td>
+        <td class="contract-loc">${contractLocation(c)}</td>
+        <td class="num muted">${formatTime(c.date_issued)}</td>
+      </tr>`;
+  }).join('');
+
+  box.innerHTML =
+    '<div class="valuation-toolbar contract-toolbar">' +
+      '<div class="segmented contract-types" role="group" aria-label="合同类别">' +
+        `<button data-ctype="all" class="${view.type === 'all' ? 'active' : ''}">全部 <span class="seg-count">${counts.all}</span></button>` +
+        types.map((t) => `<button data-ctype="${t}" class="${view.type === t ? 'active' : ''}">${CONTRACT_TYPE_ZH[t]} <span class="seg-count">${counts[t] || 0}</span></button>`).join('') +
+      '</div>' +
+      '<span class="toolbar-spacer"></span>' +
+      select('contractRole', CONTRACT_ROLES, view.role) +
+      select('contractStatus', CONTRACT_STATUS_GROUPS, view.status) +
+    '</div>' +
+    (list.length
+      ? '<div class="table-scroll"><table class="pc-mini-table contract-table"><thead><tr>' +
+          '<th>类别</th><th>合同</th><th>状态</th><th>对方</th><th class="num">金额</th><th>地点</th><th class="num">发布</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+      : '<p class="text-muted">没有符合条件的合同</p>') +
+    '<p class="text-muted valuation-note">共 ' + all.length + ' 份合同（ESI 返回最近 30 天内的合同记录）。点击合同查看物品与收卖估值。</p>';
+
+  $('contractRole').addEventListener('change', (e) => { view.role = e.target.value; renderContractList(box); });
+  $('contractStatus').addEventListener('change', (e) => { view.status = e.target.value; renderContractList(box); });
+}
+
+async function loadContractDetailData(c) {
+  const me = myCharacterId();
+  const jobs = [];
+  if (!state.contractItems.has(c.contract_id)) {
+    jobs.push(esiAuthFetch('/characters/' + me + '/contracts/' + c.contract_id + '/items/')
+      .then((items) => state.contractItems.set(c.contract_id, items))
+      .catch((error) => state.contractItems.set(c.contract_id, { __error: error.message })));
+  }
+  if (c.type === 'auction' && !state.contractBids.has(c.contract_id)) {
+    jobs.push(esiAuthFetch('/characters/' + me + '/contracts/' + c.contract_id + '/bids/')
+      .then((bids) => state.contractBids.set(c.contract_id, bids))
+      .catch(() => state.contractBids.set(c.contract_id, [])));
+  }
+  await Promise.all(jobs);
+  const items = state.contractItems.get(c.contract_id);
+  if (Array.isArray(items)) {
+    const missing = items.map((i) => i.type_id).filter((t) => !state.typeNames?.has(t));
+    if (missing.length) {
+      const names = await resolveTypeNames(missing);
+      state.typeNames = state.typeNames || new Map();
+      for (const [k, v] of names) state.typeNames.set(k, v);
+    }
+    const bidders = (state.contractBids.get(c.contract_id) || []).map((b) => b.bidder_id).filter((id) => !state.esiNames.has(id));
+    if (bidders.length) {
+      const named = await resolveNames(bidders);
+      for (const [k, v] of named.names) state.esiNames.set(k, v);
+    }
+  }
+}
+
+// 估值：raw_quantity = -2 为蓝图副本，不能上架，不计入
+function valueContractItems(items, region) {
+  const sum = { sell: 0, buy: 0, sellPriced: 0, buyPriced: 0, count: 0 };
+  for (const item of items) {
+    if (item.raw_quantity === -2) continue;
+    sum.count += 1;
+    const p = hubPrice(region, item.type_id);
+    if (p?.sell != null) { sum.sell += p.sell * item.quantity; sum.sellPriced += 1; }
+    if (p?.buy != null) { sum.buy += p.buy * item.quantity; sum.buyPriced += 1; }
+  }
+  return sum;
+}
+
+// 合同价与估值比较：负数表示合同价低于估值
+function compareCard(label, price, value, noun = '合同价') {
+  if (!value) return valuationCard(label, '无行情', '物品没有可用行情');
+  const diff = price - value;
+  const pct = (diff / value) * 100;
+  const text = (diff <= 0 ? '低 ' : '高 ') + formatISK(Math.abs(diff)) + ' ISK';
+  return valuationCard(label, text, noun + '为估值的 ' + ((price / value) * 100).toFixed(1) + '%（' + (pct <= 0 ? '低' : '高') + Math.abs(pct).toFixed(1) + '%）', diff <= 0 ? 'is-buy' : 'is-sell');
+}
+
+function contractVerdict(price, given) {
+  if (!price || !given.count || (!given.sell && !given.buy)) return '';
+  if (given.buy && price <= given.buy) return '<span class="verdict good">低于最高收购价 · 买入后可直接卖给收单</span>';
+  if (given.sell && price <= given.sell) return '<span class="verdict ok">低于市场最低卖价</span>';
+  return '<span class="verdict bad">高于市场最低卖价</span>';
+}
+
+// 收购合同的结论：报酬与索取物品价值比较（站在接受方角度）
+function requestVerdict(pay, wanted) {
+  if (!pay || (!wanted.sell && !wanted.buy)) return '';
+  if (wanted.sell && pay >= wanted.sell) return '<span class="verdict good">报酬高于最低卖价 · 从市场买入后交付即可获利</span>';
+  if (wanted.buy && pay >= wanted.buy) return '<span class="verdict ok">报酬高于最高收购价</span>';
+  return '<span class="verdict bad">报酬低于最高收购价 · 物品卖给收单更划算</span>';
+}
+
+async function renderContractDetail(box, c) {
+  const region = valuationRegion();
+  const needsData = !state.contractItems.has(c.contract_id) || (c.type === 'auction' && !state.contractBids.has(c.contract_id));
+  if (needsData) {
+    box.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取合同物品…</div>';
+    await loadContractDetailData(c);
+    if (state.contractView.id !== c.contract_id || activeProfileTab() !== 'contracts') return;
+  }
+  const items = state.contractItems.get(c.contract_id);
+  const itemList = Array.isArray(items) ? items : [];
+  const typeIds = [...new Set(itemList.filter((i) => i.raw_quantity !== -2).map((i) => i.type_id))];
+  if (typeIds.some((t) => !state.hubPriceCache.has(region.id + ':' + t))) {
+    box.innerHTML = '<div class="loading-block"><span class="spinner"></span><span id="priceProgress">正在查询 ' + esc(region.hub.name) + ' 行情…</span></div>';
+    await fetchHubPrices(region, typeIds, (done, total) => {
+      const el = $('priceProgress');
+      if (el) el.textContent = '正在查询 ' + region.hub.name + ' 行情 ' + done + ' / ' + total;
+    });
+    if (state.contractView.id !== c.contract_id || activeProfileTab() !== 'contracts') return;
+  }
+
+  const given = valueContractItems(itemList.filter((i) => i.is_included), region);     // 发起方提供
+  const wanted = valueContractItems(itemList.filter((i) => !i.is_included), region);   // 发起方索取
+  const bids = [...(state.contractBids.get(c.contract_id) || [])].sort((a, b) => b.amount - a.amount);
+  const topBid = bids[0]?.amount || 0;
+
+  // —— 估值卡片 ——
+  let cards = '';
+  if (c.type === 'courier') {
+    const perM3 = c.volume ? c.reward / c.volume : 0;
+    cards =
+      valuationCard('报酬', formatISK(c.reward) + ' ISK', c.volume ? formatNumber(c.volume, 1) + ' m³ · ' + formatPrice(perM3) + ' ISK/m³' : '—', 'is-buy') +
+      valuationCard('抵押金', formatISK(c.collateral) + ' ISK', '接受方需支付的保证金', 'is-order') +
+      valuationCard('物品估值 · 最低卖价', formatISK(given.sell) + ' ISK', given.sellPriced + '/' + given.count + ' 项有卖单', 'is-sell') +
+      valuationCard('物品估值 · 最高收价', formatISK(given.buy) + ' ISK', given.buyPriced + '/' + given.count + ' 项有收单', 'is-buy') +
+      valuationCard('抵押金覆盖率', given.sell ? ((c.collateral / given.sell) * 100).toFixed(1) + '%' : '—', '抵押金 ÷ 物品卖价估值', c.collateral >= given.sell ? 'is-buy' : 'is-sell');
+  } else if (!given.count && wanted.count) {
+    // 收购合同：发起方只索取物品并支付报酬（或价格），比较报酬与索取物品的市场价值
+    const pay = c.reward || c.price;
+    cards =
+      valuationCard(c.reward ? '发起方支付报酬' : '合同价格', formatISK(pay) + ' ISK', c.reward ? '接受方交付物品后获得' : '接受方支付') +
+      valuationCard('索取物品 · 最低卖价', formatISK(wanted.sell) + ' ISK', wanted.sellPriced + '/' + wanted.count + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
+      valuationCard('索取物品 · 最高收价', formatISK(wanted.buy) + ' ISK', wanted.buyPriced + '/' + wanted.count + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
+      (pay ? compareCard('报酬对比卖价估值', pay, wanted.sell, '报酬') + compareCard('报酬对比收价估值', pay, wanted.buy, '报酬') : '');
+  } else {
+    const price = c.type === 'auction' ? (topBid || c.price) : c.price;
+    const priceLabel = c.type === 'auction' ? (topBid ? '当前最高出价' : '起拍价') : '合同价格';
+    const priceDetail = c.type === 'auction'
+      ? (c.buyout ? '一口价 ' + formatISK(c.buyout) + ' · ' : '') + bids.length + ' 次出价'
+      : (c.reward > 0 ? '发起方另付报酬 ' + formatISK(c.reward) : '接受方支付');
+    cards =
+      valuationCard(priceLabel, formatISK(price) + ' ISK', priceDetail) +
+      valuationCard('物品估值 · 最低卖价', formatISK(given.sell) + ' ISK', given.sellPriced + '/' + given.count + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
+      valuationCard('物品估值 · 最高收价', formatISK(given.buy) + ' ISK', given.buyPriced + '/' + given.count + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
+      (given.count && price ? compareCard('对比卖价估值', price, given.sell, priceLabel) + compareCard('对比收价估值', price, given.buy, priceLabel) : '');
+    if (wanted.count) {
+      cards += valuationCard('索取物品 · 最低卖价', formatISK(wanted.sell) + ' ISK', '发起方要求接受方提供', 'is-order') +
+        valuationCard('索取物品 · 最高收价', formatISK(wanted.buy) + ' ISK', wanted.buyPriced + '/' + wanted.count + ' 项有收单', 'is-order');
+    }
+  }
+
+  // —— 合同信息 ——
+  const kv = (k, v) => v ? `<div class="kv"><span>${k}</span><strong>${v}</strong></div>` : '';
+  const date = (d) => d ? new Date(d).toLocaleString('zh-CN', { hour12: false }) : '';
+  const info =
+    kv('类别', esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))) +
+    kv('状态', contractStatusPill(c)) +
+    kv('可见范围', esc(zhLabel(CONTRACT_AVAILABILITY_ZH, c.availability, c.availability)) + (c.for_corporation ? '（代表军团）' : '')) +
+    kv('发起人', esc(displayName(c.issuer_id))) +
+    kv('发起军团', c.issuer_corporation_id ? esc(displayName(c.issuer_corporation_id)) : '') +
+    kv('指派对象', c.assignee_id ? esc(displayName(c.assignee_id)) : '') +
+    kv('接受人', c.acceptor_id ? esc(displayName(c.acceptor_id)) : '') +
+    kv(c.type === 'courier' ? '起点' : '地点', esc(locationName(c.start_location_id))) +
+    kv('终点', c.type === 'courier' && c.end_location_id ? esc(locationName(c.end_location_id)) : '') +
+    kv('完成期限', c.type === 'courier' && c.days_to_complete ? c.days_to_complete + ' 天' : '') +
+    kv('发布时间', date(c.date_issued)) +
+    kv('到期时间', date(c.date_expired)) +
+    kv('接受时间', date(c.date_accepted)) +
+    kv('完成时间', date(c.date_completed));
+
+  // —— 物品表 ——
+  const itemRows = itemList.map((i) => {
+    const bpc = i.raw_quantity === -2;
+    const p = bpc ? null : hubPrice(region, i.type_id);
+    return profileRow([
+      `<span class="item-cell"><img src="${IMAGE_BASE}/${i.type_id}/icon?size=32" alt="" width="24" height="24" loading="lazy">${esc(typeName(i.type_id))}${bpc ? ' <span class="pill">蓝图副本</span>' : ''}</span>`,
+      formatNumber(i.quantity),
+      i.is_included ? '<span class="pill buy">提供</span>' : '<span class="pill sell">索取</span>',
+      p?.sell == null ? '<span class="muted-cell">—</span>' : formatPrice(p.sell),
+      '<strong class="down">' + (p?.sell == null ? '—' : formatISK(p.sell * i.quantity)) + '</strong>',
+      p?.buy == null ? '<span class="muted-cell">—</span>' : formatPrice(p.buy),
+      '<strong class="up">' + (p?.buy == null ? '—' : formatISK(p.buy * i.quantity)) + '</strong>'
+    ]);
+  }).join('');
+
+  const bidRows = bids.map((b) => profileRow([esc(displayName(b.bidder_id)), formatPrice(b.amount) + ' ISK', date(b.date_bid)])).join('');
+
+  box.innerHTML =
+    assetToolbar(region,
+      '<button class="btn btn-ghost" data-back-contracts title="返回合同列表">' +
+        '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg><span>合同列表</span></button>' +
+      '<h3 class="asset-view-title" title="' + esc(c.title || '') + '">' +
+        '<span class="pill type-' + c.type + '">' + esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type)) + '</span> ' + esc(c.title || '（无标题）') + '</h3>') +
+    (c.type === 'courier' ? ''
+      : !given.count && wanted.count ? requestVerdict(c.reward || c.price, wanted)
+      : contractVerdict(c.type === 'auction' ? (topBid || c.price) : c.price, given)) +
+    '<div class="valuation-grid contract-grid">' + cards + '</div>' +
+    '<div class="kv-grid">' + info + '</div>' +
+    (Array.isArray(items)
+      ? (itemList.length
+        ? '<div class="table-scroll"><table class="pc-mini-table asset-table contract-items"><thead><tr>' +
+            '<th>物品</th><th>数量</th><th>方向</th><th>最低卖价</th><th>卖价估值</th><th>最高收价</th><th>收价估值</th>' +
+          '</tr></thead><tbody>' + itemRows + '</tbody></table></div>'
+        : '<p class="text-muted">该合同没有物品</p>')
+      : '<p class="text-muted">合同物品读取失败：' + esc(items?.__error || '') + '</p>') +
+    (bids.length
+      ? '<h4 class="info-section-title section-gap">出价记录</h4><div class="table-scroll"><table class="pc-mini-table bid-table"><thead><tr><th>出价人</th><th>出价</th><th>时间</th></tr></thead><tbody>' + bidRows + '</tbody></table></div>'
+      : '') +
+    '<p class="text-muted valuation-note">估值取 ' + esc(region.hub.name) + ' 空间站内的最低卖单价与最高收购价；「提供」为发起方给出的物品，「索取」为发起方要求接受方提供的物品，蓝图副本不计入。</p>';
+
+  bindAssetToolbar(region, 'contracts');
 }
 
 // ===== ESI 绑定 =====
