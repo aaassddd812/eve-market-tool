@@ -28,7 +28,7 @@ const M = {
   layer: 'security',
   selected: null,      // system index
   hover: null,
-  highlight: null,     // Set<system index>：图例高亮
+  highlight: null,     // Set<system index>：颜色说明中点选的高亮
   highlightKey: null,
   route: [],           // system index 数组
   dirty: true,
@@ -188,7 +188,7 @@ async function loadLive(force = false) {
   if (incursions.status === 'fulfilled') M.live.incursions = incursions.value;
   if (fw.status === 'fulfilled') M.live.fw = new Map(fw.value.map((x) => [x.solar_system_id, x]));
   const failed = results.filter((r) => r.status === 'rejected').length;
-  if (failed) app.showToast(failed + ' 项实时数据加载失败，部分图层可能为空', 'error');
+  if (failed) app.showToast(failed + ' 项实时数据加载失败，部分着色方式可能没有数据', 'error');
 
   // 玩家联盟名称保留原名
   const alliances = [...new Set([
@@ -386,7 +386,7 @@ function buildScene() {
   scene.add(routeLine);
 }
 
-// 根据图层颜色与图例高亮更新星系颜色
+// 根据当前着色方式与颜色说明中的高亮更新星系颜色
 const tmpColor = new THREE.Color();
 function applyColors() {
   if (!starPoints || !layerCache) return;
@@ -468,10 +468,19 @@ function dolly(factor) {
   flyTo(controls.target.clone(), len);
 }
 
+const NARROW = window.matchMedia('(max-width: 768px)');
 function centerOn(i, maxDistance = 45) {
   const s = M.systems[i];
   const dist = Math.min(camera.position.distanceTo(controls.target), maxDistance);
-  flyTo(new THREE.Vector3(s.x, s.y, s.z), dist);
+  const target = new THREE.Vector3(s.x, s.y, s.z);
+  if (NARROW.matches) {
+    // 手机端信息面板是底部卡片（约占下半屏）：把焦点沿屏幕向下移，让星系显示在上方 1/4 处
+    const dir = camera.position.clone().sub(controls.target).normalize();
+    const up = camera.up.clone().sub(dir.clone().multiplyScalar(camera.up.dot(dir))).normalize();
+    const visible = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+    target.sub(up.multiplyScalar(visible * 0.25));
+  }
+  flyTo(target, dist);
 }
 
 // ---------- 渲染 ----------
@@ -500,7 +509,7 @@ function loop() {
   requestAnimationFrame(loop);
   if (M.tween) stepTween();
   const moved = controls.update();
-  if (moved || M.dirty || M.tween) render();
+  if (moved || M.dirty || M.tween || M.flashes.length || M.battles.length) render();
 }
 
 const proj = new THREE.Vector3();
@@ -519,7 +528,7 @@ function updateFocus() {
   items.forEach(([i, b], n) => {
     const s = M.systems[i];
     pos.setXYZ(n, s.x, s.y, s.z);
-    // 被图例淡化的星系高亮时恢复图层原色
+    // 被颜色说明淡化的星系高亮时恢复当前着色
     tmpColor.setStyle(layerCache ? layerCache.colors[i] : '#ffffff');
     col.setXYZ(n, tmpColor.r, tmpColor.g, tmpColor.b);
     boost.setX(n, b);
@@ -541,6 +550,8 @@ function render() {
     M.screen[s.i * 3 + 2] = sz;
   }
   drawLabels();
+  drawBattles();
+  drawFlashes();
 }
 
 function onScreen(i, margin = 0) {
@@ -623,7 +634,21 @@ function drawLabels() {
   lg.textAlign = 'left';
   lg.font = `11px ${font}`;
   for (const i of [M.selected, M.hover]) if (i != null) systemLabel(i, true);
+  for (const b of M.battles) { const s = M.byId.get(b.system_id); if (s) systemLabel(s.i, true); }
   for (const i of M.route) systemLabel(i, false);
+  // 选中星系后：星门相邻的星系与屏幕上附近的星系也显示名称（不必放大或逐个点击）
+  if (M.selected != null && onScreen(M.selected)) {
+    const sx = M.screen[M.selected * 3], sy = M.screen[M.selected * 3 + 1];
+    for (const n of M.systems[M.selected].nbr) systemLabel(n, false);
+    const near = [];
+    for (const s of M.systems) {
+      if (s.i === M.selected || !onScreen(s.i)) continue;
+      const d = (M.screen[s.i * 3] - sx) ** 2 + (M.screen[s.i * 3 + 1] - sy) ** 2;
+      if (d < 200 * 200) near.push([d, s.i]);
+    }
+    near.sort((a, b) => a[0] - b[0]);
+    for (const [, i] of near.slice(0, 40)) systemLabel(i, false);
+  }
 
   // 星域名：星系多的星域优先
   const regionAlpha = THREE.MathUtils.clamp((dist - 60) / 220, 0, 1);
@@ -643,17 +668,18 @@ function drawLabels() {
     }
   }
 
+  // 放大到中等距离后显示星系名：离屏幕中心近的优先（视线焦点），再按碰撞避让放置
   const picks = [];
-  if (dist < 140) {
-    const cam = camera.position;
+  if (dist < 220) {
+    const cx = w / 2, cy = h / 2;
     for (const s of M.systems) {
       if (!onScreen(s.i, 20)) continue;
-      const d = (s.x - cam.x) ** 2 + (s.y - cam.y) ** 2 + (s.z - cam.z) ** 2;
+      const d = (M.screen[s.i * 3] - cx) ** 2 + (M.screen[s.i * 3 + 1] - cy) ** 2;
       picks.push([d, s.i]);
     }
     picks.sort((a, b) => a[0] - b[0]);
   }
-  const limit = dist < 40 ? 300 : dist < 80 ? 180 : 80;
+  const limit = dist < 40 ? 300 : dist < 80 ? 200 : dist < 140 ? 120 : 60;
   lg.textAlign = 'left';
   lg.font = `11px ${font}`;
   for (const [, i] of picks.slice(0, limit)) if (!always.has(i)) systemLabel(i, false);
@@ -737,13 +763,35 @@ function showTooltip(i, x, y) {
   tip.style.top = Math.min(y + pad, M.size.h - rect.height - 8) + 'px';
 }
 
-// ---------- 侧栏：图层 / 图例 / 搜索 / 路线 ----------
+// ---------- 侧栏：星系着色 / 颜色说明 / 搜索 / 路线 ----------
 function renderLayerList() {
   $('layerList').innerHTML = LAYER_GROUPS.map(([title, list]) =>
     `<div class="layer-group-title">${title}</div><div class="layer-group">` +
     list.map(([key, label]) => `<button class="layer-btn${M.layer === key ? ' active' : ''}" data-layer="${key}" title="${LAYER_HINT[key]}">${label}</button>`).join('') +
     '</div>').join('') +
     `<p class="layer-hint">${LAYER_HINT[M.layer]}</p>`;
+  $('layerSummary').textContent = LAYERS.find(([k]) => k === M.layer)?.[1] || '';
+}
+
+// ---------- 侧栏分区折叠（星系着色 / 颜色说明 / 路线规划），状态持久化 ----------
+const PANEL_DEFAULT = { layers: true, legend: false, route: false };
+function bindPanels() {
+  const saved = { ...PANEL_DEFAULT, ...app.store.getJSON('eve-map-panels', {}) };
+  document.querySelectorAll('#mapSidebar .map-panel.collapsible').forEach((panel) => {
+    setPanel(panel.dataset.panel, saved[panel.dataset.panel], false);
+    panel.querySelector('.map-panel-toggle').addEventListener('click', () => setPanel(panel.dataset.panel, !panel.classList.contains('expanded')));
+  });
+}
+
+function setPanel(name, open, persist = true) {
+  const panel = document.querySelector(`#mapSidebar .map-panel[data-panel="${name}"]`);
+  if (!panel) return;
+  panel.classList.toggle('expanded', open);
+  panel.querySelector('.map-panel-toggle').setAttribute('aria-expanded', String(open));
+  if (persist) {
+    const state = { ...PANEL_DEFAULT, ...app.store.getJSON('eve-map-panels', {}), [name]: open };
+    app.store.setJSON('eve-map-panels', state);
+  }
 }
 
 function legendRow({ color, logo, label, count, key, systemIndex, sub }) {
@@ -756,7 +804,7 @@ function legendRow({ color, logo, label, count, key, systemIndex, sub }) {
     </button>`;
 }
 
-const legendSets = new Map();   // 图例高亮 key -> Set<system index>
+const legendSets = new Map();   // 颜色说明高亮 key -> Set<system index>
 
 function renderLegend() {
   legendSets.clear();
@@ -881,6 +929,7 @@ function renderLegend() {
     rows.push(legendRow({ color: '#ff4d4d', label: '可被夺取（红圈）', count: vulnerable.size, key: 'fw:vulnerable' }));
   }
   box.innerHTML = rows.join('') + (M.highlight ? '<button class="link-btn legend-clear" data-hl-clear>取消高亮</button>' : '');
+  $('legendSummary').textContent = M.highlight ? `已高亮 ${M.highlight.size} 个星系` : '';
 }
 
 function zh(map, key) { return map[key] || key; }
@@ -890,7 +939,7 @@ function toggleHighlight(key) {
     M.highlight = null;
     M.highlightKey = null;
   } else {
-    // 星域高亮也可以从星域详情面板触发，此时图例里不一定有对应的集合
+    // 星域高亮也可以从星域详情面板触发，此时颜色说明里不一定有对应的集合
     const regionMatch = /^region:(\d+)$/.exec(key);
     M.highlight = legendSets.get(key) || (regionMatch ? new Set(M.regions.get(Number(regionMatch[1]))?.systems || []) : null);
     M.highlightKey = key;
@@ -942,10 +991,11 @@ function bindSidebar() {
     const hlRow = e.target.closest('[data-hl]');
     if (hlRow) { toggleHighlight(hlRow.dataset.hl); return; }
     if (e.target.closest('[data-hl-clear]')) { M.highlight = null; M.highlightKey = null; renderLegend(); applyColors(); return; }
+    // 手机端：选中星系 / 星域后收起抽屉，露出星图
     const sys = e.target.closest('[data-sys]');
-    if (sys) { selectSystem(Number(sys.dataset.sys), true); results.hidden = true; return; }
+    if (sys) { selectSystem(Number(sys.dataset.sys), true); results.hidden = true; app.closeDrawer(); return; }
     const reg = e.target.closest('[data-region]');
-    if (reg) { selectRegion(Number(reg.dataset.region)); results.hidden = true; }
+    if (reg) { selectRegion(Number(reg.dataset.region)); results.hidden = true; app.closeDrawer(); }
   });
 
   // 路线规划
@@ -977,6 +1027,7 @@ function bindSidebar() {
     [a.dataset.id, b.dataset.id] = [b.dataset.id, a.dataset.id];
   });
   $('routeClear').addEventListener('click', () => {
+    $('routeSummary').textContent = '';
     M.route = [];
     $('routeResult').innerHTML = '';
     clearJumpRange();
@@ -999,6 +1050,7 @@ function setRouteEnd(which, i) {
   field.value = s.name;
   field.dataset.id = s.id;
   app.showToast((which === 'from' ? '起点' : '终点') + '：' + s.name, 'success', 1500);
+  setPanel('route', true);
   if ($('routeFrom').dataset.id && $('routeTo').dataset.id) planRoute();
 }
 
@@ -1030,11 +1082,212 @@ async function planRoute() {
       }).join('') + '</ol>';
     updateRouteLine();
     fitTo(M.route, 1.2);
+    $('routeSummary').textContent = `${M.route.length - 1} 跳`;
   } catch (error) {
     M.route = [];
+    $('routeSummary').textContent = '';
     box.innerHTML = '<p class="legend-empty">路线规划失败：' + app.esc(error.message) + '（可能无法通过星门到达）</p>';
     updateRouteLine();
   }
+}
+
+// ---------- 实时击杀：星图闪烁 + 弹幕 ----------
+// 数据来自击杀记录服务 /api/kb/live（R2Z2 实时收录），地图打开且页面可见时每 6 秒取一次新击杀
+const LIVE_POLL = 6000;
+const FLASH_MS = 2600;                  // 每次闪烁 3 个脉冲
+const DANMAKU_SPEED = 110;              // 像素 / 秒
+const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
+const LIVE = { on: true, cursor: -1, timer: null, disabled: false, busy: false, lanes: [], names: new Map(), types: new Map() };
+M.flashes = [];
+M.battles = [];                         // 疑似会战（battles.js 每分钟更新）
+
+function bindLiveKills() {
+  LIVE.on = app.store.get('eve-map-live') !== '0';
+  syncLiveToggle();
+  $('mapLiveToggle').addEventListener('click', () => {
+    LIVE.on = !LIVE.on;
+    app.store.set('eve-map-live', LIVE.on ? '1' : '0');
+    syncLiveToggle();
+    if (LIVE.on) startLiveKills();
+    else { stopLiveKills(); $('mapDanmaku').innerHTML = ''; M.flashes = []; invalidate(); }
+    app.showToast(LIVE.on ? '已开启实时击杀推送' : '已关闭实时击杀推送', 'success', 1500);
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && M.running) pollLive(); });
+  $('mapDanmaku').addEventListener('click', async (e) => {
+    const item = e.target.closest('[data-live-kill]');
+    if (!item) return;
+    const sys = M.byId.get(Number(item.dataset.system));
+    if (sys) selectSystem(sys.i, true);
+    try { (await app.loadKillboard()).openServiceKill(Number(item.dataset.liveKill)); } catch (error) { app.showToast(error.message, 'error'); }
+  });
+}
+
+function syncLiveToggle() {
+  const btn = $('mapLiveToggle');
+  btn.classList.toggle('active', LIVE.on);
+  btn.setAttribute('aria-pressed', String(LIVE.on));
+}
+
+function startLiveKills() {
+  if (LIVE.disabled || !LIVE.on || LIVE.timer) return;
+  pollLive();
+  LIVE.timer = setInterval(pollLive, LIVE_POLL);
+}
+
+function stopLiveKills() {
+  clearInterval(LIVE.timer);
+  LIVE.timer = null;
+}
+
+async function pollLive() {
+  if (document.hidden || !M.running || LIVE.busy || LIVE.disabled) return;
+  LIVE.busy = true;
+  try {
+    const res = await fetch('/api/kb/live?after=' + LIVE.cursor);
+    if (res.status === 404) {            // 没有部署击杀记录服务：静默关闭
+      LIVE.disabled = true;
+      stopLiveKills();
+      $('mapLiveToggle').hidden = true;
+      return;
+    }
+    if (!res.ok) return;
+    $('mapLiveToggle').hidden = false;
+    const data = await res.json();
+    LIVE.cursor = data.cursor;
+    // 页面切回前台时可能积压很多，只播放最近 8 条
+    const kills = (data.kills || []).slice(-8);
+    if (!kills.length || !LIVE.on) return;
+    for (const [id, name] of Object.entries(data.names || {})) if (name) LIVE.names.set(Number(id), name);
+    const missing = [...new Set(kills.map((k) => k.ship_type_id))].filter((t) => !LIVE.types.has(t));
+    if (missing.length) {
+      const named = await app.resolveTypeNames(missing).catch(() => new Map());
+      for (const [k, v] of named) LIVE.types.set(k, v);
+    }
+    // 均匀分散到下一个轮询周期内，避免同时涌出
+    const gap = Math.min(1500, LIVE_POLL / kills.length);
+    kills.forEach((k, n) => setTimeout(() => { if (LIVE.on && M.running) showLiveKill(k); }, n * gap));
+  } catch { /* 网络错误：下次再试 */ } finally {
+    LIVE.busy = false;
+  }
+}
+
+function showLiveKill(k) {
+  const s = M.byId.get(k.system_id);
+  if (s) { M.flashes.push({ i: s.i, t0: performance.now(), big: k.value >= 1e9, name: s.name }); invalidate(); }
+  danmaku(k, s);
+}
+
+// 闪烁：亮点 + 3 个向外扩散的圆环；10 亿以上的击杀用更大的金色圆环
+function drawFlashes() {
+  if (!M.flashes.length) return;
+  const now = performance.now();
+  M.flashes = M.flashes.filter((f) => now - f.t0 < FLASH_MS);
+  for (const f of M.flashes) {
+    const x = M.screen[f.i * 3], y = M.screen[f.i * 3 + 1], z = M.screen[f.i * 3 + 2];
+    if (z > 1 || x < -40 || y < -40 || x > M.size.w + 40 || y > M.size.h + 40) continue;
+    const t = (now - f.t0) / FLASH_MS;
+    const phase = (t * 3) % 1;
+    const fade = 1 - t * 0.6;
+    const color = f.big ? '255, 196, 0' : '255, 82, 64';
+    lg.lineWidth = f.big ? 2.5 : 2;
+    lg.strokeStyle = `rgba(${color}, ${(1 - phase) * fade})`;
+    lg.beginPath();
+    lg.arc(x, y, 4 + phase * (f.big ? 34 : 22), 0, Math.PI * 2);
+    lg.stroke();
+    lg.fillStyle = `rgba(255, 240, 220, ${0.55 + 0.45 * Math.cos(phase * Math.PI * 2) * fade})`;
+    lg.beginPath();
+    lg.arc(x, y, f.big ? 4.5 : 3.5, 0, Math.PI * 2);
+    lg.fill();
+    if (t < 0.8) {
+      lg.font = `600 12px ${getComputedStyle(document.body).fontFamily}`;
+      lg.fillStyle = `rgba(${color}, ${fade})`;
+      lg.fillText(f.name, x + 10, y - 8);
+    }
+  }
+}
+
+// 会战：紫色呼吸光晕 + 旋转虚线圈 + 标签，会战持续期间一直显示（与单次击杀的红色扩散圈区分）
+function drawBattles() {
+  if (!M.battles.length) return;
+  const t = performance.now() / 1000;
+  const font = getComputedStyle(document.body).fontFamily;
+  for (const b of M.battles) {
+    const s = M.byId.get(b.system_id);
+    if (!s || !onScreen(s.i, 60)) continue;
+    const x = M.screen[s.i * 3], y = M.screen[s.i * 3 + 1];
+    const r = Math.min(46, 18 + Math.sqrt(b.kills) * 2);
+    const breathe = 0.5 + 0.5 * Math.sin(t * Math.PI);          // 2 秒一个呼吸周期
+    const glow = lg.createRadialGradient(x, y, 0, x, y, r * 1.6);
+    glow.addColorStop(0, `rgba(180, 108, 255, ${0.35 + 0.25 * breathe})`);
+    glow.addColorStop(1, 'rgba(180, 108, 255, 0)');
+    lg.fillStyle = glow;
+    lg.beginPath();
+    lg.arc(x, y, r * 1.6, 0, Math.PI * 2);
+    lg.fill();
+    lg.save();
+    lg.setLineDash([6, 5]);
+    lg.lineDashOffset = -t * 18;
+    lg.lineWidth = 2;
+    lg.strokeStyle = `rgba(200, 150, 255, ${0.65 + 0.35 * breathe})`;
+    lg.beginPath();
+    lg.arc(x, y, r, 0, Math.PI * 2);
+    lg.stroke();
+    lg.restore();
+    // 标签
+    const text = `会战 · ${b.kills} 艘`;
+    lg.font = `600 11px ${font}`;
+    lg.textAlign = 'center';
+    lg.textBaseline = 'middle';
+    const tw = lg.measureText(text).width + 14;
+    lg.fillStyle = 'rgba(88, 40, 140, 0.92)';
+    lg.beginPath();
+    lg.roundRect(x - tw / 2, y - r - 24, tw, 18, 9);
+    lg.fill();
+    lg.fillStyle = '#f1e4ff';
+    lg.fillText(text, x, y - r - 15);
+    lg.textAlign = 'left';
+  }
+}
+
+// 弹幕：从右向左滚过星图上方；多条轨道，选最早空出的一条
+function danmaku(k, s) {
+  const box = $('mapDanmaku');
+  const laneCount = M.size.w < 600 ? 3 : 4;
+  while (LIVE.lanes.length < laneCount) LIVE.lanes.push(0);
+  const now = performance.now();
+  let lane = 0;
+  for (let n = 1; n < laneCount; n++) if (LIVE.lanes[n] < LIVE.lanes[lane]) lane = n;
+  const v = k.victim;
+  const victim = LIVE.names.get(v.character_id) || app.officialName(v.corporation_id) || LIVE.names.get(v.corporation_id) || '';
+  const sysName = s ? s.name : '虫洞空间';
+  const secText = s ? `<i style="color:${secColor(s.sec)}">${secDisplay(s.sec).toFixed(1)}</i>` : '';
+  const tier = k.value >= 1e10 ? ' huge' : k.value >= 1e9 ? ' big' : '';
+  const el = document.createElement('button');
+  el.className = 'danmaku-item' + tier;
+  el.dataset.liveKill = k.id;
+  el.dataset.system = k.system_id;
+  el.title = '点击查看击杀详情';
+  el.innerHTML = `<img src="https://images.evetech.net/types/${k.ship_type_id}/icon?size=32" alt="" width="20" height="20">` +
+    `<b>${app.esc(LIVE.types.get(k.ship_type_id) || '舰船')}</b>` +
+    (victim ? `<span>${app.esc(victim)}</span>` : '') +
+    `<em>${app.esc(sysName)} ${secText}</em><strong>${app.formatISK(k.value)}</strong>`;
+  el.style.top = (8 + lane * 32) + 'px';
+  box.appendChild(el);
+  if (REDUCED_MOTION.matches) {
+    el.classList.add('static');
+    LIVE.lanes[lane] = now + 6000;
+    setTimeout(() => el.remove(), 6000);
+    return;
+  }
+  const width = el.offsetWidth;
+  const distance = M.size.w + width;
+  const duration = distance / DANMAKU_SPEED;
+  el.style.setProperty('--from', M.size.w + 'px');
+  el.style.setProperty('--to', -width + 'px');
+  el.style.animationDuration = duration + 's';
+  // 这条轨道在弹幕尾部离开右边缘（再留 40px 间距）后才可复用
+  LIVE.lanes[lane] = Math.max(now, LIVE.lanes[lane]) + ((width + 40) / DANMAKU_SPEED) * 1000;
+  el.addEventListener('animationend', () => el.remove());
 }
 
 // ---------- 旗舰跳跃规划 ----------
@@ -1049,7 +1302,7 @@ function bindJumpPlanner() {
   $('jumpJf').value = J.settings.jf;
   if (typeof J.settings.dock !== 'string') J.settings.dock = J.settings.dock ? 'npc' : 'any';   // 旧版是复选框
   $('jumpDock').value = J.settings.dock;
-  document.querySelectorAll('[data-route-mode]').forEach((btn) => btn.addEventListener('click', () => setRouteMode(btn.dataset.routeMode)));
+  document.querySelectorAll('[data-route-mode]').forEach((btn) => btn.addEventListener('click', () => { setPanel('route', true); setRouteMode(btn.dataset.routeMode); }));
   const onChange = () => {
     J.settings = {
       ship: Number($('jumpShip').value) || J.settings.ship, jdc: Number($('jumpJdc').value), jfc: Number($('jumpJfc').value),
@@ -1079,6 +1332,7 @@ async function setRouteMode(mode) {
   document.querySelectorAll('[data-route-mode]').forEach((b) => b.classList.toggle('active', b.dataset.routeMode === mode));
   $('jumpOptions').hidden = mode !== 'jump';
   $('routeFlag').hidden = mode === 'jump';
+  $('routeSummary').textContent = '';
   M.route = [];
   $('routeResult').innerHTML = '';
   clearJumpRange();
@@ -1216,6 +1470,7 @@ async function planJump() {
   clearJumpRange();
   if (plan.error) {
     M.route = [];
+    $('routeSummary').textContent = '';
     updateRouteLine();
     box.innerHTML = '<p class="legend-empty">' + app.esc(plan.error) + '</p>';
     return;
@@ -1227,6 +1482,7 @@ async function planJump() {
   updateRouteLine();
   fitTo(M.route, 1.25);
   renderJumpPlan();
+  $('routeSummary').textContent = `${sim.rows.length} 次跳跃`;
   const prices = await app.getMarketPriceMap().catch(() => new Map());
   const unit = prices.get(ship.fuelType);
   if (unit && J.plan?.sim === sim && $('jumpFuelIsk')) $('jumpFuelIsk').textContent = '≈ ' + app.formatISK(unit * sim.fuel) + ' ISK';
@@ -1468,8 +1724,11 @@ export function initStarMap(context) {
   lg = labels.getContext('2d');
   M.layer = LAYERS.some(([k]) => k === app.store.get('eve-map-layer')) ? app.store.get('eve-map-layer') : 'security';
   renderLayerList();
+  bindPanels();
   bindSidebar();
   bindInfo();
+  bindLiveKills();
+  app.battles?.()?.then((m) => m && m.onBattles((list) => { M.battles = list; invalidate(); }));
   $('mapRefresh').addEventListener('click', async () => {
     const btn = $('mapRefresh');
     btn.disabled = true;
@@ -1511,6 +1770,7 @@ export async function showStarMap() {
       renderLegend();
       $('mapLoading').hidden = true;
       focusFromHash();
+      startLiveKills();
     })().catch((error) => {
       console.error(error);
       $('mapLoading').innerHTML = '星图加载失败：' + app.esc(error.message) + (/WebGL/i.test(error.message) ? '（浏览器不支持 WebGL）' : '');
@@ -1521,6 +1781,10 @@ export async function showStarMap() {
   }
   await M.ready;
   if (!M.running && renderer) { M.running = true; resize(); loop(); }
+  startLiveKills();
+  // 从其他页面跳转过来（如会战提醒「在星图查看」）：定位到地址栏里的星系
+  const target = /^#map=(\d+)/.exec(location.hash);
+  if (target && M.byId.get(Number(target[1]))?.i !== M.selected) focusFromHash();
   if (M.selected != null) history.replaceState(null, '', '#map=' + M.systems[M.selected].id);
   if (Date.now() - M.live.loadedAt > LIVE_TTL && M.systems.length) {
     await loadLive();
@@ -1560,4 +1824,5 @@ function focusFromHash() {
 // 离开星图页时停止渲染循环，节省 GPU
 export function hideStarMap() {
   M.running = false;
+  stopLiveKills();
 }

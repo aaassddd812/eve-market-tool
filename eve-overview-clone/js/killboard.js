@@ -157,16 +157,16 @@ export function killTableHtml(kills, { me = null, showSide = false } = {}) {
     const sys = systemLabel(k.solar_system_id);
     const loss = me != null && v.character_id === me;
     return `<tr class="kb-row" data-kill="${k.killmail_id}" tabindex="0">
-        ${showSide ? `<td><span class="pill ${loss ? 'sell' : 'buy'}">${loss ? '损失' : '击杀'}</span></td>` : ''}
+        ${showSide ? `<td class="kb-side"><span class="pill ${loss ? 'sell' : 'buy'}">${loss ? '损失' : '击杀'}</span></td>` : ''}
         <td class="kb-ship"><img src="${img(`types/${v.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
           <span><strong>${app.esc(typeName(v.ship_type_id))}</strong>${killTags(k.zkb)}</span></td>
-        <td class="kb-party"><strong>${app.esc(partyName(v.character_id) || partyName(v.corporation_id))}</strong>
+        <td class="kb-party kb-victim-cell"><strong>${app.esc(partyName(v.character_id) || partyName(v.corporation_id))}</strong>
           <span class="cell-sub">${app.esc(partyName(v.corporation_id))}${v.alliance_id ? ' · ' + app.esc(partyName(v.alliance_id)) : ''}</span></td>
-        <td class="kb-party"><strong>${app.esc(partyName(fb.character_id) || typeName(fb.ship_type_id))}</strong>
+        <td class="kb-party kb-final-cell"><strong>${app.esc(partyName(fb.character_id) || typeName(fb.ship_type_id))}</strong>
           <span class="cell-sub">${k.attackers.length} 名攻击者</span></td>
         <td class="kb-loc"><strong>${app.esc(sys.name)} <span style="color:${sys.color}">${sys.secText}</span></strong>
           <span class="cell-sub">${app.esc(sys.region)}</span></td>
-        <td class="num"><strong>${app.formatISK(k.zkb.totalValue)}</strong><span class="cell-sub">${timeAgo(k.killmail_time)}</span></td>
+        <td class="num kb-value"><strong>${app.formatISK(k.zkb.totalValue)}</strong><span class="cell-sub">${timeAgo(k.killmail_time)}</span></td>
       </tr>`;
   }).join('');
   return `<div class="table-scroll"><table class="pc-mini-table kb-table"><thead><tr>
@@ -238,6 +238,26 @@ export async function openKill(kill, options = {}) {
     return;
   }
   $('killTitle').textContent = typeName(kill.victim.ship_type_id) + ' · 击杀详情';
+}
+
+// 打开击杀记录服务（/api/kb/）中的击杀：完整击杀邮件 + 逐项吉他中间价（星图弹幕等处使用）
+const SERVICE_PRICE_NOTE = '单项与总价值按吉他 4-4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。';
+export function openServiceKill(id) {
+  return openKill(null, {
+    priceNote: SERVICE_PRICE_NOTE,
+    load: async () => {
+      const res = await fetch('/api/kb/kill/' + id);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || '击杀记录服务 ' + res.status);
+      for (const [k, v] of Object.entries(data.names || {})) if (v) names.set(Number(k), v);
+      const km = data.killmail;
+      const players = (km.attackers || []).filter((a) => a.character_id);
+      return {
+        kill: { ...km, zkb: { totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed, solo: players.length === 1, npc: !players.length, awox: false, locationID: null, valueLabel: '吉他中间价估值' } },
+        prices: new Map(Object.entries(data.prices).map(([k, v]) => [Number(k), v]))
+      };
+    }
+  });
 }
 
 function closeKill() {

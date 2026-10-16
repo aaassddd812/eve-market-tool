@@ -3,7 +3,7 @@
 
 数据来源
   - 历史：EVE Ref 每日击杀存档 https://data.everef.net/killmails/（完整 ESI 击杀邮件，每天约 1.4 万条）
-  - 实时：zKillboard RedisQ（可访问时）；否则轮询 zKillboard 各星域最新击杀
+  - 实时：zKillboard R2Z2 顺序推送（RedisQ 已于 2026-05-31 停用）；不可用时轮询 zKillboard 各星域最新击杀
   - 价格：ESI 伏尔戈市场全量订单，取吉他 4-4 最低卖价与最高收购价的中间值
 
 接口（只读，仅监听 127.0.0.1，由 nginx 反代 /api/kb/）
@@ -11,6 +11,8 @@
   GET /api/kb/feed?cursor=&limit=&ship=&system=&region=&character=&corporation=&alliance=&side=
                                               击杀列表（最新在前）；side=kills|losses|all
                                               本地只保留 --days 天；带筛选条件时翻完本地记录后自动改为实时查询 zKillboard（不入库）
+  GET /api/kb/live?after=N                    实时收录的新击杀（星图闪烁 / 弹幕），返回新的游标
+  GET /api/kb/battles?window=30&min=50        疑似大规模会战：时间窗（分钟）内同一星系被击毁舰船数 ≥ min（不含太空舱）
   GET /api/kb/top?days=7&limit=8              指定天数内价值最高的损失
   GET /api/kb/summary?hours=24                指定小时内的总损失（含每小时分布）
   GET /api/kb/leaderboard?days=30&side=losses|kills&by=character|corporation|alliance&metric=value|count
@@ -19,7 +21,7 @@
   GET /api/kb/kill/<id>                       击杀邮件详情与逐项估价（原文按需取自 ESI，本地不保存）
 
 用法
-  python3 kb_service.py --db kb.sqlite [--port 8291] [--days 30] [--live auto|redisq|poll|off] [--static DIR]
+  python3 kb_service.py --db kb.sqlite [--port 8291] [--days 30] [--live auto|r2z2|poll|off] [--static DIR]
   --static 仅用于本地 / 演示环境：同时托管前端静态文件。
 """
 
@@ -44,7 +46,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ESI = "https://esi.evetech.net/latest"
 ZKILL = "https://zkillboard.com/api/"
-REDISQ = "https://zkillredisq.stream/listen.php"
+R2Z2 = "https://r2z2.zkillboard.com/ephemeral/"   # https://github.com/zKillboard/zKillboard/wiki/API-(R2Z2)
+R2Z2_GAP = 0.1              # 有数据时的请求间隔（官方限制每 IP 15 次 / 秒）
+R2Z2_IDLE = 6               # 收到 404（暂无新击杀）后至少等待 6 秒，官方要求
 EVEREF = "https://data.everef.net/killmails/{year}/killmails-{date}.tar.bz2"
 UA = "EVE-Market-Tool KB service (+https://github.com/wbw5780/eve-market-tool)"
 FORGE = 10000002
@@ -56,6 +60,8 @@ CACHE_TTL = 600             # 排行 / 统计结果缓存（秒）
 KM_CACHE = 500              # 击杀详情内存缓存条数
 ZKILL_GAP = 1.0             # 任意两次 zKillboard 请求的最小间隔（秒），轮询与用户查询共用
 ZKILL_MAX_PAGE = 100        # zKillboard 每个查询最多翻到第 100 页（每页 200 条）
+LIVE_BUFFER = 300           # 实时缓冲保留最近的新击杀条数
+LIVE_MAX_AGE = 3 * 3600     # 发生超过 3 小时的击杀不进入实时推送
 ARCHIVE_CACHE = 30          # 30 天以前的查询结果只放内存，缓存的 zKillboard 页数
 
 log = logging.getLogger("kb")
@@ -174,6 +180,9 @@ class Store:
         self.known_names = {row[0] for row in conn.execute("SELECT id FROM names")}
         self.pending_names = set()
         self.cache = {}
+        # 实时收录的新击杀（仅内存）：供星图闪烁与弹幕使用，按入库顺序编号
+        self.live_buf = collections.deque(maxlen=LIVE_BUFFER)
+        self.live_n = 0
         self.state = {"live_mode": None, "last_live": None, "prices_updated": self.meta("prices_updated"), "backfill": "等待中"}
 
     @staticmethod
@@ -255,8 +264,8 @@ class Store:
         return self.price(v["ship_type_id"]) + sum(self.item_value(it) for it in v.get("items") or [])
 
     # ---------------- 写入
-    def ingest(self, kms):
-        """kms: [(killmail dict, hash)]，返回新增条数"""
+    def ingest(self, kms, live=False):
+        """kms: [(killmail dict, hash)]，返回新增条数；live=True 表示来自实时推送，新击杀会进入实时缓冲"""
         if not kms:
             return 0
         c = self.conn()
@@ -299,6 +308,12 @@ class Store:
             c.executemany("INSERT INTO attackers VALUES(?,?,?,?,?,?)", att_rows)
             c.commit()
             added = len(km_rows)
+            if live:
+                fresh = time.time() - LIVE_MAX_AGE
+                for row in km_rows:
+                    if row[2] >= fresh:          # zKill 偶尔补录多年前的击杀，不当作“新击杀”推送
+                        self.live_n += 1
+                        self.live_buf.append((self.live_n, row_summary(row[:1] + row[2:])))
         return added
 
     def prune(self):
@@ -377,8 +392,16 @@ class Workers:
                 self.store.prune()  # 实时入库会持续写入，每小时清理一次超出保留期的击杀
             time.sleep(PRICE_TTL)
 
-    # ---- 历史：EVE Ref 每日存档
+    # ---- 历史：EVE Ref 每日存档；每 6 小时检查一次新的一天（同时补齐实时数据在重启期间的缺口）
     def backfill(self):
+        while True:
+            try:
+                self.backfill_once()
+            except Exception:
+                log.exception("历史导入失败")
+            time.sleep(6 * 3600)
+
+    def backfill_once(self):
         self.prices_ready.wait()
         today = dt.datetime.now(dt.timezone.utc).date()
         for back in range(self.days, 0, -1):
@@ -411,7 +434,7 @@ class Workers:
         self.store.prune()
         self.store.state["backfill"] = "完成"
 
-    # ---- 实时：RedisQ 优先，不可用时轮询各星域
+    # ---- 实时：zKillboard R2Z2 优先，不可用时轮询各星域
     def live_loop(self):
         if self.live_mode == "off":
             self.store.state["live_mode"] = "off"
@@ -419,36 +442,59 @@ class Workers:
         self.prices_ready.wait()
         mode = self.live_mode
         if mode == "auto":
-            mode = "redisq" if self.redisq_reachable() else "poll"
+            mode = "r2z2" if self.r2z2_sequence() else "poll"
         self.store.state["live_mode"] = mode
-        log.info("实时数据：%s", "zKillboard RedisQ" if mode == "redisq" else "轮询 zKillboard 各星域")
-        (self.redisq_loop if mode == "redisq" else self.poll_loop)()
+        log.info("实时数据：%s", "zKillboard R2Z2" if mode == "r2z2" else "轮询 zKillboard 各星域")
+        (self.r2z2_loop if mode == "r2z2" else self.poll_loop)()
 
-    def redisq_reachable(self):
+    def r2z2_sequence(self):
+        """R2Z2 最新序号（每 51 条击杀更新一次）；不可用时返回 None"""
         try:
-            http_get(f"{REDISQ}?queueID=eve-market-tool-probe&ttw=1", timeout=10)
-            return True
+            data, _ = get_json(R2Z2 + "sequence.json", timeout=15, retries=2)
+            return int(data["sequence"])
         except Exception as e:
-            log.info("RedisQ 不可用（%s），改用轮询", e)
-            return False
+            log.info("R2Z2 不可用（%s）", e)
+            return None
 
-    def redisq_loop(self):
-        queue_id = "eve-market-tool-" + os.urandom(4).hex()
+    def r2z2_loop(self):
+        # 序号文件只保留约 24 小时：重启后优先从上次位置继续，太旧则从最新位置开始（缺口由 EVE Ref 每日存档补齐）
+        latest = self.r2z2_sequence() or 0
+        saved = int(self.store.meta("r2z2_seq") or 0)
+        seq = saved if saved and latest - saved < 10000 else latest
+        log.info("R2Z2 从序号 %d 开始（上次 %s，最新 %d）", seq, saved or "无", latest)
+        misses = 0
         while True:
             try:
-                data, _ = get_json(f"{REDISQ}?queueID={queue_id}&ttw=10", timeout=30)
-                package = (data or {}).get("package")
-                if not package:
-                    continue
-                zkb = package.get("zkb") or {}
-                km = package.get("killmail")
-                if not km:  # 新版 RedisQ 只给出 ESI 链接
-                    km, _ = get_json(zkb.get("href") or f"{ESI}/killmails/{package['killID']}/{zkb['hash']}/")
-                self.store.ingest([(km, zkb.get("hash"))])
+                body, _ = http_get(f"{R2Z2}{seq}.json", timeout=20)
+                item = json.loads(body)
+                self.store.ingest([(item["esi"], item.get("hash"))], live=True)
                 self.store.state["last_live"] = iso(time.time())
+                self.store.state["r2z2_seq"] = seq
+                seq += 1
+                misses = 0
+                if seq % 50 == 0:
+                    self.store.meta("r2z2_seq", seq)
+                time.sleep(R2Z2_GAP)
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    misses += 1
+                    # 连续 404 且最新序号已远超当前位置：说明这段序号已过期，跳到最新
+                    if misses % 20 == 0:
+                        latest = self.r2z2_sequence() or seq
+                        if latest > seq + 100:
+                            log.warning("R2Z2 序号 %d 已过期，跳到 %d", seq, latest)
+                            seq = latest
+                    self.store.meta("r2z2_seq", seq)
+                    time.sleep(R2Z2_IDLE)
+                elif e.code == 403:
+                    log.warning("R2Z2 返回 403（可能被限流），60 秒后重试")
+                    time.sleep(60)
+                else:
+                    log.warning("R2Z2 %s：%s", seq, e)
+                    time.sleep(R2Z2_IDLE)
             except Exception as e:
-                log.warning("RedisQ：%s", e)
-                time.sleep(5)
+                log.warning("R2Z2 %s：%s", seq, e)
+                time.sleep(R2Z2_IDLE)
 
     def poll_loop(self):
         try:
@@ -462,7 +508,7 @@ class Workers:
             for path in targets:
                 try:
                     data = zkill_get(path)
-                    added += self.store.ingest([(k, (k.get("zkb") or {}).get("hash")) for k in data or []])
+                    added += self.store.ingest([(k, (k.get("zkb") or {}).get("hash")) for k in data or []], live=True)
                 except Exception as e:
                     log.debug("zKillboard %s：%s", path, e)
                 time.sleep(POLL_GAP)
@@ -571,6 +617,65 @@ class Api:
         n, oldest, newest = c.execute("SELECT COUNT(*), MIN(time), MAX(time) FROM killmails").fetchone()
         return {"killmails": n, "oldest": iso(oldest) if oldest else None, "newest": iso(newest) if newest else None,
                 "retention_days": self.store.retention, "db_mb": round(self.store.db_bytes() / 1048576, 1), **self.store.state}
+
+    # GET /live?after=N：上次之后实时收录的新击杀（首次请求 after<0 时给出最近几条）
+    def live(self, q):
+        after = int(q.get("after", -1))
+        buf = list(self.store.live_buf)
+        latest = buf[-1][0] if buf else self.store.live_n
+        if after < 0 or after > latest:           # 首次请求，或服务重启后编号重置
+            items = buf[-min(int(q.get("initial", 3)), 10):]
+        else:
+            items = [x for x in buf if x[0] > after][-50:]
+        kills = [k for _, k in items]
+        return {"cursor": latest, "kills": kills, "names": self.with_names(kills)}
+
+    # GET /battles?window=30&min=50：疑似大规模会战（时间窗内同一星系被击毁的舰船数，不含太空舱与 NPC 击杀）
+    def battles(self, q):
+        window = min(max(int(q.get("window", 30)), 5), 180)
+        min_kills = min(max(int(q.get("min", 50)), 5), 2000)
+
+        def run():
+            c = self.store.conn()
+            since = int(time.time() - window * 60)
+            base = "time >= ? AND npc = 0 AND ship_type NOT IN (670, 33328)"
+            rows = c.execute(f"""SELECT system_id, region_id, COUNT(*), SUM(value), MIN(time), MAX(time) FROM killmails
+                                 WHERE {base} GROUP BY system_id HAVING COUNT(*) >= ? ORDER BY COUNT(*) DESC LIMIT 20""",
+                             (since, min_kills)).fetchall()
+            out, ids = [], []
+            for sys_id, region, kills, value, start, end in rows:
+                km_sql = f"SELECT id FROM killmails WHERE system_id = ? AND {base}"
+                pilots = c.execute(f"""SELECT COUNT(*) FROM (
+                                         SELECT char FROM attackers WHERE km IN ({km_sql})
+                                         UNION SELECT v_char FROM killmails WHERE system_id = ? AND {base} AND v_char IS NOT NULL)""",
+                                   (sys_id, since, sys_id, since)).fetchone()[0]
+                # 主要势力：按参与击杀次数与损失合并排序（有联盟用联盟，否则用军团）
+                sides = {}
+                def side_of(eid, is_alliance):
+                    return sides.setdefault(eid, {"id": eid, "kind": "alliance" if is_alliance else "corporation", "kills": 0, "losses": 0, "lost": 0.0})
+                for eid, is_alliance, n in c.execute(f"""SELECT COALESCE(alliance, corp) e, alliance IS NOT NULL, COUNT(DISTINCT km) FROM attackers
+                                                         WHERE km IN ({km_sql}) GROUP BY e""", (sys_id, since)):
+                    if eid:
+                        side_of(eid, is_alliance)["kills"] = n
+                for eid, is_alliance, n, v in c.execute(f"""SELECT COALESCE(v_alliance, v_corp) e, v_alliance IS NOT NULL, COUNT(*), SUM(value) FROM killmails
+                                                            WHERE system_id = ? AND {base} GROUP BY e""", (sys_id, since)):
+                    if eid:
+                        side = side_of(eid, is_alliance)
+                        side["losses"], side["lost"] = n, round(v or 0, 2)
+                top_sides = sorted(sides.values(), key=lambda x: x["kills"] + x["losses"], reverse=True)[:4]
+                top = c.execute(f"SELECT id, ship_type, value FROM killmails WHERE system_id = ? AND {base} ORDER BY value DESC LIMIT 1",
+                                (sys_id, since)).fetchone()
+                ids += [x["id"] for x in top_sides]
+                out.append({"system_id": sys_id, "region_id": region, "kills": kills, "value": round(value or 0, 2),
+                            "start": iso(start), "end": iso(end), "pilots": pilots, "sides": top_sides,
+                            "top": {"id": top[0], "ship_type_id": top[1], "value": round(top[2] or 0, 2)} if top else None})
+            return {"window": window, "min": min_kills, "battles": out, "names": self.names_for(ids)}
+        hit = self.store.cache.get(("battles", window, min_kills))
+        if hit and time.time() - hit[0] < 30:      # 多个页面同时轮询时 30 秒内复用结果
+            return hit[1]
+        value = run()
+        self.store.cache[("battles", window, min_kills)] = (time.time(), value)
+        return value
 
     # GET /feed
     def feed(self, q):
@@ -873,7 +978,7 @@ class Api:
 
 # ---------------------------------------------------------------- HTTP 服务
 def make_handler(api, static_dir):
-    routes = {"status": api.status, "feed": api.feed, "top": api.top, "summary": api.summary,
+    routes = {"status": api.status, "live": api.live, "battles": api.battles, "feed": api.feed, "top": api.top, "summary": api.summary,
               "leaderboard": api.leaderboard, "search": api.search}
 
     class Handler(BaseHTTPRequestHandler):
@@ -946,7 +1051,8 @@ def main():
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8291)
     parser.add_argument("--days", type=int, default=30, help="历史导入与保留天数")
-    parser.add_argument("--live", default="auto", choices=["auto", "redisq", "poll", "off"])
+    parser.add_argument("--live", default="auto", choices=["auto", "r2z2", "redisq", "poll", "off"],
+                        help="实时数据来源；redisq 已停用，等同 r2z2")
     parser.add_argument("--static", help="同时托管的前端静态目录（本地 / 演示环境）")
     parser.add_argument("--system-regions", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_regions.json"))
     parser.add_argument("--verbose", action="store_true")
@@ -956,7 +1062,7 @@ def main():
     with open(args.system_regions, encoding="utf-8") as fh:
         system_regions = {int(k): v for k, v in json.load(fh).items()}
     store = Store(args.db, system_regions, args.days + 1)
-    Workers(store, args.days, args.live).start()
+    Workers(store, args.days, "r2z2" if args.live == "redisq" else args.live).start()
     api = Api(store)
     threading.Thread(target=api.warm, daemon=True).start()
     server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static))

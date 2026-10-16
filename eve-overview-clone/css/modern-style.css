@@ -2545,3 +2545,182 @@ td.loc {
 .jump-skills .plain-select.jump-dock-select { width: auto; min-width: 0; max-width: 190px; flex: 1 1 auto; }
 .jump-station.is-structure { color: var(--success, #30c88a); background: color-mix(in srgb, var(--success, #30c88a) 14%, transparent); }
 .jump-range .warn { color: var(--warning, #f2b134); }
+
+/* ===== 手机端适配 ===== */
+.mobile-only { display: none !important; }
+.empty-search { margin: 4px auto 0; height: 44px; padding: 0 22px; }
+.empty-search svg { width: 18px; height: 18px; }
+
+/* 窄屏网格列可收缩到 0，避免宽表格把整列撑出屏幕 */
+@media (max-width: 1100px) {
+  .kb-columns, .kb-summary { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 触屏：去掉点按高亮与双击缩放延迟；快捷键按钮没有意义 */
+button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+@media (hover: none) and (pointer: coarse) {
+  #shortcutHelpBtn, .search-kbd { display: none; }
+}
+
+@media (max-width: 768px) {
+  .mobile-only { display: revert !important; }
+  .empty-search.mobile-only { display: inline-flex !important; }
+  .desktop-only { display: none !important; }
+
+  /* 刘海屏 / 底部手势条安全区 */
+  .app-header { padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
+  .main-content, .kb-scroll, .profile-scroll, .map-sidebar-content, .profile-sidebar-content { padding-bottom: env(safe-area-inset-bottom); }
+
+  /* iOS 输入框字号小于 16px 时聚焦会自动放大页面 */
+  input[type="search"], input[type="text"], input[type="number"], textarea { font-size: 16px; }
+
+  /* 抽屉略宽，便于手指操作 */
+  #sidebar, #profileSidebar, #mapSidebar { width: min(88vw, 340px); }
+
+  /* 弹窗改为全屏 */
+  .modal { padding: 0; align-items: stretch; }
+  .modal-content, .modal-content.kill-content, .modal-content.shortcut-content {
+    max-width: none; max-height: none; height: 100%; border-radius: 0; border: 0;
+    padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+  }
+  .modal-header { position: sticky; top: 0; z-index: 2; background: var(--bg-secondary); }
+  .modal-body { flex: 1; padding: 16px; }
+
+  /* 击杀页顶部：搜索框占满一行，状态换到下一行 */
+  .kb-topbar { flex-direction: column; align-items: stretch; gap: 8px; }
+  .kb-search { max-width: none; }
+  .kb-wrap { padding: var(--spacing-md) 12px var(--spacing-lg); }
+
+  /* 成员表：横向滚动时名称列固定 */
+  /* 斑马纹是半透明背景，固定列必须用不透明底色，否则滚过的数字会透出来 */
+  .kb-members th:first-child, .kb-members td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg-secondary) !important; box-shadow: 1px 0 0 var(--border-primary); }
+  .kb-members td:first-child { min-width: 140px; max-width: 160px; }
+
+  /* 星图信息面板不超过半屏，露出被选中的星系 */
+  .map-info { max-height: 50%; }
+}
+
+/* 击杀列表在手机上改为卡片：舰船 + 价值 / 受害者 / 最后一击 + 地点 */
+@media (max-width: 640px) {
+  .kb-table thead { display: none; }
+  .kb-table, .kb-table tbody { display: block; }
+  .kb-table tr.kb-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "side side" "ship value" "victim victim" "final loc";
+    gap: 4px 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-primary);
+  }
+  .kb-table tr.kb-row td { display: block !important; padding: 0; border: 0; min-width: 0; background: none !important; }
+  .kb-table tr.kb-row:nth-child(even) { background: color-mix(in srgb, var(--bg-tertiary) 40%, transparent); }
+  .kb-table td.kb-side { grid-area: side; }
+  .kb-table td.kb-side:empty { display: none !important; }
+  .kb-table tr.kb-row td.kb-ship { grid-area: ship; display: flex !important; align-items: center; gap: 10px; }
+  .kb-table td.kb-value { grid-area: value; text-align: right; }
+  .kb-table td.kb-victim-cell { grid-area: victim; }
+  .kb-table td.kb-final-cell { grid-area: final; }
+  .kb-table td.kb-loc { grid-area: loc; text-align: right; }
+  .kb-table td.kb-final-cell strong, .kb-table td.kb-loc strong { font-size: 0.75rem; font-weight: 500; }
+  .kb-table td .cell-sub { white-space: normal; }
+  .kb-table tr.kb-divider { display: block; }
+  .kb-table tr.kb-divider td { display: block; }
+  .table-scroll:has(> .kb-table) { overflow-x: visible; }
+}
+
+/* 星图：实时击杀弹幕与开关 */
+.kill-danmaku { position: absolute; inset: 0 0 auto 0; height: 140px; z-index: 3; overflow: hidden; pointer-events: none; }
+.danmaku-item {
+  position: absolute; left: 0; display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px 0 3px;
+  white-space: nowrap; font-size: 0.75rem; color: #dbe3ee; pointer-events: auto; cursor: pointer;
+  border: 1px solid rgba(255, 82, 64, 0.35); border-radius: 13px; background: rgba(13, 18, 27, 0.78);
+  animation: danmaku-move linear forwards; will-change: transform;
+}
+.danmaku-item:hover { animation-play-state: paused; border-color: rgba(255, 82, 64, 0.8); background: rgba(13, 18, 27, 0.95); z-index: 1; }
+.danmaku-item img { border-radius: 50%; background: #0d1219; }
+.danmaku-item b { font-weight: 600; color: #fff; }
+.danmaku-item span { color: #9fb0c6; }
+.danmaku-item em { font-style: normal; color: #9fb0c6; }
+.danmaku-item em i { font-style: normal; font-weight: 600; }
+.danmaku-item strong { color: #ff7a6b; font-variant-numeric: tabular-nums; }
+.danmaku-item.big { border-color: rgba(255, 196, 0, 0.6); }
+.danmaku-item.big strong { color: #ffc400; }
+.danmaku-item.huge { height: 30px; font-size: 0.8125rem; border-color: #ffc400; background: rgba(60, 44, 0, 0.85); box-shadow: 0 0 12px rgba(255, 196, 0, 0.35); }
+.danmaku-item.huge strong { color: #ffd84d; }
+@keyframes danmaku-move { from { transform: translateX(var(--from)); } to { transform: translateX(var(--to)); } }
+/* 减少动态效果：不滚动，改为右上角静止显示几秒 */
+.danmaku-item.static { left: auto; right: 64px; animation: none !important; }
+.map-zoom .live-toggle.active { color: #ffc400; }
+.map-zoom .live-toggle.active svg { fill: rgba(255, 196, 0, 0.25); }
+@media (max-width: 768px) {
+  .kill-danmaku { height: 110px; }
+  .danmaku-item { font-size: 0.6875rem; height: 24px; }
+  .danmaku-item span { display: none; }   /* 手机上省略受害者，缩短弹幕 */
+}
+
+/* 星图侧栏：分区折叠 */
+.map-panel.collapsible { padding-top: 8px; padding-bottom: 8px; }
+.map-panel.collapsible > .map-panel-head { margin: 0 -6px; }
+.map-panel.collapsible.expanded > .map-panel-head { margin-bottom: 6px; }
+.map-panel-toggle {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 6px; border-radius: var(--radius-md);
+  color: var(--text-muted); text-align: left; transition: color var(--transition-fast), background var(--transition-fast);
+}
+.map-panel-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+.map-panel-toggle h4 { margin: 0; color: inherit; }
+.map-panel.expanded > .map-panel-head .map-panel-toggle { color: var(--text-secondary); }
+.map-panel.expanded > .map-panel-head .category-chevron { transform: rotate(90deg); }
+.map-panel-summary { flex: 1; min-width: 0; margin-left: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 0.75rem; font-weight: 400; color: var(--text-muted); }
+.map-panel.expanded .map-panel-summary { display: none; }
+.map-panel.collapsible > .map-panel-body { display: none; }
+.map-panel.collapsible.expanded > .map-panel-body { display: block; animation: fade-in var(--transition-base); }
+.map-panel-head.route-head { justify-content: space-between; }
+
+/* ===== 会战：全站提醒卡片 ===== */
+.battle-alerts { position: fixed; top: calc(var(--header-h) + 12px); right: 16px; z-index: 1500; display: flex; flex-direction: column; gap: 10px; width: min(360px, calc(100vw - 32px)); }
+.battle-alert {
+  padding: 12px 14px; border: 1px solid rgba(180, 108, 255, 0.55); border-radius: var(--radius-lg);
+  background: var(--bg-secondary); box-shadow: var(--shadow-lg), 0 0 0 3px rgba(180, 108, 255, 0.12);
+  animation: modal-in 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2); font-size: 0.8125rem;
+}
+.battle-alert-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.battle-alert-head strong { color: #b46cff; }
+.battle-alert-head > span:not(.battle-icon) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.battle-close { width: 24px; height: 24px; border-radius: 6px; color: var(--text-muted); font-size: 1.1rem; }
+.battle-close:hover { background: var(--bg-hover); color: var(--text-primary); }
+.battle-alert p { color: var(--text-secondary); line-height: 1.5; }
+.battle-alert p b { color: var(--text-primary); }
+.battle-sides { margin-top: 2px; font-weight: 500; }
+.battle-sides i { margin: 0 4px; font-style: normal; color: #b46cff; }
+.battle-actions { display: flex; gap: 8px; margin-top: 10px; }
+.battle-actions .btn { height: 30px; padding: 0 12px; font-size: 0.75rem; }
+.battle-icon { width: 16px; height: 16px; flex-shrink: 0; color: #b46cff; }
+
+/* ===== 会战：击杀记录页 ===== */
+.kb-battles { margin-bottom: var(--spacing-lg); padding: 14px 16px; border: 1px solid rgba(180, 108, 255, 0.4); border-radius: var(--radius-lg); background: color-mix(in srgb, #b46cff 6%, var(--bg-secondary)); }
+.kb-battles.is-empty { padding: 10px 16px; border-color: var(--border-primary); background: var(--bg-secondary); }
+.kb-battles-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.kb-battles-head .kb-section-title { margin: 0; display: flex; align-items: center; gap: 6px; }
+.kb-battles-head .kb-section-title b { color: #b46cff; }
+.kb-battles-head .text-muted { font-size: 0.75rem; }
+.kb-battles-head .link-btn { margin-left: auto; }
+.kb-battle-settings { display: flex; align-items: center; flex-wrap: wrap; gap: 10px 18px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-primary); font-size: 0.8125rem; color: var(--text-secondary); }
+.kb-battle-settings label { display: flex; align-items: center; gap: 8px; }
+.kb-battle-settings .plain-select { height: 30px; width: auto; }
+.kb-battle-settings .text-muted { flex-basis: 100%; font-size: 0.75rem; }
+.kb-battle-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 10px; margin-top: 12px; }
+.kb-battle { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-secondary); }
+.kb-battle-main { display: flex; flex-direction: column; gap: 2px; }
+.kb-battle-main strong { font-size: 0.9375rem; }
+.kb-battle-main .text-muted { font-size: 0.75rem; }
+.kb-battle-stats { display: flex; gap: 16px; font-size: 0.8125rem; color: var(--text-secondary); }
+.kb-battle-stats b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.kb-battle-sides { display: flex; flex-wrap: wrap; gap: 6px; }
+.kb-battle-side { display: inline-flex; flex-direction: column; padding: 4px 8px; border-radius: var(--radius-sm); background: var(--bg-tertiary); font-size: 0.75rem; }
+.kb-battle-side small { color: var(--text-muted); font-size: 0.6875rem; }
+.kb-battle-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.kb-battle-actions .link-btn { margin-right: auto; font-size: 0.75rem; }
+.kb-battle-actions .btn { height: 28px; padding: 0 10px; font-size: 0.75rem; }
+@media (max-width: 768px) {
+  .battle-alerts { top: calc(var(--header-h) + 8px); right: 8px; width: calc(100vw - 16px); }
+}

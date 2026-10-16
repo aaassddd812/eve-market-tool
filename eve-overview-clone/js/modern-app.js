@@ -220,10 +220,17 @@ async function loadServerStatus() {
 function applyTheme(theme) {
   state.theme = theme;
   document.documentElement.setAttribute('data-theme', theme);
+  // 手机浏览器地址栏颜色跟随主题
+  syncThemeColor();
   if (priceChartInstance) renderChart();
 }
 
+function syncThemeColor() {
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', state.theme === 'light' ? '#f5f7fa' : '#0b0f17');
+}
+
 function initTheme() {
+  syncThemeColor();   // 页面加载时主题已由 <head> 内联脚本设置，这里只同步地址栏颜色
   $('themeToggle').addEventListener('click', () => {
     const next = state.theme === 'dark' ? 'light' : 'dark';
     store.set('eve-theme', next);
@@ -262,13 +269,43 @@ function switchView(view) {
 
 // 击杀记录页：首次进入时加载
 let kbPageModule = null;
-async function openKbPage() {
+// ===== 会战监测：全站提醒，击杀记录页与星图订阅 =====
+let battlesPromise = null;
+function initBattleWatch() {
+  battlesPromise = import('./battles.js?v=v16r2').then((m) => {
+    m.initBattles({ store, loadKillboard, esc, formatISK, officialName, openMapSystem, openKbSystem });
+    return m;
+  }).catch((error) => { console.error('会战监测加载失败:', error); return null; });
+}
+
+// 打开星图并定位到星系
+function openMapSystem(id) {
+  history.pushState(null, '', '#map=' + id);
+  switchView('map');
+}
+
+// 打开击杀记录页并按星系筛选
+async function openKbSystem(id) {
+  switchView('kb');
+  await openKbPage();
+  kbPageModule?.filterBySystem(id);
+}
+
+// 进行中的调用复用同一个 Promise（例如会战提醒「击杀记录」按钮需要等页面就绪后再筛选）
+let kbOpening = null;
+function openKbPage() {
+  if (!kbOpening) kbOpening = openKbPageImpl().finally(() => { kbOpening = null; });
+  return kbOpening;
+}
+
+async function openKbPageImpl() {
   try {
     if (!kbPageModule) {
-      kbPageModule = await import('./kb-page.js?v=v11r1');
+      kbPageModule = await import('./kb-page.js?v=v16r2');
       kbPageModule.initKbPage({
         esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
-        fetchESI, debounce, showToast, loadKillboard,
+        fetchESI, debounce, showToast, loadKillboard, openMapSystem,
+        battles: () => battlesPromise,
         getNpcNames: () => state.npcNames,
         // 市场分类「舰船」下的全部舰船（搜索用）
         shipTypes: () => {
@@ -293,7 +330,7 @@ async function openKbPage() {
 let killboardModule = null;
 async function loadKillboard() {
   if (!killboardModule) {
-    killboardModule = await import('./killboard.js?v=v11r1');
+    killboardModule = await import('./killboard.js?v=v14r1');
     killboardModule.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap
     });
@@ -306,11 +343,13 @@ let starMapModule = null;
 async function openStarMap() {
   try {
     if (!starMapModule) {
-      starMapModule = await import('./star-map.js?v=v12r4');
+      starMapModule = await import('./star-map.js?v=v16r2');
       starMapModule.initStarMap({
-        fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames,
+        fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
         showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
         hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+        closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
+        battles: () => battlesPromise,
         getEsiToken: ensureEsiToken,
         loadKillboard,
         // 角色当前所在星系（需要 esi-location.read_location.v1）
@@ -385,6 +424,23 @@ function initSidebar() {
   $('menuToggle').addEventListener('click', () => toggleSidebar());
   $('sidebarBackdrop').addEventListener('click', closeDrawer);
   MOBILE_QUERY.addEventListener('change', closeDrawer);
+  $('emptySearchBtn').addEventListener('click', openDrawer);
+  // 手机端：在抽屉上向左滑动关闭
+  for (const sb of Object.values(SIDEBARS)) {
+    const el = $(sb.id);
+    let startX = null, startY = 0;
+    el.addEventListener('touchstart', (e) => {
+      if (!el.classList.contains('drawer-open') || e.touches.length !== 1) { startX = null; return; }
+      startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+    }, { passive: true });
+    el.addEventListener('touchend', (e) => {
+      if (startX === null) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - startX, dy = t.clientY - startY;
+      startX = null;
+      if (dx < -60 && Math.abs(dx) > Math.abs(dy) * 1.5) closeDrawer();
+    }, { passive: true });
+  }
 
   $('profileSidebarCollapse').addEventListener('click', () => toggleSidebar('profile'));
   $('profileSidebarReopen').addEventListener('click', () => toggleSidebar('profile'));
@@ -2713,6 +2769,7 @@ function initESIModal() {
 // ===== 初始化应用 =====
 function init() {
   initTheme();
+  initBattleWatch();
   initNavigation();
   initSidebar();
   initRegionSelect();

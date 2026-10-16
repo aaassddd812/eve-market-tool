@@ -77,16 +77,16 @@ function feedRows(kills, { me } = {}) {
     const sys = kb.systemLabel(k.system_id);
     const side = me ? (v[me.key] === me.id ? 'loss' : 'kill') : null;
     return `${divider}<tr class="kb-row" data-kill="${k.id}" tabindex="0">
-        ${side ? `<td><span class="pill ${side === 'loss' ? 'sell' : 'buy'}">${side === 'loss' ? '损失' : '击杀'}</span></td>` : ''}
+        ${side ? `<td class="kb-side"><span class="pill ${side === 'loss' ? 'sell' : 'buy'}">${side === 'loss' ? '损失' : '击杀'}</span></td>` : ''}
         <td class="kb-ship"><img src="${IMG(`types/${k.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
           <span><strong>${app.esc(typeName(k.ship_type_id))}</strong>${k.solo ? '<span class="kb-tag solo">单刷</span>' : ''}${k.npc ? '<span class="kb-tag npc">NPC</span>' : ''}</span></td>
-        <td class="kb-party"><strong>${v.character_id ? entityLink('character', v.character_id) : entityLink('corporation', v.corporation_id)}</strong>
+        <td class="kb-party kb-victim-cell"><strong>${v.character_id ? entityLink('character', v.character_id) : entityLink('corporation', v.corporation_id)}</strong>
           <span class="cell-sub">${v.character_id ? entityLink('corporation', v.corporation_id) : ''}${v.alliance_id ? (v.character_id ? ' · ' : '') + entityLink('alliance', v.alliance_id) : ''}</span></td>
-        <td class="kb-party"><strong>${f.character_id ? entityLink('character', f.character_id) : app.esc(typeName(f.ship_type_id))}</strong>
+        <td class="kb-party kb-final-cell"><strong>${f.character_id ? entityLink('character', f.character_id) : app.esc(typeName(f.ship_type_id))}</strong>
           <span class="cell-sub">${f.corporation_id && f.character_id ? entityLink('corporation', f.corporation_id) + ' · ' : ''}${k.attackers} 名攻击者</span></td>
         <td class="kb-loc"><strong><a class="kb-link" data-location="system:${k.system_id}">${app.esc(sys.name)}</a> <span style="color:${sys.color}">${sys.secText}</span></strong>
           <span class="cell-sub">${k.region_id ? `<a class="kb-link" data-location="region:${k.region_id}">${app.esc(partyName(k.region_id))}</a>` : ''}</span></td>
-        <td class="num"><strong>${app.formatISK(k.value)}</strong><span class="cell-sub">${timeAgo(k.time)}</span></td>
+        <td class="num kb-value"><strong>${app.formatISK(k.value)}</strong><span class="cell-sub">${timeAgo(k.time)}</span></td>
       </tr>`;
   }).join('');
 }
@@ -133,6 +133,7 @@ async function renderHome() {
   S.entity = null;
   const main = $('kbMain');
   main.innerHTML = `
+    <section class="kb-battles" id="kbBattles" hidden></section>
     <section class="kb-summary" id="kbSummary"><div class="loading-block"><span class="spinner"></span>载入统计…</div></section>
     <section class="kb-section">
       <h3 class="kb-section-title">最近 7 天最高损失</h3>
@@ -160,6 +161,7 @@ async function renderHome() {
   $('kbMore').addEventListener('click', () => loadFeed(false));
   renderFilters();
   renderBoardControls();
+  renderBattles();
   await Promise.all([loadSummary(), loadTop(), loadFeed(true), loadBoard()]);
 }
 
@@ -275,6 +277,54 @@ function setFilter(key, value) {
   if (location.hash !== '#kb') { history.pushState(null, '', '#kb'); renderHome(); return; }
   renderFilters();
   loadFeed(true);
+}
+
+// ---------- 疑似会战（数据由 battles.js 每分钟更新）----------
+let battles = null;
+function renderBattles() {
+  const box = $('kbBattles');
+  if (!box || !battles || !kb) return;
+  if (!battles.isBattleWatchAvailable()) { box.hidden = true; return; }
+  const list = battles.getBattles(), names = battles.getBattleNames(), set = battles.getBattleSettings();
+  box.hidden = false;
+  const opts = (values, current, unit) => values.map((v) => `<option value="${v}"${v === current ? ' selected' : ''}>${v} ${unit}</option>`).join('');
+  const settings = `<div class="kb-battle-settings" id="kbBattleSettings"${S.battleSettingsOpen ? '' : ' hidden'}>
+      <label class="jump-check"><input type="checkbox" data-battle-set="on"${set.on ? ' checked' : ''}><span>新会战弹出提醒</span></label>
+      <label>时间窗口 <select class="plain-select" data-battle-set="window">${opts(battles.WINDOW_OPTIONS, set.window, '分钟')}</select></label>
+      <label>至少击毁 <select class="plain-select" data-battle-set="min">${opts(battles.MIN_OPTIONS, set.min, '艘')}</select></label>
+      <span class="text-muted">同一星系在时间窗口内被击毁的舰船数（不含太空舱与 NPC 击杀）达到阈值即判定为疑似会战</span>
+    </div>`;
+  const rule = `${set.window} 分钟内同一星系击毁 ≥ ${set.min} 艘`;
+  const head = `<div class="kb-battles-head">
+      <h3 class="kb-section-title"><svg class="battle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/><path d="M14.5 6.5 18 3h3v3l-3.5 3.5"/><path d="m5 14 4 4"/><path d="m7 17-3 3"/><path d="m3 19 2 2"/></svg>${list.length ? `疑似会战 <b>${list.length}</b>` : '暂无疑似会战'}</h3>
+      <span class="text-muted">${rule}</span>
+      <button class="link-btn" data-battle-toggle-settings>${S.battleSettingsOpen ? '收起设置' : '设置'}</button>
+    </div>`;
+  const cards = list.map((b) => {
+    const sys = kb.systemLabel(b.system_id);
+    const mins = Math.max(1, Math.round((new Date(b.end) - new Date(b.start)) / 60e3));
+    const sides = b.sides.map((x) => `<span class="kb-battle-side">${entityLink(x.kind, x.id, names[x.id] || partyName(x.id))}<small>击杀 ${x.kills} · 损失 ${x.losses}</small></span>`).join('');
+    return `<article class="kb-battle">
+        <div class="kb-battle-main">
+          <strong><a class="kb-link" data-location="system:${b.system_id}">${app.esc(sys.name)}</a> <b style="color:${sys.color}">${sys.secText}</b></strong>
+          <span class="text-muted">${app.esc(sys.region || '')} · 持续约 ${mins} 分钟 · 最近一次 ${timeAgo(b.end)}</span>
+        </div>
+        <div class="kb-battle-stats"><span><b>${b.kills}</b> 艘</span><span>约 <b>${b.pilots}</b> 人</span><span><b>${app.formatISK(b.value)}</b> ISK</span></div>
+        <div class="kb-battle-sides">${sides}</div>
+        <div class="kb-battle-actions">
+          ${b.top ? `<button class="link-btn" data-kill="${b.top.id}">最贵损失 ${app.esc(typeName(b.top.ship_type_id))} · ${app.formatISK(b.top.value)}</button>` : ''}
+          <button class="btn btn-ghost" data-battle-map="${b.system_id}">在星图查看</button>
+          <button class="btn btn-ghost" data-location="system:${b.system_id}">只看这里</button>
+        </div>
+      </article>`;
+  }).join('');
+  box.innerHTML = head + settings + (cards ? `<div class="kb-battle-list">${cards}</div>` : '');
+  box.classList.toggle('is-empty', !list.length);
+}
+
+// 会战提醒「击杀记录」按钮：按星系筛选
+export function filterBySystem(id) {
+  setFilter('location', { kind: 'system', id, name: kb.systemLabel(id).name });
 }
 
 // ---------- 排行榜 ----------
@@ -588,6 +638,20 @@ export async function showKbPage() {
 
 export function initKbPage(context) {
   app = context;
+  app.battles()?.then((m) => {
+    if (!m) return;
+    battles = m;
+    m.onBattles(async (list) => {
+      await loadTypes(list.map((b) => b.top?.ship_type_id).filter(Boolean));
+      renderBattles();
+    });
+  });
+  $('kbView').addEventListener('change', (e) => {
+    const el = e.target.closest('[data-battle-set]');
+    if (!el || !battles) return;
+    const key = el.dataset.battleSet;
+    battles.setBattleSettings({ [key]: key === 'on' ? el.checked : Number(el.value) });
+  });
   const input = $('kbSearch');
   input.addEventListener('input', app.debounce(() => runSearch(input.value), 200));
   input.addEventListener('keydown', (e) => {
@@ -606,6 +670,9 @@ export function initKbPage(context) {
       navigate(`#kb/${kind}/${id}`);
       return;
     }
+    if (e.target.closest('[data-battle-toggle-settings]')) { S.battleSettingsOpen = !S.battleSettingsOpen; renderBattles(); return; }
+    const battleMap = e.target.closest('[data-battle-map]');
+    if (battleMap) { app.openMapSystem(Number(battleMap.dataset.battleMap)); return; }
     const loc = e.target.closest('[data-location], [data-pick-location]');
     if (loc) {
       e.preventDefault();

@@ -2,7 +2,10 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f17">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="color-scheme" content="dark light">
   <title>EVE 市场总览</title>
   <script>
@@ -23,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v12r3">
+  <link rel="stylesheet" href="css/modern-style.css?v=v16r2">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -129,7 +132,11 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
             </div>
             <h2>选择一个物品开始查看</h2>
-            <p>从左侧目录选择物品，或按 <kbd>/</kbd> 搜索。</p>
+            <p class="desktop-only">从左侧目录选择物品，或按 <kbd>/</kbd> 搜索。</p>
+            <p class="mobile-only">打开目录选择物品，或直接搜索名称 / Type ID。</p>
+            <button class="btn btn-primary mobile-only empty-search" id="emptySearchBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><span>搜索物品</span>
+            </button>
             <div class="quick-picks" id="quickPicks"></div>
           </div>
 
@@ -322,27 +329,30 @@
           </div>
           <div class="sidebar-content map-sidebar-content">
             <div class="map-search-results" id="mapSearchResults" hidden></div>
-            <section class="map-panel">
+            <section class="map-panel collapsible" data-panel="layers">
               <div class="map-panel-head">
-                <h4>图层</h4>
+                <button class="map-panel-toggle" aria-expanded="true"><svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><h4>星系着色</h4><span class="map-panel-summary" id="layerSummary"></span></button>
                 <button class="icon-btn small" id="mapRefresh" title="刷新实时数据" aria-label="刷新实时数据">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                 </button>
               </div>
-              <div class="layer-list" id="layerList"></div>
+              <div class="map-panel-body"><div class="layer-list" id="layerList"></div></div>
             </section>
-            <section class="map-panel">
-              <h4>图例</h4>
-              <div class="map-legend" id="mapLegend"><p class="legend-empty">载入中…</p></div>
+            <section class="map-panel collapsible" data-panel="legend">
+              <div class="map-panel-head">
+                <button class="map-panel-toggle" aria-expanded="true"><svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><h4>颜色说明</h4><span class="map-panel-summary" id="legendSummary"></span></button>
+              </div>
+              <div class="map-panel-body"><div class="map-legend" id="mapLegend"><p class="legend-empty">载入中…</p></div></div>
             </section>
-            <section class="map-panel">
-              <div class="route-head">
-                <h4>路线规划</h4>
+            <section class="map-panel collapsible" data-panel="route">
+              <div class="map-panel-head route-head">
+                <button class="map-panel-toggle" aria-expanded="true"><svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><h4>路线规划</h4><span class="map-panel-summary" id="routeSummary"></span></button>
                 <div class="segmented route-mode" role="group" aria-label="规划方式">
                   <button data-route-mode="gate" class="active">星门</button>
                   <button data-route-mode="jump">旗舰跳跃</button>
                 </div>
               </div>
+              <div class="map-panel-body">
               <div class="route-form">
                 <div class="route-field">
                   <input type="text" id="routeFrom" placeholder="起点星系" autocomplete="off" aria-label="起点星系">
@@ -377,6 +387,7 @@
                 </div>
               </div>
               <div id="routeResult"></div>
+              </div>
             </section>
             <p class="map-updated" id="mapUpdated"></p>
           </div>
@@ -389,7 +400,11 @@
           <canvas id="mapLabels" aria-hidden="true"></canvas>
           <div class="map-loading" id="mapLoading"><span class="spinner"></span>载入星图…</div>
           <div class="map-tooltip" id="mapTooltip" hidden></div>
+          <div class="kill-danmaku" id="mapDanmaku" aria-live="off"></div>
           <div class="map-zoom" role="group" aria-label="缩放">
+            <button id="mapLiveToggle" class="live-toggle" title="实时击杀推送：新击杀在星图上闪烁并滚动显示" aria-label="实时击杀推送" aria-pressed="true" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z"/></svg>
+            </button>
             <button id="mapZoomIn" title="放大 (+)" aria-label="放大">+</button>
             <button id="mapZoomOut" title="缩小 (-)" aria-label="缩小">−</button>
             <button id="mapMyLocation" title="定位到我的角色位置" aria-label="我的位置" hidden>
@@ -607,6 +622,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v12r4" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v16r2" type="module" data-cfasync="false"></script>
 </body>
 </html>
