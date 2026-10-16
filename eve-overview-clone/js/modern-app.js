@@ -256,8 +256,9 @@ function switchView(view) {
   $('profileView').hidden = view !== 'profile';
   $('mapView').hidden = view !== 'map';
   $('kbView').hidden = view !== 'kb';
+  $('fitView').hidden = view !== 'fit';
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
-  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制' }[view] || '';
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器' }[view] || '';
   closeDrawer();
   if (view === 'profile') loadProfile();
   if (view === 'map') openStarMap();
@@ -267,6 +268,35 @@ function switchView(view) {
   }
   if (view === 'kb') openKbPage();
   else if (location.hash.startsWith('#kb')) history.replaceState(null, '', location.pathname);
+  if (view === 'fit') openFitting();
+  else if (location.hash.startsWith('#fit')) history.replaceState(null, '', location.pathname);
+}
+
+// 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
+let fittingLoading = null;
+function loadFittingModule() {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v1r1').then((m) => {
+    m.initFitting({
+      esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap,
+      getCharacterSkills, getCharacterImplants,
+      hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      openDrawer: () => { if (MOBILE_QUERY.matches) openDrawer(); },
+      closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
+    });
+    return m;
+  }).catch((error) => { fittingLoading = null; throw error; });
+  return fittingLoading;
+}
+
+async function openFitting() {
+  try {
+    const m = await loadFittingModule();
+    if (!location.hash.startsWith('#fit')) history.replaceState(null, '', location.pathname + '#fit');
+    await m.showFitting();
+  } catch (error) {
+    console.error('模拟装配加载失败:', error);
+    showToast('模拟装配加载失败：' + error.message, 'error', 4000);
+  }
 }
 
 // 击杀记录页：首屏后空闲时预加载，或首次进入时加载
@@ -353,7 +383,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v16r7').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v16r9').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -361,6 +391,7 @@ function loadStarMapModule() {
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       battles: () => battlesPromise,
       getEsiToken: ensureEsiToken,
+      getCharacterSkills,
       loadKillboard,
       // 角色当前所在星系（需要 esi-location.read_location.v1）
       getMyLocation: async () => {
@@ -396,7 +427,8 @@ function setSidebarCollapsed(sidebarId, reopenId, collapsed, storageKey) {
 const SIDEBARS = {
   market: { id: 'sidebar', reopen: 'sidebarReopen', key: 'eve-sidebar-collapsed' },
   profile: { id: 'profileSidebar', reopen: 'profileSidebarReopen', key: 'eve-profile-sidebar-collapsed' },
-  map: { id: 'mapSidebar', reopen: 'mapSidebarReopen', key: 'eve-map-sidebar-collapsed' }
+  map: { id: 'mapSidebar', reopen: 'mapSidebarReopen', key: 'eve-map-sidebar-collapsed' },
+  fit: { id: 'fitSidebar', reopen: 'fitSidebarReopen', key: 'eve-fit-sidebar-collapsed' }
 };
 
 function currentSidebar() {
@@ -434,6 +466,9 @@ function initSidebar() {
   if (store.get('eve-sidebar-collapsed') === '1') setSidebarCollapsed('sidebar', 'sidebarReopen', true);
   if (store.get('eve-profile-sidebar-collapsed') === '1') setSidebarCollapsed('profileSidebar', 'profileSidebarReopen', true);
   if (store.get('eve-map-sidebar-collapsed') === '1') setSidebarCollapsed('mapSidebar', 'mapSidebarReopen', true);
+  if (store.get('eve-fit-sidebar-collapsed') === '1') setSidebarCollapsed('fitSidebar', 'fitSidebarReopen', true);
+  $('fitSidebarCollapse').addEventListener('click', () => toggleSidebar('fit'));
+  $('fitSidebarReopen').addEventListener('click', () => toggleSidebar('fit'));
   $('mapSidebarCollapse').addEventListener('click', () => toggleSidebar('map'));
   $('mapSidebarReopen').addEventListener('click', () => toggleSidebar('map'));
 
@@ -1115,11 +1150,13 @@ function sortOrders(list, side) {
   return [...list].sort((a, b) => (value(a) - value(b)) * sign);
 }
 
+// 地点前标注类型：NPC 空间站 / 玩家建筑（玩家建筑 ID ≥ 1e12）
 function locationCell(order) {
   const name = state.locationCache.get(order.location_id);
-  const isHub = order.location_id === currentRegion().hub.id;
-  const label = name || '载入中…';
-  return `<td class="loc" title="${esc(name || 'ID ' + order.location_id)}">${isHub ? '<span class="hub-badge">枢纽</span>' : ''}${esc(label)}</td>`;
+  const isStructure = order.location_id >= 1e12;
+  const badge = isStructure ? '<span class="loc-badge is-player">玩家建筑</span>' : '<span class="loc-badge">NPC建筑</span>';
+  const label = name ? (isStructure ? name.replace('玩家建筑（名称不公开）', '名称不公开') : name) : '载入中…';
+  return `<td class="loc" title="${esc(name || 'ID ' + order.location_id)}">${badge}${esc(label)}</td>`;
 }
 
 // 买单范围：station / solar_system / region，或数字跳数
@@ -1381,6 +1418,7 @@ function initHashRouting() {
     // 击杀记录页 / 星图的地址由各自页面处理；从其他页面后退到这些地址时切换过去
     if (location.hash.startsWith('#kb')) { if (state.currentView !== 'kb') switchView('kb'); return; }
     if (location.hash.startsWith('#map')) { if (state.currentView !== 'map') switchView('map'); return; }
+    if (location.hash.startsWith('#fit')) { if (state.currentView !== 'fit') switchView('fit'); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -1604,6 +1642,32 @@ async function ensureEsiToken() {
     })().finally(() => { refreshing = null; });
   }
   return refreshing;
+}
+
+// 已绑定角色的技能等级（skill_id -> 生效等级），缓存 10 分钟；跳跃规划与模拟装配共用
+let skillCache = null;   // { id, at, promise }
+function getCharacterSkills() {
+  const token = state.esiToken || readEsiToken();
+  if (!token?.access_token) return Promise.reject(new Error('尚未绑定 ESI'));
+  const id = token.character_id;
+  if (skillCache && skillCache.id === id && Date.now() - skillCache.at < 10 * 60e3) return skillCache.promise;
+  const promise = (async () => {
+    const data = state.characterData?.skills && !state.characterData.skills.__error && myCharacterId() === id
+      ? state.characterData.skills
+      : await esiAuthFetch('/characters/' + id + '/skills/');
+    // active_skill_level 为当前生效等级（Alpha 克隆受限时低于已训练等级）
+    const levels = new Map((data.skills || []).map((x) => [x.skill_id, x.active_skill_level ?? x.trained_skill_level ?? 0]));
+    return { id, name: token.character_name || ('角色 ' + id), levels };
+  })();
+  skillCache = { id, at: Date.now(), promise };
+  promise.catch(() => { if (skillCache?.promise === promise) skillCache = null; });
+  return promise;
+}
+
+// 已绑定角色当前的植入体（需要 esi-clones.read_implants.v1）
+async function getCharacterImplants() {
+  const token = await ensureEsiToken();
+  return esiAuthFetch('/characters/' + token.character_id + '/implants/');
 }
 
 async function esiAuthFetch(path, options = {}) {
@@ -3144,6 +3208,7 @@ function init() {
   handleEsiCallbackRedirect();
   if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
+  if (location.hash.startsWith('#fit')) switchView('fit');   // 装配分享链接
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);
@@ -3180,6 +3245,9 @@ function preloadPages() {
         const map = await loadStarMapModule();
         await map.preloadStarMap();
       } catch { /* 打开星图时会重试并提示 */ }
+      whenIdle(async () => {
+        try { await (await loadFittingModule()).preloadFitting(); } catch { /* 打开装配页时会重试并提示 */ }
+      }, 8000);
     }, 5000);
   }, 3000);
 }

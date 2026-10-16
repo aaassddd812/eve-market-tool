@@ -27,17 +27,12 @@ const ESI_BASE = 'https://esi.evetech.net/latest';
 export const STRUCTURE_SCOPE = 'esi-universe.read_structures.v1';
 export const STRUCTURE_SEARCH_SCOPE = 'esi-search.search_structures.v1';
 
-// 角色建筑搜索用的前缀（含字母、数字与常见中文开头），用于枚举“有停靠权限”的建筑
-const SEARCH_TERMS = [
-  'al', 'am', 'an', 'ar', 'ba', 'be', 'bi', 'bo', 'br', 'ca', 'ce', 'ch', 'ci', 'co', 'cr', 'cu', 'da', 'de', 'di', 'do', 'dr', 'du',
-  'ea', 'el', 'em', 'en', 'er', 'es', 'ev', 'fa', 'fe', 'fi', 'fl', 'fo', 'fr', 'ga', 'ge', 'gh', 'gi', 'go', 'gr', 'gu', 'ha', 'he',
-  'hi', 'ho', 'hu', 'hy', 'in', 'is', 'ja', 'jo', 'ju', 'ka', 'ke', 'ki', 'kn', 'ko', 'la', 'le', 'li', 'lo', 'lu', 'ma', 'me', 'mi',
-  'mo', 'mu', 'my', 'na', 'ne', 'ni', 'no', 'nu', 'ob', 'od', 'ok', 'on', 'op', 'or', 'os', 'ou', 'pa', 'pe', 'ph', 'pi', 'pl', 'po',
-  'pr', 'pu', 'qu', 'ra', 're', 'ri', 'ro', 'ru', 'sa', 'se', 'sh', 'si', 'sk', 'so', 'sp', 'st', 'su', 'sy', 'ta', 'te', 'th', 'ti',
-  'to', 'tr', 'tu', 'ty', 'ul', 'um', 'un', 'ur', 'us', 'ut', 'va', 've', 'vi', 'vo', 'vr', 'wa', 'we', 'wh', 'wi', 'wo', 'wu', 'xa',
-  'xe', 'ya', 'yo', 'ze', 'zo', 'zu', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-  '星', '战', '天', '龙', '风', '云', '海', '山', '新', '中', '华', '金', '银', '铁', '血', '暗', '夜', '永', '北', '上', '广', '深', '军', '联', '帝', '神'
-];
+// 角色建筑搜索关键词：ESI 要求至少 3 个字符。玩家建筑名称固定为「星系名 - 自定义名」，
+// 用「星系名最后一个字符 + 空格 - 空格」枚举（如「A - 」）即可覆盖几乎所有建筑；
+// 单个关键词结果达到上限时，再向前多取一个字符细分（如「1A - 」）。
+const SEARCH_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('');
+const SEARCH_CAP = 500;                   // ESI 搜索每个分类最多返回的条数
+const PRIVATE_VERSION = 2;                // 私有建筑发现逻辑版本，变化后自动重新发现
 
 // ---------- 停靠规则 ----------
 // 舰船停靠等级：战略货舰虽需旗舰操作技能，但不算旗舰，可停靠中型建筑
@@ -114,39 +109,50 @@ async function fetchStructureInfo(id, token) {
  * 2. 无搜索权限时从市场订单、合同起讫位置和当前停靠位置兜底（这些 scope 都是绑定即有的）。
  * 搜索失败、没有权限或令牌不支持都不会中断，只是结果少一些。
  */
-async function discoverPrivateStructures(getToken, knownIds) {
+async function discoverPrivateStructures(getToken, knownIds, onProgress = () => {}) {
   const token = await getToken();
   const candidates = new Set();
-  if (hasStructureSearchScope(token)) {
-    let idx = 0;
+  const add = (id) => { if (id >= 1e12 && !knownIds.has(id)) candidates.add(id); };
+  const searched = hasStructureSearchScope(token);
+  if (searched) {
+    const queue = SEARCH_CHARS.map((c) => c + ' - ');
+    let done = 0;
     async function searchWorker() {
-      while (idx < SEARCH_TERMS.length) {
-        const term = SEARCH_TERMS[idx++];
+      while (queue.length) {
+        const term = queue.shift();
         const r = await fetch(`${ESI_BASE}/characters/${token.character_id}/search/?categories=structure&search=${encodeURIComponent(term)}&datasource=tranquility`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
         if (r?.ok) {
-          const data = await r.json().catch(() => ({}));
-          for (const id of data.structure || []) if (!knownIds.has(id)) candidates.add(id);
+          const ids = (await r.json().catch(() => ({}))).structure || [];
+          ids.forEach(add);
+          // 结果达到上限：可能有遗漏，按前一个字符继续细分（最多细分到 3 个字符的前缀）
+          if (ids.length >= SEARCH_CAP && term.length < 7) queue.push(...SEARCH_CHARS.map((c) => c + term));
         }
-        await new Promise((res) => setTimeout(res, 60));
+        onProgress(++done, done + queue.length);
+        await new Promise((res) => setTimeout(res, 50));
       }
     }
     await Promise.all(Array.from({ length: 4 }, searchWorker));
   }
+  // 兜底与补充：订单、合同、资产、克隆、工业任务所在的建筑，以及当前停靠位置
   try {
     const auth = { headers: { Authorization: 'Bearer ' + token.access_token } };
     const cid = token.character_id;
-    const [orders, contracts, location] = await Promise.all([
-      fetch(`${ESI_BASE}/characters/${cid}/orders/?datasource=tranquility`, auth).then((r) => (r.ok ? r.json() : [])).catch(() => []),
-      fetch(`${ESI_BASE}/characters/${cid}/contracts/?datasource=tranquility`, auth).then((r) => (r.ok ? r.json() : [])).catch(() => []),
-      fetch(`${ESI_BASE}/characters/${cid}/location/?datasource=tranquility`, auth).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
+    const get = (path, fallback) => fetch(`${ESI_BASE}/characters/${cid}/${path}${path.includes('?') ? '&' : '?'}datasource=tranquility`, auth)
+      .then((r) => (r.ok ? r.json() : fallback)).catch(() => fallback);
+    const [orders, contracts, location, clones, jobs, assets] = await Promise.all([
+      get('orders/', []), get('contracts/', []), get('location/', {}), get('clones/', {}), get('industry/jobs/', []), get('assets/?page=1', [])
     ]);
-    for (const o of orders) if (o.location_id >= 1e12 && !knownIds.has(o.location_id)) candidates.add(o.location_id);
-    for (const c of contracts) {
-      for (const loc of [c.start_location_id, c.end_location_id]) {
-        if (loc >= 1e12 && !knownIds.has(loc)) candidates.add(loc);
-      }
+    orders.forEach((o) => add(o.location_id));
+    contracts.forEach((c) => { add(c.start_location_id); add(c.end_location_id); });
+    add(location.structure_id);
+    if (clones.home_location?.location_type === 'structure') add(clones.home_location.location_id);
+    (clones.jump_clones || []).forEach((c) => { if (c.location_type === 'structure') add(c.location_id); });
+    jobs.forEach((j) => { add(j.facility_id); add(j.station_id); });
+    // 资产：只取直接放在机库里的物品（容器、舰船里的物品 location_id 是物品 ID，不是建筑）
+    if (Array.isArray(assets)) {
+      const itemIds = new Set(assets.map((a) => a.item_id));
+      assets.forEach((a) => { if (a.location_flag === 'Hangar' && !itemIds.has(a.location_id)) add(a.location_id); });
     }
-    if (location.structure_id && !knownIds.has(location.structure_id)) candidates.add(location.structure_id);
   } catch { /* 兜底失败不影响主流程 */ }
   const extra = [];
   const ids = [...candidates];
@@ -159,7 +165,15 @@ async function discoverPrivateStructures(getToken, knownIds) {
     }
   }
   await Promise.all(Array.from({ length: 4 }, detailWorker));
-  return extra;
+  return { list: extra, searched };
+}
+
+// 私有建筑结果写入缓存对象（带版本与是否使用了建筑搜索，授权变化后会自动重新发现）
+async function attachPrivate(target, getToken, onProgress) {
+  const found = await discoverPrivateStructures(getToken, new Set(target.list.map((s) => s.id)), onProgress);
+  target.private = found.list;
+  target.privateSearched = found.searched;
+  target.privateVersion = PRIVATE_VERSION;
 }
 
 /**
@@ -172,12 +186,13 @@ async function discoverPrivateStructures(getToken, knownIds) {
 export async function loadPublicStructures(getToken, onProgress = () => {}) {
   const hit = cachedStructures();
   if (hit) {
-    if (!Array.isArray(hit.private)) {
-      // 旧格式缓存只有公开部分：不重读公开列表，只补发现有停靠权限的私有建筑
+    // 公开部分仍有效时不重读；私有部分在旧版本、或之前没有搜索权限而现在有时重新发现
+    const token = await getToken().catch(() => null);
+    if (!Array.isArray(hit.private) || hit.privateVersion !== PRIVATE_VERSION || (!hit.privateSearched && hasStructureSearchScope(token))) {
       try {
-        hit.private = await discoverPrivateStructures(getToken, new Set(hit.list.map((s) => s.id)));
+        await attachPrivate(hit, getToken, (d, t) => onProgress(d, t, 'private'));
         try { localStorage.setItem(STRUCTURE_CACHE_KEY, JSON.stringify(hit)); } catch { /* 忽略 */ }
-      } catch { hit.private = []; }
+      } catch { hit.private = hit.private || []; }
     }
     shareToServer(hit);
     return hit;
@@ -230,10 +245,8 @@ export async function loadPublicStructures(getToken, onProgress = () => {}) {
     if (unauthorized >= 3 && !list.length) throw new Error('当前授权没有读取玩家建筑的权限，请重新绑定 ESI');
     publicList = list; total = ids.length;
   }
-  const known = new Set(publicList.map((s) => s.id));
-  let extra = [];
-  try { extra = await discoverPrivateStructures(getToken, known); } catch { /* 私有建筑发现失败不影响公开列表 */ }
-  const result = { at, list: publicList, private: extra, total, denied };
+  const result = { at, list: publicList, private: [], total, denied };
+  try { await attachPrivate(result, getToken, (d, t) => onProgress(d, t, 'private')); } catch { /* 私有建筑发现失败不影响公开列表 */ }
   try { localStorage.setItem(STRUCTURE_CACHE_KEY, JSON.stringify(result)); } catch { /* 忽略 */ }
   shareToServer(result);
   return result;
@@ -336,10 +349,13 @@ function gateHops(systems, from, limit) {
 
 /**
  * 规划跳跃路线：先最少跳跃次数，再最短总光年。
- * options: { range, stops（中途允许停靠的星系 Set<index>，null 表示不限）, avoid: Set<index> }
+ * options: { range, stops（中途必须停靠的星系 Set<index>，null 表示不限）,
+ *            prefer（中途优先停靠的星系 Set<index>：先让无法停靠的中途点最少，再比跳跃次数和光年）, avoid: Set<index> }
  * 终点不能跳入（高安等）时，先跳到离终点星门数最少的可跳入星系，再走星门。
  */
-export function planJumpRoute(systems, from, to, { range, stops = null, avoid = new Set() }) {
+const NO_DOCK_PENALTY = 1e6;               // 每个无法停靠的中途点的代价，远大于任何跳跃次数差
+
+export function planJumpRoute(systems, from, to, { range, stops = null, prefer = null, avoid = new Set() }) {
   const origin = systems[from], dest = systems[to];
   if (!canJumpFrom(origin)) return { error: `${origin.name} 位于${NO_JUMP_REASON[origin.region]}，无法使用跳跃引擎` };
   if (NO_JUMP_REGIONS.has(dest.region)) return { error: `${dest.name} 位于${NO_JUMP_REASON[dest.region]}，跳跃引擎无法进入` };
@@ -355,7 +371,7 @@ export function planJumpRoute(systems, from, to, { range, stops = null, avoid = 
     if (!targets.size) return { error: `${dest.name} 附近 15 个星门内没有可跳入的星系` };
   }
 
-  // Dijkstra：cost = 跳跃次数 × 1000 + 总光年
+  // Dijkstra：cost = 无法停靠的中途点 × 1e6 + 跳跃次数 × 1000 + 总光年
   const n = systems.length;
   const best = new Float64Array(n).fill(Infinity);
   const prev = new Int32Array(n).fill(-1);
@@ -376,7 +392,7 @@ export function planJumpRoute(systems, from, to, { range, stops = null, avoid = 
       const d2 = dx * dx + dy * dy + dz * dz;
       const ly = Math.sqrt(d2) / LY;
       if (ly > limit) continue;
-      const c = cost + 1000 + ly;
+      const c = cost + 1000 + ly + (prefer && !prefer.has(b.i) && !targets.has(b.i) ? NO_DOCK_PENALTY : 0);
       if (c < best[b.i]) { best[b.i] = c; prev[b.i] = i; heap.push({ i: b.i, cost: c }); }
     }
   }

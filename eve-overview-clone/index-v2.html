@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v16r8">
+  <link rel="stylesheet" href="css/modern-style.css?v=v17r1">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -53,6 +53,10 @@
         <button class="nav-btn" data-view="kb" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/><circle cx="12" cy="12" r="1.5"/></svg>
           <span>击杀</span>
+        </button>
+        <button class="nav-btn" data-view="fit" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+          <span>装配</span>
         </button>
         <button class="nav-btn" data-view="profile" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -366,16 +370,23 @@
                 <div class="jump-options" id="jumpOptions" hidden>
                   <select id="jumpShip" class="plain-select" aria-label="舰船"><option>载入舰船…</option></select>
                   <div class="jump-skills">
+                    <label><span>技能</span><select id="jumpSkillSrc" class="plain-select jump-dock-select">
+                      <option value="manual">手动设置</option>
+                      <option value="max">全部 5 级</option>
+                      <option value="esi">按 ESI 角色技能</option>
+                    </select></label>
                     <label><span>跳跃引擎校准理论</span><select id="jumpJdc" class="plain-select"></select></label>
                     <label><span>跳跃燃料节约</span><select id="jumpJfc" class="plain-select"></select></label>
                     <label id="jumpJfWrap" hidden><span>战略货舰操作</span><select id="jumpJf" class="plain-select"></select></label>
                   </div>
+                  <p class="jump-range" id="jumpSkillNote" hidden></p>
                   <p class="jump-range" id="jumpRange"></p>
                   <div class="jump-skills">
                     <label><span>中途停靠</span><select id="jumpDock" class="plain-select jump-dock-select">
                       <option value="any">不限</option>
                       <option value="npc">必须有 NPC 空间站</option>
                       <option value="all">必须可停靠（含玩家建筑）</option>
+                      <option value="prefer">优先可停靠，实在没有再停太空</option>
                     </select></label>
                   </div>
                   <p class="jump-range" id="jumpDockNote" hidden></p>
@@ -435,6 +446,32 @@
               <p class="kb-status" id="kbStatus"></p>
             </div>
             <div id="kbMain"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 模拟装配视图 -->
+      <div class="view-container" id="fitView" hidden>
+        <aside class="sidebar fit-sidebar" id="fitSidebar" aria-label="装配浏览器">
+          <div class="sidebar-header">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <input type="search" id="fitSearch" placeholder="搜索舰船 / 装备（中英文）" autocomplete="off" spellcheck="false" aria-label="搜索舰船或装备">
+            </div>
+            <button class="collapse-btn" id="fitSidebarCollapse" title="收起侧边栏 ([)" aria-label="收起侧边栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+          </div>
+          <div class="segmented fit-tabs" id="fitBrowserTabs" role="group" aria-label="物品类别"></div>
+          <div class="sidebar-content fit-browser" id="fitBrowser"></div>
+        </aside>
+        <div class="fit-scroll">
+          <button class="sidebar-reopen" id="fitSidebarReopen" title="展开侧边栏 ([)" aria-label="展开侧边栏" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <div class="fit-wrap">
+            <div class="fit-main" id="fitMain"></div>
+            <aside class="fit-stats" id="fitStats" hidden aria-label="装配属性"></aside>
           </div>
         </div>
       </div>
@@ -537,6 +574,23 @@
     </div>
 
     <!-- 快捷键帮助 -->
+    <div class="modal" id="fitModal" hidden role="dialog" aria-modal="true" aria-labelledby="fitModalTitle">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="fitModalTitle">导入 EFT 装配</h3>
+          <button class="modal-close" data-fit-modal-close aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="step-desc">在游戏装配窗口点「复制到剪贴板」，或从 Pyfa / zKillboard 复制 EFT 格式文本，粘贴到下面。中英文名称都可以识别。</p>
+          <textarea id="fitImportText" class="fit-import-text" rows="12" spellcheck="false" placeholder="[Rifter, 我的装配]&#10;Damage Control II&#10;Gyrostabilizer II&#10;&#10;5MN Microwarpdrive II&#10;..."></textarea>
+          <div class="fit-modal-actions"><button class="btn btn-ghost" data-fit-modal-close>取消</button><button class="btn btn-primary" data-fit-import-go>导入</button></div>
+        </div>
+      </div>
+    </div>
+
     <div class="modal" id="shortcutModal" hidden role="dialog" aria-modal="true" aria-labelledby="shortcutTitle">
       <div class="modal-backdrop"></div>
       <div class="modal-content shortcut-content">
@@ -622,6 +676,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v16r8" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v17r1" type="module" data-cfasync="false"></script>
 </body>
 </html>

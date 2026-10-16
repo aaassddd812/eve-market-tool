@@ -7,7 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import * as JP from './jump-planner.js?v=v12r5';
+import * as JP from './jump-planner.js?v=v12r6';
 
 let app;               // 主程序提供的工具函数
 let canvas, labels, lg; // WebGL 画布、标签画布及其 2D 上下文
@@ -1373,7 +1373,47 @@ function danmaku(k, s) {
 }
 
 // ---------- 旗舰跳跃规划 ----------
-const J = { mode: 'gate', ships: null, loading: null, structures: null, settings: { ship: 23757, jdc: 5, jfc: 4, jf: 4, dock: 'any' } };
+const J = { mode: 'gate', ships: null, loading: null, structures: null, esiSkills: null, settings: { ship: 23757, jdc: 5, jfc: 4, jf: 4, dock: 'any', skillSrc: 'manual' } };
+
+// 跳跃相关技能：跳跃引擎校准理论、跳跃燃料节约、战略货舰操作
+const JUMP_SKILLS = { jdc: 21611, jfc: 21610, jf: 29029 };
+
+// 实际使用的技能等级：手动设置 / 全部 5 级 / 已绑定角色的技能
+function jumpSkills() {
+  const src = J.settings.skillSrc;
+  if (src === 'max') return { jdc: 5, jfc: 5, jf: 5 };
+  if (src === 'esi' && J.esiSkills) {
+    const lv = (id) => J.esiSkills.levels.get(id) || 0;
+    return { jdc: lv(JUMP_SKILLS.jdc), jfc: lv(JUMP_SKILLS.jfc), jf: lv(JUMP_SKILLS.jf) };
+  }
+  return { jdc: J.settings.jdc, jfc: J.settings.jfc, jf: J.settings.jf };
+}
+
+// 切换到「按 ESI 角色技能」时读取角色技能；失败则提示并退回手动设置
+async function applySkillSource() {
+  const src = J.settings.skillSrc;
+  const note = $('jumpSkillNote');
+  if (src === 'esi') {
+    note.hidden = false;
+    note.textContent = '正在读取角色技能…';
+    try {
+      J.esiSkills = await app.getCharacterSkills();
+      note.textContent = `已按 ${J.esiSkills.name} 的技能计算`;
+    } catch (error) {
+      J.esiSkills = null;
+      note.innerHTML = '<span class="warn">读取角色技能失败：' + app.esc(error.message) + '，暂按手动设置计算</span>';
+    }
+  } else {
+    note.hidden = true;
+  }
+  const eff = jumpSkills();
+  for (const key of ['jdc', 'jfc', 'jf']) {
+    const el = $('jump' + key[0].toUpperCase() + key.slice(1));
+    el.value = eff[key];
+    el.disabled = src !== 'manual';
+  }
+  syncJumpOptions();
+}
 
 function bindJumpPlanner() {
   try { Object.assign(J.settings, app.store.getJSON('eve-jump-settings', {})); } catch { /* 使用默认设置 */ }
@@ -1384,17 +1424,25 @@ function bindJumpPlanner() {
   $('jumpJf').value = J.settings.jf;
   if (typeof J.settings.dock !== 'string') J.settings.dock = J.settings.dock ? 'npc' : 'any';   // 旧版是复选框
   $('jumpDock').value = J.settings.dock;
+  $('jumpSkillSrc').value = J.settings.skillSrc || 'manual';
   document.querySelectorAll('[data-route-mode]').forEach((btn) => btn.addEventListener('click', () => { setPanel('route', true); setRouteMode(btn.dataset.routeMode); }));
-  const onChange = () => {
+  const onChange = async (e) => {
+    const manual = J.settings.skillSrc === 'manual';
     J.settings = {
-      ship: Number($('jumpShip').value) || J.settings.ship, jdc: Number($('jumpJdc').value), jfc: Number($('jumpJfc').value),
-      jf: Number($('jumpJf').value), dock: $('jumpDock').value
+      ship: Number($('jumpShip').value) || J.settings.ship,
+      // 非手动模式下技能下拉框显示的是计算值，不覆盖手动设置
+      jdc: manual ? Number($('jumpJdc').value) : J.settings.jdc,
+      jfc: manual ? Number($('jumpJfc').value) : J.settings.jfc,
+      jf: manual ? Number($('jumpJf').value) : J.settings.jf,
+      dock: $('jumpDock').value, skillSrc: $('jumpSkillSrc').value
     };
     app.store.setJSON('eve-jump-settings', J.settings);
-    syncJumpOptions();
+    if (e?.target?.id === 'jumpSkillSrc') await applySkillSource();
+    else syncJumpOptions();
     if (M.route.length && J.mode === 'jump') planJump();
   };
-  for (const id of ['jumpShip', 'jumpJdc', 'jumpJfc', 'jumpJf', 'jumpDock']) $(id).addEventListener('change', onChange);
+  for (const id of ['jumpShip', 'jumpJdc', 'jumpJfc', 'jumpJf', 'jumpDock', 'jumpSkillSrc']) $(id).addEventListener('change', onChange);
+  applySkillSource();
   $('jumpDockNote').addEventListener('click', async (e) => {
     if (!e.target.closest('[data-structures-refresh]')) return;
     try {
@@ -1455,8 +1503,9 @@ function syncJumpOptions() {
   const ship = currentShip();
   if (!ship) return;
   $('jumpJfWrap').hidden = ship.group !== 902;
-  const range = JP.maxRange(ship, J.settings.jdc);
-  const perLy = JP.fuelPerLy(ship, J.settings.jfc, J.settings.jf);
+  const sk = jumpSkills();
+  const range = JP.maxRange(ship, sk.jdc);
+  const perLy = JP.fuelPerLy(ship, sk.jfc, sk.jf);
   $('jumpRange').innerHTML = `最大跳跃距离 <strong>${range.toFixed(2)}</strong> 光年 · 每光年 ${app.formatNumber(Math.round(perLy))} ${ISOTOPE_ZH[ship.fuelType] || '燃料'}` +
     (ship.fatigue < 1 ? ` · 疲劳距离 ×${ship.fatigue}` : '');
 
@@ -1466,6 +1515,9 @@ function syncJumpOptions() {
   allOpt.disabled = !bound;
   allOpt.textContent = '必须可停靠（含玩家建筑）' + (bound ? '' : ' · 需绑定 ESI');
   if (!bound && $('jumpDock').value === 'all') { $('jumpDock').value = 'npc'; J.settings.dock = 'npc'; }
+  const esiOpt = $('jumpSkillSrc').querySelector('option[value="esi"]');
+  esiOpt.disabled = !bound;
+  esiOpt.textContent = '按 ESI 角色技能' + (bound ? '' : ' · 需绑定 ESI');
   const dock = J.settings.dock;
   const can = [JP.canDockNpc(ship) ? 'NPC 空间站' : null,
     ...DOCK_NOTE_TYPES.filter((t) => JP.canDockStructure(ship, t)).map((t) => JP.STRUCTURES[t][0])].filter(Boolean);
@@ -1473,7 +1525,10 @@ function syncJumpOptions() {
   note.hidden = dock === 'any';
   note.innerHTML = dock === 'any' ? '' : `${app.esc(ship.name)} 可停靠：${can.map(app.esc).join('、')}` +
     (dock === 'npc' && !JP.canDockNpc(ship) ? '<br><span class="warn">超级航母和泰坦不能停靠 NPC 空间站，请改选「含玩家建筑」</span>' : '') +
-    (dock === 'all' && J.structures ? `<br>已读取玩家建筑 ${app.formatNumber(J.structures.list.length + (J.structures.private?.length || 0))} 个（其中军团 / 联盟内部 ${app.formatNumber(J.structures.private?.length || 0)} 个，仅限你有停靠权限的）· <button class="link-btn" data-structures-refresh>重新读取</button>` : '');
+    (dock === 'prefer' && !bound ? '<br>未绑定 ESI，只按 NPC 空间站判断是否可停靠' : '') +
+    (dock === 'prefer' && !JP.canDockNpc(ship) && !bound ? '<br><span class="warn">超级航母和泰坦不能停靠 NPC 空间站，绑定 ESI 后才能按玩家建筑判断</span>' : '') +
+    (useStructures(dock) && J.structures && !J.structures.privateSearched ? '<br><span class="warn">当前授权没有建筑搜索权限，只能从订单、合同、资产、克隆位置找到内部建筑；重新绑定 ESI 后可找到全部有停靠权限的建筑</span>' : '') +
+    (useStructures(dock) && J.structures ? `<br>已读取玩家建筑 ${app.formatNumber(J.structures.list.length + (J.structures.private?.length || 0))} 个（其中军团 / 联盟内部 ${app.formatNumber(J.structures.private?.length || 0)} 个，仅限你有停靠权限的）· <button class="link-btn" data-structures-refresh>重新读取</button>` : '');
 }
 
 // 说明文字只列基础型号（派系铁壁与铁壁相同）
@@ -1486,8 +1541,9 @@ async function ensureStructures(force = false) {
   const token = await app.getEsiToken();
   if (JP.hasStructureScope(token) === false) throw new Error('当前 ESI 授权不包含读取玩家建筑（esi-universe.read_structures.v1），请重新绑定 ESI');
   const box = $('routeResult');
-  J.structures = await JP.loadPublicStructures(app.getEsiToken, (done, total) => {
-    if (done % 20 === 0 || done === total) box.innerHTML = `<p class="legend-empty">正在读取玩家建筑 ${done} / ${total}（首次读取，之后缓存 24 小时）…</p>`;
+  J.structures = await JP.loadPublicStructures(app.getEsiToken, (done, total, phase) => {
+    if (phase === 'private') box.innerHTML = `<p class="legend-empty">正在查找你有停靠权限的军团 / 联盟建筑 ${done} / ${total}…</p>`;
+    else if (done % 20 === 0 || done === total) box.innerHTML = `<p class="legend-empty">正在读取玩家建筑 ${done} / ${total}（首次读取，之后缓存 24 小时）…</p>`;
   });
   J.structBySys = new Map();
   for (const st of [...J.structures.list, ...(J.structures.private || [])]) {
@@ -1498,28 +1554,32 @@ async function ensureStructures(force = false) {
   return J.structures;
 }
 
-// 中途允许停靠的星系；null 表示不限
+// 是否按玩家建筑判断停靠：「必须可停靠」或「优先可停靠」（需已绑定 ESI）
+const useStructures = (dock) => dock === 'all' || (dock === 'prefer' && app.hasEsiToken());
+
+// 中途停靠约束：stops 为必须停靠的星系集合，prefer 为优先停靠的星系集合；都为 null 表示不限
 async function dockStops(ship) {
   const dock = J.settings.dock;
-  if (dock === 'any') return null;
-  const stops = new Set();
-  if (JP.canDockNpc(ship)) for (const s of M.systems) if (s.stations.length) stops.add(s.i);
-  if (dock === 'all') {
+  if (dock === 'any') return { stops: null, prefer: null };
+  const set = new Set();
+  if (JP.canDockNpc(ship)) for (const s of M.systems) if (s.stations.length) set.add(s.i);
+  if (useStructures(dock)) {
     await ensureStructures();
     for (const st of [...J.structures.list, ...(J.structures.private || [])]) {
       const s = M.byId.get(st.system);
-      if (s && JP.canDockStructure(ship, st.type)) stops.add(s.i);
+      if (s && JP.canDockStructure(ship, st.type)) set.add(s.i);
     }
   }
-  if (!stops.size) throw new Error(dock === 'npc' ? `${ship.name} 不能停靠 NPC 空间站，请改选「含玩家建筑」` : '没有可停靠的星系');
-  return stops;
+  if (dock === 'prefer') return { stops: null, prefer: set };
+  if (!set.size) throw new Error(dock === 'npc' ? `${ship.name} 不能停靠 NPC 空间站，请改选「含玩家建筑」` : '没有可停靠的星系');
+  return { stops: set, prefer: null };
 }
 
 // 某星系对当前舰船可停靠的设施
 function dockingAt(i, ship) {
   const s = M.systems[i];
   const npc = JP.canDockNpc(ship) ? s.stations.length : 0;
-  const structures = J.settings.dock === 'all' ? (J.structBySys?.get(s.id) || []).filter((st) => JP.canDockStructure(ship, st.type)) : [];
+  const structures = useStructures(J.settings.dock) ? (J.structBySys?.get(s.id) || []).filter((st) => JP.canDockStructure(ship, st.type)) : [];
   return { npc, structures };
 }
 
@@ -1539,16 +1599,17 @@ async function planJump() {
   }
   if (!ship) { box.innerHTML = '<p class="legend-empty">请选择舰船</p>'; return; }
   await new Promise((r) => setTimeout(r));   // 先让“正在规划”显示出来
-  const range = JP.maxRange(ship, J.settings.jdc);
+  const sk = jumpSkills();
+  const range = JP.maxRange(ship, sk.jdc);
   const a = M.byId.get(from).i, b = M.byId.get(to).i;
-  let stops;
+  let dockRule;
   try {
-    stops = await dockStops(ship);
+    dockRule = await dockStops(ship);
   } catch (error) {
     box.innerHTML = '<p class="legend-empty">' + app.esc(error.message) + '</p>';
     return;
   }
-  const plan = JP.planJumpRoute(M.systems, a, b, { range, stops });
+  const plan = JP.planJumpRoute(M.systems, a, b, { range, ...dockRule });
   clearJumpRange();
   if (plan.error) {
     M.route = [];
@@ -1557,8 +1618,8 @@ async function planJump() {
     box.innerHTML = '<p class="legend-empty">' + app.esc(plan.error) + '</p>';
     return;
   }
-  const sim = JP.simulate(plan.legs, ship, { jfc: J.settings.jfc, jfSkill: J.settings.jf });
-  J.plan = { ...plan, sim, ship, origin: a, range };
+  const sim = JP.simulate(plan.legs, ship, { jfc: sk.jfc, jfSkill: sk.jf });
+  J.plan = { ...plan, sim, ship, origin: a, range, prefer: dockRule.prefer };
   M.route = [...plan.path, ...plan.gates];
   routeLine.material.color.setHex(ROUTE_COLORS.jump);
   updateRouteLine();
@@ -1571,13 +1632,16 @@ async function planJump() {
 }
 
 function renderJumpPlan() {
-  const { sim, gates, ship, path, landing, range } = J.plan;
+  const { sim, gates, ship, path, landing, range, prefer } = J.plan;
+  // 「优先可停靠」模式下，中途无法停靠的星系单独标出
+  const noDock = prefer ? path.slice(1, -1).filter((i) => !prefer.has(i)) : [];
   const sys = (i) => M.systems[i];
   const fuelName = ISOTOPE_ZH[ship.fuelType] || '燃料';
   const row = (i, extra, cls = '') => {
     const s = sys(i);
     const { npc, structures } = dockingAt(i, ship);
-    const tags = npc ? `<em class="jump-station" title="${npc} 个 NPC 空间站">站</em>` : '';
+    const tags = (npc ? `<em class="jump-station" title="${npc} 个 NPC 空间站">站</em>` : '') +
+      (noDock.includes(i) ? '<em class="jump-station is-nodock" title="没有可停靠的空间站或建筑，只能停在太空">不可停靠</em>' : '');
     // 可停靠的玩家建筑直接列出游戏内名称（最多 3 座，其余放在提示里）
     const dockName = (st) => `<span class="jump-dock" title="${app.esc(JP.STRUCTURES[st.type][0] + ' · ' + st.name)}"><b>${app.esc(JP.STRUCTURES[st.type][0])}</b>${app.esc(st.name)}</span>`;
     const docks = structures.length ? `<div class="jump-docks">${structures.slice(0, 3).map(dockName).join('')}${structures.length > 3
@@ -1595,6 +1659,7 @@ function renderJumpPlan() {
       <div><strong>${app.formatNumber(sim.fuel)}</strong><span>${fuelName}</span></div>
     </div>
     <p class="jump-note"><span id="jumpFuelIsk"></span>${sim.rows.length > 1 ? ` · 连续跳完约 ${JP.formatMinutes(sim.travel)}` : ''} · 到达后疲劳约 ${JP.formatMinutes(sim.finalFatigue)}，冷却 ${JP.formatMinutes(sim.finalCooldown)}</p>
+    ${prefer ? `<p class="jump-note${noDock.length ? ' warn' : ''}">${noDock.length ? `已尽量选择可停靠的中途点，仍有 ${noDock.length} 处无法停靠（当前跳跃距离内没有可停靠的替代星系）` : '所有中途点都可以停靠'}</p>` : ''}
     ${gates.length ? `<p class="jump-note warn">${app.esc(dest.name)} 不能直接跳入（高安等），跳到 ${app.esc(sys(landing).name)} 后再走 ${gates.length} 个星门</p>` : ''}
     <div class="route-summary"><span>${app.esc(ship.name)} · 最大 ${range.toFixed(2)} 光年</span>
       <span><button class="link-btn" data-jump-range title="在星图上高亮起点一跳可达的星系">一跳范围</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>
@@ -1838,6 +1903,7 @@ export function initStarMap(context) {
 export async function showStarMap() {
   syncMyLocationButton();
   syncJumpOptions();   // 绑定 / 解绑 ESI 后更新「含玩家建筑」选项
+  if (J.settings.skillSrc === 'esi' && (!J.esiSkills || !app.hasEsiToken())) applySkillSource();   // 绑定后重新读取角色技能
   if (!M.ready) {
     M.ready = (async () => {
       $('mapLoading').hidden = false;
