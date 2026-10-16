@@ -5,6 +5,7 @@
   - 历史：EVE Ref 每日击杀存档 https://data.everef.net/killmails/（完整 ESI 击杀邮件，每天约 1.4 万条）
   - 实时：zKillboard R2Z2 顺序推送（RedisQ 已于 2026-05-31 停用）；不可用时轮询 zKillboard 各星域最新击杀
   - 价格：ESI 伏尔戈市场全量订单，取吉他 4-4 最低卖价与最高收购价的中间值
+  - 旗舰等吉他没有卖单的物品：每 6 小时扫描全服公开合同，取扣除附带物品市场价后的最低价（合同价变化时重算相关历史击杀）
 
 接口（只读，仅监听 127.0.0.1，由 nginx 反代 /api/kb/）
   GET /api/kb/status                          数据覆盖范围与运行状态
@@ -55,6 +56,9 @@ UA = "EVE-Market-Tool KB service (+https://github.com/wbw5780/eve-market-tool)"
 FORGE = 10000002
 JITA_44 = 60003760
 PRICE_TTL = 3600            # 价格每小时刷新
+CONTRACT_TTL = 6 * 3600     # 公开合同估价每 6 小时刷新
+CONTRACT_MIN_VOLUME = 500_000   # 只看体积 ≥ 50 万 m³ 的物品交换合同（旗舰 / 建筑等）
+CONTRACT_MIN_PRICE = 3e8        # 且售价 ≥ 3 亿
 POLL_INTERVAL = 300         # 轮询模式：每轮间隔（秒）
 POLL_GAP = 1.2              # 轮询模式：两次 zKillboard 请求的间隔（秒）
 CACHE_TTL = 600             # 排行 / 统计结果缓存（秒）
@@ -166,6 +170,8 @@ CREATE INDEX IF NOT EXISTS att_alliance ON attackers(alliance, time);
 CREATE INDEX IF NOT EXISTS att_km ON attackers(km);
 CREATE TABLE IF NOT EXISTS names(id INTEGER PRIMARY KEY, name TEXT, category TEXT, lname TEXT);
 CREATE TABLE IF NOT EXISTS prices(type_id INTEGER PRIMARY KEY, sell REAL, buy REAL, avg REAL);
+-- 吉他没有卖单的物品（主要是旗舰）：全服公开合同里扣除附带物品后的最低价
+CREATE TABLE IF NOT EXISTS contract_prices(type_id INTEGER PRIMARY KEY, price REAL, contract_id INTEGER, region_id INTEGER, at INTEGER);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -185,6 +191,7 @@ class Store:
         self.prices = {}
         for type_id, sell, buy, avg in conn.execute("SELECT type_id, sell, buy, avg FROM prices"):
             self.prices[type_id] = (sell, buy, avg)
+        self.contract_prices = dict(conn.execute("SELECT type_id, price FROM contract_prices"))
         self.known_names = {row[0] for row in conn.execute("SELECT id FROM names")}
         self.pending_names = set()
         self.cache = {}
@@ -244,16 +251,22 @@ class Store:
             c.commit()
 
     # ---------------- 估值：吉他最低卖价与最高收购价的中间值
-    def price(self, type_id):
+    def price(self, type_id, contracts=True):
         p = self.prices.get(type_id)
+        cp = self.contract_prices.get(type_id) if contracts else None
         if not p:
-            return 0.0
+            return cp or 0.0
         sell, buy, avg = p
         if sell and buy:
             # 卖价远高于收价通常是挂单异常（如天价卖单），改用全服均价
             if sell > buy * 10 and avg:
                 return avg
             return (sell + buy) / 2
+        # 吉他没有卖单（旗舰等不能上市场的物品）：优先用公开合同最低价，收购单多为钓鱼低价
+        if not sell and cp:
+            return cp
+        if not sell and buy and avg and buy * 10 < avg:
+            return avg
         one = sell or buy
         if one and avg and one > avg * 10:
             return avg
@@ -348,7 +361,7 @@ class Workers:
             self.prices_ready.set()
 
     def start(self):
-        for target in (self.price_loop, self.backfill, self.live_loop, self.names_loop):
+        for target in (self.price_loop, self.contract_loop, self.backfill, self.live_loop, self.names_loop):
             threading.Thread(target=target, daemon=True).start()
 
     # ---- 价格：伏尔戈全量订单 → 吉他 4-4 最低卖 / 最高收
@@ -399,6 +412,119 @@ class Workers:
             if self.store.state["backfill"] == "完成":
                 self.store.prune()  # 实时入库会持续写入，每小时清理一次超出保留期的击杀
             time.sleep(PRICE_TTL)
+
+    # ---- 公开合同估价：吉他没有卖单的物品（旗舰、部分建筑）用全服公开合同的最低价
+    # 只看体积大、售价高的物品交换合同；合同里恰好一件「吉他无卖单」的物品，扣除其余附带物品的市场价后作为它的价格
+    def refresh_contracts(self):
+        regions, _ = get_json(f"{ESI}/universe/regions/")
+        regions = [r for r in regions if r < 11000000]       # 新伊甸 k 空间（虫洞没有公开合同）
+
+        def region_contracts(rid):
+            out = []
+            try:
+                first, headers = get_json(f"{ESI}/contracts/public/{rid}/?page=1")
+            except Exception:
+                return out
+            pages = int(headers.get("X-Pages") or 1)
+            batch = [first or []]
+            for n in range(2, pages + 1):
+                try:
+                    batch.append(get_json(f"{ESI}/contracts/public/{rid}/?page={n}")[0] or [])
+                except Exception:
+                    break
+            for page in batch:
+                for c in page:
+                    if c.get("type") == "item_exchange" and (c.get("volume") or 0) >= CONTRACT_MIN_VOLUME and (c.get("price") or 0) >= CONTRACT_MIN_PRICE:
+                        c["region_id"] = rid
+                        out.append(c)
+            return out
+
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            contracts = [c for part in pool.map(region_contracts, regions) for c in part]
+
+        # 合同内容不会变，跨轮次缓存
+        cache = getattr(self, "contract_items", {})
+        todo = [c["contract_id"] for c in contracts if c["contract_id"] not in cache]
+
+        def items(cid):
+            try:
+                return cid, get_json(f"{ESI}/contracts/public/items/{cid}/")[0] or []
+            except Exception:
+                return cid, None
+
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            for cid, its in pool.map(items, todo):
+                if its is not None:
+                    cache[cid] = its
+        live = {c["contract_id"] for c in contracts}
+        self.contract_items = {k: v for k, v in cache.items() if k in live}
+
+        best = {}
+        for c in contracts:
+            its = self.contract_items.get(c["contract_id"])
+            if not its or any(not it.get("is_included") for it in its):
+                continue                                     # 跳过同时要求对方提供物品的合同
+            no_sell = [it for it in its if not (self.store.prices.get(it["type_id"]) or (None,))[0]]
+            if len(no_sell) != 1 or no_sell[0].get("quantity", 1) != 1:
+                continue
+            hull = no_sell[0]["type_id"]
+            extra = sum(self.store.price(it["type_id"], contracts=False) * (it.get("quantity") or 1) for it in its if it is not no_sell[0])
+            net = c["price"] - extra
+            if net < c["price"] * 0.5:
+                continue                                     # 附带物品占大头，估不准
+            if hull not in best or net < best[hull][0]:
+                best[hull] = (net, c["contract_id"], c["region_id"])
+
+        old = dict(self.store.contract_prices)
+        now = int(time.time())
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("DELETE FROM contract_prices")
+            c.executemany("INSERT INTO contract_prices VALUES(?,?,?,?,?)", [(t, round(v[0], 2), v[1], v[2], now) for t, v in best.items()])
+            c.commit()
+        self.store.contract_prices = {t: round(v[0], 2) for t, v in best.items()}
+        changed = [t for t, v in best.items() if not old.get(t) or abs(v[0] - old[t]) > old[t] * 0.05]
+        fixed = self.revalue_hulls(changed)
+        self.store.cache.clear()
+        self.store.meta("contracts_updated", iso(now))
+        log.info("公开合同估价：%d 个大额合同，%d 种物品有合同价（新增 %d），修正 %d 条历史击杀估值",
+                 len(contracts), len(best), len(set(best) - set(old)), fixed)
+
+    def revalue_hulls(self, types):
+        """合同价变化（首次或变动超过 5%）的船型：已入库的击杀重新读取击杀邮件，按当前价格重新估值"""
+        c = self.store.conn()
+        ids = list(types)
+        if not ids:
+            return 0
+        rows = []
+        for chunk in range(0, len(ids), 900):
+            part = ids[chunk:chunk + 900]
+            rows += c.execute(f"SELECT id, hash, value FROM killmails WHERE ship_type IN ({','.join('?' * len(part))}) AND hash IS NOT NULL",
+                              part).fetchall()
+
+        def revalue(row):
+            kid, km_hash, old = row
+            try:
+                km, _ = get_json(f"{ESI}/killmails/{kid}/{km_hash}/", timeout=20, retries=2)
+                return kid, self.store.km_value(km), old
+            except Exception:
+                return kid, None, old
+
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            results = [r for r in pool.map(revalue, rows) if r[1] is not None and abs(r[1] - r[2]) > 1]
+        with self.store.write_lock:
+            c.executemany("UPDATE killmails SET value = ? WHERE id = ?", [(round(v, 2), kid) for kid, v, _ in results])
+            c.commit()
+        return len(results)
+
+    def contract_loop(self):
+        self.prices_ready.wait()                             # 扣除附带物品需要市场价
+        while True:
+            try:
+                self.refresh_contracts()
+            except Exception:
+                log.exception("公开合同估价失败")
+            time.sleep(CONTRACT_TTL)
 
     # ---- 历史：EVE Ref 每日存档；每 6 小时检查一次新的一天（同时补齐实时数据在重启期间的缺口）
     def backfill(self):

@@ -8,7 +8,7 @@ let app, kb;
 
 const API = '/api/kb/';
 const IMG = (path, size) => `https://images.evetech.net/${path}?size=${size}`;
-const PRICE_NOTE = '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。';
+const PRICE_NOTE = '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）；旗舰等吉他没有卖单的物品，按全服公开合同扣除附带物品后的最低价估算。';
 const KIND_ZH = { character: '人物', corporation: '军团', alliance: '联盟' };
 
 const S = {

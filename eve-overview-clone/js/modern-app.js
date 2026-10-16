@@ -332,7 +332,7 @@ function openKbPage() {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v18r8').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v18r9').then((m) => {
     m.initKbPage({
       esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
