@@ -12,7 +12,7 @@
                                               击杀列表（最新在前）；side=kills|losses|all
                                               本地只保留 --days 天；带筛选条件时翻完本地记录后自动改为实时查询 zKillboard（不入库）
   GET /api/kb/live?after=N                    实时收录的新击杀（星图闪烁 / 弹幕），返回新的游标
-  GET /api/kb/battles?window=30&min=50        疑似大规模会战：时间窗（分钟）内同一星系被击毁舰船数 ≥ min（不含太空舱）
+  GET /api/kb/battles?window=60&min=20        疑似会战：时间窗（分钟）内同一星系被击毁舰船数 ≥ min（不含太空舱与 1000 万 ISK 以下的击杀）
   GET /api/kb/top?days=7&limit=8              指定天数内价值最高的损失
   GET /api/kb/summary?hours=24                指定小时内的总损失（含每小时分布）
   GET /api/kb/leaderboard?days=30&side=losses|kills&by=character|corporation|alliance&metric=value|count
@@ -63,6 +63,8 @@ ZKILL_MAX_PAGE = 100        # zKillboard 每个查询最多翻到第 100 页（�
 LIVE_BUFFER = 300           # 实时缓冲保留最近的新击杀条数
 LIVE_MAX_AGE = 3 * 3600     # 发生超过 3 小时的击杀不进入实时推送
 ARCHIVE_CACHE = 30          # 30 天以前的查询结果只放内存，缓存的 zKillboard 页数
+BATTLE_CACHE = 5              # 会战结果缓存（秒），前端与实时击杀同为 6 秒轮询
+BATTLE_MIN_VALUE = 10_000_000  # 会战只统计价值 ≥ 1000 万 ISK 的击杀（过滤小船 / 诱饵等刷数）
 
 log = logging.getLogger("kb")
 
@@ -156,6 +158,7 @@ CREATE TABLE IF NOT EXISTS attackers(km INTEGER, time INTEGER, char INTEGER, cor
 CREATE INDEX IF NOT EXISTS att_char ON attackers(char, time);
 CREATE INDEX IF NOT EXISTS att_corp ON attackers(corp, time);
 CREATE INDEX IF NOT EXISTS att_alliance ON attackers(alliance, time);
+CREATE INDEX IF NOT EXISTS att_km ON attackers(km);
 CREATE TABLE IF NOT EXISTS names(id INTEGER PRIMARY KEY, name TEXT, category TEXT, lname TEXT);
 CREATE TABLE IF NOT EXISTS prices(type_id INTEGER PRIMARY KEY, sell REAL, buy REAL, avg REAL);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -630,15 +633,15 @@ class Api:
         kills = [k for _, k in items]
         return {"cursor": latest, "kills": kills, "names": self.with_names(kills)}
 
-    # GET /battles?window=30&min=50：疑似大规模会战（时间窗内同一星系被击毁的舰船数，不含太空舱与 NPC 击杀）
+    # GET /battles?window=60&min=20：疑似会战（时间窗内同一星系被击毁的舰船数，不含太空舱、NPC 击杀与价值 < BATTLE_MIN_VALUE 的击杀）
     def battles(self, q):
-        window = min(max(int(q.get("window", 30)), 5), 180)
-        min_kills = min(max(int(q.get("min", 50)), 5), 2000)
+        window = min(max(int(q.get("window", 60)), 5), 180)
+        min_kills = min(max(int(q.get("min", 20)), 5), 2000)
 
         def run():
             c = self.store.conn()
             since = int(time.time() - window * 60)
-            base = "time >= ? AND npc = 0 AND ship_type NOT IN (670, 33328)"
+            base = f"time >= ? AND npc = 0 AND ship_type NOT IN (670, 33328) AND value >= {BATTLE_MIN_VALUE}"
             rows = c.execute(f"""SELECT system_id, region_id, COUNT(*), SUM(value), MIN(time), MAX(time) FROM killmails
                                  WHERE {base} GROUP BY system_id HAVING COUNT(*) >= ? ORDER BY COUNT(*) DESC LIMIT 20""",
                              (since, min_kills)).fetchall()
@@ -671,7 +674,7 @@ class Api:
                             "top": {"id": top[0], "ship_type_id": top[1], "value": round(top[2] or 0, 2)} if top else None})
             return {"window": window, "min": min_kills, "battles": out, "names": self.names_for(ids)}
         hit = self.store.cache.get(("battles", window, min_kills))
-        if hit and time.time() - hit[0] < 30:      # 多个页面同时轮询时 30 秒内复用结果
+        if hit and time.time() - hit[0] < BATTLE_CACHE:   # 多个页面同时轮询时短时间内复用结果
             return hit[1]
         value = run()
         self.store.cache[("battles", window, min_kills)] = (time.time(), value)

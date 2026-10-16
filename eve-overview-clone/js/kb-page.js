@@ -302,26 +302,21 @@ function renderBattles() {
   if (!battles.isBattleWatchAvailable()) { box.hidden = true; return; }
   const list = battles.getBattles(), names = battles.getBattleNames(), set = battles.getBattleSettings();
   box.hidden = false;
-  const opts = (values, current, unit) => values.map((v) => `<option value="${v}"${v === current ? ' selected' : ''}>${v} ${unit}</option>`).join('');
-  const settings = `<div class="kb-battle-settings" id="kbBattleSettings"${S.battleSettingsOpen ? '' : ' hidden'}>
-      <label class="jump-check"><input type="checkbox" data-battle-set="on"${set.on ? ' checked' : ''}><span>新会战弹出提醒</span></label>
-      <label>时间窗口 <select class="plain-select" data-battle-set="window">${opts(battles.WINDOW_OPTIONS, set.window, '分钟')}</select></label>
-      <label>至少击毁 <select class="plain-select" data-battle-set="min">${opts(battles.MIN_OPTIONS, set.min, '艘')}</select></label>
-      <span class="text-muted">同一星系在时间窗口内被击毁的舰船数（不含太空舱与 NPC 击杀）达到阈值即判定为疑似会战</span>
-    </div>`;
-  const rule = `${set.window} 分钟内同一星系击毁 ≥ ${set.min} 艘`;
+  const tiers = [...battles.BATTLE_TIERS].reverse();
+  const rule = `${battles.BATTLE_WINDOW} 分钟内同一星系击毁（不含太空舱、NPC 击杀与 10M ISK 以下的击杀）：${tiers.map((t) => `<span class="kb-tier-chip tier-${t.key}"><i></i>${t.name.replace('会战', '')} ${t.min}+</span>`).join('')}`;
   const head = `<div class="kb-battles-head">
       <h3 class="kb-section-title"><svg class="battle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/><path d="M14.5 6.5 18 3h3v3l-3.5 3.5"/><path d="m5 14 4 4"/><path d="m7 17-3 3"/><path d="m3 19 2 2"/></svg>${list.length ? `疑似会战 <b>${list.length}</b>` : '暂无疑似会战'}</h3>
-      <span class="text-muted">${rule}</span>
-      <button class="link-btn" data-battle-toggle-settings>${S.battleSettingsOpen ? '收起设置' : '设置'}</button>
+      <span class="text-muted kb-battle-rule">${rule}</span>
+      <label class="jump-check kb-battle-notify"><input type="checkbox" data-battle-set="on"${set.on ? ' checked' : ''}><span>弹出提醒</span></label>
     </div>`;
   const cards = list.map((b) => {
     const sys = kb.systemLabel(b.system_id);
     const mins = Math.max(1, Math.round((new Date(b.end) - new Date(b.start)) / 60e3));
+    const tier = battles.battleTier(b.kills);
     const sides = b.sides.map((x) => `<span class="kb-battle-side">${entityLink(x.kind, x.id, names[x.id] || partyName(x.id))}<small>击杀 ${x.kills} · 损失 ${x.losses}</small></span>`).join('');
-    return `<article class="kb-battle">
+    return `<article class="kb-battle tier-${tier.key}">
         <div class="kb-battle-main">
-          <strong><a class="kb-link" data-location="system:${b.system_id}">${app.esc(sys.name)}</a> <b style="color:${sys.color}">${sys.secText}</b></strong>
+          <strong><span class="kb-tier-badge"><i></i>${tier.name}</span><a class="kb-link" data-location="system:${b.system_id}">${app.esc(sys.name)}</a> <b style="color:${sys.color}">${sys.secText}</b></strong>
           <span class="text-muted">${app.esc(sys.region || '')} · 持续约 ${mins} 分钟 · 最近一次 ${timeAgo(b.end)}</span>
         </div>
         <div class="kb-battle-stats"><span><b>${b.kills}</b> 艘</span><span>约 <b>${b.pilots}</b> 人</span><span><b>${app.formatISK(b.value)}</b> ISK</span></div>
@@ -333,7 +328,7 @@ function renderBattles() {
         </div>
       </article>`;
   }).join('');
-  box.innerHTML = head + settings + (cards ? `<div class="kb-battle-list">${cards}</div>` : '');
+  box.innerHTML = head + (cards ? `<div class="kb-battle-list">${cards}</div>` : '');
   box.classList.toggle('is-empty', !list.length);
 }
 
@@ -709,7 +704,7 @@ export function initKbPage(context) {
     const el = e.target.closest('[data-battle-set]');
     if (!el || !battles) return;
     const key = el.dataset.battleSet;
-    battles.setBattleSettings({ [key]: key === 'on' ? el.checked : Number(el.value) });
+    if (key === 'on') battles.setBattleSettings({ on: el.checked });
   });
   const input = $('kbSearch');
   input.addEventListener('input', app.debounce(() => runSearch(input.value), 200));
@@ -729,7 +724,6 @@ export function initKbPage(context) {
       navigate(`#kb/${kind}/${id}`);
       return;
     }
-    if (e.target.closest('[data-battle-toggle-settings]')) { S.battleSettingsOpen = !S.battleSettingsOpen; renderBattles(); return; }
     const battleMap = e.target.closest('[data-battle-map]');
     if (battleMap) { app.openMapSystem(Number(battleMap.dataset.battleMap)); return; }
     const loc = e.target.closest('[data-location], [data-pick-location]');

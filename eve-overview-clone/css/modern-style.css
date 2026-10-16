@@ -2987,3 +2987,34 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .fit-esi-row .btn { padding: 4px 10px; font-size: 0.75rem; }
 .fit-esi-empty { padding: 32px 12px; text-align: center; color: var(--text-muted); font-size: 0.8125rem; }
 .fit-esi-note { margin-top: 10px; font-size: 0.75rem; }
+
+/* ===== 会战档次：小型（紫）/ 中型（橙）/ 大型（红），用动画强弱区分 ===== */
+.tier-small { --tier: 180, 108, 255; }
+.tier-medium { --tier: 255, 150, 50; }
+.tier-large { --tier: 255, 64, 64; }
+.battle-alert.tier-small, .battle-alert.tier-medium, .battle-alert.tier-large { border-color: rgba(var(--tier), 0.6); box-shadow: var(--shadow-lg), 0 0 0 3px rgba(var(--tier), 0.14); }
+.battle-alert[class*="tier-"] .battle-alert-head strong, .battle-alert[class*="tier-"] .battle-icon, .battle-alert[class*="tier-"] .battle-sides i { color: rgb(var(--tier)); }
+.battle-alert.tier-medium { animation: modal-in 220ms cubic-bezier(0.2, 0.9, 0.3, 1.2), tier-glow 2s ease-in-out 220ms infinite; }
+.battle-alert.tier-large { animation: tier-shake 480ms ease-out, tier-glow-strong 1s ease-in-out 480ms infinite; }
+.battle-alert.tier-large .battle-icon { animation: tier-icon 1s ease-in-out infinite; }
+
+.kb-tier-badge { display: inline-flex; align-items: center; gap: 5px; margin-right: 8px; padding: 1px 8px 1px 6px; border-radius: 999px; font-size: 0.6875rem; font-weight: 600; vertical-align: 2px; color: rgb(var(--tier)); background: rgba(var(--tier), 0.14); }
+.kb-tier-badge i, .kb-tier-chip i { width: 7px; height: 7px; border-radius: 50%; background: rgb(var(--tier)); }
+.kb-battle.tier-small .kb-tier-badge i { animation: tier-dot 3s ease-in-out infinite; }
+.kb-battle.tier-medium .kb-tier-badge i { animation: tier-dot 1.6s ease-in-out infinite; }
+.kb-battle.tier-large .kb-tier-badge i { animation: tier-dot 0.8s ease-in-out infinite; }
+.kb-battle[class*="tier-"] { border-color: rgba(var(--tier), 0.35); border-left: 3px solid rgb(var(--tier)); }
+.kb-battle.tier-medium { animation: tier-glow 2.4s ease-in-out infinite; }
+.kb-battle.tier-large { animation: tier-glow-strong 1.2s ease-in-out infinite; }
+.kb-battle-rule { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.kb-tier-chip { display: inline-flex; align-items: center; gap: 4px; color: rgb(var(--tier)); font-weight: 600; }
+.kb-battle-notify { margin-left: auto; font-size: 0.75rem; color: var(--text-secondary); }
+
+@keyframes tier-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--tier), 0); } 50% { box-shadow: 0 0 0 3px rgba(var(--tier), 0.18), 0 0 16px rgba(var(--tier), 0.25); } }
+@keyframes tier-glow-strong { 0%, 100% { box-shadow: 0 0 0 1px rgba(var(--tier), 0.25), 0 0 6px rgba(var(--tier), 0.2); } 50% { box-shadow: 0 0 0 4px rgba(var(--tier), 0.3), 0 0 26px rgba(var(--tier), 0.45); } }
+@keyframes tier-shake { 0% { transform: translateX(24px) scale(0.96); opacity: 0; } 35% { transform: translateX(-6px); opacity: 1; } 55% { transform: translateX(4px); } 75% { transform: translateX(-2px); } 100% { transform: none; } }
+@keyframes tier-icon { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.25); } }
+@keyframes tier-dot { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--tier), 0.6); } 50% { box-shadow: 0 0 0 4px rgba(var(--tier), 0); } }
+@media (prefers-reduced-motion: reduce) {
+  .battle-alert[class*="tier-"], .battle-alert .battle-icon, .kb-battle[class*="tier-"], .kb-tier-badge i { animation: none !important; }
+}

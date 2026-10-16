@@ -313,6 +313,8 @@ const STAR_FRAGMENT = `
     gl_FragColor = vec4(col, max(core, halo));
   }`;
 
+const FOCUS_MAX = 2 + 24;               // 悬停 + 选中 + 会战星系（会战接口最多返回 20 个）
+
 function buildScene() {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
   renderer.setClearColor(MAP_BG, 1);
@@ -373,12 +375,12 @@ function buildScene() {
   starPoints = new THREE.Points(geo, starMaterial);
   scene.add(starPoints);
 
-  // 悬停 / 选中的星系单独画在最上层，高亮的光点不会被相邻星系遮住
+  // 悬停 / 选中 / 会战的星系单独画在最上层，高亮的光点不会被相邻星系遮住
   const focusGeo = new THREE.BufferGeometry();
-  focusGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-  focusGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(6), 3));
-  focusGeo.setAttribute('size', new THREE.BufferAttribute(new Float32Array(2).fill(2.4), 1));
-  focusGeo.setAttribute('boost', new THREE.BufferAttribute(new Float32Array(2), 1));
+  focusGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(FOCUS_MAX * 3), 3));
+  focusGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(FOCUS_MAX * 3), 3));
+  focusGeo.setAttribute('size', new THREE.BufferAttribute(new Float32Array(FOCUS_MAX).fill(2.4), 1));
+  focusGeo.setAttribute('boost', new THREE.BufferAttribute(new Float32Array(FOCUS_MAX), 1));
   focusPoints = new THREE.Points(focusGeo, starMaterial.clone());
   focusPoints.material.depthTest = false;
   focusPoints.material.uniforms = starMaterial.uniforms;   // 共享缩放参数
@@ -525,13 +527,22 @@ function project(x, y, z) {
   return [(proj.x + 1) / 2 * M.size.w, (1 - proj.y) / 2 * M.size.h, proj.z];
 }
 
-// 把悬停 / 选中的星系写入高亮层（选中优先；同一个星系只画一次）
+// 把悬停 / 选中 / 会战的星系写入高亮层（会战星系与选中同样效果；同一个星系只画一次）
+function battleSystems() {
+  const out = [];
+  for (const b of M.battles) { const s = M.byId.get(b.system_id); if (s) out.push(s.i); }
+  return out;
+}
+
 function updateFocus() {
   const geo = focusPoints.geometry;
   const pos = geo.attributes.position, col = geo.attributes.color, boost = geo.attributes.boost;
   const items = [];
-  if (M.selected != null) items.push([M.selected, 2]);
-  if (M.hover != null && M.hover !== M.selected) items.push([M.hover, 1]);
+  const seen = new Set();
+  const add = (i, b) => { if (i != null && !seen.has(i) && items.length < FOCUS_MAX) { seen.add(i); items.push([i, b]); } };
+  add(M.selected, 2);
+  for (const i of battleSystems()) add(i, 2);
+  add(M.hover, 1);
   items.forEach(([i, b], n) => {
     const s = M.systems[i];
     pos.setXYZ(n, s.x, s.y, s.z);
@@ -620,7 +631,8 @@ function drawLabels() {
     place(x - tw / 2, y - 30, tw, 18);
   }
   // 星系名：靠近时显示离镜头最近的星系；选中/悬停/路线上的星系总是显示（并优先放置）
-  const always = new Set([M.selected, M.hover, ...M.route].filter((i) => i != null));
+  const battleIdx = battleSystems();
+  const always = new Set([M.selected, M.hover, ...M.route, ...battleIdx].filter((i) => i != null));
   const systemLabel = (i, force) => {
     if (!onScreen(i)) return;
     const s = M.systems[i];
@@ -641,8 +653,10 @@ function drawLabels() {
   lg.textAlign = 'left';
   lg.font = `11px ${font}`;
   for (const i of [M.selected, M.hover]) if (i != null) systemLabel(i, true);
-  for (const b of M.battles) { const s = M.byId.get(b.system_id); if (s) systemLabel(s.i, true); }
+  for (const i of battleIdx) systemLabel(i, true);
   for (const i of M.route) systemLabel(i, false);
+  // 会战星系：与选中一样显示星门相邻星系的名称
+  for (const i of battleIdx) if (onScreen(i)) for (const n of M.systems[i].nbr) systemLabel(n, false);
   // 选中星系后：星门相邻的星系与屏幕上附近的星系也显示名称（不必放大或逐个点击）
   if (M.selected != null && onScreen(M.selected)) {
     const sx = M.screen[M.selected * 3], sy = M.screen[M.selected * 3 + 1];
@@ -1106,7 +1120,7 @@ const DANMAKU_SPEED = 110;              // 像素 / 秒
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
 const LIVE = { on: true, cursor: -1, timer: null, disabled: false, busy: false, lanes: [], names: new Map(), types: new Map(), kills: new Map() };
 M.flashes = [];
-M.battles = [];                         // 疑似会战（battles.js 每分钟更新）
+M.battles = [];                         // 疑似会战（battles.js 每 6 秒更新）
 
 function bindLiveKills() {
   LIVE.on = app.store.get('eve-map-live') !== '0';
@@ -1225,45 +1239,98 @@ function drawFlashes() {
   }
 }
 
-// 会战：紫色呼吸光晕 + 旋转虚线圈 + 标签，会战持续期间一直显示（与单次击杀的红色扩散圈区分）
+// 会战：按规模分三档，持续期间一直显示（与单次击杀的红色扩散圈区分）
+//   小型：紫色，慢呼吸光晕 + 缓慢旋转的虚线圈
+//   中型：橙色，较快呼吸 + 两道反向旋转的虚线圈 + 周期性扩散波
+//   大型：红色，快速脉冲 + 三道交错冲击波 + 旋转准星
+const BATTLE_STYLE = {
+  small: { rgb: '180, 108, 255', label: 'rgba(88, 40, 140, 0.92)', text: '#f1e4ff', r: 18, period: 3, spin: 12, waves: 0 },
+  medium: { rgb: '255, 156, 56', label: 'rgba(150, 72, 8, 0.94)', text: '#fff1e0', r: 26, period: 2, spin: 24, waves: 1, wavePeriod: 2.2 },
+  large: { rgb: '255, 64, 64', label: 'rgba(160, 16, 24, 0.95)', text: '#ffe6e6', r: 34, period: 1, spin: 40, waves: 3, wavePeriod: 1.8 }
+};
+const battleTierKey = (kills) => (kills >= 100 ? 'large' : kills >= 50 ? 'medium' : 'small');
+
+function ring(x, y, r, color, width, dash, offset) {
+  lg.setLineDash(dash || []);
+  lg.lineDashOffset = offset || 0;
+  lg.lineWidth = width;
+  lg.strokeStyle = color;
+  lg.beginPath();
+  lg.arc(x, y, r, 0, Math.PI * 2);
+  lg.stroke();
+}
+
 function drawBattles() {
   if (!M.battles.length) return;
-  const t = performance.now() / 1000;
+  const still = REDUCED_MOTION.matches;
+  const t = still ? 0 : performance.now() / 1000;
   const font = getComputedStyle(document.body).fontFamily;
-  for (const b of M.battles) {
+  // 小的先画，大型会战压在最上层
+  for (const b of [...M.battles].sort((a, c) => a.kills - c.kills)) {
     const s = M.byId.get(b.system_id);
-    if (!s || !onScreen(s.i, 60)) continue;
+    if (!s || !onScreen(s.i, 90)) continue;
     const x = M.screen[s.i * 3], y = M.screen[s.i * 3 + 1];
-    const r = Math.min(46, 18 + Math.sqrt(b.kills) * 2);
-    const breathe = 0.5 + 0.5 * Math.sin(t * Math.PI);          // 2 秒一个呼吸周期
-    const glow = lg.createRadialGradient(x, y, 0, x, y, r * 1.6);
-    glow.addColorStop(0, `rgba(180, 108, 255, ${0.35 + 0.25 * breathe})`);
-    glow.addColorStop(1, 'rgba(180, 108, 255, 0)');
+    const tier = M.battleTier ? M.battleTier(b.kills) : null;
+    const key = tier?.key || battleTierKey(b.kills);
+    const st = BATTLE_STYLE[key];
+    const r = st.r + Math.min(10, Math.sqrt(b.kills) * 0.6);
+    const breathe = still ? 0.6 : 0.5 + 0.5 * Math.sin(t * Math.PI * 2 / st.period);
+    lg.save();
+    // 光晕
+    const gr = r * (key === 'large' ? 2 : 1.6) * (key === 'large' ? 0.9 + 0.15 * breathe : 1);
+    const glow = lg.createRadialGradient(x, y, 0, x, y, gr);
+    glow.addColorStop(0, `rgba(${st.rgb}, ${0.3 + 0.3 * breathe})`);
+    glow.addColorStop(1, `rgba(${st.rgb}, 0)`);
     lg.fillStyle = glow;
     lg.beginPath();
-    lg.arc(x, y, r * 1.6, 0, Math.PI * 2);
+    lg.arc(x, y, gr, 0, Math.PI * 2);
     lg.fill();
-    lg.save();
-    lg.setLineDash([6, 5]);
-    lg.lineDashOffset = -t * 18;
-    lg.lineWidth = 2;
-    lg.strokeStyle = `rgba(200, 150, 255, ${0.65 + 0.35 * breathe})`;
-    lg.beginPath();
-    lg.arc(x, y, r, 0, Math.PI * 2);
-    lg.stroke();
+    // 扩散波 / 冲击波
+    if (!still) {
+      for (let w = 0; w < st.waves; w++) {
+        const p = ((t / st.wavePeriod) + w / st.waves) % 1;
+        const wr = r * (0.8 + p * (key === 'large' ? 2.4 : 1.6));
+        ring(x, y, wr, `rgba(${st.rgb}, ${(1 - p) * (key === 'large' ? 0.8 : 0.6)})`, key === 'large' ? 2.5 * (1 - p) + 0.5 : 1.5);
+      }
+    }
+    // 主圈（旋转虚线）
+    ring(x, y, r, `rgba(${st.rgb}, ${0.65 + 0.35 * breathe})`, 2, [6, 5], -t * st.spin);
+    if (key !== 'small') ring(x, y, r * 0.7, `rgba(${st.rgb}, ${0.45 + 0.3 * breathe})`, 1.5, [3, 4], t * st.spin * 1.3);
+    // 大型：旋转准星（四段弧 + 刻度）与闪烁的核心
+    if (key === 'large') {
+      const a0 = t * 0.9;
+      lg.setLineDash([]);
+      lg.lineWidth = 3;
+      lg.strokeStyle = `rgba(${st.rgb}, 0.95)`;
+      for (let k = 0; k < 4; k++) {
+        const a = a0 + k * Math.PI / 2;
+        lg.beginPath();
+        lg.arc(x, y, r * 1.3, a - 0.32, a + 0.32);
+        lg.stroke();
+        lg.beginPath();
+        lg.moveTo(x + Math.cos(a) * r * 1.42, y + Math.sin(a) * r * 1.42);
+        lg.lineTo(x + Math.cos(a) * r * 1.62, y + Math.sin(a) * r * 1.62);
+        lg.stroke();
+      }
+      lg.fillStyle = `rgba(255, 220, 200, ${0.55 + 0.45 * breathe})`;
+      lg.beginPath();
+      lg.arc(x, y, 3 + 2 * breathe, 0, Math.PI * 2);
+      lg.fill();
+    }
     lg.restore();
     // 标签
-    const text = `会战 · ${b.kills} 艘`;
-    lg.font = `600 11px ${font}`;
+    const text = `${tier?.name || { small: '小型会战', medium: '中型会战', large: '大型会战' }[key]} · ${b.kills} 艘`;
+    lg.font = `600 ${key === 'large' ? 12 : 11}px ${font}`;
     lg.textAlign = 'center';
     lg.textBaseline = 'middle';
     const tw = lg.measureText(text).width + 14;
-    lg.fillStyle = 'rgba(88, 40, 140, 0.92)';
+    const ly = y - r * (key === 'large' ? 1.62 : 1) - (key === 'large' ? 18 : 24);
+    lg.fillStyle = st.label;
     lg.beginPath();
-    lg.roundRect(x - tw / 2, y - r - 24, tw, 18, 9);
+    lg.roundRect(x - tw / 2, ly, tw, 18, 9);
     lg.fill();
-    lg.fillStyle = '#f1e4ff';
-    lg.fillText(text, x, y - r - 15);
+    lg.fillStyle = st.text;
+    lg.fillText(text, x, ly + 9);
     lg.textAlign = 'left';
   }
 }
@@ -1878,7 +1945,7 @@ export function initStarMap(context) {
   bindSidebar();
   bindInfo();
   bindLiveKills();
-  app.battles?.()?.then((m) => m && m.onBattles((list) => { M.battles = list; invalidate(); }));
+  app.battles?.()?.then((m) => { if (!m) return; M.battleTier = m.battleTier; m.onBattles((list) => { M.battles = list; invalidate(); }); });
   $('mapRefresh').addEventListener('click', async () => {
     const btn = $('mapRefresh');
     btn.disabled = true;

@@ -304,7 +304,7 @@ let kbPageModule = null;
 // ===== 会战监测：全站提醒，击杀记录页与星图订阅 =====
 let battlesPromise = null;
 function initBattleWatch() {
-  battlesPromise = import('./battles.js?v=v16r2').then((m) => {
+  battlesPromise = import('./battles.js?v=v17r6').then((m) => {
     m.initBattles({ store, loadKillboard, esc, formatISK, officialName, openMapSystem, openKbSystem });
     return m;
   }).catch((error) => { console.error('会战监测加载失败:', error); return null; });
@@ -332,7 +332,7 @@ function openKbPage() {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v16r7').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v17r6').then((m) => {
     m.initKbPage({
       esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, loadKillboard, openMapSystem,
@@ -383,7 +383,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v16r9').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v17r6').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
