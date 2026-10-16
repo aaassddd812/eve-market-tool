@@ -1,7 +1,6 @@
 {
   "port": 8290,
   "client_id": "在这里填你的 Client ID",
-  "client_secret": "在这里填你的 Client Secret（留空字符串则仅用 PKCE）",
   "redirect_uri": "https://eve.navexor.top/",
   "scopes": [
     "esi-contracts.read_character_contracts.v1",

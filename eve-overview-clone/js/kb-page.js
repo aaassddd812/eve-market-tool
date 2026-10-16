@@ -1,11 +1,13 @@
 // ===== 击杀记录页 =====
 // 数据来自自建的击杀记录服务（server/kb_service.py，/api/kb/），收录新伊甸全部击杀；
-// 所有价值按吉他 4-4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
+// 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
+import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v16r7';
+
 let app, kb;
 
 const API = '/api/kb/';
 const IMG = (path, size) => `https://images.evetech.net/${path}?size=${size}`;
-const PRICE_NOTE = '单项与总价值按吉他 4-4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。';
+const PRICE_NOTE = '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。';
 const KIND_ZH = { character: '人物', corporation: '军团', alliance: '联盟' };
 
 const S = {
@@ -20,7 +22,20 @@ const S = {
 
 const $ = (id) => document.getElementById(id);
 
-async function api(path) {
+// 预取：空闲时提前请求首页数据，首次打开页面直接使用（1 分钟内有效，只用一次）
+const PREFETCH_TTL = 60e3;
+const prefetched = new Map();   // path -> { at, promise }
+
+function api(path) {
+  const hit = prefetched.get(path);
+  if (hit) {
+    prefetched.delete(path);
+    if (Date.now() - hit.at < PREFETCH_TTL) return hit.promise;
+  }
+  return request(path);
+}
+
+async function request(path) {
   const res = await fetch(API + path);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || '击杀记录服务 ' + res.status);
@@ -134,10 +149,10 @@ async function renderHome() {
   const main = $('kbMain');
   main.innerHTML = `
     <section class="kb-battles" id="kbBattles" hidden></section>
-    <section class="kb-summary" id="kbSummary"><div class="loading-block"><span class="spinner"></span>载入统计…</div></section>
+    <section class="kb-summary" id="kbSummary">${skSummary()}</section>
     <section class="kb-section">
       <h3 class="kb-section-title">最近 7 天最高损失</h3>
-      <div class="kb-top" id="kbTop"><div class="loading-block"><span class="spinner"></span></div></div>
+      <div class="kb-top" id="kbTop">${skTopCards(10)}</div>
     </section>
     <div class="kb-columns">
       <section class="kb-section kb-feed-panel">
@@ -148,13 +163,13 @@ async function renderHome() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新</span>
           </button>
         </div>
-        <div id="kbFeed"><div class="loading-block"><span class="spinner"></span></div></div>
+        <div id="kbFeed">${skRows(10)}</div>
         <button class="btn kb-more" id="kbMore" hidden>加载更多</button>
       </section>
       <aside class="kb-section kb-board">
         <h3 class="kb-section-title">排行榜 · 最近 30 天</h3>
         <div class="kb-board-controls" id="kbBoardControls"></div>
-        <div id="kbBoard"><div class="loading-block"><span class="spinner"></span></div></div>
+        <div id="kbBoard">${skBoard(10)}</div>
       </aside>
     </div>`;
   $('kbRefresh').addEventListener('click', () => { loadFeed(true); loadSummary(); });
@@ -203,7 +218,7 @@ function renderStatus() {
 async function loadTop() {
   const box = $('kbTop');
   try {
-    const data = await api('top?days=7&limit=8');
+    const data = await api('top?days=7&limit=10');
     absorbNames(data.names);
     await loadTypes(data.kills.map((k) => k.ship_type_id));
     if (!$('kbTop')) return;
@@ -242,7 +257,7 @@ async function loadFeed(reset) {
   const seq = ++S.feedSeq;
   S.feedBusy = true;
   const box = $('kbFeed');
-  if (reset) { S.feed = []; S.cursor = null; box.innerHTML = '<div class="loading-block"><span class="spinner"></span></div>'; }
+  if (reset) { S.feed = []; S.cursor = null; box.innerHTML = skRows(10); }
   setMoreBusy($('kbMore'), true, reset ? null : S.cursor);
   try {
     const q = feedQuery();
@@ -340,7 +355,7 @@ function renderBoardControls() {
 async function loadBoard() {
   const box = $('kbBoard');
   const seq = ++S.boardSeq;
-  box.innerHTML = '<div class="loading-block"><span class="spinner"></span>统计中…</div>';
+  box.innerHTML = skBoard(10);
   try {
     const { side, by, metric } = S.lb;
     const data = await api(`leaderboard?days=30&side=${side}&by=${by}&metric=${metric}&limit=20`);
@@ -368,10 +383,16 @@ async function publicInfo(kind, id) {
   }
 }
 
+function entitySkeleton(kind) {
+  return '<a class="kb-back" href="#kb" data-kb-home>‹ 返回击杀记录</a>' + skEntityHead() +
+    (kind === 'character' ? skTitle(14) + skCards(5) : '') + skTitle(18) + skCards(6) +
+    skTitle(12) + skToolbar(3) + skRows(8);
+}
+
 async function renderEntity(kind, id) {
   const main = $('kbMain');
   S.entity = { kind, id, side: 'all', feed: [], cursor: null, sort: { key: 'destroyed', dir: 'desc' } };
-  main.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在统计…</div>';
+  main.innerHTML = entitySkeleton(kind);
   let stats, info, lifetime, history;
   try {
     [stats, info, lifetime, history] = await Promise.all([
@@ -413,7 +434,7 @@ async function renderEntity(kind, id) {
   if (kind === 'character' && lifetime && lifetime.shipsDestroyed !== undefined) {
     const lEff = (lifetime.iskDestroyed || 0) + (lifetime.iskLost || 0) ? lifetime.iskDestroyed / (lifetime.iskDestroyed + lifetime.iskLost) * 100 : null;
     lifetimeCards = `<h4 class="info-section-title">生涯统计<small>（zKillboard 估值）</small></h4><div class="valuation-grid">
-      ${card('击杀', app.formatNumber(lifetime.shipsDestroyed || 0) + '<span class="unit">艘</span>', '单刷 ' + app.formatNumber(lifetime.soloKills || 0) + ' 次', 'is-buy')}
+      ${card('参与击杀', app.formatNumber(lifetime.shipsDestroyed || 0) + '<span class="unit">艘</span>', '单刷 ' + app.formatNumber(lifetime.soloKills || 0) + ' 次', 'is-buy')}
       ${card('损失', app.formatNumber(lifetime.shipsLost || 0) + '<span class="unit">艘</span>', '单刷被杀 ' + app.formatNumber(lifetime.soloLosses || 0) + ' 次', 'is-sell')}
       ${card('击毁价值', isk(lifetime.iskDestroyed || 0), '生涯累计', 'is-buy')}
       ${card('损失价值', isk(lifetime.iskLost || 0), '生涯累计', 'is-sell')}
@@ -421,7 +442,8 @@ async function renderEntity(kind, id) {
     </div>`;
   }
   const recentCards = `<h4 class="info-section-title${lifetimeCards ? ' section-gap' : ''}">最近 30 天<small>（吉他中间价估值）</small></h4><div class="valuation-grid">
-      ${card('击杀', app.formatNumber(stats.kills) + '<span class="unit">次</span>', '单刷 ' + app.formatNumber(stats.solo_kills) + ' 次', 'is-buy')}
+      ${card('参与击杀', app.formatNumber(stats.kills) + '<span class="unit">次</span>', '单刷 ' + app.formatNumber(stats.solo_kills) + ' 次', 'is-buy')}
+      ${stats.final_blows != null ? card('最后一击', app.formatNumber(stats.final_blows) + '<span class="unit">次</span>', stats.kills ? '占参与击杀 ' + (stats.final_blows / stats.kills * 100).toFixed(0) + '%' : '', 'is-buy') : ''}
       ${card('损失', app.formatNumber(stats.losses) + '<span class="unit">次</span>', '', 'is-sell')}
       ${card('击毁总价值', isk(stats.destroyed), kind === 'character' ? '参与的击杀' : '成员参与的击杀（每次只计一次）', 'is-buy')}
       ${card('损失总价值', isk(stats.lost), '', 'is-sell')}
@@ -454,7 +476,7 @@ async function renderEntity(kind, id) {
         ${[['all', '全部'], ['kills', '击杀'], ['losses', '损失']].map(([v, l]) => `<button data-entity-side="${v}" class="${v === 'all' ? 'active' : ''}">${l}</button>`).join('')}
       </div>
     </div>
-    <div id="kbEntityFeed"><div class="loading-block"><span class="spinner"></span></div></div>
+    <div id="kbEntityFeed">${skRows(8)}</div>
     <button class="btn kb-more" id="kbEntityMore" hidden>加载更多</button>`;
   if (stats.members) renderMembers();
   $('kbEntityMore').addEventListener('click', () => loadEntityFeed(false));
@@ -544,7 +566,7 @@ async function loadEntityFeed(reset) {
   const seq = e.seq = (e.seq || 0) + 1;
   e.busy = true;
   const box = $('kbEntityFeed');
-  if (reset) { e.feed = []; e.cursor = null; box.innerHTML = '<div class="loading-block"><span class="spinner"></span></div>'; }
+  if (reset) { e.feed = []; e.cursor = null; box.innerHTML = skRows(10); }
   const q = new URLSearchParams({ [e.kind]: e.id, side: e.side, limit: 50 });
   if (e.cursor) q.set('cursor', e.cursor);
   setMoreBusy($('kbEntityMore'), true, e.cursor);
@@ -626,12 +648,49 @@ function route() {
 // ---------- 入口 ----------
 let started = false;
 
+function homeSkeleton() {
+  return `<section class="kb-summary">${skSummary()}</section>
+    <section class="kb-section">${skTitle(14)}<div class="kb-top">${skTopCards(10)}</div></section>
+    <div class="kb-columns"><section class="kb-section kb-feed-panel">${skTitle(16)}${skRows(10)}</section>
+      <aside class="kb-section kb-board">${skTitle(30)}${skBoard(10)}</aside></div>`;
+}
+
+let ready = null;
+function ensureReady() {
+  if (!ready) {
+    ready = (async () => {
+      kb = await app.loadKillboard();
+      await kb.ensureSystems();
+    })().catch((error) => { ready = null; throw error; });
+  }
+  return ready;
+}
+
+// 空闲时预取：模块与星系数据、首页的统计 / 最高损失 / 最新击杀 / 默认排行榜，以及需要的名称
+export async function prefetchKbHome() {
+  await ensureReady();
+  const paths = ['summary?hours=24', 'status', 'top?days=7&limit=10', 'feed?' + feedQuery(),
+    `leaderboard?days=30&side=${S.lb.side}&by=${S.lb.by}&metric=${S.lb.metric}&limit=20`];
+  const at = Date.now();
+  const jobs = paths.map((path) => {
+    const promise = request(path);
+    promise.catch(() => {});
+    prefetched.set(path, { at, promise });
+    return promise;
+  });
+  const [, , top, feed] = await Promise.all(jobs);
+  absorbNames(top.names);
+  absorbNames(feed.names);
+  await loadTypes([...top.kills.map((k) => k.ship_type_id), ...typesOf(feed.kills)]);
+}
+
 export async function showKbPage() {
   if (!started) {
     started = true;
-    kb = await app.loadKillboard();
-    await kb.ensureSystems();
+    const entity = /^#kb\/(character|corporation|alliance)\//.exec(location.hash);
+    if (!$('kbMain').children.length) $('kbMain').innerHTML = entity ? entitySkeleton(entity[1]) : homeSkeleton();
   }
+  await ensureReady();
   if (!location.hash.startsWith('#kb')) history.replaceState(null, '', '#kb');
   route();
 }

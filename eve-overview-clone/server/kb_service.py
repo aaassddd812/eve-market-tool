@@ -898,8 +898,12 @@ class Api:
                 (since, eid, since)).fetchone()
             solo = c.execute(f"SELECT COUNT(*) FROM killmails WHERE time >= ? AND solo=1 AND id IN (SELECT km FROM attackers WHERE {acol}=? AND time >= ? AND char IS NOT NULL)",
                              (since, eid, since)).fetchone()[0]
+            # 最后一击：击杀记录里的 final blow 归属（经攻击者索引过滤，避免全表扫描）
+            fcol = "f_" + vcol[2:]
+            final_blows = c.execute(f"SELECT COUNT(*) FROM killmails WHERE time >= ? AND {fcol}=? AND id IN (SELECT km FROM attackers WHERE {acol}=? AND time >= ?)",
+                                    (since, eid, eid, since)).fetchone()[0]
             result = {"kind": kind, "id": eid, "days": days, "kills": kills, "losses": losses,
-                      "destroyed": round(destroyed, 2), "lost": round(lost, 2), "solo_kills": solo}
+                      "destroyed": round(destroyed, 2), "lost": round(lost, 2), "solo_kills": solo, "final_blows": final_blows}
             # 成员明细：军团 → 人物；联盟 → 军团
             member = {"corporation": ("char", "v_char"), "alliance": ("corp", "v_corp")}.get(kind)
             if member:

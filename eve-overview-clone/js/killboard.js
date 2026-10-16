@@ -2,6 +2,8 @@
 // 数据来源：zKillboard 公开 API（https://zkillboard.com/api/），浏览器可直接请求（CORS: *），无需授权。
 // 一次请求即返回完整击杀邮件（受害者、攻击者、物品）及 zKill 估值（zkb）。
 // 按 zKillboard 的使用约定：请求串行、间隔发送，结果缓存 5 分钟。
+import { skCards, skRows, skEntityHead, skTitle } from './skeleton.js?v=v16r7';
+
 let app;
 
 const ZKILL = 'https://zkillboard.com/api/';
@@ -226,7 +228,7 @@ export async function openKill(kill, options = {}) {
   const modal = $('killModal');
   const body = $('killBody');
   modal.hidden = false;
-  body.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取击杀详情…</div>';
+  body.innerHTML = skEntityHead() + skCards(3) + skTitle(12) + skRows(8, { img: 24 });
   try {
     if (options.load) ({ kill, prices: options.prices } = await options.load());
     if (currentKill !== token) return;
@@ -241,7 +243,7 @@ export async function openKill(kill, options = {}) {
 }
 
 // 打开击杀记录服务（/api/kb/）中的击杀：完整击杀邮件 + 逐项吉他中间价（星图弹幕等处使用）
-const SERVICE_PRICE_NOTE = '单项与总价值按吉他 4-4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。';
+const SERVICE_PRICE_NOTE = '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。';
 export function openServiceKill(id) {
   return openKill(null, {
     priceNote: SERVICE_PRICE_NOTE,

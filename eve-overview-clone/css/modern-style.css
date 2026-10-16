@@ -1417,6 +1417,56 @@ td.loc {
   animation: spin 0.7s linear infinite;
 }
 
+/* ===== 骨架屏：加载时按最终布局显示占位块 ===== */
+.sk,
+.kb-bars.sk-bars i.sk {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--text-muted) 14%, transparent) 25%,
+    color-mix(in srgb, var(--text-muted) 26%, transparent) 37%,
+    color-mix(in srgb, var(--text-muted) 14%, transparent) 63%);
+  background-size: 400% 100%;
+  animation: sk-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes sk-shimmer { from { background-position: 100% 50%; } to { background-position: 0 50%; } }
+@media (prefers-reduced-motion: reduce) { .sk { animation: none; } }
+.sk-line { height: 12px; max-width: 100%; }
+.sk-line.sm { height: 9px; }
+.sk-line.lg { height: 22px; margin: 6px 0 4px; }
+.sk-line.xl { height: 24px; margin: 4px 0; }
+.sk-img { flex-shrink: 0; border-radius: 8px; }
+.sk-card { gap: 8px; pointer-events: none; }
+.sk-card::before { display: none; }
+.sk-static { pointer-events: none; }
+.sk-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 7px; }
+.sk-col-narrow { flex: 0 0 18%; }
+.sk-right { align-items: flex-end; }
+.sk-list {
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  overflow: hidden;
+}
+.sk-row { display: flex; align-items: center; gap: 14px; padding: 10px 14px; }
+.sk-row + .sk-row { border-top: 1px solid var(--border-primary); }
+.sk-value { flex-shrink: 0; }
+.sk-board { border: 0; background: none; }
+.sk-board .sk-row { padding: 6px; gap: 10px; border: 0; }
+.sk-rank { width: 18px; height: 14px; flex-shrink: 0; }
+.sk-toolbar { display: flex; gap: 8px; margin: 18px 0 12px; }
+.sk-pill { height: 30px; border-radius: 8px; }
+.sk-title { margin: 22px 0 12px; }
+.kb-bars.sk-bars i.sk { opacity: 1; border-radius: 2px 2px 0 0; }
+.kb-top-card.sk-static .kb-top-text { gap: 7px; }
+.sk-legend { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+.sk-legend .sk-row { padding: 0; gap: 10px; border: 0; }
+.map-loading .sk-map { position: absolute; inset: 0; background: radial-gradient(ellipse at 50% 50%, rgba(79, 143, 247, 0.07), transparent 60%); animation: sk-pulse 1.6s ease-in-out infinite; }
+@keyframes sk-pulse { 50% { opacity: 0.35; } }
+@media (max-width: 640px) {
+  .sk-col-narrow { display: none; }
+}
+
 /* 角色信息：分组 + 图标卡片 */
 .info-section + .info-section { margin-top: var(--spacing-lg); }
 .info-section-title {
@@ -2317,6 +2367,7 @@ td.loc {
 
 .step-title { font-weight: 600; font-size: 0.9375rem; line-height: 26px; }
 .step-desc { color: var(--text-muted); font-size: 0.8125rem; margin: 2px 0 10px; }
+.step-desc a { color: var(--accent-primary); }
 
 .auth-link-box { margin-top: 10px; }
 
@@ -2545,6 +2596,11 @@ td.loc {
 .jump-skills .plain-select.jump-dock-select { width: auto; min-width: 0; max-width: 190px; flex: 1 1 auto; }
 .jump-station.is-structure { color: var(--success, #30c88a); background: color-mix(in srgb, var(--success, #30c88a) 14%, transparent); }
 .jump-range .warn { color: var(--warning, #f2b134); }
+/* 可停靠的玩家建筑：显示游戏内名称 */
+.jump-docks { display: flex; flex-direction: column; gap: 1px; padding: 0 6px 3px 34px; font-size: 0.6875rem; line-height: 1.45; }
+.jump-dock { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-secondary); }
+.jump-dock b { margin-right: 5px; font-weight: 500; color: var(--success, #30c88a); }
+.jump-dock-more { color: var(--text-muted); cursor: help; }
 
 /* ===== 手机端适配 ===== */
 .mobile-only { display: none !important; }
@@ -2647,6 +2703,29 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .danmaku-item.big strong { color: #ffc400; }
 .danmaku-item.huge { height: 30px; font-size: 0.8125rem; border-color: #ffc400; background: rgba(60, 44, 0, 0.85); box-shadow: 0 0 12px rgba(255, 196, 0, 0.35); }
 .danmaku-item.huge strong { color: #ffd84d; }
+/* 弹幕悬停详情 */
+.kill-tip {
+  position: absolute; z-index: 6; width: 290px; padding: 10px 12px; pointer-events: none;
+  font-size: 0.75rem; color: #dbe3ee; border: 1px solid rgba(255, 82, 64, 0.45); border-radius: 10px;
+  background: rgba(13, 18, 27, 0.96); box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.kill-tip[hidden] { display: none; }
+.kill-tip-head { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; margin-bottom: 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
+.kill-tip-head img { border-radius: 6px; background: #0d1219; flex-shrink: 0; }
+.kill-tip-head > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.kill-tip-head b { font-size: 0.875rem; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kill-tip-head small, .kill-tip-party small { color: #9fb0c6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kill-tip-head strong { color: #ff7a6b; font-size: 0.875rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kill-tip-head strong span { margin-left: 2px; font-size: 0.625rem; font-weight: 400; color: #9fb0c6; }
+.kill-tip-label { margin-top: 6px; font-size: 0.6875rem; color: #7f8ea3; }
+.kill-tip-party { display: flex; align-items: center; gap: 8px; margin-top: 3px; }
+.kill-tip-party img, .kill-tip-blank { width: 28px; height: 28px; border-radius: 4px; background: #1a2230; flex-shrink: 0; }
+.kill-tip-party > div { min-width: 0; display: flex; flex-direction: column; }
+.kill-tip-party b { font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kill-tip-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 8px; color: #9fb0c6; }
+.kill-tip-foot i { padding: 0 5px; border-radius: 3px; font-style: normal; font-size: 0.6875rem; color: #ffc400; background: rgba(255, 196, 0, 0.14); }
+.kill-tip-time { margin-left: auto; }
+.kill-tip-hint { margin-top: 6px; font-size: 0.6875rem; color: #6f7d91; }
 @keyframes danmaku-move { from { transform: translateX(var(--from)); } to { transform: translateX(var(--to)); } }
 /* 减少动态效果：不滚动，改为右上角静止显示几秒 */
 .danmaku-item.static { left: auto; right: 64px; animation: none !important; }

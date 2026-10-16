@@ -1,10 +1,12 @@
+import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
+
 // ===== 配置与常量 =====
 const API_BASE = 'https://esi.evetech.net/latest';
 const IMAGE_BASE = 'https://images.evetech.net/types';
 
 // 星域名称取自 ESI /universe/regions/{id}/?language=zh；hub 为该星域主要交易中心空间站
 const REGIONS = [
-  { id: 10000002, name: '伏尔戈', en: 'The Forge', hub: { id: 60003760, name: '吉他 4-4' } },
+  { id: 10000002, name: '伏尔戈', en: 'The Forge', hub: { id: 60003760, name: '吉他海4' } },
   { id: 10000043, name: '多美', en: 'Domain', hub: { id: 60008494, name: '艾玛 VIII' } },
   { id: 10000032, name: '金纳泽', en: 'Sinq Laison', hub: { id: 60011866, name: '多迪谢 IX' } },
   { id: 10000030, name: '西玛特尔', en: 'Heimatar', hub: { id: 60004588, name: '伦斯 VI' } },
@@ -267,7 +269,7 @@ function switchView(view) {
   else if (location.hash.startsWith('#kb')) history.replaceState(null, '', location.pathname);
 }
 
-// 击杀记录页：首次进入时加载
+// 击杀记录页：首屏后空闲时预加载，或首次进入时加载
 let kbPageModule = null;
 // ===== 会战监测：全站提醒，击杀记录页与星图订阅 =====
 let battlesPromise = null;
@@ -298,26 +300,33 @@ function openKbPage() {
   return kbOpening;
 }
 
+let kbPageLoading = null;
+function loadKbPageModule() {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v16r7').then((m) => {
+    m.initKbPage({
+      esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
+      fetchESI, debounce, showToast, loadKillboard, openMapSystem,
+      battles: () => battlesPromise,
+      getNpcNames: () => state.npcNames,
+      // 市场分类「舰船」下的全部舰船（搜索用）
+      shipTypes: () => {
+        if (!state.shipTypeList && state.catalog) {
+          state.shipTypeList = [...state.typeIndex.values()]
+            .filter(({ groupId }) => rootGroupId(groupId) === SHIP_ROOT_GROUP)
+            .map(({ type }) => ({ id: type.id, name: type.name }));
+        }
+        return state.shipTypeList || [];
+      }
+    });
+    kbPageModule = m;
+    return m;
+  }).catch((error) => { kbPageLoading = null; throw error; });
+  return kbPageLoading;
+}
+
 async function openKbPageImpl() {
   try {
-    if (!kbPageModule) {
-      kbPageModule = await import('./kb-page.js?v=v16r2');
-      kbPageModule.initKbPage({
-        esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
-        fetchESI, debounce, showToast, loadKillboard, openMapSystem,
-        battles: () => battlesPromise,
-        getNpcNames: () => state.npcNames,
-        // 市场分类「舰船」下的全部舰船（搜索用）
-        shipTypes: () => {
-          if (!state.shipTypeList && state.catalog) {
-            state.shipTypeList = [...state.typeIndex.values()]
-              .filter(({ groupId }) => rootGroupId(groupId) === SHIP_ROOT_GROUP)
-              .map(({ type }) => ({ id: type.id, name: type.name }));
-          }
-          return state.shipTypeList || [];
-        }
-      });
-    }
+    await loadKbPageModule();
     if (!state.catalog && state.catalogReady) await state.catalogReady;
     await kbPageModule.showKbPage();
   } catch (error) {
@@ -328,38 +337,47 @@ async function openKbPageImpl() {
 
 // 击杀记录模块：首次需要时加载
 let killboardModule = null;
-async function loadKillboard() {
-  if (!killboardModule) {
-    killboardModule = await import('./killboard.js?v=v14r1');
-    killboardModule.initKillboard({
+let killboardLoading = null;
+function loadKillboard() {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v16r7').then((m) => {
+    m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap
     });
-  }
-  return killboardModule;
+    killboardModule = m;
+    return m;
+  }).catch((error) => { killboardLoading = null; throw error; });
+  return killboardLoading;
 }
 
-// 星图模块较大，首次进入星图时才加载
+// 星图模块较大：首屏后空闲时预加载，或首次进入星图时加载
 let starMapModule = null;
+let starMapLoading = null;
+function loadStarMapModule() {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v16r7').then((m) => {
+    m.initStarMap({
+      fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
+      showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
+      hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
+      battles: () => battlesPromise,
+      getEsiToken: ensureEsiToken,
+      loadKillboard,
+      // 角色当前所在星系（需要 esi-location.read_location.v1）
+      getMyLocation: async () => {
+        const token = await ensureEsiToken();
+        const loc = await esiAuthFetch('/characters/' + token.character_id + '/location/');
+        return loc.solar_system_id;
+      }
+    });
+    starMapModule = m;
+    return m;
+  }).catch((error) => { starMapLoading = null; throw error; });
+  return starMapLoading;
+}
+
 async function openStarMap() {
   try {
-    if (!starMapModule) {
-      starMapModule = await import('./star-map.js?v=v16r4');
-      starMapModule.initStarMap({
-        fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
-        showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
-        hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
-        closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
-        battles: () => battlesPromise,
-        getEsiToken: ensureEsiToken,
-        loadKillboard,
-        // 角色当前所在星系（需要 esi-location.read_location.v1）
-        getMyLocation: async () => {
-          const token = await ensureEsiToken();
-          const loc = await esiAuthFetch('/characters/' + token.character_id + '/location/');
-          return loc.solar_system_id;
-        }
-      });
-    }
+    await loadStarMapModule();
     await starMapModule.showStarMap();
   } catch (error) {
     console.error('星图加载失败:', error);
@@ -886,7 +904,7 @@ function syncLossesTab(groupId) {
 // 舰船近期损失：zKillboard 最近 200 次损失，统计常用装配
 async function renderShipLosses(typeId) {
   const body = $('lossesBody');
-  body.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取 zKillboard 近期损失…</div>';
+  body.innerHTML = skCards(4, 'station-grid') + skTitle(14) + skRows(6, { img: 24 }) + skTitle(10) + skRows(8);
   try {
     const kb = await loadKillboard();
     const kills = await kb.fetchZkill(`losses/shipTypeID/${typeId}/`);
@@ -977,8 +995,17 @@ async function resolveLocations(orders) {
   ids.forEach((id) => {
     const official = officialName(id);
     if (official) state.locationCache.set(id, official);
-    else if (id >= 1e12) state.locationCache.set(id, '玩家建筑 #' + id);
   });
+  const structures = ids.filter((id) => id >= 1e12);
+  if (structures.length) {
+    await resolveStructureNames(structures);
+    // 查不到名称时至少显示所在星系（订单里带 system_id）
+    const systemOf = new Map(orders.map((o) => [o.location_id, o.system_id]));
+    for (const id of structures) {
+      const sys = officialName(systemOf.get(id));
+      state.locationCache.set(id, structureNameOf(id) || (sys ? sys + ' · 玩家建筑（名称不公开）' : '玩家建筑（名称不公开）'));
+    }
+  }
   const npc = ids.filter((id) => !state.locationCache.has(id));
   for (let i = 0; i < npc.length; i += 500) {
     try {
@@ -1412,9 +1439,14 @@ function initShortcuts() {
   });
 }
 
-// ===== 个人中心（ESI 经服务端 /api/esi/* 代理，凭据不落前端）=====
+// ===== 个人中心 =====
+// EVE SSO 使用纯前端 PKCE 授权：授权码换令牌、刷新令牌都由浏览器直接请求 login.eveonline.com，
+// 令牌只保存在本机 localStorage，本站服务器全程接触不到。服务器只提供公开的应用配置（Client ID、回调地址、权限列表）。
 const ESI_API = '/api/esi';
 const ESI_BASE = 'https://esi.evetech.net/latest';
+const SSO_BASE = 'https://login.eveonline.com/v2/oauth';
+const PKCE_KEY = 'eve-esi-pkce';          // 授权中的 state -> { verifier, at }（回调可能落在新标签页，所以放 localStorage）
+const PKCE_TTL = 15 * 60e3;
 
 function readEsiToken() {
   try { return JSON.parse(localStorage.getItem('eve-esi-token') || 'null'); } catch { return null; }
@@ -1431,18 +1463,147 @@ function setEsiStatus(message, kind) {
   if (el) { el.textContent = message || ''; el.className = 'status-msg' + (kind ? ' ' + kind : ''); }
 }
 
+// ---------- SSO（浏览器直连 CCP）----------
+let ssoConfigPromise = null;
+function ssoConfig() {
+  if (!ssoConfigPromise) {
+    ssoConfigPromise = fetch(ESI_API + '/config').then(async (res) => {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.client_id) throw new Error(data.error || '读取应用配置失败 ' + res.status);
+      return data;
+    }).catch((error) => { ssoConfigPromise = null; throw error; });
+  }
+  return ssoConfigPromise;
+}
+
+function b64url(bytes) {
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function randomToken(size) {
+  return b64url(crypto.getRandomValues(new Uint8Array(size)));
+}
+
+async function sha256(text) {
+  const data = new TextEncoder().encode(text);
+  if (crypto.subtle) return new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  return sha256Fallback(data);   // 非 HTTPS 页面没有 crypto.subtle
+}
+
+// 纯 JS SHA-256（仅在非安全上下文中使用）
+function sha256Fallback(data) {
+  const K = new Uint32Array([0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2]);
+  const H = new Uint32Array([0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]);
+  const len = data.length, total = Math.ceil((len + 9) / 64) * 64;
+  const buf = new Uint8Array(total);
+  buf.set(data);
+  buf[len] = 0x80;
+  new DataView(buf.buffer).setUint32(total - 4, len * 8);
+  const W = new Uint32Array(64);
+  const rotr = (x, n) => (x >>> n) | (x << (32 - n));
+  for (let off = 0; off < total; off += 64) {
+    const view = new DataView(buf.buffer, off, 64);
+    for (let i = 0; i < 16; i++) W[i] = view.getUint32(i * 4);
+    for (let i = 16; i < 64; i++) {
+      const s0 = rotr(W[i - 15], 7) ^ rotr(W[i - 15], 18) ^ (W[i - 15] >>> 3);
+      const s1 = rotr(W[i - 2], 17) ^ rotr(W[i - 2], 19) ^ (W[i - 2] >>> 10);
+      W[i] = W[i - 16] + s0 + W[i - 7] + s1;
+    }
+    let [a, b, c, d, e, f, g, h] = H;
+    for (let i = 0; i < 64; i++) {
+      const t1 = h + (rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)) + ((e & f) ^ (~e & g)) + K[i] + W[i];
+      const t2 = (rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)) + ((a & b) ^ (a & c) ^ (b & c));
+      h = g; g = f; f = e; e = (d + t1) >>> 0; d = c; c = b; b = a; a = (t1 + t2) >>> 0;
+    }
+    H[0] += a; H[1] += b; H[2] += c; H[3] += d; H[4] += e; H[5] += f; H[6] += g; H[7] += h;
+  }
+  const out = new Uint8Array(32);
+  H.forEach((v, i) => new DataView(out.buffer).setUint32(i * 4, v));
+  return out;
+}
+
+function readPkce() {
+  try {
+    const all = JSON.parse(localStorage.getItem(PKCE_KEY) || '{}');
+    const now = Date.now();
+    for (const k of Object.keys(all)) if (!(now - all[k].at < PKCE_TTL)) delete all[k];
+    return all;
+  } catch { return {}; }
+}
+
+function writePkce(all) {
+  try {
+    if (Object.keys(all).length) localStorage.setItem(PKCE_KEY, JSON.stringify(all));
+    else localStorage.removeItem(PKCE_KEY);
+  } catch { /* 忽略 */ }
+}
+
+// 直接向 CCP 请求令牌（授权码 / 刷新令牌）；CCP 对部分错误返回 HTML 页面，统一转成可读的提示
+async function ssoToken(params) {
+  const cfg = await ssoConfig();
+  let res;
+  try {
+    res = await fetch(SSO_BASE + '/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ ...params, client_id: cfg.client_id })
+    });
+  } catch {
+    throw new Error('无法连接 EVE 登录服务器，请检查网络后重试');
+  }
+  const text = await res.text();
+  let data = {};
+  try { data = JSON.parse(text); } catch { /* HTML 错误页 */ }
+  if (!res.ok || !data.access_token) {
+    const reason = data.error_description || data.error || (text.startsWith('<') ? '授权码无效或已被使用' : 'HTTP ' + res.status);
+    const error = new Error(reason);
+    error.status = res.status;
+    throw error;
+  }
+  return data;
+}
+
+// 从 access_token（JWT）读取角色身份与权限；令牌由浏览器经 HTTPS 直接从 CCP 取得
+function tokenIdentity(accessToken, clientId) {
+  const part = accessToken.split('.')[1] || '';
+  const json = decodeURIComponent(escape(atob(part.replace(/-/g, '+').replace(/_/g, '/'))));
+  const claims = JSON.parse(json);
+  const aud = [].concat(claims.aud || []);
+  if (clientId && aud.length && !aud.includes(clientId)) throw new Error('令牌不属于本应用');
+  const id = Number(String(claims.sub || '').split(':').pop());
+  if (!id) throw new Error('令牌中没有角色信息');
+  return { character_id: id, character_name: claims.name || '角色 ' + id, scopes: [].concat(claims.scp || []) };
+}
+
+function tokenRecord(data, base = {}) {
+  return { ...base, access_token: data.access_token, refresh_token: data.refresh_token || base.refresh_token,
+    expires_in: data.expires_in, expires_at: Date.now() + (data.expires_in || 1199) * 1000 };
+}
+
+// 同时有多个请求发现令牌过期时只刷新一次（CCP 的刷新令牌用一次就会更换，并发刷新会让后一个失败）
+let refreshing = null;
 async function ensureEsiToken() {
   const token = state.esiToken || readEsiToken();
   if (!token || !token.access_token) throw new Error('尚未绑定 ESI');
-  if (Date.now() > (token.expires_at || 0) - 60000) {
-    const res = await fetch(ESI_API + '/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: token.refresh_token }) });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) { writeEsiToken(null); throw new Error(data.error || '登录已过期，请重新绑定'); }
-    const fresh = { ...token, ...data, expires_at: Date.now() + (data.expires_in || 1199) * 1000 };
-    writeEsiToken(fresh);
-    return fresh;
+  if (Date.now() <= (token.expires_at || 0) - 60000) return token;
+  if (!refreshing) {
+    refreshing = (async () => {
+      try {
+        const data = await ssoToken({ grant_type: 'refresh_token', refresh_token: token.refresh_token });
+        const fresh = tokenRecord(data, token);
+        try { Object.assign(fresh, tokenIdentity(data.access_token)); } catch { /* 保留原身份 */ }
+        writeEsiToken(fresh);
+        return fresh;
+      } catch (error) {
+        // 只有 CCP 明确拒绝（4xx）时才清除令牌；网络错误保留，下次再试
+        if (error.status >= 400 && error.status < 500) { writeEsiToken(null); throw new Error('登录已过期，请重新绑定（' + error.message + '）'); }
+        throw error;
+      }
+    })().finally(() => { refreshing = null; });
   }
-  return token;
+  return refreshing;
 }
 
 async function esiAuthFetch(path, options = {}) {
@@ -1677,25 +1838,104 @@ function buildAssetLocations(assets) {
 
 const ASSET_SAFETY_ID = 2004;
 
-// 位置名称：官方中文表（NPC 空间站/星系）→ 玩家建筑原名 → ID 兜底
+// 位置名称：官方中文表（NPC 空间站/星系）→ 玩家建筑游戏内名称 → ID 兜底
 function locationName(id) {
   const official = officialName(id);
   if (official) return official;
   if (id === ASSET_SAFETY_ID) return '资产安全';
-  const known = state.esiNames?.get(Number(id));
+  const known = structureNameOf(id) || state.esiNames?.get(Number(id));
   if (known) return known;
-  return id >= 1e12 ? '玩家建筑 #' + id : '位置 #' + id;
+  return id >= 1e12 ? '玩家建筑（名称不公开）' : '位置 #' + id;
 }
 
-// 玩家建筑名称需要 esi-universe.read_structures.v1 授权；没有该权限时保留 ID 显示
+// ===== 玩家建筑名称 =====
+// 玩家建筑名称是玩家自定义的，来源依次为：本地名称缓存 → 跳跃规划读过的建筑列表 → 服务器共享的公开建筑缓存
+// → 带授权读取 /universe/structures/{id}/（需 esi-universe.read_structures.v1，且角色有权查看）。
+// 查不到的建筑记一天，避免反复请求消耗 ESI 错误额度。
+const STRUCTURE_NAMES_KEY = 'eve-structure-names-v1';
+const STRUCTURE_NAME_TTL = 7 * 86400e3;
+const STRUCTURE_MISS_TTL = 86400e3;
+let structureNames = null;   // id -> { n: 名称, s: 星系, t: 类型, at }，n 为空表示查不到
+let sharedStructuresPromise = null;
+
+function structureNameMap() {
+  if (structureNames) return structureNames;
+  structureNames = new Map();
+  try {
+    const raw = JSON.parse(localStorage.getItem(STRUCTURE_NAMES_KEY) || '{}');
+    const now = Date.now();
+    for (const [id, v] of Object.entries(raw)) {
+      if (v && now - v.at < (v.n ? STRUCTURE_NAME_TTL : STRUCTURE_MISS_TTL)) structureNames.set(Number(id), v);
+    }
+  } catch { /* 忽略 */ }
+  // 跳跃规划读过的公开 / 内部建筑列表（本地缓存 24 小时）
+  try {
+    const c = JSON.parse(localStorage.getItem('eve-public-structures-v1') || 'null');
+    if (c && Array.isArray(c.list)) {
+      for (const st of [...c.list, ...(c.private || [])]) {
+        if (st?.id && st.name) structureNames.set(st.id, { n: st.name, s: st.system, t: st.type, at: c.at || Date.now() });
+      }
+    }
+  } catch { /* 忽略 */ }
+  return structureNames;
+}
+
+function saveStructureNames() {
+  try {
+    const obj = {};
+    for (const [id, v] of structureNameMap()) obj[id] = v;
+    localStorage.setItem(STRUCTURE_NAMES_KEY, JSON.stringify(obj));
+  } catch { /* 忽略 */ }
+}
+
+function structureNameOf(id) {
+  if (!(id >= 1e12)) return null;
+  return structureNameMap().get(Number(id))?.n || null;
+}
+
+// 服务器共享缓存（其他用户读过的公开建筑），不需要授权，未部署时静默跳过
+function loadSharedStructures() {
+  if (!sharedStructuresPromise) {
+    sharedStructuresPromise = fetch('/api/esi/structures')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c) => {
+        if (!c || !Array.isArray(c.list)) return;
+        const map = structureNameMap();
+        for (const st of c.list) if (st?.id && st.name && !map.get(st.id)?.n) map.set(st.id, { n: st.name, s: st.system, t: st.type, at: c.at || Date.now() });
+      })
+      .catch(() => {});
+  }
+  return sharedStructuresPromise;
+}
+
+// 解析一批建筑名称；未绑定 ESI 时只用缓存与共享数据。返回是否有新名称（调用方据此重绘）
 async function resolveStructureNames(ids) {
-  const list = [...new Set(ids)].filter((id) => id >= 1e12).slice(0, 30);
-  await Promise.all(list.map(async (id) => {
-    try {
-      const info = await esiAuthFetch('/universe/structures/' + id + '/');
-      if (info?.name) state.esiNames.set(id, info.name);
-    } catch { /* 无权限或无法访问 */ }
-  }));
+  const map = structureNameMap();
+  let list = [...new Set(ids.map(Number))].filter((id) => id >= 1e12 && !map.has(id));
+  if (!list.length) return false;
+  await loadSharedStructures();
+  list = list.filter((id) => !map.has(id));
+  const token = state.esiToken || readEsiToken();
+  if (list.length && token) {
+    const queue = list.slice(0, 300);
+    let stop = false;
+    const worker = async () => {
+      while (queue.length && !stop) {
+        const id = queue.shift();
+        try {
+          const info = await esiAuthFetch('/universe/structures/' + id + '/');
+          map.set(id, { n: info?.name || '', s: info?.solar_system_id, t: info?.type_id, at: Date.now() });
+        } catch (error) {
+          // 403 = 无权查看；401 或其他错误（授权失效、网络）不记缓存，并停止本批请求
+          if (/ESI 403/.test(error.message)) map.set(id, { n: '', at: Date.now() });
+          else stop = true;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: 4 }, worker));
+  }
+  saveStructureNames();
+  return ids.some((id) => structureNameOf(id));
 }
 
 // 显示名：官方中文优先，玩家军团/联盟/角色保留原名
@@ -1731,7 +1971,7 @@ async function loadCharacterData() {
   $('profileCorp').textContent = '数据读取中…';
   $('profileChips').innerHTML = '';
   $('profileHeroStats').hidden = true;
-  $('profileData').innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取角色数据…</div>';
+  $('profileData').innerHTML = skCards(5) + skTitle(12) + skRows(6) + skTitle(16) + skRows(4);
   const paths = {
     character: '/characters/' + id + '/',
     wallet: '/characters/' + id + '/wallet/',
@@ -1770,7 +2010,8 @@ async function loadCharacterData() {
 
   await resolveStructureNames([
     ...assetsList.map((a) => a.rootId),
-    ...ordersList.map((o) => o.location_id)
+    ...ordersList.map((o) => o.location_id),
+    state.characterData.location?.structure_id || 0
   ]);
 
   const typeNames = await resolveTypeNames([
@@ -1799,6 +2040,32 @@ async function loadCharacterData() {
   renderProfileHero();
   renderProfileStationNav(stationSummaries());
   renderProfileTab(activeProfileTab());
+  prefetchAssetPrices();
+  prefetchProfileTabs();
+}
+
+// 读完角色数据后，空闲时在后台读取战斗记录（zKillboard，缓存 5 分钟）与合同，打开对应标签页时直接显示
+function prefetchProfileTabs() {
+  const data = state.characterData;
+  whenIdle(async () => {
+    if (state.characterData !== data) return;   // 已解绑或重新读取
+    const me = myCharacterId();
+    try {
+      const kb = await loadKillboard();
+      const [kills] = await Promise.all([
+        kb.fetchZkill(`characterID/${me}/`),
+        kb.fetchZkill(`stats/characterID/${me}/`).catch(() => null)
+      ]);
+      await kb.prepareKills(kills);
+    } catch { /* 后台预取失败不提示，打开战斗记录时会重试 */ }
+    if (state.characterData === data && !state.contracts) loadContracts().catch(() => {});
+  }, 4000);
+}
+
+// 浏览器空闲时执行（不支持 requestIdleCallback 时延迟执行）
+function whenIdle(fn, timeout = 3000) {
+  if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(() => fn(), { timeout });
+  else window.setTimeout(fn, Math.min(timeout, 1500));
 }
 
 // ===== 游戏内图标（EVE 官方图片服务器）=====
@@ -1902,19 +2169,57 @@ function valuationRegion() {
   return REGIONS.find((r) => r.id === id) || REGIONS[0];
 }
 
-// regionId:typeId -> { sell, buy }，会话内缓存；点「刷新行情」清空
-state.hubPriceCache = new Map();
+// regionId:typeId -> { sell, buy, at }；保存在本地 12 小时，重新打开页面不必重查。点「刷新行情」清空当前市场
+const HUB_PRICE_KEY = 'eve-hub-prices-v1';
+const HUB_PRICE_TTL = 12 * 3600e3;
+state.hubPriceCache = loadHubPriceCache();
+state.hubPriceInflight = new Map();   // 正在查询的物品，后台预取与页面渲染共用同一请求
 state.profileStation = null; // 当前查看的空间站（null 表示资产总估值）
 
+function loadHubPriceCache() {
+  const map = new Map();
+  try {
+    const raw = JSON.parse(localStorage.getItem(HUB_PRICE_KEY) || '{}');
+    const now = Date.now();
+    for (const [key, [sell, buy, at]] of Object.entries(raw)) {
+      if (now - at < HUB_PRICE_TTL) map.set(key, { sell, buy, at });
+    }
+  } catch { /* 忽略 */ }
+  return map;
+}
+
+function saveHubPriceCache() {
+  try {
+    const obj = {};
+    for (const [key, v] of state.hubPriceCache) if (!v.failed) obj[key] = [v.sell, v.buy, v.at || Date.now()];
+    localStorage.setItem(HUB_PRICE_KEY, JSON.stringify(obj));
+  } catch { /* 存储已满或隐私模式：只保留会话内缓存 */ }
+}
+
+// 当前市场行情中最早的查询时间（用于提示行情新旧）
+function hubPriceTime(region, typeIds) {
+  let oldest = Infinity;
+  for (const t of typeIds) {
+    const at = state.hubPriceCache.get(region.id + ':' + t)?.at;
+    if (at && at < oldest) oldest = at;
+  }
+  return Number.isFinite(oldest) ? oldest : null;
+}
+
 async function fetchHubPrices(region, typeIds, onProgress) {
-  const todo = typeIds.filter((t) => !state.hubPriceCache.has(region.id + ':' + t));
-  let done = typeIds.length - todo.length;
+  const keyOf = (t) => region.id + ':' + t;
+  const todo = typeIds.filter((t) => !state.hubPriceCache.has(keyOf(t)) && !state.hubPriceInflight.has(keyOf(t)));
+  const waiting = typeIds.map((t) => state.hubPriceInflight.get(keyOf(t))).filter(Boolean);
+  let done = typeIds.length - todo.length - waiting.length;
   onProgress?.(done, typeIds.length);
+  waiting.forEach((p) => p.then(() => onProgress?.(++done, typeIds.length)));
+  const resolvers = new Map();
+  for (const t of todo) state.hubPriceInflight.set(keyOf(t), new Promise((res) => resolvers.set(t, res)));
   let cursor = 0;
   const worker = async () => {
     while (cursor < todo.length) {
       const typeId = todo[cursor++];
-      let entry = { sell: null, buy: null };
+      let entry = { sell: null, buy: null, at: Date.now() };
       try {
         const orders = await fetchESIPaged(`/markets/${region.id}/orders/?order_type=all&type_id=${typeId}`);
         for (const o of orders) {
@@ -1923,11 +2228,41 @@ async function fetchHubPrices(region, typeIds, onProgress) {
           else entry.sell = entry.sell === null ? o.price : Math.min(entry.sell, o.price);
         }
       } catch { entry = { sell: null, buy: null, failed: true }; }
-      state.hubPriceCache.set(region.id + ':' + typeId, entry);
+      state.hubPriceCache.set(keyOf(typeId), entry);
+      state.hubPriceInflight.delete(keyOf(typeId));
+      resolvers.get(typeId)();
       onProgress?.(++done, typeIds.length);
     }
   };
-  await Promise.all(Array.from({ length: 8 }, worker));
+  await Promise.all([...Array.from({ length: 8 }, worker), ...waiting]);
+  if (todo.length) saveHubPriceCache();
+}
+
+// 需要查询行情的资产物品：蓝图副本无法出售；没有全服均价的物品基本不可交易。按估算价值排序，最多 1500 种
+async function tradableAssetTypes(assets) {
+  const avgMap = await getMarketPriceMap();
+  const qtyByType = new Map();
+  assets.forEach((a) => { if (!a.is_blueprint_copy) qtyByType.set(a.type_id, (qtyByType.get(a.type_id) || 0) + valuationQuantity(a.quantity)); });
+  return [...qtyByType.keys()].filter((t) => avgMap.size === 0 || avgMap.has(t))
+    .sort((x, y) => (avgMap.get(y) || 0) * qtyByType.get(y) - (avgMap.get(x) || 0) * qtyByType.get(x))
+    .slice(0, 1500);
+}
+
+// 绑定后读完角色数据，浏览器空闲时在后台算好资产估值所需行情；打开资产页时直接用缓存
+function prefetchAssetPrices() {
+  const assets = state.characterData?.assets;
+  if (!Array.isArray(assets) || !assets.length) return;
+  const run = async () => {
+    try {
+      if (state.characterData?.assets !== assets) return;   // 已解绑或重新读取
+      const region = valuationRegion();
+      const tradable = await tradableAssetTypes(assets);
+      if (tradable.some((t) => !state.hubPriceCache.has(region.id + ':' + t))) await fetchHubPrices(region, tradable);
+      if (state.characterData?.assets === assets) renderProfileStationNav(stationSummaries());
+    } catch { /* 后台预取失败不提示，打开资产页时会重试 */ }
+  };
+  if (typeof window.requestIdleCallback === 'function') window.requestIdleCallback(run, { timeout: 5000 });
+  else window.setTimeout(run, 1500);
 }
 
 function hubPrice(region, typeId) {
@@ -1970,14 +2305,8 @@ function assetSlotLabel(asset) {
 // 确保当前估价市场的行情已查询完毕；渲染已过期（切走/换站）时返回 null
 async function ensureAssetPrices(box, assets, seq) {
   const region = valuationRegion();
-  // 蓝图副本无法在市场出售；没有全服均价的物品基本不可交易，不发起行情查询
-  const avgMap = await getMarketPriceMap();
+  const tradable = await tradableAssetTypes(assets);
   if (seq !== state.assetRenderSeq) return null;
-  const qtyByType = new Map();
-  assets.forEach((a) => { if (!a.is_blueprint_copy) qtyByType.set(a.type_id, (qtyByType.get(a.type_id) || 0) + valuationQuantity(a.quantity)); });
-  const tradable = [...qtyByType.keys()].filter((t) => avgMap.size === 0 || avgMap.has(t))
-    .sort((x, y) => (avgMap.get(y) || 0) * qtyByType.get(y) - (avgMap.get(x) || 0) * qtyByType.get(x))
-    .slice(0, 1500);
   if (tradable.some((t) => !state.hubPriceCache.has(region.id + ':' + t))) {
     box.innerHTML = '<div class="loading-block"><span class="spinner"></span><span id="priceProgress">正在查询 ' + esc(region.hub.name) + ' 行情…</span></div>';
     await fetchHubPrices(region, tradable, (done, total) => {
@@ -2010,6 +2339,7 @@ function bindAssetToolbar(region, tab = 'assets') {
   });
   $('refreshPricesBtn').addEventListener('click', () => {
     for (const key of [...state.hubPriceCache.keys()]) if (key.startsWith(region.id + ':')) state.hubPriceCache.delete(key);
+    saveHubPriceCache();
     renderProfileTab(tab);
   });
 }
@@ -2048,6 +2378,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
   const sellPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.sell != null).length;
   const buyPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.buy != null).length;
   const failed = tradable.filter((t) => hubPrice(region, t)?.failed).length;
+  const priceAt = hubPriceTime(region, tradable);
 
   const rows = groups.map((g) => {
     const share = assetSell ? (g.sell / assetSell) * 100 : 0;
@@ -2072,6 +2403,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
     '</div>' +
     '<p class="text-muted valuation-note">价格取 ' + esc(region.hub.name) + ' 空间站内的最低卖单价与最高收购价；蓝图副本不可上架、无行情的物品不计入。共 ' +
       formatNumber(assets.length) + ' 项资产，分布在 ' + groups.length + ' 个位置。' +
+      (priceAt ? '行情查询于 ' + new Date(priceAt).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + '，本地缓存 12 小时。' : '') +
       (failed ? ' <span class="down">' + failed + ' 种物品行情查询失败，可点「刷新行情」重试。</span>' : '') + '</p>' +
     '<div class="table-scroll"><table class="pc-mini-table station-summary"><thead><tr>' +
       '<th>空间站</th><th>物品数</th><th>卖价估值</th><th>收价估值</th><th>占比（按卖价）</th>' +
@@ -2322,7 +2654,13 @@ function contractLocation(c) {
   return esc(locationName(c.start_location_id));
 }
 
-async function loadContracts() {
+// 进行中的读取复用同一个 Promise（后台预取与打开合同页可能同时触发）
+function loadContracts() {
+  if (!state.contractsLoading) state.contractsLoading = loadContractsImpl().finally(() => { state.contractsLoading = null; });
+  return state.contractsLoading;
+}
+
+async function loadContractsImpl() {
   const me = myCharacterId();
   try {
     state.contracts = await esiAuthFetchPaged('/characters/' + me + '/contracts/');
@@ -2339,8 +2677,8 @@ async function loadContracts() {
 }
 
 async function renderContractsTab(box) {
-  if (!state.contracts) {
-    box.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取合同记录…</div>';
+  if (!state.contracts || state.contractsLoading) {
+    box.innerHTML = skCards(4, 'contract-grid') + skToolbar(4) + skRows(10);
     await loadContracts();
     if (activeProfileTab() !== 'contracts') return;
   }
@@ -2475,7 +2813,7 @@ async function renderContractDetail(box, c) {
   const region = valuationRegion();
   const needsData = !state.contractItems.has(c.contract_id) || (c.type === 'auction' && !state.contractBids.has(c.contract_id));
   if (needsData) {
-    box.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取合同物品…</div>';
+    box.innerHTML = skCards(4, 'contract-grid') + skTitle(10) + skRows(8, { img: 24 });
     await loadContractDetailData(c);
     if (state.contractView.id !== c.contract_id || activeProfileTab() !== 'contracts') return;
   }
@@ -2598,7 +2936,7 @@ state.combatFilter = 'all';
 
 async function renderCombatTab(box) {
   const me = myCharacterId();
-  box.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取 zKillboard 战斗记录…</div>';
+  box.innerHTML = skCards(6) + skToolbar(3) + skRows(10);
   let kb, kills, stats;
   try {
     kb = await loadKillboard();
@@ -2617,6 +2955,7 @@ async function renderCombatTab(box) {
   const isLoss = (k) => k.victim.character_id === me;
   const losses = kills.filter(isLoss);
   const wins = kills.filter((k) => !isLoss(k));
+  const finalBlows = wins.filter((k) => (k.attackers || []).some((a) => a.final_blow && a.character_id === me)).length;
   const sum = (list) => list.reduce((t, k) => t + (k.zkb.totalValue || 0), 0);
   const filter = state.combatFilter;
   const shown = filter === 'kills' ? wins : filter === 'losses' ? losses : kills;
@@ -2627,7 +2966,9 @@ async function renderCombatTab(box) {
   const lostIsk = lifetime ? stats.iskLost || 0 : sum(losses);
   const efficiency = destroyedIsk + lostIsk ? destroyedIsk / (destroyedIsk + lostIsk) * 100 : null;
   const cards =
-    valuationCard(lifetime ? '生涯击杀' : '近期击杀', formatNumber(lifetime ? stats.shipsDestroyed || 0 : wins.length) + ' 艘', lifetime ? '单刷 ' + formatNumber(stats.soloKills || 0) + ' 次' : '最近 ' + kills.length + ' 条记录', 'is-buy') +
+    valuationCard(lifetime ? '生涯参与击杀' : '近期参与击杀', formatNumber(lifetime ? stats.shipsDestroyed || 0 : wins.length) + ' 艘', lifetime ? '单刷 ' + formatNumber(stats.soloKills || 0) + ' 次' : '最近 ' + kills.length + ' 条记录', 'is-buy') +
+    // zKillboard 生涯统计不含最后一击次数，只能按已读取的近期记录统计
+    valuationCard('最后一击', formatNumber(finalBlows) + ' 次', '最近 ' + formatNumber(wins.length) + ' 次参与击杀中', 'is-buy') +
     valuationCard(lifetime ? '生涯损失' : '近期损失', formatNumber(lifetime ? stats.shipsLost || 0 : losses.length) + ' 艘', lifetime ? '单刷被杀 ' + formatNumber(stats.soloLosses || 0) + ' 次' : '', 'is-sell') +
     valuationCard('击毁价值', formatISK(destroyedIsk) + ' ISK', lifetime ? 'zKillboard 生涯统计' : '近期记录合计', 'is-buy') +
     valuationCard('损失价值', formatISK(lostIsk) + ' ISK', lifetime ? 'zKillboard 生涯统计' : '近期记录合计', 'is-sell') +
@@ -2638,7 +2979,7 @@ async function renderCombatTab(box) {
     '<div class="valuation-grid">' + cards + '</div>' +
     '<div class="valuation-toolbar section-gap">' +
       '<div class="segmented" role="group" aria-label="战斗记录筛选">' +
-        [['all', '全部', kills.length], ['kills', '击杀', wins.length], ['losses', '损失', losses.length]].map(([key, label, n]) =>
+        [['all', '全部', kills.length], ['kills', '参与击杀', wins.length], ['losses', '损失', losses.length]].map(([key, label, n]) =>
           `<button data-combat-filter="${key}" class="${filter === key ? 'active' : ''}">${label} <span class="seg-count">${n}</span></button>`).join('') +
       '</div>' +
       '<span class="toolbar-spacer"></span>' +
@@ -2655,11 +2996,25 @@ async function generateAuthLink() {
   btn.disabled = true;
   setEsiStatus('正在生成授权链接…');
   try {
-    const res = await fetch(ESI_API + '/auth-url');
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || ('服务端 ' + res.status));
-    $('authLink').value = data.url;
-    $('openAuthBtn').href = data.url;
+    const cfg = await ssoConfig();
+    // PKCE：verifier 只保存在本机，CCP 换令牌时校验，授权码被截获也无法使用
+    const verifier = randomToken(48);
+    const challenge = b64url(await sha256(verifier));
+    const authState = randomToken(24);
+    const pending = readPkce();
+    pending[authState] = { verifier, at: Date.now() };
+    writePkce(pending);
+    const url = SSO_BASE + '/authorize?' + new URLSearchParams({
+      response_type: 'code',
+      redirect_uri: cfg.redirect_uri,
+      client_id: cfg.client_id,
+      scope: (cfg.scopes || []).join(' '),
+      state: authState,
+      code_challenge: challenge,
+      code_challenge_method: 'S256'
+    });
+    $('authLink').value = url;
+    $('openAuthBtn').href = url;
     $('authLinkBox').hidden = false;
     setEsiStatus('授权链接已生成：点击「打开」登录，完成后把地址栏完整地址粘贴到第 2 步', 'success');
   } catch (error) {
@@ -2682,19 +3037,26 @@ async function bindEsiCallback() {
   btn.disabled = true;
   setEsiStatus('正在绑定…');
   try {
-    const res = await fetch(ESI_API + '/bind', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, state: cbState })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || ('绑定失败 ' + res.status));
-    writeEsiToken({ ...data, expires_at: Date.now() + (data.expires_in || 1199) * 1000 });
+    const pending = readPkce();
+    const entry = pending[cbState];
+    if (!entry) throw new Error('授权状态无效或已过期：请在本浏览器重新生成授权链接并登录（链接 15 分钟内有效）');
+    let data;
+    try {
+      data = await ssoToken({ grant_type: 'authorization_code', code, code_verifier: entry.verifier });
+    } catch (error) {
+      throw new Error('CCP 拒绝了授权（' + error.message + '）。若提示授权码已使用，请重新生成授权链接并登录');
+    } finally {
+      delete pending[cbState];
+      writePkce(pending);
+    }
+    const cfg = await ssoConfig();
+    const identity = tokenIdentity(data.access_token, cfg.client_id);
+    writeEsiToken({ ...tokenRecord(data), ...identity });
     $('callbackUrl').value = '';
     $('authLinkBox').hidden = true;
     setEsiStatus('');
     closeEsiModal();
-    showToast('已绑定：' + (data.character_name || '角色'), 'success');
+    showToast('已绑定：' + identity.character_name, 'success');
     state.characterData = null;
     switchView('profile');
   } catch (error) {
@@ -2793,6 +3155,7 @@ function init() {
         resolve();
         const typeId = typeFromHash();
         if (typeId && state.typeIndex.has(typeId)) selectItem(typeId, { updateHash: false });
+        preloadPages();
       });
     };
     if (typeof window.requestIdleCallback === 'function') {
@@ -2802,6 +3165,23 @@ function init() {
     }
   });
   loadProfile();
+}
+
+// 首屏与目录加载完后，空闲时依次预取击杀记录页与星图（模块 + 数据），用户点开时直接显示；省流量模式下不预取
+function preloadPages() {
+  if (navigator.connection?.saveData) return;
+  whenIdle(async () => {
+    try {
+      const kbPage = await loadKbPageModule();
+      await kbPage.prefetchKbHome();
+    } catch { /* 未部署击杀记录服务等：打开页面时再处理 */ }
+    whenIdle(async () => {
+      try {
+        const map = await loadStarMapModule();
+        await map.preloadStarMap();
+      } catch { /* 打开星图时会重试并提示 */ }
+    }, 5000);
+  }, 3000);
 }
 
 // 启动应用

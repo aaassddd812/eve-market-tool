@@ -162,8 +162,15 @@ async function loadStatic() {
   M.screen = new Float32Array(M.systems.length * 3);
 }
 
-async function loadLive(force = false) {
-  if (!force && Date.now() - M.live.loadedAt < LIVE_TTL) return;
+// 进行中的请求复用同一个 Promise（空闲预取与打开星图可能同时触发）
+let liveInflight = null;
+function loadLive(force = false, quiet = false) {
+  if (!force && Date.now() - M.live.loadedAt < LIVE_TTL) return Promise.resolve();
+  if (!liveInflight) liveInflight = loadLiveImpl(quiet).finally(() => { liveInflight = null; });
+  return liveInflight;
+}
+
+async function loadLiveImpl(quiet) {
   const results = await Promise.allSettled([
     app.fetchESI('/sovereignty/map/'),
     app.fetchESI('/universe/system_kills/'),
@@ -188,7 +195,7 @@ async function loadLive(force = false) {
   if (incursions.status === 'fulfilled') M.live.incursions = incursions.value;
   if (fw.status === 'fulfilled') M.live.fw = new Map(fw.value.map((x) => [x.solar_system_id, x]));
   const failed = results.filter((r) => r.status === 'rejected').length;
-  if (failed) app.showToast(failed + ' 项实时数据加载失败，部分着色方式可能没有数据', 'error');
+  if (failed && !quiet) app.showToast(failed + ' 项实时数据加载失败，部分着色方式可能没有数据', 'error');
 
   // 玩家联盟名称保留原名
   const alliances = [...new Set([
@@ -1097,7 +1104,7 @@ const LIVE_POLL = 6000;
 const FLASH_MS = 2600;                  // 每次闪烁 3 个脉冲
 const DANMAKU_SPEED = 110;              // 像素 / 秒
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
-const LIVE = { on: true, cursor: -1, timer: null, disabled: false, busy: false, lanes: [], names: new Map(), types: new Map() };
+const LIVE = { on: true, cursor: -1, timer: null, disabled: false, busy: false, lanes: [], names: new Map(), types: new Map(), kills: new Map() };
 M.flashes = [];
 M.battles = [];                         // 疑似会战（battles.js 每分钟更新）
 
@@ -1109,13 +1116,23 @@ function bindLiveKills() {
     app.store.set('eve-map-live', LIVE.on ? '1' : '0');
     syncLiveToggle();
     if (LIVE.on) startLiveKills();
-    else { stopLiveKills(); $('mapDanmaku').innerHTML = ''; M.flashes = []; invalidate(); }
+    else { stopLiveKills(); $('mapDanmaku').innerHTML = ''; hideKillTip(); M.flashes = []; invalidate(); }
     app.showToast(LIVE.on ? '已开启实时击杀推送' : '已关闭实时击杀推送', 'success', 1500);
   });
   document.addEventListener('visibilitychange', () => { if (!document.hidden && M.running) pollLive(); });
+  // 悬停弹幕：先显示一部分详情（受害者、最后一击、攻击人数、地点时间），点击再打开完整击杀记录
+  $('mapDanmaku').addEventListener('mouseover', (e) => {
+    const item = e.target.closest('[data-live-kill]');
+    if (item) showKillTip(item);
+  });
+  $('mapDanmaku').addEventListener('mouseout', (e) => {
+    const item = e.target.closest('[data-live-kill]');
+    if (item && !item.contains(e.relatedTarget)) hideKillTip();
+  });
   $('mapDanmaku').addEventListener('click', async (e) => {
     const item = e.target.closest('[data-live-kill]');
     if (!item) return;
+    hideKillTip();
     const sys = M.byId.get(Number(item.dataset.system));
     if (sys) selectSystem(sys.i, true);
     try { (await app.loadKillboard()).openServiceKill(Number(item.dataset.liveKill)); } catch (error) { app.showToast(error.message, 'error'); }
@@ -1158,7 +1175,9 @@ async function pollLive() {
     const kills = (data.kills || []).slice(-8);
     if (!kills.length || !LIVE.on) return;
     for (const [id, name] of Object.entries(data.names || {})) if (name) LIVE.names.set(Number(id), name);
-    const missing = [...new Set(kills.map((k) => k.ship_type_id))].filter((t) => !LIVE.types.has(t));
+    for (const k of kills) LIVE.kills.set(k.id, k);
+    while (LIVE.kills.size > 120) LIVE.kills.delete(LIVE.kills.keys().next().value);
+    const missing = [...new Set(kills.flatMap((k) => [k.ship_type_id, k.final?.ship_type_id]))].filter((t) => t && !LIVE.types.has(t));
     if (missing.length) {
       const named = await app.resolveTypeNames(missing).catch(() => new Map());
       for (const [k, v] of named) LIVE.types.set(k, v);
@@ -1249,6 +1268,69 @@ function drawBattles() {
   }
 }
 
+// ---------- 弹幕悬停详情 ----------
+function killTipEl() {
+  let tip = $('mapKillTip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'mapKillTip';
+    tip.className = 'kill-tip';
+    tip.hidden = true;
+    $('mapDanmaku').parentElement.appendChild(tip);
+  }
+  return tip;
+}
+
+function liveName(id) {
+  return (id && (LIVE.names.get(id) || app.officialName(id))) || '';
+}
+
+function killAgo(iso) {
+  const sec = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (sec < 60) return '刚刚';
+  if (sec < 3600) return Math.floor(sec / 60) + ' 分钟前';
+  return Math.floor(sec / 3600) + ' 小时前';
+}
+
+function showKillTip(item) {
+  const k = LIVE.kills.get(Number(item.dataset.liveKill));
+  if (!k) return;
+  const tip = killTipEl();
+  const s = M.byId.get(k.system_id);
+  const v = k.victim || {};
+  const f = k.final || {};
+  const img = (path, size = 32) => `https://images.evetech.net/${path}?size=${size}`;
+  const party = (p, fallback) => {
+    const who = liveName(p.character_id) || liveName(p.corporation_id) || fallback;
+    const org = [p.character_id ? liveName(p.corporation_id) : '', liveName(p.alliance_id)].filter(Boolean).join(' · ');
+    const pic = p.character_id ? img(`characters/${p.character_id}/portrait`) : p.corporation_id ? img(`corporations/${p.corporation_id}/logo`) : '';
+    return `<div class="kill-tip-party">${pic ? `<img src="${pic}" alt="" width="28" height="28">` : '<span class="kill-tip-blank"></span>'}<div><b>${app.esc(who)}</b>${org ? `<small>${app.esc(org)}</small>` : ''}</div></div>`;
+  };
+  const tags = [k.solo ? '单刷' : '', k.npc ? 'NPC 击杀' : ''].filter(Boolean).map((t) => `<i>${t}</i>`).join('');
+  const where = s ? `${app.esc(s.name)} <span style="color:${secColor(s.sec)}">${secDisplay(s.sec).toFixed(1)}</span> · ${app.esc(regionName(s.region))}` : '虫洞空间';
+  tip.innerHTML = `
+    <div class="kill-tip-head"><img src="${img(`types/${k.ship_type_id}/render`, 64)}" alt="" width="44" height="44">
+      <div><b>${app.esc(LIVE.types.get(k.ship_type_id) || '舰船')}</b><small>${where}</small></div>
+      <strong>${app.formatISK(k.value)}<span>ISK</span></strong></div>
+    <div class="kill-tip-label">受害者</div>${party(v, '未知')}
+    <div class="kill-tip-label">最后一击${f.ship_type_id && LIVE.types.get(f.ship_type_id) ? ` · ${app.esc(LIVE.types.get(f.ship_type_id))}` : ''}</div>${party(f, k.npc ? 'NPC' : '未知')}
+    <div class="kill-tip-foot"><span>${app.formatNumber(k.attackers || 0)} 名攻击者</span>${tags}<span class="kill-tip-time">${killAgo(k.time)}</span></div>
+    <div class="kill-tip-hint">点击查看完整击杀记录</div>`;
+  tip.hidden = false;
+  // 弹幕悬停时暂停滚动，提示框贴在弹幕下方，左右不超出星图
+  const host = tip.parentElement.getBoundingClientRect();
+  const r = item.getBoundingClientRect();
+  const w = tip.offsetWidth;
+  const left = Math.max(8, Math.min(r.left - host.left, host.width - w - 8));
+  tip.style.left = left + 'px';
+  tip.style.top = (r.bottom - host.top + 6) + 'px';
+}
+
+function hideKillTip() {
+  const tip = $('mapKillTip');
+  if (tip) tip.hidden = true;
+}
+
 // 弹幕：从右向左滚过星图上方；多条轨道，选最早空出的一条
 function danmaku(k, s) {
   const box = $('mapDanmaku');
@@ -1287,7 +1369,7 @@ function danmaku(k, s) {
   el.style.animationDuration = duration + 's';
   // 这条轨道在弹幕尾部离开右边缘（再留 40px 间距）后才可复用
   LIVE.lanes[lane] = Math.max(now, LIVE.lanes[lane]) + ((width + 40) / DANMAKU_SPEED) * 1000;
-  el.addEventListener('animationend', () => el.remove());
+  el.addEventListener('animationend', () => { if (el.matches(':hover')) hideKillTip(); el.remove(); });
 }
 
 // ---------- 旗舰跳跃规划 ----------
@@ -1495,9 +1577,12 @@ function renderJumpPlan() {
   const row = (i, extra, cls = '') => {
     const s = sys(i);
     const { npc, structures } = dockingAt(i, ship);
-    const tags = (npc ? `<em class="jump-station" title="${npc} 个 NPC 空间站">站</em>` : '') +
-      (structures.length ? `<em class="jump-station is-structure" title="${app.esc(structures.slice(0, 8).map((st) => `${JP.STRUCTURES[st.type][0]} · ${st.name}`).join('\n'))}">建筑 ${structures.length}</em>` : '');
-    return `<li class="${cls}"><button data-sys="${i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}<span>${secDisplay(s.sec).toFixed(1)}</span>${tags}</button>${extra || ''}</li>`;
+    const tags = npc ? `<em class="jump-station" title="${npc} 个 NPC 空间站">站</em>` : '';
+    // 可停靠的玩家建筑直接列出游戏内名称（最多 3 座，其余放在提示里）
+    const dockName = (st) => `<span class="jump-dock" title="${app.esc(JP.STRUCTURES[st.type][0] + ' · ' + st.name)}"><b>${app.esc(JP.STRUCTURES[st.type][0])}</b>${app.esc(st.name)}</span>`;
+    const docks = structures.length ? `<div class="jump-docks">${structures.slice(0, 3).map(dockName).join('')}${structures.length > 3
+      ? `<span class="jump-dock-more" title="${app.esc(structures.slice(3, 20).map((st) => `${JP.STRUCTURES[st.type][0]} · ${st.name}`).join('\n'))}">另有 ${structures.length - 3} 座可停靠建筑</span>` : ''}</div>` : '';
+    return `<li class="${cls}"><button data-sys="${i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}<span>${secDisplay(s.sec).toFixed(1)}</span>${tags}</button>${docks}${extra || ''}</li>`;
   };
   const legs = sim.rows.map((r) => row(r.to,
     `<div class="jump-leg"><span>${r.ly.toFixed(2)} 光年</span><span>${app.formatNumber(r.fuel)} 燃料</span><span title="跳后重新激活冷却">冷却 ${JP.formatMinutes(r.cooldown)}</span><span title="跳后疲劳">疲劳 ${JP.formatMinutes(r.fatigue)}</span></div>`)).join('');
@@ -1756,7 +1841,7 @@ export async function showStarMap() {
   if (!M.ready) {
     M.ready = (async () => {
       $('mapLoading').hidden = false;
-      await Promise.all([loadStatic(), app.loadNpcNames()]);
+      await loadStaticOnce();
       buildScene();
       bindCanvas();
       resize();
@@ -1819,6 +1904,19 @@ function focusFromHash() {
   const m = /^#map=(\d+)/.exec(location.hash);
   const s = m && M.byId.get(Number(m[1]));
   if (s) selectSystem(s.i, true);
+}
+
+// 静态星图数据（约 640 KB）与 NPC 名称只加载一次
+let staticReady = null;
+function loadStaticOnce() {
+  if (!staticReady) staticReady = Promise.all([loadStatic(), app.loadNpcNames()]).catch((error) => { staticReady = null; throw error; });
+  return staticReady;
+}
+
+// 空闲时预取：星图数据与 ESI 实时数据（主权、击杀、跳跃等），首次打开星图只需建立场景
+export async function preloadStarMap() {
+  await loadStaticOnce();
+  await loadLive(false, true);
 }
 
 // 离开星图页时停止渲染循环，节省 GPU

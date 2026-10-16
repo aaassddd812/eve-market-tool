@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v16r2">
+  <link rel="stylesheet" href="css/modern-style.css?v=v16r8">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -342,7 +342,7 @@
               <div class="map-panel-head">
                 <button class="map-panel-toggle" aria-expanded="true"><svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg><h4>颜色说明</h4><span class="map-panel-summary" id="legendSummary"></span></button>
               </div>
-              <div class="map-panel-body"><div class="map-legend" id="mapLegend"><p class="legend-empty">载入中…</p></div></div>
+              <div class="map-panel-body"><div class="map-legend" id="mapLegend"><div class="sk-legend" aria-busy="true" aria-label="载入中"><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:52%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:40%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:58%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:46%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:62%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:38%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:54%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:44%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:50%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div><div class="sk-row"><span class="sk" style="width:12px;height:12px;border-radius:50%"></span><span class="sk sk-line" style="width:42%"></span><span class="sk sk-line" style="width:28px;margin-left:auto"></span></div></div></div></div>
             </section>
             <section class="map-panel collapsible" data-panel="route">
               <div class="map-panel-head route-head">
@@ -398,7 +398,7 @@
           </button>
           <canvas id="mapCanvas"></canvas>
           <canvas id="mapLabels" aria-hidden="true"></canvas>
-          <div class="map-loading" id="mapLoading"><span class="spinner"></span>载入星图…</div>
+          <div class="map-loading" id="mapLoading"><span class="sk-map"></span><span class="spinner"></span>载入星图…</div>
           <div class="map-tooltip" id="mapTooltip" hidden></div>
           <div class="kill-danmaku" id="mapDanmaku" aria-live="off"></div>
           <div class="map-zoom" role="group" aria-label="缩放">
@@ -596,7 +596,7 @@
           <ol class="steps">
             <li>
               <div class="step-title">生成授权链接并登录</div>
-              <p class="step-desc">授权后角色数据只缓存在本机浏览器，不上传至服务器。</p>
+              <p class="step-desc">令牌由浏览器直接向 CCP 获取，只保存在本机，本站服务器接触不到；可按 F12 在「网络」面板核对。随时可在 <a href="https://community.eveonline.com/support/third-party-applications/" target="_blank" rel="noopener">CCP 第三方应用管理</a> 撤销授权。</p>
               <button class="btn btn-primary" id="generateAuthBtn">生成授权链接</button>
               <div id="authLinkBox" class="auth-link-box" hidden>
                 <div class="input-group">
@@ -622,6 +622,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v16r4" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v16r8" type="module" data-cfasync="false"></script>
 </body>
 </html>
