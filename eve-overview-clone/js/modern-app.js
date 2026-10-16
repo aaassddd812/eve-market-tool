@@ -343,7 +343,7 @@ let starMapModule = null;
 async function openStarMap() {
   try {
     if (!starMapModule) {
-      starMapModule = await import('./star-map.js?v=v16r3');
+      starMapModule = await import('./star-map.js?v=v16r4');
       starMapModule.initStarMap({
         fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
         showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,

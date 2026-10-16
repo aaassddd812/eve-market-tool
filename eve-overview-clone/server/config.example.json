@@ -20,6 +20,6 @@
     "esi-industry.read_character_mining.v1",
     "esi-characters.read_notifications.v1",
     "esi-universe.read_structures.v1",
-    "esi-universe.search_structures.v1"
+    "esi-search.search_structures.v1"
   ]
 }

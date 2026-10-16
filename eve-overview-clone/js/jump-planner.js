@@ -25,7 +25,7 @@ const SHIP_CACHE_KEY = 'eve-jump-ships-v1';
 const STRUCTURE_CACHE_KEY = 'eve-public-structures-v1';
 const ESI_BASE = 'https://esi.evetech.net/latest';
 export const STRUCTURE_SCOPE = 'esi-universe.read_structures.v1';
-export const STRUCTURE_SEARCH_SCOPE = 'esi-universe.search_structures.v1';
+export const STRUCTURE_SEARCH_SCOPE = 'esi-search.search_structures.v1';
 
 // 角色建筑搜索用的前缀（含字母、数字与常见中文开头），用于枚举“有停靠权限”的建筑
 const SEARCH_TERMS = [
@@ -110,7 +110,7 @@ async function fetchStructureInfo(id, token) {
 
 /**
  * 发现“当前角色有停靠权限”的建筑（含军团/联盟内部建筑，公开列表里没有）：
- * 1. 角色建筑搜索（esi-universe.search_structures.v1）按前缀枚举，覆盖最全；
+ * 1. 角色建筑搜索（esi-search.search_structures.v1）按前缀枚举，覆盖最全；
  * 2. 无搜索权限时从市场订单、合同起讫位置和当前停靠位置兜底（这些 scope 都是绑定即有的）。
  * 搜索失败、没有权限或令牌不支持都不会中断，只是结果少一些。
  */

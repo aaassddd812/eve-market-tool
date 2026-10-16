@@ -7,7 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import * as JP from './jump-planner.js?v=v12r4';
+import * as JP from './jump-planner.js?v=v12r5';
 
 let app;               // 主程序提供的工具函数
 let canvas, labels, lg; // WebGL 画布、标签画布及其 2D 上下文
