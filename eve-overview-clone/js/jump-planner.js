@@ -25,6 +25,19 @@ const SHIP_CACHE_KEY = 'eve-jump-ships-v1';
 const STRUCTURE_CACHE_KEY = 'eve-public-structures-v1';
 const ESI_BASE = 'https://esi.evetech.net/latest';
 export const STRUCTURE_SCOPE = 'esi-universe.read_structures.v1';
+export const STRUCTURE_SEARCH_SCOPE = 'esi-universe.search_structures.v1';
+
+// 角色建筑搜索用的前缀（含字母、数字与常见中文开头），用于枚举“有停靠权限”的建筑
+const SEARCH_TERMS = [
+  'al', 'am', 'an', 'ar', 'ba', 'be', 'bi', 'bo', 'br', 'ca', 'ce', 'ch', 'ci', 'co', 'cr', 'cu', 'da', 'de', 'di', 'do', 'dr', 'du',
+  'ea', 'el', 'em', 'en', 'er', 'es', 'ev', 'fa', 'fe', 'fi', 'fl', 'fo', 'fr', 'ga', 'ge', 'gh', 'gi', 'go', 'gr', 'gu', 'ha', 'he',
+  'hi', 'ho', 'hu', 'hy', 'in', 'is', 'ja', 'jo', 'ju', 'ka', 'ke', 'ki', 'kn', 'ko', 'la', 'le', 'li', 'lo', 'lu', 'ma', 'me', 'mi',
+  'mo', 'mu', 'my', 'na', 'ne', 'ni', 'no', 'nu', 'ob', 'od', 'ok', 'on', 'op', 'or', 'os', 'ou', 'pa', 'pe', 'ph', 'pi', 'pl', 'po',
+  'pr', 'pu', 'qu', 'ra', 're', 'ri', 'ro', 'ru', 'sa', 'se', 'sh', 'si', 'sk', 'so', 'sp', 'st', 'su', 'sy', 'ta', 'te', 'th', 'ti',
+  'to', 'tr', 'tu', 'ty', 'ul', 'um', 'un', 'ur', 'us', 'ut', 'va', 've', 'vi', 'vo', 'vr', 'wa', 'we', 'wh', 'wi', 'wo', 'wu', 'xa',
+  'xe', 'ya', 'yo', 'ze', 'zo', 'zu', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
+  '星', '战', '天', '龙', '风', '云', '海', '山', '新', '中', '华', '金', '银', '铁', '血', '暗', '夜', '永', '北', '上', '广', '深', '军', '联', '帝', '神'
+];
 
 // ---------- 停靠规则 ----------
 // 舰船停靠等级：战略货舰虽需旗舰操作技能，但不算旗舰，可停靠中型建筑
@@ -60,6 +73,12 @@ export function hasStructureScope(token) {
   return list.includes(STRUCTURE_SCOPE);
 }
 
+export function hasStructureSearchScope(token) {
+  if (!token?.scopes) return false;                // 没有搜索权限时用订单/合同位置兜底
+  const list = Array.isArray(token.scopes) ? token.scopes : String(token.scopes).split(/\s+/);
+  return list.includes(STRUCTURE_SEARCH_SCOPE);
+}
+
 export function cachedStructures() {
   try {
     const c = JSON.parse(localStorage.getItem(STRUCTURE_CACHE_KEY) || 'null');
@@ -68,51 +87,155 @@ export function cachedStructures() {
   return null;
 }
 
+// 服务器共享缓存只存公开建筑；军团/联盟内部建筑属于私有信息，只留在各自浏览器
+let structuresPosted = false;
+function shareToServer(result) {
+  if (structuresPosted) return;
+  structuresPosted = true;
+  try {
+    fetch('/api/esi/structures', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ at: result.at, list: result.list, total: result.total, denied: result.denied || 0 })
+    }).catch(() => {});
+  } catch { /* 忽略 */ }
+}
+
+async function fetchStructureInfo(id, token) {
+  const r = await fetch(`${ESI_BASE}/universe/structures/${id}/?datasource=tranquility`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
+  if (!r?.ok) return null;                          // 403 = 没有停靠权限，跳过
+  const info = await r.json().catch(() => null);
+  if (!info || !STRUCTURES[info.type_id]) return null;
+  return { id, name: info.name, system: info.solar_system_id, type: info.type_id };
+}
+
 /**
- * 读取 ESI 公开玩家建筑（/universe/structures/ 约千个）及其所在星系、类型。
+ * 发现“当前角色有停靠权限”的建筑（含军团/联盟内部建筑，公开列表里没有）：
+ * 1. 角色建筑搜索（esi-universe.search_structures.v1）按前缀枚举，覆盖最全；
+ * 2. 无搜索权限时从市场订单、合同起讫位置和当前停靠位置兜底（这些 scope 都是绑定即有的）。
+ * 搜索失败、没有权限或令牌不支持都不会中断，只是结果少一些。
+ */
+async function discoverPrivateStructures(getToken, knownIds) {
+  const token = await getToken();
+  const candidates = new Set();
+  if (hasStructureSearchScope(token)) {
+    let idx = 0;
+    async function searchWorker() {
+      while (idx < SEARCH_TERMS.length) {
+        const term = SEARCH_TERMS[idx++];
+        const r = await fetch(`${ESI_BASE}/characters/${token.character_id}/search/?categories=structure&search=${encodeURIComponent(term)}&datasource=tranquility`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
+        if (r?.ok) {
+          const data = await r.json().catch(() => ({}));
+          for (const id of data.structure || []) if (!knownIds.has(id)) candidates.add(id);
+        }
+        await new Promise((res) => setTimeout(res, 60));
+      }
+    }
+    await Promise.all(Array.from({ length: 4 }, searchWorker));
+  }
+  try {
+    const auth = { headers: { Authorization: 'Bearer ' + token.access_token } };
+    const cid = token.character_id;
+    const [orders, contracts, location] = await Promise.all([
+      fetch(`${ESI_BASE}/characters/${cid}/orders/?datasource=tranquility`, auth).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      fetch(`${ESI_BASE}/characters/${cid}/contracts/?datasource=tranquility`, auth).then((r) => (r.ok ? r.json() : [])).catch(() => []),
+      fetch(`${ESI_BASE}/characters/${cid}/location/?datasource=tranquility`, auth).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
+    ]);
+    for (const o of orders) if (o.location_id >= 1e12 && !knownIds.has(o.location_id)) candidates.add(o.location_id);
+    for (const c of contracts) {
+      for (const loc of [c.start_location_id, c.end_location_id]) {
+        if (loc >= 1e12 && !knownIds.has(loc)) candidates.add(loc);
+      }
+    }
+    if (location.structure_id && !knownIds.has(location.structure_id)) candidates.add(location.structure_id);
+  } catch { /* 兜底失败不影响主流程 */ }
+  const extra = [];
+  const ids = [...candidates];
+  let cursor = 0;
+  async function detailWorker() {
+    while (cursor < ids.length) {
+      const id = ids[cursor++];
+      const st = await fetchStructureInfo(id, token);
+      if (st) extra.push(st);
+    }
+  }
+  await Promise.all(Array.from({ length: 4 }, detailWorker));
+  return extra;
+}
+
+/**
+ * 读取玩家建筑：公开列表（/universe/structures/ 约千个）+ 当前角色可停靠的私有建筑。
+ * 读取顺序：本地缓存 → 服务器共享缓存（其他浏览器回传的公开部分）→ 直接读 ESI。
  * 详情接口需要 esi-universe.read_structures.v1；无权查看的建筑（403）视为无法停靠。
- * 遵守 ESI 错误限额：剩余额度过低时暂停到重置，避免被临时封禁。结果在本地缓存 24 小时。
+ * 遵守 ESI 错误限额：剩余额度过低时暂停到重置，避免被临时封禁。结果在本地缓存 24 小时，
+ * 公开部分回传服务器，之后的浏览器秒读。
  */
 export async function loadPublicStructures(getToken, onProgress = () => {}) {
   const hit = cachedStructures();
-  if (hit) return hit;
-  const res = await fetch(ESI_BASE + '/universe/structures/?datasource=tranquility');
-  if (!res.ok) throw new Error('公开建筑列表读取失败 ESI ' + res.status);
-  const ids = await res.json();
-  const list = [];
-  let done = 0, denied = 0, pauseUntil = 0, unauthorized = 0;
-  const queue = [...ids];
-  async function worker() {
-    while (queue.length) {
-      const id = queue.shift();
-      const wait = pauseUntil - Date.now();
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      const token = await getToken();
-      const r = await fetch(`${ESI_BASE}/universe/structures/${id}/?datasource=tranquility`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
-      const remain = Number(r?.headers.get('x-esi-error-limit-remain'));
-      if (Number.isFinite(remain) && r.headers.get('x-esi-error-limit-remain') !== null && remain < 20) {
-        pauseUntil = Date.now() + (Number(r.headers.get('x-esi-error-limit-reset')) || 60) * 1000;
-      }
-      if (r?.ok) {
-        const info = await r.json();
-        if (STRUCTURES[info.type_id]) list.push({ id, name: info.name, system: info.solar_system_id, type: info.type_id });
-      } else if (r?.status === 401 || r?.status === 403) {
-        // 403 可能是这个建筑不对你开放，也可能是令牌缺少授权范围；后者立即停止，不再消耗错误额度
-        const body = await r.json().catch(() => ({}));
-        if (r.status === 401 || /scope/i.test(body.error || '')) unauthorized += 1;
-        else denied += 1;
-        if (unauthorized >= 3) { queue.length = 0; break; }
-      } else {
-        denied += 1;
-      }
-      done += 1;
-      onProgress(done, ids.length);
+  if (hit) {
+    if (!Array.isArray(hit.private)) {
+      // 旧格式缓存只有公开部分：不重读公开列表，只补发现有停靠权限的私有建筑
+      try {
+        hit.private = await discoverPrivateStructures(getToken, new Set(hit.list.map((s) => s.id)));
+        try { localStorage.setItem(STRUCTURE_CACHE_KEY, JSON.stringify(hit)); } catch { /* 忽略 */ }
+      } catch { hit.private = []; }
     }
+    shareToServer(hit);
+    return hit;
   }
-  await Promise.all(Array.from({ length: 6 }, worker));
-  if (unauthorized >= 3 && !list.length) throw new Error('当前授权没有读取玩家建筑的权限，请重新绑定 ESI');
-  const result = { at: Date.now(), list, total: ids.length, denied };
+  let publicList = null, total = 0, denied = 0, at = Date.now();
+  try {
+    const r = await fetch('/api/esi/structures');
+    if (r.ok) {
+      const c = await r.json();
+      if (c && Date.now() - c.at < 86400e3 && Array.isArray(c.list) && c.list.length) {
+        publicList = c.list; total = c.total || c.list.length; denied = c.denied || 0; at = c.at;
+      }
+    }
+  } catch { /* 服务器不可用时照旧直接读 ESI */ }
+  if (!publicList) {
+    const res = await fetch(ESI_BASE + '/universe/structures/?datasource=tranquility');
+    if (!res.ok) throw new Error('公开建筑列表读取失败 ESI ' + res.status);
+    const ids = await res.json();
+    const list = [];
+    let done = 0, pauseUntil = 0, unauthorized = 0;
+    const queue = [...ids];
+    async function worker() {
+      while (queue.length) {
+        const id = queue.shift();
+        const wait = pauseUntil - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        const token = await getToken();
+        const r = await fetch(`${ESI_BASE}/universe/structures/${id}/?datasource=tranquility`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
+        const remain = Number(r?.headers.get('x-esi-error-limit-remain'));
+        if (Number.isFinite(remain) && r.headers.get('x-esi-error-limit-remain') !== null && remain < 20) {
+          pauseUntil = Date.now() + (Number(r.headers.get('x-esi-error-limit-reset')) || 60) * 1000;
+        }
+        if (r?.ok) {
+          const info = await r.json();
+          if (STRUCTURES[info.type_id]) list.push({ id, name: info.name, system: info.solar_system_id, type: info.type_id });
+        } else if (r?.status === 401 || r?.status === 403) {
+          // 403 可能是这个建筑不对你开放，也可能是令牌缺少授权范围；后者立即停止，不再消耗错误额度
+          const body = await r.json().catch(() => ({}));
+          if (r.status === 401 || /scope/i.test(body.error || '')) unauthorized += 1;
+          else denied += 1;
+          if (unauthorized >= 3) { queue.length = 0; break; }
+        } else {
+          denied += 1;
+        }
+        done += 1;
+        onProgress(done, ids.length);
+      }
+    }
+    await Promise.all(Array.from({ length: 6 }, worker));
+    if (unauthorized >= 3 && !list.length) throw new Error('当前授权没有读取玩家建筑的权限，请重新绑定 ESI');
+    publicList = list; total = ids.length;
+  }
+  const known = new Set(publicList.map((s) => s.id));
+  let extra = [];
+  try { extra = await discoverPrivateStructures(getToken, known); } catch { /* 私有建筑发现失败不影响公开列表 */ }
+  const result = { at, list: publicList, private: extra, total, denied };
   try { localStorage.setItem(STRUCTURE_CACHE_KEY, JSON.stringify(result)); } catch { /* 忽略 */ }
+  shareToServer(result);
   return result;
 }
 

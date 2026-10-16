@@ -14,6 +14,12 @@
     "esi-location.read_ship_type.v1",
     "esi-location.read_online.v1",
     "esi-clones.read_clones.v1",
-    "esi-universe.read_structures.v1"
+    "esi-clones.read_implants.v1",
+    "esi-characters.read_standings.v1",
+    "esi-industry.read_character_jobs.v1",
+    "esi-industry.read_character_mining.v1",
+    "esi-characters.read_notifications.v1",
+    "esi-universe.read_structures.v1",
+    "esi-universe.search_structures.v1"
   ]
 }

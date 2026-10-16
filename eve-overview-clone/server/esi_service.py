@@ -5,13 +5,17 @@
   GET  /api/esi/auth-url   生成授权链接（服务端生成 state + PKCE verifier 并暂存）
   POST /api/esi/bind       {code, state} 换取令牌并返回角色身份
   POST /api/esi/refresh    {refresh_token} 刷新令牌
+  GET  /api/esi/structures 读取公开玩家建筑共享缓存（浏览器回传，24h 过期）
+  POST /api/esi/structures 回传公开玩家建筑缓存，供其他浏览器直接读取
 """
 
 import base64
 import hashlib
 import json
+import os
 import secrets
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -29,6 +33,13 @@ STATE_TTL = 15 * 60  # 授权链接 15 分钟内有效
 
 # state -> {verifier, created_at}
 pending = {}
+
+STRUCTURES_CACHE_PATH = os.path.join(os.path.dirname(os.path.abspath(CONFIG_PATH)), "structures-cache.json")
+STRUCTURES_BODY_LIMIT = 1_000_000      # 回传体积上限（实际约 100KB）
+STRUCTURES_LIST_LIMIT = 5000          # 建筑条数上限
+STRUCTURES_POST_INTERVAL = 30         # 同一 IP 两次回传的最小间隔（秒）
+_structures_lock = threading.Lock()
+_structures_last_post: dict[str, float] = {}
 
 
 def b64url(raw: bytes) -> str:
@@ -88,6 +99,36 @@ def sweep_expired():
         pending.pop(key, None)
 
 
+def load_structures_cache() -> dict:
+    try:
+        with open(STRUCTURES_CACHE_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict) and isinstance(data.get("list"), list):
+            return data
+    except Exception:  # noqa: BLE001
+        pass
+    return {"at": 0, "list": []}
+
+
+def valid_structures_payload(data) -> bool:
+    if not isinstance(data, dict):
+        return False
+    items = data.get("list")
+    if not isinstance(data.get("at"), (int, float)) or not isinstance(items, list):
+        return False
+    if not items or len(items) > STRUCTURES_LIST_LIMIT:
+        return False
+    for item in items:
+        if not isinstance(item, dict):
+            return False
+        name = item.get("name")
+        if not isinstance(item.get("id"), int) or not isinstance(item.get("system"), int) or not isinstance(item.get("type"), int):
+            return False
+        if not isinstance(name, str) or not name or len(name) > 200:
+            return False
+    return True
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "eve-esi-proxy/1.0"
 
@@ -101,6 +142,10 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path.split("?")[0] == "/api/esi/structures":
+            with _structures_lock:
+                payload = load_structures_cache()
+            return self._json(200, payload)
         if self.path.split("?")[0] != "/api/esi/auth-url":
             return self._json(404, {"error": "not found"})
         sweep_expired()
@@ -121,10 +166,38 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
+        if length > 2_000_000:
+            return self._json(413, {"error": "请求体过大"})
         try:
             data = json.loads(self.rfile.read(length) or b"{}")
         except ValueError:
             return self._json(400, {"error": "请求格式错误"})
+
+        if self.path == "/api/esi/structures":
+            if length > STRUCTURES_BODY_LIMIT:
+                return self._json(413, {"error": "缓存体积超出上限"})
+            ip = self.client_address[0]
+            with _structures_lock:
+                now = time.time()
+                if now - _structures_last_post.get(ip, 0) < STRUCTURES_POST_INTERVAL:
+                    return self._json(200, {"stored": False})
+                if not valid_structures_payload(data):
+                    return self._json(400, {"error": "缓存格式不符合要求"})
+                current = load_structures_cache()
+                if data["at"] > current.get("at", 0):
+                    payload = {
+                        "at": data["at"],
+                        "list": data["list"],
+                        "total": data.get("total"),
+                        "denied": data.get("denied", 0),
+                    }
+                    tmp = STRUCTURES_CACHE_PATH + ".tmp"
+                    with open(tmp, "w", encoding="utf-8") as fh:
+                        json.dump(payload, fh, ensure_ascii=False)
+                    os.replace(tmp, STRUCTURES_CACHE_PATH)
+                    _structures_last_post[ip] = now
+                    return self._json(200, {"stored": True})
+                return self._json(200, {"stored": False})
 
         if self.path == "/api/esi/bind":
             code = (data.get("code") or "").strip()

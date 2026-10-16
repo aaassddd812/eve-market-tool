@@ -7,7 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import * as JP from './jump-planner.js?v=v12r3';
+import * as JP from './jump-planner.js?v=v12r4';
 
 let app;               // 主程序提供的工具函数
 let canvas, labels, lg; // WebGL 画布、标签画布及其 2D 上下文
@@ -1391,13 +1391,13 @@ function syncJumpOptions() {
   note.hidden = dock === 'any';
   note.innerHTML = dock === 'any' ? '' : `${app.esc(ship.name)} 可停靠：${can.map(app.esc).join('、')}` +
     (dock === 'npc' && !JP.canDockNpc(ship) ? '<br><span class="warn">超级航母和泰坦不能停靠 NPC 空间站，请改选「含玩家建筑」</span>' : '') +
-    (dock === 'all' && J.structures ? `<br>已读取公开玩家建筑 ${app.formatNumber(J.structures.list.length)} 个（只含 ESI 公开列表，军团 / 联盟内部建筑不在其中）· <button class="link-btn" data-structures-refresh>重新读取</button>` : '');
+    (dock === 'all' && J.structures ? `<br>已读取玩家建筑 ${app.formatNumber(J.structures.list.length + (J.structures.private?.length || 0))} 个（其中军团 / 联盟内部 ${app.formatNumber(J.structures.private?.length || 0)} 个，仅限你有停靠权限的）· <button class="link-btn" data-structures-refresh>重新读取</button>` : '');
 }
 
 // 说明文字只列基础型号（派系铁壁与铁壁相同）
 const DOCK_NOTE_TYPES = [35832, 35825, 35835, 35836, 35833, 35826, 35827, 35834];
 
-// 读取公开玩家建筑（绑定 ESI 后可用，首次约需半分钟，之后缓存 24 小时）
+// 读取玩家建筑（绑定 ESI 后可用；公开部分读一次后缓存 24 小时，另含你有停靠权限的军团/联盟内部建筑）
 async function ensureStructures(force = false) {
   if (J.structures && !force) return J.structures;
   if (force) { try { localStorage.removeItem('eve-public-structures-v1'); } catch { /* 忽略 */ } }
@@ -1405,10 +1405,10 @@ async function ensureStructures(force = false) {
   if (JP.hasStructureScope(token) === false) throw new Error('当前 ESI 授权不包含读取玩家建筑（esi-universe.read_structures.v1），请重新绑定 ESI');
   const box = $('routeResult');
   J.structures = await JP.loadPublicStructures(app.getEsiToken, (done, total) => {
-    if (done % 20 === 0 || done === total) box.innerHTML = `<p class="legend-empty">正在读取公开玩家建筑 ${done} / ${total}（首次读取，之后缓存 24 小时）…</p>`;
+    if (done % 20 === 0 || done === total) box.innerHTML = `<p class="legend-empty">正在读取玩家建筑 ${done} / ${total}（首次读取，之后缓存 24 小时）…</p>`;
   });
   J.structBySys = new Map();
-  for (const st of J.structures.list) {
+  for (const st of [...J.structures.list, ...(J.structures.private || [])]) {
     if (!J.structBySys.has(st.system)) J.structBySys.set(st.system, []);
     J.structBySys.get(st.system).push(st);
   }
@@ -1424,7 +1424,7 @@ async function dockStops(ship) {
   if (JP.canDockNpc(ship)) for (const s of M.systems) if (s.stations.length) stops.add(s.i);
   if (dock === 'all') {
     await ensureStructures();
-    for (const st of J.structures.list) {
+    for (const st of [...J.structures.list, ...(J.structures.private || [])]) {
       const s = M.byId.get(st.system);
       if (s && JP.canDockStructure(ship, st.type)) stops.add(s.i);
     }
