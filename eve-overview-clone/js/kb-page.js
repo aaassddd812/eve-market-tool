@@ -2,6 +2,7 @@
 // 数据来自自建的击杀记录服务（server/kb_service.py，/api/kb/），收录新伊甸全部击杀；
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v16r7';
+import { initBr, renderBr } from './kb-br.js?v=v18r8';
 
 let app, kb;
 
@@ -324,6 +325,7 @@ function renderBattles() {
         <div class="kb-battle-actions">
           ${b.top ? `<button class="link-btn" data-kill="${b.top.id}">最贵损失 ${app.esc(typeName(b.top.ship_type_id))} · ${app.formatISK(b.top.value)}</button>` : ''}
           <button class="btn btn-ghost" data-battle-map="${b.system_id}">在星图查看</button>
+          <button class="btn btn-ghost" data-br-battle="${b.system_id}" data-start="${b.start}" data-end="${b.end}">战场统计</button>
           <button class="btn btn-ghost" data-location="system:${b.system_id}">只看这里</button>
         </div>
       </article>`;
@@ -626,7 +628,7 @@ function renderSuggest({ entities, ships, systems, regions }) {
   box.hidden = false;
 }
 
-// ---------- 路由：#kb、#kb/character/ID、#kb/corporation/ID、#kb/alliance/ID ----------
+// ---------- 路由：#kb、#kb/character/ID、#kb/corporation/ID、#kb/alliance/ID、#kb/br… ----------
 function navigate(hash) {
   if (location.hash !== hash) history.pushState(null, '', hash);
   route();
@@ -636,7 +638,8 @@ function route() {
   const m = /^#kb\/(character|corporation|alliance)\/(\d+)/.exec(location.hash);
   $('kbSuggest').hidden = true;
   document.querySelector('#kbView .kb-scroll')?.scrollTo({ top: 0 });
-  if (m) renderEntity(m[1], Number(m[2]));
+  if (location.hash.startsWith('#kb/br')) { S.entity = null; renderBr(location.hash); }
+  else if (m) renderEntity(m[1], Number(m[2]));
   else renderHome();
 }
 
@@ -692,6 +695,10 @@ export async function showKbPage() {
 
 export function initKbPage(context) {
   app = context;
+  initBr({
+    get app() { return app; }, get kb() { return kb; },
+    request, absorbNames, partyName, typeName, loadTypes, avatar, entityLink, IMG
+  });
   app.battles()?.then((m) => {
     if (!m) return;
     battles = m;
@@ -722,6 +729,16 @@ export function initKbPage(context) {
       const [kind, id] = (entity.dataset.entity || entity.dataset.pickEntity).split(':');
       input.value = '';
       navigate(`#kb/${kind}/${id}`);
+      return;
+    }
+    if (e.target.closest('[data-kb-br]')) { navigate('#kb/br'); return; }
+    const brBattle = e.target.closest('[data-br-battle]');
+    if (brBattle) {
+      // 会战卡片：以会战星系与持续时间（前后各留 10 分钟）打开战场统计
+      const { brBattle: sys, start, end } = brBattle.dataset;
+      const t0 = Math.floor(new Date(start).getTime() / 1000 / 60) * 60 - 600;
+      const t1 = Math.min(Math.ceil(new Date(end).getTime() / 1000 / 60) * 60 + 600, Math.ceil(Date.now() / 1000 / 60) * 60);
+      navigate(`#kb/br/${sys}/${t0}-${t1}`);
       return;
     }
     const battleMap = e.target.closest('[data-battle-map]');

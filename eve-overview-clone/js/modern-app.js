@@ -332,10 +332,10 @@ function openKbPage() {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v17r6').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v18r8').then((m) => {
     m.initKbPage({
       esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
-      fetchESI, debounce, showToast, loadKillboard, openMapSystem,
+      fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
       battles: () => battlesPromise,
       getNpcNames: () => state.npcNames,
       // 市场分类「舰船」下的全部舰船（搜索用）
@@ -369,7 +369,7 @@ async function openKbPageImpl() {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v16r7').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v18r1').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap
     });

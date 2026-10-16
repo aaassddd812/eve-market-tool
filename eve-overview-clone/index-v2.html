@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v17r3">
+  <link rel="stylesheet" href="css/modern-style.css?v=v18r8">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -443,6 +443,9 @@
                 <input type="search" id="kbSearch" placeholder="搜索人物 / 军团 / 联盟 / 舰船 / 星系 / 星域" autocomplete="off" spellcheck="false" aria-label="搜索击杀记录">
                 <div class="kb-suggest" id="kbSuggest" hidden></div>
               </div>
+              <button class="btn btn-ghost kb-br-entry" data-kb-br title="按星系与时间段统计双方阵营">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="7"/><rect x="14" y="6" width="3" height="11"/></svg><span>战场统计</span>
+              </button>
               <p class="kb-status" id="kbStatus"></p>
             </div>
             <div id="kbMain"></div>
@@ -697,6 +700,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v17r6" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v18r8" type="module" data-cfasync="false"></script>
 </body>
 </html>

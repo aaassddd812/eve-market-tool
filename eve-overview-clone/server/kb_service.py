@@ -12,6 +12,7 @@
                                               击杀列表（最新在前）；side=kills|losses|all
                                               本地只保留 --days 天；带筛选条件时翻完本地记录后自动改为实时查询 zKillboard（不入库）
   GET /api/kb/live?after=N                    实时收录的新击杀（星图闪烁 / 弹幕），返回新的游标
+  GET /api/kb/br?systems=1,2&start=T&end=T     战场统计：指定星系与时间段（Unix 秒）内的全部玩家击杀及攻击者（前端按联盟分阵营统计）
   GET /api/kb/battles?window=60&min=20        疑似会战：时间窗（分钟）内同一星系被击毁舰船数 ≥ min（不含太空舱与 1000 万 ISK 以下的击杀）
   GET /api/kb/top?days=7&limit=8              指定天数内价值最高的损失
   GET /api/kb/summary?hours=24                指定小时内的总损失（含每小时分布）
@@ -63,6 +64,10 @@ ZKILL_MAX_PAGE = 100        # zKillboard 每个查询最多翻到第 100 页（�
 LIVE_BUFFER = 300           # 实时缓冲保留最近的新击杀条数
 LIVE_MAX_AGE = 3 * 3600     # 发生超过 3 小时的击杀不进入实时推送
 ARCHIVE_CACHE = 30          # 30 天以前的查询结果只放内存，缓存的 zKillboard 页数
+BR_MAX_SYSTEMS = 30           # 战场统计：最多星系数
+BR_MAX_HOURS = 72             # 战场统计：最长时间段
+BR_MAX_KILLS = 5000           # 战场统计：最多击杀数
+BR_CACHE_KEEP = 50            # 战场统计：内存中保留的查询结果数
 BATTLE_CACHE = 5              # 会战结果缓存（秒），前端与实时击杀同为 6 秒轮询
 BATTLE_MIN_VALUE = 10_000_000  # 会战只统计价值 ≥ 1000 万 ISK 的击杀（过滤小船 / 诱饵等刷数）
 
@@ -680,6 +685,54 @@ class Api:
         self.store.cache[("battles", window, min_kills)] = (time.time(), value)
         return value
 
+    # GET /br?systems=1,2,3&start=T&end=T：战场统计原始数据（时间为 Unix 秒）
+    # 返回紧凑数组以减小体积：kills[i] = [id, time, system, ship, value, v_char, v_corp, v_alliance, [[char, corp, alliance, ship], ...]]
+    def br(self, q):
+        systems = sorted({int(x) for x in str(q.get("systems", "")).split(",") if x.strip()})
+        if not systems:
+            raise ValueError("缺少星系")
+        if len(systems) > BR_MAX_SYSTEMS:
+            raise ValueError(f"最多选择 {BR_MAX_SYSTEMS} 个星系")
+        start, end = int(q["start"]), int(q["end"])
+        if end <= start:
+            raise ValueError("结束时间必须晚于开始时间")
+        if end - start > BR_MAX_HOURS * 3600:
+            raise ValueError(f"时间段最长 {BR_MAX_HOURS} 小时")
+        key = ("br", tuple(systems), start, end)
+        hit = self.store.cache.get(key)
+        # 已经结束的时间段结果不会再变，缓存久一点；包含当前时间的只缓存 30 秒
+        ttl = CACHE_TTL if end < time.time() - 3600 else 30
+        if hit and time.time() - hit[0] < ttl:
+            return hit[1]
+        c = self.store.conn()
+        marks = ",".join("?" * len(systems))
+        rows = c.execute(f"""SELECT id, time, system_id, ship_type, value, v_char, v_corp, v_alliance FROM killmails
+                             WHERE system_id IN ({marks}) AND time >= ? AND time < ? AND npc = 0
+                             ORDER BY time LIMIT ?""", (*systems, start, end, BR_MAX_KILLS + 1)).fetchall()
+        truncated = len(rows) > BR_MAX_KILLS
+        rows = rows[:BR_MAX_KILLS]
+        att = collections.defaultdict(list)
+        ids = set()
+        kids = [r[0] for r in rows]
+        for chunk in range(0, len(kids), 900):
+            part = kids[chunk:chunk + 900]
+            for km, char, corp, alliance, ship in c.execute(
+                    f"SELECT km, char, corp, alliance, ship FROM attackers WHERE km IN ({','.join('?' * len(part))})", part):
+                att[km].append([char, corp, alliance, ship])
+                ids.update((char, corp, alliance))
+        kills = []
+        for r in rows:
+            ids.update(r[5:8])
+            kills.append([r[0], r[1], r[2], r[3], round(r[4] or 0, 2), r[5], r[6], r[7], att.get(r[0], [])])
+        value = {"systems": systems, "start": start, "end": end, "kills": kills, "truncated": truncated,
+                 "retention_days": self.store.retention, "names": self.names_for(ids)}
+        self.store.cache[key] = (time.time(), value)
+        # 查询条件由用户决定，只保留最近的若干个结果，避免缓存无限增长
+        br_keys = sorted((k for k in list(self.store.cache) if k[0] == "br"), key=lambda k: self.store.cache[k][0])
+        for k in br_keys[:-BR_CACHE_KEEP]:
+            self.store.cache.pop(k, None)
+        return value
+
     # GET /feed
     def feed(self, q):
         limit = min(int(q.get("limit", 50)), 200)
@@ -986,7 +1039,7 @@ class Api:
 # ---------------------------------------------------------------- HTTP 服务
 def make_handler(api, static_dir):
     routes = {"status": api.status, "live": api.live, "battles": api.battles, "feed": api.feed, "top": api.top, "summary": api.summary,
-              "leaderboard": api.leaderboard, "search": api.search}
+              "leaderboard": api.leaderboard, "search": api.search, "br": api.br}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):

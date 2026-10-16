@@ -54,7 +54,12 @@ async function loadSystems() {
   if (!mapData) {
     mapData = fetch('./map-data.json?v=v7r1').then((r) => r.json()).then((d) => {
       const regions = new Map(d.regions.map(([id, name]) => [id, name]));
-      const systems = new Map(d.systems.map((s) => [s[0], { sec: s[5], region: regions.get(s[6]) || '' }]));
+      const systems = new Map(d.systems.map((s) => [s[0], { sec: s[5], region: regions.get(s[6]) || '', nbr: [] }]));
+      // 星门连接（gates 为 systems 数组下标对），供战场统计选择邻近星系
+      for (const [a, b] of d.gates || []) {
+        const sa = d.systems[a]?.[0], sb = d.systems[b]?.[0];
+        if (sa && sb) { systems.get(sa).nbr.push(sb); systems.get(sb).nbr.push(sa); }
+      }
       const factions = new Map(Object.entries(d.factions).map(([id, f]) => [Number(id), f.name]));
       return { systems, factions };
     }).catch(() => ({ systems: new Map(), factions: new Map() }));
@@ -122,6 +127,19 @@ export async function ensureSystems() {
   const loaded = await loadSystems();
   systemTable = loaded.systems;
   factionTable = loaded.factions;
+}
+
+// 星门跳数 ≤ maxJumps 的邻近星系（不含自身），按跳数排序：[{ id, jumps }]
+export function systemNeighbors(id, maxJumps = 1) {
+  const seen = new Map([[id, 0]]);
+  let frontier = [id];
+  for (let j = 1; j <= maxJumps; j++) {
+    const next = [];
+    for (const s of frontier) for (const n of systemTable.get(s)?.nbr || []) if (!seen.has(n)) { seen.set(n, j); next.push(n); }
+    frontier = next;
+  }
+  seen.delete(id);
+  return [...seen].map(([sid, jumps]) => ({ id: sid, jumps }));
 }
 
 export function systemLabel(id) {
