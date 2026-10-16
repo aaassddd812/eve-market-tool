@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v17r1">
+  <link rel="stylesheet" href="css/modern-style.css?v=v17r2">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -591,6 +591,27 @@
       </div>
     </div>
 
+    <div class="modal" id="fitEsiModal" hidden role="dialog" aria-modal="true" aria-labelledby="fitEsiTitle">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="fitEsiTitle">游戏装配</h3>
+          <button class="modal-close" data-fit-esi-close aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <div class="fit-esi-tools">
+            <input id="fitEsiSearch" class="fit-esi-search" type="search" placeholder="搜索装配名称或舰船" aria-label="搜索游戏装配">
+            <span id="fitEsiCount" class="text-muted"></span>
+            <button class="btn btn-ghost" data-fit-esi-refresh title="重新读取">刷新</button>
+          </div>
+          <div id="fitEsiBody" class="fit-esi-list"></div>
+          <p class="step-desc fit-esi-note">读取 / 保存的是角色的个人装配（游戏装配窗口「个人」页）。游戏装配不包含植入体和模块的离线状态；弹药会放在货舱里。</p>
+        </div>
+      </div>
+    </div>
+
     <div class="modal" id="shortcutModal" hidden role="dialog" aria-modal="true" aria-labelledby="shortcutTitle">
       <div class="modal-backdrop"></div>
       <div class="modal-content shortcut-content">
@@ -676,6 +697,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v17r1" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v17r2" type="module" data-cfasync="false"></script>
 </body>
 </html>

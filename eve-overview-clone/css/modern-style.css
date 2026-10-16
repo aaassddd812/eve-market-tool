@@ -2972,3 +2972,18 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
   .app-header { gap: 4px; }
   .nav-btn { padding: 0 8px; }
 }
+
+/* 游戏装配（ESI）弹窗 */
+.fit-esi-tools { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 0.8125rem; }
+.fit-esi-search { flex: 1; min-width: 0; padding: 7px 10px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-primary); color: var(--text-primary); font-size: 0.8125rem; }
+.fit-esi-search:focus { outline: none; border-color: var(--border-accent); }
+.fit-esi-list { max-height: min(60vh, 520px); overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.fit-esi-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--radius-md); }
+.fit-esi-row:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.08)); }
+.fit-esi-row img { border-radius: 4px; flex-shrink: 0; }
+.fit-esi-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.fit-esi-main b { font-weight: 600; font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fit-esi-main span { font-size: 0.75rem; color: var(--text-muted); }
+.fit-esi-row .btn { padding: 4px 10px; font-size: 0.75rem; }
+.fit-esi-empty { padding: 32px 12px; text-align: center; color: var(--text-muted); font-size: 0.8125rem; }
+.fit-esi-note { margin-top: 10px; font-size: 0.75rem; }

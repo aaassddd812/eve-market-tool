@@ -275,10 +275,10 @@ function switchView(view) {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v1r1').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v1r2').then((m) => {
     m.initFitting({
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap,
-      getCharacterSkills, getCharacterImplants,
+      getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       openDrawer: () => { if (MOBILE_QUERY.matches) openDrawer(); },
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
@@ -1678,8 +1678,14 @@ async function esiAuthFetch(path, options = {}) {
     headers: { Authorization: 'Bearer ' + token.access_token, 'Accept-Language': 'zh', ...(options.headers || {}) },
     body: options.body
   });
-  if (!res.ok) throw new Error('ESI ' + res.status);
-  return res.json();
+  if (!res.ok) {
+    // 保留 ESI 返回的错误说明（如缺少授权范围、装配数量已满）
+    const error = new Error('ESI ' + res.status);
+    error.status = res.status;
+    error.esiError = await res.json().then((d) => d.error || '', () => '');
+    throw error;
+  }
+  return res.status === 204 ? null : res.json();
 }
 
 // ===== 中文映射（官方中文，Accept-Language: zh 由 ESI 返回）=====

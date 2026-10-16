@@ -1,6 +1,7 @@
 // ===== 模拟装配 =====
 // 左侧浏览舰船 / 装备 / 弹药 / 无人机 / 植入体（按市场分组或搜索），中间是舰船槽位，右侧为属性统计。
-// 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接。
+// 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
+// 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 import * as FE from './fit-engine.js?v=v1r1';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v16r7';
 
@@ -45,6 +46,8 @@ export function initFitting(context) {
     if (e.target.closest('.modal-backdrop, [data-fit-modal-close]')) closeModal();
     if (e.target.closest('[data-fit-import-go]')) importText($('fitImportText').value);
   });
+  $('fitEsiModal').addEventListener('click', onEsiModalClick);
+  $('fitEsiModal').addEventListener('input', (e) => { if (e.target.id === 'fitEsiSearch') renderEsiList(); });
 }
 
 function pick(obj, keys) {
@@ -392,7 +395,7 @@ function renderFit() {
     box.innerHTML = `<div class="fit-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2 4 7v10l8 5 8-5V7z"/><path d="M12 22V12M4 7l8 5 8-5"/></svg>
       <h3>从左侧选择一艘舰船开始装配</h3>
-      <p>也可以 <button class="link-btn" data-fit-import>导入 EFT 文本</button>${savedFits().length ? ` 或打开 <select class="plain-select" data-fit-open><option value="">我的装配…</option>${savedFits().map((f) => `<option value="${f.id}">${app.esc(f.name || type(f.ship)?.name || '未命名')}</option>`).join('')}</select>` : ''}</p>
+      <p>也可以 <button class="link-btn" data-fit-import>导入 EFT 文本</button>${app.hasEsiToken() ? '、<button class="link-btn" data-fit-esi-list>读取游戏内装配</button>' : ''}${savedFits().length ? ` 或打开 <select class="plain-select" data-fit-open><option value="">我的装配…</option>${savedFits().map((f) => `<option value="${f.id}">${app.esc(f.name || type(f.ship)?.name || '未命名')}</option>`).join('')}</select>` : ''}</p>
     </div>`;
     if (MOBILE()) app.openDrawer?.();
     return;
@@ -427,6 +430,8 @@ function renderFit() {
           <button class="btn btn-ghost" data-fit-import title="粘贴 EFT 格式文本">导入</button>
           <button class="btn btn-ghost" data-fit-export title="复制为 EFT 格式（可导入游戏或 Pyfa）">导出</button>
           <button class="btn btn-ghost" data-fit-share title="复制分享链接">分享</button>
+          <button class="btn btn-ghost" data-fit-esi-list title="${bound ? '读取已绑定角色在游戏里保存的装配' : '需要先绑定 ESI'}"${bound ? '' : ' disabled'}>游戏装配</button>
+          <button class="btn btn-ghost" data-fit-esi-save title="${bound ? '通过 ESI 保存到游戏装配窗口（个人装配）' : '需要先绑定 ESI'}"${bound ? '' : ' disabled'}>存到游戏</button>
           ${F.fit.id ? '<button class="btn btn-ghost danger" data-fit-delete title="删除已保存的装配">删除</button>' : ''}
         </div>
       </div>
@@ -698,6 +703,8 @@ async function onMainClick(e) {
   if (el('[data-fit-import]')) { openModal(); return; }
   if (el('[data-fit-export]')) { app.copyText(toEft(F.fit), '已复制 EFT 文本，可在游戏装配窗口或 Pyfa 中导入'); return; }
   if (el('[data-fit-share]')) { app.copyText(shareUrl(), '分享链接已复制'); return; }
+  if (el('[data-fit-esi-list]')) { openEsiModal(); return; }
+  if ((x = el('[data-fit-esi-save]'))) { saveToGame(x); return; }
 }
 
 function onMainChange(e) {
@@ -833,6 +840,186 @@ function openModal() {
 
 function closeModal() {
   $('fitModal').hidden = true;
+}
+
+// ---------- 游戏内装配（ESI）----------
+// 槽位标记：新版 ESI 为字符串（HiSlot0…），旧版为数字 flag，两种都识别；保存时写字符串
+const ESI_SLOT = { high: ['HiSlot', 27], mid: ['MedSlot', 19], low: ['LoSlot', 11], rig: ['RigSlot', 92], sub: ['SubSystemSlot', 125] };
+const ESI_SLOT_COUNT = { high: 8, mid: 8, low: 8, rig: 3, sub: 4 };
+const ESI_NUM_FLAG = { 5: 'Cargo', 87: 'DroneBay', 158: 'FighterBay' };
+const ESI_SCOPE_HINT = '当前授权没有装配权限，请在「ESI 绑定」中解绑后重新绑定';
+const esiList = { charId: null, fits: null, loading: false, error: '' };
+
+function parseFlag(flag) {
+  if (typeof flag === 'number') {
+    for (const [slot, [, start]] of Object.entries(ESI_SLOT)) {
+      if (flag >= start && flag < start + ESI_SLOT_COUNT[slot]) return { slot, index: flag - start };
+    }
+    return { bay: ESI_NUM_FLAG[flag] || 'Other' };
+  }
+  const m = /^(HiSlot|MedSlot|LoSlot|RigSlot|SubSystemSlot)(\d+)$/.exec(flag || '');
+  if (m) return { slot: Object.keys(ESI_SLOT).find((k) => ESI_SLOT[k][0] === m[1]), index: Number(m[2]) };
+  return { bay: flag || 'Other' };
+}
+
+function esiErrorText(error) {
+  if (error.status === 401 || error.status === 403) return ESI_SCOPE_HINT;
+  return error.esiError || error.message;
+}
+
+// ESI 装配 → 本工具的装配；弹药在游戏装配里放在货舱，按能否装填分配给装备
+function fromEsiFit(f) {
+  if (!F.data.types.has(f.ship_type_id)) return { error: '不支持的舰船' };
+  const fit = newFit(f.ship_type_id);
+  fit.name = f.name || '';
+  const cargo = [];
+  let skipped = 0;
+  for (const it of f.items || []) {
+    const t = type(it.type_id);
+    if (!t) { skipped++; continue; }
+    const where = parseFlag(it.flag);
+    if (where.slot) {
+      if (t.slot !== where.slot) { skipped++; continue; }
+      fit.slots[where.slot][where.index] = { type: t.id, state: defaultState(t), charge: null };
+    } else if (where.bay === 'DroneBay' && t.category === FE.CAT.drone) {
+      const d = fit.drones.find((x) => x.type === t.id);
+      if (d) d.count += it.quantity || 1; else fit.drones.push({ type: t.id, count: it.quantity || 1, active: 0 });
+    } else if (where.bay === 'Cargo' && t.category === FE.CAT.charge) {
+      cargo.push(t);
+    } else if (where.bay !== 'Cargo') {
+      skipped++;
+    }
+  }
+  for (const s of FE.SLOTS) fit.slots[s] = Array.from(fit.slots[s], (m) => m || null);
+  fit.slots.sub = fit.slots.sub.filter(Boolean);
+  for (const s of FE.SLOTS) {
+    for (const m of fit.slots[s]) {
+      if (!m) continue;
+      const c = cargo.find((ct) => FE.chargeFits(type(m.type), ct));
+      if (c) m.charge = c.id;
+    }
+  }
+  return { fit, skipped };
+}
+
+// 本工具的装配 → ESI 装配（POST 请求体）；每个装备按满弹药量在货舱放一份弹药
+function toEsiFit(fit) {
+  const items = [];
+  const charges = new Map();
+  for (const s of FE.SLOTS) {
+    (s === 'sub' ? fit.slots.sub.filter(Boolean) : fit.slots[s]).forEach((m, i) => {
+      if (!m) return;
+      items.push({ type_id: m.type, flag: ESI_SLOT[s][0] + i, quantity: 1 });
+      if (m.charge) charges.set(m.charge, (charges.get(m.charge) || 0) + FE.chargeCount(type(m.type), type(m.charge)));
+    });
+  }
+  for (const d of fit.drones) items.push({ type_id: d.type, flag: 'DroneBay', quantity: d.count });
+  for (const [id, qty] of charges) items.push({ type_id: id, flag: 'Cargo', quantity: qty });
+  const name = (fit.name.trim() || type(fit.ship).name).slice(0, 50);
+  return { name, description: '由 EVE Market 模拟装配保存', ship_type_id: fit.ship, items };
+}
+
+async function saveToGame(btn) {
+  if (!F.fit) return;
+  const body = toEsiFit(F.fit);
+  if (!body.items.length) { app.showToast('装配是空的', 'error'); return; }
+  btn.disabled = true;
+  try {
+    const token = await app.getEsiToken();
+    await app.esiFetch(`/characters/${token.character_id}/fittings/`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    esiList.fits = null;
+    const note = F.fit.implants.length ? '（游戏装配不保存植入体）' : '';
+    app.showToast(`已保存到 ${token.character_name || '角色'} 的游戏装配：${body.name}${note}`, 'success', 4000);
+  } catch (error) {
+    app.showToast('保存到游戏失败：' + esiErrorText(error), 'error', 5000);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function openEsiModal() {
+  $('fitEsiModal').hidden = false;
+  $('fitEsiSearch').value = '';
+  await loadEsiFits();
+}
+
+function closeEsiModal() {
+  $('fitEsiModal').hidden = true;
+}
+
+async function loadEsiFits(force = false) {
+  let token;
+  try { token = await app.getEsiToken(); } catch (error) { esiList.error = error.message; renderEsiList(); return; }
+  if (!force && esiList.fits && esiList.charId === token.character_id) { renderEsiList(); return; }
+  Object.assign(esiList, { charId: token.character_id, fits: null, loading: true, error: '' });
+  $('fitEsiTitle').textContent = `${token.character_name || '角色'} 的游戏装配`;
+  renderEsiList();
+  try {
+    const list = await app.esiFetch(`/characters/${token.character_id}/fittings/`);
+    esiList.fits = (list || []).sort((a, b) => (type(a.ship_type_id)?.name || '').localeCompare(type(b.ship_type_id)?.name || '', 'zh') || a.name.localeCompare(b.name, 'zh'));
+  } catch (error) {
+    esiList.error = esiErrorText(error);
+  }
+  esiList.loading = false;
+  renderEsiList();
+}
+
+function renderEsiList() {
+  const box = $('fitEsiBody');
+  if (esiList.loading) { box.innerHTML = skRows(6, { img: 32 }); return; }
+  if (esiList.error) { box.innerHTML = `<p class="fit-esi-empty">${app.esc(esiList.error)}</p>`; return; }
+  if (!esiList.fits) { box.innerHTML = ''; return; }
+  const q = $('fitEsiSearch').value.trim().toLowerCase();
+  const list = esiList.fits.filter((f) => !q || f.name.toLowerCase().includes(q) || (type(f.ship_type_id)?.name || '').toLowerCase().includes(q) || (type(f.ship_type_id)?.en || '').toLowerCase().includes(q));
+  $('fitEsiCount').textContent = `${esiList.fits.length} / 500`;
+  if (!list.length) { box.innerHTML = `<p class="fit-esi-empty">${esiList.fits.length ? '没有匹配的装配' : '游戏里还没有保存的个人装配'}</p>`; return; }
+  box.innerHTML = list.map((f) => {
+    const ship = type(f.ship_type_id);
+    const mods = (f.items || []).filter((it) => parseFlag(it.flag).slot).length;
+    return `<div class="fit-esi-row">
+      <img src="${IMG(f.ship_type_id, 'icon', 32)}" alt="" width="32" height="32" loading="lazy">
+      <div class="fit-esi-main"><b>${app.esc(f.name)}</b><span>${app.esc(ship?.name || '未知舰船 ' + f.ship_type_id)} · ${mods} 个装备</span></div>
+      <button class="btn btn-ghost" data-esi-open="${f.fitting_id}"${ship ? '' : ' disabled'}>打开</button>
+      <button class="btn btn-ghost danger" data-esi-delete="${f.fitting_id}" title="从游戏中删除这个装配">删除</button>
+    </div>`;
+  }).join('');
+}
+
+async function onEsiModalClick(e) {
+  const el = (sel) => e.target.closest(sel);
+  let x;
+  if (el('.modal-backdrop, [data-fit-esi-close]')) { closeEsiModal(); return; }
+  if (el('[data-fit-esi-refresh]')) { loadEsiFits(true); return; }
+  if ((x = el('[data-esi-open]'))) {
+    const f = esiList.fits.find((it) => it.fitting_id === Number(x.dataset.esiOpen));
+    const r = f && fromEsiFit(f);
+    if (!r || r.error) { app.showToast(r?.error || '装配不存在', 'error'); return; }
+    F.fit = r.fit;
+    F.selected = null;
+    autoActivateDrones();
+    recompute();
+    closeEsiModal();
+    app.showToast(r.skipped ? `已打开，${r.skipped} 项暂不支持已忽略` : '已打开游戏装配，可点「保存」存到本机', r.skipped ? 'info' : 'success', 3500);
+    return;
+  }
+  if ((x = el('[data-esi-delete]'))) {
+    const id = Number(x.dataset.esiDelete);
+    const f = esiList.fits.find((it) => it.fitting_id === id);
+    if (!f || !confirm(`从游戏中删除装配「${f.name}」？此操作无法撤销。`)) return;
+    x.disabled = true;
+    try {
+      const token = await app.getEsiToken();
+      await app.esiFetch(`/characters/${token.character_id}/fittings/${id}/`, { method: 'DELETE' });
+      esiList.fits = esiList.fits.filter((it) => it.fitting_id !== id);
+      renderEsiList();
+      app.showToast('已从游戏中删除', 'success');
+    } catch (error) {
+      x.disabled = false;
+      app.showToast('删除失败：' + esiErrorText(error), 'error', 5000);
+    }
+  }
 }
 
 // ---------- 分享链接 ----------
