@@ -4,6 +4,7 @@
 // 用法：
 //   1. 下载 https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip 并解压
 //   2. node build_map.mjs <解压目录>
+// 同时输出 eve-overview-clone/server/system_regions.json（全部星系 → 星域，供击杀记录服务使用）
 import { createReadStream } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
@@ -88,4 +89,9 @@ const output = {
 };
 
 await writeFile("eve-overview-clone/map-data.json", JSON.stringify(output));
+
+// 击杀记录服务用：全部星系（含虫洞）→ 星域 ID
+const allSystems = {};
+await eachLine("mapSolarSystems", (o) => { allSystems[o._key] = o.regionID; });
+await writeFile("eve-overview-clone/server/system_regions.json", JSON.stringify(allSystems));
 console.log(`星系 ${output.systems.length} · 星门连接 ${gates.length} · 星域 ${regions.length} · 星座 ${constellations.length} · 阵营 ${Object.keys(factions).length}`);

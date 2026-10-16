@@ -246,7 +246,9 @@ function switchView(view) {
   $('marketView').hidden = view !== 'market';
   $('profileView').hidden = view !== 'profile';
   $('mapView').hidden = view !== 'map';
-  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制' }[view];
+  $('kbView').hidden = view !== 'kb';
+  $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制' }[view] || '';
   closeDrawer();
   if (view === 'profile') loadProfile();
   if (view === 'map') openStarMap();
@@ -254,6 +256,49 @@ function switchView(view) {
     starMapModule?.hideStarMap();
     if (location.hash.startsWith('#map')) history.replaceState(null, '', location.pathname);
   }
+  if (view === 'kb') openKbPage();
+  else if (location.hash.startsWith('#kb')) history.replaceState(null, '', location.pathname);
+}
+
+// 击杀记录页：首次进入时加载
+let kbPageModule = null;
+async function openKbPage() {
+  try {
+    if (!kbPageModule) {
+      kbPageModule = await import('./kb-page.js?v=v11r1');
+      kbPageModule.initKbPage({
+        esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
+        fetchESI, debounce, showToast, loadKillboard,
+        getNpcNames: () => state.npcNames,
+        // 市场分类「舰船」下的全部舰船（搜索用）
+        shipTypes: () => {
+          if (!state.shipTypeList && state.catalog) {
+            state.shipTypeList = [...state.typeIndex.values()]
+              .filter(({ groupId }) => rootGroupId(groupId) === SHIP_ROOT_GROUP)
+              .map(({ type }) => ({ id: type.id, name: type.name }));
+          }
+          return state.shipTypeList || [];
+        }
+      });
+    }
+    if (!state.catalog && state.catalogReady) await state.catalogReady;
+    await kbPageModule.showKbPage();
+  } catch (error) {
+    console.error('击杀记录页加载失败:', error);
+    showToast('击杀记录页加载失败：' + error.message, 'error', 4000);
+  }
+}
+
+// 击杀记录模块：首次需要时加载
+let killboardModule = null;
+async function loadKillboard() {
+  if (!killboardModule) {
+    killboardModule = await import('./killboard.js?v=v11r1');
+    killboardModule.initKillboard({
+      esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap
+    });
+  }
+  return killboardModule;
 }
 
 // 星图模块较大，首次进入星图时才加载
@@ -261,11 +306,12 @@ let starMapModule = null;
 async function openStarMap() {
   try {
     if (!starMapModule) {
-      starMapModule = await import('./star-map.js?v=v8r1');
+      starMapModule = await import('./star-map.js?v=v9r1');
       starMapModule.initStarMap({
         fetchESI, esc, formatNumber, loadNpcNames, officialName, resolveNames,
         showToast, copyText, store, debounce, isTypingTarget,
         hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+        loadKillboard,
         // 角色当前所在星系（需要 esi-location.read_location.v1）
         getMyLocation: async () => {
           const token = await ensureEsiToken();
@@ -316,6 +362,7 @@ function isDrawerOpen() {
 
 function toggleSidebar(view = state.currentView) {
   const sb = SIDEBARS[view];
+  if (!sb) return;
   if (MOBILE_QUERY.matches) {
     if ($(sb.id).classList.contains('drawer-open')) closeDrawer(); else openDrawer();
     return;
@@ -366,6 +413,8 @@ function initSidebar() {
     const contract = target.closest('[data-contract-id]');
     if (contract) { openContract(Number(contract.dataset.contractId)); return true; }
     if (target.closest('[data-back-contracts]')) { openContract(null); return true; }
+    const combatFilter = target.closest('[data-combat-filter]');
+    if (combatFilter) { state.combatFilter = combatFilter.dataset.combatFilter; renderProfileTab('combat'); return true; }
     const ctype = target.closest('[data-ctype]');
     if (ctype) { state.contractView.type = ctype.dataset.ctype; renderProfileTab('contracts'); return true; }
     return false;
@@ -750,6 +799,7 @@ async function selectItem(typeId, { updateHash = true } = {}) {
   $('itemTypeId').textContent = `Type ${typeId}`;
   document.title = `${entry.type.name} · EVE 市场总览`;
   renderBreadcrumb(entry.groupId);
+  syncLossesTab(entry.groupId);
   updateFavButton();
   pushRecent(typeId);
 
@@ -759,6 +809,54 @@ async function selectItem(typeId, { updateHash = true } = {}) {
   }
   if (!same) $('mainContent').scrollTo({ top: 0 });
   await loadMarketData(typeId);
+}
+
+// 舰船（市场根分类「舰船」）才显示「近期损失」
+const SHIP_ROOT_GROUP = 4;
+function rootGroupId(groupId) {
+  let group = state.categories.get(groupId);
+  while (group?.parentId) group = state.categories.get(group.parentId);
+  return group?.id;
+}
+
+function syncLossesTab(groupId) {
+  const isShip = rootGroupId(groupId) === SHIP_ROOT_GROUP;
+  $('lossesTab').hidden = !isShip;
+  if (!isShip && state.contentTab === 'losses') switchContentTab('orders');
+  else if (isShip && state.contentTab === 'losses') renderShipLosses(state.selectedItem.id);
+}
+
+// 舰船近期损失：zKillboard 最近 200 次损失，统计常用装配
+async function renderShipLosses(typeId) {
+  const body = $('lossesBody');
+  body.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取 zKillboard 近期损失…</div>';
+  try {
+    const kb = await loadKillboard();
+    const kills = await kb.fetchZkill(`losses/shipTypeID/${typeId}/`);
+    if (state.selectedItem?.id !== typeId || state.contentTab !== 'losses') return;
+    await Promise.all([kb.prepareKills(kills.slice(0, 50)), kb.prepareFitNames(kills)]);
+    if (state.selectedItem?.id !== typeId || state.contentTab !== 'losses') return;
+    if (!kills.length) { body.innerHTML = '<p class="text-muted kb-empty">zKillboard 上没有该舰船的近期损失记录</p>'; return; }
+    const values = kills.map((k) => k.zkb.totalValue).sort((a, b) => a - b);
+    const median = values[Math.floor(values.length / 2)];
+    const avg = values.reduce((a, b) => a + b, 0) / values.length;
+    const solo = kills.filter((k) => k.zkb.solo).length;
+    const span = (new Date(kills[0].killmail_time) - new Date(kills[kills.length - 1].killmail_time)) / 86400e3;
+    body.innerHTML =
+      '<div class="valuation-grid station-grid">' +
+        valuationCard('样本', kills.length + ' 次损失', '最近 ' + Math.max(1, Math.round(span)) + ' 天内') +
+        valuationCard('损失价值中位数', formatISK(median) + ' ISK', '船体 + 装配 + 货物', 'is-sell') +
+        valuationCard('平均损失价值', formatISK(avg) + ' ISK', '受少数高价值装配影响', 'is-order') +
+        valuationCard('被单刷击毁', (solo / kills.length * 100).toFixed(0) + '%', solo + ' 次 1v1 损失') +
+      '</div>' +
+      '<h4 class="info-section-title section-gap">常用装配<small>（各模块出现在多少比例的损失中）</small></h4>' +
+      kb.commonFitHtml(kb.commonFit(kills)) +
+      '<h4 class="info-section-title section-gap">最近损失</h4><div class="kb-list">' + kb.killTableHtml(kills.slice(0, 50)) + '</div>' +
+      '<p class="text-muted valuation-note">数据来自 zKillboard，点击记录查看完整装配与攻击者。</p>';
+    kb.bindKillClicks(body.querySelector('.kb-list'), kills);
+  } catch (error) {
+    if (state.selectedItem?.id === typeId) body.innerHTML = '<p class="text-muted kb-empty">读取失败：' + esc(error.message) + '</p>';
+  }
 }
 
 function setLoading(loading) {
@@ -1064,7 +1162,8 @@ function initDetailActions() {
   $('itemIcon').addEventListener('error', (e) => e.target.classList.add('broken'));
   // 部分物品（蓝图、技能等）没有图标，隐藏破图
   document.addEventListener('error', (e) => {
-    if (e.target.tagName === 'IMG' && e.target.closest('.search-hit, .mini-item, .quick-chip, .info-icon, .chip')) e.target.classList.add('broken');
+    // 部分 NPC 舰船/武器在图片服务器上没有图标
+    if (e.target.tagName === 'IMG' && e.target.closest('.search-hit, .mini-item, .quick-chip, .info-icon, .chip, .kb-fit-item, .kb-attacker, .kb-item, .kb-ship, .kb-common-row')) e.target.classList.add('broken');
   }, true);
 }
 
@@ -1079,12 +1178,14 @@ function switchContentTab(content) {
   });
   $$('.tabs-content .tab-content').forEach((pane) => pane.classList.toggle('active', pane.id === `${content}Content`));
   $('ordersTools').hidden = content !== 'orders';
-  $('rangeTools').hidden = content === 'orders';
+  $('rangeTools').hidden = content !== 'chart' && content !== 'history';
   if (content === 'chart') renderChart();
+  if (content === 'losses' && state.selectedItem) renderShipLosses(state.selectedItem.id);
 }
 
 function initContentTabs() {
   $$('.tabs-header .tab-link').forEach((link) => link.addEventListener('click', () => switchContentTab(link.dataset.content)));
+  // 「近期损失」只对舰船显示，启动时不恢复到该标签
   if (!['orders', 'chart', 'history'].includes(state.contentTab)) state.contentTab = 'orders';
   switchContentTab(state.contentTab);
 
@@ -1193,6 +1294,9 @@ function typeFromHash() {
 
 function initHashRouting() {
   window.addEventListener('popstate', () => {
+    // 击杀记录页 / 星图的地址由各自页面处理；从其他页面后退到这些地址时切换过去
+    if (location.hash.startsWith('#kb')) { if (state.currentView !== 'kb') switchView('kb'); return; }
+    if (location.hash.startsWith('#map')) { if (state.currentView !== 'map') switchView('map'); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -1218,11 +1322,12 @@ function initShortcuts() {
   });
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {
+      if (!$('killModal').hidden) { killboardModule?.closeKillModal(); return; }
       if (!$('shortcutModal').hidden) { toggleShortcutHelp(false); return; }
       if (!$('esiModal').hidden) { closeEsiModal(); return; }
       if (isDrawerOpen()) { closeDrawer(); return; }
     }
-    if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target) || !$('esiModal').hidden) return;
+    if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target) || !$('esiModal').hidden || !$('killModal').hidden) return;
     if (event.key === '?') { toggleShortcutHelp(); event.preventDefault(); return; }
     if (event.key === '[') { toggleSidebar(); event.preventDefault(); return; }
     if (event.key === '/' && state.currentView === 'map') {
@@ -2011,6 +2116,11 @@ async function renderProfileTab(tab) {
     return;
   }
 
+  if (tab === 'combat') {
+    await renderCombatTab(box);
+    return;
+  }
+
   if (tab === 'orders') {
     const orders = Array.isArray(data.orders) ? data.orders : null;
     if (!orders || !orders.length) { box.innerHTML = '<p class="text-muted">暂无有效市场订单</p>'; return; }
@@ -2426,6 +2536,62 @@ async function renderContractDetail(box, c) {
   bindAssetToolbar(region, 'contracts');
 }
 
+// ===== 战斗记录（zKillboard）=====
+state.combatFilter = 'all';
+
+async function renderCombatTab(box) {
+  const me = myCharacterId();
+  box.innerHTML = '<div class="loading-block"><span class="spinner"></span>正在读取 zKillboard 战斗记录…</div>';
+  let kb, kills, stats;
+  try {
+    kb = await loadKillboard();
+    [kills, stats] = await Promise.all([
+      kb.fetchZkill(`characterID/${me}/`),
+      kb.fetchZkill(`stats/characterID/${me}/`).catch(() => null)
+    ]);
+    if (activeProfileTab() !== 'combat') return;
+    await kb.prepareKills(kills);
+  } catch (error) {
+    box.innerHTML = '<p class="text-muted">战斗记录读取失败：' + esc(error.message) + '</p>';
+    return;
+  }
+  if (activeProfileTab() !== 'combat') return;
+
+  const isLoss = (k) => k.victim.character_id === me;
+  const losses = kills.filter(isLoss);
+  const wins = kills.filter((k) => !isLoss(k));
+  const sum = (list) => list.reduce((t, k) => t + (k.zkb.totalValue || 0), 0);
+  const filter = state.combatFilter;
+  const shown = filter === 'kills' ? wins : filter === 'losses' ? losses : kills;
+
+  // 生涯统计（zKillboard stats）；没有数据时用近期记录估算
+  const lifetime = stats && stats.shipsDestroyed !== undefined;
+  const destroyedIsk = lifetime ? stats.iskDestroyed || 0 : sum(wins);
+  const lostIsk = lifetime ? stats.iskLost || 0 : sum(losses);
+  const efficiency = destroyedIsk + lostIsk ? destroyedIsk / (destroyedIsk + lostIsk) * 100 : null;
+  const cards =
+    valuationCard(lifetime ? '生涯击杀' : '近期击杀', formatNumber(lifetime ? stats.shipsDestroyed || 0 : wins.length) + ' 艘', lifetime ? '单刷 ' + formatNumber(stats.soloKills || 0) + ' 次' : '最近 ' + kills.length + ' 条记录', 'is-buy') +
+    valuationCard(lifetime ? '生涯损失' : '近期损失', formatNumber(lifetime ? stats.shipsLost || 0 : losses.length) + ' 艘', lifetime ? '单刷被杀 ' + formatNumber(stats.soloLosses || 0) + ' 次' : '', 'is-sell') +
+    valuationCard('击毁价值', formatISK(destroyedIsk) + ' ISK', lifetime ? 'zKillboard 生涯统计' : '近期记录合计', 'is-buy') +
+    valuationCard('损失价值', formatISK(lostIsk) + ' ISK', lifetime ? 'zKillboard 生涯统计' : '近期记录合计', 'is-sell') +
+    valuationCard('ISK 效率', efficiency == null ? '—' : efficiency.toFixed(1) + '%',
+      lifetime ? '危险度 ' + (stats.dangerRatio ?? '—') + '% · 团战 ' + (stats.gangRatio ?? '—') + '%' : '击毁 ÷（击毁 + 损失）', 'is-total');
+
+  box.innerHTML =
+    '<div class="valuation-grid">' + cards + '</div>' +
+    '<div class="valuation-toolbar section-gap">' +
+      '<div class="segmented" role="group" aria-label="战斗记录筛选">' +
+        [['all', '全部', kills.length], ['kills', '击杀', wins.length], ['losses', '损失', losses.length]].map(([key, label, n]) =>
+          `<button data-combat-filter="${key}" class="${filter === key ? 'active' : ''}">${label} <span class="seg-count">${n}</span></button>`).join('') +
+      '</div>' +
+      '<span class="toolbar-spacer"></span>' +
+      `<a class="btn btn-ghost" href="https://zkillboard.com/character/${me}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>` +
+    '</div>' +
+    '<div class="kb-list">' + kb.killTableHtml(shown, { me, showSide: true }) + '</div>' +
+    '<p class="text-muted valuation-note">数据来自 zKillboard（最近 200 条记录与生涯统计），缓存 5 分钟。点击记录查看装配与攻击者。</p>';
+  kb.bindKillClicks(box.querySelector('.kb-list'), kills);
+}
+
 // ===== ESI 绑定 =====
 async function generateAuthLink() {
   const btn = $('generateAuthBtn');
@@ -2557,6 +2723,7 @@ function init() {
   initShortcuts();
   handleEsiCallbackRedirect();
   if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
+  if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);

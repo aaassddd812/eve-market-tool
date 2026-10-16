@@ -23,7 +23,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v8r1">
+  <link rel="stylesheet" href="css/modern-style.css?v=v11r1">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -46,6 +46,10 @@
         <button class="nav-btn" data-view="map" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="2.5"/><circle cx="5" cy="6" r="1.8"/><circle cx="19" cy="7" r="1.8"/><circle cx="6" cy="18" r="1.8"/><circle cx="18" cy="18" r="1.8"/><path d="M6.5 7.2 10 10.5M17.4 8.2 14 10.6M7.4 16.8 10.2 13.6M16.6 16.8 13.8 13.6"/></svg>
           <span>星图</span>
+        </button>
+        <button class="nav-btn" data-view="kb" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/><circle cx="12" cy="12" r="1.5"/></svg>
+          <span>击杀</span>
         </button>
         <button class="nav-btn" data-view="profile" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -202,6 +206,7 @@
                 <button class="tab-link active" data-content="orders" role="tab">订单簿</button>
                 <button class="tab-link" data-content="chart" role="tab">价格走势</button>
                 <button class="tab-link" data-content="history" role="tab">历史数据</button>
+                <button class="tab-link" data-content="losses" role="tab" id="lossesTab" hidden>近期损失</button>
                 <div class="tabs-tools" id="ordersTools">
                   <label class="toggle" title="只显示该星域交易中心的订单">
                     <input type="checkbox" id="hubOnly">
@@ -272,6 +277,11 @@
                     <canvas id="priceChart"></canvas>
                     <div class="chart-empty" id="chartEmpty" hidden>暂无历史数据</div>
                   </div>
+                </div>
+
+                <!-- 舰船近期损失（zKillboard） -->
+                <div class="tab-content" id="lossesContent">
+                  <div id="lossesBody"></div>
                 </div>
 
                 <!-- 历史数据 -->
@@ -374,6 +384,23 @@
         </div>
       </div>
 
+      <!-- 击杀记录视图 -->
+      <div class="view-container" id="kbView" hidden>
+        <div class="kb-scroll">
+          <div class="kb-wrap">
+            <div class="kb-topbar">
+              <div class="search-box kb-search">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                <input type="search" id="kbSearch" placeholder="搜索人物 / 军团 / 联盟 / 舰船 / 星系 / 星域" autocomplete="off" spellcheck="false" aria-label="搜索击杀记录">
+                <div class="kb-suggest" id="kbSuggest" hidden></div>
+              </div>
+              <p class="kb-status" id="kbStatus"></p>
+            </div>
+            <div id="kbMain"></div>
+          </div>
+        </div>
+      </div>
+
       <!-- 个人中心视图 -->
       <div class="view-container" id="profileView" hidden>
         <aside class="sidebar profile-sidebar" id="profileSidebar" aria-label="个人中心导航">
@@ -397,6 +424,7 @@
               </div>
               <button class="profile-nav-btn" data-profile="orders">市场订单</button>
               <button class="profile-nav-btn" data-profile="contracts">合同查询</button>
+              <button class="profile-nav-btn" data-profile="combat">战斗记录</button>
               <button class="profile-nav-btn" data-profile="wallet">钱包流水</button>
             </nav>
           </div>
@@ -440,6 +468,7 @@
                 <button class="tab-link" data-profile="assets">资产</button>
                 <button class="tab-link" data-profile="orders">订单</button>
                 <button class="tab-link" data-profile="contracts">合同</button>
+                <button class="tab-link" data-profile="combat">战斗</button>
                 <button class="tab-link" data-profile="wallet">钱包</button>
               </div>
 
@@ -454,6 +483,20 @@
 
     <!-- Toast 通知 -->
     <div class="toast-stack" id="toastStack" aria-live="polite"></div>
+
+    <!-- 击杀详情（zKillboard） -->
+    <div class="modal" id="killModal" hidden role="dialog" aria-modal="true" aria-labelledby="killTitle">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content kill-content">
+        <div class="modal-header">
+          <h3 id="killTitle">击杀详情</h3>
+          <button class="modal-close" data-close-kill aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="modal-body" id="killBody"></div>
+      </div>
+    </div>
 
     <!-- 快捷键帮助 -->
     <div class="modal" id="shortcutModal" hidden role="dialog" aria-modal="true" aria-labelledby="shortcutTitle">
@@ -541,6 +584,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v8r1" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v11r1" type="module" data-cfasync="false"></script>
 </body>
 </html>

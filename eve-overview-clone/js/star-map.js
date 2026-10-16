@@ -1056,6 +1056,7 @@ function hopsBetween(a, b) {
 
 function selectSystem(i, center) {
   M.selected = i;
+  M.infoRegion = null;
   if (center) centerOn(i);
   renderSystemInfo(M.systems[i]);
   history.replaceState(null, '', '#map=' + M.systems[i].id);   // 可分享的链接
@@ -1116,9 +1117,29 @@ function renderSystemInfo(s) {
       <button class="btn" data-route-from="${s.i}">设为起点</button>
       <button class="btn" data-route-to="${s.i}">设为终点</button>
       <button class="btn btn-ghost" data-copy="${app.esc(s.name)}">复制名称</button>
-      <a class="btn btn-ghost" href="https://zkillboard.com/system/${s.id}/" target="_blank" rel="noopener" title="在 zKillboard 查看该星系的击杀记录">zKillboard ↗</a>
+    </div>
+    <div class="map-kills">
+      <div class="map-kills-head"><span>最近击杀</span><a href="https://zkillboard.com/system/${s.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
+      <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
     </div>`;
   $('mapInfo').hidden = false;
+  loadPanelKills(`systemID/${s.id}/`, (kills) => kills.slice(0, 8), () => M.selected === s.i);
+}
+
+// 详情面板中的击杀列表（zKillboard），面板已切换时丢弃结果
+async function loadPanelKills(path, pick, stillValid) {
+  const box = () => $('mapKillList');
+  try {
+    const kb = await app.loadKillboard();
+    const kills = pick(await kb.fetchZkill(path));
+    if (!stillValid() || !box()) return;
+    await kb.prepareKills(kills);
+    if (!stillValid() || !box()) return;
+    box().innerHTML = kb.killCompactHtml(kills);
+    kb.bindKillClicks(box(), kills);
+  } catch (error) {
+    if (stillValid() && box()) box().innerHTML = '<p class="legend-empty">击杀记录读取失败：' + app.esc(error.message) + '</p>';
+  }
 }
 
 function selectRegion(id) {
@@ -1149,8 +1170,15 @@ function selectRegion(id) {
     <div class="map-neighbors"><span>主要势力</span><div class="region-owners">${topOwners.map(({ owner, n }) =>
       `<div class="region-owner">${owner ? `<img src="${ownerLogo(owner)}" alt="" width="22" height="22">` : '<i></i>'}<span>${app.esc(ownerName(owner))}</span><b>${n}</b></div>`).join('')}</div></div>
     <div class="map-info-actions"><button class="btn" data-hl-region="${r.id}">高亮该星域</button></div>
+    <div class="map-kills">
+      <div class="map-kills-head"><span>最近大额击杀</span><a href="https://zkillboard.com/region/${r.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
+      <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
+    </div>
     ${r.description ? `<p class="region-desc">${app.esc(r.description)}</p>` : ''}`;
   $('mapInfo').hidden = false;
+  M.infoRegion = id;
+  loadPanelKills(`regionID/${id}/`, (kills) => [...kills].sort((a, b) => b.zkb.totalValue - a.zkb.totalValue).slice(0, 6),
+    () => M.selected == null && M.infoRegion === id && !$('mapInfo').hidden);
   invalidate();
 }
 

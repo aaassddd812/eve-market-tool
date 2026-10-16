@@ -5,3 +5,6 @@ desktop.ini
 *.tar.gz
 .deploy-cleanup.sh
 .repo-create.json
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
