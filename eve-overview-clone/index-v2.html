@@ -23,7 +23,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v11r1">
+  <link rel="stylesheet" href="css/modern-style.css?v=v12r3">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -336,7 +336,13 @@
               <div class="map-legend" id="mapLegend"><p class="legend-empty">载入中…</p></div>
             </section>
             <section class="map-panel">
-              <h4>路线规划</h4>
+              <div class="route-head">
+                <h4>路线规划</h4>
+                <div class="segmented route-mode" role="group" aria-label="规划方式">
+                  <button data-route-mode="gate" class="active">星门</button>
+                  <button data-route-mode="jump">旗舰跳跃</button>
+                </div>
+              </div>
               <div class="route-form">
                 <div class="route-field">
                   <input type="text" id="routeFrom" placeholder="起点星系" autocomplete="off" aria-label="起点星系">
@@ -346,6 +352,23 @@
                 <div class="route-field">
                   <input type="text" id="routeTo" placeholder="终点星系" autocomplete="off" aria-label="终点星系">
                   <div class="route-suggest" id="routeToList" hidden></div>
+                </div>
+                <div class="jump-options" id="jumpOptions" hidden>
+                  <select id="jumpShip" class="plain-select" aria-label="舰船"><option>载入舰船…</option></select>
+                  <div class="jump-skills">
+                    <label><span>跳跃引擎校准理论</span><select id="jumpJdc" class="plain-select"></select></label>
+                    <label><span>跳跃燃料节约</span><select id="jumpJfc" class="plain-select"></select></label>
+                    <label id="jumpJfWrap" hidden><span>战略货舰操作</span><select id="jumpJf" class="plain-select"></select></label>
+                  </div>
+                  <p class="jump-range" id="jumpRange"></p>
+                  <div class="jump-skills">
+                    <label><span>中途停靠</span><select id="jumpDock" class="plain-select jump-dock-select">
+                      <option value="any">不限</option>
+                      <option value="npc">必须有 NPC 空间站</option>
+                      <option value="all">必须可停靠（含玩家建筑）</option>
+                    </select></label>
+                  </div>
+                  <p class="jump-range" id="jumpDockNote" hidden></p>
                 </div>
                 <div class="route-actions">
                   <select id="routeFlag" class="plain-select" aria-label="路线偏好"></select>
@@ -584,6 +607,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v11r1" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v12r4" type="module" data-cfasync="false"></script>
 </body>
 </html>

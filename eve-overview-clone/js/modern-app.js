@@ -306,11 +306,12 @@ let starMapModule = null;
 async function openStarMap() {
   try {
     if (!starMapModule) {
-      starMapModule = await import('./star-map.js?v=v9r1');
+      starMapModule = await import('./star-map.js?v=v12r4');
       starMapModule.initStarMap({
-        fetchESI, esc, formatNumber, loadNpcNames, officialName, resolveNames,
-        showToast, copyText, store, debounce, isTypingTarget,
+        fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames,
+        showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
         hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+        getEsiToken: ensureEsiToken,
         loadKillboard,
         // 角色当前所在星系（需要 esi-location.read_location.v1）
         getMyLocation: async () => {

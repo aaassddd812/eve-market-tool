@@ -2514,3 +2514,34 @@ td.loc {
   .kb-history-row { grid-template-columns: 28px minmax(0, 1fr) 64px; }
   .kb-history-date { grid-column: 2 / 4; grid-row: 2; }
 }
+
+/* 星图：旗舰跳跃规划 */
+.route-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.route-head h4 { margin: 0; }
+.route-mode button { height: 24px; padding: 0 8px; font-size: 0.75rem; }
+.jump-options { display: grid; gap: 6px; }
+.jump-skills { display: grid; gap: 4px; }
+.jump-skills label { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 0.75rem; color: var(--text-secondary); }
+.jump-skills .plain-select { width: 76px; height: 28px; flex: none; }
+.jump-range { font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; }
+.jump-range strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.jump-check { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; }
+.jump-check input { accent-color: var(--accent-primary); }
+.jump-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+.jump-summary div { padding: 8px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-secondary); text-align: center; }
+.jump-summary strong { display: block; font-size: 1rem; font-variant-numeric: tabular-nums; }
+.jump-summary span { font-size: 0.6875rem; color: var(--text-muted); }
+.jump-note { margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary); line-height: 1.5; }
+.jump-note.warn { color: var(--warning, #f2b134); }
+.jump-list li { padding-bottom: 2px; }
+.jump-list li.is-gate button { opacity: 0.75; }
+.jump-list li.is-gate button::before { content: '门'; }
+.jump-leg { display: flex; flex-wrap: wrap; gap: 2px 10px; padding: 0 6px 4px 34px; font-size: 0.6875rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.jump-station { margin-left: 6px; padding: 0 4px; border-radius: 3px; font-size: 0.625rem; font-style: normal; color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 14%, transparent); }
+.jump-list button span { margin-left: auto; }
+.jump-foot { margin-top: 8px; font-size: 0.6875rem; color: var(--text-muted); line-height: 1.5; }
+.jump-list { counter-reset: hop -1; }
+.jump-list li.is-gate { counter-increment: none; }
+.jump-skills .plain-select.jump-dock-select { width: auto; min-width: 0; max-width: 190px; flex: 1 1 auto; }
+.jump-station.is-structure { color: var(--success, #30c88a); background: color-mix(in srgb, var(--success, #30c88a) 14%, transparent); }
+.jump-range .warn { color: var(--warning, #f2b134); }

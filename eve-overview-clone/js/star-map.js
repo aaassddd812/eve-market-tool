@@ -7,6 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import * as JP from './jump-planner.js?v=v12r3';
 
 let app;               // 主程序提供的工具函数
 let canvas, labels, lg; // WebGL 画布、标签画布及其 2D 上下文
@@ -75,6 +76,8 @@ const FACTION_COLORS = {
 const NONE_COLOR = '#3a4352';
 const DIM_COLOR = '#1f2632';
 
+const ISOTOPE_ZH = { 16274: '氦同位素', 17887: '氧同位素', 17888: '氮同位素', 17889: '氢同位素' };
+const ROUTE_COLORS = { gate: 0xffc400, jump: 0xff7a45 };
 const ROUTE_FLAGS = [['shortest', '最短路线'], ['secure', '安全优先'], ['insecure', '低安优先']];
 const FW_STATE_ZH = { uncontested: '未争夺', contested: '争夺中', vulnerable: '可被夺取', captured: '已被占领' };
 const INCURSION_STATE_ZH = { established: '已建立', mobilizing: '动员中', withdrawing: '撤退中' };
@@ -402,6 +405,7 @@ function applyColors() {
 }
 
 function updateRouteLine() {
+  if (!routeLine) return;   // 场景尚未建立（初始化时恢复上次的规划方式）
   if (M.route.length < 2) { routeLine.visible = false; invalidate(); return; }
   const pts = [];
   for (const i of M.route) { const s = M.systems[i]; pts.push(s.x, s.y, s.z); }
@@ -966,6 +970,7 @@ function bindSidebar() {
   }
   $('routeFlag').innerHTML = ROUTE_FLAGS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
   $('routePlan').addEventListener('click', planRoute);
+  bindJumpPlanner();
   $('routeSwap').addEventListener('click', () => {
     const a = $('routeFrom'), b = $('routeTo');
     [a.value, b.value] = [b.value, a.value];
@@ -974,6 +979,7 @@ function bindSidebar() {
   $('routeClear').addEventListener('click', () => {
     M.route = [];
     $('routeResult').innerHTML = '';
+    clearJumpRange();
     updateRouteLine();
   });
   $('routeResult').addEventListener('click', (e) => {
@@ -981,6 +987,7 @@ function bindSidebar() {
       app.copyText(M.route.map((i) => M.systems[i].name).join(' → '), '路线已复制');
       return;
     }
+    if (e.target.closest('[data-jump-range]')) { toggleJumpRange(); return; }
     const sys = e.target.closest('[data-sys]');
     if (sys) selectSystem(Number(sys.dataset.sys), true);
   });
@@ -1002,6 +1009,7 @@ function resolveRouteField(field) {
 }
 
 async function planRoute() {
+  if (J.mode === 'jump') { planJump(); return; }
   const from = resolveRouteField($('routeFrom'));
   const to = resolveRouteField($('routeTo'));
   const box = $('routeResult');
@@ -1010,6 +1018,7 @@ async function planRoute() {
   try {
     const ids = await app.fetchESI(`/route/${from}/${to}/?flag=${$('routeFlag').value}`);
     M.route = ids.map((id) => M.byId.get(id)?.i).filter((i) => i != null);
+    routeLine.material.color.setHex(ROUTE_COLORS.gate);
     const counts = { 高安: 0, 低安: 0, '00': 0 };
     M.route.forEach((i) => { counts[secClass(M.systems[i].sec)] += 1; });
     box.innerHTML =
@@ -1026,6 +1035,253 @@ async function planRoute() {
     box.innerHTML = '<p class="legend-empty">路线规划失败：' + app.esc(error.message) + '（可能无法通过星门到达）</p>';
     updateRouteLine();
   }
+}
+
+// ---------- 旗舰跳跃规划 ----------
+const J = { mode: 'gate', ships: null, loading: null, structures: null, settings: { ship: 23757, jdc: 5, jfc: 4, jf: 4, dock: 'any' } };
+
+function bindJumpPlanner() {
+  try { Object.assign(J.settings, app.store.getJSON('eve-jump-settings', {})); } catch { /* 使用默认设置 */ }
+  const levels = [0, 1, 2, 3, 4, 5].map((n) => `<option value="${n}">${n} 级</option>`).join('');
+  for (const id of ['jumpJdc', 'jumpJfc', 'jumpJf']) $(id).innerHTML = levels;
+  $('jumpJdc').value = J.settings.jdc;
+  $('jumpJfc').value = J.settings.jfc;
+  $('jumpJf').value = J.settings.jf;
+  if (typeof J.settings.dock !== 'string') J.settings.dock = J.settings.dock ? 'npc' : 'any';   // 旧版是复选框
+  $('jumpDock').value = J.settings.dock;
+  document.querySelectorAll('[data-route-mode]').forEach((btn) => btn.addEventListener('click', () => setRouteMode(btn.dataset.routeMode)));
+  const onChange = () => {
+    J.settings = {
+      ship: Number($('jumpShip').value) || J.settings.ship, jdc: Number($('jumpJdc').value), jfc: Number($('jumpJfc').value),
+      jf: Number($('jumpJf').value), dock: $('jumpDock').value
+    };
+    app.store.setJSON('eve-jump-settings', J.settings);
+    syncJumpOptions();
+    if (M.route.length && J.mode === 'jump') planJump();
+  };
+  for (const id of ['jumpShip', 'jumpJdc', 'jumpJfc', 'jumpJf', 'jumpDock']) $(id).addEventListener('change', onChange);
+  $('jumpDockNote').addEventListener('click', async (e) => {
+    if (!e.target.closest('[data-structures-refresh]')) return;
+    try {
+      await ensureStructures(true);
+      if (M.route.length) planJump(); else $('routeResult').innerHTML = '';
+    } catch (error) {
+      $('routeResult').innerHTML = '<p class="legend-empty">' + app.esc(error.message) + '</p>';
+    }
+  });
+  if (app.store.get('eve-route-mode') === 'jump') setRouteMode('jump');
+}
+
+async function setRouteMode(mode) {
+  if (J.mode === mode) return;
+  J.mode = mode;
+  app.store.set('eve-route-mode', mode);
+  document.querySelectorAll('[data-route-mode]').forEach((b) => b.classList.toggle('active', b.dataset.routeMode === mode));
+  $('jumpOptions').hidden = mode !== 'jump';
+  $('routeFlag').hidden = mode === 'jump';
+  M.route = [];
+  $('routeResult').innerHTML = '';
+  clearJumpRange();
+  updateRouteLine();
+  if (mode === 'jump') await ensureJumpShips();
+}
+
+async function ensureJumpShips() {
+  if (J.ships) return J.ships;
+  if (!J.loading) {
+    J.loading = JP.loadJumpShips(app.fetchESI).then((ships) => {
+      J.ships = ships;
+      const groups = new Map(JP.SHIP_GROUPS);
+      let html = '', current = null;
+      for (const ship of ships) {
+        if (ship.group !== current) { html += (current ? '</optgroup>' : '') + `<optgroup label="${app.esc(groups.get(ship.group))}">`; current = ship.group; }
+        html += `<option value="${ship.id}">${app.esc(ship.name)}</option>`;
+      }
+      $('jumpShip').innerHTML = html + (current ? '</optgroup>' : '');
+      if (!ships.some((x) => x.id === J.settings.ship)) J.settings.ship = ships[0]?.id;
+      $('jumpShip').value = J.settings.ship;
+      syncJumpOptions();
+      return ships;
+    }).catch((error) => {
+      J.loading = null;
+      $('jumpShip').innerHTML = '<option>舰船数据载入失败</option>';
+      throw error;
+    });
+  }
+  return J.loading;
+}
+
+function currentShip() {
+  return J.ships?.find((x) => x.id === J.settings.ship) || null;
+}
+
+function syncJumpOptions() {
+  const ship = currentShip();
+  if (!ship) return;
+  $('jumpJfWrap').hidden = ship.group !== 902;
+  const range = JP.maxRange(ship, J.settings.jdc);
+  const perLy = JP.fuelPerLy(ship, J.settings.jfc, J.settings.jf);
+  $('jumpRange').innerHTML = `最大跳跃距离 <strong>${range.toFixed(2)}</strong> 光年 · 每光年 ${app.formatNumber(Math.round(perLy))} ${ISOTOPE_ZH[ship.fuelType] || '燃料'}` +
+    (ship.fatigue < 1 ? ` · 疲劳距离 ×${ship.fatigue}` : '');
+
+  // 「含玩家建筑」需要绑定 ESI；超旗不能停 NPC 空间站
+  const bound = app.hasEsiToken();
+  const allOpt = $('jumpDock').querySelector('option[value="all"]');
+  allOpt.disabled = !bound;
+  allOpt.textContent = '必须可停靠（含玩家建筑）' + (bound ? '' : ' · 需绑定 ESI');
+  if (!bound && $('jumpDock').value === 'all') { $('jumpDock').value = 'npc'; J.settings.dock = 'npc'; }
+  const dock = J.settings.dock;
+  const can = [JP.canDockNpc(ship) ? 'NPC 空间站' : null,
+    ...DOCK_NOTE_TYPES.filter((t) => JP.canDockStructure(ship, t)).map((t) => JP.STRUCTURES[t][0])].filter(Boolean);
+  const note = $('jumpDockNote');
+  note.hidden = dock === 'any';
+  note.innerHTML = dock === 'any' ? '' : `${app.esc(ship.name)} 可停靠：${can.map(app.esc).join('、')}` +
+    (dock === 'npc' && !JP.canDockNpc(ship) ? '<br><span class="warn">超级航母和泰坦不能停靠 NPC 空间站，请改选「含玩家建筑」</span>' : '') +
+    (dock === 'all' && J.structures ? `<br>已读取公开玩家建筑 ${app.formatNumber(J.structures.list.length)} 个（只含 ESI 公开列表，军团 / 联盟内部建筑不在其中）· <button class="link-btn" data-structures-refresh>重新读取</button>` : '');
+}
+
+// 说明文字只列基础型号（派系铁壁与铁壁相同）
+const DOCK_NOTE_TYPES = [35832, 35825, 35835, 35836, 35833, 35826, 35827, 35834];
+
+// 读取公开玩家建筑（绑定 ESI 后可用，首次约需半分钟，之后缓存 24 小时）
+async function ensureStructures(force = false) {
+  if (J.structures && !force) return J.structures;
+  if (force) { try { localStorage.removeItem('eve-public-structures-v1'); } catch { /* 忽略 */ } }
+  const token = await app.getEsiToken();
+  if (JP.hasStructureScope(token) === false) throw new Error('当前 ESI 授权不包含读取玩家建筑（esi-universe.read_structures.v1），请重新绑定 ESI');
+  const box = $('routeResult');
+  J.structures = await JP.loadPublicStructures(app.getEsiToken, (done, total) => {
+    if (done % 20 === 0 || done === total) box.innerHTML = `<p class="legend-empty">正在读取公开玩家建筑 ${done} / ${total}（首次读取，之后缓存 24 小时）…</p>`;
+  });
+  J.structBySys = new Map();
+  for (const st of J.structures.list) {
+    if (!J.structBySys.has(st.system)) J.structBySys.set(st.system, []);
+    J.structBySys.get(st.system).push(st);
+  }
+  syncJumpOptions();
+  return J.structures;
+}
+
+// 中途允许停靠的星系；null 表示不限
+async function dockStops(ship) {
+  const dock = J.settings.dock;
+  if (dock === 'any') return null;
+  const stops = new Set();
+  if (JP.canDockNpc(ship)) for (const s of M.systems) if (s.stations.length) stops.add(s.i);
+  if (dock === 'all') {
+    await ensureStructures();
+    for (const st of J.structures.list) {
+      const s = M.byId.get(st.system);
+      if (s && JP.canDockStructure(ship, st.type)) stops.add(s.i);
+    }
+  }
+  if (!stops.size) throw new Error(dock === 'npc' ? `${ship.name} 不能停靠 NPC 空间站，请改选「含玩家建筑」` : '没有可停靠的星系');
+  return stops;
+}
+
+// 某星系对当前舰船可停靠的设施
+function dockingAt(i, ship) {
+  const s = M.systems[i];
+  const npc = JP.canDockNpc(ship) ? s.stations.length : 0;
+  const structures = J.settings.dock === 'all' ? (J.structBySys?.get(s.id) || []).filter((st) => JP.canDockStructure(ship, st.type)) : [];
+  return { npc, structures };
+}
+
+async function planJump() {
+  const box = $('routeResult');
+  const from = resolveRouteField($('routeFrom'));
+  const to = resolveRouteField($('routeTo'));
+  if (!from || !to) { box.innerHTML = '<p class="legend-empty">请从候选列表中选择起点和终点星系</p>'; return; }
+  box.innerHTML = '<p class="legend-empty">正在规划跳跃路线…</p>';
+  let ship;
+  try {
+    await ensureJumpShips();
+    ship = currentShip();
+  } catch (error) {
+    box.innerHTML = '<p class="legend-empty">舰船数据载入失败：' + app.esc(error.message) + '</p>';
+    return;
+  }
+  if (!ship) { box.innerHTML = '<p class="legend-empty">请选择舰船</p>'; return; }
+  await new Promise((r) => setTimeout(r));   // 先让“正在规划”显示出来
+  const range = JP.maxRange(ship, J.settings.jdc);
+  const a = M.byId.get(from).i, b = M.byId.get(to).i;
+  let stops;
+  try {
+    stops = await dockStops(ship);
+  } catch (error) {
+    box.innerHTML = '<p class="legend-empty">' + app.esc(error.message) + '</p>';
+    return;
+  }
+  const plan = JP.planJumpRoute(M.systems, a, b, { range, stops });
+  clearJumpRange();
+  if (plan.error) {
+    M.route = [];
+    updateRouteLine();
+    box.innerHTML = '<p class="legend-empty">' + app.esc(plan.error) + '</p>';
+    return;
+  }
+  const sim = JP.simulate(plan.legs, ship, { jfc: J.settings.jfc, jfSkill: J.settings.jf });
+  J.plan = { ...plan, sim, ship, origin: a, range };
+  M.route = [...plan.path, ...plan.gates];
+  routeLine.material.color.setHex(ROUTE_COLORS.jump);
+  updateRouteLine();
+  fitTo(M.route, 1.25);
+  renderJumpPlan();
+  const prices = await app.getMarketPriceMap().catch(() => new Map());
+  const unit = prices.get(ship.fuelType);
+  if (unit && J.plan?.sim === sim && $('jumpFuelIsk')) $('jumpFuelIsk').textContent = '≈ ' + app.formatISK(unit * sim.fuel) + ' ISK';
+}
+
+function renderJumpPlan() {
+  const { sim, gates, ship, path, landing, range } = J.plan;
+  const sys = (i) => M.systems[i];
+  const fuelName = ISOTOPE_ZH[ship.fuelType] || '燃料';
+  const row = (i, extra, cls = '') => {
+    const s = sys(i);
+    const { npc, structures } = dockingAt(i, ship);
+    const tags = (npc ? `<em class="jump-station" title="${npc} 个 NPC 空间站">站</em>` : '') +
+      (structures.length ? `<em class="jump-station is-structure" title="${app.esc(structures.slice(0, 8).map((st) => `${JP.STRUCTURES[st.type][0]} · ${st.name}`).join('\n'))}">建筑 ${structures.length}</em>` : '');
+    return `<li class="${cls}"><button data-sys="${i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}<span>${secDisplay(s.sec).toFixed(1)}</span>${tags}</button>${extra || ''}</li>`;
+  };
+  const legs = sim.rows.map((r) => row(r.to,
+    `<div class="jump-leg"><span>${r.ly.toFixed(2)} 光年</span><span>${app.formatNumber(r.fuel)} 燃料</span><span title="跳后重新激活冷却">冷却 ${JP.formatMinutes(r.cooldown)}</span><span title="跳后疲劳">疲劳 ${JP.formatMinutes(r.fatigue)}</span></div>`)).join('');
+  const gateRows = gates.map((i) => row(i, '', 'is-gate')).join('');
+  const dest = sys(gates.length ? gates[gates.length - 1] : landing);
+  $('routeResult').innerHTML = `
+    <div class="jump-summary">
+      <div><strong>${sim.rows.length}</strong><span>次跳跃</span></div>
+      <div><strong>${sim.totalLy.toFixed(1)}</strong><span>光年</span></div>
+      <div><strong>${app.formatNumber(sim.fuel)}</strong><span>${fuelName}</span></div>
+    </div>
+    <p class="jump-note"><span id="jumpFuelIsk"></span>${sim.rows.length > 1 ? ` · 连续跳完约 ${JP.formatMinutes(sim.travel)}` : ''} · 到达后疲劳约 ${JP.formatMinutes(sim.finalFatigue)}，冷却 ${JP.formatMinutes(sim.finalCooldown)}</p>
+    ${gates.length ? `<p class="jump-note warn">${app.esc(dest.name)} 不能直接跳入（高安等），跳到 ${app.esc(sys(landing).name)} 后再走 ${gates.length} 个星门</p>` : ''}
+    <div class="route-summary"><span>${app.esc(ship.name)} · 最大 ${range.toFixed(2)} 光年</span>
+      <span><button class="link-btn" data-jump-range title="在星图上高亮起点一跳可达的星系">一跳范围</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>
+    <ol class="route-list jump-list">${row(path[0], '<div class="jump-leg"><span>起点</span></div>')}${legs}${gateRows}</ol>
+    <p class="jump-foot">冷却与疲劳按 CCP 公布的规则估算（疲劳上限 5 小时、冷却上限 30 分钟），并假设每次冷却结束立即起跳；燃料按所选技能计算。</p>`;
+}
+
+function toggleJumpRange() {
+  if (M.highlightKey === 'jump-range') { clearJumpRange(); return; }
+  const p = J.plan;
+  if (!p) return;
+  const set = new Set(JP.inRange(M.systems, M.systems[p.origin], p.range));
+  set.add(p.origin);
+  M.highlight = set;
+  M.highlightKey = 'jump-range';
+  renderLegend();
+  applyColors();
+  invalidate();
+  app.showToast(`${M.systems[p.origin].name} 一跳可达 ${set.size - 1} 个星系`, 'success', 2000);
+}
+
+function clearJumpRange() {
+  if (M.highlightKey !== 'jump-range') return;
+  M.highlight = null;
+  M.highlightKey = null;
+  renderLegend();
+  applyColors();
+  invalidate();
 }
 
 // ---------- 信息面板 ----------
@@ -1237,6 +1493,7 @@ export function initStarMap(context) {
 
 export async function showStarMap() {
   syncMyLocationButton();
+  syncJumpOptions();   // 绑定 / 解绑 ESI 后更新「含玩家建筑」选项
   if (!M.ready) {
     M.ready = (async () => {
       $('mapLoading').hidden = false;
