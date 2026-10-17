@@ -4,18 +4,22 @@
 //
 // 用法：
 //   1. 下载 https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip 并解压
-//   2. node build_lp.mjs <解压目录>
+//   2. node build_lp.mjs <解压目录>             生成宁静服 lp-data.json
+//      node build_lp.mjs <解压目录> --serenity 生成晨曦服 lp-data-serenity.json（兑换项取自晨曦 ESI）
 import { createReadStream } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
-const [, , sdeDir] = process.argv;
+const args = process.argv.slice(2);
+const serenity = args.includes("--serenity");
+const [sdeDir] = args.filter((a) => !a.startsWith("--"));
 if (!sdeDir) {
   console.error("用法: node build_lp.mjs <SDE JSONL 解压目录>");
   process.exit(1);
 }
 
-const ESI = "https://esi.evetech.net/latest";
+const ESI = serenity ? "https://ali-esi.evepc.163.com/latest" : "https://esi.evetech.net/latest";
+const DATASOURCE = serenity ? "serenity" : "tranquility";
 
 async function eachLine(name, fn) {
   const rl = createInterface({ input: createReadStream(`${sdeDir}/${name}.jsonl`, "utf8"), crlfDelay: Infinity });
@@ -24,7 +28,7 @@ async function eachLine(name, fn) {
 
 async function esi(path) {
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${ESI}${path}${path.includes("?") ? "&" : "?"}datasource=tranquility`);
+    const res = await fetch(`${ESI}${path}${path.includes("?") ? "&" : "?"}datasource=${DATASOURCE}`);
     if (res.ok) return res.json();
     if (res.status === 404 || attempt >= 3) return null;
     await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
@@ -89,7 +93,7 @@ const corpList = Object.keys(stores).map(Number).map((id) => {
 const factionNames = {};
 for (const c of corpList) if (c.faction) factionNames[c.faction] = zh(factions.get(c.faction)?.name);
 
-const out = { source: "ESI /loyalty/stores + CCP SDE", generatedAt: new Date().toISOString(), factions: factionNames, corps: corpList, stores, offers, bp, names };
-const file = new URL("./eve-overview-clone/lp-data.json", import.meta.url);
+const out = { source: `ESI /loyalty/stores (${DATASOURCE}) + CCP SDE`, generatedAt: new Date().toISOString(), factions: factionNames, corps: corpList, stores, offers, bp, names };
+const file = new URL(serenity ? "./eve-overview-clone/lp-data-serenity.json" : "./eve-overview-clone/lp-data.json", import.meta.url);
 await writeFile(file, JSON.stringify(out));
 console.log(`军团 ${corpList.length}，兑换项 ${Object.keys(offers).length}，蓝图 ${Object.keys(bp).length}，物品名 ${typeIds.size}`);

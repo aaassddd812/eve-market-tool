@@ -6,6 +6,8 @@
 //   重新激活冷却 = max(跳前疲劳 ÷ 10, 1 + 有效光年) 分钟，上限 30 分钟
 //   有效光年 = 实际光年 × 疲劳系数；疲劳随时间每分钟减少 1 分钟
 
+import { SERVER, serverKey } from './server.js?v=s1';
+
 export const LY = 9.4607304725808;
 const RANGE_MARGIN = 0.002;              // 坐标保留 2 位小数，留出误差余量，宁可少算一个边缘星系
 const FATIGUE_CAP = 300;                 // 分钟
@@ -22,8 +24,10 @@ export const SHIP_GROUPS = [
 ];
 
 const SHIP_CACHE_KEY = 'eve-jump-ships-v1';
-const STRUCTURE_CACHE_KEY = 'eve-public-structures-v1';
-const ESI_BASE = 'https://esi.evetech.net/latest';
+const STRUCTURE_CACHE_KEY = serverKey('eve-public-structures-v1');
+const ESI_BASE = SERVER.esi;
+const DS = 'datasource=' + SERVER.datasource;
+const SHARED_STRUCTURES = '/api/esi/structures' + (SERVER.id === 'tq' ? '' : '?server=' + SERVER.id);   // 服务器共享缓存按服务器分开
 export const STRUCTURE_SCOPE = 'esi-universe.read_structures.v1';
 export const STRUCTURE_SEARCH_SCOPE = 'esi-search.search_structures.v1';
 
@@ -88,7 +92,7 @@ function shareToServer(result) {
   if (structuresPosted) return;
   structuresPosted = true;
   try {
-    fetch('/api/esi/structures', {
+    fetch(SHARED_STRUCTURES, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ at: result.at, list: result.list, total: result.total, denied: result.denied || 0 })
     }).catch(() => {});
@@ -96,7 +100,7 @@ function shareToServer(result) {
 }
 
 async function fetchStructureInfo(id, token) {
-  const r = await fetch(`${ESI_BASE}/universe/structures/${id}/?datasource=tranquility`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
+  const r = await fetch(`${ESI_BASE}/universe/structures/${id}/?${DS}`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
   if (!r?.ok) return null;                          // 403 = 没有停靠权限，跳过
   const info = await r.json().catch(() => null);
   if (!info || !STRUCTURES[info.type_id]) return null;
@@ -120,7 +124,7 @@ async function discoverPrivateStructures(getToken, knownIds, onProgress = () => 
     async function searchWorker() {
       while (queue.length) {
         const term = queue.shift();
-        const r = await fetch(`${ESI_BASE}/characters/${token.character_id}/search/?categories=structure&search=${encodeURIComponent(term)}&datasource=tranquility`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
+        const r = await fetch(`${ESI_BASE}/characters/${token.character_id}/search/?categories=structure&search=${encodeURIComponent(term)}&${DS}`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
         if (r?.ok) {
           const ids = (await r.json().catch(() => ({}))).structure || [];
           ids.forEach(add);
@@ -137,7 +141,7 @@ async function discoverPrivateStructures(getToken, knownIds, onProgress = () => 
   try {
     const auth = { headers: { Authorization: 'Bearer ' + token.access_token } };
     const cid = token.character_id;
-    const get = (path, fallback) => fetch(`${ESI_BASE}/characters/${cid}/${path}${path.includes('?') ? '&' : '?'}datasource=tranquility`, auth)
+    const get = (path, fallback) => fetch(`${ESI_BASE}/characters/${cid}/${path}${path.includes('?') ? '&' : '?'}${DS}`, auth)
       .then((r) => (r.ok ? r.json() : fallback)).catch(() => fallback);
     const [orders, contracts, location, clones, jobs, assets] = await Promise.all([
       get('orders/', []), get('contracts/', []), get('location/', {}), get('clones/', {}), get('industry/jobs/', []), get('assets/?page=1', [])
@@ -199,7 +203,7 @@ export async function loadPublicStructures(getToken, onProgress = () => {}) {
   }
   let publicList = null, total = 0, denied = 0, at = Date.now();
   try {
-    const r = await fetch('/api/esi/structures');
+    const r = await fetch(SHARED_STRUCTURES);
     if (r.ok) {
       const c = await r.json();
       if (c && Date.now() - c.at < 86400e3 && Array.isArray(c.list) && c.list.length) {
@@ -208,7 +212,7 @@ export async function loadPublicStructures(getToken, onProgress = () => {}) {
     }
   } catch { /* 服务器不可用时照旧直接读 ESI */ }
   if (!publicList) {
-    const res = await fetch(ESI_BASE + '/universe/structures/?datasource=tranquility');
+    const res = await fetch(ESI_BASE + '/universe/structures/?' + DS);
     if (!res.ok) throw new Error('公开建筑列表读取失败 ESI ' + res.status);
     const ids = await res.json();
     const list = [];
@@ -220,7 +224,7 @@ export async function loadPublicStructures(getToken, onProgress = () => {}) {
         const wait = pauseUntil - Date.now();
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         const token = await getToken();
-        const r = await fetch(`${ESI_BASE}/universe/structures/${id}/?datasource=tranquility`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
+        const r = await fetch(`${ESI_BASE}/universe/structures/${id}/?${DS}`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
         const remain = Number(r?.headers.get('x-esi-error-limit-remain'));
         if (Number.isFinite(remain) && r.headers.get('x-esi-error-limit-remain') !== null && remain < 20) {
           pauseUntil = Date.now() + (Number(r.headers.get('x-esi-error-limit-reset')) || 60) * 1000;

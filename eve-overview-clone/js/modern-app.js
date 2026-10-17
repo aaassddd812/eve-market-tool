@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
+import { SERVER, SERVER_LIST, IS_TQ, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s1';
 
 // ===== 配置与常量 =====
-const API_BASE = 'https://esi.evetech.net/latest';
 const IMAGE_BASE = 'https://images.evetech.net/types';
 
 // 星域名称取自 ESI /universe/regions/{id}/?language=zh；hub 为该星域主要交易中心空间站
@@ -179,7 +179,7 @@ async function copyText(text, label = '已复制') {
 }
 
 async function fetchESI(endpoint, options = {}) {
-  const url = endpoint.startsWith('http') ? endpoint : `${API_BASE}${endpoint}`;
+  const url = endpoint.startsWith('http') ? endpoint : esiUrl(endpoint);
   const response = await fetch(url, {
     ...options,
     headers: { 'Accept-Language': 'zh', ...options.headers }
@@ -191,7 +191,7 @@ async function fetchESI(endpoint, options = {}) {
 // 市场订单接口分页（X-Pages），热门物品在大星域可能超过一页
 async function fetchESIPaged(endpoint, options = {}) {
   const sep = endpoint.includes('?') ? '&' : '?';
-  const first = await fetch(`${API_BASE}${endpoint}${sep}page=1`, options);
+  const first = await fetch(esiUrl(`${endpoint}${sep}page=1`), options);
   if (!first.ok) throw new Error(`ESI ${first.status}`);
   const pages = Math.min(Number(first.headers.get('X-Pages')) || 1, 20);
   const results = [await first.json()];
@@ -209,12 +209,12 @@ async function loadServerStatus() {
   try {
     const data = await fetchESI('/status/');
     el.classList.remove('offline');
-    $('serverStatusText').textContent = '宁静 · ' + formatNumber(data.players) + ' 在线';
-    el.title = '宁静服务器在线 · ' + formatNumber(data.players) + ' 人 · 开服时间 ' + new Date(data.start_time).toLocaleString('zh-CN', { hour12: false });
+    $('serverStatusText').textContent = formatNumber(data.players) + ' 在线';
+    el.title = SERVER.full + '在线 · ' + formatNumber(data.players) + ' 人 · 开服时间 ' + new Date(data.start_time).toLocaleString('zh-CN', { hour12: false }) + ' · 点击切换服务器';
   } catch {
     el.classList.add('offline');
-    $('serverStatusText').textContent = '宁静 · 无法连接';
-    el.title = 'ESI 状态接口暂不可用';
+    $('serverStatusText').textContent = '无法连接';
+    el.title = SERVER.full + ' ESI 状态接口暂不可用 · 点击切换服务器';
   }
 }
 
@@ -333,7 +333,7 @@ async function getJitaPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v26').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v27').then((m) => {
     m.initIndustry({
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, ensureEsiToken,
@@ -358,7 +358,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v2').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v3').then((m) => {
     m.initLp({
       esc, formatISK, formatNumber, showToast, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
@@ -408,7 +408,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v24').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v25').then((m) => {
     m.initFitting({
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -437,6 +437,7 @@ let kbPageModule = null;
 // ===== 会战监测：全站提醒，击杀记录页与星图订阅 =====
 let battlesPromise = null;
 function initBattleWatch() {
+  if (!SERVER.kb) return;
   battlesPromise = import('./battles.js?v=v19r17').then((m) => {
     m.initBattles({ store, loadKillboard, esc, formatISK, officialName, openMapSystem, openKbSystem });
     return m;
@@ -454,6 +455,60 @@ async function openKbSystem(id) {
   switchView('kb');
   await openKbPage();
   kbPageModule?.filterBySystem(id);
+}
+
+// 晨曦服没有击杀数据源：击杀记录页只显示说明
+function renderNoKbPage() {
+  const box = $('kbView').querySelector('.kb-scroll');
+  if (box.dataset.noKb) return;
+  box.dataset.noKb = '1';
+  box.innerHTML = '<div class="empty-state server-unsupported">' +
+    '<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>' +
+    '<p>' + esc(NO_KB_MESSAGE) + '</p>' +
+    '<p class="hint">zKillboard 与本站击杀记录服务只收录宁静服的击杀邮件</p>' +
+    '<div class="server-unsupported-actions">' +
+      (SERVER.kbSite ? `<a class="btn btn-primary" href="${SERVER.kbSite.url}/" target="_blank" rel="noopener">打开${esc(SERVER.kbSite.name)} ↗</a>` : '') +
+      '<button class="btn btn-ghost" type="button" data-switch-server="tq">切换到宁静服</button>' +
+    '</div>' +
+  '</div>';
+}
+
+// ===== 服务器切换（顶栏）=====
+function initServerSwitch() {
+  const btn = $('serverStatus'), menu = $('serverMenu');
+  $('serverName').textContent = SERVER.name;
+  document.documentElement.dataset.server = SERVER.id;
+  if (!SERVER.kb && !SERVER.kbSite) $$('[data-profile="combat"]').forEach((el) => { el.hidden = true; });   // 没有战斗记录数据也没有外部击杀站
+  if (SERVER.tokenProxy) {
+    // 晨曦登录服务器不允许浏览器跨域请求令牌，只能经本站转发，如实说明
+    $('esiPrivacyNote').textContent = '使用网易官方 ESI 网页的授权应用登录。晨曦服登录服务器不允许浏览器直接换取令牌，这一步经本站原样转发给网易登录服务器，本站不记录、不保存；令牌只保存在本机。';
+    $('esiCallbackNote').textContent = '登录后会停在网易 ESI 页面（ali-esi.evepc.163.com），立即复制地址栏完整地址（包含 code）粘贴到这里，授权码几分钟内就会失效。';
+  }
+  menu.innerHTML = SERVER_LIST.map((x) =>
+    `<button type="button" role="menuitemradio" aria-checked="${x.id === SERVER.id}" data-switch-server="${x.id}">` +
+      `<b>${esc(x.full)}</b><small>${x.id === 'tq' ? '国际服 · Tranquility' : '国服 · Serenity'}</small></button>`).join('');
+  const toggle = (open) => {
+    menu.hidden = !open;
+    btn.setAttribute('aria-expanded', String(open));
+    if (open) menu.querySelector('[aria-checked="true"]')?.focus();
+  };
+  btn.addEventListener('click', (e) => { e.stopPropagation(); toggle(menu.hidden); });
+  document.addEventListener('click', (e) => {
+    if (!menu.hidden && !e.target.closest('#serverMenu')) toggle(false);
+    const pick = e.target.closest('[data-switch-server]');
+    if (!pick) return;
+    if (pick.dataset.switchServer === SERVER.id) { toggle(false); return; }
+    setServer(pick.dataset.switchServer);
+  });
+  menu.addEventListener('keydown', (e) => {
+    const items = [...menu.querySelectorAll('button')];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === 'Escape') { toggle(false); btn.focus(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      items[(i + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length].focus();
+    }
+  });
 }
 
 // 进行中的调用复用同一个 Promise（例如会战提醒「击杀记录」按钮需要等页面就绪后再筛选）
@@ -488,6 +543,7 @@ function loadKbPageModule() {
 }
 
 async function openKbPageImpl(restored) {
+  if (!SERVER.kb) { renderNoKbPage(); return; }
   try {
     await loadKbPageModule();
     if (!state.catalog && state.catalogReady) await state.catalogReady;
@@ -502,7 +558,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v18r1').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v19').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap
     });
@@ -516,7 +572,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v25').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v26').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -1071,7 +1127,7 @@ function rootGroupId(groupId) {
 }
 
 function syncLossesTab(groupId) {
-  const isShip = rootGroupId(groupId) === SHIP_ROOT_GROUP;
+  const isShip = SERVER.kb && rootGroupId(groupId) === SHIP_ROOT_GROUP;
   $('lossesTab').hidden = !isShip;
   if (!isShip && state.contentTab === 'losses') switchContentTab('orders');
   else if (isShip && state.contentTab === 'losses') renderShipLosses(state.selectedItem.id);
@@ -1631,19 +1687,20 @@ function initShortcuts() {
 // EVE SSO 使用纯前端 PKCE 授权：授权码换令牌、刷新令牌都由浏览器直接请求 login.eveonline.com，
 // 令牌只保存在本机 localStorage，本站服务器全程接触不到。服务器只提供公开的应用配置（Client ID、回调地址、权限列表）。
 const ESI_API = '/api/esi';
-const ESI_BASE = 'https://esi.evetech.net/latest';
-const SSO_BASE = 'https://login.eveonline.com/v2/oauth';
+const ESI_BASE = SERVER.esi;
+const SSO_BASE = SERVER.sso;
+const SERVER_QS = IS_TQ ? '' : '?server=' + SERVER.id;   // 本站接口按服务器区分（宁静服不带参数，兼容旧版）
 const PKCE_KEY = 'eve-esi-pkce';          // 授权中的 state -> { verifier, at }（回调可能落在新标签页，所以放 localStorage）
 const PKCE_TTL = 15 * 60e3;
 
 function readEsiToken() {
-  try { return JSON.parse(localStorage.getItem('eve-esi-token') || 'null'); } catch { return null; }
+  try { return JSON.parse(localStorage.getItem(serverKey('eve-esi-token')) || 'null'); } catch { return null; }
 }
 
 function writeEsiToken(token) {
   state.esiToken = token;
-  if (token) localStorage.setItem('eve-esi-token', JSON.stringify(token));
-  else localStorage.removeItem('eve-esi-token');
+  if (token) localStorage.setItem(serverKey('eve-esi-token'), JSON.stringify(token));
+  else localStorage.removeItem(serverKey('eve-esi-token'));
 }
 
 function setEsiStatus(message, kind) {
@@ -1655,7 +1712,7 @@ function setEsiStatus(message, kind) {
 let ssoConfigPromise = null;
 function ssoConfig() {
   if (!ssoConfigPromise) {
-    ssoConfigPromise = fetch(ESI_API + '/config').then(async (res) => {
+    ssoConfigPromise = fetch(ESI_API + '/config' + SERVER_QS).then(async (res) => {
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.client_id) throw new Error(data.error || '读取应用配置失败 ' + res.status);
       return data;
@@ -1733,7 +1790,8 @@ async function ssoToken(params) {
   const cfg = await ssoConfig();
   let res;
   try {
-    res = await fetch(SSO_BASE + '/token', {
+    // 晨曦 SSO 不支持跨域，经本站原样转发；宁静服浏览器直连 CCP
+    res = await fetch(SERVER.tokenProxy ? ESI_API + '/sso/token' + SERVER_QS : SSO_BASE + '/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ ...params, client_id: cfg.client_id })
@@ -1745,7 +1803,9 @@ async function ssoToken(params) {
   let data = {};
   try { data = JSON.parse(text); } catch { /* HTML 错误页 */ }
   if (!res.ok || !data.access_token) {
-    const reason = data.error_description || data.error || (text.startsWith('<') ? '授权码无效或已被使用' : 'HTTP ' + res.status);
+    // 网易登录服务器对无效 / 过期的授权码只返回 500 和一句通用错误
+    const netease = !IS_TQ && res.status === 500 ? '授权码无效或已过期（网易授权码几分钟内失效，请重新登录后尽快粘贴）' : '';
+    const reason = data.error_description || data.error || netease || (text.startsWith('<') ? '授权码无效或已被使用' : 'HTTP ' + res.status);
     const error = new Error(reason);
     error.status = res.status;
     throw error;
@@ -1822,7 +1882,7 @@ async function getCharacterImplants() {
 
 async function esiAuthFetch(path, options = {}) {
   const token = await ensureEsiToken();
-  const url = ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=tranquility';
+  const url = ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=' + SERVER.datasource;
   const res = await fetch(url, {
     method: options.method || 'GET',
     headers: { Authorization: 'Bearer ' + token.access_token, 'Accept-Language': 'zh', ...(options.headers || {}) },
@@ -1916,7 +1976,7 @@ function zhLabel(map, key, fallback) {
 
 async function fetchNameBatch(list) {
   try {
-    const res = await fetch(ESI_BASE + '/universe/names/?datasource=tranquility', {
+    const res = await fetch(ESI_BASE + '/universe/names/?datasource=' + SERVER.datasource, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(list)
@@ -2005,7 +2065,7 @@ async function resolveTypeNames(ids) {
   for (let i = 0; i < missing.length; i += 10) {
     const chunk = missing.slice(i, i + 10);
     const results = await Promise.all(chunk.map((id) =>
-      fetch(ESI_BASE + '/universe/types/' + id + '/?datasource=tranquility&language=zh')
+      fetch(ESI_BASE + '/universe/types/' + id + '/?datasource=' + SERVER.datasource + '&language=zh')
         .then((r) => (r.ok ? r.json() : null)).catch(() => null)
     ));
     results.forEach((info, idx) => { if (info?.name) names.set(chunk[idx], info.name); });
@@ -2017,7 +2077,7 @@ async function resolveTypeNames(ids) {
 async function universeTable(path) {
   state.universeTables = state.universeTables || {};
   if (!state.universeTables[path]) {
-    state.universeTables[path] = fetch(ESI_BASE + path + '?datasource=tranquility', { headers: { 'Accept-Language': 'zh' } })
+    state.universeTables[path] = fetch(ESI_BASE + path + '?datasource=' + SERVER.datasource, { headers: { 'Accept-Language': 'zh' } })
       .then((r) => (r.ok ? r.json() : []))
       .catch(() => []);
   }
@@ -2028,7 +2088,7 @@ async function universeTable(path) {
 async function esiAuthFetchPaged(path, maxPages = 20) {
   const token = await ensureEsiToken();
   const get = async (page) => {
-    const url = ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=tranquility&page=' + page;
+    const url = ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=' + SERVER.datasource + '&page=' + page;
     const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token.access_token } });
     if (!res.ok) throw new Error('ESI ' + res.status);
     return res;
@@ -2072,7 +2132,7 @@ function locationName(id) {
 // 玩家建筑名称是玩家自定义的，来源依次为：本地名称缓存 → 跳跃规划读过的建筑列表 → 服务器共享的公开建筑缓存
 // → 带授权读取 /universe/structures/{id}/（需 esi-universe.read_structures.v1，且角色有权查看）。
 // 查不到的建筑记一天，避免反复请求消耗 ESI 错误额度。
-const STRUCTURE_NAMES_KEY = 'eve-structure-names-v1';
+const STRUCTURE_NAMES_KEY = serverKey('eve-structure-names-v1');
 const STRUCTURE_NAME_TTL = 7 * 86400e3;
 const STRUCTURE_MISS_TTL = 86400e3;
 let structureNames = null;   // id -> { n: 名称, s: 星系, t: 类型, at }，n 为空表示查不到
@@ -2090,7 +2150,7 @@ function structureNameMap() {
   } catch { /* 忽略 */ }
   // 跳跃规划读过的公开 / 内部建筑列表（本地缓存 24 小时）
   try {
-    const c = JSON.parse(localStorage.getItem('eve-public-structures-v1') || 'null');
+    const c = JSON.parse(localStorage.getItem(serverKey('eve-public-structures-v1')) || 'null');
     if (c && Array.isArray(c.list)) {
       for (const st of [...c.list, ...(c.private || [])]) {
         if (st?.id && st.name) structureNames.set(st.id, { n: st.name, s: st.system, t: st.type, at: c.at || Date.now() });
@@ -2116,7 +2176,7 @@ function structureNameOf(id) {
 // 服务器共享缓存（其他用户读过的公开建筑），不需要授权，未部署时静默跳过
 function loadSharedStructures() {
   if (!sharedStructuresPromise) {
-    sharedStructuresPromise = fetch('/api/esi/structures')
+    sharedStructuresPromise = fetch('/api/esi/structures' + SERVER_QS)
       .then((r) => (r.ok ? r.json() : null))
       .then((c) => {
         if (!c || !Array.isArray(c.list)) return;
@@ -2186,7 +2246,7 @@ function loadProfile() {
 async function loadCharacterData() {
   const token = await ensureEsiToken();
   const id = token.character_id;
-  $('profileAvatar').src = 'https://images.evetech.net/characters/' + id + '/portrait?size=128';
+  $('profileAvatar').src = eveImage('characters/' + id + '/portrait', 128);
   $('profileName').textContent = token.character_name || ('角色 ' + id);
   $('profileCorp').textContent = '数据读取中…';
   $('profileChips').innerHTML = '';
@@ -2270,7 +2330,7 @@ function prefetchProfileTabs() {
   whenIdle(async () => {
     if (state.characterData !== data) return;   // 已解绑或重新读取
     const me = myCharacterId();
-    try {
+    if (SERVER.kb) try {
       const kb = await loadKillboard();
       const [kills] = await Promise.all([
         kb.fetchZkill(`characterID/${me}/`),
@@ -2289,7 +2349,6 @@ function whenIdle(fn, timeout = 3000) {
 }
 
 // ===== 游戏内图标（EVE 官方图片服务器）=====
-const EVE_IMAGES = 'https://images.evetech.net';
 const GAME_ICON = {
   capsule: 670,        // 太空舱：飞行员诞生
   skillbook: 3300,     // 技能书
@@ -2298,7 +2357,7 @@ const GAME_ICON = {
 };
 
 function gameImage(path, size = 64) {
-  return EVE_IMAGES + '/' + path + '?size=' + size;
+  return eveImage(path, size);
 }
 
 // 当前位置图标：空间站 → 空间站建筑类型；玩家建筑 → 星城；太空中 → 所在星系的恒星
@@ -2390,7 +2449,7 @@ function valuationRegion() {
 }
 
 // regionId:typeId -> { sell, buy, at }；保存在本地 12 小时，重新打开页面不必重查。点「刷新行情」清空当前市场
-const HUB_PRICE_KEY = 'eve-hub-prices-v1';
+const HUB_PRICE_KEY = serverKey('eve-hub-prices-v1');
 const HUB_PRICE_TTL = 12 * 3600e3;
 state.hubPriceCache = loadHubPriceCache();
 state.hubPriceInflight = new Map();   // 正在查询的物品，后台预取与页面渲染共用同一请求
@@ -3177,6 +3236,12 @@ state.combatFilter = 'all';
 
 async function renderCombatTab(box) {
   const me = myCharacterId();
+  if (!SERVER.kb) {
+    const link = kbSiteLink('pilot', me);
+    box.innerHTML = '<div class="empty-state"><p>' + esc(NO_KB_MESSAGE) + '</p>' +
+      (link ? `<a class="btn btn-primary" href="${link}" target="_blank" rel="noopener">在${esc(SERVER.kbSite.name)}查看我的击杀 ↗</a>` : '') + '</div>';
+    return;
+  }
   box.innerHTML = skCards(6) + skToolbar(3) + skRows(10);
   let kb, kills, stats;
   try {
@@ -3232,6 +3297,14 @@ async function renderCombatTab(box) {
 }
 
 // ===== ESI 绑定 =====
+// 晨曦服：网易登录需要一个设备 ID，由本站向网易申请（网易接口只接受官方页面来源，浏览器不能直接请求）
+async function neteaseDevice() {
+  const res = await fetch(ESI_API + '/sso/device' + SERVER_QS).catch(() => null);
+  const data = res ? await res.json().catch(() => ({})) : {};
+  if (!res?.ok || !data.device_id) throw new Error(data.error || '网易设备初始化失败，请稍后重试');
+  return { device_id: data.device_id };
+}
+
 async function generateAuthLink() {
   const btn = $('generateAuthBtn');
   btn.disabled = true;
@@ -3241,9 +3314,10 @@ async function generateAuthLink() {
     // PKCE：verifier 只保存在本机，CCP 换令牌时校验，授权码被截获也无法使用
     const verifier = randomToken(48);
     const challenge = b64url(await sha256(verifier));
+    const device = SERVER.needDevice ? await neteaseDevice() : {};
     const authState = randomToken(24);
     const pending = readPkce();
-    pending[authState] = { verifier, at: Date.now() };
+    pending[authState] = { verifier, at: Date.now(), server: SERVER.id };
     writePkce(pending);
     const url = SSO_BASE + '/authorize?' + new URLSearchParams({
       response_type: 'code',
@@ -3252,7 +3326,9 @@ async function generateAuthLink() {
       scope: (cfg.scopes || []).join(' '),
       state: authState,
       code_challenge: challenge,
-      code_challenge_method: 'S256'
+      code_challenge_method: 'S256',
+      ...SERVER.authParams,
+      ...device
     });
     $('authLink').value = url;
     $('openAuthBtn').href = url;
@@ -3283,7 +3359,8 @@ async function bindEsiCallback() {
     if (!entry) throw new Error('授权状态无效或已过期：请在本浏览器重新生成授权链接并登录（链接 15 分钟内有效）');
     let data;
     try {
-      data = await ssoToken({ grant_type: 'authorization_code', code, code_verifier: entry.verifier });
+      const extra = SERVER.manualCallback ? { redirect_uri: (await ssoConfig()).redirect_uri } : {};   // 网易换令牌要求带回调地址
+      data = await ssoToken({ grant_type: 'authorization_code', code, code_verifier: entry.verifier, ...extra });
     } catch (error) {
       throw new Error('CCP 拒绝了授权（' + error.message + '）。若提示授权码已使用，请重新生成授权链接并登录');
     } finally {
@@ -3291,7 +3368,8 @@ async function bindEsiCallback() {
       writePkce(pending);
     }
     const cfg = await ssoConfig();
-    const identity = tokenIdentity(data.access_token, cfg.client_id);
+    // 晨曦服复用的是网易官方 ESI 网页的应用，令牌受众不是本站，不做核对
+    const identity = tokenIdentity(data.access_token, IS_TQ ? cfg.client_id : null);
     writeEsiToken({ ...tokenRecord(data), ...identity });
     $('callbackUrl').value = '';
     $('authLinkBox').hidden = true;
@@ -3312,6 +3390,9 @@ async function bindEsiCallback() {
 function handleEsiCallbackRedirect() {
   const params = new URLSearchParams(location.search);
   if (!params.has('code') && !params.has('error')) return;
+  // 授权时选的服务器与当前不同（例如在另一个标签页切换过）：先切回授权时的服务器
+  const pending = readPkce()[params.get('state')];
+  if (pending?.server && pending.server !== SERVER.id) { setServer(pending.server); return; }
   const callbackUrl = location.href;
   history.replaceState(null, '', location.pathname + location.hash);
   openEsiModal();
@@ -3372,6 +3453,7 @@ function initESIModal() {
 // ===== 初始化应用 =====
 function init() {
   initTheme();
+  initServerSwitch();
   initBattleWatch();
   initNavigation();
   initSidebar();
@@ -3416,7 +3498,7 @@ function init() {
 function preloadPages() {
   if (navigator.connection?.saveData) return;
   whenIdle(async () => {
-    try {
+    if (SERVER.kb) try {
       const kbPage = await loadKbPageModule();
       await kbPage.prefetchKbHome();
     } catch { /* 未部署击杀记录服务等：打开页面时再处理 */ }

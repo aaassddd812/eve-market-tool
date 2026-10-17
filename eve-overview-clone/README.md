@@ -29,10 +29,12 @@ eve-overview-clone/
 ├── js/pi-planner.js     # 行星工业规划（按需加载）
 ├── js/industry.js       # 制造：计算器 / 利润排行 / 制造地点 / 我的工业（按需加载）
 ├── js/lp-store.js       # LP 商店：各军团兑换项 ISK/LP、全服排行、我的 LP（按需加载）
+├── js/server.js         # 宁静 / 晨曦服务器配置：ESI、SSO、图片地址与本地存储键
 ├── js/skills-page.js    # 个人中心 · 技能（按需加载）
 ├── industry-data.json   # 制造数据：蓝图、反应、发明、解码器（build_industry.mjs 生成）
 ├── skill-data.json      # 全部技能与分组（build_industry.mjs 生成）
 ├── lp-data.json         # LP 商店兑换项、军团、蓝图材料（build_lp.mjs 生成）
+├── lp-data-serenity.json # 晨曦服 LP 商店数据（build_lp.mjs --serenity 生成）
 ├── js/pi-editor.js      # 殖民地模板预览与编辑
 ├── js/pi-globe.js       # 殖民地球面坐标换算
 ├── assets/pi/           # 行星设施图标（SVG）
@@ -227,6 +229,19 @@ node build_lp.mjs <SDE 解压目录>   # 输出 eve-overview-clone/lp-data.json
 ```
 
 切换顶部导航时各页面保持原样：离开时记住地址栏与滚动位置，切回来恢复，页面不重新渲染（筛选、展开的行、输入框都保留）。
+
+## 宁静 / 晨曦服务器切换（v25）
+
+顶栏右侧的服务器状态就是切换按钮，默认宁静服（国际服），可切到晨曦服（国服）。选择记在浏览器里，切换后整页刷新。
+
+- **ESI**：晨曦服请求 `ali-esi.evepc.163.com`（`datasource=serenity`），市场订单、历史、均价、主权、入侵、角色数据等都换成晨曦数据
+- **登录**：晨曦服用网易 SSO（`login.evepc.163.com`）。网易没有开放第三方应用申请，和其他国服工具一样复用官方 ESI 网页自带的应用（Client ID `bc90aa496a404724a93f41b4f4e97761`，回调 `https://ali-esi.evepc.163.com/ui/oauth2-redirect.html`，另带网易必填的 `realm`、`device_id`）。登录后浏览器停在网易 ESI 页面，复制地址栏粘贴到绑定框第 2 步即可，授权码几分钟内失效
+- **换令牌**：网易换令牌接口不允许跨域，由 `esi_service.py` 的 `POST /api/esi/sso/token?server=serenity` 原样转发（只转发必要字段，校验 client_id，每 IP 每分钟 20 次，不记录内容）。不需要额外配置；以后有专属应用时可在 `config.json` 的 `"serenity"` 下填 `client_id` / `redirect_uri` 覆盖
+- **本地数据**：两个服务器的令牌、建筑缓存、价格缓存分开保存（晨曦服的键名加 `serenity:` 前缀），切换不会互相覆盖；共享的玩家建筑缓存服务器端也分文件
+- **图片**：物品图标两服通用；人物头像、玩家军团 / 联盟图标晨曦服取自 `image.evepc.163.com`
+- **LP 商店**：晨曦服读 `lp-data-serenity.json`（`node build_lp.mjs <SDE目录> --serenity` 生成）
+- **击杀记录**：国服击坠榜（beta.ceve-market.org）的数据接口有 CrowdSec 人机验证、请求加密且不开放跨域，本站不抓取，只外链过去（击杀页入口、个人中心「战斗记录」跳到 `pilot/<角色ID>`）
+- **不支持**：zKillboard 与本站击杀记录服务只收录宁静服，晨曦服下击杀记录页、战斗记录、舰船近期损失、星图实时击杀与击杀列表、击杀装配、制造的蓝图合同价不可用
 
 ## 行星工业（v19）
 

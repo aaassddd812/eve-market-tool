@@ -2,6 +2,7 @@
 // 数据来源：zKillboard 公开 API（https://zkillboard.com/api/），浏览器可直接请求（CORS: *），无需授权。
 // 一次请求即返回完整击杀邮件（受害者、攻击者、物品）及 zKill 估值（zkb）。
 // 按 zKillboard 的使用约定：请求串行、间隔发送，结果缓存 5 分钟。
+import { SERVER, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s1';
 import { skCards, skRows, skEntityHead, skTitle } from './skeleton.js?v=v16r7';
 
 let app;
@@ -14,7 +15,7 @@ let queue = Promise.resolve();
 let lastRequest = 0;
 
 const $ = (id) => document.getElementById(id);
-const img = (path, size) => `https://images.evetech.net/${path}?size=${size}`;
+const img = (path, size) => eveImage(path, size);
 
 export function initKillboard(context) {
   app = context;
@@ -29,6 +30,7 @@ export function initKillboard(context) {
 
 // ---------- 请求 ----------
 export function fetchZkill(path) {
+  if (!SERVER.kb) return Promise.reject(new Error(NO_KB_MESSAGE));
   const hit = cache.get(path);
   if (hit && Date.now() - hit.at < CACHE_TTL) return Promise.resolve(hit.data);
   const job = queue.then(async () => {
@@ -266,6 +268,7 @@ export function openServiceKill(id) {
   return openKill(null, {
     priceNote: SERVICE_PRICE_NOTE,
     load: async () => {
+      if (!SERVER.kb) throw new Error(NO_KB_MESSAGE);
       const res = await fetch('/api/kb/kill/' + id);
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || '击杀记录服务 ' + res.status);

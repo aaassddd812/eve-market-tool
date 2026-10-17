@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v25">
+  <link rel="stylesheet" href="css/modern-style.css?v=v26">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -77,9 +77,14 @@
       </nav>
 
       <div class="header-actions">
-        <div class="server-status" id="serverStatus" title="宁静服务器状态">
-          <span class="status-dot"></span>
-          <span class="status-text" id="serverStatusText">宁静 · 检测中</span>
+        <div class="server-switch">
+          <button class="server-status" id="serverStatus" type="button" title="切换服务器" aria-haspopup="menu" aria-expanded="false">
+            <span class="status-dot"></span>
+            <span class="server-name" id="serverName">宁静</span>
+            <span class="status-text" id="serverStatusText">检测中</span>
+            <svg class="server-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <div class="server-menu" id="serverMenu" role="menu" aria-label="切换服务器" hidden></div>
         </div>
         <a class="icon-btn api-link" href="api.html" target="_blank" rel="noopener" title="开放 API 文档" aria-label="开放 API 文档">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
@@ -743,7 +748,7 @@
           <ol class="steps">
             <li>
               <div class="step-title">生成授权链接并登录</div>
-              <p class="step-desc">令牌由浏览器直接向 CCP 获取，只保存在本机，本站服务器接触不到；可按 F12 在「网络」面板核对。随时可在 <a href="https://community.eveonline.com/support/third-party-applications/" target="_blank" rel="noopener">CCP 第三方应用管理</a> 撤销授权。</p>
+              <p class="step-desc" id="esiPrivacyNote">令牌由浏览器直接向 CCP 获取，只保存在本机，本站服务器接触不到；可按 F12 在「网络」面板核对。随时可在 <a href="https://community.eveonline.com/support/third-party-applications/" target="_blank" rel="noopener">CCP 第三方应用管理</a> 撤销授权。</p>
               <button class="btn btn-primary" id="generateAuthBtn">生成授权链接</button>
               <div id="authLinkBox" class="auth-link-box" hidden>
                 <div class="input-group">
@@ -755,7 +760,7 @@
             </li>
             <li>
               <div class="step-title">粘贴回调地址完成绑定</div>
-              <p class="step-desc">登录后浏览器地址栏的完整地址（包含 code 与 state）。</p>
+              <p class="step-desc" id="esiCallbackNote">登录后浏览器地址栏的完整地址（包含 code 与 state）。</p>
               <div class="input-group">
                 <input type="text" id="callbackUrl" placeholder="https://…?code=…&state=…" aria-label="授权回调地址">
                 <button class="btn btn-primary" id="bindCallbackBtn">绑定</button>
@@ -769,6 +774,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v26" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v27" type="module" data-cfasync="false"></script>
 </body>
 </html>

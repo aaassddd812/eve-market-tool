@@ -7,7 +7,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import * as JP from './jump-planner.js?v=v12r6';
+import * as JP from './jump-planner.js?v=v13';
+import { SERVER, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s1';
 
 let app;               // 主程序提供的工具函数
 let canvas, labels, lg; // WebGL 画布、标签画布及其 2D 上下文
@@ -131,7 +132,7 @@ function ownerName(owner) {
 function ownerLogo(owner, size = 32) {
   if (!owner) return '';
   const path = owner.kind === 'faction' ? `corporations/${owner.id}/logo` : `alliances/${owner.id}/logo`;
-  return `https://images.evetech.net/${path}?size=${size}`;
+  return eveImage(path, size);
 }
 
 function regionName(id) { return M.regions.get(id)?.name || ''; }
@@ -906,7 +907,7 @@ function renderLegend() {
       const started = new Date(c.start_time);
       const when = started > new Date() ? '开始于 ' + started.toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '进行中';
       rows.push(legendRow({
-        logo: `https://images.evetech.net/alliances/${c.defender_id}/logo?size=32`,
+        logo: eveImage(`alliances/${c.defender_id}/logo`, 32),
         label: sys.name + ' · ' + zh(CAMPAIGN_TYPE_ZH, c.event_type),
         sub: `防守方 ${M.live.names.get(c.defender_id) || c.defender_id} · 防守 ${((c.defender_score || 0) * 100).toFixed(0)}% / 进攻 ${((c.attackers_score || 0) * 100).toFixed(0)}% · ${when}`,
         systemIndex: sys.i
@@ -1117,11 +1118,12 @@ const LIVE_POLL = 6000;
 const FLASH_MS = 2600;                  // 每次闪烁 3 个脉冲
 const DANMAKU_SPEED = 110;              // 像素 / 秒
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
-const LIVE = { on: true, cursor: -1, timer: null, disabled: false, busy: false, lanes: [], names: new Map(), types: new Map(), kills: new Map() };
+const LIVE = { on: true, cursor: -1, timer: null, disabled: !SERVER.kb, busy: false, lanes: [], names: new Map(), types: new Map(), kills: new Map() };
 M.flashes = [];
 M.battles = [];                         // 疑似会战（battles.js 每 6 秒更新）
 
 function bindLiveKills() {
+  if (LIVE.disabled) $('mapLiveToggle').hidden = true;   // 晨曦服没有实时击杀数据
   LIVE.on = app.store.get('eve-map-live') !== '0';
   syncLiveToggle();
   $('mapLiveToggle').addEventListener('click', () => {
@@ -1606,7 +1608,7 @@ const DOCK_NOTE_TYPES = [35832, 35825, 35835, 35836, 35833, 35826, 35827, 35834]
 // 读取玩家建筑（绑定 ESI 后可用；公开部分读一次后缓存 24 小时，另含你有停靠权限的军团/联盟内部建筑）
 async function ensureStructures(force = false) {
   if (J.structures && !force) return J.structures;
-  if (force) { try { localStorage.removeItem('eve-public-structures-v1'); } catch { /* 忽略 */ } }
+  if (force) { try { localStorage.removeItem(serverKey('eve-public-structures-v1')); } catch { /* 忽略 */ } }
   const token = await app.getEsiToken();
   if (JP.hasStructureScope(token) === false) throw new Error('当前 ESI 授权不包含读取玩家建筑（esi-universe.read_structures.v1），请重新绑定 ESI');
   const box = $('routeResult');
@@ -1849,12 +1851,12 @@ function renderSystemInfo(s) {
       <button class="btn" data-route-to="${s.i}">设为终点</button>
       <button class="btn btn-ghost" data-copy="${app.esc(s.name)}">复制名称</button>
     </div>
-    <div class="map-kills">
+    ${SERVER.kb ? `<div class="map-kills">
       <div class="map-kills-head"><span>最近击杀</span><a href="https://zkillboard.com/system/${s.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
       <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
-    </div>`;
+    </div>` : ''}`;
   $('mapInfo').hidden = false;
-  loadPanelKills(`systemID/${s.id}/`, (kills) => kills.slice(0, 8), () => M.selected === s.i);
+  if (SERVER.kb) loadPanelKills(`systemID/${s.id}/`, (kills) => kills.slice(0, 8), () => M.selected === s.i);
 }
 
 // 详情面板中的击杀列表（zKillboard），面板已切换时丢弃结果
@@ -1901,14 +1903,14 @@ function selectRegion(id) {
     <div class="map-neighbors"><span>主要势力</span><div class="region-owners">${topOwners.map(({ owner, n }) =>
       `<div class="region-owner">${owner ? `<img src="${ownerLogo(owner)}" alt="" width="22" height="22">` : '<i></i>'}<span>${app.esc(ownerName(owner))}</span><b>${n}</b></div>`).join('')}</div></div>
     <div class="map-info-actions"><button class="btn" data-hl-region="${r.id}">高亮该星域</button></div>
-    <div class="map-kills">
+    ${SERVER.kb ? `<div class="map-kills">
       <div class="map-kills-head"><span>最近大额击杀</span><a href="https://zkillboard.com/region/${r.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
       <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
-    </div>
+    </div>` : ''}
     ${r.description ? `<p class="region-desc">${app.esc(r.description)}</p>` : ''}`;
   $('mapInfo').hidden = false;
   M.infoRegion = id;
-  loadPanelKills(`regionID/${id}/`, (kills) => [...kills].sort((a, b) => b.zkb.totalValue - a.zkb.totalValue).slice(0, 6),
+  if (SERVER.kb) loadPanelKills(`regionID/${id}/`, (kills) => [...kills].sort((a, b) => b.zkb.totalValue - a.zkb.totalValue).slice(0, 6),
     () => M.selected == null && M.infoRegion === id && !$('mapInfo').hidden);
   invalidate();
 }

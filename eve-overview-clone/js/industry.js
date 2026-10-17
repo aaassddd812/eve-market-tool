@@ -12,6 +12,7 @@
 //   安装费 = EIV × 星系指数 × (1 − 建筑减免) + EIV × (设施税 + 4% SCC 附加费)
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
+import { SERVER } from './server.js?v=s1';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, ensureEsiToken, hasEsiToken
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
@@ -182,6 +183,7 @@ async function loadBpContracts(ids) {
   const need = ids.filter((id) => !D.bpc.has(id));
   if (!need.length) return;
   try {
+    if (!SERVER.kb) throw new Error('晨曦服没有合同价格数据');
     const r = await fetch('/api/kb/bpprices?types=' + need.join(','));
     const j = r.ok ? await r.json() : {};
     D.bpUpdated = j.updated || D.bpUpdated;
@@ -191,6 +193,7 @@ async function loadBpContracts(ids) {
 async function loadBpAll() {
   if (D.bpAll) return D.bpAll;
   try {
+    if (!SERVER.kb) throw new Error('晨曦服没有合同价格数据');
     const r = await fetch('/api/kb/bpprices');
     const j = r.ok ? await r.json() : {};
     D.bpUpdated = j.updated || D.bpUpdated;

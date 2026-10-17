@@ -5,6 +5,7 @@
 // 我的 LP：ESI 角色忠诚点（esi-characters.read_loyalty.v1），按各军团最佳兑换估算价值。
 // 价格：全服均价（一次请求，立即可用）或吉他卖单 / 收单（按物品逐个读取，有缓存）。
 // 数据：lp-data.json 由 build_lp.mjs 生成（ESI /loyalty/stores + SDE 中文名）。
+import { SERVER, eveImage } from './server.js?v=s1';
 let ctx;   // esc, formatISK, formatNumber, showToast, store, fetchESI, getHubPrices, getMarketPriceMap, esiAuthFetch, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-lp-v1';
@@ -12,7 +13,7 @@ const FORGE = 10000002;
 const LP_SCOPE = 'esi-characters.read_loyalty.v1';
 const ICON = (id, size = 32) => `https://images.evetech.net/types/${id}/icon?size=${size}`;
 const BPC_ICON = (id, size = 32) => `https://images.evetech.net/types/${id}/bpc?size=${size}`;
-const LOGO = (id, size = 32) => `https://images.evetech.net/corporations/${id}/logo?size=${size}`;
+const LOGO = (id, size = 32) => eveImage(`corporations/${id}/logo`, size);
 const RANK_LIMIT = 200;
 const REFINE_TOP = 40;
 
@@ -52,7 +53,7 @@ function loadData() {
   if (!D.loading) {
     D.loading = (async () => {
       const [data, avg] = await Promise.all([
-        fetch('lp-data.json?v=1').then((r) => { if (!r.ok) throw new Error('lp-data.json ' + r.status); return r.json(); }),
+        fetch(SERVER.lpData).then((r) => { if (!r.ok) throw new Error('LP 数据 ' + r.status); return r.json(); }),
         ctx.getMarketPriceMap().catch(() => new Map())
       ]);
       D.data = data;

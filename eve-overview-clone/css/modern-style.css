@@ -3785,3 +3785,60 @@ html.pie-open { overflow: hidden; }
   .lp-table td:nth-child(2) { min-width: 150px; }
   .lp-corps { margin-left: 0; }
 }
+
+/* ===== 服务器切换（顶栏）===== */
+.server-switch { position: relative; }
+button.server-status { border: 0; font: inherit; cursor: pointer; transition: background 0.15s, color 0.15s; }
+button.server-status:hover, button.server-status[aria-expanded="true"] { background: var(--bg-hover); color: var(--text-primary); }
+button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.server-status .server-name { font-weight: 600; color: var(--text-primary); }
+.server-status .server-caret { width: 12px; height: 12px; margin-left: -2px; opacity: 0.7; flex-shrink: 0; }
+:root[data-server="serenity"] .server-status .server-name { color: var(--warning); }
+.server-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 1200;
+  min-width: 200px;
+  padding: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-primary);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+.server-menu button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 12px 8px 30px;
+  position: relative;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.server-menu button b { font-size: 0.875rem; font-weight: 600; }
+.server-menu button small { font-size: 0.75rem; color: var(--text-muted); }
+.server-menu button:hover, .server-menu button:focus-visible { background: var(--bg-tertiary); outline: none; }
+.server-menu button[aria-checked="true"]::before {
+  content: '';
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  margin-top: -4px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+}
+.server-unsupported { min-height: 50vh; }
+@media (max-width: 480px) {
+  .server-status .server-caret { display: none; }
+}
+.server-unsupported-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 8px; }
+.server-unsupported-actions .btn { margin-top: 0; }
