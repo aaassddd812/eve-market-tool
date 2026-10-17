@@ -40,6 +40,7 @@ import gzip
 import io
 import json
 import logging
+import math
 import mimetypes
 import os
 import sqlite3
@@ -61,8 +62,8 @@ EVEREF_CONTRACTS = "https://data.everef.net/public-contracts/public-contracts-la
 BP_CONTRACT_TTL = 3600      # 蓝图合同价每小时刷新（快照约每 30 分钟更新）
 BP_CONTRACT_KEEP = 5        # 每种蓝图的原图 / 拷贝各保留最便宜的几份合同
 BP_MAX_TYPES = 300          # bpprices 单次最多查询的蓝图种类
-API_RATE = 60               # 开放接口：每个 IP 每分钟可用的请求额度（令牌桶，容量同此值）
-API_COST = {"ship_fits": 10, "battle_report": 5}   # 开销大的接口一次消耗多个额度
+API_RATE = 30               # 开放接口：每个 IP 每分钟可用的请求额度（令牌桶，容量同此值）
+API_COST = {"ship_fits": 10, "battle_report": 5, "industry_profits": 5}   # 开销大的接口一次消耗多个额度
 PRICE_MAX_TYPES = 200       # prices 单次最多查询的物品种类
 SHIPFIT_MAX = 300           # shipfits：每次最多分析的最近损失数
 SHIPFIT_WORKERS = 16        # shipfits：并发向 ESI 取击杀原文
@@ -209,6 +210,7 @@ class Store:
         conn.executescript(SCHEMA)
         conn.commit()
         self.prices = {}
+        self.adjusted = {}
         for type_id, sell, buy, avg in conn.execute("SELECT type_id, sell, buy, avg FROM prices"):
             self.prices[type_id] = (sell, buy, avg)
         self.contract_prices = dict(conn.execute("SELECT type_id, price FROM contract_prices"))
@@ -412,6 +414,7 @@ class Workers:
                 sell[t] = p
         avg_list, _ = get_json(f"{ESI}/markets/prices/")
         avg = {x["type_id"]: x.get("average_price") or x.get("adjusted_price") for x in avg_list}
+        self.store.adjusted = {x["type_id"]: x["adjusted_price"] for x in avg_list if x.get("adjusted_price")}   # 制造任务的 EIV 用
         types = set(sell) | set(buy) | set(avg)
         prices = {t: (sell.get(t), buy.get(t), avg.get(t)) for t in types}
         c = self.store.conn()
@@ -1332,6 +1335,312 @@ class Api:
                 "prices": {t: round(self.store.price(t), 2) for t in types}, "names": self.names_for(ids)}
 
 
+# ---------------------------------------------------------------- 制造计算（开放接口用，公式与前端 js/industry.js 一致，技能按全 5 级）
+IND_FACILITIES = {   # 名称 -> (建筑类型, 材料效率 %, 时间效率 %, 安装费减免 %, 活动)
+    "npc": (None, 0, 0, 0, "m"), "raitaru": (35825, 1, 15, 3, "m"), "azbel": (35826, 1, 20, 4, "m"), "sotiyo": (35827, 1, 30, 5, "m"),
+    "athanor": (35835, 0, 0, 0, "r"), "tatara": (35836, 0, 25, 0, "r"),
+}
+IND_RIGS = [(0, 0), (2, 20), (2.4, 24)]   # 无 / T1 / T2 改装件：材料效率 %、时间效率 %
+IND_SCC = 4                # SCC 附加费 %
+IND_NPC_TAX = 0.25         # NPC 空间站设施税 %
+IND_SALES_TAX = 7.5 * (1 - 0.11 * 5)   # 销售税 %（会计学 5 级）
+IND_BROKER = 3 - 0.3 * 5               # 中介费 %（中介关系学 5 级）
+IND_RANK_METAS = {0, 1, 2, 14, 53, 54}
+IND_CATS = {"ship": [6], "module": [7, 32], "charge": [8], "drone": [18, 87], "component": [17, 4], "structure": [65, 66, 22, 39, 40, 46], "implant": [20]}
+IND_INDEX_TTL = 3600
+JITA_SYSTEM = 30000142
+IND_SYSTEM_ALIASES = {"jita": 30000142, "perimeter": 30000144, "amarr": 30002187, "dodixie": 30002659, "rens": 30002510, "hek": 30002053}   # 星图数据只有中文名
+
+
+class Industry:
+    def __init__(self, store, dirs):
+        self.store, self.dirs = store, dirs
+        self.data = self.systems = self.regions = None
+        self.indices, self.indices_at, self.lock = {}, 0, threading.Lock()
+        self.rank_cache = {}
+
+    def _load(self, name):
+        for d in self.dirs:
+            path = os.path.join(d, name) if d else None
+            if path and os.path.isfile(path):
+                with open(path, encoding="utf-8") as fh:
+                    return json.load(fh)
+        raise RuntimeError(f"找不到 {name}（用 --industry-dir 指定前端目录）")
+
+    def ensure(self):
+        with self.lock:
+            if self.data is None:
+                d = self._load("industry-data.json")
+                self.data = {"bp": {int(k): v for k, v in d["bp"].items()}, "inv": {int(k): v for k, v in d["inv"].items()},
+                             "types": {int(k): v for k, v in d["types"].items()}, "groups": {int(k): v for k, v in d["groups"].items()},
+                             "decryptors": {int(k): v for k, v in d["decryptors"].items()}}
+                m = self._load("map-data.json")
+                self.systems = {x[0]: {"name": x[1], "sec": x[5], "region": x[6]} for x in m["systems"]}
+                self.sys_by_name = {x[1].lower(): x[0] for x in m["systems"]}
+                self.regions = {r[0]: r[1] for r in m["regions"]}
+            if time.time() - self.indices_at > IND_INDEX_TTL:
+                try:
+                    rows, _ = get_json(f"{ESI}/industry/systems/")
+                    self.indices = {r["solar_system_id"]: {c["activity"]: c["cost_index"] for c in r["cost_indices"]} for r in rows}
+                    self.indices_at = time.time()
+                    self.rank_cache.clear()
+                except Exception as e:
+                    log.warning("成本指数获取失败：%s", e)
+                    self.indices_at = time.time() - IND_INDEX_TTL + 300   # 5 分钟后再试
+            if not self.store.adjusted:
+                try:
+                    rows, _ = get_json(f"{ESI}/markets/prices/")
+                    self.store.adjusted = {x["type_id"]: x["adjusted_price"] for x in rows if x.get("adjusted_price")}
+                except Exception as e:
+                    log.warning("调整价格获取失败：%s", e)
+
+    # ---- 基础
+    def name(self, tid):
+        t = self.data["types"].get(tid)
+        return {"id": tid, "name": t[0] if t else None, "name_en": t[1] if t else None}
+
+    def category(self, tid):
+        t = self.data["types"].get(tid)
+        return self.data["groups"].get(t[2], [None, 0])[1] if t else 0
+
+    def price(self, tid, side="sell"):
+        sell, buy, avg = self.store.prices.get(tid) or (None, None, None)
+        v = buy if side == "buy" else sell
+        return v if v is not None else sell if sell is not None else buy if buy is not None else avg
+
+    def system(self, value):
+        if value in (None, ""):
+            return JITA_SYSTEM
+        v = str(value).strip()
+        sid = int(v) if v.isdigit() else self.sys_by_name.get(v.lower()) or IND_SYSTEM_ALIASES.get(v.lower())
+        if sid not in self.systems:
+            raise ValueError(f"未知星系：{value}")
+        return sid
+
+    def product(self, value):
+        if value in (None, ""):
+            raise ValueError("缺少 product")
+        v = str(value).strip()
+        if v.isdigit() and int(v) in self.data["bp"]:
+            return int(v)
+        if v.isdigit():
+            # 也可以传蓝图 ID
+            for pid, b in self.data["bp"].items():
+                if b[0] == int(v):
+                    return pid
+            raise KeyError(v)
+        low = v.lower()
+        for pid in self.data["bp"]:
+            t = self.data["types"].get(pid)
+            if t and (t[0].lower() == low or t[1].lower() == low):
+                return pid
+        raise KeyError(v)
+
+    def settings(self, q, act):
+        fac_name = (q.get("facility") or "").lower()
+        if fac_name and fac_name not in IND_FACILITIES:
+            raise ValueError("facility 只能是 " + " / ".join(IND_FACILITIES))
+        fac = IND_FACILITIES.get(fac_name) or IND_FACILITIES["npc" if act == "m" else "tatara"]
+        if not fac_name or fac[4] != act:   # 没指定或设施做不了这种活动时用默认：制造 NPC 空间站，反应塔塔拉
+            fac_name, fac = ("npc", IND_FACILITIES["npc"]) if act == "m" else ("tatara", IND_FACILITIES["tatara"])
+        rig = int(q.get("rig", 0))
+        if rig not in (0, 1, 2):
+            raise ValueError("rig 只能是 0 / 1 / 2")
+        if fac_name == "npc":
+            rig = 0
+        tax = float(q["tax"]) if q.get("tax") not in (None, "") else (IND_NPC_TAX if fac_name == "npc" else 1.0)
+        return {"facility": fac_name, "fac": fac, "rig": rig, "tax": tax}
+
+    def job(self, pid, runs, me, te, sid, st):
+        _, qty, base_time, mats, _, act = self.data["bp"][pid][:6]
+        fac, (rig_me, rig_te) = st["fac"], IND_RIGS[st["rig"]]
+        sec = self.systems.get(sid, {}).get("sec", 0.5)
+        sm = 1 if sec >= 0.45 else 1.9 if sec > 0 else 2.1   # 改装件加成随安全等级放大
+        mul = (1 - fac[1] / 100) * (1 - rig_me * sm / 100)
+        items = [{"id": tid, "qty": max(runs, math.ceil(round(base * runs * (1 - me / 100) * mul * 100) / 100))} for tid, base in mats]
+        eiv = sum(base * runs * (self.store.adjusted.get(tid) or 0) for tid, base in mats)
+        idx = (self.indices.get(sid) or {}).get("reaction" if act == "r" else "manufacturing", 0)
+        gross = eiv * idx * (1 - fac[3] / 100)
+        taxes = eiv * (st["tax"] + IND_SCC) / 100
+        skill = (1 - 0.04 * 5) if act == "r" else (1 - 0.04 * 5) * (1 - 0.03 * 5)
+        secs = base_time * runs * (1 - te / 100) * (1 - fac[2] / 100) * (1 - rig_te * sm / 100) * skill
+        return {"act": act, "out": qty * runs, "items": items, "eiv": eiv, "index": idx, "gross": gross, "taxes": taxes, "cost": gross + taxes, "secs": secs}
+
+    def invention(self, pid, dec_id, sid, st, mat_side):
+        inv = self.data["inv"].get(self.data["bp"][pid][0])
+        if not inv:
+            return None
+        t1bp, base, runs_per, dcs, _, skills = inv
+        dec = self.data["decryptors"].get(dec_id, [1, 0, 0, 0]) if dec_id else [1, 0, 0, 0]
+        n_enc = sum(1 for tid, _ in skills if "Encryption" in (self.data["types"].get(tid, ["", ""])[1]))
+        n_sci = len(skills) - n_enc
+        prob = min(1, base * (1 + n_sci * 5 / 30 + n_enc * 5 / 40) * dec[0])
+        runs = max(1, runs_per + dec[3])
+        eiv = sum(b * (self.store.adjusted.get(tid) or 0) for tid, b in self.data["bp"][pid][3])
+        idx = (self.indices.get(sid) or {}).get("invention", 0)
+        job_cost = eiv * 0.02 * idx + eiv * 0.02 * (st["tax"] + IND_SCC) / 100
+        dc_cost = sum(q * (self.price(tid, mat_side) or 0) for tid, q in dcs)
+        dec_cost = (self.price(dec_id, mat_side) or 0) if dec_id else 0
+        attempt = dc_cost + dec_cost + job_cost
+        return {"t1_blueprint": t1bp, "probability": round(prob, 4), "runs_per_copy": runs, "me": 2 + dec[1], "te": 4 + dec[2],
+                "datacores": [{**self.name(tid), "qty": q} for tid, q in dcs], "decryptor": self.name(dec_id) if dec_id else None,
+                "cost_per_attempt": round(attempt, 2), "cost_per_run": round(attempt / (prob * runs), 2)}
+
+    # ---- 接口
+    def search(self, q):
+        self.ensure()
+        text = (q.get("q") or "").strip().lower()
+        if len(text) < 1:
+            raise ValueError("缺少 q")
+        out = []
+        for pid, b in self.data["bp"].items():
+            t = self.data["types"].get(pid)
+            if t and (text in t[0].lower() or text in t[1].lower()):
+                out.append({**self.name(pid), "blueprint_id": b[0], "activity": "reaction" if b[5] == "r" else "manufacturing",
+                            "_rank": (t[0].lower() != text and t[1].lower() != text, len(t[0]))})
+        out.sort(key=lambda x: x.pop("_rank"))
+        return {"results": out[:30]}
+
+    def blueprint(self, q, pid_value):
+        self.ensure()
+        pid = self.product(pid_value)
+        bpid, qty, t, mats, max_runs, act, skills, on_market = self.data["bp"][pid]
+        inv = self.data["inv"].get(bpid)
+        return {"product": self.name(pid), "blueprint": self.name(bpid), "activity": "reaction" if act == "r" else "manufacturing",
+                "output_per_run": qty, "time_per_run": t, "max_runs": max_runs, "blueprint_on_market": bool(on_market),
+                "materials": [{**self.name(tid), "qty": n} for tid, n in mats], "skills": [{**self.name(tid), "level": lv} for tid, lv in skills],
+                "invention": {"t1_blueprint": self.name(inv[0]), "base_probability": inv[1], "runs_per_copy": inv[2],
+                              "datacores": [{**self.name(tid), "qty": n} for tid, n in inv[3]], "time": inv[4],
+                              "skills": [{**self.name(tid), "level": lv} for tid, lv in inv[5]]} if inv else None}
+
+    def cost(self, q):
+        self.ensure()
+        pid = self.product(q.get("product"))
+        b = self.data["bp"][pid]
+        act = b[5]
+        st = self.settings(q, act)
+        sid = self.system(q.get("system"))
+        mat_side = "buy" if q.get("materials") == "buy" else "sell"
+        sell_side = "buy" if q.get("sell") == "buy" else "sell"
+        runs = max(1, min(int(q.get("runs", 1)), 100000))
+        dec_id = int(q.get("decryptor") or 0)
+        inv = self.invention(pid, dec_id, sid, st, mat_side) if act == "m" and q.get("invention", "1") != "0" else None
+        me = 0 if act == "r" else float(q["me"]) if q.get("me") not in (None, "") else inv["me"] if inv else 10
+        te = 0 if act == "r" else float(q["te"]) if q.get("te") not in (None, "") else inv["te"] if inv else 20
+        if not (0 <= me <= 10 and 0 <= te <= 20):
+            raise ValueError("me 范围 0–10，te 范围 0–20")
+        j = self.job(pid, runs, me, te, sid, st)
+        fee = IND_BROKER if mat_side == "buy" else 0
+        mats, missing = [], []
+        for it in j["items"]:
+            unit = self.price(it["id"], mat_side)
+            if unit is None:
+                missing.append(it["id"])
+            mats.append({**self.name(it["id"]), "qty": it["qty"], "unit_price": unit, "total": round((unit or 0) * it["qty"] * (1 + fee / 100), 2)})
+        mat_cost = sum(m["total"] for m in mats)
+        # 蓝图：能发明的计发明成本；市场买不到原图、合同有拷贝的按合同拷贝每流程单价
+        bpc = (self.store.bp_contracts.get(b[0]) or {}).get("c") or []
+        bp_cost = bpc[0][0] * runs if not inv and not b[7] and bpc else 0
+        inv_cost = inv["cost_per_run"] * runs if inv else 0
+        total = mat_cost + j["cost"] + inv_cost + bp_cost
+        unit_price = self.price(pid, sell_side)
+        sell_fee = IND_SALES_TAX + (IND_BROKER if sell_side == "sell" else 0)
+        revenue = (unit_price or 0) * j["out"] * (1 - sell_fee / 100)
+        sysinfo = self.systems[sid]
+        return {
+            "product": self.name(pid), "activity": "reaction" if act == "r" else "manufacturing", "runs": runs, "output": j["out"], "me": me, "te": te,
+            "system": {"id": sid, "name": sysinfo["name"], "security": round(sysinfo["sec"], 2), "cost_index": j["index"]},
+            "facility": st["facility"], "rig": st["rig"], "facility_tax": st["tax"], "prices": {"materials": mat_side, "product": sell_side, "updated": self.store.state.get("prices_updated")},
+            "materials": mats, "missing_prices": missing,
+            "material_cost": round(mat_cost, 2), "job_cost": round(j["cost"], 2), "eiv": round(j["eiv"], 2),
+            "invention": inv, "invention_cost": round(inv_cost, 2), "blueprint_cost": round(bp_cost, 2),
+            "total_cost": round(total, 2), "cost_per_unit": round(total / j["out"], 2),
+            "product_price": unit_price, "sales_fees_percent": round(sell_fee, 2), "revenue": round(revenue, 2),
+            "profit": round(revenue - total, 2), "margin": round((revenue - total) / revenue, 4) if revenue else None,
+            "time_seconds": round(j["secs"]), "profit_per_hour": round((revenue - total) / (j["secs"] / 3600), 2) if j["secs"] else None,
+        }
+
+    def profits(self, q):
+        self.ensure()
+        act = "r" if q.get("activity") == "reaction" else "m"
+        cat = q.get("category") or "all"
+        if cat != "all" and cat not in IND_CATS:
+            raise ValueError("category 只能是 all / " + " / ".join(IND_CATS))
+        tech = q.get("tech") or "all"
+        sort = q.get("sort") if q.get("sort") in ("profit_per_hour", "profit", "margin") else "profit_per_hour"
+        limit = max(1, min(int(q.get("limit", 50)), 200))
+        sid = self.system(q.get("system"))
+        st = self.settings(q, act)
+        liquid = q.get("liquid", "1") != "0"
+        key = (act, cat, tech, sort, sid, st["facility"], st["rig"], st["tax"], liquid, self.store.state.get("prices_updated"))
+        hit = self.rank_cache.get(key)
+        if not hit or time.time() - hit[0] > CACHE_TTL:
+            rows = []
+            cats = IND_CATS.get(cat)
+            for pid, b in self.data["bp"].items():
+                if b[5] != act:
+                    continue
+                t = self.data["types"].get(pid)
+                if not t or (cats and self.category(pid) not in cats) or (tech != "all" and str(t[3]) != tech):
+                    continue
+                inv_ok = b[0] in self.data["inv"]
+                bpc = (self.store.bp_contracts.get(b[0]) or {}).get("c") or []
+                need_bpc = not b[7] and not inv_ok
+                if (not bpc) if need_bpc else t[4] not in IND_RANK_METAS:
+                    continue
+                unit = self.price(pid)
+                if not unit:
+                    continue
+                sell, buy, _ = self.store.prices.get(pid) or (None, None, None)
+                adj = self.store.adjusted.get(pid)
+                if sell is None and buy is None and adj and unit > adj * 6 and unit - adj > 1e6:
+                    continue
+                # 有价无市：吉他要同时有卖单和收单，且卖价不超过收价 3 倍
+                if liquid and (sell is None or buy is None or sell > buy * 3):
+                    continue
+                if any(self.price(tid) is None for tid, _ in b[3]):
+                    continue
+                inv = self.invention(pid, 0, sid, st, "sell") if act == "m" else None
+                me, te = (0, 0) if act == "r" else (inv["me"], inv["te"]) if inv else (10, 20)
+                j = self.job(pid, 1, me, te, sid, st)
+                mats = sum(it["qty"] * self.price(it["id"]) for it in j["items"])
+                cost = mats + j["cost"] + (inv["cost_per_run"] if inv else 0) + (bpc[0][0] if need_bpc else 0)
+                revenue = unit * j["out"] * (1 - (IND_SALES_TAX + IND_BROKER) / 100)
+                profit = revenue - cost
+                if revenue and profit / revenue > 0.9:   # 利润率过高的多是有价无市
+                    continue
+                rows.append({**self.name(pid), "output": j["out"], "unit_price": unit, "cost": round(cost, 2), "profit": round(profit, 2),
+                             "margin": round(profit / revenue, 4) if revenue else 0, "time_seconds": round(j["secs"]),
+                             "profit_per_hour": round(profit / (j["secs"] / 3600), 2) if j["secs"] else 0, "invention": bool(inv), "contract_bpc": need_bpc})
+            rows.sort(key=lambda r: r[sort], reverse=True)
+            hit = (time.time(), rows)
+            self.rank_cache[key] = hit
+            while len(self.rank_cache) > 50:
+                self.rank_cache.pop(next(iter(self.rank_cache)))
+        return {"activity": "reaction" if act == "r" else "manufacturing", "system": sid, "facility": st["facility"], "rig": st["rig"],
+                "sort": sort, "liquid": liquid, "total": len(hit[1]), "rows": hit[1][:limit]}
+
+    def cost_indices(self, q):
+        self.ensure()
+        activity = q.get("activity") or "manufacturing"
+        acts = ("manufacturing", "invention", "reaction", "copying", "researching_material_efficiency", "researching_time_efficiency")
+        if activity not in acts:
+            raise ValueError("activity 只能是 " + " / ".join(acts))
+        secs = set((q.get("security") or "high,low,null").split(","))
+        region = int(q["region"]) if q.get("region") else None
+        limit = max(1, min(int(q.get("limit", 50)), 500))
+        cls = lambda sec: "high" if sec >= 0.45 else "low" if sec > 0 else "null"
+        rows = []
+        for sid, idx in self.indices.items():
+            s = self.systems.get(sid)
+            if not s or cls(s["sec"]) not in secs or (region and s["region"] != region) or (activity == "reaction" and cls(s["sec"]) == "high"):
+                continue
+            rows.append({"id": sid, "name": s["name"], "security": round(s["sec"], 2), "region_id": s["region"], "region": self.regions.get(s["region"]),
+                         "cost_index": idx.get(activity, 0), "indices": idx})
+        rows.sort(key=lambda r: r["cost_index"])
+        return {"activity": activity, "total": len(rows), "systems": rows[:limit]}
+
+
 # ---------------------------------------------------------------- 开放接口
 class RateLimiter:
     """按 IP 的令牌桶：容量 API_RATE，每秒恢复 API_RATE / 60 个"""
@@ -1353,7 +1662,7 @@ class RateLimiter:
             return ok, int(tokens), retry
 
 
-def open_routes(api):
+def open_routes(api, industry):
     """开放接口路由：(路径分段模式, 名称, 处理函数)；{n} 为数字参数，{s} 为字符串参数。文档见 api.html"""
     local = lambda q: {**q, "_local": "1"}
 
@@ -1368,7 +1677,8 @@ def open_routes(api):
         return api.bpprices(q)
     return [
         ((), "index", lambda q: {"name": "EVE Market 开放 API", "version": "v1", "docs": "/api.html",
-                                 "endpoints": [("/api/v1/" + "/".join(p)).replace("{n}", "{id}").replace("{s}", "{kind}") for p, *_ in open_routes(api)[1:]]}),
+                                 "endpoints": [("/api/v1/" + "/".join(p)).replace("{n}", "{id}").replace("{s}", "{product}" if p[0] == "industry" else "{kind}")
+                                               for p, *_ in open_routes(api, industry)[1:]]}),
         (("status",), "status", lambda q: {k: v for k, v in api.status(q).items() if k not in ("r2z2_seq",)}),
         (("prices",), "prices", api.prices),
         (("blueprints", "prices"), "bp_prices", bp_prices),
@@ -1383,6 +1693,11 @@ def open_routes(api):
         (("entities", "{s}", "{n}"), "entity", entity),
         (("search",), "search", api.search),
         (("ships", "{n}", "fits"), "ship_fits", lambda q, ship: api.shipfits({**q, "ship": str(ship)})),
+        (("industry", "search"), "industry_search", industry.search),
+        (("industry", "blueprints", "{s}"), "industry_blueprint", lambda q, v: industry.blueprint(q, v)),
+        (("industry", "cost"), "industry_cost", industry.cost),
+        (("industry", "profits"), "industry_profits", industry.profits),
+        (("industry", "systems"), "industry_systems", industry.cost_indices),
     ]
 
 
@@ -1406,8 +1721,8 @@ def match_route(routes, parts):
 
 
 # ---------------------------------------------------------------- HTTP 服务
-def make_handler(api, static_dir):
-    v1 = open_routes(api)
+def make_handler(api, static_dir, industry):
+    v1 = open_routes(api, industry)
     limiter = RateLimiter()
     routes = {"status": api.status, "live": api.live, "battles": api.battles, "feed": api.feed, "top": api.top, "summary": api.summary,
               "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits}
@@ -1461,7 +1776,11 @@ def make_handler(api, static_dir):
             try:
                 return self.send_json(200, fn(q, *args), cors)
             except KeyError as e:
-                return err(404 if name in ("kill", "entity") else 400, f"缺少或无效的参数：{e}" if name not in ("kill", "entity") else "找不到")
+                if name in ("kill", "entity", "industry_blueprint", "industry_cost"):
+                    return err(404, "找不到" + ("该产品的蓝图" if name.startswith("industry") else ""))
+                return err(400, f"缺少或无效的参数：{e}")
+            except RuntimeError as e:
+                return err(503, str(e))
             except ValueError as e:
                 return err(400, str(e) or "参数无效")
             except Exception:
@@ -1525,6 +1844,7 @@ def main():
     parser.add_argument("--live", default="auto", choices=["auto", "r2z2", "redisq", "poll", "off"],
                         help="实时数据来源；redisq 已停用，等同 r2z2")
     parser.add_argument("--static", help="同时托管的前端静态目录（本地 / 演示环境）")
+    parser.add_argument("--industry-dir", help="制造接口读取 industry-data.json / map-data.json 的目录（默认依次找 --static、仓库前端目录、/opt/eve/dist）")
     parser.add_argument("--system-regions", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_regions.json"))
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
@@ -1536,7 +1856,9 @@ def main():
     Workers(store, args.days, "r2z2" if args.live == "redisq" else args.live).start()
     api = Api(store)
     threading.Thread(target=api.warm, daemon=True).start()
-    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static))
+    here = os.path.dirname(os.path.abspath(__file__))
+    industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])
+    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry))
     log.info("击杀记录服务已启动 http://%s:%d", args.bind, args.port)
     server.serve_forever()
 

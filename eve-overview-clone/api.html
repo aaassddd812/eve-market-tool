@@ -48,7 +48,7 @@
     nav.toc h4:first-child { margin-top: 0; }
     nav.toc a { display: block; padding: 3px 8px; border-radius: 6px; color: var(--text2); font-size: 0.8125rem; }
     nav.toc a:hover { background: var(--bg3); color: var(--text); text-decoration: none; }
-    nav.toc a code { background: none; padding: 0; font-size: 0.75rem; }
+    nav.toc a code { background: none; padding: 0; font-size: 0.75rem; word-break: break-all; }
     main { padding: 28px 32px 80px; min-width: 0; }
     h1 { margin: 0 0 6px; font-size: 1.625rem; }
     h2 { margin: 40px 0 12px; padding-top: 8px; font-size: 1.25rem; border-top: 1px solid var(--border); padding-top: 24px; }
@@ -105,11 +105,11 @@
     <nav class="toc" id="toc"></nav>
     <main>
       <h1>开放 API</h1>
-      <p class="lead">本站对外提供的只读接口：吉他市场价格、蓝图合同价、击杀记录、会战、排行与实体统计、按舰船的阵亡装配。数据与网站页面相同，免注册、免密钥，可以直接在浏览器或你的程序里调用。</p>
+      <p class="lead">本站对外提供的只读接口：吉他市场价格、蓝图合同价、制造成本与利润、成本指数、击杀记录、会战、排行与实体统计、按舰船的阵亡装配。数据与网站页面相同，免注册、免密钥，可以直接在浏览器或你的程序里调用。</p>
       <div class="cards">
         <div class="card"><span>基础地址</span><b id="base"></b></div>
         <div class="card"><span>格式</span><b>JSON（UTF-8），支持 gzip</b></div>
-        <div class="card"><span>频率限制</span><b>每 IP 每分钟 60 次</b></div>
+        <div class="card"><span>频率限制</span><b>每 IP 每分钟 30 次</b></div>
         <div class="card"><span>跨域</span><b>允许任意来源（CORS *）</b></div>
       </div>
 
@@ -121,10 +121,10 @@
 
       <h2 id="rules">通用约定</h2>
       <h3>频率限制</h3>
-      <p>按来源 IP 计算，令牌桶容量 60，每秒恢复 1 次额度。多数接口每次消耗 1 次，标注了「消耗 N 次」的接口一次扣 N 次。每个响应都带有：</p>
+      <p>按来源 IP 计算，令牌桶容量 30，每 2 秒恢复 1 次额度。多数接口每次消耗 1 次，标注了「消耗 N 次」的接口一次扣 N 次。每个响应都带有：</p>
       <table>
         <tr><th>响应头</th><th>说明</th></tr>
-        <tr><td><code>X-RateLimit-Limit</code></td><td>每分钟额度（60）</td></tr>
+        <tr><td><code>X-RateLimit-Limit</code></td><td>每分钟额度（30）</td></tr>
         <tr><td><code>X-RateLimit-Remaining</code></td><td>当前剩余额度</td></tr>
         <tr><td><code>Retry-After</code></td><td>仅 429 时出现，需要等待的秒数</td></tr>
       </table>
@@ -198,6 +198,22 @@
           fields: [['kills / losses / destroyed / lost', '击杀数、损失数、击毁价值、损失价值'], ['solo_kills / final_blows', '单杀数、最后一击数'], ['members[]', '成员明细（军团 / 联盟）'], ['ships_used / ships_lost', '常用 / 损失舰船 TOP 8'], ['regions / systems', '活跃星域 / 星系 TOP 8']] },
         { path: '/search', title: '名称搜索', desc: '按名称搜索人物、军团、联盟（库中出现过的）。', example: '/search?q=goon',
           params: [['q', true, '关键字，至少 2 个字符']], fields: [['results[]', '{id, name, category}，最多 30 条']] }
+      ]],
+      ['制造', [
+        { path: '/industry/search', title: '搜索产品', desc: '按中英文名称搜索能制造 / 反应的产品。', example: '/industry/search?q=Drake',
+          params: [['q', true, '关键字（中文或英文）']], fields: [['results[]', '{id, name, name_en, blueprint_id, activity}，最多 30 条']] },
+        { path: '/industry/blueprints/{product}', title: '蓝图信息', desc: '产品的蓝图：每流程材料、产量、时间、所需技能与发明（T2 / T3）。', example: '/industry/blueprints/24698',
+          params: [['product', true, '路径参数：产品 ID、蓝图 ID 或产品名称（中英文）']],
+          fields: [['product / blueprint', '产品与蓝图 {id, name, name_en}'], ['activity', 'manufacturing（制造）/ reaction（反应）'], ['output_per_run / time_per_run / max_runs', '每流程产量、每流程秒数（未计加成）、拷贝最大流程数'], ['blueprint_on_market', '原图能否在 NPC 市场买到'], ['materials[] / skills[]', '每流程材料 {id, name, qty}、所需技能 {id, name, level}'], ['invention', '发明：T1 蓝图、基础成功率、每份拷贝流程数、数据核心、时间、技能；不能发明为 null']] },
+        { path: '/industry/cost', title: '制造成本计算', desc: '按星系成本指数、设施与改装件、蓝图效率计算材料用量、安装费、发明分摊与利润，公式与网站「制造计算器」一致。技能按全部 5 级。', example: '/industry/cost?product=24698&runs=10&system=Jita&facility=raitaru&rig=1',
+          params: [['product', true, '产品 ID、蓝图 ID 或名称'], ['runs', false, '流程数，默认 1'], ['me / te', false, '蓝图材料 / 时间效率；默认：能发明的按发明拷贝（2 / 4 + 解码器），其余 10 / 20，反应为 0'], ['system', false, '星系 ID 或中文名（也认 Jita / Amarr / Dodixie / Rens / Hek / Perimeter），默认吉他'], ['facility', false, '制造：npc（默认）/ raitaru / azbel / sotiyo；反应：athanor / tatara（默认）'], ['rig', false, '改装件：0 无（默认）/ 1 T1 / 2 T2，加成随安全等级放大；NPC 空间站无改装件'], ['tax', false, '设施税 %，默认 NPC 空间站 0.25、玩家建筑 1'], ['materials', false, '材料价格：sell（吉他卖单直接买，默认）/ buy（挂收单，加中介费）'], ['sell', false, '产品价格：sell（挂卖单，扣销售税 + 中介费，默认）/ buy（卖给收单，只扣销售税）'], ['invention', false, '是否计入发明成本，默认 1；0 表示不计'], ['decryptor', false, '解码器物品 ID']],
+          fields: [['materials[]', '{id, name, qty, unit_price, total}，qty 为计入效率后的实际用量'], ['missing_prices', '没有价格的材料 ID（按 0 计）'], ['material_cost / job_cost / eiv', '材料费、安装费（成本指数 + 设施税 + SCC 4%）、物品估值'], ['invention / invention_cost', '发明明细（成功率、每流程分摊）与本次分摊的发明成本'], ['blueprint_cost', '市场买不到原图时按合同拷贝每流程单价计的蓝图成本'], ['total_cost / cost_per_unit', '总成本、单件成本'], ['product_price / revenue', '产品单价、扣除税费后的收入'], ['profit / margin / profit_per_hour', '利润、利润率、每小时利润'], ['time_seconds', '任务时间（计入技能、设施、改装件）']] },
+        { path: '/industry/profits', title: '利润排行', desc: '按每小时利润 / 每流程利润 / 利润率排列可获得蓝图的产品（T1 与反应配方能在 NPC 市场买到，T2 / T3 能发明，其余要在公开合同买得到拷贝）。默认过滤有价无市的产品。', cost: 5, example: '/industry/profits?category=ship&sort=profit_per_hour&limit=20',
+          params: [['activity', false, 'manufacturing（默认）/ reaction'], ['category', false, 'all（默认）/ ship / module / charge / drone / component / structure / implant'], ['tech', false, 'all（默认）/ 1 / 2 / 3'], ['sort', false, 'profit_per_hour（默认）/ profit / margin'], ['limit', false, '条数，默认 50，最多 200'], ['liquid', false, '默认 1：只看吉他同时有卖单和收单、卖价不超过收价 3 倍的；0 不过滤'], ['system / facility / rig / tax', false, '同制造成本计算']],
+          fields: [['total', '符合条件的产品数'], ['rows[]', '{id, name, output, unit_price, cost, profit, margin, time_seconds, profit_per_hour, invention, contract_bpc}（每流程，ME / TE 同成本计算的默认值）']] },
+        { path: '/industry/systems', title: '成本指数（去哪造最省）', desc: '各星系的工业成本指数，从低到高排列，每小时从 ESI 更新。', example: '/industry/systems?activity=manufacturing&security=high&limit=20',
+          params: [['activity', false, 'manufacturing（默认）/ invention / reaction / copying / researching_material_efficiency / researching_time_efficiency'], ['security', false, '安全等级，逗号分隔：high,low,null（默认全部）；反应自动排除高安'], ['region', false, '星域 ID'], ['limit', false, '条数，默认 50，最多 500']],
+          fields: [['systems[]', '{id, name, security, region_id, region, cost_index, indices}，indices 为该星系全部活动的指数']] }
       ]],
       ['装配', [
         { path: '/ships/{id}/fits', title: '阵亡装配', desc: '某型舰船最近若干天阵亡时的装配，相同装配合并计数。首次查询需要从 ESI 取击杀原文，可能要十几秒。', cost: 10, example: '/ships/24698/fits?days=7',

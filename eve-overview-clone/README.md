@@ -303,9 +303,13 @@ WantedBy=multi-user.target
 击杀记录服务同时提供对外的只读接口 `/api/v1/`，文档为站点根目录的 `api.html`（页面顶部「API」按钮打开，每个接口都能直接「试一试」）。
 
 - 免注册、免密钥，允许任意来源跨域（CORS `*`），返回 JSON；出错统一为 `{"error": {"code", "message"}}`
-- 按 IP 令牌桶限流：每分钟 60 次（`API_RATE`），阵亡装配一次消耗 10 次、战场统计 5 次（`API_COST`）；响应头带 `X-RateLimit-Limit / Remaining`，超限返回 429 与 `Retry-After`
+- 按 IP 令牌桶限流：每分钟 30 次（`API_RATE`），阵亡装配一次消耗 10 次、战场统计与利润排行 5 次（`API_COST`）；响应头带 `X-RateLimit-Limit / Remaining`，超限返回 429 与 `Retry-After`
 - 接口：`/status`、`/prices`（吉他卖 / 收 / 全服均价 / 本站估价）、`/blueprints/prices`、`/kills`（只查保留期内，不转向 zKillboard）、`/kills/live`、`/kills/top`、
   `/kills/{id}`、`/stats/summary`、`/battles`、`/battle-report`、`/leaderboard`、`/entities/{kind}/{id}`、`/search`、`/ships/{id}/fits`；`/api/v1` 返回接口目录
+- 制造接口（`Industry` 类，公式与 `js/industry.js` 一致，技能按全 5 级）：`/industry/search`、`/industry/blueprints/{product}`、
+  `/industry/cost`（材料用量、安装费、发明分摊、合同拷贝、税费后利润与时间；可选星系、设施、改装件、税率、ME / TE、解码器）、
+  `/industry/profits`（利润排行，默认过滤有价无市，消耗 5 次）、`/industry/systems`（成本指数）；
+  读取前端目录的 `industry-data.json` 与 `map-data.json`（`--industry-dir`，默认依次找 `--static`、仓库前端目录、`/opt/eve/dist`），成本指数每小时从 ESI 更新
 
 ## 手机端（v13）
 
