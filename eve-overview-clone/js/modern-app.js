@@ -257,6 +257,7 @@ function switchView(view) {
   $('mapView').hidden = view !== 'map';
   $('kbView').hidden = view !== 'kb';
   $('fitView').hidden = view !== 'fit';
+  $('piView').hidden = view !== 'pi';
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
   $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器' }[view] || '';
   closeDrawer();
@@ -270,6 +271,37 @@ function switchView(view) {
   else if (location.hash.startsWith('#kb')) history.replaceState(null, '', location.pathname);
   if (view === 'fit') openFitting();
   else if (location.hash.startsWith('#fit')) history.replaceState(null, '', location.pathname);
+  if (view === 'pi') openPi();
+  else if (location.hash.startsWith('#pi')) history.replaceState(null, '', location.pathname);
+}
+
+// 行星工业规划：首次进入时加载
+let piLoading = null;
+function loadPiModule() {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v19r16').then((m) => {
+    m.initPi({
+      esc, formatISK, formatNumber, showToast, store, getMarketPriceMap,
+      // 吉他（伏尔戈交易中心）最低卖价 / 最高收购价
+      getHubPrices: async (ids, onProgress) => {
+        const jita = REGIONS[0];
+        await fetchHubPrices(jita, ids, onProgress);
+        return new Map(ids.map((id) => [id, hubPrice(jita, id)]).filter(([, v]) => v && !v.failed));
+      }
+    });
+    return m;
+  }).catch((error) => { piLoading = null; throw error; });
+  return piLoading;
+}
+
+async function openPi() {
+  try {
+    const m = await loadPiModule();
+    if (!location.hash.startsWith('#pi')) history.replaceState(null, '', location.pathname + '#pi');
+    await m.showPi();
+  } catch (error) {
+    console.error('行星工业加载失败:', error);
+    showToast('行星工业加载失败：' + error.message, 'error', 4000);
+  }
 }
 
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
@@ -304,7 +336,7 @@ let kbPageModule = null;
 // ===== 会战监测：全站提醒，击杀记录页与星图订阅 =====
 let battlesPromise = null;
 function initBattleWatch() {
-  battlesPromise = import('./battles.js?v=v17r6').then((m) => {
+  battlesPromise = import('./battles.js?v=v19r17').then((m) => {
     m.initBattles({ store, loadKillboard, esc, formatISK, officialName, openMapSystem, openKbSystem });
     return m;
   }).catch((error) => { console.error('会战监测加载失败:', error); return null; });
@@ -1419,6 +1451,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#kb')) { if (state.currentView !== 'kb') switchView('kb'); return; }
     if (location.hash.startsWith('#map')) { if (state.currentView !== 'map') switchView('map'); return; }
     if (location.hash.startsWith('#fit')) { if (state.currentView !== 'fit') switchView('fit'); return; }
+    if (location.hash.startsWith('#pi')) { if (state.currentView !== 'pi') switchView('pi'); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -3215,6 +3248,7 @@ function init() {
   if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
   if (location.hash.startsWith('#fit')) switchView('fit');   // 装配分享链接
+  if (location.hash.startsWith('#pi')) switchView('pi');     // 行星工业
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);

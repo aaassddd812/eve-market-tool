@@ -1,0 +1,17 @@
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+<!-- 采集头（采集球）：仿游戏内样式——半透明青白光盘，边缘最亮，中心深色描边的青绿圆点 -->
+<defs>
+  <radialGradient id="disc" cx="100" cy="100" r="96" gradientUnits="userSpaceOnUse">
+    <stop offset="0" stop-color="#d2ebe6" stop-opacity="0.30"/>
+    <stop offset="0.22" stop-color="#cfe6e1" stop-opacity="0.38"/>
+    <stop offset="0.34" stop-color="#3a5553" stop-opacity="0.30"/>
+    <stop offset="0.62" stop-color="#6f9893" stop-opacity="0.30"/>
+    <stop offset="0.86" stop-color="#a8ddd4" stop-opacity="0.55"/>
+    <stop offset="0.96" stop-color="#c4f2e9" stop-opacity="0.85"/>
+    <stop offset="1" stop-color="#c4f2e9" stop-opacity="0"/>
+  </radialGradient>
+</defs>
+<circle cx="100" cy="100" r="96" fill="url(#disc)"/>
+<circle cx="100" cy="100" r="15" fill="#11b9a3" stroke="#05302b" stroke-width="5"/>
+<circle cx="96" cy="96" r="4" fill="#9ff5e6" fill-opacity="0.8"/>
+</svg>
