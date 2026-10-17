@@ -61,6 +61,9 @@ EVEREF_CONTRACTS = "https://data.everef.net/public-contracts/public-contracts-la
 BP_CONTRACT_TTL = 3600      # 蓝图合同价每小时刷新（快照约每 30 分钟更新）
 BP_CONTRACT_KEEP = 5        # 每种蓝图的原图 / 拷贝各保留最便宜的几份合同
 BP_MAX_TYPES = 300          # bpprices 单次最多查询的蓝图种类
+API_RATE = 60               # 开放接口：每个 IP 每分钟可用的请求额度（令牌桶，容量同此值）
+API_COST = {"ship_fits": 10, "battle_report": 5}   # 开销大的接口一次消耗多个额度
+PRICE_MAX_TYPES = 200       # prices 单次最多查询的物品种类
 SHIPFIT_MAX = 300           # shipfits：每次最多分析的最近损失数
 SHIPFIT_WORKERS = 16        # shipfits：并发向 ESI 取击杀原文
 # 击杀邮件物品 flag → 槽位（模块与装填的弹药同 flag；区分由前端按物品类别完成）
@@ -950,9 +953,12 @@ class Api:
                     where.append(kill); args.append(eid)
                 else:
                     where.append(f"({loss} OR {kill})"); args += [eid, eid]
-        path = zkill_path(q, side)
+        # 开放接口（_local）只查本地保留期内的记录，不转向 zKillboard
+        path = None if q.get("_local") else zkill_path(q, side)
         cursor = q.get("cursor") or ""
         if cursor.startswith("z:"):
+            if not path:
+                raise ValueError("cursor 无效")
             return self.archive(path, cursor, limit)
         base_where, base_args = list(where), list(args)
         if cursor:
@@ -1258,6 +1264,20 @@ class Api:
             g["value"] = round(g["value"] / g["n"])
         return {"ship": ship, "days": days, "total": total, "scanned": len(rows), "fits": fits}
 
+    # 开放接口 GET /api/v1/prices?types=：吉他最低卖价、最高收购价、全服均价与本站估价
+    def prices(self, q):
+        ids = [int(x) for x in str(q.get("types", "")).split(",") if x.strip().isdigit()]
+        if not ids:
+            raise ValueError("缺少 types")
+        if len(ids) > PRICE_MAX_TYPES:
+            raise ValueError(f"types 最多 {PRICE_MAX_TYPES} 个")
+        out = {}
+        for t in dict.fromkeys(ids):
+            sell, buy, avg = self.store.prices.get(t) or (None, None, None)
+            est = self.store.price(t)
+            out[str(t)] = {"sell": sell, "buy": buy, "average": round(avg, 2) if avg else None, "estimate": round(est, 2) if est else None}
+        return {"updated": self.store.state.get("prices_updated"), "types": out}
+
     def bpprices(self, q):
         data = self.store.bp_contracts
         updated = self.store.state.get("bp_contracts_updated")
@@ -1277,6 +1297,8 @@ class Api:
         if not row:
             # 保留期以外的击杀：来自 zKillboard，只在内存中估值
             if km is None:
+                if q.get("_local"):   # 开放接口只查保留期内的击杀
+                    raise KeyError(kid)
                 data = zkill_get(f"killID/{kid}/")
                 if not data:
                     raise KeyError(kid)
@@ -1310,8 +1332,83 @@ class Api:
                 "prices": {t: round(self.store.price(t), 2) for t in types}, "names": self.names_for(ids)}
 
 
+# ---------------------------------------------------------------- 开放接口
+class RateLimiter:
+    """按 IP 的令牌桶：容量 API_RATE，每秒恢复 API_RATE / 60 个"""
+    def __init__(self, rate=API_RATE):
+        self.rate, self.buckets, self.lock = rate, {}, threading.Lock()
+
+    def take(self, ip, cost=1):
+        now = time.time()
+        with self.lock:
+            tokens, last = self.buckets.get(ip, (self.rate, now))
+            tokens = min(self.rate, tokens + (now - last) * self.rate / 60)
+            ok = tokens >= cost
+            if ok:
+                tokens -= cost
+            self.buckets[ip] = (tokens, now)
+            if len(self.buckets) > 20000:   # 清掉已经回满的桶
+                self.buckets = {k: v for k, v in self.buckets.items() if v[0] + (now - v[1]) * self.rate / 60 < self.rate}
+            retry = 0 if ok else int((cost - tokens) * 60 / self.rate) + 1
+            return ok, int(tokens), retry
+
+
+def open_routes(api):
+    """开放接口路由：(路径分段模式, 名称, 处理函数)；{n} 为数字参数，{s} 为字符串参数。文档见 api.html"""
+    local = lambda q: {**q, "_local": "1"}
+
+    def entity(q, kind, eid):
+        if kind not in ENTITY_COL:
+            raise ValueError("kind 只能是 character / corporation / alliance")
+        return api.entity(kind, eid, q)
+
+    def bp_prices(q):
+        if not q.get("types"):
+            raise ValueError("缺少 types")
+        return api.bpprices(q)
+    return [
+        ((), "index", lambda q: {"name": "EVE Market 开放 API", "version": "v1", "docs": "/api.html",
+                                 "endpoints": [("/api/v1/" + "/".join(p)).replace("{n}", "{id}").replace("{s}", "{kind}") for p, *_ in open_routes(api)[1:]]}),
+        (("status",), "status", lambda q: {k: v for k, v in api.status(q).items() if k not in ("r2z2_seq",)}),
+        (("prices",), "prices", api.prices),
+        (("blueprints", "prices"), "bp_prices", bp_prices),
+        (("kills",), "kills", lambda q: {k: v for k, v in api.feed(local(q)).items() if k != "notice"}),
+        (("kills", "live"), "live", api.live),
+        (("kills", "top"), "top", api.top),
+        (("kills", "{n}"), "kill", lambda q, kid: api.kill(kid, local(q))),
+        (("stats", "summary"), "summary", api.summary),
+        (("battles",), "battles", api.battles),
+        (("battle-report",), "battle_report", api.br),
+        (("leaderboard",), "leaderboard", api.leaderboard),
+        (("entities", "{s}", "{n}"), "entity", entity),
+        (("search",), "search", api.search),
+        (("ships", "{n}", "fits"), "ship_fits", lambda q, ship: api.shipfits({**q, "ship": str(ship)})),
+    ]
+
+
+def match_route(routes, parts):
+    for pattern, name, fn in routes:
+        if len(pattern) != len(parts):
+            continue
+        args = []
+        for want, got in zip(pattern, parts):
+            if want == "{n}":
+                if not got.isdigit():
+                    break
+                args.append(int(got))
+            elif want == "{s}":
+                args.append(got)
+            elif want != got:
+                break
+        else:
+            return name, fn, args
+    return None, None, None
+
+
 # ---------------------------------------------------------------- HTTP 服务
 def make_handler(api, static_dir):
+    v1 = open_routes(api)
+    limiter = RateLimiter()
     routes = {"status": api.status, "live": api.live, "battles": api.battles, "feed": api.feed, "top": api.top, "summary": api.summary,
               "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits}
 
@@ -1319,7 +1416,7 @@ def make_handler(api, static_dir):
         def log_message(self, fmt, *args):
             log.debug("%s %s", self.address_string(), fmt % args)
 
-        def send_json(self, code, obj):
+        def send_json(self, code, obj, headers=None):
             body = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode()
             gz = "gzip" in (self.headers.get("Accept-Encoding") or "") and len(body) > 1024
             if gz:
@@ -1330,11 +1427,51 @@ def make_handler(api, static_dir):
             if gz:
                 self.send_header("Content-Encoding", "gzip")
             self.send_header("Content-Length", str(len(body)))
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
             self.end_headers()
             self.wfile.write(body)
 
+        def do_OPTIONS(self):
+            # 开放接口的跨域预检
+            self.send_response(204)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type")
+            self.send_header("Access-Control-Max-Age", "86400")
+            self.end_headers()
+
+        def client_ip(self):
+            # 经 nginx 反代时取 X-Real-IP / X-Forwarded-For
+            return (self.headers.get("X-Real-IP") or (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+                    or self.client_address[0])
+
+        def open_api(self, url):
+            parts = [p for p in url.path[len("/api/v1"):].split("/") if p]
+            q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items() if not k.startswith("_")}
+            name, fn, args = match_route(v1, parts)
+            cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After"}
+            err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
+            if not fn:
+                return err(404, "接口不存在，文档见 /api.html")
+            ok, left, retry = limiter.take(self.client_ip(), API_COST.get(name, 1))
+            cors.update({"X-RateLimit-Limit": str(API_RATE), "X-RateLimit-Remaining": str(left)})
+            if not ok:
+                return err(429, f"请求过于频繁，请 {retry} 秒后再试", {"Retry-After": str(retry)})
+            try:
+                return self.send_json(200, fn(q, *args), cors)
+            except KeyError as e:
+                return err(404 if name in ("kill", "entity") else 400, f"缺少或无效的参数：{e}" if name not in ("kill", "entity") else "找不到")
+            except ValueError as e:
+                return err(400, str(e) or "参数无效")
+            except Exception:
+                log.exception("开放接口错误 %s", url.path)
+                return err(500, "服务器内部错误")
+
         def do_GET(self):
             url = urllib.parse.urlparse(self.path)
+            if url.path == "/api/v1" or url.path.startswith("/api/v1/"):
+                return self.open_api(url)
             if url.path.startswith("/api/kb/"):
                 return self.api(url)
             if static_dir:

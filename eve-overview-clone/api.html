@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="EVE Market 开放 API 文档：吉他价格、击杀记录、会战、排行、阵亡装配等只读接口">
+  <title>开放 API 文档 · EVE Market</title>
+  <script>
+    // 与主站共用主题设置
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('eve-theme'); } catch (e) {}
+      if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <style>
+    :root {
+      --bg: #0b0f17; --bg2: #111723; --bg3: #18202e; --border: #232c3b; --border2: #334155;
+      --text: #e8edf5; --text2: #9aa8bc; --muted: #6b7a90; --accent: #4f8ff7; --accent-soft: rgba(79, 143, 247, 0.12);
+      --get: #34d399; --warn: #f59e0b; --danger: #f87171;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    }
+    [data-theme="light"] {
+      --bg: #f5f7fa; --bg2: #ffffff; --bg3: #f0f3f7; --border: #e3e8ef; --border2: #cbd5e1;
+      --text: #0f172a; --text2: #475569; --muted: #7b8798; --accent: #2563eb; --accent-soft: rgba(37, 99, 235, 0.08);
+      --get: #059669; --warn: #b45309; --danger: #dc2626;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.7 var(--sans); }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code, pre { font-family: var(--mono); font-size: 0.8125rem; }
+    code { padding: 1px 6px; border-radius: 4px; background: var(--bg3); }
+    header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 20px; border-bottom: 1px solid var(--border); background: var(--bg2); }
+    header img { border-radius: 6px; }
+    header b { font-size: 1rem; white-space: nowrap; }
+    header .tag, header button { white-space: nowrap; }
+    header .tag { padding: 1px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 0.75rem; font-weight: 600; }
+    header .spacer { flex: 1; }
+    header button { height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--text2); font: inherit; font-size: 0.8125rem; cursor: pointer; }
+    header button:hover { color: var(--text); border-color: var(--border2); }
+    .layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); max-width: 1200px; margin: 0 auto; }
+    nav.toc { position: sticky; top: 56px; align-self: start; max-height: calc(100vh - 56px); overflow-y: auto; padding: 20px 12px 40px 20px; border-right: 1px solid var(--border); }
+    nav.toc h4 { margin: 16px 0 6px; font-size: 0.75rem; color: var(--muted); font-weight: 600; }
+    nav.toc h4:first-child { margin-top: 0; }
+    nav.toc a { display: block; padding: 3px 8px; border-radius: 6px; color: var(--text2); font-size: 0.8125rem; }
+    nav.toc a:hover { background: var(--bg3); color: var(--text); text-decoration: none; }
+    nav.toc a code { background: none; padding: 0; font-size: 0.75rem; }
+    main { padding: 28px 32px 80px; min-width: 0; }
+    h1 { margin: 0 0 6px; font-size: 1.625rem; }
+    h2 { margin: 40px 0 12px; padding-top: 8px; font-size: 1.25rem; border-top: 1px solid var(--border); padding-top: 24px; }
+    h3 { margin: 0; font-size: 1rem; }
+    p { margin: 8px 0; color: var(--text2); }
+    .lead { color: var(--text2); font-size: 0.9375rem; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin: 16px 0; }
+    .card { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); }
+    .card span { display: block; font-size: 0.75rem; color: var(--muted); }
+    .card b { font-size: 0.9375rem; word-break: break-all; }
+    table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 0.8125rem; }
+    th, td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; font-size: 0.75rem; background: var(--bg3); }
+    td:first-child { white-space: nowrap; }
+    .req { color: var(--danger); font-size: 0.6875rem; margin-left: 4px; }
+    pre { margin: 8px 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg3); overflow-x: auto; line-height: 1.55; }
+    .ep { margin: 18px 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg2); overflow: hidden; }
+    .ep-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+    .method { padding: 1px 8px; border-radius: 6px; background: color-mix(in srgb, var(--get) 16%, transparent); color: var(--get); font: 700 0.75rem var(--mono); }
+    .path { font: 600 0.875rem var(--mono); }
+    .cost { margin-left: auto; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); font-size: 0.6875rem; font-weight: 600; }
+    .ep-body { padding: 4px 16px 14px; }
+    .ep-body h5 { margin: 14px 0 4px; font-size: 0.75rem; color: var(--muted); font-weight: 600; }
+    .try { display: flex; gap: 6px; margin-top: 8px; }
+    .try input { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: 0.8125rem var(--mono); }
+    .try input:focus { outline: none; border-color: var(--accent); }
+    .try button { flex: none; height: 34px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: 600 0.8125rem var(--sans); cursor: pointer; }
+    .try button:disabled { opacity: 0.6; cursor: wait; }
+    .out { display: none; max-height: 360px; }
+    .out.show { display: block; }
+    .status { font-size: 0.75rem; color: var(--muted); margin-top: 6px; }
+    .status.err { color: var(--danger); }
+    .note { padding: 10px 14px; border-left: 3px solid var(--accent); border-radius: 6px; background: var(--accent-soft); color: var(--text2); font-size: 0.8125rem; margin: 12px 0; }
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      nav.toc { display: none; }
+      main { padding: 20px 16px 60px; }
+      header { padding: 0 16px; }
+      header .home-text { display: none; }
+      header { gap: 8px; }
+      header b { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <img src="https://images.evetech.net/types/44992/icon?size=64" alt="" width="28" height="28">
+    <b>EVE Market</b><span class="tag">开放 API v1</span>
+    <span class="spacer"></span>
+    <button type="button" id="theme" aria-label="切换主题">切换主题</button>
+    <a href="./"><button type="button">← <span class="home-text">返回网站</span></button></a>
+  </header>
+  <div class="layout">
+    <nav class="toc" id="toc"></nav>
+    <main>
+      <h1>开放 API</h1>
+      <p class="lead">本站对外提供的只读接口：吉他市场价格、蓝图合同价、击杀记录、会战、排行与实体统计、按舰船的阵亡装配。数据与网站页面相同，免注册、免密钥，可以直接在浏览器或你的程序里调用。</p>
+      <div class="cards">
+        <div class="card"><span>基础地址</span><b id="base"></b></div>
+        <div class="card"><span>格式</span><b>JSON（UTF-8），支持 gzip</b></div>
+        <div class="card"><span>频率限制</span><b>每 IP 每分钟 60 次</b></div>
+        <div class="card"><span>跨域</span><b>允许任意来源（CORS *）</b></div>
+      </div>
+
+      <h2 id="quick">快速开始</h2>
+      <p>查询三钛合金（34）与类晶体胶矿（35）的吉他价格：</p>
+      <pre id="quickCurl"></pre>
+      <pre id="quickJs"></pre>
+      <p>物品、星系、星域等编号都是 EVE 官方 ID，可在 <a href="https://esi.evetech.net/ui/" target="_blank" rel="noopener">ESI</a> 或本站各页面中查到（例如市场页物品详情的链接里就带着物品 ID）。</p>
+
+      <h2 id="rules">通用约定</h2>
+      <h3>频率限制</h3>
+      <p>按来源 IP 计算，令牌桶容量 60，每秒恢复 1 次额度。多数接口每次消耗 1 次，标注了「消耗 N 次」的接口一次扣 N 次。每个响应都带有：</p>
+      <table>
+        <tr><th>响应头</th><th>说明</th></tr>
+        <tr><td><code>X-RateLimit-Limit</code></td><td>每分钟额度（60）</td></tr>
+        <tr><td><code>X-RateLimit-Remaining</code></td><td>当前剩余额度</td></tr>
+        <tr><td><code>Retry-After</code></td><td>仅 429 时出现，需要等待的秒数</td></tr>
+      </table>
+      <h3>错误</h3>
+      <p>出错时返回对应的 HTTP 状态码和统一的错误对象：</p>
+      <pre>{"error": {"code": 400, "message": "缺少 types"}}</pre>
+      <table>
+        <tr><th>状态码</th><th>含义</th></tr>
+        <tr><td>400</td><td>参数缺失或无效</td></tr>
+        <tr><td>404</td><td>接口不存在，或找不到对应的击杀 / 实体</td></tr>
+        <tr><td>429</td><td>请求过于频繁，按 <code>Retry-After</code> 等待后重试</td></tr>
+        <tr><td>500</td><td>服务器内部错误</td></tr>
+      </table>
+      <h3>其他</h3>
+      <p>时间均为 UTC，ISO 8601 格式（如 <code>2026-10-17T08:05:44Z</code>），参数里的时间戳为 Unix 秒。金额单位为 ISK。击杀数据只保留最近约 30 天（见 <code>/status</code> 的 <code>retention_days</code>），更早的记录请使用 zKillboard。返回里的 <code>names</code> 是本次结果中出现的人物 / 军团 / 联盟 ID 到名称的映射。</p>
+      <div class="note">数据来自 CCP ESI、zKillboard 与 EVE Ref，仅供参考。请合理控制调用频率；需要更高额度可以在 GitHub 提 issue。</div>
+
+      <div id="endpoints"></div>
+    </main>
+  </div>
+
+  <script>
+    const BASE = location.origin + '/api/v1';
+    // 接口说明：分组、路径、标题、说明、参数 [名称, 是否必填, 说明]、示例查询、返回字段 [字段, 说明]、消耗
+    const KILL_FIELDS = [
+      ['id / time', '击杀 ID 与时间'], ['system_id / region_id', '星系与星域'], ['ship_type_id', '受害舰船类型'],
+      ['value', '估值（ISK）'], ['attackers', '攻击者人数'], ['solo / npc', '是否单杀、是否 NPC 击杀'],
+      ['victim', '受害者 character_id / corporation_id / alliance_id'], ['final', '最后一击的人物、军团、联盟与舰船']
+    ];
+    const GROUPS = [
+      ['基础', [
+        { path: '', title: '接口目录', desc: '列出全部接口路径与文档地址。', example: '' },
+        { path: '/status', title: '服务状态', desc: '击杀库规模、数据时间范围、实时收录状态与价格更新时间。', example: '/status',
+          fields: [['killmails', '库中击杀数'], ['oldest / newest', '最早 / 最新击杀时间'], ['retention_days', '击杀保留天数'], ['live_mode / last_live', '实时数据来源与最近收录时间'], ['prices_updated', '价格最近更新时间'], ['backfill', '历史数据导入进度']] }
+      ]],
+      ['市场', [
+        { path: '/prices', title: '物品价格', desc: '吉他 4-4 最低卖价、最高收购价、全服均价与本站估价，每小时更新。', example: '/prices?types=34,35,44992',
+          params: [['types', true, '物品 ID，逗号分隔，最多 200 个']],
+          fields: [['updated', '价格更新时间'], ['types.{id}.sell', '吉他 4-4 空间站最低卖价（没有卖单为 null）'], ['types.{id}.buy', '最高收购价'], ['types.{id}.average', '全服均价（ESI）'], ['types.{id}.estimate', '本站估价：卖收中间价；卖价异常时用均价；吉他没有卖单的旗舰等用公开合同最低价']] },
+        { path: '/blueprints/prices', title: '蓝图合同价', desc: '全服公开合同里各蓝图最便宜的几份原图与拷贝，约每小时更新。', example: '/blueprints/prices?types=1000,11186',
+          params: [['types', true, '蓝图 ID，逗号分隔，最多 300 个']],
+          fields: [['updated', '合同快照更新时间'], ['types.{id}.o', '原图：[[价格, 材料效率, 时间效率, 合同 ID, 星系 ID], ...]，按价格升序'], ['types.{id}.c', '拷贝：[[每流程价格, 流程数, 总价, 材料效率, 时间效率, 合同 ID, 星系 ID], ...]']] }
+      ]],
+      ['击杀记录', [
+        { path: '/kills', title: '击杀列表', desc: '按时间倒序列出击杀，可按舰船、星系、星域、人物 / 军团 / 联盟筛选，用 cursor 翻页。只查保留期内的记录。', example: '/kills?limit=5&region=10000002',
+          params: [['limit', false, '每页条数，默认 50，最多 200'], ['ship', false, '受害舰船类型 ID'], ['system / region', false, '星系 / 星域 ID'], ['character / corporation / alliance', false, '实体 ID'], ['side', false, '配合实体筛选：all（默认，击杀与损失）/ kills / losses'], ['cursor', false, '上一页返回的 cursor']],
+          fields: [['kills[]', '击杀摘要（字段见下）'], ['cursor', '下一页的 cursor，没有更多时为 null'], ['names', 'ID → 名称'], ...KILL_FIELDS.map(([k, v]) => ['kills[].' + k, v])] },
+        { path: '/kills/live', title: '实时击杀', desc: '上次请求之后新收录的击杀，适合轮询（建议间隔 ≥ 10 秒）。首次请求不带 after，返回最近几条与当前 cursor。', example: '/kills/live?initial=3',
+          params: [['after', false, '上次返回的 cursor'], ['initial', false, '首次请求返回的条数，默认 3，最多 10']],
+          fields: [['cursor', '当前编号，下次作为 after 传入'], ['kills[]', '新击杀（同击杀列表）'], ['names', 'ID → 名称']] },
+        { path: '/kills/top', title: '高价值击杀', desc: '最近若干天估值最高的击杀。', example: '/kills/top?days=7&limit=5',
+          params: [['days', false, '天数，默认 7，最多 60'], ['limit', false, '条数，默认 8，最多 50']], fields: [['kills[]', '击杀摘要'], ['names', 'ID → 名称']] },
+        { path: '/kills/{id}', title: '击杀详情', desc: 'ESI 击杀原文与本站估值（掉落 / 摧毁拆分、各物品单价）。只限保留期内的击杀。', example: '/kills/{kill}',
+          fields: [['killmail', 'ESI 击杀原文（受害者、攻击者、物品）'], ['hash', '击杀 hash'], ['value / dropped / destroyed', '总估值、掉落与摧毁部分'], ['prices', '涉及物品的单价'], ['names', 'ID → 名称']] }
+      ]],
+      ['统计与会战', [
+        { path: '/stats/summary', title: '全服概况', desc: '最近若干小时的击杀数、总损失、太空舱数，逐小时分布与损失最多的星域。', example: '/stats/summary?hours=24',
+          params: [['hours', false, '小时数，默认 24，最多 720']],
+          fields: [['count / value / pods', '击杀数、总价值、太空舱数'], ['buckets[]', '逐小时 {hour, count, value}'], ['regions[]', '损失最多的 5 个星域 {region_id, count, value}']] },
+        { path: '/battles', title: '进行中的会战', desc: '时间窗内同一星系被击毁的舰船达到阈值即视为会战（不含太空舱、NPC 击杀与价值低于 1000 万的击杀）。', example: '/battles?window=60&min=20',
+          params: [['window', false, '时间窗（分钟），默认 60，范围 5–180'], ['min', false, '最少击杀数，默认 20，范围 5–2000']],
+          fields: [['battles[]', '{system_id, region_id, kills, value, start, end, pilots, sides[], top}'], ['battles[].sides[]', '主要势力 {id, kind, kills, losses, lost}'], ['names', 'ID → 名称']] },
+        { path: '/battle-report', title: '战场统计', desc: '指定星系与时间段内的全部击杀与攻击者，用于生成战报。', cost: 5, example: '/battle-report?systems=30000142&start={start}&end={end}',
+          params: [['systems', true, '星系 ID，逗号分隔，最多 30 个'], ['start / end', true, 'Unix 秒，时间段最长 72 小时']],
+          fields: [['kills[]', '[id, 时间, 星系, 舰船, 估值, 受害人物, 受害军团, 受害联盟, [[攻击人物, 军团, 联盟, 舰船], ...]]'], ['truncated', '超过 5000 条时为 true'], ['names', 'ID → 名称']] },
+        { path: '/leaderboard', title: '排行榜', desc: '按人物 / 军团 / 联盟统计击杀或损失，按价值或数量排序。', example: '/leaderboard?side=kills&by=alliance&metric=value&limit=10',
+          params: [['side', false, 'losses（默认）/ kills'], ['by', false, 'character（默认）/ corporation / alliance'], ['metric', false, 'value（默认）/ count'], ['days', false, '天数，默认 30，最多 60'], ['limit', false, '条数，默认 20，最多 100']],
+          fields: [['rows[]', '{id, name, count, value}']] },
+        { path: '/entities/{kind}/{id}', title: '实体统计', desc: '人物 / 军团 / 联盟在最近若干天的击杀、损失、单杀、最后一击、常用与损失的舰船、活跃星域与星系；军团附成员、联盟附军团明细。', example: '/entities/alliance/1354830081?days=7',
+          params: [['kind', true, '路径参数：character / corporation / alliance'], ['id', true, '路径参数：实体 ID'], ['days', false, '天数，默认 30，最多 60']],
+          fields: [['kills / losses / destroyed / lost', '击杀数、损失数、击毁价值、损失价值'], ['solo_kills / final_blows', '单杀数、最后一击数'], ['members[]', '成员明细（军团 / 联盟）'], ['ships_used / ships_lost', '常用 / 损失舰船 TOP 8'], ['regions / systems', '活跃星域 / 星系 TOP 8']] },
+        { path: '/search', title: '名称搜索', desc: '按名称搜索人物、军团、联盟（库中出现过的）。', example: '/search?q=goon',
+          params: [['q', true, '关键字，至少 2 个字符']], fields: [['results[]', '{id, name, category}，最多 30 条']] }
+      ]],
+      ['装配', [
+        { path: '/ships/{id}/fits', title: '阵亡装配', desc: '某型舰船最近若干天阵亡时的装配，相同装配合并计数。首次查询需要从 ESI 取击杀原文，可能要十几秒。', cost: 10, example: '/ships/24698/fits?days=7',
+          params: [['id', true, '路径参数：舰船类型 ID'], ['days', false, '天数，默认 7']],
+          fields: [['total / scanned', '阵亡总数 / 实际分析数（最多 300）'], ['fits[].fit', '槽位 → [[物品 ID, 数量], ...]，槽位为 high / mid / low / rig / sub / drone / fighter，装填的弹药与装备在同一槽位'], ['fits[].n / last / value', '出现次数、最近时间（Unix 秒）、平均损失'], ['fits[].ids', '示例击杀 ID']] }
+      ]]
+    ];
+
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const anchor = (p) => 'ep' + (p || '-index').replace(/[^a-z0-9]+/gi, '-');
+    document.getElementById('base').textContent = BASE;
+    document.getElementById('quickCurl').textContent = `curl "${BASE}/prices?types=34,35"`;
+    document.getElementById('quickJs').textContent = `const r = await fetch('${BASE}/prices?types=34,35');\nconst { types } = await r.json();\nconsole.log(types['34'].sell);   // 三钛合金吉他最低卖价`;
+
+    // 示例里的占位：最近的一个击杀、两小时前到现在
+    const now = Math.floor(Date.now() / 1000);
+    const fill = (s) => s.replace('{start}', now - 7200).replace('{end}', now);
+
+    document.getElementById('toc').innerHTML = `<h4>文档</h4><a href="#quick">快速开始</a><a href="#rules">通用约定</a>` +
+      GROUPS.map(([g, eps]) => `<h4>${g}</h4>` + eps.map((e) => `<a href="#${anchor(e.path)}">${e.title} <code>${esc(e.path || '/')}</code></a>`).join('')).join('');
+
+    document.getElementById('endpoints').innerHTML = GROUPS.map(([g, eps]) => `<h2>${g}</h2>` + eps.map((e) => `
+      <section class="ep" id="${anchor(e.path)}">
+        <div class="ep-head"><span class="method">GET</span><span class="path">/api/v1${esc(e.path)}</span><h3>${e.title}</h3>${e.cost ? `<span class="cost">消耗 ${e.cost} 次</span>` : ''}</div>
+        <div class="ep-body">
+          <p>${e.desc}</p>
+          ${e.params ? `<h5>参数</h5><table><tr><th>名称</th><th>说明</th></tr>${e.params.map(([n, r, d]) => `<tr><td><code>${n}</code>${r ? '<span class="req">必填</span>' : ''}</td><td>${d}</td></tr>`).join('')}</table>` : ''}
+          ${e.fields ? `<h5>返回</h5><table><tr><th>字段</th><th>说明</th></tr>${e.fields.map(([n, d]) => `<tr><td><code>${esc(n)}</code></td><td>${esc(d)}</td></tr>`).join('')}</table>` : ''}
+          <h5>试一试</h5>
+          <form class="try" data-try><input value="/api/v1${esc(fill(e.example))}" spellcheck="false" aria-label="请求路径"><button type="submit">发送</button></form>
+          <div class="status"></div>
+          <pre class="out"></pre>
+        </div>
+      </section>`).join('')).join('');
+
+    // 击杀详情的示例 ID 用最近一条高价值击杀
+    fetch(BASE + '/kills/top?days=1&limit=1').then((r) => r.json()).then((j) => {
+      const id = j.kills?.[0]?.id;
+      if (id) document.querySelectorAll('[data-try] input').forEach((i) => { i.value = i.value.replace('{kill}', id); });
+    }).catch(() => {});
+
+    document.addEventListener('submit', async (ev) => {
+      const form = ev.target.closest('[data-try]');
+      if (!form) return;
+      ev.preventDefault();
+      const input = form.querySelector('input'), btn = form.querySelector('button');
+      const status = form.nextElementSibling, out = status.nextElementSibling;
+      btn.disabled = true;
+      status.className = 'status';
+      status.textContent = '请求中…';
+      const t0 = performance.now();
+      try {
+        const r = await fetch(location.origin + input.value.trim());
+        const text = await r.text();
+        let body = text;
+        try { body = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
+        if (body.length > 20000) body = body.slice(0, 20000) + '\n…（已截断）';
+        status.textContent = `HTTP ${r.status} · ${Math.round(performance.now() - t0)} ms · 剩余额度 ${r.headers.get('X-RateLimit-Remaining') ?? '—'}`;
+        if (!r.ok) status.className = 'status err';
+        out.textContent = body;
+        out.classList.add('show');
+      } catch (e) {
+        status.className = 'status err';
+        status.textContent = '请求失败：' + e.message;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById('theme').addEventListener('click', () => {
+      const t = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+      document.documentElement.setAttribute('data-theme', t);
+      try { localStorage.setItem('eve-theme', t); } catch (e) {}
+    });
+  </script>
+</body>
+</html>

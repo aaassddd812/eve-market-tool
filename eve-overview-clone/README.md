@@ -37,7 +37,8 @@ eve-overview-clone/
 ├── pi-data.json         # 行星工业数据：各星系行星、设施、配方（build_pi.mjs 生成）
 ├── server/build_fit_data.py # 由 SDE 生成 fit-data.json
 ├── fit-data.json        # 模拟装配数据：舰船 / 装备 / 弹药 / 无人机 / 技能 / 植入体的属性与效果
-├── server/kb_service.py # 击杀记录后端服务
+├── server/kb_service.py # 击杀记录后端服务（含开放 API /api/v1/）
+├── api.html             # 开放 API 文档（顶部「API」按钮打开）
 ├── server/system_regions.json # 全部星系 → 星域（build_map.mjs 生成）
 ├── map-data.json        # 星图静态数据（build_map.mjs 生成）
 ├── npc-names-zh.json    # 官方中文名称表（build_npc_names.mjs 生成）
@@ -281,7 +282,7 @@ python3 server/kb_service.py --db /opt/eve/kb/kb.sqlite --port 8291 --days 30
   进度保存在数据库，重启后从上次位置继续。RedisQ 已于 2026-05-31 停用（`--live redisq` 等同 `r2z2`）。
   R2Z2 不可用时自动改为轮询各星域最新击杀（每 5 分钟一轮，受 zKillboard 缓存影响最多延迟约 1 小时）
 - 价格：每小时下载伏尔戈全量订单（约 400 页）计算吉他中间价；排行榜与首页统计每 9 分钟后台预计算
-- nginx 将 `/api/kb/` 反代到 8291（见 `server/eve.navexor.top.conf`）；建议用 systemd 托管：
+- nginx 将 `/api/kb/` 与开放 API `/api/v1` 反代到 8291（见 `server/eve.navexor.top.conf`，`/api/v1` 需传 `X-Real-IP` 以便按 IP 限流）；建议用 systemd 托管：
 
 ```ini
 [Unit]
@@ -296,6 +297,15 @@ User=www-data
 [Install]
 WantedBy=multi-user.target
 ```
+
+## 开放 API（v23）
+
+击杀记录服务同时提供对外的只读接口 `/api/v1/`，文档为站点根目录的 `api.html`（页面顶部「API」按钮打开，每个接口都能直接「试一试」）。
+
+- 免注册、免密钥，允许任意来源跨域（CORS `*`），返回 JSON；出错统一为 `{"error": {"code", "message"}}`
+- 按 IP 令牌桶限流：每分钟 60 次（`API_RATE`），阵亡装配一次消耗 10 次、战场统计 5 次（`API_COST`）；响应头带 `X-RateLimit-Limit / Remaining`，超限返回 429 与 `Retry-After`
+- 接口：`/status`、`/prices`（吉他卖 / 收 / 全服均价 / 本站估价）、`/blueprints/prices`、`/kills`（只查保留期内，不转向 zKillboard）、`/kills/live`、`/kills/top`、
+  `/kills/{id}`、`/stats/summary`、`/battles`、`/battle-report`、`/leaderboard`、`/entities/{kind}/{id}`、`/search`、`/ships/{id}/fits`；`/api/v1` 返回接口目录
 
 ## 手机端（v13）
 

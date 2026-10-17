@@ -259,6 +259,10 @@ mark {
 
 .icon-btn svg { width: 20px; height: 20px; }
 .icon-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
+.icon-btn.api-link { width: auto; gap: 4px; padding: 0 10px; font-size: 0.75rem; font-weight: 700; letter-spacing: 0.02em; text-decoration: none; border: 1px solid var(--border-primary); height: 30px; }
+.icon-btn.api-link svg { width: 15px; height: 15px; }
+.icon-btn.api-link:hover { color: var(--accent-primary); border-color: var(--accent-primary); }
+@media (max-width: 768px) { .icon-btn.api-link { padding: 0 8px; } .icon-btn.api-link span { display: none; } }
 
 .menu-btn { display: none; }
 
