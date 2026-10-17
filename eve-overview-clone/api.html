@@ -109,7 +109,7 @@
       <div class="cards">
         <div class="card"><span>基础地址</span><b id="base"></b></div>
         <div class="card"><span>格式</span><b>JSON（UTF-8），支持 gzip</b></div>
-        <div class="card"><span>频率限制</span><b>每 IP 每分钟 30 次</b></div>
+        <div class="card"><span>频率限制</span><b>每 IP 每分钟 1000 次</b></div>
         <div class="card"><span>跨域</span><b>允许任意来源（CORS *）</b></div>
       </div>
 
@@ -121,10 +121,10 @@
 
       <h2 id="rules">通用约定</h2>
       <h3>频率限制</h3>
-      <p>按来源 IP 计算，令牌桶容量 30，每 2 秒恢复 1 次额度。多数接口每次消耗 1 次，标注了「消耗 N 次」的接口一次扣 N 次。每个响应都带有：</p>
+      <p>按来源 IP 计算，令牌桶容量 1000，每秒恢复约 17 次额度。多数接口每次消耗 1 次，标注了「消耗 N 次」的接口一次扣 N 次。每个响应都带有：</p>
       <table>
         <tr><th>响应头</th><th>说明</th></tr>
-        <tr><td><code>X-RateLimit-Limit</code></td><td>每分钟额度（30）</td></tr>
+        <tr><td><code>X-RateLimit-Limit</code></td><td>每分钟额度（1000）</td></tr>
         <tr><td><code>X-RateLimit-Remaining</code></td><td>当前剩余额度</td></tr>
         <tr><td><code>Retry-After</code></td><td>仅 429 时出现，需要等待的秒数</td></tr>
       </table>
