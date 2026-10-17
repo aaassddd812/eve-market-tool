@@ -22,6 +22,10 @@ export const AT = {
   maxGroupFitted: 1544, maxTypeFitted: 2431, maxGroupActive: 763, maxActiveDrones: 352,
   skillLevel: 280, subSystemSlot: 1366, fitsToShipType: 1380,
   hiSlotModifier: 1374, medSlotModifier: 1375, lowSlotModifier: 1376, turretHardPointModifier: 1368, launcherHardPointModifier: 1369,
+  fighterCapacity: 2055, fighterTubes: 2216, fighterLightSlots: 2217, fighterSupportSlots: 2218, fighterHeavySlots: 2219,
+  fighterIsLight: 2212, fighterIsSupport: 2213, fighterIsHeavy: 2214, fighterSquadronSize: 2215,
+  fighterAttackDmg: [2227, 2228, 2229, 2230], fighterAttackMult: 2226, fighterAttackDuration: 2233,
+  fighterMissileDmg: [2131, 2132, 2133, 2134], fighterMissileMult: 2130, fighterMissileDuration: 2182,
   canFitShipGroup: [1298, 1299, 1300, 1301, 1872, 1879, 1880, 1881, 2065, 2396, 2476, 2477, 2478, 2479, 2480, 2481, 2482, 2483, 2484, 2485],
   canFitShipType: [1302, 1303, 1304, 1305, 1944, 2103, 2463, 2486, 2487, 2488, 2758],
   reqSkills: [[182, 277], [183, 278], [184, 279], [1285, 1286], [1289, 1287], [1290, 1288]]
@@ -34,7 +38,7 @@ export const RESIST = {
 };
 export const DAMAGE = [AT.em, AT.thermal, AT.kinetic, AT.explosive];
 
-export const CAT = { ship: 6, module: 7, charge: 8, skill: 16, drone: 18, implant: 20, subsystem: 32 };
+export const CAT = { ship: 6, module: 7, charge: 8, skill: 16, drone: 18, implant: 20, subsystem: 32, fighter: 87 };
 const EXEMPT = new Set([CAT.ship, CAT.charge, CAT.skill, CAT.implant, CAT.subsystem]);   // 不受叠加惩罚的来源
 const EFFECT = { passive: 0, active: 1, target: 2, online: 4, overload: 5 };
 const STATE_RANK = { offline: 0, online: 1, active: 2, overload: 3 };
@@ -283,6 +287,13 @@ function special(effect, item, { ship, exempt, shipItems, ownedItems }) {
   switch (effect.name) {
     case 'skillEffect':
       return true;
+    case 'resistanceKillerShieldArmorAll':
+    case 'resistanceKillerHullAll':
+      // 极化武器：抗性归零。resistanceKiller 以百分比记（100 = 抗性系数 1.0），直接赋值会得到 −9900%
+      for (const [, , modified, modifying] of effect.mods) {
+        ship.addMod(modified, { op: OP.postAssign, src: item, srcAttr: modifying, exempt, fn: () => { const v = item.attr(modifying); return v > 1 ? v / 100 : v; } });
+      }
+      return true;
     case 'missileEMDmgBonus':
     case 'missileExplosiveDmgBonus':
     case 'missileThermalDmgBonus':
@@ -329,7 +340,11 @@ const sum = (list, fn) => list.reduce((s, x) => s + fn(x), 0);
 const avg = (list) => list.reduce((s, x) => s + x, 0) / list.length;
 
 export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
-  const { ship, modules, drones, char, data } = calc;
+  const { ship, modules, char, data } = calc;
+  // 舰载机与无人机同在装配的无人机列表里，按类别分开计算；舰载机以中队计（count 中队、active 出击中队）
+  const fighters = calc.drones.filter((d) => d.type.category === CAT.fighter);
+  const drones = calc.drones.filter((d) => d.type.category !== CAT.fighter);
+  const squad = (f) => f.attr(AT.fighterSquadronSize) || 1;
   const online = modules.filter((m) => rank(m) >= 1);
   const activeMods = modules.filter((m) => rank(m) >= 2);
 
@@ -347,12 +362,17 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
     launchers: { used: modules.filter((m) => m.type.launcher).length, total: ship.attr(AT.launcherSlots) },
     droneBay: { used: sum(drones, (d) => d.attr(AT.volume) * d.count), total: ship.attr(AT.droneCapacity) },
     bandwidth: { used: sum(drones, (d) => d.attr(AT.droneBandwidthUsed) * d.active), total: ship.attr(AT.droneBandwidth) },
-    activeDrones: { used: sum(drones, (d) => d.active), total: char.attr(AT.maxActiveDrones) }
+    activeDrones: { used: sum(drones, (d) => d.active), total: char.attr(AT.maxActiveDrones) },
+    fighterBay: { used: sum(fighters, (f) => f.attr(AT.volume) * squad(f) * f.count), total: ship.attr(AT.fighterCapacity) },
+    fighterTubes: { used: sum(fighters, (f) => f.active), total: ship.attr(AT.fighterTubes) },
+    fighterLight: { used: sum(fighters.filter((f) => f.attr(AT.fighterIsLight)), (f) => f.active), total: ship.attr(AT.fighterLightSlots) },
+    fighterSupport: { used: sum(fighters.filter((f) => f.attr(AT.fighterIsSupport)), (f) => f.active), total: ship.attr(AT.fighterSupportSlots) },
+    fighterHeavy: { used: sum(fighters.filter((f) => f.attr(AT.fighterIsHeavy)), (f) => f.active), total: ship.attr(AT.fighterHeavySlots) }
   };
 
   // 火力
   const missileMult = char.attr(AT.missileDamageMultiplier);
-  const weapon = { turret: 0, missile: 0, drone: 0, volley: 0, types: [0, 0, 0, 0] };
+  const weapon = { turret: 0, missile: 0, drone: 0, fighter: 0, volley: 0, types: [0, 0, 0, 0] };
   const weapons = [];
   for (const m of activeMods) {
     if (!(m.type.turret || m.type.launcher) || !m.charge) continue;
@@ -380,7 +400,21 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
     weapon.drone += volley / cycle * d.active;
     dmg.forEach((x, i) => { weapon.types[i] += x / cycle * d.active; });
   }
-  weapon.total = weapon.turret + weapon.missile + weapon.drone;
+  // 舰载机：普通攻击 + 导弹技能，按中队规模与出击中队数计
+  for (const f of fighters) {
+    if (!f.active) continue;
+    const n = squad(f) * f.active;
+    for (const [dmgAttrs, multAttr, durAttr] of [[AT.fighterAttackDmg, AT.fighterAttackMult, AT.fighterAttackDuration], [AT.fighterMissileDmg, AT.fighterMissileMult, AT.fighterMissileDuration]]) {
+      const cycle = f.attr(durAttr) / 1000;
+      if (!cycle) continue;
+      const mult = f.attr(multAttr) || 1;
+      const dmg = dmgAttrs.map((a) => f.attr(a) * mult);
+      if (!dmg.some(Boolean)) continue;
+      weapon.fighter += dmg.reduce((t, x) => t + x, 0) / cycle * n;
+      dmg.forEach((x, i) => { weapon.types[i] += x / cycle * n; });
+    }
+  }
+  weapon.total = weapon.turret + weapon.missile + weapon.drone + weapon.fighter;
 
   // 防御
   const layer = (hpAttr, res) => {
@@ -483,6 +517,11 @@ function problems(calc, slotCount, used, res) {
   if (res.droneBay.used > res.droneBay.total) out.push({ level: 'error', text: '无人机挂舱容量不足' });
   if (res.bandwidth.used > res.bandwidth.total) out.push({ level: 'error', text: '无人机带宽不足' });
   if (res.activeDrones.used > res.activeDrones.total) out.push({ level: 'warn', text: `同时操作的无人机超过上限 ${res.activeDrones.total} 架` });
+  if (res.fighterBay.used > res.fighterBay.total + 1e-6) out.push({ level: 'error', text: '舰载机机库容量不足' });
+  if (res.fighterTubes.used > res.fighterTubes.total) out.push({ level: 'error', text: `出击中队超过发射管数 ${res.fighterTubes.total}` });
+  for (const [k, label] of [['fighterLight', '轻型'], ['fighterSupport', '支援'], ['fighterHeavy', '重型']]) {
+    if (res[k].used > res[k].total) out.push({ level: 'error', text: `${label}舰载机中队超过上限 ${res[k].total}` });
+  }
   const groupCount = new Map(), typeCount = new Map(), activeGroup = new Map();
   for (const m of modules) {
     const t = m.type;

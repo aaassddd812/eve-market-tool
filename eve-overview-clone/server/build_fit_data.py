@@ -19,7 +19,7 @@ import json
 import sys
 import zipfile
 
-CATEGORIES = {6, 7, 8, 16, 18, 20, 32}        # 舰船、装备、弹药、技能、无人机、植入体、子系统
+CATEGORIES = {6, 7, 8, 16, 18, 20, 32, 87}    # 舰船、装备、弹药、技能、无人机、植入体、子系统、铁骑舰载机
 FUNCS = {'ItemModifier': 0, 'LocationModifier': 1, 'LocationGroupModifier': 2,
          'LocationRequiredSkillModifier': 3, 'OwnerRequiredSkillModifier': 4}
 DOMAINS = {'itemID': 0, 'shipID': 1, 'charID': 2, 'otherID': 3, 'structureID': 4, 'targetID': 5, 'target': 5}

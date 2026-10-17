@@ -2,13 +2,16 @@
 // 左侧浏览舰船 / 装备 / 弹药 / 无人机 / 植入体（按市场分组或搜索），中间是舰船槽位，右侧为属性统计。
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
-import * as FE from './fit-engine.js?v=v1r1';
+// 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
+import * as FE from './fit-engine.js?v=v21r3';
+import { initAutoFit, openAutoFit } from './fit-auto.js?v=v21r6';
+import { initKbFits, openKbFits } from './fit-kb.js?v=v21r3';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v16r7';
 
 let app;
 const $ = (id) => document.getElementById(id);
 const IMG = (id, kind = 'icon', size = 32) => `https://images.evetech.net/types/${id}/${kind}?size=${size}`;
-const DATA_URL = './fit-data.json?v=v1r1';
+const DATA_URL = './fit-data.json?v=v21r3';
 const SAVE_KEY = 'eve-fits-v1';
 const CURRENT_KEY = 'eve-fit-current';
 const SETTINGS_KEY = 'eve-fit-settings';
@@ -17,7 +20,7 @@ const TABS = [
   ['ship', '舰船', [FE.CAT.ship]],
   ['module', '装备', [FE.CAT.module, FE.CAT.subsystem]],
   ['charge', '弹药', [FE.CAT.charge]],
-  ['drone', '无人机', [FE.CAT.drone]],
+  ['drone', '无人机', [FE.CAT.drone, FE.CAT.fighter]],
   ['implant', '植入体', [FE.CAT.implant]]
 ];
 const META = { 2: ['T2', 't2'], 3: ['故事线', 'story'], 4: ['势力', 'faction'], 5: ['官员', 'officer'], 6: ['死亡空间', 'deadspace'], 14: ['T3', 't3'], 15: ['深渊', 'abyssal'] };
@@ -42,11 +45,22 @@ export function initFitting(context) {
   $('fitMain').addEventListener('click', onMainClick);
   $('fitMain').addEventListener('change', onMainChange);
   $('fitMain').addEventListener('input', onMainInput);
+  $('fitMain').addEventListener('contextmenu', onStateContext);
   $('fitModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-fit-modal-close]')) closeModal();
     if (e.target.closest('[data-fit-import-go]')) importText($('fitImportText').value);
   });
   $('fitEsiModal').addEventListener('click', onEsiModalClick);
+  const planCtx = {
+    get data() { return F.data; }, FE,
+    getFit: () => F.fit,
+    applyFit,
+    esiLevels: () => F.esi?.levels || null,
+    prices: () => F.prices,
+    esc: app.esc, formatNumber: app.formatNumber, formatISK: app.formatISK, showToast: app.showToast, store: app.store
+  };
+  initAutoFit(planCtx);
+  initKbFits(planCtx);
   $('fitEsiModal').addEventListener('input', (e) => { if (e.target.id === 'fitEsiSearch') renderEsiList(); });
 }
 
@@ -186,7 +200,10 @@ function visible(t) {
     const mods = fittedModules();
     if (!mods.some(({ m }) => FE.chargeFits(type(m.type), t))) return false;
   }
-  if (F.tab === 'drone' && F.onlyFits && F.stats && !F.stats.resources.droneBay.total) return false;
+  if (F.tab === 'drone' && F.onlyFits && F.stats) {
+    const res = F.stats.resources;
+    if (t.category === FE.CAT.fighter ? !res.fighterBay.total : !res.droneBay.total) return false;
+  }
   return true;
 }
 
@@ -262,6 +279,7 @@ function useType(id) {
   if (t.category === FE.CAT.module || t.category === FE.CAT.subsystem) addModule(t);
   else if (t.category === FE.CAT.charge) loadCharge(t);
   else if (t.category === FE.CAT.drone) addDrone(t);
+  else if (t.category === FE.CAT.fighter) addFighter(t);
   else if (t.category === FE.CAT.implant) addImplant(t);
   if (MOBILE()) app.closeDrawer?.();
 }
@@ -366,17 +384,83 @@ function addDrone(t) {
   recompute();
 }
 
-// 在带宽与同时操作上限内尽量激活
+const isFighter = (d) => type(d.type)?.category === FE.CAT.fighter;
+
+// 在带宽与同时操作上限内尽量激活无人机；舰载机在发射管与轻型 / 支援 / 重型位内尽量出击
 function autoActivateDrones() {
   const calc = FE.computeFit(F.data, F.fit, skills());
   const limit = calc.char.attr(FE.AT.maxActiveDrones);
   let bw = calc.ship.attr(FE.AT.droneBandwidth);
   let n = 0;
-  for (const d of F.fit.drones) {
+  let tubes = calc.ship.attr(FE.AT.fighterTubes);
+  const role = { light: calc.ship.attr(FE.AT.fighterLightSlots), support: calc.ship.attr(FE.AT.fighterSupportSlots), heavy: calc.ship.attr(FE.AT.fighterHeavySlots) };
+  for (const d of F.fit.drones.filter(isFighter)) {
+    const t = type(d.type);
+    const r = t.attrs.get(FE.AT.fighterIsHeavy) ? 'heavy' : t.attrs.get(FE.AT.fighterIsSupport) ? 'support' : 'light';
+    d.active = 0;
+    while (d.active < d.count && tubes > 0 && role[r] > 0) { d.active++; tubes--; role[r]--; }
+  }
+  for (const d of F.fit.drones.filter((x) => !isFighter(x))) {
     const per = type(d.type).attrs.get(FE.AT.droneBandwidthUsed) || 0;
     d.active = 0;
     while (d.active < d.count && n < limit && (per === 0 || bw >= per - 1e-6)) { d.active++; n++; bw -= per; }
   }
+}
+
+// 一键开 / 关：主动装备全部激活或全部停用（停用 = 在线不激活）；离线的装备开启时恢复在线
+function setAllStates(on) {
+  for (const { m, slot } of fittedModules()) {
+    if (slot === 'rig' || slot === 'sub') continue;
+    const t = type(m.type);
+    if (on) m.state = t.activatable ? 'active' : 'online';
+    else if (t.activatable) m.state = 'online';
+  }
+  recompute();
+}
+
+// 清空装备（保留舰船、子系统与植入体）
+function clearModules() {
+  if (!fittedModules().some(({ slot }) => slot !== 'sub') && !F.fit.drones.length) return;
+  if (!confirm('清空全部装备、弹药和无人机？')) return;
+  for (const s of ['high', 'mid', 'low', 'rig']) F.fit.slots[s] = [];
+  F.fit.drones = [];
+  F.selected = null;
+  recompute();
+  app.showToast('已清空装备', 'success', 1500);
+}
+
+// 右键装备状态按钮：切换超载
+function onStateContext(e) {
+  const x = e.target.closest('[data-fit-state]');
+  if (!x) return;
+  e.preventDefault();
+  const { slot, index } = parseRef(x.dataset.fitState);
+  const m = F.fit.slots[slot][index];
+  if (!type(m.type).overloadable) return;
+  m.state = m.state === 'overload' ? 'active' : 'overload';
+  recompute();
+}
+
+// 智能装配 / 击杀记录装配：替换当前装配（无人机按带宽自动激活）
+function applyFit(fit) {
+  F.fit = normalize(fit);
+  F.selected = null;
+  autoActivateDrones();
+  recompute();
+  renderBrowser();
+}
+
+// 舰载机按中队添加（每个中队满编）
+function addFighter(t) {
+  const res = F.stats.resources;
+  if (!res.fighterBay.total) { app.showToast('这艘船没有舰载机机库', 'error'); return; }
+  const vol = (t.attrs.get(FE.AT.volume) || 0) * (t.attrs.get(FE.AT.fighterSquadronSize) || 1);
+  if (res.fighterBay.used + vol > res.fighterBay.total + 1e-6) { app.showToast('舰载机机库容量不足', 'error'); return; }
+  const d = F.fit.drones.find((x) => x.type === t.id);
+  if (d) d.count += 1;
+  else F.fit.drones.push({ type: t.id, count: 1, active: 0 });
+  autoActivateDrones();
+  recompute();
 }
 
 function addImplant(t) {
@@ -425,6 +509,10 @@ function renderFit() {
       <div class="fit-actions">
         <button class="btn btn-primary" data-fit-save>${F.fit.id ? '保存' : '保存装配'}</button>
         <select class="plain-select" data-fit-open aria-label="我的装配"><option value="">我的装配${saved.length ? `（${saved.length}）` : ''}</option>${saved.map((f) => `<option value="${f.id}"${f.id === F.fit.id ? ' selected' : ''}>${app.esc(f.name || type(f.ship)?.name || '未命名')} · ${app.esc(type(f.ship)?.name || '')}</option>`).join('')}</select>
+        <div class="fit-action-row fit-plan-row">
+          <button class="btn btn-ghost fit-plan-btn" data-fit-auto title="按目标与约束自动装配">智能装配</button>
+          <button class="btn btn-ghost fit-plan-btn" data-fit-kb title="这艘船最近阵亡时的常见装配">击杀记录装配</button>
+        </div>
         <div class="fit-action-row">
           <button class="btn btn-ghost" data-fit-new title="新建空装配">新建</button>
           <button class="btn btn-ghost" data-fit-import title="粘贴 EFT 格式文本">导入</button>
@@ -442,6 +530,7 @@ function renderFit() {
         <button data-fit-skill="max" class="${F.skillMode === 'max' ? 'active' : ''}">全部 5 级</button>
         <button data-fit-skill="esi" class="${F.skillMode === 'esi' ? 'active' : ''}"${bound ? '' : ' disabled title="需要先绑定 ESI"'}>${F.esi && F.skillMode === 'esi' ? app.esc(F.esi.name) + ' 的技能' : '按 ESI 角色'}</button>
       </div>
+      <span class="fit-bulk"><button class="link-btn" data-fit-all="on" title="主动装备全部激活">全部开启</button><button class="link-btn" data-fit-all="off" title="主动装备全部停用">全部关闭</button><button class="link-btn danger" data-fit-clear title="清空全部装备、弹药和无人机">清空装备</button></span>
       ${missing.length ? `<span class="fit-missing" title="${app.esc(missing.map((m) => `${m.type?.name || m.type} ${m.have} → ${m.need} 级`).join('\n'))}">缺少 ${missing.length} 项技能</span>` : F.skillMode === 'esi' && F.esi ? '<span class="fit-ok">技能满足</span>' : ''}
     </div>
     ${problemsHtml(st.problems)}
@@ -465,14 +554,18 @@ function moduleRow(slot, index, m, extra) {
   const ct = m.charge && type(m.charge);
   const fixed = slot === 'rig' || slot === 'sub';
   const err = F.stats.problems.some((p) => p.module === item && p.level === 'error');
-  const states = ['offline', 'online', ...(t.activatable ? ['active'] : []), ...(t.overloadable ? ['overload'] : [])];
   const needsCharge = FE.AT.chargeGroups.some((a) => t.attrs.get(a));
-  return `<div class="fit-slot${sel ? ' is-selected' : ''}${err || extra ? ' is-error' : ''} is-${m.state}" data-fit-mod="${slot}:${index}">
-    ${fixed ? '<span class="fit-state-btn is-static"></span>' : `<button class="fit-state-btn is-${m.state}" data-fit-state="${slot}:${index}" title="${STATE_NAME[m.state]}（点击切换：${states.map((s) => STATE_NAME[s]).join(' → ')}）" aria-label="切换状态"><i></i></button>`}
+  // 状态：主动装备显示 激活 / 已关闭 / 超载，被动装备显示 在线；离线时整行变暗
+  const off = t.activatable && m.state === 'online';
+  const label = m.state === 'offline' ? '离线' : m.state === 'overload' ? '超载' : m.state === 'active' ? '激活' : off ? '已关闭' : '在线';
+  const stateBtn = fixed ? '' : `<button class="fit-state-pill s-${off ? 'off' : m.state}" data-fit-state="${slot}:${index}" title="点击${t.activatable ? '开启 / 关闭' : '在线 / 离线'} · Shift 点击离线" aria-label="切换状态">${label}</button>`;
+  const olBtn = !fixed && t.overloadable ? `<button class="fit-ol-btn${m.state === 'overload' ? ' on' : ''}" data-fit-overload="${slot}:${index}" title="${m.state === 'overload' ? '关闭超载' : '超载'}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2s5 5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3-1-5 1-8.5z"/></svg>超载</button>` : '';
+  return `<div class="fit-slot${sel ? ' is-selected' : ''}${err || extra ? ' is-error' : ''} is-${off ? 'off' : m.state}" data-fit-mod="${slot}:${index}">
     <img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">
     <span class="fit-slot-name">${app.esc(t.name)}${item && moduleNote(item) ? `<small>${moduleNote(item)}</small>` : ''}</span>
     ${ct ? `<span class="fit-charge" title="${app.esc(ct.name)} × ${FE.chargeCount(t, ct)}"><img src="${IMG(ct.id)}" alt="" width="20" height="20" loading="lazy">${app.esc(shortName(ct.name))}<button data-fit-uncharge="${slot}:${index}" aria-label="卸下弹药">×</button></span>`
       : needsCharge ? `<button class="fit-charge is-empty" data-fit-pick-charge="${slot}:${index}">装填弹药</button>` : ''}
+    ${olBtn}${stateBtn}
     <button class="fit-remove" data-fit-remove="${slot}:${index}" title="移除" aria-label="移除">×</button>
   </div>`;
 }
@@ -492,21 +585,34 @@ function dist(m) {
   return m >= 1000 ? (m / 1000).toFixed(m >= 10000 ? 1 : 2).replace(/\.?0+$/, '') + ' km' : Math.round(m) + ' m';
 }
 
+function droneRow(d, i, fighter) {
+  const t = type(d.type);
+  const size = fighter ? t.attrs.get(FE.AT.fighterSquadronSize) || 1 : 1;
+  const unit = fighter ? '中队' : '架';
+  return `<div class="fit-slot fit-drone">
+    <img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">
+    <span class="fit-slot-name">${app.esc(t.name)}<small>${fighter ? `每中队 ${size} 架 · 出击 ${d.active} / ${d.count}` : `激活 ${d.active} / ${d.count}`}</small></span>
+    <span class="fit-stepper" title="数量（${unit}）"><button data-fit-drone="${i}:count:-1" aria-label="减少">−</button><b>${d.count}</b><button data-fit-drone="${i}:count:1" aria-label="增加">+</button></span>
+    <span class="fit-stepper is-active" title="${fighter ? '出击中队' : '激活数量'}"><button data-fit-drone="${i}:active:-1" aria-label="减少">−</button><b>${d.active}</b><button data-fit-drone="${i}:active:1" aria-label="增加">+</button></span>
+    <button class="fit-remove" data-fit-drone-remove="${i}" title="移除" aria-label="移除">×</button>
+  </div>`;
+}
+
 function dronesHtml() {
   const res = F.stats.resources;
-  if (!res.droneBay.total && !F.fit.drones.length) return '';
-  const rows = F.fit.drones.map((d, i) => {
-    const t = type(d.type);
-    return `<div class="fit-slot fit-drone">
-      <img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">
-      <span class="fit-slot-name">${app.esc(t.name)}<small>激活 ${d.active} / ${d.count}</small></span>
-      <span class="fit-stepper" title="数量"><button data-fit-drone="${i}:count:-1" aria-label="减少">−</button><b>${d.count}</b><button data-fit-drone="${i}:count:1" aria-label="增加">+</button></span>
-      <span class="fit-stepper is-active" title="激活数量"><button data-fit-drone="${i}:active:-1" aria-label="少激活一架">−</button><b>${d.active}</b><button data-fit-drone="${i}:active:1" aria-label="多激活一架">+</button></span>
-      <button class="fit-remove" data-fit-drone-remove="${i}" title="移除" aria-label="移除">×</button>
-    </div>`;
-  }).join('');
-  return `<section class="fit-slots"><h4>无人机<span>挂舱 ${fmt(res.droneBay.used)} / ${fmt(res.droneBay.total)} m³ · 带宽 ${fmt(res.bandwidth.used)} / ${fmt(res.bandwidth.total)}</span></h4>
-    ${rows || '<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加</span></div>'}</section>`;
+  let html = '';
+  const drones = F.fit.drones.map((d, i) => [d, i]).filter(([d]) => !isFighter(d));
+  const fighters = F.fit.drones.map((d, i) => [d, i]).filter(([d]) => isFighter(d));
+  if (res.droneBay.total || drones.length) {
+    html += `<section class="fit-slots"><h4>无人机<span>挂舱 ${fmt(res.droneBay.used)} / ${fmt(res.droneBay.total)} m³ · 带宽 ${fmt(res.bandwidth.used)} / ${fmt(res.bandwidth.total)}</span></h4>
+      ${drones.map(([d, i]) => droneRow(d, i, false)).join('') || '<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加</span></div>'}</section>`;
+  }
+  if (res.fighterBay.total || fighters.length) {
+    const roles = [['fighterLight', '轻型'], ['fighterSupport', '支援'], ['fighterHeavy', '重型']].filter(([k]) => res[k].total).map(([k, l]) => `${l} ${res[k].used}/${res[k].total}`).join(' · ');
+    html += `<section class="fit-slots"><h4>舰载机<span>机库 ${fmt(res.fighterBay.used)} / ${fmt(res.fighterBay.total)} m³ · 发射管 ${res.fighterTubes.used} / ${res.fighterTubes.total}${roles ? ' · ' + roles : ''}</span></h4>
+      ${fighters.map(([d, i]) => droneRow(d, i, true)).join('') || '<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加舰载机</span></div>'}</section>`;
+  }
+  return html;
 }
 
 function implantsHtml(bound) {
@@ -550,6 +656,7 @@ function renderStats() {
       <div class="fit-kv"><span>炮台</span><b>${s.weapon.turret.toFixed(1)}</b></div>
       <div class="fit-kv"><span>导弹</span><b>${s.weapon.missile.toFixed(1)}</b></div>
       <div class="fit-kv"><span>无人机</span><b>${s.weapon.drone.toFixed(1)}</b></div>
+      ${s.weapon.fighter || r.fighterBay.total ? `<div class="fit-kv"><span>舰载机</span><b>${s.weapon.fighter.toFixed(1)}</b></div>` : ''}
       <div class="fit-kv"><span>齐射伤害</span><b>${app.formatNumber(Math.round(s.weapon.volley))}</b></div>
       ${s.weapon.total ? `<div class="fit-dmg">${['em', 'th', 'ki', 'ex'].map((k, i) => `<i class="is-${k}" style="flex:${s.weapon.types[i] || 0.0001}" title="${['电磁', '热能', '动能', '爆炸'][i]} ${(s.weapon.types[i] / s.weapon.total * 100).toFixed(0)}%"></i>`).join('')}</div>` : ''}
     </section>
@@ -629,11 +736,22 @@ async function onMainClick(e) {
     const { slot, index } = parseRef(x.dataset.fitState);
     const m = F.fit.slots[slot][index];
     const t = type(m.type);
-    const states = ['offline', 'online', ...(t.activatable ? ['active'] : []), ...(t.overloadable ? ['overload'] : [])];
-    m.state = states[(states.indexOf(m.state) + 1) % states.length];
+    // 点击开 / 关：主动装备在激活与在线之间切换，被动装备在在线与离线之间切换；按住 Shift 切换离线
+    if (e.shiftKey) m.state = m.state === 'offline' ? defaultState(t) : 'offline';
+    else if (t.activatable) m.state = m.state === 'active' || m.state === 'overload' ? 'online' : 'active';
+    else m.state = m.state === 'offline' ? 'online' : 'offline';
     recompute();
     return;
   }
+  if ((x = el('[data-fit-overload]'))) {
+    const { slot, index } = parseRef(x.dataset.fitOverload);
+    const m = F.fit.slots[slot][index];
+    m.state = m.state === 'overload' ? 'active' : 'overload';
+    recompute();
+    return;
+  }
+  if ((x = el('[data-fit-all]'))) { setAllStates(x.dataset.fitAll === 'on'); return; }
+  if ((x = el('[data-fit-clear]'))) { clearModules(); return; }
   if ((x = el('[data-fit-remove]'))) {
     const { slot, index } = parseRef(x.dataset.fitRemove);
     F.fit.slots[slot][index] = null;
@@ -678,8 +796,10 @@ async function onMainClick(e) {
     const d = F.fit.drones[Number(i)];
     d[field] = Math.max(field === 'count' ? 1 : 0, d[field] + Number(delta));
     if (field === 'count' && Number(delta) > 0) {
-      const bay = F.stats.resources.droneBay, vol = type(d.type).attrs.get(FE.AT.volume) || 0;
-      if (bay.used + vol > bay.total + 1e-6) { d.count -= 1; app.showToast('无人机挂舱容量不足', 'error'); return; }
+      const fighter = isFighter(d);
+      const bay = fighter ? F.stats.resources.fighterBay : F.stats.resources.droneBay;
+      const vol = (type(d.type).attrs.get(FE.AT.volume) || 0) * (fighter ? type(d.type).attrs.get(FE.AT.fighterSquadronSize) || 1 : 1);
+      if (bay.used + vol > bay.total + 1e-6) { d.count -= 1; app.showToast(fighter ? '舰载机机库容量不足' : '无人机挂舱容量不足', 'error'); return; }
     }
     d.active = Math.min(d.active, d.count);
     recompute();
@@ -704,6 +824,8 @@ async function onMainClick(e) {
   if (el('[data-fit-export]')) { app.copyText(toEft(F.fit), '已复制 EFT 文本，可在游戏装配窗口或 Pyfa 中导入'); return; }
   if (el('[data-fit-share]')) { app.copyText(shareUrl(), '分享链接已复制'); return; }
   if (el('[data-fit-esi-list]')) { openEsiModal(); return; }
+  if (el('[data-fit-auto]')) { openAutoFit(); return; }
+  if (el('[data-fit-kb]')) { openKbFits(); return; }
   if ((x = el('[data-fit-esi-save]'))) { saveToGame(x); return; }
 }
 
@@ -884,6 +1006,11 @@ function fromEsiFit(f) {
     } else if (where.bay === 'DroneBay' && t.category === FE.CAT.drone) {
       const d = fit.drones.find((x) => x.type === t.id);
       if (d) d.count += it.quantity || 1; else fit.drones.push({ type: t.id, count: it.quantity || 1, active: 0 });
+    } else if (where.bay === 'FighterBay' && t.category === FE.CAT.fighter) {
+      // 游戏里按架数记，这里按满编中队计
+      const n = Math.max(1, Math.ceil((it.quantity || 1) / (t.attrs.get(FE.AT.fighterSquadronSize) || 1)));
+      const d = fit.drones.find((x) => x.type === t.id);
+      if (d) d.count += n; else fit.drones.push({ type: t.id, count: n, active: 0 });
     } else if (where.bay === 'Cargo' && t.category === FE.CAT.charge) {
       cargo.push(t);
     } else if (where.bay !== 'Cargo') {
@@ -913,7 +1040,11 @@ function toEsiFit(fit) {
       if (m.charge) charges.set(m.charge, (charges.get(m.charge) || 0) + FE.chargeCount(type(m.type), type(m.charge)));
     });
   }
-  for (const d of fit.drones) items.push({ type_id: d.type, flag: 'DroneBay', quantity: d.count });
+  for (const d of fit.drones) {
+    const t = type(d.type);
+    if (t?.category === FE.CAT.fighter) items.push({ type_id: d.type, flag: 'FighterBay', quantity: d.count * (t.attrs.get(FE.AT.fighterSquadronSize) || 1) });
+    else items.push({ type_id: d.type, flag: 'DroneBay', quantity: d.count });
+  }
   for (const [id, qty] of charges) items.push({ type_id: id, flag: 'Cargo', quantity: qty });
   const name = (fit.name.trim() || type(fit.ship).name).slice(0, 50);
   return { name, description: '由 EVE Market 模拟装配保存', ship_type_id: fit.ship, items };

@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v19r17">
+  <link rel="stylesheet" href="css/modern-style.css?v=v21r6">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -61,6 +61,10 @@
         <button class="nav-btn" data-view="pi" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="6.5"/><ellipse cx="12" cy="12" rx="11" ry="3.8" transform="rotate(-20 12 12)"/></svg>
           <span>行星工业</span>
+        </button>
+        <button class="nav-btn" data-view="industry" role="tab" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 20h20"/><path d="M4 20V9l5 3V9l5 3V5h3l1 15"/><path d="M17 8h2"/></svg>
+          <span>制造</span>
         </button>
         <button class="nav-btn" data-view="profile" role="tab" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -490,6 +494,28 @@
         </div>
       </div>
 
+      <!-- 制造视图 -->
+      <div class="view-container" id="industryView" hidden>
+        <aside class="sidebar ind-sidebar" id="indSidebar" aria-label="制造导航">
+          <div class="sidebar-header">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <input type="search" id="indSideSearch" placeholder="搜索可制造物品（中英文）" autocomplete="off" spellcheck="false" aria-label="搜索可制造物品">
+            </div>
+            <button class="collapse-btn" id="indSidebarCollapse" title="收起侧边栏 ([)" aria-label="收起侧边栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+          </div>
+          <div class="sidebar-content ind-side" id="indSide"></div>
+        </aside>
+        <div class="kb-scroll ind-scroll">
+          <button class="sidebar-reopen" id="indSidebarReopen" title="展开侧边栏 ([)" aria-label="展开侧边栏" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <div class="kb-wrap" id="industryMain"></div>
+        </div>
+      </div>
+
       <!-- 个人中心视图 -->
       <div class="view-container" id="profileView" hidden>
         <aside class="sidebar profile-sidebar" id="profileSidebar" aria-label="个人中心导航">
@@ -502,6 +528,7 @@
           <div class="sidebar-content profile-sidebar-content">
             <nav class="profile-nav" id="profileNav">
               <button class="profile-nav-btn active" data-profile="info">角色概览</button>
+              <button class="profile-nav-btn" data-profile="skills">技能</button>
               <button class="profile-nav-btn" data-profile="assets">资产估值</button>
               <div class="profile-nav-group expanded" id="stationGroup">
                 <button class="profile-nav-group-title" id="stationGroupToggle" aria-expanded="true" aria-controls="profileStationNav">
@@ -554,6 +581,7 @@
 
               <div class="profile-tabs" role="tablist">
                 <button class="tab-link active" data-profile="info">基本信息</button>
+                <button class="tab-link" data-profile="skills">技能</button>
                 <button class="tab-link" data-profile="assets">资产</button>
                 <button class="tab-link" data-profile="orders">订单</button>
                 <button class="tab-link" data-profile="contracts">合同</button>
@@ -711,6 +739,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v19r17" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v21r6" type="module" data-cfasync="false"></script>
 </body>
 </html>

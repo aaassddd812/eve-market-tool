@@ -21,6 +21,10 @@
   GET /api/kb/search?q=                       搜索人物 / 军团 / 联盟
   GET /api/kb/entity/<kind>/<id>?days=30      人物 / 军团 / 联盟统计（含成员明细）
   GET /api/kb/kill/<id>                       击杀邮件详情与逐项估价（原文按需取自 ESI，本地不保存）
+  GET /api/kb/shipfits?ship=ID&days=7          某型舰船最近 N 天（≤ 保留期）阵亡时的装配，相同装配合并计数（物品原文按需取自 ESI，提取结果存库）
+  GET /api/kb/bpprices?types=1,2               公开合同里的蓝图价格：原图最低价、拷贝每流程最低价（各取最便宜 5 份）；
+                                               不带 types 时返回全部蓝图的 [原图最低价, 拷贝每流程最低价]
+                                               数据来自 EVE Ref 公开合同快照 https://data.everef.net/public-contracts/（每小时刷新）
 
 用法
   python3 kb_service.py --db kb.sqlite [--port 8291] [--days 30] [--live auto|r2z2|poll|off] [--static DIR]
@@ -30,6 +34,7 @@
 import argparse
 import collections
 import concurrent.futures
+import csv
 import datetime as dt
 import gzip
 import io
@@ -52,6 +57,15 @@ R2Z2 = "https://r2z2.zkillboard.com/ephemeral/"   # https://github.com/zKillboar
 R2Z2_GAP = 0.1              # 有数据时的请求间隔（官方限制每 IP 15 次 / 秒）
 R2Z2_IDLE = 6               # 收到 404（暂无新击杀）后至少等待 6 秒，官方要求
 EVEREF = "https://data.everef.net/killmails/{year}/killmails-{date}.tar.bz2"
+EVEREF_CONTRACTS = "https://data.everef.net/public-contracts/public-contracts-latest.v2.tar.bz2"
+BP_CONTRACT_TTL = 3600      # 蓝图合同价每小时刷新（快照约每 30 分钟更新）
+BP_CONTRACT_KEEP = 5        # 每种蓝图的原图 / 拷贝各保留最便宜的几份合同
+BP_MAX_TYPES = 300          # bpprices 单次最多查询的蓝图种类
+SHIPFIT_MAX = 300           # shipfits：每次最多分析的最近损失数
+SHIPFIT_WORKERS = 16        # shipfits：并发向 ESI 取击杀原文
+# 击杀邮件物品 flag → 槽位（模块与装填的弹药同 flag；区分由前端按物品类别完成）
+FIT_FLAGS = [("high", range(27, 35)), ("mid", range(19, 27)), ("low", range(11, 19)), ("rig", range(92, 100)),
+             ("sub", range(125, 133)), ("drone", (87,)), ("fighter", (158,))]
 UA = "EVE-Market-Tool KB service (+https://github.com/wbw5780/eve-market-tool)"
 FORGE = 10000002
 JITA_44 = 60003760
@@ -173,6 +187,9 @@ CREATE TABLE IF NOT EXISTS prices(type_id INTEGER PRIMARY KEY, sell REAL, buy RE
 -- 吉他没有卖单的物品（主要是旗舰）：全服公开合同里扣除附带物品后的最低价
 CREATE TABLE IF NOT EXISTS contract_prices(type_id INTEGER PRIMARY KEY, price REAL, contract_id INTEGER, region_id INTEGER, at INTEGER);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+-- 阵亡装配：从击杀原文提取的各槽位物品（JSON），供 shipfits 统计常见装配
+CREATE TABLE IF NOT EXISTS km_fits(id INTEGER PRIMARY KEY, ship INTEGER, time INTEGER, fit TEXT);
+CREATE INDEX IF NOT EXISTS kmfit_ship ON km_fits(ship, time);
 """
 
 
@@ -192,6 +209,8 @@ class Store:
         for type_id, sell, buy, avg in conn.execute("SELECT type_id, sell, buy, avg FROM prices"):
             self.prices[type_id] = (sell, buy, avg)
         self.contract_prices = dict(conn.execute("SELECT type_id, price FROM contract_prices"))
+        # 公开合同里的蓝图：type_id -> {"o": [[价格, ME, TE, 合同, 星系]], "c": [[每流程价, 流程, 价格, ME, TE, 合同, 星系]]}（仅内存）
+        self.bp_contracts = {}
         self.known_names = {row[0] for row in conn.execute("SELECT id FROM names")}
         self.pending_names = set()
         self.cache = {}
@@ -343,6 +362,7 @@ class Store:
         with self.write_lock:
             n = c.execute("DELETE FROM killmails WHERE time < ?", (cutoff,)).rowcount
             c.execute("DELETE FROM attackers WHERE time < ?", (cutoff,))
+            c.execute("DELETE FROM km_fits WHERE time < ?", (cutoff,))
             c.commit()
             c.execute("PRAGMA incremental_vacuum")  # 把删除腾出的空间还给磁盘
             c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -361,7 +381,7 @@ class Workers:
             self.prices_ready.set()
 
     def start(self):
-        for target in (self.price_loop, self.contract_loop, self.backfill, self.live_loop, self.names_loop):
+        for target in (self.price_loop, self.contract_loop, self.bp_contract_loop, self.backfill, self.live_loop, self.names_loop):
             threading.Thread(target=target, daemon=True).start()
 
     # ---- 价格：伏尔戈全量订单 → 吉他 4-4 最低卖 / 最高收
@@ -525,6 +545,57 @@ class Workers:
             except Exception:
                 log.exception("公开合同估价失败")
             time.sleep(CONTRACT_TTL)
+
+    # ---- 蓝图合同价：EVE Ref 公开合同快照（全服物品交换合同及其物品，约 6 MB）
+    # 只看「只卖一张蓝图、不要求对方附带物品」的合同：原图按总价、拷贝按每流程单价各取最便宜的几份
+    def refresh_bp_contracts(self):
+        body, _ = http_get(EVEREF_CONTRACTS, timeout=180)
+        now = time.time()
+        with tarfile.open(fileobj=io.BytesIO(body), mode="r:bz2") as tar:
+            def rows(name):
+                member = next(m for m in tar.getmembers() if m.name.endswith(name))
+                return csv.DictReader(io.TextIOWrapper(tar.extractfile(member), encoding="utf-8"))
+            contracts = {}
+            for c in rows("contracts.csv"):
+                if c["type"] != "item_exchange" or c.get("for_corporation") == "true":
+                    continue
+                price = float(c["price"] or 0)
+                if price <= 0 or (c["date_expired"] and epoch(c["date_expired"]) < now):
+                    continue
+                contracts[c["contract_id"]] = (price, int(c["system_id"] or 0))
+            items = collections.defaultdict(list)
+            for it in rows("contract_items.csv"):
+                if it["contract_id"] in contracts:
+                    items[it["contract_id"]].append(it)
+        bpo, bpc = collections.defaultdict(list), collections.defaultdict(list)
+        for cid, lst in items.items():
+            if len(lst) != 1:
+                continue
+            it = lst[0]
+            if it["is_included"] != "true" or it["is_blueprint_copy"] not in ("true", "false") or int(it["quantity"] or 1) != 1:
+                continue
+            price, system = contracts[cid]
+            tid, me, te = int(it["type_id"]), int(it["material_efficiency"] or 0), int(it["time_efficiency"] or 0)
+            if it["is_blueprint_copy"] == "true":
+                runs = int(it["runs"] or 0)
+                if runs > 0:
+                    bpc[tid].append([round(price / runs, 2), runs, price, me, te, int(cid), system])
+            else:
+                bpo[tid].append([price, me, te, int(cid), system])
+        result = {}
+        for tid in set(bpo) | set(bpc):
+            result[tid] = {"o": sorted(bpo.get(tid, []))[:BP_CONTRACT_KEEP], "c": sorted(bpc.get(tid, []))[:BP_CONTRACT_KEEP]}
+        self.store.bp_contracts = result
+        self.store.state["bp_contracts_updated"] = iso(now)
+        log.info("蓝图合同价：%d 份合同，%d 种蓝图", sum(len(v) for v in bpo.values()) + sum(len(v) for v in bpc.values()), len(result))
+
+    def bp_contract_loop(self):
+        while True:
+            try:
+                self.refresh_bp_contracts()
+            except Exception:
+                log.exception("蓝图合同价读取失败")
+            time.sleep(BP_CONTRACT_TTL)
 
     # ---- 历史：EVE Ref 每日存档；每 6 小时检查一次新的一天（同时补齐实时数据在重启期间的缺口）
     def backfill(self):
@@ -1119,6 +1190,83 @@ class Api:
         return self.cached(("entity", kind, eid, days), run)
 
     # GET /kill/<id>
+    # ---- 阵亡装配
+    @staticmethod
+    def extract_fit(km):
+        groups = {}
+        for it in km["victim"].get("items") or []:
+            flag = it.get("flag")
+            slot = next((name for name, flags in FIT_FLAGS if flag in flags), None)
+            if not slot:
+                continue
+            qty = (it.get("quantity_destroyed") or 0) + (it.get("quantity_dropped") or 0)
+            g = groups.setdefault(slot, {})
+            g[it["item_type_id"]] = g.get(it["item_type_id"], 0) + qty
+        return {k: sorted([t, n] for t, n in v.items()) for k, v in groups.items()}
+
+    def shipfits(self, q):
+        ship = int(q["ship"])
+        days = max(1, min(int(q.get("days", 7)), self.store.retention))
+        return self.cached(f"shipfits:{ship}:{days}", lambda: self._shipfits(ship, days))
+
+    def _shipfits(self, ship, days):
+        since = int(time.time() - days * 86400)
+        conn = self.store.conn()
+        total = conn.execute("SELECT COUNT(*) FROM killmails WHERE ship_type=? AND time>=?", (ship, since)).fetchone()[0]
+        rows = conn.execute("SELECT id, hash, time, value FROM killmails WHERE ship_type=? AND time>=? ORDER BY time DESC LIMIT ?",
+                            (ship, since, SHIPFIT_MAX)).fetchall()
+        have = {}
+        if rows:
+            ids = [r[0] for r in rows]
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                for kid, fit in conn.execute(f"SELECT id, fit FROM km_fits WHERE id IN ({','.join('?' * len(chunk))})", chunk):
+                    have[kid] = json.loads(fit)
+        todo = [r for r in rows if r[0] not in have and r[1]]
+
+        def fetch(row):
+            try:
+                km, _ = get_json(f"{ESI}/killmails/{row[0]}/{row[1]}/", timeout=20, retries=2)
+                return row, self.extract_fit(km)
+            except Exception:
+                return row, None
+        if todo:
+            with concurrent.futures.ThreadPoolExecutor(SHIPFIT_WORKERS) as pool:
+                fetched = [x for x in pool.map(fetch, todo) if x[1] is not None]
+            with self.store.write_lock:
+                c = self.store.conn()
+                c.executemany("INSERT OR REPLACE INTO km_fits(id, ship, time, fit) VALUES(?,?,?,?)",
+                              [(row[0], ship, row[2], json.dumps(fit, separators=(",", ":"))) for row, fit in fetched])
+                c.commit()
+            for row, fit in fetched:
+                have[row[0]] = fit
+        # 相同装配合并（只看槽位里的装备与弹药、无人机；货柜舱不计）
+        groups = {}
+        for kid, _, t, value in rows:
+            fit = have.get(kid)
+            if not fit or not any(fit.get(s) for s in ("high", "mid", "low", "rig", "sub")):
+                continue
+            key = json.dumps(fit, sort_keys=True)
+            g = groups.setdefault(key, {"fit": fit, "n": 0, "last": 0, "value": 0.0, "ids": []})
+            g["n"] += 1
+            g["value"] += value or 0
+            g["last"] = max(g["last"], t)
+            if len(g["ids"]) < 5:
+                g["ids"].append(kid)
+        fits = sorted(groups.values(), key=lambda g: (-g["n"], -g["last"]))
+        for g in fits:
+            g["value"] = round(g["value"] / g["n"])
+        return {"ship": ship, "days": days, "total": total, "scanned": len(rows), "fits": fits}
+
+    def bpprices(self, q):
+        data = self.store.bp_contracts
+        updated = self.store.state.get("bp_contracts_updated")
+        if q.get("types"):
+            ids = [int(x) for x in q["types"].split(",") if x.strip().isdigit()][:BP_MAX_TYPES]
+            return {"updated": updated, "types": {str(t): data[t] for t in ids if t in data}}
+        # 全部蓝图的最低价（利润排行用）
+        return {"updated": updated, "all": {str(t): [v["o"][0][0] if v["o"] else None, v["c"][0][0] if v["c"] else None] for t, v in data.items()}}
+
     def kill(self, kid, q):
         row = self.store.conn().execute("SELECT value, hash FROM killmails WHERE id=?", (kid,)).fetchone()
         # 本地不存击杀原文（省空间），详情按需从 ESI 获取；ESI 的击杀邮件永不变化，放进内存缓存
@@ -1165,7 +1313,7 @@ class Api:
 # ---------------------------------------------------------------- HTTP 服务
 def make_handler(api, static_dir):
     routes = {"status": api.status, "live": api.live, "battles": api.battles, "feed": api.feed, "top": api.top, "summary": api.summary,
-              "leaderboard": api.leaderboard, "search": api.search, "br": api.br}
+              "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):

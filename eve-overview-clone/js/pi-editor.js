@@ -565,7 +565,7 @@ function renderSide() {
       <div class="pie-sel-actions"><button type="button" class="pie-btn danger" data-pie="delete">删除链接</button></div>
     </section>`;
   } else {
-    sel = `<p class="pie-tip">${E.linkMode ? '依次点两个设施：没有链接则连接，已有链接则断开。按 Esc 退出。' : '点设施或链接查看与修改。底部可添加设施；「链接」模式下依次点两个设施来连接或断开。'}</p>`;
+    sel = `<p class="pie-tip">${E.linkMode ? '依次点两个设施连接 / 断开' : '点设施或链接进行修改'}</p>`;
   }
   const counts = {};
   for (const p of m.pins) counts[p.kind] = (counts[p.kind] || 0) + 1;

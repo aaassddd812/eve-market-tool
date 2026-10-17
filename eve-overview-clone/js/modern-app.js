@@ -258,8 +258,9 @@ function switchView(view) {
   $('kbView').hidden = view !== 'kb';
   $('fitView').hidden = view !== 'fit';
   $('piView').hidden = view !== 'pi';
+  $('industryView').hidden = view !== 'industry';
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
-  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器' }[view] || '';
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航' }[view] || '';
   closeDrawer();
   if (view === 'profile') loadProfile();
   if (view === 'map') openStarMap();
@@ -273,20 +274,50 @@ function switchView(view) {
   else if (location.hash.startsWith('#fit')) history.replaceState(null, '', location.pathname);
   if (view === 'pi') openPi();
   else if (location.hash.startsWith('#pi')) history.replaceState(null, '', location.pathname);
+  if (view === 'industry') openIndustry();
+  else if (location.hash.startsWith('#ind')) history.replaceState(null, '', location.pathname);
+}
+
+// 吉他（伏尔戈交易中心）最低卖价 / 最高收购价：Map(id -> { sell, buy })
+async function getJitaPrices(ids, onProgress) {
+  const jita = REGIONS[0];
+  await fetchHubPrices(jita, ids, onProgress);
+  return new Map(ids.map((id) => [id, hubPrice(jita, id)]).filter(([, v]) => v && !v.failed));
+}
+
+// 制造：首次进入时加载
+let industryLoading = null;
+function loadIndustryModule() {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v20r7').then((m) => {
+    m.initIndustry({
+      esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
+      getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, ensureEsiToken,
+      hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
+    });
+    return m;
+  }).catch((error) => { industryLoading = null; throw error; });
+  return industryLoading;
+}
+
+async function openIndustry() {
+  try {
+    const m = await loadIndustryModule();
+    await m.showIndustry(location.hash.startsWith('#ind') ? location.hash : '#ind');
+  } catch (error) {
+    console.error('制造页加载失败:', error);
+    showToast('制造页加载失败：' + error.message, 'error', 4000);
+  }
 }
 
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v19r16').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v20r7').then((m) => {
     m.initPi({
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap,
       // 吉他（伏尔戈交易中心）最低卖价 / 最高收购价
-      getHubPrices: async (ids, onProgress) => {
-        const jita = REGIONS[0];
-        await fetchHubPrices(jita, ids, onProgress);
-        return new Map(ids.map((id) => [id, hubPrice(jita, id)]).filter(([, v]) => v && !v.failed));
-      }
+      getHubPrices: getJitaPrices
     });
     return m;
   }).catch((error) => { piLoading = null; throw error; });
@@ -307,7 +338,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v1r2').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v21r6').then((m) => {
     m.initFitting({
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -460,7 +491,8 @@ const SIDEBARS = {
   market: { id: 'sidebar', reopen: 'sidebarReopen', key: 'eve-sidebar-collapsed' },
   profile: { id: 'profileSidebar', reopen: 'profileSidebarReopen', key: 'eve-profile-sidebar-collapsed' },
   map: { id: 'mapSidebar', reopen: 'mapSidebarReopen', key: 'eve-map-sidebar-collapsed' },
-  fit: { id: 'fitSidebar', reopen: 'fitSidebarReopen', key: 'eve-fit-sidebar-collapsed' }
+  fit: { id: 'fitSidebar', reopen: 'fitSidebarReopen', key: 'eve-fit-sidebar-collapsed' },
+  industry: { id: 'indSidebar', reopen: 'indSidebarReopen', key: 'eve-ind-sidebar-collapsed' }
 };
 
 function currentSidebar() {
@@ -499,6 +531,9 @@ function initSidebar() {
   if (store.get('eve-profile-sidebar-collapsed') === '1') setSidebarCollapsed('profileSidebar', 'profileSidebarReopen', true);
   if (store.get('eve-map-sidebar-collapsed') === '1') setSidebarCollapsed('mapSidebar', 'mapSidebarReopen', true);
   if (store.get('eve-fit-sidebar-collapsed') === '1') setSidebarCollapsed('fitSidebar', 'fitSidebarReopen', true);
+  if (store.get('eve-ind-sidebar-collapsed') === '1') setSidebarCollapsed('indSidebar', 'indSidebarReopen', true);
+  $('indSidebarCollapse').addEventListener('click', () => toggleSidebar('industry'));
+  $('indSidebarReopen').addEventListener('click', () => toggleSidebar('industry'));
   $('fitSidebarCollapse').addEventListener('click', () => toggleSidebar('fit'));
   $('fitSidebarReopen').addEventListener('click', () => toggleSidebar('fit'));
   $('mapSidebarCollapse').addEventListener('click', () => toggleSidebar('map'));
@@ -1452,6 +1487,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#map')) { if (state.currentView !== 'map') switchView('map'); return; }
     if (location.hash.startsWith('#fit')) { if (state.currentView !== 'fit') switchView('fit'); return; }
     if (location.hash.startsWith('#pi')) { if (state.currentView !== 'pi') switchView('pi'); return; }
+    if (location.hash.startsWith('#ind')) { if (state.currentView !== 'industry') switchView('industry'); else openIndustry(); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -2570,6 +2606,17 @@ async function renderProfileTab(tab) {
   const data = state.characterData || {};
   const ch = data.character || {};
   if (ch.__error) { box.innerHTML = '<p class="text-muted">角色信息读取失败：' + esc(ch.__error) + '</p>'; return; }
+  box.dataset.skills = '';   // 技能页的训练队列异步返回时，只在仍停留在技能页时重绘
+
+  if (tab === 'skills') {
+    try {
+      const m = await loadSkillsModule();
+      await m.renderSkills(box, data, (state.esiToken || readEsiToken())?.character_id);
+    } catch (error) {
+      box.innerHTML = '<p class="text-muted">技能页加载失败：' + esc(error.message) + '</p>';
+    }
+    return;
+  }
 
   if (tab === 'info') {
     const skillsOk = data.skills && !data.skills.__error;
@@ -2652,6 +2699,16 @@ async function renderProfileTab(tab) {
     }
     box.innerHTML = html;
   }
+}
+
+// 个人中心 · 技能：首次打开时加载
+let skillsLoading = null;
+function loadSkillsModule() {
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v20r7').then((m) => {
+    m.initSkills({ esc, formatNumber, esiAuthFetch, store });
+    return m;
+  }).catch((error) => { skillsLoading = null; throw error; });
+  return skillsLoading;
 }
 
 // 与市场中心选物品一致：选中空间站只看本站，选「资产估值」看总估值
@@ -3249,6 +3306,7 @@ function init() {
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
   if (location.hash.startsWith('#fit')) switchView('fit');   // 装配分享链接
   if (location.hash.startsWith('#pi')) switchView('pi');     // 行星工业
+  if (location.hash.startsWith('#ind')) switchView('industry');   // 制造
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);

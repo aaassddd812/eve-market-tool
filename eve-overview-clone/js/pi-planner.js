@@ -3,7 +3,7 @@
 // 给出每颗行星该放什么、预计日产量与收益，并生成游戏内可直接导入的殖民地模板（JSON）。
 // ESI 只有读取殖民地的接口，不能写入模板，所以模板通过「复制到剪贴板」或「下载 .json」导入游戏。
 // 数据：pi-data.json（build_pi.mjs 从 SDE 生成），map-data.json（星系、星门、星域）。
-import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v19r16';
+import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r7';
 import { angle } from './pi-globe.js?v=v19r12';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, store, getHubPrices(ids) -> Map(id -> {sell, buy}), getMarketPriceMap
@@ -554,7 +554,6 @@ export async function showPi() {
       <section class="pi-page">
         <div class="pi-head">
           <h2>行星工业规划</h2>
-          <span class="text-muted">选择地区与角色技能，一键算出每种产品的最优行星分配与收益，并生成可导入游戏的殖民地模板</span>
           <button type="button" class="btn btn-ghost pi-editor-entry" data-pi-editor>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg><span>模板编辑器</span>
           </button>
@@ -606,7 +605,6 @@ function renderForm() {
         <div class="pi-num"><span>每角色行星</span><select class="pi-input" data-pi-num="perChar">${[1, 2, 3, 4, 5, 6].map((n) => `<option value="${n}"${F.perChar === n ? ' selected' : ''}>${n} 颗</option>`).join('')}</select></div>
         <div class="pi-num"><span>指挥中心</span><select class="pi-input" data-pi-num="cc">${[0, 1, 2, 3, 4, 5].map((n) => `<option value="${n}"${F.cc === n ? ' selected' : ''}>${n} 级</option>`).join('')}</select></div>
       </div>
-      <small class="pi-hint">每角色行星数 = 星际整合等级 + 1；指挥中心等级 = 指挥中心升级技能等级</small>
     </div>
     <div class="pi-field">
       <label>目标产品</label>
@@ -617,7 +615,7 @@ function renderForm() {
       <div class="pi-inline"><span>资源丰度</span>${seg('rich', Object.entries(RICHNESS).map(([k, [, label]]) => [k, label]), F.rich)}</div>
       <div class="pi-inline"><span>价格</span>${seg('price', [['sell', '吉他卖单'], ['buy', '吉他收单']], F.price)}</div>
       <div class="pi-inline"><span>海关税率</span><input type="number" class="pi-input pi-tax" min="0" max="100" step="0.5" value="${F.tax}" data-pi-num="tax"><span>%</span></div>
-      <small class="pi-hint">资源丰度按每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位估算，实际取决于热点位置和采集周期</small>
+      <small class="pi-hint">每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位</small>
     </div>
     <button type="submit" class="btn btn-primary pi-go">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>一键规划
@@ -758,7 +756,7 @@ function renderResult() {
   const priceNote = R.priceAt ? `行情 ${new Date(R.priceAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}` : '';
   box.innerHTML = `${areaSummary(area)}
     ${R.plans.length > 1 ? `<div class="pi-card">
-      <div class="pi-card-head"><h3>推荐产品</h3><span class="text-muted">按日净收益排序 · ${priceNote}</span></div>
+      <div class="pi-card-head"><h3>推荐产品</h3><span class="text-muted">${priceNote}</span></div>
       <div class="pi-table-wrap"><table class="pi-table">
         <thead><tr><th>#</th><th>产品</th><th class="pi-hide-sm">方案</th><th class="num">日产量</th><th class="num pi-hide-sm">单价</th><th class="num">日净收益</th></tr></thead>
         <tbody>${rows}</tbody>
@@ -796,7 +794,7 @@ function renderDetail() {
     }
     chain = [...byTier.keys()].sort().map((t) => `<div class="pi-chain-row"><em>P${t}</em>${[...byTier.get(t)].map(([id, r]) => `<span class="${id === plan.product ? 'pi-chain-final' : ''}">${icon(id)}${ctx.esc(cName(id))} <b>${fmtH(r)}/h</b></span>`).join('')}</div>`).join('');
   }
-  const surplus = plan.surplus.length ? `<p class="pi-note">多余的 P1 直接出售：${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}（已计入收益）</p>` : '';
+  const surplus = plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '';
 
   // 行星分配
   const roleText = (r) => `${{ single: '单星', extract: '采集', factory: '工厂' }[r.kind]} · ${cName(r.product)}`;
@@ -817,7 +815,7 @@ function renderDetail() {
         </div>`;
       }).join('') || '<p class="text-muted">未分配</p>'}
     </div>`).join('');
-  const warn = assign.warnings.length ? `<p class="pi-note warn">有 ${assign.warnings.length} 个殖民地找不到合适的行星（同一角色不能在同一颗行星上建两个殖民地），可扩大地区或增加角色。</p>` : '';
+  const warn = assign.warnings.length ? `<p class="pi-note warn">${assign.warnings.length} 个殖民地没有可用行星，可扩大地区或增加角色。</p>` : '';
 
   // 模板
   const [capC, capP] = ccCap();
@@ -860,22 +858,20 @@ function renderDetail() {
       ${surplus}
     </div>
     <div class="pi-card">
-      <div class="pi-card-head"><h3>行星分配</h3><span class="text-muted">中心星系 ${ctx.esc(assign.home?.name || '')}，按距离由近到远</span></div>
+      <div class="pi-card-head"><h3>行星分配</h3><span class="text-muted">中心 ${ctx.esc(assign.home?.name || '')}</span></div>
       ${warn}
       <div class="pi-chars">${charBlocks}</div>
     </div>
     <div class="pi-card">
-      <div class="pi-card-head"><h3>殖民地模板</h3><span class="text-muted">指挥中心 ${F.cc} 级 · 同类行星共用一个模板</span></div>
+      <div class="pi-card-head"><h3>殖民地模板</h3><span class="text-muted">指挥中心 ${F.cc} 级</span></div>
       <div class="pi-tpls">${tplCards}</div>
       <div class="pi-howto">
         <b>导入游戏</b>
         <ol>
-          <li>在行星上放置指挥中心并升级到 ${F.cc} 级；</li>
-          <li>点「复制模板」，在游戏的行星界面打开「模板」→「导入与导出」→「从剪贴板载入」；</li>
-          <li>或点「下载 .json」，把文件放进 <code>文档\\EVE\\PlanetaryInteractionTemplates</code>（使用 OneDrive 时在 <code>OneDrive\\文档\\EVE\\…</code>），在游戏里刷新模板列表；</li>
-          <li>放好后给采集控制器摆放采集头、设定采集周期，再提交。</li>
+          <li>放置指挥中心并升到 ${F.cc} 级</li>
+          <li>复制模板，游戏内「模板 → 导入与导出 → 从剪贴板载入」；或把 .json 放进 <code>文档\\EVE\\PlanetaryInteractionTemplates</code></li>
+          <li>摆放采集头、设定周期后提交</li>
         </ol>
-        <p class="pi-note">ESI 只提供读取殖民地的接口，不能把模板写进游戏，所以需要手动导入。模板中的设施会自动换成当前行星对应的类型。</p>
       </div>
     </div>`;
   el.querySelectorAll('[data-pi-thumb]').forEach((c) => drawThumb(c, templates[Number(c.dataset.piThumb)].json));
