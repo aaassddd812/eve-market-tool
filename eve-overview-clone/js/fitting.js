@@ -3,8 +3,8 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v21r3';
-import { initAutoFit, openAutoFit } from './fit-auto.js?v=v21r6';
+import * as FE from './fit-engine.js?v=v22r5';
+import { initAutoFit, openAutoFit } from './fit-auto.js?v=v22r8';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v21r3';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v16r7';
 
@@ -15,6 +15,7 @@ const DATA_URL = './fit-data.json?v=v21r3';
 const SAVE_KEY = 'eve-fits-v1';
 const CURRENT_KEY = 'eve-fit-current';
 const SETTINGS_KEY = 'eve-fit-settings';
+const DRAFTS_KEY = 'eve-fit-drafts';   // 每艘船上次没保存的装配（舰船 -> 装配），最多留 30 艘
 
 const TABS = [
   ['ship', '舰船', [FE.CAT.ship]],
@@ -286,27 +287,41 @@ function useType(id) {
 
 const MOBILE = () => window.matchMedia('(max-width: 768px)').matches;
 
+// ---------- 每艘船的草稿 ----------
+// 换船、打开已保存的装配、新建、导入前，把当前装配记为这艘船的草稿（只记有装备且与已保存版本不同的）；
+// 换回这艘船时载入草稿，没有草稿就从空船开始；保存装配后清掉这艘船的草稿
+const fitBody = (f) => JSON.stringify([f.name || '', FE.SLOTS.map((s) => (f.slots[s] || []).filter(Boolean)), f.drones || [], f.implants || []]);
+function isUnsaved(f) {
+  if (!f || (!FE.SLOTS.some((s) => f.slots[s].some(Boolean)) && !f.drones.length)) return false;
+  const saved = f.id && savedFits().find((x) => x.id === f.id);
+  return !saved || fitBody(normalize(saved)) !== fitBody(f);
+}
+function drafts() {
+  const d = app.store.getJSON(DRAFTS_KEY, {});
+  return d && typeof d === 'object' ? d : {};
+}
+function stashDraft(f) {
+  if (!isUnsaved(f)) return;   // 已保存或空的不记，也不覆盖这艘船之前的草稿
+  const d = drafts();
+  d[f.ship] = { ...JSON.parse(JSON.stringify(f)), at: Date.now() };
+  const keep = Object.entries(d).sort((a, b) => (b[1].at || 0) - (a[1].at || 0)).slice(0, 30);
+  app.store.setJSON(DRAFTS_KEY, Object.fromEntries(keep));
+}
+function dropDraft(ship) {
+  const d = drafts();
+  if (d[ship]) { delete d[ship]; app.store.setJSON(DRAFTS_KEY, d); }
+}
+function takeDraft(ship) {
+  const f = drafts()[ship];
+  return f ? normalize(f) : null;
+}
+
 function setShip(id) {
-  const old = F.fit;
-  const fit = newFit(id);
-  if (old) {
-    fit.name = old.name;
-    // 换船时保留仍能装配的装备、无人机与植入体
-    const shipType = type(id);
-    let dropped = 0;
-    for (const s of FE.SLOTS) {
-      for (const m of old.slots[s]) {
-        if (!m) continue;
-        if (s === 'sub' || FE.cannotFit(F.data, shipType, type(m.type))) { dropped++; continue; }
-        fit.slots[s].push(m);
-      }
-    }
-    fit.drones = old.drones;
-    fit.implants = old.implants;
-    const kept = FE.SLOTS.reduce((n, s) => n + fit.slots[s].length, 0);
-    if (kept || dropped) app.showToast(`已更换为 ${shipType.name}` + (kept ? `，保留 ${kept} 件装备` : '') + (dropped ? `，移除 ${dropped} 件不能装配的` : ''), 'info', 3000);
-  }
-  F.fit = fit;
+  if (F.fit?.ship === id) { if (F.tab === 'ship') setTab('module'); return; }
+  stashDraft(F.fit);
+  const draft = takeDraft(id);
+  F.fit = draft || newFit(id);
+  if (draft) app.showToast(`已载入${type(id).name}上次未保存的装配`, 'info', 3000);
   F.selected = null;
   F.slotFilter = null;
   recompute();
@@ -443,6 +458,7 @@ function onStateContext(e) {
 
 // 智能装配 / 击杀记录装配：替换当前装配（无人机按带宽自动激活）
 function applyFit(fit) {
+  if (F.fit && F.fit.ship !== fit.ship) stashDraft(F.fit);
   F.fit = normalize(fit);
   F.selected = null;
   autoActivateDrones();
@@ -818,7 +834,7 @@ async function onMainClick(e) {
   }
   if (el('[data-fit-my-implants]')) { importMyImplants(); return; }
   if (el('[data-fit-save]')) { saveFit(); return; }
-  if (el('[data-fit-new]')) { F.fit = null; F.selected = null; app.store.setJSON(CURRENT_KEY, null); recompute(); setTab('ship'); return; }
+  if (el('[data-fit-new]')) { stashDraft(F.fit); F.fit = null; F.selected = null; app.store.setJSON(CURRENT_KEY, null); recompute(); setTab('ship'); return; }
   if (el('[data-fit-delete]')) { deleteFit(); return; }
   if (el('[data-fit-import]')) { openModal(); return; }
   if (el('[data-fit-export]')) { app.copyText(toEft(F.fit), '已复制 EFT 文本，可在游戏装配窗口或 Pyfa 中导入'); return; }
@@ -833,7 +849,7 @@ function onMainChange(e) {
   const open = e.target.closest('[data-fit-open]');
   if (open && open.value) {
     const f = savedFits().find((x) => x.id === open.value);
-    if (f) { F.fit = normalize(f); F.selected = null; recompute(); }
+    if (f) { stashDraft(F.fit); F.fit = normalize(f); F.selected = null; recompute(); }
   }
 }
 
@@ -881,6 +897,7 @@ function saveFit() {
   if (i >= 0) list[i] = copy; else list.unshift(copy);
   app.store.setJSON(SAVE_KEY, list);
   app.store.setJSON(CURRENT_KEY, F.fit);
+  dropDraft(F.fit.ship);   // 保存后这艘船就没有遗留的草稿了
   app.showToast('装配已保存在本机浏览器', 'success');
   renderFit();
 }
@@ -942,6 +959,7 @@ function importText(text) {
     const ct = chargeName ? findType(chargeName) : null;
     fit.slots[t.slot].push({ type: t.id, state: offline ? 'offline' : defaultState(t), charge: ct?.id || null });
   }
+  stashDraft(F.fit);
   F.fit = fit;
   F.selected = null;
   autoActivateDrones();
@@ -1127,6 +1145,7 @@ async function onEsiModalClick(e) {
     const f = esiList.fits.find((it) => it.fitting_id === Number(x.dataset.esiOpen));
     const r = f && fromEsiFit(f);
     if (!r || r.error) { app.showToast(r?.error || '装配不存在', 'error'); return; }
+    stashDraft(F.fit);
     F.fit = r.fit;
     F.selected = null;
     autoActivateDrones();
@@ -1183,6 +1202,7 @@ function loadFromHash() {
     for (const s of FE.SLOTS) fit.slots[s] = (c.m?.[s] || []).map((x) => (x ? { type: x[0], charge: x[1] || null, state: CODE_STATE[x[2]] || 'online' } : null));
     fit.drones = (c.d || []).map(([t, count, active]) => ({ type: t, count, active }));
     fit.implants = c.i || [];
+    stashDraft(F.fit);
     F.fit = normalize(fit);
     history.replaceState(null, '', location.pathname + '#fit');
     app.showToast('已打开分享的装配', 'success');
