@@ -383,7 +383,7 @@ async function openLp() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v24').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v26').then((m) => {
     m.initPi({
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap,
       // 吉他（伏尔戈交易中心）最低卖价 / 最高收购价

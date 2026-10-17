@@ -145,7 +145,9 @@ const perHour = (s, qty) => qty * 3600 / s.cycle;
 function fits(cpu, power) { const [c, p] = ccCap(); return cpu <= c && power <= p; }
 
 // 采集星：所有采集头采同一种 P0，就地加工成 P1。采集头尽量多，受 CPU / 电网限制
-function designExtractor(p0, code = 'B', radius = 5000) {
+// extra：同星另放的加工设施（混合方案，见 hostLoad），先扣掉它们的负载再放采集头
+// raw：不建基础工业设施，直接出口 P0（个别 P0 比加工后的 P1 值钱）
+function designExtractor(p0, code = 'B', radius = 5000, extra = null, raw = false) {
   const pt = D.ptByCode[code];
   const LINK = linkLoad(radius);
   const basic = D.schemByOut.get(p1Of(p0));
@@ -156,12 +158,12 @@ function designExtractor(p0, code = 'B', radius = 5000) {
   for (let h = MAX_HEADS * 3; h >= 1; h--) {
     const ecus = Math.ceil(h / MAX_HEADS);
     const p0h = h * headRate();
-    const fac = Math.ceil(p0h / bIn);
+    const fac = raw ? 0 : Math.ceil(p0h / bIn);
     const links = ecus + fac;
-    const cpu = lpC + ecus * eC + h * HEAD[0] + fac * bC + links * LINK[0];
-    const power = lpP + ecus * eP + h * HEAD[1] + fac * bP + links * LINK[1];
+    const cpu = lpC + ecus * eC + h * HEAD[0] + fac * bC + links * LINK[0] + (extra?.cpu || 0);
+    const power = lpP + ecus * eP + h * HEAD[1] + fac * bP + links * LINK[1] + (extra?.power || 0);
     if (fits(cpu, power)) {
-      return { kind: 'extract', p0, p1: basic.out, heads: h, ecus, fac, p0h, p1h: p0h / basic.inputs[0][1] * basic.outQty, cpu, power };
+      return { kind: 'extract', p0, p1: basic.out, heads: h, ecus, fac, p0h, p1h: p0h / basic.inputs[0][1] * basic.outQty, cpu, power, extra };
     }
   }
   return null;
@@ -239,6 +241,86 @@ function factoryCode(area, product) {
   return codes.sort((a, b) => area.counts[b] - area.counts[a])[0] || null;
 }
 
+// 混合方案：不单开工厂星，把加工设施平摊到 m 颗采集星上。
+// 采集星卡在电网（采集头 110 CPU / 550 电网），CPU 大量富余；高级工厂 500 / 700，少放约 1 个采集头就能换 1 个，
+// 而 1 个高级工厂每小时吃 80 个 P1，几颗采集星的产出只要几个工厂，单开一颗工厂星大多是空转。
+// 返回每颗兼工厂的采集星要放的设施（不含发射平台）与负载
+function hostLoad(dem, rate, m, radius) {
+  const LINK = linkLoad(radius);
+  const pt = D.ptByCode.B;   // 基础 / 高级工厂在各类行星上负载相同
+  let cpu = 0, power = 0;
+  const counts = [];
+  for (const [out, n] of dem.fac) {
+    const c = Math.ceil(n * rate / m - 1e-9);
+    if (!c) continue;
+    const [fc, fp] = struct(pt[facClass(out)]);
+    cpu += c * (fc + LINK[0]);
+    power += c * (fp + LINK[1]);
+    counts.push([out, c]);
+  }
+  return { counts, cpu, power };
+}
+
+// 把 total 颗行星分给各种 P1（先分 m 颗兼工厂的，再分纯采集的），每次补给产出 / 需求比例最低的那种；返回能支撑的产品产量
+// host 里没有的 P1 不能兼工厂（P4 需要高科技工厂，只有采集星能是贫瘠 / 温和行星的 P1 才行）
+function allocate(p1s, dem, total, m, full, host, cap) {
+  const n = new Map(p1s.map((p1) => [p1, 0]));
+  const hosts = new Map(p1s.map((p1) => [p1, 0]));
+  const made = (p1) => (hosts.get(p1) ? hosts.get(p1) * host.get(p1).p1h : 0) + (n.get(p1) - hosts.get(p1)) * full.get(p1).p1h;
+  const ratio = (p1) => made(p1) / dem.p1.get(p1);
+  const caps = new Map(p1s.map((p1) => [p1, cap(p1)]));
+  for (let i = 0; i < total; i++) {
+    let pick = 0, low = Infinity;
+    for (const p1 of p1s) {
+      if (n.get(p1) >= caps.get(p1) || (i < m && !host.has(p1))) continue;
+      const r = ratio(p1);
+      if (r < low) { low = r; pick = p1; }
+    }
+    if (!pick) { if (i < m) return null; break; }
+    n.set(pick, n.get(pick) + 1);
+    if (i < m) hosts.set(pick, hosts.get(pick) + 1);
+  }
+  return { n, hosts, rate: Math.min(...p1s.map(ratio)) };
+}
+
+function planHybrid(product, area, dem, p1s, exByP1, hostCodeByP1, total, cap) {
+  const hostP1s = p1s.filter((p1) => hostCodeByP1.get(p1));
+  const radius = new Map(hostP1s.map((p1) => [p1, typicalRadius(area, [hostCodeByP1.get(p1)])]));
+  let best = null;
+  const ms = [...new Set([1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32, 48, 64, 96, 128, total])].filter((m) => m <= total);
+  const designs = new Map();   // 设施负载取整后重复很多，缓存采集星设计与分配结果
+  for (const m of ms) {
+    const allocs = new Map();
+    // 产量 r 时每颗兼工厂星要放的设施 → 还能放几个采集头 → 全部行星能支撑的产量
+    const at = (r) => {
+      const host = new Map();
+      for (const p1 of hostP1s) {
+        const load = hostLoad(dem, r, m, radius.get(p1));
+        const key = p1 + ':' + load.cpu + ':' + load.power;
+        if (!designs.has(key)) designs.set(key, designExtractor(p0Of(p1), hostCodeByP1.get(p1), radius.get(p1), load));
+        const d = designs.get(key);
+        if (d) host.set(p1, d);
+      }
+      if (!host.size) return null;
+      const key = [...host].map(([p1, d]) => p1 + ':' + d.heads).join();
+      if (!allocs.has(key)) allocs.set(key, allocate(p1s, dem, total, m, exByP1, host, cap));
+      const a = allocs.get(key);
+      return a && { ...a, host };
+    };
+    const ok = (r) => { const a = at(r); return a && a.rate >= r; };
+    const top = at(0);
+    if (!top) continue;
+    let lo = 0, hi = top.rate;
+    if (ok(hi)) lo = hi;
+    else for (let i = 0; i < 24; i++) { const mid = (lo + hi) / 2; if (ok(mid)) lo = mid; else hi = mid; }
+    if (lo <= 0) continue;
+    const a = at(lo);
+    const plan = finish({ product, strategy: 'hybrid', extract: a.n, hosts: a.hosts, exByP1, hostByP1: a.host, m, hostCodeByP1, factories: 0, rate: lo, dem });
+    if (!best || plan.profit > best.profit) best = plan;
+  }
+  return best;
+}
+
 const demCache = new Map();
 function demandCache(product) { if (!demCache.has(product)) demCache.set(product, demand(product)); return demCache.get(product); }
 
@@ -255,6 +337,16 @@ function planProduct(product, area) {
   const total = F.chars * F.perChar;
   const tier = tierOf(product);
   const reasons = [];
+  // P0：所有行星都采集，不加工直接出口
+  if (tier === 0) {
+    const avail = (area.resCount.get(product) || 0) * F.chars;
+    if (!avail) return { product, error: `地区内没有可采集${cName(product)}的行星` };
+    const code = bestCodeFor(area, [product]);
+    const ex = designExtractor(product, code, typicalRadius(area, [code]), null, true);
+    if (!ex) return { product, error: '指挥中心等级过低，放不下采集设施' };
+    const n = Math.min(total, avail);
+    return finish({ product, strategy: 'raw', extract: new Map([[product, n]]), factories: 0, rate: n * ex.p0h, ex });
+  }
   // P1：所有行星都采集
   if (tier === 1) {
     const p0 = p0Of(product);
@@ -290,12 +382,23 @@ function planProduct(product, area) {
     return { product, error: '地区内缺少原材料：' + [...new Set(missing.map(p0Of))].map(cName).join('、') };
   }
   const fCode = factoryCode(area, product);
+  const codeByP1 = new Map(p1s.map((p1) => [p1, bestCodeFor(area, [p0Of(p1)])]));
+  const exByP1 = new Map(p1s.map((p1) => { const c = codeByP1.get(p1); return [p1, designExtractor(p0Of(p1), c, typicalRadius(area, [c]))]; }));
+  const exOk = [...exByP1.values()].every(Boolean);
+  // 混合方案（工厂摊到采集星上）。P4 需要高科技工厂，只有贫瘠 / 温和行星能建：只让能在这两类行星上采集的 P1 兼工厂
+  const needHT = [...dem.fac.keys()].some((o) => tierOf(o) === 4);
+  const hostCodeByP1 = new Map(p1s.map((p1) => [p1, needHT
+    ? Object.keys(area.counts).filter((c) => D.ptByCode[c].ht && D.ptByCode[c].res.includes(p0Of(p1))).sort((a, b) => area.counts[b] - area.counts[a])[0] || null
+    : codeByP1.get(p1)]));
+  if (exOk && total >= p1s.length) {
+    const hy = planHybrid(product, area, dem, p1s, exByP1, hostCodeByP1, total, (p1) => (area.resCount.get(p0Of(p1)) || 0) * F.chars);
+    if (hy) candidates.push(hy);
+  }
   if (!fCode) reasons.push('地区内没有能建高科技工厂的贫瘠 / 温和行星');
   else if (total < p1s.length + 1) reasons.push(`需要至少 ${p1s.length + 1} 颗行星（${p1s.length} 种 P1 各一颗采集星 + 1 颗工厂星）`);
   else {
-    const exByP1 = new Map(p1s.map((p1) => { const c = bestCodeFor(area, [p0Of(p1)]); return [p1, designExtractor(p0Of(p1), c, typicalRadius(area, [c]))]; }));
     const fR = typicalRadius(area, [fCode]);
-    if ([...exByP1.values()].some((e) => !e)) reasons.push('指挥中心等级过低，放不下采集设施');
+    if (!exOk) reasons.push('指挥中心等级过低，放不下采集设施');
     else {
       let best = null;
       for (let f = 1; f <= total - p1s.length; f++) {
@@ -342,9 +445,11 @@ function finish(plan) {
   let revenue = plan.rate * day * priceOf(plan.product);
   let tax = plan.rate * day * exportTax(plan.product);
   const surplus = [];
-  if (plan.strategy === 'chain') {
+  if (plan.strategy === 'chain' || plan.strategy === 'hybrid') {
+    // 混合方案里兼工厂星自产的 P1 有一部分可以就地加工、不过海关，这里仍按全部出口再进口计税（偏保守）
     for (const [p1, n] of plan.extract) {
-      const made = n * plan.exByP1.get(p1).p1h;
+      const h = plan.hosts?.get(p1) || 0;
+      const made = (n - h) * plan.exByP1.get(p1).p1h + (h ? h * plan.hostByP1.get(p1).p1h : 0);
       const used = plan.rate * plan.dem.p1.get(p1);
       tax += made * day * exportTax(p1) + used * day * importTax(p1);   // 采集星出口全部 P1，工厂星进口所需部分
       const extra = Math.max(0, made - used);
@@ -370,9 +475,12 @@ function assignPlanets(plan, area) {
     for (let i = 0; i < plan.singles; i++) roles.push({ kind: 'single', product: plan.product, codes: plan.singleCodes });
   } else {
     for (const [p1, n] of plan.extract) {
-      const p0 = p0Of(p1);
+      const p0 = plan.strategy === 'raw' ? p1 : p0Of(p1);
       const codes = Object.keys(area.counts).filter((c) => D.ptByCode[c].res.includes(p0));
-      for (let i = 0; i < n; i++) roles.push({ kind: 'extract', product: p1, p0, codes });
+      const h = plan.hosts?.get(p1) || 0;
+      // 兼工厂的星：P4 只能放在能建高科技工厂的行星上
+      const hostCodes = h && [...plan.dem.fac.keys()].some((o) => tierOf(o) === 4) ? codes.filter((c) => D.ptByCode[c].ht) : codes;
+      for (let i = 0; i < n; i++) roles.push(i < h ? { kind: 'hybrid', product: p1, p0, codes: hostCodes } : { kind: 'extract', product: p1, p0, codes });
     }
     const fCodes = Object.keys(area.counts).filter((c) => plan.fCode && (!D.ptByCode[plan.fCode].ht || D.ptByCode[c].ht));
     for (let i = 0; i < plan.factories; i++) roles.push({ kind: 'factory', product: plan.product, codes: fCodes });
@@ -411,7 +519,7 @@ function assignPlanets(plan, area) {
     }
     if (!placed) warnings.push(role);
   }
-  const kindOrder = { single: 0, extract: 1, factory: 2 };
+  const kindOrder = { single: 0, extract: 1, hybrid: 2, factory: 3 };
   for (const c of chars) c.rows.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind] || (a.jumps ?? 0) - (b.jumps ?? 0));
   return { home, chars, warnings };
 }
@@ -507,13 +615,20 @@ function planTemplates(plan, assign) {
     ];
     list.push({ key: 'single', title: `单星 P2 · ${cName(plan.product)}`, code, ...buildTemplate({ name: `单星-${cName(plan.product)}`, code, diam: diamOf(at), pins }) , summary: `采集控制器 ×2（各 ${s.half} 头）· 基础工业 ×${2 * s.fac} · 高级工业 ×${s.adv}` });
   } else {
-    for (const [p1] of plan.extract) {
+    for (const [p1, n] of plan.extract) {
+      const hosts = plan.hosts?.get(p1) || 0;
+      if (hosts) list.push(hybridTemplate(plan, p1, firstOf('hybrid', p1)));
+      if (n === hosts) continue;
       const at = firstOf('extract', p1);
-      const code = at?.code || bestCodeFor(R.area, [p0Of(p1)]);
+      const raw = plan.strategy === 'raw';
+      const p0 = raw ? p1 : p0Of(p1);
+      const code = at?.code || bestCodeFor(R.area, [p0]);
       const pt = D.ptByCode[code];
-      const ex = designExtractor(p0Of(p1), code, diamOf(at) / 2) || designExtractor(p0Of(p1), code, 1000);
-      const pins = [...ecuPins(pt, ex.p0, ex.heads), ...factoryPins(pt, p1, ex.fac)];
-      list.push({ key: 'extract-' + p1, title: `采集 · ${cName(ex.p0)} → ${cName(p1)}`, code, ...buildTemplate({ name: `采集-${cName(p1)}`, code, diam: diamOf(at), pins }), summary: `采集控制器 ×${ex.ecus}（共 ${ex.heads} 头）· 基础工业 ×${ex.fac}` });
+      const ex = designExtractor(p0, code, diamOf(at) / 2, null, raw) || designExtractor(p0, code, 1000, null, raw);
+      const pins = [...ecuPins(pt, ex.p0, ex.heads), ...(raw ? [] : factoryPins(pt, p1, ex.fac))];
+      list.push(raw
+        ? { key: 'extract-' + p1, title: `采集 · ${cName(p0)}（直接出口）`, code, ...buildTemplate({ name: `采集-${cName(p0)}`, code, diam: diamOf(at), pins }), summary: `采集控制器 ×${ex.ecus}（共 ${ex.heads} 头）· 不加工` }
+        : { key: 'extract-' + p1, title: `采集 · ${cName(ex.p0)} → ${cName(p1)}`, code, ...buildTemplate({ name: `采集-${cName(p1)}`, code, diam: diamOf(at), pins }), summary: `采集控制器 ×${ex.ecus}（共 ${ex.heads} 头）· 基础工业 ×${ex.fac}` });
     }
     if (plan.factories) {
       const at = firstOf('factory', plan.product);
@@ -534,6 +649,32 @@ function planTemplates(plan, assign) {
     }
   }
   return list;
+}
+
+// 混合方案里兼工厂的采集星：采集设施 + 平摊到这颗星的加工设施
+function hybridTemplate(plan, p1, at) {
+  const diam = (at ? at.planet.radius * 2 : 10000) || 10000;
+  const code = at?.code || plan.hostCodeByP1.get(p1);
+  const pt = D.ptByCode[code];
+  let load = hostLoad(plan.dem, plan.rate, plan.m, diam / 2);
+  let ex = designExtractor(p0Of(p1), code, diam / 2, load);
+  let note = '';
+  if (!ex) {   // 实际行星比规划时大、链接更耗资源：按能放下的最大加工量重算工厂数
+    let lo = 0, hi = plan.rate;
+    for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (designExtractor(p0Of(p1), code, diam / 2, hostLoad(plan.dem, mid, plan.m, diam / 2))) lo = mid; else hi = mid; }
+    load = hostLoad(plan.dem, lo, plan.m, diam / 2);
+    ex = designExtractor(p0Of(p1), code, diam / 2, load) || designExtractor(p0Of(p1), code, 1000, { cpu: 0, power: 0 });
+    note = `（这颗行星较大，链接更耗资源，加工产能约为规划的 ${Math.round((lo / plan.rate) * 100)}%）`;
+  }
+  const pins = [
+    ...ecuPins(pt, ex.p0, ex.heads), ...factoryPins(pt, p1, ex.fac),
+    ...load.counts.sort((a, b) => tierOf(a[0]) - tierOf(b[0])).flatMap(([out, c]) => factoryPins(pt, out, c))
+  ];
+  return {
+    key: 'hybrid-' + p1, title: `采集 + 工厂 · ${cName(ex.p0)} → ${cName(p1)}`, code,
+    ...buildTemplate({ name: `采集工厂-${cName(p1)}`, code, diam, pins }),
+    summary: `采集控制器 ×${ex.ecus}（共 ${ex.heads} 头）· 基础工业 ×${ex.fac} · ` + load.counts.map(([out, c]) => `${cName(out)} ×${c}`).join(' · ') + note
+  };
 }
 
 // 空白模板：一个发射平台，可导入已有模板再修改
@@ -577,8 +718,8 @@ export async function showPi() {
 
 function renderForm() {
   const sys = D.sysById.get(F.system);
-  const products = [1, 2, 3, 4].map((t) => {
-    const ids = Object.keys(D.pi.commodities).map(Number).filter((id) => tierOf(id) === t && D.schemByOut.has(id))
+  const products = [0, 1, 2, 3, 4].map((t) => {
+    const ids = Object.keys(D.pi.commodities).map(Number).filter((id) => tierOf(id) === t && (t === 0 || D.schemByOut.has(id)))
       .sort((a, b) => cName(a).localeCompare(cName(b), 'zh'));
     return `<optgroup label="${TIER_NAMES[t]}">${ids.map((id) => `<option value="${id}"${F.target === id ? ' selected' : ''}>${ctx.esc(cName(id))}</option>`).join('')}</optgroup>`;
   }).join('');
@@ -704,7 +845,7 @@ async function run() {
   let plans;
   if (F.target) plans = [planProduct(F.target, area)];
   else {
-    plans = Object.keys(D.pi.commodities).map(Number).filter((id) => tierOf(id) >= 1 && D.schemByOut.has(id))
+    plans = Object.keys(D.pi.commodities).map(Number).filter((id) => tierOf(id) === 0 || D.schemByOut.has(id))
       .map((id) => planProduct(id, area)).filter((p) => !p.error && p.profit > 0)
       .sort((a, b) => b.profit - a.profit);
   }
@@ -731,6 +872,8 @@ function areaSummary(area) {
 function strategyLabel(p) {
   if (p.strategy === 'single') return `单星 P2 × ${p.singles}`;
   if (p.strategy === 'extract') return `采集 × ${p.planets}`;
+  if (p.strategy === 'raw') return `采集直接卖 × ${p.planets}`;
+  if (p.strategy === 'hybrid') return `采集 × ${p.planets}（${p.m} 颗兼工厂）`;
   return `采集 × ${p.planets - p.factories} + 工厂 × ${p.factories}`;
 }
 
@@ -787,7 +930,7 @@ function renderDetail() {
   } else {
     const byTier = new Map();
     const add = (id, rate) => { const t = tierOf(id); if (!byTier.has(t)) byTier.set(t, new Map()); byTier.get(t).set(id, (byTier.get(t).get(id) || 0) + rate); };
-    if (plan.strategy === 'extract') add(plan.product, plan.rate);
+    if (plan.strategy === 'extract' || plan.strategy === 'raw') add(plan.product, plan.rate);
     else {
       add(plan.product, plan.rate);
       for (const [out, n] of plan.dem.fac) if (out !== plan.product) { const s = D.schemByOut.get(out); add(out, n * plan.rate * perHour(s, s.outQty)); }
@@ -795,11 +938,13 @@ function renderDetail() {
     }
     chain = [...byTier.keys()].sort().map((t) => `<div class="pi-chain-row"><em>P${t}</em>${[...byTier.get(t)].map(([id, r]) => `<span class="${id === plan.product ? 'pi-chain-final' : ''}">${icon(id)}${ctx.esc(cName(id))} <b>${fmtH(r)}/h</b></span>`).join('')}</div>`).join('');
   }
-  const surplus = plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '';
+  const surplus = (plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '')
+    + (plan.strategy === 'raw' ? `<p class="pi-note">P0 体积大：每颗星每天约 ${ctx.formatNumber(Math.round(plan.rate / plan.planets * 24 * (commodity(plan.product)[3] || 0.01)))} m³（发射平台容量 10,000 m³），运输量约是加工成 P1 的 ${Math.round(150 * (commodity(plan.product)[3] || 0.01) / (commodity(p1Of(plan.product))[3] || 0.38) * 10) / 10} 倍。</p>` : '')
+    + (plan.strategy === 'hybrid' ? `<p class="pi-note">不单开工厂星：加工设施平摊在 ${plan.m} 颗采集星上（采集星电网吃紧、CPU 富余，每颗只少放一两个采集头）。需要把其他 P1 运到这些星的发射平台。</p>` : '');
 
   // 行星分配
-  const roleText = (r) => `${{ single: '单星', extract: '采集', factory: '工厂' }[r.kind]} · ${cName(r.product)}`;
-  const tplKey = (r) => r.kind === 'single' ? 'single' : r.kind === 'extract' ? 'extract-' + r.product : 'factory';
+  const roleText = (r) => `${{ single: '单星', extract: '采集', hybrid: '采集+工厂', factory: '工厂' }[r.kind]} · ${cName(r.product)}`;
+  const tplKey = (r) => r.kind === 'single' ? 'single' : r.kind === 'extract' || r.kind === 'hybrid' ? r.kind + '-' + r.product : 'factory';
   const regionName = (id) => D.regions.find((x) => x.id === id)?.name || '';
   const charBlocks = assign.chars.map((c, ci) => `
     <div class="pi-char">
