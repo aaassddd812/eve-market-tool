@@ -79,7 +79,8 @@ export async function preloadFitting() {
   await F.loading.catch((error) => { F.loading = null; throw error; });
 }
 
-export async function showFitting() {
+// restored：从其他页面切回，保留当前页面，不重新渲染
+export async function showFitting(restored = false) {
   if (!F.data) {
     $('fitMain').innerHTML = skTitle(20) + '<div class="fit-layout"><div>' + skRows(8) + '</div><div>' + skCards(4, 'fit-sk-cards') + '</div></div>';
     $('fitBrowser').innerHTML = skRows(12, { img: 24 });
@@ -102,14 +103,18 @@ export async function showFitting() {
     recompute();
     return;
   }
-  if (loadFromHash()) { recompute(); renderBrowser(); }
-  syncSkillMode();
+  if (loadFromHash()) { recompute(); renderBrowser(); restored = false; }
+  syncSkillMode(restored);
 }
 
 // 绑定 / 解绑 ESI 后刷新技能来源
-function syncSkillMode() {
-  if (F.skillMode === 'esi' && !app.hasEsiToken()) { F.skillMode = 'max'; F.esi = null; recompute(); }
-  else if (F.fit) renderFit();
+let lastEsi = null;
+function syncSkillMode(restored = false) {
+  const esi = app.hasEsiToken();
+  if (esi !== lastEsi) restored = false;   // 期间绑定 / 解绑了 ESI，需要刷新技能选项
+  lastEsi = esi;
+  if (F.skillMode === 'esi' && !esi) { F.skillMode = 'max'; F.esi = null; recompute(); }
+  else if (F.fit && !restored) renderFit();
 }
 
 // ---------- 装配数据结构 ----------

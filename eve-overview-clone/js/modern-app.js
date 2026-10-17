@@ -245,37 +245,82 @@ function initNavigation() {
   $$('.nav-btn').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
 }
 
+// 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
+const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView' };
+// 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
+const viewHashes = {};
+const viewScroll = {};
+
+function ownsHash(view, hash) {
+  if (view === 'market') return !hash || hash.startsWith('#type=');
+  return Boolean(VIEW_HASH[view]) && hash.startsWith(VIEW_HASH[view]);
+}
+
+// 隐藏（display: none）会丢失滚动位置，记下视图内所有滚动过的元素
+function saveScroll(view) {
+  const root = $(VIEW_IDS[view]);
+  if (!root) return [];
+  return [...root.querySelectorAll('*')].filter((el) => el.scrollTop || el.scrollLeft).map((el) => [el, el.scrollTop, el.scrollLeft]);
+}
+
+function restoreScroll(list) {
+  for (const [el, top, left] of list || []) {
+    if (!el.isConnected) continue;
+    if (!el.scrollTop) el.scrollTop = top;
+    if (!el.scrollLeft) el.scrollLeft = left;
+  }
+}
+
+// 页面内部改地址（选中星系、切换标签等）时随时记下当前视图的 hash；后退 / 前进到别的视图时也不会丢
+function noteViewHash() {
+  if (ownsHash(state.currentView, location.hash)) viewHashes[state.currentView] = location.hash;
+}
+function initViewHashTracking() {
+  for (const fn of ['pushState', 'replaceState']) {
+    const orig = history[fn].bind(history);
+    history[fn] = (...args) => { orig(...args); noteViewHash(); };
+  }
+  window.addEventListener('popstate', noteViewHash);
+  noteViewHash();
+}
+
 function switchView(view) {
+  const prev = state.currentView;
+  if (prev !== view) viewScroll[prev] = saveScroll(prev);
+  // restored：回到离开时的状态，各页面据此不再重新渲染
+  let restored = prev === view;
+  const hashMatches = ownsHash(view, location.hash);
+  if (hashMatches && prev !== view && viewHashes[view] === location.hash) restored = true;
   state.currentView = view;
+  if (!hashMatches) {
+    restored = view in viewHashes || (!VIEW_HASH[view] && view !== 'market');
+    history.replaceState(null, '', location.pathname + location.search + (viewHashes[view] || ''));
+  }
   $$('.nav-btn').forEach((btn) => {
     const active = btn.dataset.view === view;
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-selected', String(active));
+    if (active && MOBILE_QUERY.matches) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // 手机导航可横向滑动
   });
-  $('marketView').hidden = view !== 'market';
-  $('profileView').hidden = view !== 'profile';
-  $('mapView').hidden = view !== 'map';
-  $('kbView').hidden = view !== 'kb';
-  $('fitView').hidden = view !== 'fit';
-  $('piView').hidden = view !== 'pi';
-  $('industryView').hidden = view !== 'industry';
+  for (const [v, id] of Object.entries(VIEW_IDS)) $(id).hidden = v !== view;
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
-  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航' }[view] || '';
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航' }[view] || '';
   closeDrawer();
-  if (view === 'profile') loadProfile();
-  if (view === 'map') openStarMap();
-  else {
-    starMapModule?.hideStarMap();
-    if (location.hash.startsWith('#map')) history.replaceState(null, '', location.pathname);
+  if (prev !== view) {
+    restoreScroll(viewScroll[view]);
+    requestAnimationFrame(() => restoreScroll(viewScroll[view]));
   }
-  if (view === 'kb') openKbPage();
-  else if (location.hash.startsWith('#kb')) history.replaceState(null, '', location.pathname);
-  if (view === 'fit') openFitting();
-  else if (location.hash.startsWith('#fit')) history.replaceState(null, '', location.pathname);
+  if (view === 'profile') {
+    if (!(restored && state.characterData && (state.esiToken || readEsiToken()))) loadProfile();
+  }
+  if (view === 'map') openStarMap();
+  else starMapModule?.hideStarMap();
+  if (view === 'kb') openKbPage(restored);
+  if (view === 'fit') openFitting(restored);
   if (view === 'pi') openPi();
-  else if (location.hash.startsWith('#pi')) history.replaceState(null, '', location.pathname);
-  if (view === 'industry') openIndustry();
-  else if (location.hash.startsWith('#ind')) history.replaceState(null, '', location.pathname);
+  if (view === 'industry') openIndustry(restored);
+  if (view === 'lp') openLp();
 }
 
 // 吉他（伏尔戈交易中心）最低卖价 / 最高收购价：Map(id -> { sell, buy })
@@ -288,7 +333,7 @@ async function getJitaPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v20r7').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v26').then((m) => {
     m.initIndustry({
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, ensureEsiToken,
@@ -300,20 +345,45 @@ function loadIndustryModule() {
   return industryLoading;
 }
 
-async function openIndustry() {
+async function openIndustry(restored = false) {
   try {
     const m = await loadIndustryModule();
-    await m.showIndustry(location.hash.startsWith('#ind') ? location.hash : '#ind');
+    await m.showIndustry(location.hash.startsWith('#ind') ? location.hash : '#ind', restored);
   } catch (error) {
     console.error('制造页加载失败:', error);
     showToast('制造页加载失败：' + error.message, 'error', 4000);
   }
 }
 
+// LP 商店：首次进入时加载
+let lpLoading = null;
+function loadLpModule() {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v2').then((m) => {
+    m.initLp({
+      esc, formatISK, formatNumber, showToast, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
+      getHubPrices: getJitaPrices,
+      hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
+    });
+    return m;
+  }).catch((error) => { lpLoading = null; throw error; });
+  return lpLoading;
+}
+
+async function openLp() {
+  try {
+    const m = await loadLpModule();
+    await m.showLp(location.hash.startsWith('#lp') ? location.hash : '#lp');
+  } catch (error) {
+    console.error('LP 商店加载失败:', error);
+    showToast('LP 商店加载失败：' + error.message, 'error', 4000);
+  }
+}
+
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v20r7').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v24').then((m) => {
     m.initPi({
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap,
       // 吉他（伏尔戈交易中心）最低卖价 / 最高收购价
@@ -338,7 +408,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v22r9').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v24').then((m) => {
     m.initFitting({
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -351,11 +421,11 @@ function loadFittingModule() {
   return fittingLoading;
 }
 
-async function openFitting() {
+async function openFitting(restored = false) {
   try {
     const m = await loadFittingModule();
     if (!location.hash.startsWith('#fit')) history.replaceState(null, '', location.pathname + '#fit');
-    await m.showFitting();
+    await m.showFitting(restored);
   } catch (error) {
     console.error('模拟装配加载失败:', error);
     showToast('模拟装配加载失败：' + error.message, 'error', 4000);
@@ -388,14 +458,14 @@ async function openKbSystem(id) {
 
 // 进行中的调用复用同一个 Promise（例如会战提醒「击杀记录」按钮需要等页面就绪后再筛选）
 let kbOpening = null;
-function openKbPage() {
-  if (!kbOpening) kbOpening = openKbPageImpl().finally(() => { kbOpening = null; });
+function openKbPage(restored = false) {
+  if (!kbOpening) kbOpening = openKbPageImpl(restored).finally(() => { kbOpening = null; });
   return kbOpening;
 }
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v18r9').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v25').then((m) => {
     m.initKbPage({
       esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -417,11 +487,11 @@ function loadKbPageModule() {
   return kbPageLoading;
 }
 
-async function openKbPageImpl() {
+async function openKbPageImpl(restored) {
   try {
     await loadKbPageModule();
     if (!state.catalog && state.catalogReady) await state.catalogReady;
-    await kbPageModule.showKbPage();
+    await kbPageModule.showKbPage(restored);
   } catch (error) {
     console.error('击杀记录页加载失败:', error);
     showToast('击杀记录页加载失败：' + error.message, 'error', 4000);
@@ -446,7 +516,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v17r6').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v25').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -492,7 +562,8 @@ const SIDEBARS = {
   profile: { id: 'profileSidebar', reopen: 'profileSidebarReopen', key: 'eve-profile-sidebar-collapsed' },
   map: { id: 'mapSidebar', reopen: 'mapSidebarReopen', key: 'eve-map-sidebar-collapsed' },
   fit: { id: 'fitSidebar', reopen: 'fitSidebarReopen', key: 'eve-fit-sidebar-collapsed' },
-  industry: { id: 'indSidebar', reopen: 'indSidebarReopen', key: 'eve-ind-sidebar-collapsed' }
+  industry: { id: 'indSidebar', reopen: 'indSidebarReopen', key: 'eve-ind-sidebar-collapsed' },
+  lp: { id: 'lpSidebar', reopen: 'lpSidebarReopen', key: 'eve-lp-sidebar-collapsed' }
 };
 
 function currentSidebar() {
@@ -532,6 +603,9 @@ function initSidebar() {
   if (store.get('eve-map-sidebar-collapsed') === '1') setSidebarCollapsed('mapSidebar', 'mapSidebarReopen', true);
   if (store.get('eve-fit-sidebar-collapsed') === '1') setSidebarCollapsed('fitSidebar', 'fitSidebarReopen', true);
   if (store.get('eve-ind-sidebar-collapsed') === '1') setSidebarCollapsed('indSidebar', 'indSidebarReopen', true);
+  if (store.get('eve-lp-sidebar-collapsed') === '1') setSidebarCollapsed('lpSidebar', 'lpSidebarReopen', true);
+  $('lpSidebarCollapse').addEventListener('click', () => toggleSidebar('lp'));
+  $('lpSidebarReopen').addEventListener('click', () => toggleSidebar('lp'));
   $('indSidebarCollapse').addEventListener('click', () => toggleSidebar('industry'));
   $('indSidebarReopen').addEventListener('click', () => toggleSidebar('industry'));
   $('fitSidebarCollapse').addEventListener('click', () => toggleSidebar('fit'));
@@ -634,7 +708,7 @@ function initSidebar() {
   });
 
   // 侧栏标签
-  $$('.sidebar-tabs .tab-btn').forEach((btn) => btn.addEventListener('click', () => switchSidebarTab(btn.dataset.tab)));
+  $$('#sidebar .sidebar-tabs .tab-btn').forEach((btn) => btn.addEventListener('click', () => switchSidebarTab(btn.dataset.tab)));
 
   $('collapseAllBtn').addEventListener('click', () => {
     $('catalogTree').querySelectorAll('.category.expanded').forEach((el) => setCategoryExpanded(el, false));
@@ -649,8 +723,8 @@ function initSidebar() {
 }
 
 function switchSidebarTab(tab) {
-  $$('.sidebar-tabs .tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  $$('.sidebar-content .tab-pane').forEach((pane) => pane.classList.toggle('active', pane.id === `${tab}Pane`));
+  $$('#sidebar .sidebar-tabs .tab-btn').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
+  $$('#sidebar .sidebar-content .tab-pane').forEach((pane) => pane.classList.toggle('active', pane.id === `${tab}Pane`));
   $('catalogToolbar').hidden = tab !== 'catalog';
   if (tab === 'favorites') renderFavorites();
   if (tab === 'recent') renderRecent();
@@ -1277,6 +1351,11 @@ function initOrderTables() {
     th.addEventListener('click', sort);
     th.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); sort(); } });
   });
+  // 其他页面动态生成的可排序表头（制造、LP 商店、击杀成员等）：键盘 Enter / 空格触发点击
+  document.addEventListener('keydown', (e) => {
+    const th = e.target.closest?.('th.sortable:not([data-side])');
+    if (th && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); th.click(); }
+  });
   ['sellOrdersBody', 'buyOrdersBody'].forEach((id) => $(id).addEventListener('click', (event) => {
     const row = event.target.closest('tr[data-price]');
     if (row) copyText(formatPrice(Number(row.dataset.price)).replace(/,/g, ''), '价格已复制');
@@ -1481,6 +1560,7 @@ function typeFromHash() {
 }
 
 function initHashRouting() {
+  initViewHashTracking();
   window.addEventListener('popstate', () => {
     // 击杀记录页 / 星图的地址由各自页面处理；从其他页面后退到这些地址时切换过去
     if (location.hash.startsWith('#kb')) { if (state.currentView !== 'kb') switchView('kb'); return; }
@@ -1488,6 +1568,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#fit')) { if (state.currentView !== 'fit') switchView('fit'); return; }
     if (location.hash.startsWith('#pi')) { if (state.currentView !== 'pi') switchView('pi'); return; }
     if (location.hash.startsWith('#ind')) { if (state.currentView !== 'industry') switchView('industry'); else openIndustry(); return; }
+    if (location.hash.startsWith('#lp')) { if (state.currentView !== 'lp') switchView('lp'); else openLp(); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -3307,6 +3388,7 @@ function init() {
   if (location.hash.startsWith('#fit')) switchView('fit');   // 装配分享链接
   if (location.hash.startsWith('#pi')) switchView('pi');     // 行星工业
   if (location.hash.startsWith('#ind')) switchView('industry');   // 制造
+  if (location.hash.startsWith('#lp')) switchView('lp');          // LP 商店
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);

@@ -16,6 +16,7 @@ let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, st
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
 const RECENT_KEY = 'eve-industry-recent';
+const SIDE_PANE_KEY = 'eve-industry-side-pane';
 const JITA = 30000142, FORGE = 10000002;
 const SCC = 4;           // SCC 附加费 %
 const NPC_TAX = 0.25;    // NPC 空间站设施税 %
@@ -51,10 +52,10 @@ const F = {
   tab: 'calc', sys: JITA, fac: 'npc', rig: 0, rfac: 35836, rrig: 0, tax: 1,
   mat: 'sell', prod: 'sell', skills: 'all5', me: 10, te: 20, subMe: 10,
   scope: 'region', jumps: 10, sec: { high: true, low: true, null: false },
-  rankCat: 'all', rankTech: 'all', rankAct: 'm', rankSort: 'ph', idx: 'manufacturing'
+  rankCat: 'all', rankTech: 'all', rankAct: 'm', rankSort: 'ph', rankDir: 'desc', idx: 'manufacturing', whereSort: null, whereDir: 'asc'
 };
 const C = { pid: 0, runs: 1, me: null, te: null, dec: 0, invent: true, build: new Set(), bpMode: null, bpoRuns: 100 };
-const SIDE = { q: '', open: new Set() };
+const SIDE = { q: '', open: new Set(), pane: 'catalog' };   // pane：侧栏标签 catalog 物品分类 / recent 最近查看
 const R = { rows: [], refined: false, busy: false };
 const jita = new Map();   // 吉他行情 id -> { sell, buy }
 
@@ -63,7 +64,21 @@ export function initIndustry(context) {
   const saved = ctx.store.getJSON(STORE_KEY, {}) || {};
   Object.assign(F, saved);
   F.sec = { high: true, low: true, null: false, ...(saved.sec || {}) };
+  if (ctx.store.get(SIDE_PANE_KEY) === 'recent') SIDE.pane = 'recent';
+  if (F.rankSort === 'run') F.rankSort = 'profit';   // 旧版「每流程利润」按钮
+  if (!RANK_SORT_DIR[F.rankSort]) { F.rankSort = 'ph'; F.rankDir = 'desc'; }
+  if (!WHERE_SORT_DIR[F.whereSort]) { F.whereSort = F.idx || 'manufacturing'; F.whereDir = 'asc'; }
 }
+
+// 表头排序（与市场中心订单簿一致）：点击表头按该列排序，再点一次反向；首次点击用该列更有用的方向
+const RANK_SORT_DIR = { name: 'asc', perUnit: 'asc', unit: 'desc', profit: 'desc', margin: 'desc', ph: 'desc' };
+const WHERE_SORT_DIR = { name: 'asc', region: 'asc', manufacturing: 'asc', invention: 'asc', reaction: 'asc', copying: 'asc',
+  researching_material_efficiency: 'asc', researching_time_efficiency: 'asc', jumps: 'asc', stations: 'desc' };
+const sortTh = (attr, cur, dir, key, label, cls = '') => {
+  const on = cur === key;
+  return `<th class="sortable${cls ? ' ' + cls : ''}${on ? ' sorted' : ''}" data-${attr}="${key}" data-dir="${on ? dir : ''}" aria-sort="${on ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}" tabindex="0">${label}</th>`;
+};
+const flipSort = (cur, curDir, key, defaults) => (cur === key ? (curDir === 'asc' ? 'desc' : 'asc') : defaults[key]);
 const save = () => ctx.store.setJSON(STORE_KEY, F);
 
 // ---------- 数据 ----------
@@ -311,8 +326,10 @@ function calc() {
 }
 
 // ---------- 页面框架 ----------
-export async function showIndustry(hash = location.hash) {
+// restored：从其他页面切回且地址未变，保留当前页面（输入、展开状态、滚动位置）
+export async function showIndustry(hash = location.hash, restored = false) {
   const main = $('industryMain');
+  const wasReady = Boolean(main.dataset.ready);
   if (!D.data) main.innerHTML = '<div class="pi-loading">载入制造数据…</div>';
   await loadData();
   await ensureSkills();
@@ -345,11 +362,17 @@ export async function showIndustry(hash = location.hash) {
     let t = 0;
     $('indSideSearch').addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { SIDE.q = e.target.value.trim(); renderSide(); }, 150); });
   }
+  const esi = ctx.hasEsiToken();
+  if (restored && wasReady && esi === lastEsi) { setHash(); return; }
+  lastEsi = esi;
   renderSettings();
   renderTab();
 }
 
+let lastEsi = null;   // 上次渲染时是否已绑定 ESI（绑定状态变了要刷新技能与「我的工业」）
+
 function setHash() {
+  if ($('industryView').hidden) return;   // 后台读完行情重绘时不改其他页面的地址
   const h = F.tab === 'calc' && C.pid ? `#ind/calc/${C.pid}` : `#ind/${F.tab}`;
   if (location.hash !== h) history.replaceState(null, '', location.pathname + h);
 }
@@ -649,8 +672,9 @@ function rankRows() {
     if (revenue && profit / revenue > 0.9) continue;
     rows.push({ pid, unit, cost, perUnit: cost / j.out, profit, margin: revenue ? profit / revenue : 0, ph: profit / (j.secs / 3600), secs: j.secs, inv: Boolean(inv), bpc: needBpc });
   }
-  const key = { ph: 'ph', run: 'profit', margin: 'margin' }[F.rankSort] || 'ph';
-  return rows.sort((a, b) => b[key] - a[key]);
+  const key = F.rankSort, mul = F.rankDir === 'asc' ? 1 : -1;
+  if (key === 'name') return rows.sort((a, b) => mul * tName(a.pid).localeCompare(tName(b.pid), 'zh'));
+  return rows.sort((a, b) => mul * (a[key] - b[key]));
 }
 
 function renderRank(body) {
@@ -680,13 +704,13 @@ function renderRank(body) {
       <div class="ind-rank-row">
         <div class="pi-inline"><span>活动</span>${seg('rankAct', [['m', '制造'], ['r', '反应']], F.rankAct)}</div>
         <div class="pi-inline"><span>科技</span>${seg('rankTech', [['all', '全部'], ['1', 'T1'], ['2', 'T2'], ['3', 'T3']], F.rankTech)}</div>
-        <div class="pi-inline"><span>排序</span>${seg('rankSort', [['ph', '每小时利润'], ['run', '每流程利润'], ['margin', '利润率']], F.rankSort)}</div>
       </div>
       <p class="pi-note">${R.refined ? '前 30 名为吉他实时价，其余为全服均价' : '全服均价估算'}
         <button class="btn btn-ghost ind-refine" data-ind-refine ${R.busy ? 'disabled' : ''}>${R.busy ? '精算中…' : '用吉他行情精算前 30 名'}</button></p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap ind-rank-wrap"><table class="pi-table">
-      <thead><tr><th>#</th><th>产品</th><th class="num pi-hide-sm">单个成本</th><th class="num pi-hide-sm">单价</th><th class="num">每流程利润</th><th class="num pi-hide-sm">利润率</th><th class="num">每小时利润</th><th class="num">日均成交</th></tr></thead>
+      <thead><tr><th>#</th>${[['name', '产品', ''], ['perUnit', '单个成本', 'num pi-hide-sm'], ['unit', '单价', 'num pi-hide-sm'], ['profit', '每流程利润', 'num'], ['margin', '利润率', 'num pi-hide-sm'], ['ph', '每小时利润', 'num']]
+        .map(([k, l, c]) => sortTh('ind-sort', F.rankSort, F.rankDir, k, l, c)).join('')}<th class="num">日均成交</th></tr></thead>
       <tbody>${rows || '<tr><td colspan="8" class="text-muted">没有符合条件的产品</td></tr>'}</tbody></table></div></div>`;
   // 前 25 行的成交量
   let i = 0;
@@ -730,18 +754,23 @@ function renderWhere(body) {
   list = list.filter((x) => F.sec[secInfo(x.s.sec).cls]);
   if (F.scope === 'region') list = list.filter((x) => x.s.region === D.sys.get(F.sys)?.region);
   else if (F.scope === 'near') { const near = bfs(F.sys, F.jumps); list = list.filter((x) => near.has(x.id)); }
-  if (F.idx === 'reaction') list = list.filter((x) => secInfo(x.s.sec).cls !== 'high');
+  if (F.whereSort === 'reaction') list = list.filter((x) => secInfo(x.s.sec).cls !== 'high');   // 反应只能在低安 / 00
   const jumps = (id) => D.jumpsFromJita.get(id) ?? 999;
-  list.sort((a, b) => (a.idx[F.idx] || 0) - (b.idx[F.idx] || 0) || jumps(a.id) - jumps(b.id));
+  const ws = F.whereSort, mul = F.whereDir === 'asc' ? 1 : -1;
+  const cmp = ws === 'name' ? (a, b) => a.s.name.localeCompare(b.s.name, 'zh')
+    : ws === 'region' ? (a, b) => (D.regions.get(a.s.region) || '').localeCompare(D.regions.get(b.s.region) || '', 'zh')
+    : ws === 'jumps' ? (a, b) => jumps(a.id) - jumps(b.id)
+    : ws === 'stations' ? (a, b) => (a.s.stations || 0) - (b.s.stations || 0)
+    : (a, b) => (a.idx[ws] || 0) - (b.idx[ws] || 0);
+  list.sort((a, b) => mul * cmp(a, b) || jumps(a.id) - jumps(b.id));
   const rows = list.slice(0, 150).map((x, i) => `
     <tr data-ind-sys-pick="${x.id}" class="${x.id === F.sys ? 'active' : ''}" title="设为制造星系">
       <td class="pi-rank">${i + 1}</td><td>${sysLabel(x.id)}</td><td class="pi-hide-sm">${esc(D.regions.get(x.s.region) || '')}</td>
-      ${INDEX.map(([k]) => `<td class="num${k === F.idx ? ' ind-hl' : ''}${['copying', 'researching_material_efficiency', 'researching_time_efficiency'].includes(k) ? ' pi-hide-sm' : ''}">${((x.idx[k] || 0) * 100).toFixed(2)}%</td>`).join('')}
+      ${INDEX.map(([k]) => `<td class="num${k === F.whereSort ? ' ind-hl' : ''}${['copying', 'researching_material_efficiency', 'researching_time_efficiency'].includes(k) ? ' pi-hide-sm' : ''}">${((x.idx[k] || 0) * 100).toFixed(2)}%</td>`).join('')}
       <td class="num">${D.jumpsFromJita.get(x.id) ?? '—'}</td><td class="num pi-hide-sm">${x.s.stations || '—'}</td>
     </tr>`).join('');
   body.innerHTML = `
     <div class="pi-card ind-rank-filters">
-      <div class="pi-inline"><span>排序</span>${seg('idx', INDEX, F.idx)}</div>
       <div class="ind-rank-row">
         <div class="pi-inline"><span>范围</span>${seg('scope', [['region', '同星域'], ['near', '周边'], ['all', '全宇宙']], F.scope === 'high' ? 'all' : F.scope)}</div>
         ${F.scope === 'near' ? `<div class="pi-inline"><span>跳数</span>${seg('jumps', [[5, '5'], [10, '10'], [15, '15'], [20, '20']], F.jumps)}</div>` : ''}
@@ -749,7 +778,7 @@ function renderWhere(body) {
       </div>
     </div>
     <div class="pi-card"><div class="pi-table-wrap ind-rank-wrap"><table class="pi-table">
-      <thead><tr><th>#</th><th>星系</th><th class="pi-hide-sm">星域</th>${INDEX.map(([k, l]) => `<th class="num${['copying', 'researching_material_efficiency', 'researching_time_efficiency'].includes(k) ? ' pi-hide-sm' : ''}">${l}</th>`).join('')}<th class="num">距吉他</th><th class="num pi-hide-sm">NPC 站</th></tr></thead>
+      <thead><tr><th>#</th>${sortTh('ind-wsort', F.whereSort, F.whereDir, 'name', '星系')}${sortTh('ind-wsort', F.whereSort, F.whereDir, 'region', '星域', 'pi-hide-sm')}${INDEX.map(([k, l]) => sortTh('ind-wsort', F.whereSort, F.whereDir, k, l, 'num' + (['copying', 'researching_material_efficiency', 'researching_time_efficiency'].includes(k) ? ' pi-hide-sm' : ''))).join('')}${sortTh('ind-wsort', F.whereSort, F.whereDir, 'jumps', '距吉他', 'num')}${sortTh('ind-wsort', F.whereSort, F.whereDir, 'stations', 'NPC 站', 'num pi-hide-sm')}</tr></thead>
       <tbody>${rows || '<tr><td colspan="11" class="text-muted">没有符合条件的星系</td></tr>'}</tbody></table></div></div>`;
 }
 
@@ -853,6 +882,14 @@ function renderSide() {
     return;
   }
   const recent = (ctx.store.getJSON(RECENT_KEY, []) || []).filter((x) => BP(x));
+  // 与市场中心一致：「物品分类」与「最近查看」是两个独立的标签
+  const tabs = `<div class="sidebar-tabs ind-side-tabs" role="tablist">${[['catalog', '物品分类'], ['recent', '最近查看']].map(([k, l]) => `<button type="button" class="tab-btn${SIDE.pane === k ? ' active' : ''}" data-side-pane="${k}" role="tab" aria-selected="${SIDE.pane === k}">${l}</button>`).join('')}</div>`;
+  if (SIDE.pane === 'recent') {
+    el.innerHTML = nav + tabs + (recent.length
+      ? `<div class="ind-side-section">${recent.map(sideItem).join('')}<button type="button" class="link-btn clear-recent" data-side-clear>清空最近查看</button></div>`
+      : '<div class="empty-state"><p>还没有查看记录</p></div>');
+    return;
+  }
   const tree = sideIndex().map((c) => {
     const n = c.groups.reduce((t, g) => t + g.list.length, 0);
     return `<details class="ind-side-cat" data-side-key="c:${c.key}"${SIDE.open.has('c:' + c.key) ? ' open' : ''}>
@@ -860,9 +897,7 @@ function renderSide() {
       ${c.groups.map((g) => `<details class="ind-side-group" data-side-key="g:${g.gid}"${SIDE.open.has('g:' + g.gid) ? ' open' : ''}><summary>${ctx.esc(g.name)}<small>${g.list.length}</small></summary><div class="ind-side-items" data-gid="${g.gid}"></div></details>`).join('')}
     </details>`;
   }).join('');
-  el.innerHTML = nav +
-    (recent.length ? `<div class="ind-side-section"><h4>最近查看</h4>${recent.map(sideItem).join('')}</div>` : '') +
-    `<div class="ind-side-section"><h4>按分类浏览</h4>${tree}</div>`;
+  el.innerHTML = nav + tabs + `<div class="ind-side-section">${tree}</div>`;
   el.querySelectorAll('.ind-side-group[open]').forEach(fillGroup);
 }
 
@@ -878,6 +913,9 @@ function fillGroup(d) {
 }
 
 function onSideClick(e) {
+  const pane = e.target.closest('[data-side-pane]');
+  if (pane) { SIDE.pane = pane.dataset.sidePane; ctx.store.set(SIDE_PANE_KEY, SIDE.pane); renderSide(); return; }
+  if (e.target.closest('[data-side-clear]')) { ctx.store.setJSON(RECENT_KEY, []); renderSide(); return; }
   const tab = e.target.closest('[data-side-tab]');
   if (tab) { F.tab = tab.dataset.sideTab; save(); renderTab(); ctx.closeDrawer?.(); return; }
   const pick = e.target.closest('[data-side-pick]');
@@ -893,6 +931,17 @@ function onSideClick(e) {
 function onClick(e) {
   const tab = e.target.closest('[data-ind-tab]');
   if (tab) { F.tab = tab.dataset.indTab; save(); renderTab(); return; }
+  const rs = e.target.closest('[data-ind-sort]');
+  if (rs) { const k = rs.dataset.indSort; F.rankDir = flipSort(F.rankSort, F.rankDir, k, RANK_SORT_DIR); F.rankSort = k; save(); renderTab(); return; }
+  const ws = e.target.closest('[data-ind-wsort]');
+  if (ws) {
+    const k = ws.dataset.indWsort;
+    F.whereDir = flipSort(F.whereSort, F.whereDir, k, WHERE_SORT_DIR);
+    F.whereSort = k;
+    save();
+    renderTab();
+    return;
+  }
   const set = e.target.closest('[data-ind-set]');
   if (set) {
     const k = set.dataset.indSet;

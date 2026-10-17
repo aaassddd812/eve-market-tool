@@ -28,9 +28,11 @@ eve-overview-clone/
 ├── js/fit-engine.js     # 模拟装配属性计算引擎（dogma）
 ├── js/pi-planner.js     # 行星工业规划（按需加载）
 ├── js/industry.js       # 制造：计算器 / 利润排行 / 制造地点 / 我的工业（按需加载）
+├── js/lp-store.js       # LP 商店：各军团兑换项 ISK/LP、全服排行、我的 LP（按需加载）
 ├── js/skills-page.js    # 个人中心 · 技能（按需加载）
 ├── industry-data.json   # 制造数据：蓝图、反应、发明、解码器（build_industry.mjs 生成）
 ├── skill-data.json      # 全部技能与分组（build_industry.mjs 生成）
+├── lp-data.json         # LP 商店兑换项、军团、蓝图材料（build_lp.mjs 生成）
 ├── js/pi-editor.js      # 殖民地模板预览与编辑
 ├── js/pi-globe.js       # 殖民地球面坐标换算
 ├── assets/pi/           # 行星设施图标（SVG）
@@ -207,6 +209,24 @@ python3 server/build_fit_data.py eve-online-static-data-latest-jsonl.zip fit-dat
 ```bash
 node build_industry.mjs <SDE 解压目录>   # 输出 eve-overview-clone/industry-data.json 与 skill-data.json
 ```
+
+## LP 商店（v24）
+
+- **入口**：顶部导航「LP 商店」，地址栏 `#lp`（`#lp/store/<军团ID>`、`#lp/rank`、`#lp/mine`）；数据约 500 KB（gzip 后约 80 KB）首次进入时加载
+- **LP 商店**：按势力浏览 181 个 NPC 军团的兑换项，计算 ISK/LP =（产物价值 × (1 − 税费) − 所需物品成本 − ISK 费用）÷ LP；
+  蓝图拷贝按（产物价 − 材料价）× 数量估算（材料效率 0）；可筛选、按 ISK/LP / 利润 / LP 排序，点击行展开花费明细与可兑换的军团，前 25 行显示吉他日均成交量
+- **估价设置**（保存在本机）：产物按吉他卖单 / 收单 / 全服均价，材料按吉他卖单 / 收单 / 全服均价，卖出税费 %；吉他行情逐个物品读取并缓存，读取中先用全服均价（标 ≈）
+- **全服排行**：所有兑换项（按 offer 去重）按 ISK/LP 排行，可按势力筛选；默认全服均价估算，前 40 名可用吉他行情精算
+- **我的 LP**（ESI）：角色在各军团的 LP 余额与按最佳兑换估算的价值；需要 `esi-characters.read_loyalty.v1` 权限（需在 esi-service 配置与 CCP 开发者后台开通，并重新绑定）
+- **侧栏**：三个页面的导航、搜索军团 / 兑换品、按势力浏览军团；可收起（`[`），手机端为抽屉
+
+LP 数据由 `build_lp.mjs` 生成（兑换项来自 ESI，名称与蓝图材料来自 SDE）：
+
+```bash
+node build_lp.mjs <SDE 解压目录>   # 输出 eve-overview-clone/lp-data.json
+```
+
+切换顶部导航时各页面保持原样：离开时记住地址栏与滚动位置，切回来恢复，页面不重新渲染（筛选、展开的行、输入框都保留）。
 
 ## 行星工业（v19）
 

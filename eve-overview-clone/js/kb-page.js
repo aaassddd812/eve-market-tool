@@ -545,7 +545,7 @@ function renderMembers() {
     return dir === 'asc' ? cmp : -cmp;
   });
   $('kbMembers').innerHTML = `<div class="table-scroll"><table class="pc-mini-table kb-members"><thead><tr>
-      ${MEMBER_COLS.map(([k, label]) => `<th class="sortable${k === key ? ' sorted' : ''}${k === 'name' ? '' : ' num'}" data-sort="${k}" data-dir="${k === key ? dir : ''}">${label}</th>`).join('')}
+      ${MEMBER_COLS.map(([k, label]) => `<th class="sortable${k === key ? ' sorted' : ''}${k === 'name' ? '' : ' num'}" data-sort="${k}" data-dir="${k === key ? dir : ''}" tabindex="0">${label}</th>`).join('')}
     </tr></thead><tbody>${rows.map((m) => `<tr>
       <td><span class="kb-member"><img src="${avatar(memberKind, m.id, 32)}" alt="" width="22" height="22" loading="lazy">${entityLink(memberKind, m.id, m.name)}</span></td>
       <td class="num">${app.formatNumber(m.kills)}</td>
@@ -634,7 +634,9 @@ function navigate(hash) {
   route();
 }
 
+let routed = false;
 function route() {
+  routed = true;
   const m = /^#kb\/(character|corporation|alliance)\/(\d+)/.exec(location.hash);
   $('kbSuggest').hidden = true;
   document.querySelector('#kbView .kb-scroll')?.scrollTo({ top: 0 });
@@ -682,7 +684,8 @@ export async function prefetchKbHome() {
   await loadTypes([...top.kills.map((k) => k.ship_type_id), ...typesOf(feed.kills)]);
 }
 
-export async function showKbPage() {
+// restored：从其他页面切回且地址未变，保留当前页面（滚动位置、筛选、展开状态）
+export async function showKbPage(restored = false) {
   if (!started) {
     started = true;
     const entity = /^#kb\/(character|corporation|alliance)\//.exec(location.hash);
@@ -690,6 +693,7 @@ export async function showKbPage() {
   }
   await ensureReady();
   if (!location.hash.startsWith('#kb')) history.replaceState(null, '', '#kb');
+  if (restored && routed) return;
   route();
 }
 

@@ -570,8 +570,9 @@ export async function showPi() {
       </section>`;
     bind();
     main.querySelector('[data-pi-editor]').addEventListener('click', () => openTemplateEditor(blankTemplate(), { title: '模板编辑器' }));
+    renderForm();
   }
-  renderForm();
+  // 切回本页时保留表单与规划结果，不重新渲染
 }
 
 function renderForm() {

@@ -270,7 +270,6 @@ function setLayer(layer) {
   M.layer = layer;
   M.highlight = null;
   M.highlightKey = null;
-  app.store.set('eve-map-layer', layer);
   computeLayer();
   renderLayerList();
   renderLegend();
@@ -1421,6 +1420,8 @@ function danmaku(k, s) {
     (victim ? `<span>${app.esc(victim)}</span>` : '') +
     `<em>${app.esc(sysName)} ${secText}</em><strong>${app.formatISK(k.value)}</strong>`;
   el.style.top = (8 + lane * 32) + 'px';
+  // 先不跑动画：量宽度时会触发样式计算，新版 Chrome 会把时长 0 的动画当场结束并触发 animationend
+  el.style.animationName = 'none';
   box.appendChild(el);
   if (REDUCED_MOTION.matches) {
     el.classList.add('static');
@@ -1434,6 +1435,7 @@ function danmaku(k, s) {
   el.style.setProperty('--from', M.size.w + 'px');
   el.style.setProperty('--to', -width + 'px');
   el.style.animationDuration = duration + 's';
+  el.style.animationName = '';
   // 这条轨道在弹幕尾部离开右边缘（再留 40px 间距）后才可复用
   LIVE.lanes[lane] = Math.max(now, LIVE.lanes[lane]) + ((width + 40) / DANMAKU_SPEED) * 1000;
   el.addEventListener('animationend', () => { if (el.matches(':hover')) hideKillTip(); el.remove(); });
@@ -1939,7 +1941,9 @@ export function initStarMap(context) {
   canvas = $('mapCanvas');
   labels = $('mapLabels');
   lg = labels.getContext('2d');
-  M.layer = LAYERS.some(([k]) => k === app.store.get('eve-map-layer')) ? app.store.get('eve-map-layer') : 'security';
+  // 每次打开网站进入星图都从安全等级着色开始（本次访问内切换页面仍保留当前着色）
+  M.layer = 'security';
+  app.store.remove('eve-map-layer');   // 清掉旧版记住的着色
   renderLayerList();
   bindPanels();
   bindSidebar();

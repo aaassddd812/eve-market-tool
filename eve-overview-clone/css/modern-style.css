@@ -212,7 +212,8 @@ mark {
   font-weight: 500;
 }
 
-.nav-btn svg { width: 17px; height: 17px; }
+.nav-btn svg { width: 17px; height: 17px; flex: none; }
+.nav-btn span { white-space: nowrap; }
 .nav-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 .nav-btn.active { color: var(--accent-primary); background: var(--accent-soft); }
 
@@ -2423,7 +2424,16 @@ td.loc {
   .valuation-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
+/* 导航有 8 个入口：窄一些的屏幕先收紧间距、隐藏品牌名，再只保留图标（悬停显示名称） */
+@media (max-width: 1360px) {
+  .nav-btn { padding: 0 9px; }
+  .header-nav { gap: 2px; }
+}
+@media (max-width: 1240px) {
+  .header-brand .brand-name { display: none; }
+}
 @media (max-width: 1100px) {
+  .nav-btn span { display: none; }
   .orders-container { grid-template-columns: 1fr; }
   .orders-table { height: auto; max-height: 420px; }
 }
@@ -2440,7 +2450,7 @@ td.loc {
   .server-status .status-text { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
 
   /* 两个视图的侧栏都变为左侧抽屉 */
-  #sidebar, #profileSidebar, #mapSidebar, #fitSidebar {
+  #sidebar, #profileSidebar, #mapSidebar, #fitSidebar, #indSidebar, #lpSidebar {
     position: absolute;
     top: 0;
     left: 0;
@@ -2452,8 +2462,12 @@ td.loc {
     box-shadow: var(--shadow-lg);
   }
 
-  #sidebar.collapsed > *, #profileSidebar.collapsed > *, #mapSidebar.collapsed > *, #fitSidebar.collapsed > * { visibility: visible; }
-  #sidebar.drawer-open, #profileSidebar.drawer-open, #mapSidebar.drawer-open, #fitSidebar.drawer-open { transform: none; }
+  #sidebar.collapsed > *, #profileSidebar.collapsed > *, #mapSidebar.collapsed > *, #fitSidebar.collapsed > *, #indSidebar.collapsed > *, #lpSidebar.collapsed > * { visibility: visible; }
+  #sidebar.drawer-open, #profileSidebar.drawer-open, #mapSidebar.drawer-open, #fitSidebar.drawer-open, #indSidebar.drawer-open, #lpSidebar.drawer-open { transform: none; }
+  /* 导航入口多，放不下时横向滑动，不撑宽页面 */
+  .header-nav { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  .header-nav::-webkit-scrollbar { display: none; }
+  .nav-btn { flex: none; }
   .map-info { top: auto; left: 8px; right: 8px; bottom: 8px; width: auto; max-height: 58%; }
   .map-hint { display: none; }
   .map-zoom { right: 10px; bottom: auto; top: 10px; }
@@ -2511,6 +2525,9 @@ td.loc {
 }
 
 @media (max-width: 480px) {
+  .header-brand { display: none; }
+  .nav-btn { padding: 0 7px; }
+  .api-link span { display: none; }
   /* 窄屏顶栏放不下时，服务器状态只保留状态点（悬停可看在线人数） */
   .server-status { padding: 0 9px; }
   .server-status .status-text { display: none; }
@@ -3571,6 +3588,9 @@ html.pie-open { overflow: hidden; }
 .ind-side-nav { display: flex; flex-direction: column; gap: 2px; padding-bottom: 8px; margin-bottom: 4px; border-bottom: 1px solid var(--border-primary); }
 .ind-side-nav .profile-nav-btn { display: flex; align-items: center; gap: 10px; }
 .ind-side-nav svg { width: 16px; height: 16px; flex: none; opacity: 0.8; }
+.ind-side-tabs { min-width: 0; padding: 2px 0 4px; }
+.ind-side .empty-state { padding: 24px 8px; }
+.ind-side .clear-recent { align-self: center; margin-top: 8px; }
 .ind-side-section { display: flex; flex-direction: column; gap: 1px; padding-top: 6px; }
 .ind-side-section > h4 { display: flex; align-items: baseline; gap: 6px; padding: 4px 8px; font-size: 0.6875rem; font-weight: 600; color: var(--text-muted); letter-spacing: 0.04em; }
 .ind-side-section > h4 small { font-weight: 400; }
@@ -3724,3 +3744,44 @@ html.pie-open { overflow: hidden; }
 .fit-slot.is-offline { background: transparent; border-style: dashed; }
 .fit-slot.is-offline .fit-slot-name, .fit-slot.is-offline > img { opacity: 0.4; }
 @media (max-width: 768px) { .fit-ol-btn { padding: 0 6px; font-size: 0; gap: 0; } .fit-ol-btn svg { width: 13px; height: 13px; } .fit-state-pill { min-width: 44px; padding: 0 6px; } }
+
+/* ===== LP 商店 ===== */
+#lpBody > .pi-card + .pi-card { margin-top: var(--spacing-md); }
+.lp-store-head { display: flex; align-items: center; gap: 14px; }
+.lp-store-head img { border-radius: 8px; background: #0d1219; flex: none; }
+.lp-store-head h3 { font-size: 1.125rem; font-weight: 700; }
+.lp-store-head p { margin-top: 2px; font-size: 0.8125rem; }
+.lp-store-head b { color: var(--accent-primary); }
+.lp-search { flex: 1 1 200px; max-width: 280px; }
+.lp-search input { width: 100%; }
+.lp-tax { width: 110px; }
+.lp-faction { width: auto; min-width: 140px; }
+.lp-table-wrap { max-height: none; }
+.lp-table td:nth-child(2) { white-space: normal; min-width: 200px; }
+.lp-table .pi-prod small { white-space: nowrap; }
+.lp-corps { margin: 2px 0 0 36px; font-size: 0.6875rem; color: var(--text-muted); }
+.pi-table tbody tr.lp-detail-row { cursor: default; background: var(--bg-tertiary); }
+.pi-table tbody tr.lp-detail-row:hover { background: var(--bg-tertiary); }
+.lp-detail-row > td { white-space: normal; padding: 12px; }
+.lp-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+.lp-detail h4 { margin-bottom: 6px; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); }
+.lp-lines { display: flex; flex-direction: column; gap: 4px; list-style: none; padding: 0; margin: 0; }
+.lp-lines li { display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; }
+.lp-lines li img { border-radius: 4px; background: #0d1219; flex: none; }
+.lp-lines li span { flex: 1; min-width: 0; }
+.lp-lines li b { font-variant-numeric: tabular-nums; font-weight: 600; }
+.lp-corp-list { display: flex; flex-wrap: wrap; gap: 6px; max-height: 140px; overflow-y: auto; }
+.lp-corp-list .chip { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-primary); background: var(--bg-secondary); font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; }
+.lp-corp-list .chip:hover { color: var(--accent-primary); border-color: var(--accent-primary); }
+.lp-mine-summary { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; }
+.lp-mine-summary > div { display: flex; flex-direction: column; gap: 2px; }
+.lp-mine-summary span { font-size: 0.75rem; }
+.lp-mine-summary b { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.lp-mine-summary .btn { margin-left: auto; }
+@media (max-width: 1280px) { .lp-hide-md { display: none; } }
+@media (max-width: 768px) {
+  .lp-hide-sm { display: none; }
+  .lp-search { max-width: none; }
+  .lp-table td:nth-child(2) { min-width: 150px; }
+  .lp-corps { margin-left: 0; }
+}
