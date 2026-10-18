@@ -24,7 +24,8 @@
   GET /api/kb/shipfits?ship=ID&days=7          某型舰船最近 N 天（≤ 保留期）阵亡时的装配，相同装配合并计数（物品原文按需取自 ESI，提取结果存库）
   GET /api/kb/bpprices?types=1,2               公开合同里的蓝图价格：原图最低价、拷贝每流程最低价（各取最便宜 5 份）；
                                                不带 types 时返回全部蓝图的 [原图最低价, 拷贝每流程最低价]
-                                               数据来自 EVE Ref 公开合同快照 https://data.everef.net/public-contracts/（每小时刷新）
+                                               数据来自 EVE Ref 公开合同快照 https://data.everef.net/public-contracts/（每 30 分钟刷新）
+  GET /api/kb/couriers                        全服公开快递合同（同一份快照，字段同 ESI /contracts/public/{region_id}/，另带 region_id、start_system_id）
 
 用法
   python3 kb_service.py --db kb.sqlite [--port 8291] [--days 30] [--live auto|r2z2|poll|off] [--static DIR]
@@ -59,7 +60,7 @@ R2Z2_GAP = 0.1              # 有数据时的请求间隔（官方限制每 IP 1
 R2Z2_IDLE = 6               # 收到 404（暂无新击杀）后至少等待 6 秒，官方要求
 EVEREF = "https://data.everef.net/killmails/{year}/killmails-{date}.tar.bz2"
 EVEREF_CONTRACTS = "https://data.everef.net/public-contracts/public-contracts-latest.v2.tar.bz2"
-BP_CONTRACT_TTL = 3600      # 蓝图合同价每小时刷新（快照约每 30 分钟更新）
+BP_CONTRACT_TTL = 1800      # 蓝图合同价 / 快递合同每 30 分钟刷新（快照约每 30 分钟更新）
 BP_CONTRACT_KEEP = 5        # 每种蓝图的原图 / 拷贝各保留最便宜的几份合同
 BP_MAX_TYPES = 300          # bpprices 单次最多查询的蓝图种类
 API_RATE = 1000             # 开放接口：每个 IP 每分钟可用的请求额度（令牌桶，容量同此值）
@@ -216,6 +217,7 @@ class Store:
         self.contract_prices = dict(conn.execute("SELECT type_id, price FROM contract_prices"))
         # 公开合同里的蓝图：type_id -> {"o": [[价格, ME, TE, 合同, 星系]], "c": [[每流程价, 流程, 价格, ME, TE, 合同, 星系]]}（仅内存）
         self.bp_contracts = {}
+        self.couriers = {"at": None, "list": []}
         self.known_names = {row[0] for row in conn.execute("SELECT id FROM names")}
         self.pending_names = set()
         self.cache = {}
@@ -554,15 +556,23 @@ class Workers:
 
     # ---- 蓝图合同价：EVE Ref 公开合同快照（全服物品交换合同及其物品，约 6 MB）
     # 只看「只卖一张蓝图、不要求对方附带物品」的合同：原图按总价、拷贝按每流程单价各取最便宜的几份
+    # 同一份快照里的全服公开快递合同（约数百份）原样提供给前端快递页
     def refresh_bp_contracts(self):
         body, _ = http_get(EVEREF_CONTRACTS, timeout=180)
         now = time.time()
+        couriers = []
         with tarfile.open(fileobj=io.BytesIO(body), mode="r:bz2") as tar:
             def rows(name):
                 member = next(m for m in tar.getmembers() if m.name.endswith(name))
                 return csv.DictReader(io.TextIOWrapper(tar.extractfile(member), encoding="utf-8"))
+            try:
+                meta = json.load(tar.extractfile(next(m for m in tar.getmembers() if m.name.endswith("meta.json"))))
+            except Exception:
+                meta = {}
             contracts = {}
             for c in rows("contracts.csv"):
+                if c["type"] == "courier" and not (c["date_expired"] and epoch(c["date_expired"]) < now):
+                    couriers.append(courier_row(c))
                 if c["type"] != "item_exchange" or c.get("for_corporation") == "true":
                     continue
                 price = float(c["price"] or 0)
@@ -593,6 +603,8 @@ class Workers:
             result[tid] = {"o": sorted(bpo.get(tid, []))[:BP_CONTRACT_KEEP], "c": sorted(bpc.get(tid, []))[:BP_CONTRACT_KEEP]}
         self.store.bp_contracts = result
         self.store.state["bp_contracts_updated"] = iso(now)
+        self.store.couriers = {"at": meta.get("scrape_end") or iso(now), "list": couriers}
+        log.info("快递合同：%d 份", len(couriers))
         log.info("蓝图合同价：%d 份合同，%d 种蓝图", sum(len(v) for v in bpo.values()) + sum(len(v) for v in bpc.values()), len(result))
 
     def bp_contract_loop(self):
@@ -762,6 +774,24 @@ def zkill_path(q, side):
     entity = any(q.get(k) for k in ENTITY_COL)
     prefix = side + "/" if entity and side in ("kills", "losses") else ""
     return prefix + mods
+
+
+def courier_row(c):
+    """EVE Ref 快照的一行快递合同 → 与 ESI /contracts/public/{region_id}/ 相同的字段（另带起点星系 / 星域）"""
+    num = lambda k: float(c.get(k) or 0)
+    row = {
+        "contract_id": int(c["contract_id"]), "start_location_id": int(c["start_location_id"] or 0),
+        "end_location_id": int(c["end_location_id"] or 0), "reward": num("reward"), "collateral": num("collateral"),
+        "volume": round(num("volume"), 2), "days_to_complete": int(c.get("days_to_complete") or 0),
+        "date_issued": c.get("date_issued") or None, "date_expired": c.get("date_expired") or None,
+        "issuer_id": int(c.get("issuer_id") or 0), "issuer_corporation_id": int(c.get("issuer_corporation_id") or 0),
+        "title": c.get("title") or "", "region_id": int(c.get("region_id") or 0),
+    }
+    if c.get("system_id"):
+        row["start_system_id"] = int(c["system_id"])
+    if c.get("for_corporation") == "true":
+        row["for_corporation"] = True
+    return row
 
 
 def row_summary(r):
@@ -1281,6 +1311,10 @@ class Api:
             out[str(t)] = {"sell": sell, "buy": buy, "average": round(avg, 2) if avg else None, "estimate": round(est, 2) if est else None}
         return {"updated": self.store.state.get("prices_updated"), "types": out}
 
+    def couriers(self, q):
+        """全服公开快递合同（EVE Ref 快照，约 30 分钟更新）；服务刚启动还没读到快照时 list 为空、at 为 null"""
+        return self.store.couriers
+
     def bpprices(self, q):
         data = self.store.bp_contracts
         updated = self.store.state.get("bp_contracts_updated")
@@ -1725,7 +1759,7 @@ def make_handler(api, static_dir, industry):
     v1 = open_routes(api, industry)
     limiter = RateLimiter()
     routes = {"status": api.status, "live": api.live, "battles": api.battles, "feed": api.feed, "top": api.top, "summary": api.summary,
-              "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits}
+              "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits, "couriers": api.couriers}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):

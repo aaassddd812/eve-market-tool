@@ -4,7 +4,7 @@
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
 import * as FE from './fit-engine.js?v=v22r5';
-import { initAutoFit, openAutoFit } from './fit-auto.js?v=v22r8';
+import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v24';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v22';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v16r7';
 
@@ -63,6 +63,7 @@ export function initFitting(context) {
   initAutoFit(planCtx);
   initKbFits(planCtx);
   $('fitEsiModal').addEventListener('input', (e) => { if (e.target.id === 'fitEsiSearch') renderEsiList(); });
+  $('fitEsiShipOnly').addEventListener('change', renderEsiList);
 }
 
 function pick(obj, keys) {
@@ -93,7 +94,7 @@ export async function showFitting(restored = false) {
       return;
     }
     app.getMarketPriceMap().then((m) => { F.prices = m; if (F.fit) renderStats(); }).catch(() => {});
-    if (!loadPendingKill() && !loadFromHash()) {
+    if (!loadPending() && !loadFromHash()) {
       const saved = app.store.getJSON(CURRENT_KEY, null);
       F.fit = saved && F.data.types.has(saved.ship) ? normalize(saved) : null;
     }
@@ -103,7 +104,7 @@ export async function showFitting(restored = false) {
     recompute();
     return;
   }
-  if (loadPendingKill() || loadFromHash()) { recompute(); renderBrowser(); restored = false; }
+  if (loadPending() || loadFromHash()) { recompute(); renderBrowser(); restored = false; }
   syncSkillMode(restored);
 }
 
@@ -532,6 +533,7 @@ function renderFit() {
         <select class="plain-select" data-fit-open aria-label="我的装配"><option value="">我的装配${saved.length ? `（${saved.length}）` : ''}</option>${saved.map((f) => `<option value="${f.id}"${f.id === F.fit.id ? ' selected' : ''}>${app.esc(f.name || type(f.ship)?.name || '未命名')} · ${app.esc(type(f.ship)?.name || '')}</option>`).join('')}</select>
         <div class="fit-action-row fit-plan-row">
           <button class="btn btn-ghost fit-plan-btn" data-fit-auto title="按目标与约束自动装配">智能装配</button>
+          <button class="btn btn-ghost fit-plan-btn" data-fit-imp title="装备不动，按目标推荐植入体">智能植入体</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-kb title="这艘船最近阵亡时的常见装配">击杀记录装配</button>
         </div>
         <div class="fit-action-row">
@@ -642,7 +644,7 @@ function implantsHtml(bound) {
     const slot = t.attrs.get(IMPLANT_SLOT);
     return `<div class="fit-slot"><img src="${IMG(id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(t.name)}<small>${slot ? '植入体槽位 ' + slot : '增效剂'}</small></span><button class="fit-remove" data-fit-implant-remove="${id}" aria-label="移除">×</button></div>`;
   }).join('');
-  return `<section class="fit-slots"><h4>植入体 / 增效剂<span>${bound ? '<button class="link-btn" data-fit-my-implants>导入当前角色的植入体</button>' : ''}</span></h4>
+  return `<section class="fit-slots"><h4>植入体 / 增效剂<span><button class="link-btn" data-fit-imp>智能推荐</button>${bound ? '<button class="link-btn" data-fit-my-implants>导入当前角色的植入体</button>' : ''}</span></h4>
     ${rows || '<div class="fit-slot is-empty" data-fit-empty-implant><span class="fit-slot-icon"></span><span>从左侧「植入体」中添加</span></div>'}</section>`;
 }
 
@@ -846,6 +848,7 @@ async function onMainClick(e) {
   if (el('[data-fit-share]')) { app.copyText(shareUrl(), '分享链接已复制'); return; }
   if (el('[data-fit-esi-list]')) { openEsiModal(); return; }
   if (el('[data-fit-auto]')) { openAutoFit(); return; }
+  if (el('[data-fit-imp]')) { openImplantAdvisor(); return; }
   if (el('[data-fit-kb]')) { openKbFits(); return; }
   if ((x = el('[data-fit-esi-save]'))) { saveToGame(x); return; }
 }
@@ -936,12 +939,26 @@ function toEft(fit) {
 }
 
 function importText(text) {
+  const r = parseEft(text);
+  if (r.error) { app.showToast(r.error, 'error'); return; }
+  const { fit, unknown } = r;
+  stashDraft(F.fit);
+  F.fit = fit;
+  F.selected = null;
+  autoActivateDrones();
+  recompute();
+  closeModal();
+  app.showToast(unknown.length ? `已导入，${unknown.length} 项无法识别：${unknown.slice(0, 3).join('、')}` : '已导入装配', unknown.length ? 'info' : 'success', 4000);
+}
+
+// EFT 文本 → { fit, unknown } 或 { error }
+function parseEft(text) {
   const lines = text.split(/\r?\n/).map((l) => l.trim());
   const head = lines.findIndex((l) => /^\[.+\]$/.test(l) && !/^\[empty/i.test(l));
-  if (head < 0) { app.showToast('没有找到 [舰船, 名称] 开头的 EFT 文本', 'error'); return; }
+  if (head < 0) return { error: '没有找到 [舰船, 名称] 开头的 EFT 文本' };
   const [shipName, ...rest] = lines[head].slice(1, -1).split(',');
   const ship = findType(shipName);
-  if (!ship || ship.category !== FE.CAT.ship) { app.showToast('无法识别舰船：' + shipName.trim(), 'error'); return; }
+  if (!ship || ship.category !== FE.CAT.ship) return { error: '无法识别舰船：' + shipName.trim() };
   const fit = newFit(ship.id);
   fit.name = rest.join(',').trim();
   const unknown = [];
@@ -964,13 +981,7 @@ function importText(text) {
     const ct = chargeName ? findType(chargeName) : null;
     fit.slots[t.slot].push({ type: t.id, state: offline ? 'offline' : defaultState(t), charge: ct?.id || null });
   }
-  stashDraft(F.fit);
-  F.fit = fit;
-  F.selected = null;
-  autoActivateDrones();
-  recompute();
-  closeModal();
-  app.showToast(unknown.length ? `已导入，${unknown.length} 项无法识别：${unknown.slice(0, 3).join('、')}` : '已导入装配', unknown.length ? 'info' : 'success', 4000);
+  return { fit, unknown };
 }
 
 function findType(name) {
@@ -1064,6 +1075,31 @@ export async function queueKillFit(km) {
   return true;
 }
 
+// 其他页面（快递推荐用船）带来的 EFT 装配：同样先记下，进入装配页时载入
+let pendingEft = null;
+export function queueEftFit(text) {
+  pendingEft = text;
+}
+
+function loadPending() {
+  return loadPendingKill() || loadPendingEft();
+}
+
+function loadPendingEft() {
+  if (!pendingEft) return false;
+  const r = parseEft(pendingEft);
+  pendingEft = null;
+  if (r.error) { app.showToast('无法载入装配：' + r.error, 'error', 4000); return false; }
+  const { fit } = r;
+  stashDraft(F.fit);
+  F.fit = fit;
+  F.selected = null;
+  autoActivateDrones();
+  history.replaceState(null, '', location.pathname + '#fit');
+  app.showToast('已载入推荐装配「' + (fit.name || '') + '」，可点「保存」存到本机', 'success', 3500);
+  return true;
+}
+
 function loadPendingKill() {
   if (!pendingKill) return false;
   const km = pendingKill;
@@ -1150,6 +1186,7 @@ async function saveToGame(btn) {
 async function openEsiModal() {
   $('fitEsiModal').hidden = false;
   $('fitEsiSearch').value = '';
+  $('fitEsiShipOnly').checked = true;   // 每次打开默认只看当前选择的舰船
   await loadEsiFits();
 }
 
@@ -1180,9 +1217,19 @@ function renderEsiList() {
   if (esiList.error) { box.innerHTML = `<p class="fit-esi-empty">${app.esc(esiList.error)}</p>`; return; }
   if (!esiList.fits) { box.innerHTML = ''; return; }
   const q = $('fitEsiSearch').value.trim().toLowerCase();
-  const list = esiList.fits.filter((f) => !q || f.name.toLowerCase().includes(q) || (type(f.ship_type_id)?.name || '').toLowerCase().includes(q) || (type(f.ship_type_id)?.en || '').toLowerCase().includes(q));
+  // 选了舰船时默认只列这艘船的装配；没选舰船时列全部，不显示开关
+  const ship = F.fit?.ship;
+  $('fitEsiShipOnlyLabel').hidden = !ship;
+  const shipOnly = ship && $('fitEsiShipOnly').checked;
+  const list = esiList.fits.filter((f) => !shipOnly || f.ship_type_id === ship).filter((f) => !q || f.name.toLowerCase().includes(q) || (type(f.ship_type_id)?.name || '').toLowerCase().includes(q) || (type(f.ship_type_id)?.en || '').toLowerCase().includes(q));
   $('fitEsiCount').textContent = `${esiList.fits.length} / 500`;
-  if (!list.length) { box.innerHTML = `<p class="fit-esi-empty">${esiList.fits.length ? '没有匹配的装配' : '游戏里还没有保存的个人装配'}</p>`; return; }
+  if (!list.length) {
+    const text = !esiList.fits.length ? '游戏里还没有保存的个人装配'
+      : shipOnly && !q ? `游戏里没有保存${type(ship)?.name || '这艘船'}的个人装配，可取消「只看当前舰船」查看全部`
+        : '没有匹配的装配';
+    box.innerHTML = `<p class="fit-esi-empty">${app.esc(text)}</p>`;
+    return;
+  }
   box.innerHTML = list.map((f) => {
     const ship = type(f.ship_type_id);
     const mods = (f.items || []).filter((it) => parseFlag(it.flag).slot).length;

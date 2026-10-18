@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v32">
+  <link rel="stylesheet" href="css/modern-style.css?v=v36">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -73,6 +73,10 @@
         <button class="nav-btn" data-view="appraisal" role="tab" title="合同估价" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6l1 3H8z"/><rect x="4" y="6" width="16" height="15" rx="2"/><path d="M8 11h8M8 15h5"/></svg>
           <span>估价</span>
+        </button>
+        <button class="nav-btn" data-view="courier" role="tab" title="快递合同" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4h13v12H1z"/><path d="M14 8h4l4 4v4h-8"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18" cy="18.5" r="2"/></svg>
+          <span>快递</span>
         </button>
         <button class="nav-btn" data-view="profile" role="tab" title="个人中心" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -568,6 +572,28 @@
         </div>
       </div>
 
+      <!-- 快递合同视图 -->
+      <div class="view-container" id="courierView" hidden>
+        <aside class="sidebar ind-sidebar cr-sidebar" id="courierSidebar" aria-label="快递筛选">
+          <div class="sidebar-header">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <input type="search" id="courierSearch" placeholder="搜索星系 / 空间站 / 星域" autocomplete="off" spellcheck="false" aria-label="搜索快递合同">
+            </div>
+            <button class="collapse-btn" id="courierSidebarCollapse" title="收起侧边栏 ([)" aria-label="收起侧边栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+          </div>
+          <div class="sidebar-content ind-side cr-side" id="courierSide"></div>
+        </aside>
+        <div class="kb-scroll ind-scroll">
+          <button class="sidebar-reopen" id="courierSidebarReopen" title="展开侧边栏 ([)" aria-label="展开侧边栏" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <div class="kb-wrap" id="courierMain"></div>
+        </div>
+      </div>
+
       <!-- 个人中心视图 -->
       <div class="view-container" id="profileView" hidden>
         <aside class="sidebar profile-sidebar" id="profileSidebar" aria-label="个人中心导航">
@@ -667,6 +693,20 @@
       </div>
     </div>
 
+    <!-- 快递合同详情 -->
+    <div class="modal" id="courierModal" hidden role="dialog" aria-modal="true" aria-labelledby="courierTitle">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content cr-modal">
+        <div class="modal-header">
+          <h3 id="courierTitle">快递合同</h3>
+          <button class="modal-close" data-cr-close aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="modal-body" id="courierBody"></div>
+      </div>
+    </div>
+
     <!-- 快捷键帮助 -->
     <div class="modal" id="fitModal" hidden role="dialog" aria-modal="true" aria-labelledby="fitModalTitle">
       <div class="modal-backdrop"></div>
@@ -697,6 +737,7 @@
         <div class="modal-body">
           <div class="fit-esi-tools">
             <input id="fitEsiSearch" class="fit-esi-search" type="search" placeholder="搜索装配名称或舰船" aria-label="搜索游戏装配">
+            <label class="fit-esi-ship-only" id="fitEsiShipOnlyLabel"><input type="checkbox" id="fitEsiShipOnly" checked> 只看当前舰船</label>
             <span id="fitEsiCount" class="text-muted"></span>
             <button class="btn btn-ghost" data-fit-esi-refresh title="重新读取">刷新</button>
           </div>
@@ -791,6 +832,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v38" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v43" type="module" data-cfasync="false"></script>
 </body>
 </html>

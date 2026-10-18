@@ -254,8 +254,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -313,7 +313,7 @@ function switchView(view) {
   });
   for (const [v, id] of Object.entries(VIEW_IDS)) $(id).hidden = v !== view;
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
-  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航' }[view] || '';
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选' }[view] || '';
   closeDrawer();
   if (prev !== view) {
     restoreScroll(viewScroll[view]);
@@ -330,6 +330,7 @@ function switchView(view) {
   if (view === 'industry') openIndustry(restored);
   if (view === 'lp') openLp();
   if (view === 'appraisal') openAppraisal();
+  if (view === 'courier') openCourier();
 }
 
 // 吉他（伏尔戈交易中心）最低卖价 / 最高收购价：Map(id -> { sell, buy })
@@ -389,6 +390,46 @@ async function openLp() {
   }
 }
 
+// 快递推荐用船「去装配页查看」：切到装配页并载入 EFT 装配；后退回到快递页
+async function openEftFit(text) {
+  try {
+    (await loadFittingModule()).queueEftFit(text);
+  } catch (error) {
+    showToast('模拟装配加载失败：' + error.message, 'error', 4000);
+    return false;
+  }
+  history.pushState(null, '', location.pathname + '#fit');
+  switchView('fit');
+  return true;
+}
+
+// 快递合同：首次进入时加载
+let courierLoading = null;
+async function openCourier() {
+  try {
+    if (!courierLoading) courierLoading = import('./courier.js?v=v2').then((m) => {
+      m.initCourier({
+        esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit,
+        hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+        tokenInfo: () => state.esiToken || readEsiToken(),
+        hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
+        // 玩家建筑名称与所在星系（本地缓存 → 共享缓存 → 已绑定角色可见的建筑）
+        resolveStructures: async (ids) => {
+          await resolveStructureNames(ids);
+          const map = structureNameMap();
+          return new Map(ids.map((id) => [id, map.get(id)]).filter(([, v]) => v?.n).map(([id, v]) => [id, { name: v.n, system: v.s }]));
+        },
+        openEsiBind: () => { switchView('profile'); openEsiModal(); }
+      });
+      return m;
+    }).catch((error) => { courierLoading = null; throw error; });
+    await (await courierLoading).showCourier();
+  } catch (error) {
+    console.error('快递页加载失败:', error);
+    showToast('快递页加载失败：' + error.message, 'error', 4000);
+  }
+}
+
 // 合同估价：首次进入时加载
 let appraisalLoading = null;
 async function openAppraisal() {
@@ -438,7 +479,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v26').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v30').then((m) => {
     m.initFitting({
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -665,7 +706,8 @@ const SIDEBARS = {
   map: { id: 'mapSidebar', reopen: 'mapSidebarReopen', key: 'eve-map-sidebar-collapsed' },
   fit: { id: 'fitSidebar', reopen: 'fitSidebarReopen', key: 'eve-fit-sidebar-collapsed' },
   industry: { id: 'indSidebar', reopen: 'indSidebarReopen', key: 'eve-ind-sidebar-collapsed' },
-  lp: { id: 'lpSidebar', reopen: 'lpSidebarReopen', key: 'eve-lp-sidebar-collapsed' }
+  lp: { id: 'lpSidebar', reopen: 'lpSidebarReopen', key: 'eve-lp-sidebar-collapsed' },
+  courier: { id: 'courierSidebar', reopen: 'courierSidebarReopen', key: 'eve-courier-sidebar-collapsed' }
 };
 
 function currentSidebar() {
@@ -706,6 +748,9 @@ function initSidebar() {
   if (store.get('eve-fit-sidebar-collapsed') === '1') setSidebarCollapsed('fitSidebar', 'fitSidebarReopen', true);
   if (store.get('eve-ind-sidebar-collapsed') === '1') setSidebarCollapsed('indSidebar', 'indSidebarReopen', true);
   if (store.get('eve-lp-sidebar-collapsed') === '1') setSidebarCollapsed('lpSidebar', 'lpSidebarReopen', true);
+  if (store.get('eve-courier-sidebar-collapsed') === '1') setSidebarCollapsed('courierSidebar', 'courierSidebarReopen', true);
+  $('courierSidebarCollapse').addEventListener('click', () => toggleSidebar('courier'));
+  $('courierSidebarReopen').addEventListener('click', () => toggleSidebar('courier'));
   $('lpSidebarCollapse').addEventListener('click', () => toggleSidebar('lp'));
   $('lpSidebarReopen').addEventListener('click', () => toggleSidebar('lp'));
   $('indSidebarCollapse').addEventListener('click', () => toggleSidebar('industry'));
@@ -2046,6 +2091,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#ind')) { if (state.currentView !== 'industry') switchView('industry'); else openIndustry(); return; }
     if (location.hash.startsWith('#lp')) { if (state.currentView !== 'lp') switchView('lp'); else openLp(); return; }
     if (location.hash.startsWith('#appr')) { if (state.currentView !== 'appraisal') switchView('appraisal'); return; }
+    if (location.hash.startsWith('#courier')) { if (state.currentView !== 'courier') switchView('courier'); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -3895,6 +3941,7 @@ function init() {
   if (location.hash.startsWith('#ind')) switchView('industry');   // 制造
   if (location.hash.startsWith('#lp')) switchView('lp');          // LP 商店
   if (location.hash.startsWith('#appr')) switchView('appraisal'); // 合同估价
+  if (location.hash.startsWith('#courier')) switchView('courier'); // 快递合同
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);

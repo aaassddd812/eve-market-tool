@@ -6,6 +6,7 @@
 //   3. 贪心：中 / 低 / 改装件轮流放入让得分提升最多、且资源装得下的装备；装不下时尝试加 CPU / 电网辅助装备后再填
 //   4. 替换：逐格尝试换成其他候选，直到不再变好
 // 技能：全 5 级，或按 ESI 角色（候选只保留角色能用的装备与弹药，属性按角色技能计算）。
+// 植入体：智能装配可勾选「同时推荐植入体」；装配页「智能植入体」只给当前装配推荐植入体（装备不动），见下方「植入体」一节。
 let ctx;   // data, FE, getFit, applyFit, esiLevels, prices, esc, formatNumber, formatISK, showToast, store
 const $ = (id) => document.getElementById(id);
 const KEY = 'eve-fit-auto-v1';
@@ -54,7 +55,7 @@ const ROLE_NAME = { logi: '后勤', ewar: '电子战', tackle: '拦截', mining:
 const ATTR_ZH = { 38: '货柜容量', 263: '护盾容量', 265: '装甲值', 9: '结构值', 37: '速度', 70: '敏捷', 600: '跃迁速度', 552: '信号半径', 479: '护盾回充', 482: '电容容量', 55: '电容回充', 76: '锁定距离' };
 const SHIELD_SELF = [263, 479, 271, 272, 273, 274], ARMOR_SELF = [265, 267, 268, 269, 270];
 
-const A = { goal: 'dps', tank: 'auto', resist: 'auto', selfRep: 'auto', weapon: 'auto', meta: 't2', budget: 0, minDps: 0, minEhp: 0, minSpeed: 0, capStable: false, tackle: false, skills: 'max', role: 'auto', mineTarget: 'ore', target: 'any', range: 'any' };
+const A = { goal: 'dps', tank: 'auto', resist: 'auto', selfRep: 'auto', weapon: 'auto', meta: 't2', budget: 0, minDps: 0, minEhp: 0, minSpeed: 0, capStable: false, tackle: false, skills: 'max', role: 'auto', mineTarget: 'ore', target: 'any', range: 'any', implants: false, impBudget: 500 };
 // 交战距离（米），0 为不看距离
 const RANGES = { any: 0, close: 5000, mid: 20000, long: 50000, xlong: 100000 };
 const S = { running: false, cancel: false, results: [] };
@@ -179,7 +180,7 @@ function evaluate(fit) {
   // 后勤 / 采矿 / 运输：以本职指标为主，其余兼顾坦克
   if (ROLES.has('logi')) score = ln(remote) + 0.4 * ln(ehp) + 0.05 * ln(speed);
   else if (ROLES.has('mining')) score = ln(mining * 100) + 0.3 * ln(ehp) + 0.05 * ln(speed);
-  else if (ROLES.has('hauler')) score = ln(cargo) + 0.3 * ln(ehp) + 0.1 * ln(speed);
+  else if (ROLES.has('hauler')) score = ln(cargo) + 0.3 * ln(ehp) + 0.1 * ln(speed) - 0.1 * ln(st.navigation.align);
   else if (A.goal === 'tank') score = ln(ehp) + 0.15 * ln(dps) + 0.05 * ln(speed);
   else if (A.goal === 'balanced') score = ln(dps) + ln(ehp) + 0.05 * ln(speed);
   else if (A.goal === 'pve') score = ln(dps) + ln(active) + 0.2 * ln(ehp);
@@ -196,7 +197,7 @@ function evaluate(fit) {
   if (A.budget > 0 && cost > A.budget * 1e6) penalty += 2 + 5 * (cost / (A.budget * 1e6) - 1);
   // 极小的价格项：效果相同的组合取便宜的，不影响实际效果的比较
   const thrift = 1e-5 * ln(cost / 1e6);
-  return { st, ok, score: score + extra - penalty - thrift, met: penalty === 0, cost, dps, paper, ehp, speed, active, remote, mining, cargo };
+  return { st, ok, score: score + extra - penalty - thrift, met: penalty === 0, cost, dps, paper, ehp, speed, active, remote, mining, cargo, align: st.navigation.align };
 }
 
 // ---------- 候选 ----------
@@ -602,6 +603,17 @@ async function fillEmpty(fit, cands, cur, progress) {
   return cur;
 }
 
+// 打分用的全局设定：舰船定位（可改成「当普通战斗船」）、目标体型与交战距离、自修（自动时有维修加成的战斗船自修）
+function setupScoring(shipType) {
+  TGT = ctx.FE.TARGETS[A.target] || null;
+  DIST = RANGES[A.range] || 0;
+  const P = shipProfile(shipType);
+  ROLES = new Set(A.role === 'combat' ? [] : P.roles);
+  const fighting = !['logi', 'mining', 'hauler'].some((r) => ROLES.has(r));
+  SELF_REP = A.selfRep === 'auto' && P.rep && fighting ? 'yes' : A.selfRep;
+  return { P, fighting };
+}
+
 async function search(onProgress) {
   const { FE, data } = ctx;
   const cur = ctx.getFit();
@@ -615,18 +627,11 @@ async function search(onProgress) {
   if (slots.sub && !base.slots.sub.length) throw new Error('战略巡洋舰请先装好子系统');
   for (const s of ['high', 'mid', 'low', 'rig']) base.slots[s] = Array(slots[s] || 0).fill(null);
 
-  // 舰船定位：按加成识别，可在表单里改成「当普通战斗船」
-  TGT = FE.TARGETS[A.target] || null;
-  DIST = RANGES[A.range] || 0;
-  const P = shipProfile(shipType);
-  ROLES = new Set(A.role === 'combat' ? [] : P.roles);
-  const fighting = !['logi', 'mining', 'hauler'].some((r) => ROLES.has(r));
-
+  const { P, fighting } = setupScoring(shipType);
   // 坦克类型：自动时先看舰船加成（护盾 / 装甲抗性、血量、回充 / 维修），没有再按护盾 / 装甲值与中低槽数判断
   const tankType = A.tank === 'auto' ? autoTank(shipType).tank : A.tank;
-  // 抗性：自动时盾抗船用主动抗、甲抗船用被动抗；自修：自动时有维修加成的船自修
+  // 抗性：自动时盾抗船用主动抗、甲抗船用被动抗
   const resistMode = A.resist === 'auto' ? (tankType === 'shield' ? 'active' : 'passive') : A.resist;
-  SELF_REP = A.selfRep === 'auto' && P.rep && fighting ? 'yes' : A.selfRep;
   const cands = buildCandidates(shipType, tankType, resistMode);
   CHARGES = cands.charges;
   fuelCache.clear();
@@ -728,7 +733,205 @@ async function search(onProgress) {
     results.push(best);
   }
   results.sort((a, b) => b.r.score + b.bonus - a.r.score - a.bonus);
+  // 同时推荐植入体：在每个方案上另做植入体搜索，套用最佳方案
+  if (A.implants) {
+    for (const x of results) {
+      const plans = await recommendImplants(x.fit, progress);
+      const plan = plans[0];
+      x.implantPlan = plan || null;
+      x.fit.implants = plan ? [...plan.implants] : [];
+      x.r = evaluate(x.fit);
+    }
+  }
   return { results, tankType, resistMode, evals, roles: [...ROLES], placed: [...new Set(placed)], selfRep: SELF_REP };
+}
+
+// ---------- 植入体 ----------
+// 候选：1–10 号槽、市场有售、价格不超过植入体预算（按 ESI 角色时还要求技能够）的植入体。
+// 1. 逐个单独装上，记下对得分的提升，只留有提升的；同一槽位效果相同的只留最便宜的
+// 2. 「最佳」：按提升从大到小逐槽挑预算内最好的；另对每个套装（低 / 中 / 高级 × 名称，水晶、极乐、蝰蛇等，占 1–6 号槽）
+//    逐件加入（2 件到整套），每种件数都配上其余槽位的最佳植入体一起比较；套装叠加加成由装配引擎按游戏规则计算
+// 3. 「性价比」：每个槽位取效果达到该槽最佳 70% 的最便宜植入体，不刻意凑套装
+// 只加属性点（感知、记忆等）的植入体不影响装配属性，不会被推荐。
+const IMPLANT_SLOT = 331;
+const SET_RE = /^(Low|Mid|High)-grade (.+) (Alpha|Beta|Gamma|Delta|Epsilon|Omega)$/i;
+const VALUE_SHARE = 0.7;
+
+function implantPrice(id) { return ctx.prices()?.get(id) || 0; }
+
+function implantCandidates() {
+  const { data, FE } = ctx;
+  const havePrices = Boolean(ctx.prices()?.size);
+  const levels = A.skills === 'esi' ? ctx.esiLevels() : null;
+  const budget = A.impBudget > 0 ? A.impBudget * 1e6 : Infinity;
+  return [...data.types.values()].filter((t) => {
+    const slot = t.attrs.get(IMPLANT_SLOT);
+    if (t.category !== FE.CAT.implant || !t.market || !(slot >= 1 && slot <= 10)) return false;
+    const p = implantPrice(t.id);
+    if (havePrices && (!p || p > budget)) return false;
+    return !levels || t.skills.every(([sk, l]) => (levels.get(sk) || 0) >= l);
+  });
+}
+
+// 植入体单独装上时最明显的变化（相对没有植入体），用于说明「这个植入体有什么用」
+const EFFECT_KEYS = [['dps', 'DPS'], ['ehp', 'EHP'], ['active', '主动坦'], ['remote', '远程维修'], ['mining', '采矿'], ['cargo', '货柜'], ['speed', '速度']];
+function effectText(r, r0) {
+  const out = [];
+  for (const [k, label] of EFFECT_KEYS) {
+    if (!(r0[k] > 0)) continue;
+    const d = r[k] / r0[k] - 1;
+    if (d > 0.001) out.push([d, `${label} +${(d * 100).toFixed(1)}%`]);
+  }
+  if (r0.align > 0 && r.align < r0.align * 0.999) out.push([1 - r.align / r0.align, `起跳 −${((1 - r.align / r0.align) * 100).toFixed(1)}%`]);
+  if (r.st.capacitor.stable && !r0.st.capacitor.stable) out.push([0.05, '电容稳定']);
+  return out.sort((a, b) => b[0] - a[0]).slice(0, 2).map((x) => x[1]).join('，') || '小幅提升';
+}
+
+async function recommendImplants(fit, progress) {
+  const base = clone(fit);
+  base.implants = [];
+  const r0 = evaluate(base);
+  if (!r0) return [];
+  const budget = A.impBudget > 0 ? A.impBudget * 1e6 : Infinity;
+  // 1. 单个植入体的提升
+  const bySlot = new Map();
+  const gainOf = new Map();
+  for (const t of implantCandidates()) {
+    const f = clone(base);
+    f.implants = [t.id];
+    const r = evaluate(f);
+    await tick(progress);
+    const gain = r ? r.score - r0.score : 0;
+    if (!(gain > 1e-4)) continue;
+    const slot = t.attrs.get(IMPLANT_SLOT);
+    const c = { t, slot, gain, cost: implantPrice(t.id), effect: effectText(r, r0) };
+    gainOf.set(t.id, c);
+    if (!bySlot.has(slot)) bySlot.set(slot, []);
+    bySlot.get(slot).push(c);
+  }
+  for (const list of bySlot.values()) {
+    list.sort((a, b) => b.gain - a.gain || a.cost - b.cost);
+    // 效果相同的（提升相差不到 0.1%）只留最便宜的
+    for (let i = list.length - 1; i > 0; i--) if (list.some((x, j) => j < i && Math.abs(x.gain - list[i].gain) < list[i].gain * 1e-3 && x.cost <= list[i].cost)) list.splice(i, 1);
+  }
+  if (!bySlot.size) return [];
+
+  // 在给定槽位里按提升从大到小、预算内逐槽挑
+  const greedy = (slots, left) => {
+    const out = [];
+    const order = [...slots].filter((s) => bySlot.has(s)).sort((a, b) => bySlot.get(b)[0].gain - bySlot.get(a)[0].gain);
+    for (const s of order) {
+      const c = bySlot.get(s).find((x) => x.cost <= left);
+      if (c) { out.push(c.t.id); left -= c.cost; }
+    }
+    return out;
+  };
+  const plans = [];
+  const addPlan = async (kind, ids, setName = '', setCount = 0) => {
+    const f = clone(base);
+    f.implants = ids;
+    const r = evaluate(f);
+    await tick(progress);
+    const cost = ids.reduce((sum, id) => sum + implantPrice(id), 0);
+    plans.push({ kind, implants: ids, r, cost, setName, setCount, gain: r.score - r0.score });
+  };
+  await addPlan('best', greedy(Array.from({ length: 10 }, (_, i) => i + 1), budget));
+  // 套装（1–6 号槽，同套每多装一件，套内其他件的效果都按套装系数放大）：
+  // 每个套装从空开始逐件加入「加上后得分最高」的一件（预算内），每加一件都和其余槽位的最佳植入体组成一个方案比较，
+  // 这样预算不够买整套时也会比较 3 件、4 件、5 件的组合
+  const sets = new Map();
+  for (const t of implantCandidates()) {
+    const m = SET_RE.exec(t.en || '');
+    if (!m) continue;
+    const key = m[1] + ' ' + m[2];
+    if (!sets.has(key)) sets.set(key, []);
+    sets.get(key).push(t);
+  }
+  const ALL_SLOTS = Array.from({ length: 10 }, (_, i) => i + 1);
+  for (const [, pieces] of sets) {
+    // 至少一件单独装就有提升，才值得试这个套装
+    if (pieces.length < 2 || !pieces.some((t) => gainOf.has(t.id))) continue;
+    const setName = pieces[0].name.replace(/[—\-－\s]*[^—\-－\s]+型$/, '');
+    let cur = [], cost = 0, curScore = r0.score;
+    const left = [...pieces];
+    while (left.length) {
+      let pick = null;
+      for (const t of left) {
+        const c = implantPrice(t.id);
+        if (cost + c > budget) continue;
+        const f = clone(base);
+        f.implants = [...cur, t.id];
+        const r = evaluate(f);
+        await tick(progress);
+        if (r && (!pick || r.score > pick.score)) pick = { t, score: r.score, c };
+      }
+      if (!pick || pick.score <= curScore + 1e-4) break;
+      cur = [...cur, pick.t.id];
+      cost += pick.c;
+      curScore = pick.score;
+      left.splice(left.indexOf(pick.t), 1);
+      if (cur.length >= 2) {
+        const used = new Set(cur.map((id) => ctx.data.types.get(id).attrs.get(IMPLANT_SLOT)));
+        await addPlan('set', [...cur, ...greedy(ALL_SLOTS.filter((x) => !used.has(x)), budget - cost)], setName, cur.length);
+      }
+    }
+  }
+  plans.sort((a, b) => b.r.score - a.r.score || a.cost - b.cost);
+  const best = plans[0];
+  const out = [best];
+  // 性价比：每槽取效果达到最佳 70% 的最便宜植入体
+  const value = [];
+  let left = budget;
+  for (const list of [...bySlot.values()].sort((a, b) => b[0].gain - a[0].gain)) {
+    const top = list[0].gain;
+    const c = list.filter((x) => x.gain >= top * VALUE_SHARE && x.cost <= left).sort((a, b) => a.cost - b.cost)[0];
+    if (c) { value.push(c.t.id); left -= c.cost; }
+  }
+  value.sort((a, b) => gainOf.get(a).slot - gainOf.get(b).slot);
+  const vf = clone(base);
+  vf.implants = value;
+  const vr = evaluate(vf);
+  const vcost = value.reduce((sum, id) => sum + implantPrice(id), 0);
+  if (vcost < best.cost * 0.8) out.push({ kind: 'value', implants: value, r: vr, cost: vcost, setName: '', gain: vr.score - r0.score });
+  // 最佳是套装时再给一个不用套装的方案；不是套装时给得分最高的套装方案，方便对比
+  const other = best.kind === 'set' ? plans.find((p) => p.kind === 'best') : plans.find((p) => p.kind === 'set');
+  if (other && !out.includes(other)) out.push(other);
+  for (const p of out) {
+    p.base = r0;
+    p.implants.sort((a, b) => (ctx.data.types.get(a).attrs.get(IMPLANT_SLOT) || 0) - (ctx.data.types.get(b).attrs.get(IMPLANT_SLOT) || 0));
+    p.items = p.implants.map((id) => ({ id, slot: ctx.data.types.get(id).attrs.get(IMPLANT_SLOT), cost: implantPrice(id), effect: (gainOf.get(id)?.effect || '') + (p.setName && SET_RE.test(ctx.data.types.get(id).en || '') && ctx.data.types.get(id).name.startsWith(p.setName) ? (gainOf.get(id) ? '，套装加成' : '套装加成') : '') || '小幅提升' }));
+  }
+  return out;
+}
+
+const PLAN_NAME = { best: '最佳植入体', set: '最佳植入体', value: '性价比方案' };
+const planTitle = (p, i) => (i === 0 ? PLAN_NAME[p.kind] : p.kind === 'set' ? '套装方案' : p.kind === 'best' ? '不用套装' : PLAN_NAME[p.kind]);
+
+// 植入体方案卡片：属性对比（相对不装植入体）+ 逐槽列表
+function implantPlanHtml(p, i, applyAttr) {
+  const { esc, formatNumber: num, formatISK: isk, data } = ctx;
+  const r = p.r, b = p.base;
+  const pct = (k) => (b[k] > 0 && r[k] / b[k] - 1 > 0.0005 ? `<small class="up"> +${((r[k] / b[k] - 1) * 100).toFixed(1)}%</small>` : '');
+  const roles = [...ROLES];
+  const stats = [
+    roles.includes('logi') ? `<div><span>远程维修</span><b>${r.remote.toFixed(0)}${pct('remote')}</b></div>` : '',
+    roles.includes('mining') ? `<div><span>采矿</span><b>${(r.mining * 60).toFixed(0)}<small> m³/分</small>${pct('mining')}</b></div>` : '',
+    roles.includes('hauler') ? `<div><span>货柜</span><b>${num(Math.round(r.cargo))}${pct('cargo')}</b></div>` : '',
+    r.paper >= 1 ? `<div><span>DPS</span><b>${r.dps.toFixed(0)}${pct('dps')}</b></div>` : '',
+    `<div><span>EHP</span><b>${num(Math.round(r.ehp))}${pct('ehp')}</b></div>`,
+    `<div><span>速度</span><b>${r.speed.toFixed(0)}${pct('speed')}</b></div>`,
+    A.goal === 'pve' || r.active > b.active * 1.001 ? `<div><span>主动坦</span><b>${r.active.toFixed(0)}${pct('active')}</b></div>` : '',
+    `<div><span>起跳</span><b>${r.align.toFixed(1)}<small> 秒</small>${b.align > r.align * 1.0005 ? `<small class="up"> −${((1 - r.align / b.align) * 100).toFixed(1)}%</small>` : ''}</b></div>`,
+    `<div><span>植入体估价</span><b>${p.cost ? isk(p.cost) : '—'}</b></div>`
+  ].join('');
+  const rows = p.items.map((x) => `<div class="fa-imp-row"><span class="fa-imp-slot">${x.slot}</span><img src="${IMG(x.id)}" alt="" width="24" height="24" loading="lazy"><span class="fa-imp-name">${esc(data.types.get(x.id)?.name || x.id)}<small>${esc(x.effect)}</small></span><span class="fa-imp-cost">${x.cost ? isk(x.cost) : '—'}</span></div>`).join('');
+  const title = planTitle(p, i) + (p.setName ? ` · ${esc(p.setName)}套装 ${p.setCount === 6 ? '整套' : p.setCount + ' 件'}` : '');
+  const note = p.kind === 'value' ? `每个槽位取效果达到最佳 ${VALUE_SHARE * 100}% 的最便宜植入体` : p.setName ? `同套装 ${p.setCount} 件，套内每件的效果按套装系数叠乘放大` : '';
+  return `<div class="fa-result${i === 0 ? ' best' : ''}">
+    <div class="fa-result-head"><b>${title}</b>${note ? `<span class="fa-note-inline">${note}</span>` : ''}<button type="button" class="btn btn-primary" ${applyAttr}="${i}">套用</button></div>
+    <div class="fa-stats">${stats}</div>
+    <div class="fa-imps">${rows}</div>
+  </div>`;
 }
 
 // ---------- 界面 ----------
@@ -844,6 +1047,8 @@ function renderForm() {
       + field('自修', seg('selfRep', [['auto', '自动'], ['yes', '自修'], ['no', '不自修']]), help.selfRep))}
     ${section('武器与装备', field('武器', seg('weapon', [['auto', '自动'], ['turret', '炮台'], ['missile', '导弹'], ['drone', '仅无人机']]), help.weapon)
       + field('装备等级', seg('meta', [['t1', 'T1'], ['t2', '+T2'], ['faction', '+势力'], ['deadspace', '+死亡空间'], ['officer', '+官员']]), help.meta))}
+    ${section('植入体', `<div class="fa-checks"><label class="pi-check"><input type="checkbox" data-fa-check="implants"${A.implants ? ' checked' : ''}><span>同时推荐植入体<small>装备配好后，再按同样的目标挑 1–10 号槽植入体（含套装）</small></span></label></div>`
+      + (A.implants ? field('植入体预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fa-num="impBudget"><span>百万 ISK</span></div>`, '整套植入体按全服均价计，0 为不限；高级套装往往要数十亿') : ''))}
     ${section('预算与技能', field('预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="10" value="${A.budget}" data-fa-num="budget"><span>百万 ISK</span></div>`, '整套装备（不含船）按全服均价计，0 为不限')
       + field('技能', seg('skills', [['max', '全 5 级'], ['esi', bound ? '按角色' : '按角色（未读取）']]), help.skills))}
     <button type="submit" class="btn btn-primary fa-go">${S.running ? '计算中…' : '开始装配'}</button>`;
@@ -867,6 +1072,7 @@ function onClick(e) {
     const fit = clone(r.fit);
     for (const s of ctx.FE.SLOTS) for (const m of fit.slots[s]) if (m) delete m.fixed;
     fit.name = `智能装配 · ${GOALS.find((g) => g[0] === A.goal)[1]}`;
+    if (!A.implants) fit.implants = [...(ctx.getFit().implants || [])];
     ctx.applyFit(fit);
     close();
     ctx.showToast('已套用智能装配', 'success');
@@ -876,7 +1082,7 @@ function onClick(e) {
 function onChange(e) {
   const t = e.target;
   if (t.dataset.faNum) { A[t.dataset.faNum] = Math.max(0, Number(t.value) || 0); ctx.store.setJSON(KEY, A); }
-  else if (t.dataset.faCheck) { A[t.dataset.faCheck] = t.checked; ctx.store.setJSON(KEY, A); }
+  else if (t.dataset.faCheck) { A[t.dataset.faCheck] = t.checked; ctx.store.setJSON(KEY, A); if (t.dataset.faCheck === 'implants') renderForm(); }
 }
 
 async function run() {
@@ -936,7 +1142,119 @@ function renderResults(results, { tankType, resistMode, roles, placed, selfRep }
       ${groups}
       ${charge ? `<div class="fa-slot"><span>弹药</span><div><em><img src="${IMG(charge)}" alt="" width="20" height="20" loading="lazy">${esc(name(charge))}</em></div></div>` : ''}
       ${drones ? `<div class="fa-slot"><span>无人机</span><div>${drones}</div></div>` : ''}
+      ${A.implants ? `<div class="fa-slot"><span>植入体</span><div>${x.implantPlan?.items.length ? x.implantPlan.items.map((it) => `<em title="${esc(name(it.id) + ' · ' + it.effect)}"><img src="${IMG(it.id)}" alt="" width="20" height="20" loading="lazy">${esc(name(it.id))}</em>`).join('') + `<small class="fa-imp-total">${x.implantPlan.cost ? isk(x.implantPlan.cost) : ''}</small>` : '<small class="fa-imp-total">没有能提升这套装配的植入体</small>'}</div></div>` : ''}
     </div>`;
   }).join('');
 }
 
+
+// ---------- 智能植入体（只推荐植入体，装备不动）----------
+const IS = { plans: [], running: false };
+
+export function openImplantAdvisor() {
+  const fit = ctx.getFit();
+  if (!fit) { ctx.showToast('请先选择舰船并装好装备', 'error'); return; }
+  let modal = $('fitImpModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'fitImpModal';
+    modal.className = 'modal fa-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.innerHTML = `<div class="modal-backdrop"></div><div class="modal-content fa-content fa-imp-content">
+      <div class="modal-header"><h3>智能植入体</h3><button class="modal-close" data-fi-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+      <div class="modal-body fa-body"><form class="fa-form" id="fiForm"></form><div class="fa-results" id="fiResults"></div></div></div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', onImpClick);
+    modal.addEventListener('change', (e) => {
+      const t = e.target;
+      if (t.dataset.fiNum) { A[t.dataset.fiNum] = Math.max(0, Number(t.value) || 0); ctx.store.setJSON(KEY, A); }
+    });
+    modal.addEventListener('submit', (e) => { e.preventDefault(); runImplants(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) { e.stopImmediatePropagation(); closeImp(); } }, true);
+  }
+  modal.hidden = false;
+  IS.plans = [];
+  renderImpForm();
+  $('fiResults').innerHTML = '<div class="fa-empty">保持当前装备不变，按目标挑 1–10 号槽的植入体。设好后点「推荐植入体」</div>';
+}
+
+function closeImp() {
+  S.cancel = true;
+  const m = $('fitImpModal');
+  if (m) m.hidden = true;
+}
+
+function renderImpForm() {
+  const { esc, data } = ctx;
+  const fit = ctx.getFit();
+  const ship = data.types.get(fit.ship);
+  const P = shipProfile(ship);
+  const roles = A.role === 'combat' ? [] : P.roles;
+  const job = roles.find((r) => ['logi', 'mining', 'hauler'].includes(r));
+  const seg = (k, items) => `<div class="segmented">${items.map(([v, l]) => `<button type="button" data-fi-set="${k}" data-v="${v}" class="${String(A[k]) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+  const section = (title, body) => `<section class="fa-sec"><h4>${title}</h4>${body}</section>`;
+  const bound = Boolean(ctx.esiLevels());
+  const mods = ctx.FE.SLOTS.reduce((n, s) => n + (fit.slots[s] || []).filter(Boolean).length, 0);
+  const cur = (fit.implants || []).length;
+  $('fiForm').innerHTML = `
+    <div class="fa-ship"><img src="${IMG(ship.id)}" alt="" width="32" height="32"><b>${esc(ship.name)}</b>${P.roles.map((r) => `<span class="fa-role">${ROLE_NAME[r]}</span>`).join('')}</div>
+    <p class="fa-note">当前装配 ${mods} 件装备${cur ? `，已装 ${cur} 个植入体（推荐时从空白算起，套用后替换）` : ''}${mods ? '' : '：还没有装备，建议先装好装备或用「智能装配」'}</p>
+    ${section('目标', job ? `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量与起跳时间' }[job]}挑植入体，其次是坦克</p>`
+      : `<div class="fa-goals">${GOALS.map(([k, l, d]) => `<button type="button" class="fa-goal${A.goal === k ? ' active' : ''}" data-fi-set="goal" data-v="${k}"><b>${l}</b><small>${d}</small></button>`).join('')}</div>`)}
+    ${section('预算与技能', `<div class="fa-field"><label>植入体预算</label><div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fi-num="impBudget"><span>百万 ISK</span></div><p class="fa-hint">整套植入体按全服均价计，0 为不限；高级套装往往要数十亿</p></div>
+      <div class="fa-field"><label>技能</label>${seg('skills', [['max', '全 5 级'], ['esi', bound ? '按角色' : '按角色（未读取）']])}<p class="fa-hint">${A.skills === 'esi' ? '只推荐角色技能够用的植入体' : '按全部技能 5 级计算'}</p></div>`)}
+    <button type="submit" class="btn btn-primary fa-go">${IS.running ? '计算中…' : '推荐植入体'}</button>`;
+}
+
+function onImpClick(e) {
+  if (e.target.closest('[data-fi-close]') || e.target.classList.contains('modal-backdrop')) { closeImp(); return; }
+  const set = e.target.closest('[data-fi-set]');
+  if (set) {
+    const k = set.dataset.fiSet;
+    if (k === 'skills' && set.dataset.v === 'esi' && !ctx.esiLevels()) { ctx.showToast('请先在装配页切换到「按 ESI 角色」读取技能', 'error'); return; }
+    A[k] = set.dataset.v;
+    ctx.store.setJSON(KEY, A);
+    renderImpForm();
+    return;
+  }
+  if (e.target.closest('[data-fa-cancel]')) { S.cancel = true; return; }
+  const apply = e.target.closest('[data-fi-apply]');
+  if (apply) {
+    const p = IS.plans[Number(apply.dataset.fiApply)];
+    const fit = clone(ctx.getFit());
+    fit.implants = [...p.implants];
+    ctx.applyFit(fit);
+    closeImp();
+    ctx.showToast(`已套用 ${p.implants.length} 个植入体`, 'success');
+  }
+}
+
+async function runImplants() {
+  if (IS.running) return;
+  IS.running = true;
+  S.cancel = false;
+  renderImpForm();
+  const box = $('fiResults');
+  box.innerHTML = `<div class="fa-progress"><p>正在比较植入体… <b id="fiEvals">0</b> 种组合</p><i><em id="fiBar"></em></i><button type="button" class="btn btn-ghost" data-fa-cancel>停止</button></div>`;
+  const t0 = performance.now();
+  try {
+    const fit = ctx.getFit();
+    setupScoring(ctx.data.types.get(fit.ship));
+    evals = 0;
+    const plans = await recommendImplants(fit, () => {
+      const el = $('fiEvals'); if (el) el.textContent = ctx.formatNumber(evals);
+      const bar = $('fiBar'); if (bar) bar.style.width = Math.min(95, evals / 10) + '%';
+    });
+    IS.plans = plans;
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    box.innerHTML = plans.length
+      ? `<p class="fa-meta">相对不装植入体 · ${ctx.formatNumber(evals)} 种组合 · ${secs} 秒</p>` + plans.map((p, i) => implantPlanHtml(p, i, 'data-fi-apply')).join('') +
+        '<p class="fa-hint fa-imp-foot">没有推荐植入体的槽位，可以装只加属性点的植入体（如 +5 记忆）加快技能训练。价格为全服均价。</p>'
+      : '<div class="fa-empty">没有能提升这套装配的植入体（预算内或技能允许的范围内）</div>';
+  } catch (err) {
+    box.innerHTML = `<div class="fa-empty">${err.message === 'cancelled' ? '已停止' : ctx.esc(err.message)}</div>`;
+  } finally {
+    IS.running = false;
+    renderImpForm();
+  }
+}
