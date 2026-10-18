@@ -4181,12 +4181,26 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .kb-eff i { display: block; height: 100%; background: var(--buy-color); }
 .kb-rank-ships { white-space: nowrap; }
 .kb-rank-ships img { border-radius: 4px; margin-right: 3px; vertical-align: middle; background: #0d1219; }
+.kb-rank-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; font-size: 0.75rem; }
+.kb-pager-size, .kb-pager-jump { display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--text-muted); white-space: nowrap; }
+.kb-pager-size select, .kb-pager-jump input { height: 28px; padding: 0 6px; border: 1px solid var(--border-primary); border-radius: var(--radius-sm); background: var(--bg-primary); color: var(--text-primary); font-size: 0.75rem; }
+.kb-pager-jump input { width: 64px; text-align: center; }
+#kbRankBody.is-loading .kb-rank-wrap { opacity: 0.5; pointer-events: none; transition: opacity var(--transition-fast); }
+.kb-pager { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px; margin: 14px 0 4px; }
+.kb-pager > button { min-width: 32px; height: 32px; padding: 0 8px; border: 1px solid var(--border-primary); border-radius: var(--radius-sm); background: var(--bg-secondary); color: var(--text-secondary); font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+.kb-pager > button:hover:not(:disabled) { border-color: var(--accent-primary); color: var(--accent-primary); }
+.kb-pager > button.active { border-color: var(--accent-primary); background: var(--accent-primary); color: #fff; font-weight: 600; }
+.kb-pager > button:disabled { opacity: 0.4; cursor: not-allowed; }
+.kb-pager-gap { padding: 0 4px; color: var(--text-muted); }
+.kb-pager-jump { margin-left: 8px; }
 @media (max-width: 768px) {
   .kb-rank-controls .segmented { flex: 1 1 100%; display: flex; }
   .kb-rank-controls .segmented button { flex: 1; }
   .kb-rank-filter { max-width: none; margin-left: 0; flex-basis: 100%; }
   .kb-hide-sm { display: none; }
   .kb-rank-table td, .kb-rank-table th { padding: 6px; }
+  .kb-pager > button { min-width: 30px; height: 30px; padding: 0 6px; }
+  .kb-pager-jump { flex-basis: 100%; justify-content: center; margin: 6px 0 0; }
   .kb-rank-who { max-width: 150px; }
   .kb-rank-who img { width: 26px; height: 26px; }
 }

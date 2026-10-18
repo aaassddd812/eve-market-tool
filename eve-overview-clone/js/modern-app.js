@@ -611,7 +611,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v27').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v28').then((m) => {
     m.initKbPage({
       esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,

@@ -375,24 +375,34 @@ async function loadBoard() {
   }
 }
 
-// ---------- 完整排行榜：#kb/rank/{side}/{by}/{metric}/{days} ----------
+// ---------- 完整排行榜：#kb/rank/{side}/{by}/{metric}/{days}/{page} ----------
+// 服务端分页（/leaderboard?offset=&limit=&q=），列出统计期内全部上榜的人物 / 军团 / 联盟；名称筛选在服务端全部条目里查找，排名不变
 const RANK_DAYS = [[1, '24 小时'], [7, '7 天'], [30, '30 天'], [60, '60 天']];
-const rankHash = (r) => `#kb/rank/${r.side}/${r.by}/${r.metric}/${r.days}`;
+const RANK_SIZES = [20, 50, 100];
+const RANK_SIZE_KEY = 'eve-kb-rank-size';
+const rankHash = (r) => `#kb/rank/${r.side}/${r.by}/${r.metric}/${r.days}${r.page > 1 ? '/' + r.page : ''}`;
+
+function rankSize() {
+  let v = 20;
+  try { v = Number(localStorage.getItem(RANK_SIZE_KEY)) || 20; } catch { /* 无痕模式等 */ }
+  return RANK_SIZES.includes(v) ? v : 20;
+}
 
 function parseRankHash(hash) {
-  const [, side, by, metric, days] = /^#kb\/rank(?:\/(\w+))?(?:\/(\w+))?(?:\/(\w+))?(?:\/(\d+))?/.exec(hash) || [];
+  const [, side, by, metric, days, page] = /^#kb\/rank(?:\/(\w+))?(?:\/(\w+))?(?:\/(\w+))?(?:\/(\d+))?(?:\/(\d+))?/.exec(hash) || [];
   return {
     side: side === 'kills' ? 'kills' : side === 'losses' ? 'losses' : S.lb.side,
     by: KIND_ZH[by] ? by : S.lb.by,
     metric: metric === 'count' ? 'count' : metric === 'value' ? 'value' : S.lb.metric,
-    days: RANK_DAYS.some(([d]) => d === Number(days)) ? Number(days) : 30
+    days: RANK_DAYS.some(([d]) => d === Number(days)) ? Number(days) : 30,
+    page: Math.max(1, Number(page) || 1)
   };
 }
 
 function renderRank(hash) {
   S.entity = null;
   const prev = S.rank;
-  S.rank = { ...parseRankHash(hash), sort: null, filter: prev?.filter || '', data: null, seq: (prev?.seq || 0) + 1 };
+  S.rank = { ...parseRankHash(hash), size: rankSize(), filter: prev?.filter || '', data: null, seq: (prev?.seq || 0) + 1 };
   $('kbMain').innerHTML = `
     ${BACK_LINK}
     <section class="kb-rank-page">
@@ -407,6 +417,17 @@ function renderRank(hash) {
   loadRank();
 }
 
+// 换条件 / 翻页：替换地址（不增加浏览记录），返回键直接回击杀首页
+function setRank(patch) {
+  const next = { ...S.rank, ...patch };
+  history.replaceState(null, '', rankHash(next));
+  if ('side' in patch || 'by' in patch || 'metric' in patch || 'days' in patch) { renderRank(location.hash); return; }
+  Object.assign(S.rank, patch, { seq: S.rank.seq + 1 });
+  document.querySelector('#kbView .kb-scroll')?.scrollTo({ top: 0 });
+  $('kbRankBody').classList.add('is-loading');
+  loadRank();
+}
+
 function renderRankControls() {
   const r = S.rank;
   const seg = (key, options) => `<div class="segmented" role="group">` +
@@ -417,23 +438,32 @@ function renderRankControls() {
     seg('metric', [['value', '按价值'], ['count', '按数量']]) +
     seg('days', RANK_DAYS) +
     `<label class="search-box kb-rank-filter"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      <input type="search" id="kbRankFilter" placeholder="筛选名称 / 所属" autocomplete="off" aria-label="筛选排行榜" value="${app.esc(r.filter)}"></label>`;
-  $('kbRankFilter').addEventListener('input', app.debounce((e) => { S.rank.filter = e.target.value; renderRankTable(); }, 150));
+      <input type="search" id="kbRankFilter" placeholder="在全部${KIND_ZH[r.by]}里查找名称" autocomplete="off" aria-label="查找名称" value="${app.esc(r.filter)}"></label>`;
+  $('kbRankFilter').addEventListener('input', app.debounce((e) => {
+    const v = e.target.value.trim();
+    if (v.length === 1 || v === S.rank.filter) return;   // 服务端至少两个字才查
+    S.rank.filter = v;
+    setRank({ page: 1 });
+  }, 300));
   const period = RANK_DAYS.find(([d]) => d === r.days)[1];
-  $('kbRankSub').textContent = `最近 ${period} · ${r.side === 'kills' ? '击杀' : '损失'}最多的${KIND_ZH[r.by]} · ${r.metric === 'value' ? '按价值' : '按数量'}排序 · 前 100 名`;
+  $('kbRankSub').textContent = `最近 ${period} · ${r.side === 'kills' ? '击杀' : '损失'}最多的${KIND_ZH[r.by]} · ${r.metric === 'value' ? '按价值' : '按数量'}排序`;
 }
 
 async function loadRank() {
   const r = S.rank;
   const seq = r.seq;
   try {
-    const data = await api(`leaderboard?days=${r.days}&side=${r.side}&by=${r.by}&metric=${r.metric}&limit=100&detail=1`);
+    const q = r.filter ? '&q=' + encodeURIComponent(r.filter) : '';
+    const data = await api(`leaderboard?days=${r.days}&side=${r.side}&by=${r.by}&metric=${r.metric}&offset=${(r.page - 1) * r.size}&limit=${r.size}${q}&detail=1`);
     if (S.rank?.seq !== seq) return;
     absorbNames(data.names);
     for (const row of data.rows) if (row.name) S.names.set(row.id, row.name);
+    if (data.first?.name) S.names.set(data.first.id, data.first.name);
     await loadTypes(data.rows.flatMap((row) => (row.ships || []).map((x) => x.ship_type_id)));
     if (S.rank?.seq !== seq) return;
     r.data = data;
+    // 页码超出（例如筛选后条目变少）时回到最后一页
+    if (data.matched != null && data.rows.length === 0 && data.matched > 0 && r.page > 1) { setRank({ page: Math.ceil(data.matched / r.size) }); return; }
     renderRankTable();
   } catch (error) {
     if (S.rank?.seq === seq && $('kbRankBody')) $('kbRankBody').innerHTML = '<p class="text-muted kb-empty">读取失败：' + app.esc(error.message) + '</p>';
@@ -443,49 +473,57 @@ async function loadRank() {
 // 效率：击毁价值 ÷ (击毁 + 损失价值)
 const rankEff = (row) => (row.destroyed + row.lost ? row.destroyed / (row.destroyed + row.lost) : null);
 
+function pagerHtml(page, pages) {
+  if (pages <= 1) return '';
+  const w = matchMedia('(max-width: 768px)').matches ? 1 : 2;   // 手机上当前页前后各显示 1 页
+  const nums = new Set([1, pages, ...Array.from({ length: w * 2 + 1 }, (_, i) => page - w + i)].filter((n) => n >= 1 && n <= pages));
+  let last = 0, items = '';
+  for (const n of [...nums].sort((a, b) => a - b)) {
+    if (n - last > 1) items += '<span class="kb-pager-gap">…</span>';
+    items += `<button type="button" data-rank-page="${n}" class="${n === page ? 'active' : ''}"${n === page ? ' aria-current="page"' : ''}>${n}</button>`;
+    last = n;
+  }
+  return `<nav class="kb-pager" aria-label="分页">
+      <button type="button" data-rank-page="${page - 1}"${page <= 1 ? ' disabled' : ''} aria-label="上一页">‹</button>${items}
+      <button type="button" data-rank-page="${page + 1}"${page >= pages ? ' disabled' : ''} aria-label="下一页">›</button>
+      <label class="kb-pager-jump">跳到 <input type="number" min="1" max="${pages}" value="${page}" data-rank-jump aria-label="跳到页码"> 页</label>
+    </nav>`;
+}
+
 function renderRankTable() {
   const box = $('kbRankBody');
   const r = S.rank;
   if (!box || !r?.data) return;
+  box.classList.remove('is-loading');
   const { rows, total } = r.data;
-  if (!rows.length) { box.innerHTML = '<p class="text-muted kb-empty">暂无数据</p>'; return; }
-  const detail = rows[0].kills != null;   // 旧版服务没有附加数据
-  const ranked = rows.map((row, i) => ({ ...row, rank: i + 1, eff: detail ? rankEff(row) : null }));
-  const q = r.filter.trim().toLowerCase();
-  let list = q ? ranked.filter((row) => [row.name || partyName(row.id), row.corporation_id && partyName(row.corporation_id), row.alliance_id && partyName(row.alliance_id)]
-    .some((t) => t && String(t).toLowerCase().includes(q))) : ranked;
-  if (r.sort) {
-    const { key, dir } = r.sort;
-    const val = (row) => row[key] ?? -1;
-    list = list.slice().sort((a, b) => (dir === 'asc' ? val(a) - val(b) : val(b) - val(a)));
-  }
+  const paged = r.data.matched != null;   // 旧版服务不支持分页，只返回前几名
+  const matched = paged ? r.data.matched : rows.length;
+  const pages = paged ? Math.max(1, Math.ceil(matched / r.size)) : 1;
+  const detail = rows.length ? rows[0].kills != null : paged;
   const fmtIsk = app.formatISK, fmtN = app.formatNumber;
-  const sumV = rows.reduce((t, x) => t + x.value, 0), sumN = rows.reduce((t, x) => t + x.count, 0);
-  const top = ranked[0];
   const side = r.side === 'kills' ? '击杀' : '损失';
+  const kind = KIND_ZH[r.by];
+  const first = r.data.first || (rows[0] && { ...rows[0] });
+  const sideTotal = r.data.side_total;
   const cards = `<div class="kb-summary-cards kb-rank-cards">
-      <div class="valuation-card ${r.side === 'kills' ? 'is-buy' : 'is-sell'}"><span class="valuation-label">前 ${rows.length} 名${side}合计</span>
-        <strong class="valuation-value">${fmtIsk(sumV)}<span class="unit">ISK</span></strong>
-        <span class="valuation-detail">${fmtN(sumN)} 次${total?.value ? ` · 占全服${r.side === 'kills' ? '损失' : ''} ${(sumV / total.value * 100).toFixed(1)}%` : ''}</span></div>
-      <div class="valuation-card"><span class="valuation-label">第 1 名</span>
-        <strong class="valuation-value kb-rank-first">${app.esc(top.name || partyName(top.id))}</strong>
-        <span class="valuation-detail">${r.metric === 'value' ? fmtIsk(top.value) + ' ISK · ' + fmtN(top.count) + ' 次' : fmtN(top.count) + ' 次 · ' + fmtIsk(top.value) + ' ISK'}</span></div>
+      <div class="valuation-card ${r.side === 'kills' ? 'is-buy' : 'is-sell'}"><span class="valuation-label">上榜${kind}</span>
+        <strong class="valuation-value">${fmtN(paged ? r.data.entities : rows.length)}<span class="unit">个</span></strong>
+        <span class="valuation-detail">${sideTotal ? `有${side}记录 · 合计 ${fmtIsk(sideTotal.value)} ISK` : `有${side}记录`}</span></div>
+      ${first ? `<div class="valuation-card"><span class="valuation-label">第 1 名</span>
+        <strong class="valuation-value kb-rank-first"><a class="kb-link" href="#kb/${r.by}/${first.id}" data-entity="${r.by}:${first.id}">${app.esc(first.name || partyName(first.id))}</a></strong>
+        <span class="valuation-detail">${r.metric === 'value' ? fmtIsk(first.value) + ' ISK · ' + fmtN(first.count) + ' 次' : fmtN(first.count) + ' 次 · ' + fmtIsk(first.value) + ' ISK'}</span></div>` : ''}
       ${total ? `<div class="valuation-card"><span class="valuation-label">全服 · 最近 ${RANK_DAYS.find(([d]) => d === r.days)[1]}</span>
         <strong class="valuation-value">${fmtIsk(total.value)}<span class="unit">ISK</span></strong>
         <span class="valuation-detail">${fmtN(total.count)} 次击毁</span></div>` : ''}
     </div>`;
-  const th = (key, label, cls = '') => {
-    if (!detail && key !== 'count' && key !== 'value') return '';
-    const active = r.sort?.key === key;
-    return `<th class="${cls}"><button type="button" data-rank-sort="${key}" class="${active ? 'active ' + r.sort.dir : ''}">${label}</button></th>`;
-  };
   const shipsHtml = (row) => (row.ships || []).map((x) => `<img src="${IMG(`types/${x.ship_type_id}/icon`, 32)}" alt="" width="24" height="24" loading="lazy" title="${app.esc(typeName(x.ship_type_id))} · ${fmtN(x.count)} 次">`).join('');
   const affHtml = (row) => [row.corporation_id && entityLink('corporation', row.corporation_id), row.alliance_id && entityLink('alliance', row.alliance_id)].filter(Boolean).join(' · ');
-  const body = list.map((row) => {
+  const body = rows.map((row, i) => {
+    const rank = row.rank ?? i + 1;
     const share = total?.value ? row.value / total.value : null;
-    const eff = row.eff;
+    const eff = detail ? rankEff(row) : null;
     return `<tr>
-      <td class="kb-rank-no"><span class="kb-rank${row.rank <= 3 ? ' top' : ''}">${row.rank}</span></td>
+      <td class="kb-rank-no"><span class="kb-rank${rank <= 3 ? ' top' : ''}">${rank}</span></td>
       <td><div class="kb-rank-who">
         <img src="${avatar(r.by, row.id, 64)}" alt="" width="32" height="32" loading="lazy">
         <span><a class="kb-link" href="#kb/${r.by}/${row.id}" data-entity="${r.by}:${row.id}">${app.esc(row.name || partyName(row.id))}</a>
@@ -500,15 +538,22 @@ function renderRankTable() {
       <td class="num">${fmtN(row.count)}</td>`}
     </tr>`;
   }).join('');
-  box.innerHTML = cards +
+  const from = (r.page - 1) * r.size + 1, to = from + rows.length - 1;
+  const info = paged
+    ? (matched ? `${r.filter ? `「${app.esc(r.filter)}」匹配 ${fmtN(matched)} 个 · ` : ''}第 ${fmtN(from)}–${fmtN(to)} 条，共 ${fmtN(matched)} 条` : '')
+    : '击杀记录服务版本较旧，只显示前几名';
+  const sizeSel = paged ? `<label class="kb-pager-size">每页 <select data-rank-size aria-label="每页条数">${RANK_SIZES.map((n) => `<option value="${n}"${n === r.size ? ' selected' : ''}>${n}</option>`).join('')}</select> 条</label>` : '';
+  const bar = `<div class="kb-rank-bar"><span class="text-muted">${info}</span>${sizeSel}</div>`;
+  box.innerHTML = cards + bar +
     `<div class="table-scroll kb-rank-wrap"><table class="kb-rank-table">
-      <thead><tr><th class="kb-rank-no">#</th><th>${KIND_ZH[r.by]}</th>
-        ${detail ? `${th('destroyed', '击杀', 'num')}${th('lost', '损失', 'num')}${th('eff', '效率', 'num kb-hide-sm')}${th('value', '占全服', 'num kb-hide-sm')}<th class="kb-hide-sm">${r.side === 'kills' ? '常驾舰船' : '常损舰船'}</th>`
-          : `${th('value', '价值', 'num')}${th('count', '次数', 'num')}`}
+      <thead><tr><th class="kb-rank-no">#</th><th>${kind}</th>
+        ${detail ? `<th class="num">击杀</th><th class="num">损失</th><th class="num kb-hide-sm">效率</th><th class="num kb-hide-sm">占全服</th><th class="kb-hide-sm">${r.side === 'kills' ? '常驾舰船' : '常损舰船'}</th>`
+          : '<th class="num">价值</th><th class="num">次数</th>'}
       </tr></thead>
-      <tbody>${body || `<tr><td colspan="7" class="text-muted kb-empty">没有匹配「${app.esc(r.filter)}」的条目</td></tr>`}</tbody>
+      <tbody>${body || `<tr><td colspan="7" class="text-muted kb-empty">${r.filter ? `没有名称包含「${app.esc(r.filter)}」的${kind}` : '暂无数据'}</td></tr>`}</tbody>
     </table></div>
-    <p class="text-muted valuation-note">${detail ? `击杀统计每次击杀只计一次（同一${KIND_ZH[r.by]}多人参与不重复计）；效率 = 击毁价值 ÷（击毁 + 损失价值）；所属为统计期内最近一次出现时的军团 / 联盟；` : '击杀记录服务版本较旧，只显示排行数据；'}${PRICE_NOTE}</p>`;
+    ${pagerHtml(r.page, pages)}
+    <p class="text-muted valuation-note">${detail ? `击杀统计每次击杀只计一次（同一${kind}多人参与不重复计）；效率 = 击毁价值 ÷（击毁 + 损失价值）；所属为统计期内最近一次出现时的军团 / 联盟；` : ''}${PRICE_NOTE}</p>`;
 }
 
 // ---------- 人物 / 军团 / 联盟 ----------
@@ -881,60 +926,11 @@ export function initKbPage(context) {
     const rk = e.target.closest('[data-rank]');
     if (rk && S.rank) {
       const [key, value] = rk.dataset.rank.split(':');
-      // 换条件用 replaceState，返回键直接回到击杀首页
-      const next = { ...S.rank, [key]: key === 'days' ? Number(value) : value };
-      history.replaceState(null, '', rankHash(next));
-      renderRank(location.hash);
+      setRank({ [key]: key === 'days' ? Number(value) : value, page: 1 });
       return;
     }
-    const rs = e.target.closest('[data-rank-sort]');
-    if (rs && S.rank) {
-      const key = rs.dataset.rankSort;
-      const cur = S.rank.sort;
-      S.rank.sort = cur?.key === key ? (cur.dir === 'desc' ? { key, dir: 'asc' } : null) : { key, dir: 'desc' };
-      renderRankTable();
-      return;
-    }
-    const brBattle = e.target.closest('[data-br-battle]');
-    if (brBattle) {
-      // 会战卡片：以会战星系与持续时间（前后各留 10 分钟）打开战场统计
-      const { brBattle: sys, start, end } = brBattle.dataset;
-      const t0 = Math.floor(new Date(start).getTime() / 1000 / 60) * 60 - 600;
-      const t1 = Math.min(Math.ceil(new Date(end).getTime() / 1000 / 60) * 60 + 600, Math.ceil(Date.now() / 1000 / 60) * 60);
-      navigate(`#kb/br/${sys}/${t0}-${t1}`);
-      return;
-    }
-    const battleMap = e.target.closest('[data-battle-map]');
-    if (battleMap) { app.openMapSystem(Number(battleMap.dataset.battleMap)); return; }
-    const loc = e.target.closest('[data-location], [data-pick-location]');
-    if (loc) {
-      e.preventDefault();
-      const [kind, id] = (loc.dataset.location || loc.dataset.pickLocation).split(':');
-      const name = kind === 'system' ? kb.systemLabel(Number(id)).name : partyName(Number(id));
-      input.value = '';
-      $('kbSuggest').hidden = true;
-      setFilter('location', { kind, id: Number(id), name });
-      return;
-    }
-    const ship = e.target.closest('[data-pick-ship]');
-    if (ship) {
-      const id = Number(ship.dataset.pickShip);
-      input.value = '';
-      $('kbSuggest').hidden = true;
-      setFilter('ship', { id, name: app.shipTypes().find((s) => s.id === id)?.name || typeName(id) });
-      return;
-    }
-    const clear = e.target.closest('[data-clear-filter]');
-    if (clear) { setFilter(clear.dataset.clearFilter, null); return; }
-    if (e.target.closest('[data-kb-home]')) { e.preventDefault(); navigate('#kb'); return; }
-    const lb = e.target.closest('[data-lb]');
-    if (lb) {
-      const [key, value] = lb.dataset.lb.split(':');
-      S.lb[key] = value;
-      renderBoardControls();
-      loadBoard();
-      return;
-    }
+    const pg = e.target.closest('[data-rank-page]');
+    if (pg && S.rank && !pg.disabled) { setRank({ page: Number(pg.dataset.rankPage) }); return; }
     const sort = e.target.closest('[data-sort]');
     if (sort && S.entity) {
       const key = sort.dataset.sort;
@@ -952,6 +948,18 @@ export function initKbPage(context) {
     }
     const kill = e.target.closest('[data-kill]');
     if (kill) openKill(Number(kill.dataset.kill));
+  });
+  $('kbView').addEventListener('change', (e) => {
+    if (!S.rank) return;
+    if (e.target.matches('[data-rank-size]')) {
+      const size = Number(e.target.value);
+      try { localStorage.setItem(RANK_SIZE_KEY, String(size)); } catch { /* 无痕模式等 */ }
+      // 保持当前页第一条仍在视野内
+      setRank({ size, page: Math.floor(((S.rank.page - 1) * S.rank.size) / size) + 1 });
+    } else if (e.target.matches('[data-rank-jump]')) {
+      const pages = Math.max(1, Math.ceil((S.rank.data?.matched || 0) / S.rank.size));
+      setRank({ page: Math.min(pages, Math.max(1, Number(e.target.value) || 1)) });
+    }
   });
   $('kbView').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.matches('.kb-row')) openKill(Number(e.target.dataset.kill));

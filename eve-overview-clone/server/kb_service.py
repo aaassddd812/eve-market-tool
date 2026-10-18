@@ -33,6 +33,7 @@
 """
 
 import argparse
+import array
 import collections
 import concurrent.futures
 import csv
@@ -810,6 +811,8 @@ class Api:
         self.km_lock = threading.Lock()
         self.zk_pages = collections.OrderedDict()   # zKillboard 页缓存（仅内存）
         self.mem_names = {}                         # 30 天以前击杀涉及的名称（仅内存，不写库）
+        self.lb_full = collections.OrderedDict()    # 完整排行榜（分页用）：(days, side, by, metric) -> (时间, ids, 次数, 价值)
+        self.lb_lock = threading.Lock()
 
     def names_for(self, ids):
         ids = [i for i in set(ids) if i]
@@ -1142,22 +1145,14 @@ class Api:
         side = "kills" if q.get("side") == "kills" else "losses"
         by = q.get("by") if q.get("by") in ENTITY_COL else "character"
         metric = "count" if q.get("metric") == "count" else "value"
+        if "offset" in q or q.get("q"):
+            return self.leaderboard_page(days, side, by, metric, q, force)
         limit = min(int(q.get("limit", 20)), 100)
         detail = q.get("detail") in ("1", "true")
 
         def run():
             since = int(time.time() - days * 86400)
-            vcol, acol = ENTITY_COL[by]
-            order = "n" if metric == "count" else "v"
-            if side == "losses":
-                sql = f"SELECT {vcol}, COUNT(*) n, SUM(value) v FROM killmails WHERE time >= ? AND {vcol} IS NOT NULL GROUP BY {vcol} ORDER BY {order} DESC LIMIT ?"
-            else:
-                # 只统计玩家攻击者；同一击杀中同军团 / 联盟的多人只计一次
-                # 范围几乎覆盖全表，顺序扫描比走索引后逐行回表快数倍
-                sql = f"""SELECT eid, COUNT(*) n, SUM(value) v FROM (
-                            SELECT DISTINCT a.km, a.{acol} AS eid, k.value FROM attackers a NOT INDEXED JOIN killmails k ON k.id = a.km
-                            WHERE a.time >= ? AND a.{acol} IS NOT NULL)
-                          GROUP BY eid ORDER BY {order} DESC LIMIT ?"""
+            sql = self.leaderboard_sql(side, by, metric)
             rows = self.store.conn().execute(sql, (since, limit)).fetchall()
             out = [{"id": r[0], "count": r[1], "value": round(r[2] or 0, 2)} for r in rows]
             result = {"side": side, "by": by, "metric": metric, "days": days, "rows": out}
@@ -1174,6 +1169,68 @@ class Api:
                 result["names"] = {str(i): names[i] for i in extra_ids if names.get(i)}
             return result
         return self.cached(("lb", days, side, by, metric, limit, detail), run, force)
+
+    @staticmethod
+    def leaderboard_sql(side, by, metric, limit=True):
+        vcol, acol = ENTITY_COL[by]
+        order = "n" if metric == "count" else "v"
+        tail = f"ORDER BY {order} DESC" + (" LIMIT ?" if limit else "")
+        if side == "losses":
+            return f"SELECT {vcol}, COUNT(*) n, SUM(value) v FROM killmails WHERE time >= ? AND {vcol} IS NOT NULL GROUP BY {vcol} {tail}"
+        return f"""SELECT eid, COUNT(*) n, SUM(value) v FROM (
+                    SELECT DISTINCT a.km, a.{acol} AS eid, k.value FROM attackers a NOT INDEXED JOIN killmails k ON k.id = a.km
+                    WHERE a.time >= ? AND a.{acol} IS NOT NULL)
+                  GROUP BY eid {tail}"""
+
+    # 完整排名（不限条数），供分页；只在内存里保留最近用过的几种组合
+    def leaderboard_full(self, days, side, by, metric, force=False):
+        key = (days, side, by, metric)
+        with self.lb_lock:
+            hit = self.lb_full.get(key)
+            if hit and not force and time.time() - hit[0] < CACHE_TTL:
+                self.lb_full.move_to_end(key)
+                return hit[1]
+            since = int(time.time() - days * 86400)
+            ids, counts, values = array.array("q"), array.array("q"), array.array("d")
+            for eid, n, v in self.store.conn().execute(self.leaderboard_sql(side, by, metric, limit=False), (since,)):
+                ids.append(eid)
+                counts.append(n)
+                values.append(v or 0)
+            self.lb_full[key] = (time.time(), (ids, counts, values))
+            while len(self.lb_full) > 12:
+                self.lb_full.popitem(last=False)
+            return ids, counts, values
+
+    # GET /leaderboard?offset=&limit=&q= ：分页的完整排行榜，每条带排名与附加数据；q 按名称筛选（排名不变）
+    def leaderboard_page(self, days, side, by, metric, q, force=False):
+        offset = max(0, int(q.get("offset", 0) or 0))
+        limit = min(max(int(q.get("limit", 20) or 20), 1), 100)
+        text = (q.get("q") or "").strip().lower()
+
+        def run():
+            ids, counts, values = self.leaderboard_full(days, side, by, metric, force)
+            c = self.store.conn()
+            if text:
+                match = {r[0] for r in c.execute("SELECT id FROM names WHERE lname LIKE ? AND category = ?", (f"%{text}%", by))}
+                idx = [i for i, eid in enumerate(ids) if eid in match]
+            else:
+                idx = range(len(ids))
+            out = [{"rank": i + 1, "id": ids[i], "count": counts[i], "value": round(values[i], 2)} for i in idx[offset:offset + limit]]
+            since = int(time.time() - days * 86400)
+            extra = self.leaderboard_detail(out, by, side, since) if out else []
+            first = {"id": ids[0], "count": counts[0], "value": round(values[0], 2)} if ids else None
+            names = self.names_for([r["id"] for r in out] + extra + ([first["id"]] if first else []))
+            for r in out:
+                r["name"] = names.get(r["id"])
+            if first:
+                first["name"] = names.get(first["id"])
+            n, total = c.execute("SELECT COUNT(*), COALESCE(SUM(value), 0) FROM killmails WHERE time >= ?", (since,)).fetchone()
+            return {"side": side, "by": by, "metric": metric, "days": days, "offset": offset, "limit": limit, "q": text,
+                    "entities": len(ids), "matched": len(idx), "first": first,
+                    "side_total": {"count": int(sum(counts)), "value": round(sum(values), 2)},
+                    "total": {"count": n, "value": round(total, 2)}, "rows": out,
+                    "names": {str(i): names[i] for i in extra if names.get(i)}}
+        return self.cached(("lbp", days, side, by, metric, offset, limit, text), run, force)
 
     # 完整排行榜的附加数据：另一侧的击杀 / 损失、最近所属军团与联盟、最常用 / 最常损失的舰船
     def leaderboard_detail(self, out, by, side, since):
