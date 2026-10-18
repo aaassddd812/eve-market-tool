@@ -3906,3 +3906,15 @@ button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outl
 @media (max-width: 768px) { .loc-region-btn span { display: none; } .loc-region-btn { padding: 0 10px; } }
 .struct-note { margin: 0 0 10px; padding: 8px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.75rem; color: var(--text-secondary); line-height: 1.6; }
 .struct-note.warn { color: var(--warning); }
+
+/* 市场订单：距角色跳数（绑定 ESI 且能读到位置时显示） */
+.orders-table .col-jumps { display: none; color: var(--text-secondary); }
+.has-jumps .orders-table .col-jumps { display: table-cell; }
+.orders-table td.col-jumps.is-here { color: var(--success, var(--buy-color)); font-weight: 600; }
+@media (max-width: 768px) {
+  /* 手机上显示跳数时，隐藏类型标签与总额，给地点名称留位置 */
+  .has-jumps .orders-table .loc-badge, .has-jumps .orders-table .col-total { display: none; }
+  .has-jumps .orders-table td, .has-jumps .orders-table thead th { padding-left: 6px; padding-right: 6px; }
+  .orders-table .col-jumps { padding-left: 2px; }
+  .orders-table .jumps-unit { display: none; }   /* 只显示数字，表头已写「跳数」 */
+}

@@ -1256,6 +1256,7 @@ async function loadMarketData(typeId) {
     ];
     resolveLocations(named).then(() => { if (seq === state.loadSeq) renderOrders(); });
     loadStructureOrders(typeId, seq);
+    refreshCharJumps().then((changed) => { if (changed && seq === state.loadSeq) renderOrders(); });
     getMarketPriceMap().then(() => { if (seq === state.loadSeq) renderAvgPrice(typeId); });
   } catch (error) {
     if (error.name === 'AbortError' || seq !== state.loadSeq) return;
@@ -1590,10 +1591,109 @@ function renderAvgPrice(typeId) {
 }
 
 function sortOrders(list, side) {
-  const { key, dir } = state.orderSort[side];
+  let { key, dir } = state.orderSort[side];
+  if (key === 'jumps' && !state.jumps) ({ key, dir } = { key: 'price', dir: side === 'sell' ? 'asc' : 'desc' });   // 解绑 ESI 后退回按价格
   const sign = dir === 'asc' ? 1 : -1;
+  const best = side === 'sell' ? 1 : -1;
+  if (key === 'jumps') {
+    // 同样跳数时价格更优的在前；到不了的（虫洞、未知星系）排最后
+    const jumps = new Map(list.map((o) => [o, orderJumps(o)]));
+    return [...list].sort((a, b) => {
+      const ja = jumps.get(a), jb = jumps.get(b);
+      if (ja !== jb) return ja === Infinity ? 1 : jb === Infinity ? -1 : (ja - jb) * sign;
+      return (a.price - b.price) * best;
+    });
+  }
   const value = (o) => key === 'total' ? o.price * o.volume_remain : key === 'issued' ? new Date(o.issued).getTime() : o[key];
   return [...list].sort((a, b) => (value(a) - value(b)) * sign);
+}
+
+// ===== 距角色跳数（绑定 ESI 时）=====
+// 角色位置缓存 1 分钟；星门图来自 map-data.json，从角色所在星系做一次广度优先搜索得到到各星系的最少跳数
+const CHAR_LOC_TTL = 60e3;
+const charLoc = { key: '', at: 0, promise: null };
+let gateGraphPromise = null;
+
+function gateGraph() {
+  if (!gateGraphPromise) {
+    gateGraphPromise = fetch('./map-data.json?v=v7r1').then((r) => r.json()).then((d) => {
+      const index = new Map(d.systems.map((sys, i) => [sys[0], i]));
+      const adj = d.systems.map(() => []);
+      for (const [a, b] of d.gates || []) { adj[a].push(b); adj[b].push(a); }
+      return { index, adj, systems: d.systems };
+    }).catch((error) => { gateGraphPromise = null; throw error; });
+  }
+  return gateGraphPromise;
+}
+
+function bfsJumps(graph, from) {
+  const dist = new Int16Array(graph.adj.length).fill(-1);
+  const start = graph.index.get(from);
+  if (start == null) return dist;
+  dist[start] = 0;
+  const queue = [start];
+  for (let h = 0; h < queue.length; h++) {
+    const u = queue[h];
+    for (const v of graph.adj[u]) if (dist[v] < 0) { dist[v] = dist[u] + 1; queue.push(v); }
+  }
+  return dist;
+}
+
+function orderJumps(o) {
+  const j = state.jumps;
+  const i = j && j.index.get(o.system_id);
+  const d = i == null ? -1 : j.dist[i];
+  return d < 0 ? Infinity : d;
+}
+
+// 返回 true 表示跳数有变化，需要重绘订单表
+function refreshCharJumps() {
+  const token = state.esiToken || readEsiToken();
+  if (!token?.access_token) {
+    const had = Boolean(state.jumps);
+    state.jumps = null;
+    return Promise.resolve(had);
+  }
+  const key = serverKey(String(token.character_id));
+  if (charLoc.key === key && (charLoc.promise || Date.now() - charLoc.at < CHAR_LOC_TTL)) return charLoc.promise || Promise.resolve(false);
+  charLoc.key = key;
+  charLoc.promise = (async () => {
+    try {
+      const [loc, graph] = await Promise.all([esiAuthFetch('/characters/' + token.character_id + '/location/'), gateGraph()]);
+      if (charLoc.key !== key) return false;
+      charLoc.at = Date.now();
+      if (state.jumps?.key === key && state.jumps.systemId === loc.solar_system_id) return false;
+      const i = graph.index.get(loc.solar_system_id);
+      state.jumps = { key, systemId: loc.solar_system_id, name: i == null ? '' : graph.systems[i][1], index: graph.index, dist: bfsJumps(graph, loc.solar_system_id) };
+      updateJumpsColumn();
+      return true;
+    } catch (error) {
+      // 没有位置权限或请求失败：不显示跳数，1 分钟后再试
+      charLoc.at = Date.now();
+      const had = Boolean(state.jumps);
+      state.jumps = null;
+      updateJumpsColumn();
+      return had;
+    } finally {
+      charLoc.promise = null;
+    }
+  })();
+  return charLoc.promise;
+}
+
+function updateJumpsColumn() {
+  const j = state.jumps;
+  document.querySelector('.orders-container')?.classList.toggle('has-jumps', Boolean(j));
+  $$('th.col-jumps').forEach((th) => {
+    th.title = j ? `到角色所在星系 ${j.name || ''} 的最少星门跳数，点击按由近到远排序` : '';
+  });
+}
+
+function jumpsCell(o) {
+  const d = state.jumps ? orderJumps(o) : null;
+  const text = d == null ? '' : d === Infinity ? '—' : d + '<span class="jumps-unit"> 跳</span>';
+  const title = d === 0 ? ' title="就在角色所在星系"' : d === Infinity ? ' title="星门无法到达"' : '';
+  return `<td class="num col-jumps${d === 0 ? ' is-here' : ''}"${title}>${text}</td>`;
 }
 
 // 地点前标注类型：NPC 空间站 / 玩家建筑（玩家建筑 ID ≥ 1e12）
@@ -1620,15 +1720,25 @@ function renderOrderTable(side, emptyText) {
   $(isBuy ? 'buySubtitle' : 'sellSubtitle').textContent = all.length > ORDER_ROW_LIMIT ? `显示前 ${ORDER_ROW_LIMIT} 单 · 点击行复制价格` : '点击行复制价格';
   const body = $(isBuy ? 'buyOrdersBody' : 'sellOrdersBody');
   if (!list.length) {
-    body.innerHTML = `<tr class="empty-row"><td colspan="5">${emptyText || (state.hubOnly ? '交易中心无' + (isBuy ? '买单' : '卖单') : '无' + (isBuy ? '买单' : '卖单'))}</td></tr>`;
+    body.innerHTML = `<tr class="empty-row"><td colspan="6">${emptyText || (state.hubOnly ? '交易中心无' + (isBuy ? '买单' : '卖单') : '无' + (isBuy ? '买单' : '卖单'))}</td></tr>`;
   } else {
     body.innerHTML = list.map((o) => `<tr data-price="${o.price}"${o.price === best ? ' class="best"' : ''}>
         <td class="num price">${formatPrice(o.price)}</td>
         <td class="num">${formatNumber(o.volume_remain)}</td>
-        <td class="num muted">${formatISK(o.price * o.volume_remain)}</td>
+        <td class="num muted col-total">${formatISK(o.price * o.volume_remain)}</td>
         ${locationCell(o)}
+        ${jumpsCell(o)}
         <td class="num muted col-date">${isBuy ? esc(rangeLabel(o.range)) : formatTime(o.issued)}</td>
       </tr>`).join('');
+  }
+  const unnamed = list.filter((o) => !state.locationCache.has(o.location_id) && !pendingLocations.has(o.location_id));
+  if (unnamed.length) {
+    unnamed.forEach((o) => pendingLocations.add(o.location_id));
+    const seq = state.loadSeq;
+    resolveLocations(unnamed).finally(() => {
+      unnamed.forEach((o) => pendingLocations.delete(o.location_id));
+      if (seq === state.loadSeq) renderOrderTable(side);
+    });
   }
   $$(`th.sortable[data-side="${side}"]`).forEach((th) => {
     const active = th.dataset.key === state.orderSort[side].key;
@@ -1637,6 +1747,8 @@ function renderOrderTable(side, emptyText) {
     th.setAttribute('aria-sort', active ? (state.orderSort[side].dir === 'asc' ? 'ascending' : 'descending') : 'none');
   });
 }
+
+const pendingLocations = new Set();
 
 function renderOrders(emptyText) {
   renderOrderTable('sell', emptyText);
@@ -1650,7 +1762,7 @@ function initOrderTables() {
       const side = th.dataset.side;
       const cur = state.orderSort[side];
       if (cur.key === th.dataset.key) cur.dir = cur.dir === 'asc' ? 'desc' : 'asc';
-      else state.orderSort[side] = { key: th.dataset.key, dir: th.dataset.key === 'price' && side === 'sell' ? 'asc' : 'desc' };
+      else state.orderSort[side] = { key: th.dataset.key, dir: (th.dataset.key === 'price' && side === 'sell') || th.dataset.key === 'jumps' ? 'asc' : 'desc' };
       renderOrderTable(side);
     };
     th.addEventListener('click', sort);
@@ -2011,6 +2123,7 @@ function writeEsiToken(token) {
   if (token) localStorage.setItem(serverKey('eve-esi-token'), JSON.stringify(token));
   else localStorage.removeItem(serverKey('eve-esi-token'));
   updateLocRegionBtn();
+  if (!token && state.jumps) { state.jumps = null; charLoc.key = ''; updateJumpsColumn(); renderOrders(); }
 }
 
 function setEsiStatus(message, kind) {

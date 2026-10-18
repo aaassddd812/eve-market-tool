@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v31">
+  <link rel="stylesheet" href="css/modern-style.css?v=v32">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -279,8 +279,9 @@
                             <tr>
                               <th class="num sortable" data-side="sell" data-key="price">价格</th>
                               <th class="num sortable" data-side="sell" data-key="volume_remain">数量</th>
-                              <th class="num sortable" data-side="sell" data-key="total">总额</th>
+                              <th class="num sortable col-total" data-side="sell" data-key="total">总额</th>
                               <th>地点</th>
+                              <th class="num sortable col-jumps" data-side="sell" data-key="jumps">跳数</th>
                               <th class="num sortable col-date" data-side="sell" data-key="issued">挂单</th>
                             </tr>
                           </thead>
@@ -300,8 +301,9 @@
                             <tr>
                               <th class="num sortable" data-side="buy" data-key="price">价格</th>
                               <th class="num sortable" data-side="buy" data-key="volume_remain">数量</th>
-                              <th class="num sortable" data-side="buy" data-key="total">总额</th>
+                              <th class="num sortable col-total" data-side="buy" data-key="total">总额</th>
                               <th>地点</th>
+                              <th class="num sortable col-jumps" data-side="buy" data-key="jumps">跳数</th>
                               <th class="num col-date">范围</th>
                             </tr>
                           </thead>
@@ -789,6 +791,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v37" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v38" type="module" data-cfasync="false"></script>
 </body>
 </html>
