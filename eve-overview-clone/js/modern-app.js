@@ -430,15 +430,18 @@ async function openCourier() {
   }
 }
 
-// 合同估价：首次进入时加载
+// 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v2').then((m) => {
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v4').then((m) => {
       m.initAppraisal({
         esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
         getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
-        regions: REGIONS
+        regions: REGIONS,
+        hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+        getCharacterSkills, getCharacterImplants,
+        openEsiBind: () => { switchView('profile'); openEsiModal(); }
       });
       return m;
     }).catch((error) => { appraisalLoading = null; throw error; });
@@ -446,8 +449,8 @@ async function openAppraisal() {
     if (!location.hash.startsWith('#appr')) history.replaceState(null, '', location.pathname + '#appr');
     m.showAppraisal();
   } catch (error) {
-    console.error('合同估价加载失败:', error);
-    showToast('合同估价加载失败：' + error.message, 'error', 4000);
+    console.error('估价页加载失败:', error);
+    showToast('估价页加载失败：' + error.message, 'error', 4000);
   }
 }
 
@@ -3940,7 +3943,7 @@ function init() {
   if (location.hash.startsWith('#pi')) switchView('pi');     // 行星工业
   if (location.hash.startsWith('#ind')) switchView('industry');   // 制造
   if (location.hash.startsWith('#lp')) switchView('lp');          // LP 商店
-  if (location.hash.startsWith('#appr')) switchView('appraisal'); // 合同估价
+  if (location.hash.startsWith('#appr')) switchView('appraisal'); // 估价
   if (location.hash.startsWith('#courier')) switchView('courier'); // 快递合同
   renderFavorites();
   loadServerStatus();
