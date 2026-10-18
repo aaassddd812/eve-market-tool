@@ -3914,6 +3914,19 @@ button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outl
 .ap-lv-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; font-size: 0.75rem; color: var(--text-muted); }
 .ap-lv-list span { display: flex; justify-content: space-between; gap: 6px; min-width: 0; }
 .ap-lv-list b { color: var(--text-primary); }
+.valuation-net { display: block; margin-top: 2px; color: var(--text-muted); }
+.valuation-net b { color: var(--text-secondary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat-gear { width: 12px; height: 12px; margin-left: 4px; vertical-align: -1px; opacity: 0.6; }
+#spreadCard { cursor: pointer; text-align: left; }
+#spreadValue.down { color: var(--sell-color); }
+.tf-modal { max-width: 440px; }
+.tf-modal .cr-fields label > span { width: auto; flex: 1; }
+.tf-modal .cr-fields .cr-input { width: 120px; flex: none; }
+.tf-modal .modal-body { display: flex; flex-direction: column; gap: 16px; }
+.tf-sec { display: flex; flex-direction: column; gap: 8px; }
+.tf-sec h4 { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0; font-size: 0.875rem; }
+.tf-sec h4 small { font-weight: 400; font-size: 0.75rem; color: var(--text-muted); }
+.tf-sec + .tf-sec { padding-top: 14px; border-top: 1px solid var(--border-primary); }
 .ap-settings { display: flex; flex-direction: column; gap: 10px; }
 .ap-lv-group { margin-top: 2px; font-size: 0.6875rem; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.04em; }
 .ap-fee { display: flex; gap: 16px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.75rem; color: var(--text-muted); }

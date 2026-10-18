@@ -1,14 +1,14 @@
 // ===== 估价 =====
 // 粘贴游戏里复制的合同物品列表（或仓库、装配、货柜清单），按交易中心挂单估价：
 // 每件物品的最低卖价、最高收价，合计「按卖单」「按收单」两种总价；收单量不够时另算按挂单深度能卖出的价值。
-// 交易税费：销售税 = 7.5% × (1 − 会计学 11%/级)；NPC 空间站中介费 = 3% − 经纪人关系学 0.3%/级 − 派系声望 × 0.03% − 军团声望 × 0.02%（最低 1%），
-//   玩家建筑中介费由建筑主人设定。卖给收单只交销售税，挂卖单另交中介费。
+// 技能与交易税费用全站共用的 trade-fees.js（市场详情、资产估值同一套设置）：卖给收单只交销售税，挂卖单另交中介费。
 // 化矿估价：按 reprocess-data.json（build_reprocess.mjs 从 SDE 生成）算再处理产出，技能可自定义或读取已绑定角色。
 //   矿石 / 冰矿 / 卫星矿：(50 + 改装件) × (1 + 安全等级) × (1 + 建筑加成) × (1 + 提炼学概论 3%) × (1 + 提炼效率理论 2%) × (1 + 对应矿石处理 2%) × (1 + 植入体)
 //   NPC 空间站基础 50%，不吃改装件 / 建筑 / 安全等级加成；其它物品按碎铁处理：50% × (1 + 碎铁处理技术 2%)。
 // 识别格式：制表符或两个以上空格分列，第一列物品名（游戏复制的名称后可能带 *），第二列数量；
 // 也支持「名称 x 数量」「数量 x 名称」「名称 数量」和单独一行物品名。
 import { SERVER } from './server.js?v=s1';
+import * as TF from './trade-fees.js?v=v1';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), regions,
           // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind
@@ -18,12 +18,10 @@ const ICON = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
 
 const A = { names: null, loading: null, orders: new Map(), result: null, hub: 10000002, view: 'market', rp: null, rpLoading: null, char: null };
 
-// 化矿设置：src 技能来源（custom 自定义 / char 角色）；station npc / athanor / tatara；rig 0 / 1(T1) / 3(T2)；
-// sec h / l / n（高安 / 低安 / 00 与虫洞）；imp 植入体加成 %；tax 再处理税 %；all 统一技能等级，lv 单项覆盖
-// 交易：market npc / struct（中介费按 NPC 空间站算或填玩家建筑费率）；fac / corp 派系、军团声望；broker 玩家建筑中介费 %
-const S = { src: 'custom', station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0, all: 5, lv: {}, market: 'npc', fac: 0, corp: 0, broker: 1 };
-const SKILL = { reproc: 3385, eff: 3389, scrap: 12196, accounting: 16622, brokerRel: 3446 };
-const TRADE_SKILLS = { 16622: '会计学', 3446: '经纪人关系学' };
+// 化矿设置：station npc / athanor / tatara；rig 0 / 1(T1) / 3(T2)；sec h / l / n（高安 / 低安 / 00 与虫洞）；imp 植入体加成 %；tax 再处理税 %
+const S = { station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0 };
+const SKILL = { reproc: 3385, eff: 3389, scrap: 12196 };
+const level = TF.level, fees = TF.fees, pct2 = TF.pct2;
 const SEC = { h: 0, l: 0.06, n: 0.12 };
 const STRUCT = { athanor: 0.02, tatara: 0.055 };
 const IMPLANTS = { 27175: 1, 27169: 2, 27174: 4 };   // 载诺 守财奴 提炼 RX-801 / 802 / 804
@@ -35,17 +33,13 @@ export function initAppraisal(context) {
   if (saved.view === 'reproc') A.view = 'reproc';
   if (saved.rp && typeof saved.rp === 'object') {
     const r = saved.rp;
-    if (['custom', 'char'].includes(r.src)) S.src = r.src;
     if (['npc', 'athanor', 'tatara'].includes(r.station)) S.station = r.station;
     if ([0, 1, 3].includes(r.rig)) S.rig = r.rig;
     if (r.sec in SEC) S.sec = r.sec;
     if ([0, 1, 2, 4].includes(r.imp)) S.imp = r.imp;
     if (Number.isFinite(r.tax)) S.tax = Math.min(100, Math.max(0, r.tax));
-    if (Number.isInteger(r.all) && r.all >= 0 && r.all <= 5) S.all = r.all;
-    if (['npc', 'struct'].includes(r.market)) S.market = r.market;
-    for (const k of ['fac', 'corp']) if (Number.isFinite(r[k])) S[k] = Math.min(10, Math.max(-10, r[k]));
-    if (Number.isFinite(r.broker)) S.broker = Math.min(100, Math.max(0, r.broker));
-    if (r.lv && typeof r.lv === 'object') for (const [k, v] of Object.entries(r.lv)) if (Number.isInteger(v) && v >= 0 && v <= 5) S.lv[k] = v;
+    // 旧版把技能与税费存在估价页里，迁移到共用设置
+    if (!TF.hasSaved() && (r.src || r.lv || r.market)) TF.update({ src: r.src, all: r.all, lv: r.lv || {}, market: r.market, fac: r.fac, corp: r.corp, broker: r.broker });
   }
 }
 
@@ -63,27 +57,12 @@ function loadReprocess() {
   return A.rpLoading;
 }
 
-// 技能等级：角色模式用 ESI 读到的生效等级（没学 = 0），自定义模式用单项设置或统一等级
-function level(id) {
-  if (S.src === 'char') return A.char ? (A.char.levels.get(Number(id)) || 0) : 0;
-  return S.lv[id] ?? S.all;
-}
-
 // 化矿率：skill 为物品的专属处理技能（0 = 碎铁处理）
 function yieldFor(skill) {
   if (!skill) return 0.5 * (1 + 0.02 * level(SKILL.scrap));
   const base = S.station === 'npc' ? 50 : (50 + S.rig) * (1 + SEC[S.sec]) * (1 + STRUCT[S.station]);
   return base / 100 * (1 + 0.03 * level(SKILL.reproc)) * (1 + 0.02 * level(SKILL.eff)) * (1 + 0.02 * level(skill)) * (1 + S.imp / 100);
 }
-// 交易税费（比例）：sales 销售税，broker 中介费
-function fees() {
-  const sales = 0.075 * (1 - 0.11 * level(SKILL.accounting));
-  const broker = S.market === 'struct'
-    ? S.broker / 100
-    : Math.max(0.01, 0.03 - 0.003 * level(SKILL.brokerRel) - 0.0003 * S.fac - 0.0002 * S.corp);
-  return { sales, broker };
-}
-const pct2 = (v) => (v * 100 + 1e-9).toFixed(2).replace(/0$/, '').replace(/\.0$/, '') + '%';
 const pct = (v) => (v * 100).toFixed(1).replace(/\.0$/, '') + '%';
 const rangePct = (a, b) => (pct(a) === pct(b) ? pct(a) : `${pct(a).slice(0, -1)}–${pct(b)}`);
 
@@ -345,7 +324,7 @@ function reprocHtml(R, rp) {
       <td class="num ap-sell">${m.sell == null ? '—' : ctx.formatISK(m.qty * m.sell)}</td>
     </tr>`).join('');
   const notes = [];
-  notes.push(`化矿率：${rp.oreYield != null ? `矿石 / 冰矿 ${rp.oreYield} · ` : ''}碎铁 ${pct(yieldFor(0))}（${S.station === 'npc' ? 'NPC 空间站' : S.station === 'athanor' ? '阿塔诺' : '塔塔拉'}${S.src === 'char' && A.char ? ' · ' + ctx.esc(A.char.name) + ' 的技能' : S.src === 'char' ? ' · <span class="ap-warn">角色技能未读取，按 0 级算</span>' : ''}）`);
+  notes.push(`化矿率：${rp.oreYield != null ? `矿石 / 冰矿 ${rp.oreYield} · ` : ''}碎铁 ${pct(yieldFor(0))}（${S.station === 'npc' ? 'NPC 空间站' : S.station === 'athanor' ? '阿塔诺' : '塔塔拉'}${TF.settings().src === 'char' ? (TF.character() ? ' · ' + ctx.esc(TF.character().name) + ' 的技能' : ' · <span class="ap-warn">角色技能未读取，按 0 级算</span>') : ''}）`);
   if (S.tax) notes.push(`已扣再处理税 ${S.tax}%（约 ${ctx.formatISK(rp.taxTotal)}）`);
   if (rp.leftover.length) notes.push(`${rp.leftover.length} 种物品有不足一批的零头不会化掉：${rp.leftover.slice(0, 4).map((r) => ctx.esc(r.name)).join('、')}${rp.leftover.length > 4 ? ' 等' : ''}`);
   if (rp.skip.length) notes.push(`${rp.skip.length} 种物品不能化矿：${rp.skip.slice(0, 6).map((r) => ctx.esc(r.name)).join('、')}${rp.skip.length > 6 ? ' 等' : ''}`);
@@ -394,42 +373,14 @@ function resultText() {
 
 // 设置面板：技能（交易与化矿共用）、交易税费、化矿设置
 const BASE_SKILLS = [SKILL.reproc, SKILL.eff, SKILL.scrap];
-const LEVELS = [0, 1, 2, 3, 4, 5];
 const segHtml = (name, items, disabled = false) => `<div class="segmented ap-seg" role="group">${items.map(([v, l]) => `<button type="button" data-ap-set="${name}" data-v="${v}" class="${String(S[name]) === String(v) ? 'active' : ''}"${disabled ? ' disabled' : ''}>${l}</button>`).join('')}</div>`;
-const skillName = (id) => ctx.esc(TRADE_SKILLS[id] || A.rp?.skills[id] || '技能 ' + id);
 
 function skillsHtml() {
   // 化矿技能只列出基础三项与当前物品用到的矿石处理技能（没有估价结果时列出全部）
   const used = new Set(A.result && A.rp ? A.result.rows.map((r) => A.rp.t[r.id]?.[1]).filter(Boolean) : Object.keys(A.rp?.skills || {}).map(Number));
   const oreSkills = Object.keys(A.rp?.skills || {}).map(Number).filter((id) => !BASE_SKILLS.includes(id) && used.has(id));
-  const groups = [['交易', Object.keys(TRADE_SKILLS).map(Number)], ['化矿', A.rp ? [...BASE_SKILLS, ...oreSkills] : []]].filter(([, ids]) => ids.length);
-  let body;
-  if (S.src === 'char') {
-    body = A.char
-      ? `<div class="ap-char"><b>${ctx.esc(A.char.name)}</b><button type="button" class="btn btn-ghost btn-sm" data-ap-char>重新读取</button></div>
-         ${groups.map(([t, ids]) => `<div class="ap-lv-group">${t}</div><div class="ap-lv-list">${ids.map((id) => `<span>${skillName(id)}<b>${level(id)}</b></span>`).join('')}</div>`).join('')}`
-      : `<div class="ap-char">${ctx.hasEsiToken() ? '<span class="text-muted">技能未读取，按 0 级算</span><button type="button" class="btn btn-primary btn-sm" data-ap-char>读取角色技能</button>' : '<span class="text-muted">还没绑定角色</span><button type="button" class="btn btn-primary btn-sm" data-ap-bind>绑定 ESI</button>'}</div>`;
-  } else {
-    const sel = (attr, v) => `<select class="cr-input" ${attr} aria-label="技能等级">${LEVELS.map((n) => `<option value="${n}"${v === n ? ' selected' : ''}>${n}</option>`).join('')}</select>`;
-    body = `<div class="cr-fields"><label><span>统一等级</span>${sel('data-ap-all', S.all)}</label></div>
-      ${groups.map(([t, ids]) => `<div class="ap-lv-group">${t}</div><div class="cr-fields">${ids.map((id) => `<label><span>${skillName(id)}</span>${sel(`data-ap-lv="${id}"`, level(id))}</label>`).join('')}</div>`).join('')}`;
-  }
-  return `<div class="ap-rp-row"><span>来源</span>${segHtml('src', [['custom', '自定义'], ['char', '角色技能']])}</div>${body}`;
-}
-
-function feeHtml() {
-  const f = fees();
-  const num = (attr, v, min, max, step, label) => `<input class="cr-input" type="number" min="${min}" max="${max}" step="${step}" value="${v}" ${attr} aria-label="${label}">`;
-  return `
-    <div class="ap-rp-row"><span>挂单地点</span>${segHtml('market', [['npc', 'NPC 空间站'], ['struct', '玩家建筑']])}</div>
-    <div class="cr-fields">
-      ${S.market === 'npc'
-        ? `<label><span>派系声望</span>${num('data-ap-num="fac"', S.fac, -10, 10, 0.01, '派系声望')}</label>
-           <label><span>军团声望</span>${num('data-ap-num="corp"', S.corp, -10, 10, 0.01, '军团声望')}</label>`
-        : `<label><span>建筑中介费 %</span>${num('data-ap-num="broker"', S.broker, 0, 100, 0.1, '建筑中介费')}</label>`}
-    </div>
-    <div class="ap-fee"><span>销售税 <b>${pct2(f.sales)}</b></span><span>中介费 <b>${pct2(f.broker)}</b></span></div>
-    <p class="ap-rp-tip">销售税 7.5% × (1 − 会计学 11%/级)；NPC 空间站中介费 3% − 经纪人关系学 0.3%/级 − 派系声望 × 0.03% − 军团声望 × 0.02%，最低 1%（声望填有效声望）。卖给收单只交销售税，挂卖单另交中介费。</p>`;
+  const named = (ids) => ids.map((id) => [id, A.rp.skills[id] || '技能 ' + id]);
+  return TF.skillFormHtml([['交易', TF.TRADE_SKILLS], ['化矿', A.rp ? named([...BASE_SKILLS, ...oreSkills]) : []]]);
 }
 
 function rpHtml() {
@@ -446,17 +397,16 @@ function rpHtml() {
 }
 
 function updateSummaries() {
-  const f = fees();
   const set = (id, t) => { const el = $(id); if (el) el.textContent = t; };
-  set('apSkSum', S.src === 'char' ? (A.char ? A.char.name : '角色技能未读取') : Object.keys(S.lv).length ? `自定义 · 统一 ${S.all} 级（有单项调整）` : `自定义 · 全部 ${S.all} 级`);
-  set('apFeeSum', `销售税 ${pct2(f.sales)} · 中介费 ${pct2(f.broker)}`);
+  set('apSkSum', TF.skillSummary());
+  set('apFeeSum', TF.summary());
   set('apRpSum', `矿石 ${A.rpResult?.oreYield ?? pct(yieldFor(60377))} · 碎铁 ${pct(yieldFor(0))}`);
 }
 
 function renderPanels() {
   const put = (id, html) => { const el = $(id); if (el) el.innerHTML = html; };
   put('apSkBody', skillsHtml());
-  put('apFeeBody', feeHtml());
+  put('apFeeBody', TF.feeFormHtml());
   if (A.rp) put('apRpBody', rpHtml());
   updateSummaries();
 }
@@ -465,22 +415,18 @@ function renderRp() {
   if (A.result) render(); else renderPanels();
 }
 
-async function loadChar(silent) {
+// 读到角色技能后，当前植入体里有提炼植入体时自动带上（需要 esi-clones.read_implants.v1，失败就保持手动设置）
+let implantsFor = null;
+async function syncImplants() {
+  const c = TF.character();
+  if (!c || implantsFor === c.id) return;
+  implantsFor = c.id;
   try {
-    const c = await ctx.getCharacterSkills();
-    A.char = c;
-    // 当前植入体里有提炼植入体时自动带上（需要 esi-clones.read_implants.v1，失败就保持手动设置）
-    try {
-      const imps = await ctx.getCharacterImplants();
-      const best = Math.max(0, ...(imps || []).map((id) => IMPLANTS[id] || 0));
-      S.imp = best;
-      save();
-    } catch { /* 没有植入体权限 */ }
-    if (!silent) ctx.showToast(`已读取 ${c.name} 的技能`, 'success');
-  } catch (e) {
-    if (!silent) ctx.showToast('读取角色技能失败：' + e.message, 'error', 4000);
-  }
-  renderRp();
+    const imps = await ctx.getCharacterImplants();
+    S.imp = Math.max(0, ...(imps || []).map((id) => IMPLANTS[id] || 0));
+    save();
+    renderRp();
+  } catch { /* 没有植入体权限 */ }
 }
 
 export function showAppraisal() {
@@ -549,28 +495,22 @@ export function showAppraisal() {
       const k = b.dataset.apSet;
       S[k] = k === 'rig' ? Number(b.dataset.v) : b.dataset.v;
       save();
-      if (k === 'src' && S.src === 'char' && !A.char && ctx.hasEsiToken()) { loadChar(true); return; }
       renderRp();
-      return;
     }
-    if (e.target.closest('[data-ap-char]')) { loadChar(false); return; }
-    if (e.target.closest('[data-ap-bind]')) ctx.openEsiBind();
   });
+  TF.bindForm(settings);
+  // 共用设置在任何页面改动后都刷新估价（页面隐藏时也只是重算 HTML）
+  TF.onChange(() => { renderRp(); syncImplants(); });
   settings.addEventListener('change', (e) => {
     const t = e.target;
-    if (t.matches('[data-ap-all]')) { S.all = Number(t.value); S.lv = {}; }
-    else if (t.matches('[data-ap-lv]')) S.lv[t.dataset.apLv] = Number(t.value);
-    else if (t.matches('[data-ap-imp]')) S.imp = Number(t.value);
+    if (t.matches('[data-ap-imp]')) S.imp = Number(t.value);
     else if (t.matches('[data-ap-tax]')) S.tax = Math.min(100, Math.max(0, Number(t.value) || 0));
-    else if (t.matches('[data-ap-num]')) {
-      const k = t.dataset.apNum, lim = k === 'broker' ? [0, 100] : [-10, 10];
-      S[k] = Math.min(lim[1], Math.max(lim[0], Number(t.value) || 0));
-    } else return;
+    else return;
     save();
     renderRp();
   });
   renderPanels();
-  if (S.src === 'char' && ctx.hasEsiToken()) loadChar(true);
+  if (TF.settings().src === 'char') TF.loadCharacter(true).then(syncImplants);
   loadReprocess().then(() => renderRp())
     .catch((e) => { $('apRpBody').innerHTML = `<div class="ap-warn">化矿数据载入失败：${ctx.esc(e.message)}</div>`; });
   loadNames().catch(() => {});

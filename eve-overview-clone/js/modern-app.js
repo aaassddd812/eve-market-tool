@@ -1,4 +1,5 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
+import * as TF from './trade-fees.js?v=v1';
 import { SERVER, SERVER_LIST, IS_TQ, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s1';
 
 // ===== 配置与常量 =====
@@ -434,7 +435,7 @@ async function openCourier() {
 let appraisalLoading = null;
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v4').then((m) => {
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v5').then((m) => {
       m.initAppraisal({
         esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
         getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -1605,9 +1606,18 @@ function renderStats() {
 
   if (minSell !== null && maxBuy !== null) {
     const spread = minSell - maxBuy;
-    setStat('spreadValue', formatStatPrice(spread), 'spreadMeta', `${((spread / maxBuy) * 100).toFixed(2)}%${spread < 0 ? ' · 买卖倒挂' : ''}`);
+    // 税后倒卖利润：挂收单买入付中介费，挂卖单卖出付销售税 + 中介费（技能与税费设置全站共用）
+    const f = TF.fees();
+    const cost = maxBuy * (1 + f.broker);
+    const profit = TF.flipProfit(maxBuy, minSell);
+    setStat('spreadValue', (profit > 0 ? '+' : '') + formatStatPrice(profit), 'spreadMeta',
+      `利润率 ${((profit / cost) * 100).toFixed(1)}% · ${spread < 0 ? '买卖倒挂' : '价差 ' + formatStatPrice(spread)}`);
+    $('spreadValue').classList.toggle('down', profit < 0);
+    $('spreadCard').title = `买卖价差 ${formatPrice(spread)} ISK（${((spread / maxBuy) * 100).toFixed(2)}%）\n每件税后利润 ${formatPrice(profit)} ISK\n按 ${formatPrice(maxBuy)} 挂收单买入（+中介费 ${TF.pct2(f.broker)}），按 ${formatPrice(minSell)} 挂卖单卖出（−销售税 ${TF.pct2(f.sales)} −中介费 ${TF.pct2(f.broker)}）\n${TF.skillSummary()} · 点击调整技能与税费`;
   } else {
     setStat('spreadValue', '—', 'spreadMeta', '数据不足');
+    $('spreadValue').classList.remove('down');
+    $('spreadCard').title = '点击调整技能与税费';
   }
 
   const recent = state.history.slice(0, 30);
@@ -1831,6 +1841,7 @@ function initOrderTables() {
   $('maxBuyCard').addEventListener('click', () => {
     if (state.bestPrices?.buy != null) copyText(state.bestPrices.buy.toFixed(2), '最高买价已复制');
   });
+  $('spreadCard').addEventListener('click', () => TF.openFeeDialog());
 
   const hub = $('hubOnly');
   hub.checked = state.hubOnly;
@@ -2418,6 +2429,8 @@ function valuationQuantity(quantity) {
   return Number.isFinite(value) && value > 0 ? value : 1;
 }
 
+// 估值卡片里的税后金额（技能与税费设置见 trade-fees.js）
+const netLine = (label, v) => '<span class="valuation-net">' + label + ' <b>' + formatISK(v) + '</b></span>';
 function valuationCard(label, value, detail, kind = '') {
   // 「1.23B ISK」拆成数值 + 较小的单位
   const m = /^(.*\S)\s+(ISK)$/.exec(value);
@@ -3077,6 +3090,8 @@ function assetToolbar(region, extra = '') {
       '<select id="valuationRegion" class="region-select" aria-label="估价市场">' +
         REGIONS.map((r) => `<option value="${r.id}"${r.id === region.id ? ' selected' : ''}>${esc(r.hub.name)} · ${esc(r.name)}</option>`).join('') +
       '</select></label>' +
+    '<button class="btn btn-ghost" id="tradeFeeBtn" title="技能与交易税费：估值卡片的税后金额按此计算">' +
+      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 5 5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg><span>' + esc(TF.summary()) + '</span></button>' +
     '<button class="btn" id="refreshPricesBtn" title="清除缓存并重新查询行情">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新行情</span></button>' +
   '</div>';
@@ -3088,6 +3103,7 @@ function bindAssetToolbar(region, tab = 'assets') {
     store.set('eve-valuation-region', e.target.value);
     renderProfileTab(tab);
   });
+  $('tradeFeeBtn')?.addEventListener('click', () => TF.openFeeDialog());
   $('refreshPricesBtn').addEventListener('click', () => {
     for (const key of [...state.hubPriceCache.keys()]) if (key.startsWith(region.id + ':')) state.hubPriceCache.delete(key);
     saveHubPriceCache();
@@ -3145,9 +3161,9 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
   box.innerHTML =
     assetToolbar(region, '<h3 class="asset-view-title">资产总估值</h3>') +
     '<div class="valuation-grid">' +
-      valuationCard('资产估值 · 最低卖价', formatISK(assetSell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
-      valuationCard('资产估值 · 最高收价', formatISK(assetBuy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
-      valuationCard('我的卖单', formatISK(sellOrderTotal) + ' ISK', sellOrders.length + ' 笔 · 剩余数量 × 委托价', 'is-order') +
+      valuationCard('资产估值 · 最低卖价', formatISK(assetSell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', assetSell * TF.netSell()), 'is-sell') +
+      valuationCard('资产估值 · 最高收价', formatISK(assetBuy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', assetBuy * TF.netBuy()), 'is-buy') +
+      valuationCard('我的卖单', formatISK(sellOrderTotal) + ' ISK', sellOrders.length + ' 笔 · 剩余数量 × 委托价' + netLine('全部成交税后', sellOrderTotal * TF.netBuy()), 'is-order') +
       valuationCard('我的收单', formatISK(buyOrderTotal) + ' ISK', buyOrders.length + ' 笔 · 剩余数量 × 委托价', 'is-order') +
       valuationCard('资产 + 订单合计', formatISK(assetSell + sellOrderTotal + buyOrderTotal) + ' ISK',
         '按收价：' + formatISK(assetBuy + sellOrderTotal + buyOrderTotal) + ' ISK · 不含钱包', 'is-total') +
@@ -3195,8 +3211,8 @@ function renderStationAssets(box, station, groups, { region }) {
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg><span>资产估值</span></button>' +
       '<h3 class="asset-view-title" title="' + esc(station.name) + '">' + esc(station.name) + '</h3>') +
     '<div class="valuation-grid station-grid">' +
-      valuationCard('本站估值 · 最低卖价', formatISK(station.sell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
-      valuationCard('本站估值 · 最高收价', formatISK(station.buy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
+      valuationCard('本站估值 · 最低卖价', formatISK(station.sell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', station.sell * TF.netSell()), 'is-sell') +
+      valuationCard('本站估值 · 最高收价', formatISK(station.buy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', station.buy * TF.netBuy()), 'is-buy') +
       valuationCard('物品', formatNumber(list.length) + ' 项', kinds + ' 种物品') +
       valuationCard('占总资产', total ? ((station.sell / total) * 100).toFixed(1) + '%' : '—', '按最低卖价估值') +
     '</div>' +
@@ -3849,6 +3865,7 @@ async function bindEsiCallback() {
     closeEsiModal();
     showToast('已绑定：' + identity.character_name, 'success');
     state.characterData = null;
+    TF.resetCharacter();
     switchView('profile');
   } catch (error) {
     setEsiStatus(error.message || '绑定失败', 'error');
@@ -3914,6 +3931,7 @@ function initESIModal() {
     if (!window.confirm('确定解绑当前角色？本地保存的 ESI 令牌将被清除。')) return;
     writeEsiToken(null);
     state.characterData = null;
+    TF.resetCharacter();
     renderProfileStationNav([]);
     loadProfile();
     showToast('已解绑，本地令牌已清除', 'success');
@@ -3924,6 +3942,16 @@ function initESIModal() {
 
 // ===== 初始化应用 =====
 function init() {
+  TF.initTradeFees({
+    esc, showToast, getCharacterSkills,
+    hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+    openEsiBind: () => { switchView('profile'); openEsiModal(); }
+  });
+  // 技能或税费改动：刷新市场详情的倒卖利润与资产估值
+  TF.onChange(() => {
+    if (state.selectedItem && state.orders) renderStats();
+    if (state.characterData && activeProfileTab() === 'assets') renderProfileTab('assets');
+  });
   initTheme();
   initServerSwitch();
   initBattleWatch();
