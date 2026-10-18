@@ -3904,3 +3904,5 @@ button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outl
 }
 .loc-region-btn { flex-shrink: 0; }
 @media (max-width: 768px) { .loc-region-btn span { display: none; } .loc-region-btn { padding: 0 10px; } }
+.struct-note { margin: 0 0 10px; padding: 8px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.75rem; color: var(--text-secondary); line-height: 1.6; }
+.struct-note.warn { color: var(--warning); }

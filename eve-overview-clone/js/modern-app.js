@@ -13,8 +13,10 @@ const REGIONS = [
   { id: 10000042, name: '美特伯里斯', en: 'Metropolis', hub: { id: 60005686, name: '赫克 VIII' } }
 ];
 
-// 「当前位置」得到的星域（不在上面列表里时）保存在这里：{ id, name, system }
+// 「当前位置」得到的星域保存在这里：{ id, name, system }
 const LOC_REGION_KEY = 'eve-loc-region';
+// 市场范围：'all' 全宇宙（默认）/ 'loc' 当前位置 / 星域 ID
+const MARKET_REGION_KEY = 'eve-market-region';
 
 // 空状态里的常用物品：PLEX、基础矿物、技能注入器
 const QUICK_PICK_IDS = [44992, 34, 35, 36, 37, 38, 39, 40, 40520, 40519];
@@ -46,7 +48,10 @@ const state = {
   theme: document.documentElement.getAttribute('data-theme') || 'dark',
   currentView: 'market',
   selectedItem: null,
-  regionId: allRegions().some((r) => r.id === Number(store.get('eve-region'))) ? Number(store.get('eve-region')) : 10000002,
+  // 市场范围：regionId 0 = 全宇宙；locMode = 角色当前所在星域（含可读的玩家建筑订单）
+  locMode: store.get(MARKET_REGION_KEY) === 'loc' && Boolean(locRegion()),
+  regionId: store.get(MARKET_REGION_KEY) === 'loc' && locRegion() ? locRegion().id : Number(store.get(MARKET_REGION_KEY)) || 0,
+  marketRegions: [],        // 全部星域 { id, name }（map-data.json）
   catalog: null,
   categories: new Map(),
   childGroups: new Map(),   // parentId -> 子分类数组（已排序）
@@ -67,7 +72,7 @@ const state = {
     sell: { key: 'price', dir: 'asc' },
     buy: { key: 'price', dir: 'desc' }
   },
-  hubOnly: store.get('eve-hub-only') === '1',
+  hubOnly: store.get('eve-hub-only-v2') === '1',
   chartDays: Number(store.get('eve-chart-days')) || 30,
   contentTab: store.get('eve-content-tab') || 'orders',
   loadSeq: 0,
@@ -1209,13 +1214,13 @@ async function loadMarketData(typeId) {
   $('updateTag').textContent = '更新中…';
 
   try {
-    const [orders, history] = await Promise.all([
+    const [orders, history] = regionId ? await Promise.all([
       fetchESIPaged(`/markets/${regionId}/orders/?order_type=all&type_id=${typeId}`, { signal: controller.signal }),
       fetchESI(`/markets/${regionId}/history/?type_id=${typeId}`, { signal: controller.signal }).catch((error) => {
         if (error.name === 'AbortError') throw error;
         return []; // 部分物品没有历史数据会返回 404
       })
-    ]);
+    ]) : await fetchUniverseMarket(typeId, controller.signal, (done, total) => { if (seq === state.loadSeq) $('updateTag').textContent = `更新中… ${done}/${total} 个星域`; });
     if (seq !== state.loadSeq) return;
 
     state.orders = orders || [];
@@ -1228,8 +1233,13 @@ async function loadMarketData(typeId) {
     $('updateTag').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
     setLoading(false);
 
-    // 地点名称与全服均价不阻塞首屏渲染
-    resolveLocations(state.orders).then(() => { if (seq === state.loadSeq) renderOrders(); });
+    // 地点名称与全服均价不阻塞首屏渲染。全宇宙订单多，只解析最便宜的卖单 / 最高的买单所在地（列表默认按价格排序）
+    const named = regionId ? state.orders : [
+      ...state.orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price).slice(0, 200),
+      ...state.orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price).slice(0, 200)
+    ];
+    resolveLocations(named).then(() => { if (seq === state.loadSeq) renderOrders(); });
+    loadStructureOrders(typeId, seq);
     getMarketPriceMap().then(() => { if (seq === state.loadSeq) renderAvgPrice(typeId); });
   } catch (error) {
     if (error.name === 'AbortError' || seq !== state.loadSeq) return;
@@ -1243,6 +1253,46 @@ async function loadMarketData(typeId) {
     renderOrders('加载失败，点击右上角刷新重试');
     renderHistory();
   }
+}
+
+// 全宇宙：ESI 订单只能按星域查，逐个星域查询后合并；
+// 价格历史取该物品订单最多的 12 个星域按日期汇总（成交量相加，均价按成交量加权，最高 / 最低取极值），其余星域成交很少
+async function fetchUniverseMarket(typeId, signal, onProgress) {
+  const regions = await loadMarketRegions();
+  const counts = new Map();
+  const orders = [];
+  let done = 0;
+  const queue = regions.map((r) => r.id);
+  onProgress(0, regions.length);
+  await Promise.all(Array.from({ length: 10 }, async () => {
+    while (queue.length) {
+      const id = queue.shift();
+      try {
+        const list = await fetchESIPaged(`/markets/${id}/orders/?order_type=all&type_id=${typeId}`, { signal });
+        if (list.length) { counts.set(id, list.length); orders.push(...list); }
+      } catch (error) {
+        if (error.name === 'AbortError') throw error;
+      }
+      onProgress(++done, regions.length);
+    }
+  }));
+  const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([id]) => id);
+  const lists = await Promise.all(top.map((id) => fetchESI(`/markets/${id}/history/?type_id=${typeId}`, { signal }).catch((error) => {
+    if (error.name === 'AbortError') throw error;
+    return [];
+  })));
+  const byDate = new Map();
+  for (const h of lists.flat()) {
+    const d = byDate.get(h.date);
+    if (!d) { byDate.set(h.date, { date: h.date, volume: h.volume, order_count: h.order_count, highest: h.highest, lowest: h.lowest, sum: h.average * h.volume }); continue; }
+    d.volume += h.volume;
+    d.order_count += h.order_count;
+    d.highest = Math.max(d.highest, h.highest);
+    d.lowest = Math.min(d.lowest, h.lowest);
+    d.sum += h.average * h.volume;
+  }
+  const history = [...byDate.values()].map(({ sum, ...d }) => ({ ...d, average: d.volume ? sum / d.volume : (d.highest + d.lowest) / 2 }));
+  return [orders, history];
 }
 
 async function resolveLocations(orders) {
@@ -1278,19 +1328,171 @@ async function resolveLocations(orders) {
   }
 }
 
-// 角色当前所在星域（绑定 ESI 后点「当前位置」）：常用交易中心之外的星域追加到选择器里，没有交易中心
-function allRegions() {
+// 角色当前所在星域（绑定 ESI 后点「当前位置」）：选择器里单独一项，不限交易中心，显示整个星域的订单
+function locRegion() {
   const loc = store.getJSON(serverKey(LOC_REGION_KEY), null);
-  return loc && !REGIONS.some((r) => r.id === loc.id) ? [...REGIONS, { id: loc.id, name: loc.name, hub: null, here: loc.system }] : REGIONS;
+  return loc?.id ? { id: loc.id, name: loc.name, hub: null, here: loc.system, loc: true } : null;
+}
+
+const UNIVERSE = { id: 0, name: '全宇宙', hub: null, all: true };
+
+// 全部星域（新伊甸 70 个，含只有玩家建筑市场的 00 星域；虫洞、深渊没有市场）
+let marketRegionsPromise = null;
+function loadMarketRegions() {
+  if (!marketRegionsPromise) {
+    marketRegionsPromise = fetch('./map-data.json?v=v7r1').then((r) => r.json()).then((d) => {
+      const used = new Set(d.systems.map((sys) => sys[6]));
+      state.marketRegions = d.regions.filter((r) => used.has(r[0])).map((r) => ({ id: r[0], name: r[1] }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+      return state.marketRegions;
+    }).catch((error) => { marketRegionsPromise = null; throw error; });
+  }
+  return marketRegionsPromise;
+}
+
+// ===== 玩家建筑市场（选了具体星域时）=====
+// 星域订单接口只含开放公共市场的建筑；其他建筑要用角色授权逐个读 /markets/structures/{id}/
+// （esi-markets.structure_markets.v1，且角色要有该建筑的停靠权限，否则 403）。
+// 只有铁壁 / 星城（含势力版）能装市场模块。建筑市场接口不分物品，读一次整个建筑缓存 5 分钟，换物品不再请求。
+const MARKET_STRUCTURE_TYPES = new Set([35833, 35834, 40340, 47512, 47513, 47514, 47515, 47516]);
+const STRUCT_MARKET_SCOPE = 'esi-markets.structure_markets.v1';
+const STRUCT_MARKET_TTL = 5 * 60e3;
+const STRUCT_MARKET_MAX_PAGES = 50;       // 超过 5 万条订单的大型市场跳过（这类一般是公开市场，订单已在星域订单里）
+const structMarkets = new Map();          // 建筑 ID -> { at, promise }
+let publicMarketIds = null;
+let systemRegionPromise = null;
+
+function hasScope(token, scope) {
+  const list = Array.isArray(token?.scopes) ? token.scopes : String(token?.scopes || '').split(/\s+/);
+  return list.includes(scope);
+}
+
+// 星系 → 星域（map-data.json 与星图共用缓存）
+function systemRegions() {
+  if (!systemRegionPromise) {
+    systemRegionPromise = fetch('./map-data.json?v=v7r1').then((r) => r.json())
+      .then((d) => new Map(d.systems.map((sys) => [sys[0], sys[6]])))
+      .catch((error) => { systemRegionPromise = null; throw error; });
+  }
+  return systemRegionPromise;
+}
+
+// 本星域内可能有市场的玩家建筑：公开市场建筑列表 + 本地已知的建筑（资产、订单、跳跃规划搜索过的），按所在星系筛选
+async function regionMarketStructures(regionId, onStatus) {
+  if (!publicMarketIds) publicMarketIds = fetchESI('/universe/structures/?filter=market').catch(() => { publicMarketIds = null; return []; });
+  const [regions, ids] = await Promise.all([systemRegions(), publicMarketIds, loadSharedStructures()]);
+  const map = structureNameMap();
+  const unknown = ids.filter((id) => !map.has(id));
+  if (unknown.length) {
+    onStatus(`识别玩家建筑所在星系（${unknown.length} 座，首次较慢）…`);
+    await resolveStructureNames(unknown);
+  }
+  const pub = new Set(ids);
+  return [...new Set([...ids, ...map.keys()])].filter((id) => {
+    const v = map.get(id);
+    return v?.s && regions.get(v.s) === regionId && (pub.has(id) || MARKET_STRUCTURE_TYPES.has(v.t));
+  });
+}
+
+// 读取一座建筑的全部订单，按物品分组；无权限返回 { denied }，订单太多返回 { tooBig }
+function structureMarket(id) {
+  const hit = structMarkets.get(id);
+  if (hit && Date.now() - hit.at < STRUCT_MARKET_TTL) return hit.promise;
+  const entry = { at: Date.now() };
+  entry.promise = (async () => {
+    const token = await ensureEsiToken();
+    const get = (page) => fetch(`${ESI_BASE}/markets/structures/${id}/?datasource=${SERVER.datasource}&page=${page}`, { headers: { Authorization: 'Bearer ' + token.access_token } });
+    const first = await get(1);
+    if (first.status === 403 || first.status === 404) return { denied: true };
+    if (!first.ok) throw new Error('ESI ' + first.status);
+    const pages = Number(first.headers.get('X-Pages')) || 1;
+    if (pages > STRUCT_MARKET_MAX_PAGES) return { tooBig: true };
+    const lists = [await first.json()];
+    for (let p = 2; p <= pages; p += 4) {
+      const batch = Array.from({ length: Math.min(4, pages - p + 1) }, (_, i) => get(p + i).then((r) => (r.ok ? r.json() : [])));
+      lists.push(...await Promise.all(batch));
+    }
+    const byType = new Map();
+    for (const o of lists.flat()) {
+      if (!byType.has(o.type_id)) byType.set(o.type_id, []);
+      byType.get(o.type_id).push(o);
+    }
+    return { byType };
+  })().catch((error) => { structMarkets.delete(id); throw error; });
+  structMarkets.set(id, entry);
+  return entry.promise;
+}
+
+// 选了具体星域（含当前位置）时：把本星域可读的玩家建筑订单并入订单簿（按订单号去重，公开市场建筑的订单本来就在星域订单里）
+async function loadStructureOrders(typeId, seq) {
+  const note = $('structOrdersNote');
+  const show = (text, warn = false) => {
+    if (seq !== state.loadSeq) return;
+    note.textContent = text;
+    note.classList.toggle('warn', warn);
+    note.hidden = !text;
+  };
+  const token = state.esiToken || readEsiToken();
+  if (!state.regionId || !token?.access_token) return show('');   // 全宇宙不读玩家建筑（星域太多）
+  if (!hasScope(token, STRUCT_MARKET_SCOPE)) return show('玩家建筑里的订单需要「建筑市场」授权（esi-markets.structure_markets.v1），重新绑定 ESI 后可查看', true);
+  try {
+    show('查找本星域的玩家建筑市场…');
+    const ids = await regionMarketStructures(state.regionId, show);
+    if (seq !== state.loadSeq) return;
+    if (!ids.length) return show('本星域没有找到可读取的玩家建筑市场');
+    let done = 0;
+    const results = [];
+    const queue = ids.slice();
+    show(`读取玩家建筑订单 0/${ids.length}`);
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      while (queue.length) {
+        const id = queue.shift();
+        results.push([id, await structureMarket(id).catch(() => null)]);
+        show(`读取玩家建筑订单 ${++done}/${ids.length}`);
+      }
+    }));
+    if (seq !== state.loadSeq) return;
+    const known = new Set(state.orders.map((o) => o.order_id));
+    const map = structureNameMap();
+    let readable = 0, withOrders = 0, added = 0, denied = 0, big = 0, failed = 0;
+    for (const [id, r] of results) {
+      if (!r) { failed++; continue; }
+      if (r.denied) { denied++; continue; }
+      if (r.tooBig) { big++; continue; }
+      readable++;
+      const list = r.byType.get(typeId) || [];
+      if (list.length) withOrders++;
+      for (const o of list) {
+        if (known.has(o.order_id)) continue;
+        known.add(o.order_id);
+        state.orders.push({ ...o, system_id: map.get(id)?.s });
+        added++;
+      }
+    }
+    if (added) {
+      renderStats();
+      renderOrders();
+      resolveLocations(state.orders).then(() => { if (seq === state.loadSeq) renderOrders(); });
+    }
+    show(`玩家建筑：读取 ${readable} 座市场，${withOrders} 座有本物品订单${added ? `（星域订单之外另有 ${added} 条，已并入）` : ''}`
+      + (denied ? `；${denied} 座没有停靠权限` : '') + (big ? `；${big} 座订单过多跳过` : '') + (failed ? `；${failed} 座读取失败` : ''));
+  } catch (error) {
+    show('读取玩家建筑订单失败：' + error.message, true);
+  }
 }
 
 function currentRegion() {
-  return allRegions().find((r) => r.id === state.regionId) || REGIONS[0];
+  if (state.locMode) return locRegion() || UNIVERSE;
+  if (!state.regionId) return UNIVERSE;
+  return REGIONS.find((r) => r.id === state.regionId)
+    || { id: state.regionId, name: state.marketRegions.find((r) => r.id === state.regionId)?.name || '星域 ' + state.regionId, hub: null };
 }
 
+// 「仅交易中心」：全宇宙时为五大交易中心，选了有交易中心的星域时为该交易中心
 function sideOrders(isBuy) {
-  const hubId = currentRegion().hub?.id;
-  return state.orders.filter((o) => o.is_buy_order === isBuy && (!state.hubOnly || !hubId || o.location_id === hubId));
+  const region = currentRegion();
+  const hubs = region.all ? new Set(REGIONS.map((r) => r.hub.id)) : region.hub ? new Set([region.hub.id]) : null;
+  return state.orders.filter((o) => o.is_buy_order === isBuy && (!state.hubOnly || !hubs || hubs.has(o.location_id)));
 }
 
 // 数值后附带较小的单位；占位符（— / …）不加单位
@@ -1458,7 +1660,7 @@ function initOrderTables() {
   hub.checked = state.hubOnly;
   hub.addEventListener('change', () => {
     state.hubOnly = hub.checked;
-    store.set('eve-hub-only', state.hubOnly ? '1' : '0');
+    store.set('eve-hub-only-v2', state.hubOnly ? '1' : '0');
     renderStats();
     renderOrders();
   });
@@ -1488,24 +1690,33 @@ function renderHistory() {
 
 // ===== 区域选择 =====
 function updateHubLabel() {
-  const hub = currentRegion().hub;
-  $('hubOnlyLabel').textContent = hub ? '仅' + hub.name : '仅交易中心（本星域未设）';
-  $('hubOnly').disabled = !hub;
+  const region = currentRegion();
+  $('hubOnlyLabel').textContent = region.all ? '仅五大交易中心' : region.hub ? '仅' + region.hub.name : state.locMode ? '整个星域（当前位置）' : '仅交易中心（本星域未设）';
+  $('hubOnly').disabled = !region.all && !region.hub;
 }
 
 function renderRegionOptions() {
   const select = $('regionSelect');
-  select.innerHTML = allRegions().map((r) => `<option value="${r.id}">${esc(r.name)} · ${r.hub ? esc(r.hub.name.split(' ')[0]) : '当前位置 ' + esc(r.here || '')}</option>`).join('');
-  select.value = state.regionId;
+  const loc = locRegion();
+  const others = state.marketRegions.filter((r) => !REGIONS.some((h) => h.id === r.id));
+  // 选中的星域还没载入列表时先补一项，避免显示成别的
+  if (state.regionId && !state.locMode && !REGIONS.some((r) => r.id === state.regionId) && !others.some((r) => r.id === state.regionId)) others.unshift(currentRegion());
+  select.innerHTML = '<option value="all">全宇宙（所有星域）</option>'
+    + (loc ? `<option value="loc">当前位置 · ${esc(loc.name)}（${esc(loc.here || '')}）</option>` : '')
+    + `<optgroup label="主要交易中心">${REGIONS.map((r) => `<option value="${r.id}">${esc(r.name)} · ${esc(r.hub.name.split(' ')[0])}</option>`).join('')}</optgroup>`
+    + (others.length ? `<optgroup label="其他星域">${others.map((r) => `<option value="${r.id}">${esc(r.name)}</option>`).join('')}</optgroup>` : '');
+  select.value = state.locMode ? 'loc' : state.regionId ? String(state.regionId) : 'all';
 }
 
 function initRegionSelect() {
   const select = $('regionSelect');
   renderRegionOptions();
   updateHubLabel();
+  loadMarketRegions().then(renderRegionOptions).catch(() => {});
   select.addEventListener('change', () => {
-    state.regionId = Number(select.value);
-    store.set('eve-region', state.regionId);
+    state.locMode = select.value === 'loc';
+    state.regionId = state.locMode ? locRegion().id : Number(select.value) || 0;
+    store.set(MARKET_REGION_KEY, select.value);
     updateHubLabel();
     if (state.selectedItem) loadMarketData(state.selectedItem.id);
   });
@@ -1537,13 +1748,11 @@ async function useLocationRegion() {
     const con = await fetchESI(`/universe/constellations/${sys.constellation_id}/`);
     const regionId = con.region_id;
     if (regionId >= 11000000) throw new Error(`${sys.name} 在虫洞里，虫洞没有市场`);
-    let name = REGIONS.find((r) => r.id === regionId)?.name;
-    if (!name) {
-      name = (await fetchESI(`/universe/regions/${regionId}/?language=zh`)).name;
-      store.setJSON(serverKey(LOC_REGION_KEY), { id: regionId, name, system: sys.name });
-    }
+    const name = REGIONS.find((r) => r.id === regionId)?.name || (await fetchESI(`/universe/regions/${regionId}/?language=zh`)).name;
+    store.setJSON(serverKey(LOC_REGION_KEY), { id: regionId, name, system: sys.name });
+    state.locMode = true;
     state.regionId = regionId;
-    store.set('eve-region', regionId);
+    store.set(MARKET_REGION_KEY, 'loc');
     renderRegionOptions();
     updateHubLabel();
     showToast(`已切换到 ${name}（${token.character_name || '角色'}在 ${sys.name}）`, 'success', 2600);
