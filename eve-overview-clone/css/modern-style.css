@@ -2212,8 +2212,6 @@ td.loc {
 .kb-board-value small { font-size: 0.6875rem; color: var(--text-muted); }
 
 /* 人物 / 军团 / 联盟 */
-.kb-back { display: inline-block; margin-bottom: 12px; font-size: 0.8125rem; color: var(--text-secondary); }
-.kb-back:hover { color: var(--accent-primary); }
 .kb-entity-head { display: flex; align-items: center; gap: 16px; margin-bottom: var(--spacing-lg); padding: 18px 20px; border: 1px solid var(--border-primary); border-radius: var(--radius-xl); background: var(--bg-secondary); box-shadow: var(--shadow-sm); }
 .kb-entity-head > img { border-radius: 12px; background: #0d1219; flex-shrink: 0; }
 .kb-entity-head > div { flex: 1; min-width: 0; }
@@ -3050,6 +3048,7 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .kb-br-back svg { width: 16px; height: 16px; transition: transform var(--transition-fast); }
 .kb-br-back:hover { background: var(--accent-primary); color: #fff; }
 .kb-br-back:hover svg { transform: translateX(-3px); }
+.kb-back-btn { display: inline-flex; align-items: center; margin-bottom: 14px; }
 .kb-br-head h2 { font-size: 1.25rem; font-weight: 700; }
 .kb-br-head .text-muted { font-size: 0.8125rem; }
 .kb-br-form { display: flex; flex-direction: column; gap: 14px; padding: 16px; border: 1px solid var(--border-primary); border-radius: var(--radius-lg); background: var(--bg-secondary); margin-bottom: var(--spacing-lg); }
@@ -4145,3 +4144,49 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .fa-note-inline { font-size: 0.71875rem; color: var(--text-muted); }
 .fa-imp-total { align-self: center; font-size: 0.71875rem; color: var(--text-muted); }
 .fa-imp-foot { margin-top: 4px; }
+
+/* ===== 击杀 · 完整排行榜 ===== */
+.kb-board-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.kb-board-head .kb-section-title { margin-bottom: 0; }
+.kb-board-more { flex: none; font-size: 0.75rem; color: var(--accent-primary); white-space: nowrap; }
+.kb-board-more:hover { text-decoration: underline; }
+.kb-rank-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.kb-rank-head h2 { font-size: 1.25rem; font-weight: 700; }
+.kb-rank-head span { font-size: 0.8125rem; }
+.kb-rank-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+.kb-rank-filter { flex: 1; min-width: 180px; max-width: 280px; margin-left: auto; }
+.kb-rank-cards { margin-bottom: 12px; }
+.kb-rank-first { font-size: 1.125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-rank-wrap { border: 1px solid var(--border-primary); border-radius: var(--radius-lg); background: var(--bg-secondary); }
+.kb-rank-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.kb-rank-table th { padding: 8px 10px; text-align: left; font-size: 0.6875rem; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border-primary); white-space: nowrap; }
+.kb-rank-table th.num { text-align: right; }
+.kb-rank-table th button { font: inherit; color: inherit; }
+.kb-rank-table th button.active { color: var(--text-primary); }
+.kb-rank-table th button.desc::after { content: ' ↓'; }
+.kb-rank-table th button.asc::after { content: ' ↑'; }
+.kb-rank-table td { padding: 7px 10px; border-bottom: 1px solid var(--border-primary); vertical-align: middle; }
+.kb-rank-table tbody tr:last-child td { border-bottom: 0; }
+.kb-rank-table tbody tr:hover { background: var(--bg-hover); }
+.kb-rank-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.kb-rank-table td.num b { display: block; font-weight: 600; }
+.kb-rank-table td.num small { display: block; font-size: 0.6875rem; color: var(--text-muted); }
+.kb-rank-table .kb-rank-no { width: 36px; text-align: center; }
+.kb-rank-who { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.kb-rank-who img { border-radius: 6px; background: #0d1219; flex: none; }
+.kb-rank-who > span { display: flex; flex-direction: column; min-width: 0; }
+.kb-rank-who > span > a { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-rank-who small { font-size: 0.6875rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-eff { display: inline-block; width: 48px; height: 4px; margin-right: 6px; vertical-align: middle; border-radius: 2px; background: color-mix(in srgb, var(--sell-color) 35%, transparent); overflow: hidden; }
+.kb-eff i { display: block; height: 100%; background: var(--buy-color); }
+.kb-rank-ships { white-space: nowrap; }
+.kb-rank-ships img { border-radius: 4px; margin-right: 3px; vertical-align: middle; background: #0d1219; }
+@media (max-width: 768px) {
+  .kb-rank-controls .segmented { flex: 1 1 100%; display: flex; }
+  .kb-rank-controls .segmented button { flex: 1; }
+  .kb-rank-filter { max-width: none; margin-left: 0; flex-basis: 100%; }
+  .kb-hide-sm { display: none; }
+  .kb-rank-table td, .kb-rank-table th { padding: 6px; }
+  .kb-rank-who { max-width: 150px; }
+  .kb-rank-who img { width: 26px; height: 26px; }
+}

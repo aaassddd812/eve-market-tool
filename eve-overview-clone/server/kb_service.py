@@ -1143,6 +1143,7 @@ class Api:
         by = q.get("by") if q.get("by") in ENTITY_COL else "character"
         metric = "count" if q.get("metric") == "count" else "value"
         limit = min(int(q.get("limit", 20)), 100)
+        detail = q.get("detail") in ("1", "true")
 
         def run():
             since = int(time.time() - days * 86400)
@@ -1158,10 +1159,69 @@ class Api:
                             WHERE a.time >= ? AND a.{acol} IS NOT NULL)
                           GROUP BY eid ORDER BY {order} DESC LIMIT ?"""
             rows = self.store.conn().execute(sql, (since, limit)).fetchall()
-            names = self.names_for([r[0] for r in rows])
-            return {"side": side, "by": by, "metric": metric, "days": days,
-                    "rows": [{"id": r[0], "name": names.get(r[0]), "count": r[1], "value": round(r[2] or 0, 2)} for r in rows]}
-        return self.cached(("lb", days, side, by, metric, limit), run, force)
+            out = [{"id": r[0], "count": r[1], "value": round(r[2] or 0, 2)} for r in rows]
+            result = {"side": side, "by": by, "metric": metric, "days": days, "rows": out}
+            extra_ids = []
+            if detail and out:
+                extra_ids = self.leaderboard_detail(out, by, side, since)
+                c = self.store.conn()
+                n, total = c.execute("SELECT COUNT(*), COALESCE(SUM(value), 0) FROM killmails WHERE time >= ?", (since,)).fetchone()
+                result["total"] = {"count": n, "value": round(total, 2)}
+            names = self.names_for([r["id"] for r in out] + extra_ids)
+            for r in out:
+                r["name"] = names.get(r["id"])
+            if detail:
+                result["names"] = {str(i): names[i] for i in extra_ids if names.get(i)}
+            return result
+        return self.cached(("lb", days, side, by, metric, limit, detail), run, force)
+
+    # 完整排行榜的附加数据：另一侧的击杀 / 损失、最近所属军团与联盟、最常用 / 最常损失的舰船
+    def leaderboard_detail(self, out, by, side, since):
+        vcol, acol = ENTITY_COL[by]
+        c = self.store.conn()
+        ids = [r["id"] for r in out]
+        marks = ",".join("?" * len(ids))
+        kills = {eid: (n, v) for eid, n, v in c.execute(
+            f"""SELECT eid, COUNT(*), SUM(value) FROM (
+                  SELECT DISTINCT a.km, a.{acol} AS eid, k.value FROM attackers a JOIN killmails k ON k.id = a.km
+                  WHERE a.{acol} IN ({marks}) AND a.time >= ?) GROUP BY eid""", (*ids, since))}
+        losses = {eid: (n, v) for eid, n, v in c.execute(
+            f"SELECT {vcol}, COUNT(*), SUM(value) FROM killmails WHERE {vcol} IN ({marks}) AND time >= ? GROUP BY {vcol}", (*ids, since))}
+        # 最近一次出现时的所属（受害者与攻击者两边取较晚的一条；SQLite 的 MAX() 聚合会带出同一行的其它列）
+        aff = {}
+        if by != "alliance":
+            up = ("v_corp", "v_alliance", "corp", "alliance") if by == "character" else (None, "v_alliance", None, "alliance")
+            vsel = ", ".join(x or "NULL" for x in up[:2])
+            asel = ", ".join(x or "NULL" for x in up[2:])
+            for eid, corp, ally, t in c.execute(f"SELECT {vcol}, {vsel}, MAX(time) FROM killmails WHERE {vcol} IN ({marks}) AND time >= ? GROUP BY {vcol}", (*ids, since)):
+                aff[eid] = (t, corp, ally)
+            for eid, corp, ally, t in c.execute(f"SELECT {acol}, {asel}, MAX(time) FROM attackers WHERE {acol} IN ({marks}) AND time >= ? GROUP BY {acol}", (*ids, since)):
+                if eid not in aff or t > aff[eid][0]:
+                    aff[eid] = (t, corp, ally)
+        # 排行这一侧最常见的舰船：损失榜看损失的舰船，击杀榜看攻击时驾驶的舰船（太空舱除外）
+        if side == "losses":
+            ship_sql = f"SELECT {vcol}, ship_type, COUNT(*) n FROM killmails WHERE {vcol} IN ({marks}) AND time >= ? AND ship_type NOT IN (670, 33328) GROUP BY {vcol}, ship_type"
+        else:
+            ship_sql = f"SELECT {acol}, ship, COUNT(DISTINCT km) n FROM attackers WHERE {acol} IN ({marks}) AND time >= ? AND ship IS NOT NULL AND ship NOT IN (0, 670, 33328) GROUP BY {acol}, ship"
+        ships = {}
+        for eid, ship, n in c.execute(ship_sql, (*ids, since)):
+            ships.setdefault(eid, []).append((n, ship))
+        extra = set()
+        for r in out:
+            k, l = kills.get(r["id"], (0, 0)), losses.get(r["id"], (0, 0))
+            r.update(kills=k[0], destroyed=round(k[1] or 0, 2), losses=l[0], lost=round(l[1] or 0, 2))
+            if r["id"] in aff:
+                _, corp, ally = aff[r["id"]]
+                if corp:
+                    r["corporation_id"] = corp
+                    extra.add(corp)
+                if ally:
+                    r["alliance_id"] = ally
+                    extra.add(ally)
+            top = sorted(ships.get(r["id"], []), reverse=True)[:3]
+            if top:
+                r["ships"] = [{"ship_type_id": t, "count": n} for n, t in top]
+        return list(extra)
 
     # GET /search
     def search(self, q):

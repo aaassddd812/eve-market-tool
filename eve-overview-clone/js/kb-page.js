@@ -10,6 +10,8 @@ const API = '/api/kb/';
 const IMG = (path, size) => `https://images.evetech.net/${path}?size=${size}`;
 const PRICE_NOTE = '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）；旗舰等吉他没有卖单的物品，按全服公开合同扣除附带物品后的最低价估算。';
 const KIND_ZH = { character: '人物', corporation: '军团', alliance: '联盟' };
+// 子页面顶部的返回按钮，与战场统计页同款
+const BACK_LINK = '<a class="btn kb-br-back kb-back-btn" href="#kb" data-kb-home><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span>返回击杀记录</span></a>';
 
 const S = {
   names: new Map(),          // 玩家角色 / 军团 / 联盟原名
@@ -17,6 +19,7 @@ const S = {
   filters: { ship: null, location: null },
   feed: [], cursor: null, feedSeq: 0, boardSeq: 0,
   lb: { side: 'losses', by: 'character', metric: 'value' },
+  rank: null,                // 完整排行榜：{ side, by, metric, days, sort, filter, data, seq }
   entity: null,              // { kind, id, stats, info, lifetime, side, feed, cursor, sort }
   status: null
 };
@@ -168,7 +171,8 @@ async function renderHome() {
         <button class="btn kb-more" id="kbMore" hidden>加载更多</button>
       </section>
       <aside class="kb-section kb-board">
-        <h3 class="kb-section-title">排行榜 · 最近 30 天</h3>
+        <div class="kb-board-head"><h3 class="kb-section-title">排行榜 · 最近 30 天</h3>
+          <a class="kb-board-more" href="#kb/rank" data-kb-rank title="查看前 100 名的击杀、损失、效率与常用舰船">完整排行榜 ›</a></div>
         <div class="kb-board-controls" id="kbBoardControls"></div>
         <div id="kbBoard">${skBoard(10)}</div>
       </aside>
@@ -371,6 +375,142 @@ async function loadBoard() {
   }
 }
 
+// ---------- 完整排行榜：#kb/rank/{side}/{by}/{metric}/{days} ----------
+const RANK_DAYS = [[1, '24 小时'], [7, '7 天'], [30, '30 天'], [60, '60 天']];
+const rankHash = (r) => `#kb/rank/${r.side}/${r.by}/${r.metric}/${r.days}`;
+
+function parseRankHash(hash) {
+  const [, side, by, metric, days] = /^#kb\/rank(?:\/(\w+))?(?:\/(\w+))?(?:\/(\w+))?(?:\/(\d+))?/.exec(hash) || [];
+  return {
+    side: side === 'kills' ? 'kills' : side === 'losses' ? 'losses' : S.lb.side,
+    by: KIND_ZH[by] ? by : S.lb.by,
+    metric: metric === 'count' ? 'count' : metric === 'value' ? 'value' : S.lb.metric,
+    days: RANK_DAYS.some(([d]) => d === Number(days)) ? Number(days) : 30
+  };
+}
+
+function renderRank(hash) {
+  S.entity = null;
+  const prev = S.rank;
+  S.rank = { ...parseRankHash(hash), sort: null, filter: prev?.filter || '', data: null, seq: (prev?.seq || 0) + 1 };
+  $('kbMain').innerHTML = `
+    ${BACK_LINK}
+    <section class="kb-rank-page">
+      <div class="kb-rank-head">
+        <h2>排行榜</h2>
+        <span class="text-muted" id="kbRankSub"></span>
+      </div>
+      <div class="kb-rank-controls" id="kbRankControls"></div>
+      <div id="kbRankBody">${skCards(3)}${skRows(12)}</div>
+    </section>`;
+  renderRankControls();
+  loadRank();
+}
+
+function renderRankControls() {
+  const r = S.rank;
+  const seg = (key, options) => `<div class="segmented" role="group">` +
+    options.map(([v, label]) => `<button type="button" data-rank="${key}:${v}" class="${String(r[key]) === String(v) ? 'active' : ''}">${label}</button>`).join('') + '</div>';
+  $('kbRankControls').innerHTML =
+    seg('side', [['losses', '损失最多'], ['kills', '击杀最多']]) +
+    seg('by', [['character', '人物'], ['corporation', '军团'], ['alliance', '联盟']]) +
+    seg('metric', [['value', '按价值'], ['count', '按数量']]) +
+    seg('days', RANK_DAYS) +
+    `<label class="search-box kb-rank-filter"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+      <input type="search" id="kbRankFilter" placeholder="筛选名称 / 所属" autocomplete="off" aria-label="筛选排行榜" value="${app.esc(r.filter)}"></label>`;
+  $('kbRankFilter').addEventListener('input', app.debounce((e) => { S.rank.filter = e.target.value; renderRankTable(); }, 150));
+  const period = RANK_DAYS.find(([d]) => d === r.days)[1];
+  $('kbRankSub').textContent = `最近 ${period} · ${r.side === 'kills' ? '击杀' : '损失'}最多的${KIND_ZH[r.by]} · ${r.metric === 'value' ? '按价值' : '按数量'}排序 · 前 100 名`;
+}
+
+async function loadRank() {
+  const r = S.rank;
+  const seq = r.seq;
+  try {
+    const data = await api(`leaderboard?days=${r.days}&side=${r.side}&by=${r.by}&metric=${r.metric}&limit=100&detail=1`);
+    if (S.rank?.seq !== seq) return;
+    absorbNames(data.names);
+    for (const row of data.rows) if (row.name) S.names.set(row.id, row.name);
+    await loadTypes(data.rows.flatMap((row) => (row.ships || []).map((x) => x.ship_type_id)));
+    if (S.rank?.seq !== seq) return;
+    r.data = data;
+    renderRankTable();
+  } catch (error) {
+    if (S.rank?.seq === seq && $('kbRankBody')) $('kbRankBody').innerHTML = '<p class="text-muted kb-empty">读取失败：' + app.esc(error.message) + '</p>';
+  }
+}
+
+// 效率：击毁价值 ÷ (击毁 + 损失价值)
+const rankEff = (row) => (row.destroyed + row.lost ? row.destroyed / (row.destroyed + row.lost) : null);
+
+function renderRankTable() {
+  const box = $('kbRankBody');
+  const r = S.rank;
+  if (!box || !r?.data) return;
+  const { rows, total } = r.data;
+  if (!rows.length) { box.innerHTML = '<p class="text-muted kb-empty">暂无数据</p>'; return; }
+  const detail = rows[0].kills != null;   // 旧版服务没有附加数据
+  const ranked = rows.map((row, i) => ({ ...row, rank: i + 1, eff: detail ? rankEff(row) : null }));
+  const q = r.filter.trim().toLowerCase();
+  let list = q ? ranked.filter((row) => [row.name || partyName(row.id), row.corporation_id && partyName(row.corporation_id), row.alliance_id && partyName(row.alliance_id)]
+    .some((t) => t && String(t).toLowerCase().includes(q))) : ranked;
+  if (r.sort) {
+    const { key, dir } = r.sort;
+    const val = (row) => row[key] ?? -1;
+    list = list.slice().sort((a, b) => (dir === 'asc' ? val(a) - val(b) : val(b) - val(a)));
+  }
+  const fmtIsk = app.formatISK, fmtN = app.formatNumber;
+  const sumV = rows.reduce((t, x) => t + x.value, 0), sumN = rows.reduce((t, x) => t + x.count, 0);
+  const top = ranked[0];
+  const side = r.side === 'kills' ? '击杀' : '损失';
+  const cards = `<div class="kb-summary-cards kb-rank-cards">
+      <div class="valuation-card ${r.side === 'kills' ? 'is-buy' : 'is-sell'}"><span class="valuation-label">前 ${rows.length} 名${side}合计</span>
+        <strong class="valuation-value">${fmtIsk(sumV)}<span class="unit">ISK</span></strong>
+        <span class="valuation-detail">${fmtN(sumN)} 次${total?.value ? ` · 占全服${r.side === 'kills' ? '损失' : ''} ${(sumV / total.value * 100).toFixed(1)}%` : ''}</span></div>
+      <div class="valuation-card"><span class="valuation-label">第 1 名</span>
+        <strong class="valuation-value kb-rank-first">${app.esc(top.name || partyName(top.id))}</strong>
+        <span class="valuation-detail">${r.metric === 'value' ? fmtIsk(top.value) + ' ISK · ' + fmtN(top.count) + ' 次' : fmtN(top.count) + ' 次 · ' + fmtIsk(top.value) + ' ISK'}</span></div>
+      ${total ? `<div class="valuation-card"><span class="valuation-label">全服 · 最近 ${RANK_DAYS.find(([d]) => d === r.days)[1]}</span>
+        <strong class="valuation-value">${fmtIsk(total.value)}<span class="unit">ISK</span></strong>
+        <span class="valuation-detail">${fmtN(total.count)} 次击毁</span></div>` : ''}
+    </div>`;
+  const th = (key, label, cls = '') => {
+    if (!detail && key !== 'count' && key !== 'value') return '';
+    const active = r.sort?.key === key;
+    return `<th class="${cls}"><button type="button" data-rank-sort="${key}" class="${active ? 'active ' + r.sort.dir : ''}">${label}</button></th>`;
+  };
+  const shipsHtml = (row) => (row.ships || []).map((x) => `<img src="${IMG(`types/${x.ship_type_id}/icon`, 32)}" alt="" width="24" height="24" loading="lazy" title="${app.esc(typeName(x.ship_type_id))} · ${fmtN(x.count)} 次">`).join('');
+  const affHtml = (row) => [row.corporation_id && entityLink('corporation', row.corporation_id), row.alliance_id && entityLink('alliance', row.alliance_id)].filter(Boolean).join(' · ');
+  const body = list.map((row) => {
+    const share = total?.value ? row.value / total.value : null;
+    const eff = row.eff;
+    return `<tr>
+      <td class="kb-rank-no"><span class="kb-rank${row.rank <= 3 ? ' top' : ''}">${row.rank}</span></td>
+      <td><div class="kb-rank-who">
+        <img src="${avatar(r.by, row.id, 64)}" alt="" width="32" height="32" loading="lazy">
+        <span><a class="kb-link" href="#kb/${r.by}/${row.id}" data-entity="${r.by}:${row.id}">${app.esc(row.name || partyName(row.id))}</a>
+          ${affHtml(row) ? `<small>${affHtml(row)}</small>` : ''}</span></div></td>
+      ${detail ? `
+      <td class="num"><b class="up">${fmtIsk(row.destroyed)}</b><small>${fmtN(row.kills)} 次击杀</small></td>
+      <td class="num"><b class="down">${fmtIsk(row.lost)}</b><small>${fmtN(row.losses)} 次损失</small></td>
+      <td class="num kb-hide-sm">${eff == null ? '—' : `<span class="kb-eff"><i style="width:${(eff * 100).toFixed(1)}%"></i></span>${(eff * 100).toFixed(1)}%`}</td>
+      <td class="num kb-hide-sm">${share == null ? '—' : (share * 100).toFixed(share >= 0.001 ? 2 : 3) + '%'}</td>
+      <td class="kb-rank-ships kb-hide-sm">${shipsHtml(row) || '<span class="text-muted">—</span>'}</td>` : `
+      <td class="num"><b>${fmtIsk(row.value)}</b></td>
+      <td class="num">${fmtN(row.count)}</td>`}
+    </tr>`;
+  }).join('');
+  box.innerHTML = cards +
+    `<div class="table-scroll kb-rank-wrap"><table class="kb-rank-table">
+      <thead><tr><th class="kb-rank-no">#</th><th>${KIND_ZH[r.by]}</th>
+        ${detail ? `${th('destroyed', '击杀', 'num')}${th('lost', '损失', 'num')}${th('eff', '效率', 'num kb-hide-sm')}${th('value', '占全服', 'num kb-hide-sm')}<th class="kb-hide-sm">${r.side === 'kills' ? '常驾舰船' : '常损舰船'}</th>`
+          : `${th('value', '价值', 'num')}${th('count', '次数', 'num')}`}
+      </tr></thead>
+      <tbody>${body || `<tr><td colspan="7" class="text-muted kb-empty">没有匹配「${app.esc(r.filter)}」的条目</td></tr>`}</tbody>
+    </table></div>
+    <p class="text-muted valuation-note">${detail ? `击杀统计每次击杀只计一次（同一${KIND_ZH[r.by]}多人参与不重复计）；效率 = 击毁价值 ÷（击毁 + 损失价值）；所属为统计期内最近一次出现时的军团 / 联盟；` : '击杀记录服务版本较旧，只显示排行数据；'}${PRICE_NOTE}</p>`;
+}
+
 // ---------- 人物 / 军团 / 联盟 ----------
 async function publicInfo(kind, id) {
   try {
@@ -381,7 +521,7 @@ async function publicInfo(kind, id) {
 }
 
 function entitySkeleton(kind) {
-  return '<a class="kb-back" href="#kb" data-kb-home>‹ 返回击杀记录</a>' + skEntityHead() +
+  return BACK_LINK + skEntityHead() +
     (kind === 'character' ? skTitle(14) + skCards(5) : '') + skTitle(18) + skCards(6) +
     skTitle(12) + skToolbar(3) + skRows(8);
 }
@@ -453,7 +593,7 @@ async function renderEntity(kind, id) {
   const corpHistory = kind === 'character' ? corpHistoryHtml(history) : '';
 
   main.innerHTML = `
-    <a class="kb-back" href="#kb" data-kb-home>‹ 返回击杀记录</a>
+    ${BACK_LINK}
     <div class="kb-entity-head">
       <img src="${avatar(kind, id, 128)}" alt="" width="72" height="72">
       <div>
@@ -641,6 +781,7 @@ function route() {
   $('kbSuggest').hidden = true;
   document.querySelector('#kbView .kb-scroll')?.scrollTo({ top: 0 });
   if (location.hash.startsWith('#kb/br')) { S.entity = null; renderBr(location.hash); }
+  else if (location.hash.startsWith('#kb/rank')) renderRank(location.hash);
   else if (m) renderEntity(m[1], Number(m[2]));
   else renderHome();
 }
@@ -736,6 +877,24 @@ export function initKbPage(context) {
       return;
     }
     if (e.target.closest('[data-kb-br]')) { navigate('#kb/br'); return; }
+    if (e.target.closest('[data-kb-rank]')) { e.preventDefault(); navigate(rankHash({ ...S.lb, days: 30 })); return; }
+    const rk = e.target.closest('[data-rank]');
+    if (rk && S.rank) {
+      const [key, value] = rk.dataset.rank.split(':');
+      // 换条件用 replaceState，返回键直接回到击杀首页
+      const next = { ...S.rank, [key]: key === 'days' ? Number(value) : value };
+      history.replaceState(null, '', rankHash(next));
+      renderRank(location.hash);
+      return;
+    }
+    const rs = e.target.closest('[data-rank-sort]');
+    if (rs && S.rank) {
+      const key = rs.dataset.rankSort;
+      const cur = S.rank.sort;
+      S.rank.sort = cur?.key === key ? (cur.dir === 'desc' ? { key, dir: 'asc' } : null) : { key, dir: 'desc' };
+      renderRankTable();
+      return;
+    }
     const brBattle = e.target.closest('[data-br-battle]');
     if (brBattle) {
       // 会战卡片：以会战星系与持续时间（前后各留 10 分钟）打开战场统计
