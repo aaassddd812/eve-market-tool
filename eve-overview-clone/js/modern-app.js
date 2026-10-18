@@ -13,6 +13,9 @@ const REGIONS = [
   { id: 10000042, name: '美特伯里斯', en: 'Metropolis', hub: { id: 60005686, name: '赫克 VIII' } }
 ];
 
+// 「当前位置」得到的星域（不在上面列表里时）保存在这里：{ id, name, system }
+const LOC_REGION_KEY = 'eve-loc-region';
+
 // 空状态里的常用物品：PLEX、基础矿物、技能注入器
 const QUICK_PICK_IDS = [44992, 34, 35, 36, 37, 38, 39, 40, 40520, 40519];
 const ORDER_ROW_LIMIT = 100;
@@ -43,7 +46,7 @@ const state = {
   theme: document.documentElement.getAttribute('data-theme') || 'dark',
   currentView: 'market',
   selectedItem: null,
-  regionId: REGIONS.some((r) => r.id === Number(store.get('eve-region'))) ? Number(store.get('eve-region')) : 10000002,
+  regionId: allRegions().some((r) => r.id === Number(store.get('eve-region'))) ? Number(store.get('eve-region')) : 10000002,
   catalog: null,
   categories: new Map(),
   childGroups: new Map(),   // parentId -> 子分类数组（已排序）
@@ -246,8 +249,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -321,6 +324,7 @@ function switchView(view) {
   if (view === 'pi') openPi();
   if (view === 'industry') openIndustry(restored);
   if (view === 'lp') openLp();
+  if (view === 'appraisal') openAppraisal();
 }
 
 // 吉他（伏尔戈交易中心）最低卖价 / 最高收购价：Map(id -> { sell, buy })
@@ -380,12 +384,33 @@ async function openLp() {
   }
 }
 
+// 合同估价：首次进入时加载
+let appraisalLoading = null;
+async function openAppraisal() {
+  try {
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v2').then((m) => {
+      m.initAppraisal({
+        esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
+        getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
+        regions: REGIONS
+      });
+      return m;
+    }).catch((error) => { appraisalLoading = null; throw error; });
+    const m = await appraisalLoading;
+    if (!location.hash.startsWith('#appr')) history.replaceState(null, '', location.pathname + '#appr');
+    m.showAppraisal();
+  } catch (error) {
+    console.error('合同估价加载失败:', error);
+    showToast('合同估价加载失败：' + error.message, 'error', 4000);
+  }
+}
+
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v26').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v29').then((m) => {
     m.initPi({
-      esc, formatISK, formatNumber, showToast, store, getMarketPriceMap,
+      esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 吉他（伏尔戈交易中心）最低卖价 / 最高收购价
       getHubPrices: getJitaPrices
     });
@@ -1253,13 +1278,19 @@ async function resolveLocations(orders) {
   }
 }
 
+// 角色当前所在星域（绑定 ESI 后点「当前位置」）：常用交易中心之外的星域追加到选择器里，没有交易中心
+function allRegions() {
+  const loc = store.getJSON(serverKey(LOC_REGION_KEY), null);
+  return loc && !REGIONS.some((r) => r.id === loc.id) ? [...REGIONS, { id: loc.id, name: loc.name, hub: null, here: loc.system }] : REGIONS;
+}
+
 function currentRegion() {
-  return REGIONS.find((r) => r.id === state.regionId) || REGIONS[0];
+  return allRegions().find((r) => r.id === state.regionId) || REGIONS[0];
 }
 
 function sideOrders(isBuy) {
-  const hubId = currentRegion().hub.id;
-  return state.orders.filter((o) => o.is_buy_order === isBuy && (!state.hubOnly || o.location_id === hubId));
+  const hubId = currentRegion().hub?.id;
+  return state.orders.filter((o) => o.is_buy_order === isBuy && (!state.hubOnly || !hubId || o.location_id === hubId));
 }
 
 // 数值后附带较小的单位；占位符（— / …）不加单位
@@ -1457,13 +1488,20 @@ function renderHistory() {
 
 // ===== 区域选择 =====
 function updateHubLabel() {
-  $('hubOnlyLabel').textContent = '仅' + currentRegion().hub.name;
+  const hub = currentRegion().hub;
+  $('hubOnlyLabel').textContent = hub ? '仅' + hub.name : '仅交易中心（本星域未设）';
+  $('hubOnly').disabled = !hub;
+}
+
+function renderRegionOptions() {
+  const select = $('regionSelect');
+  select.innerHTML = allRegions().map((r) => `<option value="${r.id}">${esc(r.name)} · ${r.hub ? esc(r.hub.name.split(' ')[0]) : '当前位置 ' + esc(r.here || '')}</option>`).join('');
+  select.value = state.regionId;
 }
 
 function initRegionSelect() {
   const select = $('regionSelect');
-  select.innerHTML = REGIONS.map((r) => `<option value="${r.id}">${r.name} · ${r.hub.name.split(' ')[0]}</option>`).join('');
-  select.value = state.regionId;
+  renderRegionOptions();
   updateHubLabel();
   select.addEventListener('change', () => {
     state.regionId = Number(select.value);
@@ -1471,6 +1509,51 @@ function initRegionSelect() {
     updateHubLabel();
     if (state.selectedItem) loadMarketData(state.selectedItem.id);
   });
+  $('locRegionBtn').addEventListener('click', useLocationRegion);
+  updateLocRegionBtn();
+}
+
+// 绑定 ESI 后才显示「当前位置」
+function updateLocRegionBtn() {
+  const btn = $('locRegionBtn');
+  if (btn) btn.hidden = !(state.esiToken || readEsiToken())?.access_token;
+}
+
+// 读取角色所在星系 → 星座 → 星域，切换市场到该星域（需要 esi-location.read_location.v1）
+async function useLocationRegion() {
+  const btn = $('locRegionBtn');
+  btn.disabled = true;
+  btn.classList.add('spinning');
+  try {
+    const token = await ensureEsiToken();
+    let loc;
+    try {
+      loc = await esiAuthFetch('/characters/' + token.character_id + '/location/');
+    } catch (error) {
+      if (error.status === 403 || error.status === 401) throw new Error('当前授权没有位置权限，请在个人中心重新绑定 ESI');
+      throw error;
+    }
+    const sys = await fetchESI(`/universe/systems/${loc.solar_system_id}/?language=zh`);
+    const con = await fetchESI(`/universe/constellations/${sys.constellation_id}/`);
+    const regionId = con.region_id;
+    if (regionId >= 11000000) throw new Error(`${sys.name} 在虫洞里，虫洞没有市场`);
+    let name = REGIONS.find((r) => r.id === regionId)?.name;
+    if (!name) {
+      name = (await fetchESI(`/universe/regions/${regionId}/?language=zh`)).name;
+      store.setJSON(serverKey(LOC_REGION_KEY), { id: regionId, name, system: sys.name });
+    }
+    state.regionId = regionId;
+    store.set('eve-region', regionId);
+    renderRegionOptions();
+    updateHubLabel();
+    showToast(`已切换到 ${name}（${token.character_name || '角色'}在 ${sys.name}）`, 'success', 2600);
+    if (state.selectedItem) loadMarketData(state.selectedItem.id);
+  } catch (error) {
+    showToast('获取当前位置失败：' + error.message, 'error', 4000);
+  } finally {
+    btn.disabled = false;
+    btn.classList.remove('spinning');
+  }
 }
 
 function refreshCurrent() {
@@ -1625,6 +1708,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#pi')) { if (state.currentView !== 'pi') switchView('pi'); return; }
     if (location.hash.startsWith('#ind')) { if (state.currentView !== 'industry') switchView('industry'); else openIndustry(); return; }
     if (location.hash.startsWith('#lp')) { if (state.currentView !== 'lp') switchView('lp'); else openLp(); return; }
+    if (location.hash.startsWith('#appr')) { if (state.currentView !== 'appraisal') switchView('appraisal'); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -1701,6 +1785,7 @@ function writeEsiToken(token) {
   state.esiToken = token;
   if (token) localStorage.setItem(serverKey('eve-esi-token'), JSON.stringify(token));
   else localStorage.removeItem(serverKey('eve-esi-token'));
+  updateLocRegionBtn();
 }
 
 function setEsiStatus(message, kind) {
@@ -3471,6 +3556,7 @@ function init() {
   if (location.hash.startsWith('#pi')) switchView('pi');     // 行星工业
   if (location.hash.startsWith('#ind')) switchView('industry');   // 制造
   if (location.hash.startsWith('#lp')) switchView('lp');          // LP 商店
+  if (location.hash.startsWith('#appr')) switchView('appraisal'); // 合同估价
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);

@@ -1,5 +1,6 @@
 // 从 CCP 官方 SDE（JSONL 版）生成行星工业数据 eve-overview-clone/pi-data.json
-// 收录范围与星图一致（有 position2D 的星系）：每个星系的行星类型与半径、各类行星的设施与可采资源、全部配方。
+// 收录范围：星图里的星系（有 position2D）加上虫洞星系（J 空间、席拉、C13、漂流者）；每个星系的行星类型与半径、各类行星的设施与可采资源、全部配方。
+// 虫洞不在星图里，另外输出 wh：[星系ID, 名称, 虫洞等级]（等级取星系 → 星座 → 星域上第一个有的 wormholeClassID）。
 //
 // 用法：
 //   1. 下载 https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip 并解压
@@ -85,7 +86,19 @@ schematics.sort((a, b) => a[0] - b[0]);
 
 // 星系 → 行星：[星系ID, 类型代码串, [半径(km)], [天体序号]]
 const included = new Set();
-await eachLine("mapSolarSystems", (o) => { if (o.position2D) included.add(o._key); });
+const whClass = new Map();   // 星座 / 星域 → 虫洞等级
+await eachLine("mapRegions", (o) => { if (o.wormholeClassID) whClass.set(o._key, o.wormholeClassID); });
+await eachLine("mapConstellations", (o) => { if (o.wormholeClassID) whClass.set(o._key, o.wormholeClassID); });
+const wh = [];
+const isWormholeRegion = (id) => id >= 11000001 && id <= 11000033;
+await eachLine("mapSolarSystems", (o) => {
+  if (o.position2D) included.add(o._key);
+  else if (isWormholeRegion(o.regionID)) {
+    included.add(o._key);
+    wh.push([o._key, zh(o.name), o.wormholeClassID || whClass.get(o.constellationID) || whClass.get(o.regionID) || 0]);
+  }
+});
+wh.sort((a, b) => a[0] - b[0]);
 const bySystem = new Map();
 await eachLine("mapPlanets", (o) => {
   const code = PLANET_CODES[o.typeID];
@@ -105,7 +118,8 @@ const output = {
   structures,
   commodities,
   schematics,
-  systems
+  systems,
+  wh
 };
 await writeFile("eve-overview-clone/pi-data.json", JSON.stringify(output));
-console.log(`行星类型 ${Object.keys(planetTypes).length} · 设施 ${Object.keys(structures).length} · 商品 ${Object.keys(commodities).length} · 配方 ${schematics.length} · 星系 ${systems.length} · 行星 ${systems.reduce((n, s) => n + s[1].length, 0)}`);
+console.log(`行星类型 ${Object.keys(planetTypes).length} · 设施 ${Object.keys(structures).length} · 商品 ${Object.keys(commodities).length} · 配方 ${schematics.length} · 星系 ${systems.length}（虫洞 ${wh.length}） · 行星 ${systems.reduce((n, s) => n + s[1].length, 0)}`);

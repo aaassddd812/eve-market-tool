@@ -16,6 +16,10 @@ const HEAD = [110, 550];               // 每个采集头 [CPU, 电网]
 // 链接负载 [CPU, 电网]：长度 = 弧度 × 行星半径，所以同样的模板在大行星上更耗资源
 const linkLoad = (radiusKm, rad = SPACING) => [Math.ceil(15 + 0.2 * rad * radiusKm), Math.ceil(10 + 0.15 * rad * radiusKm)];
 const MAX_HEADS = 10;                  // 每个采集控制器最多 10 个采集头
+const LP_CAP = 10000;                  // 发射平台容量 m³
+const MAX_HUBS = 4;                    // 买料加工：每颗工厂星最多几个发射平台
+const MARKET_SHARE = 0.1;              // 买料加工：产品卖出、原料买入各不超过吉他日成交量的 10%，否则价格会被自己打穿
+const HUB_GAP = 0.15;                  // 多个发射平台之间的间距（弧度），两组设施互不重叠
 // 海关出口税基数（每单位，按等级），进口为出口的一半
 const TAX_BASE = [5, 400, 7200, 60000, 1200000];
 // 资源丰度：每个采集头每小时平均产量（实际取决于热点位置与采集周期，仅作估算）
@@ -23,6 +27,10 @@ const RICHNESS = { low: [300, '低'], mid: [500, '中'], high: [750, '高'] };
 const TIER_NAMES = ['P0 原材料', 'P1 基础产品', 'P2 精炼产品', 'P3 特种产品', 'P4 高级产品'];
 const PLANET_COLORS = { T: '#5fbf6f', I: '#8fd3ff', G: '#e0bf62', O: '#4f8ff7', L: '#f06a3c', B: '#b9a47c', S: '#9a90e0', P: '#d36ad6' };
 const ICON = (id, size = 32) => `https://images.evetech.net/types/${id}/icon?size=${size}`;
+// 虫洞等级（SDE wormholeClassID）：1–6 = C1–C6，12 席拉，13 C13（碎裂），14–18 漂流者
+const WH_CLASSES = [['1', 'C1'], ['2', 'C2'], ['3', 'C3'], ['4', 'C4'], ['5', 'C5'], ['6', 'C6'], ['13', 'C13'], ['12', '席拉'], ['d', '漂流者']];
+const whKey = (cls) => (cls >= 14 && cls <= 18 ? 'd' : String(cls));
+const whLabel = (cls) => WH_CLASSES.find(([k]) => k === whKey(cls))?.[1] || '虫洞';
 const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X', 'XI', 'XII', 'XIII', 'XIV', 'XV', 'XVI', 'XVII', 'XVIII', 'XIX', 'XX'];
 
 const D = {
@@ -36,9 +44,13 @@ const D = {
 
 const F = {               // 表单状态（保存在本地）
   mode: 'region', region: 10000002, system: 0, jumps: 2,
+  whCls: '4', whSystem: 0, // 虫洞：按等级，或指定一个星系（whSystem）
   sec: { high: true, low: true, null: true },
   chars: 1, perChar: 6, cc: 5,
-  target: 0, rich: 'mid', tax: 10, price: 'sell'
+  target: 0, rich: 'mid', tax: 10, price: 'sell',
+  way: 'self',            // self 自产（采集）/ buy 买料加工
+  inPrice: 'sell',        // 买料加工的原料价：sell 直接买卖单 / buy 挂收单
+  restock: 24             // 买料加工的补货周期（小时）
 };
 
 const R = { area: null, plans: [], selected: 0, prices: new Map(), priceAt: 0, edits: new Map() };   // edits: 方案序号:模板 -> 修改后的模板
@@ -64,7 +76,7 @@ function saveForm() { ctx.store.setJSON(STORE_KEY, F); }
 function loadData() {
   if (!D.loading) {
     D.loading = Promise.all([
-      fetch('pi-data.json?v=1').then((r) => { if (!r.ok) throw new Error('pi-data.json ' + r.status); return r.json(); }),
+      fetch('pi-data.json?v=2').then((r) => { if (!r.ok) throw new Error('pi-data.json ' + r.status); return r.json(); }),
       fetch('map-data.json').then((r) => { if (!r.ok) throw new Error('map-data.json ' + r.status); return r.json(); })
     ]).then(([pi, map]) => {
       D.pi = pi;
@@ -77,6 +89,8 @@ function loadData() {
         D.sysById.set(sys.id, sys);
       }
       for (const [a, b] of map.gates) { index[a].nbr.push(index[b].id); index[b].nbr.push(index[a].id); }
+      // 虫洞星系不在星图里：没有星门，安全等级按 -1.0
+      for (const [id, name, cls] of pi.wh || []) D.sysById.set(id, { id, name, sec: -1, region: 0, wh: cls, nbr: [], planets: [] });
       for (const [id, codes, radii, idx] of pi.systems) {
         const sys = D.sysById.get(id);
         if (sys) sys.planets = [...codes].map((code, i) => ({ code, radius: radii[i], index: idx[i] }));
@@ -118,16 +132,24 @@ function bfs(start, maxJumps) {
 // 地区内全部可建殖民地的行星：[{ sys, planet, code, jumps }]
 function collectArea() {
   let systems;
-  if (F.mode === 'system') {
+  if (F.mode === 'wh') {
+    if (F.whSystem) {
+      const sys = D.sysById.get(F.whSystem);
+      if (!sys?.wh) return { error: '请重新选择虫洞星系' };
+      systems = [{ sys, jumps: 0 }];
+    } else {
+      systems = [...D.sysById.values()].filter((s) => s.wh && whKey(s.wh) === F.whCls).map((sys) => ({ sys, jumps: null }));
+    }
+  } else if (F.mode === 'system') {
     if (!D.sysById.has(F.system)) return { error: '请先选择中心星系' };
     systems = [...bfs(F.system, F.jumps)].map(([id, jumps]) => ({ sys: D.sysById.get(id), jumps }));
   } else {
     systems = [...D.sysById.values()].filter((s) => s.region === F.region).map((sys) => ({ sys, jumps: null }));
   }
-  systems = systems.filter(({ sys }) => F.sec[secInfo(sys.sec).cls]);
+  if (F.mode !== 'wh') systems = systems.filter(({ sys }) => F.sec[secInfo(sys.sec).cls]);
   const planets = [];
   for (const { sys, jumps } of systems) for (const p of sys.planets) planets.push({ sys, planet: p, code: p.code, jumps });
-  if (!planets.length) return { error: '所选地区（按安全等级过滤后）没有可建殖民地的行星' };
+  if (!planets.length) return { error: F.mode === 'wh' ? '这个虫洞没有可建殖民地的行星' : '所选地区（按安全等级过滤后）没有可建殖民地的行星' };
   const counts = {};
   for (const p of planets) counts[p.code] = (counts[p.code] || 0) + 1;
   // 每种 P0 原材料可采集的行星数
@@ -261,9 +283,49 @@ function hostLoad(dem, rate, m, radius) {
   return { counts, cpu, power };
 }
 
+// 行星够不够分：每类行星最多建「数量 × 角色数」个殖民地（同一角色一颗行星只能建一个）。
+// groups：[[可用行星类型, 殖民地数], ...]。Hall 定理按行星类型的子集检查（最多 8 类、256 个子集）：
+// 只能建在子集 U 内的殖民地总数不超过 U 的容量。每组单独的容量都不小于殖民地总数时直接通过
+function placer(area) {
+  const total = F.chars * F.perChar;
+  const types = Object.keys(area.counts);
+  const bit = new Map(types.map((c, i) => [c, 1 << i]));
+  const full = (1 << types.length) - 1;
+  const capU = new Float64Array(full + 1);
+  for (let U = 1; U <= full; U++) { const low = U & -U; capU[U] = capU[U ^ low] + area.counts[types[31 - Math.clz32(low)]] * F.chars; }
+  const masks = new Map();
+  const maskOf = (codes) => {
+    let m = masks.get(codes);
+    if (m === undefined) { m = 0; for (const c of codes) m |= bit.get(c) || 0; masks.set(codes, m); }
+    return m;
+  };
+  const check = (groups) => {
+    const ms = [], ns = [];
+    let easy = true;
+    for (const [codes, n] of groups) {
+      if (n <= 0) continue;
+      const m = maskOf(codes);
+      if (!m) return false;
+      ms.push(m); ns.push(n);
+      if (capU[m] < total) easy = false;
+    }
+    if (easy) return true;
+    for (let U = 1; U <= full; U++) {
+      let need = 0;
+      for (let i = 0; i < ms.length; i++) if ((ms[i] & ~U) === 0) need += ns[i];
+      if (need > capU[U]) return false;
+    }
+    return true;
+  };
+  // 这些类型组合单独都放得下全部殖民地：怎么分都够，不用逐次检查
+  check.loose = (codeLists) => codeLists.every((codes) => capU[maskOf(codes)] >= total);
+  return check;
+}
+
 // 把 total 颗行星分给各种 P1（先分 m 颗兼工厂的，再分纯采集的），每次补给产出 / 需求比例最低的那种；返回能支撑的产品产量
 // host 里没有的 P1 不能兼工厂（P4 需要高科技工厂，只有采集星能是贫瘠 / 温和行星的 P1 才行）
-function allocate(p1s, dem, total, m, full, host, cap) {
+// ok(n, hosts)：行星够不够分（见 placer），不够时跳过这次分配
+function allocate(p1s, dem, total, m, full, host, cap, ok = null) {
   const n = new Map(p1s.map((p1) => [p1, 0]));
   const hosts = new Map(p1s.map((p1) => [p1, 0]));
   const made = (p1) => (hosts.get(p1) ? hosts.get(p1) * host.get(p1).p1h : 0) + (n.get(p1) - hosts.get(p1)) * full.get(p1).p1h;
@@ -274,7 +336,16 @@ function allocate(p1s, dem, total, m, full, host, cap) {
     for (const p1 of p1s) {
       if (n.get(p1) >= caps.get(p1) || (i < m && !host.has(p1))) continue;
       const r = ratio(p1);
-      if (r < low) { low = r; pick = p1; }
+      if (r >= low) continue;
+      if (ok) {
+        n.set(p1, n.get(p1) + 1);
+        if (i < m) hosts.set(p1, hosts.get(p1) + 1);
+        const fine = ok(n, hosts);
+        n.set(p1, n.get(p1) - 1);
+        if (i < m) hosts.set(p1, hosts.get(p1) - 1);
+        if (!fine) continue;
+      }
+      low = r; pick = p1;
     }
     if (!pick) { if (i < m) return null; break; }
     n.set(pick, n.get(pick) + 1);
@@ -283,7 +354,7 @@ function allocate(p1s, dem, total, m, full, host, cap) {
   return { n, hosts, rate: Math.min(...p1s.map(ratio)) };
 }
 
-function planHybrid(product, area, dem, p1s, exByP1, hostCodeByP1, total, cap) {
+function planHybrid(product, area, dem, p1s, exByP1, hostCodeByP1, total, cap, ok) {
   const hostP1s = p1s.filter((p1) => hostCodeByP1.get(p1));
   const radius = new Map(hostP1s.map((p1) => [p1, typicalRadius(area, [hostCodeByP1.get(p1)])]));
   let best = null;
@@ -303,21 +374,114 @@ function planHybrid(product, area, dem, p1s, exByP1, hostCodeByP1, total, cap) {
       }
       if (!host.size) return null;
       const key = [...host].map(([p1, d]) => p1 + ':' + d.heads).join();
-      if (!allocs.has(key)) allocs.set(key, allocate(p1s, dem, total, m, exByP1, host, cap));
+      if (!allocs.has(key)) allocs.set(key, allocate(p1s, dem, total, m, exByP1, host, cap, ok));
       const a = allocs.get(key);
       return a && { ...a, host };
     };
-    const ok = (r) => { const a = at(r); return a && a.rate >= r; };
+    const feasible = (r) => { const a = at(r); return a && a.rate >= r; };
     const top = at(0);
     if (!top) continue;
     let lo = 0, hi = top.rate;
-    if (ok(hi)) lo = hi;
-    else for (let i = 0; i < 24; i++) { const mid = (lo + hi) / 2; if (ok(mid)) lo = mid; else hi = mid; }
+    if (feasible(hi)) lo = hi;
+    else for (let i = 0; i < 24; i++) { const mid = (lo + hi) / 2; if (feasible(mid)) lo = mid; else hi = mid; }
     if (lo <= 0) continue;
     const a = at(lo);
     const plan = finish({ product, strategy: 'hybrid', extract: a.n, hosts: a.hosts, exByP1, hostByP1: a.host, m, hostCodeByP1, factories: 0, rate: lo, dem });
     if (!best || plan.profit > best.profit) best = plan;
   }
+  return best;
+}
+
+// ---------- 买料加工 ----------
+// 从吉他买入半成品，在工厂星上加工成更高级的产品卖出；不采集，行星类型不限（P4 需要高科技工厂：贫瘠 / 温和）。
+// 除了 CPU / 电网，还受发射平台容量限制：一个补货周期的原料（或产物）都要放得下，每个发射平台 10,000 m³。
+// 放不下就加发射平台：每个发射平台带一组完整的加工链（中间产品不用在组间搬运），原料平均分到各组。
+const vol = (id) => commodity(id)[3] || 0;
+const inPriceOf = (id) => {
+  const p = R.prices.get(id);
+  return (F.inPrice === 'buy' ? p?.buy : p?.sell) ?? p?.avg ?? 0;
+};
+
+// 产品 1 单位/小时：buyTier 及以下的原料买入，其余自己加工
+function buyDemand(product, buyTier) {
+  const fac = new Map(), buy = new Map();
+  const walk = (out, rate) => {
+    if (out !== product && tierOf(out) <= buyTier) { buy.set(out, (buy.get(out) || 0) + rate); return; }
+    const s = D.schemByOut.get(out);
+    const n = rate / perHour(s, s.outQty);
+    fac.set(out, (fac.get(out) || 0) + n);
+    for (const [inp, q] of s.inputs) walk(inp, n * perHour(s, q));
+  };
+  walk(product, 1);
+  return { fac, buy, buyTier };
+}
+
+// 一颗工厂星以 rate 单位/小时生产时的布局：hubs 个发射平台，每组设施数 = 需求 / 组数（向上取整）
+function buyLayout(dem, rate, hubs, code, radius) {
+  const pt = D.ptByCode[code];
+  const LINK = linkLoad(radius);
+  const [lpC, lpP] = struct(pt.launchpad);
+  const hubLink = linkLoad(radius, HUB_GAP);
+  let cpu = hubs * lpC + (hubs - 1) * hubLink[0], power = hubs * lpP + (hubs - 1) * hubLink[1];
+  const counts = [];
+  for (const [out, n] of dem.fac) {
+    const c = Math.ceil(n * rate / hubs - 1e-9);
+    if (!c) continue;
+    if (!pt[facClass(out)]) return null;
+    const [fc, fp] = struct(pt[facClass(out)]);
+    cpu += hubs * c * (fc + LINK[0]);
+    power += hubs * c * (fp + LINK[1]);
+    counts.push([out, c]);
+  }
+  if (!fits(cpu, power)) return null;
+  // 每个发射平台：补货时装满一个周期的原料，周期末换成等量时间的产物
+  const inM3 = [...dem.buy].reduce((t, [id, q]) => t + q * rate * vol(id), 0);
+  const outM3 = rate * vol(dem.product);
+  if (Math.max(inM3, outM3) / hubs * F.restock > LP_CAP) return null;
+  return { counts, cpu, power, inM3, outM3 };
+}
+
+// 一颗工厂星在给定买入层级、发射平台数下能达到的最大产量
+function maxBuyRate(dem, hubs, code, radius) {
+  let lo = 0, hi = 1;
+  while (hi < 1e5 && buyLayout(dem, hi, hubs, code, radius)) { lo = hi; hi *= 2; }
+  for (let i = 0; i < 30; i++) { const mid = (lo + hi) / 2; if (buyLayout(dem, mid, hubs, code, radius)) lo = mid; else hi = mid; }
+  return lo;
+}
+
+function planBuy(product, area) {
+  const tier = tierOf(product);
+  if (tier < 1) return { product, error: 'P0 不能加工得到' };
+  const codes = Object.keys(area.counts).filter((c) => tier < 4 || D.ptByCode[c].ht);
+  if (!codes.length) return { product, error: '地区内没有能建高科技工厂的贫瘠 / 温和行星' };
+  const code = codes.sort((a, b) => area.counts[b] - area.counts[a])[0];
+  const radius = typicalRadius(area, [code]);
+  const avail = codes.reduce((n, c) => n + area.counts[c], 0) * F.chars;
+  const planets = Math.min(F.chars * F.perChar, avail);
+  const outPrice = priceOf(product);
+  if (!outPrice) return { product, error: '缺少行情' };
+  let best = null;
+  for (let buyTier = tier - 1; buyTier >= Math.max(0, tier - 3); buyTier--) {
+    const dem = { ...buyDemand(product, buyTier), product };
+    if ([...dem.buy.keys()].some((id) => !inPriceOf(id))) continue;   // 买不到的原料
+    // 每单位产品的利润：售价 − 原料 − 出口税 − 原料进口税
+    const unitCost = [...dem.buy].reduce((t, [id, q]) => t + q * (inPriceOf(id) + importTax(id)), 0);
+    const unit = outPrice - exportTax(product) - unitCost;
+    for (let hubs = 1; hubs <= MAX_HUBS; hubs++) {
+      const r = maxBuyRate(dem, hubs, code, radius);
+      if (r <= 0) continue;
+      const day = r * 24 * planets;
+      const plan = {
+        product, strategy: 'buy', buyTier, hubs, code, radius, dem, perRate: r, rate: r * planets, planets, factories: planets,
+        revenue: day * outPrice,
+        cost: day * [...dem.buy].reduce((t, [id, q]) => t + q * inPriceOf(id), 0),
+        tax: day * (exportTax(product) + [...dem.buy].reduce((t, [id, q]) => t + q * importTax(id), 0)),
+        profit: day * unit, unitCost, surplus: []
+      };
+      if (!best || plan.profit > best.profit) best = plan;
+    }
+  }
+  if (!best) return { product, error: '放不下加工设施，或原料没有行情' };
   return best;
 }
 
@@ -390,8 +554,12 @@ function planProduct(product, area) {
   const hostCodeByP1 = new Map(p1s.map((p1) => [p1, needHT
     ? Object.keys(area.counts).filter((c) => D.ptByCode[c].ht && D.ptByCode[c].res.includes(p0Of(p1))).sort((a, b) => area.counts[b] - area.counts[a])[0] || null
     : codeByP1.get(p1)]));
+  const fits2 = placer(area);
+  const extCodes = new Map(p1s.map((p1) => [p1, Object.keys(area.counts).filter((c) => D.ptByCode[c].res.includes(p0Of(p1)))]));
+  const hostCodes = new Map(p1s.map((p1) => [p1, needHT ? extCodes.get(p1).filter((c) => D.ptByCode[c].ht) : extCodes.get(p1)]));
   if (exOk && total >= p1s.length) {
-    const hy = planHybrid(product, area, dem, p1s, exByP1, hostCodeByP1, total, (p1) => (area.resCount.get(p0Of(p1)) || 0) * F.chars);
+    const ok = fits2.loose([...extCodes.values(), ...hostCodes.values()]) ? null : (n, hosts) => fits2(p1s.flatMap((p1) => [[extCodes.get(p1), n.get(p1) - hosts.get(p1)], [hostCodes.get(p1), hosts.get(p1)]]));
+    const hy = planHybrid(product, area, dem, p1s, exByP1, hostCodeByP1, total, (p1) => (area.resCount.get(p0Of(p1)) || 0) * F.chars, ok);
     if (hy) candidates.push(hy);
   }
   if (!fCode) reasons.push('地区内没有能建高科技工厂的贫瘠 / 温和行星');
@@ -401,12 +569,17 @@ function planProduct(product, area) {
     if (!exOk) reasons.push('指挥中心等级过低，放不下采集设施');
     else {
       let best = null;
+      const fCodes = Object.keys(area.counts).filter((c) => !D.ptByCode[fCode].ht || D.ptByCode[c].ht);
+      const loose = fits2.loose([...extCodes.values(), fCodes]);
       for (let f = 1; f <= total - p1s.length; f++) {
         const n = new Map(p1s.map((p1) => [p1, 1]));
         const cap = (p1) => (area.resCount.get(p0Of(p1)) || 0) * F.chars;
         const ratio = (p1) => n.get(p1) * exByP1.get(p1).p1h / dem.p1.get(p1);
+        const placeable = loose ? () => true : () => fits2([...p1s.map((p1) => [extCodes.get(p1), n.get(p1)]), [fCodes, f]]);
+        if (!placeable()) continue;
         for (let left = total - f - p1s.length; left > 0; left--) {
-          const pick = p1s.filter((p1) => n.get(p1) < cap(p1)).sort((a, b) => ratio(a) - ratio(b))[0];
+          const pick = p1s.filter((p1) => n.get(p1) < cap(p1)).sort((a, b) => ratio(a) - ratio(b))
+            .find((p1) => { n.set(p1, n.get(p1) + 1); const fine = placeable(); n.set(p1, n.get(p1) - 1); return fine; });
           if (!pick) break;
           n.set(pick, n.get(pick) + 1);
         }
@@ -471,7 +644,10 @@ function finish(plan) {
 // 以覆盖所需行星类型最多的星系为中心，按距离由近到远给每个角色分配行星；同一角色不能在同一颗行星上建两个殖民地
 function assignPlanets(plan, area) {
   const roles = [];
-  if (plan.strategy === 'single') {
+  if (plan.strategy === 'buy') {
+    const codes = Object.keys(area.counts).filter((c) => tierOf(plan.product) < 4 || D.ptByCode[c].ht);
+    for (let i = 0; i < plan.planets; i++) roles.push({ kind: 'factory', product: plan.product, codes });
+  } else if (plan.strategy === 'single') {
     for (let i = 0; i < plan.singles; i++) roles.push({ kind: 'single', product: plan.product, codes: plan.singleCodes });
   } else {
     for (const [p1, n] of plan.extract) {
@@ -497,12 +673,12 @@ function assignPlanets(plan, area) {
     if (score > homeScore) { homeScore = score; home = sys; }
   }
   const dist = bfs(home.id, 60);
-  // 由近到远；同一星系里优先小行星（链接短、省 CPU / 电网）
-  const planets = area.planets.slice().sort((a, b) => (dist.get(a.sys.id) ?? 99) - (dist.get(b.sys.id) ?? 99) || a.planet.radius - b.planet.radius);
-  const chars = Array.from({ length: F.chars }, () => ({ used: new Set(), rows: [] }));
+  // 由近到远；同一星系里优先小行星（链接短、省 CPU / 电网）。虫洞之间没有固定通道，只用中心这一个洞
+  const planets = area.planets.filter((p) => F.mode !== 'wh' || p.sys.id === home.id).sort((a, b) => (dist.get(a.sys.id) ?? 99) - (dist.get(b.sys.id) ?? 99) || a.planet.radius - b.planet.radius);
+  let chars = Array.from({ length: F.chars }, () => ({ used: new Set(), rows: [] }));
   // 选择余地小的角色先分配
   const order = roles.map((r, i) => i).sort((a, b) => roles[a].codes.length - roles[b].codes.length);
-  const warnings = [];
+  let warnings = [];
   for (const i of order) {
     const role = roles[i];
     const ok = (p) => role.codes.includes(p.code);
@@ -519,9 +695,71 @@ function assignPlanets(plan, area) {
     }
     if (!placed) warnings.push(role);
   }
+  // 按顺序贪心可能分不完（行星少、几种殖民地抢同一类行星时），改用最大流重新分配
+  if (warnings.length) {
+    const flow = flowAssign(roles, planets, dist);
+    if (flow.warnings.length < warnings.length) ({ chars, warnings } = flow);
+  }
   const kindOrder = { single: 0, extract: 1, hybrid: 2, factory: 3 };
   for (const c of chars) c.rows.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind] || (a.jumps ?? 0) - (b.jumps ?? 0));
   return { home, chars, warnings };
+}
+
+// 最大流分配：源 → 殖民地组（同种殖民地合并，容量 = 数量）→ 行星（可用类型）→ 汇（容量 = 角色数，每个角色一颗行星只建一个）。
+// 行星按由近到远逐步放开，尽量用近的；每颗行星上的殖民地轮流分给各角色，保证同一角色不重复、每个角色数量平均
+function flowAssign(roles, planets, dist) {
+  const groups = [];
+  const keyOf = (r) => r.kind + ':' + r.product + ':' + r.codes.join('');
+  for (const r of roles) {
+    let g = groups.find((x) => x.key === keyOf(r));
+    if (!g) groups.push(g = { key: keyOf(r), role: r, n: 0 });
+    g.n++;
+  }
+  const usable = planets.filter((p) => groups.some((g) => g.role.codes.includes(p.code)));
+  let best = null;
+  for (let size = Math.min(usable.length, roles.length); ; size = Math.min(usable.length, size * 2)) {
+    const pool = usable.slice(0, size);
+    // 节点：0 源，1..G 组，G+1..G+P 行星，G+P+1 汇
+    const G = groups.length, P = pool.length, T = G + P + 1;
+    const cap = new Map();
+    const adj = Array.from({ length: T + 1 }, () => []);
+    const edge = (a, b, c) => { cap.set(a + ',' + b, c); cap.set(b + ',' + a, cap.get(b + ',' + a) || 0); adj[a].push(b); adj[b].push(a); };
+    groups.forEach((g, i) => edge(0, i + 1, g.n));
+    groups.forEach((g, i) => pool.forEach((p, j) => { if (g.role.codes.includes(p.code)) edge(i + 1, G + 1 + j, F.chars); }));
+    pool.forEach((p, j) => edge(G + 1 + j, T, F.chars));
+    let total = 0;
+    for (;;) {
+      const prev = new Map([[0, -1]]);
+      const queue = [0];
+      while (queue.length && !prev.has(T)) {
+        const a = queue.shift();
+        for (const b of adj[a]) if (!prev.has(b) && cap.get(a + ',' + b) > 0) { prev.set(b, a); queue.push(b); }
+      }
+      if (!prev.has(T)) break;
+      let push = Infinity;
+      for (let b = T; b !== 0; b = prev.get(b)) push = Math.min(push, cap.get(prev.get(b) + ',' + b));
+      for (let b = T; b !== 0; b = prev.get(b)) { const a = prev.get(b); cap.set(a + ',' + b, cap.get(a + ',' + b) - push); cap.set(b + ',' + a, cap.get(b + ',' + a) + push); }
+      total += push;
+    }
+    best = { pool, groups, cap, G };
+    if (total >= roles.length || size >= usable.length) break;
+  }
+  const chars = Array.from({ length: F.chars }, () => ({ used: new Set(), rows: [] }));
+  const left = new Map(best.groups.map((g) => [g, g.n]));
+  let k = 0;
+  best.pool.forEach((p, j) => {
+    best.groups.forEach((g, i) => {
+      const used = best.cap.get((best.G + 1 + j) + ',' + (i + 1)) || 0;   // 反向边容量 = 流量
+      for (let u = 0; u < used; u++) {
+        const c = chars[k++ % F.chars];
+        c.used.add(planetName(p.sys, p.planet));
+        c.rows.push({ ...g.role, at: p, jumps: dist.get(p.sys.id) ?? null });
+        left.set(g, left.get(g) - 1);
+      }
+    });
+  });
+  const warnings = best.groups.flatMap((g) => Array(Math.max(0, left.get(g))).fill(g.role));
+  return { chars, warnings };
 }
 
 // ---------- 模板 ----------
@@ -544,36 +782,49 @@ function slots(n) {
   return { list: out, mainCount };
 }
 
-function buildTemplate({ name, code, diam, pins }) {
+// hubs > 1（买料加工）：多个发射平台沿经线排开，各带一组设施（pin.hub 指定所属组），相邻发射平台之间连一条链接
+function buildTemplate({ name, code, diam, pins, hubs = 1 }) {
   const pt = D.ptByCode[code];
   const R0 = diam / 2;
   const out = { CmdCtrLv: F.cc, Cmt: name.slice(0, 40), Diam: diam, L: [], P: [], Pln: pt.id, R: [] };
-  const hub = 1;
-  const c0 = { th: Math.PI / 2, ph: Math.PI };
-  out.P.push({ H: 0, La: Number(c0.th.toFixed(5)), Lo: Number(c0.ph.toFixed(5)), S: null, T: pt.launchpad });
-  const { list } = slots(Math.min(pins.length, 54));
-  const path = new Map([[hub, [hub]]]);
-  const pos = [c0];
-  pins.slice(0, list.length).forEach((pin, i) => {
-    const sl = list[i];
-    const d = sl.depth * SPACING;
-    const th = c0.th - d * Math.sin(sl.theta);
-    const ph = c0.ph + (d * Math.cos(sl.theta)) / Math.sin(th);
-    const idx = out.P.length + 1;
-    out.P.push({ H: pin.heads || 0, La: Number(th.toFixed(5)), Lo: Number(ph.toFixed(5)), S: pin.product, T: pin.type });
-    pos.push({ th: out.P[idx - 1].La, ph: out.P[idx - 1].Lo });
-    const prev = sl.parent < 0 ? hub : sl.parent + 2;
-    out.L.push({ D: idx, Lv: 0, S: prev });
-    path.set(idx, [...path.get(prev), idx]);
-    const toPin = path.get(idx);
-    const fromPin = toPin.slice().reverse();
-    if (pin.heads) out.R.push({ P: fromPin, Q: Math.round(pin.heads * headRate()), T: pin.product });
-    for (const [t, q] of pin.inputs || []) out.R.push({ P: toPin, Q: q, T: t });
-    if (pin.outQty) out.R.push({ P: fromPin, Q: pin.outQty, T: pin.product });
+  const centers = Array.from({ length: hubs }, (_, k) => ({ th: Math.PI / 2, ph: Math.PI + (k - (hubs - 1) / 2) * HUB_GAP }));
+  const path = new Map();
+  const pos = [];
+  centers.forEach((c, k) => {
+    out.P.push({ H: 0, La: Number(c.th.toFixed(5)), Lo: Number(c.ph.toFixed(5)), S: null, T: pt.launchpad });
+    pos.push(c);
+    path.set(k + 1, [k + 1]);
+    if (k) out.L.push({ D: k + 1, Lv: 0, S: k });
+  });
+  const placed = [];
+  centers.forEach((c0, k) => {
+    const hub = k + 1;
+    const group = pins.filter((pin) => (pin.hub || 0) === k);
+    const { list } = slots(Math.min(group.length, 54));
+    const first = out.P.length + 1;
+    group.slice(0, list.length).forEach((pin, i) => {
+      const sl = list[i];
+      const d = sl.depth * SPACING;
+      const th = c0.th - d * Math.sin(sl.theta);
+      const ph = c0.ph + (d * Math.cos(sl.theta)) / Math.sin(th);
+      const idx = out.P.length + 1;
+      out.P.push({ H: pin.heads || 0, La: Number(th.toFixed(5)), Lo: Number(ph.toFixed(5)), S: pin.product, T: pin.type });
+      pos.push({ th: out.P[idx - 1].La, ph: out.P[idx - 1].Lo });
+      const prev = sl.parent < 0 ? hub : first + sl.parent;
+      out.L.push({ D: idx, Lv: 0, S: prev });
+      path.set(idx, [...path.get(prev), idx]);
+      const toPin = path.get(idx);
+      const fromPin = toPin.slice().reverse();
+      if (pin.heads) out.R.push({ P: fromPin, Q: Math.round(pin.heads * headRate()), T: pin.product });
+      for (const [t, q] of pin.inputs || []) out.R.push({ P: toPin, Q: q, T: t });
+      if (pin.outQty) out.R.push({ P: fromPin, Q: pin.outQty, T: pin.product });
+      placed.push(pin);
+    });
   });
   // 负载统计（链接按实际弧长计费）
-  let [cpu, power] = struct(pt.launchpad);
-  for (const pin of pins.slice(0, list.length)) {
+  const [lc, lp] = struct(pt.launchpad);
+  let cpu = lc * hubs, power = lp * hubs;
+  for (const pin of placed) {
     const [c, p] = struct(pin.type);
     cpu += c + (pin.heads || 0) * HEAD[0];
     power += p + (pin.heads || 0) * HEAD[1];
@@ -603,6 +854,10 @@ function planTemplates(plan, assign) {
   };
   const diamOf = (at) => (at ? at.planet.radius * 2 : 10000) || 10000;
   const list = [];
+  if (plan.strategy === 'buy') {
+    list.push(buyTemplate(plan, firstOf('factory', plan.product)));
+    return list;
+  }
   if (plan.strategy === 'single') {
     const at = firstOf('single', plan.product);
     const code = at?.code || plan.single.code;
@@ -649,6 +904,28 @@ function planTemplates(plan, assign) {
     }
   }
   return list;
+}
+
+// 买料加工的工厂星：实际行星比规划时大、放不下时按能放下的最大产量重算
+function buyTemplate(plan, at) {
+  const diam = (at ? at.planet.radius * 2 : 10000) || 10000;
+  const code = at?.code || plan.code;
+  const pt = D.ptByCode[code];
+  let layout = buyLayout(plan.dem, plan.perRate, plan.hubs, code, diam / 2);
+  let note = '';
+  if (!layout) {
+    let lo = 0, hi = plan.perRate;
+    for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (buyLayout(plan.dem, mid, plan.hubs, code, diam / 2)) lo = mid; else hi = mid; }
+    layout = buyLayout(plan.dem, lo, plan.hubs, code, diam / 2) || { counts: [] };
+    note = `（这颗行星较大，链接更耗资源，产能约为规划的 ${Math.round((lo / plan.perRate) * 100)}%）`;
+  }
+  const group = layout.counts.slice().sort((a, b) => tierOf(a[0]) - tierOf(b[0])).flatMap(([out, c]) => factoryPins(pt, out, c));
+  const pins = Array.from({ length: plan.hubs }, (_, k) => group.map((pin) => ({ ...pin, hub: k }))).flat();
+  return {
+    key: 'factory', title: `买料加工 · ${cName(plan.product)}`, code,
+    ...buildTemplate({ name: `加工-${cName(plan.product)}`, code, diam, pins, hubs: plan.hubs }),
+    summary: (plan.hubs > 1 ? `发射平台 ×${plan.hubs}，每组：` : '') + layout.counts.map(([out, c]) => `${cName(out)} ×${c}`).join(' · ') + note
+  };
 }
 
 // 混合方案里兼工厂的采集星：采集设施 + 平摊到这颗星的加工设施
@@ -718,7 +995,9 @@ export async function showPi() {
 
 function renderForm() {
   const sys = D.sysById.get(F.system);
-  const products = [0, 1, 2, 3, 4].map((t) => {
+  const whSys = D.sysById.get(F.whSystem);
+  const buy = F.way === 'buy';
+  const products = (buy ? [1, 2, 3, 4] : [0, 1, 2, 3, 4]).map((t) => {
     const ids = Object.keys(D.pi.commodities).map(Number).filter((id) => tierOf(id) === t && (t === 0 || D.schemByOut.has(id)))
       .sort((a, b) => cName(a).localeCompare(cName(b), 'zh'));
     return `<optgroup label="${TIER_NAMES[t]}">${ids.map((id) => `<option value="${id}"${F.target === id ? ' selected' : ''}>${ctx.esc(cName(id))}</option>`).join('')}</optgroup>`;
@@ -726,9 +1005,21 @@ function renderForm() {
   const seg = (name, items, cur) => `<div class="segmented" role="group">${items.map(([v, label]) => `<button type="button" data-pi-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${label}</button>`).join('')}</div>`;
   $('piForm').innerHTML = `
     <div class="pi-field">
+      <label>方式</label>
+      ${seg('way', [['self', '自产（采集）'], ['buy', '买料加工']], F.way)}
+      ${buy ? '<small class="pi-hint">从吉他买入半成品，在工厂星上加工成更高级的产品卖出；收益取决于价差，需要本金和运输</small>' : ''}
+    </div>
+    <div class="pi-field">
       <label>地区</label>
-      ${seg('mode', [['region', '星域'], ['system', '星系周边']], F.mode)}
-      ${F.mode === 'region' ? `
+      ${seg('mode', [['region', '星域'], ['system', '星系周边'], ['wh', '虫洞']], F.mode)}
+      ${F.mode === 'wh' ? `
+        <div class="pi-inline pi-wh"><span>等级</span>${seg('whCls', WH_CLASSES, F.whSystem ? '' : F.whCls)}</div>
+        <div class="search-box pi-search">
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="search" id="piSystem" placeholder="或指定虫洞，如 J123456" value="${whSys ? ctx.esc(whSys.name) : ''}" spellcheck="false" aria-label="虫洞星系">
+          <div class="kb-suggest" id="piSuggest" hidden></div>
+        </div>
+        <small class="pi-hint">${whSys ? `按 ${ctx.esc(whSys.name)}（${whLabel(whSys.wh)}，${whSys.planets.length} 颗行星）规划；点等级可改回按等级` : '按等级时综合该等级所有虫洞，行星分配取其中行星最齐的一个洞作示例；住在哪个洞就指定哪个'}</small>` : F.mode === 'region' ? `
         <select id="piRegion" class="pi-input">${D.regions.map((r) => `<option value="${r.id}"${r.id === F.region ? ' selected' : ''}>${ctx.esc(r.name)}</option>`).join('')}</select>` : `
         <div class="search-box pi-search">
           <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -736,7 +1027,7 @@ function renderForm() {
           <div class="kb-suggest" id="piSuggest" hidden></div>
         </div>
         <div class="pi-inline"><span>范围</span>${seg('jumps', [[0, '本星系'], [1, '1 跳'], [2, '2 跳'], [3, '3 跳'], [5, '5 跳']], F.jumps)}</div>`}
-      <div class="pi-checks">
+      <div class="pi-checks"${F.mode === 'wh' ? ' hidden' : ''}>
         ${[['high', '高安'], ['low', '低安'], ['null', '00 / 波赫文']].map(([k, label]) => `<label class="pi-check sec-${k}"><input type="checkbox" data-pi-sec="${k}"${F.sec[k] ? ' checked' : ''}><span>${label}</span></label>`).join('')}
       </div>
     </div>
@@ -754,10 +1045,14 @@ function renderForm() {
     </div>
     <div class="pi-field">
       <label>估算参数</label>
+      ${buy ? `
+      <div class="pi-inline"><span>原料价</span>${seg('inPrice', [['sell', '吉他卖单'], ['buy', '吉他收单']], F.inPrice)}</div>
+      <div class="pi-inline"><span>售价</span>${seg('price', [['sell', '吉他卖单'], ['buy', '吉他收单']], F.price)}</div>
+      <div class="pi-inline"><span>补货周期</span>${seg('restock', [[12, '12 小时'], [24, '1 天'], [48, '2 天'], [72, '3 天']], F.restock)}</div>` : `
       <div class="pi-inline"><span>资源丰度</span>${seg('rich', Object.entries(RICHNESS).map(([k, [, label]]) => [k, label]), F.rich)}</div>
-      <div class="pi-inline"><span>价格</span>${seg('price', [['sell', '吉他卖单'], ['buy', '吉他收单']], F.price)}</div>
+      <div class="pi-inline"><span>价格</span>${seg('price', [['sell', '吉他卖单'], ['buy', '吉他收单']], F.price)}</div>`}
       <div class="pi-inline"><span>海关税率</span><input type="number" class="pi-input pi-tax" min="0" max="100" step="0.5" value="${F.tax}" data-pi-num="tax"><span>%</span></div>
-      <small class="pi-hint">每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位</small>
+      <small class="pi-hint">${buy ? '原料价「卖单」为直接买入（偏保守），「收单」为挂单收购；补货周期越长，需要的发射平台越多' : `每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位`}</small>
     </div>
     <button type="submit" class="btn btn-primary pi-go">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>一键规划
@@ -771,7 +1066,9 @@ function bind() {
     const set = e.target.closest('[data-pi-set]');
     if (set) {
       const key = set.dataset.piSet;
-      F[key] = key === 'jumps' ? Number(set.dataset.v) : set.dataset.v;
+      F[key] = key === 'jumps' || key === 'restock' ? Number(set.dataset.v) : set.dataset.v;
+      if (key === 'way' && F.way === 'buy' && F.target && tierOf(F.target) === 0) F.target = 0;
+      if (key === 'whCls') F.whSystem = 0;
       saveForm();
       renderForm();
       if (key !== 'mode' && R.area) run();
@@ -779,7 +1076,8 @@ function bind() {
     }
     const pick = e.target.closest('[data-pi-pick]');
     if (pick) {
-      F.system = Number(pick.dataset.piPick);
+      if (F.mode === 'wh') F.whSystem = Number(pick.dataset.piPick);
+      else F.system = Number(pick.dataset.piPick);
       saveForm();
       renderForm();
     }
@@ -808,7 +1106,9 @@ function suggest(q) {
   if (!q) { box.hidden = true; return; }
   const lower = q.toLowerCase();
   const hits = [];
+  const wh = F.mode === 'wh';
   for (const s of D.sysById.values()) {
+    if (Boolean(s.wh) !== wh || (wh && !s.planets.length)) continue;
     const name = s.name.toLowerCase();
     if (name.includes(lower)) hits.push([name.startsWith(lower) ? 0 : 1, s]);
     if (hits.length > 400) break;
@@ -816,9 +1116,10 @@ function suggest(q) {
   hits.sort((a, b) => a[0] - b[0] || a[1].name.length - b[1].name.length);
   const regionName = (id) => D.regions.find((r) => r.id === id)?.name || '';
   box.innerHTML = hits.slice(0, 12).map(([, s]) => {
-    const sec = secInfo(s.sec);
-    return `<button type="button" class="kb-suggest-item" data-pi-pick="${s.id}"><i style="background:${sec.color}"></i><span>${ctx.esc(s.name)} <b style="color:${sec.color}">${sec.text}</b></span><small>${ctx.esc(regionName(s.region))} · ${s.planets.length} 颗行星</small></button>`;
-  }).join('') || '<div class="kb-suggest-group">没有匹配的星系</div>';
+    const sec = s.wh ? { color: 'var(--accent-primary)', text: whLabel(s.wh) } : secInfo(s.sec);
+    const codes = s.wh ? ' · ' + [...new Set(s.planets.map((p) => D.ptByCode[p.code].name))].join(' ') : '';
+    return `<button type="button" class="kb-suggest-item" data-pi-pick="${s.id}"><i style="background:${sec.color}"></i><span>${ctx.esc(s.name)} <b style="color:${sec.color}">${sec.text}</b></span><small>${s.wh ? '虫洞' : ctx.esc(regionName(s.region))} · ${s.planets.length} 颗行星${codes}</small></button>`;
+  }).join('') || `<div class="kb-suggest-group">没有匹配的${wh ? '虫洞（需有可建殖民地的行星）' : '星系'}</div>`;
   box.hidden = false;
 }
 
@@ -843,11 +1144,19 @@ async function run() {
   R.area = area;
   demCache.clear();
   let plans;
-  if (F.target) plans = [planProduct(F.target, area)];
+  const plan = F.way === 'buy' ? planBuy : planProduct;
+  if (F.target) plans = [plan(F.target, area)];
   else {
-    plans = Object.keys(D.pi.commodities).map(Number).filter((id) => tierOf(id) === 0 || D.schemByOut.has(id))
-      .map((id) => planProduct(id, area)).filter((p) => !p.error && p.profit > 0)
+    plans = Object.keys(D.pi.commodities).map(Number).filter((id) => F.way === 'buy' ? D.schemByOut.has(id) : tierOf(id) === 0 || D.schemByOut.has(id))
+      .map((id) => plan(id, area)).filter((p) => !p.error && p.profit > 0)
       .sort((a, b) => b.profit - a.profit);
+  }
+  if (F.way === 'buy') {
+    // 缩减后排名会变：直到前 20 名都按成交量核对过
+    for (let todo; (todo = plans.slice(0, 20).filter((p) => !p.error && !p.depthChecked)).length;) {
+      await applyMarketDepth(todo);
+      plans = plans.filter((p) => p.error || p.profit > 0).sort((a, b) => b.profit - a.profit);
+    }
   }
   R.plans = plans;
   R.selected = 0;
@@ -858,9 +1167,12 @@ async function run() {
 }
 
 function areaSummary(area) {
-  const label = F.mode === 'region'
-    ? ctx.esc(D.regions.find((r) => r.id === F.region)?.name || '')
-    : `${ctx.esc(D.sysById.get(F.system)?.name || '')} ${F.jumps ? F.jumps + ' 跳内' : ''}`;
+  const whSys = D.sysById.get(F.whSystem);
+  const label = F.mode === 'wh'
+    ? (F.whSystem && whSys ? `${ctx.esc(whSys.name)}（${whLabel(whSys.wh)}）` : `${WH_CLASSES.find(([k]) => k === F.whCls)?.[1] || ''} 虫洞`)
+    : F.mode === 'region'
+      ? ctx.esc(D.regions.find((r) => r.id === F.region)?.name || '')
+      : `${ctx.esc(D.sysById.get(F.system)?.name || '')} ${F.jumps ? F.jumps + ' 跳内' : ''}`;
   const chips = Object.entries(area.counts).sort((a, b) => b[1] - a[1])
     .map(([code, n]) => `<span class="pi-ptype" style="--pt:${PLANET_COLORS[code]}"><i></i>${D.ptByCode[code].name} <b>${n}</b></span>`).join('');
   return `<div class="pi-area">
@@ -873,6 +1185,7 @@ function strategyLabel(p) {
   if (p.strategy === 'single') return `单星 P2 × ${p.singles}`;
   if (p.strategy === 'extract') return `采集 × ${p.planets}`;
   if (p.strategy === 'raw') return `采集直接卖 × ${p.planets}`;
+  if (p.strategy === 'buy') return `买 P${p.buyTier} 加工 × ${p.planets}${p.wanted ? ` / ${p.wanted}` : ''}${p.hubs > 1 ? `（各 ${p.hubs} 个发射平台）` : ''}`;
   if (p.strategy === 'hybrid') return `采集 × ${p.planets}（${p.m} 颗兼工厂）`;
   return `采集 × ${p.planets - p.factories} + 工厂 × ${p.factories}`;
 }
@@ -922,7 +1235,13 @@ function renderDetail() {
 
   // 生产链
   let chain = '';
-  if (plan.strategy === 'single') {
+  if (plan.strategy === 'buy') {
+    const byTier = new Map();
+    const add = (id, rate, bought) => { const t = tierOf(id); if (!byTier.has(t)) byTier.set(t, new Map()); const m = byTier.get(t); m.set(id, { rate: (m.get(id)?.rate || 0) + rate, bought }); };
+    for (const [out, n] of plan.dem.fac) { const s = D.schemByOut.get(out); add(out, n * plan.rate * perHour(s, s.outQty), false); }
+    for (const [id, q] of plan.dem.buy) add(id, q * plan.rate, true);
+    chain = [...byTier.keys()].sort().map((t) => `<div class="pi-chain-row"><em>P${t}</em>${[...byTier.get(t)].map(([id, v]) => `<span class="${id === plan.product ? 'pi-chain-final' : v.bought ? 'pi-chain-buy' : ''}">${icon(id)}${ctx.esc(cName(id))} <b>${fmtH(v.rate)}/h</b>${v.bought ? '<small>买入</small>' : ''}</span>`).join('')}</div>`).join('');
+  } else if (plan.strategy === 'single') {
     const s = plan.single;
     chain = `<div class="pi-chain-row">${s.p0s.map((p0) => `<span>${icon(p0)}${ctx.esc(cName(p0))} <b>${fmtH(s.p0h)}/h</b></span>`).join('')}</div>
       <div class="pi-chain-row">${s.p1s.map((p1) => `<span>${icon(p1)}${ctx.esc(cName(p1))} <b>${fmtH(s.p1h)}/h</b></span>`).join('')}</div>
@@ -938,7 +1257,15 @@ function renderDetail() {
     }
     chain = [...byTier.keys()].sort().map((t) => `<div class="pi-chain-row"><em>P${t}</em>${[...byTier.get(t)].map(([id, r]) => `<span class="${id === plan.product ? 'pi-chain-final' : ''}">${icon(id)}${ctx.esc(cName(id))} <b>${fmtH(r)}/h</b></span>`).join('')}</div>`).join('');
   }
-  const surplus = (plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '')
+  const buyNote = plan.strategy === 'buy' ? (() => {
+    const inDay = [...plan.dem.buy].reduce((t, [id, q]) => t + q * plan.rate * 24 * vol(id), 0);
+    const outDay = plan.rate * 24 * vol(plan.product);
+    return `<p class="pi-note">每天买入原料 ${ctx.formatNumber(Math.round(inDay))} m³、运出产品 ${ctx.formatNumber(Math.round(outDay))} m³；每 ${F.restock} 小时补货一次，每颗星 ${plan.hubs} 个发射平台（各 ${ctx.formatNumber(LP_CAP)} m³）。
+      一个补货周期的原料约 ${ctx.formatISK(plan.cost / 24 * F.restock)}，月净收益 ${ctx.formatISK(plan.profit * 30)}。</p>
+      ${plan.wanted ? `<p class="pi-note warn">受吉他成交量限制（卖出、买入各不超过日成交的 ${MARKET_SHARE * 100}%），只用 ${plan.planets} / ${plan.wanted} 颗行星，其余行星可以做别的产品。</p>` : ''}
+      <p class="pi-note" id="piDepth"></p>`;
+  })() : '';
+  const surplus = buyNote + (plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '')
     + (plan.strategy === 'raw' ? `<p class="pi-note">P0 体积大：每颗星每天约 ${ctx.formatNumber(Math.round(plan.rate / plan.planets * 24 * (commodity(plan.product)[3] || 0.01)))} m³（发射平台容量 10,000 m³），运输量约是加工成 P1 的 ${Math.round(150 * (commodity(plan.product)[3] || 0.01) / (commodity(p1Of(plan.product))[3] || 0.38) * 10) / 10} 倍。</p>` : '')
     + (plan.strategy === 'hybrid' ? `<p class="pi-note">不单开工厂星：加工设施平摊在 ${plan.m} 颗采集星上（采集星电网吃紧、CPU 富余，每颗只少放一两个采集头）。需要把其他 P1 运到这些星的发射平台。</p>` : '');
 
@@ -950,18 +1277,18 @@ function renderDetail() {
     <div class="pi-char">
       <div class="pi-char-head">角色 ${ci + 1}<span>${c.rows.length} / ${F.perChar} 颗</span></div>
       ${c.rows.map((r) => {
-        const sec = secInfo(r.at.sys.sec);
+        const sec = r.at.sys.wh ? { color: 'var(--accent-primary)', text: whLabel(r.at.sys.wh) } : secInfo(r.at.sys.sec);
         return `<div class="pi-planet">
           <i class="pi-dot" style="--pt:${PLANET_COLORS[r.at.code]}" title="${D.ptByCode[r.at.code].name}"></i>
           <div class="pi-planet-main">
             <b>${ctx.esc(planetName(r.at.sys, r.at.planet))}</b> <span style="color:${sec.color}">${sec.text}</span>
-            <small>${D.ptByCode[r.at.code].name} · ${ctx.esc(regionName(r.at.sys.region))}${r.jumps ? ` · 距中心 ${r.jumps} 跳` : r.jumps === 0 ? ' · 中心星系' : ''}</small>
+            <small>${D.ptByCode[r.at.code].name} · ${r.at.sys.wh ? '虫洞' : ctx.esc(regionName(r.at.sys.region)) + (r.jumps ? ` · 距中心 ${r.jumps} 跳` : r.jumps === 0 ? ' · 中心星系' : '')}</small>
           </div>
           <button type="button" class="pi-role" data-pi-tpl-jump="${tplKey(r)}">${ctx.esc(roleText(r))}</button>
         </div>`;
       }).join('') || '<p class="text-muted">未分配</p>'}
     </div>`).join('');
-  const warn = assign.warnings.length ? `<p class="pi-note warn">${assign.warnings.length} 个殖民地没有可用行星，可扩大地区或增加角色。</p>` : '';
+  const warn = assign.warnings.length ? `<p class="pi-note warn">${assign.warnings.length} 个殖民地没有可用行星，${F.mode === 'wh' && !F.whSystem ? '按等级时行星分配只取一个示例虫洞；指定你所在的虫洞可得到准确方案。' : '可扩大地区或增加角色。'}</p>` : '';
 
   // 模板
   const [capC, capP] = ccCap();
@@ -995,16 +1322,17 @@ function renderDetail() {
       <div class="pi-stats">
         <div><span>日产量</span><b>${ctx.formatNumber(Math.round(plan.rate * 24))}</b></div>
         <div><span>日收入</span><b>${ctx.formatISK(plan.revenue)}</b></div>
+        ${plan.strategy === 'buy' ? `<div><span>原料成本</span><b>${ctx.formatISK(plan.cost)}</b></div>` : ''}
         <div><span>海关税</span><b>${ctx.formatISK(plan.tax)}</b></div>
         <div class="pi-stat-main"><span>日净收益</span><b>${ctx.formatISK(plan.profit)}</b></div>
-        <div><span>月净收益</span><b>${ctx.formatISK(plan.profit * 30)}</b></div>
+        ${plan.strategy === 'buy' ? '' : `<div><span>月净收益</span><b>${ctx.formatISK(plan.profit * 30)}</b></div>`}
       </div>
       <h4>生产链</h4>
       <div class="pi-chain">${chain}</div>
       ${surplus}
     </div>
     <div class="pi-card">
-      <div class="pi-card-head"><h3>行星分配</h3><span class="text-muted">中心 ${ctx.esc(assign.home?.name || '')}</span></div>
+      <div class="pi-card-head"><h3>行星分配</h3><span class="text-muted">${F.mode === 'wh' ? (F.whSystem ? '' : '示例虫洞 ') : '中心 '}${ctx.esc(assign.home?.name || '')}</span></div>
       ${warn}
       <div class="pi-chars">${charBlocks}</div>
     </div>
@@ -1015,12 +1343,71 @@ function renderDetail() {
         <b>导入游戏</b>
         <ol>
           <li>放置指挥中心并升到 ${F.cc} 级</li>
+          ${plan.strategy === 'buy' ? '<li>在吉他买好原料，运到行星所在星系，通过海关办公室进口到发射平台（多个发射平台时平均分）</li>' : ''}
           <li>复制模板，游戏内「模板 → 导入与导出 → 从剪贴板载入」；或把 .json 放进 <code>文档\\EVE\\PlanetaryInteractionTemplates</code></li>
-          <li>摆放采集头、设定周期后提交</li>
+          ${plan.strategy === 'buy' ? '<li>提交后工厂会按路由自动从发射平台取料</li>' : '<li>摆放采集头、设定周期后提交</li>'}
         </ol>
       </div>
     </div>`;
   el.querySelectorAll('[data-pi-thumb]').forEach((c) => drawThumb(c, templates[Number(c.dataset.piThumb)].json));
+  if (plan.strategy === 'buy') showDepth(plan);
+}
+
+// 市场深度：本方案日产量、日采购量占吉他（伏尔戈）近 30 天日均成交量的比例
+const history = new Map();
+function dailyVolume(id) {
+  if (!history.has(id)) {
+    history.set(id, (ctx.fetchESI ? ctx.fetchESI(`/markets/10000002/history/?type_id=${id}`) : Promise.reject(new Error('no esi')))
+      .then((h) => { const last = (Array.isArray(h) ? h : []).slice(-30); return last.length ? last.reduce((t, x) => t + x.volume, 0) / 30 : 0; })
+      .catch(() => { history.delete(id); return null; }));
+  }
+  return history.get(id);
+}
+// 买料加工：按吉他成交量限制行星数（每颗星的产量、采购量固定，按比例缩减）
+async function applyMarketDepth(plans) {
+  const ids = [...new Set(plans.filter((p) => !p.error).flatMap((p) => [p.product, ...p.dem.buy.keys()]))];
+  let done = 0;
+  const queue = ids.slice();
+  await Promise.all(Array.from({ length: 6 }, async () => {
+    while (queue.length) {
+      await dailyVolume(queue.shift());
+      const el = $('piProgress');
+      if (el) el.textContent = `读取吉他成交量 ${++done}/${ids.length}`;
+    }
+  }));
+  for (const plan of plans) {
+    if (plan.error) continue;
+    plan.depthChecked = true;
+    const perPlanet = plan.rate / plan.planets * 24;
+    const items = [[plan.product, 1], ...plan.dem.buy];
+    let cap = Infinity;
+    for (const [id, q] of items) {
+      const v = await dailyVolume(id);
+      if (v != null) cap = Math.min(cap, Math.floor(v * MARKET_SHARE / (perPlanet * q)));
+    }
+    if (cap >= plan.planets) continue;
+    const k = cap / plan.planets;
+    plan.wanted = plan.planets;
+    for (const key of ['rate', 'revenue', 'cost', 'tax', 'profit']) plan[key] *= k;
+    plan.planets = plan.factories = cap;
+  }
+}
+
+async function showDepth(plan) {
+  const items = [[plan.product, plan.rate * 24, '卖出'], ...[...plan.dem.buy].map(([id, q]) => [id, q * plan.rate * 24, '买入'])];
+  const vols = await Promise.all(items.map(([id]) => dailyVolume(id)));
+  const el = $('piDepth');
+  if (!el || R.plans[R.selected] !== plan) return;
+  const parts = items.map(([id, n, verb], i) => {
+    const v = vols[i];
+    if (v == null) return null;
+    const pct = v ? n / v * 100 : Infinity;
+    return { text: `${verb}${cName(id)} ${ctx.formatNumber(Math.round(n))}/天，占吉他日成交 ${v ? (pct < 1 ? pct.toFixed(1) : Math.round(pct)) + '%' : '—（几乎没有成交）'}`, high: pct > 20 };
+  }).filter(Boolean);
+  if (!parts.length) return;
+  const high = parts.some((p) => p.high);
+  el.classList.toggle('warn', high);
+  el.innerHTML = ctx.esc(parts.map((p) => p.text).join('；')) + (high ? '。占比过高时价格会被自己打穿，建议减少行星数或分散到几种产品' : '');
 }
 
 function onResultClick(e) {
