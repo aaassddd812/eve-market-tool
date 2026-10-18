@@ -93,7 +93,7 @@ export async function showFitting(restored = false) {
       return;
     }
     app.getMarketPriceMap().then((m) => { F.prices = m; if (F.fit) renderStats(); }).catch(() => {});
-    if (!loadFromHash()) {
+    if (!loadPendingKill() && !loadFromHash()) {
       const saved = app.store.getJSON(CURRENT_KEY, null);
       F.fit = saved && F.data.types.has(saved.ship) ? normalize(saved) : null;
     }
@@ -103,7 +103,7 @@ export async function showFitting(restored = false) {
     recompute();
     return;
   }
-  if (loadFromHash()) { recompute(); renderBrowser(); restored = false; }
+  if (loadPendingKill() || loadFromHash()) { recompute(); renderBrowser(); restored = false; }
   syncSkillMode(restored);
 }
 
@@ -1050,6 +1050,60 @@ function fromEsiFit(f) {
     }
   }
   return { fit, skipped };
+}
+
+// ---------- 击杀邮件 → 装配 ----------
+// 击杀详情「去装配页查看」：先记下，进入装配页时载入
+// 返回 false 表示这艘船（如建筑、太空舱外的物体）不能装配，不跳转
+let pendingKill = null;
+export async function queueKillFit(km) {
+  if (!F.loading) F.loading = FE.loadFitData(DATA_URL);
+  const data = await F.loading.catch((error) => { F.loading = null; throw error; });
+  if (!data.types.has(km.victim.ship_type_id)) return false;
+  pendingKill = km;
+  return true;
+}
+
+function loadPendingKill() {
+  if (!pendingKill) return false;
+  const km = pendingKill;
+  pendingKill = null;
+  const r = fromKillmail(km);
+  if (r.error) { app.showToast('无法载入这次击杀的装配：' + r.error, 'error', 4000); return false; }
+  stashDraft(F.fit);
+  F.fit = r.fit;
+  F.selected = null;
+  autoActivateDrones();
+  history.replaceState(null, '', location.pathname + '#fit');
+  app.showToast(r.skipped ? `已载入击杀装配，${r.skipped} 项暂不支持已忽略` : '已载入击杀装配，可点「保存」存到本机', r.skipped ? 'info' : 'success', 3500);
+  return true;
+}
+
+// 击杀邮件的物品与游戏装配同用数字 flag；已装填的弹药与装备同一 flag，货舱物品不计入装配
+const KILL_FIGHTER_TUBES = [159, 163];   // 已出击的舰载机
+const KILL_IMPLANT_FLAG = 89;
+function fromKillmail(km) {
+  const v = km.victim;
+  const items = [];
+  const charges = [];
+  const implants = [];
+  for (const it of v.items || []) {
+    const t = type(it.item_type_id);
+    const qty = (it.quantity_dropped || 0) + (it.quantity_destroyed || 0) || 1;
+    if (it.flag === KILL_IMPLANT_FLAG) { if (t) implants.push(t.id); continue; }
+    const flag = it.flag >= KILL_FIGHTER_TUBES[0] && it.flag <= KILL_FIGHTER_TUBES[1] ? 158 : it.flag;
+    const where = parseFlag(flag);
+    if (where.slot && t?.category === FE.CAT.charge) { charges.push([where, t.id]); continue; }
+    if (where.slot || where.bay === 'DroneBay' || where.bay === 'FighterBay') items.push({ type_id: it.item_type_id, flag, quantity: qty });
+  }
+  const r = fromEsiFit({ ship_type_id: v.ship_type_id, name: `击杀 #${km.killmail_id}`, items });
+  if (r.error) return r;
+  for (const [w, id] of charges) {
+    const m = w.slot !== 'sub' && r.fit.slots[w.slot][w.index];
+    if (m && FE.chargeFits(type(m.type), type(id))) m.charge = id;
+  }
+  r.fit.implants = implants;
+  return r;
 }
 
 // 本工具的装配 → ESI 装配（POST 请求体）；每个装备按满弹药量在货舱放一份弹药

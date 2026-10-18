@@ -438,7 +438,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v25').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v26').then((m) => {
     m.initFitting({
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -460,6 +460,22 @@ async function openFitting(restored = false) {
     console.error('模拟装配加载失败:', error);
     showToast('模拟装配加载失败：' + error.message, 'error', 4000);
   }
+}
+
+// 击杀详情「去装配页查看」：切到装配页并载入击杀时的装配；后退回到原页面
+async function openKillFit(kill) {
+  try {
+    if (!await (await loadFittingModule()).queueKillFit(kill)) {
+      showToast('这个目标不是可装配的舰船', 'info', 3000);
+      return false;
+    }
+  } catch (error) {
+    showToast('模拟装配加载失败：' + error.message, 'error', 4000);
+    return false;
+  }
+  history.pushState(null, '', location.pathname + '#fit');
+  switchView('fit');
+  return true;
 }
 
 // 击杀记录页：首屏后空闲时预加载，或首次进入时加载
@@ -588,9 +604,9 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v19').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v20').then((m) => {
     m.initKillboard({
-      esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap
+      esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit
     });
     killboardModule = m;
     return m;

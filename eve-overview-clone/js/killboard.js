@@ -25,6 +25,13 @@ export function initKillboard(context) {
     if (e.target.closest('a[data-kb-entity]')) closeKill();
     const fit = e.target.closest('[data-kill-tab]');
     if (fit) switchKillTab(fit.dataset.killTab);
+    // 去装配页查看：关闭弹窗，在模拟装配中打开这艘船与击杀时的装配
+    const go = e.target.closest('[data-kill-fit]');
+    if (go && shownKill && !go.disabled) {
+      const kill = shownKill;
+      go.disabled = true;
+      app.openKillFit(kill).then((ok) => { if (ok) closeKill(); else go.disabled = false; });
+    }
   });
 }
 
@@ -239,12 +246,14 @@ function slotGroup(flag) {
 }
 
 let currentKill = null;
+let shownKill = null;   // 弹窗中正在显示的击杀
 
 // options.prices：自定义逐项单价（击杀记录页使用吉他中间价）；options.priceNote：估值说明
 // options.load：异步加载击杀数据（先打开弹窗显示加载状态）
 export async function openKill(kill, options = {}) {
   const token = {};
   currentKill = token;
+  shownKill = null;
   const modal = $('killModal');
   const body = $('killBody');
   modal.hidden = false;
@@ -255,6 +264,7 @@ export async function openKill(kill, options = {}) {
     const [prices] = await Promise.all([options.prices || app.getMarketPriceMap(), prepareKills([kill], { attackers: 'all' })]);
     if (currentKill !== token) return;
     body.innerHTML = renderKill(kill, prices, options.priceNote);
+    shownKill = kill;
   } catch (error) {
     if (currentKill === token) body.innerHTML = '<p class="text-muted kb-empty">击杀详情读取失败：' + app.esc(error.message) + '</p>';
     return;
@@ -286,6 +296,7 @@ export function openServiceKill(id) {
 function closeKill() {
   $('killModal').hidden = true;
   currentKill = null;
+  shownKill = null;
 }
 
 export function isKillOpen() {
@@ -377,6 +388,7 @@ function renderKill(k, prices, priceNote) {
       <div class="kb-values">
         <div class="kb-total"><span>总价值</span><strong>${app.formatISK(z.totalValue)}<small>ISK</small></strong></div>
         <div class="kb-split"><span class="kb-dropped">掉落 ${app.formatISK(z.droppedValue)}</span><span class="kb-destroyed">摧毁 ${app.formatISK(z.destroyedValue)}</span></div>
+        ${app.openKillFit ? '<button class="btn btn-primary" data-kill-fit title="在模拟装配中打开这艘船与击杀时的装配">去装配页查看</button>' : ''}
         <a class="btn btn-ghost" href="https://zkillboard.com/kill/${k.killmail_id}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>
         ${k.zkb.valueLabel ? `<span class="kb-value-note">${app.esc(k.zkb.valueLabel)}</span>` : ''}
       </div>
