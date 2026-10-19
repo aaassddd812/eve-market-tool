@@ -970,7 +970,42 @@ function toggleHighlight(key) {
   applyColors();
 }
 
-// 搜索：星系与星域
+// ---------- NPC 人物（npc-data.json，build_npc.mjs 由 SDE 生成）----------
+// ESI 查不到 NPC 的位置，代理人驻地来自 SDE。首次搜索或打开星系面板时才加载（约 360 KB gzip）
+const AGENT_TYPE = { 3: '新手教程', 4: '研究', 5: '统合部', 6: '故事线', 7: '故事线', 8: '活动', 9: '势力战争', 10: '史诗任务', 11: '向导', 12: '职业', 13: '纹章' };
+const NPC = { promise: null, list: null, byId: new Map(), bySystem: new Map(), divisions: {} };
+let agentFocus = null;   // 从搜索结果点进来的 NPC：{ id, system }，星系面板里高亮
+
+function loadNpcData() {
+  if (!NPC.promise) {
+    NPC.promise = fetch('./npc-data.json?v=1').then((res) => {
+      if (!res.ok) throw new Error('NPC 数据加载失败 HTTP ' + res.status);
+      return res.json();
+    }).then((d) => {
+      NPC.divisions = d.divisions || {};
+      // 空间站所在星系以本服星图为准（曙光服星图重排过）
+      const stationSystem = new Map();
+      for (const sys of M.systems) for (const st of sys.stations) stationSystem.set(st, sys.id);
+      NPC.list = d.npcs.map(([id, name, en, corp, station, system, type, division, level, locator, ceo]) =>
+        ({ id, name, en, corp, station, system: stationSystem.get(station) || system, type, division, level, locator, ceo, lower: (name + ' ' + en).toLowerCase() }));
+      for (const n of NPC.list) {
+        NPC.byId.set(n.id, n);
+        if (!NPC.bySystem.has(n.system)) NPC.bySystem.set(n.system, []);
+        NPC.bySystem.get(n.system).push(n);
+      }
+    }).catch((error) => { NPC.promise = null; throw error; });
+  }
+  return NPC.promise;
+}
+
+// 例：4 级 安全代理人 · 势力战争；非代理人显示军团 CEO
+function npcRole(n) {
+  if (!n.type) return n.ceo ? '军团 CEO' : 'NPC 人物';
+  const division = NPC.divisions[n.division] || '';
+  return `${n.level} 级 ${division}代理人${AGENT_TYPE[n.type] ? ' · ' + AGENT_TYPE[n.type] : ''}${n.locator ? ' · 可定位' : ''}`;
+}
+
+// 搜索：星系、星域与 NPC 人物
 function searchMap(query, limit = 20) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
@@ -980,10 +1015,23 @@ function searchMap(query, limit = 20) {
     if (!s.lower.includes(q)) continue;
     results.push({ type: 'system', i: s.i, name: s.name, score: s.lower === q ? -1 : s.lower.startsWith(q) ? 1 : 3 });
   }
+  if (NPC.list) {
+    for (const n of NPC.list) {
+      if (!n.lower.includes(q) || !M.byId.has(n.system)) continue;
+      const exact = n.name.toLowerCase() === q || n.en.toLowerCase() === q;
+      results.push({ type: 'npc', id: n.id, name: n.name, score: exact ? 0 : n.lower.startsWith(q) || n.en.toLowerCase().startsWith(q) ? 2 : 4 });
+    }
+  }
   return results.sort((a, b) => a.score - b.score || a.name.length - b.name.length).slice(0, limit);
 }
 
 function resultRow(r) {
+  if (r.type === 'npc') {
+    const n = NPC.byId.get(r.id);
+    const sys = M.byId.get(n.system);
+    return `<button class="map-result" data-npc="${n.id}"><span class="result-kind">NPC</span><span class="result-name">${app.esc(n.name)}</span>
+      <span class="result-sub">${app.esc(sys.name)} · ${app.esc(n.type ? n.level + ' 级' : n.ceo ? 'CEO' : '')}</span></button>`;
+  }
   if (r.type === 'region') {
     return `<button class="map-result" data-region="${r.id}"><span class="result-kind">星域</span><span class="result-name">${app.esc(r.name)}</span></button>`;
   }
@@ -998,7 +1046,9 @@ function bindSidebar() {
   const run = app.debounce(() => {
     const list = searchMap(input.value);
     results.hidden = !input.value.trim();
-    results.innerHTML = list.length ? list.map(resultRow).join('') : '<p class="legend-empty">没有找到匹配的星系或星域</p>';
+    results.innerHTML = list.length ? list.map(resultRow).join('') : `<p class="legend-empty">${NPC.list ? '没有找到匹配的星系、星域或 NPC 人物' : '没有找到匹配的星系或星域'}</p>`;
+    // NPC 数据首次搜索时才加载，加载完再搜一次
+    if (!NPC.list && input.value.trim()) loadNpcData().then(() => { if (input.value.trim()) run(); }).catch(() => {});
   }, 120);
   input.addEventListener('input', run);
   input.addEventListener('keydown', (e) => {
@@ -1015,6 +1065,15 @@ function bindSidebar() {
     // 手机端：选中星系 / 星域后收起抽屉，露出星图
     const sys = e.target.closest('[data-sys]');
     if (sys) { selectSystem(Number(sys.dataset.sys), true); results.hidden = true; app.closeDrawer(); return; }
+    const npc = e.target.closest('[data-npc]');
+    if (npc) {
+      const n = NPC.byId.get(Number(npc.dataset.npc));
+      agentFocus = { id: n.id, system: n.system };
+      selectSystem(M.byId.get(n.system).i, true);
+      results.hidden = true;
+      app.closeDrawer();
+      return;
+    }
     const reg = e.target.closest('[data-region]');
     if (reg) { selectRegion(Number(reg.dataset.region)); results.hidden = true; app.closeDrawer(); }
   });
@@ -1842,6 +1901,7 @@ function renderSystemInfo(s) {
     </div>
     <p class="map-info-note">过去 1 小时 · 恒星与 ${s.planets} 颗行星 · ${stations.length} 座 NPC 空间站</p>
     ${stations.length ? `<details class="map-stations"${stations.length <= 4 ? ' open' : ''}><summary>NPC 空间站（${stations.length}）</summary><ul>${stations.map((n) => `<li>${app.esc(n)}</li>`).join('')}</ul></details>` : ''}
+    <div id="mapAgents"></div>
     <div class="map-neighbors"><span>相邻星系</span><div>${s.nbr.map((n) => {
       const t = M.systems[n];
       return `<button class="nbr-chip" data-sys="${n}"><i style="background:${secColor(t.sec)}"></i>${app.esc(t.name)}${t.region !== s.region ? `<small>${app.esc(regionName(t.region))}</small>` : ''}</button>`;
@@ -1856,7 +1916,36 @@ function renderSystemInfo(s) {
       <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
     </div>` : ''}`;
   $('mapInfo').hidden = false;
+  renderAgents(s);
   if (SERVER.kb) loadPanelKills(`systemID/${s.id}/`, (kills) => kills.slice(0, 8), () => M.selected === s.i);
+}
+
+// 星系面板：本星系的代理人与 NPC 人物，按空间站分组；从搜索点进来的人物展开并高亮
+function renderAgents(s) {
+  const box = $('mapAgents');
+  if (!box) return;
+  if (!NPC.list) {
+    loadNpcData().then(() => { if (M.selected === s.i) renderAgents(s); }).catch(() => {});
+    return;
+  }
+  const list = NPC.bySystem.get(s.id) || [];
+  if (!list.length) { box.innerHTML = ''; return; }
+  const focus = agentFocus?.system === s.id ? agentFocus.id : null;
+  const groups = new Map();
+  for (const n of [...list].sort((a, b) => (b.level - a.level) || a.name.localeCompare(b.name, 'zh'))) {
+    if (!groups.has(n.station)) groups.set(n.station, []);
+    groups.get(n.station).push(n);
+  }
+  const agents = list.filter((n) => n.type).length;
+  box.innerHTML = `<details class="map-stations map-agents"${focus || list.length <= 6 ? ' open' : ''}>
+    <summary>代理人与 NPC 人物（${agents ? agents + ' 名代理人' : list.length + ' 人'}）</summary>
+    ${[...groups].map(([station, people]) => `<div class="agent-group">${app.esc(station ? app.officialName(station) || '空间站 ' + station : '太空据点（需在星系内的据点找到）')}</div>
+      <ul>${people.map((n) => `<li class="agent-row${n.id === focus ? ' focus' : ''}" data-agent="${n.id}">
+        <img src="${eveImage('characters/' + n.id + '/portrait', 64)}" alt="" width="32" height="32" loading="lazy">
+        <div><button class="link-btn" data-copy="${app.esc(n.name)}" title="复制名字（游戏里可搜索）">${app.esc(n.name)}</button>${n.en ? `<small>${app.esc(n.en)}</small>` : ''}
+          <span>${app.esc(npcRole(n))}</span><span>${app.esc(app.officialName(n.corp) || '')}</span></div></li>`).join('')}</ul>`).join('')}
+  </details>`;
+  if (focus) box.querySelector('.agent-row.focus')?.scrollIntoView({ block: 'nearest' });
 }
 
 // 详情面板中的击杀列表（zKillboard），面板已切换时丢弃结果

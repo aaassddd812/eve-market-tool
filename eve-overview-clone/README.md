@@ -51,6 +51,7 @@ eve-overview-clone/
 ├── map-data.json        # 星图静态数据（build_map.mjs 生成，宁静 / 晨曦共用）
 ├── map-data-infinity.json # 曙光服星图（build_map_esi.mjs 从曙光 ESI 生成）
 ├── npc-names-zh.json    # 官方中文名称表（build_npc_names.mjs 生成）
+├── npc-data.json        # NPC 人物 / 代理人驻地（build_npc.mjs 由 SDE 生成，星图搜索 NPC 用）
 ├── catalog.json         # 物品目录（含官方中文名称）
 └── type-names-zh.json   # 物品中文名数据
 ```
@@ -153,7 +154,18 @@ node build_npc_names.mjs <解压目录> --verify
 ```bash
 node build_map.mjs <SDE 解压目录>   # 输出 eve-overview-clone/map-data.json
 node build_map_esi.mjs <SDE 解压目录> [缓存目录]   # 输出曙光服 eve-overview-clone/map-data-infinity.json（约 2 万次 ESI 请求，可断点续抓）
+node build_npc.mjs <SDE 解压目录>   # 输出 eve-overview-clone/npc-data.json（NPC 人物位置）
 ```
+
+### NPC 人物位置（v54）
+
+- ESI 查不到 NPC 的位置：`/characters/{id}/` 对 NPC 只有公开资料，`/characters/{id}/location/` 需要该角色本人授权。代理人驻地只在 SDE 里，
+  `build_npc.mjs` 从 `npcCharacters`（驻扎空间站）与 `agentsInSpace`（太空据点代理人，只有星系）生成 `npc-data.json`：
+  11342 个有位置的 NPC，其中代理人 10966 个（太空代理人 360 个），约 1 MB，gzip 后约 360 KB
+- **星图搜索**：搜索框同时搜 NPC 人物（中文名 / 英文名），结果标「NPC」并显示所在星系与等级，点击定位到星系；数据在首次搜索或打开星系面板时才加载
+- **星系面板**：新增「代理人与 NPC 人物」，按空间站分组列出头像、中英文名、等级 + 部门 + 类型（研究 / 故事线 / 势力战争 / 史诗任务等，可定位代理人标注）、所属军团；
+  点名字复制（游戏里可直接搜索）。从搜索点进来的人物高亮
+- 空间站所在星系以当前服务器星图为准；曙光服的代理人分布沿用宁静 SDE，可能有出入
 
 ## 模拟装配（v17）
 
