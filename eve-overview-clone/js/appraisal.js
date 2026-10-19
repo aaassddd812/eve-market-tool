@@ -113,6 +113,10 @@ export function parse(text) {
   return { items, unknown };
 }
 
+// 伊甸币（PLEX）是全服统一市场，订单都在星域 19000001，不分交易中心（与 modern-app.js 一致）
+const GLOBAL_MARKET_REGION = 19000001;
+const GLOBAL_MARKET_TYPES = new Set([44992]);
+
 // 交易中心挂单：最低卖价、最高收价，以及按价格排好的收单（算深度用）
 async function hubOrders(region, ids, onProgress) {
   const todo = ids.filter((id) => !A.orders.has(region.id + ':' + id));
@@ -124,7 +128,8 @@ async function hubOrders(region, ids, onProgress) {
       const id = queue.shift();
       let entry;
       try {
-        const orders = (await ctx.fetchESIPaged(`/markets/${region.id}/orders/?order_type=all&type_id=${id}`)).filter((o) => o.location_id === region.hub.id);
+        const global = GLOBAL_MARKET_TYPES.has(Number(id));
+        const orders = (await ctx.fetchESIPaged(`/markets/${global ? GLOBAL_MARKET_REGION : region.id}/orders/?order_type=all&type_id=${id}`)).filter((o) => global || o.location_id === region.hub.id);
         const sells = orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price);
         const buys = orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price);
         entry = { sell: sells[0]?.price ?? null, buy: buys[0]?.price ?? null, buys: buys.map((o) => [o.price, o.volume_remain, o.min_volume || 1]), sells: sells.map((o) => [o.price, o.volume_remain]) };

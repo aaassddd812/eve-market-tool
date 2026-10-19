@@ -1261,6 +1261,36 @@ td.loc {
 .station-meta { font-size: 0.6875rem; color: var(--text-muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 .profile-nav-empty { display: block; padding: 4px 10px 6px; color: var(--text-muted); font-size: 0.75rem; }
 
+.profile-accounts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: var(--spacing-md);
+}
+.account-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  max-width: 220px;
+  padding: 0 12px 0 5px;
+  border-radius: 999px;
+  border: 1px solid var(--border-primary);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+.account-chip img { width: 24px; height: 24px; border-radius: 50%; flex: none; }
+.account-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-chip:hover { border-color: var(--accent-primary); color: var(--text-primary); }
+.account-chip:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
+.account-chip.active { border-color: var(--accent-primary); background: var(--accent-soft); color: var(--text-primary); font-weight: 600; cursor: default; }
+.account-add { padding-left: 10px; border-style: dashed; }
+.account-add svg { width: 14px; height: 14px; flex: none; }
+
 .profile-empty {
   display: flex;
   flex-direction: column;

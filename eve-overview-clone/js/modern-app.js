@@ -363,7 +363,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v4').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v5').then((m) => {
     m.initLp({
       esc, formatISK, formatNumber, showToast, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
@@ -429,7 +429,7 @@ async function openCourier() {
 let appraisalLoading = null;
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v6').then((m) => {
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v7').then((m) => {
       m.initAppraisal({
         esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
         getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -1263,13 +1263,20 @@ function setLoading(loading) {
   btn.classList.toggle('spinning', loading);
 }
 
+// 伊甸币（PLEX）是全服统一市场：ESI 把所有订单与成交历史都归在星域 19000001（GPMR-01），普通星域查不到。
+// 订单上的空间站仍是挂单的真实地点，但在任何地方都能直接买卖，所以不分星域、不按交易中心筛选。
+const GLOBAL_MARKET_REGION = 19000001;
+const GLOBAL_MARKET_TYPES = new Set([44992]);
+
 async function loadMarketData(typeId) {
   // 快速切换物品时取消上一轮请求，并丢弃过期结果
   state.loadController?.abort();
   const controller = new AbortController();
   state.loadController = controller;
   const seq = ++state.loadSeq;
-  const regionId = state.regionId;
+  const globalMarket = GLOBAL_MARKET_TYPES.has(Number(typeId));
+  state.globalMarket = globalMarket;
+  const regionId = globalMarket ? GLOBAL_MARKET_REGION : state.regionId;
   setLoading(true);
   $('updateTag').textContent = '更新中…';
 
@@ -1290,7 +1297,8 @@ async function loadMarketData(typeId) {
     renderOrders();
     renderHistory();
     if (state.contentTab === 'chart') renderChart();
-    $('updateTag').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    $('updateTag').textContent = (globalMarket ? '全服统一市场 · ' : '') + '更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    $('updateTag').title = globalMarket ? '伊甸币全服统一交易：订单不分星域，所列空间站只是挂单地点' : '';
     setLoading(false);
 
     // 地点名称与全服均价不阻塞首屏渲染。全宇宙订单多，只解析最便宜的卖单 / 最高的买单所在地（列表默认按价格排序）
@@ -1494,7 +1502,7 @@ async function loadStructureOrders(typeId, seq) {
     note.hidden = !text;
   };
   const token = state.esiToken || readEsiToken();
-  if (!state.regionId || !token?.access_token) return show('');   // 全宇宙不读玩家建筑（星域太多）
+  if (!state.regionId || state.globalMarket || !token?.access_token) return show('');   // 全宇宙不读玩家建筑（星域太多）；全服统一市场的订单已全部在星域订单里
   if (!hasScope(token, STRUCT_MARKET_SCOPE)) return show('玩家建筑里的订单需要「建筑市场」授权（esi-markets.structure_markets.v1），重新绑定 ESI 后可查看', true);
   try {
     show('查找本星域的玩家建筑市场…');
@@ -1553,7 +1561,7 @@ function currentRegion() {
 function sideOrders(isBuy) {
   const region = currentRegion();
   const hubs = region.all ? new Set(REGIONS.map((r) => r.hub.id)) : region.hub ? new Set([region.hub.id]) : null;
-  return state.orders.filter((o) => o.is_buy_order === isBuy && (!state.hubOnly || !hubs || hubs.has(o.location_id)));
+  return state.orders.filter((o) => o.is_buy_order === isBuy && (!state.hubOnly || !hubs || state.globalMarket || hubs.has(o.location_id)));
 }
 
 // 数值后附带较小的单位；占位符（— / …）不加单位
@@ -2173,7 +2181,39 @@ function readEsiToken() {
   try { return JSON.parse(localStorage.getItem(serverKey('eve-esi-token')) || 'null'); } catch { return null; }
 }
 
+// 多账号：eve-esi-token 是当前使用的角色，eve-esi-accounts 保存所有已绑定角色的令牌（按服务器分开）
+const ACCOUNTS_KEY = serverKey('eve-esi-accounts');
+function readEsiAccounts() {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem(ACCOUNTS_KEY) || '[]'); } catch { /* 忽略 */ }
+  if (!Array.isArray(list)) list = [];
+  list = list.filter((a) => a?.character_id && a.access_token);
+  // 旧版只存了一个令牌：并入列表
+  const active = state.esiToken || readEsiToken();
+  if (active?.character_id && !list.some((a) => a.character_id === active.character_id)) list.unshift(active);
+  return list;
+}
+
+function writeEsiAccounts(list) {
+  try {
+    if (list.length) localStorage.setItem(ACCOUNTS_KEY, JSON.stringify(list));
+    else localStorage.removeItem(ACCOUNTS_KEY);
+  } catch { /* 忽略 */ }
+}
+
+// 先 writeEsiToken(null) 再调用，否则当前令牌会被当作旧版单令牌重新并入
+function removeEsiAccount(id) {
+  writeEsiAccounts(readEsiAccounts().filter((a) => a.character_id !== id));
+}
+
 function writeEsiToken(token) {
+  // 新绑定或刷新后的令牌同步进账号列表（先读列表，旧版单令牌才能在被覆盖前并入）
+  const list = readEsiAccounts();
+  if (token?.character_id) {
+    const i = list.findIndex((a) => a.character_id === token.character_id);
+    if (i >= 0) list[i] = token; else list.push(token);
+  }
+  writeEsiAccounts(list);
   state.esiToken = token;
   if (token) localStorage.setItem(serverKey('eve-esi-token'), JSON.stringify(token));
   else localStorage.removeItem(serverKey('eve-esi-token'));
@@ -2324,7 +2364,11 @@ async function ensureEsiToken() {
         return fresh;
       } catch (error) {
         // 只有 CCP 明确拒绝（4xx）时才清除令牌；网络错误保留，下次再试
-        if (error.status >= 400 && error.status < 500) { writeEsiToken(null); throw new Error('登录已过期，请重新绑定（' + error.message + '）'); }
+        if (error.status >= 400 && error.status < 500) {
+          writeEsiToken(null);
+          removeEsiAccount(token.character_id);
+          throw new Error('登录已过期，请重新绑定（' + error.message + '）');
+        }
         throw error;
       }
     })().finally(() => { refreshing = null; });
@@ -2705,7 +2749,13 @@ function displayName(id) {
 }
 
 function loadProfile() {
-  const token = state.esiToken || readEsiToken();
+  let token = state.esiToken || readEsiToken();
+  // 当前角色被解绑或令牌失效时，自动换到下一个已绑定角色
+  if (!token) {
+    const next = readEsiAccounts()[0];
+    if (next) { writeEsiToken(next); resetCharacterState(); token = next; }
+  }
+  renderEsiAccounts();
   if (!token) {
     $('profileEmpty').hidden = false;
     $('profileContent').hidden = true;
@@ -2748,6 +2798,7 @@ async function loadCharacterData() {
     esiAuthFetchPaged('/characters/' + id + '/assets/').catch((error) => ({ __error: error.message })),
     loadNpcNames()
   ]);
+  if (myCharacterId() !== id) return;   // 读取期间切换了角色，丢弃旧角色的数据
   state.characterData = Object.fromEntries(entries);
   state.contracts = null;
   state.contractItems.clear();
@@ -2795,7 +2846,9 @@ async function loadCharacterData() {
       ch.bloodline_corp_id = bl?.corporation_id || null;   // 血统所属 NPC 军团
     } catch { /* 拿不到就不显示 */ }
   }
-  state.locationIconType = await resolveLocationIconType(state.characterData.location);
+  const data = state.characterData;
+  state.locationIconType = await resolveLocationIconType(data.location);
+  if (state.characterData !== data) return;   // 读取期间切换了角色
 
   renderProfileHero();
   renderProfileStationNav(stationSummaries());
@@ -2929,7 +2982,7 @@ function valuationRegion() {
 }
 
 // regionId:typeId -> { sell, buy, at }；保存在本地 12 小时，重新打开页面不必重查。点「刷新行情」清空当前市场
-const HUB_PRICE_KEY = serverKey('eve-hub-prices-v1');
+const HUB_PRICE_KEY = serverKey('eve-hub-prices-v2');   // v2：伊甸币改查全服统一市场，旧缓存里是空价格
 const HUB_PRICE_TTL = 12 * 3600e3;
 state.hubPriceCache = loadHubPriceCache();
 state.hubPriceInflight = new Map();   // 正在查询的物品，后台预取与页面渲染共用同一请求
@@ -2980,9 +3033,10 @@ async function fetchHubPrices(region, typeIds, onProgress) {
       const typeId = todo[cursor++];
       let entry = { sell: null, buy: null, at: Date.now() };
       try {
-        const orders = await fetchESIPaged(`/markets/${region.id}/orders/?order_type=all&type_id=${typeId}`);
+        const global = GLOBAL_MARKET_TYPES.has(Number(typeId));   // 伊甸币：全服统一市场，不限交易中心
+        const orders = await fetchESIPaged(`/markets/${global ? GLOBAL_MARKET_REGION : region.id}/orders/?order_type=all&type_id=${typeId}`);
         for (const o of orders) {
-          if (o.location_id !== region.hub.id) continue;
+          if (!global && o.location_id !== region.hub.id) continue;
           if (o.is_buy_order) entry.buy = entry.buy === null ? o.price : Math.max(entry.buy, o.price);
           else entry.sell = entry.sell === null ? o.price : Math.min(entry.sell, o.price);
         }
@@ -3853,14 +3907,14 @@ async function bindEsiCallback() {
     const cfg = await ssoConfig();
     // 国服复用的是网易官方 ESI 网页的应用，令牌受众不是本站，不做核对
     const identity = tokenIdentity(data.access_token, IS_TQ ? cfg.client_id : null);
+    const existed = readEsiAccounts().some((a) => a.character_id === identity.character_id);
     writeEsiToken({ ...tokenRecord(data), ...identity });
     $('callbackUrl').value = '';
     $('authLinkBox').hidden = true;
     setEsiStatus('');
     closeEsiModal();
-    showToast('已绑定：' + identity.character_name, 'success');
-    state.characterData = null;
-    TF.resetCharacter();
+    showToast((existed ? '已更新授权：' : '已绑定：') + identity.character_name, 'success');
+    resetCharacterState();
     switchView('profile');
   } catch (error) {
     setEsiStatus(error.message || '绑定失败', 'error');
@@ -3890,6 +3944,47 @@ function handleEsiCallbackRedirect() {
 }
 
 let modalReturnFocus = null;
+
+// ---------- 多账号切换 ----------
+// 换角色后清掉按角色缓存的数据（角色数据、技能、跳数、各页面的「我的」数据）
+function resetCharacterState() {
+  state.characterData = null;
+  state.profileStation = null;
+  skillCache = null;
+  TF.resetCharacter();
+  renderProfileStationNav([]);
+  if (state.jumps || charLoc.key) {
+    state.jumps = null;
+    charLoc.key = '';
+    updateJumpsColumn();
+    if (state.orders) renderOrders();
+  }
+  window.dispatchEvent(new CustomEvent('eve-account-change'));
+}
+
+function switchEsiAccount(id) {
+  if (id === myCharacterId()) return;
+  const account = readEsiAccounts().find((a) => a.character_id === id);
+  if (!account) return;
+  writeEsiToken(account);
+  resetCharacterState();
+  loadProfile();
+  showToast('已切换到 ' + (account.character_name || '角色 ' + id), 'success');
+}
+
+function renderEsiAccounts() {
+  const box = $('profileAccounts');
+  if (!box) return;
+  const list = readEsiAccounts();
+  const current = myCharacterId();
+  box.hidden = !list.length;
+  box.innerHTML = list.map((a) => {
+    const active = a.character_id === current;
+    return `<button type="button" class="account-chip${active ? ' active' : ''}" data-account="${a.character_id}" aria-pressed="${active}" title="${active ? '当前角色' : '切换到 ' + esc(a.character_name || '')}">
+      <img src="${eveImage('characters/' + a.character_id + '/portrait', 64)}" alt="" width="24" height="24" loading="lazy"><span>${esc(a.character_name || '角色 ' + a.character_id)}</span></button>`;
+  }).join('') + `<button type="button" class="account-chip account-add" data-account-add title="再绑定一个角色">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span>添加角色</span></button>`;
+}
 
 function openEsiModal() {
   modalReturnFocus = document.activeElement;
@@ -3923,13 +4018,20 @@ function initESIModal() {
       .finally(() => { btn.disabled = false; btn.classList.remove('spinning'); });
   });
   $('unbindEsiBtn').addEventListener('click', () => {
-    if (!window.confirm('确定解绑当前角色？本地保存的 ESI 令牌将被清除。')) return;
+    const token = state.esiToken || readEsiToken();
+    const name = token?.character_name || '当前角色';
+    const others = readEsiAccounts().length > 1;
+    if (!window.confirm(`确定解绑 ${name}？本地保存的该角色 ESI 令牌将被清除。` + (others ? '解绑后自动切换到其它已绑定角色。' : ''))) return;
     writeEsiToken(null);
-    state.characterData = null;
-    TF.resetCharacter();
-    renderProfileStationNav([]);
+    if (token?.character_id) removeEsiAccount(token.character_id);
+    resetCharacterState();
     loadProfile();
-    showToast('已解绑，本地令牌已清除', 'success');
+    showToast(`已解绑 ${name}，本地令牌已清除`, 'success');
+  });
+  $('profileAccounts')?.addEventListener('click', (e) => {
+    if (e.target.closest('[data-account-add]')) { openEsiModal(); return; }
+    const chip = e.target.closest('[data-account]');
+    if (chip) switchEsiAccount(Number(chip.dataset.account));
   });
   $$('.profile-tabs .tab-link').forEach((link) => link.addEventListener('click', () => switchProfileTab(link.dataset.profile)));
 }

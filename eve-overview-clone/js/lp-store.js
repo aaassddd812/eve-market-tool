@@ -34,6 +34,8 @@ export function initLp(context) {
   if (F.sort === 'isk') F.sort = 'iskLp';                   // 旧版排序按钮
   if (!SORT_DIR[F.sort]) { F.sort = 'iskLp'; F.dir = 'desc'; }
   if (F.dir !== 'asc' && F.dir !== 'desc') F.dir = SORT_DIR[F.sort];
+  // 个人中心切换角色：「我的 LP」重新读取
+  window.addEventListener('eve-account-change', () => { S.mine = null; S.mineError = null; });
 }
 
 // 表头排序（与市场中心订单簿一致）：点击表头按该列排序，再点一次反向；首次点击用该列更有用的方向
