@@ -7,7 +7,7 @@
 //   NPC 空间站基础 50%，不吃改装件 / 建筑 / 安全等级加成；其它物品按碎铁处理：50% × (1 + 碎铁处理技术 2%)。
 // 识别格式：制表符或两个以上空格分列，第一列物品名（游戏复制的名称后可能带 *），第二列数量；
 // 也支持「名称 x 数量」「数量 x 名称」「名称 数量」和单独一行物品名。
-import { SERVER } from './server.js?v=s1';
+import { SERVER } from './server.js?v=s3';
 import * as TF from './trade-fees.js?v=v1';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), regions,
@@ -16,7 +16,7 @@ const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-appraisal-v1';
 const ICON = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
 
-const A = { names: null, loading: null, orders: new Map(), result: null, hub: 10000002, view: 'market', rp: null, rpLoading: null, char: null };
+const A = { names: null, loading: null, orders: new Map(), result: null, hub: SERVER.regions[0].id, view: 'market', rp: null, rpLoading: null, char: null };
 
 // 化矿设置：station npc / athanor / tatara；rig 0 / 1(T1) / 3(T2)；sec h / l / n（高安 / 低安 / 00 与虫洞）；imp 植入体加成 %；tax 再处理税 %
 const S = { station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0 };

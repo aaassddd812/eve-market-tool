@@ -6,9 +6,9 @@
 // 路线：map-data.json 星门图上做广度优先搜索；「安全优先」时起终点都在高安则只走高安，走不通再用最短路线。
 // 推荐用船：按体积、抵押与路线安全从工业舰 / 封锁运输舰 / 深空运输舰 / 货舰 / 跳货中挑选，装配与容量见 courier-ships.js；
 //           路线经过低安 / 00 时默认跳货优先（可改），跳货另用跳跃规划算出跳跃次数与燃料。
-import { SERVER, IS_TQ } from './server.js?v=s1';
+import { SERVER, IS_TQ, HUB, HUB_NAME } from './server.js?v=s3';
 import { SHIPS as HULLS, MODULES } from './courier-ships.js?v=v1';
-import { planJumpRoute, canJumpInto } from './jump-planner.js?v=v13';
+import { planJumpRoute, canJumpInto } from './jump-planner.js?v=v14';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, openEftFit, hasEsiToken, tokenInfo, hasScope, officialName, loadNpcNames, resolveNames, resolveStructures, openEsiBind, openMapSystem, closeDrawer
 const $ = (id) => document.getElementById(id);
@@ -83,7 +83,7 @@ const esc = (s) => ctx.esc(s);
 // ---------- 星图 ----------
 function loadGraph() {
   if (!graphPromise) {
-    graphPromise = fetch('./map-data.json?v=v7r1').then((r) => r.json()).then((d) => {
+    graphPromise = fetch(SERVER.mapData).then((r) => r.json()).then((d) => {
       const n = d.systems.length;
       const g = {
         n, ids: new Int32Array(n), names: [], sec: new Float32Array(n), region: new Int32Array(n), cls: new Uint8Array(n), xyz: d.systems.map((s) => [s[2], s[3], s[4]]),
@@ -583,7 +583,7 @@ function renderSide() {
     <div class="ind-side-section cr-side-sec">
       <h4>我的位置 <small>用于计算取货跳数</small></h4>
       <div class="cr-origin">
-        <input type="search" class="cr-input" id="crOrigin" list="crSystems" placeholder="输入星系名，如 吉他" value="${esc(originName)}" autocomplete="off" spellcheck="false" aria-label="所在星系">
+        <input type="search" class="cr-input" id="crOrigin" list="crSystems" placeholder="输入星系名，如 ${HUB_NAME}" value="${esc(originName)}" autocomplete="off" spellcheck="false" aria-label="所在星系">
         ${F.origin && ctx.hasEsiToken() ? '<button type="button" class="btn btn-ghost" data-cr-charloc title="改用角色当前位置">角色位置</button>' : ''}
       </div>
       <p class="cr-hint">${originHint}</p>
@@ -840,7 +840,7 @@ function shipSection(c) {
   const reasons = [role.why];
   if (p.role === 'freighter' || p.role === 'jf') reasons.push(p.bulk ? `本单 ${ctx.formatNumber(c.volume)} m³：装 ${p.bulk} 个强化舱隔壁仍装得下${p.bulk < 3 ? `，其余 ${3 - p.bulk} 个用扩充货柜舱` : ''}` : '体积大，3 个低槽全用扩充货柜舱才装得下，血量最低，注意侦察');
   if (p.role === 'freighter' && p.risky) reasons.push('路线经过低安：货舰不能跳跃、起跳慢，非常容易被拦截，建议有侦察和护航，或改用跳货分趟');
-  if (p.role === 'freighter' && !p.risky && c.collateral >= 1e9) reasons.push('抵押高：在吉他周边、乌克米等热门星系容易被自杀式攻击，可找队友用网子帮忙快速起跳');
+  if (p.role === 'freighter' && !p.risky && c.collateral >= 1e9) reasons.push('抵押高：在' + HUB_NAME + '周边、乌克米等热门星系容易被自杀式攻击，可找队友用网子帮忙快速起跳');
   if (p.role === 'industrial' && c.collateral) reasons.push(`抵押 ${ctx.formatISK(c.collateral)}：货值不高，被打掉的可能小`);
   if (p.role === 'jf') reasons.push('跳跃货舰不能在高安启动跳跃引擎，也不能跳入高安：起点在高安时先走星门到低安，终点在高安时跳到附近低安再走星门');
   const alts = (p.alts || []).map((a) => `<span class="cr-alt"><img src="${ICON(a.hull.id)}" alt="" width="18" height="18" loading="lazy">${ROLES[a.role].name} · ${esc(a.hull.zh)}<small>${ctx.formatNumber(a.cap)} m³</small></span>`).join('');
@@ -931,7 +931,7 @@ async function sendMail(c, btn) {
   const label = btn.textContent;
   btn.textContent = '发送中…';
   const sysName = (loc) => (loc.sys >= 0 ? G.names[loc.sys] : '未知星系');
-  const sysId = c.from.sys >= 0 ? G.ids[c.from.sys] : c.to.sys >= 0 ? G.ids[c.to.sys] : 30000142;
+  const sysId = c.from.sys >= 0 ? G.ids[c.from.sys] : c.to.sys >= 0 ? G.ids[c.to.sys] : HUB.hub.system;
   const r = c.route;
   const [lv] = riskLevel(c.risk);
   const isk = (v) => ctx.formatNumber(v) + ' ISK';

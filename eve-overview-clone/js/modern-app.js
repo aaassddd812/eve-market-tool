@@ -1,18 +1,12 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v1';
-import { SERVER, SERVER_LIST, IS_TQ, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s1';
+import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s3';
 
 // ===== 配置与常量 =====
 const IMAGE_BASE = 'https://images.evetech.net/types';
 
-// 星域名称取自 ESI /universe/regions/{id}/?language=zh；hub 为该星域主要交易中心空间站
-const REGIONS = [
-  { id: 10000002, name: '伏尔戈', en: 'The Forge', hub: { id: 60003760, name: '吉他海4' } },
-  { id: 10000043, name: '多美', en: 'Domain', hub: { id: 60008494, name: '艾玛 VIII' } },
-  { id: 10000032, name: '金纳泽', en: 'Sinq Laison', hub: { id: 60011866, name: '多迪谢 IX' } },
-  { id: 10000030, name: '西玛特尔', en: 'Heimatar', hub: { id: 60004588, name: '伦斯 VI' } },
-  { id: 10000042, name: '美特伯里斯', en: 'Metropolis', hub: { id: 60005686, name: '赫克 VIII' } }
-];
+// 主要交易中心（按服务器，定义在 server.js）：REGIONS[0] 是全站默认价格基准
+const REGIONS = SERVER.regions;
 
 // 「当前位置」得到的星域保存在这里：{ id, name, system }
 const LOC_REGION_KEY = 'eve-loc-region';
@@ -334,7 +328,7 @@ function switchView(view) {
   if (view === 'courier') openCourier();
 }
 
-// 吉他（伏尔戈交易中心）最低卖价 / 最高收购价：Map(id -> { sell, buy })
+// 默认交易中心（吉他；曙光服为索巴色基）最低卖价 / 最高收购价：Map(id -> { sell, buy })
 async function getJitaPrices(ids, onProgress) {
   const jita = REGIONS[0];
   await fetchHubPrices(jita, ids, onProgress);
@@ -344,7 +338,7 @@ async function getJitaPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v27').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v28').then((m) => {
     m.initIndustry({
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, ensureEsiToken,
@@ -369,7 +363,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v3').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v4').then((m) => {
     m.initLp({
       esc, formatISK, formatNumber, showToast, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
@@ -408,7 +402,7 @@ async function openEftFit(text) {
 let courierLoading = null;
 async function openCourier() {
   try {
-    if (!courierLoading) courierLoading = import('./courier.js?v=v2').then((m) => {
+    if (!courierLoading) courierLoading = import('./courier.js?v=v3').then((m) => {
       m.initCourier({
         esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit,
         hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -435,7 +429,7 @@ async function openCourier() {
 let appraisalLoading = null;
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v5').then((m) => {
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v6').then((m) => {
       m.initAppraisal({
         esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
         getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -458,10 +452,10 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v29').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v30').then((m) => {
     m.initPi({
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
-      // 吉他（伏尔戈交易中心）最低卖价 / 最高收购价
+      // 默认交易中心最低卖价 / 最高收购价
       getHubPrices: getJitaPrices
     });
     return m;
@@ -483,7 +477,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v30').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v31').then((m) => {
     m.initFitting({
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -548,7 +542,7 @@ async function openKbSystem(id) {
   kbPageModule?.filterBySystem(id);
 }
 
-// 晨曦服没有击杀数据源：击杀记录页只显示说明
+// 国服没有击杀数据源：击杀记录页只显示说明
 function renderNoKbPage() {
   const box = $('kbView').querySelector('.kb-scroll');
   if (box.dataset.noKb) return;
@@ -559,6 +553,7 @@ function renderNoKbPage() {
     '<p class="hint">zKillboard 与本站击杀记录服务只收录宁静服的击杀邮件</p>' +
     '<div class="server-unsupported-actions">' +
       (SERVER.kbSite ? `<a class="btn btn-primary" href="${SERVER.kbSite.url}/" target="_blank" rel="noopener">打开${esc(SERVER.kbSite.name)} ↗</a>` : '') +
+      (SERVER.kbExtra || []).map((x) => `<a class="btn btn-ghost" href="${x.url}" target="_blank" rel="noopener">打开${esc(x.name)} ↗</a>`).join('') +
       '<button class="btn btn-ghost" type="button" data-switch-server="tq">切换到宁静服</button>' +
     '</div>' +
   '</div>';
@@ -571,13 +566,13 @@ function initServerSwitch() {
   document.documentElement.dataset.server = SERVER.id;
   if (!SERVER.kb && !SERVER.kbSite) $$('[data-profile="combat"]').forEach((el) => { el.hidden = true; });   // 没有战斗记录数据也没有外部击杀站
   if (SERVER.tokenProxy) {
-    // 晨曦登录服务器不允许浏览器跨域请求令牌，只能经本站转发，如实说明
-    $('esiPrivacyNote').textContent = '使用网易官方 ESI 网页的授权应用登录。晨曦服登录服务器不允许浏览器直接换取令牌，这一步经本站原样转发给网易登录服务器，本站不记录、不保存；令牌只保存在本机。';
+    // 网易登录服务器不允许浏览器跨域请求令牌，只能经本站转发，如实说明
+    $('esiPrivacyNote').textContent = '使用网易官方 ESI 网页的授权应用登录。' + SERVER.full + '登录服务器不允许浏览器直接换取令牌，这一步经本站原样转发给网易登录服务器，本站不记录、不保存；令牌只保存在本机。';
     $('esiCallbackNote').textContent = '登录后会停在网易 ESI 页面（ali-esi.evepc.163.com），立即复制地址栏完整地址（包含 code）粘贴到这里，授权码几分钟内就会失效。';
   }
   menu.innerHTML = SERVER_LIST.map((x) =>
     `<button type="button" role="menuitemradio" aria-checked="${x.id === SERVER.id}" data-switch-server="${x.id}">` +
-      `<b>${esc(x.full)}</b><small>${x.id === 'tq' ? '国际服 · Tranquility' : '国服 · Serenity'}</small></button>`).join('');
+      `<b>${esc(x.full)}</b><small>${esc(x.sub)}</small></button>`).join('');
   const toggle = (open) => {
     menu.hidden = !open;
     btn.setAttribute('aria-expanded', String(open));
@@ -649,7 +644,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v20').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v21').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit
     });
@@ -663,7 +658,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v26').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v27').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -1402,11 +1397,11 @@ function locRegion() {
 
 const UNIVERSE = { id: 0, name: '全宇宙', hub: null, all: true };
 
-// 全部星域（新伊甸 70 个，含只有玩家建筑市场的 00 星域；虫洞、深渊没有市场）
+// 全部星域（宁静 / 晨曦 70 个、曙光 59 个，含只有玩家建筑市场的 00 星域；虫洞、深渊没有市场）
 let marketRegionsPromise = null;
 function loadMarketRegions() {
   if (!marketRegionsPromise) {
-    marketRegionsPromise = fetch('./map-data.json?v=v7r1').then((r) => r.json()).then((d) => {
+    marketRegionsPromise = fetch(SERVER.mapData).then((r) => r.json()).then((d) => {
       const used = new Set(d.systems.map((sys) => sys[6]));
       state.marketRegions = d.regions.filter((r) => used.has(r[0])).map((r) => ({ id: r[0], name: r[1] }))
         .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
@@ -1436,7 +1431,7 @@ function hasScope(token, scope) {
 // 星系 → 星域（map-data.json 与星图共用缓存）
 function systemRegions() {
   if (!systemRegionPromise) {
-    systemRegionPromise = fetch('./map-data.json?v=v7r1').then((r) => r.json())
+    systemRegionPromise = fetch(SERVER.mapData).then((r) => r.json())
       .then((d) => new Map(d.systems.map((sys) => [sys[0], sys[6]])))
       .catch((error) => { systemRegionPromise = null; throw error; });
   }
@@ -1674,7 +1669,7 @@ let gateGraphPromise = null;
 
 function gateGraph() {
   if (!gateGraphPromise) {
-    gateGraphPromise = fetch('./map-data.json?v=v7r1').then((r) => r.json()).then((d) => {
+    gateGraphPromise = fetch(SERVER.mapData).then((r) => r.json()).then((d) => {
       const index = new Map(d.systems.map((sys, i) => [sys[0], i]));
       const adj = d.systems.map(() => []);
       for (const [a, b] of d.gates || []) { adj[a].push(b); adj[b].push(a); }
@@ -2273,7 +2268,7 @@ async function ssoToken(params) {
   const cfg = await ssoConfig();
   let res;
   try {
-    // 晨曦 SSO 不支持跨域，经本站原样转发；宁静服浏览器直连 CCP
+    // 网易 SSO 不支持跨域，经本站原样转发；宁静服浏览器直连 CCP
     res = await fetch(SERVER.tokenProxy ? ESI_API + '/sso/token' + SERVER_QS : SSO_BASE + '/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -3785,7 +3780,7 @@ async function renderCombatTab(box) {
 }
 
 // ===== ESI 绑定 =====
-// 晨曦服：网易登录需要一个设备 ID，由本站向网易申请（网易接口只接受官方页面来源，浏览器不能直接请求）
+// 国服（晨曦 / 曙光）：网易登录需要一个设备 ID，由本站向网易申请（网易接口只接受官方页面来源，浏览器不能直接请求）
 async function neteaseDevice() {
   const res = await fetch(ESI_API + '/sso/device' + SERVER_QS).catch(() => null);
   const data = res ? await res.json().catch(() => ({})) : {};
@@ -3856,7 +3851,7 @@ async function bindEsiCallback() {
       writePkce(pending);
     }
     const cfg = await ssoConfig();
-    // 晨曦服复用的是网易官方 ESI 网页的应用，令牌受众不是本站，不做核对
+    // 国服复用的是网易官方 ESI 网页的应用，令牌受众不是本站，不做核对
     const identity = tokenIdentity(data.access_token, IS_TQ ? cfg.client_id : null);
     writeEsiToken({ ...tokenRecord(data), ...identity });
     $('callbackUrl').value = '';

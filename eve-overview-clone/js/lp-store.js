@@ -5,11 +5,11 @@
 // 我的 LP：ESI 角色忠诚点（esi-characters.read_loyalty.v1），按各军团最佳兑换估算价值。
 // 价格：全服均价（一次请求，立即可用）或吉他卖单 / 收单（按物品逐个读取，有缓存）。
 // 数据：lp-data.json 由 build_lp.mjs 生成（ESI /loyalty/stores + SDE 中文名）。
-import { SERVER, eveImage } from './server.js?v=s1';
+import { SERVER, HUB, HUB_NAME, eveImage } from './server.js?v=s3';
 let ctx;   // esc, formatISK, formatNumber, showToast, store, fetchESI, getHubPrices, getMarketPriceMap, esiAuthFetch, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-lp-v1';
-const FORGE = 10000002;
+const FORGE = HUB.id;   // 默认交易中心所在星域（吉他 / 曙光服为长征）
 const LP_SCOPE = 'esi-characters.read_loyalty.v1';
 const ICON = (id, size = 32) => `https://images.evetech.net/types/${id}/icon?size=${size}`;
 const BPC_ICON = (id, size = 32) => `https://images.evetech.net/types/${id}/bpc?size=${size}`;
@@ -121,7 +121,7 @@ function loadJita(ids, done) {
   if (!need.length) return Promise.resolve();
   const run = (async () => {
     const map = await ctx.getHubPrices(need, (n, total) => {
-      S.progress = `读取吉他行情 ${n}/${total}`;
+      S.progress = `读取${HUB_NAME}行情 ${n}/${total}`;
       const el = document.querySelector('[data-lp-progress]');
       if (el) el.textContent = S.progress;
     }).catch(() => new Map());
@@ -213,7 +213,7 @@ function renderTab() {
 }
 
 const seg = (name, items, cur) => `<div class="segmented" role="group">${items.map(([v, l]) => `<button type="button" data-lp-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-const PRICE_ZH = { sell: '吉他卖单', buy: '吉他收单', avg: '全服均价' };
+const PRICE_ZH = { sell: HUB_NAME + '卖单', buy: HUB_NAME + '收单', avg: '全服均价' };
 
 // ---------- 设置 ----------
 function renderSettings() {
@@ -221,9 +221,9 @@ function renderSettings() {
   el.innerHTML = `
     <summary><b>估价设置</b><span class="text-muted">产物按${PRICE_ZH[F.price]} · 材料按${PRICE_ZH[F.mat]} · 税费 ${F.tax}%</span></summary>
     <div class="ind-set-grid">
-      <div class="pi-field"><label>产物卖出价</label>${seg('price', [['sell', '吉他卖单'], ['buy', '吉他收单'], ['avg', '全服均价']], F.price)}
+      <div class="pi-field"><label>产物卖出价</label>${seg('price', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.price)}
         <p class="pi-note">卖单：挂单出售，价高但要等；收单：直接卖给收购单，立即到手。</p></div>
-      <div class="pi-field"><label>所需物品 / 蓝图材料买入价</label>${seg('mat', [['sell', '吉他卖单'], ['buy', '吉他收单'], ['avg', '全服均价']], F.mat)}</div>
+      <div class="pi-field"><label>所需物品 / 蓝图材料买入价</label>${seg('mat', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.mat)}</div>
       <div class="pi-field"><label>卖出税费（%）</label><input type="number" class="pi-input lp-tax" data-lp-tax min="0" max="30" step="0.1" value="${F.tax}">
         <p class="pi-note">交易税 + 中介费，满级会计学交易税约 3.4%；挂卖单另加中介费。</p></div>
     </div>`;
@@ -233,9 +233,9 @@ function needsJita() { return F.price !== 'avg' || F.mat !== 'avg'; }
 
 function priceNote(rows) {
   if (!needsJita()) return '价格为全服均价（CCP 每日更新），仅供快速比较';
-  if (S.loadingJita) return `<span data-lp-progress>${S.progress || '读取吉他行情…'}</span>（暂用全服均价）`;
+  if (S.loadingJita) return `<span data-lp-progress>${S.progress || `读取${HUB_NAME}行情…`}</span>（暂用全服均价）`;
   const approx = rows.some((r) => r.v.approx);
-  return '吉他实时行情' + (approx ? '（部分物品没有吉他挂单，用全服均价代替，标 ≈）' : '');
+  return HUB_NAME + '实时行情' + (approx ? `（部分物品没有${HUB_NAME}挂单，用全服均价代替，标 ≈）` : '');
 }
 
 // ---------- 兑换项表格 ----------
@@ -366,7 +366,7 @@ function renderRank(body) {
     <div class="pi-card ind-rank-filters">
       ${filterBar('rankQ', sel)}
       <p class="pi-note">${needsJita() && !refined && !S.loadingJita ? '全服均价估算' : priceNote(top.slice(0, REFINE_TOP))}
-        ${needsJita() && !refined ? `<button class="btn btn-ghost ind-refine" data-lp-refine ${S.loadingJita ? 'disabled' : ''}>${S.loadingJita ? '精算中…' : `用吉他行情精算前 ${REFINE_TOP} 名`}</button>` : ''}
+        ${needsJita() && !refined ? `<button class="btn btn-ghost ind-refine" data-lp-refine ${S.loadingJita ? 'disabled' : ''}>${S.loadingJita ? '精算中…' : `用${HUB_NAME}行情精算前 ${REFINE_TOP} 名`}</button>` : ''}
         · 共 ${rows.length} 项${rows.length > RANK_LIMIT ? `，显示前 ${RANK_LIMIT}` : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap lp-table-wrap"><table class="pi-table lp-table">${tableHead()}

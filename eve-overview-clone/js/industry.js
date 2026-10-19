@@ -12,13 +12,13 @@
 //   安装费 = EIV × 星系指数 × (1 − 建筑减免) + EIV × (设施税 + 4% SCC 附加费)
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
-import { SERVER } from './server.js?v=s1';
+import { SERVER, HUB, HUB_NAME } from './server.js?v=s3';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, ensureEsiToken, hasEsiToken
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
 const RECENT_KEY = 'eve-industry-recent';
 const SIDE_PANE_KEY = 'eve-industry-side-pane';
-const JITA = 30000142, FORGE = 10000002;
+const JITA = HUB.hub.system, FORGE = HUB.id;   // 默认交易中心（吉他 / 曙光服为索巴色基）
 const SCC = 4;           // SCC 附加费 %
 const NPC_TAX = 0.25;    // NPC 空间站设施税 %
 const ICON = (id, size = 32) => `https://images.evetech.net/types/${id}/icon?size=${size}`;
@@ -88,7 +88,7 @@ function loadData() {
     D.loading = (async () => {
       const [data, map, prices, indices] = await Promise.all([
         fetch('industry-data.json?v=2').then((r) => { if (!r.ok) throw new Error('industry-data.json ' + r.status); return r.json(); }),
-        fetch('map-data.json').then((r) => { if (!r.ok) throw new Error('map-data.json ' + r.status); return r.json(); }),
+        fetch(SERVER.mapData).then((r) => { if (!r.ok) throw new Error('星图数据 ' + r.status); return r.json(); }),
         ctx.fetchESI('/markets/prices/').catch(() => []),
         ctx.fetchESI('/industry/systems/').catch(() => [])
       ]);
@@ -183,7 +183,7 @@ async function loadBpContracts(ids) {
   const need = ids.filter((id) => !D.bpc.has(id));
   if (!need.length) return;
   try {
-    if (!SERVER.kb) throw new Error('晨曦服没有合同价格数据');
+    if (!SERVER.kb) throw new Error(SERVER.full + '没有合同价格数据');
     const r = await fetch('/api/kb/bpprices?types=' + need.join(','));
     const j = r.ok ? await r.json() : {};
     D.bpUpdated = j.updated || D.bpUpdated;
@@ -193,7 +193,7 @@ async function loadBpContracts(ids) {
 async function loadBpAll() {
   if (D.bpAll) return D.bpAll;
   try {
-    if (!SERVER.kb) throw new Error('晨曦服没有合同价格数据');
+    if (!SERVER.kb) throw new Error(SERVER.full + '没有合同价格数据');
     const r = await fetch('/api/kb/bpprices');
     const j = r.ok ? await r.json() : {};
     D.bpUpdated = j.updated || D.bpUpdated;
@@ -415,7 +415,7 @@ function renderSettings() {
         <div class="pi-inline"><span>建筑税</span><input type="number" class="pi-input pi-tax" min="0" max="50" step="0.1" value="${F.tax}" data-ind-num="tax"><span>%</span></div>
         <small class="pi-hint">卖出税 ${salesTax().toFixed(2)}% · 中介费 ${brokerFee().toFixed(2)}%</small></div>
       <div class="pi-field"><label>价格</label>
-        <div class="pi-inline"><span>买材料</span>${seg('mat', [['sell', '吉他卖单'], ['buy', '挂收单']], F.mat)}</div>
+        <div class="pi-inline"><span>买材料</span>${seg('mat', [['sell', HUB_NAME + '卖单'], ['buy', '挂收单']], F.mat)}</div>
         <div class="pi-inline"><span>卖产品</span>${seg('prod', [['sell', '挂卖单'], ['buy', '卖给收单']], F.prod)}</div></div>
       <div class="pi-field"><label>技能与蓝图</label>
         <div class="pi-inline"><span>技能</span>${seg('skills', [['all5', '全 5 级'], ['esi', '读取角色']], F.skills)}</div>
@@ -485,7 +485,7 @@ async function renderCalc(body) {
       <div class="search-box ind-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input type="search" id="indProd" placeholder="搜索要制造的物品" autocomplete="off" spellcheck="false"><div class="kb-suggest" id="indProdSuggest" hidden></div></div>
     </div>
-    <div id="indCalc">${C.pid ? '<div class="pi-loading" id="indCalcLoading">读取吉他行情…</div>' : `<div class="pi-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 20h20M4 20V9l5 3V9l5 3V6l6 4v10"/></svg><p>搜索要制造的物品</p></div>`}</div>`;
+    <div id="indCalc">${C.pid ? `<div class="pi-loading" id="indCalcLoading">读取${HUB_NAME}行情…</div>` : `<div class="pi-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 20h20M4 20V9l5 3V9l5 3V6l6 4v10"/></svg><p>搜索要制造的物品</p></div>`}</div>`;
   if (!C.pid) return;
   // 吉他行情：产品、全部材料（含可自制材料的下级）、数据核心与解码器
   const ids = new Set([C.pid]);
@@ -498,7 +498,7 @@ async function renderCalc(body) {
   const bpId = BP(C.pid)[0];
   if (BP(C.pid)[7]) ids.add(bpId);   // 市场有售的原图
   await Promise.all([
-    loadJita([...ids], (done, total) => { const el = $('indCalcLoading'); if (el) el.textContent = `读取吉他行情 ${done}/${total}`; }),
+    loadJita([...ids], (done, total) => { const el = $('indCalcLoading'); if (el) el.textContent = `读取${HUB_NAME}行情 ${done}/${total}`; }),
     loadBpContracts([bpId])
   ]);
   if (F.tab !== 'calc' || !$('indCalc')) return;
@@ -582,12 +582,12 @@ function drawCalc() {
       </div>
       <div class="pi-stats ind-stats">
         <div><span>单个成本</span><b>${isk(r.perUnit)}</b></div>
-        <div><span>${F.prod === 'sell' ? '吉他卖价' : '吉他收价'}</span><b>${r.unitPrice != null ? isk(r.unitPrice) : '无报价'}</b></div>
+        <div><span>${HUB_NAME}${F.prod === 'sell' ? '卖价' : '收价'}</span><b>${r.unitPrice != null ? isk(r.unitPrice) : '无报价'}</b></div>
         <div class="${r.profit >= 0 ? 'pi-stat-main' : 'ind-stat-loss'}"><span>总利润</span><b>${isk(r.profit)}</b></div>
         <div><span>利润率</span><b>${margin.toFixed(1)}%</b></div>
         <div><span>制造时间</span><b>${fmtTime(r.j.secs)}</b></div>
         <div><span>每小时利润</span><b>${isk(hours ? r.profit / hours : 0)}</b></div>
-        <div><span>日均成交（吉他）</span><b id="indVol">…</b></div>
+        <div><span>日均成交（${HUB_NAME}）</span><b id="indVol">…</b></div>
       </div>
       <div class="ind-breakdown">
         <span>材料 <b>${isk(r.matCost)}</b></span>
@@ -603,7 +603,7 @@ function drawCalc() {
     ${bpCard(r)}
     <div class="pi-card"><div class="pi-card-head"><h3>去哪里造最省钱</h3>
       <div class="segmented ind-scope">${[['region', '同星域'], ['near', '周边 10 跳'], ['high', '全部高安'], ['all', '全宇宙']].map(([k, l]) => `<button data-ind-set="scope" data-v="${k}" class="${F.scope === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
-      <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>星系</th><th class="pi-hide-sm">星域</th><th class="num">${r.act === 'r' ? '反应' : '制造'}指数</th><th class="num">距吉他</th><th class="num pi-hide-sm">NPC 站</th><th class="num">安装费</th><th class="num">比当前</th></tr></thead><tbody>${whereRows || '<tr><td colspan="7" class="text-muted">没有符合条件的星系</td></tr>'}</tbody></table></div></div>
+      <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>星系</th><th class="pi-hide-sm">星域</th><th class="num">${r.act === 'r' ? '反应' : '制造'}指数</th><th class="num">距${HUB_NAME}</th><th class="num pi-hide-sm">NPC 站</th><th class="num">安装费</th><th class="num">比当前</th></tr></thead><tbody>${whereRows || '<tr><td colspan="7" class="text-muted">没有符合条件的星系</td></tr>'}</tbody></table></div></div>
     <div class="pi-card"><div class="pi-card-head"><h3>购物清单</h3>
       <button class="btn btn-ghost ind-copy" data-ind-copy title="可粘贴到游戏多重购买">复制清单</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>材料</th><th class="num">数量</th><th class="num">费用</th></tr></thead><tbody>${shopRows}</tbody></table></div></div>`;
@@ -708,8 +708,8 @@ function renderRank(body) {
         <div class="pi-inline"><span>活动</span>${seg('rankAct', [['m', '制造'], ['r', '反应']], F.rankAct)}</div>
         <div class="pi-inline"><span>科技</span>${seg('rankTech', [['all', '全部'], ['1', 'T1'], ['2', 'T2'], ['3', 'T3']], F.rankTech)}</div>
       </div>
-      <p class="pi-note">${R.refined ? '前 30 名为吉他实时价，其余为全服均价' : '全服均价估算'}
-        <button class="btn btn-ghost ind-refine" data-ind-refine ${R.busy ? 'disabled' : ''}>${R.busy ? '精算中…' : '用吉他行情精算前 30 名'}</button></p>
+      <p class="pi-note">${R.refined ? `前 30 名为${HUB_NAME}实时价，其余为全服均价` : '全服均价估算'}
+        <button class="btn btn-ghost ind-refine" data-ind-refine ${R.busy ? 'disabled' : ''}>${R.busy ? '精算中…' : `用${HUB_NAME}行情精算前 30 名`}</button></p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap ind-rank-wrap"><table class="pi-table">
       <thead><tr><th>#</th>${[['name', '产品', ''], ['perUnit', '单个成本', 'num pi-hide-sm'], ['unit', '单价', 'num pi-hide-sm'], ['profit', '每流程利润', 'num'], ['margin', '利润率', 'num pi-hide-sm'], ['ph', '每小时利润', 'num']]
@@ -742,7 +742,7 @@ async function refineRank() {
     const inv = invFor(x.pid);
     if (inv) inv[3].forEach(([id]) => ids.add(id));
   }
-  await loadJita([...ids], (done, total) => { const b = document.querySelector('[data-ind-refine]'); if (b) b.textContent = `读取吉他行情 ${done}/${total}`; });
+  await loadJita([...ids], (done, total) => { const b = document.querySelector('[data-ind-refine]'); if (b) b.textContent = `读取${HUB_NAME}行情 ${done}/${total}`; });
   R.busy = false;
   R.refined = true;
   if (F.tab === 'rank') renderTab();
@@ -781,7 +781,7 @@ function renderWhere(body) {
       </div>
     </div>
     <div class="pi-card"><div class="pi-table-wrap ind-rank-wrap"><table class="pi-table">
-      <thead><tr><th>#</th>${sortTh('ind-wsort', F.whereSort, F.whereDir, 'name', '星系')}${sortTh('ind-wsort', F.whereSort, F.whereDir, 'region', '星域', 'pi-hide-sm')}${INDEX.map(([k, l]) => sortTh('ind-wsort', F.whereSort, F.whereDir, k, l, 'num' + (['copying', 'researching_material_efficiency', 'researching_time_efficiency'].includes(k) ? ' pi-hide-sm' : ''))).join('')}${sortTh('ind-wsort', F.whereSort, F.whereDir, 'jumps', '距吉他', 'num')}${sortTh('ind-wsort', F.whereSort, F.whereDir, 'stations', 'NPC 站', 'num pi-hide-sm')}</tr></thead>
+      <thead><tr><th>#</th>${sortTh('ind-wsort', F.whereSort, F.whereDir, 'name', '星系')}${sortTh('ind-wsort', F.whereSort, F.whereDir, 'region', '星域', 'pi-hide-sm')}${INDEX.map(([k, l]) => sortTh('ind-wsort', F.whereSort, F.whereDir, k, l, 'num' + (['copying', 'researching_material_efficiency', 'researching_time_efficiency'].includes(k) ? ' pi-hide-sm' : ''))).join('')}${sortTh('ind-wsort', F.whereSort, F.whereDir, 'jumps', '距' + HUB_NAME, 'num')}${sortTh('ind-wsort', F.whereSort, F.whereDir, 'stations', 'NPC 站', 'num pi-hide-sm')}</tr></thead>
       <tbody>${rows || '<tr><td colspan="11" class="text-muted">没有符合条件的星系</td></tr>'}</tbody></table></div></div>`;
 }
 

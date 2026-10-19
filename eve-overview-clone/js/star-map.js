@@ -7,8 +7,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import * as JP from './jump-planner.js?v=v13';
-import { SERVER, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s1';
+import * as JP from './jump-planner.js?v=v14';
+import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s3';
 
 let app;               // 主程序提供的工具函数
 let canvas, labels, lg; // WebGL 画布、标签画布及其 2D 上下文
@@ -50,13 +50,13 @@ const LAYER_GROUPS = [
 ];
 const LAYERS = LAYER_GROUPS.flatMap(([, list]) => list);
 const LAYER_HINT = {
-  security: '游戏内安全等级配色', region: '每个星域一种颜色', distance: '与选中星系的星门跳数（未选择时以吉他为起点）',
+  security: '游戏内安全等级配色', region: '每个星域一种颜色', distance: `与选中星系的星门跳数（未选择时以${HUB_NAME}为起点）`,
   stations: '星系内 NPC 空间站数量', sov: 'ESI 实时主权：NPC 阵营 / 玩家联盟', adm: '主权枢纽的军事指数（ADM），1–6，越高越难攻破',
   campaigns: '正在进行的主权争夺战', fw: '势力战争占领方与战况',
   kills: '舰船 + 太空舱被击毁数', npc: 'NPC 被击杀数（刷怪活跃度）', jumps: '星门跳跃次数', incursions: '萨沙入侵影响的星系'
 };
 const CAMPAIGN_TYPE_ZH = { tcu_defense: '领土控制器防御', ihub_defense: '主权枢纽防御', station_defense: '空间站防御', station_freeport: '空间站自由港' };
-const JITA_ID = 30000142;
+const JITA_ID = HUB.hub.system;   // 默认起点：吉他（曙光服为索巴色基）
 const DISTANCE_BUCKETS = [[0, 0, '起点'], [1, 1, '1 跳'], [2, 2, '2 跳'], [3, 3, '3 跳'], [4, 5, '4–5 跳'], [6, 10, '6–10 跳'], [11, 20, '11–20 跳'], [21, Infinity, '20 跳以上']];
 const DISTANCE_COLORS = ['#ffffff', '#4fd1ff', '#3fb7f0', '#3a9ae0', '#5a7fd6', '#7a64c8', '#8a4fa8', '#5a3a70'];
 const ADM_COLORS = { 1: '#e5484d', 2: '#f07a3a', 3: '#f2b134', 4: '#c9d33a', 5: '#7ad151', 6: '#30c88a' };
@@ -140,7 +140,7 @@ function constellationName(id) { return M.constellations.get(id)?.name || ''; }
 
 // ---------- 数据 ----------
 async function loadStatic() {
-  const res = await fetch('./map-data.json?v=v7r1');
+  const res = await fetch(SERVER.mapData);
   if (!res.ok) throw new Error('星图数据加载失败 HTTP ' + res.status);
   const data = await res.json();
   M.factions = data.factions;

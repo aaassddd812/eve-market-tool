@@ -2,7 +2,7 @@
 // 数据来源：zKillboard 公开 API（https://zkillboard.com/api/），浏览器可直接请求（CORS: *），无需授权。
 // 一次请求即返回完整击杀邮件（受害者、攻击者、物品）及 zKill 估值（zkb）。
 // 按 zKillboard 的使用约定：请求串行、间隔发送，结果缓存 5 分钟。
-import { SERVER, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s1';
+import { SERVER, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s3';
 import { skCards, skRows, skEntityHead, skTitle } from './skeleton.js?v=v16r7';
 
 let app;
@@ -61,7 +61,7 @@ export function fetchZkill(path) {
 let mapData = null;
 async function loadSystems() {
   if (!mapData) {
-    mapData = fetch('./map-data.json?v=v7r1').then((r) => r.json()).then((d) => {
+    mapData = fetch(SERVER.mapData).then((r) => r.json()).then((d) => {
       const regions = new Map(d.regions.map(([id, name]) => [id, name]));
       const systems = new Map(d.systems.map((s) => [s[0], { sec: s[5], region: regions.get(s[6]) || '', nbr: [] }]));
       // 星门连接（gates 为 systems 数组下标对），供战场统计选择邻近星系

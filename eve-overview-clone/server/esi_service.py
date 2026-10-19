@@ -2,13 +2,13 @@
 """ESI 辅助服务：不接触任何用户令牌。
 
 EVE SSO 采用纯前端 PKCE 授权，宁静服授权码换令牌、刷新令牌都由浏览器直接请求 login.eveonline.com，
-令牌只保存在用户浏览器里。晨曦服登录服务器（login.evepc.163.com）不允许跨域，换令牌请求由本服务原样转发，
+令牌只保存在用户浏览器里。国服（晨曦 login.evepc.163.com、曙光 login-infinity.evepc.163.com）登录服务器不允许跨域，换令牌请求由本服务原样转发，
 不记录、不保存请求与响应内容。
 
-接口（全部仅监听 127.0.0.1，由 nginx 反代对外；带 ?server=serenity 时为晨曦服，不带为宁静服）：
+接口（全部仅监听 127.0.0.1，由 nginx 反代对外；带 ?server=serenity 为晨曦服、?server=infinity 为曙光服，不带为宁静服）：
   GET  /api/esi/config     公开的应用配置（Client ID、回调地址、权限列表），用于浏览器生成授权链接
-  GET  /api/esi/sso/device （仅晨曦服）向网易申请一次性设备 ID（网易登录必填；该接口只接受 esi.evepc.163.com 来源，浏览器无法直接请求）
-  POST /api/esi/sso/token  （仅晨曦服）把授权码 / 刷新令牌请求转发给网易登录服务器
+  GET  /api/esi/sso/device （仅国服）向网易申请一次性设备 ID（网易登录必填；该接口只接受 esi.evepc.163.com 来源，浏览器无法直接请求）
+  POST /api/esi/sso/token  （仅国服）把授权码 / 刷新令牌请求转发给网易登录服务器
   GET  /api/esi/structures 读取公开玩家建筑共享缓存（浏览器回传，24h 过期）
   POST /api/esi/structures 回传公开玩家建筑缓存，供其他浏览器直接读取（只含建筑 ID / 名称 / 星系 / 类型）
 """
@@ -30,25 +30,31 @@ with open(CONFIG_PATH, encoding="utf-8") as fh:
 
 # 浏览器生成授权链接所需的公开配置（Client ID 本来就会出现在授权链接里，不是机密）
 # 网易没有开放第三方应用申请，晨曦服默认复用官方 ESI 网页自带的应用（国服工具普遍如此），回调到网易 ESI 页面，
-# 用户复制地址栏粘贴回本站；以后有专属应用时可在 config.json 的 "serenity" 下覆盖。权限列表默认与宁静服相同
-SERENITY = CONFIG.get("serenity") or {}
-SERENITY_DEFAULT_CLIENT_ID = "bc90aa496a404724a93f41b4f4e97761"
-SERENITY_DEFAULT_REDIRECT = "https://ali-esi.evepc.163.com/ui/oauth2-redirect.html"
+# 用户复制地址栏粘贴回本站；以后有专属应用时可在 config.json 的 "serenity" / "infinity" 下覆盖。权限列表默认与宁静服相同
+# 曙光服与晨曦用同一个官方应用和同一套设备 ID，只是登录域名不同
+NETEASE_DEFAULT_CLIENT_ID = "bc90aa496a404724a93f41b4f4e97761"
+NETEASE_DEFAULT_REDIRECT = "https://ali-esi.evepc.163.com/ui/oauth2-redirect.html"
+NETEASE_TOKEN_URLS = {
+    "serenity": "https://login.evepc.163.com/v2/oauth/token",
+    "infinity": "https://login-infinity.evepc.163.com/v2/oauth/token",
+}
+SERVERS = ("tq", *NETEASE_TOKEN_URLS)
 PUBLIC_CONFIG = {
     "tq": {
         "client_id": CONFIG["client_id"],
         "redirect_uri": CONFIG["redirect_uri"],
         "scopes": CONFIG["scopes"],
     },
-    "serenity": {
-        "client_id": SERENITY.get("client_id") or SERENITY_DEFAULT_CLIENT_ID,
-        "redirect_uri": SERENITY.get("redirect_uri") or SERENITY_DEFAULT_REDIRECT,
-        "scopes": SERENITY.get("scopes") or CONFIG["scopes"],
-    },
 }
-SERENITY_TOKEN_URL = "https://login.evepc.163.com/v2/oauth/token"
+for _name in NETEASE_TOKEN_URLS:
+    _own = CONFIG.get(_name) or {}
+    PUBLIC_CONFIG[_name] = {
+        "client_id": _own.get("client_id") or NETEASE_DEFAULT_CLIENT_ID,
+        "redirect_uri": _own.get("redirect_uri") or NETEASE_DEFAULT_REDIRECT,
+        "scopes": _own.get("scopes") or CONFIG["scopes"],
+    }
 # 与网易官方 ESI 网页相同：每次授权前申请一个设备 ID，作为授权链接的 device_id
-SERENITY_DEVICE_URL = "https://mpay-web.g.mkey.163.com/device/init?" + urllib.parse.urlencode({
+NETEASE_DEVICE_URL = "https://mpay-web.g.mkey.163.com/device/init?" + urllib.parse.urlencode({
     "game_id": "aecfu6bgiuaaaal2-g-ma79", "device_type": "PC", "system_name": "Windows",
     "system_version": "10", "resolution": "1920*1080", "device_model": "64",
 })
@@ -66,7 +72,7 @@ _structures_last_post: dict[str, float] = {}
 
 
 def structures_cache_path(server: str) -> str:
-    return os.path.join(BASE_DIR, "structures-cache.json" if server == "tq" else "structures-cache-serenity.json")
+    return os.path.join(BASE_DIR, "structures-cache.json" if server == "tq" else f"structures-cache-{server}.json")
 
 
 def load_structures_cache(server: str) -> dict:
@@ -133,7 +139,7 @@ class Handler(BaseHTTPRequestHandler):
     def _route(self) -> tuple[str, str]:
         path, _, query = self.path.partition("?")
         server = urllib.parse.parse_qs(query).get("server", ["tq"])[0]
-        return path, ("serenity" if server == "serenity" else "tq")
+        return path, (server if server in SERVERS else "tq")
 
     def do_GET(self):
         path, server = self._route()
@@ -143,14 +149,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, payload)
         if path == "/api/esi/config":
             return self._json(200, PUBLIC_CONFIG[server])
-        if path == "/api/esi/sso/device" and server == "serenity":
+        if path == "/api/esi/sso/device" and server != "tq":
             return self._sso_device()
         return self._json(404, {"error": "not found"})
 
     def _sso_device(self):
         if not token_rate_ok(self._client_ip()):
             return self._json(429, {"error": "请求过于频繁，请稍后再试"})
-        req = urllib.request.Request(SERENITY_DEVICE_URL, headers={
+        req = urllib.request.Request(NETEASE_DEVICE_URL, headers={
             "Origin": "https://esi.evepc.163.com", "User-Agent": "eve-esi-helper/2.1"})
         try:
             with urllib.request.urlopen(req, timeout=15) as res:
@@ -161,18 +167,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(502, {"error": "网易设备初始化失败，请稍后重试"})
         return self._json(200, {"device_id": device_id})   # 只返回 ID，不返回设备密钥
 
-    def _sso_token(self, raw: bytes):
-        """晨曦服换令牌：只转发必要字段，且 client_id 必须是本站应用，避免被当成通用代理。"""
+    def _sso_token(self, raw: bytes, server: str):
+        """国服换令牌：只转发必要字段，且 client_id 必须是本站应用，避免被当成通用代理。"""
         if not token_rate_ok(self._client_ip()):
             return self._json(429, {"error": "请求过于频繁，请稍后再试"})
         form = urllib.parse.parse_qs(raw.decode("utf-8", "replace"))
         fields = {k: form[k][0] for k in TOKEN_FIELDS if form.get(k)}
-        if fields.get("client_id") != PUBLIC_CONFIG["serenity"]["client_id"]:
+        if fields.get("client_id") != PUBLIC_CONFIG[server]["client_id"]:
             return self._json(400, {"error": "client_id 不匹配"})
         if fields.get("grant_type") not in ("authorization_code", "refresh_token"):
             return self._json(400, {"error": "不支持的 grant_type"})
         req = urllib.request.Request(
-            SERENITY_TOKEN_URL,
+            NETEASE_TOKEN_URLS[server],
             data=urllib.parse.urlencode(fields).encode(),
             headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "eve-esi-helper/2.1"},
             method="POST",
@@ -183,7 +189,7 @@ class Handler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as err:
             status, body = err.code, err.read()
         except Exception:  # noqa: BLE001
-            return self._json(502, {"error": "无法连接晨曦服登录服务器"})
+            return self._json(502, {"error": "无法连接" + ("晨曦" if server == "serenity" else "曙光") + "服登录服务器"})
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -199,11 +205,11 @@ class Handler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b""
 
         if path == "/api/esi/sso/token":
-            if server != "serenity":
+            if server == "tq":
                 return self._json(404, {"error": "宁静服请直接向 login.eveonline.com 换取令牌"})
             if length > 8192:
                 return self._json(413, {"error": "请求体过大"})
-            return self._sso_token(raw)
+            return self._sso_token(raw, server)
 
         try:
             data = json.loads(raw or b"{}")

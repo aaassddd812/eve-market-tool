@@ -5,6 +5,7 @@
 // 数据：pi-data.json（build_pi.mjs 从 SDE 生成），map-data.json（星系、星门、星域）。
 import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r7';
 import { angle } from './pi-globe.js?v=v19r12';
+import { SERVER, HUB, HUB_NAME } from './server.js?v=s3';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, store, getHubPrices(ids) -> Map(id -> {sell, buy}), getMarketPriceMap
 const $ = (id) => document.getElementById(id);
@@ -43,7 +44,7 @@ const D = {
 };
 
 const F = {               // 表单状态（保存在本地）
-  mode: 'region', region: 10000002, system: 0, jumps: 2,
+  mode: 'region', region: HUB.id, system: 0, jumps: 2,
   whCls: '4', whSystem: 0, // 虫洞：按等级，或指定一个星系（whSystem）
   sec: { high: true, low: true, null: true },
   chars: 1, perChar: 6, cc: 5,
@@ -77,7 +78,7 @@ function loadData() {
   if (!D.loading) {
     D.loading = Promise.all([
       fetch('pi-data.json?v=2').then((r) => { if (!r.ok) throw new Error('pi-data.json ' + r.status); return r.json(); }),
-      fetch('map-data.json').then((r) => { if (!r.ok) throw new Error('map-data.json ' + r.status); return r.json(); })
+      fetch(SERVER.mapData).then((r) => { if (!r.ok) throw new Error('星图数据 ' + r.status); return r.json(); })
     ]).then(([pi, map]) => {
       D.pi = pi;
       for (const [id, p] of Object.entries(pi.planetTypes)) D.ptByCode[p.code] = { ...p, id: Number(id) };
@@ -1007,7 +1008,7 @@ function renderForm() {
     <div class="pi-field">
       <label>方式</label>
       ${seg('way', [['self', '自产（采集）'], ['buy', '买料加工']], F.way)}
-      ${buy ? '<small class="pi-hint">从吉他买入半成品，在工厂星上加工成更高级的产品卖出；收益取决于价差，需要本金和运输</small>' : ''}
+      ${buy ? `<small class="pi-hint">从${HUB_NAME}买入半成品，在工厂星上加工成更高级的产品卖出；收益取决于价差，需要本金和运输</small>` : ''}
     </div>
     <div class="pi-field">
       <label>地区</label>
@@ -1046,11 +1047,11 @@ function renderForm() {
     <div class="pi-field">
       <label>估算参数</label>
       ${buy ? `
-      <div class="pi-inline"><span>原料价</span>${seg('inPrice', [['sell', '吉他卖单'], ['buy', '吉他收单']], F.inPrice)}</div>
-      <div class="pi-inline"><span>售价</span>${seg('price', [['sell', '吉他卖单'], ['buy', '吉他收单']], F.price)}</div>
+      <div class="pi-inline"><span>原料价</span>${seg('inPrice', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.inPrice)}</div>
+      <div class="pi-inline"><span>售价</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>
       <div class="pi-inline"><span>补货周期</span>${seg('restock', [[12, '12 小时'], [24, '1 天'], [48, '2 天'], [72, '3 天']], F.restock)}</div>` : `
       <div class="pi-inline"><span>资源丰度</span>${seg('rich', Object.entries(RICHNESS).map(([k, [, label]]) => [k, label]), F.rich)}</div>
-      <div class="pi-inline"><span>价格</span>${seg('price', [['sell', '吉他卖单'], ['buy', '吉他收单']], F.price)}</div>`}
+      <div class="pi-inline"><span>价格</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>`}
       <div class="pi-inline"><span>海关税率</span><input type="number" class="pi-input pi-tax" min="0" max="100" step="0.5" value="${F.tax}" data-pi-num="tax"><span>%</span></div>
       <small class="pi-hint">${buy ? '原料价「卖单」为直接买入（偏保守），「收单」为挂单收购；补货周期越长，需要的发射平台越多' : `每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位`}</small>
     </div>
@@ -1128,7 +1129,7 @@ async function loadPrices() {
   if (R.prices.size && Date.now() - R.priceAt < 30 * 60e3) return;
   const ids = Object.keys(D.pi.commodities).map(Number);
   const [hub, avg] = await Promise.all([
-    ctx.getHubPrices(ids, (done, total) => { const el = $('piProgress'); if (el) el.textContent = `读取吉他行情 ${done}/${total}`; }).catch(() => new Map()),
+    ctx.getHubPrices(ids, (done, total) => { const el = $('piProgress'); if (el) el.textContent = `读取${HUB_NAME}行情 ${done}/${total}`; }).catch(() => new Map()),
     ctx.getMarketPriceMap().catch(() => new Map())
   ]);
   R.prices = new Map(ids.map((id) => [id, { sell: hub.get(id)?.sell ?? null, buy: hub.get(id)?.buy ?? null, avg: avg.get(id) || 0 }]));
@@ -1139,7 +1140,7 @@ async function run() {
   const box = $('piResult');
   const area = collectArea();
   if (area.error) { box.innerHTML = `<div class="pi-empty"><p>${ctx.esc(area.error)}</p></div>`; return; }
-  box.innerHTML = '<div class="pi-loading" id="piProgress">读取吉他行情…</div>';
+  box.innerHTML = `<div class="pi-loading" id="piProgress">读取${HUB_NAME}行情…</div>`;
   try { await loadPrices(); } catch { /* 用已有行情 */ }
   R.area = area;
   demCache.clear();
@@ -1262,7 +1263,7 @@ function renderDetail() {
     const outDay = plan.rate * 24 * vol(plan.product);
     return `<p class="pi-note">每天买入原料 ${ctx.formatNumber(Math.round(inDay))} m³、运出产品 ${ctx.formatNumber(Math.round(outDay))} m³；每 ${F.restock} 小时补货一次，每颗星 ${plan.hubs} 个发射平台（各 ${ctx.formatNumber(LP_CAP)} m³）。
       一个补货周期的原料约 ${ctx.formatISK(plan.cost / 24 * F.restock)}，月净收益 ${ctx.formatISK(plan.profit * 30)}。</p>
-      ${plan.wanted ? `<p class="pi-note warn">受吉他成交量限制（卖出、买入各不超过日成交的 ${MARKET_SHARE * 100}%），只用 ${plan.planets} / ${plan.wanted} 颗行星，其余行星可以做别的产品。</p>` : ''}
+      ${plan.wanted ? `<p class="pi-note warn">受${HUB_NAME}成交量限制（卖出、买入各不超过日成交的 ${MARKET_SHARE * 100}%），只用 ${plan.planets} / ${plan.wanted} 颗行星，其余行星可以做别的产品。</p>` : ''}
       <p class="pi-note" id="piDepth"></p>`;
   })() : '';
   const surplus = buyNote + (plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '')
@@ -1343,7 +1344,7 @@ function renderDetail() {
         <b>导入游戏</b>
         <ol>
           <li>放置指挥中心并升到 ${F.cc} 级</li>
-          ${plan.strategy === 'buy' ? '<li>在吉他买好原料，运到行星所在星系，通过海关办公室进口到发射平台（多个发射平台时平均分）</li>' : ''}
+          ${plan.strategy === 'buy' ? `<li>在${HUB_NAME}买好原料，运到行星所在星系，通过海关办公室进口到发射平台（多个发射平台时平均分）</li>` : ''}
           <li>复制模板，游戏内「模板 → 导入与导出 → 从剪贴板载入」；或把 .json 放进 <code>文档\\EVE\\PlanetaryInteractionTemplates</code></li>
           ${plan.strategy === 'buy' ? '<li>提交后工厂会按路由自动从发射平台取料</li>' : '<li>摆放采集头、设定周期后提交</li>'}
         </ol>
@@ -1357,7 +1358,7 @@ function renderDetail() {
 const history = new Map();
 function dailyVolume(id) {
   if (!history.has(id)) {
-    history.set(id, (ctx.fetchESI ? ctx.fetchESI(`/markets/10000002/history/?type_id=${id}`) : Promise.reject(new Error('no esi')))
+    history.set(id, (ctx.fetchESI ? ctx.fetchESI(`/markets/${HUB.id}/history/?type_id=${id}`) : Promise.reject(new Error('no esi')))
       .then((h) => { const last = (Array.isArray(h) ? h : []).slice(-30); return last.length ? last.reduce((t, x) => t + x.volume, 0) / 30 : 0; })
       .catch(() => { history.delete(id); return null; }));
   }
@@ -1372,7 +1373,7 @@ async function applyMarketDepth(plans) {
     while (queue.length) {
       await dailyVolume(queue.shift());
       const el = $('piProgress');
-      if (el) el.textContent = `读取吉他成交量 ${++done}/${ids.length}`;
+      if (el) el.textContent = `读取${HUB_NAME}成交量 ${++done}/${ids.length}`;
     }
   }));
   for (const plan of plans) {
@@ -1402,7 +1403,7 @@ async function showDepth(plan) {
     const v = vols[i];
     if (v == null) return null;
     const pct = v ? n / v * 100 : Infinity;
-    return { text: `${verb}${cName(id)} ${ctx.formatNumber(Math.round(n))}/天，占吉他日成交 ${v ? (pct < 1 ? pct.toFixed(1) : Math.round(pct)) + '%' : '—（几乎没有成交）'}`, high: pct > 20 };
+    return { text: `${verb}${cName(id)} ${ctx.formatNumber(Math.round(n))}/天，占${HUB_NAME}日成交 ${v ? (pct < 1 ? pct.toFixed(1) : Math.round(pct)) + '%' : '—（几乎没有成交）'}`, high: pct > 20 };
   }).filter(Boolean);
   if (!parts.length) return;
   const high = parts.some((p) => p.high);

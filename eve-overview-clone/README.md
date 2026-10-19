@@ -31,12 +31,13 @@ eve-overview-clone/
 ├── js/lp-store.js       # LP 商店：各军团兑换项 ISK/LP、全服排行、我的 LP（按需加载）
 ├── js/appraisal.js      # 估价：粘贴游戏物品列表，按交易中心挂单或化矿产出估价（按需加载）
 ├── js/trade-fees.js     # 交易税费：全站共用的技能（自定义 / 角色）与销售税、中介费设置，市场详情、资产估值、估价页共用
-├── js/server.js         # 宁静 / 晨曦服务器配置：ESI、SSO、图片地址与本地存储键
+├── js/server.js         # 宁静 / 晨曦 / 曙光服务器配置：ESI、SSO、图片地址、星图、交易中心与本地存储键
 ├── js/skills-page.js    # 个人中心 · 技能（按需加载）
 ├── industry-data.json   # 制造数据：蓝图、反应、发明、解码器（build_industry.mjs 生成）
 ├── skill-data.json      # 全部技能与分组（build_industry.mjs 生成）
 ├── lp-data.json         # LP 商店兑换项、军团、蓝图材料（build_lp.mjs 生成）
 ├── lp-data-serenity.json # 晨曦服 LP 商店数据（build_lp.mjs --serenity 生成）
+├── lp-data-infinity.json # 曙光服 LP 商店数据（build_lp.mjs --infinity 生成）
 ├── js/pi-editor.js      # 殖民地模板预览与编辑
 ├── js/pi-globe.js       # 殖民地球面坐标换算
 ├── assets/pi/           # 行星设施图标（SVG）
@@ -47,7 +48,8 @@ eve-overview-clone/
 ├── server/kb_service.py # 击杀记录后端服务（含开放 API /api/v1/）
 ├── api.html             # 开放 API 文档（顶部「API」按钮打开）
 ├── server/system_regions.json # 全部星系 → 星域（build_map.mjs 生成）
-├── map-data.json        # 星图静态数据（build_map.mjs 生成）
+├── map-data.json        # 星图静态数据（build_map.mjs 生成，宁静 / 晨曦共用）
+├── map-data-infinity.json # 曙光服星图（build_map_esi.mjs 从曙光 ESI 生成）
 ├── npc-names-zh.json    # 官方中文名称表（build_npc_names.mjs 生成）
 ├── catalog.json         # 物品目录（含官方中文名称）
 └── type-names-zh.json   # 物品中文名数据
@@ -150,6 +152,7 @@ node build_npc_names.mjs <解压目录> --verify
 
 ```bash
 node build_map.mjs <SDE 解压目录>   # 输出 eve-overview-clone/map-data.json
+node build_map_esi.mjs <SDE 解压目录> [缓存目录]   # 输出曙光服 eve-overview-clone/map-data-infinity.json（约 2 万次 ESI 请求，可断点续抓）
 ```
 
 ## 模拟装配（v17）
@@ -252,6 +255,18 @@ node build_lp.mjs <SDE 解压目录>   # 输出 eve-overview-clone/lp-data.json
 - **LP 商店**：晨曦服读 `lp-data-serenity.json`（`node build_lp.mjs <SDE目录> --serenity` 生成）
 - **击杀记录**：国服击坠榜（beta.ceve-market.org）的数据接口有 CrowdSec 人机验证、请求加密且不开放跨域，本站不抓取，只外链过去（击杀页入口、个人中心「战斗记录」跳到 `pilot/<角色ID>`）
 - **不支持**：zKillboard 与本站击杀记录服务只收录宁静服，晨曦服下击杀记录页、战斗记录、舰船近期损失、星图实时击杀与击杀列表、击杀装配、制造的蓝图合同价不可用
+
+### 曙光服（v51）
+
+服务器菜单第三项。曙光服和晨曦同属网易，大部分机制相同，区别如下：
+
+- **ESI / 登录**：同一个 ESI 地址，`datasource=infinity`；登录走 `login-infinity.evepc.163.com`，应用（Client ID）、`realm`、设备 ID 与晨曦完全相同；换令牌经 `POST /api/esi/sso/token?server=infinity` 转发，设备 ID 用 `GET /api/esi/sso/device?server=infinity`
+- **星图不同**：曙光服星系 ID 与宁静相同，但坐标、星门连接、星座 / 星域归属都重新排布过（高安在外圈、低安居中、00 在内圈），只有 59 个星域、3742 个有星门的星系。SDE 里没有曙光数据，`build_map_esi.mjs` 从曙光 ESI 逐个抓取星系、星门、星座、星域生成 `map-data-infinity.json`（格式与 `map-data.json` 相同，恒星类型、阵营、星域描述按 ID 从 SDE 补）。星图、路线、跳数、快递、行星工业、制造地点、市场星域列表都读这份数据
+- **交易中心**：曙光服主要交易中心是长征星域的索巴色基（Sobaseki，空间站 60000843），订单量远超吉他。全站默认价格基准（市场「仅交易中心」、估价、制造、行星工业、LP 商店、星图默认起点）都换成索巴色基，页面里的「吉他卖单」等文字也随之变成「索巴色基卖单」；交易中心列表为索巴色基、吉他、佩尼尔格曼、多迪谢、劳斯特威克
+- **图片**：角色 ID 与晨曦会重复，人物头像、军团 / 联盟图标取自曙光自己的 `image-infinity.evepc.163.com`
+- **本地数据**：键名加 `infinity:` 前缀；共享玩家建筑缓存存为 `structures-cache-infinity.json`
+- **LP 商店**：读 `lp-data-infinity.json`（`node build_lp.mjs <SDE目录> --infinity` 生成）
+- **击杀记录**：国服击坠榜有曙光分站 `inf.ceve-market.org`（与晨曦的 beta.ceve-market.org 同一套站点、同样的链接格式，同样有人机验证、不开放接口），击杀页外链过去，个人中心「战斗记录」跳到 `pilot/<角色ID>`；击杀页另附开明网 PVP 战情大厅（eveai.vip/pvp）入口。开明网接口在 robots.txt 里禁止抓取、不开放跨域，返回里也没有击杀邮件 hash，不做数据对接
 
 ## 行星工业（v19）
 

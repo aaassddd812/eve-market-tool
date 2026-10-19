@@ -6,20 +6,21 @@
 //   1. 下载 https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip 并解压
 //   2. node build_lp.mjs <解压目录>             生成宁静服 lp-data.json
 //      node build_lp.mjs <解压目录> --serenity 生成晨曦服 lp-data-serenity.json（兑换项取自晨曦 ESI）
+//      node build_lp.mjs <解压目录> --infinity 生成曙光服 lp-data-infinity.json（兑换项取自曙光 ESI）
 import { createReadStream } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
 const args = process.argv.slice(2);
-const serenity = args.includes("--serenity");
+const netease = ["serenity", "infinity"].find((x) => args.includes("--" + x));
 const [sdeDir] = args.filter((a) => !a.startsWith("--"));
 if (!sdeDir) {
   console.error("用法: node build_lp.mjs <SDE JSONL 解压目录>");
   process.exit(1);
 }
 
-const ESI = serenity ? "https://ali-esi.evepc.163.com/latest" : "https://esi.evetech.net/latest";
-const DATASOURCE = serenity ? "serenity" : "tranquility";
+const ESI = netease ? "https://ali-esi.evepc.163.com/latest" : "https://esi.evetech.net/latest";
+const DATASOURCE = netease || "tranquility";
 
 async function eachLine(name, fn) {
   const rl = createInterface({ input: createReadStream(`${sdeDir}/${name}.jsonl`, "utf8"), crlfDelay: Infinity });
@@ -94,6 +95,6 @@ const factionNames = {};
 for (const c of corpList) if (c.faction) factionNames[c.faction] = zh(factions.get(c.faction)?.name);
 
 const out = { source: `ESI /loyalty/stores (${DATASOURCE}) + CCP SDE`, generatedAt: new Date().toISOString(), factions: factionNames, corps: corpList, stores, offers, bp, names };
-const file = new URL(serenity ? "./eve-overview-clone/lp-data-serenity.json" : "./eve-overview-clone/lp-data.json", import.meta.url);
+const file = new URL(netease ? `./eve-overview-clone/lp-data-${netease}.json` : "./eve-overview-clone/lp-data.json", import.meta.url);
 await writeFile(file, JSON.stringify(out));
 console.log(`军团 ${corpList.length}，兑换项 ${Object.keys(offers).length}，蓝图 ${Object.keys(bp).length}，物品名 ${typeIds.size}`);
