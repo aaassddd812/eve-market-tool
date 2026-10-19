@@ -25,7 +25,7 @@ const TABS = [
 
 const D = { loading: null, data: null, avg: new Map(), offersByType: new Map(), corpById: new Map(), corpsByOffer: new Map(), history: new Map() };
 const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all' };
-const S = { q: '', rankQ: '', sideQ: '', open: new Set(), loadingJita: null, progress: '', refined: new Set(), mine: null, mineError: null, mineLoading: false, rendered: '' };
+const S = { times: new Map(), q: '', rankQ: '', sideQ: '', open: new Set(), loadingJita: null, progress: '', refined: new Set(), mine: null, mineError: null, mineLoading: false, rendered: '' };
 const jita = new Map();   // 吉他行情 id -> { sell, buy }
 
 export function initLp(context) {
@@ -263,6 +263,46 @@ function offerRow(r, i, { showCorp = false } = {}) {
     </tr>${open ? `<tr class="lp-detail-row"><td colspan="9">${offerDetail(o, v)}</td></tr>` : ''}`;
 }
 
+// ---------- 复制采购清单（游戏「市场 → 批量购买」可直接粘贴）----------
+// 每行「物品名<Tab>数量」；兑换次数默认 1。蓝图兑换项另可复制制造材料（材料效率 0，按兑换得到的全部流程）。
+// 物品名是简体中文官方名，需游戏客户端也是简体中文才能识别。
+const timesOf = (o) => S.times.get(o.id) || 1;
+function buyLines(o, kind) {
+  const n = timesOf(o);
+  const sum = new Map();
+  const add = (id, q) => sum.set(id, (sum.get(id) || 0) + q);
+  if (kind !== 'mats') for (const [m, q] of o.req) add(m, q * n);
+  if (kind !== 'req' && o.bp) for (const [m, q] of o.bp[2]) add(m, q * o.qty * n);
+  return [...sum].map(([id, q]) => `${tName(id)}\t${q}`);
+}
+// 已读取「我的 LP」时：在可兑换这一项的军团里，按 LP 最多能换几次（ISK 与物品另算）
+function myMax(o) {
+  if (!S.mine || !o.lp) return 0;
+  const corps = new Set(D.corpsByOffer.get(o.id) || []);
+  const lp = Math.max(0, ...S.mine.filter((x) => corps.has(x.corporation_id)).map((x) => x.loyalty_points));
+  return Math.floor(lp / o.lp);
+}
+function setTimes(id, n, box) {
+  const o = offer(id);
+  S.times.set(o.id, Math.min(10000, Math.max(1, Math.round(n) || 1)));
+  const el = box?.closest('.lp-buy');
+  if (el) el.outerHTML = buyListHtml(o);
+}
+function buyListHtml(o) {
+  const n = timesOf(o);
+  const mats = o.bp ? o.bp[2].length : 0;
+  const btn = (kind, label, count) => `<button type="button" class="btn btn-ghost" data-lp-copy="${kind}:${o.id}"${count ? '' : ' disabled'}>${label}${count ? `（${count} 项）` : ''}</button>`;
+  return `<div class="lp-buy"><h4>复制采购清单 <small>粘贴到游戏「市场 → 批量购买」即可一次买齐</small></h4>
+    <label class="lp-times">兑换次数 <input type="number" class="pi-input" min="1" max="10000" step="1" value="${n}" data-lp-times="${o.id}" aria-label="兑换次数"></label>
+    ${myMax(o) ? `<button type="button" class="link-btn" data-lp-max="${o.id}">按我的 LP 最多 ${ctx.formatNumber(myMax(o))} 次</button>` : ''}
+    <p class="pi-note">共需 LP <b>${ctx.formatNumber(o.lp * n)}</b> · ISK <b>${ctx.formatISK(o.isk * n)}</b>${o.ak ? ` · AK <b>${ctx.formatNumber(o.ak * n)}</b>` : ''}</p>
+    <div class="lp-buy-btns">
+      ${o.req.length ? btn('req', '复制兑换所需物品', o.req.length) : '<span class="text-muted">这个兑换不需要额外物品</span>'}
+      ${o.bp ? btn('mats', '复制制造材料', mats) : ''}
+      ${o.bp && o.req.length ? btn('all', '复制全部（合并同类）', buyLines(o, 'all').length) : ''}
+    </div></div>`;
+}
+
 function offerDetail(o, v) {
   const esc = ctx.esc, isk = ctx.formatISK;
   const line = (id, q, side) => {
@@ -278,6 +318,7 @@ function offerDetail(o, v) {
   } else {
     parts.push(`<div><h4>产出</h4><ul class="lp-lines">${line(o.type, o.qty, F.price)}<li><span>扣除税费 ${F.tax}%</span><b>${v.missing ? '—' : isk(v.revenue)}</b></li></ul></div>`);
   }
+  parts.push(buyListHtml(o));
   parts.push(`<div><h4>可兑换的军团（${corps.length}）</h4><div class="lp-corp-list">${corps.map((c) => `<button type="button" class="chip" data-lp-corp="${c}">${esc(corpName(c))}</button>`).join('')}</div>
     <p class="pi-note"><button type="button" class="btn btn-ghost" data-lp-market="${o.bp ? o.bp[0] : o.type}">在市场中心查看产物</button></p></div>`);
   return `<div class="lp-detail">${parts.join('')}</div>`;
@@ -538,6 +579,17 @@ function onClick(e) {
     return;
   }
   if (e.target.closest('[data-lp-mine-reload]')) { S.mine = null; S.mineError = null; refreshBody(); return; }
+  const max = e.target.closest('[data-lp-max]');
+  if (max) { const o = offer(max.dataset.lpMax); setTimes(o.id, myMax(o), max); return; }
+  const copy = e.target.closest('[data-lp-copy]');
+  if (copy) {
+    const [kind, id] = copy.dataset.lpCopy.split(':');
+    const o = offer(id);
+    if (!o) return;
+    const lines = buyLines(o, kind);
+    ctx.copyText(lines.join('\n'), `已复制 ${lines.length} 项${timesOf(o) > 1 ? `（× ${timesOf(o)} 次兑换）` : ''}，在游戏「批量购买」里粘贴`);
+    return;
+  }
   const market = e.target.closest('[data-lp-market]');
   if (market) { location.hash = '#type=' + market.dataset.lpMarket; return; }
   const corp = e.target.closest('[data-lp-corp]');
@@ -551,6 +603,7 @@ function onClick(e) {
 }
 
 function onChange(e) {
+  if (e.target.matches('[data-lp-times]')) { setTimes(e.target.dataset.lpTimes, Number(e.target.value), e.target); return; }
   if (e.target.matches('[data-lp-faction]')) { F.faction = e.target.value; save(); refreshBody(); return; }
   if (e.target.matches('[data-lp-tax]')) {
     const v = Number(e.target.value);

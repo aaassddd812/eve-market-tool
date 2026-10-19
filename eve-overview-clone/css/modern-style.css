@@ -4435,3 +4435,10 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .fw-refresh.flash { animation: fw-flash 1.6s ease-out; }
 @keyframes fw-flash { 0% { box-shadow: 0 0 0 3px var(--accent-ring); } 100% { box-shadow: none; } }
 @media (max-width: 768px) { .fw-cd-note { margin-left: 0; } }
+
+/* LP 商店 · 复制采购清单 */
+.lp-buy h4 small { font-weight: 400; color: var(--text-muted); font-size: 0.75rem; margin-left: 6px; }
+.lp-times { display: inline-flex; align-items: center; gap: 8px; font-size: 0.8125rem; color: var(--text-secondary); margin-right: 10px; }
+.lp-times input { width: 90px; }
+.lp-buy .link-btn { color: var(--accent-primary); }
+.lp-buy-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
