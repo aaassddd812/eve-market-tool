@@ -1,7 +1,7 @@
 // 从 CCP 官方 SDE（JSONL 版）生成 NPC 人物位置表 eve-overview-clone/npc-data.json
 // ESI 查不到 NPC 的位置（/characters/{id}/location/ 需要该角色本人授权），代理人的驻地只在 SDE 里：
 //   npcCharacters.locationID 是驻扎的 NPC 空间站；agentsInSpace 是在太空据点里的代理人（只有星系）。
-// 星图搜索 NPC 人物、星系面板列出本星系代理人都用这份数据。
+// 星图搜索 NPC 人物、星系面板列出本星系代理人都用这份数据。另输出 npc-corp-faction.json（NPC 军团 -> 阵营与阵营中文名，交易税费用）。
 //
 // 用法：
 //   1. 下载 https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip 并解压
@@ -25,6 +25,8 @@ const stationSystem = new Map();
 await eachLine("npcStations", (o) => stationSystem.set(o._key, o.solarSystemID));
 const inSpace = new Map();
 await eachLine("agentsInSpace", (o) => inSpace.set(o._key, o.solarSystemID));
+const corpFaction = {};
+await eachLine("npcCorporations", (o) => { if (o.factionID) corpFaction[o._key] = o.factionID; });
 const divisions = {};
 await eachLine("npcCorporationDivisions", (o) => { divisions[o._key] = o.name?.zh || o.name?.en || o.displayName || ""; });
 
@@ -46,8 +48,13 @@ const output = {
   source: "CCP SDE",
   generatedAt: new Date().toISOString(),
   divisions,
+  corpFaction,   // NPC 军团 -> 所属阵营（代理人可用性按代理人 / 军团 / 阵营三者中最高的有效声望判断）
   // [id, 中文名, 英文名（与中文相同时为空）, 军团ID, 空间站ID（太空代理人为 0）, 星系ID, 代理人类型, 部门ID, 等级, 可定位, 军团 CEO]
   npcs
 };
 await writeFile("eve-overview-clone/npc-data.json", JSON.stringify(output));
+// ESI 的 NPC 军团资料没有阵营字段；交易税费按挂单空间站所属军团的阵营取声望，用这份小表（约 5 KB）
+const factionNames = {};
+await eachLine("factions", (o) => { factionNames[o._key] = o.name?.zh || o.name?.en || ""; });
+await writeFile("eve-overview-clone/npc-corp-faction.json", JSON.stringify({ corps: corpFaction, factions: factionNames }));
 console.log(`NPC ${npcs.length} · 代理人 ${npcs.filter((n) => n[6]).length} · 太空代理人 ${npcs.filter((n) => !n[4]).length}`);

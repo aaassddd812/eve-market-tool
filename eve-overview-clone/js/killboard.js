@@ -261,9 +261,9 @@ export async function openKill(kill, options = {}) {
   try {
     if (options.load) ({ kill, prices: options.prices } = await options.load());
     if (currentKill !== token) return;
-    const [prices] = await Promise.all([options.prices || app.getMarketPriceMap(), prepareKills([kill], { attackers: 'all' })]);
+    const [prices, insurance] = await Promise.all([options.prices || app.getMarketPriceMap(), app.getInsurance?.().catch(() => null), prepareKills([kill], { attackers: 'all' })]);
     if (currentKill !== token) return;
-    body.innerHTML = renderKill(kill, prices, options.priceNote);
+    body.innerHTML = renderKill(kill, prices, options.priceNote, insurance?.get(kill.victim.ship_type_id));
     shownKill = kill;
   } catch (error) {
     if (currentKill === token) body.innerHTML = '<p class="text-muted kb-empty">击杀详情读取失败：' + app.esc(error.message) + '</p>';
@@ -329,7 +329,18 @@ function itemRows(items, prices, depth = 0) {
   }).join('');
 }
 
-function renderKill(k, prices, priceNote) {
+// 保险：不知道受害者投的哪一档，列出铂金（最高）赔付，净损失按铂金赔付估算（未投保时损失更大）
+function insuranceHtml(levels, total) {
+  levels = (levels || []).filter((l) => l.payout > 0);
+  if (!levels.length) return '';
+  const top = levels[levels.length - 1];
+  const net = Math.max(0, total - (top.payout - top.cost));
+  return `<div class="kb-insurance" title="${app.esc(levels.map((l) => `${l.name}：保费 ${app.formatISK(l.cost)} / 赔付 ${app.formatISK(l.payout)}`).join('\n'))}">
+      <span>保险（${app.esc(top.name)}）赔付 <b>${app.formatISK(top.payout)}</b> · 保费 ${app.formatISK(top.cost)}</span>
+      <span>投保后净损失约 <b>${app.formatISK(net)}</b></span></div>`;
+}
+
+function renderKill(k, prices, priceNote, insurance) {
   const v = k.victim;
   const z = k.zkb;
   const sys = systemLabel(k.solar_system_id);
@@ -388,8 +399,9 @@ function renderKill(k, prices, priceNote) {
       <div class="kb-values">
         <div class="kb-total"><span>总价值</span><strong>${app.formatISK(z.totalValue)}<small>ISK</small></strong></div>
         <div class="kb-split"><span class="kb-dropped">掉落 ${app.formatISK(z.droppedValue)}</span><span class="kb-destroyed">摧毁 ${app.formatISK(z.destroyedValue)}</span></div>
+        ${insuranceHtml(insurance, z.totalValue)}
         ${app.openKillFit ? '<button class="btn btn-primary" data-kill-fit title="在模拟装配中打开这艘船与击杀时的装配">去装配页查看</button>' : ''}
-        <a class="btn btn-ghost" href="https://zkillboard.com/kill/${k.killmail_id}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>
+        ${SERVER.kb ? `<a class="btn btn-ghost" href="https://zkillboard.com/kill/${k.killmail_id}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>` : ''}
         ${k.zkb.valueLabel ? `<span class="kb-value-note">${app.esc(k.zkb.valueLabel)}</span>` : ''}
       </div>
     </div>
@@ -397,7 +409,7 @@ function renderKill(k, prices, priceNote) {
       <button data-kill-tab="fit" class="active">装配与物品</button>
       <button data-kill-tab="attackers">攻击者（${k.attackers.length}）</button>
     </div>
-    <div class="kb-pane" data-pane="fit">${fit}<p class="valuation-note">${priceNote || '单项估值按 ESI 全服均价；总价值、掉落与摧毁价值为 zKillboard 估值。'}</p></div>
+    <div class="kb-pane" data-pane="fit">${fit}<p class="valuation-note">${priceNote || (SERVER.kb ? '单项估值按 ESI 全服均价；总价值、掉落与摧毁价值为 zKillboard 估值。' : '单项与总价值都按 ESI 全服均价估算（蓝图副本不计）。')}</p></div>
     <div class="kb-pane" data-pane="attackers" hidden>${attackers}</div>`;
 }
 

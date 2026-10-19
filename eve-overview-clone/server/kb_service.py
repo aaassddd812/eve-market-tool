@@ -361,7 +361,8 @@ class Store:
                 for row in km_rows:
                     if row[2] >= fresh:          # zKill 偶尔补录多年前的击杀，不当作“新击杀”推送
                         self.live_n += 1
-                        self.live_buf.append((self.live_n, row_summary(row[:1] + row[2:])))
+                        # 带上 hash：击杀预警的游戏内邮件要用 killReport:ID:HASH 链接
+                        self.live_buf.append((self.live_n, {**row_summary(row[:1] + row[2:]), "hash": row[1]}))
         return added
 
     def prune(self):

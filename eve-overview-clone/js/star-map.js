@@ -7,7 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import * as JP from './jump-planner.js?v=v14';
+import * as JP from './jump-planner.js?v=v15';
 import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s3';
 
 let app;               // 主程序提供的工具函数
@@ -973,16 +973,17 @@ function toggleHighlight(key) {
 // ---------- NPC 人物（npc-data.json，build_npc.mjs 由 SDE 生成）----------
 // ESI 查不到 NPC 的位置，代理人驻地来自 SDE。首次搜索或打开星系面板时才加载（约 360 KB gzip）
 const AGENT_TYPE = { 3: '新手教程', 4: '研究', 5: '统合部', 6: '故事线', 7: '故事线', 8: '活动', 9: '势力战争', 10: '史诗任务', 11: '向导', 12: '职业', 13: '纹章' };
-const NPC = { promise: null, list: null, byId: new Map(), bySystem: new Map(), divisions: {} };
+const NPC = { promise: null, list: null, byId: new Map(), bySystem: new Map(), divisions: {}, corpFaction: {} };
 let agentFocus = null;   // 从搜索结果点进来的 NPC：{ id, system }，星系面板里高亮
 
 function loadNpcData() {
   if (!NPC.promise) {
-    NPC.promise = fetch('./npc-data.json?v=1').then((res) => {
+    NPC.promise = fetch('./npc-data.json?v=2').then((res) => {
       if (!res.ok) throw new Error('NPC 数据加载失败 HTTP ' + res.status);
       return res.json();
     }).then((d) => {
       NPC.divisions = d.divisions || {};
+      NPC.corpFaction = d.corpFaction || {};
       // 空间站所在星系以本服星图为准（曙光服星图重排过）
       const stationSystem = new Map();
       for (const sys of M.systems) for (const st of sys.stations) stationSystem.set(st, sys.id);
@@ -996,6 +997,53 @@ function loadNpcData() {
     }).catch((error) => { NPC.promise = null; throw error; });
   }
   return NPC.promise;
+}
+
+// ---------- 代理人可用性（角色声望）----------
+// 能否接某级代理人的任务，看对代理人本人 / 其军团 / 其阵营三者中最高的有效声望：
+//   2 级 ≥ 1.0、3 级 ≥ 3.0、4 级 ≥ 5.0、5 级 ≥ 7.0，1 级不限；三者任何一项 ≤ −2.0 都不能接。
+// 有效声望 = 基础声望 + (10 − 基础声望) × 4% × 技能等级：负声望用外交学，正声望用人脉关系学（海盗阵营用犯罪关系学）。
+// 只判断普通代理人与研究代理人（研究还要求对应研究技能），故事线、史诗任务等另有规则。
+const AGENT_NEED = [0, -Infinity, 1, 3, 5, 7];
+const SOCIAL = { connections: 3359, diplomacy: 3357, criminal: 3361 };
+const PIRATE_FACTIONS = new Set([500010, 500011, 500012, 500019, 500020]);
+let agentAccess = null;   // { id, map, levels } 或 { id, error }
+let agentAccessLoading = null;
+
+function loadAgentAccess() {
+  if (!app.hasEsiToken() || !app.getCharacterStandings) return Promise.resolve(null);
+  if (!agentAccessLoading) {
+    agentAccessLoading = Promise.all([app.getCharacterStandings(), app.getCharacterSkills().catch(() => null)])
+      .then(([st, skills]) => { agentAccess = { id: st.id, map: st.map, levels: skills?.id === st.id ? skills.levels : new Map() }; })
+      .catch((error) => { agentAccess = { error: error.message }; })
+      .finally(() => { agentAccessLoading = null; });
+  }
+  return agentAccessLoading;
+}
+
+function effectiveStanding(raw, faction) {
+  const lv = (id) => agentAccess.levels.get(id) || 0;
+  const skill = raw < 0 ? lv(SOCIAL.diplomacy) : PIRATE_FACTIONS.has(faction) ? lv(SOCIAL.criminal) : lv(SOCIAL.connections);
+  return raw + (10 - raw) * 0.04 * skill;
+}
+
+// 返回 { ok, best, need } 或 null（不判断）
+function agentAvailability(n) {
+  if (!agentAccess?.map || ![2, 4].includes(n.type) || !n.level) return null;
+  const faction = NPC.corpFaction[n.corp] || 0;
+  const values = [n.id, n.corp, faction].filter(Boolean).map((id) => effectiveStanding(agentAccess.map.get(id) || 0, faction));
+  const best = Math.max(...values);
+  const need = AGENT_NEED[n.level] ?? 7;
+  const blocked = values.some((v) => v <= -2);
+  return { ok: !blocked && best >= need, best, need, blocked };
+}
+
+function availabilityHtml(n) {
+  const a = agentAvailability(n);
+  if (!a) return '';
+  if (a.blocked) return '<em class="agent-no">声望过低（≤ −2.0），不能接任务</em>';
+  if (a.ok) return `<em class="agent-ok">可接任务 · 有效声望 ${a.best.toFixed(2)}</em>`;
+  return `<em class="agent-no">需有效声望 ${a.need.toFixed(1)}（当前最高 ${a.best.toFixed(2)}）</em>`;
 }
 
 // 例：4 级 安全代理人 · 势力战争；非代理人显示军团 CEO
@@ -1114,6 +1162,13 @@ function bindSidebar() {
     updateRouteLine();
   });
   $('routeResult').addEventListener('click', (e) => {
+    if (e.target.closest('[data-game-route]')) {
+      // 星门路线：游戏自动导航会自己寻路，只设终点；跳跃路线：落点依次写成航点
+      const ids = J.mode === 'jump' && J.plan ? J.plan.path.slice(1).map((i) => M.systems[i].id).concat(J.plan.gates.map((i) => M.systems[i].id))
+        : M.route.length ? [M.systems[M.route[M.route.length - 1]].id] : [];
+      if (ids.length) app.game.route(ids, M.systems[M.byId.get(ids[ids.length - 1]).i].name);
+      return;
+    }
     if (e.target.closest('[data-copy-route]')) {
       app.copyText(M.route.map((i) => M.systems[i].name).join(' → '), '路线已复制');
       return;
@@ -1155,7 +1210,7 @@ async function planRoute() {
     M.route.forEach((i) => { counts[secClass(M.systems[i].sec)] += 1; });
     box.innerHTML =
       `<div class="route-summary"><span><strong>${M.route.length - 1}</strong> 跳 · <span class="sec-hi">高安 ${counts['高安']}</span> · <span class="sec-lo">低安 ${counts['低安']}</span> · <span class="sec-null">00 ${counts['00']}</span></span>` +
-        '<button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></div>' +
+        '<span><button class="link-btn" data-game-route title="在游戏里把终点设为目的地（角色需在线）">写入自动导航</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>' +
       '<ol class="route-list">' + M.route.map((i) => {
         const s = M.systems[i];
         return `<li><button data-sys="${i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}<span>${secDisplay(s.sec).toFixed(1)}</span></button></li>`;
@@ -1748,8 +1803,10 @@ async function planJump() {
     box.innerHTML = '<p class="legend-empty">' + app.esc(plan.error) + '</p>';
     return;
   }
-  const sim = JP.simulate(plan.legs, ship, { jfc: sk.jfc, jfSkill: sk.jf });
-  J.plan = { ...plan, sim, ship, origin: a, range, prefer: dockRule.prefer };
+  // 角色当前的跳跃疲劳（需要「跳跃疲劳」权限），作为第一跳之前的疲劳
+  const fatigue = app.getFatigue ? await app.getFatigue().catch(() => null) : null;
+  const sim = JP.simulate(plan.legs, ship, { jfc: sk.jfc, jfSkill: sk.jf, fatigue: fatigue?.minutes || 0 });
+  J.plan = { ...plan, sim, ship, origin: a, range, prefer: dockRule.prefer, fatigue };
   M.route = [...plan.path, ...plan.gates];
   routeLine.material.color.setHex(ROUTE_COLORS.jump);
   updateRouteLine();
@@ -1762,7 +1819,10 @@ async function planJump() {
 }
 
 function renderJumpPlan() {
-  const { sim, gates, ship, path, landing, range, prefer } = J.plan;
+  const { sim, gates, ship, path, landing, range, prefer, fatigue } = J.plan;
+  const fatigueNote = fatigue?.minutes > 0 ? `<p class="jump-note warn">已计入角色当前的跳跃疲劳：剩余 ${JP.formatMinutes(fatigue.minutes)}（${new Date(fatigue.expires).toLocaleString('zh-CN', { hour12: false })} 消退）</p>`
+    : fatigue ? '<p class="jump-note">角色当前没有跳跃疲劳</p>'
+      : app.hasEsiToken() ? '<p class="jump-note">按零疲劳估算。<button class="link-btn" data-scope-rebind="fatigue">授权「跳跃疲劳」</button>后可按角色实际疲劳计算</p>' : '';
   // 「优先可停靠」模式下，中途无法停靠的星系单独标出
   const noDock = prefer ? path.slice(1, -1).filter((i) => !prefer.has(i)) : [];
   const sys = (i) => M.systems[i];
@@ -1789,10 +1849,11 @@ function renderJumpPlan() {
       <div><strong>${app.formatNumber(sim.fuel)}</strong><span>${fuelName}</span></div>
     </div>
     <p class="jump-note"><span id="jumpFuelIsk"></span>${sim.rows.length > 1 ? ` · 连续跳完约 ${JP.formatMinutes(sim.travel)}` : ''} · 到达后疲劳约 ${JP.formatMinutes(sim.finalFatigue)}，冷却 ${JP.formatMinutes(sim.finalCooldown)}</p>
+    ${fatigueNote}
     ${prefer ? `<p class="jump-note${noDock.length ? ' warn' : ''}">${noDock.length ? `已尽量选择可停靠的中途点，仍有 ${noDock.length} 处无法停靠（当前跳跃距离内没有可停靠的替代星系）` : '所有中途点都可以停靠'}</p>` : ''}
     ${gates.length ? `<p class="jump-note warn">${app.esc(dest.name)} 不能直接跳入（高安等），跳到 ${app.esc(sys(landing).name)} 后再走 ${gates.length} 个星门</p>` : ''}
     <div class="route-summary"><span>${app.esc(ship.name)} · 最大 ${range.toFixed(2)} 光年</span>
-      <span><button class="link-btn" data-jump-range title="在星图上高亮起点一跳可达的星系">一跳范围</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>
+      <span><button class="link-btn" data-jump-range title="在星图上高亮起点一跳可达的星系">一跳范围</button> · <button class="link-btn" data-game-route title="把每个跳跃落点依次写入游戏自动导航（角色需在线）">写入航点</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>
     <ol class="route-list jump-list">${row(path[0], '<div class="jump-leg"><span>起点</span></div>')}${legs}${gateRows}</ol>
     <p class="jump-foot">冷却与疲劳按 CCP 公布的规则估算（疲劳上限 5 小时、冷却上限 30 分钟），并假设每次冷却结束立即起跳；燃料按所选技能计算。</p>`;
 }
@@ -1910,6 +1971,7 @@ function renderSystemInfo(s) {
       <button class="btn" data-route-from="${s.i}">设为起点</button>
       <button class="btn" data-route-to="${s.i}">设为终点</button>
       <button class="btn btn-ghost" data-copy="${app.esc(s.name)}">复制名称</button>
+      <button class="btn btn-ghost" data-game-dest="${s.id}" data-game-name="${app.esc(s.name)}" title="在游戏里设为自动导航目的地（角色需在线）">游戏内设目的地</button>
     </div>
     ${SERVER.kb ? `<div class="map-kills">
       <div class="map-kills-head"><span>最近击杀</span><a href="https://zkillboard.com/system/${s.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
@@ -1937,13 +1999,19 @@ function renderAgents(s) {
     groups.get(n.station).push(n);
   }
   const agents = list.filter((n) => n.type).length;
+  // 绑定了角色：读声望后标出能否接任务（读完重绘一次）
+  if (app.hasEsiToken() && !agentAccess && !agentAccessLoading) loadAgentAccess().then(() => { if (M.selected === s.i) renderAgents(s); });
+  const accessNote = agentAccess?.error ? `<p class="legend-empty">代理人可用性：${app.esc(agentAccess.error)}</p>`
+    : agentAccess ? '<p class="legend-empty">按当前角色的有效声望（含社交技能）判断普通 / 研究代理人能否接任务</p>' : '';
   box.innerHTML = `<details class="map-stations map-agents"${focus || list.length <= 6 ? ' open' : ''}>
     <summary>代理人与 NPC 人物（${agents ? agents + ' 名代理人' : list.length + ' 人'}）</summary>
+    ${accessNote}
     ${[...groups].map(([station, people]) => `<div class="agent-group">${app.esc(station ? app.officialName(station) || '空间站 ' + station : '太空据点（需在星系内的据点找到）')}</div>
       <ul>${people.map((n) => `<li class="agent-row${n.id === focus ? ' focus' : ''}" data-agent="${n.id}">
         <img src="${eveImage('characters/' + n.id + '/portrait', 64)}" alt="" width="32" height="32" loading="lazy">
         <div><button class="link-btn" data-copy="${app.esc(n.name)}" title="复制名字（游戏里可搜索）">${app.esc(n.name)}</button>${n.en ? `<small>${app.esc(n.en)}</small>` : ''}
-          <span>${app.esc(npcRole(n))}</span><span>${app.esc(app.officialName(n.corp) || '')}</span></div></li>`).join('')}</ul>`).join('')}
+          <span>${app.esc(npcRole(n))}</span><span>${app.esc(app.officialName(n.corp) || '')}</span>${availabilityHtml(n)}</div>
+        <button class="agent-dest" data-game-dest="${n.station || n.system}" data-game-name="${app.esc(n.name)}" title="在游戏里把${n.station ? '驻扎空间站' : '所在星系'}设为目的地">设目的地</button></li>`).join('')}</ul>`).join('')}
   </details>`;
   if (focus) box.querySelector('.agent-row.focus')?.scrollIntoView({ block: 'nearest' });
 }
@@ -2015,6 +2083,8 @@ function bindInfo() {
     if (from) { setRouteEnd('from', Number(from.dataset.routeFrom)); return; }
     const to = e.target.closest('[data-route-to]');
     if (to) { setRouteEnd('to', Number(to.dataset.routeTo)); return; }
+    const dest = e.target.closest('[data-game-dest]');
+    if (dest) { app.game.waypoint(Number(dest.dataset.gameDest), { name: dest.dataset.gameName }); return; }
     const copy = e.target.closest('[data-copy]');
     if (copy) { app.copyText(copy.dataset.copy, '已复制'); return; }
     const hlRegion = e.target.closest('[data-hl-region]');
@@ -2029,6 +2099,8 @@ function bindInfo() {
 // ---------- 入口 ----------
 export function initStarMap(context) {
   app = context;
+  // 个人中心切换角色：代理人可用性重新按新角色判断
+  window.addEventListener('eve-account-change', () => { agentAccess = null; if (M.selected != null && $('mapAgents')) renderAgents(M.systems[M.selected]); });
   canvas = $('mapCanvas');
   labels = $('mapLabels');
   lg = labels.getContext('2d');

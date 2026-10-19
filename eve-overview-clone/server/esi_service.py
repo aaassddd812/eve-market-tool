@@ -39,6 +39,8 @@ NETEASE_TOKEN_URLS = {
     "infinity": "https://login-infinity.evepc.163.com/v2/oauth/token",
 }
 SERVERS = ("tq", *NETEASE_TOKEN_URLS)
+# 国服没有 zKillboard，个人战斗记录从 ESI 读最近的击杀邮件；网易官方应用支持这项权限，默认追加（宁静服用 zKillboard，不需要）
+NETEASE_EXTRA_SCOPES = ("esi-killmails.read_killmails.v1",)
 PUBLIC_CONFIG = {
     "tq": {
         "client_id": CONFIG["client_id"],
@@ -51,7 +53,7 @@ for _name in NETEASE_TOKEN_URLS:
     PUBLIC_CONFIG[_name] = {
         "client_id": _own.get("client_id") or NETEASE_DEFAULT_CLIENT_ID,
         "redirect_uri": _own.get("redirect_uri") or NETEASE_DEFAULT_REDIRECT,
-        "scopes": _own.get("scopes") or CONFIG["scopes"],
+        "scopes": list(dict.fromkeys([*(_own.get("scopes") or CONFIG["scopes"]), *NETEASE_EXTRA_SCOPES])),
     }
 # 与网易官方 ESI 网页相同：每次授权前申请一个设备 ID，作为授权链接的 device_id
 NETEASE_DEVICE_URL = "https://mpay-web.g.mkey.163.com/device/init?" + urllib.parse.urlencode({

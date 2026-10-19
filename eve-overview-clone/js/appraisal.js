@@ -8,7 +8,7 @@
 // 识别格式：制表符或两个以上空格分列，第一列物品名（游戏复制的名称后可能带 *），第二列数量；
 // 也支持「名称 x 数量」「数量 x 名称」「名称 数量」和单独一行物品名。
 import { SERVER } from './server.js?v=s3';
-import * as TF from './trade-fees.js?v=v1';
+import * as TF from './trade-fees.js?v=v2';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), regions,
           // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind

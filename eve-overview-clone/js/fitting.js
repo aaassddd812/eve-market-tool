@@ -94,6 +94,7 @@ export async function showFitting(restored = false) {
       return;
     }
     app.getMarketPriceMap().then((m) => { F.prices = m; if (F.fit) renderStats(); }).catch(() => {});
+    app.getInsurance?.().then((m) => { F.insurance = m; if (F.fit) renderStats(); }).catch(() => {});
     if (!loadPending() && !loadFromHash()) {
       const saved = app.store.getJSON(CURRENT_KEY, null);
       F.fit = saved && F.data.types.has(saved.ship) ? normalize(saved) : null;
@@ -724,6 +725,18 @@ function renderStats() {
       <h4>其他</h4>
       <div class="fit-kv"><span>货柜舱</span><b>${fmt(s.cargo)} m³</b></div>
       ${price ? `<div class="fit-kv"><span>估价（全服均价）</span><b>${app.formatISK(price)} ISK</b></div>` : ''}
+    </section>
+    ${insuranceBlock()}`;
+}
+
+// 舰船保险：各档保费与赔付（ESI /insurance/prices/），净赔付 = 赔付 − 保费
+function insuranceBlock() {
+  const levels = F.insurance?.get(F.fit?.ship)?.filter((l) => l.payout > 0);
+  if (!levels?.length) return '';
+  return `<section class="fit-stat-block">
+      <h4>保险（12 周）</h4>
+      ${levels.map((l) => `<div class="fit-kv"><span>${app.esc(l.name)}</span><b title="保费 ${app.formatISK(l.cost)} · 赔付 ${app.formatISK(l.payout)}">${app.formatISK(l.cost)} → ${app.formatISK(l.payout)}</b></div>`).join('')}
+      <p class="fit-note">保费 → 船被击毁时的赔付；只赔舰船本身，不含装备</p>
     </section>`;
 }
 

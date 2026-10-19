@@ -424,9 +424,10 @@ export function planJumpRoute(systems, from, to, { range, stops = null, prefer =
 }
 
 // 逐跳估算燃料、冷却与疲劳（每次冷却结束立即起跳）
-export function simulate(legs, ship, { jfc, jfSkill }) {
+// fatigue：第一跳之前已有的疲劳（分钟，读自角色 ESI），默认 0
+export function simulate(legs, ship, { jfc, jfSkill, fatigue: start = 0 }) {
   const perLy = fuelPerLy(ship, jfc, jfSkill);
-  let fatigue = 0, elapsed = 0, fuel = 0;
+  let fatigue = Math.min(FATIGUE_CAP, Math.max(0, start)), elapsed = 0, fuel = 0;
   const rows = legs.map((leg, k) => {
     const eff = leg.ly * ship.fatigue;
     const cooldown = Math.min(COOLDOWN_CAP, Math.max(fatigue / 10, 1 + eff));

@@ -1,5 +1,5 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
-import * as TF from './trade-fees.js?v=v1';
+import * as TF from './trade-fees.js?v=v2';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s3';
 
 // ===== 配置与常量 =====
@@ -249,8 +249,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -326,6 +326,22 @@ function switchView(view) {
   if (view === 'lp') openLp();
   if (view === 'appraisal') openAppraisal();
   if (view === 'courier') openCourier();
+  if (view === 'war') openWar();
+}
+
+// 战争（势力战争 + 军团战争）：首次进入时加载
+let warLoading = null;
+async function openWar() {
+  try {
+    if (!warLoading) warLoading = import('./war.js?v=v2').then((m) => {
+      m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
+      return m;
+    }).catch((error) => { warLoading = null; throw error; });
+    const m = await warLoading;
+    await m.showWar(location.hash);
+  } catch (error) {
+    showToast('战争页加载失败：' + error.message, 'error', 4000);
+  }
 }
 
 // 默认交易中心（吉他；曙光服为索巴色基）最低卖价 / 最高收购价：Map(id -> { sell, buy })
@@ -402,9 +418,23 @@ async function openEftFit(text) {
 let courierLoading = null;
 async function openCourier() {
   try {
-    if (!courierLoading) courierLoading = import('./courier.js?v=v3').then((m) => {
+    if (!courierLoading) courierLoading = import('./courier.js?v=v5').then((m) => {
       m.initCourier({
-        esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit,
+        esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
+        // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
+        renderAuctions: async (box) => {
+          const a = await import('./auctions.js?v=v2');
+          if (!box.dataset.init) {
+            box.dataset.init = '1';
+            loadMarketRegions().catch(() => {});
+            a.initAuctions({
+              esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, officialName, getMarketPriceMap, valuationCard, locationName, store, game: gameActions,
+              esiBase: ESI_BASE, datasource: SERVER.datasource, regions: REGIONS, marketRegions: () => state.marketRegions,
+              resolveStructures: (ids) => resolveStructureNames(ids)
+            });
+          }
+          a.renderAuctions(box);
+        },
         hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
         tokenInfo: () => state.esiToken || readEsiToken(),
         hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
@@ -429,7 +459,7 @@ async function openCourier() {
 let appraisalLoading = null;
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v7').then((m) => {
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v8').then((m) => {
       m.initAppraisal({
         esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
         getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -452,9 +482,18 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v30').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v31').then((m) => {
     m.initPi({
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
+      // 我的殖民地（pi-colonies.js，展开时才加载）
+      renderColonies: async (box) => {
+        const c = await import('./pi-colonies.js?v=v2');
+        c.initColonies({
+          esc, formatISK, formatNumber, esiAuthFetch, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, getMarketPriceMap,
+          hasScopeGroup, scopeNeededHtml, openMapSystem, tokenInfo: () => state.esiToken || readEsiToken()
+        });
+        await c.renderColonies(box);
+      },
       // 默认交易中心最低卖价 / 最高收购价
       getHubPrices: getJitaPrices
     });
@@ -477,9 +516,9 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v31').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v33').then((m) => {
     m.initFitting({
-      esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap,
+      esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       openDrawer: () => { if (MOBILE_QUERY.matches) openDrawer(); },
@@ -644,9 +683,9 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v21').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v24').then((m) => {
     m.initKillboard({
-      esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit
+      esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance
     });
     killboardModule = m;
     return m;
@@ -658,7 +697,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v28').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v29').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -667,6 +706,9 @@ function loadStarMapModule() {
       battles: () => battlesPromise,
       getEsiToken: ensureEsiToken,
       getCharacterSkills,
+      getCharacterStandings,
+      getFatigue,
+      game: gameActions,
       loadKillboard,
       // 角色当前所在星系（需要 esi-location.read_location.v1）
       getMyLocation: async () => {
@@ -810,6 +852,11 @@ function initSidebar() {
     const contract = target.closest('[data-contract-id]');
     if (contract) { openContract(Number(contract.dataset.contractId)); return true; }
     if (target.closest('[data-back-contracts]')) { openContract(null); return true; }
+    const dyn = target.closest('[data-dyn]');
+    if (dyn) { const [t, i] = dyn.dataset.dyn.split(':').map(Number); openDynamicItem(t, i); return true; }
+    const gc = target.closest('[data-game-contract]');
+    if (gc) { gameActions.contract(Number(gc.dataset.gameContract)); return true; }
+    if (target.closest('[data-esi-rebind]')) { openEsiModal(); return true; }
     const combatFilter = target.closest('[data-combat-filter]');
     if (combatFilter) { state.combatFilter = combatFilter.dataset.combatFilter; renderProfileTab('combat'); return true; }
     const ctype = target.closest('[data-ctype]');
@@ -1436,6 +1483,92 @@ function hasScope(token, scope) {
   return list.includes(scope);
 }
 
+// ===== 额外权限（绑定时按需勾选）=====
+// 基础权限来自服务器配置；以下功能的权限在绑定框里勾选后追加到授权链接。
+// 宁静服：本站在 CCP 开发者后台注册的应用必须也开了这些权限，否则 CCP 会拒绝授权，此时取消勾选即可。
+const SCOPE_GROUPS = [
+  { id: 'ui', name: '游戏内操作', desc: '设为目的地、写入自动导航、在游戏里打开市场 / 合同窗口', scopes: ['esi-ui.write_waypoint.v1', 'esi-ui.open_window.v1'] },
+  { id: 'fatigue', name: '跳跃疲劳', desc: '旗舰跳跃规划读取角色当前的跳跃疲劳', scopes: ['esi-characters.read_fatigue.v1'] },
+  { id: 'planets', name: '行星殖民地', desc: '行星工业页显示我的殖民地、提取器到期时间与仓库存量', scopes: ['esi-planets.manage_planets.v1'] },
+  { id: 'research', name: '研究代理人', desc: '个人中心显示研究代理人累计的研究点数', scopes: ['esi-characters.read_agents_research.v1'] },
+  { id: 'fleet', name: '舰队', desc: '个人中心显示当前舰队成员、舰船与位置分布（需舰队指挥）', scopes: ['esi-fleets.read_fleet.v1'] },
+  { id: 'corp', name: '军团管理', desc: '军团钱包、订单、工业任务、建筑燃料、月矿、资产（需相应军团职位）',
+    scopes: ['esi-characters.read_corporation_roles.v1', 'esi-wallet.read_corporation_wallets.v1', 'esi-markets.read_corporation_orders.v1',
+      'esi-industry.read_corporation_jobs.v1', 'esi-corporations.read_structures.v1', 'esi-industry.read_corporation_mining.v1',
+      'esi-assets.read_corporation_assets.v1', 'esi-corporations.read_divisions.v1'] }
+];
+const SCOPE_GROUP_KEY = 'eve-esi-scope-groups';
+function selectedScopeGroups() {
+  const saved = store.get(SCOPE_GROUP_KEY);
+  return saved == null ? SCOPE_GROUPS.map((g) => g.id) : saved.split(',').filter(Boolean);
+}
+function renderScopeGroups(focus) {
+  const chosen = new Set(selectedScopeGroups());
+  if (focus) chosen.add(focus);
+  $('scopeGroupList').innerHTML = SCOPE_GROUPS.map((g) => `<label class="scope-group${g.id === focus ? ' focus' : ''}">
+      <input type="checkbox" value="${g.id}"${chosen.has(g.id) ? ' checked' : ''}><span><b>${esc(g.name)}</b><small>${esc(g.desc)}</small></span></label>`).join('');
+  updateScopeGroupCount();
+  if (focus) $('scopeGroups').open = true;
+}
+function updateScopeGroupCount() {
+  const n = $('scopeGroupList').querySelectorAll('input:checked').length;
+  $('scopeGroupCount').textContent = `已选 ${n} / ${SCOPE_GROUPS.length} 项`;
+}
+function chosenExtraScopes() {
+  const ids = [...$('scopeGroupList').querySelectorAll('input:checked')].map((i) => i.value);
+  store.set(SCOPE_GROUP_KEY, ids.join(','));
+  return SCOPE_GROUPS.filter((g) => ids.includes(g.id)).flatMap((g) => g.scopes);
+}
+// 当前角色是否有某组权限
+function hasScopeGroup(id) {
+  const token = state.esiToken || readEsiToken();
+  const g = SCOPE_GROUPS.find((x) => x.id === id);
+  return Boolean(token && g && g.scopes.every((sc) => hasScope(token, sc)));
+}
+// 缺权限时的提示块（按钮打开绑定框并勾上这一组）
+function scopeNeededHtml(id, what) {
+  const g = SCOPE_GROUPS.find((x) => x.id === id);
+  return `<div class="empty-state scope-needed"><p>${esc(what || g.desc)}需要「${esc(g.name)}」权限，当前角色的授权里没有。重新授权时勾选这一项即可（同一角色只更新令牌）。</p>
+    <button class="btn btn-primary" data-scope-rebind="${id}">重新授权</button></div>`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-scope-rebind]');
+  if (b) { if (state.currentView !== 'profile') switchView('profile'); openEsiModal(b.dataset.scopeRebind); }
+});
+
+// ===== 游戏内操作（esi-ui.*）：网页上点一下，游戏客户端里生效（角色需在线）=====
+async function gameUi(path, params, okText) {
+  if (!hasScopeGroup('ui')) { openEsiModal('ui'); showToast('需要「游戏内操作」权限：请重新授权并勾选这一项', 'error', 4000); return false; }
+  try {
+    await esiAuthFetch(path + '?' + new URLSearchParams(params), { method: 'POST' });
+    showToast(okText, 'success');
+    return true;
+  } catch (error) {
+    showToast('游戏内操作失败：' + error.message + '（角色需要在线）', 'error', 4000);
+    return false;
+  }
+}
+const gameActions = {
+  // 设为目的地（clear=true）或添加途经点；id 可以是星系或空间站 / 建筑
+  waypoint: (id, { clear = true, first = false, name = '' } = {}) => gameUi('/ui/autopilot/waypoint/',
+    { destination_id: id, clear_other_waypoints: clear, add_to_beginning: first }, clear ? `已在游戏里设为目的地${name ? '：' + name : ''}` : `已添加途经点${name ? '：' + name : ''}`),
+  // 整条路线写入自动导航：第一个清空原有航点，其余依次追加
+  route: async (ids, name = '') => {
+    if (!ids.length) return false;
+    for (let i = 0; i < ids.length; i++) {
+      if (!hasScopeGroup('ui')) return gameUi('/ui/autopilot/waypoint/', {}, '');
+      try {
+        await esiAuthFetch('/ui/autopilot/waypoint/?' + new URLSearchParams({ destination_id: ids[i], clear_other_waypoints: i === 0, add_to_beginning: false }), { method: 'POST' });
+      } catch (error) { showToast('写入自动导航失败：' + error.message + '（角色需要在线）', 'error', 4000); return false; }
+    }
+    showToast(`已写入自动导航：${ids.length} 个航点${name ? ' · ' + name : ''}`, 'success');
+    return true;
+  },
+  market: (typeId) => gameUi('/ui/openwindow/marketdetails/', { type_id: typeId }, '已在游戏里打开市场详情'),
+  contract: (contractId) => gameUi('/ui/openwindow/contract/', { contract_id: contractId }, '已在游戏里打开合同窗口'),
+  info: (targetId) => gameUi('/ui/openwindow/information/', { target_id: targetId }, '已在游戏里打开信息窗口')
+};
+
 // 星系 → 星域（map-data.json 与星图共用缓存）
 function systemRegions() {
   if (!systemRegionPromise) {
@@ -1961,6 +2094,7 @@ function refreshCurrent() {
 
 function initDetailActions() {
   $('refreshBtn').addEventListener('click', refreshCurrent);
+  $('gameMarketBtn').addEventListener('click', () => state.selectedItem && gameActions.market(state.selectedItem.id));
   $('favToggle').addEventListener('click', () => state.selectedItem && toggleFavorite(state.selectedItem.id));
   $('itemTypeId').addEventListener('click', () => state.selectedItem && copyText(state.selectedItem.id, 'Type ID 已复制'));
   $('copyNameBtn').addEventListener('click', () => state.selectedItem && copyText(state.selectedItem.name, '名称已复制'));
@@ -2109,6 +2243,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#lp')) { if (state.currentView !== 'lp') switchView('lp'); else openLp(); return; }
     if (location.hash.startsWith('#appr')) { if (state.currentView !== 'appraisal') switchView('appraisal'); return; }
     if (location.hash.startsWith('#courier')) { if (state.currentView !== 'courier') switchView('courier'); return; }
+    if (location.hash.startsWith('#war')) { if (state.currentView !== 'war') switchView('war'); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -2396,6 +2531,63 @@ function getCharacterSkills() {
   return promise;
 }
 
+// 已绑定角色的基础声望（from_id -> standing，不含社交技能加成），缓存 10 分钟；交易税费与星图代理人共用
+// 需要 esi-characters.read_standings.v1
+let standingCache = null;   // { id, at, promise }
+function getCharacterStandings() {
+  const token = state.esiToken || readEsiToken();
+  if (!token?.access_token) return Promise.reject(new Error('尚未绑定 ESI'));
+  const id = token.character_id;
+  if (standingCache && standingCache.id === id && Date.now() - standingCache.at < 10 * 60e3) return standingCache.promise;
+  const promise = (async () => {
+    if (!hasScope(token, 'esi-characters.read_standings.v1')) throw new Error('授权里没有声望权限，请重新绑定 ESI');
+    const list = await esiAuthFetch('/characters/' + id + '/standings/');
+    return { id, name: token.character_name || ('角色 ' + id), map: new Map((list || []).map((x) => [x.from_id, x.standing])) };
+  })();
+  standingCache = { id, at: Date.now(), promise };
+  promise.catch(() => { if (standingCache?.promise === promise) standingCache = null; });
+  return promise;
+}
+
+// 角色当前的跳跃疲劳（需要「跳跃疲劳」权限）：{ minutes 剩余分钟, expires }；没有权限时返回 null
+async function getFatigue() {
+  if (!hasScopeGroup('fatigue')) return null;
+  const token = await ensureEsiToken();
+  const f = await esiAuthFetch('/characters/' + token.character_id + '/fatigue/');
+  const expires = f.jump_fatigue_expire_date ? new Date(f.jump_fatigue_expire_date).getTime() : 0;
+  return { minutes: Math.max(0, (expires - Date.now()) / 60e3), expires, lastJump: f.last_jump_date || null };
+}
+
+// 舰船保险（公开接口 /insurance/prices/）：type_id -> [{ name, cost, payout }]，按赔付从低到高
+let insurancePromise = null;
+const INSURANCE_ZH = { Basic: '基础', Standard: '标准', Bronze: '青铜', Silver: '白银', Gold: '黄金', Platinum: '铂金' };
+function getInsurance() {
+  if (!insurancePromise) {
+    insurancePromise = fetchESI('/insurance/prices/?language=en').then((list) => new Map((list || []).map((x) => [x.type_id,
+      (x.levels || []).map((l) => ({ name: INSURANCE_ZH[l.name] || l.name, cost: l.cost, payout: l.payout })).sort((a, b) => a.payout - b.payout)])))
+      .catch((error) => { insurancePromise = null; throw error; });
+  }
+  return insurancePromise;
+}
+
+// NPC 空间站所属军团及该军团的阵营（中介费按这两项声望计算）
+// ESI 的 NPC 军团资料没有阵营字段，军团 -> 阵营取 SDE 生成的 npc-corp-faction.json（build_npc.mjs）
+const stationOwners = new Map();
+let corpFactionPromise = null;
+function stationOwner(stationId) {
+  if (!stationOwners.has(stationId)) {
+    if (!corpFactionPromise) corpFactionPromise = fetch('./npc-corp-faction.json?v=2').then((r) => r.json()).catch(() => { corpFactionPromise = null; return { corps: {}, factions: {} }; });
+    const p = (async () => {
+      const [st, table] = await Promise.all([fetchESI('/universe/stations/' + stationId + '/'), corpFactionPromise]);
+      const faction = table.corps[st.owner] || 0;
+      return { corp: st.owner, faction, factionName: table.factions[faction] || '' };
+    })();
+    p.catch(() => stationOwners.delete(stationId));
+    stationOwners.set(stationId, p);
+  }
+  return stationOwners.get(stationId);
+}
+
 // 已绑定角色当前的植入体（需要 esi-clones.read_implants.v1）
 async function getCharacterImplants() {
   const token = await ensureEsiToken();
@@ -2614,7 +2806,7 @@ async function esiAuthFetchPaged(path, maxPages = 20) {
   const get = async (page) => {
     const url = ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=' + SERVER.datasource + '&page=' + page;
     const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token.access_token } });
-    if (!res.ok) throw new Error('ESI ' + res.status);
+    if (!res.ok) { const error = new Error('ESI ' + res.status); error.status = res.status; throw error; }
     return res;
   };
   const first = await get(1);
@@ -3110,6 +3302,72 @@ function assetFlagLabel(flag) {
   return zhLabel(ASSET_FLAG_ZH, flag, flag || '');
 }
 
+// ===== 突变装备（深渊）：/dogma/dynamic/items/{type_id}/{item_id}/ =====
+// 每件突变装备属性不同，资产里只能看到型号；按 item_id 读真实属性，与原型装备（source_type_id）的属性逐项对比。
+// 属性中文名与单位来自 dogma-attr-zh.json（build_dogma_names.mjs 由 SDE 生成）。击杀邮件里没有 item_id，无法读取。
+const isMutated = (name, a) => a.is_singleton && /深渊|Abyssal/.test(name) && !/纤维|Filament/.test(name);
+let dogmaNamesPromise = null;
+const dogmaNames = () => dogmaNamesPromise || (dogmaNamesPromise = fetch('./dogma-attr-zh.json?v=1').then((r) => r.json()).catch(() => { dogmaNamesPromise = null; return { attrs: {}, units: {} }; }));
+const SKIP_UNITS = new Set([115, 116, 117, 119, 129, 136, 137, 140, 141, 142]);
+function fmtAttr(v, unit, units) {
+  const n = (x, d = 2) => Number(x.toFixed(d)).toLocaleString('zh-CN');
+  switch (unit) {
+    case 101: return n(v / 1000) + ' 秒';
+    case 108: case 111: return n((1 - v) * 100) + '%';
+    case 109: return n((v - 1) * 100) + '%';
+    case 127: return n(v * 100) + '%';
+    default: return n(v) + (units[unit] ? ' ' + units[unit] : '');
+  }
+}
+async function openDynamicItem(typeId, itemId) {
+  let modal = $('dynModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.id = 'dynModal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.innerHTML = `<div class="modal-backdrop" data-dyn-close></div><div class="modal-content dyn-modal">
+      <div class="modal-header"><h3 id="dynTitle">突变属性</h3><button class="modal-close" data-dyn-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+      <div class="modal-body" id="dynBody"></div></div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => { if (e.target.closest('[data-dyn-close]')) modal.hidden = true; });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) { e.stopImmediatePropagation(); modal.hidden = true; } }, true);
+  }
+  modal.hidden = false;
+  const body = $('dynBody');
+  body.innerHTML = '<div class="pi-loading">读取突变属性…</div>';
+  try {
+    const [dyn, names] = await Promise.all([fetchESI(`/dogma/dynamic/items/${typeId}/${itemId}/`), dogmaNames()]);
+    const [source, typeNames] = await Promise.all([
+      fetchESI(`/universe/types/${dyn.source_type_id}/`).catch(() => null),
+      resolveTypeNames([typeId, dyn.source_type_id, dyn.mutator_type_id])
+    ]);
+    const base = new Map((source?.dogma_attributes || []).map((x) => [x.attribute_id, x.value]));
+    const rows = dyn.dogma_attributes.map((x) => ({ id: x.attribute_id, value: x.value, base: base.get(x.attribute_id), meta: names.attrs[x.attribute_id] }))
+      .filter((r) => r.meta && !SKIP_UNITS.has(r.meta[1]) && r.base !== undefined)
+      // 负值属性（如缠绕光束的速度加成 -50%）按绝对值比较：幅度越大效果越强
+      .map((r) => ({ ...r, diff: !r.base ? 0 : r.base < 0 ? (Math.abs(r.value) - Math.abs(r.base)) / Math.abs(r.base) : (r.value - r.base) / Math.abs(r.base) }))
+      .sort((a, b) => Math.abs(b.diff) - Math.abs(a.diff));
+    const changed = rows.filter((r) => Math.abs(r.diff) > 1e-6);
+    const creator = dyn.created_by ? (await resolveNames([dyn.created_by]).catch(() => ({ names: new Map() }))).names.get(dyn.created_by) : '';
+    $('dynTitle').textContent = typeNames.get(typeId) || '突变属性';
+    const row = (r) => {
+      // 百分比类单位（108/111）数值越小越好显示时取反
+      const better = r.meta[2] ? r.diff > 0 : r.diff < 0;
+      const cls = Math.abs(r.diff) < 1e-6 ? '' : better ? 'up' : 'down';
+      return `<tr><td>${esc(r.meta[0])}</td><td>${esc(fmtAttr(r.base, r.meta[1], names.units))}</td><td><b class="${cls}">${esc(fmtAttr(r.value, r.meta[1], names.units))}</b></td>
+        <td class="${cls}">${Math.abs(r.diff) < 1e-6 ? '—' : (r.diff > 0 ? '+' : '') + (r.diff * 100).toFixed(1) + '%'}</td></tr>`;
+    };
+    body.innerHTML = `<p class="dyn-meta">原型：<b>${esc(typeNames.get(dyn.source_type_id) || dyn.source_type_id)}</b> · 突变质体：${esc(typeNames.get(dyn.mutator_type_id) || dyn.mutator_type_id)}${creator ? ' · 制作者：' + esc(creator) : ''}</p>
+      <div class="table-scroll"><table class="pc-mini-table"><thead><tr><th>属性</th><th>原型</th><th>突变后</th><th>变化</th></tr></thead><tbody>${changed.map(row).join('')}</tbody></table></div>
+      ${rows.length > changed.length ? `<details class="dyn-more"><summary>未变化的属性（${rows.length - changed.length}）</summary><table class="pc-mini-table"><tbody>${rows.filter((r) => !changed.includes(r)).map(row).join('')}</tbody></table></details>` : ''}
+      <p class="text-muted valuation-note">绿色表示比原型更好，红色表示更差（按 SDE 的「数值越大越好」判断）。</p>`;
+  } catch (error) {
+    body.innerHTML = '<p class="text-muted">突变属性读取失败：' + esc(error.message) + '</p>';
+  }
+}
+
 function assetSlotLabel(asset) {
   const flag = assetFlagLabel(asset.location_flag);
   return asset.parent ? flag + ' · ' + typeName(asset.parent.type_id) : flag;
@@ -3244,7 +3502,8 @@ function renderStationAssets(box, station, groups, { region }) {
     const p = a.is_blueprint_copy ? null : hubPrice(region, a.type_id);
     const name = typeName(a.type_id);
     return profileRow([
-      esc(name) + (a.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : ''),
+      esc(name) + (a.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : '') +
+        (isMutated(name, a) ? ` <button class="pill dyn-btn" data-dyn="${a.type_id}:${a.item_id}" title="查看这件突变装备的真实属性">突变属性</button>` : ''),
       formatNumber(a.quantity ?? 1),
       p?.sell == null ? '<span class="muted-cell">—</span>' : formatPrice(p.sell),
       '<strong class="down">' + (p?.sell == null ? '—' : formatISK(p.sell * qty)) + '</strong>',
@@ -3337,6 +3596,26 @@ async function renderProfileTab(tab) {
     return;
   }
 
+  if (['clones', 'mining', 'research', 'fleet', 'corp'].includes(tab)) {
+    try {
+      const m = await loadMoreModule();
+      if (activeProfileTab() === tab) await m.renderMore(tab, box);
+    } catch (error) {
+      box.innerHTML = '<p class="text-muted">页面加载失败：' + esc(error.message) + '</p>';
+    }
+    return;
+  }
+
+  if (tab === 'trades') {
+    try {
+      const m = await loadTradesModule();
+      if (activeProfileTab() === 'trades') await m.renderTrades(box);
+    } catch (error) {
+      box.innerHTML = '<p class="text-muted">交易记录加载失败：' + esc(error.message) + '</p>';
+    }
+    return;
+  }
+
   if (tab === 'orders') {
     const orders = Array.isArray(data.orders) ? data.orders : null;
     if (!orders || !orders.length) { box.innerHTML = '<p class="text-muted">暂无有效市场订单</p>'; return; }
@@ -3381,11 +3660,45 @@ async function renderProfileTab(tab) {
 // 个人中心 · 技能：首次打开时加载
 let skillsLoading = null;
 function loadSkillsModule() {
-  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v20r7').then((m) => {
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v21').then((m) => {
     m.initSkills({ esc, formatNumber, esiAuthFetch, store });
     return m;
   }).catch((error) => { skillsLoading = null; throw error; });
   return skillsLoading;
+}
+
+// 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
+let moreLoading = null;
+function loadMoreModule() {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v1').then((m) => {
+    m.initProfileMore({
+      esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
+      resolveStructureNames, locationName, officialName, gameImage, valuationCard, getCharacterSkills, getMarketPriceMap,
+      openMapSystem, game: gameActions, hasScopeGroup, scopeNeededHtml,
+      tokenInfo: () => state.esiToken || readEsiToken(),
+      hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
+      isActive: (tab) => state.currentView === 'profile' && activeProfileTab() === tab
+    });
+    return m;
+  }).catch((error) => { moreLoading = null; throw error; });
+  return moreLoading;
+}
+
+// 个人中心 · 交易记录与盈亏：首次打开时加载
+let tradesLoading = null;
+function loadTradesModule() {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v1').then((m) => {
+    m.initTrades({
+      esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
+      resolveStructureNames, locationName, officialName, gameImage, valuationCard,
+      tokenInfo: () => state.esiToken || readEsiToken(),
+      hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
+      selectItem: (typeId) => { switchView('market'); selectItem(typeId); },
+      isActive: () => state.currentView === 'profile' && activeProfileTab() === 'trades'
+    });
+    return m;
+  }).catch((error) => { tradesLoading = null; throw error; });
+  return tradesLoading;
 }
 
 // 与市场中心选物品一致：选中空间站只看本站，选「资产估值」看总估值
@@ -3747,7 +4060,8 @@ async function renderContractDetail(box, c) {
       '<button class="btn btn-ghost" data-back-contracts title="返回合同列表">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg><span>合同列表</span></button>' +
       '<h3 class="asset-view-title" title="' + esc(c.title || '') + '">' +
-        '<span class="pill type-' + c.type + '">' + esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type)) + '</span> ' + esc(c.title || '（无标题）') + '</h3>') +
+        '<span class="pill type-' + c.type + '">' + esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type)) + '</span> ' + esc(c.title || '（无标题）') + '</h3>' +
+      `<button class="btn btn-ghost" data-game-contract="${c.contract_id}" title="在游戏里打开这个合同（需要「游戏内操作」权限，角色需在线）">游戏内打开</button>`) +
     (c.type === 'courier' ? ''
       : !given.count && wanted.count ? requestVerdict(c.reward || c.price, wanted)
       : contractVerdict(c.type === 'auction' ? (topBid || c.price) : c.price, given)) +
@@ -3771,14 +4085,114 @@ async function renderContractDetail(box, c) {
 // ===== 战斗记录（zKillboard）=====
 state.combatFilter = 'all';
 
-async function renderCombatTab(box) {
+// ===== 国服战斗记录：zKillboard 不收录国服，改从 ESI 读角色最近的击杀邮件 =====
+// /characters/{id}/killmails/recent/（esi-killmails.read_killmails.v1）给出击杀 ID 与 hash，
+// 再逐个读公开的 /killmails/{id}/{hash}/。价值按 ESI 全服均价估算（舰船 + 物品，蓝图副本不计），格式与 zKillboard 一致以复用击杀列表与详情。
+const KILLMAIL_SCOPE = 'esi-killmails.read_killmails.v1';
+const esiKillCache = new Map();   // killmail_id -> 带估值的击杀（击杀邮件不会变）
+let esiCombat = null;             // { id, at, promise }
+
+function killmailWithValue(km, hash, prices) {
+  let dropped = 0;
+  let destroyed = prices.get(km.victim.ship_type_id) || 0;
+  const walk = (items) => {
+    for (const it of items || []) {
+      const p = it.singleton === 2 ? 0 : prices.get(it.item_type_id) || 0;
+      dropped += p * (it.quantity_dropped || 0);
+      destroyed += p * (it.quantity_destroyed || 0);
+      walk(it.items);
+    }
+  };
+  walk(km.victim.items);
+  const players = (km.attackers || []).filter((a) => a.character_id).length;
+  return { ...km, zkb: { hash, totalValue: dropped + destroyed, droppedValue: dropped, destroyedValue: destroyed,
+    solo: players === 1, npc: players === 0, awox: false, locationID: null, valueLabel: '按 ESI 全服均价估值' } };
+}
+
+function loadEsiKills() {
   const me = myCharacterId();
-  if (!SERVER.kb) {
-    const link = kbSiteLink('pilot', me);
-    box.innerHTML = '<div class="empty-state"><p>' + esc(NO_KB_MESSAGE) + '</p>' +
-      (link ? `<a class="btn btn-primary" href="${link}" target="_blank" rel="noopener">在${esc(SERVER.kbSite.name)}查看我的击杀 ↗</a>` : '') + '</div>';
+  if (esiCombat && esiCombat.id === me && Date.now() - esiCombat.at < 5 * 60e3) return esiCombat.promise;
+  const promise = (async () => {
+    const refs = (await esiAuthFetchPaged('/characters/' + me + '/killmails/recent/', 4)).slice(0, 200);
+    const prices = await getMarketPriceMap();
+    const kills = [];
+    let cursor = 0;
+    await Promise.all(Array.from({ length: 8 }, async () => {
+      while (cursor < refs.length) {
+        const ref = refs[cursor++];
+        let kill = esiKillCache.get(ref.killmail_id);
+        if (!kill) {
+          try {
+            kill = killmailWithValue(await fetchESI(`/killmails/${ref.killmail_id}/${ref.killmail_hash}/`), ref.killmail_hash, prices);
+            esiKillCache.set(ref.killmail_id, kill);
+          } catch { continue; }
+        }
+        kills.push(kill);
+      }
+    }));
+    return kills.sort((a, b) => new Date(b.killmail_time) - new Date(a.killmail_time));
+  })();
+  esiCombat = { id: me, at: Date.now(), promise };
+  promise.catch(() => { if (esiCombat?.promise === promise) esiCombat = null; });
+  return promise;
+}
+
+async function renderEsiCombat(box) {
+  const me = myCharacterId();
+  const link = kbSiteLink('pilot', me);
+  const siteBtn = link ? `<a class="btn btn-ghost" href="${link}" target="_blank" rel="noopener">在${esc(SERVER.kbSite.name)}查看 ↗</a>` : '';
+  if (!hasScope(state.esiToken || readEsiToken(), KILLMAIL_SCOPE)) {
+    box.innerHTML = '<div class="empty-state"><p>' + esc(SERVER.full) + '没有 zKillboard，站内战斗记录改从 ESI 读取，需要击杀记录权限（' + KILLMAIL_SCOPE + '）。' +
+      '当前授权里没有这项权限，请重新授权当前角色（重新生成授权链接并登录，同一角色只会更新令牌）。</p>' +
+      '<div class="empty-actions"><button class="btn btn-primary" data-esi-rebind>重新授权</button>' + siteBtn + '</div></div>';
     return;
   }
+  box.innerHTML = skCards(6) + skToolbar(3) + skRows(10);
+  let kb, kills;
+  try {
+    kb = await loadKillboard();
+    kills = await loadEsiKills();
+    if (activeProfileTab() !== 'combat' || myCharacterId() !== me) return;
+    await kb.prepareKills(kills);
+  } catch (error) {
+    if (activeProfileTab() === 'combat') box.innerHTML = '<p class="text-muted">战斗记录读取失败：' + esc(error.message) + '</p>';
+    return;
+  }
+  if (activeProfileTab() !== 'combat' || myCharacterId() !== me) return;
+  const isLoss = (k) => k.victim.character_id === me;
+  const losses = kills.filter(isLoss);
+  const wins = kills.filter((k) => !isLoss(k));
+  const finalBlows = wins.filter((k) => (k.attackers || []).some((a) => a.final_blow && a.character_id === me)).length;
+  const solo = wins.filter((k) => k.zkb.solo).length;
+  const sum = (list) => list.reduce((t, k) => t + (k.zkb.totalValue || 0), 0);
+  const destroyedIsk = sum(wins), lostIsk = sum(losses);
+  const efficiency = destroyedIsk + lostIsk ? destroyedIsk / (destroyedIsk + lostIsk) * 100 : null;
+  const filter = state.combatFilter;
+  const shown = filter === 'kills' ? wins : filter === 'losses' ? losses : kills;
+  box.innerHTML =
+    '<div class="valuation-grid">' +
+      valuationCard('近期参与击杀', formatNumber(wins.length) + ' 艘', '单刷 ' + formatNumber(solo) + ' 次', 'is-buy') +
+      valuationCard('最后一击', formatNumber(finalBlows) + ' 次', '参与击杀中', 'is-buy') +
+      valuationCard('近期损失', formatNumber(losses.length) + ' 艘', '', 'is-sell') +
+      valuationCard('击毁价值', formatISK(destroyedIsk) + ' ISK', '按全服均价估算', 'is-buy') +
+      valuationCard('损失价值', formatISK(lostIsk) + ' ISK', '按全服均价估算', 'is-sell') +
+      valuationCard('ISK 效率', efficiency == null ? '—' : efficiency.toFixed(1) + '%', '击毁 ÷（击毁 + 损失）', 'is-total') +
+    '</div>' +
+    '<div class="valuation-toolbar section-gap">' +
+      '<div class="segmented" role="group" aria-label="战斗记录筛选">' +
+        [['all', '全部', kills.length], ['kills', '参与击杀', wins.length], ['losses', '损失', losses.length]].map(([key, label, n]) =>
+          `<button data-combat-filter="${key}" class="${filter === key ? 'active' : ''}">${label} <span class="seg-count">${n}</span></button>`).join('') +
+      '</div>' +
+      '<span class="toolbar-spacer"></span>' + siteBtn +
+    '</div>' +
+    '<div class="kb-list">' + kb.killTableHtml(shown, { me, showSide: true }) + '</div>' +
+    '<p class="text-muted valuation-note">数据来自 ' + esc(SERVER.full) + ' ESI（角色最近的击杀邮件，最多 200 条），缓存 5 分钟；价值按 ESI 全服均价估算，与击杀网站的估值可能不同。点击记录查看装配与攻击者。</p>';
+  kb.bindKillClicks(box.querySelector('.kb-list'), kills);
+}
+
+async function renderCombatTab(box) {
+  const me = myCharacterId();
+  if (!SERVER.kb) { await renderEsiCombat(box); return; }
   box.innerHTML = skCards(6) + skToolbar(3) + skRows(10);
   let kb, kills, stats;
   try {
@@ -3860,7 +4274,7 @@ async function generateAuthLink() {
       response_type: 'code',
       redirect_uri: cfg.redirect_uri,
       client_id: cfg.client_id,
-      scope: (cfg.scopes || []).join(' '),
+      scope: [...new Set([...(cfg.scopes || []), ...chosenExtraScopes()])].join(' '),
       state: authState,
       code_challenge: challenge,
       code_challenge_method: 'S256',
@@ -3951,6 +4365,8 @@ function resetCharacterState() {
   state.characterData = null;
   state.profileStation = null;
   skillCache = null;
+  standingCache = null;
+  esiCombat = null;
   TF.resetCharacter();
   renderProfileStationNav([]);
   if (state.jumps || charLoc.key) {
@@ -3986,8 +4402,9 @@ function renderEsiAccounts() {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg><span>添加角色</span></button>`;
 }
 
-function openEsiModal() {
+function openEsiModal(scopeFocus) {
   modalReturnFocus = document.activeElement;
+  renderScopeGroups(typeof scopeFocus === 'string' ? scopeFocus : null);
   $('esiModal').hidden = false;
   requestAnimationFrame(() => $('generateAuthBtn').focus());
 }
@@ -4002,6 +4419,7 @@ function initESIModal() {
   $('closeEsiModal').addEventListener('click', closeEsiModal);
   $('esiModal').querySelector('.modal-backdrop').addEventListener('click', closeEsiModal);
   $('generateAuthBtn').addEventListener('click', generateAuthLink);
+  $('scopeGroupList').addEventListener('change', () => { updateScopeGroupCount(); $('authLinkBox').hidden = true; });
   $('bindCallbackBtn').addEventListener('click', bindEsiCallback);
   $('callbackUrl').addEventListener('keydown', (e) => { if (e.key === 'Enter') bindEsiCallback(); });
   $('copyAuthBtn').addEventListener('click', () => {
@@ -4037,10 +4455,43 @@ function initESIModal() {
 }
 
 
+// ===== 击杀预警（kill-alert.js）：开启后才加载模块并开始检测 =====
+const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
+let killAlertModule = null;
+function loadKillAlert() {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v2').then((m) => {
+    m.initKillAlert({
+      esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName,
+      tokenInfo: () => state.esiToken || readEsiToken(),
+      hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
+      openEsiBind: () => { switchView('profile'); openEsiModal(); },
+      openKill: async (id) => { if (!id) return; const kb = await loadKillboard(); kb.openServiceKill(id); }
+    });
+    const sync = () => {
+      const st = m.status();
+      const btn = $('killAlertBtn');
+      btn.classList.toggle('on', st.on);
+      btn.title = '击杀预警：' + st.text;
+    };
+    m.onChange(sync);
+    sync();
+    return m;
+  }).catch((error) => { killAlertModule = null; throw error; });
+  return killAlertModule;
+}
+function initKillAlerts() {
+  $('killAlertBtn').addEventListener('click', () => loadKillAlert().then((m) => m.openPanel()).catch((e) => showToast('击杀预警加载失败：' + e.message, 'error')));
+  // 已开启的话页面打开即开始检测
+  let on = false;
+  try { on = JSON.parse(localStorage.getItem(KILL_ALERT_KEY) || '{}').on === true; } catch { /* 忽略 */ }
+  if (on) loadKillAlert().catch(() => {});
+}
+
 // ===== 初始化应用 =====
 function init() {
+  initKillAlerts();
   TF.initTradeFees({
-    esc, showToast, getCharacterSkills,
+    esc, showToast, getCharacterSkills, getCharacterStandings, stationOwner, officialName,
     hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
     openEsiBind: () => { switchView('profile'); openEsiModal(); }
   });
@@ -4070,6 +4521,7 @@ function init() {
   if (location.hash.startsWith('#lp')) switchView('lp');          // LP 商店
   if (location.hash.startsWith('#appr')) switchView('appraisal'); // 估价
   if (location.hash.startsWith('#courier')) switchView('courier'); // 快递合同
+  if (location.hash.startsWith('#war')) switchView('war'); // 战争
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);

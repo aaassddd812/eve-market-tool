@@ -973,10 +973,14 @@ export async function showPi() {
       <section class="pi-page">
         <div class="pi-head">
           <h2>行星工业规划</h2>
+          <button type="button" class="btn btn-ghost pi-colonies-entry" data-pi-colonies aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5a10 10 0 0 1 0 14M12 5a10 10 0 0 0 0 14"/></svg><span>我的殖民地</span>
+          </button>
           <button type="button" class="btn btn-ghost pi-editor-entry" data-pi-editor>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg><span>模板编辑器</span>
           </button>
         </div>
+        <div class="pi-colonies" id="piColonies" hidden></div>
         <div class="pi-layout">
           <form class="pi-form" id="piForm" autocomplete="off"></form>
           <div class="pi-result" id="piResult">
@@ -989,6 +993,14 @@ export async function showPi() {
       </section>`;
     bind();
     main.querySelector('[data-pi-editor]').addEventListener('click', () => openTemplateEditor(blankTemplate(), { title: '模板编辑器' }));
+    // 我的殖民地（ESI，需要「行星殖民地」权限）：展开时读取
+    main.querySelector('[data-pi-colonies]').addEventListener('click', (e) => {
+      const box = $('piColonies');
+      box.hidden = !box.hidden;
+      e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
+      e.currentTarget.classList.toggle('active', !box.hidden);
+      if (!box.hidden) ctx.renderColonies?.(box);
+    });
     renderForm();
   }
   // 切回本页时保留表单与规划结果，不重新渲染

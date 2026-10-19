@@ -1,10 +1,12 @@
 // ===== 个人中心 · 技能 =====
 // 按游戏技能分组列出全部 512 个技能：已训练等级、生效等级（Alpha 克隆受限时较低）、技能点、训练队列中的目标等级，
 // 未学的技能灰显。数据：ESI /skills/（个人中心已读取）、/skillqueue/（需要 esi-skills.read_skillqueue.v1），skill-data.json（build_industry.mjs 生成）。
+// 角色属性：ESI /attributes/（esi-skills.read_skills.v1）。训练速度 = 主属性 + 副属性 / 2（技能点 / 分钟），据此估算每个技能升到下一级的时间。
 let ctx;   // esc, formatNumber, esiAuthFetch, store
 let data = null;
 let loading = null;
-const S = { filter: 'all', q: '', open: null, queue: null, queueFor: 0 };
+const S = { filter: 'all', q: '', open: null, queue: null, queueFor: 0, attrs: null };
+const ATTR_KEY = { 164: 'charisma', 165: 'intelligence', 166: 'memory', 167: 'perception', 168: 'willpower' };
 const OPEN_KEY = 'eve-skill-groups-open';
 const ATTR_ZH = { 164: '魅力', 165: '智力', 166: '记忆', 167: '感知', 168: '毅力' };
 const ROMAN = ['0', 'I', 'II', 'III', 'IV', 'V'];
@@ -43,11 +45,28 @@ export async function renderSkills(box, character, characterId) {
       .then((q) => { S.queue = Array.isArray(q) ? q : []; })
       .catch((e) => { S.queue = { error: e.message }; })
       .finally(() => { if (box.isConnected && box.dataset.skills === '1') draw(box, own); });
+    S.attrs = null;
+    ctx.esiAuthFetch('/characters/' + characterId + '/attributes/')
+      .then((a) => { if (S.queueFor === characterId) S.attrs = a; })
+      .catch((e) => { if (S.queueFor === characterId) S.attrs = { error: e.message }; })
+      .finally(() => { if (box.isConnected && box.dataset.skills === '1') draw(box, own); });
   }
   box.dataset.skills = '1';
   box._skOwn = own;
   draw(box, own);
   bind(box, own);
+}
+
+// 属性条：五项属性 + 重新分配（每年 1 次免费，另有奖励次数）
+function attrHtml() {
+  const esc = ctx.esc;
+  if (S.attrs === null) return '';
+  if (S.attrs.error) return `<p class="text-muted sk-note">角色属性读取失败：${esc(S.attrs.error)}</p>`;
+  const a = S.attrs;
+  const next = a.accrued_remap_cooldown_date ? new Date(a.accrued_remap_cooldown_date).getTime() : 0;
+  const remap = next > Date.now() ? '下次可重新分配：' + new Date(next).toLocaleDateString('zh-CN') : '现在可以重新分配属性';
+  return `<div class="sk-attrs">${Object.entries(ATTR_KEY).map(([id, k]) => `<span><em>${ATTR_ZH[id]}</em><b>${a[k] ?? '—'}</b></span>`).join('')}
+    <span class="sk-remap">${esc(remap)}${a.bonus_remaps ? ` · 奖励重新分配 ${a.bonus_remaps} 次` : ''}</span></div>`;
 }
 
 function draw(box, own) {
@@ -76,13 +95,16 @@ function draw(box, own) {
     return { gid: Number(gid), name, list, shown: list.filter(match), sp, levels, trained: list.filter((s) => mine.get(s.id)?.trained_skill_level > 0).length };
   }).sort((a, b) => a.name.localeCompare(b.name, 'zh'));
 
+  const attrs = S.attrs && !S.attrs.error ? S.attrs : null;
+  const rate = (s) => attrs ? (attrs[ATTR_KEY[s.pri]] || 0) + (attrs[ATTR_KEY[s.sec]] || 0) / 2 : 0;   // 技能点 / 分钟
+  const dur = (min) => { const d = Math.floor(min / 1440), h = Math.floor((min % 1440) / 60), m = Math.round(min % 60); return d ? `${d} 天 ${h} 小时` : h ? `${h} 小时 ${m} 分` : `${Math.max(1, m)} 分钟`; };
   const card = (label, value, detail) => `<div class="valuation-card"><span class="valuation-label">${label}</span><strong class="valuation-value">${value}</strong><span class="valuation-detail">${detail}</span></div>`;
   const cards = `<div class="valuation-grid sk-cards">
       ${card('总技能点', fmt(own.total_sp || 0), '')}
       ${card('未分配技能点', fmt(own.unallocated_sp || 0), '')}
       ${card('已学技能', `${trainedCount}<span class="unit">/ ${all.length}</span>`, `${fiveCount} 个已到 V 级`)}
       ${card('训练队列', queue.length ? queue.length + '<span class="unit">项</span>' : S.queue === null ? '读取中' : '空闲', queue.length ? esc(relTime(queue[queue.length - 1].finish_date)) + '后完成' : '')}
-    </div>`;
+    </div>${attrHtml()}`;
 
   let queueHtml = '';
   if (S.queue?.error) queueHtml = `<p class="text-muted sk-note">训练队列读取失败：${esc(S.queue.error)}</p>`;
@@ -105,12 +127,16 @@ function draw(box, own) {
       const lv = m?.trained_skill_level || 0, act = m?.active_skill_level ?? lv, sp = m?.skillpoints_in_skill || 0;
       const target = queued.get(s.id) || 0;
       const boxes = [1, 2, 3, 4, 5].map((n) => `<i class="${n <= act ? 'on' : n <= lv ? 'limited' : n <= target ? 'queued' : ''}"></i>`).join('');
-      const title = `${s.desc}\n\n主属性：${ATTR_ZH[s.pri] || '—'} · 副属性：${ATTR_ZH[s.sec] || '—'} · 训练倍数 ×${s.rank}`;
+      const r = rate(s);
+      const need = lv < 5 ? spForLevel(s.rank, lv + 1) - sp : 0;
+      const eta = r && need > 0 ? dur(need / r) : '';
+      const title = `${s.desc}\n\n主属性：${ATTR_ZH[s.pri] || '—'} · 副属性：${ATTR_ZH[s.sec] || '—'} · 训练倍数 ×${s.rank}` +
+        (r ? `\n训练速度 ${r.toFixed(1)} 技能点 / 分钟（${Math.round(r * 60)} / 小时）${eta ? ` · 升到 ${ROMAN[lv + 1]} 级约 ${eta}` : ''}` : '');
       return `<div class="sk-row${lv ? '' : ' untrained'}" title="${esc(title)}">
         <span class="sk-name">${esc(s.name)}</span>
         <span class="sk-rank">×${s.rank}</span>
         <span class="sk-boxes" aria-label="${lv} 级">${boxes}</span>
-        <span class="sk-sp">${lv ? fmt(sp) : '未学'}<small>${lv < 5 ? ' / ' + fmt(spForLevel(s.rank, Math.max(1, lv + 1))) : ''}</small></span>
+        <span class="sk-sp">${lv ? fmt(sp) : '未学'}<small>${lv < 5 ? ' / ' + fmt(spForLevel(s.rank, Math.max(1, lv + 1))) : ''}</small>${eta && lv ? `<small class="sk-eta">下一级约 ${eta}</small>` : ''}</span>
       </div>`;
     }).join('');
     const pct = (g.levels / (g.list.length * 5)) * 100;

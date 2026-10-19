@@ -8,7 +8,7 @@
 //           路线经过低安 / 00 时默认跳货优先（可改），跳货另用跳跃规划算出跳跃次数与燃料。
 import { SERVER, IS_TQ, HUB, HUB_NAME } from './server.js?v=s3';
 import { SHIPS as HULLS, MODULES } from './courier-ships.js?v=v1';
-import { planJumpRoute, canJumpInto } from './jump-planner.js?v=v14';
+import { planJumpRoute, canJumpInto } from './jump-planner.js?v=v15';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, openEftFit, hasEsiToken, tokenInfo, hasScope, officialName, loadNpcNames, resolveNames, resolveStructures, openEsiBind, openMapSystem, closeDrawer
 const $ = (id) => document.getElementById(id);
@@ -454,7 +454,10 @@ export async function showCourier() {
     main.innerHTML = `
       <section class="ind-page cr-page">
         <div class="pi-head cr-head">
-          <h2>快递合同</h2>
+          <h2 id="crTitle">快递合同</h2>
+          <div class="segmented cr-mode" role="group" aria-label="合同类型">
+            <button type="button" data-cr-mode="courier" class="active">快递</button><button type="button" data-cr-mode="auction">拍卖</button>
+          </div>
           <span class="text-muted" id="crMeta"></span>
           <button type="button" class="btn btn-ghost cr-refresh" data-cr-refresh title="重新读取合同">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>刷新
@@ -467,6 +470,7 @@ export async function showCourier() {
           </label>
         </div>
         <div id="crList"></div>
+        <div id="auctionPage" hidden></div>
       </section>`;
     main.addEventListener('click', onMainClick);
     $('crSort').addEventListener('change', (e) => { F.sort = e.target.value; S.shown = PAGE; save(); renderList(); });
@@ -686,6 +690,9 @@ function onSideChange(e) {
 }
 
 function onMainClick(e) {
+  const mode = e.target.closest('[data-cr-mode]');
+  if (mode) { setMode(mode.dataset.crMode); return; }
+  if (e.target.closest('#auctionPage')) return;
   if (e.target.closest('[data-cr-refresh]')) {
     loadContracts(true).then(renderAll);
     renderMain();
@@ -724,12 +731,24 @@ function closeDetail() {
   returnFocus?.focus?.();
 }
 
+// 快递 / 拍卖切换：拍卖模式隐藏快递筛选侧栏与列表，交给 auctions.js
+function setMode(mode) {
+  const auction = mode === 'auction';
+  $('courierView').classList.toggle('au-mode', auction);
+  document.querySelectorAll('[data-cr-mode]').forEach((b) => b.classList.toggle('active', b.dataset.crMode === mode));
+  $('crTitle').textContent = auction ? '公开拍卖' : '快递合同';
+  for (const el of [$('crList'), document.querySelector('.cr-toolbar:not(.au-toolbar)'), $('crMeta'), document.querySelector('.cr-refresh')]) if (el) el.hidden = auction;
+  $('auctionPage').hidden = !auction;
+  if (auction) ctx.renderAuctions($('auctionPage'));
+}
+
 function onModalClick(e) {
   if (e.target.closest('.modal-backdrop, [data-cr-close]')) { closeDetail(); return; }
   const c = S.open;
   if (!c) return;
   if (e.target.closest('[data-cr-mail]')) { sendMail(c, e.target.closest('[data-cr-mail]')); return; }
   if (e.target.closest('[data-cr-bind]')) { closeDetail(); ctx.openEsiBind(); return; }
+  if (e.target.closest('[data-cr-game]')) { ctx.game.contract(c.contract_id); return; }
   if (e.target.closest('[data-cr-copy]')) { ctx.copyText(String(c.contract_id), '合同 ID 已复制'); return; }
   if (e.target.closest('[data-cr-fit-copy]') && c.ship && !c.ship.none) { copyEft(fitEft(c.ship)); return; }
   if (e.target.closest('[data-cr-fit-open]') && c.ship && !c.ship.none) {
@@ -786,6 +805,7 @@ function renderDetail(c) {
   const action = !token
     ? `<button type="button" class="btn btn-primary" data-cr-bind>绑定 ESI 后接受</button><p class="cr-hint">接受需要把合同链接发到你的游戏邮箱，请先绑定角色。</p>`
     : `<button type="button" class="btn btn-primary" data-cr-mail${sent ? ' disabled' : ''}>${sent ? '已发送到游戏邮箱' : '接受：发送到游戏邮箱'}</button>
+       <button type="button" class="btn" data-cr-game title="需要「游戏内操作」权限，角色需在线">游戏内直接打开合同</button>
        <p class="cr-hint">${sent
          ? `已发送给 ${esc(token.character_name)}。在游戏里打开邮件，点击合同链接，在合同窗口点「接受」。`
          : `ESI 不能直接接受合同：点击后会给 <b>${esc(token.character_name)}</b> 发一封带合同链接的游戏邮件，在游戏里点链接即可接受。`}
