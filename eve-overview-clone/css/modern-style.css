@@ -4409,3 +4409,17 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 @keyframes ka-in { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
 @keyframes ka-pulse { 0%, 100% { box-shadow: 0 8px 28px rgba(239, 68, 68, 0.35); } 50% { box-shadow: 0 8px 36px rgba(239, 68, 68, 0.85); } }
 @media (prefers-reduced-motion: reduce) { .ka-flash.on, .ka-card { animation: none; } .ka-flash.on { opacity: 0.6; } }
+
+/* 击杀预警 · 人物关注 */
+.ka-watch-add { display: flex; gap: 6px; }
+.ka-watch-add input { flex: 1; min-width: 0; text-align: left; }
+.ka-watch-add select { width: 110px; }
+.ka-watch { list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 0.8125rem; }
+.ka-watch li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; background: var(--bg-tertiary); }
+.ka-watch li img { border-radius: 4px; }
+.ka-watch li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ka-watch li select { width: 110px; }
+.ka-badge.kill { background: var(--success); }
+.ka-badge.loss { background: var(--danger); }
+.ka-card.watch { border-color: var(--accent-primary); box-shadow: 0 8px 28px color-mix(in srgb, var(--accent-primary) 35%, transparent); }
+.ka-card.watch .ka-head { color: var(--accent-primary); }

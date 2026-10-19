@@ -326,6 +326,7 @@ class Store:
                 existing |= {r[0] for r in c.execute(f"SELECT id FROM killmails WHERE id IN ({','.join('?' * len(part))})", part)}
             cutoff = time.time() - self.retention * 86400
             km_rows, att_rows = [], []
+            live_att = {}                        # 实时缓冲用：每条击杀全部玩家攻击者的角色 ID（击杀预警的人物关注要判断「参与击杀」）
             for km, km_hash in kms:
                 kid = km["killmail_id"]
                 if kid in existing:
@@ -345,6 +346,8 @@ class Store:
                     final.get("character_id"), final.get("corporation_id"), final.get("alliance_id"), final.get("ship_type_id")))
                 for a in players:
                     att_rows.append((kid, t, a["character_id"], a.get("corporation_id"), a.get("alliance_id"), a.get("ship_type_id")))
+                if live:
+                    live_att[kid] = [a["character_id"] for a in players][:500]
                 for eid in (v.get("character_id"), v.get("corporation_id"), v.get("alliance_id")):
                     if eid and eid not in self.known_names:
                         self.pending_names.add(eid)
@@ -362,7 +365,7 @@ class Store:
                     if row[2] >= fresh:          # zKill 偶尔补录多年前的击杀，不当作“新击杀”推送
                         self.live_n += 1
                         # 带上 hash：击杀预警的游戏内邮件要用 killReport:ID:HASH 链接
-                        self.live_buf.append((self.live_n, {**row_summary(row[:1] + row[2:]), "hash": row[1]}))
+                        self.live_buf.append((self.live_n, {**row_summary(row[:1] + row[2:]), "hash": row[1], "att": live_att.get(row[0], [])}))
         return added
 
     def prune(self):

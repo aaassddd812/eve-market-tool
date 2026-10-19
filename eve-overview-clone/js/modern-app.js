@@ -4459,9 +4459,9 @@ function initESIModal() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v2').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v3').then((m) => {
     m.initKillAlert({
-      esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName,
+      esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
       hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
       openEsiBind: () => { switchView('profile'); openEsiModal(); },
@@ -4483,7 +4483,7 @@ function initKillAlerts() {
   $('killAlertBtn').addEventListener('click', () => loadKillAlert().then((m) => m.openPanel()).catch((e) => showToast('击杀预警加载失败：' + e.message, 'error')));
   // 已开启的话页面打开即开始检测
   let on = false;
-  try { on = JSON.parse(localStorage.getItem(KILL_ALERT_KEY) || '{}').on === true; } catch { /* 忽略 */ }
+  try { const t = JSON.parse(localStorage.getItem(KILL_ALERT_KEY) || '{}'); on = t.on === true || (t.watchOn === true && t.watch?.length > 0); } catch { /* 忽略 */ }
   if (on) loadKillAlert().catch(() => {});
 }
 
