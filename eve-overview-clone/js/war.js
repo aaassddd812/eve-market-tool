@@ -3,6 +3,9 @@
 //   /fw/leaderboards/、/fw/leaderboards/characters/、/fw/leaderboards/corporations/ 排行榜（击杀 / 胜利点，昨天 / 上周 / 总计）。
 // 军团战争（公开接口）：/wars/ 最新战争 ID（每次 2000 个，用 max_war_id 往前翻），/wars/{id}/ 双方与战果，
 //   /wars/{id}/killmails/ 击杀 ID + hash，再读 /killmails/{id}/{hash}/，价值按 ESI 全服均价估算（与国服战斗记录同一套）。
+// 刷新倒计时：按 ESI 响应的 Expires 头（跨域可读的安全响应头）显示星系争夺进度（约每 30 分钟更新）与阵营统计 / 排行榜的下次刷新时间，
+//   归零后自动重新读取并就地更新（至少间隔 60 秒，避免 ESI 缓存未及时更新时反复请求）。
+import { esiUrl } from './server.js?v=s3';
 
 let ctx;   // esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem
 const S = { tab: 'fw', board: 'characters', metric: 'kills', period: 'last_week', warFilter: 'active', wars: [], warIds: [], nextMax: null, warLoading: false };
@@ -33,10 +36,18 @@ const nameOf = (id) => ctx.officialName(id) || factionNames[id] || names.get(id)
 const logo = (kind, id, size = 32) => `<img src="${ctx.eveImage(`${kind}/${id}/${kind === 'characters' ? 'portrait' : 'logo'}`, 64)}" alt="" width="${size}" height="${size}" loading="lazy">`;
 
 // ---------- 势力战争 ----------
+// 读 ESI 并记下缓存时间：expires 下次刷新，modified 数据生成时间
+async function esiTimed(path) {
+  const res = await fetch(esiUrl(path), { headers: { 'Accept-Language': 'zh' } });
+  if (!res.ok) throw new Error('ESI ' + res.status);
+  const time = (h) => { const t = Date.parse(res.headers.get(h) || ''); return Number.isFinite(t) ? t : 0; };
+  return { data: await res.json(), expires: time('expires'), modified: time('last-modified') };
+}
+
 async function loadFw() {
   return once('fw', async () => {
-    const [stats, wars, systems, boards, table] = await Promise.all([
-      ctx.fetchESI('/fw/stats/'), ctx.fetchESI('/fw/wars/'), ctx.fetchESI('/fw/systems/').catch(() => []),
+    const [statsR, wars, systemsR, boards, table] = await Promise.all([
+      esiTimed('/fw/stats/'), ctx.fetchESI('/fw/wars/'), esiTimed('/fw/systems/').catch(() => ({ data: [], expires: 0, modified: 0 })),
       Promise.all(['', 'characters/', 'corporations/'].map((p) => ctx.fetchESI('/fw/leaderboards/' + p).catch(() => null))),
       fetch('./npc-corp-faction.json?v=2').then((r) => r.json()).catch(() => ({ factions: {} }))
     ]);
@@ -45,8 +56,64 @@ async function loadFw() {
     const ids = [];
     for (const b of [characters, corporations]) for (const m of ['kills', 'victory_points']) for (const p of ['yesterday', 'last_week', 'active_total']) for (const x of b?.[m]?.[p] || []) ids.push(x.character_id || x.corporation_id);
     await nameAll(ids);
-    return { stats, wars, systems, boards: { factions, characters, corporations } };
+    return { stats: statsR.data, wars, systems: systemsR.data, boards: { factions, characters, corporations },
+      timing: { systems: { expires: systemsR.expires, modified: systemsR.modified }, stats: { expires: statsR.expires, modified: statsR.modified } } };
   });
+}
+
+// ---------- 刷新倒计时 ----------
+const cd = (ms) => {
+  if (!(ms > 0)) return '即将刷新';
+  const t = Math.ceil(ms / 1000), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(sec).padStart(2, '0');
+};
+// 不是今天的数据带上日期（阵营统计每天结算一次，可能是一两天前生成的）
+const clock = (t) => {
+  if (!t) return '—';
+  const d = new Date(t);
+  const time = d.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? time : `${d.getMonth() + 1}/${d.getDate()} ${time}`;
+};
+function refreshBarHtml(timing) {
+  if (!timing) return '';
+  const item = (key, label, tip) => {
+    const t = timing[key];
+    return `<span class="fw-cd-item" title="${esc(tip)}"><em>${label}</em><b data-fw-cd="${key}">${cd(t.expires - Date.now())}</b><small>数据生成于 ${clock(t.modified)}</small></span>`;
+  };
+  return `<div class="fw-refresh" role="timer" aria-live="off">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg>
+      ${item('systems', '战场（星系争夺进度）刷新', 'ESI /fw/systems/ 约每 30 分钟更新一次：各星系的胜利点与占领方')}
+      ${item('stats', '阵营统计与排行榜刷新', 'ESI /fw/stats/ 与 /fw/leaderboards/：击杀、胜利点与排行（数据每天结算一次）')}
+      <span class="fw-cd-note">归零后自动更新</span>
+    </div>`;
+}
+
+let ticker = 0;
+let lastAuto = 0;
+let autoBusy = false;
+function startTicker() {
+  if (ticker) return;
+  ticker = setInterval(async () => {
+    const view = $('warView');
+    if (!view || view.hidden || S.tab !== 'fw') return;
+    const hit = cache.get('fw');
+    if (!hit) return;
+    const d = await hit.promise.catch(() => null);
+    if (!d?.timing) return;
+    const now = Date.now();
+    document.querySelectorAll('[data-fw-cd]').forEach((el) => { el.textContent = cd(d.timing[el.dataset.fwCd].expires - now); });
+    // 任一项到期（多等 5 秒让 ESI 缓存更新）→ 后台重新读取，读完就地替换，不显示加载状态
+    const due = Object.values(d.timing).some((t) => t.expires && now > t.expires + 5e3);
+    if (due && !autoBusy && now - lastAuto > 60e3) {
+      autoBusy = true;
+      lastAuto = now;
+      cache.delete('fw');
+      try {
+        const fresh = await loadFw();
+        if (S.tab === 'fw' && $('warBody0')) { $('warBody0').innerHTML = fwHtml(fresh); $('warBody0').querySelector('.fw-refresh')?.classList.add('flash'); }
+      } catch { /* 下次再试 */ } finally { autoBusy = false; }
+    }
+  }, 1000);
 }
 
 function fwHtml(d) {
@@ -72,7 +139,7 @@ function fwHtml(d) {
   const idKey = S.board === 'characters' ? 'character_id' : S.board === 'corporations' ? 'corporation_id' : 'faction_id';
   const kind = S.board === 'characters' ? 'characters' : 'corporations';
   const seg = (key, items) => `<div class="segmented" role="group">${items.map(([v, l]) => `<button data-fw-set="${key}" data-v="${v}" class="${S[key] === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-  return `<div class="fw-grid">${cards}</div>
+  return `${refreshBarHtml(d.timing)}<div class="fw-grid">${cards}</div>
     <div class="fw-cols">
       <section class="pi-card"><div class="pi-card-head"><h3>排行榜</h3></div>
         <div class="fw-board-tools">${seg('board', [['characters', '飞行员'], ['corporations', '军团'], ['factions', '阵营']])}${seg('metric', [['kills', '击杀'], ['victory_points', '胜利点']])}${seg('period', [['yesterday', '昨天'], ['last_week', '上周'], ['active_total', '总计']])}</div>
@@ -230,6 +297,7 @@ export async function showWar(hash) {
     main.addEventListener('keydown', (e) => { if (e.key === 'Enter') { const row = e.target.closest('[data-war]'); if (row) row.click(); } });
   }
   syncTabs();
+  startTicker();
   if (!location.hash.startsWith('#war')) history.replaceState(null, '', location.pathname + '#war/' + S.tab);
   await renderBody();
 }

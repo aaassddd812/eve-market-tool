@@ -4423,3 +4423,15 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .ka-badge.loss { background: var(--danger); }
 .ka-card.watch { border-color: var(--accent-primary); box-shadow: 0 8px 28px color-mix(in srgb, var(--accent-primary) 35%, transparent); }
 .ka-card.watch .ka-head { color: var(--accent-primary); }
+
+/* 势力战争 · 刷新倒计时 */
+.fw-refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; margin-bottom: 14px; padding: 10px 14px; border: 1px solid var(--border-primary); border-radius: var(--radius-md, 8px); background: var(--bg-secondary); font-size: 0.8125rem; }
+.fw-refresh > svg { width: 18px; height: 18px; color: var(--accent-primary); flex: none; }
+.fw-cd-item { display: inline-flex; align-items: baseline; gap: 8px; }
+.fw-cd-item em { font-style: normal; color: var(--text-secondary); }
+.fw-cd-item b { font-size: 1.05rem; font-variant-numeric: tabular-nums; color: var(--accent-primary); min-width: 4.2em; }
+.fw-cd-item small, .fw-cd-note { color: var(--text-muted); font-size: 0.6875rem; }
+.fw-cd-note { margin-left: auto; }
+.fw-refresh.flash { animation: fw-flash 1.6s ease-out; }
+@keyframes fw-flash { 0% { box-shadow: 0 0 0 3px var(--accent-ring); } 100% { box-shadow: none; } }
+@media (max-width: 768px) { .fw-cd-note { margin-left: 0; } }
