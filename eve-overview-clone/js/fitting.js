@@ -3,7 +3,8 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v22r5';
+import * as FE from './fit-engine.js?v=v23';
+import * as MU from './fit-mutate.js?v=v2';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v24';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v23';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v16r7';
@@ -60,6 +61,7 @@ export function initFitting(context) {
     prices: () => F.prices,
     esc: app.esc, formatNumber: app.formatNumber, formatISK: app.formatISK, showToast: app.showToast, store: app.store
   };
+  MU.initMutate(app, { data: () => F.data });
   initAutoFit(planCtx);
   initKbFits(planCtx);
   $('fitEsiModal').addEventListener('input', (e) => { if (e.target.id === 'fitEsiSearch') renderEsiList(); });
@@ -95,6 +97,8 @@ export async function showFitting(restored = false) {
     }
     app.getMarketPriceMap().then((m) => { F.prices = m; if (F.fit) renderStats(); }).catch(() => {});
     app.getInsurance?.().then((m) => { F.insurance = m; if (F.fit) renderStats(); }).catch(() => {});
+    // 突变质体数据（约 18 KB 压缩后）：装备行的「突变」按钮在读到后出现
+    MU.loadMuta().then(() => { if (F.fit) renderFit(); }).catch(() => {});
     if (!loadPending() && !loadFromHash()) {
       const saved = app.store.getJSON(CURRENT_KEY, null);
       F.fit = saved && F.data.types.has(saved.ship) ? normalize(saved) : null;
@@ -131,13 +135,20 @@ function newFit(ship) {
 function normalize(f) {
   const fit = newFit(f.ship);
   Object.assign(fit, { id: f.id || null, name: f.name || '' });
-  for (const s of FE.SLOTS) fit.slots[s] = (f.slots?.[s] || []).map((m) => (m && F.data.types.has(m.type) ? { type: m.type, state: m.state || 'online', charge: F.data.types.has(m.charge) ? m.charge : null } : null));
+  for (const s of FE.SLOTS) fit.slots[s] = (f.slots?.[s] || []).map((m) => (m && F.data.types.has(m.type) ? { type: m.type, state: m.state || 'online', charge: F.data.types.has(m.charge) ? m.charge : null, ...cleanMut(m.mut) } : null));
   fit.drones = (f.drones || []).filter((d) => F.data.types.has(d.type)).map((d) => ({ type: d.type, count: d.count || 1, active: d.active || 0 }));
   fit.implants = (f.implants || []).filter((id) => F.data.types.has(id));
   return fit;
 }
 
 function type(id) { return F.data.types.get(id); }
+
+// 突变记录：原装备存在且属性是数字才保留
+function cleanMut(mut) {
+  if (!mut || !F.data.types.has(mut.base)) return {};
+  const attrs = Object.fromEntries(Object.entries(mut.attrs || {}).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => [Number(k), v]));
+  return { mut: { base: mut.base, mutator: mut.mutator, attrs } };
+}
 
 function skills() {
   return F.skillMode === 'esi' && F.esi ? F.esi.levels : 'max';
@@ -586,7 +597,8 @@ function moduleRow(slot, index, m, extra) {
   const olBtn = !fixed && t.overloadable ? `<button class="fit-ol-btn${m.state === 'overload' ? ' on' : ''}" data-fit-overload="${slot}:${index}" title="${m.state === 'overload' ? '关闭超载' : '超载'}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2s5 5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3-1-5 1-8.5z"/></svg>超载</button>` : '';
   return `<div class="fit-slot${sel ? ' is-selected' : ''}${err || extra ? ' is-error' : ''} is-${off ? 'off' : m.state}" data-fit-mod="${slot}:${index}">
     <img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">
-    <span class="fit-slot-name">${app.esc(t.name)}${item && moduleNote(item) ? `<small>${moduleNote(item)}</small>` : ''}</span>
+    <span class="fit-slot-name"><span class="fit-slot-title">${app.esc(t.name)}${m.mut ? `<em class="fit-mut-tag" title="${app.esc(MU.mutSummary(m))}">突变</em>` : MU.isBareAbyssal(m) ? '<em class="fit-mut-tag warn" title="来自游戏装配或击杀邮件，没有突变属性，按默认值计算">未设属性</em>' : ''}</span>${item && moduleNote(item) ? `<small>${moduleNote(item)}</small>` : ''}</span>
+    ${!fixed && MU.canMutate(m) ? `<button class="fit-mut-btn${m.mut ? ' on' : ''}" data-fit-mut="${slot}:${index}" title="${m.mut ? '修改突变属性' : '突变成深渊装备并自定义属性'}">${m.mut ? '改属性' : '突变'}</button>` : ''}
     ${ct ? `<span class="fit-charge" title="${app.esc(ct.name)} × ${FE.chargeCount(t, ct)}"><img src="${IMG(ct.id)}" alt="" width="20" height="20" loading="lazy">${app.esc(shortName(ct.name))}<button data-fit-uncharge="${slot}:${index}" aria-label="卸下弹药">×</button></span>`
       : needsCharge ? `<button class="fit-charge is-empty" data-fit-pick-charge="${slot}:${index}">装填弹药</button>` : ''}
     ${olBtn}${stateBtn}
@@ -797,6 +809,19 @@ async function onMainClick(e) {
     trimSlots();
     return;
   }
+  if ((x = el('[data-fit-mut]'))) {
+    const { slot, index } = parseRef(x.dataset.fitMut);
+    const m = F.fit.slots[slot][index];
+    MU.openMutate(m, ({ type: t, mut }) => {
+      const cur = F.fit.slots[slot][index];
+      if (!cur) return;
+      cur.type = t;
+      if (mut) cur.mut = mut; else delete cur.mut;
+      recompute();
+      app.showToast(mut ? '已应用突变属性' : '已恢复为原装备', 'success');
+    }).catch((e) => app.showToast('突变质体数据加载失败：' + e.message, 'error'));
+    return;
+  }
   if ((x = el('[data-fit-uncharge]'))) {
     const { slot, index } = parseRef(x.dataset.fitUncharge);
     F.fit.slots[slot][index].charge = null;
@@ -937,21 +962,24 @@ const EFT_ORDER = ['low', 'mid', 'high', 'rig', 'sub'];
 function toEft(fit) {
   const en = (id) => type(id)?.en || type(id)?.name || '';
   const lines = [`[${en(fit.ship)}, ${fit.name || en(fit.ship)}]`];
+  const mw = MU.eftWriter(en);   // 突变装备：装备行写原装备名 [n]，文末附突变段（与 Pyfa 相同）
   for (const s of EFT_ORDER) {
     const list = fit.slots[s];
     if (!list.length && s === 'sub') continue;
     for (const m of list) {
       if (!m) { lines.push(`[Empty ${{ low: 'Low', mid: 'Med', high: 'High', rig: 'Rig', sub: 'Subsystem' }[s]} slot]`); continue; }
-      lines.push(en(m.type) + (m.charge ? ', ' + en(m.charge) : '') + (m.state === 'offline' ? ' /OFFLINE' : ''));
+      lines.push(mw.name(m) + (m.charge ? ', ' + en(m.charge) : '') + (m.state === 'offline' ? ' /OFFLINE' : ''));
     }
     lines.push('');
   }
   if (fit.drones.length) { fit.drones.forEach((d) => lines.push(`${en(d.type)} x${d.count}`)); lines.push(''); }
   fit.implants.forEach((id) => lines.push(en(id)));
-  return lines.join('\n').trim() + '\n';
+  const tail = mw.tail();
+  return lines.join('\n').trim() + '\n' + (tail ? '\n' + tail + '\n' : '');
 }
 
-function importText(text) {
+async function importText(text) {
+  if (/^\s*\[\d+\]\s/m.test(text)) await MU.loadMuta().catch(() => {});   // 有突变段时先读突变质体数据
   const r = parseEft(text);
   if (r.error) { app.showToast(r.error, 'error'); return; }
   const { fit, unknown } = r;
@@ -966,7 +994,7 @@ function importText(text) {
 
 // EFT 文本 → { fit, unknown } 或 { error }
 function parseEft(text) {
-  const lines = text.split(/\r?\n/).map((l) => l.trim());
+  const { lines, refs } = MU.eftReader(text.split(/\r?\n/).map((l) => l.trim()), findType);
   const head = lines.findIndex((l) => /^\[.+\]$/.test(l) && !/^\[empty/i.test(l));
   if (head < 0) return { error: '没有找到 [舰船, 名称] 开头的 EFT 文本' };
   const [shipName, ...rest] = lines[head].slice(1, -1).split(',');
@@ -986,13 +1014,16 @@ function parseEft(text) {
       else if (!t) unknown.push(qty[1]);
       continue;
     }
-    const [modName, chargeName] = line.split(',').map((x) => x.trim());
-    const t = findType(modName);
+    const [rawName, chargeName] = line.split(',').map((x) => x.trim());
+    const { name: modName, ref } = MU.splitRef(rawName);
+    let t = findType(modName);
     if (!t) { unknown.push(modName); continue; }
+    const mut = ref != null ? MU.mutFromRef(refs.get(ref), t.id) : null;
+    if (mut) t = type(mut.type) || t;
     if (t.category === FE.CAT.implant) { fit.implants.push(t.id); continue; }
     if (!t.slot) continue;
     const ct = chargeName ? findType(chargeName) : null;
-    fit.slots[t.slot].push({ type: t.id, state: offline ? 'offline' : defaultState(t), charge: ct?.id || null });
+    fit.slots[t.slot].push({ type: t.id, state: offline ? 'offline' : defaultState(t), charge: ct?.id || null, ...(mut ? { mut: mut.mut } : {}) });
   }
   return { fit, unknown };
 }
@@ -1300,7 +1331,7 @@ function shareUrl() {
   const f = F.fit;
   const compact = {
     s: f.ship, n: f.name || undefined,
-    m: Object.fromEntries(FE.SLOTS.filter((s) => f.slots[s].length).map((s) => [s, f.slots[s].map((m) => (m ? [m.type, m.charge || 0, STATE_CODE[m.state]] : 0))])),
+    m: Object.fromEntries(FE.SLOTS.filter((s) => f.slots[s].length).map((s) => [s, f.slots[s].map((m) => (m ? [m.type, m.charge || 0, STATE_CODE[m.state], ...(m.mut ? [[m.mut.base, m.mut.mutator, m.mut.attrs]] : [])] : 0))])),
     d: f.drones.length ? f.drones.map((d) => [d.type, d.count, d.active]) : undefined,
     i: f.implants.length ? f.implants : undefined
   };
@@ -1318,7 +1349,7 @@ function loadFromHash() {
     const c = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (ch) => ch.charCodeAt(0))));
     const fit = newFit(c.s);
     fit.name = c.n || '';
-    for (const s of FE.SLOTS) fit.slots[s] = (c.m?.[s] || []).map((x) => (x ? { type: x[0], charge: x[1] || null, state: CODE_STATE[x[2]] || 'online' } : null));
+    for (const s of FE.SLOTS) fit.slots[s] = (c.m?.[s] || []).map((x) => (x ? { type: x[0], charge: x[1] || null, state: CODE_STATE[x[2]] || 'online', ...(x[3] ? { mut: { base: x[3][0], mutator: x[3][1], attrs: x[3][2] } } : {}) } : null));
     fit.drones = (c.d || []).map(([t, count, active]) => ({ type: t, count, active }));
     fit.implants = c.i || [];
     stashDraft(F.fit);

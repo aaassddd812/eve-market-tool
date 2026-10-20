@@ -202,7 +202,14 @@ export function computeFit(data, fit, skills = 'max') {
     (fit.slots?.[slot] || []).forEach((m, index) => {
       const t = m && data.types.get(m.type);
       if (!t) return;
-      const item = new Item(data, t, 'module');
+      // 突变（深渊）装备：属性取原装备，再用自定义值覆盖；效果与槽位仍按深渊装备类型
+      let base = null;
+      if (m.mut) {
+        const src = data.types.get(m.mut.base);
+        base = new Map(src ? src.attrs : t.attrs);
+        for (const [k, v] of Object.entries(m.mut.attrs || {})) if (Number.isFinite(v)) base.set(Number(k), v);
+      }
+      const item = new Item(data, t, 'module', base);
       // 改装件、子系统始终在线
       item.state = slot === 'rig' || slot === 'sub' ? 'online' : (m.state || 'online');
       item.slot = slot;

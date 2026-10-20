@@ -59,6 +59,8 @@ eve-overview-clone/
 ├── js/auctions.js       # 快递页 · 公开拍卖
 ├── js/war.js            # 战争页：势力战争 + 军团战争
 ├── js/kill-alert.js     # 击杀预警（右上角铃铛）
+├── mutaplasmid-data.json # 突变质体：可改属性与倍率范围、原装备与深渊装备（build_mutaplasmids.mjs 生成）
+├── js/fit-mutate.js     # 模拟装配 · 深渊装备自定义属性
 ├── dogma-attr-zh.json   # 属性中文名与单位（build_dogma_names.mjs 由 SDE 生成，突变装备属性用）
 ├── catalog.json         # 物品目录（含官方中文名称）
 └── type-names-zh.json   # 物品中文名数据
@@ -164,6 +166,7 @@ node build_map.mjs <SDE 解压目录>   # 输出 eve-overview-clone/map-data.jso
 node build_map_esi.mjs <SDE 解压目录> [缓存目录]   # 输出曙光服 eve-overview-clone/map-data-infinity.json（约 2 万次 ESI 请求，可断点续抓）
 node build_npc.mjs <SDE 解压目录>   # 输出 eve-overview-clone/npc-data.json（NPC 人物位置）与 npc-corp-faction.json
 node build_dogma_names.mjs <SDE 解压目录>   # 输出 eve-overview-clone/dogma-attr-zh.json（属性中文名，突变装备用）
+node build_mutaplasmids.mjs <SDE 解压目录>   # 输出 eve-overview-clone/mutaplasmid-data.json（突变质体属性范围，模拟装配用）
 ```
 
 ### NPC 人物位置（v54）
@@ -219,6 +222,16 @@ node build_dogma_names.mjs <SDE 解压目录>   # 输出 eve-overview-clone/dogm
 ```bash
 python3 server/build_fit_data.py eve-online-static-data-latest-jsonl.zip fit-data.json
 ```
+
+### 深渊装备自定义属性（v61）
+
+- 能突变的装备（有对应突变质体的原装备，或已经是深渊装备）在装配行上有「突变」按钮，打开后选突变质体，逐项拖动滑块或输入数值，
+  另有「原始值 / 全部最佳 / 全部最差 / 随机」；每项只能在「原装备值 × 最小 / 最大倍率」内取值，与游戏一致，绿色表示比原装备好、红色更差
+  （按突变质体或属性本身的「数值越大越好」判断，负值属性如缠绕光束速度加成按幅度算）
+- 应用后装备变成对应的深渊装备并标「突变」（悬停显示各项数值），计算时属性取原装备再用自定义值覆盖（`fit-engine.js`），效果、槽位按深渊装备；可「取消突变」恢复原装备
+- 来自游戏装配 / 击杀邮件的深渊装备没有突变记录，标「未设属性」（按默认值计算），打开后先选它突变前的原装备（默认 T2）
+- 保存的装配、草稿、分享链接都带突变属性；EFT 导出与 Pyfa 相同：装备行写「原装备名 [n]」，文末「[n] 原装备名 / 突变质体名 / 属性名 值, …」，导入同样识别
+- 数据：`mutaplasmid-data.json`（`build_mutaplasmids.mjs` 由 SDE `dynamicItemAttributes` 生成，441 种突变质体，约 130 KB、gzip 后 18 KB），进入装配页后后台加载
 
 ## 制造（v20）
 

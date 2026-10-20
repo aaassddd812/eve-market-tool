@@ -516,7 +516,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v33').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v36').then((m) => {
     m.initFitting({
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,

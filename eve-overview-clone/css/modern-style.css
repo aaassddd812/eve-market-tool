@@ -4442,3 +4442,23 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .lp-times input { width: 90px; }
 .lp-buy .link-btn { color: var(--accent-primary); }
 .lp-buy-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+
+/* 模拟装配 · 深渊装备自定义属性 */
+.fit-mut-tag { font-style: normal; font-size: 0.625rem; font-weight: 700; margin-left: 6px; padding: 0 5px; border-radius: 4px; color: #fff; background: #8b5cf6; vertical-align: 1px; }
+.fit-mut-tag.warn { background: var(--warning, #f59e0b); }
+.fit-mut-btn { flex: none; font-size: 0.6875rem; padding: 2px 7px; border-radius: 4px; color: #8b5cf6; border: 1px solid color-mix(in srgb, #8b5cf6 45%, transparent); background: transparent; }
+.fit-mut-btn:hover, .fit-mut-btn.on { background: color-mix(in srgb, #8b5cf6 14%, transparent); }
+.mut-modal { max-width: 760px; }
+.mut-modal .modal-body { display: flex; flex-direction: column; gap: 10px; }
+.mut-field { display: flex; align-items: center; gap: 10px; font-size: 0.8125rem; }
+.mut-field span { width: 70px; color: var(--text-secondary); flex: none; }
+.mut-field select { flex: 1; text-align: left; }
+.mut-note { font-size: 0.75rem; color: var(--text-muted); }
+.mut-presets { display: flex; flex-wrap: wrap; gap: 6px; }
+.mut-table td { vertical-align: middle; }
+.mut-table td small { display: block; font-size: 0.6875rem; color: var(--text-muted); }
+.mut-slider { min-width: 220px; }
+.mut-slider input[type="range"] { width: 100%; accent-color: #8b5cf6; }
+.mut-table input[type="number"] { width: 110px; }
+.mut-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.fit-slot-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
