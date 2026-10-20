@@ -58,6 +58,8 @@ eve-overview-clone/
 ├── js/pi-colonies.js    # 行星工业 · 我的殖民地
 ├── js/auctions.js       # 快递页 · 公开拍卖
 ├── js/war.js            # 战争页：势力战争 + 军团战争
+├── js/guides.js         # 教程页：分类目录 + 站内译文阅读器（中文 / English / 对照，视频同步中文字幕），按需加载
+├── guides/              # 教程译文（EVE University 文章、EVE Academy 视频字幕），build_guides.py 生成
 ├── js/kill-alert.js     # 击杀预警（右上角铃铛）
 ├── mutaplasmid-data.json # 突变质体：可改属性与倍率范围、原装备与深渊装备（build_mutaplasmids.mjs 生成）
 ├── js/fit-mutate.js     # 模拟装配 · 深渊装备自定义属性
@@ -167,6 +169,7 @@ node build_map_esi.mjs <SDE 解压目录> [缓存目录]   # 输出曙光服 eve
 node build_npc.mjs <SDE 解压目录>   # 输出 eve-overview-clone/npc-data.json（NPC 人物位置）与 npc-corp-faction.json
 node build_dogma_names.mjs <SDE 解压目录>   # 输出 eve-overview-clone/dogma-attr-zh.json（属性中文名，突变装备用）
 node build_mutaplasmids.mjs <SDE 解压目录>   # 输出 eve-overview-clone/mutaplasmid-data.json（突变质体属性范围，模拟装配用）
+python3 build_guides.py <译文目录>          # 输出 eve-overview-clone/guides/（教程译文与索引）
 ```
 
 ### NPC 人物位置（v54）
@@ -573,6 +576,18 @@ User=www-data
 [Install]
 WantedBy=multi-user.target
 ```
+
+## 教程（v64）
+
+顶部导航「教程」（`#guide`，分类可直接链接，如 `#guide/wh`；文章 `#guide/read/<id>`）：左侧边栏为分类、搜索、筛选（视频 / 图文、中文原创 / 英文译文）和译文阅读语言。
+
+- 中文资料（官方新伊甸学院、BWIKI、B 站 UP 主视频 / 专栏）为外链，在新标签页打开
+- 英文资料全部翻译成中文，站内阅读，可切换「中文 / English / 对照」（记在 localStorage `eve-guide-lang`）：
+  - EVE University Wiki 34 篇文章（CC BY-SA 4.0）：保留原文的标题层级、列表、表格、图片（图片直接引用原站）和链接，长文右侧有目录
+  - EVE Academy 13 个官方教学视频：嵌入 YouTube 播放器，视频上叠加同步中文字幕（关闭 YouTube 自带字幕），下方是可点击跳转的字幕稿，跟随播放滚动；YouTube 打不开时仍可阅读字幕稿
+- 译文格式：`guides/<id>.json`，`blocks` 为逐块对齐的中英文（`t` = h2 / h3 / h4 / p / ul / ol / table / img / quote / cue，`en` 原文、`zh` 译文，列表带深度 `d`、表格带表头行 `hr`、字幕带起止秒 `s` / `e`）；`guides/index.json` 为标题与篇幅索引
+- `build_guides.py <译文目录>` 把译文目录打包到 `guides/`；目录列表在 `js/guides.js` 的 `GUIDES` 数组里，`uni()` / `academy()` 条目通过 `doc` 关联站内译文
+- 术语按国服官方译名（物品、舰船、技能等取自 SDE 中文名），译文由本站翻译，页面注明出处与许可
 
 ## 开放 API（v23）
 

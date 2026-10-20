@@ -249,8 +249,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war', guide: '#guide' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView', guide: 'guideView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -308,7 +308,7 @@ function switchView(view) {
   });
   for (const [v, id] of Object.entries(VIEW_IDS)) $(id).hidden = v !== view;
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
-  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选' }[view] || '';
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选', guide: '教程分类' }[view] || '';
   closeDrawer();
   if (prev !== view) {
     restoreScroll(viewScroll[view]);
@@ -327,6 +327,23 @@ function switchView(view) {
   if (view === 'appraisal') openAppraisal();
   if (view === 'courier') openCourier();
   if (view === 'war') openWar();
+  if (view === 'guide') openGuides();
+}
+
+// 教程：首次进入时加载
+let guidesLoading = null;
+async function openGuides() {
+  try {
+    if (!guidesLoading) guidesLoading = import('./guides.js?v=v5').then((m) => {
+      m.initGuides({ esc, debounce, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
+      return m;
+    }).catch((error) => { guidesLoading = null; throw error; });
+    const m = await guidesLoading;
+    if (!location.hash.startsWith('#guide')) history.replaceState(null, '', location.pathname + '#guide');
+    m.showGuides(location.hash);
+  } catch (error) {
+    showToast('教程页加载失败：' + error.message, 'error', 4000);
+  }
 }
 
 // 战争（势力战争 + 军团战争）：首次进入时加载
@@ -748,7 +765,8 @@ const SIDEBARS = {
   fit: { id: 'fitSidebar', reopen: 'fitSidebarReopen', key: 'eve-fit-sidebar-collapsed' },
   industry: { id: 'indSidebar', reopen: 'indSidebarReopen', key: 'eve-ind-sidebar-collapsed' },
   lp: { id: 'lpSidebar', reopen: 'lpSidebarReopen', key: 'eve-lp-sidebar-collapsed' },
-  courier: { id: 'courierSidebar', reopen: 'courierSidebarReopen', key: 'eve-courier-sidebar-collapsed' }
+  courier: { id: 'courierSidebar', reopen: 'courierSidebarReopen', key: 'eve-courier-sidebar-collapsed' },
+  guide: { id: 'guideSidebar', reopen: 'guideSidebarReopen', key: 'eve-guide-sidebar-collapsed' }
 };
 
 function currentSidebar() {
@@ -790,6 +808,9 @@ function initSidebar() {
   if (store.get('eve-ind-sidebar-collapsed') === '1') setSidebarCollapsed('indSidebar', 'indSidebarReopen', true);
   if (store.get('eve-lp-sidebar-collapsed') === '1') setSidebarCollapsed('lpSidebar', 'lpSidebarReopen', true);
   if (store.get('eve-courier-sidebar-collapsed') === '1') setSidebarCollapsed('courierSidebar', 'courierSidebarReopen', true);
+  if (store.get('eve-guide-sidebar-collapsed') === '1') setSidebarCollapsed('guideSidebar', 'guideSidebarReopen', true);
+  $('guideSidebarCollapse').addEventListener('click', () => toggleSidebar('guide'));
+  $('guideSidebarReopen').addEventListener('click', () => toggleSidebar('guide'));
   $('courierSidebarCollapse').addEventListener('click', () => toggleSidebar('courier'));
   $('courierSidebarReopen').addEventListener('click', () => toggleSidebar('courier'));
   $('lpSidebarCollapse').addEventListener('click', () => toggleSidebar('lp'));
@@ -2244,6 +2265,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#appr')) { if (state.currentView !== 'appraisal') switchView('appraisal'); return; }
     if (location.hash.startsWith('#courier')) { if (state.currentView !== 'courier') switchView('courier'); return; }
     if (location.hash.startsWith('#war')) { if (state.currentView !== 'war') switchView('war'); return; }
+    if (location.hash.startsWith('#guide')) { if (state.currentView !== 'guide') switchView('guide'); else openGuides(); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -4522,6 +4544,7 @@ function init() {
   if (location.hash.startsWith('#appr')) switchView('appraisal'); // 估价
   if (location.hash.startsWith('#courier')) switchView('courier'); // 快递合同
   if (location.hash.startsWith('#war')) switchView('war'); // 战争
+  if (location.hash.startsWith('#guide')) switchView('guide'); // 教程
   renderFavorites();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);

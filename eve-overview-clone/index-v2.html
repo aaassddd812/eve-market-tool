@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v51">
+  <link rel="stylesheet" href="css/modern-style.css?v=v54">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -81,6 +81,10 @@
         <button class="nav-btn" data-view="war" role="tab" title="势力战争与军团战争" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="M13 19l6-6M16 16l4 4M19 21l2-2"/><path d="M9.5 6.5 13 3h3v3l-3.5 3.5"/></svg>
           <span>战争</span>
+        </button>
+        <button class="nav-btn" data-view="guide" role="tab" title="教程" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg>
+          <span>教程</span>
         </button>
         <button class="nav-btn" data-view="profile" role="tab" title="个人中心" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
@@ -534,6 +538,28 @@
         </div>
       </div>
 
+      <!-- 教程视图 -->
+      <div class="view-container" id="guideView" hidden>
+        <aside class="sidebar ind-sidebar guide-sidebar" id="guideSidebar" aria-label="教程导航">
+          <div class="sidebar-header">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <input type="search" id="guideSearch" placeholder="搜索教程，如 虫洞、扫描、种菜" autocomplete="off" spellcheck="false" aria-label="搜索教程">
+            </div>
+            <button class="collapse-btn" id="guideSidebarCollapse" title="收起侧边栏 ([)" aria-label="收起侧边栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+          </div>
+          <div class="sidebar-content ind-side" id="guideSide"></div>
+        </aside>
+        <div class="kb-scroll ind-scroll">
+          <button class="sidebar-reopen" id="guideSidebarReopen" title="展开侧边栏 ([)" aria-label="展开侧边栏" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <div class="kb-wrap" id="guideMain"></div>
+        </div>
+      </div>
+
       <div class="view-container" id="warView" hidden>
         <div class="kb-scroll">
           <div class="kb-wrap" id="warMain"></div>
@@ -868,6 +894,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v63" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v67" type="module" data-cfasync="false"></script>
 </body>
 </html>
