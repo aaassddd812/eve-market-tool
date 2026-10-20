@@ -12,6 +12,7 @@ import json, os, re, sys
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'eve-overview-clone', 'guides')
 CJK = re.compile(r'[一-鿿]')
+PROMO = re.compile(r'EVE University offers|EVE ?(?:University|大学) ?提供')
 
 
 def strs(v):
@@ -34,8 +35,8 @@ def main(src):
     for name in sorted(os.listdir(src)):
         if not name.endswith('.json'): continue
         doc = json.load(open(os.path.join(src, name), encoding='utf-8'))
-        # 去掉原站「EVE University offers classes on:」推广框（课程列表是站内组件，抽取不到）
-        blocks = doc['blocks'] = [b for b in doc['blocks'] if not (b['t'] == 'table' and 'EVE University offers' in json.dumps(b.get('en', '')))]
+        # 去掉原站「EVE University offers classes on:」课程推广框（含 BWIKI 译文版本；课程列表是站内组件，抽取不到）
+        blocks = doc['blocks'] = [b for b in doc['blocks'] if not (b['t'] == 'table' and PROMO.search(json.dumps(b.get('en') or b.get('zh'), ensure_ascii=False)))]
         if doc.get('lang') != 'zh':
             missing = sum(1 for b in blocks if 'zh' not in b)
             if missing: print(f'  {name}: {missing} 块没有译文，阅读时显示英文')

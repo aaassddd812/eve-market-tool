@@ -107,7 +107,7 @@ export function initGuides(context) {
 async function loadIndex() {
   if (S.index) return S.index;
   try {
-    const r = await fetch('guides/index.json?v=4');
+    const r = await fetch('guides/index.json?v=5');
     S.index = r.ok ? await r.json() : {};
   } catch { S.index = {}; }
   return S.index;
@@ -115,7 +115,7 @@ async function loadIndex() {
 
 async function loadDoc(id) {
   if (!docs.has(id)) {
-    docs.set(id, fetch(`guides/${id}.json?v=4`).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    docs.set(id, fetch(`guides/${id}.json?v=5`).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then((doc) => {
         // 中文原文只有 zh 字段，补上 en 让阅读器按同一套逻辑渲染
         if (doc.lang === 'zh') { doc.title.en = doc.title.zh; doc.blocks.forEach((b) => { b.en = b.zh; }); }
@@ -317,6 +317,35 @@ function listHtml(b) {
   return html;
 }
 
+// 合并单元格 sp：[行, 列, colspan, rowspan]。原表漏写合并的短行（如信息框标题行）补齐到整表宽度：
+// 第一格为空（左上角）时由第一格补，否则由最后一格补
+function tableSpans(b) {
+  const sp = {}, taken = new Set();
+  for (const [r, c, cs, rs] of b.sp || []) sp[`${r},${c}`] = [cs, rs];
+  const ends = b.en.map((row, ri) => {
+    let col = 0;
+    row.forEach((_, ci) => {
+      while (taken.has(`${ri},${col}`)) col++;
+      const [cs, rs] = sp[`${ri},${ci}`] || [1, 1];
+      for (let dr = 0; dr < rs; dr++) for (let dc = 0; dc < cs; dc++) taken.add(`${ri + dr},${col + dc}`);
+      col += cs;
+    });
+    return col;
+  });
+  const width = Math.max(...ends);
+  b.en.forEach((row, ri) => {
+    let lack = width;
+    for (let c = 0; c < width; c++) if (taken.has(`${ri},${c}`)) lack--;
+    if (lack <= 0 || !row.length) return;
+    const ci = !plain(row[0]).trim() ? 0 : row.length - 1;
+    const cur = sp[`${ri},${ci}`] || [1, 1];
+    sp[`${ri},${ci}`] = [cur[0] + lack, cur[1]];
+  });
+  const out = {};
+  for (const [k, [cs, rs]] of Object.entries(sp)) out[k] = `${cs > 1 ? ` colspan="${cs}"` : ''}${rs > 1 ? ` rowspan="${rs}"` : ''}`;
+  return out;
+}
+
 function blockHtml(b, i) {
   switch (b.t) {
     case 'h2': case 'h3': case 'h4':
@@ -330,9 +359,10 @@ function blockHtml(b, i) {
       if (b.en.every((r) => r.length === 2 && !plain(r[0]).trim())) {
         return `<div class="guide-note">${b.en.map((r, ri) => dual({ en: r[1], zh: zh[ri]?.[1] }, (t, cls) => `<p${cls ? ` class="${cls}"` : ''}>${safe(t)}</p>`)).join('')}</div>`;
       }
+      const span = tableSpans(b);
       const rows = b.en.map((r, ri) => {
         const tag = b.hr?.[ri] ? 'th' : 'td';
-        return `<tr>${r.map((c, ci) => `<${tag}>${cellHtml(zh[ri]?.[ci], c)}</${tag}>`).join('')}</tr>`;
+        return `<tr>${r.map((c, ci) => `<${tag}${span[`${ri},${ci}`] || ''}>${cellHtml(zh[ri]?.[ci], c)}</${tag}>`).join('')}</tr>`;
       }).join('');
       return `<div class="table-scroll guide-table-wrap"><table class="guide-table">${rows}</table></div>`;
     }

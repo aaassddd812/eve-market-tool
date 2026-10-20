@@ -334,7 +334,7 @@ function switchView(view) {
 let guidesLoading = null;
 async function openGuides() {
   try {
-    if (!guidesLoading) guidesLoading = import('./guides.js?v=v6').then((m) => {
+    if (!guidesLoading) guidesLoading = import('./guides.js?v=v7').then((m) => {
       m.initGuides({ esc, debounce, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
       return m;
     }).catch((error) => { guidesLoading = null; throw error; });
