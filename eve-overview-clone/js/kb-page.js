@@ -931,6 +931,46 @@ export function initKbPage(context) {
     }
     const pg = e.target.closest('[data-rank-page]');
     if (pg && S.rank && !pg.disabled) { setRank({ page: Number(pg.dataset.rankPage) }); return; }
+    const brBattle = e.target.closest('[data-br-battle]');
+    if (brBattle) {
+      // 会战卡片：以会战星系与持续时间（前后各留 10 分钟）打开战场统计
+      const { brBattle: sys, start, end } = brBattle.dataset;
+      const t0 = Math.floor(new Date(start).getTime() / 1000 / 60) * 60 - 600;
+      const t1 = Math.min(Math.ceil(new Date(end).getTime() / 1000 / 60) * 60 + 600, Math.ceil(Date.now() / 1000 / 60) * 60);
+      navigate(`#kb/br/${sys}/${t0}-${t1}`);
+      return;
+    }
+    const battleMap = e.target.closest('[data-battle-map]');
+    if (battleMap) { app.openMapSystem(Number(battleMap.dataset.battleMap)); return; }
+    const loc = e.target.closest('[data-location], [data-pick-location]');
+    if (loc) {
+      e.preventDefault();
+      const [kind, id] = (loc.dataset.location || loc.dataset.pickLocation).split(':');
+      const name = kind === 'system' ? kb.systemLabel(Number(id)).name : partyName(Number(id));
+      input.value = '';
+      $('kbSuggest').hidden = true;
+      setFilter('location', { kind, id: Number(id), name });
+      return;
+    }
+    const ship = e.target.closest('[data-pick-ship]');
+    if (ship) {
+      const id = Number(ship.dataset.pickShip);
+      input.value = '';
+      $('kbSuggest').hidden = true;
+      setFilter('ship', { id, name: app.shipTypes().find((s) => s.id === id)?.name || typeName(id) });
+      return;
+    }
+    const clear = e.target.closest('[data-clear-filter]');
+    if (clear) { setFilter(clear.dataset.clearFilter, null); return; }
+    if (e.target.closest('[data-kb-home]')) { e.preventDefault(); navigate('#kb'); return; }
+    const lb = e.target.closest('[data-lb]');
+    if (lb) {
+      const [key, value] = lb.dataset.lb.split(':');
+      S.lb[key] = value;
+      renderBoardControls();
+      loadBoard();
+      return;
+    }
     const sort = e.target.closest('[data-sort]');
     if (sort && S.entity) {
       const key = sort.dataset.sort;
