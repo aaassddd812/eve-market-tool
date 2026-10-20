@@ -1,143 +1,101 @@
-// 教程：按玩法分类收录的 EVE 教程
-// - 中文资料（官方新伊甸学院、BWIKI、B 站）为外链，在新标签页打开
-// - 英文资料（EVE University Wiki 文章、EVE Academy 官方视频字幕）已全文翻译，放在 guides/<id>.json，站内阅读，可切换中文 / English / 对照
+// 教程：图文 Wiki + 视频
+// - 图文 Wiki：资料全文收录在 guides/<id>.json，站内阅读，每篇标注出处和许可
+//   · 中文原文：新伊甸学院（EVE 官方）、EVE 星战前夜 BWIKI、萌娘百科
+//   · 英文原文：EVE University Wiki，本站全文翻译，可切换中文 / English / 对照
+//   guides/index.json 是文章目录：{id: {zh, en, c: 分类, g: 小组, s: 来源, m: 阅读分钟, d: 摘要}}
+// - 视频：站内嵌入 B 站 / YouTube 播放器，附原视频链接；EVE Academy 官方视频带本站翻译的中文字幕（guides/academy-*.json）
 // 收录时逐条打开核对过（2026-10）；B 站视频注明发布日期，旧视频的界面和数值可能和现在不同
 
 let ctx = null;
 const $ = (id) => document.getElementById(id);
 const LANG_KEY = 'eve-guide-lang';
 
+// Wiki 分类：[key, 名称, 说明]
 const CATS = [
   ['start', '新手入门', '建号、新手任务、生涯代理人、Alpha / Omega、技能与安全等级'],
-  ['ship', '舰船与装配', '舰船分类、装配思路、飞行操作、总览与定向扫描'],
-  ['mine', '采矿与采集', '矿石、冰矿、气云，以及新手常见的赚钱路线'],
-  ['pve', '任务与刷怪', '代理人任务、刷怪、异常、深渊、入侵'],
+  ['ship', '舰船与装配', '舰船分类、装配、飞行与战斗机制、总览与定向扫描'],
+  ['mine', '采矿与采集', '矿石、冰矿、气云与提炼'],
+  ['pve', '任务与刷怪', '代理人任务、刷怪、异常、死亡空间、深渊、入侵'],
   ['explore', '探索与扫描', '探针扫描、数据 / 遗迹站点破解'],
-  ['wh', '虫洞', '虫洞等级、进出与生存、虫洞战斗'],
+  ['wh', '虫洞', '虫洞等级、进出与生存、虫洞站点'],
   ['industry', '工业与行星开发', '制造、发明、行星开发（种菜）'],
-  ['trade', '贸易与运输', '市场买卖、倒卖、运输'],
-  ['pvp', 'PVP 与军团', 'PVP 入门、势力战争、公开舰队、找军团'],
-  ['wiki', '百科与课程', '可以长期查阅的综合百科和课程库']
+  ['trade', '贸易与运输', '市场买卖、倒卖、运输与合同'],
+  ['pvp', 'PVP 与军团', 'PVP 入门、势力战争、舰队、军团与主权'],
+  ['lore', '背景与资料', '世界观、势力、星域、游戏历史与其他资料']
 ];
 
-// { cat, title, src, lang: 原文语言 zh / en, kind: video / text, date, url: 原文, desc, doc: 站内译文 id }
-const ACADEMY = 'https://www.eveonline.com/zh/eve-academy';
-const UNI = 'https://wiki.eveuniversity.org/';
-const BWIKI = 'https://wiki.biligame.com/eve/';
-const BV = 'https://www.bilibili.com/video/';
-const YT = 'https://www.youtube.com/watch?v=';
-const g = (cat, title, src, lang, kind, date, url, desc, doc = '') => ({ cat, title, src, lang, kind, date, url, desc, doc });
-// EVE University 文章：译文 id 由页面名生成（Directional_Scanner → directional-scanner）
-const uni = (cat, title, page, desc) => g(cat, title, 'EVE University', 'en', 'text', '', UNI + page, desc, page.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
-// EVE Academy 官方教学视频（英文配音，站内附中文字幕）
-const academy = (cat, title, id, doc, desc) => g(cat, title, 'EVE 官方 · EVE Academy', 'en', 'video', '', YT + id, desc, 'academy-' + doc);
+// 来源：index 里的 s 字段
+const SRC = {
+  nea: ['新伊甸学院', 'EVE 官方中文新手站'],
+  bw: ['BWIKI', 'B 站玩家维护的中文 EVE 百科'],
+  moe: ['萌娘百科', '中文综合百科'],
+  uni: ['EVE University', '英文 EVE 百科，本站翻译'],
+  site: ['本站整理', '玩家经验摘要']
+};
 
-const GUIDES = [
-  g('start', '新伊甸学院：新手指南', 'EVE 官方', 'zh', 'text', '', ACADEMY, '官方中文新手站，从这里开始：职业路线、舰船、驾驶与战斗机制。'),
-  g('start', '职业生涯：四条发展路线', 'EVE 官方', 'zh', 'text', '', ACADEMY + '/careers', '探险家、工业家、执法者（PvE）、自由战士（PvP），每条路线有技能计划和入门配装。'),
-  academy('start', '开始史诗任务线', 'bZRcJ3p8dTE', 'epic-arc', '新手任务之后，怎么接史诗任务线、能拿到什么。'),
-  academy('start', '了解安全等级', 'DS1EnO1iJp4', 'security-status', '星系安全等级与个人安全等级：高安、低安、00 各有什么规则和风险。'),
-  g('start', '简单EVE 新手教程篇 1：建号与新手任务', 'B 站 · L3-猛汉猎人', 'zh', 'video', '2017-10', BV + 'BV1xx411M7va/', '系列视频第一期，讲建号、选阵营和新手任务。版本较旧，新手任务流程已改过，作思路参考。'),
-  g('start', '【EVE欧服】快速上手 EVE 的实用配置和建议', 'B 站 · 祖祖Limor', 'zh', 'video', '2023-08', BV + 'BV1qN411B7pk/', '客户端设置、界面布局等上手配置，以及给新人的建议。'),
-  g('start', '【EVE新人必看技巧】新手常用邮件列表', 'B 站 · EVE欧服玉麒麟联盟', 'zh', 'video', '2022-07', BV + 'BV1TS4y1n7jQ/', '怎么加入和使用新手常用的邮件列表。同系列还有不少新人技巧。'),
-  g('start', 'EVE 星战前夜，新手如何迅速成长', 'B 站专栏', 'zh', 'text', '', 'https://www.bilibili.com/read/cv5603494/', '新手前期的路线建议：先用免费克隆体熟悉操作、在高安积累技能等。'),
-  uni('start', 'EVE 新手入门', 'Getting_Started_in_EVE_Online', '从创建角色到第一条史诗任务线的完整入门。'),
-  uni('start', '生涯代理人', 'Career_Agents', '新手任务之后的扩展教程，五类生涯任务各给奖励和舰船。'),
-  uni('start', 'AIR 生涯计划：免费技能点', 'AIR_Career_Program', '做生涯目标领取免费技能点，新号前期很划算。'),
-  uni('start', 'Alpha 与 Omega 克隆状态', 'Clone_states', '免费号（Alpha）能飞什么、能练什么，和 Omega 的区别。'),
-  uni('start', '技能与训练', 'Skills_and_learning', '技能训练、属性与植入体、技能队列。'),
-  uni('start', '安全等级', 'Security_status', '星系安全等级与个人安全等级，高安 / 低安 / 00 的规则差异。'),
-
-  g('ship', '舰船', 'EVE 官方', 'zh', 'text', '', ACADEMY + '/ships', '官方中文舰船介绍：舰船分类与各自定位。'),
-  g('ship', '驾驶你的舰船', 'EVE 官方', 'zh', 'text', '', ACADEMY + '/ships/flying-your-ship', '官方中文：移动、跃迁、跳跃等基础飞行操作。'),
-  g('ship', '战斗机制', 'EVE 官方', 'zh', 'text', '', ACADEMY + '/ships/combat-mechanics', '官方中文：锁定、伤害类型、抗性、命中等战斗基础。'),
-  academy('ship', '舰船装配', 'ArCI4bi9Eyg', 'fitting', '装配窗口、CPU 与能量栅格、高中低槽怎么搭配。'),
-  g('ship', '托勒克斯级配置思路详解', 'B 站 · 合辰JEX', 'zh', 'video', '2020-10', BV + 'BV1bZ4y1L7Ge/', '以一艘船为例讲配船思路（团内单挑赛冠军配置），适合学怎么自己配船。'),
-  uni('ship', '舰船总览', 'Ships', '各级别、各势力舰船的索引和定位。'),
-  uni('ship', '舰船装配', 'Fitting_ships', 'CPU / 能量栅格、高中低槽、改装件，配装的基本规则。'),
-  uni('ship', '总览（Overview）', 'Overview', '总览面板的设置和常用预设。'),
-  uni('ship', '定向扫描（D-Scan）', 'Directional_Scanner', '用定向扫描发现附近的舰船和建筑，保命必备。'),
-
-  academy('mine', '采矿与资源获取', 'I_dD4I-zHlw', 'mining', '采矿入门：找矿、采矿、出售或提炼。'),
-  g('mine', 'EVE Online 挖矿攻略：新手必知的七大经验', 'B 站专栏', 'zh', 'text', '2022-09', 'https://www.bilibili.com/opus/701181663484313606', '先做探索 / 采矿章节拿采矿船、用测量扫描看矿量、按货舱总价值选矿等。'),
-  g('mine', '资源采集：矿石成分与提炼表', 'BWIKI', 'zh', 'text', '', BWIKI + '%E8%B5%84%E6%BA%90%E9%87%87%E9%9B%86', '各种矿石的矿物成分和提炼产出。'),
-  uni('mine', '采矿', 'Mining', '采矿船、技能、矿石分布与采矿流程。'),
-  uni('mine', '冰矿采集', 'Ice_harvesting', '冰矿带、采冰装备与产出用途。'),
-  uni('mine', '气云采集', 'Gas_cloud_harvesting', '气云种类、位置（含虫洞）与采集装备。'),
-  uni('mine', '赚钱方式汇总', 'Making_Money', '各种赚 ISK 的方式与门槛对比。'),
-
-  g('pve', '执法者（PvE）路线', 'EVE 官方', 'zh', 'text', '', ACADEMY + '/careers/enforcer', '官方中文：任务、刷怪等 PvE 玩法的入门路线。'),
-  academy('pve', '任务入门', 'OU9lrxsE4uM', 'missions', '代理人任务怎么找、怎么接、怎么完成。'),
-  g('pve', 'ESS 的那些事', 'B 站 · 小珅的EVE之旅', 'zh', 'video', '2021-10', BV + 'BV1KT4y1d7uG/', '00 刷怪绕不开的 ESS（赏金储存装置）机制讲解。'),
-  g('pve', '非月卡账号如何月入百亿（仅供参考）', 'B 站 · 了空上人', 'zh', 'video', '2023-06', BV + 'BV17c41137Q7/', 'Alpha 号的刷怪赚钱思路。'),
-  g('pve', '6 级异常集会点战斗参考', 'B 站 · 了空上人', 'zh', 'video', '2022-09', BV + 'BV148411t71R/', '异常刷怪实战录像（曙光服），可参考打法。'),
-  g('pve', '宁静服深渊收益简报', 'B 站专栏', 'zh', 'text', '2024-08', 'https://www.bilibili.com/opus/964384191376523297', '按深渊等级统计的收益区间，打深渊前心里有数。'),
-  g('pve', '战斗玩法', 'BWIKI', 'zh', 'text', '', BWIKI + '%E6%88%98%E6%96%97%E7%8E%A9%E6%B3%95', '任务、异常、死亡空间、深渊、萨沙入侵等战斗玩法概览。'),
-  uni('pve', '任务', 'Missions', '代理人任务的类型、等级与声望。'),
-  uni('pve', '刷怪', 'Ratting', '小行星带和异常刷怪。'),
-  uni('pve', '深渊', 'Abyssals', '深渊的规则、天气、等级与推荐舰船。'),
-  uni('pve', '入侵', 'Incursions', '萨沙入侵：组队刷高收益的舰队玩法。'),
-
-  g('explore', '探险家路线', 'EVE 官方', 'zh', 'text', '', ACADEMY + '/careers/explorer', '官方中文：扫描、破解、探索的入门路线和配装。'),
-  academy('explore', '扫描宇宙信号', 'Ieo3WAvH4yU', 'scanning', '探针扫描器的用法，一步步把信号扫出来。'),
-  academy('explore', '破解赚钱', 'asKp78zRZGY', 'hacking', '数据 / 遗迹站点的破解小游戏和收益。'),
-  g('explore', '新手扫描教程', 'B 站 · 零-zer0', 'zh', 'video', '2022-05', BV + 'BV1DR4y1c7mj/', '探针扫描从零开始的操作演示。'),
-  g('explore', '探索', 'BWIKI', 'zh', 'text', '', BWIKI + '%E6%8E%A2%E7%B4%A2', '探索玩法概念、探针与分析仪等必备装备。'),
-  uni('explore', '探索', 'Exploration', '探索站点种类、收益与风险。'),
-  uni('explore', '简明探针扫描步骤', 'Probing_In_Simple_Steps', '一步步教你把信号扫到 100%。'),
-  uni('explore', '扫描', 'Scanning', '扫描相关技能、装备与各类扫描器。'),
-  uni('explore', '破解', 'Hacking', '破解小游戏的规则与技巧。'),
-
-  academy('wh', '虫洞基础', 'aldoiHE6O04', 'wormhole-basics', '虫洞是什么、怎么找、怎么判断能不能过、进去后怎么活下来。'),
-  academy('wh', '虫洞战斗', 'yiWy2ehcc1o', 'wormhole-combat', '虫洞里的战斗站点和刷怪要点。'),
-  g('wh', '虫洞', 'BWIKI', 'zh', 'text', '', BWIKI + '%E8%99%AB%E6%B4%9E', 'C1–C6 分级、本地不显示人数、席拉与碎裂虫洞等特殊星系。'),
-  uni('wh', '虫洞', 'Wormholes', '虫洞机制最全的参考：质量、寿命、洞口类型、居住。'),
-  g('wh', '虫洞“猖獗无人机巢穴”重做速览', 'B 站 · BeliEVE76', 'zh', 'video', '2026-07', BV + 'BV1BQgt6qEzW/', '近期改版后的新波次、掉落和收益。'),
-
-  g('industry', '工业家路线', 'EVE 官方', 'zh', 'text', '', ACADEMY + '/careers/industrialist', '官方中文：采矿、制造、行星开发的入门路线。'),
-  academy('industry', '基础工业生产', 'TGGKpe6MYrQ', 'industry', '蓝图、材料、工业窗口，造出第一件东西。'),
-  academy('industry', '发明与 T2 生产', 'p0exyST_TDY', 'invention', '用 T1 蓝图拷贝发明 T2 蓝图，再生产 T2 物品。'),
-  g('industry', '【EVE新人教程2022】工业家 - 制造商任务全流程', 'B 站 · EVE欧服玉麒麟联盟', 'zh', 'video', '2022-06', BV + 'BV1jY411M7Dt/', '工业生涯代理人任务一步步做完，顺便学会制造。'),
-  g('industry', '【eve新手教学】制造流程、心得', 'B 站 · Baka_sbk', 'zh', 'video', '2016-08', BV + 'BV14s411C7d6/', '制造流程讲解。版本很旧，界面已变，思路可参考。'),
-  g('industry', 'EVE 新手种菜教学（6 分钟包学会）', 'B 站 · Ezekiel_WarGod', 'zh', 'video', '2023-07', BV + 'BV1Dm4y177Z7/', '行星开发（种菜）快速上手。'),
-  g('industry', '新手教程（7）：如何进行行星开发（种菜）', 'B 站专栏', 'zh', 'text', '', 'https://www.bilibili.com/read/cv6093172/', '图文讲解行星开发的建设和生产流程。'),
-  g('industry', '生产贸易', 'BWIKI', 'zh', 'text', '', BWIKI + '%E7%94%9F%E4%BA%A7%E8%B4%B8%E6%98%93', '制造、发明、保险等生产相关说明。'),
-  uni('industry', '工业', 'Industry', '制造、研究、蓝图与工业建筑。'),
-  uni('industry', '发明', 'Invention', 'T1 蓝图拷贝发明 T2、数据核心与解码器。'),
-  uni('industry', '行星开发', 'Planetary_Industry', '行星类型、资源、设施布局与产品链。'),
-
-  academy('trade', '贸易赚钱', 'xTNrEqmjqmw', 'trading', '市场窗口、买单卖单和低买高卖的基本思路。'),
-  g('trade', 'EVE 商人基本课', 'B 站 · 祖祖Limor', 'zh', 'video', '2023-08', BV + 'BV1zu411N7d7/', '市场买卖、挂单与倒卖的基础课。'),
-  g('trade', 'EVE Online 新手教程：赚钱与投资思路', 'B 站 · EVE小课堂', 'zh', 'video', '2023-08', BV + 'BV1dh4y1r7w4/', '老玩家讲的赚钱、投资思路。'),
-  uni('trade', '贸易', 'Trading', '订单、税费、贸易中心、跨星域贸易。'),
-  uni('trade', '贸易入门课', 'Trade_(CORE_class)', '面向新人的贸易课程大纲：市场窗口、买卖单、合同。'),
-  uni('trade', '运输', 'Hauling', '运输舰、快递合同与安全运输。'),
-
-  g('pvp', '自由战士（PvP）路线', 'EVE 官方', 'zh', 'text', '', ACADEMY + '/careers/soldier-of-fortune', '官方中文：PvP 入门路线与配装。'),
-  academy('pvp', '如何找军团', 'optDBEeT0C0', 'find-corp', '军团能给你什么、去哪里找、怎么挑。'),
-  g('pvp', '天山军校 新人 PVP 入门：狂怒者级', 'B 站 · 天山以北EVE', 'zh', 'video', '2019-04', BV + 'BV1jb411u7eo/', '新人 PVP 系列，狂怒者级配置与使用。版本较旧。'),
-  g('pvp', '天山军校 新人 PVP 入门：狞獾与小托', 'B 站 · 天山以北EVE', 'zh', 'video', '2019-04', BV + 'BV17b411K7eQ/', '同系列，护卫舰 / 驱逐舰入门 PVP。'),
-  uni('pvp', 'PvP 入门', 'PvP', '从便宜船练起：拦截、近战与风筝、看击毁报告复盘。'),
-  uni('pvp', '势力战争', 'Faction_Warfare', '加入势力民兵、争夺低安星系的规则与收益。'),
-  uni('pvp', '公开舰队', 'Public_fleets', '新人也能跟的公开 PvP 舰队。'),
-  uni('pvp', '找军团', 'Find_a_Corporation', '怎么挑选适合自己的军团。'),
-
-  g('wiki', 'EVE University Wiki', 'EVE University', 'en', 'text', '', UNI + 'Main_Page', '最全的 EVE 英文百科，几乎所有机制都能查到。本站翻译了其中的入门文章。'),
-  uni('wiki', 'EVE University 课程库', 'Class_Library', '历次公开课录像目录，按主题分类。'),
-  g('wiki', 'EVE Academy 视频合集（YouTube）', 'EVE 官方 · YouTube', 'en', 'video', '', 'https://www.youtube.com/playlist?list=PLQvKSs1k6DLOwda12n4xtM6R-6tKZHYvA', '官方教学视频播放列表。其中 13 个教学视频本站已配中文字幕，分在各分类里。'),
-  g('wiki', 'EVE 星战前夜 BWIKI', 'BWIKI', 'zh', 'text', '', BWIKI + '%E9%A6%96%E9%A1%B5', 'B 站玩家维护的中文端游百科。'),
-  g('wiki', 'EVE Online（萌娘百科）', '萌娘百科', 'zh', 'text', '', 'https://zh.moegirl.org.cn/EVE_Online', '游戏背景、世界观与国服代理历史。')
+// 视频分类
+const VCATS = [
+  ['start', '新手入门'],
+  ['ship', '舰船与装配'],
+  ['pve', '任务与刷怪'],
+  ['explore', '探索与虫洞'],
+  ['industry', '采矿与工业'],
+  ['trade', '贸易与赚钱'],
+  ['pvp', 'PVP 与军团']
 ];
 
-const S = { q: '', kind: '', origin: '', cat: '', lang: 'zh', index: null, doc: null, listScroll: 0 };
+// { cat, p: bili / yt, id: BV 号或 YouTube id, title, up, date, dur: 秒, pic: 封面, desc, doc: 中文字幕 }
+const bili = (cat, id, title, up, date, dur, pic, desc) => ({ cat, p: 'bili', id, title, up, date, dur, pic: 'https://' + pic, desc });
+// EVE Academy 官方教学视频：英文配音，本站翻译中文字幕
+const academy = (cat, id, doc, title, desc) => ({ cat, p: 'yt', id, title, up: 'EVE Online 官方 · EVE Academy', date: '', dur: 0, pic: `https://i.ytimg.com/vi/${id}/hqdefault.jpg`, desc, doc: 'academy-' + doc });
+const VIDEOS = [
+  academy('start', 'bZRcJ3p8dTE', 'epic-arc', '开始史诗任务线', '新手任务之后，怎么接史诗任务线、能拿到什么。'),
+  academy('start', 'DS1EnO1iJp4', 'security-status', '了解安全等级', '星系安全等级与个人安全等级：高安、低安、00 各有什么规则和风险。'),
+  bili('start', 'BV1xx411M7va', '简单EVE 新手教程篇 1：建号与新手任务', 'L3-猛汉猎人', '2017-10', 2159, 'i0.hdslb.com/bfs/archive/c5c204d23ca20e26fd79f0f05cfc19a55c2d8a3b.png', '系列第一期，讲建号、选阵营和新手任务。版本较旧，新手任务流程已改过，作思路参考。'),
+  bili('start', 'BV1qN411B7pk', '【EVE欧服】快速上手 EVE 的实用配置和建议', '祖祖Limor', '2023-08', 1045, 'i0.hdslb.com/bfs/archive/8b3dfcf59ba1d70ccdf229cb1eaad76159bea12b.jpg', '客户端设置、界面布局等上手配置，以及给新人的建议。'),
+  bili('start', 'BV1TS4y1n7jQ', '【EVE新人必看技巧】新手常用邮件列表', 'EVE欧服玉麒麟联盟', '2022-07', 922, 'i1.hdslb.com/bfs/archive/a320e7dbe27d13bb40b4005e5f2e06ffb0248077.jpg', '怎么加入和使用新手常用的邮件列表。'),
+
+  academy('ship', 'ArCI4bi9Eyg', 'fitting', '舰船装配', '装配窗口、CPU 与能量栅格、高中低槽怎么搭配。'),
+  bili('ship', 'BV1bZ4y1L7Ge', '托勒克斯级配置思路详解', '合辰JEX', '2020-10', 1295, 'i1.hdslb.com/bfs/archive/fe52f209bdb55cff16cc6eea497a9c5b078d601b.jpg', '以一艘船为例讲配船思路（团内单挑赛冠军配置），适合学怎么自己配船。'),
+
+  academy('pve', 'OU9lrxsE4uM', 'missions', '任务入门', '代理人任务怎么找、怎么接、怎么完成。'),
+  bili('pve', 'BV1KT4y1d7uG', 'ESS 的那些事', '小珅的EVE之旅', '2021-10', 2759, 'i0.hdslb.com/bfs/archive/26377c7da9bf0df4439d5acf03a0f8828de7aac4.jpg', '00 刷怪绕不开的 ESS（赏金储存装置）机制讲解。'),
+  bili('pve', 'BV17c41137Q7', '非月卡账号如何月入百亿（仅供参考）', '了空上人', '2023-06', 727, 'i1.hdslb.com/bfs/archive/54113a63c5ba8ffcda9465ad3fe90a6b6668221b.jpg', 'Alpha 号的刷怪赚钱思路。'),
+  bili('pve', 'BV148411t71R', '6 级异常集会点战斗参考', '了空上人', '2022-09', 414, 'i2.hdslb.com/bfs/archive/2bd7be9ab2d761af14ab6dc64ae74253c0309f50.jpg', '异常刷怪实战录像（曙光服），可参考打法。'),
+
+  academy('explore', 'Ieo3WAvH4yU', 'scanning', '扫描宇宙信号', '探针扫描器的用法，一步步把信号扫出来。'),
+  academy('explore', 'asKp78zRZGY', 'hacking', '破解赚钱', '数据 / 遗迹站点的破解小游戏和收益。'),
+  bili('explore', 'BV1DR4y1c7mj', '新手扫描教程', '零-zer0', '2022-05', 1368, 'i1.hdslb.com/bfs/archive/bf2b653ce8451aa599303d920bfa000645269424.jpg', '探针扫描从零开始的操作演示。'),
+  academy('explore', 'aldoiHE6O04', 'wormhole-basics', '虫洞基础', '虫洞是什么、怎么找、怎么判断能不能过、进去后怎么活下来。'),
+  academy('explore', 'yiWy2ehcc1o', 'wormhole-combat', '虫洞战斗', '虫洞里的战斗站点和刷怪要点。'),
+  bili('explore', 'BV1BQgt6qEzW', '虫洞“猖獗无人机巢穴”重做速览', 'BeliEVE76', '2026-07', 246, 'i1.hdslb.com/bfs/archive/0e8ab0e0a748e67666c9834e3c87ad21b96280f3.jpg', '近期改版后的新波次、掉落和收益。'),
+
+  academy('industry', 'I_dD4I-zHlw', 'mining', '采矿与资源获取', '采矿入门：找矿、采矿、出售或提炼。'),
+  academy('industry', 'TGGKpe6MYrQ', 'industry', '基础工业生产', '蓝图、材料、工业窗口，造出第一件东西。'),
+  academy('industry', 'p0exyST_TDY', 'invention', '发明与 T2 生产', '用 T1 蓝图拷贝发明 T2 蓝图，再生产 T2 物品。'),
+  bili('industry', 'BV1jY411M7Dt', '【EVE新人教程2022】工业家 - 制造商任务全流程', 'EVE欧服玉麒麟联盟', '2022-06', 3638, 'i0.hdslb.com/bfs/archive/ec2e1c8bce979a2cc64a5b985477800fcee0b4c0.jpg', '工业生涯代理人任务一步步做完，顺便学会制造。'),
+  bili('industry', 'BV14s411C7d6', '【eve新手教学】制造流程、心得', 'Baka_sbk', '2016-08', 1374, 'i0.hdslb.com/bfs/archive/9245e43626928ebdab1e3018afd324657a476cec.jpg', '制造流程讲解。版本很旧，界面已变，思路可参考。'),
+  bili('industry', 'BV1Dm4y177Z7', 'EVE 新手种菜教学（6 分钟包学会）', 'Ezekiel_WarGod', '2023-07', 371, 'i0.hdslb.com/bfs/archive/5047f659ad9ec6572f49ffd3eff4dae59262f83a.jpg', '行星开发（种菜）快速上手。'),
+
+  academy('trade', 'xTNrEqmjqmw', 'trading', '贸易赚钱', '市场窗口、买单卖单和低买高卖的基本思路。'),
+  bili('trade', 'BV1zu411N7d7', 'EVE 商人基本课', '祖祖Limor', '2023-08', 720, 'i0.hdslb.com/bfs/archive/2611f22340c110d81d1a2123d20164a164c1df50.jpg', '市场买卖、挂单与倒卖的基础课。'),
+  bili('trade', 'BV1dh4y1r7w4', 'EVE Online 新手教程：赚钱与投资思路', 'EVE小课堂', '2023-08', 580, 'i2.hdslb.com/bfs/archive/d579e8c72580e00d9575671bad485f4765bc67fb.jpg', '老玩家讲的赚钱、投资思路。'),
+
+  academy('pvp', 'optDBEeT0C0', 'find-corp', '如何找军团', '军团能给你什么、去哪里找、怎么挑。'),
+  bili('pvp', 'BV1jb411u7eo', '天山军校 新人 PVP 入门：狂怒者级', '天山以北EVE', '2019-04', 1169, 'i1.hdslb.com/bfs/archive/07e2abcd89e761fef48d4981f502f73d9888e250.jpg', '新人 PVP 系列，狂怒者级配置与使用。版本较旧。'),
+  bili('pvp', 'BV17b411K7eQ', '天山军校 新人 PVP 入门：狞獾与小托', '天山以北EVE', '2019-04', 1114, 'i0.hdslb.com/bfs/archive/8730915706ce105b60a590e1c155e48a966d5d6c.jpg', '同系列，护卫舰 / 驱逐舰入门 PVP。')
+];
+
+// Wiki 首页「新手从这里开始」
+const START = ['nea-index', 'getting-started-in-eve-online', 'nea-careers', 'clone-states', 'nea-ships-flying-your-ship', 'directional-scanner', 'making-money', 'find-a-corporation'];
+
+const S = { mode: 'wiki', page: 'home', q: '', cat: '', lang: 'zh', index: null, doc: null, video: null, listScroll: 0, fromList: false };
 const docs = new Map();
-const KIND = { video: '视频', text: '图文' };
 const ICON = {
   video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="15" height="14" rx="2"/><path d="m17 10 5-3v10l-5-3z"/></svg>',
   text: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M8 13h8M8 17h5"/></svg>',
   out: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
-  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>',
-  all: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg>'
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'
 };
 const LANGS = [['zh', '中文'], ['en', 'English'], ['both', '对照']];
 
@@ -149,7 +107,7 @@ export function initGuides(context) {
 async function loadIndex() {
   if (S.index) return S.index;
   try {
-    const r = await fetch('guides/index.json?v=3');
+    const r = await fetch('guides/index.json?v=4');
     S.index = r.ok ? await r.json() : {};
   } catch { S.index = {}; }
   return S.index;
@@ -157,13 +115,18 @@ async function loadIndex() {
 
 async function loadDoc(id) {
   if (!docs.has(id)) {
-    docs.set(id, fetch(`guides/${id}.json?v=3`).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    docs.set(id, fetch(`guides/${id}.json?v=4`).then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then((doc) => {
+        // 中文原文只有 zh 字段，补上 en 让阅读器按同一套逻辑渲染
+        if (doc.lang === 'zh') { doc.title.en = doc.title.zh; doc.blocks.forEach((b) => { b.en = b.zh; }); }
+        return doc;
+      })
       .catch((e) => { docs.delete(id); throw e; }));
   }
   return docs.get(id);
 }
 
-// ---------- 安全输出：只保留 <b> <i> <code> <a href="https://…"> ----------
+// ---------- 安全输出：只保留 <b> <i> <code> <a href="https://…"> 和站内链接 <a href="#guide/w/…"> ----------
 const tpl = document.createElement('template');
 function safe(html) {
   if (!html) return '';
@@ -175,6 +138,7 @@ function safe(html) {
     if (tag === 'b' || tag === 'i' || tag === 'code') return `<${tag}>${inner}</${tag}>`;
     if (tag === 'a') {
       const href = c.getAttribute('href') || '';
+      if (/^#guide\/w\/[\w-]+$/.test(href)) return `<a href="${href}" data-guide-link>${inner}</a>`;
       return /^https:\/\//.test(href) ? `<a href="${ctx.esc(href)}" target="_blank" rel="noopener noreferrer">${inner}</a>` : inner;
     }
     return inner;
@@ -183,80 +147,158 @@ function safe(html) {
 }
 const plain = (html) => { tpl.innerHTML = html || ''; return tpl.content.textContent; };
 
-// ---------- 列表 ----------
-const titleEn = (x) => (x.doc && S.index?.[x.doc]?.en) || '';
-function matches(x) {
-  if (S.kind && x.kind !== S.kind) return false;
-  if (S.origin === 'zh' && x.lang !== 'zh') return false;
-  if (S.origin === 'tr' && !x.doc) return false;
+// ---------- 通用 ----------
+const catName = (k, list = CATS) => list.find(([c]) => c === k)?.[1] || '';
+// 同分类里官方新手站在前，其次本站译文、本站摘要、BWIKI、萌娘百科，同来源按标题排
+const SRC_ORDER = Object.keys(SRC);
+let pageList = null;
+const pages = () => (pageList ||= Object.entries(S.index || {}).filter(([id]) => !id.startsWith('academy-')).map(([id, x]) => ({ id, ...x }))
+  .sort((a, b) => ((a.s === 'uni' ? 0.5 : SRC_ORDER.indexOf(a.s)) - (b.s === 'uni' ? 0.5 : SRC_ORDER.indexOf(b.s))) || a.zh.localeCompare(b.zh, 'zh')));
+const videoDur = (v) => v.dur || S.index?.[v.doc]?.dur || 0;
+const isTr = (x) => x.s === 'uni';
+const fmtDur = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+const seg = (key, cur, opts, cls = '') => `<div class="segmented guide-seg ${cls}" role="group">${opts.map(([v, l]) => `<button type="button" data-guide-${key}="${v}" class="${cur === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+const shortTitle = (x) => ctx.esc(isTr(x) && S.lang === 'en' ? x.en : x.zh);
+
+function pageTitle(x) {
+  if (!isTr(x) || S.lang === 'zh') return ctx.esc(x.zh);
+  if (S.lang === 'en') return ctx.esc(x.en);
+  return `${ctx.esc(x.zh)}<span class="guide-title-en">${ctx.esc(x.en)}</span>`;
+}
+
+function matchPage(x) {
   if (!S.q) return true;
-  return (x.title + ' ' + titleEn(x) + ' ' + x.src + ' ' + x.desc).toLowerCase().includes(S.q);
+  return (x.zh + ' ' + (x.en || '') + ' ' + (x.d || '') + ' ' + (x.g || '')).toLowerCase().includes(S.q);
+}
+function matchVideo(v) {
+  if (!S.q) return true;
+  return (v.title + ' ' + v.up + ' ' + v.desc).toLowerCase().includes(S.q);
 }
 
-function cardTitle(x) {
-  const en = titleEn(x);
-  if (!en) return ctx.esc(x.title);
-  if (S.lang === 'en') return ctx.esc(en);
-  if (S.lang === 'both') return `${ctx.esc(x.title)}<span class="guide-title-en">${ctx.esc(en)}</span>`;
-  return ctx.esc(x.title);
+// 同分类文章按小组排列：没有小组的在前，小组按出现顺序
+function groupPages(list) {
+  const groups = new Map();
+  for (const x of list) { const g = x.g || ''; if (!groups.has(g)) groups.set(g, []); groups.get(g).push(x); }
+  return [...groups.entries()].sort((a, b) => (a[0] ? 1 : 0) - (b[0] ? 1 : 0));
 }
 
-function metaLine(x) {
-  const info = x.doc && S.index?.[x.doc];
-  const extra = info ? (info.dur ? `${Math.max(1, Math.round(info.dur / 60))} 分钟` : `约 ${Math.max(1, Math.round(info.w / 400))} 分钟读完`) : x.date;
-  return ctx.esc(x.src) + (extra ? ' · ' + ctx.esc(extra) : '');
-}
-
-function card(x) {
-  const inSite = Boolean(x.doc);
-  const badge = inSite ? `<span class="guide-lang tr">${x.kind === 'video' ? '中文字幕' : '中文译文'}</span>` : `<span class="guide-lang ${x.lang}">${x.lang === 'zh' ? '中文' : '英文'}</span>`;
-  const attrs = inSite ? `href="#guide/read/${x.doc}" data-guide-read="${x.doc}"` : `href="${ctx.esc(x.url)}" target="_blank" rel="noopener noreferrer"`;
-  return `<a class="guide-card${inSite ? ' in-site' : ''}" ${attrs}>
-    <div class="guide-card-head"><span class="guide-kind ${x.kind}">${ICON[x.kind]}${KIND[x.kind]}</span>${badge}${inSite ? '' : ICON.out}</div>
-    <strong class="guide-title">${cardTitle(x)}</strong>
-    <p class="guide-desc">${ctx.esc(x.desc)}</p>
-    <small class="guide-src">${metaLine(x)}</small></a>`;
-}
-
+// ---------- 侧边栏 ----------
 function renderSide() {
-  const list = GUIDES.filter(matches);
-  const count = (c) => list.filter((x) => x.cat === c).length;
-  const seg = (key, cur, opts) => `<div class="segmented guide-seg" role="group">${opts.map(([v, l]) => `<button type="button" data-guide-${key}="${v}" class="${cur === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-  const item = (k, name, n) => `<button type="button" class="ind-side-item${!S.doc && S.cat === k ? ' active' : ''}" data-guide-cat="${k}"${n ? '' : ' disabled'}><span>${name}</span><small>${n}</small></button>`;
-  $('guideSide').innerHTML =
-    `<div class="ind-side-section"><h4>分类</h4>${item('', '全部教程', list.length)}${CATS.map(([k, name]) => item(k, name, count(k))).join('')}</div>
-    <div class="ind-side-section guide-side-filters"><h4>筛选</h4>
-      ${seg('kind', S.kind, [['', '全部'], ['video', '视频'], ['text', '图文']])}
-      ${seg('origin', S.origin, [['', '全部'], ['zh', '中文原创'], ['tr', '英文译文']])}</div>
-    <div class="ind-side-section guide-side-filters"><h4>译文阅读语言</h4>${seg('lang', S.lang, LANGS)}
-      <p class="ind-side-empty">英文资料已全文翻译，可在中文、英文原文、中英对照之间切换。</p></div>`;
+  const mode = seg('mode', S.mode, [['wiki', `${ICON.text}图文 Wiki`], ['video', `${ICON.video}视频`]], 'guide-mode');
+  let body;
+  if (S.mode === 'wiki') {
+    const list = pages().filter(matchPage);
+    const item = (k, name, n, href) => `<a class="ind-side-item${S.page !== 'doc' && S.cat === k && !S.q ? ' active' : ''}" href="${href}" data-guide-nav><span>${name}</span><small>${n}</small></a>`;
+    // 当前分类下展开文章列表
+    const cur = S.cat && !S.q ? list.filter((x) => x.c === S.cat) : [];
+    const sub = cur.length ? `<div class="guide-side-pages">${groupPages(cur).map(([g, xs]) => `${g ? `<div class="guide-side-group">${ctx.esc(g)}</div>` : ''}${xs.map((x) =>
+      `<a class="guide-side-page${S.doc?.id === x.id ? ' active' : ''}" href="#guide/w/${x.id}" data-guide-read>${shortTitle(x)}</a>`).join('')}`).join('')}</div>` : '';
+    body = `<div class="ind-side-section"><h4>分类</h4>${item('', 'Wiki 首页', list.length, '#guide')}${CATS.map(([k, name]) =>
+      item(k, name, list.filter((x) => x.c === k).length, '#guide/' + k) + (k === S.cat ? sub : '')).join('')}</div>
+      <div class="ind-side-section guide-side-filters"><h4>译文阅读语言</h4>${seg('lang', S.lang, LANGS)}
+        <p class="ind-side-empty">EVE University 的英文文章已全文翻译，可切换中文、英文原文或中英对照。</p></div>`;
+  } else {
+    const list = VIDEOS.filter(matchVideo);
+    const item = (k, name, n) => `<a class="ind-side-item${S.page !== 'video' && S.cat === k ? ' active' : ''}" href="#guide/video${k ? '/' + k : ''}" data-guide-nav><span>${name}</span><small>${n}</small></a>`;
+    body = `<div class="ind-side-section"><h4>分类</h4>${item('', '全部视频', list.length)}${VCATS.map(([k, name]) => item(k, name, list.filter((v) => v.cat === k).length)).join('')}</div>`;
+  }
+  $('guideSide').innerHTML = `<div class="ind-side-section guide-side-mode">${mode}</div>${body}`;
+  $('guideSearch').placeholder = S.mode === 'wiki' ? '搜索 Wiki，如 虫洞、扫描、种菜' : '搜索视频，如 种菜、PVP';
+  $('guideSide').querySelector('.guide-side-page.active')?.scrollIntoView({ block: 'nearest' });
 }
 
-function renderList() {
-  const list = GUIDES.filter(matches);
-  const cats = CATS.filter(([k]) => !S.cat || S.cat === k);
-  const cur = CATS.find(([k]) => k === S.cat);
-  const head = `<div class="pi-head guide-head"><h2>${cur ? cur[1] : '教程'}</h2><span class="text-muted guide-sub">${cur ? cur[2] : '精选 EVE 教程，按玩法分类。英文资料已全文翻译成中文，站内阅读；中文资料点开在新标签页打开原文'}</span></div>`;
-  const body = cats.map(([k, name, intro]) => {
-    const items = list.filter((x) => x.cat === k);
-    if (!items.length) return '';
-    return `<section class="guide-section">${S.cat ? '' : `<div class="guide-section-head"><h3>${name}</h3><span class="text-muted">${intro}</span></div>`}
-      <div class="guide-grid">${items.map(card).join('')}</div></section>`;
-  }).join('');
-  $('guideMain').innerHTML = `<section class="pi-page guide-page">${head}${body || '<p class="legend-empty">没有符合条件的教程</p>'}
-    <p class="text-muted valuation-note">中文资料来自 EVE 官方新伊甸学院、B 站 BWIKI 和 B 站 UP 主，版权归原作者。英文文章译自 EVE University Wiki（CC BY-SA 4.0），视频字幕译自 EVE Academy 官方视频，译文由本站翻译，可能有疏漏，以原文为准。B 站视频标了发布日期，较早的视频里界面和数值可能已经变了。</p></section>`;
+// ---------- Wiki 列表 ----------
+const srcBadge = (x) => `<span class="guide-src-badge ${x.s}">${SRC[x.s]?.[0] || ''}</span>`;
+
+function pageRow(x) {
+  return `<a class="guide-row" href="#guide/w/${x.id}" data-guide-read>
+    <div class="guide-row-main"><strong class="guide-title">${pageTitle(x)}</strong>${x.d ? `<p class="guide-desc">${ctx.esc(x.d)}</p>` : ''}</div>
+    <div class="guide-row-meta">${srcBadge(x)}${isTr(x) ? '<span class="guide-lang tr">译文</span>' : ''}<small>${x.m || 1} 分钟</small></div></a>`;
 }
 
-// ---------- 阅读器 ----------
+const WIKI_NOTE = `<p class="text-muted valuation-note">图文资料全文收录自新伊甸学院（EVE 官方，版权归 CCP Games）、EVE 星战前夜 BWIKI（CC BY-NC-SA 4.0）、萌娘百科（CC BY-NC-SA 3.0 CN）和 EVE University Wiki（CC BY-SA 4.0，英文原文，本站翻译）。每篇文章开头标注了出处和原文链接，内容以原文为准。</p>`;
+
+function renderWikiHome() {
+  const all = pages();
+  const start = START.map((id) => all.find((x) => x.id === id)).filter(Boolean);
+  const srcCount = Object.keys(SRC).map((k) => [k, all.filter((x) => x.s === k).length]).filter(([, n]) => n);
+  $('guideMain').innerHTML = `<section class="pi-page guide-page">
+    <div class="guide-hero"><h2>EVE 中文 Wiki</h2>
+      <p class="text-muted">${all.length} 篇图文资料，按玩法分类整理。来源：${srcCount.map(([k, n]) => `${SRC[k][0]} ${n} 篇`).join('、')}。另有 <a href="#guide/video" data-guide-nav>${VIDEOS.length} 个教学视频</a>。</p></div>
+    ${start.length ? `<section class="guide-section"><div class="guide-section-head"><h3>新手从这里开始</h3></div>
+      <div class="guide-start">${start.map((x, i) => `<a class="guide-start-item" href="#guide/w/${x.id}" data-guide-read><b>${i + 1}</b><span>${shortTitle(x)}</span>${srcBadge(x)}</a>`).join('')}</div></section>` : ''}
+    <section class="guide-section"><div class="guide-section-head"><h3>分类</h3></div>
+      <div class="guide-cat-grid">${CATS.map(([k, name, intro]) => {
+        const xs = all.filter((x) => x.c === k);
+        if (!xs.length) return '';
+        return `<div class="guide-cat-card"><a class="guide-cat-head" href="#guide/${k}" data-guide-nav><strong>${name}</strong><small>${xs.length} 篇</small></a>
+          <p class="guide-desc">${intro}</p>
+          <ul>${xs.slice(0, 6).map((x) => `<li><a href="#guide/w/${x.id}" data-guide-read>${shortTitle(x)}</a></li>`).join('')}</ul>
+          ${xs.length > 6 ? `<a class="guide-more" href="#guide/${k}" data-guide-nav>全部 ${xs.length} 篇 →</a>` : ''}</div>`;
+      }).join('')}</div></section>
+    ${WIKI_NOTE}</section>`;
+}
+
+function renderWikiCat() {
+  const [k, name, intro] = CATS.find(([c]) => c === S.cat);
+  const xs = pages().filter((x) => x.c === k);
+  $('guideMain').innerHTML = `<section class="pi-page guide-page">
+    <nav class="guide-crumb"><a href="#guide" data-guide-nav>Wiki</a><span>/</span>${name}</nav>
+    <div class="pi-head guide-head"><h2>${name}</h2><span class="text-muted guide-sub">${intro} · ${xs.length} 篇</span></div>
+    ${groupPages(xs).map(([g, list]) => `<section class="guide-section">${g ? `<div class="guide-section-head"><h3>${ctx.esc(g)}</h3><span class="text-muted">${list.length} 篇</span></div>` : ''}
+      <div class="guide-rows">${list.map(pageRow).join('')}</div></section>`).join('') || '<p class="legend-empty">这个分类还没有文章</p>'}
+    ${WIKI_NOTE}</section>`;
+}
+
+function renderWikiSearch() {
+  const xs = pages().filter(matchPage);
+  const vs = VIDEOS.filter(matchVideo);
+  $('guideMain').innerHTML = `<section class="pi-page guide-page">
+    <div class="pi-head guide-head"><h2>搜索「${ctx.esc(S.q)}」</h2><span class="text-muted guide-sub">${xs.length} 篇文章${vs.length ? `，视频里还有 ${vs.length} 个结果，切到「视频」查看` : ''}</span></div>
+    ${CATS.map(([k, name]) => {
+      const list = xs.filter((x) => x.c === k);
+      return list.length ? `<section class="guide-section"><div class="guide-section-head"><h3>${name}</h3><span class="text-muted">${list.length} 篇</span></div><div class="guide-rows">${list.map(pageRow).join('')}</div></section>` : '';
+    }).join('') || '<p class="legend-empty">没有找到相关文章</p>'}</section>`;
+}
+
+// ---------- 视频列表 ----------
+function videoCard(v) {
+  return `<a class="guide-vcard" href="#guide/v/${v.id}" data-guide-read>
+    <div class="guide-thumb"><img src="${ctx.esc(v.pic)}${v.p === 'bili' ? '@480w_270h_1c.webp' : ''}" alt="" loading="lazy" referrerpolicy="no-referrer">
+      <span class="guide-thumb-play">${ICON.play}</span>${videoDur(v) ? `<span class="guide-thumb-dur">${fmtDur(videoDur(v))}</span>` : ''}
+      ${v.doc ? '<span class="guide-thumb-tag">中文字幕</span>' : ''}</div>
+    <strong class="guide-title">${ctx.esc(v.title)}</strong>
+    <small class="guide-src">${v.p === 'bili' ? 'B 站' : 'YouTube'} · ${ctx.esc(v.up)}${v.date ? ' · ' + v.date : ''}</small></a>`;
+}
+
+function renderVideoList() {
+  const list = VIDEOS.filter(matchVideo);
+  const cats = VCATS.filter(([k]) => !S.cat || S.cat === k);
+  const name = catName(S.cat, VCATS);
+  $('guideMain').innerHTML = `<section class="pi-page guide-page">
+    ${name ? `<nav class="guide-crumb"><a href="#guide/video" data-guide-nav>视频</a><span>/</span>${name}</nav>` : ''}
+    <div class="pi-head guide-head"><h2>${S.q ? `搜索「${ctx.esc(S.q)}」` : name || '教学视频'}</h2><span class="text-muted guide-sub">${S.q ? `${list.length} 个视频` : '站内直接播放，附原视频链接。EVE Academy 官方视频是英文配音，本站翻译了中文字幕'}</span></div>
+    ${cats.map(([k, n]) => {
+      const vs = list.filter((v) => v.cat === k);
+      return vs.length ? `<section class="guide-section">${S.cat ? '' : `<div class="guide-section-head"><h3>${n}</h3><span class="text-muted">${vs.length} 个</span></div>`}
+        <div class="guide-vgrid">${vs.map(videoCard).join('')}</div></section>` : '';
+    }).join('') || '<p class="legend-empty">没有符合条件的视频</p>'}
+    <p class="text-muted valuation-note">视频版权归原作者，本站只嵌入原平台的播放器。B 站视频标了发布日期，较早的视频里界面和数值可能已经变了。</p></section>`;
+}
+
+// ---------- 文章阅读 ----------
 const pickText = (b, lang) => (lang === 'en' ? b.en : (b.zh ?? b.en));
+const docLang = () => (S.doc?.lang === 'zh' ? 'zh' : S.lang);
 // 中文 / English / 对照：对照时中文在上、英文原文在下
 function dual(b, render) {
-  if (S.lang === 'both') return render(b.zh ?? b.en, '') + (b.zh && b.zh !== b.en ? render(b.en, 'guide-en') : '');
-  return render(pickText(b, S.lang), '');
+  const lang = docLang();
+  if (lang === 'both') return render(b.zh ?? b.en, '') + (b.zh && b.zh !== b.en ? render(b.en, 'guide-en') : '');
+  return render(pickText(b, lang), '');
 }
 function cellHtml(zh, en) {
-  if (S.lang === 'en') return safe(en);
-  if (S.lang === 'both' && zh && zh !== en) return `${safe(zh)}<div class="guide-en">${safe(en)}</div>`;
+  const lang = docLang();
+  if (lang === 'en') return safe(en);
+  if (lang === 'both' && zh && zh !== en) return `${safe(zh)}<div class="guide-en">${safe(en)}</div>`;
   return safe(zh ?? en);
 }
 
@@ -278,7 +320,7 @@ function listHtml(b) {
 function blockHtml(b, i) {
   switch (b.t) {
     case 'h2': case 'h3': case 'h4':
-      return `<${b.t} id="gh-${i}">${S.lang === 'both' && b.zh && b.zh !== b.en ? `${safe(b.zh)}<span class="guide-en">${safe(b.en)}</span>` : safe(pickText(b, S.lang))}</${b.t}>`;
+      return `<${b.t} id="gh-${i}">${docLang() === 'both' && b.zh && b.zh !== b.en ? `${safe(b.zh)}<span class="guide-en">${safe(b.en)}</span>` : safe(pickText(b, docLang()))}</${b.t}>`;
     case 'p': return dual(b, (t, cls) => `<p${cls ? ` class="${cls}"` : ''}>${safe(t)}</p>`);
     case 'quote': return `<div class="guide-note">${dual(b, (t, cls) => `<p${cls ? ` class="${cls}"` : ''}>${safe(t)}</p>`)}</div>`;
     case 'ul': case 'ol': return listHtml(b);
@@ -302,19 +344,59 @@ function blockHtml(b, i) {
 
 function docTitle(doc) {
   const zh = doc.title.zh || doc.title.en;
-  if (S.lang === 'en') return ctx.esc(doc.title.en);
-  if (S.lang === 'both' && zh !== doc.title.en) return `${ctx.esc(zh)}<span class="guide-title-en">${ctx.esc(doc.title.en)}</span>`;
+  const lang = docLang();
+  if (lang === 'en') return ctx.esc(doc.title.en);
+  if (lang === 'both' && zh !== doc.title.en) return `${ctx.esc(zh)}<span class="guide-title-en">${ctx.esc(doc.title.en)}</span>`;
   return ctx.esc(zh);
+}
+
+function relatedHtml(id) {
+  const me = S.index[id];
+  if (!me) return '';
+  const same = pages().filter((x) => x.c === me.c && x.id !== id);
+  same.sort((a, b) => (b.g === me.g) - (a.g === me.g));
+  const list = same.slice(0, 8);
+  return list.length ? `<section class="guide-related"><h3>${catName(me.c)} · 相关文章</h3><div class="guide-rows">${list.map(pageRow).join('')}</div></section>` : '';
 }
 
 function renderArticleBody(doc) {
   const heads = doc.blocks.map((b, i) => [b, i]).filter(([b]) => b.t === 'h2' || b.t === 'h3');
   const toc = heads.length >= 3 ? `<nav class="guide-toc" aria-label="目录"><h4>目录</h4>${heads.map(([b, i]) =>
-    `<button type="button" class="${b.t}" data-guide-toc="${i}">${ctx.esc(plain(S.lang === 'en' ? b.en : (b.zh ?? b.en)))}</button>`).join('')}</nav>` : '';
-  $('guideDocBody').innerHTML = `<div class="guide-article-layout${toc ? '' : ' no-toc'}"><article class="guide-article">${doc.blocks.map(blockHtml).join('')}</article>${toc}</div>`;
+    `<button type="button" class="${b.t}" data-guide-toc="${i}">${ctx.esc(plain(pickText(b, docLang())))}</button>`).join('')}</nav>` : '';
+  $('guideDocBody').innerHTML = `<div class="guide-article-layout${toc ? '' : ' no-toc'}"><div><article class="guide-article">${doc.blocks.map(blockHtml).join('')}</article>${relatedHtml(doc.id)}</div>${toc}</div>`;
 }
 
-// ---------- 视频：YouTube 播放器 + 同步中文字幕 ----------
+function sourceBox(doc) {
+  let shown = doc.url;
+  try { shown = decodeURI(doc.url); } catch { /* 保持原样 */ }
+  return `<div class="guide-source">
+    <div><span>来源</span><b>${ctx.esc(doc.source)}</b></div>
+    <div><span>许可</span>${ctx.esc(doc.license)}</div>
+    <div><span>原文</span><a href="${ctx.esc(doc.url)}" target="_blank" rel="noopener noreferrer">${ctx.esc(shown.replace(/^https:\/\//, ''))}${ICON.out}</a></div>
+    ${doc.lang !== 'zh' ? '<div><span>说明</span>英文原文由本站翻译成中文，可能有疏漏，以原文为准</div>' : doc.note ? `<div><span>说明</span>${ctx.esc(doc.note)}</div>` : ''}</div>`;
+}
+
+async function renderDoc(id) {
+  const info = S.index[id];
+  $('guideMain').innerHTML = `<section class="pi-page guide-page guide-reader"><div class="guide-reader-bar">
+      <nav class="guide-crumb"><a href="#guide" data-guide-nav>Wiki</a>${info ? `<span>/</span><a href="#guide/${info.c}" data-guide-nav>${catName(info.c)}</a>` : ''}</nav>
+      <span class="toolbar-spacer"></span><div id="guideLangBar"></div></div>
+    <div id="guideDocHead"></div><div id="guideDocBody"><p class="legend-empty">加载中…</p></div></section>`;
+  let doc;
+  try { doc = await loadDoc(id); } catch (e) {
+    $('guideDocBody').innerHTML = `<p class="legend-empty">文章加载失败：${ctx.esc(e.message)}</p>`;
+    return;
+  }
+  if (parse(location.hash).id !== id) return;
+  S.doc = doc;
+  renderSide();
+  if (doc.lang !== 'zh') $('guideLangBar').innerHTML = `<div class="segmented" role="group" aria-label="阅读语言">${LANGS.map(([v, l]) => `<button type="button" data-guide-lang="${v}" class="${S.lang === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+  $('guideDocHead').innerHTML = `<h1 class="guide-doc-title" id="guideDocTitle">${docTitle(doc)}</h1>${sourceBox(doc)}`;
+  renderArticleBody(doc);
+}
+
+// ---------- 视频播放 ----------
+// YouTube：IFrame API + 同步中文字幕；B 站：嵌入官方播放器
 const V = { player: null, timer: 0, cue: -1, doc: null, follow: true };
 let ytApi = null;
 function loadYouTube() {
@@ -340,7 +422,6 @@ function stopVideo() {
   V.player = null; V.cue = -1; V.doc = null;
 }
 
-const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 function capHtml(b) {
   if (!b) return '';
   if (S.lang === 'en') return `<span>${ctx.esc(b.en)}</span>`;
@@ -349,9 +430,12 @@ function capHtml(b) {
 }
 
 function renderTranscript(doc) {
-  $('guideDocBody').innerHTML = `<div class="guide-transcript-head"><h3>字幕稿</h3><label class="guide-follow"><input type="checkbox" data-guide-follow${V.follow ? ' checked' : ''}> 跟随播放滚动</label></div>
-    <ol class="guide-transcript" id="guideTranscript">${doc.blocks.map((b, i) => `<li data-guide-cue="${i}" class="${i === V.cue ? 'active' : ''}"><time>${fmtTime(b.s)}</time><div>${S.lang === 'en' ? ctx.esc(b.en) : S.lang === 'both' ? `${ctx.esc(b.zh ?? b.en)}<span class="guide-en">${ctx.esc(b.en)}</span>` : ctx.esc(b.zh ?? b.en)}</div></li>`).join('')}</ol>`;
-  $('guideCap').innerHTML = capHtml(doc.blocks[V.cue]);
+  $('guideTranscriptBox').innerHTML = `<div class="guide-transcript-head"><h3>字幕稿</h3>
+      <div class="segmented" role="group" aria-label="字幕语言">${LANGS.map(([v, l]) => `<button type="button" data-guide-lang="${v}" class="${S.lang === v ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <label class="guide-follow"><input type="checkbox" data-guide-follow${V.follow ? ' checked' : ''}> 跟随播放滚动</label></div>
+    <ol class="guide-transcript" id="guideTranscript">${doc.blocks.map((b, i) => `<li data-guide-cue="${i}" class="${i === V.cue ? 'active' : ''}"><time>${fmtDur(b.s)}</time><div>${S.lang === 'en' ? ctx.esc(b.en) : S.lang === 'both' ? `${ctx.esc(b.zh ?? b.en)}<span class="guide-en">${ctx.esc(b.en)}</span>` : ctx.esc(b.zh ?? b.en)}</div></li>`).join('')}</ol>`;
+  const cap = $('guideCap');
+  if (cap) cap.innerHTML = capHtml(doc.blocks[V.cue]);
 }
 
 function tick() {
@@ -381,17 +465,17 @@ function hideYtCaptions() {
   } catch { /* 播放器未就绪 */ }
 }
 
-async function startVideo(doc) {
+async function startYouTube(v, doc) {
   stopVideo();
   V.doc = doc;
   try {
     await loadYouTube();
-    if (S.doc !== doc) return;
+    if (S.video !== v) return;
     V.player = new window.YT.Player('guideYt', {
-      videoId: doc.yt,
+      videoId: v.id,
       playerVars: { rel: 0, modestbranding: 1, cc_load_policy: 0, playsinline: 1 },
       events: {
-        onReady: () => { V.timer = setInterval(tick, 200); },
+        onReady: () => { if (doc) V.timer = setInterval(tick, 200); },
         // 关掉 YouTube 自带字幕（有的账号 / 浏览器设置会自动打开），只显示本站字幕；字幕模块在开始播放后才加载
         onApiChange: hideYtCaptions,
         onStateChange: (e) => { if (e.data === 1) hideYtCaptions(); }
@@ -399,42 +483,56 @@ async function startVideo(doc) {
     });
   } catch (e) {
     const box = $('guideYt');
-    if (box) box.outerHTML = `<div class="guide-yt-fail"><p>视频无法加载（${ctx.esc(e.message)}）。YouTube 在部分网络环境下无法访问，可以直接阅读下方的中文字幕稿，或<a href="${ctx.esc(doc.url)}" target="_blank" rel="noopener noreferrer">在 YouTube 打开</a>。</p></div>`;
+    if (box) box.outerHTML = `<div class="guide-yt-fail"><p>视频无法加载（${ctx.esc(e.message)}）。YouTube 在部分网络环境下无法访问，可以直接阅读下方的中文字幕稿，或<a href="https://www.youtube.com/watch?v=${ctx.esc(v.id)}" target="_blank" rel="noopener noreferrer">在 YouTube 打开</a>。</p></div>`;
   }
 }
 
-async function renderReader(id) {
-  const main = $('guideMain');
-  const entry = GUIDES.find((x) => x.doc === id);
-  main.innerHTML = `<section class="pi-page guide-page guide-reader"><div class="guide-reader-bar">
-      <button type="button" class="btn btn-ghost guide-back" data-guide-back>${ICON.back}返回${entry ? ' · ' + ctx.esc(CATS.find(([k]) => k === entry.cat)[1]) : ''}</button>
-      <span class="toolbar-spacer"></span>
-      <div class="segmented" role="group" aria-label="阅读语言">${LANGS.map(([v, l]) => `<button type="button" data-guide-lang="${v}" class="${S.lang === v ? 'active' : ''}">${l}</button>`).join('')}</div></div>
-    <div id="guideDocHead"></div><div id="guideDocBody"><p class="legend-empty">加载中…</p></div></section>`;
-  let doc;
-  try { doc = await loadDoc(id); } catch (e) {
-    $('guideDocBody').innerHTML = `<p class="legend-empty">译文加载失败：${ctx.esc(e.message)}${entry ? `，可以<a href="${ctx.esc(entry.url)}" target="_blank" rel="noopener noreferrer">阅读原文</a>` : ''}</p>`;
-    return;
+async function renderVideo(id) {
+  const v = VIDEOS.find((x) => x.id === id);
+  if (!v) { navigate('#guide/video', false); return; }
+  S.video = v;
+  S.cat = v.cat;
+  renderSide();
+  const url = v.p === 'bili' ? `https://www.bilibili.com/video/${v.id}/` : `https://www.youtube.com/watch?v=${v.id}`;
+  const player = v.p === 'bili'
+    ? `<iframe src="https://player.bilibili.com/player.html?bvid=${v.id}&autoplay=0&danmaku=0&high_quality=1" title="${ctx.esc(v.title)}" allow="fullscreen; picture-in-picture" allowfullscreen></iframe>`
+    : '<div id="guideYt"></div><div class="guide-cap" id="guideCap" aria-live="off"></div>';
+  const related = VIDEOS.filter((x) => x.cat === v.cat && x !== v);
+  $('guideMain').innerHTML = `<section class="pi-page guide-page guide-reader">
+    <div class="guide-reader-bar"><nav class="guide-crumb"><a href="#guide/video" data-guide-nav>视频</a><span>/</span><a href="#guide/video/${v.cat}" data-guide-nav>${catName(v.cat, VCATS)}</a></nav></div>
+    <h1 class="guide-doc-title">${ctx.esc(v.title)}</h1>
+    <p class="guide-doc-meta">${v.p === 'bili' ? 'B 站' : 'YouTube'} · ${ctx.esc(v.up)}${v.date ? ' · ' + v.date + ' 发布' : ''}${videoDur(v) ? ' · ' + fmtDur(videoDur(v)) : ''} · <a href="${url}" target="_blank" rel="noopener noreferrer">${v.p === 'bili' ? '在 B 站观看' : '在 YouTube 观看'}${ICON.out}</a></p>
+    <div class="guide-video">${player}</div>
+    <p class="guide-vdesc">${ctx.esc(v.desc)}${v.doc ? ' 英文配音，中文字幕由本站翻译，播放时显示在画面上，下方是完整字幕稿，点击可跳转。' : ''}</p>
+    <div id="guideTranscriptBox"></div>
+    ${related.length ? `<section class="guide-related"><h3>${catName(v.cat, VCATS)} · 更多视频</h3><div class="guide-vgrid">${related.map(videoCard).join('')}</div></section>` : ''}</section>`;
+  if (v.p !== 'yt') return;
+  let doc = null;
+  if (v.doc) {
+    try { doc = await loadDoc(v.doc); } catch { /* 没有字幕也能播放 */ }
+    if (S.video !== v) return;
+    if (doc) { S.doc = doc; renderTranscript(doc); }
   }
-  if (!location.hash.startsWith('#guide/read/' + id)) return;
-  S.doc = doc;
-  const video = Boolean(doc.yt);
-  $('guideDocHead').innerHTML = `<h1 class="guide-doc-title" id="guideDocTitle">${docTitle(doc)}</h1>
-    <p class="guide-doc-meta">${ctx.esc(doc.source)} · ${video ? '英文配音，中文字幕由本站翻译' : '本站翻译'} · ${ctx.esc(doc.license)} · <a href="${ctx.esc(doc.url)}" target="_blank" rel="noopener noreferrer">${video ? '在 YouTube 观看' : '查看英文原文'}${ICON.out}</a></p>
-    ${video ? '<div class="guide-video"><div id="guideYt"></div><div class="guide-cap" id="guideCap" aria-live="off"></div></div>' : ''}`;
-  if (video) { renderTranscript(doc); startVideo(doc); } else renderArticleBody(doc);
-}
-
-function refreshReaderLang() {
-  const doc = S.doc;
-  if (!doc) return;
-  document.querySelectorAll('#guideMain [data-guide-lang]').forEach((b) => b.classList.toggle('active', b.dataset.guideLang === S.lang));
-  $('guideDocTitle').innerHTML = docTitle(doc);
-  if (doc.yt) renderTranscript(doc); else renderArticleBody(doc);
+  startYouTube(v, doc);
 }
 
 // ---------- 路由与事件 ----------
 function scroller() { return $('guideMain').closest('.kb-scroll'); }
+
+function parse(hash) {
+  const h = (hash || '').replace(/^#guide\/?/, '');
+  let m;
+  if ((m = /^w\/([\w-]+)/.exec(h))) return { mode: 'wiki', page: 'doc', id: m[1] };
+  if ((m = /^v\/([\w-]+)/.exec(h))) return { mode: 'video', page: 'video', id: m[1] };
+  // 旧链接 #guide/read/<id>
+  if ((m = /^read\/([\w-]+)/.exec(h))) {
+    const v = VIDEOS.find((x) => x.doc === m[1]);
+    return v ? { mode: 'video', page: 'video', id: v.id } : { mode: 'wiki', page: 'doc', id: m[1] };
+  }
+  if ((m = /^video(?:\/(\w+))?/.exec(h))) return { mode: 'video', page: 'list', cat: VCATS.some(([k]) => k === m[1]) ? m[1] : '' };
+  if ((m = /^(\w+)/.exec(h)) && CATS.some(([k]) => k === m[1])) return { mode: 'wiki', page: 'cat', cat: m[1] };
+  return { mode: 'wiki', page: 'home', cat: '' };
+}
 
 function navigate(hash, push = true) {
   if (location.hash !== hash) history[push ? 'pushState' : 'replaceState'](null, '', location.pathname + hash);
@@ -445,33 +543,42 @@ function setLang(v) {
   S.lang = v;
   try { localStorage.setItem(LANG_KEY, v); } catch { /* 无痕模式等 */ }
   renderSide();
-  if (S.doc) refreshReaderLang(); else renderList();
+  if (S.page === 'doc' && S.doc) {
+    document.querySelectorAll('#guideMain [data-guide-lang]').forEach((b) => b.classList.toggle('active', b.dataset.guideLang === S.lang));
+    $('guideDocTitle').innerHTML = docTitle(S.doc);
+    renderArticleBody(S.doc);
+  } else if (S.page === 'video') { if (S.doc) renderTranscript(S.doc); }
+  else render();
 }
 
 function bind() {
   const view = $('guideView');
   view.addEventListener('click', (e) => {
-    const read = e.target.closest('[data-guide-read]');
-    if (read && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return;
+    const read = e.target.closest('[data-guide-read], [data-guide-link]');
+    if (read) {
+      // 进入文章 / 视频：记住列表位置，浏览器后退时恢复
       e.preventDefault();
-      S.listScroll = scroller().scrollTop;
-      S.fromList = true;
-      navigate('#guide/read/' + read.dataset.guideRead);
+      if (S.page !== 'doc' && S.page !== 'video') S.listScroll = scroller().scrollTop;
+      S.fromList = S.page !== 'doc' && S.page !== 'video' ? true : S.fromList;
+      navigate(read.getAttribute('href'));
       ctx.closeDrawer?.();
       return;
     }
-    const c = e.target.closest('[data-guide-cat]');
-    if (c) { S.fromList = false; navigate('#guide' + (c.dataset.guideCat ? '/' + c.dataset.guideCat : ''), Boolean(S.doc)); scroller().scrollTop = 0; ctx.closeDrawer?.(); return; }
-    if (e.target.closest('[data-guide-back]')) {
-      // 从列表点进来的直接后退（回到原来的列表和滚动位置），分享链接直接打开的回到所属分类
-      if (S.fromList) history.back();
-      else navigate('#guide' + (S.cat ? '/' + S.cat : ''));
+    const nav = e.target.closest('[data-guide-nav]');
+    if (nav) {
+      e.preventDefault();
+      S.fromList = false;
+      if (S.q) { S.q = ''; $('guideSearch').value = ''; }
+      navigate(nav.getAttribute('href'));
+      ctx.closeDrawer?.();
       return;
     }
-    const k = e.target.closest('[data-guide-kind]');
-    if (k) { S.kind = k.dataset.guideKind; renderSide(); if (!S.doc) renderList(); return; }
-    const o = e.target.closest('[data-guide-origin]');
-    if (o) { S.origin = o.dataset.guideOrigin; renderSide(); if (!S.doc) renderList(); return; }
+    const mode = e.target.closest('[data-guide-mode]');
+    if (mode) {
+      if (mode.dataset.guideMode !== S.mode) { S.fromList = false; navigate(mode.dataset.guideMode === 'video' ? '#guide/video' : '#guide'); }
+      return;
+    }
     const l = e.target.closest('[data-guide-lang]');
     if (l) { setLang(l.dataset.guideLang); return; }
     const toc = e.target.closest('[data-guide-toc]');
@@ -483,35 +590,42 @@ function bind() {
   const input = $('guideSearch');
   input.addEventListener('input', ctx.debounce(() => {
     S.q = input.value.trim().toLowerCase();
+    // 阅读时搜索：回到列表显示结果
+    if (S.page === 'doc' || S.page === 'video') { S.fromList = false; navigate(S.mode === 'video' ? '#guide/video' : '#guide'); return; }
     renderSide();
-    if (S.doc) navigate('#guide' + (S.cat ? '/' + S.cat : '')); else renderList();
+    render();
   }, 150));
-  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') { input.value = ''; S.q = ''; renderSide(); if (!S.doc) renderList(); } });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') { input.value = ''; S.q = ''; renderSide(); if (S.page !== 'doc' && S.page !== 'video') render(); } });
+}
+
+function render() {
+  if (S.mode === 'video') renderVideoList();
+  else if (S.q) renderWikiSearch();
+  else if (S.page === 'cat') renderWikiCat();
+  else renderWikiHome();
 }
 
 export async function showGuides(hash) {
   const main = $('guideMain');
   if (!main.dataset.ready) { main.dataset.ready = '1'; bind(); }
   await loadIndex();
-  const read = /^#guide\/read\/([\w-]+)/.exec(hash || '');
-  if (read) {
-    if (S.doc?.id === read[1] && main.querySelector('.guide-reader')) return;
+  const r = parse(hash);
+  // 旧链接 #guide/read/<id> 换成新地址
+  if (/^#guide\/read\//.test(hash || '')) { const h = r.page === 'video' ? '#guide/v/' + r.id : '#guide/w/' + r.id; history.replaceState(null, '', location.pathname + h); }
+  if (r.page === 'doc' || r.page === 'video') {
+    const cur = r.page === 'doc' ? S.page === 'doc' && S.doc?.id === r.id : S.page === 'video' && S.video?.id === r.id;
+    if (cur && main.querySelector('.guide-reader')) return;
     stopVideo();
-    S.doc = null;
-    const entry = GUIDES.find((x) => x.doc === read[1]);
-    if (entry) S.cat = entry.cat;
-    renderSide();
+    Object.assign(S, { mode: r.mode, page: r.page, doc: null, video: null });
     scroller().scrollTop = 0;
-    await renderReader(read[1]);
+    if (r.page === 'doc') { S.cat = S.index[r.id]?.c || ''; renderSide(); await renderDoc(r.id); }
+    else await renderVideo(r.id);
     return;
   }
-  const wasReading = Boolean(S.doc) && S.fromList;
+  const back = S.fromList && (S.page === 'doc' || S.page === 'video');
   stopVideo();
-  S.doc = null;
-  S.fromList = false;
-  const m = /^#guide\/(\w+)/.exec(hash || '');
-  S.cat = m && CATS.some(([k]) => k === m[1]) ? m[1] : '';
+  Object.assign(S, { mode: r.mode, page: r.page, cat: r.cat, doc: null, video: null, fromList: false });
   renderSide();
-  renderList();
-  if (wasReading) requestAnimationFrame(() => { scroller().scrollTop = S.listScroll; });
+  render();
+  scroller().scrollTop = back ? S.listScroll : 0;
 }

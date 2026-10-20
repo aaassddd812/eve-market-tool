@@ -33,6 +33,24 @@ export function initKillboard(context) {
       app.openKillFit(kill).then((ok) => { if (ok) closeKill(); else go.disabled = false; });
     }
   });
+  // 切换估值价格来源：重算交易中心估值后重绘（保留当前标签页）
+  $('killModal').addEventListener('change', async (e) => {
+    if (!e.target.matches('[data-val-src]') || !shownArgs) return;
+    app.valuation.set(e.target.value);
+    const args = shownArgs, tab = $('killBody').querySelector('[data-kill-tab].active')?.dataset.killTab;
+    const val = await killValuation(args.kill);
+    if (shownArgs !== args) return;
+    $('killBody').innerHTML = renderKill(args.kill, val, args.priceNote, args.insurance);
+    if (tab) switchKillTab(tab);
+  });
+}
+
+// 船体 + 全部物品（含货柜内）按所选交易中心的最低卖 / 最高收估值；singleton 2 为蓝图副本
+function killValuation(kill) {
+  const list = [{ type_id: kill.victim.ship_type_id, quantity: 1 }];
+  const walk = (items) => { for (const it of items || []) { list.push({ type_id: it.item_type_id, quantity: (it.quantity_dropped || 0) + (it.quantity_destroyed || 0), is_blueprint_copy: it.singleton === 2 }); walk(it.items); } };
+  walk(kill.victim.items);
+  return app.valuation.items(list);
 }
 
 // ---------- 请求 ----------
@@ -247,13 +265,15 @@ function slotGroup(flag) {
 
 let currentKill = null;
 let shownKill = null;   // 弹窗中正在显示的击杀
+let shownArgs = null;   // 重绘所需：{ kill, priceNote, insurance }
 
-// options.prices：自定义逐项单价（击杀记录页使用吉他中间价）；options.priceNote：估值说明
+// options.priceNote：总价值的估值说明（单项按所选交易中心估值）
 // options.load：异步加载击杀数据（先打开弹窗显示加载状态）
 export async function openKill(kill, options = {}) {
   const token = {};
   currentKill = token;
   shownKill = null;
+  shownArgs = null;
   const modal = $('killModal');
   const body = $('killBody');
   modal.hidden = false;
@@ -261,9 +281,10 @@ export async function openKill(kill, options = {}) {
   try {
     if (options.load) ({ kill, prices: options.prices } = await options.load());
     if (currentKill !== token) return;
-    const [prices, insurance] = await Promise.all([options.prices || app.getMarketPriceMap(), app.getInsurance?.().catch(() => null), prepareKills([kill], { attackers: 'all' })]);
+    const [val, insurance] = await Promise.all([killValuation(kill), app.getInsurance?.().catch(() => null), prepareKills([kill], { attackers: 'all' })]);
     if (currentKill !== token) return;
-    body.innerHTML = renderKill(kill, prices, options.priceNote, insurance?.get(kill.victim.ship_type_id));
+    shownArgs = { kill, priceNote: options.priceNote, insurance: insurance?.get(kill.victim.ship_type_id) };
+    body.innerHTML = renderKill(kill, val, shownArgs.priceNote, shownArgs.insurance);
     shownKill = kill;
   } catch (error) {
     if (currentKill === token) body.innerHTML = '<p class="text-muted kb-empty">击杀详情读取失败：' + app.esc(error.message) + '</p>';
@@ -273,7 +294,7 @@ export async function openKill(kill, options = {}) {
 }
 
 // 打开击杀记录服务（/api/kb/）中的击杀：完整击杀邮件 + 逐项吉他中间价（星图弹幕等处使用）
-const SERVICE_PRICE_NOTE = '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。';
+const SERVICE_PRICE_NOTE = '总价值、掉落与摧毁价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。';
 export function openServiceKill(id) {
   return openKill(null, {
     priceNote: SERVICE_PRICE_NOTE,
@@ -313,19 +334,19 @@ function switchKillTab(tab) {
 }
 const $$ = (sel) => document.querySelectorAll(sel);
 
-function itemRows(items, prices, depth = 0) {
+function itemRows(items, val, depth = 0) {
   return items.map((it) => {
     const qty = (it.quantity_dropped || 0) + (it.quantity_destroyed || 0);
-    const unit = prices.get(it.item_type_id);
-    const value = unit ? unit * qty : null;
+    const p = it.singleton === 2 ? {} : val.price(it.item_type_id);
+    const cell = (x) => (x == null ? '—' : app.formatISK(x * qty));
     const dropped = it.quantity_dropped ? `<span class="kb-dropped">掉落 ${app.formatNumber(it.quantity_dropped)}</span>` : '';
     const destroyed = it.quantity_destroyed ? `<span class="kb-destroyed">摧毁 ${app.formatNumber(it.quantity_destroyed)}</span>` : '';
     return `<div class="kb-fit-item${it.quantity_dropped ? ' is-dropped' : ''}" style="padding-left:${8 + depth * 18}px">
         <img src="${img(`types/${it.item_type_id}/icon`, 32)}" alt="" width="24" height="24" loading="lazy">
         <span class="kb-fit-name">${app.esc(typeName(it.item_type_id))}</span>
         <span class="kb-fit-qty">${dropped}${destroyed}</span>
-        <span class="kb-fit-value">${value == null ? '—' : app.formatISK(value)}</span>
-      </div>` + (it.items ? itemRows(it.items, prices, depth + 1) : '');
+        <span class="kb-fit-value" title="最低卖价">${cell(p.sell)}</span><span class="kb-fit-value is-buy" title="最高收购价">${cell(p.buy)}</span>
+      </div>` + (it.items ? itemRows(it.items, val, depth + 1) : '');
   }).join('');
 }
 
@@ -340,7 +361,7 @@ function insuranceHtml(levels, total) {
       <span>投保后净损失约 <b>${app.formatISK(net)}</b></span></div>`;
 }
 
-function renderKill(k, prices, priceNote, insurance) {
+function renderKill(k, val, priceNote, insurance) {
   const v = k.victim;
   const z = k.zkb;
   const sys = systemLabel(k.solar_system_id);
@@ -350,7 +371,7 @@ function renderKill(k, prices, priceNote, insurance) {
   const groups = new Map(SLOT_GROUPS.map(([key, label]) => [key, { label, items: [] }]));
   for (const it of v.items || []) groups.get(slotGroup(it.flag)).items.push(it);
   const fit = [...groups.values()].filter((g) => g.items.length).map((g) =>
-    `<section class="kb-fit-group"><h5>${g.label}<span>${g.items.length}</span></h5>${itemRows(g.items, prices)}</section>`).join('')
+    `<section class="kb-fit-group"><h5>${g.label}<span>${g.items.length}</span></h5>${itemRows(g.items, val)}</section>`).join('')
     || '<p class="text-muted">没有物品</p>';
 
   // 攻击者
@@ -399,6 +420,8 @@ function renderKill(k, prices, priceNote, insurance) {
       <div class="kb-values">
         <div class="kb-total"><span>总价值</span><strong>${app.formatISK(z.totalValue)}<small>ISK</small></strong></div>
         <div class="kb-split"><span class="kb-dropped">掉落 ${app.formatISK(z.droppedValue)}</span><span class="kb-destroyed">摧毁 ${app.formatISK(z.destroyedValue)}</span></div>
+        <div class="kb-hubval">${app.valuation.select('data-val-src', val.region)}
+          <span>最低卖价 <b>${app.formatISK(val.sell)}</b></span><span>最高收价 <b>${app.formatISK(val.buy)}</b></span></div>
         ${insuranceHtml(insurance, z.totalValue)}
         ${app.openKillFit ? '<button class="btn btn-primary" data-kill-fit title="在模拟装配中打开这艘船与击杀时的装配">去装配页查看</button>' : ''}
         ${SERVER.kb ? `<a class="btn btn-ghost" href="https://zkillboard.com/kill/${k.killmail_id}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>` : ''}
@@ -409,7 +432,7 @@ function renderKill(k, prices, priceNote, insurance) {
       <button data-kill-tab="fit" class="active">装配与物品</button>
       <button data-kill-tab="attackers">攻击者（${k.attackers.length}）</button>
     </div>
-    <div class="kb-pane" data-pane="fit">${fit}<p class="valuation-note">${priceNote || (SERVER.kb ? '单项估值按 ESI 全服均价；总价值、掉落与摧毁价值为 zKillboard 估值。' : '单项与总价值都按 ESI 全服均价估算（蓝图副本不计）。')}</p></div>
+    <div class="kb-pane" data-pane="fit"><div class="kb-fit-cols"><span>最低卖价</span><span>最高收价</span></div>${fit}<p class="valuation-note">单项按${app.esc(val.region.hub.name)}的最低卖价 / 最高收购价估值（含船体，蓝图副本不计），可在上方切换交易中心。${app.esc(priceNote || (SERVER.kb ? '总价值、掉落与摧毁价值为 zKillboard 估值。' : '总价值按 ESI 全服均价估算。'))}</p></div>
     <div class="kb-pane" data-pane="attackers" hidden>${attackers}</div>`;
 }
 

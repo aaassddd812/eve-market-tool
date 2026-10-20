@@ -126,7 +126,7 @@ function feedTable(kills, opts = {}) {
 // 打开击杀详情：从服务读取完整击杀邮件与逐项中间价
 function openKill(id) {
   kb.openKill(null, {
-    priceNote: PRICE_NOTE,
+    priceNote: '总价值、掉落与摧毁价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价；旗舰等吉他没有卖单的物品按全服公开合同最低价）。',
     load: async () => {
       const data = await api('kill/' + id);
       absorbNames(data.names);

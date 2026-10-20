@@ -58,8 +58,8 @@ eve-overview-clone/
 ├── js/pi-colonies.js    # 行星工业 · 我的殖民地
 ├── js/auctions.js       # 快递页 · 公开拍卖
 ├── js/war.js            # 战争页：势力战争 + 军团战争
-├── js/guides.js         # 教程页：分类目录 + 站内译文阅读器（中文 / English / 对照，视频同步中文字幕），按需加载
-├── guides/              # 教程译文（EVE University 文章、EVE Academy 视频字幕），build_guides.py 生成
+├── js/guides.js         # 教程页：图文 Wiki（分类 / 搜索 / 阅读器，译文可切中英对照）+ 视频（嵌入 B 站 / YouTube，官方视频同步中文字幕），按需加载
+├── guides/              # 教程 Wiki 文章（新伊甸学院、BWIKI、萌娘百科、EVE University 译文、本站摘要）与视频字幕，build_guides.py 生成
 ├── js/kill-alert.js     # 击杀预警（右上角铃铛）
 ├── mutaplasmid-data.json # 突变质体：可改属性与倍率范围、原装备与深渊装备（build_mutaplasmids.mjs 生成）
 ├── js/fit-mutate.js     # 模拟装配 · 深渊装备自定义属性
@@ -109,7 +109,7 @@ eve-overview-clone/
 - **侧栏**：与市场中心一致，可收起（`[`）/展开，移动端为抽屉；「空间站资产」分组可折叠，按估值排序并显示每个位置的物品数与卖价估值
 - **资产估值 / 空间站**：「资产估值」显示总估值与各空间站汇总（点击进入）；选中某个空间站时，与市场中心选中物品一样，只显示该站的物品与该站估值，可筛选物品
 - **位置名称**：装在舰船/集装箱里的资产会沿 `location_id` 向上找到真正所在的空间站；NPC 空间站、星系、NPC 军团、NPC 角色显示官方中文名（`npc-names-zh.json`），玩家军团/联盟/建筑等玩家自定义名称保留原名
-- **资产估值**：可选交易中心（默认吉他海4），分别按站内**最低卖价**和**最高收购价**估值；行情按物品逐个查询 ESI 并在会话内缓存，可「刷新行情」；蓝图副本与无行情物品不计入。
+- **资产估值**：可选交易中心或全宇宙（默认吉他海4，见下文「物品估值来源」），分别按**最低卖价**和**最高收购价**估值；行情在本机缓存，可「刷新行情」；蓝图副本与无行情物品不计入。
   估值卡片另给税后金额（挂卖单扣销售税 + 中介费，卖给收单与「我的卖单」全部成交只扣销售税），工具栏的税费按钮打开「交易税费」设置
 - **资产读取**：读取全部分页
 - **技能**：侧栏「技能」按游戏分组列出全部 512 个技能（`skill-data.json`），显示已训练 / 生效等级（Alpha 克隆受限时区分）、技能点、下一级所需技能点与训练倍数，未学的技能灰显；
@@ -169,7 +169,7 @@ node build_map_esi.mjs <SDE 解压目录> [缓存目录]   # 输出曙光服 eve
 node build_npc.mjs <SDE 解压目录>   # 输出 eve-overview-clone/npc-data.json（NPC 人物位置）与 npc-corp-faction.json
 node build_dogma_names.mjs <SDE 解压目录>   # 输出 eve-overview-clone/dogma-attr-zh.json（属性中文名，突变装备用）
 node build_mutaplasmids.mjs <SDE 解压目录>   # 输出 eve-overview-clone/mutaplasmid-data.json（突变质体属性范围，模拟装配用）
-python3 build_guides.py <译文目录>          # 输出 eve-overview-clone/guides/（教程译文与索引）
+python3 build_guides.py <文章目录>          # 输出 eve-overview-clone/guides/（教程文章与索引）
 ```
 
 ### NPC 人物位置（v54）
@@ -190,7 +190,7 @@ python3 build_guides.py <译文目录>          # 输出 eve-overview-clone/guid
 - **装配**：高 / 中 / 低槽、改装件、子系统（T3 巡洋舰按子系统增加槽位与安装座），装备可切换离线 / 在线 / 激活 / 超载；
   无人机可设数量与激活数量（自动受带宽与同时操作上限约束）；植入体与增效剂，可一键导入当前角色的植入体
 - **属性**：CPU / 能量栅格 / 校准值 / 安装座，炮台 / 导弹 / 无人机 DPS 与齐射伤害、伤害类型分布，护盾 / 装甲 / 结构抗性与 EHP，
-  护盾自然回充与主动维修，电容稳定性（按游戏充能曲线计算），速度、起跳时间、跃迁速度、信号半径，锁定距离、扫描分辨率、最大锁定数、感应强度，货柜舱与全服均价估价
+  护盾自然回充与主动维修，电容稳定性（按游戏充能曲线计算），速度、起跳时间、跃迁速度、信号半径，锁定距离、扫描分辨率、最大锁定数、感应强度，货柜舱与估价（所选交易中心 / 全宇宙的最低卖价与最高收价）
 - **检查**：资源、槽位、安装座超出，改装件尺寸，只能装特定舰船的装备，同类装备装配 / 激活数量上限，无人机挂舱与带宽
 - **技能**：全部 5 级，或按已绑定 ESI 角色的技能计算，并列出装配需要但角色未达到的技能
 - **保存与分享**：装配保存在本机浏览器；换船时当前没保存的装配记为这艘船的草稿（最多 30 艘），换到某艘船时载入它上次没保存的装配，没有则从空船开始，保存后清掉草稿；EFT 文本导入（游戏「复制到剪贴板」、Pyfa、zKillboard，中英文名称均可）与导出（英文名称，可导入游戏或 Pyfa）；
@@ -335,11 +335,11 @@ node build_lp.mjs <SDE 解压目录>   # 输出 eve-overview-clone/lp-data.json
 ### 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团（v56）
 
 - **克隆与植入体**：`/clones/` + `/implants/`：当前植入体、各跳跃克隆的位置与植入体、下次可跳时间（冷却 24 小时 − 意识同步每级 1 小时）、医疗克隆远程更换冷却
-- **挖矿记录**：`/mining/`（最近 30 天）按矿种、按日期汇总，按 ESI 全服均价估值（矿石原价）
+- **挖矿记录**：`/mining/`（最近 30 天）按矿种、按日期汇总，按所选交易中心的最低卖价 / 最高收价估值（矿石原价）
 - **研究代理人**：`/agents_research/`，研究点 = 余数 + 每日点数 × 已过天数，代理人驻地来自 `npc-data.json`，点地点跳到星图
 - **舰队**：`/fleet/` → `/fleets/{id}/members/` + `/wings/`（读成员需要舰队指挥），舰船分布、位置分布、成员列表
 - **军团管理**：`/roles/` 显示职位；钱包（部门名来自 `/divisions/`）、订单、工业任务（含可交付）、建筑（燃料剩余时间，3 天内标红、7 天内标黄，增强计时，服务）、
-  月矿（矿块到达 / 自然崩解）、资产（全服均价估值前 200 种）。各分区单独读取，403 时提示需要的军团职位；NPC 军团不显示
+  月矿（矿块到达 / 自然崩解）、资产（按所选交易中心估值，列出前 200 种）。各分区单独读取，403 时提示需要的军团职位；NPC 军团不显示
 
 ### 其他增强（v56）
 
@@ -452,6 +452,15 @@ node build_lp.mjs <SDE 解压目录>   # 输出 eve-overview-clone/lp-data.json
 node build_pi.mjs <SDE 解压目录>   # 输出 eve-overview-clone/pi-data.json（含虫洞星系与等级 wh）
 node build_reprocess.mjs <SDE 解压目录>   # 输出 eve-overview-clone/reprocess-data.json（化矿产物）
 ```
+
+## 物品估值来源（v68）
+
+所有显示物品估值的地方共用一个下拉框：吉他 / 艾玛 / 多迪谢 / 伦斯 / 赫克（曙光服为其交易中心列表）或「全宇宙」，默认吉他；选择记在 localStorage `eve-valuation-region`，在任一处切换后其它页面也跟着变。
+每处都同时给出**最低卖价**和**最高收价**两个估值：资产与空间站、角色合同、公开拍卖详情、估价页、挖矿记录、军团资产、行星殖民地存量、击杀详情（船体 + 全部物品，逐项两列）、模拟装配估价。
+
+- 行情来源：宁静服由击杀记录服务批量提供（`/api/v1/prices?hub=`，一次 200 种）。服务每小时先读伏尔戈订单更新吉他价格，再读全部 k 空间星域订单，算出其余贸易中心和全宇宙（所有星域的空间站与建筑订单）的最低卖 / 最高收（约 1600 页，2–3 分钟）。服务不可用时退回逐个物品查 ESI
+- 全宇宙只在宁静服提供（需要服务端汇总）；全宇宙的最高收价常来自偏远星域、限定范围的收单，可能高于最低卖价
+- 击杀列表、排行榜等处的总价值仍是服务端按吉他中间价算的，只有击杀详情里可以切换
 
 ## 估价
 
@@ -577,17 +586,21 @@ User=www-data
 WantedBy=multi-user.target
 ```
 
-## 教程（v64）
+## 教程（v68：图文 Wiki + 视频）
 
-顶部导航「教程」（`#guide`，分类可直接链接，如 `#guide/wh`；文章 `#guide/read/<id>`）：左侧边栏为分类、搜索、筛选（视频 / 图文、中文原创 / 英文译文）和译文阅读语言。
+顶部导航「教程」，侧边栏顶部切换「图文 Wiki / 视频」，下面是分类目录（当前分类展开文章列表）和搜索。
 
-- 中文资料（官方新伊甸学院、BWIKI、B 站 UP 主视频 / 专栏）为外链，在新标签页打开
-- 英文资料全部翻译成中文，站内阅读，可切换「中文 / English / 对照」（记在 localStorage `eve-guide-lang`）：
-  - EVE University Wiki 34 篇文章（CC BY-SA 4.0）：保留原文的标题层级、列表、表格、图片（图片直接引用原站）和链接，长文右侧有目录
-  - EVE Academy 13 个官方教学视频：嵌入 YouTube 播放器，视频上叠加同步中文字幕（关闭 YouTube 自带字幕），下方是可点击跳转的字幕稿，跟随播放滚动；YouTube 打不开时仍可阅读字幕稿
-- 译文格式：`guides/<id>.json`，`blocks` 为逐块对齐的中英文（`t` = h2 / h3 / h4 / p / ul / ol / table / img / quote / cue，`en` 原文、`zh` 译文，列表带深度 `d`、表格带表头行 `hr`、字幕带起止秒 `s` / `e`）；`guides/index.json` 为标题与篇幅索引
-- `build_guides.py <译文目录>` 把译文目录打包到 `guides/`；目录列表在 `js/guides.js` 的 `GUIDES` 数组里，`uni()` / `academy()` 条目通过 `doc` 关联站内译文
-- 术语按国服官方译名（物品、舰船、技能等取自 SDE 中文名），译文由本站翻译，页面注明出处与许可
+- **图文 Wiki**（`#guide`，分类 `#guide/<分类>`，文章 `#guide/w/<id>`；旧链接 `#guide/read/<id>` 自动跳转）：资料全文收录在站内，每篇开头的来源框注明出处、许可和原文链接
+  - 新伊甸学院（EVE 官方中文新手站，© CCP Games）、EVE 星战前夜 BWIKI（CC BY-NC-SA 4.0；舰船图鉴等数据页不收，BWIKI 译自 EVE University 且本站已有全文译文的页面不重复收）、萌娘百科（CC BY-NC-SA 3.0 CN）
+  - EVE University Wiki 34 篇（CC BY-SA 4.0），本站全文翻译，可切换「中文 / English / 对照」（localStorage `eve-guide-lang`）
+  - B 站专栏原作者声明禁止转载，只收本站整理的要点摘要并链接原文
+  - 首页：新手入门路线 + 各分类卡片；分类页按小组列出（如「战斗异常攻略」「远征（死亡空间）」「势力与组织」）；文章页有目录和同分类相关文章；能对应到站内文章的链接（BWIKI 内链、EVE University 链接）改为站内跳转
+- **视频**（`#guide/video`，分类 `#guide/video/<分类>`，播放 `#guide/v/<BV 号或 YouTube id>`）：按分类排列的封面卡片，站内嵌入 B 站 / YouTube 播放器并附原视频链接
+  - EVE Academy 13 个官方视频：视频上叠加本站翻译的同步中文字幕（关闭 YouTube 自带字幕），下方是可点击跳转的字幕稿；YouTube 打不开时仍可阅读字幕稿
+  - 视频列表在 `js/guides.js` 的 `VIDEOS`（B 站封面取自视频页的 `pic`，以 no-referrer 加载）
+- 数据：`guides/<id>.json` 为块结构（`t` = h2 / h3 / h4 / p / ul / ol / table / img / quote / cue）。译文逐块对齐 `en` / `zh`；中文原文 `lang: "zh"` 只有 `zh`。`guides/index.json` 为目录（`zh` / `en` 标题、`c` 分类、`g` 小组、`s` 来源、`m` 阅读分钟、`d` 摘要）
+- `build_guides.py <文章目录>` 打包：文章 JSON 里的 `cat` / `group` / `desc` / `src` 写入目录后从正文去掉
+- 术语按国服官方译名（物品、舰船、技能等取自 SDE 中文名）
 
 ## 开放 API（v23）
 
@@ -595,7 +608,7 @@ WantedBy=multi-user.target
 
 - 免注册、免密钥，允许任意来源跨域（CORS `*`），返回 JSON；出错统一为 `{"error": {"code", "message"}}`
 - 按 IP 令牌桶限流：每分钟 1000 次（`API_RATE`），阵亡装配一次消耗 10 次、战场统计与利润排行 5 次（`API_COST`）；响应头带 `X-RateLimit-Limit / Remaining`，超限返回 429 与 `Retry-After`
-- 接口：`/status`、`/prices`（吉他卖 / 收 / 全服均价 / 本站估价）、`/blueprints/prices`、`/kills`（只查保留期内，不转向 zKillboard）、`/kills/live`、`/kills/top`、
+- 接口：`/status`、`/prices`（卖 / 收默认吉他，`hub` 可选四族贸易中心或 `all` 全宇宙；另有全服均价 / 本站估价）、`/blueprints/prices`、`/kills`（只查保留期内，不转向 zKillboard）、`/kills/live`、`/kills/top`、
   `/kills/{id}`、`/stats/summary`、`/battles`、`/battle-report`、`/leaderboard`、`/entities/{kind}/{id}`、`/search`、`/ships/{id}/fits`；`/api/v1` 返回接口目录
 - 制造接口（`Industry` 类，公式与 `js/industry.js` 一致，技能按全 5 级）：`/industry/search`、`/industry/blueprints/{product}`、
   `/industry/cost`（材料用量、安装费、发明分摊、合同拷贝、税费后利润与时间；可选星系、设施、改装件、税率、ME / TE、解码器）、

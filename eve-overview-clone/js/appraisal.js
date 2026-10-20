@@ -10,7 +10,7 @@
 import { SERVER } from './server.js?v=s3';
 import * as TF from './trade-fees.js?v=v2';
 
-let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), regions,
+let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation,
           // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-appraisal-v1';
@@ -29,7 +29,7 @@ const IMPLANTS = { 27175: 1, 27169: 2, 27174: 4 };   // 载诺 守财奴 提炼 
 export function initAppraisal(context) {
   ctx = context;
   const saved = ctx.store.getJSON(STORE_KEY, {});
-  if (ctx.regions.some((r) => r.id === saved.hub)) A.hub = saved.hub;
+  A.hub = ctx.valuation.region().id;   // 交易中心与全站估值共用同一个选择
   if (saved.view === 'reproc') A.view = 'reproc';
   if (saved.rp && typeof saved.rp === 'object') {
     const r = saved.rp;
@@ -118,7 +118,13 @@ const GLOBAL_MARKET_REGION = 19000001;
 const GLOBAL_MARKET_TYPES = new Set([44992]);
 
 // 交易中心挂单：最低卖价、最高收价，以及按价格排好的收单（算深度用）
+// 全宇宙：只有最低卖 / 最高收（击杀记录服务汇总），没有挂单深度
 async function hubOrders(region, ids, onProgress) {
+  if (region.all) {
+    const v = await ctx.valuation.items(ids.map((id) => ({ type_id: id, quantity: 1 })), onProgress);
+    for (const id of ids) { const p = v.price(id); A.orders.set(region.id + ':' + id, p.failed ? { failed: true } : { sell: p.sell ?? null, buy: p.buy ?? null }); }
+    return;
+  }
   const todo = ids.filter((id) => !A.orders.has(region.id + ':' + id));
   let done = ids.length - todo.length;
   onProgress(done, ids.length);
@@ -161,7 +167,7 @@ async function appraise() {
   try { await loadNames(); } catch (e) { out.innerHTML = `<div class="ap-empty">物品名称载入失败：${ctx.esc(e.message)}</div>`; return; }
   const { items, unknown } = parse(text);
   if (!items.size) { out.innerHTML = `<div class="ap-empty">没有识别出物品${unknown.length ? '：' + ctx.esc(unknown.slice(0, 3).join('、')) : ''}</div>`; return; }
-  const region = ctx.regions.find((r) => r.id === A.hub) || ctx.regions[0];
+  const region = ctx.valuation.sources.find((r) => r.id === A.hub) || ctx.valuation.sources[0];
   const ids = [...items.keys()];
   // 化矿产物也要挂单价；化矿数据载入失败时只做市场估价
   const rp = await loadReprocess().catch((e) => { console.warn('化矿数据载入失败', e); return null; });
@@ -175,7 +181,8 @@ async function appraise() {
   const rows = ids.map((id) => {
     const qty = items.get(id);
     const o = A.orders.get(region.id + ':' + id) || {};
-    const depthSell = o.buys ? walk(o.buys, qty, true) : { total: 0, filled: 0 };
+    // 全宇宙没有挂单深度：按最高收价全部成交计
+    const depthSell = o.buys ? walk(o.buys, qty, true) : region.all && o.buy != null ? { total: o.buy * qty, filled: qty } : { total: 0, filled: 0 };
     const depthBuy = o.sells ? walk(o.sells, qty, false) : { total: 0, filled: 0 };
     return {
       id, qty, name: nameOf(id), failed: o.failed,
@@ -436,6 +443,13 @@ async function syncImplants() {
 
 export function showAppraisal() {
   const main = $('apMain');
+  // 别的页面改了估值来源：跟着切换，已有结果重新估价
+  const cur = ctx.valuation.region().id;
+  if (main.dataset.ready && cur !== A.hub) {
+    A.hub = cur;
+    if ($('apHub')) $('apHub').value = String(cur);
+    if (A.result) appraise();
+  }
   if (main.dataset.ready) return;
   main.dataset.ready = '1';
   main.innerHTML = `
@@ -447,7 +461,7 @@ export function showAppraisal() {
           <div class="ap-controls">
             <label class="select-wrap" title="交易中心">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-              <select id="apHub" class="region-select" aria-label="交易中心">${ctx.regions.map((r) => `<option value="${r.id}"${r.id === A.hub ? ' selected' : ''}>${ctx.esc(r.hub.name)}</option>`).join('')}</select>
+              <select id="apHub" class="region-select" aria-label="交易中心">${ctx.valuation.sources.map((r) => `<option value="${r.id}"${r.id === A.hub ? ' selected' : ''}>${ctx.esc(r.hub.name)}</option>`).join('')}</select>
             </label>
             <button type="button" class="btn btn-ghost" id="apClear">清空</button>
             <button type="button" class="btn btn-primary" id="apGo">估价</button>
@@ -477,6 +491,7 @@ export function showAppraisal() {
   $('apInput').addEventListener('paste', () => setTimeout(appraise, 0));
   $('apHub').addEventListener('change', (e) => {
     A.hub = Number(e.target.value);
+    ctx.valuation.set(A.hub);
     save();
     if (A.result) appraise();
   });

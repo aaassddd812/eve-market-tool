@@ -161,9 +161,9 @@
           fields: [['killmails', '库中击杀数'], ['oldest / newest', '最早 / 最新击杀时间'], ['retention_days', '击杀保留天数'], ['live_mode / last_live', '实时数据来源与最近收录时间'], ['prices_updated', '价格最近更新时间'], ['backfill', '历史数据导入进度']] }
       ]],
       ['市场', [
-        { path: '/prices', title: '物品价格', desc: '吉他 4-4 最低卖价、最高收购价、全服均价与本站估价，每小时更新。', example: '/prices?types=34,35,44992',
-          params: [['types', true, '物品 ID，逗号分隔，最多 200 个']],
-          fields: [['updated', '价格更新时间'], ['types.{id}.sell', '吉他 4-4 空间站最低卖价（没有卖单为 null）'], ['types.{id}.buy', '最高收购价'], ['types.{id}.average', '全服均价（ESI）'], ['types.{id}.estimate', '本站估价：卖收中间价；卖价异常时用均价；吉他没有卖单的旗舰等用公开合同最低价']] },
+        { path: '/prices', title: '物品价格', desc: '最低卖价、最高收购价（默认吉他 4-4，可选四族贸易中心或全宇宙）、全服均价与本站估价，每小时更新。', example: '/prices?types=34,35,44992',
+          params: [['types', true, '物品 ID，逗号分隔，最多 200 个'], ['hub', false, '交易中心所在星域 ID：10000002 吉他（默认）/ 10000043 艾玛 / 10000032 多迪谢 / 10000030 伦斯 / 10000042 赫克；all 为全宇宙（所有星域的空间站与建筑订单）']],
+          fields: [['hub', '本次使用的交易中心（星域 ID 或 all）'], ['updated', '价格更新时间'], ['types.{id}.sell', '该交易中心空间站的最低卖价（没有卖单为 null）'], ['types.{id}.buy', '最高收购价'], ['types.{id}.average', '全服均价（ESI）'], ['types.{id}.estimate', '本站估价：卖收中间价；卖价异常时用均价；吉他没有卖单的旗舰等用公开合同最低价']] },
         { path: '/blueprints/prices', title: '蓝图合同价', desc: '全服公开合同里各蓝图最便宜的几份原图与拷贝，约每小时更新。', example: '/blueprints/prices?types=1000,11186',
           params: [['types', true, '蓝图 ID，逗号分隔，最多 300 个']],
           fields: [['updated', '合同快照更新时间'], ['types.{id}.o', '原图：[[价格, 材料效率, 时间效率, 合同 ID, 星系 ID], ...]，按价格升序'], ['types.{id}.c', '拷贝：[[每流程价格, 流程数, 总价, 材料效率, 时间效率, 合同 ID, 星系 ID], ...]']] }

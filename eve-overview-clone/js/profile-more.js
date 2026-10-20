@@ -1,6 +1,6 @@
 // ===== 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团 =====
 //   克隆  /characters/{id}/clones/ + /implants/（esi-clones.*，原有权限）：跳跃克隆位置与植入体、下次可跳时间
-//   挖矿  /characters/{id}/mining/（esi-industry.read_character_mining.v1，原有权限）：最近 30 天挖矿记录，按 ESI 全服均价估值
+//   挖矿  /characters/{id}/mining/（esi-industry.read_character_mining.v1，原有权限）：最近 30 天挖矿记录，按所选交易中心（或全宇宙）的最低卖 / 最高收估值
 //   研究  /characters/{id}/agents_research/（「研究代理人」权限）：研究点数 = 余数 + 每日点数 × 开始以来的天数
 //   舰队  /characters/{id}/fleet/ → /fleets/{fleet_id}/members/（「舰队」权限，读成员需要是舰队指挥）
 //   军团  /characters/{id}/roles/ + 军团钱包 / 订单 / 工业 / 建筑 / 月矿 / 资产（「军团管理」权限，且需相应军团职位）
@@ -22,6 +22,7 @@ export function initProfileMore(context) {
 }
 
 const esc = (s) => ctx.esc(s);
+const val0 = () => ctx.valuation.region();
 const me = () => ctx.tokenInfo()?.character_id;
 const loading = (text) => `<div class="pi-loading">${esc(text)}</div>`;
 const fail = (what, error) => `<p class="text-muted">${esc(what)}读取失败：${esc(error.message)}</p>`;
@@ -100,40 +101,43 @@ async function renderMining(box) {
   let data;
   try {
     data = await cached('mining', async (cid) => {
-      const [rows, prices] = await Promise.all([ctx.esiAuthFetchPaged('/characters/' + cid + '/mining/', 10), ctx.getMarketPriceMap()]);
+      const rows = await ctx.esiAuthFetchPaged('/characters/' + cid + '/mining/', 10);
       const types = await ctx.resolveTypeNames(rows.map((r) => r.type_id));
-      return { rows, prices, types };
+      return { rows, types };
     });
   } catch (error) { if (still('mining', id)) box.innerHTML = fail('挖矿记录', error); return; }
   if (!still('mining', id)) return;
-  const { rows, prices, types } = data;
+  const { rows, types } = data;
   if (!rows.length) { box.innerHTML = '<p class="text-muted">最近 30 天没有挖矿记录</p>'; return; }
-  const value = (r) => (prices.get(r.type_id) || 0) * r.quantity;
+  const val = await ctx.valuation.items(rows, (d, t) => { if (t > d && still('mining', id)) box.innerHTML = loading(`读取${val0().hub.name}行情 ${d}/${t}…`); });
+  if (!still('mining', id)) return;
+  const sellOf = (r) => (val.price(r.type_id).sell || 0) * r.quantity;
+  const buyOf = (r) => (val.price(r.type_id).buy || 0) * r.quantity;
   const byType = new Map(), byDay = new Map();
-  let total = 0, units = 0;
+  let units = 0;
   for (const r of rows) {
-    const v = value(r);
-    total += v; units += r.quantity;
-    const t = byType.get(r.type_id) || { id: r.type_id, qty: 0, value: 0 };
-    t.qty += r.quantity; t.value += v; byType.set(r.type_id, t);
-    const d = byDay.get(r.date) || { date: r.date, value: 0, qty: 0, systems: new Set() };
-    d.value += v; d.qty += r.quantity; d.systems.add(r.solar_system_id); byDay.set(r.date, d);
+    const sv = sellOf(r), bv = buyOf(r);
+    units += r.quantity;
+    const t = byType.get(r.type_id) || { id: r.type_id, qty: 0, sell: 0, buy: 0 };
+    t.qty += r.quantity; t.sell += sv; t.buy += bv; byType.set(r.type_id, t);
+    const d = byDay.get(r.date) || { date: r.date, sell: 0, buy: 0, qty: 0, systems: new Set() };
+    d.sell += sv; d.buy += bv; d.qty += r.quantity; d.systems.add(r.solar_system_id); byDay.set(r.date, d);
   }
   const systems = new Set(rows.map((r) => r.solar_system_id));
-  const typeRows = [...byType.values()].sort((a, b) => b.value - a.value).map((t) => tr([
-    typeCell(types, t.id), ctx.formatNumber(t.qty), ctx.formatISK(t.value), total ? (t.value / total * 100).toFixed(1) + '%' : '—']));
+  const typeRows = [...byType.values()].sort((a, b) => b.sell - a.sell).map((t) => tr([
+    typeCell(types, t.id), ctx.formatNumber(t.qty), ctx.formatISK(t.sell), ctx.formatISK(t.buy), val.sell ? (t.sell / val.sell * 100).toFixed(1) + '%' : '—']));
   const dayRows = [...byDay.values()].sort((a, b) => b.date.localeCompare(a.date)).map((d) => tr([
-    esc(d.date), esc([...d.systems].map((s) => ctx.officialName(s) || s).join('、')), ctx.formatNumber(d.qty), ctx.formatISK(d.value)]));
+    esc(d.date), esc([...d.systems].map((s) => ctx.officialName(s) || s).join('、')), ctx.formatNumber(d.qty), ctx.formatISK(d.sell), ctx.formatISK(d.buy)]));
   box.innerHTML =
-    '<div class="valuation-grid">' +
-      ctx.valuationCard('估算收益', ctx.formatISK(total) + ' ISK', '按 ESI 全服均价（矿石原价，未精炼）', 'is-buy') +
-      ctx.valuationCard('挖矿总量', ctx.formatNumber(units) + ' 单位', byType.size + ' 种矿') +
-      ctx.valuationCard('天数', byDay.size + ' 天', systems.size + ' 个星系') +
-      ctx.valuationCard('日均', ctx.formatISK(total / byDay.size) + ' ISK', '有挖矿的日子') +
+    `<div class="valuation-toolbar">${ctx.valuation.select('data-val-src="mining"', val.region)}</div>` +
+    '<div class="valuation-grid section-gap">' +
+      ctx.valuation.cards(val, '估算收益') +
+      ctx.valuationCard('挖矿总量', ctx.formatNumber(units) + ' 单位', byType.size + ' 种矿 · ' + byDay.size + ' 天 · ' + systems.size + ' 个星系') +
+      ctx.valuationCard('日均', ctx.formatISK(val.sell / byDay.size) + ' ISK', '按最低卖价，有挖矿的日子') +
     '</div>' +
-    '<section class="info-section"><h4 class="info-section-title">按矿种</h4>' + table(['矿种', '数量', '估值', '占比'], typeRows) + '</section>' +
-    '<section class="info-section"><h4 class="info-section-title">按日期</h4>' + table(['日期', '星系', '数量', '估值'], dayRows) + '</section>' +
-    '<p class="text-muted valuation-note">ESI 挖矿记录保留最近 30 天，游戏里约每 10 分钟更新一次。</p>';
+    '<section class="info-section"><h4 class="info-section-title">按矿种</h4>' + table(['矿种', '数量', '最低卖价估值', '最高收价估值', '占比'], typeRows) + '</section>' +
+    '<section class="info-section"><h4 class="info-section-title">按日期</h4>' + table(['日期', '星系', '数量', '最低卖价估值', '最高收价估值'], dayRows) + '</section>' +
+    `<p class="text-muted valuation-note">按${esc(val.region.hub.name)}的矿石原价估值（未精炼）。ESI 挖矿记录保留最近 30 天，游戏里约每 10 分钟更新一次。</p>`;
 }
 
 // ---------- 研究代理人 ----------
@@ -277,16 +281,18 @@ const CORP_LOAD = {
     return { list, moonNames };
   },
   assets: async (corp) => {
-    const [assets, prices] = await Promise.all([ctx.esiAuthFetchPaged(`/corporations/${corp}/assets/`, 20), ctx.getMarketPriceMap()]);
+    const [assets, avg] = await Promise.all([ctx.esiAuthFetchPaged(`/corporations/${corp}/assets/`, 20), ctx.getMarketPriceMap()]);
     const byType = new Map();
     for (const a of assets) {
-      const t = byType.get(a.type_id) || { id: a.type_id, qty: 0 };
-      t.qty += a.is_blueprint_copy ? 0 : a.quantity || 1;
+      if (a.is_blueprint_copy) continue;
+      const t = byType.get(a.type_id) || { type_id: a.type_id, quantity: 0 };
+      t.quantity += a.quantity || 1;
       byType.set(a.type_id, t);
     }
-    const top = [...byType.values()].map((t) => ({ ...t, value: (prices.get(t.id) || 0) * t.qty })).sort((a, b) => b.value - a.value);
-    const types = await ctx.resolveTypeNames(top.slice(0, 200).map((t) => t.id));
-    return { count: assets.length, top, types, total: top.reduce((s, t) => s + t.value, 0) };
+    // 按全服均价挑出最值钱的 1500 种去查交易中心行情（没有均价的基本不可交易）
+    const list = [...byType.values()].filter((t) => !avg.size || avg.has(t.type_id))
+      .sort((a, b) => (avg.get(b.type_id) || 0) * b.quantity - (avg.get(a.type_id) || 0) * a.quantity).slice(0, 1500);
+    return { count: assets.length, kinds: byType.size, list };
   }
 };
 
@@ -338,12 +344,22 @@ function corpBody(view, d) {
         esc(fmtDate(m.chunk_arrival_time)) + `<span class="cell-sub">${ms > 0 ? '还剩 ' + left(ms) : '已到达'}</span>`, esc(fmtDate(m.natural_decay_time))]);
     }), 'trade-table');
   }
-  if (view === 'assets') {
-    return '<div class="valuation-grid">' + ctx.valuationCard('资产估值', formatISK(d.total) + ' ISK', '按 ESI 全服均价，蓝图副本不计', 'is-total') + ctx.valuationCard('资产条目', formatNumber(d.count) + ' 项', d.top.length + ' 种物品') + '</div>' +
-      table(['物品', '数量', '估值'], d.top.slice(0, 200).map((t) => tr([typeCell(d.types, t.id), formatNumber(t.qty), formatISK(t.value)]))) +
-      (d.top.length > 200 ? `<p class="text-muted valuation-note">只列出估值最高的 200 种</p>` : '');
-  }
   return '';
+}
+
+// 军团资产：按所选交易中心估值
+async function corpAssets(d, body, alive) {
+  const { formatISK, formatNumber } = ctx;
+  const val = await ctx.valuation.items(d.list, (n, t) => { if (t > n && alive()) body.innerHTML = loading(`读取${val0().hub.name}行情 ${n}/${t}…`); });
+  if (!alive()) return;
+  const top = d.list.map((t) => ({ ...t, sell: (val.price(t.type_id).sell || 0) * t.quantity, buy: (val.price(t.type_id).buy || 0) * t.quantity }))
+    .sort((a, b) => b.sell - a.sell).slice(0, 200);
+  const types = await ctx.resolveTypeNames(top.map((t) => t.type_id));
+  if (!alive()) return;
+  body.innerHTML = `<div class="valuation-toolbar">${ctx.valuation.select('data-val-src="corp"', val.region)}</div>` +
+    '<div class="valuation-grid section-gap">' + ctx.valuation.cards(val, '资产估值') + ctx.valuationCard('资产条目', formatNumber(d.count) + ' 项', d.kinds + ' 种物品，蓝图副本不计') + '</div>' +
+    table(['物品', '数量', '最低卖价估值', '最高收价估值'], top.map((t) => tr([typeCell(types, t.type_id), formatNumber(t.quantity), formatISK(t.sell), formatISK(t.buy)]))) +
+    (d.list.length > 200 ? `<p class="text-muted valuation-note">只列出按最低卖价估值最高的 200 种</p>` : '');
 }
 
 async function renderCorp(box) {
@@ -364,7 +380,8 @@ async function renderCorp(box) {
   const body = box.querySelector('[data-corp-body]');
   try {
     const d = await cached('corp:' + view, () => CORP_LOAD[view](base.corp));
-    if (still('corp', id) && S.corpView === view) body.innerHTML = corpBody(view, d);
+    const alive = () => still('corp', id) && S.corpView === view;
+    if (alive()) { if (view === 'assets') await corpAssets(d, body, alive); else body.innerHTML = corpBody(view, d); }
   } catch (error) {
     if (!still('corp', id) || S.corpView !== view) return;
     const need = CORP_VIEWS.find((v) => v[0] === view)[2];
@@ -393,6 +410,13 @@ export async function renderMore(tab, box) {
       if (sys) { ctx.openMapSystem(Number(sys.dataset.mapSys)); return; }
       const dest = e.target.closest('[data-game-dest]');
       if (dest) ctx.game.waypoint(Number(dest.dataset.gameDest));
+    });
+    // 切换估值价格来源
+    box.addEventListener('change', (e) => {
+      const src = e.target.closest('[data-val-src]');
+      if (!src) return;
+      ctx.valuation.set(src.value);
+      if (ctx.isActive(src.dataset.valSrc)) RENDER[src.dataset.valSrc](box);
     });
   }
   await RENDER[tab](box);

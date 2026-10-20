@@ -3,7 +3,7 @@
 // 当前出价：/contracts/public/bids/{contract_id}/（公开），只为当前显示的合同读取，没有出价时返回 204。
 // 详情：/contracts/public/items/{contract_id}/ 物品清单（按 ESI 全服均价估值）+ 出价记录；可在游戏里打开合同。
 
-let ctx;   // esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveStructures, officialName, getMarketPriceMap, marketRegions, regions, game, store
+let ctx;   // esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveStructures, officialName, valuation, marketRegions, regions, game, store
 const S = { region: 0, list: null, loading: null, error: null, q: '', shown: 50, sort: 'expire', bids: new Map(), items: new Map(), at: 0 };
 const cache = new Map();   // region -> { at, list }
 const stations = new Map(); // 中文名称表里没有的 NPC 空间站（如曙光服独有的站）-> ESI 站名
@@ -158,40 +158,44 @@ async function openDetail(c) {
       const g = e.target.closest('[data-au-game]');
       if (g) ctx.game.contract(Number(g.dataset.auGame));
     });
+    // 切换估值价格来源后重绘当前合同
+    modal.addEventListener('change', (e) => { if (e.target.matches('[data-val-src]')) { ctx.valuation.set(e.target.value); openDetail(modal.contract); } });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) { e.stopImmediatePropagation(); modal.hidden = true; } }, true);
   }
   modal.hidden = false;
+  modal.contract = c;
   $('auTitle').textContent = c.title || '拍卖合同';
   const body = $('auBody');
   body.innerHTML = '<div class="pi-loading">读取合同物品与出价…</div>';
   try {
-    const [items, prices] = await Promise.all([
-      S.items.get(c.contract_id) || fetch(`${ctx.esiBase}/contracts/public/items/${c.contract_id}/?datasource=${ctx.datasource}`).then((r) => (r.status === 204 ? [] : r.ok ? r.json() : Promise.reject(new Error('ESI ' + r.status)))),
-      ctx.getMarketPriceMap()
-    ]);
+    const items = S.items.get(c.contract_id) || await fetch(`${ctx.esiBase}/contracts/public/items/${c.contract_id}/?datasource=${ctx.datasource}`).then((r) => (r.status === 204 ? [] : r.ok ? r.json() : Promise.reject(new Error('ESI ' + r.status))));
     S.items.set(c.contract_id, items);
     if (!S.bids.has(c.contract_id)) await loadBids([c]);
     const bids = S.bids.get(c.contract_id) || [];
     const types = await ctx.resolveTypeNames(items.map((i) => i.type_id));
     const given = items.filter((i) => i.is_included);
-    const value = given.reduce((t, i) => t + (i.is_blueprint_copy ? 0 : (prices.get(i.type_id) || 0) * i.quantity), 0);
+    const v = await ctx.valuation.items(given, (d, t) => { if (modal.contract === c && t > d) body.innerHTML = `<div class="pi-loading">读取${esc(ctx.valuation.region().hub.name)}行情 ${d}/${t}…</div>`; });
+    if (modal.contract !== c || modal.hidden) return;
     const { formatISK, formatPrice, formatNumber } = ctx;
     const top = bids[0]?.amount || 0;
     body.innerHTML = `
       <div class="valuation-grid">
         ${ctx.valuationCard('当前出价', top ? formatISK(top) + ' ISK' : '暂无出价', top ? bids.length + ' 次出价' : '起拍价 ' + formatISK(c.price), 'is-buy')}
         ${ctx.valuationCard('一口价', c.buyout ? formatISK(c.buyout) + ' ISK' : '—', '')}
-        ${ctx.valuationCard('物品估值', formatISK(value) + ' ISK', '全服均价，蓝图副本不计')}
+        ${ctx.valuation.cards(v)}
         ${ctx.valuationCard('剩余时间', left(c.date_expired), esc(placeName(c.start_location_id)))}
       </div>
-      <div class="valuation-toolbar section-gap"><span class="toolbar-spacer"></span><button class="btn" data-au-game="${c.contract_id}" title="需要「游戏内操作」权限，角色需在线">游戏内打开合同</button></div>
+      <div class="valuation-toolbar section-gap">${ctx.valuation.select('data-val-src', v.region)}<span class="toolbar-spacer"></span><button class="btn" data-au-game="${c.contract_id}" title="需要「游戏内操作」权限，角色需在线">游戏内打开合同</button></div>
       <h4 class="info-section-title">物品（${given.length}）</h4>
-      <div class="table-scroll"><table class="pc-mini-table"><thead><tr><th>物品</th><th>数量</th><th>估值</th></tr></thead><tbody>${given.map((i) => `<tr>
-        <td>${esc(types.get(i.type_id) || 'Type ' + i.type_id)}${i.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : ''}</td><td>${formatNumber(i.quantity)}</td>
-        <td>${i.is_blueprint_copy ? '—' : formatISK((prices.get(i.type_id) || 0) * i.quantity)}</td></tr>`).join('')}</tbody></table></div>
+      <div class="table-scroll"><table class="pc-mini-table"><thead><tr><th>物品</th><th>数量</th><th>最低卖价合计</th><th>最高收价合计</th></tr></thead><tbody>${given.map((i) => {
+        const p = i.is_blueprint_copy ? {} : v.price(i.type_id);
+        const cell = (x) => (x == null ? '—' : formatISK(x * i.quantity));
+        return `<tr><td>${esc(types.get(i.type_id) || 'Type ' + i.type_id)}${i.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : ''}</td><td>${formatNumber(i.quantity)}</td>
+        <td>${cell(p.sell)}</td><td>${cell(p.buy)}</td></tr>`;
+      }).join('')}</tbody></table></div>
       <h4 class="info-section-title">出价记录（${bids.length}）</h4>
       ${bids.length ? `<div class="table-scroll"><table class="pc-mini-table"><thead><tr><th>出价</th><th>时间</th></tr></thead><tbody>${bids.map((b) => `<tr><td>${formatPrice(b.amount)} ISK</td><td>${new Date(b.date_bid).toLocaleString('zh-CN', { hour12: false })}</td></tr>`).join('')}</tbody></table></div>` : '<p class="text-muted">还没有人出价</p>'}
-      <p class="text-muted valuation-note">ESI 公开出价记录不含出价人。</p>`;
+      <p class="text-muted valuation-note">物品估值按${esc(v.region.hub.name)}的最低卖价 / 最高收购价，蓝图副本不计。ESI 公开出价记录不含出价人。</p>`;
   } catch (error) {
     body.innerHTML = '<p class="text-muted">读取失败：' + esc(error.message) + '</p>';
   }

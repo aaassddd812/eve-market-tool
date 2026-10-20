@@ -66,6 +66,7 @@ export function initFitting(context) {
   initKbFits(planCtx);
   $('fitEsiModal').addEventListener('input', (e) => { if (e.target.id === 'fitEsiSearch') renderEsiList(); });
   $('fitEsiShipOnly').addEventListener('change', renderEsiList);
+  $('fitStats').addEventListener('change', (e) => { if (e.target.matches('[data-val-src]')) { app.valuation.set(e.target.value); renderStats(); } });
 }
 
 function pick(obj, keys) {
@@ -677,7 +678,8 @@ function renderStats() {
   const resRow = (label, values) => `<tr><th>${label}</th>${values.map((v) => `<td style="--r:${(v * 100).toFixed(0)}%">${(v * 100).toFixed(1)}%</td>`).join('')}</tr>`;
   const d = s.defense;
   const cap = s.capacitor;
-  const price = fitPrice();
+  refreshFitValue();
+  const v = F.val;
   box.innerHTML = `
     <section class="fit-stat-block">
       <h4>装配资源</h4>
@@ -736,8 +738,14 @@ function renderStats() {
     <section class="fit-stat-block">
       <h4>其他</h4>
       <div class="fit-kv"><span>货柜舱</span><b>${fmt(s.cargo)} m³</b></div>
-      ${price ? `<div class="fit-kv"><span>估价（全服均价）</span><b>${app.formatISK(price)} ISK</b></div>` : ''}
     </section>
+    ${v ? `<section class="fit-stat-block">
+      <h4>估价</h4>
+      <div class="fit-val-src">${app.valuation.select('data-val-src', v.region)}</div>
+      <div class="fit-kv"><span>最低卖价</span><b>${app.formatISK(v.sell)} ISK</b></div>
+      <div class="fit-kv"><span>最高收价</span><b>${app.formatISK(v.buy)} ISK</b></div>
+      <p class="fit-note">船体 + 装备 + 弹药 + 无人机 + 植入体${v.sellN < v.n ? `；${v.n - v.sellN} 种在${app.esc(v.region.hub.name)}没有卖单` : ''}</p>
+    </section>` : ''}
     ${insuranceBlock()}`;
 }
 
@@ -758,17 +766,22 @@ function duration(sec) {
   return sec.toFixed(1) + ' 秒';
 }
 
-function fitPrice() {
-  if (!F.prices?.size || !F.fit) return 0;
-  const p = (id) => F.prices.get(id) || 0;
-  let total = p(F.fit.ship);
+// 装配估价：按所选交易中心（或全宇宙）的最低卖 / 最高收，装配变化或切换来源时重新查询后重绘
+let valSeq = 0;
+function refreshFitValue() {
+  if (!F.fit) return;
+  const list = [{ type_id: F.fit.ship, quantity: 1 }];
   for (const { m } of fittedModules()) {
-    total += p(m.type);
-    if (m.charge) total += p(m.charge) * FE.chargeCount(type(m.type), type(m.charge));
+    list.push({ type_id: m.type, quantity: 1 });
+    if (m.charge) list.push({ type_id: m.charge, quantity: FE.chargeCount(type(m.type), type(m.charge)) });
   }
-  for (const d of F.fit.drones) total += p(d.type) * d.count;
-  for (const id of F.fit.implants) total += p(id);
-  return total;
+  for (const d of F.fit.drones) list.push({ type_id: d.type, quantity: d.count });
+  for (const id of F.fit.implants) list.push({ type_id: id, quantity: 1 });
+  const key = app.valuation.region().id + '|' + list.map((i) => i.type_id + 'x' + i.quantity).join(',');
+  if (F.valKey === key) return;
+  F.valKey = key;
+  const seq = ++valSeq;
+  app.valuation.items(list).then((v) => { if (seq === valSeq) { F.val = v; renderStats(); } }).catch(() => {});
 }
 
 // ---------- 交互 ----------

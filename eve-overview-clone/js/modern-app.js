@@ -334,7 +334,7 @@ function switchView(view) {
 let guidesLoading = null;
 async function openGuides() {
   try {
-    if (!guidesLoading) guidesLoading = import('./guides.js?v=v5').then((m) => {
+    if (!guidesLoading) guidesLoading = import('./guides.js?v=v6').then((m) => {
       m.initGuides({ esc, debounce, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
       return m;
     }).catch((error) => { guidesLoading = null; throw error; });
@@ -440,12 +440,12 @@ async function openCourier() {
         esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
         // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
         renderAuctions: async (box) => {
-          const a = await import('./auctions.js?v=v2');
+          const a = await import('./auctions.js?v=v3');
           if (!box.dataset.init) {
             box.dataset.init = '1';
             loadMarketRegions().catch(() => {});
             a.initAuctions({
-              esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, officialName, getMarketPriceMap, valuationCard, locationName, store, game: gameActions,
+              esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, officialName, valuation, valuationCard, locationName, store, game: gameActions,
               esiBase: ESI_BASE, datasource: SERVER.datasource, regions: REGIONS, marketRegions: () => state.marketRegions,
               resolveStructures: (ids) => resolveStructureNames(ids)
             });
@@ -476,11 +476,11 @@ async function openCourier() {
 let appraisalLoading = null;
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v8').then((m) => {
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v9').then((m) => {
       m.initAppraisal({
         esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
         getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
-        regions: REGIONS,
+        valuation,
         hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
         getCharacterSkills, getCharacterImplants,
         openEsiBind: () => { switchView('profile'); openEsiModal(); }
@@ -504,9 +504,9 @@ function loadPiModule() {
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
       renderColonies: async (box) => {
-        const c = await import('./pi-colonies.js?v=v2');
+        const c = await import('./pi-colonies.js?v=v3');
         c.initColonies({
-          esc, formatISK, formatNumber, esiAuthFetch, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, getMarketPriceMap,
+          esc, formatISK, formatNumber, esiAuthFetch, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, valuation,
           hasScopeGroup, scopeNeededHtml, openMapSystem, tokenInfo: () => state.esiToken || readEsiToken()
         });
         await c.renderColonies(box);
@@ -533,9 +533,9 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v36').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v37').then((m) => {
     m.initFitting({
-      esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance,
+      esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       openDrawer: () => { if (MOBILE_QUERY.matches) openDrawer(); },
@@ -662,7 +662,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v30').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v31').then((m) => {
     m.initKbPage({
       esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -700,9 +700,9 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v24').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v25').then((m) => {
     m.initKillboard({
-      esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance
+      esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance, valuation
     });
     killboardModule = m;
     return m;
@@ -3189,11 +3189,47 @@ function profileRow(cells, attrs = '') {
   return '<tr' + attrs + '>' + cells.map((c) => '<td>' + c + '</td>').join('') + '</tr>';
 }
 
-// ===== 资产估值：所选星域交易中心的最低卖价 / 最高收购价 =====
+// ===== 物品估值：所选交易中心（或全宇宙）的最低卖价 / 最高收购价 =====
+// 资产、合同、估价、军团资产、挖矿、行星存量、击杀详情、装配等处共用同一个选择，默认吉他（曙光服为索巴色基）。
+// 全宇宙：所有星域空间站与建筑订单里的最低卖 / 最高收，由击杀记录服务每小时汇总，只有宁静服可用
+const VAL_UNIVERSE = { id: 0, name: '所有星域', en: 'Universe', hub: { id: 0, name: '全宇宙', system: 0 }, all: true };
+const VALUATION_SOURCES = SERVER.kb ? [...REGIONS, VAL_UNIVERSE] : REGIONS;
 function valuationRegion() {
-  const id = Number(store.get('eve-valuation-region')) || state.regionId;
-  return REGIONS.find((r) => r.id === id) || REGIONS[0];
+  const v = store.get('eve-valuation-region');
+  return VALUATION_SOURCES.find((r) => String(r.id) === v) || REGIONS[0];
 }
+function setValuationRegion(id) { store.set('eve-valuation-region', String(id)); }
+// 估值来源下拉框；attrs 例如 'id="valuationRegion"' 或 'data-val-src'
+function valuationSelect(attrs, region = valuationRegion()) {
+  return '<label class="select-wrap val-src" title="估值使用的价格：交易中心空间站的最低卖价 / 最高收购价">' +
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>' +
+    '<select ' + attrs + ' class="region-select" aria-label="估值价格来源">' +
+      VALUATION_SOURCES.map((r) => `<option value="${r.id}"${r.id === region.id ? ' selected' : ''}>${esc(r.hub.name)} · ${esc(r.name)}</option>`).join('') +
+    '</select></label>';
+}
+// 一组物品（[{ type_id, quantity, is_blueprint_copy }]）按当前来源估值：{ region, sell, buy, n, sellN, buyN, price(id) }
+async function valuateItems(items, onProgress) {
+  const region = valuationRegion();
+  const list = items.filter((i) => !i.is_blueprint_copy && i.type_id);
+  const ids = [...new Set(list.map((i) => Number(i.type_id)))];
+  await fetchHubPrices(region, ids, onProgress);
+  const r = { region, sell: 0, buy: 0, n: ids.length, sellN: 0, buyN: 0, price: (id) => hubPrice(region, id) || {} };
+  for (const i of list) {
+    const p = hubPrice(region, i.type_id), q = valuationQuantity(i.quantity);
+    if (p?.sell != null) r.sell += p.sell * q;
+    if (p?.buy != null) r.buy += p.buy * q;
+  }
+  r.sellN = ids.filter((t) => hubPrice(region, t)?.sell != null).length;
+  r.buyN = ids.filter((t) => hubPrice(region, t)?.buy != null).length;
+  return r;
+}
+// 两张估值卡片：最低卖 / 最高收
+function valuationCards(v, label = '物品估值') {
+  const where = esc(v.region.hub.name);
+  return valuationCard(label + ' · 最低卖价', formatISK(v.sell) + ' ISK', `${v.sellN}/${v.n} 种在 ${where} 有卖单`, 'is-sell') +
+    valuationCard(label + ' · 最高收价', formatISK(v.buy) + ' ISK', `${v.buyN}/${v.n} 种在 ${where} 有收单`, 'is-buy');
+}
+const valuation = { sources: VALUATION_SOURCES, region: valuationRegion, set: setValuationRegion, select: valuationSelect, items: valuateItems, cards: valuationCards };
 
 // regionId:typeId -> { sell, buy, at }；保存在本地 12 小时，重新打开页面不必重查。点「刷新行情」清空当前市场
 const HUB_PRICE_KEY = serverKey('eve-hub-prices-v2');   // v2：伊甸币改查全服统一市场，旧缓存里是空价格
@@ -3241,13 +3277,41 @@ async function fetchHubPrices(region, typeIds, onProgress) {
   waiting.forEach((p) => p.then(() => onProgress?.(++done, typeIds.length)));
   const resolvers = new Map();
   for (const t of todo) state.hubPriceInflight.set(keyOf(t), new Promise((res) => resolvers.set(t, res)));
+  const settle = (typeId, entry) => {
+    state.hubPriceCache.set(keyOf(typeId), entry);
+    state.hubPriceInflight.delete(keyOf(typeId));
+    resolvers.get(typeId)();
+    onProgress?.(++done, typeIds.length);
+  };
+  let rest = todo;
+  // 宁静服：击杀记录服务每小时汇总全部订单，一次查 200 种；服务不可用（或旧版不支持 hub）时退回逐个物品查 ESI
+  if (SERVER.kb) {
+    const viaServer = todo.filter((t) => !GLOBAL_MARKET_TYPES.has(Number(t)));
+    const ok = new Set();
+    for (let i = 0; i < viaServer.length; i += 200) {
+      const batch = viaServer.slice(i, i + 200);
+      let data = null;
+      try {
+        const res = await fetch(`/api/v1/prices?types=${batch.join(',')}&hub=${region.all ? 'all' : region.id}`);
+        if (res.ok) data = await res.json();
+      } catch { /* 走 ESI */ }
+      if (!data?.hub || !data.types) break;
+      for (const t of batch) {
+        const p = data.types[t] || {};
+        settle(t, { sell: p.sell ?? null, buy: p.buy ?? null, at: Date.now() });
+        ok.add(t);
+      }
+    }
+    rest = todo.filter((t) => !ok.has(t));
+  }
   let cursor = 0;
   const worker = async () => {
-    while (cursor < todo.length) {
-      const typeId = todo[cursor++];
+    while (cursor < rest.length) {
+      const typeId = rest[cursor++];
       let entry = { sell: null, buy: null, at: Date.now() };
       try {
         const global = GLOBAL_MARKET_TYPES.has(Number(typeId));   // 伊甸币：全服统一市场，不限交易中心
+        if (region.all && !global) throw new Error('全宇宙价格需要击杀记录服务');
         const orders = await fetchESIPaged(`/markets/${global ? GLOBAL_MARKET_REGION : region.id}/orders/?order_type=all&type_id=${typeId}`);
         for (const o of orders) {
           if (!global && o.location_id !== region.hub.id) continue;
@@ -3255,10 +3319,7 @@ async function fetchHubPrices(region, typeIds, onProgress) {
           else entry.sell = entry.sell === null ? o.price : Math.min(entry.sell, o.price);
         }
       } catch { entry = { sell: null, buy: null, failed: true }; }
-      state.hubPriceCache.set(keyOf(typeId), entry);
-      state.hubPriceInflight.delete(keyOf(typeId));
-      resolvers.get(typeId)();
-      onProgress?.(++done, typeIds.length);
+      settle(typeId, entry);
     }
   };
   await Promise.all([...Array.from({ length: 8 }, worker), ...waiting]);
@@ -3414,11 +3475,7 @@ async function ensureAssetPrices(box, assets, seq) {
 function assetToolbar(region, extra = '') {
   return '<div class="valuation-toolbar">' + extra +
     '<span class="toolbar-spacer"></span>' +
-    '<label class="select-wrap" title="估价使用的交易中心">' +
-      '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>' +
-      '<select id="valuationRegion" class="region-select" aria-label="估价市场">' +
-        REGIONS.map((r) => `<option value="${r.id}"${r.id === region.id ? ' selected' : ''}>${esc(r.hub.name)} · ${esc(r.name)}</option>`).join('') +
-      '</select></label>' +
+    valuationSelect('id="valuationRegion"', region) +
     '<button class="btn btn-ghost" id="tradeFeeBtn" title="技能与交易税费：估值卡片的税后金额按此计算">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 5 5 19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg><span>' + esc(TF.summary()) + '</span></button>' +
     '<button class="btn" id="refreshPricesBtn" title="清除缓存并重新查询行情">' +
@@ -3429,7 +3486,7 @@ function assetToolbar(region, extra = '') {
 // 估价市场选择 + 刷新行情；资产页与合同详情共用
 function bindAssetToolbar(region, tab = 'assets') {
   $('valuationRegion').addEventListener('change', (e) => {
-    store.set('eve-valuation-region', e.target.value);
+    setValuationRegion(e.target.value);
     renderProfileTab(tab);
   });
   $('tradeFeeBtn')?.addEventListener('click', () => TF.openFeeDialog());
@@ -3692,10 +3749,10 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v1').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v2').then((m) => {
     m.initProfileMore({
       esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
-      resolveStructureNames, locationName, officialName, gameImage, valuationCard, getCharacterSkills, getMarketPriceMap,
+      resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
       openMapSystem, game: gameActions, hasScopeGroup, scopeNeededHtml,
       tokenInfo: () => state.esiToken || readEsiToken(),
       hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),

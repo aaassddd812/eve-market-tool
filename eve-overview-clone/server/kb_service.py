@@ -75,6 +75,8 @@ FIT_FLAGS = [("high", range(27, 35)), ("mid", range(19, 27)), ("low", range(11, 
 UA = "EVE-Market-Tool KB service (+https://github.com/wbw5780/eve-market-tool)"
 FORGE = 10000002
 JITA_44 = 60003760
+# 四族贸易中心（星域 → 交易中心空间站），开放接口 prices 的 hub 参数用星域 ID；全宇宙用 all（库里记作 0）
+HUB_STATIONS = {10000002: 60003760, 10000043: 60008494, 10000032: 60011866, 10000030: 60004588, 10000042: 60005686}
 PRICE_TTL = 3600            # 价格每小时刷新
 CONTRACT_TTL = 6 * 3600     # 公开合同估价每 6 小时刷新
 CONTRACT_MIN_VOLUME = 500_000   # 只看体积 ≥ 50 万 m³ 的物品交换合同（旗舰 / 建筑等）
@@ -190,6 +192,8 @@ CREATE INDEX IF NOT EXISTS att_alliance ON attackers(alliance, time);
 CREATE INDEX IF NOT EXISTS att_km ON attackers(km);
 CREATE TABLE IF NOT EXISTS names(id INTEGER PRIMARY KEY, name TEXT, category TEXT, lname TEXT);
 CREATE TABLE IF NOT EXISTS prices(type_id INTEGER PRIMARY KEY, sell REAL, buy REAL, avg REAL);
+-- 各贸易中心与全宇宙（hub = 0）的最低卖价 / 最高收购价
+CREATE TABLE IF NOT EXISTS hub_prices(hub INTEGER, type_id INTEGER, sell REAL, buy REAL, PRIMARY KEY(hub, type_id)) WITHOUT ROWID;
 -- 吉他没有卖单的物品（主要是旗舰）：全服公开合同里扣除附带物品后的最低价
 CREATE TABLE IF NOT EXISTS contract_prices(type_id INTEGER PRIMARY KEY, price REAL, contract_id INTEGER, region_id INTEGER, at INTEGER);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -215,6 +219,9 @@ class Store:
         self.adjusted = {}
         for type_id, sell, buy, avg in conn.execute("SELECT type_id, sell, buy, avg FROM prices"):
             self.prices[type_id] = (sell, buy, avg)
+        self.hub_prices = {}
+        for hub, type_id, sell, buy in conn.execute("SELECT hub, type_id, sell, buy FROM hub_prices"):
+            self.hub_prices.setdefault(hub, {})[type_id] = (sell, buy)
         self.contract_prices = dict(conn.execute("SELECT type_id, price FROM contract_prices"))
         # 公开合同里的蓝图：type_id -> {"o": [[价格, ME, TE, 合同, 星系]], "c": [[每流程价, 流程, 价格, ME, TE, 合同, 星系]]}（仅内存）
         self.bp_contracts = {}
@@ -225,7 +232,7 @@ class Store:
         # 实时收录的新击杀（仅内存）：供星图闪烁与弹幕使用，按入库顺序编号
         self.live_buf = collections.deque(maxlen=LIVE_BUFFER)
         self.live_n = 0
-        self.state = {"live_mode": None, "last_live": None, "prices_updated": self.meta("prices_updated"), "backfill": "等待中"}
+        self.state = {"live_mode": None, "last_live": None, "prices_updated": self.meta("prices_updated"), "hub_prices_updated": self.meta("hub_prices_updated"), "backfill": "等待中"}
 
     @staticmethod
     def migrate(conn):
@@ -396,29 +403,46 @@ class Workers:
         for target in (self.price_loop, self.contract_loop, self.bp_contract_loop, self.backfill, self.live_loop, self.names_loop):
             threading.Thread(target=target, daemon=True).start()
 
-    # ---- 价格：伏尔戈全量订单 → 吉他 4-4 最低卖 / 最高收
-    def refresh_prices(self):
-        first, headers = get_json(f"{ESI}/markets/{FORGE}/orders/?order_type=all&page=1")
+    # ---- 价格：伏尔戈全量订单 → 吉他 4-4 最低卖 / 最高收；随后读全宇宙订单 → 其余贸易中心与全宇宙的最低卖 / 最高收
+    @staticmethod
+    def region_orders(rid, handle):
+        """逐页读取星域全部订单交给 handle，返回页数"""
+        first, headers = get_json(f"{ESI}/markets/{rid}/orders/?order_type=all&page=1")
+        handle(first or [])
         pages = int(headers.get("X-Pages") or 1)
-        orders = list(first)
 
         def page(n):
-            data, _ = get_json(f"{ESI}/markets/{FORGE}/orders/?order_type=all&page={n}")
-            return data
+            data, _ = get_json(f"{ESI}/markets/{rid}/orders/?order_type=all&page={n}")
+            return data or []
 
         with concurrent.futures.ThreadPoolExecutor(8) as pool:
             for data in pool.map(page, range(2, pages + 1)):
-                orders.extend(data)
-        sell, buy = {}, {}
-        for o in orders:
-            if o["location_id"] != JITA_44:
-                continue
-            t, p = o["type_id"], o["price"]
-            if o["is_buy_order"]:
-                if p > buy.get(t, 0):
-                    buy[t] = p
-            elif t not in sell or p < sell[t]:
-                sell[t] = p
+                handle(data)
+        return pages
+
+    def refresh_prices(self):
+        uni_sell, uni_buy = {}, {}                        # 全宇宙
+        hub_sell = {h: {} for h in HUB_STATIONS}
+        hub_buy = {h: {} for h in HUB_STATIONS}
+        station_hub = {st: h for h, st in HUB_STATIONS.items()}
+
+        def handle(orders):
+            for o in orders:
+                t, p = o["type_id"], o["price"]
+                h = station_hub.get(o["location_id"])
+                if o["is_buy_order"]:
+                    if p > uni_buy.get(t, 0):
+                        uni_buy[t] = p
+                    if h and p > hub_buy[h].get(t, 0):
+                        hub_buy[h][t] = p
+                else:
+                    if t not in uni_sell or p < uni_sell[t]:
+                        uni_sell[t] = p
+                    if h and (t not in hub_sell[h] or p < hub_sell[h][t]):
+                        hub_sell[h][t] = p
+
+        pages = self.region_orders(FORGE, handle)
+        sell, buy = hub_sell[FORGE], hub_buy[FORGE]
         avg_list, _ = get_json(f"{ESI}/markets/prices/")
         avg = {x["type_id"]: x.get("average_price") or x.get("adjusted_price") for x in avg_list}
         self.store.adjusted = {x["type_id"]: x["adjusted_price"] for x in avg_list if x.get("adjusted_price")}   # 制造任务的 EIV 用
@@ -434,6 +458,33 @@ class Workers:
         self.store.meta("prices_updated", stamp)
         self.store.state["prices_updated"] = stamp
         log.info("价格已更新：%d 页订单，%d 种物品有吉他行情", pages, len(set(sell) | set(buy)))
+        self.prices_ready.set()
+
+        # 其余星域：某个星域读取失败时跳过（全宇宙价格少了这个星域），不影响吉他价格
+        regions, _ = get_json(f"{ESI}/universe/regions/")
+        failed = []
+        for rid in regions:
+            if rid >= 11000000 or rid == FORGE:
+                continue
+            try:
+                pages += self.region_orders(rid, handle)
+            except urllib.error.HTTPError as e:
+                if e.code != 404:
+                    failed.append(rid)
+            except Exception:
+                failed.append(rid)
+        hubs = {0: (uni_sell, uni_buy), **{h: (hub_sell[h], hub_buy[h]) for h in HUB_STATIONS}}
+        rows = [(h, t, sl.get(t), bl.get(t)) for h, (sl, bl) in hubs.items() for t in set(sl) | set(bl)]
+        with self.store.write_lock:
+            c.execute("DELETE FROM hub_prices")
+            c.executemany("INSERT INTO hub_prices VALUES(?,?,?,?)", rows)
+            c.commit()
+        self.store.hub_prices = {h: {t: (sl.get(t), bl.get(t)) for t in set(sl) | set(bl)} for h, (sl, bl) in hubs.items()}
+        stamp = iso(time.time())
+        self.store.meta("hub_prices_updated", stamp)
+        self.store.state["hub_prices_updated"] = stamp
+        log.info("贸易中心 / 全宇宙价格已更新：共 %d 页订单，%d 种物品%s", pages, len(set(uni_sell) | set(uni_buy)),
+                 f"，{len(failed)} 个星域读取失败" if failed else "")
 
     def price_loop(self):
         while True:
@@ -1418,19 +1469,28 @@ class Api:
             g["value"] = round(g["value"] / g["n"])
         return {"ship": ship, "days": days, "total": total, "scanned": len(rows), "fits": fits}
 
-    # 开放接口 GET /api/v1/prices?types=：吉他最低卖价、最高收购价、全服均价与本站估价
+    # 开放接口 GET /api/v1/prices?types=&hub=：最低卖价、最高收购价、全服均价与本站估价
+    # hub 默认吉他；可选四族贸易中心所在星域 ID（10000043 艾玛 / 10000032 多迪谢 / 10000030 伦斯 / 10000042 赫克）或 all（全宇宙）
     def prices(self, q):
         ids = [int(x) for x in str(q.get("types", "")).split(",") if x.strip().isdigit()]
         if not ids:
             raise ValueError("缺少 types")
         if len(ids) > PRICE_MAX_TYPES:
             raise ValueError(f"types 最多 {PRICE_MAX_TYPES} 个")
+        hub = str(q.get("hub") or FORGE)
+        hub = 0 if hub == "all" else int(hub) if hub.isdigit() else -1
+        if hub != 0 and hub not in HUB_STATIONS:
+            raise ValueError("hub 只能是 all 或 " + " / ".join(map(str, HUB_STATIONS)))
+        table = None if hub == FORGE else self.store.hub_prices.get(hub, {})
         out = {}
         for t in dict.fromkeys(ids):
             sell, buy, avg = self.store.prices.get(t) or (None, None, None)
+            if table is not None:
+                sell, buy = table.get(t) or (None, None)
             est = self.store.price(t)
             out[str(t)] = {"sell": sell, "buy": buy, "average": round(avg, 2) if avg else None, "estimate": round(est, 2) if est else None}
-        return {"updated": self.store.state.get("prices_updated"), "types": out}
+        updated = self.store.state.get("prices_updated" if table is None else "hub_prices_updated")
+        return {"hub": "all" if hub == 0 else hub, "updated": updated, "types": out}
 
     def couriers(self, q):
         """全服公开快递合同（EVE Ref 快照，约 30 分钟更新）；服务刚启动还没读到快照时 list 为空、at 为 null"""

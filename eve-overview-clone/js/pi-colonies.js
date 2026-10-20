@@ -3,7 +3,7 @@
 // 需要 esi-planets.manage_planets.v1（「行星殖民地」权限）。ESI 数据在游戏里打开该行星时才更新（last_update）。
 // 提取器到期时间、产物与每周期产量直接来自 ESI；仓库存量按 ESI 全服均价估值。
 
-let ctx;   // esc, formatISK, formatNumber, esiAuthFetch, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, getMarketPriceMap, hasScopeGroup, scopeNeededHtml, tokenInfo, openMapSystem
+let ctx;   // esc, formatISK, formatNumber, esiAuthFetch, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, valuation, hasScopeGroup, scopeNeededHtml, tokenInfo, openMapSystem
 const PLANET_TYPE = { temperate: '温和', barren: '贫瘠', oceanic: '海洋', ice: '冰体', gas: '气体', lava: '熔岩', storm: '风暴', plasma: '等离子' };
 let cache = null;   // { id, at, promise }
 
@@ -23,10 +23,9 @@ async function load(force) {
   if (!force && cache && cache.id === id && Date.now() - cache.at < 5 * 60e3) return cache.promise;
   const promise = (async () => {
     const list = await ctx.esiAuthFetch('/characters/' + id + '/planets/');
-    const [layouts, names, prices] = await Promise.all([
+    const [layouts, names] = await Promise.all([
       Promise.all(list.map((p) => ctx.esiAuthFetch(`/characters/${id}/planets/${p.planet_id}/`).catch((e) => ({ error: e.message })))),
-      Promise.all(list.map((p) => ctx.fetchESI(`/universe/planets/${p.planet_id}/?language=zh`).then((x) => x.name).catch(() => '行星 ' + p.planet_id))),
-      ctx.getMarketPriceMap()
+      Promise.all(list.map((p) => ctx.fetchESI(`/universe/planets/${p.planet_id}/?language=zh`).then((x) => x.name).catch(() => '行星 ' + p.planet_id)))
     ]);
     const typeIds = new Set();
     const schematics = new Set();
@@ -42,7 +41,7 @@ async function load(force) {
     for (const sid of schematics) if (output.has(sid)) typeIds.add(output.get(sid));
     const types = await ctx.resolveTypeNames([...typeIds]);
     const schem = [...schematics].map((sid) => [sid, output.has(sid) ? types.get(output.get(sid)) || '配方 ' + sid : '配方 ' + sid]);
-    return { list, layouts, names, prices, types, schematics: new Map(schem) };
+    return { list, layouts, names, types, schematics: new Map(schem) };
   })();
   cache = { id, at: Date.now(), promise };
   promise.catch(() => { if (cache?.promise === promise) cache = null; });
@@ -59,7 +58,7 @@ function planetCard(p, layout, name, d) {
   const factories = pins.filter((x) => x.schematic_id);
   const stores = new Map();
   for (const pin of pins) if (!pin.schematic_id) for (const c of pin.contents || []) stores.set(c.type_id, (stores.get(c.type_id) || 0) + c.amount);
-  const storeValue = [...stores].reduce((t, [id, n]) => t + (d.prices.get(id) || 0) * n, 0);
+  const storeValue = [...stores].reduce((t, [id, n]) => t + (d.val.price(id).sell || 0) * n, 0);
   const now = Date.now();
   const exRows = extractors.map((x) => {
     const e = x.extractor_details;
@@ -78,7 +77,7 @@ function planetCard(p, layout, name, d) {
       <button class="link-btn" data-col-sys="${p.solar_system_id}">${esc(ctx.officialName(p.solar_system_id) || p.solar_system_id)}</button></div>
     ${extractors.length ? `<div class="col-sec"><h5>提取器</h5><ul class="col-list">${exRows}</ul></div>` : ''}
     ${factoryGroups.size ? `<div class="col-sec"><h5>工厂</h5><div class="col-chips">${[...factoryGroups].map(([sid, n]) => `<span class="pill">${esc(d.schematics.get(sid))} × ${n}</span>`).join(' ')}</div></div>` : ''}
-    ${stores.size ? `<div class="col-sec"><h5>仓库 / 发射台存量 <small>≈ ${formatISK(storeValue)} ISK</small></h5><ul class="col-list">${[...stores].sort((a, b) => b[1] - a[1]).map(([id, n]) => `<li>${icon(id)}<span>${esc(type(id))}</span><b>${formatNumber(n)}</b></li>`).join('')}</ul></div>` : ''}
+    ${stores.size ? `<div class="col-sec"><h5>仓库 / 发射台存量 <small>最低卖价 ≈ ${formatISK(storeValue)} ISK</small></h5><ul class="col-list">${[...stores].sort((a, b) => b[1] - a[1]).map(([id, n]) => `<li>${icon(id)}<span>${esc(type(id))}</span><b>${formatNumber(n)}</b></li>`).join('')}</ul></div>` : ''}
     <p class="col-foot">${updated ? '数据更新于 ' + updated.toLocaleString('zh-CN', { hour12: false }) + '（在游戏里打开这颗行星后才会刷新）' : ''}</p>
   </div>`;
 }
@@ -95,16 +94,19 @@ export async function renderColonies(box, force = false) {
   const expiries = d.layouts.flatMap((l) => (l.pins || []).filter((x) => x.extractor_details && x.expiry_time).map((x) => new Date(x.expiry_time).getTime()));
   const stopped = expiries.filter((t) => t <= now).length;
   const next = expiries.filter((t) => t > now).sort((a, b) => a - b)[0];
-  let value = 0;
-  for (const l of d.layouts) for (const pin of l.pins || []) if (!pin.schematic_id) for (const c of pin.contents || []) value += (d.prices.get(c.type_id) || 0) * c.amount;
+  // 仓库与发射台里的存量，按所选交易中心估值
+  const stock = [];
+  for (const l of d.layouts) for (const pin of l.pins || []) if (!pin.schematic_id) for (const c of pin.contents || []) stock.push({ type_id: c.type_id, quantity: c.amount });
+  const val = await ctx.valuation.items(stock);
+  d = { ...d, val };
   box.innerHTML =
     '<div class="valuation-grid">' +
       ctx.valuationCard('殖民地', d.list.length + ' 个', '') +
       ctx.valuationCard('提取器', expiries.length + ' 台', stopped ? `${stopped} 台已停止` : '全部运行中', stopped ? 'is-sell' : 'is-buy') +
       ctx.valuationCard('最早到期', next ? left(next - now) + '后' : '—', next ? new Date(next).toLocaleString('zh-CN', { hour12: false }) : '') +
-      ctx.valuationCard('存量估值', formatISK(value) + ' ISK', '仓库与发射台，按全服均价') +
+      ctx.valuation.cards(val, '存量估值') +
     '</div>' +
-    `<div class="valuation-toolbar section-gap"><span class="toolbar-spacer"></span><button class="btn btn-ghost" data-col-reload>刷新</button></div>` +
+    `<div class="valuation-toolbar section-gap">${ctx.valuation.select('data-val-src', val.region)}<span class="toolbar-spacer"></span><button class="btn btn-ghost" data-col-reload>刷新</button></div>` +
     '<div class="col-grid">' + d.list.map((p, i) => planetCard(p, d.layouts[i], d.names[i], d)).join('') + '</div>';
   if (!box.dataset.colBound) {
     box.dataset.colBound = '1';
@@ -113,5 +115,6 @@ export async function renderColonies(box, force = false) {
       const sys = e.target.closest('[data-col-sys]');
       if (sys) ctx.openMapSystem(Number(sys.dataset.colSys));
     });
+    box.addEventListener('change', (e) => { if (e.target.matches('[data-val-src]')) { ctx.valuation.set(e.target.value); renderColonies(box); } });
   }
 }
