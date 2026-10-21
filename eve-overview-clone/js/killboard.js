@@ -205,8 +205,8 @@ export function killTableHtml(kills, { me = null, showSide = false } = {}) {
     const loss = me != null && v.character_id === me;
     return `<tr class="kb-row" data-kill="${k.killmail_id}" tabindex="0">
         ${showSide ? `<td class="kb-side"><span class="pill ${loss ? 'sell' : 'buy'}">${loss ? '损失' : '击杀'}</span></td>` : ''}
-        <td class="kb-ship"><img src="${img(`types/${v.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
-          <span><strong>${app.esc(typeName(v.ship_type_id))}</strong>${killTags(k.zkb)}</span></td>
+        <td class="kb-ship"><span class="kb-ship-inner"><img src="${img(`types/${v.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
+          <span><strong>${app.esc(typeName(v.ship_type_id))}</strong>${killTags(k.zkb)}</span></span></td>
         <td class="kb-party kb-victim-cell"><strong>${app.esc(partyName(v.character_id) || partyName(v.corporation_id))}</strong>
           <span class="cell-sub">${app.esc(partyName(v.corporation_id))}${v.alliance_id ? ' · ' + app.esc(partyName(v.alliance_id)) : ''}</span></td>
         <td class="kb-party kb-final-cell"><strong>${app.esc(partyName(fb.character_id) || typeName(fb.ship_type_id))}</strong>

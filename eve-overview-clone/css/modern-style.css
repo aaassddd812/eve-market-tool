@@ -2023,7 +2023,8 @@ td.loc {
 .kb-row { cursor: pointer; }
 .kb-row:hover td { background: var(--accent-soft) !important; }
 .kb-row:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
-.kb-ship { display: flex; align-items: center; gap: 10px; min-width: 180px; }
+.kb-ship { min-width: 180px; }
+.kb-ship-inner { display: flex; align-items: center; gap: 10px; }
 .kb-ship img { border-radius: 6px; background: #0d1219; flex-shrink: 0; }
 .kb-ship strong, .kb-party strong, .kb-loc strong { display: block; font-weight: 500; white-space: nowrap; }
 .kb-party, .kb-loc { white-space: normal; min-width: 120px; }
