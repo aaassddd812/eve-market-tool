@@ -1,0 +1,206 @@
+[
+  {
+    "url": "https://mutamarket.com/api/openapi.json",
+    "method": "GET",
+    "status": 200,
+    "seconds": 2.556,
+    "file": "openapi.json",
+    "sha256": "ecfbf0900a6dde7cda5b472df8c2cfb5be2cadbb4e801b2b36563dfbd015dca1",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "observed_at": "2026-10-21T08:24:54.916408+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/api/estimator-statistics",
+    "method": "GET",
+    "status": 200,
+    "seconds": 2.98,
+    "file": "estimator-statistics.json",
+    "sha256": "1ec15bab8c040d038ae29a67a606f5f9bc9fede52f1bc54a99f35f66fd29cabb",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "observed_at": "2026-10-21T08:24:57.896479+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/api/abyssal-type-statistics",
+    "method": "GET",
+    "status": 200,
+    "seconds": 6.027,
+    "file": "abyssal-type-statistics.json",
+    "sha256": "61c7018c317a85f7a9e5be21c1d94681dc778092fc8fb87a49a9e2d952f32310",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "observed_at": "2026-10-21T08:25:03.924123+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/api/modules/1056160153322",
+    "method": "GET",
+    "status": 200,
+    "seconds": 3.435,
+    "file": "sample-module.json",
+    "sha256": "dc5a08a047ae5b9db65242261e0069ed296e610ab1232e8891397fd66f3c08ce",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "observed_at": "2026-10-21T08:25:07.363130+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/api/modules/type/48439",
+    "method": "GET",
+    "status": 200,
+    "seconds": 5.136,
+    "file": "sample-type-list.json",
+    "sha256": "591cd8c4d05e81b9ea029a1a84f1fe96995d72fa401462bbc6cea6b50267e441",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "observed_at": "2026-10-21T08:25:12.501238+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/modules/add",
+    "method": "GET",
+    "status": 200,
+    "seconds": 2.489,
+    "file": "appraise.html",
+    "sha256": "608e28442f58f8f4a759bf9daf5dab9a4718d4171ae28bb0b66776fc53a1abd8",
+    "headers": {
+      "content-type": "text/html"
+    },
+    "observed_at": "2026-10-21T08:25:14.992517+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/_app/immutable/entry/app.CeN6U48t.js",
+    "method": "GET",
+    "status": 200,
+    "seconds": 1.401,
+    "file": "scripts/app.CeN6U48t.js",
+    "sha256": "bf4305766beed179c79abe8b5f22eb1ccdbee828a0572bd2b33c0dbcb537e0e0",
+    "headers": {
+      "cache-control": "public,max-age=31536000,immutable",
+      "content-type": "text/javascript",
+      "vary": "Accept-Encoding"
+    },
+    "observed_at": "2026-10-21T08:25:16.394519+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/_app/immutable/nodes/0.B-pGPmjp.js",
+    "method": "GET",
+    "status": 200,
+    "seconds": 2.521,
+    "file": "scripts/0.B-pGPmjp.js",
+    "sha256": "86a5d1fed0c089f90ec11be0cb5a5ece94b5e3402c31f1a85883c79f73733c8f",
+    "headers": {
+      "cache-control": "public,max-age=31536000,immutable",
+      "content-type": "text/javascript",
+      "vary": "Accept-Encoding"
+    },
+    "observed_at": "2026-10-21T08:25:18.915569+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/_app/immutable/nodes/30.apuUpUIS.js",
+    "method": "GET",
+    "status": 200,
+    "seconds": 1.878,
+    "file": "scripts/30.apuUpUIS.js",
+    "sha256": "c5c2b0408f4438197528143fffad07bec7841e4991851531e47f3fbb0db03a5e",
+    "headers": {
+      "cache-control": "public,max-age=31536000,immutable",
+      "content-type": "text/javascript",
+      "vary": "Accept-Encoding"
+    },
+    "observed_at": "2026-10-21T08:25:20.794324+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/documentation/appraisal",
+    "method": "GET",
+    "status": 200,
+    "seconds": 3.171,
+    "file": "doc-appraisal.html",
+    "sha256": "f4f21f621120977d83eb65c1a48b4b883f496827bf637fa95cf5bf4c06df090f",
+    "headers": {
+      "content-type": "text/html"
+    },
+    "observed_at": "2026-10-21T08:25:23.965860+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/documentation/api-overview",
+    "method": "GET",
+    "status": 200,
+    "seconds": 2.191,
+    "file": "doc-api-overview.html",
+    "sha256": "7e890e98c52eb6ffe25c2639df8cc1286eb54611174daf2285630b61513f57b7",
+    "headers": {
+      "content-type": "text/html"
+    },
+    "observed_at": "2026-10-21T08:25:26.156648+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/documentation/api-modules",
+    "method": "GET",
+    "status": 404,
+    "seconds": 3.267,
+    "file": "doc-api-modules.html",
+    "sha256": "765ebe01c7967b885fb38a9e4486a2671fb1b17e04719b328a0e426ac1c113be",
+    "headers": {
+      "content-type": "text/html"
+    },
+    "observed_at": "2026-10-21T08:25:29.423959+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/api/modules",
+    "method": "POST",
+    "status": 200,
+    "seconds": 1.748,
+    "file": "sample-refresh.json",
+    "sha256": "dc5a08a047ae5b9db65242261e0069ed296e610ab1232e8891397fd66f3c08ce",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "observed_at": "2026-10-21T08:26:29.180422+00:00"
+  },
+  {
+    "url": "https://esi.evetech.net/latest/dogma/dynamic/items/48439/1056160153322/",
+    "method": "GET",
+    "status": 200,
+    "seconds": 1.318,
+    "file": "sample-esi.json",
+    "sha256": "90e9ceec6243384445cd9690381a8cc66a0f2e2c7cc7c592bbe7405352028df4",
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "access-control-allow-origin": "*",
+      "cache-control": "public",
+      "vary": "X-Compatibility-Date"
+    },
+    "observed_at": "2026-10-21T08:26:30.499081+00:00"
+  },
+  {
+    "url": "https://mutamarket.com/api/modules/type/49738",
+    "method": "GET",
+    "status": 200,
+    "seconds": 5.339,
+    "file": "bcs-type-list.json",
+    "sha256": "ccb4255a27f453e3091d5fda34b1c937af42cfb1e64cac92800e4cee8eaeb0fa",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "observed_at": "2026-10-21T08:26:35.838263+00:00"
+  },
+  {
+    "url": "https://esi.evetech.net/latest/dogma/dynamic/items/49738/1056163236300/",
+    "method": "GET",
+    "status": 200,
+    "seconds": 1.457,
+    "file": "bcs-esi.json",
+    "sha256": "23be91964cd7265cd2e1af79ba90e6dd303fd415aff05c7a2ea6c74370490508",
+    "headers": {
+      "content-type": "application/json; charset=UTF-8",
+      "access-control-allow-origin": "*",
+      "cache-control": "public",
+      "vary": "X-Compatibility-Date"
+    },
+    "observed_at": "2026-10-21T08:26:37.302725+00:00"
+  }
+]

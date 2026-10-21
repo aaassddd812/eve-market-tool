@@ -1,0 +1,40 @@
+{
+  "item_id": 1056160153322,
+  "type": {
+    "id": 48439,
+    "name": "Large Abyssal Cap Battery"
+  },
+  "source_type": {
+    "id": 41220,
+    "name": "Thukker Large Cap Battery",
+    "meta_group": "Faction",
+    "meta_group_id": 4,
+    "published": true
+  },
+  "mutaplasmid": {
+    "id": 85514,
+    "name": "Glorified Gravid Large Cap Battery Mutaplasmid"
+  },
+  "estimated_value": 115370770.63225992,
+  "estimated_value_updated_at": "2026-10-20 13:03:59.312113+00",
+  "asking_price": 105000000.0,
+  "attribute_count": 4,
+  "model": {
+    "id": 37,
+    "type_id": 48439,
+    "name": "Large Abyssal Cap Battery",
+    "data_count": 13904,
+    "r2": 0.7877856708985453,
+    "mae": 111187387.72054966,
+    "nmae": 25.346447819204503,
+    "last_trained_at": "2026-10-20 09:38:08.912578+00",
+    "data_statistics": {
+      "Faction": 13379,
+      "Storyline": 136,
+      "Tech I": 198,
+      "Tech II": 191
+    },
+    "created_at": "2024-11-25 15:02:07+00",
+    "updated_at": "2026-10-20 09:38:08.912578+00"
+  }
+}

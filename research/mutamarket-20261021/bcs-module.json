@@ -1,0 +1,161 @@
+{
+  "data": {
+    "id": 1056163236300,
+    "type": {
+      "id": 49738,
+      "name": "Abyssal Ballistic Control System"
+    },
+    "creator": {
+      "id": 2120977665,
+      "slug": "lirimoon-2120977665",
+      "name": "LiriMoon",
+      "description": null,
+      "has_premium": false,
+      "corporation_id": null
+    },
+    "mutated_attributes": [
+      {
+        "id": 50,
+        "name": "cpu",
+        "display_name": "CPU usage",
+        "value": 50.66799830436707,
+        "base_value": 40.0,
+        "fraction": -0.889,
+        "fraction_type": -0.48491,
+        "fraction_absolute": 0.2969547384286604,
+        "bar": 0,
+        "is_derived": false,
+        "unit": {
+          "id": 106,
+          "name": "Teraflops",
+          "display_name": "tf"
+        },
+        "is_virtual": false,
+        "type_band": [
+          0.5454545060465125,
+          0.5999999046325684
+        ]
+      },
+      {
+        "id": 1255,
+        "name": "droneDamageBonus",
+        "display_name": "Drone Damage Bonus",
+        "value": 0.0,
+        "base_value": 0.0,
+        "fraction": 0.0,
+        "fraction_type": -0.0,
+        "fraction_absolute": -2.0,
+        "bar": 0,
+        "is_derived": false,
+        "unit": {
+          "id": 105,
+          "name": "Percentage",
+          "display_name": "%"
+        },
+        "is_virtual": true,
+        "type_band": null
+      },
+      {
+        "id": 213,
+        "name": "missileDamageMultiplierBonus",
+        "display_name": "Missile Damage Bonus",
+        "value": 1.105060049200058,
+        "base_value": 1.1,
+        "fraction": 0.32857,
+        "fraction_type": 0.184,
+        "fraction_absolute": 0.47409433346927493,
+        "bar": 0,
+        "is_derived": false,
+        "unit": {
+          "id": 109,
+          "name": "Modifier Percent",
+          "display_name": "%"
+        },
+        "is_virtual": false,
+        "type_band": [
+          0.43999952316238705,
+          0.5600028610256778
+        ]
+      },
+      {
+        "id": 204,
+        "name": "speedMultiplier",
+        "display_name": "Rate of Fire Bonus",
+        "value": 0.8849312596023083,
+        "base_value": 0.895,
+        "fraction": 0.5625,
+        "fraction_type": 0.375,
+        "fraction_absolute": 0.7713398938089109,
+        "bar": 0,
+        "is_derived": false,
+        "unit": {
+          "id": 111,
+          "name": "Inversed Modifier Percent",
+          "display_name": "%"
+        },
+        "is_virtual": false,
+        "type_band": [
+          0.5,
+          0.6666666666666666
+        ]
+      },
+      {
+        "id": 5000004,
+        "name": "dpsIncreaseMissiles",
+        "display_name": "DPS Increase",
+        "value": 1.2487524168788844,
+        "base_value": 1.229050279329609,
+        "fraction": 0.46206,
+        "fraction_type": 0.28271,
+        "fraction_absolute": 0.5905081554031193,
+        "bar": 0,
+        "is_derived": true,
+        "unit": {
+          "id": 109,
+          "name": "Modifier Percent",
+          "display_name": "%"
+        },
+        "is_virtual": false,
+        "type_band": [
+          0.47971316354671123,
+          0.6118751337799637
+        ]
+      }
+    ],
+    "source_type": {
+      "id": 22291,
+      "name": "Ballistic Control System II",
+      "meta_group": "Tech II",
+      "meta_group_id": 2,
+      "published": true
+    },
+    "mutaplasmid": {
+      "id": 49740,
+      "name": "Gravid Ballistic Control System Mutaplasmid"
+    },
+    "contract": {
+      "id": 237268069,
+      "type": "item_exchange",
+      "price": 10000000.0,
+      "asking_for_items": false,
+      "plex_count": 0,
+      "non_abyssal_modules_count": 0,
+      "abyssal_modules_count": 1,
+      "issuer": {
+        "id": 2120977665,
+        "slug": "lirimoon-2120977665",
+        "name": "LiriMoon",
+        "description": null,
+        "has_premium": false,
+        "corporation_id": null
+      },
+      "date_issued": "2026-10-20 17:17:13+00",
+      "date_expired": "2026-10-23 17:17:13+00"
+    },
+    "estimated_value": 25696838.321791716,
+    "estimated_value_updated_at": "2026-10-20 19:09:41.466776+00",
+    "public_asset": null,
+    "slug": "abyssal-ballistic-control-system-1056163236300",
+    "average_fraction": 0.0006900000000000054
+  }
+}

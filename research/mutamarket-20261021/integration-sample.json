@@ -1,0 +1,57 @@
+[
+  {
+    "server": "tq",
+    "item_id": 1056160153322,
+    "type_id": 48439,
+    "estimated_value": 115370770.63225992,
+    "estimated_value_updated_at": "2026-10-20 13:03:59.312113+00",
+    "model": {
+      "data_count": 13904,
+      "r2": 0.7877856708985453,
+      "mae": 111187387.72054966,
+      "nmae": 25.346447819204503,
+      "last_trained_at": "2026-10-20 09:38:08.912578+00"
+    },
+    "source_url": "https://mutamarket.com/modules/large-abyssal-cap-battery-1056160153322",
+    "fit": {
+      "type": 48439,
+      "mut": {
+        "base": 41220,
+        "mutator": 85514,
+        "attrs": {
+          "67": 1958.4045062345267,
+          "2267": -27.931400187253953,
+          "30": 366.24000587463377,
+          "50": 35.11304953086376
+        }
+      }
+    }
+  },
+  {
+    "server": "tq",
+    "item_id": 1056163236300,
+    "type_id": 49738,
+    "estimated_value": 25696838.321791716,
+    "estimated_value_updated_at": "2026-10-20 19:09:41.466776+00",
+    "model": {
+      "data_count": 24178,
+      "r2": 0.7412942796659839,
+      "mae": 66413757.491034806,
+      "nmae": 22.310268655115568,
+      "last_trained_at": "2026-10-20 09:39:45.611797+00"
+    },
+    "source_url": "https://mutamarket.com/modules/abyssal-ballistic-control-system-1056163236300",
+    "fit": {
+      "type": 49738,
+      "mut": {
+        "base": 22291,
+        "mutator": 49740,
+        "attrs": {
+          "204": 0.8849312596023083,
+          "213": 1.105060049200058,
+          "50": 50.66799830436707
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,88 @@
+{
+  "refresh_estimate": 115370770.63225992,
+  "battery_comparison": [
+    {
+      "attribute_id": 67,
+      "name": "capacitorBonus",
+      "api_value": 1958.4045062345267,
+      "esi_value": 1958.4045062345267,
+      "is_derived": false,
+      "is_virtual": false,
+      "matches_raw": true
+    },
+    {
+      "attribute_id": 2267,
+      "name": "energyWarfareResistanceBonus",
+      "api_value": -27.931400187253953,
+      "esi_value": -27.931400187253953,
+      "is_derived": false,
+      "is_virtual": false,
+      "matches_raw": true
+    },
+    {
+      "attribute_id": 50,
+      "name": "cpu",
+      "api_value": 35.11304953086376,
+      "esi_value": 35.11304953086376,
+      "is_derived": false,
+      "is_virtual": false,
+      "matches_raw": true
+    },
+    {
+      "attribute_id": 30,
+      "name": "power",
+      "api_value": 366.24000587463377,
+      "esi_value": 366.24000587463377,
+      "is_derived": false,
+      "is_virtual": false,
+      "matches_raw": true
+    }
+  ],
+  "bcs_comparison": [
+    {
+      "attribute_id": 50,
+      "name": "cpu",
+      "api_value": 50.66799830436707,
+      "esi_value": 50.66799830436707,
+      "is_derived": false,
+      "is_virtual": false,
+      "matches_raw": true
+    },
+    {
+      "attribute_id": 1255,
+      "name": "droneDamageBonus",
+      "api_value": 0.0,
+      "esi_value": null,
+      "is_derived": false,
+      "is_virtual": true,
+      "matches_raw": false
+    },
+    {
+      "attribute_id": 213,
+      "name": "missileDamageMultiplierBonus",
+      "api_value": 1.105060049200058,
+      "esi_value": 1.105060049200058,
+      "is_derived": false,
+      "is_virtual": false,
+      "matches_raw": true
+    },
+    {
+      "attribute_id": 204,
+      "name": "speedMultiplier",
+      "api_value": 0.8849312596023083,
+      "esi_value": 0.8849312596023083,
+      "is_derived": false,
+      "is_virtual": false,
+      "matches_raw": true
+    },
+    {
+      "attribute_id": 5000004,
+      "name": "dpsIncreaseMissiles",
+      "api_value": 1.2487524168788844,
+      "esi_value": null,
+      "is_derived": true,
+      "is_virtual": false,
+      "matches_raw": false
+    }
+  ]
+}
