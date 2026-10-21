@@ -2094,7 +2094,8 @@ td.loc {
 .kb-split { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 0.8125rem; }
 .kb-dropped { color: var(--buy-color); }
 .kb-destroyed { color: var(--sell-color); }
-.kb-tabs { margin: 18px 0 10px; }
+.kb-fit-cta { display: flex; justify-content: flex-end; margin-top: 12px; }
+.kb-tabs { margin: 14px 0 10px; }
 
 .kb-pane { display: flex; flex-direction: column; gap: 10px; }
 .kb-fit-group { border: 1px solid var(--border-primary); border-radius: var(--radius-md); overflow: hidden; }

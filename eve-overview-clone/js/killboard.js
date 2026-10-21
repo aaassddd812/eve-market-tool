@@ -402,7 +402,6 @@ function renderKill(k, val, priceNote, insurance) {
       <div class="kb-ship-col">
         <div class="kb-ship-render"><img src="${img(`types/${v.ship_type_id}/render`, 256)}" alt="" width="128" height="128"></div>
         <div class="kb-ship-actions">
-          ${app.openKillFit ? '<button class="btn btn-primary" data-kill-fit title="在模拟装配中打开这艘船与击杀时的装配">去装配页查看</button>' : ''}
           ${SERVER.kb ? `<a class="btn btn-ghost" href="https://zkillboard.com/kill/${k.killmail_id}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>` : ''}
         </div>
       </div>
@@ -432,6 +431,7 @@ function renderKill(k, val, priceNote, insurance) {
         ${k.zkb.valueLabel ? `<span class="kb-value-note">${app.esc(k.zkb.valueLabel)}</span>` : ''}
       </div>
     </div>
+    ${app.openKillFit ? '<div class="kb-fit-cta"><button class="btn btn-primary" data-kill-fit title="在模拟装配中打开这艘船与击杀时的装配">去装配页查看</button></div>' : ''}
     <div class="segmented kb-tabs">
       <button data-kill-tab="fit" class="active">装配与物品</button>
       <button data-kill-tab="attackers">攻击者（${k.attackers.length}）</button>
