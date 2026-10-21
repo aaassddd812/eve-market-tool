@@ -700,7 +700,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v25').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v26').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance, valuation
     });
@@ -1917,7 +1917,7 @@ function locationCell(order) {
   const isStructure = order.location_id >= 1e12;
   const badge = isStructure ? '<span class="loc-badge is-player">玩家建筑</span>' : '<span class="loc-badge">NPC建筑</span>';
   const label = name ? (isStructure ? name.replace('玩家建筑（名称不公开）', '名称不公开') : name) : '载入中…';
-  return `<td class="loc" title="${esc(name || 'ID ' + order.location_id)}">${badge}${esc(label)}</td>`;
+  return `<td class="loc" data-copy="${esc(name || 'ID ' + order.location_id)}" title="${esc(name || 'ID ' + order.location_id)}（点击复制）">${badge}${esc(label)}</td>`;
 }
 
 // 买单范围：station / solar_system / region，或数字跳数
@@ -1932,15 +1932,15 @@ function renderOrderTable(side, emptyText) {
   const list = sortOrders(all, side).slice(0, ORDER_ROW_LIMIT);
   const best = state.bestPrices?.[side];
   $(isBuy ? 'buyCount' : 'sellCount').textContent = all.length;
-  $(isBuy ? 'buySubtitle' : 'sellSubtitle').textContent = all.length > ORDER_ROW_LIMIT ? `显示前 ${ORDER_ROW_LIMIT} 单 · 点击行复制价格` : '点击行复制价格';
+  $(isBuy ? 'buySubtitle' : 'sellSubtitle').textContent = all.length > ORDER_ROW_LIMIT ? `显示前 ${ORDER_ROW_LIMIT} 单 · 点击行复制价格 · 地点/数量/总价列单独复制` : '点击行复制价格 · 地点/数量/总价列单独复制';
   const body = $(isBuy ? 'buyOrdersBody' : 'sellOrdersBody');
   if (!list.length) {
     body.innerHTML = `<tr class="empty-row"><td colspan="6">${emptyText || (state.hubOnly ? '交易中心无' + (isBuy ? '买单' : '卖单') : '无' + (isBuy ? '买单' : '卖单'))}</td></tr>`;
   } else {
     body.innerHTML = list.map((o) => `<tr data-price="${o.price}"${o.price === best ? ' class="best"' : ''}>
         <td class="num price">${formatPrice(o.price)}</td>
-        <td class="num">${formatNumber(o.volume_remain)}</td>
-        <td class="num muted col-total">${formatISK(o.price * o.volume_remain)}</td>
+        <td class="num" data-copy="${o.volume_remain}" title="点击复制数量">${formatNumber(o.volume_remain)}</td>
+        <td class="num muted col-total" data-copy="${(o.price * o.volume_remain).toFixed(2)}" title="点击复制订单总价">${formatISK(o.price * o.volume_remain)}</td>
         ${locationCell(o)}
         ${jumpsCell(o)}
         <td class="num muted col-date">${isBuy ? esc(rangeLabel(o.range)) : formatTime(o.issued)}</td>
@@ -1990,7 +1990,15 @@ function initOrderTables() {
   });
   ['sellOrdersBody', 'buyOrdersBody'].forEach((id) => $(id).addEventListener('click', (event) => {
     const row = event.target.closest('tr[data-price]');
-    if (row) copyText(formatPrice(Number(row.dataset.price)).replace(/,/g, ''), '价格已复制');
+    if (!row) return;
+    // 带 data-copy 的列（地点 / 数量 / 总价）单独点击复制各自内容，其余位置点击复制价格
+    const cell = event.target.closest('td[data-copy]');
+    if (cell) {
+      const label = cell.classList.contains('loc') ? '地点已复制' : cell.classList.contains('col-total') ? '订单总价已复制' : '数量已复制';
+      copyText(cell.dataset.copy, label);
+      return;
+    }
+    copyText(formatPrice(Number(row.dataset.price)).replace(/,/g, ''), '价格已复制');
   }));
   $('minSellCard').addEventListener('click', () => {
     if (state.bestPrices?.sell != null) copyText(state.bestPrices.sell.toFixed(2), '最低卖价已复制');
