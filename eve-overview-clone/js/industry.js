@@ -514,9 +514,10 @@ function fmtTime(secs) {
 function drawCalc() {
   const el = $('indCalc');
   if (!el || !C.pid) return;
-  // 重渲染会重置滚动位置（内容高度瞬时塌缩被钳制），先记住再恢复
+  // 重渲染会重置滚动位置：外层 .kb-scroll 与各表格内嵌滚动条（材料表等 max-height 容器）都先记住再恢复
   const scroller = el.closest('.kb-scroll');
   const keepScroll = scroller ? scroller.scrollTop : null;
+  const wrapTops = [...el.querySelectorAll('.pi-table-wrap')].map((w) => w.scrollTop);
   const esc = ctx.esc, isk = ctx.formatISK, num = ctx.formatNumber;
   const r = calc();
   const b = BP(r.pid);
@@ -611,12 +612,15 @@ function drawCalc() {
       <button class="btn btn-ghost ind-copy" data-ind-copy title="可粘贴到游戏多重购买">复制清单</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>材料</th><th class="num">数量</th><th class="num">费用</th></tr></thead><tbody>${shopRows}</tbody></table></div></div>`;
   // 重渲染后内容高度要等图片 / 布局稳定，多帧兜底恢复滚动位置
-  if (scroller && keepScroll != null) {
-    scroller.scrollTop = keepScroll;
-    requestAnimationFrame(() => { scroller.scrollTop = keepScroll; });
-    requestAnimationFrame(() => requestAnimationFrame(() => { scroller.scrollTop = keepScroll; }));
-    setTimeout(() => { scroller.scrollTop = keepScroll; }, 150);
-  }
+  const restoreScrolls = () => {
+    if (scroller && keepScroll != null) scroller.scrollTop = keepScroll;
+    const wraps = el.querySelectorAll('.pi-table-wrap');
+    wrapTops.forEach((top, i) => { if (wraps[i]) wraps[i].scrollTop = top; });
+  };
+  restoreScrolls();
+  requestAnimationFrame(restoreScrolls);
+  requestAnimationFrame(() => requestAnimationFrame(restoreScrolls));
+  setTimeout(restoreScrolls, 150);
 }
 
 // 蓝图价格卡片
