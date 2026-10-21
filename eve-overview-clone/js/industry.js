@@ -514,6 +514,9 @@ function fmtTime(secs) {
 function drawCalc() {
   const el = $('indCalc');
   if (!el || !C.pid) return;
+  // 重渲染会重置滚动位置（内容高度瞬时塌缩被钳制），先记住再恢复
+  const scroller = el.closest('.kb-scroll');
+  const keepScroll = scroller ? scroller.scrollTop : null;
   const esc = ctx.esc, isk = ctx.formatISK, num = ctx.formatNumber;
   const r = calc();
   const b = BP(r.pid);
@@ -597,7 +600,7 @@ function drawCalc() {
         <span>卖出所得 <b>${isk(r.revenue)}</b></span>
       </div>
     </div>
-    <div class="pi-card"><div class="pi-card-head"><h3>材料</h3></div>
+    <div class="pi-card"><div class="pi-card-head"><h3>材料</h3>${r.rows.some((m) => m.canBuild) ? '<span class="ind-mat-bulk"><button type="button" class="btn btn-ghost" data-ind-build-all>全自制</button><button type="button" class="btn btn-ghost" data-ind-build-none>全购买</button></span>' : ''}</div>
       <div class="pi-table-wrap"><table class="pi-table ind-mats"><thead><tr><th>材料</th><th class="num">基础</th><th class="num">实际</th><th class="num">单价</th><th class="num">小计</th><th></th></tr></thead><tbody>${matRows}</tbody></table></div></div>
     ${invHtml}
     ${bpCard(r)}
@@ -607,6 +610,7 @@ function drawCalc() {
     <div class="pi-card"><div class="pi-card-head"><h3>购物清单</h3>
       <button class="btn btn-ghost ind-copy" data-ind-copy title="可粘贴到游戏多重购买">复制清单</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>材料</th><th class="num">数量</th><th class="num">费用</th></tr></thead><tbody>${shopRows}</tbody></table></div></div>`;
+  if (scroller && keepScroll != null) scroller.scrollTop = keepScroll;
 }
 
 // 蓝图价格卡片
@@ -976,6 +980,16 @@ function onClick(e) {
   if (build) {
     const id = Number(build.dataset.indBuild);
     if (C.build.has(id)) C.build.delete(id); else C.build.add(id);
+    drawCalc();
+    return;
+  }
+  if (e.target.closest('[data-ind-build-all]')) {
+    for (const m of calc().rows) if (m.canBuild) C.build.add(m.id);
+    drawCalc();
+    return;
+  }
+  if (e.target.closest('[data-ind-build-none]')) {
+    for (const m of calc().rows) if (m.canBuild) C.build.delete(m.id);
     drawCalc();
     return;
   }

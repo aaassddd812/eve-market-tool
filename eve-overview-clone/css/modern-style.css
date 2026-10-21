@@ -4667,3 +4667,7 @@ li > .guide-en, td > .guide-en, th > .guide-en, figcaption > .guide-en { margin-
   .guide-reader-bar .toolbar-spacer { display: none; }
   .guide-cap { bottom: 16%; }
 }
+
+/* 制造材料卡片头部的全自制 / 全购买按钮 */
+.ind-mat-bulk { display: flex; gap: 6px; }
+.ind-mat-bulk .btn { padding: 3px 10px; font-size: 0.75rem; }
