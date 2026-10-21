@@ -426,7 +426,7 @@ function renderKill(k, val, priceNote, insurance) {
         <div class="kb-total"><span>总价值</span><strong>${app.formatISK(z.totalValue)}<small>ISK</small></strong></div>
         <div class="kb-split"><span class="kb-dropped">掉落 ${app.formatISK(z.droppedValue)}</span><span class="kb-destroyed">摧毁 ${app.formatISK(z.destroyedValue)}</span></div>
         <div class="kb-hubval">${app.valuation.select('data-val-src', val.region)}
-          <span>最低卖价 <b>${app.formatISK(val.sell)}</b></span><span>最高收价 <b>${app.formatISK(val.buy)}</b></span></div>
+          <span class="kb-hubval-row"><span>最低卖价 <b>${app.formatISK(val.sell)}</b></span><span>最高收价 <b>${app.formatISK(val.buy)}</b></span></span></div>
         ${insuranceHtml(insurance, z.totalValue)}
         ${k.zkb.valueLabel ? `<span class="kb-value-note">${app.esc(k.zkb.valueLabel)}</span>` : ''}
       </div>

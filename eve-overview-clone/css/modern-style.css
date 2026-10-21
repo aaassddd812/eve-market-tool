@@ -2091,7 +2091,7 @@ td.loc {
 .kb-total span { display: block; font-size: 0.75rem; color: var(--text-muted); }
 .kb-total strong { font-size: 1.75rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 .kb-total small { margin-left: 4px; font-size: 0.75rem; font-weight: 500; color: var(--text-muted); }
-.kb-split { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 0.8125rem; }
+.kb-split { display: flex; flex-direction: row; align-items: baseline; justify-content: flex-end; gap: 12px; font-size: 0.8125rem; }
 .kb-dropped { color: var(--buy-color); }
 .kb-destroyed { color: var(--sell-color); }
 .kb-fit-cta { display: flex; justify-content: flex-end; margin-top: 12px; }
@@ -2119,6 +2119,7 @@ td.loc {
 .kb-fit-cols { display: flex; justify-content: flex-end; gap: 10px; padding: 0 12px 4px; font-size: 0.6875rem; color: var(--text-muted); }
 .kb-fit-cols span { width: 80px; text-align: right; }
 .kb-hubval { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-size: 0.75rem; color: var(--text-secondary); }
+.kb-hubval-row { display: flex; gap: 12px; align-items: baseline; justify-content: flex-end; flex-wrap: wrap; }
 .kb-hubval b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .kb-hubval .val-src { margin-bottom: 2px; }
 
