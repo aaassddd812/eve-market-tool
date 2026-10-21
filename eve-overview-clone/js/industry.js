@@ -610,7 +610,13 @@ function drawCalc() {
     <div class="pi-card"><div class="pi-card-head"><h3>购物清单</h3>
       <button class="btn btn-ghost ind-copy" data-ind-copy title="可粘贴到游戏多重购买">复制清单</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>材料</th><th class="num">数量</th><th class="num">费用</th></tr></thead><tbody>${shopRows}</tbody></table></div></div>`;
-  if (scroller && keepScroll != null) scroller.scrollTop = keepScroll;
+  // 重渲染后内容高度要等图片 / 布局稳定，多帧兜底恢复滚动位置
+  if (scroller && keepScroll != null) {
+    scroller.scrollTop = keepScroll;
+    requestAnimationFrame(() => { scroller.scrollTop = keepScroll; });
+    requestAnimationFrame(() => requestAnimationFrame(() => { scroller.scrollTop = keepScroll; }));
+    setTimeout(() => { scroller.scrollTop = keepScroll; }, 150);
+  }
 }
 
 // 蓝图价格卡片
