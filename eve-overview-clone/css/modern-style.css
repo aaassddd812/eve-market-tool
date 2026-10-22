@@ -4944,7 +4944,7 @@ td .hc-sub { display: inline; margin-left: 6px; }
 .hc-note { margin: 0; font-size: 0.75rem; line-height: 1.6; color: var(--text-muted); }
 @media (max-width: 640px) {
   #hubsBody { padding: 10px 0 14px; }
-  .hc-head .segmented { width: 100%; }
+  .hc-head .segmented { width: 100%; flex-wrap: wrap; }
 }
 @media (max-width: 640px) {
   .mut-slider { min-width: 90px; }

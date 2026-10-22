@@ -1,6 +1,6 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v1';
+import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v2';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s3';
 
 // ===== 配置与常量 =====

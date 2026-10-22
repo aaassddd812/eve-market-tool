@@ -1,15 +1,19 @@
 // 市场详情 ·「交易中心比价」：各交易中心（server.js 的 regions）当前最优卖价 / 收价、订单量与星域日均成交，
 // 以及跨交易中心倒卖的税后利润（技能、税费与声望设置来自 trade-fees.js，全站共用）。
 // 数据：ESI /markets/{region}/orders/（只取交易中心空间站内的订单）与 /markets/{region}/history/（星域 30 天日均），打开标签时才查，缓存 5 分钟。
-// 倒卖方式：在 A 直接买最低卖单（不付税费）→ 运到 B 后「卖给收单」（付销售税）或「挂卖单」（付销售税 + 中介费，按 B 当前最低卖价）；
-// A = B 时为本地挂收单→挂卖单（买入也付中介费）。可做数量按价格 5% 以内的订单深度与 B 的日均成交（挂单只算 10%）估算，不含运费与风险。
+// 倒卖四种方式（买入 → 卖出）：在 A「卖单收」直接买最低卖单（不付税费）或「收单收」按最高收价挂收单（付中介费）；
+// 运到 B 后「收单出」直接卖给最高收单（付销售税）或「卖单出」按最低卖价挂卖单（付销售税 + 中介费）。A = B 为本地倒卖。
+// 可做数量：直接成交按最优价 5% 以内的订单深度，挂单按该星域日均成交的 10%，两端取小；不含运费与风险。
 let ctx = null;
 const cache = new Map();   // typeId -> { at, promise }
 const TTL = 5 * 60e3;
 const DEPTH = 0.05;        // 最优价 5% 以内的订单算作可成交深度
-const SHARE = 0.1;         // 挂卖单最多按日均成交的 10% 估算
-const opts = { mode: 'buy', sort: 'profit' };
+const SHARE = 0.1;         // 挂单最多按日均成交的 10% 估算
+// 方式：[买入用卖单(s) / 收单(b)][卖出用收单(b) / 卖单(s)]
+const MODES = [['sb', '卖单收 · 收单出'], ['bb', '收单收 · 收单出'], ['ss', '卖单收 · 卖单出'], ['bs', '收单收 · 卖单出']];
+const opts = { mode: 'sb', sort: 'profit' };
 try { Object.assign(opts, JSON.parse(localStorage.getItem('eve-hub-compare') || '{}')); } catch { /* 用默认 */ }
+if (!MODES.some(([k]) => k === opts.mode)) opts.mode = 'sb';   // 旧设置 buy / sell
 const persist = () => { try { localStorage.setItem('eve-hub-compare', JSON.stringify(opts)); } catch { /* 无痕模式 */ } };
 
 export function initHubCompare(context) { ctx = context; }
@@ -47,22 +51,18 @@ function load(typeId) {
 function routes(hubs) {
   const f = ctx.TF.fees();
   const out = [];
+  const buyOrder = opts.mode[0] === 'b', sellOrder = opts.mode[1] === 's';
   for (const a of hubs) {
+    const buyAt = buyOrder ? a.buy : a.sell;
+    if (buyAt == null) continue;
+    const cost = buyAt * (1 + (buyOrder ? f.broker : 0));
+    const buyCap = buyOrder ? Math.floor(a.daily * SHARE) : a.sellDepth;
     for (const b of hubs) {
-      if (a === b) {
-        if (a.buy == null || a.sell == null) continue;
-        const cost = a.buy * (1 + f.broker);
-        const unit = ctx.TF.flipProfit(a.buy, a.sell);
-        out.push({ a, b, local: true, buyAt: a.buy, sellAt: a.sell, cost, unit, qty: Math.floor(a.daily * SHARE) });
-        continue;
-      }
-      if (a.sell == null) continue;
-      const instant = opts.mode === 'buy';
-      const sellAt = instant ? b.buy : b.sell;
+      const sellAt = sellOrder ? b.sell : b.buy;
       if (sellAt == null) continue;
-      const unit = sellAt * (1 - f.sales - (instant ? 0 : f.broker)) - a.sell;
-      const cap = instant ? b.buyDepth : Math.floor(b.daily * SHARE);
-      out.push({ a, b, buyAt: a.sell, sellAt, cost: a.sell, unit, qty: Math.min(a.sellDepth, cap) });
+      const unit = sellAt * (1 - f.sales - (sellOrder ? f.broker : 0)) - cost;
+      const sellCap = sellOrder ? Math.floor(b.daily * SHARE) : b.buyDepth;
+      out.push({ a, b, local: a === b, buyAt, sellAt, cost, unit, qty: Math.min(buyCap, sellCap) });
     }
   }
   for (const r of out) { r.margin = r.cost ? r.unit / r.cost : 0; r.total = r.unit > 0 ? r.unit * r.qty : 0; }
@@ -90,7 +90,7 @@ function html(hubs) {
   const list = routes(live);
   const pos = list.filter((r) => r.unit > 0);
   const routeRows = list.slice(0, 20).map((r) => `<tr class="${r.unit > 0 ? '' : 'hc-loss'}">
-      <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地 · 挂收单→挂卖单</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}</td>
+      <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}</td>
       <td class="num">${formatPrice(r.buyAt)}</td>
       <td class="num">${formatPrice(r.sellAt)}</td>
       <td class="num ${r.unit > 0 ? 'up' : 'down'}">${(r.unit > 0 ? '+' : '') + formatPrice(r.unit)}</td>
@@ -106,12 +106,12 @@ function html(hubs) {
       <th>交易中心</th><th class="num">最低卖价</th><th class="num">卖单量</th><th class="num">最高收价</th><th class="num">收单量</th><th class="num">日均成交（星域）</th><th class="num">日均成交额</th>
     </tr></thead><tbody>${hubRows}</tbody></table></div>
     <div class="hc-head"><h3>倒卖利润（税后）</h3><span class="toolbar-spacer"></span>
-      ${seg('mode', [['buy', '到货卖给收单'], ['sell', '到货挂卖单']])}
+      ${seg('mode', MODES)}
       ${seg('sort', [['profit', '预计利润'], ['margin', '利润率'], ['unit', '每件利润']])}</div>
     ${routeRows ? `<div class="table-scroll"><table class="pc-mini-table hc-table"><thead><tr>
       <th>路线（买入 → 卖出）</th><th class="num">买入价</th><th class="num">卖出价</th><th class="num">每件税后利润</th><th class="num">利润率</th><th class="num">可做数量</th><th class="num">预计利润</th>
     </tr></thead><tbody>${routeRows}</tbody></table></div>` : '<p class="text-muted">订单不足，算不出倒卖利润</p>'}
-    <p class="hc-note" title="跨中心：买入地直接买最低卖单，到货后${opts.mode === 'buy' ? '卖给最高收单' : '按最低卖价挂卖单'}；本地：挂收单→挂卖单。可做数量按最优价 5% 以内的订单深度${opts.mode === 'buy' ? '' : '与日均成交 10%'}估算，日均成交为整个星域。">${pos.length ? `${pos.length} 条路线有利润` : '没有盈利的路线'} · 未计运费</p>
+    <p class="hc-note" title="卖单收：直接买最低卖单；收单收：按最高收价挂收单（付中介费 ${TF.pct2(f.broker)}）；收单出：直接卖给最高收单（销售税 ${TF.pct2(f.sales)}）；卖单出：按最低卖价挂卖单（销售税 + 中介费）。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%。">${pos.length ? `${pos.length} 条路线有利润` : '没有盈利的路线'} · 未计运费</p>
   </div>`;
 }
 
