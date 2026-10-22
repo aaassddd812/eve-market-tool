@@ -4357,7 +4357,7 @@ async function generateAuthLink() {
     const pending = readPkce();
     pending[authState] = { verifier, at: Date.now(), server: SERVER.id };
     writePkce(pending);
-    const url = SSO_BASE + '/authorize?' + new URLSearchParams({
+    const authorize = SSO_BASE + '/authorize?' + new URLSearchParams({
       response_type: 'code',
       redirect_uri: cfg.redirect_uri,
       client_id: cfg.client_id,
@@ -4368,6 +4368,11 @@ async function generateAuthLink() {
       ...SERVER.authParams,
       ...device
     });
+    // 国服：先经网易 /account/logoff 登出旧会话再回跳授权页（ceve-market 同款做法），
+    // 浏览器残留的网易登录态会被自动清掉，不再出现 Missing Netease token；欧服保持直连
+    const url = IS_TQ
+      ? authorize
+      : SSO_BASE.replace(/\/v2\/oauth$/, '') + '/account/logoff?returnUrl=' + encodeURIComponent('/v2/oauth/authorize?' + authorize.split('?')[1]);
     $('authLink').value = url;
     $('openAuthBtn').href = url;
     $('authLinkBox').hidden = false;
