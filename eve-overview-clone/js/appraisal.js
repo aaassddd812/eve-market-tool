@@ -8,7 +8,7 @@
 // 识别格式：制表符或两个以上空格分列，第一列物品名（游戏复制的名称后可能带 *），第二列数量；
 // 也支持「名称 x 数量」「数量 x 名称」「名称 数量」和单独一行物品名。
 import { SERVER } from './server.js?v=s3';
-import * as TF from './trade-fees.js?v=v2';
+import * as TF from './trade-fees.js?v=v3';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation,
           // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind, loadAbyssal() -> abyssal.js 模块
@@ -423,7 +423,7 @@ function rpHtml() {
       <label><span>植入体</span><select class="cr-input" data-ap-imp aria-label="提炼植入体">${[[0, '无'], [1, 'RX-801 +1%'], [2, 'RX-802 +2%'], [4, 'RX-804 +4%']].map(([v, l]) => `<option value="${v}"${S.imp === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <label><span>再处理税 %</span><input class="cr-input" type="number" min="0" max="100" step="0.1" value="${S.tax}" data-ap-tax aria-label="再处理税"></label>
     </div>
-    <p class="ap-rp-tip">改装件、建筑与安全等级加成只作用于矿石 / 冰矿 / 卫星矿；装备等其它物品按碎铁处理技术算。NPC 空间站声望 0 时再处理税约 5%。</p>`;
+    <p class="ap-rp-tip" title="改装件、建筑与安全等级加成只作用于矿石 / 冰矿 / 卫星矿；装备等按碎铁处理技术算">NPC 空间站声望 0 时再处理税约 5%</p>`;
 }
 
 function updateSummaries() {
@@ -472,7 +472,7 @@ export function showAppraisal() {
   main.dataset.ready = '1';
   main.innerHTML = `
     <section class="ap-page">
-      <div class="ap-head"><h2>估价</h2><span class="text-muted">游戏里打开合同 / 仓库 → 全选物品 → Ctrl+C，粘贴到下面；可按市场挂单估价，也可按化矿产出估价</span></div>
+      <div class="ap-head"><h2>估价</h2><span class="text-muted">游戏里全选物品 Ctrl+C 后粘贴</span></div>
       <div class="ap-layout">
         <div class="ap-form">
           <textarea id="apInput" class="ap-input" spellcheck="false" placeholder="例如：&#10;小型掠能器 II*	1	掠能器*	装备*	高能量槽&#10;液化臭氧*	150	冰矿产物*	材料*	货柜舱&#10;掘金者级*	1	勘探护卫舰*	舰船*&#10;&#10;也可以：名称 x 数量，或一行一个名称"></textarea>

@@ -178,8 +178,7 @@ function render(box, data) {
       '<button class="btn btn-ghost" data-trade-reload>刷新</button>' +
     '</div>' +
     `<div data-trade-body>${S.view === 'tx' ? txTable(data) : S.view === 'orders' ? ordersTable(data) : itemsTable(data, sum)}</div>` +
-    `<p class="text-muted valuation-note">统计最近 ${days} 天的 ${formatNumber(data.transactions.length)} 笔成交（ESI 只提供最近约 30 天、最多 2500 条）。` +
-    '配对利润按买卖均价计算，不含只买未卖的库存；税费为钱包流水里同期实际缴纳的销售税与中介费。历史订单为 90 天内已结束的订单。</p>';
+    `<p class="text-muted valuation-note" title="ESI 只提供最近约 30 天、最多 2500 条；配对利润按买卖均价，不含库存；税费取钱包流水实缴">最近 ${days} 天 · ${formatNumber(data.transactions.length)} 笔成交</p>';
 }
 
 function bind(box) {

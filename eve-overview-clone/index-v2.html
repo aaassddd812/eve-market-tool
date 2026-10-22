@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v64">
+  <link rel="stylesheet" href="css/modern-style.css?v=v65">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -274,6 +274,7 @@
                 <button class="tab-link active" data-content="orders" role="tab">订单簿</button>
                 <button class="tab-link" data-content="chart" role="tab">价格走势</button>
                 <button class="tab-link" data-content="history" role="tab">历史数据</button>
+                <button class="tab-link" data-content="hubs" role="tab" id="hubsTab">交易中心比价</button>
                 <button class="tab-link" data-content="losses" role="tab" id="lossesTab" hidden>近期损失</button>
                 <div class="tabs-tools" id="ordersTools">
                   <label class="toggle" title="只显示该星域交易中心的订单">
@@ -348,6 +349,11 @@
                     <canvas id="priceChart"></canvas>
                     <div class="chart-empty" id="chartEmpty" hidden>暂无历史数据</div>
                   </div>
+                </div>
+
+                <!-- 交易中心比价与跨中心倒卖（hub-compare.js） -->
+                <div class="tab-content" id="hubsContent">
+                  <div id="hubsBody"></div>
                 </div>
 
                 <!-- 舰船近期损失（zKillboard） -->
@@ -488,7 +494,7 @@
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
             </button>
           </div>
-          <p class="map-hint">左键拖动旋转 · 右键拖动平移 · 滚轮缩放 · 点击星系查看详情 · 双击聚焦</p>
+          <p class="map-hint">拖动旋转 · 右键平移 · 滚轮缩放 · 双击聚焦</p>
           <aside class="map-info" id="mapInfo" hidden></aside>
         </div>
       </div>
@@ -826,7 +832,7 @@
           </button>
         </div>
         <div class="modal-body">
-          <p class="step-desc">在游戏装配窗口点「复制到剪贴板」，或从 Pyfa / zKillboard 复制 EFT 格式文本，粘贴到下面。中英文名称都可以识别。</p>
+          <p class="step-desc" title="游戏装配窗口「复制到剪贴板」或 Pyfa / zKillboard 的 EFT 文本，中英文均可">粘贴 EFT 装配文本</p>
           <textarea id="fitImportText" class="fit-import-text" rows="12" spellcheck="false" placeholder="[Rifter, 我的装配]&#10;Damage Control II&#10;Gyrostabilizer II&#10;&#10;5MN Microwarpdrive II&#10;..."></textarea>
           <div class="fit-modal-actions"><button class="btn btn-ghost" data-fit-modal-close>取消</button><button class="btn btn-primary" data-fit-import-go>导入</button></div>
         </div>
@@ -850,7 +856,7 @@
             <button class="btn btn-ghost" data-fit-esi-refresh title="重新读取">刷新</button>
           </div>
           <div id="fitEsiBody" class="fit-esi-list"></div>
-          <p class="step-desc fit-esi-note">读取 / 保存的是角色的个人装配（游戏装配窗口「个人」页）。游戏装配不包含植入体和模块的离线状态；弹药会放在货舱里。</p>
+          <p class="step-desc fit-esi-note" title="游戏装配不包含植入体和离线状态；弹药放在货舱">角色的个人装配</p>
         </div>
       </div>
     </div>
@@ -914,7 +920,7 @@
           <ol class="steps">
             <li>
               <div class="step-title">生成授权链接并登录</div>
-              <p class="step-desc" id="esiPrivacyNote">令牌由浏览器直接向 CCP 获取，只保存在本机，本站服务器接触不到；可按 F12 在「网络」面板核对。随时可在 <a href="https://community.eveonline.com/support/third-party-applications/" target="_blank" rel="noopener">CCP 第三方应用管理</a> 撤销授权。</p>
+              <p class="step-desc" id="esiPrivacyNote">令牌只保存在本机，本站服务器接触不到 · <a href="https://community.eveonline.com/support/third-party-applications/" target="_blank" rel="noopener">撤销授权</a></p>
               <details class="scope-groups" id="scopeGroups">
                 <summary>额外权限（按需勾选，<span id="scopeGroupCount"></span>）</summary>
                 <div class="scope-group-list" id="scopeGroupList"></div>
@@ -930,7 +936,7 @@
             </li>
             <li>
               <div class="step-title">粘贴回调地址完成绑定</div>
-              <p class="step-desc" id="esiCallbackNote">登录后浏览器地址栏的完整地址（包含 code 与 state）。</p>
+              <p class="step-desc" id="esiCallbackNote">粘贴登录后地址栏的完整地址</p>
               <div class="input-group">
                 <input type="text" id="callbackUrl" placeholder="https://…?code=…&state=…" aria-label="授权回调地址">
                 <button class="btn btn-primary" id="bindCallbackBtn">绑定</button>
@@ -944,6 +950,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v85" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v86" type="module" data-cfasync="false"></script>
 </body>
 </html>

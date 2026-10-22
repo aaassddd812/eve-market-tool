@@ -224,10 +224,10 @@ function renderSettings() {
     <summary><b>估价设置</b><span class="text-muted">产物按${PRICE_ZH[F.price]} · 材料按${PRICE_ZH[F.mat]} · 税费 ${F.tax}%</span></summary>
     <div class="ind-set-grid">
       <div class="pi-field"><label>产物卖出价</label>${seg('price', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.price)}
-        <p class="pi-note">卖单：挂单出售，价高但要等；收单：直接卖给收购单，立即到手。</p></div>
+        </div>
       <div class="pi-field"><label>所需物品 / 蓝图材料买入价</label>${seg('mat', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.mat)}</div>
       <div class="pi-field"><label>卖出税费（%）</label><input type="number" class="pi-input lp-tax" data-lp-tax min="0" max="30" step="0.1" value="${F.tax}">
-        <p class="pi-note">交易税 + 中介费，满级会计学交易税约 3.4%；挂卖单另加中介费。</p></div>
+        </div>
     </div>`;
 }
 
@@ -448,7 +448,7 @@ function bestOffer(corp) {
 
 function renderMine(body) {
   if (!ctx.hasEsiToken()) {
-    body.innerHTML = '<div class="pi-card"><p class="text-muted">绑定 ESI 后可查看角色在各 NPC 军团的忠诚点（LP）余额，并估算可兑换的价值。请先在「个人中心」绑定角色。</p></div>';
+    body.innerHTML = '<div class="pi-card"><p class="text-muted">在「个人中心」绑定角色后查看 LP 余额</p></div>';
     return;
   }
   if (!S.mine && !S.mineError) {

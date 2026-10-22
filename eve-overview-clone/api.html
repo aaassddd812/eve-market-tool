@@ -230,7 +230,13 @@
         { path: '/abyssal/types', title: '深渊装备类型', desc: '全部深渊装备类型、各项突变属性在该类型能达到的最好 / 最差值（原始数值），以及模型质量。缓存 7 天。', example: '/abyssal/types',
           fields: [['types[]', '{id, name, attributes[], model}'], ['attributes[]', '{id, key, name, unit, unit_id, high_is_good, best, worst, is_derived, is_virtual}；is_derived 为 MutaMarket 推算的属性（如 DPS 提升），is_virtual 不是真实突变属性'], ['model', '同 /abyssal/models，没有为 null']] },
         { path: '/abyssal/models', title: '估价模型列表', desc: 'MutaMarket 各深渊装备类型的模型统计，缓存 24 小时。', example: '/abyssal/models',
-          fields: [['models[]', '{type_id, data_count, r2, mae, nmae, last_trained_at}，按类型 ID 排序']] }
+          fields: [['models[]', '{type_id, data_count, r2, mae, nmae, last_trained_at}，按类型 ID 排序']] },
+        { path: '/abyssal/estimate', method: 'POST', title: '估价（任意属性）', desc: '一次最多 50 件。给 <code>item_id</code> 时先查 MutaMarket 已有的估价（只读，不会导入），MutaMarket 没有的再用<b>本站模型</b>；只给 <code>attrs</code>（如装配里自定义的属性）时直接用本站模型。本站模型算法照搬 MutaMarket 的估价器（MIT 许可），以 EVE Ref 公开合同快照里的单件深渊装备合同训练，见下一个接口。每 10 件消耗 1 次额度。',
+          body: '{"items": [{"type_id": 49738, "item_id": 1034743152796}, {"type_id": 47408, "attrs": {"6": 270, "20": -54, "30": 165, "50": 46, "554": 590}}]}',
+          params: [['items[].type_id', true, '深渊装备类型 ID'], ['items[].item_id', false, '物品 ID；本站没有属性时向 ESI /dogma/dynamic/items/ 读取'], ['items[].attrs', false, '{属性ID: 值}（原始数值，与 ESI 相同）；缺的属性按 0 计，最好带上原装备的全部属性'], ['mutamarket', false, 'false 时跳过 MutaMarket，只用本站模型']],
+          fields: [['results[]', '与 items 一一对应：{type_id, item_id?, value, source, model, error?}'], ['source', 'mutamarket（MutaMarket 模型）/ model（本站模型）'], ['model', 'MutaMarket：同 /abyssal/models；本站：{data_count, sold, listed, r2, mae, nmae, trained_at}'], ['error', '没有估价的原因（不是深渊装备、该类型数据不足、ESI 读不到属性等）；value 为 null']] },
+        { path: '/abyssal/estimator', title: '本站估价模型', desc: '本站模型各类型的训练数据量与 5 折交叉验证指标。每种深渊装备一个随机森林（100 棵树、最大深度 20、每叶至少 2 个样本），在 ln(1+价格) 上拟合；数据为 EVE Ref 公开合同快照（约 30 分钟一份）中只卖一件深渊装备的合同，保留 180 天：到期前消失的（疑似成交）权重加倍，其余按挂牌价，因此整体偏向挂牌价；对数价格偏离中位数超过 3.5 个 MAD 的去掉。每 6 小时重训，少于 50 条的类型不建模。', example: '/abyssal/estimator',
+          fields: [['enabled', '服务器有 numpy 时为 true'], ['models[]', '{type_id, data_count, sold, listed, r2, mae, nmae, trained_at, features}；features 为模型用到的属性 ID'], ['data', '{类型ID: 训练数据条数}'], ['features', '{类型ID: [属性ID]}，与 MutaMarket 每个类型的特征相同（去掉派生属性）']] }
       ]],
       ['装配', [
         { path: '/ships/{id}/fits', title: '阵亡装配', desc: '某型舰船最近若干天阵亡时的装配，相同装配合并计数。首次查询需要从 ESI 取击杀原文，可能要十几秒。', cost: 10, example: '/ships/24698/fits?days=7',

@@ -423,11 +423,11 @@ function drawPanel() {
       <span>${ctx.esc(e.name)}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
       <button class="ka-close" data-ka-del="${e.id}" title="取消关注" aria-label="取消关注">×</button></li>`).join('')}</ul>` : '<p class="text-muted">还没有关注的角色</p>'}
     ${watching() && IS_TQ ? `<p class="ka-status on">${ctx.esc(watchText())}</p>` : ''}
-    ${IS_TQ ? '' : `<p class="ka-note">${ctx.esc(SERVER.full)}没有实时击杀数据，只能用 ESI 各星系「过去一小时击杀数」的增量判断（约每小时更新一次），提醒会有延迟，也没有具体的击杀邮件。</p>`}
+    ${IS_TQ ? '' : `<p class="ka-note" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据，提醒会延迟</p>`}
     <div class="ka-actions"><button class="btn btn-ghost" data-ka-test="web">测试网页特效</button><button class="btn btn-ghost" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>
     <h4 class="ka-h">最近预警</h4>
     ${st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${ctx.esc(describe(a))}</span><small>${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="text-muted">还没有预警</p>'}
-    <p class="ka-note">网页需要保持打开（可以在后台标签页，但浏览器会降低后台页面的检测频率）。多个标签页同时打开时只发一封邮件。</p>`;
+    <p class="ka-note">需保持网页打开（可在后台）</p>`;
 }
 
 export function openPanel() {

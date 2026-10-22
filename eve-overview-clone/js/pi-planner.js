@@ -1021,7 +1021,7 @@ function renderForm() {
     <div class="pi-field">
       <label>方式</label>
       ${seg('way', [['self', '自产（采集）'], ['buy', '买料加工']], F.way)}
-      ${buy ? `<small class="pi-hint">从${HUB_NAME}买入半成品，在工厂星上加工成更高级的产品卖出；收益取决于价差，需要本金和运输</small>` : ''}
+      ${buy ? `<small class="pi-hint">买入半成品加工后卖出</small>` : ''}
     </div>
     <div class="pi-field">
       <label>地区</label>
@@ -1067,7 +1067,7 @@ function renderForm() {
       <div class="pi-inline"><span>资源丰度</span>${seg('rich', Object.entries(RICHNESS).map(([k, [, label]]) => [k, label]), F.rich)}</div>
       <div class="pi-inline"><span>价格</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>`}
       <div class="pi-inline"><span>海关税率</span><input type="number" class="pi-input pi-tax" min="0" max="100" step="0.5" value="${F.tax}" data-pi-num="tax"><span>%</span></div>
-      <small class="pi-hint">${buy ? '原料价「卖单」为直接买入（偏保守），「收单」为挂单收购；补货周期越长，需要的发射平台越多；成交上限：每种产品卖出、原料买入各不超过' + HUB_NAME + '日成交的这个比例，超出的行星分给下一种产品' : `每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位`}</small>
+      ${buy ? '' : `<small class="pi-hint">每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位</small>`}
     </div>
     <button type="submit" class="btn btn-primary pi-go">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>一键规划
@@ -1228,7 +1228,7 @@ function comboHtml(combo) {
   if (!combo) return '';
   const all = F.chars * F.perChar;
   return `<div class="pi-card">
-    <div class="pi-card-head"><h3>多产品组合</h3><span class="text-muted">${all} 个殖民地 · 单个产品受成交量限制用不满时，剩余行星分给下一种产品（按每颗行星日收益从高到低）</span></div>
+    <div class="pi-card-head"><h3>多产品组合</h3><span class="text-muted" title="单个产品受成交量限制用不满时，剩余行星分给下一种产品">${all} 个殖民地</span></div>
     <div class="pi-table-wrap"><table class="pi-table">
       <thead><tr><th>产品</th><th class="pi-hide-sm">方案</th><th class="num">行星</th><th class="num">日净收益</th></tr></thead>
       <tbody>${combo.rows.map((r) => `<tr class="${r.i === R.selected ? 'active' : ''}" data-pi-plan="${r.i}">
@@ -1310,14 +1310,13 @@ function renderDetail() {
   const buyNote = plan.strategy === 'buy' ? (() => {
     const inDay = [...plan.dem.buy].reduce((t, [id, q]) => t + q * plan.rate * 24 * vol(id), 0);
     const outDay = plan.rate * 24 * vol(plan.product);
-    return `<p class="pi-note">每天买入原料 ${ctx.formatNumber(Math.round(inDay))} m³、运出产品 ${ctx.formatNumber(Math.round(outDay))} m³；每 ${F.restock} 小时补货一次，每颗星 ${plan.hubs} 个发射平台（各 ${ctx.formatNumber(LP_CAP)} m³）。
-      一个补货周期的原料约 ${ctx.formatISK(plan.cost / 24 * F.restock)}，月净收益 ${ctx.formatISK(plan.profit * 30)}。</p>
-      ${plan.wanted ? `<p class="pi-note warn">受${HUB_NAME}成交量限制（卖出、买入各不超过日成交的 ${F.share}%），只用 ${plan.planets} / ${plan.wanted} 颗行星，其余行星可以做别的产品（见上方「多产品组合」）。</p>` : ''}
+    return `<p class="pi-note" title="每 ${F.restock} 小时补货，每颗星 ${plan.hubs} 个发射平台（各 ${ctx.formatNumber(LP_CAP)} m³）；一次补货原料约 ${ctx.formatISK(plan.cost / 24 * F.restock)}">每天买入 ${ctx.formatNumber(Math.round(inDay))} m³ · 运出 ${ctx.formatNumber(Math.round(outDay))} m³ · 月净收益 ${ctx.formatISK(plan.profit * 30)}</p>
+      ${plan.wanted ? `<p class="pi-note warn" title="卖出、买入各不超过日成交的 ${F.share}%；其余行星可做别的产品（见「多产品组合」）">受成交量限制，只用 ${plan.planets} / ${plan.wanted} 颗行星</p>` : ''}
       <p class="pi-note" id="piDepth"></p>`;
   })() : '';
   const surplus = buyNote + (plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '')
-    + (plan.strategy === 'raw' ? `<p class="pi-note">P0 体积大：每颗星每天约 ${ctx.formatNumber(Math.round(plan.rate / plan.planets * 24 * (commodity(plan.product)[3] || 0.01)))} m³（发射平台容量 10,000 m³），运输量约是加工成 P1 的 ${Math.round(150 * (commodity(plan.product)[3] || 0.01) / (commodity(p1Of(plan.product))[3] || 0.38) * 10) / 10} 倍。</p>` : '')
-    + (plan.strategy === 'hybrid' ? `<p class="pi-note">不单开工厂星：加工设施平摊在 ${plan.m} 颗采集星上（采集星电网吃紧、CPU 富余，每颗只少放一两个采集头）。需要把其他 P1 运到这些星的发射平台。</p>` : '');
+    + (plan.strategy === 'raw' ? `<p class="pi-note">P0 体积大：每颗星每天约 ${ctx.formatNumber(Math.round(plan.rate / plan.planets * 24 * (commodity(plan.product)[3] || 0.01)))} m³</p>` : '')
+    + (plan.strategy === 'hybrid' ? `<p class="pi-note" title="采集星电网吃紧、CPU 富余，每颗只少放一两个采集头；需要把其他 P1 运到这些星">加工设施平摊在 ${plan.m} 颗采集星上</p>` : '');
 
   // 行星分配
   const roleText = (r) => `${{ single: '单星', extract: '采集', hybrid: '采集+工厂', factory: '工厂' }[r.kind]} · ${cName(r.product)}`;
@@ -1338,7 +1337,7 @@ function renderDetail() {
         </div>`;
       }).join('') || '<p class="text-muted">未分配</p>'}
     </div>`).join('');
-  const warn = assign.warnings.length ? `<p class="pi-note warn">${assign.warnings.length} 个殖民地没有可用行星，${F.mode === 'wh' && !F.whSystem ? '按等级时行星分配只取一个示例虫洞；指定你所在的虫洞可得到准确方案。' : '可扩大地区或增加角色。'}</p>` : '';
+  const warn = assign.warnings.length ? `<p class="pi-note warn">${assign.warnings.length} 个殖民地没有可用行星${F.mode === 'wh' && !F.whSystem ? '，指定所在虫洞可得到准确方案' : '，可扩大地区或增加角色'}</p>` : '';
 
   // 模板
   const [capC, capP] = ccCap();

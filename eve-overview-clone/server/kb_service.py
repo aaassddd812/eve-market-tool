@@ -74,6 +74,109 @@ ABYSSAL_MODELS_TTL = 24 * 3600  # 各类型模型质量
 ABYSSAL_POST_RATE = 10          # 每个 IP 每分钟最多导入 / 刷新次数
 ABYSSAL_LIST_TTL = 300          # 在售列表（按筛选条件）缓存
 ABYSSAL_TYPES_TTL = 7 * 86400   # 各深渊类型的属性范围（最好 / 最差），对方建议长期缓存
+# 本站模型的特征：照搬 MutaMarket（MIT，github.com/MutaMarket/MutaMarket src/estimator/seed.rs）每类深渊装备用的 dogma 属性，
+# 已换成属性 ID；他们的派生属性（采集速度等）不进模型
+ABYSSAL_FEATURES = {
+    47408: (147, 6, 50, 1223, 30, 554, 20),
+    47702: (6, 50, 54, 30, 20),
+    47732: (6, 50, 54, 105),
+    47736: (6, 50, 54),
+    47740: (147, 6, 50, 1223, 30, 554, 20),
+    47745: (147, 6, 50, 1223, 30, 554, 20),
+    47749: (6, 50, 1223, 30, 20),
+    47753: (6, 50, 1223, 30, 20),
+    47757: (6, 50, 1223, 30, 20),
+    47769: (84, 6, 50, 73, 1211, 30),
+    47773: (84, 6, 50, 73, 1211, 30),
+    47777: (84, 6, 50, 73, 1211, 30),
+    47781: (6, 50, 73, 1211, 30, 68),
+    47785: (6, 50, 73, 1211, 30, 68),
+    47789: (6, 50, 73, 1211, 30, 68),
+    47793: (6, 50, 73, 1211, 30, 68),
+    47800: (72, 50, 30, 983),
+    47804: (72, 50, 30, 983),
+    47808: (72, 50, 30, 983),
+    47812: (1159, 50, 796, 30),
+    47817: (1159, 50, 796, 30),
+    47820: (1159, 50, 796, 30),
+    47824: (6, 50, 97, 1897, 1896, 2044, 1180, 54, 30),
+    47828: (6, 50, 97, 1897, 1896, 2044, 1180, 54, 30),
+    47832: (6, 50, 97, 1897, 1896, 2044, 1180, 54, 30),
+    47836: (6, 50, 73, 30, 1795, 68),
+    47838: (6, 50, 73, 30, 1795, 68),
+    47840: (6, 50, 73, 30, 1795, 68),
+    47842: (84, 6, 50, 73, 30, 1795),
+    47844: (84, 6, 50, 73, 30, 1795),
+    47846: (84, 6, 50, 73, 30, 1795),
+    48419: (6, 50, 2044, 1180, 54, 30, 90),
+    48423: (6, 50, 2044, 1180, 54, 30, 90),
+    48427: (6, 50, 2044, 1180, 54, 30, 90),
+    48431: (67, 50, 2267, 30),
+    48435: (67, 50, 2267, 30),
+    48439: (67, 50, 2267, 30),
+    49722: (50, 64, 204),
+    49726: (50, 64, 204),
+    49730: (50, 64, 204),
+    49734: (50, 64, 204),
+    49738: (847, 50, 1255, 213, 204),
+    52227: (267, 268, 269, 270, 50, 271, 272, 273, 274, 974, 975, 976, 977),
+    52230: (267, 268, 269, 270, 50, 73, 271, 272, 273, 274, 974, 975, 976, 977),
+    56303: (6, 50, 54, 30, 105),
+    56304: (6, 50, 54, 30, 105),
+    56305: (6, 50, 1223, 30, 20),
+    56306: (147, 6, 50, 1223, 30, 554, 20),
+    56307: (84, 6, 50, 73, 1211, 30),
+    56308: (84, 6, 50, 73, 30, 1795),
+    56309: (6, 50, 73, 1211, 30, 68),
+    56310: (6, 50, 73, 30, 1795, 68),
+    56311: (6, 50, 2044, 1180, 54, 30, 90),
+    56312: (6, 50, 97, 1897, 1896, 2044, 1180, 54, 30),
+    56313: (50, 30, 2351, 2347, 2346, 2306, 2307, 2353),
+    60478: (265, 64, 114, 508, 116, 158, 9, 117, 54, 263, 160, 37),
+    60479: (265, 64, 114, 508, 116, 158, 9, 117, 54, 263, 160, 37),
+    60480: (265, 64, 114, 508, 116, 158, 9, 117, 54, 263, 160, 37),
+    60481: (265, 64, 114, 508, 116, 158, 9, 117, 54, 263, 160, 37),
+    60482: (50, 1255, 30),
+    60483: (50, 2337, 2335, 2338, 2336, 30),
+    78621: (50, 64, 204),
+    84434: (6, 50, 73, 114, 99, 30),
+    84435: (6, 50, 73, 99, 30, 118),
+    84436: (6, 50, 73, 99, 117, 30),
+    84437: (6, 50, 73, 99, 116, 30),
+    84438: (6, 50, 73, 114, 99, 30),
+    84439: (6, 50, 73, 99, 30, 118),
+    84440: (6, 50, 73, 99, 117, 30),
+    84441: (6, 50, 73, 99, 116, 30),
+    84442: (6, 50, 73, 114, 99, 30),
+    84443: (6, 50, 73, 99, 30, 118),
+    84444: (6, 50, 73, 99, 117, 30),
+    84445: (6, 50, 73, 99, 116, 30),
+    90460: (6, 50, 73, 54, 77, 5969, 5967, 3154, 3153, 30),
+    90467: (6, 50, 73, 54, 77, 5969, 5967, 3154, 3153, 30),
+    90474: (6, 50, 73, 54, 77, 5969, 5967, 3154, 3153, 30),
+    90483: (6, 50, 73, 54, 77, 5969, 5967, 3154, 3153, 30),
+    90487: (6, 50, 73, 54, 77, 5969, 5967, 3154, 3153, 30),
+    90493: (6, 50, 73, 54, 77, 5969, 5967, 3154, 3153, 30),
+    90498: (6, 50, 73, 54, 77, 5969, 5967, 3154, 3153, 30),
+    90502: (6, 50, 73, 54, 77, 5969, 5967, 3154, 3153, 30),
+    90524: (6, 50, 73, 54, 77, 5969, 5967, 3154, 3153, 30),
+    90529: (6, 50, 73, 54, 77, 3154, 3153, 30),
+    90593: (6, 50, 73, 54, 77, 3154, 3153, 30),
+    90614: (73, 54, 37, 77, 3154, 3153),
+    90618: (73, 54, 37, 77, 3154, 3153),
+    90621: (73, 54, 37, 77, 3154, 3153),
+    90622: (73, 54, 37, 77, 3154, 3153),
+    97242: (848, 847, 50, 349, 351, 767),
+    97243: (50, 20),
+    97244: (848, 847, 50, 349, 351, 767),
+    97245: (50, 459),
+    97648: (84, 6, 50, 73, 2044, 54, 30),
+    97657: (84, 6, 50, 73, 2044, 54, 30),
+    97668: (84, 6, 50, 73, 2044, 54, 30),
+    97675: (84, 6, 50, 73, 2044, 54, 30),
+}
+ABYSSAL_MIN_ROWS = 50          # 至少 50 条数据才训练（与 MutaMarket 相同）
+ABYSSAL_TRAIN_EVERY = 6 * 3600
 ABYSSAL_SORTS = {"price", "value", "fraction", "contract-date", "date-added"}
 ABYSSAL_META_GROUPS = {"t1", "t2", "storyline", "faction", "officer", "deadspace"}
 ABYSSAL_FLAGS = {"goldbar", "brownbar", "diamondbar", "item-exchange", "auction", "no-multi-item-contracts", "contracts-only", "in-jita", "without-other-items"}
@@ -210,6 +313,16 @@ CREATE TABLE IF NOT EXISTS contract_prices(type_id INTEGER PRIMARY KEY, price RE
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 -- 深渊装备估价（MutaMarket 单件结果，按 item_id 缓存；data 为本站归一化后的 JSON）
 CREATE TABLE IF NOT EXISTS abyssal(item_id INTEGER PRIMARY KEY, type_id INTEGER, data TEXT, fetched_at INTEGER);
+-- 本站深渊估价模型的训练数据：EVE Ref 公开合同快照里只卖一件深渊装备的物品交换合同（attrs 为该件全部 dogma 属性 JSON）；
+-- gone = 1：到期前从快照消失（疑似成交），2：到期后消失
+CREATE TABLE IF NOT EXISTS abyssal_contracts(contract_id INTEGER PRIMARY KEY, item_id INTEGER, type_id INTEGER, source_type_id INTEGER, mutator_type_id INTEGER,
+  price REAL, issued INTEGER, expires INTEGER, first_seen INTEGER, last_seen INTEGER, gone INTEGER DEFAULT 0, attrs TEXT);
+CREATE INDEX IF NOT EXISTS abyssal_contracts_type ON abyssal_contracts(type_id);
+CREATE INDEX IF NOT EXISTS abyssal_contracts_item ON abyssal_contracts(item_id);
+-- ESI 单件突变属性（不会变，永久缓存）
+CREATE TABLE IF NOT EXISTS abyssal_dyn(item_id INTEGER PRIMARY KEY, type_id INTEGER, source_type_id INTEGER, mutator_type_id INTEGER, attrs TEXT);
+-- 训练好的模型（pickle 的树数组）与交叉验证指标
+CREATE TABLE IF NOT EXISTS abyssal_models(type_id INTEGER PRIMARY KEY, model BLOB, stats TEXT, trained_at INTEGER);
 -- 阵亡装配：从击杀原文提取的各槽位物品（JSON），供 shipfits 统计常见装配
 CREATE TABLE IF NOT EXISTS km_fits(id INTEGER PRIMARY KEY, ship INTEGER, time INTEGER, fit TEXT);
 CREATE INDEX IF NOT EXISTS kmfit_ship ON km_fits(ship, time);
@@ -638,7 +751,7 @@ class Workers:
                 meta = json.load(tar.extractfile(next(m for m in tar.getmembers() if m.name.endswith("meta.json"))))
             except Exception:
                 meta = {}
-            contracts = {}
+            contracts, times = {}, {}
             for c in rows("contracts.csv"):
                 if c["type"] == "courier" and not (c["date_expired"] and epoch(c["date_expired"]) < now):
                     couriers.append(courier_row(c))
@@ -648,10 +761,34 @@ class Workers:
                 if price <= 0 or (c["date_expired"] and epoch(c["date_expired"]) < now):
                     continue
                 contracts[c["contract_id"]] = (price, int(c["system_id"] or 0))
+                times[c["contract_id"]] = (int(epoch(c["date_issued"])) if c["date_issued"] else 0, int(epoch(c["date_expired"])) if c["date_expired"] else 0)
             items = collections.defaultdict(list)
             for it in rows("contract_items.csv"):
                 if it["contract_id"] in contracts:
                     items[it["contract_id"]].append(it)
+            # 本站深渊估价模型的训练数据：只卖一件深渊装备的合同
+            model = getattr(self.store, "abyssal_model", None)
+            if model:
+                single = {}
+                for cid, lst in items.items():
+                    it = lst[0]
+                    if len(lst) == 1 and it["is_included"] == "true" and it["item_id"] and int(it["type_id"] or 0) in ABYSSAL_FEATURES:
+                        single[it["item_id"]] = (cid, int(it["type_id"]))
+                try:
+                    dyn = {d["item_id"]: d for d in rows("contract_dynamic_items.csv") if d["item_id"] in single}
+                    attrs = collections.defaultdict(dict)
+                    for a in rows("contract_dynamic_items_dogma_attributes.csv"):
+                        if a["item_id"] in dyn:
+                            attrs[a["item_id"]][a["attribute_id"]] = float(a["value"])
+                    batch = []
+                    for item_id, d in dyn.items():
+                        cid, tid = single[item_id]
+                        if attrs.get(item_id):
+                            batch.append((int(cid), int(item_id), tid, int(d["source_type_id"] or 0), int(d["mutator_type_id"] or 0),
+                                          contracts[cid][0], *times[cid], attrs[item_id]))
+                    model.ingest(batch, now)
+                except Exception:
+                    log.exception("深渊模型训练数据读取失败")
         bpo, bpc = collections.defaultdict(list), collections.defaultdict(list)
         for cid, lst in items.items():
             if len(lst) != 1:
@@ -2153,6 +2290,297 @@ class Abyssal:
         return out
 
 
+# ---------------------------------------------------------------- 本站深渊估价模型
+# 算法照搬 MutaMarket 的估价器（MIT 许可，github.com/MutaMarket/MutaMarket src/estimator/forest.rs）：
+# 每个深渊类型一个随机森林回归（自助采样的 CART 树取平均，每次分裂考虑全部特征，max_depth 20、min_samples_leaf 2），
+# 在 ln(1 + 价格) 上拟合，5 折连续分组交叉验证得到 R² / MAE / NMAE。
+# 不同之处：MutaMarket 的训练数据是他们记录的真实单件成交（会员数据，不公开），训练好的模型也只存在他们的数据库里；
+# 本站用 EVE Ref 公开合同快照（约 30 分钟一份）里只卖一件深渊装备的合同：到期前消失的（疑似成交）权重加倍，
+# 仍在挂的按挂牌价，所以整体偏向挂牌价。树的数量 100（他们 300），没有用原装备市场价做锚点。
+# 只在 MutaMarket 没有这件装备（或是装配里自定义的属性）时使用。
+class Forest:
+    """numpy 随机森林；每棵树存成平铺数组：feature（-1 为叶）、threshold、left、right、value"""
+    MAX_DEPTH, MIN_LEAF = 20, 2
+
+    def __init__(self, trees):
+        self.trees = trees
+
+    @classmethod
+    def fit(cls, X, y, n_trees=100, seed=42):
+        import numpy as np
+        rng = np.random.default_rng(seed)
+        n = len(y)
+        return cls([cls._tree(X, y, rng.integers(0, n, n)) for _ in range(n_trees)])
+
+    @classmethod
+    def _tree(cls, X, y, rows):
+        import numpy as np
+        feat, thr, left, right, val = [], [], [], [], []
+        stack = [(rows, 0, -1, False)]
+        while stack:
+            idx, depth, parent, is_right = stack.pop()
+            node = len(feat)
+            ys = y[idx]
+            mean = float(ys.mean())
+            feat.append(-1); thr.append(0.0); left.append(0); right.append(0); val.append(mean)
+            if parent >= 0:
+                (right if is_right else left)[parent] = node
+            n = len(idx)
+            if depth >= cls.MAX_DEPTH or n < 2 * cls.MIN_LEAF or float(ys.var()) <= 1e-12:
+                continue
+            best, total = None, float(ys.sum())
+            for f in range(X.shape[1]):
+                xs = X[idx, f]
+                order = np.argsort(xs, kind="stable")
+                xs, yo = xs[order], ys[order]
+                cl = np.cumsum(yo)[:-1]
+                nl = np.arange(1, n)
+                ok = (xs[1:] > xs[:-1] + 1e-7) & (nl >= cls.MIN_LEAF) & (n - nl >= cls.MIN_LEAF)
+                if not ok.any():
+                    continue
+                proxy = np.where(ok, cl * cl / nl + (total - cl) ** 2 / (n - nl), -np.inf)
+                i = int(proxy.argmax())
+                if best is None or proxy[i] > best[0]:
+                    t = xs[i] / 2 + xs[i + 1] / 2
+                    best = (proxy[i], f, xs[i] if t == xs[i + 1] else t)
+            if best is None:
+                continue
+            _, f, t = best
+            feat[node], thr[node] = f, float(t)
+            mask = X[idx, f] <= t
+            stack.append((idx[~mask], depth + 1, node, True))
+            stack.append((idx[mask], depth + 1, node, False))
+        return (np.array(feat, dtype=np.int16), np.array(thr), np.array(left, dtype=np.int32), np.array(right, dtype=np.int32), np.array(val))
+
+    def predict(self, X):
+        import numpy as np
+        out = np.zeros(len(X))
+        rows = np.arange(len(X))
+        for feat, thr, left, right, val in self.trees:
+            node = np.zeros(len(X), dtype=np.int64)
+            for _ in range(self.MAX_DEPTH + 1):
+                f = feat[node]
+                leaf = f < 0
+                if leaf.all():
+                    break
+                go_left = X[rows, np.maximum(f, 0)] <= thr[node]
+                node = np.where(leaf, node, np.where(go_left, left[node], right[node]))
+            out += val[node]
+        return out / len(self.trees)
+
+
+def fit_abyssal(X, y):
+    """在子进程里跑（训练是纯 numpy 小运算，放在服务进程里会长时间占住 GIL）：5 折交叉验证 + 全量训练"""
+    import numpy as np
+    n = len(y)
+    # 5 折连续分组交叉验证（与 MutaMarket 相同），指标按 ISK 计算
+    r2s, maes, nmaes, start = [], [], [], 0
+    for fold in range(5):
+        size = n // 5 + (fold < n % 5)
+        test = np.arange(start, start + size)
+        start += size
+        train = np.setdiff1d(np.arange(n), test)
+        pred = np.expm1(Forest.fit(X[train], y[train], n_trees=40).predict(X[test]))
+        truth = np.expm1(y[test])
+        ss = ((truth - truth.mean()) ** 2).sum()
+        r2s.append(1 - ((truth - pred) ** 2).sum() / ss if ss else 0.0)
+        mae = float(np.abs(truth - pred).mean())
+        maes.append(mae)
+        nmaes.append(mae / truth.mean() * 100 if truth.mean() else 0.0)
+    return Forest.fit(X, y).trees, {"r2": float(np.mean(r2s)), "mae": float(np.mean(maes)), "nmae": float(np.mean(nmaes))}
+
+
+class AbyssalModel:
+    def __init__(self, store):
+        self.store = store
+        self.lock = threading.Lock()
+        self.models = {}       # type_id -> (Forest, stats)
+        self.trained_at = 0
+        try:
+            import numpy  # noqa: F401
+            self.enabled = True
+        except ImportError:
+            self.enabled = False
+            log.warning("没有 numpy：本站深渊估价模型不可用")
+        if self.enabled:
+            self.load()
+
+    def load(self):
+        import pickle
+        for type_id, blob, stats in self.store.conn().execute("SELECT type_id, model, stats FROM abyssal_models"):
+            try:
+                self.models[type_id] = (Forest(pickle.loads(blob)), json.loads(stats))
+            except Exception:
+                log.warning("深渊模型 %s 读取失败", type_id)
+
+    # ---- 训练数据：每份合同快照调用一次
+    def ingest(self, rows, now):
+        """rows: [(contract_id, item_id, type_id, source, mutator, price, issued, expires, attrs dict)]"""
+        conn = self.store.conn()
+        now = int(now)
+        conn.executemany(
+            """INSERT INTO abyssal_contracts(contract_id, item_id, type_id, source_type_id, mutator_type_id, price, issued, expires, first_seen, last_seen, gone, attrs)
+               VALUES(?,?,?,?,?,?,?,?,?,?,0,?)
+               ON CONFLICT(contract_id) DO UPDATE SET price = excluded.price, last_seen = excluded.last_seen, gone = 0""",
+            [(c, i, t, s, m, p, iss, exp, now, now, json.dumps(a, separators=(",", ":"))) for c, i, t, s, m, p, iss, exp, a in rows])
+        if len(rows) > 500:   # 快照不完整时不判断谁消失了
+            conn.execute("UPDATE abyssal_contracts SET gone = CASE WHEN expires > last_seen + 3600 THEN 1 ELSE 2 END WHERE gone = 0 AND last_seen < ?", (now,))
+        conn.execute("DELETE FROM abyssal_contracts WHERE last_seen < ?", (now - 180 * 86400,))
+        # 属性顺便存进单件缓存
+        conn.executemany("INSERT OR IGNORE INTO abyssal_dyn(item_id, type_id, source_type_id, mutator_type_id, attrs) VALUES(?,?,?,?,?)",
+                         [(i, t, s, m, json.dumps(a, separators=(",", ":"))) for c, i, t, s, m, p, iss, exp, a in rows])
+        conn.commit()
+        log.info("深渊模型训练数据：本次 %d 份单件合同", len(rows))
+        if self.enabled and time.time() - self.trained_at > ABYSSAL_TRAIN_EVERY:
+            self.trained_at = time.time()
+            threading.Thread(target=self.train_all, daemon=True).start()
+
+    def dataset(self, type_id):
+        import numpy as np
+        feats = ABYSSAL_FEATURES[type_id]
+        rows = self.store.conn().execute(
+            "SELECT price, gone, attrs FROM abyssal_contracts WHERE type_id = ? AND gone IN (0, 1) AND price >= 100000 ORDER BY contract_id", (type_id,)).fetchall()
+        X, y, sold, listed = [], [], 0, 0
+        for price, gone, attrs in rows:
+            a = json.loads(attrs)
+            x = [float(a.get(str(f), 0.0)) for f in feats]
+            for _ in range(2 if gone == 1 else 1):   # 疑似成交权重加倍
+                X.append(x); y.append(price)
+            sold += gone == 1
+            listed += gone == 0
+        if not y:
+            return None
+        X, y = np.array(X), np.log1p(np.array(y))
+        # 去掉离谱的挂牌价：对数价格偏离中位数超过 3.5 个 MAD
+        med = np.median(y)
+        mad = np.median(np.abs(y - med)) * 1.4826
+        if mad > 0:
+            keep = np.abs(y - med) <= 3.5 * mad
+            X, y = X[keep], y[keep]
+        return X, y, sold, listed
+
+    def train_type(self, type_id, pool):
+        import pickle
+        data = self.dataset(type_id)
+        if not data or len(data[1]) < ABYSSAL_MIN_ROWS:
+            with self.lock:
+                self.models.pop(type_id, None)
+            conn = self.store.conn()
+            conn.execute("DELETE FROM abyssal_models WHERE type_id = ?", (type_id,))
+            conn.commit()
+            return False
+        X, y, sold, listed = data
+        trees, metrics = pool.submit(fit_abyssal, X, y).result()
+        stats = {"data_count": len(y), "sold": int(sold), "listed": int(listed), **metrics,
+                 "trained_at": int(time.time()), "features": list(ABYSSAL_FEATURES[type_id])}
+        conn = self.store.conn()
+        conn.execute("INSERT OR REPLACE INTO abyssal_models(type_id, model, stats, trained_at) VALUES(?,?,?,?)",
+                     (type_id, pickle.dumps(trees), json.dumps(stats), stats["trained_at"]))
+        conn.commit()
+        with self.lock:
+            self.models[type_id] = (Forest(trees), stats)
+        return True
+
+    def train_all(self):
+        import multiprocessing
+        t0, ok = time.time(), 0
+        with concurrent.futures.ProcessPoolExecutor(1, mp_context=multiprocessing.get_context("spawn")) as pool:
+            for type_id in ABYSSAL_FEATURES:
+                try:
+                    ok += self.train_type(type_id, pool)
+                except Exception:
+                    log.exception("深渊模型 %s 训练失败", type_id)
+        log.info("深渊模型：%d / %d 种已训练，用时 %.0f 秒", ok, len(ABYSSAL_FEATURES), time.time() - t0)
+
+    def predict(self, type_id, attrs):
+        import numpy as np
+        with self.lock:
+            m = self.models.get(type_id)
+        if not m:
+            return None, None
+        forest, stats = m
+        x = np.array([[float(attrs.get(f, attrs.get(str(f), 0.0))) for f in ABYSSAL_FEATURES[type_id]]])
+        return float(np.expm1(forest.predict(x)[0])), stats
+
+    def stats(self, q=None):
+        """GET /api/v1/abyssal/estimator：本站模型各类型的数据量与交叉验证指标"""
+        with self.lock:
+            rows = [{"type_id": t, **s} for t, (_, s) in sorted(self.models.items())]
+        counts = dict(self.store.conn().execute("SELECT type_id, COUNT(*) FROM abyssal_contracts WHERE gone IN (0, 1) GROUP BY type_id").fetchall())
+        return {"enabled": self.enabled, "models": rows, "data": {str(k): v for k, v in counts.items()},
+                "features": {str(k): list(v) for k, v in ABYSSAL_FEATURES.items()}}
+
+    # ---- 单件属性：本站缓存 → ESI
+    def dynamic(self, type_id, item_id):
+        row = self.store.conn().execute("SELECT type_id, source_type_id, mutator_type_id, attrs FROM abyssal_dyn WHERE item_id = ?", (item_id,)).fetchone()
+        if row:
+            return {"type_id": row[0], "source_type_id": row[1], "mutator_type_id": row[2], "attrs": json.loads(row[3])}
+        try:
+            d, _ = get_json(f"{ESI}/dogma/dynamic/items/{type_id}/{item_id}/", timeout=20, retries=2)
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 404):
+                raise KeyError("ESI 读不到这件装备的突变属性")
+            raise
+        attrs = {str(a["attribute_id"]): a["value"] for a in d.get("dogma_attributes") or []}
+        conn = self.store.conn()
+        conn.execute("INSERT OR IGNORE INTO abyssal_dyn(item_id, type_id, source_type_id, mutator_type_id, attrs) VALUES(?,?,?,?,?)",
+                     (item_id, type_id, d.get("source_type_id"), d.get("mutator_type_id"), json.dumps(attrs, separators=(",", ":"))))
+        conn.commit()
+        return {"type_id": type_id, "source_type_id": d.get("source_type_id"), "mutator_type_id": d.get("mutator_type_id"), "attrs": attrs}
+
+
+def abyssal_estimate(abyssal, model, body):
+    """POST /api/v1/abyssal/estimate {items: [{type_id, item_id} | {type_id, attrs: {属性ID: 值}}], mutamarket: true}
+    每件：有 item_id 时先看 MutaMarket（只读，不导入），没有估价再用本站模型；只给属性时直接用本站模型"""
+    items = body.get("items")
+    if not isinstance(items, list) or not 0 < len(items) <= 50:
+        raise ValueError("items 应为 1 ~ 50 件")
+    use_muta = body.get("mutamarket", True) is not False
+    abyssal.check_server(body.get("server"))
+
+    def one(it):
+        try:
+            type_id = int(it.get("type_id"))
+        except (TypeError, ValueError, AttributeError):
+            return {"error": "需要 type_id"}
+        out = {"type_id": type_id}
+        item_id = it.get("item_id")
+        attrs = it.get("attrs")
+        if item_id is not None:
+            try:
+                item_id = int(item_id)
+            except (TypeError, ValueError):
+                return {**out, "error": "item_id 无效"}
+            out["item_id"] = item_id
+            if use_muta:
+                try:
+                    m = abyssal.module({}, item_id)
+                    if m.get("estimated_value"):
+                        return {**out, "value": m["estimated_value"], "source": "mutamarket", "model": m.get("model"),
+                                "updated_at": m.get("estimated_value_updated_at"), "source_url": m.get("source_url")}
+                except (KeyError, RuntimeError):
+                    pass
+            try:
+                attrs = model.dynamic(type_id, item_id)["attrs"]
+            except KeyError as e:
+                return {**out, "error": str(e.args[0])}
+            except Exception:
+                return {**out, "error": "ESI 暂时读不到属性"}
+        if not isinstance(attrs, dict):
+            return {**out, "error": "需要 item_id 或 attrs"}
+        if type_id not in ABYSSAL_FEATURES:
+            return {**out, "error": "不是深渊装备"}
+        if not model.enabled:
+            return {**out, "error": "本站模型不可用"}
+        value, stats = model.predict(type_id, attrs)
+        if value is None:
+            return {**out, "value": None, "source": "model", "error": "该类型数据不足，暂无本站模型"}
+        return {**out, "value": value, "source": "model", "model": {k: stats[k] for k in ("data_count", "sold", "listed", "r2", "mae", "nmae", "trained_at")}}
+
+    with concurrent.futures.ThreadPoolExecutor(4) as pool:
+        return {"results": list(pool.map(one, items))}
+
+
 # ---------------------------------------------------------------- 开放接口
 class RateLimiter:
     """按 IP 的令牌桶：容量 API_RATE，每秒恢复 API_RATE / 60 个"""
@@ -2215,6 +2643,7 @@ def open_routes(api, industry, abyssal=None):
         (("abyssal", "models"), "abyssal_models", abyssal.models),
         (("abyssal", "types"), "abyssal_types", abyssal.types),
         (("abyssal", "list"), "abyssal_list", abyssal.list),
+        (("abyssal", "estimator"), "abyssal_estimator", lambda q: abyssal.model.stats(q)),
     ] if abyssal else [])
 
 
@@ -2312,22 +2741,28 @@ def make_handler(api, static_dir, industry, abyssal):
             url = urllib.parse.urlparse(self.path)
             cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
             err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
-            if url.path.rstrip("/") != "/api/v1/abyssal/appraise":
+            path = url.path.rstrip("/")
+            if path not in ("/api/v1/abyssal/appraise", "/api/v1/abyssal/estimate"):
                 return err(404, "接口不存在，文档见 /api.html")
+            estimate = path.endswith("/estimate")
             try:
                 length = int(self.headers.get("Content-Length") or 0)
-                if not 0 < length <= 4096:
+                if not 0 < length <= (65536 if estimate else 4096):
                     raise ValueError
                 body = json.loads(self.rfile.read(length))
                 if not isinstance(body, dict):
                     raise ValueError
             except ValueError:
-                return err(400, "请求体应为 JSON：{type_id, item_id}")
-            ok, left, retry = post_limiter.take(self.client_ip())
+                return err(400, "请求体应为 JSON：{items: [...]}" if estimate else "请求体应为 JSON：{type_id, item_id}")
+            if estimate:   # 只读估价：走普通额度，每 10 件算 1 次
+                items = body.get("items") if isinstance(body.get("items"), list) else []
+                ok, left, retry = limiter.take(self.client_ip(), 1 + len(items) // 10)
+            else:
+                ok, left, retry = post_limiter.take(self.client_ip())
             if not ok:
                 return err(429, f"查询太频繁，请 {retry} 秒后再试", {"Retry-After": str(retry)})
             try:
-                return self.send_json(200, abyssal.appraise(body), cors)
+                return self.send_json(200, abyssal_estimate(abyssal, abyssal.model, body) if estimate else abyssal.appraise(body), cors)
             except KeyError as e:
                 return err(404, str(e.args[0]) if e.args else "MutaMarket 没有这件装备")
             except ValueError as e:
@@ -2404,12 +2839,14 @@ def main():
     with open(args.system_regions, encoding="utf-8") as fh:
         system_regions = {int(k): v for k, v in json.load(fh).items()}
     store = Store(args.db, system_regions, args.days + 1)
+    store.abyssal_model = AbyssalModel(store)
     Workers(store, args.days, "r2z2" if args.live == "redisq" else args.live).start()
     api = Api(store)
     threading.Thread(target=api.warm, daemon=True).start()
     here = os.path.dirname(os.path.abspath(__file__))
     industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])
     abyssal = Abyssal(store)
+    abyssal.model = store.abyssal_model
     server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal))
     log.info("击杀记录服务已启动 http://%s:%d", args.bind, args.port)
     server.serve_forever()

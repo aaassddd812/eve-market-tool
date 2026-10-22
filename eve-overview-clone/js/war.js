@@ -148,7 +148,7 @@ function fwHtml(d) {
       <section class="pi-card"><div class="pi-card-head"><h3>争夺最激烈的星系</h3></div>
         <ol class="fw-board">${hot.map((s) => `<li><button class="link-btn fw-name" data-fw-sys="${s.solar_system_id}">${esc(ctx.officialName(s.solar_system_id) || s.solar_system_id)}</button>
           <small>${esc(nameOf(s.occupier_faction_id))}</small><i class="fw-bar"><em style="width:${Math.min(100, s.pct * 100).toFixed(1)}%"></em></i><b>${(s.pct * 100).toFixed(0)}%</b></li>`).join('')}</ol>
-        <p class="text-muted valuation-note">进度 = 胜利点 ÷ 阈值，达到 100% 时星系易主。点星系名在星图中查看。</p>
+        
       </section>
     </div>`;
 }
@@ -246,7 +246,7 @@ async function openWar(w) {
     kills.sort((x, y) => new Date(y.killmail_time) - new Date(x.killmail_time));
     await kb.prepareKills(kills);
     if (modal.hidden || !$('warKills')) return;
-    $('warKills').innerHTML = kb.killTableHtml(kills) + `<p class="text-muted valuation-note">最近 ${kills.length} 次击杀（最多 60），价值按 ESI 全服均价估算。</p>`;
+    $('warKills').innerHTML = kb.killTableHtml(kills) + `<p class="text-muted valuation-note">最近 ${kills.length} 次击杀</p>`;
     kb.bindKillClicks($('warKills'), kills);
   } catch (error) {
     if ($('warKills')) $('warKills').innerHTML = '<p class="text-muted">击杀读取失败：' + esc(error.message) + '</p>';

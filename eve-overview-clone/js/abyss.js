@@ -403,11 +403,11 @@ function renderItem() {
           ${c ? `<button class="btn btn-sm" data-abyss-contract="${c.id}">在游戏里打开合同</button>` : ''}
           <button class="btn btn-ghost btn-sm" data-abyss-esi>ESI 原始属性</button>
         </div>
-        <p class="text-muted aby-note">模型估价按真实单件合同成交价训练，可能偏差很大：先看下面相似装备实际挂多少。「刷新估价」会让 MutaMarket 从 ESI 重新读取这件装备。</p>
+        <p class="text-muted aby-note">估价仅供参考，先看相似装备实际挂价</p>
       </div>
     </div>
     <div class="pi-card aby-sim">
-      <div class="pi-card-head"><h3>属性明细</h3><span class="text-muted">勾选属性后可搜索相似装备；roll 分数为在本突变质体范围中的位置（-100 最差 … 0 原值 … 100 最好）</span></div>
+      <div class="pi-card-head"><h3>属性明细</h3><span class="text-muted" title="roll 分数：在本突变质体范围中的位置（-100 最差 … 0 原值 … 100 最好）">勾选属性搜索相似装备</span></div>
       <div class="table-scroll"><table class="pc-mini-table aby-table"><thead><tr><th>属性</th><th class="num">原装备</th><th class="num">突变后</th><th class="num">变化</th><th class="num">roll 分数</th><th class="num">该类型范围（最差 ~ 最好）</th></tr></thead><tbody>${rows}</tbody></table></div>
       <div class="aby-actions aby-sim-bar">
         <label><span class="text-muted">允许偏差</span><select class="input" id="abyssTol">${[5, 10, 20, 30].map((v) => `<option value="${v}"${v === 10 ? ' selected' : ''}>±${v}%</option>`).join('')}</select></label>
@@ -416,7 +416,7 @@ function renderItem() {
         <button class="btn btn-ghost btn-sm" data-abyss-type="${m.type_id}">搜索该类型</button>
       </div>
     </div>
-    <div class="pi-card"><div class="pi-card-head"><h3>与各原装备对比</h3><span class="text-muted">这个突变质体能用在哪些装备上、它们的原始属性和吉他价格——看这件 roll 是否比直接买势力 / 官员装备划算</span></div>
+    <div class="pi-card"><div class="pi-card-head"><h3>与各原装备对比</h3><span class="text-muted">对比直接买原装备是否划算</span></div>
       <div id="abyssSources"><div class="pi-loading">读取原装备…</div></div></div>
   </section>`;
   renderSources(m);
@@ -453,7 +453,7 @@ async function renderSources(m) {
     }).join('');
     box.innerHTML = `<div class="table-scroll"><table class="pc-mini-table aby-table"><thead><tr><th>原装备</th>${attrs.map((a) => `<th class="num">${esc(attrName(a))}</th>`).join('')}<th class="num">吉他最低卖价</th></tr></thead>
       <tbody><tr class="aby-self"><td><b>这件突变装备</b></td>${attrs.map((a) => `<td class="num"><b>${esc(fmtVal(a, a.value))}</b></td>`).join('')}<td class="num">${m.estimated_value ? '估 ' + ctx.formatISK(m.estimated_value) : '—'}</td></tr>${rows}</tbody></table></div>
-      <p class="text-muted aby-note">绿色表示这件突变装备在该属性上比那件原装备好，红色表示更差。</p>`;
+      `;
   } catch (e) {
     if (box.isConnected) box.innerHTML = `<p class="text-muted">原装备读取失败：${esc(e.message)}</p>`;
   }
@@ -524,9 +524,8 @@ function statsHtml() {
   }).join('');
   const withModel = D.types.filter((t) => t.model?.r2 != null).length;
   return `<section class="pi-page aby-page">
-    <div class="pi-head"><h2>价格模型统计</h2><span class="text-muted">${D.types.length} 种深渊装备，${withModel} 种有估价模型</span></div>
-    <div class="pi-card"><p class="text-muted aby-note" style="margin:0 0 10px">MutaMarket 为每种深渊装备单独训练随机森林模型：输入是突变属性，标签是真实的单件合同成交价，至少 50 笔成交才训练。
-      R² 是该类型整体拟合度（不是某件装备卖出该价的概率），平均误差（NMAE）是该类型预测的平均偏差比例。点一行查看该类型在售装备。</p>
+    <div class="pi-head"><h2 title="每种深渊装备一个随机森林模型，按真实单件合同成交价训练；R² 为类型整体拟合度，平均误差为预测平均偏差比例">价格模型统计</h2><span class="text-muted">${D.types.length} 种深渊装备，${withModel} 种有估价模型</span></div>
+    <div class="pi-card">
       <div class="table-scroll"><table class="pc-mini-table aby-table aby-stats"><thead><tr><th>深渊装备</th><th>分类</th><th class="num">成交样本</th><th class="num">可信度</th><th class="num">R²</th><th class="num">平均误差</th><th class="num">平均绝对误差</th><th class="num">训练时间</th></tr></thead><tbody>${rows}</tbody></table></div></div></section>`;
 }
 

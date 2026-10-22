@@ -436,7 +436,7 @@ function renderKill(k, val, priceNote, insurance) {
       <button data-kill-tab="fit" class="active">装配与物品</button>
       <button data-kill-tab="attackers">攻击者（${k.attackers.length}）</button>
     </div>
-    <div class="kb-pane" data-pane="fit"><div class="kb-fit-cols"><span>最低卖价</span><span>最高收价</span></div>${fit}<p class="valuation-note">单项按${app.esc(val.region.hub.name)}的最低卖价 / 最高收购价估值（含船体，蓝图副本不计），可在上方切换交易中心。${app.esc(priceNote || (SERVER.kb ? '总价值、掉落与摧毁价值为 zKillboard 估值。' : '总价值按 ESI 全服均价估算。'))}</p></div>
+    <div class="kb-pane" data-pane="fit"><div class="kb-fit-cols"><span>最低卖价</span><span>最高收价</span></div>${fit}<p class="valuation-note" title="${app.esc(priceNote || (SERVER.kb ? '总价值为 zKillboard 估值' : '总价值按 ESI 全服均价估算'))}">按${app.esc(val.region.hub.name)}估值</p></div>
     <div class="kb-pane" data-pane="attackers" hidden>${attackers}</div>`;
 }
 

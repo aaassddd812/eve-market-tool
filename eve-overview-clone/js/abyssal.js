@@ -99,7 +99,7 @@ function contractText(c) {
   return `${single ? '挂牌' : '所在合同'} ${ctx.formatISK(c.price)}${single ? '' : `（含 ${(c.abyssal_modules_count || 0) + (c.non_abyssal_modules_count || 0)} 件物品）`}`;
 }
 
-const NOTE = '估价来自 <a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a>：按真实单件合同成交价训练的模型预测，仅供参考，不是能立即成交的价格。点「查询估价」会让 MutaMarket 从 ESI 导入这件装备，并在其网站公开显示。';
+const NOTE = '数据：<a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a> · 仅供参考 · 「查询估价」会在其网站公开这件装备';
 
 // ---------- 突变属性弹窗里的一块 ----------
 export function mountItem(el, type, item) {

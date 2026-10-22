@@ -836,7 +836,7 @@ async function renderMine(body) {
   }
   let bpsHtml;
   if (bps.error) {
-    bpsHtml = `<p class="text-muted">蓝图读取失败：${esc(bps.error)}</p><p class="pi-note">需要蓝图读取权限，开通后重新绑定 ESI。</p>`;
+    bpsHtml = `<p class="text-muted">蓝图读取失败：${esc(bps.error)}</p><p class="pi-note">需要蓝图读取权限</p>`;
   } else if (!bps.length) bpsHtml = '<p class="text-muted">没有蓝图</p>';
   else {
     const prodOf = new Map(Object.entries(D.data.bp).map(([pid, b]) => [b[0], Number(pid)]));

@@ -216,7 +216,7 @@ function pageRow(x) {
     <div class="guide-row-meta">${srcBadge(x)}${isTr(x) ? '<span class="guide-lang tr">译文</span>' : ''}<small>${x.m || 1} 分钟</small></div></a>`;
 }
 
-const WIKI_NOTE = `<p class="text-muted valuation-note">图文资料全文收录自新伊甸学院（EVE 官方，版权归 CCP Games）、EVE 星战前夜 BWIKI（CC BY-NC-SA 4.0）、萌娘百科（CC BY-NC-SA 3.0 CN）和 EVE University Wiki（CC BY-SA 4.0，英文原文，本站翻译）。每篇文章开头标注了出处和原文链接，内容以原文为准。</p>`;
+const WIKI_NOTE = `<p class="text-muted valuation-note" title="新伊甸学院（CCP Games）、BWIKI（CC BY-NC-SA 4.0）、萌娘百科（CC BY-NC-SA 3.0 CN）、EVE University Wiki（CC BY-SA 4.0，本站翻译）；以原文为准">资料来源与许可见各文章开头</p>`;;
 
 function renderWikiHome() {
   const all = pages();
@@ -283,7 +283,7 @@ function renderVideoList() {
       return vs.length ? `<section class="guide-section">${S.cat ? '' : `<div class="guide-section-head"><h3>${n}</h3><span class="text-muted">${vs.length} 个</span></div>`}
         <div class="guide-vgrid">${vs.map(videoCard).join('')}</div></section>` : '';
     }).join('') || '<p class="legend-empty">没有符合条件的视频</p>'}
-    <p class="text-muted valuation-note">视频版权归原作者，本站只嵌入原平台的播放器。B 站视频标了发布日期，较早的视频里界面和数值可能已经变了。</p></section>`;
+    <p class="text-muted valuation-note">视频版权归原作者</p></section>`;
 }
 
 // ---------- 文章阅读 ----------
@@ -533,7 +533,7 @@ async function renderVideo(id) {
     <h1 class="guide-doc-title">${ctx.esc(v.title)}</h1>
     <p class="guide-doc-meta">${v.p === 'bili' ? 'B 站' : 'YouTube'} · ${ctx.esc(v.up)}${v.date ? ' · ' + v.date + ' 发布' : ''}${videoDur(v) ? ' · ' + fmtDur(videoDur(v)) : ''} · <a href="${url}" target="_blank" rel="noopener noreferrer">${v.p === 'bili' ? '在 B 站观看' : '在 YouTube 观看'}${ICON.out}</a></p>
     <div class="guide-video">${player}</div>
-    <p class="guide-vdesc">${ctx.esc(v.desc)}${v.doc ? ' 英文配音，中文字幕由本站翻译，播放时显示在画面上，下方是完整字幕稿，点击可跳转。' : ''}</p>
+    <p class="guide-vdesc">${ctx.esc(v.desc)}${v.doc ? ' 中文字幕由本站翻译' : ''}</p>
     <div id="guideTranscriptBox"></div>
     ${related.length ? `<section class="guide-related"><h3>${catName(v.cat, VCATS)} · 更多视频</h3><div class="guide-vgrid">${related.map(videoCard).join('')}</div></section>` : ''}</section>`;
   if (v.p !== 'yt') return;

@@ -604,7 +604,7 @@ function renderSide() {
       ${seg('lowShip', LOW_SHIPS)}
       <h4>种族偏好</h4>
       ${seg('race', RACES)}
-      <p class="cr-hint">高安路线：高价值货物用封锁运输舰 / 深空运输舰，普通货物用 T1 工业舰，大体积用货舰。容量按全部技能 5 级计算。</p>
+      <p class="cr-hint">容量按全部技能 5 级计算</p>
     </div>
     <div class="ind-side-section cr-side-sec">
       <h4>舰船容量</h4>

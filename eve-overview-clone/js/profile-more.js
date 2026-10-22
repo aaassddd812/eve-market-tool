@@ -137,7 +137,7 @@ async function renderMining(box) {
     '</div>' +
     '<section class="info-section"><h4 class="info-section-title">按矿种</h4>' + table(['矿种', '数量', '最低卖价估值', '最高收价估值', '占比'], typeRows) + '</section>' +
     '<section class="info-section"><h4 class="info-section-title">按日期</h4>' + table(['日期', '星系', '数量', '最低卖价估值', '最高收价估值'], dayRows) + '</section>' +
-    `<p class="text-muted valuation-note">按${esc(val.region.hub.name)}的矿石原价估值（未精炼）。ESI 挖矿记录保留最近 30 天，游戏里约每 10 分钟更新一次。</p>`;
+    `<p class="text-muted valuation-note" title="按${esc(val.region.hub.name)}矿石原价（未精炼）；ESI 保留最近 30 天">最近 30 天</p>`;
 }
 
 // ---------- 研究代理人 ----------
@@ -180,7 +180,7 @@ async function renderResearch(box) {
       ctx.formatNumber(Math.round(r.points_per_day * 100) / 100),
       `<strong class="up">${ctx.formatNumber(Math.floor(r.rp))}</strong>`,
       esc(fmtDate(r.started_at, false)) + `<span class="cell-sub">${Math.floor(r.days)} 天</span>`])), 'trade-table') +
-    '<p class="text-muted valuation-note">研究点 = 开始时的余数 + 每日点数 × 已过天数；可在代理人处兑换数据核心。</p>';
+    '';
 }
 
 // ---------- 舰队 ----------

@@ -209,7 +209,7 @@ export function feeFormHtml() {
     <div class="ap-rp-row"><span>挂单地点</span>${seg('market', [['npc', 'NPC 空间站'], ['struct', '玩家建筑']])}</div>
     ${T.market === 'npc' ? standFormHtml() : `<div class="cr-fields"><label><span>建筑中介费 %</span>${num('broker', 0, 100, 0.1, '建筑中介费')}</label></div>`}
     <div class="ap-fee"><span>销售税 <b>${pct2(f.sales)}</b></span><span>中介费 <b>${pct2(f.broker)}</b></span></div>
-    <p class="ap-rp-tip">销售税 7.5% × (1 − 会计学 11%/级)；NPC 空间站中介费 3% − 经纪人关系学 0.3%/级 − 派系声望 × 0.03% − 军团声望 × 0.02%，最低 1%（声望为基础声望，不含人脉关系学 / 外交学加成；角色声望模式按挂单空间站所属军团及其阵营取值）。卖给收单只交销售税，挂卖单另交中介费。</p>`;
+    <p class="ap-rp-tip" title="销售税 7.5% × (1 − 会计学 11%/级)；NPC 中介费 3% − 经纪人关系学 0.3%/级 − 派系声望 × 0.03% − 军团声望 × 0.02%，最低 1%">卖给收单只交销售税，挂卖单另交中介费</p>`;
 }
 
 // 绑定一个容器里的 data-tf-* 控件；改动后 update() 会通知所有订阅者

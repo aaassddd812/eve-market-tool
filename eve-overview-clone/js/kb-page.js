@@ -111,8 +111,8 @@ function feedRows(kills, { me } = {}) {
 }
 
 const FEED_NOTICE = {
-  global_end: '本站保留最近 30 天的全部击杀。按人物、军团、联盟、舰船或地点筛选后，可以继续向前查看更早的记录。',
-  zkill_limit: 'zKillboard 每个查询最多只能向前翻 2 万条，更早的记录无法查看。可以加上舰船或地点等条件缩小范围。'
+  global_end: '本站只保留最近 30 天；筛选后可查看更早记录',
+  zkill_limit: 'zKillboard 最多向前翻 2 万条，可加条件缩小范围'
 };
 
 function feedTable(kills, opts = {}) {
@@ -553,7 +553,7 @@ function renderRankTable() {
       <tbody>${body || `<tr><td colspan="7" class="text-muted kb-empty">${r.filter ? `没有名称包含「${app.esc(r.filter)}」的${kind}` : '暂无数据'}</td></tr>`}</tbody>
     </table></div>
     ${pagerHtml(r.page, pages)}
-    <p class="text-muted valuation-note">${detail ? `击杀统计每次击杀只计一次（同一${kind}多人参与不重复计）；效率 = 击毁价值 ÷（击毁 + 损失价值）；所属为统计期内最近一次出现时的军团 / 联盟；` : ''}${PRICE_NOTE}</p>`;
+    <p class="text-muted valuation-note" title="${detail ? '每次击杀只计一次；效率 = 击毁 ÷（击毁 + 损失）；所属为最近一次出现时的军团 / 联盟。' : ''}${PRICE_NOTE}">价值为估算值</p>`;
 }
 
 // ---------- 人物 / 军团 / 联盟 ----------

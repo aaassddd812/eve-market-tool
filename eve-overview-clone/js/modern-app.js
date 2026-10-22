@@ -1,5 +1,6 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
-import * as TF from './trade-fees.js?v=v2';
+import * as TF from './trade-fees.js?v=v3';
+import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v1';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s3';
 
 // ===== 配置与常量 =====
@@ -336,7 +337,7 @@ function switchView(view) {
 let sovLoading = null;
 async function openSov() {
   try {
-    if (!sovLoading) sovLoading = import('./sov.js?v=v2').then((m) => {
+    if (!sovLoading) sovLoading = import('./sov.js?v=v3').then((m) => {
       m.initSov({
         esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
         getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -356,7 +357,7 @@ async function openSov() {
 let abyssLoading = null;
 async function openAbyss() {
   try {
-    if (!abyssLoading) abyssLoading = import('./abyss.js?v=v1').then((m) => {
+    if (!abyssLoading) abyssLoading = import('./abyss.js?v=v2').then((m) => {
       m.initAbyss({
         esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, getHubPrices: getJitaPrices, fetchESI,
         game: gameActions, openDynamicItem, loadAbyssal, dogmaNames, fmtAttr,
@@ -375,7 +376,7 @@ async function openAbyss() {
 let guidesLoading = null;
 async function openGuides() {
   try {
-    if (!guidesLoading) guidesLoading = import('./guides.js?v=v7').then((m) => {
+    if (!guidesLoading) guidesLoading = import('./guides.js?v=v8').then((m) => {
       m.initGuides({ esc, debounce, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
       return m;
     }).catch((error) => { guidesLoading = null; throw error; });
@@ -391,7 +392,7 @@ async function openGuides() {
 let warLoading = null;
 async function openWar() {
   try {
-    if (!warLoading) warLoading = import('./war.js?v=v4').then((m) => {
+    if (!warLoading) warLoading = import('./war.js?v=v5').then((m) => {
       m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
       return m;
     }).catch((error) => { warLoading = null; throw error; });
@@ -412,7 +413,7 @@ async function getJitaPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v31').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v32').then((m) => {
     m.initIndustry({
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, ensureEsiToken,
@@ -437,7 +438,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v6').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v7').then((m) => {
     m.initLp({
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
@@ -476,12 +477,12 @@ async function openEftFit(text) {
 let courierLoading = null;
 async function openCourier() {
   try {
-    if (!courierLoading) courierLoading = import('./courier.js?v=v5').then((m) => {
+    if (!courierLoading) courierLoading = import('./courier.js?v=v6').then((m) => {
       m.initCourier({
         esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
         // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
         renderAuctions: async (box) => {
-          const a = await import('./auctions.js?v=v3');
+          const a = await import('./auctions.js?v=v4');
           if (!box.dataset.init) {
             box.dataset.init = '1';
             loadMarketRegions().catch(() => {});
@@ -517,7 +518,7 @@ async function openCourier() {
 let appraisalLoading = null;
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v10').then((m) => {
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v11').then((m) => {
       m.initAppraisal({
         esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
         getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -541,7 +542,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v32').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v33').then((m) => {
     m.initPi({
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
@@ -575,9 +576,9 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v37').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v38').then((m) => {
     m.initFitting({
-      esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation,
+      esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       openDrawer: () => { if (MOBILE_QUERY.matches) openDrawer(); },
@@ -665,8 +666,8 @@ function initServerSwitch() {
   if (!SERVER.kb && !SERVER.kbSite) $$('[data-profile="combat"]').forEach((el) => { el.hidden = true; });   // 没有战斗记录数据也没有外部击杀站
   if (SERVER.tokenProxy) {
     // 网易登录服务器不允许浏览器跨域请求令牌，只能经本站转发，如实说明
-    $('esiPrivacyNote').textContent = '使用网易官方 ESI 网页的授权应用登录。' + SERVER.full + '登录服务器不允许浏览器直接换取令牌，这一步经本站原样转发给网易登录服务器，本站不记录、不保存；令牌只保存在本机。';
-    $('esiCallbackNote').textContent = '登录后会停在网易 ESI 页面（ali-esi.evepc.163.com），立即复制地址栏完整地址（包含 code）粘贴到这里，授权码几分钟内就会失效。';
+    $('esiPrivacyNote').textContent = '经本站原样转发到网易登录服务器（不记录），令牌只保存在本机';
+    $('esiCallbackNote').textContent = '复制网易 ESI 页面地址栏的完整地址（几分钟内有效）';
   }
   menu.innerHTML = SERVER_LIST.map((x) =>
     `<button type="button" role="menuitemradio" aria-checked="${x.id === SERVER.id}" data-switch-server="${x.id}">` +
@@ -704,7 +705,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v31').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v32').then((m) => {
     m.initKbPage({
       esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -742,7 +743,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v29').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v30').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance, valuation
     });
@@ -1315,6 +1316,7 @@ async function selectItem(typeId, { updateHash = true } = {}) {
   document.title = `${entry.type.name} · EVE 市场总览`;
   renderBreadcrumb(entry.groupId);
   syncLossesTab(entry.groupId);
+  if (state.contentTab === 'hubs') renderHubCompare($('hubsBody'), typeId);
   updateFavButton();
   pushRecent(typeId);
 
@@ -1367,7 +1369,7 @@ async function renderShipLosses(typeId) {
       '<h4 class="info-section-title section-gap">常用装配<small>（各模块出现在多少比例的损失中）</small></h4>' +
       kb.commonFitHtml(kb.commonFit(kills)) +
       '<h4 class="info-section-title section-gap">最近损失</h4><div class="kb-list">' + kb.killTableHtml(kills.slice(0, 50)) + '</div>' +
-      '<p class="text-muted valuation-note">数据来自 zKillboard，点击记录查看完整装配与攻击者。</p>';
+      '<p class="text-muted valuation-note">数据：zKillboard</p>';
     kb.bindKillClicks(body.querySelector('.kb-list'), kills);
   } catch (error) {
     if (state.selectedItem?.id === typeId) body.innerHTML = '<p class="text-muted kb-empty">读取失败：' + esc(error.message) + '</p>';
@@ -2202,12 +2204,16 @@ function switchContentTab(content) {
   $('rangeTools').hidden = content !== 'chart' && content !== 'history';
   if (content === 'chart') renderChart();
   if (content === 'losses' && state.selectedItem) renderShipLosses(state.selectedItem.id);
+  if (content === 'hubs' && state.selectedItem) renderHubCompare($('hubsBody'), state.selectedItem.id);
 }
 
 function initContentTabs() {
   $$('.tabs-header .tab-link').forEach((link) => link.addEventListener('click', () => switchContentTab(link.dataset.content)));
   // 「近期损失」只对舰船显示，启动时不恢复到该标签
-  if (!['orders', 'chart', 'history'].includes(state.contentTab)) state.contentTab = 'orders';
+  if (!['orders', 'chart', 'history', 'hubs'].includes(state.contentTab)) state.contentTab = 'orders';
+  if (REGIONS.length < 2) $('hubsTab').hidden = true;
+  initHubCompare({ regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
+    skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8) });
   switchContentTab(state.contentTab);
 
   const seg = $('rangeSeg');
@@ -3468,7 +3474,7 @@ function fmtAttr(v, unit, units) {
 // 深渊装备估价（MutaMarket，经 kb_service 代理）：突变属性弹窗与估价页共用，首次用到时加载
 let abyssalLoading = null;
 function loadAbyssal() {
-  if (!abyssalLoading) abyssalLoading = import('./abyssal.js?v=v1').then((m) => {
+  if (!abyssalLoading) abyssalLoading = import('./abyssal.js?v=v2').then((m) => {
     m.initAbyssal({ esc, formatISK, formatNumber, resolveTypeNames, openDynamicItem });
     return m;
   }).catch((error) => { abyssalLoading = null; throw error; });
@@ -3525,7 +3531,7 @@ async function openDynamicItem(typeId, itemId) {
     attrsEl.innerHTML = `<p class="dyn-meta">原型：<b>${esc(typeNames.get(dyn.source_type_id) || dyn.source_type_id)}</b> · 突变质体：${esc(typeNames.get(dyn.mutator_type_id) || dyn.mutator_type_id)}${creator ? ' · 制作者：' + esc(creator) : ''}</p>
       <div class="table-scroll"><table class="pc-mini-table"><thead><tr><th>属性</th><th>原型</th><th>突变后</th><th>变化</th></tr></thead><tbody>${changed.map(row).join('')}</tbody></table></div>
       ${rows.length > changed.length ? `<details class="dyn-more"><summary>未变化的属性（${rows.length - changed.length}）</summary><table class="pc-mini-table"><tbody>${rows.filter((r) => !changed.includes(r)).map(row).join('')}</tbody></table></details>` : ''}
-      <p class="text-muted valuation-note">绿色表示比原型更好，红色表示更差（按 SDE 的「数值越大越好」判断）。</p>`;
+`;
   } catch (error) {
     if (attrsEl.isConnected) attrsEl.innerHTML = '<p class="text-muted">突变属性读取失败：' + esc(error.message) + '</p>';
   }
@@ -3577,6 +3583,83 @@ function bindAssetToolbar(region, tab = 'assets') {
   });
 }
 
+// ===== 资产里的深渊装备估价：默认不估，点按钮后开启（记在本机）=====
+// 每件先看 MutaMarket 已有的估价（只读，不会导入），MutaMarket 没有的再用本站模型（kb_service AbyssalModel）
+const ABY_ASSET_KEY = 'eve-abyss-assets';
+let abyAssetForce = null;   // 本次会话里点过的开关（无痕模式下 localStorage 不可用时也生效）
+const abyAssetOn = () => { if (abyAssetForce != null) return abyAssetForce; try { return localStorage.getItem(ABY_ASSET_KEY) === '1'; } catch { return false; } };
+const abyEst = new Map();   // item_id -> { value, source, model, error }
+let abyEstRun = null;
+const mutatedAssets = (list) => list.filter((a) => a.item_id && isMutated(typeName(a.type_id), a));
+function estimateAbyssalAssets(list) {
+  if (abyEstRun) return abyEstRun;
+  const todo = list.filter((a) => !abyEst.has(a.item_id));
+  if (!todo.length) return null;
+  abyEstRun = (async () => {
+    for (let i = 0; i < todo.length; i += 50) {
+      const chunk = todo.slice(i, i + 50);
+      try {
+        const r = await fetch('/api/v1/abyssal/estimate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items: chunk.map((a) => ({ type_id: a.type_id, item_id: a.item_id })) }) });
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(body.error?.message || 'HTTP ' + r.status);
+        chunk.forEach((a, j) => abyEst.set(a.item_id, body.results?.[j] || { error: '无结果' }));
+      } catch (e) {
+        chunk.forEach((a) => abyEst.set(a.item_id, { error: e.message, retry: true }));
+      }
+    }
+  })().finally(() => {
+    abyEstRun = null;
+    if (activeProfileTab() === 'assets') renderProfileTab('assets');
+  });
+  return abyEstRun;
+}
+function abySummary(list) {
+  const items = mutatedAssets(list);
+  const out = { items, value: 0, n: 0, muta: 0, model: 0, failed: 0, retry: 0 };
+  for (const a of items) {
+    const x = abyEst.get(a.item_id);
+    if (x?.value) { out.value += x.value; out.n++; x.source === 'mutamarket' ? out.muta++ : out.model++; }
+    else if (x) { out.failed++; if (x.retry) out.retry++; }
+  }
+  return out;
+}
+// 资产估值卡片网格里的一张：未开启时是按钮，开启后是合计
+function abyAssetCard(list) {
+  if (!IS_TQ || !SERVER.kb) return '';
+  const s = abySummary(list);
+  if (!s.items.length) return '';
+  if (!abyAssetOn()) {
+    return valuationCard('深渊装备', s.items.length + ' 件', '<button class="btn btn-sm" data-aby-assets="on">估价深渊装备（' + s.items.length + ' 件）</button>', 'is-aby');
+  }
+  if (abyEstRun || s.items.some((a) => !abyEst.has(a.item_id))) {
+    estimateAbyssalAssets(s.items);
+    return valuationCard('深渊参考估价', '估价中…', s.items.length + ' 件深渊装备，先查 MutaMarket，没有的用本站模型', 'is-aby');
+  }
+  return valuationCard('深渊参考估价', formatISK(s.value) + ' ISK',
+    s.n + '/' + s.items.length + ' 件有估价：MutaMarket ' + s.muta + ' 件、本站模型 ' + s.model + ' 件；不计入市场估值' +
+    '<span class="aby-act">' + (s.retry ? '<button class="btn btn-ghost btn-sm" data-aby-assets="retry">重试</button>' : '') +
+    '<button class="btn btn-ghost btn-sm" data-aby-assets="off" title="不再自动估价深渊装备">关闭估价</button></span>', 'is-aby');
+}
+function abyAssetPill(a) {
+  if (!abyAssetOn()) return '';
+  const x = abyEst.get(a.item_id);
+  if (!x) return ' <span class="pill aby-est-pill">估价中…</span>';
+  if (!x.value) return ` <span class="pill aby-est-pill is-none" title="${esc(x.error || '')}">无估价</span>`;
+  const src = x.source === 'mutamarket' ? 'MutaMarket' : '本站模型';
+  const tip = x.source === 'mutamarket' ? 'MutaMarket 模型估价' : `本站模型估价${x.model ? `（${x.model.data_count} 条合同数据，R² ${x.model.r2.toFixed(2)}）` : ''}`;
+  return ` <span class="pill aby-est-pill" title="${esc(tip)}">≈ ${formatISK(x.value)} · ${src}</span>`;
+}
+function bindAbyAssets(box) {
+  box.querySelectorAll('[data-aby-assets]').forEach((b) => b.addEventListener('click', () => {
+    const act = b.dataset.abyAssets;
+    try { act === 'off' ? localStorage.removeItem(ABY_ASSET_KEY) : localStorage.setItem(ABY_ASSET_KEY, '1'); } catch { /* 无痕模式：只在本次生效 */ }
+    if (act === 'retry') for (const [k, v] of abyEst) if (v.retry) abyEst.delete(k);
+    abyAssetForce = act !== 'off';
+    renderProfileTab('assets');
+  }));
+}
+
 async function renderAssetsTab(box) {
   const data = state.characterData;
   const assets = Array.isArray(data.assets) ? data.assets : null;
@@ -3594,6 +3677,7 @@ async function renderAssetsTab(box) {
   if (station) renderStationAssets(box, station, groups, ctx);
   else renderAssetsOverview(box, groups, ctx);
   bindAssetToolbar(ctx.region);
+  bindAbyAssets(box);
 }
 
 // 「资产估值」：总估值 + 各空间站汇总
@@ -3633,11 +3717,12 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
       valuationCard('我的收单', formatISK(buyOrderTotal) + ' ISK', buyOrders.length + ' 笔 · 剩余数量 × 委托价', 'is-order') +
       valuationCard('资产 + 订单合计', formatISK(assetSell + sellOrderTotal + buyOrderTotal) + ' ISK',
         '按收价：' + formatISK(assetBuy + sellOrderTotal + buyOrderTotal) + ' ISK · 不含钱包', 'is-total') +
+      abyAssetCard(assets) +
     '</div>' +
-    '<p class="text-muted valuation-note">价格取 ' + esc(region.hub.name) + ' 空间站内的最低卖单价与最高收购价；蓝图副本不可上架、无行情的物品不计入。共 ' +
-      formatNumber(assets.length) + ' 项资产，分布在 ' + groups.length + ' 个位置。' +
-      (priceAt ? '行情查询于 ' + new Date(priceAt).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) + '，本地缓存 12 小时。' : '') +
-      (failed ? ' <span class="down">' + failed + ' 种物品行情查询失败，可点「刷新行情」重试。</span>' : '') + '</p>' +
+    '<p class="text-muted valuation-note" title="' + esc(region.hub.name) + ' 最低卖价 / 最高收价；蓝图副本与无行情物品不计入；行情本地缓存 12 小时">' +
+      formatNumber(assets.length) + ' 项 · ' + groups.length + ' 个位置' +
+      (priceAt ? ' · 行情 ' + new Date(priceAt).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '') +
+      (failed ? ' · <span class="down">' + failed + ' 种行情查询失败</span>' : '') + '</p>' +
     '<div class="table-scroll"><table class="pc-mini-table station-summary"><thead><tr>' +
       '<th>空间站</th><th>物品数</th><th>卖价估值</th><th>收价估值</th><th>占比（按卖价）</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
@@ -3662,7 +3747,7 @@ function renderStationAssets(box, station, groups, { region }) {
     const name = typeName(a.type_id);
     return profileRow([
       esc(name) + (a.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : '') +
-        (isMutated(name, a) ? ` <button class="pill dyn-btn" data-dyn="${a.type_id}:${a.item_id}" title="查看这件突变装备的真实属性">突变属性</button>` : ''),
+        (isMutated(name, a) ? ` <button class="pill dyn-btn" data-dyn="${a.type_id}:${a.item_id}" title="查看这件突变装备的真实属性">突变属性</button>` + abyAssetPill(a) : ''),
       formatNumber(a.quantity ?? 1),
       p?.sell == null ? '<span class="muted-cell">—</span>' : formatPrice(p.sell),
       '<strong class="down">' + (p?.sell == null ? '—' : formatISK(p.sell * qty)) + '</strong>',
@@ -3682,13 +3767,14 @@ function renderStationAssets(box, station, groups, { region }) {
       valuationCard('本站估值 · 最高收价', formatISK(station.buy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', station.buy * TF.netBuy()), 'is-buy') +
       valuationCard('物品', formatNumber(list.length) + ' 项', kinds + ' 种物品') +
       valuationCard('占总资产', total ? ((station.sell / total) * 100).toFixed(1) + '%' : '—', '按最低卖价估值') +
+      abyAssetCard(list) +
     '</div>' +
     '<div class="station-filter search-box"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' +
       '<input type="search" id="stationFilter" placeholder="筛选本站物品" autocomplete="off" aria-label="筛选本站物品"></div>' +
     '<div class="table-scroll"><table class="pc-mini-table asset-table"><thead><tr>' +
       '<th>物品</th><th>数量</th><th>最低卖价</th><th>卖价估值</th><th>最高收价</th><th>收价估值</th><th>槽位</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
-    (list.length > ASSET_ROW_LIMIT ? '<p class="text-muted valuation-note">另有 ' + (list.length - ASSET_ROW_LIMIT) + ' 项未显示（已计入本站估值）。</p>' : '');
+    (list.length > ASSET_ROW_LIMIT ? '<p class="text-muted valuation-note">另有 ' + (list.length - ASSET_ROW_LIMIT) + ' 项未显示</p>' : '');
 
   $('stationFilter').addEventListener('input', debounce((e) => {
     const q = e.target.value.trim().toLowerCase();
@@ -3829,7 +3915,7 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v2').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v3').then((m) => {
     m.initProfileMore({
       esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
@@ -3846,7 +3932,7 @@ function loadMoreModule() {
 // 个人中心 · 交易记录与盈亏：首次打开时加载
 let tradesLoading = null;
 function loadTradesModule() {
-  if (!tradesLoading) tradesLoading = import('./trades.js?v=v1').then((m) => {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v2').then((m) => {
     m.initTrades({
       esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard,
@@ -4045,7 +4131,7 @@ function renderContractList(box) {
           '<th>类别</th><th>合同</th><th>状态</th><th>对方</th><th class="num">金额</th><th>地点</th><th class="num">发布</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table></div>'
       : '<p class="text-muted">没有符合条件的合同</p>') +
-    '<p class="text-muted valuation-note">共 ' + all.length + ' 份合同（ESI 返回最近 30 天内的合同记录）。点击合同查看物品与收卖估值。</p>';
+    '<p class="text-muted valuation-note" title="ESI 只返回最近 30 天">共 ' + all.length + ' 份合同</p>';
 
   $('contractRole').addEventListener('change', (e) => { view.role = e.target.value; renderContractList(box); });
   $('contractStatus').addEventListener('change', (e) => { view.status = e.target.value; renderContractList(box); });
@@ -4236,7 +4322,7 @@ async function renderContractDetail(box, c) {
     (bids.length
       ? '<h4 class="info-section-title section-gap">出价记录</h4><div class="table-scroll"><table class="pc-mini-table bid-table"><thead><tr><th>出价人</th><th>出价</th><th>时间</th></tr></thead><tbody>' + bidRows + '</tbody></table></div>'
       : '') +
-    '<p class="text-muted valuation-note">估值取 ' + esc(region.hub.name) + ' 空间站内的最低卖单价与最高收购价；「提供」为发起方给出的物品，「索取」为发起方要求接受方提供的物品，蓝图副本不计入。</p>';
+    '';
 
   bindAssetToolbar(region, 'contracts');
 }
@@ -4345,7 +4431,7 @@ async function renderEsiCombat(box) {
       '<span class="toolbar-spacer"></span>' + siteBtn +
     '</div>' +
     '<div class="kb-list">' + kb.killTableHtml(shown, { me, showSide: true }) + '</div>' +
-    '<p class="text-muted valuation-note">数据来自 ' + esc(SERVER.full) + ' ESI（角色最近的击杀邮件，最多 200 条），缓存 5 分钟；价值按 ESI 全服均价估算，与击杀网站的估值可能不同。点击记录查看装配与攻击者。</p>';
+    '<p class="text-muted valuation-note" title="角色最近 200 条击杀邮件，价值按全服均价估算">数据：' + esc(SERVER.full) + ' ESI</p>';
   kb.bindKillClicks(box.querySelector('.kb-list'), kills);
 }
 
@@ -4402,7 +4488,7 @@ async function renderCombatTab(box) {
       `<a class="btn btn-ghost" href="https://zkillboard.com/character/${me}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>` +
     '</div>' +
     '<div class="kb-list">' + kb.killTableHtml(shown, { me, showSide: true }) + '</div>' +
-    '<p class="text-muted valuation-note">数据来自 zKillboard（最近 200 条记录与生涯统计），缓存 5 分钟。点击记录查看装配与攻击者。</p>';
+    '<p class="text-muted valuation-note">数据：zKillboard</p>';
   kb.bindKillClicks(box.querySelector('.kb-list'), kills);
 }
 
@@ -4623,7 +4709,7 @@ function initESIModal() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v3').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v4').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -4662,6 +4748,7 @@ function init() {
   // 技能或税费改动：刷新市场详情的倒卖利润与资产估值
   TF.onChange(() => {
     if (state.selectedItem && state.orders) renderStats();
+    if (state.contentTab === 'hubs') refreshHubCompare($('hubsBody'));
     if (state.characterData && activeProfileTab() === 'assets') renderProfileTab('assets');
   });
   initTheme();

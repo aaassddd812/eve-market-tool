@@ -111,7 +111,7 @@ function renderList(box) {
       <th>合同 / 地点</th><th>起拍价</th>${th('price', '当前出价')}${th('buyout', '一口价')}<th>体积</th>${th('expire', '剩余时间')}
     </tr></thead><tbody>${rowsHtml(shown)}</tbody></table></div>` +
     (list.length > S.shown ? `<div class="au-more"><button class="btn btn-ghost" data-au-more>再显示 ${Math.min(PAGE, list.length - S.shown)} 份</button></div>` : '') +
-    '<p class="text-muted valuation-note">只列出公开拍卖（私人 / 军团合同不在公开接口里）。当前出价只为显示中的合同读取。</p>';
+    '';
   // 补读当前出价与地点名称
   const missing = shown.filter((c) => !S.bids.has(c.contract_id));
   if (missing.length) loadBids(missing).then(() => { if (box.isConnected) renderList(box); });
@@ -195,7 +195,7 @@ async function openDetail(c) {
       }).join('')}</tbody></table></div>
       <h4 class="info-section-title">出价记录（${bids.length}）</h4>
       ${bids.length ? `<div class="table-scroll"><table class="pc-mini-table"><thead><tr><th>出价</th><th>时间</th></tr></thead><tbody>${bids.map((b) => `<tr><td>${formatPrice(b.amount)} ISK</td><td>${new Date(b.date_bid).toLocaleString('zh-CN', { hour12: false })}</td></tr>`).join('')}</tbody></table></div>` : '<p class="text-muted">还没有人出价</p>'}
-      <p class="text-muted valuation-note">物品估值按${esc(v.region.hub.name)}的最低卖价 / 最高收购价，蓝图副本不计。ESI 公开出价记录不含出价人。</p>`;
+      `;
   } catch (error) {
     body.innerHTML = '<p class="text-muted">读取失败：' + esc(error.message) + '</p>';
   }

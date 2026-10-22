@@ -1030,7 +1030,7 @@ function renderForm() {
     ${P.labels.length ? `<div class="fa-bonus"><span>舰船加成</span>${P.labels.map((l) => `<em>${esc(l)}</em>`).join('')}</div>` : ''}
     ${P.roles.length ? section('舰船定位', field('', seg('role', [['auto', '按加成：' + P.roles.map((r) => ROLE_NAME[r]).join(' / ')], ['combat', '当普通战斗船']]), help.role)
       + (roles.includes('mining') ? field('采矿对象', seg('mineTarget', [['ore', '矿石'], ['ice', '冰矿'], ['gas', '气云']]), help.mineTarget) : '')) : ''}
-    ${section('目标', job ? `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量' }[job]}配装，其余槽位兼顾坦克；要按输出 / 坦克配，把定位改成「当普通战斗船」</p>`
+    ${section('目标', job ? `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量' }[job]}配装，其余兼顾坦克</p>`
       : `<div class="fa-goals">${GOALS.map(([k, l, d]) => `<button type="button" class="fa-goal${A.goal === k ? ' active' : ''}" data-fa-set="goal" data-v="${k}"><b>${l}</b><small>${d}</small></button>`).join('')}</div>`)}
     ${job ? '' : section('打什么目标', aimHtml())}
     ${section('最低要求 <small>填 0 表示不限</small>', `<div class="fa-grid3">
@@ -1249,7 +1249,7 @@ async function runImplants() {
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
     box.innerHTML = plans.length
       ? `<p class="fa-meta">相对不装植入体 · ${ctx.formatNumber(evals)} 种组合 · ${secs} 秒</p>` + plans.map((p, i) => implantPlanHtml(p, i, 'data-fi-apply')).join('') +
-        '<p class="fa-hint fa-imp-foot">没有推荐植入体的槽位，可以装只加属性点的植入体（如 +5 记忆）加快技能训练。价格为全服均价。</p>'
+        '<p class="fa-hint fa-imp-foot">价格为全服均价</p>'
       : '<div class="fa-empty">没有能提升这套装配的植入体（预算内或技能允许的范围内）</div>';
   } catch (err) {
     box.innerHTML = `<div class="fa-empty">${err.message === 'cancelled' ? '已停止' : ctx.esc(err.message)}</div>`;

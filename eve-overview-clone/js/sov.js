@@ -434,12 +434,11 @@ function transportCard(id, e, r, R) {
     const list = r.sources || [];
     body = list.length ? `<table class="pi-table"><thead><tr><th>来源</th><th class="num">数量</th><th>路线</th></tr></thead><tbody>${list.map((f) =>
       `<tr><td><a data-sov-sys="${f.from}">${esc(D.sys.get(f.from).name)}</a></td><td class="num">${num(f.amount)}</td><td>${f.path.length - 1} 跳</td></tr>`).join('')}</tbody></table>`
-      : '<p class="text-muted">还没有星系向这里导出。到来源星系把运输设为「导出」并选这里为目的地。</p>';
+      : '<p class="text-muted">还没有星系向这里导出</p>';
     body += `<p class="text-muted">最多 3 个来源（${list.length} / 3）</p>`;
   } else if (e.mode === 'transit') {
     body = r.flows.length ? `<p>经过的劳动力：</p><ul class="sov-flows">${r.flows.map((f) => `<li>${esc(D.sys.get(f.from).name)} → ${esc(D.sys.get(f.to).name)}：${num(f.amount)}</li>`).join('')}</ul>`
       : '<p class="text-muted">目前没有劳动力经过这里。</p>';
-    body += '<p class="text-muted">中转星系只转运，不使用经过的劳动力；本星系自己的劳动力照常使用。</p>';
   } else body = '<p class="text-muted">本星系劳动力只自用。</p>';
   return `<div class="pi-card"><div class="pi-card-head"><h3>劳动力运输</h3><span class="text-muted">只能在同一联盟的星系间沿星门运输</span></div>
     <div class="segmented sov-modes">${Object.entries(MODE_NAME).map(([k, v]) => `<button data-sov-mode="${k}" class="${e.mode === k ? 'active' : ''}">${v}</button>`).join('')}</div>${body}</div>`;
@@ -455,7 +454,7 @@ function planetsCard(id, s, r) {
       <span class="toolbar-spacer"></span><button class="btn btn-ghost btn-sm" data-sov-planets="on">全选</button><button class="btn btn-ghost btn-sm" data-sov-planets="off">全不选</button></div>
     <div class="pi-table-wrap"><table class="pi-table sov-table"><thead><tr><th>天体</th><th>类型</th><th class="num">产出</th></tr></thead><tbody>
       <tr><td>恒星</td><td>—</td><td class="num">${num(r.res.star)} 电力</td></tr>${rows}</tbody></table></div>
-    <p class="text-muted sov-foot">天钩试剂仓可存 ${D.sov.reagentHours} 小时产量；非安全仓的试剂在被盗窗口期可被他人抽走。</p></div>`;
+    <p class="text-muted sov-foot">试剂仓可存 ${D.sov.reagentHours} 小时产量</p></div>`;
 }
 
 // ---------- 总览 ----------
@@ -485,7 +484,7 @@ function overviewHtml(R) {
       <div><span>星系</span><b>${P.list.length}</b></div><div><span>升级件 运行 / 总数</span><b>${T.run} / ${T.all}</b></div>
       <div><span>电力 已用 / 总量</span><b>${num(T.pu)} / ${num(T.p)}</b></div><div><span>劳动力 已用 / 总量</span><b>${num(T.wu)} / ${num(T.w)}</b></div>
       <div><span>有问题的星系</span><b class="${[...R.values()].some((r) => r.warn.length) ? 'down' : ''}">${[...R.values()].filter((r) => r.warn.length).length}</b></div></div>
-    <div class="pi-card"><div class="pi-card-head"><h3>燃料试剂</h3><span class="text-muted">产出为装了天钩的冰体 / 熔岩行星，需要手动运到各主权中心；ISK 按吉他最低卖价</span></div>
+    <div class="pi-card"><div class="pi-card-head"><h3>燃料试剂</h3><span class="text-muted">按吉他最低卖价</span></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>试剂</th><th class="num">产出 / 小时</th><th class="num">消耗 / 小时</th><th class="num">净 / 小时</th><th class="num">30 天消耗</th><th class="num">30 天体积</th><th class="num">启动燃料合计</th><th class="num">30 天价值</th></tr></thead>
       <tbody>${reagentRow(ICE, T.ice, T.iceUse, T.iceStart)}${reagentRow(GAS, T.gas, T.gasUse, T.gasStart)}</tbody></table></div></div>
     <div class="pi-card"><div class="pi-card-head"><h3>各星系</h3><span class="text-muted">点一行进入该星系</span></div>

@@ -4,8 +4,8 @@
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
 import * as FE from './fit-engine.js?v=v23';
-import * as MU from './fit-mutate.js?v=v2';
-import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v24';
+import * as MU from './fit-mutate.js?v=v3';
+import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v25';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v23';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v16r7';
 
@@ -136,7 +136,7 @@ function newFit(ship) {
 function normalize(f) {
   const fit = newFit(f.ship);
   Object.assign(fit, { id: f.id || null, name: f.name || '' });
-  for (const s of FE.SLOTS) fit.slots[s] = (f.slots?.[s] || []).map((m) => (m && F.data.types.has(m.type) ? { type: m.type, state: m.state || 'online', charge: F.data.types.has(m.charge) ? m.charge : null, ...cleanMut(m.mut) } : null));
+  for (const s of FE.SLOTS) fit.slots[s] = (f.slots?.[s] || []).map((m) => (m && F.data.types.has(m.type) ? { type: m.type, state: m.state || 'online', charge: F.data.types.has(m.charge) ? m.charge : null, ...cleanMut(m.mut, m.abyssal) } : null));
   fit.drones = (f.drones || []).filter((d) => F.data.types.has(d.type)).map((d) => ({ type: d.type, count: d.count || 1, active: d.active || 0 }));
   fit.implants = (f.implants || []).filter((id) => F.data.types.has(id));
   return fit;
@@ -145,10 +145,13 @@ function normalize(f) {
 function type(id) { return F.data.types.get(id); }
 
 // 突变记录：原装备存在且属性是数字才保留
-function cleanMut(mut) {
+// 深渊参考估价（fit-mutate.js 算出）：{ value, src, item, include }
+function cleanMut(mut, aby) {
   if (!mut || !F.data.types.has(mut.base)) return {};
   const attrs = Object.fromEntries(Object.entries(mut.attrs || {}).filter(([, v]) => Number.isFinite(v)).map(([k, v]) => [Number(k), v]));
-  return { mut: { base: mut.base, mutator: mut.mutator, attrs } };
+  const out = { mut: { base: mut.base, mutator: mut.mutator, attrs } };
+  if (aby && Number(aby.value) > 0) out.abyssal = { value: Number(aby.value), src: ['item', 'model'].includes(aby.src) ? aby.src : 'similar', item: Number(aby.item) || null, include: Boolean(aby.include) };
+  return out;
 }
 
 function skills() {
@@ -744,7 +747,8 @@ function renderStats() {
       <div class="fit-val-src">${app.valuation.select('data-val-src', v.region)}</div>
       <div class="fit-kv"><span>最低卖价</span><b>${app.formatISK(v.sell)} ISK</b></div>
       <div class="fit-kv"><span>最高收价</span><b>${app.formatISK(v.buy)} ISK</b></div>
-      <p class="fit-note">船体 + 装备 + 弹药 + 无人机 + 植入体${v.sellN < v.n ? `；${v.n - v.sellN} 种在${app.esc(v.region.hub.name)}没有卖单` : ''}</p>
+      ${v.aby?.n ? `<div class="fit-kv"><span>深渊参考估价</span><b>${app.formatISK(v.aby.all)} ISK</b></div>` : ''}
+      <p class="fit-note">${v.aby?.n ? (v.aby.included ? `含 ${v.aby.included} 件深渊参考估价` : `${v.aby.n} 件深渊估价未计入`) : ''}${v.sellN < v.n ? `${v.aby?.n ? ' · ' : ''}${v.n - v.sellN} 种无卖单` : ''}</p>
     </section>` : ''}
     ${insuranceBlock()}`;
 }
@@ -756,7 +760,7 @@ function insuranceBlock() {
   return `<section class="fit-stat-block">
       <h4>保险（12 周）</h4>
       ${levels.map((l) => `<div class="fit-kv"><span>${app.esc(l.name)}</span><b title="保费 ${app.formatISK(l.cost)} · 赔付 ${app.formatISK(l.payout)}">${app.formatISK(l.cost)} → ${app.formatISK(l.payout)}</b></div>`).join('')}
-      <p class="fit-note">保费 → 船被击毁时的赔付；只赔舰船本身，不含装备</p>
+      
     </section>`;
 }
 
@@ -777,11 +781,19 @@ function refreshFitValue() {
   }
   for (const d of F.fit.drones) list.push({ type_id: d.type, quantity: d.count });
   for (const id of F.fit.implants) list.push({ type_id: id, quantity: 1 });
-  const key = app.valuation.region().id + '|' + list.map((i) => i.type_id + 'x' + i.quantity).join(',');
+  // 突变装备勾选了「计入装配总价」的深渊参考估价（市场上没有这些单件的挂单价）
+  const aby = fittedModules().filter(({ m }) => m.mut && m.abyssal?.value);
+  const abyIn = aby.filter(({ m }) => m.abyssal.include).reduce((t, { m }) => t + m.abyssal.value, 0);
+  const abyAll = aby.reduce((t, { m }) => t + m.abyssal.value, 0);
+  const key = app.valuation.region().id + '|' + list.map((i) => i.type_id + 'x' + i.quantity).join(',') + '|' + abyIn + '/' + abyAll;
   if (F.valKey === key) return;
   F.valKey = key;
   const seq = ++valSeq;
-  app.valuation.items(list).then((v) => { if (seq === valSeq) { F.val = v; renderStats(); } }).catch(() => {});
+  app.valuation.items(list).then((v) => {
+    if (seq !== valSeq) return;
+    F.val = { ...v, sell: v.sell + abyIn, buy: v.buy + abyIn, aby: { n: aby.length, included: aby.filter(({ m }) => m.abyssal.include).length, value: abyIn, all: abyAll } };
+    renderStats();
+  }).catch(() => {});
 }
 
 // ---------- 交互 ----------
@@ -825,11 +837,12 @@ async function onMainClick(e) {
   if ((x = el('[data-fit-mut]'))) {
     const { slot, index } = parseRef(x.dataset.fitMut);
     const m = F.fit.slots[slot][index];
-    MU.openMutate(m, ({ type: t, mut }) => {
+    MU.openMutate(m, ({ type: t, mut, abyssal }) => {
       const cur = F.fit.slots[slot][index];
       if (!cur) return;
       cur.type = t;
       if (mut) cur.mut = mut; else delete cur.mut;
+      if (mut && abyssal) cur.abyssal = abyssal; else delete cur.abyssal;
       recompute();
       app.showToast(mut ? '已应用突变属性' : '已恢复为原装备', 'success');
     }).catch((e) => app.showToast('突变质体数据加载失败：' + e.message, 'error'));
