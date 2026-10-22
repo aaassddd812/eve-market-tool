@@ -11,7 +11,7 @@ import { SERVER } from './server.js?v=s3';
 import * as TF from './trade-fees.js?v=v2';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation,
-          // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind
+          // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind, loadAbyssal() -> abyssal.js 模块
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-appraisal-v1';
 const ICON = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
@@ -163,10 +163,15 @@ async function appraise() {
   const text = $('apInput').value;
   const out = $('apResult');
   if (!text.trim()) { out.innerHTML = '<div class="ap-empty">先在左边粘贴物品列表</div>'; return; }
+  // 深渊装备：游戏里拖进聊天框的物品链接带有单件 item_id（showinfo:类型//物品），单独按 MutaMarket 模型估价
+  const hasLinks = /showinfo:\d+\/\/\d+/.test(text);
+  mountAbyssal(hasLinks ? text : '');
+  const plain = hasLinks ? text.split('\n').filter((l) => !/showinfo:\d+\/\/\d+/.test(l)).join('\n') : text;
+  if (!plain.trim()) { A.result = null; out.innerHTML = ''; return; }
   out.innerHTML = '<div class="ap-empty" id="apProgress">载入物品名称…</div>';
   try { await loadNames(); } catch (e) { out.innerHTML = `<div class="ap-empty">物品名称载入失败：${ctx.esc(e.message)}</div>`; return; }
-  const { items, unknown } = parse(text);
-  if (!items.size) { out.innerHTML = `<div class="ap-empty">没有识别出物品${unknown.length ? '：' + ctx.esc(unknown.slice(0, 3).join('、')) : ''}</div>`; return; }
+  const { items, unknown } = parse(plain);
+  if (!items.size) { A.result = null; out.innerHTML = `<div class="ap-empty">没有识别出物品${unknown.length ? '：' + ctx.esc(unknown.slice(0, 3).join('、')) : ''}</div>`; return; }
   const region = ctx.valuation.sources.find((r) => r.id === A.hub) || ctx.valuation.sources[0];
   const ids = [...items.keys()];
   // 化矿产物也要挂单价；化矿数据载入失败时只做市场估价
@@ -201,6 +206,19 @@ async function appraise() {
     noSell: rows.filter((r) => r.sell == null), noBuy: rows.filter((r) => r.buy == null)
   };
   render();
+}
+
+// 深渊装备卡片在 #apAby（render() 只重绘 #apResult，不影响它）
+async function mountAbyssal(text) {
+  const el = $('apAby');
+  const seq = (A.abySeq = (A.abySeq || 0) + 1);
+  if (!text) { el.innerHTML = ''; return; }
+  try {
+    const m = await ctx.loadAbyssal();
+    if (seq === A.abySeq) m.mountList(el, m.parseLinks(text));
+  } catch (e) {
+    if (seq === A.abySeq) el.innerHTML = `<div class="ap-empty">深渊估价加载失败：${ctx.esc(e.message)}</div>`;
+  }
 }
 
 const nameOf = (id) => A.names.byId[id] || 'Type ' + id;
@@ -481,7 +499,10 @@ export function showAppraisal() {
             </details>
           </div>
         </div>
-        <div class="ap-result" id="apResult"><div class="ap-empty">粘贴后点「估价」（Ctrl+Enter）</div></div>
+        <div class="ap-col">
+          <div class="ap-result" id="apResult"><div class="ap-empty">粘贴后点「估价」（Ctrl+Enter）</div></div>
+          <div id="apAby"></div>
+        </div>
       </div>
     </section>`;
   $('apGo').addEventListener('click', appraise);

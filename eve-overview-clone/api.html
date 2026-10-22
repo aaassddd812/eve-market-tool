@@ -215,6 +215,23 @@
           params: [['activity', false, 'manufacturing（默认）/ invention / reaction / copying / researching_material_efficiency / researching_time_efficiency'], ['security', false, '安全等级，逗号分隔：high,low,null（默认全部）；反应自动排除高安'], ['region', false, '星域 ID'], ['limit', false, '条数，默认 50，最多 500']],
           fields: [['systems[]', '{id, name, security, region_id, region, cost_index, indices}，indices 为该星系全部活动的指数']] }
       ]],
+      ['深渊装备', [
+        { path: '/abyssal/modules/{item_id}', title: '深渊装备估价', desc: '按单件物品 ID 查询 <a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a> 的估价（每种深渊装备一个随机森林模型，以真实单件合同成交价训练）。只读：MutaMarket 还没收录的返回 404，不会自动导入。只支持宁静服；结果缓存 6 小时。估价是模型参考值，<code>estimated_value</code> 为 null 表示暂无估价（不要当作 0）。', cost: 2, example: '/abyssal/modules/1056160153322?type_id=48439',
+          params: [['item_id', true, '路径参数：物品 ID（资产、合同物品、击杀里的 item_id，或游戏物品链接 showinfo:类型//物品 中的第二个数）'], ['type_id', false, '物品类型 ID，用于校验']],
+          fields: [['item_id / type_id / type_name', '物品与类型'], ['source_type / mutaplasmid', '原型装备与突变质体 {id, name}'], ['estimated_value / estimated_value_updated_at', '参考估价（ISK）与估价时间；无模型时为 null'], ['attributes[]', '{id, name, value, base_value, unit, derived}，derived 为派生属性（如 DPS），不能用于装配计算'], ['contract', '所在公开合同 {id, type, price, abyssal_modules_count, non_abyssal_modules_count, date_expired}，多件物品的合同价格不是这件的价格；没有为 null'], ['model', '该类型模型 {data_count, r2, mae, nmae, last_trained_at}，r2 是类型整体拟合度；没有模型为 null'], ['source_url', 'MutaMarket 页面'], ['fetched_at', '本站取得时间（Unix 秒）']] },
+        { path: '/abyssal/appraise', method: 'POST', title: '导入并估价', desc: '让 MutaMarket 从 ESI 导入 / 刷新这件装备并估价，返回与上一个接口相同。<b>导入后这件装备会出现在 MutaMarket 的公开页面</b>，请只在用户明确要求时调用。同一件 10 分钟内重复调用直接返回缓存；每个 IP 每分钟最多 10 次。',
+          body: '{"type_id": 48439, "item_id": 1056160153322}',
+          params: [['type_id', true, '请求体 JSON：物品类型 ID'], ['item_id', true, '请求体 JSON：物品 ID'], ['server', false, '请求体 JSON：只接受 tq（默认）']] },
+        { path: '/abyssal/list', title: '在售深渊装备', desc: '某种深渊装备目前在售的单件（公开合同与卖家在 MutaMarket 直接挂售），每页 100 件，按 <code>next_cursor</code> 翻页；筛选与 MutaMarket 网站一致。结果缓存 5 分钟。每件的字段同「深渊装备估价」。', cost: 3, example: '/abyssal/list?type=49738&sort=price&order=asc&flags=contracts-only,no-multi-item-contracts',
+          params: [['type', true, '深渊装备类型 ID（见 /abyssal/types）'], ['sort', false, 'date-added（上架时间）/ contract-date（合同时间）/ price（价格，默认）/ value（估价）/ fraction（平均 roll）/ 属性 ID'], ['order', false, 'asc / desc'],
+            ['meta_group', false, '原装备等级：t1 / t2 / storyline / faction / officer / deadspace'], ['flags', false, '逗号分隔：contracts-only（只看游戏合同）、no-multi-item-contracts（只看单件合同）、in-jita（吉他 4-4）、item-exchange / auction、goldbar / diamondbar / brownbar（至少一项属性达到该类型最好 / 荣耀最好 / 最差值）'],
+            ['price / value', false, '合同价格 / 估价范围（ISK），格式 最小-最大，可省略一端'], ['attrs', false, '属性范围（原始数值，与 ESI 相同），格式 属性ID:最小~最大，多个用逗号分隔，可省略一端'], ['region', false, '合同所在星域 ID'], ['cursor', false, '上一页返回的 next_cursor']],
+          fields: [['items[]', '在售装备，字段同「深渊装备估价」，另有 attributes[].fraction（在本突变质体范围中的位置，-1 最差 … 1 最好）、fraction_type（按整个类型归一化）、bar（1 金条 / 2 钻石 / -1 棕条）、average_fraction、listed（直接挂售）、creator'], ['next_cursor', '下一页游标，没有更多时为 null']] },
+        { path: '/abyssal/types', title: '深渊装备类型', desc: '全部深渊装备类型、各项突变属性在该类型能达到的最好 / 最差值（原始数值），以及模型质量。缓存 7 天。', example: '/abyssal/types',
+          fields: [['types[]', '{id, name, attributes[], model}'], ['attributes[]', '{id, key, name, unit, unit_id, high_is_good, best, worst, is_derived, is_virtual}；is_derived 为 MutaMarket 推算的属性（如 DPS 提升），is_virtual 不是真实突变属性'], ['model', '同 /abyssal/models，没有为 null']] },
+        { path: '/abyssal/models', title: '估价模型列表', desc: 'MutaMarket 各深渊装备类型的模型统计，缓存 24 小时。', example: '/abyssal/models',
+          fields: [['models[]', '{type_id, data_count, r2, mae, nmae, last_trained_at}，按类型 ID 排序']] }
+      ]],
       ['装配', [
         { path: '/ships/{id}/fits', title: '阵亡装配', desc: '某型舰船最近若干天阵亡时的装配，相同装配合并计数。首次查询需要从 ESI 取击杀原文，可能要十几秒。', cost: 10, example: '/ships/24698/fits?days=7',
           params: [['id', true, '路径参数：舰船类型 ID'], ['days', false, '天数，默认 7']],
@@ -237,15 +254,15 @@
 
     document.getElementById('endpoints').innerHTML = GROUPS.map(([g, eps]) => `<h2>${g}</h2>` + eps.map((e) => `
       <section class="ep" id="${anchor(e.path)}">
-        <div class="ep-head"><span class="method">GET</span><span class="path">/api/v1${esc(e.path)}</span><h3>${e.title}</h3>${e.cost ? `<span class="cost">消耗 ${e.cost} 次</span>` : ''}</div>
+        <div class="ep-head"><span class="method">${e.method || 'GET'}</span><span class="path">/api/v1${esc(e.path)}</span><h3>${e.title}</h3>${e.cost ? `<span class="cost">消耗 ${e.cost} 次</span>` : ''}</div>
         <div class="ep-body">
           <p>${e.desc}</p>
           ${e.params ? `<h5>参数</h5><table><tr><th>名称</th><th>说明</th></tr>${e.params.map(([n, r, d]) => `<tr><td><code>${n}</code>${r ? '<span class="req">必填</span>' : ''}</td><td>${d}</td></tr>`).join('')}</table>` : ''}
           ${e.fields ? `<h5>返回</h5><table><tr><th>字段</th><th>说明</th></tr>${e.fields.map(([n, d]) => `<tr><td><code>${esc(n)}</code></td><td>${esc(d)}</td></tr>`).join('')}</table>` : ''}
-          <h5>试一试</h5>
+          ${e.body ? `<h5>示例</h5><pre class="out" style="display:block">curl -X POST "${BASE}${esc(e.path)}" \\\n  -H "Content-Type: application/json" \\\n  -d '${esc(e.body)}'</pre>` : `<h5>试一试</h5>
           <form class="try" data-try><input value="/api/v1${esc(fill(e.example))}" spellcheck="false" aria-label="请求路径"><button type="submit">发送</button></form>
           <div class="status"></div>
-          <pre class="out"></pre>
+          <pre class="out"></pre>`}
         </div>
       </section>`).join('')).join('');
 

@@ -249,8 +249,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war', guide: '#guide' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView', guide: 'guideView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war', sov: '#sov', abyss: '#abyss', guide: '#guide' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView', sov: 'sovView', abyss: 'abyssView', guide: 'guideView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -308,7 +308,7 @@ function switchView(view) {
   });
   for (const [v, id] of Object.entries(VIEW_IDS)) $(id).hidden = v !== view;
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
-  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选', guide: '教程分类' }[view] || '';
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选', guide: '教程分类', sov: '主权规划导航', abyss: '深渊装备类型' }[view] || '';
   closeDrawer();
   if (prev !== view) {
     restoreScroll(viewScroll[view]);
@@ -327,7 +327,48 @@ function switchView(view) {
   if (view === 'appraisal') openAppraisal();
   if (view === 'courier') openCourier();
   if (view === 'war') openWar();
+  if (view === 'sov') openSov();
+  if (view === 'abyss') openAbyss();
   if (view === 'guide') openGuides();
+}
+
+// 主权规划：首次进入时加载
+let sovLoading = null;
+async function openSov() {
+  try {
+    if (!sovLoading) sovLoading = import('./sov.js?v=v2').then((m) => {
+      m.initSov({
+        esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
+        getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+        tokenInfo: () => state.esiToken || readEsiToken(), hasScopeGroup, scopeNeededHtml, getHubPrices: getJitaPrices,
+        closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
+      });
+      return m;
+    }).catch((error) => { sovLoading = null; throw error; });
+    const m = await sovLoading;
+    await m.showSov(location.hash);
+  } catch (error) {
+    showToast('主权规划页加载失败：' + error.message, 'error', 4000);
+  }
+}
+
+// 深渊市场（MutaMarket 数据）：首次进入时加载
+let abyssLoading = null;
+async function openAbyss() {
+  try {
+    if (!abyssLoading) abyssLoading = import('./abyss.js?v=v1').then((m) => {
+      m.initAbyss({
+        esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, getHubPrices: getJitaPrices, fetchESI,
+        game: gameActions, openDynamicItem, loadAbyssal, dogmaNames, fmtAttr,
+        closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
+      });
+      return m;
+    }).catch((error) => { abyssLoading = null; throw error; });
+    const m = await abyssLoading;
+    await m.showAbyss(location.hash.startsWith('#abyss') ? location.hash : '#abyss');
+  } catch (error) {
+    showToast('深渊市场加载失败：' + error.message, 'error', 4000);
+  }
 }
 
 // 教程：首次进入时加载
@@ -476,14 +517,15 @@ async function openCourier() {
 let appraisalLoading = null;
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v9').then((m) => {
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v10').then((m) => {
       m.initAppraisal({
         esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
         getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
         valuation,
         hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
         getCharacterSkills, getCharacterImplants,
-        openEsiBind: () => { switchView('profile'); openEsiModal(); }
+        openEsiBind: () => { switchView('profile'); openEsiModal(); },
+        loadAbyssal
       });
       return m;
     }).catch((error) => { appraisalLoading = null; throw error; });
@@ -499,7 +541,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v31').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v32').then((m) => {
     m.initPi({
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
@@ -766,7 +808,9 @@ const SIDEBARS = {
   industry: { id: 'indSidebar', reopen: 'indSidebarReopen', key: 'eve-ind-sidebar-collapsed' },
   lp: { id: 'lpSidebar', reopen: 'lpSidebarReopen', key: 'eve-lp-sidebar-collapsed' },
   courier: { id: 'courierSidebar', reopen: 'courierSidebarReopen', key: 'eve-courier-sidebar-collapsed' },
-  guide: { id: 'guideSidebar', reopen: 'guideSidebarReopen', key: 'eve-guide-sidebar-collapsed' }
+  guide: { id: 'guideSidebar', reopen: 'guideSidebarReopen', key: 'eve-guide-sidebar-collapsed' },
+  sov: { id: 'sovSidebar', reopen: 'sovSidebarReopen', key: 'eve-sov-sidebar-collapsed' },
+  abyss: { id: 'abyssSidebar', reopen: 'abyssSidebarReopen', key: 'eve-abyss-sidebar-collapsed' }
 };
 
 function currentSidebar() {
@@ -809,6 +853,12 @@ function initSidebar() {
   if (store.get('eve-lp-sidebar-collapsed') === '1') setSidebarCollapsed('lpSidebar', 'lpSidebarReopen', true);
   if (store.get('eve-courier-sidebar-collapsed') === '1') setSidebarCollapsed('courierSidebar', 'courierSidebarReopen', true);
   if (store.get('eve-guide-sidebar-collapsed') === '1') setSidebarCollapsed('guideSidebar', 'guideSidebarReopen', true);
+  if (store.get('eve-sov-sidebar-collapsed') === '1') setSidebarCollapsed('sovSidebar', 'sovSidebarReopen', true);
+  $('sovSidebarCollapse').addEventListener('click', () => toggleSidebar('sov'));
+  $('sovSidebarReopen').addEventListener('click', () => toggleSidebar('sov'));
+  if (store.get('eve-abyss-sidebar-collapsed') === '1') setSidebarCollapsed('abyssSidebar', 'abyssSidebarReopen', true);
+  $('abyssSidebarCollapse').addEventListener('click', () => toggleSidebar('abyss'));
+  $('abyssSidebarReopen').addEventListener('click', () => toggleSidebar('abyss'));
   $('guideSidebarCollapse').addEventListener('click', () => toggleSidebar('guide'));
   $('guideSidebarReopen').addEventListener('click', () => toggleSidebar('guide'));
   $('courierSidebarCollapse').addEventListener('click', () => toggleSidebar('courier'));
@@ -1516,12 +1566,15 @@ const SCOPE_GROUPS = [
   { id: 'corp', name: '军团管理', desc: '军团钱包、订单、工业任务、建筑燃料、月矿、资产（需相应军团职位）',
     scopes: ['esi-characters.read_corporation_roles.v1', 'esi-wallet.read_corporation_wallets.v1', 'esi-markets.read_corporation_orders.v1',
       'esi-industry.read_corporation_jobs.v1', 'esi-corporations.read_structures.v1', 'esi-industry.read_corporation_mining.v1',
-      'esi-assets.read_corporation_assets.v1', 'esi-corporations.read_divisions.v1'] }
-];
+      'esi-assets.read_corporation_assets.v1', 'esi-corporations.read_divisions.v1'] },
+  // 主权中心 / 天钩接口只有宁静服有；新权限默认不勾（CCP 后台的应用要先开通，否则授权会被拒）
+  { id: 'sov', name: '主权设施', desc: '主权规划页读取军团的主权中心（升级件、电力、劳动力、燃料）与天钩（需董事等军团职位）',
+    scopes: ['esi-structures.read_corporation.v1'], tqOnly: true, optIn: true }
+].filter((g) => !g.tqOnly || IS_TQ);
 const SCOPE_GROUP_KEY = 'eve-esi-scope-groups';
 function selectedScopeGroups() {
   const saved = store.get(SCOPE_GROUP_KEY);
-  return saved == null ? SCOPE_GROUPS.map((g) => g.id) : saved.split(',').filter(Boolean);
+  return saved == null ? SCOPE_GROUPS.filter((g) => !g.optIn).map((g) => g.id) : saved.split(',').filter(Boolean);
 }
 function renderScopeGroups(focus) {
   const chosen = new Set(selectedScopeGroups());
@@ -2273,6 +2326,8 @@ function initHashRouting() {
     if (location.hash.startsWith('#appr')) { if (state.currentView !== 'appraisal') switchView('appraisal'); return; }
     if (location.hash.startsWith('#courier')) { if (state.currentView !== 'courier') switchView('courier'); return; }
     if (location.hash.startsWith('#war')) { if (state.currentView !== 'war') switchView('war'); return; }
+    if (location.hash.startsWith('#sov')) { if (state.currentView !== 'sov') switchView('sov'); else openSov(); return; }
+    if (location.hash.startsWith('#abyss')) { if (state.currentView !== 'abyss') switchView('abyss'); else openAbyss(); return; }
     if (location.hash.startsWith('#guide')) { if (state.currentView !== 'guide') switchView('guide'); else openGuides(); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
@@ -3410,6 +3465,20 @@ function fmtAttr(v, unit, units) {
     default: return n(v) + (units[unit] ? ' ' + units[unit] : '');
   }
 }
+// 深渊装备估价（MutaMarket，经 kb_service 代理）：突变属性弹窗与估价页共用，首次用到时加载
+let abyssalLoading = null;
+function loadAbyssal() {
+  if (!abyssalLoading) abyssalLoading = import('./abyssal.js?v=v1').then((m) => {
+    m.initAbyssal({ esc, formatISK, formatNumber, resolveTypeNames, openDynamicItem });
+    return m;
+  }).catch((error) => { abyssalLoading = null; throw error; });
+  return abyssalLoading;
+}
+function mountAbyssal(el, typeId, itemId) {
+  loadAbyssal().then((m) => { if (el.isConnected) m.mountItem(el, typeId, itemId); })
+    .catch((error) => { el.innerHTML = '<p class="text-muted">深渊估价加载失败：' + esc(error.message) + '</p>'; });
+}
+
 async function openDynamicItem(typeId, itemId) {
   let modal = $('dynModal');
   if (!modal) {
@@ -3427,7 +3496,9 @@ async function openDynamicItem(typeId, itemId) {
   }
   modal.hidden = false;
   const body = $('dynBody');
-  body.innerHTML = '<div class="pi-loading">读取突变属性…</div>';
+  body.innerHTML = '<div id="dynAttrs"><div class="pi-loading">读取突变属性…</div></div><div id="dynAby"></div>';
+  const attrsEl = $('dynAttrs');
+  mountAbyssal($('dynAby'), typeId, itemId);
   try {
     const [dyn, names] = await Promise.all([fetchESI(`/dogma/dynamic/items/${typeId}/${itemId}/`), dogmaNames()]);
     const [source, typeNames] = await Promise.all([
@@ -3450,12 +3521,13 @@ async function openDynamicItem(typeId, itemId) {
       return `<tr><td>${esc(r.meta[0])}</td><td>${esc(fmtAttr(r.base, r.meta[1], names.units))}</td><td><b class="${cls}">${esc(fmtAttr(r.value, r.meta[1], names.units))}</b></td>
         <td class="${cls}">${Math.abs(r.diff) < 1e-6 ? '—' : (r.diff > 0 ? '+' : '') + (r.diff * 100).toFixed(1) + '%'}</td></tr>`;
     };
-    body.innerHTML = `<p class="dyn-meta">原型：<b>${esc(typeNames.get(dyn.source_type_id) || dyn.source_type_id)}</b> · 突变质体：${esc(typeNames.get(dyn.mutator_type_id) || dyn.mutator_type_id)}${creator ? ' · 制作者：' + esc(creator) : ''}</p>
+    if (!attrsEl.isConnected) return;
+    attrsEl.innerHTML = `<p class="dyn-meta">原型：<b>${esc(typeNames.get(dyn.source_type_id) || dyn.source_type_id)}</b> · 突变质体：${esc(typeNames.get(dyn.mutator_type_id) || dyn.mutator_type_id)}${creator ? ' · 制作者：' + esc(creator) : ''}</p>
       <div class="table-scroll"><table class="pc-mini-table"><thead><tr><th>属性</th><th>原型</th><th>突变后</th><th>变化</th></tr></thead><tbody>${changed.map(row).join('')}</tbody></table></div>
       ${rows.length > changed.length ? `<details class="dyn-more"><summary>未变化的属性（${rows.length - changed.length}）</summary><table class="pc-mini-table"><tbody>${rows.filter((r) => !changed.includes(r)).map(row).join('')}</tbody></table></details>` : ''}
       <p class="text-muted valuation-note">绿色表示比原型更好，红色表示更差（按 SDE 的「数值越大越好」判断）。</p>`;
   } catch (error) {
-    body.innerHTML = '<p class="text-muted">突变属性读取失败：' + esc(error.message) + '</p>';
+    if (attrsEl.isConnected) attrsEl.innerHTML = '<p class="text-muted">突变属性读取失败：' + esc(error.message) + '</p>';
   }
 }
 
@@ -4614,6 +4686,8 @@ function init() {
   if (location.hash.startsWith('#appr')) switchView('appraisal'); // 估价
   if (location.hash.startsWith('#courier')) switchView('courier'); // 快递合同
   if (location.hash.startsWith('#war')) switchView('war'); // 战争
+  if (location.hash.startsWith('#sov')) switchView('sov'); // 主权规划
+  if (location.hash.startsWith('#abyss')) switchView('abyss'); // 深渊市场
   if (location.hash.startsWith('#guide')) switchView('guide'); // 教程
   renderFavorites();
   loadServerStatus();

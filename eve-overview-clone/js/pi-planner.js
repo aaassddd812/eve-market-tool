@@ -19,7 +19,7 @@ const linkLoad = (radiusKm, rad = SPACING) => [Math.ceil(15 + 0.2 * rad * radius
 const MAX_HEADS = 10;                  // 每个采集控制器最多 10 个采集头
 const LP_CAP = 10000;                  // 发射平台容量 m³
 const MAX_HUBS = 4;                    // 买料加工：每颗工厂星最多几个发射平台
-const MARKET_SHARE = 0.1;              // 买料加工：产品卖出、原料买入各不超过吉他日成交量的 10%，否则价格会被自己打穿
+// 买料加工：产品卖出、原料买入各不超过吉他日成交量的 F.share%（默认 10%），否则价格会被自己打穿；0 表示不限
 const HUB_GAP = 0.15;                  // 多个发射平台之间的间距（弧度），两组设施互不重叠
 // 海关出口税基数（每单位，按等级），进口为出口的一半
 const TAX_BASE = [5, 400, 7200, 60000, 1200000];
@@ -51,7 +51,8 @@ const F = {               // 表单状态（保存在本地）
   target: 0, rich: 'mid', tax: 10, price: 'sell',
   way: 'self',            // self 自产（采集）/ buy 买料加工
   inPrice: 'sell',        // 买料加工的原料价：sell 直接买卖单 / buy 挂收单
-  restock: 24             // 买料加工的补货周期（小时）
+  restock: 24,            // 买料加工的补货周期（小时）
+  share: 10               // 买料加工的成交量上限（占日成交 %），0 不限
 };
 
 const R = { area: null, plans: [], selected: 0, prices: new Map(), priceAt: 0, edits: new Map() };   // edits: 方案序号:模板 -> 修改后的模板
@@ -1061,11 +1062,12 @@ function renderForm() {
       ${buy ? `
       <div class="pi-inline"><span>原料价</span>${seg('inPrice', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.inPrice)}</div>
       <div class="pi-inline"><span>售价</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>
-      <div class="pi-inline"><span>补货周期</span>${seg('restock', [[12, '12 小时'], [24, '1 天'], [48, '2 天'], [72, '3 天']], F.restock)}</div>` : `
+      <div class="pi-inline"><span>补货周期</span>${seg('restock', [[12, '12 小时'], [24, '1 天'], [48, '2 天'], [72, '3 天']], F.restock)}</div>
+      <div class="pi-inline"><span>成交上限</span>${seg('share', [[5, '5%'], [10, '10%'], [20, '20%'], [0, '不限']], F.share)}</div>` : `
       <div class="pi-inline"><span>资源丰度</span>${seg('rich', Object.entries(RICHNESS).map(([k, [, label]]) => [k, label]), F.rich)}</div>
       <div class="pi-inline"><span>价格</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>`}
       <div class="pi-inline"><span>海关税率</span><input type="number" class="pi-input pi-tax" min="0" max="100" step="0.5" value="${F.tax}" data-pi-num="tax"><span>%</span></div>
-      <small class="pi-hint">${buy ? '原料价「卖单」为直接买入（偏保守），「收单」为挂单收购；补货周期越长，需要的发射平台越多' : `每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位`}</small>
+      <small class="pi-hint">${buy ? '原料价「卖单」为直接买入（偏保守），「收单」为挂单收购；补货周期越长，需要的发射平台越多；成交上限：每种产品卖出、原料买入各不超过' + HUB_NAME + '日成交的这个比例，超出的行星分给下一种产品' : `每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位`}</small>
     </div>
     <button type="submit" class="btn btn-primary pi-go">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>一键规划
@@ -1079,7 +1081,7 @@ function bind() {
     const set = e.target.closest('[data-pi-set]');
     if (set) {
       const key = set.dataset.piSet;
-      F[key] = key === 'jumps' || key === 'restock' ? Number(set.dataset.v) : set.dataset.v;
+      F[key] = key === 'jumps' || key === 'restock' || key === 'share' ? Number(set.dataset.v) : set.dataset.v;
       if (key === 'way' && F.way === 'buy' && F.target && tierOf(F.target) === 0) F.target = 0;
       if (key === 'whCls') F.whSystem = 0;
       saveForm();
@@ -1164,7 +1166,7 @@ async function run() {
       .map((id) => plan(id, area)).filter((p) => !p.error && p.profit > 0)
       .sort((a, b) => b.profit - a.profit);
   }
-  if (F.way === 'buy') {
+  if (F.way === 'buy' && F.share) {
     // 缩减后排名会变：直到前 20 名都按成交量核对过
     for (let todo; (todo = plans.slice(0, 20).filter((p) => !p.error && !p.depthChecked)).length;) {
       await applyMarketDepth(todo);
@@ -1203,6 +1205,40 @@ function strategyLabel(p) {
   return `采集 × ${p.planets - p.factories} + 工厂 × ${p.factories}`;
 }
 
+const capBadge = (p) => ` <em class="pi-cap" title="卖出、买入各不超过${HUB_NAME}日成交的 ${F.share}%，只能用 ${p.planets} / ${p.wanted} 颗行星；多出的行星可以做别的产品">限成交量</em>`;
+
+// 买料加工的多产品组合：每种产品受成交量限制只能用部分行星时，剩下的行星依次分给下一种产品。
+// 按每颗行星的日收益从高到低分配（只用核对过成交量的方案），收益按行星数线性折算。
+function buyCombo() {
+  if (F.way !== 'buy' || F.target || !F.share) return null;
+  let left = F.chars * F.perChar;
+  const rows = [];
+  const list = R.plans.map((p, i) => ({ p, i })).filter(({ p }) => !p.error && p.depthChecked && p.planets > 0 && p.profit > 0)
+    .sort((a, b) => b.p.profit / b.p.planets - a.p.profit / a.p.planets);
+  for (const { p, i } of list) {
+    if (left <= 0) break;
+    const n = Math.min(p.planets, left);
+    rows.push({ p, i, n, profit: p.profit * n / p.planets });
+    left -= n;
+  }
+  return rows.length > 1 ? { rows, left, total: rows.reduce((t, r) => t + r.profit, 0) } : null;
+}
+
+function comboHtml(combo) {
+  if (!combo) return '';
+  const all = F.chars * F.perChar;
+  return `<div class="pi-card">
+    <div class="pi-card-head"><h3>多产品组合</h3><span class="text-muted">${all} 个殖民地 · 单个产品受成交量限制用不满时，剩余行星分给下一种产品（按每颗行星日收益从高到低）</span></div>
+    <div class="pi-table-wrap"><table class="pi-table">
+      <thead><tr><th>产品</th><th class="pi-hide-sm">方案</th><th class="num">行星</th><th class="num">日净收益</th></tr></thead>
+      <tbody>${combo.rows.map((r) => `<tr class="${r.i === R.selected ? 'active' : ''}" data-pi-plan="${r.i}">
+        <td><div class="pi-prod"><img src="${ICON(r.p.product)}" alt="" width="28" height="28" loading="lazy"><span>${ctx.esc(cName(r.p.product))}<small>P${tierOf(r.p.product)}</small></span></div></td>
+        <td class="pi-hide-sm">买 P${r.p.buyTier} 加工</td><td class="num">${r.n}</td><td class="num pi-profit">${ctx.formatISK(r.profit)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td>合计</td><td class="pi-hide-sm">${combo.left > 0 ? `<span class="text-muted">还有 ${combo.left} 颗行星没有合适的产品</span>` : ''}</td><td class="num">${all - combo.left}</td><td class="num pi-profit">${ctx.formatISK(combo.total)}</td></tr></tfoot>
+    </table></div>
+  </div>`;
+}
+
 function renderResult() {
   const box = $('piResult');
   const area = R.area;
@@ -1218,13 +1254,14 @@ function renderResult() {
     <tr class="${i === R.selected ? 'active' : ''}" data-pi-plan="${i}">
       <td class="pi-rank">${i + 1}</td>
       <td><div class="pi-prod"><img src="${ICON(p.product)}" alt="" width="28" height="28" loading="lazy"><span>${ctx.esc(cName(p.product))}<small>P${tierOf(p.product)}</small></span></div></td>
-      <td class="pi-hide-sm">${strategyLabel(p)}</td>
+      <td class="pi-hide-sm">${strategyLabel(p)}${p.wanted ? capBadge(p) : ''}</td>
       <td class="num">${ctx.formatNumber(Math.round(p.rate * 24))}</td>
       <td class="num pi-hide-sm">${ctx.formatISK(priceOf(p.product))}</td>
       <td class="num pi-profit">${ctx.formatISK(p.profit)}</td>
     </tr>`).join('');
   const priceNote = R.priceAt ? `行情 ${new Date(R.priceAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}` : '';
   box.innerHTML = `${areaSummary(area)}
+    ${comboHtml(buyCombo())}
     ${R.plans.length > 1 ? `<div class="pi-card">
       <div class="pi-card-head"><h3>推荐产品</h3><span class="text-muted">${priceNote}</span></div>
       <div class="pi-table-wrap"><table class="pi-table">
@@ -1275,7 +1312,7 @@ function renderDetail() {
     const outDay = plan.rate * 24 * vol(plan.product);
     return `<p class="pi-note">每天买入原料 ${ctx.formatNumber(Math.round(inDay))} m³、运出产品 ${ctx.formatNumber(Math.round(outDay))} m³；每 ${F.restock} 小时补货一次，每颗星 ${plan.hubs} 个发射平台（各 ${ctx.formatNumber(LP_CAP)} m³）。
       一个补货周期的原料约 ${ctx.formatISK(plan.cost / 24 * F.restock)}，月净收益 ${ctx.formatISK(plan.profit * 30)}。</p>
-      ${plan.wanted ? `<p class="pi-note warn">受${HUB_NAME}成交量限制（卖出、买入各不超过日成交的 ${MARKET_SHARE * 100}%），只用 ${plan.planets} / ${plan.wanted} 颗行星，其余行星可以做别的产品。</p>` : ''}
+      ${plan.wanted ? `<p class="pi-note warn">受${HUB_NAME}成交量限制（卖出、买入各不超过日成交的 ${F.share}%），只用 ${plan.planets} / ${plan.wanted} 颗行星，其余行星可以做别的产品（见上方「多产品组合」）。</p>` : ''}
       <p class="pi-note" id="piDepth"></p>`;
   })() : '';
   const surplus = buyNote + (plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '')
@@ -1396,7 +1433,7 @@ async function applyMarketDepth(plans) {
     let cap = Infinity;
     for (const [id, q] of items) {
       const v = await dailyVolume(id);
-      if (v != null) cap = Math.min(cap, Math.floor(v * MARKET_SHARE / (perPlanet * q)));
+      if (v != null) cap = Math.min(cap, Math.floor(v * F.share / 100 / (perPlanet * q)));
     }
     if (cap >= plan.planets) continue;
     const k = cap / plan.planets;
@@ -1427,7 +1464,7 @@ function onResultClick(e) {
   const row = e.target.closest('[data-pi-plan]');
   if (row) {
     R.selected = Number(row.dataset.piPlan);
-    $('piResult').querySelectorAll('[data-pi-plan]').forEach((r) => r.classList.toggle('active', r === row));
+    $('piResult').querySelectorAll('[data-pi-plan]').forEach((r) => r.classList.toggle('active', r.dataset.piPlan === row.dataset.piPlan));
     renderDetail();
     $('piDetail').scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;

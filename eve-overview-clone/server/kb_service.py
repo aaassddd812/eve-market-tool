@@ -45,6 +45,7 @@ import logging
 import math
 import mimetypes
 import os
+import re
 import sqlite3
 import tarfile
 import threading
@@ -65,7 +66,17 @@ BP_CONTRACT_TTL = 1800      # 蓝图合同价 / 快递合同每 30 分钟刷新�
 BP_CONTRACT_KEEP = 5        # 每种蓝图的原图 / 拷贝各保留最便宜的几份合同
 BP_MAX_TYPES = 300          # bpprices 单次最多查询的蓝图种类
 API_RATE = 1000             # 开放接口：每个 IP 每分钟可用的请求额度（令牌桶，容量同此值）
-API_COST = {"ship_fits": 10, "battle_report": 5, "industry_profits": 5}   # 开销大的接口一次消耗多个额度
+API_COST = {"ship_fits": 10, "battle_report": 5, "industry_profits": 5, "abyssal_module": 2, "abyssal_list": 3}   # 开销大的接口一次消耗多个额度
+# 深渊装备估价：代理 MutaMarket 公开 API（对方不允许浏览器跨域）。只用于宁静服；导入 / 刷新（POST）由用户点击触发、单独限流
+MUTA_API = "https://mutamarket.com/api"
+ABYSSAL_TTL = 6 * 3600          # 单件估价缓存
+ABYSSAL_MODELS_TTL = 24 * 3600  # 各类型模型质量
+ABYSSAL_POST_RATE = 10          # 每个 IP 每分钟最多导入 / 刷新次数
+ABYSSAL_LIST_TTL = 300          # 在售列表（按筛选条件）缓存
+ABYSSAL_TYPES_TTL = 7 * 86400   # 各深渊类型的属性范围（最好 / 最差），对方建议长期缓存
+ABYSSAL_SORTS = {"price", "value", "fraction", "contract-date", "date-added"}
+ABYSSAL_META_GROUPS = {"t1", "t2", "storyline", "faction", "officer", "deadspace"}
+ABYSSAL_FLAGS = {"goldbar", "brownbar", "diamondbar", "item-exchange", "auction", "no-multi-item-contracts", "contracts-only", "in-jita", "without-other-items"}
 PRICE_MAX_TYPES = 200       # prices 单次最多查询的物品种类
 SHIPFIT_MAX = 300           # shipfits：每次最多分析的最近损失数
 SHIPFIT_WORKERS = 16        # shipfits：并发向 ESI 取击杀原文
@@ -197,6 +208,8 @@ CREATE TABLE IF NOT EXISTS hub_prices(hub INTEGER, type_id INTEGER, sell REAL, b
 -- 吉他没有卖单的物品（主要是旗舰）：全服公开合同里扣除附带物品后的最低价
 CREATE TABLE IF NOT EXISTS contract_prices(type_id INTEGER PRIMARY KEY, price REAL, contract_id INTEGER, region_id INTEGER, at INTEGER);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+-- 深渊装备估价（MutaMarket 单件结果，按 item_id 缓存；data 为本站归一化后的 JSON）
+CREATE TABLE IF NOT EXISTS abyssal(item_id INTEGER PRIMARY KEY, type_id INTEGER, data TEXT, fetched_at INTEGER);
 -- 阵亡装配：从击杀原文提取的各槽位物品（JSON），供 shipfits 统计常见装配
 CREATE TABLE IF NOT EXISTS km_fits(id INTEGER PRIMARY KEY, ship INTEGER, time INTEGER, fit TEXT);
 CREATE INDEX IF NOT EXISTS kmfit_ship ON km_fits(ship, time);
@@ -1856,6 +1869,290 @@ class Industry:
         return {"activity": activity, "total": len(rows), "systems": rows[:limit]}
 
 
+# ---------------------------------------------------------------- 深渊装备估价
+class Abyssal:
+    """MutaMarket 深渊装备估价代理：每个深渊类型一个随机森林模型（真实单件合同成交价训练），按 item_id 估价。
+    GET 只读本站缓存 / 对方已有的装备；POST 会让对方从 ESI 导入 / 刷新这件装备（对方公开页面会出现它），只在用户点击时调用。"""
+
+    def __init__(self, store):
+        self.store = store
+        self.sem = threading.Semaphore(2)            # 同时最多 2 个上游请求
+        self.lock = threading.Lock()
+        self.inflight = {}                           # item_id -> Event，合并同一件的并发请求
+        self.models_at, self.models_map = 0, {}
+        self.missing = collections.OrderedDict()     # 对方没有的 item_id -> 时间（10 分钟内不重复问）
+        self.lists = collections.OrderedDict()       # 上游路径 -> (时间, 结果)
+        self.types_at, self.types_list = 0, []
+
+    @staticmethod
+    def check_server(server):
+        if (server or "tq") != "tq":
+            raise ValueError("深渊估价只支持宁静服（MutaMarket 的价格来自宁静服合同）")
+
+    def upstream(self, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        headers = {"Accept": "application/json"}
+        if data:
+            headers["Content-Type"] = "application/json"
+        with self.sem:
+            try:
+                raw, _ = http_get(MUTA_API + path, timeout=30, data=data, headers=headers)
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    detail = json.loads(e.read() or b"{}").get("message") or ""
+                except Exception:
+                    pass
+                if e.code == 404:
+                    raise KeyError("MutaMarket 还没有这件装备")
+                if e.code in (400, 422):
+                    raise ValueError("MutaMarket 无法导入这件装备" + (f"：{detail}" if detail else "（物品链接无效或 ESI 读不到）"))
+                if e.code == 429:
+                    raise RuntimeError("MutaMarket 请求过于频繁，请稍后再试")
+                raise RuntimeError(f"MutaMarket 暂不可用（HTTP {e.code}）")
+            except (urllib.error.URLError, TimeoutError, OSError):
+                raise RuntimeError("MutaMarket 暂不可用（连接超时）")
+        return json.loads(raw)
+
+    def model_stats(self):
+        now = time.time()
+        if now - self.models_at > ABYSSAL_MODELS_TTL or not self.models_map:
+            try:
+                rows = self.upstream("/estimator-statistics")
+                self.models_map = {r["type_id"]: {"data_count": r.get("data_count"), "r2": r.get("r2"), "mae": r.get("mae"),
+                                                  "nmae": r.get("nmae"), "last_trained_at": r.get("last_trained_at")} for r in rows if r.get("type_id")}
+                self.models_at = now
+            except Exception:
+                if not self.models_map:
+                    raise
+                self.models_at = now - ABYSSAL_MODELS_TTL + 600   # 失败时沿用旧数据，10 分钟后再试
+        return self.models_map
+
+    def normalize(self, d):
+        value = d.get("estimated_value")
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            value = None
+        try:
+            model = self.model_stats().get(d["type"]["id"])
+        except Exception:
+            model = None
+        c = d.get("contract") or None
+        ref = lambda x: {"id": x.get("id"), "name": x.get("name")} if x else None
+        num = lambda v: v if isinstance(v, (int, float)) and math.isfinite(v) else None
+        return {
+            "v": 2,
+            "item_id": d["id"], "type_id": d["type"]["id"], "type_name": d["type"].get("name"),
+            "source_type": {"id": (d.get("source_type") or {}).get("id"), "name": (d.get("source_type") or {}).get("name"),
+                            "meta_group": (d.get("source_type") or {}).get("meta_group")},
+            "creator": ref(d.get("creator")),
+            # 各属性在突变质体范围内的平均位置（-1 最差 … 1 最好）
+            "average_fraction": num(d.get("average_fraction")),
+            # 没有合同、由卖家直接挂在 MutaMarket 上
+            "listed": bool(d.get("public_asset")),
+            "mutaplasmid": {"id": (d.get("mutaplasmid") or {}).get("id"), "name": (d.get("mutaplasmid") or {}).get("name")},
+            "estimated_value": value, "estimated_value_updated_at": d.get("estimated_value_updated_at"),
+            # 真实突变属性（派生 / 虚拟属性只供展示，不能当成装备属性）
+            # fraction：在本突变质体范围内的位置，-1 最差 … 0 原值 … 1 最好；fraction_type：按整个深渊类型（所有质体）归一化；
+            # bar：1 达到该类型最好值（金条）/ 2 荣耀质体上的最好值（钻石）/ -1 最差值（棕条）
+            "attributes": [{"id": a.get("id"), "name": a.get("display_name") or a.get("name"), "key": a.get("name"), "value": a.get("value"), "base_value": a.get("base_value"),
+                            "unit": (a.get("unit") or {}).get("display_name"), "unit_id": (a.get("unit") or {}).get("id"),
+                            "fraction": num(a.get("fraction")), "fraction_type": num(a.get("fraction_type")), "type_band": a.get("type_band"),
+                            "bar": a.get("bar") or 0, "derived": bool(a.get("is_derived") or a.get("is_virtual")),
+                            "is_derived": bool(a.get("is_derived")), "is_virtual": bool(a.get("is_virtual"))}
+                           for a in d.get("mutated_attributes") or []],
+            "contract": {"id": c.get("id"), "type": c.get("type"), "price": c.get("price"), "abyssal_modules_count": c.get("abyssal_modules_count"),
+                         "non_abyssal_modules_count": c.get("non_abyssal_modules_count"), "plex_count": c.get("plex_count"),
+                         "asking_for_items": c.get("asking_for_items"), "issuer": ref(c.get("issuer")),
+                         "date_issued": c.get("date_issued"), "date_expired": c.get("date_expired")} if c else None,
+            "model": model,
+            "source_url": "https://mutamarket.com/modules/" + d["slug"] if d.get("slug") else None,
+        }
+
+    def save(self, out):
+        now = int(time.time())
+        out["fetched_at"] = now
+        self.store.conn().execute("INSERT OR REPLACE INTO abyssal(item_id, type_id, data, fetched_at) VALUES(?,?,?,?)",
+                                  (out["item_id"], out["type_id"], json.dumps(out, ensure_ascii=False), now))
+        self.store.conn().commit()
+        return out
+
+    def cached(self, item_id):
+        row = self.store.conn().execute("SELECT data, fetched_at FROM abyssal WHERE item_id=?", (item_id,)).fetchone()
+        return (json.loads(row[0]), row[1]) if row else (None, 0)
+
+    def once(self, item_id, fn):
+        """同一件装备的并发请求只发一次上游"""
+        with self.lock:
+            ev = self.inflight.get(item_id)
+            mine = ev is None
+            if mine:
+                ev = self.inflight[item_id] = threading.Event()
+        if not mine:
+            ev.wait(35)
+            hit, _ = self.cached(item_id)
+            if hit:
+                return hit
+        try:
+            return fn()
+        finally:
+            if mine:
+                with self.lock:
+                    self.inflight.pop(item_id, None)
+                ev.set()
+
+    def module(self, q, item_id):
+        """GET /api/v1/abyssal/modules/{item_id}：本站缓存或对方已有的结果；对方没有时 404（不会自动导入）"""
+        self.check_server(q.get("server"))
+        hit, at = self.cached(item_id)
+        if hit and hit.get("v") == 2 and time.time() - at < ABYSSAL_TTL:
+            return hit
+        miss = self.missing.get(item_id)
+        if not hit and miss and time.time() - miss < 600:
+            raise KeyError("MutaMarket 还没有这件装备")
+
+        def fetch():
+            try:
+                return self.save(self.normalize(self.upstream(f"/modules/{item_id}")["data"]))
+            except KeyError:
+                self.missing[item_id] = time.time()
+                while len(self.missing) > 5000:
+                    self.missing.popitem(last=False)
+                raise
+            except RuntimeError:
+                if hit:   # 上游不可用时返回旧结果
+                    return {**hit, "stale": True}
+                raise
+        return self.once(item_id, fetch)
+
+    def appraise(self, body):
+        """POST /api/v1/abyssal/appraise {type_id, item_id, server}：让对方从 ESI 导入 / 刷新并估价"""
+        self.check_server(body.get("server"))
+        try:
+            type_id, item_id = int(body["type_id"]), int(body["item_id"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError("需要 type_id 和 item_id")
+        if not (0 < type_id < 2 ** 31 and 0 < item_id < 2 ** 53):
+            raise ValueError("物品 ID 超出有效范围")
+        hit, at = self.cached(item_id)
+        if hit and time.time() - at < 600:   # 10 分钟内刚查过，不重复导入
+            return hit
+        self.missing.pop(item_id, None)
+        return self.once(item_id, lambda: self.save(self.normalize(self.upstream("/modules", {"type_id": type_id, "item_id": item_id})["data"])))
+
+    def models(self, q):
+        """GET /api/v1/abyssal/models：各深渊类型的模型质量（训练样本数、R²、平均误差）"""
+        return {"models": [{"type_id": k, **v} for k, v in sorted(self.model_stats().items())]}
+
+    def types(self, q):
+        """GET /api/v1/abyssal/types：全部深渊类型、各突变属性的最好 / 最差值，以及模型质量"""
+        now = time.time()
+        if now - self.types_at > ABYSSAL_TYPES_TTL or not self.types_list:
+            try:
+                rows = self.upstream("/abyssal-type-statistics")
+                by = collections.OrderedDict()
+                for r in rows:
+                    t = r.get("type") or {}
+                    e = by.setdefault(r["type_id"], {"id": r["type_id"], "name": t.get("name"), "attributes": []})
+                    a = r.get("attribute") or {}
+                    e["attributes"].append({"id": r["attribute_id"], "key": a.get("name"), "name": a.get("display_name") or a.get("name"),
+                                            "unit": (a.get("unit") or {}).get("display_name"), "unit_id": (a.get("unit") or {}).get("id"),
+                                            "high_is_good": bool(r.get("high_is_good")), "best": r.get("best"), "worst": r.get("worst"),
+                                            "is_derived": bool(r.get("is_derived")), "is_virtual": bool(r.get("is_virtual"))})
+                self.types_list, self.types_at = list(by.values()), now
+            except Exception:
+                if not self.types_list:
+                    raise
+                self.types_at = now - ABYSSAL_TYPES_TTL + 600
+        try:
+            models = self.model_stats()
+        except Exception:
+            models = {}
+        return {"types": [{**t, "model": models.get(t["id"])} for t in self.types_list]}
+
+    @staticmethod
+    def list_path(q):
+        """把本站的查询参数换成对方的 URL 段（见 mutamarket.com/documentation/api-filtering），逐项校验"""
+        try:
+            type_id = int(q.get("type", ""))
+        except ValueError:
+            raise ValueError("需要 type（深渊装备类型 ID）")
+        if not 0 < type_id < 2 ** 31:
+            raise ValueError("type 无效")
+        segs = ["type", str(type_id)]
+        sort = q.get("sort") or "price"
+        if sort not in ABYSSAL_SORTS and not re.fullmatch(r"\d{1,9}", sort):
+            raise ValueError("sort 只能是 price / value / fraction / contract-date / date-added 或属性 ID")
+        order = q.get("order") or ("asc" if sort == "price" else "desc")
+        if order not in ("asc", "desc"):
+            raise ValueError("order 只能是 asc / desc")
+        segs += ["sort", sort, order]
+        mg = q.get("meta_group")
+        if mg:
+            if mg not in ABYSSAL_META_GROUPS:
+                raise ValueError("meta_group 无效")
+            segs += ["meta-group", mg]
+        flags = [f for f in (q.get("flags") or "").split(",") if f]
+        for f in flags:
+            if f not in ABYSSAL_FLAGS:
+                raise ValueError(f"不支持的筛选：{f}")
+            segs.append(f)
+        big = 10 ** 15
+        for key, seg in (("price", "contract-price"), ("value", "estimated-value")):
+            v = q.get(key)
+            if v:
+                m = re.fullmatch(r"(\d{1,15})?-(\d{1,15})?", v)
+                if not m or not (m.group(1) or m.group(2)):
+                    raise ValueError(f"{key} 格式：最小-最大（ISK）")
+                segs += [seg, f"{m.group(1) or 0}-{m.group(2) or big}"]
+        # attrs=属性ID:最小~最大,...（属性可能为负值，所以范围用 ~ 分隔）
+        for part in [p for p in (q.get("attrs") or "").split(",") if p][:12]:
+            m = re.fullmatch(r"(\d{1,9}):(-?\d+(?:\.\d+)?)?~(-?\d+(?:\.\d+)?)?", part)
+            if not m or (m.group(2) is None and m.group(3) is None):
+                raise ValueError("attrs 格式：属性ID:最小~最大")
+            segs += ["attributes", m.group(1), f"{m.group(2) if m.group(2) is not None else -big}-{m.group(3) if m.group(3) is not None else big}"]
+        path = "/modules/" + "/".join(segs)
+        params = {}
+        if q.get("region"):
+            if not re.fullmatch(r"1\d{7}", q["region"]):
+                raise ValueError("region 无效")
+            params["region_id"] = q["region"]
+        if q.get("cursor"):
+            if not re.fullmatch(r"[A-Za-z0-9+/=_-]{1,200}", q["cursor"]):
+                raise ValueError("cursor 无效")
+            params["cursor"] = q["cursor"]
+        return path + ("?" + urllib.parse.urlencode(params) if params else "")
+
+    def list(self, q):
+        """GET /api/v1/abyssal/list：某深渊类型在售（合同与直接挂单）的装备，每页 100 件，按 next_cursor 翻页"""
+        self.check_server(q.get("server"))
+        path = self.list_path(q)
+        now = time.time()
+        with self.lock:
+            hit = self.lists.get(path)
+        if hit and now - hit[0] < ABYSSAL_LIST_TTL:
+            return hit[1]
+        try:
+            raw = self.upstream(path)
+        except KeyError:
+            raise KeyError("没有这个深渊装备类型")
+        except RuntimeError:
+            if hit:
+                return {**hit[1], "stale": True}
+            raise
+        items = [self.normalize(d) for d in raw.get("data") or []]
+        # 顺便存进单件缓存，打开详情不必再问上游
+        conn = self.store.conn()
+        conn.executemany("INSERT OR REPLACE INTO abyssal(item_id, type_id, data, fetched_at) VALUES(?,?,?,?)",
+                         [(x["item_id"], x["type_id"], json.dumps({**x, "fetched_at": int(now)}, ensure_ascii=False), int(now)) for x in items])
+        conn.commit()
+        out = {"items": items, "next_cursor": (raw.get("meta") or {}).get("next_cursor"), "fetched_at": int(now)}
+        with self.lock:
+            self.lists[path] = (now, out)
+            while len(self.lists) > 300:
+                self.lists.popitem(last=False)
+        return out
+
+
 # ---------------------------------------------------------------- 开放接口
 class RateLimiter:
     """按 IP 的令牌桶：容量 API_RATE，每秒恢复 API_RATE / 60 个"""
@@ -1877,7 +2174,7 @@ class RateLimiter:
             return ok, int(tokens), retry
 
 
-def open_routes(api, industry):
+def open_routes(api, industry, abyssal=None):
     """开放接口路由：(路径分段模式, 名称, 处理函数)；{n} 为数字参数，{s} 为字符串参数。文档见 api.html"""
     local = lambda q: {**q, "_local": "1"}
 
@@ -1893,7 +2190,7 @@ def open_routes(api, industry):
     return [
         ((), "index", lambda q: {"name": "EVE Market 开放 API", "version": "v1", "docs": "/api.html",
                                  "endpoints": [("/api/v1/" + "/".join(p)).replace("{n}", "{id}").replace("{s}", "{product}" if p[0] == "industry" else "{kind}")
-                                               for p, *_ in open_routes(api, industry)[1:]]}),
+                                               for p, *_ in open_routes(api, industry, abyssal)[1:]]}),
         (("status",), "status", lambda q: {k: v for k, v in api.status(q).items() if k not in ("r2z2_seq",)}),
         (("prices",), "prices", api.prices),
         (("blueprints", "prices"), "bp_prices", bp_prices),
@@ -1913,7 +2210,12 @@ def open_routes(api, industry):
         (("industry", "cost"), "industry_cost", industry.cost),
         (("industry", "profits"), "industry_profits", industry.profits),
         (("industry", "systems"), "industry_systems", industry.cost_indices),
-    ]
+    ] + ([
+        (("abyssal", "modules", "{n}"), "abyssal_module", abyssal.module),
+        (("abyssal", "models"), "abyssal_models", abyssal.models),
+        (("abyssal", "types"), "abyssal_types", abyssal.types),
+        (("abyssal", "list"), "abyssal_list", abyssal.list),
+    ] if abyssal else [])
 
 
 def match_route(routes, parts):
@@ -1936,9 +2238,10 @@ def match_route(routes, parts):
 
 
 # ---------------------------------------------------------------- HTTP 服务
-def make_handler(api, static_dir, industry):
-    v1 = open_routes(api, industry)
+def make_handler(api, static_dir, industry, abyssal):
+    v1 = open_routes(api, industry, abyssal)
     limiter = RateLimiter()
+    post_limiter = RateLimiter(ABYSSAL_POST_RATE)
     routes = {"status": api.status, "live": api.live, "battles": api.battles, "feed": api.feed, "top": api.top, "summary": api.summary,
               "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits, "couriers": api.couriers}
 
@@ -1966,7 +2269,7 @@ def make_handler(api, static_dir, industry):
             # 开放接口的跨域预检
             self.send_response(204)
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
             self.send_header("Access-Control-Max-Age", "86400")
             self.end_headers()
@@ -1991,7 +2294,9 @@ def make_handler(api, static_dir, industry):
             try:
                 return self.send_json(200, fn(q, *args), cors)
             except KeyError as e:
-                if name in ("kill", "entity", "industry_blueprint", "industry_cost"):
+                if name in ("kill", "entity", "industry_blueprint", "industry_cost", "abyssal_module", "abyssal_list"):
+                    if name == "abyssal_module":
+                        return err(404, str(e.args[0]) if e.args else "MutaMarket 没有这件装备")
                     return err(404, "找不到" + ("该产品的蓝图" if name.startswith("industry") else ""))
                 return err(400, f"缺少或无效的参数：{e}")
             except RuntimeError as e:
@@ -2000,6 +2305,37 @@ def make_handler(api, static_dir, industry):
                 return err(400, str(e) or "参数无效")
             except Exception:
                 log.exception("开放接口错误 %s", url.path)
+                return err(500, "服务器内部错误")
+
+        def do_POST(self):
+            # 唯一的写入型开放接口：深渊装备导入 / 刷新估价（转发到 MutaMarket，按 IP 单独限流）
+            url = urllib.parse.urlparse(self.path)
+            cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
+            err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
+            if url.path.rstrip("/") != "/api/v1/abyssal/appraise":
+                return err(404, "接口不存在，文档见 /api.html")
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 4096:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return err(400, "请求体应为 JSON：{type_id, item_id}")
+            ok, left, retry = post_limiter.take(self.client_ip())
+            if not ok:
+                return err(429, f"查询太频繁，请 {retry} 秒后再试", {"Retry-After": str(retry)})
+            try:
+                return self.send_json(200, abyssal.appraise(body), cors)
+            except KeyError as e:
+                return err(404, str(e.args[0]) if e.args else "MutaMarket 没有这件装备")
+            except ValueError as e:
+                return err(400, str(e))
+            except RuntimeError as e:
+                return err(503, str(e))
+            except Exception:
+                log.exception("深渊估价错误")
                 return err(500, "服务器内部错误")
 
         def do_GET(self):
@@ -2073,7 +2409,8 @@ def main():
     threading.Thread(target=api.warm, daemon=True).start()
     here = os.path.dirname(os.path.abspath(__file__))
     industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])
-    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry))
+    abyssal = Abyssal(store)
+    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal))
     log.info("击杀记录服务已启动 http://%s:%d", args.bind, args.port)
     server.serve_forever()
 
