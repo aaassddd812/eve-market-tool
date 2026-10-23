@@ -1,5 +1,5 @@
 // ===== 战争：势力战争 + 军团战争 =====
-// 势力战争（公开接口）：/fw/stats/ 各阵营人数、星系、击杀与胜利点；/fw/wars/ 交战关系；/fw/systems/ 星系争夺进度；
+// 势力战争（公开接口）：/fw/stats/ 各阵营人数、星系、击杀与胜利点；/fw/wars/ 交战关系（按对抗关系分成各条战线）；/fw/systems/ 星系争夺进度；
 //   /fw/leaderboards/、/fw/leaderboards/characters/、/fw/leaderboards/corporations/ 排行榜（击杀 / 胜利点，昨天 / 上周 / 总计）。
 // 军团战争（公开接口）：/wars/ 最新战争 ID（每次 2000 个，用 max_war_id 往前翻），/wars/{id}/ 双方与战果，
 //   /wars/{id}/killmails/ 击杀 ID + hash，再读 /killmails/{id}/{hash}/，价值按 ESI 全服均价估算（与国服战斗记录同一套）。
@@ -140,6 +140,7 @@ function fwHtml(d) {
   const kind = S.board === 'characters' ? 'characters' : 'corporations';
   const seg = (key, items) => `<div class="segmented" role="group">${items.map(([v, l]) => `<button data-fw-set="${key}" data-v="${v}" class="${S[key] === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
   return `${refreshBarHtml(d.timing)}<div class="fw-grid">${cards}</div>
+    ${frontsHtml(d)}
     <div class="fw-cols">
       <section class="pi-card"><div class="pi-card-head"><h3>排行榜</h3></div>
         <div class="fw-board-tools">${seg('board', [['characters', '飞行员'], ['corporations', '军团'], ['factions', '阵营']])}${seg('metric', [['kills', '击杀'], ['victory_points', '胜利点']])}${seg('period', [['yesterday', '昨天'], ['last_week', '上周'], ['active_total', '总计']])}</div>
@@ -151,6 +152,65 @@ function fwHtml(d) {
         
       </section>
     </div>`;
+}
+
+// 战线：/fw/wars/ 的每组对抗关系一条（帝国之间两条：加达里—盖伦特、艾玛—米玛塔尔；海盗叛乱四条：古斯塔斯对加达里 / 盖伦特、天使对艾玛 / 米玛塔尔）。
+//   帝国战线按 /fw/systems/ 的所属阵营（owner）划战区，统计双方占领星系、被争夺 / 可被夺取数量和进度最高的前线星系；
+//   海盗战线 ESI 没有星系级数据，只对比阵营统计。人数、击杀、胜利点都是阵营总数（含该阵营其它战线）。
+const FW_COLOR = { 500001: '#4a9fdc', 500002: '#c8553d', 500003: '#d9a93a', 500004: '#4fb37a', 500010: '#8e9aa6', 500011: '#b5653a' };
+const EMPIRE = new Set([500001, 500002, 500003, 500004]);
+const fwColor = (id) => FW_COLOR[id] || '#888';
+// 排列顺序：加达里—盖伦特战区（及古斯塔斯）在前，艾玛—米玛塔尔战区（及天使）在后
+const FW_RANK = [500001, 500004, 500003, 500002, 500010, 500011];
+const rank = (id) => (FW_RANK.includes(id) ? FW_RANK.indexOf(id) : 99);
+function frontsHtml(d) {
+  const { formatNumber } = ctx;
+  const stat = new Map(d.stats.map((f) => [f.faction_id, f]));
+  const seen = new Set(), fronts = [];
+  for (const w of d.wars) {
+    const pair = [w.faction_id, w.against_id].sort((a, b) => rank(a) - rank(b));
+    const key = pair.join('-');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    fronts.push({ a: pair[0], b: pair[1], empire: EMPIRE.has(pair[0]) && EMPIRE.has(pair[1]) });
+  }
+  if (!fronts.length) return '';
+  fronts.sort((x, y) => (y.empire - x.empire) || rank(x.a) - rank(y.a) || rank(x.b) - rank(y.b));
+  const side = (id, right) => `<span class="fw-side${right ? ' right' : ''}">${logo('corporations', id, 28)}<b>${esc(nameOf(id))}</b></span>`;
+  // 双色拔河条：左右两边各占比例
+  const tug = (label, va, vb, a, b, fmt = formatNumber) => {
+    const sum = (va || 0) + (vb || 0);
+    const pa = sum ? (va / sum) * 100 : 50;
+    return `<div class="fw-tug"><span>${fmt(va || 0)}</span><em>${label}</em><span>${fmt(vb || 0)}</span>
+      <i style="--a:${fwColor(a)};--b:${fwColor(b)}"><u style="width:${pa.toFixed(1)}%"></u></i></div>`;
+  };
+  const card = ({ a, b, empire }) => {
+    const A = stat.get(a) || {}, B = stat.get(b) || {};
+    let zone = '';
+    if (empire) {
+      const sys = d.systems.filter((s) => s.owner_faction_id === a || s.owner_faction_id === b);
+      const occ = (f) => sys.filter((s) => s.occupier_faction_id === f).length;
+      const fighting = sys.filter((s) => s.contested === 'contested').length, vuln = sys.filter((s) => s.contested === 'vulnerable');
+      const hot = sys.filter((s) => s.victory_points_threshold && s.victory_points > 0)
+        .map((s) => ({ ...s, pct: s.victory_points / s.victory_points_threshold })).sort((x, y) => y.pct - x.pct).slice(0, 5);
+      zone = `${tug('占领星系', occ(a), occ(b), a, b)}
+        <p class="fw-front-meta">战区 ${sys.length} 个星系 · <span class="fw-warn">${fighting} 个争夺中</span>${vuln.length ? ` · <span class="fw-danger">${vuln.length} 个可被夺取：${vuln.map((s) => `<button class="link-btn" data-fw-sys="${s.solar_system_id}">${esc(ctx.officialName(s.solar_system_id) || s.solar_system_id)}</button>`).join('、')}</span>` : ''}</p>
+        ${hot.length ? `<ol class="fw-board fw-hot">${hot.map((s) => `<li><i class="fw-dot" style="background:${fwColor(s.occupier_faction_id)}" title="占领方 ${esc(nameOf(s.occupier_faction_id))}"></i><button class="link-btn fw-name" data-fw-sys="${s.solar_system_id}">${esc(ctx.officialName(s.solar_system_id) || s.solar_system_id)}</button>
+          <i class="fw-bar"><em style="width:${Math.min(100, s.pct * 100).toFixed(1)}%"></em></i><b>${(s.pct * 100).toFixed(0)}%</b></li>`).join('')}</ol>` : '<p class="text-muted fw-front-meta">战区内暂无星系在争夺</p>'}`;
+    } else {
+      zone = `${tug('控制星系', A.systems_controlled, B.systems_controlled, a, b)}`;
+    }
+    return `<div class="fw-front">
+      <div class="fw-front-head">${side(a)}<span class="fw-vs">${empire ? '帝国战区' : 'vs'}</span>${side(b, true)}</div>
+      ${tug('飞行员', A.pilots, B.pilots, a, b)}
+      ${tug('上周击杀', A.kills?.last_week, B.kills?.last_week, a, b)}
+      ${empire ? tug('上周胜利点', A.victory_points?.last_week, B.victory_points?.last_week, a, b) : ''}
+      ${zone}</div>`;
+  };
+  const empires = fronts.filter((f) => f.empire), pirates = fronts.filter((f) => !f.empire);
+  return `<section class="fw-fronts"><div class="fw-fronts-head"><h3>${fronts.length} 条战线</h3><small class="text-muted">人数、击杀、胜利点为阵营总数（含它在其它战线的数据）；点星系名在星图中查看</small></div>
+    ${empires.length ? `<div class="fw-front-grid">${empires.map(card).join('')}</div>` : ''}
+    ${pirates.length ? `<p class="fw-front-sub">海盗叛乱战线 <small class="text-muted">ESI 不提供叛乱星系的争夺进度，只能对比阵营统计</small></p><div class="fw-front-grid pirate">${pirates.map(card).join('')}</div>` : ''}</section>`;
 }
 
 // ---------- 军团战争 ----------

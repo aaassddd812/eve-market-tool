@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v4';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v3';
+import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v5';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v4';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
 // ===== 配置与常量 =====
@@ -412,7 +412,7 @@ async function openGuides() {
 let warLoading = null;
 async function openWar() {
   try {
-    if (!warLoading) warLoading = import('./war.js?v=v5').then((m) => {
+    if (!warLoading) warLoading = import('./war.js?v=v6').then((m) => {
       m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
       return m;
     }).catch((error) => { warLoading = null; throw error; });
@@ -1332,9 +1332,9 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v1').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v2').then((m) => {
     m.initWatchBoard({
-      regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESIPaged,
+      regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
       typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
       iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,

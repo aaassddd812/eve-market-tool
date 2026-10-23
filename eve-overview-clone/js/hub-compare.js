@@ -68,7 +68,8 @@ function load(typeId) {
       sellDepth: sell == null ? 0 : sells.filter((o) => o.price <= sell * (1 + DEPTH)).reduce((s, o) => s + o.volume_remain, 0),
       buyDepth: buy == null ? 0 : buys.filter((o) => o.price >= buy * (1 - DEPTH) && (o.min_volume || 1) <= 1).reduce((s, o) => s + o.volume_remain, 0),
       daily: days ? vol / Math.max(30, Math.min(days, 30)) : 0,   // 没成交的日子 ESI 不返回，按 30 天平均
-      avg: recent.length ? recent.reduce((s, d) => s + d.average * d.volume, 0) / (vol || 1) : null
+      avg: recent.length ? recent.reduce((s, d) => s + d.average * d.volume, 0) / (vol || 1) : null,
+      hist: recent.map((d) => [d.date, d.average, d.volume])   // 自选看板画走势、算涨跌
     };
   }));
   cache.set(typeId, { at: Date.now(), promise });
