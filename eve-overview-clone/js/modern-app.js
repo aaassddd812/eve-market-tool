@@ -412,7 +412,7 @@ async function openGuides() {
 let warLoading = null;
 async function openWar() {
   try {
-    if (!warLoading) warLoading = import('./war.js?v=v6').then((m) => {
+    if (!warLoading) warLoading = import('./war.js?v=v7').then((m) => {
       m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
       return m;
     }).catch((error) => { warLoading = null; throw error; });

@@ -5304,3 +5304,12 @@ td .sov-auto-tag { margin-left: 4px; }
 .fw-front-sub small { font-weight: 400; margin-left: 6px; }
 .fw-front-grid.pirate { grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); }
 .fw-front-grid.pirate .fw-side { font-size: 0.8125rem; gap: 6px; }
+.fw-eta { flex: none; padding: 0 6px; border-radius: 9px; font-size: 0.6875rem; line-height: 18px; color: var(--accent-primary); background: var(--accent-soft); white-space: nowrap; }
+.fw-board small.fw-eta { color: var(--accent-primary); }
+.fw-board small.fw-eta.danger, .fw-eta.danger { color: var(--danger); background: var(--sell-soft); }
+.fw-board small.fw-eta.down, .fw-eta.down { color: var(--buy-color); background: var(--buy-soft); }
+.fw-board small.fw-eta.muted, .fw-eta.muted { color: var(--text-muted); background: var(--bg-tertiary); }
+.fw-next { margin: 0; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--bg-tertiary); font-size: 0.8125rem; }
+.fw-next b { color: var(--warning, #f59e0b); margin-left: 4px; }
+.fw-trend-note { margin: -4px 0 10px; font-size: 0.75rem; color: var(--text-muted); }
+.fw-next .link-btn, .fw-front-meta .link-btn { color: var(--accent-primary); }

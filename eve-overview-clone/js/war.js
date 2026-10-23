@@ -5,7 +5,7 @@
 //   /wars/{id}/killmails/ 击杀 ID + hash，再读 /killmails/{id}/{hash}/，价值按 ESI 全服均价估算（与国服战斗记录同一套）。
 // 刷新倒计时：按 ESI 响应的 Expires 头（跨域可读的安全响应头）显示星系争夺进度（约每 30 分钟更新）与阵营统计 / 排行榜的下次刷新时间，
 //   归零后自动重新读取并就地更新（至少间隔 60 秒，避免 ESI 缓存未及时更新时反复请求）。
-import { esiUrl } from './server.js?v=s4';
+import { esiUrl, SERVER } from './server.js?v=s4';
 
 let ctx;   // esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem
 const S = { tab: 'fw', board: 'characters', metric: 'kills', period: 'last_week', warFilter: 'active', wars: [], warIds: [], nextMax: null, warLoading: false };
@@ -46,17 +46,18 @@ async function esiTimed(path) {
 
 async function loadFw() {
   return once('fw', async () => {
-    const [statsR, wars, systemsR, boards, table] = await Promise.all([
+    const [statsR, wars, systemsR, boards, table, trend] = await Promise.all([
       esiTimed('/fw/stats/'), ctx.fetchESI('/fw/wars/'), esiTimed('/fw/systems/').catch(() => ({ data: [], expires: 0, modified: 0 })),
       Promise.all(['', 'characters/', 'corporations/'].map((p) => ctx.fetchESI('/fw/leaderboards/' + p).catch(() => null))),
-      fetch('./npc-corp-faction.json?v=2').then((r) => r.json()).catch(() => ({ factions: {} }))
+      fetch('./npc-corp-faction.json?v=2').then((r) => r.json()).catch(() => ({ factions: {} })),
+      fetch('/api/v1/fw/trend?server=' + SERVER.id).then((r) => (r.ok ? r.json() : null)).catch(() => null)
     ]);
     factionNames = table.factions || {};
     const [factions, characters, corporations] = boards;
     const ids = [];
     for (const b of [characters, corporations]) for (const m of ['kills', 'victory_points']) for (const p of ['yesterday', 'last_week', 'active_total']) for (const x of b?.[m]?.[p] || []) ids.push(x.character_id || x.corporation_id);
     await nameAll(ids);
-    return { stats: statsR.data, wars, systems: systemsR.data, boards: { factions, characters, corporations },
+    return { stats: statsR.data, wars, systems: systemsR.data, trend, boards: { factions, characters, corporations },
       timing: { systems: { expires: systemsR.expires, modified: systemsR.modified }, stats: { expires: statsR.expires, modified: statsR.modified } } };
   });
 }
@@ -148,7 +149,7 @@ function fwHtml(d) {
       </section>
       <section class="pi-card"><div class="pi-card-head"><h3>争夺最激烈的星系</h3></div>
         <ol class="fw-board">${hot.map((s) => `<li><button class="link-btn fw-name" data-fw-sys="${s.solar_system_id}">${esc(ctx.officialName(s.solar_system_id) || s.solar_system_id)}</button>
-          <small>${esc(nameOf(s.occupier_faction_id))}</small><i class="fw-bar"><em style="width:${Math.min(100, s.pct * 100).toFixed(1)}%"></em></i><b>${(s.pct * 100).toFixed(0)}%</b></li>`).join('')}</ol>
+          <small>${esc(nameOf(s.occupier_faction_id))}</small>${etaHtml(s, d.trend)}<i class="fw-bar"><em style="width:${Math.min(100, s.pct * 100).toFixed(1)}%"></em></i><b>${(s.pct * 100).toFixed(0)}%</b></li>`).join('')}</ol>
         
       </section>
     </div>`;
@@ -157,6 +158,34 @@ function fwHtml(d) {
 // 战线：/fw/wars/ 的每组对抗关系一条（帝国之间两条：加达里—盖伦特、艾玛—米玛塔尔；海盗叛乱四条：古斯塔斯对加达里 / 盖伦特、天使对艾玛 / 米玛塔尔）。
 //   帝国战线按 /fw/systems/ 的所属阵营（owner）划战区，统计双方占领星系、被争夺 / 可被夺取数量和进度最高的前线星系；
 //   海盗战线 ESI 没有星系级数据，只对比阵营统计。人数、击杀、胜利点都是阵营总数（含该阵营其它战线）。
+// 预计时间（服务器后端 /api/v1/fw/trend 记录的胜利点快照）：按最近 6 小时推进速度估算，不是游戏里的真实倒计时
+const dur = (h) => (h < 1 ? Math.max(1, Math.round(h * 60)) + ' 分钟' : h < 48 ? h.toFixed(1) + ' 小时' : Math.round(h / 24) + ' 天');
+// 距快照时间已经过去的部分扣掉，得到从现在起还要多久
+function etaLeft(s, trend) {
+  const t = trend?.systems?.[s.solar_system_id];
+  if (t?.eta == null || !(t.rate > 0)) return null;
+  return Math.max(0, t.eta - (Date.now() / 1000 - trend.updated) / 3600);
+}
+function etaHtml(s, trend) {
+  const t = trend?.systems?.[s.solar_system_id];
+  if (!t) return '';
+  if (s.contested === 'vulnerable') {
+    if (!t.vuln_since) return '';
+    // 记录开始时就已经是可被夺取，只能说「至少」
+    const atLeast = t.vuln_since <= trend.since;
+    return `<small class="fw-eta danger" title="记录中最早出现「可被夺取」：${new Date(t.vuln_since * 1000).toLocaleString('zh-CN', { hour12: false })}">可被夺取 ${atLeast ? '至少' : '已'} ${dur((Date.now() / 1000 - t.vuln_since) / 3600)}</small>`;
+  }
+  if (t.rate == null) return '';
+  const tip = `最近 ${t.pts} 次快照：胜利点 ${t.rate > 0 ? '+' : ''}${ctx.formatNumber(t.rate)} / 小时`;
+  if (t.rate > 0 && t.eta != null) { const h = etaLeft(s, trend); return `<small class="fw-eta" title="${tip}">≈${h < 0.05 ? '即将' : dur(h)}满</small>`; }
+  if (t.rate < 0) return `<small class="fw-eta down" title="${tip}">回落中</small>`;
+  return `<small class="fw-eta muted" title="${tip}">停滞</small>`;
+}
+function trendNote(trend) {
+  if (!trend) return '预计时间暂不可用（读不到服务器的胜利点记录）';
+  if ((trend.snapshots || 0) < 2) return '⏱ 服务器刚开始记录胜利点，攒够两次 ESI 更新（约 1 小时）后显示各星系的预计时间';
+  return `⏱ 预计时间按最近 ${trend.window_hours} 小时胜利点推进速度估算（服务器每次 ESI 更新记一笔，已记录 ${trend.snapshots} 次，自 ${clock(trend.since * 1000)} 起），只作参考，不是游戏里的倒计时`;
+}
 const FW_COLOR = { 500001: '#4a9fdc', 500002: '#c8553d', 500003: '#d9a93a', 500004: '#4fb37a', 500010: '#8e9aa6', 500011: '#b5653a' };
 const EMPIRE = new Set([500001, 500002, 500003, 500004]);
 const fwColor = (id) => FW_COLOR[id] || '#888';
@@ -193,10 +222,15 @@ function frontsHtml(d) {
       const fighting = sys.filter((s) => s.contested === 'contested').length, vuln = sys.filter((s) => s.contested === 'vulnerable');
       const hot = sys.filter((s) => s.victory_points_threshold && s.victory_points > 0)
         .map((s) => ({ ...s, pct: s.victory_points / s.victory_points_threshold })).sort((x, y) => y.pct - x.pct).slice(0, 5);
+      const flips = sys.filter((s) => d.trend?.systems?.[s.solar_system_id]?.flipped > Date.now() / 1000 - 86400)
+        .map((s) => `<button class="link-btn" data-fw-sys="${s.solar_system_id}">${esc(ctx.officialName(s.solar_system_id) || s.solar_system_id)}</button>（${dur((Date.now() / 1000 - d.trend.systems[s.solar_system_id].flipped) / 3600)}前归${esc(nameOf(s.occupier_faction_id))}）`);
+      const next = sys.map((s) => ({ s, h: etaLeft(s, d.trend) })).filter((x) => x.h != null && x.s.contested !== 'vulnerable').sort((x, y) => x.h - y.h)[0];
       zone = `${tug('占领星系', occ(a), occ(b), a, b)}
         <p class="fw-front-meta">战区 ${sys.length} 个星系 · <span class="fw-warn">${fighting} 个争夺中</span>${vuln.length ? ` · <span class="fw-danger">${vuln.length} 个可被夺取：${vuln.map((s) => `<button class="link-btn" data-fw-sys="${s.solar_system_id}">${esc(ctx.officialName(s.solar_system_id) || s.solar_system_id)}</button>`).join('、')}</span>` : ''}</p>
+        ${flips.length ? `<p class="fw-front-meta">24 小时内易主：${flips.join('、')}</p>` : ''}
+        ${next ? `<p class="fw-next">⏱ 预计最快进入可被夺取：<button class="link-btn" data-fw-sys="${next.s.solar_system_id}">${esc(ctx.officialName(next.s.solar_system_id) || next.s.solar_system_id)}</button>（${esc(nameOf(next.s.occupier_faction_id))}）<b>${next.h < 0.05 ? '即将' : '约 ' + dur(next.h) + '后'}</b></p>` : ''}
         ${hot.length ? `<ol class="fw-board fw-hot">${hot.map((s) => `<li><i class="fw-dot" style="background:${fwColor(s.occupier_faction_id)}" title="占领方 ${esc(nameOf(s.occupier_faction_id))}"></i><button class="link-btn fw-name" data-fw-sys="${s.solar_system_id}">${esc(ctx.officialName(s.solar_system_id) || s.solar_system_id)}</button>
-          <i class="fw-bar"><em style="width:${Math.min(100, s.pct * 100).toFixed(1)}%"></em></i><b>${(s.pct * 100).toFixed(0)}%</b></li>`).join('')}</ol>` : '<p class="text-muted fw-front-meta">战区内暂无星系在争夺</p>'}`;
+          ${etaHtml(s, d.trend)}<i class="fw-bar"><em style="width:${Math.min(100, s.pct * 100).toFixed(1)}%"></em></i><b>${(s.pct * 100).toFixed(0)}%</b></li>`).join('')}</ol>` : '<p class="text-muted fw-front-meta">战区内暂无星系在争夺</p>'}`;
     } else {
       zone = `${tug('控制星系', A.systems_controlled, B.systems_controlled, a, b)}`;
     }
@@ -209,6 +243,7 @@ function frontsHtml(d) {
   };
   const empires = fronts.filter((f) => f.empire), pirates = fronts.filter((f) => !f.empire);
   return `<section class="fw-fronts"><div class="fw-fronts-head"><h3>${fronts.length} 条战线</h3><small class="text-muted">人数、击杀、胜利点为阵营总数（含它在其它战线的数据）；点星系名在星图中查看</small></div>
+    <p class="fw-trend-note">${trendNote(d.trend)}</p>
     ${empires.length ? `<div class="fw-front-grid">${empires.map(card).join('')}</div>` : ''}
     ${pirates.length ? `<p class="fw-front-sub">海盗叛乱战线 <small class="text-muted">ESI 不提供叛乱星系的争夺进度，只能对比阵营统计</small></p><div class="fw-front-grid pirate">${pirates.map(card).join('')}</div>` : ''}</section>`;
 }

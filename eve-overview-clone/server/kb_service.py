@@ -39,6 +39,7 @@ import collections
 import concurrent.futures
 import csv
 import datetime as dt
+import email.utils
 import gzip
 import io
 import json
@@ -2899,6 +2900,110 @@ class HubArbitrage:
         return out
 
 
+# ---------------------------------------------------------------- 势力战争趋势
+# 后台每 5 分钟看一次三个服的 /fw/systems/（ESI 约 30 分钟更新一次），按 Last-Modified 记下每个星系的胜利点快照（保留 3 天）。
+# 接口 GET /api/v1/fw/trend?server=：各星系最近 6 小时胜利点推进速度（最小二乘，占领方变了就从变化后算起）、
+#   按这个速度到达阈值的预计小时数、进入「可被夺取」的时间、最近一次易主时间。只是按趋势估算，游戏里没有公开的倒计时。
+FW_POLL = 5 * 60
+FW_KEEP = 3 * 86400
+FW_WINDOW = 6 * 3600
+
+
+class FwTracker:
+    def __init__(self, store):
+        self.store = store
+        self.lock = threading.Lock()
+        self.cache = {}         # server -> 接口结果
+        c = store.conn()
+        with store.write_lock:
+            c.execute("CREATE TABLE IF NOT EXISTS fw_snap(server TEXT, system_id INTEGER, at INTEGER, vp INTEGER, threshold INTEGER, occupier INTEGER, contested TEXT,"
+                      " PRIMARY KEY(server, system_id, at)) WITHOUT ROWID")
+            c.commit()
+
+    def start(self):
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def loop(self):
+        while True:
+            for server in ARB_SERVERS:
+                try:
+                    self.poll(server)
+                except Exception as e:
+                    log.warning("势力战争快照（%s）失败：%s", server, e)
+            time.sleep(FW_POLL)
+
+    def poll(self, server):
+        cfg = ARB_SERVERS[server]
+        url = f"{cfg['esi']}/fw/systems/" + (f"?{cfg['qs']}" if cfg["qs"] else "")
+        data, headers = get_json(url, timeout=30)
+        if not data:
+            return
+        try:
+            at = int(email.utils.parsedate_to_datetime(headers.get("Last-Modified")).timestamp())
+        except Exception:
+            at = int(time.time())
+        c = self.store.conn()
+        last = c.execute("SELECT MAX(at) FROM fw_snap WHERE server=?", (server,)).fetchone()[0]
+        if last and at <= last:
+            return
+        with self.store.write_lock:
+            c.executemany("INSERT OR REPLACE INTO fw_snap VALUES (?,?,?,?,?,?,?)",
+                          [(server, s["solar_system_id"], at, s.get("victory_points") or 0, s.get("victory_points_threshold") or 0,
+                            s.get("occupier_faction_id"), s.get("contested")) for s in data])
+            c.execute("DELETE FROM fw_snap WHERE at < ?", (at - FW_KEEP,))
+            c.commit()
+        with self.lock:
+            self.cache.pop(server, None)
+
+    def trend(self, q):
+        server = q.get("server") or "tq"
+        if server not in ARB_SERVERS:
+            raise ValueError("server 只能是 " + " / ".join(ARB_SERVERS))
+        with self.lock:
+            hit = self.cache.get(server)
+        if hit:
+            return hit
+        rows = self.store.conn().execute("SELECT system_id, at, vp, threshold, occupier, contested FROM fw_snap WHERE server=? ORDER BY system_id, at", (server,)).fetchall()
+        by = collections.defaultdict(list)
+        for sid, *rest in rows:
+            by[sid].append(rest)
+        ats = sorted({r[1] for r in rows})
+        systems = {}
+        for sid, snaps in by.items():
+            now_at, vp, thr, occ, state = snaps[-1]
+            # 最近一次易主：往前找占领方不同的快照
+            flipped = None
+            for i in range(len(snaps) - 1, 0, -1):
+                if snaps[i - 1][3] != snaps[i][3]:
+                    flipped = snaps[i][0]
+                    break
+            vuln = None
+            if state == "vulnerable":
+                vuln = now_at
+                for s in reversed(snaps):
+                    if s[4] != "vulnerable" or s[3] != occ:
+                        break
+                    vuln = s[0]
+            pts = [(s[0], s[1]) for s in snaps if s[0] >= now_at - FW_WINDOW and s[0] >= (flipped or 0)]
+            rate = None
+            if len(pts) >= 2 and pts[-1][0] - pts[0][0] >= 25 * 60:
+                n = len(pts)
+                mx = sum(p[0] for p in pts) / n
+                my = sum(p[1] for p in pts) / n
+                den = sum((p[0] - mx) ** 2 for p in pts)
+                rate = sum((p[0] - mx) * (p[1] - my) for p in pts) / den * 3600 if den else None
+            eta = None
+            if rate and thr and state != "vulnerable":
+                eta = (thr - vp) / rate if rate > 0 else (-vp / rate if vp > 0 else None)   # 负速度：多久回落到 0
+            systems[sid] = {"rate": round(rate) if rate is not None else None, "eta": round(eta, 2) if eta is not None and eta >= 0 else None,
+                            "pts": len(pts), "vuln_since": vuln, "flipped": flipped}
+        out = {"server": server, "updated": ats[-1] if ats else None, "since": ats[0] if ats else None, "snapshots": len(ats),
+               "window_hours": FW_WINDOW // 3600, "systems": systems}
+        with self.lock:
+            self.cache[server] = out
+        return out
+
+
 class RateLimiter:
     """按 IP 的令牌桶：容量 API_RATE，每秒恢复 API_RATE / 60 个"""
     def __init__(self, rate=API_RATE):
@@ -2940,6 +3045,7 @@ def open_routes(api, industry, abyssal=None):
         (("prices",), "prices", api.prices),
         (("blueprints", "prices"), "bp_prices", bp_prices),
         (("hubs", "arbitrage"), "hub_arbitrage", lambda q: api.arb.snapshot(q)),
+        (("fw", "trend"), "fw_trend", lambda q: api.fw.trend(q)),
         (("wormholes", "activity"), "wh_activity", api.wh_activity),
         (("wormholes", "systems", "{n}"), "wh_system", lambda q, sid: api.wh_system(sid, q)),
         (("kills",), "kills", lambda q: {k: v for k, v in api.feed(local(q)).items() if k != "notice"}),
@@ -3164,6 +3270,8 @@ def main():
     Workers(store, args.days, "r2z2" if args.live == "redisq" else args.live).start()
     api = Api(store)
     api.arb = store.arb
+    api.fw = FwTracker(store)
+    api.fw.start()
     threading.Thread(target=api.warm, daemon=True).start()
     here = os.path.dirname(os.path.abspath(__file__))
     industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])
