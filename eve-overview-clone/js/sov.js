@@ -7,6 +7,12 @@
 //   - 同一互斥组只能装一个（如同种矿物的勘探阵列 1–3、电力监控部门与劳动力机械工具、四种稳定发生器）
 //   - 升级件按优先级依次分配电力和劳动力，资源不够的进入低电量（本页按「放不下就跳过，继续给后面的」模拟）
 //   - 电力监控部门 / 劳动力机械工具产出的电力 / 劳动力只供优先级更低的升级件使用；机械工具产出的劳动力不能导出
+// 一键规划（autoPlan）：用户只选各星系装哪些天钩、哪些升级件，其余自动配——
+//   1. 产出件（电力监控部门 / 劳动力机械工具）排到最前，其余按用户顺序；
+//   2. 电力不够且没装产出件：加能补足的最低级电力监控部门（耗劳动力换电力）；
+//   3. 劳动力：可选来源最少的缺口先处理，沿星门找规划里有富余的星系导出（先找能一次补足的最近星系，否则取富余最多的，最多 3 个来源），
+//      途经星系设为中转（优先走自给自足的星系，不行再借道有富余的星系）；
+//   4. 运输后仍不够、电力有富余：加能补足的最低级劳动力机械工具（耗电力换劳动力）。自动加的升级件带标记，重新规划时先移除
 // ESI（宁静服，2026-05 起的新接口，需 esi-structures.read_corporation.v1 与军团职位）：
 //   /corporations/{id}/structures/sovereignty-hubs[/{hub}]：升级件与上线状态、电力 / 劳动力、燃料仓、劳动力运输设置
 //   /corporations/{id}/structures/skyhooks[/{id}]：天钩所在行星、是否在产出、试剂库存
@@ -35,14 +41,17 @@ const STATE_NAME = { Online: '在线', Offline: '离线', Low: '低电量', Pend
 const SKYHOOK_STATE = { ShieldVulnerable: '正常', ArmorReinforced: '装甲增强', ArmorVulnerable: '装甲可攻击', HullReinforced: '结构增强', HullVulnerable: '结构可攻击', Unspecified: '未知' };
 
 const D = { loading: null, sov: null, sys: new Map(), regions: new Map(), consts: new Map(), up: new Map(), owners: null, ownersLoading: null, prices: null };
-const S = { tab: 'plan', cur: 0, query: '', pick: null, esi: null, esiLoading: false };
+const S = { tab: 'plan', cur: 0, query: '', pick: null, esi: null, esiLoading: false, autoRes: null, undo: null };
 let P = { list: [], sys: {} };
 
 export function initSov(context) {
   ctx = context;
   P = ctx.store.getJSON(STORE_KEY, null) || { list: [], sys: {} };
 }
-const save = () => ctx.store.setJSON(STORE_KEY, P);
+const save = () => {
+  if (P.auto && D.sov) S.autoRes = autoPlan();   // 「改动后自动」：每次改动后重新规划
+  ctx.store.setJSON(STORE_KEY, P);
+};
 
 // ---------- 数据 ----------
 function loadData() {
@@ -235,6 +244,179 @@ function simulate() {
   return R;
 }
 
+// ---------- 一键规划 ----------
+const isProducer = (tid) => { const u = D.up.get(tid); return Boolean(u && (u.powerProd || u.wfProd)); };
+// 产出至少 want 的最低级；都不够取最高级。fits 过滤可用的（如电力够不够装）
+function pickProducer(key, want, fits = () => true) {
+  const list = [...D.up.values()].filter((u) => u[key] && fits(u)).sort((a, b) => a[key] - b[key]);
+  return list.find((u) => u[key] >= want) || list[list.length - 1] || null;
+}
+function needs(id) {
+  const n = { p: 0, w: 0, pp: 0, wp: 0 };
+  for (const [tid, on] of P.sys[id].ups) {
+    const u = D.up.get(tid);
+    if (!u || !on) continue;
+    n.p += u.power; n.w += u.wf; n.pp += u.powerProd; n.wp += u.wfProd;
+  }
+  return n;
+}
+// 劳动力余量：天钩劳动力 −（升级件劳动力 − 机械工具产出）；机械工具产出不能导出，所以余量最多是天钩劳动力
+function wfBalance(id) {
+  const n = needs(id), res = resources(id);
+  return Math.min(res.wf, res.wf + n.wp - n.w);
+}
+function powerSpare(id) {
+  const n = needs(id);
+  return resources(id).power + n.pp - n.p;
+}
+
+// 三种加装电力监控部门的策略都试一遍（不加 / 本星系劳动力够付才加 / 缺电就加），取上线升级件最多的方案
+function autoPlan() {
+  let best = null;
+  for (const mode of ['all', 'local', 'none']) {
+    const res = planOnce(mode);
+    const score = [res.lowCount, res.unmet.reduce((t, [, n]) => t + n, 0), res.added.length];
+    if (!best || score[0] < best.score[0] || (score[0] === best.score[0] && (score[1] < best.score[1] || (score[1] === best.score[1] && score[2] < best.score[2])))) {
+      best = { score, res, sys: JSON.stringify(P.sys) };
+    }
+  }
+  P.sys = JSON.parse(best.sys);
+  return best.res;
+}
+
+function planOnce(powerMode) {
+  const ids = P.list;
+  const inPlan = new Set(ids);
+  const added = [];
+  for (const id of ids) {
+    const e = entry(id);
+    e.ups = e.ups.filter((x) => !x[2]);
+    e.ups = [...e.ups.filter(([t]) => isProducer(t)), ...e.ups.filter(([t]) => !isProducer(t))];
+    e.mode = ''; e.to = 0; e.amount = 0;
+  }
+  const hasProducer = (id) => P.sys[id].ups.some(([t, on]) => on && isProducer(t));
+  // 电力：只能本星系解决
+  for (const id of ids) {
+    const lack = -powerSpare(id);
+    if (powerMode === 'none' || lack <= 0 || hasProducer(id)) continue;
+    const u = pickProducer('powerProd', lack, (x) => powerMode === 'all' || x.wf <= wfBalance(id));
+    if (!u) continue;
+    P.sys[id].ups.unshift([u.id, true, 1]);
+    added.push([id, u]);
+  }
+  // 劳动力运输
+  const bal = new Map(ids.map((id) => [id, wfBalance(id)]));
+  const role = new Map();   // 星系 → exp / imp / transit
+  const flows = [];
+  const unmet = new Map();
+  const reach = (from, strict) => {
+    const prev = new Map([[from, 0]]), dist = new Map([[from, 0]]);
+    const queue = [from];
+    const cands = [];
+    while (queue.length) {
+      const cur = queue.shift();
+      for (const n of D.sys.get(cur).nbr) {
+        if (!inPlan.has(n) || prev.has(n)) continue;
+        prev.set(n, cur); dist.set(n, dist.get(cur) + 1);
+        const r = role.get(n);
+        if (!r && bal.get(n) > 0) cands.push(n);
+        // 能借道：已是中转，或还没分配角色且自给自足（严格模式）/ 不缺劳动力（放宽后可借道有富余的星系）；缺劳动力的星系要留着导入，不借道
+        if (r === 'transit' || (!r && (strict ? bal.get(n) === 0 : bal.get(n) >= 0))) queue.push(n);
+      }
+    }
+    return { prev, dist, cands };
+  };
+  // 先处理可选来源最少的缺口（只有一条路的星系别被别人抢走来源），同样少的先处理缺得多的
+  const pending = new Set(ids.filter((id) => bal.get(id) < 0));
+  const options = (d) => { const a = reach(d, true).cands.length; return a || reach(d, false).cands.length; };
+  while (pending.size) {
+    let d = 0, dOpt = Infinity;
+    for (const x of pending) {
+      const o = options(x);
+      if (o < dOpt || (o === dOpt && bal.get(x) < bal.get(d))) { d = x; dOpt = o; }
+    }
+    pending.delete(d);
+    let left = -bal.get(d), sources = 0;
+    while (left > 0 && sources < 3) {
+      // 依次：只走自给自足星系能一次补足的最近来源 → 借道有富余星系能一次补足的 → 富余最多的（先严格后放宽）
+      const ways = [reach(d, true), reach(d, false)];
+      let found = null;
+      for (const w of ways) {
+        const x = w.cands.filter((c) => bal.get(c) >= left).sort((a, b) => w.dist.get(a) - w.dist.get(b))[0];
+        if (x) { found = { x, prev: w.prev }; break; }
+      }
+      if (!found) for (const w of ways) {
+        const x = w.cands.slice().sort((a, b) => bal.get(b) - bal.get(a) || w.dist.get(a) - w.dist.get(b))[0];
+        if (x) { found = { x, prev: w.prev }; break; }
+      }
+      if (!found) break;
+      const { x, prev } = found;
+      const amount = Math.min(bal.get(x), left);
+      Object.assign(P.sys[x], { mode: 'export', to: d, amount });
+      role.set(x, 'exp');
+      for (let c = prev.get(x); c && c !== d; c = prev.get(c)) { role.set(c, 'transit'); P.sys[c].mode = 'transit'; }
+      flows.push({ from: x, to: d, amount });
+      left -= amount; sources++;
+    }
+    if (sources) { role.set(d, 'imp'); P.sys[d].mode = 'import'; }
+    if (left > 0) unmet.set(d, left);
+  }
+  // 运输后仍缺劳动力：电力有富余就加机械工具
+  for (const [id, left] of [...unmet]) {
+    if (hasProducer(id)) continue;
+    const spare = powerSpare(id);
+    const u = pickProducer('wfProd', left, (x) => x.power <= spare);
+    if (!u) continue;
+    P.sys[id].ups.unshift([u.id, true, 1]);
+    added.push([id, u]);
+    if (u.wfProd >= left) unmet.delete(id); else unmet.set(id, left - u.wfProd);
+  }
+  const R = simulate();
+  const low = ids.filter((id) => R.get(id).ups.some((x) => x.state === 'low'));
+  return {
+    at: Date.now(), flows, added, lowCount: ids.reduce((t, id) => t + R.get(id).ups.filter((x) => x.state === 'low').length, 0),
+    exp: ids.filter((id) => P.sys[id].mode === 'export').length,
+    imp: ids.filter((id) => P.sys[id].mode === 'import').length,
+    transit: ids.filter((id) => P.sys[id].mode === 'transit').length,
+    low, unmet: [...unmet]
+  };
+}
+
+function runAuto() {
+  S.undo = JSON.stringify(P);
+  S.autoRes = autoPlan();
+  S.autoRes.manual = true;
+  ctx.store.setJSON(STORE_KEY, P);
+  render();
+}
+
+function autoCard() {
+  const a = S.autoRes;
+  if (!a || a.hidden) return '';
+  const name = (id) => esc(D.sys.get(id)?.name || id);
+  const link = (id) => `<a data-sov-sys="${id}">${name(id)}</a>`;
+  const lines = [];
+  if (a.flows.length) lines.push(`劳动力运输 ${a.flows.length} 条：${a.flows.map((f) => `${link(f.from)} → ${link(f.to)} ${num(f.amount)}`).join('、')}${a.transit ? `（${a.transit} 个星系设为中转）` : ''}`);
+  if (a.added.length) lines.push(`自动加装：${a.added.map(([id, u]) => `${link(id)} ${esc(u.name)}`).join('、')}`);
+  if (a.unmet.length) lines.push(`<span class="down">劳动力仍不足：${a.unmet.map(([id, n]) => `${link(id)} 缺 ${num(n)}`).join('、')}（沿星门能导入的富余劳动力不够，可多装温和 / 贫瘠 / 海洋天钩，或把中间星系也加入规划）</span>`);
+  if (a.low.length) {
+    const R = simulate();
+    const why = (id) => {
+      const r = R.get(id);
+      const lowUps = r.ups.filter((x) => x.state === 'low');
+      const lp = Math.max(0, r.usedP + lowUps.reduce((t, x) => t + x.u.power, 0) - r.powerTotal);
+      const lw = Math.max(0, r.usedW + lowUps.reduce((t, x) => t + x.u.wf, 0) - r.wfTotal);
+      return [lp ? `缺电 ${num(lp)}` : '', lw ? `缺劳动力 ${num(lw)}` : ''].filter(Boolean).join('、');
+    };
+    lines.push(`<span class="down">仍有升级件资源不足：${a.low.map((id) => `${link(id)}（${why(id)}）`).join('、')}；电力只能本星系解决，可多装气体 / 风暴 / 等离子天钩或去掉部分升级件</span>`);
+  }
+  if (!lines.length) lines.push('各星系电力、劳动力都够，不需要运输');
+  return `<div class="pi-card sov-auto-card"><div class="pi-card-head"><h3>${P.auto ? '自动规划' : '一键规划结果'}</h3>
+      <span class="text-muted">${a.low.length || a.unmet.length ? '部分星系仍有缺口' : '全部升级件可上线'}</span><span class="toolbar-spacer"></span>
+      ${S.undo && a.manual ? '<button class="btn btn-ghost btn-sm" data-sov-undo>撤销</button>' : ''}${P.auto ? '' : '<button class="btn btn-ghost btn-sm" data-sov-auto-hide>收起</button>'}</div>
+    <ul class="sov-auto-lines">${lines.map((l) => `<li>${l}</li>`).join('')}</ul></div>`;
+}
+
 // ---------- 页面 ----------
 export async function showSov(hash) {
   const main = $('sovMain');
@@ -252,6 +434,7 @@ export async function showSov(hash) {
   try { await loadData(); } catch (error) { $('sovBody').innerHTML = `<div class="empty-state"><p>数据加载失败：${esc(error.message)}</p></div>`; return; }
   $('sovSrc').textContent = `数据：SDE ${D.sov.sdeDate.slice(0, 10)}（build ${D.sov.sdeBuild}）`;
   if (!S.cur || !P.list.includes(S.cur)) S.cur = P.list[0] || 0;
+  if (P.auto && !S.autoRes) { S.autoRes = autoPlan(); ctx.store.setJSON(STORE_KEY, P); }
   render();
 }
 
@@ -289,7 +472,8 @@ function introHtml() {
     <li>在左侧搜索星系、星座或星域加入规划（星座 / 星域可只加某个联盟的主权星系）</li>
     <li>每个星系勾选哪些行星装了轨道天钩：气体 / 风暴 / 等离子行星供电，温和 / 贫瘠 / 海洋行星供劳动力，冰体 / 熔岩行星产燃料试剂</li>
     <li>按优先级添加升级件，本页模拟哪些能上线、还剩多少电力和劳动力、每小时烧多少燃料</li>
-    <li>劳动力不够的星系可以从别的星系导入：导出星系选目的地和数量，路上经过的星系设为中转</li>
+    <li>点左侧「一键规划」：自动排优先级、配好劳动力导出 / 导入 / 中转，电力或劳动力不够时自动加电力监控部门 / 劳动力机械工具；勾选「改动后自动」后，只管选天钩和升级件就行</li>
+    <li>也可以手动配置：劳动力不够的星系从别的星系导入，导出星系选目的地和数量，路上经过的星系设为中转</li>
     <li>有军团职位的话，在「我的主权设施」用 ESI 读出实际配置，一键导入成规划再调整</li></ol>
     <p class="text-muted">规划保存在本机浏览器，可在「总览」导出 / 导入。</p></div>`;
 }
@@ -349,7 +533,9 @@ function listHtml(R) {
       <span class="sov-dot ${statusOf(r)}"></span><b>${esc(s.name)}</b>${e.mode ? `<span class="sov-mode m-${e.mode}">${MODE_NAME[e.mode]}</span>` : ''}
       <span class="sov-mini">${running}/${e.ups.length} 件 · 电 ${num(r.freeP)} · 劳 ${num(r.freeW)}</span></button>`;
   }
-  return `<div class="sov-list-head"><span>规划中的星系 ${P.list.length}</span><button class="btn btn-ghost btn-sm" data-sov-clear>清空</button></div>${html}`;
+  return `<div class="sov-auto-bar"><button class="btn btn-primary btn-sm" data-sov-auto title="按各星系选的天钩和升级件，自动排优先级、配置劳动力导出 / 导入 / 中转，必要时加电力监控部门或劳动力机械工具">一键规划</button>
+      <label class="pi-check" title="每次改天钩或升级件后自动重新规划；开启时劳动力运输不能手动改"><input type="checkbox" data-sov-autoon${P.auto ? ' checked' : ''}><span>改动后自动</span></label></div>
+    <div class="sov-list-head"><span>规划中的星系 ${P.list.length}</span><button class="btn btn-ghost btn-sm" data-sov-clear>清空</button></div>${html}`;
 }
 
 function bar(used, total) {
@@ -368,7 +554,7 @@ function detailHtml(R) {
   return `<div class="sov-sys-head"><h3><a href="#map=${id}" data-sov-map="${id}">${esc(s.name)}</a></h3>
       <span class="text-muted">${esc(D.consts.get(s.cons)?.name)} · ${esc(D.regions.get(s.region))} · ${s.sec.toFixed(1)}</span>
       ${o ? `<span class="sov-owner">${esc(ownerName(o))}</span>${devs}` : (D.owners ? '<span class="text-muted">无主</span>' : '')}
-      <span class="toolbar-spacer"></span><button class="btn btn-ghost btn-sm" data-sov-remove="${id}">移出规划</button></div>
+      <span class="toolbar-spacer"></span>${P.auto ? '' : '<button class="btn btn-ghost btn-sm" data-sov-auto>一键规划</button>'}<button class="btn btn-ghost btn-sm" data-sov-remove="${id}">移出规划</button></div>
     <div class="pi-stats sov-stats">
       <div><span>电力 已用 / 总量</span><b>${num(r.usedP)} / ${num(r.powerTotal)}</b>${bar(r.usedP, r.powerTotal)}</div>
       <div><span>劳动力 已用 / 总量</span><b>${num(r.usedW)} / ${num(r.wfTotal)}</b>${bar(r.usedW, r.wfTotal)}</div>
@@ -376,6 +562,7 @@ function detailHtml(R) {
       <div><span>${reagentName(ICE)} 每小时 产出 − 消耗</span><b class="${net(ICE) < 0 ? 'down' : 'up'}">${net(ICE) > 0 ? '+' : ''}${num(net(ICE))}</b></div>
       <div><span>${reagentName(GAS)} 每小时 产出 − 消耗</span><b class="${net(GAS) < 0 ? 'down' : 'up'}">${net(GAS) > 0 ? '+' : ''}${num(net(GAS))}</b></div>
     </div>
+    ${autoCard()}
     ${r.warn.length ? `<div class="sov-warn">${r.warn.map((w) => `<div>${esc(w)}</div>`).join('')}</div>` : ''}
     <div class="sov-grid">
       ${upgradesCard(id, e, r)}
@@ -406,7 +593,8 @@ function upgradesCard(id, e, r) {
   const rows = r.ups.map((x, i) => {
     const u = x.u;
     const [label, cls] = STATE[x.state];
-    return `<tr><td class="num">${i + 1}</td><td title="${esc(u?.desc || '')}">${esc(u?.name || '类型 ' + x.tid)}</td>
+    const auto = P.sys[id].ups[i]?.[2];
+    return `<tr><td class="num">${i + 1}</td><td title="${esc(u?.desc || '')}">${esc(u?.name || '类型 ' + x.tid)}${auto ? ' <span class="sov-auto-tag" title="一键规划自动加装，重新规划时会重新计算">自动</span>' : ''}</td>
       <td class="num">${u ? (u.powerProd ? `<span class="up">+${num(u.powerProd)}</span>` : num(u.power)) : ''}</td>
       <td class="num">${u ? (u.wfProd ? `<span class="up">+${num(u.wfProd)}</span>` : num(u.wf)) : ''}</td>
       <td class="num">${u ? fuelCell(u) : ''}</td><td class="num">${u?.startup ? num(u.startup) : '—'}</td>
@@ -423,6 +611,14 @@ function upgradesCard(id, e, r) {
 function transportCard(id, e, r, R) {
   const others = P.list.filter((x) => x !== id);
   let body = '';
+  if (P.auto) {
+    const f = r.out;
+    body = e.mode === 'export' && f ? `<p>导出 ${num(f.amount)} → <a data-sov-sys="${f.to}">${esc(D.sys.get(f.to)?.name || '')}</a>${f.ok ? `，路线 ${f.path.map((x) => esc(D.sys.get(x).name)).join(' → ')}` : ''}</p>`
+      : e.mode === 'import' ? `<p>从 ${(r.sources || []).map((x) => `<a data-sov-sys="${x.from}">${esc(D.sys.get(x.from).name)}</a> ${num(x.amount)}`).join('、') || '—'} 导入</p>`
+      : e.mode === 'transit' ? `<p>中转：${r.flows.map((x) => `${esc(D.sys.get(x.from).name)} → ${esc(D.sys.get(x.to).name)} ${num(x.amount)}`).join('、')}</p>`
+      : '<p class="text-muted">本星系劳动力只自用。</p>';
+    return `<div class="pi-card"><div class="pi-card-head"><h3>劳动力运输</h3><span class="sov-mode m-${e.mode || 'none'}">${MODE_NAME[e.mode]}</span><span class="text-muted">自动规划中，关闭「改动后自动」可手动调整</span></div>${body}</div>`;
+  }
   if (e.mode === 'export') {
     const f = r.out;
     body = `<div class="sov-form"><label>目的星系<select class="input" data-sov-field="to"><option value="0">选择…</option>${others.map((x) =>
@@ -480,7 +676,7 @@ function overviewHtml(R) {
       <td class="num">${price ? ctx.formatISK(use * 24 * 30 * price) : '—'}</td></tr>`;
   };
   if (!D.prices) ctx.getHubPrices([ICE, GAS]).then((m) => { D.prices = m; if (S.tab === 'overview') render(); }).catch(() => { D.prices = new Map(); });
-  return `<div class="pi-stats">
+  return `${autoCard()}<div class="pi-stats">
       <div><span>星系</span><b>${P.list.length}</b></div><div><span>升级件 运行 / 总数</span><b>${T.run} / ${T.all}</b></div>
       <div><span>电力 已用 / 总量</span><b>${num(T.pu)} / ${num(T.p)}</b></div><div><span>劳动力 已用 / 总量</span><b>${num(T.wu)} / ${num(T.w)}</b></div>
       <div><span>有问题的星系</span><b class="${[...R.values()].some((r) => r.warn.length) ? 'down' : ''}">${[...R.values()].filter((r) => r.warn.length).length}</b></div></div>
@@ -690,6 +886,9 @@ function bindEvents(main) {
     const pl = t.closest('[data-sov-planets]');
     if (pl) { const e = P.sys[S.cur]; e.off = pl.dataset.sovPlanets === 'on' ? [] : D.sys.get(S.cur).res[1].map((p) => p[0]); save(); render(); return; }
     if (t.closest('[data-sov-export]')) { exportPlan(); return; }
+    if (t.closest('[data-sov-auto]')) { if (!P.list.length) { ctx.showToast('先加入星系', 'info'); return; } runAuto(); return; }
+    if (t.closest('[data-sov-undo]')) { P = JSON.parse(S.undo); S.undo = null; S.autoRes = null; ctx.store.setJSON(STORE_KEY, P); render(); ctx.showToast('已撤销一键规划', 'success'); return; }
+    if (t.closest('[data-sov-auto-hide]')) { if (S.autoRes) S.autoRes.hidden = true; render(); return; }
     if (t.closest('[data-sov-esi-reload]')) { S.esi = null; render(); return; }
     if (t.closest('[data-sov-esi-import]')) { if (!P.list.length || confirm('用 ESI 读到的配置替换当前规划？')) importEsi(); return; }
   });
@@ -698,6 +897,11 @@ function bindEvents(main) {
   });
   main.addEventListener('change', (ev) => {
     const t = ev.target;
+    if (t.matches('[data-sov-autoon]')) {
+      P.auto = t.checked;
+      if (P.auto) { S.undo = JSON.stringify({ ...P, auto: false }); save(); S.autoRes.manual = true; } else { S.autoRes = null; ctx.store.setJSON(STORE_KEY, P); }
+      render(); return;
+    }
     if (t.id === 'sovAddUp' && t.value) {
       const e = P.sys[S.cur], u = D.up.get(Number(t.value));
       if (e.ups.some(([tid]) => D.up.get(tid)?.excl === u.excl)) { ctx.showToast('同一组只能装一个', 'error'); return; }

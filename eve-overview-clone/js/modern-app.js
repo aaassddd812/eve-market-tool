@@ -339,7 +339,7 @@ function switchView(view) {
 let sovLoading = null;
 async function openSov() {
   try {
-    if (!sovLoading) sovLoading = import('./sov.js?v=v3').then((m) => {
+    if (!sovLoading) sovLoading = import('./sov.js?v=v4').then((m) => {
       m.initSov({
         esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
         getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
