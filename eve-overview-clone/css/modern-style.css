@@ -5086,6 +5086,6 @@ td .hc-sub { display: inline; margin-left: 6px; }
 .sov-auto-bar .pi-check { font-size: 0.75rem; }
 .sov-auto-tag { font-size: 0.625rem; padding: 0 5px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-primary); }
 td .sov-auto-tag { margin-left: 4px; }
-.sov-auto-card { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
+.sov-auto-card { margin-bottom: 16px; background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent-primary) 30%, transparent); }
 .sov-auto-lines { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 0.8125rem; line-height: 1.6; }
 .sov-auto-lines a { cursor: pointer; color: var(--accent-primary); }
