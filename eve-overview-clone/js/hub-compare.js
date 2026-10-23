@@ -4,11 +4,14 @@
 // 倒卖四种方式（买入 → 卖出）：在 A「卖单收」直接买最低卖单（不付税费）或「收单收」按最高收价挂收单（付中介费）；
 // 运到 B 后「收单出」直接卖给最高收单（付销售税）或「卖单出」按最低卖价挂卖单（付销售税 + 中介费）。A = B 为本地倒卖。
 // 可做数量：直接成交按最优价 5% 以内的订单深度，挂单按该星域日均成交的 10%，两端取小；不含运费与风险。
+// 全部物品一起比的排行在 hub-rank.js（数据由击杀记录服务汇总）。
 let ctx = null;
 const cache = new Map();   // typeId -> { at, promise }
 const TTL = 5 * 60e3;
 const DEPTH = 0.05;        // 最优价 5% 以内的订单算作可成交深度
 const SHARE = 0.1;         // 挂单最多按日均成交的 10% 估算
+// 挂单价要在星域 30 天成交均价附近才算数：远低于均价的收单、远高于均价的卖单（钓鱼单 / 没人成交的挂单）不作为挂单价
+const BAND = [0.6, 1.4];
 // 方式：[买入用卖单(s) / 收单(b)][卖出用收单(b) / 卖单(s)]
 const MODES = [['sb', '卖单收 · 收单出'], ['bb', '收单收 · 收单出'], ['ss', '卖单收 · 卖单出'], ['bs', '收单收 · 卖单出']];
 const opts = { mode: 'sb', sort: 'profit' };
@@ -48,26 +51,36 @@ function load(typeId) {
   return promise;
 }
 
-function routes(hubs) {
-  const f = ctx.TF.fees();
+// 一个物品在各交易中心之间的全部路线（hubs 元素需有 sell / buy / sellDepth / buyDepth / daily / avg）；全物品倒卖排行（hub-rank.js）共用
+export function calcRoutes(hubs, mode, f) {
   const out = [];
-  const buyOrder = opts.mode[0] === 'b', sellOrder = opts.mode[1] === 's';
+  const buyOrder = mode[0] === 'b', sellOrder = mode[1] === 's';
   for (const a of hubs) {
     const buyAt = buyOrder ? a.buy : a.sell;
-    if (buyAt == null) continue;
+    if (buyAt == null || (buyOrder && a.avg && buyAt < a.avg * BAND[0])) continue;
     const cost = buyAt * (1 + (buyOrder ? f.broker : 0));
-    const buyCap = buyOrder ? Math.floor(a.daily * SHARE) : a.sellDepth;
+    const buyCap = buyOrder ? Math.floor((a.daily || 0) * SHARE) : a.sellDepth;
     for (const b of hubs) {
       const sellAt = sellOrder ? b.sell : b.buy;
-      if (sellAt == null) continue;
+      if (sellAt == null || (sellOrder && b.avg && sellAt > b.avg * BAND[1])) continue;
       const unit = sellAt * (1 - f.sales - (sellOrder ? f.broker : 0)) - cost;
-      const sellCap = sellOrder ? Math.floor(b.daily * SHARE) : b.buyDepth;
-      out.push({ a, b, local: a === b, buyAt, sellAt, cost, unit, qty: Math.min(buyCap, sellCap) });
+      const sellCap = sellOrder ? Math.floor((b.daily || 0) * SHARE) : b.buyDepth;
+      const qty = Math.min(buyCap, sellCap);
+      out.push({ a, b, local: a === b, buyAt, sellAt, cost, unit, qty, margin: cost ? unit / cost : 0, total: unit > 0 ? unit * qty : 0 });
     }
   }
-  for (const r of out) { r.margin = r.cost ? r.unit / r.cost : 0; r.total = r.unit > 0 ? r.unit * r.qty : 0; }
-  const key = { profit: (r) => r.total, margin: (r) => r.margin, unit: (r) => r.unit }[opts.sort] || ((r) => r.total);
-  return out.sort((x, y) => key(y) - key(x) || y.margin - x.margin);
+  return out;
+}
+export const ROUTE_SORT = { profit: (r) => r.total, margin: (r) => r.margin, unit: (r) => r.unit };
+export { MODES };
+// 从全物品排行点进来时沿用排行的倒卖方式
+export function setHubMode(mode) {
+  if (MODES.some(([k]) => k === mode) && opts.mode !== mode) { opts.mode = mode; persist(); }
+}
+
+function routes(hubs) {
+  const key = ROUTE_SORT[opts.sort] || ROUTE_SORT.profit;
+  return calcRoutes(hubs, opts.mode, ctx.TF.fees()).sort((x, y) => key(y) - key(x) || y.margin - x.margin);
 }
 
 function html(hubs) {
@@ -101,7 +114,8 @@ function html(hubs) {
   return `<div class="hc-wrap">
     <div class="hc-head"><h3>交易中心行情</h3><span class="toolbar-spacer"></span>
       <button class="btn btn-ghost btn-sm" data-hc-fees title="调整技能与税费">${esc(TF.summary())}</button>
-      <button class="btn btn-ghost btn-sm" data-hc-reload>刷新</button></div>
+      <button class="btn btn-ghost btn-sm" data-hc-reload>刷新</button>
+      ${ctx.openRank ? '<button class="btn btn-ghost btn-sm" data-hc-rank title="所有物品一起比，按利润排行">全部物品排行</button>' : ''}</div>
     <div class="table-scroll"><table class="pc-mini-table hc-table"><thead><tr>
       <th>交易中心</th><th class="num">最低卖价</th><th class="num">卖单量</th><th class="num">最高收价</th><th class="num">收单量</th><th class="num">日均成交（星域）</th><th class="num">日均成交额</th>
     </tr></thead><tbody>${hubRows}</tbody></table></div>
@@ -111,7 +125,7 @@ function html(hubs) {
     ${routeRows ? `<div class="table-scroll"><table class="pc-mini-table hc-table"><thead><tr>
       <th>路线（买入 → 卖出）</th><th class="num">买入价</th><th class="num">卖出价</th><th class="num">每件税后利润</th><th class="num">利润率</th><th class="num">可做数量</th><th class="num">预计利润</th>
     </tr></thead><tbody>${routeRows}</tbody></table></div>` : '<p class="text-muted">订单不足，算不出倒卖利润</p>'}
-    <p class="hc-note" title="卖单收：直接买最低卖单；收单收：按最高收价挂收单（付中介费 ${TF.pct2(f.broker)}）；收单出：直接卖给最高收单（销售税 ${TF.pct2(f.sales)}）；卖单出：按最低卖价挂卖单（销售税 + 中介费）。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%。">${pos.length ? `${pos.length} 条路线有利润` : '没有盈利的路线'} · 未计运费</p>
+    <p class="hc-note" title="卖单收：直接买最低卖单；收单收：按最高收价挂收单（付中介费 ${TF.pct2(f.broker)}）；收单出：直接卖给最高收单（销售税 ${TF.pct2(f.sales)}）；卖单出：按最低卖价挂卖单（销售税 + 中介费）。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%；挂单价偏离星域 30 天成交均价太多（收单低于 60%、卖单高于 140%）的路线不列出。">${pos.length ? `${pos.length} 条路线有利润` : '没有盈利的路线'} · 未计运费</p>
   </div>`;
 }
 
@@ -141,6 +155,7 @@ export async function renderHubCompare(box, typeId) {
       return;
     }
     if (e.target.closest('[data-hc-fees]')) { ctx.TF.openFeeDialog(); return; }
+    if (e.target.closest('[data-hc-rank]')) { ctx.openRank(); return; }
     if (e.target.closest('[data-hc-reload]')) { cache.delete(id); renderHubCompare(box, id); }
   });
 }

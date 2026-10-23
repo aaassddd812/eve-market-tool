@@ -6,6 +6,7 @@
 //   types   物品 -> [中文名, 英文名, 分组, 科技等级, 元组, 体积]（只收录用到的物品）
 //   groups  分组 -> [中文名, 大类]；cats 大类 -> 中文名；metas 元组 -> 中文名
 //   decryptors 解码器 -> [成功率倍数, 材料效率, 时间效率, 流程数]
+//   res     制造蓝图 -> [ME 研究基础时间, TE 研究基础时间, 拷贝每流程时间]（秒；研究各级时间 = 基础 × 等级倍数）
 //   structures 工业建筑类型 -> 中文名
 // skill-data.json：
 //   skills  技能 -> [中文名, 英文名, 分组, 等级倍数(rank), 主属性, 副属性, 说明]
@@ -58,6 +59,7 @@ const skillPairs = (list) => (list || []).map((s) => [s.typeID, s.level]);
 
 // 蓝图：只收录产品可在市场交易的制造 / 反应
 const bp = {};
+const res = {};
 const bpByProduct = new Map();
 const inventionRaw = [];
 await eachLine("blueprints", (o) => {
@@ -73,6 +75,7 @@ await eachLine("blueprints", (o) => {
     // 最后一项：蓝图能否在 NPC 市场买到（1 / 0）；买不到的 T1 蓝图多来自 LP 商店或掉落
     bp[prod.typeID] = [o.blueprintTypeID, prod.quantity, a.time, pairs(a.materials), o.maxProductionLimit || 1, code, skillPairs(a.skills), bpType.marketGroupID ? 1 : 0];
     bpByProduct.set(o.blueprintTypeID, prod.typeID);
+    if (code === "m") res[o.blueprintTypeID] = [o.activities.research_material?.time || 0, o.activities.research_time?.time || 0, o.activities.copying?.time || 0];
     used.add(prod.typeID); used.add(o.blueprintTypeID);
     a.materials.forEach((m) => used.add(m.typeID));
     (a.skills || []).forEach((s) => used.add(s.typeID));
@@ -128,7 +131,7 @@ const outCats = Object.fromEntries([...usedCats].map((id) => [id, zh(cats.get(id
 
 await writeFile("eve-overview-clone/industry-data.json", JSON.stringify({
   source: "CCP SDE (JSONL)", generatedAt: new Date().toISOString(),
-  bp, inv, types: outTypes, groups: outGroups, cats: outCats, metas, decryptors, structures
+  bp, inv, types: outTypes, groups: outGroups, cats: outCats, metas, decryptors, structures, res
 }));
 
 // 技能

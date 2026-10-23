@@ -1,6 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v2';
+import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v3';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v1';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s3';
 
 // ===== 配置与常量 =====
@@ -250,14 +251,14 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war', sov: '#sov', abyss: '#abyss', guide: '#guide' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView', sov: 'sovView', abyss: 'abyssView', guide: 'guideView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war', sov: '#sov', abyss: '#abyss', wh: '#wh', guide: '#guide' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView', sov: 'sovView', abyss: 'abyssView', wh: 'whView', guide: 'guideView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
 
 function ownsHash(view, hash) {
-  if (view === 'market') return !hash || hash.startsWith('#type=');
+  if (view === 'market') return !hash || hash.startsWith('#type=') || hash.startsWith('#arb');
   return Boolean(VIEW_HASH[view]) && hash.startsWith(VIEW_HASH[view]);
 }
 
@@ -330,6 +331,7 @@ function switchView(view) {
   if (view === 'war') openWar();
   if (view === 'sov') openSov();
   if (view === 'abyss') openAbyss();
+  if (view === 'wh') openWormhole();
   if (view === 'guide') openGuides();
 }
 
@@ -350,6 +352,24 @@ async function openSov() {
     await m.showSov(location.hash);
   } catch (error) {
     showToast('主权规划页加载失败：' + error.message, 'error', 4000);
+  }
+}
+
+// 虫洞：首次进入时加载
+let whLoading = null;
+async function openWormhole() {
+  try {
+    if (!whLoading) whLoading = import('./wormhole.js?v=v1').then((m) => {
+      m.initWormhole({
+        esc, formatISK, formatNumber, showToast, store, loadKillboard, resolveTypeNames,
+        planPi: (id) => loadPiModule().then((pi) => { pi.useWormhole(id); switchView('pi'); })
+      });
+      return m;
+    }).catch((error) => { whLoading = null; throw error; });
+    const m = await whLoading;
+    await m.showWormhole(location.hash.startsWith('#wh') ? location.hash : '#wh');
+  } catch (error) {
+    showToast('虫洞页加载失败：' + error.message, 'error', 4000);
   }
 }
 
@@ -413,10 +433,10 @@ async function getJitaPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v32').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v34').then((m) => {
     m.initIndustry({
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
-      getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, ensureEsiToken,
+      getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
     });
@@ -542,7 +562,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v33').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v34').then((m) => {
     m.initPi({
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
@@ -667,7 +687,7 @@ function initServerSwitch() {
   if (SERVER.tokenProxy) {
     // 网易登录服务器不允许浏览器跨域请求令牌，只能经本站转发，如实说明
     $('esiPrivacyNote').textContent = '经本站原样转发到网易登录服务器（不记录），令牌只保存在本机';
-    $('esiCallbackNote').textContent = '复制网易 ESI 页面地址栏的完整地址（几分钟内有效）';
+    $('esiCallbackNote').textContent = '复制网易 ESI 页面地址栏的完整地址（几分钟内有效）；登录报 invalid_scope 时把报错文字粘贴过来';
   }
   menu.innerHTML = SERVER_LIST.map((x) =>
     `<button type="button" role="menuitemradio" aria-checked="${x.id === SERVER.id}" data-switch-server="${x.id}">` +
@@ -975,6 +995,9 @@ function initSidebar() {
   // 侧栏标签
   $$('#sidebar .sidebar-tabs .tab-btn').forEach((btn) => btn.addEventListener('click', () => switchSidebarTab(btn.dataset.tab)));
 
+  $('arbRankBtn').addEventListener('click', () => openArb());
+  $('emptyArbBtn').addEventListener('click', () => openArb());
+  if (REGIONS.length < 2) { $('arbRankBtn').hidden = true; $('emptyArbBtn').hidden = true; }
   $('collapseAllBtn').addEventListener('click', () => {
     $('catalogTree').querySelectorAll('.category.expanded').forEach((el) => setCategoryExpanded(el, false));
   });
@@ -1283,6 +1306,23 @@ function renderQuickPicks() {
 function setDetailVisible(visible) {
   $('emptyView').hidden = visible;
   $('detailView').hidden = !visible;
+  $('arbView').hidden = true;
+}
+
+// 倒卖排行（#arb）：市场中心里与物品详情并列的一页，所有物品一起比交易中心差价
+function openArb({ updateHash = true } = {}) {
+  if (REGIONS.length < 2) return;
+  if (state.currentView !== 'market') switchView('market');
+  $('emptyView').hidden = true;
+  $('detailView').hidden = true;
+  $('arbView').hidden = false;
+  $$('[data-type-id].active').forEach((el) => el.classList.remove('active'));
+  state.selectedItem = null;
+  document.title = '倒卖排行 · EVE 市场总览';
+  if (updateHash && location.hash !== '#arb') history.pushState(null, '', '#arb');
+  closeDrawer();
+  $('mainContent').scrollTo({ top: 0 });
+  showHubRank($('arbBody'));
 }
 
 function renderBreadcrumb(groupId) {
@@ -1589,6 +1629,24 @@ function renderScopeGroups(focus) {
 function updateScopeGroupCount() {
   const n = $('scopeGroupList').querySelectorAll('input:checked').length;
   $('scopeGroupCount').textContent = `已选 ${n} / ${SCOPE_GROUPS.length} 项`;
+}
+// 登录端不接受的权限：曙光服的网易官方应用不支持蓝图权限（登录后报 invalid_scope）；
+// 其他被拒的权限在用户粘贴报错后记下（每个服务器分开），以后生成授权链接时去掉
+const SERVER_BAD_SCOPES = { infinity: ['esi-characters.read_blueprints.v1'] };
+const BAD_SCOPE_KEY = 'eve-esi-bad-scopes-' + SERVER.id;
+function badScopes() {
+  return new Set([...(SERVER_BAD_SCOPES[SERVER.id] || []), ...String(store.get(BAD_SCOPE_KEY) || '').split(',').filter(Boolean)]);
+}
+// 从报错文字（JSON 或回调地址）里找出被拒的权限并记下；返回权限名或 null
+function learnBadScope(text) {
+  let raw = String(text || '');
+  try { raw = decodeURIComponent(raw.replace(/\+/g, ' ')); } catch { /* 保持原文 */ }
+  const m = raw.match(/invalid_scope[\s\S]*?'(esi-[\w.-]+)'/) || raw.match(/'(esi-[\w.-]+)' scope is not valid/);
+  if (!m) return null;
+  const list = badScopes();
+  list.add(m[1]);
+  store.set(BAD_SCOPE_KEY, [...list].filter((x) => !(SERVER_BAD_SCOPES[SERVER.id] || []).includes(x)).join(','));
+  return m[1];
 }
 function chosenExtraScopes() {
   const ids = [...$('scopeGroupList').querySelectorAll('input:checked')].map((i) => i.value);
@@ -2213,7 +2271,12 @@ function initContentTabs() {
   if (!['orders', 'chart', 'history', 'hubs'].includes(state.contentTab)) state.contentTab = 'orders';
   if (REGIONS.length < 2) $('hubsTab').hidden = true;
   initHubCompare({ regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
-    skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8) });
+    skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8), openRank: () => openArb() });
+  initHubRank({ server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
+    typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
+    category: (id) => { const e = state.typeIndex.get(id); const g = e && state.categories.get(rootGroupId(e.groupId)); return g ? { id: g.id, name: g.name } : null; },
+    iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,
+    openItem: (id) => { switchContentTab('hubs'); selectItem(id); } });
   switchContentTab(state.contentTab);
 
   const seg = $('rangeSeg');
@@ -2334,7 +2397,9 @@ function initHashRouting() {
     if (location.hash.startsWith('#war')) { if (state.currentView !== 'war') switchView('war'); return; }
     if (location.hash.startsWith('#sov')) { if (state.currentView !== 'sov') switchView('sov'); else openSov(); return; }
     if (location.hash.startsWith('#abyss')) { if (state.currentView !== 'abyss') switchView('abyss'); else openAbyss(); return; }
+    if (location.hash.startsWith('#wh')) { if (state.currentView !== 'wh') switchView('wh'); else openWormhole(); return; }
     if (location.hash.startsWith('#guide')) { if (state.currentView !== 'guide') switchView('guide'); else openGuides(); return; }
+    if (location.hash.startsWith('#arb')) { openArb({ updateHash: false }); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -4519,7 +4584,7 @@ async function generateAuthLink() {
       response_type: 'code',
       redirect_uri: cfg.redirect_uri,
       client_id: cfg.client_id,
-      scope: [...new Set([...(cfg.scopes || []), ...chosenExtraScopes()])].join(' '),
+      scope: [...new Set([...(cfg.scopes || []), ...chosenExtraScopes()])].filter((sc) => !badScopes().has(sc)).join(' '),
       state: authState,
       code_challenge: challenge,
       code_challenge_method: 'S256',
@@ -4542,9 +4607,17 @@ async function generateAuthLink() {
   }
 }
 
+// 登录端拒绝某项权限：去掉它，重新生成授权链接
+function rejectedScope(scope) {
+  $('callbackUrl').value = '';
+  generateAuthLink().then(() => setEsiStatus(`${SERVER.full}登录不支持权限 ${scope}，已从授权链接中去掉：请点击「打开」重新登录`, 'error'));
+}
+
 async function bindEsiCallback() {
   const raw = $('callbackUrl').value.trim();
   if (!raw) { setEsiStatus('请粘贴登录后的完整回调地址', 'error'); $('callbackUrl').focus(); return; }
+  const bad = learnBadScope(raw);
+  if (bad) { rejectedScope(bad); return; }
   let params;
   try { params = new URL(raw, location.href).searchParams; } catch { setEsiStatus('地址格式不正确', 'error'); return; }
   if (params.get('error')) { setEsiStatus('授权失败：' + params.get('error'), 'error'); return; }
@@ -4599,7 +4672,10 @@ function handleEsiCallbackRedirect() {
   history.replaceState(null, '', location.pathname + location.hash);
   openEsiModal();
   $('callbackUrl').value = callbackUrl;
-  if (params.has('error')) {
+  const bad = learnBadScope(callbackUrl);
+  if (bad) {
+    rejectedScope(bad);
+  } else if (params.has('error')) {
     setEsiStatus('授权失败：' + (params.get('error_description') || params.get('error')), 'error');
   } else {
     setEsiStatus('检测到授权回调，请点击「绑定」完成 ESI 绑定', 'success');
@@ -4749,6 +4825,7 @@ function init() {
   TF.onChange(() => {
     if (state.selectedItem && state.orders) renderStats();
     if (state.contentTab === 'hubs') refreshHubCompare($('hubsBody'));
+    refreshHubRank($('arbBody'));
     if (state.characterData && activeProfileTab() === 'assets') renderProfileTab('assets');
   });
   initTheme();
@@ -4775,6 +4852,7 @@ function init() {
   if (location.hash.startsWith('#war')) switchView('war'); // 战争
   if (location.hash.startsWith('#sov')) switchView('sov'); // 主权规划
   if (location.hash.startsWith('#abyss')) switchView('abyss'); // 深渊市场
+  if (location.hash.startsWith('#wh')) switchView('wh'); // 虫洞
   if (location.hash.startsWith('#guide')) switchView('guide'); // 教程
   renderFavorites();
   loadServerStatus();
@@ -4787,6 +4865,7 @@ function init() {
         resolve();
         const typeId = typeFromHash();
         if (typeId && state.typeIndex.has(typeId)) selectItem(typeId, { updateHash: false });
+        else if (location.hash.startsWith('#arb')) openArb({ updateHash: false });
         preloadPages();
       });
     };

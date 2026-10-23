@@ -74,6 +74,14 @@ function editorEnv() {
 
 function saveForm() { ctx.store.setJSON(STORE_KEY, F); }
 
+// 虫洞页「行星工业规划」：按指定虫洞星系规划（之后进入行星工业页时生效）
+export function useWormhole(systemId) {
+  F.mode = 'wh';
+  F.whSystem = systemId;
+  saveForm();
+  if ($('piMain')?.dataset.ready && D.pi) renderForm();
+}
+
 // ---------- 数据 ----------
 function loadData() {
   if (!D.loading) {

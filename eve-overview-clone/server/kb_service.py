@@ -34,6 +34,7 @@
 
 import argparse
 import array
+import bz2
 import collections
 import concurrent.futures
 import csv
@@ -66,7 +67,7 @@ BP_CONTRACT_TTL = 1800      # 蓝图合同价 / 快递合同每 30 分钟刷新�
 BP_CONTRACT_KEEP = 5        # 每种蓝图的原图 / 拷贝各保留最便宜的几份合同
 BP_MAX_TYPES = 300          # bpprices 单次最多查询的蓝图种类
 API_RATE = 1000             # 开放接口：每个 IP 每分钟可用的请求额度（令牌桶，容量同此值）
-API_COST = {"ship_fits": 10, "battle_report": 5, "industry_profits": 5, "abyssal_module": 2, "abyssal_list": 3}   # 开销大的接口一次消耗多个额度
+API_COST = {"hub_arbitrage": 5, "ship_fits": 10, "battle_report": 5, "industry_profits": 5, "abyssal_module": 2, "abyssal_list": 3}   # 开销大的接口一次消耗多个额度
 # 深渊装备估价：代理 MutaMarket 公开 API（对方不允许浏览器跨域）。只用于宁静服；导入 / 刷新（POST）由用户点击触发、单独限流
 MUTA_API = "https://mutamarket.com/api"
 ABYSSAL_TTL = 6 * 3600          # 单件估价缓存
@@ -233,6 +234,9 @@ def get_json(url, timeout=60, retries=3, **kw):
             if e.code in (400, 404):
                 raise
             err = e
+            if e.code == 429:                   # ESI 限流：按 Retry-After 等待
+                time.sleep(min(int(e.headers.get("Retry-After") or 10), 60))
+                continue
         except Exception as e:  # 网络错误：退避重试
             err = e
         time.sleep(1.5 * (attempt + 1))
@@ -551,11 +555,14 @@ class Workers:
         hub_sell = {h: {} for h in HUB_STATIONS}
         hub_buy = {h: {} for h in HUB_STATIONS}
         station_hub = {st: h for h, st in HUB_STATIONS.items()}
+        books = {h: {} for h in HUB_STATIONS}        # 交易中心挂单明细，给倒卖排行用（宁静服不再单独读订单）
 
         def handle(orders):
             for o in orders:
                 t, p = o["type_id"], o["price"]
                 h = station_hub.get(o["location_id"])
+                if h:
+                    HubArbitrage.add_order(books[h], o)
                 if o["is_buy_order"]:
                     if p > uni_buy.get(t, 0):
                         uni_buy[t] = p
@@ -611,6 +618,9 @@ class Workers:
         self.store.state["hub_prices_updated"] = stamp
         log.info("贸易中心 / 全宇宙价格已更新：共 %d 页订单，%d 种物品%s", pages, len(set(uni_sell) | set(uni_buy)),
                  f"，{len(failed)} 个星域读取失败" if failed else "")
+        arb = getattr(self.store, "arb", None)
+        if arb and not set(failed) & set(HUB_STATIONS):
+            threading.Thread(target=arb.ingest, args=("tq", books), daemon=True).start()
 
     def price_loop(self):
         while True:
@@ -1642,6 +1652,57 @@ class Api:
         updated = self.store.state.get("prices_updated" if table is None else "hub_prices_updated")
         return {"hub": "all" if hub == 0 else hub, "updated": updated, "types": out}
 
+    # 虫洞：击杀邮件里的星系 ID 31000000–31999999 是虫洞空间（ESI 的星系击杀统计不含虫洞，只能从击杀记录统计）
+    def wh_activity(self, q):
+        """GET /api/v1/wormholes/activity?days=1|7|30：各虫洞星系的击杀数、总价值、被 NPC 击毁数、最近一次击杀"""
+        days = int(q.get("days") or 7)
+        if days not in (1, 7, 30):
+            raise ValueError("days 只能是 1 / 7 / 30")
+
+        def build():
+            since = int(time.time()) - days * 86400
+            rows = self.store.conn().execute(
+                "SELECT system_id, COUNT(*), SUM(value), SUM(npc), MAX(time) FROM killmails "
+                "WHERE time >= ? AND system_id >= 31000000 AND system_id < 32000000 GROUP BY system_id", (since,)).fetchall()
+            return {"days": days, "updated": iso(time.time()), "fields": ["kills", "value", "npc_kills", "last"],
+                    "systems": {str(r[0]): [r[1], round(r[2] or 0), r[3] or 0, iso(r[4])] for r in rows}}
+        return self.cached(("wh_activity", days), build)
+
+    def wh_system(self, sid, q):
+        """GET /api/v1/wormholes/systems/{id}：近 30 天击杀统计、按 UTC 小时分布、出现最多的军团 / 联盟（推测常驻）、最近 20 次击杀"""
+        if not 31000000 <= sid < 32000000:
+            raise ValueError("不是虫洞星系")
+
+        def build():
+            c = self.store.conn()
+            since = int(time.time()) - 30 * 86400
+            rows = c.execute(f"SELECT {SUMMARY_COLS} FROM killmails WHERE system_id=? AND time >= ? ORDER BY time DESC, id DESC", (sid, since)).fetchall()
+            hours = [0] * 24
+            corps, alliances = collections.Counter(), collections.Counter()
+            for r in rows:
+                hours[time.gmtime(r[1]).tm_hour] += 1
+                if r[10]:
+                    corps[r[10]] += 1
+                if r[11]:
+                    alliances[r[11]] += 1
+            ids = [r[0] for r in rows]
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                ph = ",".join("?" * len(chunk))
+                # 每次击杀里同一军团 / 联盟只算一次
+                for (corp,) in c.execute(f"SELECT corp FROM (SELECT DISTINCT km, corp FROM attackers WHERE km IN ({ph}) AND corp)", chunk):
+                    corps[corp] += 1
+                for (alliance,) in c.execute(f"SELECT alliance FROM (SELECT DISTINCT km, alliance FROM attackers WHERE km IN ({ph}) AND alliance)", chunk):
+                    alliances[alliance] += 1
+            recent = [row_summary(r) for r in rows[:20]]
+            top_c, top_a = corps.most_common(8), alliances.most_common(5)
+            names = self.with_names(recent, [x for x, _ in top_c + top_a])
+            return {"system_id": sid, "days": 30, "kills": len(rows), "value": round(sum(r[5] or 0 for r in rows)),
+                    "npc_kills": sum(1 for r in rows if r[8]), "last": iso(rows[0][1]) if rows else None, "hours_utc": hours,
+                    "corporations": [{"id": x, "count": n} for x, n in top_c], "alliances": [{"id": x, "count": n} for x, n in top_a],
+                    "recent": recent, "names": names}
+        return self.cached(("wh_system", sid), build)
+
     def couriers(self, q):
         """全服公开快递合同（EVE Ref 快照，约 30 分钟更新）；服务刚启动还没读到快照时 list 为空、at 为 null"""
         return self.store.couriers
@@ -2582,6 +2643,262 @@ def abyssal_estimate(abyssal, model, body):
 
 
 # ---------------------------------------------------------------- 开放接口
+# ---------------------------------------------------------------- 交易中心倒卖排行
+# 各服务器五个交易中心的全部挂单汇总（每个物品每个交易中心：最低卖 / 最高收、挂单量、最优价 5% 以内的深度）与所在星域日均成交，
+# 前端按用户的技能与税费算四种倒卖方式的路线与利润。宁静服直接用后台价格任务每小时读到的全部订单（不重复请求 ESI）；
+# 国服第一次被请求时才开始抓取，之后每 30 分钟刷新，6 小时没人看就停。
+# 日均成交：宁静服读 EVE Ref 每日市场历史（全星域全物品一个文件）；国服没有这种存档，按物品逐个查 ESI 历史（缓存 1 天，挂单额大的优先，每轮最多 ARB_HISTORY_BUDGET 次、24 分钟）。
+# 每轮先用已知成交量发布一次结果，成交量读完再更新
+ARB_TTL = 30 * 60
+ARB_IDLE = 6 * 3600
+ARB_DEPTH = 0.05
+ARB_DAYS = 30
+ARB_HISTORY_BUDGET = 12000
+ARB_HISTORY_TTL = 86400
+EVEREF_HISTORY = "https://data.everef.net/market-history/{year}/market-history-{date}.csv.bz2"
+NETEASE_ESI = "https://ali-esi.evepc.163.com/latest"
+ARB_SERVERS = {
+    "tq": {"esi": ESI, "qs": "", "hubs": HUB_STATIONS},
+    "serenity": {"esi": NETEASE_ESI, "qs": "datasource=serenity", "hubs": HUB_STATIONS},
+    "infinity": {"esi": NETEASE_ESI, "qs": "datasource=infinity",
+                 "hubs": {10000016: 60000843, 10000002: 60003760, 10000043: 60006399, 10000032: 60001866, 10000030: 60004611}},
+}
+
+
+class HubArbitrage:
+    def __init__(self, store):
+        self.store = store
+        self.lock = threading.Lock()
+        self.data = {}          # server -> 最新快照（接口返回的结构）
+        self.state = {}         # server -> {"asked", "running", "progress", "error"}
+        self.everef = {}        # 日期 -> {(星域, 物品): 成交量}（宁静服，只留交易中心星域）
+        c = store.conn()
+        with store.write_lock:
+            c.execute("CREATE TABLE IF NOT EXISTS arb_volume(server TEXT, region INTEGER, type_id INTEGER, daily REAL, at INTEGER, avg REAL, PRIMARY KEY(server, region, type_id)) WITHOUT ROWID")
+            if "avg" not in [r[1] for r in c.execute("PRAGMA table_info(arb_volume)")]:
+                c.execute("ALTER TABLE arb_volume ADD COLUMN avg REAL")
+            c.commit()
+
+    @staticmethod
+    def add_order(book, o):
+        b = book.setdefault(o["type_id"], ([], []))
+        if o["is_buy_order"]:
+            if (o.get("min_volume") or 1) <= 1:
+                b[1].append((o["price"], o["volume_remain"]))
+        else:
+            b[0].append((o["price"], o["volume_remain"]))
+
+    def snapshot(self, q):
+        server = q.get("server") or "tq"
+        if server not in ARB_SERVERS:
+            raise ValueError("server 只能是 " + " / ".join(ARB_SERVERS))
+        with self.lock:
+            st = self.state.setdefault(server, {"asked": 0, "running": False, "progress": "", "error": None})
+            st["asked"] = time.time()
+            if server == "tq" and not self.data.get(server):
+                st["progress"] = st["progress"] or "等待后台价格任务读完全部订单（服务启动后约 10 分钟）"
+            elif server != "tq" and not st["running"]:
+                st["running"] = True
+                threading.Thread(target=self.loop, args=(server,), daemon=True).start()
+            data = self.data.get(server)
+        if not data:
+            return {"server": server, "loading": True, "progress": st["progress"] or "排队中", "error": st["error"]}
+        return {**data, "progress": st["progress"]}
+
+    def loop(self, server):
+        while True:
+            try:
+                self.refresh(server)
+                self.state[server]["error"] = None
+            except Exception as e:
+                log.warning("倒卖排行（%s）刷新失败：%s", server, e)
+                self.state[server]["error"] = str(e)
+            time.sleep(ARB_TTL)
+            with self.lock:
+                if time.time() - self.state[server]["asked"] > ARB_IDLE:
+                    self.state[server]["running"] = False
+                    return
+
+    def url(self, cfg, path, **params):
+        qs = "&".join([*(f"{k}={v}" for k, v in params.items()), *([cfg["qs"]] if cfg["qs"] else [])])
+        return f"{cfg['esi']}{path}?{qs}"
+
+    def refresh(self, server):
+        cfg = ARB_SERVERS[server]
+        st = self.state[server]
+        hubs = list(cfg["hubs"].items())
+        station_hub = {stn: rid for rid, stn in hubs}
+        books = {rid: {} for rid, _ in hubs}           # 星域 -> 物品 -> ([卖单], [收单])，元素 (价格, 数量)
+
+        def handle(orders):
+            for o in orders:
+                rid = station_hub.get(o["location_id"])
+                if rid is not None:
+                    self.add_order(books[rid], o)
+
+        for i, (rid, _) in enumerate(hubs):
+            first, headers = get_json(self.url(cfg, f"/markets/{rid}/orders/", order_type="all", page=1))
+            handle(first or [])
+            pages = int(headers.get("X-Pages") or 1)
+
+            def page(n, rid=rid):
+                data, _ = get_json(self.url(cfg, f"/markets/{rid}/orders/", order_type="all", page=n))
+                return data or []
+            with concurrent.futures.ThreadPoolExecutor(8) as pool:
+                for n, data in enumerate(pool.map(page, range(2, pages + 1)), 2):
+                    handle(data)
+                    st["progress"] = f"读取订单：第 {i + 1}/{len(hubs)} 个交易中心 {n}/{pages} 页"
+        self.ingest(server, books)
+
+    def ingest(self, server, books):
+        """books：星域 -> 物品 -> ([卖单], [收单])；宁静服由后台价格任务每小时送来，国服由 refresh 自己读"""
+        cfg = ARB_SERVERS[server]
+        hubs = list(cfg["hubs"].items())
+        st = self.state.setdefault(server, {"asked": 0, "running": False, "progress": "", "error": None})
+        rows = {}
+        for k, (rid, _) in enumerate(hubs):
+            for t, (sells, buys) in books[rid].items():
+                sells.sort()
+                buys.sort(reverse=True)
+                sell = sells[0][0] if sells else None
+                buy = buys[0][0] if buys else None
+                r = rows.setdefault(t, [None] * len(hubs))
+                r[k] = [sell, buy, sum(v for _, v in sells), sum(v for _, v in buys),
+                        sum(v for p, v in sells if p <= sell * (1 + ARB_DEPTH)) if sells else 0,
+                        sum(v for p, v in buys if p >= buy * (1 - ARB_DEPTH)) if buys else 0, None]
+        del books
+        # 先用已有的成交量发布一次（直接成交的方式马上能用），读完成交量再更新
+        known = self.known_volumes(server)
+        self.publish(server, hubs, rows, known)
+        st["progress"] = "读取成交量"
+        log.info("倒卖排行（%s）订单已汇总：%d 种物品", server, len(rows))
+        if server == "tq":
+            daily = self.volumes_everef(cfg)
+        else:
+            daily = self.volumes_esi(server, cfg, rows, st, lambda d: self.publish(server, hubs, rows, d))
+        self.publish(server, hubs, rows, daily)
+        st["progress"] = ""
+
+    def known_volumes(self, server):
+        if server == "tq":
+            return self.everef_daily() if self.everef else {}
+        c = self.store.conn()
+        return {(r, t): (d, a) for r, t, d, a in c.execute("SELECT region, type_id, daily, avg FROM arb_volume WHERE server=?", (server,))}
+
+    def publish(self, server, hubs, rows, daily):
+        types = {}
+        for t, r in rows.items():
+            out = []
+            for k, (rid, _) in enumerate(hubs):
+                h = r[k]
+                if h is None:
+                    out.append(None)
+                    continue
+                d, a = daily.get((rid, t)) or (None, None)
+                out.append([*h[:6], round(d, 2) if d is not None else None, round(a, 2) if a else None])
+            types[str(t)] = out
+        self.data[server] = {"server": server, "updated": iso(time.time()), "hubs": [rid for rid, _ in hubs],
+                             "fields": ["sell", "buy", "sell_qty", "buy_qty", "sell_depth", "buy_depth", "daily", "avg"],
+                             "volume_ready": len(daily), "types": types}
+
+    def volumes_everef(self, cfg):
+        """EVE Ref 最近 30 天每日市场历史 → 交易中心星域日均成交（没有成交的日子不在文件里，按 30 天平均）"""
+        regions = set(cfg["hubs"])
+        today = dt.datetime.now(dt.timezone.utc).date()
+        days = [today - dt.timedelta(days=d) for d in range(1, ARB_DAYS + 3)]
+        for d in days:
+            key = d.isoformat()
+            if key in self.everef:
+                continue
+            try:
+                body, _ = http_get(EVEREF_HISTORY.format(year=d.year, date=key), timeout=120)
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    continue                   # 当天文件还没生成
+                raise
+            vol = {}
+            rd = csv.DictReader(io.StringIO(bz2.decompress(body).decode()))
+            for row in rd:
+                rid = int(row["region_id"])
+                if rid in regions:
+                    v = int(float(row["volume"]))
+                    vol[(rid, int(row["type_id"]))] = (v, v * float(row["average"] or 0))
+            self.everef[key] = vol
+        keep = sorted(self.everef)[-ARB_DAYS:]
+        for k in list(self.everef):
+            if k not in keep:
+                del self.everef[k]
+        return self.everef_daily()
+
+    def everef_daily(self):
+        keep = sorted(self.everef)
+        out = {}
+        for k in keep:
+            for key, (v, isk) in self.everef[k].items():
+                o = out.get(key)
+                out[key] = (o[0] + v, o[1] + isk) if o else (v, isk)
+        n = max(len(keep), 1)
+        return {k: (v / n, isk / v if v else None) for k, (v, isk) in out.items()}   # (日均成交量, 成交均价)
+
+    def volumes_esi(self, server, cfg, rows, st, on_progress):
+        """国服：逐个查 ESI 星域历史（库里缓存 1 天）；挂单额大的物品优先，每轮最多 ARB_HISTORY_BUDGET 次"""
+        hubs = list(cfg["hubs"])
+        c = self.store.conn()
+        cached = {(r, t): (d, at, a) for r, t, d, at, a in c.execute("SELECT region, type_id, daily, at, avg FROM arb_volume WHERE server=?", (server,))}
+        now = int(time.time())
+        todo = []
+        for t, r in rows.items():
+            for k, rid in enumerate(hubs):
+                h = r[k]
+                if h is None:
+                    continue
+                hit = cached.get((rid, t))
+                if hit and now - hit[1] < ARB_HISTORY_TTL and (hit[2] is not None or not hit[0]):
+                    continue
+                weight = (h[0] or 0) * h[2] + (h[1] or 0) * h[3]
+                todo.append((-weight, rid, t))
+        todo.sort()
+        todo = todo[:ARB_HISTORY_BUDGET]
+        deadline = time.time() + ARB_TTL * 0.8          # 本轮读不完的留到下一轮
+
+        def one(item):
+            _, rid, t = item
+            if time.time() > deadline:
+                return None
+            try:
+                hist, _ = get_json(self.url(cfg, f"/markets/{rid}/history/", type_id=t), retries=2)
+            except urllib.error.HTTPError as e:
+                if e.code != 404:
+                    return None
+                hist = []
+            except Exception:
+                return None
+            cutoff = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=ARB_DAYS)).isoformat()
+            vol = sum(d["volume"] for d in (hist or []) if d["date"] > cutoff)
+            isk = sum(d["volume"] * d["average"] for d in (hist or []) if d["date"] > cutoff)
+            return rid, t, vol / ARB_DAYS, isk / vol if vol else None
+        out = {k: (v[0], v[2]) for k, v in cached.items()}
+        got = []
+
+        def flush():
+            with self.store.write_lock:
+                c.executemany("INSERT OR REPLACE INTO arb_volume VALUES(?,?,?,?,?,?)", [(server, rid, t, d, now, a) for rid, t, d, a in got])
+                c.commit()
+            out.update({(rid, t): (d, a) for rid, t, d, a in got})
+            got.clear()
+        with concurrent.futures.ThreadPoolExecutor(8) as pool:
+            for n, res in enumerate(pool.map(one, todo), 1):
+                if res:
+                    got.append(res)
+                if n % 100 == 0:
+                    st["progress"] = f"读取成交量 {n}/{len(todo)}"
+                if n % 1000 == 0:
+                    flush()
+                    on_progress(out)
+        flush()
+        return out
+
+
 class RateLimiter:
     """按 IP 的令牌桶：容量 API_RATE，每秒恢复 API_RATE / 60 个"""
     def __init__(self, rate=API_RATE):
@@ -2622,6 +2939,9 @@ def open_routes(api, industry, abyssal=None):
         (("status",), "status", lambda q: {k: v for k, v in api.status(q).items() if k not in ("r2z2_seq",)}),
         (("prices",), "prices", api.prices),
         (("blueprints", "prices"), "bp_prices", bp_prices),
+        (("hubs", "arbitrage"), "hub_arbitrage", lambda q: api.arb.snapshot(q)),
+        (("wormholes", "activity"), "wh_activity", api.wh_activity),
+        (("wormholes", "systems", "{n}"), "wh_system", lambda q, sid: api.wh_system(sid, q)),
         (("kills",), "kills", lambda q: {k: v for k, v in api.feed(local(q)).items() if k != "notice"}),
         (("kills", "live"), "live", api.live),
         (("kills", "top"), "top", api.top),
@@ -2840,8 +3160,10 @@ def main():
         system_regions = {int(k): v for k, v in json.load(fh).items()}
     store = Store(args.db, system_regions, args.days + 1)
     store.abyssal_model = AbyssalModel(store)
+    store.arb = HubArbitrage(store)
     Workers(store, args.days, "r2z2" if args.live == "redisq" else args.live).start()
     api = Api(store)
+    api.arb = store.arb
     threading.Thread(target=api.warm, daemon=True).start()
     here = os.path.dirname(os.path.abspath(__file__))
     industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])

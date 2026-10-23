@@ -3,7 +3,8 @@
 //            推荐安装费最低的星系，显示吉他 30 天日均成交量。
 // 利润排行：按全服均价估算全部产品的每流程利润与每小时利润，前列可用吉他实时行情精算并显示成交量。
 // 制造地点：按星系工业指数排序（制造 / 发明 / 反应 / 研究），可按星域、周边跳数、安全等级筛选。
-// 我的工业：ESI 工业任务（esi-industry.read_character_jobs.v1）与角色蓝图（esi-characters.read_blueprints.v1）。
+// 我的工业：ESI 工业任务（esi-industry.read_character_jobs.v1）与角色蓝图（esi-characters.read_blueprints.v1），蓝图按自身 ME / TE 算成本与每小时利润。
+// 制造规划 / 库存可造、计算器里的解码器对比、发明次数、ME 影响、研究与拷贝：见 ind-plan.js。
 // 蓝图价格：市场有售的原图用吉他卖价；市场没有的（拷贝、派系等）用公开合同最低价（击杀记录服务 /api/kb/bpprices，
 //          数据来自 EVE Ref 公开合同快照）。可选择不计入、原图分摊到 N 个流程、或按拷贝每流程单价计入。
 // 公式（与游戏一致）：
@@ -13,7 +14,8 @@
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s3';
-let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, ensureEsiToken, hasEsiToken
+import * as Plan from './ind-plan.js?v=v1';
+let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
 const RECENT_KEY = 'eve-industry-recent';
@@ -53,7 +55,7 @@ const F = {
   tab: 'calc', sys: JITA, fac: 'npc', rig: 0, rfac: 35836, rrig: 0, tax: 1,
   mat: 'sell', prod: 'sell', skills: 'all5', me: 10, te: 20, subMe: 10,
   scope: 'region', jumps: 10, sec: { high: true, low: true, null: false },
-  rankCat: 'all', rankTech: 'all', rankAct: 'm', rankSort: 'ph', rankDir: 'desc', idx: 'manufacturing', whereSort: null, whereDir: 'asc'
+  rankCat: 'all', rankTech: 'all', rankAct: 'm', rankSkill: false, rankOwned: false, rankSort: 'ph', rankDir: 'desc', idx: 'manufacturing', whereSort: null, whereDir: 'asc'
 };
 const C = { pid: 0, runs: 1, me: null, te: null, dec: 0, invent: true, build: new Set(), bpMode: null, bpoRuns: 100 };
 const SIDE = { q: '', open: new Set(), pane: 'catalog' };   // pane：侧栏标签 catalog 物品分类 / recent 最近查看
@@ -87,7 +89,7 @@ function loadData() {
   if (!D.loading) {
     D.loading = (async () => {
       const [data, map, prices, indices] = await Promise.all([
-        fetch('industry-data.json?v=2').then((r) => { if (!r.ok) throw new Error('industry-data.json ' + r.status); return r.json(); }),
+        fetch('industry-data.json?v=3').then((r) => { if (!r.ok) throw new Error('industry-data.json ' + r.status); return r.json(); }),
         fetch(SERVER.mapData).then((r) => { if (!r.ok) throw new Error('星图数据 ' + r.status); return r.json(); }),
         ctx.fetchESI('/markets/prices/').catch(() => []),
         ctx.fetchESI('/industry/systems/').catch(() => [])
@@ -335,8 +337,12 @@ export async function showIndustry(hash = location.hash, restored = false) {
   const wasReady = Boolean(main.dataset.ready);
   if (!D.data) main.innerHTML = '<div class="pi-loading">载入制造数据…</div>';
   await loadData();
+  if (!planReady) {
+    planReady = true;
+    Plan.initPlan({ ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, selectProduct, renderTab, sysSec, secMul });
+  }
   await ensureSkills();
-  const m = /^#ind(?:\/(calc|rank|where|mine))?(?:\/(\d+))?/.exec(hash || '');
+  const m = /^#ind(?:\/(calc|rank|where|mine|plan))?(?:\/(\d+))?/.exec(hash || '');
   if (m?.[1]) F.tab = m[1];
   if (m?.[2] && BP(Number(m[2]))) selectProduct(Number(m[2]), false);
   if (!main.dataset.ready) {
@@ -347,7 +353,7 @@ export async function showIndustry(hash = location.hash, restored = false) {
           <h2>制造</h2>
         </div>
         <div class="segmented ind-tabs ind-tabs-mobile" id="indTabs" role="tablist">
-          ${[['calc', '制造计算器'], ['rank', '利润排行'], ['where', '制造地点'], ['mine', '我的工业']].map(([k, l]) => `<button data-ind-tab="${k}">${l}</button>`).join('')}
+          ${[['calc', '制造计算器'], ['plan', '制造规划'], ['rank', '利润排行'], ['where', '制造地点'], ['mine', '我的工业']].map(([k, l]) => `<button data-ind-tab="${k}">${l}</button>`).join('')}
         </div>
         <details class="pi-card ind-settings" id="indSettings"></details>
         <div id="indBody"></div>
@@ -355,6 +361,7 @@ export async function showIndustry(hash = location.hash, restored = false) {
     main.addEventListener('click', onClick);
     main.addEventListener('change', onChange);
     main.addEventListener('input', onInput);
+    main.addEventListener('toggle', (e) => { if (Plan.onCalcEvent(e) === 'draw') drawCalc(); }, true);
     main.addEventListener('focusout', () => setTimeout(() => { if (!main.contains(document.activeElement)) main.querySelectorAll('.kb-suggest').forEach((b) => { b.hidden = true; }); }, 150));
     const side = $('indSide');
     side.addEventListener('click', onSideClick);
@@ -372,6 +379,7 @@ export async function showIndustry(hash = location.hash, restored = false) {
   renderTab();
 }
 
+let planReady = false;
 let lastEsi = null;   // 上次渲染时是否已绑定 ESI（绑定状态变了要刷新技能与「我的工业」）
 
 function setHash() {
@@ -388,6 +396,7 @@ function renderTab() {
   if (F.tab === 'calc') renderCalc(body);
   else if (F.tab === 'rank') renderRank(body);
   else if (F.tab === 'where') renderWhere(body);
+  else if (F.tab === 'plan') Plan.renderPlan(body);
   else renderMine(body);
 }
 
@@ -576,7 +585,7 @@ function drawCalc() {
         <img src="${ICON(r.pid, 64)}" alt="" width="52" height="52">
         <div><h3>${esc(t[0])} <small class="text-muted">${esc(t[1])}</small></h3>
           <span class="text-muted">${esc(g?.[0] || '')} · ${tl}${meta && meta !== '一级科技' && meta !== '二级科技' ? ' · ' + esc(meta) : ''} · ${r.act === 'r' ? '反应' : '制造'}${b[1] > 1 ? ' · 每流程 ' + b[1] + ' 个' : ''}</span></div>
-        <a class="btn btn-ghost ind-market" href="#type=${r.pid}">市场行情</a>
+        <span class="ind-head-btns"><button type="button" class="btn btn-ghost" data-ind-addplan title="把当前产品、流程数与 ME / TE 加入制造规划">加入规划${Plan.planCount() ? `<small>${Plan.planCount()}</small>` : ''}</button><a class="btn btn-ghost ind-market" href="#type=${r.pid}">市场行情</a></span>
       </div>
       <div class="ind-inputs">
         <div class="pi-num"><span>流程数</span><input type="number" class="pi-input" min="1" max="100000" value="${r.runs}" data-ind-calc="runs"></div>
@@ -605,6 +614,7 @@ function drawCalc() {
       <div class="pi-table-wrap"><table class="pi-table ind-mats"><thead><tr><th>材料</th><th class="num">基础</th><th class="num">实际</th><th class="num">单价</th><th class="num">小计</th><th></th></tr></thead><tbody>${matRows}</tbody></table></div></div>
     ${invHtml}
     ${bpCard(r)}
+    ${Plan.calcExtrasHtml(r)}
     <div class="pi-card"><div class="pi-card-head"><h3>去哪里造最省钱</h3>
       <div class="segmented ind-scope">${[['region', '同星域'], ['near', '周边 10 跳'], ['high', '全部高安'], ['all', '全宇宙']].map(([k, l]) => `<button data-ind-set="scope" data-v="${k}" class="${F.scope === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>星系</th><th class="pi-hide-sm">星域</th><th class="num">${r.act === 'r' ? '反应' : '制造'}指数</th><th class="num">距${HUB_NAME}</th><th class="num pi-hide-sm">NPC 站</th><th class="num">安装费</th><th class="num">比当前</th></tr></thead><tbody>${whereRows || '<tr><td colspan="7" class="text-muted">没有符合条件的星系</td></tr>'}</tbody></table></div></div>
@@ -660,6 +670,8 @@ function candidates(act) {
 // ---------- 利润排行 ----------
 function rankRows() {
   const cat = RANK_CATS.find((c) => c[0] === F.rankCat)?.[2];
+  const skillF = F.rankSkill && F.skills === 'esi' && D.skills;
+  const ownedF = F.rankOwned && ctx.hasEsiToken() && Plan.ownedState().ready && !Plan.ownedState().err;
   const rows = [];
   for (const key of Object.keys(D.data.bp)) {
     const pid = Number(key);
@@ -668,6 +680,8 @@ function rankRows() {
     const t = T(pid);
     if (cat && !cat.includes(tCat(pid))) continue;
     if (F.rankTech !== 'all' && String(t[3]) !== F.rankTech) continue;
+    if (skillF && !Plan.skillOk(pid)) continue;
+    if (ownedF && !Plan.owned(pid)) continue;
     // 蓝图要能获得：T1 / 反应配方在 NPC 市场出售，T2 / T3 能发明，其余（派系等）要在公开合同里买得到拷贝
     const contractBpc = D.bpAll?.get(b[0])?.[1] ?? null;
     const needBpc = !b[7] && !invFor(pid);
@@ -702,6 +716,7 @@ function renderRank(body) {
     return;
   }
   const seg = (name, items, cur) => `<div class="segmented" role="group">${items.map(([v, l]) => `<button type="button" data-ind-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+  if (F.rankOwned && ctx.hasEsiToken() && !Plan.ownedState().ready) Plan.loadOwned().then(() => { if (F.tab === 'rank') renderTab(); });
   R.rows = rankRows();
   const top = R.rows.slice(0, 100);
   const rows = top.map((x, i) => `
@@ -721,6 +736,10 @@ function renderRank(body) {
       <div class="ind-rank-row">
         <div class="pi-inline"><span>活动</span>${seg('rankAct', [['m', '制造'], ['r', '反应']], F.rankAct)}</div>
         <div class="pi-inline"><span>科技</span>${seg('rankTech', [['all', '全部'], ['1', 'T1'], ['2', 'T2'], ['3', 'T3']], F.rankTech)}</div>
+        ${ctx.hasEsiToken() ? `<div class="pi-checks">
+          <label class="pi-check" title="${F.skills === 'esi' ? '按角色技能筛掉造不了（含发明技能）的产品' : '需要在上方设置里把技能改为「角色技能（ESI）」'}"><input type="checkbox" data-ind-rankf="rankSkill"${F.rankSkill ? ' checked' : ''}${F.skills === 'esi' ? '' : ' disabled'}><span>只看技能够造</span></label>
+          <label class="pi-check" title="只看有蓝图的产品（T2 有对应 T1 蓝图也算，可以发明）"><input type="checkbox" data-ind-rankf="rankOwned"${F.rankOwned ? ' checked' : ''}><span>只看我有的蓝图${F.rankOwned ? (Plan.ownedState().ready ? (Plan.ownedState().err ? `（${esc(Plan.ownedState().err)}）` : `（${Plan.ownedState().count}）`) : '（读取中…）') : ''}</span></label>
+        </div>` : ''}
       </div>
       <p class="pi-note">${R.refined ? `前 30 名为${HUB_NAME}实时价，其余为全服均价` : '全服均价估算'}
         <button class="btn btn-ghost ind-refine" data-ind-refine ${R.busy ? 'disabled' : ''}>${R.busy ? '精算中…' : `用${HUB_NAME}行情精算前 30 名`}</button></p>
@@ -810,7 +829,10 @@ async function renderMine(body) {
   const id = token.character_id;
   const [jobs, bps] = await Promise.all([
     ctx.esiAuthFetch(`/characters/${id}/industry/jobs/?include_completed=true`).catch((e) => ({ error: e.message })),
-    ctx.esiAuthFetch(`/characters/${id}/blueprints/`).catch((e) => ({ error: e.message }))
+    // 曙光服登录不支持蓝图权限，令牌里没有就不去请求
+    token.scopes && ![].concat(token.scopes).join(' ').includes('esi-characters.read_blueprints.v1')
+      ? { error: SERVER.id === 'infinity' ? '曙光服登录不支持蓝图权限，暂时无法读取' : '未授权蓝图读取权限', noScope: true }
+      : ctx.esiAuthFetch(`/characters/${id}/blueprints/`).catch((e) => ({ error: e.message }))
   ]);
   if (F.tab !== 'mine') return;
   const esc = ctx.esc, num = ctx.formatNumber;
@@ -836,18 +858,24 @@ async function renderMine(body) {
   }
   let bpsHtml;
   if (bps.error) {
-    bpsHtml = `<p class="text-muted">蓝图读取失败：${esc(bps.error)}</p><p class="pi-note">需要蓝图读取权限</p>`;
+    bpsHtml = bps.noScope ? `<p class="text-muted">${esc(bps.error)}</p>` : `<p class="text-muted">蓝图读取失败：${esc(bps.error)}</p><p class="pi-note">需要蓝图读取权限</p>`;
   } else if (!bps.length) bpsHtml = '<p class="text-muted">没有蓝图</p>';
   else {
-    const prodOf = new Map(Object.entries(D.data.bp).map(([pid, b]) => [b[0], Number(pid)]));
-    const list = bps.slice().sort((a, b) => name(a.type_id).localeCompare(name(b.type_id), 'zh'));
-    bpsHtml = `<div class="pi-table-wrap ind-rank-wrap"><table class="pi-table"><thead><tr><th>蓝图</th><th>类型</th><th class="num">ME</th><th class="num">TE</th><th class="num">剩余流程</th><th class="num pi-hide-sm">数量</th></tr></thead><tbody>${list.map((b) => {
-      const pid = prodOf.get(b.type_id);
-      return `<tr${pid ? ` data-ind-pick="${pid}" data-me="${b.material_efficiency}" data-te="${b.time_efficiency}"` : ''}>
-        <td><div class="pi-prod"><img src="${BP_ICON(b.type_id, 32, b.runs !== -1)}" alt="" width="24" height="24" loading="lazy"><span>${esc(name(b.type_id))}</span></div></td>
-        <td>${b.runs === -1 ? '原图' : '拷贝'}</td><td class="num">${b.material_efficiency}</td><td class="num">${b.time_efficiency}</td>
-        <td class="num">${b.runs === -1 ? '∞' : num(b.runs)}</td><td class="num pi-hide-sm">${b.quantity > 0 ? num(b.quantity) : 1}</td></tr>`;
-    }).join('')}</tbody></table></div>`;
+    const draw = (rows) => {
+      const isk = ctx.formatISK;
+      const list = rows.slice().sort((a, b) => (b.ph ?? -Infinity) - (a.ph ?? -Infinity) || name(a.b.type_id).localeCompare(name(b.b.type_id), 'zh'));
+      return `<div class="pi-table-wrap ind-rank-wrap"><table class="pi-table"><thead><tr><th>蓝图</th><th>类型</th><th class="num">ME / TE</th><th class="num">剩余流程</th><th class="num pi-hide-sm">单个成本</th><th class="num pi-hide-sm">每流程利润</th><th class="num">每小时利润</th><th></th></tr></thead><tbody>${list.map(({ b, pid, perUnit, profit, ph }) => `<tr${pid ? ` data-ind-pick="${pid}" data-me="${b.material_efficiency}" data-te="${b.time_efficiency}" title="按这张蓝图的 ME / TE 打开计算器"` : ''}>
+        <td><div class="pi-prod"><img src="${BP_ICON(b.type_id, 32, b.runs !== -1)}" alt="" width="24" height="24" loading="lazy"><span>${esc(name(b.type_id))}${b.quantity > 1 ? `<small>×${num(b.quantity)}</small>` : ''}</span></div></td>
+        <td>${b.runs === -1 ? '原图' : '拷贝'}</td><td class="num">${b.material_efficiency} / ${b.time_efficiency}</td>
+        <td class="num">${b.runs === -1 ? '∞' : num(b.runs)}</td>
+        <td class="num pi-hide-sm">${perUnit != null ? isk(perUnit) : '—'}</td>
+        <td class="num pi-hide-sm ${profit == null ? '' : profit >= 0 ? 'up' : 'down'}">${profit != null ? isk(profit) : '—'}</td>
+        <td class="num ${ph == null ? '' : ph >= 0 ? 'pi-profit' : 'down'}">${ph != null ? isk(ph) : '—'}</td>
+        <td>${pid && profit != null ? `<button type="button" class="link-btn" data-plan-add="${pid}" data-runs="${b.runs === -1 ? 1 : b.runs}" data-me="${b.material_efficiency}" data-te="${b.time_efficiency}">加入规划</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
+        <p class="pi-note">成本按蓝图自身 ME / TE、材料全部购买、当前设施与星系；行情读取中时先用全服均价</p>`;
+    };
+    const redraw = async () => { const el = $('indMineBps'); if (el && F.tab === 'mine') el.innerHTML = draw(await Plan.mineBlueprintRows(bps)); };
+    bpsHtml = `<div id="indMineBps">${draw(await Plan.mineBlueprintRows(bps, redraw))}</div>`;
   }
   body.innerHTML = `
     <div class="pi-card"><div class="pi-card-head"><h3>工业任务</h3></div>${jobsHtml}</div>
@@ -857,6 +885,7 @@ async function renderMine(body) {
 // ---------- 侧栏 ----------
 const SIDE_TABS = [
   ['calc', '制造计算器', '<path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h3M13 12h3M8 16h3M13 16h3"/>'],
+  ['plan', '制造规划', '<path d="M4 6h16M4 12h10M4 18h7"/><path d="M17 15v6M14 18h6"/>'],
   ['rank', '利润排行', '<path d="M3 20h18"/><path d="M6 16V10M12 16V5M18 16v-8"/>'],
   ['where', '制造地点', '<circle cx="12" cy="10" r="3"/><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/>'],
   ['mine', '我的工业', '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>']
@@ -945,7 +974,31 @@ function onSideClick(e) {
 }
 
 // ---------- 事件 ----------
+function planResult(res) {
+  if (!res || res === 'none') return Boolean(res);
+  if (res === 'draw') drawCalc();
+  else if (res === 'calc') { F.tab = 'calc'; save(); renderTab(); document.querySelector('#industryView .kb-scroll')?.scrollTo({ top: 0, behavior: 'smooth' }); }
+  else if (F.tab === 'plan') renderTab();
+  return true;
+}
+
 function onClick(e) {
+  if (planResult(F.tab === 'calc' ? Plan.onCalcEvent(e) : Plan.onPlanEvent(e))) return;
+  if (e.target.closest('[data-ind-addplan]')) {
+    const r = calc();
+    Plan.addToPlan(r.pid, { runs: r.runs, me: C.me, te: C.te, invent: Boolean(r.inv), dec: C.dec });
+    drawCalc();
+    return;
+  }
+  const rf = e.target.closest('[data-ind-rankf]');
+  if (rf) {
+    const k = rf.dataset.indRankf;
+    F[k] = rf.checked;
+    save();
+    if (k === 'rankOwned' && F.rankOwned && !Plan.ownedState().ready) { renderTab(); Plan.loadOwned().then(() => { if (F.tab === 'rank') renderTab(); }); return; }
+    renderTab();
+    return;
+  }
   const tab = e.target.closest('[data-ind-tab]');
   if (tab) { F.tab = tab.dataset.indTab; save(); renderTab(); return; }
   const rs = e.target.closest('[data-ind-sort]');
@@ -1020,6 +1073,7 @@ function refresh() {
 
 function onChange(e) {
   const t = e.target;
+  if (planResult(F.tab === 'calc' ? Plan.onCalcEvent(e) : Plan.onPlanEvent(e))) return;
   if (t.dataset.indNum) {
     const lim = { tax: [0, 50], me: [0, 10], te: [0, 20], subMe: [0, 10] }[t.dataset.indNum];
     F[t.dataset.indNum] = Math.min(lim[1], Math.max(lim[0], Number(t.value) || 0));
