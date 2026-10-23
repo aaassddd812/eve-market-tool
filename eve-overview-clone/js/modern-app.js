@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v3';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v1';
+import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v4';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v3';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s3';
 
 // ===== 配置与常量 =====
@@ -258,7 +258,7 @@ const viewHashes = {};
 const viewScroll = {};
 
 function ownsHash(view, hash) {
-  if (view === 'market') return !hash || hash.startsWith('#type=') || hash.startsWith('#arb');
+  if (view === 'market') return !hash || hash.startsWith('#type=') || hash.startsWith('#arb') || hash.startsWith('#watch');
   return Boolean(VIEW_HASH[view]) && hash.startsWith(VIEW_HASH[view]);
 }
 
@@ -433,10 +433,11 @@ async function getJitaPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v34').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v35').then((m) => {
     m.initIndustry({
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
+      esiAccountFetch, esiAccountList,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
     });
@@ -562,7 +563,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v34').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v35').then((m) => {
     m.initPi({
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
@@ -996,6 +997,8 @@ function initSidebar() {
   $$('#sidebar .sidebar-tabs .tab-btn').forEach((btn) => btn.addEventListener('click', () => switchSidebarTab(btn.dataset.tab)));
 
   $('arbRankBtn').addEventListener('click', () => openArb());
+  $('watchBoardBtn').addEventListener('click', () => openWatch());
+  $('favBoardBtn')?.addEventListener('click', () => openWatch());
   $('emptyArbBtn').addEventListener('click', () => openArb());
   if (REGIONS.length < 2) { $('arbRankBtn').hidden = true; $('emptyArbBtn').hidden = true; }
   $('collapseAllBtn').addEventListener('click', () => {
@@ -1307,6 +1310,7 @@ function setDetailVisible(visible) {
   $('emptyView').hidden = visible;
   $('detailView').hidden = !visible;
   $('arbView').hidden = true;
+  $('watchView').hidden = true;
 }
 
 // 倒卖排行（#arb）：市场中心里与物品详情并列的一页，所有物品一起比交易中心差价
@@ -1315,6 +1319,7 @@ function openArb({ updateHash = true } = {}) {
   if (state.currentView !== 'market') switchView('market');
   $('emptyView').hidden = true;
   $('detailView').hidden = true;
+  $('watchView').hidden = true;
   $('arbView').hidden = false;
   $$('[data-type-id].active').forEach((el) => el.classList.remove('active'));
   state.selectedItem = null;
@@ -1323,6 +1328,42 @@ function openArb({ updateHash = true } = {}) {
   closeDrawer();
   $('mainContent').scrollTo({ top: 0 });
   showHubRank($('arbBody'));
+}
+
+// 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
+let watchLoading = null;
+function loadWatchBoard() {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v1').then((m) => {
+    m.initWatchBoard({
+      regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESIPaged,
+      isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
+      typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
+      iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,
+      openItem: (id) => selectItem(id),
+      favorites: () => state.favorites.slice(),
+      toggleFavorite,
+      isActive: () => state.currentView === 'market' && !$('watchView').hidden
+    });
+    const box = $('watchBody');
+    box.addEventListener('click', (e) => m.onClick(e, box));
+    box.addEventListener('change', (e) => m.onChange(e, box));
+    return m;
+  }).catch((error) => { watchLoading = null; throw error; });
+  return watchLoading;
+}
+function openWatch({ updateHash = true } = {}) {
+  if (state.currentView !== 'market') switchView('market');
+  $('emptyView').hidden = true;
+  $('detailView').hidden = true;
+  $('arbView').hidden = true;
+  $('watchView').hidden = false;
+  $$('[data-type-id].active').forEach((el) => el.classList.remove('active'));
+  state.selectedItem = null;
+  document.title = '自选看板 · EVE 市场总览';
+  if (updateHash && location.hash !== '#watch') history.pushState(null, '', '#watch');
+  closeDrawer();
+  $('mainContent').scrollTo({ top: 0 });
+  loadWatchBoard().then((m) => m.showWatchBoard($('watchBody'))).catch((e) => { $('watchBody').innerHTML = '<p class="text-muted">自选看板加载失败：' + esc(e.message) + '</p>'; });
 }
 
 function renderBreadcrumb(groupId) {
@@ -1909,6 +1950,54 @@ function renderStats() {
   renderSparkline('volumeSpark', chrono.map((d) => d.volume), 'bar');
   renderSparkline('priceSpark', chrono.map((d) => d.average), 'line');
   renderAvgPrice(state.selectedItem?.id);
+  renderIndicators(sells, buys, minSell);
+}
+
+// 行情指标（近 30 天，按当前市场范围的订单与成交历史）：
+//   成交天数 = 30 天里有成交的天数（ESI 不返回没成交的日子）；日均量按 30 天平均
+//   价格波动 = 每日均价的标准差 ÷ 平均值；日内振幅 = 每日 (最高 − 最低) ÷ 均价 的平均
+//   买卖量比 = 最高收价 10% 以内的收单量 ÷ 最低卖价 10% 以内的卖单量（> 1 收的人多；排除远离市价的挂单）
+//   现价偏离 = 最低卖价比 30 天成交均价高 / 低多少；全宇宙范围只看交易中心空间站的订单（偏远空间站的零星低价单不算），
+//   全宇宙的历史是多个星域按日合并的，最高 / 最低价来自不同星域，不算日内振幅
+//   评级：成交天数 ≥ 25 且波动 < 5% 稳定；≥ 15 天且波动 < 15% 一般；< 8 天冷门；其余波动大
+function marketMetrics(history, sells, buys, minSell, merged) {
+  const cutoff = Date.now() - 30 * 86400e3;
+  const days = history.filter((d) => new Date(d.date).getTime() >= cutoff);
+  const vol = days.reduce((t, d) => t + d.volume, 0);
+  const avg = vol ? days.reduce((t, d) => t + d.average * d.volume, 0) / vol : null;
+  const mean = days.length ? days.reduce((t, d) => t + d.average, 0) / days.length : 0;
+  const cv = days.length > 1 && mean ? Math.sqrt(days.reduce((t, d) => t + (d.average - mean) ** 2, 0) / days.length) / mean : null;
+  const range = merged ? null : days.length ? days.reduce((t, d) => t + (d.average ? (d.highest - d.lowest) / d.average : 0), 0) / days.length : null;
+  const maxBuy = buys.length ? Math.max(...buys.map((o) => o.price)) : null;
+  const sq = minSell == null ? 0 : sells.filter((o) => o.price <= minSell * 1.1).reduce((t, o) => t + o.volume_remain, 0);
+  const bq = maxBuy == null ? 0 : buys.filter((o) => o.price >= maxBuy * 0.9).reduce((t, o) => t + o.volume_remain, 0);
+  const tradeDays = days.length;
+  const grade = tradeDays < 8 ? ['冷门', 'cold'] : tradeDays >= 25 && cv != null && cv < 0.05 ? ['稳定', 'good'] : tradeDays >= 15 && cv != null && cv < 0.15 ? ['一般', 'mid'] : ['波动大', 'bad'];
+  return { tradeDays, daily: vol / 30, avg, cv, range, ratio: sq ? bq / sq : null, dev: avg && minSell != null ? minSell / avg - 1 : null, grade };
+}
+function renderIndicators(sells, buys, minSell) {
+  const box = $('marketIndicators');
+  if (!box) return;
+  if (!state.history.length && !sells.length && !buys.length) { box.hidden = true; return; }
+  const region = currentRegion();
+  const merged = region.all && !state.globalMarket;
+  let ref = sells, refMin = minSell, refBuys = buys;
+  if (merged) {
+    const hubs = new Set(REGIONS.map((r) => r.hub.id));
+    const hubSells = sells.filter((o) => hubs.has(o.location_id)), hubBuys = buys.filter((o) => hubs.has(o.location_id));
+    if (hubSells.length) { ref = hubSells; refMin = Math.min(...hubSells.map((o) => o.price)); }
+    if (hubBuys.length) refBuys = hubBuys;
+  }
+  const m = marketMetrics(state.history, ref, refBuys, refMin, merged);
+  const pct = (v, d = 1) => (v == null ? '—' : (v * 100).toFixed(d) + '%');
+  const chip = (label, value, title, cls = '') => `<span class="mk-chip ${cls}" title="${esc(title)}"><small>${label}</small><b>${value}</b></span>`;
+  box.hidden = false;
+  box.innerHTML = chip('评级', m.grade[0], '成交天数 ≥ 25 且价格波动 < 5% 为稳定；≥ 15 天且波动 < 15% 为一般；30 天里不到 8 天有成交为冷门', 'g-' + m.grade[1]) +
+    chip('成交天数', `${m.tradeDays} / 30`, '近 30 天里有成交的天数') +
+    chip('价格波动', pct(m.cv), '每日均价的标准差 ÷ 平均值，越小越稳') +
+    chip('日内振幅', pct(m.range), merged ? '全宇宙的成交历史由多个星域合并，最高 / 最低价来自不同星域，选具体星域后显示' : '每天（最高价 − 最低价）÷ 均价 的平均') +
+    chip('买卖量比', m.ratio == null ? '—' : m.ratio.toFixed(2), '最高收价 10% 以内的收单量 ÷ 最低卖价 10% 以内的卖单量；大于 1 说明收的人多') +
+    chip('现价偏离', m.dev == null ? '—' : (m.dev > 0 ? '+' : '') + pct(m.dev), (merged ? '交易中心最低卖价' : '最低卖价') + '比近 30 天成交均价（' + (m.avg ? formatPrice(m.avg) : '—') + '）高或低多少', m.dev == null ? '' : m.dev > 0.1 ? 'up-warn' : m.dev < -0.1 ? 'down-warn' : '');
 }
 
 function renderAvgPrice(typeId) {
@@ -2400,6 +2489,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#wh')) { if (state.currentView !== 'wh') switchView('wh'); else openWormhole(); return; }
     if (location.hash.startsWith('#guide')) { if (state.currentView !== 'guide') switchView('guide'); else openGuides(); return; }
     if (location.hash.startsWith('#arb')) { openArb({ updateHash: false }); return; }
+    if (location.hash.startsWith('#watch')) { openWatch({ updateHash: false }); return; }
     const typeId = typeFromHash();
     if (typeId && typeId !== state.selectedItem?.id) {
       switchView('market');
@@ -2666,6 +2756,40 @@ async function ensureEsiToken() {
   }
   return refreshing;
 }
+
+// 用指定已绑定角色的令牌请求 ESI（多角色功能用，如制造规划按人物分配产线）；当前角色走 ensureEsiToken，其他角色单独刷新并写回账号列表
+const accountRefreshing = new Map();
+async function accountToken(id) {
+  const active = state.esiToken || readEsiToken();
+  if (active?.character_id === id) return ensureEsiToken();
+  const token = readEsiAccounts().find((a) => a.character_id === id);
+  if (!token) throw new Error('角色未绑定');
+  if (Date.now() <= (token.expires_at || 0) - 60000) return token;
+  if (!accountRefreshing.has(id)) {
+    accountRefreshing.set(id, (async () => {
+      try {
+        const data = await ssoToken({ grant_type: 'refresh_token', refresh_token: token.refresh_token });
+        const fresh = tokenRecord(data, token);
+        try { Object.assign(fresh, tokenIdentity(data.access_token)); } catch { /* 保留原身份 */ }
+        writeEsiAccounts(readEsiAccounts().map((a) => (a.character_id === id ? fresh : a)));
+        return fresh;
+      } catch (error) {
+        if (error.status >= 400 && error.status < 500) { removeEsiAccount(id); throw new Error(token.character_name + ' 登录已过期，请重新绑定'); }
+        throw error;
+      }
+    })().finally(() => accountRefreshing.delete(id)));
+  }
+  return accountRefreshing.get(id);
+}
+async function esiAccountFetch(id, path) {
+  const token = await accountToken(id);
+  const res = await fetch(ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=' + SERVER.datasource, {
+    headers: { Authorization: 'Bearer ' + token.access_token, 'Accept-Language': 'zh' }
+  });
+  if (!res.ok) { const error = new Error('ESI ' + res.status); error.status = res.status; throw error; }
+  return res.json();
+}
+const esiAccountList = () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name || '角色 ' + a.character_id, scopes: [].concat(a.scopes || []) }));
 
 // 已绑定角色的技能等级（skill_id -> 生效等级），缓存 10 分钟；跳跃规划与模拟装配共用
 let skillCache = null;   // { id, at, promise }
@@ -3725,7 +3849,21 @@ function bindAbyAssets(box) {
   }));
 }
 
+// 资产页扩展（净值趋势、清仓小助手）：asset-tools.js
+let assetTools = null;
+let assetToolsLoading = null;
+function loadAssetTools() {
+  if (!assetToolsLoading) assetToolsLoading = import('./asset-tools.js?v=v1').then((m) => {
+    m.initAssetTools({ esc, formatISK, formatNumber, typeName, serverKey, store, TF, server: SERVER.id, regions: REGIONS, showToast,
+      isActive: () => !$('profileView').hidden && activeProfileTab() === 'assets' });
+    assetTools = m;
+    return m;
+  }).catch((error) => { assetToolsLoading = null; throw error; });
+  return assetToolsLoading;
+}
+
 async function renderAssetsTab(box) {
+  await loadAssetTools().catch(() => null);
   const data = state.characterData;
   const assets = Array.isArray(data.assets) ? data.assets : null;
   if (!assets) { box.innerHTML = '<p class="text-muted">资产读取失败或权限不足' + (data.assets?.__error ? '：' + esc(data.assets.__error) : '') + '</p>'; return; }
@@ -3742,6 +3880,10 @@ async function renderAssetsTab(box) {
   if (station) renderStationAssets(box, station, groups, ctx);
   else renderAssetsOverview(box, groups, ctx);
   bindAssetToolbar(ctx.region);
+  $('clearanceBtn')?.addEventListener('click', () => {
+    $('profileStationNav')?.querySelectorAll('.active').forEach((b) => b.classList.remove('active'));
+    assetTools.showClearance(box, assets, () => renderProfileTab('assets'));
+  });
   bindAbyAssets(box);
 }
 
@@ -3773,8 +3915,12 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
       </tr>`;
   }).join('');
 
+  const charId = myCharacterId();
+  const walletOk = typeof data.wallet === 'number';
+  assetTools?.recordNetWorth(charId, { sell: assetSell, buy: assetBuy, orders: sellOrderTotal + buyOrderTotal, wallet: walletOk ? data.wallet : null });
   box.innerHTML =
-    assetToolbar(region, '<h3 class="asset-view-title">资产总估值</h3>') +
+    assetToolbar(region, '<h3 class="asset-view-title">资产总估值</h3><button type="button" class="btn btn-ghost" id="clearanceBtn" title="每种物品去哪个交易中心卖、直接卖收单还是挂卖单">清仓小助手</button>') +
+    (assetTools ? assetTools.netWorthHtml(charId) : '') +
     '<div class="valuation-grid">' +
       valuationCard('资产估值 · 最低卖价', formatISK(assetSell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', assetSell * TF.netSell()), 'is-sell') +
       valuationCard('资产估值 · 最高收价', formatISK(assetBuy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', assetBuy * TF.netBuy()), 'is-buy') +
@@ -3927,17 +4073,12 @@ async function renderProfileTab(tab) {
   }
 
   if (tab === 'orders') {
-    const orders = Array.isArray(data.orders) ? data.orders : null;
-    if (!orders || !orders.length) { box.innerHTML = '<p class="text-muted">暂无有效市场订单</p>'; return; }
-    box.innerHTML = '<div class="table-scroll"><table class="pc-mini-table orders-mini"><thead><tr><th>物品</th><th>方向</th><th>位置</th><th>范围</th><th>单价</th><th>剩余/总量</th></tr></thead><tbody>' +
-      orders.map((o) => profileRow([
-        esc(typeName(o.type_id)),
-        o.is_buy_order ? '<span class="pill buy">收购</span>' : '<span class="pill sell">出售</span>',
-        esc(locationName(o.location_id)),
-        esc(rangeLabel(o.range || '')),
-        formatPrice(o.price),
-        formatNumber(o.volume_remain) + ' / ' + formatNumber(o.volume_total)
-      ])).join('') + '</tbody></table></div>';
+    try {
+      const m = await loadOrderWatch();
+      if (activeProfileTab() === 'orders') await m.renderOrders(box, data.orders, myCharacterId());
+    } catch (error) {
+      box.innerHTML = '<p class="text-muted">订单页加载失败：' + esc(error.message) + '</p>';
+    }
     return;
   }
 
@@ -3992,6 +4133,26 @@ function loadMoreModule() {
     return m;
   }).catch((error) => { moreLoading = null; throw error; });
   return moreLoading;
+}
+
+// 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
+let orderWatchLoading = null;
+function loadOrderWatch() {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v1').then((m) => {
+    m.initOrderWatch({
+      esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
+      hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
+      typeName, locationName, resolveTypeNames, store, serverKey,
+      selectItem: (typeId) => { switchView('market'); selectItem(typeId); },
+      isActive: () => !$('profileView').hidden && activeProfileTab() === 'orders'
+    });
+    const box = $('profileData');
+    box.addEventListener('click', (e) => { if (activeProfileTab() === 'orders') m.onClick(e, box); });
+    box.addEventListener('change', (e) => { if (activeProfileTab() === 'orders') m.onChange(e, box); });
+    return m;
+  }).catch((error) => { orderWatchLoading = null; throw error; });
+  return orderWatchLoading;
 }
 
 // 个人中心 · 交易记录与盈亏：首次打开时加载
@@ -4813,9 +4974,20 @@ function initKillAlerts() {
   if (on) loadKillAlert().catch(() => {});
 }
 
+// 订单后台监控开着时启动即加载（每 5 分钟检查被压价）
+function initWatchBackground() {
+  const w = store.getJSON('eve-watch-board', {});
+  if (w?.bg && Object.values(w.alerts || {}).flat().some((a) => a.on)) loadWatchBoard().catch(() => {});
+}
+function initOrderWatchBackground() {
+  if (store.getJSON('eve-order-watch', {})?.bg && (state.esiToken || readEsiToken())) loadOrderWatch().catch(() => {});
+}
+
 // ===== 初始化应用 =====
 function init() {
   initKillAlerts();
+  initOrderWatchBackground();
+  initWatchBackground();
   TF.initTradeFees({
     esc, showToast, getCharacterSkills, getCharacterStandings, stationOwner, officialName,
     hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -4866,6 +5038,7 @@ function init() {
         const typeId = typeFromHash();
         if (typeId && state.typeIndex.has(typeId)) selectItem(typeId, { updateHash: false });
         else if (location.hash.startsWith('#arb')) openArb({ updateHash: false });
+        else if (location.hash.startsWith('#watch')) openWatch({ updateHash: false });
         preloadPages();
       });
     };

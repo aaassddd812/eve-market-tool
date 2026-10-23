@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v71">
+  <link rel="stylesheet" href="css/modern-style.css?v=v73">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -159,6 +159,7 @@
 
           <div class="sidebar-toolbar" id="catalogToolbar">
             <span class="sidebar-hint" id="catalogHint">载入目录…</span>
+            <button class="link-btn" id="watchBoardBtn" title="收藏的物品同时看各交易中心价格，可设到价提醒">自选看板</button>
             <button class="link-btn" id="arbRankBtn" title="所有物品一起比交易中心差价，按利润排行">倒卖排行</button>
             <button class="link-btn" id="collapseAllBtn" title="折叠所有分类">全部折叠</button>
           </div>
@@ -170,6 +171,7 @@
               </div>
             </div>
             <div class="tab-pane" id="favoritesPane">
+              <button class="btn btn-ghost btn-sm fav-board-btn" id="favBoardBtn">打开自选看板（各交易中心价格 · 到价提醒）</button>
               <div class="item-list" id="favoritesList"></div>
             </div>
             <div class="tab-pane" id="recentPane">
@@ -203,6 +205,7 @@
 
           <!-- 倒卖排行（#arb） -->
           <div class="arb-view" id="arbView" hidden><div id="arbBody"></div></div>
+          <div class="arb-view" id="watchView" hidden><div id="watchBody"></div></div>
 
           <!-- 详情视图 -->
           <div class="detail-view" id="detailView" hidden>
@@ -278,6 +281,7 @@
                 <svg class="sparkline" id="priceSpark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden="true"></svg>
               </div>
             </div>
+            <div class="mk-ind" id="marketIndicators" hidden></div>
 
             <!-- 内容标签页 -->
             <div class="content-tabs">
@@ -967,6 +971,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v92" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v94" type="module" data-cfasync="false"></script>
 </body>
 </html>

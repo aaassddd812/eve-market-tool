@@ -5,6 +5,8 @@
 // 制造地点：按星系工业指数排序（制造 / 发明 / 反应 / 研究），可按星域、周边跳数、安全等级筛选。
 // 我的工业：ESI 工业任务（esi-industry.read_character_jobs.v1）与角色蓝图（esi-characters.read_blueprints.v1），蓝图按自身 ME / TE 算成本与每小时利润。
 // 制造规划 / 库存可造、计算器里的解码器对比、发明次数、ME 影响、研究与拷贝：见 ind-plan.js。
+// 利润排行的价格与成交量先用交易中心快照（/api/v1/hubs/arbitrage），综合评分 = 每小时利润、日均成交额、利润率、买卖价差加权。
+// NPC 蓝图：npc-bp.json（build_npc_bp.mjs 生成），侧栏「NPC 蓝图」页与计算器蓝图卡片。
 // 蓝图价格：市场有售的原图用吉他卖价；市场没有的（拷贝、派系等）用公开合同最低价（击杀记录服务 /api/kb/bpprices，
 //          数据来自 EVE Ref 公开合同快照）。可选择不计入、原图分摊到 N 个流程、或按拷贝每流程单价计入。
 // 公式（与游戏一致）：
@@ -14,7 +16,7 @@
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s3';
-import * as Plan from './ind-plan.js?v=v1';
+import * as Plan from './ind-plan.js?v=v2';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
@@ -50,12 +52,12 @@ const ACT_ZH = { 1: '制造', 3: '时间效率研究', 4: '材料效率研究', 
 const STATUS_ZH = { active: '进行中', paused: '暂停', ready: '可交付', delivered: '已交付', cancelled: '已取消', reverted: '已撤销' };
 
 const D = { loading: null, data: null, sys: new Map(), regions: new Map(), jumpsFromJita: null, adjusted: new Map(), average: new Map(), indices: new Map(), skills: null, history: new Map(),
-  bpc: new Map(), bpAll: null, bpUpdated: null };   // 蓝图合同价：蓝图 -> { o: 原图合同, c: 拷贝合同 }；bpAll：全部蓝图的 [原图最低, 拷贝每流程最低]
+  bpc: new Map(), bpAll: null, bpUpdated: null, mkt: undefined, mktAt: null };   // mkt：交易中心快照 id -> { sell, buy, daily }   // 蓝图合同价：蓝图 -> { o: 原图合同, c: 拷贝合同 }；bpAll：全部蓝图的 [原图最低, 拷贝每流程最低]
 const F = {
   tab: 'calc', sys: JITA, fac: 'npc', rig: 0, rfac: 35836, rrig: 0, tax: 1,
   mat: 'sell', prod: 'sell', skills: 'all5', me: 10, te: 20, subMe: 10,
   scope: 'region', jumps: 10, sec: { high: true, low: true, null: false },
-  rankCat: 'all', rankTech: 'all', rankAct: 'm', rankSkill: false, rankOwned: false, rankSort: 'ph', rankDir: 'desc', idx: 'manufacturing', whereSort: null, whereDir: 'asc'
+  rankCat: 'all', rankTech: 'all', rankAct: 'm', rankSkill: false, rankOwned: false, rankVol: 0, rankScore: 0, rankSort: 'ph', rankDir: 'desc', idx: 'manufacturing', whereSort: null, whereDir: 'asc'
 };
 const C = { pid: 0, runs: 1, me: null, te: null, dec: 0, invent: true, build: new Set(), bpMode: null, bpoRuns: 100 };
 const SIDE = { q: '', open: new Set(), pane: 'catalog' };   // pane：侧栏标签 catalog 物品分类 / recent 最近查看
@@ -74,7 +76,7 @@ export function initIndustry(context) {
 }
 
 // 表头排序（与市场中心订单簿一致）：点击表头按该列排序，再点一次反向；首次点击用该列更有用的方向
-const RANK_SORT_DIR = { name: 'asc', perUnit: 'asc', unit: 'desc', profit: 'desc', margin: 'desc', ph: 'desc' };
+const RANK_SORT_DIR = { name: 'asc', perUnit: 'asc', unit: 'desc', profit: 'desc', margin: 'desc', ph: 'desc', daily: 'desc', score: 'desc' };
 const WHERE_SORT_DIR = { name: 'asc', region: 'asc', manufacturing: 'asc', invention: 'asc', reaction: 'asc', copying: 'asc',
   researching_material_efficiency: 'asc', researching_time_efficiency: 'asc', jumps: 'asc', stations: 'desc' };
 const sortTh = (attr, cur, dir, key, label, cls = '') => {
@@ -151,11 +153,41 @@ const lvl = (id) => (F.skills === 'esi' && D.skills ? D.skills.get(id) || 0 : 5)
 const salesTax = () => 7.5 * (1 - 0.11 * lvl(SKILL.accounting));   // %
 const brokerFee = () => Math.max(0, 3 - 0.3 * lvl(SKILL.broker));   // %
 
-// 价格：优先吉他行情，没有时用全服均价
+// 价格：优先吉他实时行情，其次交易中心快照（每 30 分钟汇总），都没有时用全服均价
 function price(id, side) {
-  const j = jita.get(id);
+  const j = jita.get(id) || D.mkt?.get(id);
   const v = side === 'buy' ? j?.buy : j?.sell;
   return v ?? j?.sell ?? j?.buy ?? D.average.get(id) ?? null;
+}
+
+// 交易中心快照（击杀记录服务 /api/v1/hubs/arbitrage）：主交易中心全部物品的卖价、买价、30 天日均成交量；读不到时排行退回全服均价
+async function loadMarket() {
+  if (D.mkt !== undefined) return D.mkt;
+  try {
+    const r = await fetch('/api/v1/hubs/arbitrage?server=' + SERVER.id);
+    const d = r.ok ? await r.json() : null;
+    if (!d?.types || !d.hubs?.length) throw new Error('无快照');
+    const h = Math.max(0, d.hubs.indexOf(FORGE));
+    D.mkt = new Map();
+    for (const [k, v] of Object.entries(d.types)) {
+      const x = v[h];
+      if (x && (x[0] != null || x[1] != null)) D.mkt.set(Number(k), { sell: x[0], buy: x[1], daily: x[6] || 0 });
+    }
+    D.mktAt = d.updated || null;
+  } catch { D.mkt = null; }
+  return D.mkt;
+}
+
+// 综合评分 0–100：每小时利润 40%、日均成交额 30%、利润率 20%、行情稳定（买卖价差小）10%；利润与成交额按对数刻度；
+// 日均成交不到 1 个的按成交量开方打折（很久才卖出一个，算出来的利润没有意义），交易中心没有成交记录的为 0
+const logN = (x, lo, hi) => (x > 0 ? Math.min(1, Math.max(0, (Math.log10(x) - lo) / (hi - lo))) : 0);
+function rankScore(x) {
+  if (x.profit <= 0) return 0;
+  const m = D.mkt?.get(x.pid);
+  const spread = m?.sell && m?.buy ? (m.sell - m.buy) / m.sell : 1;
+  const stable = x.daily >= 1 ? Math.max(0, 1 - spread * 2.5) : 0;
+  const thin = x.daily >= 1 ? 1 : Math.sqrt(Math.max(0, x.daily));
+  return Math.round(100 * thin * (0.4 * logN(x.ph, 5, 8.5) + 0.3 * logN(x.daily * x.unit, 6, 10) + 0.2 * Math.min(1, x.margin / 0.4) + 0.1 * stable));
 }
 const matPrice = (id) => price(id, F.mat === 'buy' ? 'buy' : 'sell');
 const matFee = () => (F.mat === 'buy' ? brokerFee() : 0);           // 挂收单买材料要付中介费
@@ -339,10 +371,10 @@ export async function showIndustry(hash = location.hash, restored = false) {
   await loadData();
   if (!planReady) {
     planReady = true;
-    Plan.initPlan({ ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, selectProduct, renderTab, sysSec, secMul });
+    Plan.initPlan({ server: SERVER.id, ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, selectProduct, renderTab, sysSec, secMul });
   }
   await ensureSkills();
-  const m = /^#ind(?:\/(calc|rank|where|mine|plan))?(?:\/(\d+))?/.exec(hash || '');
+  const m = /^#ind(?:\/(calc|rank|where|mine|plan|npc))?(?:\/(\d+))?/.exec(hash || '');
   if (m?.[1]) F.tab = m[1];
   if (m?.[2] && BP(Number(m[2]))) selectProduct(Number(m[2]), false);
   if (!main.dataset.ready) {
@@ -353,7 +385,7 @@ export async function showIndustry(hash = location.hash, restored = false) {
           <h2>制造</h2>
         </div>
         <div class="segmented ind-tabs ind-tabs-mobile" id="indTabs" role="tablist">
-          ${[['calc', '制造计算器'], ['plan', '制造规划'], ['rank', '利润排行'], ['where', '制造地点'], ['mine', '我的工业']].map(([k, l]) => `<button data-ind-tab="${k}">${l}</button>`).join('')}
+          ${[['calc', '制造计算器'], ['plan', '制造规划'], ['rank', '利润排行'], ['where', '制造地点'], ['npc', 'NPC 蓝图'], ['mine', '我的工业']].map(([k, l]) => `<button data-ind-tab="${k}">${l}</button>`).join('')}
         </div>
         <details class="pi-card ind-settings" id="indSettings"></details>
         <div id="indBody"></div>
@@ -397,6 +429,7 @@ function renderTab() {
   else if (F.tab === 'rank') renderRank(body);
   else if (F.tab === 'where') renderWhere(body);
   else if (F.tab === 'plan') Plan.renderPlan(body);
+  else if (F.tab === 'npc') renderNpc(body);
   else renderMine(body);
 }
 
@@ -647,6 +680,7 @@ function bpCard(r) {
       <div class="ind-bp-col"><h4>市场原图</h4>${bp.onMarket ? (bp.market != null ? `<p class="ind-bp-price">${isk(bp.market)}</p>` : '<p class="text-muted">无卖单</p>') : '<p class="text-muted">不出售</p>'}</div>
       <div class="ind-bp-col"><h4>合同原图</h4>${bpoRows ? `<ul>${bpoRows}</ul>` : '<p class="text-muted">无</p>'}</div>
       <div class="ind-bp-col"><h4>合同拷贝</h4>${bpcRows ? `<ul>${bpcRows}</ul>` : '<p class="text-muted">无</p>'}</div>
+      ${npcCol(bp.bpId)}
     </div>
     <div class="ind-bp-mode">
       <span>蓝图成本</span>
@@ -655,6 +689,89 @@ function bpCard(r) {
       <span class="text-muted">${r.payback ? `原图 ${ctx.formatNumber(r.payback)} 流程回本` : ''}</span>
     </div>
   </div>`;
+}
+
+// ---------- NPC 蓝图 ----------
+// npc-bp.json（build_npc_bp.mjs 由 SDE 生成）：NPC 军团在自家空间站出售的蓝图原图，价格固定为基础价格
+//   { bp: { 蓝图: [价格, [军团]] }, corps: { 军团: [名称, 势力, [有空间站的星域], 空间站数] }, factions: { 势力: 名称 } }
+const NPC = { data: null, loading: null, q: '', fac: '', region: '' };
+function loadNpc() {
+  if (!NPC.loading) {
+    NPC.loading = fetch('npc-bp.json?v=1').then((r) => (r.ok ? r.json() : null)).catch(() => null)
+      .then((d) => { NPC.data = d || { bp: {}, corps: {}, factions: {} }; return NPC.data; });
+  }
+  return NPC.loading;
+}
+// 蓝图 -> 产品
+let bpToProduct = null;
+const productOf = (bpId) => {
+  if (!bpToProduct) { bpToProduct = new Map(); for (const k of Object.keys(D.data.bp)) bpToProduct.set(BP(k)[0], Number(k)); }
+  return bpToProduct.get(Number(bpId)) || 0;
+};
+const corpLabel = (cid) => NPC.data.corps[cid]?.[0] || '军团 ' + cid;
+
+function npcCol(bpId) {
+  if (!NPC.data) { loadNpc().then(() => { if (F.tab === 'calc') drawCalc(); }); return '<div class="ind-bp-col"><h4>NPC 出售</h4><p class="text-muted">读取中…</p></div>'; }
+  const e = NPC.data.bp[bpId];
+  if (!e) return '<div class="ind-bp-col"><h4>NPC 出售</h4><p class="text-muted">NPC 不卖</p></div>';
+  const corps = e[1].slice(0, 3).map((c) => `<li><span>${ctx.esc(corpLabel(c))}</span></li>`).join('');
+  return `<div class="ind-bp-col"><h4>NPC 出售</h4><p class="ind-bp-price">${ctx.formatISK(e[0])}</p><ul>${corps}</ul>${e[1].length > 3 ? `<button type="button" class="link-btn" data-npc-bp="${bpId}">共 ${e[1].length} 个军团</button>` : ''}</div>`;
+}
+
+function renderNpc(body) {
+  if (!NPC.data) {
+    body.innerHTML = '<div class="pi-loading">读取 NPC 蓝图…</div>';
+    loadNpc().then(() => { if (F.tab === 'npc') renderNpc(body); });
+    return;
+  }
+  const esc = ctx.esc, d = NPC.data;
+  const facOpts = Object.entries(d.factions).sort((a, b) => a[1].localeCompare(b[1], 'zh'))
+    .map(([id, n]) => `<option value="${id}"${NPC.fac === id ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  const regIds = new Set();
+  for (const c of Object.values(d.corps)) if (!NPC.fac || String(c[1]) === NPC.fac) c[2].forEach((r) => regIds.add(r));
+  const regOpts = [...regIds].map((r) => [r, D.regions.get(r) || '星域 ' + r]).sort((a, b) => a[1].localeCompare(b[1], 'zh'))
+    .map(([id, n]) => `<option value="${id}"${NPC.region === String(id) ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  body.innerHTML = `
+    <div class="pi-card ind-rank-filters">
+      <div class="ind-rank-row">
+        <input type="search" class="pi-input ind-npc-q" id="indNpcQ" placeholder="搜索蓝图或产品名" value="${esc(NPC.q)}">
+        <label class="pi-inline"><span>势力</span><select class="pi-input" data-npc-f="fac"><option value="">全部</option>${facOpts}</select></label>
+        <label class="pi-inline"><span>星域</span><select class="pi-input" data-npc-f="region"><option value="">全部</option>${regOpts}</select></label>
+      </div>
+      <p class="pi-note">NPC 军团在自家空间站按固定价格出售的蓝图原图（基础价格，与市场挂单一致）。点击行打开制造计算器</p>
+    </div>
+    <div class="pi-card" id="indNpcList"></div>`;
+  drawNpcList();
+}
+
+function drawNpcList() {
+  const box = $('indNpcList');
+  if (!box) return;
+  const esc = ctx.esc, d = NPC.data, q = NPC.q.toLowerCase();
+  const fac = NPC.fac, reg = Number(NPC.region) || 0;
+  const corpOk = (c) => { const x = d.corps[c]; return x && (!fac || String(x[1]) === fac) && (!reg || x[2].includes(reg)); };
+  const rows = [];
+  for (const [bpId, [cost, corps]] of Object.entries(d.bp)) {
+    const pid = productOf(bpId);
+    if ((fac || reg) && !corps.some(corpOk)) continue;
+    if (q && !(tName(bpId).toLowerCase().includes(q) || (pid && tName(pid).toLowerCase().includes(q)) || T(bpId)[1]?.toLowerCase?.().includes(q))) continue;
+    rows.push({ bpId: Number(bpId), pid, cost, corps: corps.filter(corpOk) });
+  }
+  const key = (id) => tName(id).replace(/^[\s'"“”‘’]+/, '');   // 派系蓝图名带引号，排序时忽略
+  rows.sort((a, b) => key(a.bpId).localeCompare(key(b.bpId), 'zh'));
+  const shown = rows.slice(0, 200);
+  box.innerHTML = `<div class="pi-table-wrap ind-rank-wrap"><table class="pi-table">
+    <thead><tr><th>蓝图</th><th class="num">NPC 价格</th><th>出售军团</th><th class="pi-hide-sm">星域</th></tr></thead>
+    <tbody>${shown.map((x) => {
+      const regs = [...new Set(x.corps.flatMap((c) => d.corps[c][2]))];
+      const regTxt = regs.slice(0, 4).map((r) => D.regions.get(r) || r).join('、') + (regs.length > 4 ? ` 等 ${regs.length} 个` : '');
+      return `<tr${x.pid && BP(x.pid) ? ` data-ind-pick="${x.pid}" title="打开制造计算器"` : ''}>
+        <td><div class="pi-prod"><img src="${BP_ICON(x.bpId, 32)}" alt="" width="24" height="24" loading="lazy"><span>${esc(tName(x.bpId))}</span></div></td>
+        <td class="num">${ctx.formatISK(x.cost)}</td>
+        <td class="ind-npc-corps">${x.corps.slice(0, 3).map((c) => esc(corpLabel(c))).join('、')}${x.corps.length > 3 ? ` <small class="text-muted">等 ${x.corps.length} 个</small>` : ''}</td>
+        <td class="pi-hide-sm ind-npc-corps">${esc(regTxt)}</td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="text-muted">没有符合条件的蓝图</td></tr>'}</tbody></table></div>
+    <p class="pi-note">共 ${rows.length} 种${rows.length > shown.length ? `，显示前 ${shown.length} 种，可搜索缩小范围` : ''}</p>`;
 }
 
 function candidates(act) {
@@ -671,7 +788,7 @@ function candidates(act) {
 function rankRows() {
   const cat = RANK_CATS.find((c) => c[0] === F.rankCat)?.[2];
   const skillF = F.rankSkill && F.skills === 'esi' && D.skills;
-  const ownedF = F.rankOwned && ctx.hasEsiToken() && Plan.ownedState().ready && !Plan.ownedState().err;
+  const ownedF = F.rankOwned && (ctx.hasEsiToken() || Plan.pastedBps()) && Plan.ownedState().ready && !Plan.ownedState().err;
   const rows = [];
   for (const key of Object.keys(D.data.bp)) {
     const pid = Number(key);
@@ -690,7 +807,9 @@ function rankRows() {
     if (!unit) continue;
     // 均价远高于 CCP 调整价格的，多是成交极少、价格被拉高的物品
     const adj = D.adjusted.get(pid);
-    if (!jita.has(pid) && adj && unit > adj * 6 && unit - adj > 1e6) continue;
+    const daily = D.mkt?.get(pid)?.daily ?? null;
+    if (D.mkt && F.rankVol && (daily || 0) < F.rankVol) continue;
+    if (!jita.has(pid) && !(daily >= 1) && adj && unit > adj * 6 && unit - adj > 1e6) continue;
     if (b[3].some(([id]) => matPrice(id) == null)) continue;
     const inv = b[5] === 'm' ? invention(pid, 0) : null;
     const me = b[5] === 'r' ? 0 : inv ? inv.me : F.me, te = b[5] === 'r' ? 0 : inv ? inv.te : F.te;
@@ -701,7 +820,10 @@ function rankRows() {
     const profit = revenue - cost;
     // 利润率超过 90% 的基本是有价无市（成本远低于挂单价），不参与排行
     if (revenue && profit / revenue > 0.9) continue;
-    rows.push({ pid, unit, cost, perUnit: cost / j.out, profit, margin: revenue ? profit / revenue : 0, ph: profit / (j.secs / 3600), secs: j.secs, inv: Boolean(inv), bpc: needBpc });
+    const row = { pid, unit, cost, perUnit: cost / j.out, profit, margin: revenue ? profit / revenue : 0, ph: profit / (j.secs / 3600), secs: j.secs, inv: Boolean(inv), bpc: needBpc, daily: daily ?? 0 };
+    row.score = rankScore(row);
+    if (D.mkt && F.rankScore && row.score < F.rankScore) continue;
+    rows.push(row);
   }
   const key = F.rankSort, mul = F.rankDir === 'asc' ? 1 : -1;
   if (key === 'name') return rows.sort((a, b) => mul * tName(a.pid).localeCompare(tName(b.pid), 'zh'));
@@ -710,13 +832,14 @@ function rankRows() {
 
 function renderRank(body) {
   const esc = ctx.esc, isk = ctx.formatISK;
-  if (!D.bpAll) {
-    body.innerHTML = '<div class="pi-loading">读取公开合同蓝图价格…</div>';
-    loadBpAll().then(() => { if (F.tab === 'rank') renderRank(body); });
+  if (!D.bpAll || D.mkt === undefined) {
+    body.innerHTML = '<div class="pi-loading">读取公开合同蓝图价格与交易中心行情…</div>';
+    Promise.all([loadBpAll(), loadMarket()]).then(() => { if (F.tab === 'rank') renderRank(body); });
     return;
   }
+  const mkt = Boolean(D.mkt);
   const seg = (name, items, cur) => `<div class="segmented" role="group">${items.map(([v, l]) => `<button type="button" data-ind-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-  if (F.rankOwned && ctx.hasEsiToken() && !Plan.ownedState().ready) Plan.loadOwned().then(() => { if (F.tab === 'rank') renderTab(); });
+  if (F.rankOwned && (ctx.hasEsiToken() || Plan.pastedBps()) && !Plan.ownedState().ready) Plan.loadOwned().then(() => { if (F.tab === 'rank') renderTab(); });
   R.rows = rankRows();
   const top = R.rows.slice(0, 100);
   const rows = top.map((x, i) => `
@@ -728,7 +851,8 @@ function renderRank(body) {
       <td class="num">${isk(x.profit)}</td>
       <td class="num pi-hide-sm">${(x.margin * 100).toFixed(1)}%</td>
       <td class="num ${x.ph >= 0 ? 'pi-profit' : 'down'}">${isk(x.ph)}</td>
-      <td class="num" data-ind-vol="${x.pid}">…</td>
+      <td class="num"${mkt ? '' : ` data-ind-vol="${x.pid}"`}>${mkt ? (x.daily >= 0.1 ? ctx.formatNumber(x.daily >= 10 ? Math.round(x.daily) : Math.round(x.daily * 10) / 10) : x.daily > 0 ? '<0.1' : '—') : '…'}</td>
+      ${mkt ? `<td class="num"><span class="ind-score ind-score-${x.score >= 60 ? 'hi' : x.score >= 35 ? 'mid' : 'lo'}">${x.score}</span></td>` : ''}
     </tr>`).join('');
   body.innerHTML = `
     <div class="pi-card ind-rank-filters">
@@ -736,18 +860,23 @@ function renderRank(body) {
       <div class="ind-rank-row">
         <div class="pi-inline"><span>活动</span>${seg('rankAct', [['m', '制造'], ['r', '反应']], F.rankAct)}</div>
         <div class="pi-inline"><span>科技</span>${seg('rankTech', [['all', '全部'], ['1', 'T1'], ['2', 'T2'], ['3', 'T3']], F.rankTech)}</div>
-        ${ctx.hasEsiToken() ? `<div class="pi-checks">
-          <label class="pi-check" title="${F.skills === 'esi' ? '按角色技能筛掉造不了（含发明技能）的产品' : '需要在上方设置里把技能改为「角色技能（ESI）」'}"><input type="checkbox" data-ind-rankf="rankSkill"${F.rankSkill ? ' checked' : ''}${F.skills === 'esi' ? '' : ' disabled'}><span>只看技能够造</span></label>
+        ${ctx.hasEsiToken() || Plan.pastedBps() ? `<div class="pi-checks">
+          ${ctx.hasEsiToken() ? `<label class="pi-check" title="${F.skills === 'esi' ? '按角色技能筛掉造不了（含发明技能）的产品' : '需要在上方设置里把技能改为「角色技能（ESI）」'}"><input type="checkbox" data-ind-rankf="rankSkill"${F.rankSkill ? ' checked' : ''}${F.skills === 'esi' ? '' : ' disabled'}><span>只看技能够造</span></label>` : ''}
           <label class="pi-check" title="只看有蓝图的产品（T2 有对应 T1 蓝图也算，可以发明）"><input type="checkbox" data-ind-rankf="rankOwned"${F.rankOwned ? ' checked' : ''}><span>只看我有的蓝图${F.rankOwned ? (Plan.ownedState().ready ? (Plan.ownedState().err ? `（${esc(Plan.ownedState().err)}）` : `（${Plan.ownedState().count}）`) : '（读取中…）') : ''}</span></label>
         </div>` : ''}
       </div>
-      <p class="pi-note">${R.refined ? `前 30 名为${HUB_NAME}实时价，其余为全服均价` : '全服均价估算'}
+      ${mkt ? `<div class="ind-rank-row">
+        <label class="pi-inline"><span>日均成交至少</span><select class="pi-input" data-ind-rankn="rankVol">${[0, 1, 10, 100, 1000, 10000].map((v) => `<option value="${v}"${F.rankVol === v ? ' selected' : ''}>${v ? ctx.formatNumber(v) + ' 个' : '不限'}</option>`).join('')}</select></label>
+        <label class="pi-inline" title="每小时利润 40%、日均成交额 30%、利润率 20%、买卖价差 10%（利润与成交额按对数刻度）"><span>综合评分至少</span><select class="pi-input" data-ind-rankn="rankScore">${[0, 20, 35, 50, 60, 70].map((v) => `<option value="${v}"${F.rankScore === v ? ' selected' : ''}>${v || '不限'}</option>`).join('')}</select></label>
+      </div>` : ''}
+      <p class="pi-note">${mkt ? `${HUB_NAME}行情快照（${D.mktAt ? new Date(D.mktAt).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总）${R.refined ? `，前 30 名为实时价` : ''}` : R.refined ? `前 30 名为${HUB_NAME}实时价，其余为全服均价` : '全服均价估算'}
         <button class="btn btn-ghost ind-refine" data-ind-refine ${R.busy ? 'disabled' : ''}>${R.busy ? '精算中…' : `用${HUB_NAME}行情精算前 30 名`}</button></p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap ind-rank-wrap"><table class="pi-table">
       <thead><tr><th>#</th>${[['name', '产品', ''], ['perUnit', '单个成本', 'num pi-hide-sm'], ['unit', '单价', 'num pi-hide-sm'], ['profit', '每流程利润', 'num'], ['margin', '利润率', 'num pi-hide-sm'], ['ph', '每小时利润', 'num']]
-        .map(([k, l, c]) => sortTh('ind-sort', F.rankSort, F.rankDir, k, l, c)).join('')}<th class="num">日均成交</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="8" class="text-muted">没有符合条件的产品</td></tr>'}</tbody></table></div></div>`;
+        .map(([k, l, c]) => sortTh('ind-sort', F.rankSort, F.rankDir, k, l, c)).join('')}${mkt ? sortTh('ind-sort', F.rankSort, F.rankDir, 'daily', '日均成交', 'num') + sortTh('ind-sort', F.rankSort, F.rankDir, 'score', '<span title="每小时利润 40%、日均成交额 30%、利润率 20%、买卖价差 10%">评分</span>', 'num') : '<th class="num">日均成交</th>'}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="${mkt ? 9 : 8}" class="text-muted">没有符合条件的产品</td></tr>`}</tbody></table></div></div>`;
+  if (mkt) return;
   // 前 25 行的成交量
   let i = 0;
   const ids = top.slice(0, 25).map((x) => x.pid);
@@ -820,14 +949,16 @@ function renderWhere(body) {
 
 // ---------- 我的工业 ----------
 async function renderMine(body) {
+  const pasted = Plan.pastedBps();
   if (!ctx.hasEsiToken()) {
-    body.innerHTML = '<div class="pi-empty"><p>绑定 ESI 后可查看角色的工业任务与蓝图</p></div>';
+    if (!pasted) { body.innerHTML = `<div class="pi-empty"><p>绑定 ESI 后可查看角色的工业任务与蓝图</p></div>${pasteCard(null)}`; return; }
+    await drawMine(body, { hint: '绑定 ESI 后可查看工业任务' }, pasted.list, pasted);
     return;
   }
   body.innerHTML = '<div class="pi-loading">读取工业任务与蓝图…</div>';
   const token = await ctx.ensureEsiToken();
   const id = token.character_id;
-  const [jobs, bps] = await Promise.all([
+  let [jobs, bps] = await Promise.all([
     ctx.esiAuthFetch(`/characters/${id}/industry/jobs/?include_completed=true`).catch((e) => ({ error: e.message })),
     // 曙光服登录不支持蓝图权限，令牌里没有就不去请求
     token.scopes && ![].concat(token.scopes).join(' ').includes('esi-characters.read_blueprints.v1')
@@ -835,11 +966,29 @@ async function renderMine(body) {
       : ctx.esiAuthFetch(`/characters/${id}/blueprints/`).catch((e) => ({ error: e.message }))
   ]);
   if (F.tab !== 'mine') return;
+  // ESI 读不到蓝图时用粘贴导入的
+  if (bps.error && pasted) bps = pasted.list;
+  await drawMine(body, jobs, bps, bps === pasted?.list ? pasted : null);
+}
+
+// 粘贴导入游戏蓝图（ESI 读不到时使用；读得到时也可以导入，作为备用）
+function pasteCard(pasted) {
+  const at = pasted ? new Date(pasted.at).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  return `<details class="pi-card ind-paste-bp"${pasted ? '' : ' open'}>
+    <summary><h3>粘贴导入游戏蓝图</h3><span class="text-muted">${pasted ? `已导入 ${pasted.list.length} 张 · ${at}` : '曙光服或未授权蓝图权限时使用'}</span></summary>
+    <p class="pi-note">在游戏工业窗口的蓝图页（或机库）选中蓝图，Ctrl+A、Ctrl+C 后粘贴到这里。每行认出蓝图名，后面的数字依次作为 ME、TE、剩余流程；写「原图」或没有流程数的算原图。也可以手写，例如「乌鸦级蓝图 10 20 原图」「毒蜥级蓝图 2 4 10」</p>
+    <textarea class="pi-input ind-paste-text" id="indBpPaste" rows="6" placeholder="乌鸦级蓝图	10	20	原图"></textarea>
+    <div class="ind-paste-actions"><button type="button" class="btn btn-primary" data-bp-paste="save">导入</button>${pasted ? '<button type="button" class="btn btn-ghost" data-bp-paste="clear">清除已导入</button>' : ''}<span class="text-muted" id="indBpPasteMsg"></span></div>
+  </details>`;
+}
+
+async function drawMine(body, jobs, bps, pasted) {
   const esc = ctx.esc, num = ctx.formatNumber;
   const name = (tid) => D.data.types[tid]?.[0] || '物品 ' + tid;
   const now = Date.now();
   let jobsHtml;
-  if (jobs.error) jobsHtml = `<p class="text-muted">工业任务读取失败：${esc(jobs.error)}</p>`;
+  if (jobs.hint) jobsHtml = `<p class="text-muted">${esc(jobs.hint)}</p>`;
+  else if (jobs.error) jobsHtml = `<p class="text-muted">工业任务读取失败：${esc(jobs.error)}</p>`;
   else if (!jobs.length) jobsHtml = '<p class="text-muted">最近没有工业任务</p>';
   else {
     const order = { active: 0, ready: 1, paused: 2 };
@@ -879,7 +1028,8 @@ async function renderMine(body) {
   }
   body.innerHTML = `
     <div class="pi-card"><div class="pi-card-head"><h3>工业任务</h3></div>${jobsHtml}</div>
-    <div class="pi-card"><div class="pi-card-head"><h3>我的蓝图</h3></div>${bpsHtml}</div>`;
+    <div class="pi-card"><div class="pi-card-head"><h3>我的蓝图</h3>${pasted ? '<span class="ind-tag-paste">粘贴导入</span>' : ''}</div>${bpsHtml}</div>
+    ${pasteCard(Plan.pastedBps())}`;
 }
 
 // ---------- 侧栏 ----------
@@ -888,6 +1038,7 @@ const SIDE_TABS = [
   ['plan', '制造规划', '<path d="M4 6h16M4 12h10M4 18h7"/><path d="M17 15v6M14 18h6"/>'],
   ['rank', '利润排行', '<path d="M3 20h18"/><path d="M6 16V10M12 16V5M18 16v-8"/>'],
   ['where', '制造地点', '<circle cx="12" cy="10" r="3"/><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/>'],
+  ['npc', 'NPC 蓝图', '<path d="M3 21h18M5 21V9l7-5 7 5v12"/><path d="M9 21v-6h6v6"/>'],
   ['mine', '我的工业', '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>']
 ];
 
@@ -990,6 +1141,19 @@ function onClick(e) {
     drawCalc();
     return;
   }
+  const bpp = e.target.closest('[data-bp-paste]');
+  if (bpp) {
+    if (bpp.dataset.bpPaste === 'clear') { Plan.savePastedBps(null); renderTab(); return; }
+    const { list, unknown } = Plan.parseBlueprintPaste($('indBpPaste')?.value);
+    const msg = $('indBpPasteMsg');
+    if (!list.length) { if (msg) msg.textContent = '没有认出蓝图' + (unknown.length ? `（如：${unknown.slice(0, 2).join('、')}）` : ''); return; }
+    Plan.savePastedBps(list);
+    ctx.showToast(`已导入 ${list.length} 张蓝图${unknown.length ? `，${unknown.length} 行没认出` : ''}`, 'success', 2600);
+    renderTab();
+    return;
+  }
+  const nb = e.target.closest('[data-npc-bp]');
+  if (nb) { NPC.q = tName(nb.dataset.npcBp); NPC.fac = ''; NPC.region = ''; F.tab = 'npc'; save(); renderTab(); return; }
   const rf = e.target.closest('[data-ind-rankf]');
   if (rf) {
     const k = rf.dataset.indRankf;
@@ -1079,6 +1243,12 @@ function onChange(e) {
     F[t.dataset.indNum] = Math.min(lim[1], Math.max(lim[0], Number(t.value) || 0));
     t.value = F[t.dataset.indNum];
     save(); renderSettings(); refresh();
+  } else if (t.dataset.npcF) {
+    NPC[t.dataset.npcF] = t.value;
+    if (t.dataset.npcF === 'fac') NPC.region = '';
+    renderNpc($('indBody'));
+  } else if (t.dataset.indRankn) {
+    F[t.dataset.indRankn] = Number(t.value) || 0; save(); renderTab();
   } else if (t.dataset.indSec) {
     F.sec[t.dataset.indSec] = t.checked; save(); refresh();
   } else if (t.dataset.indCalc) {
@@ -1097,6 +1267,7 @@ let suggestTimer = 0;
 function onInput(e) {
   const t = e.target;
   clearTimeout(suggestTimer);
-  if (t.id === 'indSys') suggestTimer = setTimeout(() => sysSuggest(t.value.trim()), 120);
+  if (t.id === 'indNpcQ') suggestTimer = setTimeout(() => { NPC.q = t.value.trim(); drawNpcList(); }, 150);
+  else if (t.id === 'indSys') suggestTimer = setTimeout(() => sysSuggest(t.value.trim()), 120);
   else if (t.id === 'indProd') suggestTimer = setTimeout(() => productSuggest(t.value), 120);
 }

@@ -2,7 +2,8 @@
 // 数据：击杀记录服务 GET /api/v1/hubs/arbitrage?server=，每 30 分钟汇总当前服务器五个交易中心的全部挂单
 //      （每个物品每个交易中心：最低卖 / 最高收、最优价 5% 以内的深度）与星域日均成交（宁静服 EVE Ref 每日历史，国服逐个查 ESI，缓存 1 天）。
 // 路线与利润的算法与单个物品的「交易中心比价」相同（hub-compare.js 的 calcRoutes），技能与税费用全站设置；每个物品只列筛选条件下最好的一条路线。
-import { calcRoutes, ROUTE_SORT, MODES, setHubMode } from './hub-compare.js?v=v3';
+// 运费设置与单品比价共用（跨中心路线扣 包装体积 × 每立方运费 + 抵押费），可按每立方利润排序（适合按货舱容量选品）
+import { calcRoutes, ROUTE_SORT, MODES, setHubMode, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v4';
 
 let ctx = null;   // server, regions, esc, formatISK, formatPrice, formatNumber, TF, typeName, category, isGlobal, iconUrl, openItem
 const LIMIT = 200;
@@ -11,7 +12,7 @@ const POLL_VOLUME = 20000;   // 服务器还在读成交量时，隔一会儿取
 const MIN_PROFIT = [[0, '不限'], [1e6, '100 万'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿']];
 const MIN_DAILY = [[0, '不限'], [10, '10'], [100, '100'], [1000, '1000']];
 const F = { mode: 'sb', sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0 };
-const S = { data: null, loading: null, error: null, q: '', timer: 0, rows: null, key: '' };
+const S = { data: null, loading: null, error: null, q: '', timer: 0, rows: null, key: '', vols: {} };
 try { Object.assign(F, JSON.parse(localStorage.getItem('eve-hub-rank') || '{}')); } catch { /* 用默认 */ }
 const save = () => { try { localStorage.setItem('eve-hub-rank', JSON.stringify(F)); } catch { /* 无痕模式 */ } };
 
@@ -47,11 +48,12 @@ function hubsOf(row, names) {
 }
 
 function compute() {
-  const key = JSON.stringify([F, ctx.TF.summary(), S.data?.updated]);
+  const key = JSON.stringify([F, ctx.TF.summary(), S.data?.updated, freight()]);
   if (S.rows && S.key === key) return S.rows;
   const f = ctx.TF.fees();
   const names = S.data.hubs.map((id) => ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id);
   const score = ROUTE_SORT[F.sort] || ROUTE_SORT.profit;
+  const fr = freight();
   const rows = [];
   for (const [tid, row] of Object.entries(S.data.types)) {
     const id = Number(tid);
@@ -59,7 +61,7 @@ function compute() {
     const cat = ctx.category(id);
     if (!cat || (F.cat && cat.id !== F.cat)) continue;
     let best = null;
-    for (const r of calcRoutes(hubsOf(row, names), F.mode, f)) {
+    for (const r of calcRoutes(hubsOf(row, names), F.mode, f, { vol: S.vols[id] || 0, ...fr })) {
       if (r.unit <= 0 || !r.qty || r.total < F.minProfit) continue;
       if (F.from && r.a.id !== F.from) continue;
       if (F.to && r.b.id !== F.to) continue;
@@ -101,6 +103,7 @@ function html() {
       <td class="num pi-hide-sm">${px(r.sellAt)}</td>
       <td class="num up">+${px(r.unit)}</td>
       <td class="num up">${(r.margin * 100).toFixed(1)}%</td>
+      <td class="num pi-hide-sm" title="${r.vol ? formatNumber(r.vol) + ' m³ / 件' : '体积未知'}">${r.perM3 != null ? formatISK(r.perM3) : '—'}</td>
       <td class="num">${formatNumber(r.qty)}</td>
       <td class="num pi-hide-sm">${formatISK(r.cost * r.qty)}</td>
       <td class="num up">${formatISK(r.total)}</td></tr>`;
@@ -122,14 +125,15 @@ function html() {
       <div class="ind-rank-row">
         <div class="pi-inline"><span>预计利润 ≥</span>${select('minProfit', MIN_PROFIT)}</div>
         <div class="pi-inline"><span>日均成交 ≥</span>${select('minDaily', MIN_DAILY)}</div>
-        <div class="pi-inline"><span>排序</span>${seg('sort', [['profit', '预计利润'], ['margin', '利润率'], ['unit', '每件利润']])}</div>
+        <div class="pi-inline"><span>排序</span>${seg('sort', [['profit', '预计利润'], ['margin', '利润率'], ['unit', '每件利润'], ['m3', '每立方利润']])}</div>
       </div>
+      <div class="ind-rank-row">${freightHtml('hr')}</div>
       <p class="pi-note" title="可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。">
-        ${list.length} 个物品有利润${list.length > LIMIT ? `，显示前 ${LIMIT}` : ''} · 未计运费 · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}</p>
+        ${list.length} 个物品有利润${list.length > LIMIT ? `，显示前 ${LIMIT}` : ''} · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table hr-table"><thead><tr>
-      <th class="pi-hide-sm">#</th><th>物品</th><th>路线</th><th class="num pi-hide-sm">买入价</th><th class="num pi-hide-sm">卖出价</th><th class="num">每件利润</th><th class="num">利润率</th><th class="num">可做数量</th><th class="num pi-hide-sm">投入</th><th class="num">预计利润</th>
-    </tr></thead><tbody>${rows || `<tr><td colspan="10" class="text-muted">${noVol ? '成交量还在读取中，挂单方式暂时算不出可做数量' : '没有符合条件的路线'}</td></tr>`}</tbody></table></div></div>
+      <th class="pi-hide-sm">#</th><th>物品</th><th>路线</th><th class="num pi-hide-sm">买入价</th><th class="num pi-hide-sm">卖出价</th><th class="num">每件利润</th><th class="num">利润率</th><th class="num pi-hide-sm">每立方</th><th class="num">可做数量</th><th class="num pi-hide-sm">投入</th><th class="num">预计利润</th>
+    </tr></thead><tbody>${rows || `<tr><td colspan="11" class="text-muted">${noVol ? '成交量还在读取中，挂单方式暂时算不出可做数量' : '没有符合条件的路线'}</td></tr>`}</tbody></table></div></div>
   </div>`;
 }
 
@@ -167,6 +171,7 @@ function poll(box) {
 
 export async function showHubRank(box) {
   if (!box.dataset.bound) bind(box);
+  S.vols = await loadVolumes();
   if (!S.data || S.data.loading) await load();
   render(box);
 }
@@ -193,7 +198,8 @@ function bind(box) {
   box.addEventListener('change', (e) => {
     const sel = e.target.closest('[data-hr-sel]');
     if (sel) { F[sel.dataset.hrSel] = Number(sel.value); save(); render(box); return; }
-    if (e.target.matches('[data-hr-local]')) { F.local = e.target.checked; save(); render(box); }
+    if (e.target.matches('[data-hr-local]')) { F.local = e.target.checked; save(); render(box); return; }
+    if (e.target.matches('[data-hr-m3],[data-hr-collat]')) { setFreight(box.querySelector('[data-hr-m3]').value, box.querySelector('[data-hr-collat]').value); render(box); }
   });
   let t = 0;
   box.addEventListener('input', (e) => {

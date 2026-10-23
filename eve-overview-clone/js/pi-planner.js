@@ -1013,6 +1013,16 @@ export async function showPi() {
     renderForm();
   }
   // 切回本页时保留表单与规划结果，不重新渲染
+  // #pi/物品：从制造规划的购物清单跳过来，直接规划这种行星产品（P0 只能自产）
+  const m = /^#pi\/(\d+)$/.exec(location.hash);
+  if (m && D.pi.commodities[m[1]]) {
+    window.history.replaceState(null, '', location.pathname + '#pi');   // 本文件有同名的 history 变量
+    F.target = Number(m[1]);
+    if (F.way === 'buy' && tierOf(F.target) === 0) F.way = 'self';
+    saveForm();
+    renderForm();
+    run();
+  }
 }
 
 function renderForm() {
