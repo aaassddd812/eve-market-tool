@@ -252,4 +252,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", CONFIG["port"]), Handler).serve_forever()
+    # 监听地址可经 config.json 的 "host" 覆盖（默认 127.0.0.1 不变）——容器/反代部署时需要 0.0.0.0
+    ThreadingHTTPServer((CONFIG.get("host", "127.0.0.1"), CONFIG["port"]), Handler).serve_forever()

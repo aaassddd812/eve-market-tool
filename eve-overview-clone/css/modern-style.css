@@ -5222,3 +5222,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .clr-method.buy { background: var(--buy-soft); color: var(--buy-color); }
 .clr-method.list { background: var(--sell-soft); color: var(--sell-color); }
 .clr-table td small.hc-sub { display: block; }
+
+/* 中英对照：英文名小字副标题（type-names-en.json 存在时生效） */
+.item-en { display: block; font-size: 11px; opacity: 0.55; line-height: 1.2; }
+.item-btn { white-space: normal; }

@@ -1072,6 +1072,8 @@ async function loadCatalog() {
     const response = await fetch('./catalog.json?v=v2r7');
     if (!response.ok) throw new Error('HTTP ' + response.status);
     state.catalog = await response.json();
+    // 中英对照：加载英文名映射（type-names-en.json 由 build_type_names_en.mjs 生成；缺失时静默降级为纯中文）
+    fetch('./type-names-en.json').then((r) => r.ok ? r.json() : {}).then((m) => { state.typeEn = m; renderCatalog(); }).catch(() => {});
     buildCatalogIndex();
     renderCatalog();
     renderQuickPicks();
@@ -1149,8 +1151,10 @@ function setCategoryExpanded(category, expanded) {
 
 function renderItem(type, extra = '') {
   const active = state.selectedItem?.id === type.id ? ' active' : '';
-  return `<button class="item-btn${active}" type="button" data-type-id="${type.id}" title="${esc(type.name)} · Type ${type.id}">
-      <span class="item-name">${extra || esc(type.name)}</span>
+  const en = state.typeEn?.[String(type.id)] || '';
+  const enHtml = en ? `<span class="item-en">${esc(en)}</span>` : '';
+  return `<button class="item-btn${active}" type="button" data-type-id="${type.id}" title="${esc(type.name)}${en ? ' / ' + esc(en) : ''} · Type ${type.id}">
+      <span class="item-name">${extra || esc(type.name)}</span>${enHtml}
     </button>`;
 }
 
@@ -1194,11 +1198,12 @@ function renderSearchResults(container) {
     const groupHit = group.name.toLowerCase().includes(query);
     group.types.forEach((type) => {
       const name = type.name.toLowerCase();
+      const enName = (state.typeEn?.[String(type.id)] || '').toLowerCase();
       let score = -1;
       if (idQuery !== null && type.id === idQuery) score = 0;
-      else if (name === query) score = 1;
-      else if (name.startsWith(query)) score = 2;
-      else if (name.includes(query)) score = 3;
+      else if (name === query || enName === query) score = 1;
+      else if (name.startsWith(query) || enName.startsWith(query)) score = 2;
+      else if (name.includes(query) || enName.includes(query)) score = 3;
       else if (groupHit) score = 4;
       if (score >= 0) results.push({ type, group, score });
     });
