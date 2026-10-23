@@ -6,7 +6,7 @@
 //   重新激活冷却 = max(跳前疲劳 ÷ 10, 1 + 有效光年) 分钟，上限 30 分钟
 //   有效光年 = 实际光年 × 疲劳系数；疲劳随时间每分钟减少 1 分钟
 
-import { SERVER, serverKey } from './server.js?v=s3';
+import { SERVER, serverKey } from './server.js?v=s4';
 
 export const LY = 9.4607304725808;
 const RANGE_MARGIN = 0.002;              // 坐标保留 2 位小数，留出误差余量，宁可少算一个边缘星系

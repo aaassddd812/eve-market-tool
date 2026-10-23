@@ -15,7 +15,7 @@
 //   安装费 = EIV × 星系指数 × (1 − 建筑减免) + EIV × (设施税 + 4% SCC 附加费)
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
-import { SERVER, HUB, HUB_NAME } from './server.js?v=s3';
+import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
 import * as Plan from './ind-plan.js?v=v2';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);

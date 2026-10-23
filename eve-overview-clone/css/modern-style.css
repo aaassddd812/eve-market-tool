@@ -1919,6 +1919,7 @@ td.loc {
 .map-zoom button { width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; color: #c9d3e0; font-size: 1.125rem; }
 .map-zoom button + button { border-top: 1px solid #2a3446; }
 .map-zoom button:hover { background: rgba(79, 143, 247, 0.18); color: #fff; }
+.map-zoom button.map-view-toggle { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.02em; }
 .map-zoom button[hidden] + button { border-top: none; }
 .map-zoom svg { width: 16px; height: 16px; }
 .map-hint { position: absolute; left: 16px; bottom: 14px; z-index: 2; font-size: 0.6875rem; color: rgba(201, 211, 224, 0.55); pointer-events: none; }

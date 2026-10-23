@@ -28,7 +28,7 @@ const SERVERS = {
     kb: true,          // 自建击杀记录服务与 zKillboard 只收录宁静服
     kbSite: null,
     lpData: 'lp-data.json?v=1',
-    mapData: './map-data.json?v=v7r1',
+    mapData: './map-data.json?v=v7r2',
     image: null,
     sub: '国际服 · Tranquility',
     regions: JITA_REGIONS
@@ -45,7 +45,7 @@ const SERVERS = {
     // 国服击坠榜：数据接口有人机验证、不开放跨域，只能外链过去查看
     kbSite: { name: '国服击坠榜', url: 'https://beta.ceve-market.org' },
     lpData: 'lp-data-serenity.json?v=1',
-    mapData: './map-data.json?v=v7r1',   // 晨曦星图与宁静相同
+    mapData: './map-data.json?v=v7r2',   // 晨曦星图与宁静相同
     image: 'https://image.evepc.163.com',
     sub: '国服 · Serenity',
     regions: JITA_REGIONS

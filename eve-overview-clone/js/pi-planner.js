@@ -5,7 +5,7 @@
 // 数据：pi-data.json（build_pi.mjs 从 SDE 生成），map-data.json（星系、星门、星域）。
 import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r7';
 import { angle } from './pi-globe.js?v=v19r12';
-import { SERVER, HUB, HUB_NAME } from './server.js?v=s3';
+import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, store, getHubPrices(ids) -> Map(id -> {sell, buy}), getMarketPriceMap
 const $ = (id) => document.getElementById(id);

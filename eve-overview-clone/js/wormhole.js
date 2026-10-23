@@ -4,7 +4,7 @@
 // 虫洞类型：全部虫洞代码的通往、出现位置、存活时间、质量与可通过船型。天象：六种天象各等级的效果。
 // 质量计算：按虫洞总质量（±10% 随机）逐跳推算剩余质量、状态与塌洞风险。席拉连接：EVE-Scout 公开的席拉 / 图尔努尔实时虫洞（仅宁静服），按跳数排序。
 // 数据：wh-data.json 由 build_wormholes.mjs 生成（CCP SDE + anoik.is 的固定出口）；星图跳数用当前服务器的 map-data。
-import { SERVER, IS_TQ } from './server.js?v=s3';
+import { SERVER, IS_TQ } from './server.js?v=s4';
 
 let ctx = null;   // esc, formatISK, formatNumber, showToast, store, loadKillboard, planPi, resolveTypeNames
 const $ = (id) => document.getElementById(id);

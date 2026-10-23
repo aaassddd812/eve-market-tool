@@ -8,7 +8,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import * as JP from './jump-planner.js?v=v15';
-import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s3';
+import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s4';
 
 let app;               // 主程序提供的工具函数
 let canvas, labels, lg; // WebGL 画布、标签画布及其 2D 上下文
@@ -36,8 +36,12 @@ const M = {
   running: false,
   tween: null,
   screen: null,        // Float32Array [x, y, depth] 每个星系的屏幕坐标（每帧更新，用于命中测试与标签）
-  size: { w: 0, h: 0, dpr: 1 }
+  size: { w: 0, h: 0, dpr: 1 },
+  view: '3d',          // 星图视图：3d（默认）/ 2d（游戏 2D 星图排布，俯视）
+  morph: null          // 2D / 3D 切换过渡 { t0, dur, from, to, cur }
 };
+const VIEW_KEY = 'eve-map-view';
+try { if (localStorage.getItem(VIEW_KEY) === '2d') M.view = '2d'; } catch { /* 忽略 */ }
 
 const LIVE_TTL = 10 * 60e3;    // 实时数据缓存 10 分钟
 const MAP_BG = '#05080d';
@@ -148,8 +152,13 @@ async function loadStatic() {
     M.regions.set(id, { id, name, faction, description, cx: 0, cy: 0, cz: 0, systems: [] });
   }
   for (const [id, name, region] of data.constellations) M.constellations.set(id, { id, name, region });
-  M.systems = data.systems.map(([id, name, x, y, z, sec, region, constellation, faction, star, planets, stations], i) =>
-    ({ i, id, name, x, y, z, sec, region, constellation, faction, star, planets, stations, nbr: [], lower: name.toLowerCase() }));
+  // x / y / z 为真实三维坐标（光年计算用）；rx / ry / rz 为当前画面坐标，3D 时等于真实坐标，2D 时为游戏 2D 星图的平面排布
+  // 星图数据没有 2D 坐标的服务器（曙光）只有 3D
+  M.has2d = data.systems[0]?.[12] != null;
+  if (!M.has2d) M.view = '3d';
+  M.systems = data.systems.map(([id, name, x, y, z, sec, region, constellation, faction, star, planets, stations, p2], i) =>
+    ({ i, id, name, x, y, z, sec, region, constellation, faction, star, planets, stations, nbr: [], lower: name.toLowerCase(),
+      p2: p2 ? [p2[0], 0, p2[1]] : [x, y, z], rx: x, ry: y, rz: z }));
   for (const s of M.systems) {
     M.byId.set(s.id, s);
     const r = M.regions.get(s.region);
@@ -161,6 +170,82 @@ async function loadStatic() {
   M.gates = data.gates;
   for (const [a, b] of M.gates) { M.systems[a].nbr.push(b); M.systems[b].nbr.push(a); }
   M.screen = new Float32Array(M.systems.length * 3);
+  setRenderPositions(M.view === '2d' ? 1 : 0, false);
+}
+
+// ---------- 2D / 3D ----------
+// t：0 = 3D，1 = 2D，切换时在两者之间插值做过渡动画
+function setRenderPositions(t, apply = true) {
+  for (const s of M.systems) {
+    s.rx = s.x + (s.p2[0] - s.x) * t;
+    s.ry = s.y * (1 - t);
+    s.rz = s.z + (s.p2[2] - s.z) * t;
+  }
+  for (const r of M.regions.values()) {
+    let x = 0, y = 0, z = 0;
+    for (const i of r.systems) { const s = M.systems[i]; x += s.rx; y += s.ry; z += s.rz; }
+    const n = r.systems.length || 1;
+    r.rcx = x / n; r.rcy = y / n; r.rcz = z / n;
+  }
+  if (!apply || !starPoints) return;
+  const pos = starPoints.geometry.attributes.position;
+  for (const s of M.systems) pos.setXYZ(s.i, s.rx, s.ry, s.rz);
+  pos.needsUpdate = true;
+  for (const [lines, same] of [[gateLinesInner, true], [gateLinesCross, false]]) {
+    const lp = lines.geometry.attributes.position;
+    let n = 0;
+    for (const [a, b] of M.gates) {
+      const sa = M.systems[a], sb = M.systems[b];
+      if ((sa.region === sb.region) !== same) continue;
+      lp.setXYZ(n++, sa.rx, sa.ry, sa.rz);
+      lp.setXYZ(n++, sb.rx, sb.ry, sb.rz);
+    }
+    lp.needsUpdate = true;
+    lines.geometry.computeBoundingSphere();
+  }
+  starPoints.geometry.computeBoundingSphere();
+  updateRouteLine();
+  invalidate();
+}
+
+// 2D：俯视、不能旋转，左键平移；3D：左键旋转、右键平移
+function applyControlMode() {
+  const flat = M.view === '2d';
+  controls.enableRotate = !flat;
+  controls.mouseButtons = { LEFT: flat ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+  controls.touches = { ONE: flat ? THREE.TOUCH.PAN : THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  $('mapTopView').hidden = flat;
+  const btn = $('mapViewToggle');
+  btn.hidden = !M.has2d;
+  btn.textContent = flat ? '3D' : '2D';
+  btn.title = flat ? '切换到 3D 星图 (V)' : '切换到 2D 星图 (V)';
+  btn.setAttribute('aria-pressed', String(flat));
+  $('mapHint').textContent = flat ? '拖动平移 · 滚轮缩放 · 双击聚焦' : '拖动旋转 · 右键平移 · 滚轮缩放 · 双击聚焦';
+}
+
+function setView(view) {
+  if (!M.has2d || (view === M.view && !M.morph)) return;
+  M.view = view;
+  try { localStorage.setItem(VIEW_KEY, view); } catch { /* 忽略 */ }
+  applyControlMode();
+  const from = M.morph ? M.morph.cur : view === '2d' ? 0 : 1, to = view === '2d' ? 1 : 0;
+  // 镜头按切换后的坐标定位：有选中星系时对准它（保持距离），否则显示全部；2D 为正上方俯视，3D 恢复斜视
+  setRenderPositions(to, false);
+  if (M.selected != null) {
+    const sel = M.systems[M.selected];
+    flyTo(new THREE.Vector3(sel.rx, sel.ry, sel.rz), camera.position.distanceTo(controls.target), view === '2d' ? TOP_DIR : OVERVIEW_DIR);
+  } else fitAll();
+  setRenderPositions(from, false);
+  M.tween.dur = 700;
+  M.morph = { t0: performance.now(), dur: 700, from, to, cur: from };
+}
+
+function stepMorph() {
+  const m = M.morph;
+  const t = Math.min(1, (performance.now() - m.t0) / m.dur);
+  m.cur = m.from + (m.to - m.from) * easeInOut(t);
+  setRenderPositions(m.cur);
+  if (t >= 1) M.morph = null;
 }
 
 // 进行中的请求复用同一个 Promise（空闲预取与打开星图可能同时触发）
@@ -348,7 +433,7 @@ function buildScene() {
   const inner = [], cross = [];
   for (const [a, b] of M.gates) {
     const sa = M.systems[a], sb = M.systems[b];
-    (sa.region === sb.region ? inner : cross).push(sa.x, sa.y, sa.z, sb.x, sb.y, sb.z);
+    (sa.region === sb.region ? inner : cross).push(sa.rx, sa.ry, sa.rz, sb.rx, sb.ry, sb.rz);
   }
   const lineMat = (color, opacity) => new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
   const lineGeo = (arr) => { const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3)); return geo; };
@@ -359,7 +444,7 @@ function buildScene() {
   // 星系
   const n = M.systems.length;
   const pos = new Float32Array(n * 3);
-  M.systems.forEach((s) => pos.set([s.x, s.y, s.z], s.i * 3));
+  M.systems.forEach((s) => pos.set([s.rx, s.ry, s.rz], s.i * 3));
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
@@ -417,7 +502,7 @@ function updateRouteLine() {
   if (!routeLine) return;   // 场景尚未建立（初始化时恢复上次的规划方式）
   if (M.route.length < 2) { routeLine.visible = false; invalidate(); return; }
   const pts = [];
-  for (const i of M.route) { const s = M.systems[i]; pts.push(s.x, s.y, s.z); }
+  for (const i of M.route) { const s = M.systems[i]; pts.push(s.rx, s.ry, s.rz); }
   routeLine.geometry.dispose();
   routeLine.geometry = new LineGeometry();
   routeLine.geometry.setPositions(pts);
@@ -453,7 +538,7 @@ function fitTo(indices, padding = 1.15, direction) {
   if (!indices.length) return;
   const box = new THREE.Box3();
   const v = new THREE.Vector3();
-  for (const i of indices) { const s = M.systems[i]; box.expandByPoint(v.set(s.x, s.y, s.z)); }
+  for (const i of indices) { const s = M.systems[i]; box.expandByPoint(v.set(s.rx, s.ry, s.rz)); }
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   const radius = Math.max(sphere.radius, 6);
   const fov = THREE.MathUtils.degToRad(camera.fov);
@@ -463,12 +548,13 @@ function fitTo(indices, padding = 1.15, direction) {
 
 // 默认视角：从南方上空斜看整个新伊甸，接近旧版游戏星图
 const OVERVIEW_DIR = new THREE.Vector3(0, 1.35, 1);
-function fitAll(direction = OVERVIEW_DIR) {
+const TOP_DIR = new THREE.Vector3(0, 1, 0.0001);
+function fitAll(direction = M.view === '2d' ? TOP_DIR : OVERVIEW_DIR) {
   fitTo(M.systems.map((s) => s.i), 0.7, direction);
 }
 
 function topView() {
-  fitTo(M.systems.map((s) => s.i), 0.78, new THREE.Vector3(0, 1, 0.0001));
+  fitTo(M.systems.map((s) => s.i), 0.78, TOP_DIR);
 }
 
 function dolly(factor) {
@@ -481,7 +567,7 @@ const NARROW = window.matchMedia('(max-width: 768px)');
 function centerOn(i, maxDistance = 45) {
   const s = M.systems[i];
   const dist = Math.min(camera.position.distanceTo(controls.target), maxDistance);
-  const target = new THREE.Vector3(s.x, s.y, s.z);
+  const target = new THREE.Vector3(s.rx, s.ry, s.rz);
   if (NARROW.matches) {
     // 手机端信息面板是底部卡片（约占下半屏）：把焦点沿屏幕向下移，让星系显示在上方 1/4 处
     const dir = camera.position.clone().sub(controls.target).normalize();
@@ -517,8 +603,9 @@ function loop() {
   if (!M.running) return;
   requestAnimationFrame(loop);
   if (M.tween) stepTween();
+  if (M.morph) stepMorph();
   const moved = controls.update();
-  if (moved || M.dirty || M.tween || M.flashes.length || M.battles.length) render();
+  if (moved || M.dirty || M.tween || M.morph || M.flashes.length || M.battles.length) render();
 }
 
 const proj = new THREE.Vector3();
@@ -545,7 +632,7 @@ function updateFocus() {
   add(M.hover, 1);
   items.forEach(([i, b], n) => {
     const s = M.systems[i];
-    pos.setXYZ(n, s.x, s.y, s.z);
+    pos.setXYZ(n, s.rx, s.ry, s.rz);
     // 被颜色说明淡化的星系高亮时恢复当前着色
     tmpColor.setStyle(layerCache ? layerCache.colors[i] : '#ffffff');
     col.setXYZ(n, tmpColor.r, tmpColor.g, tmpColor.b);
@@ -562,7 +649,7 @@ function render() {
 
   // 每个星系的屏幕坐标：命中测试与标签共用
   for (const s of M.systems) {
-    const [sx, sy, sz] = project(s.x, s.y, s.z);
+    const [sx, sy, sz] = project(s.rx, s.ry, s.rz);
     M.screen[s.i * 3] = sx;
     M.screen[s.i * 3 + 1] = sy;
     M.screen[s.i * 3 + 2] = sz;
@@ -678,7 +765,7 @@ function drawLabels() {
     lg.font = `600 12px ${font}`;
     const regions = [...M.regions.values()].filter((r) => r.systems.length).sort((a, b) => b.systems.length - a.systems.length);
     for (const r of regions) {
-      const [sx, sy, sz] = project(r.cx, r.cy, r.cz);
+      const [sx, sy, sz] = project(r.rcx, r.rcy, r.rcz);
       if (sz <= -1 || sz >= 1 || sx < -80 || sx > w + 80 || sy < -20 || sy > h + 20) continue;
       const width = lg.measureText(r.name).width;
       if (!place(sx - width / 2 - 3, sy - 8, width + 6, 16)) continue;
@@ -758,6 +845,8 @@ function bindCanvas() {
   $('mapZoomOut').addEventListener('click', () => dolly(1 / 0.6));
   $('mapZoomReset').addEventListener('click', () => fitAll());
   $('mapTopView').addEventListener('click', topView);
+  $('mapViewToggle').addEventListener('click', () => setView(M.view === '2d' ? '3d' : '2d'));
+  applyControlMode();
   $('mapMyLocation').addEventListener('click', locateMe);
   new ResizeObserver(() => { if (!$('mapView').hidden) resize(); }).observe($('mapStage'));
 }
@@ -2129,7 +2218,8 @@ export function initStarMap(context) {
     if (e.key === '+' || e.key === '=') dolly(0.7);
     else if (e.key === '-') dolly(1 / 0.7);
     else if (e.key === '0') fitAll();
-    else if (e.key === 't' || e.key === 'T') topView();
+    else if (e.key === 't' || e.key === 'T') { if (M.view !== '2d') topView(); }
+    else if (e.key === 'v' || e.key === 'V') setView(M.view === '2d' ? '3d' : '2d');
     else if (e.key === 'Escape' && !$('mapInfo').hidden) closeInfo();
   });
 }

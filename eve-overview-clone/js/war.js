@@ -5,7 +5,7 @@
 //   /wars/{id}/killmails/ 击杀 ID + hash，再读 /killmails/{id}/{hash}/，价值按 ESI 全服均价估算（与国服战斗记录同一套）。
 // 刷新倒计时：按 ESI 响应的 Expires 头（跨域可读的安全响应头）显示星系争夺进度（约每 30 分钟更新）与阵营统计 / 排行榜的下次刷新时间，
 //   归零后自动重新读取并就地更新（至少间隔 60 秒，避免 ESI 缓存未及时更新时反复请求）。
-import { esiUrl } from './server.js?v=s3';
+import { esiUrl } from './server.js?v=s4';
 
 let ctx;   // esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem
 const S = { tab: 'fw', board: 'characters', metric: 'kills', period: 'last_week', warFilter: 'active', wars: [], warIds: [], nextMax: null, warLoading: false };

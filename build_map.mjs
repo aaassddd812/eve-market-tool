@@ -74,13 +74,15 @@ await eachLine("factions", (o) => {
 const output = {
   source: "CCP SDE (JSONL)",
   generatedAt: new Date().toISOString(),
-  // [id, 中文名, x, y, z, 安全等级, 星域ID, 星座ID, 阵营ID, 恒星类型ID, 行星数, [NPC空间站ID]]
+  // [id, 中文名, x, y, z, 安全等级, 星域ID, 星座ID, 阵营ID, 恒星类型ID, 行星数, [NPC空间站ID], [2D 星图 x, z]]
+  // 2D 坐标为 SDE position2D（游戏 2D 星图的排布），同样缩放并转换为 (x, -y)，星图「2D」视图用
   systems: systems.map((s) => [
     s._key, zh(s.name),
     round(s.position.x / 1e15, 2), round(s.position.y / 1e15, 2), round(-s.position.z / 1e15, 2),
     round(s.securityStatus, 3), s.regionID, s.constellationID, s.factionID || 0,
     starType.get(s.starID) || 0, (s.planetIDs || []).length,
-    stationsBySystem.get(s._key) || []
+    stationsBySystem.get(s._key) || [],
+    [round(s.position2D.x / 1e15, 2), round(-s.position2D.y / 1e15, 2)]
   ]),
   gates,
   regions: regions.sort((a, b) => a[0] - b[0]),

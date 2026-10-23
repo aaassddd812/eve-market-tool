@@ -7,7 +7,7 @@
 // 声望来源：manual 手填 / char 角色声望（ESI /characters/{id}/standings/），按挂单空间站的所属军团与其阵营取值。
 // 其它页面（估价页的化矿技能）也可以用 level() 与 skillFormHtml() 共享这套技能设置。
 
-import { SERVER } from './server.js?v=s3';
+import { SERVER } from './server.js?v=s4';
 
 const KEY = 'eve-trade-fees-v1';
 export const SKILL = { accounting: 16622, brokerRel: 3446 };

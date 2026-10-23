@@ -6,7 +6,7 @@
 // 路线：map-data.json 星门图上做广度优先搜索；「安全优先」时起终点都在高安则只走高安，走不通再用最短路线。
 // 推荐用船：按体积、抵押与路线安全从工业舰 / 封锁运输舰 / 深空运输舰 / 货舰 / 跳货中挑选，装配与容量见 courier-ships.js；
 //           路线经过低安 / 00 时默认跳货优先（可改），跳货另用跳跃规划算出跳跃次数与燃料。
-import { SERVER, IS_TQ, HUB, HUB_NAME } from './server.js?v=s3';
+import { SERVER, IS_TQ, HUB, HUB_NAME } from './server.js?v=s4';
 import { SHIPS as HULLS, MODULES } from './courier-ships.js?v=v1';
 import { planJumpRoute, canJumpInto } from './jump-planner.js?v=v15';
 

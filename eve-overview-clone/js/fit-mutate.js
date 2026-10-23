@@ -7,7 +7,7 @@
 // 宁静服：属性表下方是参考估价卡片（套用的在售装备且属性未改时取它的 MutaMarket 估价，否则按当前属性用本站模型）；
 // 点「深渊市场在售」才读取并以卡片列出同类在售装备（MutaMarket，/api/v1/abyssal/list），可对比属性、一键套用。
 //   存为装备的 abyssal: { value, src: 'item'（MutaMarket）| 'model'（本站模型）| 'similar', item, include }，include 时计入装配估价。
-import { IS_TQ, SERVER } from './server.js?v=s3';
+import { IS_TQ, SERVER } from './server.js?v=s4';
 
 let app, FE;
 let D = null;        // 解析后的数据

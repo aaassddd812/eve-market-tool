@@ -1,7 +1,7 @@
 // ===== 击杀记录装配 =====
 // 列出当前舰船最近 N 天阵亡时的装配（击杀记录服务 /api/kb/shipfits，最多分析最近 300 次损失），
 // 只看装备时相同的装配合并为一组（弹药、无人机数量不同不影响），按出现次数排序，点「套用」载入装配页。
-import { SERVER, NO_KB_MESSAGE } from './server.js?v=s3';
+import { SERVER, NO_KB_MESSAGE } from './server.js?v=s4';
 let ctx;   // data, FE, getFit, applyFit, esc, formatNumber, formatISK, showToast, store
 const $ = (id) => document.getElementById(id);
 const KEY = 'eve-fit-kb-days';

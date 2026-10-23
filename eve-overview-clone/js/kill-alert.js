@@ -11,7 +11,7 @@
 //   只有宁静服可用：实时缓冲里每条击杀带全部玩家攻击者的角色 ID（att）；国服没有公开的个人击杀数据。
 // 浏览器后台标签页的定时器会被降频（约每分钟一次），预警可能延迟。
 
-import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s3';
+import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s4';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');

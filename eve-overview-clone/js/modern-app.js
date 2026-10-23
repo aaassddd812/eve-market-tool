@@ -2,7 +2,7 @@ import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
 import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v4';
 import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v3';
-import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s3';
+import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
 // ===== 配置与常量 =====
 const IMAGE_BASE = 'https://images.evetech.net/types';
@@ -778,7 +778,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v29').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v31').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -996,11 +996,10 @@ function initSidebar() {
   // 侧栏标签
   $$('#sidebar .sidebar-tabs .tab-btn').forEach((btn) => btn.addEventListener('click', () => switchSidebarTab(btn.dataset.tab)));
 
-  $('arbRankBtn').addEventListener('click', () => openArb());
   $('watchBoardBtn').addEventListener('click', () => openWatch());
   $('favBoardBtn')?.addEventListener('click', () => openWatch());
   $('emptyArbBtn').addEventListener('click', () => openArb());
-  if (REGIONS.length < 2) { $('arbRankBtn').hidden = true; $('emptyArbBtn').hidden = true; }
+  if (REGIONS.length < 2) $('emptyArbBtn').hidden = true;
   $('collapseAllBtn').addEventListener('click', () => {
     $('catalogTree').querySelectorAll('.category.expanded').forEach((el) => setCategoryExpanded(el, false));
   });

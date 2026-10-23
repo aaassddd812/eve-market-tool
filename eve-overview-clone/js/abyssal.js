@@ -5,7 +5,7 @@
 //   POST /api/v1/abyssal/appraise {type_id, item_id}：让对方从 ESI 导入 / 刷新并估价——这件装备会出现在对方公开页面，只在用户点击时调用
 // 只有宁静服：价格模型来自宁静服合同，国服的物品 ID 与价格不能混用。
 // 估价是模型预测的参考值，不是能立即成交的收购价，不计入普通的最低卖 / 最高收合计；没有模型时显示「暂无估价」，不当作 0。
-import { SERVER, IS_TQ } from './server.js?v=s3';
+import { SERVER, IS_TQ } from './server.js?v=s4';
 
 let ctx;   // esc, formatISK, formatNumber, resolveTypeNames(ids) -> Map, openDynamicItem(typeId, itemId)
 const results = new Map();   // item_id -> { state: 'loading' | 'ok' | 'missing' | 'error' | 'posting', data, error }
