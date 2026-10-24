@@ -33,6 +33,7 @@ EVE Online（欧服宁静）一站式辅助工具：市场中心、个人中心�
 - **物品估值**：所有估值处可切换吉他 / 四族贸易中心 / 全宇宙，同时给出最低卖价与最高收价（默认吉他）
 - **教程**：图文 Wiki（新伊甸学院、BWIKI、萌娘百科、EVE University 全文译文，均注明出处）+ 分类视频（站内嵌入 B 站 / YouTube）
 - **ESI 授权**：纯前端 PKCE——令牌只存在你的浏览器，本站服务器接触不到；解绑即清除，可随时在 CCP 撤销
+- **中英文界面**：右上角一键切换；默认语言按浏览器语言与时区判断（中文环境显示中文，其余显示英文），游戏内名称（物品、星系、NPC 等）用 CCP 官方英文名，搜索也可输入英文；教程里的中文 Wiki 正文保持中文
 - **手机端适配**：侧栏抽屉、卡片式击杀列表、全屏弹窗、刘海屏安全区
 
 ## 目录结构
@@ -47,6 +48,7 @@ eve-overview-clone/          # 前端 + 后端服务（详见其 README.md）
 ├── server/kb_service.py     # 击杀记录服务（EVE Ref 存档 + R2Z2 实时流）
 └── server/eve.navexor.top.conf  # nginx 配置
 build_*.mjs / build_catalog.mjs  # 从 SDE / ESI 生成静态数据的脚本
+build_names_en.py            # 生成英文版用的官方中英名称对照表 i18n/names-en.json
 ```
 
 完整功能说明、快捷键、数据来源与部署方法见 **[eve-overview-clone/README.md](eve-overview-clone/README.md)**。

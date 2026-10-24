@@ -98,9 +98,14 @@ const ICON = {
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>'
 };
 const LANGS = [['zh', '中文'], ['en', 'English'], ['both', '对照']];
+// 英文界面（js/i18n.js）：Wiki 正文、标题与简介只有中文，加 notranslate 保持原样，不做逐字替换
+const EN_UI = window.I18N?.lang === 'en';
+const NT = EN_UI ? ' notranslate' : '';
+const EN_NOTE = EN_UI ? '<p class="guide-en-note">Wiki articles are available in Chinese only; EVE University articles can be read in the English original.</p>' : '';
 
 export function initGuides(context) {
   ctx = context;
+  if (EN_UI) S.lang = 'en';   // 英文界面默认读英文原文
   try { const v = localStorage.getItem(LANG_KEY); if (LANGS.some(([k]) => k === v)) S.lang = v; } catch { /* 无痕模式等 */ }
 }
 
@@ -158,10 +163,10 @@ const videoDur = (v) => v.dur || S.index?.[v.doc]?.dur || 0;
 const isTr = (x) => x.s === 'uni';
 const fmtDur = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
 const seg = (key, cur, opts, cls = '') => `<div class="segmented guide-seg ${cls}" role="group">${opts.map(([v, l]) => `<button type="button" data-guide-${key}="${v}" class="${cur === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-const shortTitle = (x) => ctx.esc(isTr(x) && S.lang === 'en' ? x.en : x.zh);
+const shortTitle = (x) => (isTr(x) && S.lang === 'en' ? ctx.esc(x.en) : `<span class="zh-only${NT}">${ctx.esc(x.zh)}</span>`);
 
 function pageTitle(x) {
-  if (!isTr(x) || S.lang === 'zh') return ctx.esc(x.zh);
+  if (!isTr(x) || S.lang === 'zh') return `<span class="zh-only${NT}">${ctx.esc(x.zh)}</span>`;
   if (S.lang === 'en') return ctx.esc(x.en);
   return `${ctx.esc(x.zh)}<span class="guide-title-en">${ctx.esc(x.en)}</span>`;
 }
@@ -191,7 +196,7 @@ function renderSide() {
     const item = (k, name, n, href) => `<a class="ind-side-item${S.page !== 'doc' && S.cat === k && !S.q ? ' active' : ''}" href="${href}" data-guide-nav><span>${name}</span><small>${n}</small></a>`;
     // 当前分类下展开文章列表
     const cur = S.cat && !S.q ? list.filter((x) => x.c === S.cat) : [];
-    const sub = cur.length ? `<div class="guide-side-pages">${groupPages(cur).map(([g, xs]) => `${g ? `<div class="guide-side-group">${ctx.esc(g)}</div>` : ''}${xs.map((x) =>
+    const sub = cur.length ? `<div class="guide-side-pages">${groupPages(cur).map(([g, xs]) => `${g ? `<div class="guide-side-group${NT}">${ctx.esc(g)}</div>` : ''}${xs.map((x) =>
       `<a class="guide-side-page${S.doc?.id === x.id ? ' active' : ''}" href="#guide/w/${x.id}" data-guide-read>${shortTitle(x)}</a>`).join('')}`).join('')}</div>` : '';
     body = `<div class="ind-side-section"><h4>分类</h4>${item('', 'Wiki 首页', list.length, '#guide')}${CATS.map(([k, name]) =>
       item(k, name, list.filter((x) => x.c === k).length, '#guide/' + k) + (k === S.cat ? sub : '')).join('')}</div>
@@ -212,7 +217,7 @@ const srcBadge = (x) => `<span class="guide-src-badge ${x.s}">${SRC[x.s]?.[0] ||
 
 function pageRow(x) {
   return `<a class="guide-row" href="#guide/w/${x.id}" data-guide-read>
-    <div class="guide-row-main"><strong class="guide-title">${pageTitle(x)}</strong>${x.d ? `<p class="guide-desc">${ctx.esc(x.d)}</p>` : ''}</div>
+    <div class="guide-row-main"><strong class="guide-title">${pageTitle(x)}</strong>${x.d ? `<p class="guide-desc${NT}">${ctx.esc(x.d)}</p>` : ''}</div>
     <div class="guide-row-meta">${srcBadge(x)}${isTr(x) ? '<span class="guide-lang tr">译文</span>' : ''}<small>${x.m || 1} 分钟</small></div></a>`;
 }
 
@@ -223,7 +228,7 @@ function renderWikiHome() {
   const start = START.map((id) => all.find((x) => x.id === id)).filter(Boolean);
   const srcCount = Object.keys(SRC).map((k) => [k, all.filter((x) => x.s === k).length]).filter(([, n]) => n);
   $('guideMain').innerHTML = `<section class="pi-page guide-page">
-    <div class="guide-hero"><h2>EVE 中文 Wiki</h2>
+    <div class="guide-hero"><h2>EVE 中文 Wiki</h2>${EN_NOTE}
       <p class="text-muted">${all.length} 篇图文资料，按玩法分类整理。来源：${srcCount.map(([k, n]) => `${SRC[k][0]} ${n} 篇`).join('、')}。另有 <a href="#guide/video" data-guide-nav>${VIDEOS.length} 个教学视频</a>。</p></div>
     ${start.length ? `<section class="guide-section"><div class="guide-section-head"><h3>新手从这里开始</h3></div>
       <div class="guide-start">${start.map((x, i) => `<a class="guide-start-item" href="#guide/w/${x.id}" data-guide-read><b>${i + 1}</b><span>${shortTitle(x)}</span>${srcBadge(x)}</a>`).join('')}</div></section>` : ''}
@@ -245,7 +250,7 @@ function renderWikiCat() {
   $('guideMain').innerHTML = `<section class="pi-page guide-page">
     <nav class="guide-crumb"><a href="#guide" data-guide-nav>Wiki</a><span>/</span>${name}</nav>
     <div class="pi-head guide-head"><h2>${name}</h2><span class="text-muted guide-sub">${intro} · ${xs.length} 篇</span></div>
-    ${groupPages(xs).map(([g, list]) => `<section class="guide-section">${g ? `<div class="guide-section-head"><h3>${ctx.esc(g)}</h3><span class="text-muted">${list.length} 篇</span></div>` : ''}
+    ${groupPages(xs).map(([g, list]) => `<section class="guide-section">${g ? `<div class="guide-section-head"><h3 class="${NT}">${ctx.esc(g)}</h3><span class="text-muted">${list.length} 篇</span></div>` : ''}
       <div class="guide-rows">${list.map(pageRow).join('')}</div></section>`).join('') || '<p class="legend-empty">这个分类还没有文章</p>'}
     ${WIKI_NOTE}</section>`;
 }
@@ -391,9 +396,9 @@ function relatedHtml(id) {
 
 function renderArticleBody(doc) {
   const heads = doc.blocks.map((b, i) => [b, i]).filter(([b]) => b.t === 'h2' || b.t === 'h3');
-  const toc = heads.length >= 3 ? `<nav class="guide-toc" aria-label="目录"><h4>目录</h4>${heads.map(([b, i]) =>
+  const toc = heads.length >= 3 ? `<nav class="guide-toc${doc.lang === 'zh' || docLang() !== 'en' ? NT : ''}" aria-label="目录"><h4>目录</h4>${heads.map(([b, i]) =>
     `<button type="button" class="${b.t}" data-guide-toc="${i}">${ctx.esc(plain(pickText(b, docLang())))}</button>`).join('')}</nav>` : '';
-  $('guideDocBody').innerHTML = `<div class="guide-article-layout${toc ? '' : ' no-toc'}"><div><article class="guide-article">${doc.blocks.map(blockHtml).join('')}</article>${relatedHtml(doc.id)}</div>${toc}</div>`;
+  $('guideDocBody').innerHTML = `<div class="guide-article-layout${toc ? '' : ' no-toc'}"><div><article class="guide-article${doc.lang === 'zh' || docLang() !== 'en' ? NT : ''}">${doc.blocks.map(blockHtml).join('')}</article>${relatedHtml(doc.id)}</div>${toc}</div>`;
 }
 
 function sourceBox(doc) {
@@ -421,7 +426,7 @@ async function renderDoc(id) {
   S.doc = doc;
   renderSide();
   if (doc.lang !== 'zh') $('guideLangBar').innerHTML = `<div class="segmented" role="group" aria-label="阅读语言">${LANGS.map(([v, l]) => `<button type="button" data-guide-lang="${v}" class="${S.lang === v ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-  $('guideDocHead').innerHTML = `<h1 class="guide-doc-title" id="guideDocTitle">${docTitle(doc)}</h1>${sourceBox(doc)}`;
+  $('guideDocHead').innerHTML = `<h1 class="guide-doc-title${doc.lang === 'zh' || docLang() !== 'en' ? NT : ''}" id="guideDocTitle">${docTitle(doc)}</h1>${doc.lang === 'zh' ? EN_NOTE : ''}${sourceBox(doc)}`;
   renderArticleBody(doc);
 }
 

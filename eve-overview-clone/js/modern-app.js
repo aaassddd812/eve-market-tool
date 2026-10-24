@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
 import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v7';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v6';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v7';
 import * as SM from './struct-markets.js?v=v3';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
@@ -246,9 +246,38 @@ function initTheme() {
   });
 }
 
+// ===== 中文输入法 =====
+// 拼音组字时浏览器也会发 input 事件；各页面的筛选框收到后会重画列表、替换掉输入框，组到一半的拼音就被当成英文提交。
+// 组字中的 input 事件在捕获阶段拦下，选字结束（compositionend）后再补发一次，页面只看到最终文字。
+window.__imeComposing = false;
+document.addEventListener('compositionstart', () => { window.__imeComposing = true; }, true);
+document.addEventListener('compositionend', (e) => {
+  window.__imeComposing = false;
+  e.target.dispatchEvent(new Event('input', { bubbles: true }));
+}, true);
+document.addEventListener('input', (e) => { if (e.isComposing || window.__imeComposing) e.stopImmediatePropagation(); }, true);
+
 // ===== 视图切换 =====
 function initNavigation() {
   $$('.nav-btn').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
+  // 导航文字放不下（如英文界面）时只留图标，保证右侧的服务器、语言、主题等按钮不被挤出屏幕
+  const header = document.querySelector('.app-header');
+  const nav = document.querySelector('.header-nav');
+  if (!header || !nav) return;
+  const over = () => nav.scrollWidth > nav.clientWidth + 1;
+  const fit = () => {
+    header.classList.remove('nav-tight', 'nav-compact');
+    if (!over()) return;
+    header.classList.add('nav-tight');   // 先收起品牌名与在线人数、收紧间距
+    if (over()) header.classList.add('nav-compact');   // 还放不下再只留图标（悬停显示名称）
+  };
+  let raf = 0;
+  const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(fit); };
+  if (window.ResizeObserver) new ResizeObserver(schedule).observe(header);
+  else window.addEventListener('resize', schedule);
+  // 翻译会改变导航文字长度
+  new MutationObserver(schedule).observe(nav, { childList: true, subtree: true, characterData: true });
+  schedule();
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
@@ -397,7 +426,7 @@ async function openAbyss() {
 let guidesLoading = null;
 async function openGuides() {
   try {
-    if (!guidesLoading) guidesLoading = import('./guides.js?v=v8').then((m) => {
+    if (!guidesLoading) guidesLoading = import('./guides.js?v=v9').then((m) => {
       m.initGuides({ esc, debounce, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
       return m;
     }).catch((error) => { guidesLoading = null; throw error; });
@@ -598,7 +627,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v38').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v39').then((m) => {
     m.initFitting({
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -779,7 +808,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v43').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v44').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -4178,7 +4207,7 @@ function loadOrderWatch() {
 // 个人中心 · 交易记录与盈亏：首次打开时加载
 let tradesLoading = null;
 function loadTradesModule() {
-  if (!tradesLoading) tradesLoading = import('./trades.js?v=v2').then((m) => {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v3').then((m) => {
     m.initTrades({
       esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard,

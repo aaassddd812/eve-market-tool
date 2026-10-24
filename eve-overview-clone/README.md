@@ -21,6 +21,9 @@ eve-overview-clone/
 ├── index-v2.html        # v2 页面结构（导航/侧栏/工具栏/详情/市场数据表）
 ├── css/modern-style.css # 全部样式
 ├── js/modern-app.js     # 数据 + 交互逻辑
+├── js/i18n.js           # 中英文切换（最先加载的普通脚本）
+├── i18n/names-en.json   # 官方中文名 → 官方英文名（build_names_en.py 生成）
+├── i18n/en-ui.json      # 界面文案英文译文（exact 整句 + patterns 句式）
 ├── js/star-map.js       # 星图（进入星图页时按需加载）
 ├── js/killboard.js      # 击杀详情 / zKillboard 查询（按需加载）
 ├── js/kb-page.js        # 击杀记录页（按需加载）
@@ -154,7 +157,7 @@ node build_npc_names.mjs <解压目录> --verify
   可添加最多 15 个途经点（信息面板「加为途经点」），「最短顺序」在本地星门图上按同样的偏好求经过全部途经点的最短顺序（终点可不填），
   「按填写顺序」可上下调整；各段仍由 ESI 规划，结果标出每个停靠点与分段跳数，写入自动导航时途经点与终点依次写成航点；
   「粘贴导入」：游戏里全选复制地点 / 路线 / 聊天内容后粘贴（也可直接粘贴进起点、终点框），自动识别中英文星系名、空间站全名与星系链接，
-  可选首尾作起点 / 终点或全部作途经点，到不了的星系（波赫文等）会直接指出
+  只在当前路线上追加：已填的起点、终点和途经点都不动，空着的起点 / 终点用识别结果的首 / 尾补上，其余接在现有途经点后面（已在路线里的跳过），到不了的星系（波赫文等）会直接指出
 - **跳桥**（星门路线）：「走跳桥」默认开启。绑定 ESI 后用角色建筑搜索「 » 」找出你有权使用的安塞波克斯跳桥（`esi-search.search_structures.v1` + `esi-universe.read_structures.v1`，
   按名称「A » B - 名字」取两端星系，按服务器 + 角色缓存 1 天，可点「刷新」重读）；也可「手动添加」粘贴跳桥列表（每行「A » B」，中英文星系名都行，按服务器保存）。
   ESI 路线接口的 `connections` 是单向的且最多 100 对，所以先在本地星门图上带全部跳桥求最短路，只把路上用到的跳桥（双向）交给 ESI；ESI 失败时用本地结果。
@@ -837,3 +840,17 @@ node build_wormholes.mjs <SDE 解压目录> [anoik static.json]   # 输出 eve-o
 - 合同相关 Tab 仍是原页面的占位入口；可通过右上角“合同估值”打开已接通的合同工具
 - ESI 授权需要在官方 [EVE Developers](https://developers.eveonline.com/) 注册应用，将绑定弹层提示的回调地址填入应用配置，再粘贴 Client ID。页面会生成授权链接，登录完成后把地址栏中的完整回调地址粘回工具。OAuth 使用纯前端 PKCE：授权码换令牌、刷新令牌都由浏览器直接请求 `login.eveonline.com`，access/refresh token 只存储在浏览器 localStorage，本站服务器接触不到（可在开发者工具「网络」面板核对：带令牌的请求只发往 `login.eveonline.com` 与 `esi.evetech.net`）。`server/esi_service.py` 只提供公开的应用配置（Client ID、回调地址、权限列表）与公开玩家建筑名称缓存，不需要也不应配置 Client Secret。解绑会清除令牌，也可在 CCP 第三方应用管理页随时撤销授权
 - 省略号菜单、更多菜单的下拉项为快照可见项
+
+## 中英文界面
+
+- 右上角「EN / 中文」按钮切换，选择保存在本机（localStorage `eve-lang`）；地址栏 `?lang=en` / `?lang=zh` 可强制指定。
+- 默认语言：用户选过的 > 浏览器语言含中文，或时区在中国大陆 / 港澳台 → 中文，否则英文。
+- 英文模式下 `js/i18n.js`：
+  - 站内静态数据（物品目录、星图、NPC、装配、工业等 JSON）里与官方中文名完全相同的字符串换成官方英文名，所以搜索可直接输入英文；
+  - ESI 请求改成 `language=en`；
+  - 页面文字（含 title / placeholder 等属性、canvas 文字、alert / confirm）按 `i18n/en-ui.json` 翻译：整句 → 游戏名称 → 带 `{0}` 的句式 → 按「 · 」「，」拆段 → 已知词条逐段替换；
+  - 带 `translate="no"` 或 `.notranslate` 的元素不翻译（教程里的中文 Wiki 标题与正文保持中文，EVE University 文章默认显示英文原文）。
+- 词典到达前页面先隐藏（最多 3 秒），避免中文闪一下。
+- 更新名称表：下载 SDE JSONL 版解压后运行 `python3 build_names_en.py <目录>`；新增界面文案后在 `i18n/en-ui.json` 补译文，并提升 `js/i18n.js` 里的 `VER` 与页面引用的 `?v=`。
+- 顶栏导航放不下时（英文较长）先收起品牌名与在线人数，再只显示图标，右侧的服务器、语言、主题按钮始终固定在屏幕内。
+- 中文输入法：拼音组字中的 input 事件统一拦下，选字结束后再补发，筛选框不会在组字时重画打断输入。

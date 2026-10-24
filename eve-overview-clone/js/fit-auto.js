@@ -851,7 +851,7 @@ async function recommendImplants(fit, progress) {
   for (const [, pieces] of sets) {
     // 至少一件单独装就有提升，才值得试这个套装
     if (pieces.length < 2 || !pieces.some((t) => gainOf.has(t.id))) continue;
-    const setName = pieces[0].name.replace(/[—\-－\s]*[^—\-－\s]+型$/, '');
+    const setName = pieces[0].name.replace(/[—\-－\s]*[^—\-－\s]+型$/, '').replace(/\s+(Alpha|Beta|Gamma|Delta|Epsilon|Omega)$/, '');   // 英文版名称是「… Alpha」
     let cur = [], cost = 0, curScore = r0.score;
     const left = [...pieces];
     while (left.length) {

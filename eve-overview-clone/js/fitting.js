@@ -5,7 +5,7 @@
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
 import * as FE from './fit-engine.js?v=v23';
 import * as MU from './fit-mutate.js?v=v3';
-import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v25';
+import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v26';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v23';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v16r7';
 

@@ -178,7 +178,7 @@ function render(box, data) {
       '<button class="btn btn-ghost" data-trade-reload>刷新</button>' +
     '</div>' +
     `<div data-trade-body>${S.view === 'tx' ? txTable(data) : S.view === 'orders' ? ordersTable(data) : itemsTable(data, sum)}</div>` +
-    `<p class="text-muted valuation-note" title="ESI 只提供最近约 30 天、最多 2500 条；配对利润按买卖均价，不含库存；税费取钱包流水实缴">最近 ${days} 天 · ${formatNumber(data.transactions.length)} 笔成交</p>';
+    `<p class="text-muted valuation-note" title="ESI 只提供最近约 30 天、最多 2500 条；配对利润按买卖均价，不含库存；税费取钱包流水实缴">最近 ${days} 天 · ${formatNumber(data.transactions.length)} 笔成交</p>`;
 }
 
 function bind(box) {

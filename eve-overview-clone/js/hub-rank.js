@@ -185,6 +185,7 @@ function render(box) {
     S.timer = setTimeout(async () => { await load(true); render(box); }, S.data ? POLL : 0);
     return;
   }
+  if (window.__imeComposing && box.contains(document.activeElement)) { setTimeout(() => render(box), 500); return; }   // 正在用输入法打字：先不重画，免得打断组字
   const focus = document.activeElement?.matches?.('[data-hr-q]') ? document.activeElement.selectionStart : null;
   box.innerHTML = html();
   if (focus != null) { const inp = box.querySelector('[data-hr-q]'); inp.focus(); inp.setSelectionRange(focus, focus); }

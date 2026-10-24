@@ -1372,6 +1372,20 @@ function bindRouteImport() {
     text.focus();
     refresh();
   };
+  // 导入只在当前路线上追加：已填的起点 / 终点 / 途经点不动，空着的起点 / 终点用识别结果的首 / 尾补上，其余接在现有途经点后面
+  const plan = (list) => {
+    const from = resolveRouteField($('routeFrom')), to = resolveRouteField($('routeTo'));
+    const have = new Set([from, to, ...[...$('routeWaypoints').querySelectorAll('input')].map(resolveRouteField)].filter(Boolean));
+    const fresh = list.filter((i, k) => !have.has(M.systems[i].id) && list.indexOf(i) === k);
+    const r = { from: null, to: null, vias: fresh.slice() };
+    if (!from && r.vias.length) r.from = r.vias.shift();
+    if (!to && r.vias.length && (from || r.vias.length > 1)) r.to = r.vias.pop();
+    const room = MAX_WAYPOINTS - $('routeWaypoints').children.length;
+    r.dropped = Math.max(0, r.vias.length - room);
+    r.vias = r.vias.slice(0, Math.max(0, room));
+    r.dup = list.length - fresh.length;
+    return r;
+  };
   const refresh = app.debounce(async () => {
     const my = ++seq;
     if (!text.value.trim()) { parsed = []; preview.textContent = ''; apply.disabled = true; return; }
@@ -1379,38 +1393,31 @@ function bindRouteImport() {
     const list = await parseRouteImport(text.value);
     if (my !== seq) return;
     parsed = list;
-    apply.disabled = !list.length;
-    const via = $('routeImportMode').value === 'via';
-    const cap = via ? MAX_WAYPOINTS : MAX_WAYPOINTS + 2;
-    preview.innerHTML = list.length
-      ? `识别到 <strong>${list.length}</strong> 个星系：` + list.slice(0, 30).map((i) => app.esc(M.systems[i].name)).join(' → ') + (list.length > 30 ? ' …' : '') +
-        (list.length > cap ? `<br><span class="sec-null">途经点最多 ${MAX_WAYPOINTS} 个，只导入前 ${cap} 个</span>` : '')
-      : '没有识别到星系名';
+    const r = plan(list);
+    const n = r.vias.length + (r.from != null) + (r.to != null);
+    apply.disabled = !n;
+    const name = (i) => app.esc(M.systems[i].name);
+    preview.innerHTML = !list.length ? '没有识别到星系名'
+      : `识别到 <strong>${list.length}</strong> 个星系：` + list.slice(0, 30).map(name).join(' → ') + (list.length > 30 ? ' …' : '') + '<br>' +
+        [r.from != null ? `起点设为 ${name(r.from)}` : '', r.vias.length ? `新增 ${r.vias.length} 个途经点` : '', r.to != null ? `终点设为 ${name(r.to)}` : ''].filter(Boolean).join('，') +
+        (r.dup ? `${n ? '；' : ''}${r.dup} 个已在路线里，跳过` : '') +
+        (r.dropped ? `<br><span class="sec-null">途经点最多 ${MAX_WAYPOINTS} 个，另有 ${r.dropped} 个没导入</span>` : '');
   }, 250);
   $('routeImportToggle').addEventListener('click', () => { if (box.hidden) open(); else box.hidden = true; });
   $('routeImportCancel').addEventListener('click', () => { box.hidden = true; });
   text.addEventListener('input', refresh);
-  $('routeImportMode').addEventListener('change', refresh);
   apply.addEventListener('click', () => {
     if (!parsed.length) return;
-    const via = $('routeImportMode').value === 'via';
-    const list = parsed.slice(0, via ? MAX_WAYPOINTS : MAX_WAYPOINTS + 2);
-    const setField = (f, i) => { f.value = i == null ? '' : M.systems[i].name; f.dataset.id = i == null ? '' : M.systems[i].id; };
-    $('routeWaypoints').innerHTML = '';
-    // 全部作途经点：跳过和当前起点 / 终点相同的星系
-    const ends = new Set([resolveRouteField($('routeFrom')), resolveRouteField($('routeTo'))]);
-    let vias = list.filter((i) => !ends.has(M.systems[i].id));
-    if (!via) {
-      setField($('routeFrom'), list[0]);
-      setField($('routeTo'), list.length > 1 ? list[list.length - 1] : null);
-      vias = list.slice(1, -1);
-    }
-    for (const i of vias) addWaypoint(M.systems[i]);
+    const r = plan(parsed);
+    const setField = (f, i) => { f.value = M.systems[i].name; f.dataset.id = M.systems[i].id; };
+    if (r.from != null) setField($('routeFrom'), r.from);
+    if (r.to != null) setField($('routeTo'), r.to);
+    for (const i of r.vias) addWaypoint(M.systems[i]);
     syncWaypointUi();
     box.hidden = true;
     text.value = '';
-    app.showToast(`已导入 ${list.length} 个星系`, 'success', 1500);
-    if (resolveRouteField($('routeFrom')) && (resolveRouteField($('routeTo')) || vias.length)) planRoute();
+    app.showToast(`已导入 ${r.vias.length + (r.from != null) + (r.to != null)} 个星系`, 'success', 1500);
+    if (resolveRouteField($('routeFrom')) && (resolveRouteField($('routeTo')) || $('routeWaypoints').children.length)) planRoute();
   });
   // 在起点 / 终点 / 途经点框里直接粘贴多行或多个星系：转到导入框
   $('routeForm').addEventListener('paste', (e) => {
