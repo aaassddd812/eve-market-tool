@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v87">
+  <link rel="stylesheet" href="css/modern-style.css?v=v88">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -497,6 +497,20 @@
                   <select id="routeFlag" class="plain-select" aria-label="路线偏好"></select>
                   <button class="btn btn-primary" id="routePlan">规划</button>
                   <button class="btn btn-ghost" id="routeClear">清除</button>
+                </div>
+                <div class="route-bridges" id="routeBridges">
+                  <label class="route-check" title="把跳桥（安塞波克斯星门）当作一跳加入路线"><input type="checkbox" id="routeBridgeOn"><span>走跳桥</span></label>
+                  <span class="route-bridge-note" id="routeBridgeNote"></span>
+                  <span class="route-bridge-acts"><button class="link-btn" id="routeBridgeRefresh" title="用 ESI 重新读取你能用的跳桥">刷新</button><button class="link-btn" id="routeBridgeManual" title="粘贴跳桥列表，每行「星系A » 星系B」">手动添加</button></span>
+                </div>
+                <div class="route-import" id="routeBridgeBox" hidden>
+                  <textarea id="routeBridgeText" rows="5" placeholder="每行一座跳桥，如：&#10;EC-P8R » 1DQ1-A&#10;支持 » 、<->、->、↔ 或制表符分隔，也可以直接粘贴游戏里的跳桥建筑名" aria-label="手动添加跳桥"></textarea>
+                  <p class="route-import-preview" id="routeBridgePreview"></p>
+                  <div class="route-import-actions">
+                    <button class="btn btn-primary" id="routeBridgeSave">保存</button>
+                    <button class="btn btn-ghost" id="routeBridgeClearManual" title="清空手动添加的跳桥">清空手动</button>
+                    <button class="btn btn-ghost" id="routeBridgeCancel">取消</button>
+                  </div>
                 </div>
               </div>
               <div id="routeResult"></div>
@@ -993,6 +1007,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v112" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v115" type="module" data-cfasync="false"></script>
 </body>
 </html>

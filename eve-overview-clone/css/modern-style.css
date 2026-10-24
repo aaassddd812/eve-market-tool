@@ -1868,6 +1868,14 @@ td.loc {
 .route-import-actions { display: flex; gap: 6px; }
 .route-import-actions .plain-select { flex: 1; min-width: 0; }
 .route-import-actions .btn { height: 32px; padding: 0 12px; }
+.route-bridges { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; font-size: 0.75rem; color: var(--text-secondary); }
+.route-bridges[hidden] { display: none; }
+.route-check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; color: var(--text-primary); font-size: 0.8125rem; }
+.route-bridge-note { flex: 1; min-width: 0; color: var(--text-muted); }
+.route-bridge-acts { display: inline-flex; gap: 10px; }
+.route-bridge-acts .link-btn[hidden] { display: none; }
+.route-bridge-tag { font-weight: 500; font-size: 0.6875rem; padding: 0 6px; border-radius: 4px; color: #b45309; background: rgba(245, 158, 11, 0.14); }
+.route-list li.is-bridge button i { box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.5); }
 .route-legs { margin: 0 0 8px; font-size: 0.75rem; line-height: 1.7; color: var(--text-secondary); }
 .route-legs small { color: var(--text-muted); }
 .route-list li.is-stop button { color: var(--text-primary); font-weight: 600; }

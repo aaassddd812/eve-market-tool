@@ -1229,6 +1229,7 @@ function bindSidebar() {
   };
   $('routeSwap').addEventListener('click', reverseRoute);
   bindRouteImport();
+  bindBridges();
   // 起点 / 终点：一键填入 ESI 角色当前所在星系
   document.querySelectorAll('[data-route-here]').forEach((btn) => btn.addEventListener('click', () => routeFromHere(btn)));
   $('routeReverse').addEventListener('click', reverseRoute);
@@ -1470,11 +1471,14 @@ function resolveRouteField(field) {
   return exact?.id || null;
 }
 
-// 本地星门图上的单源最短路（只用来给途经点排顺序，实际每段路线仍由 ESI 规划）
-// 安全优先 / 低安优先按 ESI 的思路给不想走的星系加大代价
+// 本地星门图上的单源最短路（给途经点排顺序、检查可达性、找出用到的跳桥；实际每段路线仍由 ESI 规划）
+// 安全优先 / 低安优先按 ESI 的思路给不想走的星系加大代价；勾选「走跳桥」时跳桥也算一跳。dist.prev 为前驱
 function gateCosts(src, flag) {
   const n = M.systems.length;
   const dist = new Float64Array(n).fill(Infinity);
+  const prev = new Int32Array(n).fill(-1);
+  dist.prev = prev;
+  const br = bridgesOn() ? bridgeAdj() : null;
   const weight = (i) => {
     if (flag === 'shortest') return 1;
     const hi = secClass(M.systems[i].sec) === '高安';
@@ -1509,12 +1513,222 @@ function gateCosts(src, flag) {
   while (heap.length) {
     const [d, i] = pop();
     if (d > dist[i]) continue;
-    for (const j of M.systems[i].nbr) {
+    const relax = (j) => {
       const nd = d + weight(j);
-      if (nd < dist[j]) { dist[j] = nd; push([nd, j]); }
-    }
+      if (nd < dist[j]) { dist[j] = nd; prev[j] = i; push([nd, j]); }
+    };
+    for (const j of M.systems[i].nbr) relax(j);
+    if (br?.has(i)) for (const j of br.get(i)) relax(j);
   }
   return dist;
+}
+
+function localPath(dist, to) {
+  if (dist[to] === Infinity) return null;
+  const path = [];
+  for (let i = to; i >= 0; i = dist.prev[i]) path.push(i);
+  return path.reverse();
+}
+
+// ---------- 跳桥（安塞波克斯星门，Ansiblex）----------
+// 自动：角色建筑搜索「 » 」（跳桥名称固定为「A » B - 自定义名」，需要 esi-search.search_structures.v1）→ 建筑详情（esi-universe.read_structures.v1）
+//   类型 35841 的取所在星系为起点、名称里 » 后面的星系为终点；只能搜到角色有权使用的跳桥。按服务器 + 角色缓存 1 天。
+// 手动：粘贴「A » B」列表，按服务器保存。两种合并后双向使用。
+// ESI 路线接口的 connections 参数是单向的、最多 100 对：本地先带全部跳桥求最短路，只把路上用到的跳桥交给 ESI
+const BRIDGE_TYPE = 35841;
+const BRIDGE_TTL = 86400e3;
+const BR = { auto: [], at: 0, cid: 0, manual: null, loading: null, note: '', adj: null };
+const bridgeKey = (cid) => serverKey('eve-bridges') + '-' + cid;
+const bridgeManualKey = () => serverKey('eve-bridges-manual');
+
+function bridgesOn() { return J.mode !== 'jump' && $('routeBridgeOn')?.checked && bridgeList().length > 0; }
+
+function bridgeList() {
+  if (BR.manual == null) {
+    try { BR.manual = JSON.parse(localStorage.getItem(bridgeManualKey()) || '[]'); } catch { BR.manual = []; }
+  }
+  const seen = new Set();
+  const out = [];
+  for (const b of [...BR.auto, ...BR.manual]) {
+    const k = Math.min(b.a, b.b) + ':' + Math.max(b.a, b.b);
+    if (seen.has(k) || !M.byId.has(b.a) || !M.byId.has(b.b)) continue;
+    seen.add(k);
+    out.push(b);
+  }
+  return out;
+}
+
+// 星系 index -> 跳桥对面的星系 index 列表
+function bridgeAdj() {
+  if (BR.adj) return BR.adj;
+  const adj = new Map();
+  const add = (x, y) => { if (!adj.has(x)) adj.set(x, []); adj.get(x).push(y); };
+  for (const b of bridgeList()) { const x = M.byId.get(b.a).i, y = M.byId.get(b.b).i; add(x, y); add(y, x); }
+  BR.adj = adj;
+  return adj;
+}
+const isGateHop = (x, y) => M.systems[x].nbr.includes(y);
+
+function systemByName(name) {
+  const n = String(name || '').trim().toLowerCase();
+  return n ? M.systems.find((s) => s.lower === n) : null;
+}
+
+// 「1DQ1-A » 8QT-H4 - 名字」→ [起点名, 终点名]
+function parseBridgeName(name) {
+  const m = /^\s*(.+?)\s*(?:»|<->|->|↔|<>|\t)\s*(.+?)(?:\s+-\s.*)?\s*$/.exec(name || '');
+  return m ? [m[1].trim(), m[2].trim()] : null;
+}
+
+function loadBridgeCache(cid) {
+  if (BR.cid === cid) return;
+  BR.cid = cid; BR.auto = []; BR.at = 0; BR.adj = null;
+  try {
+    const c = JSON.parse(localStorage.getItem(bridgeKey(cid)) || 'null');
+    if (c && Array.isArray(c.list)) { BR.auto = c.list; BR.at = c.at || 0; }
+  } catch { /* 忽略 */ }
+}
+
+async function fetchBridges(force = false) {
+  if (!app.hasEsiToken()) return;
+  const token = await app.getEsiToken().catch(() => null);
+  if (!token?.access_token) return;
+  loadBridgeCache(token.character_id);
+  if (!force && BR.at && Date.now() - BR.at < BRIDGE_TTL) return;
+  if (BR.loading) return BR.loading;
+  if (!JP.hasStructureSearchScope(token)) { BR.note = '自动读取跳桥需要「建筑搜索」授权，重新绑定 ESI 后可用'; syncBridgeUi(); return; }
+  BR.loading = (async () => {
+    BR.note = '正在读取跳桥…';
+    syncBridgeUi();
+    const auth = { headers: { Authorization: 'Bearer ' + token.access_token } };
+    const search = async (term) => {
+      const r = await fetch(`${SERVER.esi}/characters/${token.character_id}/search/?categories=structure&search=${encodeURIComponent(term)}&datasource=${SERVER.datasource}`, auth).catch(() => null);
+      return r?.ok ? ((await r.json().catch(() => ({}))).structure || []) : null;
+    };
+    let ids = await search(' » ');
+    if (ids == null) throw new Error('建筑搜索失败');
+    // 达到 500 条上限：按起点星系名最后一个字符细分
+    if (ids.length >= 500) {
+      const more = await Promise.all('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('').map((c) => search(c + ' » ')));
+      ids = [...new Set([...ids, ...more.flat().filter(Boolean)])];
+    }
+    const list = [];
+    const queue = ids.slice();
+    let pauseUntil = 0;
+    await Promise.all(Array.from({ length: 4 }, async () => {
+      while (queue.length) {
+        const id = queue.shift();
+        const wait = pauseUntil - Date.now();
+        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+        const r = await fetch(`${SERVER.esi}/universe/structures/${id}/?datasource=${SERVER.datasource}`, auth).catch(() => null);
+        const remain = r?.headers.get('x-esi-error-limit-remain');
+        if (remain != null && Number(remain) < 20) pauseUntil = Date.now() + (Number(r.headers.get('x-esi-error-limit-reset')) || 60) * 1000;
+        if (!r?.ok) continue;
+        const info = await r.json().catch(() => null);
+        if (info?.type_id !== BRIDGE_TYPE) continue;
+        const names = parseBridgeName(info.name);
+        const to = names && systemByName(names[1]);
+        if (to && info.solar_system_id !== to.id) list.push({ a: info.solar_system_id, b: to.id, id, name: info.name });
+      }
+    }));
+    BR.auto = list;
+    BR.at = Date.now();
+    BR.adj = null;
+    BR.note = '';
+    try { localStorage.setItem(bridgeKey(BR.cid), JSON.stringify({ at: BR.at, list })); } catch { /* 忽略 */ }
+  })().catch((error) => { BR.note = '读取跳桥失败：' + error.message; }).finally(() => { BR.loading = null; syncBridgeUi(); });
+  return BR.loading;
+}
+
+function syncBridgeUi() {
+  const box = $('routeBridges');
+  if (!box) return;
+  box.hidden = J.mode === 'jump';
+  const all = bridgeList();
+  const auto = BR.auto.length, manual = (BR.manual || []).length;
+  $('routeBridgeRefresh').hidden = !app.hasEsiToken();
+  $('routeBridgeNote').textContent = BR.note || (all.length
+    ? `已知 ${all.length} 座${auto && manual ? `（自动 ${auto} · 手动 ${manual}）` : manual ? '（手动添加）' : ''}`
+    : app.hasEsiToken() ? '没有找到你能用的跳桥' : '绑定 ESI 后自动读取你能用的跳桥');
+}
+
+// 中文名本地匹配，英文名（如 Jita）用 ESI /universe/ids/ 查
+async function parseManualBridges(text) {
+  const rows = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((line) => [line, parseBridgeName(line)]);
+  const en = new Map();
+  const unknown = [...new Set(rows.flatMap(([, n]) => n || []).filter((n) => !systemByName(n) && /[a-z]/i.test(n)))];
+  if (unknown.length) {
+    try {
+      const res = await app.fetchESI('/universe/ids/?language=en', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(unknown.slice(0, 500)) });
+      for (const x of res.systems || []) { const sys = M.byId.get(x.id); if (sys) en.set(x.name.toLowerCase(), sys); }
+    } catch { /* 只用本地匹配 */ }
+  }
+  const find = (n) => systemByName(n) || en.get(n.toLowerCase());
+  const out = [], bad = [];
+  for (const [line, names] of rows) {
+    const a = names && find(names[0]), b = names && find(names[1]);
+    if (a && b && a !== b) out.push({ a: a.id, b: b.id }); else bad.push(line);
+  }
+  return { out, bad };
+}
+
+function bindBridges() {
+  const on = $('routeBridgeOn');
+  on.checked = app.store.get('eve-route-bridges') !== '0';
+  on.addEventListener('change', () => {
+    app.store.set('eve-route-bridges', on.checked ? '1' : '0');
+    if (on.checked) fetchBridges();
+  });
+  $('routeBridgeRefresh').addEventListener('click', () => fetchBridges(true));
+  const box = $('routeBridgeBox'), text = $('routeBridgeText'), preview = $('routeBridgePreview');
+  let seq = 0;
+  const refresh = async () => {
+    const my = ++seq;
+    const { out, bad } = await parseManualBridges(text.value);
+    if (my !== seq) return;
+    preview.innerHTML = text.value.trim() ? `识别到 <strong>${out.length}</strong> 座跳桥${bad.length ? `，${bad.length} 行看不懂：${app.esc(bad.slice(0, 2).join('；'))}${bad.length > 2 ? ' …' : ''}` : ''}` : '';
+  };
+  $('routeBridgeManual').addEventListener('click', () => {
+    box.hidden = !box.hidden;
+    if (!box.hidden) {
+      text.value = (BR.manual || []).map((b) => `${M.byId.get(b.a)?.name} » ${M.byId.get(b.b)?.name}`).join('\n');
+      refresh();
+      text.focus();
+    }
+  });
+  text.addEventListener('input', app.debounce(refresh, 200));
+  $('routeBridgeCancel').addEventListener('click', () => { box.hidden = true; });
+  const saveManual = (list) => {
+    BR.manual = list;
+    BR.adj = null;
+    try { localStorage.setItem(bridgeManualKey(), JSON.stringify(list)); } catch { /* 忽略 */ }
+    box.hidden = true;
+    syncBridgeUi();
+    if (M.route.length && J.mode !== 'jump') planRoute();
+  };
+  $('routeBridgeSave').addEventListener('click', async () => {
+    const { out } = await parseManualBridges(text.value);
+    saveManual(out);
+    app.showToast(`已保存 ${out.length} 座手动跳桥`, 'success', 1500);
+  });
+  $('routeBridgeClearManual').addEventListener('click', () => saveManual([]));
+  syncBridgeUi();
+}
+
+// 一段路线：不走跳桥时直接问 ESI；走跳桥时本地先求最短路，把用到的跳桥（双向）作为 connections 交给 ESI，ESI 失败时用本地结果
+async function routeLeg(a, b, flag) {
+  const base = `/route/${a}/${b}/?flag=${flag}`;
+  if (!bridgesOn()) return app.fetchESI(base);
+  const path = localPath(gateCosts(M.byId.get(a).i, flag), M.byId.get(b).i);
+  if (!path) return app.fetchESI(base);
+  const used = [];
+  for (let k = 1; k < path.length; k++) if (!isGateHop(path[k - 1], path[k])) used.push([M.systems[path[k - 1]].id, M.systems[path[k]].id]);
+  if (!used.length) return app.fetchESI(base);
+  if (used.length <= 50) {
+    const conns = used.flatMap(([x, y]) => [`connections=${x}%7C${y}`, `connections=${y}%7C${x}`]).join('&');
+    try { return await app.fetchESI(`${base}&${conns}`); } catch { /* 用本地结果 */ }
+  }
+  return path.map((i) => M.systems[i].id);
 }
 
 // 起点固定、终点可选：状态压缩 DP 求经过全部途经点的最短顺序（途经点 ≤ 15）
@@ -1564,6 +1778,7 @@ async function planRoute() {
   }
   const flag = $('routeFlag').value;
   box.innerHTML = '<p class="legend-empty">正在规划路线…</p>';
+  if ($('routeBridgeOn').checked && app.hasEsiToken()) await fetchBridges();
   try {
     // 途经点顺序：自动时在本地星门图上求最短顺序，否则按填写顺序
     // 先在本地星门图上检查可达性，直接指出到不了的星系（波赫文、虫洞、被封锁的星系等）
@@ -1579,7 +1794,7 @@ async function planRoute() {
     }
     const stops = [from, ...order, ...(to ? [to] : [])].filter((id, k, a) => k === 0 || id !== a[k - 1]);
     if (stops.length < 2) throw Object.assign(new Error('起点和终点相同，请添加途经点或换一个终点'), { local: true });
-    const legs = await Promise.all(stops.slice(1).map((b, k) => app.fetchESI(`/route/${stops[k]}/${b}/?flag=${flag}`)));
+    const legs = await Promise.all(stops.slice(1).map((b, k) => routeLeg(stops[k], b, flag)));
     // 拼接各段，记下每个停靠点在整条路线里的位置
     const ids = [stops[0]];
     const stopAt = new Map([[0, '起点']]);
@@ -1588,20 +1803,28 @@ async function planRoute() {
       stopAt.set(ids.length - 1, k === legs.length - 1 && to ? '终点' : `途经 ${k + 1}`);
     });
     M.route = ids.map((id) => M.byId.get(id)?.i).filter((i) => i != null);
-    M.routeStops = stops.slice(1);
+    // 跳桥：route 里相邻但没有星门相连的两站
+    const bridgeAt = new Set();
+    for (let k = 1; k < M.route.length; k++) if (!isGateHop(M.route[k - 1], M.route[k])) bridgeAt.add(k);
+    // 写入游戏自动导航：途经点、终点，以及每座跳桥的两端（游戏自动导航不一定会走跳桥）
+    const stopIdx = new Set(stopAt.keys());
+    M.routeStops = M.route.map((i, k) => (k > 0 && (stopIdx.has(k) || bridgeAt.has(k) || bridgeAt.has(k + 1)) ? M.systems[i].id : null))
+      .filter((id, k, a) => id != null && id !== a[k - 1]);
+    if (!bridgeAt.size) M.routeStops = stops.slice(1);
     routeLine.material.color.setHex(ROUTE_COLORS.gate);
     const counts = { 高安: 0, 低安: 0, '00': 0 };
     M.route.forEach((i) => { counts[secClass(M.systems[i].sec)] += 1; });
     const multi = stops.length > 2;
     const legLine = multi ? '<p class="route-legs">' + stops.map((id, k) => app.esc(M.byId.get(id).name) + (k < legs.length ? ` <small>${legs[k].length - 1} 跳</small> →` : '')).join(' ') + '</p>' : '';
     box.innerHTML =
-      `<div class="route-summary"><span><strong>${M.route.length - 1}</strong> 跳 · <span class="sec-hi">高安 ${counts['高安']}</span> · <span class="sec-lo">低安 ${counts['低安']}</span> · <span class="sec-null">00 ${counts['00']}</span></span>` +
-        `<span><button class="link-btn" data-game-route title="${multi ? '把途经点和终点依次写入游戏自动导航' : '在游戏里把终点设为目的地'}（角色需在线）">写入自动导航</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>` +
+      `<div class="route-summary"><span><strong>${M.route.length - 1}</strong> 跳${bridgeAt.size ? ` <span class="route-bridge-tag">含跳桥 ${bridgeAt.size}</span>` : ''} · <span class="sec-hi">高安 ${counts['高安']}</span> · <span class="sec-lo">低安 ${counts['低安']}</span> · <span class="sec-null">00 ${counts['00']}</span></span>` +
+        `<span><button class="link-btn" data-game-route title="${multi || bridgeAt.size ? '把途经点、跳桥两端和终点依次写入游戏自动导航' : '在游戏里把终点设为目的地'}（角色需在线）">写入自动导航</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>` +
       legLine +
       '<ol class="route-list">' + M.route.map((i, k) => {
         const s = M.systems[i];
         const tag = multi && stopAt.get(k);
-        return `<li${tag ? ' class="is-stop"' : ''}><button data-sys="${i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}${tag ? `<em>${tag}</em>` : ''}<span>${secDisplay(s.sec).toFixed(1)}</span></button></li>`;
+        const cls = [tag ? 'is-stop' : '', bridgeAt.has(k) ? 'is-bridge' : ''].filter(Boolean).join(' ');
+        return `<li${cls ? ` class="${cls}"` : ''}><button data-sys="${i}"${bridgeAt.has(k) ? ' title="经跳桥到达"' : ''}><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}${bridgeAt.has(k) ? '<b class="route-bridge-tag">跳桥</b>' : ''}${tag ? `<em>${tag}</em>` : ''}<span>${secDisplay(s.sec).toFixed(1)}</span></button></li>`;
       }).join('') + '</ol>';
     updateRouteLine();
     fitTo(M.route, 1.2);
@@ -2038,6 +2261,7 @@ async function setRouteMode(mode) {
   $('routeFlag').hidden = mode === 'jump';
   // 多目的地只用于星门路线
   $('routeMulti').hidden = $('routeWaypoints').hidden = mode === 'jump';
+  syncBridgeUi();
   $('routeSummary').textContent = '';
   M.route = [];
   $('routeResult').innerHTML = '';
@@ -2551,6 +2775,8 @@ export async function showStarMap() {
       $('mapLoading').hidden = true;
       focusFromHash();
       startLiveKills();
+      syncBridgeUi();
+      if ($('routeBridgeOn').checked && app.hasEsiToken()) fetchBridges().then(syncBridgeUi);
     })().catch((error) => {
       console.error(error);
       $('mapLoading').innerHTML = '星图加载失败：' + app.esc(error.message) + (/WebGL/i.test(error.message) ? '（浏览器不支持 WebGL）' : '');
@@ -2560,6 +2786,9 @@ export async function showStarMap() {
     return;
   }
   await M.ready;
+  // 绑定 / 换角色后更新跳桥（有缓存时不请求）
+  syncBridgeUi();
+  if ($('routeBridgeOn').checked && app.hasEsiToken()) fetchBridges().then(syncBridgeUi);
   if (!M.running && renderer) { M.running = true; resize(); loop(); }
   startLiveKills();
   // 从其他页面跳转过来（如会战提醒「在星图查看」）：定位到地址栏里的星系
