@@ -32,6 +32,7 @@ const M = {
   highlight: null,     // Set<system index>：颜色说明中点选的高亮
   highlightKey: null,
   route: [],           // system index 数组
+  routeStops: [],      // 星门路线的途经点 + 终点（星系 ID），写入游戏自动导航用
   dirty: true,
   running: false,
   tween: null,
@@ -1216,36 +1217,35 @@ function bindSidebar() {
   });
 
   // 路线规划
-  for (const which of ['From', 'To']) {
-    const field = $('route' + which);
-    const list = $('route' + which + 'List');
-    field.addEventListener('input', app.debounce(() => {
-      field.dataset.id = '';
-      const found = searchMap(field.value, 8).filter((r) => r.type === 'system');
-      list.innerHTML = found.map((r) => resultRow(r).replace('data-sys', 'data-pick')).join('');
-      list.hidden = !found.length;
-    }, 120));
-    field.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
-    list.addEventListener('mousedown', (e) => {
-      const pick = e.target.closest('[data-pick]');
-      if (!pick) return;
-      const s = M.systems[Number(pick.dataset.pick)];
-      field.value = s.name;
-      field.dataset.id = s.id;
-      list.hidden = true;
-    });
-  }
+  for (const which of ['From', 'To']) bindSystemField($('route' + which), $('route' + which + 'List'));
   $('routeFlag').innerHTML = ROUTE_FLAGS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
   $('routePlan').addEventListener('click', planRoute);
   bindJumpPlanner();
-  $('routeSwap').addEventListener('click', () => {
-    const a = $('routeFrom'), b = $('routeTo');
-    [a.value, b.value] = [b.value, a.value];
-    [a.dataset.id, b.dataset.id] = [b.dataset.id, a.dataset.id];
+  // 反转：起点 ↔ 终点，途经点倒序
+  const reverseRoute = () => {
+    const fields = [$('routeFrom'), ...$('routeWaypoints').querySelectorAll('input'), $('routeTo')];
+    const vals = fields.map((f) => [f.value, f.dataset.id || '']).reverse();
+    fields.forEach((f, k) => { [f.value, f.dataset.id] = vals[k]; });
+  };
+  $('routeSwap').addEventListener('click', reverseRoute);
+  $('routeReverse').addEventListener('click', reverseRoute);
+  // 途经点：添加 / 上移 / 下移 / 删除
+  $('routeAddWp').addEventListener('click', () => { addWaypoint()?.focus(); });
+  $('routeOrder').addEventListener('change', syncWaypointUi);
+  $('routeWaypoints').addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-wp-act]');
+    if (!btn) return;
+    const row = btn.closest('.route-wp');
+    const act = btn.dataset.wpAct;
+    if (act === 'del') row.remove();
+    else if (act === 'up' && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+    else if (act === 'down' && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+    syncWaypointUi();
   });
   $('routeClear').addEventListener('click', () => {
     $('routeSummary').textContent = '';
     M.route = [];
+    M.routeStops = [];
     $('routeResult').innerHTML = '';
     clearJumpRange();
     updateRouteLine();
@@ -1254,7 +1254,7 @@ function bindSidebar() {
     if (e.target.closest('[data-game-route]')) {
       // 星门路线：游戏自动导航会自己寻路，只设终点；跳跃路线：落点依次写成航点
       const ids = J.mode === 'jump' && J.plan ? J.plan.path.slice(1).map((i) => M.systems[i].id).concat(J.plan.gates.map((i) => M.systems[i].id))
-        : M.route.length ? [M.systems[M.route[M.route.length - 1]].id] : [];
+        : M.route.length ? M.routeStops : [];
       if (ids.length) app.game.route(ids, M.systems[M.byId.get(ids[ids.length - 1]).i].name);
       return;
     }
@@ -1268,13 +1268,67 @@ function bindSidebar() {
   });
 }
 
+// 星系输入框 + 候选列表（起点 / 终点 / 途经点共用）
+function bindSystemField(field, list) {
+  field.addEventListener('input', app.debounce(() => {
+    field.dataset.id = '';
+    const found = searchMap(field.value, 8).filter((r) => r.type === 'system');
+    list.innerHTML = found.map((r) => resultRow(r).replace('data-sys', 'data-pick')).join('');
+    list.hidden = !found.length;
+  }, 120));
+  field.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
+  list.addEventListener('mousedown', (e) => {
+    const pick = e.target.closest('[data-pick]');
+    if (!pick) return;
+    const s = M.systems[Number(pick.dataset.pick)];
+    field.value = s.name;
+    field.dataset.id = s.id;
+    list.hidden = true;
+  });
+}
+
+const MAX_WAYPOINTS = 15;
+
+function addWaypoint(s = null) {
+  const box = $('routeWaypoints');
+  if (box.children.length >= MAX_WAYPOINTS) { app.showToast(`途经点最多 ${MAX_WAYPOINTS} 个`, 'error', 2000); return null; }
+  const row = document.createElement('div');
+  row.className = 'route-wp';
+  row.innerHTML = `<div class="route-field"><input type="text" autocomplete="off" aria-label="途经星系"><div class="route-suggest" hidden></div></div>
+    <button class="icon-btn small" data-wp-act="up" title="上移" aria-label="上移">↑</button><button class="icon-btn small" data-wp-act="down" title="下移" aria-label="下移">↓</button><button class="icon-btn small" data-wp-act="del" title="删除途经点" aria-label="删除途经点">✕</button>`;
+  const input = row.querySelector('input');
+  bindSystemField(input, row.querySelector('.route-suggest'));
+  if (s) { input.value = s.name; input.dataset.id = s.id; }
+  box.appendChild(row);
+  syncWaypointUi();
+  return input;
+}
+
+// 途经点序号、顺序选项、终点是否可省略
+function syncWaypointUi() {
+  const rows = [...$('routeWaypoints').children];
+  const auto = $('routeOrder').value === 'auto';
+  rows.forEach((row, k) => {
+    row.querySelector('input').placeholder = auto ? '途经星系' : `第 ${k + 1} 站`;
+    row.querySelector('[data-wp-act="up"]').hidden = auto;
+    row.querySelector('[data-wp-act="down"]').hidden = auto;
+  });
+  $('routeOrder').hidden = $('routeReverse').hidden = !rows.length;
+  $('routeSwap').hidden = !!rows.length;   // 有途经点时 ⇅ 会压住途经点的按钮，改用「反转」
+  $('routeTo').placeholder = rows.length ? '终点星系（可不填，停在最后一个途经点）' : '终点星系';
+}
+
 function setRouteEnd(which, i) {
   const s = M.systems[i];
+  setPanel('route', true);
+  if (J.mode !== 'jump' && which === 'via') {
+    if (addWaypoint(s)) app.showToast('已添加途经点：' + s.name, 'success', 1500);
+    return;
+  }
   const field = $(which === 'from' ? 'routeFrom' : 'routeTo');
   field.value = s.name;
   field.dataset.id = s.id;
   app.showToast((which === 'from' ? '起点' : '终点') + '：' + s.name, 'success', 1500);
-  setPanel('route', true);
   if ($('routeFrom').dataset.id && $('routeTo').dataset.id) planRoute();
 }
 
@@ -1284,31 +1338,141 @@ function resolveRouteField(field) {
   return exact?.id || null;
 }
 
+// 本地星门图上的单源最短路（只用来给途经点排顺序，实际每段路线仍由 ESI 规划）
+// 安全优先 / 低安优先按 ESI 的思路给不想走的星系加大代价
+function gateCosts(src, flag) {
+  const n = M.systems.length;
+  const dist = new Float64Array(n).fill(Infinity);
+  const weight = (i) => {
+    if (flag === 'shortest') return 1;
+    const hi = secClass(M.systems[i].sec) === '高安';
+    return (flag === 'secure' ? hi : !hi) ? 1 : 50;
+  };
+  dist[src] = 0;
+  // 二叉堆 Dijkstra，元素 [代价, 星系]
+  const heap = [[0, src]];
+  const push = (x) => {
+    heap.push(x);
+    for (let k = heap.length - 1; k > 0;) {
+      const p = (k - 1) >> 1;
+      if (heap[p][0] <= heap[k][0]) break;
+      [heap[p], heap[k]] = [heap[k], heap[p]]; k = p;
+    }
+  };
+  const pop = () => {
+    const top = heap[0], last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      for (let k = 0; ;) {
+        const l = 2 * k + 1, r = l + 1;
+        let m = k;
+        if (l < heap.length && heap[l][0] < heap[m][0]) m = l;
+        if (r < heap.length && heap[r][0] < heap[m][0]) m = r;
+        if (m === k) break;
+        [heap[m], heap[k]] = [heap[k], heap[m]]; k = m;
+      }
+    }
+    return top;
+  };
+  while (heap.length) {
+    const [d, i] = pop();
+    if (d > dist[i]) continue;
+    for (const j of M.systems[i].nbr) {
+      const nd = d + weight(j);
+      if (nd < dist[j]) { dist[j] = nd; push([nd, j]); }
+    }
+  }
+  return dist;
+}
+
+// 起点固定、终点可选：状态压缩 DP 求经过全部途经点的最短顺序（途经点 ≤ 15）
+function bestWaypointOrder(start, vias, end, flag) {
+  const pts = [start, ...vias, ...(end != null ? [end] : [])];
+  const dist = pts.map((p) => gateCosts(p, flag));
+  const d = (a, b) => dist[a][pts[b]];
+  const k = vias.length, full = (1 << k) - 1;
+  const dp = Array.from({ length: 1 << k }, () => new Float64Array(k).fill(Infinity));
+  const prev = Array.from({ length: 1 << k }, () => new Int8Array(k).fill(-1));
+  for (let j = 0; j < k; j++) dp[1 << j][j] = d(0, j + 1);
+  for (let mask = 1; mask <= full; mask++) {
+    for (let j = 0; j < k; j++) {
+      const cur = dp[mask][j];
+      if (!(mask & (1 << j)) || cur === Infinity) continue;
+      for (let t = 0; t < k; t++) {
+        if (mask & (1 << t)) continue;
+        const nm = mask | (1 << t), nd = cur + d(j + 1, t + 1);
+        if (nd < dp[nm][t]) { dp[nm][t] = nd; prev[nm][t] = j; }
+      }
+    }
+  }
+  let last = -1, best = Infinity;
+  for (let j = 0; j < k; j++) {
+    const total = dp[full][j] + (end != null ? d(j + 1, k + 1) : 0);
+    if (total < best) { best = total; last = j; }
+  }
+  if (last < 0) return null;
+  const order = [];
+  for (let mask = full, j = last; j >= 0;) { order.push(vias[j]); const p = prev[mask][j]; mask ^= 1 << j; j = p; }
+  return order.reverse();
+}
+
 async function planRoute() {
   if (J.mode === 'jump') { planJump(); return; }
-  const from = resolveRouteField($('routeFrom'));
-  const to = resolveRouteField($('routeTo'));
   const box = $('routeResult');
-  if (!from || !to) { box.innerHTML = '<p class="legend-empty">请从候选列表中选择起点和终点星系</p>'; return; }
+  const from = resolveRouteField($('routeFrom'));
+  const toField = $('routeTo');
+  const to = resolveRouteField(toField);
+  const wpInputs = [...$('routeWaypoints').querySelectorAll('input')];
+  const filled = wpInputs.filter((f) => f.value.trim());
+  const vias = filled.map(resolveRouteField);
+  const auto = $('routeOrder').value === 'auto';
+  if (!from || vias.some((v) => !v) || (!to && (toField.value.trim() || !vias.length))) {
+    box.innerHTML = '<p class="legend-empty">请从候选列表中选择' + (vias.length ? '起点、终点和途经星系' : '起点和终点星系') + '</p>';
+    return;
+  }
+  const flag = $('routeFlag').value;
   box.innerHTML = '<p class="legend-empty">正在规划路线…</p>';
   try {
-    const ids = await app.fetchESI(`/route/${from}/${to}/?flag=${$('routeFlag').value}`);
+    // 途经点顺序：自动时在本地星门图上求最短顺序，否则按填写顺序
+    let order = vias;
+    if (auto && vias.length > 1) {
+      const idx = (id) => M.byId.get(id).i;
+      const best = bestWaypointOrder(idx(from), vias.map(idx), to ? idx(to) : null, flag);
+      if (!best) throw new Error('有星系无法通过星门互相到达');
+      order = best.map((i) => M.systems[i].id);
+    }
+    const stops = [from, ...order, ...(to ? [to] : [])].filter((id, k, a) => k === 0 || id !== a[k - 1]);
+    if (stops.length < 2) throw new Error('起点和终点相同');
+    const legs = await Promise.all(stops.slice(1).map((b, k) => app.fetchESI(`/route/${stops[k]}/${b}/?flag=${flag}`)));
+    // 拼接各段，记下每个停靠点在整条路线里的位置
+    const ids = [stops[0]];
+    const stopAt = new Map([[0, '起点']]);
+    legs.forEach((leg, k) => {
+      ids.push(...leg.slice(1));
+      stopAt.set(ids.length - 1, k === legs.length - 1 && to ? '终点' : `途经 ${k + 1}`);
+    });
     M.route = ids.map((id) => M.byId.get(id)?.i).filter((i) => i != null);
+    M.routeStops = stops.slice(1);
     routeLine.material.color.setHex(ROUTE_COLORS.gate);
     const counts = { 高安: 0, 低安: 0, '00': 0 };
     M.route.forEach((i) => { counts[secClass(M.systems[i].sec)] += 1; });
+    const multi = stops.length > 2;
+    const legLine = multi ? '<p class="route-legs">' + stops.map((id, k) => app.esc(M.byId.get(id).name) + (k < legs.length ? ` <small>${legs[k].length - 1} 跳</small> →` : '')).join(' ') + '</p>' : '';
     box.innerHTML =
       `<div class="route-summary"><span><strong>${M.route.length - 1}</strong> 跳 · <span class="sec-hi">高安 ${counts['高安']}</span> · <span class="sec-lo">低安 ${counts['低安']}</span> · <span class="sec-null">00 ${counts['00']}</span></span>` +
-        '<span><button class="link-btn" data-game-route title="在游戏里把终点设为目的地（角色需在线）">写入自动导航</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>' +
-      '<ol class="route-list">' + M.route.map((i) => {
+        `<span><button class="link-btn" data-game-route title="${multi ? '把途经点和终点依次写入游戏自动导航' : '在游戏里把终点设为目的地'}（角色需在线）">写入自动导航</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>` +
+      legLine +
+      '<ol class="route-list">' + M.route.map((i, k) => {
         const s = M.systems[i];
-        return `<li><button data-sys="${i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}<span>${secDisplay(s.sec).toFixed(1)}</span></button></li>`;
+        const tag = multi && stopAt.get(k);
+        return `<li${tag ? ' class="is-stop"' : ''}><button data-sys="${i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}${tag ? `<em>${tag}</em>` : ''}<span>${secDisplay(s.sec).toFixed(1)}</span></button></li>`;
       }).join('') + '</ol>';
     updateRouteLine();
     fitTo(M.route, 1.2);
-    $('routeSummary').textContent = `${M.route.length - 1} 跳`;
+    $('routeSummary').textContent = `${M.route.length - 1} 跳` + (multi ? ` · ${stops.length - 2 + (to ? 0 : 1)} 个途经点` : '');
   } catch (error) {
     M.route = [];
+    M.routeStops = [];
     $('routeSummary').textContent = '';
     box.innerHTML = '<p class="legend-empty">路线规划失败：' + app.esc(error.message) + '（可能无法通过星门到达）</p>';
     updateRouteLine();
@@ -1736,6 +1900,8 @@ async function setRouteMode(mode) {
   document.querySelectorAll('[data-route-mode]').forEach((b) => b.classList.toggle('active', b.dataset.routeMode === mode));
   $('jumpOptions').hidden = mode !== 'jump';
   $('routeFlag').hidden = mode === 'jump';
+  // 多目的地只用于星门路线
+  $('routeMulti').hidden = $('routeWaypoints').hidden = mode === 'jump';
   $('routeSummary').textContent = '';
   M.route = [];
   $('routeResult').innerHTML = '';
@@ -2059,6 +2225,7 @@ function renderSystemInfo(s) {
     <div class="map-info-actions">
       <button class="btn" data-route-from="${s.i}">设为起点</button>
       <button class="btn" data-route-to="${s.i}">设为终点</button>
+      ${J.mode === 'jump' ? '' : `<button class="btn" data-route-via="${s.i}">加为途经点</button>`}
       <button class="btn btn-ghost" data-copy="${app.esc(s.name)}">复制名称</button>
       <button class="btn btn-ghost" data-game-dest="${s.id}" data-game-name="${app.esc(s.name)}" title="在游戏里设为自动导航目的地（角色需在线）">游戏内设目的地</button>
     </div>
@@ -2172,6 +2339,8 @@ function bindInfo() {
     if (from) { setRouteEnd('from', Number(from.dataset.routeFrom)); return; }
     const to = e.target.closest('[data-route-to]');
     if (to) { setRouteEnd('to', Number(to.dataset.routeTo)); return; }
+    const via = e.target.closest('[data-route-via]');
+    if (via) { setRouteEnd('via', Number(via.dataset.routeVia)); return; }
     const dest = e.target.closest('[data-game-dest]');
     if (dest) { app.game.waypoint(Number(dest.dataset.gameDest), { name: dest.dataset.gameName }); return; }
     const copy = e.target.closest('[data-copy]');

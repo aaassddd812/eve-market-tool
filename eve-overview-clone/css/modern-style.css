@@ -1839,6 +1839,22 @@ td.loc {
   background: var(--bg-elevated);
   box-shadow: var(--shadow-lg);
 }
+.route-waypoints { display: grid; gap: 6px; }
+.route-waypoints:empty { display: none; }
+.route-wp { display: flex; align-items: center; gap: 4px; }
+.route-wp .route-field { flex: 1; min-width: 0; }
+.route-wp .icon-btn { flex-shrink: 0; font-size: 0.8125rem; }
+.route-wp .icon-btn[hidden] { display: none; }
+.route-multi { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; }
+.route-multi[hidden] { display: none; }
+.route-multi > span { white-space: nowrap; }
+.route-multi .route-reverse { margin-left: 12px; }
+.route-multi .route-reverse[hidden], .route-swap[hidden] { display: none; }
+.route-multi .plain-select { width: auto; height: 28px; font-size: 0.75rem; }
+.route-legs { margin: 0 0 8px; font-size: 0.75rem; line-height: 1.7; color: var(--text-secondary); }
+.route-legs small { color: var(--text-muted); }
+.route-list li.is-stop button { color: var(--text-primary); font-weight: 600; }
+.route-list em { font-style: normal; font-weight: 500; font-size: 0.6875rem; padding: 0 6px; border-radius: 4px; color: var(--accent-primary); background: var(--accent-soft); }
 .route-actions { display: flex; gap: 6px; }
 .route-actions .plain-select { flex: 1; min-width: 0; }
 .route-actions .btn { height: 34px; padding: 0 12px; }
@@ -5381,3 +5397,9 @@ td .sov-auto-tag { margin-left: 4px; }
     .kb-br-cols > .kb-br-col > * { align-self: start; }
   }
 }
+/* 虫洞查询框：卡片是纵向 flex，搜索框不能被 flex: 1 压扁 */
+.wh-search-card .search-box { flex: none; height: 42px; }
+/* 粘贴导入蓝图：多行输入框（不受 .pi-input 固定 36px 高度影响），与说明文字拉开距离 */
+.ind-paste-bp .pi-note { margin: 0 0 12px; }
+.ind-paste-text.pi-input { height: auto; min-height: 150px; padding: 10px 12px; line-height: 1.6; }
+.ind-paste-actions { margin-top: 12px; }
