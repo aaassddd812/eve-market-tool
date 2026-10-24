@@ -1461,7 +1461,7 @@ function syncWaypointUi() {
 function setRouteEnd(which, i, note = '') {
   const s = M.systems[i];
   setPanel('route', true);
-  if (J.mode !== 'jump' && which === 'via') {
+  if (which === 'via') {
     if (addWaypoint(s)) app.showToast('已添加途经点：' + s.name, 'success', 1500);
     return;
   }
@@ -1739,10 +1739,11 @@ async function routeLeg(a, b, flag) {
 }
 
 // 起点固定、终点可选：状态压缩 DP 求经过全部途经点的最短顺序（途经点 ≤ 15）
-function bestWaypointOrder(start, vias, end, flag) {
+// cost(a, b)：两个星系之间的代价；默认按星门图（flag 为路线偏好）
+function bestWaypointOrder(start, vias, end, flag, cost = null) {
   const pts = [start, ...vias, ...(end != null ? [end] : [])];
-  const dist = pts.map((p) => gateCosts(p, flag));
-  const d = (a, b) => dist[a][pts[b]];
+  const dist = cost ? null : pts.map((p) => gateCosts(p, flag));
+  const d = cost ? (a, b) => cost(pts[a], pts[b]) : (a, b) => dist[a][pts[b]];
   const k = vias.length, full = (1 << k) - 1;
   const dp = Array.from({ length: 1 << k }, () => new Float64Array(k).fill(Infinity));
   const prev = Array.from({ length: 1 << k }, () => new Int8Array(k).fill(-1));
@@ -2266,8 +2267,6 @@ async function setRouteMode(mode) {
   document.querySelectorAll('[data-route-mode]').forEach((b) => b.classList.toggle('active', b.dataset.routeMode === mode));
   $('jumpOptions').hidden = mode !== 'jump';
   $('routeFlag').hidden = mode === 'jump';
-  // 多目的地只用于星门路线
-  $('routeMulti').hidden = $('routeWaypoints').hidden = mode === 'jump';
   syncBridgeUi();
   $('routeSummary').textContent = '';
   M.route = [];
@@ -2393,8 +2392,13 @@ function dockingAt(i, ship) {
 async function planJump() {
   const box = $('routeResult');
   const from = resolveRouteField($('routeFrom'));
-  const to = resolveRouteField($('routeTo'));
-  if (!from || !to) { box.innerHTML = '<p class="legend-empty">请从候选列表中选择起点和终点星系</p>'; return; }
+  const toField = $('routeTo');
+  const to = resolveRouteField(toField);
+  const vias = [...$('routeWaypoints').querySelectorAll('input')].filter((f) => f.value.trim()).map(resolveRouteField);
+  if (!from || vias.some((v) => !v) || (!to && (toField.value.trim() || !vias.length))) {
+    box.innerHTML = '<p class="legend-empty">请从候选列表中选择' + (vias.length ? '起点、终点和途经星系' : '起点和终点星系') + '</p>';
+    return;
+  }
   box.innerHTML = '<p class="legend-empty">正在规划跳跃路线…</p>';
   let ship;
   try {
@@ -2408,7 +2412,8 @@ async function planJump() {
   await new Promise((r) => setTimeout(r));   // 先让“正在规划”显示出来
   const sk = jumpSkills();
   const range = JP.maxRange(ship, sk.jdc);
-  const a = M.byId.get(from).i, b = M.byId.get(to).i;
+  const idx = (id) => M.byId.get(id).i;
+  const a = idx(from);
   let dockRule;
   try {
     dockRule = await dockStops(ship);
@@ -2416,7 +2421,13 @@ async function planJump() {
     box.innerHTML = '<p class="legend-empty">' + app.esc(error.message) + '</p>';
     return;
   }
-  const plan = JP.planJumpRoute(M.systems, a, b, { range, ...dockRule });
+  // 途经点顺序：自动时按直线光年求最短顺序，否则按填写顺序
+  let order = vias.map(idx);
+  if ($('routeOrder').value === 'auto' && order.length > 1) {
+    order = bestWaypointOrder(a, order, to ? idx(to) : null, null, (p, q) => JP.lyBetween(M.systems[p], M.systems[q]));
+  }
+  const stops = [a, ...order, ...(to ? [idx(to)] : [])].filter((i, k, arr) => k === 0 || i !== arr[k - 1]);
+  const plan = planJumpStops(stops, { range, ...dockRule }, !to);
   clearJumpRange();
   if (plan.error) {
     M.route = [];
@@ -2434,14 +2445,32 @@ async function planJump() {
   updateRouteLine();
   fitTo(M.route, 1.25);
   renderJumpPlan();
-  $('routeSummary').textContent = `${sim.rows.length} 次跳跃`;
+  $('routeSummary').textContent = `${sim.rows.length} 次跳跃` + (plan.stopAt.size ? ` · ${plan.stopAt.size} 个途经点` : '');
   const prices = await app.getMarketPriceMap().catch(() => new Map());
   const unit = prices.get(ship.fuelType);
   if (unit && J.plan?.sim === sim && $('jumpFuelIsk')) $('jumpFuelIsk').textContent = '≈ ' + app.formatISK(unit * sim.fuel) + ' ISK';
 }
 
+// 依次规划每一段（起点 → 途经点 → … → 终点）再拼接；途经点必须能直接跳入，只有最后一站可以落地后再走星门
+function planJumpStops(stops, opts, endIsVia = false) {
+  if (stops.length < 2) return { error: '起点和终点相同，请添加途经点或换一个终点' };
+  const bad = stops.slice(1, -1).find((i) => !JP.canJumpInto(M.systems[i]));
+  if (bad != null) return { error: `途经点 ${M.systems[bad].name} 不能直接跳入（高安等），请移除或换成附近可跳入的星系` };
+  const path = [stops[0]], legs = [], stopAt = new Map();
+  let last = null;
+  for (let k = 1; k < stops.length; k++) {
+    const seg = JP.planJumpRoute(M.systems, stops[k - 1], stops[k], opts);
+    if (seg.error) return { error: stops.length > 2 ? `${M.systems[stops[k - 1]].name} → ${M.systems[stops[k]].name}：${seg.error}` : seg.error };
+    path.push(...seg.path.slice(1));
+    legs.push(...seg.legs);
+    if (k < stops.length - 1 || endIsVia) stopAt.set(path.length - 1, `途经 ${k}`);
+    last = seg;
+  }
+  return { path, legs, gates: last.gates, landing: last.landing, stopAt, stops };
+}
+
 function renderJumpPlan() {
-  const { sim, gates, ship, path, landing, range, prefer, fatigue } = J.plan;
+  const { sim, gates, ship, path, landing, range, prefer, fatigue, stopAt, stops } = J.plan;
   const fatigueNote = fatigue?.minutes > 0 ? `<p class="jump-note warn">已计入角色当前的跳跃疲劳：剩余 ${JP.formatMinutes(fatigue.minutes)}（${new Date(fatigue.expires).toLocaleString('zh-CN', { hour12: false })} 消退）</p>`
     : fatigue ? '<p class="jump-note">角色当前没有跳跃疲劳</p>'
       : app.hasEsiToken() ? '<p class="jump-note">按零疲劳估算。<button class="link-btn" data-scope-rebind="fatigue">授权「跳跃疲劳」</button>后可按角色实际疲劳计算</p>' : '';
@@ -2449,19 +2478,23 @@ function renderJumpPlan() {
   const noDock = prefer ? path.slice(1, -1).filter((i) => !prefer.has(i)) : [];
   const sys = (i) => M.systems[i];
   const fuelName = ISOTOPE_ZH[ship.fuelType] || '燃料';
-  const row = (i, extra, cls = '') => {
+  const row = (i, extra, cls = '', stop = '') => {
     const s = sys(i);
     const { npc, structures } = dockingAt(i, ship);
-    const tags = (npc ? `<em class="jump-station" title="${npc} 个 NPC 空间站">站</em>` : '') +
+    const tags = (stop ? `<em>${stop}</em>` : '') + (npc ? `<em class="jump-station" title="${npc} 个 NPC 空间站">站</em>` : '') +
       (noDock.includes(i) ? '<em class="jump-station is-nodock" title="没有可停靠的空间站或建筑，只能停在太空">不可停靠</em>' : '');
     // 可停靠的玩家建筑直接列出游戏内名称（最多 3 座，其余放在提示里）
     const dockName = (st) => `<span class="jump-dock" title="${app.esc(JP.STRUCTURES[st.type][0] + ' · ' + st.name)}"><b>${app.esc(JP.STRUCTURES[st.type][0])}</b>${app.esc(st.name)}</span>`;
     const docks = structures.length ? `<div class="jump-docks">${structures.slice(0, 3).map(dockName).join('')}${structures.length > 3
       ? `<span class="jump-dock-more" title="${app.esc(structures.slice(3, 20).map((st) => `${JP.STRUCTURES[st.type][0]} · ${st.name}`).join('\n'))}">另有 ${structures.length - 3} 座可停靠建筑</span>` : ''}</div>` : '';
+    if (stop) cls = (cls + ' is-stop').trim();
     return `<li class="${cls}"><button data-sys="${i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}<span>${secDisplay(s.sec).toFixed(1)}</span>${tags}</button>${docks}${extra || ''}</li>`;
   };
-  const legs = sim.rows.map((r) => row(r.to,
-    `<div class="jump-leg"><span>${r.ly.toFixed(2)} 光年</span><span>${app.formatNumber(r.fuel)} 燃料</span><span title="跳后重新激活冷却">冷却 ${JP.formatMinutes(r.cooldown)}</span><span title="跳后疲劳">疲劳 ${JP.formatMinutes(r.fatigue)}</span></div>`)).join('');
+  const legs = sim.rows.map((r, k) => row(r.to,
+    `<div class="jump-leg"><span>${r.ly.toFixed(2)} 光年</span><span>${app.formatNumber(r.fuel)} 燃料</span><span title="跳后重新激活冷却">冷却 ${JP.formatMinutes(r.cooldown)}</span><span title="跳后疲劳">疲劳 ${JP.formatMinutes(r.fatigue)}</span></div>`, '', stopAt.get(k + 1))).join('');
+  // 多段路线：列出每段的跳跃次数
+  const cut = [...new Set([0, ...stopAt.keys(), path.length - 1])];
+  const legLine = stopAt.size ? '<p class="route-legs">' + stops.map((i, k) => app.esc(sys(i).name) + (k < stops.length - 1 ? ` <small>${cut[k + 1] - cut[k]} 跳</small> →` : '')).join(' ') + '</p>' : '';
   const gateRows = gates.map((i) => row(i, '', 'is-gate')).join('');
   const dest = sys(gates.length ? gates[gates.length - 1] : landing);
   $('routeResult').innerHTML = `
@@ -2476,6 +2509,7 @@ function renderJumpPlan() {
     ${gates.length ? `<p class="jump-note warn">${app.esc(dest.name)} 不能直接跳入（高安等），跳到 ${app.esc(sys(landing).name)} 后再走 ${gates.length} 个星门</p>` : ''}
     <div class="route-summary"><span>${app.esc(ship.name)} · 最大 ${range.toFixed(2)} 光年</span>
       <span><button class="link-btn" data-jump-range title="在星图上高亮起点一跳可达的星系">一跳范围</button> · <button class="link-btn" data-game-route title="把每个跳跃落点依次写入游戏自动导航（角色需在线）">写入航点</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>
+    ${legLine}
     <ol class="route-list jump-list">${row(path[0], '<div class="jump-leg"><span>起点</span></div>')}${legs}${gateRows}</ol>
     <p class="jump-foot">冷却与疲劳按 CCP 公布的规则估算（疲劳上限 5 小时、冷却上限 30 分钟），并假设每次冷却结束立即起跳；燃料按所选技能计算。</p>`;
 }

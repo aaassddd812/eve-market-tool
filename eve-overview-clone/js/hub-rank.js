@@ -14,7 +14,7 @@ const POLL = 4000;
 const POLL_VOLUME = 20000;   // 服务器还在读成交量时，隔一会儿取一次新结果
 const MIN_PROFIT = [[0, '不限'], [1e6, '100 万'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿']];
 const MIN_DAILY = [[0, '不限'], [10, '10'], [100, '100'], [1000, '1000']];
-const F = { mode: 'sb', sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0 };
+const F = { mode: 'sb', sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, strict: true };
 const S = { data: null, loading: null, error: null, q: '', timer: 0, rows: null, key: '', vols: {}, sm: [], smKey: '', smNote: '' };
 try { Object.assign(F, JSON.parse(localStorage.getItem('eve-hub-rank') || '{}')); } catch { /* 用默认 */ }
 const save = () => { try { localStorage.setItem('eve-hub-rank', JSON.stringify(F)); } catch { /* 无痕模式 */ } };
@@ -94,21 +94,33 @@ function compute() {
     if (ctx.isGlobal(id)) continue;
     const cat = ctx.category(id);
     if (!cat || (F.cat && cat.id !== F.cat)) continue;
-    let best = null;
+    let best = null, loose = null;
+    const better = (r, b) => !b || score(r) > score(b) || (score(r) === score(b) && r.margin > b.margin);
     for (const r of calcRoutes(hubsOf(row, names, id), F.mode, f, { vol: S.vols[id] || 0, ...fr })) {
-      if (r.unit <= 0 || !r.qty || r.total < F.minProfit) continue;
+      // 买入 / 卖出地点、本地倒卖是范围，始终生效；利润与成交量门槛可以放开看
       if (from && r.a.id !== from) continue;
       if (to && r.b.id !== to) continue;
       if (!F.local && r.local) continue;
-      if (F.minDaily && Math.max(r.a.daily || 0, r.b.daily || 0) < F.minDaily) continue;
-      if (!best || score(r) > score(best) || (score(r) === score(best) && r.margin > best.margin)) best = r;
+      const miss = missOf(r);
+      if (!miss) { if (better(r, best)) best = r; } else if (!F.strict && better(r, loose)) { loose = r; loose.miss = miss; }
     }
     if (best) rows.push({ id, cat, r: best });
+    else if (loose) rows.push({ id, cat, r: loose, off: true });
   }
-  rows.sort((x, y) => score(y.r) - score(x.r) || y.r.margin - x.r.margin);
+  // 符合条件的排前面，不符合的（取消「只看符合条件」后才有）排在后面
+  rows.sort((x, y) => (x.off - y.off) || score(y.r) - score(x.r) || y.r.margin - x.r.margin);
   S.rows = rows;
   S.key = key;
   return rows;
+}
+
+// 路线不符合哪个条件（符合时返回空串）
+function missOf(r) {
+  if (r.unit <= 0) return '亏损';
+  if (!r.qty) return '算不出可做数量';
+  if (r.total < F.minProfit) return '预计利润低于门槛';
+  if (F.minDaily && Math.max(r.a.daily || 0, r.b.daily || 0) < F.minDaily) return '日均成交低于门槛';
+  return '';
 }
 
 const seg = (k, items) => `<div class="segmented">${items.map(([v, l]) => `<button type="button" data-hr-${k}="${v}" class="${String(F[k]) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
@@ -128,20 +140,23 @@ function html() {
   const noVol = !all.length && F.mode !== 'sb' && Object.values(S.data.types).every((r) => r.every((h) => !h || h[6] == null));
   const name = (h) => esc(String(h.name));
   const px = (v) => Math.abs(v) >= 1e6 ? formatISK(v) : formatPrice(v);   // 大额用 M / B，表格放得下
+  const ok = list.filter((x) => !x.off).length;
+  const sign = (v) => (v > 0 ? '+' : '') + px(v);
   const rows = top.map((x, i) => {
     const r = x.r;
-    return `<tr data-hr-open="${x.id}" title="打开该物品的交易中心比价">
+    const cls = r.unit > 0 ? 'up' : 'down';
+    return `<tr data-hr-open="${x.id}"${x.off ? ` class="hr-off" title="不符合条件：${esc(r.miss)} · 点击打开该物品的交易中心比价"` : ' title="打开该物品的交易中心比价"'}>
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
       <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}</small></span></div></td>
       <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}</td>
       <td class="num pi-hide-sm">${px(r.buyAt)}</td>
       <td class="num pi-hide-sm">${px(r.sellAt)}</td>
-      <td class="num up">+${px(r.unit)}</td>
-      <td class="num up">${(r.margin * 100).toFixed(1)}%</td>
+      <td class="num ${cls}">${sign(r.unit)}</td>
+      <td class="num ${cls}">${(r.margin * 100).toFixed(1)}%</td>
       <td class="num pi-hide-sm" title="${r.vol ? formatNumber(r.vol) + ' m³ / 件' : '体积未知'}">${r.perM3 != null ? formatISK(r.perM3) : '—'}</td>
-      <td class="num">${formatNumber(r.qty)}</td>
-      <td class="num pi-hide-sm">${formatISK(r.cost * r.qty)}</td>
-      <td class="num up">${formatISK(r.total)}</td></tr>`;
+      <td class="num">${r.qty ? formatNumber(r.qty) : '—'}</td>
+      <td class="num pi-hide-sm">${r.qty ? formatISK(r.cost * r.qty) : '—'}</td>
+      <td class="num ${r.total ? 'up' : ''}">${r.total ? formatISK(r.total) : '—'}</td></tr>`;
   }).join('');
   return `<div class="hr-wrap">
     <div class="pi-card ind-rank-filters">
@@ -157,6 +172,7 @@ function html() {
         <div class="pi-inline"><span>买入</span>${select('from', hubOpts)}</div>
         <div class="pi-inline"><span>卖出</span>${select('to', hubOpts)}</div>
         <label class="pi-inline hr-check"><input type="checkbox" data-hr-local ${F.local ? 'checked' : ''}><span>含本地倒卖</span></label>
+        <label class="pi-inline hr-check" title="取消勾选后，亏损、算不出可做数量或没达到利润 / 成交量门槛的物品也列出来（灰色，排在后面）"><input type="checkbox" data-hr-strict ${F.strict ? 'checked' : ''}><span>只看符合条件的路线</span></label>
       </div>
       <div class="ind-rank-row">
         <div class="pi-inline"><span>预计利润 ≥</span>${select('minProfit', MIN_PROFIT)}</div>
@@ -165,7 +181,7 @@ function html() {
       </div>
       <div class="ind-rank-row">${freightHtml('hr')}</div>
       <p class="pi-note" title="可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。">
-        ${list.length} 个物品有利润${list.length > LIMIT ? `，显示前 ${LIMIT}` : ''} · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${esc(S.smNote)}</span>` : ''}</p>
+        ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${list.length > LIMIT ? `，显示前 ${LIMIT}` : ''} · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${esc(S.smNote)}</span>` : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table hr-table"><thead><tr>
       <th class="pi-hide-sm">#</th><th>物品</th><th>路线</th><th class="num pi-hide-sm">买入价</th><th class="num pi-hide-sm">卖出价</th><th class="num">每件利润</th><th class="num">利润率</th><th class="num pi-hide-sm">每立方</th><th class="num">可做数量</th><th class="num pi-hide-sm">投入</th><th class="num">预计利润</th>
@@ -240,6 +256,7 @@ function bind(box) {
     const sel = e.target.closest('[data-hr-sel]');
     if (sel) { F[sel.dataset.hrSel] = Number(sel.value); save(); render(box); return; }
     if (e.target.matches('[data-hr-local]')) { F.local = e.target.checked; save(); render(box); return; }
+    if (e.target.matches('[data-hr-strict]')) { F.strict = e.target.checked; save(); render(box); return; }
     if (e.target.matches('[data-hr-m3],[data-hr-collat]')) { setFreight(box.querySelector('[data-hr-m3]').value, box.querySelector('[data-hr-collat]').value); render(box); }
   });
   let t = 0;

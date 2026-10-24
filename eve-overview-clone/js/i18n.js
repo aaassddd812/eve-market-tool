@@ -9,7 +9,7 @@
 (function () {
   'use strict';
   var KEY = 'eve-lang';
-  var VER = '7';
+  var VER = '9';
   var CN_TZ = /^Asia\/(Shanghai|Chongqing|Chungking|Harbin|Urumqi|Kashgar|Hong_Kong|Macau|Macao|Taipei)$/;
 
   function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
@@ -67,6 +67,9 @@
       var ex = d.exact || {};
       for (var k in ex) EX[k] = ex[k];
       (d.patterns || []).forEach(function (p) { addPattern(p[0], p[1]); });
+      // 同一组里固定文字多的句式先试：「途经 {0}」不能抢在「途经点 {0} 不能直接跳入…」前面
+      var byLit = function (a, b) { return b.lit - a.lit; };
+      [PAT_HEAD, PAT_TAIL].forEach(function (g) { for (var c in g) g[c].sort(byLit); });
     });
   api.ready = Promise.all([namesP, uiP]).then(function () {
     for (var k in EX) if (k.length > maxKey) maxKey = k.length;
@@ -89,7 +92,7 @@
       else if (i % 2) { src += (i === 1 && !parts[0]) || (i === parts.length - 2 && !parts[parts.length - 1]) ? '([\\s\\S]*?)' : '([\\s\\S]+?)'; order.push(Number(parts[i])); } else src += esc(parts[i]).replace(/ /g, '\\s*');
     }
     var re = new RegExp(src + '$');
-    var pat = { re: re, order: order, val: val };
+    var pat = { re: re, order: order, val: val, lit: key.replace(/\{\d+\}|\s/g, '').length };
     var head = parts[0], tail = parts[parts.length - 1];
     if (head) (PAT_HEAD[head[0]] = PAT_HEAD[head[0]] || []).push(pat);
     else if (tail) (PAT_TAIL[tail[tail.length - 1]] = PAT_TAIL[tail[tail.length - 1]] || []).push(pat);
