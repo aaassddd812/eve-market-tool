@@ -1,8 +1,8 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v6';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v5';
-import * as SM from './struct-markets.js?v=v2';
+import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v7';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v6';
+import * as SM from './struct-markets.js?v=v3';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
 // ===== 配置与常量 =====
@@ -1333,7 +1333,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v3').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v4').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -1860,7 +1860,7 @@ async function loadStructureOrders(typeId, seq) {
     }
     show(`玩家建筑：读取 ${readable} 座市场，${withOrders} 座有本物品订单${added ? `（星域订单之外另有 ${added} 条，已并入）` : ''}`
       + (denied ? `；${denied} 座没有停靠权限` : '') + (big ? `；${big} 座订单过多跳过` : '') + (failed ? `；${failed} 座读取失败` : ''));
-    note.insertAdjacentHTML('beforeend', ' · <button class="link-btn" data-struct-manage>管理我的建筑市场</button>');
+    note.insertAdjacentHTML('beforeend', ' · <button class="link-btn" data-struct-manage>管理玩家建筑市场</button>');
   } catch (error) {
     show('读取玩家建筑订单失败：' + error.message, true);
   }

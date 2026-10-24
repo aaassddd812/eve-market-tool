@@ -186,7 +186,7 @@ function html(hubs, vol) {
     <div class="hc-head"><h3>交易中心行情</h3><span class="toolbar-spacer"></span>
       <button class="btn btn-ghost btn-sm" data-hc-fees title="调整技能与税费">${esc(TF.summary())}</button>
       <button class="btn btn-ghost btn-sm" data-hc-reload>刷新</button>
-      ${ctx.structs ? `<button class="btn btn-ghost btn-sm" data-hc-structs title="把你有权限的玩家建筑市场加入比价（需绑定 ESI）">建筑市场${ctx.structs.count() ? `（${ctx.structs.count()}）` : ''}</button>` : ''}
+      ${ctx.structs ? `<button class="btn btn-ghost btn-sm" data-hc-structs title="把你有权限的玩家建筑市场加入比价（需绑定 ESI）">玩家建筑市场${ctx.structs.count() ? `（${ctx.structs.count()}）` : ''}</button>` : ''}
       ${ctx.openRank ? '<button class="btn btn-ghost btn-sm" data-hc-rank title="所有物品一起比，按利润排行">全部物品排行</button>' : ''}</div>
     <div class="table-scroll"><table class="pc-mini-table hc-table"><thead><tr>
       <th>交易中心</th><th class="num">最低卖价</th><th class="num">卖单量</th><th class="num">最高收价</th><th class="num">收单量</th><th class="num">日均成交（星域）</th><th class="num">日均成交额</th>

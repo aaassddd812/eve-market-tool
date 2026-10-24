@@ -184,7 +184,7 @@ export async function scanStructures(onProgress = () => {}) {
     const listed = new Set(st.list.map((s) => s.id));
     const ids = [...candidates].filter((id) => listed.has(id) || !st.skip[id]);
     for (const id of listed) if (!ids.includes(id)) ids.push(id);
-    await probeInto(ids, { onProgress: (d, t) => onProgress(`逐座试读建筑市场 ${d}/${t}${pauseUntil > Date.now() ? '（ESI 错误额度快用完，暂停中）' : ''}`) });
+    await probeInto(ids, { onProgress: (d, t) => onProgress(`逐座试读玩家建筑市场 ${d}/${t}${pauseUntil > Date.now() ? '（ESI 错误额度快用完，暂停中）' : ''}`) });
     state().scanAt = Date.now();
     save();
     return ids.length;
@@ -229,7 +229,7 @@ export function openStructManager() {
     modal.setAttribute('aria-labelledby', 'smTitle');
     modal.innerHTML = `<div class="modal-backdrop" data-sm-close></div>
       <div class="modal-content sm-modal">
-        <div class="modal-header"><h3 id="smTitle">我的建筑市场</h3>
+        <div class="modal-header"><h3 id="smTitle">玩家建筑市场</h3>
           <button class="modal-close" data-sm-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
         </div>
         <div class="modal-body" id="smBody"></div>

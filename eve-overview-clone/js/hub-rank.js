@@ -6,7 +6,7 @@
 // 我的建筑市场（struct-markets.js，需绑定 ESI）：浏览器用角色授权读勾选建筑的全部订单，按物品汇总后作为额外的买入 / 卖出地点加入排行；
 //   建筑没有成交历史，和交易中心同星域时借用该交易中心的日均成交与均价，否则挂单方式算不出可做数量（直接成交方式不受影响）。
 //   只比服务器汇总里有的物品（五个交易中心都没有挂单的物品不在排行里）。
-import { calcRoutes, ROUTE_SORT, MODES, setHubMode, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v6';
+import { calcRoutes, ROUTE_SORT, MODES, setHubMode, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v7';
 
 let ctx = null;   // server, regions, esc, formatISK, formatPrice, formatNumber, TF, typeName, category, isGlobal, iconUrl, openItem
 const LIMIT = 200;
@@ -27,9 +27,9 @@ export function initHubRank(context) {
 // 勾选建筑的订单 → 每座建筑一张 物品 → 行情 表
 async function loadStructs(box) {
   if (!ctx.structs?.count()) { S.sm = []; S.smKey = ''; S.smNote = ''; S.rows = null; return; }
-  S.smNote = '正在读取你的建筑市场…';
+  S.smNote = '正在读取玩家建筑市场…';
   if (box) render(box);
-  const list = await ctx.structs.load((d, t) => { S.smNote = `正在读取你的建筑市场 ${d}/${t}…`; const n = box?.querySelector('[data-hr-smnote]'); if (n) n.textContent = S.smNote; }).catch(() => []);
+  const list = await ctx.structs.load((d, t) => { S.smNote = `正在读取玩家建筑市场 ${d}/${t}…`; const n = box?.querySelector('[data-hr-smnote]'); if (n) n.textContent = S.smNote; }).catch(() => []);
   S.sm = list.map(({ s, byType }) => {
     const quotes = new Map();
     for (const [tid, orders] of byType) quotes.set(tid, ctx.structs.quote(orders));
@@ -147,7 +147,7 @@ function html() {
     <div class="pi-card ind-rank-filters">
       <div class="hc-head"><h3>交易中心倒卖排行</h3><span class="toolbar-spacer"></span>
         <button class="btn btn-ghost btn-sm" data-hr-fees title="调整技能与税费">${esc(TF.summary())}</button>
-        ${ctx.structs ? `<button class="btn btn-ghost btn-sm" data-hr-structs title="把你有权限的玩家建筑市场加入排行（需绑定 ESI）">建筑市场${ctx.structs.count() ? `（${ctx.structs.count()}）` : ''}</button>` : ''}
+        ${ctx.structs ? `<button class="btn btn-ghost btn-sm" data-hr-structs title="把你有权限的玩家建筑市场加入排行（需绑定 ESI）">玩家建筑市场${ctx.structs.count() ? `（${ctx.structs.count()}）` : ''}</button>` : ''}
         <button class="btn btn-ghost btn-sm" data-hr-reload>刷新</button></div>
       <div class="ind-rank-row">${seg('mode', MODES)}</div>
       <div class="ind-rank-row">

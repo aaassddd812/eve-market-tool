@@ -4,7 +4,7 @@
 //   也可切到表格视图（各中心卖 / 收一目了然）。可按涨跌、偏离均价、成交额、最接近触发的提醒排序。数据与单品「交易中心比价」相同（hub-compare.js，缓存 5 分钟）。
 // 到价提醒：每个物品可设若干条「某交易中心 卖价 / 收价 ≤ / ≥ 某价」（或一键「卖价跌 / 涨 5%、10%」），看板开着或后台监控开着时每 5 分钟检查一次；
 //   触发后网页提示（可选桌面通知、提示音），该条提醒停用，点「重新启用」再次监控。设置保存在本机。
-import { loadHubs } from './hub-compare.js?v=v6';
+import { loadHubs } from './hub-compare.js?v=v7';
 
 let ctx = null;   // isGlobal, fetchESI, fetchESIPaged, regions, esc, formatISK, formatPrice, formatNumber, showToast, typeName, iconUrl, openItem, favorites, toggleFavorite, store, isActive
 const KEY = 'eve-watch-board';
