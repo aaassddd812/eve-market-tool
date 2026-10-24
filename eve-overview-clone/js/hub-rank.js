@@ -3,7 +3,10 @@
 //      （每个物品每个交易中心：最低卖 / 最高收、最优价 5% 以内的深度）与星域日均成交（宁静服 EVE Ref 每日历史，国服逐个查 ESI，缓存 1 天）。
 // 路线与利润的算法与单个物品的「交易中心比价」相同（hub-compare.js 的 calcRoutes），技能与税费用全站设置；每个物品只列筛选条件下最好的一条路线。
 // 运费设置与单品比价共用（跨中心路线扣 包装体积 × 每立方运费 + 抵押费），可按每立方利润排序（适合按货舱容量选品）
-import { calcRoutes, ROUTE_SORT, MODES, setHubMode, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v5';
+// 我的建筑市场（struct-markets.js，需绑定 ESI）：浏览器用角色授权读勾选建筑的全部订单，按物品汇总后作为额外的买入 / 卖出地点加入排行；
+//   建筑没有成交历史，和交易中心同星域时借用该交易中心的日均成交与均价，否则挂单方式算不出可做数量（直接成交方式不受影响）。
+//   只比服务器汇总里有的物品（五个交易中心都没有挂单的物品不在排行里）。
+import { calcRoutes, ROUTE_SORT, MODES, setHubMode, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v6';
 
 let ctx = null;   // server, regions, esc, formatISK, formatPrice, formatNumber, TF, typeName, category, isGlobal, iconUrl, openItem
 const LIMIT = 200;
@@ -12,11 +15,31 @@ const POLL_VOLUME = 20000;   // 服务器还在读成交量时，隔一会儿取
 const MIN_PROFIT = [[0, '不限'], [1e6, '100 万'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿']];
 const MIN_DAILY = [[0, '不限'], [10, '10'], [100, '100'], [1000, '1000']];
 const F = { mode: 'sb', sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0 };
-const S = { data: null, loading: null, error: null, q: '', timer: 0, rows: null, key: '', vols: {} };
+const S = { data: null, loading: null, error: null, q: '', timer: 0, rows: null, key: '', vols: {}, sm: [], smKey: '', smNote: '' };
 try { Object.assign(F, JSON.parse(localStorage.getItem('eve-hub-rank') || '{}')); } catch { /* 用默认 */ }
 const save = () => { try { localStorage.setItem('eve-hub-rank', JSON.stringify(F)); } catch { /* 无痕模式 */ } };
 
-export function initHubRank(context) { ctx = context; }
+export function initHubRank(context) {
+  ctx = context;
+  ctx.structs?.on(() => { S.smKey = ''; if (S.box?.isConnected && !S.box.hidden && S.data && !S.data.loading) loadStructs(S.box); });
+}
+
+// 勾选建筑的订单 → 每座建筑一张 物品 → 行情 表
+async function loadStructs(box) {
+  if (!ctx.structs?.count()) { S.sm = []; S.smKey = ''; S.smNote = ''; S.rows = null; return; }
+  S.smNote = '正在读取你的建筑市场…';
+  if (box) render(box);
+  const list = await ctx.structs.load((d, t) => { S.smNote = `正在读取你的建筑市场 ${d}/${t}…`; const n = box?.querySelector('[data-hr-smnote]'); if (n) n.textContent = S.smNote; }).catch(() => []);
+  S.sm = list.map(({ s, byType }) => {
+    const quotes = new Map();
+    for (const [tid, orders] of byType) quotes.set(tid, ctx.structs.quote(orders));
+    return { s, quotes };
+  });
+  S.smKey = S.sm.map((x) => x.s.id).join(',') + '@' + Date.now();
+  S.smNote = list.length ? `含 ${list.length} 座玩家建筑` : '';
+  S.rows = null;
+  if (box) render(box);
+}
 
 async function load(force) {
   if (S.loading && !force) return S.loading;
@@ -38,22 +61,33 @@ async function load(force) {
 }
 
 // 服务端数组 → hub-compare 用的对象
-function hubsOf(row, names) {
+function hubsOf(row, names, id) {
   const out = [];
   row.forEach((h, k) => {
     if (!h) return;
     out.push({ id: S.data.hubs[k], name: names[k], sell: h[0], buy: h[1], sellDepth: h[4], buyDepth: h[5], daily: h[6], avg: h[7] });
   });
+  // 玩家建筑：同星域交易中心的日均成交与均价
+  for (const { s, quotes } of S.sm) {
+    const q = quotes.get(id);
+    if (!q || (q.sell == null && q.buy == null)) continue;
+    const k = S.data.hubs.indexOf(s.region);
+    const h = k >= 0 ? row[k] : null;
+    out.push({ id: s.id, name: s.label, struct: true, ...q, daily: h?.[6] ?? null, avg: h?.[7] ?? null });
+  }
   return out;
 }
 
 function compute() {
-  const key = JSON.stringify([F, ctx.TF.summary(), S.data?.updated, freight()]);
+  const key = JSON.stringify([F, ctx.TF.summary(), S.data?.updated, freight(), S.smKey]);
   if (S.rows && S.key === key) return S.rows;
   const f = ctx.TF.fees();
   const names = S.data.hubs.map((id) => ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id);
   const score = ROUTE_SORT[F.sort] || ROUTE_SORT.profit;
   const fr = freight();
+  // 买入 / 卖出选的建筑被取消勾选后按「全部」算
+  const places = new Set([...S.data.hubs, ...S.sm.map((x) => x.s.id)]);
+  const from = places.has(F.from) ? F.from : 0, to = places.has(F.to) ? F.to : 0;
   const rows = [];
   for (const [tid, row] of Object.entries(S.data.types)) {
     const id = Number(tid);
@@ -61,10 +95,10 @@ function compute() {
     const cat = ctx.category(id);
     if (!cat || (F.cat && cat.id !== F.cat)) continue;
     let best = null;
-    for (const r of calcRoutes(hubsOf(row, names), F.mode, f, { vol: S.vols[id] || 0, ...fr })) {
+    for (const r of calcRoutes(hubsOf(row, names, id), F.mode, f, { vol: S.vols[id] || 0, ...fr })) {
       if (r.unit <= 0 || !r.qty || r.total < F.minProfit) continue;
-      if (F.from && r.a.id !== F.from) continue;
-      if (F.to && r.b.id !== F.to) continue;
+      if (from && r.a.id !== from) continue;
+      if (to && r.b.id !== to) continue;
       if (!F.local && r.local) continue;
       if (F.minDaily && Math.max(r.a.daily || 0, r.b.daily || 0) < F.minDaily) continue;
       if (!best || score(r) > score(best) || (score(r) === score(best) && r.margin > best.margin)) best = r;
@@ -86,7 +120,8 @@ function html() {
   const q = S.q.trim().toLowerCase();
   const list = q ? all.filter((x) => ctx.typeName(x.id).toLowerCase().includes(q) || String(x.id) === q) : all;
   const top = list.slice(0, LIMIT);
-  const hubOpts = [[0, '全部'], ...S.data.hubs.map((id) => [id, ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id])];
+  const hubOpts = [[0, '全部'], ...S.data.hubs.map((id) => [id, ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id]),
+    ...S.sm.map(({ s }) => [s.id, s.label])];
   const cats = new Map();
   for (const x of Object.keys(S.data.types)) { const c = ctx.category(Number(x)); if (c) cats.set(c.id, c.name); }
   const catOpts = [[0, '全部分类'], ...[...cats].sort((a, b) => a[1].localeCompare(b[1], 'zh'))];
@@ -112,6 +147,7 @@ function html() {
     <div class="pi-card ind-rank-filters">
       <div class="hc-head"><h3>交易中心倒卖排行</h3><span class="toolbar-spacer"></span>
         <button class="btn btn-ghost btn-sm" data-hr-fees title="调整技能与税费">${esc(TF.summary())}</button>
+        ${ctx.structs ? `<button class="btn btn-ghost btn-sm" data-hr-structs title="把你有权限的玩家建筑市场加入排行（需绑定 ESI）">建筑市场${ctx.structs.count() ? `（${ctx.structs.count()}）` : ''}</button>` : ''}
         <button class="btn btn-ghost btn-sm" data-hr-reload>刷新</button></div>
       <div class="ind-rank-row">${seg('mode', MODES)}</div>
       <div class="ind-rank-row">
@@ -129,7 +165,7 @@ function html() {
       </div>
       <div class="ind-rank-row">${freightHtml('hr')}</div>
       <p class="pi-note" title="可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。">
-        ${list.length} 个物品有利润${list.length > LIMIT ? `，显示前 ${LIMIT}` : ''} · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}</p>
+        ${list.length} 个物品有利润${list.length > LIMIT ? `，显示前 ${LIMIT}` : ''} · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${esc(S.smNote)}</span>` : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table hr-table"><thead><tr>
       <th class="pi-hide-sm">#</th><th>物品</th><th>路线</th><th class="num pi-hide-sm">买入价</th><th class="num pi-hide-sm">卖出价</th><th class="num">每件利润</th><th class="num">利润率</th><th class="num pi-hide-sm">每立方</th><th class="num">可做数量</th><th class="num pi-hide-sm">投入</th><th class="num">预计利润</th>
@@ -171,9 +207,12 @@ function poll(box) {
 
 export async function showHubRank(box) {
   if (!box.dataset.bound) bind(box);
+  S.box = box;
   S.vols = await loadVolumes();
   if (!S.data || S.data.loading) await load();
   render(box);
+  // 建筑市场缓存 5 分钟，过期或勾选变了再读
+  if (ctx.structs?.count() && (!S.smKey || Date.now() - Number(S.smKey.split('@')[1]) > 5 * 60e3)) loadStructs(box);
 }
 
 // 技能或税费改动后重算
@@ -191,6 +230,7 @@ function bind(box) {
       save(); render(box); return;
     }
     if (e.target.closest('[data-hr-fees]')) { ctx.TF.openFeeDialog(); return; }
+    if (e.target.closest('[data-hr-structs]')) { ctx.structs.open(); return; }
     if (e.target.closest('[data-hr-reload]')) { load(true).then(() => render(box)); return; }
     const row = e.target.closest('[data-hr-open]');
     if (row) { setHubMode(F.mode); ctx.openItem(Number(row.dataset.hrOpen)); }

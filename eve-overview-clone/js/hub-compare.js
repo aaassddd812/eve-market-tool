@@ -7,6 +7,7 @@
 // 运费（跨交易中心路线，与倒卖排行共用设置）：每件运费 = 包装体积 × 每立方运费 + 买入成本 × 抵押费率；每立方利润 = 每件利润 ÷ 包装体积。
 //   体积来自 type-volume.json（build_volumes.mjs 由 SDE 生成）。运费默认 0（不计），可按快递报价填写。
 // 全部物品一起比的排行在 hub-rank.js（数据由击杀记录服务汇总）。
+// 我的建筑市场（struct-markets.js，需绑定 ESI）：勾选的玩家建筑排在交易中心后面一起算路线；建筑没有自己的成交历史，日均成交与均价用所在星域的。
 let ctx = null;
 const cache = new Map();   // typeId -> { at, promise }
 const TTL = 5 * 60e3;
@@ -21,7 +22,43 @@ try { Object.assign(opts, JSON.parse(localStorage.getItem('eve-hub-compare') || 
 if (!MODES.some(([k]) => k === opts.mode)) opts.mode = 'sb';   // 旧设置 buy / sell
 const persist = () => { try { localStorage.setItem('eve-hub-compare', JSON.stringify(opts)); } catch { /* 无痕模式 */ } };
 
-export function initHubCompare(context) { ctx = context; }
+export function initHubCompare(context) {
+  ctx = context;
+  // 建筑勾选变化：清掉缓存，正开着的比价重画
+  ctx.structs?.on(() => {
+    structCache.clear();
+    if (lastBox?.isConnected && lastBox.dataset.type && lastBox.querySelector('.hc-wrap')) renderHubCompare(lastBox, Number(lastBox.dataset.type));
+  });
+}
+let lastBox = null;
+
+// 勾选的玩家建筑：每座一行，和交易中心同样的字段（星域历史与交易中心同星域时直接借用）
+const structCache = new Map();   // typeId -> { at, promise }
+const regionHist = new Map();    // `${region}:${type}` -> promise
+function loadStructRows(typeId, hubs) {
+  if (!ctx.structs?.count()) return Promise.resolve([]);
+  const hit = structCache.get(typeId);
+  if (hit && Date.now() - hit.at < TTL) return hit.promise;
+  const promise = ctx.structs.load().then((list) => Promise.all(list.map(async ({ s, byType }) => {
+    const q = ctx.structs.quote(byType.get(typeId) || []);
+    let hist = hubs.find((h) => h.region.id === s.region);
+    if (!hist && s.region) {
+      const k = s.region + ':' + typeId;
+      if (!regionHist.has(k)) regionHist.set(k, ctx.fetchESI(`/markets/${s.region}/history/?type_id=${typeId}`).catch(() => null));
+      const history = await regionHist.get(k);
+      const recent = Array.isArray(history) ? history.slice(-30) : [];
+      const vol = recent.reduce((n, d) => n + d.volume, 0);
+      hist = { daily: vol / 30, avg: recent.length ? recent.reduce((n, d) => n + d.average * d.volume, 0) / (vol || 1) : null };
+    }
+    return {
+      region: { id: s.region, name: ctx.structs.regionName(s.region), hub: { id: s.id, name: s.label } },
+      id: s.id, label: s.label, struct: true, failed: false, ...q, daily: hist?.daily || 0, avg: hist?.avg ?? null
+    };
+  })));
+  structCache.set(typeId, { at: Date.now(), promise });
+  promise.catch(() => structCache.delete(typeId));
+  return promise;
+}
 
 // 物品包装体积（m³），首次用到时加载
 let volumes = null;
@@ -119,10 +156,10 @@ function html(hubs, vol) {
   const live = hubs.filter((h) => !h.failed);
   const minSell = Math.min(...live.map((h) => h.sell ?? Infinity));
   const maxBuy = Math.max(...live.map((h) => h.buy ?? -Infinity));
-  const name = (h) => esc(h.region.hub.name.split(' ')[0].replace(/海\d+$/, '') || h.region.name);
+  const name = (h) => esc(h.label || h.region.hub.name.split(' ')[0].replace(/海\d+$/, '') || h.region.name);
   const num = (v) => v == null ? '<span class="muted-cell">—</span>' : formatPrice(v);
-  const hubRows = hubs.map((h) => `<tr>
-      <td><b>${name(h)}</b><small class="hc-sub">${esc(h.region.name)}</small></td>
+  const hubRows = hubs.map((h) => `<tr${h.struct ? ' class="hc-struct"' : ''}>
+      <td><b>${name(h)}</b><small class="hc-sub">${h.struct ? '玩家建筑 · ' : ''}${esc(h.region.name)}</small></td>
       ${h.failed ? '<td colspan="6" class="muted-cell">ESI 读取失败</td>' : `
       <td class="num ${h.sell != null && h.sell === minSell ? 'hc-best down' : ''}">${num(h.sell)}</td>
       <td class="num">${h.sellQty ? formatNumber(h.sellQty) : '—'}</td>
@@ -149,6 +186,7 @@ function html(hubs, vol) {
     <div class="hc-head"><h3>交易中心行情</h3><span class="toolbar-spacer"></span>
       <button class="btn btn-ghost btn-sm" data-hc-fees title="调整技能与税费">${esc(TF.summary())}</button>
       <button class="btn btn-ghost btn-sm" data-hc-reload>刷新</button>
+      ${ctx.structs ? `<button class="btn btn-ghost btn-sm" data-hc-structs title="把你有权限的玩家建筑市场加入比价（需绑定 ESI）">建筑市场${ctx.structs.count() ? `（${ctx.structs.count()}）` : ''}</button>` : ''}
       ${ctx.openRank ? '<button class="btn btn-ghost btn-sm" data-hc-rank title="所有物品一起比，按利润排行">全部物品排行</button>' : ''}</div>
     <div class="table-scroll"><table class="pc-mini-table hc-table"><thead><tr>
       <th>交易中心</th><th class="num">最低卖价</th><th class="num">卖单量</th><th class="num">最高收价</th><th class="num">收单量</th><th class="num">日均成交（星域）</th><th class="num">日均成交额</th>
@@ -167,12 +205,18 @@ function html(hubs, vol) {
 export async function renderHubCompare(box, typeId) {
   if (!ctx.regions?.length) { box.innerHTML = '<p class="text-muted">当前服务器只有一个交易中心</p>'; return; }
   box.dataset.type = typeId;
+  lastBox = box;
   if (ctx.isGlobal?.(typeId)) { box.innerHTML = '<p class="text-muted">该物品是全服统一市场（不分星域与交易中心），没有交易中心差价</p>'; return; }
   box.innerHTML = ctx.skeleton();
   try {
     const [hubs, vols] = await Promise.all([load(typeId), loadVolumes()]);
     if (Number(box.dataset.type) !== typeId) return;
     box.innerHTML = html(hubs, vols[typeId] || 0);
+    // 玩家建筑读得慢（整座建筑的订单），先显示交易中心，读完再补上
+    if (ctx.structs?.count()) {
+      const rows = await loadStructRows(typeId, hubs).catch(() => []);
+      if (Number(box.dataset.type) === typeId && rows.length) box.innerHTML = html([...hubs, ...rows], vols[typeId] || 0);
+    }
   } catch (e) {
     if (Number(box.dataset.type) === typeId) box.innerHTML = `<p class="text-muted">读取失败：${ctx.esc(e.message)}</p>`;
   }
@@ -191,7 +235,8 @@ export async function renderHubCompare(box, typeId) {
     }
     if (e.target.closest('[data-hc-fees]')) { ctx.TF.openFeeDialog(); return; }
     if (e.target.closest('[data-hc-rank]')) { ctx.openRank(); return; }
-    if (e.target.closest('[data-hc-reload]')) { cache.delete(id); renderHubCompare(box, id); }
+    if (e.target.closest('[data-hc-structs]')) { ctx.structs.open(); return; }
+    if (e.target.closest('[data-hc-reload]')) { cache.delete(id); structCache.delete(id); renderHubCompare(box, id); }
   });
   box.addEventListener('change', (e) => {
     if (!e.target.matches('[data-hc-m3],[data-hc-collat]')) return;

@@ -1,7 +1,8 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v5';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v4';
+import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v6';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v5';
+import * as SM from './struct-markets.js?v=v2';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
 // ===== 配置与常量 =====
@@ -778,7 +779,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v34').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v40').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -1332,7 +1333,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v2').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v3').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -1809,11 +1810,18 @@ async function loadStructureOrders(typeId, seq) {
     note.hidden = !text;
   };
   const token = state.esiToken || readEsiToken();
-  if (!state.regionId || state.globalMarket || !token?.access_token) return show('');   // 全宇宙不读玩家建筑（星域太多）；全服统一市场的订单已全部在星域订单里
+  if (state.globalMarket || !token?.access_token) return show('');   // 全服统一市场的订单已全部在星域订单里
   if (!hasScope(token, STRUCT_MARKET_SCOPE)) return show('玩家建筑里的订单需要「建筑市场」授权（esi-markets.structure_markets.v1），重新绑定 ESI 后可查看', true);
   try {
-    show('查找本星域的玩家建筑市场…');
-    const ids = await regionMarketStructures(state.regionId, show);
+    // 选了星域：本星域的公开 / 已知市场建筑 + 「我的建筑市场」里本星域的；全宇宙：只读「我的建筑市场」（星域太多，不逐个找）
+    const mine = await SM.enabledStructs();
+    if (seq !== state.loadSeq) return;
+    if (!state.regionId && !mine.length) return show('');
+    let ids = mine.filter((x) => !state.regionId || x.region === state.regionId).map((x) => x.id);
+    if (state.regionId) {
+      show('查找本星域的玩家建筑市场…');
+      ids = [...new Set([...await regionMarketStructures(state.regionId, show), ...ids])];
+    }
     if (seq !== state.loadSeq) return;
     if (!ids.length) return show('本星域没有找到可读取的玩家建筑市场');
     let done = 0;
@@ -1852,6 +1860,7 @@ async function loadStructureOrders(typeId, seq) {
     }
     show(`玩家建筑：读取 ${readable} 座市场，${withOrders} 座有本物品订单${added ? `（星域订单之外另有 ${added} 条，已并入）` : ''}`
       + (denied ? `；${denied} 座没有停靠权限` : '') + (big ? `；${big} 座订单过多跳过` : '') + (failed ? `；${failed} 座读取失败` : ''));
+    note.insertAdjacentHTML('beforeend', ' · <button class="link-btn" data-struct-manage>管理我的建筑市场</button>');
   } catch (error) {
     show('读取玩家建筑订单失败：' + error.message, true);
   }
@@ -2358,9 +2367,21 @@ function initContentTabs() {
   // 「近期损失」只对舰船显示，启动时不恢复到该标签
   if (!['orders', 'chart', 'history', 'hubs'].includes(state.contentTab)) state.contentTab = 'orders';
   if (REGIONS.length < 2) $('hubsTab').hidden = true;
-  initHubCompare({ regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
+  SM.initStructMarkets({ getToken: ensureEsiToken, readToken: () => state.esiToken || readEsiToken(), hasScope, structureMarket, structureNameMap, saveStructureNames,
+    systemRegions, esc, formatNumber });
+  const structs = {
+    load: SM.loadEnabledMarkets, quote: SM.structQuote, count: SM.enabledCount, open: SM.openStructManager, on: SM.onStructChange,
+    regionName: (id) => state.marketRegions.find((r) => r.id === id)?.name || REGIONS.find((r) => r.id === id)?.name || ''
+  };
+  loadMarketRegions().catch(() => {});
+  $('structOrdersNote').addEventListener('click', (e) => { if (e.target.closest('[data-struct-manage]')) SM.openStructManager(); });
+  // 建筑勾选变化：订单簿重新并入
+  // 建筑勾选变化：重新读订单（去掉的建筑订单要从订单簿里拿掉）；对话框里每点一次勾选都会触发，稍等再读
+  let structReload = 0;
+  SM.onStructChange(() => { clearTimeout(structReload); structReload = setTimeout(() => { if (state.selectedItem?.id) loadMarketData(state.selectedItem.id); }, 800); });
+  initHubCompare({ structs, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
     skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8), openRank: () => openArb() });
-  initHubRank({ server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
+  initHubRank({ structs, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
     typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
     category: (id) => { const e = state.typeIndex.get(id); const g = e && state.categories.get(rootGroupId(e.groupId)); return g ? { id: g.id, name: g.name } : null; },
     iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,

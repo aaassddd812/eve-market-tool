@@ -1228,6 +1228,9 @@ function bindSidebar() {
     fields.forEach((f, k) => { [f.value, f.dataset.id] = vals[k]; });
   };
   $('routeSwap').addEventListener('click', reverseRoute);
+  bindRouteImport();
+  // 起点 / 终点：一键填入 ESI 角色当前所在星系
+  document.querySelectorAll('[data-route-here]').forEach((btn) => btn.addEventListener('click', () => routeFromHere(btn)));
   $('routeReverse').addEventListener('click', reverseRoute);
   // 途经点：添加 / 上移 / 下移 / 删除
   $('routeAddWp').addEventListener('click', () => { addWaypoint()?.focus(); });
@@ -1289,6 +1292,135 @@ function bindSystemField(field, list) {
 
 const MAX_WAYPOINTS = 15;
 
+// ---------- 粘贴导入多个星系 ----------
+// 游戏里复制的人物和地点、路线、聊天内容：按行拆开，表格行（制表符分列）每行取一个星系，其余文本按 → / 逗号等拆成多个；
+// 中文名本地匹配，英文名 / 空间站名用 ESI /universe/ids/ 查，星系链接 showinfo:5//ID 直接取
+const IMPORT_SPLIT = /\s*(?:→|->|=>|»|›|>|,|，|、|;|；|\|)\s*/;
+
+function importCandidates(cell) {
+  // 人物和地点里没去过的星系名后面带 *
+  const c = cell.replace(/<[^>]+>/g, '').trim().replace(/\*+$/, '').trim();
+  if (!c || c.length > 120) return [];
+  const out = [c];
+  // 空间站全名「吉他 IV - 卫星 4 - 加达里海军组装工厂」/ 玩家建筑「Jita - 名字」：取第一段的星系名
+  // 「Amarr VIII (Oris) - …」这种行星带括号名的也去掉
+  const head = c.split(' - ')[0].replace(/\s*\([^)]*\)$/, '').replace(/\s+[IVXLC]+$/, '').trim();
+  if (head && head !== c) out.push(head);
+  return out;
+}
+
+async function parseRouteImport(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  // 每行：[{ cells: [[候选名…]…], link: 星系 index }]
+  const rows = [];
+  const stationIds = new Set();
+  for (const line of lines) {
+    const links = [...line.matchAll(/showinfo:(\d+)\/\/(\d+)/g)].map((m) => [Number(m[1]), Number(m[2])]);
+    for (const [, id] of links) if (id >= 60000000 && id < 64000000) stationIds.add(id);
+    // 表格行：制表符分列；有的地方粘贴后制表符会变成连续空格，也按分列处理
+    const tab = line.includes('\t') || (/ {2,}/.test(line) && !IMPORT_SPLIT.test(line));
+    const cells = (tab ? line.split(/\t| {2,}/) : line.replace(/<[^>]+>/g, ' ').split(IMPORT_SPLIT)).map(importCandidates);
+    rows.push({ tab, cells, links });
+  }
+  // 本地中文名匹配不到的，交给 ESI 查英文名 / 空间站名
+  const local = (name) => M.systems.find((s) => s.lower === name.toLowerCase());
+  const nameMap = new Map();
+  const unknown = new Set();
+  for (const r of rows) for (const cands of r.cells) for (const n of cands) {
+    const s = local(n);
+    if (s) nameMap.set(n.toLowerCase(), s.i); else if (/[a-z]/i.test(n)) unknown.add(n);
+  }
+  if (unknown.size) {
+    const names = [...unknown].slice(0, 500);
+    try {
+      const res = await app.fetchESI('/universe/ids/?language=en', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(names) });
+      for (const x of res.systems || []) { const s = M.byId.get(x.id); if (s) nameMap.set(x.name.toLowerCase(), s.i); }
+      for (const x of res.stations || []) { stationIds.add(x.id); nameMap.set(x.name.toLowerCase(), -x.id); }
+    } catch { /* 查不到就只用本地匹配的结果 */ }
+  }
+  // 空间站 → 所在星系
+  const stationSys = new Map();
+  await Promise.all([...stationIds].slice(0, 50).map((id) => app.fetchESI(`/universe/stations/${id}/`)
+    .then((st) => { const s = M.byId.get(st.system_id); if (s) stationSys.set(id, s.i); }).catch(() => {})));
+  const resolve = (n) => {
+    const v = nameMap.get(n.toLowerCase());
+    return v == null ? null : v >= 0 ? v : stationSys.get(-v) ?? null;
+  };
+  const linkSys = ([type, id]) => type === 5 ? M.byId.get(id)?.i ?? null : stationSys.get(id) ?? null;
+  const out = [];
+  for (const r of rows) {
+    const found = r.cells.map((cands) => { for (const n of cands) { const i = resolve(n); if (i != null) return i; } return null; });
+    const fromLinks = r.links.map(linkSys).filter((i) => i != null);
+    if (r.tab) {
+      // 表格行只取一个：链接优先，其次第 2 列起的第一个星系（第 1 列常是自定义名称），最后才用第 1 列
+      const pick = fromLinks[0] ?? found.slice(1).find((i) => i != null) ?? found[0];
+      if (pick != null) out.push(pick);
+    } else if (fromLinks.length) out.push(...fromLinks);
+    else out.push(...found.filter((i) => i != null));
+  }
+  return out.filter((i, k) => k === 0 || i !== out[k - 1]);
+}
+
+function bindRouteImport() {
+  const box = $('routeImport'), text = $('routeImportText'), preview = $('routeImportPreview'), apply = $('routeImportApply');
+  let parsed = [];
+  let seq = 0;
+  const open = (value) => {
+    box.hidden = false;
+    if (value != null) text.value = value;
+    text.focus();
+    refresh();
+  };
+  const refresh = app.debounce(async () => {
+    const my = ++seq;
+    if (!text.value.trim()) { parsed = []; preview.textContent = ''; apply.disabled = true; return; }
+    preview.textContent = '正在识别…';
+    const list = await parseRouteImport(text.value);
+    if (my !== seq) return;
+    parsed = list;
+    apply.disabled = !list.length;
+    const via = $('routeImportMode').value === 'via';
+    const cap = via ? MAX_WAYPOINTS : MAX_WAYPOINTS + 2;
+    preview.innerHTML = list.length
+      ? `识别到 <strong>${list.length}</strong> 个星系：` + list.slice(0, 30).map((i) => app.esc(M.systems[i].name)).join(' → ') + (list.length > 30 ? ' …' : '') +
+        (list.length > cap ? `<br><span class="sec-null">途经点最多 ${MAX_WAYPOINTS} 个，只导入前 ${cap} 个</span>` : '')
+      : '没有识别到星系名';
+  }, 250);
+  $('routeImportToggle').addEventListener('click', () => { if (box.hidden) open(); else box.hidden = true; });
+  $('routeImportCancel').addEventListener('click', () => { box.hidden = true; });
+  text.addEventListener('input', refresh);
+  $('routeImportMode').addEventListener('change', refresh);
+  apply.addEventListener('click', () => {
+    if (!parsed.length) return;
+    const via = $('routeImportMode').value === 'via';
+    const list = parsed.slice(0, via ? MAX_WAYPOINTS : MAX_WAYPOINTS + 2);
+    const setField = (f, i) => { f.value = i == null ? '' : M.systems[i].name; f.dataset.id = i == null ? '' : M.systems[i].id; };
+    $('routeWaypoints').innerHTML = '';
+    // 全部作途经点：跳过和当前起点 / 终点相同的星系
+    const ends = new Set([resolveRouteField($('routeFrom')), resolveRouteField($('routeTo'))]);
+    let vias = list.filter((i) => !ends.has(M.systems[i].id));
+    if (!via) {
+      setField($('routeFrom'), list[0]);
+      setField($('routeTo'), list.length > 1 ? list[list.length - 1] : null);
+      vias = list.slice(1, -1);
+    }
+    for (const i of vias) addWaypoint(M.systems[i]);
+    syncWaypointUi();
+    box.hidden = true;
+    text.value = '';
+    app.showToast(`已导入 ${list.length} 个星系`, 'success', 1500);
+    if (resolveRouteField($('routeFrom')) && (resolveRouteField($('routeTo')) || vias.length)) planRoute();
+  });
+  // 在起点 / 终点 / 途经点框里直接粘贴多行或多个星系：转到导入框
+  $('routeForm').addEventListener('paste', (e) => {
+    if (!e.target.matches('.route-field input')) return;
+    const t = e.clipboardData?.getData('text') || '';
+    if (!/[\n\t]|→|->|showinfo:/.test(t.trim())) return;
+    e.preventDefault();
+    open(t);
+  });
+}
+
 function addWaypoint(s = null) {
   const box = $('routeWaypoints');
   if (box.children.length >= MAX_WAYPOINTS) { app.showToast(`途经点最多 ${MAX_WAYPOINTS} 个`, 'error', 2000); return null; }
@@ -1318,7 +1450,7 @@ function syncWaypointUi() {
   $('routeTo').placeholder = rows.length ? '终点星系（可不填，停在最后一个途经点）' : '终点星系';
 }
 
-function setRouteEnd(which, i) {
+function setRouteEnd(which, i, note = '') {
   const s = M.systems[i];
   setPanel('route', true);
   if (J.mode !== 'jump' && which === 'via') {
@@ -1328,7 +1460,7 @@ function setRouteEnd(which, i) {
   const field = $(which === 'from' ? 'routeFrom' : 'routeTo');
   field.value = s.name;
   field.dataset.id = s.id;
-  app.showToast((which === 'from' ? '起点' : '终点') + '：' + s.name, 'success', 1500);
+  app.showToast((which === 'from' ? '起点' : '终点') + '：' + note + s.name, 'success', 1500);
   if ($('routeFrom').dataset.id && $('routeTo').dataset.id) planRoute();
 }
 
@@ -1434,15 +1566,19 @@ async function planRoute() {
   box.innerHTML = '<p class="legend-empty">正在规划路线…</p>';
   try {
     // 途经点顺序：自动时在本地星门图上求最短顺序，否则按填写顺序
+    // 先在本地星门图上检查可达性，直接指出到不了的星系（波赫文、虫洞、被封锁的星系等）
+    const reach = gateCosts(M.byId.get(from).i, 'shortest');
+    const cut = [...vias, ...(to ? [to] : [])].filter((id) => reach[M.byId.get(id).i] === Infinity);
+    if (cut.length) throw Object.assign(new Error([...new Set(cut)].map((id) => M.byId.get(id).name).join('、') + ' 无法从起点通过星门到达'), { local: true });
     let order = vias;
     if (auto && vias.length > 1) {
       const idx = (id) => M.byId.get(id).i;
       const best = bestWaypointOrder(idx(from), vias.map(idx), to ? idx(to) : null, flag);
-      if (!best) throw new Error('有星系无法通过星门互相到达');
+      if (!best) throw Object.assign(new Error('有星系无法通过星门互相到达'), { local: true });
       order = best.map((i) => M.systems[i].id);
     }
     const stops = [from, ...order, ...(to ? [to] : [])].filter((id, k, a) => k === 0 || id !== a[k - 1]);
-    if (stops.length < 2) throw new Error('起点和终点相同');
+    if (stops.length < 2) throw Object.assign(new Error('起点和终点相同，请添加途经点或换一个终点'), { local: true });
     const legs = await Promise.all(stops.slice(1).map((b, k) => app.fetchESI(`/route/${stops[k]}/${b}/?flag=${flag}`)));
     // 拼接各段，记下每个停靠点在整条路线里的位置
     const ids = [stops[0]];
@@ -1474,7 +1610,7 @@ async function planRoute() {
     M.route = [];
     M.routeStops = [];
     $('routeSummary').textContent = '';
-    box.innerHTML = '<p class="legend-empty">路线规划失败：' + app.esc(error.message) + '（可能无法通过星门到达）</p>';
+    box.innerHTML = '<p class="legend-empty">路线规划失败：' + app.esc(error.message) + (error.local ? '' : '（可能无法通过星门到达）') + '</p>';
     updateRouteLine();
   }
 }
@@ -2455,7 +2591,23 @@ async function locateMe() {
 }
 
 function syncMyLocationButton() {
-  $('mapMyLocation').hidden = !app.hasEsiToken();
+  const hidden = !app.hasEsiToken();
+  $('mapMyLocation').hidden = hidden;
+  document.querySelectorAll('[data-route-here]').forEach((b) => { b.hidden = hidden; });
+}
+
+async function routeFromHere(btn) {
+  btn.disabled = true;
+  try {
+    const s = M.byId.get(await app.getMyLocation());
+    if (!s) { app.showToast('角色当前位于星图未收录的空间（如虫洞），无法规划星门路线', 'info'); return; }
+    M.myLocation = s.i;
+    setRouteEnd(btn.dataset.routeHere, s.i, '当前位置 ');
+  } catch (error) {
+    app.showToast('无法读取角色位置：' + error.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // 地址栏 #map=星系ID：打开时直接定位

@@ -26,7 +26,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v82">
+  <link rel="stylesheet" href="css/modern-style.css?v=v87">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -437,23 +437,37 @@
                 </div>
               </div>
               <div class="map-panel-body">
-              <div class="route-form">
+              <div class="route-form" id="routeForm">
                 <div class="route-field">
                   <input type="text" id="routeFrom" placeholder="起点星系" autocomplete="off" aria-label="起点星系">
                   <div class="route-suggest" id="routeFromList" hidden></div>
+                  <button class="route-here" data-route-here="from" title="起点设为当前 ESI 角色所在星系" aria-label="起点设为当前位置" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7"/></svg></button>
                 </div>
                 <button class="icon-btn small route-swap" id="routeSwap" title="反转路线（交换起点和终点）" aria-label="反转路线">⇅</button>
                 <div class="route-waypoints" id="routeWaypoints"></div>
                 <div class="route-field">
                   <input type="text" id="routeTo" placeholder="终点星系" autocomplete="off" aria-label="终点星系">
                   <div class="route-suggest" id="routeToList" hidden></div>
+                  <button class="route-here" data-route-here="to" title="终点设为当前 ESI 角色所在星系" aria-label="终点设为当前位置" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="7"/></svg></button>
                 </div>
                 <div class="route-multi" id="routeMulti">
-                  <span><button class="link-btn" id="routeAddWp" title="添加必须经过的星系（最多 15 个）">+ 添加途经点</button><button class="link-btn route-reverse" id="routeReverse" hidden title="反转路线：起点和终点互换，途经点倒序">⇅ 反转</button></span>
+                  <span><button class="link-btn" id="routeAddWp" title="添加必须经过的星系（最多 15 个）">+ 添加途经点</button><button class="link-btn route-reverse" id="routeImportToggle" title="粘贴游戏里复制的地点 / 路线 / 星系名，一次导入多个星系">粘贴导入</button><button class="link-btn route-reverse" id="routeReverse" hidden title="反转路线：起点和终点互换，途经点倒序">⇅ 反转</button></span>
                   <select id="routeOrder" class="plain-select" aria-label="途经顺序" hidden>
                     <option value="auto" title="自动排出经过所有途经点的最短顺序">最短顺序</option>
                     <option value="fixed">按填写顺序</option>
                   </select>
+                </div>
+                <div class="route-import" id="routeImport" hidden>
+                  <textarea id="routeImportText" rows="5" placeholder="在游戏里全选（Ctrl+A）地点、路线或聊天里的星系，复制（Ctrl+C）后粘贴到这里。&#10;支持中英文星系名、空间站全名、星系链接，一行一个或用 → 、逗号分隔" aria-label="粘贴要导入的星系"></textarea>
+                  <p class="route-import-preview" id="routeImportPreview"></p>
+                  <div class="route-import-actions">
+                    <select id="routeImportMode" class="plain-select" aria-label="导入方式">
+                      <option value="ends">首尾作起点 / 终点</option>
+                      <option value="via">全部作途经点</option>
+                    </select>
+                    <button class="btn btn-primary" id="routeImportApply" disabled>导入</button>
+                    <button class="btn btn-ghost" id="routeImportCancel">取消</button>
+                  </div>
                 </div>
                 <div class="jump-options" id="jumpOptions" hidden>
                   <select id="jumpShip" class="plain-select" aria-label="舰船"><option>载入舰船…</option></select>
@@ -979,6 +993,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v103" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v111" type="module" data-cfasync="false"></script>
 </body>
 </html>
