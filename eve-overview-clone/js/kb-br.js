@@ -476,6 +476,7 @@ function partyRow(p, side) {
   </div>`;
 }
 
+// 每列固定 6 块（标题、势力、舰船组成标题、舰船组成、损失标题、损失），宽屏下两列用 subgrid 逐块对齐；势力列表默认显示 6 个，多的下滑查看
 function sideColumn(s, st) {
   const fielded = [...st.fielded].sort((a, b) => b[1] - a[1]);
   const shipRows = fielded.map(([t, n]) => {
@@ -495,7 +496,7 @@ function sideColumn(s, st) {
     <h4>舰船组成<span>出场 / 损失</span></h4>
     ${shipRows ? `<div class="table-scroll kb-br-table"><table class="pc-mini-table"><tbody>${shipRows}</tbody></table></div>` : '<p class="text-muted kb-br-none">无</p>'}
     <h4>损失<span>${st.ships + st.pods} · ${ctx.app.formatISK(st.lost)} ISK</span></h4>
-    ${losses ? `<div class="table-scroll kb-br-table"><table class="pc-mini-table kb-br-losses"><tbody>${losses}</tbody></table></div>${st.losses.length > 200 ? `<p class="text-muted kb-br-none">只显示价值最高的 200 条</p>` : ''}` : '<p class="text-muted kb-br-none">没有损失</p>'}
+    <div>${losses ? `<div class="table-scroll kb-br-table"><table class="pc-mini-table kb-br-losses"><tbody>${losses}</tbody></table></div>${st.losses.length > 200 ? `<p class="text-muted kb-br-none">只显示价值最高的 200 条</p>` : ''}` : '<p class="text-muted kb-br-none">没有损失</p>'}</div>
   </section>`;
 }
 

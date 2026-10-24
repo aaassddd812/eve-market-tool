@@ -15,6 +15,7 @@
   GET /api/kb/live?after=N                    实时收录的新击杀（星图闪烁 / 弹幕），返回新的游标
   GET /api/kb/br?systems=1,2&start=T&end=T     战场统计：指定星系与时间段（Unix 秒）内的全部玩家击杀及攻击者（前端按联盟分阵营统计）
   GET /api/kb/battles?window=60&min=20        疑似会战：时间窗（分钟）内同一星系被击毁舰船数 ≥ min（不含太空舱与 1000 万 ISK 以下的击杀）
+  GET /api/kb/battles/history?days=30         最近 N 天全部疑似会战，含双方阵营划分、损失 / 击毁与战损比（缓存 10 分钟）
   GET /api/kb/top?days=7&limit=8              指定天数内价值最高的损失
   GET /api/kb/summary?hours=24                指定小时内的总损失（含每小时分布）
   GET /api/kb/leaderboard?days=30&side=losses|kills&by=character|corporation|alliance&metric=value|count
@@ -212,6 +213,9 @@ BR_MAX_KILLS = 5000           # 战场统计：最多击杀数
 BR_CACHE_KEEP = 50            # 战场统计：内存中保留的查询结果数
 BATTLE_CACHE = 5              # 会战结果缓存（秒），前端与实时击杀同为 6 秒轮询
 BATTLE_MIN_VALUE = 10_000_000  # 会战只统计价值 ≥ 1000 万 ISK 的击杀（过滤小船 / 诱饵等刷数）
+BATTLE_MIN_KILLS = 20           # 历史会战：60 分钟内同一星系击毁 ≥ 20 艘（与实时疑似会战默认口径相同）
+BATTLE_GAP = 30 * 60            # 历史会战：同一星系相邻击杀间隔不超过 30 分钟算同一场
+BATTLE_HISTORY_CACHE = 600      # 历史会战结果缓存（秒）
 
 log = logging.getLogger("kb")
 
@@ -1027,6 +1031,7 @@ class Api:
         self.km_lock = threading.Lock()
         self.zk_pages = collections.OrderedDict()   # zKillboard 页缓存（仅内存）
         self.mem_names = {}                         # 30 天以前击杀涉及的名称（仅内存，不写库）
+        self.bh_lock, self.bh_busy, self.bh_cache = threading.Lock(), {}, {}   # 历史会战：同时只算一份；单独缓存，不随合同估价更新清空
         self.lb_full = collections.OrderedDict()    # 完整排行榜（分页用）：(days, side, by, metric) -> (时间, ids, 次数, 价值)
         self.lb_lock = threading.Lock()
 
@@ -1136,6 +1141,145 @@ class Api:
         value = run()
         self.store.cache[("battles", window, min_kills)] = (time.time(), value)
         return value
+
+    # GET /battles/history?days=30：最近 N 天全部疑似会战（同一星系相邻击杀间隔 ≤ 30 分钟连成一段，段内任意 60 分钟击毁 ≥ 20 艘才算；口径同 /battles）。
+    # 双方阵营按「谁打谁」划分：同一次击杀里一起出手的算友方，打了对方的算敌方，从参与最多的势力开始依次归队；两边都没有关系的算第三方。
+    # 每方统计势力、人数、损失（艘 / ISK）、击毁（艘 / ISK），战损比 = 击毁 ÷（击毁 + 损失）。结果缓存 10 分钟，过期后先返回旧结果、后台重算。
+    def battle_history(self, q):
+        days = min(max(int(q.get("days", 30)), 1), 30)
+        key = ("battle_history", days)
+        hit = self.bh_cache.get(key)
+        if hit and time.time() - hit[0] < BATTLE_HISTORY_CACHE:
+            return hit[1]
+        if hit:
+            with self.bh_lock:
+                if not self.bh_busy.get(days):
+                    self.bh_busy[days] = True
+                    def bg():
+                        try:
+                            self.bh_cache[key] = (time.time(), self._battle_history(days))
+                        finally:
+                            self.bh_busy[days] = False
+                    threading.Thread(target=bg, daemon=True).start()
+            return hit[1]
+        with self.bh_lock:
+            hit = self.bh_cache.get(key)   # 另一个请求可能刚算完
+            if hit and time.time() - hit[0] < BATTLE_HISTORY_CACHE:
+                return hit[1]
+            value = self._battle_history(days)
+            self.bh_cache[key] = (time.time(), value)
+            return value
+
+    def _battle_history(self, days):
+        c = self.store.conn()
+        since = int(time.time() - days * 86400)
+        rows = c.execute(f"""SELECT id, time, system_id, region_id, ship_type, value, v_char, COALESCE(v_alliance, v_corp), v_alliance IS NOT NULL
+                             FROM killmails WHERE time >= ? AND npc = 0 AND ship_type NOT IN (670, 33328) AND value >= {BATTLE_MIN_VALUE}
+                             ORDER BY system_id, time""", (since,)).fetchall()
+        # 按星系切段
+        segs, cur = [], []
+        for r in rows:
+            if cur and (r[2] != cur[-1][2] or r[1] - cur[-1][1] > BATTLE_GAP):
+                segs.append(cur)
+                cur = []
+            cur.append(r)
+        if cur:
+            segs.append(cur)
+        window = 3600
+        battles = []
+        for seg in segs:
+            if len(seg) < BATTLE_MIN_KILLS:
+                continue
+            j, peak = 0, 0
+            for i in range(len(seg)):
+                while seg[i][1] - seg[j][1] > window:
+                    j += 1
+                peak = max(peak, i - j + 1)
+            if peak >= BATTLE_MIN_KILLS:
+                battles.append((seg, peak))
+        out, ids = [], []
+        for seg, peak in battles:
+            kms = [r[0] for r in seg]
+            att = collections.defaultdict(list)    # km -> [(char, 势力, 是否联盟)]
+            for chunk in range(0, len(kms), 900):
+                part = kms[chunk:chunk + 900]
+                for km, ch, ent, is_al in c.execute(f"SELECT km, char, COALESCE(alliance, corp), alliance IS NOT NULL FROM attackers WHERE km IN ({','.join('?' * len(part))})", part):
+                    att[km].append((ch, ent, is_al))
+            kind, inv, friend, enemy, chars = {}, collections.Counter(), collections.Counter(), collections.Counter(), collections.defaultdict(set)
+            for r in seg:
+                v = r[7]
+                if v:
+                    kind[v] = r[8]
+                    inv[v] += 1
+                    if r[6]:
+                        chars[v].add(r[6])
+                ents = set()
+                for ch, ent, is_al in att[r[0]]:
+                    if ent:
+                        kind[ent] = is_al
+                        ents.add(ent)
+                        if ch:
+                            chars[ent].add(ch)
+                ents.discard(v)
+                for e in ents:
+                    inv[e] += 1
+                    if v:
+                        enemy[(min(e, v), max(e, v))] += 1
+                el = sorted(ents)
+                if len(el) <= 30:
+                    for a in range(len(el)):
+                        for b in range(a + 1, len(el)):
+                            friend[(el[a], el[b])] += 1
+            rel = lambda e, team: sum(friend[(min(e, t), max(e, t))] - enemy[(min(e, t), max(e, t))] for t in team)
+            teams, team_of = [[], []], {}
+            for e, _ in inv.most_common():
+                if not teams[0]:
+                    t = 0
+                else:
+                    s0, s1 = rel(e, teams[0]), rel(e, teams[1])
+                    if not teams[1]:
+                        t = 0 if s0 > 0 else 1 if s0 < 0 else None
+                    else:
+                        t = None if s0 == s1 == 0 else (0 if s0 >= s1 else 1)
+                if t is not None:
+                    teams[t].append(e)
+                    team_of[e] = t
+            stat = [{"losses": 0, "lost": 0.0, "kills": 0, "destroyed": 0.0, "ents": collections.Counter(), "e_kills": collections.Counter(), "e_losses": collections.Counter(), "e_lost": collections.Counter()} for _ in range(3)]
+            for r in seg:
+                vt = team_of.get(r[7], 2)
+                s = stat[vt]
+                s["losses"] += 1
+                s["lost"] += r[5] or 0
+                if r[7]:
+                    s["e_losses"][r[7]] += 1
+                    s["e_lost"][r[7]] += r[5] or 0
+                hit_teams = set()
+                for _, ent, _ in att[r[0]]:
+                    if ent and ent != r[7]:
+                        stat[team_of.get(ent, 2)]["e_kills"][ent] += 1 if ent not in hit_teams else 0
+                        hit_teams.add(ent)
+                for t in {team_of.get(e, 2) for e in hit_teams}:
+                    if t != vt:
+                        stat[t]["kills"] += 1
+                        stat[t]["destroyed"] += r[5] or 0
+            def team_json(t, members):
+                s = stat[t]
+                top = sorted(members, key=lambda e: inv[e], reverse=True)
+                ids.extend(top[:4])
+                return {"entities": [{"id": e, "kind": "alliance" if kind.get(e) else "corporation", "kills": s["e_kills"][e], "losses": s["e_losses"][e], "lost": round(s["e_lost"][e])} for e in top[:4]],
+                        "n_entities": len(members), "pilots": len(set().union(*(chars[e] for e in members))) if members else 0,
+                        "losses": s["losses"], "lost": round(s["lost"]), "kills": s["kills"], "destroyed": round(s["destroyed"])}
+            others = [e for e in inv if e not in team_of]
+            top = max(seg, key=lambda r: r[5] or 0)
+            all_chars = set().union(*chars.values()) if chars else set()
+            out.append({"system_id": seg[0][2], "region_id": seg[0][3], "start": iso(seg[0][1]), "end": iso(seg[-1][1]),
+                        "kills": len(seg), "peak": peak, "value": round(sum(r[5] or 0 for r in seg)), "pilots": len(all_chars),
+                        "teams": [team_json(0, teams[0]), team_json(1, teams[1])],
+                        "third": {"n_entities": len(others), "losses": stat[2]["losses"], "lost": round(stat[2]["lost"])},
+                        "top": {"id": top[0], "ship_type_id": top[4], "value": round(top[5] or 0)}})
+        out.sort(key=lambda b: b["end"], reverse=True)
+        return {"days": days, "updated": iso(int(time.time())), "min": BATTLE_MIN_KILLS, "gap_minutes": BATTLE_GAP // 60,
+                "battles": out, "names": self.names_for(ids)}
 
     # GET /br?systems=1,2,3&start=T&end=T：战场统计原始数据（时间为 Unix 秒）
     # 返回紧凑数组以减小体积：kills[i] = [id, time, system, ship, value, v_char, v_corp, v_alliance, [[char, corp, alliance, ship], ...]]
@@ -3097,7 +3241,7 @@ def make_handler(api, static_dir, industry, abyssal):
     v1 = open_routes(api, industry, abyssal)
     limiter = RateLimiter()
     post_limiter = RateLimiter(ABYSSAL_POST_RATE)
-    routes = {"status": api.status, "live": api.live, "battles": api.battles, "feed": api.feed, "top": api.top, "summary": api.summary,
+    routes = {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "feed": api.feed, "top": api.top, "summary": api.summary,
               "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits, "couriers": api.couriers}
 
     class Handler(BaseHTTPRequestHandler):
@@ -3213,8 +3357,8 @@ def make_handler(api, static_dir, industry, abyssal):
             q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
             parts = [p for p in url.path[len("/api/kb/"):].split("/") if p]
             try:
-                if len(parts) == 1 and parts[0] in routes:
-                    return self.send_json(200, routes[parts[0]](q))
+                if "/".join(parts) in routes:      # battles/history 这类两段路径也在表里
+                    return self.send_json(200, routes["/".join(parts)](q))
                 if len(parts) == 3 and parts[0] == "entity":
                     return self.send_json(200, api.entity(parts[1], int(parts[2]), q))
                 if len(parts) == 2 and parts[0] == "kill":
@@ -3273,6 +3417,7 @@ def main():
     api.fw = FwTracker(store)
     api.fw.start()
     threading.Thread(target=api.warm, daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(30), api.battle_history({"days": 30})), daemon=True).start()   # 历史会战先算好一份
     here = os.path.dirname(os.path.abspath(__file__))
     industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])
     abyssal = Abyssal(store)

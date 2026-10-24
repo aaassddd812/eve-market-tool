@@ -5313,3 +5313,71 @@ td .sov-auto-tag { margin-left: 4px; }
 .fw-next b { color: var(--warning, #f59e0b); margin-left: 4px; }
 .fw-trend-note { margin: -4px 0 10px; font-size: 0.75rem; color: var(--text-muted); }
 .fw-next .link-btn, .fw-front-meta .link-btn { color: var(--accent-primary); }
+/* 近 30 天疑似会战（#kb/battles） */
+.kb-bh-entry { height: 28px; padding: 0 10px; font-size: 0.75rem; margin-left: auto; }
+.kb-bh-select { height: 32px; width: auto; }
+.kb-bh-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.kb-bh { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-secondary); }
+.kb-bh-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; font-size: 0.8125rem; }
+.kb-bh-head .kb-tier-badge { margin-right: 0; }
+.kb-bh-sys { font-size: 0.9375rem; font-weight: 600; }
+.kb-bh-head .text-muted { font-size: 0.75rem; }
+.kb-bh-stats { margin-left: auto; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.kb-bh-stats b { color: var(--text-primary); }
+.kb-bh-vs { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: stretch; }
+.kb-bh-x { align-self: center; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); }
+.kb-bh-team { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg-tertiary); min-width: 0; }
+.kb-bh-team.right { text-align: right; }
+.kb-bh-team-head { display: flex; align-items: baseline; gap: 6px; }
+.kb-bh-team.right .kb-bh-team-head { flex-direction: row-reverse; }
+.kb-bh-team-head b { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.kb-bh-team.left .kb-bh-team-head b { color: #4a9fdc; }
+.kb-bh-team.right .kb-bh-team-head b { color: #e0694a; }
+.kb-bh-team-head small { font-size: 0.6875rem; color: var(--text-muted); }
+.kb-bh-ents { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 0.8125rem; }
+.kb-bh-team.right .kb-bh-ents { justify-content: flex-end; }
+.kb-bh-ent { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
+.kb-bh-ent a { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-bh-ent img { border-radius: 3px; flex: none; }
+.kb-bh-ents small { font-size: 0.6875rem; align-self: center; }
+.kb-bh-nums { display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 0.75rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.kb-bh-team.right .kb-bh-nums { justify-content: flex-end; }
+.kb-bh-nums .up { color: var(--buy-color); } .kb-bh-nums .down { color: var(--sell-color); }
+.kb-bh-bar { height: 6px; border-radius: 3px; background: #4a9fdc; overflow: hidden; display: flex; justify-content: flex-end; }
+.kb-bh-bar i { display: block; height: 100%; background: #e0694a; border-left: 2px solid var(--bg-secondary); }
+.kb-bh-third { font-size: 0.75rem; }
+@media (max-width: 640px) {
+  .kb-bh-vs { grid-template-columns: 1fr; }
+  .kb-bh-x { justify-self: center; }
+  .kb-bh-team.right { text-align: left; }
+  .kb-bh-team.right .kb-bh-team-head { flex-direction: row; }
+  .kb-bh-team.right .kb-bh-ents, .kb-bh-team.right .kb-bh-nums { justify-content: flex-start; }
+  .kb-bh-stats { margin-left: 0; width: 100%; }
+}
+.kb-bh-ratio { display: flex; justify-content: space-between; margin-top: -4px; font-variant-numeric: tabular-nums; }
+.kb-bh-ratio span { display: inline-flex; align-items: baseline; gap: 6px; }
+.kb-bh-ratio b { font-size: 0.9375rem; }
+.kb-bh-ratio .left b { color: #4a9fdc; }
+.kb-bh-ratio .right b { color: #e0694a; }
+.kb-bh-ratio small { font-size: 0.6875rem; color: var(--text-muted); }
+.kb-bh-team .kb-bh-team-head b { color: var(--text-primary); }
+/* 会战规模：整卡描边 + 顶部色带 + 实心徽章（不用左侧竖条） */
+.kb-bh[class*="tier-"] { border-color: rgba(var(--tier), 0.45); box-shadow: 0 0 0 1px rgba(var(--tier), 0.12); background: linear-gradient(180deg, rgba(var(--tier), 0.10), transparent 64px), var(--bg-secondary); }
+.kb-bh.tier-large { border-width: 2px; border-color: rgba(var(--tier), 0.75); box-shadow: 0 4px 18px rgba(var(--tier), 0.22); }
+.kb-bh.tier-medium { border-color: rgba(var(--tier), 0.6); box-shadow: 0 3px 12px rgba(var(--tier), 0.14); }
+.kb-bh-tier { display: inline-flex; align-items: center; gap: 5px; padding: 2px 10px 2px 8px; border-radius: 6px; font-size: 0.8125rem; font-weight: 700; color: #fff; background: rgb(var(--tier)); align-self: center; letter-spacing: 0.02em; }
+.kb-bh-tier svg { width: 14px; height: 14px; }
+.kb-bh.tier-large .kb-bh-tier { font-size: 0.875rem; padding: 3px 12px 3px 9px; box-shadow: 0 0 0 3px rgba(var(--tier), 0.22); }
+.kb-bh.tier-large .kb-bh-sys { font-size: 1.0625rem; }
+.kb-bh-page [data-bh="size:20"] { color: rgb(180, 108, 255); font-weight: 600; }
+.kb-bh-page [data-bh="size:50"] { color: rgb(255, 150, 50); font-weight: 600; }
+.kb-bh-page [data-bh="size:100"] { color: rgb(255, 64, 64); font-weight: 600; }
+/* 战场统计双方列：势力列表默认显示 6 个、可下滑；宽屏下左右两列逐块对齐 */
+.kb-br-col:not(.kb-br-third) .kb-br-parties { max-height: 292px; overflow-y: auto; overscroll-behavior: contain; }
+@media (min-width: 901px) {
+  @supports (grid-template-rows: subgrid) {
+    .kb-br-cols { grid-template-rows: repeat(6, auto); row-gap: 0; }
+    .kb-br-cols > .kb-br-col { display: grid; grid-row: span 6; grid-template-rows: subgrid; align-content: start; }
+    .kb-br-cols > .kb-br-col > * { align-self: start; }
+  }
+}
