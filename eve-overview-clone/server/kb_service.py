@@ -68,10 +68,9 @@ EVEREF_CONTRACTS = "https://data.everef.net/public-contracts/public-contracts-la
 BP_CONTRACT_TTL = 1800      # 蓝图合同价 / 快递合同每 30 分钟刷新（快照约每 30 分钟更新）
 BP_CONTRACT_KEEP = 5        # 每种蓝图的原图 / 拷贝各保留最便宜的几份合同
 BP_MAX_TYPES = 300          # bpprices 单次最多查询的蓝图种类
-API_RATE = 1000             # 开放接口：每个 IP 每分钟可用的请求额度（令牌桶，容量同此值）
 PILOTS_MAX = 200            # 本地频道名单分析：一次最多查多少名角色
 PILOT_CACHE = 20000
-API_COST = {"pilots": 5, "hub_arbitrage": 5, "ship_fits": 10, "battle_report": 5, "industry_profits": 5, "abyssal_module": 2, "abyssal_list": 3}   # 开销大的接口一次消耗多个额度
+# 开放接口不限额度；只有深渊装备导入 / 刷新（POST，会写入 MutaMarket 公开页面）按 IP 限流
 # 深渊装备估价：代理 MutaMarket 公开 API（对方不允许浏览器跨域）。只用于宁静服；导入 / 刷新（POST）由用户点击触发、单独限流
 MUTA_API = "https://mutamarket.com/api"
 ABYSSAL_TTL = 6 * 3600          # 单件估价缓存
@@ -2863,9 +2862,29 @@ class HubArbitrage:
         c = store.conn()
         with store.write_lock:
             c.execute("CREATE TABLE IF NOT EXISTS arb_volume(server TEXT, region INTEGER, type_id INTEGER, daily REAL, at INTEGER, avg REAL, PRIMARY KEY(server, region, type_id)) WITHOUT ROWID")
-            if "avg" not in [r[1] for r in c.execute("PRAGMA table_info(arb_volume)")]:
+            cols = [r[1] for r in c.execute("PRAGMA table_info(arb_volume)")]
+            if "avg" not in cols:
                 c.execute("ALTER TABLE arb_volume ADD COLUMN avg REAL")
+            if "daily7" not in cols:
+                c.execute("ALTER TABLE arb_volume ADD COLUMN daily7 REAL")
+            if "daily1" not in cols:
+                c.execute("ALTER TABLE arb_volume ADD COLUMN daily1 REAL")
             c.commit()
+        self.losses = (0, {})   # (时间, {舰船 type_id: 近 7 天被击毁艘数})，宁静服击杀库统计
+
+    def ship_losses(self):
+        """近 7 天各舰船被击毁数（击杀库，30 分钟缓存），「按销量选品」看舰船消耗用"""
+        at, data = self.losses
+        if time.time() - at < ARB_TTL:
+            return data
+        since = int(time.time()) - 7 * 86400
+        try:
+            rows = self.store.conn().execute("SELECT ship_type, COUNT(*) FROM killmails WHERE time >= ? AND ship_type IS NOT NULL GROUP BY ship_type", (since,)).fetchall()
+            data = {str(t): n for t, n in rows}
+        except Exception as e:
+            log.warning("舰船损失统计失败：%s", e)
+        self.losses = (time.time(), data)
+        return data
 
     @staticmethod
     def add_order(book, o):
@@ -2891,7 +2910,10 @@ class HubArbitrage:
             data = self.data.get(server)
         if not data:
             return {"server": server, "loading": True, "progress": st["progress"] or "排队中", "error": st["error"]}
-        return {**data, "progress": st["progress"]}
+        out = {**data, "progress": st["progress"]}
+        if server == "tq":
+            out["losses7"] = self.ship_losses()
+        return out
 
     def loop(self, server):
         while True:
@@ -2971,7 +2993,7 @@ class HubArbitrage:
         if server == "tq":
             return self.everef_daily() if self.everef else {}
         c = self.store.conn()
-        return {(r, t): (d, a) for r, t, d, a in c.execute("SELECT region, type_id, daily, avg FROM arb_volume WHERE server=?", (server,))}
+        return {(r, t): (d, a, d7, d1) for r, t, d, a, d7, d1 in c.execute("SELECT region, type_id, daily, avg, daily7, daily1 FROM arb_volume WHERE server=?", (server,))}
 
     def publish(self, server, hubs, rows, daily):
         types = {}
@@ -2982,11 +3004,12 @@ class HubArbitrage:
                 if h is None:
                     out.append(None)
                     continue
-                d, a = daily.get((rid, t)) or (None, None)
-                out.append([*h[:6], round(d, 2) if d is not None else None, round(a, 2) if a else None])
+                d, a, d7, d1 = (tuple(daily.get((rid, t)) or ()) + (None,) * 4)[:4]
+                rnd = lambda v: round(v, 2) if v is not None else None
+                out.append([*h[:6], rnd(d), round(a, 2) if a else None, rnd(d7), rnd(d1)])
             types[str(t)] = out
         self.data[server] = {"server": server, "updated": iso(time.time()), "hubs": [rid for rid, _ in hubs],
-                             "fields": ["sell", "buy", "sell_qty", "buy_qty", "sell_depth", "buy_depth", "daily", "avg"],
+                             "fields": ["sell", "buy", "sell_qty", "buy_qty", "sell_depth", "buy_depth", "daily", "avg", "daily7", "daily1"],
                              "volume_ready": len(daily), "types": types}
 
     def volumes_everef(self, cfg):
@@ -3011,6 +3034,8 @@ class HubArbitrage:
                 if rid in regions:
                     v = int(float(row["volume"]))
                     vol[(rid, int(row["type_id"]))] = (v, v * float(row["average"] or 0))
+            if not vol:
+                continue                       # 文件已建但还没有数据（只有表头），下次刷新再读
             self.everef[key] = vol
         keep = sorted(self.everef)[-ARB_DAYS:]
         for k in list(self.everef):
@@ -3020,19 +3045,23 @@ class HubArbitrage:
 
     def everef_daily(self):
         keep = sorted(self.everef)
+        last7 = set(keep[-7:])
+        last1 = keep[-1] if keep else None
         out = {}
         for k in keep:
             for key, (v, isk) in self.everef[k].items():
-                o = out.get(key)
-                out[key] = (o[0] + v, o[1] + isk) if o else (v, isk)
+                o = out.get(key) or (0, 0, 0, 0)
+                out[key] = (o[0] + v, o[1] + isk, o[2] + (v if k in last7 else 0), o[3] + (v if k == last1 else 0))
         n = max(len(keep), 1)
-        return {k: (v / n, isk / v if v else None) for k, (v, isk) in out.items()}   # (日均成交量, 成交均价)
+        n7 = max(len(last7), 1)
+        # (30 天日均成交量, 成交均价, 7 天日均, 最近一天)
+        return {k: (v / n, isk / v if v else None, v7 / n7, v1) for k, (v, isk, v7, v1) in out.items()}
 
     def volumes_esi(self, server, cfg, rows, st, on_progress):
         """国服：逐个查 ESI 星域历史（库里缓存 1 天）；挂单额大的物品优先，每轮最多 ARB_HISTORY_BUDGET 次"""
         hubs = list(cfg["hubs"])
         c = self.store.conn()
-        cached = {(r, t): (d, at, a) for r, t, d, at, a in c.execute("SELECT region, type_id, daily, at, avg FROM arb_volume WHERE server=?", (server,))}
+        cached = {(r, t): (d, at, a, d7, d1) for r, t, d, at, a, d7, d1 in c.execute("SELECT region, type_id, daily, at, avg, daily7, daily1 FROM arb_volume WHERE server=?", (server,))}
         now = int(time.time())
         todo = []
         for t, r in rows.items():
@@ -3041,7 +3070,7 @@ class HubArbitrage:
                 if h is None:
                     continue
                 hit = cached.get((rid, t))
-                if hit and now - hit[1] < ARB_HISTORY_TTL and (hit[2] is not None or not hit[0]):
+                if hit and now - hit[1] < ARB_HISTORY_TTL and (hit[2] is not None or not hit[0]) and hit[3] is not None and hit[4] is not None:
                     continue
                 weight = (h[0] or 0) * h[2] + (h[1] or 0) * h[3]
                 todo.append((-weight, rid, t))
@@ -3061,18 +3090,24 @@ class HubArbitrage:
                 hist = []
             except Exception:
                 return None
-            cutoff = (dt.datetime.now(dt.timezone.utc).date() - dt.timedelta(days=ARB_DAYS)).isoformat()
+            today = dt.datetime.now(dt.timezone.utc).date()
+            cutoff = (today - dt.timedelta(days=ARB_DAYS)).isoformat()
+            cutoff7 = (today - dt.timedelta(days=7)).isoformat()
             vol = sum(d["volume"] for d in (hist or []) if d["date"] > cutoff)
             isk = sum(d["volume"] * d["average"] for d in (hist or []) if d["date"] > cutoff)
-            return rid, t, vol / ARB_DAYS, isk / vol if vol else None
-        out = {k: (v[0], v[2]) for k, v in cached.items()}
+            vol7 = sum(d["volume"] for d in (hist or []) if d["date"] > cutoff7)
+            cutoff1 = (today - dt.timedelta(days=2)).isoformat()     # 最近一个完整交易日（ESI 一般到昨天）
+            recent = [d for d in (hist or []) if d["date"] > cutoff1]
+            vol1 = max(recent, key=lambda d: d["date"])["volume"] if recent else 0
+            return rid, t, vol / ARB_DAYS, isk / vol if vol else None, vol7 / 7, vol1
+        out = {k: (v[0], v[2], v[3], v[4]) for k, v in cached.items()}
         got = []
 
         def flush():
             with self.store.write_lock:
-                c.executemany("INSERT OR REPLACE INTO arb_volume VALUES(?,?,?,?,?,?)", [(server, rid, t, d, now, a) for rid, t, d, a in got])
+                c.executemany("INSERT OR REPLACE INTO arb_volume(server, region, type_id, daily, at, avg, daily7, daily1) VALUES(?,?,?,?,?,?,?,?)", [(server, rid, t, d, now, a, d7, d1) for rid, t, d, a, d7, d1 in got])
                 c.commit()
-            out.update({(rid, t): (d, a) for rid, t, d, a in got})
+            out.update({(rid, t): (d, a, d7, d1) for rid, t, d, a, d7, d1 in got})
             got.clear()
         with concurrent.futures.ThreadPoolExecutor(8) as pool:
             for n, res in enumerate(pool.map(one, todo), 1):
@@ -3192,8 +3227,8 @@ class FwTracker:
 
 
 class RateLimiter:
-    """按 IP 的令牌桶：容量 API_RATE，每秒恢复 API_RATE / 60 个"""
-    def __init__(self, rate=API_RATE):
+    """按 IP 的令牌桶：容量 rate，每秒恢复 rate / 60 个（只用于深渊装备导入）"""
+    def __init__(self, rate):
         self.rate, self.buckets, self.lock = rate, {}, threading.Lock()
 
     def take(self, ip, cost=1):
@@ -3283,7 +3318,6 @@ def match_route(routes, parts):
 # ---------------------------------------------------------------- HTTP 服务
 def make_handler(api, static_dir, industry, abyssal):
     v1 = open_routes(api, industry, abyssal)
-    limiter = RateLimiter()
     post_limiter = RateLimiter(ABYSSAL_POST_RATE)
     routes = {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "feed": api.feed, "top": api.top, "summary": api.summary,
               "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits, "couriers": api.couriers}
@@ -3326,14 +3360,10 @@ def make_handler(api, static_dir, industry, abyssal):
             parts = [p for p in url.path[len("/api/v1"):].split("/") if p]
             q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items() if not k.startswith("_")}
             name, fn, args = match_route(v1, parts)
-            cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "X-RateLimit-Limit, X-RateLimit-Remaining, Retry-After"}
+            cors = {"Access-Control-Allow-Origin": "*"}
             err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
             if not fn:
                 return err(404, "接口不存在，文档见 /api.html")
-            ok, left, retry = limiter.take(self.client_ip(), API_COST.get(name, 1))
-            cors.update({"X-RateLimit-Limit": str(API_RATE), "X-RateLimit-Remaining": str(left)})
-            if not ok:
-                return err(429, f"请求过于频繁，请 {retry} 秒后再试", {"Retry-After": str(retry)})
             try:
                 return self.send_json(200, fn(q, *args), cors)
             except KeyError as e:
@@ -3368,13 +3398,10 @@ def make_handler(api, static_dir, industry, abyssal):
                     raise ValueError
             except ValueError:
                 return err(400, "请求体应为 JSON：{items: [...]}" if estimate else "请求体应为 JSON：{type_id, item_id}")
-            if estimate:   # 只读估价：走普通额度，每 10 件算 1 次
-                items = body.get("items") if isinstance(body.get("items"), list) else []
-                ok, left, retry = limiter.take(self.client_ip(), 1 + len(items) // 10)
-            else:
-                ok, left, retry = post_limiter.take(self.client_ip())
-            if not ok:
-                return err(429, f"查询太频繁，请 {retry} 秒后再试", {"Retry-After": str(retry)})
+            if not estimate:   # 只读估价不限；导入 / 刷新会写入 MutaMarket，按 IP 限流
+                ok, _, retry = post_limiter.take(self.client_ip())
+                if not ok:
+                    return err(429, f"查询太频繁，请 {retry} 秒后再试", {"Retry-After": str(retry)})
             try:
                 return self.send_json(200, abyssal_estimate(abyssal, abyssal.model, body) if estimate else abyssal.appraise(body), cors)
             except KeyError as e:

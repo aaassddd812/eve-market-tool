@@ -69,7 +69,6 @@
     .ep-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
     .method { padding: 1px 8px; border-radius: 6px; background: color-mix(in srgb, var(--get) 16%, transparent); color: var(--get); font: 700 0.75rem var(--mono); }
     .path { font: 600 0.875rem var(--mono); }
-    .cost { margin-left: auto; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); font-size: 0.6875rem; font-weight: 600; }
     .ep-body { padding: 4px 16px 14px; }
     .ep-body h5 { margin: 14px 0 4px; font-size: 0.75rem; color: var(--muted); font-weight: 600; }
     .try { display: flex; gap: 6px; margin-top: 8px; }
@@ -121,13 +120,7 @@
 
       <h2 id="rules">通用约定</h2>
       <h3>频率限制</h3>
-      <p>按来源 IP 计算，令牌桶容量 1000，每秒恢复约 17 次额度。多数接口每次消耗 1 次，标注了「消耗 N 次」的接口一次扣 N 次。每个响应都带有：</p>
-      <table>
-        <tr><th>响应头</th><th>说明</th></tr>
-        <tr><td><code>X-RateLimit-Limit</code></td><td>每分钟额度（1000）</td></tr>
-        <tr><td><code>X-RateLimit-Remaining</code></td><td>当前剩余额度</td></tr>
-        <tr><td><code>Retry-After</code></td><td>仅 429 时出现，需要等待的秒数</td></tr>
-      </table>
+      <p>不限额度，所有查询接口都可以随意调用。唯一的例外是「导入并估价」（<code>POST /abyssal/appraise</code>）：它会让 MutaMarket 导入装备并公开展示，每个 IP 每分钟最多 10 次，超出返回 429 和 <code>Retry-After</code>（需要等待的秒数）。</p>
       <h3>错误</h3>
       <p>出错时返回对应的 HTTP 状态码和统一的错误对象：</p>
       <pre>{"error": {"code": 400, "message": "缺少 types"}}</pre>
@@ -135,12 +128,12 @@
         <tr><th>状态码</th><th>含义</th></tr>
         <tr><td>400</td><td>参数缺失或无效</td></tr>
         <tr><td>404</td><td>接口不存在，或找不到对应的击杀 / 实体</td></tr>
-        <tr><td>429</td><td>请求过于频繁，按 <code>Retry-After</code> 等待后重试</td></tr>
+        <tr><td>429</td><td>仅「导入并估价」：请求过于频繁，按 <code>Retry-After</code> 等待后重试</td></tr>
         <tr><td>500</td><td>服务器内部错误</td></tr>
       </table>
       <h3>其他</h3>
       <p>时间均为 UTC，ISO 8601 格式（如 <code>2026-10-17T08:05:44Z</code>），参数里的时间戳为 Unix 秒。金额单位为 ISK。击杀数据只保留最近约 30 天（见 <code>/status</code> 的 <code>retention_days</code>），更早的记录请使用 zKillboard。返回里的 <code>names</code> 是本次结果中出现的人物 / 军团 / 联盟 ID 到名称的映射。</p>
-      <div class="note">数据来自 CCP ESI、zKillboard 与 EVE Ref，仅供参考。请合理控制调用频率；需要更高额度可以在 GitHub 提 issue。</div>
+      <div class="note">数据来自 CCP ESI、zKillboard 与 EVE Ref，仅供参考。请合理控制调用频率，大量数据建议自己缓存。</div>
 
       <div id="endpoints"></div>
     </main>
@@ -148,7 +141,7 @@
 
   <script>
     const BASE = location.origin + '/api/v1';
-    // 接口说明：分组、路径、标题、说明、参数 [名称, 是否必填, 说明]、示例查询、返回字段 [字段, 说明]、消耗
+    // 接口说明：分组、路径、标题、说明、参数 [名称, 是否必填, 说明]、示例查询、返回字段 [字段, 说明]
     const KILL_FIELDS = [
       ['id / time', '击杀 ID 与时间'], ['system_id / region_id', '星系与星域'], ['ship_type_id', '受害舰船类型'],
       ['value', '估值（ISK）'], ['attackers', '攻击者人数'], ['solo / npc', '是否单杀、是否 NPC 击杀'],
@@ -164,9 +157,9 @@
         { path: '/prices', title: '物品价格', desc: '最低卖价、最高收购价（默认吉他 4-4，可选四族贸易中心或全宇宙）、全服均价与本站估价，每小时更新。', example: '/prices?types=34,35,44992',
           params: [['types', true, '物品 ID，逗号分隔，最多 200 个'], ['hub', false, '交易中心所在星域 ID：10000002 吉他（默认）/ 10000043 艾玛 / 10000032 多迪谢 / 10000030 伦斯 / 10000042 赫克；all 为全宇宙（所有星域的空间站与建筑订单）']],
           fields: [['hub', '本次使用的交易中心（星域 ID 或 all）'], ['updated', '价格更新时间'], ['types.{id}.sell', '该交易中心空间站的最低卖价（没有卖单为 null）'], ['types.{id}.buy', '最高收购价'], ['types.{id}.average', '全服均价（ESI）'], ['types.{id}.estimate', '本站估价：卖收中间价；卖价异常时用均价；吉他没有卖单的旗舰等用公开合同最低价']] },
-        { path: '/hubs/arbitrage', title: '交易中心倒卖数据', desc: '某个服务器五个交易中心空间站的全部挂单汇总，每个物品每个交易中心一组数字，供按自己的税费计算跨中心倒卖。宁静服每小时随全宇宙订单刷新，成交量取 EVE Ref 每日市场历史；晨曦 / 曙光第一次请求时开始抓取（约 1–2 分钟，期间返回 loading），之后每 30 分钟刷新，成交量按物品逐个查 ESI、缓存 1 天，读完前部分物品为 null。返回约 1 MB（gzip），一次请求消耗 5 个额度。', example: '/hubs/arbitrage?server=tq',
+        { path: '/hubs/arbitrage', title: '交易中心倒卖数据', desc: '某个服务器五个交易中心空间站的全部挂单汇总，每个物品每个交易中心一组数字，供按自己的税费计算跨中心倒卖。宁静服每小时随全宇宙订单刷新，成交量取 EVE Ref 每日市场历史；晨曦 / 曙光第一次请求时开始抓取（约 1–2 分钟，期间返回 loading），之后每 30 分钟刷新，成交量按物品逐个查 ESI、缓存 1 天，读完前部分物品为 null。返回约 1 MB（gzip）。', example: '/hubs/arbitrage?server=tq',
           params: [['server', false, 'tq（默认）/ serenity / infinity']],
-          fields: [['hubs', '交易中心所在星域 ID，顺序与 types 里每组数据一致'], ['types', '{物品ID: [每个交易中心一组 [sell, buy, sell_qty, buy_qty, sell_depth, buy_depth, daily, avg] 或 null]}'], ['sell / buy', '空间站内最低卖价 / 最高收价（收单只算最小数量为 1 的）'], ['sell_depth / buy_depth', '最优价 5% 以内的挂单数量'], ['daily / avg', '所在星域 30 天日均成交量、成交均价'], ['updated', '汇总时间'], ['progress', '后台进度（读成交量时非空）'], ['loading', '还没有数据时为 true']] },
+          fields: [['hubs', '交易中心所在星域 ID，顺序与 types 里每组数据一致'], ['types', '{物品ID: [每个交易中心一组 [sell, buy, sell_qty, buy_qty, sell_depth, buy_depth, daily, avg, daily7, daily1] 或 null]}'], ['sell / buy', '空间站内最低卖价 / 最高收价（收单只算最小数量为 1 的）'], ['sell_depth / buy_depth', '最优价 5% 以内的挂单数量'], ['daily / avg / daily7 / daily1', '所在星域 30 天日均成交量、成交均价、7 天日均成交量、最近一个完整交易日（UTC）的成交量'], ['losses7', '仅宁静服：{舰船 type_id: 本站击杀库近 7 天被击毁艘数}'], ['updated', '汇总时间'], ['progress', '后台进度（读成交量时非空）'], ['loading', '还没有数据时为 true']] },
         { path: '/fw/trend', title: '势力战争推进趋势', desc: '本站每次 ESI 更新 /fw/systems/（约 30 分钟一次）都记下各星系的胜利点，保留 3 天；返回各星系最近 6 小时的胜利点推进速度（最小二乘，占领方变了从变化后算起）和按此速度到达阈值的预计小时数，以及进入「可被夺取」与最近一次易主的时间。只是按趋势估算，游戏没有公开倒计时。', example: '/fw/trend?server=tq',
           params: [['server', false, 'tq（默认）/ serenity / infinity']],
           fields: [['updated / since', '最新一次 / 最早一次快照时间（ESI 数据生成时间，Unix 秒）'], ['snapshots', '已记录的快照次数（少于 2 次时没有速度）'], ['window_hours', '计算速度用的时间窗口（小时）'], ['systems.{id}.rate', '胜利点每小时变化（负数为回落），点数不够时为 null'], ['systems.{id}.eta', '自 updated 起到达阈值的预计小时数（rate 为负时是回落到 0 的小时数）'], ['systems.{id}.pts', '参与计算的快照数'], ['systems.{id}.vuln_since', '这一轮「可被夺取」最早出现在哪次快照'], ['systems.{id}.flipped', '最近一次易主的快照时间']] },
@@ -198,7 +191,7 @@
         { path: '/battles', title: '进行中的会战', desc: '时间窗内同一星系被击毁的舰船达到阈值即视为会战（不含太空舱、NPC 击杀与价值低于 1000 万的击杀）。', example: '/battles?window=60&min=20',
           params: [['window', false, '时间窗（分钟），默认 60，范围 5–180'], ['min', false, '最少击杀数，默认 20，范围 5–2000']],
           fields: [['battles[]', '{system_id, region_id, kills, value, start, end, pilots, sides[], top}'], ['battles[].sides[]', '主要势力 {id, kind, kills, losses, lost}'], ['names', 'ID → 名称']] },
-        { path: '/battle-report', title: '战场统计', desc: '指定星系与时间段内的全部击杀与攻击者，用于生成战报。', cost: 5, example: '/battle-report?systems=30000142&start={start}&end={end}',
+        { path: '/battle-report', title: '战场统计', desc: '指定星系与时间段内的全部击杀与攻击者，用于生成战报。', example: '/battle-report?systems=30000142&start={start}&end={end}',
           params: [['systems', true, '星系 ID，逗号分隔，最多 30 个'], ['start / end', true, 'Unix 秒，时间段最长 72 小时']],
           fields: [['kills[]', '[id, 时间, 星系, 舰船, 估值, 受害人物, 受害军团, 受害联盟, [[攻击人物, 军团, 联盟, 舰船], ...]]'], ['truncated', '超过 5000 条时为 true'], ['names', 'ID → 名称']] },
         { path: '/leaderboard', title: '排行榜', desc: '按人物 / 军团 / 联盟统计击杀或损失，按价值或数量排序。', example: '/leaderboard?side=kills&by=alliance&metric=value&limit=10',
@@ -207,7 +200,7 @@
         { path: '/entities/{kind}/{id}', title: '实体统计', desc: '人物 / 军团 / 联盟在最近若干天的击杀、损失、单杀、最后一击、常用与损失的舰船、活跃星域与星系；军团附成员、联盟附军团明细。', example: '/entities/alliance/1354830081?days=7',
           params: [['kind', true, '路径参数：character / corporation / alliance'], ['id', true, '路径参数：实体 ID'], ['days', false, '天数，默认 30，最多 60']],
           fields: [['kills / losses / destroyed / lost', '击杀数、损失数、击毁价值、损失价值'], ['solo_kills / final_blows', '单杀数、最后一击数'], ['members[]', '成员明细（军团 / 联盟）'], ['ships_used / ships_lost', '常用 / 损失舰船 TOP 8'], ['regions / systems', '活跃星域 / 星系 TOP 8']] },
-        { path: '/pilots', title: '批量人物统计', desc: '一次查多名人物近 30 天的击杀、损失、单杀、平均同伙人数、最近活跃时间、常用舰船与常去星系（各 TOP 3），用于本地频道名单分析。结果缓存，一次请求消耗 5 个额度。', cost: 5, example: '/pilots?ids=2112625428,95465499',
+        { path: '/pilots', title: '批量人物统计', desc: '一次查多名人物近 30 天的击杀、损失、单杀、平均同伙人数、最近活跃时间、常用舰船与常去星系（各 TOP 3），用于本地频道名单分析。结果缓存。', example: '/pilots?ids=2112625428,95465499',
           params: [['ids', true, '人物 ID，逗号分隔，最多 200 个']],
           fields: [['pilots.{id}.kills / losses', '参与击杀数、损失数'], ['destroyed / lost', '击毁价值、损失价值（ISK）'], ['solo', '单杀数'], ['gang', '参与的击杀平均攻击者人数（没有击杀时为 null）'], ['last', '最近一次击杀或损失的时间'], ['ships / systems', '[[舰船 type_id, 次数]] / [[星系 ID, 次数]]，各 TOP 3']] },
         { path: '/search', title: '名称搜索', desc: '按名称搜索人物、军团、联盟（库中出现过的）。', example: '/search?q=goon',
@@ -222,7 +215,7 @@
         { path: '/industry/cost', title: '制造成本计算', desc: '按星系成本指数、设施与改装件、蓝图效率计算材料用量、安装费、发明分摊与利润，公式与网站「制造计算器」一致。技能按全部 5 级。', example: '/industry/cost?product=24698&runs=10&system=Jita&facility=raitaru&rig=1',
           params: [['product', true, '产品 ID、蓝图 ID 或名称'], ['runs', false, '流程数，默认 1'], ['me / te', false, '蓝图材料 / 时间效率；默认：能发明的按发明拷贝（2 / 4 + 解码器），其余 10 / 20，反应为 0'], ['system', false, '星系 ID 或中文名（也认 Jita / Amarr / Dodixie / Rens / Hek / Perimeter），默认吉他'], ['facility', false, '制造：npc（默认）/ raitaru / azbel / sotiyo；反应：athanor / tatara（默认）'], ['rig', false, '改装件：0 无（默认）/ 1 T1 / 2 T2，加成随安全等级放大；NPC 空间站无改装件'], ['tax', false, '设施税 %，默认 NPC 空间站 0.25、玩家建筑 1'], ['materials', false, '材料价格：sell（吉他卖单直接买，默认）/ buy（挂收单，加中介费）'], ['sell', false, '产品价格：sell（挂卖单，扣销售税 + 中介费，默认）/ buy（卖给收单，只扣销售税）'], ['invention', false, '是否计入发明成本，默认 1；0 表示不计'], ['decryptor', false, '解码器物品 ID']],
           fields: [['materials[]', '{id, name, qty, unit_price, total}，qty 为计入效率后的实际用量'], ['missing_prices', '没有价格的材料 ID（按 0 计）'], ['material_cost / job_cost / eiv', '材料费、安装费（成本指数 + 设施税 + SCC 4%）、物品估值'], ['invention / invention_cost', '发明明细（成功率、每流程分摊）与本次分摊的发明成本'], ['blueprint_cost', '市场买不到原图时按合同拷贝每流程单价计的蓝图成本'], ['total_cost / cost_per_unit', '总成本、单件成本'], ['product_price / revenue', '产品单价、扣除税费后的收入'], ['profit / margin / profit_per_hour', '利润、利润率、每小时利润'], ['time_seconds', '任务时间（计入技能、设施、改装件）']] },
-        { path: '/industry/profits', title: '利润排行', desc: '按每小时利润 / 每流程利润 / 利润率排列可获得蓝图的产品（T1 与反应配方能在 NPC 市场买到，T2 / T3 能发明，其余要在公开合同买得到拷贝）。默认过滤有价无市的产品。', cost: 5, example: '/industry/profits?category=ship&sort=profit_per_hour&limit=20',
+        { path: '/industry/profits', title: '利润排行', desc: '按每小时利润 / 每流程利润 / 利润率排列可获得蓝图的产品（T1 与反应配方能在 NPC 市场买到，T2 / T3 能发明，其余要在公开合同买得到拷贝）。默认过滤有价无市的产品。', example: '/industry/profits?category=ship&sort=profit_per_hour&limit=20',
           params: [['activity', false, 'manufacturing（默认）/ reaction'], ['category', false, 'all（默认）/ ship / module / charge / drone / component / structure / implant'], ['tech', false, 'all（默认）/ 1 / 2 / 3'], ['sort', false, 'profit_per_hour（默认）/ profit / margin'], ['limit', false, '条数，默认 50，最多 200'], ['liquid', false, '默认 1：只看吉他同时有卖单和收单、卖价不超过收价 3 倍的；0 不过滤'], ['system / facility / rig / tax', false, '同制造成本计算']],
           fields: [['total', '符合条件的产品数'], ['rows[]', '{id, name, output, unit_price, cost, profit, margin, time_seconds, profit_per_hour, invention, contract_bpc}（每流程，ME / TE 同成本计算的默认值）']] },
         { path: '/industry/systems', title: '成本指数（去哪造最省）', desc: '各星系的工业成本指数，从低到高排列，每小时从 ESI 更新。', example: '/industry/systems?activity=manufacturing&security=high&limit=20',
@@ -230,13 +223,13 @@
           fields: [['systems[]', '{id, name, security, region_id, region, cost_index, indices}，indices 为该星系全部活动的指数']] }
       ]],
       ['深渊装备', [
-        { path: '/abyssal/modules/{item_id}', title: '深渊装备估价', desc: '按单件物品 ID 查询 <a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a> 的估价（每种深渊装备一个随机森林模型，以真实单件合同成交价训练）。只读：MutaMarket 还没收录的返回 404，不会自动导入。只支持宁静服；结果缓存 6 小时。估价是模型参考值，<code>estimated_value</code> 为 null 表示暂无估价（不要当作 0）。', cost: 2, example: '/abyssal/modules/1056160153322?type_id=48439',
+        { path: '/abyssal/modules/{item_id}', title: '深渊装备估价', desc: '按单件物品 ID 查询 <a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a> 的估价（每种深渊装备一个随机森林模型，以真实单件合同成交价训练）。只读：MutaMarket 还没收录的返回 404，不会自动导入。只支持宁静服；结果缓存 6 小时。估价是模型参考值，<code>estimated_value</code> 为 null 表示暂无估价（不要当作 0）。', example: '/abyssal/modules/1056160153322?type_id=48439',
           params: [['item_id', true, '路径参数：物品 ID（资产、合同物品、击杀里的 item_id，或游戏物品链接 showinfo:类型//物品 中的第二个数）'], ['type_id', false, '物品类型 ID，用于校验']],
           fields: [['item_id / type_id / type_name', '物品与类型'], ['source_type / mutaplasmid', '原型装备与突变质体 {id, name}'], ['estimated_value / estimated_value_updated_at', '参考估价（ISK）与估价时间；无模型时为 null'], ['attributes[]', '{id, name, value, base_value, unit, derived}，derived 为派生属性（如 DPS），不能用于装配计算'], ['contract', '所在公开合同 {id, type, price, abyssal_modules_count, non_abyssal_modules_count, date_expired}，多件物品的合同价格不是这件的价格；没有为 null'], ['model', '该类型模型 {data_count, r2, mae, nmae, last_trained_at}，r2 是类型整体拟合度；没有模型为 null'], ['source_url', 'MutaMarket 页面'], ['fetched_at', '本站取得时间（Unix 秒）']] },
         { path: '/abyssal/appraise', method: 'POST', title: '导入并估价', desc: '让 MutaMarket 从 ESI 导入 / 刷新这件装备并估价，返回与上一个接口相同。<b>导入后这件装备会出现在 MutaMarket 的公开页面</b>，请只在用户明确要求时调用。同一件 10 分钟内重复调用直接返回缓存；每个 IP 每分钟最多 10 次。',
           body: '{"type_id": 48439, "item_id": 1056160153322}',
           params: [['type_id', true, '请求体 JSON：物品类型 ID'], ['item_id', true, '请求体 JSON：物品 ID'], ['server', false, '请求体 JSON：只接受 tq（默认）']] },
-        { path: '/abyssal/list', title: '在售深渊装备', desc: '某种深渊装备目前在售的单件（公开合同与卖家在 MutaMarket 直接挂售），每页 100 件，按 <code>next_cursor</code> 翻页；筛选与 MutaMarket 网站一致。结果缓存 5 分钟。每件的字段同「深渊装备估价」。', cost: 3, example: '/abyssal/list?type=49738&sort=price&order=asc&flags=contracts-only,no-multi-item-contracts',
+        { path: '/abyssal/list', title: '在售深渊装备', desc: '某种深渊装备目前在售的单件（公开合同与卖家在 MutaMarket 直接挂售），每页 100 件，按 <code>next_cursor</code> 翻页；筛选与 MutaMarket 网站一致。结果缓存 5 分钟。每件的字段同「深渊装备估价」。', example: '/abyssal/list?type=49738&sort=price&order=asc&flags=contracts-only,no-multi-item-contracts',
           params: [['type', true, '深渊装备类型 ID（见 /abyssal/types）'], ['sort', false, 'date-added（上架时间）/ contract-date（合同时间）/ price（价格，默认）/ value（估价）/ fraction（平均 roll）/ 属性 ID'], ['order', false, 'asc / desc'],
             ['meta_group', false, '原装备等级：t1 / t2 / storyline / faction / officer / deadspace'], ['flags', false, '逗号分隔：contracts-only（只看游戏合同）、no-multi-item-contracts（只看单件合同）、in-jita（吉他 4-4）、item-exchange / auction、goldbar / diamondbar / brownbar（至少一项属性达到该类型最好 / 荣耀最好 / 最差值）'],
             ['price / value', false, '合同价格 / 估价范围（ISK），格式 最小-最大，可省略一端'], ['attrs', false, '属性范围（原始数值，与 ESI 相同），格式 属性ID:最小~最大，多个用逗号分隔，可省略一端'], ['region', false, '合同所在星域 ID'], ['cursor', false, '上一页返回的 next_cursor']],
@@ -245,7 +238,7 @@
           fields: [['types[]', '{id, name, attributes[], model}'], ['attributes[]', '{id, key, name, unit, unit_id, high_is_good, best, worst, is_derived, is_virtual}；is_derived 为 MutaMarket 推算的属性（如 DPS 提升），is_virtual 不是真实突变属性'], ['model', '同 /abyssal/models，没有为 null']] },
         { path: '/abyssal/models', title: '估价模型列表', desc: 'MutaMarket 各深渊装备类型的模型统计，缓存 24 小时。', example: '/abyssal/models',
           fields: [['models[]', '{type_id, data_count, r2, mae, nmae, last_trained_at}，按类型 ID 排序']] },
-        { path: '/abyssal/estimate', method: 'POST', title: '估价（任意属性）', desc: '一次最多 50 件。给 <code>item_id</code> 时先查 MutaMarket 已有的估价（只读，不会导入），MutaMarket 没有的再用<b>本站模型</b>；只给 <code>attrs</code>（如装配里自定义的属性）时直接用本站模型。本站模型算法照搬 MutaMarket 的估价器（MIT 许可），以 EVE Ref 公开合同快照里的单件深渊装备合同训练，见下一个接口。每 10 件消耗 1 次额度。',
+        { path: '/abyssal/estimate', method: 'POST', title: '估价（任意属性）', desc: '一次最多 50 件。给 <code>item_id</code> 时先查 MutaMarket 已有的估价（只读，不会导入），MutaMarket 没有的再用<b>本站模型</b>；只给 <code>attrs</code>（如装配里自定义的属性）时直接用本站模型。本站模型算法照搬 MutaMarket 的估价器（MIT 许可），以 EVE Ref 公开合同快照里的单件深渊装备合同训练，见下一个接口。',
           body: '{"items": [{"type_id": 49738, "item_id": 1034743152796}, {"type_id": 47408, "attrs": {"6": 270, "20": -54, "30": 165, "50": 46, "554": 590}}]}',
           params: [['items[].type_id', true, '深渊装备类型 ID'], ['items[].item_id', false, '物品 ID；本站没有属性时向 ESI /dogma/dynamic/items/ 读取'], ['items[].attrs', false, '{属性ID: 值}（原始数值，与 ESI 相同）；缺的属性按 0 计，最好带上原装备的全部属性'], ['mutamarket', false, 'false 时跳过 MutaMarket，只用本站模型']],
           fields: [['results[]', '与 items 一一对应：{type_id, item_id?, value, source, model, error?}'], ['source', 'mutamarket（MutaMarket 模型）/ model（本站模型）'], ['model', 'MutaMarket：同 /abyssal/models；本站：{data_count, sold, listed, r2, mae, nmae, trained_at}'], ['error', '没有估价的原因（不是深渊装备、该类型数据不足、ESI 读不到属性等）；value 为 null']] },
@@ -253,7 +246,7 @@
           fields: [['enabled', '服务器有 numpy 时为 true'], ['models[]', '{type_id, data_count, sold, listed, r2, mae, nmae, trained_at, features}；features 为模型用到的属性 ID'], ['data', '{类型ID: 训练数据条数}'], ['features', '{类型ID: [属性ID]}，与 MutaMarket 每个类型的特征相同（去掉派生属性）']] }
       ]],
       ['装配', [
-        { path: '/ships/{id}/fits', title: '阵亡装配', desc: '某型舰船最近若干天阵亡时的装配，相同装配合并计数。首次查询需要从 ESI 取击杀原文，可能要十几秒。', cost: 10, example: '/ships/24698/fits?days=7',
+        { path: '/ships/{id}/fits', title: '阵亡装配', desc: '某型舰船最近若干天阵亡时的装配，相同装配合并计数。首次查询需要从 ESI 取击杀原文，可能要十几秒。', example: '/ships/24698/fits?days=7',
           params: [['id', true, '路径参数：舰船类型 ID'], ['days', false, '天数，默认 7']],
           fields: [['total / scanned', '阵亡总数 / 实际分析数（最多 300）'], ['fits[].fit', '槽位 → [[物品 ID, 数量], ...]，槽位为 high / mid / low / rig / sub / drone / fighter，装填的弹药与装备在同一槽位'], ['fits[].n / last / value', '出现次数、最近时间（Unix 秒）、平均损失'], ['fits[].ids', '示例击杀 ID']] }
       ]]
@@ -274,7 +267,7 @@
 
     document.getElementById('endpoints').innerHTML = GROUPS.map(([g, eps]) => `<h2>${g}</h2>` + eps.map((e) => `
       <section class="ep" id="${anchor(e.path)}">
-        <div class="ep-head"><span class="method">${e.method || 'GET'}</span><span class="path">/api/v1${esc(e.path)}</span><h3>${e.title}</h3>${e.cost ? `<span class="cost">消耗 ${e.cost} 次</span>` : ''}</div>
+        <div class="ep-head"><span class="method">${e.method || 'GET'}</span><span class="path">/api/v1${esc(e.path)}</span><h3>${e.title}</h3></div>
         <div class="ep-body">
           <p>${e.desc}</p>
           ${e.params ? `<h5>参数</h5><table><tr><th>名称</th><th>说明</th></tr>${e.params.map(([n, r, d]) => `<tr><td><code>${n}</code>${r ? '<span class="req">必填</span>' : ''}</td><td>${d}</td></tr>`).join('')}</table>` : ''}
@@ -308,7 +301,7 @@
         let body = text;
         try { body = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {}
         if (body.length > 20000) body = body.slice(0, 20000) + '\n…（已截断）';
-        status.textContent = `HTTP ${r.status} · ${Math.round(performance.now() - t0)} ms · 剩余额度 ${r.headers.get('X-RateLimit-Remaining') ?? '—'}`;
+        status.textContent = `HTTP ${r.status} · ${Math.round(performance.now() - t0)} ms`;
         if (!r.ok) status.className = 'status err';
         out.textContent = body;
         out.classList.add('show');

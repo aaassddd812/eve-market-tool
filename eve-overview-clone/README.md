@@ -616,7 +616,9 @@ node build_reprocess.mjs <SDE 解压目录>   # 输出 eve-overview-clone/reproc
 
 ### 倒卖排行（v89）
 
-- 所有物品一起比，和 LP 商店全服排行一样：市场中心左侧目录工具栏「倒卖排行」、空白页按钮或单品比价标签里的「全部物品排行」进入，地址栏 `#arb`（`js/hub-rank.js`）
+- 所有物品一起比，和 LP 商店全服排行一样：顶栏「倒卖排行」按钮（市场中心右边，打开时高亮，再点「市场中心」回到物品页）、空白页按钮或单品比价标签里的「全部物品排行」进入，地址栏 `#arb`（`js/hub-rank.js`）
+- 打开排行时，市场中心左侧的物品目录换成分类列表（显示每个分类符合条件的物品数，点一下只看该分类，标题旁的标签可取消；手机上点「分类」打开）
+- **按销量选品**（交易方式第五项）：选一个目标交易中心，按 24 小时（最近一个完整交易日，UTC）/ 近 7 天 / 近 30 天的星域日均成交看卖得多的物品——日成交额、趋势（7 天 ÷ 30 天，≥ 1.3 标「成交上涨」）、库存天数（卖单总量 ÷ 日成交，不到 2 天标「库存少」，没有卖单标「无卖单」并按均价估卖价）、最低卖价比 30 天均价高 15% 以上标「卖价偏高」，宁静服另有近 7 天被击毁数（击杀库，舰船与部署物）。每个物品找最好的进货方式：别的交易中心 / 玩家建筑 / 自定义市场直接买，或在任意地点（含目标市场本地）挂收单收货，运到目标市场挂卖单；建议数量 = 日成交 × 份额（默认 10%）× 计划天数（默认 3 天），不超过进货地深度；默认按每天利润排序，可按日成交额、趋势、库存最少、被击毁数排序，可筛每天利润、日成交额、库存天数与只看成交上涨
 - 数据来自击杀记录服务 `GET /api/v1/hubs/arbitrage?server=`：五个交易中心空间站的全部挂单汇总（最低卖 / 最高收、最优价 5% 以内的深度）与星域 30 天日均成交量、成交均价。
   宁静服直接用后台价格任务每小时读到的全宇宙订单（不再另外请求 ESI），成交量读 EVE Ref 每日市场历史；
   晨曦 / 曙光第一次有人打开时才开始抓取，之后每 30 分钟刷新，成交量逐个物品查 ESI 历史（挂单额大的优先，缓存 1 天，表 `arb_volume`），读完前先按已有成交量出结果，页面每 20 秒取一次新结果
@@ -828,12 +830,12 @@ node build_wormholes.mjs <SDE 解压目录> [anoik static.json]   # 输出 eve-o
 击杀记录服务同时提供对外的只读接口 `/api/v1/`，文档为站点根目录的 `api.html`（页面顶部「API」按钮打开，每个接口都能直接「试一试」）。
 
 - 免注册、免密钥，允许任意来源跨域（CORS `*`），返回 JSON；出错统一为 `{"error": {"code", "message"}}`
-- 按 IP 令牌桶限流：每分钟 1000 次（`API_RATE`），阵亡装配一次消耗 10 次、战场统计与利润排行 5 次（`API_COST`）；响应头带 `X-RateLimit-Limit / Remaining`，超限返回 429 与 `Retry-After`
+- 不限额度；只有深渊装备「导入并估价」（`POST /abyssal/appraise`，会写入 MutaMarket 公开页面）每个 IP 每分钟最多 10 次，超限返回 429 与 `Retry-After`
 - 接口：`/status`、`/prices`（卖 / 收默认吉他，`hub` 可选四族贸易中心或 `all` 全宇宙；另有全服均价 / 本站估价）、`/blueprints/prices`、`/kills`（只查保留期内，不转向 zKillboard）、`/kills/live`、`/kills/top`、
   `/kills/{id}`、`/stats/summary`、`/battles`、`/battle-report`、`/leaderboard`、`/entities/{kind}/{id}`、`/search`、`/ships/{id}/fits`；`/api/v1` 返回接口目录
 - 制造接口（`Industry` 类，公式与 `js/industry.js` 一致，技能按全 5 级）：`/industry/search`、`/industry/blueprints/{product}`、
   `/industry/cost`（材料用量、安装费、发明分摊、合同拷贝、税费后利润与时间；可选星系、设施、改装件、税率、ME / TE、解码器）、
-  `/industry/profits`（利润排行，默认过滤有价无市，消耗 5 次）、`/industry/systems`（成本指数）；
+  `/industry/profits`（利润排行，默认过滤有价无市）、`/industry/systems`（成本指数）；
   读取前端目录的 `industry-data.json` 与 `map-data.json`（`--industry-dir`，默认依次找 `--static`、仓库前端目录、`/opt/eve/dist`），成本指数每小时从 ESI 更新
 
 ## 手机端（v13）

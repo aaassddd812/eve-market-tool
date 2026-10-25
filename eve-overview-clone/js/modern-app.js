@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes } from './hub-compare.js?v=v7';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v9';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v18';
 import * as SM from './struct-markets.js?v=v3';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
@@ -258,8 +258,31 @@ document.addEventListener('compositionend', (e) => {
 document.addEventListener('input', (e) => { if (e.isComposing || window.__imeComposing) e.stopImmediatePropagation(); }, true);
 
 // ===== 视图切换 =====
+function syncNavActive(scroll) {
+  const arb = state.currentView === 'market' && !$('arbView').hidden;
+  $$('.nav-btn').forEach((btn) => {
+    const active = btn.dataset.view === state.currentView && btn.hasAttribute('data-arb') === arb;
+    btn.classList.toggle('active', active);
+    btn.setAttribute('aria-selected', String(active));
+    if (scroll === true && active && MOBILE_QUERY.matches) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // 手机导航可横向滑动
+  });
+}
 function initNavigation() {
-  $$('.nav-btn').forEach((btn) => btn.addEventListener('click', () => switchView(btn.dataset.view)));
+  $$('.nav-btn').forEach((btn) => btn.addEventListener('click', () => {
+    if (btn.hasAttribute('data-arb')) { openArb(); return; }
+    if (btn.dataset.view === 'market' && state.currentView === 'market' && !$('arbView').hidden) { closeArbToCatalog(); return; }
+    switchView(btn.dataset.view);
+  }));
+  // 倒卖排行是市场中心里的一页：顶栏「倒卖排行」与「市场中心」按它是否显示切换高亮
+  // 倒卖排行打开时，市场侧栏的物品目录换成排行的分类列表（#arbSide，hub-rank.js 渲染）
+  const syncArb = () => {
+    syncNavActive();
+    const arb = !$('arbView').hidden;
+    $('sidebar').classList.toggle('arb-mode', arb);
+    $('arbSide').hidden = !arb;
+    $('sidebar').setAttribute('aria-label', arb ? '倒卖排行分类' : '物品目录');
+  };
+  new MutationObserver(syncArb).observe($('arbView'), { attributes: true, attributeFilter: ['hidden'] });
   // 导航文字放不下（如英文界面）时只留图标，保证右侧的服务器、语言、主题等按钮不被挤出屏幕
   const header = document.querySelector('.app-header');
   const nav = document.querySelector('.header-nav');
@@ -332,12 +355,7 @@ function switchView(view) {
     restored = view in viewHashes || (!VIEW_HASH[view] && view !== 'market');
     history.replaceState(null, '', location.pathname + location.search + (viewHashes[view] || ''));
   }
-  $$('.nav-btn').forEach((btn) => {
-    const active = btn.dataset.view === view;
-    btn.classList.toggle('active', active);
-    btn.setAttribute('aria-selected', String(active));
-    if (active && MOBILE_QUERY.matches) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // 手机导航可横向滑动
-  });
+  syncNavActive(true);
   for (const [v, id] of Object.entries(VIEW_IDS)) $(id).hidden = v !== view;
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
   $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选', guide: '教程分类', sov: '主权规划导航', abyss: '深渊装备类型' }[view] || '';
@@ -880,7 +898,7 @@ function currentSidebar() {
 function openDrawer() {
   $(currentSidebar().id).classList.add('drawer-open');
   $('sidebarBackdrop').hidden = false;
-  if (state.currentView === 'market') setTimeout(() => $('itemSearch').focus(), 50);
+  if (state.currentView === 'market' && $('arbView').hidden) setTimeout(() => $('itemSearch').focus(), 50);
 }
 
 function closeDrawer() {
@@ -1037,7 +1055,7 @@ function initSidebar() {
   $('watchBoardBtn').addEventListener('click', () => openWatch());
   $('favBoardBtn')?.addEventListener('click', () => openWatch());
   $('emptyArbBtn').addEventListener('click', () => openArb());
-  if (REGIONS.length < 2) $('emptyArbBtn').hidden = true;
+  if (REGIONS.length < 2) { $('emptyArbBtn').hidden = true; $('navArbBtn').hidden = true; }
   $('collapseAllBtn').addEventListener('click', () => {
     $('catalogTree').querySelectorAll('.category.expanded').forEach((el) => setCategoryExpanded(el, false));
   });
@@ -1350,6 +1368,15 @@ function setDetailVisible(visible) {
   $('watchView').hidden = true;
 }
 
+// 在倒卖排行里点顶栏「市场中心」：回到市场首页（选择物品的空状态）
+function closeArbToCatalog() {
+  state.selectedItem = null;
+  setDetailVisible(false);
+  document.title = 'EVE 市场总览';
+  history.pushState(null, '', location.pathname + location.search);
+  $('mainContent').scrollTo({ top: 0 });
+}
+
 // 倒卖排行（#arb）：市场中心里与物品详情并列的一页，所有物品一起比交易中心差价
 function openArb({ updateHash = true } = {}) {
   if (REGIONS.length < 2) return;
@@ -1364,7 +1391,7 @@ function openArb({ updateHash = true } = {}) {
   if (updateHash && location.hash !== '#arb') history.pushState(null, '', '#arb');
   closeDrawer();
   $('mainContent').scrollTo({ top: 0 });
-  showHubRank($('arbBody'));
+  showHubRank($('arbBody'), $('arbSide'));
 }
 
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
@@ -2445,7 +2472,9 @@ function initContentTabs() {
     typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
     category: (id) => { const e = state.typeIndex.get(id); const g = e && state.categories.get(rootGroupId(e.groupId)); return g ? { id: g.id, name: g.name } : null; },
     iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,
-    openItem: (id) => { switchContentTab('hubs'); selectItem(id); } });
+    openItem: (id) => { switchContentTab('hubs'); selectItem(id); },
+    openSide: () => { if (MOBILE_QUERY.matches) openDrawer(); else if ($('sidebar').classList.contains('collapsed')) toggleSidebar('market'); },
+    closeSide: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
   switchContentTab(state.contentTab);
 
   const seg = $('rangeSeg');

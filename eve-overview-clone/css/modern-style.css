@@ -5585,3 +5585,20 @@ td .sov-auto-tag { margin-left: 4px; }
 .hr-custom { gap: 8px 10px; }
 .hr-custom .pi-input { flex: 0 1 220px; width: 220px; min-width: 0; }
 .hr-custom .pi-note { flex-basis: 100%; }
+/* 倒卖排行：打开时市场侧栏的物品目录换成分类列表 */
+.hr-side-title { display: none; flex: 1; min-width: 0; padding-left: 4px; font-size: 0.875rem; font-weight: 600; color: var(--text-primary); }
+.sidebar.arb-mode .hr-side-title { display: block; }
+.sidebar.arb-mode .sidebar-header .search-box,
+.sidebar.arb-mode .sidebar-tabs,
+.sidebar.arb-mode #catalogToolbar,
+.sidebar.arb-mode .sidebar-content:not(#arbSide) { display: none; }
+.hr-side { padding-top: 0; }
+.hr-side .ind-side-item { padding: 6px 8px; }
+.hr-cat-tag { display: inline-flex; align-items: center; gap: 2px; margin-left: 8px; padding: 1px 4px 1px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 500; vertical-align: middle; background: var(--accent-soft); color: var(--accent-primary); }
+.hr-filter-btn { display: none; }
+@media (max-width: 768px) { .hr-filter-btn { display: inline-flex; } }
+/* 按销量选品：紧俏 / 升温 / 价高 / 售罄 标签 */
+.hr-tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 0.625rem; font-weight: 600; line-height: 1.6; vertical-align: 1px; }
+.hr-tag.hot { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.hr-tag.up { color: var(--success, #16a34a); background: color-mix(in srgb, var(--success, #16a34a) 14%, transparent); }
+.hr-tag.warn { color: var(--warning, #d97706); background: color-mix(in srgb, var(--warning, #d97706) 16%, transparent); }
