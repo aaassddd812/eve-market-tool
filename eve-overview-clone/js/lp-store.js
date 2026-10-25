@@ -6,6 +6,7 @@
 // 价格：全服均价（一次请求，立即可用）或吉他卖单 / 收单（按物品逐个读取，有缓存）。
 // 数据：lp-data.json 由 build_lp.mjs 生成（ESI /loyalty/stores + SDE 中文名）。
 import { SERVER, HUB, HUB_NAME, eveImage } from './server.js?v=s4';
+import { skPage } from './skeleton.js?v=v17';
 let ctx;   // esc, formatISK, formatNumber, showToast, store, fetchESI, getHubPrices, getMarketPriceMap, esiAuthFetch, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-lp-v1';
@@ -161,9 +162,16 @@ function fillVolumes(body, rows) {
 }
 
 // ---------- 入口 ----------
+// 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
+export async function preload() {
+  await loadData();
+  // 默认的「LP 商店」标签页：顺便取当前军团商店里物品的交易中心行情（页面已打开时取完刷新）
+  if (F.tab === 'store' && needsJita() && !S.loadingJita) await loadJita((D.data.stores[F.corp] || []).map(offer).flatMap(offerTypes), () => { if (F.tab === 'store' && $('lpBody')) refreshBody(); });
+}
+
 export async function showLp(hash = location.hash) {
   const main = $('lpMain');
-  if (!D.data) main.innerHTML = '<div class="pi-loading">载入 LP 商店数据…</div>';
+  if (!D.data) main.innerHTML = skPage({ tabs: 3, rows: 10 });
   await loadData();
   const m = /^#lp(?:\/(store|rank|mine))?(?:\/(\d+))?/.exec(hash || '');
   if (m?.[1]) F.tab = m[1];

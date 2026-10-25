@@ -18,6 +18,7 @@
 //   /corporations/{id}/structures/skyhooks[/{id}]：天钩所在行星、是否在产出、试剂库存
 //   /sovereignty/systems：各星系主权联盟与军事 / 工业 / 战略等级（国服没有，用旧的 /sovereignty/map/ 只取联盟）
 import { SERVER, IS_TQ } from './server.js?v=s4';
+import { skPage } from './skeleton.js?v=v17';
 
 let ctx;   // esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem, getEsiToken, hasEsiToken, tokenInfo, hasScopeGroup, scopeNeededHtml, getHubPrices, closeDrawer
 const $ = (id) => document.getElementById(id);
@@ -418,6 +419,9 @@ function autoCard() {
 }
 
 // ---------- 页面 ----------
+// 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
+export const preload = () => loadData();
+
 export async function showSov(hash) {
   const main = $('sovMain');
   const m = /^#sov(?:\/(overview|esi|sys\/(\d+)))?/.exec(hash || '');
@@ -428,7 +432,7 @@ export async function showSov(hash) {
     main.dataset.ready = '1';
     main.innerHTML = `<section class="pi-page sov-page">
       <div class="pi-head"><h2 id="sovTitle">主权规划</h2><span class="toolbar-spacer"></span><span class="text-muted sov-src" id="sovSrc"></span></div>
-      <div id="sovBody"><div class="empty-state"><p>加载中…</p></div></div></section>`;
+      <div id="sovBody">${skPage({ title: false, cards: 4, rows: 6 })}</div></section>`;
     bindEvents($('sovView'));
   }
   try { await loadData(); } catch (error) { $('sovBody').innerHTML = `<div class="empty-state"><p>数据加载失败：${esc(error.message)}</p></div>`; return; }

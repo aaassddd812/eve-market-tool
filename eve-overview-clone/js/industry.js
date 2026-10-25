@@ -17,6 +17,7 @@
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
 import * as Plan from './ind-plan.js?v=v3';
+import { skPage } from './skeleton.js?v=v17';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
@@ -364,10 +365,13 @@ function calc() {
 
 // ---------- 页面框架 ----------
 // restored：从其他页面切回且地址未变，保留当前页面（输入、展开状态、滚动位置）
+// 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
+export const preload = () => loadData();
+
 export async function showIndustry(hash = location.hash, restored = false) {
   const main = $('industryMain');
   const wasReady = Boolean(main.dataset.ready);
-  if (!D.data) main.innerHTML = '<div class="pi-loading">载入制造数据…</div>';
+  if (!D.data) main.innerHTML = skPage({ tabs: 6, cards: 4, rows: 8 });
   await loadData();
   if (!planReady) {
     planReady = true;

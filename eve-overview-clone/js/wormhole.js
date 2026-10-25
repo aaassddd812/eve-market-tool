@@ -5,6 +5,7 @@
 // 质量计算：按虫洞总质量（±10% 随机）逐跳推算剩余质量、状态与塌洞风险。席拉连接：EVE-Scout 公开的席拉 / 图尔努尔实时虫洞（仅宁静服），按跳数排序。
 // 数据：wh-data.json 由 build_wormholes.mjs 生成（CCP SDE + anoik.is 的固定出口）；星图跳数用当前服务器的 map-data。
 import { SERVER, IS_TQ } from './server.js?v=s4';
+import { skPage } from './skeleton.js?v=v17';
 
 let ctx = null;   // esc, formatISK, formatNumber, showToast, store, loadKillboard, planPi, resolveTypeNames
 const $ = (id) => document.getElementById(id);
@@ -92,6 +93,9 @@ function loadMap() {
 }
 
 // ---------- 页面 ----------
+// 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
+export const preload = () => loadData();
+
 export async function showWormhole(hash) {
   const main = $('whMain');
   parseHash(hash || location.hash);
@@ -100,7 +104,7 @@ export async function showWormhole(hash) {
     main.innerHTML = `<section class="pi-page wh-page">
       <div class="pi-head"><h2>虫洞</h2>
         <div class="segmented wh-tabs" role="tablist">${TABS.map(([k, l]) => `<button type="button" data-wh-tab="${k}">${l}</button>`).join('')}</div></div>
-      <div id="whBody"><div class="pi-loading">载入虫洞数据…</div></div></section>`;
+      <div id="whBody">${skPage({ title: false, cards: 4, rows: 6 })}</div></section>`;
     main.addEventListener('click', onClick);
     main.addEventListener('change', onChange);
     main.addEventListener('input', onInput);

@@ -6,6 +6,7 @@
 // 刷新倒计时：按 ESI 响应的 Expires 头（跨域可读的安全响应头）显示星系争夺进度（约每 30 分钟更新）与阵营统计 / 排行榜的下次刷新时间，
 //   归零后自动重新读取并就地更新（至少间隔 60 秒，避免 ESI 缓存未及时更新时反复请求）。
 import { esiUrl, SERVER } from './server.js?v=s4';
+import { skPage } from './skeleton.js?v=v17';
 
 let ctx;   // esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem
 const S = { tab: 'fw', board: 'characters', metric: 'kills', period: 'last_week', warFilter: 'active', wars: [], warIds: [], nextMax: null, warLoading: false };
@@ -353,16 +354,19 @@ async function renderBody() {
   const body = $('warBody0');
   if (!body) return;
   if (S.tab === 'fw') {
-    body.innerHTML = '<div class="pi-loading">读取势力战争数据…</div>';
+    body.innerHTML = skPage({ title: false, tabs: 3, cards: 4, rows: 8 });
     try { const d = await loadFw(); if (S.tab === 'fw') body.innerHTML = fwHtml(d); } catch (error) { body.innerHTML = '<p class="text-muted">读取失败：' + esc(error.message) + '</p>'; }
   } else {
     if (!S.wars.length) {
-      body.innerHTML = '<div class="pi-loading">读取最新的战争…</div>';
+      body.innerHTML = skPage({ title: false, tabs: 3, rows: 10 });
       try { await loadWarPage(); } catch (error) { body.innerHTML = '<p class="text-muted">读取失败：' + esc(error.message) + '</p>'; return; }
     }
     if (S.tab === 'wars') body.innerHTML = warsHtml();
   }
 }
+
+// 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
+export const preload = () => (S.tab === 'fw' ? loadFw() : S.wars.length ? null : loadWarPage());
 
 export async function showWar(hash) {
   const main = $('warMain');

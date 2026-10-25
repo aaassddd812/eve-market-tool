@@ -1,9 +1,9 @@
-import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
+import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17';
 import * as TF from './trade-fees.js?v=v3';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v12';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v27';
 import * as SM from './struct-markets.js?v=v4';
-import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v1';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v4';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
 // ===== 配置与常量 =====
@@ -352,6 +352,7 @@ function switchView(view) {
   const hashMatches = ownsHash(view, location.hash);
   if (hashMatches && prev !== view && viewHashes[view] === location.hash) restored = true;
   state.currentView = view;
+  if (prev !== view) recordVisit(view);
   if (!hashMatches) {
     restored = view in viewHashes || (!VIEW_HASH[view] && view !== 'market');
     history.replaceState(null, '', location.pathname + location.search + (viewHashes[view] || ''));
@@ -368,6 +369,7 @@ function switchView(view) {
   if (view === 'profile') {
     if (!(restored && state.characterData && (state.esiToken || readEsiToken()))) loadProfile();
   }
+  showPageSkeleton(view);
   if (view === 'map') openStarMap();
   else starMapModule?.hideStarMap();
   if (view === 'kb') openKbPage(restored);
@@ -384,20 +386,36 @@ function switchView(view) {
   if (view === 'guide') openGuides();
 }
 
+// 按需加载的页面：模块还没下载完时先按页面布局画骨架（模块第一次显示时整块替换）
+const PAGE_SKELETON = {
+  pi: ['piMain', { cards: 4, rows: 6 }], industry: ['industryMain', { tabs: 6, cards: 4, rows: 8 }], lp: ['lpMain', { tabs: 3, rows: 10 }],
+  courier: ['courierMain', { tabs: 2, rows: 10 }], war: ['warMain', { tabs: 2, cards: 4, rows: 8 }], sov: ['sovMain', { cards: 4, rows: 6 }],
+  abyss: ['abyssMain', { tabs: 3, grid: 6 }], wh: ['whMain', { tabs: 6, cards: 4, rows: 6 }], guide: ['guideMain', { tabs: 3, rows: 8 }],
+  appraisal: ['apMain', { cards: 3, rows: 4 }]
+};
+function showPageSkeleton(view) {
+  const [id, opts] = PAGE_SKELETON[view] || [];
+  const el = id && $(id);
+  if (el && !el.dataset.ready && !el.children.length) el.innerHTML = `<section class="pi-page">${skPage(opts)}</section>`;
+}
+
 // 主权规划：首次进入时加载
 let sovLoading = null;
+function loadSovModule() {
+  if (!sovLoading) sovLoading = import('./sov.js?v=v6').then((m) => {
+    m.initSov({
+      esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
+      getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      tokenInfo: () => state.esiToken || readEsiToken(), hasScopeGroup, scopeNeededHtml, getHubPrices: getJitaPrices,
+      closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
+    });
+    return m;
+  }).catch((error) => { sovLoading = null; throw error; });
+  return sovLoading;
+}
 async function openSov() {
   try {
-    if (!sovLoading) sovLoading = import('./sov.js?v=v4').then((m) => {
-      m.initSov({
-        esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
-        getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
-        tokenInfo: () => state.esiToken || readEsiToken(), hasScopeGroup, scopeNeededHtml, getHubPrices: getJitaPrices,
-        closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
-      });
-      return m;
-    }).catch((error) => { sovLoading = null; throw error; });
-    const m = await sovLoading;
+    const m = await loadSovModule();
     await m.showSov(location.hash);
   } catch (error) {
     showToast('主权规划页加载失败：' + error.message, 'error', 4000);
@@ -406,16 +424,19 @@ async function openSov() {
 
 // 虫洞：首次进入时加载
 let whLoading = null;
+function loadWormholeModule() {
+  if (!whLoading) whLoading = import('./wormhole.js?v=v3').then((m) => {
+    m.initWormhole({
+      esc, formatISK, formatNumber, showToast, store, loadKillboard, resolveTypeNames,
+      planPi: (id) => loadPiModule().then((pi) => { pi.useWormhole(id); switchView('pi'); })
+    });
+    return m;
+  }).catch((error) => { whLoading = null; throw error; });
+  return whLoading;
+}
 async function openWormhole() {
   try {
-    if (!whLoading) whLoading = import('./wormhole.js?v=v1').then((m) => {
-      m.initWormhole({
-        esc, formatISK, formatNumber, showToast, store, loadKillboard, resolveTypeNames,
-        planPi: (id) => loadPiModule().then((pi) => { pi.useWormhole(id); switchView('pi'); })
-      });
-      return m;
-    }).catch((error) => { whLoading = null; throw error; });
-    const m = await whLoading;
+    const m = await loadWormholeModule();
     await m.showWormhole(location.hash.startsWith('#wh') ? location.hash : '#wh');
   } catch (error) {
     showToast('虫洞页加载失败：' + error.message, 'error', 4000);
@@ -424,17 +445,20 @@ async function openWormhole() {
 
 // 深渊市场（MutaMarket 数据）：首次进入时加载
 let abyssLoading = null;
+function loadAbyssModule() {
+  if (!abyssLoading) abyssLoading = import('./abyss.js?v=v4').then((m) => {
+    m.initAbyss({
+      esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, getHubPrices: getJitaPrices, fetchESI,
+      game: gameActions, openDynamicItem, loadAbyssal, dogmaNames, fmtAttr,
+      closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
+    });
+    return m;
+  }).catch((error) => { abyssLoading = null; throw error; });
+  return abyssLoading;
+}
 async function openAbyss() {
   try {
-    if (!abyssLoading) abyssLoading = import('./abyss.js?v=v2').then((m) => {
-      m.initAbyss({
-        esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, getHubPrices: getJitaPrices, fetchESI,
-        game: gameActions, openDynamicItem, loadAbyssal, dogmaNames, fmtAttr,
-        closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
-      });
-      return m;
-    }).catch((error) => { abyssLoading = null; throw error; });
-    const m = await abyssLoading;
+    const m = await loadAbyssModule();
     await m.showAbyss(location.hash.startsWith('#abyss') ? location.hash : '#abyss');
   } catch (error) {
     showToast('深渊市场加载失败：' + error.message, 'error', 4000);
@@ -443,13 +467,16 @@ async function openAbyss() {
 
 // 教程：首次进入时加载
 let guidesLoading = null;
+function loadGuidesModule() {
+  if (!guidesLoading) guidesLoading = import('./guides.js?v=v11').then((m) => {
+    m.initGuides({ esc, debounce, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
+    return m;
+  }).catch((error) => { guidesLoading = null; throw error; });
+  return guidesLoading;
+}
 async function openGuides() {
   try {
-    if (!guidesLoading) guidesLoading = import('./guides.js?v=v9').then((m) => {
-      m.initGuides({ esc, debounce, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
-      return m;
-    }).catch((error) => { guidesLoading = null; throw error; });
-    const m = await guidesLoading;
+    const m = await loadGuidesModule();
     if (!location.hash.startsWith('#guide')) history.replaceState(null, '', location.pathname + '#guide');
     m.showGuides(location.hash);
   } catch (error) {
@@ -459,13 +486,16 @@ async function openGuides() {
 
 // 战争（势力战争 + 军团战争）：首次进入时加载
 let warLoading = null;
+function loadWarModule() {
+  if (!warLoading) warLoading = import('./war.js?v=v9').then((m) => {
+    m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
+    return m;
+  }).catch((error) => { warLoading = null; throw error; });
+  return warLoading;
+}
 async function openWar() {
   try {
-    if (!warLoading) warLoading = import('./war.js?v=v7').then((m) => {
-      m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
-      return m;
-    }).catch((error) => { warLoading = null; throw error; });
-    const m = await warLoading;
+    const m = await loadWarModule();
     await m.showWar(location.hash);
   } catch (error) {
     showToast('战争页加载失败：' + error.message, 'error', 4000);
@@ -482,7 +512,7 @@ async function getJitaPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v36').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v38').then((m) => {
     m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -508,7 +538,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v8').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v11').then((m) => {
     m.initLp({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
@@ -545,39 +575,42 @@ async function openEftFit(text) {
 
 // 快递合同：首次进入时加载
 let courierLoading = null;
+function loadCourierModule() {
+  if (!courierLoading) courierLoading = import('./courier.js?v=v7').then((m) => {
+    m.initCourier({
+      esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
+      // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
+      renderAuctions: async (box) => {
+        const a = await import('./auctions.js?v=v4');
+        if (!box.dataset.init) {
+          box.dataset.init = '1';
+          loadMarketRegions().catch(() => {});
+          a.initAuctions({
+            esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, officialName, valuation, valuationCard, locationName, store, game: gameActions,
+            esiBase: ESI_BASE, datasource: SERVER.datasource, regions: REGIONS, marketRegions: () => state.marketRegions,
+            resolveStructures: (ids) => resolveStructureNames(ids)
+          });
+        }
+        a.renderAuctions(box);
+      },
+      hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      tokenInfo: () => state.esiToken || readEsiToken(),
+      hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
+      // 玩家建筑名称与所在星系（本地缓存 → 共享缓存 → 已绑定角色可见的建筑）
+      resolveStructures: async (ids) => {
+        await resolveStructureNames(ids);
+        const map = structureNameMap();
+        return new Map(ids.map((id) => [id, map.get(id)]).filter(([, v]) => v?.n).map(([id, v]) => [id, { name: v.n, system: v.s }]));
+      },
+      openEsiBind: () => { switchView('profile'); openEsiModal(); }
+    });
+    return m;
+  }).catch((error) => { courierLoading = null; throw error; });
+  return courierLoading;
+}
 async function openCourier() {
   try {
-    if (!courierLoading) courierLoading = import('./courier.js?v=v6').then((m) => {
-      m.initCourier({
-        esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
-        // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
-        renderAuctions: async (box) => {
-          const a = await import('./auctions.js?v=v4');
-          if (!box.dataset.init) {
-            box.dataset.init = '1';
-            loadMarketRegions().catch(() => {});
-            a.initAuctions({
-              esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, officialName, valuation, valuationCard, locationName, store, game: gameActions,
-              esiBase: ESI_BASE, datasource: SERVER.datasource, regions: REGIONS, marketRegions: () => state.marketRegions,
-              resolveStructures: (ids) => resolveStructureNames(ids)
-            });
-          }
-          a.renderAuctions(box);
-        },
-        hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
-        tokenInfo: () => state.esiToken || readEsiToken(),
-        hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
-        // 玩家建筑名称与所在星系（本地缓存 → 共享缓存 → 已绑定角色可见的建筑）
-        resolveStructures: async (ids) => {
-          await resolveStructureNames(ids);
-          const map = structureNameMap();
-          return new Map(ids.map((id) => [id, map.get(id)]).filter(([, v]) => v?.n).map(([id, v]) => [id, { name: v.n, system: v.s }]));
-        },
-        openEsiBind: () => { switchView('profile'); openEsiModal(); }
-      });
-      return m;
-    }).catch((error) => { courierLoading = null; throw error; });
-    await (await courierLoading).showCourier();
+    await (await loadCourierModule()).showCourier();
   } catch (error) {
     console.error('快递页加载失败:', error);
     showToast('快递页加载失败：' + error.message, 'error', 4000);
@@ -586,21 +619,24 @@ async function openCourier() {
 
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
+function loadAppraisalModule() {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v12').then((m) => {
+    m.initAppraisal({ addToCart,
+      esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
+      getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
+      valuation,
+      hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      getCharacterSkills, getCharacterImplants,
+      openEsiBind: () => { switchView('profile'); openEsiModal(); },
+      loadAbyssal
+    });
+    return m;
+  }).catch((error) => { appraisalLoading = null; throw error; });
+  return appraisalLoading;
+}
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v12').then((m) => {
-      m.initAppraisal({ addToCart,
-        esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
-        getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
-        valuation,
-        hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
-        getCharacterSkills, getCharacterImplants,
-        openEsiBind: () => { switchView('profile'); openEsiModal(); },
-        loadAbyssal
-      });
-      return m;
-    }).catch((error) => { appraisalLoading = null; throw error; });
-    const m = await appraisalLoading;
+    const m = await loadAppraisalModule();
     if (!location.hash.startsWith('#appr')) history.replaceState(null, '', location.pathname + '#appr');
     m.showAppraisal();
   } catch (error) {
@@ -612,7 +648,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v35').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v37').then((m) => {
     m.initPi({ addToCart,
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
@@ -646,7 +682,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v40').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v41').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -783,7 +819,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v36').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v37').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -821,7 +857,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v30').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v31').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance, valuation
     });
@@ -4352,7 +4388,7 @@ async function renderProfileTab(tab) {
 // 个人中心 · 技能：首次打开时加载
 let skillsLoading = null;
 function loadSkillsModule() {
-  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v21').then((m) => {
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v23').then((m) => {
     m.initSkills({ esc, formatNumber, esiAuthFetch, store });
     return m;
   }).catch((error) => { skillsLoading = null; throw error; });
@@ -5252,7 +5288,7 @@ function initCartButton() {
   syncCartBadge();
 }
 
-// ===== 预警（右上角铃铛，alert-center.js）：击杀预警与本地日志合在一个弹窗；铃铛的点任一开启就亮，本地日志刚有敌情时变红 =====
+// ===== 预警（右上角铃铛，alert-center.js）：击杀预警、本地日志与邮件设置合在一个弹窗；铃铛的点任一开启就亮，本地日志刚有敌情时变红 =====
 const alertState = { kill: null, intel: null };
 function syncAlertBtn() {
   const btn = $('killAlertBtn');
@@ -5262,12 +5298,13 @@ function syncAlertBtn() {
   btn.title = `击杀预警：${k ? k.text : '未开启'}；本地日志：${i ? i.text : '未开启'}`;
   setTabState('kill', k?.on);
   setTabState('intel', i?.on);
+  setTabState('mail', Boolean((k?.on && k.mail) || (i?.on && i.mail)));
 }
 
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v4').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v6').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5290,7 +5327,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v9').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v11').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5404,6 +5441,7 @@ function init() {
   if (location.hash.startsWith('#wh')) switchView('wh'); // 虫洞
   if (location.hash.startsWith('#guide')) switchView('guide'); // 教程
   renderFavorites();
+  bindPagePreload();
   loadServerStatus();
   setInterval(loadServerStatus, 5 * 60 * 1000);
 
@@ -5443,9 +5481,63 @@ function preloadPages() {
       } catch { /* 打开星图时会重试并提示 */ }
       whenIdle(async () => {
         try { await (await loadFittingModule()).preloadFitting(); } catch { /* 打开装配页时会重试并提示 */ }
+        // 常去的其他页面依次预取
+        const queue = frequentPages();
+        const next = () => { const v = queue.shift(); if (v) whenIdle(async () => { await preloadPage(v); next(); }, 4000); };
+        next();
       }, 8000);
     }, 5000);
   }, 3000);
+}
+
+// 其他页面的预加载：鼠标悬停 / 按下 / 键盘聚焦到导航按钮时就开始取该页的模块与基础数据（各模块的 preload()），点进去直接显示；
+// 常去的页面（eve-page-visits 记每页打开次数与最近一次，近 30 天、最多 4 个）在首屏、击杀记录、星图、装配预取完后空闲时依次预取。省流量模式下都不预取
+const PAGE_PRELOAD = {
+  kb: () => (SERVER.kb ? loadKbPageModule().then((m) => m.prefetchKbHome()) : null),
+  map: () => loadStarMapModule().then((m) => m.preloadStarMap()),
+  fit: () => loadFittingModule().then((m) => m.preloadFitting()),
+  pi: () => loadPiModule().then((m) => m.preload()),
+  industry: () => loadIndustryModule().then((m) => m.preload()),
+  lp: () => loadLpModule().then((m) => m.preload()),
+  courier: () => loadCourierModule().then((m) => m.preload()),
+  war: () => loadWarModule().then((m) => m.preload()),
+  sov: () => loadSovModule().then((m) => m.preload()),
+  abyss: () => loadAbyssModule().then((m) => m.preload()),
+  wh: () => loadWormholeModule().then((m) => m.preload()),
+  guide: () => loadGuidesModule().then((m) => m.preload()),
+  appraisal: () => loadAppraisalModule()
+};
+const preloadedAt = new Map();
+function preloadPage(view) {
+  const run = PAGE_PRELOAD[view];
+  if (!run || navigator.connection?.saveData || view === state.currentView) return Promise.resolve();
+  if (Date.now() - (preloadedAt.get(view) || 0) < 120e3) return Promise.resolve();   // 两分钟内不重复
+  preloadedAt.set(view, Date.now());
+  return Promise.resolve().then(run).catch(() => { preloadedAt.delete(view); });
+}
+const VISIT_KEY = 'eve-page-visits';
+function recordVisit(view) {
+  try {
+    const v = JSON.parse(localStorage.getItem(VISIT_KEY) || '{}');
+    v[view] = [(v[view]?.[0] || 0) + 1, Date.now()];
+    localStorage.setItem(VISIT_KEY, JSON.stringify(v));
+  } catch { /* 无痕模式 */ }
+}
+function frequentPages() {
+  let v = {};
+  try { v = JSON.parse(localStorage.getItem(VISIT_KEY) || '{}'); } catch { /* 无痕模式 */ }
+  const since = Date.now() - 30 * 86400e3;
+  return Object.entries(v).filter(([k, [, at]]) => PAGE_PRELOAD[k] && !['kb', 'map', 'fit'].includes(k) && at > since)
+    .sort((a, b) => b[1][0] - a[1][0]).slice(0, 4).map(([k]) => k);
+}
+function bindPagePreload() {
+  let timer = 0;
+  const btnOf = (e) => e.target.closest?.('.nav-btn[data-view]:not([data-arb])');
+  const go = (b, delay) => { clearTimeout(timer); timer = setTimeout(() => preloadPage(b.dataset.view), delay); };
+  document.addEventListener('pointerover', (e) => { const b = btnOf(e); if (b && !b.contains(e.relatedTarget)) go(b, 100); });
+  document.addEventListener('pointerout', (e) => { const b = btnOf(e); if (b && !b.contains(e.relatedTarget)) clearTimeout(timer); });
+  document.addEventListener('touchstart', (e) => { const b = btnOf(e); if (b) go(b, 0); }, { passive: true });
+  document.addEventListener('focusin', (e) => { const b = btnOf(e); if (b) go(b, 0); });
 }
 
 // 启动应用

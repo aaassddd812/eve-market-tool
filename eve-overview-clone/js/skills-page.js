@@ -2,6 +2,8 @@
 // 按游戏技能分组列出全部 512 个技能：已训练等级、生效等级（Alpha 克隆受限时较低）、技能点、训练队列中的目标等级，
 // 未学的技能灰显。数据：ESI /skills/（个人中心已读取）、/skillqueue/（需要 esi-skills.read_skillqueue.v1），skill-data.json（build_industry.mjs 生成）。
 // 角色属性：ESI /attributes/（esi-skills.read_skills.v1）。训练速度 = 主属性 + 副属性 / 2（技能点 / 分钟），据此估算每个技能升到下一级的时间。
+import { skCards, skRows } from './skeleton.js?v=v17';
+
 let ctx;   // esc, formatNumber, esiAuthFetch, store
 let data = null;
 let loading = null;
@@ -34,7 +36,7 @@ function relTime(iso) {
 }
 
 export async function renderSkills(box, character, characterId) {
-  box.innerHTML = '<p class="text-muted">载入技能数据…</p>';
+  box.innerHTML = skCards(4, 'sk-cards') + skRows(8, { img: 28 });
   await load();
   const own = character?.skills && !character.skills.__error ? character.skills : null;
   if (!own) { box.innerHTML = `<p class="text-muted">技能读取失败：${ctx.esc(character?.skills?.__error || '权限不足')}</p>`; return; }
@@ -132,9 +134,9 @@ function draw(box, own) {
       const eta = r && need > 0 ? dur(need / r) : '';
       const title = `${s.desc}\n\n主属性：${ATTR_ZH[s.pri] || '—'} · 副属性：${ATTR_ZH[s.sec] || '—'} · 训练倍数 ×${s.rank}` +
         (r ? `\n训练速度 ${r.toFixed(1)} 技能点 / 分钟（${Math.round(r * 60)} / 小时）${eta ? ` · 升到 ${ROMAN[lv + 1]} 级约 ${eta}` : ''}` : '');
-      return `<div class="sk-row${lv ? '' : ' untrained'}" title="${esc(title)}">
+      return `<div class="skl-row${lv ? '' : ' untrained'}" title="${esc(title)}">
         <span class="sk-name">${esc(s.name)}</span>
-        <span class="sk-rank">×${s.rank}</span>
+        <span class="skl-rank">×${s.rank}</span>
         <span class="sk-boxes" aria-label="${lv} 级">${boxes}</span>
         <span class="sk-sp">${lv ? fmt(sp) : '未学'}<small>${lv < 5 ? ' / ' + fmt(spForLevel(s.rank, Math.max(1, lv + 1))) : ''}</small>${eta && lv ? `<small class="sk-eta">下一级约 ${eta}</small>` : ''}</span>
       </div>`;
@@ -147,14 +149,14 @@ function draw(box, own) {
   }).join('') || '<p class="text-muted">没有符合条件的技能</p>';
 
   box.innerHTML = `${cards}${queueHtml}
-    <div class="sk-toolbar">
+    <div class="skl-toolbar">
       <div class="search-box sk-search">
         <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input type="search" id="skSearch" placeholder="搜索技能（中英文）" value="${esc(S.q)}" autocomplete="off" spellcheck="false">
       </div>
       <div class="segmented" role="group">${[['all', '全部'], ['trained', '已学'], ['partial', '未满级'], ['untrained', '未学']].map(([k, l]) => `<button data-sk-filter="${k}" class="${S.filter === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       <button class="link-btn" data-sk-all="1">全部展开</button><button class="link-btn" data-sk-all="0">全部收起</button>
-      <span class="sk-legend"><i class="on"></i>已学<i class="limited"></i>受克隆限制<i class="queued"></i>队列中</span>
+      <span class="skl-legend"><i class="on"></i>已学<i class="limited"></i>受克隆限制<i class="queued"></i>队列中</span>
     </div>
     <div class="sk-groups">${groupHtml}</div>`;
   if (document.activeElement?.id !== 'skSearch' && S.focusSearch) { const el = box.querySelector('#skSearch'); el.focus(); el.setSelectionRange(el.value.length, el.value.length); }

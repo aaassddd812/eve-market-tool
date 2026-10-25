@@ -6,6 +6,7 @@
 import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r7';
 import { angle } from './pi-globe.js?v=v19r12';
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
+import { skPage } from './skeleton.js?v=v17';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, store, getHubPrices(ids) -> Map(id -> {sell, buy}), getMarketPriceMap
 const $ = (id) => document.getElementById(id);
@@ -971,9 +972,12 @@ function blankTemplate() {
 }
 
 // ---------- 页面 ----------
+// 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
+export const preload = () => loadData();
+
 export async function showPi() {
   const main = $('piMain');
-  if (!D.pi) main.innerHTML = '<div class="pi-loading">载入行星数据…</div>';
+  if (!D.pi) main.innerHTML = skPage({ cards: 4, rows: 6 });
   await loadData();
   initPiEditor(editorEnv());
   if (!main.dataset.ready) {

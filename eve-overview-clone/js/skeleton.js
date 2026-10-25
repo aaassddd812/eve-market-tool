@@ -61,3 +61,20 @@ export function skEntityHead() {
 export function skTitle(w = 18) {
   return `<div class="sk-title">${line(w, '')}</div>`;
 }
+
+// 段落文字：长短不一的几行（文章正文、设置面板）
+export function skText(n = 6) {
+  return '<div class="sk-text" aria-busy="true">' + repeat(n, (i) => line(i % 5 === 4 ? 38 : widths[i % 10] + 24, '')) + '</div>';
+}
+
+// 卡片网格（深渊装备列表等）：图标 + 名称 + 几行属性
+export function skGrid(n = 6) {
+  return '<div class="sk-grid" aria-busy="true">' + repeat(n, (i) => `<div class="sk-gcard">
+      <div class="sk-row sk-flat"><span class="sk sk-img" style="width:36px;height:36px"></span><span class="sk-col">${line(widths[i % 10], '')}${line(40, 'sm')}</span></div>
+      ${repeat(4, (j) => line(88 - ((i + j) % 4) * 9, 'sm'))}${line(34, '')}</div>`) + '</div>';
+}
+
+// 整页：标题 + 分段按钮 + 统计卡片 + 列表 / 卡片网格（各功能页首次载入时用）
+export function skPage({ title = true, tabs = 0, cards = 0, rows = 8, grid = 0, img = 32 } = {}) {
+  return `<div class="sk-page" aria-busy="true">${title ? skTitle(14) : ''}${tabs ? skToolbar(tabs) : ''}${cards ? skCards(cards, 'sk-cards') : ''}${grid ? skGrid(grid) : rows ? skRows(rows, { img }) : ''}</div>`;
+}

@@ -6,6 +6,7 @@
 // 地址栏：#abyss（上次的类型）· #abyss/t/<类型>?筛选（与 /api/v1/abyssal/list 的参数相同，可收藏分享）· #abyss/m/<物品ID> · #abyss/appraise · #abyss/stats
 // 只有宁静服：价格来自宁静服合同。
 import { SERVER, IS_TQ } from './server.js?v=s4';
+import { skPage, skGrid } from './skeleton.js?v=v17';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, getHubPrices, fetchESI, game, openDynamicItem,
            // loadAbyssal() -> abyssal.js 模块, dogmaNames() -> { attrs, units }, fmtAttr(v, unit, units), closeDrawer
@@ -152,6 +153,19 @@ function cardHtml(m, big = false) {
 }
 
 // ---------- 入口与路由 ----------
+// 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
+export async function preload() {
+  if (!IS_TQ || !SERVER.kb) return;
+  await loadBase();
+  if (S.items.length || (PRE_LIST && Date.now() - PRE_LIST.at < LIST_FRESH)) return;
+  const q = new URLSearchParams({ type: D.byId.has(S.type) ? S.type : DEFAULT_TYPE, sort: 'date-added', order: 'desc' });
+  const r = await api('list?' + q);
+  await names([...r.items.map((m) => m.source_type?.id), ...r.items.map((m) => m.mutaplasmid?.id)]);
+  PRE_LIST = { qs: q.toString(), at: Date.now(), r };
+}
+let PRE_LIST = null;        // 预取的默认列表（打开页面时 3 分钟内直接用）
+const LIST_FRESH = 180e3;
+
 export async function showAbyss(hash) {
   const main = $('abyssMain');
   if (!main.dataset.ready) {
@@ -163,7 +177,7 @@ export async function showAbyss(hash) {
     main.innerHTML = `<div class="empty-state"><p>深渊市场的数据来自 MutaMarket，只收录宁静服的合同与价格，${esc(SERVER.full)}暂不支持。</p></div>`;
     return;
   }
-  if (!D.types) main.innerHTML = '<div class="pi-loading">载入深渊类型…</div>';
+  if (!D.types) main.innerHTML = skPage({ tabs: 3, grid: 6 });
   try { await loadBase(); } catch (e) { main.innerHTML = `<div class="empty-state"><p>深渊数据载入失败：${esc(e.message)}</p></div>`; return; }
   route(hash || location.hash);
 }
@@ -297,7 +311,7 @@ function marketHtml() {
 }
 function listHtml() {
   if (S.error && !S.items.length) return `<div class="empty-state"><p>读取失败：${esc(S.error)}</p><button class="btn btn-sm" data-abyss-retry>重试</button></div>`;
-  if (!S.items.length) return S.loading ? '<div class="pi-loading">读取在售装备…</div>' : '<div class="empty-state"><p>没有符合条件的在售装备</p></div>';
+  if (!S.items.length) return S.loading ? skGrid(6) : '<div class="empty-state"><p>没有符合条件的在售装备</p></div>';
   return `<div class="aby-count text-muted">已显示 ${S.items.length} 件 · 点卡片看详情 · 数据来自 <a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a>，每 5 分钟更新</div>
     <div class="aby-grid">${S.items.map((m) => cardHtml(m)).join('')}</div>
     ${S.cursor ? `<div class="aby-more"><button class="btn" data-abyss-more ${S.loading ? 'disabled' : ''}>${S.loading ? '读取中…' : '加载更多'}</button></div>` : ''}
@@ -313,7 +327,9 @@ async function fetchList(more) {
   if (!q.get('sort')) { q.set('sort', 'date-added'); q.set('order', 'desc'); }
   if (more && S.cursor) q.set('cursor', S.cursor);
   try {
-    const r = await api('list?' + q);
+    const pre = !more && PRE_LIST?.qs === q.toString() && Date.now() - PRE_LIST.at < LIST_FRESH ? PRE_LIST.r : null;
+    PRE_LIST = null;
+    const r = pre || await api('list?' + q);
     if (seq !== S.seq) return;
     S.items = more ? [...S.items, ...r.items] : r.items;
     S.cursor = r.next_cursor;
@@ -370,7 +386,7 @@ function confidenceRow(model) {
 function renderItem() {
   const main = $('abyssMain');
   const m = S.item;
-  if (!m) { main.innerHTML = '<div class="pi-loading">读取装备…</div>'; return; }
+  if (!m) { main.innerHTML = skPage({ cards: 3, rows: 6 }); return; }
   const t = D.byId.get(m.type_id);
   const c = m.contract;
   const model = m.model || t?.model;

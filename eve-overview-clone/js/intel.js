@@ -7,10 +7,10 @@
 // 我的位置：绑定 ESI 且有位置权限时读角色位置；否则读本地频道日志里「Channel changed to Local」一行；都没有时用手动填的星系。
 // 关键词监控：勾选的频道（或全部频道）里出现关键词（/正则/ 也可以）就提醒。游戏日志监控：战斗日志等出现关键词就提醒（例如被跃迁扰断）。
 // 提醒方式：提示音、网页卡片、系统通知、游戏内邮件（与击杀预警共用收件人与发信间隔，alert-mail.js；一段时间里的提醒合并成一封，
-//   多个标签页都在监听时按消息去重，只发一次）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
+//   多个标签页都在监听时按消息去重，只发一次；收件人在「邮件」标签页设置，这里勾选发给谁；英文界面发英文邮件）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
 // 文件编码：聊天记录是 UTF-16 LE（带 BOM），游戏日志是 UTF-8；按 BOM 判断。文件名「频道名_YYYYMMDD_HHMMSS_角色ID.txt」。
 
-import * as AM from './alert-mail.js?v=v1';
+import * as AM from './alert-mail.js?v=v3';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem
 const KEY = 'eve-intel-v1';
@@ -35,7 +35,7 @@ function notify() { for (const fn of subs) { try { fn(); } catch (e) { console.e
 function load() { try { Object.assign(T, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch { /* 忽略 */ } }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(T)); } catch { /* 忽略 */ } }
 function setStatus(t) { S.status = t; notify(); }
-export const status = () => ({ on: T.on && S.timer !== 0, alert: Date.now() - S.lastAlert < 60e3, text: S.status || (T.on ? '' : '本地日志监听未开启') });
+export const status = () => ({ on: T.on && S.timer !== 0, mail: T.mail, alert: Date.now() - S.lastAlert < 60e3, text: S.status || (T.on ? '' : '本地日志监听未开启') });
 
 // ---------- IndexedDB：保存文件夹句柄 ----------
 function idb(mode, fn) {
@@ -60,6 +60,7 @@ export async function initIntel(context) {
   load();
   AM.initAlertMail(ctx);
   AM.onMailChange(renderPanel);
+  AM.registerSource('intel', { label: '本地日志', on: () => T.mail, set: (on) => update({ mail: on }) });
   if (!supported()) return;
   S.dir = await idbGet('dir');
   if (T.on && S.dir) resume(false);
@@ -133,6 +134,7 @@ export function update(patch) {
   else if ('channels' in patch || 'kwAll' in patch || 'gameOn' in patch || 'kwOn' in patch) scan(false);
   if ('home' in patch || 'useLoc' in patch) pollLocation();
   notify();
+  if ('mail' in patch) AM.refresh();
 }
 
 // ---------- 扫描文件夹：每个频道（每个角色）只读最新的文件 ----------
@@ -428,18 +430,27 @@ async function flushMail() {
   const list = S.mailQueue.splice(0);
   if (!list.length) return null;
   const esc = ctx.esc;
+  const en = AM.EN;   // 英文界面发英文邮件
   const intelN = list.filter((r) => r.type === 'intel').length;
-  const subject = list.length === 1 ? '本地日志 · ' + titleOf(list[0]) : `本地日志：${list.length} 条提醒${intelN ? `（敌情 ${intelN} 条）` : ''}`;
+  const jumps = (n) => (en ? (n === 0 ? 'same system' : n === 1 ? '1 jump' : n + ' jumps') : n === 0 ? '本星系' : n + ' 跳');
+  const title = (r) => (r.type === 'intel' ? (en ? `Intel: ${r.name}${r.jumps != null ? ` (${jumps(r.jumps)})` : ''}` : titleOf(r))
+    : en ? (r.type === 'kw' ? `Keyword "${r.kw}"` : `Game log "${r.kw}"`) : titleOf(r));
+  const subject = list.length === 1 ? AM.L('本地日志 · ', 'Local logs · ') + title(list[0])
+    : en ? `Local logs: ${list.length} alerts${intelN ? ` (${intelN} intel)` : ''}` : `本地日志：${list.length} 条提醒${intelN ? `（敌情 ${intelN} 条）` : ''}`;
   const line = (r) => {
-    const sys = r.system ? `<a href="showinfo:5//${r.system}">${esc(r.name)}</a>${r.jumps != null ? `（${r.jumps === 0 ? '本星系' : r.jumps + ' 跳'}）` : ''}：` : '';
-    const tag = r.type === 'intel' ? '【敌情】' : r.type === 'kw' ? `【关键词「${esc(r.kw)}」】` : `【游戏日志「${esc(r.kw)}」】`;
-    return `${tag}${sys}${esc((r.who ? r.who + '：' : '') + r.msg)} · ${esc(r.channel)} · ${r.time.toLocaleTimeString('zh-CN', { hour12: false })}`;
+    const sys = r.system ? `<a href="showinfo:5//${r.system}">${esc(r.name)}</a>${r.jumps != null ? (en ? ` (${jumps(r.jumps)})` : `（${jumps(r.jumps)}）`) : ''}${en ? ': ' : '：'}` : '';
+    const tag = en ? (r.type === 'intel' ? '[Intel] ' : r.type === 'kw' ? `[Keyword "${esc(r.kw)}"] ` : `[Game log "${esc(r.kw)}"] `)
+      : r.type === 'intel' ? '【敌情】' : r.type === 'kw' ? `【关键词「${esc(r.kw)}」】` : `【游戏日志「${esc(r.kw)}」】`;
+    return `${tag}${sys}${esc((r.who ? r.who + (en ? ': ' : '：') : '') + r.msg)} · ${esc(r.channel)} · ${r.time.toLocaleTimeString(en ? 'en-GB' : 'zh-CN', { hour12: false })}`;
   };
-  const who = AM.ownerWord();
-  const body = `<font size="14">本地日志：${who}监听的频道 / 游戏日志有新的提醒${S.here ? `（${who}在 <a href="showinfo:5//${S.here}">${esc(sysName(S.here))}</a>）` : ''}。</font><br><br>` +
-    list.slice(0, 20).map(line).join('<br>') + (list.length > 20 ? `<br>……另有 ${list.length - 20} 条` : '') +
-    '<br><br><font size="10" color="#ff888888">来自 EVE Market 本地日志，可在网页右上角的铃铛里关闭。</font>';
-  return AM.sendMail(subject, body);
+  const who = AM.ownerWord('intel');
+  const here = S.here ? `<a href="showinfo:5//${S.here}">${esc(sysName(S.here))}</a>` : '';
+  const intro = en ? `Local logs: new alerts from the channels / game logs ${who === 'you' ? 'you are' : who + ' is'} watching${here ? ` (${who === 'you' ? 'you are' : who + ' is'} in ${here})` : ''}.`
+    : `本地日志：${who}监听的频道 / 游戏日志有新的提醒${here ? `（${who}在 ${here}）` : ''}。`;
+  const body = `<font size="14">${intro}</font><br><br>` +
+    list.slice(0, 20).map(line).join('<br>') + (list.length > 20 ? `<br>${en ? `…and ${list.length - 20} more` : `……另有 ${list.length - 20} 条`}` : '') +
+    `<br><br><font size="10" color="#ff888888">${AM.L('来自 EVE Market 本地日志，可在网页右上角的铃铛里关闭。', 'Sent by EVE Market local log alerts. Turn it off from the bell icon at the top right of the site.')}</font>`;
+  return AM.sendMail('intel', subject, body);
 }
 
 function beep(jumps) {
@@ -520,6 +531,7 @@ function drawPanel() {
   return `
     <div class="ka-top"><span class="ka-status${status().on ? ' on' : ''}"><i></i>${ctx.esc(status().text)}</span></div>
     <p class="ka-note">读取本机的游戏聊天记录与日志，文件不会上传；需要电脑版 Chrome 或 Edge。</p>
+    <div class="ac-cols"><div class="ac-col">
     ${sec('日志文件夹', `<div class="ka-list">
       <div class="ka-opt"><span><b>${S.dir ? ctx.esc(S.dir.name) : '未选择'}</b><small>${S.dir ? `聊天记录 ${S.chat ? '✓' : '✗'} · 游戏日志 ${S.game ? '✓' : '✗'}` : `选 <code>${window.I18N?.lang === 'en' ? 'Documents' : '文档'}\\EVE\\logs</code>`}</small></span>
         <span class="ka-ctl">${S.dir && S.perm !== 'granted' ? '<button class="btn btn-ghost btn-sm" data-in-resume>恢复监听</button>' : ''}<button class="btn btn-primary btn-sm" data-in-pick>${S.dir ? '重新选择' : '选择文件夹'}</button></span></div>
@@ -534,12 +546,13 @@ function drawPanel() {
       <label class="ka-opt" title="消息里有这些词（空格分隔）算星系已清空，星图标绿、不提醒"><span><b>报平安的字样</b></span><input type="text" class="cr-input intel-home" data-in-home="clearWords" data-keep="clear" value="${ctx.esc(T.clearWords)}" aria-label="报平安字样"></label>
       <label class="ka-opt" title="星图上的红 / 绿标记多久后消失"><span><b>星图标记保留</b></span><select class="cr-input" data-in-num="expire">${[5, 10, 15, 30, 60].map((m) => `<option value="${m}"${T.expire === m ? ' selected' : ''}>${m} 分钟</option>`).join('')}</select></label>
     </div>`)}
+    </div><div class="ac-col">
     ${sec('提醒方式', `<div class="ka-list">
       ${sw('sound', '提示音', '', '越近响得越急')}
       ${sw('web', '网页卡片', '', '右上角弹出敌情卡片，点击在星图查看')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
       ${sw('mail', '游戏内邮件', '', '发 EVE 邮件（每分钟最多一封，多条合并），需要绑定 ESI')}
-      ${T.mail ? AM.recipientsHtml() : ''}
+      ${T.mail ? AM.pickerHtml('intel') : ''}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-in-test>测试提醒</button>${T.mail ? `<button class="btn btn-ghost btn-sm" data-in-testmail${ctx.tokenInfo() ? '' : ' disabled'}>发送测试邮件</button>` : ''}</div>`)}
     ${sec('频道关键词', `<div class="ka-list">
@@ -551,6 +564,7 @@ function drawPanel() {
       ${sw('gameOn', '开启游戏日志提醒', '', '战斗、通知等游戏日志里出现关键词就提醒')}
       ${wordList('gameWords', '关键词，例如 warp scramble、跃迁扰断、被锁定')}
     </div>`)}
+    </div></div>
     ${sec('最近消息', S.reports.length ? `<ul class="ka-history">${S.reports.map((r) => `<li${r.system ? ` data-in-sys="${r.system}"` : ''}>
       <span class="ka-badge${r.clear ? ' clear' : ''}">${r.type !== 'intel' ? (r.type === 'kw' ? '关键词' : '日志') : r.clear ? '平安' : r.jumps == null ? '敌情' : r.jumps + ' 跳'}</span>
       <span>${r.system ? `<b>${ctx.esc(r.name)}</b> ` : ''}${ctx.esc((r.who ? r.who + '：' : '') + r.msg)}<small> · ${ctx.esc(r.channel)}</small></span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有消息</p>')}`;
@@ -561,7 +575,7 @@ export function mountPanel(el, opts) {
   if (panel) return;
   panel = el;
   shell = opts;
-  AM.bindRecipients(panel);
+  AM.bindPicker(panel);
   panel.addEventListener('click', onClick);
   panel.addEventListener('change', onChangeEvt);
   panel.addEventListener('keydown', (e) => {
@@ -603,7 +617,7 @@ async function onClick(e) {
     if (!AM.canMail()) { AM.testToast(null); return; }
     await ensureNames().catch(() => {});
     const id = S.here || S.graph?.systems[0]?.[0];
-    S.mailQueue.push({ type: 'intel', time: new Date(), channel: '测试频道', who: '测试', msg: '（测试）' + (id ? sysName(id) : '') + ' 2 红', system: id, name: id ? sysName(id) : '', jumps: S.here ? 0 : null });
+    S.mailQueue.push({ type: 'intel', time: new Date(), channel: AM.L('测试频道', 'Test channel'), who: AM.L('测试', 'Tester'), msg: AM.L('（测试）', '(test) ') + (id ? sysName(id) : '') + AM.L(' 2 红', ' 2 reds'), system: id, name: id ? sysName(id) : '', jumps: S.here ? 0 : null });
     clearTimeout(S.mailTimer);
     flushMail().then(AM.testToast);
     return;

@@ -447,6 +447,9 @@ function searchText(c) {
 }
 
 // ---------- 页面 ----------
+// 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
+export const preload = () => loadContracts();
+
 export async function showCourier() {
   const main = $('courierMain');
   if (!main.dataset.ready) {

@@ -6,6 +6,8 @@
 // - 视频：站内嵌入 B 站 / YouTube 播放器，附原视频链接；EVE Academy 官方视频带本站翻译的中文字幕（guides/academy-*.json）
 // 收录时逐条打开核对过（2026-10）；B 站视频注明发布日期，旧视频的界面和数值可能和现在不同
 
+import { skText } from './skeleton.js?v=v17';
+
 let ctx = null;
 const $ = (id) => document.getElementById(id);
 const LANG_KEY = 'eve-guide-lang';
@@ -416,7 +418,7 @@ async function renderDoc(id) {
   $('guideMain').innerHTML = `<section class="pi-page guide-page guide-reader"><div class="guide-reader-bar">
       <nav class="guide-crumb"><a href="#guide" data-guide-nav>Wiki</a>${info ? `<span>/</span><a href="#guide/${info.c}" data-guide-nav>${catName(info.c)}</a>` : ''}</nav>
       <span class="toolbar-spacer"></span><div id="guideLangBar"></div></div>
-    <div id="guideDocHead"></div><div id="guideDocBody"><p class="legend-empty">加载中…</p></div></section>`;
+    <div id="guideDocHead"></div><div id="guideDocBody">${skText(12)}</div></section>`;
   let doc;
   try { doc = await loadDoc(id); } catch (e) {
     $('guideDocBody').innerHTML = `<p class="legend-empty">文章加载失败：${ctx.esc(e.message)}</p>`;
@@ -639,6 +641,9 @@ function render() {
   else if (S.page === 'cat') renderWikiCat();
   else renderWikiHome();
 }
+
+// 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
+export const preload = () => loadIndex();
 
 export async function showGuides(hash) {
   const main = $('guideMain');

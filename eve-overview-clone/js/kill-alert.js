@@ -6,7 +6,7 @@
 // 提醒方式：
 //   游戏内邮件（默认开）：给自己发一封 EVE 邮件（esi-mail.send_mail.v1），带击杀报告链接 killReport:ID:HASH，游戏里点开即可看 KM；
 //     同一分钟内的多条击杀合并成一封，两封之间至少隔 60 秒；同时开了多个标签页时只由一个标签页发送。
-//     收件人、发信间隔与本地日志共用（alert-mail.js）：可发给自己、邮件列表、军团、联盟、其他角色。
+//     收件人在「预警」弹窗的「邮件」标签页设置（alert-mail.js，与本地日志共用通讯录与发信间隔），这里勾选发给谁；英文界面发英文邮件。
 //   网页特效（默认关）：屏幕边缘红色闪烁 + 右上角预警卡片（点击查看击杀详情），可选提示音。
 // 人物关注（与位置预警相互独立，默认关闭）：关注的角色产生 KM 时提醒，可分别选「击杀」（参与击杀，含最后一击）/「损失」/「全部」。
 //   只有宁静服可用：实时缓冲里每条击杀带全部玩家攻击者的角色 ID（att）；国服没有公开的个人击杀数据。
@@ -17,7 +17,7 @@
 // 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
 
 import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s4';
-import * as AM from './alert-mail.js?v=v1';
+import * as AM from './alert-mail.js?v=v3';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
@@ -61,7 +61,7 @@ function watchText() {
   if (regionWatching()) parts.push(`正在监控 ${T.regions.length} 个星域`);
   return parts.join('；');
 }
-export const status = () => ({ on: T.on || watching() || regionWatching(), text: [T.on ? S.status : '', watchText()].filter(Boolean).join('；') || '预警未开启', area: S.status, system: S.systemName, count: S.range.size, history: S.history });
+export const status = () => ({ on: T.on || watching() || regionWatching(), mail: T.mail, text: [T.on ? S.status : '', watchText()].filter(Boolean).join('；') || '预警未开启', area: S.status, system: S.systemName, count: S.range.size, history: S.history });
 export function onChange(fn) { subs.add(fn); return () => subs.delete(fn); }
 function notify() { for (const fn of subs) { try { fn(); } catch (e) { console.error(e); } } }
 function setStatus(text) { S.status = text; notify(); }
@@ -71,6 +71,7 @@ export function initKillAlert(context) {
   load();
   AM.initAlertMail(ctx, T);   // 旧版收件人设置（T.mailSelf / mailTo）第一次搬到共用设置里
   AM.onMailChange(renderPanel);
+  AM.registerSource('kill', { label: '击杀预警', on: () => T.mail, set: (on) => update({ mail: on }) });
   window.addEventListener('eve-account-change', () => { S.system = 0; S.range = new Map(); S.charId = 0; restart(); });
   // 多个标签页：只有「领头」的标签页发游戏邮件，避免重复
   setInterval(claimLeader, 10e3);
@@ -96,6 +97,7 @@ export function update(patch) {
   // 位置预警或人物关注的开关变化、关注名单从空到有时重新开始检测
   if ('on' in patch || 'watchOn' in patch || 'regionOn' in patch || (('watch' in patch || 'regions' in patch) && !S.timerKills)) restart();
   notify();
+  if ('mail' in patch) AM.refresh();
 }
 
 function stop() {
@@ -282,35 +284,89 @@ async function flushMail(force = false) {
   const list = S.mailQueue.splice(0);
   if (!list.length || (!force && !isLeader())) return null;
   if (!ctx.tokenInfo()) return null;
-  const who = AM.ownerWord();   // 发给别人时说清楚是谁的预警
+  const subject = mailSubject(list);
+  const body = (AM.EN ? mailBodyEn : mailBodyZh)(list);
+  return AM.sendMail('kill', subject, body);
+}
+// 邮件标题与正文（英文界面发英文，舰船 / 星系名在英文模式下本来就是英文）
+function mailSubject(list) {
   const first = list[0];
-  const watched = list.filter((x) => x.watch);
-  const subject = list.length === 1 ? (first.watch ? '人物关注：' : '击杀预警：') + describe(first)
-    : watched.length === list.length ? `人物关注：关注的角色产生了 ${list.length} 条 KM`
-      : watched.length ? `击杀预警：${list.length} 条（其中关注人物 ${watched.length} 条）`
-        : `击杀预警：附近 ${list.length} 起击杀（最近 ${Math.min(...list.map((x) => x.jumps ?? 99))} 跳）`;
+  const watched = list.filter((x) => x.watch).length;
+  if (!AM.EN) {
+    return list.length === 1 ? (first.watch ? '人物关注：' : '击杀预警：') + describe(first)
+      : watched === list.length ? `人物关注：关注的角色产生了 ${list.length} 条 KM`
+        : watched ? `击杀预警：${list.length} 条（其中关注人物 ${watched} 条）`
+          : `击杀预警：附近 ${list.length} 起击杀（最近 ${Math.min(...list.map((x) => x.jumps ?? 99))} 跳）`;
+  }
+  return list.length === 1 ? (first.watch ? 'Watchlist: ' : 'Kill alert: ') + describeEn(first)
+    : watched === list.length ? `Watchlist: ${list.length} new killmails`
+      : watched ? `Kill alert: ${list.length} kills (${watched} watchlist)`
+        : `Kill alert: ${list.length} kills nearby (closest ${Math.min(...list.map((x) => x.jumps ?? 99))} jumps)`;
+}
+const jumpsEn = (n) => (n === 0 ? 'same system' : n === 1 ? '1 jump' : n + ' jumps');
+function describeEn(a) {
+  const ship = (a.victim ? a.victim + "'s " : '') + a.ship;
+  if (a.hourly) return `${a.systemName} (${jumpsEn(a.jumps)}): ${a.added} new kills in the last hour`;
+  if (a.watch) return a.watch.role === 'loss' ? `${a.watch.name} lost a ${a.ship} · ${a.systemName}` : `${a.watch.name} killed ${ship} · ${a.systemName}`;
+  if (a.region) return `${a.region} · ${a.systemName}: ${ship} destroyed`;
+  return `${a.systemName} (${jumpsEn(a.jumps)}): ${ship} destroyed`;
+}
+const mailTime = (t) => new Date(t).toLocaleTimeString(AM.EN ? 'en-GB' : 'zh-CN', { hour12: false });
+const mailSys = (a) => `<a href="showinfo:5//${a.system}">${ctx.esc(a.systemName)}</a>`;
+const mailKm = (a, label) => (a.hash ? ` · <a href="killReport:${a.id}:${a.hash}">${label}</a>` : '');
+const mailWho = (a, name) => `<a href="showinfo:${{ corporation: 2, alliance: 16159 }[a.watch.kind] || 1377}//${a.watch.id}">${ctx.esc(name)}</a>`;
+function mailFrame(list, intro, line, more, foot) {
+  return `<font size="14">${intro}</font><br><br>` + list.slice(0, 20).map(line).join('<br>') + (list.length > 20 ? `<br>${more(list.length - 20)}` : '') +
+    `<br><br><font size="10" color="#ff888888">${foot}</font>`;
+}
+function mailBodyZh(list) {
+  const who = AM.ownerWord('kill');   // 发给别人时说清楚是谁的预警
+  const first = list[0];
+  const watched = list.filter((x) => x.watch).length;
   const line = (a) => {
-    const sys = `<a href="showinfo:5//${a.system}">${ctx.esc(a.systemName)}</a>`;
+    const sys = mailSys(a);
     if (a.hourly) return `${sys}（${a.jumps} 跳）：过去一小时新增击杀 ${a.added} 次（国服没有实时击杀邮件，数据来自 ESI 每小时统计）`;
-    const km = a.hash ? ` · <a href="killReport:${a.id}:${a.hash}">查看击杀报告</a>` : '';
+    const km = mailKm(a, '查看击杀报告');
     if (a.watch) {
-      const who = `<a href="showinfo:${{ corporation: 2, alliance: 16159 }[a.watch.kind] || 1377}//${a.watch.id}">${ctx.esc(whoOf(a.watch))}</a>`;
-      const what = a.watch.role === 'loss' ? `${who} <b>损失</b>了${ctx.esc(a.ship)}` : `${who} <b>参与击杀</b>了${ctx.esc(a.victim ? a.victim + '的' : '')}${ctx.esc(a.ship)}`;
-      return `【关注】${what} · ${sys}${a.jumps != null ? `（距你 ${a.jumps} 跳）` : ''}${a.value ? '，价值 ' + ctx.formatISK(a.value) + ' ISK' : ''}` +
-        ` · ${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}${km}`;
+      const w = mailWho(a, whoOf(a.watch));
+      const what = a.watch.role === 'loss' ? `${w} <b>损失</b>了${ctx.esc(a.ship)}` : `${w} <b>参与击杀</b>了${ctx.esc(a.victim ? a.victim + '的' : '')}${ctx.esc(a.ship)}`;
+      return `【关注】${what} · ${sys}${a.jumps != null ? `（距你 ${a.jumps} 跳）` : ''}${a.value ? '，价值 ' + ctx.formatISK(a.value) + ' ISK' : ''} · ${mailTime(a.time)}${km}`;
     }
     return `${a.region ? '【' + ctx.esc(a.region) + '】' : ''}${sys}${a.jumps != null ? `（${a.jumps} 跳）` : ''}：${ctx.esc(a.victim ? a.victim + '的' : '')}${ctx.esc(a.ship)}被击毁` +
-      `${a.value ? '，价值 ' + ctx.formatISK(a.value) + ' ISK' : ''}${a.attackers ? '，' + a.attackers + ' 名攻击者' : ''}${a.final ? '（最后一击：' + ctx.esc(a.final) + '）' : ''}` +
-      ` · ${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}${km}`;
+      `${a.value ? '，价值 ' + ctx.formatISK(a.value) + ' ISK' : ''}${a.attackers ? '，' + a.attackers + ' 名攻击者' : ''}${a.final ? '（最后一击：' + ctx.esc(a.final) + '）' : ''} · ${mailTime(a.time)}${km}`;
   };
   const regional = list.filter((x) => x.region).length;
-  const intro = watched.length === list.length ? `人物关注：${who}关注的角色 / 军团 / 联盟产生了新的 KM。`
-    : regional === list.length - watched.length ? `星域监控：${who}监控的星域发生了击杀${watched.length ? '，另有关注的对象产生了 KM' : ''}。`
-      : `击杀预警：${who}所在的 ${ctx.esc(S.systemName || first.systemName || '')} 周边 ${T.jumps} 跳内发生了击杀${regional ? '，监控的星域也有击杀' : ''}${watched.length ? '，另有关注的对象产生了 KM' : ''}。`;
-  const body = `<font size="14">${intro}</font><br><br>` +
-    list.slice(0, 20).map(line).join('<br>') + (list.length > 20 ? `<br>……另有 ${list.length - 20} 起` : '') +
-    `<br><br><font size="10" color="#ff888888">来自 EVE Market 击杀预警，可在网页右上角的铃铛里关闭或调整范围。</font>`;
-  return AM.sendMail(subject, body);
+  const intro = watched === list.length ? `人物关注：${who}关注的角色 / 军团 / 联盟产生了新的 KM。`
+    : regional === list.length - watched ? `星域监控：${who}监控的星域发生了击杀${watched ? '，另有关注的对象产生了 KM' : ''}。`
+      : `击杀预警：${who}所在的 ${ctx.esc(S.systemName || first.systemName || '')} 周边 ${T.jumps} 跳内发生了击杀${regional ? '，监控的星域也有击杀' : ''}${watched ? '，另有关注的对象产生了 KM' : ''}。`;
+  return mailFrame(list, intro, line, (n) => `……另有 ${n} 起`, '来自 EVE Market 击杀预警，可在网页右上角的铃铛里关闭或调整范围。');
+}
+function mailBodyEn(list) {
+  const who = AM.ownerWord('kill');
+  const whose = who === 'you' ? 'your' : who + "'s";
+  const first = list[0];
+  const watched = list.filter((x) => x.watch).length;
+  const kindEn = { corporation: 'Corporation ', alliance: 'Alliance ' };
+  const line = (a) => {
+    const sys = mailSys(a);
+    if (a.hourly) return `${sys} (${jumpsEn(a.jumps)}): ${a.added} new kills in the last hour (no live killmails on this server; hourly ESI statistics)`;
+    const km = mailKm(a, 'Kill report');
+    const value = a.value ? `, worth ${ctx.formatISK(a.value)} ISK` : '';
+    const ship = ctx.esc((a.victim ? a.victim + "'s " : '') + a.ship);
+    if (a.watch) {
+      const w = mailWho(a, (kindEn[a.watch.kind] || '') + a.watch.name);
+      const what = a.watch.role === 'loss' ? `${w} <b>lost</b> a ${ctx.esc(a.ship)}` : `${w} <b>was on the kill</b> of ${ship}`;
+      return `[Watchlist] ${what} · ${sys}${a.jumps != null ? ` (${jumpsEn(a.jumps)} from you)` : ''}${value} · ${mailTime(a.time)}${km}`;
+    }
+    return `${a.region ? '[' + ctx.esc(a.region) + '] ' : ''}${sys}${a.jumps != null ? ` (${jumpsEn(a.jumps)})` : ''}: ${ship} destroyed${value}` +
+      `${a.attackers ? `, ${a.attackers} attacker${a.attackers > 1 ? 's' : ''}` : ''}${a.final ? ` (final blow: ${ctx.esc(a.final)})` : ''} · ${mailTime(a.time)}${km}`;
+  };
+  const regional = list.filter((x) => x.region).length;
+  const also = watched ? '; watched pilots / corporations / alliances also have new killmails' : '';
+  const intro = watched === list.length ? `Watchlist: ${whose} watched pilots / corporations / alliances have new killmails.`
+    : regional === list.length - watched ? `Region watch: kills in ${whose} watched regions${also}.`
+      : `Kill alert: kills within ${T.jumps} jumps of ${ctx.esc(S.systemName || first.systemName || '')}, where ${who === 'you' ? 'you are' : who + ' is'}${regional ? '; also kills in watched regions' : ''}${also}.`;
+  return mailFrame(list, intro, line, (n) => `…and ${n} more`, 'Sent by EVE Market kill alerts. Turn it off or change the range from the bell icon at the top right of the site.');
 }
 
 // 网页特效：屏幕边缘闪烁 + 预警卡片 + 可选提示音
@@ -371,7 +427,7 @@ function beep(urgent) {
 
 // 测试：网页特效 / 游戏内邮件
 export function test(kind) {
-  const a = { id: 0, test: true, system: S.system || 30000142, jumps: 2, time: new Date().toISOString(), ship: '金鹏级（测试）', victim: '测试飞行员', value: 432000000, attackers: 8 };
+  const a = { id: 0, test: true, system: S.system || 30000142, jumps: 2, time: new Date().toISOString(), ship: AM.L('金鹏级（测试）', 'Raven (test)'), victim: AM.L('测试飞行员', 'Test Pilot'), value: 432000000, attackers: 8 };
   a.systemName = S.systemName || sysName(a.system);
   if (kind === 'web') { webAlert(a); return; }
   if (kind === 'mail') {
@@ -390,7 +446,7 @@ const sec = (title, body, extra = '') => `<section class="ka-sec"><h4 class="ka-
 function renderPanel() {
   if (!panel || !shell.isOpen(panel)) return;
   // 重绘时保留正在输入的关注角色名
-  const keep = ['[data-ka-name]', '[data-ka-region]', '[data-am-name]'].map((sel) => {
+  const keep = ['[data-ka-name]', '[data-ka-region]'].map((sel) => {
     const el = panel.querySelector(sel);
     return el ? { sel, value: el.value, focus: document.activeElement === el } : null;
   }).filter(Boolean);
@@ -444,6 +500,7 @@ function drawPanel() {
     <div class="ka-top">${pill(st.on, st.text)}</div>
     ${token ? '' : '<p class="ka-warn">位置预警需要先在「个人中心」绑定 ESI</p>'}
     ${IS_TQ ? '' : `<p class="ka-warn" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据：提醒会延迟，星域监控与人物关注不可用</p>`}
+    <div class="ac-cols"><div class="ac-col">
     ${sec('位置预警', `<div class="ka-list">
       ${sw('on', '开启位置预警', '角色所在星系周边的击杀')}
       <label class="ka-opt"><span><b>检测范围</b></span><span class="ka-ctl"><input type="number" class="cr-input" min="1" max="10" step="1" value="${T.jumps}" data-ka-jumps aria-label="检测范围（跳）" title="1–10 跳"> 跳</span></label>
@@ -451,11 +508,12 @@ function drawPanel() {
     </div>`)}
     ${sec('提醒方式', `<div class="ka-list">
       ${sw('mail', '游戏内邮件', '', '发 EVE 邮件，附击杀报告链接（每分钟最多一封，多条合并）')}
-      ${T.mail ? AM.recipientsHtml() : ''}
+      ${T.mail ? AM.pickerHtml('kill') : ''}
       ${sw('web', '网页特效', '', '屏幕边缘红色闪烁 + 右上角预警卡片')}
       ${sw('sound', '提示音', '', '网页特效时同时播放提示音')}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ka-test="web">测试网页特效</button><button class="btn btn-ghost btn-sm" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>`)}
+    </div><div class="ac-col">
     ${sec('星域监控', `<div class="ka-list">
       ${sw('regionOn', '开启星域监控', '', '指定星域里发生的任何击杀都提醒，不需要绑定 ESI')}
       <div class="ka-opt ka-stack"><div class="ka-watch-add">
@@ -482,6 +540,7 @@ function drawPanel() {
         <span>${ctx.esc(e.name)}${e.kind !== 'character' ? `<small> · ${KIND_ZH[e.kind]}</small>` : ''}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
         <button class="ka-close" data-ka-del="${e.id}" title="取消关注" aria-label="取消关注">×</button></li>`).join('')}</ul>` : ''}</div>
     </div>`)}
+    </div></div>
     ${sec('最近预警', st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${ctx.esc(describe(a))}</span><small>${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有预警</p>')}
     <p class="ka-note">网页需保持打开（可在后台）</p>`;
 }
@@ -491,7 +550,7 @@ export function mountPanel(el, opts) {
   if (panel) return;
   panel = el;
   shell = opts;
-  AM.bindRecipients(panel);
+  AM.bindPicker(panel);
   panel.addEventListener('click', (e) => {
     const t = e.target.closest('[data-ka-test]');
     if (t) { test(t.dataset.kaTest); return; }
