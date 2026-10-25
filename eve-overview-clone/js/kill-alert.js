@@ -9,13 +9,21 @@
 //   网页特效（默认关）：屏幕边缘红色闪烁 + 右上角预警卡片（点击查看击杀详情），可选提示音。
 // 人物关注（与位置预警相互独立，默认关闭）：关注的角色产生 KM 时提醒，可分别选「击杀」（参与击杀，含最后一击）/「损失」/「全部」。
 //   只有宁静服可用：实时缓冲里每条击杀带全部玩家攻击者的角色 ID（att）；国服没有公开的个人击杀数据。
+// 星域监控（与位置预警相互独立，宁静服）：指定星域里的任何击杀都提醒，不需要绑定。
+// 过滤条件（位置预警与星域监控共用）：最低价值、受害者舰船类别、只提醒 N 秒内发生的击杀（zKillboard 收录有延迟，过旧的不提醒）。
+// 人物关注也可以关注军团 / 联盟：成员损失，或成员参与击杀（实时缓冲里带全部攻击者的军团 / 联盟 ID：ao）。
 // 浏览器后台标签页的定时器会被降频（约每分钟一次），预警可能延迟。
 
 import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s4';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
-const DEFAULTS = { on: false, jumps: 3, mail: true, web: false, sound: false, pods: true, watchOn: false, watch: [] };   // watch: [{ id, name, mode: both|kills|losses }]
+const DEFAULTS = { on: false, jumps: 3, mail: true, web: false, sound: false, pods: true, watchOn: false, watch: [],   // watch: [{ id, name, kind: character|corporation|alliance, mode: both|kills|losses }]
+  minValue: 0, classes: [], maxAge: 0, regionOn: false, regions: [] };   // classes: 舰船类别（市场分组 ID），空 = 全部；regions: [{ id, name }]
+const MIN_VALUES = [[0, '不限'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿'], [1e10, '100 亿']];
+const MAX_AGES = [[0, '不限'], [60, '1 分钟'], [180, '3 分钟'], [600, '10 分钟'], [1800, '30 分钟']];
+const KIND_ZH = { character: '角色', corporation: '军团', alliance: '联盟' };
+const REGION_MAX = 20;
 const WATCH_MAX = 50;
 const MODE_ZH = { both: '击杀与损失', kills: '只看击杀', losses: '只看损失' };
 const T = { ...DEFAULTS };
@@ -37,16 +45,22 @@ function load() {
   try { Object.assign(T, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch { /* 忽略 */ }
   T.jumps = Math.min(10, Math.max(1, Math.round(Number(T.jumps) || 3)));
   if (!Array.isArray(T.watch)) T.watch = [];
+  T.watch.forEach((e) => { if (!e.kind) e.kind = 'character'; });
+  if (!Array.isArray(T.classes)) T.classes = [];
+  if (!Array.isArray(T.regions)) T.regions = [];
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(T)); } catch { /* 忽略 */ } }
 
 export const settings = () => T;
 const watching = () => T.watchOn && T.watch.length > 0;
+const regionWatching = () => T.regionOn && T.regions.length > 0 && IS_TQ;
 function watchText() {
-  if (!watching()) return '';
-  return IS_TQ ? `正在关注 ${T.watch.length} 名角色` : `${SERVER.full}没有实时击杀数据，人物关注不可用`;
+  const parts = [];
+  if (watching()) parts.push(IS_TQ ? `正在关注 ${T.watch.length} 个角色 / 军团 / 联盟` : `${SERVER.full}没有实时击杀数据，人物关注不可用`);
+  if (regionWatching()) parts.push(`正在监控 ${T.regions.length} 个星域`);
+  return parts.join('；');
 }
-export const status = () => ({ on: T.on || watching(), text: [T.on ? S.status : '', watchText()].filter(Boolean).join('；') || '预警未开启', area: S.status, system: S.systemName, count: S.range.size, history: S.history });
+export const status = () => ({ on: T.on || watching() || regionWatching(), text: [T.on ? S.status : '', watchText()].filter(Boolean).join('；') || '预警未开启', area: S.status, system: S.systemName, count: S.range.size, history: S.history });
 export function onChange(fn) { subs.add(fn); return () => subs.delete(fn); }
 function notify() { for (const fn of subs) { try { fn(); } catch (e) { console.error(e); } } }
 function setStatus(text) { S.status = text; notify(); }
@@ -77,7 +91,7 @@ export function update(patch) {
   save();
   if ('jumps' in patch && S.system) computeRange(S.system);
   // 位置预警或人物关注的开关变化、关注名单从空到有时重新开始检测
-  if ('on' in patch || 'watchOn' in patch || ('watch' in patch && !S.timerKills)) restart();
+  if ('on' in patch || 'watchOn' in patch || 'regionOn' in patch || (('watch' in patch || 'regions' in patch) && !S.timerKills)) restart();
   notify();
 }
 
@@ -88,7 +102,7 @@ function stop() {
 
 export function restart() {
   stop();
-  const watch = watching() && IS_TQ;
+  const watch = (watching() && IS_TQ) || regionWatching();
   if (!T.on && !watch) { setStatus(T.on ? '' : '位置预警未开启'); return; }
   S.cursor = null;
   S.snapshot = null;
@@ -147,14 +161,24 @@ function jumpsTo(systemId) {
   return S.dist[i] >= 0 ? S.dist[i] : null;
 }
 
-// 关注名单里的角色是否出现在这条击杀里：受害者 = 损失；攻击者（含最后一击）= 击杀
+// 关注名单里的角色 / 军团 / 联盟是否出现在这条击杀里：受害者 = 损失；攻击者（含最后一击）= 击杀
 function watchMatch(k) {
   if (!watching()) return null;
   for (const e of T.watch) {
-    if (e.mode !== 'kills' && k.victim?.character_id === e.id) return { ...e, role: 'loss' };
-    if (e.mode !== 'losses' && (k.final?.character_id === e.id || (k.att || []).includes(e.id))) return { ...e, role: 'kill' };
+    const key = e.kind === 'corporation' ? 'corporation_id' : e.kind === 'alliance' ? 'alliance_id' : 'character_id';
+    if (e.mode !== 'kills' && k.victim?.[key] === e.id) return { ...e, role: 'loss' };
+    if (e.mode !== 'losses' && (k.final?.[key] === e.id || (e.kind === 'character' ? k.att || [] : k.ao || []).includes(e.id))) return { ...e, role: 'kill' };
   }
   return null;
+}
+
+// 位置预警 / 星域监控的过滤条件
+function passes(k) {
+  const pod = [670, 33328].includes(k.ship_type_id);
+  if (pod && !T.pods) return false;
+  if (T.minValue && (k.value || 0) < T.minValue) return false;
+  if (T.classes.length && !pod && !T.classes.includes(ctx.shipClassOf?.(k.ship_type_id) ?? -1)) return false;
+  return true;
 }
 
 // ---------- 宁静服：实时击杀 ----------
@@ -172,18 +196,22 @@ async function pollLive() {
     const hits = [];
     for (const k of data.kills || []) {
       if (S.seen.has(k.id)) continue;
+      if (T.maxAge && (Date.now() - new Date(k.time)) / 1000 > T.maxAge) continue;
       const w = watchMatch(k);
       if (w) hits.push({ k, w });
-      else if (T.on && S.range.has(k.system_id) && (T.pods || ![670, 33328].includes(k.ship_type_id))) hits.push({ k });
+      else if (passes(k)) {
+        if (T.on && S.range.has(k.system_id)) hits.push({ k });
+        else if (regionWatching() && T.regions.some((r) => r.id === k.region_id)) hits.push({ k, region: T.regions.find((r) => r.id === k.region_id).name });
+      }
     }
     if (!hits.length) return;
     hits.forEach(({ k }) => S.seen.add(k.id));
     const types = await ctx.resolveTypeNames(hits.flatMap(({ k }) => [k.ship_type_id, k.final?.ship_type_id])).catch(() => new Map());
     const names = data.names || {};
-    for (const { k, w } of hits) {
+    for (const { k, w, region } of hits) {
       raise({
-        id: k.id, hash: k.hash, system: k.system_id, jumps: w ? jumpsTo(k.system_id) : S.range.get(k.system_id), time: k.time, value: k.value,
-        watch: w ? { id: w.id, name: w.name, role: w.role } : null,
+        id: k.id, hash: k.hash, system: k.system_id, jumps: w || region ? jumpsTo(k.system_id) : S.range.get(k.system_id), time: k.time, value: k.value,
+        watch: w ? { id: w.id, name: w.name, role: w.role, kind: w.kind } : null, region: region || null,
         ship: types.get(k.ship_type_id) || 'Type ' + k.ship_type_id,
         victim: names[k.victim?.character_id] || names[k.victim?.corporation_id] || ctx.officialName(k.victim?.corporation_id) || '',
         attackers: k.attackers, final: names[k.final?.character_id] || (k.final?.ship_type_id ? types.get(k.final.ship_type_id) : '') || ''
@@ -227,12 +255,14 @@ function raise(a) {
 
 const where = (a) => a.jumps == null ? a.systemName : `${a.systemName}（${a.jumps === 0 ? '本星系' : a.jumps + ' 跳'}）`;
 const badge = (a) => a.watch ? `<span class="ka-badge ${a.watch.role === 'loss' ? 'loss' : 'kill'}">${a.watch.role === 'loss' ? '损失' : '击杀'}</span>`
-  : `<span class="ka-badge">${a.jumps === 0 ? '本星系' : a.jumps + ' 跳'}</span>`;
+  : a.region ? '<span class="ka-badge">星域</span>' : `<span class="ka-badge">${a.jumps === 0 ? '本星系' : a.jumps + ' 跳'}</span>`;
+const whoOf = (w) => (w.kind && w.kind !== 'character' ? `${KIND_ZH[w.kind]} ${w.name}` : w.name);
 function describe(a) {
   if (a.hourly) return `${a.systemName}（${a.jumps} 跳）过去一小时新增击杀 ${a.added} 次`;
   if (a.watch) return a.watch.role === 'loss'
-    ? `关注的 ${a.watch.name} 损失了${a.ship} · ${where(a)}`
-    : `关注的 ${a.watch.name} 参与击杀了${a.victim ? a.victim + '的' : ''}${a.ship} · ${where(a)}`;
+    ? `关注的 ${whoOf(a.watch)} 损失了${a.ship} · ${where(a)}`
+    : `关注的 ${whoOf(a.watch)} 参与击杀了${a.victim ? a.victim + '的' : ''}${a.ship} · ${where(a)}`;
+  if (a.region) return `${a.region} · ${where(a)} ${a.victim ? a.victim + '的' : ''}${a.ship}被击毁`;
   return `${a.systemName}（${a.jumps} 跳）${a.victim ? a.victim + '的' : ''}${a.ship}被击毁`;
 }
 
@@ -262,16 +292,19 @@ async function flushMail(force = false) {
     if (a.hourly) return `${sys}（${a.jumps} 跳）：过去一小时新增击杀 ${a.added} 次（国服没有实时击杀邮件，数据来自 ESI 每小时统计）`;
     const km = a.hash ? ` · <a href="killReport:${a.id}:${a.hash}">查看击杀报告</a>` : '';
     if (a.watch) {
-      const who = `<a href="showinfo:1377//${a.watch.id}">${ctx.esc(a.watch.name)}</a>`;
+      const who = `<a href="showinfo:${{ corporation: 2, alliance: 16159 }[a.watch.kind] || 1377}//${a.watch.id}">${ctx.esc(whoOf(a.watch))}</a>`;
       const what = a.watch.role === 'loss' ? `${who} <b>损失</b>了${ctx.esc(a.ship)}` : `${who} <b>参与击杀</b>了${ctx.esc(a.victim ? a.victim + '的' : '')}${ctx.esc(a.ship)}`;
       return `【关注】${what} · ${sys}${a.jumps != null ? `（距你 ${a.jumps} 跳）` : ''}${a.value ? '，价值 ' + ctx.formatISK(a.value) + ' ISK' : ''}` +
         ` · ${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}${km}`;
     }
-    return `${sys}（${a.jumps} 跳）：${ctx.esc(a.victim ? a.victim + '的' : '')}${ctx.esc(a.ship)}被击毁` +
+    return `${a.region ? '【' + ctx.esc(a.region) + '】' : ''}${sys}${a.jumps != null ? `（${a.jumps} 跳）` : ''}：${ctx.esc(a.victim ? a.victim + '的' : '')}${ctx.esc(a.ship)}被击毁` +
       `${a.value ? '，价值 ' + ctx.formatISK(a.value) + ' ISK' : ''}${a.attackers ? '，' + a.attackers + ' 名攻击者' : ''}${a.final ? '（最后一击：' + ctx.esc(a.final) + '）' : ''}` +
       ` · ${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}${km}`;
   };
-  const intro = watched.length === list.length ? '人物关注：你关注的角色产生了新的 KM。' : `击杀预警：你所在的 ${ctx.esc(S.systemName)} 周边 ${T.jumps} 跳内发生了击杀${watched.length ? '，另有关注的角色产生了 KM' : ''}。`;
+  const regional = list.filter((x) => x.region).length;
+  const intro = watched.length === list.length ? '人物关注：你关注的角色 / 军团 / 联盟产生了新的 KM。'
+    : regional === list.length - watched.length ? `星域监控：你监控的星域发生了击杀${watched.length ? '，另有关注的对象产生了 KM' : ''}。`
+      : `击杀预警：你所在的 ${ctx.esc(S.systemName)} 周边 ${T.jumps} 跳内发生了击杀${regional ? '，监控的星域也有击杀' : ''}${watched.length ? '，另有关注的对象产生了 KM' : ''}。`;
   const body = `<font size="14">${intro}</font><br><br>` +
     list.slice(0, 20).map(line).join('<br>') + (list.length > 20 ? `<br>……另有 ${list.length - 20} 起` : '') +
     `<br><br><font size="10" color="#ff888888">来自 EVE Market 击杀预警，可在网页右上角的铃铛里关闭或调整范围。</font>`;
@@ -362,40 +395,63 @@ const sw = (key, label, desc) => `<label class="ka-opt"><input type="checkbox" d
 function renderPanel() {
   if (!panel || panel.hidden) return;
   // 重绘时保留正在输入的关注角色名
-  const typing = panel.querySelector('[data-ka-name]');
-  const keep = typing ? { value: typing.value, focus: document.activeElement === typing, mode: panel.querySelector('[data-ka-mode]')?.value } : null;
+  const keep = ['[data-ka-name]', '[data-ka-region]'].map((sel) => {
+    const el = panel.querySelector(sel);
+    return el ? { sel, value: el.value, focus: document.activeElement === el } : null;
+  }).filter(Boolean);
+  const mode = panel.querySelector('[data-ka-mode]')?.value;
   drawPanel();
-  if (keep) {
-    const el = panel.querySelector('[data-ka-name]');
-    el.value = keep.value;
-    if (keep.mode) panel.querySelector('[data-ka-mode]').value = keep.mode;
-    if (keep.focus) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+  for (const k of keep) {
+    const el = panel.querySelector(k.sel);
+    if (!el) continue;
+    el.value = k.value;
+    if (k.focus) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
   }
+  if (mode) panel.querySelector('[data-ka-mode]').value = mode;
 }
 
-// 添加关注：角色 ID 直接读公开资料；名字用 /universe/ids/ 精确匹配（游戏内完整名字，不区分大小写）
+// 添加关注：ID 依次试角色 / 军团 / 联盟的公开资料；名字用 /universe/ids/ 精确匹配（游戏内完整名字，不区分大小写），同名时角色优先
 async function addWatch(text, mode) {
   text = text.trim();
   if (!text) return;
-  if (T.watch.length >= WATCH_MAX) { ctx.showToast(`最多关注 ${WATCH_MAX} 名角色`, 'error'); return; }
+  if (T.watch.length >= WATCH_MAX) { ctx.showToast(`最多关注 ${WATCH_MAX} 个`, 'error'); return; }
   let hit = null;
   try {
     if (/^\d{6,12}$/.test(text)) {
-      const res = await fetch(esiUrl(`/characters/${text}/`));
-      if (res.ok) hit = { id: Number(text), name: (await res.json()).name };
+      for (const [kind, path] of [['character', 'characters'], ['corporation', 'corporations'], ['alliance', 'alliances']]) {
+        const res = await fetch(esiUrl(`/${path}/${text}/`));
+        if (res.ok) { hit = { id: Number(text), name: (await res.json()).name, kind }; break; }
+      }
     } else {
       const res = await fetch(esiUrl('/universe/ids/'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([text]) });
       const d = res.ok ? await res.json() : {};
-      hit = d.characters?.[0] || null;
+      const pick = d.characters?.[0] ? ['character', d.characters[0]] : d.corporations?.[0] ? ['corporation', d.corporations[0]] : d.alliances?.[0] ? ['alliance', d.alliances[0]] : null;
+      if (pick) hit = { ...pick[1], kind: pick[0] };
     }
   } catch { /* 下面提示 */ }
-  if (!hit) { ctx.showToast('没有找到这个角色：请输入游戏内完整的角色名或角色 ID', 'error', 4000); return; }
+  if (!hit) { ctx.showToast('没有找到：请输入游戏内完整的角色 / 军团 / 联盟名称，或 ID', 'error', 4000); return; }
   if (T.watch.some((e) => e.id === hit.id)) { ctx.showToast(`已经关注了 ${hit.name}`, 'error'); return; }
-  update({ watch: [...T.watch, { id: hit.id, name: hit.name, mode }] });
+  update({ watch: [...T.watch, { id: hit.id, name: hit.name, kind: hit.kind, mode }] });
   const el = panel?.querySelector('[data-ka-name]');
   if (el) el.value = '';
-  ctx.showToast(`已关注 ${hit.name}（${MODE_ZH[mode]}）`, 'success');
+  ctx.showToast(`已关注${KIND_ZH[hit.kind]} ${hit.name}（${MODE_ZH[mode]}）`, 'success');
 }
+
+async function addRegion(text) {
+  text = text.trim();
+  if (!text) return;
+  const list = await ctx.regionList();
+  const key = text.toLowerCase();
+  const hit = list.find((r) => r.name.toLowerCase() === key) || list.find((r) => r.name.toLowerCase().includes(key));
+  if (!hit) { ctx.showToast('没有找到这个星域', 'error'); return; }
+  if (T.regions.some((r) => r.id === hit.id)) { ctx.showToast(`已经在监控 ${hit.name}`, 'error'); return; }
+  if (T.regions.length >= REGION_MAX) { ctx.showToast(`最多监控 ${REGION_MAX} 个星域`, 'error'); return; }
+  update({ regions: [...T.regions, { id: hit.id, name: hit.name }] });
+  const el = panel?.querySelector('[data-ka-region]');
+  if (el) el.value = '';
+}
+const entityImg = (e) => ctx.eveImage((e.kind === 'corporation' ? 'corporations/' + e.id + '/logo' : e.kind === 'alliance' ? 'alliances/' + e.id + '/logo' : 'characters/' + e.id + '/portrait'), 64);
+const opts = (list, cur) => list.map(([v, l]) => `<option value="${v}"${Number(cur) === v ? ' selected' : ''}>${l}</option>`).join('');
 
 function drawPanel() {
   const token = ctx.tokenInfo();
@@ -411,18 +467,34 @@ function drawPanel() {
     ${sw('sound', '提示音', '网页特效时同时播放提示音')}
     ${sw('pods', '包括太空舱', '太空舱被击毁也提醒')}
     <p class="ka-status${T.on ? ' on' : ''}">${ctx.esc(T.on ? st.area : '位置预警未开启')}</p>
+    <h4 class="ka-h">星域监控</h4>
+    ${sw('regionOn', '开启星域监控', '指定星域里发生的任何击杀都提醒（不需要绑定，与位置预警相互独立）')}
+    ${IS_TQ ? '' : `<p class="ka-warn">${ctx.esc(SERVER.full)}没有实时击杀数据，星域监控只在宁静服可用。</p>`}
+    <div class="ka-watch-add">
+      <input type="text" class="cr-input" data-ka-region list="kaRegionList" placeholder="星域名称" autocomplete="off" aria-label="监控星域">
+      <datalist id="kaRegionList">${(S.regionNames || []).map((r) => `<option value="${ctx.esc(r.name)}"></option>`).join('')}</datalist>
+      <button class="btn btn-primary" data-ka-radd>添加</button>
+    </div>
+    ${T.regions.length ? `<div class="ka-chips">${T.regions.map((r) => `<span class="ka-chip">${ctx.esc(r.name)}<button class="ka-close" data-ka-rdel="${r.id}" aria-label="移除">×</button></span>`).join('')}</div>` : ''}
+    <h4 class="ka-h">过滤条件<small>（位置预警与星域监控）</small></h4>
+    <label class="ka-opt ka-range"><span><b>最低价值</b><small>只提醒价值不低于此值的击杀</small></span>
+      <select class="cr-input" data-ka-num="minValue" aria-label="最低价值">${opts(MIN_VALUES, T.minValue)}</select></label>
+    <label class="ka-opt ka-range"><span><b>只提醒多久内发生的</b><small>击杀记录收录有延迟，过旧的不再提醒</small></span>
+      <select class="cr-input" data-ka-num="maxAge" aria-label="时效">${opts(MAX_AGES, T.maxAge)}</select></label>
+    <div class="ka-opt ka-classes"><span><b>受害者舰船类别</b><small>${T.classes.length ? `只提醒选中的 ${T.classes.length} 类` : '都不选 = 全部舰船'}</small></span>
+      <div class="ka-chips">${(ctx.shipClasses?.() || []).map((c) => `<button type="button" class="ka-chip toggle${T.classes.includes(c.id) ? ' on' : ''}" data-ka-class="${c.id}">${ctx.esc(c.name)}</button>`).join('')}</div></div>
     <h4 class="ka-h">人物关注</h4>
-    ${sw('watchOn', '开启人物提醒', '关注的角色产生 KM 时提醒，与上面的位置预警相互独立（默认关闭）')}
+    ${sw('watchOn', '开启人物提醒', '关注的角色 / 军团 / 联盟产生 KM 时提醒，与上面的位置预警相互独立（默认关闭）')}
     ${IS_TQ ? '' : `<p class="ka-warn">${ctx.esc(SERVER.full)}没有公开的实时击杀数据，人物关注只在宁静服可用。</p>`}
     <div class="ka-watch-add">
-      <input type="text" class="cr-input" data-ka-name placeholder="完整角色名，或角色 ID" autocomplete="off" spellcheck="false" aria-label="关注角色">
+      <input type="text" class="cr-input" data-ka-name placeholder="完整的角色 / 军团 / 联盟名称，或 ID" autocomplete="off" spellcheck="false" aria-label="关注角色">
       <select class="cr-input" data-ka-mode aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>
       <button class="btn btn-primary" data-ka-add>添加</button>
     </div>
-    ${T.watch.length ? `<ul class="ka-watch">${T.watch.map((e) => `<li><img src="${ctx.eveImage('characters/' + e.id + '/portrait', 64)}" alt="" width="24" height="24" loading="lazy">
-      <span>${ctx.esc(e.name)}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
+    ${T.watch.length ? `<ul class="ka-watch">${T.watch.map((e) => `<li><img src="${entityImg(e)}" alt="" width="24" height="24" loading="lazy">
+      <span>${ctx.esc(e.name)}${e.kind !== 'character' ? `<small> · ${KIND_ZH[e.kind]}</small>` : ''}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
       <button class="ka-close" data-ka-del="${e.id}" title="取消关注" aria-label="取消关注">×</button></li>`).join('')}</ul>` : '<p class="text-muted">还没有关注的角色</p>'}
-    ${watching() && IS_TQ ? `<p class="ka-status on">${ctx.esc(watchText())}</p>` : ''}
+    ${(watching() || regionWatching()) && IS_TQ ? `<p class="ka-status on">${ctx.esc(watchText())}</p>` : ''}
     ${IS_TQ ? '' : `<p class="ka-note" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据，提醒会延迟</p>`}
     <div class="ka-actions"><button class="btn btn-ghost" data-ka-test="web">测试网页特效</button><button class="btn btn-ghost" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>
     <h4 class="ka-h">最近预警</h4>
@@ -448,11 +520,17 @@ export function openPanel() {
       const open = e.target.closest('[data-ka-open]');
       if (open) { panel.hidden = true; ctx.openKill(Number(open.dataset.kaOpen)); return; }
       if (e.target.closest('[data-ka-add]')) { addWatch(panel.querySelector('[data-ka-name]').value, panel.querySelector('[data-ka-mode]').value); return; }
+      if (e.target.closest('[data-ka-radd]')) { addRegion(panel.querySelector('[data-ka-region]').value); return; }
+      const rdel = e.target.closest('[data-ka-rdel]');
+      if (rdel) { update({ regions: T.regions.filter((r) => r.id !== Number(rdel.dataset.kaRdel)) }); return; }
+      const cls = e.target.closest('[data-ka-class]');
+      if (cls) { const id = Number(cls.dataset.kaClass); update({ classes: T.classes.includes(id) ? T.classes.filter((x) => x !== id) : [...T.classes, id] }); return; }
       const del = e.target.closest('[data-ka-del]');
       if (del) update({ watch: T.watch.filter((x) => x.id !== Number(del.dataset.kaDel)) });
     });
     panel.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && e.target.matches('[data-ka-name]')) { e.preventDefault(); addWatch(e.target.value, panel.querySelector('[data-ka-mode]').value); }
+      if (e.key === 'Enter' && e.target.matches('[data-ka-region]')) { e.preventDefault(); addRegion(e.target.value); }
     });
     panel.addEventListener('change', (e) => {
       const set = e.target.closest('[data-ka-set]');
@@ -462,6 +540,7 @@ export function openPanel() {
         return;
       }
       if (e.target.matches('[data-ka-jumps]')) { update({ jumps: Number(e.target.value) }); return; }
+      if (e.target.matches('[data-ka-num]')) { update({ [e.target.dataset.kaNum]: Number(e.target.value) }); return; }
       const wm = e.target.closest('[data-ka-wmode]');
       if (wm) update({ watch: T.watch.map((x) => (x.id === Number(wm.dataset.kaWmode) ? { ...x, mode: wm.value } : x)) });
     });
@@ -470,4 +549,5 @@ export function openPanel() {
   }
   panel.hidden = false;
   renderPanel();
+  if (!S.regionNames) ctx.regionList().then((list) => { S.regionNames = list; renderPanel(); }).catch(() => {});
 }

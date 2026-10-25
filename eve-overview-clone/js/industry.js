@@ -16,7 +16,7 @@
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
-import * as Plan from './ind-plan.js?v=v2';
+import * as Plan from './ind-plan.js?v=v3';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
@@ -652,7 +652,8 @@ function drawCalc() {
       <div class="segmented ind-scope">${[['region', '同星域'], ['near', '周边 10 跳'], ['high', '全部高安'], ['all', '全宇宙']].map(([k, l]) => `<button data-ind-set="scope" data-v="${k}" class="${F.scope === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>星系</th><th class="pi-hide-sm">星域</th><th class="num">${r.act === 'r' ? '反应' : '制造'}指数</th><th class="num">距${HUB_NAME}</th><th class="num pi-hide-sm">NPC 站</th><th class="num">安装费</th><th class="num">比当前</th></tr></thead><tbody>${whereRows || '<tr><td colspan="7" class="text-muted">没有符合条件的星系</td></tr>'}</tbody></table></div></div>
     <div class="pi-card"><div class="pi-card-head"><h3>购物清单</h3>
-      <button class="btn btn-ghost ind-copy" data-ind-copy title="可粘贴到游戏多重购买">复制清单</button></div>
+      <button class="btn btn-ghost ind-copy" data-ind-copy title="可粘贴到游戏多重购买">复制清单</button>
+      <button class="btn btn-ghost ind-copy" data-ind-cart title="材料加入购物车">加入购物车</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>材料</th><th class="num">数量</th><th class="num">费用</th></tr></thead><tbody>${shopRows}</tbody></table></div></div>`;
   // 重渲染后内容高度要等图片 / 布局稳定，多帧兜底恢复滚动位置
   const restoreScrolls = () => {
@@ -1218,6 +1219,10 @@ function onClick(e) {
   if (e.target.closest('[data-ind-build-none]')) {
     for (const m of calc().rows) if (m.canBuild) C.build.delete(m.id);
     drawCalc();
+    return;
+  }
+  if (e.target.closest('[data-ind-cart]')) {
+    ctx.addToCart((R.shopping || []).map(([id, q]) => ({ id, qty: q, name: tName(id) })));
     return;
   }
   if (e.target.closest('[data-ind-copy]')) {

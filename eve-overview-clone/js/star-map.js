@@ -49,14 +49,14 @@ const MAP_BG = '#05080d';
 
 // 图层分组：基础 / 势力 / 活动（活动类为过去 1 小时数据）
 const LAYER_GROUPS = [
-  ['基础', [['security', '安全等级'], ['region', '星域'], ['distance', '跳数距离'], ['stations', 'NPC 空间站']]],
+  ['基础', [['security', '安全等级'], ['region', '星域'], ['distance', '跳数距离'], ['stations', 'NPC 空间站'], ['planets', '行星资源']]],
   ['势力', [['sov', '势力划分'], ['adm', '军事指数'], ['campaigns', '主权争夺'], ['fw', '势力战争']]],
   ['活动 · 1 小时', [['kills', '玩家击杀'], ['npc', 'NPC 击杀'], ['jumps', '跳跃'], ['incursions', '入侵']]]
 ];
 const LAYERS = LAYER_GROUPS.flatMap(([, list]) => list);
 const LAYER_HINT = {
   security: '游戏内安全等级配色', region: '每个星域一种颜色', distance: `与选中星系的星门跳数（未选择时以${HUB_NAME}为起点）`,
-  stations: '星系内 NPC 空间站数量', sov: 'ESI 实时主权：NPC 阵营 / 玩家联盟', adm: '主权枢纽的军事指数（ADM），1–6，越高越难攻破',
+  stations: '星系内 NPC 空间站数量', planets: '星系里能提取所选资源（或所选类型）的行星数量', sov: 'ESI 实时主权：NPC 阵营 / 玩家联盟', adm: '主权枢纽的军事指数（ADM），1–6，越高越难攻破',
   campaigns: '正在进行的主权争夺战', fw: '势力战争占领方与战况',
   kills: '舰船 + 太空舱被击毁数', npc: 'NPC 被击杀数（刷怪活跃度）', jumps: '星门跳跃次数', incursions: '萨沙入侵影响的星系'
 };
@@ -301,7 +301,41 @@ async function loadLiveImpl(quiet) {
 let layerCache = null;   // { max, colors: [] }
 
 // 数值类图层的取值函数（用于热度着色与排行）
+// 行星资源（pi-data.json，与行星工业规划共用）：每个星系的行星类型代码串，按所选 P0 资源 / 行星类型计数
+const PI = { promise: null, data: null, bySystem: new Map(), pick: 'res:2073' };
+try { PI.pick = localStorage.getItem('eve-map-pi') || PI.pick; } catch { /* 忽略 */ }
+function loadPiData() {
+  if (!PI.promise) PI.promise = fetch('./pi-data.json?v=2').then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))).then((d) => {
+    PI.data = d;
+    for (const [id, codes] of d.systems) PI.bySystem.set(id, codes);
+    if (M.layer === 'planets') { computeLayer(); renderLayerList(); renderLegend(); }
+  }).catch((e) => { PI.promise = null; console.error('行星数据加载失败', e); });
+  return PI.promise;
+}
+function piCount(s) {
+  const codes = PI.bySystem.get(s.id);
+  if (!codes || !PI.data) return 0;
+  if (PI.wantKey !== PI.pick) {
+    const [kind, v] = PI.pick.split(':');
+    PI.want = new Set(Object.values(PI.data.planetTypes).filter((t) => (kind === 'type' ? t.code === v : t.res.includes(Number(v)))).map((t) => t.code));
+    PI.wantKey = PI.pick;
+  }
+  const want = PI.want;
+  let n = 0;
+  for (const c of codes) if (want.has(c)) n++;
+  return n;
+}
+function piOptions() {
+  if (!PI.data) return '<p class="layer-hint">读取行星数据…</p>';
+  const res = Object.entries(PI.data.commodities).filter(([, c]) => c[2] === 0).sort((a, b) => a[1][0].localeCompare(b[1][0], 'zh-CN'));
+  const types = Object.values(PI.data.planetTypes);
+  return `<select class="region-select map-pi-pick" data-pi-pick aria-label="行星资源">
+    <optgroup label="P0 资源">${res.map(([id, c]) => `<option value="res:${id}"${PI.pick === 'res:' + id ? ' selected' : ''}>${app.esc(c[0])}</option>`).join('')}</optgroup>
+    <optgroup label="行星类型">${types.map((t) => `<option value="type:${t.code}"${PI.pick === 'type:' + t.code ? ' selected' : ''}>${app.esc(t.name)}</option>`).join('')}</optgroup></select>`;
+}
+
 const LAYER_METRIC = {
+  planets: piCount,
   kills: (s) => { const k = M.live.kills.get(s.id); return k ? k.ship_kills + k.pod_kills : 0; },
   npc: (s) => M.live.kills.get(s.id)?.npc_kills || 0,
   jumps: (s) => M.live.jumps.get(s.id) || 0,
@@ -339,6 +373,7 @@ function computeLayer() {
       case 'npc': c = heat(metric(s), max, 32); break;
       case 'jumps': c = heat(metric(s), max, 190); break;
       case 'stations': c = heat(metric(s), max, 48); break;
+      case 'planets': c = heat(metric(s), max, 140); break;
       case 'region': c = hashColor(s.region * 7 + 3); break;
       case 'distance': { const h = M.distance.hops[s.i]; c = h < 0 ? DIM_COLOR : DISTANCE_COLORS[DISTANCE_BUCKETS.findIndex(([lo, hi]) => h >= lo && h <= hi)]; break; }
       case 'adm': { const a = M.live.adm.get(s.id); c = a ? ADM_COLORS[Math.min(6, Math.max(1, Math.floor(a.vulnerability_occupancy_level || 1)))] : DIM_COLOR; break; }
@@ -355,6 +390,7 @@ function computeLayer() {
 
 function setLayer(layer) {
   M.layer = layer;
+  if (layer === 'planets' && !PI.data) loadPiData();
   M.highlight = null;
   M.highlightKey = null;
   computeLayer();
@@ -483,6 +519,8 @@ function buildScene() {
 
 // 根据当前着色方式与颜色说明中的高亮更新星系颜色
 const tmpColor = new THREE.Color();
+// 本地日志的敌情标记（intel.js）：星系 ID -> { clear }；有人报敌情标红并放大，报平安标绿
+const INTEL_HOSTILE = '#ff3b3b', INTEL_CLEAR = '#3ddc84';
 function applyColors() {
   if (!starPoints || !layerCache) return;
   const colors = starPoints.geometry.attributes.color;
@@ -490,9 +528,10 @@ function applyColors() {
   const hl = M.highlight;
   for (const s of M.systems) {
     const dim = hl && !hl.has(s.i);
-    tmpColor.setStyle(dim ? DIM_COLOR : layerCache.colors[s.i]);
+    const intel = M.intel?.get(s.id);
+    tmpColor.setStyle(intel ? (intel.clear ? INTEL_CLEAR : INTEL_HOSTILE) : dim ? DIM_COLOR : layerCache.colors[s.i]);
     colors.setXYZ(s.i, tmpColor.r, tmpColor.g, tmpColor.b);
-    sizes.setX(s.i, dim ? 1.6 : hl ? 3.2 : 2.4);
+    sizes.setX(s.i, intel ? (intel.clear ? 3.6 : 5) : dim ? 1.6 : hl ? 3.2 : 2.4);
   }
   colors.needsUpdate = true;
   sizes.needsUpdate = true;
@@ -880,7 +919,7 @@ function renderLayerList() {
     `<div class="layer-group-title">${title}</div><div class="layer-group">` +
     list.map(([key, label]) => `<button class="layer-btn${M.layer === key ? ' active' : ''}" data-layer="${key}" title="${LAYER_HINT[key]}">${label}</button>`).join('') +
     '</div>').join('') +
-    `<p class="layer-hint">${LAYER_HINT[M.layer]}</p>`;
+    `<p class="layer-hint">${LAYER_HINT[M.layer]}</p>` + (M.layer === 'planets' ? piOptions() : '');
   $('layerSummary').textContent = LAYERS.find(([k]) => k === M.layer)?.[1] || '';
 }
 
@@ -953,12 +992,12 @@ function renderLegend() {
     section('其他', sorted.filter(([key]) => key === 'none'));
   } else if (LAYER_METRIC[M.layer]) {
     const value = LAYER_METRIC[M.layer];
-    const hue = { kills: 8, npc: 32, jumps: 190, stations: 48 }[M.layer];
+    const hue = { kills: 8, npc: 32, jumps: 190, stations: 48, planets: 140 }[M.layer];
     // 分段色块（对数刻度）
     const steps = [0, 1, 5, 20, 100, layerCache.max].filter((v, n, arr) => n === 0 || (v <= layerCache.max && v > arr[n - 1]));
     rows.push('<div class="legend-steps">' + steps.map((v) => `<span><i style="background:${heat(v, layerCache.max, hue)}"></i>${v}</span>`).join('') + '</div>');
     const total = M.systems.reduce((t, s) => t + value(s), 0);
-    const title = { kills: '玩家击杀（舰船 + 太空舱）', npc: 'NPC 击杀', jumps: '星门跳跃', stations: 'NPC 空间站' }[M.layer];
+    const title = { kills: '玩家击杀（舰船 + 太空舱）', npc: 'NPC 击杀', jumps: '星门跳跃', stations: 'NPC 空间站', planets: '可用行星' }[M.layer];
     rows.push(`<div class="legend-group">${title} · 合计 ${app.formatNumber(total)}</div>`);
     const top = [...M.systems].sort((a, b) => value(b) - value(a)).slice(0, 12).filter((s) => value(s) > 0);
     for (const s of top) rows.push(legendRow({ color: layerCache.colors[s.i], label: s.name, sub: regionName(s.region), count: app.formatNumber(value(s)), systemIndex: s.i }));
@@ -1194,6 +1233,12 @@ function bindSidebar() {
     if (e.key === 'Escape') { input.value = ''; results.hidden = true; }
   });
 
+  $('mapSidebar').addEventListener('change', (e) => {
+    if (!e.target.matches('[data-pi-pick]')) return;
+    PI.pick = e.target.value;
+    try { localStorage.setItem('eve-map-pi', PI.pick); } catch { /* 忽略 */ }
+    computeLayer(); renderLegend();
+  });
   $('mapSidebar').addEventListener('click', (e) => {
     const layer = e.target.closest('[data-layer]');
     if (layer) { setLayer(layer.dataset.layer); return; }
@@ -2626,10 +2671,11 @@ function renderSystemInfo(s) {
     <div class="map-info-actions">
       <button class="btn" data-route-from="${s.i}">设为起点</button>
       <button class="btn" data-route-to="${s.i}">设为终点</button>
-      ${J.mode === 'jump' ? '' : `<button class="btn" data-route-via="${s.i}">加为途经点</button>`}
+      <button class="btn" data-route-via="${s.i}">加为途经点</button>
       <button class="btn btn-ghost" data-copy="${app.esc(s.name)}">复制名称</button>
       <button class="btn btn-ghost" data-game-dest="${s.id}" data-game-name="${app.esc(s.name)}" title="在游戏里设为自动导航目的地（角色需在线）">游戏内设目的地</button>
     </div>
+    ${extLinks('system', s.id)}
     ${SERVER.kb ? `<div class="map-kills">
       <div class="map-kills-head"><span>最近击杀</span><a href="https://zkillboard.com/system/${s.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
       <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
@@ -2689,6 +2735,29 @@ async function loadPanelKills(path, pick, stillValid) {
   }
 }
 
+// 外部网站：dotlan 用英文名（ESI /universe/names/ 返回英文，缓存），zKillboard 用 ID；面板渲染后再补上 dotlan 链接
+const enNameCache = new Map();
+async function englishName(id) {
+  if (!enNameCache.has(id)) {
+    enNameCache.set(id, fetch(esiUrl('/universe/names/'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([id]) })
+      .then((r) => (r.ok ? r.json() : [])).then((d) => d[0]?.name || null).catch(() => { enNameCache.delete(id); return null; }));
+  }
+  return enNameCache.get(id);
+}
+function extLinks(kind, id) {
+  if (SERVER.id !== 'tq') return '';   // 国服的星系在 dotlan / zKillboard 上没有数据（曙光服星图也不同）
+  englishName(id).then((name) => {
+    const a = $('mapInfo').querySelector(`[data-dotlan="${kind}:${id}"]`);
+    if (!a || !name) return;
+    a.href = kind === 'region' ? 'https://evemaps.dotlan.net/map/' + encodeURIComponent(name.replace(/ /g, '_'))
+      : 'https://evemaps.dotlan.net/system/' + encodeURIComponent(name.replace(/ /g, '_'));
+    a.hidden = false;
+  });
+  return `<div class="map-ext"><span>外部网站</span>
+    <a data-dotlan="${kind}:${id}" href="https://evemaps.dotlan.net/" target="_blank" rel="noopener" hidden>dotlan ↗</a>
+    <a href="https://zkillboard.com/${kind}/${id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>`;
+}
+
 function selectRegion(id) {
   const r = M.regions.get(id);
   if (!r) return;
@@ -2717,6 +2786,7 @@ function selectRegion(id) {
     <div class="map-neighbors"><span>主要势力</span><div class="region-owners">${topOwners.map(({ owner, n }) =>
       `<div class="region-owner">${owner ? `<img src="${ownerLogo(owner)}" alt="" width="22" height="22">` : '<i></i>'}<span>${app.esc(ownerName(owner))}</span><b>${n}</b></div>`).join('')}</div></div>
     <div class="map-info-actions"><button class="btn" data-hl-region="${r.id}">高亮该星域</button></div>
+    ${extLinks('region', r.id)}
     ${SERVER.kb ? `<div class="map-kills">
       <div class="map-kills-head"><span>最近大额击杀</span><a href="https://zkillboard.com/region/${r.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
       <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
@@ -2758,6 +2828,7 @@ function bindInfo() {
 // ---------- 入口 ----------
 export function initStarMap(context) {
   app = context;
+  window.addEventListener('eve-intel-marks', (e) => { M.intel = e.detail; applyColors(); });
   // 个人中心切换角色：代理人可用性重新按新角色判断
   window.addEventListener('eve-account-change', () => { agentAccess = null; if (M.selected != null && $('mapAgents')) renderAgents(M.systems[M.selected]); });
   canvas = $('mapCanvas');

@@ -267,14 +267,15 @@ function offerRow(r, i, { showCorp = false } = {}) {
 // 每行「物品名<Tab>数量」；兑换次数默认 1。蓝图兑换项另可复制制造材料（材料效率 0，按兑换得到的全部流程）。
 // 物品名是简体中文官方名，需游戏客户端也是简体中文才能识别。
 const timesOf = (o) => S.times.get(o.id) || 1;
-function buyLines(o, kind) {
+function buyItems(o, kind) {
   const n = timesOf(o);
   const sum = new Map();
   const add = (id, q) => sum.set(id, (sum.get(id) || 0) + q);
   if (kind !== 'mats') for (const [m, q] of o.req) add(m, q * n);
   if (kind !== 'req' && o.bp) for (const [m, q] of o.bp[2]) add(m, q * o.qty * n);
-  return [...sum].map(([id, q]) => `${tName(id)}\t${q}`);
+  return [...sum].map(([id, qty]) => ({ id, qty, name: tName(id) }));
 }
+const buyLines = (o, kind) => buyItems(o, kind).map((x) => `${x.name}\t${x.qty}`);
 // 已读取「我的 LP」时：在可兑换这一项的军团里，按 LP 最多能换几次（ISK 与物品另算）
 function myMax(o) {
   if (!S.mine || !o.lp) return 0;
@@ -300,6 +301,7 @@ function buyListHtml(o) {
       ${o.req.length ? btn('req', '复制兑换所需物品', o.req.length) : '<span class="text-muted">这个兑换不需要额外物品</span>'}
       ${o.bp ? btn('mats', '复制制造材料', mats) : ''}
       ${o.bp && o.req.length ? btn('all', '复制全部（合并同类）', buyLines(o, 'all').length) : ''}
+      ${o.req.length || o.bp ? `<button type="button" class="btn btn-ghost" data-lp-cart="${o.bp && o.req.length ? 'all' : o.req.length ? 'req' : 'mats'}:${o.id}" title="${o.bp && o.req.length ? '兑换所需物品与制造材料' : o.req.length ? '兑换所需物品' : '制造材料'}加入购物车">加入购物车</button>` : ''}
     </div></div>`;
 }
 
@@ -581,6 +583,13 @@ function onClick(e) {
   if (e.target.closest('[data-lp-mine-reload]')) { S.mine = null; S.mineError = null; refreshBody(); return; }
   const max = e.target.closest('[data-lp-max]');
   if (max) { const o = offer(max.dataset.lpMax); setTimes(o.id, myMax(o), max); return; }
+  const cart = e.target.closest('[data-lp-cart]');
+  if (cart) {
+    const [kind, id] = cart.dataset.lpCart.split(':');
+    const o = offer(id);
+    if (o) ctx.addToCart(buyItems(o, kind));
+    return;
+  }
   const copy = e.target.closest('[data-lp-copy]');
   if (copy) {
     const [kind, id] = copy.dataset.lpCopy.split(':');

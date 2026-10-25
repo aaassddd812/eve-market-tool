@@ -437,7 +437,7 @@ function drawPlan(body, tabs) {
       ${ganttHtml(r.schedule)}</div>
     <div class="pi-card"><div class="pi-card-head"><h3>产线启动清单</h3><span class="text-muted">按开工顺序；组件先造，同一层的任务可以同时开；整流程多出的组件不折算价值</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-copy="jobs">复制清单</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>产品</th><th>类型</th><th class="num">流程</th><th class="num pi-hide-sm">ME / TE</th><th class="num">时间</th><th class="num pi-hide-sm">安装费</th><th class="num pi-hide-sm">安排</th></tr></thead><tbody>${jobRows}</tbody></table></div></div>
-    <div class="pi-card"><div class="pi-card-head"><h3>购物清单</h3><span class="text-muted">${r.shop.filter((s) => s.toBuy).length} 种要买${piShop.length ? ` · 其中行星工业产品 ${piShop.length} 种共 ${isk(piShop.reduce((t, x) => t + x.toBuy * x.unit, 0))}，点名字旁的「行星工业」看自己产怎么布置` : ''}</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-copy="shop" title="可粘贴到游戏多重购买">复制清单</button></div>
+    <div class="pi-card"><div class="pi-card-head"><h3>购物清单</h3><span class="text-muted">${r.shop.filter((s) => s.toBuy).length} 种要买${piShop.length ? ` · 其中行星工业产品 ${piShop.length} 种共 ${isk(piShop.reduce((t, x) => t + x.toBuy * x.unit, 0))}，点名字旁的「行星工业」看自己产怎么布置` : ''}</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-copy="shop" title="可粘贴到游戏多重购买">复制清单</button><button type="button" class="btn btn-ghost btn-sm" data-plan-cart title="要买的材料加入购物车">加入购物车</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>材料</th><th class="num">需要</th>${P.stock !== 'none' ? '<th class="num">库存抵扣</th>' : ''}<th class="num">要买</th><th class="num">费用</th></tr></thead><tbody>${shopRows}</tbody></table></div></div>`;
 }
 
@@ -589,6 +589,10 @@ export function onPlanEvent(e) {
     if (pi) { location.hash = '#pi/' + pi.dataset.planPi; return 'none'; }
     const bld = t.closest('[data-plan-build]');
     if (bld) { const id = Number(bld.dataset.planBuild); P.build = P.build.includes(id) ? P.build.filter((x) => x !== id) : [...P.build, id]; savePlan(); return 'plan'; }
+    if (t.closest('[data-plan-cart]') && S.lastPlan) {
+      X.ctx.addToCart(S.lastPlan.shop.filter((s) => s.toBuy).map((s) => ({ id: s.id, qty: s.toBuy, name: X.tName(s.id) })));
+      return 'none';
+    }
     const copy = t.closest('[data-plan-copy]');
     if (copy && S.lastPlan) {
       const text = copy.dataset.planCopy === 'shop'

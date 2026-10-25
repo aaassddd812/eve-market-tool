@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare } from './hub-compare.js?v=v7';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v8';
+import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes } from './hub-compare.js?v=v7';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v9';
 import * as SM from './struct-markets.js?v=v3';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
@@ -463,8 +463,8 @@ async function getJitaPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v35').then((m) => {
-    m.initIndustry({
+  if (!industryLoading) industryLoading = import('./industry.js?v=v36').then((m) => {
+    m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       esiAccountFetch, esiAccountList,
@@ -489,8 +489,8 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v7').then((m) => {
-    m.initLp({
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v8').then((m) => {
+    m.initLp({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -569,8 +569,8 @@ async function openCourier() {
 let appraisalLoading = null;
 async function openAppraisal() {
   try {
-    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v11').then((m) => {
-      m.initAppraisal({
+    if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v12').then((m) => {
+      m.initAppraisal({ addToCart,
         esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
         getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
         valuation,
@@ -594,7 +594,7 @@ async function openAppraisal() {
 let piLoading = null;
 function loadPiModule() {
   if (!piLoading) piLoading = import('./pi-planner.js?v=v35').then((m) => {
-    m.initPi({
+    m.initPi({ addToCart,
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
       renderColonies: async (box) => {
@@ -627,8 +627,8 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v39').then((m) => {
-    m.initFitting({
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v40').then((m) => {
+    m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -705,8 +705,16 @@ function renderNoKbPage() {
       (SERVER.kbSite ? `<a class="btn btn-primary" href="${SERVER.kbSite.url}/" target="_blank" rel="noopener">打开${esc(SERVER.kbSite.name)} ↗</a>` : '') +
       (SERVER.kbExtra || []).map((x) => `<a class="btn btn-ghost" href="${x.url}" target="_blank" rel="noopener">打开${esc(x.name)} ↗</a>`).join('') +
       '<button class="btn btn-ghost" type="button" data-switch-server="tq">切换到宁静服</button>' +
+      '<button class="btn btn-ghost" type="button" data-local-scan>本地名单分析</button>' +
     '</div>' +
-  '</div>';
+  '</div><div class="kb-wrap" id="localScanBox"></div>';
+  box.querySelector('[data-local-scan]').addEventListener('click', async () => {
+    const m = await import('./local-scan.js?v=v2');
+    m.renderLocal($('localScanBox'), {
+      esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage: (path, size) => `https://images.evetech.net/${path}?size=${size}`,
+      kb: false, loadTypes: async () => {}, typeName, systemName: (id) => officialName(id) || String(id)
+    });
+  });
 }
 
 // ===== 服务器切换（顶栏）=====
@@ -756,9 +764,9 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v33').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v36').then((m) => {
     m.initKbPage({
-      esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
+      esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
       battles: () => battlesPromise,
       getNpcNames: () => state.npcNames,
@@ -808,7 +816,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v46').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v47').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -1675,6 +1683,8 @@ const SCOPE_GROUPS = [
   { id: 'planets', name: '行星殖民地', desc: '行星工业页显示我的殖民地、提取器到期时间与仓库存量', scopes: ['esi-planets.manage_planets.v1'] },
   { id: 'research', name: '研究代理人', desc: '个人中心显示研究代理人累计的研究点数', scopes: ['esi-characters.read_agents_research.v1'] },
   { id: 'fleet', name: '舰队', desc: '个人中心显示当前舰队成员、舰船与位置分布（需舰队指挥）', scopes: ['esi-fleets.read_fleet.v1'] },
+  // 新权限默认不勾（CCP 后台的应用要先开通，否则授权会被拒）
+  { id: 'mail', name: '游戏邮件', desc: '个人中心查看游戏邮件（收件箱、已发送、军团、联盟邮件，只读）', scopes: ['esi-mail.read_mail.v1'], optIn: true },
   { id: 'corp', name: '军团管理', desc: '军团钱包、订单、工业任务、建筑燃料、月矿、资产（需相应军团职位）',
     scopes: ['esi-characters.read_corporation_roles.v1', 'esi-wallet.read_corporation_wallets.v1', 'esi-markets.read_corporation_orders.v1',
       'esi-industry.read_corporation_jobs.v1', 'esi-corporations.read_structures.v1', 'esi-industry.read_corporation_mining.v1',
@@ -2010,7 +2020,25 @@ function marketMetrics(history, sells, buys, minSell, merged) {
   const bq = maxBuy == null ? 0 : buys.filter((o) => o.price >= maxBuy * 0.9).reduce((t, o) => t + o.volume_remain, 0);
   const tradeDays = days.length;
   const grade = tradeDays < 8 ? ['冷门', 'cold'] : tradeDays >= 25 && cv != null && cv < 0.05 ? ['稳定', 'good'] : tradeDays >= 15 && cv != null && cv < 0.15 ? ['一般', 'mid'] : ['波动大', 'bad'];
-  return { tradeDays, daily: vol / 30, avg, cv, range, ratio: sq ? bq / sq : null, dev: avg && minSell != null ? minSell / avg - 1 : null, grade };
+  const sorted = days.map((d) => d.average).filter(Boolean).sort((a, b) => a - b);
+  const median = sorted.length ? (sorted.length % 2 ? sorted[(sorted.length - 1) >> 1] : (sorted[sorted.length / 2 - 1] + sorted[sorted.length / 2]) / 2) : null;
+  return { tradeDays, daily: vol / 30, avg, median, cv, range, ratio: sq ? bq / sq : null, dev: avg && minSell != null ? minSell / avg - 1 : null, grade,
+    sell5: topPercentAvg(sells, true), buy5: topPercentAvg(buys, false) };
+}
+// 前 5% 均价（与游戏估价、Janice 等常用口径相同）：按价格从优到劣取订单，直到累计数量达到总挂单量的 5%，求加权均价；不受个别离谱挂单影响
+function topPercentAvg(orders, asc, pct = 0.05) {
+  if (!orders.length) return null;
+  const total = orders.reduce((t, o) => t + o.volume_remain, 0);
+  if (!total) return null;
+  const want = Math.max(1, total * pct);
+  let got = 0, isk = 0;
+  for (const o of [...orders].sort((a, b) => (asc ? a.price - b.price : b.price - a.price))) {
+    const take = Math.min(o.volume_remain, want - got);
+    got += take;
+    isk += take * o.price;
+    if (got >= want) break;
+  }
+  return got ? isk / got : null;
 }
 function renderIndicators(sells, buys, minSell) {
   const box = $('marketIndicators');
@@ -2034,6 +2062,9 @@ function renderIndicators(sells, buys, minSell) {
     chip('价格波动', pct(m.cv), '每日均价的标准差 ÷ 平均值，越小越稳') +
     chip('日内振幅', pct(m.range), merged ? '全宇宙的成交历史由多个星域合并，最高 / 最低价来自不同星域，选具体星域后显示' : '每天（最高价 − 最低价）÷ 均价 的平均') +
     chip('买卖量比', m.ratio == null ? '—' : m.ratio.toFixed(2), '最高收价 10% 以内的收单量 ÷ 最低卖价 10% 以内的卖单量；大于 1 说明收的人多') +
+    chip('卖单前 5% 均价', m.sell5 == null ? '—' : formatPrice(m.sell5), '最便宜的卖单依次累计到全部卖单数量的 5%，求加权均价（游戏估价常用口径，不受个别低价挂单影响）') +
+    chip('收单前 5% 均价', m.buy5 == null ? '—' : formatPrice(m.buy5), '出价最高的收单依次累计到全部收单数量的 5%，求加权均价') +
+    chip('30 天中位价', m.median == null ? '—' : formatPrice(m.median), '近 30 天每日成交均价的中位数') +
     chip('现价偏离', m.dev == null ? '—' : (m.dev > 0 ? '+' : '') + pct(m.dev), (merged ? '交易中心最低卖价' : '最低卖价') + '比近 30 天成交均价（' + (m.avg ? formatPrice(m.avg) : '—') + '）高或低多少', m.dev == null ? '' : m.dev > 0.1 ? 'up-warn' : m.dev < -0.1 ? 'down-warn' : '');
 }
 
@@ -2410,7 +2441,7 @@ function initContentTabs() {
   SM.onStructChange(() => { clearTimeout(structReload); structReload = setTimeout(() => { if (state.selectedItem?.id) loadMarketData(state.selectedItem.id); }, 800); });
   initHubCompare({ structs, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
     skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8), openRank: () => openArb() });
-  initHubRank({ structs, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
+  initHubRank({ structs, quote: SM.structQuote, esiUrl, showToast, regionList: regionListAll, findSystem: findSystemByName, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
     typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
     category: (id) => { const e = state.typeIndex.get(id); const g = e && state.categories.get(rootGroupId(e.groupId)); return g ? { id: g.id, name: g.name } : null; },
     iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,
@@ -4101,7 +4132,7 @@ async function renderProfileTab(tab) {
     return;
   }
 
-  if (['clones', 'mining', 'research', 'fleet', 'corp'].includes(tab)) {
+  if (['clones', 'mining', 'research', 'fleet', 'corp', 'mail'].includes(tab)) {
     try {
       const m = await loadMoreModule();
       if (activeProfileTab() === tab) await m.renderMore(tab, box);
@@ -4170,7 +4201,7 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v3').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v4').then((m) => {
     m.initProfileMore({
       esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
@@ -4991,17 +5022,116 @@ function initESIModal() {
 }
 
 
+// ===== 购物车（cart.js）：各页面「加入购物车」写本地存储，点右上角图标才加载弹窗 =====
+const CART_KEY = serverKey('eve-cart-v1');
+function readCart() {
+  const c = store.getJSON(CART_KEY, null) || {};
+  return { items: Array.isArray(c.items) ? c.items : [], history: Array.isArray(c.history) ? c.history : [] };
+}
+function writeCart(cart, quiet = false) {
+  store.setJSON(CART_KEY, cart);
+  syncCartBadge(cart);
+  window.dispatchEvent(new CustomEvent('eve-cart-change', { detail: { quiet } }));
+}
+function syncCartBadge(cart = readCart()) {
+  const btn = $('cartBtn');
+  if (!btn) return;
+  const n = cart.items.length;
+  btn.querySelector('.cart-count').textContent = n ? (n > 99 ? '99+' : String(n)) : '';
+  btn.classList.toggle('has-items', n > 0);
+  btn.title = n ? `购物车（${n} 种物品）` : '购物车';
+}
+// items: [{ id, qty, name?, en? }]；同一物品数量累加
+function addToCart(list, { silent = false } = {}) {
+  const cart = readCart();
+  const byId = new Map(cart.items.map((x) => [x.id, x]));
+  let added = 0;
+  for (const it of list) {
+    const id = Number(it.id), qty = Math.max(1, Math.round(Number(it.qty) || 1));
+    if (!id) continue;
+    const name = it.name || state.typeIndex.get(id)?.type.name || typeName(id);
+    const hit = byId.get(id);
+    if (hit) hit.qty += qty;
+    else { const x = { id, name, qty, ...(it.en ? { en: it.en } : {}) }; byId.set(id, x); cart.items.push(x); }
+    added++;
+  }
+  writeCart(cart);
+  if (!silent && added) showToast(added === 1 ? `已加入购物车：${list[0].name || byId.get(Number(list[0].id))?.name}` : `已加入购物车 ${added} 种物品`, 'success');
+  return added;
+}
+let cartVolumes = {};
+let cartModule = null;
+function typeByName(name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) return null;
+  if (!state.typeByNameMap) {
+    state.typeByNameMap = new Map();
+    for (const { type } of state.typeIndex.values()) state.typeByNameMap.set(String(type.name).toLowerCase(), type);
+  }
+  return state.typeByNameMap.get(key) || null;
+}
+function openCartModal() {
+  if (!cartModule) cartModule = Promise.all([import('./cart.js?v=v2'), loadVolumes().then((v) => { cartVolumes = v || {}; })]).then(([m]) => {
+    m.initCart({
+      esc, formatISK, formatNumber, showToast, copyText, store, valuation, typeByName, readCart, writeCart, addToCart, esiUrl,
+      typeById: (id) => state.typeIndex.get(Number(id))?.type || null,
+      eveTypeIcon: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,
+      typeVolume: (id) => cartVolumes[id] || 0,
+      isEn: () => window.I18N?.lang === 'en',
+      openItem: (id) => { switchView('market'); selectItem(id); }
+    });
+    return m;
+  }).catch((error) => { cartModule = null; throw error; });
+  cartModule.then((m) => m.openCart()).catch((e) => showToast('购物车加载失败：' + e.message, 'error'));
+}
+function initCartButton() {
+  $('cartBtn')?.addEventListener('click', openCartModal);
+  $('cartAddItem')?.addEventListener('click', () => { if (state.selectedItem) addToCart([{ id: state.selectedItem.id, qty: 1, name: state.selectedItem.name }]); });
+  window.addEventListener('storage', (e) => { if (e.key === CART_KEY) syncCartBadge(); });
+  syncCartBadge();
+}
+
+// ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
+let intelModule = null;
+function loadIntel() {
+  if (!intelModule) intelModule = import('./intel.js?v=v2').then(async (m) => {
+    await m.initIntel({
+      esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
+      tokenInfo: () => state.esiToken || readEsiToken(),
+      hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope)
+    });
+    const sync = () => {
+      const st = m.status();
+      const btn = $('intelBtn');
+      btn.classList.toggle('on', st.on);
+      btn.classList.toggle('alert', st.alert);
+      btn.title = '本地日志：' + st.text;
+    };
+    m.onChange(sync);
+    sync();
+    return m;
+  }).catch((error) => { intelModule = null; throw error; });
+  return intelModule;
+}
+function initIntelButton() {
+  $('intelBtn')?.addEventListener('click', () => loadIntel().then((m) => m.openPanel()).catch((e) => showToast('本地日志加载失败：' + e.message, 'error')));
+  let on = false;
+  try { on = JSON.parse(localStorage.getItem('eve-intel-v1') || '{}').on === true; } catch { /* 忽略 */ }
+  if (on) loadIntel().catch(() => {});
+}
+
 // ===== 击杀预警（kill-alert.js）：开启后才加载模块并开始检测 =====
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v4').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v5').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
       hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
       openEsiBind: () => { switchView('profile'); openEsiModal(); },
-      openKill: async (id) => { if (!id) return; const kb = await loadKillboard(); kb.openServiceKill(id); }
+      openKill: async (id) => { if (!id) return; const kb = await loadKillboard(); kb.openServiceKill(id); },
+      shipClasses, shipClassOf, regionList: regionListAll
     });
     const sync = () => {
       const st = m.status();
@@ -5015,11 +5145,47 @@ function loadKillAlert() {
   }).catch((error) => { killAlertModule = null; throw error; });
   return killAlertModule;
 }
+// 全部 K 空间星域（官方中文名 / 英文模式下为英文名），按名称排序
+async function regionListAll() {
+  await loadNpcNames();
+  return Object.entries(state.npcNames?.regions || {}).map(([id, name]) => ({ id: Number(id), name })).filter((r) => r.id < 11000000).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+}
+// 按名字找星系（当前服务器星图，不区分大小写）：{ id, name, region }
+async function findSystemByName(name) {
+  const graph = await gateGraph();
+  const key = String(name).trim().toLowerCase();
+  const sys = graph.systems.find((x) => String(x[1]).toLowerCase() === key);
+  return sys ? { id: sys[0], name: sys[1], region: sys[6] } : null;   // map-data：[id, 名称, x, y, z, 安全等级, 星域, …]
+}
+
+// 舰船类别（击杀预警过滤用）：市场分类「舰船」下的二级分组，旗舰再细分到三级（航母、无畏、泰坦……）
+const CAPITAL_GROUP = 1381;
+function shipClasses() {
+  if (!state.categories?.size) return [];
+  const kids = (pid) => [...state.categories.values()].filter((g) => g.parentId === pid);
+  return kids(SHIP_ROOT_GROUP).flatMap((g) => (g.id === CAPITAL_GROUP ? kids(CAPITAL_GROUP) : [g])).map((g) => ({ id: g.id, name: g.name }));
+}
+function shipClassOf(typeId) {
+  const entry = state.typeIndex.get(Number(typeId));
+  if (!entry) return null;
+  let g = state.categories.get(entry.groupId), prev = null, prev2 = null;
+  while (g?.parentId) { prev2 = prev; prev = g; g = state.categories.get(g.parentId); }
+  if (g?.id !== SHIP_ROOT_GROUP || !prev) return null;
+  if (prev.id === CAPITAL_GROUP) {
+    // prev 是二级（旗舰），要三级：从类型所在分组往上找父级是旗舰的那层
+    let x = state.categories.get(entry.groupId);
+    while (x && x.parentId !== CAPITAL_GROUP) x = state.categories.get(x.parentId);
+    return x?.id ?? prev.id;
+  }
+  return prev.id;
+}
 function initKillAlerts() {
+  initCartButton();
+  initIntelButton();
   $('killAlertBtn').addEventListener('click', () => loadKillAlert().then((m) => m.openPanel()).catch((e) => showToast('击杀预警加载失败：' + e.message, 'error')));
   // 已开启的话页面打开即开始检测
   let on = false;
-  try { const t = JSON.parse(localStorage.getItem(KILL_ALERT_KEY) || '{}'); on = t.on === true || (t.watchOn === true && t.watch?.length > 0); } catch { /* 忽略 */ }
+  try { const t = JSON.parse(localStorage.getItem(KILL_ALERT_KEY) || '{}'); on = t.on === true || (t.watchOn === true && t.watch?.length > 0) || (t.regionOn === true && t.regions?.length > 0); } catch { /* 忽略 */ }
   if (on) loadKillAlert().catch(() => {});
 }
 

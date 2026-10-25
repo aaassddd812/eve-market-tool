@@ -721,7 +721,7 @@ async function renderEntity(kind, id) {
     [stats, info, lifetime, history] = await Promise.all([
       api(`entity/${kind}/${id}?days=30`),
       publicInfo(kind, id),
-      kind === 'character' ? kb.fetchZkill(`stats/characterID/${id}/`).catch(() => null) : null,
+      kb.fetchZkill(`stats/${kind}ID/${id}/`).catch(() => null),
       kind === 'character' ? app.fetchESI(`/characters/${id}/corporationhistory/`).catch(() => []) : []
     ]);
   } catch (error) {
@@ -754,7 +754,7 @@ async function renderEntity(kind, id) {
   const card = (label, value, detail, cls = '') => `<div class="valuation-card ${cls}"><span class="valuation-label">${label}</span><strong class="valuation-value">${value}</strong><span class="valuation-detail">${detail}</span></div>`;
   const isk = (v) => app.formatISK(v) + '<span class="unit">ISK</span>';
   let lifetimeCards = '';
-  if (kind === 'character' && lifetime && lifetime.shipsDestroyed !== undefined) {
+  if (lifetime && lifetime.shipsDestroyed !== undefined) {
     const lEff = (lifetime.iskDestroyed || 0) + (lifetime.iskLost || 0) ? lifetime.iskDestroyed / (lifetime.iskDestroyed + lifetime.iskLost) * 100 : null;
     lifetimeCards = `<h4 class="info-section-title">生涯统计<small>（zKillboard 估值）</small></h4><div class="valuation-grid">
       ${card('参与击杀', app.formatNumber(lifetime.shipsDestroyed || 0) + '<span class="unit">艘</span>', '单刷 ' + app.formatNumber(lifetime.soloKills || 0) + ' 次', 'is-buy')}
@@ -787,9 +787,13 @@ async function renderEntity(kind, id) {
         <h2>${app.esc(name)}</h2>
         <p>${sub.join(' · ')}</p>
       </div>
-      <a class="btn btn-ghost" href="https://zkillboard.com/${kind}/${id}/" target="_blank" rel="noopener">zKillboard ↗</a>
+      <div class="kb-ext-links">
+        <a class="btn btn-ghost" href="https://zkillboard.com/${kind}/${id}/" target="_blank" rel="noopener">zKillboard ↗</a>
+        <a class="btn btn-ghost" href="https://evewho.com/${kind}/${id}" target="_blank" rel="noopener">EVEWho ↗</a>
+        ${kind !== 'character' ? `<a class="btn btn-ghost" href="https://evemaps.dotlan.net/${kind === 'alliance' ? 'alliance' : 'corp'}/${encodeURIComponent(name.replace(/ /g, '_'))}" target="_blank" rel="noopener">dotlan ↗</a>` : ''}
+      </div>
     </div>
-    ${lifetimeCards}${recentCards}
+    ${lifetimeCards}${monthlyHtml(lifetime)}${recentCards}
     ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天 · 点击表头排序）</small></h4><div id="kbMembers"></div>` : ''}
     ${activity}${corpHistory}
     <div class="kb-mini-grid">${shipList(stats.ships_used, '常用舰船（击杀时）')}${shipList(stats.ships_lost, '损失的舰船')}</div>
@@ -807,6 +811,33 @@ async function renderEntity(kind, id) {
 }
 
 // 最近 30 天活跃地区：星域（占比条）+ 星系（安全等级着色），点击可筛选击杀记录
+// zKillboard 统计：最近 12 个月的击杀 / 损失（柱状）与活跃时段（星期 × UTC 小时热力图）
+function monthlyHtml(z) {
+  if (!z) return '';
+  const months = Object.values(z.months || {}).sort((a, b) => (a.year - b.year) || (a.month - b.month)).slice(-12);
+  let out = '';
+  if (months.length) {
+    const max = Math.max(1, ...months.map((m) => Math.max(m.shipsDestroyed || 0, m.shipsLost || 0)));
+    out += `<h4 class="info-section-title section-gap">月度统计<small>（zKillboard · 最近 ${months.length} 个月）</small></h4>
+      <div class="kb-months">${months.map((m) => {
+        const k = m.shipsDestroyed || 0, l = m.shipsLost || 0;
+        const tip = `${m.year} 年 ${m.month} 月：击杀 ${app.formatNumber(k)} 艘（${app.formatISK(m.iskDestroyed || 0)} ISK），损失 ${app.formatNumber(l)} 艘（${app.formatISK(m.iskLost || 0)} ISK）`;
+        return `<div class="kb-month" title="${app.esc(tip)}"><div class="kb-month-bars"><i class="k" style="height:${(k / max * 100).toFixed(1)}%"></i><i class="l" style="height:${(l / max * 100).toFixed(1)}%"></i></div>
+          <b>${app.formatNumber(k)}</b><small>${window.I18N?.lang === 'en' ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m.month - 1] : m.month + ' 月'}</small></div>`;
+      }).join('')}</div>
+      <p class="kb-months-legend"><i class="k"></i>击杀 <i class="l"></i>损失 <span class="text-muted">· 鼠标移到柱子上看 ISK</span></p>`;
+  }
+  const act = z.activity;
+  if (act && act.max) {
+    const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+    const cells = [0, 1, 2, 3, 4, 5, 6].map((d) => `<div class="kb-heat-row"><span>${days[d]}</span>${(act[d] || []).map((n, h) =>
+      `<i style="opacity:${n ? (0.15 + 0.85 * n / act.max).toFixed(2) : 0.06}" title="${days[d]} UTC ${h}:00（北京 ${(h + 8) % 24}:00）· ${n} 次"></i>`).join('')}</div>`).join('');
+    out += `<h4 class="info-section-title section-gap">活跃时段<small>（zKillboard 全部记录 · UTC 小时）</small></h4>
+      <div class="kb-heat">${cells}<div class="kb-heat-row kb-heat-axis"><span></span>${Array.from({ length: 24 }, (_, h) => `<em>${h % 3 ? '' : h}</em>`).join('')}</div></div>`;
+  }
+  return out;
+}
+
 function activityHtml(stats) {
   const regions = stats.regions || [], systems = stats.systems || [];
   if (!regions.length && !systems.length) return '';
@@ -967,10 +998,21 @@ function route() {
   $('kbSuggest').hidden = true;
   document.querySelector('#kbView .kb-scroll')?.scrollTo({ top: 0 });
   if (location.hash.startsWith('#kb/br')) { S.entity = null; renderBr(location.hash); }
+  else if (location.hash.startsWith('#kb/local')) { S.entity = null; renderLocalScan(); }
   else if (location.hash.startsWith('#kb/rank')) renderRank(location.hash);
   else if (location.hash.startsWith('#kb/battles')) renderBattleHistory();
   else if (m) renderEntity(m[1], Number(m[2]));
   else renderHome();
+}
+
+// ---------- 本地名单分析（local-scan.js，首次打开时加载）----------
+async function renderLocalScan() {
+  const m = await import('./local-scan.js?v=v2');
+  if (!location.hash.startsWith('#kb/local')) return;
+  m.renderLocal($('kbMain'), {
+    esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,
+    kb: true, loadTypes, typeName, systemName: (id) => kb.systemLabel(id).name
+  });
 }
 
 // ---------- 入口 ----------
@@ -1064,6 +1106,7 @@ export function initKbPage(context) {
       return;
     }
     if (e.target.closest('[data-kb-br]')) { navigate('#kb/br'); return; }
+    if (e.target.closest('[data-kb-local]')) { navigate('#kb/local'); return; }
     if (e.target.closest('[data-kb-bh]')) { e.preventDefault(); navigate('#kb/battles'); return; }
     const bh = e.target.closest('[data-bh]');
     if (bh && S.bh) {

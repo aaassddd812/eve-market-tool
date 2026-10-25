@@ -69,7 +69,9 @@ BP_CONTRACT_TTL = 1800      # 蓝图合同价 / 快递合同每 30 分钟刷新�
 BP_CONTRACT_KEEP = 5        # 每种蓝图的原图 / 拷贝各保留最便宜的几份合同
 BP_MAX_TYPES = 300          # bpprices 单次最多查询的蓝图种类
 API_RATE = 1000             # 开放接口：每个 IP 每分钟可用的请求额度（令牌桶，容量同此值）
-API_COST = {"hub_arbitrage": 5, "ship_fits": 10, "battle_report": 5, "industry_profits": 5, "abyssal_module": 2, "abyssal_list": 3}   # 开销大的接口一次消耗多个额度
+PILOTS_MAX = 200            # 本地频道名单分析：一次最多查多少名角色
+PILOT_CACHE = 20000
+API_COST = {"pilots": 5, "hub_arbitrage": 5, "ship_fits": 10, "battle_report": 5, "industry_profits": 5, "abyssal_module": 2, "abyssal_list": 3}   # 开销大的接口一次消耗多个额度
 # 深渊装备估价：代理 MutaMarket 公开 API（对方不允许浏览器跨域）。只用于宁静服；导入 / 刷新（POST）由用户点击触发、单独限流
 MUTA_API = "https://mutamarket.com/api"
 ABYSSAL_TTL = 6 * 3600          # 单件估价缓存
@@ -489,7 +491,8 @@ class Store:
                 for a in players:
                     att_rows.append((kid, t, a["character_id"], a.get("corporation_id"), a.get("alliance_id"), a.get("ship_type_id")))
                 if live:
-                    live_att[kid] = [a["character_id"] for a in players][:500]
+                    live_att[kid] = ([a["character_id"] for a in players][:500],
+                                     list(dict.fromkeys(x for a in players for x in (a.get("corporation_id"), a.get("alliance_id")) if x))[:200])
                 for eid in (v.get("character_id"), v.get("corporation_id"), v.get("alliance_id")):
                     if eid and eid not in self.known_names:
                         self.pending_names.add(eid)
@@ -507,7 +510,7 @@ class Store:
                     if row[2] >= fresh:          # zKill 偶尔补录多年前的击杀，不当作“新击杀”推送
                         self.live_n += 1
                         # 带上 hash：击杀预警的游戏内邮件要用 killReport:ID:HASH 链接
-                        self.live_buf.append((self.live_n, {**row_summary(row[:1] + row[2:]), "hash": row[1], "att": live_att.get(row[0], [])}))
+                        self.live_buf.append((self.live_n, {**row_summary(row[:1] + row[2:]), "hash": row[1], "att": live_att.get(row[0], ([], []))[0], "ao": live_att.get(row[0], ([], []))[1]}))
         return added
 
     def prune(self):
@@ -1034,6 +1037,7 @@ class Api:
         self.bh_lock, self.bh_busy, self.bh_cache = threading.Lock(), {}, {}   # 历史会战：同时只算一份；单独缓存，不随合同估价更新清空
         self.lb_full = collections.OrderedDict()    # 完整排行榜（分页用）：(days, side, by, metric) -> (时间, ids, 次数, 价值)
         self.lb_lock = threading.Lock()
+        self.pilot_cache, self.pilot_lock = collections.OrderedDict(), threading.Lock()
 
     def names_for(self, ids):
         ids = [i for i in set(ids) if i]
@@ -1704,6 +1708,45 @@ class Api:
             result["name"] = self.names_for([eid]).get(eid)
             return result
         return self.cached(("entity", kind, eid, days), run)
+
+    # GET /api/v1/pilots?ids=1,2,3：本地频道名单分析，每名角色近 30 天的击杀 / 损失、单挑、平均同伙人数、常用船与常去星系
+    def pilots(self, q):
+        ids = list(dict.fromkeys(int(x) for x in str(q.get("ids", "")).split(",") if x.strip().isdigit()))
+        if not ids:
+            raise ValueError("缺少 ids")
+        if len(ids) > PILOTS_MAX:
+            raise ValueError(f"ids 最多 {PILOTS_MAX} 个")
+        now = time.time()
+        since = int(now - 30 * 86400)
+        out, todo = {}, []
+        with self.pilot_lock:
+            for cid in ids:
+                hit = self.pilot_cache.get(cid)
+                if hit and now - hit[0] < CACHE_TTL:
+                    out[cid] = hit[1]
+                else:
+                    todo.append(cid)
+        c = self.store.conn() if todo else None
+        for cid in todo:
+            sub = "SELECT km FROM attackers WHERE char=? AND time >= ?"
+            kills, destroyed, solo, gang, last_k = c.execute(
+                f"SELECT COUNT(*), COALESCE(SUM(value),0), COALESCE(SUM(solo),0), AVG(attackers), MAX(time) FROM killmails WHERE time >= ? AND id IN ({sub})",
+                (since, cid, since)).fetchone()
+            losses, lost, last_l = c.execute("SELECT COUNT(*), COALESCE(SUM(value),0), MAX(time) FROM killmails WHERE v_char=? AND time >= ?", (cid, since)).fetchone()
+            ships = c.execute("SELECT ship, COUNT(DISTINCT km) n FROM attackers WHERE char=? AND time >= ? AND ship IS NOT NULL GROUP BY ship ORDER BY n DESC LIMIT 3",
+                              (cid, since)).fetchall()
+            systems = c.execute(f"SELECT system_id, COUNT(*) n FROM killmails WHERE time >= ? AND (v_char=? OR id IN ({sub})) GROUP BY system_id ORDER BY n DESC LIMIT 3",
+                                (since, cid, cid, since)).fetchall()
+            last = max(last_k or 0, last_l or 0)
+            row = {"kills": kills, "losses": losses, "destroyed": round(destroyed), "lost": round(lost), "solo": solo,
+                   "gang": round(gang, 1) if gang else None, "last": iso(last) if last else None,
+                   "ships": [[s, n] for s, n in ships], "systems": [[s, n] for s, n in systems]}
+            out[cid] = row
+            with self.pilot_lock:
+                self.pilot_cache[cid] = (now, row)
+                while len(self.pilot_cache) > PILOT_CACHE:
+                    self.pilot_cache.popitem(last=False)
+        return {"days": 30, "pilots": {str(cid): out[cid] for cid in ids}}
 
     # GET /kill/<id>
     # ---- 阵亡装配
@@ -3201,6 +3244,7 @@ def open_routes(api, industry, abyssal=None):
         (("battle-report",), "battle_report", api.br),
         (("leaderboard",), "leaderboard", api.leaderboard),
         (("entities", "{s}", "{n}"), "entity", entity),
+        (("pilots",), "pilots", api.pilots),
         (("search",), "search", api.search),
         (("ships", "{n}", "fits"), "ship_fits", lambda q, ship: api.shipfits({**q, "ship": str(ship)})),
         (("industry", "search"), "industry_search", industry.search),

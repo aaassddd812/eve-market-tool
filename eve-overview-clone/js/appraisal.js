@@ -280,6 +280,7 @@ function render() {
   const foot = `<div class="ap-foot">
       <span class="text-muted">${ctx.esc(R.region.hub.name)}挂单 · ${R.at.toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}${SERVER.id === 'tq' ? '' : ' · ' + SERVER.full}</span>
       <button type="button" class="btn btn-ghost" data-ap-copy>复制结果</button>
+      ${ctx.addToCart ? '<button type="button" class="btn btn-ghost" data-ap-cart title="把这些物品和数量加入购物车，可复制为游戏批量购买清单">全部加入购物车</button>' : ''}
     </div>`;
   $('apResult').innerHTML = tabs + (A.view === 'reproc' && rp ? reprocHtml(R, rp) : marketHtml(R, rp)) + foot;
   // 技能列表跟着物品变（只列用到的矿石处理技能）
@@ -528,6 +529,7 @@ export function showAppraisal() {
       return;
     }
     if (e.target.closest('[data-ap-copy]')) ctx.copyText(resultText(), '已复制估价结果');
+    if (e.target.closest('[data-ap-cart]')) ctx.addToCart(A.result.rows.map((r) => ({ id: r.id, qty: r.qty, name: r.name })));
   });
   const settings = $('apSettings');
   settings.addEventListener('click', (e) => {

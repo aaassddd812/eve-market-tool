@@ -1,4 +1,4 @@
-// ===== 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团 =====
+// ===== 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团 / 邮件 =====
 //   克隆  /characters/{id}/clones/ + /implants/（esi-clones.*，原有权限）：跳跃克隆位置与植入体、下次可跳时间
 //   挖矿  /characters/{id}/mining/（esi-industry.read_character_mining.v1，原有权限）：最近 30 天挖矿记录，按所选交易中心（或全宇宙）的最低卖 / 最高收估值
 //   研究  /characters/{id}/agents_research/（「研究代理人」权限）：研究点数 = 余数 + 每日点数 × 开始以来的天数
@@ -389,8 +389,68 @@ async function renderCorp(box) {
   }
 }
 
+// ---------- 邮件 ----------
+// /characters/{id}/mail/labels/ + /mail/?labels=&last_mail_id=（每次 50 封）+ /mail/{mail_id}/（「游戏邮件」权限 esi-mail.read_mail.v1）
+// 邮件正文是游戏里的富文本（<font>、<a href="showinfo:…">、<br>），这里只保留文字与换行
+const MAIL_LABEL_ZH = { 1: '收件箱', 2: '已发送', 4: '军团', 8: '联盟' };
+const M = { label: 1, list: [], more: true, open: 0, bodies: new Map(), names: new Map(), labels: null, loading: false };
+window.addEventListener('eve-account-change', () => { M.list = []; M.more = true; M.open = 0; M.bodies.clear(); M.labels = null; });
+function mailText(html) {
+  // DOMParser 解析出的文档不执行脚本、不加载图片（不能用页面里的元素 innerHTML，<img onerror> 会执行）
+  const doc = new DOMParser().parseFromString(String(html || '').replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n'), 'text/html');
+  return (doc.body?.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+}
+async function loadMail(id, more) {
+  if (!M.labels) M.labels = await ctx.esiAuthFetch(`/characters/${id}/mail/labels/`).catch(() => ({ labels: [] }));
+  const last = more && M.list.length ? '&last_mail_id=' + M.list[M.list.length - 1].mail_id : '';
+  const page = await ctx.esiAuthFetch(`/characters/${id}/mail/?labels=${M.label}${last}`);
+  M.list = more ? M.list.concat(page) : page;
+  M.more = page.length >= 50;
+  const ids = [...new Set(page.flatMap((m) => [m.from, ...(m.recipients || []).map((r) => r.recipient_id)]).filter((x) => x && !M.names.has(x)))];
+  if (ids.length) { const { names } = await ctx.resolveNames(ids); for (const [k, v] of names) M.names.set(k, v); }
+}
+async function renderMail(box, more = false) {
+  const id = me();
+  if (!ctx.hasScopeGroup('mail')) { box.innerHTML = ctx.scopeNeededHtml('mail', '在网页里看游戏邮件'); return; }
+  if (!M.list.length || more) {
+    if (!more) box.innerHTML = loading('读取邮件…');
+    M.loading = true;
+    try { await loadMail(id, more); } catch (error) { M.loading = false; if (still('mail', id)) box.innerHTML = fail('邮件', error); return; }
+    M.loading = false;
+  }
+  if (!still('mail', id)) return;
+  const labels = [...(M.labels?.labels || [])].sort((a, b) => a.label_id - b.label_id);
+  const name = (x) => esc(M.names.get(x) || ctx.officialName(x) || 'ID ' + x);
+  const rows = M.list.map((m) => {
+    const body = M.bodies.get(m.mail_id);
+    const open = M.open === m.mail_id;
+    return `<tr class="mail-row${m.is_read ? '' : ' unread'}${open ? ' open' : ''}" data-mail="${m.mail_id}">
+      <td>${M.label === 2 ? (m.recipients || []).slice(0, 3).map((r) => name(r.recipient_id)).join('、') : name(m.from)}</td>
+      <td class="mail-subject">${esc(m.subject || '（无主题）')}</td><td class="num">${fmtDate(m.timestamp)}</td></tr>
+      ${open ? `<tr class="mail-body-row"><td colspan="3"><div class="mail-body">${body == null ? loading('读取正文…') : esc(body).replace(/\n/g, '<br>')}</div></td></tr>` : ''}`;
+  }).join('');
+  box.innerHTML = `<div class="valuation-toolbar"><div class="segmented" role="group">${labels.map((l) => `<button data-mail-label="${l.label_id}" class="${M.label === l.label_id ? 'active' : ''}">${esc(MAIL_LABEL_ZH[l.label_id] || l.name)}${l.unread_count ? ` <b class="mail-unread">${l.unread_count}</b>` : ''}</button>`).join('')}</div>
+      <span class="toolbar-spacer"></span>${M.labels?.total_unread_count ? `<span class="text-muted">未读 ${M.labels.total_unread_count} 封</span>` : ''}<button class="btn btn-ghost" data-mail-reload>刷新</button></div>
+    ${M.list.length ? `<div class="table-scroll"><table class="pc-mini-table mail-table"><thead><tr><th>${M.label === 2 ? '收件人' : '发件人'}</th><th>主题</th><th class="num">时间</th></tr></thead><tbody>${rows}</tbody></table></div>
+      ${M.more ? '<div class="au-more"><button class="btn btn-ghost" data-mail-more>再读 50 封</button></div>' : ''}` : '<p class="text-muted">这个文件夹里没有邮件</p>'}
+    <p class="text-muted valuation-note">只读：在这里看邮件不会把邮件标为已读。点一封邮件展开正文。</p>`;
+}
+async function openMail(box, mailId) {
+  const id = me();
+  M.open = M.open === mailId ? 0 : mailId;
+  renderMail(box);
+  if (!M.open || M.bodies.has(mailId)) return;
+  try {
+    const d = await ctx.esiAuthFetch(`/characters/${id}/mail/${mailId}/`);
+    M.bodies.set(mailId, mailText(d.body));
+  } catch (error) {
+    M.bodies.set(mailId, '正文读取失败：' + error.message);
+  }
+  if (still('mail', id)) renderMail(box);
+}
+
 // ---------- 入口 ----------
-const RENDER = { clones: renderClones, mining: renderMining, research: renderResearch, fleet: renderFleet, corp: renderCorp };
+const RENDER = { clones: renderClones, mining: renderMining, research: renderResearch, fleet: renderFleet, corp: renderCorp, mail: renderMail };
 export const MORE_TABS = Object.keys(RENDER);
 
 export async function renderMore(tab, box) {
@@ -406,6 +466,12 @@ export async function renderMore(tab, box) {
       }
       const reload = e.target.closest('[data-more-reload]');
       if (reload) { const key = reload.dataset.moreReload; cache.delete(key); const tab = key.split(':')[0]; if (ctx.isActive(tab)) RENDER[tab](box); return; }
+      const mail = e.target.closest('[data-mail]');
+      if (mail) { openMail(box, Number(mail.dataset.mail)); return; }
+      const ml = e.target.closest('[data-mail-label]');
+      if (ml) { M.label = Number(ml.dataset.mailLabel); M.list = []; M.open = 0; renderMail(box); return; }
+      if (e.target.closest('[data-mail-more]')) { if (!M.loading) renderMail(box, true); return; }
+      if (e.target.closest('[data-mail-reload]')) { M.list = []; M.labels = null; M.open = 0; renderMail(box); return; }
       const sys = e.target.closest('[data-map-sys]');
       if (sys) { ctx.openMapSystem(Number(sys.dataset.mapSys)); return; }
       const dest = e.target.closest('[data-game-dest]');

@@ -207,6 +207,9 @@
         { path: '/entities/{kind}/{id}', title: '实体统计', desc: '人物 / 军团 / 联盟在最近若干天的击杀、损失、单杀、最后一击、常用与损失的舰船、活跃星域与星系；军团附成员、联盟附军团明细。', example: '/entities/alliance/1354830081?days=7',
           params: [['kind', true, '路径参数：character / corporation / alliance'], ['id', true, '路径参数：实体 ID'], ['days', false, '天数，默认 30，最多 60']],
           fields: [['kills / losses / destroyed / lost', '击杀数、损失数、击毁价值、损失价值'], ['solo_kills / final_blows', '单杀数、最后一击数'], ['members[]', '成员明细（军团 / 联盟）'], ['ships_used / ships_lost', '常用 / 损失舰船 TOP 8'], ['regions / systems', '活跃星域 / 星系 TOP 8']] },
+        { path: '/pilots', title: '批量人物统计', desc: '一次查多名人物近 30 天的击杀、损失、单杀、平均同伙人数、最近活跃时间、常用舰船与常去星系（各 TOP 3），用于本地频道名单分析。结果缓存，一次请求消耗 5 个额度。', cost: 5, example: '/pilots?ids=2112625428,95465499',
+          params: [['ids', true, '人物 ID，逗号分隔，最多 200 个']],
+          fields: [['pilots.{id}.kills / losses', '参与击杀数、损失数'], ['destroyed / lost', '击毁价值、损失价值（ISK）'], ['solo', '单杀数'], ['gang', '参与的击杀平均攻击者人数（没有击杀时为 null）'], ['last', '最近一次击杀或损失的时间'], ['ships / systems', '[[舰船 type_id, 次数]] / [[星系 ID, 次数]]，各 TOP 3']] },
         { path: '/search', title: '名称搜索', desc: '按名称搜索人物、军团、联盟（库中出现过的）。', example: '/search?q=goon',
           params: [['q', true, '关键字，至少 2 个字符']], fields: [['results[]', '{id, name, category}，最多 30 条']] }
       ]],

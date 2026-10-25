@@ -19,7 +19,7 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=9"></script>
+  <script src="js/i18n.js?v=14"></script>
   <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
   <script type="importmap">
     {
@@ -29,7 +29,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v92">
+  <link rel="stylesheet" href="css/modern-style.css?v=v95">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -121,6 +121,14 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
           <span>API</span>
         </a>
+        <button class="icon-btn cart-btn" id="cartBtn" title="购物车" aria-label="购物车">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.5L21 8H6"/></svg>
+          <i class="cart-count" aria-hidden="true"></i>
+        </button>
+        <button class="icon-btn intel-btn" id="intelBtn" title="本地日志：敌情频道与游戏日志（未开启）" aria-label="本地日志">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><path d="M12 12 19 5"/><circle cx="12" cy="12" r="1"/></svg>
+          <i class="ka-dot" aria-hidden="true"></i>
+        </button>
         <button class="icon-btn ka-bell" id="killAlertBtn" title="击杀预警（未开启）" aria-label="击杀预警">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <i class="ka-dot" aria-hidden="true"></i>
@@ -224,6 +232,9 @@
                     <span id="itemName">物品名称</span>
                     <button class="fav-btn" id="favToggle" title="加入收藏 (F)" aria-pressed="false" aria-label="收藏">
                       <svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                    </button>
+                    <button class="fav-btn cart-add-btn" id="cartAddItem" title="加入购物车" aria-label="加入购物车">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.5L21 8H6"/><path d="M13 8v5M10.5 10.5h5"/></svg>
                     </button>
                   </h1>
                   <div class="item-tags">
@@ -563,6 +574,9 @@
               <button class="btn btn-ghost kb-br-entry" data-kb-br title="按星系与时间段统计双方阵营">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="7"/><rect x="14" y="6" width="3" height="11"/></svg><span>战场统计</span>
               </button>
+              <button class="btn btn-ghost kb-br-entry" data-kb-local title="粘贴本地频道成员列表，统计势力分布与每个人的击杀记录">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>本地分析</span>
+              </button>
               <p class="kb-status" id="kbStatus"></p>
             </div>
             <div id="kbMain"></div>
@@ -782,6 +796,7 @@
               <button class="profile-nav-btn" data-profile="mining">挖矿记录</button>
               <button class="profile-nav-btn" data-profile="research">研究代理人</button>
               <button class="profile-nav-btn" data-profile="fleet">舰队</button>
+              <button class="profile-nav-btn" data-profile="mail">游戏邮件</button>
               <button class="profile-nav-btn" data-profile="corp">军团管理</button>
             </nav>
           </div>
@@ -835,6 +850,7 @@
                 <button class="tab-link" data-profile="mining">挖矿</button>
                 <button class="tab-link" data-profile="research">研究</button>
                 <button class="tab-link" data-profile="fleet">舰队</button>
+                <button class="tab-link" data-profile="mail">邮件</button>
                 <button class="tab-link" data-profile="corp">军团</button>
               </div>
 
@@ -1007,6 +1023,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v122" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v127" type="module" data-cfasync="false"></script>
 </body>
 </html>
