@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes } from './hub-compare.js?v=v7';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v21';
+import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes } from './hub-compare.js?v=v11';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v26';
 import * as SM from './struct-markets.js?v=v4';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
@@ -1397,7 +1397,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v4').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v8').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -1688,11 +1688,15 @@ function loadMarketRegions() {
 // 星域订单接口只含开放公共市场的建筑；其他建筑要用角色授权逐个读 /markets/structures/{id}/
 // （esi-markets.structure_markets.v1，且角色要有该建筑的停靠权限，否则 403）。
 // 只有铁壁 / 星城（含势力版）能装市场模块。建筑市场接口不分物品，读一次整个建筑缓存 5 分钟，换物品不再请求。
+// 预加载：页面空闲时先在后台读好「我的建筑市场」里勾选的建筑（选了具体星域时还有本星域的建筑），之后每 5 分钟后台刷新；
+//   过期 30 分钟以内先用旧数据、后台刷新（刷新完通知比价 / 倒卖排行），点进物品或倒卖排行时不用再等整座建筑的订单。
 const MARKET_STRUCTURE_TYPES = new Set([35833, 35834, 40340, 47512, 47513, 47514, 47515, 47516]);
 const STRUCT_MARKET_SCOPE = 'esi-markets.structure_markets.v1';
 const STRUCT_MARKET_TTL = 5 * 60e3;
 const STRUCT_MARKET_MAX_PAGES = 50;       // 超过 5 万条订单的大型市场跳过（这类一般是公开市场，订单已在星域订单里）
-const structMarkets = new Map();          // 建筑 ID -> { at, promise }
+const STRUCT_MARKET_STALE = 30 * 60e3;    // 过期不到 30 分钟：先用旧数据，后台刷新
+const structMarkets = new Map();          // 建筑 ID -> { at, promise, data, refreshing }
+const structDataListeners = new Set();    // 后台刷新完一座建筑后通知（参数：建筑 ID）
 let publicMarketIds = null;
 let systemRegionPromise = null;
 
@@ -1840,9 +1844,28 @@ async function regionMarketStructures(regionId, onStatus) {
 // 读取一座建筑的全部订单，按物品分组；无权限返回 { denied }，订单太多返回 { tooBig }
 function structureMarket(id) {
   const hit = structMarkets.get(id);
-  if (hit && Date.now() - hit.at < STRUCT_MARKET_TTL) return hit.promise;
+  const age = hit ? Date.now() - hit.at : Infinity;
+  if (hit && age < STRUCT_MARKET_TTL) return hit.promise;
+  if (hit?.data && age < STRUCT_MARKET_STALE) { refreshStructureMarket(id); return Promise.resolve(hit.data); }
   const entry = { at: Date.now() };
-  entry.promise = (async () => {
+  entry.promise = readStructureMarket(id).then((data) => { entry.data = data; return data; }).catch((error) => { structMarkets.delete(id); throw error; });
+  structMarkets.set(id, entry);
+  return entry.promise;
+}
+// 后台刷新：旧数据照常用，新数据读完才替换（失败就留着旧的，下次再试）
+function refreshStructureMarket(id) {
+  const hit = structMarkets.get(id);
+  if (!hit?.data) return structureMarket(id);
+  if (hit.refreshing) return hit.refreshing;
+  hit.refreshing = readStructureMarket(id).then((data) => {
+    structMarkets.set(id, { at: Date.now(), promise: Promise.resolve(data), data });
+    structDataListeners.forEach((fn) => { try { fn(id); } catch { /* 单个监听出错不影响其他 */ } });
+    return data;
+  }).catch(() => hit.data).finally(() => { hit.refreshing = null; });
+  return hit.refreshing;
+}
+function readStructureMarket(id) {
+  return (async () => {
     const token = await ensureEsiToken();
     const get = (page) => fetch(`${ESI_BASE}/markets/structures/${id}/?datasource=${SERVER.datasource}&page=${page}`, { headers: { Authorization: 'Bearer ' + token.access_token } });
     const first = await get(1);
@@ -1861,9 +1884,33 @@ function structureMarket(id) {
       byType.get(o.type_id).push(o);
     }
     return { byType };
-  })().catch((error) => { structMarkets.delete(id); throw error; });
-  structMarkets.set(id, entry);
-  return entry.promise;
+  })();
+}
+
+// 预加载 / 定时刷新：勾选的建筑 + 当前星域的建筑市场；快过期（剩不到 1 分钟）的后台重读，一次一座，不和页面抢请求
+let structPrefetching = null;
+function prefetchStructMarkets() {
+  if (structPrefetching || document.hidden) return structPrefetching;
+  const token = state.esiToken || readEsiToken();
+  if (!token?.access_token || !hasScope(token, STRUCT_MARKET_SCOPE)) return null;
+  structPrefetching = (async () => {
+    const ids = (await SM.enabledStructs()).map((x) => x.id);
+    if (state.regionId) ids.push(...await regionMarketStructures(state.regionId, () => {}).catch(() => []));
+    for (const id of new Set(ids)) {
+      const hit = structMarkets.get(id);
+      const age = hit ? Date.now() - hit.at : Infinity;
+      if (hit && !hit.data && age < STRUCT_MARKET_TTL) continue;          // 正在读
+      if (hit?.data && (hit.data.denied || hit.data.tooBig)) continue;    // 没权限 / 太大：后台不重试（403 计入 ESI 错误额度），用到时照旧按缓存时间重读
+      if (age < STRUCT_MARKET_TTL - 60e3) continue;
+      await (hit?.data ? refreshStructureMarket(id) : structureMarket(id)).catch(() => null);
+    }
+  })().catch(() => {}).finally(() => { structPrefetching = null; });
+  return structPrefetching;
+}
+function startStructPrefetch() {
+  whenIdle(() => prefetchStructMarkets(), 4000);
+  setInterval(() => prefetchStructMarkets(), 60e3);                       // 每分钟看一次哪些快过期
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) prefetchStructMarkets(); });
 }
 
 // 选了具体星域（含当前位置）时：把本星域可读的玩家建筑订单并入订单簿（按订单号去重，公开市场建筑的订单本来就在星域订单里）
@@ -2368,6 +2415,7 @@ function initRegionSelect() {
     store.set(MARKET_REGION_KEY, select.value);
     updateHubLabel();
     if (state.selectedItem) loadMarketData(state.selectedItem.id);
+    else whenIdle(() => prefetchStructMarkets());
   });
   $('locRegionBtn').addEventListener('click', useLocationRegion);
   updateLocRegionBtn();
@@ -2458,6 +2506,7 @@ function initContentTabs() {
     systemRegions, esc, formatNumber });
   const structs = {
     load: SM.loadEnabledMarkets, quote: SM.structQuote, count: SM.enabledCount, open: SM.openStructManager, on: SM.onStructChange, readable: SM.readableStructs, enable: SM.enableStruct,
+    onData: (fn) => structDataListeners.add(fn),
     regionName: (id) => state.marketRegions.find((r) => r.id === id)?.name || REGIONS.find((r) => r.id === id)?.name || ''
   };
   loadMarketRegions().catch(() => {});
@@ -2465,7 +2514,8 @@ function initContentTabs() {
   // 建筑勾选变化：订单簿重新并入
   // 建筑勾选变化：重新读订单（去掉的建筑订单要从订单簿里拿掉）；对话框里每点一次勾选都会触发，稍等再读
   let structReload = 0;
-  SM.onStructChange(() => { clearTimeout(structReload); structReload = setTimeout(() => { if (state.selectedItem?.id) loadMarketData(state.selectedItem.id); }, 800); });
+  SM.onStructChange(() => { clearTimeout(structReload); structReload = setTimeout(() => { if (state.selectedItem?.id) loadMarketData(state.selectedItem.id); prefetchStructMarkets(); }, 800); });
+  startStructPrefetch();
   initHubCompare({ structs, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
     skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8), openRank: () => openArb() });
   initHubRank({ structs, quote: SM.structQuote, esiUrl, showToast, regionList: regionListAll, findSystem: findSystemByName, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
@@ -2475,6 +2525,10 @@ function initContentTabs() {
     openItem: (id) => { switchContentTab('hubs'); selectItem(id); },
     openSide: () => { if (MOBILE_QUERY.matches) openDrawer(); else if ($('sidebar').classList.contains('collapsed')) toggleSidebar('market'); },
     closeSide: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
+  // 用过倒卖排行的浏览器：空闲时先把排行要的数据取好（建筑订单先由 startStructPrefetch 读，排行这里直接用缓存）
+  let usedArb = false;
+  try { usedArb = Boolean(localStorage.getItem('eve-hub-rank')); } catch { /* 无痕模式 */ }
+  if (usedArb && REGIONS.length >= 2) setTimeout(() => whenIdle(() => prefetchHubRank(), 5000), 6000);
   switchContentTab(state.contentTab);
 
   const seg = $('rangeSeg');

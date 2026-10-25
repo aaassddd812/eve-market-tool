@@ -2832,7 +2832,7 @@ def abyssal_estimate(abyssal, model, body):
 # ---------------------------------------------------------------- 开放接口
 # ---------------------------------------------------------------- 交易中心倒卖排行
 # 各服务器五个交易中心的全部挂单汇总（每个物品每个交易中心：最低卖 / 最高收、挂单量、最优价 5% 以内的深度）与所在星域日均成交，
-# 前端按用户的技能与税费算四种倒卖方式的路线与利润。宁静服直接用后台价格任务每小时读到的全部订单（不重复请求 ESI）；
+# 前端按用户的技能与税费算各种买入 / 卖出组合的路线与利润（含近 24 小时 / 7 / 14 / 30 天成交中位价、最低价、最高价，hist=1 才返回）。宁静服直接用后台价格任务每小时读到的全部订单（不重复请求 ESI）；
 # 国服第一次被请求时才开始抓取，之后每 30 分钟刷新，6 小时没人看就停。
 # 日均成交：宁静服读 EVE Ref 每日市场历史（全星域全物品一个文件）；国服没有这种存档，按物品逐个查 ESI 历史（缓存 1 天，挂单额大的优先，每轮最多 ARB_HISTORY_BUDGET 次、24 分钟）。
 # 每轮先用已知成交量发布一次结果，成交量读完再更新
@@ -2842,6 +2842,33 @@ ARB_DEPTH = 0.05
 ARB_DAYS = 30
 ARB_HISTORY_BUDGET = 12000
 ARB_HISTORY_TTL = 86400
+# 成交价统计的天数（1 = 最近一个完整交易日）：近 N 天每日成交均价的中位数、每日最低价里最低的、每日最高价里最高的
+# （倒卖「中位价 / 最低价 / 最高价」收出用）。数据量大，接口加 hist=1 才返回这些字段
+ARB_HIST_DAYS = (1, 7, 14, 30)
+HIST_FIELDS = [f"{p}{k}" for p in ("med", "low", "high") for k in ARB_HIST_DAYS]
+HIST_COLS = ", ".join(HIST_FIELDS)
+ARB_FIELDS = ["sell", "buy", "sell_qty", "buy_qty", "sell_depth", "buy_depth", "daily", "avg", "daily7", "daily1"]
+
+
+def median(xs):
+    xs = sorted(xs)
+    n = len(xs)
+    if not n:
+        return None
+    return xs[n // 2] if n % 2 else (xs[n // 2 - 1] + xs[n // 2]) / 2
+
+
+def hist_stats(days, sinces):
+    """days：[(日期, 均价, 最低, 最高)]（只含有成交的日子）；sinces：每个窗口的起始日期（含）→ (中位价..., 最低价..., 最高价...)"""
+    med, low, high = [], [], []
+    for s0 in sinces:
+        w = [d for d in days if s0 and d[0] >= s0]
+        med.append(median([d[1] for d in w]))
+        lo = [d[2] for d in w if d[2]]
+        hi = [d[3] for d in w if d[3]]
+        low.append(min(lo) if lo else None)
+        high.append(max(hi) if hi else None)
+    return (*med, *low, *high)
 EVEREF_HISTORY = "https://data.everef.net/market-history/{year}/market-history-{date}.csv.bz2"
 NETEASE_ESI = "https://ali-esi.evepc.163.com/latest"
 ARB_SERVERS = {
@@ -2857,6 +2884,7 @@ class HubArbitrage:
         self.store = store
         self.lock = threading.Lock()
         self.data = {}          # server -> 最新快照（接口返回的结构）
+        self.data_hist = {}     # server -> 同上，另带成交价统计字段（hist=1）
         self.state = {}         # server -> {"asked", "running", "progress", "error"}
         self.everef = {}        # 日期 -> {(星域, 物品): 成交量}（宁静服，只留交易中心星域）
         c = store.conn()
@@ -2869,6 +2897,9 @@ class HubArbitrage:
                 c.execute("ALTER TABLE arb_volume ADD COLUMN daily7 REAL")
             if "daily1" not in cols:
                 c.execute("ALTER TABLE arb_volume ADD COLUMN daily1 REAL")
+            for k in HIST_FIELDS:
+                if k not in cols:
+                    c.execute(f"ALTER TABLE arb_volume ADD COLUMN {k} REAL")
             c.commit()
         self.losses = (0, {})   # (时间, {舰船 type_id: 近 7 天被击毁艘数})，宁静服击杀库统计
 
@@ -2907,7 +2938,7 @@ class HubArbitrage:
             elif server != "tq" and not st["running"]:
                 st["running"] = True
                 threading.Thread(target=self.loop, args=(server,), daemon=True).start()
-            data = self.data.get(server)
+            data = (self.data_hist if q.get("hist") == "1" else self.data).get(server)
         if not data:
             return {"server": server, "loading": True, "progress": st["progress"] or "排队中", "error": st["error"]}
         out = {**data, "progress": st["progress"]}
@@ -2993,24 +3024,29 @@ class HubArbitrage:
         if server == "tq":
             return self.everef_daily() if self.everef else {}
         c = self.store.conn()
-        return {(r, t): (d, a, d7, d1) for r, t, d, a, d7, d1 in c.execute("SELECT region, type_id, daily, avg, daily7, daily1 FROM arb_volume WHERE server=?", (server,))}
+        return {(r, t): (d, a, d7, d1, *m) for r, t, d, a, d7, d1, *m in c.execute(f"SELECT region, type_id, daily, avg, daily7, daily1, {HIST_COLS} FROM arb_volume WHERE server=?", (server,))}
 
     def publish(self, server, hubs, rows, daily):
-        types = {}
+        types, full = {}, {}
+        n = 4 + len(HIST_FIELDS)
+        rnd = lambda v: round(v, 2) if v is not None else None
         for t, r in rows.items():
-            out = []
+            out, out_full = [], []
             for k, (rid, _) in enumerate(hubs):
                 h = r[k]
                 if h is None:
                     out.append(None)
+                    out_full.append(None)
                     continue
-                d, a, d7, d1 = (tuple(daily.get((rid, t)) or ()) + (None,) * 4)[:4]
-                rnd = lambda v: round(v, 2) if v is not None else None
-                out.append([*h[:6], rnd(d), round(a, 2) if a else None, rnd(d7), rnd(d1)])
+                d, a, d7, d1, *m = (tuple(daily.get((rid, t)) or ()) + (None,) * n)[:n]
+                base = [*h[:6], rnd(d), round(a, 2) if a else None, rnd(d7), rnd(d1)]
+                out.append(base)
+                out_full.append(base + [rnd(v) for v in m])
             types[str(t)] = out
-        self.data[server] = {"server": server, "updated": iso(time.time()), "hubs": [rid for rid, _ in hubs],
-                             "fields": ["sell", "buy", "sell_qty", "buy_qty", "sell_depth", "buy_depth", "daily", "avg", "daily7", "daily1"],
-                             "volume_ready": len(daily), "types": types}
+            full[str(t)] = out_full
+        meta = {"server": server, "updated": iso(time.time()), "hubs": [rid for rid, _ in hubs], "volume_ready": len(daily)}
+        self.data[server] = {**meta, "fields": ARB_FIELDS, "types": types}
+        self.data_hist[server] = {**meta, "fields": ARB_FIELDS + HIST_FIELDS, "types": full}
 
     def volumes_everef(self, cfg):
         """EVE Ref 最近 30 天每日市场历史 → 交易中心星域日均成交（没有成交的日子不在文件里，按 30 天平均）"""
@@ -3033,7 +3069,7 @@ class HubArbitrage:
                 rid = int(row["region_id"])
                 if rid in regions:
                     v = int(float(row["volume"]))
-                    vol[(rid, int(row["type_id"]))] = (v, v * float(row["average"] or 0))
+                    vol[(rid, int(row["type_id"]))] = (v, v * float(row["average"] or 0), float(row.get("lowest") or 0), float(row.get("highest") or 0))
             if not vol:
                 continue                       # 文件已建但还没有数据（只有表头），下次刷新再读
             self.everef[key] = vol
@@ -3049,19 +3085,28 @@ class HubArbitrage:
         last1 = keep[-1] if keep else None
         out = {}
         for k in keep:
-            for key, (v, isk) in self.everef[k].items():
+            for key, (v, isk, *_) in self.everef[k].items():
                 o = out.get(key) or (0, 0, 0, 0)
                 out[key] = (o[0] + v, o[1] + isk, o[2] + (v if k in last7 else 0), o[3] + (v if k == last1 else 0))
         n = max(len(keep), 1)
         n7 = max(len(last7), 1)
-        # (30 天日均成交量, 成交均价, 7 天日均, 最近一天)
-        return {k: (v / n, isk / v if v else None, v7 / n7, v1) for k, (v, isk, v7, v1) in out.items()}
+        # 每天的成交均价 / 最低 / 最高，算近 N 天成交价统计（没成交的日子不算）
+        prices = {}
+        for k in keep:
+            for key, (v, isk, *lh) in self.everef[k].items():
+                if v:
+                    prices.setdefault(key, []).append((k, isk / v, *(lh or (None, None))))
+        sinces = [keep[-n] if len(keep) >= n else keep[0] for n in ARB_HIST_DAYS] if keep else []
+        stats = {key: hist_stats(ps, sinces) for key, ps in prices.items()}
+        # (30 天日均成交量, 成交均价, 7 天日均, 最近一天, 中位价..., 最低价..., 最高价...)
+        none = (None,) * len(HIST_FIELDS)
+        return {k: (v / n, isk / v if v else None, v7 / n7, v1, *stats.get(k, none)) for k, (v, isk, v7, v1) in out.items()}
 
     def volumes_esi(self, server, cfg, rows, st, on_progress):
         """国服：逐个查 ESI 星域历史（库里缓存 1 天）；挂单额大的物品优先，每轮最多 ARB_HISTORY_BUDGET 次"""
         hubs = list(cfg["hubs"])
         c = self.store.conn()
-        cached = {(r, t): (d, at, a, d7, d1) for r, t, d, at, a, d7, d1 in c.execute("SELECT region, type_id, daily, at, avg, daily7, daily1 FROM arb_volume WHERE server=?", (server,))}
+        cached = {(r, t): (d, at, a, d7, d1, *m) for r, t, d, at, a, d7, d1, *m in c.execute(f"SELECT region, type_id, daily, at, avg, daily7, daily1, {HIST_COLS} FROM arb_volume WHERE server=?", (server,))}
         now = int(time.time())
         todo = []
         for t, r in rows.items():
@@ -3070,7 +3115,8 @@ class HubArbitrage:
                 if h is None:
                     continue
                 hit = cached.get((rid, t))
-                if hit and now - hit[1] < ARB_HISTORY_TTL and (hit[2] is not None or not hit[0]) and hit[3] is not None and hit[4] is not None:
+                if hit and now - hit[1] < ARB_HISTORY_TTL and (hit[2] is not None or not hit[0]) and hit[3] is not None and hit[4] is not None \
+                        and (hit[-1] is not None or not hit[0]):   # 旧记录没有中位价的重新读
                     continue
                 weight = (h[0] or 0) * h[2] + (h[1] or 0) * h[3]
                 todo.append((-weight, rid, t))
@@ -3099,15 +3145,19 @@ class HubArbitrage:
             cutoff1 = (today - dt.timedelta(days=2)).isoformat()     # 最近一个完整交易日（ESI 一般到昨天）
             recent = [d for d in (hist or []) if d["date"] > cutoff1]
             vol1 = max(recent, key=lambda d: d["date"])["volume"] if recent else 0
-            return rid, t, vol / ARB_DAYS, isk / vol if vol else None, vol7 / 7, vol1
-        out = {k: (v[0], v[2], v[3], v[4]) for k, v in cached.items()}
+            days = sorted((d["date"], d["average"], d.get("lowest"), d.get("highest")) for d in (hist or []) if d["volume"])
+            last = max(recent, key=lambda d: d["date"])["date"] if recent else ""
+            sinces = [last if n == 1 else (today - dt.timedelta(days=n - 1)).isoformat() for n in ARB_HIST_DAYS]
+            return rid, t, vol / ARB_DAYS, isk / vol if vol else None, vol7 / 7, vol1, *hist_stats(days, sinces)
+        out = {k: (v[0], *v[2:]) for k, v in cached.items()}
         got = []
 
         def flush():
             with self.store.write_lock:
-                c.executemany("INSERT OR REPLACE INTO arb_volume(server, region, type_id, daily, at, avg, daily7, daily1) VALUES(?,?,?,?,?,?,?,?)", [(server, rid, t, d, now, a, d7, d1) for rid, t, d, a, d7, d1 in got])
+                c.executemany(f"INSERT OR REPLACE INTO arb_volume(server, region, type_id, daily, at, avg, daily7, daily1, {HIST_COLS}) VALUES(?,?,?,?,?,?,?,?{',?' * len(HIST_FIELDS)})",
+                              [(server, rid, t, d, now, *rest) for rid, t, d, *rest in got])
                 c.commit()
-            out.update({(rid, t): (d, a, d7, d1) for rid, t, d, a, d7, d1 in got})
+            out.update({(rid, t): (d, *rest) for rid, t, d, *rest in got})
             got.clear()
         with concurrent.futures.ThreadPoolExecutor(8) as pool:
             for n, res in enumerate(pool.map(one, todo), 1):

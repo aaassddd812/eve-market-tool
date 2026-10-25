@@ -5235,6 +5235,9 @@ td .sov-auto-tag { margin-left: 4px; }
 .mk-chip.up-warn b { color: var(--sell-color); }
 .mk-chip.down-warn b { color: var(--buy-color); }
 .hc-ship { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 4px 0 8px; font-size: 0.8125rem; }
+.hc-mode > span { white-space: nowrap; }
+.hc-mode { max-width: 100%; min-width: 0; }
+.hc-mode .segmented { flex-wrap: wrap; min-width: 0; }
 .hc-freight { flex-wrap: wrap; }
 .hc-freight .pi-input { width: 80px; }
 

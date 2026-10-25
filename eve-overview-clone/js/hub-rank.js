@@ -20,10 +20,16 @@
 // 消耗排行（mode = consume）：五大交易中心日均成交（可选 24 小时 / 7 天 / 30 天）加起来看什么东西用得多，宁静服再加上击杀库近 7 天被击毁数；
 //   消耗额 = 五中心日成交额合计 + 日均被击毁数 × 均价（舰船、部署物被打爆后要补货）。列出最便宜的交易中心卖价，
 //   启用了玩家建筑市场时再列建筑里的最低卖价与比交易中心贵多少，方便决定去哪里买、给建筑市场备什么货。
+// 倒卖方式：买入（卖单收 / 收单收 / 中位价收 / 最低价收 / 最高价收）和卖出（收单出 / 卖单出 / 中位价出 / 最低价出 / 最高价出）自由组合，
+//   F.mode 是两个字母（hub-compare.js 的 MODES），F.rmode 记住上次的组合（切到按销量选品 / 消耗排行再切回来还是它）；
+//   成交价取近 F.med 天（1 = 24 小时）：服务器汇总的 med / low / high{1,7,14,30}，数据量大，用到时才带 hist=1 重新取一次（之后一直带）。
+//   按成交价挂单而现价偏离 20% 以上的路线标「现价偏离」（hub-compare.js 的 devTip）。
 // 排序：点表头排序（再点一次换方向），普通倒卖按预计利润 / 利润率 / 每件利润 / 每立方利润排序时，每个物品也按这一项挑最好的路线。
 // 分页：全部结果都能看，每页 50 / 100 / 200 / 500 条。
+// 预加载（prefetchHubRank，用过倒卖排行的浏览器在页面空闲时调用）：先取服务器汇总、包装体积、勾选建筑与自定义市场的挂单，
+//   打开倒卖排行时直接出结果；建筑订单后台刷新完（structs.onData）悄悄换上新数据，不显示「正在读取」。
 // 分类：打开倒卖排行时市场中心侧栏的物品目录换成分类列表（#arbSide），显示每个分类符合条件的物品数。
-import { calcRoutes, ROUTE_SORT, MODES, setHubMode, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v7';
+import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v11';
 
 let ctx = null;   // server, regions, esc, formatISK, formatPrice, formatNumber, TF, typeName, category, isGlobal, iconUrl, openItem
 const PAGE_SIZES = [50, 100, 200, 500];
@@ -90,7 +96,7 @@ function pagerHtml(page, pages, total, from, to) {
 }
 const pageSize = () => (PAGE_SIZES.includes(Number(F.size)) ? Number(F.size) : 100);
 const RISING = 1.3, TIGHT = 2, HIGH = 1.15;   // 成交上涨：7 天 / 30 天 ≥ 1.3；库存少：库存 < 2 天；卖价偏高：卖价 ≥ 均价 × 1.15
-const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', mode: 'sb', sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, strict: true, excl: [], custom: [] };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]
+const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', mode: 'sb', rmode: 'sb', med: 7, sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, strict: true, excl: [], custom: [] };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]
 const CUSTOM_MAX = 3;
 const CUSTOM_TTL = 10 * 60e3;
 const customCache = new Map();   // 市场 ID -> { at, quotes }
@@ -98,6 +104,10 @@ const S = { page: 1, pageKey: '', data: null, loading: null, error: null, q: '',
 try { Object.assign(F, JSON.parse(localStorage.getItem('eve-hub-rank') || '{}')); } catch { /* 用默认 */ }
 if (!Array.isArray(F.excl)) F.excl = [];
 if (!Array.isArray(F.custom)) F.custom = [];
+if (!MODES.some(([k]) => k === F.rmode)) F.rmode = 'sb';
+if (MODES.some(([k]) => k === F.mode)) F.rmode = F.mode;
+else if (F.mode !== 'demand' && F.mode !== 'consume') F.mode = F.rmode;
+if (!MED_DAYS.includes(Number(F.med))) F.med = 7;
 // 自定义市场的 ID：负数，不和交易中心 / 建筑 ID 冲突（星域 10000002 + 星系 30000142 → -2000142）
 const customId = (c) => -((c.region % 1e6) * 1e6 + (c.system ? c.system % 1e6 : 0));
 const save = () => { try { localStorage.setItem('eve-hub-rank', JSON.stringify(F)); } catch { /* 无痕模式 */ } };
@@ -105,14 +115,30 @@ const save = () => { try { localStorage.setItem('eve-hub-rank', JSON.stringify(F
 export function initHubRank(context) {
   ctx = context;
   ctx.structs?.on(() => { S.smKey = ''; if (S.box?.isConnected && !S.box.hidden && S.data && !S.data.loading) loadStructs(S.box); });
+  let t = 0;
+  ctx.structs?.onData?.(() => {
+    clearTimeout(t);
+    t = setTimeout(() => { if (S.sm.length) loadStructs(S.box?.isConnected && !S.box.hidden && S.data && !S.data.loading ? S.box : null); }, 1500);
+  });
+}
+
+// 页面空闲时预加载（只在用过倒卖排行的浏览器里调用）
+export async function prefetchHubRank() {
+  if (S.data || S.loading) return;
+  await Promise.all([load(), loadVolumes().then((v) => { S.vols = v; })]).catch(() => {});
+  if (ctx.structs?.count() && !S.smKey) await loadStructs(null);
+  if (F.custom.length && !S.cm.length) await loadCustom(null);
 }
 
 // 勾选建筑的订单 → 每座建筑一张 物品 → 行情 表
 async function loadStructs(box) {
   if (!ctx.structs?.count()) { S.sm = []; S.smKey = ''; S.smNote = ''; S.rows = null; return; }
-  S.smNote = '正在读取玩家建筑市场…';
-  if (box) render(box);
-  const list = await ctx.structs.load((d, t) => { S.smNote = `正在读取玩家建筑市场 ${d}/${t}…`; const n = box?.querySelector('[data-hr-smnote]'); if (n) n.textContent = S.smNote; }).catch(() => []);
+  const quiet = S.sm.length > 0;   // 已有建筑数据（预加载过 / 后台刷新）：先用着，不显示「正在读取」
+  if (!quiet) {
+    S.smNote = '正在读取玩家建筑市场…';
+    if (box) render(box);
+  }
+  const list = await ctx.structs.load((d, t) => { if (quiet) return; S.smNote = `正在读取玩家建筑市场 ${d}/${t}…`; const n = box?.querySelector('[data-hr-smnote]'); if (n) n.textContent = S.smNote; }).catch(() => []);
   S.sm = list.map(({ s, byType }) => {
     const quotes = new Map();
     for (const [tid, orders] of byType) quotes.set(tid, ctx.structs.quote(orders));
@@ -185,13 +211,15 @@ async function regionOrders(region, onProgress) {
 async function load(force) {
   if (S.loading && !force) return S.loading;
   S.loading = (async () => {
-    const res = await fetch(`/api/v1/hubs/arbitrage?server=${ctx.server}`);
+    if (wantHist()) S.hist = true;
+    const res = await fetch(`/api/v1/hubs/arbitrage?server=${ctx.server}${S.hist ? '&hist=1' : ''}`);
     const data = await res.json().catch(() => null);
     if (!res.ok) throw new Error(data?.error?.message || 'HTTP ' + res.status);
     return data;
   })();
   try {
     S.data = await S.loading;
+    S.at = Date.now();
     S.error = null;
     S.rows = null;
   } catch (e) {
@@ -202,11 +230,15 @@ async function load(force) {
 }
 
 // 服务端数组 → hub-compare 用的对象
+const wantHist = () => modeKind() === 'route' && usesHist(F.mode);
+const hasHist = () => !!S.data?.fields?.includes('med1');
 function hubsOf(row, names, id) {
   const out = [];
+  const idx = ['med', 'low', 'high'].map((p) => S.data.fields?.indexOf(p + F.med) ?? -1);
+  const med = (h) => (h && idx[0] >= 0 ? { m: h[idx[0]], l: h[idx[1]], h: h[idx[2]] } : null);
   row.forEach((h, k) => {
     if (!h) return;
-    out.push({ id: S.data.hubs[k], name: names[k], sell: h[0], buy: h[1], sellQty: h[2], sellDepth: h[4], buyDepth: h[5], daily: h[6], avg: h[7], daily7: h[8] ?? null, daily1: h[9] ?? null });
+    out.push({ id: S.data.hubs[k], name: names[k], sell: h[0], buy: h[1], sellQty: h[2], sellDepth: h[4], buyDepth: h[5], daily: h[6], avg: h[7], daily7: h[8] ?? null, daily1: h[9] ?? null, px: med(h) });
   });
   // 玩家建筑：同星域交易中心的日均成交与均价
   for (const { s, quotes } of [...S.sm, ...S.cm]) {
@@ -214,7 +246,7 @@ function hubsOf(row, names, id) {
     if (!q || (q.sell == null && q.buy == null)) continue;
     const k = S.data.hubs.indexOf(s.region);
     const h = k >= 0 ? row[k] : null;
-    out.push({ id: s.id, name: s.label, struct: true, ...q, daily: h?.[6] ?? null, avg: h?.[7] ?? null });
+    out.push({ id: s.id, name: s.label, struct: true, ...q, daily: h?.[6] ?? null, avg: h?.[7] ?? null, px: med(h) });
   }
   return out;
 }
@@ -222,7 +254,7 @@ function hubsOf(row, names, id) {
 function compute() {
   if (F.mode === 'demand') return computeDemand();
   if (F.mode === 'consume') return computeConsume();
-  const key = JSON.stringify([{ ...F, cat: 0, sort: ROUTE_SORT[F.sort] ? F.sort : 'profit', sdir: 0, size: 0 }, ctx.TF.summary(), S.data?.updated, freight(), S.smKey, S.cmKey]);
+  const key = JSON.stringify([{ ...F, cat: 0, sort: ROUTE_SORT[F.sort] ? F.sort : 'profit', sdir: 0, size: 0 }, ctx.TF.summary(), S.data?.updated, S.data?.fields?.length, freight(), S.smKey, S.cmKey]);
   if (S.rows && S.key === key) return S.rows;
   const f = ctx.TF.fees();
   const names = S.data.hubs.map((id) => ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id);
@@ -274,7 +306,7 @@ function targetOf() {
   return list[0];
 }
 function computeDemand() {
-  const key = JSON.stringify(['demand', { ...F, cat: 0, dsort: 0, sdir: 0, size: 0 }, ctx.TF.summary(), S.data?.updated, freight(), S.smKey, S.cmKey]);
+  const key = JSON.stringify(['demand', { ...F, cat: 0, dsort: 0, sdir: 0, size: 0 }, ctx.TF.summary(), S.data?.updated, S.data?.fields?.length, freight(), S.smKey, S.cmKey]);
   if (S.rows && S.key === key) return S.rows;
   const f = ctx.TF.fees();
   const names = S.data.hubs.map((id) => ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id);
@@ -533,6 +565,7 @@ function html(all0) {
     ...S.sm.map(({ s }) => [s.id, s.label]), ...S.cm.map(({ s }) => [s.id, s.label])];
   const catName = F.cat ? catNameOf(F.cat) : '';
   const noVol = !all0.length && F.mode !== 'sb' && Object.values(S.data.types).every((r) => r.every((h) => !h || h[6] == null));
+  const noHist = !all0.length && wantHist() && !hasHist();
   const name = (h) => esc(String(h.name));
   const px = (v) => Math.abs(v) >= 1e6 ? formatISK(v) : formatPrice(v);   // 大额用 M / B，表格放得下
   const ok = list.filter((x) => !x.off).length;
@@ -544,7 +577,7 @@ function html(all0) {
     const cls = r.unit > 0 ? 'up' : 'down';
     return `<tr data-hr-open="${x.id}"${x.off ? ` class="hr-off" title="不符合条件：${esc(r.miss)} · 点击打开该物品的交易中心比价"` : ' title="打开该物品的交易中心比价"'}>
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}</small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${devTip(r) ? ` <b class="hr-tag warn" title="${devTip(r)}">现价偏离</b>` : ''}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}</td>
       <td class="num pi-hide-sm">${px(r.buyAt)}</td>
@@ -571,7 +604,8 @@ function html(all0) {
         <button type="button" class="btn btn-primary btn-sm" data-hr-cadd${F.custom.length >= CUSTOM_MAX ? ' disabled' : ''}>添加</button>
         ${F.custom.map((c) => `<span class="ka-chip">${esc(c.sysName ? c.sysName + ' · ' + c.name : c.name)}<button type="button" class="ka-close" data-hr-cdel="${customId(c)}" aria-label="移除">×</button></span>`).join('')}
         <span class="pi-note">最多 ${CUSTOM_MAX} 个；浏览器直接读该星域全部挂单，大星域要等一会儿。星域里没有交易中心时没有成交量数据，只能算「直接成交」</span></div>` : ''}
-      <div class="ind-rank-row">${seg('mode', [...MODES, ['demand', '按销量选品'], ['consume', '消耗排行']])}</div>
+      <div class="ind-rank-row"><div class="segmented">${[['route', '倒卖路线'], ['demand', '按销量选品'], ['consume', '消耗排行']].map(([v, l]) => `<button type="button" data-hr-kind="${v}" class="${modeKind() === v ? 'active' : ''}">${l}</button>`).join('')}</div></div>
+      ${C || D ? '' : `<div class="ind-rank-row">${modePicker('hr', F.mode, F.med)}</div>`}
       ${C ? consumeControls() : D ? demandControls() : `<div class="ind-rank-row">
         <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input type="search" data-hr-q placeholder="筛选物品" value="${esc(S.q)}" spellcheck="false" aria-label="筛选物品"></div>
@@ -588,14 +622,14 @@ function html(all0) {
         <div class="pi-inline"><span>日均成交 ≥</span>${select('minDaily', MIN_DAILY)}</div>
       </div>`}
       ${C ? '' : `<div class="ind-rank-row">${freightHtml('hr')}</div>`}
-      <p class="pi-note" title="${C ? `日成交量是五大交易中心所在星域的统计加起来（含周边玩家建筑）；消耗额 = 日成交额合计 + 近 7 天日均被击毁数 × 均价（只有宁静服有击杀数据）。建筑卖价是已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少。` : D ? `目标市场的成交量是整个星域的统计（含周边玩家建筑；自定义市场借用同星域交易中心的数据），库存天数用目标市场自己的卖单；建议数量 = 日均成交 × 份额 × 计划天数，不超过进货地卖单深度（挂收单按进货地日均成交 × 份额）。挂单价偏离 30 天成交均价太多的不算。` : '可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。'}">
+      <p class="pi-note" title="${C ? `日成交量是五大交易中心所在星域的统计加起来（含周边玩家建筑）；消耗额 = 日成交额合计 + 近 7 天日均被击毁数 × 均价（只有宁静服有击杀数据）。建筑卖价是已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少。` : D ? `目标市场的成交量是整个星域的统计（含周边玩家建筑；自定义市场借用同星域交易中心的数据），库存天数用目标市场自己的卖单；建议数量 = 日均成交 × 份额 × 计划天数，不超过进货地卖单深度（挂收单按进货地日均成交 × 份额）。挂单价偏离 30 天成交均价太多的不算。` : '买入、卖出方式可以任意组合；中位价 / 最低价 / 最高价收出是按近 ' + daysLabel(F.med) + '的成交价挂单（付中介费），成交价偏离 30 天均价超过 60%–140% 的不用（乱价成交），现价偏离挂单价 20% 以上标「现价偏离」。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。'}">
         ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${C ? '' : ` · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'}`} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${esc(S.smNote)}</span>` : ''}${S.cmNote ? ` · <span data-hr-cmnote>${esc(S.cmNote)}</span>` : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table hr-table"><thead><tr>
       ${C ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('use', '消耗额', 'num', '日成交额合计 + 被击毁折合每天的价值')}${th('turn', '日成交额', 'num pi-hide-sm')}${th('units', '日成交量', 'num', '五大交易中心日均成交量合计，悬停看各中心')}${S.data.losses7 ? th('loss', '近 7 天被击毁', 'num', '本站击杀库近 7 天被击毁的数量（舰船与部署物）') : ''}${th('trend', '趋势', 'num pi-hide-sm', '近 7 天日均成交比 30 天')}${th('price', '最便宜的交易中心')}${S.sm.length ? th('markup', '建筑卖价', '', '已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少') : ''}`
     : D ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '进货')}${th('day', '每天利润', 'num')}${th('unit', '每件利润', 'num')}${th('qty', '建议数量', 'num')}${th('turn', '日成交额', 'num', '日均成交量 × 成交均价')}${th('trend', '趋势', 'num pi-hide-sm', '近 7 天日均成交比 30 天')}${th('stock', '库存天数', 'num pi-hide-sm', '目标市场卖单库存够卖几天')}${S.data.losses7 ? th('loss', '近 7 天被击毁', 'num pi-hide-sm', '本站击杀库近 7 天被击毁的数量（舰船与部署物）') : ''}`
     : `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '路线')}${th('buy', '买入价', 'num pi-hide-sm')}${th('sell', '卖出价', 'num pi-hide-sm')}${th('unit', '每件利润', 'num', '同时按这一项为每个物品挑路线')}${th('margin', '利润率', 'num', '同时按这一项为每个物品挑路线')}${th('m3', '每立方', 'num pi-hide-sm', '同时按这一项为每个物品挑路线')}${th('qty', '可做数量', 'num')}${th('cost', '投入', 'num pi-hide-sm')}${th('profit', '预计利润', 'num', '同时按这一项为每个物品挑路线')}`}
-    </tr></thead><tbody>${rows || `<tr><td colspan="11" class="text-muted">${noVol || ((D || C) && !hasVol()) ? '成交量还在读取中，挂单方式暂时算不出可做数量' : C ? '没有符合条件的物品' : D ? demandEmpty() : '没有符合条件的路线'}</td></tr>`}</tbody></table></div>
+    </tr></thead><tbody>${rows || `<tr><td colspan="11" class="text-muted">${noHist && !C && !D ? (S.histLoading ? '正在读取成交价数据…' : '服务器还没有成交价数据，先换别的方式') : noVol || ((D || C) && !hasVol()) ? '成交量还在读取中，挂单方式暂时算不出可做数量' : C ? '没有符合条件的物品' : D ? demandEmpty() : '没有符合条件的路线'}</td></tr>`}</tbody></table></div>
       ${list.length ? pagerHtml(S.page, pages, list.length, off + 1, off + top.length) : ''}</div>
   </div>`;
 }
@@ -654,6 +688,14 @@ function render(box) {
   if (S.data.progress) poll(box);
 }
 
+// 用到成交价但手上的汇总没带这些字段：带 hist=1 再取一次
+function needHist(box) {
+  if (!wantHist() || hasHist() || S.histLoading) return;
+  S.histLoading = true;
+  render(box);
+  load(true).finally(() => { S.histLoading = false; render(box); });
+}
+
 // 结果有变化（成交量又读了一批、或读完）才重画，否则只更新进度文字
 function poll(box) {
   clearTimeout(S.timer);
@@ -678,6 +720,7 @@ export async function showHubRank(box, side) {
   }
   S.vols = await loadVolumes();
   if (!S.data || S.data.loading) await load();
+  else if (Date.now() - (S.at || 0) > 10 * 60e3) load(true).then(() => render(box));   // 预加载的结果放久了：先显示，后台换新（服务器 30 分钟汇总一次）
   render(box);
   // 建筑市场缓存 5 分钟，过期或勾选变了再读
   if (ctx.structs?.count() && (!S.smKey || Date.now() - Number(S.smKey.split('@')[1]) > 5 * 60e3)) loadStructs(box);
@@ -764,9 +807,12 @@ function bind(box) {
     const cat = e.target.closest('[data-hr-cat]');
     if (cat) { pickCat(Number(cat.dataset.hrCat)); return; }
     if (e.target.closest('[data-hr-side]')) { ctx.openSide?.(); return; }
-    const b = e.target.closest('[data-hr-mode],[data-hr-sort],[data-hr-win],[data-hr-dsort],[data-hr-csort]');
+    const mk = modeClick(e.target, 'hr', F.mode, F.med);
+    if (mk) { [F.mode, F.med] = mk; F.rmode = F.mode; save(); render(box); needHist(box); return; }
+    const kd = e.target.closest('[data-hr-kind]');
+    if (kd) { F.mode = kd.dataset.hrKind === 'route' ? F.rmode : kd.dataset.hrKind; save(); render(box); needHist(box); return; }
+    const b = e.target.closest('[data-hr-sort],[data-hr-win],[data-hr-dsort],[data-hr-csort]');
     if (b) {
-      if (b.dataset.hrMode) F.mode = b.dataset.hrMode;
       if (b.dataset.hrSort) F.sort = b.dataset.hrSort;
       if (b.dataset.hrWin) F.win = Number(b.dataset.hrWin);
       if (b.dataset.hrDsort) F.dsort = b.dataset.hrDsort;
@@ -801,7 +847,7 @@ function bind(box) {
       return;
     }
     const row = e.target.closest('[data-hr-open]');
-    if (row) { const m = row.dataset.hrModeOpen || F.mode; if (MODES.some(([k]) => k === m)) setHubMode(m); ctx.openItem(Number(row.dataset.hrOpen)); }
+    if (row) { const m = row.dataset.hrModeOpen || F.mode; if (MODES.some(([k]) => k === m)) setHubMode(m, F.med); ctx.openItem(Number(row.dataset.hrOpen)); }
   });
   box.addEventListener('change', (e) => {
     const sel = e.target.closest('[data-hr-sel]');
