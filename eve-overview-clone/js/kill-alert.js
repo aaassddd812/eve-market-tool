@@ -391,7 +391,9 @@ export function test(kind) {
 
 // ---------- 设置面板（右上角铃铛）----------
 let panel = null;
-const sw = (key, label, desc) => `<label class="ka-opt"><input type="checkbox" data-ka-set="${key}"${T[key] ? ' checked' : ''}><span><b>${label}</b><small>${desc}</small></span></label>`;
+// 设置行：左边名称（可带一行短说明），右边开关；详细说明放在悬停提示里
+const sw = (key, label, sub = '', tip = '') => `<label class="ka-opt"${tip ? ` title="${tip}"` : ''}><span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span><input type="checkbox" class="ka-switch" data-ka-set="${key}"${T[key] ? ' checked' : ''}></label>`;
+const sec = (title, body, extra = '') => `<section class="ka-sec"><h4 class="ka-h">${title}${extra}</h4>${body}</section>`;
 function renderPanel() {
   if (!panel || panel.hidden) return;
   // 重绘时保留正在输入的关注角色名
@@ -457,49 +459,50 @@ function drawPanel() {
   const token = ctx.tokenInfo();
   const st = status();
   const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m < 60 ? m + ' 分钟前' : Math.floor(m / 60) + ' 小时前'; };
+  const pill = (on, text) => `<span class="ka-status${on ? ' on' : ''}"><i></i>${ctx.esc(text)}</span>`;
   panel.querySelector('#kaBody').innerHTML = `
-    ${token ? '' : '<p class="ka-warn">需要先在「个人中心」绑定 ESI，按角色所在位置检测周边击杀。</p>'}
-    ${sw('on', '开启击杀预警', '按角色当前所在星系，实时检测周边星系的击杀（默认关闭）')}
-    <label class="ka-opt ka-range"><span><b>检测范围</b><small>角色所在星系周边多少跳以内（1–10，默认 3）</small></span>
-      <input type="number" class="cr-input" min="1" max="10" step="1" value="${T.jumps}" data-ka-jumps aria-label="检测范围（跳）"> 跳</label>
-    ${sw('mail', '游戏内邮件提醒', '给自己发 EVE 邮件，附击杀报告链接，游戏里点开即可看 KM（每分钟最多一封，多条合并）')}
-    ${sw('web', '网页醒目特效', '屏幕边缘红色闪烁 + 右上角预警卡片（默认关闭）')}
-    ${sw('sound', '提示音', '网页特效时同时播放提示音')}
-    ${sw('pods', '包括太空舱', '太空舱被击毁也提醒')}
-    <p class="ka-status${T.on ? ' on' : ''}">${ctx.esc(T.on ? st.area : '位置预警未开启')}</p>
-    <h4 class="ka-h">星域监控</h4>
-    ${sw('regionOn', '开启星域监控', '指定星域里发生的任何击杀都提醒（不需要绑定，与位置预警相互独立）')}
-    ${IS_TQ ? '' : `<p class="ka-warn">${ctx.esc(SERVER.full)}没有实时击杀数据，星域监控只在宁静服可用。</p>`}
-    <div class="ka-watch-add">
-      <input type="text" class="cr-input" data-ka-region list="kaRegionList" placeholder="星域名称" autocomplete="off" aria-label="监控星域">
-      <datalist id="kaRegionList">${(S.regionNames || []).map((r) => `<option value="${ctx.esc(r.name)}"></option>`).join('')}</datalist>
-      <button class="btn btn-primary" data-ka-radd>添加</button>
+    <div class="ka-top">${pill(st.on, st.text)}</div>
+    ${token ? '' : '<p class="ka-warn">位置预警需要先在「个人中心」绑定 ESI</p>'}
+    ${IS_TQ ? '' : `<p class="ka-warn" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据：提醒会延迟，星域监控与人物关注不可用</p>`}
+    ${sec('位置预警', `<div class="ka-list">
+      ${sw('on', '开启位置预警', '角色所在星系周边的击杀')}
+      <label class="ka-opt"><span><b>检测范围</b></span><span class="ka-ctl"><input type="number" class="cr-input" min="1" max="10" step="1" value="${T.jumps}" data-ka-jumps aria-label="检测范围（跳）" title="1–10 跳"> 跳</span></label>
+      ${sw('pods', '包括太空舱')}
+    </div>`)}
+    ${sec('提醒方式', `<div class="ka-list">
+      ${sw('mail', '游戏内邮件', '', '给自己发 EVE 邮件，附击杀报告链接（每分钟最多一封，多条合并）')}
+      ${sw('web', '网页特效', '', '屏幕边缘红色闪烁 + 右上角预警卡片')}
+      ${sw('sound', '提示音', '', '网页特效时同时播放提示音')}
     </div>
-    ${T.regions.length ? `<div class="ka-chips">${T.regions.map((r) => `<span class="ka-chip">${ctx.esc(r.name)}<button class="ka-close" data-ka-rdel="${r.id}" aria-label="移除">×</button></span>`).join('')}</div>` : ''}
-    <h4 class="ka-h">过滤条件<small>（位置预警与星域监控）</small></h4>
-    <label class="ka-opt ka-range"><span><b>最低价值</b><small>只提醒价值不低于此值的击杀</small></span>
-      <select class="cr-input" data-ka-num="minValue" aria-label="最低价值">${opts(MIN_VALUES, T.minValue)}</select></label>
-    <label class="ka-opt ka-range"><span><b>只提醒多久内发生的</b><small>击杀记录收录有延迟，过旧的不再提醒</small></span>
-      <select class="cr-input" data-ka-num="maxAge" aria-label="时效">${opts(MAX_AGES, T.maxAge)}</select></label>
-    <div class="ka-opt ka-classes"><span><b>受害者舰船类别</b><small>${T.classes.length ? `只提醒选中的 ${T.classes.length} 类` : '都不选 = 全部舰船'}</small></span>
-      <div class="ka-chips">${(ctx.shipClasses?.() || []).map((c) => `<button type="button" class="ka-chip toggle${T.classes.includes(c.id) ? ' on' : ''}" data-ka-class="${c.id}">${ctx.esc(c.name)}</button>`).join('')}</div></div>
-    <h4 class="ka-h">人物关注</h4>
-    ${sw('watchOn', '开启人物提醒', '关注的角色 / 军团 / 联盟产生 KM 时提醒，与上面的位置预警相互独立（默认关闭）')}
-    ${IS_TQ ? '' : `<p class="ka-warn">${ctx.esc(SERVER.full)}没有公开的实时击杀数据，人物关注只在宁静服可用。</p>`}
-    <div class="ka-watch-add">
-      <input type="text" class="cr-input" data-ka-name placeholder="完整的角色 / 军团 / 联盟名称，或 ID" autocomplete="off" spellcheck="false" aria-label="关注角色">
-      <select class="cr-input" data-ka-mode aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>
-      <button class="btn btn-primary" data-ka-add>添加</button>
-    </div>
-    ${T.watch.length ? `<ul class="ka-watch">${T.watch.map((e) => `<li><img src="${entityImg(e)}" alt="" width="24" height="24" loading="lazy">
-      <span>${ctx.esc(e.name)}${e.kind !== 'character' ? `<small> · ${KIND_ZH[e.kind]}</small>` : ''}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
-      <button class="ka-close" data-ka-del="${e.id}" title="取消关注" aria-label="取消关注">×</button></li>`).join('')}</ul>` : '<p class="text-muted">还没有关注的角色</p>'}
-    ${(watching() || regionWatching()) && IS_TQ ? `<p class="ka-status on">${ctx.esc(watchText())}</p>` : ''}
-    ${IS_TQ ? '' : `<p class="ka-note" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据，提醒会延迟</p>`}
-    <div class="ka-actions"><button class="btn btn-ghost" data-ka-test="web">测试网页特效</button><button class="btn btn-ghost" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>
-    <h4 class="ka-h">最近预警</h4>
-    ${st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${ctx.esc(describe(a))}</span><small>${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="text-muted">还没有预警</p>'}
-    <p class="ka-note">需保持网页打开（可在后台）</p>`;
+    <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ka-test="web">测试网页特效</button><button class="btn btn-ghost btn-sm" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>`)}
+    ${sec('星域监控', `<div class="ka-list">
+      ${sw('regionOn', '开启星域监控', '', '指定星域里发生的任何击杀都提醒，不需要绑定 ESI')}
+      <div class="ka-opt ka-stack"><div class="ka-watch-add">
+        <input type="text" class="cr-input" data-ka-region list="kaRegionList" placeholder="添加星域" autocomplete="off" aria-label="监控星域">
+        <datalist id="kaRegionList">${(S.regionNames || []).map((r) => `<option value="${ctx.esc(r.name)}"></option>`).join('')}</datalist>
+        <button class="btn btn-primary btn-sm" data-ka-radd>添加</button>
+      </div>
+      ${T.regions.length ? `<div class="ka-chips">${T.regions.map((r) => `<span class="ka-chip">${ctx.esc(r.name)}<button class="ka-close" data-ka-rdel="${r.id}" aria-label="移除">×</button></span>`).join('')}</div>` : ''}</div>
+    </div>`)}
+    ${sec('过滤条件', `<div class="ka-list">
+      <label class="ka-opt"><span><b>最低价值</b></span><select class="cr-input" data-ka-num="minValue" aria-label="最低价值">${opts(MIN_VALUES, T.minValue)}</select></label>
+      <label class="ka-opt" title="击杀记录收录有延迟，过旧的不再提醒"><span><b>只提醒多久内的</b></span><select class="cr-input" data-ka-num="maxAge" aria-label="时效">${opts(MAX_AGES, T.maxAge)}</select></label>
+      <div class="ka-opt ka-stack"><span><b>舰船类别</b><small>${T.classes.length ? `已选 ${T.classes.length} 类` : '不选 = 全部'}</small></span>
+        <div class="ka-chips">${(ctx.shipClasses?.() || []).map((c) => `<button type="button" class="ka-chip toggle${T.classes.includes(c.id) ? ' on' : ''}" data-ka-class="${c.id}">${ctx.esc(c.name)}</button>`).join('')}</div></div>
+    </div>`, '<small>位置预警与星域监控</small>')}
+    ${sec('人物关注', `<div class="ka-list">
+      ${sw('watchOn', '开启人物提醒', '', '关注的角色 / 军团 / 联盟产生 KM 时提醒')}
+      <div class="ka-opt ka-stack"><div class="ka-watch-add">
+        <input type="text" class="cr-input" data-ka-name placeholder="角色 / 军团 / 联盟全名或 ID" autocomplete="off" spellcheck="false" aria-label="关注角色">
+        <select class="cr-input" data-ka-mode aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select>
+        <button class="btn btn-primary btn-sm" data-ka-add>添加</button>
+      </div>
+      ${T.watch.length ? `<ul class="ka-watch">${T.watch.map((e) => `<li><img src="${entityImg(e)}" alt="" width="24" height="24" loading="lazy">
+        <span>${ctx.esc(e.name)}${e.kind !== 'character' ? `<small> · ${KIND_ZH[e.kind]}</small>` : ''}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
+        <button class="ka-close" data-ka-del="${e.id}" title="取消关注" aria-label="取消关注">×</button></li>`).join('')}</ul>` : ''}</div>
+    </div>`)}
+    ${sec('最近预警', st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${ctx.esc(describe(a))}</span><small>${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有预警</p>')}
+    <p class="ka-note">网页需保持打开（可在后台）</p>`;
 }
 
 export function openPanel() {

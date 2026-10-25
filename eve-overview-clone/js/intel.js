@@ -437,9 +437,11 @@ function card(title, body, r) {
 
 // ---------- 面板 ----------
 let panel = null;
-const sw = (key, label, desc) => `<label class="ka-opt"><input type="checkbox" data-in-set="${key}"${T[key] ? ' checked' : ''}><span><b>${label}</b><small>${desc}</small></span></label>`;
-const wordList = (key, ph) => `<div class="ka-watch-add"><input type="text" class="cr-input" data-in-word="${key}" data-keep="w-${key}" placeholder="${ph}" autocomplete="off" spellcheck="false"><button class="btn btn-primary" data-in-wadd="${key}">添加</button></div>
-  ${T[key].length ? `<div class="ka-chips">${T[key].map((w, i) => `<span class="ka-chip">${ctx.esc(w)}<button class="ka-close" data-in-wdel="${key}:${i}" aria-label="移除">×</button></span>`).join('')}</div>` : ''}`;
+// 设置行：左边名称（可带一行短说明），右边开关；详细说明放在悬停提示里
+const sw = (key, label, sub = '', tip = '') => `<label class="ka-opt"${tip ? ` title="${tip}"` : ''}><span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span><input type="checkbox" class="ka-switch" data-in-set="${key}"${T[key] ? ' checked' : ''}></label>`;
+const sec = (title, body) => `<section class="ka-sec"><h4 class="ka-h">${title}</h4>${body}</section>`;
+const wordList = (key, ph) => `<div class="ka-opt ka-stack"><div class="ka-watch-add"><input type="text" class="cr-input" data-in-word="${key}" data-keep="w-${key}" placeholder="${ph}" autocomplete="off" spellcheck="false"><button class="btn btn-primary btn-sm" data-in-wadd="${key}">添加</button></div>
+  ${T[key].length ? `<div class="ka-chips">${T[key].map((w, i) => `<span class="ka-chip">${ctx.esc(w)}<button class="ka-close" data-in-wdel="${key}:${i}" aria-label="移除">×</button></span>`).join('')}</div>` : ''}</div>`;
 
 function renderPanel() {
   if (!panel || panel.hidden) return;
@@ -467,42 +469,40 @@ function drawPanel() {
   const here = S.here ? `${sysName(S.here)}（${{ esi: 'ESI 角色位置', local: '本地频道日志', manual: '手动设置' }[S.hereFrom] || ''}）` : '未知（所有敌情都提醒）';
   const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m + ' 分钟前'; };
   return `
-    <p class="ka-note">读取游戏写在电脑上的聊天记录与游戏日志，<b>文件只在你的浏览器里读取，不会上传</b>。需要<b>电脑版 Chrome 或 Edge</b>；默认关闭，选择文件夹后才开始。</p>
-    <div class="ka-actions">
-      <button class="btn btn-primary" data-in-pick>${S.dir ? '重新选择日志文件夹' : '选择日志文件夹'}</button>
-      ${S.dir && S.perm !== 'granted' ? '<button class="btn btn-ghost" data-in-resume>恢复监听</button>' : ''}
+    <div class="ka-top"><span class="ka-status${status().on ? ' on' : ''}"><i></i>${ctx.esc(status().text)}</span></div>
+    <p class="ka-note">读取本机的游戏聊天记录与日志，文件不会上传；需要电脑版 Chrome 或 Edge。</p>
+    ${sec('日志文件夹', `<div class="ka-list">
+      <div class="ka-opt"><span><b>${S.dir ? ctx.esc(S.dir.name) : '未选择'}</b><small>${S.dir ? `聊天记录 ${S.chat ? '✓' : '✗'} · 游戏日志 ${S.game ? '✓' : '✗'}` : `选 <code>${window.I18N?.lang === 'en' ? 'Documents' : '文档'}\\EVE\\logs</code>`}</small></span>
+        <span class="ka-ctl">${S.dir && S.perm !== 'granted' ? '<button class="btn btn-ghost btn-sm" data-in-resume>恢复监听</button>' : ''}<button class="btn btn-primary btn-sm" data-in-pick>${S.dir ? '重新选择' : '选择文件夹'}</button></span></div>
+      ${sw('on', '开启本地日志监听')}
+    </div>`)}
+    ${sec('敌情频道', `<div class="ka-list">
+      <div class="ka-opt ka-stack"><div class="intel-chans">${chans.length ? chans.map((c) => `<label class="ka-chip toggle${T.channels.includes(c) ? ' on' : ''}"><input type="checkbox" data-in-chan="${ctx.esc(c)}"${T.channels.includes(c) ? ' checked' : ''} hidden>${ctx.esc(c)}</label>`).join('')
+        : `<span class="ka-empty">${S.dir ? '最近 7 天没有聊天记录（游戏设置 → 聊天 → 勾选「记录聊天到文件」）' : '选择文件夹后列出最近 7 天用过的频道'}</span>`}</div></div>
+      <label class="ka-opt" title="敌情星系距离我的位置多少跳以内才提醒（0–20）"><span><b>预警范围</b></span><span class="ka-ctl"><input type="number" class="cr-input" min="0" max="20" step="1" value="${T.jumps}" data-in-num="jumps" aria-label="预警范围（跳）"> 跳</span></label>
+      ${sw('useLoc', '自动获取我的位置', `当前：${ctx.esc(here)}`, '绑定 ESI 时读角色位置，否则读本地频道日志里的星系切换记录')}
+      <label class="ka-opt" title="自动获取不到位置时使用"><span><b>手动设置位置</b></span><input type="text" class="cr-input intel-home" data-in-home="home" data-keep="home" value="${ctx.esc(T.home)}" placeholder="星系名" autocomplete="off" aria-label="手动位置"></label>
+      <label class="ka-opt" title="消息里有这些词（空格分隔）算星系已清空，星图标绿、不提醒"><span><b>报平安的字样</b></span><input type="text" class="cr-input intel-home" data-in-home="clearWords" data-keep="clear" value="${ctx.esc(T.clearWords)}" aria-label="报平安字样"></label>
+      <label class="ka-opt" title="星图上的红 / 绿标记多久后消失"><span><b>星图标记保留</b></span><select class="cr-input" data-in-num="expire">${[5, 10, 15, 30, 60].map((m) => `<option value="${m}"${T.expire === m ? ' selected' : ''}>${m} 分钟</option>`).join('')}</select></label>
+    </div>`)}
+    ${sec('提醒方式', `<div class="ka-list">
+      ${sw('sound', '提示音', '', '越近响得越急')}
+      ${sw('web', '网页卡片', '', '右上角弹出敌情卡片，点击在星图查看')}
+      ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
     </div>
-    <p class="ka-note">在弹出的窗口里选 <code>${window.I18N?.lang === 'en' ? 'Documents' : '文档'}\\EVE\\logs</code>（里面有 Chatlogs 和 Gamelogs 两个文件夹）。${S.dir ? `当前：<b>${ctx.esc(S.dir.name)}</b>（聊天记录 ${S.chat ? '✓' : '✗'} · 游戏日志 ${S.game ? '✓' : '✗'}）` : ''}</p>
-    ${sw('on', '开启本地日志监听', '关闭后不再读取任何文件')}
-    <p class="ka-status${status().on ? ' on' : ''}">${ctx.esc(status().text)}</p>
-    <h4 class="ka-h">敌情频道</h4>
-    <div class="intel-chans">${chans.length ? chans.map((c) => `<label class="ka-chip toggle${T.channels.includes(c) ? ' on' : ''}"><input type="checkbox" data-in-chan="${ctx.esc(c)}"${T.channels.includes(c) ? ' checked' : ''} hidden>${ctx.esc(c)}</label>`).join('')
-      : `<span class="text-muted">${S.dir ? '最近 7 天没有找到聊天记录（游戏设置 → 聊天 → 勾选「记录聊天到文件」）' : '选择日志文件夹后列出最近 7 天用过的频道'}</span>`}</div>
-    <label class="ka-opt ka-range"><span><b>预警范围</b><small>敌情星系距离我的位置多少跳以内才提醒（0–20）</small></span>
-      <input type="number" class="cr-input" min="0" max="20" step="1" value="${T.jumps}" data-in-num="jumps" aria-label="预警范围（跳）"> 跳</label>
-    ${sw('useLoc', '自动获取我的位置', '绑定 ESI 时读角色位置，否则读本地频道日志里的星系切换记录')}
-    <label class="ka-opt ka-range"><span><b>手动设置位置</b><small>自动获取不到时使用</small></span>
-      <input type="text" class="cr-input intel-home" data-in-home="home" data-keep="home" value="${ctx.esc(T.home)}" placeholder="星系名" autocomplete="off" aria-label="手动位置"></label>
-    <p class="ka-note">我的位置：${ctx.esc(here)}</p>
-    <label class="ka-opt ka-range"><span><b>报平安的字样</b><small>消息里有这些词（空格分隔）算星系已清空，星图标绿、不提醒</small></span>
-      <input type="text" class="cr-input intel-home" data-in-home="clearWords" data-keep="clear" value="${ctx.esc(T.clearWords)}" aria-label="报平安字样"></label>
-    <label class="ka-opt ka-range"><span><b>星图标记保留</b><small>星图上的红 / 绿标记多久后消失</small></span>
-      <select class="cr-input" data-in-num="expire">${[5, 10, 15, 30, 60].map((m) => `<option value="${m}"${T.expire === m ? ' selected' : ''}>${m} 分钟</option>`).join('')}</select></label>
-    ${sw('sound', '提示音', '越近响得越急')}
-    ${sw('web', '网页卡片', '右上角弹出敌情卡片，点击在星图查看')}
-    ${sw('notify', '系统通知', '浏览器在后台时也能看到（需要允许通知）')}
-    <h4 class="ka-h">频道关键词监控</h4>
-    ${sw('kwOn', '开启关键词提醒', '勾选的敌情频道里出现关键词就提醒；写成 /正则/ 也可以')}
-    ${sw('kwAll', '监控所有频道', '包括军团、舰队、私聊等全部频道（最近 2 天的聊天记录）')}
-    ${wordList('keywords', '关键词，例如 你的名字、cyno、/集合|ping/')}
-    <h4 class="ka-h">游戏日志监控</h4>
-    ${sw('gameOn', '开启游戏日志提醒', '战斗、通知等游戏日志里出现关键词就提醒')}
-    ${wordList('gameWords', '关键词，例如 warp scramble、跃迁扰断、被锁定')}
-    <div class="ka-actions"><button class="btn btn-ghost" data-in-test>测试提醒</button></div>
-    <h4 class="ka-h">最近消息</h4>
-    ${S.reports.length ? `<ul class="ka-history">${S.reports.map((r) => `<li${r.system ? ` data-in-sys="${r.system}"` : ''}>
+    <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-in-test>测试提醒</button></div>`)}
+    ${sec('频道关键词', `<div class="ka-list">
+      ${sw('kwOn', '开启关键词提醒', '', '勾选的敌情频道里出现关键词就提醒；写成 /正则/ 也可以')}
+      ${sw('kwAll', '监控所有频道', '', '包括军团、舰队、私聊等全部频道（最近 2 天的聊天记录）')}
+      ${wordList('keywords', '关键词，例如 你的名字、cyno、/集合|ping/')}
+    </div>`)}
+    ${sec('游戏日志', `<div class="ka-list">
+      ${sw('gameOn', '开启游戏日志提醒', '', '战斗、通知等游戏日志里出现关键词就提醒')}
+      ${wordList('gameWords', '关键词，例如 warp scramble、跃迁扰断、被锁定')}
+    </div>`)}
+    ${sec('最近消息', S.reports.length ? `<ul class="ka-history">${S.reports.map((r) => `<li${r.system ? ` data-in-sys="${r.system}"` : ''}>
       <span class="ka-badge${r.clear ? ' clear' : ''}">${r.type !== 'intel' ? (r.type === 'kw' ? '关键词' : '日志') : r.clear ? '平安' : r.jumps == null ? '敌情' : r.jumps + ' 跳'}</span>
-      <span>${r.system ? `<b>${ctx.esc(r.name)}</b> ` : ''}${ctx.esc((r.who ? r.who + '：' : '') + r.msg)}<small> · ${ctx.esc(r.channel)}</small></span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="text-muted">还没有消息</p>'}`;
+      <span>${r.system ? `<b>${ctx.esc(r.name)}</b> ` : ''}${ctx.esc((r.who ? r.who + '：' : '') + r.msg)}<small> · ${ctx.esc(r.channel)}</small></span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有消息</p>')}`;
 }
 
 export function openPanel() {

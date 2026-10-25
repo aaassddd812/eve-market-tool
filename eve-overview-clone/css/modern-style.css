@@ -4483,20 +4483,45 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .ka-bell { position: relative; }
 .ka-bell .ka-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); opacity: 0; }
 .ka-bell.on .ka-dot { opacity: 1; background: var(--success); box-shadow: 0 0 0 2px var(--bg-primary); }
-.ka-modal { max-width: 520px; }
-.ka-modal .modal-body { display: flex; flex-direction: column; gap: 8px; }
-.ka-opt { display: flex; align-items: flex-start; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg-tertiary); cursor: pointer; font-size: 0.8125rem; }
-.ka-opt input[type="checkbox"] { margin-top: 3px; }
-.ka-opt span { display: flex; flex-direction: column; flex: 1; }
-.ka-opt small { color: var(--text-muted); font-size: 0.75rem; }
-.ka-range { align-items: center; }
-.ka-range input { width: 64px; text-align: center; }
-.ka-status { font-size: 0.8125rem; color: var(--text-muted); padding: 6px 10px; border-left: 3px solid var(--border-primary); }
-.ka-status.on { color: var(--success); border-left-color: var(--success); }
-.ka-note { font-size: 0.75rem; color: var(--text-muted); }
-.ka-warn { font-size: 0.8125rem; color: var(--warning, #f59e0b); }
+.ka-modal { max-width: 560px; }
+.ka-modal .modal-body { display: flex; flex-direction: column; gap: 14px; }
+/* 分组：标题 + 一张圆角卡片，行之间细分隔线；名称在左、控件在右 */
+.ka-sec { display: flex; flex-direction: column; gap: 8px; }
+.ka-h { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 0 2px; font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); letter-spacing: 0.02em; }
+.ka-list { display: flex; flex-direction: column; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-secondary); overflow: hidden; }
+.ka-opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; padding: 8px 14px; cursor: pointer; font-size: 0.8125rem; }
+.ka-list > .ka-opt + .ka-opt { border-top: 1px solid var(--border-primary); }
+.ka-opt > span:first-child { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.ka-opt b { font-weight: 500; color: var(--text-primary); }
+.ka-opt small { color: var(--text-muted); font-size: 0.6875rem; overflow: hidden; text-overflow: ellipsis; }
+.ka-opt > .cr-input { width: auto; min-width: 110px; flex: none; }
+.ka-opt > .intel-home { width: 180px; }
+.ka-ctl { display: inline-flex; align-items: center; gap: 6px; flex: none; color: var(--text-muted); font-size: 0.8125rem; }
+.ka-ctl input[type="number"] { width: 60px; text-align: center; }
+.ka-stack { flex-direction: column; align-items: stretch; cursor: default; }
+.ka-stack > span:first-child { flex-direction: row; align-items: baseline; gap: 8px; }
+/* 开关 */
+.ka-switch { appearance: none; -webkit-appearance: none; flex: none; position: relative; width: 36px; height: 20px; margin: 0; border-radius: 999px; background: var(--border-secondary, #9ca3af); cursor: pointer; transition: background var(--transition-fast); }
+.ka-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3); transition: transform var(--transition-fast); }
+.ka-switch:checked { background: var(--accent-primary); }
+.ka-switch:checked::after { transform: translateX(16px); }
+.ka-switch:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: 2px; }
+/* 状态：圆点 + 文字 */
+.ka-top { display: flex; }
+.ka-status { display: inline-flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 999px; background: var(--bg-tertiary); font-size: 0.75rem; color: var(--text-muted); }
+.ka-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); flex: none; }
+.ka-status.on { color: var(--success); background: color-mix(in srgb, var(--success) 12%, transparent); }
+.ka-status.on i { background: var(--success); box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent); }
+.ka-note { margin: 0; font-size: 0.75rem; color: var(--text-muted); }
+.ka-warn { margin: 0; padding: 8px 12px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent); font-size: 0.75rem; color: var(--warning, #f59e0b); }
+.ka-empty { margin: 0; padding: 10px 2px; font-size: 0.75rem; color: var(--text-muted); }
 .ka-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.ka-h { font-size: 0.8125rem; margin-top: 6px; }
+.ka-modal .ka-sec .btn { height: 32px; padding: 0 12px; font-size: 0.8125rem; }
+.ka-actions .btn-ghost { border: 1px solid var(--border-primary); }
+@media (max-width: 480px) { .ka-opt { padding: 8px 12px; } .ka-opt > .intel-home { width: 140px; } .ka-opt > .cr-input { min-width: 96px; } }
+.ka-history li, .ka-watch li { padding: 6px 10px; border-radius: var(--radius-sm); }
+.ka-h small { font-weight: 400; color: var(--text-muted); letter-spacing: 0; }
+.intel-home { text-align: left; }
 .ka-history { list-style: none; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; font-size: 0.8125rem; }
 .ka-history li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 4px; background: var(--bg-tertiary); }
 .ka-history li[data-ka-open] { cursor: pointer; }
@@ -5549,17 +5574,13 @@ td .sov-auto-tag { margin-left: 4px; }
 .kb-heat-row span { color: var(--text-muted); }
 .kb-heat-row i { height: 14px; border-radius: 2px; background: var(--accent-primary); }
 .kb-heat-axis em { font-style: normal; color: var(--text-muted); text-align: left; }
-.ka-h small { font-weight: 400; color: var(--text-muted); }
 .ka-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .ka-chip { display: inline-flex; align-items: center; gap: 2px; padding: 2px 4px 2px 10px; border-radius: 999px; font-size: 0.75rem; background: var(--bg-tertiary); border: 1px solid var(--border-primary); color: var(--text-secondary); }
 .ka-chip.toggle { padding: 3px 10px; cursor: pointer; }
 .ka-chip.toggle.on { color: #fff; background: var(--accent-primary); border-color: var(--accent-primary); }
-.ka-classes { flex-direction: column; cursor: default; }
-.ka-range select { width: auto; min-width: 96px; }
 
 /* 本地日志 · 敌情预警（js/intel.js） */
 .intel-chans { display: flex; flex-wrap: wrap; gap: 6px; }
-.intel-home { width: 180px; text-align: left; }
 .ka-badge.clear { background: var(--success); }
 .intel-card { border-color: #ff8a3b; }
 .intel-cards { top: auto; bottom: 16px; }

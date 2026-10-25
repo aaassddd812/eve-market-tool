@@ -5123,7 +5123,7 @@ function initCartButton() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v2').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v3').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5153,7 +5153,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v5').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v6').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
