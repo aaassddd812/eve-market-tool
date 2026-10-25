@@ -10,7 +10,7 @@
 //   多个标签页都在监听时按消息去重，只发一次；收件人在「邮件」标签页设置，这里勾选发给谁；英文界面发英文邮件）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
 // 文件编码：聊天记录是 UTF-16 LE（带 BOM），游戏日志是 UTF-8；按 BOM 判断。文件名「频道名_YYYYMMDD_HHMMSS_角色ID.txt」。
 
-import * as AM from './alert-mail.js?v=v5';
+import * as AM from './alert-mail.js?v=v6';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem
 const KEY = 'eve-intel-v1';

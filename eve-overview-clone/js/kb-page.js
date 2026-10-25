@@ -1005,13 +1005,13 @@ function route() {
   else renderHome();
 }
 
-// ---------- 本地名单分析（local-scan.js，首次打开时加载）----------
+// ---------- 本地分析：频道成员名单 / 定向扫描（local-scan.js，首次打开时加载）----------
 async function renderLocalScan() {
-  const m = await import('./local-scan.js?v=v2');
+  const m = await import('./local-scan.js?v=v4');
   if (!location.hash.startsWith('#kb/local')) return;
   m.renderLocal($('kbMain'), {
     esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,
-    kb: true, loadTypes, typeName, systemName: (id) => kb.systemLabel(id).name
+    kb: true, loadTypes, typeName, systemName: (id) => kb.systemLabel(id).name, fetchESI: app.fetchESI, copyText: app.copyText
   });
 }
 

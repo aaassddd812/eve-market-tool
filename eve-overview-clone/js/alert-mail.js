@@ -185,14 +185,17 @@ function remove(id) {
   update({ book: M.book.filter((r) => r.id !== Number(id)), use: Object.fromEntries(SRC.map((s) => [s, M.use[s].filter((k) => k !== key)])) });
 }
 
+const isList = (r) => r.kind === 'mailing_list';
 // 击杀预警 / 本地日志标签页里「游戏内邮件」开关下面的一行：勾选这种预警发给谁，通讯录在「邮件」标签页管理
 export function pickerHtml(src) {
   const esc = ctx.esc;
   const use = M.use[src] || [];
   const chip = (key, label, sub = '') => `<button type="button" class="ka-chip toggle${use.includes(key) ? ' on' : ''}" data-am-use="${src}:${key}">${esc(label)}${sub ? `<small> · ${sub}</small>` : ''}</button>`;
+  const lists = M.book.filter(isList), people = M.book.filter((r) => !isList(r));
   return `<div class="ka-opt ka-stack"><span><b>收件人</b><small>${M.book.length ? '勾选这种预警发给谁' : '邮件列表、军团、联盟、其他角色在「邮件」里添加'}</small></span>
-    <div class="ka-chips">${chip('self', '自己')}${M.book.map((r) => chip(String(r.id), r.name, r.kind !== 'character' ? KIND_ZH[r.kind] : '')).join('')}
-      <button type="button" class="ka-chip toggle ka-chip-link" data-ac-goto="mail">管理收件人</button></div></div>`;
+    <div class="am-pick"><span class="am-pick-h">${L('人', 'People')}</span><div class="ka-chips">${chip('self', '自己')}${people.map((r) => chip(String(r.id), r.name, r.kind !== 'character' ? KIND_ZH[r.kind] : '')).join('')}</div></div>
+    ${lists.length ? `<div class="am-pick"><span class="am-pick-h">邮件列表</span><div class="ka-chips">${lists.map((r) => chip(String(r.id), r.name)).join('')}</div></div>` : ''}
+    <div class="ka-chips"><button type="button" class="ka-chip toggle ka-chip-link" data-ac-goto="mail">管理收件人</button></div></div>`;
 }
 // 收件人勾选的事件（每个面板容器绑一次）
 export function bindPicker(box) {
@@ -229,6 +232,7 @@ function drawPanel() {
   const ok = canMail();
   const state = !token ? '未绑定 ESI，不能发邮件' : ok ? `以 ${token.character_name || ''} 的名义发送` : '授权里没有发送邮件权限，请重新绑定 ESI';
   const labels = SRC.filter((s) => sources.has(s)).map((s) => [s, sources.get(s).label]);
+  const lists = M.book.filter(isList), people = M.book.filter((r) => !isList(r));
   const useBtn = (src, key, label) => `<button type="button" class="ka-chip toggle${(M.use[src] || []).includes(key) ? ' on' : ''}" data-am-use="${src}:${key}">${label}</button>`;
   const row = (key, name, sub, del) => `<div class="ka-opt am-row"><span><b>${esc(name)}</b>${sub ? `<small>${sub}</small>` : ''}</span>
     <span class="ka-chips">${labels.map(([s, l]) => useBtn(s, key, l)).join('')}</span>${del ? `<button class="ka-close" data-am-del="${key}" aria-label="移除" title="移除">×</button>` : '<span class="am-del-gap"></span>'}</div>`;
@@ -238,15 +242,19 @@ function drawPanel() {
     ${token ? '' : '<p class="ka-warn">游戏内邮件需要先在「个人中心」绑定 ESI</p>'}
     <section class="ka-sec"><h4 class="ka-h">哪些预警发邮件</h4><div class="ka-list">${labels.map(([s, l]) => sw(s, l)).join('')}</div>
       <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-am-test${token ? '' : ' disabled'}>发送测试邮件</button></div></section>
-    <section class="ka-sec"><h4 class="ka-h">收件人<small>每个收件人勾选接收哪种预警</small></h4><div class="ka-list">
+    <section class="ka-sec"><h4 class="ka-h">邮件列表<small>每个列表勾选接收哪种预警</small></h4><div class="ka-list">
+      ${lists.map((r) => row(String(r.id), r.name, '', true)).join('')}
+      <div class="ka-opt ka-stack">${S.lists?.length ? `<div class="ka-watch-add">
+        <select class="cr-input am-list-select" data-am-list aria-label="添加邮件列表"><option value="">添加你加入的邮件列表…</option>${S.lists.filter((l) => !M.book.some((b) => b.id === l.mailing_list_id)).map((l) => `<option value="${l.mailing_list_id}">${esc(l.name)}</option>`).join('')}</select></div>`
+        : `<small>${!token ? '绑定 ESI 后可添加你加入的邮件列表' : !ctx.hasScope(READ_MAIL_SCOPE) ? '读取你加入的邮件列表需要「读取邮件」授权，重新绑定 ESI 时勾选' : '你还没有加入邮件列表（游戏里建一个，队友加入后就能一起收到预警）'}</small>`}</div>
+    </div></section>
+    <section class="ka-sec"><h4 class="ka-h">角色 / 军团 / 联盟<small>每个收件人勾选接收哪种预警</small></h4><div class="ka-list">
       ${row('self', '自己', token ? esc(token.character_name || '') : '', false)}
-      ${M.book.map((r) => row(String(r.id), r.name, KIND_ZH[r.kind], true)).join('')}
+      ${people.map((r) => row(String(r.id), r.name, KIND_ZH[r.kind], true)).join('')}
       <div class="ka-opt ka-stack"><div class="ka-watch-add">
-        ${S.lists?.length ? `<select class="cr-input" data-am-list aria-label="邮件列表"><option value="">邮件列表…</option>${S.lists.map((l) => `<option value="${l.mailing_list_id}">${esc(l.name)}</option>`).join('')}</select>` : ''}
         <input type="text" class="cr-input" data-am-name placeholder="角色 / 军团 / 联盟全名或 ID" autocomplete="off" spellcheck="false" aria-label="收件人">
         <button class="btn btn-primary btn-sm" data-am-add${token ? '' : ' disabled'}>添加</button>
-      </div>
-      ${token && !ctx.hasScope(READ_MAIL_SCOPE) ? '<small>读取你加入的邮件列表需要「读取邮件」授权，重新绑定 ESI 时勾选</small>' : ''}</div>
+      </div></div>
     </div></section>
     <p class="ka-note">同一角色两封邮件至少隔 1 分钟，期间的提醒合并成一封；邮件语言跟随界面语言。发给军团 / 联盟要有游戏里的群发权限，对方开了 CSPA 收费会发送失败。</p>`;
 }

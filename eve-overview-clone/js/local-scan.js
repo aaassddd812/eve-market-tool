@@ -1,14 +1,17 @@
-// ===== 本地频道名单分析（击杀记录 → 本地分析，#kb/local）=====
-// 游戏里在本地频道（或任意频道）的成员列表里 Ctrl+A、Ctrl+C，粘贴进来：
+// ===== 本地分析（击杀记录 → 本地分析，#kb/local）：一个粘贴框，自动识别是频道成员名单还是定向扫描结果 =====
+// 频道成员名单：游戏里在本地频道（或任意频道）的成员列表里 Ctrl+A、Ctrl+C，粘贴进来：
 //   1. ESI /universe/ids/ 把名字换成角色 ID（每次最多 500 个），/characters/affiliation/ 查所属军团 / 联盟 / 势力（每次最多 1000 个）；
 //   2. 宁静服再查本站击杀记录服务 /api/v1/pilots（每次最多 200 名）：近 30 天击杀 / 损失、单挑、平均同伙人数、常用船、常去星系、最近活跃；
 //   3. 按联盟 / 军团统计人数，点一下可以隐藏（比如自己人），隐藏名单存在本浏览器。
 // 国服没有公开击杀数据，只显示所属势力分布。
+// 定向扫描结果：扫描窗口里 Ctrl+A、Ctrl+C，每行「类型 ID<Tab>名称<Tab>类型<Tab>距离」（旧客户端没有类型 ID，按类型名用 /universe/ids/ 查）。
+//   类型所属的分组（舰船类别）与大类用 ESI /universe/types/、/universe/groups/ 查，缓存在本浏览器（eve-dscan-types-v1）；
+//   统计舰船总数、1 万公里内、按舰船类别 / 型号的数量，标出旗舰、拦截、后勤、隐轰、侦察等需要注意的船，建筑、无人机与其他单列；可复制一行统计发到舰队频道。
 
-let D;   // esc, formatISK, formatNumber, resolveNames, resolveTypeNames, esiUrl, eveImage, kb, systemName, typeName
+let D;   // esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage, kb, loadTypes, systemName, typeName, fetchESI, copyText
 const IGNORE_KEY = 'eve-local-ignore-v1';
 const MAX = 1000;
-const S = { text: '', pilots: [], orgs: new Map(), status: '', sort: 'threat', ignore: new Set(), busy: false, at: null, box: null };
+const S = { text: '', mode: '', pilots: [], orgs: new Map(), scan: null, status: '', sort: 'threat', ignore: new Set(), busy: false, at: null, box: null };
 try { S.ignore = new Set(JSON.parse(localStorage.getItem(IGNORE_KEY) || '[]')); } catch { /* 忽略 */ }
 const saveIgnore = () => { try { localStorage.setItem(IGNORE_KEY, JSON.stringify([...S.ignore])); } catch { /* 忽略 */ } };
 
@@ -38,10 +41,12 @@ function setStatus(text) { S.status = text; const el = S.box?.querySelector('[da
 
 async function analyze(text) {
   if (S.busy) return;
+  if (isDscan(text)) { analyzeDscan(text); return; }
   const names = parseNames(text);
-  if (!names.length) { setStatus('没有识别到角色名：在游戏频道成员列表里 Ctrl+A、Ctrl+C 后粘贴'); return; }
+  if (!names.length) { setStatus('没有识别到内容：粘贴频道成员列表或定向扫描结果'); return; }
   S.busy = true;
   S.text = text;
+  S.mode = 'local';
   try {
     setStatus(`正在识别 ${names.length} 个名字…`);
     const chars = [];
@@ -81,6 +86,164 @@ async function analyze(text) {
     S.busy = false;
     S.box?.querySelector('[data-ls-run]')?.removeAttribute('disabled');
   }
+}
+
+
+// ---------- 定向扫描 ----------
+// 每行至少 3 列（Tab 分隔）且末列像距离（数字 + 单位，或「-」）的行占多数时算定向扫描结果
+const DIST_RE = /^(-|[\d.,\s ]+\s*(m|km|au|米|千米|公里|天文单位|км|м|а\.?е\.?))$/i;
+function scanRows(text) {
+  return String(text).split(/\r?\n/).map((l) => l.split('\t').map((c) => c.trim())).filter((c) => c.length >= 3);
+}
+function isDscan(text) {
+  const lines = String(text).split(/\r?\n/).filter((l) => l.trim());
+  const rows = scanRows(text).filter((c) => DIST_RE.test(c[c.length - 1]));
+  return rows.length > 0 && rows.length >= lines.length * 0.5;
+}
+// 距离换成公里（看不到距离时为 null）
+function distKm(s) {
+  const m = /([\d.,\s ]+)\s*(m|km|au|米|千米|公里|天文单位|км|м)/i.exec(s || '');
+  if (!m) return null;
+  const n = parseFloat(m[1].replace(/[\s ,]/g, ''));
+  if (!Number.isFinite(n)) return null;
+  const u = m[2].toLowerCase();
+  return u === 'au' || u === '天文单位' ? n * 1.496e8 : u === 'm' || u === '米' || u === 'м' ? n / 1000 : n;
+}
+
+// 类型 → 分组、分组 → 名称与大类：缓存在本浏览器（按界面语言）
+const TYPE_KEY = 'eve-dscan-types-v1';
+const LANG = window.I18N?.lang === 'en' ? 'en' : 'zh';
+let TC = null;
+function typeCache() {
+  if (!TC) {
+    try { TC = JSON.parse(localStorage.getItem(TYPE_KEY) || 'null'); } catch { TC = null; }
+    if (!TC || TC.lang !== LANG) TC = { lang: LANG, t: {}, g: {} };   // t: { 类型ID: 分组ID }，g: { 分组ID: [名称, 大类ID] }
+  }
+  return TC;
+}
+const saveTypeCache = () => { try { localStorage.setItem(TYPE_KEY, JSON.stringify(TC)); } catch { /* 忽略 */ } };
+async function pool(items, n, fn) {
+  const q = [...items];
+  await Promise.all(Array.from({ length: Math.min(n, q.length) }, async () => { while (q.length) await fn(q.shift()); }));
+}
+async function loadGroups(typeIds) {
+  const c = typeCache();
+  await pool(typeIds.filter((id) => !c.t[id]), 8, async (id) => {
+    try { c.t[id] = (await D.fetchESI(`/universe/types/${id}/?language=zh`)).group_id; } catch { /* 查不到算其他 */ }
+  });
+  const gids = [...new Set(typeIds.map((id) => c.t[id]).filter((g) => g && !c.g[g]))];
+  await pool(gids, 8, async (g) => {
+    try { const d = await D.fetchESI(`/universe/groups/${g}/?language=zh`); c.g[g] = [d.name, d.category_id]; } catch { /* 忽略 */ }
+  });
+  saveTypeCache();
+}
+
+// 大类：舰船 / 无人机与舰载机 / 建筑 / 可部署 / 其他（天体、残骸等）
+const KIND = { 6: 'ship', 18: 'drone', 87: 'drone', 65: 'structure', 23: 'structure', 40: 'structure', 46: 'structure', 3: 'structure', 22: 'deploy' };
+const KIND_ZH = { ship: '舰船', drone: '无人机 / 舰载机', structure: '建筑', deploy: '可部署', other: '天体与其他' };
+// 需要注意的舰船分组（游戏分组 ID）与可部署的拦截泡
+const WATCH = [
+  ['旗舰', 'cap', [30, 659, 547, 485, 1538, 4594, 883, 902], 'Capitals'],
+  ['拦截泡', 'bubble', [541, 894, 361], 'Bubbles'],
+  ['后勤', 'logi', [832, 1527], 'Logistics'],
+  ['隐轰', 'bomber', [834], 'Bombers'],
+  ['侦察', 'recon', [833, 906], 'Recons'],
+  ['黑隐', 'blops', [898], 'Black Ops']
+];
+
+async function analyzeDscan(text) {
+  S.busy = true;
+  S.text = text;
+  S.mode = 'dscan';
+  try {
+    const rows = scanRows(text).filter((c) => DIST_RE.test(c[c.length - 1]));
+    let items = rows.map((c) => (/^\d+$/.test(c[0]) && c.length >= 4
+      ? { typeId: Number(c[0]), name: c[1], typeName: c[2], dist: distKm(c[3]) }
+      : { typeId: 0, name: c[0], typeName: c[1], dist: distKm(c[2]) }));
+    // 旧客户端没有类型 ID：按类型名查
+    const noId = [...new Set(items.filter((x) => !x.typeId).map((x) => x.typeName))];
+    if (noId.length) {
+      setStatus(`正在识别 ${noId.length} 种类型…`);
+      const byName = new Map();
+      for (let i = 0; i < noId.length; i += 500) {
+        const d = await postJson('/universe/ids/', noId.slice(i, i + 500));
+        for (const t of d.inventory_types || []) byName.set(t.name.toLowerCase(), t.id);
+      }
+      items = items.map((x) => (x.typeId ? x : { ...x, typeId: byName.get(x.typeName.toLowerCase()) || 0 }));
+    }
+    const ids = [...new Set(items.map((x) => x.typeId).filter(Boolean))];
+    setStatus(`正在查 ${ids.length} 种类型的分组…`);
+    await Promise.all([loadGroups(ids), D.loadTypes(ids).catch(() => {})]);
+    const c = typeCache();
+    for (const x of items) {
+      const g = c.t[x.typeId];
+      x.group = g || 0;
+      x.groupName = (g && c.g[g]?.[0]) || '';
+      x.kind = KIND[g && c.g[g]?.[1]] || 'other';
+    }
+    S.scan = { items, at: new Date() };
+    setStatus('');
+  } catch (e) {
+    setStatus('分析失败：' + e.message);
+  } finally {
+    S.busy = false;
+    draw();
+  }
+}
+
+const scanTypeName = (x) => { const n = x.typeId ? D.typeName(x.typeId) : ''; return n && !/^Type \d+$/.test(n) ? n : x.typeName; };
+function countBy(list, key) {
+  const m = new Map();
+  for (const x of list) {
+    const k = key(x);
+    const g = m.get(k) || { key: k, n: 0, first: x };
+    g.n++;
+    m.set(k, g);
+  }
+  return [...m.values()].sort((a, b) => b.n - a.n);
+}
+const NEAR_KM = 10000;
+function scanStats() {
+  const items = S.scan.items;
+  const ships = items.filter((x) => x.kind === 'ship');
+  const classes = countBy(ships, (x) => x.groupName || x.typeName);
+  const types = countBy(ships, (x) => x.typeId || x.typeName);
+  const watch = WATCH.map(([label, cls, gs, en]) => ({ label, en, cls, n: items.filter((x) => gs.includes(x.group)).length })).filter((w) => w.n);
+  const others = countBy(items.filter((x) => x.kind !== 'ship'), (x) => x.typeId || x.typeName);
+  const byKind = Object.fromEntries(Object.keys(KIND_ZH).map((k) => [k, items.filter((x) => x.kind === k).length]));
+  return { ships, classes, types, watch, others, byKind, near: ships.filter((x) => x.dist != null && x.dist <= NEAR_KM).length };
+}
+// 发到舰队频道的一行统计（英文界面写英文，舰船类别名本来就是界面语言）
+function scanSummaryText(st) {
+  const en = LANG === 'en';
+  const classes = st.classes.slice(0, 8).map((g) => `${g.key} ${g.n}`).join(en ? ', ' : '、');
+  if (en) return `D-scan: ${st.ships.length} ships${st.watch.length ? ' (' + st.watch.map((w) => `${w.en} ${w.n}`).join(', ') + ')' : ''}${classes ? ': ' + classes : ''}`;
+  return `定向扫描：${st.ships.length} 艘舰船${st.watch.length ? '（' + st.watch.map((w) => `${w.label} ${w.n}`).join('、') + '）' : ''}${classes ? '：' + classes : ''}`;
+}
+function barList(list, label, icon) {
+  const max = list[0]?.n || 1;
+  return `<ul class="ls-groups">${list.map((g) => `<li>${icon ? icon(g) : ''}<span class="ls-gname">${esc(label(g))}</span>
+    <span class="ls-bar"><em style="width:${(g.n / max) * 100}%"></em></span><b>${g.n}</b></li>`).join('')}</ul>`;
+}
+const typeIcon = (g) => (g.first.typeId ? `<img src="https://images.evetech.net/types/${g.first.typeId}/icon?size=32" alt="" width="20" height="20" loading="lazy">` : '<i></i>');
+function scanHtml() {
+  const st = scanStats();
+  return `
+    <section class="kb-section">
+      <div class="ls-summary">
+        <div><b>${st.ships.length}</b><small>艘舰船</small></div>
+        <div><b>${st.near}</b><small>1 万公里内</small></div>
+        <div><b>${st.types.length}</b><small>种舰船</small></div>
+        <div><b>${st.byKind.drone}</b><small>无人机 / 舰载机</small></div>
+        <div><b>${st.byKind.structure + st.byKind.deploy}</b><small>建筑与可部署</small></div>
+      </div>
+      ${st.watch.length ? `<div class="ds-watch"><span class="text-muted">注意</span>${st.watch.map((w) => `<span class="ds-tag ${w.cls}">${w.label} <b>${w.n}</b></span>`).join('')}</div>` : ''}
+      <div class="ls-actions ds-copy"><button class="btn btn-ghost btn-sm" data-ls-copy>复制统计</button><span class="text-muted notranslate">${esc(scanSummaryText(st))}</span></div>
+      ${st.ships.length ? `<div class="ls-cols"><div><h3 class="ls-h">按舰船类别</h3>${barList(st.classes, (g) => g.key)}</div>
+        <div><h3 class="ls-h">按舰船型号</h3>${barList(st.types, (g) => scanTypeName(g.first), typeIcon)}</div></div>` : '<p class="text-muted">扫描结果里没有舰船</p>'}
+    </section>
+    ${st.others.length ? `<section class="kb-section"><h3 class="ls-h">建筑、无人机与其他</h3>
+      ${barList(st.others, (g) => `${scanTypeName(g.first)} · ${KIND_ZH[g.first.kind]}`, typeIcon)}</section>` : ''}`;
 }
 
 // 威胁程度：近 30 天击杀数、单挑数、击杀 / (击杀 + 损失)
@@ -167,14 +330,16 @@ function draw() {
   }).join('');
   box.innerHTML = `
     <section class="kb-section ls-input">
-      <div class="kb-section-head"><h2>本地名单分析</h2><span class="text-muted">游戏里在频道成员列表 Ctrl+A、Ctrl+C，粘贴到下面（最多 ${MAX} 人）</span></div>
-      <textarea class="cr-input" rows="6" data-ls-text placeholder="一行一个角色名" spellcheck="false">${esc(keep)}</textarea>
+      <div class="kb-section-head"><h2>本地分析</h2><span class="text-muted">粘贴频道成员列表（Ctrl+A、Ctrl+C，最多 ${MAX} 人）查人，或粘贴定向扫描结果看舰队组成，自动识别</span></div>
+      <textarea class="cr-input" rows="6" data-ls-text placeholder="${LANG === 'en' ? 'Channel member list: one pilot name per line&#10;D-scan: select all in the scan window and copy' : '频道成员列表：一行一个角色名&#10;定向扫描：扫描窗口里全选复制'}" spellcheck="false">${esc(keep)}</textarea>
       <div class="ls-actions"><button class="btn btn-primary" data-ls-run${S.busy ? ' disabled' : ''}>分析</button>
         ${S.ignore.size ? `<button class="btn btn-ghost" data-ls-unignore>显示全部（已隐藏 ${S.ignore.size} 个军团 / 联盟）</button>` : ''}
+        ${S.mode ? `<span class="ds-mode">${S.mode === 'dscan' ? '定向扫描' : '频道成员名单'}</span>` : ''}
         <span class="text-muted" data-ls-status>${esc(S.status)}</span></div>
-      ${D.kb ? '' : '<p class="ka-note">当前服务器没有公开的击杀数据，只统计所属军团 / 联盟。</p>'}
+      ${D.kb || S.mode === 'dscan' ? '' : '<p class="ka-note">当前服务器没有公开的击杀数据，名单只统计所属军团 / 联盟。</p>'}
     </section>
-    ${S.pilots.length ? `
+    ${S.mode === 'dscan' && S.scan ? scanHtml() : ''}
+    ${S.mode === 'local' && S.pilots.length ? `
     <section class="kb-section">
       <div class="ls-summary">
         <div><b>${S.pilots.length}</b><small>名角色${shown.length < S.pilots.length ? `（显示 ${shown.length}）` : ''}</small></div>
@@ -206,7 +371,8 @@ export function renderLocal(box, deps) {
     if (sort) { S.sort = sort.dataset.lsSort; draw(); return; }
     const ig = e.target.closest('[data-ls-ignore]');
     if (ig) { const id = Number(ig.dataset.lsIgnore); if (S.ignore.has(id)) S.ignore.delete(id); else S.ignore.add(id); saveIgnore(); draw(); return; }
-    if (e.target.closest('[data-ls-unignore]')) { S.ignore.clear(); saveIgnore(); draw(); }
+    if (e.target.closest('[data-ls-unignore]')) { S.ignore.clear(); saveIgnore(); draw(); return; }
+    if (e.target.closest('[data-ls-copy]') && S.scan) D.copyText(scanSummaryText(scanStats()));
   });
   box.addEventListener('paste', (e) => {
     if (!e.target.matches('[data-ls-text]')) return;

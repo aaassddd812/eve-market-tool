@@ -17,7 +17,7 @@
 // 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
 
 import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s4';
-import * as AM from './alert-mail.js?v=v5';
+import * as AM from './alert-mail.js?v=v6';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');

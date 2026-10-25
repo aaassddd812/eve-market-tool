@@ -19,7 +19,7 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=32"></script>
+  <script src="js/i18n.js?v=35"></script>
   <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
   <script type="importmap">
     {
@@ -29,7 +29,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v118">
+  <link rel="stylesheet" href="css/modern-style.css?v=v120">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -576,7 +576,7 @@
               <button class="btn btn-ghost kb-br-entry" data-kb-br title="按星系与时间段统计双方阵营">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3v18h18"/><rect x="7" y="10" width="3" height="7"/><rect x="14" y="6" width="3" height="11"/></svg><span>战场统计</span>
               </button>
-              <button class="btn btn-ghost kb-br-entry" data-kb-local title="粘贴本地频道成员列表，统计势力分布与每个人的击杀记录">
+              <button class="btn btn-ghost kb-br-entry" data-kb-local title="粘贴频道成员列表查人（势力分布与击杀记录），或粘贴定向扫描结果看舰队组成">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span>本地分析</span>
               </button>
               <p class="kb-status" id="kbStatus"></p>
@@ -1025,6 +1025,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v161" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v164" type="module" data-cfasync="false"></script>
 </body>
 </html>
