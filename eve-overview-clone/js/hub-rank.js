@@ -15,6 +15,8 @@
 //   建议数量 = 日均成交 × 份额 × 计划天数（不超过进货地的卖单深度 / 挂收单按进货地日均成交 × 份额）；按每天利润排行。
 //   标签：无卖单（目标市场卖空了，卖价按 30 天成交均价估）、库存少（卖单不够卖 2 天）、成交上涨（7 天日均 ≥ 30 天 × 1.3）、
 //   卖价偏高（最低卖价 ≥ 30 天均价 × 1.15）。「24 小时」是最近一个完整交易日（UTC），ESI 与 EVE Ref 只有按天的统计。
+//   目标市场用搜索框选：交易中心、可读的玩家建筑（选未勾选的会自动勾选）、自定义市场，也可以搜星域直接加为自定义市场。
+//   建筑 / 自定义市场的成交量借用同星域交易中心（整个星域的统计），库存天数用该市场自己的卖单；星域里没有交易中心时算不了。
 // 分类：打开倒卖排行时市场中心侧栏的物品目录换成分类列表（#arbSide），显示每个分类符合条件的物品数。
 import { calcRoutes, ROUTE_SORT, MODES, setHubMode, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v7';
 
@@ -33,7 +35,7 @@ const F = { target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxSto
 const CUSTOM_MAX = 3;
 const CUSTOM_TTL = 10 * 60e3;
 const customCache = new Map();   // 市场 ID -> { at, quotes }
-const S = { data: null, loading: null, error: null, q: '', timer: 0, rows: null, key: '', vols: {}, sm: [], smKey: '', smNote: '', cm: [], cmKey: '', cmNote: '', showCustom: false };
+const S = { data: null, loading: null, error: null, q: '', timer: 0, rows: null, key: '', vols: {}, sm: [], smKey: '', smNote: '', cm: [], cmKey: '', cmNote: '', showCustom: false, tq: '', tOpen: false };
 try { Object.assign(F, JSON.parse(localStorage.getItem('eve-hub-rank') || '{}')); } catch { /* 用默认 */ }
 if (!Array.isArray(F.excl)) F.excl = [];
 if (!Array.isArray(F.custom)) F.custom = [];
@@ -197,15 +199,31 @@ function compute() {
 }
 
 // 按销量选品：目标交易中心的需求指标 + 最好的进货路线
-const targetHub = () => (S.data.hubs.includes(F.target) ? F.target : S.data.hubs[0]);
+const hubLabel = (id) => String(ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id);
+function targetList() {
+  return [...S.data.hubs.map((id) => ({ id, name: hubLabel(id), kind: 'hub', region: id })),
+    ...S.sm.map(({ s }) => ({ id: s.id, name: s.label, kind: 'struct', region: s.region })),
+    ...S.cm.map(({ s }) => ({ id: s.id, name: s.label, kind: 'custom', region: s.region }))];
+}
+// 选中的建筑 / 自定义市场还在读挂单时返回 pending，不要先拿别的市场顶上
+function targetOf() {
+  const list = targetList();
+  const t = list.find((x) => x.id === F.target);
+  if (t) return t;
+  const c = F.target < 0 && F.custom.find((x) => customId(x) === F.target);
+  if (c) return { id: F.target, name: c.sysName ? `${c.sysName}（${c.name}）` : c.name, pending: true };
+  const st = F.target > 0 && (ctx.structs?.readable?.() || []).find((x) => x.id === F.target && x.on);
+  if (st) return { id: F.target, name: st.name, pending: true };
+  return list[0];
+}
 function computeDemand() {
   const key = JSON.stringify(['demand', { ...F, cat: 0 }, ctx.TF.summary(), S.data?.updated, freight(), S.smKey, S.cmKey]);
   if (S.rows && S.key === key) return S.rows;
   const f = ctx.TF.fees();
   const names = S.data.hubs.map((id) => ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id);
   const fr = freight();
-  const target = targetHub();
-  const ti = S.data.hubs.indexOf(target);
+  const T = targetOf();
+  const ti = T.pending ? -1 : S.data.hubs.indexOf(T.region);   // 成交量来自目标所在星域的交易中心
   const share = Math.max(0.1, Number(F.share) || 10) / 100, days = Math.max(1, Number(F.days) || 3);
   const losses = S.data.losses7 || {};
   const excl = new Set(F.excl);
@@ -221,11 +239,14 @@ function computeDemand() {
     if (!daily || !avg) continue;
     const turnover = daily * avg;
     const trend = d30 && d7 != null ? d7 / d30 : null;
-    const stock = h[2] / daily;
-    // 日成交额、库存天数、只看成交上涨是范围，始终生效
-    if (turnover < F.minTurn || (F.maxStock && stock > F.maxStock) || (F.rising && !(trend >= RISING))) continue;
+    if (turnover < F.minTurn || (F.rising && !(trend >= RISING))) continue;
     const hubs = hubsOf(row, names, id);
-    const tgt = hubs.find((x) => x.id === target);
+    let tgt = hubs.find((x) => x.id === T.id);
+    // 建筑 / 自定义市场里没有这个物品的挂单：当作卖空了
+    if (!tgt) { tgt = { id: T.id, name: T.name, struct: true, sell: null, buy: null, sellQty: 0, sellDepth: 0, buyDepth: 0, daily: d30, avg }; hubs.push(tgt); }
+    const stock = (tgt.sellQty || 0) / daily;
+    // 日成交额、库存天数、只看成交上涨是范围，始终生效
+    if (F.maxStock && stock > F.maxStock) continue;
     const soldOut = tgt.sell == null;
     const b = soldOut ? { ...tgt, sell: avg } : tgt;
     const list = hubs.map((x) => (x === tgt ? b : x));
@@ -255,12 +276,13 @@ function computeDemand() {
 
 function demandControls() {
   const { esc } = ctx;
-  const hubName = (id) => ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id;
+  const T = targetOf();
   const sorts = [['day', '每天利润'], ['turn', '日成交额'], ['trend', '趋势'], ['stock', '库存最少'], ...(S.data.losses7 ? [['loss', '被击毁数']] : [])];
   return `<div class="ind-rank-row">
         <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input type="search" data-hr-q placeholder="筛选物品" value="${esc(S.q)}" spellcheck="false" aria-label="筛选物品"></div>
-        <div class="pi-inline"><span>目标市场</span><select class="pi-input" data-hr-sel="target">${S.data.hubs.map((id) => `<option value="${id}"${id === targetHub() ? ' selected' : ''}>${esc(String(hubName(id)))}</option>`).join('')}</select></div>
+        <div class="pi-inline"><span>目标市场</span><div class="hr-target"><input type="search" class="pi-input" data-hr-tq value="${esc(S.tOpen ? S.tq : tr(T.name))}" placeholder="${esc(tr(T.name))}" spellcheck="false" autocomplete="off" aria-label="目标市场：搜索交易中心、玩家建筑或星域" title="搜索交易中心、玩家建筑或星域">
+          <div class="kb-suggest hr-target-pop" data-hr-tpop${S.tOpen ? '' : ' hidden'}>${S.tOpen ? targetPopup() : ''}</div></div></div>
         <div class="pi-inline" title="按哪段时间的日均成交量算。24 小时是最近一个完整交易日（UTC），ESI 只有按天的统计"><span>成交量</span>${seg('win', [[1, '24 小时'], [7, '近 7 天'], [30, '近 30 天']])}</div>
         <label class="pi-inline" title="你能拿下目标市场日成交量的多少"><span>份额</span><input type="number" class="pi-input pi-tax" min="1" max="100" step="1" value="${esc(String(F.share))}" data-hr-num="share"><span>%</span></label>
         <label class="pi-inline" title="一次进货打算卖几天"><span>计划卖</span><input type="number" class="pi-input pi-tax" min="1" max="30" step="1" value="${esc(String(F.days))}" data-hr-num="days"><span>天</span></label>
@@ -277,6 +299,55 @@ function demandControls() {
       ${S.showExcl && F.excl.length ? `<div class="ind-rank-row hr-excl"><span class="text-muted">已排除：</span>${F.excl.map((id) => `<span class="ka-chip">${esc(ctx.typeName(id))}<button type="button" class="ka-close" data-hr-unhide="${id}" title="恢复" aria-label="恢复">×</button></span>`).join('')}
         <button type="button" class="link-btn" data-hr-unhide-all>全部恢复</button></div>` : ''}
       <div class="ind-rank-row"><div class="pi-inline"><span>排序</span>${seg('dsort', sorts)}</div></div>`;
+}
+
+// 目标市场搜索的候选（英文界面下中英文名都能搜）
+const tr = (s) => window.I18N?.t?.(String(s)) ?? String(s);
+function targetPopup() {
+  const { esc } = ctx;
+  const k = S.tq.trim().toLowerCase();
+  const hit = (n) => !k || String(n).toLowerCase().includes(k) || tr(n).toLowerCase().includes(k);
+  const cur = targetList();
+  const T = targetOf();
+  const groups = [];
+  const add = (title, items) => { if (items.length) groups.push([title, items]); };
+  add('交易中心', cur.filter((t) => t.kind === 'hub' && hit(t.name)));
+  add('玩家建筑', (ctx.structs?.readable?.() || []).filter((s) => hit(s.name)).slice(0, 30).map((s) => ({ ...s, sub: s.on ? '' : '未启用，选中后启用' })));
+  add('自定义市场', cur.filter((t) => t.kind === 'custom' && hit(t.name)));
+  if (k && S.regionNames) {
+    const regs = S.regionNames.filter((r) => hit(r.name) && !F.custom.some((c) => c.region === r.id && !c.system)).slice(0, 8);
+    add('星域（加为自定义市场）', regs.map((r) => ({ region: r.id, name: r.name, sub: F.custom.length >= CUSTOM_MAX ? `自定义市场已满 ${CUSTOM_MAX} 个` : S.data.hubs.includes(r.id) ? '' : '没有成交量数据' })));
+  }
+  const html = groups.map(([title, items]) => `<div class="kb-suggest-group">${title}</div>${items.map((o) => `<button type="button" class="kb-suggest-item${o.id === T.id ? ' active' : ''}" ${o.region && !o.kind ? `data-hr-tregion="${o.region}"` : `data-hr-target="${o.id}"`}><span>${esc(String(o.name))}</span>${o.sub ? `<small>${esc(o.sub)}</small>` : ''}</button>`).join('')}`).join('');
+  return (html || '<div class="kb-suggest-group">没有匹配的市场</div>')
+    + (ctx.structs ? '<button type="button" class="kb-suggest-item hr-target-more" data-hr-structs><span>管理玩家建筑市场…</span></button>' : '');
+}
+function fillTargetPop(box) {
+  const pop = box.querySelector('[data-hr-tpop]');
+  if (!pop) return;
+  pop.hidden = !S.tOpen;
+  pop.innerHTML = S.tOpen ? targetPopup() : '';
+}
+function closeTarget(box) {
+  if (!S.tOpen) return;
+  S.tOpen = false; S.tq = '';
+  const inp = box.querySelector('[data-hr-tq]');
+  if (inp) inp.value = tr(targetOf().name);
+  fillTargetPop(box);
+}
+function pickTarget(box, id) {
+  if (id > 0 && !S.data.hubs.includes(id)) ctx.structs?.enable?.(id);   // 未勾选的建筑：勾选后会自动读挂单
+  F.target = id;
+  S.tOpen = false; S.tq = '';
+  save(); render(box);
+}
+function pickTargetRegion(box, region) {
+  if (F.custom.length >= CUSTOM_MAX) { ctx.showToast(`自定义市场最多 ${CUSTOM_MAX} 个，先在「自定义市场」里移除一个`, 'error'); return; }
+  const r = S.regionNames.find((x) => x.id === region);
+  const c = { region, name: r?.name || String(region), system: 0, sysName: '' };
+  F.custom = [...F.custom, c];
+  pickTarget(box, customId(c));
+  loadCustom(box);
 }
 
 function demandRow(x, i) {
@@ -381,16 +452,22 @@ function html(all0) {
         <div class="pi-inline"><span>排序</span>${seg('sort', [['profit', '预计利润'], ['margin', '利润率'], ['unit', '每件利润'], ['m3', '每立方利润']])}</div>
       </div>`}
       <div class="ind-rank-row">${freightHtml('hr')}</div>
-      <p class="pi-note" title="${D ? `目标市场的成交量是整个星域的统计（含周边玩家建筑）；建议数量 = 日均成交 × 份额 × 计划天数，不超过进货地卖单深度（挂收单按进货地日均成交 × 份额）。挂单价偏离 30 天成交均价太多的不算。` : ''}"${D ? '' : '可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。'}">
+      <p class="pi-note" title="${D ? `目标市场的成交量是整个星域的统计（含周边玩家建筑；玩家建筑 / 自定义市场借用同星域交易中心的数据），库存天数用目标市场自己的卖单；建议数量 = 日均成交 × 份额 × 计划天数，不超过进货地卖单深度（挂收单按进货地日均成交 × 份额）。挂单价偏离 30 天成交均价太多的不算。` : ''}"${D ? '' : '可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。'}">
         ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${list.length > LIMIT ? `，显示前 ${LIMIT}` : ''} · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${esc(S.smNote)}</span>` : ''}${S.cmNote ? ` · <span data-hr-cmnote>${esc(S.cmNote)}</span>` : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table hr-table"><thead><tr>
       ${D ? `<th class="pi-hide-sm">#</th><th>物品</th><th>进货</th><th class="num">每天利润</th><th class="num">每件利润</th><th class="num">建议数量</th><th class="num" title="日均成交量 × 成交均价">日成交额</th><th class="num pi-hide-sm" title="近 7 天日均成交比 30 天">趋势</th><th class="num pi-hide-sm" title="目标市场卖单库存够卖几天">库存天数</th>${S.data.losses7 ? '<th class="num pi-hide-sm" title="本站击杀库近 7 天被击毁的数量（舰船与部署物）">近 7 天被击毁</th>' : ''}`
     : '<th class="pi-hide-sm">#</th><th>物品</th><th>路线</th><th class="num pi-hide-sm">买入价</th><th class="num pi-hide-sm">卖出价</th><th class="num">每件利润</th><th class="num">利润率</th><th class="num pi-hide-sm">每立方</th><th class="num">可做数量</th><th class="num pi-hide-sm">投入</th><th class="num">预计利润</th>'}
-    </tr></thead><tbody>${rows || `<tr><td colspan="11" class="text-muted">${noVol || (D && !hasVol()) ? '成交量还在读取中，挂单方式暂时算不出可做数量' : D ? '没有符合条件的物品' : '没有符合条件的路线'}</td></tr>`}</tbody></table></div></div>
+    </tr></thead><tbody>${rows || `<tr><td colspan="11" class="text-muted">${noVol || (D && !hasVol()) ? '成交量还在读取中，挂单方式暂时算不出可做数量' : D ? demandEmpty() : '没有符合条件的路线'}</td></tr>`}</tbody></table></div></div>
   </div>`;
 }
 
+function demandEmpty() {
+  const T = targetOf();
+  if (T.pending) return `正在读取 ${ctx.esc(T.name)} 的挂单…`;
+  if (!S.data.hubs.includes(T.region)) return `${ctx.esc(T.name)} 所在星域没有交易中心，没有成交量数据，按销量选品算不了`;
+  return '没有符合条件的物品';
+}
 const hasVol = () => Object.values(S.data.types).some((r) => r.some((h) => h && h[6] != null));
 
 function catNameOf(id) {
@@ -428,12 +505,14 @@ function render(box) {
   }
   if (window.__imeComposing && box.contains(document.activeElement)) { setTimeout(() => render(box), 500); return; }   // 正在用输入法打字：先不重画，免得打断组字
   const focus = document.activeElement?.matches?.('[data-hr-q]') ? document.activeElement.selectionStart : null;
+  const tFocus = document.activeElement?.matches?.('[data-hr-tq]') ? document.activeElement.selectionStart : null;
   const typed = ['[data-hr-cregion]', '[data-hr-csystem]'].map((sel) => box.querySelector(sel)?.value || '');
   const all = compute();
   box.innerHTML = html(all);
   renderSide(all);
   ['[data-hr-cregion]', '[data-hr-csystem]'].forEach((sel, i) => { const el = box.querySelector(sel); if (el && typed[i]) el.value = typed[i]; });
   if (focus != null) { const inp = box.querySelector('[data-hr-q]'); inp.focus(); inp.setSelectionRange(focus, focus); }
+  if (tFocus != null && S.tOpen) { const inp = box.querySelector('[data-hr-tq]'); if (inp) { inp.focus(); inp.setSelectionRange(tFocus, tFocus); } }
   if (S.data.progress) poll(box);
 }
 
@@ -503,7 +582,26 @@ function pickCat(id) {
 
 function bind(box) {
   box.dataset.bound = '1';
+  // 目标市场搜索：点外面或按 Esc 收起；候选按钮用 mousedown 防止输入框先失焦
+  document.addEventListener('click', (e) => { if (S.tOpen && !e.target.closest('.hr-target')) closeTarget(box); });
+  box.addEventListener('mousedown', (e) => { if (e.target.closest('[data-hr-tpop]')) e.preventDefault(); });
+  box.addEventListener('focusin', (e) => {
+    if (!e.target.matches('[data-hr-tq]') || S.tOpen) return;
+    S.tOpen = true; S.tq = '';
+    e.target.value = '';
+    fillTargetPop(box);
+    if (!S.regionNames) ctx.regionList().then((l) => { S.regionNames = l; if (S.tOpen) fillTargetPop(box); }).catch(() => {});
+  });
+  box.addEventListener('keydown', (e) => {
+    if (!e.target.matches('[data-hr-tq]')) return;
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeTarget(box); e.target.blur(); }
+    if (e.key === 'Enter') { e.preventDefault(); box.querySelector('[data-hr-tpop] [data-hr-target],[data-hr-tpop] [data-hr-tregion]')?.click(); }
+  });
   box.addEventListener('click', (e) => {
+    const tg = e.target.closest('[data-hr-target]');
+    if (tg) { pickTarget(box, Number(tg.dataset.hrTarget)); return; }
+    const tr = e.target.closest('[data-hr-tregion]');
+    if (tr) { pickTargetRegion(box, Number(tr.dataset.hrTregion)); return; }
     const cat = e.target.closest('[data-hr-cat]');
     if (cat) { pickCat(Number(cat.dataset.hrCat)); return; }
     if (e.target.closest('[data-hr-side]')) { ctx.openSide?.(); return; }
@@ -516,7 +614,7 @@ function bind(box) {
       save(); render(box); return;
     }
     if (e.target.closest('[data-hr-fees]')) { ctx.TF.openFeeDialog(); return; }
-    if (e.target.closest('[data-hr-structs]')) { ctx.structs.open(); return; }
+    if (e.target.closest('[data-hr-structs]')) { closeTarget(box); ctx.structs.open(); return; }
     if (e.target.closest('[data-hr-reload]')) { load(true).then(() => render(box)); return; }
     const hide = e.target.closest('[data-hr-hide]');
     if (hide) { F.excl = [...new Set([...F.excl, Number(hide.dataset.hrHide)])]; save(); render(box); return; }
@@ -537,6 +635,7 @@ function bind(box) {
       F.custom = F.custom.filter((c) => customId(c) !== id);
       if (F.from === id) F.from = 0;
       if (F.to === id) F.to = 0;
+      if (F.target === id) F.target = 0;
       save();
       loadCustom(box).then(() => render(box));
       return;
@@ -560,6 +659,7 @@ function bind(box) {
   });
   let t = 0;
   box.addEventListener('input', (e) => {
+    if (e.target.matches('[data-hr-tq]')) { S.tOpen = true; S.tq = e.target.value; fillTargetPop(box); return; }
     if (!e.target.matches('[data-hr-q]')) return;
     S.q = e.target.value;
     clearTimeout(t);

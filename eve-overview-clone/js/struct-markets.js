@@ -53,6 +53,13 @@ export async function enabledStructs() {
   const regions = await ctx.systemRegions().catch(() => new Map());
   return list.map((s) => ({ ...s, region: regions.get(s.system) || 0, label: shortName(s.name, s.id) }));
 }
+// 可读的建筑（含未勾选），倒卖排行的目标市场搜索用
+export function readableStructs() { return hasStructScope() ? state().list.filter((s) => s.status === 'ok').map((s) => ({ id: s.id, name: shortName(s.name, s.id), on: Boolean(s.on) })) : []; }
+export function enableStruct(id) {
+  const item = state().list.find((s) => s.id === id && s.status === 'ok');
+  if (item && !item.on) { item.on = true; save(); emit(); }
+  return Boolean(item);
+}
 export function enabledCount() { return hasStructScope() ? state().list.filter((s) => s.on && s.status === 'ok').length : 0; }
 
 // 「Jita - 名字」：表格里放得下的短名

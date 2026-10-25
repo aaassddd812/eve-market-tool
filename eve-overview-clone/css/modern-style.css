@@ -5582,6 +5582,11 @@ td .sov-auto-tag { margin-left: 4px; }
 .hr-hide:hover { color: var(--danger); }
 @media (hover: none) { .hr-hide { opacity: 0.6; } }
 .hr-excl { flex-wrap: wrap; gap: 6px; align-items: center; }
+.hr-target { position: relative; }
+.hr-target .pi-input { width: 200px; }
+.hr-target-pop { right: auto; min-width: 280px; max-width: min(360px, calc(100vw - 32px)); max-height: 360px; }
+.hr-target-pop .kb-suggest-item.active { color: var(--accent-primary); font-weight: 600; }
+.hr-target-more { margin-top: 4px; border-top: 1px solid var(--border-primary); border-radius: 0; color: var(--text-secondary); }
 .hr-custom { gap: 8px 10px; }
 .hr-custom .pi-input { flex: 0 1 220px; width: 220px; min-width: 0; }
 .hr-custom .pi-note { flex-basis: 100%; }

@@ -1,8 +1,8 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes } from './hub-compare.js?v=v7';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v18';
-import * as SM from './struct-markets.js?v=v3';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v19';
+import * as SM from './struct-markets.js?v=v4';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
 // ===== 配置与常量 =====
@@ -2457,7 +2457,7 @@ function initContentTabs() {
   SM.initStructMarkets({ getToken: ensureEsiToken, readToken: () => state.esiToken || readEsiToken(), hasScope, structureMarket, structureNameMap, saveStructureNames,
     systemRegions, esc, formatNumber });
   const structs = {
-    load: SM.loadEnabledMarkets, quote: SM.structQuote, count: SM.enabledCount, open: SM.openStructManager, on: SM.onStructChange,
+    load: SM.loadEnabledMarkets, quote: SM.structQuote, count: SM.enabledCount, open: SM.openStructManager, on: SM.onStructChange, readable: SM.readableStructs, enable: SM.enableStruct,
     regionName: (id) => state.marketRegions.find((r) => r.id === id)?.name || REGIONS.find((r) => r.id === id)?.name || ''
   };
   loadMarketRegions().catch(() => {});
