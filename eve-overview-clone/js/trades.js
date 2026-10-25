@@ -8,7 +8,7 @@
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
            // resolveStructureNames, locationName, gameImage, valuationCard, tokenInfo, hasScope, selectItem, isActive
-const S = { id: null, data: null, loading: null, view: 'items', q: '', sort: 'profit' };
+const S = { id: null, data: null, loading: null, view: 'items', q: '', sort: 'profit', dir: 'desc' };   // 点表头排序，同一列再点换方向
 const ROW_LIMIT = 300;
 const ORDER_STATE_ZH = { expired: '已过期', cancelled: '已取消' };
 
@@ -90,18 +90,31 @@ function itemCell(data, id) {
 
 function itemsTable(data, sum) {
   const { esc, formatISK, formatPrice, formatNumber } = ctx;
-  const sorters = {
-    profit: (a, b) => (b.profit ?? -Infinity) - (a.profit ?? -Infinity),
-    margin: (a, b) => (b.margin ?? -Infinity) - (a.margin ?? -Infinity),
-    volume: (a, b) => (b.buyIsk + b.sellIsk) - (a.buyIsk + a.sellIsk),
-    recent: (a, b) => new Date(b.last) - new Date(a.last)
+  // 各列取值；null（只买入 / 只卖出没有利润）不论方向都排最后
+  const getters = {
+    name: (r) => typeName(data, r.id),
+    buy: (r) => r.buyQty ? r.buyQty * r.avgBuy : null,
+    sell: (r) => r.sellQty ? r.sellQty * r.avgSell : null,
+    profit: (r) => r.profit,
+    margin: (r) => r.margin,
+    volume: (r) => r.buyIsk + r.sellIsk,
+    recent: (r) => new Date(r.last).getTime()
   };
+  const get = getters[S.sort] || getters.profit;
+  const sign = S.dir === 'asc' ? 1 : -1;
   const q = S.q.toLowerCase();
-  const list = sum.items.filter((r) => !q || typeName(data, r.id).toLowerCase().includes(q)).sort(sorters[S.sort] || sorters.profit);
+  const list = sum.items.filter((r) => !q || typeName(data, r.id).toLowerCase().includes(q)).sort((a, b) => {
+    const x = get(a), y = get(b);
+    if (x == null || y == null) return x == null && y == null ? 0 : x == null ? 1 : -1;
+    return (typeof x === 'string' ? x.localeCompare(y, 'zh') : x - y) * sign;
+  });
   if (!list.length) return '<p class="text-muted">没有匹配的物品</p>';
-  const th = (key, label) => `<th><button class="th-sort${S.sort === key ? ' active' : ''}" data-trade-sort="${key}">${label}</button></th>`;
+  const th = (key, label) => {
+    const on = S.sort === key;
+    return `<th class="sortable${on ? ' sorted' : ''}" data-trade-sort="${key}" data-dir="${on ? S.dir : ''}" aria-sort="${on ? (S.dir === 'asc' ? 'ascending' : 'descending') : 'none'}" tabindex="0">${label}</th>`;
+  };
   return `<div class="table-scroll"><table class="pc-mini-table trade-table"><thead><tr>
-      <th>物品</th><th>买入</th><th>卖出</th>${th('profit', '配对利润')}${th('margin', '毛利率')}${th('volume', '成交额')}${th('recent', '最近成交')}
+      ${th('name', '物品')}${th('buy', '买入')}${th('sell', '卖出')}${th('profit', '配对利润')}${th('margin', '毛利率')}${th('volume', '成交额')}${th('recent', '最近成交')}
     </tr></thead><tbody>${list.slice(0, ROW_LIMIT).map((r) => `<tr>
       <td>${itemCell(data, r.id)}</td>
       <td>${r.buyQty ? formatNumber(r.buyQty) + ' × ' + formatPrice(r.avgBuy) : '<span class="muted-cell">—</span>'}</td>
@@ -189,10 +202,13 @@ function bind(box) {
     const view = e.target.closest('[data-trade-view]');
     if (view) { S.view = view.dataset.tradeView; render(box, S.data); return; }
     const sort = e.target.closest('[data-trade-sort]');
-    if (sort) { S.sort = sort.dataset.tradeSort; render(box, S.data); return; }
+    if (sort) { sortBy(box, sort.dataset.tradeSort); return; }
     const type = e.target.closest('[data-trade-type]');
     if (type) { ctx.selectItem(Number(type.dataset.tradeType)); return; }
     if (e.target.closest('[data-trade-reload]')) renderTrades(box, true);
+  });
+  box.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('th[data-trade-sort]')) { e.preventDefault(); sortBy(box, e.target.dataset.tradeSort); }
   });
   box.addEventListener('input', (e) => {
     if (!ctx.isActive() || !S.data || !e.target.matches('[data-trade-q]')) return;
@@ -216,4 +232,12 @@ export async function renderTrades(box, force = false) {
   } catch (error) {
     if (ctx.isActive()) box.innerHTML = '<p class="text-muted">交易记录读取失败：' + ctx.esc(error.message) + '</p>';
   }
+}
+
+// 点表头：换列时物品名按升序、其他按降序，同一列再点换方向
+function sortBy(box, key) {
+  S.dir = S.sort === key ? (S.dir === 'asc' ? 'desc' : 'asc') : (key === 'name' ? 'asc' : 'desc');
+  S.sort = key;
+  render(box, S.data);
+  box.querySelector(`th[data-trade-sort="${key}"]`)?.focus({ preventScroll: true });
 }

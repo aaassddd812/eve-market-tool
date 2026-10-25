@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes } from './hub-compare.js?v=v7';
-import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v19';
+import { initHubRank, showHubRank, refreshHubRank } from './hub-rank.js?v=v21';
 import * as SM from './struct-markets.js?v=v4';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
@@ -4267,7 +4267,7 @@ function loadOrderWatch() {
 // 个人中心 · 交易记录与盈亏：首次打开时加载
 let tradesLoading = null;
 function loadTradesModule() {
-  if (!tradesLoading) tradesLoading = import('./trades.js?v=v3').then((m) => {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v4').then((m) => {
     m.initTrades({
       esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard,
