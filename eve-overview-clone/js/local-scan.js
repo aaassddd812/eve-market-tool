@@ -6,7 +6,7 @@
 // 国服没有公开击杀数据，只显示所属势力分布。
 // 定向扫描结果：扫描窗口里 Ctrl+A、Ctrl+C，每行「类型 ID<Tab>名称<Tab>类型<Tab>距离」（旧客户端没有类型 ID，按类型名用 /universe/ids/ 查）。
 //   类型所属的分组（舰船类别）与大类用 ESI /universe/types/、/universe/groups/ 查，缓存在本浏览器（eve-dscan-types-v1）；
-//   统计舰船总数、1 万公里内、按舰船类别 / 型号的数量，标出旗舰、拦截、后勤、隐轰、侦察等需要注意的船，建筑、无人机与其他单列；可复制一行统计发到舰队频道。
+//   统计舰船总数、同格（显示距离的）、按舰船类别 / 型号的数量，标出旗舰、拦截泡、后勤、隐轰、侦察、黑隐与扫描探针，建筑、无人机与其他单列；可复制一行统计发到舰队频道。
 
 let D;   // esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage, kb, loadTypes, systemName, typeName, fetchESI, copyText
 const IGNORE_KEY = 'eve-local-ignore-v1';
@@ -90,10 +90,13 @@ async function analyze(text) {
 
 
 // ---------- 定向扫描 ----------
-// 每行至少 3 列（Tab 分隔）且末列像距离（数字 + 单位，或「-」）的行占多数时算定向扫描结果
+// 每行至少 3 列且末列像距离（数字 + 单位，或「-」）的行占多数时算定向扫描结果。
+// 列之间是 Tab；从聊天窗口、网页转贴时 Tab 常变成多个空格，也认（名称里的单个空格不受影响）。国服客户端名称末尾带「*」，去掉
 const DIST_RE = /^(-|[\d.,\s ]+\s*(m|km|au|米|千米|公里|天文单位|км|м|а\.?е\.?))$/i;
 function scanRows(text) {
-  return String(text).split(/\r?\n/).map((l) => l.split('\t').map((c) => c.trim())).filter((c) => c.length >= 3);
+  const clean = (c) => c.trim().replace(/\*+$/, '').trim();
+  return String(text).split(/\r?\n/).map((l) => (l.includes('\t') ? l.split('\t') : l.trim().split(/[ \u00a0\u3000]{2,}/)).map(clean))   // 有 Tab 按 Tab 分（名称为空时列不错位）
+    .filter((c) => c.length >= 3);
 }
 function isDscan(text) {
   const lines = String(text).split(/\r?\n/).filter((l) => l.trim());
@@ -148,7 +151,8 @@ const WATCH = [
   ['后勤', 'logi', [832, 1527], 'Logistics'],
   ['隐轰', 'bomber', [834], 'Bombers'],
   ['侦察', 'recon', [833, 906], 'Recons'],
-  ['黑隐', 'blops', [898], 'Black Ops']
+  ['黑隐', 'blops', [898], 'Black Ops'],
+  ['探针', 'probe', [479], 'Probes']   // 扫描 / 作战扫描探针：有人在扫
 ];
 
 async function analyzeDscan(text) {
@@ -202,7 +206,6 @@ function countBy(list, key) {
   }
   return [...m.values()].sort((a, b) => b.n - a.n);
 }
-const NEAR_KM = 10000;
 function scanStats() {
   const items = S.scan.items;
   const ships = items.filter((x) => x.kind === 'ship');
@@ -211,7 +214,7 @@ function scanStats() {
   const watch = WATCH.map(([label, cls, gs, en]) => ({ label, en, cls, n: items.filter((x) => gs.includes(x.group)).length })).filter((w) => w.n);
   const others = countBy(items.filter((x) => x.kind !== 'ship'), (x) => x.typeId || x.typeName);
   const byKind = Object.fromEntries(Object.keys(KIND_ZH).map((k) => [k, items.filter((x) => x.kind === k).length]));
-  return { ships, classes, types, watch, others, byKind, near: ships.filter((x) => x.dist != null && x.dist <= NEAR_KM).length };
+  return { ships, classes, types, watch, others, byKind, grid: ships.filter((x) => x.dist != null).length };   // 有距离的在同一格，「-」是格外
 }
 // 发到舰队频道的一行统计（英文界面写英文，舰船类别名本来就是界面语言）
 function scanSummaryText(st) {
@@ -229,10 +232,10 @@ const typeIcon = (g) => (g.first.typeId ? `<img src="https://images.evetech.net/
 function scanHtml() {
   const st = scanStats();
   return `
-    <section class="kb-section">
+    <section class="kb-section ls-card">
       <div class="ls-summary">
         <div><b>${st.ships.length}</b><small>艘舰船</small></div>
-        <div><b>${st.near}</b><small>1 万公里内</small></div>
+        <div title="扫描结果里显示距离的在同一格，「-」表示不在同格"><b>${st.grid}</b><small>同格</small></div>
         <div><b>${st.types.length}</b><small>种舰船</small></div>
         <div><b>${st.byKind.drone}</b><small>无人机 / 舰载机</small></div>
         <div><b>${st.byKind.structure + st.byKind.deploy}</b><small>建筑与可部署</small></div>
@@ -242,7 +245,7 @@ function scanHtml() {
       ${st.ships.length ? `<div class="ls-cols"><div><h3 class="ls-h">按舰船类别</h3>${barList(st.classes, (g) => g.key)}</div>
         <div><h3 class="ls-h">按舰船型号</h3>${barList(st.types, (g) => scanTypeName(g.first), typeIcon)}</div></div>` : '<p class="text-muted">扫描结果里没有舰船</p>'}
     </section>
-    ${st.others.length ? `<section class="kb-section"><h3 class="ls-h">建筑、无人机与其他</h3>
+    ${st.others.length ? `<section class="kb-section ls-card"><h3 class="ls-h">建筑、无人机与其他</h3>
       ${barList(st.others, (g) => `${scanTypeName(g.first)} · ${KIND_ZH[g.first.kind]}`, typeIcon)}</section>` : ''}`;
 }
 
@@ -340,7 +343,7 @@ function draw() {
     </section>
     ${S.mode === 'dscan' && S.scan ? scanHtml() : ''}
     ${S.mode === 'local' && S.pilots.length ? `
-    <section class="kb-section">
+    <section class="kb-section ls-card">
       <div class="ls-summary">
         <div><b>${S.pilots.length}</b><small>名角色${shown.length < S.pilots.length ? `（显示 ${shown.length}）` : ''}</small></div>
         <div><b>${new Set(S.pilots.map((p) => p.alliance).filter(Boolean)).size}</b><small>个联盟</small></div>
@@ -350,7 +353,7 @@ function draw() {
       </div>
       <div class="ls-cols"><div><h3 class="ls-h">联盟</h3>${groupsHtml('alliance')}</div><div><h3 class="ls-h">军团</h3>${groupsHtml('corporation')}</div></div>
     </section>
-    <section class="kb-section">
+    <section class="kb-section ls-card">
       <div class="table-scroll"><table class="data-table ls-table"><thead><tr>${th('name', '角色')}${th('org', '联盟 / 军团')}
         ${D.kb ? `${th('threat', '威胁')}${th('kills', '击杀', 'num')}${th('losses', '损失', 'num')}<th class="num ls-hide-sm" title="击杀 ÷（击杀 + 损失）">击杀占比</th><th class="num ls-hide-sm" title="参与的击杀平均有多少名玩家">平均同伙</th><th class="ls-hide-sm">常用船</th><th class="ls-hide-md">常去星系</th>${th('last', '最近活跃', 'num')}` : ''}
       </tr></thead><tbody>${rows}</tbody></table></div>

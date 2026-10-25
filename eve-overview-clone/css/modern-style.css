@@ -5598,6 +5598,11 @@ td .sov-auto-tag { margin-left: 4px; }
 .ls-threat.low { color: var(--success); }
 .ls-ships { white-space: nowrap; }
 .ls-ships img { border-radius: 3px; margin-right: 2px; vertical-align: middle; }
+/* 本地分析：结果放在卡片里（与其他页面一致） */
+.ls-card { padding: 14px 16px; border: 1px solid var(--border-primary); border-radius: var(--radius-lg); background: var(--bg-secondary); }
+.ls-card .ls-summary > div { background: var(--bg-tertiary); }
+.ls-card .table-scroll { margin: 0 -16px; }
+.ls-card > .ka-note { margin-bottom: 0; }
 /* 本地分析 · 定向扫描 */
 .ds-mode { padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; color: var(--accent-primary); background: var(--accent-soft); }
 .ds-watch { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; font-size: 0.8125rem; }
