@@ -17,7 +17,7 @@
 // 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
 
 import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s4';
-import * as AM from './alert-mail.js?v=v3';
+import * as AM from './alert-mail.js?v=v4';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
@@ -500,7 +500,6 @@ function drawPanel() {
     <div class="ka-top">${pill(st.on, st.text)}</div>
     ${token ? '' : '<p class="ka-warn">位置预警需要先在「个人中心」绑定 ESI</p>'}
     ${IS_TQ ? '' : `<p class="ka-warn" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据：提醒会延迟，星域监控与人物关注不可用</p>`}
-    <div class="ac-cols"><div class="ac-col">
     ${sec('位置预警', `<div class="ka-list">
       ${sw('on', '开启位置预警', '角色所在星系周边的击杀')}
       <label class="ka-opt"><span><b>检测范围</b></span><span class="ka-ctl"><input type="number" class="cr-input" min="1" max="10" step="1" value="${T.jumps}" data-ka-jumps aria-label="检测范围（跳）" title="1–10 跳"> 跳</span></label>
@@ -513,7 +512,6 @@ function drawPanel() {
       ${sw('sound', '提示音', '', '网页特效时同时播放提示音')}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ka-test="web">测试网页特效</button><button class="btn btn-ghost btn-sm" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>`)}
-    </div><div class="ac-col">
     ${sec('星域监控', `<div class="ka-list">
       ${sw('regionOn', '开启星域监控', '', '指定星域里发生的任何击杀都提醒，不需要绑定 ESI')}
       <div class="ka-opt ka-stack"><div class="ka-watch-add">
@@ -540,7 +538,6 @@ function drawPanel() {
         <span>${ctx.esc(e.name)}${e.kind !== 'character' ? `<small> · ${KIND_ZH[e.kind]}</small>` : ''}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
         <button class="ka-close" data-ka-del="${e.id}" title="取消关注" aria-label="取消关注">×</button></li>`).join('')}</ul>` : ''}</div>
     </div>`)}
-    </div></div>
     ${sec('最近预警', st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${ctx.esc(describe(a))}</span><small>${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有预警</p>')}
     <p class="ka-note">网页需保持打开（可在后台）</p>`;
 }

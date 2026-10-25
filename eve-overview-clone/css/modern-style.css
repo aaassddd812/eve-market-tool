@@ -4507,20 +4507,17 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .ka-bell.on .ka-dot { opacity: 1; background: var(--success); box-shadow: 0 0 0 2px var(--bg-primary); }
 .ka-bell.alert .ka-dot { opacity: 1; background: var(--danger); box-shadow: 0 0 0 2px var(--bg-primary); }
 /* 预警弹窗（alert-center.js）：击杀预警 / 本地日志两个标签页；宽屏两栏，最近记录、状态、提示占满一行 */
-/* 预警弹窗固定宽高：切换标签页、内容多少都不变（手机上本来就是全屏） */
-.modal-content.ac-modal { max-width: 880px; }
-@media (min-width: 769px) { .modal-content.ac-modal { width: 880px; height: min(760px, 90vh); } }
+/* 预警弹窗固定宽高：切换标签页、内容多少都不变（手机上本来就是全屏）；设置一栏从上往下排 */
+.modal-content.ac-modal { max-width: 680px; }
+@media (min-width: 769px) { .modal-content.ac-modal { width: 680px; height: min(760px, 90vh); } }
 .ac-modal.ka-modal .modal-body { display: block; flex: 1; min-height: 0; scrollbar-gutter: stable; }
 .ac-head { justify-content: flex-start; gap: 16px; }
 .ac-head .modal-close { margin-left: auto; }
 .ac-tabs button { display: inline-flex; align-items: center; gap: 6px; }
 .ac-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); opacity: 0.35; }
 .ac-tabs .on .ac-dot { background: var(--success); opacity: 1; }
-/* 每个标签页固定两栏：哪块在左、哪块在右写死在各模块的 drawPanel 里（ac-cols / ac-col），内容变化不会让各块换栏 */
 .ac-pane > * { margin-bottom: 14px; }
 .ac-pane > .ka-note, .ac-pane > .ka-warn { margin: 0 0 14px; }
-.ac-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
-.ac-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 /* 预警 · 邮件标签页：收件人每行右侧勾选接收哪种预警 */
 .am-row { cursor: default; flex-wrap: wrap; }
 .am-row > .ka-chips { flex: none; }
@@ -4528,7 +4525,7 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .ka-chip.ka-chip-link { border-style: dashed; background: transparent; color: var(--accent-primary); }
 .ka-chip.on small { color: inherit; opacity: 0.8; }
 
-@media (max-width: 760px) { .ac-cols { grid-template-columns: minmax(0, 1fr); } .ac-head { gap: 10px; } .ac-head h3 { display: none; } }
+@media (max-width: 760px) { .ac-head { gap: 10px; } .ac-head h3 { display: none; } }
 .ka-modal { max-width: 560px; }
 .ka-modal .modal-body { display: flex; flex-direction: column; gap: 14px; }
 /* 分组：标题 + 一张圆角卡片，行之间细分隔线；名称在左、控件在右 */

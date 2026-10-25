@@ -10,7 +10,7 @@
 //   多个标签页都在监听时按消息去重，只发一次；收件人在「邮件」标签页设置，这里勾选发给谁；英文界面发英文邮件）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
 // 文件编码：聊天记录是 UTF-16 LE（带 BOM），游戏日志是 UTF-8；按 BOM 判断。文件名「频道名_YYYYMMDD_HHMMSS_角色ID.txt」。
 
-import * as AM from './alert-mail.js?v=v3';
+import * as AM from './alert-mail.js?v=v4';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem
 const KEY = 'eve-intel-v1';
@@ -531,7 +531,6 @@ function drawPanel() {
   return `
     <div class="ka-top"><span class="ka-status${status().on ? ' on' : ''}"><i></i>${ctx.esc(status().text)}</span></div>
     <p class="ka-note">读取本机的游戏聊天记录与日志，文件不会上传；需要电脑版 Chrome 或 Edge。</p>
-    <div class="ac-cols"><div class="ac-col">
     ${sec('日志文件夹', `<div class="ka-list">
       <div class="ka-opt"><span><b>${S.dir ? ctx.esc(S.dir.name) : '未选择'}</b><small>${S.dir ? `聊天记录 ${S.chat ? '✓' : '✗'} · 游戏日志 ${S.game ? '✓' : '✗'}` : `选 <code>${window.I18N?.lang === 'en' ? 'Documents' : '文档'}\\EVE\\logs</code>`}</small></span>
         <span class="ka-ctl">${S.dir && S.perm !== 'granted' ? '<button class="btn btn-ghost btn-sm" data-in-resume>恢复监听</button>' : ''}<button class="btn btn-primary btn-sm" data-in-pick>${S.dir ? '重新选择' : '选择文件夹'}</button></span></div>
@@ -546,7 +545,6 @@ function drawPanel() {
       <label class="ka-opt" title="消息里有这些词（空格分隔）算星系已清空，星图标绿、不提醒"><span><b>报平安的字样</b></span><input type="text" class="cr-input intel-home" data-in-home="clearWords" data-keep="clear" value="${ctx.esc(T.clearWords)}" aria-label="报平安字样"></label>
       <label class="ka-opt" title="星图上的红 / 绿标记多久后消失"><span><b>星图标记保留</b></span><select class="cr-input" data-in-num="expire">${[5, 10, 15, 30, 60].map((m) => `<option value="${m}"${T.expire === m ? ' selected' : ''}>${m} 分钟</option>`).join('')}</select></label>
     </div>`)}
-    </div><div class="ac-col">
     ${sec('提醒方式', `<div class="ka-list">
       ${sw('sound', '提示音', '', '越近响得越急')}
       ${sw('web', '网页卡片', '', '右上角弹出敌情卡片，点击在星图查看')}
@@ -564,7 +562,6 @@ function drawPanel() {
       ${sw('gameOn', '开启游戏日志提醒', '', '战斗、通知等游戏日志里出现关键词就提醒')}
       ${wordList('gameWords', '关键词，例如 warp scramble、跃迁扰断、被锁定')}
     </div>`)}
-    </div></div>
     ${sec('最近消息', S.reports.length ? `<ul class="ka-history">${S.reports.map((r) => `<li${r.system ? ` data-in-sys="${r.system}"` : ''}>
       <span class="ka-badge${r.clear ? ' clear' : ''}">${r.type !== 'intel' ? (r.type === 'kw' ? '关键词' : '日志') : r.clear ? '平安' : r.jumps == null ? '敌情' : r.jumps + ' 跳'}</span>
       <span>${r.system ? `<b>${ctx.esc(r.name)}</b> ` : ''}${ctx.esc((r.who ? r.who + '：' : '') + r.msg)}<small> · ${ctx.esc(r.channel)}</small></span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有消息</p>')}`;

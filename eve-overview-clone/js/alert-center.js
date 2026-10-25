@@ -1,10 +1,10 @@
 // ===== 预警（右上角铃铛）=====
 // 击杀预警（kill-alert.js）与本地日志（intel.js）合在一个弹窗里，两个标签页；检测与设置还是各自的模块，这里只管弹窗、标签切换和标签上的状态点。
 // 两个模块都是点到对应标签页时才加载（已开启的会在页面打开时由 modern-app.js 先加载）。上次看的标签页记在 eve-alert-tab。
-// 弹窗加宽到 880px，宽屏下设置分两栏排（CSS 多栏），手机上一栏。
+// 弹窗在电脑上固定 680×760（切换标签页不变大小），设置一栏排；手机上全屏。
 // 第三个标签页「邮件」（alert-mail.js）集中设置收件人与哪些预警发邮件；打开它时先加载两个预警模块（它们会登记自己的邮件开关）。
 
-import * as AM from './alert-mail.js?v=v3';
+import * as AM from './alert-mail.js?v=v4';
 import { skText } from './skeleton.js?v=v17';
 
 let deps = null;   // { loadKill, loadIntel, esc }

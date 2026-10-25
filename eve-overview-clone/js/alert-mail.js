@@ -222,10 +222,8 @@ function drawPanel() {
   return `
     <div class="ka-top"><span class="ka-status${ok ? ' on' : ''}"><i></i>${esc(state)}</span></div>
     ${token ? '' : '<p class="ka-warn">游戏内邮件需要先在「个人中心」绑定 ESI</p>'}
-    <div class="ac-cols"><div class="ac-col">
     <section class="ka-sec"><h4 class="ka-h">哪些预警发邮件</h4><div class="ka-list">${labels.map(([s, l]) => sw(s, l)).join('')}</div>
       <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-am-test${token ? '' : ' disabled'}>发送测试邮件</button></div></section>
-    </div><div class="ac-col">
     <section class="ka-sec"><h4 class="ka-h">收件人<small>每个收件人勾选接收哪种预警</small></h4><div class="ka-list">
       ${row('self', '自己', token ? esc(token.character_name || '') : '', false)}
       ${M.book.map((r) => row(String(r.id), r.name, KIND_ZH[r.kind], true)).join('')}
@@ -236,7 +234,6 @@ function drawPanel() {
       </div>
       ${token && !ctx.hasScope(READ_MAIL_SCOPE) ? '<small>读取你加入的邮件列表需要「读取邮件」授权，重新绑定 ESI 时勾选</small>' : ''}</div>
     </div></section>
-    </div></div>
     <p class="ka-note">同一角色两封邮件至少隔 1 分钟，期间的提醒合并成一封；邮件语言跟随界面语言。发给军团 / 联盟要有游戏里的群发权限，对方开了 CSPA 收费会发送失败。</p>`;
 }
 function testMail() {
