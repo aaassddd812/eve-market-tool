@@ -5,7 +5,7 @@
 // 发送：esi-mail.send_mail.v1；两种预警共用发信间隔（同一角色两封至少隔 60 秒，失败后再多等 1 分钟），各自把这段时间里的提醒合并成一封。
 //   邮件语言跟随界面语言（英文界面发英文邮件），见 L()。
 // 设置存在 eve-alert-mail-v1（按服务器）：{ book: [{ id, name, kind }], use: { kill: ['self', id…], intel: [...] } }；
-//   旧格式 { self, to } 与旧版击杀预警里的 mailSelf / mailTo 加载时自动转换（原来的收件人两种预警都勾上）。
+//   旧格式 { self, to } 与旧版击杀预警里的 mailSelf / mailTo 加载时自动转换（原来的收件人两种预警都勾上，见 mergeLegacy）。
 
 import { serverKey, esiUrl } from './server.js?v=s4';
 
@@ -25,23 +25,37 @@ const S = { lastMail: 0, lists: null, error: '' };
 const subs = new Set();
 const sources = new Map();   // kill / intel → { label, on(), set(on) }，由两个模块登记
 
-export function initAlertMail(context, legacy = null) {
+export function initAlertMail(context) {
   if (ctx) return;
   ctx = context;
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { /* 忽略 */ }
   if (saved?.book) Object.assign(M, saved);
   else if (saved) convert(saved.self !== false, saved.to);
-  else if (legacy && (Array.isArray(legacy.mailTo) || legacy.mailSelf === false)) convert(legacy.mailSelf !== false, legacy.mailTo);
   if (!Array.isArray(M.book)) M.book = [];
   M.use = M.use || {};
   for (const s of SRC) if (!Array.isArray(M.use[s])) M.use[s] = ['self'];
+  mergeLegacy();
 }
 // 旧格式：一份收件人两种预警共用 → 通讯录 + 两种预警都勾上
 function convert(self, to) {
   M.book = Array.isArray(to) ? to.slice(0, MAX) : [];
   const keys = [...(self ? ['self'] : []), ...M.book.map((r) => String(r.id))];
   M.use = { kill: [...keys], intel: [...keys] };
+}
+// 旧版击杀预警自己存的收件人（eve-kill-alert-v1 的 mailSelf / mailTo）：直接从存储里读，不管哪个模块先初始化；
+// 只做一次（legacyDone），之前因为本地日志先加载而没搬过来的，这里补进通讯录（两种预警都勾上）
+function mergeLegacy() {
+  if (M.legacyDone) return;
+  let t = null;
+  try { t = JSON.parse(localStorage.getItem(serverKey('eve-kill-alert-v1')) || 'null'); } catch { /* 忽略 */ }
+  const add = (Array.isArray(t?.mailTo) ? t.mailTo : []).filter((r) => r?.id && r.kind && !M.book.some((b) => b.id === r.id)).slice(0, Math.max(0, MAX - M.book.length));
+  for (const r of add) {
+    M.book.push({ id: r.id, name: r.name, kind: r.kind });
+    for (const s of SRC) if (!M.use[s].includes(String(r.id))) M.use[s].push(String(r.id));
+  }
+  if (t?.mailSelf === false && add.length) for (const s of SRC) M.use[s] = M.use[s].filter((k) => k !== 'self');
+  M.legacyDone = true;
   save();
 }
 export function onMailChange(fn) { subs.add(fn); }

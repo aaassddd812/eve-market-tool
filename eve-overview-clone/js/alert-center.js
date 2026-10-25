@@ -4,7 +4,7 @@
 // 弹窗在电脑上固定 680×760（切换标签页不变大小），设置一栏排；手机上全屏。
 // 第三个标签页「邮件」（alert-mail.js）集中设置收件人与哪些预警发邮件；打开它时先加载两个预警模块（它们会登记自己的邮件开关）。
 
-import * as AM from './alert-mail.js?v=v4';
+import * as AM from './alert-mail.js?v=v5';
 import { skText } from './skeleton.js?v=v17';
 
 let deps = null;   // { loadKill, loadIntel, esc }

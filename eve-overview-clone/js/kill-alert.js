@@ -17,7 +17,7 @@
 // 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
 
 import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s4';
-import * as AM from './alert-mail.js?v=v4';
+import * as AM from './alert-mail.js?v=v5';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
@@ -69,7 +69,7 @@ function setStatus(text) { S.status = text; notify(); }
 export function initKillAlert(context) {
   ctx = context;
   load();
-  AM.initAlertMail(ctx, T);   // 旧版收件人设置（T.mailSelf / mailTo）第一次搬到共用设置里
+  AM.initAlertMail(ctx);   // 旧版收件人设置（T.mailSelf / mailTo）由 alert-mail.js 直接从存储里搬过去
   AM.onMailChange(renderPanel);
   AM.registerSource('kill', { label: '击杀预警', on: () => T.mail, set: (on) => update({ mail: on }) });
   window.addEventListener('eve-account-change', () => { S.system = 0; S.range = new Map(); S.charId = 0; restart(); });
