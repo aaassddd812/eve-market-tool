@@ -4483,6 +4483,20 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .ka-bell { position: relative; }
 .ka-bell .ka-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); opacity: 0; }
 .ka-bell.on .ka-dot { opacity: 1; background: var(--success); box-shadow: 0 0 0 2px var(--bg-primary); }
+.ka-bell.alert .ka-dot { opacity: 1; background: var(--danger); box-shadow: 0 0 0 2px var(--bg-primary); }
+/* 预警弹窗（alert-center.js）：击杀预警 / 本地日志两个标签页；宽屏两栏，最近记录、状态、提示占满一行 */
+.modal-content.ac-modal { max-width: 880px; }
+.ac-modal.ka-modal .modal-body { display: block; }
+.ac-head { justify-content: flex-start; gap: 16px; }
+.ac-head .modal-close { margin-left: auto; }
+.ac-tabs button { display: inline-flex; align-items: center; gap: 6px; }
+.ac-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); opacity: 0.35; }
+.ac-tabs .on .ac-dot { background: var(--success); opacity: 1; }
+.ac-pane { columns: 2; column-gap: 16px; }
+.ac-pane > * { break-inside: avoid; margin-bottom: 14px; }
+.ac-pane > .ka-note, .ac-pane > .ka-warn { margin: 0 0 14px; }
+.ac-pane > .ka-top, .ac-pane > .ka-warn, .ac-pane > .ka-note, .ac-pane > .ka-sec:last-of-type { column-span: all; }
+@media (max-width: 760px) { .ac-pane { columns: 1; } .ac-head { gap: 10px; } .ac-head h3 { display: none; } }
 .ka-modal { max-width: 560px; }
 .ka-modal .modal-body { display: flex; flex-direction: column; gap: 14px; }
 /* 分组：标题 + 一张圆角卡片，行之间细分隔线；名称在左、控件在右 */
@@ -5496,12 +5510,9 @@ td .sov-auto-tag { margin-left: 4px; }
 .lang-toggle { width: auto; min-width: 36px; padding: 0 8px; font-size: 0.75rem; font-weight: 600; letter-spacing: 0.02em; }
 
 /* 购物车（js/cart.js） */
-.cart-btn, .intel-btn { position: relative; }
+.cart-btn { position: relative; }
 .cart-btn .cart-count { position: absolute; top: 2px; right: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; font-size: 0.625rem; font-style: normal; font-weight: 700; line-height: 16px; text-align: center; color: #fff; background: var(--accent-primary); display: none; }
 .cart-btn.has-items .cart-count { display: block; }
-.intel-btn .ka-dot { position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; border-radius: 50%; opacity: 0; }
-.intel-btn.on .ka-dot { opacity: 1; background: var(--success); box-shadow: 0 0 0 2px var(--bg-primary); }
-.intel-btn.alert .ka-dot { opacity: 1; background: var(--danger); box-shadow: 0 0 0 2px var(--bg-primary); }
 .cart-add-btn:hover { color: var(--accent-primary); }
 .cart-modal { max-width: 860px; }
 .cart-modal .modal-body { display: flex; flex-direction: column; gap: 10px; }

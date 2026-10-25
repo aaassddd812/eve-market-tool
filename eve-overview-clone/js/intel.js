@@ -1,4 +1,4 @@
-// ===== 本地日志（右上角雷达图标）：敌情频道预警、频道关键词监控、游戏日志监控 =====
+// ===== 本地日志（右上角铃铛「预警」弹窗的第二个标签页）：敌情频道预警、频道关键词监控、游戏日志监控 =====
 // 默认关闭。用户主动选择 EVE 日志文件夹（Documents\EVE\logs）后，浏览器用 File System Access API 只读地读取聊天记录（Chatlogs）与游戏日志（Gamelogs）：
 //   文件只在本机浏览器里读取，不会上传；只有电脑版 Chrome / Edge（86 以上）等 Chromium 浏览器支持，Firefox、Safari 和手机浏览器不支持。
 //   文件夹授权保存在本浏览器（IndexedDB），下次打开网页时浏览器可能要求再点一次「恢复监听」重新授权。
@@ -6,19 +6,23 @@
 //   消息里含「clr / clear / 干净」等字样算报平安（星图标绿）。星系名同时认当前界面语言与英文名（ESI 取英文名，缓存在本地）。
 // 我的位置：绑定 ESI 且有位置权限时读角色位置；否则读本地频道日志里「Channel changed to Local」一行；都没有时用手动填的星系。
 // 关键词监控：勾选的频道（或全部频道）里出现关键词（/正则/ 也可以）就提醒。游戏日志监控：战斗日志等出现关键词就提醒（例如被跃迁扰断）。
+// 提醒方式：提示音、网页卡片、系统通知、游戏内邮件（与击杀预警共用收件人与发信间隔，alert-mail.js；一段时间里的提醒合并成一封，
+//   多个标签页都在监听时按消息去重，只发一次）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
 // 文件编码：聊天记录是 UTF-16 LE（带 BOM），游戏日志是 UTF-8；按 BOM 判断。文件名「频道名_YYYYMMDD_HHMMSS_角色ID.txt」。
+
+import * as AM from './alert-mail.js?v=v1';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem
 const KEY = 'eve-intel-v1';
 const DEFAULTS = {
-  on: false, channels: [], jumps: 5, sound: true, notify: false, web: true, expire: 10, home: '', useLoc: true,
+  on: false, channels: [], jumps: 5, sound: true, notify: false, web: true, mail: false, expire: 10, home: '', useLoc: true,
   clearWords: 'clr clear 干净 安全 没人', kwOn: false, keywords: [], kwAll: false, gameOn: false, gameWords: []
 };
 const T = { ...DEFAULTS };
 const S = {
   dir: null, chat: null, game: null, perm: 'none', status: '', timer: 0, scanTimer: 0, locTimer: 0,
   files: new Map(), channels: new Map(), reports: [], marks: new Map(), names: null, seen: new Set(),
-  graph: null, dist: null, here: null, hereFrom: '', localHere: new Map(), busy: false, lastAlert: 0, alertTimer: 0
+  graph: null, dist: null, here: null, hereFrom: '', localHere: new Map(), busy: false, lastAlert: 0, alertTimer: 0, mailQueue: [], mailTimer: 0
 };
 const LOC_SCOPE = 'esi-location.read_location.v1';
 const POLL = 2000, SCAN = 20000, LOC_POLL = 30000;
@@ -54,6 +58,8 @@ const idbSet = (k, v) => idb('readwrite', (st) => st.put(v, k)).catch(() => null
 export async function initIntel(context) {
   ctx = context;
   load();
+  AM.initAlertMail(ctx);
+  AM.onMailChange(renderPanel);
   if (!supported()) return;
   S.dir = await idbGet('dir');
   if (T.on && S.dir) resume(false);
@@ -386,13 +392,54 @@ function raise(r) {
   S.lastAlert = Date.now();
   clearTimeout(S.alertTimer);
   S.alertTimer = setTimeout(notify, 61e3);
-  const title = r.type === 'intel' ? `敌情：${r.name}${r.jumps != null ? `（${r.jumps === 0 ? '本星系' : r.jumps + ' 跳'}）` : ''}` : r.type === 'kw' ? `关键词「${r.kw}」` : `游戏日志「${r.kw}」`;
+  const title = titleOf(r);
   const body = (r.who ? r.who + '：' : '') + r.msg;
+  if (T.mail && !r.test) queueMail(r);
   if (T.sound) beep(r.type === 'intel' ? (r.jumps ?? 9) : 5);
   if (T.web) card(title, body, r);
   if (T.notify && window.Notification?.permission === 'granted') {
     try { const n = new Notification(title, { body: r.channel + ' · ' + body, tag: 'eve-intel-' + (r.system || r.kw), renotify: true }); n.onclick = () => { window.focus(); if (r.system) ctx.openMapSystem(r.system); }; } catch { /* 忽略 */ }
   }
+}
+
+const titleOf = (r) => (r.type === 'intel' ? `敌情：${r.name}${r.jumps != null ? `（${r.jumps === 0 ? '本星系' : r.jumps + ' 跳'}）` : ''}` : r.type === 'kw' ? `关键词「${r.kw}」` : `游戏日志「${r.kw}」`);
+
+// 游戏内邮件：等到可以发信时把这段时间的提醒合并成一封
+function queueMail(r) {
+  if (!AM.canMail() || !claimMail(r)) return;
+  S.mailQueue.push(r);
+  if (!S.mailTimer) S.mailTimer = setTimeout(flushMail, AM.nextSlot());
+}
+// 多个标签页都在读同一份日志时，同一条消息只由先读到的那个发（localStorage 记 5 分钟）
+function claimMail(r) {
+  const sig = [r.type, r.channel, r.who, r.msg, +r.time].join('|');
+  try {
+    const k = 'eve-intel-mailed', now = Date.now();
+    const m = JSON.parse(localStorage.getItem(k) || '{}');
+    for (const [x, t] of Object.entries(m)) if (now - t > 300e3) delete m[x];
+    if (m[sig]) return false;
+    m[sig] = now;
+    localStorage.setItem(k, JSON.stringify(m));
+  } catch { /* 无痕模式：照发 */ }
+  return true;
+}
+async function flushMail() {
+  S.mailTimer = 0;
+  const list = S.mailQueue.splice(0);
+  if (!list.length) return null;
+  const esc = ctx.esc;
+  const intelN = list.filter((r) => r.type === 'intel').length;
+  const subject = list.length === 1 ? '本地日志 · ' + titleOf(list[0]) : `本地日志：${list.length} 条提醒${intelN ? `（敌情 ${intelN} 条）` : ''}`;
+  const line = (r) => {
+    const sys = r.system ? `<a href="showinfo:5//${r.system}">${esc(r.name)}</a>${r.jumps != null ? `（${r.jumps === 0 ? '本星系' : r.jumps + ' 跳'}）` : ''}：` : '';
+    const tag = r.type === 'intel' ? '【敌情】' : r.type === 'kw' ? `【关键词「${esc(r.kw)}」】` : `【游戏日志「${esc(r.kw)}」】`;
+    return `${tag}${sys}${esc((r.who ? r.who + '：' : '') + r.msg)} · ${esc(r.channel)} · ${r.time.toLocaleTimeString('zh-CN', { hour12: false })}`;
+  };
+  const who = AM.ownerWord();
+  const body = `<font size="14">本地日志：${who}监听的频道 / 游戏日志有新的提醒${S.here ? `（${who}在 <a href="showinfo:5//${S.here}">${esc(sysName(S.here))}</a>）` : ''}。</font><br><br>` +
+    list.slice(0, 20).map(line).join('<br>') + (list.length > 20 ? `<br>……另有 ${list.length - 20} 条` : '') +
+    '<br><br><font size="10" color="#ff888888">来自 EVE Market 本地日志，可在网页右上角的铃铛里关闭。</font>';
+  return AM.sendMail(subject, body);
 }
 
 function beep(jumps) {
@@ -435,8 +482,9 @@ function card(title, body, r) {
   setTimeout(() => el.remove(), 30e3);
 }
 
-// ---------- 面板 ----------
-let panel = null;
+// ---------- 面板（「预警」弹窗的「本地日志」标签页）----------
+let panel = null;      // 标签页容器
+let shell = null;      // { close, isOpen }：弹窗由 alert-center.js 管
 // 设置行：左边名称（可带一行短说明），右边开关；详细说明放在悬停提示里
 const sw = (key, label, sub = '', tip = '') => `<label class="ka-opt"${tip ? ` title="${tip}"` : ''}><span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span><input type="checkbox" class="ka-switch" data-in-set="${key}"${T[key] ? ' checked' : ''}></label>`;
 const sec = (title, body) => `<section class="ka-sec"><h4 class="ka-h">${title}</h4>${body}</section>`;
@@ -444,11 +492,12 @@ const wordList = (key, ph) => `<div class="ka-opt ka-stack"><div class="ka-watch
   ${T[key].length ? `<div class="ka-chips">${T[key].map((w, i) => `<span class="ka-chip">${ctx.esc(w)}<button class="ka-close" data-in-wdel="${key}:${i}" aria-label="移除">×</button></span>`).join('')}</div>` : ''}</div>`;
 
 function renderPanel() {
-  if (!panel || panel.hidden) return;
-  const body = panel.querySelector('#intelBody');
-  // 重绘时保留正在输入的文字与焦点
+  if (!panel || !shell.isOpen(panel)) return;
+  const body = panel;
+  // 重绘时保留正在输入的文字、焦点与滚动位置
   const keep = [...body.querySelectorAll('input[data-keep]')].map((el) => [el.dataset.keep, el.value, document.activeElement === el]);
-  const top = body.scrollTop;
+  const sc = panel.closest('.modal-body') || panel;
+  const top = sc.scrollTop;
   body.innerHTML = drawPanel();
   for (const [k, v, focus] of keep) {
     const el = body.querySelector(`input[data-keep="${k}"]`);
@@ -456,7 +505,7 @@ function renderPanel() {
     el.value = v;
     if (focus) { el.focus(); el.setSelectionRange(v.length, v.length); }
   }
-  body.scrollTop = top;
+  sc.scrollTop = top;
 }
 
 function drawPanel() {
@@ -489,8 +538,10 @@ function drawPanel() {
       ${sw('sound', '提示音', '', '越近响得越急')}
       ${sw('web', '网页卡片', '', '右上角弹出敌情卡片，点击在星图查看')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
+      ${sw('mail', '游戏内邮件', '', '发 EVE 邮件（每分钟最多一封，多条合并），需要绑定 ESI')}
+      ${T.mail ? AM.recipientsHtml() : ''}
     </div>
-    <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-in-test>测试提醒</button></div>`)}
+    <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-in-test>测试提醒</button>${T.mail ? `<button class="btn btn-ghost btn-sm" data-in-testmail${ctx.tokenInfo() ? '' : ' disabled'}>发送测试邮件</button>` : ''}</div>`)}
     ${sec('频道关键词', `<div class="ka-list">
       ${sw('kwOn', '开启关键词提醒', '', '勾选的敌情频道里出现关键词就提醒；写成 /正则/ 也可以')}
       ${sw('kwAll', '监控所有频道', '', '包括军团、舰队、私聊等全部频道（最近 2 天的聊天记录）')}
@@ -505,30 +556,26 @@ function drawPanel() {
       <span>${r.system ? `<b>${ctx.esc(r.name)}</b> ` : ''}${ctx.esc((r.who ? r.who + '：' : '') + r.msg)}<small> · ${ctx.esc(r.channel)}</small></span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有消息</p>')}`;
 }
 
-export function openPanel() {
-  if (!panel) {
-    panel = document.createElement('div');
-    panel.className = 'modal';
-    panel.id = 'intelModal';
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-modal', 'true');
-    panel.innerHTML = `<div class="modal-backdrop" data-in-dismiss></div><div class="modal-content ka-modal">
-      <div class="modal-header"><h3>本地日志 · 敌情预警</h3><button class="modal-close" data-in-dismiss aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-      <div class="modal-body" id="intelBody"></div></div>`;
-    document.body.appendChild(panel);
-    panel.addEventListener('click', onClick);
-    panel.addEventListener('change', onChangeEvt);
-    panel.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter') return;
-      const w = e.target.closest('[data-in-word]');
-      if (w) { e.preventDefault(); addWord(w.dataset.inWord, w.value); }
-      const h = e.target.closest('[data-in-home]');
-      if (h) { e.preventDefault(); update({ [h.dataset.inHome]: h.value.trim() }); }
-    });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && panel && !panel.hidden) { e.stopImmediatePropagation(); panel.hidden = true; } }, true);
-  }
-  panel.hidden = false;
+// 把标签页挂到弹窗里（只挂一次）；opts：{ close() 关掉弹窗, isOpen(el) 这个标签页是否正显示 }
+export function mountPanel(el, opts) {
+  if (panel) return;
+  panel = el;
+  shell = opts;
+  AM.bindRecipients(panel);
+  panel.addEventListener('click', onClick);
+  panel.addEventListener('change', onChangeEvt);
+  panel.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const w = e.target.closest('[data-in-word]');
+    if (w) { e.preventDefault(); addWord(w.dataset.inWord, w.value); }
+    const h = e.target.closest('[data-in-home]');
+    if (h) { e.preventDefault(); update({ [h.dataset.inHome]: h.value.trim() }); }
+  });
+}
+// 切到这个标签页时
+export function showPanel() {
   renderPanel();
+  AM.loadMailLists();
   if (S.dir && S.perm === 'granted' && !S.channels.size) scan(false);
 }
 
@@ -540,7 +587,6 @@ function addWord(key, value) {
 
 async function onClick(e) {
   const t = (sel) => e.target.closest(sel);
-  if (t('[data-in-dismiss]')) { panel.hidden = true; return; }
   if (t('[data-in-pick]')) { pickFolder(); return; }
   if (t('[data-in-resume]')) {
     if (!T.on) { T.on = true; save(); }
@@ -552,11 +598,20 @@ async function onClick(e) {
   const wdel = t('[data-in-wdel]');
   if (wdel) { const [k, i] = wdel.dataset.inWdel.split(':'); update({ [k]: T[k].filter((_, n) => n !== Number(i)) }); return; }
   const sys = t('[data-in-sys]');
-  if (sys) { panel.hidden = true; ctx.openMapSystem(Number(sys.dataset.inSys)); return; }
+  if (sys) { shell.close(); ctx.openMapSystem(Number(sys.dataset.inSys)); return; }
+  if (t('[data-in-testmail]')) {
+    if (!AM.canMail()) { AM.testToast(null); return; }
+    await ensureNames().catch(() => {});
+    const id = S.here || S.graph?.systems[0]?.[0];
+    S.mailQueue.push({ type: 'intel', time: new Date(), channel: '测试频道', who: '测试', msg: '（测试）' + (id ? sysName(id) : '') + ' 2 红', system: id, name: id ? sysName(id) : '', jumps: S.here ? 0 : null });
+    clearTimeout(S.mailTimer);
+    flushMail().then(AM.testToast);
+    return;
+  }
   if (t('[data-in-test]')) {
     await ensureNames().catch(() => {});
     const id = S.here || S.graph?.systems[0]?.[0];
-    raise({ type: 'intel', time: new Date(), channel: '测试频道', who: '测试', msg: '（测试）' + (id ? sysName(id) : '') + ' 2 红', system: id, name: id ? sysName(id) : '', jumps: S.here ? 0 : null });
+    raise({ test: true, type: 'intel', time: new Date(), channel: '测试频道', who: '测试', msg: '（测试）' + (id ? sysName(id) : '') + ' 2 红', system: id, name: id ? sysName(id) : '', jumps: S.here ? 0 : null });
   }
 }
 
@@ -569,6 +624,7 @@ async function onChangeEvt(e) {
       if (p !== 'granted') { set.checked = false; ctx.showToast('浏览器没有允许通知', 'error'); return; }
     }
     if (key === 'on' && set.checked && !S.dir) { set.checked = false; pickFolder(); return; }
+    if (key === 'mail' && set.checked && !ctx.tokenInfo()) { set.checked = false; ctx.showToast('游戏内邮件需要先在「个人中心」绑定 ESI', 'error', 4000); return; }
     if (key === 'on' && set.checked && S.perm !== 'granted') { T.on = true; save(); resume(true); return; }
     update({ [key]: set.checked });
     return;

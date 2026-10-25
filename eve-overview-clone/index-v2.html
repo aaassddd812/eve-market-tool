@@ -19,7 +19,7 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=30"></script>
+  <script src="js/i18n.js?v=31"></script>
   <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
   <script type="importmap">
     {
@@ -29,7 +29,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v108">
+  <link rel="stylesheet" href="css/modern-style.css?v=v111">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -129,11 +129,7 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.5L21 8H6"/></svg>
           <i class="cart-count" aria-hidden="true"></i>
         </button>
-        <button class="icon-btn intel-btn" id="intelBtn" title="本地日志：敌情频道与游戏日志（未开启）" aria-label="本地日志">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><path d="M12 12 19 5"/><circle cx="12" cy="12" r="1"/></svg>
-          <i class="ka-dot" aria-hidden="true"></i>
-        </button>
-        <button class="icon-btn ka-bell" id="killAlertBtn" title="击杀预警（未开启）" aria-label="击杀预警">
+        <button class="icon-btn ka-bell" id="killAlertBtn" title="预警：击杀预警、本地日志（未开启）" aria-label="预警">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <i class="ka-dot" aria-hidden="true"></i>
         </button>
@@ -1029,6 +1025,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v151" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v152" type="module" data-cfasync="false"></script>
 </body>
 </html>

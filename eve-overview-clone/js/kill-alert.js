@@ -6,8 +6,7 @@
 // 提醒方式：
 //   游戏内邮件（默认开）：给自己发一封 EVE 邮件（esi-mail.send_mail.v1），带击杀报告链接 killReport:ID:HASH，游戏里点开即可看 KM；
 //     同一分钟内的多条击杀合并成一封，两封之间至少隔 60 秒；同时开了多个标签页时只由一个标签页发送。
-//     收件人：默认发给自己，可另加邮件列表（读自己加入的列表要 esi-mail.read_mail.v1）、军团、联盟、其他角色（最多 10 个，可取消发给自己）。
-//     游戏里的聊天频道 ESI 没有发送接口，想让队友收到就建一个邮件列表。发给军团 / 联盟要有游戏里的群发权限，对方开了 CSPA 收费会发送失败。
+//     收件人、发信间隔与本地日志共用（alert-mail.js）：可发给自己、邮件列表、军团、联盟、其他角色。
 //   网页特效（默认关）：屏幕边缘红色闪烁 + 右上角预警卡片（点击查看击杀详情），可选提示音。
 // 人物关注（与位置预警相互独立，默认关闭）：关注的角色产生 KM 时提醒，可分别选「击杀」（参与击杀，含最后一击）/「损失」/「全部」。
 //   只有宁静服可用：实时缓冲里每条击杀带全部玩家攻击者的角色 ID（att）；国服没有公开的个人击杀数据。
@@ -15,34 +14,31 @@
 // 过滤条件（位置预警与星域监控共用）：最低价值、受害者舰船类别、只提醒 N 秒内发生的击杀（zKillboard 收录有延迟，过旧的不提醒）。
 // 人物关注也可以关注军团 / 联盟：成员损失，或成员参与击杀（实时缓冲里带全部攻击者的军团 / 联盟 ID：ao）。
 // 浏览器后台标签页的定时器会被降频（约每分钟一次），预警可能延迟。
+// 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
 
 import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s4';
+import * as AM from './alert-mail.js?v=v1';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
 const DEFAULTS = { on: false, jumps: 3, mail: true, web: false, sound: false, pods: true, watchOn: false, watch: [],   // watch: [{ id, name, kind: character|corporation|alliance, mode: both|kills|losses }]
-  minValue: 0, classes: [], maxAge: 0, regionOn: false, regions: [],
-  mailSelf: true, mailTo: [] };   // mailTo: [{ id, name, kind: character|corporation|alliance|mailing_list }]   // classes: 舰船类别（市场分组 ID），空 = 全部；regions: [{ id, name }]
+  minValue: 0, classes: [], maxAge: 0, regionOn: false, regions: [] };   // classes: 舰船类别（市场分组 ID），空 = 全部；regions: [{ id, name }]
 const MIN_VALUES = [[0, '不限'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿'], [1e10, '100 亿']];
 const MAX_AGES = [[0, '不限'], [60, '1 分钟'], [180, '3 分钟'], [600, '10 分钟'], [1800, '30 分钟']];
-const KIND_ZH = { character: '角色', corporation: '军团', alliance: '联盟', mailing_list: '邮件列表' };
-const MAILTO_MAX = 10;
-const READ_MAIL_SCOPE = 'esi-mail.read_mail.v1';
+const KIND_ZH = { character: '角色', corporation: '军团', alliance: '联盟' };
 const REGION_MAX = 20;
 const WATCH_MAX = 50;
 const MODE_ZH = { both: '击杀与损失', kills: '只看击杀', losses: '只看损失' };
 const T = { ...DEFAULTS };
 const S = {
   timerLoc: 0, timerKills: 0, system: 0, systemName: '', range: new Map(), status: '', cursor: null, busy: false,
-  seen: new Set(), history: [], mailQueue: [], lastMail: 0, mailTimer: 0, snapshot: null, snapshotAt: '', charId: 0
+  seen: new Set(), history: [], mailQueue: [], mailTimer: 0, snapshot: null, snapshotAt: '', charId: 0
 };
 const TAB = Math.random().toString(36).slice(2);
 const LEADER_KEY = 'eve-kill-alert-leader';
 const LOC_POLL = 30e3;
 const LIVE_POLL = 6e3;
 const NETEASE_POLL = 5 * 60e3;
-const MAIL_GAP = 60e3;
-const MAIL_SCOPE = 'esi-mail.send_mail.v1';
 const LOC_SCOPE = 'esi-location.read_location.v1';
 const subs = new Set();
 
@@ -53,7 +49,6 @@ function load() {
   T.watch.forEach((e) => { if (!e.kind) e.kind = 'character'; });
   if (!Array.isArray(T.classes)) T.classes = [];
   if (!Array.isArray(T.regions)) T.regions = [];
-  if (!Array.isArray(T.mailTo)) T.mailTo = [];
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(T)); } catch { /* 忽略 */ } }
 
@@ -74,6 +69,8 @@ function setStatus(text) { S.status = text; notify(); }
 export function initKillAlert(context) {
   ctx = context;
   load();
+  AM.initAlertMail(ctx, T);   // 旧版收件人设置（T.mailSelf / mailTo）第一次搬到共用设置里
+  AM.onMailChange(renderPanel);
   window.addEventListener('eve-account-change', () => { S.system = 0; S.range = new Map(); S.charId = 0; restart(); });
   // 多个标签页：只有「领头」的标签页发游戏邮件，避免重复
   setInterval(claimLeader, 10e3);
@@ -274,29 +271,18 @@ function describe(a) {
 
 // 游戏内邮件：合并、限速，只由领头标签页发送
 function queueMail(a) {
-  if (!ctx.hasScope(MAIL_SCOPE)) return;
+  if (!AM.canMail()) return;
   S.mailQueue.push(a);
   if (S.mailTimer) return;
-  const wait = Math.max(3e3, S.lastMail + MAIL_GAP - Date.now());
-  S.mailTimer = setTimeout(flushMail, wait);
-}
-
-// 收件人：自己（可关）+ 另加的邮件列表 / 军团 / 联盟 / 角色；都没有时还是发给自己
-function mailRecipients(token) {
-  const out = T.mailSelf ? [{ recipient_id: token.character_id, recipient_type: 'character' }] : [];
-  for (const r of T.mailTo) if (r.id !== token.character_id || r.kind !== 'character') out.push({ recipient_id: r.id, recipient_type: r.kind });
-  return out.length ? out : [{ recipient_id: token.character_id, recipient_type: 'character' }];
+  S.mailTimer = setTimeout(flushMail, AM.nextSlot());
 }
 
 async function flushMail(force = false) {
   S.mailTimer = 0;
   const list = S.mailQueue.splice(0);
   if (!list.length || (!force && !isLeader())) return null;
-  const token = ctx.tokenInfo();
-  if (!token) return null;
-  const recipients = mailRecipients(token);
-  const others = recipients.some((r) => r.recipient_id !== token.character_id);
-  const who = others ? ctx.esc(token.character_name || '') : '你';   // 发给别人时说清楚是谁的预警
+  if (!ctx.tokenInfo()) return null;
+  const who = AM.ownerWord();   // 发给别人时说清楚是谁的预警
   const first = list[0];
   const watched = list.filter((x) => x.watch);
   const subject = list.length === 1 ? (first.watch ? '人物关注：' : '击杀预警：') + describe(first)
@@ -324,19 +310,7 @@ async function flushMail(force = false) {
   const body = `<font size="14">${intro}</font><br><br>` +
     list.slice(0, 20).map(line).join('<br>') + (list.length > 20 ? `<br>……另有 ${list.length - 20} 起` : '') +
     `<br><br><font size="10" color="#ff888888">来自 EVE Market 击杀预警，可在网页右上角的铃铛里关闭或调整范围。</font>`;
-  S.lastMail = Date.now();
-  try {
-    await ctx.esiAuthFetch('/characters/' + token.character_id + '/mail/', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ recipients, subject: subject.slice(0, 100), body, approved_cost: 0 })
-    });
-    return true;
-  } catch (error) {
-    console.warn('击杀预警邮件发送失败', error);
-    S.lastMail = Date.now() + 60e3;   // 失败（多为发信频率限制、没有群发权限、对方开了 CSPA 收费）时多等一会
-    S.mailError = error.message;
-    return false;
-  }
+  return AM.sendMail(subject, body);
 }
 
 // 网页特效：屏幕边缘闪烁 + 预警卡片 + 可选提示音
@@ -401,25 +375,22 @@ export function test(kind) {
   a.systemName = S.systemName || sysName(a.system);
   if (kind === 'web') { webAlert(a); return; }
   if (kind === 'mail') {
-    if (!ctx.hasScope(MAIL_SCOPE)) { ctx.showToast('授权里没有发送邮件权限（esi-mail.send_mail.v1），请重新绑定 ESI', 'error', 4000); return; }
-    S.lastMail = 0;
+    if (!AM.canMail()) { AM.testToast(null); return; }
     S.mailQueue.push(a);
-    flushMail(true).then((ok) => {
-      if (ok) ctx.showToast('测试邮件已发送，请在游戏邮箱查看', 'success');
-      else ctx.showToast('测试邮件发送失败：' + (S.mailError || '未知错误') + '（发给军团 / 联盟要有群发权限，对方开了 CSPA 收费也会失败）', 'error', 6000);
-    });
+    flushMail(true).then(AM.testToast);
   }
 }
 
-// ---------- 设置面板（右上角铃铛）----------
-let panel = null;
+// ---------- 设置面板（「预警」弹窗的「击杀预警」标签页）----------
+let panel = null;      // 标签页容器
+let shell = null;      // { close, isOpen }：弹窗由 alert-center.js 管
 // 设置行：左边名称（可带一行短说明），右边开关；详细说明放在悬停提示里
 const sw = (key, label, sub = '', tip = '') => `<label class="ka-opt"${tip ? ` title="${tip}"` : ''}><span><b>${label}</b>${sub ? `<small>${sub}</small>` : ''}</span><input type="checkbox" class="ka-switch" data-ka-set="${key}"${T[key] ? ' checked' : ''}></label>`;
 const sec = (title, body, extra = '') => `<section class="ka-sec"><h4 class="ka-h">${title}${extra}</h4>${body}</section>`;
 function renderPanel() {
-  if (!panel || panel.hidden) return;
+  if (!panel || !shell.isOpen(panel)) return;
   // 重绘时保留正在输入的关注角色名
-  const keep = ['[data-ka-name]', '[data-ka-region]', '[data-ka-mailname]'].map((sel) => {
+  const keep = ['[data-ka-name]', '[data-ka-region]', '[data-am-name]'].map((sel) => {
     const el = panel.querySelector(sel);
     return el ? { sel, value: el.value, focus: document.activeElement === el } : null;
   }).filter(Boolean);
@@ -439,59 +410,13 @@ async function addWatch(text, mode) {
   text = text.trim();
   if (!text) return;
   if (T.watch.length >= WATCH_MAX) { ctx.showToast(`最多关注 ${WATCH_MAX} 个`, 'error'); return; }
-  const hit = await resolveEntity(text);
+  const hit = await AM.resolveEntity(text);
   if (!hit) { ctx.showToast('没有找到：请输入游戏内完整的角色 / 军团 / 联盟名称，或 ID', 'error', 4000); return; }
   if (T.watch.some((e) => e.id === hit.id)) { ctx.showToast(`已经关注了 ${hit.name}`, 'error'); return; }
   update({ watch: [...T.watch, { id: hit.id, name: hit.name, kind: hit.kind, mode }] });
   const el = panel?.querySelector('[data-ka-name]');
   if (el) el.value = '';
   ctx.showToast(`已关注${KIND_ZH[hit.kind]} ${hit.name}（${MODE_ZH[mode]}）`, 'success');
-}
-
-// 邮件收件人：邮件列表从下拉选（value = 列表 ID），其他按名字 / ID 查角色、军团、联盟
-async function addMailTo(text, listId) {
-  if (T.mailTo.length >= MAILTO_MAX) { ctx.showToast(`收件人最多 ${MAILTO_MAX} 个`, 'error'); return; }
-  let hit = null;
-  if (listId) {
-    const l = (S.mailLists || []).find((x) => x.mailing_list_id === Number(listId));
-    if (l) hit = { id: l.mailing_list_id, name: l.name, kind: 'mailing_list' };
-  } else {
-    text = text.trim();
-    if (!text) return;
-    hit = await resolveEntity(text);
-    if (!hit) { ctx.showToast('没有找到：请输入游戏内完整的角色 / 军团 / 联盟名称，或 ID', 'error', 4000); return; }
-  }
-  if (!hit) return;
-  if (T.mailTo.some((e) => e.id === hit.id)) { ctx.showToast(`${hit.name} 已经在收件人里`, 'error'); return; }
-  update({ mailTo: [...T.mailTo, hit] });
-  const el = panel?.querySelector('[data-ka-mailname]');
-  if (el) el.value = '';
-}
-// 自己加入的邮件列表（需要 esi-mail.read_mail.v1）
-function loadMailLists() {
-  const token = ctx.tokenInfo();
-  if (!token || S.mailLists || !ctx.hasScope(READ_MAIL_SCOPE)) return;
-  S.mailLists = [];
-  ctx.esiAuthFetch('/characters/' + token.character_id + '/mail/lists/').then((l) => { S.mailLists = Array.isArray(l) ? l : []; renderPanel(); }).catch(() => { S.mailLists = null; });
-}
-
-// ID 依次试角色 / 军团 / 联盟的公开资料；名字用 /universe/ids/ 精确匹配（游戏内完整名字，不区分大小写），同名时角色优先
-async function resolveEntity(text) {
-  let hit = null;
-  try {
-    if (/^\d{6,12}$/.test(text)) {
-      for (const [kind, path] of [['character', 'characters'], ['corporation', 'corporations'], ['alliance', 'alliances']]) {
-        const res = await fetch(esiUrl(`/${path}/${text}/`));
-        if (res.ok) { hit = { id: Number(text), name: (await res.json()).name, kind }; break; }
-      }
-    } else {
-      const res = await fetch(esiUrl('/universe/ids/'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify([text]) });
-      const d = res.ok ? await res.json() : {};
-      const pick = d.characters?.[0] ? ['character', d.characters[0]] : d.corporations?.[0] ? ['corporation', d.corporations[0]] : d.alliances?.[0] ? ['alliance', d.alliances[0]] : null;
-      if (pick) hit = { ...pick[1], kind: pick[0] };
-    }
-  } catch { /* 调用方提示 */ }
-  return hit;
 }
 
 async function addRegion(text) {
@@ -515,7 +440,7 @@ function drawPanel() {
   const st = status();
   const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m < 60 ? m + ' 分钟前' : Math.floor(m / 60) + ' 小时前'; };
   const pill = (on, text) => `<span class="ka-status${on ? ' on' : ''}"><i></i>${ctx.esc(text)}</span>`;
-  panel.querySelector('#kaBody').innerHTML = `
+  panel.innerHTML = `
     <div class="ka-top">${pill(st.on, st.text)}</div>
     ${token ? '' : '<p class="ka-warn">位置预警需要先在「个人中心」绑定 ESI</p>'}
     ${IS_TQ ? '' : `<p class="ka-warn" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据：提醒会延迟，星域监控与人物关注不可用</p>`}
@@ -526,14 +451,7 @@ function drawPanel() {
     </div>`)}
     ${sec('提醒方式', `<div class="ka-list">
       ${sw('mail', '游戏内邮件', '', '发 EVE 邮件，附击杀报告链接（每分钟最多一封，多条合并）')}
-      ${T.mail ? `<div class="ka-opt ka-stack"><span title="游戏里的聊天频道没有发送接口，想让队友收到可以建一个邮件列表。发给军团 / 联盟要有游戏里的群发权限，对方开了 CSPA 收费会发送失败"><b>收件人</b><small>聊天频道发不了，可用邮件列表</small></span>
-        <div class="ka-chips"><button type="button" class="ka-chip toggle${T.mailSelf ? ' on' : ''}" data-ka-mailself>自己</button>${T.mailTo.map((r) => `<span class="ka-chip">${ctx.esc(r.name)}${r.kind !== 'character' ? `<small> · ${KIND_ZH[r.kind]}</small>` : ''}<button class="ka-close" data-ka-maildel="${r.id}" aria-label="移除">×</button></span>`).join('')}</div>
-        <div class="ka-watch-add">
-          ${S.mailLists?.length ? `<select class="cr-input" data-ka-maillist aria-label="邮件列表"><option value="">邮件列表…</option>${S.mailLists.map((l) => `<option value="${l.mailing_list_id}">${ctx.esc(l.name)}</option>`).join('')}</select>` : ''}
-          <input type="text" class="cr-input" data-ka-mailname placeholder="角色 / 军团 / 联盟全名或 ID" autocomplete="off" spellcheck="false" aria-label="收件人">
-          <button class="btn btn-primary btn-sm" data-ka-mailadd${token ? '' : ' disabled'}>添加</button>
-        </div>
-        ${token && !ctx.hasScope(READ_MAIL_SCOPE) ? '<small>读取你加入的邮件列表需要「读取邮件」授权，重新绑定 ESI 时勾选</small>' : ''}</div>` : ''}
+      ${T.mail ? AM.recipientsHtml() : ''}
       ${sw('web', '网页特效', '', '屏幕边缘红色闪烁 + 右上角预警卡片')}
       ${sw('sound', '提示音', '', '网页特效时同时播放提示音')}
     </div>
@@ -568,59 +486,47 @@ function drawPanel() {
     <p class="ka-note">网页需保持打开（可在后台）</p>`;
 }
 
-export function openPanel() {
-  if (!panel) {
-    panel = document.createElement('div');
-    panel.className = 'modal';
-    panel.id = 'killAlertModal';
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-modal', 'true');
-    panel.innerHTML = `<div class="modal-backdrop" data-ka-dismiss></div><div class="modal-content ka-modal">
-      <div class="modal-header"><h3>击杀预警</h3><button class="modal-close" data-ka-dismiss aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-      <div class="modal-body" id="kaBody"></div></div>`;
-    document.body.appendChild(panel);
-    panel.addEventListener('click', (e) => {
-      if (e.target.closest('[data-ka-dismiss]')) { panel.hidden = true; return; }
-      const t = e.target.closest('[data-ka-test]');
-      if (t) { test(t.dataset.kaTest); return; }
-      const open = e.target.closest('[data-ka-open]');
-      if (open) { panel.hidden = true; ctx.openKill(Number(open.dataset.kaOpen)); return; }
-      if (e.target.closest('[data-ka-add]')) { addWatch(panel.querySelector('[data-ka-name]').value, panel.querySelector('[data-ka-mode]').value); return; }
-      if (e.target.closest('[data-ka-radd]')) { addRegion(panel.querySelector('[data-ka-region]').value); return; }
-      if (e.target.closest('[data-ka-mailadd]')) { addMailTo(panel.querySelector('[data-ka-mailname]').value, ''); return; }
-      if (e.target.closest('[data-ka-mailself]')) { update({ mailSelf: !T.mailSelf }); return; }
-      const mdel = e.target.closest('[data-ka-maildel]');
-      if (mdel) { update({ mailTo: T.mailTo.filter((r) => r.id !== Number(mdel.dataset.kaMaildel)) }); return; }
-      const rdel = e.target.closest('[data-ka-rdel]');
-      if (rdel) { update({ regions: T.regions.filter((r) => r.id !== Number(rdel.dataset.kaRdel)) }); return; }
-      const cls = e.target.closest('[data-ka-class]');
-      if (cls) { const id = Number(cls.dataset.kaClass); update({ classes: T.classes.includes(id) ? T.classes.filter((x) => x !== id) : [...T.classes, id] }); return; }
-      const del = e.target.closest('[data-ka-del]');
-      if (del) update({ watch: T.watch.filter((x) => x.id !== Number(del.dataset.kaDel)) });
-    });
-    panel.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target.matches('[data-ka-name]')) { e.preventDefault(); addWatch(e.target.value, panel.querySelector('[data-ka-mode]').value); }
-      if (e.key === 'Enter' && e.target.matches('[data-ka-region]')) { e.preventDefault(); addRegion(e.target.value); }
-      if (e.key === 'Enter' && e.target.matches('[data-ka-mailname]')) { e.preventDefault(); addMailTo(e.target.value, ''); }
-    });
-    panel.addEventListener('change', (e) => {
-      const set = e.target.closest('[data-ka-set]');
-      if (set) {
-        if (set.dataset.kaSet === 'on' && set.checked && !ctx.tokenInfo()) { set.checked = false; panel.hidden = true; ctx.openEsiBind(); return; }
-        update({ [set.dataset.kaSet]: set.checked });
-        return;
-      }
-      if (e.target.matches('[data-ka-jumps]')) { update({ jumps: Number(e.target.value) }); return; }
-      if (e.target.matches('[data-ka-maillist]')) { if (e.target.value) addMailTo('', e.target.value); return; }
-      if (e.target.matches('[data-ka-num]')) { update({ [e.target.dataset.kaNum]: Number(e.target.value) }); return; }
-      const wm = e.target.closest('[data-ka-wmode]');
-      if (wm) update({ watch: T.watch.map((x) => (x.id === Number(wm.dataset.kaWmode) ? { ...x, mode: wm.value } : x)) });
-    });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && panel && !panel.hidden) { e.stopImmediatePropagation(); panel.hidden = true; } }, true);
-    onChange(renderPanel);
-  }
-  panel.hidden = false;
+// 把标签页挂到弹窗里（只挂一次）；opts：{ close() 关掉弹窗, isOpen(el) 这个标签页是否正显示 }
+export function mountPanel(el, opts) {
+  if (panel) return;
+  panel = el;
+  shell = opts;
+  AM.bindRecipients(panel);
+  panel.addEventListener('click', (e) => {
+    const t = e.target.closest('[data-ka-test]');
+    if (t) { test(t.dataset.kaTest); return; }
+    const open = e.target.closest('[data-ka-open]');
+    if (open) { shell.close(); ctx.openKill(Number(open.dataset.kaOpen)); return; }
+    if (e.target.closest('[data-ka-add]')) { addWatch(panel.querySelector('[data-ka-name]').value, panel.querySelector('[data-ka-mode]').value); return; }
+    if (e.target.closest('[data-ka-radd]')) { addRegion(panel.querySelector('[data-ka-region]').value); return; }
+    const rdel = e.target.closest('[data-ka-rdel]');
+    if (rdel) { update({ regions: T.regions.filter((r) => r.id !== Number(rdel.dataset.kaRdel)) }); return; }
+    const cls = e.target.closest('[data-ka-class]');
+    if (cls) { const id = Number(cls.dataset.kaClass); update({ classes: T.classes.includes(id) ? T.classes.filter((x) => x !== id) : [...T.classes, id] }); return; }
+    const del = e.target.closest('[data-ka-del]');
+    if (del) update({ watch: T.watch.filter((x) => x.id !== Number(del.dataset.kaDel)) });
+  });
+  panel.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.matches('[data-ka-name]')) { e.preventDefault(); addWatch(e.target.value, panel.querySelector('[data-ka-mode]').value); }
+    if (e.key === 'Enter' && e.target.matches('[data-ka-region]')) { e.preventDefault(); addRegion(e.target.value); }
+  });
+  panel.addEventListener('change', (e) => {
+    const set = e.target.closest('[data-ka-set]');
+    if (set) {
+      if (set.dataset.kaSet === 'on' && set.checked && !ctx.tokenInfo()) { set.checked = false; shell.close(); ctx.openEsiBind(); return; }
+      update({ [set.dataset.kaSet]: set.checked });
+      return;
+    }
+    if (e.target.matches('[data-ka-jumps]')) { update({ jumps: Number(e.target.value) }); return; }
+    if (e.target.matches('[data-ka-num]')) { update({ [e.target.dataset.kaNum]: Number(e.target.value) }); return; }
+    const wm = e.target.closest('[data-ka-wmode]');
+    if (wm) update({ watch: T.watch.map((x) => (x.id === Number(wm.dataset.kaWmode) ? { ...x, mode: wm.value } : x)) });
+  });
+  onChange(renderPanel);
+}
+// 切到这个标签页时
+export function showPanel() {
   renderPanel();
-  loadMailLists();
+  AM.loadMailLists();
   if (!S.regionNames) ctx.regionList().then((list) => { S.regionNames = list; renderPanel(); }).catch(() => {});
 }

@@ -3,6 +3,7 @@ import * as TF from './trade-fees.js?v=v3';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v12';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v27';
 import * as SM from './struct-markets.js?v=v4';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v1';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
 // ===== 配置与常量 =====
@@ -5251,22 +5252,28 @@ function initCartButton() {
   syncCartBadge();
 }
 
+// ===== 预警（右上角铃铛，alert-center.js）：击杀预警与本地日志合在一个弹窗；铃铛的点任一开启就亮，本地日志刚有敌情时变红 =====
+const alertState = { kill: null, intel: null };
+function syncAlertBtn() {
+  const btn = $('killAlertBtn');
+  const k = alertState.kill, i = alertState.intel;
+  btn.classList.toggle('on', Boolean(k?.on || i?.on));
+  btn.classList.toggle('alert', Boolean(i?.alert));
+  btn.title = `击杀预警：${k ? k.text : '未开启'}；本地日志：${i ? i.text : '未开启'}`;
+  setTabState('kill', k?.on);
+  setTabState('intel', i?.on);
+}
+
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v3').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v4').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
       hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope)
     });
-    const sync = () => {
-      const st = m.status();
-      const btn = $('intelBtn');
-      btn.classList.toggle('on', st.on);
-      btn.classList.toggle('alert', st.alert);
-      btn.title = '本地日志：' + st.text;
-    };
+    const sync = () => { alertState.intel = m.status(); syncAlertBtn(); };
     m.onChange(sync);
     sync();
     return m;
@@ -5274,7 +5281,6 @@ function loadIntel() {
   return intelModule;
 }
 function initIntelButton() {
-  $('intelBtn')?.addEventListener('click', () => loadIntel().then((m) => m.openPanel()).catch((e) => showToast('本地日志加载失败：' + e.message, 'error')));
   let on = false;
   try { on = JSON.parse(localStorage.getItem('eve-intel-v1') || '{}').on === true; } catch { /* 忽略 */ }
   if (on) loadIntel().catch(() => {});
@@ -5284,7 +5290,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v8').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v9').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5293,12 +5299,7 @@ function loadKillAlert() {
       openKill: async (id) => { if (!id) return; const kb = await loadKillboard(); kb.openServiceKill(id); },
       shipClasses, shipClassOf, regionList: regionListAll
     });
-    const sync = () => {
-      const st = m.status();
-      const btn = $('killAlertBtn');
-      btn.classList.toggle('on', st.on);
-      btn.title = '击杀预警：' + st.text;
-    };
+    const sync = () => { alertState.kill = m.status(); syncAlertBtn(); };
     m.onChange(sync);
     sync();
     return m;
@@ -5342,7 +5343,8 @@ function shipClassOf(typeId) {
 function initKillAlerts() {
   initCartButton();
   initIntelButton();
-  $('killAlertBtn').addEventListener('click', () => loadKillAlert().then((m) => m.openPanel()).catch((e) => showToast('击杀预警加载失败：' + e.message, 'error')));
+  initAlertCenter({ loadKill: loadKillAlert, loadIntel, esc });
+  $('killAlertBtn').addEventListener('click', () => openAlertCenter());
   // 已开启的话页面打开即开始检测
   let on = false;
   try { const t = JSON.parse(localStorage.getItem(KILL_ALERT_KEY) || '{}'); on = t.on === true || (t.watchOn === true && t.watch?.length > 0) || (t.regionOn === true && t.regions?.length > 0); } catch { /* 忽略 */ }
