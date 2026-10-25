@@ -121,9 +121,10 @@ function load(typeId) {
   const hit = cache.get(typeId);
   if (hit && Date.now() - hit.at < TTL) return hit.promise;
   const promise = Promise.all(ctx.regions.map(async (r) => {
+    // 订单与历史走市场中心的星域缓存（悬停预取、全宇宙行情读过的直接用）
     const [orders, history] = await Promise.all([
-      ctx.fetchESIPaged(`/markets/${r.id}/orders/?order_type=all&type_id=${typeId}`).catch(() => null),
-      ctx.fetchESI(`/markets/${r.id}/history/?type_id=${typeId}`).catch(() => null)
+      (ctx.regionOrders ? ctx.regionOrders(typeId, r.id) : ctx.fetchESIPaged(`/markets/${r.id}/orders/?order_type=all&type_id=${typeId}`)).catch(() => null),
+      (ctx.regionHistory ? ctx.regionHistory(typeId, r.id) : ctx.fetchESI(`/markets/${r.id}/history/?type_id=${typeId}`)).catch(() => null)
     ]);
     const hub = (orders || []).filter((o) => o.location_id === r.hub.id);
     const sells = hub.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price);
@@ -310,7 +311,7 @@ export async function renderHubCompare(box, typeId) {
     if (e.target.closest('[data-hc-fees]')) { ctx.TF.openFeeDialog(); return; }
     if (e.target.closest('[data-hc-rank]')) { ctx.openRank(); return; }
     if (e.target.closest('[data-hc-structs]')) { ctx.structs.open(); return; }
-    if (e.target.closest('[data-hc-reload]')) { cache.delete(id); structCache.delete(id); renderHubCompare(box, id); }
+    if (e.target.closest('[data-hc-reload]')) { cache.delete(id); structCache.delete(id); ctx.dropMarket?.(id); renderHubCompare(box, id); }
   });
   box.addEventListener('change', (e) => {
     if (!e.target.matches('[data-hc-m3],[data-hc-collat]')) return;

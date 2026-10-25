@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle } from './skeleton.js?v=v16r7';
 import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes } from './hub-compare.js?v=v11';
-import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v26';
+import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v12';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v27';
 import * as SM from './struct-markets.js?v=v4';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 
@@ -1397,7 +1397,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v8').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v9').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -1533,12 +1533,69 @@ function setLoading(loading) {
 const GLOBAL_MARKET_REGION = 19000001;
 const GLOBAL_MARKET_TYPES = new Set([44992]);
 
-async function loadMarketData(typeId) {
-  // 快速切换物品时取消上一轮请求，并丢弃过期结果
-  state.loadController?.abort();
-  const controller = new AbortController();
-  state.loadController = controller;
+// ===== 物品行情缓存与预取 =====
+// 每个星域的订单、历史分别按「星域:物品」缓存 5 分钟（ESI 订单本身约 5 分钟更新一次），市场中心、交易中心比价、自选看板共用；刷新按钮强制重读。
+// 预取：鼠标在物品上停 120 ms（触屏按下、键盘聚焦）就开始读，点进去时多半已经到了；打开物品后空闲时再取列表里前后相邻的物品。
+//   选了星域：预取该星域；全宇宙：只预取五大交易中心所在星域（大部分订单都在这里），点进去先显示这几个星域的结果，其余星域后台补全后再刷新。
+//   开着「交易中心比价」标签时，同时预取五个交易中心的数据（hub-compare.js 的 loadHubs，也走这里的缓存）。
+const MARKET_TTL = 5 * 60e3;
+const MARKET_CACHE_MAX = 800;   // 全宇宙一个物品约 80 条（70 个星域订单 + 12 个历史）
+const marketCache = new Map();  // `o|h:${星域}:${物品}` -> { at, promise }
+function marketCached(key, make, force) {
+  const hit = marketCache.get(key);
+  if (!force && hit && Date.now() - hit.at < MARKET_TTL) return hit.promise;
+  const promise = make();
+  marketCache.delete(key);
+  marketCache.set(key, { at: Date.now(), promise });
+  promise.catch(() => { if (marketCache.get(key)?.promise === promise) marketCache.delete(key); });
+  while (marketCache.size > MARKET_CACHE_MAX) marketCache.delete(marketCache.keys().next().value);
+  return promise;
+}
+const regionOrders = (typeId, regionId, force = false) => marketCached(`o:${regionId}:${typeId}`, () => fetchESIPaged(`/markets/${regionId}/orders/?order_type=all&type_id=${typeId}`), force);
+// 部分物品没有历史数据会返回 404
+const regionHistory = (typeId, regionId, force = false) => marketCached(`h:${regionId}:${typeId}`, () => fetchESI(`/markets/${regionId}/history/?type_id=${typeId}`).catch(() => []), force);
+function regionMarket(typeId, regionId, { force = false } = {}) {
+  return Promise.all([regionOrders(typeId, regionId, force), regionHistory(typeId, regionId, force)]);
+}
+function dropMarketCache(typeId) {
+  for (const k of [...marketCache.keys()]) if (k.endsWith(':' + typeId)) marketCache.delete(k);
+}
+function prefetchItem(typeId, { hubs = state.contentTab === 'hubs' } = {}) {
+  if (!typeId || !state.typeIndex.has(typeId)) return;
+  const global = GLOBAL_MARKET_TYPES.has(typeId);
+  const regionId = global ? GLOBAL_MARKET_REGION : state.regionId;
+  const ids = regionId ? [regionId] : REGIONS.map((r) => r.id);
+  ids.forEach((id) => regionMarket(typeId, id).catch(() => {}));
+  if (hubs && !global && REGIONS.length >= 2) loadHubs(typeId).catch(() => {});
+}
+// 打开物品后：列表里（侧栏目录 / 搜索结果）前后相邻的物品
+function prefetchNeighbors(typeId) {
+  const el = document.querySelector(`#sidebar .item-btn.active[data-type-id="${typeId}"]`);
+  if (!el) return;
+  const list = [...el.parentElement.querySelectorAll(':scope > [data-type-id]')];
+  const i = list.indexOf(el);
+  [list[i + 1], list[i + 2], list[i - 1]].forEach((x) => x && prefetchItem(Number(x.dataset.typeId)));
+}
+function initItemPrefetch() {
+  let timer = 0, cur = 0;
+  const idOf = (t) => { const el = t?.closest?.('[data-type-id],[data-hr-open]'); return el ? [Number(el.dataset.typeId || el.dataset.hrOpen), Boolean(el.dataset.hrOpen)] : [0, false]; };
+  const arm = (e, delay) => {
+    const [id, arb] = idOf(e.target);
+    if (!id || id === cur || id === state.selectedItem?.id) return;
+    cur = id;
+    clearTimeout(timer);
+    timer = setTimeout(() => prefetchItem(id, arb ? { hubs: true } : undefined), delay);   // 倒卖排行点进去打开的是比价标签
+  };
+  document.addEventListener('pointerover', (e) => { if (e.pointerType !== 'touch') arm(e, 120); });
+  document.addEventListener('pointerout', (e) => { if (idOf(e.target)[0] === cur && !e.relatedTarget?.closest?.(`[data-type-id="${cur}"],[data-hr-open="${cur}"]`)) { clearTimeout(timer); cur = 0; } });
+  document.addEventListener('touchstart', (e) => arm(e, 0), { passive: true });
+  document.addEventListener('focusin', (e) => arm(e, 120));
+}
+
+async function loadMarketData(typeId, { force = false } = {}) {
+  // 快速切换物品时丢弃过期结果（已发出的请求读完照样进缓存，全宇宙的其余星域不再继续读）
   const seq = ++state.loadSeq;
+  const current = () => seq === state.loadSeq;
   const globalMarket = GLOBAL_MARKET_TYPES.has(Number(typeId));
   state.globalMarket = globalMarket;
   const regionId = globalMarket ? GLOBAL_MARKET_REGION : state.regionId;
@@ -1546,37 +1603,46 @@ async function loadMarketData(typeId) {
   $('updateTag').textContent = '更新中…';
 
   try {
-    const [orders, history] = regionId ? await Promise.all([
-      fetchESIPaged(`/markets/${regionId}/orders/?order_type=all&type_id=${typeId}`, { signal: controller.signal }),
-      fetchESI(`/markets/${regionId}/history/?type_id=${typeId}`, { signal: controller.signal }).catch((error) => {
-        if (error.name === 'AbortError') throw error;
-        return []; // 部分物品没有历史数据会返回 404
-      })
-    ]) : await fetchUniverseMarket(typeId, controller.signal, (done, total) => { if (seq === state.loadSeq) $('updateTag').textContent = `更新中… ${done}/${total} 个星域`; });
-    if (seq !== state.loadSeq) return;
+    // 选了星域：走缓存（悬停 / 相邻物品预取过的直接用）；全宇宙：先显示五大交易中心所在星域，其余星域读完再刷新
+    let partial = false;
+    const show = (orders, history) => {
+      state.orders = (orders || []).slice();   // 后面会并入玩家建筑订单，不改缓存里的数组
+      state.history = (history || []).slice().sort((a, b) => new Date(b.date) - new Date(a.date));
+      renderStats();
+      renderOrders();
+      renderHistory();
+      if (state.contentTab === 'chart') renderChart();
+    };
+    const [orders, history] = (regionId ? await regionMarket(typeId, regionId, { force })
+      : await fetchUniverseMarket(typeId, {
+        force, current,
+        onProgress: (done, total) => {
+          if (current()) $('updateTag').textContent = partial ? `已显示五大交易中心 · 其余星域读取中 ${done}/${total}` : `更新中… ${done}/${total} 个星域`;
+        },
+        onPartial: (o, h) => {
+          if (!current()) return;
+          partial = true;
+          show(o, h);
+          setLoading(false);
+          resolveLocations(topOrders(state.orders)).then(() => { if (current()) renderOrders(); });
+        }
+      })) || [];
+    if (!current()) return;
 
-    state.orders = orders || [];
-    state.history = (history || []).sort((a, b) => new Date(b.date) - new Date(a.date));
-
-    renderStats();
-    renderOrders();
-    renderHistory();
-    if (state.contentTab === 'chart') renderChart();
+    show(orders, history);
     $('updateTag').textContent = (globalMarket ? '全服统一市场 · ' : '') + '更新于 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false });
     $('updateTag').title = globalMarket ? '伊甸币全服统一交易：订单不分星域，所列空间站只是挂单地点' : '';
     setLoading(false);
+    whenIdle(() => { if (seq === state.loadSeq) prefetchNeighbors(typeId); }, 2000);
 
     // 地点名称与全服均价不阻塞首屏渲染。全宇宙订单多，只解析最便宜的卖单 / 最高的买单所在地（列表默认按价格排序）
-    const named = regionId ? state.orders : [
-      ...state.orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price).slice(0, 200),
-      ...state.orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price).slice(0, 200)
-    ];
+    const named = regionId ? state.orders : topOrders(state.orders);
     resolveLocations(named).then(() => { if (seq === state.loadSeq) renderOrders(); });
     loadStructureOrders(typeId, seq);
     refreshCharJumps().then((changed) => { if (changed && seq === state.loadSeq) renderOrders(); });
     getMarketPriceMap().then(() => { if (seq === state.loadSeq) renderAvgPrice(typeId); });
   } catch (error) {
-    if (error.name === 'AbortError' || seq !== state.loadSeq) return;
+    if (!current()) return;
     console.error('加载市场数据失败:', error);
     setLoading(false);
     $('updateTag').textContent = '加载失败';
@@ -1589,32 +1655,42 @@ async function loadMarketData(typeId) {
   }
 }
 
+// 全宇宙订单多，只解析最便宜的卖单 / 最高的买单所在地（列表默认按价格排序）
+function topOrders(orders) {
+  return [
+    ...orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price).slice(0, 200),
+    ...orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price).slice(0, 200)
+  ];
+}
+
 // 全宇宙：ESI 订单只能按星域查，逐个星域查询后合并；
 // 价格历史取该物品订单最多的 12 个星域按日期汇总（成交量相加，均价按成交量加权，最高 / 最低取极值），其余星域成交很少
-async function fetchUniverseMarket(typeId, signal, onProgress) {
-  const regions = await loadMarketRegions();
-  const counts = new Map();
-  const orders = [];
+// 分两步：先读五大交易中心所在星域（悬停预取过的直接命中缓存）交给 onPartial 先显示，再 10 路并发读其余星域；切换物品后（current() 为假）不再读新的星域
+async function fetchUniverseMarket(typeId, { force = false, current = () => true, onProgress = () => {}, onPartial = null } = {}) {
+  const regions = (await loadMarketRegions()).map((r) => r.id);
+  const first = REGIONS.map((r) => r.id).filter((id) => regions.includes(id));
+  const queue = regions.filter((id) => !first.includes(id));
+  const byRegion = new Map();
   let done = 0;
-  const queue = regions.map((r) => r.id);
+  const one = async (id) => {
+    const list = await regionOrders(typeId, id, force).catch(() => []);
+    if (list.length) byRegion.set(id, list);
+    onProgress(++done, regions.length);
+  };
   onProgress(0, regions.length);
+  await Promise.all(first.map(one));
+  if (!current()) return null;
+  if (onPartial && queue.length) onPartial(...await universeResult(typeId, byRegion, force));
   await Promise.all(Array.from({ length: 10 }, async () => {
-    while (queue.length) {
-      const id = queue.shift();
-      try {
-        const list = await fetchESIPaged(`/markets/${id}/orders/?order_type=all&type_id=${typeId}`, { signal });
-        if (list.length) { counts.set(id, list.length); orders.push(...list); }
-      } catch (error) {
-        if (error.name === 'AbortError') throw error;
-      }
-      onProgress(++done, regions.length);
-    }
+    while (queue.length && current()) await one(queue.shift());
   }));
-  const top = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([id]) => id);
-  const lists = await Promise.all(top.map((id) => fetchESI(`/markets/${id}/history/?type_id=${typeId}`, { signal }).catch((error) => {
-    if (error.name === 'AbortError') throw error;
-    return [];
-  })));
+  if (!current()) return null;
+  return universeResult(typeId, byRegion, force);
+}
+async function universeResult(typeId, byRegion, force) {
+  const orders = [...byRegion.values()].flat();
+  const top = [...byRegion].sort((a, b) => b[1].length - a[1].length).slice(0, 12).map(([id]) => id);
+  const lists = await Promise.all(top.map((id) => regionHistory(typeId, id, force)));
   const byDate = new Map();
   for (const h of lists.flat()) {
     const d = byDate.get(h.date);
@@ -2463,7 +2539,7 @@ async function useLocationRegion() {
 }
 
 function refreshCurrent() {
-  if (state.selectedItem && !$('refreshBtn').disabled) loadMarketData(state.selectedItem.id);
+  if (state.selectedItem && !$('refreshBtn').disabled) loadMarketData(state.selectedItem.id, { force: true });
 }
 
 function initDetailActions() {
@@ -2516,7 +2592,8 @@ function initContentTabs() {
   let structReload = 0;
   SM.onStructChange(() => { clearTimeout(structReload); structReload = setTimeout(() => { if (state.selectedItem?.id) loadMarketData(state.selectedItem.id); prefetchStructMarkets(); }, 800); });
   startStructPrefetch();
-  initHubCompare({ structs, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
+  initItemPrefetch();
+  initHubCompare({ structs, regionOrders, regionHistory, dropMarket: dropMarketCache, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
     skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8), openRank: () => openArb() });
   initHubRank({ structs, quote: SM.structQuote, esiUrl, showToast, regionList: regionListAll, findSystem: findSystemByName, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
     typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
