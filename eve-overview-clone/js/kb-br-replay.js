@@ -9,7 +9,9 @@ const TILES = 24;
 const FEED = 14;
 const RP = { box: null, model: null, t: 0, playing: false, speed: 60, raf: 0, last: 0, idx: -1, flash: new Map() };
 
-const clock = (sec) => new Date(sec * 1000).toISOString().slice(11, 19);
+import { isoIn, tzLabel } from './eve-time.js?v=v1';
+
+const clock = (sec) => isoIn(sec).slice(11, 19);   // 跟随战场统计的时区切换
 const span = (sec) => { const s = Math.max(0, Math.round(sec)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 
 export function initReplay(context) { ctx = context; }
@@ -113,7 +115,7 @@ function update(force) {
   const box = RP.box;
   if (!box) return;
   const { kills, t0, t1 } = RP.model;
-  box.querySelector('#rpClock').textContent = clock(RP.t) + ' EVE';
+  box.querySelector('#rpClock').textContent = clock(RP.t) + ' ' + tzLabel();
   box.querySelector('#rpElapsed').textContent = `+${span(RP.t - t0)} / ${span(t1 - t0)}`;
   const range = box.querySelector('#rpRange');
   if (document.activeElement !== range) range.value = Math.round(RP.t);

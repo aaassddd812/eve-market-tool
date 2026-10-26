@@ -836,7 +836,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v47').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v49').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -880,7 +880,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v31').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v32').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance, valuation
     });
@@ -4185,7 +4185,7 @@ function bindAbyAssets(box) {
 let assetTools = null;
 let assetToolsLoading = null;
 function loadAssetTools() {
-  if (!assetToolsLoading) assetToolsLoading = import('./asset-tools.js?v=v1').then((m) => {
+  if (!assetToolsLoading) assetToolsLoading = import('./asset-tools.js?v=v2').then((m) => {
     m.initAssetTools({ esc, formatISK, formatNumber, typeName, serverKey, store, TF, server: SERVER.id, regions: REGIONS, showToast,
       isActive: () => !$('profileView').hidden && activeProfileTab() === 'assets' });
     assetTools = m;

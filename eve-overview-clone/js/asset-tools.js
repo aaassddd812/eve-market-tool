@@ -84,7 +84,7 @@ function loadSnap() {
   return snapLoading;
 }
 
-const S = { minValue: 1e6, method: 'auto' };   // minValue：只看合计价值 ≥ 的物品；method：auto 推荐 / buy 全部卖收单
+const S = { minValue: 1e6, method: 'auto', focus: '' };   // minValue：只看合计价值 ≥ 的物品；method：auto 推荐 / buy 全部卖收单；focus：只看某组（交易中心:方式）
 
 function analyze(assets) {
   const byType = new Map();
@@ -125,32 +125,64 @@ function analyze(assets) {
 
 const hubName = (regionId) => ctx.regions.find((r) => r.id === regionId)?.hub.name || '星域 ' + regionId;
 
-function clearanceHtml(rows) {
-  const { esc, formatISK: isk, formatNumber: num } = ctx;
+// 按「交易中心 + 方式」分组：一组就是一趟出售（复制清单用）
+function groupRows(rows) {
   const groups = new Map();
   for (const r of rows) {
     const k = r.region + ':' + r.method;
-    if (!groups.has(k)) groups.set(k, { region: r.region, method: r.method, rows: [], value: 0 });
+    if (!groups.has(k)) groups.set(k, { key: k, region: r.region, method: r.method, rows: [], value: 0 });
     const g = groups.get(k);
     g.rows.push(r);
     g.value += r.value;
   }
-  const list = [...groups.values()].sort((a, b) => b.value - a.value);
+  return [...groups.values()].sort((a, b) => b.value - a.value);
+}
+const METHOD = { buy: '卖给收单', list: '挂卖单' };
+const daysText = (d) => (d < 1 ? '1 天内' : `约 ${Math.ceil(d)} 天`);
+
+function clearanceHtml(rows, groups, filters) {
+  const { esc, formatISK: isk, formatNumber: num } = ctx;
   const sum = rows.reduce((t, r) => t + r.value, 0);
-  const summary = list.map((g, k) => `<div class="clr-group">
-      <b>${esc(hubName(g.region))}</b><span>${g.method === 'buy' ? '直接卖收单' : '挂卖单'} · ${g.rows.length} 种</span><strong>${isk(g.value)}</strong>
-      <button type="button" class="link-btn" data-clr-copy="${k}" title="复制「物品名 数量」清单，可粘贴到游戏多重出售">复制清单</button></div>`).join('');
-  const body = rows.slice(0, 300).map((r) => `<tr>
+  const part = (m) => { const l = rows.filter((r) => r.method === m); return { n: l.length, v: l.reduce((t, r) => t + r.value, 0), days: Math.max(0, ...l.map((r) => r.days)) }; };
+  const buy = part('buy'), list = part('list');
+  const hero = `<section class="clr-hero">
+      <div class="clr-hero-intro">
+        <h3>清仓小助手</h3>
+        <p>把资产换成 ISK：算好每样东西去哪个交易中心、怎么卖最划算</p>
+      </div>
+      <div class="clr-hero-nums">
+        <div class="clr-total"><span>预计可得（税后）</span><strong>${isk(sum)}<small> ISK</small></strong><em>${num(rows.length)} 种物品</em></div>
+        <div class="clr-part buy"><span>立即到手</span><b>${isk(buy.v)}</b><em>卖给收单 · ${buy.n} 种</em></div>
+        <div class="clr-part list"><span>挂单等待</span><b>${isk(list.v)}</b><em>${list.n ? `挂卖单 · ${list.n} 种 · 最慢${daysText(list.days)}` : '没有要挂单的'}</em></div>
+      </div>
+    </section>`;
+  if (!rows.length) return hero + filters + '<p class="clr-empty">没有符合条件的物品：试试把「只看价值」调低</p>';
+  const focus = groups.find((g) => g.key === S.focus);
+  const plans = groups.map((g, k) => `<div class="clr-plan ${g.method}${focus === g ? ' on' : ''}" data-clr-focus="${g.key}" role="button" tabindex="0" aria-pressed="${focus === g}" title="点击只看这一组">
+      <span class="clr-plan-no">${k + 1}</span>
+      <div class="clr-plan-main"><b>${esc(hubName(g.region))}</b><span class="clr-method ${g.method}">${METHOD[g.method]}</span></div>
+      <div class="clr-plan-val"><strong>${isk(g.value)}</strong><em>${g.rows.length} 种</em></div>
+      <button type="button" class="btn btn-sm ${k === 0 ? 'btn-primary' : 'btn-ghost'}" data-clr-copy="${k}" title="${g.method === 'buy' ? '复制「物品名 数量」，粘贴到游戏的「多重出售」窗口' : '复制「物品名 数量」清单，到交易中心逐个挂单'}">复制清单</button>
+    </div>`).join('');
+  const shown = focus ? focus.rows : rows;
+  const mainHub = hubName(snap.hubs[0]);
+  const body = shown.slice(0, 300).map((r) => `<tr>
       <td><div class="pi-prod"><img src="https://images.evetech.net/types/${r.id}/icon?size=32" alt="" width="24" height="24" loading="lazy"><span>${esc(ctx.typeName(r.id))}</span></div></td>
       <td class="num">${num(r.qty)}</td>
       <td>${esc(hubName(r.region))}</td>
-      <td><span class="clr-method ${r.method}">${r.method === 'buy' ? '卖收单' : '挂卖单'}</span>${r.method === 'buy' && !r.instantOk ? '<small class="hc-sub down">收单量不够，要往下砸</small>' : ''}</td>
+      <td><span class="clr-method ${r.method}">${METHOD[r.method]}</span>${r.method === 'buy' && !r.instantOk ? ' <span class="clr-warn" title="收单量不够，要往下砸到更低的收单价">收单不足</span>' : ''}</td>
       <td class="num">${formatP(r.method === 'buy' ? r.buy : r.listPrice)}</td>
-      <td class="num"><b>${isk(r.value)}</b>${r.gain > r.value * 0.01 ? `<small class="hc-sub up">比在主交易中心直接卖多 ${isk(r.gain)}</small>` : ''}</td>
-      <td class="num pi-hide-sm">${r.method === 'list' ? (r.days < 1 ? '1 天内' : `约 ${Math.ceil(r.days)} 天`) : '立即'}</td></tr>`).join('');
-  return `<div class="clr-summary">${summary}</div>
-    <p class="pi-note">合计税后约 <b>${isk(sum)}</b> · ${rows.length} 种物品${rows.length > 300 ? '，表格显示前 300 种' : ''} · 行情 ${snap.at ? new Date(snap.at).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总 · 未计运费</p>
-    <div class="table-scroll"><table class="pi-table clr-table"><thead><tr><th>物品</th><th class="num">数量</th><th>去哪卖</th><th>怎么卖</th><th class="num">价格</th><th class="num">税后所得</th><th class="num pi-hide-sm">预计卖完</th></tr></thead><tbody>${body || '<tr><td colspan="7" class="text-muted">没有符合条件的物品</td></tr>'}</tbody></table></div>`;
+      <td class="num"><b>${isk(r.value)}</b></td>
+      <td class="num clr-gain">${r.gain > r.value * 0.01 ? '+' + isk(r.gain) : ''}</td>
+      <td class="num pi-hide-sm">${r.method === 'list' ? daysText(r.days) : '立即'}</td></tr>`).join('');
+  return `${hero}${filters}
+    <h4 class="clr-h">出售计划<small>按交易中心分组，每组复制清单到游戏里卖</small></h4>
+    <div class="clr-plans">${plans}</div>
+    <div class="clr-table-head">
+      ${focus ? `<span class="clr-chip">只看：${esc(hubName(focus.region))} · ${METHOD[focus.method]}<button type="button" data-clr-focus="" aria-label="显示全部">×</button></span>` : `<b>全部物品</b>`}
+      <span class="text-muted">${num(shown.length)} 种${shown.length > 300 ? '，显示前 300 种' : ''}</span>
+    </div>
+    <div class="table-scroll"><table class="pi-table clr-table"><thead><tr><th>物品</th><th class="num">数量</th><th>去哪卖</th><th>怎么卖</th><th class="num">单价</th><th class="num">税后所得</th><th class="num" title="比在${esc(mainHub)}直接卖给收单多得">多赚</th><th class="num pi-hide-sm">卖完时间</th></tr></thead><tbody>${body}</tbody></table></div>`;
 }
 const formatP = (v) => (v == null ? '—' : ctx.formatISK(v));
 
@@ -158,17 +190,24 @@ let last = null;   // 最近一次的分组结果（复制清单用）
 export async function showClearance(box, assets, onBack) {
   const draw = () => {
     const rows = analyze(assets);
-    const groups = new Map();
-    for (const r of rows) { const k = r.region + ':' + r.method; if (!groups.has(k)) groups.set(k, { rows: [], value: 0 }); groups.get(k).rows.push(r); groups.get(k).value += r.value; }
-    last = [...groups.values()].sort((a, b) => b.value - a.value);
+    last = groupRows(rows);
+    if (S.focus && !last.some((g) => g.key === S.focus)) S.focus = '';
     const seg = (name, items, cur) => `<div class="segmented">${items.map(([v, l]) => `<button type="button" data-clr-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-    box.innerHTML = `<div class="valuation-toolbar"><button type="button" class="btn btn-ghost" data-clr-back>← 返回资产</button><h3 class="asset-view-title">清仓小助手</h3></div>
+    const filters = `
       <div class="clr-filters">
-        <div class="pi-inline"><span>方式</span>${seg('method', [['auto', '推荐（卖收单或挂单）'], ['buy', '全部直接卖收单']], S.method)}</div>
+        <div class="pi-inline"><span>卖法</span>${seg('method', [['auto', '推荐'], ['buy', '全部卖给收单']], S.method)}</div>
         <div class="pi-inline"><span>只看价值 ≥</span>${seg('minValue', [[0, '全部'], [1e6, '100 万'], [1e7, '1000 万'], [1e8, '1 亿']], S.minValue)}</div>
-      </div>
-      <p class="pi-note">对比五个交易中心直接卖给收单与挂卖单（比最低卖价低一档）的税后所得，按当前技能与税费设置计算；挂单按日成交量的 1/4 估算卖完时间，超过 ${LIST_DAYS} 天或多赚不到 ${LIST_BONUS * 100}% 的建议直接卖。蓝图拷贝与组装状态的舰船不计入</p>
-      ${clearanceHtml(rows)}`;
+        <details class="clr-how"${S.how ? ' open' : ''}><summary>怎么算的？</summary>
+          <ul>
+            <li>对比五个交易中心「直接卖给收单」和「挂卖单（比最低卖价低一档）」的税后所得，按你的技能与税费设置计算</li>
+            <li>挂单按日成交量的 1/4 估算卖完时间；超过 ${LIST_DAYS} 天、或比直接卖多不到 ${LIST_BONUS * 100}% 的，建议直接卖给收单</li>
+            <li>不含蓝图拷贝和组装状态的舰船；未计运费，物品不在那个交易中心要自己运过去</li>
+            <li>行情为交易中心快照，${snap.at ? new Date(snap.at).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总</li>
+          </ul>
+        </details>
+      </div>`;
+    box.innerHTML = `<div class="valuation-toolbar"><button type="button" class="btn btn-ghost" data-clr-back>← 返回资产</button></div>${clearanceHtml(rows, last, filters)}`;
+    box.querySelector('.clr-how')?.addEventListener('toggle', (e) => { S.how = e.target.open; });
   };
   box.innerHTML = '<div class="pi-loading">读取五个交易中心行情…</div>';
   try { await loadSnap(); } catch (e) { box.innerHTML = `<div class="valuation-toolbar"><button type="button" class="btn btn-ghost" data-clr-back>← 返回资产</button></div><p class="text-muted">行情读取失败：${ctx.esc(e.message)}</p>`; bind(box, draw, onBack); return; }
@@ -183,10 +222,17 @@ function bind(box, draw, onBack) {
     const set = e.target.closest('[data-clr-set]');
     if (set) { const k = set.dataset.clrSet; S[k] = k === 'minValue' ? Number(set.dataset.v) : set.dataset.v; draw(); return; }
     const cp = e.target.closest('[data-clr-copy]');
+    if (!cp) {
+      const fo = e.target.closest('[data-clr-focus]');
+      if (fo) { S.focus = fo.dataset.clrFocus === S.focus ? '' : fo.dataset.clrFocus; draw(); return; }
+    }
     if (cp && last) {
       const g = last[Number(cp.dataset.clrCopy)];
       navigator.clipboard.writeText(g.rows.map((r) => `${ctx.typeName(r.id)}\t${r.qty}`).join('\n'))
         .then(() => ctx.showToast(`已复制 ${g.rows.length} 种物品`, 'success', 1800), () => ctx.showToast('浏览器阻止了复制', 'error'));
     }
+  };
+  box.onkeydown = (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.clr-plan')) { e.preventDefault(); e.target.click(); }
   };
 }

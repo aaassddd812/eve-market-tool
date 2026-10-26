@@ -4,6 +4,7 @@
 // 按 zKillboard 的使用约定：请求串行、间隔发送，结果缓存 5 分钟。
 import { SERVER, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s4';
 import { skCards, skRows, skEntityHead, skTitle } from './skeleton.js?v=v17';
+import { fullIn } from './eve-time.js?v=v1';
 
 let app;
 
@@ -184,6 +185,13 @@ function timeAgo(iso) {
   if (diff < 86400e3) return Math.floor(diff / 3600e3) + ' 小时前';
   if (diff < 86400e3 * 30) return Math.floor(diff / 86400e3) + ' 天前';
   return new Date(iso).toLocaleDateString('zh-CN');
+}
+
+// 击杀时间：北京时间（UTC+8）为主，下面一行是游戏内时间（EVE 时间 = UTC）
+function killTime(iso) {
+  const sec = Math.floor(Date.parse(iso) / 1000);
+  if (!Number.isFinite(sec)) return '—';
+  return `${fullIn(sec, 'cn')} <small class="kb-tz">UTC+8</small><br><small class="text-muted">游戏内时间 ${fullIn(sec, 'eve')}</small>`;
 }
 
 function killTags(z) {
@@ -417,7 +425,7 @@ function renderKill(k, val, priceNote, insurance) {
         <div class="kb-facts">
           <span><em>舰船</em>${app.esc(typeName(v.ship_type_id))}</span>
           <span><em>地点</em>${app.esc(sys.name)} <b style="color:${sys.color}">${sys.secText}</b>${sys.region ? ' · ' + app.esc(sys.region) : ''}${station ? '<br><small>' + app.esc(station) + '</small>' : ''}</span>
-          <span><em>时间</em>${new Date(k.killmail_time).toLocaleString('zh-CN', { hour12: false })}</span>
+          <span><em>时间</em>${killTime(k.killmail_time)}</span>
           <span><em>伤害</em>${app.formatNumber(v.damage_taken)} · ${k.attackers.length} 名攻击者</span>
         </div>
         <div class="kb-tags">${killTags(z)}</div>

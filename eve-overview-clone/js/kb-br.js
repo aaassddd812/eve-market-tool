@@ -2,7 +2,8 @@
 // 选择星系（可勾选星门邻近星系）与时间段，向击杀记录服务读取期间全部玩家击杀与攻击者，
 // 按联盟（无联盟时按军团）汇总，自动推测 A / B 双方阵营（可手动调整），统计双方人数、损失、舰船组成与损失明细。
 // 路由：#kb/br（设置）、#kb/br/<星系,…>/<开始>-<结束>[/<A 方,…>/<B 方,…>]（时间为 Unix 秒，可分享）
-import { initReplay, mountReplay, stopReplay, resizeReplay } from './kb-br-replay.js?v=v3';
+import { initReplay, mountReplay, stopReplay, resizeReplay } from './kb-br-replay.js?v=v4';
+import { getTz, setTz, tzLabel, isoIn, parseIn } from './eve-time.js?v=v1';
 let ctx;                       // kb-page 提供的工具：app, kb, request, absorbNames, partyName, typeName, loadTypes, avatar, entityLink, IMG
 const $ = (id) => document.getElementById(id);
 const PODS = new Set([670, 33328]);
@@ -30,11 +31,11 @@ export function initBr(context) {
   window.addEventListener('resize', resizeReplay);
 }
 
-// ---------- 时间（EVE 时间即 UTC）----------
-const toInput = (sec) => new Date(sec * 1000).toISOString().slice(0, 16);
-const fromInput = (v) => (v ? Math.floor(Date.parse(v + ':00Z') / 1000) : NaN);
-const fmtTime = (sec) => new Date(sec * 1000).toISOString().slice(0, 16).replace('T', ' ');
-const fmtClock = (sec) => new Date(sec * 1000).toISOString().slice(11, 16);
+// ---------- 时间：默认北京时间（UTC+8），可切换为 EVE 时间（UTC），见 eve-time.js；链接里始终是 Unix 秒 ----------
+const toInput = (sec) => isoIn(sec).slice(0, 16);
+const fromInput = (v) => parseIn(v);
+const fmtTime = (sec) => isoIn(sec).slice(0, 16).replace('T', ' ');
+const fmtClock = (sec) => isoIn(sec).slice(11, 16);
 
 function defaultRange() {
   const end = Math.ceil(Date.now() / 1000 / 300) * 300;
@@ -146,8 +147,9 @@ function renderForm() {
       </div>
     </div>` : ''}
     <div class="kb-br-row">
-      <label class="kb-br-label">时间<small>EVE 时间</small></label>
+      <label class="kb-br-label">时间</label>
       <div class="kb-br-field">
+        <div class="segmented kb-br-tz" role="group" aria-label="时区">${[['cn', '北京时间 UTC+8'], ['eve', 'EVE 时间']].map(([z, l]) => `<button type="button" data-br-tz="${z}" class="${getTz() === z ? 'active' : ''}">${l}</button>`).join('')}</div>
         <div class="kb-br-time">
           <input type="datetime-local" id="brStart" value="${toInput(BR.start)}" step="60" aria-label="开始时间">
           <span>至</span>
@@ -195,6 +197,7 @@ function bindForm() {
     }
     if ((x = el('[data-br-unpick]'))) { BR.picked = BR.picked.filter((id) => id !== Number(x.dataset.brUnpick)); renderForm(); return; }
     if ((x = el('[data-br-jumps]'))) { BR.jumps = Number(x.dataset.brJumps); renderForm(); return; }
+    if ((x = el('[data-br-tz]'))) { setTz(x.dataset.brTz); renderForm(); if (BR.data?.kills.length) renderResult(); return; }
     if ((x = el('[data-br-all]'))) {
       BR.checked = x.dataset.brAll === '1' ? new Set(neighborsOf(BR.picked, BR.jumps).map((n) => n.id)) : new Set();
       renderForm();
@@ -385,7 +388,7 @@ function renderResult() {
     <div class="kb-br-summary">
       <div class="kb-br-title">
         <strong>${ctx.app.esc(sysList)}</strong>
-        <span class="text-muted">${fmtTime(d.start)} – ${fmtTime(d.end)} EVE · ${d.kills.length} 次击杀 · ${ctx.app.formatNumber(pilots)} 名飞行员 · 总损失 ${ctx.app.formatISK(total)} ISK${d.truncated ? ' · 击杀过多，只统计前 5000 条' : ''}</span>
+        <span class="text-muted">${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()} · ${d.kills.length} 次击杀 · ${ctx.app.formatNumber(pilots)} 名飞行员 · 总损失 ${ctx.app.formatISK(total)} ISK${d.truncated ? ' · 击杀过多，只统计前 5000 条' : ''}</span>
       </div>
       <div class="kb-br-tools">
         <button class="btn btn-ghost" data-br-auto title="按击杀关系重新推测双方">重新分阵营</button>
@@ -742,7 +745,7 @@ function imageModel() {
   const cmp = (label, a, b, f = num) => ({ label, a, b, aText: f(a), bText: f(b) });
   return {
     title: names.length > 4 ? `${names.slice(0, 4).join('、')} 等 ${names.length} 个星系` : names.join('、'),
-    subtitle: `${fmtTime(d.start)} – ${fmtTime(d.end)} EVE  ·  ${d.kills.length} 次击杀  ·  ${num(pilots)} 名飞行员  ·  总损失 ${isk(total)} ISK`,
+    subtitle: `${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()}  ·  ${d.kills.length} 次击杀  ·  ${num(pilots)} 名飞行员  ·  总损失 ${isk(total)} ISK`,
     sides: { A: side(A), B: side(B) },
     ratio: info.ratio, verdict: info.verdict, winner: info.winner,
     shareA: info.pa, shareAText: PERCENT(info.pa), shareBText: PERCENT(1 - info.pa), eff: info.effText,
@@ -753,7 +756,7 @@ function imageModel() {
       labels: [fmtClock(cd.t0), fmtClock(cd.t0 + (cd.t1 - cd.t0) / 2), fmtClock(cd.t1)]
     },
     footer: location.host + ' · 击杀数据按吉他中间价估值',
-    generated: '生成于 ' + fmtTime(Math.floor(Date.now() / 1000)) + ' EVE'
+    generated: '生成于 ' + fmtTime(Math.floor(Date.now() / 1000)) + ' ' + tzLabel()
   };
 }
 

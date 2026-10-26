@@ -2,7 +2,7 @@
 // 数据来自自建的击杀记录服务（server/kb_service.py，/api/kb/），收录新伊甸全部击杀；
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v23';
+import { initBr, renderBr } from './kb-br.js?v=v24';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v1';
 
 let app, kb;
@@ -999,11 +999,11 @@ function route() {
 
 // ---------- 本地分析：频道成员名单 / 定向扫描（local-scan.js，首次打开时加载）----------
 async function renderLocalScan() {
-  const m = await import('./local-scan.js?v=v7');
+  const m = await import('./local-scan.js?v=v8');
   if (!location.hash.startsWith('#kb/local')) return;
   m.renderLocal($('kbMain'), {
     esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,
-    kb: true, loadTypes, typeName, systemName: (id) => kb.systemLabel(id).name, fetchESI: app.fetchESI, copyText: app.copyText
+    kb: true, back: BACK_LINK, loadTypes, typeName, systemName: (id) => kb.systemLabel(id).name, fetchESI: app.fetchESI, copyText: app.copyText
   });
 }
 

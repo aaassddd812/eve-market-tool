@@ -3204,6 +3204,8 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .kb-br-near-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb-br-near-item small { color: var(--text-muted); font-size: 0.6875rem; }
 .kb-br-time { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 0.8125rem; color: var(--text-secondary); }
+.kb-br-tz { width: fit-content; margin-bottom: 8px; }
+.kb-tz { margin-left: 4px; padding: 1px 5px; border-radius: 4px; background: var(--accent-soft); color: var(--accent-primary); font-size: 0.6875rem; font-weight: 600; }
 .kb-br-time input { height: 34px; padding: 0 8px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-primary); color: var(--text-primary); font: inherit; color-scheme: light dark; }
 .kb-br-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--text-muted); }
 .kb-br-quick button { padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border-primary); color: var(--text-secondary); }
@@ -5361,16 +5363,58 @@ td .sov-auto-tag { margin-left: 4px; }
 .nw-key.nw-asset i { background: var(--buy-color); }
 .nw-key.nw-wallet i { background: var(--warning); }
 .nw-key.nw-orders i { background: var(--violet); }
-.clr-filters { display: flex; gap: 10px 18px; flex-wrap: wrap; margin: 8px 0; }
-.clr-summary { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; margin: 10px 0 4px; }
-.clr-group { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; padding: 8px 12px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.8125rem; }
-.clr-group span { color: var(--text-muted); font-size: 0.75rem; }
-.clr-group strong { font-variant-numeric: tabular-nums; }
-.clr-group .link-btn { justify-self: end; }
-.clr-method { padding: 1px 8px; border-radius: 999px; font-size: 0.6875rem; }
+/* 清仓小助手：概览卡 → 筛选 → 出售计划（按交易中心分组）→ 物品表 */
+.clr-hero { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: center; gap: 16px 28px; margin: 4px 0 14px; padding: 18px 20px; border-radius: var(--radius-lg, 12px); background: linear-gradient(135deg, var(--accent-soft), transparent 70%), var(--bg-tertiary); }
+.clr-hero-intro h3 { margin: 0 0 4px; font-size: 1.25rem; }
+.clr-hero-intro p { margin: 0; color: var(--text-secondary); font-size: 0.875rem; }
+.clr-hero-nums { display: flex; gap: 10px; flex-wrap: wrap; }
+.clr-hero-nums > div { display: flex; flex-direction: column; gap: 2px; min-width: 140px; padding: 10px 14px; border-radius: var(--radius-md); background: var(--bg-primary); }
+.clr-hero-nums span { font-size: 0.75rem; color: var(--text-muted); }
+.clr-hero-nums em { font-style: normal; font-size: 0.75rem; color: var(--text-muted); }
+.clr-total strong { font-size: 1.625rem; line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--accent-primary); }
+.clr-total strong small { font-size: 0.8125rem; font-weight: 500; color: var(--text-muted); }
+.clr-part b { font-size: 1.125rem; font-variant-numeric: tabular-nums; }
+.clr-part.buy b { color: var(--buy-color); }
+.clr-part.list b { color: var(--accent-primary); }
+.clr-filters { display: flex; align-items: center; gap: 10px 18px; flex-wrap: wrap; margin: 0 0 16px; }
+.clr-filters .pi-inline > span:first-child { width: auto; white-space: nowrap; }
+.clr-how { font-size: 0.8125rem; color: var(--text-secondary); }
+.clr-how summary { cursor: pointer; color: var(--accent-primary); list-style: none; }
+.clr-how summary::-webkit-details-marker { display: none; }
+.clr-how summary::before { content: '?'; display: inline-grid; place-items: center; width: 16px; height: 16px; margin-right: 5px; border-radius: 50%; background: var(--accent-soft); font-size: 0.6875rem; font-weight: 700; }
+.clr-how[open] { flex-basis: 100%; padding: 10px 14px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.clr-how ul { margin: 8px 0 0; padding-left: 18px; line-height: 1.7; }
+.clr-h { display: flex; align-items: baseline; gap: 10px; margin: 0 0 8px; font-size: 0.9375rem; }
+.clr-h small { font-weight: 400; font-size: 0.75rem; color: var(--text-muted); }
+.clr-plans { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-bottom: 18px; }
+.clr-plan { display: grid; grid-template-columns: auto 1fr auto; grid-template-rows: auto auto; align-items: center; gap: 6px 10px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-tertiary); cursor: pointer; transition: background .15s; }
+.clr-plan:hover { background: var(--bg-hover, var(--accent-soft)); }
+.clr-plan.on { background: var(--accent-soft); }
+.clr-plan:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 1px; }
+.clr-plan-no { grid-row: span 2; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; background: var(--bg-primary); font-size: 0.8125rem; font-weight: 700; color: var(--text-secondary); }
+.clr-plan.on .clr-plan-no { background: var(--accent-primary); color: #fff; }
+.clr-plan-main { grid-column: 2 / span 2; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.clr-plan-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clr-plan-val { grid-column: 2; display: flex; align-items: baseline; gap: 8px; }
+.clr-plan-val strong { font-size: 1.0625rem; font-variant-numeric: tabular-nums; }
+.clr-plan-val em { font-style: normal; font-size: 0.75rem; color: var(--text-muted); }
+.clr-plan .btn { grid-column: 3; grid-row: 2; }
+.clr-method { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 0.6875rem; white-space: nowrap; }
 .clr-method.buy { background: var(--buy-soft); color: var(--buy-color); }
-.clr-method.list { background: var(--sell-soft); color: var(--sell-color); }
-.clr-table td small.hc-sub { display: block; }
+.clr-method.list { background: var(--accent-soft); color: var(--accent-primary); }
+.clr-warn { display: inline-block; padding: 1px 6px; border-radius: 999px; font-size: 0.6875rem; background: rgba(245, 158, 11, 0.14); color: var(--warning); white-space: nowrap; cursor: help; }
+.clr-table-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 0.875rem; }
+.clr-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-primary); font-weight: 600; font-size: 0.8125rem; }
+.clr-chip button { width: 20px; height: 20px; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; font-size: 0.9375rem; line-height: 1; }
+.clr-chip button:hover { background: var(--accent-soft); }
+.clr-table .clr-gain { color: var(--buy-color); font-variant-numeric: tabular-nums; }
+.clr-empty { padding: 24px; text-align: center; color: var(--text-muted); border-radius: var(--radius-md); background: var(--bg-tertiary); }
+@media (max-width: 760px) {
+  .clr-hero { grid-template-columns: 1fr; padding: 14px; }
+  .clr-hero-nums > div { flex: 1 1 120px; min-width: 0; }
+  .clr-total { flex-basis: 100% !important; }
+  .clr-plans { grid-template-columns: 1fr; }
+}
 /* 自选看板卡片视图 */
 .wb-head .wb-sort { width: auto; height: 30px; font-size: 0.8125rem; }
 .wb-seg button { height: 26px; font-size: 0.8125rem; }

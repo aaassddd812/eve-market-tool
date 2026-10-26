@@ -331,7 +331,7 @@ function draw() {
       <td class="ls-hide-md">${(s?.systems || []).slice(0, 2).map(([id]) => esc(D.systemName(id))).join('、') || '—'}</td>
       <td class="num">${s ? ago(s.last) : '—'}</td>` : ''}</tr>`;
   }).join('');
-  box.innerHTML = `
+  box.innerHTML = `${D.back || ''}
     <section class="kb-section ls-input">
       <div class="kb-section-head"><h2>本地分析</h2><span class="text-muted">粘贴频道成员列表（Ctrl+A、Ctrl+C，最多 ${MAX} 人）查人，或粘贴定向扫描结果看舰队组成，自动识别</span></div>
       <textarea class="cr-input" rows="6" data-ls-text placeholder="${LANG === 'en' ? 'Channel member list: one pilot name per line&#10;D-scan: select all in the scan window and copy' : '频道成员列表：一行一个角色名&#10;定向扫描：扫描窗口里全选复制'}" spellcheck="false">${esc(keep)}</textarea>
