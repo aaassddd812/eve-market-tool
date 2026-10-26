@@ -894,11 +894,12 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v47').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v50').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       battles: () => battlesPromise,
       getEsiToken: ensureEsiToken,
@@ -4185,7 +4186,7 @@ function bindAbyAssets(box) {
 let assetTools = null;
 let assetToolsLoading = null;
 function loadAssetTools() {
-  if (!assetToolsLoading) assetToolsLoading = import('./asset-tools.js?v=v2').then((m) => {
+  if (!assetToolsLoading) assetToolsLoading = import('./asset-tools.js?v=v3').then((m) => {
     m.initAssetTools({ esc, formatISK, formatNumber, typeName, serverKey, store, TF, server: SERVER.id, regions: REGIONS, showToast,
       isActive: () => !$('profileView').hidden && activeProfileTab() === 'assets' });
     assetTools = m;
@@ -4443,7 +4444,7 @@ async function renderProfileTab(tab) {
 // 个人中心 · 技能：首次打开时加载
 let skillsLoading = null;
 function loadSkillsModule() {
-  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v23').then((m) => {
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v26').then((m) => {
     m.initSkills({ esc, formatNumber, esiAuthFetch, store });
     return m;
   }).catch((error) => { skillsLoading = null; throw error; });

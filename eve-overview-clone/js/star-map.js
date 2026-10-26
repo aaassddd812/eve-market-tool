@@ -51,14 +51,22 @@ const MAP_BG = '#05080d';
 const LAYER_GROUPS = [
   ['基础', [['security', '安全等级'], ['region', '星域'], ['distance', '跳数距离'], ['stations', 'NPC 空间站'], ['planets', '行星资源']]],
   ['势力', [['sov', '势力划分'], ['adm', '军事指数'], ['campaigns', '主权争夺'], ['fw', '势力战争']]],
-  ['活动 · 1 小时', [['kills', '玩家击杀'], ['npc', 'NPC 击杀'], ['jumps', '跳跃'], ['incursions', '入侵']]]
+  ['活动', [['kills', '舰船击毁'], ['pods', '太空舱击毁'], ['npc', 'NPC 击杀'], ['jumps', '跳跃'], ['incursions', '入侵']]],
+  ['工业', [['industry', '工业成本指数']]]
 ];
+// 活动类（击杀、跳跃）来自 ESI 每小时快照，与游戏内实时滚动的统计会有出入
+const HOURLY = new Set(['kills', 'pods', 'npc', 'jumps']);
+// 工业成本指数（ESI /industry/systems/，约每小时更新）：按活动分别着色
+const IND_ACTS = [['manufacturing', '制造'], ['researching_time_efficiency', '时间效率研究'], ['researching_material_efficiency', '材料效率研究'], ['copying', '拷贝'], ['invention', '发明'], ['reaction', '反应']];
+const IND = { promise: null, map: null, at: 0, act: 'manufacturing' };
+try { IND.act = localStorage.getItem('eve-map-ind') || IND.act; } catch { /* 忽略 */ }
 const LAYERS = LAYER_GROUPS.flatMap(([, list]) => list);
 const LAYER_HINT = {
   security: '游戏内安全等级配色', region: '每个星域一种颜色', distance: `与选中星系的星门跳数（未选择时以${HUB_NAME}为起点）`,
   stations: '星系内 NPC 空间站数量', planets: '星系里能提取所选资源（或所选类型）的行星数量', sov: 'ESI 实时主权：NPC 阵营 / 玩家联盟', adm: '主权枢纽的军事指数（ADM），1–6，越高越难攻破',
   campaigns: '正在进行的主权争夺战', fw: '势力战争占领方与战况',
-  kills: '舰船 + 太空舱被击毁数', npc: 'NPC 被击杀数（刷怪活跃度）', jumps: '星门跳跃次数', incursions: '萨沙入侵影响的星系'
+  kills: '过去 1 小时被击毁的玩家舰船（不含太空舱）', pods: '过去 1 小时被击毁的太空舱', npc: '过去 24 小时被击杀的 NPC 舰船（刷怪活跃度，与游戏星图一致）', jumps: '过去 1 小时的星门跳跃次数',
+  incursions: '萨沙入侵影响的星系', industry: '星系内该项工业活动的系统成本指数：越多人在这里开工越高，越低越省安装费'
 };
 const CAMPAIGN_TYPE_ZH = { tcu_defense: '领土控制器防御', ihub_defense: '主权枢纽防御', station_defense: '空间站防御', station_freeport: '空间站自由港' };
 const JITA_ID = HUB.hub.system;   // 默认起点：吉他（曙光服为索巴色基）
@@ -249,6 +257,48 @@ function stepMorph() {
   if (t >= 1) M.morph = null;
 }
 
+// 读 ESI 并记下数据生成时间（Last-Modified），用于提示「快照截至几点」
+async function fetchStamped(path, key) {
+  const res = await fetch(esiUrl(path), { headers: { 'Accept-Language': 'zh' } });
+  if (!res.ok) throw new Error('ESI ' + res.status);
+  const at = Date.parse(res.headers.get('last-modified') || '');
+  if (at) M.live[key] = at;
+  return res.json();
+}
+// NPC 击杀：有 24 小时累计时用它，否则用 ESI 过去 1 小时
+const npcKills = (id) => (M.live.npc24 ? M.live.npc24.get(id) || 0 : M.live.kills.get(id)?.npc_kills || 0);
+const npcSpan = () => (M.live.npc24 ? (M.live.npc24Info.hours >= 24 ? '24 小时' : `近 ${M.live.npc24Info.hours} 小时`) : '1 小时');
+const hhmm = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' });
+function hourlyNote() {
+  if (M.layer === 'npc' && M.live.npc24) {
+    const h = M.live.npc24Info.hours;
+    return `过去 ${h >= 24 ? 24 : h} 小时累计（本站每小时存一份 ESI 快照再相加，截至 ${hhmm(M.live.npc24Info.to)}）` + (h < 24 ? '；服务刚开始记录，满 24 小时后与游戏一致' : '');
+  }
+  const at = M.layer === 'jumps' ? M.live.jumpsAt : M.live.killsAt;
+  return at ? `ESI 每小时更新一次快照（这份截至 ${hhmm(at)}），游戏内是实时滚动统计，数字会有出入` : 'ESI 每小时更新一次快照，游戏内是实时滚动统计，数字会有出入';
+}
+
+function loadIndustry() {
+  if (!IND.promise) IND.promise = fetchStamped('/industry/systems/', 'indAt').then((list) => {
+    IND.map = new Map(list.map((x) => [x.solar_system_id, Object.fromEntries(x.cost_indices.map((c) => [c.activity, c.cost_index]))]));
+    if (M.layer === 'industry') { computeLayer(); renderLayerList(); renderLegend(); }
+    const box = $('mapIndBlock');
+    if (box && M.selected != null) box.outerHTML = industryHtml(M.systems[M.selected]);
+  }).catch((e) => { IND.promise = null; console.error('工业指数加载失败', e); });
+  return IND.promise;
+}
+const pct = (v) => (v * 100).toFixed(v < 0.1 ? 2 : 1) + '%';
+function industryHtml(s) {
+  const c = IND.map?.get(s.id);
+  if (!IND.map) return '<div id="mapIndBlock" class="map-ind"><p class="map-info-note">读取工业成本指数…</p></div>';
+  if (!c) return '<div id="mapIndBlock" class="map-ind"></div>';
+  return `<div id="mapIndBlock" class="map-ind"><div class="map-ind-head">工业成本指数</div><div class="map-ind-grid">${IND_ACTS.map(([k, l]) => `<span${k === IND.act && M.layer === 'industry' ? ' class="on"' : ''}><em>${l}</em><b>${c[k] != null ? pct(c[k]) : '—'}</b></span>`).join('')}</div></div>`;
+}
+function indOptions() {
+  return `<select class="region-select map-pi-pick" data-ind-pick aria-label="工业活动">${IND_ACTS.map(([k, l]) => `<option value="${k}"${IND.act === k ? ' selected' : ''}>${l}</option>`).join('')}</select>` +
+    (IND.map ? '' : '<p class="layer-hint">读取工业成本指数…</p>');
+}
+
 // 进行中的请求复用同一个 Promise（空闲预取与打开星图可能同时触发）
 let liveInflight = null;
 function loadLive(force = false, quiet = false) {
@@ -260,14 +310,19 @@ function loadLive(force = false, quiet = false) {
 async function loadLiveImpl(quiet) {
   const results = await Promise.allSettled([
     app.fetchESI('/sovereignty/map/'),
-    app.fetchESI('/universe/system_kills/'),
-    app.fetchESI('/universe/system_jumps/'),
+    fetchStamped('/universe/system_kills/', 'killsAt'),
+    fetchStamped('/universe/system_jumps/', 'jumpsAt'),
     app.fetchESI('/incursions/'),
     app.fetchESI('/fw/systems/'),
     app.fetchESI('/sovereignty/structures/'),
-    app.fetchESI('/sovereignty/campaigns/')
+    app.fetchESI('/sovereignty/campaigns/'),
+    fetch('/api/v1/map/kills?server=' + SERVER.id).then((r) => (r.ok ? r.json() : null)).catch(() => null)
   ]);
-  const [sov, kills, jumps, incursions, fw, structures, campaigns] = results;
+  const [sov, kills, jumps, incursions, fw, structures, campaigns, k24] = results;
+  // NPC 击杀按 24 小时（与游戏星图一致）：本站后端把 ESI 每小时快照累加；没有后端时退回 1 小时
+  const d24 = k24.status === 'fulfilled' && k24.value?.hours ? k24.value : null;
+  M.live.npc24 = d24 ? new Map(Object.entries(d24.systems).map(([id, v]) => [Number(id), v[2]])) : null;
+  M.live.npc24Info = d24 ? { hours: d24.hours, to: d24.to * 1000 } : null;
   if (structures.status === 'fulfilled') {
     M.live.adm = new Map();
     for (const st of structures.value) {
@@ -281,7 +336,7 @@ async function loadLiveImpl(quiet) {
   if (jumps.status === 'fulfilled') M.live.jumps = new Map(jumps.value.map((x) => [x.system_id, x.ship_jumps]));
   if (incursions.status === 'fulfilled') M.live.incursions = incursions.value;
   if (fw.status === 'fulfilled') M.live.fw = new Map(fw.value.map((x) => [x.solar_system_id, x]));
-  const failed = results.filter((r) => r.status === 'rejected').length;
+  const failed = results.slice(0, 7).filter((r) => r.status === 'rejected').length;
   if (failed && !quiet) app.showToast(failed + ' 项实时数据加载失败，部分着色方式可能没有数据', 'error');
 
   // 玩家联盟名称保留原名
@@ -336,8 +391,10 @@ function piOptions() {
 
 const LAYER_METRIC = {
   planets: piCount,
-  kills: (s) => { const k = M.live.kills.get(s.id); return k ? k.ship_kills + k.pod_kills : 0; },
-  npc: (s) => M.live.kills.get(s.id)?.npc_kills || 0,
+  kills: (s) => M.live.kills.get(s.id)?.ship_kills || 0,
+  pods: (s) => M.live.kills.get(s.id)?.pod_kills || 0,
+  industry: (s) => (IND.map?.get(s.id)?.[IND.act] || 0) * 100,   // 百分比
+  npc: (s) => npcKills(s.id),
   jumps: (s) => M.live.jumps.get(s.id) || 0,
   stations: (s) => s.stations.length
 };
@@ -370,6 +427,8 @@ function computeLayer() {
     switch (M.layer) {
       case 'sov': { const o = ownerOf(s); c = o ? (o.kind === 'faction' ? factionColor(o.id) : hashColor(o.id)) : NONE_COLOR; break; }
       case 'kills': c = heat(metric(s), max, 8); break;
+      case 'pods': c = heat(metric(s), max, 350); break;
+      case 'industry': c = heat(metric(s), max, 270); break;
       case 'npc': c = heat(metric(s), max, 32); break;
       case 'jumps': c = heat(metric(s), max, 190); break;
       case 'stations': c = heat(metric(s), max, 48); break;
@@ -391,6 +450,7 @@ function computeLayer() {
 function setLayer(layer) {
   M.layer = layer;
   if (layer === 'planets' && !PI.data) loadPiData();
+  if (layer === 'industry' && !IND.map) loadIndustry();
   M.highlight = null;
   M.highlightKey = null;
   computeLayer();
@@ -604,7 +664,8 @@ function dolly(factor) {
 }
 
 const NARROW = window.matchMedia('(max-width: 768px)');
-function centerOn(i, maxDistance = 45) {
+// instant：直接移过去，不播放飞行动画（「我的位置」按钮用，且保持当前缩放）
+function centerOn(i, maxDistance = 45, instant = false) {
   const s = M.systems[i];
   const dist = Math.min(camera.position.distanceTo(controls.target), maxDistance);
   const target = new THREE.Vector3(s.rx, s.ry, s.rz);
@@ -614,6 +675,14 @@ function centerOn(i, maxDistance = 45) {
     const up = camera.up.clone().sub(dir.clone().multiplyScalar(camera.up.dot(dir))).normalize();
     const visible = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
     target.sub(up.multiplyScalar(visible * 0.25));
+  }
+  if (instant) {
+    const dir = camera.position.clone().sub(controls.target).normalize();
+    M.tween = null;
+    controls.target.copy(target);
+    camera.position.copy(target).add(dir.multiplyScalar(dist));
+    invalidate();
+    return;
   }
   flyTo(target, dist);
 }
@@ -897,7 +966,8 @@ function showTooltip(i, x, y) {
   const s = M.systems[i];
   const owner = ownerOf(s);
   let extra = '';
-  if (M.layer === 'kills' || M.layer === 'npc') { const k = M.live.kills.get(s.id); extra = `玩家击杀 ${k ? k.ship_kills + k.pod_kills : 0} · NPC ${k ? app.formatNumber(k.npc_kills) : 0}`; }
+  if (M.layer === 'kills' || M.layer === 'pods' || M.layer === 'npc') { const k = M.live.kills.get(s.id); extra = `舰船 ${k ? k.ship_kills : 0} · 太空舱 ${k ? k.pod_kills : 0}（1 小时）· NPC ${app.formatNumber(npcKills(s.id))}（${npcSpan()}）`; }
+  else if (M.layer === 'industry') { const v = IND.map?.get(s.id)?.[IND.act]; extra = `${IND_ACTS.find(([k]) => k === IND.act)[1]} ${v != null ? pct(v) : '—'}`; }
   else if (M.layer === 'jumps') extra = `跳跃 ${M.live.jumps.get(s.id) || 0}`;
   else if (M.layer === 'stations') extra = `${s.stations.length} 座 NPC 空间站`;
   else if (M.layer === 'distance') { const h = M.distance?.hops[s.i]; extra = h == null || h < 0 ? '无法到达' : `距 ${M.systems[M.distance.origin].name} ${h} 跳`; }
@@ -919,7 +989,7 @@ function renderLayerList() {
     `<div class="layer-group-title">${title}</div><div class="layer-group">` +
     list.map(([key, label]) => `<button class="layer-btn${M.layer === key ? ' active' : ''}" data-layer="${key}" title="${LAYER_HINT[key]}">${label}</button>`).join('') +
     '</div>').join('') +
-    `<p class="layer-hint">${LAYER_HINT[M.layer]}</p>` + (M.layer === 'planets' ? piOptions() : '');
+    `<p class="layer-hint">${LAYER_HINT[M.layer]}</p>` + (M.layer === 'planets' ? piOptions() : M.layer === 'industry' ? indOptions() : '');
   $('layerSummary').textContent = LAYERS.find(([k]) => k === M.layer)?.[1] || '';
 }
 
@@ -992,15 +1062,23 @@ function renderLegend() {
     section('其他', sorted.filter(([key]) => key === 'none'));
   } else if (LAYER_METRIC[M.layer]) {
     const value = LAYER_METRIC[M.layer];
-    const hue = { kills: 8, npc: 32, jumps: 190, stations: 48, planets: 140 }[M.layer];
+    const hue = { kills: 8, pods: 350, npc: 32, jumps: 190, stations: 48, planets: 140, industry: 270 }[M.layer];
+    const isInd = M.layer === 'industry';
+    const show = (v) => (isInd ? v.toFixed(v < 10 ? 2 : 1) + '%' : app.formatNumber(Math.round(v)));
     // 分段色块（对数刻度）
-    const steps = [0, 1, 5, 20, 100, layerCache.max].filter((v, n, arr) => n === 0 || (v <= layerCache.max && v > arr[n - 1]));
-    rows.push('<div class="legend-steps">' + steps.map((v) => `<span><i style="background:${heat(v, layerCache.max, hue)}"></i>${v}</span>`).join('') + '</div>');
-    const total = M.systems.reduce((t, s) => t + value(s), 0);
-    const title = { kills: '玩家击杀（舰船 + 太空舱）', npc: 'NPC 击杀', jumps: '星门跳跃', stations: 'NPC 空间站', planets: '可用行星' }[M.layer];
-    rows.push(`<div class="legend-group">${title} · 合计 ${app.formatNumber(total)}</div>`);
+    const steps = (isInd ? [0.14, 1, 2, 5, 10, layerCache.max] : [0, 1, 5, 20, 100, layerCache.max]).filter((v, n, arr) => n === 0 || (v <= layerCache.max && v > arr[n - 1]));
+    rows.push('<div class="legend-steps">' + steps.map((v) => `<span><i style="background:${heat(v, layerCache.max, hue)}"></i>${show(v)}</span>`).join('') + '</div>');
+    if (HOURLY.has(M.layer)) rows.push(`<p class="legend-note">${hourlyNote()}</p>`);
+    if (isInd) {
+      rows.push(`<div class="legend-group">${IND_ACTS.find(([k]) => k === IND.act)[1]} · 成本指数最高的星系</div>`);
+      if (IND.at || M.live.indAt) rows.push(`<p class="legend-note">ESI 约每小时更新（这份截至 ${hhmm(M.live.indAt)}）；多数星系为最低 0.14%</p>`);
+    } else {
+      const total = M.systems.reduce((t, s) => t + value(s), 0);
+      const title = { kills: '舰船击毁 · 1 小时', pods: '太空舱击毁 · 1 小时', npc: 'NPC 击杀 · ' + npcSpan(), jumps: '星门跳跃 · 1 小时', stations: 'NPC 空间站', planets: '可用行星' }[M.layer];
+      rows.push(`<div class="legend-group">${title} · 合计 ${app.formatNumber(total)}</div>`);
+    }
     const top = [...M.systems].sort((a, b) => value(b) - value(a)).slice(0, 12).filter((s) => value(s) > 0);
-    for (const s of top) rows.push(legendRow({ color: layerCache.colors[s.i], label: s.name, sub: regionName(s.region), count: app.formatNumber(value(s)), systemIndex: s.i }));
+    for (const s of top) rows.push(legendRow({ color: layerCache.colors[s.i], label: s.name, sub: regionName(s.region), count: show(value(s)), systemIndex: s.i }));
   } else if (M.layer === 'region') {
     const regions = [...M.regions.values()].filter((r) => r.systems.length).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
     for (const r of regions) {
@@ -1234,6 +1312,13 @@ function bindSidebar() {
   });
 
   $('mapSidebar').addEventListener('change', (e) => {
+    if (e.target.matches('[data-ind-pick]')) {
+      IND.act = e.target.value;
+      try { localStorage.setItem('eve-map-ind', IND.act); } catch { /* 忽略 */ }
+      computeLayer(); renderLegend();
+      if (M.selected != null && $('mapIndBlock')) $('mapIndBlock').outerHTML = industryHtml(M.systems[M.selected]);
+      return;
+    }
     if (!e.target.matches('[data-pi-pick]')) return;
     PI.pick = e.target.value;
     try { localStorage.setItem('eve-map-pi', PI.pick); } catch { /* 忽略 */ }
@@ -1913,7 +1998,7 @@ function bindLiveKills() {
     else { stopLiveKills(); $('mapDanmaku').innerHTML = ''; hideKillTip(); M.flashes = []; invalidate(); }
     app.showToast(LIVE.on ? '已开启实时击杀推送' : '已关闭实时击杀推送', 'success', 1500);
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && M.running) pollLive(); });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && M.running) { pollLive(); pollMyLoc(); } });
   // 悬停弹幕：先显示一部分详情（受害者、最后一击、攻击人数、地点时间），点击再打开完整击杀记录
   $('mapDanmaku').addEventListener('mouseover', (e) => {
     const item = e.target.closest('[data-live-kill]');
@@ -2618,11 +2703,18 @@ function selectSystem(i, center) {
   invalidate();
 }
 
+function myStatusHtml(s) {
+  if (M.myLocation === s.i) return '<div class="map-status mine">我的角色当前在此星系</div>';
+  const h = hopsBetween(M.myLocation, s.i);
+  return `<div class="map-status mine">距我的位置（${app.esc(M.systems[M.myLocation].name)}）${h < 0 ? '无法通过星门到达' : h + ' 跳'}</div>`;
+}
+
 function statCell(label, value) {
   return `<div class="map-stat"><span>${label}</span><strong>${value}</strong></div>`;
 }
 
 function renderSystemInfo(s) {
+  if (!IND.map) loadIndustry();
   const owner = ownerOf(s);
   const kills = M.live.kills.get(s.id);
   const jumps = M.live.jumps.get(s.id);
@@ -2635,12 +2727,7 @@ function renderSystemInfo(s) {
   if (adm) status.push(`<div class="map-status adm">军事指数 ${(adm.vulnerability_occupancy_level || 0).toFixed(1)} · 脆弱窗口 ${new Date(adm.vulnerable_start_time).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}–${new Date(adm.vulnerable_end_time).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}</div>`);
   const campaign = M.live.campaigns.find((c) => c.solar_system_id === s.id);
   if (campaign) status.push(`<div class="map-status campaign">主权争夺 · ${app.esc(zh(CAMPAIGN_TYPE_ZH, campaign.event_type))} · 防守 ${((campaign.defender_score || 0) * 100).toFixed(0)}% / 进攻 ${((campaign.attackers_score || 0) * 100).toFixed(0)}%</div>`);
-  if (M.myLocation != null && M.myLocation !== s.i) {
-    const h = hopsBetween(M.myLocation, s.i);
-    status.push(`<div class="map-status mine">距我的位置（${app.esc(M.systems[M.myLocation].name)}）${h < 0 ? '无法通过星门到达' : h + ' 跳'}</div>`);
-  } else if (M.myLocation === s.i) {
-    status.push('<div class="map-status mine">我的角色当前在此星系</div>');
-  }
+  if (M.myLocation != null) status.push(myStatusHtml(s));
   if (fw) status.push(`<div class="map-status fw">势力战争 · 占领方 ${app.esc(M.factions[fw.occupier_faction_id]?.name || '')} · ${app.esc(zh(FW_STATE_ZH, fw.contested))}${fw.victory_points_threshold ? ` · 进度 ${(fw.victory_points / fw.victory_points_threshold * 100).toFixed(0)}%` : ''}</div>`);
 
   $('mapInfo').innerHTML = `
@@ -2656,12 +2743,13 @@ function renderSystemInfo(s) {
       <div><span>${owner?.kind === 'alliance' ? '主权联盟' : owner ? '所属阵营' : '主权'}</span><strong>${app.esc(ownerName(owner))}</strong></div></div>
     ${status.join('')}
     <div class="map-stats">
-      ${statCell('玩家击杀', kills ? kills.ship_kills : 0)}
-      ${statCell('太空舱击杀', kills ? kills.pod_kills : 0)}
-      ${statCell('NPC 击杀', kills ? app.formatNumber(kills.npc_kills) : 0)}
+      ${statCell('舰船击毁', kills ? kills.ship_kills : 0)}
+      ${statCell('太空舱击毁', kills ? kills.pod_kills : 0)}
+      ${statCell('NPC 击杀', app.formatNumber(npcKills(s.id)) + `<small>${npcSpan()}</small>`)}
       ${statCell('跳跃', app.formatNumber(jumps || 0))}
     </div>
-    <p class="map-info-note">过去 1 小时 · 恒星与 ${s.planets} 颗行星 · ${stations.length} 座 NPC 空间站</p>
+    <p class="map-info-note" title="ESI 每小时更新一次快照，游戏内是实时滚动统计，数字会有出入">舰船、太空舱、跳跃为过去 1 小时${M.live.killsAt ? `（ESI 快照，截至 ${hhmm(M.live.killsAt)}）` : ''} · 恒星与 ${s.planets} 颗行星 · ${stations.length} 座 NPC 空间站</p>
+    ${industryHtml(s)}
     ${stations.length ? `<details class="map-stations"${stations.length <= 4 ? ' open' : ''}><summary>NPC 空间站（${stations.length}）</summary><ul>${stations.map((n) => `<li>${app.esc(n)}</li>`).join('')}</ul></details>` : ''}
     <div id="mapAgents"></div>
     <div class="map-neighbors"><span>相邻星系</span><div>${s.nbr.map((n) => {
@@ -2887,6 +2975,8 @@ export async function showStarMap() {
       $('mapLoading').hidden = true;
       focusFromHash();
       startLiveKills();
+      LOC.off = false;
+      startLocPoll();
       syncBridgeUi();
       if ($('routeBridgeOn').checked && app.hasEsiToken()) fetchBridges().then(syncBridgeUi);
     })().catch((error) => {
@@ -2903,6 +2993,8 @@ export async function showStarMap() {
   if ($('routeBridgeOn').checked && app.hasEsiToken()) fetchBridges().then(syncBridgeUi);
   if (!M.running && renderer) { M.running = true; resize(); loop(); }
   startLiveKills();
+  LOC.off = false;
+  startLocPoll();
   // 从其他页面跳转过来（如会战提醒「在星图查看」）：定位到地址栏里的星系
   const target = /^#map=(\d+)/.exec(location.hash);
   if (target && M.byId.get(Number(target[1]))?.i !== M.selected) focusFromHash();
@@ -2922,13 +3014,57 @@ async function locateMe() {
     const systemId = await app.getMyLocation();
     const s = M.byId.get(systemId);
     if (!s) { app.showToast('角色当前位于星图未收录的空间（如虫洞）', 'info'); return; }
-    M.myLocation = s.i;
-    selectSystem(s.i, true);
+    setMyLocation(s.i);
+    // 不飞行、不拉近：保持当前缩放，直接把视角移到所在星系并选中
+    centerOn(s.i, Infinity, true);
+    selectSystem(s.i);
+    startLocPoll();
   } catch (error) {
     app.showToast('无法读取角色位置：' + error.message, 'error');
   } finally {
     btn.disabled = false;
   }
+}
+
+// ---------- 实时位置：星图在前台时每秒读一次角色位置（ESI 约 5 秒更新一次，期间浏览器直接用 HTTP 缓存，不会真的每秒请求）----------
+const LOC_SCOPE = 'esi-location.read_location.v1';
+const LOC_POLL = 1000;
+const LOC = { timer: 0, busy: false, off: false, fails: 0 };
+function startLocPoll() {
+  if (LOC.timer || LOC.off || !app.hasEsiToken() || !app.hasScope?.(LOC_SCOPE)) return;
+  LOC.fails = 0;
+  LOC.timer = setInterval(pollMyLoc, LOC_POLL);
+  pollMyLoc();
+}
+function stopLocPoll() {
+  clearInterval(LOC.timer);
+  LOC.timer = 0;
+}
+async function pollMyLoc() {
+  if (document.hidden || !M.running || LOC.busy) return;
+  if (!app.hasEsiToken()) { stopLocPoll(); setMyLocation(null); return; }
+  LOC.busy = true;
+  try {
+    const id = await app.getMyLocation();
+    LOC.fails = 0;
+    setMyLocation(M.byId.get(id)?.i ?? null);   // 虫洞等星图未收录的空间不显示
+  } catch (error) {
+    if (error.status === 401 || error.status === 403) { LOC.off = true; stopLocPoll(); }   // 授权失效或没有位置权限
+    else if (++LOC.fails >= 10) stopLocPoll();   // 连续失败先停，下次进入星图再试
+  } finally {
+    LOC.busy = false;
+  }
+}
+// 位置变化：移动标记，并更新信息面板里「距我的位置」那一行
+function setMyLocation(i) {
+  if (i === M.myLocation) return;
+  M.myLocation = i;
+  const line = $('mapInfo').querySelector('.map-status.mine');
+  if (M.selected != null && !$('mapInfo').hidden) {
+    if (line && i != null) line.outerHTML = myStatusHtml(M.systems[M.selected]);
+    else if (line) line.remove();
+  }
+  invalidate();
 }
 
 function syncMyLocationButton() {
@@ -2942,7 +3078,7 @@ async function routeFromHere(btn) {
   try {
     const s = M.byId.get(await app.getMyLocation());
     if (!s) { app.showToast('角色当前位于星图未收录的空间（如虫洞），无法规划星门路线', 'info'); return; }
-    M.myLocation = s.i;
+    setMyLocation(s.i);
     setRouteEnd(btn.dataset.routeHere, s.i, '当前位置 ');
   } catch (error) {
     app.showToast('无法读取角色位置：' + error.message, 'error');
@@ -2975,4 +3111,5 @@ export async function preloadStarMap() {
 export function hideStarMap() {
   M.running = false;
   stopLiveKills();
+  stopLocPoll();
 }

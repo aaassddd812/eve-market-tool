@@ -3184,6 +3184,78 @@ class HubArbitrage:
         return out
 
 
+# ---------------------------------------------------------------- 星系击杀 24 小时
+# ESI /universe/system_kills/ 只有「过去 1 小时」的快照（约每小时更新一次）；游戏星图显示的是 24 小时。
+# 后台每 10 分钟看一次三个服的快照，按 Last-Modified 存下每一份（保留 26 小时），
+# 接口 GET /api/v1/map/kills?server= 把最近 24 份快照累加：{ hours, from, to, systems: { 星系ID: [舰船, 太空舱, NPC] } }。
+MAPK_POLL = 10 * 60
+MAPK_KEEP = 26 * 3600
+
+
+class MapKills:
+    def __init__(self, store):
+        self.store = store
+        self.lock = threading.Lock()
+        self.cache = {}
+        c = store.conn()
+        with store.write_lock:
+            c.execute("CREATE TABLE IF NOT EXISTS map_kill_snap(server TEXT, at INTEGER, data TEXT, PRIMARY KEY(server, at)) WITHOUT ROWID")
+            c.commit()
+
+    def start(self):
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def loop(self):
+        while True:
+            for server in ARB_SERVERS:
+                try:
+                    self.poll(server)
+                except Exception as e:
+                    log.warning("星系击杀快照（%s）失败：%s", server, e)
+            time.sleep(MAPK_POLL)
+
+    def poll(self, server):
+        cfg = ARB_SERVERS[server]
+        url = f"{cfg['esi']}/universe/system_kills/" + (f"?{cfg['qs']}" if cfg["qs"] else "")
+        data, headers = get_json(url, timeout=30)
+        if data is None:
+            return
+        try:
+            at = int(email.utils.parsedate_to_datetime(headers.get("Last-Modified")).timestamp())
+        except Exception:
+            return
+        c = self.store.conn()
+        if c.execute("SELECT 1 FROM map_kill_snap WHERE server=? AND at=?", (server, at)).fetchone():
+            return
+        packed = {str(x["system_id"]): [x.get("ship_kills") or 0, x.get("pod_kills") or 0, x.get("npc_kills") or 0] for x in data}
+        with self.store.write_lock:
+            c.execute("INSERT OR REPLACE INTO map_kill_snap VALUES (?,?,?)", (server, at, json.dumps(packed, separators=(",", ":"))))
+            c.execute("DELETE FROM map_kill_snap WHERE at < ?", (at - MAPK_KEEP,))
+            c.commit()
+        with self.lock:
+            self.cache.pop(server, None)
+
+    def totals(self, q):
+        server = q.get("server") or "tq"
+        if server not in ARB_SERVERS:
+            raise ValueError("server 只能是 " + " / ".join(ARB_SERVERS))
+        with self.lock:
+            hit = self.cache.get(server)
+        if hit:
+            return hit
+        rows = self.store.conn().execute("SELECT at, data FROM map_kill_snap WHERE server=? ORDER BY at DESC LIMIT 24", (server,)).fetchall()
+        systems = {}
+        for _, data in rows:
+            for sid, v in json.loads(data).items():
+                t = systems.setdefault(sid, [0, 0, 0])
+                t[0] += v[0]; t[1] += v[1]; t[2] += v[2]
+        # 每份快照是它之前 1 小时的数据：覆盖范围从最早一份往前 1 小时到最新一份
+        out = {"server": server, "hours": len(rows), "from": (rows[-1][0] - 3600) if rows else None, "to": rows[0][0] if rows else None, "systems": systems}
+        with self.lock:
+            self.cache[server] = out
+        return out
+
+
 # ---------------------------------------------------------------- 势力战争趋势
 # 后台每 5 分钟看一次三个服的 /fw/systems/（ESI 约 30 分钟更新一次），按 Last-Modified 记下每个星系的胜利点快照（保留 3 天）。
 # 接口 GET /api/v1/fw/trend?server=：各星系最近 6 小时胜利点推进速度（最小二乘，占领方变了就从变化后算起）、
@@ -3330,6 +3402,7 @@ def open_routes(api, industry, abyssal=None):
         (("blueprints", "prices"), "bp_prices", bp_prices),
         (("hubs", "arbitrage"), "hub_arbitrage", lambda q: api.arb.snapshot(q)),
         (("fw", "trend"), "fw_trend", lambda q: api.fw.trend(q)),
+        (("map", "kills"), "map_kills", lambda q: api.mapk.totals(q)),
         (("wormholes", "activity"), "wh_activity", api.wh_activity),
         (("wormholes", "systems", "{n}"), "wh_system", lambda q, sid: api.wh_system(sid, q)),
         (("kills",), "kills", lambda q: {k: v for k, v in api.feed(local(q)).items() if k != "notice"}),
@@ -3549,6 +3622,8 @@ def main():
     api.arb = store.arb
     api.fw = FwTracker(store)
     api.fw.start()
+    api.mapk = MapKills(store)
+    api.mapk.start()
     threading.Thread(target=api.warm, daemon=True).start()
     threading.Thread(target=lambda: (time.sleep(30), api.battle_history({"days": 30})), daemon=True).start()   # 历史会战先算好一份
     here = os.path.dirname(os.path.abspath(__file__))

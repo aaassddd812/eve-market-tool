@@ -148,7 +148,6 @@ function clearanceHtml(rows, groups, filters) {
   const hero = `<section class="clr-hero">
       <div class="clr-hero-intro">
         <h3>清仓小助手</h3>
-        <p>把资产换成 ISK：算好每样东西去哪个交易中心、怎么卖最划算</p>
       </div>
       <div class="clr-hero-nums">
         <div class="clr-total"><span>预计可得（税后）</span><strong>${isk(sum)}<small> ISK</small></strong><em>${num(rows.length)} 种物品</em></div>
