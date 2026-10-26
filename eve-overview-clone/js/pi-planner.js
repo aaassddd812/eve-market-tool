@@ -6,11 +6,14 @@
 import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r7';
 import { angle } from './pi-globe.js?v=v19r12';
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
-import { skPage } from './skeleton.js?v=v17';
+import { skPage, skRows } from './skeleton.js?v=v17';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, store, getHubPrices(ids) -> Map(id -> {sell, buy}), getMarketPriceMap
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-pi-form-v1';
+const RECENT_KEY = 'eve-pi-recent-v1';   // 侧栏「最近规划」的产品
+const SIDE_OPEN_KEY = 'eve-pi-side-open';
+const SIDE_TAB_KEY = 'eve-pi-side-tab';    // 侧栏标签：catalog 产品目录 / recent 最近规划
 
 // 指挥中心等级 0–5 的 [CPU, 电网]（指挥中心升级技能）
 const CC_LEVELS = [[1675, 6000], [7057, 9000], [12136, 12000], [17215, 15000], [21315, 17000], [25415, 19000]];
@@ -977,22 +980,14 @@ export const preload = () => loadData();
 
 export async function showPi() {
   const main = $('piMain');
-  if (!D.pi) main.innerHTML = skPage({ cards: 4, rows: 6 });
+  if (!D.pi) { main.innerHTML = skPage({ cards: 4, rows: 6 }); if (!$('piSide').children.length) $('piSide').innerHTML = skRows(10, { img: 22 }); }
   await loadData();
   initPiEditor(editorEnv());
   if (!main.dataset.ready) {
     main.dataset.ready = '1';
     main.innerHTML = `
-      <section class="pi-page">
-        <div class="pi-head">
-          <h2>行星工业规划</h2>
-          <button type="button" class="btn btn-ghost pi-colonies-entry" data-pi-colonies aria-expanded="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5a10 10 0 0 1 0 14M12 5a10 10 0 0 0 0 14"/></svg><span>我的殖民地</span>
-          </button>
-          <button type="button" class="btn btn-ghost pi-editor-entry" data-pi-editor>
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg><span>模板编辑器</span>
-          </button>
-        </div>
+      <section class="pi-page pi-planner">
+        <div class="pi-head"><h2>行星工业规划</h2></div>
         <div class="pi-colonies" id="piColonies" hidden></div>
         <div class="pi-layout">
           <form class="pi-form" id="piForm" autocomplete="off"></form>
@@ -1005,15 +1000,7 @@ export async function showPi() {
         </div>
       </section>`;
     bind();
-    main.querySelector('[data-pi-editor]').addEventListener('click', () => openTemplateEditor(blankTemplate(), { title: '模板编辑器' }));
-    // 我的殖民地（ESI，需要「行星殖民地」权限）：展开时读取
-    main.querySelector('[data-pi-colonies]').addEventListener('click', (e) => {
-      const box = $('piColonies');
-      box.hidden = !box.hidden;
-      e.currentTarget.setAttribute('aria-expanded', String(!box.hidden));
-      e.currentTarget.classList.toggle('active', !box.hidden);
-      if (!box.hidden) ctx.renderColonies?.(box);
-    });
+    bindSide();
     renderForm();
   }
   // 切回本页时保留表单与规划结果，不重新渲染
@@ -1027,6 +1014,106 @@ export async function showPi() {
     renderForm();
     run();
   }
+  renderSide();
+}
+
+// ===== 侧边栏：页面导航 + 产品目录（参数设置都在主区，侧栏只负责「看什么」）=====
+const SIDE = { q: '', open: null, pane: 'plan', tab: null };
+const SIDE_NAV = [
+  ['plan', '规划', '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>'],
+  ['colonies', '我的殖民地', '<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5a10 10 0 0 1 0 14M12 5a10 10 0 0 0 0 14"/>'],
+  ['editor', '模板编辑器', '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>']
+];
+const recentList = () => ctx.store.getJSON(RECENT_KEY, []).filter((id) => D.pi.commodities[id]);
+function pushRecent(id) {
+  ctx.store.setJSON(RECENT_KEY, [id, ...recentList().filter((x) => x !== id)].slice(0, 8));
+}
+// 当前方式下可以规划的产品（买料加工没有 P0）
+function productsOfTier(t) {
+  if (F.way === 'buy' && t === 0) return [];
+  return Object.keys(D.pi.commodities).map(Number).filter((id) => tierOf(id) === t && (t === 0 || D.schemByOut.has(id)))
+    .sort((a, b) => cName(a).localeCompare(cName(b), 'zh'));
+}
+function sideItem(id) {
+  return `<button type="button" class="ind-side-item${F.target === id ? ' active' : ''}" data-pi-target="${id}"><img src="${ICON(id)}" alt="" width="22" height="22" loading="lazy"><span>${ctx.esc(cName(id))}</span><small>P${tierOf(id)}</small></button>`;
+}
+function renderSide() {
+  const el = $('piSide');
+  if (!el || !D.pi) return;
+  if (!SIDE.open) SIDE.open = new Set(ctx.store.getJSON(SIDE_OPEN_KEY, [2]));
+  const nav = `<nav class="ind-side-nav">${SIDE_NAV.map(([k, l, icon]) => `<button type="button" class="profile-nav-btn${SIDE.pane === k ? ' active' : ''}" data-pi-pane="${k}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg>${l}</button>`).join('')}</nav>`;
+  if (SIDE.q) {
+    const q = SIDE.q.toLowerCase();
+    const hits = [0, 1, 2, 3, 4].flatMap(productsOfTier).filter((id) => cName(id).toLowerCase().includes(q));
+    el.innerHTML = nav + `<div class="ind-side-section"><h4>搜索结果 <small>${hits.length} 个</small></h4>${hits.map(sideItem).join('') || '<p class="ind-side-empty">没有匹配的行星产品</p>'}</div>`;
+    return;
+  }
+  const recent = recentList().filter((id) => F.way !== 'buy' || tierOf(id) > 0);
+  const auto = `<button type="button" class="ind-side-item pi-side-auto${!F.target ? ' active' : ''}" data-pi-target="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>自动推荐</span><small>按日收益</small></button>`;
+  const tree = [0, 1, 2, 3, 4].map((t) => {
+    const ids = productsOfTier(t);
+    if (!ids.length) return '';
+    const open = SIDE.open.has(t) || (F.target && tierOf(F.target) === t);
+    return `<details class="ind-side-cat" data-pi-tier="${t}"${open ? ' open' : ''}><summary>${TIER_NAMES[t]}<small>${ids.length}</small></summary><div class="ind-side-items">${ids.map(sideItem).join('')}</div></details>`;
+  }).join('');
+  if (!SIDE.tab) SIDE.tab = ctx.store.get(SIDE_TAB_KEY) === 'recent' ? 'recent' : 'catalog';
+  const tabs = `<div class="sidebar-tabs ind-side-tabs" role="tablist">${[['catalog', '产品目录'], ['recent', '最近规划']].map(([k, l]) => `<button type="button" class="tab-btn${SIDE.tab === k ? ' active' : ''}" data-pi-tab="${k}" role="tab" aria-selected="${SIDE.tab === k}">${l}</button>`).join('')}</div>`;
+  const body = SIDE.tab === 'recent'
+    ? (recent.length
+      ? `<div class="ind-side-section">${recent.map(sideItem).join('')}<button type="button" class="link-btn clear-recent" data-pi-clear>清空最近规划</button></div>`
+      : '<div class="empty-state"><p>还没有规划过具体产品</p><small>在产品目录里点一个产品，就会记在这里</small></div>')
+    : `<div class="ind-side-section">${auto}</div><div class="ind-side-section"><h4>${F.way === 'buy' ? '买料加工' : '自产'}</h4>${tree}</div>`;
+  el.innerHTML = nav + tabs + body;
+}
+function showPane(pane) {
+  SIDE.pane = pane;
+  const planner = document.querySelector('#piMain .pi-layout');
+  const box = $('piColonies');
+  if (planner) planner.hidden = pane === 'colonies';
+  if (box) {
+    box.hidden = pane !== 'colonies';
+    // 我的殖民地（ESI，需要「行星殖民地」权限）：切过去时读取
+    if (pane === 'colonies') ctx.renderColonies?.(box);
+  }
+  const h2 = document.querySelector('#piMain .pi-head h2');
+  if (h2) h2.textContent = pane === 'colonies' ? '我的殖民地' : '行星工业规划';
+  renderSide();
+}
+function bindSide() {
+  const side = $('piSide');
+  let t;
+  $('piSideSearch').addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { SIDE.q = e.target.value.trim(); renderSide(); }, 150); });
+  side.addEventListener('click', (e) => {
+    const tab = e.target.closest('[data-pi-tab]');
+    if (tab) { SIDE.tab = tab.dataset.piTab; ctx.store.set(SIDE_TAB_KEY, SIDE.tab); renderSide(); return; }
+    if (e.target.closest('[data-pi-clear]')) { ctx.store.setJSON(RECENT_KEY, []); renderSide(); return; }
+    const pane = e.target.closest('[data-pi-pane]');
+    if (pane) {
+      const k = pane.dataset.piPane;
+      if (k === 'editor') openTemplateEditor(blankTemplate(), { title: '模板编辑器' });
+      else showPane(k);
+      ctx.closeDrawer?.();
+      return;
+    }
+    const pick = e.target.closest('[data-pi-target]');
+    if (pick) {
+      F.target = Number(pick.dataset.piTarget);
+      if (F.way === 'buy' && tierOf(F.target) === 0) F.way = 'self';
+      saveForm();
+      renderForm();
+      if (SIDE.pane !== 'plan') showPane('plan');
+      ctx.closeDrawer?.();
+      run();
+    }
+  });
+  // 记住哪些分级展开着
+  side.addEventListener('toggle', (e) => {
+    const d = e.target.closest?.('[data-pi-tier]');
+    if (!d || SIDE.q) return;
+    const tier = Number(d.dataset.piTier);
+    if (d.open) SIDE.open.add(tier); else SIDE.open.delete(tier);
+    ctx.store.setJSON(SIDE_OPEN_KEY, [...SIDE.open]);
+  }, true);
 }
 
 function renderForm() {
@@ -1040,11 +1127,18 @@ function renderForm() {
   }).join('');
   const seg = (name, items, cur) => `<div class="segmented" role="group">${items.map(([v, label]) => `<button type="button" data-pi-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${label}</button>`).join('')}</div>`;
   $('piForm').innerHTML = `
+    <div class="pi-col">
     <div class="pi-field">
       <label>方式</label>
       ${seg('way', [['self', '自产（采集）'], ['buy', '买料加工']], F.way)}
       ${buy ? `<small class="pi-hint">买入半成品加工后卖出</small>` : ''}
     </div>
+    <div class="pi-field">
+      <label>目标产品</label>
+      <select id="piTarget" class="pi-input"><option value="0"${!F.target ? ' selected' : ''}>自动推荐（按日收益排序）</option>${products}</select>
+    </div>
+    </div>
+    <div class="pi-col">
     <div class="pi-field">
       <label>地区</label>
       ${seg('mode', [['region', '星域'], ['system', '星系周边'], ['wh', '虫洞']], F.mode)}
@@ -1067,6 +1161,8 @@ function renderForm() {
         ${[['high', '高安'], ['low', '低安'], ['null', '00 / 波赫文']].map(([k, label]) => `<label class="pi-check sec-${k}"><input type="checkbox" data-pi-sec="${k}"${F.sec[k] ? ' checked' : ''}><span>${label}</span></label>`).join('')}
       </div>
     </div>
+    </div>
+    <div class="pi-col">
     <div class="pi-field">
       <label>角色与技能</label>
       <div class="pi-grid3">
@@ -1075,10 +1171,8 @@ function renderForm() {
         <div class="pi-num"><span>指挥中心</span><select class="pi-input" data-pi-num="cc">${[0, 1, 2, 3, 4, 5].map((n) => `<option value="${n}"${F.cc === n ? ' selected' : ''}>${n} 级</option>`).join('')}</select></div>
       </div>
     </div>
-    <div class="pi-field">
-      <label>目标产品</label>
-      <select id="piTarget" class="pi-input"><option value="0"${!F.target ? ' selected' : ''}>自动推荐（按日收益排序）</option>${products}</select>
     </div>
+    <div class="pi-col">
     <div class="pi-field">
       <label>估算参数</label>
       ${buy ? `
@@ -1089,11 +1183,14 @@ function renderForm() {
       <div class="pi-inline"><span>资源丰度</span>${seg('rich', Object.entries(RICHNESS).map(([k, [, label]]) => [k, label]), F.rich)}</div>
       <div class="pi-inline"><span>价格</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>`}
       <div class="pi-inline"><span>海关税率</span><input type="number" class="pi-input pi-tax" min="0" max="100" step="0.5" value="${F.tax}" data-pi-num="tax"><span>%</span></div>
-      ${buy ? '' : `<small class="pi-hint">每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位</small>`}
     </div>
-    <button type="submit" class="btn btn-primary pi-go">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>一键规划
-    </button>`;
+    </div>
+    <div class="pi-form-foot">
+      <small class="pi-hint">${buy ? '<span class="pi-hint-side">产品也可以在左侧目录里直接点选</span>' : `<span>每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位</span><span class="pi-hint-side">；产品也可以在左侧目录里直接点选</span>`}</small>
+      <button type="submit" class="btn btn-primary pi-go">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>一键规划
+      </button>
+    </div>`;
 }
 
 function bind() {
@@ -1108,6 +1205,7 @@ function bind() {
       if (key === 'whCls') F.whSystem = 0;
       saveForm();
       renderForm();
+      if (key === 'way') renderSide();
       if (key !== 'mode' && R.area) run();
       return;
     }
@@ -1122,7 +1220,7 @@ function bind() {
   form.addEventListener('change', (e) => {
     const t = e.target;
     if (t.id === 'piRegion') F.region = Number(t.value);
-    else if (t.id === 'piTarget') F.target = Number(t.value);
+    else if (t.id === 'piTarget') { F.target = Number(t.value); renderSide(); }
     else if (t.dataset.piSec) F.sec[t.dataset.piSec] = t.checked;
     else if (t.dataset.piNum) {
       const lim = { chars: [1, 30], perChar: [1, 6], cc: [0, 5], tax: [0, 100] }[t.dataset.piNum];
@@ -1198,9 +1296,11 @@ async function run() {
   R.plans = plans;
   R.selected = 0;
   R.edits.clear();
+  if (F.target) pushRecent(F.target);
+  renderSide();
   renderResult();
-  // 窄屏时结果在表单下方，滚动过去
-  if (window.matchMedia('(max-width: 1100px)').matches) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // 结果在设置卡片下方：看不到时滚动过去
+  if (box.getBoundingClientRect().top > window.innerHeight * 0.6) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function areaSummary(area) {

@@ -6,7 +6,9 @@
 import * as FE from './fit-engine.js?v=v23';
 import * as MU from './fit-mutate.js?v=v3';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v26';
-import { initKbFits, openKbFits } from './fit-kb.js?v=v23';
+import { initKbFits, openKbFits } from './fit-kb.js?v=v26';
+import { initSim, openSim } from './fit-sim.js?v=v5';
+import { initGraph, openGraph } from './fit-graph.js?v=v4';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 
 let app;
@@ -64,6 +66,16 @@ export function initFitting(context) {
   MU.initMutate(app, { data: () => F.data });
   initAutoFit(planCtx);
   initKbFits(planCtx);
+  const toolCtx = {
+    get data() { return F.data; }, FE,
+    getFit: () => F.fit, getStats: () => F.stats, savedFits, parseEft, normalize, skills,
+    hasEsi: () => app.hasEsiToken(),
+    esiFits: loadEsiFitList,
+    // 在装配页打开（对战模拟的装配详情）
+    openInFitting: (fit) => { applyFit(fit); app.showToast('已在装配页打开，可点「保存」存到本机', 'success'); },
+    esc: app.esc, formatNumber: app.formatNumber, formatISK: app.formatISK, showToast: app.showToast, store: app.store
+  };
+  toolInit = () => { initSim(toolCtx); initGraph(toolCtx); toolInit = null; };
   $('fitEsiModal').addEventListener('input', (e) => { if (e.target.id === 'fitEsiSearch') renderEsiList(); });
   $('fitEsiShipOnly').addEventListener('change', renderEsiList);
   $('fitStats').addEventListener('change', (e) => { if (e.target.matches('[data-val-src]')) { app.valuation.set(e.target.value); renderStats(); } });
@@ -75,6 +87,26 @@ function pick(obj, keys) {
 
 function saveSettings() {
   app.store.setJSON(SETTINGS_KEY, { skillMode: F.skillMode, onlyFits: F.onlyFits, tab: F.tab });
+}
+
+let toolInit = null;   // 装配数据到了再初始化对战模拟 / 伤害图表（它们需要读取本机装配）
+function openTool(open, arg) {
+  toolInit?.();
+  open(arg);
+}
+
+// 战场统计「模拟对打」：进入装配页后打开对战模拟（preset 见 fit-sim.js openSim）
+let pendingSim = null;
+export function queueSim(preset) {
+  pendingSim = preset || {};
+}
+function loadPendingSim() {
+  const hashSim = /^#fit\/sim/.test(location.hash);
+  if (!pendingSim && !hashSim) return;
+  const preset = pendingSim && pendingSim.a ? pendingSim : null;
+  pendingSim = null;
+  history.replaceState(null, '', location.pathname + '#fit');
+  openTool(openSim, preset);
 }
 
 // 空闲时预加载装配数据
@@ -108,10 +140,12 @@ export async function showFitting(restored = false) {
     renderBrowserTabs();
     renderBrowser();
     recompute();
+    loadPendingSim();
     return;
   }
   if (loadPending() || loadFromHash()) { recompute(); renderBrowser(); restored = false; }
   syncSkillMode(restored);
+  loadPendingSim();
 }
 
 // 绑定 / 解绑 ESI 后刷新技能来源
@@ -517,6 +551,7 @@ function renderFit() {
     box.innerHTML = `<div class="fit-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2 4 7v10l8 5 8-5V7z"/><path d="M12 22V12M4 7l8 5 8-5"/></svg>
       <h3>从左侧选择一艘舰船开始装配</h3>
+      <p class="fit-empty-tools"><button class="btn btn-ghost" data-fit-sim>舰队对战模拟</button></p>
       <p>也可以 <button class="link-btn" data-fit-import>导入 EFT 文本</button>${app.hasEsiToken() ? '、<button class="link-btn" data-fit-esi-list>读取游戏内装配</button>' : ''}${savedFits().length ? ` 或打开 <select class="plain-select" data-fit-open><option value="">我的装配…</option>${savedFits().map((f) => `<option value="${f.id}">${app.esc(f.name || type(f.ship)?.name || '未命名')}</option>`).join('')}</select>` : ''}</p>
     </div>`;
     if (MOBILE()) app.openDrawer?.();
@@ -551,6 +586,8 @@ function renderFit() {
           <button class="btn btn-ghost fit-plan-btn" data-fit-auto title="按目标与约束自动装配">智能装配</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-imp title="装备不动，按目标推荐植入体">智能植入体</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-kb title="这艘船最近阵亡时的常见装配">击杀记录装配</button>
+          <button class="btn btn-ghost fit-plan-btn" data-fit-graph title="有效 DPS 随距离、目标速度、信号半径变化的曲线（类似 Pyfa 的图表）">伤害图表</button>
+          <button class="btn btn-ghost fit-plan-btn" data-fit-sim title="两方舰队按装配模拟对打">对战模拟</button>
         </div>
         <div class="fit-action-row">
           <button class="btn btn-ghost" data-fit-new title="新建空装配">新建</button>
@@ -824,6 +861,8 @@ async function onMainClick(e) {
     recompute();
     return;
   }
+  if ((x = el('[data-fit-sim]'))) { openTool(openSim); return; }
+  if ((x = el('[data-fit-graph]'))) { openTool(openGraph); return; }
   if ((x = el('[data-fit-all]'))) { setAllStates(x.dataset.fitAll === 'on'); return; }
   if ((x = el('[data-fit-clear]'))) { clearModules(); return; }
   if ((x = el('[data-fit-remove]'))) {
@@ -1279,6 +1318,20 @@ async function openEsiModal() {
 
 function closeEsiModal() {
   $('fitEsiModal').hidden = true;
+}
+
+// 对战模拟用：已绑定角色的游戏装配（转换成本工具的装配；与「游戏装配」弹窗共用列表）
+async function loadEsiFitList() {
+  const token = await app.getEsiToken();
+  if (!(esiList.fits && esiList.charId === token.character_id)) {
+    try {
+      const list = await app.esiFetch(`/characters/${token.character_id}/fittings/`);
+      Object.assign(esiList, { charId: token.character_id, fits: list || [], error: '' });
+    } catch (error) {
+      throw new Error(esiErrorText(error));
+    }
+  }
+  return esiList.fits.map((f) => { const r = fromEsiFit(f); return r.error ? null : { ...r.fit, esiId: f.fitting_id, name: f.name }; }).filter(Boolean);
 }
 
 async function loadEsiFits(force = false) {

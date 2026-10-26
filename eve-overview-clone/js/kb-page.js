@@ -2,7 +2,8 @@
 // 数据来自自建的击杀记录服务（server/kb_service.py，/api/kb/），收录新伊甸全部击杀；
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v19';
+import { initBr, renderBr } from './kb-br.js?v=v23';
+import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v1';
 
 let app, kb;
 
@@ -193,8 +194,6 @@ async function loadSummary() {
     S.status = status;
     renderStatus();
     if (!$('kbSummary')) return;
-    const max = Math.max(...day.buckets.map((b) => b.value), 1);
-    const bars = day.buckets.map((b) => `<i style="height:${Math.max(2, b.value / max * 100).toFixed(1)}%" title="${new Date(b.hour).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })} · ${b.count} 次 · ${app.formatISK(b.value)} ISK"></i>`).join('');
     box.innerHTML = `
       <div class="kb-summary-cards">
         <div class="valuation-card is-sell"><span class="valuation-label">最近 24 小时总损失</span>
@@ -207,7 +206,8 @@ async function loadSummary() {
           <strong class="valuation-value kb-region-value">${day.regions[0] ? `<a class="kb-link" data-location="region:${day.regions[0].region_id}">${app.esc(partyName(day.regions[0].region_id))}</a>` : '—'}</strong>
           <span class="valuation-detail">${day.regions[0] ? app.formatISK(day.regions[0].value) + ' ISK · ' + day.regions[0].count + ' 次' : ''}</span></div>
       </div>
-      <div class="kb-hours"><div class="kb-hours-head"><span>每小时损失（最近 24 小时）</span><span>${app.formatISK(max)} ISK / 小时峰值</span></div><div class="kb-bars">${bars}</div></div>`;
+      ${hoursChart(day.buckets)}`;
+    drawHours(box, day.buckets);
   } catch (error) {
     box.innerHTML = '<p class="text-muted kb-empty">统计读取失败：' + app.esc(error.message) + '</p>';
   }
@@ -672,7 +672,7 @@ function drawBh() {
         <div class="kb-bh-nums"><span>约 ${fmtN(t.pilots)} 人</span><span class="up">击毁 ${fmtN(t.kills)} 艘 · ${fmtIsk(t.destroyed)}</span><span class="down">损失 ${fmtN(t.losses)} 艘</span></div>
       </div>`;
     const sum = x.teams[0].lost + x.teams[1].lost;
-    const bar = sum ? `<div class="kb-bh-bar" title="双方损失 ISK 对比：蓝色越长左方打得越好（左方损失 ${fmtIsk(x.teams[0].lost)}，右方损失 ${fmtIsk(x.teams[1].lost)}）"><i style="width:${((x.teams[0].lost / sum) * 100).toFixed(1)}%"></i></div>` : '';
+    const bar = sum ? `<div class="kb-bh-bar" title="双方损失 ISK 对比：蓝色越长左方打得越好（左方损失 ${fmtIsk(x.teams[0].lost)}，右方损失 ${fmtIsk(x.teams[1].lost)}）"><i class="a" style="width:${((x.teams[1].lost / sum) * 100).toFixed(1)}%"></i><i class="b" style="width:${((x.teams[0].lost / sum) * 100).toFixed(1)}%"></i></div>` : '';
     return `<article class="kb-bh tier-${tier.key}">
       <div class="kb-bh-head">
         <span class="kb-bh-tier"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/><path d="M14.5 6.5 18 3h3v3l-3.5 3.5"/><path d="m5 14 4 4"/><path d="m7 17-3 3"/><path d="m3 19 2 2"/></svg>${tier.name}</span>
@@ -805,37 +805,29 @@ async function renderEntity(kind, id) {
     </div>
     <div id="kbEntityFeed">${skRows(8)}</div>
     <button class="btn kb-more" id="kbEntityMore" hidden>加载更多</button>`;
+  mountMonthly(main, lifetime);
   if (stats.members) renderMembers();
   $('kbEntityMore').addEventListener('click', () => loadEntityFeed(false));
   loadEntityFeed(true);
 }
 
 // 最近 30 天活跃地区：星域（占比条）+ 星系（安全等级着色），点击可筛选击杀记录
-// zKillboard 统计：最近 12 个月的击杀 / 损失（柱状）与活跃时段（星期 × UTC 小时热力图）
+// zKillboard 统计：最近 12 个月的击杀 / 损失（柱状，舰船数 / ISK 切换）与活跃时段（星期 × 小时热力图）；图表在 kb-charts.js
 function monthlyHtml(z) {
   if (!z) return '';
-  const months = Object.values(z.months || {}).sort((a, b) => (a.year - b.year) || (a.month - b.month)).slice(-12);
+  const months = monthList(z);
   let out = '';
-  if (months.length) {
-    const max = Math.max(1, ...months.map((m) => Math.max(m.shipsDestroyed || 0, m.shipsLost || 0)));
-    out += `<h4 class="info-section-title section-gap">月度统计<small>（zKillboard · 最近 ${months.length} 个月）</small></h4>
-      <div class="kb-months">${months.map((m) => {
-        const k = m.shipsDestroyed || 0, l = m.shipsLost || 0;
-        const tip = `${m.year} 年 ${m.month} 月：击杀 ${app.formatNumber(k)} 艘（${app.formatISK(m.iskDestroyed || 0)} ISK），损失 ${app.formatNumber(l)} 艘（${app.formatISK(m.iskLost || 0)} ISK）`;
-        return `<div class="kb-month" title="${app.esc(tip)}"><div class="kb-month-bars"><i class="k" style="height:${(k / max * 100).toFixed(1)}%"></i><i class="l" style="height:${(l / max * 100).toFixed(1)}%"></i></div>
-          <b>${app.formatNumber(k)}</b><small>${window.I18N?.lang === 'en' ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m.month - 1] : m.month + ' 月'}</small></div>`;
-      }).join('')}</div>
-      <p class="kb-months-legend"><i class="k"></i>击杀 <i class="l"></i>损失 <span class="text-muted">· 鼠标移到柱子上看 ISK</span></p>`;
-  }
-  const act = z.activity;
-  if (act && act.max) {
-    const days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-    const cells = [0, 1, 2, 3, 4, 5, 6].map((d) => `<div class="kb-heat-row"><span>${days[d]}</span>${(act[d] || []).map((n, h) =>
-      `<i style="opacity:${n ? (0.15 + 0.85 * n / act.max).toFixed(2) : 0.06}" title="${days[d]} UTC ${h}:00（北京 ${(h + 8) % 24}:00）· ${n} 次"></i>`).join('')}</div>`).join('');
-    out += `<h4 class="info-section-title section-gap">活跃时段<small>（zKillboard 全部记录 · UTC 小时）</small></h4>
-      <div class="kb-heat">${cells}<div class="kb-heat-row kb-heat-axis"><span></span>${Array.from({ length: 24 }, (_, h) => `<em>${h % 3 ? '' : h}</em>`).join('')}</div></div>`;
-  }
+  if (months.length) out += `<h4 class="info-section-title section-gap">月度统计<small>（zKillboard · 最近 ${months.length} 个月）</small></h4>${monthsChart(months)}`;
+  if (z.activity?.max) out += `<h4 class="info-section-title section-gap">活跃时段<small>（zKillboard 全部记录）</small></h4>${heatChart()}`;
   return out;
+}
+const monthList = (z) => Object.values(z?.months || {}).sort((a, b) => (a.year - b.year) || (a.month - b.month)).slice(-12);
+// 图表在 HTML 放进页面后再画（要量容器宽度）
+function mountMonthly(root, z) {
+  if (!z) return;
+  const months = monthList(z);
+  if (months.length) drawMonths(root, months);
+  if (z.activity?.max) drawHeat(root, z.activity);
 }
 
 function activityHtml(stats) {
@@ -1069,6 +1061,7 @@ export async function showKbPage(restored = false) {
 
 export function initKbPage(context) {
   app = context;
+  initKbCharts(app);
   initBr({
     get app() { return app; }, get kb() { return kb; },
     request, absorbNames, partyName, typeName, loadTypes, avatar, entityLink, IMG

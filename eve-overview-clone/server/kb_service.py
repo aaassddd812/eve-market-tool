@@ -22,7 +22,7 @@
   GET /api/kb/search?q=                       搜索人物 / 军团 / 联盟
   GET /api/kb/entity/<kind>/<id>?days=30      人物 / 军团 / 联盟统计（含成员明细）
   GET /api/kb/kill/<id>                       击杀邮件详情与逐项估价（原文按需取自 ESI，本地不保存）
-  GET /api/kb/shipfits?ship=ID&days=7          某型舰船最近 N 天（≤ 保留期）阵亡时的装配，相同装配合并计数（物品原文按需取自 ESI，提取结果存库）
+  GET /api/kb/shipfits?ship=ID&days=7[&limit=N][&kills=ID,…] 某型舰船最近 N 天（≤ 保留期）阵亡时的装配，相同装配合并计数（物品原文按需取自 ESI，提取结果存库）
   GET /api/kb/bpprices?types=1,2               公开合同里的蓝图价格：原图最低价、拷贝每流程最低价（各取最便宜 5 份）；
                                                不带 types 时返回全部蓝图的 [原图最低价, 拷贝每流程最低价]
                                                数据来自 EVE Ref 公开合同快照 https://data.everef.net/public-contracts/（每 30 分钟刷新）
@@ -42,6 +42,7 @@ import csv
 import datetime as dt
 import email.utils
 import gzip
+import hashlib
 import io
 import json
 import logging
@@ -187,6 +188,7 @@ ABYSSAL_FLAGS = {"goldbar", "brownbar", "diamondbar", "item-exchange", "auction"
 PRICE_MAX_TYPES = 200       # prices 单次最多查询的物品种类
 SHIPFIT_MAX = 300           # shipfits：每次最多分析的最近损失数
 SHIPFIT_WORKERS = 16        # shipfits：并发向 ESI 取击杀原文
+SHIPFIT_KILLS = 60          # shipfits?kills=：最多指定的击杀数
 # 击杀邮件物品 flag → 槽位（模块与装填的弹药同 flag；区分由前端按物品类别完成）
 FIT_FLAGS = [("high", range(27, 35)), ("mid", range(19, 27)), ("low", range(11, 19)), ("rig", range(92, 100)),
              ("sub", range(125, 133)), ("drone", (87,)), ("fighter", (158,))]
@@ -1765,14 +1767,24 @@ class Api:
     def shipfits(self, q):
         ship = int(q["ship"])
         days = max(1, min(int(q.get("days", 7)), self.store.retention))
-        return self.cached(f"shipfits:{ship}:{days}", lambda: self._shipfits(ship, days))
+        # limit：只分析最近若干次损失（对战模拟一次要查很多种船，用较小的值）
+        limit = max(10, min(int(q.get("limit") or SHIPFIT_MAX), SHIPFIT_MAX))
+        # kills：只分析这些击杀（对战模拟按一场会战里这型船的实际损失取装配），最多 SHIPFIT_KILLS 个
+        kills = sorted({int(x) for x in str(q.get("kills") or "").split(",") if x.strip().isdigit()})[:SHIPFIT_KILLS]
+        key = f"shipfits:{ship}:{days}:{limit}:{hashlib.md5(','.join(map(str, kills)).encode()).hexdigest() if kills else ''}"
+        return self.cached(key, lambda: self._shipfits(ship, days, limit, kills))
 
-    def _shipfits(self, ship, days):
+    def _shipfits(self, ship, days, limit=SHIPFIT_MAX, kills=None):
         since = int(time.time() - days * 86400)
         conn = self.store.conn()
-        total = conn.execute("SELECT COUNT(*) FROM killmails WHERE ship_type=? AND time>=?", (ship, since)).fetchone()[0]
-        rows = conn.execute("SELECT id, hash, time, value FROM killmails WHERE ship_type=? AND time>=? ORDER BY time DESC LIMIT ?",
-                            (ship, since, SHIPFIT_MAX)).fetchall()
+        if kills:
+            rows = conn.execute(f"SELECT id, hash, time, value FROM killmails WHERE ship_type=? AND id IN ({','.join('?' * len(kills))}) ORDER BY time DESC",
+                                (ship, *kills)).fetchall()
+            total = len(rows)
+        else:
+            total = conn.execute("SELECT COUNT(*) FROM killmails WHERE ship_type=? AND time>=?", (ship, since)).fetchone()[0]
+            rows = conn.execute("SELECT id, hash, time, value FROM killmails WHERE ship_type=? AND time>=? ORDER BY time DESC LIMIT ?",
+                                (ship, since, limit)).fetchall()
         have = {}
         if rows:
             ids = [r[0] for r in rows]

@@ -19,7 +19,7 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=36"></script>
+  <script src="js/i18n.js?v=42"></script>
   <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
   <script type="importmap">
     {
@@ -29,7 +29,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v121">
+  <link rel="stylesheet" href="css/modern-style.css?v=v128">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -696,7 +696,22 @@
       </div>
 
       <div class="view-container" id="piView" hidden>
-        <div class="kb-scroll">
+        <aside class="sidebar ind-sidebar" id="piSidebar" aria-label="行星工业导航">
+          <div class="sidebar-header">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <input type="search" id="piSideSearch" placeholder="搜索行星产品" autocomplete="off" spellcheck="false" aria-label="搜索行星产品">
+            </div>
+            <button class="collapse-btn" id="piSidebarCollapse" title="收起侧边栏 ([)" aria-label="收起侧边栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+          </div>
+          <div class="sidebar-content ind-side" id="piSide"></div>
+        </aside>
+        <div class="kb-scroll ind-scroll">
+          <button class="sidebar-reopen" id="piSidebarReopen" title="展开侧边栏 ([)" aria-label="展开侧边栏" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
           <div class="kb-wrap" id="piMain"></div>
         </div>
       </div>
@@ -1025,6 +1040,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v167" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v175" type="module" data-cfasync="false"></script>
 </body>
 </html>

@@ -117,9 +117,22 @@ function render() {
 
 const topDrones = (g) => [...g.drones.values()].sort((a, b) => b.n - a.n)[0]?.list || [];
 
-function toFit(g) {
+// 对战模拟（fit-sim.js）用：某型舰船最近 N 天（最近 limit 次损失里）最常见的装配（没有记录时为 null）
+// kills：只看这些击杀（一场会战里这型船的实际损失）
+export async function commonFit(ship, { days = 7, limit = 20, kills = null } = {}) {
+  if (!SERVER.kb) throw new Error(NO_KB_MESSAGE);
+  const r = await fetch(`/api/kb/shipfits?ship=${ship}&days=${days}&limit=${limit}${kills?.length ? '&kills=' + kills.slice(0, 60).join(',') : ''}`);
+  if (!r.ok) throw new Error(r.status === 404 ? '需要击杀记录服务' : 'HTTP ' + r.status);
+  const groups = merge((await r.json()).fits || []);
+  if (!groups.length) return null;
+  // list：全部装配分组（按出现次数），第一套即最常见的
+  const list = groups.slice(0, 12).map((g) => ({ fit: toFit(g, ship, []), n: g.n }));
+  return { ...list[0], list, total: groups.reduce((t, g) => t + g.n, 0) };
+}
+
+function toFit(g, ship = K.ship, implants = ctx.getFit()?.implants || []) {
   const { data, FE } = ctx;
-  const fit = { id: null, name: '', ship: K.ship, slots: { high: [], mid: [], low: [], rig: [], sub: [] }, drones: [], implants: [...(ctx.getFit().implants || [])] };
+  const fit = { id: null, name: '', ship, slots: { high: [], mid: [], low: [], rig: [], sub: [] }, drones: [], implants: [...implants] };
   for (const s of FE.SLOTS) {
     const charges = [...(g.charges[s] || new Map())].sort((a, b) => b[1] - a[1]).map(([id]) => data.types.get(id)).filter(Boolean);
     for (const [id, n] of g.modules[s] || []) {

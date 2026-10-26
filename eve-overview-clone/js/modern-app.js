@@ -360,7 +360,7 @@ function switchView(view) {
   syncNavActive(true);
   for (const [v, id] of Object.entries(VIEW_IDS)) $(id).hidden = v !== view;
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
-  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选', guide: '教程分类', sov: '主权规划导航', abyss: '深渊装备类型' }[view] || '';
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选', guide: '教程分类', sov: '主权规划导航', abyss: '深渊装备类型', pi: '行星工业导航' }[view] || '';
   closeDrawer();
   if (prev !== view) {
     restoreScroll(viewScroll[view]);
@@ -648,8 +648,8 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v37').then((m) => {
-    m.initPi({ addToCart,
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v39').then((m) => {
+    m.initPi({ addToCart, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
       renderColonies: async (box) => {
@@ -682,7 +682,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v41').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v46').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -819,11 +819,17 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v42').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v47').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
       battles: () => battlesPromise,
+      // 战场统计「模拟对打」：切到装配页并打开对战模拟；后退回到战场统计
+      openBattleSim: async (preset) => {
+        try { (await loadFittingModule()).queueSim(preset); } catch (error) { showToast('模拟装配加载失败：' + error.message, 'error', 4000); return; }
+        history.pushState(null, '', location.pathname + '#fit');
+        switchView('fit');
+      },
       getNpcNames: () => state.npcNames,
       // 市场分类「舰船」下的全部舰船（搜索用）
       shipTypes: () => {
@@ -925,7 +931,8 @@ const SIDEBARS = {
   courier: { id: 'courierSidebar', reopen: 'courierSidebarReopen', key: 'eve-courier-sidebar-collapsed' },
   guide: { id: 'guideSidebar', reopen: 'guideSidebarReopen', key: 'eve-guide-sidebar-collapsed' },
   sov: { id: 'sovSidebar', reopen: 'sovSidebarReopen', key: 'eve-sov-sidebar-collapsed' },
-  abyss: { id: 'abyssSidebar', reopen: 'abyssSidebarReopen', key: 'eve-abyss-sidebar-collapsed' }
+  abyss: { id: 'abyssSidebar', reopen: 'abyssSidebarReopen', key: 'eve-abyss-sidebar-collapsed' },
+  pi: { id: 'piSidebar', reopen: 'piSidebarReopen', key: 'eve-pi-sidebar-collapsed' }
 };
 
 function currentSidebar() {
@@ -974,6 +981,9 @@ function initSidebar() {
   if (store.get('eve-abyss-sidebar-collapsed') === '1') setSidebarCollapsed('abyssSidebar', 'abyssSidebarReopen', true);
   $('abyssSidebarCollapse').addEventListener('click', () => toggleSidebar('abyss'));
   $('abyssSidebarReopen').addEventListener('click', () => toggleSidebar('abyss'));
+  if (store.get('eve-pi-sidebar-collapsed') === '1') setSidebarCollapsed('piSidebar', 'piSidebarReopen', true);
+  $('piSidebarCollapse').addEventListener('click', () => toggleSidebar('pi'));
+  $('piSidebarReopen').addEventListener('click', () => toggleSidebar('pi'));
   $('guideSidebarCollapse').addEventListener('click', () => toggleSidebar('guide'));
   $('guideSidebarReopen').addEventListener('click', () => toggleSidebar('guide'));
   $('courierSidebarCollapse').addEventListener('click', () => toggleSidebar('courier'));

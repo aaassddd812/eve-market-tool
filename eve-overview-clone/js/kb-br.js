@@ -2,6 +2,7 @@
 // 选择星系（可勾选星门邻近星系）与时间段，向击杀记录服务读取期间全部玩家击杀与攻击者，
 // 按联盟（无联盟时按军团）汇总，自动推测 A / B 双方阵营（可手动调整），统计双方人数、损失、舰船组成与损失明细。
 // 路由：#kb/br（设置）、#kb/br/<星系,…>/<开始>-<结束>[/<A 方,…>/<B 方,…>]（时间为 Unix 秒，可分享）
+import { initReplay, mountReplay, stopReplay, resizeReplay } from './kb-br-replay.js?v=v3';
 let ctx;                       // kb-page 提供的工具：app, kb, request, absorbNames, partyName, typeName, loadTypes, avatar, entityLink, IMG
 const $ = (id) => document.getElementById(id);
 const PODS = new Set([670, 33328]);
@@ -20,7 +21,14 @@ const BR = {
   view: 'A'                  // 窄屏下显示哪一方的明细
 };
 
-export function initBr(context) { ctx = context; }
+export function initBr(context) {
+  ctx = context;
+  initReplay({
+    IMG: (...a) => ctx.IMG(...a), typeName: (t) => ctx.typeName(t), partyName: (id) => ctx.partyName(id),
+    get esc() { return ctx.app.esc; }, get formatISK() { return ctx.app.formatISK; }
+  });
+  window.addEventListener('resize', resizeReplay);
+}
 
 // ---------- 时间（EVE 时间即 UTC）----------
 const toInput = (sec) => new Date(sec * 1000).toISOString().slice(0, 16);
@@ -381,12 +389,15 @@ function renderResult() {
       </div>
       <div class="kb-br-tools">
         <button class="btn btn-ghost" data-br-auto title="按击杀关系重新推测双方">重新分阵营</button>
+        <button class="btn btn-ghost${BR.replay ? ' active' : ''}" data-br-replay title="按击杀邮件的时间点回放这场会战">战局复盘</button>
         <button class="btn btn-ghost" data-br-share>复制链接</button>
+        ${ctx.app.openBattleSim ? '<button class="btn btn-ghost" data-br-sim title="按双方实际出场的舰船（装配取击杀记录里最常见的一套）在装配页模拟对打">模拟对打</button>' : ''}
         <button class="btn btn-primary" data-br-image title="生成战况图片，可下载或复制后分享">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg><span>分享图片</span>
         </button>
       </div>
     </div>
+    ${BR.replay ? '<div id="brReplay"></div>' : ''}
     ${ratioHero(A, B)}
     ${timelineBox()}
     <div class="segmented kb-br-switch" role="group" aria-label="查看哪一方">
@@ -401,6 +412,7 @@ function renderResult() {
       <div class="kb-br-parties">${unassigned.map((p) => partyRow(p, null)).join('')}</div>
     </section>` : ''}`;
   box.onclick = onResultClick;
+  if (BR.replay) mountReplay($('brReplay'), replayModel(A, B)); else stopReplay();
   drawTimeline();
   observeChart();
 }
@@ -655,6 +667,13 @@ function onResultClick(e) {
   }
   if (el('[data-br-auto]')) { autoSides(); history.replaceState(null, '', hashFor()); renderResult(); return; }
   if ((x = el('[data-br-image]'))) { shareImage(x); return; }
+  if (el('[data-br-sim]')) { openSim(); return; }
+  if (el('[data-br-replay]') || el('[data-br-replay-close]')) {
+    BR.replay = !BR.replay;
+    renderResult();
+    if (BR.replay) $('brReplay')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return;
+  }
   if (el('[data-br-share]')) { ctx.app.copyText(location.origin + location.pathname + hashFor(), '战场统计链接已复制'); return; }
   if ((x = el('[data-br-view]'))) { BR.view = x.dataset.brView; renderResult(); return; }
   if ((x = el('[data-br-chart]'))) {
@@ -662,6 +681,38 @@ function onResultClick(e) {
     x.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === x));
     drawTimeline();
   }
+}
+
+// 战局复盘的数据：按时间排序的击杀（标出损失方）与双方舰船组成
+function replayModel(A, B) {
+  const kills = BR.data.kills.filter((k) => !PODS.has(k[3])).map(([id, t, sys, ship, value, vChar, vCorp, vAlliance]) => ({
+    id, t, sys, ship, value, char: vChar, party: vAlliance || vCorp, side: BR.side.get(partyOf(vCorp, vAlliance)) || null
+  }));
+  const t0 = (kills[0]?.t || BR.data.start) - 60;
+  const t1 = Math.max((kills[kills.length - 1]?.t || BR.data.end) + 30, t0 + 120);
+  return { key: BR.key + '|' + [...BR.side].join(','), kills, t0, t1, fielded: { A: A.fielded, B: B.fielded } };
+}
+
+// 模拟对打：每名飞行员按第一艘出现的舰船计一次（换船不重复计），实际损失按舰船类型对照
+function openSim() {
+  const side = (s) => {
+    const st = sideStats(s);
+    const count = new Map();
+    for (const c of st.pilots) {
+      const ship = [...(BR.pilotShips.get(c) || [])][0];
+      if (ship) count.set(ship, (count.get(ship) || 0) + 1);
+    }
+    // 本场这型船的损失（对战模拟优先按这些击杀取装配）
+    const kills = new Map();
+    for (const k of st.losses) if (!PODS.has(k[3])) (kills.get(k[3]) || kills.set(k[3], []).get(k[3])).push(k[0]);
+    return { rows: [...count].sort((a, b) => b[1] - a[1]).map(([ship, n]) => ({ ship, count: n, kills: (kills.get(ship) || []).slice(0, 60) })), lost: [...st.lostByType], kills };
+  };
+  const A = side('A'), B = side('B');
+  // 本方这型船没阵亡时，可以借用对方同型船的阵亡装配
+  for (const [me, other] of [[A, B], [B, A]]) for (const r of me.rows) r.killsOther = (other.kills.get(r.ship) || []).slice(0, 60);
+  if (!A.rows.length || !B.rows.length) { ctx.app.showToast('两方都要有舰船才能模拟', 'info'); return; }
+  const sys = BR.data.systems.map((id) => ctx.kb.systemLabel(id).name).join('、');
+  ctx.app.openBattleSim({ title: `${sys} ${fmtTime(BR.data.start)}`, a: A.rows, b: B.rows, real: { A: A.lost, B: B.lost } });
 }
 
 // ---------- 分享图片 ----------
