@@ -19,7 +19,7 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=42"></script>
+  <script src="js/i18n.js?v=43"></script>
   <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
   <script type="importmap">
     {
@@ -29,7 +29,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v128">
+  <link rel="stylesheet" href="css/modern-style.css?v=v130">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -60,6 +60,10 @@
         <button class="nav-btn" data-view="kb" role="tab" title="击杀" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/><circle cx="12" cy="12" r="1.5"/></svg>
           <span>击杀</span>
+        </button>
+        <button class="nav-btn" data-view="sim" role="tab" title="模拟对打：两方舰队按装配模拟交战" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6.5 9.5 12 3 17.5z"/><path d="M21 6.5 14.5 12l6.5 5.5z"/><path d="M12 3v3M12 10.5v3M12 18v3"/></svg>
+          <span>模拟对打</span>
         </button>
         <button class="nav-btn" data-view="fit" role="tab" title="装配" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
@@ -613,6 +617,12 @@
       </div>
 
       <!-- 行星工业视图 -->
+      <div class="view-container" id="simView" hidden>
+        <div class="kb-scroll">
+          <div class="kb-wrap sim-page" id="simMain"></div>
+        </div>
+      </div>
+
       <div class="view-container" id="appraisalView" hidden>
         <div class="kb-scroll">
           <div class="kb-wrap" id="apMain"></div>
@@ -1040,6 +1050,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v175" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v176" type="module" data-cfasync="false"></script>
 </body>
 </html>

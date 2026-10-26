@@ -7,7 +7,7 @@ import * as FE from './fit-engine.js?v=v23';
 import * as MU from './fit-mutate.js?v=v3';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v26';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v26';
-import { initSim, openSim } from './fit-sim.js?v=v5';
+import { initSim, mountSim } from './fit-sim.js?v=v6';
 import { initGraph, openGraph } from './fit-graph.js?v=v4';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 
@@ -71,8 +71,8 @@ export function initFitting(context) {
     getFit: () => F.fit, getStats: () => F.stats, savedFits, parseEft, normalize, skills,
     hasEsi: () => app.hasEsiToken(),
     esiFits: loadEsiFitList,
-    // 在装配页打开（对战模拟的装配详情）
-    openInFitting: (fit) => { applyFit(fit); app.showToast('已在装配页打开，可点「保存」存到本机', 'success'); },
+    // 在装配页打开（模拟对打的装配详情）：先记下，切到装配页时载入
+    openInFitting: (fit) => { pendingFit = fit; app.openFit(); },
     esc: app.esc, formatNumber: app.formatNumber, formatISK: app.formatISK, showToast: app.showToast, store: app.store
   };
   toolInit = () => { initSim(toolCtx); initGraph(toolCtx); toolInit = null; };
@@ -89,24 +89,36 @@ function saveSettings() {
   app.store.setJSON(SETTINGS_KEY, { skillMode: F.skillMode, onlyFits: F.onlyFits, tab: F.tab });
 }
 
-let toolInit = null;   // 装配数据到了再初始化对战模拟 / 伤害图表（它们需要读取本机装配）
+let toolInit = null;   // 装配数据到了再初始化模拟对打 / 伤害图表（它们需要读取本机装配）
 function openTool(open, arg) {
   toolInit?.();
   open(arg);
 }
 
-// 战场统计「模拟对打」：进入装配页后打开对战模拟（preset 见 fit-sim.js openSim）
+// 模拟对打页（独立菜单，与装配页共用装配数据）；战场统计「模拟对打」先 queueSim 带入双方舰船
 let pendingSim = null;
 export function queueSim(preset) {
-  pendingSim = preset || {};
+  pendingSim = preset || null;
 }
-function loadPendingSim() {
-  const hashSim = /^#fit\/sim/.test(location.hash);
-  if (!pendingSim && !hashSim) return;
-  const preset = pendingSim && pendingSim.a ? pendingSim : null;
+export async function showSim(root, restored = false) {
+  if (!F.data && !root.dataset.ready) root.innerHTML = skTitle(16) + skCards(3) + skRows(6);
+  try {
+    await ensureData();
+  } catch (error) {
+    root.innerHTML = '<p class="text-muted kb-empty">装配数据加载失败：' + app.esc(error.message) + '</p>';
+    return;
+  }
+  toolInit?.();
+  const preset = pendingSim;
   pendingSim = null;
-  history.replaceState(null, '', location.pathname + '#fit');
-  openTool(openSim, preset);
+  mountSim(root, preset, restored && !preset);
+}
+
+async function ensureData() {
+  if (F.data) return F.data;
+  if (!F.loading) F.loading = FE.loadFitData(DATA_URL);
+  try { F.data = await F.loading; } catch (error) { F.loading = null; throw error; }
+  return F.data;
 }
 
 // 空闲时预加载装配数据
@@ -117,14 +129,14 @@ export async function preloadFitting() {
 
 // restored：从其他页面切回，保留当前页面，不重新渲染
 export async function showFitting(restored = false) {
-  if (!F.data) {
-    $('fitMain').innerHTML = skTitle(20) + '<div class="fit-layout"><div>' + skRows(8) + '</div><div>' + skCards(4, 'fit-sk-cards') + '</div></div>';
-    $('fitBrowser').innerHTML = skRows(12, { img: 24 });
+  if (!F.ready) {
+    if (!F.data) {
+      $('fitMain').innerHTML = skTitle(20) + '<div class="fit-layout"><div>' + skRows(8) + '</div><div>' + skCards(4, 'fit-sk-cards') + '</div></div>';
+      $('fitBrowser').innerHTML = skRows(12, { img: 24 });
+    }
     try {
-      if (!F.loading) F.loading = FE.loadFitData(DATA_URL);
-      F.data = await F.loading;
+      await ensureData();
     } catch (error) {
-      F.loading = null;
       $('fitMain').innerHTML = '<p class="text-muted kb-empty">装配数据加载失败：' + app.esc(error.message) + '</p>';
       return;
     }
@@ -140,12 +152,11 @@ export async function showFitting(restored = false) {
     renderBrowserTabs();
     renderBrowser();
     recompute();
-    loadPendingSim();
+    F.ready = true;
     return;
   }
   if (loadPending() || loadFromHash()) { recompute(); renderBrowser(); restored = false; }
   syncSkillMode(restored);
-  loadPendingSim();
 }
 
 // 绑定 / 解绑 ESI 后刷新技能来源
@@ -551,7 +562,7 @@ function renderFit() {
     box.innerHTML = `<div class="fit-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2 4 7v10l8 5 8-5V7z"/><path d="M12 22V12M4 7l8 5 8-5"/></svg>
       <h3>从左侧选择一艘舰船开始装配</h3>
-      <p class="fit-empty-tools"><button class="btn btn-ghost" data-fit-sim>舰队对战模拟</button></p>
+      <p class="fit-empty-tools"><button class="btn btn-ghost" data-fit-sim>模拟对打</button></p>
       <p>也可以 <button class="link-btn" data-fit-import>导入 EFT 文本</button>${app.hasEsiToken() ? '、<button class="link-btn" data-fit-esi-list>读取游戏内装配</button>' : ''}${savedFits().length ? ` 或打开 <select class="plain-select" data-fit-open><option value="">我的装配…</option>${savedFits().map((f) => `<option value="${f.id}">${app.esc(f.name || type(f.ship)?.name || '未命名')}</option>`).join('')}</select>` : ''}</p>
     </div>`;
     if (MOBILE()) app.openDrawer?.();
@@ -587,7 +598,7 @@ function renderFit() {
           <button class="btn btn-ghost fit-plan-btn" data-fit-imp title="装备不动，按目标推荐植入体">智能植入体</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-kb title="这艘船最近阵亡时的常见装配">击杀记录装配</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-graph title="有效 DPS 随距离、目标速度、信号半径变化的曲线（类似 Pyfa 的图表）">伤害图表</button>
-          <button class="btn btn-ghost fit-plan-btn" data-fit-sim title="两方舰队按装配模拟对打">对战模拟</button>
+          <button class="btn btn-ghost fit-plan-btn" data-fit-sim title="打开「模拟对打」页：两方舰队按装配模拟交战">模拟对打</button>
         </div>
         <div class="fit-action-row">
           <button class="btn btn-ghost" data-fit-new title="新建空装配">新建</button>
@@ -861,7 +872,7 @@ async function onMainClick(e) {
     recompute();
     return;
   }
-  if ((x = el('[data-fit-sim]'))) { openTool(openSim); return; }
+  if ((x = el('[data-fit-sim]'))) { app.openSim(); return; }
   if ((x = el('[data-fit-graph]'))) { openTool(openGraph); return; }
   if ((x = el('[data-fit-all]'))) { setAllStates(x.dataset.fitAll === 'on'); return; }
   if ((x = el('[data-fit-clear]'))) { clearModules(); return; }
@@ -1207,8 +1218,21 @@ export function queueEftFit(text) {
   pendingEft = text;
 }
 
+// 模拟对打「在装配页打开」带来的装配
+let pendingFit = null;
+function loadPendingFit() {
+  if (!pendingFit) return false;
+  stashDraft(F.fit);
+  F.fit = normalize(pendingFit);
+  pendingFit = null;
+  F.selected = null;
+  autoActivateDrones();
+  app.showToast('已在装配页打开，可点「保存」存到本机', 'success');
+  return true;
+}
+
 function loadPending() {
-  return loadPendingKill() || loadPendingEft();
+  return loadPendingFit() || loadPendingKill() || loadPendingEft();
 }
 
 function loadPendingEft() {

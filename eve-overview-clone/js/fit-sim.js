@@ -28,67 +28,74 @@ const S = {
   sides: { A: [], B: [] },
   opt: { dist: 10, trans: 25, focus: 'weak', logi: true, ewar: true, prop: false, max: 300 },
   title: '', real: null,      // 来自会战：标题与实际损失 { A: Map(ship -> n), B }
+  back: '',                   // 来自战场统计时的地址（「返回战场统计」）
   result: null, seq: 0, adding: null, chart: 'ships',
   esi: { fits: null, loading: false, error: '' },   // 已绑定角色的游戏内装配
-  detail: null                                      // 装配详情面板 { side, id, groups, sel }
+  detail: null,                                     // 装配详情面板 { side, id, groups, sel }
+  menu: false                                       // 对局存档菜单是否展开
 };
+let root = null;
+const SAVES_KEY = 'eve-sim-saves-v1';   // 对局存档：[{ id, name, at, title, opt, sides }]
+const SAVES_MAX = 20;
 
 export function initSim(context) {
   ctx = context;
   try {
     const saved = ctx.store.getJSON(KEY, null);
-    if (saved) {
-      Object.assign(S.opt, saved.opt || {});
-      for (const s of SIDES) S.sides[s] = (saved.sides?.[s] || []).filter((r) => ctx.data.types.has(r.ship)).map((r) => ({ ...r, id: ++S.seq, status: r.fit ? 'ok' : 'idle' }));
-      S.title = saved.title || '';
-    }
+    if (saved) loadState(saved);
   } catch { /* 默认 */ }
 }
 
+const packRows = (list) => list.map(({ ship, count, src, fit, label, kills, killsOther }) => ({ ship, count, src, kills, killsOther, fit: AUTO.has(src) ? null : fit, label: AUTO.has(src) ? '' : label }));
+function packState() {
+  return { opt: S.opt, title: S.title, back: S.back, real: S.real ? { A: [...S.real.A], B: [...S.real.B] } : null, sides: { A: packRows(S.sides.A), B: packRows(S.sides.B) } };
+}
+function loadState(st) {
+  Object.assign(S.opt, st.opt || {});
+  for (const s of SIDES) S.sides[s] = (st.sides?.[s] || []).filter((r) => ctx.data.types.has(r.ship)).map((r) => ({ ...r, id: ++S.seq, status: r.fit ? 'ok' : 'idle' }));
+  S.title = st.title || '';
+  S.back = st.back || '';
+  S.real = st.real ? { A: new Map(st.real.A || []), B: new Map(st.real.B || []) } : null;
+}
 function save() {
-  const rows = (list) => list.map(({ ship, count, src, fit, label, kills, killsOther }) => ({ ship, count, src, kills, killsOther, fit: AUTO.has(src) ? null : fit, label: AUTO.has(src) ? '' : label }));
-  ctx.store.setJSON(KEY, { opt: S.opt, title: S.title, sides: { A: rows(S.sides.A), B: rows(S.sides.B) } });
+  ctx.store.setJSON(KEY, packState());
 }
 
-// preset：{ title, a: [{ ship, count }], b: [...], real: { A: [[ship, n]], B } }
-export function openSim(preset = null) {
-  let modal = $('fitSimModal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'fitSimModal';
-    modal.className = 'modal sim-modal';
-    modal.setAttribute('role', 'dialog');
-    modal.setAttribute('aria-labelledby', 'simTitle');
-    modal.innerHTML = `<div class="modal-backdrop"></div><div class="modal-content sim-content">
-      <div class="modal-header"><h3 id="simTitle">舰队对战模拟</h3><button class="modal-close" data-sim-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-      <div class="modal-body" id="simBody"></div><div class="modal-body sim-detail" id="simDetail" hidden></div></div>`;
-    document.body.appendChild(modal);
-    modal.addEventListener('click', onClick);
-    modal.addEventListener('change', onChange);
-    modal.addEventListener('input', onInput);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) { if (S.detail) closeDetail(); else close(); } });
-    window.addEventListener('resize', () => { if (!modal.hidden) drawChart(); });
+// 模拟对打页：root 为页面容器；preset 来自战场统计 { title, a: [{ ship, count, kills, killsOther }], b, real: { A: [[ship, n]], B }, back }
+export function mountSim(el, preset = null, restored = false) {
+  const fresh = root !== el || !el.dataset.ready;
+  root = el;
+  if (fresh) {
+    el.dataset.ready = '1';
+    el.addEventListener('click', onClick);
+    el.addEventListener('change', onChange);
+    el.addEventListener('input', onInput);
+    el.addEventListener('keydown', onKeydown);
+    el.addEventListener('focusout', onFocusOut);
+    el.addEventListener('submit', onSubmit);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && root?.offsetParent && S.detail) closeDetail(); });
+    document.addEventListener('click', (e) => { if (S.menu && !e.target.closest('.sim-menu')) toggleMenu(false); });
+    let w = 0;
+    window.addEventListener('resize', () => { if (root?.offsetParent && root.clientWidth !== w) { w = root.clientWidth; drawChart(); } });
   }
-  if (preset) {
+  if (preset?.a) {
     S.title = preset.title || '';
+    S.back = preset.back || '';
     S.real = preset.real ? Object.fromEntries(SIDES.map((s) => [s, new Map(preset.real[s] || [])])) : null;
     const isShip = (r) => ctx.data.types.get(r.ship)?.category === ctx.FE.CAT.ship;
-    const row = (r) => {
-      const hasBattle = r.kills?.length || r.killsOther?.length;
-      return Object.assign(newRow(r.ship, r.count, hasBattle ? 'battle' : 'kb'), { kills: r.kills || [], killsOther: r.killsOther || [] });
-    };
+    const row = (r) => Object.assign(newRow(r.ship, r.count, r.kills?.length || r.killsOther?.length ? 'battle' : 'kb'), { kills: r.kills || [], killsOther: r.killsOther || [] });
     S.sides.A = preset.a.filter(isShip).map(row);
     S.sides.B = preset.b.filter(isShip).map(row);
     S.result = null;
+    S.detail = null;
     save();
   }
-  modal.hidden = false;
-  document.body.classList.add('modal-open');
+  if (!fresh && restored && root.querySelector('#simBody')) { renderSides(); loadEsi(); return; }
   S.detail = null;
   render();
-  showDetailPane(false);
   for (const s of SIDES) S.sides[s].forEach(resolveRow);
   loadEsi();
+  schedule(0);
 }
 
 // 游戏内装配（绑定了角色才读；与装配页「游戏装配」弹窗共用缓存）
@@ -101,11 +108,16 @@ function loadEsi() {
     .finally(() => { S.esi.loading = false; renderSides(); if (S.detail) openDetail(S.detail.side, S.detail.id, S.detail.sel); });
 }
 
-function close() {
-  S.detail = null;
-  showDetailPane(false);
-  $('fitSimModal').hidden = true;
-  document.body.classList.remove('modal-open');
+// 改动后自动重新模拟（短暂合并连续改动；装配还在读取时先用读到的部分算，读完再更新）
+let runTimer = 0;
+function schedule(delay = 250) {
+  clearTimeout(runTimer);
+  runTimer = setTimeout(run, delay);
+}
+function changed() {
+  save();
+  renderSides();
+  schedule();
 }
 
 function newRow(ship, count = 1, src = 'kb', fit = null, label = '') {
@@ -159,9 +171,8 @@ async function resolveRow(row) {
     row.error = error.message;
   }
   prepare(row);
-  S.result = null;
   renderSides();
-  renderResult();
+  schedule(400);
 }
 
 function emptyFit(ship) {
@@ -396,11 +407,49 @@ export function simulate(sides, opt) {
 const mean = (r) => (r[0] + r[1] + r[2] + r[3]) / 4 || 1;
 
 // ---------- 界面 ----------
+// 示例对局（按英文名找船型，没有的跳过）
+const PRESETS = [
+  { name: '重型突击舰对射', a: [['Muninn', 15], ['Scimitar', 3]], b: [['Eagle', 15], ['Basilisk', 3]] },
+  { name: '战列巡洋舰对冲', a: [['Hurricane', 10]], b: [['Drake', 10]] },
+  { name: '护卫舰小队', a: [['Rifter', 5]], b: [['Merlin', 5]] }
+];
+let enIndex = null;
+function shipByEn(name) {
+  if (!enIndex) {
+    enIndex = new Map();
+    for (const t of ctx.data.types.values()) if (t.category === ctx.FE.CAT.ship && t.market && t.en) enIndex.set(t.en, t.id);
+  }
+  return enIndex.get(name);
+}
+const presetSide = (list) => list.map(([en, n]) => [shipByEn(en), n]).filter(([id]) => id);
+
+const ICON = {
+  swap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4 3 8l4 4"/><path d="M3 8h14"/><path d="m17 20 4-4-4-4"/><path d="M21 16H7"/></svg>',
+  save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>',
+  back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
+  x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  mirror: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16V5a2 2 0 0 1 2-2h11"/></svg>'
+};
+
 function render() {
-  const body = $('simBody');
-  $('simTitle').textContent = S.title ? `对战模拟 · ${S.title}` : '舰队对战模拟';
+  if (!root) return;
   const seg = (key, items) => `<div class="segmented" role="group">${items.map(([v, l]) => `<button type="button" data-sim-opt="${key}" data-v="${v}" class="${String(S.opt[key]) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-  body.innerHTML = `
+  root.innerHTML = `<div id="simBody" class="sim-body">
+    <header class="sim-head">
+      ${S.back ? `<button type="button" class="btn btn-ghost sim-back" data-sim-back>${ICON.back}返回战场统计</button>` : ''}
+      <div class="sim-head-main">
+        <h2>模拟对打${S.title ? `<small>${ctx.esc(S.title)}</small>` : ''}</h2>
+        <p>两方舰队按装配逐秒对射，改动后自动重新模拟。点舰船可查看、更换装配。</p>
+      </div>
+      <div class="sim-head-actions">
+        <div class="sim-menu">
+          <button type="button" class="btn btn-ghost" data-sim-menu aria-expanded="false">${ICON.save}对局存档</button>
+          <div class="sim-menu-pop" id="simMenu" hidden></div>
+        </div>
+        <button type="button" class="btn btn-ghost" data-sim-swap title="交换 A / B 两方">${ICON.swap}交换两方</button>
+        <button type="button" class="btn btn-ghost" data-sim-reset title="清空两方舰船">清空</button>
+      </div>
+    </header>
     <div class="sim-opts">
       <label class="sim-opt"><span>交战距离</span><select class="pi-input" data-sim-opt-select="dist">${DISTANCES.map((d) => `<option value="${d}"${S.opt.dist === d ? ' selected' : ''}>${d} km</option>`).join('')}</select></label>
       <div class="sim-opt"><span>目标机动</span>${seg('trans', TRANS)}</div>
@@ -409,15 +458,18 @@ function render() {
       <label class="pi-check"><input type="checkbox" data-sim-flag="logi"${S.opt.logi ? ' checked' : ''}><span>后勤遥修</span></label>
       <label class="pi-check"><input type="checkbox" data-sim-flag="ewar"${S.opt.ewar ? ' checked' : ''}><span>网子 / 标记</span></label>
       <label class="pi-check" title="开启时速度与信号半径都按推进器开着计算（舰队对射时一般不开）"><input type="checkbox" data-sim-flag="prop"${S.opt.prop ? ' checked' : ''}><span>推进器开启</span></label>
-      ${SIDES.some((s) => S.sides[s].some(hasBattle)) ? `<div class="sim-opt"><span>装配来源</span><div class="segmented" role="group"><button type="button" data-sim-src="battle">全部用本场阵亡装配</button><button type="button" data-sim-src="kb">全部用最近常见装配</button></div></div>` : ''}
-      <button type="button" class="btn btn-primary sim-go" data-sim-run>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 17.5 3 6V3h3l11.5 11.5M13 19l6-6M16 16l4 4M19 21l2-2"/></svg>开始模拟
-      </button>
+      <div class="sim-opt" id="simBulk"></div>
+      <span class="sim-status" id="simStatus" role="status"></span>
     </div>
+    <div id="simVerdict"></div>
     <div class="sim-sides" id="simSides"></div>
     <div id="simResult"></div>
-    <p class="fit-hint sim-note">技能全部 5 级；双方固定在交战距离上，目标横向速度 = 最大速度 × 目标机动比例；有长冷却的装备（突击型损伤控制等）不计开启；集火时每 ${SQUAD} 艘船共打一个目标。
-      不计电容（假定够用）、中和、ECM、阻尼、超载与指挥脉冲。本场阵亡装配：这型船在这场会战里阵亡时最常见的一套（本方没有阵亡时取对方同型船的），会战一般是监制队，同型船按同一套装配算；最近常见装配：最近 7 天最近 20 次损失里最常见的一套。结果仅供参考。</p>`;
+    <details class="sim-note">
+      <summary>模拟规则与局限</summary>
+      <p>技能全部 5 级；双方固定在交战距离上，目标横向速度 = 最大速度 × 目标机动比例；有长冷却的装备（突击型损伤控制等）不计开启；集火时每 ${SQUAD} 艘船共打一个目标。
+      不计电容（假定够用）、中和、ECM、阻尼、超载与指挥脉冲。本场阵亡装配：这型船在这场会战里阵亡时最常见的一套（本方没有阵亡时取对方同型船的），会战一般是监制队，同型船按同一套装配算；最近常见装配：最近 7 天最近 20 次损失里最常见的一套。结果仅供参考。</p>
+    </details>
+  </div><div class="sim-detail" id="simDetail" hidden></div>`;
   renderSides();
   renderResult();
 }
@@ -455,19 +507,26 @@ function rowHtml(side, r) {
     : u ? `<span>${ctx.formatNumber(Math.round(u.dps))} DPS · ${ctx.formatNumber(Math.round(u.ehp))} EHP${u.remote.length ? ` · 遥修 ${ctx.formatNumber(Math.round(u.remote.reduce((s, x) => s + x.rate, 0)))}/s` : ''}</span>${r.status === 'none' ? `<em class="sim-warn" title="${ctx.esc(r.error || '这型船最近没有阵亡记录，按空船计算；可在下拉框换成自己的装配')}">${ctx.esc(r.label)}</em>` : AUTO.has(r.src) && r.label ? `<em>${ctx.esc(r.label)}</em>` : ''}`
       : '';
   return `<div class="sim-row" data-sim-row="${side}:${r.id}">
-    <button type="button" class="sim-row-img" data-sim-detail title="查看 / 更换装配"><img src="${IMG(r.ship)}" alt="" width="32" height="32" loading="lazy"></button>
+    <button type="button" class="sim-row-img" data-sim-detail title="查看 / 更换装配"><img src="${IMG(r.ship)}" alt="" width="36" height="36" loading="lazy"></button>
     <div class="sim-row-main">
-      <button type="button" class="sim-row-name" data-sim-detail title="查看 / 更换装配"><b>${ctx.esc(t?.name || '')}</b><span>装配详情</span></button>
+      <button type="button" class="sim-row-name" data-sim-detail title="查看 / 更换装配"><b>${ctx.esc(t?.name || '')}</b><span>装配详情 ›</span></button>
       <div class="sim-row-info">${info}</div>
       <select class="plain-select sim-fit" data-sim-fit aria-label="装配">${fitOptions(r)}</select>
     </div>
-    <input type="number" class="pi-input sim-count" min="1" max="500" value="${r.count}" data-sim-count aria-label="数量">
-    <button type="button" class="icon-btn sim-del" data-sim-del title="移除" aria-label="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <div class="sim-step" role="group" aria-label="数量">
+      <button type="button" data-sim-step="-1" aria-label="减少"${r.count <= 1 ? ' disabled' : ''}>−</button>
+      <input type="number" class="sim-count" min="1" max="500" value="${r.count}" data-sim-count aria-label="数量" inputmode="numeric">
+      <button type="button" data-sim-step="1" aria-label="增加"${r.count >= 500 ? ' disabled' : ''}>+</button>
+    </div>
+    <div class="sim-row-acts">
+      <button type="button" class="icon-btn" data-sim-mirror title="复制到${side === 'A' ? ' B' : ' A'} 方" aria-label="复制到对方">${ICON.mirror}</button>
+      <button type="button" class="icon-btn sim-del" data-sim-del title="移除" aria-label="移除">${ICON.x}</button>
+    </div>
   </div>`;
 }
 
 function renderSides() {
-  const box = $('simSides');
+  const box = root?.querySelector('#simSides');
   if (!box) return;
   // 装配读完后会重画：保留正在输入的搜索框
   const typing = document.activeElement?.dataset?.simSearch ? { side: document.activeElement.dataset.simSearch, value: document.activeElement.value, pos: document.activeElement.selectionStart } : null;
@@ -482,18 +541,18 @@ function renderSides() {
         <h4><span class="sim-badge">${s} 方</span>${tot.ships} 艘${tot.loading ? `<small class="sim-loading">读取装配 ${list.length - tot.loading} / ${list.length}</small>` : ''}</h4>
         <div class="sim-side-stats"><span>纸面 <b>${ctx.formatNumber(Math.round(tot.dps))}</b> DPS</span><span><b>${ctx.formatISK(tot.ehp)}</b> EHP</span>${tot.reps ? `<span>遥修 <b>${ctx.formatNumber(Math.round(tot.reps))}</b>/s</span>` : ''}</div>
       </header>
-      <div class="sim-rows">${list.map((r) => rowHtml(s, r)).join('') || '<p class="sim-empty">还没有舰船</p>'}</div>
       <div class="sim-add">
         <div class="search-box sim-search">
           <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input type="search" data-sim-search="${s}" placeholder="添加舰船（中英文名）" autocomplete="off" spellcheck="false" aria-label="添加舰船">
           <div class="kb-suggest" data-sim-suggest="${s}" hidden></div>
         </div>
-        ${cur ? `<button type="button" class="btn btn-ghost" data-sim-add-current="${s}" title="把装配页当前的装配加入这一方">加入当前装配</button>` : ''}
+        ${cur ? `<button type="button" class="btn btn-ghost" data-sim-add-current="${s}" title="把装配页当前的装配加入这一方">当前装配</button>` : ''}
         <button type="button" class="btn btn-ghost" data-sim-eft="${s}">粘贴 EFT</button>
-        ${list.length ? `<button type="button" class="link-btn danger" data-sim-clear="${s}">清空</button>` : ''}
       </div>
       ${adding ? `<div class="sim-eft"><textarea class="pi-input" rows="6" data-sim-eft-text placeholder="[Muninn, 舰队装配]&#10;…"></textarea><div><button type="button" class="btn btn-primary" data-sim-eft-go="${s}">加入</button><button type="button" class="btn btn-ghost" data-sim-eft-cancel>取消</button></div></div>` : ''}
+      <div class="sim-rows">${list.map((r) => rowHtml(s, r)).join('') || '<p class="sim-empty">还没有舰船，在上面搜索添加</p>'}</div>
+      ${list.length ? `<div class="sim-side-foot"><button type="button" class="link-btn danger" data-sim-clear="${s}">清空 ${s} 方</button></div>` : ''}
     </section>`;
   }).join('');
   if (eftText) { const ta = box.querySelector('[data-sim-eft-text]'); if (ta) ta.value = eftText; }
@@ -503,6 +562,12 @@ function renderSides() {
     input.focus();
     try { input.setSelectionRange(typing.pos, typing.pos); } catch { /* search 输入框不支持时忽略 */ }
     if (typing.value.trim()) input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  const bulk = root.querySelector('#simBulk');
+  if (bulk) {
+    const any = SIDES.some((s) => S.sides[s].some(hasBattle));
+    bulk.hidden = !any;
+    bulk.innerHTML = any ? '<span>装配来源</span><div class="segmented" role="group"><button type="button" data-sim-src="battle">全部用本场阵亡装配</button><button type="button" data-sim-src="kb">全部用最近常见装配</button></div>' : '';
   }
 }
 
@@ -527,11 +592,12 @@ function addRow(side, row) {
   const same = AUTO.has(row.src) && S.sides[side].find((r) => r.ship === row.ship && r.src === row.src);
   if (same) same.count = Math.min(500, same.count + row.count);
   else S.sides[side].push(row);
-  S.result = null;
-  save();
-  renderSides();
-  renderResult();
+  undo = null;
+  changed();
   if (!same) resolveRow(row); else if (row.fit) prepare(row);
+  // 刚加的那行闪一下
+  const id = same ? same.id : row.id;
+  root.querySelector(`[data-sim-row="${side}:${id}"]`)?.classList.add('flash');
 }
 
 function setSource(row, src) {
@@ -552,57 +618,134 @@ function setSource(row, src) {
     row.status = 'ok';
     prepare(row);
   } else if (src === 'hull') { row.fit = emptyFit(row.ship); row.label = '空船'; row.status = 'ok'; prepare(row); }
-  S.result = null;
-  save();
-  renderSides();
-  renderResult();
+  changed();
 }
 
+function loadPreset(p) {
+  const mk = (list) => presetSide(list).map(([ship, n]) => newRow(ship, n));
+  S.sides.A = mk(p.a);
+  S.sides.B = mk(p.b);
+  S.title = '';
+  S.back = '';
+  S.real = null;
+  S.result = null;
+  render();
+  save();
+  for (const s of SIDES) S.sides[s].forEach(resolveRow);
+  schedule(0);
+}
+
+// ---------- 对局存档 ----------
+function savesList() { return ctx.store.getJSON(SAVES_KEY, []) || []; }
+function toggleMenu(on = !S.menu) {
+  S.menu = on;
+  const pop = root?.querySelector('#simMenu');
+  if (!pop) return;
+  root.querySelector('[data-sim-menu]').setAttribute('aria-expanded', String(on));
+  pop.hidden = !on;
+  if (!on) return;
+  const list = savesList();
+  const n = (st) => SIDES.map((s) => (st.sides?.[s] || []).reduce((t, r) => t + r.count, 0));
+  const empty = !S.sides.A.length && !S.sides.B.length;
+  pop.innerHTML = `<form class="sim-save-form" data-sim-save-form>
+      <input class="pi-input" name="name" maxlength="40" placeholder="${ctx.esc(S.title || '给这局起个名字')}" aria-label="存档名称"${empty ? ' disabled' : ''}>
+      <button type="submit" class="btn btn-primary"${empty ? ' disabled' : ''}>保存当前</button>
+    </form>
+    ${list.length ? `<div class="sim-save-list">${list.map((x) => { const [a, b] = n(x); return `<div class="sim-save-item">
+        <button type="button" data-sim-load="${x.id}"><b translate="no">${ctx.esc(x.name)}</b><small>A ${a} 艘 vs B ${b} 艘 · ${new Date(x.at).toLocaleDateString('zh-CN')}</small></button>
+        <button type="button" class="icon-btn" data-sim-unsave="${x.id}" title="删除存档" aria-label="删除存档">${ICON.x}</button>
+      </div>`; }).join('')}</div>` : '<p class="sim-save-empty">还没有存档。存下来的对局保存在本机浏览器，可随时载入。</p>'}`;
+  if (!empty) pop.querySelector('input').focus();
+}
+
+function onSubmit(e) {
+  if (!e.target.matches('[data-sim-save-form]')) return;
+  e.preventDefault();
+  const name = (e.target.elements.name.value.trim() || S.title || `A ${S.sides.A.reduce((t, r) => t + r.count, 0)} 艘 vs B ${S.sides.B.reduce((t, r) => t + r.count, 0)} 艘`).slice(0, 40);
+  const list = savesList().filter((x) => x.name !== name);
+  list.unshift({ id: Date.now(), name, at: Date.now(), ...packState() });
+  ctx.store.setJSON(SAVES_KEY, list.slice(0, SAVES_MAX));
+  ctx.showToast(`已保存「${name}」`, 'success');
+  toggleMenu(true);
+}
+
+// ---------- 交互 ----------
 function onClick(e) {
-  if (e.target.closest('[data-sim-close]') || e.target.classList.contains('modal-backdrop')) { close(); return; }
   if (S.detail && e.target.closest('#simDetail')) { onDetailClick(e); return; }
-  const dt = e.target.closest('[data-sim-detail]');
+  const el = (sel) => e.target.closest(sel);
+  let x;
+  if (el('[data-sim-back]')) { history.back(); return; }
+  if (el('[data-sim-menu]')) { toggleMenu(); return; }
+  if (el('[data-sim-undo]')) { undoClear(); return; }
+  if ((x = el('[data-sim-load]'))) {
+    const st = savesList().find((v) => String(v.id) === x.dataset.simLoad);
+    if (!st) return;
+    loadState(st);
+    S.result = null;
+    S.menu = false;
+    render();
+    save();
+    for (const s of SIDES) S.sides[s].forEach(resolveRow);
+    schedule(0);
+    ctx.showToast(`已载入「${st.name}」`, 'success');
+    return;
+  }
+  if ((x = el('[data-sim-unsave]'))) {
+    ctx.store.setJSON(SAVES_KEY, savesList().filter((v) => String(v.id) !== x.dataset.simUnsave));
+    toggleMenu(true);
+    return;
+  }
+  if ((x = el('[data-sim-preset]'))) { loadPreset(PRESETS[Number(x.dataset.simPreset)]); return; }
+  if (el('[data-sim-battles]')) { ctx.openBattles?.(); return; }
+  const dt = el('[data-sim-detail]');
   if (dt) { const { side, row } = findRow(dt); openDetail(side, row.id); return; }
-  const opt = e.target.closest('[data-sim-opt]');
+  const opt = el('[data-sim-opt]');
   if (opt) {
     const k = opt.dataset.simOpt;
     S.opt[k] = k === 'focus' ? opt.dataset.v : Number(opt.dataset.v);
     opt.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === opt));
     save();
-    if (S.result) run();
+    schedule(0);
     return;
   }
-  if (e.target.closest('[data-sim-run]')) { run(); return; }
-  const bulk = e.target.closest('[data-sim-src]');
+  const bulk = el('[data-sim-src]');
   if (bulk) {
     const src = bulk.dataset.simSrc;
     for (const s of SIDES) for (const r of S.sides[s]) if (AUTO.has(r.src) && r.src !== src && (src === 'kb' || hasBattle(r))) { r.src = src; r.fit = null; r.status = 'idle'; resolveRow(r); }
-    S.result = null;
-    save();
-    renderSides();
-    renderResult();
+    changed();
     return;
   }
-  const ch = e.target.closest('[data-sim-chart]');
+  const ch = el('[data-sim-chart]');
   if (ch) { S.chart = ch.dataset.simChart; ch.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === ch)); drawChart(); return; }
-  const pick = e.target.closest('[data-sim-pick]');
+  const pick = el('[data-sim-pick]');
   if (pick) {
     const [side, ship] = pick.dataset.simPick.split(':');
     document.activeElement?.blur?.();
     addRow(side, newRow(Number(ship), 1));
     return;
   }
-  const del = e.target.closest('[data-sim-del]');
+  if ((x = el('[data-sim-step]'))) {
+    const { row } = findRow(x);
+    row.count = Math.max(1, Math.min(500, row.count + Number(x.dataset.simStep)));
+    changed();
+    return;
+  }
+  if ((x = el('[data-sim-mirror]'))) {
+    const { side, row } = findRow(x);
+    const other = side === 'A' ? 'B' : 'A';
+    const copy = Object.assign(newRow(row.ship, row.count, row.src, row.fit ? JSON.parse(JSON.stringify(row.fit)) : null, row.label), { kills: row.kills, killsOther: row.killsOther });
+    if (copy.fit) prepare(copy);
+    addRow(other, copy);
+    return;
+  }
+  const del = el('[data-sim-del]');
   if (del) {
     const { side, row } = findRow(del);
     S.sides[side] = S.sides[side].filter((r) => r !== row);
-    S.result = null;
-    save();
-    renderSides();
-    renderResult();
+    changed();
     return;
   }
-  const cur = e.target.closest('[data-sim-add-current]');
+  const cur = el('[data-sim-add-current]');
   if (cur) {
     const fit = ctx.normalize(JSON.parse(JSON.stringify(ctx.getFit())));
     const row = newRow(fit.ship, 1, 'current', fit, '当前装配');
@@ -610,12 +753,12 @@ function onClick(e) {
     addRow(cur.dataset.simAddCurrent, row);
     return;
   }
-  const eft = e.target.closest('[data-sim-eft]');
-  if (eft) { S.adding = { side: eft.dataset.simEft }; renderSides(); document.querySelector('[data-sim-eft-text]')?.focus(); return; }
-  if (e.target.closest('[data-sim-eft-cancel]')) { S.adding = null; renderSides(); return; }
-  const go = e.target.closest('[data-sim-eft-go]');
+  const eft = el('[data-sim-eft]');
+  if (eft) { S.adding = { side: eft.dataset.simEft }; renderSides(); root.querySelector('[data-sim-eft-text]')?.focus(); return; }
+  if (el('[data-sim-eft-cancel]')) { S.adding = null; renderSides(); return; }
+  const go = el('[data-sim-eft-go]');
   if (go) {
-    const r = ctx.parseEft(document.querySelector('[data-sim-eft-text]').value);
+    const r = ctx.parseEft(root.querySelector('[data-sim-eft-text]').value);
     if (r.error) { ctx.showToast('无法识别：' + r.error, 'error', 3500); return; }
     const row = newRow(r.fit.ship, 1, 'eft', ctx.normalize(r.fit), r.fit.name || 'EFT 装配');
     prepare(row);
@@ -623,10 +766,33 @@ function onClick(e) {
     addRow(go.dataset.simEftGo, row);
     return;
   }
-  const clr = e.target.closest('[data-sim-clear]');
-  if (clr) { S.sides[clr.dataset.simClear] = []; S.result = null; save(); renderSides(); renderResult(); return; }
-  const sw = e.target.closest('[data-sim-swap]');
-  if (sw) { [S.sides.A, S.sides.B] = [S.sides.B, S.sides.A]; if (S.real) [S.real.A, S.real.B] = [S.real.B, S.real.A]; save(); renderSides(); run(); }
+  const clr = el('[data-sim-clear]');
+  if (clr) { clearSides([clr.dataset.simClear]); return; }
+  if (el('[data-sim-reset]')) { clearSides(SIDES); return; }
+  if (el('[data-sim-swap]')) {
+    [S.sides.A, S.sides.B] = [S.sides.B, S.sides.A];
+    if (S.real) [S.real.A, S.real.B] = [S.real.B, S.real.A];
+    changed();
+    schedule(0);
+  }
+}
+
+// 清空可撤销（提示条里的「撤销」）
+let undo = null;
+function clearSides(list) {
+  if (!list.some((s) => S.sides[s].length)) return;
+  undo = { sides: { A: S.sides.A, B: S.sides.B }, title: S.title, real: S.real, back: S.back };
+  for (const s of list) S.sides[s] = [];
+  if (list.length === 2) { S.title = ''; S.real = null; S.back = ''; render(); }
+  changed();
+  renderVerdict();
+}
+function undoClear() {
+  if (!undo) return;
+  Object.assign(S, { sides: undo.sides, title: undo.title, real: undo.real, back: undo.back });
+  undo = null;
+  render();
+  changed();
 }
 
 function onChange(e) {
@@ -635,19 +801,15 @@ function onChange(e) {
   if (t.matches('[data-sim-count]')) {
     const { row } = findRow(t);
     row.count = Math.max(1, Math.min(500, Math.round(Number(t.value)) || 1));
-    t.value = row.count;
-    S.result = null;
-    save();
-    renderSides();
-    renderResult();
+    changed();
     return;
   }
-  if (t.dataset.simOptSelect) { S.opt[t.dataset.simOptSelect] = Number(t.value); save(); if (S.result) run(); return; }
+  if (t.dataset.simOptSelect) { S.opt[t.dataset.simOptSelect] = Number(t.value); save(); schedule(0); return; }
   if (t.dataset.simFlag) {
     S.opt[t.dataset.simFlag] = t.checked;
     save();
     if (t.dataset.simFlag === 'prop') { for (const s of SIDES) S.sides[s].forEach((r) => { if (r.fit) prepare(r); }); renderSides(); }
-    if (S.result) run();
+    schedule(0);
   }
 }
 
@@ -655,36 +817,129 @@ function onInput(e) {
   const t = e.target;
   if (!t.dataset.simSearch) return;
   const side = t.dataset.simSearch;
-  const box = document.querySelector(`[data-sim-suggest="${side}"]`);
+  const box = root.querySelector(`[data-sim-suggest="${side}"]`);
   const q = t.value.trim();
   if (!q) { box.hidden = true; return; }
   const hits = shipSearch(q);
-  box.innerHTML = hits.map((s) => `<button type="button" class="kb-suggest-item" data-sim-pick="${side}:${s.id}"><img src="${IMG(s.id)}" alt="" width="22" height="22" loading="lazy"><span>${ctx.esc(s.name)}</span><small>${ctx.esc(ctx.data.groups.get(s.group)?.name || '')}</small></button>`).join('') || '<p class="ind-side-empty">没有匹配的舰船</p>';
+  box.innerHTML = hits.map((s, i) => `<button type="button" class="kb-suggest-item${i ? '' : ' active'}" data-sim-pick="${side}:${s.id}"><img src="${IMG(s.id)}" alt="" width="22" height="22" loading="lazy"><span>${ctx.esc(s.name)}</span><small>${ctx.esc(ctx.data.groups.get(s.group)?.name || '')}</small></button>`).join('') || '<p class="ind-side-empty">没有匹配的舰船</p>';
   box.hidden = false;
 }
 
+// 搜索框键盘操作：↑↓ 选择、回车添加、Esc 收起
+function onKeydown(e) {
+  const t = e.target;
+  if (t.dataset?.simSearch) {
+    const box = root.querySelector(`[data-sim-suggest="${t.dataset.simSearch}"]`);
+    const items = [...box.querySelectorAll('.kb-suggest-item')];
+    if (e.key === 'Escape') { box.hidden = true; return; }
+    if (box.hidden || !items.length) return;
+    const i = items.findIndex((x) => x.classList.contains('active'));
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const j = (i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      items.forEach((x, k) => x.classList.toggle('active', k === j));
+      items[j].scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const [side, ship] = (items[Math.max(0, i)]).dataset.simPick.split(':');
+      t.value = '';
+      box.hidden = true;
+      addRow(side, newRow(Number(ship), 1));
+      root.querySelector(`[data-sim-search="${side}"]`)?.focus();
+    }
+    return;
+  }
+  if (e.key === 'Enter' && t.matches('[data-sim-count]')) t.blur();
+}
+
+function onFocusOut(e) {
+  const t = e.target;
+  if (!t.dataset?.simSearch) return;
+  // 点建议项时先失焦：稍等再收起
+  setTimeout(() => {
+    if (!root.contains(document.activeElement) || !document.activeElement.closest('.sim-search')) root.querySelector(`[data-sim-suggest="${t.dataset.simSearch}"]`)?.setAttribute('hidden', '');
+  }, 150);
+}
+
 function run() {
-  const pending = SIDES.flatMap((s) => S.sides[s]).filter((r) => !r.unit);
-  if (!S.sides.A.length || !S.sides.B.length) { ctx.showToast('两方都要至少有一艘船', 'info'); return; }
-  const waiting = pending.filter((r) => r.status === 'loading' || r.status === 'idle');
-  if (!SIDES.every((s) => S.sides[s].some((r) => r.unit))) { ctx.showToast('还在读取装配，稍等再试', 'info'); return; }
-  S.result = simulate(S.sides, S.opt);
-  S.result.skipped = waiting.reduce((t, r) => t + r.count, 0);
+  if (!root?.querySelector('#simSides')) return;
+  const all = SIDES.flatMap((s) => S.sides[s]);
+  const waiting = all.filter((r) => !r.unit && (r.status === 'loading' || r.status === 'idle'));
+  if (!S.sides.A.length || !S.sides.B.length || !SIDES.every((s) => S.sides[s].some((r) => r.unit))) {
+    S.result = null;
+  } else {
+    const t0 = performance.now();
+    S.result = simulate(S.sides, S.opt);
+    S.result.skipped = waiting.reduce((t, r) => t + r.count, 0);
+    S.result.ms = performance.now() - t0;
+  }
+  setStatus(waiting.length);
   renderResult();
+}
+
+function setStatus(waiting) {
+  const el = root?.querySelector('#simStatus');
+  if (!el) return;
+  const both = S.sides.A.length && S.sides.B.length;
+  el.className = 'sim-status' + (waiting ? ' busy' : S.result ? ' ok' : '');
+  el.textContent = !both ? '两方各加至少一艘船后自动模拟'
+    : waiting ? `读取装配中（还剩 ${waiting} 种），读完自动更新`
+    : S.result ? '结果已随设置自动更新' : '';
 }
 
 // ---------- 结果 ----------
 function fmtSec(s) { return s >= 60 ? `${Math.floor(s / 60)} 分 ${String(s % 60).padStart(2, '0')} 秒` : `${s} 秒`; }
 
-function renderResult() {
-  const box = $('simResult');
+// 结论条放在舰船列表上方：改设置时不用往下翻就能看到胜负；两方都空时显示快速开始
+function renderVerdict() {
+  const box = root?.querySelector('#simVerdict');
   if (!box) return;
   const R = S.result;
+  if (!S.sides.A.length && !S.sides.B.length) {
+    const cur = ctx.getFit();
+    box.innerHTML = `<section class="sim-start">
+      ${undo ? `<div class="sim-undo">已清空舰船<button type="button" class="link-btn" data-sim-undo>撤销</button></div>` : ''}
+      <h3>从哪里开始？</h3>
+      <div class="sim-start-grid">
+        <button type="button" class="sim-start-card" data-sim-battles>
+          <b>从真实会战导入</b><span>在「近 30 天会战」打开一场的战场统计，点「模拟对打」，双方出场舰船和本场阵亡装配会自动带进来</span><em>去选会战 ›</em>
+        </button>
+        ${PRESETS.map((p, i) => {
+          const a = presetSide(p.a), b = presetSide(p.b);
+          if (!a.length || !b.length) return '';
+          const icons = (list) => list.map(([id, n]) => `<span><img src="${IMG(id)}" alt="" width="22" height="22" loading="lazy">${ctx.esc(ctx.data.types.get(id)?.name || '')} ×${n}</span>`).join('');
+          return `<button type="button" class="sim-start-card" data-sim-preset="${i}"><b>${p.name}</b><div class="sim-start-vs"><div>${icons(a)}</div><i>VS</i><div>${icons(b)}</div></div><em>载入示例 ›</em></button>`;
+        }).join('')}
+      </div>
+      <p class="sim-start-hint">也可以直接在下面两方的搜索框里添加舰船${cur ? '，或点「当前装配」把装配页正在编辑的船加进来' : ''}。</p>
+    </section>`;
+    return;
+  }
   if (!R) { box.innerHTML = ''; return; }
   const { winner, lead } = R;
   const verdict = winner ? `${winner} 方获胜` : lead ? `未分胜负 · ${lead} 方占优` : '势均力敌';
-  const skipped = R.skipped ? `<span class="sim-warn">还有 ${R.skipped} 艘船的装配没读到，未计入；读完后再点「开始模拟」</span>` : '';
   const sub = winner ? `用时 ${fmtSec(R.t)}，剩余 ${R.end[winner]} / ${R.start[winner]} 艘` : `${fmtSec(R.t)} 后 A 方剩 ${R.end.A} 艘（${(R.hp.A * 100).toFixed(0)}% 血量），B 方剩 ${R.end.B} 艘（${(R.hp.B * 100).toFixed(0)}%）`;
+  const skipped = R.skipped ? `<span class="sim-warn">还有 ${R.skipped} 艘船的装配没读到，暂未计入</span>` : '';
+  const side = (s) => {
+    const lost = R.start[s] - R.end[s];
+    const real = S.real?.[s] ? [...S.real[s].values()].reduce((a, b) => a + b, 0) : null;
+    return `<div class="sim-v-side side-${s.toLowerCase()}"><span class="sim-badge">${s} 方</span><b>${R.end[s]}</b><small>/ ${R.start[s]} 艘剩余</small>
+      <div class="sim-v-bar"><i style="width:${(R.end[s] / Math.max(1, R.start[s]) * 100).toFixed(1)}%"></i></div>
+      <small><span>损失</span> ${lost}${real != null ? ` · <span>实际损失</span> ${real}` : ''}</small></div>`;
+  };
+  box.innerHTML = `<section class="sim-verdict${winner ? ' sim-win-' + winner.toLowerCase() : ''}">
+    ${side('A')}
+    <div class="sim-v-mid"><b>${verdict}</b><span>${sub}</span>${skipped}</div>
+    ${side('B')}
+  </section>`;
+}
+
+function renderResult() {
+  renderVerdict();
+  const box = root?.querySelector('#simResult');
+  if (!box) return;
+  const R = S.result;
+  if (!R) { box.innerHTML = ''; return; }
   const table = (s) => {
     const rows = R.rows.filter((r) => r.side === s);
     const real = S.real?.[s];
@@ -702,10 +957,6 @@ function renderResult() {
   };
   const firsts = R.kills.slice(0, 12);
   box.innerHTML = `<section class="sim-result">
-    <div class="sim-hero${winner ? ' sim-win-' + winner.toLowerCase() : ''}">
-      <div><b>${verdict}</b><span>${sub}</span>${skipped}</div>
-      <button type="button" class="btn btn-ghost" data-sim-swap title="交换 A / B 两方">交换两方</button>
-    </div>
     <div class="sim-chart">
       <div class="kb-br-chart-head">
         <h4>战况走势</h4>
@@ -784,12 +1035,17 @@ function drawChart() {
 // 左边是这型船能用的装配（本场阵亡的几套、最近常见的几套、我的装配、游戏装配、当前装配、空船），右边是选中那套的槽位与属性
 const SLOT_NAMES = { high: '高槽', mid: '中槽', low: '低槽', rig: '改装件', sub: '子系统' };
 
+// 详情面板在页面里整块替换模拟界面：打开时滚到顶部，关闭时回到原来的位置
+let bodyScroll = 0;
 function showDetailPane(on) {
   const body = $('simBody'), pane = $('simDetail');
   if (!body || !pane) return;
+  const scroller = root?.closest('.kb-scroll');
+  if (on && body.hidden === false && scroller) bodyScroll = scroller.scrollTop;
   body.hidden = on;
   pane.hidden = !on;
   if (!on) pane.innerHTML = '';
+  if (scroller) scroller.scrollTop = on ? 0 : bodyScroll;
 }
 
 function closeDetail() {
@@ -949,8 +1205,8 @@ function onDetailClick(e) {
     return;
   }
   if (e.target.closest('[data-sim-dt-open]')) {
+    closeDetail();
     ctx.openInFitting(ctx.normalize(JSON.parse(JSON.stringify(item.fit))));
-    close();
   }
 }
 
@@ -963,8 +1219,5 @@ function useFit(row, item) {
   row.label = item.label + (item.meta ? ' ' + item.meta : '');
   row.status = 'ok';
   prepare(row);
-  S.result = null;
-  save();
-  renderSides();
-  renderResult();
+  changed();
 }

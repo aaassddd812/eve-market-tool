@@ -305,8 +305,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war', sov: '#sov', abyss: '#abyss', wh: '#wh', guide: '#guide' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView', sov: 'sovView', abyss: 'abyssView', wh: 'whView', guide: 'guideView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war', sov: '#sov', abyss: '#abyss', wh: '#wh', guide: '#guide' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView', sov: 'sovView', abyss: 'abyssView', wh: 'whView', guide: 'guideView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -373,6 +373,7 @@ function switchView(view) {
   if (view === 'map') openStarMap();
   else starMapModule?.hideStarMap();
   if (view === 'kb') openKbPage(restored);
+  if (view === 'sim') openSimPage(restored);
   if (view === 'fit') openFitting(restored);
   if (view === 'pi') openPi();
   if (view === 'industry') openIndustry(restored);
@@ -682,17 +683,33 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v46').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v47').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       openDrawer: () => { if (MOBILE_QUERY.matches) openDrawer(); },
-      closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
+      closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
+      // 装配页与模拟对打页互相跳转（可后退）
+      openSim: () => { history.pushState(null, '', location.pathname + '#sim'); switchView('sim'); },
+      openFit: () => { history.pushState(null, '', location.pathname + '#fit'); switchView('fit'); },
+      openBattles: () => { history.pushState(null, '', location.pathname + '#kb/battles'); switchView('kb'); }
     });
     return m;
   }).catch((error) => { fittingLoading = null; throw error; });
   return fittingLoading;
+}
+
+// 模拟对打（fit-sim.js）：与装配页共用装配模块和数据
+async function openSimPage(restored = false) {
+  try {
+    const m = await loadFittingModule();
+    if (!location.hash.startsWith('#sim')) history.replaceState(null, '', location.pathname + '#sim');
+    await m.showSim($('simMain'), restored);
+  } catch (error) {
+    console.error('模拟对打加载失败:', error);
+    showToast('模拟对打加载失败：' + error.message, 'error', 4000);
+  }
 }
 
 async function openFitting(restored = false) {
@@ -824,11 +841,11 @@ function loadKbPageModule() {
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
       battles: () => battlesPromise,
-      // 战场统计「模拟对打」：切到装配页并打开对战模拟；后退回到战场统计
+      // 战场统计「模拟对打」：切到模拟对打页并带入双方舰船；后退回到战场统计
       openBattleSim: async (preset) => {
-        try { (await loadFittingModule()).queueSim(preset); } catch (error) { showToast('模拟装配加载失败：' + error.message, 'error', 4000); return; }
-        history.pushState(null, '', location.pathname + '#fit');
-        switchView('fit');
+        try { (await loadFittingModule()).queueSim({ ...preset, back: location.hash }); } catch (error) { showToast('模拟对打加载失败：' + error.message, 'error', 4000); return; }
+        history.pushState(null, '', location.pathname + '#sim');
+        switchView('sim');
       },
       getNpcNames: () => state.npcNames,
       // 市场分类「舰船」下的全部舰船（搜索用）
@@ -2764,6 +2781,8 @@ function initHashRouting() {
     // 击杀记录页 / 星图的地址由各自页面处理；从其他页面后退到这些地址时切换过去
     if (location.hash.startsWith('#kb')) { if (state.currentView !== 'kb') switchView('kb'); return; }
     if (location.hash.startsWith('#map')) { if (state.currentView !== 'map') switchView('map'); return; }
+    if (location.hash.startsWith('#sim')) { if (state.currentView !== 'sim') switchView('sim'); return; }
+    if (location.hash.startsWith('#fit/sim')) { history.replaceState(null, '', location.pathname + '#sim'); switchView('sim'); return; }
     if (location.hash.startsWith('#fit')) { if (state.currentView !== 'fit') switchView('fit'); return; }
     if (location.hash.startsWith('#pi')) { if (state.currentView !== 'pi') switchView('pi'); return; }
     if (location.hash.startsWith('#ind')) { if (state.currentView !== 'industry') switchView('industry'); else openIndustry(); return; }
@@ -5439,6 +5458,8 @@ function init() {
   handleEsiCallbackRedirect();
   if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
+  if (location.hash.startsWith('#fit/sim')) history.replaceState(null, '', location.pathname + '#sim');   // 旧地址：对战模拟原在装配页
+  if (location.hash.startsWith('#sim')) switchView('sim');   // 模拟对打
   if (location.hash.startsWith('#fit')) switchView('fit');   // 装配分享链接
   if (location.hash.startsWith('#pi')) switchView('pi');     // 行星工业
   if (location.hash.startsWith('#ind')) switchView('industry');   // 制造
@@ -5506,6 +5527,7 @@ const PAGE_PRELOAD = {
   kb: () => (SERVER.kb ? loadKbPageModule().then((m) => m.prefetchKbHome()) : null),
   map: () => loadStarMapModule().then((m) => m.preloadStarMap()),
   fit: () => loadFittingModule().then((m) => m.preloadFitting()),
+  sim: () => loadFittingModule().then((m) => m.preloadFitting()),
   pi: () => loadPiModule().then((m) => m.preload()),
   industry: () => loadIndustryModule().then((m) => m.preload()),
   lp: () => loadLpModule().then((m) => m.preload()),
