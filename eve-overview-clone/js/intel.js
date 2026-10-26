@@ -7,7 +7,7 @@
 // 我的位置：绑定 ESI 且有位置权限时读角色位置；否则读本地频道日志里「Channel changed to Local」一行；都没有时用手动填的星系。
 // 关键词监控：勾选的频道（或全部频道）里出现关键词（/正则/ 也可以）就提醒。游戏日志监控：战斗日志等出现关键词就提醒（例如被跃迁扰断）。
 // 提醒方式：提示音、网页卡片、系统通知、游戏内邮件（与击杀预警共用收件人与发信间隔，alert-mail.js；一段时间里的提醒合并成一封，
-//   多个标签页都在监听时按消息去重，只发一次；收件人在「邮件」标签页设置，这里勾选发给谁；英文界面发英文邮件）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
+//   多个标签页都在监听时按消息去重，邮件只发一次、提示音与系统通知只响一次；收件人在「邮件」标签页设置，这里勾选发给谁；英文界面发英文邮件）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
 // 文件编码：聊天记录是 UTF-16 LE（带 BOM），游戏日志是 UTF-8；按 BOM 判断。文件名「频道名_YYYYMMDD_HHMMSS_角色ID.txt」。
 
 import * as AM from './alert-mail.js?v=v6';
@@ -397,8 +397,10 @@ function raise(r) {
   const title = titleOf(r);
   const body = (r.who ? r.who + '：' : '') + r.msg;
   if (T.mail && !r.test) queueMail(r);
-  if (T.sound) beep(r.type === 'intel' ? (r.jumps ?? 9) : 5);
   if (T.web) card(title, body, r);
+  // 提示音、系统通知：多个标签页都在监听时同一条只响一次（网页卡片每个标签页各自显示）
+  if (!(T.sound || T.notify) || (!r.test && !claim(r, 'eve-intel-rung'))) return;
+  if (T.sound) beep(r.type === 'intel' ? (r.jumps ?? 9) : 5);
   if (T.notify && window.Notification?.permission === 'granted') {
     try { const n = new Notification(title, { body: r.channel + ' · ' + body, tag: 'eve-intel-' + (r.system || r.kw), renotify: true }); n.onclick = () => { window.focus(); if (r.system) ctx.openMapSystem(r.system); }; } catch { /* 忽略 */ }
   }
@@ -408,15 +410,15 @@ const titleOf = (r) => (r.type === 'intel' ? `敌情：${r.name}${r.jumps != nul
 
 // 游戏内邮件：等到可以发信时把这段时间的提醒合并成一封
 function queueMail(r) {
-  if (!AM.canMail() || !claimMail(r)) return;
+  if (!AM.canMail() || !claim(r, 'eve-intel-mailed')) return;
   S.mailQueue.push(r);
   if (!S.mailTimer) S.mailTimer = setTimeout(flushMail, AM.nextSlot());
 }
-// 多个标签页都在读同一份日志时，同一条消息只由先读到的那个发（localStorage 记 5 分钟）
-function claimMail(r) {
-  const sig = [r.type, r.channel, r.who, r.msg, +r.time].join('|');
+// 多个标签页都在读同一份日志时，同一条提醒只由先读到的那个处理（localStorage 记 5 分钟；k 区分邮件 / 提示音与通知）
+function claim(r, k) {
+  const sig = [r.type, r.channel, r.who, r.msg, +r.time, r.system || r.kw].join('|');
   try {
-    const k = 'eve-intel-mailed', now = Date.now();
+    const now = Date.now();
     const m = JSON.parse(localStorage.getItem(k) || '{}');
     for (const [x, t] of Object.entries(m)) if (now - t > 300e3) delete m[x];
     if (m[sig]) return false;
