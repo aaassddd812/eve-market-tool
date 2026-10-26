@@ -49,6 +49,7 @@ eve-overview-clone/
 ├── js/pi-editor.js      # 殖民地模板预览与编辑
 ├── js/pi-globe.js       # 殖民地球面坐标换算
 ├── assets/pi/           # 行星设施图标（SVG）
+├── assets/favicon.svg   # 网站图标（另有 favicon-32.png、apple-touch-icon.png 由它导出，改图标后三个一起更新并改 ?v=）
 ├── reprocess-data.json  # 化矿数据：每种物品的再处理产物、每批数量、矿石处理技能（build_reprocess.mjs 生成）
 ├── pi-data.json         # 行星工业数据：各星系行星、设施、配方（build_pi.mjs 生成）
 ├── sov-data.json        # 主权规划数据：升级件、各星系恒星电力与行星殖民地资源（build_sov.mjs 生成）
