@@ -6041,3 +6041,29 @@ td .sov-auto-tag { margin-left: 4px; }
   .sim-step { margin-left: 46px; }
   .sim-row-acts { margin-left: auto; }
 }
+
+/* 右上角「定制」：联系作者弹窗（淡色底，不用边框） */
+.icon-btn.contact-btn { width: auto; gap: 4px; padding: 0 10px; font-size: 0.75rem; font-weight: 600; color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
+.icon-btn.contact-btn svg { width: 15px; height: 15px; }
+.icon-btn.contact-btn:hover { background: color-mix(in srgb, var(--accent-primary) 18%, transparent); color: var(--accent-primary); }
+@media (max-width: 768px) { .icon-btn.contact-btn { padding: 0; width: 36px; } .icon-btn.contact-btn span { display: none; } }
+.modal-content.contact-content { max-width: 440px; }
+.contact-body { display: flex; flex-direction: column; gap: 14px; }
+.contact-intro { font-size: 0.875rem; color: var(--text-secondary); }
+.contact-offer { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.contact-offer li { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.contact-offer b { font-size: 0.8125rem; }
+.contact-offer span { font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; }
+.contact-list { display: flex; flex-direction: column; gap: 8px; }
+.contact-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-tertiary)); }
+.contact-kind { flex: none; min-width: 64px; font-size: 0.75rem; font-weight: 600; color: var(--accent-primary); }
+.contact-value { flex: 1; min-width: 0; font-size: 1rem; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text-primary); overflow-wrap: anywhere; }
+.contact-item .btn { flex: none; height: 30px; }
+.contact-note { font-size: 0.75rem; color: var(--text-muted); }
+@media (max-width: 480px) {
+  /* 顶栏右侧按钮多：窄屏收紧间距与按钮宽度，服务器名过长时省略 */
+  .header-actions { gap: 2px; }
+  .header-actions .icon-btn { width: 34px; }
+  .header-actions .icon-btn.api-link { width: auto; padding: 0 7px; }
+  .server-status .server-name { max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}

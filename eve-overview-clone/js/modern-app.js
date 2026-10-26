@@ -2813,6 +2813,31 @@ function toggleShortcutHelp(show = $('shortcutModal').hidden) {
   $('shortcutModal').hidden = !show;
 }
 
+// ===== 联系作者 · 定制功能（右上角「定制」按钮）=====
+// 联系方式在这里改：kind 显示名，value 号码 / 地址（留空则不显示），href 可选（点击打开）
+const CONTACTS = [
+  { kind: 'QQ', value: '282975795' },
+  { kind: 'QQ 群', value: '729497969' }
+];
+function toggleContact(show = $('contactModal').hidden) {
+  $('contactModal').hidden = !show;
+  if (!show) return;
+  const list = CONTACTS.map((c, i) => ({ ...c, i })).filter((c) => c.value);
+  $('contactList').innerHTML = list.length ? list.map((c) => `<div class="contact-item">
+      <span class="contact-kind">${esc(c.kind)}</span>
+      ${c.href ? `<a class="contact-value notranslate" translate="no" href="${esc(c.href)}" target="_blank" rel="noopener">${esc(c.value)}</a>` : `<b class="contact-value notranslate" translate="no">${esc(c.value)}</b>`}
+      <button type="button" class="btn btn-ghost" data-contact-copy="${c.i}">复制</button>
+    </div>`).join('') : '<p class="contact-note">联系方式整理中，稍后补上。</p>';
+}
+function initContact() {
+  $('contactBtn').addEventListener('click', () => toggleContact(true));
+  $('contactModal').addEventListener('click', (e) => {
+    if (e.target.closest('.modal-backdrop, [data-close-contact]')) { toggleContact(false); return; }
+    const b = e.target.closest('[data-contact-copy]');
+    if (b) { const c = CONTACTS[Number(b.dataset.contactCopy)]; copyText(c.value, `已复制 ${c.kind}`); }
+  });
+}
+
 // ===== 全局快捷键 =====
 function initShortcuts() {
   $('shortcutHelpBtn').addEventListener('click', () => toggleShortcutHelp(true));
@@ -2823,6 +2848,7 @@ function initShortcuts() {
     if (event.key === 'Escape') {
       if (!$('killModal').hidden) { killboardModule?.closeKillModal(); return; }
       if (!$('shortcutModal').hidden) { toggleShortcutHelp(false); return; }
+      if (!$('contactModal').hidden) { toggleContact(false); return; }
       if (!$('esiModal').hidden) { closeEsiModal(); return; }
       if (isDrawerOpen()) { closeDrawer(); return; }
     }
@@ -5455,6 +5481,7 @@ function init() {
   initESIModal();
   initHashRouting();
   initShortcuts();
+  initContact();
   handleEsiCallbackRedirect();
   if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
