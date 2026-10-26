@@ -7,7 +7,8 @@
 //   游戏内邮件（默认开）：给自己发一封 EVE 邮件（esi-mail.send_mail.v1），带击杀报告链接 killReport:ID:HASH，游戏里点开即可看 KM；
 //     同一分钟内的多条击杀合并成一封，两封之间至少隔 60 秒；同时开了多个标签页时只由一个标签页发送。
 //     收件人在「预警」弹窗的「邮件」标签页设置（alert-mail.js，与本地日志共用通讯录与发信间隔），这里勾选发给谁；英文界面发英文邮件。
-//   网页特效（默认关）：屏幕边缘红色闪烁 + 右上角预警卡片（点击查看击杀详情），可选提示音。
+//   网页特效（默认关）：屏幕边缘红色闪烁 + 右上角预警卡片（点击查看击杀详情）。
+//   提示音、系统通知（默认关，与网页特效互相独立）：系统通知在浏览器后台也能看到，点击打开击杀详情；多个标签页同一条只响一次（ring）。
 // 人物关注（与位置预警相互独立，默认关闭）：关注的角色产生 KM 时提醒，可分别选「击杀」（参与击杀，含最后一击）/「损失」/「全部」。
 //   只有宁静服可用：实时缓冲里每条击杀带全部玩家攻击者的角色 ID（att）；国服没有公开的个人击杀数据。
 // 星域监控（与位置预警相互独立，宁静服）：指定星域里的任何击杀都提醒，不需要绑定。
@@ -21,7 +22,7 @@ import * as AM from './alert-mail.js?v=v6';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
-const DEFAULTS = { on: false, jumps: 3, mail: true, web: false, sound: false, pods: true, watchOn: false, watch: [],   // watch: [{ id, name, kind: character|corporation|alliance, mode: both|kills|losses }]
+const DEFAULTS = { on: false, jumps: 3, mail: true, web: false, sound: false, notify: false, pods: true, watchOn: false, watch: [],   // watch: [{ id, name, kind: character|corporation|alliance, mode: both|kills|losses }]
   minValue: 0, classes: [], maxAge: 0, regionOn: false, regions: [] };   // classes: 舰船类别（市场分组 ID），空 = 全部；regions: [{ id, name }]
 const MIN_VALUES = [[0, '不限'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿'], [1e10, '100 亿']];
 const MAX_AGES = [[0, '不限'], [60, '1 分钟'], [180, '3 分钟'], [600, '10 分钟'], [1800, '30 分钟']];
@@ -255,7 +256,30 @@ function raise(a) {
   S.history.length = Math.min(S.history.length, 30);
   notify();
   if (T.web) webAlert(a);
+  ring(a);
   if (T.mail) queueMail(a);
+}
+
+// 提示音、系统通知：与网页特效各自独立；多个标签页同时收到同一条只响一次
+const RING_KEY = 'eve-kill-alert-ring';
+function ring(a) {
+  if (!T.sound && !T.notify) return;
+  const id = String(a.id || a.time);
+  try {
+    const last = JSON.parse(localStorage.getItem(RING_KEY) || 'null');
+    if (!a.test && last && last.id === id && Date.now() - last.at < 60e3) return;
+    localStorage.setItem(RING_KEY, JSON.stringify({ id, at: Date.now() }));
+  } catch { /* 忽略 */ }
+  if (T.sound) beep(a.jumps === 0);
+  if (T.notify && window.Notification?.permission === 'granted') {
+    const title = a.watch ? AM.L('人物关注', 'Watchlist') : AM.L('击杀预警', 'Kill alert');
+    const extra = [a.value ? ctx.formatISK(a.value) + ' ISK' : '', a.attackers ? AM.L(a.attackers + ' 名攻击者', a.attackers + (a.attackers === 1 ? ' attacker' : ' attackers')) : ''].filter(Boolean).join(' · ');
+    const body = AM.L(describe(a), describeEn(a)) + (extra ? '\n' + extra : '');
+    try {
+      const n = new Notification(title, { body, tag: 'eve-kill-alert-' + id, renotify: true });
+      n.onclick = () => { window.focus(); n.close(); if (a.id && !a.hourly && !a.test) ctx.openKill(Number(a.id)); };
+    } catch { /* 部分浏览器只允许 Service Worker 通知 */ }
+  }
 }
 
 const where = (a) => a.jumps == null ? a.systemName : `${a.systemName}（${a.jumps === 0 ? '本星系' : a.jumps + ' 跳'}）`;
@@ -369,7 +393,7 @@ function mailBodyEn(list) {
   return mailFrame(list, intro, line, (n) => `…and ${n} more`, 'Sent by EVE Market kill alerts. Turn it off or change the range from the bell icon at the top right of the site.');
 }
 
-// 网页特效：屏幕边缘闪烁 + 预警卡片 + 可选提示音
+// 网页特效：屏幕边缘闪烁 + 预警卡片
 let layer = null;
 function ensureLayer() {
   if (layer) return layer;
@@ -405,7 +429,6 @@ export function webAlert(a) {
   cards.prepend(card);
   while (cards.children.length > 4) cards.lastChild.remove();
   setTimeout(() => card.remove(), 45e3);
-  if (T.sound) beep(a.jumps === 0);
 }
 
 function beep(urgent) {
@@ -425,11 +448,16 @@ function beep(urgent) {
   } catch { /* 浏览器不允许自动播放时忽略 */ }
 }
 
-// 测试：网页特效 / 游戏内邮件
+// 测试：网页提醒（特效、提示音、系统通知中开着的）/ 游戏内邮件
 export function test(kind) {
   const a = { id: 0, test: true, system: S.system || 30000142, jumps: 2, time: new Date().toISOString(), ship: AM.L('金鹏级（测试）', 'Raven (test)'), victim: AM.L('测试飞行员', 'Test Pilot'), value: 432000000, attackers: 8 };
   a.systemName = S.systemName || sysName(a.system);
-  if (kind === 'web') { webAlert(a); return; }
+  if (kind === 'web') {
+    if (!T.web && !T.sound && !T.notify) { ctx.showToast('先打开网页特效、提示音或系统通知', 'info'); return; }
+    if (T.web) webAlert(a);
+    ring(a);
+    return;
+  }
   if (kind === 'mail') {
     if (!AM.canMail()) { AM.testToast(null); return; }
     S.mailQueue.push(a);
@@ -509,9 +537,10 @@ function drawPanel() {
       ${sw('mail', '游戏内邮件', '', '发 EVE 邮件，附击杀报告链接（每分钟最多一封，多条合并）')}
       ${T.mail ? AM.pickerHtml('kill') : ''}
       ${sw('web', '网页特效', '', '屏幕边缘红色闪烁 + 右上角预警卡片')}
-      ${sw('sound', '提示音', '', '网页特效时同时播放提示音')}
+      ${sw('sound', '提示音', '', '有新预警时播放提示音，本星系的更急促')}
+      ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
     </div>
-    <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ka-test="web">测试网页特效</button><button class="btn btn-ghost btn-sm" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>`)}
+    <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ka-test="web">测试网页提醒</button><button class="btn btn-ghost btn-sm" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>`)}
     ${sec('星域监控', `<div class="ka-list">
       ${sw('regionOn', '开启星域监控', '', '指定星域里发生的任何击杀都提醒，不需要绑定 ESI')}
       <div class="ka-opt ka-stack"><div class="ka-watch-add">
@@ -566,9 +595,16 @@ export function mountPanel(el, opts) {
     if (e.key === 'Enter' && e.target.matches('[data-ka-name]')) { e.preventDefault(); addWatch(e.target.value, panel.querySelector('[data-ka-mode]').value); }
     if (e.key === 'Enter' && e.target.matches('[data-ka-region]')) { e.preventDefault(); addRegion(e.target.value); }
   });
-  panel.addEventListener('change', (e) => {
+  panel.addEventListener('change', async (e) => {
     const set = e.target.closest('[data-ka-set]');
     if (set) {
+      if (set.dataset.kaSet === 'notify' && set.checked) {
+        if (!window.Notification) { set.checked = false; ctx.showToast('这个浏览器不支持系统通知', 'error'); return; }
+        if (Notification.permission !== 'granted') {
+          const p = await Notification.requestPermission().catch(() => 'denied');
+          if (p !== 'granted') { set.checked = false; ctx.showToast('浏览器没有允许通知', 'error'); return; }
+        }
+      }
       if (set.dataset.kaSet === 'on' && set.checked && !ctx.tokenInfo()) { set.checked = false; shell.close(); ctx.openEsiBind(); return; }
       update({ [set.dataset.kaSet]: set.checked });
       return;
