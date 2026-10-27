@@ -208,6 +208,10 @@ export function computeFit(data, fit, skills = 'max') {
         const src = data.types.get(m.mut.base);
         base = new Map(src ? src.attrs : t.attrs);
         for (const [k, v] of Object.entries(m.mut.attrs || {})) if (Number.isFinite(v)) base.set(Number(k), v);
+      } else if (data.abyssalBase?.has(t.id)) {
+        // 没有突变属性的深渊装备（游戏装配 / 击杀邮件）：深渊类型本身几乎没有属性，按原装备的属性计算
+        const src = data.types.get(data.abyssalBase.get(t.id));
+        if (src) base = new Map([...src.attrs, ...t.attrs]);
       }
       const item = new Item(data, t, 'module', base);
       // 改装件、子系统始终在线

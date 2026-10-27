@@ -26,6 +26,10 @@
   GET /api/kb/bpprices?types=1,2               公开合同里的蓝图价格：原图最低价、拷贝每流程最低价（各取最便宜 5 份）；
                                                不带 types 时返回全部蓝图的 [原图最低价, 拷贝每流程最低价]
                                                数据来自 EVE Ref 公开合同快照 https://data.everef.net/public-contracts/（每 30 分钟刷新）
+  GET /api/kb/contracts?status=open|done|expired|repost|ended|all&type=&region=&item=&side=want&q=&issuer=&min=&max=&since=&sort=&order=&limit=&offset=
+                                              公开合同存档（EVE Ref 每 30 分钟快照逐份比对）：在售 / 推测成交 / 过期 / 撤单重发；item 只查一种物品时附近 30 天成交单价
+  GET /api/kb/contracts/<id>                  存档合同详情与物品
+  GET /api/kb/contracts/status                存档进度与各状态数量
   GET /api/kb/couriers                        全服公开快递合同（同一份快照，字段同 ESI /contracts/public/{region_id}/，另带 region_id、start_system_id）
 
 用法
@@ -1828,7 +1832,8 @@ class Api:
             g["value"] = round(g["value"] / g["n"])
         return {"ship": ship, "days": days, "total": total, "scanned": len(rows), "fits": fits}
 
-    # 开放接口 GET /api/v1/prices?types=&hub=：最低卖价、最高收购价、全服均价与本站估价
+    # 开放接口 GET /api/v1/prices?types=&hub=：最低卖价、最高收购价、全服均价与本站估价，
+    # 以及该交易中心近 1 / 7 / 14 / 30 天成交中位价 med（倒卖排行汇总里有的物品；hub=all 用吉他的）
     # hub 默认吉他；可选四族贸易中心所在星域 ID（10000043 艾玛 / 10000032 多迪谢 / 10000030 伦斯 / 10000042 赫克）或 all（全宇宙）
     def prices(self, q):
         ids = [int(x) for x in str(q.get("types", "")).split(",") if x.strip().isdigit()]
@@ -1841,13 +1846,14 @@ class Api:
         if hub != 0 and hub not in HUB_STATIONS:
             raise ValueError("hub 只能是 all 或 " + " / ".join(map(str, HUB_STATIONS)))
         table = None if hub == FORGE else self.store.hub_prices.get(hub, {})
+        med = self.store.arb.medians(hub or FORGE) if getattr(self.store, "arb", None) else (lambda t: None)
         out = {}
         for t in dict.fromkeys(ids):
             sell, buy, avg = self.store.prices.get(t) or (None, None, None)
             if table is not None:
                 sell, buy = table.get(t) or (None, None)
             est = self.store.price(t)
-            out[str(t)] = {"sell": sell, "buy": buy, "average": round(avg, 2) if avg else None, "estimate": round(est, 2) if est else None}
+            out[str(t)] = {"sell": sell, "buy": buy, "average": round(avg, 2) if avg else None, "estimate": round(est, 2) if est else None, "med": med(t)}
         updated = self.store.state.get("prices_updated" if table is None else "hub_prices_updated")
         return {"hub": "all" if hub == 0 else hub, "updated": updated, "types": out}
 
@@ -2929,6 +2935,22 @@ class HubArbitrage:
         self.losses = (time.time(), data)
         return data
 
+    def medians(self, region):
+        """宁静服倒卖汇总里某交易中心各物品近 1 / 7 / 14 / 30 天成交中位价：返回 t -> {"1": 价, "7": …} 或 None（还没汇总 / 没有成交）"""
+        d = self.data_hist.get("tq")
+        if not d or region not in d["hubs"]:
+            return lambda t: None
+        k, base, types = d["hubs"].index(region), len(ARB_FIELDS), d["types"]
+
+        def get(t):
+            row = types.get(str(t))
+            h = row[k] if row else None
+            if not h:
+                return None
+            m = {str(days): h[base + i] for i, days in enumerate(ARB_HIST_DAYS) if h[base + i] is not None}
+            return m or None
+        return get
+
     @staticmethod
     def add_order(book, o):
         b = book.setdefault(o["type_id"], ([], []))
@@ -3192,6 +3214,339 @@ MAPK_POLL = 10 * 60
 MAPK_KEEP = 26 * 3600
 
 
+# ---------------------------------------------------------------- 公开合同存档
+# EVE Ref 每 30 分钟抓一次全服公开合同（https://data.everef.net/public-contracts/history/），每份快照都处理：新合同连同物品存库，
+# 上一份还在、这一份不见了的合同按到期时间判断——到期前消失：物品交换 / 快递视为已被接（推测成交；发起人手动删除也会这样，ESI 无法区分），
+# 拍卖视为一口价成交；到期后消失：拍卖有出价按最高出价成交，否则算过期。同一发起人在同一份快照里新发了物品完全相同的合同，算「撤单重发」。
+# 首次启动先按小时补最近 --contract-backfill 天的历史快照，之后跟着最新快照走；已结束的合同保留 --contract-keep 天。
+# 数据放在单独的 SQLite（默认与 --db 同目录的 contracts.sqlite），不占用击杀库的写锁。
+PC_HISTORY = "https://data.everef.net/public-contracts/history/{y}/{d}/"
+PC_POLL = 600                   # 每 10 分钟看一次有没有新快照
+PC_LIST_MAX = 100
+PC_SCHEMA = """
+PRAGMA journal_mode=WAL;
+CREATE TABLE IF NOT EXISTS pc(contract_id INTEGER PRIMARY KEY, type TEXT, status TEXT, region_id INTEGER, system_id INTEGER,
+  location_id INTEGER, end_location_id INTEGER, issuer_id INTEGER, issuer_corp INTEGER, for_corp INTEGER, title TEXT,
+  price REAL, reward REAL, collateral REAL, buyout REAL, volume REAL, days INTEGER, issued INTEGER, expires INTEGER,
+  first_seen INTEGER, last_seen INTEGER, ended INTEGER, final REAL, bids INTEGER, top_bid REAL, value REAL, want REAL,
+  n_items INTEGER, main_type INTEGER, repost INTEGER);
+CREATE INDEX IF NOT EXISTS pc_status ON pc(status, ended);
+CREATE INDEX IF NOT EXISTS pc_issued ON pc(status, issued);
+CREATE INDEX IF NOT EXISTS pc_issuer ON pc(issuer_id);
+CREATE TABLE IF NOT EXISTS pc_items(contract_id INTEGER, type_id INTEGER, quantity INTEGER, inc INTEGER, bpc INTEGER, runs INTEGER, me INTEGER, te INTEGER);
+CREATE INDEX IF NOT EXISTS pc_items_c ON pc_items(contract_id);
+CREATE INDEX IF NOT EXISTS pc_items_t ON pc_items(type_id, contract_id);
+CREATE TABLE IF NOT EXISTS pc_meta(key TEXT PRIMARY KEY, value TEXT);
+"""
+PC_COLS = ("contract_id, type, status, region_id, system_id, location_id, end_location_id, issuer_id, issuer_corp, for_corp, title, price, reward, "
+           "collateral, buyout, volume, days, issued, expires, first_seen, last_seen, ended, final, bids, top_bid, value, want, n_items, main_type, repost")
+PC_SORT = {"issued": "issued", "ended": "ended", "expires": "expires", "price": "COALESCE(final, CASE type WHEN 'courier' THEN reward ELSE price END)",
+           "value": "value", "ratio": "(COALESCE(final, price) / NULLIF(value, 0))", "volume": "volume"}
+
+
+class ContractArchive:
+    def __init__(self, store, path, backfill_days=3, keep_days=90):
+        self.store = store
+        self.path = path
+        self.backfill_days = backfill_days
+        self.keep = keep_days * 86400
+        self.local = threading.local()
+        self.lock = threading.Lock()
+        self.state = {"snapshot": None, "processed": 0, "backfill": "等待中"}
+        c = self.conn()
+        c.executescript(PC_SCHEMA)
+        c.commit()
+        self.status = dict(c.execute("SELECT contract_id, status FROM pc"))   # 内存里的合同状态，判断新增 / 消失 / 重新出现
+        self.state["snapshot"] = self.meta("last_snapshot")
+        self.counts = None
+
+    def conn(self):
+        c = getattr(self.local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+            c.execute("PRAGMA busy_timeout=30000")
+            self.local.conn = c
+        return c
+
+    def meta(self, key, value=None):
+        c = self.conn()
+        if value is None:
+            row = c.execute("SELECT value FROM pc_meta WHERE key=?", (key,)).fetchone()
+            return row[0] if row else None
+        c.execute("INSERT OR REPLACE INTO pc_meta VALUES(?, ?)", (key, str(value)))
+        c.commit()
+
+    def start(self):
+        threading.Thread(target=self.loop, daemon=True).start()
+
+    def loop(self):
+        while True:
+            try:
+                self.catch_up()
+            except Exception:
+                log.exception("公开合同存档失败")
+            time.sleep(PC_POLL)
+
+    @staticmethod
+    def snapshot_files(day):
+        """某天（UTC）的全部快照：[(时间戳, 地址)]"""
+        url = PC_HISTORY.format(y=day.year, d=day.isoformat())
+        try:
+            body, _ = http_get(url, timeout=60)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return []
+            raise
+        out = []
+        for m in re.finditer(r'href="([^"]*public-contracts-(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})\.v2\.tar\.bz2)"', body.decode("utf-8", "replace")):
+            ts = epoch(f"{m.group(2)}T{m.group(3)}:{m.group(4)}:{m.group(5)}")
+            out.append((ts, urllib.parse.urljoin(url, m.group(1))))
+        return sorted(set(out))
+
+    def catch_up(self):
+        last = int(self.meta("last_ts") or 0)
+        today = dt.datetime.now(dt.timezone.utc).date()
+        start = today - dt.timedelta(days=self.backfill_days) if not last else dt.datetime.fromtimestamp(last, dt.timezone.utc).date()
+        files = []
+        day = start
+        while day <= today:
+            files += [f for f in self.snapshot_files(day) if f[0] > last]
+            day += dt.timedelta(days=1)
+        for i, (ts, url) in enumerate(files):
+            # 补历史时按小时取（相邻快照不到 55 分钟的跳过），最后一份总是处理
+            if i < len(files) - 1 and last and ts - last < 55 * 60 and time.time() - ts > 2 * 3600:
+                continue
+            self.state["backfill"] = "完成" if i == len(files) - 1 else f"正在补 {iso(ts)}（{i + 1}/{len(files)}）"
+            try:
+                body, _ = http_get(url, timeout=300)
+            except Exception as e:
+                log.warning("合同快照下载失败 %s：%s", url, e)
+                continue
+            self.ingest(body, ts)
+            last = ts
+            self.meta("last_ts", ts)
+        self.state["backfill"] = "完成"
+
+    def ingest(self, body, ts):
+        started = time.time()
+        with tarfile.open(fileobj=io.BytesIO(body), mode="r:bz2") as tar:
+            members = {m.name.rsplit("/", 1)[-1]: m for m in tar.getmembers()}
+
+            def rows(name):
+                return csv.DictReader(io.TextIOWrapper(tar.extractfile(members[name]), encoding="utf-8"))
+            try:
+                meta = json.load(tar.extractfile(members["meta.json"]))
+                ts = epoch(meta.get("scrape_end") or iso(ts))
+            except Exception:
+                pass
+            snap = {int(r["contract_id"]): r for r in rows("contracts.csv")}
+            bids = {}
+            if "contract_bids.csv" in members:
+                for b in rows("contract_bids.csv"):
+                    cid, amt = int(b["contract_id"]), float(b["amount"] or 0)
+                    n, top = bids.get(cid, (0, 0))
+                    bids[cid] = (n + 1, max(top, amt))
+            open_ids = [cid for cid, st in self.status.items() if st == "open"]
+            # 抓取不完整的快照（合同数骤降）不判断消失，避免把大批合同误记为成交
+            partial = len(open_ids) > 5000 and len(snap) < len(open_ids) * 0.85
+            new = [cid for cid in snap if cid not in self.status]
+            new_set = set(new)
+            items = collections.defaultdict(list)
+            if new:
+                for it in rows("contract_items.csv"):
+                    cid = int(it["contract_id"])
+                    if cid in new_set:
+                        items[cid].append(it)
+        num = lambda r, k: float(r.get(k) or 0)
+        intv = lambda v: int(float(v)) if v not in (None, "") else None
+        c = self.conn()
+        with self.lock:
+            ins, ins_items = [], []
+            sig_new = collections.defaultdict(dict)    # 发起人 -> {物品签名: 新合同}
+            for cid in new:
+                r = snap[cid]
+                its = items.get(cid, [])
+                value = want = 0.0
+                main, best = None, -1.0
+                sig = []
+                for it in its:
+                    tid, qty = int(it["type_id"]), int(it["quantity"] or 1)
+                    inc = it["is_included"] == "true"
+                    bpc = it.get("is_blueprint_copy") == "true"
+                    v = 0.0 if bpc else self.store.price(tid) * qty
+                    if inc:
+                        value += v
+                        if v > best:
+                            main, best = tid, v
+                    else:
+                        want += v
+                    sig.append((tid, qty, inc))
+                    ins_items.append((cid, tid, qty, int(inc), int(bpc), intv(it.get("runs")), intv(it.get("material_efficiency")), intv(it.get("time_efficiency"))))
+                n, top = bids.get(cid, (0, None))
+                issuer = int(r["issuer_id"] or 0)
+                sig_new[issuer][tuple(sorted(sig))] = cid
+                ins.append((cid, r["type"], "open", intv(r.get("region_id")), intv(r.get("system_id")), intv(r.get("start_location_id")),
+                            intv(r.get("end_location_id")), issuer, intv(r.get("issuer_corporation_id")), int(r.get("for_corporation") == "true"),
+                            r.get("title") or "", num(r, "price"), num(r, "reward"), num(r, "collateral"), num(r, "buyout") or None, num(r, "volume"),
+                            intv(r.get("days_to_complete")), epoch(r["date_issued"]) if r.get("date_issued") else None,
+                            epoch(r["date_expired"]) if r.get("date_expired") else None, ts, ts, None, None, n, top,
+                            round(value, 2), round(want, 2), len(its), main, None))
+            c.executemany(f"INSERT OR REPLACE INTO pc({PC_COLS}) VALUES({','.join('?' * 30)})", ins)
+            c.executemany("INSERT INTO pc_items VALUES(?,?,?,?,?,?,?,?)", ins_items)
+            # 重新出现（上一份抓漏了）：恢复为在售
+            back = [cid for cid in snap if self.status.get(cid) not in (None, "open")]
+            if back:
+                c.executemany("UPDATE pc SET status='open', ended=NULL, final=NULL, repost=NULL WHERE contract_id=?", [(x,) for x in back])
+            ended = {}
+            if not partial:
+                gone = [cid for cid in open_ids if cid not in snap]
+                for chunk in range(0, len(gone), 900):
+                    part = gone[chunk:chunk + 900]
+                    q = f"SELECT contract_id, type, issuer_id, expires, price, reward, buyout, bids, top_bid FROM pc WHERE contract_id IN ({','.join('?' * len(part))})"
+                    for cid, typ, issuer, exp, price, reward, buyout, nb, top in c.execute(q, part).fetchall():
+                        if exp and exp <= ts + 60:
+                            ended[cid] = ("done", top, None) if typ == "auction" and nb else ("expired", None, None)
+                            continue
+                        repost = None
+                        if issuer in sig_new:
+                            sig = tuple(sorted((t, q_, bool(i)) for t, q_, i in c.execute("SELECT type_id, quantity, inc FROM pc_items WHERE contract_id=?", (cid,))))
+                            repost = sig_new[issuer].get(sig)
+                        if repost:
+                            ended[cid] = ("repost", None, repost)
+                        elif typ == "auction" and not buyout:
+                            ended[cid] = ("expired", None, None)      # 没有一口价的拍卖不能提前买走，只能是发起人撤掉
+                        else:
+                            ended[cid] = ("done", buyout if typ == "auction" else (reward if typ == "courier" else price), None)
+                c.executemany("UPDATE pc SET status=?, final=?, repost=?, ended=? WHERE contract_id=?",
+                              [(st, fin, rp, ts, cid) for cid, (st, fin, rp) in ended.items()])
+            # 在售合同：更新最后出现时间与拍卖出价
+            c.execute("UPDATE pc SET last_seen=? WHERE status='open'", (ts,))
+            c.executemany("UPDATE pc SET bids=?, top_bid=? WHERE contract_id=?", [(n, top, cid) for cid, (n, top) in bids.items() if cid in snap])
+            cut = ts - self.keep
+            old = [x[0] for x in c.execute("SELECT contract_id FROM pc WHERE status!='open' AND ended < ?", (cut,))]
+            for chunk in range(0, len(old), 900):
+                part = old[chunk:chunk + 900]
+                c.execute(f"DELETE FROM pc_items WHERE contract_id IN ({','.join('?' * len(part))})", part)
+                c.execute(f"DELETE FROM pc WHERE contract_id IN ({','.join('?' * len(part))})", part)
+            c.commit()
+            for cid in new:
+                self.status[cid] = "open"
+            for cid in back:
+                self.status[cid] = "open"
+            for cid, (st, _, _) in ended.items():
+                self.status[cid] = st
+            for cid in old:
+                self.status.pop(cid, None)
+            self.counts = None
+        self.meta("last_snapshot", iso(ts))
+        self.state["snapshot"] = iso(ts)
+        self.state["processed"] += 1
+        kinds = collections.Counter(v[0] for v in ended.values())
+        log.info("公开合同快照 %s：%d 份在售，新增 %d，结束 %s%s（%.1f 秒）", iso(ts), len(snap), len(new),
+                 dict(kinds) or 0, "，快照不完整未判断消失" if partial else "", time.time() - started)
+
+    # ---------------- 查询
+    @staticmethod
+    def row(r):
+        d = dict(zip([x.strip() for x in PC_COLS.split(",")], r))
+        for k in ("issued", "expires", "first_seen", "last_seen", "ended"):
+            d[k] = iso(d[k]) if d[k] else None
+        d["for_corp"] = bool(d["for_corp"])
+        return d
+
+    def summary(self):
+        with self.lock:
+            if self.counts is None:
+                self.counts = dict(self.conn().execute("SELECT status, COUNT(*) FROM pc GROUP BY status").fetchall())
+            return self.counts
+
+    def list(self, q):
+        where, args = [], []
+        status = q.get("status") or "open"
+        if status == "ended":
+            where.append("status IN ('done','expired','repost')")
+        elif status != "all":
+            if status not in ("open", "done", "expired", "repost"):
+                raise ValueError("status 只能是 open / done / expired / repost / ended / all")
+            where.append("status=?")
+            args.append(status)
+        if q.get("type"):
+            if q["type"] not in ("item_exchange", "auction", "courier"):
+                raise ValueError("type 只能是 item_exchange / auction / courier")
+            where.append("type=?")
+            args.append(q["type"])
+        for key, col in (("region", "region_id"), ("system", "system_id"), ("issuer", "issuer_id"), ("location", "location_id")):
+            if q.get(key):
+                where.append(f"{col}=?")
+                args.append(int(q[key]))
+        items = [int(x) for x in (q.get("item") or "").split(",") if x.strip().isdigit()][:200]
+        if items:
+            want = q.get("side") == "want"
+            where.append(f"contract_id IN (SELECT contract_id FROM pc_items WHERE type_id IN ({','.join('?' * len(items))}) AND inc=?)")
+            args += items + [0 if want else 1]
+        if q.get("q"):
+            where.append("title LIKE ?")
+            args.append("%" + q["q"].replace("%", "") + "%")
+        price = PC_SORT["price"]
+        if q.get("min"):
+            where.append(f"{price} >= ?")
+            args.append(float(q["min"]))
+        if q.get("max"):
+            where.append(f"{price} <= ?")
+            args.append(float(q["max"]))
+        if q.get("since"):
+            where.append("COALESCE(ended, issued) >= ?")
+            args.append(int(time.time()) - int(float(q["since"]) * 86400))
+        sort = q.get("sort") or ("ended" if status in ("done", "expired", "repost", "ended") else "issued")
+        if sort not in PC_SORT:
+            raise ValueError("sort 只能是 " + " / ".join(PC_SORT))
+        order = "ASC" if q.get("order") == "asc" else "DESC"
+        limit = max(1, min(PC_LIST_MAX, int(q.get("limit") or 50)))
+        offset = max(0, int(q.get("offset") or 0))
+        cond = (" WHERE " + " AND ".join(where)) if where else ""
+        c = self.conn()
+        total = c.execute(f"SELECT COUNT(*) FROM pc{cond}", args).fetchone()[0]
+        rows = [self.row(r) for r in c.execute(f"SELECT {PC_COLS} FROM pc{cond} ORDER BY {PC_SORT[sort]} {order} NULLS LAST, contract_id DESC LIMIT ? OFFSET ?",
+                                                args + [limit, offset])]
+        if rows:
+            ids = [r["contract_id"] for r in rows]
+            its = collections.defaultdict(list)
+            for cid, tid, qty, inc in c.execute(f"SELECT contract_id, type_id, quantity, inc FROM pc_items WHERE contract_id IN ({','.join('?' * len(ids))})", ids):
+                its[cid].append([tid, qty, inc])
+            for r in rows:
+                lst = its.get(r["contract_id"], [])
+                r["items"] = lst[:8]
+        out = {"total": total, "offset": offset, "list": rows, "snapshot": self.state["snapshot"], "counts": self.summary()}
+        # 只查一种物品时：近 30 天「只卖这一种物品」的推测成交合同，给出单价中位数
+        if len(items) == 1 and q.get("side") != "want":
+            since = int(time.time()) - 30 * 86400
+            units = sorted(fin / qty for fin, qty in c.execute(
+                "SELECT p.final, SUM(i.quantity) FROM pc p JOIN pc_items i ON i.contract_id=p.contract_id "
+                "WHERE p.status='done' AND p.type!='courier' AND p.ended>=? AND p.contract_id IN (SELECT contract_id FROM pc_items WHERE type_id=? AND inc=1) "
+                "GROUP BY p.contract_id HAVING COUNT(*)=SUM(i.type_id=?) AND SUM(i.inc)=COUNT(*) AND SUM(i.bpc)=0", (since, items[0], items[0])) if fin and qty)
+            if units:
+                out["sold"] = {"type_id": items[0], "count": len(units), "median": units[len(units) // 2], "min": units[0], "max": units[-1], "days": 30}
+        return out
+
+    def detail(self, cid):
+        c = self.conn()
+        r = c.execute(f"SELECT {PC_COLS} FROM pc WHERE contract_id=?", (cid,)).fetchone()
+        if not r:
+            raise KeyError(cid)
+        d = self.row(r)
+        d["items"] = [dict(zip(("type_id", "quantity", "is_included", "is_blueprint_copy", "runs", "me", "te"), (t, q, bool(i), bool(b), ru, me, te)))
+                      for t, q, i, b, ru, me, te in c.execute("SELECT type_id, quantity, inc, bpc, runs, me, te FROM pc_items WHERE contract_id=?", (cid,))]
+        if d["repost"]:
+            d["repost_status"] = self.status.get(d["repost"])
+        prev = c.execute("SELECT contract_id FROM pc WHERE repost=?", (cid,)).fetchone()
+        if prev:
+            d["repost_of"] = prev[0]
+        return d
+
+    def info(self, q=None):
+        return {**self.state, "counts": self.summary()}
+
+
 class MapKills:
     def __init__(self, store):
         self.store = store
@@ -3405,6 +3760,9 @@ def open_routes(api, industry, abyssal=None):
         (("map", "kills"), "map_kills", lambda q: api.mapk.totals(q)),
         (("wormholes", "activity"), "wh_activity", api.wh_activity),
         (("wormholes", "systems", "{n}"), "wh_system", lambda q, sid: api.wh_system(sid, q)),
+        (("contracts",), "contracts", lambda q: api.pc.list(q)),
+        (("contracts", "status"), "contracts_status", lambda q: api.pc.info(q)),
+        (("contracts", "{n}"), "contract", lambda q, cid: api.pc.detail(cid)),
         (("kills",), "kills", lambda q: {k: v for k, v in api.feed(local(q)).items() if k != "notice"}),
         (("kills", "live"), "live", api.live),
         (("kills", "top"), "top", api.top),
@@ -3455,7 +3813,8 @@ def make_handler(api, static_dir, industry, abyssal):
     v1 = open_routes(api, industry, abyssal)
     post_limiter = RateLimiter(ABYSSAL_POST_RATE)
     routes = {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "feed": api.feed, "top": api.top, "summary": api.summary,
-              "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits, "couriers": api.couriers}
+              "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits, "couriers": api.couriers,
+              "contracts": lambda q: api.pc.list(q), "contracts/status": lambda q: api.pc.info(q)}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -3502,7 +3861,7 @@ def make_handler(api, static_dir, industry, abyssal):
             try:
                 return self.send_json(200, fn(q, *args), cors)
             except KeyError as e:
-                if name in ("kill", "entity", "industry_blueprint", "industry_cost", "abyssal_module", "abyssal_list"):
+                if name in ("kill", "contract", "entity", "industry_blueprint", "industry_cost", "abyssal_module", "abyssal_list"):
                     if name == "abyssal_module":
                         return err(404, str(e.args[0]) if e.args else "MutaMarket 没有这件装备")
                     return err(404, "找不到" + ("该产品的蓝图" if name.startswith("industry") else ""))
@@ -3569,6 +3928,8 @@ def make_handler(api, static_dir, industry, abyssal):
                     return self.send_json(200, api.entity(parts[1], int(parts[2]), q))
                 if len(parts) == 2 and parts[0] == "kill":
                     return self.send_json(200, api.kill(int(parts[1]), q))
+                if len(parts) == 2 and parts[0] == "contracts" and parts[1].isdigit():
+                    return self.send_json(200, api.pc.detail(int(parts[1])))
                 self.send_json(404, {"error": "not found"})
             except (KeyError, ValueError) as e:
                 self.send_json(404 if isinstance(e, KeyError) else 400, {"error": str(e)})
@@ -3608,6 +3969,9 @@ def main():
     parser.add_argument("--static", help="同时托管的前端静态目录（本地 / 演示环境）")
     parser.add_argument("--industry-dir", help="制造接口读取 industry-data.json / map-data.json 的目录（默认依次找 --static、仓库前端目录、/opt/eve/dist）")
     parser.add_argument("--system-regions", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "system_regions.json"))
+    parser.add_argument("--contract-db", help="公开合同存档数据库（默认与 --db 同目录的 contracts.sqlite）")
+    parser.add_argument("--contract-backfill", type=int, default=3, help="首次启动补多少天的历史合同快照（按小时）")
+    parser.add_argument("--contract-keep", type=int, default=90, help="已结束的公开合同保留天数")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -3624,6 +3988,9 @@ def main():
     api.fw.start()
     api.mapk = MapKills(store)
     api.mapk.start()
+    api.pc = ContractArchive(store, args.contract_db or os.path.join(os.path.dirname(os.path.abspath(args.db)), "contracts.sqlite"),
+                             args.contract_backfill, args.contract_keep)
+    api.pc.start()
     threading.Thread(target=api.warm, daemon=True).start()
     threading.Thread(target=lambda: (time.sleep(30), api.battle_history({"days": 30})), daemon=True).start()   # 历史会战先算好一份
     here = os.path.dirname(os.path.abspath(__file__))

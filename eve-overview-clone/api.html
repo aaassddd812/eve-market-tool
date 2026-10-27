@@ -178,6 +178,17 @@
           params: [['types', true, '蓝图 ID，逗号分隔，最多 300 个']],
           fields: [['updated', '合同快照更新时间'], ['types.{id}.o', '原图：[[价格, 材料效率, 时间效率, 合同 ID, 星系 ID], ...]，按价格升序'], ['types.{id}.c', '拷贝：[[每流程价格, 流程数, 总价, 材料效率, 时间效率, 合同 ID, 星系 ID], ...]']] }
       ]],
+      ['公开合同', [
+        { path: '/contracts', title: '公开合同存档', desc: 'EVE Ref 每 30 分钟抓一次全服公开合同，本站逐份比对并存档（已结束的保留 90 天）：在售 = 最新快照里还在；推测成交 = 到期前消失（物品交换 / 快递为被接受，拍卖为一口价；发起人手动删除也会这样，ESI 无法区分）或拍卖到期时有出价；过期 = 到期后消失且无人出价；撤单重发 = 同一发起人在同一份快照里发了物品完全相同的新合同。', example: '/contracts?status=done&item=40520',
+          params: [['status', false, 'open（默认）/ done / expired / repost / ended（已结束的全部）/ all'], ['type', false, 'item_exchange / auction / courier'], ['region / system / location / issuer', false, '星域、星系、空间站或建筑、发起人 ID'],
+            ['item', false, '物品 ID，逗号分隔（最多 200 个）；合同提供的物品里有其中之一即匹配'], ['side', false, 'want：改为匹配合同索取的物品'], ['q', false, '标题包含的文字'], ['min / max', false, '价格范围（快递为报酬，推测成交为成交价）'],
+            ['since', false, '只看最近 N 天发布或结束的'], ['sort', false, 'issued / ended / expires / price / value / ratio（价格 ÷ 估值）/ volume'], ['order', false, 'desc（默认）/ asc'], ['limit / offset', false, '每页最多 100 份']],
+          fields: [['total', '符合条件的合同数'], ['list[]', '合同：contract_id、type、status、region_id、system_id、location_id、issuer_id、title、price、reward、collateral、buyout、volume、issued、expires、first_seen、last_seen、ended（发现消失的快照时间）、final（推测成交价）、bids / top_bid、value（提供物品的吉他中间价估值）、want（索取物品估值）、n_items、main_type、repost（重发后的新合同）、items（[[物品, 数量, 是否提供]]，最多 8 项）'],
+            ['sold', '只查一种物品时：近 30 天只卖这一种物品的推测成交合同数与单价中位数 / 最低 / 最高'], ['counts', '各状态合同数'], ['snapshot', '最新处理的快照时间']] },
+        { path: '/contracts/{id}', title: '存档合同详情', desc: '一份存档合同的全部字段与物品（含蓝图流程、ME / TE）；撤单重发的合同带 repost（新合同）或 repost_of（旧合同）。', example: '/contracts/237498854',
+          fields: [['items[]', '{type_id, quantity, is_included, is_blueprint_copy, runs, me, te}'], ['repost_status', '重发后的新合同当前状态']] },
+        { path: '/contracts/status', title: '存档进度', desc: '最新处理的快照、补历史进度与各状态合同数。', example: '/contracts/status' }
+      ]],
       ['击杀记录', [
         { path: '/kills', title: '击杀列表', desc: '按时间倒序列出击杀，可按舰船、星系、星域、人物 / 军团 / 联盟筛选，用 cursor 翻页。只查保留期内的记录。', example: '/kills?limit=5&region=10000002',
           params: [['limit', false, '每页条数，默认 50，最多 200'], ['ship', false, '受害舰船类型 ID'], ['system / region', false, '星系 / 星域 ID'], ['character / corporation / alliance', false, '实体 ID'], ['side', false, '配合实体筛选：all（默认，击杀与损失）/ kills / losses'], ['cursor', false, '上一页返回的 cursor']],

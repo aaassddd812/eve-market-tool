@@ -14,6 +14,7 @@
 // 星域监控（与位置预警相互独立，宁静服）：指定星域里的任何击杀都提醒，不需要绑定。
 // 过滤条件（位置预警与星域监控共用）：最低价值、受害者舰船类别、只提醒 N 秒内发生的击杀（zKillboard 收录有延迟，过旧的不提醒）。
 // 人物关注也可以关注军团 / 联盟：成员损失，或成员参与击杀（实时缓冲里带全部攻击者的军团 / 联盟 ID：ao）。
+// 角色离线时不提醒（默认开）：每分钟读一次 ESI /characters/{id}/online/（esi-location.read_online.v1），离线期间的预警只记进「最近预警」，不发邮件 / 特效 / 提示音 / 通知。
 // 浏览器后台标签页的定时器会被降频（约每分钟一次），预警可能延迟。
 // 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
 
@@ -23,7 +24,7 @@ import * as AM from './alert-mail.js?v=v6';
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
 const DEFAULTS = { on: false, jumps: 3, mail: true, web: false, sound: false, notify: false, pods: true, watchOn: false, watch: [],   // watch: [{ id, name, kind: character|corporation|alliance, mode: both|kills|losses }]
-  minValue: 0, classes: [], maxAge: 0, regionOn: false, regions: [] };   // classes: 舰船类别（市场分组 ID），空 = 全部；regions: [{ id, name }]
+  minValue: 0, classes: [], maxAge: 0, regionOn: false, regions: [], offlineMute: true };   // classes: 舰船类别（市场分组 ID），空 = 全部；regions: [{ id, name }]
 const MIN_VALUES = [[0, '不限'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿'], [1e10, '100 亿']];
 const MAX_AGES = [[0, '不限'], [60, '1 分钟'], [180, '3 分钟'], [600, '10 分钟'], [1800, '30 分钟']];
 const KIND_ZH = { character: '角色', corporation: '军团', alliance: '联盟' };
@@ -33,7 +34,8 @@ const MODE_ZH = { both: '击杀与损失', kills: '只看击杀', losses: '只�
 const T = { ...DEFAULTS };
 const S = {
   timerLoc: 0, timerKills: 0, system: 0, systemName: '', range: new Map(), status: '', cursor: null, busy: false,
-  seen: new Set(), history: [], mailQueue: [], mailTimer: 0, snapshot: null, snapshotAt: '', charId: 0
+  seen: new Set(), history: [], mailQueue: [], mailTimer: 0, snapshot: null, snapshotAt: '', charId: 0,
+  online: null, timerOnline: 0        // 角色是否在线（null = 不知道 / 没开这项）
 };
 const TAB = Math.random().toString(36).slice(2);
 const LEADER_KEY = 'eve-kill-alert-leader';
@@ -41,6 +43,8 @@ const LOC_POLL = 30e3;
 const LIVE_POLL = 6e3;
 const NETEASE_POLL = 5 * 60e3;
 const LOC_SCOPE = 'esi-location.read_location.v1';
+const ONLINE_SCOPE = 'esi-location.read_online.v1';
+const ONLINE_POLL = 60e3;   // ESI 在线状态缓存 60 秒
 const subs = new Set();
 
 function load() {
@@ -62,7 +66,8 @@ function watchText() {
   if (regionWatching()) parts.push(`正在监控 ${T.regions.length} 个星域`);
   return parts.join('；');
 }
-export const status = () => ({ on: T.on || watching() || regionWatching(), mail: T.mail, text: [T.on ? S.status : '', watchText()].filter(Boolean).join('；') || '预警未开启', area: S.status, system: S.systemName, count: S.range.size, history: S.history });
+const muted = () => T.offlineMute && S.online === false;
+export const status = () => ({ on: T.on || watching() || regionWatching(), mail: T.mail, text: [T.on ? S.status : '', watchText(), muted() ? '角色离线，暂停提醒' : ''].filter(Boolean).join('；') || '预警未开启', area: S.status, system: S.systemName, count: S.range.size, history: S.history });
 export function onChange(fn) { subs.add(fn); return () => subs.delete(fn); }
 function notify() { for (const fn of subs) { try { fn(); } catch (e) { console.error(e); } } }
 function setStatus(text) { S.status = text; notify(); }
@@ -97,18 +102,43 @@ export function update(patch) {
   if ('jumps' in patch && S.system) computeRange(S.system);
   // 位置预警或人物关注的开关变化、关注名单从空到有时重新开始检测
   if ('on' in patch || 'watchOn' in patch || 'regionOn' in patch || (('watch' in patch || 'regions' in patch) && !S.timerKills)) restart();
+  else if ('offlineMute' in patch) startOnline();
   notify();
   if ('mail' in patch) AM.refresh();
 }
 
 function stop() {
-  clearInterval(S.timerLoc); clearInterval(S.timerKills);
-  S.timerLoc = S.timerKills = 0;
+  clearInterval(S.timerLoc); clearInterval(S.timerKills); clearInterval(S.timerOnline);
+  S.timerLoc = S.timerKills = S.timerOnline = 0;
+}
+
+// 角色在线状态：开了「离线时不提醒」且有权限时每分钟读一次；读不到时按在线处理（照常提醒）
+function startOnline() {
+  clearInterval(S.timerOnline);
+  S.timerOnline = 0;
+  S.online = null;
+  if (T.offlineMute && (T.on || watching() || regionWatching()) && ctx.tokenInfo() && ctx.hasScope(ONLINE_SCOPE)) {
+    pollOnline();
+    S.timerOnline = setInterval(pollOnline, ONLINE_POLL);
+  }
+  notify();
+}
+async function pollOnline() {
+  const token = ctx.tokenInfo();
+  if (!token) return;
+  try {
+    const r = await ctx.esiAuthFetch('/characters/' + token.character_id + '/online/');
+    const online = r?.online !== false;
+    if (online !== S.online) { S.online = online; notify(); }
+  } catch {
+    if (S.online !== null) { S.online = null; notify(); }
+  }
 }
 
 export function restart() {
   stop();
   const watch = (watching() && IS_TQ) || regionWatching();
+  startOnline();
   if (!T.on && !watch) { setStatus(T.on ? '' : '位置预警未开启'); return; }
   S.cursor = null;
   S.snapshot = null;
@@ -252,9 +282,12 @@ async function pollSystemKills() {
 // ---------- 提醒 ----------
 function raise(a) {
   a.systemName = sysName(a.system);
+  // 角色离线：只记进最近预警，不提醒
+  if (muted()) a.muted = true;
   S.history.unshift({ ...a, at: Date.now() });
   S.history.length = Math.min(S.history.length, 30);
   notify();
+  if (a.muted) return;
   if (T.web) webAlert(a);
   ring(a);
   if (T.mail) queueMail(a);
@@ -539,6 +572,8 @@ function drawPanel() {
       ${sw('web', '网页特效', '', '屏幕边缘红色闪烁 + 右上角预警卡片')}
       ${sw('sound', '提示音', '', '有新预警时播放提示音，本星系的更急促')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
+      ${sw('offlineMute', '角色离线时不提醒', S.online === false ? '角色当前离线' : S.online ? '角色当前在线' : '', '每分钟读一次角色在线状态，离线期间的预警只记在「最近预警」里，不发邮件、不弹特效、不响提示音')}
+      ${T.offlineMute && token && !ctx.hasScope(ONLINE_SCOPE) ? '<p class="ka-warn">授权里没有在线状态权限（esi-location.read_online.v1），重新绑定 ESI 后才能判断是否在线；现在照常提醒</p>' : ''}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ka-test="web">测试网页提醒</button><button class="btn btn-ghost btn-sm" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>`)}
     ${sec('星域监控', `<div class="ka-list">
@@ -567,7 +602,7 @@ function drawPanel() {
         <span>${ctx.esc(e.name)}${e.kind !== 'character' ? `<small> · ${KIND_ZH[e.kind]}</small>` : ''}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
         <button class="ka-close" data-ka-del="${e.id}" title="取消关注" aria-label="取消关注">×</button></li>`).join('')}</ul>` : ''}</div>
     </div>`)}
-    ${sec('最近预警', st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${ctx.esc(describe(a))}</span><small>${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有预警</p>')}
+    ${sec('最近预警', st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${ctx.esc(describe(a))}</span><small>${a.muted ? '离线未提醒 · ' : ''}${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有预警</p>')}
     <p class="ka-note">网页需保持打开（可在后台）</p>`;
 }
 

@@ -319,8 +319,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', war: '#war', sov: '#sov', abyss: '#abyss', wh: '#wh', guide: '#guide' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', war: 'warView', sov: 'sovView', abyss: 'abyssView', wh: 'whView', guide: 'guideView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', wh: '#wh', guide: '#guide' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', wh: 'whView', guide: 'guideView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -394,6 +394,7 @@ function switchView(view) {
   if (view === 'lp') openLp();
   if (view === 'appraisal') openAppraisal();
   if (view === 'courier') openCourier();
+  if (view === 'contracts') openContracts();
   if (view === 'war') openWar();
   if (view === 'sov') openSov();
   if (view === 'abyss') openAbyss();
@@ -406,7 +407,7 @@ const PAGE_SKELETON = {
   pi: ['piMain', { cards: 4, rows: 6 }], industry: ['industryMain', { tabs: 6, cards: 4, rows: 8 }], lp: ['lpMain', { tabs: 3, rows: 10 }],
   courier: ['courierMain', { tabs: 2, rows: 10 }], war: ['warMain', { tabs: 2, cards: 4, rows: 8 }], sov: ['sovMain', { cards: 4, rows: 6 }],
   abyss: ['abyssMain', { tabs: 3, grid: 6 }], wh: ['whMain', { tabs: 6, cards: 4, rows: 6 }], guide: ['guideMain', { tabs: 3, rows: 8 }],
-  appraisal: ['apMain', { cards: 3, rows: 4 }]
+  appraisal: ['apMain', { cards: 3, rows: 4 }], contracts: ['ctMain', { tabs: 2, rows: 10 }]
 };
 function showPageSkeleton(view) {
   const [id, opts] = PAGE_SKELETON[view] || [];
@@ -632,10 +633,40 @@ async function openCourier() {
   }
 }
 
+// 合同（公开合同存档 + 我的个人 / 军团 / 联盟合同）：首次进入时加载
+let contractsLoading = null;
+function loadContractsModule() {
+  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v5').then((m) => {
+    m.initContracts({
+      esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, officialName, locationName, loadNpcNames, typeName,
+      valuation, valuationCard, store, game: gameActions, regions: REGIONS, marketRegions: () => state.marketRegions, loadMarketRegions,
+      getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
+      resolveStructures: (ids) => resolveStructureNames(ids),
+      archive: Boolean(SERVER.kb), esiBase: ESI_BASE, datasource: SERVER.datasource, icon: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,   // 蓝图没有 icon，图片加载失败时由 contracts.js 换成 /bp
+      esiAuthFetch, esiAuthFetchPaged, hasScopeGroup, scopeNeededHtml,
+      hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      tokenInfo: () => state.esiToken || readEsiToken(),
+      openEsiBind: () => { switchView('profile'); openEsiModal(); }
+    });
+    return m;
+  }).catch((error) => { contractsLoading = null; throw error; });
+  return contractsLoading;
+}
+async function openContracts() {
+  try {
+    const m = await loadContractsModule();
+    if (!location.hash.startsWith('#contracts')) history.replaceState(null, '', location.pathname + '#contracts');
+    await m.showContracts();
+  } catch (error) {
+    console.error('合同页加载失败:', error);
+    showToast('合同页加载失败：' + error.message, 'error', 4000);
+  }
+}
+
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v12').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v13').then((m) => {
     m.initAppraisal({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
       getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -697,14 +728,14 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v53').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v59').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       openDrawer: () => { if (MOBILE_QUERY.matches) openDrawer(); },
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
-      // 装配页与模拟对打页互相跳转（可后退）
+      // 装配页与战场模拟页互相跳转（可后退）
       openSim: () => { history.pushState(null, '', location.pathname + '#sim'); switchView('sim'); },
       openFit: () => { history.pushState(null, '', location.pathname + '#fit'); switchView('fit'); },
       openBattles: () => { history.pushState(null, '', location.pathname + '#kb/battles'); switchView('kb'); },
@@ -715,15 +746,15 @@ function loadFittingModule() {
   return fittingLoading;
 }
 
-// 模拟对打（fit-sim.js）：与装配页共用装配模块和数据
+// 战场模拟（fit-sim.js）：与装配页共用装配模块和数据
 async function openSimPage(restored = false) {
   try {
     const m = await loadFittingModule();
     if (!location.hash.startsWith('#sim')) history.replaceState(null, '', location.pathname + '#sim');
     await m.showSim($('simMain'), restored);
   } catch (error) {
-    console.error('模拟对打加载失败:', error);
-    showToast('模拟对打加载失败：' + error.message, 'error', 4000);
+    console.error('战场模拟加载失败:', error);
+    showToast('战场模拟加载失败：' + error.message, 'error', 4000);
   }
 }
 
@@ -851,14 +882,14 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v49').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v50').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
       battles: () => battlesPromise,
-      // 战场统计「模拟对打」：切到模拟对打页并带入双方舰船；后退回到战场统计
+      // 战场统计「战场模拟」：切到战场模拟页并带入双方舰船；后退回到战场统计
       openBattleSim: async (preset) => {
-        try { (await loadFittingModule()).queueSim({ ...preset, back: location.hash }); } catch (error) { showToast('模拟对打加载失败：' + error.message, 'error', 4000); return; }
+        try { (await loadFittingModule()).queueSim({ ...preset, back: location.hash }); } catch (error) { showToast('战场模拟加载失败：' + error.message, 'error', 4000); return; }
         history.pushState(null, '', location.pathname + '#sim');
         switchView('sim');
       },
@@ -1871,6 +1902,7 @@ const SCOPE_GROUPS = [
   { id: 'research', name: '研究代理人', desc: '个人中心显示研究代理人累计的研究点数', scopes: ['esi-characters.read_agents_research.v1'] },
   { id: 'fleet', name: '舰队', desc: '个人中心显示当前舰队成员、舰船与位置分布（需舰队指挥）', scopes: ['esi-fleets.read_fleet.v1'] },
   // 新权限默认不勾（CCP 后台的应用要先开通，否则授权会被拒）
+  { id: 'corpContracts', name: '军团合同', desc: '合同页查看军团发起、接受或指派给军团的合同', scopes: ['esi-contracts.read_corporation_contracts.v1'], optIn: true },
   { id: 'mail', name: '游戏邮件', desc: '个人中心查看游戏邮件（收件箱、已发送、军团、联盟邮件，只读）', scopes: ['esi-mail.read_mail.v1'], optIn: true },
   { id: 'corp', name: '军团管理', desc: '军团钱包、订单、工业任务、建筑燃料、月矿、资产（需相应军团职位）',
     scopes: ['esi-characters.read_corporation_roles.v1', 'esi-wallet.read_corporation_wallets.v1', 'esi-markets.read_corporation_orders.v1',
@@ -2805,6 +2837,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#lp')) { if (state.currentView !== 'lp') switchView('lp'); else openLp(); return; }
     if (location.hash.startsWith('#appr')) { if (state.currentView !== 'appraisal') switchView('appraisal'); return; }
     if (location.hash.startsWith('#courier')) { if (state.currentView !== 'courier') switchView('courier'); return; }
+    if (location.hash.startsWith('#contracts')) { if (state.currentView !== 'contracts') switchView('contracts'); return; }
     if (location.hash.startsWith('#war')) { if (state.currentView !== 'war') switchView('war'); return; }
     if (location.hash.startsWith('#sov')) { if (state.currentView !== 'sov') switchView('sov'); else openSov(); return; }
     if (location.hash.startsWith('#abyss')) { if (state.currentView !== 'abyss') switchView('abyss'); else openAbyss(); return; }
@@ -3813,32 +3846,60 @@ function valuationSelect(attrs, region = valuationRegion()) {
       VALUATION_SOURCES.map((r) => `<option value="${r.id}"${r.id === region.id ? ' selected' : ''}>${esc(r.hub.name)} · ${esc(r.name)}</option>`).join('') +
     '</select></label>';
 }
-// 一组物品（[{ type_id, quantity, is_blueprint_copy }]）按当前来源估值：{ region, sell, buy, n, sellN, buyN, price(id) }
+// 成交中位价：和倒卖排行同一套数据（服务器汇总的交易中心近 1 / 7 / 14 / 30 天每日成交均价的中位数，宁静服才有）；天数全站估值共用
+const VAL_MED_DAYS = [1, 7, 14, 30];
+const valuationMedDays = () => { const d = Number(store.get('eve-valuation-med')); return VAL_MED_DAYS.includes(d) ? d : 7; };
+const hasMedPrice = () => Boolean(SERVER.kb);
+const medOf = (p, days = valuationMedDays()) => p?.med?.[days] ?? null;
+// 天数切换（卡片里的 24 小时 / 7 / 14 / 30 天）：记下后让同一块里的估值来源下拉框触发一次 change，各页面照常重画
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-val-med]');
+  if (!b) return;
+  store.set('eve-valuation-med', b.dataset.valMed);
+  let el = b;
+  for (let i = 0; i < 8 && el; i++, el = el.parentElement) {
+    const sel = el.querySelector?.('.val-src select');
+    if (sel) { sel.dispatchEvent(new Event('change', { bubbles: true })); return; }
+  }
+});
+function medDaysPicker(days = valuationMedDays()) {
+  return '<span class="val-med-days" role="group" aria-label="成交价天数">' + VAL_MED_DAYS.map((d) => `<button type="button" data-val-med="${d}" class="${d === days ? 'active' : ''}">${d === 1 ? '24 小时' : d + ' 天'}</button>`).join('') + '</span>';
+}
+// 一组物品（[{ type_id, quantity, is_blueprint_copy }]）按当前来源估值：{ region, sell, buy, mid, n, sellN, buyN, midN, days, price(id) }
 async function valuateItems(items, onProgress) {
   const region = valuationRegion();
+  const days = valuationMedDays();
   const list = items.filter((i) => !i.is_blueprint_copy && i.type_id);
   const ids = [...new Set(list.map((i) => Number(i.type_id)))];
   await fetchHubPrices(region, ids, onProgress);
-  const r = { region, sell: 0, buy: 0, n: ids.length, sellN: 0, buyN: 0, price: (id) => hubPrice(region, id) || {} };
+  const r = { region, days, sell: 0, buy: 0, mid: 0, n: ids.length, sellN: 0, buyN: 0, midN: 0, price: (id) => { const p = hubPrice(region, id) || {}; return { ...p, mid: medOf(p, days) }; } };
   for (const i of list) {
     const p = hubPrice(region, i.type_id), q = valuationQuantity(i.quantity);
     if (p?.sell != null) r.sell += p.sell * q;
     if (p?.buy != null) r.buy += p.buy * q;
+    if (medOf(p, days) != null) r.mid += medOf(p, days) * q;
   }
   r.sellN = ids.filter((t) => hubPrice(region, t)?.sell != null).length;
   r.buyN = ids.filter((t) => hubPrice(region, t)?.buy != null).length;
+  r.midN = ids.filter((t) => medOf(hubPrice(region, t), days) != null).length;
   return r;
 }
-// 两张估值卡片：最低卖 / 最高收
+// 估值卡片：最低卖 / 最高收 / 成交中位价（宁静服）
+function medCard(label, total, priced, n, region, days = valuationMedDays()) {
+  return valuationCard(label + ' · 成交中位价', formatISK(total) + ' ISK',
+    `<span title="${esc(region.hub.name)} 近 ${days} 天每日成交均价的中位数（与倒卖排行同一数据），不受挂单乱价影响">${priced}/${n} 种有成交价</span>` + medDaysPicker(days), 'is-mid');
+}
 function valuationCards(v, label = '物品估值') {
   const where = esc(v.region.hub.name);
   return valuationCard(label + ' · 最低卖价', formatISK(v.sell) + ' ISK', `${v.sellN}/${v.n} 种在 ${where} 有卖单`, 'is-sell') +
-    valuationCard(label + ' · 最高收价', formatISK(v.buy) + ' ISK', `${v.buyN}/${v.n} 种在 ${where} 有收单`, 'is-buy');
+    valuationCard(label + ' · 最高收价', formatISK(v.buy) + ' ISK', `${v.buyN}/${v.n} 种在 ${where} 有收单`, 'is-buy') +
+    (hasMedPrice() ? medCard(label, v.mid, v.midN, v.n, v.region, v.days) : '');
 }
-const valuation = { sources: VALUATION_SOURCES, region: valuationRegion, set: setValuationRegion, select: valuationSelect, items: valuateItems, cards: valuationCards };
+const valuation = { sources: VALUATION_SOURCES, region: valuationRegion, set: setValuationRegion, select: valuationSelect, items: valuateItems, cards: valuationCards,
+  medDays: valuationMedDays, hasMed: hasMedPrice, medOf, medDaysPicker };
 
 // regionId:typeId -> { sell, buy, at }；保存在本地 12 小时，重新打开页面不必重查。点「刷新行情」清空当前市场
-const HUB_PRICE_KEY = serverKey('eve-hub-prices-v2');   // v2：伊甸币改查全服统一市场，旧缓存里是空价格
+const HUB_PRICE_KEY = serverKey('eve-hub-prices-v3');   // v2：伊甸币改查全服统一市场，旧缓存里是空价格；v3：带成交中位价
 const HUB_PRICE_TTL = 12 * 3600e3;
 state.hubPriceCache = loadHubPriceCache();
 state.hubPriceInflight = new Map();   // 正在查询的物品，后台预取与页面渲染共用同一请求
@@ -3849,8 +3910,8 @@ function loadHubPriceCache() {
   try {
     const raw = JSON.parse(localStorage.getItem(HUB_PRICE_KEY) || '{}');
     const now = Date.now();
-    for (const [key, [sell, buy, at]] of Object.entries(raw)) {
-      if (now - at < HUB_PRICE_TTL) map.set(key, { sell, buy, at });
+    for (const [key, [sell, buy, at, med]] of Object.entries(raw)) {
+      if (now - at < HUB_PRICE_TTL) map.set(key, { sell, buy, at, med: med || null });
     }
   } catch { /* 忽略 */ }
   return map;
@@ -3859,7 +3920,7 @@ function loadHubPriceCache() {
 function saveHubPriceCache() {
   try {
     const obj = {};
-    for (const [key, v] of state.hubPriceCache) if (!v.failed) obj[key] = [v.sell, v.buy, v.at || Date.now()];
+    for (const [key, v] of state.hubPriceCache) if (!v.failed) obj[key] = v.med ? [v.sell, v.buy, v.at || Date.now(), v.med] : [v.sell, v.buy, v.at || Date.now()];
     localStorage.setItem(HUB_PRICE_KEY, JSON.stringify(obj));
   } catch { /* 存储已满或隐私模式：只保留会话内缓存 */ }
 }
@@ -3904,7 +3965,7 @@ async function fetchHubPrices(region, typeIds, onProgress) {
       if (!data?.hub || !data.types) break;
       for (const t of batch) {
         const p = data.types[t] || {};
-        settle(t, { sell: p.sell ?? null, buy: p.buy ?? null, at: Date.now() });
+        settle(t, { sell: p.sell ?? null, buy: p.buy ?? null, med: p.med || null, at: Date.now() });
         ok.add(t);
       }
     }
@@ -3967,15 +4028,17 @@ function hubPrice(region, typeId) {
 function stationSummaries() {
   const assets = Array.isArray(state.characterData?.assets) ? state.characterData.assets : [];
   const region = valuationRegion();
+  const days = valuationMedDays();
   const map = new Map();
   for (const a of assets) {
-    if (!map.has(a.rootId)) map.set(a.rootId, { id: a.rootId, name: locationName(a.rootId), assets: [], sell: 0, buy: 0 });
+    if (!map.has(a.rootId)) map.set(a.rootId, { id: a.rootId, name: locationName(a.rootId), assets: [], sell: 0, buy: 0, mid: 0 });
     const group = map.get(a.rootId);
     group.assets.push(a);
     const p = a.is_blueprint_copy ? null : hubPrice(region, a.type_id);
     const qty = valuationQuantity(a.quantity);
     if (p?.sell != null) group.sell += p.sell * qty;
     if (p?.buy != null) group.buy += p.buy * qty;
+    if (medOf(p, days) != null) group.mid += medOf(p, days) * qty;
   }
   return [...map.values()].sort((x, y) => y.sell - x.sell || y.assets.length - x.assets.length);
 }
@@ -4246,6 +4309,8 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
   const buyOrderTotal = buyOrders.reduce((s, o) => s + o.price * o.volume_remain, 0);
   const assetSell = groups.reduce((s, g) => s + g.sell, 0);
   const assetBuy = groups.reduce((s, g) => s + g.buy, 0);
+  const assetMid = groups.reduce((s, g) => s + g.mid, 0);
+  const showMid = hasMedPrice();
   const nonBpc = assets.filter((a) => !a.is_blueprint_copy);
   const sellPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.sell != null).length;
   const buyPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.buy != null).length;
@@ -4259,6 +4324,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
         <td>${formatNumber(g.assets.length)}</td>
         <td class="down">${g.sell ? formatISK(g.sell) : '—'}</td>
         <td class="up">${g.buy ? formatISK(g.buy) : '—'}</td>
+        ${showMid ? `<td class="mid-cell">${g.mid ? formatISK(g.mid) : '—'}</td>` : ''}
         <td><span class="share-bar"><i style="width:${share.toFixed(1)}%"></i></span>${share ? share.toFixed(1) + '%' : '—'}</td>
       </tr>`;
   }).join('');
@@ -4272,6 +4338,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
     '<div class="valuation-grid">' +
       valuationCard('资产估值 · 最低卖价', formatISK(assetSell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', assetSell * TF.netSell()), 'is-sell') +
       valuationCard('资产估值 · 最高收价', formatISK(assetBuy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', assetBuy * TF.netBuy()), 'is-buy') +
+      (showMid ? medCard('资产估值', assetMid, nonBpc.filter((a) => medOf(hubPrice(region, a.type_id)) != null).length, nonBpc.length, region) : '') +
       valuationCard('我的卖单', formatISK(sellOrderTotal) + ' ISK', sellOrders.length + ' 笔 · 剩余数量 × 委托价' + netLine('全部成交税后', sellOrderTotal * TF.netBuy()), 'is-order') +
       valuationCard('我的收单', formatISK(buyOrderTotal) + ' ISK', buyOrders.length + ' 笔 · 剩余数量 × 委托价', 'is-order') +
       valuationCard('资产 + 订单合计', formatISK(assetSell + sellOrderTotal + buyOrderTotal) + ' ISK',
@@ -4283,7 +4350,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
       (priceAt ? ' · 行情 ' + new Date(priceAt).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '') +
       (failed ? ' · <span class="down">' + failed + ' 种行情查询失败</span>' : '') + '</p>' +
     '<div class="table-scroll"><table class="pc-mini-table station-summary"><thead><tr>' +
-      '<th>空间站</th><th>物品数</th><th>卖价估值</th><th>收价估值</th><th>占比（按卖价）</th>' +
+      '<th>空间站</th><th>物品数</th><th>卖价估值</th><th>收价估值</th>' + (showMid ? '<th>成交价估值</th>' : '') + '<th>占比（按卖价）</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
@@ -4298,6 +4365,8 @@ function renderStationAssets(box, station, groups, { region }) {
   const nonBpc = list.filter((a) => !a.is_blueprint_copy);
   const sellPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.sell != null).length;
   const buyPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.buy != null).length;
+  const showMid = hasMedPrice();
+  const midPriced = nonBpc.filter((a) => medOf(hubPrice(region, a.type_id)) != null).length;
   const kinds = new Set(list.map((a) => a.type_id)).size;
 
   const rows = list.slice(0, ASSET_ROW_LIMIT).map((a) => {
@@ -4312,6 +4381,7 @@ function renderStationAssets(box, station, groups, { region }) {
       '<strong class="down">' + (p?.sell == null ? '—' : formatISK(p.sell * qty)) + '</strong>',
       p?.buy == null ? '<span class="muted-cell">—</span>' : formatPrice(p.buy),
       '<strong class="up">' + (p?.buy == null ? '—' : formatISK(p.buy * qty)) + '</strong>',
+      ...(showMid ? [medOf(p) == null ? '<span class="muted-cell">—</span>' : `<span class="mid-cell" title="单价 ${formatPrice(medOf(p))}">${formatISK(medOf(p) * qty)}</span>`] : []),
       esc(assetSlotLabel(a))
     ], ` data-filter="${esc(name.toLowerCase())}"`);
   }).join('');
@@ -4324,6 +4394,7 @@ function renderStationAssets(box, station, groups, { region }) {
     '<div class="valuation-grid station-grid">' +
       valuationCard('本站估值 · 最低卖价', formatISK(station.sell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', station.sell * TF.netSell()), 'is-sell') +
       valuationCard('本站估值 · 最高收价', formatISK(station.buy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', station.buy * TF.netBuy()), 'is-buy') +
+      (showMid ? medCard('本站估值', station.mid, midPriced, nonBpc.length, region) : '') +
       valuationCard('物品', formatNumber(list.length) + ' 项', kinds + ' 种物品') +
       valuationCard('占总资产', total ? ((station.sell / total) * 100).toFixed(1) + '%' : '—', '按最低卖价估值') +
       abyAssetCard(list) +
@@ -4331,7 +4402,7 @@ function renderStationAssets(box, station, groups, { region }) {
     '<div class="station-filter search-box"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' +
       '<input type="search" id="stationFilter" placeholder="筛选本站物品" autocomplete="off" aria-label="筛选本站物品"></div>' +
     '<div class="table-scroll"><table class="pc-mini-table asset-table"><thead><tr>' +
-      '<th>物品</th><th>数量</th><th>最低卖价</th><th>卖价估值</th><th>最高收价</th><th>收价估值</th><th>槽位</th>' +
+      '<th>物品</th><th>数量</th><th>最低卖价</th><th>卖价估值</th><th>最高收价</th><th>收价估值</th>' + (showMid ? '<th>成交价估值</th>' : '') + '<th>槽位</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
     (list.length > ASSET_ROW_LIMIT ? '<p class="text-muted valuation-note">另有 ' + (list.length - ASSET_ROW_LIMIT) + ' 项未显示</p>' : '');
 
@@ -4743,13 +4814,14 @@ async function loadContractDetailData(c) {
 
 // 估值：raw_quantity = -2 为蓝图副本，不能上架，不计入
 function valueContractItems(items, region) {
-  const sum = { sell: 0, buy: 0, sellPriced: 0, buyPriced: 0, count: 0 };
+  const sum = { sell: 0, buy: 0, mid: 0, sellPriced: 0, buyPriced: 0, midPriced: 0, count: 0 };
   for (const item of items) {
     if (item.raw_quantity === -2) continue;
     sum.count += 1;
     const p = hubPrice(region, item.type_id);
     if (p?.sell != null) { sum.sell += p.sell * item.quantity; sum.sellPriced += 1; }
     if (p?.buy != null) { sum.buy += p.buy * item.quantity; sum.buyPriced += 1; }
+    if (medOf(p) != null) { sum.mid += medOf(p) * item.quantity; sum.midPriced += 1; }
   }
   return sum;
 }
@@ -4802,6 +4874,8 @@ async function renderContractDetail(box, c) {
   const wanted = valueContractItems(itemList.filter((i) => !i.is_included), region);   // 发起方索取
   const bids = [...(state.contractBids.get(c.contract_id) || [])].sort((a, b) => b.amount - a.amount);
   const topBid = bids[0]?.amount || 0;
+  const showMid = hasMedPrice();
+  const midCard = (label, v) => showMid && v.count ? medCard(label, v.mid, v.midPriced, v.count, region) : '';
 
   // —— 估值卡片 ——
   let cards = '';
@@ -4812,6 +4886,7 @@ async function renderContractDetail(box, c) {
       valuationCard('抵押金', formatISK(c.collateral) + ' ISK', '接受方需支付的保证金', 'is-order') +
       valuationCard('物品估值 · 最低卖价', formatISK(given.sell) + ' ISK', given.sellPriced + '/' + given.count + ' 项有卖单', 'is-sell') +
       valuationCard('物品估值 · 最高收价', formatISK(given.buy) + ' ISK', given.buyPriced + '/' + given.count + ' 项有收单', 'is-buy') +
+      midCard('物品估值', given) +
       valuationCard('抵押金覆盖率', given.sell ? ((c.collateral / given.sell) * 100).toFixed(1) + '%' : '—', '抵押金 ÷ 物品卖价估值', c.collateral >= given.sell ? 'is-buy' : 'is-sell');
   } else if (!given.count && wanted.count) {
     // 收购合同：发起方只索取物品并支付报酬（或价格），比较报酬与索取物品的市场价值
@@ -4820,7 +4895,9 @@ async function renderContractDetail(box, c) {
       valuationCard(c.reward ? '发起方支付报酬' : '合同价格', formatISK(pay) + ' ISK', c.reward ? '接受方交付物品后获得' : '接受方支付') +
       valuationCard('索取物品 · 最低卖价', formatISK(wanted.sell) + ' ISK', wanted.sellPriced + '/' + wanted.count + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
       valuationCard('索取物品 · 最高收价', formatISK(wanted.buy) + ' ISK', wanted.buyPriced + '/' + wanted.count + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
-      (pay ? compareCard('报酬对比卖价估值', pay, wanted.sell, '报酬') + compareCard('报酬对比收价估值', pay, wanted.buy, '报酬') : '');
+      midCard('索取物品', wanted) +
+      (pay ? compareCard('报酬对比卖价估值', pay, wanted.sell, '报酬') + compareCard('报酬对比收价估值', pay, wanted.buy, '报酬') : '') +
+      (pay && showMid && wanted.mid ? compareCard('报酬对比成交价估值', pay, wanted.mid, '报酬') : '');
   } else {
     const price = c.type === 'auction' ? (topBid || c.price) : c.price;
     const priceLabel = c.type === 'auction' ? (topBid ? '当前最高出价' : '起拍价') : '合同价格';
@@ -4831,7 +4908,9 @@ async function renderContractDetail(box, c) {
       valuationCard(priceLabel, formatISK(price) + ' ISK', priceDetail) +
       valuationCard('物品估值 · 最低卖价', formatISK(given.sell) + ' ISK', given.sellPriced + '/' + given.count + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
       valuationCard('物品估值 · 最高收价', formatISK(given.buy) + ' ISK', given.buyPriced + '/' + given.count + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
-      (given.count && price ? compareCard('对比卖价估值', price, given.sell, priceLabel) + compareCard('对比收价估值', price, given.buy, priceLabel) : '');
+      midCard('物品估值', given) +
+      (given.count && price ? compareCard('对比卖价估值', price, given.sell, priceLabel) + compareCard('对比收价估值', price, given.buy, priceLabel) : '') +
+      (given.count && price && showMid && given.mid ? compareCard('对比成交价估值', price, given.mid, priceLabel) : '');
     if (wanted.count) {
       cards += valuationCard('索取物品 · 最低卖价', formatISK(wanted.sell) + ' ISK', '发起方要求接受方提供', 'is-order') +
         valuationCard('索取物品 · 最高收价', formatISK(wanted.buy) + ' ISK', wanted.buyPriced + '/' + wanted.count + ' 项有收单', 'is-order');
@@ -4868,7 +4947,8 @@ async function renderContractDetail(box, c) {
       p?.sell == null ? '<span class="muted-cell">—</span>' : formatPrice(p.sell),
       '<strong class="down">' + (p?.sell == null ? '—' : formatISK(p.sell * i.quantity)) + '</strong>',
       p?.buy == null ? '<span class="muted-cell">—</span>' : formatPrice(p.buy),
-      '<strong class="up">' + (p?.buy == null ? '—' : formatISK(p.buy * i.quantity)) + '</strong>'
+      '<strong class="up">' + (p?.buy == null ? '—' : formatISK(p.buy * i.quantity)) + '</strong>',
+      ...(showMid ? [medOf(p) == null ? '<span class="muted-cell">—</span>' : `<span class="mid-cell" title="单价 ${formatPrice(medOf(p))}">${formatISK(medOf(p) * i.quantity)}</span>`] : [])
     ]);
   }).join('');
 
@@ -4889,7 +4969,7 @@ async function renderContractDetail(box, c) {
     (Array.isArray(items)
       ? (itemList.length
         ? '<div class="table-scroll"><table class="pc-mini-table asset-table contract-items"><thead><tr>' +
-            '<th>物品</th><th>数量</th><th>方向</th><th>最低卖价</th><th>卖价估值</th><th>最高收价</th><th>收价估值</th>' +
+            '<th>物品</th><th>数量</th><th>方向</th><th>最低卖价</th><th>卖价估值</th><th>最高收价</th><th>收价估值</th>' + (showMid ? '<th>成交价估值</th>' : '') +
           '</tr></thead><tbody>' + itemRows + '</tbody></table></div>'
         : '<p class="text-muted">该合同没有物品</p>')
       : '<p class="text-muted">合同物品读取失败：' + esc(items?.__error || '') + '</p>') +
@@ -5398,7 +5478,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v15').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v16').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5502,13 +5582,14 @@ function init() {
   if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
   if (location.hash.startsWith('#fit/sim')) history.replaceState(null, '', location.pathname + '#sim');   // 旧地址：对战模拟原在装配页
-  if (location.hash.startsWith('#sim')) switchView('sim');   // 模拟对打
+  if (location.hash.startsWith('#sim')) switchView('sim');   // 战场模拟
   if (location.hash.startsWith('#fit')) switchView('fit');   // 装配分享链接
   if (location.hash.startsWith('#pi')) switchView('pi');     // 行星工业
   if (location.hash.startsWith('#ind')) switchView('industry');   // 制造
   if (location.hash.startsWith('#lp')) switchView('lp');          // LP 商店
   if (location.hash.startsWith('#appr')) switchView('appraisal'); // 估价
   if (location.hash.startsWith('#courier')) switchView('courier'); // 快递合同
+  if (location.hash.startsWith('#contracts')) switchView('contracts'); // 合同
   if (location.hash.startsWith('#war')) switchView('war'); // 战争
   if (location.hash.startsWith('#sov')) switchView('sov'); // 主权规划
   if (location.hash.startsWith('#abyss')) switchView('abyss'); // 深渊市场

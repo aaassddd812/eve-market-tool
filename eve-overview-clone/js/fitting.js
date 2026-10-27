@@ -3,11 +3,11 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v24';
-import * as MU from './fit-mutate.js?v=v3';
+import * as FE from './fit-engine.js?v=v25';
+import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v26';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v26';
-import { initSim, mountSim } from './fit-sim.js?v=v6';
+import { initSim, mountSim } from './fit-sim.js?v=v11';
 import { initGraph, openGraph } from './fit-graph.js?v=v4';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 
@@ -84,7 +84,9 @@ export function initFitting(context) {
     getFit: () => F.fit, getStats: () => F.stats, savedFits, parseEft, normalize, skills,
     hasEsi: () => app.hasEsiToken(),
     esiFits: loadEsiFitList,
-    // 在装配页打开（模拟对打的装配详情）：先记下，切到装配页时载入
+    prices: () => app.getMarketPriceMap(),        // 全服均价（战场模拟的 ISK 交换比）
+    esiSkills: () => app.getCharacterSkills(),    // 已绑定角色的技能（战场模拟某一方按角色技能）
+    // 在装配页打开（战场模拟的装配详情）：先记下，切到装配页时载入
     openInFitting: (fit) => { pendingFit = fit; app.openFit(); },
     esc: app.esc, formatNumber: app.formatNumber, formatISK: app.formatISK, showToast: app.showToast, store: app.store
   };
@@ -102,13 +104,13 @@ function saveSettings() {
   app.store.setJSON(SETTINGS_KEY, { skillMode: F.skillMode, onlyFits: F.onlyFits, tab: F.tab });
 }
 
-let toolInit = null;   // 装配数据到了再初始化模拟对打 / 伤害图表（它们需要读取本机装配）
+let toolInit = null;   // 装配数据到了再初始化战场模拟 / 伤害图表（它们需要读取本机装配）
 function openTool(open, arg) {
   toolInit?.();
   open(arg);
 }
 
-// 模拟对打页（独立菜单，与装配页共用装配数据）；战场统计「模拟对打」先 queueSim 带入双方舰船
+// 战场模拟页（独立菜单，与装配页共用装配数据）；战场统计「战场模拟」先 queueSim 带入双方舰船
 let pendingSim = null;
 export function queueSim(preset) {
   pendingSim = preset || null;
@@ -122,6 +124,8 @@ export async function showSim(root, restored = false) {
     return;
   }
   toolInit?.();
+  // 突变质体数据：没有突变属性的深渊装备要靠它按原装备计算（击杀记录装配里常见）
+  await MU.loadMuta().catch(() => {});
   const preset = pendingSim;
   pendingSim = null;
   mountSim(root, preset, restored && !preset);
@@ -156,7 +160,7 @@ export async function showFitting(restored = false) {
     app.getMarketPriceMap().then((m) => { F.prices = m; if (F.fit) renderStats(); }).catch(() => {});
     app.getInsurance?.().then((m) => { F.insurance = m; if (F.fit) renderStats(); }).catch(() => {});
     // 突变质体数据（约 18 KB 压缩后）：装备行的「突变」按钮在读到后出现
-    MU.loadMuta().then(() => { if (F.fit) renderFit(); }).catch(() => {});
+    MU.loadMuta().then(() => { if (F.fit) recompute(); }).catch(() => {});
     if (!loadPending() && !loadFromHash()) {
       const saved = app.store.getJSON(CURRENT_KEY, null);
       F.fit = saved && F.data.types.has(saved.ship) ? normalize(saved) : null;
@@ -314,7 +318,8 @@ function renderBrowser() {
   const count = new Map();
   const noMarket = [];
   for (const t of list) {
-    if (!t.market || !F.data.markets.has(t.market)) { noMarket.push(t); continue; }
+    // 不在市场出售的深渊装备（突变后的装备 / 无人机）不列出，要用就在装配行上「突变」
+    if (!t.market || !F.data.markets.has(t.market)) { if (t.meta !== 15) noMarket.push(t); continue; }
     for (let m = F.data.markets.get(t.market); m; m = F.data.markets.get(m.parent)) count.set(m.id, (count.get(m.id) || 0) + 1);
   }
   const roots = [...F.data.markets.values()].filter((m) => !m.parent && count.get(m.id)).sort(byName);
@@ -812,7 +817,7 @@ function renderFit() {
     box.innerHTML = `<div class="fit-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2 4 7v10l8 5 8-5V7z"/><path d="M12 22V12M4 7l8 5 8-5"/></svg>
       <h3>从左侧选择一艘舰船开始装配</h3>
-      <p class="fit-empty-tools"><button class="btn btn-ghost" data-fit-sim>模拟对打</button></p>
+      <p class="fit-empty-tools"><button class="btn btn-ghost" data-fit-sim>战场模拟</button></p>
       <p>也可以 <button class="link-btn" data-fit-import>导入 EFT 文本</button>${app.hasEsiToken() ? '、<button class="link-btn" data-fit-esi-list>读取游戏内装配</button>' : ''}${savedFits().length ? ` 或打开 <select class="plain-select" data-fit-open><option value="">我的装配…</option>${savedFits().map((f) => `<option value="${f.id}">${app.esc(f.name || type(f.ship)?.name || '未命名')}</option>`).join('')}</select>` : ''}</p>
     </div>`;
     if (MOBILE()) app.openDrawer?.();
@@ -848,7 +853,7 @@ function renderFit() {
           <button class="btn btn-ghost fit-plan-btn" data-fit-imp title="装备不动，按目标推荐植入体">智能植入体</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-kb title="这艘船最近阵亡时的常见装配">击杀记录装配</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-graph title="有效 DPS 随距离、目标速度、信号半径变化的曲线（类似 Pyfa 的图表）">伤害图表</button>
-          <button class="btn btn-ghost fit-plan-btn" data-fit-sim title="打开「模拟对打」页：两方舰队按装配模拟交战">模拟对打</button>
+          <button class="btn btn-ghost fit-plan-btn" data-fit-sim title="打开「战场模拟」页：两方舰队按装配模拟交战">战场模拟</button>
         </div>
         <div class="fit-action-row">
           <button class="btn btn-ghost" data-fit-new title="新建空装配">新建</button>
@@ -900,7 +905,7 @@ function moduleRow(slot, index, m, extra) {
   const olBtn = !fixed && t.overloadable ? `<button class="fit-ol-btn${m.state === 'overload' ? ' on' : ''}" data-fit-overload="${slot}:${index}" title="${m.state === 'overload' ? '关闭超载' : '超载'}"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2s5 5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-3-1-5 1-8.5z"/></svg>超载</button>` : '';
   return `<div class="fit-slot${sel ? ' is-selected' : ''}${err || extra ? ' is-error' : ''} is-${off ? 'off' : m.state}" data-fit-mod="${slot}:${index}">
     <img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">
-    <span class="fit-slot-name"><span class="fit-slot-title">${app.esc(t.name)}${m.mut ? `<em class="fit-mut-tag" title="${app.esc(MU.mutSummary(m))}">突变</em>` : MU.isBareAbyssal(m) ? '<em class="fit-mut-tag warn" title="来自游戏装配或击杀邮件，没有突变属性，按默认值计算">未设属性</em>' : ''}</span>${item && moduleNote(item) ? `<small>${moduleNote(item)}</small>` : ''}</span>
+    <span class="fit-slot-name"><span class="fit-slot-title">${app.esc(t.name)}${m.mut ? `<em class="fit-mut-tag" title="${app.esc(MU.mutSummary(m))}">突变</em>` : MU.isBareAbyssal(m) ? '<em class="fit-mut-tag warn" title="来自游戏装配或击杀邮件，没有突变属性，按原装备（优先科技 II）的属性计算">未设属性</em>' : ''}</span>${item && moduleNote(item) ? `<small>${moduleNote(item)}</small>` : ''}</span>
     ${!fixed && MU.canMutate(m) ? `<button class="fit-mut-btn${m.mut ? ' on' : ''}" data-fit-mut="${slot}:${index}" title="${m.mut ? '修改突变属性' : '突变成深渊装备并自定义属性'}">${m.mut ? '改属性' : '突变'}</button>` : ''}
     ${ct ? `<span class="fit-charge" title="${app.esc(ct.name)} × ${FE.chargeCount(t, ct)}"><img src="${IMG(ct.id)}" alt="" width="20" height="20" loading="lazy">${app.esc(shortName(ct.name))}<button data-fit-uncharge="${slot}:${index}" aria-label="卸下弹药">×</button></span>`
       : needsCharge ? `<button class="fit-charge is-empty" data-fit-pick-charge="${slot}:${index}">装填弹药</button>` : ''}
@@ -1469,7 +1474,7 @@ export function queueEftFit(text) {
   pendingEft = text;
 }
 
-// 模拟对打「在装配页打开」带来的装配
+// 战场模拟「在装配页打开」带来的装配
 let pendingFit = null;
 function loadPendingFit() {
   if (!pendingFit) return false;

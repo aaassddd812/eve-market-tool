@@ -31,6 +31,16 @@ export function loadMuta() {
       }
       const attrByName = new Map(Object.entries(raw.attrs).map(([id, a]) => [a[2].toLowerCase(), Number(id)]));
       D = { list, byId: new Map(list.map((m) => [m.id, m])), byBase, byResult, byName, attrs: raw.attrs, units: raw.units, attrByName };
+      // 深渊装备 -> 原装备（优先科技 II）：没有突变属性的深渊装备按它计算（fit-engine.js computeFit）
+      const data = FE?.data?.();
+      if (data) {
+        data.abyssalBase = new Map();
+        for (const [result, ms] of byResult) {
+          const bases = [...new Set(ms.flatMap((m) => m.bases))].map((b) => data.types.get(b)).filter(Boolean);
+          const pick = bases.find((t) => t.meta === 2) || bases[0];
+          if (pick) data.abyssalBase.set(result, pick.id);
+        }
+      }
       return D;
     }).catch((e) => { loading = null; throw e; });
   }

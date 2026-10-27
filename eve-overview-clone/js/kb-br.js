@@ -394,7 +394,7 @@ function renderResult() {
         <button class="btn btn-ghost" data-br-auto title="按击杀关系重新推测双方">重新分阵营</button>
         <button class="btn btn-ghost${BR.replay ? ' active' : ''}" data-br-replay title="按击杀邮件的时间点回放这场会战">战局复盘</button>
         <button class="btn btn-ghost" data-br-share>复制链接</button>
-        ${ctx.app.openBattleSim ? '<button class="btn btn-ghost" data-br-sim title="按双方实际出场的舰船（装配取击杀记录里最常见的一套）在装配页模拟对打">模拟对打</button>' : ''}
+        ${ctx.app.openBattleSim ? '<button class="btn btn-ghost" data-br-sim title="按双方实际出场的舰船（装配取击杀记录里最常见的一套）进行战场模拟">战场模拟</button>' : ''}
         <button class="btn btn-primary" data-br-image title="生成战况图片，可下载或复制后分享">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg><span>分享图片</span>
         </button>
@@ -696,7 +696,7 @@ function replayModel(A, B) {
   return { key: BR.key + '|' + [...BR.side].join(','), kills, t0, t1, fielded: { A: A.fielded, B: B.fielded } };
 }
 
-// 模拟对打：每名飞行员按第一艘出现的舰船计一次（换船不重复计），实际损失按舰船类型对照
+// 战场模拟：每名飞行员按第一艘出现的舰船计一次（换船不重复计），实际损失按舰船类型对照
 function openSim() {
   const side = (s) => {
     const st = sideStats(s);

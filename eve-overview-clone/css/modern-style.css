@@ -854,6 +854,14 @@ button.stat-card:hover {
 .tone-amber { --tone: var(--warning); }
 .tone-violet, .valuation-card.is-total { --tone: var(--violet); }
 .valuation-card.is-order { --tone: var(--warning); }
+.valuation-card.is-mid { --tone: var(--accent-primary); }
+.valuation-card.is-mid .valuation-detail { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+/* 成交中位价的天数切换（估值卡片 / 估价页共用） */
+.val-med-days { display: inline-flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 2px; border-radius: var(--radius-sm); background: var(--bg-tertiary); }
+.val-med-days button { padding: 1px 6px; border: 0; border-radius: 3px; background: none; color: var(--text-muted); font: inherit; font-size: 0.6875rem; cursor: pointer; white-space: nowrap; }
+.val-med-days button:hover { color: var(--text-primary); }
+.val-med-days button.active { background: var(--bg-secondary); color: var(--text-primary); box-shadow: var(--shadow-sm); }
+.mid-cell, .ap-mid { color: var(--accent-primary); font-variant-numeric: tabular-nums; }
 .valuation-card.is-aby { --tone: var(--violet); }
 .valuation-card.is-aby .valuation-detail { white-space: normal; }
 .valuation-card.is-aby .valuation-detail > .btn { margin-top: 6px; }
@@ -4125,6 +4133,9 @@ button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outl
 .ap-stats small { font-size: 0.6875rem; color: var(--text-muted); }
 .ap-stats .ap-stat-sell b { color: var(--sell-color); }
 .ap-stats .ap-stat-buy b { color: var(--buy-color); }
+.ap-stats.has-mid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ap-stats .ap-stat-mid b { color: var(--accent-primary); }
+.ap-stats .ap-stat-mid small { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ap-notes { margin: 0 0 12px; padding: 10px 14px 10px 28px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.75rem; line-height: 1.7; color: var(--text-secondary); }
 .ap-notes b { color: var(--text-primary); }
 .ap-warn { color: var(--warning); }
@@ -4208,6 +4219,8 @@ button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outl
 @media (max-width: 768px) {
   .ap-stats { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .ap-stats > div:last-child { grid-column: 1 / -1; }
+  .ap-stats.has-mid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .ap-stats.has-mid > div:last-child { grid-column: auto; }
   .ap-hide-sm { display: none; }
   .ap-item .ap-unit { display: block; }
   .ap-table td:first-child { min-width: 150px; }
@@ -6166,6 +6179,62 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-note { font-size: 0.75rem; color: var(--text-muted); }
 .sim-note summary { cursor: pointer; width: fit-content; }
 .sim-note p { margin-top: 6px; line-height: 1.6; }
+/* 每方设置：技能 / 超载 / 指挥脉冲 */
+.sim-side-opts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; font-size: 0.75rem; color: var(--text-secondary); }
+.sim-side-opts .plain-select { font-size: 0.75rem; }
+.sim-side-opts .pi-check { padding: 3px 8px; font-size: 0.75rem; }
+.sim-side-tag { color: var(--text-muted); }
+.sim-burst { display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.sim-burst > span { margin-right: 2px; color: var(--text-muted); }
+.sim-burst button { padding: 2px 8px; border: 1px solid var(--border-primary); border-radius: 999px; background: none; font: inherit; color: var(--text-secondary); cursor: pointer; }
+.sim-burst button:hover { color: var(--text-primary); border-color: var(--border-secondary); }
+.sim-burst button.active { background: var(--accent-soft); border-color: transparent; color: var(--accent-primary); font-weight: 600; }
+.sim-phase input.pi-input { width: 64px; }
+.sim-ratio { font-size: 0.75rem; font-weight: 600; color: var(--text-primary); }
+.sim-v-mid .link-btn { font-size: 0.75rem; }
+/* 对照 */
+.sim-base { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; padding: 8px 14px; border: 1px dashed var(--border-secondary); border-radius: var(--radius-lg); font-size: 0.75rem; color: var(--text-secondary); }
+.sim-base > b { color: var(--text-primary); }
+.sim-base em { margin-left: 4px; font-style: normal; font-weight: 600; }
+.sim-base em.good { color: var(--success); }
+.sim-base em.bad { color: var(--error, #f0524f); }
+.sim-base .link-btn { margin-left: auto; }
+.sim-legend-base i { background: none !important; border: 1.5px dashed var(--text-muted); }
+.kb-br-plot .ln.sim-ln-base { stroke-width: 1.5; stroke-dasharray: 5 4; opacity: 0.55; }
+.sim-phase-ln { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
+.sim-phase-tx { fill: var(--text-muted); }
+/* 胜负原因 / 扫描 */
+.sim-insight, .sim-tactics { padding: 14px 16px; border-radius: var(--radius-lg); background: var(--bg-tertiary); }
+.sim-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.sim-sec-head h4 { font-size: 0.875rem; }
+.sim-sec-head .sim-status { margin-left: 0; }
+.sim-insight-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.sim-facts { width: 100%; border-collapse: collapse; font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+.sim-facts th, .sim-facts td { padding: 5px 8px; text-align: right; border-bottom: 1px solid var(--border-primary); }
+.sim-facts th:first-child { text-align: left; font-weight: 500; color: var(--text-secondary); }
+.sim-facts thead th { border-bottom-color: var(--border-secondary); }
+.sim-facts tr[title] th:first-child { text-decoration: underline dotted var(--text-muted); text-underline-offset: 3px; cursor: help; }
+.sim-facts td.best { color: var(--text-primary); font-weight: 700; }
+.sim-facts td { color: var(--text-secondary); }
+.sim-facts .sim-side-b, .sim-tips .sim-side-b { --side: var(--br-b); }
+.sim-tips .sim-badge { flex: none; }
+.sim-tips { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.sim-tips li { display: flex; align-items: baseline; gap: 8px; padding: 8px 12px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-secondary); font-size: 0.8125rem; line-height: 1.55; }
+.sim-grid-wrap { overflow-x: auto; }
+.sim-grid { width: 100%; border-collapse: separate; border-spacing: 3px; font-size: 0.75rem; }
+.sim-grid th { padding: 4px 6px; font-weight: 500; color: var(--text-muted); white-space: nowrap; }
+.sim-grid tbody th { text-align: left; }
+.sim-grid td { padding: 0; }
+.sim-cell { display: block; width: 100%; min-width: 52px; height: 32px; border: 1px solid transparent; border-radius: 6px; background: var(--bg-secondary); font: inherit; font-weight: 600; color: var(--text-secondary); cursor: pointer; }
+.sim-cell.is-a { background: color-mix(in srgb, var(--br-a) calc(var(--a) * 100%), var(--bg-secondary)); color: var(--text-primary); }
+.sim-cell.is-b { background: color-mix(in srgb, var(--br-b) calc(var(--a) * 100%), var(--bg-secondary)); color: var(--text-primary); }
+.sim-cell.is-cur { border-color: var(--text-primary); }
+.sim-cell.is-wait { cursor: default; color: var(--text-muted); }
+.sim-cell:not(.is-wait):hover { filter: brightness(1.15); }
+.sim-hint, .sim-need { margin-top: 8px; font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.6; }
+.sim-need b { color: var(--text-primary); }
+#simTactics:empty { display: none; }
+@media (max-width: 860px) { .sim-insight-body { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 760px) {
   .sim-verdict { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   .sim-v-mid { grid-column: 1 / -1; grid-row: 1; }
@@ -6204,4 +6273,62 @@ td .sov-auto-tag { margin-left: 4px; }
   .header-actions .icon-btn { width: 34px; }
   .header-actions .icon-btn.api-link { width: auto; padding: 0 7px; }
   .server-status .server-name { max-width: 76px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+/* ===== 合同页（contracts.js）===== */
+.ct-page .ap-head { margin-bottom: 12px; }
+.ct-tabbar { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-bottom: 12px; }
+.ct-tabs button small { margin-left: 4px; font-size: 0.6875rem; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ct-filters { justify-content: flex-start; }
+.ct-filters .toolbar-spacer { flex: 1; }
+.ct-search { width: 180px; max-width: 100%; }
+.ct-order { min-width: 36px; padding-inline: 8px; }
+.ct-note { margin: 0 0 8px; font-size: 0.75rem; }
+.ct-table td { vertical-align: middle; }
+.ct-table .num, .ct-items .num { text-align: right; font-variant-numeric: tabular-nums; }
+.ct-row { cursor: pointer; }
+.ct-row:hover td { background: var(--bg-hover); }
+.ct-item { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ct-item img { flex-shrink: 0; border-radius: var(--radius-sm); }
+.ct-item > span { display: flex; flex-direction: column; min-width: 0; }
+.ct-item b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.ct-noimg { width: 32px; height: 32px; flex-shrink: 0; border-radius: var(--radius-sm); background: var(--bg-tertiary); }
+.ct-items .ct-noimg, .ct-items .ct-item img { width: 24px; height: 24px; }
+.ct-time { white-space: nowrap; }
+.ct-time > span:first-child { display: block; }
+.ct-ratio { display: inline-block; margin-left: 6px; padding: 0 5px; border-radius: 3px; font-size: 0.6875rem; background: var(--bg-tertiary); color: var(--text-secondary); }
+.ct-ratio.up { color: var(--buy-color); background: var(--buy-soft); }
+.ct-ratio.down { color: var(--sell-color); background: color-mix(in srgb, var(--sell-color) 12%, transparent); }
+.pill.ct-type-auction { color: var(--violet); background: color-mix(in srgb, var(--violet) 12%, transparent); }
+.pill.ct-type-courier { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
+.pill.ct-st-open { color: var(--accent-primary); background: var(--accent-soft); }
+.pill.ct-st-done { color: var(--buy-color); background: var(--buy-soft); }
+.pill.ct-st-expired, .pill.ct-st-repost { color: var(--text-muted); background: var(--bg-tertiary); }
+.ct-sold { display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 10px; border-radius: var(--radius-md); background: var(--bg-secondary); border: 1px solid var(--border-primary); }
+.ct-sold > div:nth-child(2) { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; font-size: 0.75rem; color: var(--text-muted); }
+.ct-sold > div:nth-child(2) b { font-size: 0.875rem; color: var(--text-primary); }
+.ct-sold-num { display: flex; flex-direction: column; align-items: flex-end; font-size: 0.6875rem; color: var(--text-muted); }
+.ct-sold-num b { font-size: 1.125rem; color: var(--buy-color); font-variant-numeric: tabular-nums; }
+.ct-modal { max-width: 860px; }
+.ct-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.ct-repost { margin: 0 0 10px; font-size: 0.8125rem; color: var(--text-secondary); }
+.link-btn { padding: 0; border: 0; background: none; color: var(--accent-primary); font: inherit; cursor: pointer; text-decoration: underline; }
+.ct-show-sm { display: none; }
+@media (max-width: 768px) {
+  .ct-hide-sm { display: none; }
+  .ct-show-sm { display: flex; gap: 4px; margin: 2px 0; }
+  .ct-show-sm .pill { font-size: 0.625rem; padding: 0 5px; }
+  .ct-filters > .select-wrap { flex: 1 1 40%; min-width: 0; }
+  .ct-filters > .select-wrap select { width: 100%; }
+  .ct-filters .ct-search { flex: 1 1 100%; }
+  .ct-filters .toolbar-spacer { display: none; }
+  .ct-table { width: 100%; }
+  .ct-table td:first-child { width: 58%; min-width: 0; white-space: normal; }
+  .ct-table td, .ct-table th { padding-inline: 6px; }
+  .ct-item { gap: 6px; }
+  .ct-item b { white-space: normal; overflow-wrap: anywhere; }
+  .ct-table .cell-sub { overflow-wrap: anywhere; }
+  .ct-search { flex: 1 1 140px; width: auto; }
+  .ct-sold { flex-wrap: wrap; }
+  .ct-sold-num { align-items: flex-start; }
 }

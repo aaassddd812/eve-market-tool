@@ -2,7 +2,7 @@
 // 数据来自自建的击杀记录服务（server/kb_service.py，/api/kb/），收录新伊甸全部击杀；
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v24';
+import { initBr, renderBr } from './kb-br.js?v=v25';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v1';
 
 let app, kb;
