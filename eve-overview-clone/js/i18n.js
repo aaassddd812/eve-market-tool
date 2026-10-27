@@ -9,7 +9,7 @@
 (function () {
   'use strict';
   var KEY = 'eve-lang';
-  var VER = '66';
+  var VER = '67';
   var CN_TZ = /^Asia\/(Shanghai|Chongqing|Chungking|Harbin|Urumqi|Kashgar|Hong_Kong|Macau|Macao|Taipei)$/;
 
   function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
@@ -171,7 +171,7 @@
   api.t = tr;
 
   // ---------- 数据：游戏名称换成官方英文名 ----------
-  var DATA = /\/(catalog|map-data(-\w+)?|npc-[\w-]+|type-names-zh|fit-data|industry-data|skill-data|sov-data|wh-data|pi-data|lp-data(-\w+)?|reprocess-data|mutaplasmid-data|dogma-attr-zh|type-volume|courier-\w+)\.json$/;
+  var DATA = /\/(catalog|map-data(-\w+)?|npc-[\w-]+|type-names-zh|fit-data|industry-data|skill-data|sov-data|wh-data|pi-data|lp-data(-\w+)?|reprocess-data|mutaplasmid-data|dogma-attr-zh|type-volume|courier-\w+|cn-extra-\w+)\.json$/;
   function swapNames(o) {
     if (typeof o === 'string') return NAMES[o] != null ? NAMES[o] : o;
     if (Array.isArray(o)) { for (var i = 0; i < o.length; i++) o[i] = swapNames(o[i]); return o; }

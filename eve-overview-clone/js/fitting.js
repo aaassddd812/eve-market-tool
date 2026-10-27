@@ -3,7 +3,7 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v25';
+import * as FE from './fit-engine.js?v=v26';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v26';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v26';
@@ -140,7 +140,7 @@ export async function showSim(root, restored = false) {
   mountSim(root, preset, restored && !preset);
 }
 
-// 技能规划页（独立菜单，用装配数据里的技能前置关系）
+// 技能规划（个人中心 · 技能页里的子页，用装配数据里的技能前置关系）
 export async function showPlan(root, restored = false) {
   if (!F.data && !root.dataset.ready) root.innerHTML = skTitle(16) + skCards(4) + skRows(6);
   try {

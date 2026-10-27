@@ -3,11 +3,12 @@
 // 未学的技能灰显。数据：ESI /skills/（个人中心已读取）、/skillqueue/（需要 esi-skills.read_skillqueue.v1），skill-data.json（build_industry.mjs 生成）。
 // 角色属性：ESI /attributes/（esi-skills.read_skills.v1）。训练速度 = 主属性 + 副属性 / 2（技能点 / 分钟），据此估算每个技能升到下一级的时间。
 import { skCards, skRows } from './skeleton.js?v=v17';
+import { serverExtra } from './server-extra.js?v=1';
 
-let ctx;   // esc, formatNumber, esiAuthFetch, store
+let ctx;   // esc, formatNumber, esiAuthFetch, store, showPlan
 let data = null;
 let loading = null;
-const S = { filter: 'all', q: '', open: null, queue: null, queueFor: 0, attrs: null };
+const S = { filter: 'all', q: '', open: null, queue: null, queueFor: 0, attrs: null, mode: 'list' };
 const ATTR_KEY = { 164: 'charisma', 165: 'intelligence', 166: 'memory', 167: 'perception', 168: 'willpower' };
 const OPEN_KEY = 'eve-skill-groups-open';
 const ATTR_ZH = { 164: '魅力', 165: '智力', 166: '记忆', 167: '感知', 168: '毅力' };
@@ -19,8 +20,13 @@ export function initSkills(context) {
 }
 
 function load() {
-  if (!loading) loading = fetch('skill-data.json?v=1').then((r) => { if (!r.ok) throw new Error('skill-data.json ' + r.status); return r.json(); })
-    .then((d) => { data = d; }).catch((e) => { loading = null; throw e; });
+  if (!loading) {
+    loading = Promise.all([fetch('skill-data.json?v=1').then((r) => { if (!r.ok) throw new Error('skill-data.json ' + r.status); return r.json(); }), serverExtra()])
+      .then(([d, extra]) => {   // 国服独有技能
+        if (extra?.skills) { Object.assign(d.skills, extra.skills.skills); Object.assign(d.groups, extra.skills.groups); }
+        data = d;
+      }).catch((e) => { loading = null; throw e; });
+  }
   return loading;
 }
 
@@ -45,10 +51,22 @@ export async function renderSkills(box, character, characterId) {
       .catch((e) => { if (S.queueFor === characterId) S.attrs = { error: e.message }; })
       .finally(() => { if (box.isConnected && box.dataset.skills === '1') draw(box, own); });
   }
-  box.dataset.skills = '1';
   box._skOwn = own;
-  draw(box, own);
   bind(box, own);
+  if (S.mode === 'plan') { drawPlan(box); return; }
+  box.dataset.skills = '1';
+  draw(box, own);
+}
+
+// 技能 / 技能规划 两个子页
+export function setSkillsMode(mode) { S.mode = mode === 'plan' ? 'plan' : 'list'; }
+const modeNav = () => `<div class="segmented sk-mode" role="tablist">${[['list', '技能'], ['plan', '技能规划']].map(([k, l]) => `<button data-sk-mode="${k}" class="${S.mode === k ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+
+function drawPlan(box) {
+  box.dataset.skills = 'plan';
+  clearInterval(timer); timer = 0;
+  box.innerHTML = `${modeNav()}<div class="sk-plan-host"></div>`;
+  ctx.showPlan(box.querySelector('.sk-plan-host'));
 }
 
 // 属性条：五项属性 + 重新分配（每年 1 次免费，另有奖励次数）
@@ -131,7 +149,7 @@ function draw(box, own) {
       <div class="sk-rows">${rows}</div></details>`;
   }).join('') || '<p class="text-muted">没有符合条件的技能</p>';
 
-  box.innerHTML = `${cards}${queueHtml}
+  box.innerHTML = `${modeNav()}${cards}${queueHtml}
     <div class="skl-toolbar">
       <div class="search-box sk-search">
         <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -139,7 +157,6 @@ function draw(box, own) {
       </div>
       <div class="segmented" role="group">${[['all', '全部'], ['trained', '已学'], ['partial', '未满级'], ['untrained', '未学']].map(([k, l]) => `<button data-sk-filter="${k}" class="${S.filter === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       <button class="link-btn" data-sk-all="1">全部展开</button><button class="link-btn" data-sk-all="0">全部收起</button>
-      <a class="link-btn sk-plan-link" href="#plan" title="按已学技能规划想开的船和发展方向">技能规划 ›</a>
       <span class="skl-legend"><i class="on"></i>已学<i class="limited"></i>受克隆限制<i class="queued"></i>队列中</span>
     </div>
     <div class="sk-groups">${groupHtml}</div>`;
@@ -152,6 +169,13 @@ function bind(box, own) {
   if (box.dataset.skBound) return;
   box.dataset.skBound = '1';
   box.addEventListener('click', (e) => {
+    const mode = e.target.closest('[data-sk-mode]');
+    if (mode && box.dataset.skills) {
+      if (mode.dataset.skMode === S.mode) return;
+      S.mode = mode.dataset.skMode;
+      if (S.mode === 'plan') drawPlan(box); else { box.dataset.skills = '1'; draw(box, currentOwn()); }
+      return;
+    }
     if (box.dataset.skills !== '1') return;
     const f = e.target.closest('[data-sk-filter]');
     if (f) { S.filter = f.dataset.skFilter; S.focusSearch = false; draw(box, currentOwn()); return; }

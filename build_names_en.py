@@ -122,6 +122,12 @@ for g in cat['groups']:
         put_id(t.get('name'), ids_type.get(t.get('id')))
 print('by id', byid)
 
+# 国服独有物品 / 分组的英文名（eve-overview-clone/server/build_cn_extra.py 从网易 ESI 读取）
+cn_file = os.path.join(os.path.dirname(OUT), 'names-en-cn.json')
+if os.path.exists(cn_file):
+    for zh, en in json.load(open(cn_file, encoding='utf8')).items():
+        put(zh, en)
+
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 with open(OUT, 'w', encoding='utf8') as f:
     json.dump(names, f, ensure_ascii=False, separators=(',', ':'))

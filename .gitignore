@@ -8,3 +8,6 @@ desktop.ini
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+
+# 国服数据构建缓存（build_cn_extra.py）
+.cn-cache/

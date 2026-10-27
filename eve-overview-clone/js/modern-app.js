@@ -5,9 +5,20 @@ import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub
 import * as SM from './struct-markets.js?v=v5';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v7';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
+import { serverExtra, cnTypeImage } from './server-extra.js?v=1';
 
 // ===== 配置与常量 =====
 const IMAGE_BASE = 'https://images.evetech.net/types';
+// 国服独有物品的图标：images.evetech.net 没有时换成网易图片服务器（最先注册，抢在各处「破图隐藏」之前）
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (img.tagName !== 'IMG' || img.dataset.cnImg) return;
+  const alt = cnTypeImage(img.src);
+  if (!alt) return;
+  img.dataset.cnImg = '1';
+  e.stopImmediatePropagation();
+  img.src = alt;
+}, true);
 
 // 主要交易中心（按服务器，定义在 server.js）：REGIONS[0] 是全站默认价格基准
 const REGIONS = SERVER.regions;
@@ -319,8 +330,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', plan: '#plan', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', wh: '#wh', guide: '#guide' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', plan: 'planView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', wh: 'whView', guide: 'guideView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', wh: '#wh', guide: '#guide' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', wh: 'whView', guide: 'guideView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -388,7 +399,6 @@ function switchView(view) {
   else starMapModule?.hideStarMap();
   if (view === 'kb') openKbPage(restored);
   if (view === 'sim') openSimPage(restored);
-  if (view === 'plan') openPlanPage(restored);
   if (view === 'fit') openFitting(restored);
   if (view === 'pi') openPi();
   if (view === 'industry') openIndustry(restored);
@@ -729,7 +739,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v65').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v66').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -738,7 +748,7 @@ function loadFittingModule() {
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       // 装配页与战场模拟页互相跳转（可后退）
       openSim: () => { history.pushState(null, '', location.pathname + '#sim'); switchView('sim'); },
-      openPlan: () => { history.pushState(null, '', location.pathname + '#plan'); switchView('plan'); },
+      openPlan: () => openSkillPlan(),
       openEsiBind: () => { switchView('profile'); openEsiModal(); },
       openFit: () => { history.pushState(null, '', location.pathname + '#fit'); switchView('fit'); },
       openBattles: () => { history.pushState(null, '', location.pathname + '#kb/battles'); switchView('kb'); },
@@ -761,16 +771,12 @@ async function openSimPage(restored = false) {
   }
 }
 
-// 技能规划（skill-plan.js）：与装配页共用装配模块和数据
-async function openPlanPage(restored = false) {
-  try {
-    const m = await loadFittingModule();
-    if (!location.hash.startsWith('#plan')) history.replaceState(null, '', location.pathname + '#plan');
-    await m.showPlan($('planMain'), restored);
-  } catch (error) {
-    console.error('技能规划加载失败:', error);
-    showToast('技能规划加载失败：' + error.message, 'error', 4000);
-  }
+// 技能规划（skill-plan.js）：放在个人中心 · 技能页里，与装配页共用装配模块和数据
+async function openSkillPlan() {
+  try { (await loadSkillsModule()).setSkillsMode('plan'); } catch { /* 下面打开技能页时会显示加载失败 */ }
+  if (location.hash) history.replaceState(null, '', location.pathname);
+  if (state.currentView !== 'profile') switchView('profile');
+  switchProfileTab('skills');
 }
 
 async function openFitting(restored = false) {
@@ -1254,6 +1260,7 @@ async function loadCatalog() {
     const response = await fetch('./catalog.json?v=v2r7');
     if (!response.ok) throw new Error('HTTP ' + response.status);
     state.catalog = await response.json();
+    mergeServerCatalog((await serverExtra())?.catalog);
     buildCatalogIndex();
     renderCatalog();
     renderQuickPicks();
@@ -1268,6 +1275,18 @@ async function loadCatalog() {
       $('catalogTree').innerHTML = '<div class="skeleton-list"><i></i><i></i><i></i><i></i></div>';
       loadCatalog();
     });
+  }
+}
+
+// 国服独有物品：新的市场分组直接加入；已有分组（merge）只追加物品
+function mergeServerCatalog(extra) {
+  if (!extra) return;
+  const byId = new Map(state.catalog.groups.map((g) => [g.id, g]));
+  for (const g of extra.groups) {
+    const have = byId.get(g.id);
+    if (!have) { const { merge, ...rest } = g; state.catalog.groups.push(rest); byId.set(g.id, rest); continue; }
+    const ids = new Set(have.types.map((t) => t.id));
+    have.types.push(...g.types.filter((t) => !ids.has(t.id)));
   }
 }
 
@@ -2845,7 +2864,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#kb')) { if (state.currentView !== 'kb') switchView('kb'); return; }
     if (location.hash.startsWith('#map')) { if (state.currentView !== 'map') switchView('map'); return; }
     if (location.hash.startsWith('#sim')) { if (state.currentView !== 'sim') switchView('sim'); return; }
-    if (location.hash.startsWith('#plan')) { if (state.currentView !== 'plan') switchView('plan'); return; }
+    if (location.hash.startsWith('#plan')) { openSkillPlan(); return; }
     if (location.hash.startsWith('#fit/sim')) { history.replaceState(null, '', location.pathname + '#sim'); switchView('sim'); return; }
     if (location.hash.startsWith('#fit')) { if (state.currentView !== 'fit') switchView('fit'); return; }
     if (location.hash.startsWith('#pi')) { if (state.currentView !== 'pi') switchView('pi'); return; }
@@ -4546,8 +4565,8 @@ async function renderProfileTab(tab) {
 // 个人中心 · 技能：首次打开时加载
 let skillsLoading = null;
 function loadSkillsModule() {
-  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v27').then((m) => {
-    m.initSkills({ esc, formatNumber, esiAuthFetch, store });
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v28').then((m) => {
+    m.initSkills({ esc, formatNumber, esiAuthFetch, store, showPlan: async (el) => (await loadFittingModule()).showPlan(el) });
     return m;
   }).catch((error) => { skillsLoading = null; throw error; });
   return skillsLoading;
@@ -5599,7 +5618,7 @@ function init() {
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
   if (location.hash.startsWith('#fit/sim')) history.replaceState(null, '', location.pathname + '#sim');   // 旧地址：对战模拟原在装配页
   if (location.hash.startsWith('#sim')) switchView('sim');   // 战场模拟
-  if (location.hash.startsWith('#plan')) switchView('plan'); // 技能规划
+  if (location.hash.startsWith('#plan')) openSkillPlan();    // 旧地址：技能规划已移到个人中心 · 技能
   if (location.hash.startsWith('#fit')) switchView('fit');   // 装配分享链接
   if (location.hash.startsWith('#pi')) switchView('pi');     // 行星工业
   if (location.hash.startsWith('#ind')) switchView('industry');   // 制造

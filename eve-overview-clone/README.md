@@ -63,6 +63,8 @@ eve-overview-clone/
 ├── server/system_regions.json # 全部星系 → 星域（build_map.mjs 生成）
 ├── map-data.json        # 星图静态数据（build_map.mjs 生成，宁静 / 晨曦共用）
 ├── map-data-infinity.json # 曙光服星图（build_map_esi.mjs 从曙光 ESI 生成）
+├── cn-extra-serenity.json / cn-extra-infinity.json # 晨曦 / 曙光独有的舰船、装备、技能等（server/build_cn_extra.py 从国服 ESI 生成）
+├── js/server-extra.js   # 切到国服时加载上面的文件，并把国服独有物品的图标换到网易图片服务器
 ├── npc-names-zh.json    # 官方中文名称表（build_npc_names.mjs 生成）
 ├── npc-data.json        # NPC 人物 / 代理人驻地（build_npc.mjs 由 SDE 生成，星图搜索 NPC 用）
 ├── npc-corp-faction.json # NPC 军团 → 阵营及阵营中文名（build_npc.mjs 生成，交易税费按挂单空间站取声望用）
@@ -302,7 +304,7 @@ python3 build_guides.py <文章目录>          # 输出 eve-overview-clone/guid
   - 对照：「设为对照」记下当前结果，改动后结论下方显示前后对比（胜负、双方损失与 ISK、用时），走势图叠加虚线
   - 分享链接：对局（两方舰船、装配、选项、每方设置）压缩（`CompressionStream('deflate-raw')`）后放进 `#sim=…`，打开即载入；击杀记录装配只记来源，打开时重新读取
   - 没有突变属性的深渊装备（游戏装配 / 击杀邮件里常见）按原装备（优先科技 II，突变质体数据 `abyssalBase`）的属性计算，不再让 DPS 等属性变成 0；不模拟真正的走位、过热损坏与装填时间
-- **技能规划**（`js/skill-plan.js`，独立菜单，导航在「战场模拟」后，地址栏 `#plan`；装配页「技能规划」按钮带上当前装配进入，个人中心「技能」页也有入口；与装配页共用装配数据里的技能前置关系）：
+- **技能规划**（`js/skill-plan.js`，在个人中心「技能」页顶部切换「技能 / 技能规划」；装配页「技能规划」按钮带上当前装配跳过去，旧地址 `#plan` 也会跳到这里；与装配页共用装配数据里的技能前置关系）：
   - 目标：想开的船（默认带上击杀记录里这型船最近最常见的装配，可换成「只开船」或我的装配）、14 个发展方向（基础属性、炮台 / 导弹 / 无人机输出、护盾 / 装甲坦克、后勤、电子战、探索、采矿、工业、贸易、行星工业、舰队指挥，按英文名找技能）、单个技能（I–V）；目标存在本机 `eve-skill-plan-v1`
   - 船的「能开」= 船体 + 装配里装备 / 弹药 / 无人机 / 植入体的技能要求；「用好」再加船体技能到 IV、武器 / 弹药 / 无人机技能到 IV，并按装配内容加支援技能（基础、炮台、导弹、无人机、护盾 / 装甲坦克，坦克按装备所需技能的分组判断）
   - 排序：前置技能逐级展开（已满足的技能不再追溯前置）；先排所有目标的「能开 / 能用」，再排「用好」与发展方向；每个阶段里贪心地先练还差最少的目标，目标内的需求按单项耗时从短到长
@@ -434,7 +436,7 @@ node build_lp.mjs <SDE 解压目录>   # 输出 eve-overview-clone/lp-data.json
 - **登录**：晨曦服用网易 SSO（`login.evepc.163.com`）。网易没有开放第三方应用申请，和其他国服工具一样复用官方 ESI 网页自带的应用（Client ID `bc90aa496a404724a93f41b4f4e97761`，回调 `https://ali-esi.evepc.163.com/ui/oauth2-redirect.html`，另带网易必填的 `realm`、`device_id`）。登录后浏览器停在网易 ESI 页面，复制地址栏粘贴到绑定框第 2 步即可，授权码几分钟内失效
 - **换令牌**：网易换令牌接口不允许跨域，由 `esi_service.py` 的 `POST /api/esi/sso/token?server=serenity` 原样转发（只转发必要字段，校验 client_id，每 IP 每分钟 20 次，不记录内容）。不需要额外配置；以后有专属应用时可在 `config.json` 的 `"serenity"` 下填 `client_id` / `redirect_uri` 覆盖
 - **本地数据**：两个服务器的令牌、建筑缓存、价格缓存分开保存（晨曦服的键名加 `serenity:` 前缀），切换不会互相覆盖；共享的玩家建筑缓存服务器端也分文件
-- **图片**：物品图标两服通用；人物头像、玩家军团 / 联盟图标晨曦服取自 `image.evepc.163.com`
+- **图片**：物品图标两服通用（国服独有物品除外，见下文「国服独有的舰船、装备、技能」）；人物头像、玩家军团 / 联盟图标晨曦服取自 `image.evepc.163.com`
 - **LP 商店**：晨曦服读 `lp-data-serenity.json`（`node build_lp.mjs <SDE目录> --serenity` 生成）
 - **击杀记录**：国服击坠榜（beta.ceve-market.org）的数据接口有 CrowdSec 人机验证、请求加密且不开放跨域，本站不抓取，只外链过去（击杀页入口、个人中心「战斗记录」跳到 `pilot/<角色ID>`）
 - **不支持**：zKillboard 与本站击杀记录服务只收录宁静服，晨曦服下击杀记录页、战斗记录、舰船近期损失、星图实时击杀与击杀列表、击杀装配、制造的蓝图合同价不可用
@@ -571,6 +573,19 @@ node build_lp.mjs <SDE 解压目录>   # 输出 eve-overview-clone/lp-data.json
 - **本地数据**：键名加 `infinity:` 前缀；共享玩家建筑缓存存为 `structures-cache-infinity.json`
 - **LP 商店**：读 `lp-data-infinity.json`（`node build_lp.mjs <SDE目录> --infinity` 生成）
 - **击杀记录**：国服击坠榜有曙光分站 `inf.ceve-market.org`（与晨曦的 beta.ceve-market.org 同一套站点、同样的链接格式，同样有人机验证、不开放接口），击杀页外链过去，个人中心「战斗记录」跳到 `pilot/<角色ID>`；击杀页另附开明网 PVP 战情大厅（eveai.vip/pvp）入口。开明网接口在 robots.txt 里禁止抓取、不开放跨域，返回里也没有击杀邮件 hash，不做数据对接
+
+### 国服独有的舰船、装备、技能（v218）
+
+晨曦、曙光有不少宁静服没有的东西：索拉弗雷尔系列舰船与武器、巨像、山岳级、星云级等轻型护卫舰、对应的专属技能、特别版植入体、翻新组件等。
+CCP 的 SDE 里没有这些物品，`server/build_cn_extra.py` 从网易 ESI 读取，每个服生成一份 `cn-extra-<服>.json`，切到该服时并入：
+
+- **物品目录**：新的市场分组与物品加进市场侧栏，可搜索、看行情（晨曦约 2000 件，曙光约 6300 件）
+- **装配 / 战场模拟 / 技能规划**：独有舰船（晨曦 23 艘、曙光 45 艘）、装备、弹药、无人机、植入体的属性和效果并入装配数据；没有 SDE 的「舰船加成」说明和描述
+- **技能页**：独有技能（如「索拉弗雷尔护卫舰操作」）按游戏分组显示
+- **英文名**：取 ESI `language=en`，并入 `i18n/names-en.json`（另存 `i18n/names-en-cn.json`，`build_names_en.py` 重建时会再并入）；网易没翻译的（ESI 返回 `item <ID>`）保留中文
+- **图标**：这些物品在 images.evetech.net 上没有图标，加载失败时自动换成网易图片服务器（晨曦 `image.evepc.163.com`、曙光 `image-infinity.evepc.163.com`，`/Type/<ID>_32|64.png`）
+- **加成的局限**：ESI 的效果修正不带「对哪个技能 / 分组的装备生效」，脚本按效果名（如 `ShipBonusMedHybridTurretDmg` → 中型混合炮台）和 SDE 里同类修正推断；推断不出来的修正丢弃（晨曦约 120 条、曙光约 140 条，少算一个加成，好过加错地方），所以少数国服舰船的数值会和游戏里有出入
+- **更新**：`python3 server/build_cn_extra.py <SDE 解压目录>`（在 eve-overview-clone 下运行；ESI 结果缓存在 `server/.cn-cache/`，重跑只请求新物品），之后把 `server-extra.js` 里 `cn-extra-*.json?v=` 加一，并同步改 `fit-engine.js`、`skills-page.js`、`modern-app.js` 引用的 `server-extra.js?v=`
 
 ## 行星工业（v19）
 

@@ -4,6 +4,8 @@
 // 不可叠加的属性对装备来源的乘法修改施加叠加惩罚（舰船、技能、植入体、子系统、弹药来源不受惩罚）。
 // 绝大多数加成来自效果的 modifierInfo；推进器提速、子系统槽位等少数效果在这里单独实现。
 
+import { serverExtra } from './server-extra.js?v=1';
+
 // ---------- 常用属性 ----------
 export const AT = {
   mass: 4, capacity: 38, volume: 161, radius: 162,
@@ -52,12 +54,18 @@ let DATA = null;
 
 export function loadFitData(url) {
   if (!DATA) {
-    DATA = fetch(url).then((r) => {
+    DATA = Promise.all([fetch(url).then((r) => {
       if (!r.ok) throw new Error('装配数据加载失败 HTTP ' + r.status);
       return r.json();
-    }).then(parse).catch((error) => { DATA = null; throw error; });
+    }), serverExtra()]).then(([raw, extra]) => parse(mergeExtra(raw, extra?.fit))).catch((error) => { DATA = null; throw error; });
   }
   return DATA;
+}
+
+// 国服独有的舰船、装备、技能（cn-extra-<服>.json，只含 fit-data.json 里没有的条目）
+function mergeExtra(raw, extra) {
+  if (extra) for (const k of ['attrs', 'effects', 'groups', 'markets', 'types']) Object.assign(raw[k], extra[k]);
+  return raw;
 }
 
 function parse(raw) {
