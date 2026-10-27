@@ -6,7 +6,7 @@
 //   2. 手动添加：建筑 ID、游戏内链接（showinfo:类型//ID）或名称（有建筑搜索权限时按名称搜）。
 // 结果按服务器 + 角色存在本地；勾选的建筑参与比价与排行。令牌只在浏览器里，服务器拿不到这些数据。
 import { SERVER, serverKey } from './server.js?v=s4';
-import * as JP from './jump-planner.js?v=v15';
+import * as JP from './jump-planner.js?v=v16';
 
 export const MARKET_STRUCTURE_TYPES = new Set([35833, 35834, 40340, 47512, 47513, 47514, 47515, 47516]);
 export const STRUCT_MARKET_SCOPE = 'esi-markets.structure_markets.v1';
@@ -180,7 +180,7 @@ export async function scanStructures(onProgress = () => {}) {
     const pub = await fetch(`${SERVER.esi}/universe/structures/?datasource=${SERVER.datasource}&filter=market`).then((r) => (r.ok ? r.json() : [])).catch(() => []);
     pub.forEach((id) => candidates.add(id));
     try {
-      const found = await JP.loadPublicStructures(ctx.getToken, (d, t, phase) => onProgress(phase === 'private' ? `查找你能停靠的建筑 ${d}/${t}…` : `读取玩家建筑列表 ${d}/${t}…`));
+      const found = await JP.loadPublicStructures(ctx.getToken, (d, t, phase) => onProgress(phase === 'private' ? `查找你能停靠的建筑 ${d}/${t}…` : phase === 'detail' ? `读取你能停靠的建筑详情 ${d}/${t}…` : `读取玩家建筑列表 ${d}/${t}…`));
       // 公开可停靠但不在公开市场列表里的建筑，市场一般也不对外，只试私有（军团 / 联盟）建筑
       for (const s of found.private || []) if (MARKET_STRUCTURE_TYPES.has(s.type)) candidates.add(s.id);
     } catch { /* 建筑发现失败时只试公开市场列表 */ }

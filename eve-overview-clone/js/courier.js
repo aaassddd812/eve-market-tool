@@ -8,7 +8,7 @@
 //           路线经过低安 / 00 时默认跳货优先（可改），跳货另用跳跃规划算出跳跃次数与燃料。
 import { SERVER, IS_TQ, HUB, HUB_NAME } from './server.js?v=s4';
 import { SHIPS as HULLS, MODULES } from './courier-ships.js?v=v1';
-import { planJumpRoute, canJumpInto } from './jump-planner.js?v=v15';
+import { planJumpRoute, canJumpInto } from './jump-planner.js?v=v16';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, openEftFit, hasEsiToken, tokenInfo, hasScope, officialName, loadNpcNames, resolveNames, resolveStructures, openEsiBind, openMapSystem, closeDrawer
 const $ = (id) => document.getElementById(id);

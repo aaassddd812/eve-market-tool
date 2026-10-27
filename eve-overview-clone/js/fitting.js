@@ -7,7 +7,8 @@ import * as FE from './fit-engine.js?v=v25';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v26';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v26';
-import { initSim, mountSim } from './fit-sim.js?v=v11';
+import { initSim, mountSim } from './fit-sim.js?v=v14';
+import { initPlan, mountPlan, queuePlan } from './skill-plan.js?v=v4';
 import { initGraph, openGraph } from './fit-graph.js?v=v4';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 
@@ -79,6 +80,14 @@ export function initFitting(context) {
   MU.initMutate(app, { data: () => F.data });
   initAutoFit(planCtx);
   initKbFits(planCtx);
+  // 技能规划页（skill-plan.js）
+  const planPageCtx = {
+    get data() { return F.data; }, FE,
+    getFit: () => F.fit, savedFits, normalize,
+    hasEsi: () => app.hasEsiToken(),
+    esiFetch: app.esiFetch, getEsiToken: app.getEsiToken, getImplants: app.getCharacterImplants, openEsiBind: app.openEsiBind,
+    esc: app.esc, formatNumber: app.formatNumber, showToast: app.showToast, copyText: app.copyText, store: app.store
+  };
   const toolCtx = {
     get data() { return F.data; }, FE,
     getFit: () => F.fit, getStats: () => F.stats, savedFits, parseEft, normalize, skills,
@@ -90,7 +99,7 @@ export function initFitting(context) {
     openInFitting: (fit) => { pendingFit = fit; app.openFit(); },
     esc: app.esc, formatNumber: app.formatNumber, formatISK: app.formatISK, showToast: app.showToast, store: app.store
   };
-  toolInit = () => { initSim(toolCtx); initGraph(toolCtx); toolInit = null; };
+  toolInit = () => { initSim(toolCtx); initGraph(toolCtx); initPlan(planPageCtx); toolInit = null; };
   $('fitEsiModal').addEventListener('input', (e) => { if (e.target.id === 'fitEsiSearch') renderEsiList(); });
   $('fitEsiShipOnly').addEventListener('change', renderEsiList);
   $('fitStats').addEventListener('change', (e) => { if (e.target.matches('[data-val-src]')) { app.valuation.set(e.target.value); renderStats(); } });
@@ -129,6 +138,19 @@ export async function showSim(root, restored = false) {
   const preset = pendingSim;
   pendingSim = null;
   mountSim(root, preset, restored && !preset);
+}
+
+// 技能规划页（独立菜单，用装配数据里的技能前置关系）
+export async function showPlan(root, restored = false) {
+  if (!F.data && !root.dataset.ready) root.innerHTML = skTitle(16) + skCards(4) + skRows(6);
+  try {
+    await ensureData();
+  } catch (error) {
+    root.innerHTML = '<p class="text-muted kb-empty">装配数据加载失败：' + app.esc(error.message) + '</p>';
+    return;
+  }
+  toolInit?.();
+  mountPlan(root, restored);
 }
 
 async function ensureData() {
@@ -854,6 +876,7 @@ function renderFit() {
           <button class="btn btn-ghost fit-plan-btn" data-fit-kb title="这艘船最近阵亡时的常见装配">击杀记录装配</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-graph title="有效 DPS 随距离、目标速度、信号半径变化的曲线（类似 Pyfa 的图表）">伤害图表</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-sim title="打开「战场模拟」页：两方舰队按装配模拟交战">战场模拟</button>
+          <button class="btn btn-ghost fit-plan-btn" data-fit-skillplan title="按角色技能规划开这艘船、用好这套装配要练的技能">技能规划</button>
         </div>
         <div class="fit-action-row">
           <button class="btn btn-ghost" data-fit-new title="新建空装配">新建</button>
@@ -1129,6 +1152,7 @@ async function onMainClick(e) {
     return;
   }
   if ((x = el('[data-fit-sim]'))) { app.openSim(); return; }
+  if (el('[data-fit-skillplan]')) { queuePlan({ ship: F.fit.ship, fit: F.fit, label: F.fit.name ? `装配：${F.fit.name}` : '装配页当前装配' }); app.openPlan(); return; }
   if ((x = el('[data-fit-graph]'))) { openTool(openGraph); return; }
   if ((x = el('[data-fit-all]'))) { setAllStates(x.dataset.fitAll === 'on'); return; }
   if ((x = el('[data-fit-clear]'))) { clearModules(); return; }

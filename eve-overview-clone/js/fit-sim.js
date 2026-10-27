@@ -21,6 +21,14 @@ const DISTANCES = [2, 5, 10, 20, 30, 50, 70];
 const DURATIONS = [[120, '2 分钟'], [300, '5 分钟'], [600, '10 分钟']];
 const FOCUS = [['weak', '最脆优先'], ['dps', '输出优先'], ['spread', '分散']];
 const TRANS = [[0, '静止'], [25, '慢速'], [50, '环绕'], [100, '全速']];
+// 常见打法：一键设置交战距离、目标机动与分阶段
+const SCENES = [
+  ['brawl', '近身缠斗', { dist: 2, trans: 50, phase: false }, '2 km · 环绕'],
+  ['mid', '中距对射', { dist: 10, trans: 25, phase: false }, '10 km · 慢速'],
+  ['kite', '高速风筝', { dist: 20, trans: 100, phase: false }, '20 km · 全速'],
+  ['snipe', '远程狙击', { dist: 70, trans: 0, phase: false }, '70 km · 静止'],
+  ['close', '先远后近', { dist: 30, trans: 25, phase: true, dist2: 5, at: 30 }, '30 km → 30 秒后 5 km']
+];
 const SQUAD = 15;   // 集火时每 15 艘船共用一个目标（大舰队会同时打多个目标，避免几百艘船打一艘的过量伤害）
 const SIDES = ['A', 'B'];
 function sideDefaults() { return { skills: 'max', heat: false, bursts: [] }; }
@@ -350,6 +358,20 @@ export function simulate(sides, opt) {
   const maxHp = { A: totalHp(bySide.A) || 1, B: totalHp(bySide.B) || 1 };
   const timeline = [{ t: 0, A: bySide.A.length, B: bySide.B.length, hpA: 1, hpB: 1 }];
   const kills = [];
+  // 回放（只在主模拟里记录）：每秒每艘船三层 HP（0–200，0 = 阵亡）与当前目标
+  const rec = opt.record ? { units: units.map((u) => ({ side: u.side, ship: u.r.row.ship })), frames: [] } : null;
+  const index = rec && new Map(units.map((u, i) => [u, i]));
+  const snap = () => {
+    const hp = new Uint8Array(units.length * 3), tg = new Int16Array(units.length).fill(-1);
+    units.forEach((u, i) => {
+      if (!u.alive) return;
+      for (let l = 0; l < 3; l++) hp[i * 3 + l] = u.t.max[l] ? Math.round(u.hp[l] / u.t.max[l] * 200) : 0;
+      hp[i * 3 + 2] = Math.max(1, hp[i * 3 + 2]);
+      if (u.target?.alive) tg[i] = index.get(u.target);
+    });
+    rec.frames.push({ hp, tg });
+  };
+  if (rec) snap();
   // 命中比例缓存：攻击方装配 × 目标装配 × 网 / 标记倍数 × 距离
   const applyCache = new Map();
   const applied = (u, v, velMult, sigMult, dist) => {
@@ -534,11 +556,12 @@ export function simulate(sides, opt) {
       A: bySide.A.filter((u) => u.alive).length, B: bySide.B.filter((u) => u.alive).length,
       hpA: totalHp(bySide.A.filter((u) => u.alive)) / maxHp.A, hpB: totalHp(bySide.B.filter((u) => u.alive)) / maxHp.B
     });
+    if (rec) snap();
   }
   const last = timeline[timeline.length - 1];
   const winner = last.A && !last.B ? 'A' : last.B && !last.A ? 'B' : null;
   const lead = winner || (last.hpA - last.hpB > 0.05 ? 'A' : last.hpB - last.hpA > 0.05 ? 'B' : null);
-  return { t, timeline, kills, rows, winner, lead, tally, start: { A: bySide.A.length, B: bySide.B.length }, end: { A: last.A, B: last.B }, hp: { A: last.hpA, B: last.hpB } };
+  return { t, timeline, kills, rows, winner, lead, tally, rec, start: { A: bySide.A.length, B: bySide.B.length }, end: { A: last.A, B: last.B }, hp: { A: last.hpA, B: last.hpB } };
 }
 
 const mean = (r) => (r[0] + r[1] + r[2] + r[3]) / 4 || 1;
@@ -621,23 +644,143 @@ function insightsHtml(R) {
     ${anyOf('lockWait') ? line('锁定等待', (f) => f.lockWait, pct, false, '换目标后等待锁定的时间占比') : ''}
     ${isk ? line('出场价值', (f, s) => isk[s].field, ctx.formatISK, true) + line('损失 ISK', (f, s) => isk[s].lost, ctx.formatISK, false) : ''}
   </tbody></table>`;
-  // 提示：挑差距明显的几条
+  const list = tipsOf(R, F).slice(0, 5).map(([, s, x]) => `<li><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span><span>${ctx.esc(x)}</span></li>`).join('') || '<li>双方各项差距不大，胜负主要取决于数量和集火</li>';
+  return `<section class="sim-insight"><div class="sim-sec-head"><h4>胜负原因</h4></div>
+    <div class="sim-insight-body">${table}<ul class="sim-tips">${list}</ul></div></section>`;
+}
+// 提示：挑差距明显的几条（[分数, 哪一方, 文字]，分数高的在前）
+function tipsOf(R, F = { A: sideFacts(R, 'A'), B: sideFacts(R, 'B') }) {
+  const num = (v) => ctx.formatNumber(Math.round(v || 0));
   const tips = [];
   for (const s of SIDES) {
     const o = s === 'A' ? 'B' : 'A', f = F[s], g = F[o];
     const tip = (score, text) => tips.push([score, s, text]);
+    if (!f.paper && g.paper) tip(10, '没有输出（装配里没有武器，或装配没读到）');
     if (f.paper && g.paper && f.paper / g.paper >= 1.5) tip(f.paper / g.paper, `纸面 DPS 是 ${o} 方的 ${(f.paper / g.paper).toFixed(1)} 倍`);
     if (f.ehp && g.ehp && f.ehp / g.ehp >= 1.5) tip(f.ehp / g.ehp, `总 EHP 是 ${o} 方的 ${(f.ehp / g.ehp).toFixed(1)} 倍`);
-    if (f.app != null && f.app < 0.6) tip(3 - f.app * 2, `只有 ${pct(f.app)} 的输出打中了目标（射程或命中不足），可以试试换交战距离、弹药或目标机动设置`);
-    if (f.taken && f.reps / f.taken > 0.15) tip(1 + f.reps / f.taken * 3, `遥修抵消了 ${pct(f.reps / f.taken)} 的承伤`);
+    if (f.app != null && f.app < 0.6) tip(4 - f.app * 4, `只有 ${pct(f.app)} 的输出打中了目标（射程或命中不足），可以试试换交战距离、弹药或目标机动设置`);
+    if (f.taken && f.reps / f.taken > 0.15) tip(1 + f.reps / f.taken * 2, `遥修抵消了 ${pct(f.reps / f.taken)} 的承伤`);
     if (f.capped > 0.1) tip(1 + f.capped * 4, `有 ${pct(f.capped)} 的时间电容见底（${g.drained ? '被中和' : '装备耗电太大'}），耗电的武器和维修随之停摆`);
     if (f.jammed > 0.05) tip(1 + f.jammed * 4, `有 ${pct(f.jammed)} 的时间被 ECM 干扰，无法锁定和输出`);
     if (f.noRange > 0.05) tip(2 + f.noRange * 4, `锁定距离只有 ${num(f.lockRange / 1000)} km，有 ${pct(f.noRange)} 的时间够不到目标`);
   }
-  tips.sort((a, b) => b[0] - a[0]);
-  const list = tips.slice(0, 5).map(([, s, x]) => `<li><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span><span>${ctx.esc(x)}</span></li>`).join('') || '<li>双方各项差距不大，胜负主要取决于数量和集火</li>';
-  return `<section class="sim-insight"><div class="sim-sec-head"><h4>胜负原因</h4></div>
-    <div class="sim-insight-body">${table}<ul class="sim-tips">${list}</ul></div></section>`;
+  return tips.sort((a, b) => b[0] - a[0]);
+}
+
+// ---------- 伤害与抗性 ----------
+// 每方的伤害构成 vs 对方各层抗性（按 HP 加权平均）：对方主要靠哪一层承伤、那一层哪种伤害最弱
+const DMG_COLORS = ['em', 'th', 'ki', 'ex'];
+function sideProfile(R, s) {
+  const dmg = [0, 0, 0, 0], hp = [0, 0, 0], ehp = [0, 0, 0];
+  const res = [[0, 0, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]];
+  for (const r of R.rows) {
+    if (r.side !== s) continue;
+    const u = r.row.unit;
+    for (let k = 0; k < 4; k++) dmg[k] += u.types[k] * r.n;
+    for (let l = 0; l < 3; l++) {
+      hp[l] += u.max[l] * r.n;
+      ehp[l] += u.max[l] / mean(u.res[l]) * r.n;
+      for (let k = 0; k < 4; k++) res[l][k] += u.res[l][k] * u.max[l] * r.n;
+    }
+  }
+  return { dmg, ehp, res: res.map((x, l) => x.map((v) => (hp[l] ? v / hp[l] : 1))) };
+}
+function matchupHtml(R) {
+  const P = { A: sideProfile(R, 'A'), B: sideProfile(R, 'B') };
+  // res 里是抗性系数（1 − 抗性），越大越好打
+  const weakest = (a) => a.indexOf(Math.max(...a));
+  const block = (s) => {
+    const o = s === 'A' ? 'B' : 'A', me = P[s], en = P[o];
+    const head = `<h5><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span><span>打</span><span class="sim-badge${o === 'B' ? ' sim-side-b' : ''}">${o} 方</span></h5>`;
+    const tot = me.dmg.reduce((t, x) => t + x, 0);
+    if (!tot) return `<div class="sim-mu-side">${head}<p class="sim-hint">这一方没有输出</p></div>`;
+    const share = me.dmg.map((x) => x / tot);
+    const ehpTot = en.ehp.reduce((t, x) => t + x, 0) || 1;
+    const layer = en.ehp.indexOf(Math.max(...en.ehp));
+    const eff = share.reduce((t, x, k) => t + x * en.res[layer][k], 0);
+    const best = weakest(en.res[layer]);
+    const gain = en.res[layer][best] / (eff || 1) - 1;
+    const rows = DAMAGE_NAMES.map((n, k) => `<tr><th><i class="sim-dmg ${DMG_COLORS[k]}"></i>${n}</th>
+      <td><div class="sim-mu-bar"><i class="${DMG_COLORS[k]}" style="width:${(share[k] * 100).toFixed(1)}%"></i></div><span>${pct(share[k])}</span></td>
+      ${[0, 1, 2].map((l) => `<td class="num${l === layer ? ' main' : ''}${k === weakest(en.res[l]) && en.ehp[l] ? ' hole' : ''}">${en.ehp[l] ? pct(1 - en.res[l][k]) : '—'}</td>`).join('')}</tr>`).join('');
+    const tip = gain > 0.08 && share[best] < 0.6
+      ? `<p class="sim-mu-tip">${ctx.esc(`换成更多${DAMAGE_NAMES[best]}伤害（对方${LAYER_NAMES[layer]}这一类抗性只有 ${pct(1 - en.res[layer][best])}），有效伤害最多可提高 ${pct(gain)}`)}</p>`
+      : '<p class="sim-mu-ok">伤害类型已经比较对路</p>';
+    return `<div class="sim-mu-side">${head}
+      <p class="sim-mu-sum">${ctx.esc(`对方主要靠${LAYER_NAMES[layer]}承伤（占 EHP ${pct(en.ehp[layer] / ehpTot)}），本方伤害打在这一层的有效比例 ${pct(eff)}`)}</p>
+      <table class="sim-mu"><thead><tr><th>伤害类型</th><th>本方输出占比</th>${LAYER_NAMES.map((l, i) => `<th class="num${i === layer ? ' main' : ''}">对方${l}抗性</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
+      ${tip}</div>`;
+  };
+  return `<section class="sim-matchup"><div class="sim-sec-head"><h4>伤害与抗性</h4><span class="sim-hint">高亮列为对方主要承伤的一层，标红为那一层最弱的抗性</span></div>
+    <div class="sim-mu-cols">${block('A')}${block('B')}</div></section>`;
+}
+
+// ---------- 战场回放 ----------
+// 拖动时间轴或播放：每艘船一个小格（护盾 / 装甲 / 结构三条血条），阵亡变灰，正在被集火的描边
+const RP = { t: 0, pos: 0, playing: false, speed: 5, timer: 0 };
+let plotX = null;   // 走势图的时间 → 横坐标（回放位置线用）
+function replayHtml(R) {
+  if (!R.rec) return '';
+  const tiles = (s) => R.rec.units.map((u, i) => (u.side === s ? `<span class="sim-tile" data-i="${i}" title="${ctx.esc(ctx.data.types.get(u.ship)?.name || '')}"><img src="${IMG(u.ship)}" alt="" width="26" height="26" loading="lazy"><i class="sh"></i><i class="ar"></i><i class="hu"></i></span>` : '')).join('');
+  const many = R.rec.units.length > 240;
+  return `<section class="sim-replay${many ? ' is-many' : ''}">
+    <div class="sim-sec-head"><h4>战场回放</h4>
+      <div class="sim-rp-ctl">
+        <button type="button" class="btn btn-ghost btn-sm" data-sim-play>${RP.playing ? '暂停' : '播放'}</button>
+        <div class="segmented" role="group" aria-label="播放速度">${[1, 5, 20].map((v) => `<button type="button" data-sim-speed="${v}" class="${RP.speed === v ? 'active' : ''}">${v}×</button>`).join('')}</div>
+      </div></div>
+    <div class="sim-rp-bar"><input type="range" min="0" max="${R.t}" step="1" value="${Math.min(RP.t, R.t)}" data-sim-rp aria-label="回放时间"><span class="sim-rp-time" id="simRpTime"></span></div>
+    <div class="sim-rp-sides">
+      <div class="sim-rp-side side-a"><h5><span class="sim-badge">A 方</span><span id="simRpA"></span></h5><div class="sim-tiles">${tiles('A')}</div></div>
+      <div class="sim-rp-side side-b"><h5><span class="sim-badge sim-side-b">B 方</span><span id="simRpB"></span></h5><div class="sim-tiles">${tiles('B')}</div></div>
+    </div>
+    <div class="sim-rp-log" id="simRpLog"></div>
+    <p class="sim-hint">每格一艘船，三条血条依次为护盾、装甲、结构；描边表示这一秒正被对方集火。点走势图也可以跳到对应时间。</p>
+  </section>`;
+}
+function updateReplay(t) {
+  const R = S.result;
+  const box = root?.querySelector('.sim-replay');
+  if (!R?.rec || !box) return;
+  RP.pos = Math.max(0, Math.min(R.t, t));
+  RP.t = Math.floor(RP.pos);
+  const f = R.rec.frames[Math.min(RP.t, R.rec.frames.length - 1)];
+  const shot = new Set();
+  for (const x of f.tg) if (x >= 0) shot.add(x);
+  const alive = { A: 0, B: 0 };
+  box.querySelectorAll('.sim-tile').forEach((el) => {
+    const i = Number(el.dataset.i), dead = !f.hp[i * 3 + 2];
+    if (!dead) alive[R.rec.units[i].side] += 1;
+    el.classList.toggle('dead', dead);
+    el.classList.toggle('shot', !dead && shot.has(i));
+    el.style.setProperty('--sh', f.hp[i * 3] / 2 + '%');
+    el.style.setProperty('--ar', f.hp[i * 3 + 1] / 2 + '%');
+    el.style.setProperty('--hu', f.hp[i * 3 + 2] / 2 + '%');
+  });
+  const range = box.querySelector('[data-sim-rp]');
+  if (range && Number(range.value) !== RP.t) range.value = RP.t;
+  $('simRpTime').textContent = `${fmtSec(RP.t)} / ${fmtSec(R.t)}`;
+  $('simRpA').textContent = `存活 ${alive.A} / ${R.start.A}`;
+  $('simRpB').textContent = `存活 ${alive.B} / ${R.start.B}`;
+  const recent = R.kills.filter((k) => k.t <= RP.t && k.t > RP.t - 10).slice(-8).reverse();
+  $('simRpLog').innerHTML = recent.length ? `<small>最近 10 秒阵亡</small>${recent.map((k) => `<span class="sim-kill sim-kill-${k.side.toLowerCase()}"><small>${fmtSec(k.t)}</small><img src="${IMG(k.ship)}" alt="" width="20" height="20" loading="lazy">${ctx.esc(ctx.data.types.get(k.ship)?.name || '')}</span>`).join('')}` : '';
+  // 走势图上的回放位置
+  const ln = root.querySelector('#simPlot .sim-rp-ln');
+  if (ln && plotX) { const x = plotX(RP.t); ln.setAttribute('x1', x); ln.setAttribute('x2', x); }
+}
+function playReplay(on = !RP.playing) {
+  const R = S.result;
+  RP.playing = on && Boolean(R?.rec);
+  clearInterval(RP.timer);
+  const btn = root?.querySelector('[data-sim-play]');
+  if (btn) btn.textContent = RP.playing ? '暂停' : '播放';
+  if (!RP.playing) return;
+  if (RP.t >= R.t) RP.pos = 0;
+  RP.timer = setInterval(() => {
+    if (!root?.offsetParent || S.result !== R) { playReplay(false); return; }
+    updateReplay(RP.pos + RP.speed / 5);
+    if (RP.t >= R.t) playReplay(false);
+  }, 200);
 }
 
 // ---------- 参数扫描 / 至少需要几艘 ----------
@@ -809,17 +952,27 @@ function render() {
       </div>
     </header>
     <div class="sim-opts">
-      <label class="sim-opt"><span>交战距离</span><select class="pi-input" data-sim-opt-select="dist">${distOpts(S.opt.dist)}</select></label>
-      <label class="pi-check" title="开打一段时间后改到另一个距离（如先在远处对射，再贴近）"><input type="checkbox" data-sim-flag="phase"${S.opt.phase ? ' checked' : ''}><span>分阶段</span></label>
-      ${S.opt.phase ? `<label class="sim-opt sim-phase"><span>第</span><input type="number" class="pi-input" min="5" max="590" step="5" value="${S.opt.at}" data-sim-opt-num="at" aria-label="切换时间（秒）"><span>秒起改为</span><select class="pi-input" data-sim-opt-select="dist2">${distOpts(S.opt.dist2)}</select></label>` : ''}
-      <div class="sim-opt"><span>目标机动</span>${seg('trans', TRANS)}</div>
-      <div class="sim-opt"><span>集火</span>${seg('focus', FOCUS)}</div>
-      <label class="sim-opt"><span>最长时间</span><select class="pi-input" data-sim-opt-select="max">${DURATIONS.map(([v, l]) => `<option value="${v}"${S.opt.max === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
-      <label class="pi-check"><input type="checkbox" data-sim-flag="logi"${S.opt.logi ? ' checked' : ''}><span>后勤遥修</span></label>
-      <label class="pi-check" title="网子、标记、阻尼（扫描分辨率与锁定距离）、ECM（按干扰强度与传感器强度算概率）"><input type="checkbox" data-sim-flag="ewar"${S.opt.ewar ? ' checked' : ''}><span>电子战</span></label>
-      <label class="pi-check" title="逐秒结算电容：耗电装备在电容不够时按比例运转，中和与吸电会扣目标的电容"><input type="checkbox" data-sim-flag="cap"${S.opt.cap ? ' checked' : ''}><span>电容 / 中和</span></label>
-      <label class="pi-check" title="开启时速度与信号半径都按推进器开着计算（舰队对射时一般不开）"><input type="checkbox" data-sim-flag="prop"${S.opt.prop ? ' checked' : ''}><span>推进器开启</span></label>
-      <div class="sim-opt" id="simBulk"></div>
+      <div class="sim-opt-row">
+        <span class="sim-opt-label">常见打法</span>
+        <div class="sim-scenes">${SCENES.map(([k, l, o, d]) => `<button type="button" class="sim-scene${Object.entries(o).every(([kk, v]) => S.opt[kk] === v) ? ' active' : ''}" data-sim-scene="${k}"><b>${l}</b><small>${d}</small></button>`).join('')}</div>
+      </div>
+      <div class="sim-opt-row">
+        <span class="sim-opt-label">交战</span>
+        <label class="sim-opt"><span>距离</span><select class="pi-input" data-sim-opt-select="dist">${distOpts(S.opt.dist)}</select></label>
+        <label class="pi-check" title="开打一段时间后改到另一个距离（如先在远处对射，再贴近）"><input type="checkbox" data-sim-flag="phase"${S.opt.phase ? ' checked' : ''}><span>分阶段</span></label>
+        ${S.opt.phase ? `<label class="sim-opt sim-phase"><span>第</span><input type="number" class="pi-input" min="5" max="590" step="5" value="${S.opt.at}" data-sim-opt-num="at" aria-label="切换时间（秒）"><span>秒起改为</span><select class="pi-input" data-sim-opt-select="dist2">${distOpts(S.opt.dist2)}</select></label>` : ''}
+        <div class="sim-opt" title="目标横向速度 = 最大速度 × 这个比例；越快越难打中（大口径武器尤其明显）"><span>目标机动</span>${seg('trans', TRANS)}</div>
+      </div>
+      <div class="sim-opt-row">
+        <span class="sim-opt-label">规则</span>
+        <div class="sim-opt"><span>集火</span>${seg('focus', FOCUS)}</div>
+        <label class="sim-opt"><span>最长</span><select class="pi-input" data-sim-opt-select="max">${DURATIONS.map(([v, l]) => `<option value="${v}"${S.opt.max === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        <label class="pi-check"><input type="checkbox" data-sim-flag="logi"${S.opt.logi ? ' checked' : ''}><span>后勤遥修</span></label>
+        <label class="pi-check" title="网子、标记、阻尼（扫描分辨率与锁定距离）、ECM（按干扰强度与传感器强度算概率）"><input type="checkbox" data-sim-flag="ewar"${S.opt.ewar ? ' checked' : ''}><span>电子战</span></label>
+        <label class="pi-check" title="逐秒结算电容：耗电装备在电容不够时按比例运转，中和与吸电会扣目标的电容"><input type="checkbox" data-sim-flag="cap"${S.opt.cap ? ' checked' : ''}><span>电容 / 中和</span></label>
+        <label class="pi-check" title="开启时速度与信号半径都按推进器开着计算（舰队对射时一般不开）"><input type="checkbox" data-sim-flag="prop"${S.opt.prop ? ' checked' : ''}><span>推进器开启</span></label>
+      </div>
+      <div class="sim-opt-row" id="simBulkRow" hidden><span class="sim-opt-label">装配</span><div class="sim-opt" id="simBulk"></div></div>
       <span class="sim-status" id="simStatus" role="status"></span>
     </div>
     <div id="simVerdict"></div>
@@ -933,7 +1086,8 @@ function renderSides() {
   if (bulk) {
     const any = SIDES.some((s) => S.sides[s].some(hasBattle));
     bulk.hidden = !any;
-    bulk.innerHTML = any ? '<span>装配来源</span><div class="segmented" role="group"><button type="button" data-sim-src="battle">全部用本场阵亡装配</button><button type="button" data-sim-src="kb">全部用最近常见装配</button></div>' : '';
+    root.querySelector('#simBulkRow').hidden = !any;
+    bulk.innerHTML = any ? '<div class="segmented" role="group"><button type="button" data-sim-src="battle">全部用本场阵亡装配</button><button type="button" data-sim-src="kb">全部用最近常见装配</button></div>' : '';
   }
 }
 
@@ -1056,6 +1210,19 @@ function onClick(e) {
   if (el('[data-sim-undo]')) { undoClear(); return; }
   if (el('[data-sim-share]')) { copyShare(); return; }
   if (el('[data-sim-sweep]')) { runSweep(); return; }
+  if (el('[data-sim-play]')) { playReplay(); return; }
+  if ((x = el('[data-sim-speed]'))) { RP.speed = Number(x.dataset.simSpeed); x.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === x)); return; }
+  if ((x = el('[data-sim-scene]'))) {
+    const sc = SCENES.find(([k]) => k === x.dataset.simScene);
+    if (!sc) return;
+    Object.assign(S.opt, sc[2]);
+    save();
+    const sweep = S.sweep;
+    render();
+    S.sweep = sweep;
+    run();
+    return;
+  }
   if (el('[data-sim-base]')) { setBaseline(); return; }
   if (el('[data-sim-base-clear]')) { S.base = null; renderResult(); return; }
   if ((x = el('[data-sim-cell]'))) {
@@ -1220,6 +1387,7 @@ function onChange(e) {
 
 function onInput(e) {
   const t = e.target;
+  if (t.matches('[data-sim-rp]')) { playReplay(false); updateReplay(Number(t.value)); return; }
   if (!t.dataset.simSearch) return;
   const side = t.dataset.simSearch;
   const box = root.querySelector(`[data-sim-suggest="${side}"]`);
@@ -1268,13 +1436,14 @@ function onFocusOut(e) {
 
 function run() {
   if (!root?.querySelector('#simSides')) return;
+  root.querySelectorAll('[data-sim-scene]').forEach((b) => b.classList.toggle('active', Object.entries(SCENES.find(([k]) => k === b.dataset.simScene)[2]).every(([k, v]) => S.opt[k] === v)));
   const all = SIDES.flatMap((s) => S.sides[s]);
   const waiting = all.filter((r) => !r.unit && (r.status === 'loading' || r.status === 'idle'));
   if (!S.sides.A.length || !S.sides.B.length || !SIDES.every((s) => S.sides[s].some((r) => r.unit))) {
     S.result = null;
   } else {
     const t0 = performance.now();
-    S.result = simulate(S.sides, S.opt);
+    S.result = simulate(S.sides, { ...S.opt, record: true });
     S.result.skipped = waiting.reduce((t, r) => t + r.count, 0);
     S.result.ms = performance.now() - t0;
   }
@@ -1335,10 +1504,12 @@ function renderVerdict() {
       ${isk ? `<small><span>损失</span> ${ctx.formatISK(isk[s].lost)} ISK${isk[s].eff != null ? ` · <span>效率</span> ${pct(isk[s].eff)}` : ''}</small>` : ''}</div>`;
   };
   // ISK 交换比：A 方击毁 : A 方损失
+  const why = tipsOf(R)[0];
   const ratio = isk && isk.A.lost + isk.B.lost ? (isk.A.lost ? `ISK 交换比 1 : ${(isk.B.lost / isk.A.lost).toFixed(2)}` : 'A 方零损失') : '';
   box.innerHTML = `<section class="sim-verdict${winner ? ' sim-win-' + winner.toLowerCase() : ''}">
     ${side('A')}
     <div class="sim-v-mid"><b>${verdict}</b><span>${sub}</span>${ratio ? `<span class="sim-ratio" title="A 方损失 ISK : B 方损失 ISK（全服均价）">${ratio}</span>` : ''}${skipped}
+      ${why ? `<span class="sim-why"><span class="sim-badge${why[1] === 'B' ? ' sim-side-b' : ''}">${why[1]} 方</span><span>${ctx.esc(why[2])}</span></span>` : ''}
       <button type="button" class="link-btn" data-sim-base title="记下这次结果，改完舰船 / 装配 / 设置后对比前后差异">${S.base ? '更新对照' : '设为对照'}</button></div>
     ${side('B')}
   </section>${baselineHtml(R)}`;
@@ -1380,10 +1551,13 @@ function renderResult() {
       <div class="kb-br-plot" id="simPlot"><svg></svg><div class="kb-br-tip" id="simTip" hidden></div></div>
     </div>
     ${firsts.length ? `<div class="sim-kills"><h5>阵亡顺序</h5><div>${firsts.map((k) => `<span class="sim-kill sim-kill-${k.side.toLowerCase()}"><small>${fmtSec(k.t)}</small><img src="${IMG(k.ship)}" alt="" width="20" height="20" loading="lazy">${ctx.esc(ctx.data.types.get(k.ship)?.name || '')}</span>`).join('')}${R.kills.length > firsts.length ? `<span class="sim-more">…共 ${R.kills.length} 艘</span>` : ''}</div></div>` : ''}
+    ${replayHtml(R)}
     ${insightsHtml(R)}
+    ${matchupHtml(R)}
     <div class="sim-res-cols">${table('A')}${table('B')}</div>
   </section>`;
   drawChart();
+  if (R.rec) updateReplay(RP.playing ? RP.pos : Math.min(RP.pos, R.t) || R.t);
   renderTactics();
 }
 
@@ -1403,6 +1577,7 @@ function drawChart() {
   const ys = hp ? 0.25 : [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000].find((v) => v * 4 >= top * 1.04) || Math.ceil(top / 4);
   const max = ys * 4;
   const x = (t) => L + t / tMax * iw;
+  plotX = x;
   const y = (v) => T + ih - v / max * ih;
   const val = (p, s) => (hp ? p['hp' + s] : p[s]);
   const fmtT = (t) => (t >= 60 ? `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}` : `${t}s`);
@@ -1429,6 +1604,7 @@ function drawChart() {
     <path class="ln a" d="${line('A')}"/><path class="ln b" d="${line('B')}"/>
     ${base ? `<path class="ln a sim-ln-base" d="${line('A', base)}"/><path class="ln b sim-ln-base" d="${line('B', base)}"/>` : ''}
     ${S.opt.phase && S.opt.at < tMax ? `<line class="sim-phase-ln" x1="${x(S.opt.at)}" x2="${x(S.opt.at)}" y1="${T}" y2="${T + ih}"/><text class="ax sim-phase-tx" x="${x(S.opt.at) + 4}" y="${T + 10}">→ ${S.opt.dist2} km</text>` : ''}
+    ${R.rec ? `<line class="sim-rp-ln" x1="${x(RP.t)}" x2="${x(RP.t)}" y1="${T}" y2="${T + ih}"/>` : ''}
     <line class="cross" x1="0" x2="0" y1="${T}" y2="${T + ih}" visibility="hidden"/>`;
   const tip = $('simTip'), cross = svg.querySelector('.cross'), hit = svg.querySelector('.hit');
   hit.onmousemove = (e) => {
@@ -1445,6 +1621,12 @@ function drawChart() {
     tip.style.top = T + 4 + 'px';
   };
   hit.onmouseleave = () => { tip.hidden = true; cross.setAttribute('visibility', 'hidden'); };
+  // 点图：回放跳到这一秒
+  hit.onclick = (e) => {
+    const r = svg.getBoundingClientRect();
+    playReplay(false);
+    updateReplay(Math.min(R.t, Math.max(0, (e.clientX - r.left - L) / iw * tMax)));
+  };
 }
 
 // ---------- 装配详情 / 更换 ----------

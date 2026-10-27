@@ -139,6 +139,7 @@ function draw(box, own) {
       </div>
       <div class="segmented" role="group">${[['all', '全部'], ['trained', '已学'], ['partial', '未满级'], ['untrained', '未学']].map(([k, l]) => `<button data-sk-filter="${k}" class="${S.filter === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       <button class="link-btn" data-sk-all="1">全部展开</button><button class="link-btn" data-sk-all="0">全部收起</button>
+      <a class="link-btn sk-plan-link" href="#plan" title="按已学技能规划想开的船和发展方向">技能规划 ›</a>
       <span class="skl-legend"><i class="on"></i>已学<i class="limited"></i>受克隆限制<i class="queued"></i>队列中</span>
     </div>
     <div class="sk-groups">${groupHtml}</div>`;

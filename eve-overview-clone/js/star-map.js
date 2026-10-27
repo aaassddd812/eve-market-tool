@@ -7,7 +7,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
-import * as JP from './jump-planner.js?v=v15';
+import * as JP from './jump-planner.js?v=v16';
 import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s4';
 
 let app;               // 主程序提供的工具函数
@@ -1739,7 +1739,7 @@ async function fetchBridges(force = false) {
     syncBridgeUi();
     const auth = { headers: { Authorization: 'Bearer ' + token.access_token } };
     const search = async (term) => {
-      const r = await fetch(`${SERVER.esi}/characters/${token.character_id}/search/?categories=structure&search=${encodeURIComponent(term)}&datasource=${SERVER.datasource}`, auth).catch(() => null);
+      const r = await fetch(`${SERVER.esi}/characters/${token.character_id}/search/?categories=structure&search=${encodeURIComponent(term)}&datasource=${SERVER.datasource}`, { ...auth, signal: AbortSignal.timeout(20000) }).catch(() => null);
       return r?.ok ? ((await r.json().catch(() => ({}))).structure || []) : null;
     };
     let ids = await search(' » ');
@@ -1757,7 +1757,7 @@ async function fetchBridges(force = false) {
         const id = queue.shift();
         const wait = pauseUntil - Date.now();
         if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-        const r = await fetch(`${SERVER.esi}/universe/structures/${id}/?datasource=${SERVER.datasource}`, auth).catch(() => null);
+        const r = await fetch(`${SERVER.esi}/universe/structures/${id}/?datasource=${SERVER.datasource}`, { ...auth, signal: AbortSignal.timeout(20000) }).catch(() => null);
         const remain = r?.headers.get('x-esi-error-limit-remain');
         if (remain != null && Number(remain) < 20) pauseUntil = Date.now() + (Number(r.headers.get('x-esi-error-limit-reset')) || 60) * 1000;
         if (!r?.ok) continue;
@@ -2463,6 +2463,7 @@ function syncJumpOptions() {
     (dock === 'npc' && !JP.canDockNpc(ship) ? '<br><span class="warn">超级航母和泰坦不能停靠 NPC 空间站，请改选「含玩家建筑」</span>' : '') +
     (dock === 'prefer' && !bound ? '<br>未绑定 ESI，只按 NPC 空间站判断是否可停靠' : '') +
     (dock === 'prefer' && !JP.canDockNpc(ship) && !bound ? '<br><span class="warn">超级航母和泰坦不能停靠 NPC 空间站，绑定 ESI 后才能按玩家建筑判断</span>' : '') +
+    (useStructures(dock) && J.structures?.privatePartial ? '<br><span class="warn">军团 / 联盟内部建筑没有读完（已跳过），可能漏掉一些可停靠的星系；点「重新读取」再试</span>' : '') +
     (useStructures(dock) && J.structures && !J.structures.privateSearched ? '<br><span class="warn">当前授权没有建筑搜索权限，只能从订单、合同、资产、克隆位置找到内部建筑；重新绑定 ESI 后可找到全部有停靠权限的建筑</span>' : '') +
     (useStructures(dock) && J.structures ? `<br>已读取玩家建筑 ${app.formatNumber(J.structures.list.length + (J.structures.private?.length || 0))} 个（其中军团 / 联盟内部 ${app.formatNumber(J.structures.private?.length || 0)} 个，仅限你有停靠权限的）· <button class="link-btn" data-structures-refresh>重新读取</button>` : '');
 }
@@ -2471,23 +2472,39 @@ function syncJumpOptions() {
 const DOCK_NOTE_TYPES = [35832, 35825, 35835, 35836, 35833, 35826, 35827, 35834];
 
 // 读取玩家建筑（绑定 ESI 后可用；公开部分读一次后缓存 24 小时，另含你有停靠权限的军团/联盟内部建筑）
-async function ensureStructures(force = false) {
-  if (J.structures && !force) return J.structures;
+// 同一时间只读一次（改设置会重新规划，不能并发重复读取）；查找内部建筑可能要几分钟，进度里可「跳过」，先按已读到的建筑规划
+let structuresLoading = null, structuresAbort = null;
+function ensureStructures(force = false) {
+  if (J.structures && !force) return Promise.resolve(J.structures);
+  if (structuresLoading) return structuresLoading;
+  structuresLoading = loadStructures(force).finally(() => { structuresLoading = null; structuresAbort = null; });
+  return structuresLoading;
+}
+async function loadStructures(force) {
   if (force) { try { localStorage.removeItem(serverKey('eve-public-structures-v1')); } catch { /* 忽略 */ } }
   const token = await app.getEsiToken();
   if (JP.hasStructureScope(token) === false) throw new Error('当前 ESI 授权不包含读取玩家建筑（esi-universe.read_structures.v1），请重新绑定 ESI');
   const box = $('routeResult');
-  J.structures = await JP.loadPublicStructures(app.getEsiToken, (done, total, phase) => {
-    if (phase === 'private') box.innerHTML = `<p class="legend-empty">正在查找你有停靠权限的军团 / 联盟建筑 ${done} / ${total}…</p>`;
+  if (!box.dataset.skipBound) {
+    box.dataset.skipBound = '1';
+    box.addEventListener('click', (e) => { if (e.target.closest('[data-structures-skip]')) structuresAbort?.abort(); });
+  }
+  structuresAbort = new AbortController();
+  const skip = '<button class="link-btn" data-structures-skip>跳过，先按已读到的建筑规划</button>';
+  const result = await JP.loadPublicStructures(app.getEsiToken, (done, total, phase) => {
+    if (phase === 'private') box.innerHTML = `<p class="legend-empty">正在查找你有停靠权限的军团 / 联盟建筑 ${done} / ${total}… ${skip}</p>`;
+    else if (phase === 'detail') { if (done % 10 === 0 || done === total) box.innerHTML = `<p class="legend-empty">正在读取军团 / 联盟建筑详情 ${done} / ${total}… ${skip}</p>`; }
     else if (done % 20 === 0 || done === total) box.innerHTML = `<p class="legend-empty">正在读取玩家建筑 ${done} / ${total}（首次读取，之后缓存 24 小时）…</p>`;
-  });
+  }, { signal: structuresAbort.signal });
+  J.structures = result;
   J.structBySys = new Map();
-  for (const st of [...J.structures.list, ...(J.structures.private || [])]) {
+  for (const st of [...result.list, ...(result.private || [])]) {
     if (!J.structBySys.has(st.system)) J.structBySys.set(st.system, []);
     J.structBySys.get(st.system).push(st);
   }
+  box.innerHTML = '<p class="legend-empty">正在规划跳跃路线…</p>';
   syncJumpOptions();
-  return J.structures;
+  return result;
 }
 
 // 是否按玩家建筑判断停靠：「必须可停靠」或「优先可停靠」（需已绑定 ESI）

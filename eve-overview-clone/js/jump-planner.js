@@ -37,6 +37,8 @@ export const STRUCTURE_SEARCH_SCOPE = 'esi-search.search_structures.v1';
 const SEARCH_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('');
 const SEARCH_CAP = 500;                   // ESI 搜索每个分类最多返回的条数
 const PRIVATE_VERSION = 2;                // 私有建筑发现逻辑版本，变化后自动重新发现
+const SEARCH_MAX = 240;                   // 建筑搜索最多请求数（结果满 500 条时按前缀细分，大联盟可能细分出上万个请求）
+const FETCH_TIMEOUT = 20000;              // 单个 ESI 请求超时：CCP 偶尔不返回，不能让整个读取一直等下去
 
 // ---------- 停靠规则 ----------
 // 舰船停靠等级：战略货舰虽需旗舰操作技能，但不算旗舰，可停靠中型建筑
@@ -99,8 +101,31 @@ function shareToServer(result) {
   } catch { /* 忽略 */ }
 }
 
-async function fetchStructureInfo(id, token) {
-  const r = await fetch(`${ESI_BASE}/universe/structures/${id}/?${DS}`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
+// 带超时（及外部取消）的 fetch；同时遵守 ESI 错误限额：剩余额度过低时所有请求暂停到重置
+let pauseUntil = 0;
+async function esiGet(url, token, signal) {
+  const wait = pauseUntil - Date.now();
+  if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  if (signal?.aborted) return null;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT);
+  const stop = () => ctl.abort();
+  signal?.addEventListener('abort', stop, { once: true });
+  try {
+    const r = await fetch(url, { headers: { Authorization: 'Bearer ' + token.access_token }, signal: ctl.signal });
+    const remain = r.headers.get('x-esi-error-limit-remain');
+    if (remain !== null && Number(remain) < 20) pauseUntil = Date.now() + (Number(r.headers.get('x-esi-error-limit-reset')) || 60) * 1000;
+    return r;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', stop);
+  }
+}
+
+async function fetchStructureInfo(id, token, signal) {
+  const r = await esiGet(`${ESI_BASE}/universe/structures/${id}/?${DS}`, token, signal);
   if (!r?.ok) return null;                          // 403 = 没有停靠权限，跳过
   const info = await r.json().catch(() => null);
   if (!info || !STRUCTURES[info.type_id]) return null;
@@ -113,23 +138,27 @@ async function fetchStructureInfo(id, token) {
  * 2. 无搜索权限时从市场订单、合同起讫位置和当前停靠位置兜底（这些 scope 都是绑定即有的）。
  * 搜索失败、没有权限或令牌不支持都不会中断，只是结果少一些。
  */
-async function discoverPrivateStructures(getToken, knownIds, onProgress = () => {}) {
+async function discoverPrivateStructures(getToken, knownIds, onProgress = () => {}, signal = null) {
   const token = await getToken();
   const candidates = new Set();
   const add = (id) => { if (id >= 1e12 && !knownIds.has(id)) candidates.add(id); };
   const searched = hasStructureSearchScope(token);
   if (searched) {
     const queue = SEARCH_CHARS.map((c) => c + ' - ');
-    let done = 0;
+    let done = 0, sent = queue.length;
     async function searchWorker() {
-      while (queue.length) {
+      while (queue.length && !signal?.aborted) {
         const term = queue.shift();
-        const r = await fetch(`${ESI_BASE}/characters/${token.character_id}/search/?categories=structure&search=${encodeURIComponent(term)}&${DS}`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
+        const r = await esiGet(`${ESI_BASE}/characters/${token.character_id}/search/?categories=structure&search=${encodeURIComponent(term)}&${DS}`, token, signal);
         if (r?.ok) {
           const ids = (await r.json().catch(() => ({}))).structure || [];
           ids.forEach(add);
-          // 结果达到上限：可能有遗漏，按前一个字符继续细分（最多细分到 3 个字符的前缀）
-          if (ids.length >= SEARCH_CAP && term.length < 7) queue.push(...SEARCH_CHARS.map((c) => c + term));
+          // 结果达到上限：可能有遗漏，按前一个字符继续细分（最多细分到 3 个字符的前缀，总请求数有上限）
+          if (ids.length >= SEARCH_CAP && term.length < 7 && sent < SEARCH_MAX) {
+            const more = SEARCH_CHARS.map((c) => c + term).slice(0, SEARCH_MAX - sent);
+            sent += more.length;
+            queue.push(...more);
+          }
         }
         onProgress(++done, done + queue.length);
         await new Promise((res) => setTimeout(res, 50));
@@ -139,10 +168,9 @@ async function discoverPrivateStructures(getToken, knownIds, onProgress = () => 
   }
   // 兜底与补充：订单、合同、资产、克隆、工业任务所在的建筑，以及当前停靠位置
   try {
-    const auth = { headers: { Authorization: 'Bearer ' + token.access_token } };
     const cid = token.character_id;
-    const get = (path, fallback) => fetch(`${ESI_BASE}/characters/${cid}/${path}${path.includes('?') ? '&' : '?'}${DS}`, auth)
-      .then((r) => (r.ok ? r.json() : fallback)).catch(() => fallback);
+    const get = (path, fallback) => (signal?.aborted ? Promise.resolve(fallback) : esiGet(`${ESI_BASE}/characters/${cid}/${path}${path.includes('?') ? '&' : '?'}${DS}`, token, signal)
+      .then((r) => (r?.ok ? r.json() : fallback)).catch(() => fallback));
     const [orders, contracts, location, clones, jobs, assets] = await Promise.all([
       get('orders/', []), get('contracts/', []), get('location/', {}), get('clones/', {}), get('industry/jobs/', []), get('assets/?page=1', [])
     ]);
@@ -158,24 +186,27 @@ async function discoverPrivateStructures(getToken, knownIds, onProgress = () => 
       assets.forEach((a) => { if (a.location_flag === 'Hangar' && !itemIds.has(a.location_id)) add(a.location_id); });
     }
   } catch { /* 兜底失败不影响主流程 */ }
+  // 逐个读详情（显示进度；取消时保留已读到的）
   const extra = [];
   const ids = [...candidates];
-  let cursor = 0;
+  let cursor = 0, done = 0;
   async function detailWorker() {
-    while (cursor < ids.length) {
+    while (cursor < ids.length && !signal?.aborted) {
       const id = ids[cursor++];
-      const st = await fetchStructureInfo(id, token);
+      const st = await fetchStructureInfo(id, token, signal);
       if (st) extra.push(st);
+      onProgress(++done, ids.length, 'detail');
     }
   }
-  await Promise.all(Array.from({ length: 4 }, detailWorker));
-  return { list: extra, searched };
+  await Promise.all(Array.from({ length: 8 }, detailWorker));
+  return { list: extra, searched, partial: Boolean(signal?.aborted) };
 }
 
 // 私有建筑结果写入缓存对象（带版本与是否使用了建筑搜索，授权变化后会自动重新发现）
-async function attachPrivate(target, getToken, onProgress) {
-  const found = await discoverPrivateStructures(getToken, new Set(target.list.map((s) => s.id)), onProgress);
+async function attachPrivate(target, getToken, onProgress, signal) {
+  const found = await discoverPrivateStructures(getToken, new Set(target.list.map((s) => s.id)), onProgress, signal);
   target.private = found.list;
+  target.privatePartial = found.partial;
   target.privateSearched = found.searched;
   target.privateVersion = PRIVATE_VERSION;
 }
@@ -187,14 +218,15 @@ async function attachPrivate(target, getToken, onProgress) {
  * 遵守 ESI 错误限额：剩余额度过低时暂停到重置，避免被临时封禁。结果在本地缓存 24 小时，
  * 公开部分回传服务器，之后的浏览器秒读。
  */
-export async function loadPublicStructures(getToken, onProgress = () => {}) {
+// options.signal：取消后跳过还没读完的内部建筑（保留已读到的），公开部分照常返回
+export async function loadPublicStructures(getToken, onProgress = () => {}, { signal = null } = {}) {
   const hit = cachedStructures();
   if (hit) {
     // 公开部分仍有效时不重读；私有部分在旧版本、或之前没有搜索权限而现在有时重新发现
     const token = await getToken().catch(() => null);
     if (!Array.isArray(hit.private) || hit.privateVersion !== PRIVATE_VERSION || (!hit.privateSearched && hasStructureSearchScope(token))) {
       try {
-        await attachPrivate(hit, getToken, (d, t) => onProgress(d, t, 'private'));
+        await attachPrivate(hit, getToken, (d, t, ph) => onProgress(d, t, ph || 'private'), signal);
         try { localStorage.setItem(STRUCTURE_CACHE_KEY, JSON.stringify(hit)); } catch { /* 忽略 */ }
       } catch { hit.private = hit.private || []; }
     }
@@ -203,7 +235,7 @@ export async function loadPublicStructures(getToken, onProgress = () => {}) {
   }
   let publicList = null, total = 0, denied = 0, at = Date.now();
   try {
-    const r = await fetch(SHARED_STRUCTURES);
+    const r = await fetch(SHARED_STRUCTURES, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
     if (r.ok) {
       const c = await r.json();
       if (c && Date.now() - c.at < 86400e3 && Array.isArray(c.list) && c.list.length) {
@@ -212,23 +244,17 @@ export async function loadPublicStructures(getToken, onProgress = () => {}) {
     }
   } catch { /* 服务器不可用时照旧直接读 ESI */ }
   if (!publicList) {
-    const res = await fetch(ESI_BASE + '/universe/structures/?' + DS);
+    const res = await fetch(ESI_BASE + '/universe/structures/?' + DS, { signal: AbortSignal.timeout(FETCH_TIMEOUT) });
     if (!res.ok) throw new Error('公开建筑列表读取失败 ESI ' + res.status);
     const ids = await res.json();
     const list = [];
-    let done = 0, pauseUntil = 0, unauthorized = 0;
+    let done = 0, unauthorized = 0;
     const queue = [...ids];
     async function worker() {
       while (queue.length) {
         const id = queue.shift();
-        const wait = pauseUntil - Date.now();
-        if (wait > 0) await new Promise((r) => setTimeout(r, wait));
         const token = await getToken();
-        const r = await fetch(`${ESI_BASE}/universe/structures/${id}/?${DS}`, { headers: { Authorization: 'Bearer ' + token.access_token } }).catch(() => null);
-        const remain = Number(r?.headers.get('x-esi-error-limit-remain'));
-        if (Number.isFinite(remain) && r.headers.get('x-esi-error-limit-remain') !== null && remain < 20) {
-          pauseUntil = Date.now() + (Number(r.headers.get('x-esi-error-limit-reset')) || 60) * 1000;
-        }
+        const r = await esiGet(`${ESI_BASE}/universe/structures/${id}/?${DS}`, token);
         if (r?.ok) {
           const info = await r.json();
           if (STRUCTURES[info.type_id]) list.push({ id, name: info.name, system: info.solar_system_id, type: info.type_id });
@@ -250,7 +276,7 @@ export async function loadPublicStructures(getToken, onProgress = () => {}) {
     publicList = list; total = ids.length;
   }
   const result = { at, list: publicList, private: [], total, denied };
-  try { await attachPrivate(result, getToken, (d, t) => onProgress(d, t, 'private')); } catch { /* 私有建筑发现失败不影响公开列表 */ }
+  try { await attachPrivate(result, getToken, (d, t, ph) => onProgress(d, t, ph || 'private'), signal); } catch { /* 私有建筑发现失败不影响公开列表 */ }
   try { localStorage.setItem(STRUCTURE_CACHE_KEY, JSON.stringify(result)); } catch { /* 忽略 */ }
   shareToServer(result);
   return result;
