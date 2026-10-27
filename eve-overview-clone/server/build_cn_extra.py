@@ -14,6 +14,15 @@
   fit:     { attrs, effects, groups, markets, types }                       只含 fit-data.json 里没有的条目
   skills:  { skills: { id: [中文名, 英文名, 分组, 倍数, 主属性, 副属性, 描述] }, groups: { id: 名称 } }
 另把这些物品、分组的英文名并入 i18n/names-en.json（同时写一份 i18n/names-en-cn.json，build_names_en.py 重建时会再并入）。
+
+曙光另有两套舰船加成（技能未发布，照样收录到 fit.types，不进技能页）：
+  舰船适性（技能组 4160）：技能把数值加到舰船的 shipAdaption* 属性上，舰船再用自己的效果加到装甲 / 抗性等；
+    描述写「解锁后」的只有 1 级（fit.adapt.max1），其余按 5 级
+  云计算（技能组 4196）：把闲置舰船放进云计算后给当前舰船加成，效果直接改舰船属性；前端由玩家勾选放了哪些船才生效。
+    fit.adapt.cloud: { 技能: [来源舰船, 对该级别全部种族(0/1), 带宽] }；fit.adapt.hulls: { 种族船体技能: [种族, 级别] }
+    生效对象：与来源舰船同级别（按种族船体技能），T1 / T2 / 海军型只对本族；需要两族技能的（海盗船）对全部种族；
+    官方列出过的舰船按官方表格（CLOUD_NEWS）。带宽：官方表格有的按表格，否则 T1 20、海军型 25、T2 30、其他势力 35
+另外 fit.patch: { 已有舰船: [{ 属性: 国服值 }, [国服效果列表]] }：宁静服也有的舰船在国服的属性值 / 效果不同时（适性属性与效果、数值调整）按国服覆盖。
 """
 import collections
 import concurrent.futures as cf
@@ -34,6 +43,11 @@ FUNCS = {'ItemModifier': 0, 'LocationModifier': 1, 'LocationGroupModifier': 2,
 DOMAINS = {'itemID': 0, 'shipID': 1, 'charID': 2, 'otherID': 3, 'structureID': 4, 'targetID': 5, 'target': 5}
 BASE_FIELDS = {'mass': 4, 'capacity': 38, 'volume': 161, 'radius': 162}
 SKILL_ATTRS = {'rank': 275, 'pri': 180, 'sec': 181}
+ADAPT_GROUPS = {4160, 4196}   # 舰船适性、云计算（曙光）
+CLOUD_GROUP = 4196
+CLOUD_NEWS = 'https://evepc.163.com/shuguang/news/20231116/38678_1120400.html'
+REQ_SKILLS = ('182', '183', '184', '1285', '1289', '1290')
+HULL_RE = re.compile(r'^(Amarr|Caldari|Gallente|Minmatar|Precursor|ORE|Jove|Upwell|EDENCOM|Triglavian) (Frigate|Destroyer|Cruiser|Battlecruiser|Battleship|Carrier|Dreadnought|Titan|Force Auxiliary|Industrial|Hauler|Freighter)$')
 
 
 # ---------- ESI（带磁盘缓存）----------
@@ -200,7 +214,7 @@ def build(ds, sde, tq_ids):
     q = f'datasource={ds}'
     extra = sorted(all_ids(CN, ds) - tq_ids)
     zh = dict(zip(extra, cache.many([f'{CN}/universe/types/{t}/?{q}&language=zh' for t in extra])))
-    zh = {k: v for k, v in zh.items() if v and v.get('published')}
+    zh = {k: v for k, v in zh.items() if v and (v.get('published') or v.get('group_id') in ADAPT_GROUPS)}
     ids = sorted(zh)
     en = dict(zip(ids, cache.many([f'{CN}/universe/types/{t}/?{q}&language=en' for t in ids])))
     gids = sorted({t['group_id'] for t in zh.values()})
@@ -250,9 +264,12 @@ def build(ds, sde, tq_ids):
 
     # 装配数据
     fit_ids = [t for t in ids if groups.get(zh[t]['group_id']) and groups[zh[t]['group_id']]['category_id'] in FIT_CATS]
-    eff_ids = sorted({e['effect_id'] for t in fit_ids for e in zh[t].get('dogma_effects', [])} - {int(k) for k in fit['effects']})
+    # 宁静服也有的舰船：读国服的属性与效果，不同的地方作补丁
+    ship_ids = sorted(int(k) for k, v in fit['types'].items() if fit['groups'].get(str(v[2]), [0, 0])[1] == 6)
+    cn_ships = {t: v for t, v in zip(ship_ids, cache.many([f'{CN}/universe/types/{t}/?{q}&language=zh' for t in ship_ids])) if v}
+    eff_ids = sorted({e['effect_id'] for d in [*(zh[t] for t in fit_ids), *cn_ships.values()] for e in d.get('dogma_effects', [])} - {int(k) for k in fit['effects']})
     effects = {e: v for e, v in zip(eff_ids, cache.many([f'{CN}/dogma/effects/{e}/?{q}' for e in eff_ids])) if v}
-    attr_ids = {a['attribute_id'] for t in fit_ids for a in zh[t].get('dogma_attributes', [])} | set(BASE_FIELDS.values())
+    attr_ids = {a['attribute_id'] for d in [*(zh[t] for t in fit_ids), *cn_ships.values()] for a in d.get('dogma_attributes', [])} | set(BASE_FIELDS.values())
     for v in effects.values():
         for m in v.get('modifiers', []):
             attr_ids.update([m.get('modified_attribute_id', 0), m.get('modifying_attribute_id', 0)])
@@ -280,6 +297,17 @@ def build(ds, sde, tq_ids):
         dflt = next((x['effect_id'] for x in d.get('dogma_effects', []) if x.get('is_default')), 0)
         out_types[t] = [d['name'], clean_en((en.get(t) or {}).get('name'), d['name']), d['group_id'], d.get('market_group_id') or 0,
                         int(a.get(1692, 0)), {str(k): v for k, v in sorted(a.items())}, effs, dflt]
+    patch = {}
+    for t, d in cn_ships.items():
+        old = fit['types'][str(t)]
+        a = {str(x['attribute_id']): num(x['value']) for x in d.get('dogma_attributes', [])}
+        dflt = lambda k: (fit['attrs'].get(k) or out_attrs.get(int(k)) or [0])[0]
+        # 宁静服没有、值又等于默认值的属性（如 ESI 多列的 charge / shieldCharge = 0）不用补
+        changed = {k: v for k, v in sorted(a.items(), key=lambda kv: int(kv[0])) if old[5].get(k) != v and (k in old[5] or v != dflt(k))}
+        effs = [x['effect_id'] for x in d.get('dogma_effects', []) if str(x['effect_id']) in fit['effects'] or x['effect_id'] in out_eff]
+        if changed or sorted(effs) != sorted(old[6]):
+            patch[t] = [changed, effs if sorted(effs) != sorted(old[6]) else None]
+    adapt = adapt_meta(ds, fit, out_types, zh, groups)
     used_groups = {v[2] for v in out_types.values()} - {int(k) for k in fit['groups']}
     out_groups = {g: [groups[g]['name'], groups[g]['category_id']] for g in sorted(used_groups)}
     out_markets = {}
@@ -296,7 +324,7 @@ def build(ds, sde, tq_ids):
     have_sg = {int(k) for k in skill_data['groups']}
     sk = {}
     for t in fit_ids:
-        if groups[zh[t]['group_id']]['category_id'] != 16:
+        if groups[zh[t]['group_id']]['category_id'] != 16 or zh[t]['group_id'] in ADAPT_GROUPS:   # 适性 / 云计算不进技能页
             continue
         v = out_types[t]
         a = {int(k): x for k, x in v[5].items()}
@@ -305,14 +333,68 @@ def build(ds, sde, tq_ids):
 
     data = {'server': ds,
             'catalog': {'groups': list(out_cat.values())},
-            'fit': {'attrs': out_attrs, 'effects': out_eff, 'groups': out_groups, 'markets': out_markets, 'types': out_types},
+            'fit': {'attrs': out_attrs, 'effects': out_eff, 'groups': out_groups, 'markets': out_markets, 'types': out_types,
+                    'patch': patch, **({'adapt': adapt} if adapt else {})},
             'skills': {'skills': sk, 'groups': sk_groups}}
     with open(os.path.join(ROOT, f'cn-extra-{ds}.json'), 'w', encoding='utf-8') as fh:
         json.dump(data, fh, ensure_ascii=False, separators=(',', ':'))
     ships = sum(1 for v in out_types.values() if out_groups.get(v[2], [0, 0])[1] == 6 or fit['groups'].get(str(v[2]), [0, 0])[1] == 6)
     print(f'{ds}: 独有物品 {len(ids)} · 目录分组 {len(out_cat)} · 装配物品 {len(out_types)}（舰船 {ships}）· 技能 {len(sk)}'
-          f' · 新效果 {len(out_eff)}（丢弃无法推断的修正 {dropped} 条）· 新属性 {len(out_attrs)}')
+          f' · 新效果 {len(out_eff)}（丢弃无法推断的修正 {dropped} 条）· 新属性 {len(out_attrs)} · 舰船补丁 {len(patch)}'
+          + (f' · 适性 1 级技能 {len(adapt["max1"])} · 云计算 {len(adapt["cloud"])}' if adapt else ''))
     return names_en
+
+
+def cloud_table():
+    """官方「获得云计算能力的舰船」表：舰船中文名 -> (对象, 带宽)"""
+    import html as H
+    try:
+        req = urllib.request.Request(CLOUD_NEWS, headers={'User-Agent': 'Mozilla/5.0'})
+        page = urllib.request.urlopen(req, timeout=30).read().decode('utf-8', 'replace')
+    except Exception as e:  # noqa: BLE001
+        print('云计算官方表读取失败', e, file=sys.stderr)
+        return {}
+    cells = [H.unescape(re.sub(r'<[^>]+>', '', c)).strip() for c in re.findall(r'<t[dh][^>]*>(.*?)</t[dh]>', page, re.S)]
+    out = {}
+    for i in range(0, len(cells) - 3, 4):
+        ship, _, bw, target = cells[i:i + 4]
+        if bw.isdigit():
+            out[ship] = (target, int(bw))
+    return out
+
+
+def adapt_meta(ds, fit, out_types, zh, groups):
+    """适性技能的等级上限、云计算技能的来源舰船 / 生效范围 / 带宽（没有这两组技能的服务器返回 None）"""
+    adapt = [t for t in out_types if zh[t]['group_id'] in ADAPT_GROUPS]
+    if not adapt:
+        return None
+    max1 = sorted(t for t in adapt if zh[t]['group_id'] != CLOUD_GROUP and '解锁' in (zh[t].get('description') or ''))
+    category = lambda g: (fit['groups'].get(str(g)) or [0, (groups.get(g) or {}).get('category_id', 0)])[1]
+    allt = {**{int(k): v for k, v in fit['types'].items()}, **out_types}
+    ships = {t: v for t, v in allt.items() if category(v[2]) == 6}
+    hulls = {t: list(m.groups()) for t, v in allt.items() if (m := HULL_RE.match(v[1] or ''))}
+    table = cloud_table()
+    by_name = sorted(((v[0], t) for t, v in ships.items()), key=lambda x: -len(x[0]))   # 长名优先：「磨难级海军型」先于「磨难级」
+    cloud, unknown = {}, 0
+    for t in adapt:
+        if zh[t]['group_id'] != CLOUD_GROUP:
+            continue
+        src = next((sid for n, sid in by_name if zh[t]['name'].startswith(n)), None)
+        if not src:
+            unknown += 1
+            continue
+        v = ships[src]
+        races = {hulls[int(v[5][k])][0] for k in REQ_SKILLS if v[5].get(k) and int(v[5][k]) in hulls}
+        if v[0] in table:
+            target, bw = table[v[0]]
+            every = int(target.startswith('全部'))
+        else:
+            every = int(len(races) > 1)
+            bw = {1: 20, 2: 30}.get(v[4], 25 if v[4] == 4 and len(races) == 1 else 35)
+        cloud[t] = [src, every, bw]
+    if unknown:
+        print(f'{ds}: {unknown} 个云计算技能找不到来源舰船（多为没有名称的 CloudComputingBoundItem），不生效')
+    return {'max1': max1, 'cloud': cloud, 'hulls': hulls}
 
 
 def main():

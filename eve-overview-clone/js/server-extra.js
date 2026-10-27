@@ -7,7 +7,7 @@ let extraP = null;
 export function serverExtra() {
   if (IS_TQ) return Promise.resolve(null);
   if (!extraP) {
-    extraP = fetch(`./cn-extra-${SERVER.id}.json?v=1`)
+    extraP = fetch(`./cn-extra-${SERVER.id}.json?v=2`)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
   }

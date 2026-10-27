@@ -88,7 +88,7 @@ function loadMyOrders() {
   return MO.loading;
 }
 const myOrdersStale = () => !MO.loading && (!MO.at || Date.now() - MO.at > 300e3);
-const jita = new Map();   // 吉他行情 id -> { sell, buy }
+const jita = new Map();   // 吉他行情 id -> { sell, buy, at }
 
 export function initIndustry(context) {
   ctx = context;
@@ -220,11 +220,15 @@ const matFee = () => (F.mat === 'buy' ? brokerFee() : 0);           // 挂收单
 const prodPrice = (id) => price(id, F.prod === 'buy' ? 'buy' : 'sell');
 const sellFee = () => salesTax() + (F.prod === 'sell' ? brokerFee() : 0);
 
+// 行情：物品不多时（计算器、排行精算）读和市场中心同一份实时订单（5 分钟缓存）；多时（生产规划）用服务器每小时的快照，缓存不超过 1 小时
+const LIVE_MAX = 200;
+const JITA_TTL = 5 * 60e3;
 async function loadJita(ids, onProgress) {
-  const need = [...new Set(ids)].filter((id) => !jita.has(id));
+  const now = Date.now();
+  const need = [...new Set(ids)].filter((id) => !(now - (jita.get(id)?.at || 0) < JITA_TTL));
   if (!need.length) return;
-  const map = await ctx.getHubPrices(need, onProgress).catch(() => new Map());
-  for (const id of need) jita.set(id, map.get(id) || {});
+  const map = await (need.length <= LIVE_MAX ? ctx.getLiveHubPrices(need, onProgress) : ctx.getHubPrices(need, onProgress, { maxAge: 3600e3 })).catch(() => new Map());
+  for (const id of need) jita.set(id, { ...(map.get(id) || {}), at: now });
 }
 
 async function dailyVolume(id) {

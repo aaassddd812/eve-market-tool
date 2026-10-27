@@ -4,7 +4,7 @@
 // 不可叠加的属性对装备来源的乘法修改施加叠加惩罚（舰船、技能、植入体、子系统、弹药来源不受惩罚）。
 // 绝大多数加成来自效果的 modifierInfo；推进器提速、子系统槽位等少数效果在这里单独实现。
 
-import { serverExtra } from './server-extra.js?v=1';
+import { serverExtra } from './server-extra.js?v=2';
 
 // ---------- 常用属性 ----------
 export const AT = {
@@ -62,9 +62,18 @@ export function loadFitData(url) {
   return DATA;
 }
 
-// 国服独有的舰船、装备、技能（cn-extra-<服>.json，只含 fit-data.json 里没有的条目）
+// 国服独有的舰船、装备、技能（cn-extra-<服>.json，只含 fit-data.json 里没有的条目）；
+// patch：国服平衡改动过的已有舰船 { typeId: [改动的属性, 新效果列表|null] }；adapt：曙光的舰船适性 / 云计算技能
 function mergeExtra(raw, extra) {
-  if (extra) for (const k of ['attrs', 'effects', 'groups', 'markets', 'types']) Object.assign(raw[k], extra[k]);
+  if (!extra) return raw;
+  for (const k of ['attrs', 'effects', 'groups', 'markets', 'types']) Object.assign(raw[k], extra[k]);
+  for (const [id, [attrs, effs]] of Object.entries(extra.patch || {})) {
+    const t = raw.types[id];
+    if (!t) continue;
+    t[5] = { ...t[5], ...attrs };
+    if (effs) t[6] = effs;
+  }
+  if (extra.adapt) raw.adapt = extra.adapt;
   return raw;
 }
 
@@ -95,7 +104,21 @@ function parse(raw) {
   for (const t of types.values()) if (t.market && markets.has(t.market)) markets.get(t.market).types.push(t);
   const skills = [...types.values()].filter((t) => t.category === CAT.skill);
   const char = new Map(Object.entries(raw.char || {}).map(([k, v]) => [Number(k), v]));
-  return { attrs, effects, groups, markets, types, byName, skills, char };
+  const adapt = raw.adapt;
+  // 云计算：来源舰船 -> { bw 带宽, skills: [{ id, every 是否不限种族 }] }
+  const cloud = new Map();
+  for (const id of adapt?.max1 || []) if (types.has(id)) types.get(id).maxLevel = 1;
+  for (const [id, [src, every, bw]] of Object.entries(adapt?.cloud || {})) {
+    const t = types.get(Number(id));
+    if (!t || !types.has(src)) continue;
+    t.cloud = { src, every: !!every };
+    if (!cloud.has(src)) cloud.set(src, { bw, skills: [] });
+    const c = cloud.get(src);
+    c.bw = Math.max(c.bw, bw);
+    c.skills.push({ id: t.id, every: !!every });
+  }
+  const hulls = new Map(Object.entries(adapt?.hulls || {}).map(([k, v]) => [Number(k), v]));
+  return { attrs, effects, groups, markets, types, byName, skills, char, cloud, hulls };
 }
 
 function slotOf(t) {
@@ -184,6 +207,36 @@ function multiply(v, list, stackable) {
   return v;
 }
 
+// ---------- 云计算（曙光）----------
+// 云计算技能的加成只在「云」里放了来源舰船、且当前舰船与来源同船级（T1 / T2 / 海军型还要求同种族）时生效
+let CLOUD = new Set();
+export function setCloud(ids) { CLOUD = new Set(ids || []); }
+
+// 舰船的 [种族, 船级]：取其所需技能里的船体技能
+export function hullOf(data, type) {
+  for (const [s] of type?.skills || []) if (data.hulls.has(s)) return data.hulls.get(s);
+  return null;
+}
+
+function cloudApplies(data, { src, every }, shipType) {
+  if (!CLOUD.has(src)) return false;
+  const a = hullOf(data, data.types.get(src));
+  const b = hullOf(data, shipType);
+  return Boolean(a && b && a[1] === b[1] && (every || a[0] === b[0]));
+}
+
+// 给界面用：云里每艘舰船的带宽、加成技能以及对当前舰船是否生效
+export function cloudInfo(data, shipId) {
+  const ship = data.types.get(shipId);
+  return [...CLOUD].filter((id) => data.cloud.has(id)).map((id) => {
+    const c = data.cloud.get(id);
+    return {
+      ship: data.types.get(id), bw: c.bw,
+      skills: c.skills.map((s) => ({ type: data.types.get(s.id), every: s.every, active: Boolean(ship && cloudApplies(data, { src: id, every: s.every }, ship)) }))
+    };
+  });
+}
+
 // ---------- 装配计算 ----------
 /**
  * fit: { ship: typeId, slots: { high: [mod|null], mid, low, rig, sub }, drones: [{ type, count, active }], implants: [typeId] }
@@ -197,8 +250,8 @@ export function computeFit(data, fit, skills = 'max') {
   const ship = new Item(data, shipType, 'ship');
   const skillItems = [];
   for (const t of data.skills) {
-    const level = skills === 'max' ? 5 : (skills.get(t.id) || 0);
-    if (!level) continue;
+    const level = Math.min(skills === 'max' ? 5 : (skills.get(t.id) || 0), t.maxLevel || 5);
+    if (!level || (t.cloud && !cloudApplies(data, t.cloud, shipType))) continue;
     const base = new Map(t.attrs);
     base.set(AT.skillLevel, level);
     skillItems.push(new Item(data, t, 'skill', base));

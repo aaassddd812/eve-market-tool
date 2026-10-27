@@ -5,7 +5,7 @@ import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub
 import * as SM from './struct-markets.js?v=v6';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v8';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
-import { serverExtra, cnTypeImage } from './server-extra.js?v=1';
+import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
 
 // ===== 配置与常量 =====
@@ -531,19 +531,50 @@ async function openWar() {
 }
 
 // 默认交易中心（吉他；曙光服为索巴色基）最低卖价 / 最高收购价：Map(id -> { sell, buy })
-async function getJitaPrices(ids, onProgress) {
+// maxAge：只用这么新的缓存（资产估值沿用 12 小时缓存；制造等算利润的页面要求 1 小时内）
+async function getJitaPrices(ids, onProgress, { maxAge } = {}) {
   const jita = REGIONS[0];
-  await fetchHubPrices(jita, ids, onProgress);
+  await fetchHubPrices(jita, ids, onProgress, maxAge);
   return new Map(ids.map((id) => [id, hubPrice(jita, id)]).filter(([, v]) => v && !v.failed));
+}
+
+// 实时行情：和市场中心同一份订单（ESI，5 分钟缓存），取默认交易中心空间站的最低卖 / 最高收；同时更新交易中心价格缓存。
+// 逐个物品读 ESI，只用于物品不多的场合（制造计算器、利润排行精算）
+async function getLiveHubPrices(ids, onProgress) {
+  const hub = REGIONS[0];
+  const out = new Map();
+  let done = 0, cursor = 0;
+  onProgress?.(0, ids.length);
+  const worker = async () => {
+    while (cursor < ids.length) {
+      const id = ids[cursor++];
+      const global = GLOBAL_MARKET_TYPES.has(Number(id));   // 伊甸币：全服统一市场
+      try {
+        const orders = await regionOrders(id, global ? GLOBAL_MARKET_REGION : hub.id);
+        const e = { sell: null, buy: null, at: Date.now() };
+        for (const o of orders) {
+          if (!global && o.location_id !== hub.hub.id) continue;
+          if (o.is_buy_order) e.buy = e.buy === null ? o.price : Math.max(e.buy, o.price);
+          else e.sell = e.sell === null ? o.price : Math.min(e.sell, o.price);
+        }
+        state.hubPriceCache.set(hub.id + ':' + id, { ...e, med: hubPrice(hub, id)?.med || null });
+        out.set(id, e);
+      } catch { /* 读不到的物品不给价格 */ }
+      onProgress?.(++done, ids.length);
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  saveHubPriceCache();
+  return out;
 }
 
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v41').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v42').then((m) => {
     m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
-      getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
+      getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       esiAccountFetch, esiAccountList,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
@@ -740,7 +771,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v72').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v74').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -3976,9 +4007,10 @@ function hubPriceTime(region, typeIds) {
   return Number.isFinite(oldest) ? oldest : null;
 }
 
-async function fetchHubPrices(region, typeIds, onProgress) {
+async function fetchHubPrices(region, typeIds, onProgress, maxAge = HUB_PRICE_TTL) {
   const keyOf = (t) => region.id + ':' + t;
-  const todo = typeIds.filter((t) => !state.hubPriceCache.has(keyOf(t)) && !state.hubPriceInflight.has(keyOf(t)));
+  const fresh = (t) => { const c = state.hubPriceCache.get(keyOf(t)); return c && (c.failed || Date.now() - c.at <= maxAge); };   // 读取失败的本次会话不再重试
+  const todo = typeIds.filter((t) => !fresh(t) && !state.hubPriceInflight.has(keyOf(t)));
   const waiting = typeIds.map((t) => state.hubPriceInflight.get(keyOf(t))).filter(Boolean);
   let done = typeIds.length - todo.length - waiting.length;
   onProgress?.(done, typeIds.length);
@@ -4571,7 +4603,7 @@ async function renderProfileTab(tab) {
 // 个人中心 · 技能：首次打开时加载
 let skillsLoading = null;
 function loadSkillsModule() {
-  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v28').then((m) => {
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v29').then((m) => {
     m.initSkills({ esc, formatNumber, esiAuthFetch, store, showPlan: async (el) => (await loadFittingModule()).showPlan(el) });
     return m;
   }).catch((error) => { skillsLoading = null; throw error; });

@@ -6606,3 +6606,10 @@ td .sov-auto-tag { margin-left: 4px; }
   .ipc-chart, .ipc-chart-tall { height: 300px; }
   .ip-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
+.fit-cloud-row { flex-wrap: wrap; }
+.fit-cloud-skills { display: flex; flex-wrap: wrap; gap: 4px; flex-basis: 100%; order: 1; padding-left: 36px; }
+.fit-cloud-skills span { padding: 2px 7px; border-radius: 6px; font-size: 0.6875rem; color: var(--text-muted); background: var(--bg-tertiary); }
+.fit-cloud-skills i { font-style: normal; }
+.fit-cloud-skills b { margin-left: 6px; font-weight: 600; }
+.fit-cloud-skills span.is-on b { color: var(--success); }
+.fit-slots h4 span.is-over { color: var(--danger); }

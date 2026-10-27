@@ -3,7 +3,7 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v26';
+import * as FE from './fit-engine.js?v=v27';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v27';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
@@ -12,6 +12,7 @@ import { initPlan, mountPlan, queuePlan } from './skill-plan.js?v=v7';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 import { makeFloat, pinBtn, closeBtn } from './float-pop.js?v=3';
+import { SERVER } from './server.js?v=s4';
 
 let app;
 const $ = (id) => document.getElementById(id);
@@ -24,6 +25,8 @@ const DATA_URL = './fit-data.json?v=v21r3';
 const SAVE_KEY = 'eve-fits-v1';
 const CURRENT_KEY = 'eve-fit-current';
 const SETTINGS_KEY = 'eve-fit-settings';
+const CLOUD_KEY = 'eve-fit-cloud-' + SERVER.id;   // 曙光云计算：放进「云」的舰船
+const CLOUD_BW = 100;
 const DRAFTS_KEY = 'eve-fit-drafts';   // 每艘船上次没保存的装配（舰船 -> 装配），最多留 30 艘
 
 const TABS = [
@@ -54,6 +57,7 @@ export function initFitting(context) {
   app = context;
   try { Object.assign(F, pick(app.store.getJSON(SETTINGS_KEY, {}), ['skillMode', 'onlyFits', 'tab'])); } catch { /* 默认设置 */ }
   if (F.skillMode === 'esi' && !app.hasEsiToken()) F.skillMode = 'max';
+  try { FE.setCloud(app.store.getJSON(CLOUD_KEY, [])); } catch { /* 空云 */ }
   bindSidebar();
   initTypeInfo();
   $('fitMain').addEventListener('click', onMainClick);
@@ -900,7 +904,36 @@ function renderFit() {
     ${slotRows}
     ${dronesHtml()}
     ${implantsHtml(bound)}
+    ${cloudHtml()}
     ${missing.length ? `<section class="fit-slots"><h4>缺少的技能<span>${missing.length}</span></h4><div class="fit-skill-list">${missing.map((m) => `<span>${app.esc(m.type?.name || '')} <b>${m.have} → ${m.need}</b></span>`).join('')}</div></section>` : ''}`;
+}
+
+// 曙光云计算：选择放进「云」的舰船，同船级（T1 / T2 / 海军型还要同种族）的舰船获得它们的云计算技能加成
+function cloudHtml() {
+  if (!F.data.cloud?.size) return '';
+  const info = FE.cloudInfo(F.data, F.fit.ship);
+  const used = info.reduce((n, c) => n + c.bw, 0);
+  const inCloud = new Set(info.map((c) => c.ship.id));
+  const byClass = new Map();
+  for (const id of F.data.cloud.keys()) {
+    const t = type(id);
+    if (!t || inCloud.has(id)) continue;
+    const g = F.data.groups.get(t.group)?.name || '';
+    if (!byClass.has(g)) byClass.set(g, []);
+    byClass.get(g).push(t);
+  }
+  const options = [...byClass].sort((a, b) => a[0].localeCompare(b[0], 'zh')).map(([g, list]) => `<optgroup label="${app.esc(g)}">${list.sort((a, b) => a.name.localeCompare(b.name, 'zh')).map((t) => `<option value="${t.id}">${app.esc(t.name)}（带宽 ${F.data.cloud.get(t.id).bw}）</option>`).join('')}</optgroup>`).join('');
+  const rows = info.map((c) => `<div class="fit-slot fit-cloud-row"><img src="${IMG(c.ship.id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(c.ship.name)}<small>带宽 ${c.bw}</small></span>
+    <span class="fit-cloud-skills">${c.skills.map((k) => `<span class="${k.active ? 'is-on' : ''}" title="${k.every ? '同船级全部种族' : '同船级同种族'}"><i>${app.esc(k.type?.name || '')}</i><b>${k.active ? '生效' : '不适用'}</b></span>`).join('')}</span>
+    <button class="fit-remove" data-fit-cloud-remove="${c.ship.id}" aria-label="移除">×</button></div>`).join('');
+  return `<section class="fit-slots"><h4>云计算<span class="${used > CLOUD_BW ? 'is-over' : ''}">带宽 ${used} / ${CLOUD_BW}${used > CLOUD_BW ? '（超出）' : ''}</span></h4>
+    ${rows}<div class="fit-slot is-empty"><select class="plain-select" data-fit-cloud-add aria-label="加入云计算的舰船"><option value="">加入云计算的舰船…</option>${options}</select></div></section>`;
+}
+
+function saveCloud(ids) {
+  FE.setCloud(ids);
+  app.store.setJSON(CLOUD_KEY, ids);
+  recompute();
 }
 
 function problemsHtml(list) {
@@ -1221,6 +1254,7 @@ async function onMainClick(e) {
     return;
   }
   if ((x = el('[data-fit-drone-remove]'))) { F.fit.drones.splice(Number(x.dataset.fitDroneRemove), 1); recompute(); return; }
+  if ((x = el('[data-fit-cloud-remove]'))) { saveCloud(FE.cloudInfo(F.data, F.fit.ship).map((c) => c.ship.id).filter((id) => id !== Number(x.dataset.fitCloudRemove))); return; }
   if ((x = el('[data-fit-implant-remove]'))) { F.fit.implants = F.fit.implants.filter((id) => id !== Number(x.dataset.fitImplantRemove)); recompute(); return; }
   if ((x = el('[data-fit-skill]'))) {
     const mode = x.dataset.fitSkill;
@@ -1247,6 +1281,8 @@ async function onMainClick(e) {
 }
 
 function onMainChange(e) {
+  const cloud = e.target.closest('[data-fit-cloud-add]');
+  if (cloud && cloud.value) { saveCloud([...FE.cloudInfo(F.data, F.fit.ship).map((c) => c.ship.id), Number(cloud.value)]); return; }
   const open = e.target.closest('[data-fit-open]');
   if (open && open.value) {
     const f = savedFits().find((x) => x.id === open.value);
