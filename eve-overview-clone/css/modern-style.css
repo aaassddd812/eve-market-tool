@@ -629,6 +629,8 @@ img.broken { opacity: 0; }
 
 .empty-icon { box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent-primary) 6%, transparent), 0 10px 40px color-mix(in srgb, var(--accent-primary) 25%, transparent); }
 .empty-icon svg { width: 34px; height: 34px; }
+.empty-ship { width: 112px; height: 112px; overflow: hidden; background: #05080d; }
+.empty-ship img { width: 100%; height: 100%; object-fit: cover; }
 .empty-view h2 { font-size: 1.375rem; font-weight: 600; margin-bottom: 6px; }
 .empty-view > p { color: var(--text-secondary); font-size: 0.875rem; }
 
