@@ -54,11 +54,11 @@ const RACES = [['auto', '自动'], ['caldari', '加达里'], ['gallente', '盖�
 const LOW_SHIPS = [['jf', '跳货'], ['br', '封锁运输'], ['dst', '深空运输'], ['auto', '最小船']];
 const LOW_TEXT = { jf: '跳货', br: '封锁运输舰', dst: '深空运输舰', auto: '能装下的最小船' };
 const ROLES = {
-  industrial: { name: 'T1 工业舰', short: '工业舰', why: '全高安路线、货值不高，便宜的 T1 工业舰就够用；被打掉损失也小' },
-  br: { name: '封锁运输舰', short: '封锁运输', why: '货柜舱无法被扫描，能装隐秘行动隐形装置：隐形 + 微跃推进器起跳，在低安 / 00 也很难被拦住' },
-  dst: { name: '深空运输舰', short: '深空运输', why: '舰队机库 62,500 m³、货物无法被扫描、血量高，可用微型跳跃引擎或隐形 + 微跃推进器摆脱拦截' },
-  freighter: { name: '货舰', short: '货舰', why: '大体积只能用货舰；装得下时尽量多装强化舱隔壁提高血量，防自杀式攻击' },
-  jf: { name: '跳跃货舰', short: '跳货', why: '路线经过低安 / 00：跳跃货舰用跳跃引擎直接跳到目的地附近，少走危险星门' }
+  industrial: { name: 'T1 工业舰', short: '工业舰', why: '全高安且货值不高，T1 工业舰就够' },
+  br: { name: '封锁运输舰', short: '封锁运输', why: '货柜舱不可扫描，隐形 + 微跃起跳难被拦截' },
+  dst: { name: '深空运输舰', short: '深空运输', why: '机库 62,500 m³、不可扫描、血厚，可微跳或隐形脱身' },
+  freighter: { name: '货舰', short: '货舰', why: '大体积只能用货舰，尽量多装强化舱隔壁防自杀' },
+  jf: { name: '跳跃货舰', short: '跳货', why: '途经低安 / 00，用跳跃引擎少走危险星门' }
 };
 const HIGH_VALUE = 3e8;          // 抵押 ≥ 3 亿视为高价值货物，高安也不用 T1 工业舰
 const JDC = 5, JFC = 5, JF_SKILL = 5;
@@ -339,13 +339,13 @@ function riskFactors(c) {
   }
   const col = c.collateral;
   const colPts = col >= 5e9 ? 25 : col >= 2e9 ? 18 : col >= 1e9 ? 12 : col >= 5e8 ? 7 : col >= 1e8 ? 3 : 0;
-  if (colPts) out.push({ text: `抵押 ${ctx.formatISK(col)} ISK：货物价值高，容易成为自杀式攻击的目标`, pts: colPts });
+  if (colPts) out.push({ text: `抵押 ${ctx.formatISK(col)} ISK，易被自杀式攻击`, pts: colPts });
   for (const [loc, label] of [[c.from, '起点'], [c.to, '终点']]) {
     if (loc.kind !== 'structure') continue;
     if (!loc.known) out.push({ text: `${label}是名称不公开的玩家建筑，可能没有停靠权限`, pts: 15 });
     else out.push({ text: `${label}是玩家建筑，停靠权限可能被收回`, pts: 5 });
   }
-  if (c.to.kind === 'structure' && col >= 5e8) out.push({ text: '大额抵押 + 玩家建筑终点：常见的快递骗局形式，接单前确认能停靠', pts: 10 });
+  if (c.to.kind === 'structure' && col >= 5e8) out.push({ text: '大额抵押 + 建筑终点：常见骗局，先确认能停靠', pts: 10 });
   // 按每跳约 3 分钟估算（货舰在高安的平均用时），所需时间超过期限一半时提示
   if (c.total != null && c.days_to_complete && c.total * 3 > c.days_to_complete * 24 * 60 * 0.5) out.push({ text: `完成期限只有 ${c.days_to_complete} 天，路程偏紧`, pts: 10 });
   return out;
@@ -530,9 +530,9 @@ function renderList() {
   const o = originIndex();
   const total = rows.reduce((s, c) => s + c.reward, 0);
   $('crCount').innerHTML = `符合条件 <b>${rows.length}</b> 份 · 报酬合计 ${ctx.formatISK(total)} ISK` +
-    (o >= 0 ? ` · 取货跳数从 <b>${esc(G.names[o])}</b> 算起` : ' · <span class="text-muted">填写所在星系或绑定 ESI 后可算取货跳数</span>');
+    (o >= 0 ? ` · 取货跳数从 <b>${esc(G.names[o])}</b> 算起` : '');
   if (!rows.length) {
-    el.innerHTML = '<div class="empty-state cr-empty"><p>没有符合条件的快递合同，可以放宽左侧的筛选条件</p></div>';
+    el.innerHTML = '<div class="empty-state cr-empty"><p>没有符合条件的合同</p></div>';
     return;
   }
   const head = `<div class="cr-row cr-row-head" role="row">
@@ -581,19 +581,19 @@ function renderSide() {
   const regions = [...counts.entries()].map(([id, n]) => [id, G.regionName.get(id) || String(id), n]).sort((a, b) => b[2] - a[2]);
   const charName = S.charSys && G.index.has(S.charSys) ? G.names[G.index.get(S.charSys)] : '';
   const originName = F.origin?.id && G.index.has(F.origin.id) ? G.names[G.index.get(F.origin.id)] : '';
-  const originHint = F.origin ? `手动指定：${esc(originName)}` : charName ? `角色当前位置：${esc(charName)}` : ctx.hasEsiToken() ? '读不到角色位置（需要位置权限），可手动填写' : '未绑定 ESI，可手动填写所在星系';
+  const originHint = F.origin ? '' : charName ? `角色当前位置：${esc(charName)}` : ctx.hasEsiToken() ? '读不到角色位置（需要位置权限）' : '';
   el.innerHTML = `
     <div class="ind-side-section cr-side-sec">
-      <h4>评分侧重</h4>
+      <h4 title="综合评分 = 每跳收益、报酬、取货距离、安全按侧重加权">评分侧重</h4>
       ${seg('focus', Object.entries(FOCUS).map(([k, [l]]) => [k, l]))}
     </div>
     <div class="ind-side-section cr-side-sec">
-      <h4>我的位置 <small>用于计算取货跳数</small></h4>
+      <h4>我的位置</h4>
       <div class="cr-origin">
         <input type="search" class="cr-input" id="crOrigin" list="crSystems" placeholder="输入星系名，如 ${HUB_NAME}" value="${esc(originName)}" autocomplete="off" spellcheck="false" aria-label="所在星系">
         ${F.origin && ctx.hasEsiToken() ? '<button type="button" class="btn btn-ghost" data-cr-charloc title="改用角色当前位置">角色位置</button>' : ''}
       </div>
-      <p class="cr-hint">${originHint}</p>
+      ${originHint ? `<p class="cr-hint">${originHint}</p>` : ''}
       <datalist id="crSystems">${systemOptions()}</datalist>
     </div>
     <div class="ind-side-section cr-side-sec">
@@ -607,7 +607,6 @@ function renderSide() {
       ${seg('lowShip', LOW_SHIPS)}
       <h4>种族偏好</h4>
       ${seg('race', RACES)}
-      <p class="cr-hint">容量按全部技能 5 级计算</p>
     </div>
     <div class="ind-side-section cr-side-sec">
       <h4>舰船容量</h4>
@@ -626,13 +625,7 @@ function renderSide() {
       </select>
       <label class="cr-check"><input type="checkbox" data-cr-field="hideUnknown"${F.hideUnknown ? ' checked' : ''}> 隐藏名称不公开的玩家建筑</label>
       <button type="button" class="btn btn-ghost cr-reset" data-cr-reset>重置筛选</button>
-    </div>
-    <details class="cr-help">
-      <summary>评分怎么算</summary>
-      <p><b>综合评分</b>（0–100）= 每跳收益、报酬大小、取货距离、安全四项按「评分侧重」加权。每跳收益 = 报酬 ÷（取货跳数 + 运送跳数）。</p>
-      <p><b>风险</b>看路线经过的低安 / 00 星系、抵押金额（货值越高越容易被自杀式攻击）、是否为不公开的玩家建筑（可能无法停靠）以及完成期限是否紧张。</p>
-      <p>快递合同里的货物不公开，抵押金额只能大致反映货值。</p>
-    </details>`;
+    </div>`;
 }
 
 let systemOptionsHtml = '';
@@ -767,7 +760,7 @@ function onModalClick(e) {
 async function copyEft(text) {
   try {
     await navigator.clipboard.writeText(text);
-    ctx.showToast('已复制 EFT 装配，可在游戏装配窗口或 Pyfa 中导入', 'success', 2500);
+    ctx.showToast('已复制 EFT 装配', 'success', 2500);
   } catch {
     ctx.showToast('浏览器阻止了复制', 'error');
   }
@@ -806,13 +799,11 @@ function renderDetail(c) {
   const sent = S.sent.has(c.contract_id);
   const noScope = token && !ctx.hasScope(MAIL_SCOPE);
   const action = !token
-    ? `<button type="button" class="btn btn-primary" data-cr-bind>绑定 ESI 后接受</button><p class="cr-hint">接受需要把合同链接发到你的游戏邮箱，请先绑定角色。</p>`
-    : `<button type="button" class="btn btn-primary" data-cr-mail${sent ? ' disabled' : ''}>${sent ? '已发送到游戏邮箱' : '接受：发送到游戏邮箱'}</button>
+    ? `<button type="button" class="btn btn-primary" data-cr-bind>绑定 ESI 后接受</button>`
+    : `<button type="button" class="btn btn-primary" data-cr-mail${sent ? ' disabled' : ''} title="ESI 不能直接接受合同，会发一封带合同链接的游戏邮件">${sent ? '已发送到游戏邮箱' : '接受：发送到游戏邮箱'}</button>
        <button type="button" class="btn" data-cr-game title="需要「游戏内操作」权限，角色需在线">游戏内直接打开合同</button>
-       <p class="cr-hint">${sent
-         ? `已发送给 ${esc(token.character_name)}。在游戏里打开邮件，点击合同链接，在合同窗口点「接受」。`
-         : `ESI 不能直接接受合同：点击后会给 <b>${esc(token.character_name)}</b> 发一封带合同链接的游戏邮件，在游戏里点链接即可接受。`}
-       ${noScope ? '<br><span class="cr-warn">当前授权没有「发送邮件」权限（esi-mail.send_mail.v1），发送失败时请到个人中心重新绑定 ESI。</span>' : ''}</p>`;
+       ${sent ? `<p class="cr-hint">已发送给 ${esc(token.character_name)}，在游戏邮件里点链接接受</p>` : ''}
+       ${noScope ? '<p class="cr-hint"><span class="cr-warn" title="esi-mail.send_mail.v1">缺少「发送邮件」权限，可能发送失败</span></p>' : ''}`;
   $('courierBody').innerHTML = `
     <div class="cr-detail">
       <div class="cr-ends">${locBlock(c.from, '取货')}<span class="cr-ends-arrow" aria-hidden="true">→</span>${locBlock(c.to, '送达')}</div>
@@ -823,7 +814,7 @@ function renderDetail(c) {
         ${stat('运送路线', routeText, routeSub)}
         ${stat('取货距离', c.pickup != null ? c.pickup + ' 跳' : '—', o >= 0 ? '从 ' + esc(G.names[o]) : '未设置所在星系')}
         ${stat('每跳收益', c.ipj == null ? '—' : ctx.formatISK(c.ipj) + ' ISK', c.total != null ? '共 ' + c.total + ' 跳' : '')}
-        ${stat('完成期限', c.days_to_complete + ' 天', '接受后开始计时')}
+        ${stat('完成期限', c.days_to_complete + ' 天')}
         ${stat('合同剩余', remain(c.expires - Date.now()), c.date_expired ? new Date(c.date_expired).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' 到期' : '')}
         <div class="cr-stat"><span>发布人</span><b id="crIssuer">${issuerHtml(c)}</b></div>
       </div>
@@ -861,14 +852,13 @@ function shipSection(c) {
   }).join('');
   const hold = p.role === 'dst' ? '舰队机库' : '货柜舱';
   const reasons = [role.why];
-  if (p.role === 'freighter' || p.role === 'jf') reasons.push(p.bulk ? `本单 ${ctx.formatNumber(c.volume)} m³：装 ${p.bulk} 个强化舱隔壁仍装得下${p.bulk < 3 ? `，其余 ${3 - p.bulk} 个用扩充货柜舱` : ''}` : '体积大，3 个低槽全用扩充货柜舱才装得下，血量最低，注意侦察');
-  if (p.role === 'freighter' && p.risky) reasons.push('路线经过低安：货舰不能跳跃、起跳慢，非常容易被拦截，建议有侦察和护航，或改用跳货分趟');
-  if (p.role === 'freighter' && !p.risky && c.collateral >= 1e9) reasons.push('抵押高：在' + HUB_NAME + '周边、乌克米等热门星系容易被自杀式攻击，可找队友用网子帮忙快速起跳');
-  if (p.role === 'industrial' && c.collateral) reasons.push(`抵押 ${ctx.formatISK(c.collateral)}：货值不高，被打掉的可能小`);
-  if (p.role === 'jf') reasons.push('跳跃货舰不能在高安启动跳跃引擎，也不能跳入高安：起点在高安时先走星门到低安，终点在高安时跳到附近低安再走星门');
+  if (p.role === 'freighter' || p.role === 'jf') reasons.push(p.bulk ? `本单 ${ctx.formatNumber(c.volume)} m³：可装 ${p.bulk} 个强化舱隔壁${p.bulk < 3 ? `，其余 ${3 - p.bulk} 个用扩充货柜舱` : ''}` : '体积大，低槽全装扩充货柜舱，血量最低');
+  if (p.role === 'freighter' && p.risky) reasons.push('途经低安：货舰易被拦截，建议侦察护航或改用跳货');
+  if (p.role === 'freighter' && !p.risky && c.collateral >= 1e9) reasons.push('抵押高：' + HUB_NAME + '、乌克米等地易被自杀式攻击');
+  if (p.role === 'jf') reasons.push('跳货不能在高安起跳或跳入高安，需经低安中转');
   const alts = (p.alts || []).map((a) => `<span class="cr-alt"><img src="${ICON(a.hull.id)}" alt="" width="18" height="18" loading="lazy">${ROLES[a.role].name} · ${esc(a.hull.zh)}<small>${ctx.formatNumber(a.cap)} m³</small></span>`).join('');
   return `<div class="cr-section">
-    <h4>推荐用船 <small>按全部技能 5 级计算${p.risky ? ' · 低安 / 00 路线优先用' + (LOW_TEXT[F.lowShip] || '') : ''}</small></h4>
+    <h4>推荐用船 <small>全技能 5 级${p.risky ? ' · 低安 / 00 优先' + (LOW_TEXT[F.lowShip] || '') : ''}</small></h4>
     <div class="cr-ship">
       <img src="${ICON(p.hull.id, 64)}" alt="" width="56" height="56">
       <div class="cr-ship-main">
@@ -939,10 +929,10 @@ function renderJump(c) {
   if (j.before.length > 1) steps.push(`<li>星门 <b>${j.before.length - 1}</b> 跳到 ${sys(j.before[j.before.length - 1])}（起点在高安，不能启动跳跃引擎）</li>`);
   if (j.legs.length) steps.push(`<li>跳跃 <b>${j.legs.length}</b> 次：${j.legs.map((l) => `${sys(l.to)} <small>${l.ly.toFixed(1)} 光年</small>`).join(' → ')}</li>`);
   if (j.after.length > 1) steps.push(`<li>星门 <b>${j.after.length - 1}</b> 跳到 ${sys(j.after[j.after.length - 1])}（终点在高安，不能跳入）</li>`);
-  const gates = c.route ? `，星门路线要 ${c.route.jumps} 跳` : '';
-  el.innerHTML = `<h5>跳货路线 <small>跳跃距离 ${j.range?.toFixed(1) ?? '—'} 光年（跳跃引擎校准理论 5 级）${gates}</small></h5>
+  const gates = c.route ? ` · 星门 ${c.route.jumps} 跳` : '';
+  el.innerHTML = `<h5>跳货路线 <small>跳跃距离 ${j.range?.toFixed(1) ?? '—'} 光年${gates}</small></h5>
     <ol>${steps.join('') || '<li>起终点在同一星系</li>'}</ol>
-    ${j.legs.length ? `<p class="cr-hint">共 ${j.ly.toFixed(1)} 光年，燃料约 <b>${ctx.formatNumber(j.fuel)}</b> 个${FUEL_ZH[c.ship.hull.fuelType] || '同位素'}（跳跃燃料节约、战略货舰操作均 5 级）</p>` : ''}`;
+    ${j.legs.length ? `<p class="cr-hint">共 ${j.ly.toFixed(1)} 光年，燃料约 <b>${ctx.formatNumber(j.fuel)}</b> 个${FUEL_ZH[c.ship.hull.fuelType] || '同位素'}</p>` : ''}`;
 }
 
 // ---------- 发送邮件 ----------
@@ -982,7 +972,7 @@ async function sendMail(c, btn) {
       })
     });
     S.sent.add(c.contract_id);
-    ctx.showToast('已发送到 ' + token.character_name + ' 的游戏邮箱，在游戏里点邮件中的合同链接即可接受', 'success', 5000);
+    ctx.showToast('已发送到 ' + token.character_name + ' 的游戏邮箱', 'success', 5000);
     if (S.open === c) renderDetail(c);
   } catch (error) {
     btn.disabled = false;

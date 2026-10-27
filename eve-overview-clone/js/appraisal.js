@@ -8,7 +8,7 @@
 // 识别格式：制表符或两个以上空格分列，第一列物品名（游戏复制的名称后可能带 *），第二列数量；
 // 也支持「名称 x 数量」「数量 x 名称」「名称 数量」和单独一行物品名。
 import { SERVER } from './server.js?v=s4';
-import * as TF from './trade-fees.js?v=v3';
+import * as TF from './trade-fees.js?v=v4';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation,
           // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind, loadAbyssal() -> abyssal.js 模块
@@ -308,7 +308,7 @@ function marketHtml(R, rp) {
   const body = rows.map((r) => {
     const short = r.buy != null && r.depthSell.filled < r.qty;
     return `<tr>
-      <td><div class="ap-item"><img src="${ICON(r.id)}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a><small class="ap-unit">单价 卖 ${isk(r.sell)} · 收 ${isk(r.buy)}</small></span></div></td>
+      <td><div class="ap-item"><img src="${ICON(r.id)}" data-item-pop="${r.id}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a><small class="ap-unit">单价 卖 ${isk(r.sell)} · 收 ${isk(r.buy)}</small></span></div></td>
       <td class="num">${ctx.formatNumber(r.qty)}</td>
       <td class="num ap-sell ap-hide-sm">${isk(r.sell)}</td>
       <td class="num ap-buy ap-hide-sm">${isk(r.buy)}</td>
@@ -319,7 +319,7 @@ function marketHtml(R, rp) {
     </tr>`;
   }).join('');
   const notes = [];
-  if (R.shortBuy.length) notes.push(`${R.shortBuy.length} 种物品的收单量不够，按挂单深度一次性全部卖给收单约 <b>${ctx.formatISK(R.depthSellTotal)}</b>`);
+  if (R.shortBuy.length) notes.push(`${R.shortBuy.length} 种收单量不够，全部卖给收单约 <b>${ctx.formatISK(R.depthSellTotal)}</b>`);
   if (R.noSell.length) notes.push(`${R.noSell.length} 种在${ctx.esc(R.region.hub.name)}没有卖单：${R.noSell.slice(0, 6).map((r) => ctx.esc(r.name)).join('、')}${R.noSell.length > 6 ? ' 等' : ''}`);
   if (R.noBuy.length) notes.push(`${R.noBuy.length} 种没有收单`);
   if (R.unknown.length) notes.push(`<span class="ap-warn">${R.unknown.length} 行没认出来：${R.unknown.slice(0, 5).map((l) => ctx.esc(l.slice(0, 30))).join('、')}${R.unknown.length > 5 ? ' 等' : ''}</span>`);
@@ -354,7 +354,7 @@ function reprocHtml(R, rp) {
   const items = rp.rows.slice().sort((a, b) => b.rpBuy - a.rpBuy).map((r) => {
     const better = r.direct == null ? null : r.rpBuy > r.direct;
     return `<tr>
-      <td><div class="ap-item"><img src="${ICON(r.id)}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a><small class="ap-unit">${pct(r.y)} · ${ctx.esc(A.rp.skills[r.skill || SKILL.scrap] || '')}</small></span></div></td>
+      <td><div class="ap-item"><img src="${ICON(r.id)}" data-item-pop="${r.id}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a><small class="ap-unit">${pct(r.y)} · ${ctx.esc(A.rp.skills[r.skill || SKILL.scrap] || '')}</small></span></div></td>
       <td class="num">${fmt(r.qty)}${r.left ? `<small title="不足一批（${fmt(r.portion)} 个）的部分不会化掉">剩 ${fmt(r.left)}</small>` : ''}</td>
       <td class="num ap-hide-sm" title="${ctx.esc(A.rp.skills[r.skill || SKILL.scrap] || '')}">${pct(r.y)}</td>
       <td class="num ap-buy ap-strong">${r.batches ? ctx.formatISK(r.rpBuy) : '—'}${r.missing ? `<small>${r.missing} 种产物没有收单</small>` : ''}</td>
@@ -363,7 +363,7 @@ function reprocHtml(R, rp) {
     </tr>`;
   }).join('');
   const mats = rp.mats.map((m) => `<tr>
-      <td><div class="ap-item"><img src="${ICON(m.id)}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${m.id}" title="查看市场">${ctx.esc(m.name)}</a><small class="ap-unit">收 ${isk(m.buy)} · 卖 ${isk(m.sell)}</small></span></div></td>
+      <td><div class="ap-item"><img src="${ICON(m.id)}" data-item-pop="${m.id}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${m.id}" title="查看市场">${ctx.esc(m.name)}</a><small class="ap-unit">收 ${isk(m.buy)} · 卖 ${isk(m.sell)}</small></span></div></td>
       <td class="num">${fmt(m.qty)}</td>
       <td class="num ap-buy ap-hide-sm">${isk(m.buy)}</td>
       <td class="num ap-buy ap-strong">${m.buy == null ? '—' : ctx.formatISK(m.qty * m.buy)}</td>
@@ -372,8 +372,8 @@ function reprocHtml(R, rp) {
   const notes = [];
   notes.push(`化矿率：${rp.oreYield != null ? `矿石 / 冰矿 ${rp.oreYield} · ` : ''}碎铁 ${pct(yieldFor(0))}（${S.station === 'npc' ? 'NPC 空间站' : S.station === 'athanor' ? '阿塔诺' : '塔塔拉'}${TF.settings().src === 'char' ? (TF.character() ? ' · ' + ctx.esc(TF.character().name) + ' 的技能' : ' · <span class="ap-warn">角色技能未读取，按 0 级算</span>') : ''}）`);
   if (S.tax) notes.push(`已扣再处理税 ${S.tax}%（约 ${ctx.formatISK(rp.taxTotal)}）`);
-  if (rp.leftover.length) notes.push(`${rp.leftover.length} 种物品有不足一批的零头不会化掉：${rp.leftover.slice(0, 4).map((r) => ctx.esc(r.name)).join('、')}${rp.leftover.length > 4 ? ' 等' : ''}`);
-  if (rp.skip.length) notes.push(`${rp.skip.length} 种物品不能化矿：${rp.skip.slice(0, 6).map((r) => ctx.esc(r.name)).join('、')}${rp.skip.length > 6 ? ' 等' : ''}`);
+  if (rp.leftover.length) notes.push(`${rp.leftover.length} 种有零头化不掉：${rp.leftover.slice(0, 4).map((r) => ctx.esc(r.name)).join('、')}${rp.leftover.length > 4 ? ' 等' : ''}`);
+  if (rp.skip.length) notes.push(`${rp.skip.length} 种不能化矿：${rp.skip.slice(0, 6).map((r) => ctx.esc(r.name)).join('、')}${rp.skip.length > 6 ? ' 等' : ''}`);
   if (R.unknown.length) notes.push(`<span class="ap-warn">${R.unknown.length} 行没认出来</span>`);
   if (!rp.rows.length) return `<ul class="ap-notes">${notes.map((n) => `<li>${n}</li>`).join('')}</ul><div class="ap-empty">这些物品都不能化矿</div>`;
   return `
@@ -489,7 +489,7 @@ export function showAppraisal() {
   main.dataset.ready = '1';
   main.innerHTML = `
     <section class="ap-page">
-      <div class="ap-head"><h2>估价</h2><span class="text-muted">游戏里全选物品 Ctrl+C 后粘贴</span></div>
+      <div class="ap-head"><h2>估价</h2></div>
       <div class="ap-layout">
         <div class="ap-form">
           <textarea id="apInput" class="ap-input" spellcheck="false" placeholder="例如：&#10;小型掠能器 II*	1	掠能器*	装备*	高能量槽&#10;液化臭氧*	150	冰矿产物*	材料*	货柜舱&#10;掘金者级*	1	勘探护卫舰*	舰船*&#10;&#10;也可以：名称 x 数量，或一行一个名称"></textarea>
@@ -517,7 +517,7 @@ export function showAppraisal() {
           </div>
         </div>
         <div class="ap-col">
-          <div class="ap-result" id="apResult"><div class="ap-empty">粘贴后点「估价」（Ctrl+Enter）</div></div>
+          <div class="ap-result" id="apResult"><div class="ap-empty">游戏里 Ctrl+C 物品，粘贴后点「估价」</div></div>
           <div id="apAby"></div>
         </div>
       </div>

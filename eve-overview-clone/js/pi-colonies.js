@@ -78,13 +78,13 @@ function planetCard(p, layout, name, d) {
     ${extractors.length ? `<div class="col-sec"><h5>提取器</h5><ul class="col-list">${exRows}</ul></div>` : ''}
     ${factoryGroups.size ? `<div class="col-sec"><h5>工厂</h5><div class="col-chips">${[...factoryGroups].map(([sid, n]) => `<span class="pill">${esc(d.schematics.get(sid))} × ${n}</span>`).join(' ')}</div></div>` : ''}
     ${stores.size ? `<div class="col-sec"><h5>仓库 / 发射台存量 <small>最低卖价 ≈ ${formatISK(storeValue)} ISK</small></h5><ul class="col-list">${[...stores].sort((a, b) => b[1] - a[1]).map(([id, n]) => `<li>${icon(id)}<span>${esc(type(id))}</span><b>${formatNumber(n)}</b></li>`).join('')}</ul></div>` : ''}
-    <p class="col-foot">${updated ? '数据更新于 ' + updated.toLocaleString('zh-CN', { hour12: false }) + '（在游戏里打开这颗行星后才会刷新）' : ''}</p>
+    <p class="col-foot" title="游戏里打开行星后才刷新">${updated ? '更新于 ' + updated.toLocaleString('zh-CN', { hour12: false }) : ''}</p>
   </div>`;
 }
 
 export async function renderColonies(box, force = false) {
   const { esc, formatISK } = ctx;
-  if (!ctx.tokenInfo()) { box.innerHTML = '<div class="pi-card"><p class="text-muted">绑定 ESI 后可查看我的殖民地。请先在「个人中心」绑定角色。</p></div>'; return; }
+  if (!ctx.tokenInfo()) { box.innerHTML = '<div class="pi-card"><p class="text-muted">需要先绑定 ESI</p></div>'; return; }
   if (!ctx.hasScopeGroup('planets')) { box.innerHTML = ctx.scopeNeededHtml('planets', '查看我的殖民地'); return; }
   box.innerHTML = '<div class="pi-loading">读取殖民地…</div>';
   let d;

@@ -1,11 +1,12 @@
 import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17';
-import * as TF from './trade-fees.js?v=v3';
-import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v12';
-import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v27';
-import * as SM from './struct-markets.js?v=v5';
-import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v7';
+import * as TF from './trade-fees.js?v=v4';
+import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v13';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v33';
+import * as SM from './struct-markets.js?v=v6';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v8';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=1';
+import { initItemPop, openItemPop } from './item-pop.js?v=3';
 
 // ===== 配置与常量 =====
 const IMAGE_BASE = 'https://images.evetech.net/types';
@@ -429,7 +430,7 @@ function showPageSkeleton(view) {
 // 主权规划：首次进入时加载
 let sovLoading = null;
 function loadSovModule() {
-  if (!sovLoading) sovLoading = import('./sov.js?v=v6').then((m) => {
+  if (!sovLoading) sovLoading = import('./sov.js?v=v7').then((m) => {
     m.initSov({
       esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
       getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -452,7 +453,7 @@ async function openSov() {
 // 虫洞：首次进入时加载
 let whLoading = null;
 function loadWormholeModule() {
-  if (!whLoading) whLoading = import('./wormhole.js?v=v3').then((m) => {
+  if (!whLoading) whLoading = import('./wormhole.js?v=v4').then((m) => {
     m.initWormhole({
       esc, formatISK, formatNumber, showToast, store, loadKillboard, resolveTypeNames,
       planPi: (id) => loadPiModule().then((pi) => { pi.useWormhole(id); switchView('pi'); })
@@ -473,7 +474,7 @@ async function openWormhole() {
 // 深渊市场（MutaMarket 数据）：首次进入时加载
 let abyssLoading = null;
 function loadAbyssModule() {
-  if (!abyssLoading) abyssLoading = import('./abyss.js?v=v4').then((m) => {
+  if (!abyssLoading) abyssLoading = import('./abyss.js?v=v5').then((m) => {
     m.initAbyss({
       esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, getHubPrices: getJitaPrices, fetchESI,
       game: gameActions, openDynamicItem, loadAbyssal, dogmaNames, fmtAttr,
@@ -495,7 +496,7 @@ async function openAbyss() {
 // 教程：首次进入时加载
 let guidesLoading = null;
 function loadGuidesModule() {
-  if (!guidesLoading) guidesLoading = import('./guides.js?v=v11').then((m) => {
+  if (!guidesLoading) guidesLoading = import('./guides.js?v=v12').then((m) => {
     m.initGuides({ esc, debounce, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
     return m;
   }).catch((error) => { guidesLoading = null; throw error; });
@@ -514,7 +515,7 @@ async function openGuides() {
 // 战争（势力战争 + 军团战争）：首次进入时加载
 let warLoading = null;
 function loadWarModule() {
-  if (!warLoading) warLoading = import('./war.js?v=v9').then((m) => {
+  if (!warLoading) warLoading = import('./war.js?v=v12').then((m) => {
     m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
     return m;
   }).catch((error) => { warLoading = null; throw error; });
@@ -539,7 +540,7 @@ async function getJitaPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v38').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v41').then((m) => {
     m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -565,7 +566,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v11').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v14').then((m) => {
     m.initLp({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
@@ -603,7 +604,7 @@ async function openEftFit(text) {
 // 快递合同：首次进入时加载
 let courierLoading = null;
 function loadCourierModule() {
-  if (!courierLoading) courierLoading = import('./courier.js?v=v8').then((m) => {
+  if (!courierLoading) courierLoading = import('./courier.js?v=v9').then((m) => {
     m.initCourier({
       esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
       // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
@@ -647,7 +648,7 @@ async function openCourier() {
 // 合同（公开合同存档 + 我的个人 / 军团 / 联盟合同）：首次进入时加载
 let contractsLoading = null;
 function loadContractsModule() {
-  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v5').then((m) => {
+  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v6').then((m) => {
     m.initContracts({
       esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, officialName, locationName, loadNpcNames, typeName,
       valuation, valuationCard, store, game: gameActions, regions: REGIONS, marketRegions: () => state.marketRegions, loadMarketRegions,
@@ -677,7 +678,7 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v13').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v14').then((m) => {
     m.initAppraisal({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
       getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -705,12 +706,12 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v39').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v40').then((m) => {
     m.initPi({ addToCart, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
       renderColonies: async (box) => {
-        const c = await import('./pi-colonies.js?v=v3');
+        const c = await import('./pi-colonies.js?v=v4');
         c.initColonies({
           esc, formatISK, formatNumber, esiAuthFetch, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, valuation,
           hasScopeGroup, scopeNeededHtml, openMapSystem, tokenInfo: () => state.esiToken || readEsiToken()
@@ -739,7 +740,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v66').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v68').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -839,7 +840,7 @@ function renderNoKbPage() {
   box.innerHTML = '<div class="empty-state server-unsupported">' +
     '<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>' +
     '<p>' + esc(NO_KB_MESSAGE) + '</p>' +
-    '<p class="hint">zKillboard 与本站击杀记录服务只收录宁静服的击杀邮件</p>' +
+    '<p class="hint">击杀数据仅限宁静服</p>' +
     '<div class="server-unsupported-actions">' +
       (SERVER.kbSite ? `<a class="btn btn-primary" href="${SERVER.kbSite.url}/" target="_blank" rel="noopener">打开${esc(SERVER.kbSite.name)} ↗</a>` : '') +
       (SERVER.kbExtra || []).map((x) => `<a class="btn btn-ghost" href="${x.url}" target="_blank" rel="noopener">打开${esc(x.name)} ↗</a>`).join('') +
@@ -848,7 +849,7 @@ function renderNoKbPage() {
     '</div>' +
   '</div><div class="kb-wrap" id="localScanBox"></div>';
   box.querySelector('[data-local-scan]').addEventListener('click', async () => {
-    const m = await import('./local-scan.js?v=v2');
+    const m = await import('./local-scan.js?v=v3');
     m.renderLocal($('localScanBox'), {
       esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage: (path, size) => `https://images.evetech.net/${path}?size=${size}`,
       kb: false, loadTypes: async () => {}, typeName, systemName: (id) => officialName(id) || String(id)
@@ -864,8 +865,8 @@ function initServerSwitch() {
   if (!SERVER.kb && !SERVER.kbSite) $$('[data-profile="combat"]').forEach((el) => { el.hidden = true; });   // 没有战斗记录数据也没有外部击杀站
   if (SERVER.tokenProxy) {
     // 网易登录服务器不允许浏览器跨域请求令牌，只能经本站转发，如实说明
-    $('esiPrivacyNote').textContent = '经本站原样转发到网易登录服务器（不记录），令牌只保存在本机';
-    $('esiCallbackNote').textContent = '复制网易 ESI 页面地址栏的完整地址（几分钟内有效）；登录报 invalid_scope 时把报错文字粘贴过来';
+    $('esiPrivacyNote').textContent = '经本站转发到网易登录（不记录），令牌只存本机';
+    $('esiCallbackNote').textContent = '粘贴地址栏完整地址（几分钟内有效）';
   }
   menu.innerHTML = SERVER_LIST.map((x) =>
     `<button type="button" role="menuitemradio" aria-checked="${x.id === SERVER.id}" data-switch-server="${x.id}">` +
@@ -903,7 +904,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v50').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v53').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -961,7 +962,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v53').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v54').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -1406,7 +1407,7 @@ function renderSearchResults(container) {
   });
 
   if (!results.length) {
-    container.innerHTML = '<div class="empty-state"><p>未找到 “' + esc(state.searchQuery) + '”</p><p class="hint">试试更短的关键词或输入 Type ID</p></div>';
+    container.innerHTML = '<div class="empty-state"><p>未找到 “' + esc(state.searchQuery) + '”</p></div>';
     return;
   }
   results.sort((a, b) => a.score - b.score || a.type.name.length - b.type.name.length || a.type.name.localeCompare(b.type.name, 'zh-CN'));
@@ -1473,7 +1474,7 @@ function renderFavorites() {
   if (!state.catalog) return;
   $('favoritesList').innerHTML = count
     ? state.favorites.map((id) => miniItem(id, { removable: true })).join('')
-    : `<div class="empty-state">${ICONS.star}<p>暂无收藏物品</p><p class="hint">在物品详情中点击 ☆ 或按 F 收藏</p></div>`;
+    : `<div class="empty-state">${ICONS.star}<p>暂无收藏物品</p></div>`;
 }
 
 function renderRecent() {
@@ -1542,7 +1543,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v9').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v10').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -1618,6 +1619,37 @@ async function selectItem(typeId, { updateHash = true } = {}) {
   await loadMarketData(typeId);
 }
 
+// ===== 单物品行情窗口（item-pop.js 入口与外壳，item-panel.js 内容在第一次打开时才加载） =====
+let itemPanelModule = null;
+function initItemPopups() {
+  const groupPath = (id) => {
+    const e = state.typeIndex.get(id);
+    if (!e) return [];
+    const root = state.categories.get(rootGroupId(e.groupId)), g = state.categories.get(e.groupId);
+    return [...new Set([root?.name, g?.name].filter(Boolean))];
+  };
+  initItemPop({
+    typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
+    groupPath, copyText,
+    iconUrl: (id, size = 64) => `${IMAGE_BASE}/${id}/icon?size=${size}`,
+    openItem: (id) => { switchView('market'); selectItem(id); },
+    loadPanel: async () => {
+      if (itemPanelModule) return itemPanelModule;
+      const m = await import('./item-panel.js?v=2');
+      m.initItemPanel({
+        esc, formatISK, formatPrice, formatNumber, cssVar, showToast, locationName, resolveStructureNames,
+        server: SERVER.id, regions: REGIONS, globalRegion: GLOBAL_MARKET_REGION, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
+        regionOrders, regionHistory, accountToken,
+        accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
+        openEsiBind: () => { switchView('profile'); openEsiModal(); },
+        typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id
+      });
+      itemPanelModule = m;
+      return m;
+    }
+  });
+}
+
 // 舰船（市场根分类「舰船」）才显示「近期损失」
 const SHIP_ROOT_GROUP = 4;
 function rootGroupId(groupId) {
@@ -1643,7 +1675,7 @@ async function renderShipLosses(typeId) {
     if (state.selectedItem?.id !== typeId || state.contentTab !== 'losses') return;
     await Promise.all([kb.prepareKills(kills.slice(0, 50)), kb.prepareFitNames(kills)]);
     if (state.selectedItem?.id !== typeId || state.contentTab !== 'losses') return;
-    if (!kills.length) { body.innerHTML = '<p class="text-muted kb-empty">zKillboard 上没有该舰船的近期损失记录</p>'; return; }
+    if (!kills.length) { body.innerHTML = '<p class="text-muted kb-empty">没有近期损失记录</p>'; return; }
     const values = kills.map((k) => k.zkb.totalValue).sort((a, b) => a - b);
     const median = values[Math.floor(values.length / 2)];
     const avg = values.reduce((a, b) => a + b, 0) / values.length;
@@ -1652,11 +1684,11 @@ async function renderShipLosses(typeId) {
     body.innerHTML =
       '<div class="valuation-grid station-grid">' +
         valuationCard('样本', kills.length + ' 次损失', '最近 ' + Math.max(1, Math.round(span)) + ' 天内') +
-        valuationCard('损失价值中位数', formatISK(median) + ' ISK', '船体 + 装配 + 货物', 'is-sell') +
-        valuationCard('平均损失价值', formatISK(avg) + ' ISK', '受少数高价值装配影响', 'is-order') +
+        valuationCard('损失价值中位数', formatISK(median) + ' ISK', '', 'is-sell') +
+        valuationCard('平均损失价值', formatISK(avg) + ' ISK', '', 'is-order') +
         valuationCard('被单刷击毁', (solo / kills.length * 100).toFixed(0) + '%', solo + ' 次 1v1 损失') +
       '</div>' +
-      '<h4 class="info-section-title section-gap">常用装配<small>（各模块出现在多少比例的损失中）</small></h4>' +
+      '<h4 class="info-section-title section-gap">常用装配</h4>' +
       kb.commonFitHtml(kb.commonFit(kills)) +
       '<h4 class="info-section-title section-gap">最近损失</h4><div class="kb-list">' + kb.killTableHtml(kills.slice(0, 50)) + '</div>' +
       '<p class="text-muted valuation-note">数据：zKillboard</p>';
@@ -1762,7 +1794,7 @@ async function loadMarketData(typeId, { force = false } = {}) {
       : await fetchUniverseMarket(typeId, {
         force, current,
         onProgress: (done, total) => {
-          if (current()) $('updateTag').textContent = partial ? `已显示五大交易中心 · 其余星域读取中 ${done}/${total}` : `更新中… ${done}/${total} 个星域`;
+          if (current()) $('updateTag').textContent = partial ? `其余星域读取中 ${done}/${total}` : `更新中… ${done}/${total} 个星域`;
         },
         onPartial: (o, h) => {
           if (!current()) return;
@@ -1795,7 +1827,7 @@ async function loadMarketData(typeId, { force = false } = {}) {
     state.orders = [];
     state.history = [];
     renderStats();
-    renderOrders('加载失败，点击右上角刷新重试');
+    renderOrders('加载失败');
     renderHistory();
   }
 }
@@ -1930,20 +1962,20 @@ function hasScope(token, scope) {
 // 基础权限来自服务器配置；以下功能的权限在绑定框里勾选后追加到授权链接。
 // 宁静服：本站在 CCP 开发者后台注册的应用必须也开了这些权限，否则 CCP 会拒绝授权，此时取消勾选即可。
 const SCOPE_GROUPS = [
-  { id: 'ui', name: '游戏内操作', desc: '设为目的地、写入自动导航、在游戏里打开市场 / 合同窗口', scopes: ['esi-ui.write_waypoint.v1', 'esi-ui.open_window.v1'] },
-  { id: 'fatigue', name: '跳跃疲劳', desc: '旗舰跳跃规划读取角色当前的跳跃疲劳', scopes: ['esi-characters.read_fatigue.v1'] },
-  { id: 'planets', name: '行星殖民地', desc: '行星工业页显示我的殖民地、提取器到期时间与仓库存量', scopes: ['esi-planets.manage_planets.v1'] },
-  { id: 'research', name: '研究代理人', desc: '个人中心显示研究代理人累计的研究点数', scopes: ['esi-characters.read_agents_research.v1'] },
-  { id: 'fleet', name: '舰队', desc: '个人中心显示当前舰队成员、舰船与位置分布（需舰队指挥）', scopes: ['esi-fleets.read_fleet.v1'] },
+  { id: 'ui', name: '游戏内操作', desc: '设目的地、自动导航、打开游戏窗口', scopes: ['esi-ui.write_waypoint.v1', 'esi-ui.open_window.v1'] },
+  { id: 'fatigue', name: '跳跃疲劳', desc: '旗舰跳跃规划读取疲劳', scopes: ['esi-characters.read_fatigue.v1'] },
+  { id: 'planets', name: '行星殖民地', desc: '查看我的行星殖民地', scopes: ['esi-planets.manage_planets.v1'] },
+  { id: 'research', name: '研究代理人', desc: '查看研究点数', scopes: ['esi-characters.read_agents_research.v1'] },
+  { id: 'fleet', name: '舰队', desc: '查看舰队成员（需舰队指挥）', scopes: ['esi-fleets.read_fleet.v1'] },
   // 新权限默认不勾（CCP 后台的应用要先开通，否则授权会被拒）
-  { id: 'corpContracts', name: '军团合同', desc: '合同页查看军团发起、接受或指派给军团的合同', scopes: ['esi-contracts.read_corporation_contracts.v1'], optIn: true },
-  { id: 'mail', name: '游戏邮件', desc: '个人中心查看游戏邮件（收件箱、已发送、军团、联盟邮件，只读）', scopes: ['esi-mail.read_mail.v1'], optIn: true },
-  { id: 'corp', name: '军团管理', desc: '军团钱包、订单、工业任务、建筑燃料、月矿、资产（需相应军团职位）',
+  { id: 'corpContracts', name: '军团合同', desc: '查看军团合同', scopes: ['esi-contracts.read_corporation_contracts.v1'], optIn: true },
+  { id: 'mail', name: '游戏邮件', desc: '查看游戏邮件（只读）', scopes: ['esi-mail.read_mail.v1'], optIn: true },
+  { id: 'corp', name: '军团管理', desc: '钱包、订单、工业、建筑、资产（需军团职位）',
     scopes: ['esi-characters.read_corporation_roles.v1', 'esi-wallet.read_corporation_wallets.v1', 'esi-markets.read_corporation_orders.v1',
       'esi-industry.read_corporation_jobs.v1', 'esi-corporations.read_structures.v1', 'esi-industry.read_corporation_mining.v1',
       'esi-assets.read_corporation_assets.v1', 'esi-corporations.read_divisions.v1'] },
   // 主权中心 / 天钩接口只有宁静服有；新权限默认不勾（CCP 后台的应用要先开通，否则授权会被拒）
-  { id: 'sov', name: '主权设施', desc: '主权规划页读取军团的主权中心（升级件、电力、劳动力、燃料）与天钩（需董事等军团职位）',
+  { id: 'sov', name: '主权设施', desc: '主权中心与天钩（需董事等职位）',
     scopes: ['esi-structures.read_corporation.v1'], tqOnly: true, optIn: true }
 ].filter((g) => !g.tqOnly || IS_TQ);
 const SCOPE_GROUP_KEY = 'eve-esi-scope-groups';
@@ -1995,7 +2027,7 @@ function hasScopeGroup(id) {
 // 缺权限时的提示块（按钮打开绑定框并勾上这一组）
 function scopeNeededHtml(id, what) {
   const g = SCOPE_GROUPS.find((x) => x.id === id);
-  return `<div class="empty-state scope-needed"><p>${esc(what || g.desc)}需要「${esc(g.name)}」权限，当前角色的授权里没有。重新授权时勾选这一项即可（同一角色只更新令牌）。</p>
+  return `<div class="empty-state scope-needed"><p>${esc(what || g.desc)}需要「${esc(g.name)}」权限</p>
     <button class="btn btn-primary" data-scope-rebind="${id}">重新授权</button></div>`;
 }
 document.addEventListener('click', (e) => {
@@ -2005,7 +2037,7 @@ document.addEventListener('click', (e) => {
 
 // ===== 游戏内操作（esi-ui.*）：网页上点一下，游戏客户端里生效（角色需在线）=====
 async function gameUi(path, params, okText) {
-  if (!hasScopeGroup('ui')) { openEsiModal('ui'); showToast('需要「游戏内操作」权限：请重新授权并勾选这一项', 'error', 4000); return false; }
+  if (!hasScopeGroup('ui')) { openEsiModal('ui'); showToast('需要「游戏内操作」权限', 'error', 4000); return false; }
   try {
     await esiAuthFetch(path + '?' + new URLSearchParams(params), { method: 'POST' });
     showToast(okText, 'success');
@@ -2146,7 +2178,7 @@ async function loadStructureOrders(typeId, seq) {
   };
   const token = state.esiToken || readEsiToken();
   if (state.globalMarket || !token?.access_token) return show('');   // 全服统一市场的订单已全部在星域订单里
-  if (!hasScope(token, STRUCT_MARKET_SCOPE)) return show('玩家建筑里的订单需要「建筑市场」授权（esi-markets.structure_markets.v1），重新绑定 ESI 后可查看', true);
+  if (!hasScope(token, STRUCT_MARKET_SCOPE)) return show('玩家建筑订单需「建筑市场」权限，请重新绑定 ESI', true);
   try {
     // 选了星域：本星域的公开 / 已知市场建筑 + 「我的建筑市场」里本星域的；全宇宙：只读「我的建筑市场」（星域太多，不逐个找）
     const mine = await SM.enabledStructs();
@@ -2498,7 +2530,7 @@ function renderOrderTable(side, emptyText) {
   const list = sortOrders(all, side).slice(0, ORDER_ROW_LIMIT);
   const best = state.bestPrices?.[side];
   $(isBuy ? 'buyCount' : 'sellCount').textContent = all.length;
-  $(isBuy ? 'buySubtitle' : 'sellSubtitle').textContent = all.length > ORDER_ROW_LIMIT ? `显示前 ${ORDER_ROW_LIMIT} 单 · 点击行复制价格 · 地点/数量/总价列单独复制` : '点击行复制价格 · 地点/数量/总价列单独复制';
+  $(isBuy ? 'buySubtitle' : 'sellSubtitle').textContent = all.length > ORDER_ROW_LIMIT ? `显示前 ${ORDER_ROW_LIMIT} 单` : '点击行复制价格';
   const body = $(isBuy ? 'buyOrdersBody' : 'sellOrdersBody');
   if (!list.length) {
     body.innerHTML = `<tr class="empty-row"><td colspan="6">${emptyText || (state.hubOnly ? '交易中心无' + (isBuy ? '买单' : '卖单') : '无' + (isBuy ? '买单' : '卖单'))}</td></tr>`;
@@ -2739,12 +2771,13 @@ function initContentTabs() {
   SM.onStructChange(() => { clearTimeout(structReload); structReload = setTimeout(() => { if (state.selectedItem?.id) loadMarketData(state.selectedItem.id); prefetchStructMarkets(); }, 800); });
   startStructPrefetch();
   initItemPrefetch();
+  initItemPopups();
   initHubCompare({ structs, regionOrders, regionHistory, dropMarket: dropMarketCache, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
     skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8), openRank: () => openArb() });
   initHubRank({ structs, quote: SM.structQuote, esiUrl, showToast, regionList: regionListAll, findSystem: findSystemByName, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
     typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
     category: (id) => { const e = state.typeIndex.get(id); const g = e && state.categories.get(rootGroupId(e.groupId)); return g ? { id: g.id, name: g.name } : null; },
-    iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,
+    iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`, openItemPop,
     openItem: (id) => { switchContentTab('hubs'); selectItem(id); },
     openSide: () => { if (MOBILE_QUERY.matches) openDrawer(); else if ($('sidebar').classList.contains('collapsed')) toggleSidebar('market'); },
     closeSide: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
@@ -3119,7 +3152,7 @@ async function ssoToken(params) {
   try { data = JSON.parse(text); } catch { /* HTML 错误页 */ }
   if (!res.ok || !data.access_token) {
     // 网易登录服务器对无效 / 过期的授权码只返回 500 和一句通用错误
-    const netease = !IS_TQ && res.status === 500 ? '授权码无效或已过期（网易授权码几分钟内失效，请重新登录后尽快粘贴）' : '';
+    const netease = !IS_TQ && res.status === 500 ? '授权码无效或已过期，请重新登录' : '';
     const reason = data.error_description || data.error || netease || (text.startsWith('<') ? '授权码无效或已被使用' : 'HTTP ' + res.status);
     const error = new Error(reason);
     error.status = res.status;
@@ -4109,7 +4142,7 @@ function fmtAttr(v, unit, units) {
 // 深渊装备估价（MutaMarket，经 kb_service 代理）：突变属性弹窗与估价页共用，首次用到时加载
 let abyssalLoading = null;
 function loadAbyssal() {
-  if (!abyssalLoading) abyssalLoading = import('./abyssal.js?v=v2').then((m) => {
+  if (!abyssalLoading) abyssalLoading = import('./abyssal.js?v=v3').then((m) => {
     m.initAbyssal({ esc, formatISK, formatNumber, resolveTypeNames, openDynamicItem });
     return m;
   }).catch((error) => { abyssalLoading = null; throw error; });
@@ -4265,14 +4298,14 @@ function abyAssetCard(list) {
   const s = abySummary(list);
   if (!s.items.length) return '';
   if (!abyAssetOn()) {
-    return valuationCard('深渊装备', s.items.length + ' 件', '<button class="btn btn-sm" data-aby-assets="on">估价深渊装备（' + s.items.length + ' 件）</button>', 'is-aby');
+    return valuationCard('深渊装备', s.items.length + ' 件', '<button class="btn btn-sm" data-aby-assets="on">估价</button>', 'is-aby');
   }
   if (abyEstRun || s.items.some((a) => !abyEst.has(a.item_id))) {
     estimateAbyssalAssets(s.items);
-    return valuationCard('深渊参考估价', '估价中…', s.items.length + ' 件深渊装备，先查 MutaMarket，没有的用本站模型', 'is-aby');
+    return valuationCard('深渊参考估价', '估价中…', '', 'is-aby');
   }
   return valuationCard('深渊参考估价', formatISK(s.value) + ' ISK',
-    s.n + '/' + s.items.length + ' 件有估价：MutaMarket ' + s.muta + ' 件、本站模型 ' + s.model + ' 件；不计入市场估值' +
+    '<span title="MutaMarket ' + s.muta + ' 件 · 本站模型 ' + s.model + ' 件">' + s.n + '/' + s.items.length + ' 件有估价 · 不计入市场估值</span>' +
     '<span class="aby-act">' + (s.retry ? '<button class="btn btn-ghost btn-sm" data-aby-assets="retry">重试</button>' : '') +
     '<button class="btn btn-ghost btn-sm" data-aby-assets="off" title="不再自动估价深渊装备">关闭估价</button></span>', 'is-aby');
 }
@@ -4299,7 +4332,7 @@ function bindAbyAssets(box) {
 let assetTools = null;
 let assetToolsLoading = null;
 function loadAssetTools() {
-  if (!assetToolsLoading) assetToolsLoading = import('./asset-tools.js?v=v3').then((m) => {
+  if (!assetToolsLoading) assetToolsLoading = import('./asset-tools.js?v=v4').then((m) => {
     m.initAssetTools({ esc, formatISK, formatNumber, typeName, serverKey, store, TF, server: SERVER.id, regions: REGIONS, showToast,
       isActive: () => !$('profileView').hidden && activeProfileTab() === 'assets' });
     assetTools = m;
@@ -4374,8 +4407,8 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
       valuationCard('资产估值 · 最低卖价', formatISK(assetSell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', assetSell * TF.netSell()), 'is-sell') +
       valuationCard('资产估值 · 最高收价', formatISK(assetBuy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', assetBuy * TF.netBuy()), 'is-buy') +
       (showMid ? medCard('资产估值', assetMid, nonBpc.filter((a) => medOf(hubPrice(region, a.type_id)) != null).length, nonBpc.length, region) : '') +
-      valuationCard('我的卖单', formatISK(sellOrderTotal) + ' ISK', sellOrders.length + ' 笔 · 剩余数量 × 委托价' + netLine('全部成交税后', sellOrderTotal * TF.netBuy()), 'is-order') +
-      valuationCard('我的收单', formatISK(buyOrderTotal) + ' ISK', buyOrders.length + ' 笔 · 剩余数量 × 委托价', 'is-order') +
+      valuationCard('我的卖单', formatISK(sellOrderTotal) + ' ISK', sellOrders.length + ' 笔' + netLine('全部成交税后', sellOrderTotal * TF.netBuy()), 'is-order') +
+      valuationCard('我的收单', formatISK(buyOrderTotal) + ' ISK', buyOrders.length + ' 笔', 'is-order') +
       valuationCard('资产 + 订单合计', formatISK(assetSell + sellOrderTotal + buyOrderTotal) + ' ISK',
         '按收价：' + formatISK(assetBuy + sellOrderTotal + buyOrderTotal) + ' ISK · 不含钱包', 'is-total') +
       abyAssetCard(assets) +
@@ -4431,7 +4464,7 @@ function renderStationAssets(box, station, groups, { region }) {
       valuationCard('本站估值 · 最高收价', formatISK(station.buy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', station.buy * TF.netBuy()), 'is-buy') +
       (showMid ? medCard('本站估值', station.mid, midPriced, nonBpc.length, region) : '') +
       valuationCard('物品', formatNumber(list.length) + ' 项', kinds + ' 种物品') +
-      valuationCard('占总资产', total ? ((station.sell / total) * 100).toFixed(1) + '%' : '—', '按最低卖价估值') +
+      valuationCard('占总资产', total ? ((station.sell / total) * 100).toFixed(1) + '%' : '—', '按最低卖价') +
       abyAssetCard(list) +
     '</div>' +
     '<div class="station-filter search-box"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' +
@@ -4542,9 +4575,9 @@ async function renderProfileTab(tab) {
     const income = journal ? journal.filter((j) => j.amount > 0).reduce((t, j) => t + j.amount, 0) : 0;
     const spend = journal ? journal.filter((j) => j.amount < 0).reduce((t, j) => t + j.amount, 0) : 0;
     let html = '<div class="valuation-grid wallet-grid">' +
-      valuationCard('钱包余额', walletOk ? formatPrice(data.wallet) + ' ISK' : '权限不足', '当前角色钱包') +
+      valuationCard('钱包余额', walletOk ? formatPrice(data.wallet) + ' ISK' : '权限不足', '') +
       valuationCard('近期收入', formatISK(income) + ' ISK', '最近 ' + (journal ? journal.length : 0) + ' 条流水', 'is-buy') +
-      valuationCard('近期支出', formatISK(Math.abs(spend)) + ' ISK', '同一时间段', 'is-sell') +
+      valuationCard('近期支出', formatISK(Math.abs(spend)) + ' ISK', '', 'is-sell') +
       '</div>';
     if (journal && journal.length) {
       html += '<div class="table-scroll"><table class="pc-mini-table wallet-mini"><thead><tr><th>时间</th><th>类型</th><th>对方</th><th>金额</th></tr></thead><tbody>' +
@@ -4575,7 +4608,7 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v4').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v5').then((m) => {
     m.initProfileMore({
       esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
@@ -4592,7 +4625,7 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v1').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v2').then((m) => {
     m.initOrderWatch({
       esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -4612,7 +4645,7 @@ function loadOrderWatch() {
 // 个人中心 · 交易记录与盈亏：首次打开时加载
 let tradesLoading = null;
 function loadTradesModule() {
-  if (!tradesLoading) tradesLoading = import('./trades.js?v=v4').then((m) => {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v5').then((m) => {
     m.initTrades({
       esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard,
@@ -4863,16 +4896,15 @@ function valueContractItems(items, region) {
 
 // 合同价与估值比较：负数表示合同价低于估值
 function compareCard(label, price, value, noun = '合同价') {
-  if (!value) return valuationCard(label, '无行情', '物品没有可用行情');
+  if (!value) return valuationCard(label, '无行情', '');
   const diff = price - value;
-  const pct = (diff / value) * 100;
   const text = (diff <= 0 ? '低 ' : '高 ') + formatISK(Math.abs(diff)) + ' ISK';
-  return valuationCard(label, text, noun + '为估值的 ' + ((price / value) * 100).toFixed(1) + '%（' + (pct <= 0 ? '低' : '高') + Math.abs(pct).toFixed(1) + '%）', diff <= 0 ? 'is-buy' : 'is-sell');
+  return valuationCard(label, text, noun + '为估值的 ' + ((price / value) * 100).toFixed(1) + '%', diff <= 0 ? 'is-buy' : 'is-sell');
 }
 
 function contractVerdict(price, given) {
   if (!price || !given.count || (!given.sell && !given.buy)) return '';
-  if (given.buy && price <= given.buy) return '<span class="verdict good">低于最高收购价 · 买入后可直接卖给收单</span>';
+  if (given.buy && price <= given.buy) return '<span class="verdict good">低于最高收购价</span>';
   if (given.sell && price <= given.sell) return '<span class="verdict ok">低于市场最低卖价</span>';
   return '<span class="verdict bad">高于市场最低卖价</span>';
 }
@@ -4880,9 +4912,9 @@ function contractVerdict(price, given) {
 // 收购合同的结论：报酬与索取物品价值比较（站在接受方角度）
 function requestVerdict(pay, wanted) {
   if (!pay || (!wanted.sell && !wanted.buy)) return '';
-  if (wanted.sell && pay >= wanted.sell) return '<span class="verdict good">报酬高于最低卖价 · 从市场买入后交付即可获利</span>';
+  if (wanted.sell && pay >= wanted.sell) return '<span class="verdict good">报酬高于最低卖价</span>';
   if (wanted.buy && pay >= wanted.buy) return '<span class="verdict ok">报酬高于最高收购价</span>';
-  return '<span class="verdict bad">报酬低于最高收购价 · 物品卖给收单更划算</span>';
+  return '<span class="verdict bad">报酬低于最高收购价</span>';
 }
 
 async function renderContractDetail(box, c) {
@@ -4918,16 +4950,16 @@ async function renderContractDetail(box, c) {
     const perM3 = c.volume ? c.reward / c.volume : 0;
     cards =
       valuationCard('报酬', formatISK(c.reward) + ' ISK', c.volume ? formatNumber(c.volume, 1) + ' m³ · ' + formatPrice(perM3) + ' ISK/m³' : '—', 'is-buy') +
-      valuationCard('抵押金', formatISK(c.collateral) + ' ISK', '接受方需支付的保证金', 'is-order') +
+      valuationCard('抵押金', formatISK(c.collateral) + ' ISK', '', 'is-order') +
       valuationCard('物品估值 · 最低卖价', formatISK(given.sell) + ' ISK', given.sellPriced + '/' + given.count + ' 项有卖单', 'is-sell') +
       valuationCard('物品估值 · 最高收价', formatISK(given.buy) + ' ISK', given.buyPriced + '/' + given.count + ' 项有收单', 'is-buy') +
       midCard('物品估值', given) +
-      valuationCard('抵押金覆盖率', given.sell ? ((c.collateral / given.sell) * 100).toFixed(1) + '%' : '—', '抵押金 ÷ 物品卖价估值', c.collateral >= given.sell ? 'is-buy' : 'is-sell');
+      valuationCard('抵押金覆盖率', given.sell ? ((c.collateral / given.sell) * 100).toFixed(1) + '%' : '—', '', c.collateral >= given.sell ? 'is-buy' : 'is-sell');
   } else if (!given.count && wanted.count) {
     // 收购合同：发起方只索取物品并支付报酬（或价格），比较报酬与索取物品的市场价值
     const pay = c.reward || c.price;
     cards =
-      valuationCard(c.reward ? '发起方支付报酬' : '合同价格', formatISK(pay) + ' ISK', c.reward ? '接受方交付物品后获得' : '接受方支付') +
+      valuationCard(c.reward ? '发起方支付报酬' : '合同价格', formatISK(pay) + ' ISK', '') +
       valuationCard('索取物品 · 最低卖价', formatISK(wanted.sell) + ' ISK', wanted.sellPriced + '/' + wanted.count + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
       valuationCard('索取物品 · 最高收价', formatISK(wanted.buy) + ' ISK', wanted.buyPriced + '/' + wanted.count + ' 项在 ' + esc(region.hub.name) + ' 有收单', 'is-buy') +
       midCard('索取物品', wanted) +
@@ -4938,7 +4970,7 @@ async function renderContractDetail(box, c) {
     const priceLabel = c.type === 'auction' ? (topBid ? '当前最高出价' : '起拍价') : '合同价格';
     const priceDetail = c.type === 'auction'
       ? (c.buyout ? '一口价 ' + formatISK(c.buyout) + ' · ' : '') + bids.length + ' 次出价'
-      : (c.reward > 0 ? '发起方另付报酬 ' + formatISK(c.reward) : '接受方支付');
+      : (c.reward > 0 ? '发起方另付报酬 ' + formatISK(c.reward) : '');
     cards =
       valuationCard(priceLabel, formatISK(price) + ' ISK', priceDetail) +
       valuationCard('物品估值 · 最低卖价', formatISK(given.sell) + ' ISK', given.sellPriced + '/' + given.count + ' 项在 ' + esc(region.hub.name) + ' 有卖单', 'is-sell') +
@@ -4947,7 +4979,7 @@ async function renderContractDetail(box, c) {
       (given.count && price ? compareCard('对比卖价估值', price, given.sell, priceLabel) + compareCard('对比收价估值', price, given.buy, priceLabel) : '') +
       (given.count && price && showMid && given.mid ? compareCard('对比成交价估值', price, given.mid, priceLabel) : '');
     if (wanted.count) {
-      cards += valuationCard('索取物品 · 最低卖价', formatISK(wanted.sell) + ' ISK', '发起方要求接受方提供', 'is-order') +
+      cards += valuationCard('索取物品 · 最低卖价', formatISK(wanted.sell) + ' ISK', wanted.sellPriced + '/' + wanted.count + ' 项有卖单', 'is-order') +
         valuationCard('索取物品 · 最高收价', formatISK(wanted.buy) + ' ISK', wanted.buyPriced + '/' + wanted.count + ' 项有收单', 'is-order');
     }
   }
@@ -5076,8 +5108,7 @@ async function renderEsiCombat(box) {
   const link = kbSiteLink('pilot', me);
   const siteBtn = link ? `<a class="btn btn-ghost" href="${link}" target="_blank" rel="noopener">在${esc(SERVER.kbSite.name)}查看 ↗</a>` : '';
   if (!hasScope(state.esiToken || readEsiToken(), KILLMAIL_SCOPE)) {
-    box.innerHTML = '<div class="empty-state"><p>' + esc(SERVER.full) + '没有 zKillboard，站内战斗记录改从 ESI 读取，需要击杀记录权限（' + KILLMAIL_SCOPE + '）。' +
-      '当前授权里没有这项权限，请重新授权当前角色（重新生成授权链接并登录，同一角色只会更新令牌）。</p>' +
+    box.innerHTML = '<div class="empty-state"><p title="' + KILLMAIL_SCOPE + '">战斗记录需要击杀记录权限</p>' +
       '<div class="empty-actions"><button class="btn btn-primary" data-esi-rebind>重新授权</button>' + siteBtn + '</div></div>';
     return;
   }
@@ -5106,11 +5137,11 @@ async function renderEsiCombat(box) {
   box.innerHTML =
     '<div class="valuation-grid">' +
       valuationCard('近期参与击杀', formatNumber(wins.length) + ' 艘', '单刷 ' + formatNumber(solo) + ' 次', 'is-buy') +
-      valuationCard('最后一击', formatNumber(finalBlows) + ' 次', '参与击杀中', 'is-buy') +
+      valuationCard('最后一击', formatNumber(finalBlows) + ' 次', '', 'is-buy') +
       valuationCard('近期损失', formatNumber(losses.length) + ' 艘', '', 'is-sell') +
-      valuationCard('击毁价值', formatISK(destroyedIsk) + ' ISK', '按全服均价估算', 'is-buy') +
-      valuationCard('损失价值', formatISK(lostIsk) + ' ISK', '按全服均价估算', 'is-sell') +
-      valuationCard('ISK 效率', efficiency == null ? '—' : efficiency.toFixed(1) + '%', '击毁 ÷（击毁 + 损失）', 'is-total') +
+      valuationCard('击毁价值', formatISK(destroyedIsk) + ' ISK', '', 'is-buy') +
+      valuationCard('损失价值', formatISK(lostIsk) + ' ISK', '', 'is-sell') +
+      valuationCard('ISK 效率', efficiency == null ? '—' : efficiency.toFixed(1) + '%', '', 'is-total') +
     '</div>' +
     '<div class="valuation-toolbar section-gap">' +
       '<div class="segmented" role="group" aria-label="战斗记录筛选">' +
@@ -5159,12 +5190,12 @@ async function renderCombatTab(box) {
   const cards =
     valuationCard(lifetime ? '生涯参与击杀' : '近期参与击杀', formatNumber(lifetime ? stats.shipsDestroyed || 0 : wins.length) + ' 艘', lifetime ? '单刷 ' + formatNumber(stats.soloKills || 0) + ' 次' : '最近 ' + kills.length + ' 条记录', 'is-buy') +
     // zKillboard 生涯统计不含最后一击次数，只能按已读取的近期记录统计
-    valuationCard('最后一击', formatNumber(finalBlows) + ' 次', '最近 ' + formatNumber(wins.length) + ' 次参与击杀中', 'is-buy') +
+    valuationCard('最后一击', formatNumber(finalBlows) + ' 次', '', 'is-buy') +
     valuationCard(lifetime ? '生涯损失' : '近期损失', formatNumber(lifetime ? stats.shipsLost || 0 : losses.length) + ' 艘', lifetime ? '单刷被杀 ' + formatNumber(stats.soloLosses || 0) + ' 次' : '', 'is-sell') +
     valuationCard('击毁价值', formatISK(destroyedIsk) + ' ISK', lifetime ? 'zKillboard 生涯统计' : '近期记录合计', 'is-buy') +
     valuationCard('损失价值', formatISK(lostIsk) + ' ISK', lifetime ? 'zKillboard 生涯统计' : '近期记录合计', 'is-sell') +
     valuationCard('ISK 效率', efficiency == null ? '—' : efficiency.toFixed(1) + '%',
-      lifetime ? '危险度 ' + (stats.dangerRatio ?? '—') + '% · 团战 ' + (stats.gangRatio ?? '—') + '%' : '击毁 ÷（击毁 + 损失）', 'is-total');
+      lifetime ? '危险度 ' + (stats.dangerRatio ?? '—') + '% · 团战 ' + (stats.gangRatio ?? '—') + '%' : '', 'is-total');
 
   box.innerHTML =
     '<div class="valuation-grid">' + cards + '</div>' +
@@ -5223,7 +5254,7 @@ async function generateAuthLink() {
     $('authLink').value = url;
     $('openAuthBtn').href = url;
     $('authLinkBox').hidden = false;
-    setEsiStatus('授权链接已生成：点击「打开」登录，完成后把地址栏完整地址粘贴到第 2 步', 'success');
+    setEsiStatus('已生成，点「打开」登录', 'success');
   } catch (error) {
     setEsiStatus('生成失败：' + error.message, 'error');
   } finally {
@@ -5234,7 +5265,7 @@ async function generateAuthLink() {
 // 登录端拒绝某项权限：去掉它，重新生成授权链接
 function rejectedScope(scope) {
   $('callbackUrl').value = '';
-  generateAuthLink().then(() => setEsiStatus(`${SERVER.full}登录不支持权限 ${scope}，已从授权链接中去掉：请点击「打开」重新登录`, 'error'));
+  generateAuthLink().then(() => setEsiStatus(`已去掉不支持的权限 ${scope}，请重新登录`, 'error'));
 }
 
 async function bindEsiCallback() {
@@ -5254,13 +5285,13 @@ async function bindEsiCallback() {
   try {
     const pending = readPkce();
     const entry = pending[cbState];
-    if (!entry) throw new Error('授权状态无效或已过期：请在本浏览器重新生成授权链接并登录（链接 15 分钟内有效）');
+    if (!entry) throw new Error('授权状态已过期，请重新生成链接');
     let data;
     try {
       const extra = SERVER.manualCallback ? { redirect_uri: (await ssoConfig()).redirect_uri } : {};   // 网易换令牌要求带回调地址
       data = await ssoToken({ grant_type: 'authorization_code', code, code_verifier: entry.verifier, ...extra });
     } catch (error) {
-      throw new Error('CCP 拒绝了授权（' + error.message + '）。若提示授权码已使用，请重新生成授权链接并登录');
+      throw new Error('CCP 拒绝了授权（' + error.message + '）');
     } finally {
       delete pending[cbState];
       writePkce(pending);
@@ -5302,7 +5333,7 @@ function handleEsiCallbackRedirect() {
   } else if (params.has('error')) {
     setEsiStatus('授权失败：' + (params.get('error_description') || params.get('error')), 'error');
   } else {
-    setEsiStatus('检测到授权回调，请点击「绑定」完成 ESI 绑定', 'success');
+    setEsiStatus('已获取回调，请点「绑定」', 'success');
     $('bindCallbackBtn').focus();
   }
 }
@@ -5394,7 +5425,7 @@ function initESIModal() {
     if (token?.character_id) removeEsiAccount(token.character_id);
     resetCharacterState();
     loadProfile();
-    showToast(`已解绑 ${name}，本地令牌已清除`, 'success');
+    showToast(`已解绑 ${name}`, 'success');
   });
   $('profileAccounts')?.addEventListener('click', (e) => {
     if (e.target.closest('[data-account-add]')) { openEsiModal(); return; }
@@ -5454,7 +5485,7 @@ function typeByName(name) {
   return state.typeByNameMap.get(key) || null;
 }
 function openCartModal() {
-  if (!cartModule) cartModule = Promise.all([import('./cart.js?v=v2'), loadVolumes().then((v) => { cartVolumes = v || {}; })]).then(([m]) => {
+  if (!cartModule) cartModule = Promise.all([import('./cart.js?v=v3'), loadVolumes().then((v) => { cartVolumes = v || {}; })]).then(([m]) => {
     m.initCart({
       esc, formatISK, formatNumber, showToast, copyText, store, valuation, typeByName, readCart, writeCart, addToCart, esiUrl,
       typeById: (id) => state.typeIndex.get(Number(id))?.type || null,
@@ -5490,7 +5521,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v10').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v11').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5513,7 +5544,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v16').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v17').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),

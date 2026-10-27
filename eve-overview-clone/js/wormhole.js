@@ -219,7 +219,7 @@ function effectList(key, cls) {
 function systemHtml() {
   const { esc, formatNumber } = ctx;
   const s = D.sysById.get(S.sys);
-  if (!s) return searchBox() + `<div class="pi-card"><p class="text-muted">输入虫洞星系名称查看等级、天象、固定出口与行星。${IS_TQ ? '宁静服还会显示近 30 天的击杀、活跃时段与常驻势力。' : ''}</p></div>`;
+  if (!s) return searchBox();
   const counts = {};
   for (const c of s.planets) counts[c] = (counts[c] || 0) + 1;
   const planetHtml = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([c, n]) => `<span class="wh-planet wh-p${c}">${PLANETS[c] || c} ×${n}</span>`).join('') || '<span class="text-muted">没有行星</span>';
@@ -237,8 +237,7 @@ function systemHtml() {
     </div>
     <div class="wh-grid">
       <div class="pi-card"><h4 class="wh-h">固定出口</h4>
-        ${s.statics.length ? `<div class="pi-table-wrap"><table class="pi-table wh-table">${holeHead(false)}<tbody>${s.statics.map((c) => holeRow(c)).join('')}</tbody></table></div>` : '<p class="text-muted">没有固定出口</p>'}
-        <p class="pi-note">固定出口塌了会在原处重新刷出同类型的洞；另外随时可能有随机虫洞与对面开过来的 K162</p></div>
+        ${s.statics.length ? `<div class="pi-table-wrap"><table class="pi-table wh-table">${holeHead(false)}<tbody>${s.statics.map((c) => holeRow(c)).join('')}</tbody></table></div>` : '<p class="text-muted">没有固定出口</p>'}</div>
       <div class="pi-card"><h4 class="wh-h">天象</h4>
         ${s.effect ? `<p><b>${EFFECTS[s.effect][0]}</b> <span class="text-muted">· ${clsName(s.cls)} 强度</span></p>${effectList(s.effect, s.cls)}` : `<p class="text-muted">${s.cls === 12 ? '席拉没有天象效果' : '没有天象效果'}</p>`}</div>
     </div>
@@ -273,7 +272,7 @@ function detailHtml(id) {
   if (!e || e.loading || (!e.data && !e.error)) return '<div class="pi-card"><div class="pi-loading">读取近 30 天击杀…</div></div>';
   if (e.error) return `<div class="pi-card"><p class="text-muted">击杀统计读取失败：${esc(e.error)}</p></div>`;
   const d = e.data;
-  if (!d.kills) return '<div class="pi-card"><h4 class="wh-h">近 30 天活动</h4><p class="text-muted">本站没有记录到这个星系近 30 天的击杀（可能没人住，或住户很少出门）</p></div>';
+  if (!d.kills) return '<div class="pi-card"><h4 class="wh-h">近 30 天活动</h4><p class="text-muted">近 30 天没有击杀记录</p></div>';
   const name = (x) => esc(d.names?.[x] || String(x));
   const max = Math.max(...d.hours_utc, 1);
   const bars = d.hours_utc.map((n, h) => `<div class="wh-bar" title="UTC ${h}:00（北京时间 ${(h + 8) % 24}:00）· ${n} 次"><i style="height:${Math.round(n / max * 100)}%"></i><small>${h % 6 === 0 ? (h + 8) % 24 : ''}</small></div>`).join('');
@@ -322,7 +321,7 @@ async function renderActivity(body) {
       <div class="ind-rank-row"><div class="pi-inline"><span>时间</span>${seg('actDays', [[1, '24 小时'], [7, '7 天'], [30, '30 天']])}</div>
         <div class="pi-inline"><span>等级</span>${seg('actCls', clsOpts)}</div>
         <div class="pi-inline"><span>天象</span><select class="pi-input" data-wh-sel="actEff">${effOpts.map(([v, l]) => `<option value="${v}"${S.actEff === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div></div>
-      <p class="pi-note">${rows.length} 个虫洞星系有击杀，显示前 200 · 击杀多说明有人住或常有人来猎杀；被 NPC 击毁多通常是有人在刷站点 · 本站击杀库统计</p></div>
+      <p class="pi-note" title="击杀多说明有人住或常有人来猎杀；被 NPC 击毁多通常是有人在刷站点">${rows.length} 个星系有击杀，显示前 200</p></div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table wh-table"><thead><tr><th class="pi-hide-sm">#</th><th>星系</th><th>等级</th><th class="pi-hide-sm">天象</th><th class="pi-hide-sm">固定出口</th><th class="num">击杀</th><th class="num">价值</th><th class="num pi-hide-sm">被 NPC 击毁</th><th class="num">最近</th></tr></thead><tbody>
     ${rows.slice(0, 200).map((r, i) => `<tr data-wh-sys="${r.s.id}" class="wh-row">
       <td class="pi-rank pi-hide-sm">${i + 1}</td><td><b>${esc(r.s.name)}</b></td><td>${clsTag(r.s.cls)}</td>
@@ -348,7 +347,7 @@ function holesHtml() {
       <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input type="search" data-wh-holeq placeholder="虫洞代码，如 H296" value="${esc(S.holeQ)}" spellcheck="false" aria-label="虫洞代码"></div>
       <div class="pi-inline"><span>通往</span><select class="pi-input" data-wh-sel="holeDest"><option value="all">全部</option>${dests.map((d) => `<option value="${d}"${S.holeDest === String(d) ? ' selected' : ''}>${clsName(d)}</option>`).join('')}</select></div></div>
-      <p class="pi-note">共 ${list.length} 种 · 总质量与存活时间都有约 ±10% 的随机浮动 · 质量单位 kt（千吨，1 kt = 100 万 kg）</p></div>
+      <p class="pi-note" title="1 kt = 100 万 kg">共 ${list.length} 种 · 质量与存活有 ±10% 浮动</p></div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table wh-table">${holeHead(true)}<tbody>${list.map((h) => holeRow(h.code, { showSrc: true })).join('') || '<tr><td colspan="9" class="text-muted">没有匹配的虫洞</td></tr>'}</tbody></table></div></div>`;
 }
 
@@ -357,7 +356,7 @@ function effectsHtml() {
   const classes = [1, 2, 3, 4, 5, 6];
   const counts = {};
   for (const s of D.sysById.values()) if (s.effect) counts[s.effect] = (counts[s.effect] || 0) + 1;
-  return `<p class="pi-note wh-intro">虫洞星系里的次级恒星给整个星系的舰船加上效果，强度随等级提高（C13 按 C6，漂流者星系按 C2）</p>
+  return `<p class="pi-note wh-intro">强度随等级提高，C13 按 C6、漂流者星系按 C2</p>
     <div class="wh-eff-grid">${Object.entries(EFFECTS).map(([k, [name, mods]]) => `<div class="pi-card"><h4 class="wh-h"><span class="wh-eff-tag wh-e-${k}">${name}</span> <small class="text-muted">${counts[k] || 0} 个星系</small></h4>
       <div class="pi-table-wrap"><table class="pi-table wh-table wh-eff-table"><thead><tr><th>效果</th>${classes.map((c) => `<th class="num">C${c}</th>`).join('')}</tr></thead><tbody>
       ${mods.map(([n, sign, base]) => `<tr><td>${n}</td>${classes.map((c) => `<td class="num ${sign > 0 ? 'up' : 'down'}">${sign > 0 ? '+' : '−'}${effVal(base, c)}%</td>`).join('')}</tr>`).join('')}
@@ -422,14 +421,14 @@ function massHtml() {
         <div class="pi-inline"><span>单次上限</span><b>${hole?.jump ? formatNumber(hole.jump / 1e6) + ' kt' : '—'}</b></div>
         <span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-wh-clear>清空</button>
       </div>
-      <p class="pi-note">实际总质量在标称值 ±10% 之间随机，所以剩余质量按区间算。游戏里看虫洞信息：>50% 稳定、10–50% 「减弱」、<10% 「临界」，可用来缩小区间。「热」= 开着微曲 / 加力（500MN 微曲 +50 kt、50MN +5 kt）</p>
+      <p class="pi-note" title="游戏里虫洞信息：>50% 稳定、10–50% 减弱、<10% 临界，可缩小区间">总质量有 ±10% 浮动，剩余按区间算；「热」= 开微曲 / 加力</p>
     </div>
-    <div class="pi-card"><h4 class="wh-h">添加一次通过</h4><div class="wh-presets">${preset}
+    <div class="pi-card"><h4 class="wh-h" title="进 = 从家这边过去，出 = 回来">添加一次通过</h4><div class="wh-presets">${preset}
       <div class="wh-preset"><span>自定义</span><input type="number" class="pi-input wh-mass-in" data-wh-custom placeholder="质量 kt" min="0" step="0.1">
         <button type="button" class="btn btn-ghost btn-sm" data-wh-addc="in">进</button><button type="button" class="btn btn-ghost btn-sm" data-wh-addc="out">出</button></div></div></div>
     <div class="pi-card">${calc.length ? `<div class="pi-table-wrap"><table class="pi-table wh-table"><thead><tr><th>#</th><th>方向</th><th>舰船质量</th><th class="num">累计</th><th class="num">剩余（区间）</th><th>状态</th><th>船在哪</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
-      ${last && last.far > 0 && last.lo - 0 < (calc.filter((r) => r.dir === 'in').slice(-1)[0]?.mass || 0) * 1e6 ? '<p class="pi-note warn">注意：还有船在对面，剩余质量可能不够它回来，回程可能把洞关掉，船被关在对面</p>' : ''}`
-      : '<p class="text-muted">从上面添加每一次通过（进 = 从家这边过去，出 = 回来），查看每一步后虫洞剩多少质量</p>'}</div>`;
+      ${last && last.far > 0 && last.lo - 0 < (calc.filter((r) => r.dir === 'in').slice(-1)[0]?.mass || 0) * 1e6 ? '<p class="pi-note warn">注意：对面还有船，回程可能把洞关掉</p>' : ''}`
+      : '<p class="text-muted">还没有通过记录</p>'}</div>`;
 }
 
 // ---------- 席拉连接 ----------
@@ -464,7 +463,7 @@ async function renderThera(body) {
       <div class="pi-inline"><span>从</span><input type="search" class="pi-input wh-origin" data-wh-origin list="whOriginList" placeholder="输入所在星系（中文名，回车）" value="${esc(S.origin)}" spellcheck="false" aria-label="出发星系"></div>
       <datalist id="whOriginList">${S.origin ? '' : ''}</datalist>
       <span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-wh-scout-reload>刷新</button></div>
-      <p class="pi-note">${rows.length} 个连接${origin ? ` · 按离 ${esc(origin.name)} 的跳数排序` : S.origin ? ' · <span class="warn">没找到这个星系</span>' : ' · 输入所在星系后按跳数排序，找最近的席拉入口'} · 数据：EVE-Scout 志愿者实时扫描，5 分钟更新 · 进出席拉前确认信号还在</p></div>
+      <p class="pi-note">${rows.length} 个连接${origin ? ` · 按离 ${esc(origin.name)} 的跳数排序` : S.origin ? ' · <span class="warn">没找到这个星系</span>' : ' · 填所在星系可按跳数排序'} · EVE-Scout 数据 · 进出前确认信号还在</p></div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table wh-table"><thead><tr><th>枢纽</th><th>枢纽内信号</th><th>对面星系</th><th class="pi-hide-sm">星域</th><th>对面信号</th><th class="pi-hide-sm">类型</th><th>最大船型</th><th class="num">剩余</th>${origin ? '<th class="num">跳数</th>' : ''}</tr></thead><tbody>
     ${rows.map(({ x, inK, ksys, jumps }) => `<tr>
       <td><b>${hub(x)}</b></td><td><code>${esc(x.out_signature || '')}</code></td>

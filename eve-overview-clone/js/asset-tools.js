@@ -44,9 +44,9 @@ export function netWorthHtml(charId) {
     const pct = total(p) ? (d / total(p)) * 100 : 0;
     return `<span class="nw-delta ${d >= 0 ? 'up' : 'down'}">${label} ${d >= 0 ? '+' : ''}${isk(d)}（${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%）</span>`;
   };
-  const head = `<div class="nw-head"><h3>净值趋势</h3><b>${isk(total(last))} ISK</b>${delta(prev(1), '较前一天')}${delta(prev(7), '7 天')}${delta(prev(30), '30 天')}</div>`;
-  const note = `<p class="pi-note">资产按卖价 + 订单 + 钱包${last.w == null ? '（钱包权限不足，未计入）' : ''}；每次打开资产页记一笔，每天保留最后一次，只存在本机浏览器</p>`;
-  if (list.length < 2) return `<div class="nw-card">${head}<p class="text-muted">已记下今天的净值，之后每天打开资产页就能看到变化曲线</p>${note}</div>`;
+  const head = `<div class="nw-head"><h3 title="资产按卖价 + 订单 + 钱包；每天记一笔，只存在本机浏览器">净值趋势</h3><b>${isk(total(last))} ISK</b>${delta(prev(1), '较前一天')}${delta(prev(7), '7 天')}${delta(prev(30), '30 天')}</div>`;
+  const note = last.w == null ? '<p class="pi-note">未计钱包（无权限）</p>' : '';
+  if (list.length < 2) return `<div class="nw-card">${head}<p class="text-muted">已记录今天，明天起显示曲线</p>${note}</div>`;
   // 折线：SVG 只画线（随宽度拉伸），坐标文字与数据点用 HTML 定位，避免被拉变形
   const t0 = new Date(list[0].d).getTime(), t1 = new Date(last.d).getTime();
   const span = Math.max(DAY, t1 - t0);
@@ -152,10 +152,10 @@ function clearanceHtml(rows, groups, filters) {
       <div class="clr-hero-nums">
         <div class="clr-total"><span>预计可得（税后）</span><strong>${isk(sum)}<small> ISK</small></strong><em>${num(rows.length)} 种物品</em></div>
         <div class="clr-part buy"><span>立即到手</span><b>${isk(buy.v)}</b><em>卖给收单 · ${buy.n} 种</em></div>
-        <div class="clr-part list"><span>挂单等待</span><b>${isk(list.v)}</b><em>${list.n ? `挂卖单 · ${list.n} 种 · 最慢${daysText(list.days)}` : '没有要挂单的'}</em></div>
+        <div class="clr-part list"><span>挂单等待</span><b>${isk(list.v)}</b><em>${list.n ? `挂卖单 · ${list.n} 种 · 最慢${daysText(list.days)}` : '无'}</em></div>
       </div>
     </section>`;
-  if (!rows.length) return hero + filters + '<p class="clr-empty">没有符合条件的物品：试试把「只看价值」调低</p>';
+  if (!rows.length) return hero + filters + '<p class="clr-empty">没有符合条件的物品</p>';
   const focus = groups.find((g) => g.key === S.focus);
   const plans = groups.map((g, k) => `<div class="clr-plan ${g.method}${focus === g ? ' on' : ''}" data-clr-focus="${g.key}" role="button" tabindex="0" aria-pressed="${focus === g}" title="点击只看这一组">
       <span class="clr-plan-no">${k + 1}</span>
@@ -166,7 +166,7 @@ function clearanceHtml(rows, groups, filters) {
   const shown = focus ? focus.rows : rows;
   const mainHub = hubName(snap.hubs[0]);
   const body = shown.slice(0, 300).map((r) => `<tr>
-      <td><div class="pi-prod"><img src="https://images.evetech.net/types/${r.id}/icon?size=32" alt="" width="24" height="24" loading="lazy"><span>${esc(ctx.typeName(r.id))}</span></div></td>
+      <td><div class="pi-prod"><img src="https://images.evetech.net/types/${r.id}/icon?size=32" data-item-pop="${r.id}" alt="" width="24" height="24" loading="lazy"><span>${esc(ctx.typeName(r.id))}</span></div></td>
       <td class="num">${num(r.qty)}</td>
       <td>${esc(hubName(r.region))}</td>
       <td><span class="clr-method ${r.method}">${METHOD[r.method]}</span>${r.method === 'buy' && !r.instantOk ? ' <span class="clr-warn" title="收单量不够，要往下砸到更低的收单价">收单不足</span>' : ''}</td>
@@ -175,7 +175,7 @@ function clearanceHtml(rows, groups, filters) {
       <td class="num clr-gain">${r.gain > r.value * 0.01 ? '+' + isk(r.gain) : ''}</td>
       <td class="num pi-hide-sm">${r.method === 'list' ? daysText(r.days) : '立即'}</td></tr>`).join('');
   return `${hero}${filters}
-    <h4 class="clr-h">出售计划<small>按交易中心分组，每组复制清单到游戏里卖</small></h4>
+    <h4 class="clr-h">出售计划</h4>
     <div class="clr-plans">${plans}</div>
     <div class="clr-table-head">
       ${focus ? `<span class="clr-chip">只看：${esc(hubName(focus.region))} · ${METHOD[focus.method]}<button type="button" data-clr-focus="" aria-label="显示全部">×</button></span>` : `<b>全部物品</b>`}
@@ -196,19 +196,11 @@ export async function showClearance(box, assets, onBack) {
       <div class="clr-filters">
         <div class="pi-inline"><span>卖法</span>${seg('method', [['auto', '推荐'], ['buy', '全部卖给收单']], S.method)}</div>
         <div class="pi-inline"><span>只看价值 ≥</span>${seg('minValue', [[0, '全部'], [1e6, '100 万'], [1e7, '1000 万'], [1e8, '1 亿']], S.minValue)}</div>
-        <details class="clr-how"${S.how ? ' open' : ''}><summary>怎么算的？</summary>
-          <ul>
-            <li>对比五个交易中心「直接卖给收单」和「挂卖单（比最低卖价低一档）」的税后所得，按你的技能与税费设置计算</li>
-            <li>挂单按日成交量的 1/4 估算卖完时间；超过 ${LIST_DAYS} 天、或比直接卖多不到 ${LIST_BONUS * 100}% 的，建议直接卖给收单</li>
-            <li>不含蓝图拷贝和组装状态的舰船；未计运费，物品不在那个交易中心要自己运过去</li>
-            <li>行情为交易中心快照，${snap.at ? new Date(snap.at).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总</li>
-          </ul>
-        </details>
+        <span class="text-muted" title="挂单按日成交量 1/4 估算，超过 ${LIST_DAYS} 天或多赚不到 ${LIST_BONUS * 100}% 则卖收单；不含蓝图拷贝与组装舰船，未计运费">行情 ${snap.at ? new Date(snap.at).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'}</span>
       </div>`;
     box.innerHTML = `<div class="valuation-toolbar"><button type="button" class="btn btn-ghost" data-clr-back>← 返回资产</button></div>${clearanceHtml(rows, last, filters)}`;
-    box.querySelector('.clr-how')?.addEventListener('toggle', (e) => { S.how = e.target.open; });
   };
-  box.innerHTML = '<div class="pi-loading">读取五个交易中心行情…</div>';
+  box.innerHTML = '<div class="pi-loading">读取中…</div>';
   try { await loadSnap(); } catch (e) { box.innerHTML = `<div class="valuation-toolbar"><button type="button" class="btn btn-ghost" data-clr-back>← 返回资产</button></div><p class="text-muted">行情读取失败：${ctx.esc(e.message)}</p>`; bind(box, draw, onBack); return; }
   if (!ctx.isActive()) return;
   draw();

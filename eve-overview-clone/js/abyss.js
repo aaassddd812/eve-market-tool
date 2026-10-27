@@ -174,7 +174,7 @@ export async function showAbyss(hash) {
   }
   if (!IS_TQ || !SERVER.kb) {
     $('abyssSide').innerHTML = '';
-    main.innerHTML = `<div class="empty-state"><p>深渊市场的数据来自 MutaMarket，只收录宁静服的合同与价格，${esc(SERVER.full)}暂不支持。</p></div>`;
+    main.innerHTML = `<div class="empty-state"><p>深渊市场仅支持宁静服（数据来自 MutaMarket）</p></div>`;
     return;
   }
   if (!D.types) main.innerHTML = skPage({ tabs: 3, grid: 6 });
@@ -296,7 +296,7 @@ function marketHtml() {
         <label class="aby-check"><input type="checkbox" data-abyss-flag="no-multi-item-contracts"${flagOn('no-multi-item-contracts') ? ' checked' : ''}>只看单件合同</label>
         <label class="aby-check"><input type="checkbox" data-abyss-flag="in-jita"${flagOn('in-jita') ? ' checked' : ''}>吉他 4-4</label>
       </div>
-      <details class="aby-adv"${nFilters ? ' open' : ''}><summary>属性范围${nFilters ? `<small>${nFilters} 项</small>` : ''}<span class="text-muted">空着表示不限；占位文字是该类型可能的范围</span></summary>
+      <details class="aby-adv"${nFilters ? ' open' : ''}><summary>属性范围${nFilters ? `<small>${nFilters} 项</small>` : ''}</summary>
         <div class="aby-afs">${attrInputs}</div></details>
       <div class="aby-frow aby-display">
         <span class="text-muted">属性条</span>
@@ -312,7 +312,7 @@ function marketHtml() {
 function listHtml() {
   if (S.error && !S.items.length) return `<div class="empty-state"><p>读取失败：${esc(S.error)}</p><button class="btn btn-sm" data-abyss-retry>重试</button></div>`;
   if (!S.items.length) return S.loading ? skGrid(6) : '<div class="empty-state"><p>没有符合条件的在售装备</p></div>';
-  return `<div class="aby-count text-muted">已显示 ${S.items.length} 件 · 点卡片看详情 · 数据来自 <a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a>，每 5 分钟更新</div>
+  return `<div class="aby-count text-muted">已显示 ${S.items.length} 件 · 数据来自 <a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a></div>
     <div class="aby-grid">${S.items.map((m) => cardHtml(m)).join('')}</div>
     ${S.cursor ? `<div class="aby-more"><button class="btn" data-abyss-more ${S.loading ? 'disabled' : ''}>${S.loading ? '读取中…' : '加载更多'}</button></div>` : ''}
     ${S.error ? `<p class="down">${esc(S.error)}</p>` : ''}`;
@@ -368,7 +368,7 @@ async function openItem(id) {
     if (S.view !== 'item') return;
     if (!S.item) {
       renderSide();
-      $('abyssMain').innerHTML = `<div class="empty-state"><p>${e.status === 404 ? 'MutaMarket 还没有收录这件装备。可以在「物品链接估价」粘贴它的游戏物品链接，查询后会自动收录。' : '读取失败：' + esc(e.message)}</p></div>`;
+      $('abyssMain').innerHTML = `<div class="empty-state"><p>${e.status === 404 ? 'MutaMarket 未收录，可到「物品链接估价」粘贴链接查询' : '读取失败：' + esc(e.message)}</p></div>`;
       return;
     }
   }
@@ -419,7 +419,7 @@ function renderItem() {
           ${c ? `<button class="btn btn-sm" data-abyss-contract="${c.id}">在游戏里打开合同</button>` : ''}
           <button class="btn btn-ghost btn-sm" data-abyss-esi>ESI 原始属性</button>
         </div>
-        <p class="text-muted aby-note">估价仅供参考，先看相似装备实际挂价</p>
+        <p class="text-muted aby-note">估价仅供参考</p>
       </div>
     </div>
     <div class="pi-card aby-sim">
@@ -432,7 +432,7 @@ function renderItem() {
         <button class="btn btn-ghost btn-sm" data-abyss-type="${m.type_id}">搜索该类型</button>
       </div>
     </div>
-    <div class="pi-card"><div class="pi-card-head"><h3>与各原装备对比</h3><span class="text-muted">对比直接买原装备是否划算</span></div>
+    <div class="pi-card"><div class="pi-card-head"><h3>与各原装备对比</h3></div>
       <div id="abyssSources"><div class="pi-loading">读取原装备…</div></div></div>
   </section>`;
   renderSources(m);
@@ -510,9 +510,9 @@ async function refreshItem() {
 // ---------- 物品链接估价 ----------
 function renderAppraise(main) {
   main.innerHTML = `<section class="pi-page aby-page">
-    <div class="pi-head"><h2>物品链接估价</h2><span class="text-muted">游戏里把深渊装备拖进聊天框，复制后粘贴到这里（一次可以多件）</span></div>
+    <div class="pi-head"><h2>物品链接估价</h2><span class="text-muted">粘贴游戏物品链接，可多件</span></div>
     <div class="pi-card aby-paste"><textarea id="abyssPaste" class="ap-input" spellcheck="false" placeholder="<url=showinfo:48439//1056160153322>大型深渊电容器电池</url>"></textarea>
-      <div class="aby-actions"><button class="btn btn-primary" data-abyss-appraise>查询</button><span class="text-muted">也可以在「估价」页和普通物品一起粘贴</span></div></div>
+      <div class="aby-actions"><button class="btn btn-primary" data-abyss-appraise>查询</button></div></div>
     <div id="abyssPasteResult"></div></section>`;
   const input = $('abyssPaste');
   input.value = S.paste || '';

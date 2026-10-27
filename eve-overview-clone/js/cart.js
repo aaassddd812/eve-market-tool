@@ -110,7 +110,7 @@ function render(fetchPrices = true) {
   const rows = list.map((x) => {
     const p = price(x.id);
     return `<tr>
-      <td class="cart-name"><img src="${ctx.eveTypeIcon(x.id)}" alt="" width="24" height="24" loading="lazy"><button class="link-btn" data-cart-open="${x.id}">${esc(x.name)}</button></td>
+      <td class="cart-name"><img src="${ctx.eveTypeIcon(x.id)}" data-item-pop="${x.id}" alt="" width="24" height="24" loading="lazy"><button class="link-btn" data-cart-open="${x.id}">${esc(x.name)}</button></td>
       <td class="num"><input type="number" class="cr-input cart-qty" min="1" step="1" value="${Math.round(x.qty)}" data-cart-qty="${x.id}" aria-label="数量"></td>
       <td class="num">${p.sell != null ? ctx.formatISK(p.sell) : '—'}</td>
       <td class="num">${p.sell != null ? ctx.formatISK(p.sell * x.qty) : '—'}</td>
@@ -124,7 +124,7 @@ function render(fetchPrices = true) {
       <button class="btn btn-ghost" data-cart-paste-toggle>${S.showPaste ? '收起粘贴' : '粘贴清单'}</button>
       <button class="btn btn-ghost" data-cart-history-toggle>购物记录${cart.history.length ? `（${cart.history.length}）` : ''}</button>
     </div>
-    ${S.showPaste ? `<div class="cart-paste"><textarea class="cr-input" rows="5" data-cart-paste placeholder="每行一个物品：物品名 + Tab 或空格 + 数量；也可以粘贴游戏里复制的仓库、合同、批量购买清单"></textarea>
+    ${S.showPaste ? `<div class="cart-paste"><textarea class="cr-input" rows="5" data-cart-paste placeholder="每行：物品名 数量"></textarea>
       <button class="btn btn-primary" data-cart-paste-add>加入购物车</button></div>` : ''}
     ${S.showHistory ? historyHtml(cart) : ''}
     ${list.length ? `<div class="table-scroll"><table class="data-table cart-table"><thead><tr><th>物品</th><th class="num">数量</th><th class="num">单价（最低卖）</th><th class="num">小计</th><th class="num">按最高收</th><th></th></tr></thead>
@@ -139,13 +139,13 @@ function render(fetchPrices = true) {
         ${ctx.isEn() ? '' : '<button class="btn btn-ghost" data-cart-copy="en" title="游戏客户端是英文时用这个">复制英文名清单</button>'}
         <button class="btn btn-ghost danger" data-cart-clear>清空</button>
       </div>
-      <p class="ka-note">游戏里打开市场窗口 → 左下角「批量购买」→「从剪贴板导入」，即可一次下单全部物品。复制清单时会自动存进购物记录。</p>`
-    : '<div class="empty-state"><p>购物车是空的。在估价、装配、制造、LP 商店或物品详情里点「加入购物车」，或用上面的「粘贴清单」。</p></div>'}`;
+      <p class="ka-note">市场「批量购买」→「从剪贴板导入」</p>`
+    : '<div class="empty-state"><p>购物车是空的</p></div>'}`;
   if (fetchPrices) loadPrices().catch((e) => ctx.showToast('读取价格失败：' + e.message, 'error'));
 }
 
 function historyHtml(cart) {
-  if (!cart.history.length) return '<div class="cart-history"><p class="text-muted">还没有购物记录（复制批量购买清单时自动保存）</p></div>';
+  if (!cart.history.length) return '<div class="cart-history"><p class="text-muted">还没有购物记录</p></div>';
   return `<div class="cart-history"><ul>${cart.history.map((h, i) => `<li>
       <span><b>${new Date(h.at).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</b>
       ${h.items.length} 种物品${h.total ? ' · ' + ctx.formatISK(h.total) + ' ISK' : ''}<small>${esc(h.items.slice(0, 3).map((x) => x.name).join('、'))}${h.items.length > 3 ? ' 等' : ''}</small></span>
@@ -211,7 +211,7 @@ async function onClick(e) {
     try {
       const text = await multibuyText(copy.dataset.cartCopy === 'en');
       await navigator.clipboard.writeText(text);
-      ctx.showToast(`已复制 ${items().length} 种物品的批量购买清单，到游戏市场「批量购买」里导入`, 'success', 3500);
+      ctx.showToast(`已复制 ${items().length} 种物品`, 'success', 3500);
       saveHistory();
       render(false);
     } catch (err) {

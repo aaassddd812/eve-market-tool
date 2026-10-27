@@ -197,7 +197,7 @@ function standFormHtml() {
     body = st.owner && stand
       ? `<div class="ap-lv-list"><span>${esc(st.owner.factionName || '无阵营')}<b>${st.fac.toFixed(2)}</b></span><span>${name(st.owner.corp)}<b>${st.corp.toFixed(2)}</b></span></div>
          <div class="ap-char"><span class="text-muted">${esc(stand.name)} 的基础声望</span><button type="button" class="btn btn-ghost btn-sm" data-tf-stand>重新读取</button></div>`
-      : `<div class="ap-char"><span class="text-muted">${standError ? '读取失败：' + esc(standError) : standLoading ? '正在读取角色声望…' : '声望未读取，按 0 算'}</span><button type="button" class="btn btn-primary btn-sm" data-tf-stand>读取角色声望</button></div>`;
+      : `<div class="ap-char"><span class="text-muted">${standError ? '读取失败：' + esc(standError) : standLoading ? '读取中…' : '声望未读取，按 0 算'}</span><button type="button" class="btn btn-primary btn-sm" data-tf-stand>读取角色声望</button></div>`;
   }
   return head + `<div class="cr-fields">${pick}</div>` + body;
 }
@@ -235,8 +235,8 @@ let modal = null;
 function renderDialog() {
   if (!modal || modal.hidden) return;
   modal.querySelector('#tfBody').innerHTML = `
-    <div class="tf-sec"><h4>技能<small>${esc(skillSummary())}</small></h4>${skillFormHtml()}</div>
-    <div class="tf-sec"><h4>税费<small>${summary()}</small></h4>${feeFormHtml()}</div>`;
+    <div class="tf-sec"><h4>技能</h4>${skillFormHtml()}</div>
+    <div class="tf-sec"><h4>税费</h4>${feeFormHtml()}</div>`;
 }
 export function openFeeDialog() {
   if (!modal) {

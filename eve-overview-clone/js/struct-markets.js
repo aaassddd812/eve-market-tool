@@ -254,9 +254,9 @@ function renderDialog() {
   const { esc, formatNumber } = ctx;
   const body = modal.querySelector('#smBody');
   const token = ctx.readToken();
-  if (!token?.access_token) { body.innerHTML = '<p class="pi-note">绑定 ESI 后才能读取玩家建筑里的市场。</p>'; return; }
+  if (!token?.access_token) { body.innerHTML = '<p class="pi-note">需要先绑定 ESI</p>'; return; }
   if (!hasStructScope()) {
-    body.innerHTML = `<p class="pi-note">当前授权没有「建筑市场」权限（${STRUCT_MARKET_SCOPE}），请在个人中心重新绑定 ESI。</p>`;
+    body.innerHTML = `<p class="pi-note" title="${STRUCT_MARKET_SCOPE}">缺少「建筑市场」权限，请重新绑定 ESI</p>`;
     return;
   }
   const st = state();
@@ -272,16 +272,16 @@ function renderDialog() {
   }).join('');
   const stale = st.scanAt && Date.now() - st.scanAt > RESCAN_HINT;
   body.innerHTML = `
-    <p class="pi-note">勾选的建筑会和五大交易中心一起出现在「交易中心比价」「倒卖排行」里，订单簿（含全宇宙）也会并入它们的订单。数据由你的浏览器用你的授权直接读 ESI，本站服务器拿不到。</p>
+    <p class="pi-note" title="数据由你的浏览器直接读 ESI，本站服务器拿不到">勾选的建筑并入比价、排行和订单簿</p>
     <div class="sm-actions">
       <button class="btn btn-primary" data-sm-scan ${scanning ? 'disabled' : ''}>${scanning ? '扫描中…' : st.scanAt ? '重新扫描' : '扫描我能读的建筑'}</button>
-      <span class="sm-progress">${esc(progress || (st.scanAt ? `上次扫描 ${new Date(st.scanAt).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}${stale ? '，建议重新扫描' : ''}` : '会试读公开市场建筑和你能停靠的铁壁 / 星城，首次可能要几分钟'))}</span>
+      <span class="sm-progress">${esc(progress || (st.scanAt ? `上次扫描 ${new Date(st.scanAt).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}${stale ? '，建议重新扫描' : ''}` : '首次扫描可能要几分钟'))}</span>
     </div>
     <div class="sm-add">
-      <textarea class="pi-input" data-sm-input rows="2" placeholder="手动添加：建筑 ID、游戏里拖到聊天框的建筑链接，或建筑全名（一行一个）"></textarea>
+      <textarea class="pi-input" data-sm-input rows="2" placeholder="手动添加：建筑 ID、链接或全名，一行一个"></textarea>
       <button class="btn" data-sm-add>添加</button>
     </div>
-    ${st.list.length ? `<p class="sm-sum">已启用 ${on} 座${on ? `，每次读取约 ${formatNumber(pages)} 页订单` : ''}${on > 10 ? '，建筑太多会让比价和排行变慢' : ''}</p><ul class="sm-list">${rows}</ul>` : '<p class="sm-sum">还没有建筑，先扫描或手动添加。</p>'}`;
+    ${st.list.length ? `<p class="sm-sum">已启用 ${on} 座${on ? `，约 ${formatNumber(pages)} 页订单` : ''}${on > 10 ? '，太多会变慢' : ''}</p><ul class="sm-list">${rows}</ul>` : '<p class="sm-sum">还没有建筑</p>'}`;
 }
 
 function bindDialog() {
@@ -307,7 +307,7 @@ function bindDialog() {
       try {
         const { ids, misses } = await parseManual(text);
         if (ids.length) await probeInto(ids, { manual: true });
-        progress = (ids.length ? `添加了 ${ids.length} 座` : '没有识别到建筑') + (misses.length ? `；找不到：${misses.slice(0, 3).join('、')}${misses.length > 3 ? ' 等' : ''}（名称要完整，或改填建筑 ID）` : '');
+        progress = (ids.length ? `添加了 ${ids.length} 座` : '没有识别到建筑') + (misses.length ? `；找不到：${misses.slice(0, 3).join('、')}${misses.length > 3 ? ' 等' : ''}（需完整名称或 ID）` : '');
       } catch (err) { progress = '添加失败：' + err.message; }
       renderDialog();
       return;

@@ -54,8 +54,8 @@ const still = (tab, id) => ctx.isActive(tab) && me() === id;
 // ---------- 克隆 ----------
 async function renderClones(box) {
   const id = me();
-  if (!ctx.hasScope('esi-clones.read_clones.v1')) { box.innerHTML = '<p class="text-muted">授权里没有克隆权限（esi-clones.read_clones.v1），重新绑定 ESI 后可查看</p>'; return; }
-  box.innerHTML = loading('读取跳跃克隆与植入体…');
+  if (!ctx.hasScope('esi-clones.read_clones.v1')) { box.innerHTML = '<p class="text-muted" title="esi-clones.read_clones.v1">无克隆权限，需重新绑定 ESI</p>'; return; }
+  box.innerHTML = loading('读取中…');
   let data;
   try {
     data = await cached('clones', async (cid) => {
@@ -81,11 +81,11 @@ async function renderClones(box) {
   const implantList = (list) => list?.length ? `<div class="clone-implants">${list.map((t) => typeCell(types, t)).join('')}</div>` : '<span class="text-muted">没有植入体</span>';
   box.innerHTML =
     '<div class="valuation-grid">' +
-      ctx.valuationCard('跳跃克隆', jc.length + ' 个', '不含当前使用的克隆') +
-      ctx.valuationCard('下次可跳克隆', next > Date.now() ? left(next - Date.now()) + '后' : '现在可跳', `冷却 ${24 - sync} 小时（意识同步 ${sync} 级）${last ? ' · 上次 ' + fmtDate(clones.last_clone_jump_date) : ''}`, next > Date.now() ? 'is-sell' : 'is-buy') +
-      ctx.valuationCard('医疗克隆', esc(ctx.locationName(clones.home_location?.location_id)), stationChange > Date.now() ? `远程更换冷却还剩 ${left(stationChange - Date.now())}` : '可以远程更换') +
+      ctx.valuationCard('跳跃克隆', jc.length + ' 个', '不含当前克隆') +
+      ctx.valuationCard('下次可跳克隆', next > Date.now() ? left(next - Date.now()) + '后' : '现在可跳', `冷却 ${24 - sync} 小时`, next > Date.now() ? 'is-sell' : 'is-buy') +
+      ctx.valuationCard('医疗克隆', esc(ctx.locationName(clones.home_location?.location_id)), stationChange > Date.now() ? `${left(stationChange - Date.now())}后可更换` : '可更换') +
     '</div>' +
-    '<section class="info-section"><h4 class="info-section-title">当前植入体</h4>' + (implants ? implantList(implants) : '<p class="text-muted">授权里没有植入体权限</p>') + '</section>' +
+    '<section class="info-section"><h4 class="info-section-title">当前植入体</h4>' + (implants ? implantList(implants) : '<p class="text-muted">无植入体权限</p>') + '</section>' +
     '<section class="info-section"><h4 class="info-section-title">跳跃克隆</h4>' +
       (jc.length ? jc.map((c) => `<div class="clone-card"><div class="clone-head"><b>${esc(c.name || '跳跃克隆')}</b><span>${esc(ctx.locationName(c.location_id))}</span>
         <button class="link-btn" data-game-dest="${c.location_id}" title="在游戏里设为目的地">设目的地</button></div>${implantList(c.implants)}</div>`).join('')
@@ -96,8 +96,8 @@ async function renderClones(box) {
 // ---------- 挖矿 ----------
 async function renderMining(box) {
   const id = me();
-  if (!ctx.hasScope('esi-industry.read_character_mining.v1')) { box.innerHTML = '<p class="text-muted">授权里没有挖矿记录权限（esi-industry.read_character_mining.v1），重新绑定 ESI 后可查看</p>'; return; }
-  box.innerHTML = loading('读取挖矿记录…');
+  if (!ctx.hasScope('esi-industry.read_character_mining.v1')) { box.innerHTML = '<p class="text-muted" title="esi-industry.read_character_mining.v1">无挖矿记录权限，需重新绑定 ESI</p>'; return; }
+  box.innerHTML = loading('读取中…');
   let data;
   try {
     data = await cached('mining', async (cid) => {
@@ -133,7 +133,7 @@ async function renderMining(box) {
     '<div class="valuation-grid section-gap">' +
       ctx.valuation.cards(val, '估算收益') +
       ctx.valuationCard('挖矿总量', ctx.formatNumber(units) + ' 单位', byType.size + ' 种矿 · ' + byDay.size + ' 天 · ' + systems.size + ' 个星系') +
-      ctx.valuationCard('日均', ctx.formatISK(val.sell / byDay.size) + ' ISK', '按最低卖价，有挖矿的日子') +
+      ctx.valuationCard('日均', ctx.formatISK(val.sell / byDay.size) + ' ISK', '按最低卖价') +
     '</div>' +
     '<section class="info-section"><h4 class="info-section-title">按矿种</h4>' + table(['矿种', '数量', '最低卖价估值', '最高收价估值', '占比'], typeRows) + '</section>' +
     '<section class="info-section"><h4 class="info-section-title">按日期</h4>' + table(['日期', '星系', '数量', '最低卖价估值', '最高收价估值'], dayRows) + '</section>' +
@@ -149,7 +149,7 @@ function npcStations() {
 async function renderResearch(box) {
   const id = me();
   if (!ctx.hasScopeGroup('research')) { box.innerHTML = ctx.scopeNeededHtml('research', '查看研究代理人'); return; }
-  box.innerHTML = loading('读取研究代理人…');
+  box.innerHTML = loading('读取中…');
   let data;
   try {
     data = await cached('research', async (cid) => {
@@ -160,7 +160,7 @@ async function renderResearch(box) {
   } catch (error) { if (still('research', id)) box.innerHTML = fail('研究代理人', error); return; }
   if (!still('research', id)) return;
   const { list, npcs, types } = data;
-  if (!list.length) { box.innerHTML = '<p class="text-muted">没有正在进行的研究（在研究代理人处开始研究后显示）</p>'; return; }
+  if (!list.length) { box.innerHTML = '<p class="text-muted">没有进行中的研究</p>'; return; }
   const now = Date.now();
   const rows = list.map((r) => {
     const days = (now - new Date(r.started_at).getTime()) / 86400e3;
@@ -170,7 +170,7 @@ async function renderResearch(box) {
   box.innerHTML =
     '<div class="valuation-grid">' +
       ctx.valuationCard('研究代理人', rows.length + ' 名', '') +
-      ctx.valuationCard('累计研究点', ctx.formatNumber(Math.floor(rows.reduce((t, r) => t + r.rp, 0))) + ' RP', '按开始时间推算到现在', 'is-buy') +
+      ctx.valuationCard('累计研究点', ctx.formatNumber(Math.floor(rows.reduce((t, r) => t + r.rp, 0))) + ' RP', '', 'is-buy') +
       ctx.valuationCard('每日合计', ctx.formatNumber(Math.round(totalDay * 100) / 100) + ' RP', '') +
     '</div>' +
     table(['代理人', '地点', '研究领域', '每日', '当前研究点', '开始于'], rows.map((r) => tr([
@@ -187,7 +187,7 @@ async function renderResearch(box) {
 async function renderFleet(box) {
   const id = me();
   if (!ctx.hasScopeGroup('fleet')) { box.innerHTML = ctx.scopeNeededHtml('fleet', '查看舰队'); return; }
-  box.innerHTML = loading('读取舰队…');
+  box.innerHTML = loading('读取中…');
   let data;
   try {
     data = await cached('fleet', async (cid) => {
@@ -198,7 +198,7 @@ async function renderFleet(box) {
       }
       let members = null, membersError = '';
       try { members = await ctx.esiAuthFetch('/fleets/' + fleet.fleet_id + '/members/?language=zh'); } catch (error) {
-        membersError = error.status === 403 || error.status === 404 ? '只有舰队指挥（舰队 Boss）能读取成员列表' : error.message;
+        membersError = error.status === 403 || error.status === 404 ? '仅舰队 Boss 可读取成员列表' : error.message;
       }
       const wings = members ? await ctx.esiAuthFetch('/fleets/' + fleet.fleet_id + '/wings/?language=zh').catch(() => []) : [];
       const types = members ? await ctx.resolveTypeNames(members.map((m) => m.ship_type_id)) : new Map();
@@ -327,7 +327,7 @@ function corpBody(view, d) {
     if (!d.list.length) return '<p class="text-muted">军团没有建筑</p>';
     const soon = d.list.filter((s) => s.fuel_expires && new Date(s.fuel_expires) - Date.now() < 7 * 86400e3);
     return '<div class="valuation-grid">' + ctx.valuationCard('建筑', d.list.length + ' 座', '') +
-      ctx.valuationCard('燃料不足 7 天', soon.length + ' 座', soon.length ? '需要尽快补充燃料' : '全部充足', soon.length ? 'is-sell' : 'is-buy') + '</div>' +
+      ctx.valuationCard('燃料不足 7 天', soon.length + ' 座', '', soon.length ? 'is-sell' : 'is-buy') + '</div>' +
       table(['建筑', '类型', '星系', '燃料', '状态', '服务'], [...d.list].sort((a, b) => (a.fuel_expires ? new Date(a.fuel_expires) : Infinity) - (b.fuel_expires ? new Date(b.fuel_expires) : Infinity)).map((s) => {
         const ms = s.fuel_expires ? new Date(s.fuel_expires) - Date.now() : null;
         const fuel = ms == null ? '<span class="muted-cell">无燃料 / 低功率</span>' : `<span class="${ms < 3 * 86400e3 ? 'down' : ms < 7 * 86400e3 ? 'warn-text' : 'up'}">${left(ms)}</span><span class="cell-sub">${esc(fmtDate(s.fuel_expires))}</span>`;
@@ -357,23 +357,23 @@ async function corpAssets(d, body, alive) {
   const types = await ctx.resolveTypeNames(top.map((t) => t.type_id));
   if (!alive()) return;
   body.innerHTML = `<div class="valuation-toolbar">${ctx.valuation.select('data-val-src="corp"', val.region)}</div>` +
-    '<div class="valuation-grid section-gap">' + ctx.valuation.cards(val, '资产估值') + ctx.valuationCard('资产条目', formatNumber(d.count) + ' 项', d.kinds + ' 种物品，蓝图副本不计') + '</div>' +
+    '<div class="valuation-grid section-gap">' + ctx.valuation.cards(val, '资产估值') + ctx.valuationCard('资产条目', formatNumber(d.count) + ' 项', d.kinds + ' 种物品') + '</div>' +
     table(['物品', '数量', '最低卖价估值', '最高收价估值'], top.map((t) => tr([typeCell(types, t.type_id), formatNumber(t.quantity), formatISK(t.sell), formatISK(t.buy)]))) +
-    (d.list.length > 200 ? `<p class="text-muted valuation-note">只列出按最低卖价估值最高的 200 种</p>` : '');
+    (d.list.length > 200 ? `<p class="text-muted valuation-note">仅显示估值前 200 种</p>` : '');
 }
 
 async function renderCorp(box) {
   const id = me();
-  if (!ctx.hasScopeGroup('corp')) { box.innerHTML = ctx.scopeNeededHtml('corp', '查看军团钱包、订单、工业、建筑、月矿与资产'); return; }
-  box.innerHTML = loading('读取军团职位…');
+  if (!ctx.hasScopeGroup('corp')) { box.innerHTML = ctx.scopeNeededHtml('corp', '查看军团数据'); return; }
+  box.innerHTML = loading('读取中…');
   let base;
   try { base = await cached('corp:base', corpBase); } catch (error) { if (still('corp', id)) box.innerHTML = fail('军团职位', error); return; }
   if (!still('corp', id)) return;
-  if (base.corp < 2000000) { box.innerHTML = '<p class="text-muted">当前在 NPC 军团，没有军团管理数据</p>'; return; }
+  if (base.corp < 2000000) { box.innerHTML = '<p class="text-muted">当前在 NPC 军团</p>'; return; }
   const roles = base.roles.map((r) => ROLE_ZH[r] || r);
   const view = S.corpView;
   box.innerHTML =
-    `<p class="corp-roles">军团职位：${roles.length ? roles.map((r) => `<span class="pill">${esc(r)}</span>`).join(' ') : '<span class="text-muted">没有职位（大部分军团数据需要相应职位）</span>'}</p>` +
+    `<p class="corp-roles">军团职位：${roles.length ? roles.map((r) => `<span class="pill">${esc(r)}</span>`).join(' ') : '<span class="text-muted">无</span>'}</p>` +
     `<div class="valuation-toolbar section-gap"><div class="segmented" role="group">${CORP_VIEWS.map(([k, l]) => `<button data-more-view="corp:${k}" class="${view === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       <span class="toolbar-spacer"></span><button class="btn btn-ghost" data-more-reload="corp:${view}">刷新</button></div>` +
     `<div data-corp-body>${loading('读取中…')}</div>`;
@@ -385,7 +385,7 @@ async function renderCorp(box) {
   } catch (error) {
     if (!still('corp', id) || S.corpView !== view) return;
     const need = CORP_VIEWS.find((v) => v[0] === view)[2];
-    body.innerHTML = error.status === 403 ? `<p class="text-muted">没有权限读取：需要军团职位「${esc(need)}」</p>` : fail('军团数据', error);
+    body.innerHTML = error.status === 403 ? `<p class="text-muted">需要军团职位「${esc(need)}」</p>` : fail('军团数据', error);
   }
 }
 
@@ -411,9 +411,9 @@ async function loadMail(id, more) {
 }
 async function renderMail(box, more = false) {
   const id = me();
-  if (!ctx.hasScopeGroup('mail')) { box.innerHTML = ctx.scopeNeededHtml('mail', '在网页里看游戏邮件'); return; }
+  if (!ctx.hasScopeGroup('mail')) { box.innerHTML = ctx.scopeNeededHtml('mail', '查看邮件'); return; }
   if (!M.list.length || more) {
-    if (!more) box.innerHTML = loading('读取邮件…');
+    if (!more) box.innerHTML = loading('读取中…');
     M.loading = true;
     try { await loadMail(id, more); } catch (error) { M.loading = false; if (still('mail', id)) box.innerHTML = fail('邮件', error); return; }
     M.loading = false;
@@ -433,7 +433,7 @@ async function renderMail(box, more = false) {
       <span class="toolbar-spacer"></span>${M.labels?.total_unread_count ? `<span class="text-muted">未读 ${M.labels.total_unread_count} 封</span>` : ''}<button class="btn btn-ghost" data-mail-reload>刷新</button></div>
     ${M.list.length ? `<div class="table-scroll"><table class="pc-mini-table mail-table"><thead><tr><th>${M.label === 2 ? '收件人' : '发件人'}</th><th>主题</th><th class="num">时间</th></tr></thead><tbody>${rows}</tbody></table></div>
       ${M.more ? '<div class="au-more"><button class="btn btn-ghost" data-mail-more>再读 50 封</button></div>' : ''}` : '<p class="text-muted">这个文件夹里没有邮件</p>'}
-    <p class="text-muted valuation-note">只读：在这里看邮件不会把邮件标为已读。点一封邮件展开正文。</p>`;
+    <p class="text-muted valuation-note">不会标记为已读</p>`;
 }
 async function openMail(box, mailId) {
   const id = me();

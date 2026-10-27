@@ -399,7 +399,7 @@ function autoCard() {
   const lines = [];
   if (a.flows.length) lines.push(`劳动力运输 ${a.flows.length} 条：${a.flows.map((f) => `${link(f.from)} → ${link(f.to)} ${num(f.amount)}`).join('、')}${a.transit ? `（${a.transit} 个星系设为中转）` : ''}`);
   if (a.added.length) lines.push(`自动加装：${a.added.map(([id, u]) => `${link(id)} ${esc(u.name)}`).join('、')}`);
-  if (a.unmet.length) lines.push(`<span class="down">劳动力仍不足：${a.unmet.map(([id, n]) => `${link(id)} 缺 ${num(n)}`).join('、')}（沿星门能导入的富余劳动力不够，可多装温和 / 贫瘠 / 海洋天钩，或把中间星系也加入规划）</span>`);
+  if (a.unmet.length) lines.push(`<span class="down">劳动力仍不足：${a.unmet.map(([id, n]) => `${link(id)} 缺 ${num(n)}`).join('、')}（可多装劳动力天钩或加入中间星系）</span>`);
   if (a.low.length) {
     const R = simulate();
     const why = (id) => {
@@ -409,7 +409,7 @@ function autoCard() {
       const lw = Math.max(0, r.usedW + lowUps.reduce((t, x) => t + x.u.wf, 0) - r.wfTotal);
       return [lp ? `缺电 ${num(lp)}` : '', lw ? `缺劳动力 ${num(lw)}` : ''].filter(Boolean).join('、');
     };
-    lines.push(`<span class="down">仍有升级件资源不足：${a.low.map((id) => `${link(id)}（${why(id)}）`).join('、')}；电力只能本星系解决，可多装气体 / 风暴 / 等离子天钩或去掉部分升级件</span>`);
+    lines.push(`<span class="down">仍有升级件资源不足：${a.low.map((id) => `${link(id)}（${why(id)}）`).join('、')}；电力只能本星系自给</span>`);
   }
   if (!lines.length) lines.push('各星系电力、劳动力都够，不需要运输');
   return `<div class="pi-card sov-auto-card"><div class="pi-card-head"><h3>${P.auto ? '自动规划' : '一键规划结果'}</h3>
@@ -465,21 +465,14 @@ function renderSide(R) {
     `<button class="ind-side-item${S.tab === k ? ' active' : ''}" data-sov-tab="${k}"><span>${name}</span>${n !== '' ? `<small>${n}</small>` : ''}</button>`).join('');
   side.innerHTML = `<div class="ind-side-nav">${nav}</div>
     <div class="sov-pick" id="sovPick" hidden></div>
-    <div class="ind-side-section sov-side-list">${P.list.length ? listHtml(R) : '<p class="ind-side-empty">在上面搜索星系、星座或星域，加入规划。</p>'}</div>`;
+    <div class="ind-side-section sov-side-list">${P.list.length ? listHtml(R) : '<p class="ind-side-empty">还没有星系</p>'}</div>`;
   const input = $('sovSearch');
   if (input && input.value !== S.query) input.value = S.query;
   renderPick();
 }
 
 function introHtml() {
-  return `<div class="pi-card sov-intro"><h3>怎么用</h3><ol>
-    <li>在左侧搜索星系、星座或星域加入规划（星座 / 星域可只加某个联盟的主权星系）</li>
-    <li>每个星系勾选哪些行星装了轨道天钩：气体 / 风暴 / 等离子行星供电，温和 / 贫瘠 / 海洋行星供劳动力，冰体 / 熔岩行星产燃料试剂</li>
-    <li>按优先级添加升级件，本页模拟哪些能上线、还剩多少电力和劳动力、每小时烧多少燃料</li>
-    <li>点左侧「一键规划」：自动排优先级、配好劳动力导出 / 导入 / 中转，电力或劳动力不够时自动加电力监控部门 / 劳动力机械工具；勾选「改动后自动」后，只管选天钩和升级件就行</li>
-    <li>也可以手动配置：劳动力不够的星系从别的星系导入，导出星系选目的地和数量，路上经过的星系设为中转</li>
-    <li>有军团职位的话，在「我的主权设施」用 ESI 读出实际配置，一键导入成规划再调整</li></ol>
-    <p class="text-muted">规划保存在本机浏览器，可在「总览」导出 / 导入。</p></div>`;
+  return '<div class="pi-card sov-intro"><p class="text-muted">在左侧搜索星系、星座或星域加入规划</p></div>';
 }
 
 function searchHits(q) {
@@ -606,8 +599,8 @@ function upgradesCard(id, e, r) {
       <td><div class="sov-actions"><button data-sov-up="up:${i}" title="提高优先级"${i ? '' : ' disabled'}>↑</button><button data-sov-up="down:${i}" title="降低优先级"${i < r.ups.length - 1 ? '' : ' disabled'}>↓</button>
         <button data-sov-up="toggle:${i}" title="${x.on ? '关闭' : '开启'}">${x.on ? '关' : '开'}</button><button data-sov-up="del:${i}" title="移除">✕</button></div></td></tr>`;
   }).join('');
-  return `<div class="pi-card sov-card-ups"><div class="pi-card-head"><h3>升级件</h3><span class="text-muted">按优先级从上到下分配资源；启动燃料为上线时一次性消耗</span></div>
-    ${rows ? `<div class="pi-table-wrap"><table class="pi-table sov-table"><thead><tr><th class="num">#</th><th>升级件</th><th class="num">电力</th><th class="num">劳动力</th><th class="num">燃料 / 小时</th><th class="num">启动燃料</th><th>状态</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="text-muted">还没有升级件</p>'}
+  return `<div class="pi-card sov-card-ups"><div class="pi-card-head"><h3>升级件</h3><span class="text-muted">按优先级从上到下分配</span></div>
+    ${rows ? `<div class="pi-table-wrap"><table class="pi-table sov-table"><thead><tr><th class="num">#</th><th>升级件</th><th class="num">电力</th><th class="num">劳动力</th><th class="num">燃料 / 小时</th><th class="num" title="上线时一次性消耗">启动燃料</th><th>状态</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="text-muted">还没有升级件</p>'}
     <div class="sov-add-up"><select class="input" id="sovAddUp"><option value="">添加升级件…</option>${opts}</select></div>
     <p class="text-muted sov-foot">剩余：电力 ${num(r.freeP)} · 劳动力 ${num(r.freeW)}　｜　燃料每小时：${reagentName(ICE)} ${num(r.fuel[ICE])} · ${reagentName(GAS)} ${num(r.fuel[GAS])}　｜　启动燃料：${reagentName(ICE)} ${num(r.startup[ICE])} · ${reagentName(GAS)} ${num(r.startup[GAS])}</p></div>`;
 }
@@ -621,14 +614,14 @@ function transportCard(id, e, r, R) {
       : e.mode === 'import' ? `<p>从 ${(r.sources || []).map((x) => `<a data-sov-sys="${x.from}">${esc(D.sys.get(x.from).name)}</a> ${num(x.amount)}`).join('、') || '—'} 导入</p>`
       : e.mode === 'transit' ? `<p>中转：${r.flows.map((x) => `${esc(D.sys.get(x.from).name)} → ${esc(D.sys.get(x.to).name)} ${num(x.amount)}`).join('、')}</p>`
       : '<p class="text-muted">本星系劳动力只自用。</p>';
-    return `<div class="pi-card"><div class="pi-card-head"><h3>劳动力运输</h3><span class="sov-mode m-${e.mode || 'none'}">${MODE_NAME[e.mode]}</span><span class="text-muted">自动规划中，关闭「改动后自动」可手动调整</span></div>${body}</div>`;
+    return `<div class="pi-card"><div class="pi-card-head"><h3>劳动力运输</h3><span class="sov-mode m-${e.mode || 'none'}">${MODE_NAME[e.mode]}</span><span class="text-muted" title="关闭「改动后自动」可手动调整">自动规划中</span></div>${body}</div>`;
   }
   if (e.mode === 'export') {
     const f = r.out;
     body = `<div class="sov-form"><label>目的星系<select class="input" data-sov-field="to"><option value="0">选择…</option>${others.map((x) =>
       `<option value="${x}"${x === e.to ? ' selected' : ''}>${esc(D.sys.get(x).name)}${P.sys[x].mode === 'import' ? '' : '（未设为导入）'}</option>`).join('')}</select></label>
       <label>数量<input class="input" type="number" min="0" step="100" data-sov-field="amount" value="${Number(e.amount) || 0}"></label>
-      <span class="text-muted">本星系天钩劳动力 ${num(r.res.wf)}（机械工具产出的不能导出）</span></div>
+      <span class="text-muted" title="机械工具产出的不能导出">可导出 ${num(r.res.wf)}</span></div>
       ${f?.ok ? `<p class="sov-route">路线：${f.path.map((x) => `<a data-sov-sys="${x}">${esc(D.sys.get(x).name)}</a>`).join(' → ')}（${f.path.length - 1} 跳）</p>` : ''}`;
   } else if (e.mode === 'import') {
     const list = r.sources || [];
@@ -638,7 +631,7 @@ function transportCard(id, e, r, R) {
     body += `<p class="text-muted">最多 3 个来源（${list.length} / 3）</p>`;
   } else if (e.mode === 'transit') {
     body = r.flows.length ? `<p>经过的劳动力：</p><ul class="sov-flows">${r.flows.map((f) => `<li>${esc(D.sys.get(f.from).name)} → ${esc(D.sys.get(f.to).name)}：${num(f.amount)}</li>`).join('')}</ul>`
-      : '<p class="text-muted">目前没有劳动力经过这里。</p>';
+      : '<p class="text-muted">没有劳动力经过</p>';
   } else body = '<p class="text-muted">本星系劳动力只自用。</p>';
   return `<div class="pi-card"><div class="pi-card-head"><h3>劳动力运输</h3><span class="text-muted">只能在同一联盟的星系间沿星门运输</span></div>
     <div class="segmented sov-modes">${Object.entries(MODE_NAME).map(([k, v]) => `<button data-sov-mode="${k}" class="${e.mode === k ? 'active' : ''}">${v}</button>`).join('')}</div>${body}</div>`;
@@ -687,19 +680,19 @@ function overviewHtml(R) {
     <div class="pi-card"><div class="pi-card-head"><h3>燃料试剂</h3><span class="text-muted">按吉他最低卖价</span></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>试剂</th><th class="num">产出 / 小时</th><th class="num">消耗 / 小时</th><th class="num">净 / 小时</th><th class="num">30 天消耗</th><th class="num">30 天体积</th><th class="num">启动燃料合计</th><th class="num">30 天价值</th></tr></thead>
       <tbody>${reagentRow(ICE, T.ice, T.iceUse, T.iceStart)}${reagentRow(GAS, T.gas, T.gasUse, T.gasStart)}</tbody></table></div></div>
-    <div class="pi-card"><div class="pi-card-head"><h3>各星系</h3><span class="text-muted">点一行进入该星系</span></div>
+    <div class="pi-card"><div class="pi-card-head"><h3>各星系</h3></div>
       <div class="pi-table-wrap sov-overview"><table class="pi-table"><thead><tr><th>星系</th><th>星域</th><th class="num">电力</th><th class="num">劳动力</th><th>运输</th><th class="num">升级件</th><th class="num">冰 净/时</th><th class="num">气 净/时</th><th>问题</th></tr></thead><tbody>${rows}</tbody></table></div></div>
     ${ioCard()}`;
 }
 function ioCard() {
-  return `<div class="pi-card"><div class="pi-card-head"><h3>导出 / 导入规划</h3><span class="text-muted">JSON 文件，可分享给盟友</span></div>
+  return `<div class="pi-card"><div class="pi-card-head"><h3>导出 / 导入规划</h3></div>
     <div class="sov-io"><button class="btn" data-sov-export>导出规划</button><label class="btn">导入规划<input type="file" accept=".json,application/json" id="sovImport" hidden></label></div></div>`;
 }
 
 // ---------- ESI：我的主权设施 ----------
 function renderEsi(body) {
-  if (!IS_TQ) { body.innerHTML = `<div class="empty-state"><p>主权中心与天钩接口只在宁静服提供，${esc(SERVER.full)}的 ESI 还没有。</p></div>`; return; }
-  if (!ctx.hasEsiToken()) { body.innerHTML = '<div class="empty-state"><p>先在「个人中心」绑定角色。读取主权中心需要军团的董事或站点经理等职位。</p></div>'; return; }
+  if (!IS_TQ) { body.innerHTML = '<div class="empty-state"><p>仅宁静服可用</p></div>'; return; }
+  if (!ctx.hasEsiToken()) { body.innerHTML = '<div class="empty-state"><p>先绑定角色（需董事或站点经理职位）</p></div>'; return; }
   if (!ctx.hasScopeGroup('sov')) { body.innerHTML = ctx.scopeNeededHtml('sov', '读取军团的主权中心与天钩'); return; }
   if (!S.esi && !S.esiLoading) { loadEsi(); }
   if (S.esiLoading) { body.innerHTML = `<div class="empty-state"><p>${esc(S.esiProgress || '读取中…')}</p></div>`; return; }
@@ -751,7 +744,7 @@ function renderEsi(body) {
   }).join('');
   body.innerHTML = `<div class="sov-esi-head"><span>${esc(d.corpName)} · ${d.hubs.length} 个主权中心 · ${d.skyhooks.length} 个天钩 · 读取于 ${fmtTime(new Date(d.at).toISOString())}</span>
       <span class="toolbar-spacer"></span><button class="btn" data-sov-esi-reload>刷新</button><button class="btn btn-primary" data-sov-esi-import>导入到规划</button></div>
-    <p class="text-muted sov-foot">升级件颜色：<span class="sov-chip c-online">在线</span><span class="sov-chip c-low">低电量</span><span class="sov-chip c-offline">离线</span><span class="sov-chip c-pending">等待中</span>　导入会用这些星系替换当前规划。</p>
+    <p class="text-muted sov-foot">升级件颜色：<span class="sov-chip c-online">在线</span><span class="sov-chip c-low">低电量</span><span class="sov-chip c-offline">离线</span><span class="sov-chip c-pending">等待中</span></p>
     ${hubsHtml}
     ${d.skyhooks.length ? `<div class="pi-card"><div class="pi-card-head"><h3>天钩</h3><span class="text-muted">${d.skyhooks.length} 个</span></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>行星</th><th>类型</th><th>状态</th><th class="num">产出</th><th>试剂库存</th><th>建筑状态</th></tr></thead><tbody>${skyRows}</tbody></table></div></div>` : ''}`;

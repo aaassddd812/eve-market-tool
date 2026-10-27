@@ -202,8 +202,7 @@ function renderSide() {
       `<a class="guide-side-page${S.doc?.id === x.id ? ' active' : ''}" href="#guide/w/${x.id}" data-guide-read>${shortTitle(x)}</a>`).join('')}`).join('')}</div>` : '';
     body = `<div class="ind-side-section"><h4>分类</h4>${item('', 'Wiki 首页', list.length, '#guide')}${CATS.map(([k, name]) =>
       item(k, name, list.filter((x) => x.c === k).length, '#guide/' + k) + (k === S.cat ? sub : '')).join('')}</div>
-      <div class="ind-side-section guide-side-filters"><h4>译文阅读语言</h4>${seg('lang', S.lang, LANGS)}
-        <p class="ind-side-empty">EVE University 的英文文章已全文翻译，可切换中文、英文原文或中英对照。</p></div>`;
+      <div class="ind-side-section guide-side-filters"><h4>译文阅读语言</h4>${seg('lang', S.lang, LANGS)}</div>`;
   } else {
     const list = VIDEOS.filter(matchVideo);
     const item = (k, name, n) => `<a class="ind-side-item${S.page !== 'video' && S.cat === k ? ' active' : ''}" href="#guide/video${k ? '/' + k : ''}" data-guide-nav><span>${name}</span><small>${n}</small></a>`;
@@ -228,10 +227,9 @@ const WIKI_NOTE = `<p class="text-muted valuation-note" title="新伊甸学院�
 function renderWikiHome() {
   const all = pages();
   const start = START.map((id) => all.find((x) => x.id === id)).filter(Boolean);
-  const srcCount = Object.keys(SRC).map((k) => [k, all.filter((x) => x.s === k).length]).filter(([, n]) => n);
   $('guideMain').innerHTML = `<section class="pi-page guide-page">
     <div class="guide-hero"><h2>EVE 中文 Wiki</h2>${EN_NOTE}
-      <p class="text-muted">${all.length} 篇图文资料，按玩法分类整理。来源：${srcCount.map(([k, n]) => `${SRC[k][0]} ${n} 篇`).join('、')}。另有 <a href="#guide/video" data-guide-nav>${VIDEOS.length} 个教学视频</a>。</p></div>
+      <p class="text-muted">${all.length} 篇图文 · <a href="#guide/video" data-guide-nav>${VIDEOS.length} 个视频</a></p></div>
     ${start.length ? `<section class="guide-section"><div class="guide-section-head"><h3>新手从这里开始</h3></div>
       <div class="guide-start">${start.map((x, i) => `<a class="guide-start-item" href="#guide/w/${x.id}" data-guide-read><b>${i + 1}</b><span>${shortTitle(x)}</span>${srcBadge(x)}</a>`).join('')}</div></section>` : ''}
     <section class="guide-section"><div class="guide-section-head"><h3>分类</h3></div>
@@ -261,7 +259,7 @@ function renderWikiSearch() {
   const xs = pages().filter(matchPage);
   const vs = VIDEOS.filter(matchVideo);
   $('guideMain').innerHTML = `<section class="pi-page guide-page">
-    <div class="pi-head guide-head"><h2>搜索「${ctx.esc(S.q)}」</h2><span class="text-muted guide-sub">${xs.length} 篇文章${vs.length ? `，视频里还有 ${vs.length} 个结果，切到「视频」查看` : ''}</span></div>
+    <div class="pi-head guide-head"><h2>搜索「${ctx.esc(S.q)}」</h2><span class="text-muted guide-sub">${xs.length} 篇文章${vs.length ? ` · 视频 ${vs.length} 个` : ''}</span></div>
     ${CATS.map(([k, name]) => {
       const list = xs.filter((x) => x.c === k);
       return list.length ? `<section class="guide-section"><div class="guide-section-head"><h3>${name}</h3><span class="text-muted">${list.length} 篇</span></div><div class="guide-rows">${list.map(pageRow).join('')}</div></section>` : '';
@@ -284,7 +282,7 @@ function renderVideoList() {
   const name = catName(S.cat, VCATS);
   $('guideMain').innerHTML = `<section class="pi-page guide-page">
     ${name ? `<nav class="guide-crumb"><a href="#guide/video" data-guide-nav>视频</a><span>/</span>${name}</nav>` : ''}
-    <div class="pi-head guide-head"><h2>${S.q ? `搜索「${ctx.esc(S.q)}」` : name || '教学视频'}</h2><span class="text-muted guide-sub">${S.q ? `${list.length} 个视频` : '站内直接播放，附原视频链接。EVE Academy 官方视频是英文配音，本站翻译了中文字幕'}</span></div>
+    <div class="pi-head guide-head"><h2>${S.q ? `搜索「${ctx.esc(S.q)}」` : name || '教学视频'}</h2><span class="text-muted guide-sub">${list.length} 个视频</span></div>
     ${cats.map(([k, n]) => {
       const vs = list.filter((v) => v.cat === k);
       return vs.length ? `<section class="guide-section">${S.cat ? '' : `<div class="guide-section-head"><h3>${n}</h3><span class="text-muted">${vs.length} 个</span></div>`}
@@ -410,7 +408,7 @@ function sourceBox(doc) {
     <div><span>来源</span><b>${ctx.esc(doc.source)}</b></div>
     <div><span>许可</span>${ctx.esc(doc.license)}</div>
     <div><span>原文</span><a href="${ctx.esc(doc.url)}" target="_blank" rel="noopener noreferrer">${ctx.esc(shown.replace(/^https:\/\//, ''))}${ICON.out}</a></div>
-    ${doc.lang !== 'zh' ? '<div><span>说明</span>英文原文由本站翻译成中文，可能有疏漏，以原文为准</div>' : doc.note ? `<div><span>说明</span>${ctx.esc(doc.note)}</div>` : ''}</div>`;
+    ${doc.lang !== 'zh' ? '<div><span>说明</span>本站译自英文原文，以原文为准</div>' : doc.note ? `<div><span>说明</span>${ctx.esc(doc.note)}</div>` : ''}</div>`;
 }
 
 async function renderDoc(id) {
@@ -520,7 +518,7 @@ async function startYouTube(v, doc) {
     });
   } catch (e) {
     const box = $('guideYt');
-    if (box) box.outerHTML = `<div class="guide-yt-fail"><p>视频无法加载（${ctx.esc(e.message)}）。YouTube 在部分网络环境下无法访问，可以直接阅读下方的中文字幕稿，或<a href="https://www.youtube.com/watch?v=${ctx.esc(v.id)}" target="_blank" rel="noopener noreferrer">在 YouTube 打开</a>。</p></div>`;
+    if (box) box.outerHTML = `<div class="guide-yt-fail"><p>视频无法加载（${ctx.esc(e.message)}），可读下方字幕稿或<a href="https://www.youtube.com/watch?v=${ctx.esc(v.id)}" target="_blank" rel="noopener noreferrer">在 YouTube 打开</a></p></div>`;
   }
 }
 

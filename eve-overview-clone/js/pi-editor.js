@@ -136,7 +136,7 @@ function autoRoutes(m) {
     if (!p.product) { problems.push({ pin: i, text: `${label} 未设置${p.kind === 'ecu' ? '采集资源' : '配方'}` }); return; }
     const path = nearestHub(i);
     if (!path) { problems.push({ pin: i, text: `${label} 没有链接到发射平台或储藏设施` }); return; }
-    if (path.length > MAX_ROUTE) problems.push({ pin: i, text: `${label} 的路由经过 ${path.length} 个设施，超过 ${MAX_ROUTE} 个，游戏不会建这条路由` });
+    if (path.length > MAX_ROUTE) problems.push({ pin: i, text: `${label} 的路由经过 ${path.length} 个设施，超过 ${MAX_ROUTE} 个上限` });
     if (p.kind === 'ecu') {
       const perHour = Math.max(1, Math.round(p.heads * env.headRate()));
       routes.push({ path, qty: perHour, type: p.product, from: i, m3h: perHour * vol(p.product) });
@@ -460,7 +460,7 @@ export function openTemplateEditor(json, { title = '殖民地模板', onSave = n
         <div class="pie-hud-top">
           <div class="pie-title"><small>行星工业 · 殖民地模板</small><b>${env.esc(title)}</b></div>
           <div class="pie-top-actions">
-            <span class="pie-hint">拖动设施移动 · 拖动空白处平移 · 滚轮缩放 · L 链接 · Del 删除</span>
+            <span class="pie-hint">拖动移动 · 滚轮缩放 · L 链接 · Del 删除</span>
             <button type="button" class="pie-x" data-pie="close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
           </div>
         </div>
@@ -577,13 +577,13 @@ function renderSide() {
         <label class="pie-row"><span>行星类型</span><select class="pie-input" data-pie-prop="code">${Object.entries(env.ptByCode).map(([c, p]) => `<option value="${c}"${c === m.code ? ' selected' : ''}>${p.name}</option>`).join('')}</select></label>
         <label class="pie-row"><span>指挥中心</span><select class="pie-input" data-pie-prop="cc">${[0, 1, 2, 3, 4, 5].map((n) => `<option value="${n}"${n === m.cc ? ' selected' : ''}>${n} 级</option>`).join('')}</select></label>
       </div>
-      <label class="pie-row"><span>行星直径 km（影响链接长度与负载）</span><input type="number" class="pie-input" min="1000" max="200000" step="10" value="${Math.round(m.R * 2)}" data-pie-prop="diam"></label>
+      <label class="pie-row"><span>行星直径 km</span><input type="number" class="pie-input" min="1000" max="200000" step="10" value="${Math.round(m.R * 2)}" data-pie-prop="diam"></label>
       <div class="pie-counts">${Object.entries(counts).map(([k, n]) => `<span style="--k:${KINDS[k].color}"><i></i>${KINDS[k].label} ${n}</span>`).join('')}<span>链接 ${m.links.length}</span><span>路由 ${routes.length}</span></div>
     </section>
     ${sel}
     <section class="pie-panel">
       <header>导入检查${problems.length ? ` <em>${problems.length}</em>` : ''}</header>
-      ${problems.length ? `<ul class="pie-problems">${problems.map((p) => `<li${p.pin != null ? ` data-pie-goto="${p.pin}"` : p.link != null ? ` data-pie-goto-link="${p.link}"` : ''}>${env.esc(p.text)}</li>`).join('')}</ul>` : '<p class="pie-ok">✓ 符合游戏导入规则，路由已自动生成</p>'}
+      ${problems.length ? `<ul class="pie-problems">${problems.map((p) => `<li${p.pin != null ? ` data-pie-goto="${p.pin}"` : p.link != null ? ` data-pie-goto-link="${p.link}"` : ''}>${env.esc(p.text)}</li>`).join('')}</ul>` : '<p class="pie-ok">✓ 可导入游戏</p>'}
     </section>
     <div class="pie-actions">
       ${E.onSave ? '<button type="button" class="pie-btn primary wide" data-pie="save">保存修改</button>' : ''}
@@ -777,7 +777,7 @@ function duplicateSelected() {
 }
 
 function importJson() {
-  const text = prompt('粘贴模板 JSON（游戏里「导入与导出 → 复制到剪贴板」得到的内容）');
+  const text = prompt('粘贴模板 JSON');
   if (!text) return;
   try {
     const json = JSON.parse(text);
@@ -838,7 +838,7 @@ function onModalClick(e) {
     E.onSave?.(j, { cpu: u.cpu, power: u.power, code: view.model.code });
     E.original = templateText(j);
     E.dirty = false;
-    env.showToast('已保存，复制 / 下载会使用修改后的模板', 'success');
+    env.showToast('已保存', 'success');
     closeEditor(true);
   }
 }

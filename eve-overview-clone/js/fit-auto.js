@@ -13,11 +13,11 @@ const KEY = 'eve-fit-auto-v1';
 const IMG = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
 
 const GOALS = [
-  ['dps', '输出优先', '尽量高的 DPS，剩余槽位补坦克'],
-  ['tank', '坦克优先', '尽量高的有效血量'],
-  ['balanced', '均衡', '输出与坦克兼顾'],
-  ['pve', '刷怪主动坦', '主动维修 / 回充，电容稳定'],
-  ['kite', '风筝', '速度优先，保留输出']
+  ['dps', '输出优先', '余槽补坦克'],
+  ['tank', '坦克优先', ''],
+  ['balanced', '均衡', ''],
+  ['pve', '刷怪主动坦', '主动维修，电容稳定'],
+  ['kite', '风筝', '速度优先']
 ];
 // 装备等级逐级放宽：T1 → T2 → 势力（含故事线）→ 死亡空间 → 官员
 const METAS = { t1: [0, 1], t2: [0, 1, 2], faction: [0, 1, 2, 3, 4], deadspace: [0, 1, 2, 3, 4, 6], officer: [0, 1, 2, 3, 4, 5, 6] };
@@ -926,7 +926,7 @@ function implantPlanHtml(p, i, applyAttr) {
   ].join('');
   const rows = p.items.map((x) => `<div class="fa-imp-row"><span class="fa-imp-slot">${x.slot}</span><img src="${IMG(x.id)}" alt="" width="24" height="24" loading="lazy"><span class="fa-imp-name">${esc(data.types.get(x.id)?.name || x.id)}<small>${esc(x.effect)}</small></span><span class="fa-imp-cost">${x.cost ? isk(x.cost) : '—'}</span></div>`).join('');
   const title = planTitle(p, i) + (p.setName ? ` · ${esc(p.setName)}套装 ${p.setCount === 6 ? '整套' : p.setCount + ' 件'}` : '');
-  const note = p.kind === 'value' ? `每个槽位取效果达到最佳 ${VALUE_SHARE * 100}% 的最便宜植入体` : p.setName ? `同套装 ${p.setCount} 件，套内每件的效果按套装系数叠乘放大` : '';
+  const note = p.kind === 'value' ? `每槽取效果 ≥ 最佳 ${VALUE_SHARE * 100}% 的最便宜款` : '';
   return `<div class="fa-result${i === 0 ? ' best' : ''}">
     <div class="fa-result-head"><b>${title}</b>${note ? `<span class="fa-note-inline">${note}</span>` : ''}<button type="button" class="btn btn-primary" ${applyAttr}="${i}">套用</button></div>
     <div class="fa-stats">${stats}</div>
@@ -971,23 +971,19 @@ const AIM_TARGETS = [
   ['capital', '旗舰', '旗舰 / 建筑']
 ];
 const AIM_RANGES = [
-  ['any', '不限', '不看射程'],
-  ['close', '5 km', '贴脸'],
-  ['mid', '20 km', '中距离'],
-  ['long', '50 km', '远程'],
-  ['xlong', '100 km', '超远']
+  ['any', '不限', ''],
+  ['close', '5 km', ''],
+  ['mid', '20 km', ''],
+  ['long', '50 km', ''],
+  ['xlong', '100 km', '']
 ];
 function aimHtml() {
-  const card = (k, [v, title, sub]) => `<button type="button" class="fa-opt${A[k] === v ? ' active' : ''}" data-fa-set="${k}" data-v="${v}"><b>${title}</b><small>${sub}</small></button>`;
+  const card = (k, [v, title, sub]) => `<button type="button" class="fa-opt${A[k] === v ? ' active' : ''}" data-fa-set="${k}" data-v="${v}"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</button>`;
   const t = ctx.FE.TARGETS[A.target], d = RANGES[A.range];
-  let summary;
-  if (!t && !d) summary = '都选「不限」时按面板 DPS 挑武器，不考虑打不打得中。';
-  else {
-    const parts = [];
-    if (t) parts.push(`目标按信号半径 ${t.sig} m、速度 ${t.vel} m/s 算：炮台跟踪不够、导弹爆炸半径太大都会掉伤害`);
-    if (d) parts.push(`在 ${d / 1000} km 开火：炮台超出最佳射程 + 失准范围会掉伤害，导弹飞不到不算`);
-    summary = `<b>会怎么挑：</b>${parts.join('；')}。武器、弹药和无人机都按打得中的伤害比较，结果里显示「有效 DPS / 面板 DPS」。`;
-  }
+  const parts = [];
+  if (t) parts.push(`目标 ${t.sig} m / ${t.vel} m/s`);
+  if (d) parts.push(`${d / 1000} km`);
+  const summary = parts.length ? `按有效 DPS 挑武器：${parts.join(' · ')}` : '按面板 DPS 挑武器';
   return `<div class="fa-field"><label>目标体型</label><div class="fa-opts">${AIM_TARGETS.map((o) => card('target', o)).join('')}</div></div>
     <div class="fa-field"><label>交战距离</label><div class="fa-opts">${AIM_RANGES.map((o) => card('range', o)).join('')}</div></div>
     <p class="fa-aim">${summary}</p>`;
@@ -1012,26 +1008,20 @@ function renderForm() {
   const repAuto = P.rep && !job;
   const auto = (text) => `<b>自动 →</b> ${text}`;
   const help = {
-    role: A.role === 'combat' ? '忽略舰船定位，和普通战斗船一样只看输出 / 坦克'
-      : `先放好${roles.map((r) => ROLE_NAME[r]).join('、')}装备，其余槽位再按目标配`,
-    mineTarget: { ore: '露天采矿器 / 采矿激光 + 采矿改良设备，默认装简单小行星晶体', ice: '冰矿采集器 + 冰矿采集改良设备', gas: '气云采集器' }[A.mineTarget],
-    tank: A.tank === 'auto' ? auto(`本船用${NAME[tank.tank]}坦克（依据${tank.why}）`) : A.tank === 'shield' ? '中槽放护盾扩展、强化装置' : '低槽放装甲附甲、薄膜',
-    resist: A.resist === 'auto' ? auto(`${NAME[tank.tank]}船用${NAME[resist]}（盾抗主动抗、甲抗被动抗）`)
-      : A.resist === 'active' ? '需要激活的强化器 / 增强器，抗性高但耗电容' : '增效器 / 薄膜等被动装备，不耗电容',
-    selfRep: A.selfRep === 'auto' ? auto(repAuto ? '本船有维修加成，配回充 / 维修装备' : A.goal === 'pve' ? '刷怪主动坦会配回充 / 维修装备' : '看得分决定，一般不配')
-      : A.selfRep === 'yes' ? '一定配回充 / 维修装备，维修量计入得分' : '不配回充 / 维修装备，槽位全给血量和抗性',
-    weapon: { auto: '比较各种炮台、导弹，取伤害最高的；有无人机挂舱也配无人机', turret: '只用炮台', missile: '只用导弹发射器', drone: '高槽不放武器，只配无人机 / 舰载机' }[A.weapon],
-    meta: { t1: '只用 T1 及其变体', t2: '可用 T1、T2', faction: '再加势力、故事线装备', deadspace: '再加死亡空间装备', officer: '全部可用，包括官员装备' }[A.meta],
-    skills: A.skills === 'esi' ? '只用角色能装的装备，属性按角色技能计算' : '按全部技能 5 级计算'
+    mineTarget: A.mineTarget === 'ore' ? '默认装简单小行星晶体' : '',
+    tank: A.tank === 'auto' ? auto(`${NAME[tank.tank]}坦克（${tank.why}）`) : '',
+    resist: A.resist === 'auto' ? auto(NAME[resist]) : A.resist === 'active' ? '耗电容' : '',
+    selfRep: A.selfRep === 'auto' ? auto(repAuto ? '配维修（有维修加成）' : A.goal === 'pve' ? '配维修' : '一般不配') : '',
+    skills: A.skills === 'esi' ? '只用角色能装的装备' : ''
   };
 
   $('faForm').innerHTML = `
     <div class="fa-ship"><img src="${IMG(ship.id)}" alt="" width="32" height="32"><b>${esc(ship.name)}</b>${P.roles.map((r) => `<span class="fa-role">${ROLE_NAME[r]}</span>`).join('')}</div>
     ${P.labels.length ? `<div class="fa-bonus"><span>舰船加成</span>${P.labels.map((l) => `<em>${esc(l)}</em>`).join('')}</div>` : ''}
-    ${P.roles.length ? section('舰船定位', field('', seg('role', [['auto', '按加成：' + P.roles.map((r) => ROLE_NAME[r]).join(' / ')], ['combat', '当普通战斗船']]), help.role)
+    ${P.roles.length ? section('舰船定位', field('', seg('role', [['auto', '按加成：' + P.roles.map((r) => ROLE_NAME[r]).join(' / ')], ['combat', '当普通战斗船']]), )
       + (roles.includes('mining') ? field('采矿对象', seg('mineTarget', [['ore', '矿石'], ['ice', '冰矿'], ['gas', '气云']]), help.mineTarget) : '')) : ''}
     ${section('目标', job ? `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量' }[job]}配装，其余兼顾坦克</p>`
-      : `<div class="fa-goals">${GOALS.map(([k, l, d]) => `<button type="button" class="fa-goal${A.goal === k ? ' active' : ''}" data-fa-set="goal" data-v="${k}"><b>${l}</b><small>${d}</small></button>`).join('')}</div>`)}
+      : `<div class="fa-goals">${GOALS.map(([k, l, d]) => `<button type="button" class="fa-goal${A.goal === k ? ' active' : ''}" data-fa-set="goal" data-v="${k}"><b>${l}</b>${d ? `<small>${d}</small>` : ''}</button>`).join('')}</div>`)}
     ${job ? '' : section('打什么目标', aimHtml())}
     ${section('最低要求 <small>填 0 表示不限</small>', `<div class="fa-grid3">
         <label class="fa-num"><span>DPS</span><input type="number" min="0" step="10" value="${A.minDps}" data-fa-num="minDps"></label>
@@ -1039,17 +1029,17 @@ function renderForm() {
         <label class="fa-num"><span>速度 m/s</span><input type="number" min="0" step="50" value="${A.minSpeed}" data-fa-num="minSpeed"></label>
       </div>
       <div class="fa-checks">
-        <label class="pi-check"><input type="checkbox" data-fa-check="capStable"${A.capStable ? ' checked' : ''}><span>电容稳定<small>所有装备一直开着也不会耗光电容</small></span></label>
-        <label class="pi-check"><input type="checkbox" data-fa-check="tackle"${A.tackle ? ' checked' : ''}><span>预留扰频器和停滞网<small>PVP 抓人用，先占两个中槽</small></span></label>
+        <label class="pi-check"><input type="checkbox" data-fa-check="capStable"${A.capStable ? ' checked' : ''}><span>电容稳定</span></label>
+        <label class="pi-check"><input type="checkbox" data-fa-check="tackle"${A.tackle ? ' checked' : ''}><span>预留扰频器和停滞网<small>占两个中槽</small></span></label>
       </div>`)}
     ${section('坦克', field('坦克类型', seg('tank', [['auto', '自动'], ['shield', '护盾'], ['armor', '装甲']]), help.tank)
       + field('抗性', seg('resist', [['auto', '自动'], ['active', '主动抗'], ['passive', '被动抗']]), help.resist)
       + field('自修', seg('selfRep', [['auto', '自动'], ['yes', '自修'], ['no', '不自修']]), help.selfRep))}
-    ${section('武器与装备', field('武器', seg('weapon', [['auto', '自动'], ['turret', '炮台'], ['missile', '导弹'], ['drone', '仅无人机']]), help.weapon)
-      + field('装备等级', seg('meta', [['t1', 'T1'], ['t2', '+T2'], ['faction', '+势力'], ['deadspace', '+死亡空间'], ['officer', '+官员']]), help.meta))}
-    ${section('植入体', `<div class="fa-checks"><label class="pi-check"><input type="checkbox" data-fa-check="implants"${A.implants ? ' checked' : ''}><span>同时推荐植入体<small>装备配好后，再按同样的目标挑 1–10 号槽植入体（含套装）</small></span></label></div>`
-      + (A.implants ? field('植入体预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fa-num="impBudget"><span>百万 ISK</span></div>`, '整套植入体按全服均价计，0 为不限；高级套装往往要数十亿') : ''))}
-    ${section('预算与技能', field('预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="10" value="${A.budget}" data-fa-num="budget"><span>百万 ISK</span></div>`, '整套装备（不含船）按全服均价计，0 为不限')
+    ${section('武器与装备', field('武器', seg('weapon', [['auto', '自动'], ['turret', '炮台'], ['missile', '导弹'], ['drone', '仅无人机']]))
+      + field('装备等级', seg('meta', [['t1', 'T1'], ['t2', '+T2'], ['faction', '+势力'], ['deadspace', '+死亡空间'], ['officer', '+官员']])))}
+    ${section('植入体', `<div class="fa-checks"><label class="pi-check"><input type="checkbox" data-fa-check="implants"${A.implants ? ' checked' : ''}><span>同时推荐植入体</span></label></div>`
+      + (A.implants ? field('植入体预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fa-num="impBudget"><span>百万 ISK</span></div>`, '按全服均价，0 为不限') : ''))}
+    ${section('预算与技能', field('预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="10" value="${A.budget}" data-fa-num="budget"><span>百万 ISK</span></div>`, '不含船，按全服均价，0 为不限')
       + field('技能', seg('skills', [['max', '全 5 级'], ['esi', bound ? '按角色' : '按角色（未读取）']]), help.skills))}
     <button type="submit" class="btn btn-primary fa-go">${S.running ? '计算中…' : '开始装配'}</button>`;
 }
@@ -1175,7 +1165,7 @@ export function openImplantAdvisor() {
   modal.hidden = false;
   IS.plans = [];
   renderImpForm();
-  $('fiResults').innerHTML = '<div class="fa-empty">保持当前装备不变，按目标挑 1–10 号槽的植入体。设好后点「推荐植入体」</div>';
+  $('fiResults').innerHTML = '<div class="fa-empty">设好后点「推荐植入体」</div>';
 }
 
 function closeImp() {
@@ -1198,11 +1188,11 @@ function renderImpForm() {
   const cur = (fit.implants || []).length;
   $('fiForm').innerHTML = `
     <div class="fa-ship"><img src="${IMG(ship.id)}" alt="" width="32" height="32"><b>${esc(ship.name)}</b>${P.roles.map((r) => `<span class="fa-role">${ROLE_NAME[r]}</span>`).join('')}</div>
-    <p class="fa-note">当前装配 ${mods} 件装备${cur ? `，已装 ${cur} 个植入体（推荐时从空白算起，套用后替换）` : ''}${mods ? '' : '：还没有装备，建议先装好装备或用「智能装配」'}</p>
+    <p class="fa-note">${mods ? `当前 ${mods} 件装备${cur ? `，${cur} 个植入体（套用后替换）` : ''}` : '还没有装备，建议先装好'}</p>
     ${section('目标', job ? `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量与起跳时间' }[job]}挑植入体，其次是坦克</p>`
-      : `<div class="fa-goals">${GOALS.map(([k, l, d]) => `<button type="button" class="fa-goal${A.goal === k ? ' active' : ''}" data-fi-set="goal" data-v="${k}"><b>${l}</b><small>${d}</small></button>`).join('')}</div>`)}
-    ${section('预算与技能', `<div class="fa-field"><label>植入体预算</label><div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fi-num="impBudget"><span>百万 ISK</span></div><p class="fa-hint">整套植入体按全服均价计，0 为不限；高级套装往往要数十亿</p></div>
-      <div class="fa-field"><label>技能</label>${seg('skills', [['max', '全 5 级'], ['esi', bound ? '按角色' : '按角色（未读取）']])}<p class="fa-hint">${A.skills === 'esi' ? '只推荐角色技能够用的植入体' : '按全部技能 5 级计算'}</p></div>`)}
+      : `<div class="fa-goals">${GOALS.map(([k, l, d]) => `<button type="button" class="fa-goal${A.goal === k ? ' active' : ''}" data-fi-set="goal" data-v="${k}"><b>${l}</b>${d ? `<small>${d}</small>` : ''}</button>`).join('')}</div>`)}
+    ${section('预算与技能', `<div class="fa-field"><label>植入体预算</label><div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fi-num="impBudget"><span>百万 ISK</span></div><p class="fa-hint">按全服均价，0 为不限</p></div>
+      <div class="fa-field"><label>技能</label>${seg('skills', [['max', '全 5 级'], ['esi', bound ? '按角色' : '按角色（未读取）']])}${A.skills === 'esi' ? '<p class="fa-hint">只推荐技能够用的植入体</p>' : ''}</div>`)}
     <button type="submit" class="btn btn-primary fa-go">${IS.running ? '计算中…' : '推荐植入体'}</button>`;
 }
 
@@ -1250,7 +1240,7 @@ async function runImplants() {
     box.innerHTML = plans.length
       ? `<p class="fa-meta">相对不装植入体 · ${ctx.formatNumber(evals)} 种组合 · ${secs} 秒</p>` + plans.map((p, i) => implantPlanHtml(p, i, 'data-fi-apply')).join('') +
         '<p class="fa-hint fa-imp-foot">价格为全服均价</p>'
-      : '<div class="fa-empty">没有能提升这套装配的植入体（预算内或技能允许的范围内）</div>';
+      : '<div class="fa-empty">预算 / 技能内没有能提升的植入体</div>';
   } catch (err) {
     box.innerHTML = `<div class="fa-empty">${err.message === 'cancelled' ? '已停止' : ctx.esc(err.message)}</div>`;
   } finally {

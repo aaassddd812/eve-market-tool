@@ -5,11 +5,11 @@
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
 import * as FE from './fit-engine.js?v=v26';
 import * as MU from './fit-mutate.js?v=v4';
-import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v26';
-import { initKbFits, openKbFits } from './fit-kb.js?v=v26';
-import { initSim, mountSim } from './fit-sim.js?v=v14';
-import { initPlan, mountPlan, queuePlan } from './skill-plan.js?v=v4';
-import { initGraph, openGraph } from './fit-graph.js?v=v4';
+import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v27';
+import { initKbFits, openKbFits } from './fit-kb.js?v=v27';
+import { initSim, mountSim } from './fit-sim.js?v=v15';
+import { initPlan, mountPlan, queuePlan } from './skill-plan.js?v=v6';
+import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 
 let app;
@@ -555,7 +555,7 @@ function skillTreeHtml(t) {
   const tree = rowsOf(t, 0, new Set([t.id]));
   const head = esi
     ? (missing ? `<p class="fi-skill-note miss">按 ${app.esc(F.esi.name)} 的技能：还差 ${missing} 项</p>` : `<p class="fi-skill-note ok">按 ${app.esc(F.esi.name)} 的技能：全部满足</p>`)
-    : `<p class="fi-skill-note">按全 5 级显示${app.hasEsiToken() ? '，在装配页「技能」切到「按 ESI 角色」可看自己的等级' : ''}</p>`;
+    : '<p class="fi-skill-note">按全 5 级显示</p>';
   return head + `<div class="fi-skill-tree">${tree}</div>`;
 }
 
@@ -1239,7 +1239,7 @@ async function onMainClick(e) {
   if (el('[data-fit-new]')) { stashDraft(F.fit); F.fit = null; F.selected = null; app.store.setJSON(CURRENT_KEY, null); recompute(); setTab('ship'); return; }
   if (el('[data-fit-delete]')) { deleteFit(); return; }
   if (el('[data-fit-import]')) { openModal(); return; }
-  if (el('[data-fit-export]')) { app.copyText(toEft(F.fit), '已复制 EFT 文本，可在游戏装配窗口或 Pyfa 中导入'); return; }
+  if (el('[data-fit-export]')) { app.copyText(toEft(F.fit), '已复制 EFT 文本'); return; }
   if (el('[data-fit-share]')) { app.copyText(shareUrl(), '分享链接已复制'); return; }
   if (el('[data-fit-cart]')) { app.addToCart(fitShoppingList(F.fit)); return; }
   if (el('[data-fit-esi-list]')) { openEsiModal(); return; }
@@ -1420,7 +1420,7 @@ function closeModal() {
 const ESI_SLOT = { high: ['HiSlot', 27], mid: ['MedSlot', 19], low: ['LoSlot', 11], rig: ['RigSlot', 92], sub: ['SubSystemSlot', 125] };
 const ESI_SLOT_COUNT = { high: 8, mid: 8, low: 8, rig: 3, sub: 4 };
 const ESI_NUM_FLAG = { 5: 'Cargo', 87: 'DroneBay', 158: 'FighterBay' };
-const ESI_SCOPE_HINT = '当前授权没有装配权限，请在「ESI 绑定」中解绑后重新绑定';
+const ESI_SCOPE_HINT = '授权缺少装配权限，请重新绑定 ESI';
 const esiList = { charId: null, fits: null, loading: false, error: '' };
 
 function parseFlag(flag) {
@@ -1507,7 +1507,7 @@ function loadPendingFit() {
   pendingFit = null;
   F.selected = null;
   autoActivateDrones();
-  app.showToast('已在装配页打开，可点「保存」存到本机', 'success');
+  app.showToast('已在装配页打开', 'success');
   return true;
 }
 
@@ -1526,7 +1526,7 @@ function loadPendingEft() {
   F.selected = null;
   autoActivateDrones();
   history.replaceState(null, '', location.pathname + '#fit');
-  app.showToast('已载入推荐装配「' + (fit.name || '') + '」，可点「保存」存到本机', 'success', 3500);
+  app.showToast('已载入推荐装配「' + (fit.name || '') + '」', 'success', 3500);
   return true;
 }
 
@@ -1541,7 +1541,7 @@ function loadPendingKill() {
   F.selected = null;
   autoActivateDrones();
   history.replaceState(null, '', location.pathname + '#fit');
-  app.showToast(r.skipped ? `已载入击杀装配，${r.skipped} 项暂不支持已忽略` : '已载入击杀装配，可点「保存」存到本机', r.skipped ? 'info' : 'success', 3500);
+  app.showToast(r.skipped ? `已载入击杀装配，${r.skipped} 项暂不支持已忽略` : '已载入击杀装配', r.skipped ? 'info' : 'success', 3500);
   return true;
 }
 
@@ -1668,8 +1668,8 @@ function renderEsiList() {
   const list = esiList.fits.filter((f) => !shipOnly || f.ship_type_id === ship).filter((f) => !q || f.name.toLowerCase().includes(q) || (type(f.ship_type_id)?.name || '').toLowerCase().includes(q) || (type(f.ship_type_id)?.en || '').toLowerCase().includes(q));
   $('fitEsiCount').textContent = `${esiList.fits.length} / 500`;
   if (!list.length) {
-    const text = !esiList.fits.length ? '游戏里还没有保存的个人装配'
-      : shipOnly && !q ? `游戏里没有保存${type(ship)?.name || '这艘船'}的个人装配，可取消「只看当前舰船」查看全部`
+    const text = !esiList.fits.length ? '游戏里还没有个人装配'
+      : shipOnly && !q ? `游戏里没有${type(ship)?.name || '这艘船'}的个人装配`
         : '没有匹配的装配';
     box.innerHTML = `<p class="fit-esi-empty">${app.esc(text)}</p>`;
     return;
@@ -1701,7 +1701,7 @@ async function onEsiModalClick(e) {
     autoActivateDrones();
     recompute();
     closeEsiModal();
-    app.showToast(r.skipped ? `已打开，${r.skipped} 项暂不支持已忽略` : '已打开游戏装配，可点「保存」存到本机', r.skipped ? 'info' : 'success', 3500);
+    app.showToast(r.skipped ? `已打开，${r.skipped} 项暂不支持已忽略` : '已打开游戏装配', r.skipped ? 'info' : 'success', 3500);
     return;
   }
   if ((x = el('[data-esi-delete]'))) {

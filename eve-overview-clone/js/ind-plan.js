@@ -76,7 +76,7 @@ function decryptorHtml(r) {
   const copies = Math.ceil(r.runs / inv.runs);
   const expect = Math.ceil(copies / inv.prob);
   const n95 = attemptsFor(copies, inv.prob);
-  return `<div class="pi-card"><div class="pi-card-head"><h3>解码器对比</h3><span class="text-muted">按当前流程数 ${r.runs}，各解码器的发明成本与总利润</span></div>
+  return `<div class="pi-card"><div class="pi-card-head"><h3>解码器对比</h3><span class="text-muted">按 ${r.runs} 个流程</span></div>
     <div class="pi-table-wrap"><table class="pi-table ind-dec-table"><thead><tr><th>解码器</th><th class="num">成功率</th><th class="num">拷贝流程</th><th class="num">ME / TE</th><th class="num pi-hide-sm">发明 / 流程</th><th class="num">单个成本</th><th class="num">总利润</th><th class="num pi-hide-sm">每小时利润</th><th></th></tr></thead><tbody>
     ${rows.map(({ dec, q, ph }) => `<tr class="${dec === X.C.dec ? 'active' : ''}">
       <td>${dec ? esc(X.tName(dec)) : '不使用'}${dec === best.dec ? ' <span class="ind-best">利润最高</span>' : ''}${dec === bestPh.dec && bestPh.dec !== best.dec ? ' <span class="ind-best">每小时最高</span>' : ''}</td>
@@ -85,7 +85,7 @@ function decryptorHtml(r) {
       <td class="num ${q.profit >= 0 ? 'up' : 'down'}">${isk(q.profit)}</td><td class="num pi-hide-sm">${isk(ph)}</td>
       <td>${dec === X.C.dec ? '<span class="text-muted">当前</span>' : `<button type="button" class="link-btn" data-plan-dec="${dec}">使用</button>`}</td></tr>`).join('')}
     </tbody></table></div>
-    <p class="pi-note">要造 ${r.runs} 个流程需要 ${copies} 份 T2 拷贝（每份 ${inv.runs} 流程）：平均要发明 ${expect} 次；想有约 95% 把握一次凑够，开 <b>${Number.isFinite(n95) ? n95 : '—'}</b> 次发明
+    <p class="pi-note">需 ${copies} 份拷贝，平均发明 ${expect} 次；95% 把握开 <b>${Number.isFinite(n95) ? n95 : '—'}</b> 次发明
       （${inv.dcs.map(([id, q]) => esc(X.tName(id)) + ' ×' + X.ctx.formatNumber(q * (Number.isFinite(n95) ? n95 : expect))).join('、')}${X.C.dec ? `，解码器 ×${Number.isFinite(n95) ? n95 : expect}` : ''}）</p></div>`;
 }
 
@@ -104,7 +104,7 @@ function meHtml(r) {
     rows.push({ me, mats, total, profit: unit * j.out * (1 - X.sellFee() / 100) - total, out: j.out });
   }
   const base = rows[r.me]?.total ?? rows[0].total;
-  return `<details class="pi-card ind-fold"${FOLD.me ? ' open' : ''} data-plan-fold="me"><summary><h3>材料效率影响</h3><span class="text-muted">蓝图 ME 0–10 时的材料费与利润（材料全部购买，按 ${runs} 个流程）</span></summary>
+  return `<details class="pi-card ind-fold"${FOLD.me ? ' open' : ''} data-plan-fold="me"><summary><h3>材料效率影响</h3><span class="text-muted">按 ${runs} 个流程</span></summary>
     <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>ME</th><th class="num">材料费</th><th class="num">单个成本</th><th class="num">总利润</th><th class="num">比当前</th></tr></thead><tbody>
     ${rows.map((x) => `<tr class="${x.me === r.me ? 'active' : ''}"><td>${x.me}</td><td class="num">${isk(x.mats)}</td><td class="num">${isk(x.total / x.out)}</td><td class="num ${x.profit >= 0 ? 'up' : 'down'}">${isk(x.profit)}</td>
       <td class="num">${x.me === r.me ? '当前' : Math.abs(base - x.total) < 1 ? '—' : (base - x.total > 0 ? '省 ' : '多 ') + isk(Math.abs(base - x.total))}</td></tr>`).join('')}
@@ -146,7 +146,7 @@ function researchHtml(r) {
   const perRunMats = (meLv) => X.job(r.pid, 100, meLv, r.te).items.reduce((t, it) => t + it.qty * (X.matPrice(it.id) ?? 0) * fee, 0) / 100;
   const save = perRunMats(curMe) - perRunMats(tme);
   const payback = save > 0 ? Math.ceil(me.cost / save) : null;
-  return `<details class="pi-card ind-fold"${FOLD.research ? ' open' : ''} data-plan-fold="research"><summary><h3>研究与拷贝</h3><span class="text-muted">原图研究 ME / TE、拷贝的时间与费用（${X.F.fac === 'npc' ? 'NPC 空间站' : X.ctx.esc(X.D.data.structures[X.F.fac])}，当前星系指数）</span></summary>
+  return `<details class="pi-card ind-fold"${FOLD.research ? ' open' : ''} data-plan-fold="research"><summary><h3>研究与拷贝</h3><span class="text-muted">${X.F.fac === 'npc' ? 'NPC 空间站' : X.ctx.esc(X.D.data.structures[X.F.fac])}</span></summary>
     <div class="ind-research">
       <div class="ind-res-col"><h4>材料效率研究</h4>
         <div class="pi-inline"><span>ME ${curMe} →</span><input type="number" class="pi-input pi-tax" min="${curMe}" max="10" value="${tme}" data-plan-res="me"></div>
@@ -158,7 +158,7 @@ function researchHtml(r) {
         <div class="pi-inline"><span>份数</span><input type="number" class="pi-input pi-tax" min="1" max="1000" value="${R.copies}" data-plan-res="copies"><span>每份流程</span><input type="number" class="pi-input pi-tax" min="1" max="${maxRuns}" value="${cruns}" data-plan-res="runs"></div>
         <div class="ind-kv"><span>时间</span><b>${X.fmtTime(cp.secs)}</b><span>费用（估）</span><b>${isk(cp.cost)}</b><span>每流程</span><b>${isk(cp.cost / (cruns * R.copies))}</b></div></div>
     </div>
-    <p class="pi-note">技能：冶金学 ${X.lvl(SK.metallurgy)} 级 · 研究 ${X.lvl(SK.research)} 级 · 科学 ${X.lvl(SK.science)} 级 · 高级工业理论 ${X.lvl(SK.advIndustry)} 级；费用为按星系指数的估算，以游戏里为准</p></details>`;
+    <p class="pi-note">技能：冶金学 ${X.lvl(SK.metallurgy)} 级 · 研究 ${X.lvl(SK.research)} 级 · 科学 ${X.lvl(SK.science)} 级 · 高级工业理论 ${X.lvl(SK.advIndustry)} 级</p></details>`;
 }
 
 export function onCalcEvent(e) {
@@ -370,7 +370,7 @@ export async function renderPlan(body) {
   }
   if (!P.items.length) {
     body.innerHTML = tabs + `<div class="pi-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7"/><path d="M17 15v6M14 18h6"/></svg>
-      <p>还没有规划。在制造计算器、利润排行或「我的工业」的蓝图里点「加入规划」，把要造的产品放到一起算</p></div>` + stockSourceHtml();
+      <p>还没有规划</p></div>` + stockSourceHtml();
     return;
   }
   body.innerHTML = tabs + `<div class="pi-loading" id="planLoading">读取行情…</div>`;
@@ -428,16 +428,16 @@ function drawPlan(body, tabs) {
       </div>
       <div class="pi-card-head"><h3>产品</h3><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-clear>清空规划</button></div>
       <div class="pi-table-wrap"><table class="pi-table ind-plan-items"><thead><tr><th>产品</th><th class="num">流程</th><th class="num pi-hide-sm" title="拆成几个任务放到不同产线同时造">分批</th><th class="num pi-hide-sm">ME / TE</th><th class="num">产出</th><th class="num pi-hide-sm">成本</th><th class="num pi-hide-sm">卖出</th><th class="num">利润</th><th></th></tr></thead><tbody>${itemRows}</tbody></table></div>
-      ${buildChips ? `<div class="ind-plan-build"><span class="text-muted">组件与中间产品（点一下切换自制 / 购买，自制会逐级展开并加入产线）：</span><div>${buildChips}</div></div>` : ''}
+      ${buildChips ? `<div class="ind-plan-build"><span class="text-muted">组件（点击切换自制 / 购买）：</span><div>${buildChips}</div></div>` : ''}
     </div>
     ${inventHtml(r)}
     ${stockSourceHtml()}
     <div class="pi-card"><div class="pi-card-head"><h3>产线时间轴</h3>${lanesHtml()}</div>
       ${charsHtml()}
       ${ganttHtml(r.schedule)}</div>
-    <div class="pi-card"><div class="pi-card-head"><h3>产线启动清单</h3><span class="text-muted">按开工顺序；组件先造，同一层的任务可以同时开；整流程多出的组件不折算价值</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-copy="jobs">复制清单</button></div>
+    <div class="pi-card"><div class="pi-card-head"><h3>产线启动清单</h3><span class="text-muted">按开工顺序</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-copy="jobs">复制清单</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>产品</th><th>类型</th><th class="num">流程</th><th class="num pi-hide-sm">ME / TE</th><th class="num">时间</th><th class="num pi-hide-sm">安装费</th><th class="num pi-hide-sm">安排</th></tr></thead><tbody>${jobRows}</tbody></table></div></div>
-    <div class="pi-card"><div class="pi-card-head"><h3>购物清单</h3><span class="text-muted">${r.shop.filter((s) => s.toBuy).length} 种要买${piShop.length ? ` · 其中行星工业产品 ${piShop.length} 种共 ${isk(piShop.reduce((t, x) => t + x.toBuy * x.unit, 0))}，点名字旁的「行星工业」看自己产怎么布置` : ''}</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-copy="shop" title="可粘贴到游戏多重购买">复制清单</button><button type="button" class="btn btn-ghost btn-sm" data-plan-cart title="要买的材料加入购物车">加入购物车</button></div>
+    <div class="pi-card"><div class="pi-card-head"><h3>购物清单</h3><span class="text-muted">${r.shop.filter((s) => s.toBuy).length} 种要买${piShop.length ? ` · 其中行星工业产品 ${piShop.length} 种共 ${isk(piShop.reduce((t, x) => t + x.toBuy * x.unit, 0))}` : ''}</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-copy="shop" title="可粘贴到游戏多重购买">复制清单</button><button type="button" class="btn btn-ghost btn-sm" data-plan-cart title="要买的材料加入购物车">加入购物车</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>材料</th><th class="num">需要</th>${P.stock !== 'none' ? '<th class="num">库存抵扣</th>' : ''}<th class="num">要买</th><th class="num">费用</th></tr></thead><tbody>${shopRows}</tbody></table></div></div>`;
 }
 
@@ -456,7 +456,7 @@ function charsHtml() {
     ? `<li class="is-err"><b>${esc(c.name)}</b><span>${esc(c.err)}，不参与分配</span></li>`
     : `<li><b>${esc(c.name)}</b><span>制造 ${c.m} 条${c.busyM.length ? `（${Math.min(c.busyM.length, c.m)} 条在忙）` : ''} · ${c.r ? `反应 ${c.r} 条${c.busyR.length ? `（${Math.min(c.busyR.length, c.r)} 条在忙）` : ''}` : '不能反应'}${c.jobsErr ? ` · <small>${esc(c.jobsErr)}</small>` : ''}</span></li>`).join('');
   const noR = S.chars.every((c) => c.err || !c.r);
-  return `<ul class="ind-chars">${rows}</ul><p class="pi-note">产线数按技能：基础 1 条，大规模生产 / 高级大规模生产每级 +1（反应同理，需要反应学）。${noR ? `没有角色能做反应，反应任务按手动 ${P.rslots} 条算。` : ''}<button type="button" class="link-btn" data-plan-chars>重新读取</button></p>`;
+  return `<ul class="ind-chars">${rows}</ul><p class="pi-note">${noR ? `无人能做反应，按手动 ${P.rslots} 条算。` : ''}<button type="button" class="link-btn" data-plan-chars>重新读取</button></p>`;
 }
 
 // 发明进度：已经发明了多少次、成功几张，按二项分布估算还要再发明几次
@@ -479,7 +479,7 @@ function inventHtml(r) {
       <td class="num">${left ? `还差 ${num(left)} 张` : '<span class="up">已够</span>'}</td>
       <td class="num">${left ? `${num(n95)} 次<small class="hc-sub">约 ${isk(n95 * q.inv.attempt)}</small>` : '—'}</td></tr>`;
   }).join('');
-  return `<div class="pi-card"><div class="pi-card-head"><h3>发明进度</h3><span class="text-muted">填上已经发明的次数和成功张数，算还要再发明几次（约 95% 把握）</span></div>
+  return `<div class="pi-card"><div class="pi-card-head"><h3>发明进度</h3><span class="text-muted">按 95% 把握算还要发明几次</span></div>
     <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>产品</th><th class="num">需要拷贝</th><th class="num">已发明</th><th class="num">已成功</th><th class="num pi-hide-sm">成功率</th><th class="num">进度</th><th class="num">还要发明</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
@@ -497,7 +497,7 @@ function ganttHtml(sch) {
       ${l.busy ? `<i class="ind-gantt-bar busy" style="left:0;width:${Math.max(0.6, (l.busy / sch.span) * 100)}%" title="已有任务 · ${X.fmtTime(l.busy)} 后空出">已有任务</i>` : ''}
       ${l.bars.map((b) => `<i class="ind-gantt-bar d${Math.min(b.depth, 3)}" style="left:${(b.start / sch.span) * 100}%;width:${Math.max(0.6, (b.secs / sch.span) * 100)}%" title="${esc(X.tName(b.pid))} ×${b.runs} · ${X.fmtTime(b.secs)}">${esc(X.tName(b.pid))}</i>`).join('')}</div></div>`).join('')}
     <div class="ind-gantt-row"><span class="ind-gantt-label"></span><div class="ind-gantt-axis">${axis}</div></div></div>
-    <p class="pi-note">按层级排：先造最底层的组件，一层全部完成再开下一层；同一层的任务分到最早空出来的产线${sch.byChar ? '（已扣掉各角色进行中的任务）' : ''}。时间已含技能与设施加成，未计搬运与等待</p>`;
+    <p class="pi-note">组件逐层先造${sch.byChar ? '，已扣除进行中的任务' : ''}</p>`;
 }
 
 function stockSourceHtml() {
@@ -505,20 +505,20 @@ function stockSourceHtml() {
   const esi = X.ctx.hasEsiToken();
   const seg = `<div class="segmented">${[['none', '不扣'], ...(esi ? [['esi', '我的资产（ESI）']] : []), ['paste', '粘贴清单']].map(([k, l]) => `<button type="button" data-plan-stock="${k}" class="${P.stock === k ? 'active' : ''}">${l}</button>`).join('')}</div>`;
   let extra = '';
-  if (P.stock === 'esi') extra = S.assetsErr ? `<p class="pi-note warn">资产读取失败：${esc(S.assetsErr)}</p>` : S.assets ? `<p class="pi-note">已读取 ${S.assets.size} 种物品（所有位置合计） <button type="button" class="link-btn" data-plan-assets>重新读取</button></p>` : '';
+  if (P.stock === 'esi') extra = S.assetsErr ? `<p class="pi-note warn">资产读取失败：${esc(S.assetsErr)}</p>` : S.assets ? `<p class="pi-note">已读取 ${S.assets.size} 种物品 <button type="button" class="link-btn" data-plan-assets>重新读取</button></p>` : '';
   if (P.stock === 'paste') {
     const { map, unknown } = parsePaste(P.paste);
     extra = `<textarea class="pi-input ind-paste" data-plan-paste rows="5" placeholder="每行「物品名  数量」，可直接粘贴游戏仓库 / 机库里复制的物品列表">${esc(P.paste)}</textarea>
       <p class="pi-note">识别 ${map.size} 种${unknown.length ? `，${unknown.length} 行没认出（${esc(unknown.slice(0, 5).join('、'))}${unknown.length > 5 ? ' 等' : ''}）` : ''}</p>`;
   }
-  return `<div class="pi-card ind-stock"><div class="pi-card-head"><h3>库存</h3>${seg}<span class="text-muted">${P.tab === 'stock' ? '用哪些材料反推能造什么' : '已有的材料和组件从购物清单与产线里扣掉'}</span></div>${extra}</div>`;
+  return `<div class="pi-card ind-stock"><div class="pi-card-head"><h3>库存</h3>${seg}${P.tab === 'stock' ? '' : '<span class="text-muted">从购物清单中扣除</span>'}</div>${extra}</div>`;
 }
 
 // 工业清库：现有材料能造什么
 function clearHtml() {
   const { esc, formatISK: isk, formatNumber: num } = X.ctx;
   const stock = stockMap();
-  if (!stock.size) return '<div class="pi-card"><p class="text-muted">先选择库存来源（ESI 资产或粘贴清单）</p></div>';
+  if (!stock.size) return '<div class="pi-card"><p class="text-muted">先选择库存来源</p></div>';
   const fac = X.facilityFor('m');
   const mul = (1 - fac.me / 100) * (1 - (fac.rig.me * X.secMul(X.sysSec())) / 100);
   const full = [], part = [];
@@ -548,12 +548,12 @@ function clearHtml() {
   part.sort((a, b) => b.cover - a.cover || a.missingCost - b.missingCost);
   const icon = (id) => `<img src="${X.ICON(id)}" alt="" width="24" height="24" loading="lazy">`;
   const prod = (pid) => `<div class="pi-prod">${icon(pid)}<span>${esc(X.tName(pid))}${X.invFor(pid) ? '<small>T2</small>' : ''}</span></div>`;
-  return `<div class="pi-card"><div class="pi-card-head"><h3>库存直接能造</h3><span class="text-muted">${full.length} 种 · 按用掉的库存价值排序 · 蓝图 ME ${X.F.me}（T2 按发明拷贝 ME 2）</span></div>
+  return `<div class="pi-card"><div class="pi-card-head"><h3>库存直接能造</h3><span class="text-muted">${full.length} 种 · 蓝图 ME ${X.F.me}</span></div>
       <div class="pi-table-wrap ind-rank-wrap"><table class="pi-table"><thead><tr><th>产品</th><th class="num">最多流程</th><th class="num">用掉库存</th><th class="num pi-hide-sm">产出价值</th><th class="num">利润（含安装费）</th><th></th></tr></thead><tbody>
       ${full.slice(0, 60).map((x) => `<tr><td>${prod(x.pid)}</td><td class="num">${num(x.runs)}</td><td class="num">${isk(x.used)}</td><td class="num pi-hide-sm">${isk(x.out)}</td><td class="num ${x.profit >= 0 ? 'up' : 'down'}">${isk(x.profit)}</td>
         <td class="ind-plan-act"><button type="button" class="link-btn" data-plan-add="${x.pid}" data-runs="${x.runs}">加入规划</button><button type="button" class="link-btn" data-ind-pick="${x.pid}">计算器</button></td></tr>`).join('') || '<tr><td colspan="6" class="text-muted">现有材料凑不齐任何产品的一个流程</td></tr>'}
       </tbody></table></div></div>
-    <div class="pi-card"><div class="pi-card-head"><h3>差一点能造</h3><span class="text-muted">库存覆盖一个流程材料价值一半以上，补齐就能开工</span></div>
+    <div class="pi-card"><div class="pi-card-head"><h3>差一点能造</h3><span class="text-muted">库存已覆盖一半以上</span></div>
       <div class="pi-table-wrap ind-rank-wrap"><table class="pi-table"><thead><tr><th>产品</th><th class="num">库存覆盖</th><th class="num">补齐要花</th><th class="pi-hide-sm">缺</th><th></th></tr></thead><tbody>
       ${part.filter((x) => x.cover >= 0.5).slice(0, 40).map((x) => `<tr><td>${prod(x.pid)}</td><td class="num">${(x.cover * 100).toFixed(0)}%</td><td class="num">${isk(x.missingCost)}</td>
         <td class="pi-hide-sm ind-missing">${x.missing.slice(0, 4).map((m) => `${esc(X.tName(m.id))} ×${num(Math.ceil(m.q - m.have))}`).join('、')}${x.missing.length > 4 ? ' 等' : ''}</td>

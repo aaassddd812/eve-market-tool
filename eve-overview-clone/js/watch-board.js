@@ -4,7 +4,7 @@
 //   也可切到表格视图（各中心卖 / 收一目了然）。可按涨跌、偏离均价、成交额、最接近触发的提醒排序。数据与单品「交易中心比价」相同（hub-compare.js，缓存 5 分钟）。
 // 到价提醒：每个物品可设若干条「某交易中心 卖价 / 收价 ≤ / ≥ 某价」（或一键「卖价跌 / 涨 5%、10%」），看板开着或后台监控开着时每 5 分钟检查一次；
 //   触发后网页提示（可选桌面通知、提示音），该条提醒停用，点「重新启用」再次监控。设置保存在本机。
-import { loadHubs } from './hub-compare.js?v=v12';
+import { loadHubs } from './hub-compare.js?v=v13';
 
 let ctx = null;   // isGlobal, fetchESI, fetchESIPaged, regions, esc, formatISK, formatPrice, formatNumber, showToast, typeName, iconUrl, openItem, favorites, toggleFavorite, store, isActive
 const KEY = 'eve-watch-board';
@@ -50,7 +50,7 @@ async function loadGlobal(id) {
 
 export async function showWatchBoard(box) {
   const ids = ctx.favorites();
-  if (!ids.length) { box.innerHTML = headHtml(ids) + '<div class="empty-state"><p>还没有收藏物品</p><p class="hint">在物品详情中点击 ☆ 或按 F 收藏，收藏的物品会出现在这里</p></div>'; return; }
+  if (!ids.length) { box.innerHTML = headHtml(ids) + '<div class="empty-state"><p>还没有收藏物品</p><p class="hint">物品详情点 ☆ 或按 F 收藏</p></div>'; return; }
   const missing = ids.filter((id) => !S.rows.has(id));
   if (missing.length || Date.now() - S.at > POLL) {
     if (!S.rows.size) box.innerHTML = headHtml(ids) + `<div class="pi-loading">读取 ${ids.length} 个物品在各交易中心的价格…</div>`;
@@ -104,7 +104,7 @@ function headHtml(ids) {
     ${ids.length ? `<select class="input wb-sort" data-wb-sort title="排序">${Object.entries(SORTS).map(([k, x]) => `<option value="${k}"${W.sort === k ? ' selected' : ''}>${x.label}</option>`).join('')}</select>
     <div class="segmented wb-seg">${seg('view', 'card', '卡片')}${seg('view', 'table', '表格')}</div>` : ''}
     <button class="btn btn-ghost btn-sm" data-wb-refresh ${S.busy ? 'disabled' : ''}>${S.busy ? '读取中…' : '刷新'}</button></div>
-    <div class="wb-bar">${chk('bg', '离开看板也监控到价提醒', '看板关着时也每 5 分钟检查一次（网页开着才有效）')}${chk('notify', '桌面通知', '需要允许浏览器通知')}${chk('sound', '提示音', '触发时播放提示音')}
+    <div class="wb-bar">${chk('bg', '后台监控到价', '看板关着时也每 5 分钟检查一次（网页开着才有效）')}${chk('notify', '桌面通知', '需要允许浏览器通知')}${chk('sound', '提示音', '触发时播放提示音')}
       <span class="text-muted">${armedCount() ? `${armedCount()} 条提醒监控中` : '点 🔔 给物品设到价提醒'}</span></div>`;
 }
 
@@ -210,7 +210,7 @@ function cardsHtml(ids) {
     </div>`;
   }).join('');
   return `<div class="wb-grid">${cards}</div>
-    <p class="pi-note">涨跌按${ctx.regions[0] ? ctx.esc(ctx.regions[0].name) : '主'}星域每日成交均价算（ESI 每日更新一次）；当前价只算交易中心空间站内的订单。绿色 = 最便宜的卖价，蓝色 = 最高的收价，点物品名打开市场详情</p>`;
+    <p class="pi-note" title="涨跌按${ctx.regions[0] ? ctx.esc(ctx.regions[0].name) : '主'}星域每日成交均价算；只算交易中心空间站内的订单">绿 = 最低卖价，蓝 = 最高收价</p>`;
 }
 
 function editorHtml(id, main) {
@@ -249,11 +249,11 @@ function tableHtml(ids) {
   return `<div class="pi-card wb-card"><div class="table-scroll"><table class="pi-table wb-table">
     <thead><tr><th rowspan="2">物品</th>${head}<th rowspan="2" class="num" title="主星域每日成交均价，最近一天比前一天">日</th><th rowspan="2" class="num" title="主星域每日成交均价，最近一天比 7 天前">7 日</th><th rowspan="2" class="num pi-hide-sm" title="${esc(hubName(regions[0]))}（卖 − 收）÷ 卖">卖收差</th><th rowspan="2" class="num pi-hide-sm" title="${esc(regions[0].name)}星域 30 天日均成交">日均量</th><th rowspan="2"></th></tr>
     <tr>${sub}</tr></thead><tbody>${rows}</tbody></table></div></div>
-    <p class="pi-note">绿色 = 最便宜的卖价，蓝色 = 最高的收价；只算交易中心空间站内的订单。到价提醒在卡片视图里看得更清楚</p>`;
+    <p class="pi-note" title="只算交易中心空间站内的订单">绿 = 最低卖价，蓝 = 最高收价</p>`;
 }
 
 function itemCell(id) {
-  return `<button class="link-btn wb-item" data-wb-item="${id}"><img src="${ctx.iconUrl(id)}" alt="" width="24" height="24" loading="lazy">${ctx.esc(ctx.typeName(id))}</button>`;
+  return `<button class="link-btn wb-item" data-wb-item="${id}"><img src="${ctx.iconUrl(id)}" data-item-pop="${id}" alt="" width="24" height="24" loading="lazy">${ctx.esc(ctx.typeName(id))}</button>`;
 }
 
 export async function onClick(e, box) {

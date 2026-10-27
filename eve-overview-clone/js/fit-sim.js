@@ -9,7 +9,7 @@
 // 装配来源：击杀记录里这型船最近阵亡时最常见的装配（fit-kb.js commonFit）、当前装配、我的装配、游戏内保存的装配（ESI）、EFT 文本，或空船；
 // 点舰船打开装配详情：看槽位与属性，从本场 / 最近常见的几套装配和自己的装配里换一套。
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失。
-import { commonFit } from './fit-kb.js?v=v26';
+import { commonFit } from './fit-kb.js?v=v27';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
 const $ = (id) => document.getElementById(id);
@@ -644,7 +644,7 @@ function insightsHtml(R) {
     ${anyOf('lockWait') ? line('锁定等待', (f) => f.lockWait, pct, false, '换目标后等待锁定的时间占比') : ''}
     ${isk ? line('出场价值', (f, s) => isk[s].field, ctx.formatISK, true) + line('损失 ISK', (f, s) => isk[s].lost, ctx.formatISK, false) : ''}
   </tbody></table>`;
-  const list = tipsOf(R, F).slice(0, 5).map(([, s, x]) => `<li><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span><span>${ctx.esc(x)}</span></li>`).join('') || '<li>双方各项差距不大，胜负主要取决于数量和集火</li>';
+  const list = tipsOf(R, F).slice(0, 5).map(([, s, x]) => `<li><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span><span>${ctx.esc(x)}</span></li>`).join('') || '<li>各项差距不大，主要看数量和集火</li>';
   return `<section class="sim-insight"><div class="sim-sec-head"><h4>胜负原因</h4></div>
     <div class="sim-insight-body">${table}<ul class="sim-tips">${list}</ul></div></section>`;
 }
@@ -655,12 +655,12 @@ function tipsOf(R, F = { A: sideFacts(R, 'A'), B: sideFacts(R, 'B') }) {
   for (const s of SIDES) {
     const o = s === 'A' ? 'B' : 'A', f = F[s], g = F[o];
     const tip = (score, text) => tips.push([score, s, text]);
-    if (!f.paper && g.paper) tip(10, '没有输出（装配里没有武器，或装配没读到）');
+    if (!f.paper && g.paper) tip(10, '没有输出（无武器或装配未读到）');
     if (f.paper && g.paper && f.paper / g.paper >= 1.5) tip(f.paper / g.paper, `纸面 DPS 是 ${o} 方的 ${(f.paper / g.paper).toFixed(1)} 倍`);
     if (f.ehp && g.ehp && f.ehp / g.ehp >= 1.5) tip(f.ehp / g.ehp, `总 EHP 是 ${o} 方的 ${(f.ehp / g.ehp).toFixed(1)} 倍`);
-    if (f.app != null && f.app < 0.6) tip(4 - f.app * 4, `只有 ${pct(f.app)} 的输出打中了目标（射程或命中不足），可以试试换交战距离、弹药或目标机动设置`);
+    if (f.app != null && f.app < 0.6) tip(4 - f.app * 4, `只有 ${pct(f.app)} 的输出打中（射程或命中不足）`);
     if (f.taken && f.reps / f.taken > 0.15) tip(1 + f.reps / f.taken * 2, `遥修抵消了 ${pct(f.reps / f.taken)} 的承伤`);
-    if (f.capped > 0.1) tip(1 + f.capped * 4, `有 ${pct(f.capped)} 的时间电容见底（${g.drained ? '被中和' : '装备耗电太大'}），耗电的武器和维修随之停摆`);
+    if (f.capped > 0.1) tip(1 + f.capped * 4, `有 ${pct(f.capped)} 的时间电容见底（${g.drained ? '被中和' : '装备耗电太大'}）`);
     if (f.jammed > 0.05) tip(1 + f.jammed * 4, `有 ${pct(f.jammed)} 的时间被 ECM 干扰，无法锁定和输出`);
     if (f.noRange > 0.05) tip(2 + f.noRange * 4, `锁定距离只有 ${num(f.lockRange / 1000)} km，有 ${pct(f.noRange)} 的时间够不到目标`);
   }
@@ -704,14 +704,14 @@ function matchupHtml(R) {
       <td><div class="sim-mu-bar"><i class="${DMG_COLORS[k]}" style="width:${(share[k] * 100).toFixed(1)}%"></i></div><span>${pct(share[k])}</span></td>
       ${[0, 1, 2].map((l) => `<td class="num${l === layer ? ' main' : ''}${k === weakest(en.res[l]) && en.ehp[l] ? ' hole' : ''}">${en.ehp[l] ? pct(1 - en.res[l][k]) : '—'}</td>`).join('')}</tr>`).join('');
     const tip = gain > 0.08 && share[best] < 0.6
-      ? `<p class="sim-mu-tip">${ctx.esc(`换成更多${DAMAGE_NAMES[best]}伤害（对方${LAYER_NAMES[layer]}这一类抗性只有 ${pct(1 - en.res[layer][best])}），有效伤害最多可提高 ${pct(gain)}`)}</p>`
+      ? `<p class="sim-mu-tip">${ctx.esc(`换成${DAMAGE_NAMES[best]}伤害（对方${LAYER_NAMES[layer]}抗性仅 ${pct(1 - en.res[layer][best])}），最多 +${pct(gain)}`)}</p>`
       : '<p class="sim-mu-ok">伤害类型已经比较对路</p>';
     return `<div class="sim-mu-side">${head}
-      <p class="sim-mu-sum">${ctx.esc(`对方主要靠${LAYER_NAMES[layer]}承伤（占 EHP ${pct(en.ehp[layer] / ehpTot)}），本方伤害打在这一层的有效比例 ${pct(eff)}`)}</p>
+      <p class="sim-mu-sum">${ctx.esc(`对方主要靠${LAYER_NAMES[layer]}承伤（占 EHP ${pct(en.ehp[layer] / ehpTot)}），本方有效比例 ${pct(eff)}`)}</p>
       <table class="sim-mu"><thead><tr><th>伤害类型</th><th>本方输出占比</th>${LAYER_NAMES.map((l, i) => `<th class="num${i === layer ? ' main' : ''}">对方${l}抗性</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
       ${tip}</div>`;
   };
-  return `<section class="sim-matchup"><div class="sim-sec-head"><h4>伤害与抗性</h4><span class="sim-hint">高亮列为对方主要承伤的一层，标红为那一层最弱的抗性</span></div>
+  return `<section class="sim-matchup"><div class="sim-sec-head"><h4>伤害与抗性</h4><span class="sim-hint">高亮 = 主要承伤层，标红 = 最弱抗性</span></div>
     <div class="sim-mu-cols">${block('A')}${block('B')}</div></section>`;
 }
 
@@ -735,7 +735,7 @@ function replayHtml(R) {
       <div class="sim-rp-side side-b"><h5><span class="sim-badge sim-side-b">B 方</span><span id="simRpB"></span></h5><div class="sim-tiles">${tiles('B')}</div></div>
     </div>
     <div class="sim-rp-log" id="simRpLog"></div>
-    <p class="sim-hint">每格一艘船，三条血条依次为护盾、装甲、结构；描边表示这一秒正被对方集火。点走势图也可以跳到对应时间。</p>
+    <p class="sim-hint">血条：护盾 / 装甲 / 结构；描边 = 被集火</p>
   </section>`;
 }
 function updateReplay(t) {
@@ -842,15 +842,15 @@ function renderTactics() {
     return `<td><button type="button" class="sim-cell${side ? ' is-' + side.toLowerCase() : ''}${cur(d, tr) ? ' is-cur' : ''}" style="--a:${(0.15 + a * 0.6).toFixed(2)}" data-sim-cell="${d}:${tr}" title="${d} km · ${TRANS.find(([v]) => v === tr)[1]} · ${label}${c.winner ? ' · ' + fmtSec(c.t) : ''}">${label}</button></td>`;
   };
   const need = W?.need;
-  const needHtml = !W || W.running ? '' : need ? (need.need ? `<p class="sim-need"><b>${need.side} 方</b>要在当前设置下获胜，按现有船型比例至少需要 <b>${need.need}</b> 艘（现在 ${need.base} 艘，再加 ${need.need - need.base} 艘）</p>`
-    : `<p class="sim-need"><b>${need.side} 方</b>按现有船型加到 5 倍也赢不了，需要换装配或战术</p>`) : '<p class="sim-need">当前设置下没有明显落后的一方</p>';
+  const needHtml = !W || W.running ? '' : need ? (need.need ? `<p class="sim-need"><b>${need.side} 方</b>至少需 <b>${need.need}</b> 艘才能赢（现 ${need.base} 艘）</p>`
+    : `<p class="sim-need"><b>${need.side} 方</b>加到 5 倍也赢不了</p>`) : '<p class="sim-need">没有明显落后的一方</p>';
   box.innerHTML = `<section class="sim-tactics">
     <div class="sim-sec-head"><h4>距离与机动扫描</h4>
       ${W?.running ? `<span class="sim-status busy">扫描中 ${W.done} / ${W.total}</span>` : `<button type="button" class="btn btn-ghost btn-sm" data-sim-sweep>${W ? '重新扫描' : '开始扫描'}</button>`}</div>
     ${W ? `<div class="sim-grid-wrap"><table class="sim-grid"><thead><tr><th>目标机动 \\ 距离</th>${DISTANCES.map((d) => `<th>${d} km</th>`).join('')}</tr></thead>
       <tbody>${TRANS.map(([tr, l]) => `<tr><th>${l}</th>${DISTANCES.map((d) => cell(d, tr)).join('')}</tr>`).join('')}</tbody></table></div>
-      <p class="sim-hint">点格子可直接切换到那个距离和机动设置。</p>${needHtml}`
-    : '<p class="sim-hint">把每个交战距离和目标机动组合都模拟一遍，看哪一方在哪种打法下占优；同时算出落后一方至少需要多少艘船才能赢。</p>'}
+      <p class="sim-hint">点格子切换到该设置</p>${needHtml}`
+    : '<p class="sim-hint">逐个模拟各距离 × 机动，并算出落后方需几艘</p>'}
   </section>`;
 }
 
@@ -939,7 +939,6 @@ function render() {
       ${S.back ? `<button type="button" class="btn btn-ghost sim-back" data-sim-back>${ICON.back}返回战场统计</button>` : ''}
       <div class="sim-head-main">
         <h2>战场模拟${S.title ? `<small>${ctx.esc(S.title)}</small>` : ''}</h2>
-        <p>两方舰队按装配逐秒对射，改动后自动重新模拟。点舰船可查看、更换装配。</p>
       </div>
       <div class="sim-head-actions">
         <div class="sim-menu">
@@ -981,9 +980,7 @@ function render() {
     <div id="simTactics"></div>
     <details class="sim-note">
       <summary>模拟规则与局限</summary>
-      <p>技能按每方的设置（全 5 级或已绑定角色）；双方固定在交战距离上（可分两个阶段），目标横向速度 = 最大速度 × 目标机动比例；超出锁定距离锁不上目标；有长冷却的装备（突击型损伤控制等）不计开启；集火时每 ${SQUAD} 艘船共打一个目标。
-      电容逐秒结算，不够时耗电的武器（能量 / 混合炮台）、维修、遥修和电子战按比例运转；ECM 每个周期按「干扰强度 ÷ 目标传感器强度」的概率让目标掉锁。
-      超载不计过热损坏；指挥脉冲按 T2 脉冲 + 满技能 + 指挥舰 + 思维链接估算（约为基础值的 ${BURST_MULT.toFixed(1)} 倍）。ISK 按全服均价（船体 + 装备 + 弹药 + 无人机）。本场阵亡装配：这型船在这场会战里阵亡时最常见的一套（本方没有阵亡时取对方同型船的），会战一般是监制队，同型船按同一套装配算；最近常见装配：最近 7 天最近 20 次损失里最常见的一套。结果仅供参考。</p>
+      <p>双方固定在交战距离；集火每 ${SQUAD} 艘打一个目标；长冷却装备不计开启；超载不计过热；指挥脉冲约为基础值 ${BURST_MULT.toFixed(1)} 倍；ISK 按全服均价。结果仅供参考。</p>
     </details>
   </div><div class="sim-detail" id="simDetail" hidden></div>`;
   renderSides();
@@ -1070,7 +1067,7 @@ function renderSides() {
         <button type="button" class="btn btn-ghost" data-sim-eft="${s}">粘贴 EFT</button>
       </div>
       ${adding ? `<div class="sim-eft"><textarea class="pi-input" rows="6" data-sim-eft-text placeholder="[Muninn, 舰队装配]&#10;…"></textarea><div><button type="button" class="btn btn-primary" data-sim-eft-go="${s}">加入</button><button type="button" class="btn btn-ghost" data-sim-eft-cancel>取消</button></div></div>` : ''}
-      <div class="sim-rows">${list.map((r) => rowHtml(s, r)).join('') || '<p class="sim-empty">还没有舰船，在上面搜索添加</p>'}</div>
+      <div class="sim-rows">${list.map((r) => rowHtml(s, r)).join('') || '<p class="sim-empty">还没有舰船</p>'}</div>
       ${list.length ? `<div class="sim-side-foot"><button type="button" class="link-btn danger" data-sim-clear="${s}">清空 ${s} 方</button></div>` : ''}
     </section>`;
   }).join('');
@@ -1185,7 +1182,7 @@ function toggleMenu(on = !S.menu) {
     ${list.length ? `<div class="sim-save-list">${list.map((x) => { const [a, b] = n(x); return `<div class="sim-save-item">
         <button type="button" data-sim-load="${x.id}"><b translate="no">${ctx.esc(x.name)}</b><small>A ${a} 艘 vs B ${b} 艘 · ${new Date(x.at).toLocaleDateString('zh-CN')}</small></button>
         <button type="button" class="icon-btn" data-sim-unsave="${x.id}" title="删除存档" aria-label="删除存档">${ICON.x}</button>
-      </div>`; }).join('')}</div>` : '<p class="sim-save-empty">还没有存档。存下来的对局保存在本机浏览器，可随时载入。</p>'}`;
+      </div>`; }).join('')}</div>` : '<p class="sim-save-empty">还没有存档（仅存本机）</p>'}`;
   if (!empty) pop.querySelector('input').focus();
 }
 
@@ -1456,9 +1453,8 @@ function setStatus(waiting) {
   if (!el) return;
   const both = S.sides.A.length && S.sides.B.length;
   el.className = 'sim-status' + (waiting ? ' busy' : S.result ? ' ok' : '');
-  el.textContent = !both ? '两方各加至少一艘船后自动模拟'
-    : waiting ? `读取装配中（还剩 ${waiting} 种），读完自动更新`
-    : S.result ? '结果已随设置自动更新' : '';
+  el.textContent = !both ? '两方各加一艘船即开始模拟'
+    : waiting ? `读取装配（剩 ${waiting} 种）` : '';
 }
 
 // ---------- 结果 ----------
@@ -1470,13 +1466,12 @@ function renderVerdict() {
   if (!box) return;
   const R = S.result;
   if (!S.sides.A.length && !S.sides.B.length) {
-    const cur = ctx.getFit();
     box.innerHTML = `<section class="sim-start">
       ${undo ? `<div class="sim-undo">已清空舰船<button type="button" class="link-btn" data-sim-undo>撤销</button></div>` : ''}
       <h3>从哪里开始？</h3>
       <div class="sim-start-grid">
         <button type="button" class="sim-start-card" data-sim-battles>
-          <b>从真实会战导入</b><span>在「近 30 天会战」打开一场的战场统计，点「战场模拟」，双方出场舰船和本场阵亡装配会自动带进来</span><em>去选会战 ›</em>
+          <b>从真实会战导入</b><span>自动带入双方舰船和阵亡装配</span><em>去选会战 ›</em>
         </button>
         ${PRESETS.map((p, i) => {
           const a = presetSide(p.a), b = presetSide(p.b);
@@ -1485,7 +1480,6 @@ function renderVerdict() {
           return `<button type="button" class="sim-start-card" data-sim-preset="${i}"><b>${p.name}</b><div class="sim-start-vs"><div>${icons(a)}</div><i>VS</i><div>${icons(b)}</div></div><em>载入示例 ›</em></button>`;
         }).join('')}
       </div>
-      <p class="sim-start-hint">也可以直接在下面两方的搜索框里添加舰船${cur ? '，或点「当前装配」把装配页正在编辑的船加进来' : ''}。</p>
     </section>`;
     return;
   }
@@ -1684,7 +1678,7 @@ async function candidates(row) {
   if (mine.length) groups.push({ title: '我的装配', items: mine });
   if (ctx.hasEsi?.()) {
     const items = (S.esi.fits || []).filter((x) => x.ship === row.ship).map((f) => ({ key: 'esi:' + f.esiId, fit: f, label: f.name || '未命名', meta: '游戏装配' }));
-    groups.push({ title: '游戏装配', items, note: S.esi.loading ? '读取中…' : S.esi.error ? '读取失败：' + S.esi.error : items.length ? '' : '游戏里没有保存这型船的装配' });
+    groups.push({ title: '游戏装配', items, note: S.esi.loading ? '读取中…' : S.esi.error ? '读取失败：' + S.esi.error : items.length ? '' : '游戏里没有这型船的装配' });
   }
   groups.push({ title: '其他', items: [{ key: 'hull', fit: emptyFit(row.ship), label: '空船（无装备）', meta: '' }] });
   return groups;
@@ -1716,7 +1710,7 @@ function renderDetail() {
         <span><b>${esc(x.label)}</b>${x.meta ? `<em>${esc(x.meta)}</em>` : ''}</span>
         <small>${u ? `${num(u.dps)} DPS · ${ctx.formatISK(u.ehp)} EHP` : '—'}</small></button>`; }).join('')}
       ${g.note ? `<p class="sim-dt-note">${esc(g.note)}</p>` : ''}
-    </div>`).join('') : '<p class="sim-loading sim-dt-note">读取可用装配…</p>';
+    </div>`).join('') : '<p class="sim-loading sim-dt-note">读取装配…</p>';
   pane.innerHTML = `
     <div class="sim-dt-head">
       <button type="button" class="btn btn-ghost" data-sim-dt-back><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>返回模拟</button>

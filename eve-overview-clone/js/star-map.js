@@ -272,10 +272,10 @@ const hhmm = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour12: false, hou
 function hourlyNote() {
   if (M.layer === 'npc' && M.live.npc24) {
     const h = M.live.npc24Info.hours;
-    return `过去 ${h >= 24 ? 24 : h} 小时累计（本站每小时存一份 ESI 快照再相加，截至 ${hhmm(M.live.npc24Info.to)}）` + (h < 24 ? '；服务刚开始记录，满 24 小时后与游戏一致' : '');
+    return `过去 ${h >= 24 ? 24 : h} 小时累计，截至 ${hhmm(M.live.npc24Info.to)}` + (h < 24 ? '（记录未满 24 小时）' : '');
   }
   const at = M.layer === 'jumps' ? M.live.jumpsAt : M.live.killsAt;
-  return at ? `ESI 每小时更新一次快照（这份截至 ${hhmm(at)}），游戏内是实时滚动统计，数字会有出入` : 'ESI 每小时更新一次快照，游戏内是实时滚动统计，数字会有出入';
+  return at ? `ESI 每小时快照，截至 ${hhmm(at)}` : 'ESI 每小时快照';
 }
 
 function loadIndustry() {
@@ -989,7 +989,7 @@ function renderLayerList() {
     `<div class="layer-group-title">${title}</div><div class="layer-group">` +
     list.map(([key, label]) => `<button class="layer-btn${M.layer === key ? ' active' : ''}" data-layer="${key}" title="${LAYER_HINT[key]}">${label}</button>`).join('') +
     '</div>').join('') +
-    `<p class="layer-hint">${LAYER_HINT[M.layer]}</p>` + (M.layer === 'planets' ? piOptions() : M.layer === 'industry' ? indOptions() : '');
+    (M.layer === 'planets' ? piOptions() : M.layer === 'industry' ? indOptions() : '');
   $('layerSummary').textContent = LAYERS.find(([k]) => k === M.layer)?.[1] || '';
 }
 
@@ -1068,10 +1068,10 @@ function renderLegend() {
     // 分段色块（对数刻度）
     const steps = (isInd ? [0.14, 1, 2, 5, 10, layerCache.max] : [0, 1, 5, 20, 100, layerCache.max]).filter((v, n, arr) => n === 0 || (v <= layerCache.max && v > arr[n - 1]));
     rows.push('<div class="legend-steps">' + steps.map((v) => `<span><i style="background:${heat(v, layerCache.max, hue)}"></i>${show(v)}</span>`).join('') + '</div>');
-    if (HOURLY.has(M.layer)) rows.push(`<p class="legend-note">${hourlyNote()}</p>`);
+    if (HOURLY.has(M.layer)) rows.push(`<p class="legend-note" title="游戏内是实时滚动统计，数字会有出入">${hourlyNote()}</p>`);
     if (isInd) {
       rows.push(`<div class="legend-group">${IND_ACTS.find(([k]) => k === IND.act)[1]} · 成本指数最高的星系</div>`);
-      if (IND.at || M.live.indAt) rows.push(`<p class="legend-note">ESI 约每小时更新（这份截至 ${hhmm(M.live.indAt)}）；多数星系为最低 0.14%</p>`);
+      if (IND.at || M.live.indAt) rows.push(`<p class="legend-note">截至 ${hhmm(M.live.indAt)}，多数星系为最低 0.14%</p>`);
     } else {
       const total = M.systems.reduce((t, s) => t + value(s), 0);
       const title = { kills: '舰船击毁 · 1 小时', pods: '太空舱击毁 · 1 小时', npc: 'NPC 击杀 · ' + npcSpan(), jumps: '星门跳跃 · 1 小时', stations: 'NPC 空间站', planets: '可用行星' }[M.layer];
@@ -1088,7 +1088,7 @@ function renderLegend() {
     }
   } else if (M.layer === 'distance') {
     const origin = M.systems[M.distance.origin];
-    rows.push(`<div class="legend-group">起点：<b>${app.esc(origin.name)}</b>${M.selected == null ? '（点击星系可更换起点）' : ''}</div>`);
+    rows.push(`<div class="legend-group">起点：<b>${app.esc(origin.name)}</b>${M.selected == null ? '（点星系可换起点）' : ''}</div>`);
     DISTANCE_BUCKETS.forEach(([lo, hi, label], n) => {
       const set = new Set(M.systems.filter((s) => M.distance.hops[s.i] >= lo && M.distance.hops[s.i] <= hi).map((s) => s.i));
       add('dist:' + n, set);
@@ -1097,7 +1097,6 @@ function renderLegend() {
     const unreachable = new Set(M.systems.filter((s) => M.distance.hops[s.i] < 0).map((s) => s.i));
     if (unreachable.size) { add('dist:none', unreachable); rows.push(legendRow({ color: DIM_COLOR, label: '星门无法到达', count: unreachable.size, key: 'dist:none' })); }
   } else if (M.layer === 'adm') {
-    rows.push('<div class="legend-group">军事指数越高，主权枢纽越难被攻破</div>');
     for (let level = 6; level >= 1; level--) {
       const set = new Set(M.systems.filter((s) => Math.floor(M.live.adm.get(s.id)?.vulnerability_occupancy_level || 0) === level).map((s) => s.i));
       add('adm:' + level, set);
@@ -1585,7 +1584,7 @@ function syncWaypointUi() {
   });
   $('routeOrder').hidden = $('routeReverse').hidden = !rows.length;
   $('routeSwap').hidden = !!rows.length;   // 有途经点时 ⇅ 会压住途经点的按钮，改用「反转」
-  $('routeTo').placeholder = rows.length ? '终点星系（可不填，停在最后一个途经点）' : '终点星系';
+  $('routeTo').placeholder = rows.length ? '终点星系（可不填）' : '终点星系';
 }
 
 function setRouteEnd(which, i, note = '') {
@@ -2461,11 +2460,11 @@ function syncJumpOptions() {
   note.hidden = dock === 'any';
   note.innerHTML = dock === 'any' ? '' : `${app.esc(ship.name)} 可停靠：${can.map(app.esc).join('、')}` +
     (dock === 'npc' && !JP.canDockNpc(ship) ? '<br><span class="warn">超级航母和泰坦不能停靠 NPC 空间站，请改选「含玩家建筑」</span>' : '') +
-    (dock === 'prefer' && !bound ? '<br>未绑定 ESI，只按 NPC 空间站判断是否可停靠' : '') +
-    (dock === 'prefer' && !JP.canDockNpc(ship) && !bound ? '<br><span class="warn">超级航母和泰坦不能停靠 NPC 空间站，绑定 ESI 后才能按玩家建筑判断</span>' : '') +
-    (useStructures(dock) && J.structures?.privatePartial ? '<br><span class="warn">军团 / 联盟内部建筑没有读完（已跳过），可能漏掉一些可停靠的星系；点「重新读取」再试</span>' : '') +
-    (useStructures(dock) && J.structures && !J.structures.privateSearched ? '<br><span class="warn">当前授权没有建筑搜索权限，只能从订单、合同、资产、克隆位置找到内部建筑；重新绑定 ESI 后可找到全部有停靠权限的建筑</span>' : '') +
-    (useStructures(dock) && J.structures ? `<br>已读取玩家建筑 ${app.formatNumber(J.structures.list.length + (J.structures.private?.length || 0))} 个（其中军团 / 联盟内部 ${app.formatNumber(J.structures.private?.length || 0)} 个，仅限你有停靠权限的）· <button class="link-btn" data-structures-refresh>重新读取</button>` : '');
+    (dock === 'prefer' && !bound ? '<br>未绑定 ESI，只算 NPC 空间站' : '') +
+    (dock === 'prefer' && !JP.canDockNpc(ship) && !bound ? '<br><span class="warn">超旗不能停靠 NPC 空间站，需绑定 ESI</span>' : '') +
+    (useStructures(dock) && J.structures?.privatePartial ? '<br><span class="warn">内部建筑没有读完，可能漏掉可停靠星系</span>' : '') +
+    (useStructures(dock) && J.structures && !J.structures.privateSearched ? '<br><span class="warn" title="只能从订单、合同、资产、克隆位置找到内部建筑">缺少建筑搜索权限，内部建筑可能不全</span>' : '') +
+    (useStructures(dock) && J.structures ? `<br>已读取玩家建筑 ${app.formatNumber(J.structures.list.length + (J.structures.private?.length || 0))} 个（内部 ${app.formatNumber(J.structures.private?.length || 0)} 个）· <button class="link-btn" data-structures-refresh>重新读取</button>` : '');
 }
 
 // 说明文字只列基础型号（派系铁壁与铁壁相同）
@@ -2620,7 +2619,7 @@ function renderJumpPlan() {
   const { sim, gates, ship, path, landing, range, prefer, fatigue, stopAt, stops } = J.plan;
   const fatigueNote = fatigue?.minutes > 0 ? `<p class="jump-note warn">已计入角色当前的跳跃疲劳：剩余 ${JP.formatMinutes(fatigue.minutes)}（${new Date(fatigue.expires).toLocaleString('zh-CN', { hour12: false })} 消退）</p>`
     : fatigue ? '<p class="jump-note">角色当前没有跳跃疲劳</p>'
-      : app.hasEsiToken() ? '<p class="jump-note">按零疲劳估算。<button class="link-btn" data-scope-rebind="fatigue">授权「跳跃疲劳」</button>后可按角色实际疲劳计算</p>' : '';
+      : app.hasEsiToken() ? '<p class="jump-note">按零疲劳估算 · <button class="link-btn" data-scope-rebind="fatigue" title="授权后按角色实际疲劳计算">授权「跳跃疲劳」</button></p>' : '';
   // 「优先可停靠」模式下，中途无法停靠的星系单独标出
   const noDock = prefer ? path.slice(1, -1).filter((i) => !prefer.has(i)) : [];
   const sys = (i) => M.systems[i];
@@ -2650,15 +2649,14 @@ function renderJumpPlan() {
       <div><strong>${sim.totalLy.toFixed(1)}</strong><span>光年</span></div>
       <div><strong>${app.formatNumber(sim.fuel)}</strong><span>${fuelName}</span></div>
     </div>
-    <p class="jump-note"><span id="jumpFuelIsk"></span>${sim.rows.length > 1 ? ` · 连续跳完约 ${JP.formatMinutes(sim.travel)}` : ''} · 到达后疲劳约 ${JP.formatMinutes(sim.finalFatigue)}，冷却 ${JP.formatMinutes(sim.finalCooldown)}</p>
+    <p class="jump-note" title="按 CCP 规则估算（疲劳上限 5 小时、冷却上限 30 分钟），假设冷却结束立即起跳"><span id="jumpFuelIsk"></span>${sim.rows.length > 1 ? ` · 连续跳完约 ${JP.formatMinutes(sim.travel)}` : ''} · 到达后疲劳约 ${JP.formatMinutes(sim.finalFatigue)}，冷却 ${JP.formatMinutes(sim.finalCooldown)}</p>
     ${fatigueNote}
-    ${prefer ? `<p class="jump-note${noDock.length ? ' warn' : ''}">${noDock.length ? `已尽量选择可停靠的中途点，仍有 ${noDock.length} 处无法停靠（当前跳跃距离内没有可停靠的替代星系）` : '所有中途点都可以停靠'}</p>` : ''}
+    ${prefer ? `<p class="jump-note${noDock.length ? ' warn' : ''}">${noDock.length ? `仍有 ${noDock.length} 处中途点无法停靠` : '所有中途点都可以停靠'}</p>` : ''}
     ${gates.length ? `<p class="jump-note warn">${app.esc(dest.name)} 不能直接跳入（高安等），跳到 ${app.esc(sys(landing).name)} 后再走 ${gates.length} 个星门</p>` : ''}
     <div class="route-summary"><span>${app.esc(ship.name)} · 最大 ${range.toFixed(2)} 光年</span>
       <span><button class="link-btn" data-jump-range title="在星图上高亮起点一跳可达的星系">一跳范围</button> · <button class="link-btn" data-game-route title="把每个跳跃落点依次写入游戏自动导航（角色需在线）">写入航点</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>
     ${legLine}
-    <ol class="route-list jump-list">${row(path[0], '<div class="jump-leg"><span>起点</span></div>')}${legs}${gateRows}</ol>
-    <p class="jump-foot">冷却与疲劳按 CCP 公布的规则估算（疲劳上限 5 小时、冷却上限 30 分钟），并假设每次冷却结束立即起跳；燃料按所选技能计算。</p>`;
+    <ol class="route-list jump-list">${row(path[0], '<div class="jump-leg"><span>起点</span></div>')}${legs}${gateRows}</ol>`;
 }
 
 function toggleJumpRange() {
@@ -2765,7 +2763,7 @@ function renderSystemInfo(s) {
       ${statCell('NPC 击杀', app.formatNumber(npcKills(s.id)) + `<small>${npcSpan()}</small>`)}
       ${statCell('跳跃', app.formatNumber(jumps || 0))}
     </div>
-    <p class="map-info-note" title="ESI 每小时更新一次快照，游戏内是实时滚动统计，数字会有出入">舰船、太空舱、跳跃为过去 1 小时${M.live.killsAt ? `（ESI 快照，截至 ${hhmm(M.live.killsAt)}）` : ''} · 恒星与 ${s.planets} 颗行星 · ${stations.length} 座 NPC 空间站</p>
+    <p class="map-info-note" title="ESI 每小时更新一次快照，游戏内是实时滚动统计，数字会有出入">舰船、太空舱、跳跃为过去 1 小时${M.live.killsAt ? `（截至 ${hhmm(M.live.killsAt)}）` : ''} · 恒星与 ${s.planets} 颗行星 · ${stations.length} 座 NPC 空间站</p>
     ${industryHtml(s)}
     ${stations.length ? `<details class="map-stations"${stations.length <= 4 ? ' open' : ''}><summary>NPC 空间站（${stations.length}）</summary><ul>${stations.map((n) => `<li>${app.esc(n)}</li>`).join('')}</ul></details>` : ''}
     <div id="mapAgents"></div>
@@ -2810,7 +2808,7 @@ function renderAgents(s) {
   // 绑定了角色：读声望后标出能否接任务（读完重绘一次）
   if (app.hasEsiToken() && !agentAccess && !agentAccessLoading) loadAgentAccess().then(() => { if (M.selected === s.i) renderAgents(s); });
   const accessNote = agentAccess?.error ? `<p class="legend-empty">代理人可用性：${app.esc(agentAccess.error)}</p>`
-    : agentAccess ? '<p class="legend-empty">按当前角色的有效声望（含社交技能）判断普通 / 研究代理人能否接任务</p>' : '';
+    : '';
   box.innerHTML = `<details class="map-stations map-agents"${focus || list.length <= 6 ? ' open' : ''}>
     <summary>代理人与 NPC 人物（${agents ? agents + ' 名代理人' : list.length + ' 人'}）</summary>
     ${accessNote}

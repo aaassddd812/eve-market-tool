@@ -22,7 +22,7 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=67"></script>
+  <script src="js/i18n.js?v=72"></script>
   <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
   <script type="importmap">
     {
@@ -32,7 +32,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v168">
+  <link rel="stylesheet" href="css/modern-style.css?v=v175">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -220,8 +220,8 @@
               <img src="https://images.evetech.net/types/638/render?size=256" alt="" width="112" height="112">
             </div>
             <h2>选择一个物品开始查看</h2>
-            <p class="desktop-only">从左侧目录选择物品，或按 <kbd>/</kbd> 搜索。</p>
-            <p class="mobile-only">打开目录选择物品，或直接搜索名称 / Type ID。</p>
+            <p class="desktop-only">从左侧选择，或按 <kbd>/</kbd> 搜索</p>
+            <p class="mobile-only">打开目录或直接搜索</p>
             <button class="btn btn-primary mobile-only empty-search" id="emptySearchBtn">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg><span>搜索物品</span>
             </button>
@@ -855,7 +855,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               </div>
               <h2>尚未绑定 ESI</h2>
-              <p>绑定 ESI 后可查看角色信息、资产估值、市场订单与钱包流水。</p>
+              <p>绑定后查看角色、资产、订单与钱包</p>
               <button class="btn btn-primary" id="bindEsiBtn">绑定 ESI</button>
             </div>
 
@@ -988,13 +988,13 @@
           </button>
         </div>
         <div class="modal-body contact-body">
-          <p class="contact-intro">本站由个人开发维护，全部功能免费使用。</p>
+          <p class="contact-intro">个人开发，全部功能免费</p>
           <ul class="contact-offer">
-            <li><b>定制功能</b><span>为军团 / 联盟做专属工具、数据看板、QQ 群机器人、私有部署等</span></li>
-            <li><b>问题与建议</b><span>发现数据不对、功能出错，或想要新功能，都欢迎告诉我</span></li>
+            <li><b>定制功能</b><span>军团 / 联盟专属工具、看板、QQ 机器人、私有部署</span></li>
+            <li><b>问题与建议</b><span>数据不对、功能出错或想要新功能</span></li>
           </ul>
           <div class="contact-list" id="contactList"></div>
-          <p class="contact-note">加好友或入群时请备注「EVE 工具」。</p>
+          <p class="contact-note">加好友请备注「EVE 工具」</p>
         </div>
       </div>
     </div>
@@ -1088,6 +1088,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v218" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v227" type="module" data-cfasync="false"></script>
 </body>
 </html>

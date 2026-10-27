@@ -5,7 +5,7 @@
 // 训练时间：主属性 + 副属性 / 2 技能点每分钟（属性含植入体加成），Alpha 克隆减半；可算最佳属性重新分配（每项 17–27，共 99 点）。
 // 训练队列：ESI 只开放了读取（esi-skills.read_skillqueue.v1），没有写入接口，网页无法直接改游戏里的训练队列；
 // 「复制技能清单」每行「技能名 等级」，在游戏技能窗口的训练队列里 Ctrl+V 即可整批加入。
-import { commonFit } from './fit-kb.js?v=v26';
+import { commonFit } from './fit-kb.js?v=v27';
 
 let ctx;   // data, FE, getFit, savedFits, normalize, hasEsi, esiFetch, getEsiToken, getImplants, openEsiBind, esc, formatNumber, showToast, store
 const KEY = 'eve-skill-plan-v1';
@@ -333,12 +333,6 @@ function render() {
   const keep = document.activeElement?.dataset?.spSearch ? { k: document.activeElement.dataset.spSearch, v: document.activeElement.value } : null;
   plan = C && (C.mode === 'none' || C.trained || C.error) ? buildPlan() : null;
   root.innerHTML = `<div class="sp-page">
-    <header class="sim-head">
-      <div class="sim-head-main">
-        <h2>技能规划</h2>
-        <p>选想开的船或发展方向，按角色已学技能排出训练顺序：先能开、再用好，前置技能自动补齐。</p>
-      </div>
-    </header>
     ${charHtml()}
     <div class="sp-cols">
       <div class="sp-left">
@@ -364,7 +358,7 @@ function charHtml() {
     </div>`;
   if (C.mode === 'none') {
     return `<section class="sp-char is-guest">
-      <div class="sp-char-main"><b>未绑定角色</b><span>按全部技能未学、默认属性估算；绑定 ESI 后按你的角色已学技能、属性与训练队列规划。</span></div>
+      <div class="sp-char-main"><b>未绑定角色</b><span>按全部技能未学估算</span></div>
       ${ctx.openEsiBind ? '<button type="button" class="btn btn-primary btn-sm" data-sp-bind>绑定 ESI</button>' : ''}
       ${opts}
     </section>`;
@@ -374,10 +368,7 @@ function charHtml() {
   const q = C.queue;
   const qEnd = q?.length ? Math.max(...q.map((x) => (x.finish_date ? Date.parse(x.finish_date) : 0))) : 0;
   return `<section class="sp-char">
-    <img class="sp-char-img" src="https://images.evetech.net/characters/${C.id}/portrait?size=64" alt="" width="44" height="44">
-    <div class="sp-char-main"><b translate="no">${esc(C.name)}</b>
-      <span>${ctx.formatNumber(C.totalSp)} 技能点 · 已学 ${[...C.trained.values()].filter((l) => l > 0).length} 个技能</span>
-      <span>${q ? (q.length ? `训练队列 ${q.length} 项，${qEnd ? dateTime(qEnd) + ' 完成' : '已暂停'}` : '训练队列为空') : `训练队列读取失败${C.queueError ? '：' + esc(C.queueError) : ''}`}</span></div>
+    <div class="sp-char-main"><span>${q ? (q.length ? `训练队列 ${q.length} 项，${qEnd ? dateOnly(qEnd) + ' 完成' : '已暂停'}` : '训练队列为空') : `训练队列读取失败${C.queueError ? '：' + esc(C.queueError) : ''}`}</span></div>
     <div class="sp-attrs">${ATTRS.map(([, k, n]) => `<span><em>${n}</em><b>${base[k] + imp[k]}</b>${imp[k] ? `<small>+${imp[k]}</small>` : ''}</span>`).join('')}</div>
     ${opts}
   </section>`;
@@ -397,11 +388,10 @@ function addHtml() {
       <div class="sp-quick">
         ${cur ? `<button type="button" class="btn btn-ghost btn-sm" data-sp-add-current>装配页当前装配</button>` : ''}
         ${saved.length ? `<select class="plain-select" data-sp-add-saved aria-label="我的装配"><option value="">从我的装配添加…</option>${saved.map((f) => `<option value="${ctx.esc(String(f.id))}">${ctx.esc(ctx.data.types.get(f.ship)?.name || '')} · ${ctx.esc(f.name || '未命名')}</option>`).join('')}</select>` : ''}
-      </div>
-      <p class="sp-hint">选船后默认带上击杀记录里这型船最近最常见的装配，算出开船 + 装上这套装配要的技能。</p>`;
+      </div>`;
   } else if (tab === 'dir') {
     const on = new Set(P.targets.filter((t) => t.kind === 'dir').map((t) => t.dir));
-    body = `<div class="sp-dirs">${DIRS.map((d) => `<button type="button" class="sp-dir${on.has(d.id) ? ' active' : ''}" data-sp-dir="${d.id}" aria-pressed="${on.has(d.id)}"><b>${d.name}</b><small>${d.desc}</small></button>`).join('')}</div>`;
+    body = `<div class="sp-dirs">${DIRS.map((d) => `<button type="button" class="sp-dir${on.has(d.id) ? ' active' : ''}" data-sp-dir="${d.id}" aria-pressed="${on.has(d.id)}" title="${d.desc}"><b>${d.name}</b></button>`).join('')}</div>`;
   } else {
     body = `<div class="sp-skill-add">
         <div class="search-box sp-search">
@@ -444,8 +434,8 @@ function targetsHtml() {
           <select class="plain-select" data-sp-src aria-label="装配">${fitSrcOptions(t)}</select>
           <div class="segmented" role="group" aria-label="目标"><button type="button" data-sp-depth="fly" class="${t.depth !== 'good' ? 'active' : ''}" title="只算开船和装上装配需要的技能">能开</button><button type="button" data-sp-depth="good" class="${t.depth === 'good' ? 'active' : ''}" title="再加船体技能、武器与坦克支援技能到 IV 级">用好</button></div>
         </div>
-        ${t.status === 'loading' ? '<small class="sim-loading">读取常见装配…</small>' : t.fit && t.label ? `<small>${esc(t.label)}</small>` : t.status === 'none' ? `<small class="sim-warn">${esc(t.label || '没有找到常见装配，只算开船')}</small>` : ''}`
-      : t.kind === 'dir' ? `<small>${esc(DIRS.find((d) => d.id === t.dir)?.desc || '')}</small>` : '';
+        ${t.status === 'loading' ? '<small class="sim-loading">读取常见装配…</small>' : t.status === 'none' ? '<small class="sim-warn">没有常见装配，只算开船</small>' : ''}`
+      : '';
     return `<div class="sp-target" data-sp-target="${t.id}">
       ${targetIcon(t)}
       <div class="sp-t-main">
@@ -458,7 +448,7 @@ function targetsHtml() {
   }).join('');
   return `<section class="sp-box">
     <div class="sim-sec-head"><h4>规划目标 <small>${P.targets.length}</small></h4>${P.targets.length ? '<button type="button" class="link-btn" data-sp-clear>清空</button>' : ''}</div>
-    <div class="sp-targets">${rows || '<p class="sim-empty">还没有目标。在上面选一艘想开的船，或者挑一个发展方向。</p>'}</div>
+    <div class="sp-targets">${rows || '<p class="sim-empty">还没有目标</p>'}</div>
   </section>`;
 }
 
@@ -466,32 +456,29 @@ function resultHtml() {
   const esc = ctx.esc;
   if (!C) return '<div class="sp-box sp-wait"><span class="sim-status busy">读取角色技能…</span></div>';
   if (!plan) return '';
-  if (!P.targets.length) return `<div class="sp-box sp-empty-res"><h4>怎么用</h4><ol>
-      <li>在左边选「想开的船」（默认带上最近最常见的装配），或者挑一个「发展方向」</li>
-      <li>右边按你的角色已学技能列出还要练的技能，前置技能自动补齐，先能开、再用好</li>
-      <li>点「复制技能清单」，在游戏技能窗口的训练队列里按 Ctrl+V 粘贴</li></ol></div>`;
+  if (!P.targets.length) return '<div class="sp-box sp-empty-res"><p class="sim-empty">训练顺序显示在这里</p></div>';
   const E = plan.entries;
   const card = (label, value, detail = '') => `<div class="valuation-card"><span class="valuation-label">${label}</span><strong class="valuation-value">${value}</strong><span class="valuation-detail">${detail}</span></div>`;
   const wait = (plan.start - Date.now()) / 60e3;
   const cards = `<div class="valuation-grid sp-cards">
-    ${card('总训练时间', E.length ? dur(plan.total.min) : '—', wait > 1 ? `排在当前训练队列之后（还有 ${dur(wait)}）` : '')}
-    ${card('预计完成', E.length ? esc(dateOnly(plan.end)) : '—', E.length ? esc(dateTime(plan.end)) : '')}
-    ${card('需要技能点', ctx.formatNumber(plan.total.sp), plan.total.sp ? `约 ${Math.ceil(plan.total.sp / injectorSp())} 个大型技能注入器（每个 ${ctx.formatNumber(injectorSp())} 点）` : '')}
-    ${card('技能条目', `${E.length}<span class="unit">项</span>`, E.length > QUEUE_MAX ? `游戏队列最多 ${QUEUE_MAX} 项，需要分批` : `${new Set(E.map((e) => e.skill)).size} 个技能`)}
+    ${card('总训练时间', E.length ? dur(plan.total.min) : '—', wait > 1 ? `接在当前队列后` : '')}
+    ${card('预计完成', E.length ? esc(dateOnly(plan.end)) : '—')}
+    ${card('需要技能点', ctx.formatNumber(plan.total.sp), plan.total.sp ? `≈ ${Math.ceil(plan.total.sp / injectorSp())} 个大型注入器` : '')}
+    ${card('技能条目', `${E.length}<span class="unit">项</span>`, E.length > QUEUE_MAX ? `超过 ${QUEUE_MAX} 项，需分批` : '')}
   </div>`;
-  if (!E.length) return cards + '<div class="sp-box sp-done"><b>全部目标都已满足</b><span>这些船和技能你现在就能用了。</span></div>';
+  if (!E.length) return cards + '<div class="sp-box sp-done"><b>全部目标都已满足</b></div>';
   // 属性重新分配建议
   const B = plan.best;
   let remap = '';
   if (B) {
     const save = B.curMin - B.min;
     const a = C?.attrs;
-    const when = a?.accrued_remap_cooldown_date && Date.parse(a.accrued_remap_cooldown_date) > Date.now() ? `下次免费重新分配：${dateOnly(Date.parse(a.accrued_remap_cooldown_date))}` : a ? '现在可以免费重新分配' : '';
-    const bonus = a?.bonus_remaps ? `，奖励重新分配 ${a.bonus_remaps} 次` : '';
+    const when = a?.accrued_remap_cooldown_date && Date.parse(a.accrued_remap_cooldown_date) > Date.now() ? `${dateOnly(Date.parse(a.accrued_remap_cooldown_date))} 可重新分配` : a ? '现在可重新分配' : '';
+    const bonus = a?.bonus_remaps ? ` · 奖励 ${a.bonus_remaps} 次` : '';
     remap = `<div class="sp-box sp-remap">
       <div class="sim-sec-head"><h4>属性分配建议</h4>${when ? `<span class="sp-hint">${esc(when + bonus)}</span>` : ''}</div>
       ${save > 60 ? `<div class="sp-remap-row">${ATTRS.map(([, k, n]) => { const d = B.attrs[k] - plan.cur[k]; return `<span><em>${n}</em><b>${B.attrs[k]}</b>${d ? `<small class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${d}</small>` : ''}</span>`; }).join('')}</div>` : ''}
-      <p class="sp-hint">${save > 60 ? esc(`按这个分配（不含植入体），这份规划能少练 ${dur(save)}（${Math.round(save / B.curMin * 100)}%）`) : '当前属性分配已经接近最佳，不用重新分配'}</p>
+      <p class="sp-hint">${save > 60 ? esc(`可少练 ${dur(save)}（${Math.round(save / B.curMin * 100)}%）`) : '当前分配已接近最佳'}</p>
     </div>`;
   }
   // 里程碑
@@ -499,9 +486,8 @@ function resultHtml() {
     need?.missing ? { t, end: need.end, label: t.kind === 'ship' ? '能开' : '练到' } : null,
     good?.missing ? { t, end: good.end, label: t.kind === 'dir' ? '练完' : '用好' } : null
   ]).filter(Boolean).sort((a, b) => a.end - b.end);
-  const msHtml = ms.length ? `<div class="sp-box"><div class="sim-sec-head"><h4>里程碑</h4></div><ol class="sp-ms">${ms.map((m) => `<li><time>${esc(dateOnly(m.end))}</time><span class="sp-ms-tag">${m.label}</span><b>${esc(targetName(m.t))}</b><small>还需 ${dur((m.end - Date.now()) / 60e3)}</small></li>`).join('')}</ol></div>` : '';
+  const msHtml = ms.length ? `<div class="sp-box"><div class="sim-sec-head"><h4>里程碑</h4></div><ol class="sp-ms">${ms.map((m) => `<li><time>${esc(dateOnly(m.end))}</time><span class="sp-ms-tag">${m.label}</span><b>${esc(targetName(m.t))}</b></li>`).join('')}</ol></div>` : '';
   // 清单
-  const names = new Map(P.targets.map((t) => [t.id, targetName(t)]));
   const limit = P.showAll ? E.length : 80;
   let n = 0;
   const section = (phase, title) => {
@@ -512,12 +498,9 @@ function resultHtml() {
       n += 1;
       if (n > limit) return '';
       const info = skillInfo(e.skill);
-      const g = ctx.data.groups.get(info.t.group)?.name || '';
-      const fors = [...e.for].map((id) => names.get(id)).filter(Boolean);
       return `<tr>
         <td class="num sp-n">${n}</td>
-        <td><div class="sp-sk"><span class="sp-sk-name">${esc(info.t.name)}</span><span class="sp-lv">${ROMAN[e.level]}</span>${e.pre ? '<span class="sp-pre" title="其他技能的前置要求">前置</span>' : ''}</div>
-          <small class="sp-for">${esc(g)}${fors.length ? ' · ' : ''}${fors.slice(0, 3).map((x) => `<span>${esc(x)}</span>`).join('')}${fors.length > 3 ? ` +${fors.length - 3}` : ''}</small></td>
+        <td><div class="sp-sk"><span class="sp-sk-name">${esc(info.t.name)}</span><span class="sp-lv">${ROMAN[e.level]}</span>${e.pre ? '<span class="sp-pre" title="其他技能的前置要求">前置</span>' : ''}</div></td>
         <td class="num pi-hide-sm">${ctx.formatNumber(e.sp)}</td>
         <td class="num">${dur(e.min)}</td>
         <td class="num pi-hide-sm">${esc(dateTime(e.end))}</td>
@@ -529,14 +512,13 @@ function resultHtml() {
     <div class="sim-sec-head"><h4>训练顺序</h4>
       <div class="sp-copy">
         ${window.I18N?.lang === 'en' ? '' : `<div class="segmented" role="group" aria-label="技能名语言"><button type="button" data-sp-lang="zh" class="${P.opt.lang !== 'en' ? 'active' : ''}" title="国服 / 中文客户端">中文名</button><button type="button" data-sp-lang="en" class="${P.opt.lang === 'en' ? 'active' : ''}" title="英文客户端">英文名</button></div>`}
-        <button type="button" class="btn btn-primary btn-sm" data-sp-copy>复制技能清单</button>
+        <button type="button" class="btn btn-primary btn-sm" data-sp-copy title="复制后在游戏技能队列里按 Ctrl+V 粘贴（一次最多 ${QUEUE_MAX} 项）">复制技能清单</button>
       </div></div>
     <div class="pi-table-wrap"><table class="pi-table sp-table">
       <thead><tr><th class="num">#</th><th>技能</th><th class="num pi-hide-sm">技能点</th><th class="num">时长</th><th class="num pi-hide-sm">完成时间</th></tr></thead>
       ${section('need', '第一阶段 · 能开 / 能用')}${section('good', '第二阶段 · 用好 / 发展方向')}
     </table></div>
     ${E.length > limit ? `<button type="button" class="btn btn-ghost btn-sm sp-more" data-sp-all>显示全部 ${E.length} 项</button>` : ''}
-    <p class="sp-note">网页没办法直接改游戏里的训练队列：ESI 只开放了读取技能队列的接口（esi-skills.read_skillqueue.v1），没有写入接口。复制清单后，在游戏「技能」窗口的训练队列里按 Ctrl+V，会按顺序整批加入（一次最多 ${QUEUE_MAX} 项）。</p>
   </div>`;
   return cards + msHtml + list + remap;
 }
@@ -597,7 +579,7 @@ function copyList() {
   // 英文界面下装配数据里的名称已换成英文（i18n.js），只能复制英文名
   const en = P.opt.lang === 'en' || window.I18N?.lang === 'en';
   const lines = E.slice(0, QUEUE_MAX).map((e) => { const t = ctx.data.types.get(e.skill); return `${(en ? t.en : t.name) || t.name} ${e.level}`; });
-  const msg = E.length > QUEUE_MAX ? `已复制前 ${QUEUE_MAX} 项（游戏队列上限），练完后再复制剩下的` : `已复制 ${lines.length} 项，在游戏训练队列里 Ctrl+V 粘贴`;
+  const msg = E.length > QUEUE_MAX ? `已复制前 ${QUEUE_MAX} 项（队列上限）` : `已复制 ${lines.length} 项，在游戏训练队列里 Ctrl+V 粘贴`;
   navigator.clipboard.writeText(lines.join('\n')).then(() => ctx.showToast(msg, 'success', 3500), () => window.prompt('复制技能清单', lines.join('\n')));
 }
 

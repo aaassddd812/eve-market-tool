@@ -99,11 +99,11 @@ function contractText(c) {
   return `${single ? '挂牌' : '所在合同'} ${ctx.formatISK(c.price)}${single ? '' : `（含 ${(c.abyssal_modules_count || 0) + (c.non_abyssal_modules_count || 0)} 件物品）`}`;
 }
 
-const NOTE = '数据：<a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a> · 仅供参考 · 「查询估价」会在其网站公开这件装备';
+const NOTE = '数据：<a href="https://mutamarket.com" target="_blank" rel="noopener">MutaMarket</a> · 「查询估价」会公开这件装备';
 
 // ---------- 突变属性弹窗里的一块 ----------
 export function mountItem(el, type, item) {
-  if (!supported) { el.innerHTML = `<div class="aby-box"><span class="text-muted">深渊装备估价只支持宁静服（${ctx.esc(SERVER.full)}没有对应的成交数据）</span></div>`; return; }
+  if (!supported) { el.innerHTML = '<div class="aby-box"><span class="text-muted">深渊估价仅支持宁静服</span></div>'; return; }
   const draw = () => {
     if (!el.isConnected) { listeners.delete(draw); return; }
     const r = results.get(item) || { state: 'loading' };
@@ -111,7 +111,7 @@ export function mountItem(el, type, item) {
     let body;
     if (r.state === 'loading') body = '<span class="text-muted">查询深渊估价…</span>';
     else if (r.state === 'missing' || (r.state === 'posting' && !d)) {
-      body = `<span>MutaMarket 还没有收录这件装备。</span><button class="btn btn-primary btn-sm" data-aby-post ${r.state === 'posting' ? 'disabled' : ''}>${r.state === 'posting' ? '查询中…' : '查询估价'}</button>`;
+      body = `<span>MutaMarket 未收录</span><button class="btn btn-primary btn-sm" data-aby-post ${r.state === 'posting' ? 'disabled' : ''}>${r.state === 'posting' ? '查询中…' : '查询估价'}</button>`;
     } else if (r.state === 'error' && !d) body = `<span class="down">估价查询失败：${ctx.esc(r.error)}</span><button class="btn btn-sm" data-aby-retry>重试</button>`;
     else {
       body = `<div class="aby-value"><span>深渊参考估价</span><b>${d.estimated_value ? ctx.formatISK(d.estimated_value) + ' ISK' : '暂无估价'}</b>
@@ -136,7 +136,7 @@ export function mountItem(el, type, item) {
 // ---------- 估价页的深渊装备列表 ----------
 export function mountList(el, links) {
   if (!links.length) { el.innerHTML = ''; return; }
-  if (!supported) { el.innerHTML = `<div class="ap-card aby-card"><div class="aby-card-head"><h3>深渊装备 ${links.length} 件</h3></div><p class="text-muted">深渊装备估价只支持宁静服。</p></div>`; return; }
+  if (!supported) { el.innerHTML = `<div class="ap-card aby-card"><div class="aby-card-head"><h3>深渊装备 ${links.length} 件</h3></div><p class="text-muted">深渊估价仅支持宁静服</p></div>`; return; }
   const ICON = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
   const draw = () => {
     if (!el.isConnected) { listeners.delete(draw); return; }
@@ -164,7 +164,7 @@ export function mountList(el, links) {
         <td class="num">${value}</td><td class="aby-meta-cell">${meta}</td><td><div class="aby-actions">${action}</div></td></tr>`;
     }).join('');
     el.innerHTML = `<div class="ap-card aby-card"><div class="aby-card-head"><h3>深渊装备 ${links.length} 件</h3>
-        <span class="aby-total">参考估价合计 <b>${ctx.formatISK(total)}</b>${priced < links.length ? `<small>（${links.length - priced} 件暂无估价，未计入）</small>` : ''}</span>
+        <span class="aby-total">参考估价合计 <b>${ctx.formatISK(total)}</b>${priced < links.length ? `<small>（${links.length - priced} 件未计入）</small>` : ''}</span>
         <span class="toolbar-spacer"></span>${missing.length > 1 ? `<button class="btn btn-primary btn-sm" data-aby-post-all>查询全部未收录（${missing.length}）</button>` : ''}</div>
       <div class="table-scroll"><table class="ap-table aby-table"><thead><tr><th>装备 / 原型</th><th class="num">参考估价</th><th>依据</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
       <p class="text-muted aby-note">${NOTE}</p></div>`;

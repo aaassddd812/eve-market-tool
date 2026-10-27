@@ -7,6 +7,7 @@
 //   归零后自动重新读取并就地更新（至少间隔 60 秒，避免 ESI 缓存未及时更新时反复请求）。
 import { esiUrl, SERVER } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
+import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 
 let ctx;   // esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem
 const S = { tab: 'fw', board: 'characters', metric: 'kills', period: 'last_week', warFilter: 'active', wars: [], warIds: [], nextMax: null, warLoading: false };
@@ -80,13 +81,12 @@ function refreshBarHtml(timing) {
   if (!timing) return '';
   const item = (key, label, tip) => {
     const t = timing[key];
-    return `<span class="fw-cd-item" title="${esc(tip)}"><em>${label}</em><b data-fw-cd="${key}">${cd(t.expires - Date.now())}</b><small>数据生成于 ${clock(t.modified)}</small></span>`;
+    return `<span class="fw-cd-item" title="${esc(tip)}"><em>${label}</em><b data-fw-cd="${key}">${cd(t.expires - Date.now())}</b><small>生成于 ${clock(t.modified)}</small></span>`;
   };
   return `<div class="fw-refresh" role="timer" aria-live="off">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9 2h6"/></svg>
-      ${item('systems', '战场（星系争夺进度）刷新', 'ESI /fw/systems/ 约每 30 分钟更新一次：各星系的胜利点与占领方')}
-      ${item('stats', '阵营统计与排行榜刷新', 'ESI /fw/stats/ 与 /fw/leaderboards/：击杀、胜利点与排行（数据每天结算一次）')}
-      <span class="fw-cd-note">归零后自动更新</span>
+      ${item('systems', '星系争夺刷新', 'ESI /fw/systems/ 约每 30 分钟更新一次：各星系的胜利点与占领方')}
+      ${item('stats', '阵营统计刷新', 'ESI /fw/stats/ 与 /fw/leaderboards/：击杀、胜利点与排行（数据每天结算一次）')}
     </div>`;
 }
 
@@ -144,7 +144,7 @@ function fwHtml(d) {
   return `${refreshBarHtml(d.timing)}<div class="fw-grid">${cards}</div>
     ${frontsHtml(d)}
     <div class="fw-cols">
-      <section class="pi-card"><div class="pi-card-head"><h3>排行榜</h3></div>
+      <section class="pi-card"><div class="pi-card-head"><h3>排行榜</h3>${list.length ? `<span class="toolbar-spacer"></span>${exportBtnHtml('data-fw-export')}` : ''}</div>
         <div class="fw-board-tools">${seg('board', [['characters', '飞行员'], ['corporations', '军团'], ['factions', '阵营']])}${seg('metric', [['kills', '击杀'], ['victory_points', '胜利点']])}${seg('period', [['yesterday', '昨天'], ['last_week', '上周'], ['active_total', '总计']])}</div>
         ${list.length ? `<ol class="fw-board">${list.map((x, i) => `<li><span class="fw-rank">${i + 1}</span>${logo(kind, x[idKey], 22)}<span class="fw-name">${esc(nameOf(x[idKey]))}</span><b>${formatNumber(x.amount)}</b></li>`).join('')}</ol>` : '<p class="text-muted">暂无数据</p>'}
       </section>
@@ -154,6 +154,24 @@ function fwHtml(d) {
         
       </section>
     </div>`;
+}
+
+// 导出 CSV：当前选择（飞行员 / 军团 / 阵营 × 击杀 / 胜利点 × 时段）的排行，数据已在内存里
+async function exportFwBoard() {
+  const d = await cache.get('fw')?.promise.catch(() => null);
+  const list = d?.boards[S.board]?.[S.metric]?.[S.period] || [];
+  if (!list.length) return;
+  const idKey = S.board === 'characters' ? 'character_id' : S.board === 'corporations' ? 'corporation_id' : 'faction_id';
+  const KIND = { characters: '飞行员', corporations: '军团', factions: '阵营' };
+  const PERIOD = { yesterday: '昨天', last_week: '上周', active_total: '总计' };
+  const metric = S.metric === 'kills' ? '击杀' : '胜利点';
+  exportCsv('势力战争排行榜', [
+    ['#', (x) => list.indexOf(x) + 1],
+    [KIND[S.board], (x) => nameOf(x[idKey])],
+    ['ID', (x) => x[idKey]],
+    [metric, (x) => x.amount],
+    ['时段', () => PERIOD[S.period]]
+  ], list);
 }
 
 // 战线：/fw/wars/ 的每组对抗关系一条（帝国之间两条：加达里—盖伦特、艾玛—米玛塔尔；海盗叛乱四条：古斯塔斯对加达里 / 盖伦特、天使对艾玛 / 米玛塔尔）。
@@ -183,9 +201,9 @@ function etaHtml(s, trend) {
   return `<small class="fw-eta muted" title="${tip}">停滞</small>`;
 }
 function trendNote(trend) {
-  if (!trend) return '预计时间暂不可用（读不到服务器的胜利点记录）';
-  if ((trend.snapshots || 0) < 2) return '⏱ 服务器刚开始记录胜利点，攒够两次 ESI 更新（约 1 小时）后显示各星系的预计时间';
-  return `⏱ 预计时间按最近 ${trend.window_hours} 小时胜利点推进速度估算（服务器每次 ESI 更新记一笔，已记录 ${trend.snapshots} 次，自 ${clock(trend.since * 1000)} 起），只作参考，不是游戏里的倒计时`;
+  if (!trend) return ['预计时间暂不可用', '读不到服务器的胜利点记录'];
+  if ((trend.snapshots || 0) < 2) return ['⏱ 约 1 小时后显示预计时间', '服务器刚开始记录胜利点，攒够两次 ESI 更新后显示'];
+  return [`⏱ 预计时间按近 ${trend.window_hours} 小时速度估算，仅供参考`, `服务器每次 ESI 更新记一笔，已记录 ${trend.snapshots} 次，自 ${clock(trend.since * 1000)} 起；不是游戏里的倒计时`];
 }
 const FW_COLOR = { 500001: '#4a9fdc', 500002: '#c8553d', 500003: '#d9a93a', 500004: '#4fb37a', 500010: '#8e9aa6', 500011: '#b5653a' };
 const EMPIRE = new Set([500001, 500002, 500003, 500004]);
@@ -243,10 +261,11 @@ function frontsHtml(d) {
       ${zone}</div>`;
   };
   const empires = fronts.filter((f) => f.empire), pirates = fronts.filter((f) => !f.empire);
-  return `<section class="fw-fronts"><div class="fw-fronts-head"><h3>${fronts.length} 条战线</h3><small class="text-muted">人数、击杀、胜利点为阵营总数（含它在其它战线的数据）；点星系名在星图中查看</small></div>
-    <p class="fw-trend-note">${trendNote(d.trend)}</p>
+  const [tnText, tnTip] = trendNote(d.trend);
+  return `<section class="fw-fronts"><div class="fw-fronts-head"><h3>${fronts.length} 条战线</h3><small class="text-muted">数据为阵营总数（含其它战线）</small></div>
+    <p class="fw-trend-note" title="${esc(tnTip)}">${tnText}</p>
     ${empires.length ? `<div class="fw-front-grid">${empires.map(card).join('')}</div>` : ''}
-    ${pirates.length ? `<p class="fw-front-sub">海盗叛乱战线 <small class="text-muted">ESI 不提供叛乱星系的争夺进度，只能对比阵营统计</small></p><div class="fw-front-grid pirate">${pirates.map(card).join('')}</div>` : ''}</section>`;
+    ${pirates.length ? `<p class="fw-front-sub">海盗叛乱战线 <small class="text-muted">ESI 无争夺进度</small></p><div class="fw-front-grid pirate">${pirates.map(card).join('')}</div>` : ''}</section>`;
 }
 
 // ---------- 军团战争 ----------
@@ -384,6 +403,7 @@ export async function showWar(hash) {
       if (tab) { S.tab = tab.dataset.warTab; history.replaceState(null, '', location.pathname + '#war/' + S.tab); syncTabs(); renderBody(); return; }
       const set = e.target.closest('[data-fw-set]');
       if (set) { S[set.dataset.fwSet] = set.dataset.v; renderBody(); return; }
+      if (e.target.closest('[data-fw-export]')) { exportFwBoard(); return; }
       const sys = e.target.closest('[data-fw-sys]');
       if (sys) { ctx.openMapSystem(Number(sys.dataset.fwSys)); return; }
       const f = e.target.closest('[data-war-filter]');

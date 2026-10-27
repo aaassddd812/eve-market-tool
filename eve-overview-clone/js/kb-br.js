@@ -2,7 +2,7 @@
 // 选择星系（可勾选星门邻近星系）与时间段，向击杀记录服务读取期间全部玩家击杀与攻击者，
 // 按联盟（无联盟时按军团）汇总，自动推测 A / B 双方阵营（可手动调整），统计双方人数、损失、舰船组成与损失明细。
 // 路由：#kb/br（设置）、#kb/br/<星系,…>/<开始>-<结束>[/<A 方,…>/<B 方,…>]（时间为 Unix 秒，可分享）
-import { initReplay, mountReplay, stopReplay, resizeReplay } from './kb-br-replay.js?v=v4';
+import { initReplay, mountReplay, stopReplay, resizeReplay } from './kb-br-replay.js?v=v5';
 import { getTz, setTz, tzLabel, isoIn, parseIn } from './eve-time.js?v=v1';
 let ctx;                       // kb-page 提供的工具：app, kb, request, absorbNames, partyName, typeName, loadTypes, avatar, entityLink, IMG
 const $ = (id) => document.getElementById(id);
@@ -87,7 +87,6 @@ export async function renderBr(hash) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span>返回击杀记录</span>
         </a>
         <h2>战场统计</h2>
-        <span class="text-muted">选择星系与时间段，按联盟划分双方阵营，统计人数、损失与舰船组成</span>
       </div>
       <div class="kb-br-form" id="brForm"></div>
       <div id="brResult"></div>
@@ -160,7 +159,7 @@ function renderForm() {
     </div>
     <div class="kb-br-actions">
       <button class="btn btn-primary" data-br-go${BR.picked.length ? '' : ' disabled'}>生成战场统计</button>
-      <span class="text-muted">最多 ${MAX_SYSTEMS} 个星系、${MAX_HOURS} 小时；本站保留最近 30 天的击杀</span>
+      <span class="text-muted">最多 ${MAX_SYSTEMS} 个星系、${MAX_HOURS} 小时，限 30 天内</span>
     </div>`;
 }
 
@@ -376,7 +375,7 @@ function renderResult() {
   const box = $('brResult');
   if (!d.kills.length) {
     const old = d.start < Date.now() / 1000 - d.retention_days * 86400;
-    box.innerHTML = `<p class="kb-empty text-muted">这段时间内所选星系没有玩家击杀${old ? `（本站只保留最近 ${d.retention_days} 天的击杀）` : ''}</p>`;
+    box.innerHTML = `<p class="kb-empty text-muted">没有玩家击杀${old ? `（仅存 ${d.retention_days} 天）` : ''}</p>`;
     return;
   }
   const A = sideStats('A'), B = sideStats('B');
@@ -411,7 +410,7 @@ function renderResult() {
       ${sideColumn('B', B)}
     </div>
     ${unassigned.length ? `<section class="kb-br-col kb-br-third">
-      <h4>未分配 / 第三方<span>${unassigned.length} 个势力 · 点 A / B 加入一方</span></h4>
+      <h4>未分配 / 第三方<span>${unassigned.length} 个势力</span></h4>
       <div class="kb-br-parties">${unassigned.map((p) => partyRow(p, null)).join('')}</div>
     </section>` : ''}`;
   box.onclick = onResultClick;
@@ -507,11 +506,11 @@ function sideColumn(s, st) {
   }).join('');
   return `<section class="kb-br-col side-${s.toLowerCase()}">
     <h4 class="kb-br-col-title"><i class="kb-br-badge">${s}</i>${s} 方 · 势力<span>${st.parties.length}</span></h4>
-    <div class="kb-br-parties">${st.parties.map((p) => partyRow(p, s)).join('') || '<p class="text-muted kb-br-none">从下方「未分配」或另一方移入势力</p>'}</div>
+    <div class="kb-br-parties">${st.parties.map((p) => partyRow(p, s)).join('') || '<p class="text-muted kb-br-none">暂无势力</p>'}</div>
     <h4>舰船组成<span>出场 / 损失</span></h4>
     ${shipRows ? `<div class="table-scroll kb-br-table"><table class="pc-mini-table"><tbody>${shipRows}</tbody></table></div>` : '<p class="text-muted kb-br-none">无</p>'}
     <h4>损失<span>${st.ships + st.pods} · ${ctx.app.formatISK(st.lost)} ISK</span></h4>
-    <div>${losses ? `<div class="table-scroll kb-br-table"><table class="pc-mini-table kb-br-losses"><tbody>${losses}</tbody></table></div>${st.losses.length > 200 ? `<p class="text-muted kb-br-none">只显示价值最高的 200 条</p>` : ''}` : '<p class="text-muted kb-br-none">没有损失</p>'}</div>
+    <div>${losses ? `<div class="table-scroll kb-br-table"><table class="pc-mini-table kb-br-losses"><tbody>${losses}</tbody></table></div>${st.losses.length > 200 ? `<p class="text-muted kb-br-none">仅显示前 200 条</p>` : ''}` : '<p class="text-muted kb-br-none">没有损失</p>'}</div>
   </section>`;
 }
 
@@ -815,7 +814,7 @@ function openImageModal(blob) {
     if (e.target.closest('[data-copy]')) {
       try {
         await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-        ctx.app.showToast('图片已复制，可直接粘贴到 QQ / 微信 / Discord', 'success');
+        ctx.app.showToast('图片已复制', 'success');
       } catch {
         ctx.app.showToast('浏览器不允许复制图片，请使用下载', 'error');
       }

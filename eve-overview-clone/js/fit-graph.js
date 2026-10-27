@@ -142,12 +142,11 @@ function render() {
     <div class="gr-compare">
       <span>对比</span>
       ${G.compare.map((id) => { const f = saved.find((x) => String(x.id) === String(id)); return f ? `<span class="ka-chip on">${fitName(f)}<button type="button" data-gr-uncompare="${id}" aria-label="移除">×</button></span>` : ''; }).join('')}
-      ${G.compare.length < 3 && saved.length ? `<select class="plain-select" data-gr-compare><option value="">+ 加入我的装配…</option>${saved.filter((f) => !G.compare.includes(String(f.id))).map((f) => `<option value="${f.id}">${fitName(f)}</option>`).join('')}</select>` : saved.length ? '' : '<small class="text-muted">保存装配后可以加进来对比</small>'}
+      ${G.compare.length < 3 && saved.length ? `<select class="plain-select" data-gr-compare><option value="">+ 加入我的装配…</option>${saved.filter((f) => !G.compare.includes(String(f.id))).map((f) => `<option value="${f.id}">${fitName(f)}</option>`).join('')}</select>` : saved.length ? '' : '<small class="text-muted">保存装配后可对比</small>'}
     </div>
     <div class="kb-br-plot gr-plot" id="grPlot"><svg></svg><div class="kb-br-tip" id="grTip" hidden></div></div>
     <div class="gr-legend" id="grLegend"></div>
-    <p class="fit-hint">纵轴为对目标的有效 DPS（含命中与伤害比例${tgt.res && G.resist ? '，并乘目标抗性' : ''}）；网子按 T2 −60%、标记按 T2 +37.5%，多个时有叠加惩罚。
-      横轴为距离时目标速度按全部为横向速度计算；导弹超过飞行距离为 0，舰载机按满伤害。</p>`;
+    <p class="fit-hint" title="网子按 T2 −60%、标记按 T2 +37.5%（有叠加惩罚）；横轴为距离时目标速度全按横向；导弹超出射程为 0">纵轴：有效 DPS${tgt.res && G.resist ? '（含目标抗性）' : ''}</p>`;
   draw();
 }
 

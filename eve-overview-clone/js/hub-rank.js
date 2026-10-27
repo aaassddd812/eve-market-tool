@@ -29,9 +29,10 @@
 // 预加载（prefetchHubRank，用过倒卖排行的浏览器在页面空闲时调用）：先取服务器汇总、包装体积、勾选建筑与自定义市场的挂单，
 //   打开倒卖排行时直接出结果；建筑订单后台刷新完（structs.onData）悄悄换上新数据，不显示「正在读取」。
 // 分类：打开倒卖排行时市场中心侧栏的物品目录换成分类列表（#arbSide），显示每个分类符合条件的物品数。
-import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v12';
+import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v13';
+import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 
-let ctx = null;   // server, regions, esc, formatISK, formatPrice, formatNumber, TF, typeName, category, isGlobal, iconUrl, openItem
+let ctx = null;   // server, regions, esc, formatISK, formatPrice, formatNumber, TF, typeName, category, isGlobal, iconUrl, openItemPop, openItem
 const PAGE_SIZES = [50, 100, 200, 500];
 const POLL = 4000;
 const POLL_VOLUME = 20000;   // 服务器还在读成交量时，隔一会儿取一次新结果
@@ -427,9 +428,9 @@ function consumeRow(x, i) {
   const trend = x.trend == null ? '—' : `<span class="${x.trend >= RISING ? 'up' : x.trend <= 1 / RISING ? 'down' : ''}">${x.trend >= 1 ? '+' : ''}${Math.round((x.trend - 1) * 100)}%</span>`;
   const per = x.per.sort((a, b) => b[1] - a[1]).map(([h, d]) => `${hubLabel(h)} ${formatNumber(Math.round(d))}`).join(' · ');
   const markup = x.st && x.cheap ? x.st.price / x.cheap.price - 1 : null;
-  return `<tr data-hr-open="${x.id}" title="打开该物品的交易中心比价">
+  return `<tr data-hr-open="${x.id}" title="查看物品详情">
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${x.trend >= RISING ? ' <b class="hr-tag up" title="近 7 天日均成交量比 30 天高 30% 以上">成交上涨</b>' : ''}</small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${x.trend >= RISING ? ' <b class="hr-tag up" title="近 7 天日均成交量比 30 天高 30% 以上">成交上涨</b>' : ''}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td class="num up" title="${x.lossIsk ? `日成交额 ${formatISK(x.turnover)} + 被击毁折合每天 ${formatISK(x.lossIsk)}` : '日成交额合计'}">${formatISK(x.use)}</td>
       <td class="num pi-hide-sm">${formatISK(x.turnover)}</td>
@@ -482,7 +483,7 @@ function targetPopup() {
     add('星域（加为自定义市场）', regs.map((r) => ({ region: r.id, name: r.name, sub: F.custom.length >= CUSTOM_MAX ? `自定义市场已满 ${CUSTOM_MAX} 个` : S.data.hubs.includes(r.id) ? '' : '没有成交量数据' })));
   }
   const html = groups.map(([title, items]) => `<div class="kb-suggest-group">${title}</div>${items.map((o) => `<button type="button" class="kb-suggest-item${o.id === T.id ? ' active' : ''}" ${o.region && !o.kind ? `data-hr-tregion="${o.region}"` : `data-hr-target="${o.id}"`}><span>${esc(String(o.name))}</span>${o.sub ? `<small>${esc(o.sub)}</small>` : ''}</button>`).join('')}`).join('');
-  return (html || '<div class="kb-suggest-group">没有匹配的市场</div>') + '<div class="kb-suggest-group hr-target-tip">玩家建筑市场不能作为目标市场</div>';
+  return html || '<div class="kb-suggest-group">没有匹配的市场</div>';
 }
 function fillTargetPop(box) {
   const pop = box.querySelector('[data-hr-tpop]');
@@ -503,7 +504,7 @@ function pickTarget(box, id) {
   save(); render(box);
 }
 function pickTargetRegion(box, region) {
-  if (F.custom.length >= CUSTOM_MAX) { ctx.showToast(`自定义市场最多 ${CUSTOM_MAX} 个，先在「自定义市场」里移除一个`, 'error'); return; }
+  if (F.custom.length >= CUSTOM_MAX) { ctx.showToast(`自定义市场最多 ${CUSTOM_MAX} 个`, 'error'); return; }
   const r = S.regionNames.find((x) => x.id === region);
   const c = { region, name: r?.name || String(region), system: 0, sysName: '' };
   F.custom = [...F.custom, c];
@@ -522,9 +523,9 @@ function demandRow(x, i) {
     !x.soldOut && x.high >= HIGH ? ['卖价偏高', `现在的最低卖价比 30 天成交均价高 ${Math.round((x.high - 1) * 100)}%`, 'warn'] : null].filter(Boolean);
   const how = r.mode === 'bs' ? (r.local ? '本地挂收单' : `${esc(String(r.a.name))} 挂收单`) : `${esc(String(r.a.name))} 直接买`;
   const trend = x.trend == null ? '—' : `<span class="${x.trend >= RISING ? 'up' : x.trend <= 1 / RISING ? 'down' : ''}">${x.trend >= 1 ? '+' : ''}${Math.round((x.trend - 1) * 100)}%</span>`;
-  return `<tr data-hr-open="${x.id}" data-hr-mode-open="${r.mode}"${x.off ? ` class="hr-off" title="不符合条件：${esc(r.miss)} · 点击打开该物品的交易中心比价"` : ' title="打开该物品的交易中心比价"'}>
+  return `<tr data-hr-open="${x.id}" data-hr-mode-open="${r.mode}"${x.off ? ` class="hr-off" title="不符合条件：${esc(r.miss)} · 点击查看物品详情"` : ' title="查看物品详情"'}>
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${tags.map(([t, tip, c]) => ` <b class="hr-tag ${c}" title="${esc(tip)}">${t}</b>`).join('')}</small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${tags.map(([t, tip, c]) => ` <b class="hr-tag ${c}" title="${esc(tip)}">${t}</b>`).join('')}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td title="进货价 ${px(r.buyAt)} · 卖出价 ${px(r.sellAt)}${x.soldOut ? '（估）' : ''}">${how}</td>
       <td class="num ${r.perDay ? 'up' : ''}">${r.perDay ? formatISK(r.perDay) : '—'}</td>
@@ -534,6 +535,32 @@ function demandRow(x, i) {
       <td class="num pi-hide-sm">${trend}</td>
       <td class="num pi-hide-sm">${x.soldOut ? '<span class="down">0</span>' : x.stock >= 100 ? '100+' : x.stock.toFixed(1)}</td>
       ${S.data.losses7 ? `<td class="num pi-hide-sm">${x.loss ? formatNumber(x.loss) : '—'}</td>` : ''}</tr>`;
+}
+
+// 点击排行里的物品：打开单物品行情窗口（item-pop.js），不用切走排行页；这一行的路线与利润显示在窗口标题下
+function rowFacts(x) {
+  const { formatISK, formatPrice, formatNumber } = ctx;
+  const px = (v) => Math.abs(v) >= 1e6 ? formatISK(v) : formatPrice(v);
+  const r = x.r;
+  if (F.mode === 'consume') return [
+    ['日消耗额', formatISK(x.use)],
+    ['日成交件数', formatNumber(Math.round(x.units))],
+    ['最便宜', x.cheap ? `${hubLabel(x.cheap.hub)} ${px(x.cheap.price)}` : '—']];
+  if (!r) return [];
+  const route = r.local ? `${r.a.name}（本地）` : `${r.a.name} → ${r.b.name}`;
+  return [
+    ['路线', route],
+    ['进货价', px(r.buyAt)],
+    ['卖出价', px(r.sellAt)],
+    ['单件利润', `${r.unit > 0 ? '+' : ''}${px(r.unit)}`, r.unit > 0 ? 'up' : 'down'],
+    r.margin != null ? ['利润率', `${(r.margin * 100).toFixed(1)}%`] : null,
+    ['可倒数量', r.qty ? formatNumber(r.qty) : '—'],
+    r.total ? ['总利润', formatISK(r.total), 'up'] : r.perDay ? ['每天利润', formatISK(r.perDay), 'up'] : null].filter(Boolean);
+}
+
+function openItemModal(id) {
+  const x = (S.list || []).find((v) => v.id === id);
+  ctx.openItemPop(id, { pinned: true, summary: x ? rowFacts(x) : null });
 }
 
 // 路线不符合哪个条件（符合时返回空串）
@@ -554,6 +581,7 @@ function html(all0) {
   const q = S.q.trim().toLowerCase();
   const list0 = q ? all.filter((x) => ctx.typeName(x.id).toLowerCase().includes(q) || String(x.id) === q) : all;
   const list = sortRows(list0);
+  S.list = list;   // 导出 CSV 用（筛选、排序后的全部行）
   // 筛选 / 排序 / 模式变了回到第 1 页（排除物品不算，免得在后面的页上排除一个就跳回去）
   const pk = JSON.stringify([{ ...F, excl: 0 }, q]);
   if (S.pageKey !== pk) { S.pageKey = pk; S.page = 1; }
@@ -575,9 +603,9 @@ function html(all0) {
     const i = off + i0;
     const r = x.r;
     const cls = r.unit > 0 ? 'up' : 'down';
-    return `<tr data-hr-open="${x.id}"${x.off ? ` class="hr-off" title="不符合条件：${esc(r.miss)} · 点击打开该物品的交易中心比价"` : ' title="打开该物品的交易中心比价"'}>
+    return `<tr data-hr-open="${x.id}"${x.off ? ` class="hr-off" title="不符合条件：${esc(r.miss)} · 点击查看物品详情"` : ' title="查看物品详情"'}>
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${devTip(r) ? ` <b class="hr-tag warn" title="${devTip(r)}">现价偏离</b>` : ''}</small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${devTip(r) ? ` <b class="hr-tag warn" title="${devTip(r)}">现价偏离</b>` : ''}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}</td>
       <td class="num pi-hide-sm">${px(r.buyAt)}</td>
@@ -596,6 +624,7 @@ function html(all0) {
         <button class="btn btn-ghost btn-sm" data-hr-fees title="调整技能与税费">${esc(TF.summary())}</button>
         ${ctx.structs ? `<button class="btn btn-ghost btn-sm" data-hr-structs title="把你有权限的玩家建筑市场加入排行（需绑定 ESI）">玩家建筑市场${ctx.structs.count() ? `（${ctx.structs.count()}）` : ''}</button>` : ''}
         <button class="btn btn-ghost btn-sm" data-hr-custom title="任选星域（可限定星系）的 NPC 市场加入排行">自定义市场${F.custom.length ? `（${F.custom.length}）` : ''}</button>
+        ${list.length ? exportBtnHtml('data-hr-export') : ''}
         <button class="btn btn-ghost btn-sm" data-hr-reload>刷新</button></div>
       ${S.showCustom ? `<div class="ind-rank-row hr-custom">
         <input class="pi-input" data-hr-cregion list="hrRegionList" placeholder="星域" autocomplete="off" aria-label="星域">
@@ -603,7 +632,7 @@ function html(all0) {
         <input class="pi-input" data-hr-csystem placeholder="星系（可不填 = 整个星域）" autocomplete="off" aria-label="星系">
         <button type="button" class="btn btn-primary btn-sm" data-hr-cadd${F.custom.length >= CUSTOM_MAX ? ' disabled' : ''}>添加</button>
         ${F.custom.map((c) => `<span class="ka-chip">${esc(c.sysName ? c.sysName + ' · ' + c.name : c.name)}<button type="button" class="ka-close" data-hr-cdel="${customId(c)}" aria-label="移除">×</button></span>`).join('')}
-        <span class="pi-note">最多 ${CUSTOM_MAX} 个；浏览器直接读该星域全部挂单，大星域要等一会儿。星域里没有交易中心时没有成交量数据，只能算「直接成交」</span></div>` : ''}
+        <span class="pi-note" title="浏览器直接读该星域全部挂单；没有交易中心的星域无成交量数据，只能算直接成交">最多 ${CUSTOM_MAX} 个，大星域较慢</span></div>` : ''}
       <div class="ind-rank-row"><div class="segmented">${[['route', '倒卖路线'], ['demand', '按销量选品'], ['consume', '消耗排行']].map(([v, l]) => `<button type="button" data-hr-kind="${v}" class="${modeKind() === v ? 'active' : ''}">${l}</button>`).join('')}</div></div>
       ${C || D ? '' : `<div class="ind-rank-row">${modePicker('hr', F.mode, F.med)}</div>`}
       ${C ? consumeControls() : D ? demandControls() : `<div class="ind-rank-row">
@@ -629,15 +658,48 @@ function html(all0) {
       ${C ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('use', '消耗额', 'num', '日成交额合计 + 被击毁折合每天的价值')}${th('turn', '日成交额', 'num pi-hide-sm')}${th('units', '日成交量', 'num', '五大交易中心日均成交量合计，悬停看各中心')}${S.data.losses7 ? th('loss', '近 7 天被击毁', 'num', '本站击杀库近 7 天被击毁的数量（舰船与部署物）') : ''}${th('trend', '趋势', 'num pi-hide-sm', '近 7 天日均成交比 30 天')}${th('price', '最便宜的交易中心')}${S.sm.length ? th('markup', '建筑卖价', '', '已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少') : ''}`
     : D ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '进货')}${th('day', '每天利润', 'num')}${th('unit', '每件利润', 'num')}${th('qty', '建议数量', 'num')}${th('turn', '日成交额', 'num', '日均成交量 × 成交均价')}${th('trend', '趋势', 'num pi-hide-sm', '近 7 天日均成交比 30 天')}${th('stock', '库存天数', 'num pi-hide-sm', '目标市场卖单库存够卖几天')}${S.data.losses7 ? th('loss', '近 7 天被击毁', 'num pi-hide-sm', '本站击杀库近 7 天被击毁的数量（舰船与部署物）') : ''}`
     : `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '路线')}${th('buy', '买入价', 'num pi-hide-sm')}${th('sell', '卖出价', 'num pi-hide-sm')}${th('unit', '每件利润', 'num', '同时按这一项为每个物品挑路线')}${th('margin', '利润率', 'num', '同时按这一项为每个物品挑路线')}${th('m3', '每立方', 'num pi-hide-sm', '同时按这一项为每个物品挑路线')}${th('qty', '可做数量', 'num')}${th('cost', '投入', 'num pi-hide-sm')}${th('profit', '预计利润', 'num', '同时按这一项为每个物品挑路线')}`}
-    </tr></thead><tbody>${rows || `<tr><td colspan="11" class="text-muted">${noHist && !C && !D ? (S.histLoading ? '正在读取成交价数据…' : '服务器还没有成交价数据，先换别的方式') : noVol || ((D || C) && !hasVol()) ? '成交量还在读取中，挂单方式暂时算不出可做数量' : C ? '没有符合条件的物品' : D ? demandEmpty() : '没有符合条件的路线'}</td></tr>`}</tbody></table></div>
+    </tr></thead><tbody>${rows || `<tr><td colspan="11" class="text-muted">${noHist && !C && !D ? (S.histLoading ? '正在读取成交价数据…' : '服务器还没有成交价数据，先换别的方式') : noVol || ((D || C) && !hasVol()) ? '成交量读取中…' : C ? '没有符合条件的物品' : D ? demandEmpty() : '没有符合条件的路线'}</td></tr>`}</tbody></table></div>
       ${list.length ? pagerHtml(S.page, pages, list.length, off + 1, off + top.length) : ''}</div>
   </div>`;
+}
+
+// 导出 CSV：按当前模式的列导出筛选、排序后的全部行（ISK 原始数值，百分比写数值）
+function exportRows() {
+  const list = S.list || [];
+  if (!list.length) return;
+  const m = modeKind();
+  const pct = (v) => (v == null ? null : (v - 1) * 100);
+  const base = [['Type ID', (x) => x.id], ['物品', (x) => ctx.typeName(x.id)], ['分类', (x) => x.cat.name]];
+  const miss = F.strict ? [] : [['不符合条件', (x) => (x.off ? x.r.miss || '' : '')]];
+  const loss = S.data.losses7 ? [['近 7 天被击毁', (x) => x.loss || 0]] : [];
+  let cols, name;
+  if (m === 'consume') {
+    name = '交易中心倒卖排行-消耗排行';
+    cols = [...base, ['消耗额', (x) => x.use], ['日成交额', (x) => x.turnover], ['日成交量', (x) => x.units], ...loss,
+      ...(S.data.losses7 ? [['被击毁折合每天', (x) => x.lossIsk || 0]] : []), ['趋势 %', (x) => pct(x.trend)],
+      ['最便宜的交易中心', (x) => (x.cheap ? hubLabel(x.cheap.hub) : '')], ['最低卖价', (x) => x.cheap?.price ?? null], ['卖单数量', (x) => x.cheap?.qty ?? null],
+      ...(S.sm.length ? [['建筑', (x) => x.st?.name ?? ''], ['建筑卖价', (x) => x.st?.price ?? null], ['比交易中心贵 %', (x) => (x.st && x.cheap ? (x.st.price / x.cheap.price - 1) * 100 : null)]] : [])];
+  } else if (m === 'demand') {
+    name = '交易中心倒卖排行-按销量选品';
+    cols = [...base, ['进货方式', (x) => (x.r.mode === 'bs' ? '挂收单' : '直接买')], ['进货地点', (x) => (x.r.local ? x.r.b.name : x.r.a.name)],
+      ['进货价', (x) => x.r.buyAt], ['卖出价', (x) => x.r.sellAt], ['每天利润', (x) => x.r.perDay || 0], ['每件利润', (x) => x.r.unit], ['建议数量', (x) => x.r.qty || 0],
+      ['日成交额', (x) => x.turnover], ['日均成交量', (x) => x.daily], ['趋势 %', (x) => pct(x.trend)], ['库存天数', (x) => (x.soldOut ? 0 : x.stock)],
+      ['无卖单', (x) => (x.soldOut ? '是' : '')], ...loss, ...miss];
+  } else {
+    name = '交易中心倒卖排行-倒卖路线';
+    cols = [...base, ['买入地点', (x) => x.r.a.name], ['卖出地点', (x) => x.r.b.name], ['买入价', (x) => x.r.buyAt], ['卖出价', (x) => x.r.sellAt],
+      ['每件利润', (x) => x.r.unit], ['利润率 %', (x) => x.r.margin * 100], ['每立方利润', (x) => x.r.perM3 ?? null], ['单件体积 m³', (x) => x.r.vol || null],
+      ['可做数量', (x) => x.r.qty || 0], ['投入', (x) => (x.r.qty ? x.r.cost * x.r.qty : 0)], ['预计利润', (x) => x.r.total || 0],
+      ['现价偏离', (x) => (devTip(x.r) ? '是' : '')], ...miss];
+  }
+  const n = exportCsv(name, cols, list);
+  ctx.showToast(`已导出 ${n} 行`, 'success', 1800);
 }
 
 function demandEmpty() {
   const T = targetOf();
   if (T.pending) return `正在读取 ${ctx.esc(T.name)} 的挂单…`;
-  if (!S.data.hubs.includes(T.region)) return `${ctx.esc(T.name)} 所在星域没有交易中心，没有成交量数据，按销量选品算不了`;
+  if (!S.data.hubs.includes(T.region)) return `${ctx.esc(T.name)} 所在星域没有成交量数据`;
   return '没有符合条件的物品';
 }
 const hasVol = () => Object.values(S.data.types).some((r) => r.some((h) => h && h[6] != null));
@@ -659,7 +721,7 @@ function renderSide(all) {
   const cats = [...counts].sort((a, b) => b[1].n - a[1].n || a[1].name.localeCompare(b[1].name, 'zh'));
   const btn = (id, name, n) => `<button type="button" class="ind-side-item${F.cat === id ? ' active' : ''}" data-hr-cat="${id}"><span>${esc(String(name))}</span><small>${n}</small></button>`;
   const top = side.scrollTop;
-  side.innerHTML = `<div class="ind-side-section"><h4>分类 <small>符合条件的物品数</small></h4>${btn(0, '全部分类', total)}${cats.map(([id, c]) => btn(id, c.name, c.n)).join('')}</div>`;
+  side.innerHTML = `<div class="ind-side-section"><h4>分类</h4>${btn(0, '全部分类', total)}${cats.map(([id, c]) => btn(id, c.name, c.n)).join('')}</div>`;
   side.scrollTop = top;
 }
 
@@ -671,7 +733,7 @@ function render(box) {
     return;
   }
   if (!S.data || S.data.loading) {
-    box.innerHTML = `<div class="pi-card"><h3>交易中心倒卖排行</h3><div class="pi-loading">服务器正在汇总五个交易中心的全部挂单${S.data?.progress ? '：' + ctx.esc(S.data.progress) : '…'}</div><p class="pi-note">首次大约需要 1–3 分钟，之后每 30 分钟自动刷新</p></div>`;
+    box.innerHTML = `<div class="pi-card"><h3>交易中心倒卖排行</h3><div class="pi-loading">正在汇总五大交易中心挂单${S.data?.progress ? '：' + ctx.esc(S.data.progress) : '…'}</div><p class="pi-note">首次约需 1–3 分钟</p></div>`;
     S.timer = setTimeout(async () => { await load(true); render(box); }, S.data ? POLL : 0);
     return;
   }
@@ -821,6 +883,7 @@ function bind(box) {
     }
     if (e.target.closest('[data-hr-fees]')) { ctx.TF.openFeeDialog(); return; }
     if (e.target.closest('[data-hr-structs]')) { closeTarget(box); ctx.structs.open(); return; }
+    if (e.target.closest('[data-hr-export]')) { exportRows(); return; }
     if (e.target.closest('[data-hr-reload]')) { load(true).then(() => render(box)); return; }
     const hide = e.target.closest('[data-hr-hide]');
     if (hide) { F.excl = [...new Set([...F.excl, Number(hide.dataset.hrHide)])]; save(); render(box); return; }
@@ -847,7 +910,7 @@ function bind(box) {
       return;
     }
     const row = e.target.closest('[data-hr-open]');
-    if (row) { const m = row.dataset.hrModeOpen || F.mode; if (MODES.some(([k]) => k === m)) setHubMode(m, F.med); ctx.openItem(Number(row.dataset.hrOpen)); }
+    if (row) { const m = row.dataset.hrModeOpen || F.mode; if (MODES.some(([k]) => k === m)) setHubMode(m, F.med); openItemModal(Number(row.dataset.hrOpen)); }
   });
   box.addEventListener('change', (e) => {
     const sel = e.target.closest('[data-hr-sel]');

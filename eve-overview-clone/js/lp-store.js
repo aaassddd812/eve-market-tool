@@ -7,6 +7,7 @@
 // 数据：lp-data.json 由 build_lp.mjs 生成（ESI /loyalty/stores + SDE 中文名）。
 import { SERVER, HUB, HUB_NAME, eveImage } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
+import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 let ctx;   // esc, formatISK, formatNumber, showToast, store, fetchESI, getHubPrices, getMarketPriceMap, esiAuthFetch, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-lp-v1';
@@ -242,10 +243,10 @@ function renderSettings() {
 function needsJita() { return F.price !== 'avg' || F.mat !== 'avg'; }
 
 function priceNote(rows) {
-  if (!needsJita()) return '价格为全服均价（CCP 每日更新），仅供快速比较';
+  if (!needsJita()) return '全服均价估算';
   if (S.loadingJita) return `<span data-lp-progress>${S.progress || `读取${HUB_NAME}行情…`}</span>（暂用全服均价）`;
   const approx = rows.some((r) => r.v.approx);
-  return HUB_NAME + '实时行情' + (approx ? `（部分物品没有${HUB_NAME}挂单，用全服均价代替，标 ≈）` : '');
+  return HUB_NAME + '实时行情' + (approx ? '（≈ 为全服均价）' : '');
 }
 
 // ---------- 兑换项表格 ----------
@@ -259,7 +260,7 @@ function offerRow(r, i, { showCorp = false } = {}) {
   return `
     <tr data-lp-open="${o.id}" class="${open ? 'active' : ''}" title="点击展开明细">
       <td class="pi-rank lp-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${o.bp ? BPC_ICON(o.type) : ICON(o.type)}" alt="" width="28" height="28" loading="lazy"><span>${esc(tName(o.type))}${o.qty > 1 ? `<small>×${ctx.formatNumber(o.qty)}</small>` : ''}${o.bp ? '<small class="ind-tag-bpc" title="蓝图拷贝：按（产物价 − 材料价）× 数量估算，材料效率 0">蓝图</small>' : ''}</span></div>
+      <td><div class="pi-prod"><img src="${o.bp ? BPC_ICON(o.type) : ICON(o.type)}"${o.bp ? '' : ` data-item-pop="${o.type}"`} alt="" width="28" height="28" loading="lazy"><span>${esc(tName(o.type))}${o.qty > 1 ? `<small>×${ctx.formatNumber(o.qty)}</small>` : ''}${o.bp ? '<small class="ind-tag-bpc" title="蓝图拷贝：按（产物价 − 材料价）× 数量估算，材料效率 0">蓝图</small>' : ''}</span></div>
         ${showCorp ? `<div class="lp-corps">${esc(corpName(corps[0]))}${corps.length > 1 ? ` 等 ${corps.length} 家` : ''}</div>` : ''}</td>
       <td class="num">${ctx.formatNumber(o.lp)}</td>
       <td class="num lp-hide-md">${o.isk ? isk(o.isk) : '—'}</td>
@@ -301,12 +302,12 @@ function buyListHtml(o) {
   const n = timesOf(o);
   const mats = o.bp ? o.bp[2].length : 0;
   const btn = (kind, label, count) => `<button type="button" class="btn btn-ghost" data-lp-copy="${kind}:${o.id}"${count ? '' : ' disabled'}>${label}${count ? `（${count} 项）` : ''}</button>`;
-  return `<div class="lp-buy"><h4>复制采购清单 <small>粘贴到游戏「市场 → 批量购买」即可一次买齐</small></h4>
+  return `<div class="lp-buy"><h4>复制采购清单</h4>
     <label class="lp-times">兑换次数 <input type="number" class="pi-input" min="1" max="10000" step="1" value="${n}" data-lp-times="${o.id}" aria-label="兑换次数"></label>
     ${myMax(o) ? `<button type="button" class="link-btn" data-lp-max="${o.id}">按我的 LP 最多 ${ctx.formatNumber(myMax(o))} 次</button>` : ''}
     <p class="pi-note">共需 LP <b>${ctx.formatNumber(o.lp * n)}</b> · ISK <b>${ctx.formatISK(o.isk * n)}</b>${o.ak ? ` · AK <b>${ctx.formatNumber(o.ak * n)}</b>` : ''}</p>
     <div class="lp-buy-btns">
-      ${o.req.length ? btn('req', '复制兑换所需物品', o.req.length) : '<span class="text-muted">这个兑换不需要额外物品</span>'}
+      ${o.req.length ? btn('req', '复制兑换所需物品', o.req.length) : '<span class="text-muted">无需额外物品</span>'}
       ${o.bp ? btn('mats', '复制制造材料', mats) : ''}
       ${o.bp && o.req.length ? btn('all', '复制全部（合并同类）', buyLines(o, 'all').length) : ''}
       ${o.req.length || o.bp ? `<button type="button" class="btn btn-ghost" data-lp-cart="${o.bp && o.req.length ? 'all' : o.req.length ? 'req' : 'mats'}:${o.id}" title="${o.bp && o.req.length ? '兑换所需物品与制造材料' : o.req.length ? '兑换所需物品' : '制造材料'}加入购物车">加入购物车</button>` : ''}
@@ -317,7 +318,7 @@ function offerDetail(o, v) {
   const esc = ctx.esc, isk = ctx.formatISK;
   const line = (id, q, side) => {
     const p = price(id, side);
-    return `<li><img src="${ICON(id)}" alt="" width="20" height="20" loading="lazy"><span>${esc(tName(id))} × ${ctx.formatNumber(q)}</span><b>${p.v == null ? '无价格' : (side !== 'avg' && p.src === 'avg' ? '≈' : '') + isk(p.v * q)}</b></li>`;
+    return `<li><img src="${ICON(id)}" data-item-pop="${id}" alt="" width="20" height="20" loading="lazy"><span>${esc(tName(id))} × ${ctx.formatNumber(q)}</span><b>${p.v == null ? '无价格' : (side !== 'avg' && p.src === 'avg' ? '≈' : '') + isk(p.v * q)}</b></li>`;
   };
   const corps = D.corpsByOffer.get(o.id) || [];
   const parts = [];
@@ -420,11 +421,36 @@ function renderRank(body) {
       ${filterBar('rankQ', sel)}
       <p class="pi-note">${needsJita() && !refined && !S.loadingJita ? '全服均价估算' : priceNote(top.slice(0, REFINE_TOP))}
         ${needsJita() && !refined ? `<button class="btn btn-ghost ind-refine" data-lp-refine ${S.loadingJita ? 'disabled' : ''}>${S.loadingJita ? '精算中…' : `用${HUB_NAME}行情精算前 ${REFINE_TOP} 名`}</button>` : ''}
-        · 共 ${rows.length} 项${rows.length > RANK_LIMIT ? `，显示前 ${RANK_LIMIT}` : ''}</p>
+        · 共 ${rows.length} 项${rows.length > RANK_LIMIT ? `，显示前 ${RANK_LIMIT}` : ''}
+        ${rows.length ? exportBtnHtml('data-lp-export') : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap lp-table-wrap"><table class="pi-table lp-table">${tableHead()}
       <tbody>${top.map((r, i) => offerRow(r, i, { showCorp: true })).join('') || '<tr><td colspan="9" class="text-muted">没有符合条件的兑换项</td></tr>'}</tbody></table></div></div>`;
   fillVolumes(body, top);
+}
+
+// 导出 CSV：当前筛选与排序下的全部兑换项（不只显示的前 RANK_LIMIT 名）；ISK 为原始数值，无价格的留空
+function exportRank() {
+  const src = (v) => (v.missing ? '无价格' : needsJita() && !v.approx ? HUB_NAME + '行情' : '全服均价');
+  const val = (v, k) => (v.missing ? null : v[k]);
+  const corps = (o) => D.corpsByOffer.get(o.id) || [];
+  const n = exportCsv('LP 全服排行', [
+    ['#', (r) => r.i + 1],
+    ['兑换品', (r) => tName(r.o.type)],
+    ['Type ID', (r) => r.o.type],
+    ['数量', (r) => r.o.qty],
+    ['蓝图', (r) => (r.o.bp ? '是' : '否')],
+    ['军团', (r) => corpName(corps(r.o)[0])],
+    ['可兑换军团数', (r) => corps(r.o).length],
+    ['LP', (r) => r.o.lp],
+    ['ISK 费用', (r) => r.o.isk],
+    ['所需物品', (r) => r.v.reqCost],
+    ['产物价值', (r) => val(r.v, 'revenue')],
+    ['利润', (r) => val(r.v, 'profit')],
+    ['ISK/LP', (r) => val(r.v, 'iskLp')],
+    ['价格来源', (r) => src(r.v)]
+  ], rankRows().map((r, i) => ({ ...r, i })));
+  ctx.showToast(`已导出 ${n} 行`, 'success', 1800);
 }
 
 // ---------- 我的 LP ----------
@@ -437,7 +463,7 @@ async function loadMine() {
     S.mine = (Array.isArray(list) ? list : []).sort((a, b) => b.loyalty_points - a.loyalty_points);
   } catch (error) {
     S.mineError = error.status === 403 || /scope/i.test(error.esiError || '')
-      ? `当前 ESI 授权不包含 ${LP_SCOPE}，请在个人中心重新绑定（服务端也需开启该授权范围）。`
+      ? `授权缺少 ${LP_SCOPE}，请重新绑定 ESI`
       : '读取失败：' + error.message;
   } finally {
     S.mineLoading = false;
@@ -458,7 +484,7 @@ function bestOffer(corp) {
 
 function renderMine(body) {
   if (!ctx.hasEsiToken()) {
-    body.innerHTML = '<div class="pi-card"><p class="text-muted">在「个人中心」绑定角色后查看 LP 余额</p></div>';
+    body.innerHTML = '<div class="pi-card"><p class="text-muted">需要先绑定 ESI</p></div>';
     return;
   }
   if (!S.mine && !S.mineError) {
@@ -522,7 +548,7 @@ function renderSide() {
     }
     el.innerHTML = nav +
       `<div class="ind-side-section"><h4>军团 <small>${corps.length}</small></h4>${corps.map(item).join('') || '<p class="ind-side-empty">没有匹配的军团</p>'}</div>` +
-      `<div class="ind-side-section"><h4>兑换品 <small>${items.length >= 40 ? '前 40 个' : items.length}</small></h4>${items.map((o) => `<button type="button" class="ind-side-item" data-side-item="${ctx.esc(tName(o.type))}"><img src="${o.bp ? BPC_ICON(o.type) : ICON(o.type)}" alt="" width="22" height="22" loading="lazy"><span>${ctx.esc(tName(o.type))}</span><small>${(D.corpsByOffer.get(o.id) || []).length} 家</small></button>`).join('') || '<p class="ind-side-empty">没有匹配的兑换品</p>'}</div>`;
+      `<div class="ind-side-section"><h4>兑换品 <small>${items.length >= 40 ? '前 40 个' : items.length}</small></h4>${items.map((o) => `<button type="button" class="ind-side-item" data-side-item="${ctx.esc(tName(o.type))}"><img src="${o.bp ? BPC_ICON(o.type) : ICON(o.type)}"${o.bp ? '' : ` data-item-pop="${o.type}"`} alt="" width="22" height="22" loading="lazy"><span>${ctx.esc(tName(o.type))}</span><small>${(D.corpsByOffer.get(o.id) || []).length} 家</small></button>`).join('') || '<p class="ind-side-empty">没有匹配的兑换品</p>'}</div>`;
     return;
   }
   const byFaction = new Map();
@@ -588,6 +614,7 @@ function onClick(e) {
     refreshBody();
     return;
   }
+  if (e.target.closest('[data-lp-export]')) { exportRank(); return; }
   if (e.target.closest('[data-lp-mine-reload]')) { S.mine = null; S.mineError = null; refreshBody(); return; }
   const max = e.target.closest('[data-lp-max]');
   if (max) { const o = offer(max.dataset.lpMax); setTimes(o.id, myMax(o), max); return; }

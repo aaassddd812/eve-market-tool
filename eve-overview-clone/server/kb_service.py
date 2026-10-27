@@ -7,7 +7,7 @@
   - 价格：ESI 伏尔戈市场全量订单，取吉他 4-4 最低卖价与最高收购价的中间值
   - 旗舰等吉他没有卖单的物品：每 6 小时扫描全服公开合同，取扣除附带物品市场价后的最低价（合同价变化时重算相关历史击杀）
 
-接口（只读，仅监听 127.0.0.1，由 nginx 反代 /api/kb/）
+接口（除钱包存档外只读，仅监听 127.0.0.1，由 nginx 反代 /api/kb/）
   GET /api/kb/status                          数据覆盖范围与运行状态
   GET /api/kb/feed?cursor=&limit=&ship=&system=&region=&character=&corporation=&alliance=&side=
                                               击杀列表（最新在前）；side=kills|losses|all
@@ -31,6 +31,9 @@
   GET /api/kb/contracts/<id>                  存档合同详情与物品
   GET /api/kb/contracts/status                存档进度与各状态数量
   GET /api/kb/couriers                        全服公开快递合同（同一份快照，字段同 ESI /contracts/public/{region_id}/，另带 region_id、start_system_id）
+  GET /api/kb/obsvol?server=tq&type=ID&regions=  本站观察成交量：交易中心挂单相邻快照的减少量 / 到期前消失量，按 UTC 日期累计（保留 31 天）
+  POST /api/kb/wallet/sync                    钱包成交存档：带浏览器的 ESI 令牌（Authorization），同步并返回某角色某物品的成交 / 税费 / 工业任务
+  POST /api/kb/wallet/delete                  删除某角色的全部钱包存档（同样校验令牌）
 
 用法
   python3 kb_service.py --db kb.sqlite [--port 8291] [--days 30] [--live auto|r2z2|poll|off] [--static DIR]
@@ -40,6 +43,7 @@
 import argparse
 import array
 import bz2
+import calendar
 import collections
 import concurrent.futures
 import csv
@@ -237,13 +241,14 @@ def http_get(url, timeout=60, data=None, headers=None):
         return body, res.headers
 
 
-def get_json(url, timeout=60, retries=3, **kw):
+def get_json(url, timeout=60, retries=3, fatal=(400, 404), **kw):
+    """fatal：遇到这些 HTTP 状态码不重试，直接抛出（带令牌的 ESI 请求要把 401 / 403 当作结果）"""
     for attempt in range(retries):
         try:
             body, headers = http_get(url, timeout=timeout, **kw)
             return json.loads(body) if body else None, headers
         except urllib.error.HTTPError as e:
-            if e.code in (400, 404):
+            if e.code in fatal:
                 raise
             err = e
             if e.code == 429:                   # ESI 限流：按 Retry-After 等待
@@ -569,6 +574,8 @@ class Workers:
         hub_buy = {h: {} for h in HUB_STATIONS}
         station_hub = {st: h for h, st in HUB_STATIONS.items()}
         books = {h: {} for h in HUB_STATIONS}        # 交易中心挂单明细，给倒卖排行用（宁静服不再单独读订单）
+        obs = getattr(self.store, "obs", None)
+        snap = obs.snapshot("tq") if obs else None   # 本站观察成交量：交易中心挂单快照
 
         def handle(orders):
             for o in orders:
@@ -576,6 +583,8 @@ class Workers:
                 h = station_hub.get(o["location_id"])
                 if h:
                     HubArbitrage.add_order(books[h], o)
+                    if snap:
+                        snap.add(o, h)
                 if o["is_buy_order"]:
                     if p > uni_buy.get(t, 0):
                         uni_buy[t] = p
@@ -632,6 +641,13 @@ class Workers:
         log.info("贸易中心 / 全宇宙价格已更新：共 %d 页订单，%d 种物品%s", pages, len(set(uni_sell) | set(uni_buy)),
                  f"，{len(failed)} 个星域读取失败" if failed else "")
         arb = getattr(self.store, "arb", None)
+        # 有交易中心星域没读成功时丢弃本轮快照（保留上一份），否则没读到的订单会被当成消失
+        if snap and not set(failed) & set(HUB_STATIONS):
+            try:
+                obs.commit(snap)
+            except Exception:
+                log.exception("观察成交量统计失败")
+        del snap
         if arb and not set(failed) & set(HUB_STATIONS):
             threading.Thread(target=arb.ingest, args=("tq", books), daemon=True).start()
 
@@ -3004,12 +3020,16 @@ class HubArbitrage:
         hubs = list(cfg["hubs"].items())
         station_hub = {stn: rid for rid, stn in hubs}
         books = {rid: {} for rid, _ in hubs}           # 星域 -> 物品 -> ([卖单], [收单])，元素 (价格, 数量)
+        obs = getattr(self.store, "obs", None)
+        snap = obs.snapshot(server) if obs else None   # 本站观察成交量（国服只在这个循环运行时有数据）
 
         def handle(orders):
             for o in orders:
                 rid = station_hub.get(o["location_id"])
                 if rid is not None:
                     self.add_order(books[rid], o)
+                    if snap:
+                        snap.add(o, rid)
 
         for i, (rid, _) in enumerate(hubs):
             first, headers = get_json(self.url(cfg, f"/markets/{rid}/orders/", order_type="all", page=1))
@@ -3023,6 +3043,12 @@ class HubArbitrage:
                 for n, data in enumerate(pool.map(page, range(2, pages + 1)), 2):
                     handle(data)
                     st["progress"] = f"读取订单：第 {i + 1}/{len(hubs)} 个交易中心 {n}/{pages} 页"
+        if snap:                                       # 读取失败时上面已抛出，不会提交不完整的快照
+            try:
+                obs.commit(snap)
+            except Exception:
+                log.exception("观察成交量统计失败（%s）", server)
+            del snap
         self.ingest(server, books)
 
     def ingest(self, server, books):
@@ -3715,8 +3741,347 @@ class FwTracker:
         return out
 
 
+# ---------------------------------------------------------------- 本站观察成交量
+# 每次读到交易中心挂单快照，按 order_id 与上一份对比：剩余数量减少的部分计入 dec，到期前消失的订单的剩余数量计入 gone
+# （成交完或撤单，无法区分）；新出现的订单不计。上一份快照只放内存（array 紧凑存储），重启后第一份只作基准
+OBS_KEEP_DAYS = 31
+
+
+class ObsSnapshot:
+    """一份交易中心挂单快照（收集中）：region_ids 为该服务器交易中心星域，顺序即星域序号"""
+    def __init__(self, server, region_ids):
+        self.server = server
+        self.regions = list(region_ids)
+        self.index = {rid: k for k, rid in enumerate(self.regions)}
+        self.ids, self.remain, self.types = array.array("q"), array.array("l"), array.array("l")
+        self.flags, self.expires = array.array("b"), array.array("l")   # 星域序号 × 2 + 收单标记；到期 Unix 秒
+        self.read_at = {}          # 星域序号 -> 第一次读到该星域挂单的时间（判断「到期前消失」用）
+
+    def add(self, o, rid):
+        k = self.index[rid]
+        if k not in self.read_at:
+            self.read_at[k] = time.time()
+        s = o["issued"]
+        issued = calendar.timegm((int(s[:4]), int(s[5:7]), int(s[8:10]), int(s[11:13]), int(s[14:16]), int(s[17:19])))
+        self.ids.append(o["order_id"])
+        self.remain.append(o["volume_remain"])
+        self.types.append(o["type_id"])
+        self.flags.append(k * 2 + bool(o["is_buy_order"]))
+        self.expires.append(issued + int(o.get("duration") or 0) * 86400)
+
+    def sorted(self):
+        """按 order_id 排序并去重（翻页期间订单移动可能被读到两次），返回 (ids, remain, types, flags, expires)"""
+        out = tuple(array.array(a.typecode) for a in (self.ids, self.remain, self.types, self.flags, self.expires))
+        src = (self.ids, self.remain, self.types, self.flags, self.expires)
+        last = None
+        for i in sorted(range(len(self.ids)), key=self.ids.__getitem__):
+            if self.ids[i] == last:
+                continue
+            last = self.ids[i]
+            for a, b in zip(out, src):
+                a.append(b[i])
+        return out
+
+
+class ObsVolume:
+    def __init__(self, store):
+        self.store = store
+        self.lock = threading.Lock()
+        self.prev = {}             # server -> (星域列表, 排序后的快照数组)
+        self.pruned = None         # 上次清理旧数据的日期
+        c = store.conn()
+        with store.write_lock:
+            c.execute("CREATE TABLE IF NOT EXISTS obs_volume(server TEXT, region INTEGER, type_id INTEGER, day TEXT, sell_dec INTEGER, buy_dec INTEGER, "
+                      "sell_gone INTEGER, buy_gone INTEGER, PRIMARY KEY(server, region, type_id, day)) WITHOUT ROWID")
+            # 每个服务器每个星域：第一次有对比结果的时间、最近一次快照时间（Unix 秒）
+            c.execute("CREATE TABLE IF NOT EXISTS obs_state(server TEXT, region INTEGER, since INTEGER, last INTEGER, PRIMARY KEY(server, region)) WITHOUT ROWID")
+            c.commit()
+
+    def snapshot(self, server):
+        return ObsSnapshot(server, ARB_SERVERS[server]["hubs"])
+
+    def commit(self, snap):
+        """一份完整快照（全部交易中心星域都读成功）与上一份对比，结果累加进 obs_volume"""
+        now = time.time()
+        cur = snap.sorted()
+        n_new = len(cur[0])
+        snap.ids = snap.remain = snap.types = snap.flags = snap.expires = None
+        with self.lock:
+            prev = self.prev.get(snap.server)
+            self.prev[snap.server] = (snap.regions, cur)
+        if prev and prev[0] != snap.regions:
+            prev = None
+        agg = {}                   # (星域序号, 物品) -> [卖单减少, 收单减少, 卖单消失, 收单消失]
+        if prev:
+            pi, pr, pt, pf, pe = prev[1]
+            ni, nr = cur[0], cur[1]
+            present = {f >> 1 for f in cur[3]}      # 本轮一单都没有的星域不算消失（防止异常的空结果）
+            j, nn = 0, len(ni)
+            for i in range(len(pi)):
+                oid = pi[i]
+                while j < nn and ni[j] < oid:
+                    j += 1
+                f = pf[i]
+                if j < nn and ni[j] == oid:
+                    d = pr[i] - nr[j]
+                    if d <= 0:
+                        continue
+                    k = f & 1
+                elif f >> 1 in present and pe[i] > snap.read_at.get(f >> 1, now):
+                    d, k = pr[i], 2 + (f & 1)
+                else:
+                    continue
+                v = agg.get((f >> 1, pt[i]))
+                if v is None:
+                    v = agg[(f >> 1, pt[i])] = [0, 0, 0, 0]
+                v[k] += d
+        day = dt.datetime.fromtimestamp(now, dt.timezone.utc).strftime("%Y-%m-%d")
+        rows = [(snap.server, snap.regions[k], t, day, *v) for (k, t), v in agg.items()]
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.executemany("INSERT INTO obs_volume VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(server, region, type_id, day) DO UPDATE SET "
+                          "sell_dec = sell_dec + excluded.sell_dec, buy_dec = buy_dec + excluded.buy_dec, "
+                          "sell_gone = sell_gone + excluded.sell_gone, buy_gone = buy_gone + excluded.buy_gone", rows)
+            c.executemany("INSERT INTO obs_state VALUES(?,?,?,?) ON CONFLICT(server, region) DO UPDATE SET "
+                          "since = COALESCE(since, excluded.since), last = excluded.last",
+                          [(snap.server, rid, int(now) if prev else None, int(now)) for rid in snap.regions])
+            if self.pruned != day:
+                cutoff = dt.datetime.fromtimestamp(now - OBS_KEEP_DAYS * 86400, dt.timezone.utc).strftime("%Y-%m-%d")
+                c.execute("DELETE FROM obs_volume WHERE day < ?", (cutoff,))
+                self.pruned = day
+            c.commit()
+        log.info("观察成交量（%s）：%d 条交易中心挂单%s", snap.server, n_new, f"，{len(rows)} 种物品 / 星域有变化" if prev else "（基准快照）")
+
+    def query(self, q):
+        server = q.get("server") or "tq"
+        if server not in ARB_SERVERS:
+            raise ValueError("server 只能是 " + " / ".join(ARB_SERVERS))
+        try:
+            type_id = int(q.get("type") or "")
+            hubs = list(ARB_SERVERS[server]["hubs"])
+            regions = [int(x) for x in q["regions"].split(",") if x.strip()] if q.get("regions") else hubs
+        except ValueError:
+            raise ValueError("type / regions 应为数字") from None
+        if type_id <= 0 or not regions or len(regions) > len(hubs) or not set(regions) <= set(hubs):
+            raise ValueError("type 或 regions 无效（regions 只能是该服务器的交易中心星域）")
+        regions = list(dict.fromkeys(regions))
+        cutoff = dt.datetime.fromtimestamp(time.time() - (OBS_KEEP_DAYS - 1) * 86400, dt.timezone.utc).strftime("%Y-%m-%d")
+        c = self.store.conn()
+        marks = ",".join("?" * len(regions))
+        out = {"server": server, "since": {}, "last": {}, "regions": {str(r): [] for r in regions}}
+        for rid, since, last in c.execute(f"SELECT region, since, last FROM obs_state WHERE server=? AND region IN ({marks})", (server, *regions)):
+            out["since"][str(rid)] = iso(since) if since else None
+            out["last"][str(rid)] = iso(last) if last else None
+        for rid, *row in c.execute(f"SELECT region, day, sell_dec, buy_dec, sell_gone, buy_gone FROM obs_volume WHERE server=? AND type_id=? AND day >= ? "
+                                   f"AND region IN ({marks}) ORDER BY day", (server, type_id, cutoff, *regions)):
+            out["regions"][str(rid)].append(row)
+        return out
+
+
+# ---------------------------------------------------------------- 钱包成交存档
+# 浏览器把自己的 ESI 令牌带过来，服务器代为读取钱包成交 / 税费 / 订单 / 工业任务并长期存档（ESI 只给最近 30 天左右）。
+# 令牌只用于本次请求，不落盘、不写日志；内存里只记令牌哈希 -> 已校验的角色
+WALLET_SYNC_GAP = 15 * 60       # 同一角色两次同步的最小间隔
+WALLET_FORCE_GAP = 60           # 手动强制同步的最小间隔
+WALLET_AUTH_TTL = 15 * 60       # 令牌校验结果缓存
+WALLET_RATE = 30                # 每个 IP 每分钟最多请求次数
+WALLET_PAGES_MAX = 100          # 分页接口最多读多少页
+WALLET_SCHEMA = """
+CREATE TABLE IF NOT EXISTS wallet_tx(server TEXT, tx_id INTEGER, char_id INTEGER, date INTEGER, type_id INTEGER, qty INTEGER, price REAL,
+  is_buy INTEGER, location_id INTEGER, client_id INTEGER, PRIMARY KEY(server, tx_id));
+CREATE INDEX IF NOT EXISTS wallet_tx_type ON wallet_tx(server, char_id, type_id);
+-- 交易税（context_id = 成交 tx_id）与中介费（context_id = 订单 order_id），amount 为正数
+CREATE TABLE IF NOT EXISTS wallet_fee(server TEXT, ref_id INTEGER, char_id INTEGER, date INTEGER, kind TEXT, amount REAL, context_id INTEGER, PRIMARY KEY(server, ref_id));
+CREATE INDEX IF NOT EXISTS wallet_fee_ctx ON wallet_fee(server, char_id, context_id);
+CREATE TABLE IF NOT EXISTS wallet_order(server TEXT, order_id INTEGER, char_id INTEGER, type_id INTEGER, PRIMARY KEY(server, order_id));
+-- 制造（1）/ 反应（9、11）任务，只存已完成（delivered / ready）；qty = 流程 × 每流程产量
+CREATE TABLE IF NOT EXISTS ind_job(server TEXT, job_id INTEGER, char_id INTEGER, product_type_id INTEGER, activity_id INTEGER, runs INTEGER, qty INTEGER,
+  status TEXT, date INTEGER, location_id INTEGER, PRIMARY KEY(server, job_id));
+CREATE INDEX IF NOT EXISTS ind_job_type ON ind_job(server, char_id, product_type_id);
+-- 每个角色最近一次同步时间、存档最早成交时间、令牌权限（位：1 订单，2 工业任务）
+CREATE TABLE IF NOT EXISTS wallet_sync(server TEXT, char_id INTEGER, at INTEGER, first_date INTEGER, scopes INTEGER, PRIMARY KEY(server, char_id));
+"""
+WALLET_TABLES = ("wallet_tx", "wallet_fee", "wallet_order", "ind_job", "wallet_sync")
+
+
+class EsiUnavailable(Exception):
+    """ESI 读取失败（5xx / 超时等），与令牌无效（PermissionError）区分"""
+
+
+class Wallet:
+    def __init__(self, store, industry=None):
+        self.store, self.industry = store, industry
+        self.lock = threading.Lock()
+        self.auth = {}             # sha256(令牌) -> (server, 角色, 过期时间)
+        self.char_locks = {}       # (server, 角色) -> 锁：同一角色的同步串行，避免并发重复读 ESI
+        c = store.conn()
+        with store.write_lock:
+            c.executescript(WALLET_SCHEMA)
+            c.commit()
+
+    @staticmethod
+    def params(body):
+        server = body.get("server")
+        if server not in ARB_SERVERS:
+            raise ValueError("server 只能是 " + " / ".join(ARB_SERVERS))
+        char, type_id = body.get("character_id"), body.get("type_id")
+        if type(char) is not int or char <= 0 or (type_id is not None and (type(type_id) is not int or type_id <= 0)):
+            raise ValueError("character_id / type_id 应为正整数")
+        return server, char, type_id, body.get("force") is True
+
+    def esi(self, server, path, token, **params):
+        cfg = ARB_SERVERS[server]
+        qs = urllib.parse.urlencode(params)
+        url = f"{cfg['esi']}{path}?" + "&".join(x for x in (qs, cfg["qs"]) if x)
+        try:
+            return get_json(url, timeout=30, retries=2, fatal=(400, 401, 403, 404), headers={"Authorization": f"Bearer {token}"})
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                raise PermissionError(e.code) from None
+            raise EsiUnavailable(f"ESI 返回 {e.code}") from None
+        except Exception as e:
+            raise EsiUnavailable(f"ESI 读取失败：{type(e).__name__}") from None
+
+    def pages(self, server, path, token, **params):
+        first, headers = self.esi(server, path, token, page=1, **params)
+        out = list(first or [])
+        for n in range(2, min(int(headers.get("X-Pages") or 1), WALLET_PAGES_MAX) + 1):
+            data, _ = self.esi(server, path, token, page=n, **params)
+            out += data or []
+        return out
+
+    def char_lock(self, server, char):
+        with self.lock:
+            now = time.time()
+            if len(self.auth) > 10000:
+                self.auth = {k: v for k, v in self.auth.items() if v[2] > now}
+            return self.char_locks.setdefault((server, char), threading.Lock())
+
+    def verify(self, key, server, char, token):
+        """用令牌读钱包成交：ESI 返回 200 才认为令牌属于这个角色。返回成交列表"""
+        try:
+            tx, _ = self.esi(server, f"/characters/{char}/wallet/transactions/", token)
+        except PermissionError:
+            self.auth.pop(key, None)
+            raise
+        self.auth[key] = (server, char, time.time() + WALLET_AUTH_TTL)
+        return tx or []
+
+    def authed(self, key, server, char):
+        a = self.auth.get(key)
+        return bool(a) and a[0] == server and a[1] == char and a[2] > time.time()
+
+    def sync(self, body, token):
+        server, char, type_id, force = self.params(body)
+        key = hashlib.sha256(token.encode()).hexdigest()
+        c = self.store.conn()
+        stale = None
+        with self.char_lock(server, char):
+            row = c.execute("SELECT at FROM wallet_sync WHERE server=? AND char_id=?", (server, char)).fetchone()
+            now = time.time()
+            due = row is None or now - row[0] >= WALLET_SYNC_GAP or (force and now - row[0] >= WALLET_FORCE_GAP)
+            authed = self.authed(key, server, char)
+            if due or not authed:
+                try:
+                    tx = self.verify(key, server, char, token)
+                    if due:
+                        self.fetch(server, char, token, tx)
+                except EsiUnavailable as e:
+                    # 没法确认身份（令牌没校验过）或还没有存档时不返回数据
+                    if row is None or not self.authed(key, server, char):
+                        raise
+                    stale = str(e)
+        out = self.result(server, char, type_id)
+        if stale:
+            out.update(stale=True, error=stale)
+        return out
+
+    def fetch(self, server, char, token, tx):
+        """读取并存档：成交（已读到）、税费、订单物品、工业任务"""
+        base = f"/characters/{char}"
+        tx_rows = [(server, t["transaction_id"], char, epoch(t["date"]), t["type_id"], t["quantity"], t["unit_price"], int(bool(t.get("is_buy"))),
+                    t.get("location_id"), t.get("client_id")) for t in tx]
+        self.write(server, char, tx_rows)            # 成交先存（后面的读取失败也不丢）
+        fees = [(server, e["id"], char, epoch(e["date"]), "tax" if e["ref_type"] == "transaction_tax" else "broker", abs(e.get("amount") or 0), e.get("context_id"))
+                for e in self.pages(server, base + "/wallet/journal/", token) if e.get("ref_type") in ("transaction_tax", "brokers_fee")]
+        scopes = 3
+        orders = []
+        try:
+            for path in ("/orders/", "/orders/history/"):
+                orders += [(server, o["order_id"], char, o["type_id"]) for o in self.pages(server, base + path, token)]
+        except PermissionError:                     # 缺 esi-markets.read_character_orders.v1
+            scopes &= ~1
+        jobs = []
+        try:
+            data, _ = self.esi(server, base + "/industry/jobs/", token, include_completed="true")
+            bp = {}
+            if self.industry:
+                try:
+                    if self.industry.data is None:
+                        self.industry.ensure()
+                    bp = self.industry.data["bp"]
+                except Exception as e:
+                    log.warning("钱包同步：读取蓝图数据失败：%s", e)
+            for j in data or []:
+                if j.get("activity_id") in (1, 9, 11) and j.get("status") in ("delivered", "ready") and j.get("product_type_id"):
+                    runs = j.get("runs") or 0
+                    per = (bp.get(j["product_type_id"]) or [None, 1])[1] or 1
+                    jobs.append((server, j["job_id"], char, j["product_type_id"], j["activity_id"], runs, runs * per, j["status"],
+                                 epoch(j["end_date"]) if j.get("end_date") else None, j.get("output_location_id") or j.get("station_id")))
+        except PermissionError:                     # 缺 esi-industry.read_character_jobs.v1
+            scopes &= ~2
+        self.write(server, char, tx_rows, fees, orders, jobs, scopes)
+        log.info("钱包同步（%s 角色 %d）：成交 %d、税费 %d、订单 %d、工业任务 %d", server, char, len(tx_rows), len(fees), len(orders), len(jobs))
+
+    def write(self, server, char, tx, fees=(), orders=(), jobs=(), scopes=None):
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.executemany("INSERT OR IGNORE INTO wallet_tx VALUES(?,?,?,?,?,?,?,?,?,?)", tx)
+            c.executemany("INSERT OR IGNORE INTO wallet_fee VALUES(?,?,?,?,?,?,?)", fees)
+            c.executemany("INSERT OR IGNORE INTO wallet_order VALUES(?,?,?,?)", orders)
+            c.executemany("INSERT INTO ind_job VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(server, job_id) DO UPDATE SET "
+                          "status = excluded.status, date = excluded.date, runs = excluded.runs, qty = excluded.qty, location_id = excluded.location_id", jobs)
+            if scopes is not None:
+                first = c.execute("SELECT MIN(date) FROM wallet_tx WHERE server=? AND char_id=?", (server, char)).fetchone()[0]
+                c.execute("INSERT INTO wallet_sync VALUES(?,?,?,?,?) ON CONFLICT(server, char_id) DO UPDATE SET "
+                          "at = excluded.at, first_date = excluded.first_date, scopes = excluded.scopes", (server, char, int(time.time()), first, scopes))
+            c.commit()
+
+    def result(self, server, char, type_id):
+        c = self.store.conn()
+        row = c.execute("SELECT at, first_date, scopes FROM wallet_sync WHERE server=? AND char_id=?", (server, char)).fetchone()
+        at, first, scopes = row or (None, None, 3)
+        out = {"character_id": char, "synced_at": iso(at) if at else None, "first_date": iso(first) if first else None,
+               "scopes": {"orders": bool(scopes & 1), "jobs": bool(scopes & 2)}}
+        if type_id:
+            out["tx"] = [list(r) for r in c.execute("SELECT tx_id, date, qty, price, is_buy, location_id FROM wallet_tx WHERE server=? AND char_id=? AND type_id=? "
+                                                     "ORDER BY date, tx_id", (server, char, type_id))]
+            out["fees"] = [list(r) for r in c.execute(
+                "SELECT f.date, f.kind, f.amount FROM wallet_fee f JOIN wallet_tx t ON t.server = f.server AND t.tx_id = f.context_id "
+                "WHERE f.server=? AND f.char_id=? AND f.kind='tax' AND t.type_id=? "
+                "UNION ALL SELECT f.date, f.kind, f.amount FROM wallet_fee f JOIN wallet_order o ON o.server = f.server AND o.order_id = f.context_id "
+                "WHERE f.server=? AND f.char_id=? AND f.kind='broker' AND o.type_id=? ORDER BY 1",
+                (server, char, type_id, server, char, type_id))]
+            out["jobs"] = [list(r) for r in c.execute("SELECT job_id, date, qty, runs, activity_id, status, location_id FROM ind_job "
+                                                       "WHERE server=? AND char_id=? AND product_type_id=? ORDER BY date, job_id", (server, char, type_id))]
+        return out
+
+    def delete(self, body, token):
+        server, char, _, _ = self.params(body)
+        key = hashlib.sha256(token.encode()).hexdigest()
+        with self.char_lock(server, char):
+            if not self.authed(key, server, char):
+                self.verify(key, server, char, token)
+            c = self.store.conn()
+            with self.store.write_lock:
+                n = sum(c.execute(f"DELETE FROM {t} WHERE server=? AND char_id=?", (server, char)).rowcount for t in WALLET_TABLES)
+                c.commit()
+        log.info("钱包存档已删除（%s 角色 %d）：%d 行", server, char, n)
+        return {"deleted": n}
+
+
 class RateLimiter:
-    """按 IP 的令牌桶：容量 rate，每秒恢复 rate / 60 个（只用于深渊装备导入）"""
+    """按 IP 的令牌桶：容量 rate，每秒恢复 rate / 60 个（用于深渊装备导入、钱包存档）"""
     def __init__(self, rate):
         self.rate, self.buckets, self.lock = rate, {}, threading.Lock()
 
@@ -3814,7 +4179,8 @@ def make_handler(api, static_dir, industry, abyssal):
     post_limiter = RateLimiter(ABYSSAL_POST_RATE)
     routes = {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "feed": api.feed, "top": api.top, "summary": api.summary,
               "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits, "couriers": api.couriers,
-              "contracts": lambda q: api.pc.list(q), "contracts/status": lambda q: api.pc.info(q)}
+              "contracts": lambda q: api.pc.list(q), "contracts/status": lambda q: api.pc.info(q), "obsvol": lambda q: api.obs.query(q)}
+    wallet_limiter = RateLimiter(WALLET_RATE)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -3874,9 +4240,44 @@ def make_handler(api, static_dir, industry, abyssal):
                 log.exception("开放接口错误 %s", url.path)
                 return err(500, "服务器内部错误")
 
+        def wallet(self, path):
+            # 钱包成交存档（同源调用，不带 CORS 头）；令牌只在本次请求里使用，不写日志
+            if path not in ("/api/kb/wallet/sync", "/api/kb/wallet/delete"):
+                return self.send_json(404, {"error": "not found"})
+            ok, _, retry = wallet_limiter.take(self.client_ip())
+            if not ok:
+                return self.send_json(429, {"error": f"请求太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            auth = self.headers.get("Authorization") or ""
+            token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+            if not re.fullmatch(r"[A-Za-z0-9._~+/=-]{1,4096}", token):
+                return self.send_json(403, {"error": "令牌无效或缺少钱包权限"})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 4096:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "请求体应为 JSON：{server, character_id, type_id, force}"})
+            try:
+                fn = api.wallet.sync if path.endswith("/sync") else api.wallet.delete
+                return self.send_json(200, fn(body, token))
+            except PermissionError:
+                return self.send_json(403, {"error": "令牌无效或缺少钱包权限"})
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except EsiUnavailable as e:
+                return self.send_json(502, {"error": str(e)})
+            except Exception:
+                log.exception("钱包存档错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
         def do_POST(self):
-            # 唯一的写入型开放接口：深渊装备导入 / 刷新估价（转发到 MutaMarket，按 IP 单独限流）
+            # 钱包成交存档；其余是唯一的写入型开放接口：深渊装备导入 / 刷新估价（转发到 MutaMarket，按 IP 单独限流）
             url = urllib.parse.urlparse(self.path)
+            if url.path.startswith("/api/kb/wallet/"):
+                return self.wallet(url.path.rstrip("/"))
             cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
             err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
             path = url.path.rstrip("/")
@@ -3981,6 +4382,7 @@ def main():
     store = Store(args.db, system_regions, args.days + 1)
     store.abyssal_model = AbyssalModel(store)
     store.arb = HubArbitrage(store)
+    store.obs = ObsVolume(store)
     Workers(store, args.days, "r2z2" if args.live == "redisq" else args.live).start()
     api = Api(store)
     api.arb = store.arb
@@ -3995,6 +4397,8 @@ def main():
     threading.Thread(target=lambda: (time.sleep(30), api.battle_history({"days": 30})), daemon=True).start()   # 历史会战先算好一份
     here = os.path.dirname(os.path.abspath(__file__))
     industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])
+    api.obs = store.obs
+    api.wallet = Wallet(store, industry)
     abyssal = Abyssal(store)
     abyssal.model = store.abyssal_model
     server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal))

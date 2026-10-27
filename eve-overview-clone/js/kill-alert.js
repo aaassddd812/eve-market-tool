@@ -19,7 +19,7 @@
 // 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
 
 import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s4';
-import * as AM from './alert-mail.js?v=v6';
+import * as AM from './alert-mail.js?v=v7';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
@@ -145,7 +145,7 @@ export function restart() {
   let area = T.on;
   // 位置预警要读角色位置；人物关注只用公开的实时击杀，不绑定也能用（游戏邮件提醒仍需绑定）
   if (area && !ctx.tokenInfo()) { setStatus('需要先绑定 ESI'); area = false; }
-  else if (area && !ctx.hasScope(LOC_SCOPE)) { setStatus('授权里没有位置权限（esi-location.read_location.v1），请重新绑定 ESI'); area = false; }
+  else if (area && !ctx.hasScope(LOC_SCOPE)) { setStatus('缺少位置权限，请重新绑定 ESI'); area = false; }
   if (area) {
     setStatus('正在读取角色位置…');
     pollLocation();
@@ -458,7 +458,7 @@ export function webAlert(a) {
   card.innerHTML = `<div class="ka-head">${badge(a)}<b>${a.watch ? '人物关注' : '击杀预警'}</b>
       <button class="ka-close" data-ka-close aria-label="关闭">×</button></div>
     <div class="ka-body">${ctx.esc(describe(a))}</div>
-    <div class="ka-meta">${a.value ? ctx.formatISK(a.value) + ' ISK · ' : ''}${a.attackers ? a.attackers + ' 名攻击者 · ' : ''}${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}${a.id && !a.hourly && !a.test ? ' · 点击查看击杀详情' : ''}</div>`;
+    <div class="ka-meta">${a.value ? ctx.formatISK(a.value) + ' ISK · ' : ''}${a.attackers ? a.attackers + ' 名攻击者 · ' : ''}${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}</div>`;
   cards.prepend(card);
   while (cards.children.length > 4) cards.lastChild.remove();
   setTimeout(() => card.remove(), 45e3);
@@ -528,7 +528,7 @@ async function addWatch(text, mode) {
   if (!text) return;
   if (T.watch.length >= WATCH_MAX) { ctx.showToast(`最多关注 ${WATCH_MAX} 个`, 'error'); return; }
   const hit = await AM.resolveEntity(text);
-  if (!hit) { ctx.showToast('没有找到：请输入游戏内完整的角色 / 军团 / 联盟名称，或 ID', 'error', 4000); return; }
+  if (!hit) { ctx.showToast('没有找到，请输入完整名称或 ID', 'error', 4000); return; }
   if (T.watch.some((e) => e.id === hit.id)) { ctx.showToast(`已经关注了 ${hit.name}`, 'error'); return; }
   update({ watch: [...T.watch, { id: hit.id, name: hit.name, kind: hit.kind, mode }] });
   const el = panel?.querySelector('[data-ka-name]');
@@ -562,7 +562,7 @@ function drawPanel() {
     ${token ? '' : '<p class="ka-warn">位置预警需要先在「个人中心」绑定 ESI</p>'}
     ${IS_TQ ? '' : `<p class="ka-warn" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据：提醒会延迟，星域监控与人物关注不可用</p>`}
     ${sec('位置预警', `<div class="ka-list">
-      ${sw('on', '开启位置预警', '角色所在星系周边的击杀')}
+      ${sw('on', '开启位置预警')}
       <label class="ka-opt"><span><b>检测范围</b></span><span class="ka-ctl"><input type="number" class="cr-input" min="1" max="10" step="1" value="${T.jumps}" data-ka-jumps aria-label="检测范围（跳）" title="1–10 跳"> 跳</span></label>
       ${sw('pods', '包括太空舱')}
     </div>`)}
@@ -573,7 +573,7 @@ function drawPanel() {
       ${sw('sound', '提示音', '', '有新预警时播放提示音，本星系的更急促')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
       ${sw('offlineMute', '角色离线时不提醒', S.online === false ? '角色当前离线' : S.online ? '角色当前在线' : '', '每分钟读一次角色在线状态，离线期间的预警只记在「最近预警」里，不发邮件、不弹特效、不响提示音')}
-      ${T.offlineMute && token && !ctx.hasScope(ONLINE_SCOPE) ? '<p class="ka-warn">授权里没有在线状态权限（esi-location.read_online.v1），重新绑定 ESI 后才能判断是否在线；现在照常提醒</p>' : ''}
+      ${T.offlineMute && token && !ctx.hasScope(ONLINE_SCOPE) ? '<p class="ka-warn" title="esi-location.read_online.v1">缺少在线状态权限，暂照常提醒</p>' : ''}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ka-test="web">测试网页提醒</button><button class="btn btn-ghost btn-sm" data-ka-test="mail"${token ? '' : ' disabled'}>发送测试邮件</button></div>`)}
     ${sec('星域监控', `<div class="ka-list">

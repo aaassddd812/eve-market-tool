@@ -2,8 +2,9 @@
 // 数据来自自建的击杀记录服务（server/kb_service.py，/api/kb/），收录新伊甸全部击杀；
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v25';
+import { initBr, renderBr } from './kb-br.js?v=v26';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v1';
+import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 
 let app, kb;
 
@@ -93,7 +94,7 @@ function feedRows(kills, { me } = {}) {
     const v = k.victim, f = k.final;
     // 本站只保留最近 30 天，更早的记录是实时向 zKillboard 查询的（不入库），用分隔行标出
     const divider = k.archive && !divided
-      ? (divided = true, `<tr class="kb-divider"><td colspan="${me ? 6 : 5}">以下为 30 天以前的记录，实时查询自 zKillboard，价值同样按吉他中间价估算</td></tr>`)
+      ? (divided = true, `<tr class="kb-divider"><td colspan="${me ? 6 : 5}">以下为 30 天前的记录（zKillboard）</td></tr>`)
       : '';
     const sys = kb.systemLabel(k.system_id);
     const side = me ? (v[me.key] === me.id ? 'loss' : 'kill') : null;
@@ -113,8 +114,8 @@ function feedRows(kills, { me } = {}) {
 }
 
 const FEED_NOTICE = {
-  global_end: '本站只保留最近 30 天；筛选后可查看更早记录',
-  zkill_limit: 'zKillboard 最多向前翻 2 万条，可加条件缩小范围'
+  global_end: '仅存 30 天，加筛选可查更早',
+  zkill_limit: 'zKillboard 最多查 2 万条，请缩小范围'
 };
 
 function feedTable(kills, opts = {}) {
@@ -198,7 +199,7 @@ async function loadSummary() {
       <div class="kb-summary-cards">
         <div class="valuation-card is-sell"><span class="valuation-label">最近 24 小时总损失</span>
           <strong class="valuation-value">${app.formatISK(day.value)}<span class="unit">ISK</span></strong>
-          <span class="valuation-detail">按吉他最低卖价与最高收购价的中间值估算</span></div>
+          <span class="valuation-detail">吉他中间价估值</span></div>
         <div class="valuation-card"><span class="valuation-label">击毁舰船</span>
           <strong class="valuation-value">${app.formatNumber(day.count - day.pods)}<span class="unit">艘</span></strong>
           <span class="valuation-detail">另有 ${app.formatNumber(day.pods)} 个太空舱</span></div>
@@ -290,7 +291,7 @@ function renderFilters() {
   const chips = [];
   if (S.filters.ship) chips.push(`<span class="kb-chip"><img src="${IMG(`types/${S.filters.ship.id}/icon`, 32)}" alt="" width="16" height="16">${app.esc(S.filters.ship.name)}<button data-clear-filter="ship" aria-label="移除">×</button></span>`);
   if (S.filters.location) chips.push(`<span class="kb-chip">${S.filters.location.kind === 'region' ? '星域' : '星系'} · ${app.esc(S.filters.location.name)}<button data-clear-filter="location" aria-label="移除">×</button></span>`);
-  $('kbFilters').innerHTML = chips.join('') || '<span class="kb-filter-hint">可在上方搜索舰船或地点进行筛选，两者可同时使用</span>';
+  $('kbFilters').innerHTML = chips.join('');
 }
 
 function setFilter(key, value) {
@@ -309,10 +310,10 @@ function renderBattles() {
   const list = battles.getBattles(), names = battles.getBattleNames(), set = battles.getBattleSettings();
   box.hidden = false;
   const tiers = [...battles.BATTLE_TIERS].reverse();
-  const rule = `${battles.BATTLE_WINDOW} 分钟内同一星系击毁（不含太空舱、NPC 击杀与 10M ISK 以下的击杀）：${tiers.map((t) => `<span class="kb-tier-chip tier-${t.key}"><i></i>${t.name.replace('会战', '')} ${t.min}+</span>`).join('')}`;
+  const rule = `${battles.BATTLE_WINDOW} 分钟内击毁：${tiers.map((t) => `<span class="kb-tier-chip tier-${t.key}"><i></i>${t.name.replace('会战', '')} ${t.min}+</span>`).join('')}`;
   const head = `<div class="kb-battles-head">
       <h3 class="kb-section-title"><svg class="battle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/><path d="M14.5 6.5 18 3h3v3l-3.5 3.5"/><path d="m5 14 4 4"/><path d="m7 17-3 3"/><path d="m3 19 2 2"/></svg>${list.length ? `疑似会战 <b>${list.length}</b>` : '暂无疑似会战'}</h3>
-      <span class="text-muted kb-battle-rule">${rule}</span>
+      <span class="text-muted kb-battle-rule" title="不含太空舱、NPC 击杀与 10M ISK 以下">${rule}</span>
       <a class="btn btn-ghost kb-bh-entry" href="#kb/battles" data-kb-bh title="最近 30 天全部疑似会战、双方战损比，可筛选">近 30 天会战 ›</a>
       <label class="jump-check kb-battle-notify"><input type="checkbox" data-battle-set="on"${set.on ? ' checked' : ''}><span>弹出提醒</span></label>
     </div>`;
@@ -503,14 +504,13 @@ function renderRankTable() {
   const pages = paged ? Math.max(1, Math.ceil(matched / r.size)) : 1;
   const detail = rows.length ? rows[0].kills != null : paged;
   const fmtIsk = app.formatISK, fmtN = app.formatNumber;
-  const side = r.side === 'kills' ? '击杀' : '损失';
   const kind = KIND_ZH[r.by];
   const first = r.data.first || (rows[0] && { ...rows[0] });
   const sideTotal = r.data.side_total;
   const cards = `<div class="kb-summary-cards kb-rank-cards">
       <div class="valuation-card ${r.side === 'kills' ? 'is-buy' : 'is-sell'}"><span class="valuation-label">上榜${kind}</span>
         <strong class="valuation-value">${fmtN(paged ? r.data.entities : rows.length)}<span class="unit">个</span></strong>
-        <span class="valuation-detail">${sideTotal ? `有${side}记录 · 合计 ${fmtIsk(sideTotal.value)} ISK` : `有${side}记录`}</span></div>
+        <span class="valuation-detail">${sideTotal ? `合计 ${fmtIsk(sideTotal.value)} ISK` : ''}</span></div>
       ${first ? `<div class="valuation-card"><span class="valuation-label">第 1 名</span>
         <strong class="valuation-value kb-rank-first"><a class="kb-link" href="#kb/${r.by}/${first.id}" data-entity="${r.by}:${first.id}">${app.esc(first.name || partyName(first.id))}</a></strong>
         <span class="valuation-detail">${r.metric === 'value' ? fmtIsk(first.value) + ' ISK · ' + fmtN(first.count) + ' 次' : fmtN(first.count) + ' 次 · ' + fmtIsk(first.value) + ' ISK'}</span></div>` : ''}
@@ -543,9 +543,10 @@ function renderRankTable() {
   const from = (r.page - 1) * r.size + 1, to = from + rows.length - 1;
   const info = paged
     ? (matched ? `${r.filter ? `「${app.esc(r.filter)}」匹配 ${fmtN(matched)} 个 · ` : ''}第 ${fmtN(from)}–${fmtN(to)} 条，共 ${fmtN(matched)} 条` : '')
-    : '击杀记录服务版本较旧，只显示前几名';
+    : '服务版本较旧，仅显示前几名';
   const sizeSel = paged ? `<label class="kb-pager-size">每页 <select data-rank-size aria-label="每页条数">${RANK_SIZES.map((n) => `<option value="${n}"${n === r.size ? ' selected' : ''}>${n}</option>`).join('')}</select> 条</label>` : '';
-  const bar = `<div class="kb-rank-bar"><span class="text-muted">${info}</span>${sizeSel}</div>`;
+  const exportBtn = rows.length ? exportBtnHtml('data-kb-rank-export') : '';
+  const bar = `<div class="kb-rank-bar"><span class="text-muted">${info}</span><span style="display:inline-flex;align-items:center;gap:8px;flex-wrap:wrap">${sizeSel}${exportBtn}</span></div>`;
   box.innerHTML = cards + bar +
     `<div class="table-scroll kb-rank-wrap"><table class="kb-rank-table">
       <thead><tr><th class="kb-rank-no">#</th><th>${kind}</th>
@@ -556,6 +557,55 @@ function renderRankTable() {
     </table></div>
     ${pagerHtml(r.page, pages)}
     <p class="text-muted valuation-note" title="${detail ? '每次击杀只计一次；效率 = 击毁 ÷（击毁 + 损失）；所属为最近一次出现时的军团 / 联盟。' : ''}${PRICE_NOTE}">价值为估算值</p>`;
+}
+
+// 导出 CSV：服务端分页（每次最多 100 条），按当前筛选从第 1 名起连续读取，最多导出前 EXPORT_MAX 名
+const EXPORT_MAX = 1000;
+let exporting = false;
+async function exportRank() {
+  const r = S.rank;
+  if (!r?.data?.rows?.length || exporting) return;
+  exporting = true;
+  const rows = [];
+  try {
+    app.showToast(`正在读取前 ${EXPORT_MAX} 名…`, 'info', 1500);
+    const q = r.filter ? '&q=' + encodeURIComponent(r.filter) : '';
+    while (rows.length < EXPORT_MAX) {
+      const data = await api(`leaderboard?days=${r.days}&side=${r.side}&by=${r.by}&metric=${r.metric}&offset=${rows.length}&limit=100${q}&detail=1`);
+      if (rows.length && data.rows?.[0]?.id === rows[0].id) break;   // 旧版服务不支持 offset，会重复返回第一页
+      absorbNames(data.names);
+      for (const row of data.rows || []) if (row.name) S.names.set(row.id, row.name);
+      await loadTypes((data.rows || []).flatMap((row) => (row.ships || []).map((x) => x.ship_type_id)));
+      rows.push(...(data.rows || []));
+      if (!data.rows || data.rows.length < 100) break;
+    }
+  } catch (error) {
+    app.showToast('导出失败：' + error.message, 'error', 3000);
+    exporting = false;
+    return;
+  }
+  exporting = false;
+  if (!rows.length) return;
+  const total = r.data.total;
+  const detail = rows[0].kills != null;
+  const cols = [
+    ['#', (row) => row.rank ?? rows.indexOf(row) + 1],
+    [KIND_ZH[r.by], (row) => row.name || partyName(row.id)],
+    ['ID', (row) => row.id]
+  ];
+  if (r.by === 'character') cols.push(['所属军团', (row) => partyName(row.corporation_id)]);
+  if (r.by !== 'alliance') cols.push(['所属联盟', (row) => partyName(row.alliance_id)]);
+  if (detail) {
+    cols.push(
+      ['击毁价值', (row) => row.destroyed], ['击杀次数', (row) => row.kills],
+      ['损失价值', (row) => row.lost], ['损失次数', (row) => row.losses],
+      ['效率 %', (row) => { const e = rankEff(row); return e == null ? null : e * 100; }],
+      ['占全服 %', (row) => (total?.value ? row.value / total.value * 100 : null)],
+      [r.side === 'kills' ? '常驾舰船' : '常损舰船', (row) => (row.ships || []).map((x) => `${typeName(x.ship_type_id)} ×${x.count}`).join(' / ')]
+    );
+  } else cols.push(['价值', (row) => row.value], ['次数', (row) => row.count]);
+  const n = exportCsv('击杀排行榜', cols, rows);
+  app.showToast(`已导出 ${n} 行`, 'success', 1800);
 }
 
 // ---------- 近 30 天疑似会战：#kb/battles ----------
@@ -650,11 +700,11 @@ function drawBh() {
   const fmtIsk = app.formatISK, fmtN = app.formatNumber;
   const total = list.reduce((s, x) => s + x.value, 0), kills = list.reduce((s, x) => s + x.kills, 0);
   const large = list.filter((x) => x.kills >= 100).length;
-  $('kbBhSub').textContent = `共 ${fmtN(b.data.battles.length)} 场 · 统计于 ${new Date(b.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}（每 10 分钟更新）`;
+  $('kbBhSub').textContent = `共 ${fmtN(b.data.battles.length)} 场 · 统计于 ${new Date(b.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })}`;
   const cards = `<div class="kb-summary-cards kb-rank-cards">
       <div class="valuation-card"><span class="valuation-label">符合条件的会战</span><strong class="valuation-value">${fmtN(list.length)}<span class="unit">场</span></strong><span class="valuation-detail">其中大型（100 艘以上）${large} 场</span></div>
       <div class="valuation-card is-sell"><span class="valuation-label">击毁舰船</span><strong class="valuation-value">${fmtN(kills)}<span class="unit">艘</span></strong><span class="valuation-detail">不含太空舱与 10M 以下</span></div>
-      <div class="valuation-card"><span class="valuation-label">总价值</span><strong class="valuation-value">${fmtIsk(total)}<span class="unit">ISK</span></strong><span class="valuation-detail">按估价合计</span></div>
+      <div class="valuation-card"><span class="valuation-label">总价值</span><strong class="valuation-value">${fmtIsk(total)}<span class="unit">ISK</span></strong></div>
     </div>`;
   const page = list.slice(0, b.shown);
   loadTypes(page.map((x) => x.top?.ship_type_id).filter(Boolean)).then(() => {
@@ -693,8 +743,7 @@ function drawBh() {
   }).join('');
   box.innerHTML = cards + (rows ? `<div class="kb-bh-list">${rows}</div>` : '<p class="text-muted kb-empty">没有符合条件的会战</p>') +
     (list.length > b.shown ? `<div class="au-more"><button class="btn btn-ghost" data-bh-more>再显示 ${Math.min(BH_PAGE, list.length - b.shown)} 场（还有 ${list.length - b.shown} 场）</button></div>` : '') +
-    `<p class="text-muted valuation-note">口径：同一星系相邻击杀间隔不超过 ${b.data.gap_minutes} 分钟算同一场，场内任意 60 分钟击毁 ≥ ${b.data.min} 艘（不含太空舱、NPC 击杀与 10M ISK 以下）。
-      双方按「谁打谁」自动分队（一起出手的算友方），与双方都没有交火的算第三方；战损比 = 击毁 ÷（击毁 + 损失），按 ISK 算。价值为估算值</p>`;
+    `<p class="text-muted valuation-note" title="口径：同一星系相邻击杀间隔不超过 ${b.data.gap_minutes} 分钟算同一场，场内任意 60 分钟击毁 ≥ ${b.data.min} 艘（不含太空舱、NPC 击杀与 10M ISK 以下）。 双方按「谁打谁」自动分队（一起出手的算友方），与双方都没有交火的算第三方；战损比 = 击毁 ÷（击毁 + 损失），按 ISK 算。价值为估算值">价值为估算值</p>`;
 }
 
 // ---------- 人物 / 军团 / 联盟 ----------
@@ -759,8 +808,8 @@ async function renderEntity(kind, id) {
     lifetimeCards = `<h4 class="info-section-title">生涯统计<small>（zKillboard 估值）</small></h4><div class="valuation-grid">
       ${card('参与击杀', app.formatNumber(lifetime.shipsDestroyed || 0) + '<span class="unit">艘</span>', '单刷 ' + app.formatNumber(lifetime.soloKills || 0) + ' 次', 'is-buy')}
       ${card('损失', app.formatNumber(lifetime.shipsLost || 0) + '<span class="unit">艘</span>', '单刷被杀 ' + app.formatNumber(lifetime.soloLosses || 0) + ' 次', 'is-sell')}
-      ${card('击毁价值', isk(lifetime.iskDestroyed || 0), '生涯累计', 'is-buy')}
-      ${card('损失价值', isk(lifetime.iskLost || 0), '生涯累计', 'is-sell')}
+      ${card('击毁价值', isk(lifetime.iskDestroyed || 0), '', 'is-buy')}
+      ${card('损失价值', isk(lifetime.iskLost || 0), '', 'is-sell')}
       ${card('ISK 效率', lEff == null ? '—' : lEff.toFixed(1) + '%', '危险度 ' + (lifetime.dangerRatio ?? '—') + '% · 团战 ' + (lifetime.gangRatio ?? '—') + '%', 'is-total')}
     </div>`;
   }
@@ -768,9 +817,9 @@ async function renderEntity(kind, id) {
       ${card('参与击杀', app.formatNumber(stats.kills) + '<span class="unit">次</span>', '单刷 ' + app.formatNumber(stats.solo_kills) + ' 次', 'is-buy')}
       ${stats.final_blows != null ? card('最后一击', app.formatNumber(stats.final_blows) + '<span class="unit">次</span>', stats.kills ? '占参与击杀 ' + (stats.final_blows / stats.kills * 100).toFixed(0) + '%' : '', 'is-buy') : ''}
       ${card('损失', app.formatNumber(stats.losses) + '<span class="unit">次</span>', '', 'is-sell')}
-      ${card('击毁总价值', isk(stats.destroyed), kind === 'character' ? '参与的击杀' : '成员参与的击杀（每次只计一次）', 'is-buy')}
+      ${card('击毁总价值', isk(stats.destroyed), '', 'is-buy')}
       ${card('损失总价值', isk(stats.lost), '', 'is-sell')}
-      ${card('ISK 效率', eff == null ? '—' : eff.toFixed(1) + '%', '击毁 ÷（击毁 + 损失）', 'is-total')}
+      ${card('ISK 效率', eff == null ? '—' : eff.toFixed(1) + '%', '', 'is-total')}
     </div>`;
 
   const shipList = (list, title) => list.length ? `<section class="kb-mini-panel"><h5>${title}</h5>${list.map((s) =>
@@ -794,7 +843,7 @@ async function renderEntity(kind, id) {
       </div>
     </div>
     ${lifetimeCards}${monthlyHtml(lifetime)}${recentCards}
-    ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天 · 点击表头排序）</small></h4><div id="kbMembers"></div>` : ''}
+    ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天）</small></h4><div id="kbMembers"></div>` : ''}
     ${activity}${corpHistory}
     <div class="kb-mini-grid">${shipList(stats.ships_used, '常用舰船（击杀时）')}${shipList(stats.ships_lost, '损失的舰船')}</div>
     <div class="kb-feed-head section-gap">
@@ -847,7 +896,7 @@ function activityHtml(stats) {
     return `<div class="kb-mini-row"><span><a class="kb-link" data-location="system:${x.system_id}">${app.esc(sys.name)}</a>
         <b style="color:${sys.color}">${sys.secText}</b>${sys.region ? ` <small>${app.esc(sys.region)}</small>` : ''}</span><b>${app.formatNumber(x.count)}</b></div>`;
   }).join('');
-  return `<h4 class="info-section-title section-gap">最近 30 天活跃地区<small>（击杀与损失次数 · 点击筛选记录）</small></h4>
+  return `<h4 class="info-section-title section-gap">最近 30 天活跃地区</h4>
     <div class="kb-activity">
       ${regionRows ? `<section class="kb-mini-panel"><h5>星域</h5>${regionRows}</section>` : ''}
       ${systemRows ? `<section class="kb-mini-panel"><h5>星系</h5>${systemRows}</section>` : ''}
@@ -972,7 +1021,7 @@ function renderSuggest({ entities, ships, systems, regions }) {
       group('人物', byKind('character')) + group('军团', byKind('corporation')) + group('联盟', byKind('alliance'))) +
     group('舰船', ships.map((s) => `<button class="kb-suggest-item" data-pick-ship="${s.id}"><img src="${IMG(`types/${s.id}/icon`, 32)}" alt="" width="22" height="22" loading="lazy"><span>${app.esc(s.name)}</span><small>筛选击杀记录</small></button>`)) +
     group('星系', systems.map((s) => { const l = kb.systemLabel(s.id); return `<button class="kb-suggest-item" data-pick-location="system:${s.id}"><i style="background:${l.color}"></i><span>${app.esc(s.name)} <b style="color:${l.color}">${l.secText}</b></span><small>${app.esc(l.region)}</small></button>`; })) +
-    group('星域', regions.map((r) => `<button class="kb-suggest-item" data-pick-location="region:${r.id}"><i></i><span>${app.esc(r.name)}</span><small>星域</small></button>`));
+    group('星域', regions.map((r) => `<button class="kb-suggest-item" data-pick-location="region:${r.id}"><i></i><span>${app.esc(r.name)}</span></button>`));
   box.innerHTML = html || '<p class="legend-empty">没有找到匹配项</p>';
   box.hidden = false;
 }
@@ -999,7 +1048,7 @@ function route() {
 
 // ---------- 本地分析：频道成员名单 / 定向扫描（local-scan.js，首次打开时加载）----------
 async function renderLocalScan() {
-  const m = await import('./local-scan.js?v=v8');
+  const m = await import('./local-scan.js?v=v9');
   if (!location.hash.startsWith('#kb/local')) return;
   m.renderLocal($('kbMain'), {
     esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,
@@ -1117,6 +1166,7 @@ export function initKbPage(context) {
       setRank({ [key]: key === 'days' ? Number(value) : value, page: 1 });
       return;
     }
+    if (e.target.closest('[data-kb-rank-export]')) { exportRank(); return; }
     const pg = e.target.closest('[data-rank-page]');
     if (pg && S.rank && !pg.disabled) { setRank({ page: Number(pg.dataset.rankPage) }); return; }
     const brBattle = e.target.closest('[data-br-battle]');

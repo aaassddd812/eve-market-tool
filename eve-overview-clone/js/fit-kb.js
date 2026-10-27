@@ -43,7 +43,7 @@ async function load() {
   $('fkTitle').textContent = `${shipType?.name || ''} · 击杀记录装配`;
   renderBar();
   const token = ++K.loading;
-  $('fkList').innerHTML = '<div class="fa-empty">读取阵亡记录… 首次可能需要十几秒</div>';
+  $('fkList').innerHTML = '<div class="fa-empty">读取阵亡记录…（首次较慢）</div>';
   try {
     if (!SERVER.kb) throw new Error(NO_KB_MESSAGE);
     const r = await fetch(`/api/kb/shipfits?ship=${ship}&days=${K.days}`);
@@ -112,7 +112,7 @@ function render() {
       ${slots}
       ${drones.length ? `<div class="fa-slot"><span>无人机</span><div>${drones.map(([id, n]) => `<em><img src="${IMG(id)}" alt="" width="20" height="20" loading="lazy">${esc(name(id))} <b>×${n}</b></em>`).join('')}</div></div>` : ''}
     </div>`;
-  }).join('') || '<div class="fa-empty">这段时间没有这艘船的阵亡记录</div>';
+  }).join('') || '<div class="fa-empty">没有阵亡记录</div>';
 }
 
 const topDrones = (g) => [...g.drones.values()].sort((a, b) => b.n - a.n)[0]?.list || [];

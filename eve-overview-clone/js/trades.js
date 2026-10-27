@@ -85,7 +85,7 @@ const signed = (v) => `<strong class="${v >= 0 ? 'up' : 'down'}">${v >= 0 ? '+' 
 
 function itemCell(data, id) {
   const { esc, gameImage } = ctx;
-  return `<button class="link-btn trade-item" data-trade-type="${id}" title="在市场中心查看"><img src="${gameImage('types/' + id + '/icon', 32)}" alt="" width="20" height="20" loading="lazy">${esc(typeName(data, id))}</button>`;
+  return `<button class="link-btn trade-item" data-trade-type="${id}" title="在市场中心查看"><img src="${gameImage('types/' + id + '/icon', 32)}" data-item-pop="${id}" alt="" width="20" height="20" loading="lazy">${esc(typeName(data, id))}</button>`;
 }
 
 function itemsTable(data, sum) {
@@ -147,7 +147,7 @@ function txTable(data) {
 
 function ordersTable(data) {
   const { esc, formatPrice, formatNumber, locationName } = ctx;
-  if (!data.orderScope) return '<p class="text-muted">授权里没有市场订单权限，重新绑定 ESI 后可查看历史订单</p>';
+  if (!data.orderScope) return '<p class="text-muted">无订单权限，需重新绑定 ESI</p>';
   const q = S.q.toLowerCase();
   const list = data.orders.filter((o) => !q || typeName(data, o.type_id).toLowerCase().includes(q));
   if (!list.length) return '<p class="text-muted">90 天内没有已结束的订单</p>';
@@ -178,8 +178,8 @@ function render(box, data) {
       valuationCard('买入总额', formatISK(sum.buyIsk) + ' ISK', formatNumber(sum.buyN) + ' 笔成交', 'is-sell') +
       valuationCard('卖出总额', formatISK(sum.sellIsk) + ' ISK', formatNumber(sum.sellN) + ' 笔成交', 'is-buy') +
       valuationCard('已缴税费', formatISK(fees) + ' ISK', '销售税 ' + formatISK(sum.tax) + ' · 中介费 ' + formatISK(sum.broker)) +
-      valuationCard('配对利润', (sum.profit >= 0 ? '' : '−') + formatISK(Math.abs(sum.profit)) + ' ISK', '买卖都有的物品按均价配对', sum.profit >= 0 ? 'is-buy' : 'is-sell') +
-      valuationCard('扣税费后', (sum.profit - fees >= 0 ? '' : '−') + formatISK(Math.abs(sum.profit - fees)) + ' ISK', '配对利润 − 已缴税费', 'is-total') +
+      valuationCard('配对利润', (sum.profit >= 0 ? '' : '−') + formatISK(Math.abs(sum.profit)) + ' ISK', '', sum.profit >= 0 ? 'is-buy' : 'is-sell') +
+      valuationCard('扣税费后', (sum.profit - fees >= 0 ? '' : '−') + formatISK(Math.abs(sum.profit - fees)) + ' ISK', '', 'is-total') +
     '</div>' +
     '<div class="valuation-toolbar section-gap">' +
       '<div class="segmented" role="group" aria-label="交易记录视图">' +
@@ -222,10 +222,10 @@ function bind(box) {
 export async function renderTrades(box, force = false) {
   bind(box);
   if (!ctx.hasScope('esi-wallet.read_character_wallet.v1')) {
-    box.innerHTML = '<p class="text-muted">授权里没有钱包权限（esi-wallet.read_character_wallet.v1），重新绑定 ESI 后可查看交易记录</p>';
+    box.innerHTML = '<p class="text-muted" title="esi-wallet.read_character_wallet.v1">无钱包权限，需重新绑定 ESI</p>';
     return;
   }
-  if (!S.data || force) box.innerHTML = '<div class="pi-loading">读取成交记录、钱包流水与历史订单…</div>';
+  if (!S.data || force) box.innerHTML = '<div class="pi-loading">读取中…</div>';
   try {
     const data = await load(force);
     if (ctx.isActive() && ctx.tokenInfo()?.character_id === S.id) render(box, data);

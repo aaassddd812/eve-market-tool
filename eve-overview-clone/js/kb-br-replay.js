@@ -174,7 +174,7 @@ function renderState(idx) {
     <img src="${IMG(`types/${k.ship}/icon`, 32)}" alt="" width="24" height="24" loading="lazy">
     <span><b>${esc(ctx.typeName(k.ship))}</b><em>${k.char ? esc(ctx.partyName(k.char)) : ''}${k.party ? ' · ' + esc(ctx.partyName(k.party)) : ''}</em></span>
     <i>${isk(k.value)}</i>
-  </div>`).join('') || '<p class="br-rp-more">还没有击杀，点「播放」开始</p>';
+  </div>`).join('') || '<p class="br-rp-more">暂无击杀</p>';
 }
 
 export function resizeReplay() {

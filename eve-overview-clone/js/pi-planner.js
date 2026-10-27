@@ -3,7 +3,7 @@
 // 给出每颗行星该放什么、预计日产量与收益，并生成游戏内可直接导入的殖民地模板（JSON）。
 // ESI 只有读取殖民地的接口，不能写入模板，所以模板通过「复制到剪贴板」或「下载 .json」导入游戏。
 // 数据：pi-data.json（build_pi.mjs 从 SDE 生成），map-data.json（星系、星门、星域）。
-import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r7';
+import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r8';
 import { angle } from './pi-globe.js?v=v19r12';
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
 import { skPage, skRows } from './skeleton.js?v=v17';
@@ -911,7 +911,7 @@ function planTemplates(plan, assign) {
         let lo = 0, hi = plan.rate;
         for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (factoryLayout(plan.dem, mid, plan.factories, code, radius)) lo = mid; else hi = mid; }
         layout = factoryLayout(plan.dem, lo, plan.factories, code, radius) || { counts: [] };
-        note = `（这颗行星较大，链接更耗资源，产能约为规划的 ${Math.round((lo / plan.rate) * 100)}%）`;
+        note = `（行星较大，产能约 ${Math.round((lo / plan.rate) * 100)}%）`;
       }
       const pins = layout.counts.sort((a, b) => tierOf(a[0]) - tierOf(b[0])).flatMap(([out, c]) => factoryPins(pt, out, c));
       list.push({ key: 'factory', title: `工厂 · ${cName(plan.product)}`, code, ...buildTemplate({ name: `工厂-${cName(plan.product)}`, code, diam: diamOf(at), pins }), summary: layout.counts.map(([out, c]) => `${cName(out)} ×${c}`).join(' · ') + note });
@@ -931,7 +931,7 @@ function buyTemplate(plan, at) {
     let lo = 0, hi = plan.perRate;
     for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (buyLayout(plan.dem, mid, plan.hubs, code, diam / 2)) lo = mid; else hi = mid; }
     layout = buyLayout(plan.dem, lo, plan.hubs, code, diam / 2) || { counts: [] };
-    note = `（这颗行星较大，链接更耗资源，产能约为规划的 ${Math.round((lo / plan.perRate) * 100)}%）`;
+    note = `（行星较大，产能约 ${Math.round((lo / plan.perRate) * 100)}%）`;
   }
   const group = layout.counts.slice().sort((a, b) => tierOf(a[0]) - tierOf(b[0])).flatMap(([out, c]) => factoryPins(pt, out, c));
   const pins = Array.from({ length: plan.hubs }, (_, k) => group.map((pin) => ({ ...pin, hub: k }))).flat();
@@ -955,7 +955,7 @@ function hybridTemplate(plan, p1, at) {
     for (let i = 0; i < 40; i++) { const mid = (lo + hi) / 2; if (designExtractor(p0Of(p1), code, diam / 2, hostLoad(plan.dem, mid, plan.m, diam / 2))) lo = mid; else hi = mid; }
     load = hostLoad(plan.dem, lo, plan.m, diam / 2);
     ex = designExtractor(p0Of(p1), code, diam / 2, load) || designExtractor(p0Of(p1), code, 1000, { cpu: 0, power: 0 });
-    note = `（这颗行星较大，链接更耗资源，加工产能约为规划的 ${Math.round((lo / plan.rate) * 100)}%）`;
+    note = `（行星较大，加工产能约 ${Math.round((lo / plan.rate) * 100)}%）`;
   }
   const pins = [
     ...ecuPins(pt, ex.p0, ex.heads), ...factoryPins(pt, p1, ex.fac),
@@ -1061,7 +1061,7 @@ function renderSide() {
   const body = SIDE.tab === 'recent'
     ? (recent.length
       ? `<div class="ind-side-section">${recent.map(sideItem).join('')}<button type="button" class="link-btn clear-recent" data-pi-clear>清空最近规划</button></div>`
-      : '<div class="empty-state"><p>还没有规划过具体产品</p><small>在产品目录里点一个产品，就会记在这里</small></div>')
+      : '<div class="empty-state"><p>还没有规划过具体产品</p></div>')
     : `<div class="ind-side-section">${auto}</div><div class="ind-side-section"><h4>${F.way === 'buy' ? '买料加工' : '自产'}</h4>${tree}</div>`;
   el.innerHTML = nav + tabs + body;
 }
@@ -1131,11 +1131,10 @@ function renderForm() {
     <div class="pi-field">
       <label>方式</label>
       ${seg('way', [['self', '自产（采集）'], ['buy', '买料加工']], F.way)}
-      ${buy ? `<small class="pi-hint">买入半成品加工后卖出</small>` : ''}
     </div>
     <div class="pi-field">
       <label>目标产品</label>
-      <select id="piTarget" class="pi-input"><option value="0"${!F.target ? ' selected' : ''}>自动推荐（按日收益排序）</option>${products}</select>
+      <select id="piTarget" class="pi-input"><option value="0"${!F.target ? ' selected' : ''}>自动推荐</option>${products}</select>
     </div>
     </div>
     <div class="pi-col">
@@ -1149,7 +1148,7 @@ function renderForm() {
           <input type="search" id="piSystem" placeholder="或指定虫洞，如 J123456" value="${whSys ? ctx.esc(whSys.name) : ''}" spellcheck="false" aria-label="虫洞星系">
           <div class="kb-suggest" id="piSuggest" hidden></div>
         </div>
-        <small class="pi-hint">${whSys ? `按 ${ctx.esc(whSys.name)}（${whLabel(whSys.wh)}，${whSys.planets.length} 颗行星）规划；点等级可改回按等级` : '按等级时综合该等级所有虫洞，行星分配取其中行星最齐的一个洞作示例；住在哪个洞就指定哪个'}</small>` : F.mode === 'region' ? `
+        <small class="pi-hint">${whSys ? `按 ${ctx.esc(whSys.name)}（${whLabel(whSys.wh)}，${whSys.planets.length} 颗行星）规划` : '按等级取示例虫洞，可指定所在虫洞'}</small>` : F.mode === 'region' ? `
         <select id="piRegion" class="pi-input">${D.regions.map((r) => `<option value="${r.id}"${r.id === F.region ? ' selected' : ''}>${ctx.esc(r.name)}</option>`).join('')}</select>` : `
         <div class="search-box pi-search">
           <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -1186,7 +1185,7 @@ function renderForm() {
     </div>
     </div>
     <div class="pi-form-foot">
-      <small class="pi-hint">${buy ? '<span class="pi-hint-side">产品也可以在左侧目录里直接点选</span>' : `<span>每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位</span><span class="pi-hint-side">；产品也可以在左侧目录里直接点选</span>`}</small>
+      <small class="pi-hint">${buy ? '' : `<span>每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位</span>`}</small>
       <button type="submit" class="btn btn-primary pi-go">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>一键规划
       </button>
@@ -1356,7 +1355,7 @@ function comboHtml(combo) {
       <tbody>${combo.rows.map((r) => `<tr class="${r.i === R.selected ? 'active' : ''}" data-pi-plan="${r.i}">
         <td><div class="pi-prod"><img src="${ICON(r.p.product)}" alt="" width="28" height="28" loading="lazy"><span>${ctx.esc(cName(r.p.product))}<small>P${tierOf(r.p.product)}</small></span></div></td>
         <td class="pi-hide-sm">买 P${r.p.buyTier} 加工</td><td class="num">${r.n}</td><td class="num pi-profit">${ctx.formatISK(r.profit)}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td>合计</td><td class="pi-hide-sm">${combo.left > 0 ? `<span class="text-muted">还有 ${combo.left} 颗行星没有合适的产品</span>` : ''}</td><td class="num">${all - combo.left}</td><td class="num pi-profit">${ctx.formatISK(combo.total)}</td></tr></tfoot>
+      <tfoot><tr><td>合计</td><td class="pi-hide-sm">${combo.left > 0 ? `<span class="text-muted">${combo.left} 颗行星未分配</span>` : ''}</td><td class="num">${all - combo.left}</td><td class="num pi-profit">${ctx.formatISK(combo.total)}</td></tr></tfoot>
     </table></div>
   </div>`;
 }
@@ -1365,7 +1364,7 @@ function renderResult() {
   const box = $('piResult');
   const area = R.area;
   if (!R.plans.length) {
-    box.innerHTML = areaSummary(area) + '<div class="pi-empty"><p>这个地区按当前条件没有可行的方案</p></div>';
+    box.innerHTML = areaSummary(area) + '<div class="pi-empty"><p>没有可行方案</p></div>';
     return;
   }
   if (R.plans.length === 1 && R.plans[0].error) {
@@ -1459,7 +1458,7 @@ function renderDetail() {
         </div>`;
       }).join('') || '<p class="text-muted">未分配</p>'}
     </div>`).join('');
-  const warn = assign.warnings.length ? `<p class="pi-note warn">${assign.warnings.length} 个殖民地没有可用行星${F.mode === 'wh' && !F.whSystem ? '，指定所在虫洞可得到准确方案' : '，可扩大地区或增加角色'}</p>` : '';
+  const warn = assign.warnings.length ? `<p class="pi-note warn">${assign.warnings.length} 个殖民地没有可用行星${F.mode === 'wh' && !F.whSystem ? '，可指定所在虫洞' : '，可扩大地区'}</p>` : '';
 
   // 模板
   const [capC, capP] = ccCap();
@@ -1514,9 +1513,9 @@ function renderDetail() {
         <b>导入游戏</b>
         <ol>
           <li>放置指挥中心并升到 ${F.cc} 级</li>
-          ${plan.strategy === 'buy' ? `<li>在${HUB_NAME}买好原料，运到行星所在星系，通过海关办公室进口到发射平台（多个发射平台时平均分）</li>` : ''}
+          ${plan.strategy === 'buy' ? `<li>原料经海关进口到发射平台</li>` : ''}
           <li>复制模板，游戏内「模板 → 导入与导出 → 从剪贴板载入」；或把 .json 放进 <code>文档\\EVE\\PlanetaryInteractionTemplates</code></li>
-          ${plan.strategy === 'buy' ? '<li>提交后工厂会按路由自动从发射平台取料</li>' : '<li>摆放采集头、设定周期后提交</li>'}
+          ${plan.strategy === 'buy' ? '' : '<li>摆放采集头、设定周期后提交</li>'}
         </ol>
       </div>
     </div>`;

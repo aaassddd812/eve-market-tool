@@ -281,7 +281,7 @@ export async function renderHubCompare(box, typeId) {
   if (!ctx.regions?.length) { box.innerHTML = '<p class="text-muted">当前服务器只有一个交易中心</p>'; return; }
   box.dataset.type = typeId;
   lastBox = box;
-  if (ctx.isGlobal?.(typeId)) { box.innerHTML = '<p class="text-muted">该物品是全服统一市场（不分星域与交易中心），没有交易中心差价</p>'; return; }
+  if (ctx.isGlobal?.(typeId)) { box.innerHTML = '<p class="text-muted">全服统一市场，没有交易中心差价</p>'; return; }
   box.innerHTML = ctx.skeleton();
   try {
     const [hubs, vols] = await Promise.all([load(typeId), loadVolumes()]);

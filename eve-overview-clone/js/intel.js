@@ -10,7 +10,7 @@
 //   多个标签页都在监听时按消息去重，邮件只发一次、提示音与系统通知只响一次；收件人在「邮件」标签页设置，这里勾选发给谁；英文界面发英文邮件）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
 // 文件编码：聊天记录是 UTF-16 LE（带 BOM），游戏日志是 UTF-8；按 BOM 判断。文件名「频道名_YYYYMMDD_HHMMSS_角色ID.txt」。
 
-import * as AM from './alert-mail.js?v=v6';
+import * as AM from './alert-mail.js?v=v7';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem
 const KEY = 'eve-intel-v1';
@@ -101,7 +101,7 @@ async function resume(gesture) {
   let perm = await S.dir.queryPermission({ mode: 'read' }).catch(() => 'denied');
   if (perm !== 'granted' && gesture) perm = await S.dir.requestPermission({ mode: 'read' }).catch(() => 'denied');
   S.perm = perm;
-  if (perm !== 'granted') { setStatus('浏览器需要重新授权读取日志文件夹：点「恢复监听」'); return; }
+  if (perm !== 'granted') { setStatus('需重新授权：点「恢复监听」'); return; }
   await resolveDirs(S.dir);
   await scan(true);
   start();
@@ -523,8 +523,7 @@ function renderPanel() {
 
 function drawPanel() {
   if (!supported()) {
-    return `<p class="ka-warn">当前浏览器不支持读取本地文件夹。请用<b>电脑版 Chrome 或 Edge（86 以上）</b>打开本站；Firefox、Safari 和手机浏览器都不支持。</p>
-      <p class="ka-note">这个功能读取游戏写在电脑上的聊天记录与游戏日志（Documents\\EVE\\logs），实现敌情频道预警、频道关键词与游戏日志提醒。</p>`;
+    return '<p class="ka-warn">当前浏览器不支持，请用电脑版 Chrome 或 Edge</p>';
   }
   const chans = [...S.channels.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c).filter((c) => !isLocal(c));
   for (const c of T.channels) if (!chans.includes(c)) chans.push(c);
@@ -532,7 +531,7 @@ function drawPanel() {
   const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m + ' 分钟前'; };
   return `
     <div class="ka-top"><span class="ka-status${status().on ? ' on' : ''}"><i></i>${ctx.esc(status().text)}</span></div>
-    <p class="ka-note">读取本机的游戏聊天记录与日志，文件不会上传；需要电脑版 Chrome 或 Edge。</p>
+    <p class="ka-note">只在本机读取日志，不会上传</p>
     ${sec('日志文件夹', `<div class="ka-list">
       <div class="ka-opt"><span><b>${S.dir ? ctx.esc(S.dir.name) : '未选择'}</b><small>${S.dir ? `聊天记录 ${S.chat ? '✓' : '✗'} · 游戏日志 ${S.game ? '✓' : '✗'}` : `选 <code>${window.I18N?.lang === 'en' ? 'Documents' : '文档'}\\EVE\\logs</code>`}</small></span>
         <span class="ka-ctl">${S.dir && S.perm !== 'granted' ? '<button class="btn btn-ghost btn-sm" data-in-resume>恢复监听</button>' : ''}<button class="btn btn-primary btn-sm" data-in-pick>${S.dir ? '重新选择' : '选择文件夹'}</button></span></div>
@@ -540,7 +539,7 @@ function drawPanel() {
     </div>`)}
     ${sec('敌情频道', `<div class="ka-list">
       <div class="ka-opt ka-stack"><div class="intel-chans">${chans.length ? chans.map((c) => `<label class="ka-chip toggle${T.channels.includes(c) ? ' on' : ''}"><input type="checkbox" data-in-chan="${ctx.esc(c)}"${T.channels.includes(c) ? ' checked' : ''} hidden>${ctx.esc(c)}</label>`).join('')
-        : `<span class="ka-empty">${S.dir ? '最近 7 天没有聊天记录（游戏设置 → 聊天 → 勾选「记录聊天到文件」）' : '选择文件夹后列出最近 7 天用过的频道'}</span>`}</div></div>
+        : `<span class="ka-empty">${S.dir ? '最近 7 天没有聊天记录（需开启「记录聊天到文件」）' : '先选择日志文件夹'}</span>`}</div></div>
       <label class="ka-opt" title="敌情星系距离我的位置多少跳以内才提醒（0–20）"><span><b>预警范围</b></span><span class="ka-ctl"><input type="number" class="cr-input" min="0" max="20" step="1" value="${T.jumps}" data-in-num="jumps" aria-label="预警范围（跳）"> 跳</span></label>
       ${sw('useLoc', '自动获取我的位置', `当前：${ctx.esc(here)}`, '绑定 ESI 时读角色位置，否则读本地频道日志里的星系切换记录')}
       <label class="ka-opt" title="自动获取不到位置时使用"><span><b>手动设置位置</b></span><input type="text" class="cr-input intel-home" data-in-home="home" data-keep="home" value="${ctx.esc(T.home)}" placeholder="星系名" autocomplete="off" aria-label="手动位置"></label>

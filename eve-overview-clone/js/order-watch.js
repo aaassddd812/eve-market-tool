@@ -141,14 +141,14 @@ async function buildReport(charId, orders) {
 function reportHtml(R) {
   const { esc, formatISK: isk, formatNumber: num } = ctx;
   if (!R) return '';
-  if (R.first) return `<div class="ow-report"><b>订单变化</b><span class="text-muted">已记下当前订单，下次打开会列出这段时间的新单、成交与过期</span></div>`;
+  if (R.first) return `<div class="ow-report"><b>订单变化</b><span class="text-muted">已记录，下次打开显示变化</span></div>`;
   const ago = fmtAgo(Date.now() - R.since);
-  if (R.empty) return `<div class="ow-report"><b>订单变化</b><span class="text-muted">自 ${ago}前上次查看以来没有变化</span></div>`;
+  if (R.empty) return `<div class="ow-report"><b>订单变化</b><span class="text-muted">自 ${ago}前起无变化</span></div>`;
   const name = (id) => esc(ctx.typeName(id));
   const side = (buy) => (buy ? '<span class="pill buy">收</span>' : '<span class="pill sell">卖</span>');
   const sum = (list) => list.reduce((t, x) => t + (x.isk || 0), 0);
   const sec = (title, list, fmt, total) => (list.length ? `<div class="ow-rep-sec"><h4>${title} <small>${list.length}${total ? ' · ' + isk(total) : ''}</small></h4><ul>${list.slice(0, 12).map(fmt).join('')}${list.length > 12 ? `<li class="text-muted">… 等 ${list.length} 张</li>` : ''}</ul></div>` : '');
-  return `<div class="ow-report"><div class="ow-rep-head"><b>订单变化</b><span class="text-muted">自 ${ago}前上次查看以来</span></div><div class="ow-rep-grid">
+  return `<div class="ow-report"><div class="ow-rep-head"><b>订单变化</b><span class="text-muted">自 ${ago}前起</span></div><div class="ow-rep-grid">
     ${sec('部分成交', R.partial, (x) => `<li>${side(x.o.is_buy_order)} ${name(x.o.type_id)} ×${num(x.qty)} <span class="text-muted">@ ${ctx.formatPrice(x.o.price)}</span></li>`, sum(R.partial))}
     ${sec('全部成交', R.filled, (x) => `<li>${side(x.buy)} ${name(x.type_id)} ×${num(x.qty)} <span class="text-muted">@ ${ctx.formatPrice(x.price)}</span></li>`, sum(R.filled))}
     ${sec('新挂单', R.fresh, (o) => `<li>${side(o.is_buy_order)} ${name(o.type_id)} ×${num(o.volume_total)} <span class="text-muted">@ ${ctx.formatPrice(o.price)}</span></li>`)}
@@ -206,7 +206,7 @@ function draw(box) {
     const o = r.o;
     const cool = COOLDOWN - (now - Date.parse(o.issued || 0));
     return `<tr class="ow-${r.state}">
-      <td><button class="link-btn ow-item" data-ow-item="${o.type_id}"><img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" alt="" width="20" height="20" loading="lazy">${esc(ctx.typeName(o.type_id))}</button></td>
+      <td><button class="link-btn ow-item" data-ow-item="${o.type_id}"><img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" data-item-pop="${o.type_id}" alt="" width="20" height="20" loading="lazy">${esc(ctx.typeName(o.type_id))}</button></td>
       <td>${o.is_buy_order ? '<span class="pill buy">收购</span>' : '<span class="pill sell">出售</span>'}</td>
       <td class="pi-hide-sm ow-loc">${esc(ctx.locationName(o.location_id))}</td>
       <td class="num">${px(o.price)}</td>
@@ -217,9 +217,9 @@ function draw(box) {
   }).join('');
   box.innerHTML = settingsHtml() + reportHtml(S.report) + `
     <div class="ow-sum"><span class="ow-state under">被压 ${cnt('under')}</span><span class="ow-state lead">领先 ${cnt('lead')}</span><span class="ow-state alone">只有我 ${cnt('alone')}</span>${cnt('unknown') ? `<span class="ow-state unknown">无法判断 ${cnt('unknown')}</span>` : ''}
-      <span class="text-muted">建议价 = 对手价再让一档（4 位有效数字），点一下复制</span></div>
+      <span class="text-muted" title="对手价再让一档（4 位有效数字）">点建议价复制</span></div>
     <div class="table-scroll"><table class="pc-mini-table ow-table"><thead><tr><th>物品</th><th>方向</th><th class="pi-hide-sm">位置</th><th class="num">我的价格</th><th class="num">对手最优</th><th>状态</th><th class="num">建议价</th><th class="num pi-hide-sm">剩余 / 总量</th></tr></thead><tbody>${body}</tbody></table></div>
-    <p class="pi-note">卖单只和同一空间站 / 建筑的卖单比；收单还算上同星系范围更大的收单与星域范围收单。玩家建筑里的订单需要「建筑市场」权限</p>`;
+    <p class="pi-note" title="卖单只和同一空间站 / 建筑的卖单比；收单还算上星系 / 星域范围的收单">玩家建筑订单需「建筑市场」权限</p>`;
 }
 
 export async function onClick(e, box) {

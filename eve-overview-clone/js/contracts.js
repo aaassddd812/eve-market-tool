@@ -171,7 +171,7 @@ function publicRows() {
     const time = c.status === 'open' ? `<span>${esc(ago(c.issued))}</span><span class="cell-sub">${esc(left(c.expires))}</span>`
       : `<span>${esc(ago(c.ended))}</span><span class="cell-sub"><span>发布于</span> <span>${esc(ago(c.issued))}</span></span>`;
     return `<tr class="ct-row" data-ct="${c.contract_id}" tabindex="0">
-      <td><div class="ct-item">${it.main ? `<img src="${ctx.icon(it.main)}" onerror="if(!this.dataset.bp){this.dataset.bp=1;this.src=this.src.replace('/icon','/bp')}" alt="" width="32" height="32" loading="lazy">` : '<span class="ct-noimg"></span>'}
+      <td><div class="ct-item">${it.main ? `<img src="${ctx.icon(it.main)}" data-item-pop="${it.main}" onerror="if(!this.dataset.bp){this.dataset.bp=1;this.src=this.src.replace('/icon','/bp')}" alt="" width="32" height="32" loading="lazy">` : '<span class="ct-noimg"></span>'}
         <span><b>${esc(it.text)}</b><span class="ct-show-sm"><span class="pill ct-type-${c.type}">${esc(TYPE_ZH[c.type] || c.type)}</span></span>${it.vol ? `<span class="cell-sub">${it.vol}${it.title ? ` · <span translate="no">${esc(unent(it.title))}</span>` : ''}</span>` : ''}${it.sub || it.more ? `<span class="cell-sub">${it.more ? `<span>等 ${it.more} 项</span>${it.sub ? ' · ' : ''}` : ''}${it.sub ? `<span translate="no">${esc(unent(it.sub))}</span>` : ''}</span>` : ''}</span></div></td>
       <td class="ct-hide-sm"><span class="pill ct-type-${c.type}">${esc(TYPE_ZH[c.type] || c.type)}</span>${S.tab !== c.status ? ` <span class="pill">${esc(STATUS_ZH[c.status] || c.status)}</span>` : ''}</td>
       <td class="ct-hide-sm"><span>${esc(place(c))}</span><span class="cell-sub">${esc(nameOf(c.issuer_id))}${c.for_corp ? ' · <span>军团</span>' : ''}</span></td>
@@ -186,8 +186,8 @@ function soldHtml() {
   const s = S.sold;
   if (!s) return '';
   const { formatISK, formatPrice } = ctx;
-  return `<div class="ct-sold"><img src="${ctx.icon(s.type_id)}" onerror="if(!this.dataset.bp){this.dataset.bp=1;this.src=this.src.replace('/icon','/bp')}" alt="" width="32" height="32">
-    <div><b>${esc(typeName(s.type_id))}</b><span>近 ${s.days} 天公开合同推测成交 ${s.count} 份（只卖这一种物品的合同）</span></div>
+  return `<div class="ct-sold"><img src="${ctx.icon(s.type_id)}" data-item-pop="${s.type_id}" onerror="if(!this.dataset.bp){this.dataset.bp=1;this.src=this.src.replace('/icon','/bp')}" alt="" width="32" height="32">
+    <div><b>${esc(typeName(s.type_id))}</b><span title="只统计单一物品的合同">近 ${s.days} 天推测成交 ${s.count} 份</span></div>
     <div class="ct-sold-num"><span>单价中位数</span><b>${formatPrice(s.median)} ISK</b><small>${formatISK(s.min)} – ${formatISK(s.max)}</small></div></div>`;
 }
 
@@ -230,7 +230,7 @@ async function loadEsi(kind, force) {
     const structs = [...new Set(list.map((c) => c.start_location_id).filter((id) => id > 1e12))];
     if (structs.length) ctx.resolveStructures(structs).then(() => renderBody()).catch(() => {});
   } catch (error) {
-    S.esi.set(kind, { error: error.status === 403 ? '没有权限读取（军团合同需要「军团合同」权限）' : error.message });
+    S.esi.set(kind, { error: error.status === 403 ? '没有「军团合同」权限' : error.message });
   }
   renderBody();
 }
@@ -299,10 +299,10 @@ function renderBody() {
   const box = $('ctBody');
   if (!box) return;
   if (isPublic()) {
-    if (!ctx.archive) { box.innerHTML = '<div class="empty-state"><p>公开合同存档只有宁静服提供（需要本站服务端逐份比对 EVE Ref 快照）。</p></div>'; return; }
+    if (!ctx.archive) { box.innerHTML = '<div class="empty-state"><p>公开合同存档仅宁静服提供</p></div>'; return; }
     const why = S.tab === 'done' ? '到期前从公开列表消失的合同（被接受，或发起人手动删除，ESI 无法区分），拍卖含到期有出价的'
       : S.tab === 'repost' ? '同一发起人删掉后马上重发了物品相同的合同，不算成交' : '';
-    const note = `<p class="text-muted ct-note"><span>${S.snapshot ? `最新快照 ${esc(fmtTime(S.snapshot))} · ` : ''}共 ${ctx.formatNumber(S.total)} 份</span>${why ? ` · <span>${why}</span>` : ''}</p>`;
+    const note = `<p class="text-muted ct-note"${why ? ` title="${why}"` : ''}><span>${S.snapshot ? `最新快照 ${esc(fmtTime(S.snapshot))} · ` : ''}共 ${ctx.formatNumber(S.total)} 份</span></p>`;
     if (S.error) { box.innerHTML = soldHtml() + `<p class="text-muted">读取失败：${esc(S.error)}</p>`; return; }
     if (!S.list.length) { box.innerHTML = S.loading ? '<div class="pi-loading">读取公开合同…</div>' : soldHtml() + note + '<p class="text-muted">没有符合条件的合同</p>'; return; }
     box.innerHTML = soldHtml() + note +
@@ -311,7 +311,7 @@ function renderBody() {
     return;
   }
   if (!ctx.hasEsiToken()) {
-    box.innerHTML = '<div class="empty-state"><p>绑定 ESI 角色后可以查看个人、军团与联盟合同。</p><button class="btn btn-primary" data-ct-bind>绑定角色</button></div>';
+    box.innerHTML = '<div class="empty-state"><p>绑定角色后查看我的合同</p><button class="btn btn-primary" data-ct-bind>绑定角色</button></div>';
     return;
   }
   const st = S.esi.get(S.tab);
@@ -319,9 +319,9 @@ function renderBody() {
   if (st.scope) { box.innerHTML = ctx.scopeNeededHtml('corpContracts', '查看军团合同'); return; }
   if (st.error) { box.innerHTML = `<p class="text-muted">读取失败：${esc(st.error)}</p>`; return; }
   const note = S.tab === 'alliance'
-    ? '<p class="text-muted ct-note">ESI 没有联盟合同接口：这里是个人与军团合同里可见范围为「联盟」的合同；指派给联盟、但你和军团都不是发起方或接受方的合同读不到。</p>'
-    : S.tab === 'corp' ? '<p class="text-muted ct-note">军团发起、接受或指派给军团的合同（ESI 只返回 30 天内的合同与进行中的快递）。</p>'
-      : '<p class="text-muted ct-note">你发起、接受或指派给你的合同（ESI 只返回 30 天内的合同）。</p>';
+    ? '<p class="text-muted ct-note">仅含可见范围为「联盟」的个人 / 军团合同</p>'
+    : S.tab === 'corp' ? '<p class="text-muted ct-note">仅 30 天内的合同与进行中的快递</p>'
+      : '<p class="text-muted ct-note">仅 30 天内的合同</p>';
   const rows = esiRows(st.list);
   box.innerHTML = note + (rows ? `<div class="table-scroll"><table class="pc-mini-table ct-table">${tableHead(false)}<tbody>${rows}</tbody></table></div>` : '<p class="text-muted">没有合同</p>');
 }
@@ -450,7 +450,7 @@ async function renderDetail(d) {
   const row = (i, v) => {
     const p = i.is_blueprint_copy ? {} : v.price(i.type_id);
     const cell = (x, cls = '') => (x == null ? '<td class="num muted-cell">—</td>' : `<td class="num ${cls}">${formatISK(x * i.quantity)}</td>`);
-    return `<tr><td><div class="ct-item"><img src="${ctx.icon(i.type_id)}" onerror="if(!this.dataset.bp){this.dataset.bp=1;this.src=this.src.replace('/icon','/bp')}" alt="" width="24" height="24" loading="lazy"><span>${esc(typeName(i.type_id))}${i.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : ''}${i.runs > 0 || i.me || i.te ? `<span class="cell-sub">${i.runs > 0 ? i.runs + ' 流程 · ' : ''}ME ${i.me || 0} · TE ${i.te || 0}</span>` : ''}</span></div></td>
+    return `<tr><td><div class="ct-item"><img src="${ctx.icon(i.type_id)}"${i.is_blueprint_copy ? '' : ` data-item-pop="${i.type_id}"`} onerror="if(!this.dataset.bp){this.dataset.bp=1;this.src=this.src.replace('/icon','/bp')}" alt="" width="24" height="24" loading="lazy"><span>${esc(typeName(i.type_id))}${i.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : ''}${i.runs > 0 || i.me || i.te ? `<span class="cell-sub">${i.runs > 0 ? i.runs + ' 流程 · ' : ''}ME ${i.me || 0} · TE ${i.te || 0}</span>` : ''}</span></div></td>
       <td class="num">${formatNumber(i.quantity)}</td>${cell(p.sell, 'down')}${cell(p.buy, 'up')}${ctx.valuation.hasMed() ? cell(p.mid, 'mid-cell') : ''}</tr>`;
   };
   const table = (list, v, title) => (list.length ? `<h4 class="info-section-title section-gap">${esc(title)}（${list.length}）</h4>
@@ -475,7 +475,7 @@ export async function showContracts() {
   }
   main.dataset.ready = '1';
   main.innerHTML = `<section class="ct-page">
-    <div class="ap-head"><h2>合同</h2><span class="text-muted">全服公开合同（含推测成交的历史合同）与我的个人 / 军团 / 联盟合同</span></div>
+    <div class="ap-head"><h2>合同</h2></div>
     <div class="ct-tabbar" id="ctTabs"></div>
     <div class="cr-toolbar ct-filters" id="ctFilters"></div>
     <div id="ctBody"></div></section>`;

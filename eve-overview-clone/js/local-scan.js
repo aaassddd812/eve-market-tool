@@ -333,13 +333,13 @@ function draw() {
   }).join('');
   box.innerHTML = `${D.back || ''}
     <section class="kb-section ls-input">
-      <div class="kb-section-head"><h2>本地分析</h2><span class="text-muted">粘贴频道成员列表（Ctrl+A、Ctrl+C，最多 ${MAX} 人）查人，或粘贴定向扫描结果看舰队组成，自动识别</span></div>
+      <div class="kb-section-head"><h2>本地分析</h2><span class="text-muted" title="频道成员 Ctrl+A、Ctrl+C，最多 ${MAX} 人">粘贴成员列表或定向扫描结果</span></div>
       <textarea class="cr-input" rows="6" data-ls-text placeholder="${LANG === 'en' ? 'Channel member list: one pilot name per line&#10;D-scan: select all in the scan window and copy' : '频道成员列表：一行一个角色名&#10;定向扫描：扫描窗口里全选复制'}" spellcheck="false">${esc(keep)}</textarea>
       <div class="ls-actions"><button class="btn btn-primary" data-ls-run${S.busy ? ' disabled' : ''}>分析</button>
         ${S.ignore.size ? `<button class="btn btn-ghost" data-ls-unignore>显示全部（已隐藏 ${S.ignore.size} 个军团 / 联盟）</button>` : ''}
         ${S.mode ? `<span class="ds-mode">${S.mode === 'dscan' ? '定向扫描' : '频道成员名单'}</span>` : ''}
         <span class="text-muted" data-ls-status>${esc(S.status)}</span></div>
-      ${D.kb || S.mode === 'dscan' ? '' : '<p class="ka-note">当前服务器没有公开的击杀数据，名单只统计所属军团 / 联盟。</p>'}
+      ${D.kb || S.mode === 'dscan' ? '' : '<p class="ka-note">本服务器无击杀数据，只统计军团 / 联盟</p>'}
     </section>
     ${S.mode === 'dscan' && S.scan ? scanHtml() : ''}
     ${S.mode === 'local' && S.pilots.length ? `
@@ -357,7 +357,7 @@ function draw() {
       <div class="table-scroll"><table class="data-table ls-table"><thead><tr>${th('name', '角色')}${th('org', '联盟 / 军团')}
         ${D.kb ? `${th('threat', '威胁')}${th('kills', '击杀', 'num')}${th('losses', '损失', 'num')}<th class="num ls-hide-sm" title="击杀 ÷（击杀 + 损失）">击杀占比</th><th class="num ls-hide-sm" title="参与的击杀平均有多少名玩家">平均同伙</th><th class="ls-hide-sm">常用船</th><th class="ls-hide-md">常去星系</th>${th('last', '最近活跃', 'num')}` : ''}
       </tr></thead><tbody>${rows}</tbody></table></div>
-      ${D.kb ? '<p class="ka-note">数据为本站击杀记录近 30 天的统计；威胁按击杀数、击杀占比与单挑次数估算，仅供参考。点角色名看详细击杀记录。</p>' : ''}
+      ${D.kb ? '<p class="ka-note" title="威胁按击杀数、击杀占比与单挑次数估算">近 30 天击杀统计，威胁仅供参考</p>' : ''}
     </section>` : ''}`;
 }
 
