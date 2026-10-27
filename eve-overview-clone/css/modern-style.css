@@ -199,12 +199,12 @@ mark {
 
 .header-nav { display: flex; gap: 4px; flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .header-nav::-webkit-scrollbar { display: none; }
-.app-header.nav-tight .header-brand .brand-name,
+.app-header.nav-nobrand .header-brand .brand-name,
 .app-header.nav-tight .server-status .status-text { display: none; }
 .app-header.nav-tight .nav-btn { padding: 0 6px; }
 .app-header.nav-tight .header-nav { gap: 0; }
-.app-header.nav-compact .nav-btn span { display: none; }
-.app-header.nav-compact .nav-btn { padding: 0 8px; }
+.app-header .nav-btn.nav-ico span { display: none; }
+.app-header .nav-btn.nav-ico { padding: 0 7px; }
 
 .nav-btn {
   flex: none;
@@ -2559,22 +2559,8 @@ td.loc {
   .valuation-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
-/* 导航有 14 个入口：窄一些的屏幕先隐藏品牌名、收紧间距、服务器状态只留名称，再只保留图标（悬停显示名称） */
-@media (max-width: 1800px) {
-  .header-brand .brand-name { display: none; }
-}
-@media (max-width: 1720px) {
-  .nav-btn { padding: 0 6px; }
-  .header-nav { gap: 0; }
-}
-@media (max-width: 1620px) {
-  .server-status .status-text { display: none; }
-}
-@media (max-width: 1400px) {
-  .nav-btn span { display: none; }
-}
+/* 导航放不下时由 modern-app.js 逐级收起（.nav-nobrand、.nav-tight，再从右往左把入口换成只留图标的 .nav-ico），不再按固定宽度断点一刀切 */
 @media (max-width: 1100px) {
-  .nav-btn span { display: none; }
   .orders-container { grid-template-columns: 1fr; }
   .orders-table { height: auto; max-height: 420px; }
 }
@@ -2586,6 +2572,7 @@ td.loc {
   .menu-btn { display: flex; }
   .header-brand .brand-name { display: none; }
   .nav-btn { padding: 0 10px; }
+  .nav-btn span { display: none; }   /* 手机导航只留图标，可横向滑动 */
   #shortcutHelpBtn { display: none; }   /* 手机没有键盘快捷键，给导航让出空间 */
   .server-status { padding: 0 10px; }
   .server-status .status-text { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }

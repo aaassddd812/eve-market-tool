@@ -259,6 +259,7 @@ document.addEventListener('compositionend', (e) => {
 document.addEventListener('input', (e) => { if (e.isComposing || window.__imeComposing) e.stopImmediatePropagation(); }, true);
 
 // ===== 视图切换 =====
+let fitNav = () => {};   // initNavigation 里赋值：重新计算顶栏哪些入口只留图标
 function syncNavActive(scroll) {
   const arb = state.currentView === 'market' && !$('arbView').hidden;
   $$('.nav-btn').forEach((btn) => {
@@ -267,6 +268,7 @@ function syncNavActive(scroll) {
     btn.setAttribute('aria-selected', String(active));
     if (scroll === true && active && MOBILE_QUERY.matches) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // 手机导航可横向滑动
   });
+  fitNav();   // 当前页的入口优先保留文字
 }
 function initNavigation() {
   $$('.nav-btn').forEach((btn) => btn.addEventListener('click', () => {
@@ -290,18 +292,30 @@ function initNavigation() {
   if (!header || !nav) return;
   const over = () => nav.scrollWidth > nav.clientWidth + 1;
   const fit = () => {
-    header.classList.remove('nav-tight', 'nav-compact');
+    const btns = [...nav.querySelectorAll('.nav-btn')];
+    header.classList.remove('nav-nobrand', 'nav-tight');
+    btns.forEach((b) => b.classList.remove('nav-ico'));
     if (!over()) return;
-    header.classList.add('nav-tight');   // 先收起品牌名与在线人数、收紧间距
-    if (over()) header.classList.add('nav-compact');   // 还放不下再只留图标（悬停显示名称）
+    header.classList.add('nav-nobrand');   // 先收起品牌名
+    if (!over()) return;
+    header.classList.add('nav-tight');   // 再收起在线人数、收紧间距
+    // 还放不下就从右往左逐个只留图标（悬停显示名称），当前页的入口最后才收，空间够多少就留多少文字
+    const order = [...btns.filter((b) => !b.classList.contains('active')).reverse(), ...btns.filter((b) => b.classList.contains('active'))];
+    for (const b of order) {
+      if (!over()) break;
+      b.classList.add('nav-ico');
+    }
   };
   let raf = 0;
   const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(fit); };
-  if (window.ResizeObserver) new ResizeObserver(schedule).observe(header);
+  // 右侧按钮（在线人数、翻译后的文字）变宽变窄时顶栏总宽不变，也要重新排
+  if (window.ResizeObserver) { const ro = new ResizeObserver(schedule); ro.observe(header); const act = header.querySelector('.header-actions'); if (act) ro.observe(act); }
   else window.addEventListener('resize', schedule);
   // 翻译会改变导航文字长度
   new MutationObserver(schedule).observe(nav, { childList: true, subtree: true, characterData: true });
+  document.fonts?.ready.then(schedule);
   schedule();
+  fitNav = schedule;
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
