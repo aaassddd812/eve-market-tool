@@ -1635,7 +1635,7 @@ function initItemPopups() {
     openItem: (id) => { switchView('market'); selectItem(id); },
     loadPanel: async () => {
       if (itemPanelModule) return itemPanelModule;
-      const m = await import('./item-panel.js?v=2');
+      const m = await import('./item-panel.js?v=3');
       m.initItemPanel({
         esc, formatISK, formatPrice, formatNumber, cssVar, showToast, locationName, resolveStructureNames,
         server: SERVER.id, regions: REGIONS, globalRegion: GLOBAL_MARKET_REGION, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),

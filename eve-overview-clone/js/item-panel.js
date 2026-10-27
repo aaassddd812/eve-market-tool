@@ -12,7 +12,7 @@ let ctx = null;   // esc, formatISK, formatPrice, formatNumber, cssVar, server, 
 const PREF_KEY = 'eve-item-panel';
 const TABS = [['market', '市场数据'], ['history', '价格历史'], ['trades', '成交与制造'], ['stats', '数据统计']];
 const MAX_MKTS = 2;
-const ROWS = 20;
+const BOOK_MAX = 500;   // 每边最多显示的挂单数（框内滚动）
 const MINE_TTL = 3 * 60e3;
 const OBS_TTL = 10 * 60e3;
 const WALLET_SCOPE = 'esi-wallet.read_character_wallet.v1';
@@ -155,16 +155,14 @@ async function renderMarket(M, main) {
   }
   const loc = !pref.hubOnly || M.global;
   const table = (list, buy) => {
-    const rows = M.more ? list : list.slice(0, ROWS);
-    return `<table class="pi-table ipc-book"><thead><tr><th class="num">${buy ? '收购价' : '出售价'}</th><th class="num">剩余</th>${buy ? '<th class="num" title="单笔最少卖给这张收单的数量">最小量</th>' : ''}${loc ? '<th>地点</th>' : ''}</tr></thead>
+    const rows = list.slice(0, BOOK_MAX);
+    return `<div class="ipc-book-box"><table class="pi-table ipc-book"><thead><tr><th class="num">${buy ? '收购价' : '出售价'}</th><th class="num">剩余</th>${buy ? '<th class="num" title="单笔最少卖给这张收单的数量">最小量</th>' : ''}${loc ? '<th>地点</th>' : ''}</tr></thead>
       <tbody>${rows.map((o) => `<tr><td class="num ${buy ? 'buy' : 'sell'}"><button type="button" class="ipc-price" data-ipc-price="${o.price.toFixed(2)}" title="复制价格">${ctx.formatPrice(o.price)}</button></td>
         <td class="num">${ctx.formatNumber(o.volume_remain)}</td>${buy ? `<td class="num">${o.min_volume > 1 ? ctx.formatNumber(o.min_volume) : '1'}</td>` : ''}
-        ${loc ? `<td class="ipc-loc">${ctx.esc(ctx.locationName(o.location_id))}</td>` : ''}</tr>`).join('') || `<tr><td colspan="4" class="text-muted">没有${buy ? '收单' : '卖单'}</td></tr>`}</tbody></table>`;
+        ${loc ? `<td class="ipc-loc">${ctx.esc(ctx.locationName(o.location_id))}</td>` : ''}</tr>`).join('') || `<tr><td colspan="4" class="text-muted">没有${buy ? '收单' : '卖单'}</td></tr>`}</tbody></table></div>`;
   };
-  const longest = Math.max(...books.map((b) => Math.max(b.sells.length, b.buys.length)));
   out.innerHTML = sum + books.map((b, k) => `${books.length > 1 ? `<h4 class="ipc-h"><span class="ipc-dot" style="background:${color(MKT_COLOR[k])}"></span>${ctx.esc(hubLabel(b.r))}</h4>` : ''}
-    <div class="ipc-books">${table(b.sells, false)}${table(b.buys, true)}</div>`).join('')
-    + (longest > ROWS ? `<button type="button" class="btn btn-ghost btn-sm ipc-more" data-ipc-more>${M.more ? '收起' : `显示全部（${ctx.formatNumber(longest)}）`}</button>` : '');
+    <div class="ipc-books">${table(b.sells, false)}${table(b.buys, true)}</div>`).join('');
 }
 
 function chartBase() {
