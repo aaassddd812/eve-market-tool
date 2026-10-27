@@ -39,7 +39,8 @@
   击杀相关接口（status / feed / live / br / battles / top / summary / leaderboard / search / entity / kill / shipfits）可带 server=serenity|infinity 查国服
 
 用法
-  python3 kb_service.py --db kb.sqlite [--port 8291] [--days 30] [--live auto|r2z2|poll|off] [--static DIR]
+  python3 kb_service.py --db kb.sqlite [--port 8291] [--days 180] [--cn-days 0] [--live auto|r2z2|poll|off] [--static DIR]
+  宁静服保留 --days 天（首次启动从 EVE Ref 补齐这么多天，约每天 13 MB）；国服 --cn-days 为 0 时永久保存。
   --static 仅用于本地 / 演示环境：同时托管前端静态文件。
 """
 
@@ -220,7 +221,7 @@ ZKILL_GAP = 1.0             # 任意两次 zKillboard 请求的最小间隔（�
 ZKILL_MAX_PAGE = 100        # zKillboard 每个查询最多翻到第 100 页（每页 200 条）
 LIVE_BUFFER = 300           # 实时缓冲保留最近的新击杀条数
 LIVE_MAX_AGE = 3 * 3600     # 发生超过 3 小时的击杀不进入实时推送
-ARCHIVE_CACHE = 30          # 30 天以前的查询结果只放内存，缓存的 zKillboard 页数
+ARCHIVE_CACHE = 30          # 保留期以前的查询结果只放内存，缓存的 zKillboard 页数
 BR_MAX_SYSTEMS = 30           # 战场统计：最多星系数
 BR_MAX_HOURS = 72             # 战场统计：最长时间段
 BR_MAX_KILLS = 5000           # 战场统计：最多击杀数
@@ -366,7 +367,7 @@ class Store:
         self.path = path
         self.server = server                     # tq / serenity / infinity：各服务器一个库，击杀 ID 互不相干
         self.system_regions = system_regions
-        self.retention = retention_days
+        self.retention = retention_days          # 0 = 永久保存（国服默认）
         self.write_lock = threading.Lock()
         self.local = threading.local()
         conn = self.conn()
@@ -500,7 +501,7 @@ class Store:
             for chunk in range(0, len(ids), 900):
                 part = ids[chunk:chunk + 900]
                 existing |= {r[0] for r in c.execute(f"SELECT id FROM killmails WHERE id IN ({','.join('?' * len(part))})", part)}
-            cutoff = time.time() - self.retention * 86400
+            cutoff = time.time() - self.retention * 86400 if self.retention else 0
             km_rows, att_rows = [], []
             live_att = {}                        # 实时缓冲用：每条击杀全部玩家攻击者的角色 ID（击杀预警的人物关注要判断「参与击杀」）
             for km, km_hash in kms:
@@ -546,6 +547,8 @@ class Store:
         return added
 
     def prune(self):
+        if not self.retention:
+            return
         cutoff = int(time.time() - self.retention * 86400)
         c = self.conn()
         with self.write_lock:
@@ -1171,7 +1174,7 @@ class Api:
         self.km_cache = collections.OrderedDict()
         self.km_lock = threading.Lock()
         self.zk_pages = collections.OrderedDict()   # zKillboard 页缓存（仅内存）
-        self.mem_names = {}                         # 30 天以前击杀涉及的名称（仅内存，不写库）
+        self.mem_names = {}                         # 保留期以前击杀涉及的名称（仅内存，不写库）
         self.bh_lock, self.bh_busy, self.bh_cache = threading.Lock(), {}, {}   # 历史会战：同时只算一份；单独缓存，不随合同估价更新清空
         self.lb_full = collections.OrderedDict()    # 完整排行榜（分页用）：(days, side, by, metric) -> (时间, ids, 次数, 价值)
         self.lb_lock = threading.Lock()
@@ -1525,7 +1528,7 @@ class Api:
             return {"kills": kills, "cursor": start, "names": self.with_names(kills)}
         return self.archive(path, start, limit)
 
-    # 30 天以前：向 zKillboard 查询，按吉他中间价重新估值，只放内存
+    # 保留期以前：向 zKillboard 查询，按吉他中间价重新估值，只放内存
     def zk_page(self, path, page):
         key = f"{path}page/{page}/"
         hit = self.zk_pages.get(key)
@@ -1904,7 +1907,7 @@ class Api:
 
     def shipfits(self, q):
         ship = int(q["ship"])
-        days = max(1, min(int(q.get("days", 7)), self.store.retention))
+        days = max(1, min(int(q.get("days", 7)), self.store.retention or 3650))
         # limit：只分析最近若干次损失（对战模拟一次要查很多种船，用较小的值）
         limit = max(10, min(int(q.get("limit") or SHIPFIT_MAX), SHIPFIT_MAX))
         # kills：只分析这些击杀（对战模拟按一场会战里这型船的实际损失取装配），最多 SHIPFIT_KILLS 个
@@ -4508,7 +4511,7 @@ def main():
     parser.add_argument("--db", default="kb.sqlite")
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8291)
-    parser.add_argument("--days", type=int, default=30, help="历史导入与保留天数")
+    parser.add_argument("--days", type=int, default=180, help="宁静服历史导入与保留天数")
     parser.add_argument("--live", default="auto", choices=["auto", "r2z2", "redisq", "poll", "off"],
                         help="实时数据来源；redisq 已停用，等同 r2z2")
     parser.add_argument("--static", help="同时托管的前端静态目录（本地 / 演示环境）")
@@ -4518,6 +4521,7 @@ def main():
     parser.add_argument("--contract-backfill", type=int, default=3, help="首次启动补多少天的历史合同快照（按小时）")
     parser.add_argument("--contract-keep", type=int, default=90, help="已结束的公开合同保留天数")
     parser.add_argument("--cn", default="serenity,infinity", help="同时收录哪些国服的击杀（逗号分隔，off 关闭）")
+    parser.add_argument("--cn-days", type=int, default=0, help="国服击杀保留天数（0 = 永久保存）")
     parser.add_argument("--cn-db-dir", help="国服击杀库目录（默认与 --db 同目录，文件名 kb-<服务器>.sqlite）")
     parser.add_argument("--cn-queue", help="KM 广播队列名（默认按 --db 路径生成；同一台机器上的两个实例不能共用，否则会互相抢走击杀）")
     parser.add_argument("--verbose", action="store_true")
@@ -4554,7 +4558,7 @@ def main():
     for name in [s.strip() for s in args.cn.split(",") if s.strip() and s.strip() != "off"]:
         if name not in CN_KB:
             parser.error(f"--cn 只能是 {' / '.join(CN_KB)}")
-        cn_store = Store(os.path.join(cn_dir, f"kb-{name}.sqlite"), dict(system_regions), args.days + 1, server=name)
+        cn_store = Store(os.path.join(cn_dir, f"kb-{name}.sqlite"), dict(system_regions), args.cn_days + 1 if args.cn_days else 0, server=name)
         CnWorkers(cn_store, queue).start()
         cn_apis[name] = Api(cn_store)
         threading.Thread(target=cn_apis[name].warm, daemon=True).start()

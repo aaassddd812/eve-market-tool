@@ -159,7 +159,7 @@ function renderForm() {
     </div>
     <div class="kb-br-actions">
       <button class="btn btn-primary" data-br-go${BR.picked.length ? '' : ' disabled'}>生成战场统计</button>
-      <span class="text-muted">最多 ${MAX_SYSTEMS} 个星系、${MAX_HOURS} 小时，限 30 天内</span>
+      <span class="text-muted">最多 ${MAX_SYSTEMS} 个星系、${MAX_HOURS} 小时，限本站已收录的时间段</span>
     </div>`;
 }
 
@@ -374,8 +374,8 @@ function renderResult() {
   const d = BR.data;
   const box = $('brResult');
   if (!d.kills.length) {
-    const old = d.start < Date.now() / 1000 - d.retention_days * 86400;
-    box.innerHTML = `<p class="kb-empty text-muted">没有玩家击杀${old ? `（仅存 ${d.retention_days} 天）` : ''}</p>`;
+    const old = d.retention_days && d.start < Date.now() / 1000 - d.retention_days * 86400;   // 0 = 永久保存（国服）
+    box.innerHTML = `<p class="kb-empty text-muted">没有玩家击杀${old ? `（仅存 ${d.retention_days - 1} 天）` : ''}</p>`;
     return;
   }
   const A = sideStats('A'), B = sideStats('B');

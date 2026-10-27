@@ -135,7 +135,7 @@
         <tr><td>500</td><td>服务器内部错误</td></tr>
       </table>
       <h3>其他</h3>
-      <p>时间均为 UTC，ISO 8601 格式（如 <code>2026-10-17T08:05:44Z</code>），参数里的时间戳为 Unix 秒。金额单位为 ISK。击杀数据只保留最近约 30 天（见 <code>/status</code> 的 <code>retention_days</code>），更早的记录请使用 zKillboard。返回里的 <code>names</code> 是本次结果中出现的人物 / 军团 / 联盟 ID 到名称的映射。</p>
+      <p>时间均为 UTC，ISO 8601 格式（如 <code>2026-10-17T08:05:44Z</code>），参数里的时间戳为 Unix 秒。金额单位为 ISK。击杀数据：宁静服只保留最近约半年（见 <code>/status</code> 的 <code>retention_days</code>），更早的记录请使用 zKillboard；击杀相关接口加 <code>server=serenity</code> / <code>infinity</code> 查晨曦 / 曙光，国服从本站接入那天起收录、永久保存（<code>retention_days</code> 为 0）。返回里的 <code>names</code> 是本次结果中出现的人物 / 军团 / 联盟 ID 到名称的映射。</p>
       <div class="note">数据来自 CCP ESI、zKillboard 与 EVE Ref，仅供参考。请合理控制调用频率，大量数据建议自己缓存。</div>
 
       <div id="endpoints"></div>

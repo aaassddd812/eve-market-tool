@@ -3,7 +3,7 @@
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v27';
+import { initBr, renderBr } from './kb-br.js?v=v28';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v1';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 import { SERVER, IS_TQ, HUB, eveImage, kbSiteLink } from './server.js?v=s4';
@@ -97,9 +97,9 @@ function feedRows(kills, { me } = {}) {
   let divided = false;
   return kills.map((k) => {
     const v = k.victim, f = k.final;
-    // 本站只保留最近 30 天，更早的记录是实时向 zKillboard 查询的（不入库），用分隔行标出
+    // 宁静服本站只保留 --days 天（默认半年），更早的记录是实时向 zKillboard 查询的（不入库），用分隔行标出
     const divider = k.archive && !divided
-      ? (divided = true, `<tr class="kb-divider"><td colspan="${me ? 6 : 5}">以下为 30 天前的记录（zKillboard）</td></tr>`)
+      ? (divided = true, `<tr class="kb-divider"><td colspan="${me ? 6 : 5}">以下为 ${keptDays()} 天前的记录（zKillboard）</td></tr>`)
       : '';
     const sys = kb.systemLabel(k.system_id);
     const side = me ? (v[me.key] === me.id ? 'loss' : 'kill') : null;
@@ -118,8 +118,13 @@ function feedRows(kills, { me } = {}) {
   }).join('');
 }
 
+// 本站保留天数（status 的 retention_days 比 --days 多 1 天余量）；国服永久保存，从接入那天起收录
+const keptDays = () => (S.status?.retention_days || 181) - 1;
 const FEED_NOTICE = {
-  global_end: '仅存 30 天，加筛选可查更早',
+  get global_end() {
+    if (IS_TQ) return `仅存 ${keptDays()} 天，加筛选可查更早`;
+    return S.status?.since ? `${SERVER.full}从 ${new Date(S.status.since).toLocaleDateString('zh-CN')} 起收录，没有更早的记录` : '没有更早的记录';
+  },
   zkill_limit: 'zKillboard 最多查 2 万条，请缩小范围'
 };
 
