@@ -697,7 +697,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v47').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v53').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -707,7 +707,8 @@ function loadFittingModule() {
       // 装配页与模拟对打页互相跳转（可后退）
       openSim: () => { history.pushState(null, '', location.pathname + '#sim'); switchView('sim'); },
       openFit: () => { history.pushState(null, '', location.pathname + '#fit'); switchView('fit'); },
-      openBattles: () => { history.pushState(null, '', location.pathname + '#kb/battles'); switchView('kb'); }
+      openBattles: () => { history.pushState(null, '', location.pathname + '#kb/battles'); switchView('kb'); },
+      openItem: (id) => { switchView('market'); selectItem(id); }
     });
     return m;
   }).catch((error) => { fittingLoading = null; throw error; });
@@ -908,7 +909,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v50').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v51').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,

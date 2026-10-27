@@ -3,7 +3,7 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v23';
+import * as FE from './fit-engine.js?v=v24';
 import * as MU from './fit-mutate.js?v=v3';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v26';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v26';
@@ -13,6 +13,10 @@ import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 
 let app;
 const $ = (id) => document.getElementById(id);
+const INFO_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>';
+const infoBtn = (id, tag = 'button') => tag === 'button'
+  ? `<button type="button" class="fit-info-btn" data-fit-info="${id}" title="查看详情" aria-label="查看详情">${INFO_ICON}</button>`
+  : `<span class="fit-info-btn" data-fit-info="${id}" role="button" title="查看详情" aria-label="查看详情">${INFO_ICON}</span>`;
 const IMG = (id, kind = 'icon', size = 32) => `https://images.evetech.net/types/${id}/${kind}?size=${size}`;
 const DATA_URL = './fit-data.json?v=v21r3';
 const SAVE_KEY = 'eve-fits-v1';
@@ -27,6 +31,8 @@ const TABS = [
   ['drone', '无人机', [FE.CAT.drone, FE.CAT.fighter]],
   ['implant', '植入体', [FE.CAT.implant]]
 ];
+// 科技 I 里衍生等级 ≥ 1 的是衍生装备（紧凑型、持久型、受限型、聚焦型等），原版衍生等级为 0
+const metaTag = (t) => META[t.meta] || (t.meta === 1 && t.attrs.get(633) > 0 ? ['衍生', 'derived'] : null);
 const META = { 2: ['T2', 't2'], 3: ['故事线', 'story'], 4: ['势力', 'faction'], 5: ['官员', 'officer'], 6: ['死亡空间', 'deadspace'], 14: ['T3', 't3'], 15: ['深渊', 'abyssal'] };
 const STATE_NAME = { offline: '离线', online: '在线', active: '激活', overload: '超载' };
 const IMPLANT_SLOT = 331, BOOSTER_SLOT = 1087;
@@ -36,6 +42,7 @@ const F = {
   fit: null, calc: null, stats: null,
   tab: 'ship', query: '', open: new Set(), slotFilter: null, onlyFits: true,
   selected: null,                 // { slot, index }：选中的装备（装填弹药用）
+  infoSrc: null,                  // 详情弹窗是从装配里哪一项点开的（衍生替换用）
   skillMode: 'max', esi: null,
   prices: null
 };
@@ -46,6 +53,12 @@ export function initFitting(context) {
   try { Object.assign(F, pick(app.store.getJSON(SETTINGS_KEY, {}), ['skillMode', 'onlyFits', 'tab'])); } catch { /* 默认设置 */ }
   if (F.skillMode === 'esi' && !app.hasEsiToken()) F.skillMode = 'max';
   bindSidebar();
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-fit-info]');
+    if (!b) return;
+    e.preventDefault(); e.stopPropagation();
+    openTypeInfo(Number(b.dataset.fitInfo), infoSource(b));
+  }, true);
   $('fitMain').addEventListener('click', onMainClick);
   $('fitMain').addEventListener('change', onMainChange);
   $('fitMain').addEventListener('input', onMainInput);
@@ -325,13 +338,250 @@ const byName = (a, b) => a.name.localeCompare(b.name, 'zh');
 const byMeta = (a, b) => (a.meta || 1) - (b.meta || 1) || a.name.localeCompare(b.name, 'zh');
 
 function itemRow(t) {
-  const meta = META[t.meta];
+  const meta = metaTag(t);
   const fitInfo = t.category === FE.CAT.module ? [t.attrs.get(FE.AT.cpu) ? `${fmt(t.attrs.get(FE.AT.cpu))} tf` : '', t.attrs.get(FE.AT.power) ? `${fmt(t.attrs.get(FE.AT.power))} MW` : '', t.attrs.get(FE.AT.upgradeCost) ? `校准 ${t.attrs.get(FE.AT.upgradeCost)}` : ''].filter(Boolean).join(' · ') : '';
   return `<button class="fit-item" data-fit-type="${t.id}" title="${app.esc(t.name + (t.en ? '\n' + t.en : ''))}">
     <img src="${IMG(t.id)}" alt="" width="24" height="24" loading="lazy">
     <span class="fit-item-name">${app.esc(t.name)}${fitInfo ? `<small>${fitInfo}</small>` : ''}</span>
-    ${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}
+    ${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${infoBtn(t.id, 'span')}
   </button>`;
+}
+
+// ---------- 物品详情（舰船 / 装备 / 弹药 / 无人机）：类似游戏里的「显示信息」----------
+// 属性中文名与单位来自 dogma-attr-zh.json，数值取物品本身的基础属性（不含技能与舰船加成）
+let dogmaP = null;
+const dogmaNames = () => dogmaP || (dogmaP = fetch('./dogma-attr-zh.json?v=1').then((r) => r.json()).catch(() => { dogmaP = null; return { attrs: {}, units: {} }; }));
+const SKILL_REQ = [[182, 277], [183, 278], [184, 279], [1285, 1286], [1289, 1287], [1290, 1288]];
+const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V'];
+const INFO_GROUPS = [
+  ['装配', [14, 13, 12, 1137, 1132, 48, 11, 50, 30, 1153, 102, 101, 1547, 128, 38, 161, 4]],
+  ['防御', [263, 479, 271, 272, 273, 274, 265, 267, 268, 269, 270, 9, 113, 111, 109, 110]],
+  ['电容', [482, 55, 6]],
+  ['导航', [37, 70, 552, 600, 1281]],
+  ['锁定', [76, 564, 192, 208, 209, 210, 211]],
+  ['无人机', [283, 1271]]
+];
+const SKIP_INFO = new Set([...SKILL_REQ.flat(), 633]);
+function infoValue(id, v, unit, units) {
+  const n = (x, d = 2) => Number(x.toFixed(d)).toLocaleString('zh-CN');
+  switch (unit) {
+    case 101: return n(v / 1000) + ' 秒';
+    case 108: case 111: return n((1 - v) * 100) + '%';
+    case 109: return n((v - 1) * 100) + '%';
+    case 127: return n(v * 100) + '%';
+    case 115: return app.esc(F.data.groups.get(v)?.name || String(v));
+    case 116: return app.esc(type(v)?.name || String(v));
+    case 117: return ['', '小型', '中型', '大型', '超大型'][v] || String(v);
+    case 137: return v ? '是' : '否';
+    default: {
+      const u = { 9: 'm³', 8: 'm²' }[unit] || (unit !== 122 && unit !== 103 ? units[unit] : '');
+      return n(v) + (!u ? '' : u === '%' ? '%' : ' ' + app.esc(u));
+    }
+  }
+}
+// 从装配里点开的详情记住来源（舰船 / 哪个槽位的装备 / 第几组无人机），衍生里的「替换」只换这一个
+function infoSource(b) {
+  if (!F.fit || b.closest('#fitInfoModal')) return null;
+  if (b.closest('.fit-head-main')) return { kind: 'ship' };
+  const row = b.closest('.fit-slot');
+  if (row?.dataset.fitMod) return { kind: 'mod', ...parseRef(row.dataset.fitMod) };
+  const drone = row?.querySelector('[data-fit-drone-remove]');
+  if (drone) return { kind: 'drone', index: Number(drone.dataset.fitDroneRemove) };
+  return null;
+}
+// 来源处现在装的物品（已被改动就不再能替换）
+function sourceType(src) {
+  if (!src || !F.fit) return null;
+  if (src.kind === 'ship') return F.fit.ship;
+  if (src.kind === 'mod') return F.fit.slots[src.slot]?.[src.index]?.type ?? null;
+  return F.fit.drones[src.index]?.type ?? null;
+}
+
+async function openTypeInfo(id, src = null) {
+  const t = type(id);
+  if (!t) return;
+  let modal = $('fitInfoModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.id = 'fitInfoModal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.innerHTML = `<div class="modal-backdrop" data-fi-close></div><div class="modal-content fi-modal">
+      <div class="modal-header"><h3>物品详情</h3><button class="modal-close" data-fi-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+      <div class="modal-body" id="fitInfoBody"></div></div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => {
+      if (e.target.closest('[data-fi-close]')) { modal.hidden = true; return; }
+      const m = e.target.closest('[data-fi-market]');
+      if (m) { modal.hidden = true; app.openItem?.(Number(m.dataset.fiMarket)); return; }
+      const sw = e.target.closest('[data-fi-swap]');
+      if (sw) { if (swapType(Number(body.dataset.id), Number(sw.dataset.fiSwap))) modal.hidden = true; return; }
+      const tab = e.target.closest('[data-fi-tab]');
+      if (tab) modal.querySelectorAll('[data-fi-tab], [data-fi-pane]').forEach((el) => el.classList.toggle('active', (el.dataset.fiTab || el.dataset.fiPane) === tab.dataset.fiTab));
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) { e.stopImmediatePropagation(); modal.hidden = true; } }, true);
+  }
+  const body = $('fitInfoBody');
+  const tabNow = modal.hidden ? null : modal.querySelector('[data-fi-tab].active')?.dataset.fiTab;
+  const meta = metaTag(t);
+  const isShip = t.category === FE.CAT.ship;
+  const [names, info] = await Promise.all([dogmaNames(), fitInfo()]);
+  if (!modal.hidden && body.dataset.id === String(id)) return;
+  body.dataset.id = String(id);
+  F.infoSrc = sourceType(src) === id ? src : null;
+  const rows = new Map();
+  for (const [aid, v] of t.attrs) {
+    const a = names.attrs[aid];
+    if (!a || SKIP_INFO.has(aid) || [119, 129, 136, 140, 142].includes(a[1])) continue;
+    rows.set(aid, `<div class="fi-attr"><span>${app.esc(a[0])}</span><b>${infoValue(aid, v, a[1], names.units)}</b></div>`);
+  }
+  const used = new Set();
+  const sections = INFO_GROUPS.map(([label, ids]) => {
+    const list = ids.filter((x) => rows.has(x)).map((x) => { used.add(x); return rows.get(x); });
+    return list.length ? `<section class="fi-sec"><h4>${label}</h4><div class="fi-grid">${list.join('')}</div></section>` : '';
+  }).join('');
+  const rest = [...rows].filter(([x]) => !used.has(x)).map(([, h]) => h);
+  const attrsHtml = sections + (rest.length ? `<section class="fi-sec"><h4>${sections ? '其他' : '属性'}</h4><div class="fi-grid">${rest.join('')}</div></section>` : '') || '<p class="text-muted">没有可显示的属性</p>';
+  const bonus = info.bonus?.[id];
+  const variants = variantsOf(id, info);
+  const tabs = [['attrs', '属性'], ...(bonus ? [['bonus', '加成']] : []), ['skills', `技能需求${t.skills.length ? ` ${t.skills.length}` : ''}`], ...(variants.length > 1 ? [['var', `衍生 ${variants.length}`]] : []), ['desc', '描述']];
+  // 替换后重新打开新物品时停在原来的标签页
+  const first = tabs.some(([k]) => k === tabNow) ? tabNow : bonus && isShip ? 'bonus' : 'attrs';
+  const pane = (key, html) => `<div class="fi-pane${key === first ? ' active' : ''}" data-fi-pane="${key}">${html}</div>`;
+  body.innerHTML = `<div class="fi-head">
+      <img src="${IMG(id, isShip ? 'render' : 'icon', 128)}" alt="" width="72" height="72">
+      <div class="fi-title"><span>${app.esc(F.data.groups.get(t.group)?.name || '')}${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${t.attrs.get(633) ? `<small>衍生等级 ${t.attrs.get(633)}</small>` : ''}</span>
+        <h4>${app.esc(t.name)}</h4>${t.en && t.en !== t.name ? `<small translate="no">${app.esc(t.en)}</small>` : ''}</div>
+      ${t.market ? `<button type="button" class="btn btn-ghost btn-sm" data-fi-market="${id}">市场价格</button>` : ''}
+    </div>
+    <div class="segmented fi-tabs">${tabs.map(([k, l]) => `<button type="button" data-fi-tab="${k}" class="${k === first ? 'active' : ''}">${l}</button>`).join('')}</div>
+    <div class="fi-panes">${pane('attrs', attrsHtml)}
+    ${bonus ? pane('bonus', bonusHtml(bonus)) : ''}
+    ${pane('skills', skillTreeHtml(t))}
+    ${variants.length > 1 ? pane('var', variantsHtml(variants, id, Boolean(F.infoSrc))) : ''}
+    ${pane('desc', '<div class="fi-desc" id="fitInfoDesc" translate="no"><div class="pi-loading">读取描述…</div></div>')}</div>`;
+  modal.hidden = false;
+  body.querySelector('.fi-panes').scrollTop = 0;
+  const lang = window.I18N?.lang === 'en' ? 'en' : 'zh';
+  app.fetchESI(`/universe/types/${id}/`, { headers: { 'Accept-Language': lang } }).then((d) => {
+    const el = $('fitInfoDesc');
+    if (!el || body.dataset.id !== String(id)) return;
+    const text = String(d.description || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+    el.textContent = text || (lang === 'en' ? 'No description' : '没有描述');
+  }).catch(() => { const el = $('fitInfoDesc'); if (el && body.dataset.id === String(id)) el.textContent = '描述读取失败'; });
+}
+
+// 舰船加成与衍生关系（fit-info.json，server/build_fit_info.py 由 SDE 生成），第一次打开详情时加载
+let fitInfoP = null;
+const fitInfo = () => fitInfoP || (fitInfoP = fetch('./fit-info.json?v=1').then((r) => r.json()).catch(() => { fitInfoP = null; return {}; }));
+const BONUS_UNIT = { 105: '%', 104: 'x', 139: '+', 1: ' m', 144: ' AU/s' };
+
+// 加成说明：{物品ID|名称} 换成可点开详情的链接，其余文字转义
+function bonusText(raw) {
+  return String(raw).split(/(\{\d+\|[^}]*\})/).map((part) => {
+    const m = /^\{(\d+)\|([^}]*)\}$/.exec(part);
+    if (!m) return app.esc(part);
+    return type(Number(m[1])) ? `<button type="button" class="fi-link" data-fit-info="${m[1]}">${app.esc(m[2])}</button>` : `<span>${app.esc(m[2])}</span>`;
+  }).join('');
+}
+function bonusLines(list) {
+  const en = window.I18N?.lang === 'en';
+  return list.map(([v, unit, zh, enText]) => {
+    const val = v == null ? '' : unit === 139 ? '+' + fmt(v) : fmt(v) + (BONUS_UNIT[unit] || '');
+    return `<li>${val ? `<b class="fi-bonus-val">${val}</b>` : '<b class="fi-bonus-val is-dot">·</b>'}<span>${bonusText(en ? enText : zh)}</span></li>`;
+  }).join('');
+}
+function bonusHtml(b) {
+  // 整块不经页面翻译（说明文字自带中英文），标题也按界面语言直接输出
+  const en = window.I18N?.lang === 'en';
+  const esi = F.skillMode === 'esi' && F.esi;
+  // 标题后 5 个格子是当前技能等级（全 5 级 / ESI 角色）
+  const level = (id) => {
+    const h = esi ? F.esi.levels.get(id) || 0 : 5;
+    const tip = en ? `Current level ${h}${esi ? ` (${F.esi.name})` : ' (all level V)'}` : `当前 ${h} 级${esi ? `（${F.esi.name}）` : '（全 5 级）'}`;
+    return `<span class="fi-boxes${h >= 5 ? ' is-max' : ''}" title="${app.esc(tip)}">${Array.from({ length: 5 }, (_, i) => `<i class="${i < h ? 'on' : ''}"></i>`).join('')}</span>`;
+  };
+  const skillHead = (id) => (en ? `${app.esc(type(id)?.en || 'Skill ' + id)} bonus (per skill level)` : `${app.esc(type(id)?.name || '技能 ' + id)}每升一级`) + level(id);
+  const parts = (b.s || []).map(([skill, list]) => `<section class="fi-sec"><h4 class="fi-bonus-head">${skillHead(skill)}</h4><ul class="fi-bonus">${bonusLines(list)}</ul></section>`);
+  if (b.r) parts.push(`<section class="fi-sec"><h4>${en ? 'Role bonus' : '特有加成'}</h4><ul class="fi-bonus">${bonusLines(b.r)}</ul></section>`);
+  if (b.m) parts.push(`<section class="fi-sec"><h4>${en ? 'Misc bonus' : '其他加成'}</h4><ul class="fi-bonus">${bonusLines(b.m)}</ul></section>`);
+  return `<div translate="no">${parts.join('')}</div>`;
+}
+
+// 技能需求：和游戏一样展开前置技能树，每个技能 5 个格子；已有等级按当前技能设置（全 5 级 / ESI 角色）
+function skillTreeHtml(t) {
+  if (!t.skills.length) return '<p class="text-muted">不需要技能</p>';
+  const esi = F.skillMode === 'esi' && F.esi;
+  const have = (s) => (esi ? F.esi.levels.get(s) || 0 : 5);
+  let missing = 0;
+  const rowsOf = (tt, depth, path) => tt.skills.map(([s, need]) => {
+    const st = type(s);
+    const h = have(s);
+    if (h < need) missing++;
+    const boxes = Array.from({ length: 5 }, (_, i) => `<i class="${i < h ? 'on' : i < need ? 'need' : ''}"></i>`).join('');
+    const row = `<div class="fi-skill${h >= need ? ' ok' : ' miss'}" style="--d:${depth}">
+      <button type="button" class="fi-link" data-fit-info="${s}">${app.esc(st?.name || '技能 ' + s)}</button>
+      <span class="fi-boxes" title="需要 ${need} 级 · 当前 ${h} 级">${boxes}</span><b>${ROMAN[need] || need}</b></div>`;
+    return row + (st && !path.has(s) && depth < 8 ? rowsOf(st, depth + 1, new Set([...path, s])) : '');
+  }).join('');
+  const tree = rowsOf(t, 0, new Set([t.id]));
+  const head = esi
+    ? (missing ? `<p class="fi-skill-note miss">按 ${app.esc(F.esi.name)} 的技能：还差 ${missing} 项</p>` : `<p class="fi-skill-note ok">按 ${app.esc(F.esi.name)} 的技能：全部满足</p>`)
+    : `<p class="fi-skill-note">按全 5 级显示${app.hasEsiToken() ? '，在装配页「技能」切到「按 ESI 角色」可看自己的等级' : ''}</p>`;
+  return head + `<div class="fi-skill-tree">${tree}</div>`;
+}
+
+// 衍生：同一母型的全部物品（T1、衍生、T2、故事线、势力、死亡空间、官员……）
+const VAR_ORDER = { 1: 0, 2: 2, 3: 3, 4: 4, 6: 5, 5: 6, 14: 7, 15: 8 };
+function variantsOf(id, info) {
+  const v = info.var || {};
+  const parent = v[id];
+  if (!parent) return [];
+  const rank = (t) => (t.meta === 1 && t.attrs.get(633) > 0 ? 1 : VAR_ORDER[t.meta] ?? 9);
+  return Object.keys(v).filter((k) => v[k] === parent).map((k) => type(Number(k))).filter(Boolean)
+    .sort((a, b) => rank(a) - rank(b) || (a.attrs.get(633) || 0) - (b.attrs.get(633) || 0) || a.name.localeCompare(b.name, 'zh'));
+}
+function variantsHtml(list, current, swappable) {
+  return `<div class="fi-vars">${list.map((t) => {
+    const meta = metaTag(t) || (t.meta === 1 ? ['T1', 't1'] : null);
+    const res = t.category === FE.CAT.module ? [t.attrs.get(FE.AT.cpu) ? `${fmt(t.attrs.get(FE.AT.cpu))} tf` : '', t.attrs.get(FE.AT.power) ? `${fmt(t.attrs.get(FE.AT.power))} MW` : ''].filter(Boolean).join(' · ') : '';
+    return `<div class="fi-var${t.id === current ? ' is-current' : ''}"><button type="button" class="fi-var-main" data-fit-info="${t.id}">
+      <img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">
+      <span class="fi-var-name">${app.esc(t.name)}${res ? `<small>${res}</small>` : ''}</span>
+      ${t.attrs.get(633) ? `<small class="fi-var-ml">衍生等级 ${t.attrs.get(633)}</small>` : ''}
+      ${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}
+    </button>${swappable && t.id !== current ? `<button type="button" class="btn btn-ghost btn-sm fi-var-swap" data-fi-swap="${t.id}">替换</button>` : ''}</div>`;
+  }).join('')}</div>`;
+}
+
+// 衍生里的「替换」：把打开详情的那一个（舰船 / 槽位里的装备 / 那组无人机）换成选中的衍生；
+// 换船和左侧选船一样：有这艘船上次的装配就载入，没有就从空船开始
+function swapType(from, to) {
+  const src = F.infoSrc;
+  const a = type(from), b = type(to);
+  if (!a || !b || sourceType(src) !== from) return false;
+  const f = F.fit;
+  if (src.kind === 'ship') { F.infoSrc = null; setShip(to); return true; }
+  if (src.kind === 'mod') {
+    const m = f.slots[src.slot][src.index];
+    const why = FE.cannotFit(F.data, type(f.ship), b);
+    if (why) { app.showToast(`${b.name}：${why}`, 'error'); return false; }
+    Object.assign(m, { type: to, state: m.state === 'offline' ? 'offline' : defaultState(b) });
+    delete m.mut; delete m.abyssal;
+    if (m.charge && !FE.chargeFits(b, type(m.charge))) m.charge = null;
+  } else {
+    const d = f.drones[src.index];
+    const same = f.drones.find((x) => x.type === to);
+    if (same) { same.count += d.count; f.drones.splice(src.index, 1); } else d.type = to;
+    autoActivateDrones();
+  }
+  F.infoSrc = null;
+  F.selected = null;
+  recompute();
+  trimSlots();
+  app.showToast(`已把 ${a.name} 替换为 ${b.name}`, 'success', 1800);
+  return true;
 }
 
 function fmt(v, d = 1) {
@@ -587,7 +837,7 @@ function renderFit() {
       <img class="fit-ship-img" src="${IMG(shipType.id, 'render', 128)}" alt="" width="88" height="88">
       <div class="fit-head-main">
         <span class="fit-ship-group">${app.esc(F.data.groups.get(shipType.group)?.name || '')}</span>
-        <h2>${app.esc(shipType.name)}</h2>
+        <h2>${app.esc(shipType.name)}${infoBtn(shipType.id)}</h2>
         <input class="fit-name" id="fitName" value="${app.esc(F.fit.name)}" placeholder="装配名称" maxlength="60" aria-label="装配名称">
       </div>
       <div class="fit-actions">
@@ -654,7 +904,7 @@ function moduleRow(slot, index, m, extra) {
     ${!fixed && MU.canMutate(m) ? `<button class="fit-mut-btn${m.mut ? ' on' : ''}" data-fit-mut="${slot}:${index}" title="${m.mut ? '修改突变属性' : '突变成深渊装备并自定义属性'}">${m.mut ? '改属性' : '突变'}</button>` : ''}
     ${ct ? `<span class="fit-charge" title="${app.esc(ct.name)} × ${FE.chargeCount(t, ct)}"><img src="${IMG(ct.id)}" alt="" width="20" height="20" loading="lazy">${app.esc(shortName(ct.name))}<button data-fit-uncharge="${slot}:${index}" aria-label="卸下弹药">×</button></span>`
       : needsCharge ? `<button class="fit-charge is-empty" data-fit-pick-charge="${slot}:${index}">装填弹药</button>` : ''}
-    ${olBtn}${stateBtn}
+    ${olBtn}${stateBtn}${infoBtn(t.id)}
     <button class="fit-remove" data-fit-remove="${slot}:${index}" title="移除" aria-label="移除">×</button>
   </div>`;
 }
@@ -683,6 +933,7 @@ function droneRow(d, i, fighter) {
     <span class="fit-slot-name">${app.esc(t.name)}<small>${fighter ? `每中队 ${size} 架 · 出击 ${d.active} / ${d.count}` : `激活 ${d.active} / ${d.count}`}</small></span>
     <span class="fit-stepper" title="数量（${unit}）"><button data-fit-drone="${i}:count:-1" aria-label="减少">−</button><b>${d.count}</b><button data-fit-drone="${i}:count:1" aria-label="增加">+</button></span>
     <span class="fit-stepper is-active" title="${fighter ? '出击中队' : '激活数量'}"><button data-fit-drone="${i}:active:-1" aria-label="减少">−</button><b>${d.active}</b><button data-fit-drone="${i}:active:1" aria-label="增加">+</button></span>
+    ${infoBtn(t.id)}
     <button class="fit-remove" data-fit-drone-remove="${i}" title="移除" aria-label="移除">×</button>
   </div>`;
 }

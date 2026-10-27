@@ -635,8 +635,12 @@ export function cannotFit(data, shipType, t, ship = null) {
 export function chargeFits(module, charge) {
   const groups = AT.chargeGroups.map((a) => module.attrs.get(a)).filter(Boolean);
   if (!groups.includes(charge.group)) return false;
+  // 装备有尺寸要求时弹药尺寸必须相同（弹药没有尺寸属性也不行，如超大型辅助护盾回充增量器只能装 400 / 800 电池）
   const size = module.attrs.get(AT.chargeSize);
-  return !size || !charge.attrs.get(AT.chargeSize) || size === charge.attrs.get(AT.chargeSize);
+  if (size && charge.attrs.get(AT.chargeSize) !== size) return false;
+  // 弹药体积不能超过装备容量（如中型电容注电器装不下 3200 电池）
+  const cap = module.attrs.get(AT.capacity), vol = charge.attrs.get(AT.volume) || 0;
+  return !cap || vol <= cap + 1e-9;
 }
 
 // 装备当前能装的弹药数量

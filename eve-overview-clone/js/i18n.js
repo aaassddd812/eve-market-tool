@@ -9,7 +9,7 @@
 (function () {
   'use strict';
   var KEY = 'eve-lang';
-  var VER = '52';
+  var VER = '56';
   var CN_TZ = /^Asia\/(Shanghai|Chongqing|Chungking|Harbin|Urumqi|Kashgar|Hong_Kong|Macau|Macao|Taipei)$/;
 
   function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
@@ -31,7 +31,7 @@
   document.documentElement.lang = LANG === 'en' ? 'en' : 'zh-CN';
   var api = window.I18N = {
     lang: LANG,
-    set: function (l) { store(KEY, l); var u = new URL(location.href); u.searchParams.delete('lang'); location.replace(u.toString()); },
+    set: function (l) { store(KEY, l); var u = new URL(location.href); u.searchParams.delete('lang'); if (u.toString() === location.href) location.reload(); else location.replace(u.toString()); },   // 地址带 # 且没变时 replace 只会跳锚点不刷新
     t: function (s) { return s; },
     ready: Promise.resolve()
   };

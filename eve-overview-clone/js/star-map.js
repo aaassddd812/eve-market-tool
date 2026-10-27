@@ -3015,8 +3015,7 @@ async function locateMe() {
     const s = M.byId.get(systemId);
     if (!s) { app.showToast('角色当前位于星图未收录的空间（如虫洞）', 'info'); return; }
     setMyLocation(s.i);
-    // 不飞行、不拉近：保持当前缩放，直接把视角移到所在星系并选中
-    centerOn(s.i, Infinity, true);
+    // 和手动点击星系一样：只选中并显示信息，视角不动
     selectSystem(s.i);
     startLocPoll();
   } catch (error) {
