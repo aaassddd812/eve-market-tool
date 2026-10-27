@@ -4,9 +4,9 @@ import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadH
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v33';
 import * as SM from './struct-markets.js?v=v6';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v8';
-import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, NO_KB_MESSAGE, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
+import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=1';
-import { initItemPop, openItemPop } from './item-pop.js?v=3';
+import { initItemPop, openItemPop } from './item-pop.js?v=6';
 
 // ===== 配置与常量 =====
 const IMAGE_BASE = 'https://images.evetech.net/types';
@@ -740,7 +740,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v68').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v72').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -812,8 +812,7 @@ let kbPageModule = null;
 // ===== 会战监测：全站提醒，击杀记录页与星图订阅 =====
 let battlesPromise = null;
 function initBattleWatch() {
-  if (!SERVER.kb) return;
-  battlesPromise = import('./battles.js?v=v19r17').then((m) => {
+  battlesPromise = import('./battles.js?v=v19r18').then((m) => {
     m.initBattles({ store, loadKillboard, esc, formatISK, officialName, openMapSystem, openKbSystem });
     return m;
   }).catch((error) => { console.error('会战监测加载失败:', error); return null; });
@@ -830,31 +829,6 @@ async function openKbSystem(id) {
   switchView('kb');
   await openKbPage();
   kbPageModule?.filterBySystem(id);
-}
-
-// 国服没有击杀数据源：击杀记录页只显示说明
-function renderNoKbPage() {
-  const box = $('kbView').querySelector('.kb-scroll');
-  if (box.dataset.noKb) return;
-  box.dataset.noKb = '1';
-  box.innerHTML = '<div class="empty-state server-unsupported">' +
-    '<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>' +
-    '<p>' + esc(NO_KB_MESSAGE) + '</p>' +
-    '<p class="hint">击杀数据仅限宁静服</p>' +
-    '<div class="server-unsupported-actions">' +
-      (SERVER.kbSite ? `<a class="btn btn-primary" href="${SERVER.kbSite.url}/" target="_blank" rel="noopener">打开${esc(SERVER.kbSite.name)} ↗</a>` : '') +
-      (SERVER.kbExtra || []).map((x) => `<a class="btn btn-ghost" href="${x.url}" target="_blank" rel="noopener">打开${esc(x.name)} ↗</a>`).join('') +
-      '<button class="btn btn-ghost" type="button" data-switch-server="tq">切换到宁静服</button>' +
-      '<button class="btn btn-ghost" type="button" data-local-scan>本地名单分析</button>' +
-    '</div>' +
-  '</div><div class="kb-wrap" id="localScanBox"></div>';
-  box.querySelector('[data-local-scan]').addEventListener('click', async () => {
-    const m = await import('./local-scan.js?v=v3');
-    m.renderLocal($('localScanBox'), {
-      esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage: (path, size) => `https://images.evetech.net/${path}?size=${size}`,
-      kb: false, loadTypes: async () => {}, typeName, systemName: (id) => officialName(id) || String(id)
-    });
-  });
 }
 
 // ===== 服务器切换（顶栏）=====
@@ -904,7 +878,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v53').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v54').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -933,7 +907,6 @@ function loadKbPageModule() {
 }
 
 async function openKbPageImpl(restored) {
-  if (!SERVER.kb) { renderNoKbPage(); return; }
   try {
     await loadKbPageModule();
     if (!state.catalog && state.catalogReady) await state.catalogReady;
@@ -948,7 +921,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v32').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v33').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance, valuation
     });
@@ -962,7 +935,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v54').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v55').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -5544,7 +5517,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v17').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v18').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5692,7 +5665,7 @@ function init() {
 function preloadPages() {
   if (navigator.connection?.saveData) return;
   whenIdle(async () => {
-    if (SERVER.kb) try {
+    try {
       const kbPage = await loadKbPageModule();
       await kbPage.prefetchKbHome();
     } catch { /* 未部署击杀记录服务等：打开页面时再处理 */ }
@@ -5715,7 +5688,7 @@ function preloadPages() {
 // 其他页面的预加载：鼠标悬停 / 按下 / 键盘聚焦到导航按钮时就开始取该页的模块与基础数据（各模块的 preload()），点进去直接显示；
 // 常去的页面（eve-page-visits 记每页打开次数与最近一次，近 30 天、最多 4 个）在首屏、击杀记录、星图、装配预取完后空闲时依次预取。省流量模式下都不预取
 const PAGE_PRELOAD = {
-  kb: () => (SERVER.kb ? loadKbPageModule().then((m) => m.prefetchKbHome()) : null),
+  kb: () => loadKbPageModule().then((m) => m.prefetchKbHome()),
   map: () => loadStarMapModule().then((m) => m.preloadStarMap()),
   fit: () => loadFittingModule().then((m) => m.preloadFitting()),
   sim: () => loadFittingModule().then((m) => m.preloadFitting()),

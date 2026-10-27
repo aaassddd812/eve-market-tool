@@ -2,7 +2,7 @@
 // 数据来源：zKillboard 公开 API（https://zkillboard.com/api/），浏览器可直接请求（CORS: *），无需授权。
 // 一次请求即返回完整击杀邮件（受害者、攻击者、物品）及 zKill 估值（zkb）。
 // 按 zKillboard 的使用约定：请求串行、间隔发送，结果缓存 5 分钟。
-import { SERVER, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s4';
+import { SERVER, IS_TQ, HUB, NO_KB_MESSAGE, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { skCards, skRows, skEntityHead, skTitle } from './skeleton.js?v=v17';
 import { fullIn } from './eve-time.js?v=v1';
 
@@ -143,7 +143,7 @@ function collectItems(items, types) {
 const linkable = (kind, id) => id && (kind !== 'corporation' || id < 1000000 || id >= 2000000);
 const partyLink = (kind, id, text) => {
   const label = app.esc(text ?? partyName(id));
-  return linkable(kind, id) ? `<a class="kb-link" href="#kb/${kind}/${id}" data-kb-entity="${kind}:${id}">${label}</a>` : label;
+  return linkable(kind, id) ? `<a class="kb-link" href="#kb/${kind}/${id}" data-kb-entity="${kind}:${id}" translate="no">${label}</a>` : label;
 };
 
 const partyName = (id) => (id ? app.officialName(id) || factionTable.get(id) || names.get(id) || 'ID ' + id : '');
@@ -215,9 +215,9 @@ export function killTableHtml(kills, { me = null, showSide = false } = {}) {
         ${showSide ? `<td class="kb-side"><span class="pill ${loss ? 'sell' : 'buy'}">${loss ? '损失' : '击杀'}</span></td>` : ''}
         <td class="kb-ship"><span class="kb-ship-inner"><img src="${img(`types/${v.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
           <span><strong>${app.esc(typeName(v.ship_type_id))}</strong>${killTags(k.zkb)}</span></span></td>
-        <td class="kb-party kb-victim-cell"><strong>${app.esc(partyName(v.character_id) || partyName(v.corporation_id))}</strong>
-          <span class="cell-sub">${app.esc(partyName(v.corporation_id))}${v.alliance_id ? ' · ' + app.esc(partyName(v.alliance_id)) : ''}</span></td>
-        <td class="kb-party kb-final-cell"><strong>${app.esc(partyName(fb.character_id) || typeName(fb.ship_type_id))}</strong>
+        <td class="kb-party kb-victim-cell"><strong translate="no">${app.esc(partyName(v.character_id) || partyName(v.corporation_id))}</strong>
+          <span class="cell-sub" translate="no">${app.esc(partyName(v.corporation_id))}${v.alliance_id ? ' · ' + app.esc(partyName(v.alliance_id)) : ''}</span></td>
+        <td class="kb-party kb-final-cell"><strong${fb.character_id ? ' translate="no"' : ''}>${app.esc(partyName(fb.character_id) || typeName(fb.ship_type_id))}</strong>
           <span class="cell-sub">${k.attackers.length} 名攻击者</span></td>
         <td class="kb-loc"><strong>${app.esc(sys.name)} <span style="color:${sys.color}">${sys.secText}</span></strong>
           <span class="cell-sub">${app.esc(sys.region)}</span></td>
@@ -235,7 +235,7 @@ export function killCompactHtml(kills) {
   return kills.map((k) => `<button class="kb-item" data-kill="${k.killmail_id}">
       <img src="${img(`types/${k.victim.ship_type_id}/icon`, 64)}" alt="" width="30" height="30" loading="lazy">
       <span class="kb-item-text"><strong>${app.esc(typeName(k.victim.ship_type_id))}</strong>
-        <small>${app.esc(partyName(k.victim.character_id) || partyName(k.victim.corporation_id))}</small></span>
+        <small translate="no">${app.esc(partyName(k.victim.character_id) || partyName(k.victim.corporation_id))}</small></span>
       <span class="kb-item-meta"><b>${app.formatISK(k.zkb.totalValue)}</b><small>${timeAgo(k.killmail_time)}</small></span>
     </button>`).join('');
 }
@@ -302,20 +302,20 @@ export async function openKill(kill, options = {}) {
 }
 
 // 打开击杀记录服务（/api/kb/）中的击杀：完整击杀邮件 + 逐项吉他中间价（星图弹幕等处使用）
-const SERVICE_PRICE_NOTE = '总价值、掉落与摧毁价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。';
+const SERVICE_PRICE_NOTE = IS_TQ ? '总价值、掉落与摧毁价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。'
+  : `总价值、掉落与摧毁价值按${HUB.hub.name} 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取${SERVER.full}全服均价）。`;
 export function openServiceKill(id) {
   return openKill(null, {
     priceNote: SERVICE_PRICE_NOTE,
     load: async () => {
-      if (!SERVER.kb) throw new Error(NO_KB_MESSAGE);
-      const res = await fetch('/api/kb/kill/' + id);
+      const res = await fetch('/api/kb/kill/' + id + (IS_TQ ? '' : '?server=' + SERVER.id));
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || '击杀记录服务 ' + res.status);
       for (const [k, v] of Object.entries(data.names || {})) if (v) names.set(Number(k), v);
       const km = data.killmail;
       const players = (km.attackers || []).filter((a) => a.character_id);
       return {
-        kill: { ...km, zkb: { totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed, solo: players.length === 1, npc: !players.length, awox: false, locationID: null, valueLabel: '吉他中间价估值' } },
+        kill: { ...km, zkb: { totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed, solo: players.length === 1, npc: !players.length, awox: false, locationID: null, valueLabel: IS_TQ ? '吉他中间价估值' : `${HUB.hub.name} 中间价估值` } },
         prices: new Map(Object.entries(data.prices).map(([k, v]) => [Number(k), v]))
       };
     }
@@ -410,7 +410,8 @@ function renderKill(k, val, priceNote, insurance) {
       <div class="kb-ship-col">
         <div class="kb-ship-render"><img src="${img(`types/${v.ship_type_id}/render`, 256)}" alt="" width="128" height="128"></div>
         <div class="kb-ship-actions">
-          ${SERVER.kb ? `<a class="btn btn-ghost" href="https://zkillboard.com/kill/${k.killmail_id}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>` : ''}
+          ${SERVER.kb ? `<a class="btn btn-ghost" href="https://zkillboard.com/kill/${k.killmail_id}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>`
+            : SERVER.kbSite ? `<a class="btn btn-ghost" href="${kbSiteLink('kill', k.killmail_id)}" target="_blank" rel="noopener">在${app.esc(SERVER.kbSite.name)}查看 ↗</a>` : ''}
         </div>
       </div>
       <div class="kb-victim">

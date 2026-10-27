@@ -1,16 +1,21 @@
 // ===== 击杀记录页 =====
 // 数据来自自建的击杀记录服务（server/kb_service.py，/api/kb/），收录新伊甸全部击杀；
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
+// 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v26';
+import { initBr, renderBr } from './kb-br.js?v=v27';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v1';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
+import { SERVER, IS_TQ, HUB, eveImage, kbSiteLink } from './server.js?v=s4';
 
 let app, kb;
 
 const API = '/api/kb/';
-const IMG = (path, size) => `https://images.evetech.net/${path}?size=${size}`;
-const PRICE_NOTE = '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）；旗舰等吉他没有卖单的物品，按全服公开合同扣除附带物品后的最低价估算。';
+const IMG = (path, size) => eveImage(path, size);   // 国服人物头像、军团 / 联盟图标在网易图片服务器
+const SRV = IS_TQ ? '' : 'server=' + SERVER.id;
+const VALUE_LABEL = IS_TQ ? '吉他中间价估值' : `${HUB.hub.name} 中间价估值`;
+const CN_PRICE_NOTE = `单项与总价值按${HUB.hub.name} 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取${SERVER.full}全服均价）。`;
+const PRICE_NOTE = !IS_TQ ? CN_PRICE_NOTE : '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）；旗舰等吉他没有卖单的物品，按全服公开合同扣除附带物品后的最低价估算。';
 const KIND_ZH = { character: '人物', corporation: '军团', alliance: '联盟' };
 // 子页面顶部的返回按钮，与战场统计页同款
 const BACK_LINK = '<a class="btn kb-br-back kb-back-btn" href="#kb" data-kb-home><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span>返回击杀记录</span></a>';
@@ -43,7 +48,7 @@ function api(path) {
 }
 
 async function request(path) {
-  const res = await fetch(API + path);
+  const res = await fetch(API + path + (SRV ? (path.includes('?') ? '&' : '?') + SRV : ''));
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || '击杀记录服务 ' + res.status);
   return data;
@@ -76,7 +81,7 @@ function avatar(kind, id, size = 32) {
 
 function entityLink(kind, id, text) {
   if (!id) return '';
-  return `<a class="kb-link" href="#kb/${kind}/${id}" data-entity="${kind}:${id}">${app.esc(text || partyName(id))}</a>`;
+  return `<a class="kb-link" href="#kb/${kind}/${id}" data-entity="${kind}:${id}" translate="no">${app.esc(text || partyName(id))}</a>`;
 }
 
 function timeAgo(iso) {
@@ -129,7 +134,7 @@ function feedTable(kills, opts = {}) {
 // 打开击杀详情：从服务读取完整击杀邮件与逐项中间价
 function openKill(id) {
   kb.openKill(null, {
-    priceNote: '总价值、掉落与摧毁价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价；旗舰等吉他没有卖单的物品按全服公开合同最低价）。',
+    priceNote: !IS_TQ ? CN_PRICE_NOTE : '总价值、掉落与摧毁价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价；旗舰等吉他没有卖单的物品按全服公开合同最低价）。',
     load: async () => {
       const data = await api('kill/' + id);
       absorbNames(data.names);
@@ -141,7 +146,7 @@ function openKill(id) {
           zkb: {
             totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed,
             solo: players.length === 1, npc: !players.length, awox: false, locationID: null,
-            valueLabel: '吉他中间价估值'
+            valueLabel: VALUE_LABEL
           }
         },
         prices: new Map(Object.entries(data.prices).map(([k, v]) => [Number(k), v]))
@@ -199,7 +204,7 @@ async function loadSummary() {
       <div class="kb-summary-cards">
         <div class="valuation-card is-sell"><span class="valuation-label">最近 24 小时总损失</span>
           <strong class="valuation-value">${app.formatISK(day.value)}<span class="unit">ISK</span></strong>
-          <span class="valuation-detail">吉他中间价估值</span></div>
+          <span class="valuation-detail">${VALUE_LABEL}</span></div>
         <div class="valuation-card"><span class="valuation-label">击毁舰船</span>
           <strong class="valuation-value">${app.formatNumber(day.count - day.pods)}<span class="unit">艘</span></strong>
           <span class="valuation-detail">另有 ${app.formatNumber(day.pods)} 个太空舱</span></div>
@@ -217,9 +222,12 @@ async function loadSummary() {
 function renderStatus() {
   const st = S.status;
   if (!st || !$('kbStatus')) return;
-  const live = { poll: '轮询 zKillboard', redisq: 'zKillboard 实时推送', off: '未开启' }[st.live_mode] || '启动中';
+  const live = { poll: '轮询 zKillboard', redisq: 'zKillboard 实时推送', kmqueue: 'CEVE 市场 KM 广播', off: '未开启' }[st.live_mode] || '启动中';
+  // 国服没有历史存档：从本站接入那天起累计，注明起点并给出外部击坠榜
+  const since = !IS_TQ && st.since ? ` · <span>${SERVER.full}从 ${new Date(st.since).toLocaleDateString('zh-CN')} 起收录</span>` : '';
+  const site = !IS_TQ && SERVER.kbSite ? ` · <a href="${SERVER.kbSite.url}/" target="_blank" rel="noopener">${app.esc(SERVER.kbSite.name)} ↗</a>` : '';
   $('kbStatus').innerHTML = `收录 <b>${app.formatNumber(st.killmails)}</b> 条 · ${st.oldest ? new Date(st.oldest).toLocaleDateString('zh-CN') : '—'} 至 ${st.newest ? timeAgo(st.newest) : '—'}
-    · 实时：${live}${st.backfill && st.backfill !== '完成' ? ' · 历史：' + app.esc(st.backfill) : ''}`;
+    · <span>实时：${live}</span>${st.backfill && st.backfill !== '完成' ? ' · 历史：' + app.esc(st.backfill) : ''}${since}${site}`;
 }
 
 async function loadTop() {
@@ -234,7 +242,7 @@ async function loadTop() {
         <img src="${IMG(`types/${k.ship_type_id}/render`, 128)}" alt="" width="72" height="72" loading="lazy">
         <span class="kb-top-text">
           <strong>${app.esc(typeName(k.ship_type_id))}</strong>
-          <small>${app.esc(partyName(k.victim.character_id) || partyName(k.victim.corporation_id))}</small>
+          <small translate="no">${app.esc(partyName(k.victim.character_id) || partyName(k.victim.corporation_id))}</small>
           <small>${app.esc(kb.systemLabel(k.system_id).name)} · ${timeAgo(k.time)}</small>
         </span>
         <b>${app.formatISK(k.value)}</b>
@@ -369,7 +377,7 @@ async function loadBoard() {
       <li><a class="kb-board-row" href="#kb/${by}/${r.id}" data-entity="${by}:${r.id}">
         <span class="kb-rank${n < 3 ? ' top' : ''}">${n + 1}</span>
         <img src="${avatar(by, r.id, 64)}" alt="" width="30" height="30" loading="lazy">
-        <span class="kb-board-name">${app.esc(r.name || partyName(r.id))}</span>
+        <span class="kb-board-name" translate="no">${app.esc(r.name || partyName(r.id))}</span>
         <span class="kb-board-value"><b>${metric === 'value' ? app.formatISK(r.value) : app.formatNumber(r.count)}</b>
           <small>${metric === 'value' ? r.count + ' 次' : app.formatISK(r.value) + ' ISK'}</small></span>
       </a></li>`).join('') + '</ol>' : '<p class="text-muted kb-empty">暂无数据</p>';
@@ -512,7 +520,7 @@ function renderRankTable() {
         <strong class="valuation-value">${fmtN(paged ? r.data.entities : rows.length)}<span class="unit">个</span></strong>
         <span class="valuation-detail">${sideTotal ? `合计 ${fmtIsk(sideTotal.value)} ISK` : ''}</span></div>
       ${first ? `<div class="valuation-card"><span class="valuation-label">第 1 名</span>
-        <strong class="valuation-value kb-rank-first"><a class="kb-link" href="#kb/${r.by}/${first.id}" data-entity="${r.by}:${first.id}">${app.esc(first.name || partyName(first.id))}</a></strong>
+        <strong class="valuation-value kb-rank-first"><a class="kb-link" href="#kb/${r.by}/${first.id}" data-entity="${r.by}:${first.id}" translate="no">${app.esc(first.name || partyName(first.id))}</a></strong>
         <span class="valuation-detail">${r.metric === 'value' ? fmtIsk(first.value) + ' ISK · ' + fmtN(first.count) + ' 次' : fmtN(first.count) + ' 次 · ' + fmtIsk(first.value) + ' ISK'}</span></div>` : ''}
       ${total ? `<div class="valuation-card"><span class="valuation-label">全服 · 最近 ${RANK_DAYS.find(([d]) => d === r.days)[1]}</span>
         <strong class="valuation-value">${fmtIsk(total.value)}<span class="unit">ISK</span></strong>
@@ -528,7 +536,7 @@ function renderRankTable() {
       <td class="kb-rank-no"><span class="kb-rank${rank <= 3 ? ' top' : ''}">${rank}</span></td>
       <td><div class="kb-rank-who">
         <img src="${avatar(r.by, row.id, 64)}" alt="" width="32" height="32" loading="lazy">
-        <span><a class="kb-link" href="#kb/${r.by}/${row.id}" data-entity="${r.by}:${row.id}">${app.esc(row.name || partyName(row.id))}</a>
+        <span><a class="kb-link" href="#kb/${r.by}/${row.id}" data-entity="${r.by}:${row.id}" translate="no">${app.esc(row.name || partyName(row.id))}</a>
           ${affHtml(row) ? `<small>${affHtml(row)}</small>` : ''}</span></div></td>
       ${detail ? `
       <td class="num"><b class="up">${fmtIsk(row.destroyed)}</b><small>${fmtN(row.kills)} 次击杀</small></td>
@@ -770,7 +778,7 @@ async function renderEntity(kind, id) {
     [stats, info, lifetime, history] = await Promise.all([
       api(`entity/${kind}/${id}?days=30`),
       publicInfo(kind, id),
-      kb.fetchZkill(`stats/${kind}ID/${id}/`).catch(() => null),
+      IS_TQ ? kb.fetchZkill(`stats/${kind}ID/${id}/`).catch(() => null) : null,
       kind === 'character' ? app.fetchESI(`/characters/${id}/corporationhistory/`).catch(() => []) : []
     ]);
   } catch (error) {
@@ -813,7 +821,7 @@ async function renderEntity(kind, id) {
       ${card('ISK 效率', lEff == null ? '—' : lEff.toFixed(1) + '%', '危险度 ' + (lifetime.dangerRatio ?? '—') + '% · 团战 ' + (lifetime.gangRatio ?? '—') + '%', 'is-total')}
     </div>`;
   }
-  const recentCards = `<h4 class="info-section-title${lifetimeCards ? ' section-gap' : ''}">最近 30 天<small>（吉他中间价估值）</small></h4><div class="valuation-grid">
+  const recentCards = `<h4 class="info-section-title${lifetimeCards ? ' section-gap' : ''}">最近 30 天<small>（${VALUE_LABEL}）</small></h4><div class="valuation-grid">
       ${card('参与击杀', app.formatNumber(stats.kills) + '<span class="unit">次</span>', '单刷 ' + app.formatNumber(stats.solo_kills) + ' 次', 'is-buy')}
       ${stats.final_blows != null ? card('最后一击', app.formatNumber(stats.final_blows) + '<span class="unit">次</span>', stats.kills ? '占参与击杀 ' + (stats.final_blows / stats.kills * 100).toFixed(0) + '%' : '', 'is-buy') : ''}
       ${card('损失', app.formatNumber(stats.losses) + '<span class="unit">次</span>', '', 'is-sell')}
@@ -833,13 +841,14 @@ async function renderEntity(kind, id) {
       <img src="${avatar(kind, id, 128)}" alt="" width="72" height="72">
       <div>
         <span class="kb-entity-kind">${KIND_ZH[kind]}</span>
-        <h2>${app.esc(name)}</h2>
+        <h2 translate="no">${app.esc(name)}</h2>
         <p>${sub.join(' · ')}</p>
       </div>
       <div class="kb-ext-links">
-        <a class="btn btn-ghost" href="https://zkillboard.com/${kind}/${id}/" target="_blank" rel="noopener">zKillboard ↗</a>
-        <a class="btn btn-ghost" href="https://evewho.com/${kind}/${id}" target="_blank" rel="noopener">EVEWho ↗</a>
-        ${kind !== 'character' ? `<a class="btn btn-ghost" href="https://evemaps.dotlan.net/${kind === 'alliance' ? 'alliance' : 'corp'}/${encodeURIComponent(name.replace(/ /g, '_'))}" target="_blank" rel="noopener">dotlan ↗</a>` : ''}
+        ${IS_TQ ? `<a class="btn btn-ghost" href="https://zkillboard.com/${kind}/${id}/" target="_blank" rel="noopener">zKillboard ↗</a>
+        <a class="btn btn-ghost" href="https://evewho.com/${kind}/${id}" target="_blank" rel="noopener">EVEWho ↗</a>` : ''}
+        ${!IS_TQ && SERVER.kbSite ? `<a class="btn btn-ghost" href="${kbSiteLink({ character: 'pilot', corporation: 'corp', alliance: 'alliance' }[kind], id)}" target="_blank" rel="noopener">${app.esc(SERVER.kbSite.name)} ↗</a>` : ''}
+        ${IS_TQ && kind !== 'character' ? `<a class="btn btn-ghost" href="https://evemaps.dotlan.net/${kind === 'alliance' ? 'alliance' : 'corp'}/${encodeURIComponent(name.replace(/ /g, '_'))}" target="_blank" rel="noopener">dotlan ↗</a>` : ''}
       </div>
     </div>
     ${lifetimeCards}${monthlyHtml(lifetime)}${recentCards}
@@ -1048,11 +1057,11 @@ function route() {
 
 // ---------- 本地分析：频道成员名单 / 定向扫描（local-scan.js，首次打开时加载）----------
 async function renderLocalScan() {
-  const m = await import('./local-scan.js?v=v9');
+  const m = await import('./local-scan.js?v=v10');
   if (!location.hash.startsWith('#kb/local')) return;
   m.renderLocal($('kbMain'), {
     esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,
-    kb: true, back: BACK_LINK, loadTypes, typeName, systemName: (id) => kb.systemLabel(id).name, fetchESI: app.fetchESI, copyText: app.copyText
+    kb: true, server: IS_TQ ? '' : SERVER.id, back: BACK_LINK, loadTypes, typeName, systemName: (id) => kb.systemLabel(id).name, fetchESI: app.fetchESI, copyText: app.copyText
   });
 }
 

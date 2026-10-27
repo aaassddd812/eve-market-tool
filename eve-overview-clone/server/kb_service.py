@@ -6,6 +6,8 @@
   - 实时：zKillboard R2Z2 顺序推送（RedisQ 已于 2026-05-31 停用）；不可用时轮询 zKillboard 各星域最新击杀
   - 价格：ESI 伏尔戈市场全量订单，取吉他 4-4 最低卖价与最高收购价的中间值
   - 旗舰等吉他没有卖单的物品：每 6 小时扫描全服公开合同，取扣除附带物品市场价后的最低价（合同价变化时重算相关历史击杀）
+  - 国服（晨曦 / 曙光）：CEVE 市场 KM 广播队列 + 网易 ESI 击杀原文，各服一个库，从接入起累计（没有历史存档与 zKillboard）；
+    估值用各自主贸易中心空间站的中间价（见 CN_KB）
 
 接口（除钱包存档外只读，仅监听 127.0.0.1，由 nginx 反代 /api/kb/）
   GET /api/kb/status                          数据覆盖范围与运行状态
@@ -34,6 +36,7 @@
   GET /api/kb/obsvol?server=tq&type=ID&regions=  本站观察成交量：交易中心挂单相邻快照的减少量 / 到期前消失量，按 UTC 日期累计（保留 31 天）
   POST /api/kb/wallet/sync                    钱包成交存档：带浏览器的 ESI 令牌（Authorization），同步并返回某角色某物品的成交 / 税费 / 工业任务
   POST /api/kb/wallet/delete                  删除某角色的全部钱包存档（同样校验令牌）
+  击杀相关接口（status / feed / live / br / battles / top / summary / leaderboard / search / entity / kill / shipfits）可带 server=serenity|infinity 查国服
 
 用法
   python3 kb_service.py --db kb.sqlite [--port 8291] [--days 30] [--live auto|r2z2|poll|off] [--static DIR]
@@ -227,6 +230,14 @@ BATTLE_MIN_VALUE = 10_000_000  # 会战只统计价值 ≥ 1000 万 ISK 的击�
 BATTLE_MIN_KILLS = 20           # 历史会战：60 分钟内同一星系击毁 ≥ 20 艘（与实时疑似会战默认口径相同）
 BATTLE_GAP = 30 * 60            # 历史会战：同一星系相邻击杀间隔不超过 30 分钟算同一场
 BATTLE_HISTORY_CACHE = 600      # 历史会战结果缓存（秒）
+# 国服击杀：CEVE 市场的 KM 广播队列（长轮询，约 5 秒无新击杀返回空；id 为队列名，5 分钟没人读就作废），完整击杀邮件读网易 ESI；
+# 估值用主贸易中心空间站的最低卖 / 最高收中间价
+CN_KB = {
+    "serenity": {"queue": "https://beta.ceve-market.org/api/public/kmqueue", "hub": (10000002, 60003760)},
+    "infinity": {"queue": "https://inf.ceve-market.org/api/public/kmqueue", "hub": (10000016, 60000843)},
+}
+CN_PENDING = 5000             # 等待读取原文 / 估值的击杀最多缓存条数
+CN_QUEUE_GAP = 1.0            # 两次读队列的最小间隔（秒）：连续有击杀时不长轮询，太快会被 429
 
 log = logging.getLogger("kb")
 
@@ -279,17 +290,17 @@ def zkill_get(path):
     return data
 
 
-def resolve_names(ids, depth=0):
-    """ESI 批量解析玩家角色 / 军团 / 联盟原名"""
+def resolve_names(ids, depth=0, url=None):
+    """ESI 批量解析玩家角色 / 军团 / 联盟原名；url：国服用网易 ESI（带 datasource）"""
     try:
-        data, _ = get_json(f"{ESI}/universe/names/", data=json.dumps(ids).encode(),
+        data, _ = get_json(url or f"{ESI}/universe/names/", data=json.dumps(ids).encode(),
                            headers={"Content-Type": "application/json"}, retries=2)
         return data or []
     except urllib.error.HTTPError:
         if len(ids) == 1 or depth > 10:
             return []
         mid = len(ids) // 2
-        return resolve_names(ids[:mid], depth + 1) + resolve_names(ids[mid:], depth + 1)
+        return resolve_names(ids[:mid], depth + 1, url) + resolve_names(ids[mid:], depth + 1, url)
     except Exception as e:
         log.warning("名称解析失败：%s", e)
         return []
@@ -351,8 +362,9 @@ CREATE INDEX IF NOT EXISTS kmfit_ship ON km_fits(ship, time);
 
 
 class Store:
-    def __init__(self, path, system_regions, retention_days):
+    def __init__(self, path, system_regions, retention_days, server="tq"):
         self.path = path
+        self.server = server                     # tq / serenity / infinity：各服务器一个库，击杀 ID 互不相干
         self.system_regions = system_regions
         self.retention = retention_days
         self.write_lock = threading.Lock()
@@ -379,7 +391,17 @@ class Store:
         # 实时收录的新击杀（仅内存）：供星图闪烁与弹幕使用，按入库顺序编号
         self.live_buf = collections.deque(maxlen=LIVE_BUFFER)
         self.live_n = 0
+        if not self.meta("created"):
+            self.meta("created", iso(time.time()))
         self.state = {"live_mode": None, "last_live": None, "prices_updated": self.meta("prices_updated"), "hub_prices_updated": self.meta("hub_prices_updated"), "backfill": "等待中"}
+        if server != "tq":
+            self.state.update(backfill=None, since=self.meta("created"))   # 国服没有历史存档，从接入起累计
+
+    def esi_url(self, path, **params):
+        """本服务器的 ESI 地址（国服走网易 ESI，带 datasource）"""
+        cfg = ARB_SERVERS[self.server]
+        qs = "&".join([*(f"{k}={v}" for k, v in params.items()), *([cfg["qs"]] if cfg["qs"] else [])])
+        return f"{cfg['esi']}{path}" + (f"?{qs}" if qs else "")
 
     @staticmethod
     def migrate(conn):
@@ -552,15 +574,14 @@ class Workers:
             threading.Thread(target=target, daemon=True).start()
 
     # ---- 价格：伏尔戈全量订单 → 吉他 4-4 最低卖 / 最高收；随后读全宇宙订单 → 其余贸易中心与全宇宙的最低卖 / 最高收
-    @staticmethod
-    def region_orders(rid, handle):
+    def region_orders(self, rid, handle):
         """逐页读取星域全部订单交给 handle，返回页数"""
-        first, headers = get_json(f"{ESI}/markets/{rid}/orders/?order_type=all&page=1")
+        first, headers = get_json(self.store.esi_url(f"/markets/{rid}/orders/", order_type="all", page=1))
         handle(first or [])
         pages = int(headers.get("X-Pages") or 1)
 
         def page(n):
-            data, _ = get_json(f"{ESI}/markets/{rid}/orders/?order_type=all&page={n}")
+            data, _ = get_json(self.store.esi_url(f"/markets/{rid}/orders/", order_type="all", page=n))
             return data or []
 
         with concurrent.futures.ThreadPoolExecutor(8) as pool:
@@ -991,7 +1012,7 @@ class Workers:
             if not pending:
                 time.sleep(15)   # 没有待解析的名称时才休眠；有积压时连续处理
                 continue
-            resolved = resolve_names(pending)
+            resolved = resolve_names(pending, url=self.store.esi_url("/universe/names/"))
             c = self.store.conn()
             with self.store.write_lock:
                 c.executemany("INSERT OR REPLACE INTO names VALUES(?,?,?,?)",
@@ -1000,6 +1021,102 @@ class Workers:
             for eid in pending:
                 self.store.pending_names.discard(eid)
                 self.store.known_names.add(eid)
+
+
+class CnWorkers(Workers):
+    """国服（晨曦 / 曙光）：没有历史存档与 zKillboard，只收录接入后 KM 广播队列里的新击杀"""
+    def __init__(self, store, queue):
+        super().__init__(store, 0, "kmqueue")
+        self.queue = queue
+        self.pending = collections.deque(maxlen=CN_PENDING)
+
+    def start(self):
+        for target in (self.price_loop, self.queue_loop, self.ingest_loop, self.names_loop):
+            threading.Thread(target=target, daemon=True).start()
+
+    def refresh_prices(self):
+        region, station = CN_KB[self.store.server]["hub"]
+        sell, buy = {}, {}
+
+        def handle(orders):
+            for o in orders:
+                if o["location_id"] != station:
+                    continue
+                t, p = o["type_id"], o["price"]
+                if o["is_buy_order"]:
+                    if p > buy.get(t, 0):
+                        buy[t] = p
+                elif t not in sell or p < sell[t]:
+                    sell[t] = p
+
+        pages = self.region_orders(region, handle)
+        avg_list, _ = get_json(self.store.esi_url("/markets/prices/"))
+        avg = {x["type_id"]: x.get("average_price") or x.get("adjusted_price") for x in avg_list}
+        prices = {t: (sell.get(t), buy.get(t), avg.get(t)) for t in set(sell) | set(buy) | set(avg)}
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("DELETE FROM prices")
+            c.executemany("INSERT INTO prices VALUES(?,?,?,?)", [(t, *v) for t, v in prices.items()])
+            c.commit()
+        self.store.prices = prices
+        stamp = iso(time.time())
+        self.store.meta("prices_updated", stamp)
+        self.store.state["prices_updated"] = stamp
+        log.info("[%s] 价格已更新：%d 页订单，%d 种物品有交易中心行情", self.store.server, pages, len(set(sell) | set(buy)))
+        self.prices_ready.set()
+
+    def price_loop(self):
+        while True:
+            try:
+                self.refresh_prices()
+            except Exception as e:
+                log.warning("[%s] 价格刷新失败：%s", self.store.server, e)
+            self.store.prune()
+            time.sleep(PRICE_TTL)
+
+    # 队列只能单线程读（同一队列并发读取结果不确定）；读到就先放进 pending，估值与入库在 ingest_loop 里做，价格没好时也不让队列过期
+    def queue_loop(self):
+        url = f"{CN_KB[self.store.server]['queue']}?id={urllib.parse.quote(self.queue)}"
+        self.store.state["live_mode"] = "kmqueue"
+        log.info("[%s] 实时数据：KM 广播队列 %s", self.store.server, self.queue)
+        started = 0.0
+        while True:
+            time.sleep(max(0.0, started + CN_QUEUE_GAP - time.time()))
+            started = time.time()
+            try:
+                data, _ = get_json(url, timeout=40, retries=1)
+                km = (data or {}).get("killmail")
+            except Exception as e:
+                log.warning("[%s] KM 广播队列：%s", self.store.server, e)
+                time.sleep(15)
+                continue
+            if km and km.get("kill_id") and km.get("hash"):
+                self.pending.append(km)
+
+    def ingest_loop(self):
+        self.prices_ready.wait()
+        while True:
+            if not self.pending:
+                time.sleep(1)
+                continue
+            s = self.pending.popleft()
+            try:
+                km, _ = get_json(self.store.esi_url(f"/killmails/{int(s['kill_id'])}/{s['hash']}/"), timeout=20, retries=3)
+            except Exception as e:
+                s["_tries"] = s.get("_tries", 0) + 1
+                if s["_tries"] < 5:
+                    self.pending.append(s)
+                log.warning("[%s] 击杀 %s 原文读取失败：%s", self.store.server, s.get("kill_id"), e)
+                time.sleep(5)
+                continue
+            sid = km.get("solar_system_id")
+            if sid and sid not in self.store.system_regions and s.get("region_id"):
+                self.store.system_regions[sid] = int(s["region_id"])   # 本地星系表是宁静服的，缺的用广播里的星域补上
+            try:
+                self.store.ingest([(km, s["hash"])], live=True)
+                self.store.state["last_live"] = iso(time.time())
+            except Exception:
+                log.exception("[%s] 击杀 %s 入库失败", self.store.server, s.get("kill_id"))
 
 
 # ---------------------------------------------------------------- 查询
@@ -1375,7 +1492,8 @@ class Api:
                 else:
                     where.append(f"({loss} OR {kill})"); args += [eid, eid]
         # 开放接口（_local）只查本地保留期内的记录，不转向 zKillboard
-        path = None if q.get("_local") else zkill_path(q, side)
+        # 国服没有 zKillboard，只有本地收录的记录
+        path = None if q.get("_local") or self.store.server != "tq" else zkill_path(q, side)
         cursor = q.get("cursor") or ""
         if cursor.startswith("z:"):
             if not path:
@@ -1816,7 +1934,7 @@ class Api:
 
         def fetch(row):
             try:
-                km, _ = get_json(f"{ESI}/killmails/{row[0]}/{row[1]}/", timeout=20, retries=2)
+                km, _ = get_json(self.store.esi_url(f"/killmails/{row[0]}/{row[1]}/"), timeout=20, retries=2)
                 return row, self.extract_fit(km)
             except Exception:
                 return row, None
@@ -1947,7 +2065,7 @@ class Api:
         if not row:
             # 保留期以外的击杀：来自 zKillboard，只在内存中估值
             if km is None:
-                if q.get("_local"):   # 开放接口只查保留期内的击杀
+                if q.get("_local") or self.store.server != "tq":   # 开放接口只查保留期内的击杀；国服没有 zKillboard
                     raise KeyError(kid)
                 data = zkill_get(f"killID/{kid}/")
                 if not data:
@@ -1957,7 +2075,7 @@ class Api:
                     self.km_cache[kid] = km
             row = (self.store.km_value(km), (km.get("zkb") or {}).get("hash"))
         elif km is None:
-            km, _ = get_json(f"{ESI}/killmails/{kid}/{row[1]}/", timeout=20, retries=2)
+            km, _ = get_json(self.store.esi_url(f"/killmails/{kid}/{row[1]}/"), timeout=20, retries=2)
             with self.km_lock:
                 self.km_cache[kid] = km
                 while len(self.km_cache) > KM_CACHE:
@@ -4174,12 +4292,30 @@ def match_route(routes, parts):
 
 
 # ---------------------------------------------------------------- HTTP 服务
-def make_handler(api, static_dir, industry, abyssal):
+# 击杀相关接口按 ?server= 分到各服务器的库（其余接口的 server 参数含义不变）
+KB_ROUTES = ("status", "live", "battles", "battles/history", "feed", "top", "summary", "leaderboard", "search", "br", "shipfits")
+V1_KB_ROUTES = {"kills", "live", "top", "kill", "summary", "battles", "battle_report", "leaderboard", "entity", "pilots", "search", "ship_fits"}
+
+
+def kb_routes(api):
+    return {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "feed": api.feed, "top": api.top,
+            "summary": api.summary, "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "shipfits": api.shipfits}
+
+
+def make_handler(api, static_dir, industry, abyssal, cn_apis=None):
+    apis = {"tq": api, **(cn_apis or {})}
     v1 = open_routes(api, industry, abyssal)
+    v1_cn = {s: open_routes(a, industry, abyssal) for s, a in (cn_apis or {}).items()}
     post_limiter = RateLimiter(ABYSSAL_POST_RATE)
-    routes = {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "feed": api.feed, "top": api.top, "summary": api.summary,
-              "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "bpprices": api.bpprices, "shipfits": api.shipfits, "couriers": api.couriers,
+    routes = {**kb_routes(api), "bpprices": api.bpprices, "couriers": api.couriers,
               "contracts": lambda q: api.pc.list(q), "contracts/status": lambda q: api.pc.info(q), "obsvol": lambda q: api.obs.query(q)}
+    kb = {s: kb_routes(a) for s, a in apis.items()}
+
+    def kb_server(q):
+        srv = q.get("server") or "tq"
+        if srv not in apis:
+            raise ValueError("server 只能是 " + " / ".join(apis))
+        return srv
     wallet_limiter = RateLimiter(WALLET_RATE)
 
     class Handler(BaseHTTPRequestHandler):
@@ -4224,6 +4360,11 @@ def make_handler(api, static_dir, industry, abyssal):
             err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
             if not fn:
                 return err(404, "接口不存在，文档见 /api.html")
+            srv = q.get("server") or "tq"
+            if name in V1_KB_ROUTES and srv != "tq":
+                if srv not in v1_cn:
+                    return err(400, "server 只能是 " + " / ".join(apis))
+                name, fn, args = match_route(v1_cn[srv], parts)
             try:
                 return self.send_json(200, fn(q, *args), cors)
             except KeyError as e:
@@ -4322,13 +4463,16 @@ def make_handler(api, static_dir, industry, abyssal):
         def api(self, url):
             q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
             parts = [p for p in url.path[len("/api/kb/"):].split("/") if p]
+            key = "/".join(parts)
             try:
-                if "/".join(parts) in routes:      # battles/history 这类两段路径也在表里
-                    return self.send_json(200, routes["/".join(parts)](q))
+                if key in KB_ROUTES:
+                    return self.send_json(200, kb[kb_server(q)][key](q))
+                if key in routes:      # battles/history 这类两段路径也在表里
+                    return self.send_json(200, routes[key](q))
                 if len(parts) == 3 and parts[0] == "entity":
-                    return self.send_json(200, api.entity(parts[1], int(parts[2]), q))
+                    return self.send_json(200, apis[kb_server(q)].entity(parts[1], int(parts[2]), q))
                 if len(parts) == 2 and parts[0] == "kill":
-                    return self.send_json(200, api.kill(int(parts[1]), q))
+                    return self.send_json(200, apis[kb_server(q)].kill(int(parts[1]), q))
                 if len(parts) == 2 and parts[0] == "contracts" and parts[1].isdigit():
                     return self.send_json(200, api.pc.detail(int(parts[1])))
                 self.send_json(404, {"error": "not found"})
@@ -4373,6 +4517,9 @@ def main():
     parser.add_argument("--contract-db", help="公开合同存档数据库（默认与 --db 同目录的 contracts.sqlite）")
     parser.add_argument("--contract-backfill", type=int, default=3, help="首次启动补多少天的历史合同快照（按小时）")
     parser.add_argument("--contract-keep", type=int, default=90, help="已结束的公开合同保留天数")
+    parser.add_argument("--cn", default="serenity,infinity", help="同时收录哪些国服的击杀（逗号分隔，off 关闭）")
+    parser.add_argument("--cn-db-dir", help="国服击杀库目录（默认与 --db 同目录，文件名 kb-<服务器>.sqlite）")
+    parser.add_argument("--cn-queue", help="KM 广播队列名（默认按 --db 路径生成；同一台机器上的两个实例不能共用，否则会互相抢走击杀）")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -4401,7 +4548,17 @@ def main():
     api.wallet = Wallet(store, industry)
     abyssal = Abyssal(store)
     abyssal.model = store.abyssal_model
-    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal))
+    cn_apis = {}
+    cn_dir = args.cn_db_dir or os.path.dirname(os.path.abspath(args.db))
+    queue = args.cn_queue or "emt-" + hashlib.md5(os.path.abspath(args.db).encode()).hexdigest()[:10]
+    for name in [s.strip() for s in args.cn.split(",") if s.strip() and s.strip() != "off"]:
+        if name not in CN_KB:
+            parser.error(f"--cn 只能是 {' / '.join(CN_KB)}")
+        cn_store = Store(os.path.join(cn_dir, f"kb-{name}.sqlite"), dict(system_regions), args.days + 1, server=name)
+        CnWorkers(cn_store, queue).start()
+        cn_apis[name] = Api(cn_store)
+        threading.Thread(target=cn_apis[name].warm, daemon=True).start()
+    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal, cn_apis))
     log.info("击杀记录服务已启动 http://%s:%d", args.bind, args.port)
     server.serve_forever()
 

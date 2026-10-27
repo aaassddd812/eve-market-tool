@@ -5,7 +5,7 @@
 // 训练时间：主属性 + 副属性 / 2 技能点每分钟（属性含植入体加成），Alpha 克隆减半；可算最佳属性重新分配（每项 17–27，共 99 点）。
 // 训练队列：ESI 只开放了读取（esi-skills.read_skillqueue.v1），没有写入接口，网页无法直接改游戏里的训练队列；
 // 「复制技能清单」每行「技能名 等级」，在游戏技能窗口的训练队列里 Ctrl+V 即可整批加入。
-import { commonFit } from './fit-kb.js?v=v27';
+import { commonFit } from './fit-kb.js?v=v28';
 
 let ctx;   // data, FE, getFit, savedFits, normalize, hasEsi, esiFetch, getEsiToken, getImplants, openEsiBind, esc, formatNumber, showToast, store
 const KEY = 'eve-skill-plan-v1';

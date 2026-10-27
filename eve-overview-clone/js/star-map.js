@@ -1981,12 +1981,11 @@ const LIVE_POLL = 6000;
 const FLASH_MS = 2600;                  // 每次闪烁 3 个脉冲
 const DANMAKU_SPEED = 110;              // 像素 / 秒
 const REDUCED_MOTION = window.matchMedia('(prefers-reduced-motion: reduce)');
-const LIVE = { on: true, cursor: -1, timer: null, disabled: !SERVER.kb, busy: false, lanes: [], names: new Map(), types: new Map(), kills: new Map() };
+const LIVE = { on: true, cursor: -1, timer: null, disabled: false, busy: false, lanes: [], names: new Map(), types: new Map(), kills: new Map() };
 M.flashes = [];
 M.battles = [];                         // 疑似会战（battles.js 每 6 秒更新）
 
 function bindLiveKills() {
-  if (LIVE.disabled) $('mapLiveToggle').hidden = true;   // 晨曦服没有实时击杀数据
   LIVE.on = app.store.get('eve-map-live') !== '0';
   syncLiveToggle();
   $('mapLiveToggle').addEventListener('click', () => {
@@ -2038,7 +2037,7 @@ async function pollLive() {
   if (document.hidden || !M.running || LIVE.busy || LIVE.disabled) return;
   LIVE.busy = true;
   try {
-    const res = await fetch('/api/kb/live?after=' + LIVE.cursor);
+    const res = await fetch('/api/kb/live?after=' + LIVE.cursor + (SERVER.id === 'tq' ? '' : '&server=' + SERVER.id));
     if (res.status === 404) {            // 没有部署击杀记录服务：静默关闭
       LIVE.disabled = true;
       stopLiveKills();
@@ -2230,12 +2229,12 @@ function showKillTip(item) {
   const s = M.byId.get(k.system_id);
   const v = k.victim || {};
   const f = k.final || {};
-  const img = (path, size = 32) => `https://images.evetech.net/${path}?size=${size}`;
+  const img = (path, size = 32) => eveImage(path, size);   // 国服头像在网易图片服务器
   const party = (p, fallback) => {
     const who = liveName(p.character_id) || liveName(p.corporation_id) || fallback;
     const org = [p.character_id ? liveName(p.corporation_id) : '', liveName(p.alliance_id)].filter(Boolean).join(' · ');
     const pic = p.character_id ? img(`characters/${p.character_id}/portrait`) : p.corporation_id ? img(`corporations/${p.corporation_id}/logo`) : '';
-    return `<div class="kill-tip-party">${pic ? `<img src="${pic}" alt="" width="28" height="28">` : '<span class="kill-tip-blank"></span>'}<div><b>${app.esc(who)}</b>${org ? `<small>${app.esc(org)}</small>` : ''}</div></div>`;
+    return `<div class="kill-tip-party">${pic ? `<img src="${pic}" alt="" width="28" height="28">` : '<span class="kill-tip-blank"></span>'}<div translate="no"><b>${app.esc(who)}</b>${org ? `<small>${app.esc(org)}</small>` : ''}</div></div>`;
   };
   const tags = [k.solo ? '单刷' : '', k.npc ? 'NPC 击杀' : ''].filter(Boolean).map((t) => `<i>${t}</i>`).join('');
   const where = s ? `${app.esc(s.name)} <span style="color:${secColor(s.sec)}">${secDisplay(s.sec).toFixed(1)}</span> · ${app.esc(regionName(s.region))}` : '虫洞空间';
@@ -2282,7 +2281,7 @@ function danmaku(k, s) {
   el.title = '点击查看击杀详情';
   el.innerHTML = `<img src="https://images.evetech.net/types/${k.ship_type_id}/icon?size=32" alt="" width="20" height="20">` +
     `<b>${app.esc(LIVE.types.get(k.ship_type_id) || '舰船')}</b>` +
-    (victim ? `<span>${app.esc(victim)}</span>` : '') +
+    (victim ? `<span translate="no">${app.esc(victim)}</span>` : '') +
     `<em>${app.esc(sysName)} ${secText}</em><strong>${app.formatISK(k.value)}</strong>`;
   el.style.top = (8 + lane * 32) + 'px';
   // 先不跑动画：量宽度时会触发样式计算，新版 Chrome 会把时长 0 的动画当场结束并触发 animationend

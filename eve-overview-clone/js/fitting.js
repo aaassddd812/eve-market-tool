@@ -6,11 +6,12 @@
 import * as FE from './fit-engine.js?v=v26';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v27';
-import { initKbFits, openKbFits } from './fit-kb.js?v=v27';
-import { initSim, mountSim } from './fit-sim.js?v=v15';
-import { initPlan, mountPlan, queuePlan } from './skill-plan.js?v=v6';
+import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
+import { initSim, mountSim } from './fit-sim.js?v=v16';
+import { initPlan, mountPlan, queuePlan } from './skill-plan.js?v=v7';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
+import { makeFloat, pinBtn, closeBtn } from './float-pop.js?v=3';
 
 let app;
 const $ = (id) => document.getElementById(id);
@@ -54,12 +55,7 @@ export function initFitting(context) {
   try { Object.assign(F, pick(app.store.getJSON(SETTINGS_KEY, {}), ['skillMode', 'onlyFits', 'tab'])); } catch { /* 默认设置 */ }
   if (F.skillMode === 'esi' && !app.hasEsiToken()) F.skillMode = 'max';
   bindSidebar();
-  document.addEventListener('click', (e) => {
-    const b = e.target.closest('[data-fit-info]');
-    if (!b) return;
-    e.preventDefault(); e.stopPropagation();
-    openTypeInfo(Number(b.dataset.fitInfo), infoSource(b));
-  }, true);
+  initTypeInfo();
   $('fitMain').addEventListener('click', onMainClick);
   $('fitMain').addEventListener('change', onMainChange);
   $('fitMain').addEventListener('input', onMainInput);
@@ -408,7 +404,7 @@ function infoValue(id, v, unit, units) {
 }
 // 从装配里点开的详情记住来源（舰船 / 哪个槽位的装备 / 第几组无人机），衍生里的「替换」只换这一个
 function infoSource(b) {
-  if (!F.fit || b.closest('#fitInfoModal')) return null;
+  if (!F.fit || b.closest('.fi-pop')) return null;
   if (b.closest('.fit-head-main')) return { kind: 'ship' };
   const row = b.closest('.fit-slot');
   if (row?.dataset.fitMod) return { kind: 'mod', ...parseRef(row.dataset.fitMod) };
@@ -424,37 +420,38 @@ function sourceType(src) {
   return F.fit.drones[src.index]?.type ?? null;
 }
 
+// 物品详情：悬浮窗（float-pop.js）——点 ⓘ 打开，可拖动、不挡装配操作；窗口里的物品链接点击后在本窗口换内容
+let infoFloat = null;
+function initTypeInfo() {
+  infoFloat = makeFloat({
+    attr: 'fit-info',
+    hover: false,
+    className: 'fi-pop fi-modal',
+    label: '物品详情',
+    html: `<div class="modal-header" data-float-drag><h3>物品详情</h3><span class="toolbar-spacer"></span>${pinBtn()}${closeBtn()}</div>
+      <div class="modal-body" id="fitInfoBody"></div>`,
+    onOpen: (id, { anchor }) => openTypeInfo(id, anchor ? infoSource(anchor) : null),
+    onClose: () => { $('fitInfoBody').dataset.open = ''; }
+  });
+  infoFloat.el.addEventListener('click', (e) => {
+    const m = e.target.closest('[data-fi-market]');
+    if (m) { infoFloat.close(); app.openItem?.(Number(m.dataset.fiMarket)); return; }
+    const sw = e.target.closest('[data-fi-swap]');
+    if (sw) { if (swapType(Number($('fitInfoBody').dataset.id), Number(sw.dataset.fiSwap))) infoFloat.close(); return; }
+    const tab = e.target.closest('[data-fi-tab]');
+    if (tab) infoFloat.el.querySelectorAll('[data-fi-tab], [data-fi-pane]').forEach((el) => el.classList.toggle('active', (el.dataset.fiTab || el.dataset.fiPane) === tab.dataset.fiTab));
+  });
+}
+
 async function openTypeInfo(id, src = null) {
   const t = type(id);
   if (!t) return;
-  let modal = $('fitInfoModal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.className = 'modal';
-    modal.id = 'fitInfoModal';
-    modal.setAttribute('role', 'dialog');
-    modal.setAttribute('aria-modal', 'true');
-    modal.innerHTML = `<div class="modal-backdrop" data-fi-close></div><div class="modal-content fi-modal">
-      <div class="modal-header"><h3>物品详情</h3><button class="modal-close" data-fi-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
-      <div class="modal-body" id="fitInfoBody"></div></div>`;
-    document.body.appendChild(modal);
-    modal.addEventListener('click', (e) => {
-      if (e.target.closest('[data-fi-close]')) { modal.hidden = true; return; }
-      const m = e.target.closest('[data-fi-market]');
-      if (m) { modal.hidden = true; app.openItem?.(Number(m.dataset.fiMarket)); return; }
-      const sw = e.target.closest('[data-fi-swap]');
-      if (sw) { if (swapType(Number(body.dataset.id), Number(sw.dataset.fiSwap))) modal.hidden = true; return; }
-      const tab = e.target.closest('[data-fi-tab]');
-      if (tab) modal.querySelectorAll('[data-fi-tab], [data-fi-pane]').forEach((el) => el.classList.toggle('active', (el.dataset.fiTab || el.dataset.fiPane) === tab.dataset.fiTab));
-    });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) { e.stopImmediatePropagation(); modal.hidden = true; } }, true);
-  }
   const body = $('fitInfoBody');
-  const tabNow = modal.hidden ? null : modal.querySelector('[data-fi-tab].active')?.dataset.fiTab;
+  const tabNow = body.dataset.open ? body.querySelector('[data-fi-tab].active')?.dataset.fiTab : null;
   const meta = metaTag(t);
   const isShip = t.category === FE.CAT.ship;
   const [names, info] = await Promise.all([dogmaNames(), fitInfo()]);
-  if (!modal.hidden && body.dataset.id === String(id)) return;
+  if (infoFloat.id !== id) return;   // 读数据期间换了别的物品
   body.dataset.id = String(id);
   F.infoSrc = sourceType(src) === id ? src : null;
   const rows = new Map();
@@ -488,7 +485,7 @@ async function openTypeInfo(id, src = null) {
     ${pane('skills', skillTreeHtml(t))}
     ${variants.length > 1 ? pane('var', variantsHtml(variants, id, Boolean(F.infoSrc))) : ''}
     ${pane('desc', '<div class="fi-desc" id="fitInfoDesc" translate="no"><div class="pi-loading">读取描述…</div></div>')}</div>`;
-  modal.hidden = false;
+  body.dataset.open = '1';
   body.querySelector('.fi-panes').scrollTop = 0;
   const lang = window.I18N?.lang === 'en' ? 'en' : 'zh';
   app.fetchESI(`/universe/types/${id}/`, { headers: { 'Accept-Language': lang } }).then((d) => {

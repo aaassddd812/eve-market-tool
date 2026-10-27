@@ -70,7 +70,7 @@ async function analyze(text) {
       for (let i = 0; i < S.pilots.length; i += 200) {
         setStatus(`正在查近 30 天击杀记录 ${Math.min(i + 200, S.pilots.length)} / ${S.pilots.length}…`);
         const part = S.pilots.slice(i, i + 200);
-        const res = await fetch('/api/v1/pilots?ids=' + part.map((p) => p.id).join(','));
+        const res = await fetch('/api/v1/pilots?ids=' + part.map((p) => p.id).join(',') + (D.server ? '&server=' + D.server : ''));
         const d = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(d.error?.message || '击杀记录服务 ' + res.status);
         for (const p of part) p.st = d.pilots?.[p.id] || null;

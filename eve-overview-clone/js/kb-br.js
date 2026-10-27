@@ -500,7 +500,7 @@ function sideColumn(s, st) {
   const losses = st.losses.slice(0, 200).map((k) => {
     const [id, t, sys, ship, value, vChar, vCorp, vAlliance] = k;
     return `<tr class="kb-row" data-kill="${id}" tabindex="0">
-      <td class="kb-br-ship"><img src="${ctx.IMG(`types/${ship}/icon`, 32)}" alt="" width="22" height="22" loading="lazy"><span>${ctx.app.esc(ctx.typeName(ship))}<small>${vChar ? ctx.app.esc(ctx.partyName(vChar)) : ''}${vAlliance || vCorp ? ' · ' + ctx.app.esc(ctx.partyName(vAlliance || vCorp)) : ''}</small></span></td>
+      <td class="kb-br-ship"><img src="${ctx.IMG(`types/${ship}/icon`, 32)}" alt="" width="22" height="22" loading="lazy"><span>${ctx.app.esc(ctx.typeName(ship))}<small translate="no">${vChar ? ctx.app.esc(ctx.partyName(vChar)) : ''}${vAlliance || vCorp ? ' · ' + ctx.app.esc(ctx.partyName(vAlliance || vCorp)) : ''}</small></span></td>
       <td class="num">${ctx.app.formatISK(value)}<small>${fmtClock(t)} · ${ctx.app.esc(ctx.kb.systemLabel(sys).name)}</small></td>
     </tr>`;
   }).join('');

@@ -1,7 +1,9 @@
 // ===== 会战监测 =====
 // 每 6 秒（与星图实时击杀同频）向击杀记录服务查询疑似会战（60 分钟内同一星系被击毁 ≥ 20 艘舰船，不含太空舱、NPC 击杀与 10M ISK 以下的击杀），
 // 按规模分为小型 / 中型 / 大型三档；每场会战只弹出一次提醒（记录在浏览器本地，刷新页面也不会再弹），5 秒后自动消失。
-// 击杀记录页与星图通过 onBattles() 订阅。未部署击杀记录服务（404）时自动停用。
+// 击杀记录页与星图通过 onBattles() 订阅。未部署击杀记录服务（404）时自动停用。国服按 server= 查各自的击杀库。
+import { SERVER, IS_TQ } from './server.js?v=s4';
+
 let app;
 const POLL = 6000;          // 与星图实时击杀轮询（LIVE_POLL）一致
 const KEY = 'eve-battle-settings';
@@ -65,7 +67,7 @@ async function poll() {
   if (B.disabled || document.hidden || B.busy) return;
   B.busy = true;
   try {
-    const res = await fetch(`/api/kb/battles?window=${BATTLE_WINDOW}&min=${BATTLE_MIN}`);
+    const res = await fetch(`/api/kb/battles?window=${BATTLE_WINDOW}&min=${BATTLE_MIN}` + (IS_TQ ? '' : '&server=' + SERVER.id));
     if (res.status === 404) { B.disabled = true; clearInterval(B.timer); B.list = []; emit(); return; }
     if (!res.ok) return;
     const data = await res.json();

@@ -1,8 +1,8 @@
 // ===== 击杀预警 =====
 // 绑定 ESI 后可开启（默认关闭）：按角色当前所在星系（/location/，每 30 秒读一次），实时检测周边 N 跳（默认 3 跳，可设 1–10）内的击杀。
 // 数据来源：
-//   宁静服：击杀记录服务 /api/kb/live（R2Z2 实时收录，每 6 秒取一次），每条击杀都有 ID 与 hash；
-//   晨曦 / 曙光：没有实时击杀源，只能用 ESI /universe/system_kills/（各星系过去 1 小时击杀数，约每小时更新）的增量判断，没有具体击杀邮件。
+//   击杀记录服务 /api/kb/live（每 6 秒取一次），每条击杀都有 ID 与 hash：宁静服来自 R2Z2，晨曦 / 曙光来自 CEVE 市场 KM 广播（server=）；
+//   服务没有该服务器的数据时（未部署 / 未开启国服收录），国服退回 ESI /universe/system_kills/（各星系过去 1 小时击杀数，约每小时更新）的增量判断，没有具体击杀邮件。
 // 提醒方式：
 //   游戏内邮件（默认开）：给自己发一封 EVE 邮件（esi-mail.send_mail.v1），带击杀报告链接 killReport:ID:HASH，游戏里点开即可看 KM；
 //     同一分钟内的多条击杀合并成一封，两封之间至少隔 60 秒；同时开了多个标签页时只由一个标签页发送。
@@ -10,8 +10,8 @@
 //   网页特效（默认关）：屏幕边缘红色闪烁 + 右上角预警卡片（点击查看击杀详情）。
 //   提示音、系统通知（默认关，与网页特效互相独立）：系统通知在浏览器后台也能看到，点击打开击杀详情；多个标签页同一条只响一次（ring）。
 // 人物关注（与位置预警相互独立，默认关闭）：关注的角色产生 KM 时提醒，可分别选「击杀」（参与击杀，含最后一击）/「损失」/「全部」。
-//   只有宁静服可用：实时缓冲里每条击杀带全部玩家攻击者的角色 ID（att）；国服没有公开的个人击杀数据。
-// 星域监控（与位置预警相互独立，宁静服）：指定星域里的任何击杀都提醒，不需要绑定。
+//   实时缓冲里每条击杀带全部玩家攻击者的角色 ID（att）；退回每小时统计时不可用。
+// 星域监控（与位置预警相互独立）：指定星域里的任何击杀都提醒，不需要绑定。
 // 过滤条件（位置预警与星域监控共用）：最低价值、受害者舰船类别、只提醒 N 秒内发生的击杀（zKillboard 收录有延迟，过旧的不提醒）。
 // 人物关注也可以关注军团 / 联盟：成员损失，或成员参与击杀（实时缓冲里带全部攻击者的军团 / 联盟 ID：ao）。
 // 角色离线时不提醒（默认开）：每分钟读一次 ESI /characters/{id}/online/（esi-location.read_online.v1），离线期间的预警只记进「最近预警」，不发邮件 / 特效 / 提示音 / 通知。
@@ -34,7 +34,7 @@ const MODE_ZH = { both: '击杀与损失', kills: '只看击杀', losses: '只�
 const T = { ...DEFAULTS };
 const S = {
   timerLoc: 0, timerKills: 0, system: 0, systemName: '', range: new Map(), status: '', cursor: null, busy: false,
-  seen: new Set(), history: [], mailQueue: [], mailTimer: 0, snapshot: null, snapshotAt: '', charId: 0,
+  seen: new Set(), history: [], mailQueue: [], mailTimer: 0, snapshot: null, snapshotAt: '', charId: 0, hourly: false,
   online: null, timerOnline: 0        // 角色是否在线（null = 不知道 / 没开这项）
 };
 const TAB = Math.random().toString(36).slice(2);
@@ -59,10 +59,10 @@ function save() { try { localStorage.setItem(KEY, JSON.stringify(T)); } catch { 
 
 export const settings = () => T;
 const watching = () => T.watchOn && T.watch.length > 0;
-const regionWatching = () => T.regionOn && T.regions.length > 0 && IS_TQ;
+const regionWatching = () => T.regionOn && T.regions.length > 0 && !S.hourly;
 function watchText() {
   const parts = [];
-  if (watching()) parts.push(IS_TQ ? `正在关注 ${T.watch.length} 个角色 / 军团 / 联盟` : `${SERVER.full}没有实时击杀数据，人物关注不可用`);
+  if (watching()) parts.push(!S.hourly ? `正在关注 ${T.watch.length} 个角色 / 军团 / 联盟` : `${SERVER.full}没有实时击杀数据，人物关注不可用`);
   if (regionWatching()) parts.push(`正在监控 ${T.regions.length} 个星域`);
   return parts.join('；');
 }
@@ -137,7 +137,7 @@ async function pollOnline() {
 
 export function restart() {
   stop();
-  const watch = (watching() && IS_TQ) || regionWatching();
+  const watch = (watching() && !S.hourly) || regionWatching();
   startOnline();
   if (!T.on && !watch) { setStatus(T.on ? '' : '位置预警未开启'); return; }
   S.cursor = null;
@@ -151,8 +151,8 @@ export function restart() {
     pollLocation();
     S.timerLoc = setInterval(pollLocation, LOC_POLL);
   } else if (!T.on) setStatus('位置预警未开启');
-  // 宁静服实时击杀同时服务于位置预警与人物关注；国服只有位置预警（每小时统计）
-  if (IS_TQ) { if (area || watch) { pollLive(); S.timerKills = setInterval(pollLive, LIVE_POLL); } }
+  // 实时击杀同时服务于位置预警与人物关注；国服退回每小时统计后只有位置预警
+  if (!S.hourly) { if (area || watch) { pollLive(); S.timerKills = setInterval(pollLive, LIVE_POLL); } }
   else if (area) { pollSystemKills(); S.timerKills = setInterval(pollSystemKills, NETEASE_POLL); }
 }
 
@@ -217,14 +217,18 @@ function passes(k) {
   return true;
 }
 
-// ---------- 宁静服：实时击杀 ----------
+// ---------- 实时击杀 ----------
 async function pollLive() {
   if (S.busy || (!T.on && !watching())) return;
   S.busy = true;
   try {
     const first = S.cursor == null;
-    const res = await fetch('/api/kb/live?after=' + (first ? -1 : S.cursor) + (first ? '&initial=0' : ''));
-    if (!res.ok) { if (res.status === 404) setStatus('没有部署击杀记录服务，宁静服无法实时预警'); return; }
+    const res = await fetch('/api/kb/live?after=' + (first ? -1 : S.cursor) + (first ? '&initial=0' : '') + (IS_TQ ? '' : '&server=' + SERVER.id));
+    if (!res.ok) {
+      if (res.status === 404 && IS_TQ) setStatus('没有部署击杀记录服务，宁静服无法实时预警');
+      else if (!IS_TQ && (res.status === 400 || res.status === 404)) { S.hourly = true; S.busy = false; restart(); if (panel) drawPanel(); }   // 服务没有国服数据：退回每小时统计
+      return;
+    }
     const data = await res.json();
     S.cursor = data.cursor;
     if (first) return;   // 第一次只取游标，不提醒旧击杀
@@ -256,7 +260,7 @@ async function pollLive() {
   } catch { /* 网络错误：下次再试 */ } finally { S.busy = false; }
 }
 
-// ---------- 晨曦 / 曙光：各星系过去 1 小时击杀数的增量 ----------
+// ---------- 晨曦 / 曙光（击杀记录服务没有该服数据时）：各星系过去 1 小时击杀数的增量 ----------
 async function pollSystemKills() {
   if (!T.on) return;
   try {
@@ -560,7 +564,7 @@ function drawPanel() {
   panel.innerHTML = `
     <div class="ka-top">${pill(st.on, st.text)}</div>
     ${token ? '' : '<p class="ka-warn">位置预警需要先在「个人中心」绑定 ESI</p>'}
-    ${IS_TQ ? '' : `<p class="ka-warn" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据：提醒会延迟，星域监控与人物关注不可用</p>`}
+    ${!S.hourly ? '' : `<p class="ka-warn" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据：提醒会延迟，星域监控与人物关注不可用</p>`}
     ${sec('位置预警', `<div class="ka-list">
       ${sw('on', '开启位置预警')}
       <label class="ka-opt"><span><b>检测范围</b></span><span class="ka-ctl"><input type="number" class="cr-input" min="1" max="10" step="1" value="${T.jumps}" data-ka-jumps aria-label="检测范围（跳）" title="1–10 跳"> 跳</span></label>

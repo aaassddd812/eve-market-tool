@@ -1,7 +1,7 @@
 // ===== 击杀记录装配 =====
 // 列出当前舰船最近 N 天阵亡时的装配（击杀记录服务 /api/kb/shipfits，最多分析最近 300 次损失），
 // 只看装备时相同的装配合并为一组（弹药、无人机数量不同不影响），按出现次数排序，点「套用」载入装配页。
-import { SERVER, NO_KB_MESSAGE } from './server.js?v=s4';
+import { SERVER, IS_TQ, kbSiteLink } from './server.js?v=s4';
 let ctx;   // data, FE, getFit, applyFit, esc, formatNumber, formatISK, showToast, store
 const $ = (id) => document.getElementById(id);
 const KEY = 'eve-fit-kb-days';
@@ -45,8 +45,7 @@ async function load() {
   const token = ++K.loading;
   $('fkList').innerHTML = '<div class="fa-empty">读取阵亡记录…（首次较慢）</div>';
   try {
-    if (!SERVER.kb) throw new Error(NO_KB_MESSAGE);
-    const r = await fetch(`/api/kb/shipfits?ship=${ship}&days=${K.days}`);
+    const r = await fetch(`/api/kb/shipfits?ship=${ship}&days=${K.days}` + (IS_TQ ? '' : '&server=' + SERVER.id));
     if (!r.ok) throw new Error(r.status === 404 ? '需要击杀记录服务' : 'HTTP ' + r.status);
     const j = await r.json();
     if (token !== K.loading) return;
@@ -107,7 +106,7 @@ function render() {
     const drones = topDrones(g);
     return `<div class="fa-result fk-item">
       <div class="fa-result-head"><b>×${g.n}</b><span class="text-muted">${(g.n / total * 100).toFixed(0)}% · ${ago(g.last)} · 平均损失 ${isk(g.value)}</span>
-        <a class="link-btn" href="https://zkillboard.com/kill/${g.ids[0]}/" target="_blank" rel="noopener">查看击杀</a>
+        ${killLink(g.ids[0])}
         <button type="button" class="btn btn-primary" data-fk-apply="${i}">套用</button></div>
       ${slots}
       ${drones.length ? `<div class="fa-slot"><span>无人机</span><div>${drones.map(([id, n]) => `<em><img src="${IMG(id)}" alt="" width="20" height="20" loading="lazy">${esc(name(id))} <b>×${n}</b></em>`).join('')}</div></div>` : ''}
@@ -115,13 +114,18 @@ function render() {
   }).join('') || '<div class="fa-empty">没有阵亡记录</div>';
 }
 
+// 国服没有 zKillboard，链到国服击坠榜
+const killLink = (id) => {
+  const url = IS_TQ ? `https://zkillboard.com/kill/${id}/` : kbSiteLink('kill', id);
+  return url ? `<a class="link-btn" href="${url}" target="_blank" rel="noopener">查看击杀</a>` : '';
+};
+
 const topDrones = (g) => [...g.drones.values()].sort((a, b) => b.n - a.n)[0]?.list || [];
 
 // 对战模拟（fit-sim.js）用：某型舰船最近 N 天（最近 limit 次损失里）最常见的装配（没有记录时为 null）
 // kills：只看这些击杀（一场会战里这型船的实际损失）
 export async function commonFit(ship, { days = 7, limit = 20, kills = null } = {}) {
-  if (!SERVER.kb) throw new Error(NO_KB_MESSAGE);
-  const r = await fetch(`/api/kb/shipfits?ship=${ship}&days=${days}&limit=${limit}${kills?.length ? '&kills=' + kills.slice(0, 60).join(',') : ''}`);
+  const r = await fetch(`/api/kb/shipfits?ship=${ship}&days=${days}&limit=${limit}${kills?.length ? '&kills=' + kills.slice(0, 60).join(',') : ''}` + (IS_TQ ? '' : '&server=' + SERVER.id));
   if (!r.ok) throw new Error(r.status === 404 ? '需要击杀记录服务' : 'HTTP ' + r.status);
   const groups = merge((await r.json()).fits || []);
   if (!groups.length) return null;
