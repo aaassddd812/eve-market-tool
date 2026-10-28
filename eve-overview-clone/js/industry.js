@@ -17,7 +17,7 @@
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
 import * as Plan from './ind-plan.js?v=v5';
-import * as Chain from './ind-chain.js?v=1';
+import * as Chain from './ind-chain.js?v=2';
 import * as IS from './ind-structs.js?v=3';
 import { skPage } from './skeleton.js?v=v17';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';

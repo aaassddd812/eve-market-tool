@@ -144,20 +144,42 @@ export function addOres(g, lp) {
     for (const x of from) { if (!g.edges.has(x.id)) g.edges.set(x.id, new Set()); g.edges.get(x.id).add(o); }
   }
 }
-// 按层分列（层 = 离产品的最远距离）；每列按上级在各自列里的平均位置排序，减少连线交叉
+// 按层分列：先按离产品的最远距离分层，再把同一类的物品（同级行星产品、矿物、矿石、只能买的材料）拉到同一列（取这一类里最深的一层），
+// 下级始终在上级右边；每列里按类型分组（蓝图组件按物品分组），组内按上级在各自列里的平均位置排序，减少连线交叉
+function groupOf(g, n) {
+  if (n.id === g.root) return 'root';
+  if (n.kind === 'mine') return 'mine';
+  if (n.kind === 'pi' || (!n.kind && piTier(n.id) === 0)) return 'pi' + piTier(n.id);
+  if (n.kind === 'ore') return 'mat';
+  if (!n.kind) return 'leaf';
+  return null;   // 蓝图组件按层数自然排
+}
+const GROUP_ORDER = ['root', 'bp', 'pi4', 'pi3', 'pi2', 'pi1', 'pi0', 'mat', 'leaf', 'mine'];
 function columns(g) {
+  const depth = new Map([...g.nodes.values()].map((n) => [n.id, n.depth]));
+  const groups = new Map();
+  for (const n of g.nodes.values()) { const k = groupOf(g, n); if (k && k !== 'root') { if (!groups.has(k)) groups.set(k, []); groups.get(k).push(n.id); } }
+  for (let pass = 0; pass < 20; pass++) {
+    let moved = false;
+    for (const ids of groups.values()) {
+      const d = Math.max(...ids.map((id) => depth.get(id)));
+      for (const id of ids) if (depth.get(id) < d) { depth.set(id, d); moved = true; }
+    }
+    for (const [p, kids] of g.edges) for (const k of kids) if (depth.has(p) && depth.has(k) && depth.get(k) <= depth.get(p)) { depth.set(k, depth.get(p) + 1); moved = true; }
+    if (!moved) break;
+  }
   const cols = [];
-  for (const n of g.nodes.values()) (cols[n.depth] = cols[n.depth] || []).push(n);
+  for (const n of g.nodes.values()) (cols[depth.get(n.id)] = cols[depth.get(n.id)] || []).push(n);
   const filled = cols.filter(Boolean);
   const pos = new Map();
   const parents = new Map();
   for (const [p, kids] of g.edges) for (const k of kids) { if (!parents.has(k)) parents.set(k, []); parents.get(k).push(p); }
+  const rank = (n) => { const k = groupOf(g, n) || 'bp'; return GROUP_ORDER.indexOf(k) * 1e6 + (k === 'bp' ? X.T(n.id)[2] || 0 : 0); };
   filled.forEach((col, ci) => {
-    if (ci) {
-      const score = (n) => { const ps = (parents.get(n.id) || []).filter((p) => pos.has(p)); return ps.length ? ps.reduce((t, p) => t + pos.get(p), 0) / ps.length : 2; };
-      col.sort((a, b) => score(a) - score(b) || b.cost - a.cost);
-    }
+    const score = (n) => { const ps = (parents.get(n.id) || []).filter((p) => pos.has(p)); return ps.length ? ps.reduce((t, p) => t + pos.get(p), 0) / ps.length : 2; };
+    if (ci) col.sort((a, b) => rank(a) - rank(b) || score(a) - score(b) || b.cost - a.cost);
     col.forEach((n, i) => pos.set(n.id, i / Math.max(1, col.length - 1)));
+    col.forEach((n) => { n.col = groupOf(g, n) || 'bp'; });
   });
   return filled;
 }
@@ -179,9 +201,14 @@ export function graphHtml(g, { reproc, lp }) {
     if (!n.kind && piTier(n.id) === 0) return 'P0';
     return KIND_LABEL[n.kind] || '材料';
   };
-  const head = (i, col) => i === 0 ? '产品' : col.every((n) => n.kind === 'mine') ? '矿石' : `第 ${i} 层`;
-  const html = cols.map((col, i) => `<div class="ind-chain-col"><div class="ind-chain-colhead">${head(i, col)}</div>${col.map((n) => `
-      <div class="ind-node k-${n.kind || 'leaf'}${n.make ? ' make' : ''}" data-node="${n.id}">
+  const GROUP_LABEL = { mine: '矿石', mat: '矿物', leaf: '购买', pi4: 'P4', pi3: 'P3', pi2: 'P2', pi1: 'P1', pi0: 'P0' };
+  const head = (i, col) => {
+    if (i === 0) return '产品';
+    const ks = [...new Set(col.map((n) => n.col))];
+    return ks.length === 1 && GROUP_LABEL[ks[0]] ? GROUP_LABEL[ks[0]] : `第 ${i} 层`;
+  };
+  const html = cols.map((col, i) => `<div class="ind-chain-col"><div class="ind-chain-colhead">${head(i, col)}</div>${col.map((n, j) => `
+      <div class="ind-node k-${n.kind || 'leaf'}${n.make ? ' make' : ''}${j && col[j - 1].col !== n.col ? ' grp' : ''}" data-node="${n.id}">
         <div class="ind-node-top"><img src="${X.ICON(n.id)}" data-item-pop="${n.id}" alt="" width="22" height="22" loading="lazy"><span class="ind-node-name" title="${esc(X.tName(n.id))}">${esc(X.tName(n.id))}</span><small class="ind-node-tag">${tag(n)}</small></div>
         <div class="ind-node-bot"><b>${num(Math.ceil(n.need - 1e-9))}</b><span>${isk(n.cost)}</span>${btn(n)}</div>
       </div>`).join('')}</div>`).join('');

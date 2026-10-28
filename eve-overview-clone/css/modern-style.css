@@ -6860,3 +6860,4 @@ td .sov-auto-tag { margin-left: 4px; }
 .tf-struct > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tf-struct .cr-input { width: 80px; }
 .tf-struct-add { width: 100%; margin-bottom: 6px; }
+.ind-node.grp { margin-top: 10px; }

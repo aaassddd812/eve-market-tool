@@ -20,6 +20,11 @@
 // 消耗排行（mode = consume）：五大交易中心日均成交（可选 24 小时 / 7 天 / 30 天）加起来看什么东西用得多，宁静服再加上击杀库近 7 天被击毁数；
 //   消耗额 = 五中心日成交额合计 + 日均被击毁数 × 均价（舰船、部署物被打爆后要补货）。列出最便宜的交易中心卖价，
 //   启用了玩家建筑市场时再列建筑里的最低卖价与比交易中心贵多少，方便决定去哪里买、给建筑市场备什么货。
+// 改单推荐（mode = relist）：同一个交易中心挂收单收货、挂卖单出货（站内倒卖，要经常改单抢位置），只推荐做什么，不推荐改成多少钱。
+//   ESI 每天只有成交均价，不分收单 / 卖单成交：服务器按每天「均价 = f × 最高价 + (1 − f) × 最低价」解出卖单侧成交占比 f（近 30 天按成交量加权，
+//   字段 sshare）；没有时按当前收单价 / 卖单价与 30 天均价近似（标「估」）。收单每天能收到约 (1 − f) × 日成交，卖单能卖出约 f × 日成交，
+//   每天可做 = 两边取小 × 份额。每件利润 = 卖价扣销售税与中介费 − 收价加中介费 − 改单费（每天改 N 次，两张单各按 (1 − 改单折扣) × 中介费率 × 价格摊到每件）。
+//   偏卖方（f ≥ 65%，收单难收到货）/ 偏买方（f ≤ 35%，卖单难卖）/ 均衡。挂单价离 30 天均价太远（收单 < 60%、卖单 > 140%）的不算。
 // 倒卖方式：买入（卖单收 / 收单收 / 中位价收 / 最低价收 / 最高价收）和卖出（收单出 / 卖单出 / 中位价出 / 最低价出 / 最高价出）自由组合，
 //   F.mode 是两个字母（hub-compare.js 的 MODES），F.rmode 记住上次的组合（切到按销量选品 / 消耗排行再切回来还是它）；
 //   成交价取近 F.med 天（1 = 24 小时）：服务器汇总的 med / low / high{1,7,14,30}，数据量大，用到时才带 hist=1 重新取一次（之后一直带）。
@@ -45,14 +50,16 @@ const DEMAND_MAX_STOCK = [[0, '不限'], [1, '1 天'], [3, '3 天'], [7, '7 天'
 const COLS = {
   route: { name: null, buy: (x) => x.r.buyAt, sell: (x) => x.r.sellAt, unit: (x) => x.r.unit, margin: (x) => x.r.margin, m3: (x) => x.r.perM3, qty: (x) => x.r.qty || null, cost: (x) => (x.r.qty ? x.r.cost * x.r.qty : null), profit: (x) => x.r.total },
   demand: { name: null, day: (x) => x.perDay, unit: (x) => x.r.unit, qty: (x) => x.r.qty || null, turn: (x) => x.turnover, trend: (x) => x.trend, stock: (x) => (x.soldOut ? 0 : x.stock), loss: (x) => x.loss },
+  relist: { name: null, day: (x) => x.perDay, unit: (x) => x.unit, margin: (x) => x.margin, qty: (x) => x.qty, bias: (x) => x.f, turn: (x) => x.turnover },
   consume: { name: null, use: (x) => x.use, turn: (x) => x.turnover, units: (x) => x.units, loss: (x) => x.loss, trend: (x) => x.trend, price: (x) => x.cheap?.price ?? null, markup: (x) => (x.st && x.cheap ? x.st.price / x.cheap.price - 1 : null) }
 };
-const SORT_KEY = { route: 'sort', demand: 'dsort', consume: 'csort' };
+const SORT_KEY = { route: 'sort', demand: 'dsort', consume: 'csort', relist: 'rsort' };
 const ASC = new Set(['name', 'buy', 'stock', 'price', 'markup']);
-const modeKind = () => (F.mode === 'demand' ? 'demand' : F.mode === 'consume' ? 'consume' : 'route');
+const KINDS = ['demand', 'consume', 'relist'];
+const modeKind = () => (KINDS.includes(F.mode) ? F.mode : 'route');
 function sortState() {
   const m = modeKind();
-  const k = COLS[m][F[SORT_KEY[m]]] !== undefined ? F[SORT_KEY[m]] : { route: 'profit', demand: 'day', consume: 'use' }[m];
+  const k = COLS[m][F[SORT_KEY[m]]] !== undefined ? F[SORT_KEY[m]] : { route: 'profit', demand: 'day', consume: 'use', relist: 'day' }[m];
   return { m, k, dir: F.sdir?.[m]?.[k] || (ASC.has(k) ? 'asc' : 'desc') };
 }
 function sortRows(rows) {
@@ -97,7 +104,7 @@ function pagerHtml(page, pages, total, from, to) {
 }
 const pageSize = () => (PAGE_SIZES.includes(Number(F.size)) ? Number(F.size) : 100);
 const RISING = 1.3, TIGHT = 2, HIGH = 1.15;   // 成交上涨：7 天 / 30 天 ≥ 1.3；库存少：库存 < 2 天；卖价偏高：卖价 ≥ 均价 × 1.15
-const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', mode: 'sb', rmode: 'sb', med: 7, sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, strict: true, excl: [], custom: [] };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]
+const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', rsort: 'day', edits: 3, rhub: 0, mode: 'sb', rmode: 'sb', med: 7, sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, strict: true, excl: [], custom: [] };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]
 const CUSTOM_MAX = 3;
 const CUSTOM_TTL = 10 * 60e3;
 const customCache = new Map();   // 市场 ID -> { at, quotes }
@@ -107,7 +114,7 @@ if (!Array.isArray(F.excl)) F.excl = [];
 if (!Array.isArray(F.custom)) F.custom = [];
 if (!MODES.some(([k]) => k === F.rmode)) F.rmode = 'sb';
 if (MODES.some(([k]) => k === F.mode)) F.rmode = F.mode;
-else if (F.mode !== 'demand' && F.mode !== 'consume') F.mode = F.rmode;
+else if (!['demand', 'consume', 'relist'].includes(F.mode)) F.mode = F.rmode;
 if (!MED_DAYS.includes(Number(F.med))) F.med = 7;
 // 自定义市场的 ID：负数，不和交易中心 / 建筑 ID 冲突（星域 10000002 + 星系 30000142 → -2000142）
 const customId = (c) => -((c.region % 1e6) * 1e6 + (c.system ? c.system % 1e6 : 0));
@@ -255,6 +262,7 @@ function hubsOf(row, names, id) {
 function compute() {
   if (F.mode === 'demand') return computeDemand();
   if (F.mode === 'consume') return computeConsume();
+  if (F.mode === 'relist') return computeRelist();
   const key = JSON.stringify([{ ...F, cat: 0, sort: ROUTE_SORT[F.sort] ? F.sort : 'profit', sdir: 0, size: 0 }, ctx.TF.summary(), S.data?.updated, S.data?.fields?.length, freight(), S.smKey, S.cmKey]);
   if (S.rows && S.key === key) return S.rows;
   const f = ctx.TF.fees();
@@ -361,6 +369,93 @@ function computeDemand() {
   S.rows = rows;
   S.key = key;
   return rows;
+}
+
+// 改单推荐：每个交易中心站内挂收单 → 挂卖单，按卖单侧成交占比估两边每天能走多少
+const BIAS_SELL = 0.65, BIAS_BUY = 0.35;
+function computeRelist() {
+  const key = JSON.stringify(['relist', { ...F, cat: 0, rsort: 0, sdir: 0, size: 0 }, ctx.TF.summary(), S.data?.updated]);
+  if (S.rows && S.key === key) return S.rows;
+  const f = ctx.TF.fees();
+  const disc = Math.min(1, 0.5 + 0.06 * ctx.TF.level(ctx.TF.SKILL.advBroker));
+  const edits = Math.max(0, Number(F.edits) || 0);
+  const share = Math.max(0.1, Number(F.share) || 10) / 100;
+  const si = S.data.fields?.indexOf('sshare') ?? -1;
+  const excl = new Set(F.excl);
+  const rows = [];
+  for (const [tid, row] of Object.entries(S.data.types)) {
+    const id = Number(tid);
+    if (ctx.isGlobal(id) || excl.has(id)) continue;
+    const cat = ctx.category(id);
+    if (!cat) continue;
+    let best = null, loose = null;
+    row.forEach((h, k) => {
+      const hub = S.data.hubs[k];
+      if (!h || (F.rhub && hub !== F.rhub)) return;
+      const sell = h[0], buy = h[1], avg = h[7];
+      const d30 = h[6], d7 = h[8] ?? null, d1 = h[9] ?? null;
+      const daily = F.win === 1 ? (d1 ?? d7 ?? d30) : F.win === 7 ? (d7 ?? d30) : d30;
+      if (sell == null || buy == null || !daily || !avg || sell <= buy) return;
+      if (buy < avg * 0.6 || sell > avg * 1.4) return;   // 钓鱼单 / 没人成交的挂单
+      const fs = si >= 0 ? h[si] : null;
+      const fx = fs ?? Math.min(1, Math.max(0, (avg - buy) / (sell - buy)));
+      const sellSide = fx * daily, buySide = (1 - fx) * daily;
+      const qty = Math.floor(Math.min(sellSide, buySide) * share);
+      const relist = edits * (1 - disc) * f.broker * (buy + sell);
+      const cost = buy * (1 + f.broker);
+      const unit = sell * (1 - f.sales - f.broker) - cost - relist;
+      const x = { id, cat, hub, sell, buy, avg, daily, turnover: daily * avg, f: fx, est: fs == null, sellSide, buySide, qty, relist, unit, margin: unit / cost, perDay: unit > 0 ? unit * qty : 0 };
+      const miss = unit <= 0 ? '亏损' : !qty ? '每天能做不到 1 件' : x.perDay < F.minDay ? '每天利润低于门槛' : x.turnover < F.minTurn ? '日成交额低于门槛' : '';
+      if (!miss) { if (!best || x.perDay > best.perDay) best = x; } else if (!F.strict && (!loose || x.unit > loose.unit)) { loose = { ...x, miss }; }
+    });
+    if (best) rows.push(best);
+    else if (loose) rows.push({ ...loose, off: true });
+  }
+  rows.sort((x, y) => (x.off - y.off) || y.perDay - x.perDay);
+  S.rows = rows;
+  S.key = key;
+  return rows;
+}
+const biasOf = (x) => (x.f >= BIAS_SELL ? ['偏卖方', '大部分成交在卖单上：卖单走得快，收单很难收到货', 'warn'] : x.f <= BIAS_BUY ? ['偏买方', '大部分成交在收单上：收单收得快，卖单不好卖', 'warn'] : ['均衡', '收单和卖单两边都有成交', 'up']);
+function relistControls() {
+  const { esc } = ctx;
+  const hubOpts = [[0, '全部交易中心'], ...S.data.hubs.map((id) => [id, hubLabel(id)])];
+  return `<div class="ind-rank-row">
+        <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="search" data-hr-q placeholder="筛选物品" value="${esc(S.q)}" spellcheck="false" aria-label="筛选物品"></div>
+        <div class="pi-inline"><span>交易中心</span>${select('rhub', hubOpts)}</div>
+        <div class="pi-inline" title="按哪段时间的日均成交量算"><span>成交量</span>${seg('win', [[1, '24 小时'], [7, '近 7 天'], [30, '近 30 天']])}</div>
+        <label class="pi-inline" title="两边每天能走的量里，你能拿下多少"><span>份额</span><input type="number" class="pi-input pi-tax" min="1" max="100" step="1" value="${esc(String(F.share))}" data-hr-num="share"><span>%</span></label>
+        <label class="pi-inline" title="收单、卖单每天各改几次（改单费按交易税费设置里的技能算）"><span>每天改单</span><input type="number" class="pi-input pi-tax" min="0" max="30" step="1" value="${esc(String(F.edits))}" data-hr-num="edits"><span>次</span></label>
+      </div>
+      <div class="ind-rank-row">
+        <div class="pi-inline"><span>每天利润 ≥</span>${select('minDay', DEMAND_MIN_DAY)}</div>
+        <div class="pi-inline"><span>日成交额 ≥</span>${select('minTurn', DEMAND_MIN_TURN)}</div>
+        <label class="pi-inline hr-check" title="取消勾选后，亏损或没达到门槛的物品也列出来（灰色，排在后面）"><input type="checkbox" data-hr-strict ${F.strict ? 'checked' : ''}><span>只看符合条件的</span></label>
+        ${F.excl.length ? `<button type="button" class="btn btn-ghost btn-sm" data-hr-excl-toggle>已排除 ${F.excl.length} 个物品</button>` : ''}
+      </div>
+      ${S.showExcl && F.excl.length ? `<div class="ind-rank-row hr-excl"><span class="text-muted">已排除：</span>${F.excl.map((id) => `<span class="ka-chip">${esc(ctx.typeName(id))}<button type="button" class="ka-close" data-hr-unhide="${id}" title="恢复" aria-label="恢复">×</button></span>`).join('')}
+        <button type="button" class="link-btn" data-hr-unhide-all>全部恢复</button></div>` : ''}`;
+}
+function relistRow(x, i) {
+  const { esc, formatISK, formatPrice, formatNumber } = ctx;
+  const px = (v) => Math.abs(v) >= 1e6 ? formatISK(v) : formatPrice(v);
+  const [bias, tip, c] = biasOf(x);
+  const sides = `卖单侧约 ${formatNumber(Math.round(x.sellSide))} 件/天 · 收单侧约 ${formatNumber(Math.round(x.buySide))} 件/天${x.est ? '（按现价与均价估算）' : '（近 30 天每日最高 / 最低价与均价推算）'}`;
+  const cls = x.unit > 0 ? 'up' : 'down';
+  return `<tr data-hr-open="${x.id}" data-hr-mode-open="bs"${x.off ? ` class="hr-off" title="不符合条件：${esc(x.miss)} · 点击查看物品详情"` : ' title="查看物品详情"'}>
+      <td class="pi-rank pi-hide-sm">${i + 1}</td>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)} <b class="hr-tag ${c}" title="${esc(tip)}">${bias}</b></small></span>
+        <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
+      <td>${esc(hubLabel(x.hub))}</td>
+      <td class="num pi-hide-sm">${px(x.buy)}</td>
+      <td class="num pi-hide-sm">${px(x.sell)}</td>
+      <td class="num ${cls}" title="已扣改单费每件 ${px(x.relist)}">${(x.unit > 0 ? '+' : '') + px(x.unit)}</td>
+      <td class="num ${cls}">${(x.margin * 100).toFixed(1)}%</td>
+      <td class="num" title="${esc(sides)}">${Math.round(x.f * 100)}%${x.est ? '<small class="text-muted"> 估</small>' : ''}</td>
+      <td class="num" title="${esc(sides)}">${x.qty ? formatNumber(x.qty) : '—'}</td>
+      <td class="num ${x.perDay ? 'up' : ''}">${x.perDay ? formatISK(x.perDay) : '—'}</td>
+      <td class="num pi-hide-sm" title="日均成交 ${formatNumber(Math.round(x.daily))} 件">${formatISK(x.turnover)}</td></tr>`;
 }
 
 // 消耗排行：五大交易中心成交量合计 + 被击毁数
@@ -546,6 +641,14 @@ function rowFacts(x) {
     ['日消耗额', formatISK(x.use)],
     ['日成交件数', formatNumber(Math.round(x.units))],
     ['最便宜', x.cheap ? `${hubLabel(x.cheap.hub)} ${px(x.cheap.price)}` : '—']];
+  if (F.mode === 'relist') return [
+    ['交易中心', hubLabel(x.hub)],
+    ['收单价', px(x.buy)], ['卖单价', px(x.sell)],
+    ['每件利润', `${x.unit > 0 ? '+' : ''}${px(x.unit)}`, x.unit > 0 ? 'up' : 'down'],
+    ['利润率', `${(x.margin * 100).toFixed(1)}%`],
+    ['卖单侧成交', `${Math.round(x.f * 100)}%${x.est ? '（估）' : ''}`],
+    ['每天可做', x.qty ? formatNumber(x.qty) : '—'],
+    x.perDay ? ['每天利润', formatISK(x.perDay), 'up'] : null].filter(Boolean);
   if (!r) return [];
   const route = r.local ? `${r.a.name}（本地）` : `${r.a.name} → ${r.b.name}`;
   return [
@@ -598,8 +701,8 @@ function html(all0) {
   const px = (v) => Math.abs(v) >= 1e6 ? formatISK(v) : formatPrice(v);   // 大额用 M / B，表格放得下
   const ok = list.filter((x) => !x.off).length;
   const sign = (v) => (v > 0 ? '+' : '') + px(v);
-  const D = F.mode === 'demand', C = F.mode === 'consume';
-  const rows = C ? top.map((x, i) => consumeRow(x, off + i)).join('') : D ? top.map((x, i) => demandRow(x, off + i)).join('') : top.map((x, i0) => {
+  const D = F.mode === 'demand', C = F.mode === 'consume', RL = F.mode === 'relist';
+  const rows = RL ? top.map((x, i) => relistRow(x, off + i)).join('') : C ? top.map((x, i) => consumeRow(x, off + i)).join('') : D ? top.map((x, i) => demandRow(x, off + i)).join('') : top.map((x, i0) => {
     const i = off + i0;
     const r = x.r;
     const cls = r.unit > 0 ? 'up' : 'down';
@@ -633,9 +736,9 @@ function html(all0) {
         <button type="button" class="btn btn-primary btn-sm" data-hr-cadd${F.custom.length >= CUSTOM_MAX ? ' disabled' : ''}>添加</button>
         ${F.custom.map((c) => `<span class="ka-chip">${esc(c.sysName ? c.sysName + ' · ' + c.name : c.name)}<button type="button" class="ka-close" data-hr-cdel="${customId(c)}" aria-label="移除">×</button></span>`).join('')}
         <span class="pi-note" title="浏览器直接读该星域全部挂单；没有交易中心的星域无成交量数据，只能算直接成交">最多 ${CUSTOM_MAX} 个，大星域较慢</span></div>` : ''}
-      <div class="ind-rank-row"><div class="segmented">${[['route', '倒卖路线'], ['demand', '按销量选品'], ['consume', '消耗排行']].map(([v, l]) => `<button type="button" data-hr-kind="${v}" class="${modeKind() === v ? 'active' : ''}">${l}</button>`).join('')}</div></div>
-      ${C || D ? '' : `<div class="ind-rank-row">${modePicker('hr', F.mode, F.med)}</div>`}
-      ${C ? consumeControls() : D ? demandControls() : `<div class="ind-rank-row">
+      <div class="ind-rank-row"><div class="segmented">${[['route', '倒卖路线'], ['demand', '按销量选品'], ['relist', '改单推荐'], ['consume', '消耗排行']].map(([v, l]) => `<button type="button" data-hr-kind="${v}" class="${modeKind() === v ? 'active' : ''}">${l}</button>`).join('')}</div></div>
+      ${C || D || RL ? '' : `<div class="ind-rank-row">${modePicker('hr', F.mode, F.med)}</div>`}
+      ${RL ? relistControls() : C ? consumeControls() : D ? demandControls() : `<div class="ind-rank-row">
         <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
           <input type="search" data-hr-q placeholder="筛选物品" value="${esc(S.q)}" spellcheck="false" aria-label="筛选物品"></div>
         <div class="pi-inline"><span>买入</span>${select('from', hubOpts)}</div>
@@ -650,15 +753,16 @@ function html(all0) {
         <div class="pi-inline"><span>预计利润 ≥</span>${select('minProfit', MIN_PROFIT)}</div>
         <div class="pi-inline"><span>日均成交 ≥</span>${select('minDaily', MIN_DAILY)}</div>
       </div>`}
-      ${C ? '' : `<div class="ind-rank-row">${freightHtml('hr')}</div>`}
-      <p class="pi-note" title="${C ? `日成交量是五大交易中心所在星域的统计加起来（含周边玩家建筑）；消耗额 = 日成交额合计 + 近 7 天日均被击毁数 × 均价（只有宁静服有击杀数据）。建筑卖价是已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少。` : D ? `目标市场的成交量是整个星域的统计（含周边玩家建筑；自定义市场借用同星域交易中心的数据），库存天数用目标市场自己的卖单；建议数量 = 日均成交 × 份额 × 计划天数，不超过进货地卖单深度（挂收单按进货地日均成交 × 份额）。挂单价偏离 30 天成交均价太多的不算。` : '买入、卖出方式可以任意组合；中位价 / 最低价 / 最高价收出是按近 ' + daysLabel(F.med) + '的成交价挂单（付中介费），成交价偏离 30 天均价超过 60%–140% 的不用（乱价成交），现价偏离挂单价 20% 以上标「现价偏离」。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。'}">
-        ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${C ? '' : ` · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'}`} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${esc(S.smNote)}</span>` : ''}${S.cmNote ? ` · <span data-hr-cmnote>${esc(S.cmNote)}</span>` : ''}</p>
+      ${C || RL ? '' : `<div class="ind-rank-row">${freightHtml('hr')}</div>`}
+      <p class="pi-note" title="${RL ? '同一个交易中心挂收单收货、挂卖单出货。卖单侧成交占比：ESI 每天只有成交均价，按「均价 = f × 当天最高价 + (1 − f) × 当天最低价」解出，近 30 天按成交量加权；标「估」的是用现在的收单价、卖单价和 30 天均价近似。每天可做 = 收单侧、卖单侧每天成交量取小 × 份额；每件利润已扣销售税、两边中介费和每天的改单费。只推荐做什么，改成多少钱看市场行情。' : C ? `日成交量是五大交易中心所在星域的统计加起来（含周边玩家建筑）；消耗额 = 日成交额合计 + 近 7 天日均被击毁数 × 均价（只有宁静服有击杀数据）。建筑卖价是已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少。` : D ? `目标市场的成交量是整个星域的统计（含周边玩家建筑；自定义市场借用同星域交易中心的数据），库存天数用目标市场自己的卖单；建议数量 = 日均成交 × 份额 × 计划天数，不超过进货地卖单深度（挂收单按进货地日均成交 × 份额）。挂单价偏离 30 天成交均价太多的不算。` : '买入、卖出方式可以任意组合；中位价 / 最低价 / 最高价收出是按近 ' + daysLabel(F.med) + '的成交价挂单（付中介费），成交价偏离 30 天均价超过 60%–140% 的不用（乱价成交），现价偏离挂单价 20% 以上标「现价偏离」。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。'}">
+        ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${C || RL ? '' : ` · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'}`} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${esc(S.smNote)}</span>` : ''}${S.cmNote ? ` · <span data-hr-cmnote>${esc(S.cmNote)}</span>` : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table hr-table"><thead><tr>
-      ${C ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('use', '消耗额', 'num', '日成交额合计 + 被击毁折合每天的价值')}${th('turn', '日成交额', 'num pi-hide-sm')}${th('units', '日成交量', 'num', '五大交易中心日均成交量合计，悬停看各中心')}${S.data.losses7 ? th('loss', '近 7 天被击毁', 'num', '本站击杀库近 7 天被击毁的数量（舰船与部署物）') : ''}${th('trend', '趋势', 'num pi-hide-sm', '近 7 天日均成交比 30 天')}${th('price', '最便宜的交易中心')}${S.sm.length ? th('markup', '建筑卖价', '', '已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少') : ''}`
+      ${RL ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '交易中心')}${th('', '收单价', 'num pi-hide-sm')}${th('', '卖单价', 'num pi-hide-sm')}${th('unit', '每件利润', 'num', '已扣销售税、中介费和改单费')}${th('margin', '利润率', 'num')}${th('bias', '卖单侧成交', 'num', '成交量里有多少成交在卖单上；越接近 50% 两边越好做')}${th('qty', '每天可做', 'num', '收单侧、卖单侧每天成交量取小 × 份额')}${th('day', '每天利润', 'num')}${th('turn', '日成交额', 'num pi-hide-sm')}`
+    : C ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('use', '消耗额', 'num', '日成交额合计 + 被击毁折合每天的价值')}${th('turn', '日成交额', 'num pi-hide-sm')}${th('units', '日成交量', 'num', '五大交易中心日均成交量合计，悬停看各中心')}${S.data.losses7 ? th('loss', '近 7 天被击毁', 'num', '本站击杀库近 7 天被击毁的数量（舰船与部署物）') : ''}${th('trend', '趋势', 'num pi-hide-sm', '近 7 天日均成交比 30 天')}${th('price', '最便宜的交易中心')}${S.sm.length ? th('markup', '建筑卖价', '', '已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少') : ''}`
     : D ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '进货')}${th('day', '每天利润', 'num')}${th('unit', '每件利润', 'num')}${th('qty', '建议数量', 'num')}${th('turn', '日成交额', 'num', '日均成交量 × 成交均价')}${th('trend', '趋势', 'num pi-hide-sm', '近 7 天日均成交比 30 天')}${th('stock', '库存天数', 'num pi-hide-sm', '目标市场卖单库存够卖几天')}${S.data.losses7 ? th('loss', '近 7 天被击毁', 'num pi-hide-sm', '本站击杀库近 7 天被击毁的数量（舰船与部署物）') : ''}`
     : `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '路线')}${th('buy', '买入价', 'num pi-hide-sm')}${th('sell', '卖出价', 'num pi-hide-sm')}${th('unit', '每件利润', 'num', '同时按这一项为每个物品挑路线')}${th('margin', '利润率', 'num', '同时按这一项为每个物品挑路线')}${th('m3', '每立方', 'num pi-hide-sm', '同时按这一项为每个物品挑路线')}${th('qty', '可做数量', 'num')}${th('cost', '投入', 'num pi-hide-sm')}${th('profit', '预计利润', 'num', '同时按这一项为每个物品挑路线')}`}
-    </tr></thead><tbody>${rows || `<tr><td colspan="11" class="text-muted">${noHist && !C && !D ? (S.histLoading ? '正在读取成交价数据…' : '服务器还没有成交价数据，先换别的方式') : noVol || ((D || C) && !hasVol()) ? '成交量读取中…' : C ? '没有符合条件的物品' : D ? demandEmpty() : '没有符合条件的路线'}</td></tr>`}</tbody></table></div>
+    </tr></thead><tbody>${rows || `<tr><td colspan="11" class="text-muted">${noHist && !C && !D ? (S.histLoading ? '正在读取成交价数据…' : '服务器还没有成交价数据，先换别的方式') : noVol || ((D || C || RL) && !hasVol()) ? '成交量读取中…' : C || RL ? '没有符合条件的物品' : D ? demandEmpty() : '没有符合条件的路线'}</td></tr>`}</tbody></table></div>
       ${list.length ? pagerHtml(S.page, pages, list.length, off + 1, off + top.length) : ''}</div>
   </div>`;
 }
@@ -679,6 +783,11 @@ function exportRows() {
       ...(S.data.losses7 ? [['被击毁折合每天', (x) => x.lossIsk || 0]] : []), ['趋势 %', (x) => pct(x.trend)],
       ['最便宜的交易中心', (x) => (x.cheap ? hubLabel(x.cheap.hub) : '')], ['最低卖价', (x) => x.cheap?.price ?? null], ['卖单数量', (x) => x.cheap?.qty ?? null],
       ...(S.sm.length ? [['建筑', (x) => x.st?.name ?? ''], ['建筑卖价', (x) => x.st?.price ?? null], ['比交易中心贵 %', (x) => (x.st && x.cheap ? (x.st.price / x.cheap.price - 1) * 100 : null)]] : [])];
+  } else if (m === 'relist') {
+    name = '交易中心倒卖排行-改单推荐';
+    cols = [...base, ['交易中心', (x) => hubLabel(x.hub)], ['收单价', (x) => x.buy], ['卖单价', (x) => x.sell], ['每件利润', (x) => x.unit], ['利润率 %', (x) => x.margin * 100],
+      ['卖单侧成交 %', (x) => x.f * 100], ['估算', (x) => (x.est ? '是' : '')], ['每天可做', (x) => x.qty], ['每天利润', (x) => x.perDay], ['日成交额', (x) => x.turnover], ['每件改单费', (x) => x.relist],
+      ...(F.strict ? [] : [['不符合条件', (x) => (x.off ? x.miss || '' : '')]])];
   } else if (m === 'demand') {
     name = '交易中心倒卖排行-按销量选品';
     cols = [...base, ['进货方式', (x) => (x.r.mode === 'bs' ? '挂收单' : '直接买')], ['进货地点', (x) => (x.r.local ? x.r.b.name : x.r.a.name)],
@@ -924,7 +1033,8 @@ function bind(box) {
     const num = e.target.closest('[data-hr-num]');
     if (num) {
       const k = num.dataset.hrNum;
-      F[k] = Math.min(k === 'share' ? 100 : 30, Math.max(1, Math.round(Number(num.value) || (k === 'share' ? 10 : 3))));
+      const v = Math.round(Number(num.value));
+      F[k] = k === 'edits' ? Math.min(30, Math.max(0, Number.isFinite(v) ? v : 3)) : Math.min(k === 'share' ? 100 : 30, Math.max(1, v || (k === 'share' ? 10 : 3)));
       save(); render(box); return;
     }
     if (e.target.matches('[data-hr-m3],[data-hr-collat]')) { setFreight(box.querySelector('[data-hr-m3]').value, box.querySelector('[data-hr-collat]').value); render(box); }
