@@ -755,7 +755,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v40').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v46').then((m) => {
     m.initPi({ addToCart, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）

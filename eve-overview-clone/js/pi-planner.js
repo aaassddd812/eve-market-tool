@@ -2,6 +2,7 @@
 // 选择地区（星域，或某星系周边若干跳）、角色数与技能，按吉他行情为每种产品（P1–P4）算出最优的行星分配，
 // 给出每颗行星该放什么、预计日产量与收益，并生成游戏内可直接导入的殖民地模板（JSON）。
 // ESI 只有读取殖民地的接口，不能写入模板，所以模板通过「复制到剪贴板」或「下载 .json」导入游戏。
+// 侧栏「工厂计算」（pi-factory.js）：按发射平台容量算最大补货周期，按自定义加工时间算原料需求并一键购买。
 // 数据：pi-data.json（build_pi.mjs 从 SDE 生成），map-data.json（星系、星门、星域）。
 import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r8';
 import { angle } from './pi-globe.js?v=v19r12';
@@ -431,7 +432,8 @@ function buyDemand(product, buyTier) {
 }
 
 // 一颗工厂星以 rate 单位/小时生产时的布局：hubs 个发射平台，每组设施数 = 需求 / 组数（向上取整）
-function buyLayout(dem, rate, hubs, code, radius) {
+// 放不下时返回 null，why 对象记下原因：fac 行星不能建该工厂 / grid CPU、电网不够 / volume 发射平台装不下（side: in 原料 / out 产品）
+function buyLayout(dem, rate, hubs, code, radius, why = {}) {
   const pt = D.ptByCode[code];
   const LINK = linkLoad(radius);
   const [lpC, lpP] = struct(pt.launchpad);
@@ -441,17 +443,17 @@ function buyLayout(dem, rate, hubs, code, radius) {
   for (const [out, n] of dem.fac) {
     const c = Math.ceil(n * rate / hubs - 1e-9);
     if (!c) continue;
-    if (!pt[facClass(out)]) return null;
+    if (!pt[facClass(out)]) { why.kind = 'fac'; return null; }
     const [fc, fp] = struct(pt[facClass(out)]);
     cpu += hubs * c * (fc + LINK[0]);
     power += hubs * c * (fp + LINK[1]);
     counts.push([out, c]);
   }
-  if (!fits(cpu, power)) return null;
+  if (!fits(cpu, power)) { why.kind = 'grid'; why.factories = counts.reduce((t, [, c]) => t + c * hubs, 0); return null; }
   // 每个发射平台：补货时装满一个周期的原料，周期末换成等量时间的产物
   const inM3 = [...dem.buy].reduce((t, [id, q]) => t + q * rate * vol(id), 0);
   const outM3 = rate * vol(dem.product);
-  if (Math.max(inM3, outM3) / hubs * F.restock > LP_CAP) return null;
+  if (Math.max(inM3, outM3) / hubs * F.restock > LP_CAP) { why.kind = 'volume'; why.side = outM3 > inM3 ? 'out' : 'in'; return null; }
   return { counts, cpu, power, inM3, outM3 };
 }
 
@@ -485,7 +487,11 @@ function planBuy(product, area) {
       const r = maxBuyRate(dem, hubs, code, radius);
       if (r <= 0) continue;
       const day = r * 24 * planets;
+      // 产量再高一点就放不下：记下是什么卡住了
+      const limit = {};
+      buyLayout(dem, r * 1.001 + 1e-6, hubs, code, radius, limit);
       const plan = {
+        limit,
         product, strategy: 'buy', buyTier, hubs, code, radius, dem, perRate: r, rate: r * planets, planets, factories: planets,
         revenue: day * outPrice,
         cost: day * [...dem.buy].reduce((t, [id, q]) => t + q * inPriceOf(id), 0),
@@ -974,6 +980,16 @@ function blankTemplate() {
   return { CmdCtrLv: F.cc, Cmt: '新模板', Diam: 10000, L: [], P: [{ H: 0, La: 1.5708, Lo: 3.14159, S: null, T: pt.launchpad }], Pln: pt.id, R: [] };
 }
 
+// 工厂计算：首次切到该页时加载
+let factoryLoading = null;
+function factoryModule() {
+  if (!factoryLoading) factoryLoading = import('./pi-factory.js?v=3').then((m) => {
+    m.initFactory(ctx, { pi: D.pi, schemByOut: D.schemByOut, cName, tierOf, ICON, TAX_BASE, HUB_NAME });
+    return m;
+  }).catch((e) => { factoryLoading = null; ctx.showToast('工厂计算加载失败：' + e.message, 'error'); throw e; });
+  return factoryLoading;
+}
+
 // ---------- 页面 ----------
 // 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
 export const preload = () => loadData();
@@ -989,6 +1005,7 @@ export async function showPi() {
       <section class="pi-page pi-planner">
         <div class="pi-head"><h2>行星工业规划</h2></div>
         <div class="pi-colonies" id="piColonies" hidden></div>
+        <div class="pi-factory" id="piFactory" hidden></div>
         <div class="pi-layout">
           <form class="pi-form" id="piForm" autocomplete="off"></form>
           <div class="pi-result" id="piResult">
@@ -1021,6 +1038,7 @@ export async function showPi() {
 const SIDE = { q: '', open: null, pane: 'plan', tab: null };
 const SIDE_NAV = [
   ['plan', '规划', '<path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/>'],
+  ['factory', '工厂计算', '<path d="M3 21V9l6 4V9l6 4V5h6v16z"/>'],
   ['colonies', '我的殖民地', '<circle cx="12" cy="12" r="7"/><path d="M5 12h14M12 5a10 10 0 0 1 0 14M12 5a10 10 0 0 0 0 14"/>'],
   ['editor', '模板编辑器', '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>']
 ];
@@ -1067,16 +1085,22 @@ function renderSide() {
 }
 function showPane(pane) {
   SIDE.pane = pane;
-  const planner = document.querySelector('#piMain .pi-layout');
+  const planner = document.querySelector('#piMain .pi-planner > .pi-layout');
   const box = $('piColonies');
-  if (planner) planner.hidden = pane === 'colonies';
+  if (planner) planner.hidden = pane !== 'plan';
+  const fac = $('piFactory');
+  if (fac) {
+    fac.hidden = pane !== 'factory';
+    // 工厂计算（pi-factory.js）：切过去时加载
+    if (pane === 'factory') factoryModule().then((m) => m.renderFactory(fac));
+  }
   if (box) {
     box.hidden = pane !== 'colonies';
     // 我的殖民地（ESI，需要「行星殖民地」权限）：切过去时读取
     if (pane === 'colonies') ctx.renderColonies?.(box);
   }
   const h2 = document.querySelector('#piMain .pi-head h2');
-  if (h2) h2.textContent = pane === 'colonies' ? '我的殖民地' : '行星工业规划';
+  if (h2) h2.textContent = pane === 'colonies' ? '我的殖民地' : pane === 'factory' ? '工厂计算' : '行星工业规划';
   renderSide();
 }
 function bindSide() {
@@ -1096,6 +1120,13 @@ function bindSide() {
       return;
     }
     const pick = e.target.closest('[data-pi-target]');
+    // 工厂计算页：侧栏选产品只换计算的产品
+    if (pick && SIDE.pane === 'factory') {
+      if (!D.schemByOut.has(Number(pick.dataset.piTarget))) { ctx.showToast('P0 原材料不能在工厂里加工，请选 P1–P4 产品', 'info'); return; }
+      factoryModule().then((m) => { m.setProduct(Number(pick.dataset.piTarget)); m.renderFactory($('piFactory')); });
+      ctx.closeDrawer?.();
+      return;
+    }
     if (pick) {
       F.target = Number(pick.dataset.piTarget);
       if (F.way === 'buy' && tierOf(F.target) === 0) F.way = 'self';
@@ -1432,6 +1463,7 @@ function renderDetail() {
     const inDay = [...plan.dem.buy].reduce((t, [id, q]) => t + q * plan.rate * 24 * vol(id), 0);
     const outDay = plan.rate * 24 * vol(plan.product);
     return `<p class="pi-note" title="每 ${F.restock} 小时补货，每颗星 ${plan.hubs} 个发射平台（各 ${ctx.formatNumber(LP_CAP)} m³）；一次补货原料约 ${ctx.formatISK(plan.cost / 24 * F.restock)}">每天买入 ${ctx.formatNumber(Math.round(inDay))} m³ · 运出 ${ctx.formatNumber(Math.round(outDay))} m³ · 月净收益 ${ctx.formatISK(plan.profit * 30)}</p>
+      ${limitNote(plan)}
       ${plan.wanted ? `<p class="pi-note warn" title="卖出、买入各不超过日成交的 ${F.share}%；其余行星可做别的产品（见「多产品组合」）">受成交量限制，只用 ${plan.planets} / ${plan.wanted} 颗行星</p>` : ''}
       <p class="pi-note" id="piDepth"></p>`;
   })() : '';
@@ -1550,12 +1582,22 @@ async function applyMarketDepth(plans) {
     plan.depthChecked = true;
     const perPlanet = plan.rate / plan.planets * 24;
     const items = [[plan.product, 1], ...plan.dem.buy];
-    let cap = Infinity;
+    let cap = Infinity, worst = null;
     for (const [id, q] of items) {
       const v = await dailyVolume(id);
-      if (v != null) cap = Math.min(cap, Math.floor(v * F.share / 100 / (perPlanet * q)));
+      if (v == null) continue;
+      const c = Math.floor(v * F.share / 100 / (perPlanet * q));
+      if (c < cap) { cap = c; worst = { id, n: perPlanet * q, v }; }
     }
     if (cap >= plan.planets) continue;
+    // 指定了产品时，连一颗行星都超出成交上限：说明原因，不要只显示「没有可行方案」
+    if (cap <= 0 && F.target) {
+      const pct = worst.v ? Math.round(worst.n / worst.v * 100) : Infinity;
+      plan.error = `受成交量限制：一颗行星每天就要${worst.id === plan.product ? '卖出' : '买入'}${cName(worst.id)} ${ctx.formatNumber(Math.round(worst.n))} 个，`
+        + `占${HUB_NAME}日成交 ${isFinite(pct) ? pct + '%' : '—（几乎没有成交）'}，超过「成交上限」${F.share}%。可以把成交上限调高或选「不限」`
+        + (F.restock < 72 ? '，或把补货周期调长（每颗星的产量会降低）' : '');
+      continue;
+    }
     const k = cap / plan.planets;
     plan.wanted = plan.planets;
     for (const key of ['rate', 'revenue', 'cost', 'tax', 'profit']) plan[key] *= k;
@@ -1578,6 +1620,18 @@ async function showDepth(plan) {
   const high = parts.some((p) => p.high);
   el.classList.toggle('warn', high);
   el.innerHTML = ctx.esc(parts.map((p) => p.text).join('；')) + (high ? '。占比过高时价格会被自己打穿，建议减少行星数或分散到几种产品' : '');
+}
+
+// 买料加工：每颗星的产量被什么卡住
+function limitNote(plan) {
+  const l = plan.limit || {};
+  const per = plan.perRate;
+  const text = l.kind === 'volume'
+    ? `产量受发射平台容量限制：每 ${F.restock} 小时补货一次，${plan.hubs} 个发射平台共 ${ctx.formatNumber(plan.hubs * LP_CAP)} m³，${l.side === 'out' ? `装满的是产品（${cName(plan.product)}每个 ${vol(plan.product)} m³，比原料占地方）` : '装满的是原料'}，所以每颗星每小时最多 ${per.toFixed(1)} 个。补货周期改短产量会更高`
+    : l.kind === 'grid'
+      ? `产量受指挥中心 CPU / 电网限制：${F.cc} 级指挥中心再多建工厂就放不下了（现有 ${plan.hubs} 个发射平台），所以每颗星每小时最多 ${per.toFixed(1)} 个${F.cc < 5 ? '。提高指挥中心升级技能可以多建工厂' : ''}`
+      : l.kind === 'fac' ? '这类行星不能建所需的工厂' : '';
+  return text ? `<p class="pi-note">${ctx.esc(text)}</p>` : '';
 }
 
 function onResultClick(e) {

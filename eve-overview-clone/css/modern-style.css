@@ -6786,3 +6786,24 @@ td .sov-auto-tag { margin-left: 4px; }
 .bz-meta.m2 { color: var(--accent-primary); }
 .bz-meta.m4, .bz-meta.m6 { color: var(--success); }
 .bz-meta.m5 { color: var(--warning); }
+/* 行星工业：工厂计算 */
+.pf-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.pf-stat { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; }
+.pf-stat > span { font-size: 0.75rem; color: var(--text-muted); }
+.pf-stat > b { font-size: 1.25rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pf-stat > small { font-size: 0.75rem; line-height: 1.5; color: var(--text-muted); }
+.pf-card { padding: 14px 16px; margin-bottom: 12px; overflow-x: auto; }
+.pf-card h3 { display: flex; align-items: baseline; gap: 8px; font-size: 0.9375rem; font-weight: 600; margin: 0 0 10px; }
+.pf-card h3 small { font-size: 0.75rem; font-weight: 400; color: var(--text-muted); }
+.pf-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.pf-card-head h3 { margin: 0; }
+.pf-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
+.pf-table th, .pf-table td { padding: 7px 8px; text-align: right; border-top: 1px solid var(--border-primary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pf-table th { font-size: 0.75rem; font-weight: 500; color: var(--text-muted); border-top: 0; }
+.pf-table th:first-child, .pf-table td:first-child { text-align: left; }
+.pf-table td:first-child span { margin-left: 8px; vertical-align: middle; }
+.pf-table td:first-child img { border-radius: 4px; vertical-align: middle; }
+.pf-table td:first-child small, .pf-table td small { margin-left: 4px; font-size: 0.6875rem; color: var(--text-muted); }
+.pf-table tfoot td { font-weight: 600; }
+.pf-table .pf-mid td { color: var(--text-secondary); }
+.pf-note { margin: 10px 0 0; line-height: 1.6; }
