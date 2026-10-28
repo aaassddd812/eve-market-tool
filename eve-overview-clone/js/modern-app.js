@@ -589,11 +589,11 @@ async function getLiveHubPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v43').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v44').then((m) => {
     m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
-      esiAccountFetch, esiAccountList,
+      esiAccountFetch, esiAccountList, resolveTypeNames,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
     });

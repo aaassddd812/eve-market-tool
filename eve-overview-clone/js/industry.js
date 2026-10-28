@@ -149,7 +149,15 @@ function bfs(start, max) {
   return seen;
 }
 
-const T = (id) => D.data.types[id] || ['物品 ' + id, '', 0, 1, 0, 0];
+// 制造数据里没有的物品（如国服独有、没有配方的蓝图）：名字从 ESI 补（extraNames），补不到才显示 ID
+const extraNames = new Map();
+const T = (id) => D.data.types[id] || [extraNames.get(Number(id)) || '物品 ' + id, '', 0, 1, 0, 0];
+async function fillNames(ids) {
+  const miss = [...new Set(ids.map(Number))].filter((id) => id && !D.data.types[id] && !extraNames.has(id));
+  if (!miss.length || !ctx.resolveTypeNames) return;
+  const names = await ctx.resolveTypeNames(miss).catch(() => new Map());
+  for (const [id, n] of names) extraNames.set(Number(id), n);
+}
 const isBlueprint = (id) => D.data.groups[T(id)[2]]?.[1] === 9;
 // 任意物品图标：蓝图用蓝图 / 拷贝图标
 const anyIcon = (id, copy = false) => (isBlueprint(id) ? BP_ICON(id, 32, copy) : ICON(id));
@@ -1068,7 +1076,8 @@ function pasteCard(pasted) {
 
 async function drawMine(body, jobs, bps, pasted) {
   const esc = ctx.esc, num = ctx.formatNumber;
-  const name = (tid) => D.data.types[tid]?.[0] || '物品 ' + tid;
+  await fillNames([...(Array.isArray(jobs) ? jobs.map((j) => j.product_type_id || j.blueprint_type_id) : []), ...(Array.isArray(bps) ? bps.map((b) => b.type_id) : [])]);
+  const name = tName;
   const now = Date.now();
   let jobsHtml;
   if (jobs.hint) jobsHtml = `<p class="text-muted">${esc(jobs.hint)}</p>`;
