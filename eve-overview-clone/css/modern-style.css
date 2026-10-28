@@ -856,6 +856,7 @@ button.stat-card:hover {
 .tone-amber { --tone: var(--warning); }
 .tone-violet, .valuation-card.is-total { --tone: var(--violet); }
 .valuation-card.is-order { --tone: var(--warning); }
+.valuation-card.is-split { --tone: var(--text-secondary); }
 .valuation-card.is-mid { --tone: var(--accent-primary); }
 .valuation-card.is-mid .valuation-detail { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
 /* 成交中位价的天数切换（估值卡片 / 估价页共用） */
@@ -4130,14 +4131,14 @@ button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outl
 .ap-controls .select-wrap { flex: 1; min-width: 0; }
 .ap-controls .region-select { width: 100%; }
 .ap-empty { padding: 72px 16px; border: 1px dashed var(--border-secondary); border-radius: var(--radius-lg); color: var(--text-muted); text-align: center; font-size: 0.875rem; }
-.ap-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+.ap-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
 .ap-stats > div { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-secondary); border: 1px solid var(--border-primary); min-width: 0; }
 .ap-stats span { font-size: 0.75rem; color: var(--text-muted); }
 .ap-stats b { font-size: 1.25rem; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .ap-stats small { font-size: 0.6875rem; color: var(--text-muted); }
 .ap-stats .ap-stat-sell b { color: var(--sell-color); }
 .ap-stats .ap-stat-buy b { color: var(--buy-color); }
-.ap-stats.has-mid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.ap-stats.has-mid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .ap-stats .ap-stat-mid b { color: var(--accent-primary); }
 .ap-stats .ap-stat-mid small { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .ap-notes { margin: 0 0 12px; padding: 10px 14px 10px 28px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.75rem; line-height: 1.7; color: var(--text-secondary); }
@@ -4222,9 +4223,8 @@ button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outl
 }
 @media (max-width: 768px) {
   .ap-stats { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .ap-stats > div:last-child { grid-column: 1 / -1; }
   .ap-stats.has-mid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
-  .ap-stats.has-mid > div:last-child { grid-column: auto; }
+  .ap-stats.has-mid > div:last-child { grid-column: 1 / -1; }
   .ap-hide-sm { display: none; }
   .ap-item .ap-unit { display: block; }
   .ap-table td:first-child { min-width: 150px; }
@@ -4490,7 +4490,7 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .trade-item { display: inline-flex; align-items: center; gap: 6px; padding: 0; font-size: 0.8125rem; color: var(--text-primary); text-align: left; }
 .trade-item:hover { color: var(--accent-primary); }
 .trade-item img { width: 20px; height: 20px; border-radius: 3px; flex: none; }
-.trade-loc { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trade-loc { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trade-filter { width: 200px; margin: 0; }
 .empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 12px; }
 .tf-modal .cr-fields .cr-input[data-tf-hub], .ap-rp .cr-fields .cr-input[data-tf-hub] { width: 260px; max-width: 70%; text-align: left; }
@@ -5369,7 +5369,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .ow-state.lead { background: var(--buy-soft); color: var(--buy-color); }
 .ow-state.unknown { color: var(--text-muted); }
 .ow-item { display: inline-flex; align-items: center; gap: 6px; text-align: left; }
-.ow-loc { max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ow-loc { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ow-copy { font-variant-numeric: tabular-nums; padding: 1px 8px; }
 .ow-cool { display: block; font-size: 0.6875rem; }
 
@@ -6798,3 +6798,65 @@ td .sov-auto-tag { margin-left: 4px; }
 .pf-table td:first-child img { border-radius: 4px; vertical-align: middle; }
 .pf-table td:first-child small, .pf-table td small { margin-left: 4px; font-size: 0.6875rem; color: var(--text-muted); }
 .pf-table tfoot td { font-weight: 600; }
+
+/* 制造：生产链层次图 */
+.ind-chain .pi-card-head { flex-wrap: wrap; gap: 8px; }
+.ind-reproc { margin-left: auto; gap: 6px; font-size: 0.75rem; color: var(--text-secondary); }
+.ind-chain-wrap { position: relative; overflow-x: auto; padding: 4px 2px 8px; }
+.ind-chain-lines { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+.ind-chain-lines path { fill: none; stroke: var(--border-secondary); stroke-width: 1.2; }
+.ind-chain-lines path.on { stroke: var(--accent-primary); opacity: 0.55; }
+.ind-chain-cols { position: relative; display: flex; gap: 44px; align-items: flex-start; min-width: min-content; }
+.ind-chain-col { display: flex; flex-direction: column; gap: 6px; width: 188px; flex: none; }
+.ind-chain-colhead { font-size: 0.6875rem; color: var(--text-muted); padding: 0 2px 2px; }
+.ind-node { border: 1px solid var(--border-secondary); border-radius: var(--radius-sm); background: var(--bg-secondary); padding: 5px 7px; font-size: 0.75rem; }
+.ind-node.make { border-color: var(--accent-primary); }
+.ind-node.k-mine { border-style: dashed; }
+.ind-node-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ind-node-top img { flex: none; border-radius: 3px; }
+.ind-node-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.ind-node-tag { flex: none; font-size: 0.625rem; color: var(--text-muted); }
+.ind-node-bot { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+.ind-node-bot span { flex: 1; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ind-node-btn { flex: none; padding: 0 6px; border: 1px solid var(--border-secondary); border-radius: var(--radius-sm); font-size: 0.6875rem; line-height: 1.5; color: var(--text-secondary); }
+.ind-node-btn.on { border-color: var(--accent-primary); background: var(--accent-soft); color: var(--accent-primary); }
+.ind-node-btn:hover { border-color: var(--accent-primary); }
+@media (max-width: 640px) {
+  .ind-chain-col { width: 156px; }
+  .ind-chain-cols { gap: 28px; }
+  .ind-reproc { margin-left: 0; }
+}
+
+/* 制造：我的建筑 */
+.ind-my { margin-top: 6px; gap: 6px; }
+.ind-my select { flex: 1; min-width: 0; }
+.ind-my .btn { padding: 3px 10px; font-size: 0.75rem; }
+.is-modal { width: min(720px, calc(100vw - 32px)); max-width: 720px; }
+.is-found { margin-bottom: 12px; max-height: 30vh; }
+.is-found .btn { padding: 2px 10px; font-size: 0.75rem; }
+.is-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; max-height: 56vh; overflow-y: auto; }
+.is-card { border: 1px solid var(--border-primary); border-radius: var(--radius-md); padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.is-row { display: flex; align-items: center; gap: 8px; }
+.is-row .is-name { flex: 1; min-width: 0; font-weight: 600; }
+.is-grid { display: grid; grid-template-columns: 1.3fr 1.3fr repeat(3, 1fr); gap: 8px; }
+.is-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 0.6875rem; color: var(--text-muted); min-width: 0; }
+.is-grid .pi-input, .is-rigs .pi-input { width: 100%; min-width: 0; }
+.is-rigs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+@media (max-width: 640px) {
+  .is-grid { grid-template-columns: 1fr 1fr; }
+  .is-grid label:nth-child(-n+2) { grid-column: span 1; }
+  .is-rigs { grid-template-columns: 1fr; }
+}
+
+/* 我的订单：费用、剩余利润、订单记录 */
+.ow-margin.ok { color: var(--buy-color); }
+.ow-margin.thin { color: var(--warning); }
+.ow-margin.bad { color: var(--sell-color); }
+.ow-fee { font-variant-numeric: tabular-nums; }
+.ow-fee small { color: var(--text-muted); }
+.ow-hist td { background: var(--bg-tertiary); font-size: 0.75rem; }
+.ow-hist ul { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.tf-struct { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; font-size: 0.8125rem; }
+.tf-struct > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-struct .cr-input { width: 80px; }
+.tf-struct-add { width: 100%; margin-bottom: 6px; }

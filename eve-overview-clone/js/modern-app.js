@@ -1,5 +1,5 @@
 import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17';
-import * as TF from './trade-fees.js?v=v4';
+import * as TF from './trade-fees.js?v=v5';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v13';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v33';
 import * as SM from './struct-markets.js?v=v6';
@@ -589,11 +589,12 @@ async function getLiveHubPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v44').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v49').then((m) => {
     m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
-      esiAccountFetch, esiAccountList, resolveTypeNames,
+      esiAccountFetch, esiAccountList, resolveTypeNames, hasScope, structureNameMap, saveStructureNames,
+      readToken: () => state.esiToken || readEsiToken(),
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
     });
@@ -727,7 +728,7 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v14').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v16').then((m) => {
     m.initAppraisal({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
       getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -755,7 +756,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v56').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v57').then((m) => {
     m.initPi({ addToCart, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
@@ -927,7 +928,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v55').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v56').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -3946,6 +3947,11 @@ const VAL_MED_DAYS = [1, 7, 14, 30];
 const valuationMedDays = () => { const d = Number(store.get('eve-valuation-med')); return VAL_MED_DAYS.includes(d) ? d : 7; };
 const hasMedPrice = () => Boolean(SERVER.kb);
 const medOf = (p, days = valuationMedDays()) => p?.med?.[days] ?? null;
+// 买卖中间价：（最低卖价 + 最高收价）÷ 2，卖单、收单都有才算
+const splitOf = (p) => (p?.sell != null && p?.buy != null ? (p.sell + p.buy) / 2 : null);
+function splitCard(label, total, priced, n) {
+  return valuationCard(label + ' · 买卖中间价', formatISK(total) + ' ISK', `<span title="（最低卖价 + 最高收价）÷ 2，卖单和收单都有的物品才计入">${priced}/${n} 项同时有卖单和收单</span>`, 'is-split');
+}
 // 天数切换（卡片里的 24 小时 / 7 / 14 / 30 天）：记下后让同一块里的估值来源下拉框触发一次 change，各页面照常重画
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-val-med]');
@@ -3967,16 +3973,18 @@ async function valuateItems(items, onProgress) {
   const list = items.filter((i) => !i.is_blueprint_copy && i.type_id);
   const ids = [...new Set(list.map((i) => Number(i.type_id)))];
   await fetchHubPrices(region, ids, onProgress);
-  const r = { region, days, sell: 0, buy: 0, mid: 0, n: ids.length, sellN: 0, buyN: 0, midN: 0, price: (id) => { const p = hubPrice(region, id) || {}; return { ...p, mid: medOf(p, days) }; } };
+  const r = { region, days, sell: 0, buy: 0, mid: 0, split: 0, n: ids.length, sellN: 0, buyN: 0, midN: 0, splitN: 0, price: (id) => { const p = hubPrice(region, id) || {}; return { ...p, mid: medOf(p, days) }; } };
   for (const i of list) {
     const p = hubPrice(region, i.type_id), q = valuationQuantity(i.quantity);
     if (p?.sell != null) r.sell += p.sell * q;
     if (p?.buy != null) r.buy += p.buy * q;
+    if (splitOf(p) != null) r.split += splitOf(p) * q;
     if (medOf(p, days) != null) r.mid += medOf(p, days) * q;
   }
   r.sellN = ids.filter((t) => hubPrice(region, t)?.sell != null).length;
   r.buyN = ids.filter((t) => hubPrice(region, t)?.buy != null).length;
   r.midN = ids.filter((t) => medOf(hubPrice(region, t), days) != null).length;
+  r.splitN = ids.filter((t) => splitOf(hubPrice(region, t)) != null).length;
   return r;
 }
 // 估值卡片：最低卖 / 最高收 / 成交中位价（宁静服）
@@ -3984,10 +3992,12 @@ function medCard(label, total, priced, n, region, days = valuationMedDays()) {
   return valuationCard(label + ' · 成交中位价', formatISK(total) + ' ISK',
     `<span title="${esc(region.hub.name)} 近 ${days} 天每日成交均价的中位数（与倒卖排行同一数据），不受挂单乱价影响">${priced}/${n} 种有成交价</span>` + medDaysPicker(days), 'is-mid');
 }
-function valuationCards(v, label = '物品估值') {
+// withSplit：资产类页面另加一张「买卖中间价」
+function valuationCards(v, label = '物品估值', withSplit = false) {
   const where = esc(v.region.hub.name);
   return valuationCard(label + ' · 最低卖价', formatISK(v.sell) + ' ISK', `${v.sellN}/${v.n} 种在 ${where} 有卖单`, 'is-sell') +
     valuationCard(label + ' · 最高收价', formatISK(v.buy) + ' ISK', `${v.buyN}/${v.n} 种在 ${where} 有收单`, 'is-buy') +
+    (withSplit ? splitCard(label, v.split, v.splitN, v.n) : '') +
     (hasMedPrice() ? medCard(label, v.mid, v.midN, v.n, v.region, v.days) : '');
 }
 const valuation = { sources: VALUATION_SOURCES, region: valuationRegion, set: setValuationRegion, select: valuationSelect, items: valuateItems, cards: valuationCards,
@@ -4127,13 +4137,14 @@ function stationSummaries() {
   const days = valuationMedDays();
   const map = new Map();
   for (const a of assets) {
-    if (!map.has(a.rootId)) map.set(a.rootId, { id: a.rootId, name: locationName(a.rootId), assets: [], sell: 0, buy: 0, mid: 0 });
+    if (!map.has(a.rootId)) map.set(a.rootId, { id: a.rootId, name: locationName(a.rootId), assets: [], sell: 0, buy: 0, mid: 0, split: 0 });
     const group = map.get(a.rootId);
     group.assets.push(a);
     const p = a.is_blueprint_copy ? null : hubPrice(region, a.type_id);
     const qty = valuationQuantity(a.quantity);
     if (p?.sell != null) group.sell += p.sell * qty;
     if (p?.buy != null) group.buy += p.buy * qty;
+    if (splitOf(p) != null) group.split += splitOf(p) * qty;
     if (medOf(p, days) != null) group.mid += medOf(p, days) * qty;
   }
   return [...map.values()].sort((x, y) => y.sell - x.sell || y.assets.length - x.assets.length);
@@ -4406,8 +4417,10 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
   const assetSell = groups.reduce((s, g) => s + g.sell, 0);
   const assetBuy = groups.reduce((s, g) => s + g.buy, 0);
   const assetMid = groups.reduce((s, g) => s + g.mid, 0);
+  const assetSplit = groups.reduce((s, g) => s + g.split, 0);
   const showMid = hasMedPrice();
   const nonBpc = assets.filter((a) => !a.is_blueprint_copy);
+  const splitPriced = nonBpc.filter((a) => splitOf(hubPrice(region, a.type_id)) != null).length;
   const sellPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.sell != null).length;
   const buyPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.buy != null).length;
   const failed = tradable.filter((t) => hubPrice(region, t)?.failed).length;
@@ -4420,6 +4433,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
         <td>${formatNumber(g.assets.length)}</td>
         <td class="down">${g.sell ? formatISK(g.sell) : '—'}</td>
         <td class="up">${g.buy ? formatISK(g.buy) : '—'}</td>
+        <td>${g.split ? formatISK(g.split) : '—'}</td>
         ${showMid ? `<td class="mid-cell">${g.mid ? formatISK(g.mid) : '—'}</td>` : ''}
         <td><span class="share-bar"><i style="width:${share.toFixed(1)}%"></i></span>${share ? share.toFixed(1) + '%' : '—'}</td>
       </tr>`;
@@ -4434,6 +4448,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
     '<div class="valuation-grid">' +
       valuationCard('资产估值 · 最低卖价', formatISK(assetSell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', assetSell * TF.netSell()), 'is-sell') +
       valuationCard('资产估值 · 最高收价', formatISK(assetBuy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', assetBuy * TF.netBuy()), 'is-buy') +
+      splitCard('资产估值', assetSplit, splitPriced, nonBpc.length) +
       (showMid ? medCard('资产估值', assetMid, nonBpc.filter((a) => medOf(hubPrice(region, a.type_id)) != null).length, nonBpc.length, region) : '') +
       valuationCard('我的卖单', formatISK(sellOrderTotal) + ' ISK', sellOrders.length + ' 笔' + netLine('全部成交税后', sellOrderTotal * TF.netBuy()), 'is-order') +
       valuationCard('我的收单', formatISK(buyOrderTotal) + ' ISK', buyOrders.length + ' 笔', 'is-order') +
@@ -4446,7 +4461,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
       (priceAt ? ' · 行情 ' + new Date(priceAt).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '') +
       (failed ? ' · <span class="down">' + failed + ' 种行情查询失败</span>' : '') + '</p>' +
     '<div class="table-scroll"><table class="pc-mini-table station-summary"><thead><tr>' +
-      '<th>空间站</th><th>物品数</th><th>卖价估值</th><th>收价估值</th>' + (showMid ? '<th>成交价估值</th>' : '') + '<th>占比（按卖价）</th>' +
+      '<th>空间站</th><th>物品数</th><th>卖价估值</th><th>收价估值</th><th>中间价估值</th>' + (showMid ? '<th>成交价估值</th>' : '') + '<th>占比（按卖价）</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
@@ -4463,6 +4478,7 @@ function renderStationAssets(box, station, groups, { region }) {
   const buyPriced = nonBpc.filter((a) => hubPrice(region, a.type_id)?.buy != null).length;
   const showMid = hasMedPrice();
   const midPriced = nonBpc.filter((a) => medOf(hubPrice(region, a.type_id)) != null).length;
+  const splitPriced = nonBpc.filter((a) => splitOf(hubPrice(region, a.type_id)) != null).length;
   const kinds = new Set(list.map((a) => a.type_id)).size;
 
   const rows = list.slice(0, ASSET_ROW_LIMIT).map((a) => {
@@ -4490,6 +4506,7 @@ function renderStationAssets(box, station, groups, { region }) {
     '<div class="valuation-grid station-grid">' +
       valuationCard('本站估值 · 最低卖价', formatISK(station.sell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', station.sell * TF.netSell()), 'is-sell') +
       valuationCard('本站估值 · 最高收价', formatISK(station.buy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', station.buy * TF.netBuy()), 'is-buy') +
+      splitCard('本站估值', station.split, splitPriced, nonBpc.length) +
       (showMid ? medCard('本站估值', station.mid, midPriced, nonBpc.length, region) : '') +
       valuationCard('物品', formatNumber(list.length) + ' 项', kinds + ' 种物品') +
       valuationCard('占总资产', total ? ((station.sell / total) * 100).toFixed(1) + '%' : '—', '按最低卖价') +
@@ -4636,7 +4653,7 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v5').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v7').then((m) => {
     m.initProfileMore({
       esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
@@ -4653,7 +4670,7 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v2').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v7').then((m) => {
     m.initOrderWatch({
       esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -4673,7 +4690,7 @@ function loadOrderWatch() {
 // 个人中心 · 交易记录与盈亏：首次打开时加载
 let tradesLoading = null;
 function loadTradesModule() {
-  if (!tradesLoading) tradesLoading = import('./trades.js?v=v5').then((m) => {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v6').then((m) => {
     m.initTrades({
       esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard,
@@ -4694,6 +4711,8 @@ function switchProfileTab(tab, stationId) {
   $$('.profile-tabs .tab-link').forEach((link) => link.classList.toggle('active', link.dataset.profile === tab));
   syncProfileNavActive(tab);
   document.querySelector('.profile-scroll')?.scrollTo({ top: 0 });
+  // 要异步读取的分栏先换成骨架屏，不让上一个分栏的内容停留到新数据回来
+  if (state.characterData && !['info', 'wallet', 'assets'].includes(tab)) $('profileData').innerHTML = skCards(4) + skToolbar(3) + skRows(8);
   if (state.characterData) renderProfileTab(tab);
 }
 

@@ -16,7 +16,9 @@
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
-import * as Plan from './ind-plan.js?v=v4';
+import * as Plan from './ind-plan.js?v=v5';
+import * as Chain from './ind-chain.js?v=1';
+import * as IS from './ind-structs.js?v=3';
 import { skPage } from './skeleton.js?v=v17';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken, hasEsiToken, closeDrawer
@@ -56,7 +58,7 @@ const STATUS_ZH = { active: '进行中', paused: '暂停', ready: '可交付', d
 const D = { loading: null, data: null, sys: new Map(), regions: new Map(), jumpsFromJita: null, adjusted: new Map(), average: new Map(), indices: new Map(), skills: null, history: new Map(),
   bpc: new Map(), bpAll: null, bpUpdated: null, mkt: undefined, mktAt: null };   // mkt：交易中心快照 id -> { sell, buy, daily }   // 蓝图合同价：蓝图 -> { o: 原图合同, c: 拷贝合同 }；bpAll：全部蓝图的 [原图最低, 拷贝每流程最低]
 const F = {
-  tab: 'calc', sys: JITA, fac: 'npc', rig: 0, rfac: 35836, rrig: 0, tax: 1,
+  tab: 'calc', sys: JITA, fac: 'npc', rig: 0, rfac: 35836, rrig: 0, tax: 1, reproc: 69.6,
   mat: 'sell', prod: 'sell', skills: 'all5', me: 10, te: 20, subMe: 10,
   scope: 'region', jumps: 10, sec: { high: true, low: true, null: false },
   rankCat: 'all', rankTech: 'all', rankAct: 'm', rankSkill: false, rankOwned: false, rankVol: 0, rankScore: 0, rankSort: 'ph', rankDir: 'desc', rankSize: 100, rankNoOrders: false, idx: 'manufacturing', whereSort: null, whereDir: 'asc'
@@ -284,18 +286,30 @@ function bpPrices(pid) {
 }
 
 // ---------- 计算 ----------
-function facilityFor(act) {
+// 设施：F.fac / F.rfac 为 's:<key>' 时用「我的建筑」（加成按产品分类、星系用建筑所在星系、税率用建筑自己的）
+function facilityFor(act, pid) {
+  const key = act === 'r' ? F.rfac : F.fac;
+  const s = typeof key === 'string' && key.startsWith('s:') ? IS.get(key.slice(2)) : null;
+  if (s && IS.canDo(s, act)) {
+    const g = pid ? T(pid)[2] : 0;
+    return { ...IS.bonus(s, act, g, g ? D.data.groups[g]?.[1] || 0 : 0), rig: { me: 0, te: 0 }, sys: s.system || undefined, s };
+  }
   if (act === 'r') return { ...FACILITIES[F.rfac] || FACILITIES[35836], rig: RIGS[F.rrig] };
   return { ...FACILITIES[F.fac] || FACILITIES.npc, rig: RIGS[F.rig] };
 }
-const facTax = (act) => (act === 'm' && F.fac === 'npc' ? NPC_TAX : F.tax);
+const facTax = (act) => {
+  const f = facilityFor(act);
+  if (f.s) return IS.taxOf(f.s, act, F.tax);
+  return act !== 'r' && (F.fac === 'npc' || !FACILITIES[F.fac]) ? NPC_TAX : F.tax;
+};
 const sysSec = (id = F.sys) => D.sys.get(id)?.sec ?? 0.5;
 const costIndex = (act, id = F.sys) => (D.indices.get(id) || {})[act === 'r' ? 'reaction' : 'manufacturing'] || 0;
 
 // 一个任务的材料、EIV、安装费、时间
-function job(pid, runs, me, te, sysId = F.sys) {
+function job(pid, runs, me, te, sysId) {
   const [, qty, time, mats, , act] = BP(pid);
-  const fac = facilityFor(act);
+  const fac = facilityFor(act, pid);
+  sysId = sysId ?? fac.sys ?? F.sys;
   const sm = secMul(sysSec(sysId));
   const mul = (1 - fac.me / 100) * (1 - (fac.rig.me * sm) / 100);
   const items = mats.map(([id, base]) => ({
@@ -322,15 +336,48 @@ function invention(pid, decId = 0) {
   const prob = Math.min(1, base * (1 + sci.reduce((t, [id]) => t + lvl(id), 0) / 30 + (enc ? lvl(enc[0]) : 0) / 40) * dec[0]);
   const runs = Math.max(1, runsPer + dec[3]);
   const eivProduct = BP(pid)[3].reduce((t, [id, b]) => t + b * (D.adjusted.get(id) || 0), 0);
-  const jobCost = eivProduct * 0.02 * ((D.indices.get(F.sys) || {}).invention || 0) + eivProduct * 0.02 * (facTax('m') + SCC) / 100;
+  const fac = facilityFor('i', pid);
+  const jobCost = eivProduct * 0.02 * ((D.indices.get(fac.sys ?? F.sys) || {}).invention || 0) * (1 - fac.cost / 100) + eivProduct * 0.02 * (facTax('i') + SCC) / 100;
   const dcCost = dcs.reduce((t, [id, q]) => t + q * (matPrice(id) ?? 0), 0);
   const decCost = decId ? matPrice(decId) ?? 0 : 0;
   const attempt = dcCost + decCost + jobCost;
   return { t1bp, prob, runs, me: 2 + dec[1], te: 4 + dec[2], dcs, dcCost, decCost, jobCost, attempt, perRun: attempt / (prob * runs) };
 }
 
-// 生产 units 个 pid 的成本：材料逐个按「购买」或「自制」（C.build 中的物品）计算，自制按比例分摊
-function buildCost(pid, units, depth, sysId = F.sys) {
+// 生产 units 个 pid 的成本：材料逐个按「购买」或「自制」（C.build 中的物品）计算，自制按比例分摊。
+// 能自制的有三种（ind-chain.js 的 kindOf）：bp 蓝图、pi 行星配方、ore 买矿石化矿；化矿的材料先记到 sink.ore，
+// 由 calc 合在一起解最便宜的矿石组合，第二遍按得到的化矿单价（K.oreUnit）计成本。sink.g 是层次图，只算单价时 sink 为 null
+const K = { oreUnit: null };
+function produce(id, units, depth, sysId, sink) {
+  const kind = Chain.kindOf(id);
+  if (kind === 'pi') {
+    const rec = Chain.piRecipe(id);
+    const share = units / rec.outQty;
+    let cost = 0;
+    const raw = new Map();
+    for (const [mid, q] of rec.inputs) {
+      const s = supply(mid, q * share, depth + 1, sysId, sink, id);
+      cost += s.cost;
+      for (const [k, v] of s.raw) raw.set(k, (raw.get(k) || 0) + v);
+    }
+    return { cost, raw, secs: 0 };
+  }
+  if (kind === 'ore') {
+    if (sink?.ore) sink.ore.set(id, (sink.ore.get(id) || 0) + units);
+    const u = K.oreUnit?.get(id);
+    return { cost: units * (u ?? (matPrice(id) ?? 0) * (1 + matFee() / 100)), raw: new Map(), secs: 0 };
+  }
+  return buildCost(id, units, depth, sysId, sink);
+}
+// 材料 id 用 need 个：自制就往下推，否则按市价买
+function supply(id, need, depth, sysId, sink, parent) {
+  const kind = Chain.kindOf(id);
+  const make = Boolean(kind) && C.build.has(id) && depth < 12;
+  const s = make ? produce(id, need, depth, sysId, sink) : { cost: need * (matPrice(id) ?? 0) * (1 + matFee() / 100), raw: new Map([[id, need]]), secs: 0 };
+  if (sink?.g) Chain.addEdge(sink.g, parent, id, need, s.cost, depth, kind, make);
+  return s;
+}
+function buildCost(pid, units, depth, sysId, sink = null) {
   const [, qty, , , , act] = BP(pid);
   const runs = Math.ceil(units / qty);
   const me = act === 'r' ? 0 : F.subMe;
@@ -339,15 +386,9 @@ function buildCost(pid, units, depth, sysId = F.sys) {
   let cost = j.cost * share;
   const raw = new Map();
   for (const it of j.items) {
-    const need = it.qty * share;
-    if (depth < 6 && C.build.has(it.id) && BP(it.id)) {
-      const sub = buildCost(it.id, need, depth + 1, sysId);
-      cost += sub.cost;
-      for (const [id, q] of sub.raw) raw.set(id, (raw.get(id) || 0) + q);
-    } else {
-      cost += need * (matPrice(it.id) ?? 0) * (1 + matFee() / 100);
-      raw.set(it.id, (raw.get(it.id) || 0) + need);
-    }
+    const sub = supply(it.id, it.qty * share, depth + 1, sysId, sink, pid);
+    cost += sub.cost;
+    for (const [id, q] of sub.raw) raw.set(id, (raw.get(id) || 0) + q);
   }
   return { cost, raw, secs: j.secs * share };
 }
@@ -372,32 +413,52 @@ function calc() {
   const te = act === 'r' ? 0 : C.te ?? (inv ? inv.te : bpcRow ? bpcRow[4] : F.te);
   const runs = Math.max(1, C.runs);
   const j = job(pid, runs, me, te);
-  const raw = new Map();
-  let matCost = 0;
-  const rows = j.items.map((it) => {
-    const buyUnit = matPrice(it.id);
-    const canBuild = Boolean(BP(it.id));
-    const build = canBuild && C.build.has(it.id);
-    let unitCost = (buyUnit ?? 0) * (1 + matFee() / 100);
-    let sub = null;
-    if (canBuild) {
-      sub = buildCost(it.id, it.qty, 1);
-      if (build) unitCost = sub.cost / it.qty;
+  // 两遍：第一遍收集要化矿的材料，解出最便宜的矿石组合后第二遍按化矿单价计成本、画层次图
+  const pass = (sink) => {
+    const raw = new Map();
+    let matCost = 0;
+    const rows = j.items.map((it) => {
+      const buyUnit = matPrice(it.id);
+      const kind = Chain.kindOf(it.id);
+      const canBuild = Boolean(kind);
+      const build = canBuild && C.build.has(it.id);
+      const s = supply(it.id, it.qty, 1, undefined, sink, pid);
+      for (const [id, q] of s.raw) raw.set(id, (raw.get(id) || 0) + q);
+      matCost += s.cost;
+      const buildUnit = canBuild ? (build ? s.cost : produce(it.id, it.qty, 1, undefined, null).cost) / it.qty : null;
+      return { ...it, kind, buyUnit, canBuild, build, unitCost: s.cost / it.qty, buildUnit };
+    });
+    return { raw, matCost, rows };
+  };
+  K.oreUnit = null;
+  let lp = null, out;
+  if (!Chain.chainReady()) out = pass(null);
+  else {
+    const ore = new Map();
+    const g = Chain.newGraph(pid, j.out, 0);
+    const sink = { ore: new Map(), g };
+    pass({ ore });
+    if (ore.size) { lp = Chain.solveOres(ore, F.reproc / 100); K.oreUnit = lp.unit; }
+    out = pass(sink);
+    K.oreUnit = null;
+    if (lp) {
+      Chain.addOres(g, lp);
+      for (const [o, n] of lp.ores) out.raw.set(o, (out.raw.get(o) || 0) + n);
+      for (const m of lp.missing) out.raw.set(m, (out.raw.get(m) || 0) + ore.get(m));
     }
-    if (build) for (const [id, q] of sub.raw) raw.set(id, (raw.get(id) || 0) + q);
-    else raw.set(it.id, (raw.get(it.id) || 0) + it.qty);
-    matCost += unitCost * it.qty;
-    return { ...it, buyUnit, canBuild, build, unitCost, buildUnit: sub ? sub.cost / it.qty : null };
-  });
+    out.g = g;
+  }
+  const { raw, matCost, rows } = out;
   const invCost = inv ? inv.perRun * runs : 0;
   const bpCost = bpMode === 'bpc' ? bpcPerRun * runs : bpMode === 'bpo' ? (bpoPrice / Math.max(1, C.bpoRuns)) * runs : 0;
   const total = matCost + j.cost + invCost + bpCost;
+  if (out.g) out.g.nodes.get(pid).cost = total;
   const unitPrice = prodPrice(pid);
   const revenue = (unitPrice ?? 0) * j.out * (1 - sellFee() / 100);
   const profit = revenue - total;
   const profitNoBp = profit + bpCost;
   const payback = bpoPrice != null && profitNoBp > 0 ? Math.ceil(bpoPrice / (profitNoBp / runs)) : null;
-  return { pid, act, me, te, runs, j, rows, raw, matCost, inv, invCost, bp, bpoPrice, bpcPerRun, bpMode, bpCost, payback, total, unitPrice, revenue, profit, perUnit: total / j.out };
+  return { pid, act, me, te, runs, j, rows, raw, matCost, g: out.g, lp, inv, invCost, bp, bpoPrice, bpcPerRun, bpMode, bpCost, payback, total, unitPrice, revenue, profit, perUnit: total / j.out };
 }
 
 // ---------- 页面框架 ----------
@@ -412,9 +473,11 @@ export async function showIndustry(hash = location.hash, restored = false) {
   await loadData();
   if (!planReady) {
     planReady = true;
+    Chain.initChain({ ctx, BP, T, tName, matPrice, ICON, F });
+    IS.initStructs({ ctx, D, F, sysLabel, onChange: () => { renderSettings(); refresh(); } });
     Plan.initPlan({ server: SERVER.id, ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, selectProduct, renderTab, sysSec, secMul });
   }
-  await ensureSkills();
+  await Promise.all([ensureSkills(), IS.loadRigs().catch(() => {})]);
   const m = /^#ind(?:\/(calc|rank|where|mine|plan|npc))?(?:\/(\d+))?/.exec(hash || '');
   if (m?.[1]) F.tab = m[1];
   if (m?.[2] && BP(Number(m[2]))) selectProduct(Number(m[2]), false);
@@ -434,6 +497,8 @@ export async function showIndustry(hash = location.hash, restored = false) {
     main.addEventListener('click', onClick);
     main.addEventListener('change', onChange);
     main.addEventListener('input', onInput);
+    let rt = 0;
+    window.addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => { const el = $('indCalc'); if (el && R.graph && el.querySelector('.ind-chain')) Chain.drawLines(el, R.graph); }, 120); });
     main.addEventListener('toggle', (e) => { if (Plan.onCalcEvent(e) === 'draw') drawCalc(); }, true);
     main.addEventListener('focusout', () => setTimeout(() => { if (!main.contains(document.activeElement)) main.querySelectorAll('.kb-suggest').forEach((b) => { b.hidden = true; }); }, 150));
     const side = $('indSide');
@@ -478,22 +543,35 @@ function renderTab() {
 function renderSettings() {
   const el = $('indSettings');
   const open = el.open;
-  const fac = facilityFor('m'), rfac = facilityFor('r');
+  const fac = facilityFor('m', C.pid || undefined), rfac = facilityFor('r');
   const seg = (name, items, cur) => `<div class="segmented" role="group">${items.map(([v, l]) => `<button type="button" data-ind-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
   const facOpts = [['npc', 'NPC 空间站'], ...[35825, 35826, 35827].map((id) => [id, D.data.structures[id]])];
   const rfacOpts = [35835, 35836].map((id) => [id, D.data.structures[id]]);
-  const idx = D.indices.get(F.sys) || {};
+  // 我的建筑：下拉选择（能做该活动的），旁边是管理按钮
+  const mySel = (name, act, cur) => {
+    const list = IS.structs().filter((x) => IS.canDo(x, act));
+    return `<div class="pi-inline ind-my"><select class="pi-input" data-ind-sel="${name}"><option value="">我的建筑…</option>${list.map((x) => `<option value="s:${ctx.esc(x.key)}"${cur === 's:' + x.key ? ' selected' : ''}>${ctx.esc(IS.shortName(x))}</option>`).join('')}</select><button type="button" class="btn btn-ghost" data-ind-structs>管理</button></div>`;
+  };
+  const facHint = (f, act) => {
+    const tePct = (100 - (100 - f.te) * (1 - f.rig.te * secMul(sysSec(f.sys)) / 100)).toFixed(1);
+    const mePct = Math.round((f.me + f.rig.me * secMul(sysSec(f.sys))) * 100) / 100;
+    return `<small class="pi-hint">${f.s ? sysLabel(f.s.system) + ' · ' : ''}ME −${mePct}% · TE −${tePct}% · 安装费 −${f.cost}%${f.s ? ` · 税 ${facTax(act)}%` : ''}${f.s && act === 'm' && C.pid ? '（按当前产品）' : ''}</small>`;
+  };
+  const facName = fac.s ? IS.shortName(fac.s) : F.fac === 'npc' || !D.data.structures[F.fac] ? 'NPC 空间站' : D.data.structures[F.fac] + (F.rig ? ' + ' + RIGS[F.rig].name + ' 改装件' : '');
+  const idx = D.indices.get(fac.sys ?? F.sys) || {};
   el.innerHTML = `
-    <summary><b>制造设置</b><span class="text-muted">${sysLabel(F.sys)} · 制造指数 ${((idx.manufacturing || 0) * 100).toFixed(2)}% · ${F.fac === 'npc' ? 'NPC 空间站' : ctx.esc(D.data.structures[F.fac])}${F.fac !== 'npc' && F.rig ? ' + ' + RIGS[F.rig].name + ' 改装件' : ''} · 技能${F.skills === 'esi' ? (D.skills ? '按角色' : '（未绑定，按全 5 级）') : '全 5 级'}</span></summary>
+    <summary><b>制造设置</b><span class="text-muted">${sysLabel(fac.sys ?? F.sys)} · 制造指数 ${((idx.manufacturing || 0) * 100).toFixed(2)}% · ${ctx.esc(facName)} · 技能${F.skills === 'esi' ? (D.skills ? '按角色' : '（未绑定，按全 5 级）') : '全 5 级'}</span></summary>
     <div class="ind-set-grid">
       <div class="pi-field"><label>制造星系</label>
         <div class="search-box pi-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input type="search" id="indSys" placeholder="输入星系名" value="${ctx.esc(D.sys.get(F.sys)?.name || '')}" autocomplete="off" spellcheck="false"><div class="kb-suggest" id="indSysSuggest" hidden></div></div></div>
-      <div class="pi-field"><label>制造设施</label>${seg('fac', facOpts, F.fac)}
-        ${F.fac !== 'npc' ? `<div class="pi-inline"><span>改装件</span>${seg('rig', RIGS.map((r, i) => [i, r.name]), F.rig)}</div>` : ''}
-        <small class="pi-hint">ME −${fac.me + fac.rig.me * secMul(sysSec())}% · TE −${(100 - (100 - fac.te) * (1 - fac.rig.te * secMul(sysSec()) / 100)).toFixed(1)}% · 安装费 −${fac.cost}%</small></div>
-      <div class="pi-field"><label>反应设施</label>${seg('rfac', rfacOpts, F.rfac)}
-        <div class="pi-inline"><span>改装件</span>${seg('rrig', RIGS.map((r, i) => [i, r.name]), F.rrig)}</div></div>
+          <input type="search" id="indSys" placeholder="输入星系名" value="${ctx.esc(D.sys.get(F.sys)?.name || '')}" autocomplete="off" spellcheck="false"><div class="kb-suggest" id="indSysSuggest" hidden></div></div>
+        ${fac.s ? '<small class="pi-hint">选了我的建筑时按建筑所在星系算</small>' : ''}</div>
+      <div class="pi-field"><label>制造设施</label>${seg('fac', facOpts, F.fac)}${mySel('fac', 'm', F.fac)}
+        ${!fac.s && F.fac !== 'npc' ? `<div class="pi-inline"><span>改装件</span>${seg('rig', RIGS.map((r, i) => [i, r.name]), F.rig)}</div>` : ''}
+        ${facHint(fac, 'm')}</div>
+      <div class="pi-field"><label>反应设施</label>${seg('rfac', rfacOpts, F.rfac)}${mySel('rfac', 'r', F.rfac)}
+        ${rfac.s ? '' : `<div class="pi-inline"><span>改装件</span>${seg('rrig', RIGS.map((r, i) => [i, r.name]), F.rrig)}</div>`}
+        ${rfac.s ? facHint(rfac, 'r') : ''}</div>
       <div class="pi-field"><label>税费</label>
         <div class="pi-inline"><span>建筑税</span><input type="number" class="pi-input pi-tax" min="0" max="50" step="0.1" value="${F.tax}" data-ind-num="tax"><span>%</span></div>
         <small class="pi-hint">卖出税 ${salesTax().toFixed(2)}% · 中介费 ${brokerFee().toFixed(2)}%</small></div>
@@ -583,8 +661,25 @@ async function renderCalc(body) {
   if (BP(C.pid)[7]) ids.add(bpId);   // 市场有售的原图
   await Promise.all([
     loadJita([...ids], (done, total) => { const el = $('indCalcLoading'); if (el) el.textContent = `读取${HUB_NAME}行情 ${done}/${total}`; }),
-    loadBpContracts([bpId])
+    loadBpContracts([bpId]),
+    Chain.loadChain().catch(() => {})
   ]);
+  // 生产链更深的部分：行星产品各级、能化出这些材料的矿石（数量多时用每小时快照）
+  if (Chain.chainReady()) {
+    const deep = new Set(), seen = new Set();
+    const dig = (id, depth) => {
+      if (seen.has(id) || depth > 12) return;
+      seen.add(id);
+      const kind = Chain.kindOf(id);
+      if (kind === 'bp') for (const [m] of BP(id)[3]) { deep.add(m); dig(m, depth + 1); }
+      else if (kind === 'pi') for (const [m] of Chain.piRecipe(id).inputs) { deep.add(m); dig(m, depth + 1); }
+    };
+    dig(C.pid, 0);
+    Chain.oresFor([...deep]).forEach((o) => deep.add(o));
+    for (const id of ids) deep.delete(id);
+    if (deep.size) await Promise.all([loadJita([...deep]), fillNames([...deep])]);
+    if (F.tab !== 'calc' || !$('indCalc')) return;
+  }
   if (F.tab !== 'calc' || !$('indCalc')) return;
   drawCalc();
   dailyVolume(C.pid).then((h) => { const el = $('indVol'); if (el && h) el.innerHTML = `${ctx.formatNumber(Math.round(h.vol))}<small> 件/天</small>`; else if (el) el.textContent = '—'; });
@@ -623,7 +718,7 @@ function drawCalc() {
       <td class="num"><b>${num(m.qty)}</b></td>
       <td class="num">${m.buyUnit != null ? ctx.formatPrice(m.buyUnit) : '<span class="text-muted">无报价</span>'}</td>
       <td class="num">${isk(m.unitCost * m.qty)}</td>
-      <td>${m.canBuild ? `<button type="button" class="ind-build-btn${m.build ? ' on' : ''}" data-ind-build="${m.id}" title="自制单价 ${isk(m.buildUnit)}">${m.build ? '自制' : '购买'}<small>${cheaper === 'build' ? '自制更省' : cheaper === 'buy' ? '购买更省' : ''}</small></button>` : ''}</td>
+      <td>${m.canBuild ? `<button type="button" class="ind-build-btn${m.build ? ' on' : ''}" data-ind-build="${m.id}" title="${m.kind === 'ore' ? '化矿' : '自制'}单价 ${isk(m.buildUnit)}">${m.build ? (m.kind === 'ore' ? '化矿' : '自制') : '购买'}<small>${cheaper === 'build' ? (m.kind === 'ore' ? '化矿更省' : '自制更省') : cheaper === 'buy' ? '购买更省' : ''}</small></button>` : ''}</td>
     </tr>`;
   }).join('');
 
@@ -687,6 +782,7 @@ function drawCalc() {
     </div>
     <div class="pi-card"><div class="pi-card-head"><h3>材料</h3>${r.rows.some((m) => m.canBuild) ? '<span class="ind-mat-bulk"><button type="button" class="btn btn-ghost" data-ind-build-all>全自制</button><button type="button" class="btn btn-ghost" data-ind-build-none>全购买</button></span>' : ''}</div>
       <div class="pi-table-wrap"><table class="pi-table ind-mats"><thead><tr><th>材料</th><th class="num">基础</th><th class="num">实际</th><th class="num">单价</th><th class="num">小计</th><th></th></tr></thead><tbody>${matRows}</tbody></table></div></div>
+    ${r.g ? Chain.graphHtml(r.g, { reproc: F.reproc, lp: r.lp }) : ''}
     ${invHtml}
     ${bpCard(r)}
     ${Plan.calcExtrasHtml(r)}
@@ -703,6 +799,7 @@ function drawCalc() {
     const wraps = el.querySelectorAll('.pi-table-wrap');
     wrapTops.forEach((top, i) => { if (wraps[i]) wraps[i].scrollTop = top; });
   };
+  if (r.g) { R.graph = r.g; Chain.drawLines(el, r.g); requestAnimationFrame(() => Chain.drawLines(el, r.g)); }
   restoreScrolls();
   requestAnimationFrame(restoreScrolls);
   requestAnimationFrame(() => requestAnimationFrame(restoreScrolls));
@@ -1256,6 +1353,7 @@ function onClick(e) {
     renderTab();
     return;
   }
+  if (e.target.closest('[data-ind-structs]')) { IS.openManager(); return; }
   const tab = e.target.closest('[data-ind-tab]');
   if (tab) { F.tab = tab.dataset.indTab; save(); renderTab(); return; }
   if (e.target.closest('[data-ind-export]')) { exportRank(); return; }
@@ -1277,7 +1375,7 @@ function onClick(e) {
     const k = set.dataset.indSet;
     let v = set.dataset.v;
     if (['rig', 'rrig', 'jumps'].includes(k)) v = Number(v);
-    if (['fac', 'rfac'].includes(k) && v !== 'npc') v = Number(v);
+    if (['fac', 'rfac'].includes(k) && /^\d+$/.test(v)) v = Number(v);
     F[k] = v;
     if (k === 'rankAct' && v === 'r') F.rankTech = 'all';
     save();
@@ -1307,12 +1405,32 @@ function onClick(e) {
     return;
   }
   if (e.target.closest('[data-ind-build-all]')) {
-    for (const m of calc().rows) if (m.canBuild) C.build.add(m.id);
+    for (const m of calc().rows) if (m.kind === 'bp') C.build.add(m.id);
     drawCalc();
     return;
   }
   if (e.target.closest('[data-ind-build-none]')) {
     for (const m of calc().rows) if (m.canBuild) C.build.delete(m.id);
+    drawCalc();
+    return;
+  }
+  const deep = e.target.closest('[data-ind-deep]');
+  if (deep) {
+    // 一键展开：none 全部购买；bp 蓝图能造的都造；all 再往下推到行星 P0 与矿石
+    const mode = deep.dataset.indDeep;
+    C.build = new Set();
+    if (mode !== 'none') {
+      const dig = (id, depth) => {
+        if (depth > 12) return;
+        const kind = Chain.kindOf(id);
+        if (!kind || (mode === 'bp' && kind !== 'bp')) return;
+        if (depth && C.build.has(id)) return;
+        if (depth) C.build.add(id);
+        if (kind === 'bp') for (const [m] of BP(id)[3]) dig(m, depth + 1);
+        else if (kind === 'pi') for (const [m] of Chain.piRecipe(id).inputs) dig(m, depth + 1);
+      };
+      dig(C.pid, 0);
+    }
     drawCalc();
     return;
   }
@@ -1338,8 +1456,13 @@ function refresh() {
 function onChange(e) {
   const t = e.target;
   if (planResult(F.tab === 'calc' ? Plan.onCalcEvent(e) : Plan.onPlanEvent(e))) return;
+  if (t.dataset.indSel) {
+    if (t.value) { F[t.dataset.indSel] = t.value; save(); }
+    renderSettings(); refresh();
+    return;
+  }
   if (t.dataset.indNum) {
-    const lim = { tax: [0, 50], me: [0, 10], te: [0, 20], subMe: [0, 10] }[t.dataset.indNum];
+    const lim = { tax: [0, 50], me: [0, 10], te: [0, 20], subMe: [0, 10], reproc: [30, 100] }[t.dataset.indNum];
     F[t.dataset.indNum] = Math.min(lim[1], Math.max(lim[0], Number(t.value) || 0));
     t.value = F[t.dataset.indNum];
     save(); renderSettings(); refresh();

@@ -116,15 +116,16 @@ function scienceJob(pid, kind, mulSum) {
   const b = X.BP(pid);
   const res = X.D.data.res?.[b[0]];
   if (!res) return null;
-  const fac = X.facilityFor('m');
+  const act = kind === 'copy' ? 'c' : kind;
+  const fac = X.facilityFor(act, pid);
   const eiv = b[3].reduce((t, [id, q]) => t + q * (X.D.adjusted.get(id) || 0), 0);
   const idxKey = { me: 'researching_material_efficiency', te: 'researching_time_efficiency', copy: 'copying' }[kind];
-  const idx = (X.D.indices.get(X.F.sys) || {})[idxKey] || 0;
+  const idx = (X.D.indices.get(fac.sys ?? X.F.sys) || {})[idxKey] || 0;
   const skill = kind === 'me' ? SK.metallurgy : kind === 'te' ? SK.research : SK.science;
   const timeMul = (1 - 0.05 * X.lvl(skill)) * (1 - 0.03 * X.lvl(SK.advIndustry)) * (1 - fac.te / 100);
   const base = kind === 'me' ? res[0] : kind === 'te' ? res[1] : res[2];
   const secs = base * mulSum * timeMul;
-  const cost = eiv * 0.02 * mulSum * (idx * (1 - fac.cost / 100) + (X.facTax('m') + X.SCC) / 100);
+  const cost = eiv * 0.02 * mulSum * (idx * (1 - fac.cost / 100) + (X.facTax(act) + X.SCC) / 100);
   return { secs, cost, idx };
 }
 const levelSum = (from, to) => { let s = 0; for (let n = from + 1; n <= to; n++) s += LEVEL_MUL[n] / 105; return s; };
@@ -519,8 +520,7 @@ function clearHtml() {
   const { esc, formatISK: isk, formatNumber: num } = X.ctx;
   const stock = stockMap();
   if (!stock.size) return '<div class="pi-card"><p class="text-muted">先选择库存来源</p></div>';
-  const fac = X.facilityFor('m');
-  const mul = (1 - fac.me / 100) * (1 - (fac.rig.me * X.secMul(X.sysSec())) / 100);
+  const mulOf = (pid) => { const fac = X.facilityFor('m', pid); return (1 - fac.me / 100) * (1 - (fac.rig.me * X.secMul(X.sysSec(fac.sys))) / 100); };
   const full = [], part = [];
   for (const key of Object.keys(X.D.data.bp)) {
     const pid = Number(key);
@@ -530,6 +530,7 @@ function clearHtml() {
     const unit = X.prodPrice(pid);
     if (!unit || b[3].some(([id]) => !X.matPrice(id))) continue;
     const me = X.invFor(pid) ? 2 : X.F.me;
+    const mul = mulOf(pid);
     const per = b[3].map(([id, q]) => ({ id, q: q * (1 - me / 100) * mul, have: stock.get(id) || 0, price: X.matPrice(id) ?? 0 }));
     const value = per.reduce((t, m) => t + m.q * m.price, 0);
     if (!value) continue;

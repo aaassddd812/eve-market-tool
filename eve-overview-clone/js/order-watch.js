@@ -8,6 +8,13 @@
 //   列出新挂单、部分成交（成交数量 × 价格）、全部成交、过期、取消。
 // 后台监控（默认关）：每 5 分钟检查一次，有订单新被压价时网页提示，可选桌面通知与提示音；关闭页面就停止。
 // ESI 缓存：角色订单约 20 分钟、市场订单 5 分钟，所以「刷新」最快也是这个频率。
+// 订单账本（本机，按角色）：每次读到订单都记一笔——新挂单（中介费）、改价（issued 变了，按 trade-fees.js 的改单费）、成交（剩余减少）。
+//   费率按订单所在地点（brokerAt：按建筑单独填的 / 建筑默认 / NPC 技能声望）。两次读取之间改了多次只能记一次（ESI 缓存约 20 分钟）。
+//   收单：每件成本 = 价格 + 累计费用 / 总量，和同站最低卖价扣税费后比，得剩余利润率；
+//   卖单：每件到手 = 价格扣销售税 − 累计费用 / 总量，有收单成交记录时和平均收购成本比。
+//   改单以价格变化为准（游戏里改单必须改价）。
+
+import * as TF from './trade-fees.js?v=v5';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, typeName, locationName, resolveTypeNames, selectItem, store, serverKey, isActive
 const SET_KEY = 'eve-order-watch';
@@ -25,6 +32,8 @@ export function initOrderWatch(context) {
 }
 const saveSet = () => ctx.store.setJSON(SET_KEY, SET);
 const snapKey = (charId) => ctx.serverKey('eve-order-snap-' + charId);
+const ledgerKey = (charId) => ctx.serverKey('eve-order-ledger-' + charId);
+const LEDGER_DAYS = 120;   // 结束超过 120 天的订单从账本删掉
 
 // 一档价格：保留 4 位有效数字的最小变动（不低于 0.01）
 export function tick(price) {
@@ -88,16 +97,23 @@ async function analyze(orders) {
       const o = orders[i++];
       const m = await marketFor(o);
       if (m.err) { out.push({ o, state: 'unknown', why: m.err }); continue; }
+      // 收单的参考卖价：同一空间站 / 建筑别人的最低卖单（算剩余利润用）
+      let sellRef = null;
+      if (o.is_buy_order) {
+        const ms = await marketFor({ ...o, is_buy_order: false });
+        const sells = (ms.list || []).filter((x) => !x.is_buy_order && x.location_id === o.location_id && !mine.has(x.order_id));
+        if (sells.length) sellRef = Math.min(...sells.map((x) => x.price));
+      }
       const sys = o.system_id || m.list.find((x) => x.location_id === o.location_id)?.system_id;
       const rivals = m.list.filter((x) => !mine.has(x.order_id) && x.is_buy_order === o.is_buy_order && (o.is_buy_order
         ? x.location_id === o.location_id || x.range === 'region' || (sys && x.system_id === sys && x.range !== 'station')
         : x.location_id === o.location_id));
-      if (!rivals.length) { out.push({ o, state: 'alone' }); continue; }
+      if (!rivals.length) { out.push({ o, state: 'alone', sellRef }); continue; }
       const best = o.is_buy_order ? Math.max(...rivals.map((x) => x.price)) : Math.min(...rivals.map((x) => x.price));
       const bestVol = rivals.filter((x) => x.price === best).reduce((t, x) => t + x.volume_remain, 0);
       const worse = o.is_buy_order ? best > o.price : best < o.price;
       const tie = best === o.price;
-      out.push({ o, best, bestVol, rivals: rivals.length, state: worse || tie ? 'under' : 'lead', tie, gap: Math.abs(best - o.price), sug: worse || tie ? suggest(o, best) : null,
+      out.push({ o, sellRef, best, bestVol, rivals: rivals.length, state: worse || tie ? 'under' : 'lead', tie, gap: Math.abs(best - o.price), sug: worse || tie ? suggest(o, best) : null,
         lead: !worse && !tie ? Math.abs(o.price - best) : 0 });
     }
   };
@@ -106,18 +122,72 @@ async function analyze(orders) {
   return out.sort((a, b) => order[a.state] - order[b.state] || ctx.typeName(a.o.type_id).localeCompare(ctx.typeName(b.o.type_id), 'zh'));
 }
 
+// ---------- 订单账本 ----------
+// L：{ o: { 订单号: { t 物品, b 收单, loc, tot 总量, h: [[时间, 价格, 剩余, 事件 new|mod|fill|end]], fee 中介费, rel 改单费, n 改单次数, end } },
+//      cost: { 物品: [收购数量, 含费用的收购总额] } }
+function loadLedger(charId) {
+  const L = ctx.store.getJSON(ledgerKey(charId), null) || {};
+  return { o: L.o || {}, cost: L.cost || {} };
+}
+function track(charId, orders) {
+  const L = loadLedger(charId);
+  const now = Date.now();
+  const live = new Set();
+  for (const o of orders) {
+    const id = String(o.order_id);
+    live.add(id);
+    const rate = TF.brokerAt(o.location_id);
+    let e = L.o[id];
+    if (!e) {
+      e = L.o[id] = { t: o.type_id, b: o.is_buy_order ? 1 : 0, loc: o.location_id, tot: o.volume_total, iss: o.issued, h: [[Date.parse(o.issued) || now, o.price, o.volume_remain, 'new']], fee: TF.brokerFee(rate, o.price * o.volume_total), rel: 0, n: 0 };
+      if (o.volume_remain < o.volume_total) fill(L, e, o.volume_total - o.volume_remain, o.price, now);
+      continue;
+    }
+    const last = e.h[e.h.length - 1];
+    if (o.volume_remain < last[2]) fill(L, e, last[2] - o.volume_remain, last[1], now);
+    if (o.price !== last[1]) {   // 游戏里改单一定改价（issued 也会变，但只看价格更稳）
+      e.rel += TF.relistFee(rate, last[1], o.price, o.volume_remain);
+      e.n += 1;
+      e.iss = o.issued;
+      e.h.push([Date.parse(o.issued) || now, o.price, o.volume_remain, 'mod']);
+    } else if (o.volume_remain < last[2]) e.h.push([now, o.price, o.volume_remain, 'fill']);
+  }
+  for (const [id, e] of Object.entries(L.o)) {
+    if (!live.has(id) && !e.end) { e.end = now; e.h.push([now, e.h[e.h.length - 1][1], e.h[e.h.length - 1][2], 'end']); }
+    if (e.end && now - e.end > LEDGER_DAYS * 86400e3) delete L.o[id];
+  }
+  ctx.store.setJSON(ledgerKey(charId), L);
+  return L;
+}
+// 收单成交：按成交件数分摊这张单的费用，记入该物品的平均收购成本
+function fill(L, e, qty, price, now) {
+  if (!e.b || qty <= 0) return;
+  const c = L.cost[e.t] || [0, 0];
+  L.cost[e.t] = [c[0] + qty, c[1] + qty * price];
+  e.filled = (e.filled || 0) + qty;
+}
+const feesOf = (e) => (e ? e.fee + e.rel : 0);
+// 物品的平均收购成本（含已付费用，按成交件数）
+function avgCost(L, typeId) {
+  const c = L.cost[typeId];
+  if (!c || !c[0]) return null;
+  const fees = Object.values(L.o).filter((e) => e.b && e.t === typeId && e.filled).reduce((t, e) => t + feesOf(e) * Math.min(1, e.filled / e.tot), 0);
+  return (c[1] + fees) / c[0];
+}
+
 // ---------- 订单变化报告 ----------
 async function buildReport(charId, orders) {
   const prev = ctx.store.getJSON(snapKey(charId), null);
   const snap = { at: Date.now(), o: Object.fromEntries(orders.map((o) => [o.order_id, [o.volume_remain, o.price, o.type_id, o.is_buy_order ? 1 : 0, o.volume_total]])) };
   ctx.store.setJSON(snapKey(charId), snap);
   if (!prev) return { first: true };
-  const R = { since: prev.at, fresh: [], partial: [], filled: [], expired: [], cancelled: [] };
+  const R = { since: prev.at, fresh: [], partial: [], moved: [], filled: [], expired: [], cancelled: [] };
   const now = new Set(orders.map((o) => String(o.order_id)));
   for (const o of orders) {
     const p = prev.o[o.order_id];
     if (!p) R.fresh.push(o);
     else if (o.volume_remain < p[0]) R.partial.push({ o, qty: p[0] - o.volume_remain, isk: (p[0] - o.volume_remain) * o.price });
+    if (p && p[1] !== o.price) R.moved.push({ o, from: p[1] });
   }
   const gone = Object.entries(prev.o).filter(([id]) => !now.has(id));
   if (gone.length) {
@@ -134,7 +204,7 @@ async function buildReport(charId, orders) {
       else R.expired.push(row);   // 没有历史记录的（权限不足或还没同步）也算已结束
     }
   }
-  R.empty = !R.fresh.length && !R.partial.length && !R.filled.length && !R.expired.length && !R.cancelled.length;
+  R.empty = !R.fresh.length && !R.partial.length && !R.moved.length && !R.filled.length && !R.expired.length && !R.cancelled.length;
   return R;
 }
 
@@ -151,6 +221,7 @@ function reportHtml(R) {
   return `<div class="ow-report"><div class="ow-rep-head"><b>订单变化</b><span class="text-muted">自 ${ago}前起</span></div><div class="ow-rep-grid">
     ${sec('部分成交', R.partial, (x) => `<li>${side(x.o.is_buy_order)} ${name(x.o.type_id)} ×${num(x.qty)} <span class="text-muted">@ ${ctx.formatPrice(x.o.price)}</span></li>`, sum(R.partial))}
     ${sec('全部成交', R.filled, (x) => `<li>${side(x.buy)} ${name(x.type_id)} ×${num(x.qty)} <span class="text-muted">@ ${ctx.formatPrice(x.price)}</span></li>`, sum(R.filled))}
+    ${sec('改价', R.moved, (x) => `<li>${side(x.o.is_buy_order)} ${name(x.o.type_id)} <span class="text-muted">${ctx.formatPrice(x.from)} → ${ctx.formatPrice(x.o.price)}</span></li>`)}
     ${sec('新挂单', R.fresh, (o) => `<li>${side(o.is_buy_order)} ${name(o.type_id)} ×${num(o.volume_total)} <span class="text-muted">@ ${ctx.formatPrice(o.price)}</span></li>`)}
     ${sec('过期', R.expired, (x) => `<li>${side(x.buy)} ${name(x.type_id)}${x.qty ? ` 成交 ${num(x.qty)}` : ''}${x.left != null ? ` 剩 ${num(x.left)}` : ''}</li>`, sum(R.expired))}
     ${sec('取消', R.cancelled, (x) => `<li>${side(x.buy)} ${name(x.type_id)}${x.left != null ? ` 剩 ${num(x.left)}` : ''}</li>`)}
@@ -171,6 +242,9 @@ export async function renderOrders(box, orders, charId) {
   if (!Array.isArray(orders)) { box.innerHTML = `<p class="text-muted">订单读取失败：${esc(orders?.__error || '未知错误')}</p>`; return; }
   if (charId !== S.charId) { S.charId = charId; S.report = null; S.rows = null; }
   if (!S.report) S.report = await buildReport(charId, orders);
+  if (S.tracked !== orders) { S.tracked = orders; S.ledger = track(charId, orders); }
+  TF.setStructCandidates([...new Set(orders.map((o) => o.location_id).filter((id) => id >= 1e12))].map((id) => ({ id, name: ctx.locationName(id) })));
+  if (!S.feeSub) S.feeSub = TF.onChange(() => { const b = document.getElementById('profileData'); if (S.rows && b && ctx.isActive()) draw(b); });
   if (!orders.length) { box.innerHTML = settingsHtml() + reportHtml(S.report) + '<p class="text-muted">暂无有效市场订单</p>'; return; }
   if (!S.rows || S.orders !== orders) {
     S.orders = orders;
@@ -188,6 +262,7 @@ function settingsHtml() {
   const chk = (k, label, title) => `<label class="pi-check" title="${title}"><input type="checkbox" data-ow-set="${k}"${SET[k] ? ' checked' : ''}${k !== 'bg' && !SET.bg ? ' disabled' : ''}><span>${label}</span></label>`;
   return `<div class="ow-bar"><button class="btn btn-ghost btn-sm" data-ow-refresh ${S.busy ? 'disabled' : ''}>${S.busy ? '检查中…' : '重新比价'}</button>
     <span class="text-muted">${S.checkedAt ? `比价于 ${new Date(S.checkedAt).toLocaleTimeString('zh-CN', { hour12: false })}` : ''}</span><span class="toolbar-spacer"></span>
+    <button class="btn btn-ghost btn-sm" data-ow-fees title="${TF.summary()}">税费设置</button>
     ${chk('bg', '后台监控被压价', '每 5 分钟检查一次（页面开着才有效），有订单新被压价时提醒')}${chk('notify', '桌面通知', '浏览器桌面通知，需要允许通知权限')}${chk('sound', '提示音', '被压价时播放提示音')}</div>`;
 }
 
@@ -202,23 +277,55 @@ function draw(box) {
     alone: () => '<span class="ow-state alone">只有我</span>',
     unknown: (r) => `<span class="ow-state unknown" title="${esc(r.why || '')}">无法判断</span>`
   };
+  const L = S.ledger || { o: {}, cost: {} };
+  const f = TF.fees();
+  const pct = (v) => (v * 100).toFixed(1) + '%';
+  // 剩余利润率：收单 = 同站最低卖价扣税费 vs 收购价 + 分摊费用；卖单 = 到手单价 vs 平均收购成本
+  const profitOf = (o, price, fees, sellRef) => {
+    const rate = TF.brokerAt(o.location_id);
+    if (o.is_buy_order) {
+      if (sellRef == null) return null;
+      const unit = price + fees / o.volume_total;
+      return { m: (sellRef * (1 - f.sales - rate) - unit) / unit, tip: `每件成本 ${px(unit)}（含费用）· 同站最低卖价 ${px(sellRef)} 扣销售税与中介费后 ${px(sellRef * (1 - f.sales - rate))}` };
+    }
+    const net = price * (1 - f.sales) - fees / o.volume_total;
+    const cost = avgCost(L, o.type_id);
+    if (cost == null) return { net, tip: `每件到手 ${px(net)}（扣销售税与分摊费用）；没有这个物品的收单成交记录，算不了利润` };
+    return { m: (net - cost) / cost, tip: `每件到手 ${px(net)} · 平均收购成本 ${px(cost)}（你的收单成交记录，含费用）` };
+  };
+  const marginHtml = (p) => {
+    if (!p) return '—';
+    if (p.m == null) return `<span class="text-muted" title="${esc(p.tip)}">到手 ${ctx.formatISK(p.net)}</span>`;
+    return `<b class="ow-margin ${p.m <= 0 ? 'bad' : p.m < 0.05 ? 'thin' : 'ok'}" title="${esc(p.tip)}">${pct(p.m)}</b>`;
+  };
+  const EV = { new: '新挂单', mod: '改价', fill: '成交', end: '结束' };
   const body = rows.map((r) => {
     const o = r.o;
+    const e = L.o[o.order_id];
+    const fees = feesOf(e);
+    const p = profitOf(o, o.price, fees, r.sellRef);
+    // 按建议价改单：本次改单费与改后的利润率
+    const rel = r.sug != null ? TF.relistFee(TF.brokerAt(o.location_id), o.price, r.sug, o.volume_remain) : 0;
+    const after = r.sug != null ? profitOf(o, r.sug, fees + rel, r.sellRef) : null;
+    const hist = S.open?.has(o.order_id) && e ? `<tr class="ow-hist"><td colspan="10"><ul>${e.h.map(([at, pr, left, ev]) => `<li><span class="text-muted">${new Date(at).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span> ${EV[ev] || ev} <b>${px(pr)}</b> 剩 ${num(left)}</li>`).join('')}</ul>
+      <small class="text-muted"><span>中介费 ${ctx.formatISK(e.fee)} · 改单费 ${ctx.formatISK(e.rel)}（${e.n} 次）</span> · <span>两次读取之间多次改单只能记一次</span></small></td></tr>` : '';
     const cool = COOLDOWN - (now - Date.parse(o.issued || 0));
     return `<tr class="ow-${r.state}">
       <td><button class="link-btn ow-item" data-ow-item="${o.type_id}"><img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" data-item-pop="${o.type_id}" alt="" width="20" height="20" loading="lazy">${esc(ctx.typeName(o.type_id))}</button></td>
       <td>${o.is_buy_order ? '<span class="pill buy">收购</span>' : '<span class="pill sell">出售</span>'}</td>
       <td class="pi-hide-sm ow-loc">${esc(ctx.locationName(o.location_id))}</td>
       <td class="num">${px(o.price)}</td>
+      <td class="num">${e ? `<button class="link-btn" data-ow-hist="${o.order_id}">${marginHtml(p)}</button>` : marginHtml(p)}</td>
       <td class="num">${r.best != null ? px(r.best) + `<small class="text-muted"> ×${num(r.bestVol)}</small>` : '—'}</td>
       <td>${STATE[r.state](r)}</td>
-      <td class="num">${r.sug != null ? `<button class="btn btn-ghost btn-sm ow-copy" data-ow-copy="${r.sug}" title="复制后在游戏里修改订单粘贴">${px(r.sug)}</button>${cool > 0 ? `<small class="text-muted ow-cool" title="订单修改后 5 分钟内不能再改">${Math.ceil(cool / 60e3)} 分钟后可改</small>` : ''}` : '—'}</td>
-      <td class="num pi-hide-sm">${num(o.volume_remain)} / ${num(o.volume_total)}</td></tr>`;
+      <td class="num">${r.sug != null ? `<button class="btn btn-ghost btn-sm ow-copy" data-ow-copy="${r.sug}" title="复制后在游戏里修改订单粘贴">${px(r.sug)}</button><small class="text-muted ow-cool">改单费 ${ctx.formatISK(rel)}${after?.m != null ? ` · 改后 ${pct(after.m)}` : ''}</small>${cool > 0 ? `<small class="text-muted ow-cool" title="订单修改后 5 分钟内不能再改">${Math.ceil(cool / 60e3)} 分钟后可改</small>` : ''}` : '—'}</td>
+      <td class="num pi-hide-sm">${e ? `<button class="link-btn ow-fee" data-ow-hist="${o.order_id}" title="点开看这张单的记录">${ctx.formatISK(fees)}${e.n ? `<small> · 改 ${e.n} 次</small>` : ''}</button>` : '—'}</td>
+      <td class="num pi-hide-sm">${num(o.volume_remain)} / ${num(o.volume_total)}</td></tr>${hist}`;
   }).join('');
   box.innerHTML = settingsHtml() + reportHtml(S.report) + `
     <div class="ow-sum"><span class="ow-state under">被压 ${cnt('under')}</span><span class="ow-state lead">领先 ${cnt('lead')}</span><span class="ow-state alone">只有我 ${cnt('alone')}</span>${cnt('unknown') ? `<span class="ow-state unknown">无法判断 ${cnt('unknown')}</span>` : ''}
       <span class="text-muted" title="对手价再让一档（4 位有效数字）">点建议价复制</span></div>
-    <div class="table-scroll"><table class="pc-mini-table ow-table"><thead><tr><th>物品</th><th>方向</th><th class="pi-hide-sm">位置</th><th class="num">我的价格</th><th class="num">对手最优</th><th>状态</th><th class="num">建议价</th><th class="num pi-hide-sm">剩余 / 总量</th></tr></thead><tbody>${body}</tbody></table></div>
+    <div class="table-scroll"><table class="pc-mini-table ow-table"><thead><tr><th>物品</th><th>方向</th><th class="pi-hide-sm">位置</th><th class="num">我的价格</th><th class="num" title="收单：同站最低卖价扣税费后，比每件成本（含已付中介费与改单费）；卖单：每件到手比平均收购成本">剩余利润</th><th class="num">对手最优</th><th>状态</th><th class="num">建议价</th><th class="num pi-hide-sm">已付费用</th><th class="num pi-hide-sm">剩余 / 总量</th></tr></thead><tbody>${body}</tbody></table></div>
     <p class="pi-note" title="卖单只和同一空间站 / 建筑的卖单比；收单还算上星系 / 星域范围的收单">玩家建筑订单需「建筑市场」权限</p>`;
 }
 
@@ -226,6 +333,15 @@ export async function onClick(e, box) {
   const t = e.target;
   const copy = t.closest('[data-ow-copy]');
   if (copy) { ctx.copyText(copy.dataset.owCopy, '已复制建议价 ' + copy.dataset.owCopy); return true; }
+  if (t.closest('[data-ow-fees]')) { TF.openFeeDialog(); return true; }
+  const hist = t.closest('[data-ow-hist]');
+  if (hist) {
+    S.open = S.open || new Set();
+    const id = Number(hist.dataset.owHist);
+    if (S.open.has(id)) S.open.delete(id); else S.open.add(id);
+    draw(box);
+    return true;
+  }
   const item = t.closest('[data-ow-item]');
   if (item) { ctx.selectItem(Number(item.dataset.owItem)); return true; }
   if (t.closest('[data-ow-refresh]')) {
@@ -274,6 +390,7 @@ async function backgroundCheck() {
     const rows = await analyze(orders);
     const fresh = rows.filter((r) => r.state === 'under' && S.alerted.get(r.o.order_id) !== alertKey(r));
     S.orders = orders; S.rows = rows; S.checkedAt = Date.now(); S.charId = token.character_id;
+    S.tracked = orders; S.ledger = track(token.character_id, orders);
     rememberAlerted(rows);
     if (fresh.length) notify(fresh);
   } catch { /* 下一轮再试 */ } finally { S.busy = false; }

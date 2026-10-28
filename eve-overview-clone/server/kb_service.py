@@ -11,7 +11,7 @@
 
 接口（除钱包存档外只读，仅监听 127.0.0.1，由 nginx 反代 /api/kb/）
   GET /api/kb/status                          数据覆盖范围与运行状态
-  GET /api/kb/feed?cursor=&limit=&ship=&system=&region=&character=&corporation=&alliance=&side=
+  GET /api/kb/feed?cursor=&limit=&ship=&system=&constellation=&region=&character=&corporation=&alliance=&side=
                                               击杀列表（最新在前）；side=kills|losses|all
                                               本地只保留 --days 天；带筛选条件时翻完本地记录后自动改为实时查询 zKillboard（不入库）
   GET /api/kb/live?after=N                    实时收录的新击杀（星图闪烁 / 弹幕），返回新的游标
@@ -1138,7 +1138,7 @@ ENTITY_COL = {"character": ("v_char", "char"), "corporation": ("v_corp", "corp")
 
 
 ZKILL_MOD = (("character", "characterID"), ("corporation", "corporationID"), ("alliance", "allianceID"),
-             ("ship", "shipTypeID"), ("system", "solarSystemID"), ("region", "regionID"))
+             ("ship", "shipTypeID"), ("system", "solarSystemID"), ("constellation", "constellationID"), ("region", "regionID"))
 
 
 def zkill_path(q, side):
@@ -1184,6 +1184,7 @@ class Api:
         self.km_cache = collections.OrderedDict()
         self.km_lock = threading.Lock()
         self.zk_pages = collections.OrderedDict()   # zKillboard 页缓存（仅内存）
+        self.const_systems = {}                     # 星座 -> 星系列表（ESI，仅内存）
         self.mem_names = {}                         # 保留期以前击杀涉及的名称（仅内存，不写库）
         self.bh_lock, self.bh_busy, self.bh_cache = threading.Lock(), {}, {}   # 历史会战：同时只算一份；单独缓存，不随合同估价更新清空
         self.lb_full = collections.OrderedDict()    # 完整排行榜（分页用）：(days, side, by, metric) -> (时间, ids, 次数, 价值)
@@ -1485,6 +1486,14 @@ class Api:
         return value
 
     # GET /feed
+    def constellation_systems(self, cid):
+        """星座包含的星系（库里只存了星系、星域，星座按 ESI 换成星系列表）"""
+        if cid not in self.const_systems:
+            srv = ARB_SERVERS.get(self.store.server, ARB_SERVERS["tq"])
+            data, _ = get_json(f"{srv['esi']}/universe/constellations/{cid}/" + (f"?{srv['qs']}" if srv["qs"] else ""), timeout=20)
+            self.const_systems[cid] = [int(x) for x in (data or {}).get("systems", [])]
+        return self.const_systems[cid]
+
     def feed(self, q):
         limit = min(int(q.get("limit", 50)), 200)
         where, args = [], []
@@ -1492,6 +1501,10 @@ class Api:
             if q.get(key):
                 where.append(f"{col}=?")
                 args.append(int(q[key]))
+        if q.get("constellation"):
+            systems = self.constellation_systems(int(q["constellation"])) or [0]
+            where.append(f"system_id IN ({','.join('?' * len(systems))})")
+            args += systems
         side = q.get("side", "all")
         for kind, (vcol, acol) in ENTITY_COL.items():
             if q.get(kind):

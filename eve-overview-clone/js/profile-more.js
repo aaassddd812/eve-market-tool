@@ -5,6 +5,7 @@
 //   舰队  /characters/{id}/fleet/ → /fleets/{fleet_id}/members/（「舰队」权限，读成员需要是舰队指挥）
 //   军团  /characters/{id}/roles/ + 军团钱包 / 订单 / 工业 / 建筑 / 月矿 / 资产（「军团管理」权限，且需相应军团职位）
 // 数据按角色缓存 5 分钟，切换角色时清空。
+import { skCards, skRows } from './skeleton.js?v=v17';
 
 let ctx;
 const cache = new Map();   // `${tab}:${key}` -> { id, at, promise }
@@ -24,7 +25,8 @@ export function initProfileMore(context) {
 const esc = (s) => ctx.esc(s);
 const val0 = () => ctx.valuation.region();
 const me = () => ctx.tokenInfo()?.character_id;
-const loading = (text) => `<div class="pi-loading">${esc(text)}</div>`;
+// 读取时显示骨架屏（与个人中心首次进入一致）；带进度的提示仍显示文字
+const loading = (text = '') => (text && text !== '读取中…' ? `<div class="pi-loading">${esc(text)}</div>` : skCards(4) + skRows(8));
 const fail = (what, error) => `<p class="text-muted">${esc(what)}读取失败：${esc(error.message)}</p>`;
 const fmtDate = (iso, time = true) => iso ? new Date(iso).toLocaleString('zh-CN', time ? { hour12: false, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit' }) : '—';
 function left(ms) {
@@ -357,7 +359,7 @@ async function corpAssets(d, body, alive) {
   const types = await ctx.resolveTypeNames(top.map((t) => t.type_id));
   if (!alive()) return;
   body.innerHTML = `<div class="valuation-toolbar">${ctx.valuation.select('data-val-src="corp"', val.region)}</div>` +
-    '<div class="valuation-grid section-gap">' + ctx.valuation.cards(val, '资产估值') + ctx.valuationCard('资产条目', formatNumber(d.count) + ' 项', d.kinds + ' 种物品') + '</div>' +
+    '<div class="valuation-grid section-gap">' + ctx.valuation.cards(val, '资产估值', true) + ctx.valuationCard('资产条目', formatNumber(d.count) + ' 项', d.kinds + ' 种物品') + '</div>' +
     table(['物品', '数量', '最低卖价估值', '最高收价估值'], top.map((t) => tr([typeCell(types, t.type_id), formatNumber(t.quantity), formatISK(t.sell), formatISK(t.buy)]))) +
     (d.list.length > 200 ? `<p class="text-muted valuation-note">仅显示估值前 200 种</p>` : '');
 }

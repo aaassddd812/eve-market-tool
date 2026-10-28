@@ -303,7 +303,7 @@ async function loadFeed(reset) {
 function renderFilters() {
   const chips = [];
   if (S.filters.ship) chips.push(`<span class="kb-chip"><img src="${IMG(`types/${S.filters.ship.id}/icon`, 32)}" alt="" width="16" height="16">${app.esc(S.filters.ship.name)}<button data-clear-filter="ship" aria-label="移除">×</button></span>`);
-  if (S.filters.location) chips.push(`<span class="kb-chip">${S.filters.location.kind === 'region' ? '星域' : '星系'} · ${app.esc(S.filters.location.name)}<button data-clear-filter="location" aria-label="移除">×</button></span>`);
+  if (S.filters.location) chips.push(`<span class="kb-chip">${{ region: '星域', constellation: '星座' }[S.filters.location.kind] || '星系'} · ${app.esc(S.filters.location.name)}<button data-clear-filter="location" aria-label="移除">×</button></span>`);
   $('kbFilters').innerHTML = chips.join('');
 }
 
@@ -999,7 +999,7 @@ async function loadEntityFeed(reset) {
   }
 }
 
-// ---------- 搜索：人物 / 军团 / 联盟（服务端）+ 舰船 / 星系 / 星域（本地）----------
+// ---------- 搜索：人物 / 军团 / 联盟（服务端）+ 舰船 / 星系 / 星座 / 星域（本地）----------
 let searchSeq = 0;
 async function runSearch(text) {
   const box = $('kbSuggest');
@@ -1020,11 +1020,12 @@ function localSearch(q) {
     .sort((a, b) => a.s - b.s || a.name.length - b.name.length).slice(0, n);
   const npc = app.getNpcNames();
   const systems = npc ? Object.entries(npc.systems).map(([id, name]) => ({ id: Number(id), name })) : [];
+  const constellations = npc?.constellations ? Object.entries(npc.constellations).map(([id, name]) => ({ id: Number(id), name })) : [];
   const regions = npc ? Object.entries(npc.regions).map(([id, name]) => ({ id: Number(id), name })) : [];
-  return { ships: pick(app.shipTypes(), 6), systems: pick(systems, 6), regions: pick(regions, 4) };
+  return { ships: pick(app.shipTypes(), 6), systems: pick(systems, 6), constellations: pick(constellations, 4), regions: pick(regions, 4) };
 }
 
-function renderSuggest({ entities, ships, systems, regions }) {
+function renderSuggest({ entities, ships, systems, constellations, regions }) {
   const box = $('kbSuggest');
   const group = (title, items) => items.length ? `<div class="kb-suggest-group">${title}</div>` + items.join('') : '';
   const ents = entities || [];
@@ -1035,6 +1036,7 @@ function renderSuggest({ entities, ships, systems, regions }) {
       group('人物', byKind('character')) + group('军团', byKind('corporation')) + group('联盟', byKind('alliance'))) +
     group('舰船', ships.map((s) => `<button class="kb-suggest-item" data-pick-ship="${s.id}"><img src="${IMG(`types/${s.id}/icon`, 32)}" alt="" width="22" height="22" loading="lazy"><span>${app.esc(s.name)}</span><small>筛选击杀记录</small></button>`)) +
     group('星系', systems.map((s) => { const l = kb.systemLabel(s.id); return `<button class="kb-suggest-item" data-pick-location="system:${s.id}"><i style="background:${l.color}"></i><span>${app.esc(s.name)} <b style="color:${l.color}">${l.secText}</b></span><small>${app.esc(l.region)}</small></button>`; })) +
+    group('星座', constellations.map((r) => `<button class="kb-suggest-item" data-pick-location="constellation:${r.id}"><i></i><span>${app.esc(r.name)}</span></button>`)) +
     group('星域', regions.map((r) => `<button class="kb-suggest-item" data-pick-location="region:${r.id}"><i></i><span>${app.esc(r.name)}</span></button>`));
   box.innerHTML = html || '<p class="legend-empty">没有找到匹配项</p>';
   box.hidden = false;

@@ -6,15 +6,18 @@
 // 技能来源：custom 自定义（统一等级 all + 单项 lv，默认全部 5 级）/ char 已绑定角色的 ESI 技能（没学 = 0 级）。
 // 声望来源：manual 手填 / char 角色声望（ESI /characters/{id}/standings/），按挂单空间站的所属军团与其阵营取值。
 // 其它页面（估价页的化矿技能）也可以用 level() 与 skillFormHtml() 共享这套技能设置。
+// 按建筑的中介费（structs）：每座玩家建筑单独填（如免税店填 0.5，主人不收也有 0.5% SCC 附加费）；订单在哪座建筑就用哪座的，
+//   没填的建筑用「建筑中介费」，NPC 空间站按技能与声望算（brokerAt）。
+// 改单费（relistFee）：(1 − 50% − 高级经纪人关系学 6%/级) × 中介费率 × 新订单总价 + 加价部分 × 中介费率，最低 100 ISK。
 
 import { SERVER } from './server.js?v=s4';
 
 const KEY = 'eve-trade-fees-v1';
-export const SKILL = { accounting: 16622, brokerRel: 3446 };
-export const TRADE_SKILLS = [[SKILL.accounting, '会计学'], [SKILL.brokerRel, '经纪人关系学']];
+export const SKILL = { accounting: 16622, brokerRel: 3446, advBroker: 16597 };
+export const TRADE_SKILLS = [[SKILL.accounting, '会计学'], [SKILL.brokerRel, '经纪人关系学'], [SKILL.advBroker, '高级经纪人关系学']];
 const LEVELS = [0, 1, 2, 3, 4, 5];
 
-const T = { src: 'custom', all: 5, lv: {}, market: 'npc', fac: 0, corp: 0, broker: 1, stand: 'manual', hub: 0 };
+const T = { src: 'custom', all: 5, lv: {}, market: 'npc', fac: 0, corp: 0, broker: 1, stand: 'manual', hub: 0, structs: {} };   // structs：建筑 ID -> { n 名称, b 中介费 % }
 let ctx = null;          // esc, showToast, getCharacterSkills, getCharacterStandings, stationOwner, officialName, hasEsiToken, openEsiBind
 let char = null;         // { id, name, levels: Map }
 let charLoading = null;
@@ -47,6 +50,10 @@ function assign(r) {
   if (Number.isFinite(r.broker)) T.broker = clamp(r.broker, 0, 100);
   if (['manual', 'char'].includes(r.stand)) T.stand = r.stand;
   if (Number.isInteger(r.hub)) T.hub = r.hub;
+  if (r.structs && typeof r.structs === 'object') {
+    T.structs = {};
+    for (const [k, v] of Object.entries(r.structs)) if (/^\d+$/.test(k) && v && Number.isFinite(v.b)) T.structs[k] = { n: String(v.n || ''), b: clamp(v.b, 0, 100) };
+  }
 }
 function persist() {
   saved = true;
@@ -138,6 +145,23 @@ export function fees() {
     : (({ fac, corp }) => Math.max(0.01, 0.03 - 0.003 * level(SKILL.brokerRel) - 0.0003 * fac - 0.0002 * corp))(standings());
   return { sales, broker };
 }
+// 某个挂单地点的中介费率：单独填过的建筑 > 其他玩家建筑用「建筑中介费」> NPC 空间站按技能与声望
+export function brokerAt(loc) {
+  const s = T.structs[loc];
+  if (s) return s.b / 100;
+  if (loc >= 1e12) return T.broker / 100;
+  return Math.max(0.01, 0.03 - 0.003 * level(SKILL.brokerRel) - 0.0003 * standings().fac - 0.0002 * standings().corp);
+}
+export const brokerFee = (rate, value) => (value > 0 ? Math.max(100, rate * value) : 0);
+// 改单费：新订单总价按折扣收中介费，加价部分再收全额中介费
+export function relistFee(rate, oldPrice, newPrice, qty) {
+  const disc = Math.min(1, 0.5 + 0.06 * level(SKILL.advBroker));
+  return Math.max(100, (1 - disc) * rate * newPrice * qty) + rate * Math.max(0, (newPrice - oldPrice) * qty);
+}
+// 订单页提供的候选建筑（订单所在的玩家建筑），税费表单里可以直接加
+let structCands = [];
+export function setStructCandidates(list) { structCands = list; }
+
 // 到手比例：卖给收单只交销售税，挂卖单再交中介费
 export const netBuy = () => 1 - fees().sales;
 export const netSell = () => { const f = fees(); return 1 - f.sales - f.broker; };
@@ -208,8 +232,20 @@ export function feeFormHtml() {
   return `
     <div class="ap-rp-row"><span>挂单地点</span>${seg('market', [['npc', 'NPC 空间站'], ['struct', '玩家建筑']])}</div>
     ${T.market === 'npc' ? standFormHtml() : `<div class="cr-fields"><label><span>建筑中介费 %</span>${num('broker', 0, 100, 0.1, '建筑中介费')}</label></div>`}
+    ${structFeeHtml()}
     <div class="ap-fee"><span>销售税 <b>${pct2(f.sales)}</b></span><span>中介费 <b>${pct2(f.broker)}</b></span></div>
     <p class="ap-rp-tip" title="销售税 7.5% × (1 − 会计学 11%/级)；NPC 中介费 3% − 经纪人关系学 0.3%/级 − 派系声望 × 0.03% − 军团声望 × 0.02%，最低 1%">卖给收单只交销售税，挂卖单另交中介费</p>`;
+}
+
+// 按建筑的中介费：已填的建筑可改可删；订单所在、还没填的建筑列在下拉里
+function structFeeHtml() {
+  const list = Object.entries(T.structs);
+  const cands = structCands.filter((c) => !T.structs[c.id]);
+  if (!list.length && !cands.length) return '';
+  return `<div class="ap-lv-group">按建筑的中介费</div>
+    ${list.map(([id, v]) => `<div class="tf-struct"><span title="${id}">${esc(v.n || '建筑 ' + id)}</span><input class="cr-input" type="number" min="0" max="100" step="0.1" value="${v.b}" data-tf-struct="${id}" aria-label="中介费 %"><span>%</span><button type="button" class="icon-btn small" data-tf-struct-del="${id}" title="移除" aria-label="移除">✕</button></div>`).join('')}
+    ${cands.length ? `<select class="cr-input tf-struct-add" data-tf-struct-add aria-label="添加建筑"><option value="">添加订单所在的建筑…</option>${cands.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select>` : ''}
+    <p class="ap-rp-tip">填游戏下单窗口里的中介费；主人免税也有 0.5% SCC 附加费</p>`;
 }
 
 // 绑定一个容器里的 data-tf-* 控件；改动后 update() 会通知所有订阅者
@@ -219,7 +255,9 @@ export function bindForm(box) {
     if (b) { update({ [b.dataset.tfSet]: b.dataset.v }); return; }
     if (e.target.closest('[data-tf-char]')) { char = null; loadCharacter(false); return; }
     if (e.target.closest('[data-tf-stand]')) { stand = null; standFailAt = 0; loadStandings(false); notify(); return; }
-    if (e.target.closest('[data-tf-bind]')) { closeFeeDialog(); ctx?.openEsiBind?.(); }
+    if (e.target.closest('[data-tf-bind]')) { closeFeeDialog(); ctx?.openEsiBind?.(); return; }
+    const del = e.target.closest('[data-tf-struct-del]');
+    if (del) { const structs = { ...T.structs }; delete structs[del.dataset.tfStructDel]; update({ structs }); }
   });
   box.addEventListener('change', (e) => {
     const t = e.target;
@@ -227,6 +265,11 @@ export function bindForm(box) {
     else if (t.matches('[data-tf-lv]')) update({ lv: { ...T.lv, [t.dataset.tfLv]: Number(t.value) } });
     else if (t.matches('[data-tf-num]')) update({ [t.dataset.tfNum]: Number(t.value) || 0 });
     else if (t.matches('[data-tf-hub]')) update({ hub: Number(t.value) });
+    else if (t.matches('[data-tf-struct]')) { const id = t.dataset.tfStruct; update({ structs: { ...T.structs, [id]: { ...T.structs[id], b: Number(t.value) || 0 } } }); }
+    else if (t.matches('[data-tf-struct-add]') && t.value) {
+      const c = structCands.find((x) => String(x.id) === t.value);
+      update({ structs: { ...T.structs, [t.value]: { n: c?.name || '', b: 0.5 } } });
+    }
   });
 }
 

@@ -58,7 +58,9 @@ const F = {               // 表单状态（保存在本地）
   way: 'self',            // self 自产（采集）/ buy 买料加工
   inPrice: 'sell',        // 买料加工的原料价：sell 直接买卖单 / buy 挂收单
   restock: 24,            // 买料加工的补货周期（小时），0 = 自动（按发射平台容量算最长周期）
-  share: 10               // 买料加工的成交量上限（占日成交 %），0 不限
+  share: 10,              // 买料加工的成交量上限（占日成交 %），0 不限
+  ecus: 0,                // 采集星的采集控制器个数，0 = 自动（采集头放到 CPU / 电网上限）
+  ecuYield: 0             // 每个采集控制器的实际产量（P0/小时，游戏里采集程序显示的），0 = 按资源丰度估算
 };
 
 const R = { area: null, plans: [], selected: 0, prices: new Map(), priceAt: 0, edits: new Map() };   // edits: 方案序号:模板 -> 修改后的模板
@@ -182,7 +184,9 @@ const perHour = (s, qty) => qty * 3600 / s.cycle;
 
 function fits(cpu, power) { const [c, p] = ccCap(); return cpu <= c && power <= p; }
 
-// 采集星：所有采集头采同一种 P0，就地加工成 P1。采集头尽量多，受 CPU / 电网限制
+// 采集星：所有采集头采同一种 P0，就地加工成 P1。默认采集头尽量多（受 CPU / 电网限制），工厂按平均产量配够
+// 玩家指定采集控制器个数（F.ecus）时只放这么多；填了单个采集控制器的实际产量（F.ecuYield）时，
+// 按实际产量配工厂，放不下就把剩余 CPU / 电网放满工厂，吃不完的 P0 留在发射平台（overflow）
 // extra：同星另放的加工设施（混合方案，见 hostLoad），先扣掉它们的负载再放采集头
 // raw：不建基础工业设施，直接出口 P0（个别 P0 比加工后的 P1 值钱）
 function designExtractor(p0, code = 'B', radius = 5000, extra = null, raw = false) {
@@ -193,16 +197,40 @@ function designExtractor(p0, code = 'B', radius = 5000, extra = null, raw = fals
   const [eC, eP] = struct(pt.ecu);
   const [bC, bP] = struct(pt.basic);
   const bIn = perHour(basic, basic.inputs[0][1]);
-  for (let h = MAX_HEADS * 3; h >= 1; h--) {
-    const ecus = Math.ceil(h / MAX_HEADS);
+  const load = (ecus, h, fac) => {
+    const links = ecus + fac;
+    return [lpC + ecus * eC + h * HEAD[0] + fac * bC + links * LINK[0] + (extra?.cpu || 0),
+      lpP + ecus * eP + h * HEAD[1] + fac * bP + links * LINK[1] + (extra?.power || 0)];
+  };
+  const design = (ecus, h, p0h, fac) => {
+    const proc = raw ? p0h : Math.min(p0h, fac * bIn);
+    const [cpu, power] = load(ecus, h, fac);
+    return { kind: 'extract', p0, p1: basic.out, heads: h, ecus, fac, p0h: proc, mined: p0h, overflow: p0h - proc, perEcu: p0h / ecus,
+      p1h: proc / basic.inputs[0][1] * basic.outQty, cpu, power, extra };
+  };
+  // 按实际产量：每个采集控制器按 10 个采集头算负载（放不下再减），工厂配到够用为止，不够就放满
+  if (F.ecuYield) {
+    let best = null;
+    for (const ecus of F.ecus ? [F.ecus] : [1, 2, 3]) {
+      const p0h = ecus * F.ecuYield;
+      const need = raw ? 0 : Math.ceil(p0h / bIn);
+      for (let h = ecus * MAX_HEADS; h >= ecus; h--) {
+        if (!fits(...load(ecus, h, raw ? 0 : 1))) continue;
+        let fac = raw ? 0 : 1;
+        while (fac < need && fits(...load(ecus, h, fac + 1))) fac++;
+        const d = design(ecus, h, p0h, fac);
+        if (!best || d.p1h > best.p1h + 1e-9 || (raw && d.p0h > best.p0h)) best = d;
+        break;
+      }
+    }
+    return best;
+  }
+  for (let h = MAX_HEADS * (F.ecus || 3); h >= 1; h--) {
+    const ecus = F.ecus || Math.ceil(h / MAX_HEADS);
+    if (h < ecus) break;   // 指定了个数：每个控制器至少 1 个头
     const p0h = h * headRate();
     const fac = raw ? 0 : Math.ceil(p0h / bIn);
-    const links = ecus + fac;
-    const cpu = lpC + ecus * eC + h * HEAD[0] + fac * bC + links * LINK[0] + (extra?.cpu || 0);
-    const power = lpP + ecus * eP + h * HEAD[1] + fac * bP + links * LINK[1] + (extra?.power || 0);
-    if (fits(cpu, power)) {
-      return { kind: 'extract', p0, p1: basic.out, heads: h, ecus, fac, p0h, p1h: p0h / basic.inputs[0][1] * basic.outQty, cpu, power, extra };
-    }
+    if (fits(...load(ecus, h, fac))) return design(ecus, h, p0h, fac);
   }
   return null;
 }
@@ -839,7 +867,7 @@ function buildTemplate({ name, code, diam, pins, hubs = 1 }) {
       path.set(idx, [...path.get(prev), idx]);
       const toPin = path.get(idx);
       const fromPin = toPin.slice().reverse();
-      if (pin.heads) out.R.push({ P: fromPin, Q: Math.round(pin.heads * headRate()), T: pin.product });
+      if (pin.heads) out.R.push({ P: fromPin, Q: Math.round(pin.qty || pin.heads * headRate()), T: pin.product });
       for (const [t, q] of pin.inputs || []) out.R.push({ P: toPin, Q: q, T: t });
       if (pin.outQty) out.R.push({ P: fromPin, Q: pin.outQty, T: pin.product });
       placed.push(pin);
@@ -860,11 +888,14 @@ function buildTemplate({ name, code, diam, pins, hubs = 1 }) {
   return { json: out, cpu, power };
 }
 
-function ecuPins(pt, p0, heads) {
-  const pins = [];
-  for (let left = heads; left > 0; left -= MAX_HEADS) pins.push({ type: pt.ecu, product: p0, heads: Math.min(MAX_HEADS, left) });
-  return pins;
+// ecus：控制器个数（采集头平均分）；qty：每个控制器的实际产量（路由数量），没有就按丰度估
+function ecuPins(pt, p0, heads, ecus = Math.ceil(heads / MAX_HEADS), qty = 0) {
+  return Array.from({ length: ecus }, (_, i) => ({ type: pt.ecu, product: p0, heads: Math.floor(heads / ecus) + (i < heads % ecus ? 1 : 0), qty }));
 }
+const exPins = (pt, ex) => ecuPins(pt, ex.p0, ex.heads, ex.ecus, F.ecuYield ? ex.perEcu : 0);
+// 模板说明：采集控制器、采集头、工厂个数；按实际产量时工厂吃不完的部分
+const exSummary = (ex) => `采集控制器 ×${ex.ecus}（共 ${ex.heads} 头${F.ecuYield ? `，各 ${ctx.formatNumber(Math.round(ex.perEcu))}/h` : ''}）`;
+const overflowNote = (ex) => (ex.overflow > 0.5 ? ` · 工厂吃不完，每小时多 ${ctx.formatNumber(Math.round(ex.overflow))} 个 ${cName(ex.p0)} 留在发射平台` : '');
 function factoryPins(pt, out, count) {
   const s = D.schemByOut.get(out);
   return Array.from({ length: count }, () => ({ type: pt[facClass(out)], product: out, inputs: s.inputs, outQty: s.outQty }));
@@ -904,10 +935,10 @@ function planTemplates(plan, assign) {
       const code = at?.code || bestCodeFor(R.area, [p0]);
       const pt = D.ptByCode[code];
       const ex = designExtractor(p0, code, diamOf(at) / 2, null, raw) || designExtractor(p0, code, 1000, null, raw);
-      const pins = [...ecuPins(pt, ex.p0, ex.heads), ...(raw ? [] : factoryPins(pt, p1, ex.fac))];
+      const pins = [...exPins(pt, ex), ...(raw ? [] : factoryPins(pt, p1, ex.fac))];
       list.push(raw
-        ? { key: 'extract-' + p1, title: `采集 · ${cName(p0)}（直接出口）`, code, ...buildTemplate({ name: `采集-${cName(p0)}`, code, diam: diamOf(at), pins }), summary: `采集控制器 ×${ex.ecus}（共 ${ex.heads} 头）· 不加工` }
-        : { key: 'extract-' + p1, title: `采集 · ${cName(ex.p0)} → ${cName(p1)}`, code, ...buildTemplate({ name: `采集-${cName(p1)}`, code, diam: diamOf(at), pins }), summary: `采集控制器 ×${ex.ecus}（共 ${ex.heads} 头）· 基础工业 ×${ex.fac}` });
+        ? { key: 'extract-' + p1, title: `采集 · ${cName(p0)}（直接出口）`, code, ...buildTemplate({ name: `采集-${cName(p0)}`, code, diam: diamOf(at), pins }), summary: `${exSummary(ex)} · 不加工` }
+        : { key: 'extract-' + p1, title: `采集 · ${cName(ex.p0)} → ${cName(p1)}`, code, ...buildTemplate({ name: `采集-${cName(p1)}`, code, diam: diamOf(at), pins }), summary: `${exSummary(ex)} · 基础工业 ×${ex.fac}${overflowNote(ex)}` });
     }
     if (plan.factories) {
       const at = firstOf('factory', plan.product);
@@ -968,13 +999,13 @@ function hybridTemplate(plan, p1, at) {
     note = `（行星较大，加工产能约 ${Math.round((lo / plan.rate) * 100)}%）`;
   }
   const pins = [
-    ...ecuPins(pt, ex.p0, ex.heads), ...factoryPins(pt, p1, ex.fac),
+    ...exPins(pt, ex), ...factoryPins(pt, p1, ex.fac),
     ...load.counts.sort((a, b) => tierOf(a[0]) - tierOf(b[0])).flatMap(([out, c]) => factoryPins(pt, out, c))
   ];
   return {
     key: 'hybrid-' + p1, title: `采集 + 工厂 · ${cName(ex.p0)} → ${cName(p1)}`, code,
     ...buildTemplate({ name: `采集工厂-${cName(p1)}`, code, diam, pins }),
-    summary: `采集控制器 ×${ex.ecus}（共 ${ex.heads} 头）· 基础工业 ×${ex.fac} · ` + load.counts.map(([out, c]) => `${cName(out)} ×${c}`).join(' · ') + note
+    summary: `${exSummary(ex)} · 基础工业 ×${ex.fac} · ` + load.counts.map(([out, c]) => `${cName(out)} ×${c}`).join(' · ') + note + overflowNote(ex)
   };
 }
 
@@ -1193,12 +1224,14 @@ function renderForm() {
       <div class="pi-inline"><span>或自定义</span><input type="number" class="pi-input pi-tax" min="1" max="720" step="1" value="${RESTOCKS.some(([h]) => h === F.restock) ? '' : F.restock}" placeholder="如 30" data-pi-num="restock" aria-label="自定义补货周期（小时）"><span>小时补一次</span></div>
       <div class="pi-inline"><span>成交上限</span>${seg('share', [[5, '5%'], [10, '10%'], [20, '20%'], [0, '不限']], F.share)}</div>` : `
       <div class="pi-inline"><span>资源丰度</span>${seg('rich', Object.entries(RICHNESS).map(([k, [, label]]) => [k, label]), F.rich)}</div>
+      <div class="pi-inline"><span>采集器</span>${seg('ecus', [[0, '自动'], [1, '1 个'], [2, '2 个'], [3, '3 个']], F.ecus)}</div>
+      <div class="pi-inline"><span>单个产量</span><input type="number" class="pi-input pi-tax" min="0" step="100" value="${F.ecuYield || ''}" placeholder="选填" data-pi-num="ecuYield" aria-label="每个采集器的实际产量（每小时）"><span>/小时</span></div>
       <div class="pi-inline"><span>价格</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>`}
       <div class="pi-inline"><span>海关税率</span><input type="number" class="pi-input pi-tax" min="0" max="100" step="0.5" value="${F.tax}" data-pi-num="tax"><span>%</span></div>
     </div>
     </div>
     <div class="pi-form-foot">
-      <small class="pi-hint">${buy ? '' : `<span>每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位</span>`}</small>
+      <small class="pi-hint">${buy ? '' : F.ecuYield ? '<span>按填的单个采集器产量配工厂，放不下就放满</span>' : `<span>每个采集头每小时 ${RICHNESS.low[0]} / ${RICHNESS.mid[0]} / ${RICHNESS.high[0]} 单位；单个产量填游戏里采集器显示的每小时产量</span>`}</small>
       <button type="submit" class="btn btn-primary pi-go">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>一键规划
       </button>
@@ -1212,7 +1245,7 @@ function bind() {
     const set = e.target.closest('[data-pi-set]');
     if (set) {
       const key = set.dataset.piSet;
-      F[key] = key === 'jumps' || key === 'restock' || key === 'share' ? Number(set.dataset.v) : set.dataset.v;
+      F[key] = ['jumps', 'restock', 'share', 'ecus'].includes(key) ? Number(set.dataset.v) : set.dataset.v;
       if (key === 'way' && F.way === 'buy' && F.target && tierOf(F.target) === 0) F.target = 0;
       if (key === 'whCls') F.whSystem = 0;
       saveForm();
@@ -1236,11 +1269,11 @@ function bind() {
     else if (t.dataset.piSec) F.sec[t.dataset.piSec] = t.checked;
     else if (t.dataset.piNum) {
       if (t.dataset.piNum === 'restock' && !t.value) return;
-      const lim = { chars: [1, 30], perChar: [1, 6], cc: [0, 5], tax: [0, 100], restock: [1, 720] }[t.dataset.piNum];
+      const lim = { chars: [1, 30], perChar: [1, 6], cc: [0, 5], tax: [0, 100], restock: [1, 720], ecuYield: [0, 1e6] }[t.dataset.piNum];
       const v = Math.min(lim[1], Math.max(lim[0], Number(t.value) || 0));
       F[t.dataset.piNum] = t.dataset.piNum === 'tax' ? v : Math.round(v);
       t.value = F[t.dataset.piNum];
-      if (t.dataset.piNum === 'restock') { saveForm(); renderForm(); if (R.area) run(); return; }
+      if (t.dataset.piNum === 'restock' || t.dataset.piNum === 'ecuYield') { if (!F.ecuYield) t.value = ''; saveForm(); renderForm(); if (R.area) run(); return; }
     } else return;
     saveForm();
   });

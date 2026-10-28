@@ -5,6 +5,7 @@
 //   /characters/{id}/orders/history/       90 天内已结束的订单：过期 / 取消 / 全部成交（esi-markets.read_character_orders.v1）
 // 物品盈亏按成交均价配对：配对数量 = min(买入量, 卖出量)，配对利润 = 配对数量 × (卖出均价 − 买入均价)；
 // 净利润再减去同期实际缴纳的税费。只买没卖（囤货）或只卖没买（卖资产）的部分不计入配对利润。
+import { skCards, skToolbar, skRows } from './skeleton.js?v=v17';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
            // resolveStructureNames, locationName, gameImage, valuationCard, tokenInfo, hasScope, selectItem, isActive
@@ -225,7 +226,7 @@ export async function renderTrades(box, force = false) {
     box.innerHTML = '<p class="text-muted" title="esi-wallet.read_character_wallet.v1">无钱包权限，需重新绑定 ESI</p>';
     return;
   }
-  if (!S.data || force) box.innerHTML = '<div class="pi-loading">读取中…</div>';
+  if (!S.data || force) box.innerHTML = skCards(4) + skToolbar(3) + skRows(10);
   try {
     const data = await load(force);
     if (ctx.isActive() && ctx.tokenInfo()?.character_id === S.id) render(box, data);

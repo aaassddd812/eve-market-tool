@@ -8,7 +8,7 @@
 // 识别格式：制表符或两个以上空格分列，第一列物品名（游戏复制的名称后可能带 *），第二列数量；
 // 也支持「名称 x 数量」「数量 x 名称」「名称 数量」和单独一行物品名。
 import { SERVER } from './server.js?v=s4';
-import * as TF from './trade-fees.js?v=v4';
+import * as TF from './trade-fees.js?v=v5';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation,
           // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind, loadAbyssal() -> abyssal.js 模块
@@ -290,6 +290,13 @@ function render() {
   renderPanels();
 }
 
+// 买卖中间价（split）：（最低卖价 + 最高收价）÷ 2，卖单、收单都有才算；返回合计与有价种数
+function applySplit(R) {
+  for (const r of R.rows) r.split = r.sell != null && r.buy != null ? (r.sell + r.buy) / 2 : null;
+  const priced = R.rows.filter((r) => r.split != null);
+  return { total: priced.reduce((t, r) => t + r.qty * r.split, 0), n: priced.length };
+}
+
 // 按当前选的天数给每行填上成交中位价（mid），返回合计与有价种数
 function applyMed(R) {
   const days = ctx.valuation.medDays();
@@ -302,6 +309,7 @@ function marketHtml(R, rp) {
   const isk = (v) => (v == null ? '—' : ctx.formatISK(v));
   const f = fees();
   const M = R.hasMed ? applyMed(R) : null;
+  const SP = applySplit(R);
   const sellNet = R.sellTotal * (1 - f.sales - f.broker), buyNet = R.buyTotal * (1 - f.sales);
   const sortKey = A.sort || 'sell';
   const rows = R.rows.slice().sort((a, b) => ((b.qty * (b[sortKey] ?? 0)) - (a.qty * (a[sortKey] ?? 0))));
@@ -314,6 +322,7 @@ function marketHtml(R, rp) {
       <td class="num ap-buy ap-hide-sm">${isk(r.buy)}</td>
       <td class="num ap-sell ap-strong">${r.sell == null ? '—' : ctx.formatISK(r.qty * r.sell)}</td>
       <td class="num ap-buy ap-strong">${r.buy == null ? '—' : ctx.formatISK(r.qty * r.buy)}${short ? `<small title="收单总量不够">收单只够 ${ctx.formatNumber(r.depthSell.filled)}</small>` : ''}</td>
+      <td class="num ap-hide-sm">${r.split == null ? '—' : `<span title="单价 ${isk(r.split)}">${ctx.formatISK(r.qty * r.split)}</span>`}</td>
       ${M ? `<td class="num ap-mid">${r.mid == null ? '—' : `<span title="单价 ${isk(r.mid)}">${ctx.formatISK(r.qty * r.mid)}</span>`}</td>` : ''}
       <td class="num ap-hide-sm">${r.avg == null ? '—' : ctx.formatISK(r.qty * r.avg)}</td>
     </tr>`;
@@ -327,6 +336,7 @@ function marketHtml(R, rp) {
     <div class="ap-stats${M ? ' has-mid' : ''}">
       <div class="ap-stat-sell"><span>按最低卖价</span><b>${ctx.formatISK(R.sellTotal)}</b><small>挂卖单税后 <em>${ctx.formatISK(sellNet)}</em>（−${pct2(f.sales + f.broker)}）</small></div>
       <div class="ap-stat-buy"><span>按最高收价</span><b>${ctx.formatISK(R.buyTotal)}</b><small>卖给收单税后 <em>${ctx.formatISK(buyNet)}</em>（−${pct2(f.sales)}）</small></div>
+      <div><span title="（最低卖价 + 最高收价）÷ 2，卖单和收单都有的物品才计入">按买卖中间价</span><b>${ctx.formatISK(SP.total)}</b><small>${SP.n}/${R.rows.length} 种同时有卖单和收单</small></div>
       ${M ? `<div class="ap-stat-mid"><span title="${ctx.esc(R.region.hub.name)} 每日成交均价的中位数（与倒卖排行同一数据），不受挂单乱价影响">按成交中位价</span><b>${ctx.formatISK(M.total)}</b><small>${M.n}/${R.rows.length} 种有成交价${ctx.valuation.medDaysPicker(M.days)}</small></div>` : ''}
       <div><span>全服均价</span><b>${ctx.formatISK(R.avgTotal)}</b><small>${R.rows.length} 种 · ${ctx.formatNumber(R.rows.reduce((t, r) => t + r.qty, 0))} 件</small></div>
     </div>
@@ -337,12 +347,13 @@ function marketHtml(R, rp) {
         <th>物品</th><th class="num">数量</th><th class="num ap-hide-sm">最低卖价</th><th class="num ap-hide-sm">最高收价</th>
         <th class="num"><button type="button" data-ap-sort="sell" class="${sortKey === 'sell' ? 'active' : ''}">卖单小计</button></th>
         <th class="num"><button type="button" data-ap-sort="buy" class="${sortKey === 'buy' ? 'active' : ''}">收单小计</button></th>
+        <th class="num ap-hide-sm"><button type="button" data-ap-sort="split" class="${sortKey === 'split' ? 'active' : ''}">中间价小计</button></th>
         ${M ? `<th class="num"><button type="button" data-ap-sort="mid" class="${sortKey === 'mid' ? 'active' : ''}">成交价小计</button></th>` : ''}
         <th class="num ap-hide-sm"><button type="button" data-ap-sort="avg" class="${sortKey === 'avg' ? 'active' : ''}">均价小计</button></th>
       </tr></thead>
       <tbody>${body}</tbody>
-      <tfoot><tr><td>合计</td><td></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-sell ap-strong">${ctx.formatISK(R.sellTotal)}</td><td class="num ap-buy ap-strong">${ctx.formatISK(R.buyTotal)}</td>${M ? `<td class="num ap-mid ap-strong">${ctx.formatISK(M.total)}</td>` : ''}<td class="num ap-hide-sm">${ctx.formatISK(R.avgTotal)}</td></tr>
-        <tr class="ap-net"><td>税后</td><td></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-sell">${ctx.formatISK(sellNet)}</td><td class="num ap-buy">${ctx.formatISK(buyNet)}</td>${M ? '<td></td>' : ''}<td class="ap-hide-sm"></td></tr></tfoot>
+      <tfoot><tr><td>合计</td><td></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-sell ap-strong">${ctx.formatISK(R.sellTotal)}</td><td class="num ap-buy ap-strong">${ctx.formatISK(R.buyTotal)}</td><td class="num ap-hide-sm ap-strong">${ctx.formatISK(SP.total)}</td>${M ? `<td class="num ap-mid ap-strong">${ctx.formatISK(M.total)}</td>` : ''}<td class="num ap-hide-sm">${ctx.formatISK(R.avgTotal)}</td></tr>
+        <tr class="ap-net"><td>税后</td><td></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-sell">${ctx.formatISK(sellNet)}</td><td class="num ap-buy">${ctx.formatISK(buyNet)}</td><td class="ap-hide-sm"></td>${M ? '<td></td>' : ''}<td class="ap-hide-sm"></td></tr></tfoot>
     </table></div>`;
 }
 
@@ -402,6 +413,7 @@ function resultText() {
   const rp = A.rpResult;
   const f = fees();
   const M = R.hasMed ? applyMed(R) : null;
+  const SP = applySplit(R);
   if (A.view === 'reproc' && rp) {
     return [
       `化矿估价（${R.region.hub.name}，矿石 ${rp.oreYield ?? '—'} · 碎铁 ${pct(yieldFor(0))}${S.tax ? ' · 税 ' + S.tax + '%' : ''}）`,
@@ -413,7 +425,7 @@ function resultText() {
   return [
     `估价（${R.region.hub.name}）`,
     ...R.rows.map((r) => `${r.name} ×${r.qty}　卖 ${isk(r.sell == null ? null : r.sell * r.qty)}　收 ${isk(r.buy == null ? null : r.buy * r.qty)}` + (M ? `　成交 ${isk(r.mid == null ? null : r.mid * r.qty)}` : '')),
-    `合计：按最低卖价 ${isk(R.sellTotal)} ISK，按最高收价 ${isk(R.buyTotal)} ISK` + (M ? `，按近 ${M.days} 天成交中位价 ${isk(M.total)} ISK` : ''),
+    `合计：按最低卖价 ${isk(R.sellTotal)} ISK，按最高收价 ${isk(R.buyTotal)} ISK，按买卖中间价 ${isk(SP.total)} ISK` + (M ? `，按近 ${M.days} 天成交中位价 ${isk(M.total)} ISK` : ''),
     `税后：挂卖单 ${isk(R.sellTotal * (1 - f.sales - f.broker))} ISK，卖给收单 ${isk(R.buyTotal * (1 - f.sales))} ISK（销售税 ${pct2(f.sales)} · 中介费 ${pct2(f.broker)}）`
   ].join('\n');
 }
