@@ -5,7 +5,7 @@
 // 买料加工的补货周期：固定（12 小时 – 3 天或自定义小时数，产量受发射平台容量限制），或「自动」（工厂按 CPU / 电网建满，
 // 再按原料、产品体积与发射平台容量算出最长补货周期）；方案详情的「补货清单」给出每次补货要买的原料数量，可一键购买。
 // 数据：pi-data.json（build_pi.mjs 从 SDE 生成），map-data.json（星系、星门、星域）。
-import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r8';
+import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v20r10';
 import { angle } from './pi-globe.js?v=v19r12';
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
 import { skPage, skRows } from './skeleton.js?v=v17';

@@ -195,10 +195,12 @@ function centroid(pins) {
 }
 // 视野最多约 0.7 弧度宽：拉远也只看殖民地附近
 const minRpx = (w, h) => Math.min(w, h) / 0.7;
-function fitCam(m, w, h, fill = 0.36) {
+// 设施间距最多放大到 FIT_GAP 像素：设施与游戏里一样紧挨着，不会因为殖民地小而被放得很开
+const FIT_GAP = 110;
+function fitCam(m, w, h, fill = 0.36, gap = FIT_GAP) {
   const c = centroid(m.pins);
   const span = Math.max(0.016, ...m.pins.map((p) => pinAngle(p, c)));
-  return { th: c.th, ph: c.ph, rpx: Math.max(minRpx(w, h), Math.min(80000, (Math.min(w, h) * fill) / span)), cx: w / 2, cy: h / 2 };
+  return { th: c.th, ph: c.ph, rpx: Math.max(minRpx(w, h), Math.min(80000, gap / SPACING, (Math.min(w, h) * fill) / span)), cx: w / 2, cy: h / 2 };
 }
 
 // ---------- 图标 ----------
@@ -236,10 +238,11 @@ function drawScene(view) {
   drawColony(g, view, w, h);
 }
 
-// 设施图标半径随缩放变化：相邻设施间距（像素）的三分之一左右
-const HEAD_RING = 2.2;   // 采集头环半径（相对设施图标半径）
-const pinRadius = (cam) => Math.max(9, Math.min(22, cam.rpx * SPACING * 0.32));
+// 设施图标按真实比例随缩放变化：图标直径约为最小间距的九成，相邻设施和游戏里一样几乎挨着
+const HEAD_RING = 1.5;   // 采集头环半径（相对设施图标半径）
+const pinRadius = (cam) => Math.max(5, cam.rpx * SPACING * 0.38);
 
+const linkPx = (pts) => Math.hypot(pts[pts.length - 1].x - pts[0].x, pts[pts.length - 1].y - pts[0].y);
 function polyline(g, pts) {
   g.beginPath();
   pts.forEach((p, k) => (k ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y)));
@@ -253,7 +256,7 @@ function drawColony(g, view, w, h) {
   const info = view.info || autoRoutes(m);
   const redraw = view.redraw;
   const t = view.t || 0;
-  const r = thumb ? 7 : pinRadius(cam);
+  const r = pinRadius(cam);
   const spacingPx = cam.rpx * SPACING;
   g.lineCap = 'round';
   g.lineJoin = 'round';
@@ -282,7 +285,7 @@ function drawColony(g, view, w, h) {
         g.beginPath(); g.arc(x, y, pr * 3, 0, Math.PI * 2); g.fill();
       }
     }
-    if (!thumb && (sel || spacingPx > 90)) {
+    if (!thumb && (sel || linkPx(pts) > r * 2.3 + 60)) {   // 链接露出的部分够长才标距离
       const mid = pts[Math.floor(pts.length / 2)];
       const dx = pts[pts.length - 1].x - pts[0].x, dy = pts[pts.length - 1].y - pts[0].y;
       const len = Math.hypot(dx, dy) || 1;
@@ -334,9 +337,10 @@ function drawColony(g, view, w, h) {
     g.fillStyle = glow;
     g.beginPath(); g.arc(s.x, s.y, r * 2.6, 0, Math.PI * 2); g.fill();
     // 采集头（采集球）：仿游戏内的半透明青白光盘，环绕在采集控制器外圈
-    if (p.kind === 'ecu' && p.heads) {
+    const headRing = p.kind === 'ecu' && p.heads && spacingPx >= 170;   // 设施紧挨着时采集头圈会压到旁边，拉近后再画
+    if (headRing) {
       const ring = r * HEAD_RING;
-      const hr = thumb ? 3.2 : Math.max(7, r * 0.6);
+      const hr = Math.max(2.5, r * 0.3);
       g.strokeStyle = 'rgba(150,225,215,0.22)'; g.lineWidth = thumb ? 0.8 : 1;
       g.beginPath(); g.arc(s.x, s.y, ring, 0, Math.PI * 2); g.stroke();
       const himg = icon('assets/pi/head.svg', redraw);
@@ -358,15 +362,24 @@ function drawColony(g, view, w, h) {
       g.fillStyle = '#0a1018'; g.strokeStyle = k.color; g.lineWidth = 2;
       g.beginPath(); g.arc(s.x, s.y, r, 0, Math.PI * 2); g.fill(); g.stroke();
     }
+    if (p.kind === 'ecu' && p.heads && !headRing) {
+      const bx = s.x + r * 0.78, by = s.y + r * 0.78;
+      g.font = font(Math.max(9, Math.min(13, r * 0.45)), 600);
+      const txt = '×' + p.heads, tw = g.measureText(txt).width + 8, th = Math.max(13, Math.min(18, r * 0.6));
+      g.fillStyle = 'rgba(5,8,14,0.9)'; g.strokeStyle = 'rgba(150,225,215,0.7)'; g.lineWidth = 1;
+      g.beginPath(); g.roundRect(bx - tw / 2, by - th / 2, tw, th, th / 2); g.fill(); g.stroke();
+      g.fillStyle = '#bff3ea'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(txt, bx, by + 0.5);
+    }
     if (bad) {
       g.strokeStyle = '#ff5a5a'; g.lineWidth = 2; g.setLineDash([4, 3]);
-      g.beginPath(); g.arc(s.x, s.y, r * (p.kind === 'ecu' ? HEAD_RING + 0.6 : 1.5), 0, Math.PI * 2); g.stroke();
+      g.beginPath(); g.arc(s.x, s.y, r * (headRing ? HEAD_RING + 0.6 : 1.5), 0, Math.PI * 2); g.stroke();
       g.setLineDash([]);
     }
     if (thumb) return;
     // 产物角标
     if (p.product && !HUBS.has(p.kind)) {
-      const off = p.kind === 'ecu' ? r * (HEAD_RING + 1.15) : r * 0.9 * Math.SQRT2;   // 采集控制器的角标放在采集头外圈之外
+      const off = headRing ? r * (HEAD_RING + 1.15) : r * 0.9 * Math.SQRT2;   // 采集控制器的角标放在采集头外圈之外
       const bx = s.x + off * Math.SQRT1_2, by = s.y - off * Math.SQRT1_2, br = Math.max(6.5, r * 0.46);
       g.fillStyle = '#05080e'; g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 1;
       g.beginPath(); g.arc(bx, by, br, 0, Math.PI * 2); g.fill(); g.stroke();
@@ -374,11 +387,11 @@ function drawColony(g, view, w, h) {
       if (pimg) g.drawImage(pimg, bx - br * 0.82, by - br * 0.82, br * 1.64, br * 1.64);
     }
     // 名称：拉近后显示
-    if (spacingPx > 70 || selected || hovered) {
+    if (spacingPx > 170 || selected || hovered) {   // 紧挨着时名称会压到旁边的设施，拉近后再显示
       const label = HUBS.has(p.kind) ? k.label : p.product ? env.cName(p.product) : '未设置';
       g.font = font(11, selected ? 600 : 400);
       g.textAlign = 'center'; g.textBaseline = 'top';
-      const ly = s.y + r * (p.kind === 'ecu' ? HEAD_RING + 0.65 : 1.18) + 6;
+      const ly = s.y + r * (headRing ? HEAD_RING + 0.65 : 1.18) + 6;
       g.lineWidth = 3; g.strokeStyle = '#000';
       g.strokeText(label, s.x, ly);
       g.fillStyle = selected ? '#ffffff' : p.product || HUBS.has(p.kind) ? 'rgba(215,232,245,0.9)' : '#ff9b9b';
@@ -386,7 +399,7 @@ function drawColony(g, view, w, h) {
     }
     if (selected) {
       // 游戏式选中框：四角括号
-      const q = r * (p.kind === 'ecu' ? HEAD_RING + 0.65 : 1.2) + 7, L = 7;
+      const q = r * (headRing ? HEAD_RING + 0.65 : 1.2) + 7, L = 7;
       g.strokeStyle = '#ffffff'; g.lineWidth = 1.6;
       for (const [sx, sy] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
         g.beginPath();
@@ -427,7 +440,7 @@ export function drawThumb(canvas, json) {
   const m = fromJson(json);
   if (!canvas.isConnected) return;
   const w = canvas.clientWidth || 300, h = canvas.clientHeight || 150;
-  const view = { canvas, model: m, cam: fitCam(m, w, h, 0.4), thumb: true, width: w, height: h };
+  const view = { canvas, model: m, cam: fitCam(m, w, h, 0.4, 56), thumb: true, width: w, height: h };
   view.redraw = () => drawScene(view);
   drawScene(view);
 }
