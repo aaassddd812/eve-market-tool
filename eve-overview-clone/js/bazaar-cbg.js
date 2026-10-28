@@ -7,7 +7,7 @@
 // 地址栏：#bazaar · #bazaar/c/<藏宝阁订单号>
 import { HUB_NAME, eveImage } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
-import * as BS from './bazaar-skills.js?v=5';
+import * as BS from './bazaar-skills.js?v=6';
 
 let ctx;
 const $ = (id) => document.getElementById(id);
@@ -75,12 +75,20 @@ function route(hash) {
     if (!C.items.length && !C.loading) fetchList(true);
     return;
   }
+  // 从菜单进入时地址栏没有 #bazaar：补上，详情页「返回列表」/ 浏览器后退才能回到这里
+  if (!location.hash.startsWith('#bazaar')) history.replaceState(null, '', location.pathname + location.search + '#bazaar');
+  const back = C.view !== 'list';
   C.view = 'list';
   loadNeed();
   render();
+  if (back) scroller()?.scrollTo(0, C.listTop || 0);   // 回到列表时恢复滚动位置
   if (!C.loading && (!C.items.length || Date.now() - C.at > 600e3)) fetchList(false);
 }
+const scroller = () => $('bazaarMain').closest('.kb-scroll');
 function go(hash) {
+  // 从列表点进详情：记下滚动位置；「返回列表」用浏览器后退，前进 / 后退记录保持一致
+  C.fromList = C.view === 'list' && hash !== '#bazaar';
+  if (C.fromList) C.listTop = scroller()?.scrollTop || 0;
   if (location.hash !== hash) history.pushState(null, '', location.pathname + location.search + hash);
   route(hash);
 }
@@ -316,7 +324,7 @@ async function valueHtml(d) {
 function bind() {
   const view = $('bazaarView');
   const search = $('bazaarSearch');
-  BS.bindAna(view, () => C.ana?.c);
+  BS.bindAna(view, () => C.ana?.c, renderAna, (m) => ctx.showToast(m, 'error'));
   BS.bindNeed($('bazaarSide'), {
     get: () => C.need,
     set: (reqs) => { C.need = reqs; save(); if (C.view !== 'list') go('#bazaar'); else { loadNeed(); refreshList(); } },
@@ -340,16 +348,11 @@ function bind() {
     if (train && C.ana) { BS.setTrainShip(Number(train.dataset.bzTrain)); C.ana.tab = 'train'; renderAna(); return; }
     if (t.closest('[data-cbg-retry]')) { NEED.err = false; NEED.at = 0; loadNeed(); fetchList(false); return; }
     if (t.closest('[data-cbg-clear]')) { C.q = ''; $('bazaarSearch').value = ''; render(); return; }
-    if (t.closest('[data-cbg-back]')) { if (history.length > 1 && C.items.length) history.back(); else go('#bazaar'); }
+    if (t.closest('[data-cbg-back]')) { if (C.fromList) { C.fromList = false; history.back(); } else go('#bazaar'); }
   });
   view.addEventListener('change', (e) => {
     const t = e.target;
     if (t.matches('[data-cbg-order]')) { C.order = t.value; save(); if (C.view !== 'list') go('#bazaar'); else render(); return; }
-    if (t.matches('[data-bz-ship]') && C.ana?.c) {
-      const ship = BS.shipByName(C.ana.c, t.value);
-      if (ship) { BS.setTrainShip(ship.id); renderAna(); } else ctx.showToast('没有找到这艘船', 'error');
-      return;
-    }
     if (t.matches('[data-cbg-sp]')) { C[t.dataset.cbgSp] = t.value; save(); if (C.view === 'list') refreshList(); }
   });
 }

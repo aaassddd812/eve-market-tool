@@ -230,9 +230,17 @@ function trainHtml(c) {
 function injectorSp(total) {
   return total < 5e7 ? 5e5 : total < 8e7 ? 4e5 : total < 1.5e8 ? 3e5 : 1.5e5;
 }
-export function shipByName(c, name) {
+// 舰船名：先精确匹配（中英文），loose 时再找名字以输入开头 / 包含输入的，取名字最短的
+export function shipByName(c, name, loose = false) {
   const q = name.trim().toLowerCase();
-  return c.data.byName.get(q) && c.data.byName.get(q).category === 6 ? c.data.byName.get(q) : null;
+  if (!q) return null;
+  const t = c.data.byName.get(q);
+  if (t && t.category === 6) return t;
+  if (!loose) return null;
+  const hits = ships(c).map((s) => s.t).map((s) => [s, s.name.toLowerCase(), (s.en || '').toLowerCase()])
+    .filter(([, n, en]) => n.includes(q) || en.includes(q))
+    .sort((a, b) => (b[1].startsWith(q) || b[2].startsWith(q)) - (a[1].startsWith(q) || a[2].startsWith(q)) || a[1].length - b[1].length);
+  return hits[0]?.[0] || null;
 }
 
 // ---------- 可用装备 ----------
@@ -293,8 +301,20 @@ export function equipListHtml(c) {
   }).join('');
   return shown ? html : '<p class="text-muted">没有符合的装备。</p>';
 }
-// 技能分析里的输入控件（装备搜索、显示不能用的）：getChar() 返回当前角色
-export function bindAna(root, getChar) {
+// 技能分析里的输入控件（开船耗时的舰船、装备搜索、显示不能用的）：getChar() 返回当前角色，rerender() 重画技能分析
+export function bindAna(root, getChar, rerender, warn) {
+  // 舰船：从候选里点选（input 事件，名字完全一致）立即计算；回车 / 离开输入框（change）时名字不完整也找最接近的
+  root.addEventListener('input', (e) => {
+    if (!e.target.matches('[data-bz-ship]')) return;
+    const c = getChar(), ship = c && shipByName(c, e.target.value);
+    if (ship && ship.id !== trainShip) { setTrainShip(ship.id); rerender(); }
+  });
+  root.addEventListener('change', (e) => {
+    if (!e.target.matches('[data-bz-ship]') || !e.target.value.trim()) return;
+    const c = getChar(), ship = c && shipByName(c, e.target.value, true);
+    if (!ship) { warn('没有找到这艘船'); return; }
+    if (ship.id !== trainShip || e.target.value !== ship.name) { setTrainShip(ship.id); rerender(); }
+  });
   root.addEventListener('input', (e) => {
     if (!e.target.matches('[data-bz-eq]')) return;
     const c = getChar(), box = document.getElementById('bzEqList');

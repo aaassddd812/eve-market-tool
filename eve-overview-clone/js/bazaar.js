@@ -11,7 +11,7 @@
 // 地址栏：#bazaar · #bazaar/t/<帖子ID>（晨曦：#bazaar/c/<藏宝阁订单号>）
 import { IS_TQ, SERVER } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
-import * as BS from './bazaar-skills.js?v=5';
+import * as BS from './bazaar-skills.js?v=6';
 
 let ctx;   // esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices(ids) -> Map(id -> { sell, buy }), fitData() -> { data, FE }, closeDrawer
 const $ = (id) => document.getElementById(id);
@@ -61,7 +61,7 @@ function save() { ctx.store.set(STORE_KEY, JSON.stringify({ lang: S.lang, order:
 export function initBazaar(context) { ctx = context; load(); }
 const IS_CBG = SERVER.id === 'serenity';
 let CBG = null;
-const cbgModule = () => (CBG ||= import('./bazaar-cbg.js?v=6').then((m) => { m.initCbg(ctx); return m; }));
+const cbgModule = () => (CBG ||= import('./bazaar-cbg.js?v=8').then((m) => { m.initCbg(ctx); return m; }));
 
 async function api(path) {
   const res = await fetch('/api/kb/bazaar' + path);
@@ -98,13 +98,21 @@ function route(hash) {
     if (!S.topics.length && !S.loading) fetchList(false, true);   // 侧栏的分类计数
     return;
   }
+  // 从菜单进入时地址栏没有 #bazaar：补上，详情页「返回列表」/ 浏览器后退才能回到这里
+  if (!location.hash.startsWith('#bazaar')) history.replaceState(null, '', location.pathname + location.search + '#bazaar');
+  const back = S.view !== 'list';
   S.view = 'list';
   loadNeed();
   render();
+  if (back) scroller()?.scrollTo(0, S.listTop || 0);   // 回到列表时恢复滚动位置
   const key = S.order + '|' + S.dir + '|' + S.q + '|' + S.lang;
   if (key !== S.key || (!S.topics.length && !S.loading)) fetchList(false);
 }
+const scroller = () => $('bazaarMain').closest('.kb-scroll');
 function go(hash) {
+  // 从列表点进详情：记下滚动位置；「返回列表」用浏览器后退，前进 / 后退记录保持一致
+  S.fromList = S.view === 'list' && hash !== '#bazaar';
+  if (S.fromList) S.listTop = scroller()?.scrollTop || 0;
   if (location.hash !== hash) history.pushState(null, '', location.pathname + location.search + hash);
   route(hash);
 }
@@ -519,7 +527,7 @@ async function whoCard(user, t) {
 // ---------- 事件 ----------
 function bind() {
   const view = $('bazaarView');
-  BS.bindAna(view, () => curChar()?.c);
+  BS.bindAna(view, () => curChar()?.c, renderAna, (m) => ctx.showToast(m, 'error'));
   BS.bindNeed($('bazaarSide'), {
     get: () => S.need,
     set: (reqs) => { S.need = reqs; save(); NEED.match.clear(); if (S.view !== 'list') go('#bazaar'); else { refreshList(); loadNeed(); } },
@@ -545,7 +553,7 @@ function bind() {
     if (t.closest('[data-bz-more]')) { fetchList(true); return; }
     if (t.closest('[data-bz-retry]')) { NEED.err = false; fetchList(false); return; }
     if (t.closest('[data-bz-clear]')) { S.q = ''; $('bazaarSearch').value = ''; route('#bazaar'); return; }
-    if (t.closest('[data-bz-back]')) { if (history.length > 1 && S.topics.length) history.back(); else go('#bazaar'); return; }
+    if (t.closest('[data-bz-back]')) { if (S.fromList) { S.fromList = false; history.back(); } else go('#bazaar'); return; }
     const lang = t.closest('[data-bz-lang]');
     if (lang) { S.lang = lang.dataset.bzLang; save(); if (S.lang === 'zh' && S.topic) loadZh(S.topic); else applyLang(); return; }
     const jump = t.closest('[data-bz-jump]');
@@ -557,11 +565,6 @@ function bind() {
       const [o, d] = t.value.split(':');
       S.order = o; S.dir = d || 'desc'; save();
       if (S.view !== 'list') go('#bazaar'); else route('#bazaar');
-      return;
-    }
-    if (t.matches('[data-bz-ship]') && S.ana?.c) {
-      const ship = BS.shipByName(S.ana.c, t.value);
-      if (ship) { BS.setTrainShip(ship.id); renderAna(); } else ctx.showToast('没有找到这艘船', 'error');
       return;
     }
     if (t.matches('[data-bz-sp]')) { S[t.dataset.bzSp] = t.value; save(); if (S.view === 'list') refreshList(); return; }

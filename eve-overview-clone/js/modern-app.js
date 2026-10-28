@@ -488,7 +488,7 @@ function loadAbyssModule() {
 // 角色交易（宁静服：官方论坛 Character Bazaar）：首次进入时加载
 let bazaarLoading = null;
 function loadBazaarModule() {
-  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v11').then((m) => {
+  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v13').then((m) => {
     m.initBazaar({ esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices: getLiveHubPrices, fitData: () => loadFittingModule().then((f) => f.fitData()), closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
     return m;
   }).catch((error) => { bazaarLoading = null; throw error; });
