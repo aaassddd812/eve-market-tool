@@ -520,7 +520,8 @@ function sysSuggest(q) {
 
 // ---------- 制造计算器 ----------
 function productHits(q, limit = 14) {
-  const lower = q.toLowerCase();
+  // 按蓝图名搜也能找到产品：「屹立研究实验室蓝图 I」→「屹立研究实验室 I」
+  const lower = q.toLowerCase().replace(/蓝图|\s*\bblueprint\b/g, '').replace(/\s+/g, ' ').trim() || q.toLowerCase();
   const out = [];
   for (const pid of Object.keys(D.data.bp)) {
     const t = T(pid);
