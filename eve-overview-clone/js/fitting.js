@@ -160,6 +160,11 @@ async function ensureData() {
   return F.data;
 }
 
+// 其他页面（角色交易的技能分析）共用装配数据与引擎
+export async function fitData() {
+  return { data: await ensureData(), FE };
+}
+
 // 空闲时预加载装配数据
 export async function preloadFitting() {
   if (!F.loading) F.loading = FE.loadFitData(DATA_URL);

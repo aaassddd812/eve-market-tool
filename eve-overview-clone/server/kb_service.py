@@ -25,6 +25,15 @@
   GET /api/kb/entity/<kind>/<id>?days=30      人物 / 军团 / 联盟统计（含成员明细）
   GET /api/kb/kill/<id>                       击杀邮件详情与逐项估价（原文按需取自 ESI，本地不保存）
   GET /api/kb/shipfits?ship=ID&days=7[&limit=N][&kills=ID,…] 某型舰船最近 N 天（≤ 保留期）阵亡时的装配，相同装配合并计数（物品原文按需取自 ESI，提取结果存库）
+  GET /api/kb/bazaar?page=&order=activity|created&q=   官方论坛角色交易版块（宁静服）帖子列表 / 搜索（代理，缓存 2 分钟）
+  GET /api/kb/bazaar/topic?id=                帖子详情（全部楼层，最多 200 层）
+  GET /api/kb/bazaar/translate?id=            帖子各楼层的中文机器翻译（Google 翻译，按原文缓存）
+  GET /api/kb/bazaar/skills?id=               卖家贴的 qsna.eu 技能展示（技能 ID、等级、技能点）
+  GET /api/kb/bazaar/cbg                      晨曦：网易藏宝阁在售与公示期角色（缓存 10 分钟）
+  GET /api/kb/bazaar/cbg/detail?id=           藏宝阁角色详情：技能、钱包、安全等级、军团历史、舰船与装配
+  GET /api/kb/bazaar/skillset                 宁静：索引里各帖技能展示角色的技能等级（列表按「能开什么船 / 技能几级」筛选）
+  GET /api/kb/bazaar/cbg/skillset             晨曦：藏宝阁各角色的技能等级（后台每 10 分钟补齐）
+                                              order=sp|price|ratio（&dir=asc）时列表来自后台索引：近期帖子的 1 楼里解析出的技能点 / 报价
   GET /api/kb/bpprices?types=1,2               公开合同里的蓝图价格：原图最低价、拷贝每流程最低价（各取最便宜 5 份）；
                                                不带 types 时返回全部蓝图的 [原图最低价, 拷贝每流程最低价]
                                                数据来自 EVE Ref 公开合同快照 https://data.everef.net/public-contracts/（每 30 分钟刷新）
@@ -55,6 +64,7 @@ import datetime as dt
 import email.utils
 import gzip
 import hashlib
+import html as html_lib
 import io
 import json
 import logging
@@ -2409,6 +2419,737 @@ class Industry:
         return {"activity": activity, "total": len(rows), "systems": rows[:limit]}
 
 
+# ---------------------------------------------------------------- 角色交易（晨曦：网易藏宝阁）
+CBG = "https://eve.cbg.163.com"
+CBG_TTL = 600             # 列表 / 详情缓存秒数
+CBG_UA = "Mozilla/5.0 (compatible; EVE-Market-Tool)"
+CBG_ROW_RE = re.compile(r'<tr class="[^"]*" data-serverid="(\d+)" data-game_ordersn="(\d+)">(.*?)</tr>', re.S)
+
+
+def cbg_num(text):
+    """藏宝阁的数字：1.35亿 / 2504.01万 / 0.0"""
+    m = re.search(r"(-?[\d.]+)\s*(亿|万)?", text or "")
+    if not m:
+        return None
+    return float(m.group(1)) * {"亿": 1e8, "万": 1e4}.get(m.group(2), 1)
+
+
+class Cbg:
+    """网易藏宝阁（晨曦）在售与公示期角色：列表页与详情页都是服务端渲染的 HTML，详情页里嵌着角色数据 EquipData（技能、钱包、舰船…）"""
+
+    def __init__(self):
+        self.cache = {}
+        self.lock = threading.Lock()
+        self.skills = {}   # 订单号 -> [角色ID, 角色名, 总技能点, "技能ID:等级,…"]（列表按技能要求筛选用）
+        self.ids = []      # 最近一次列表里的订单号
+
+    def start(self):
+        threading.Thread(target=self.run, daemon=True, name="cbg").start()
+        return self
+
+    def run(self):
+        """后台每 10 分钟读一遍列表和全部角色详情（晨曦只有几十个角色），备好技能等级"""
+        time.sleep(30)
+        while True:
+            try:
+                for it in self.items({})["items"]:
+                    if it["id"] not in self.skills:
+                        try:
+                            self.detail({"id": it["id"]})
+                        except (KeyError, RuntimeError):
+                            pass
+                        time.sleep(1)
+            except Exception:
+                log.exception("藏宝阁后台读取出错")
+            time.sleep(CBG_TTL)
+
+    def skillset(self, q):
+        with self.lock:
+            out = {sn: self.skills[sn] for sn in self.ids if sn in self.skills}
+        return {"items": out, "pending": len(self.ids) - len(out)}
+
+    def get(self, path):
+        now = time.time()
+        hit = self.cache.get(path)
+        if hit and now - hit[0] < CBG_TTL:
+            return hit[1]
+        try:
+            body, _ = http_get(CBG + path, timeout=20, headers={"User-Agent": CBG_UA})
+            text = body.decode("utf-8", "replace")
+        except Exception as e:
+            if hit:
+                return hit[1]
+            log.warning("藏宝阁读取失败 %s: %s", path, e)
+            raise RuntimeError("网易藏宝阁暂时无法访问，请稍后再试")
+        with self.lock:
+            if len(self.cache) > 300:
+                for k in sorted(self.cache, key=lambda k: self.cache[k][0])[:150]:
+                    del self.cache[k]
+            self.cache[path] = (now, text)
+        return text
+
+    @staticmethod
+    def rows(html, status):
+        out = []
+        for server, sn, body in CBG_ROW_RE.findall(html):
+            tds = re.findall(r"<td>(.*?)</td>", body, re.S)
+            text = lambda i: re.sub(r"<[^>]+>|\s+", " ", tds[i]).strip() if i < len(tds) else ""
+            pop = dict(re.findall(r"<p[^>]*>\s*([^：<]+?)\s*：\s*([^<]*)</p>", body))
+            cid = re.search(r"/Character/(\d+)_", body)
+            price = re.search(r"mapPriceColor\(([\d.]+)", body)
+            out.append({"id": int(sn), "server": int(server), "status": status, "name": html_lib.unescape(text(1)),
+                        "character_id": int(cid.group(1)) if cid else None,
+                        "sp": cbg_num(text(2)), "price": float(price.group(1)) if price else None, "left": text(5),
+                        "sec": cbg_num(pop.get("安全等级")), "isk": cbg_num(pop.get("I S K"))})
+        return out
+
+    def items(self, q):
+        """在售 + 公示期的全部角色（藏宝阁晨曦一共只有几十个，整页读完）"""
+        out, seen = [], set()
+        for path, status in (("/?page={}", "sale"), ("/cbg/query.py?act=fair_show&page={}", "fair")):
+            for page in range(1, 21):
+                got = [r for r in self.rows(self.get(path.format(page)), status) if r["id"] not in seen]
+                if not got:
+                    break
+                seen.update(r["id"] for r in got)
+                out += got
+        self.ids = [r["id"] for r in out]
+        return {"items": out, "source": CBG}
+
+    def detail(self, q):
+        sn = int(q.get("id") or 0)
+        if sn <= 0:
+            raise ValueError("缺少 id")
+        html = self.get(f"/cbg/query.py?act=detail&serverid=1&game_ordersn={sn}")
+        m = re.search(r"var EquipData = (\{.*?\});\s*\n", html, re.S)
+        if not m:
+            raise KeyError("藏宝阁上找不到这个角色（可能已售出或下架）")
+        d = json.loads(m.group(1))
+        dd = {re.sub(r"\s+", "", k): re.sub(r"<[^>]+>|\s+", " ", v).strip()
+              for k, v in re.findall(r"<dt>([^<]*?)：?</dt>\s*<dd[^>]*>(.*?)</dd>", html, re.S)}
+        price = re.search(r"<dt>价格：</dt>.*?mapPriceColor\(([\d.]+)", html, re.S)
+        slot = lambda s, k: [[x.get("itemTypeId"), x.get("itemTypeName")] for x in s.get(k) or []]
+        total = (d.get("totalAllocatedSkillPoint") or 0) + (d.get("totalUnallocatedSkillPoint") or 0)
+        sk = ",".join(f"{x['skillTypeId']}:{x.get('level') or 0}" for g in d.get("learnedSkills") or [] for x in g.get("skills") or [] if x.get("skillTypeId"))
+        with self.lock:
+            self.skills[sn] = [d.get("characterId"), d.get("characterName"), total, sk]
+        return {"id": sn, "url": f"{CBG}/cbg/query.py?act=detail&serverid=1&game_ordersn={sn}", "source": "网易藏宝阁",
+                "name": d.get("characterName"), "character_id": d.get("characterId"), "price": float(price.group(1)) if price else None,
+                "status": dd.get("状态"), "left": dd.get("出售剩余时间") or dd.get("公示剩余时间"), "seller": dd.get("卖家"),
+                "total_sp": (d.get("totalAllocatedSkillPoint") or 0) + (d.get("totalUnallocatedSkillPoint") or 0),
+                "allocated_sp": d.get("totalAllocatedSkillPoint"), "unallocated_sp": d.get("totalUnallocatedSkillPoint"),
+                "isk": d.get("iskInWallet"), "sec": d.get("securityLevel"), "station": d.get("stationName"),
+                "corp_history": d.get("corpHistory") or [],
+                "skills": [[x["skillTypeId"], x.get("level") or 0, 0] for g in d.get("learnedSkills") or [] for x in g.get("skills") or []],
+                "ships": [{"type": x.get("shipTypeId"), "name": x.get("shipTypeName"), "jumps": x.get("jumpCount"),
+                           "slots": {k: slot(x, k) for k in ("highSlot", "mediumSlot", "lowSlot", "rigSlot", "subsystemSlot")}}
+                          for x in d.get("shipsToShow") or []],
+                "items": [[x.get("itemTypeId"), x.get("itemTypeName"), x.get("quantity") or x.get("count")] for x in d.get("itemsToShow") or []]}
+
+
+# ---------------------------------------------------------------- 角色交易（宁静服官方论坛 Character Bazaar）
+FORUM = "https://forums.eveonline.com"
+BAZAAR_CAT = (60, "marketplace/character-bazaar")   # Marketplace 下的角色交易版块
+BAZAAR_TTL = 120          # 列表 / 帖子缓存秒数（论坛对匿名访问有频率限制）
+BAZAAR_MAX_POSTS = 200    # 帖子详情最多读取的楼层数（拍卖帖出价很多）
+BAZAAR_CRAWL_PAGES = 20      # 后台索引读取论坛列表的页数（每页 30 帖，约覆盖近 3 个月）
+BAZAAR_CRAWL_GAP = 900    # 两轮索引的间隔（秒）
+BAZAAR_KEEP_DAYS = 120    # 索引里保留最近 N 天有回复的帖子
+QSNA_RE = re.compile(r"qsna\.eu/eve/characters/(\d+)", re.I)   # 卖家最常用的技能展示站，有公开的 ESI 格式技能接口
+SP_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*x?\s*(?:m|mil|mill|million|kk)\b\.?\s*(sp|skill)?", re.I)
+BODY_SP_RE = re.compile(r"skill\s*points?\s*(?:total)?\s*[:：=-]?\s*(\d+(?:[.,]\d+)?)\s*(?:m|mil|million|kk)\b", re.I)
+# 帖子正文里的报价：一口价 / 起拍价 / 要价（单位 B）
+ASK_RE = re.compile(r"(buy\s*-?\s*out|\bb/?o\b|start(?:ing)?\s*(?:bid|at|price)?|bidding\s+(?:at|from)|opening\s+bid|asking(?:\s+price)?|price|selling\s+(?:it\s+)?for)"
+                    r"[^0-9\n]{0,25}?(\d+(?:[.,]\d+)?)\s*(?:b|bil|bill|billion|bn)\b", re.I)
+TRANSLATE_URL = "https://translate.googleapis.com/translate_a/t?client=gtx&sl=en&tl=zh-CN&format=html"   # 固定英文：术语先换成中文后自动检测会误判
+# 机器翻译后修正的 EVE 术语
+# 机器翻译后修正的常见误译（只改不翻译标记以外的文字，官方名称不受影响）
+ZH_FIX = [("杀戮权", "击杀权"), ("跳跃克隆体", "远距克隆"), ("跳跃克隆", "远距克隆"), ("NPC 公司", "NPC 军团"), ("NPC公司", "NPC 军团"), ("公司", "军团"),
+          ("干净秒", "安全等级干净"), ("清洁秒", "安全等级干净"), ("重映射", "属性重置"), ("帐户", "账号"), ("账户", "账号"), ("安全状态", "安全等级"),
+          ("试点", "飞行员"), ("挖掘机", "采掘者"), ("秘密行动", "隐形特勤舰"), ("黑行动", "黑隐特勤舰"), ("传真飞行员", "战力辅助舰飞行员"), ("传真", "战力辅助舰"),
+          ("侦察船", "侦察舰"), ("跳跃货船", "战略货舰"), ("跳跃货轮", "战略货舰"), ("货轮", "货舰"), ("盾牌", "护盾"), ("中共", "CCP")]
+
+
+def zh_fix(html):
+    parts = re.split(r'(<span class="notranslate">.*?</span>)', html, flags=re.S)
+    for i in range(0, len(parts), 2):
+        for a, b in ZH_FIX:
+            parts[i] = parts[i].replace(a, b)
+    # 技能名后的等级：翻译会吞掉空格（采掘者操作V → 采掘者操作 V）
+    return re.sub(r"(</span>)\s*([IV]{1,3}|[1-5])(?![\w-])", r"\1 \2", "".join(parts))
+
+
+AMOUNT_RE = re.compile(r"\b\d+(?:[.,]\d+)?\s*(?:b|bil|bill|billion|bn|kkk|m|mil|mill|million|kk)\b(?:\s*(?:isk|sp))?", re.I)
+
+
+# 游戏术语：常用缩写与船级（区分大小写，整词匹配）。舰船、技能、植入体等的官方中文名由 EveGlossary 从装配数据读取
+EVE_TERMS = {
+    "BS": "战列舰", "BC": "战列巡洋舰", "BCs": "战列巡洋舰", "HAC": "重型突击巡洋舰", "HACs": "重型突击巡洋舰", "HIC": "重型拦截巡洋舰", "HICs": "重型拦截巡洋舰",
+    "Dictor": "拦截舰", "Dictors": "拦截舰", "Interdictor": "拦截舰", "Interdictors": "拦截舰", "FAX": "战力辅助舰", "Fax": "战力辅助舰", "FAXes": "战力辅助舰",
+    "Force Auxiliary": "战力辅助舰", "Force Auxiliaries": "战力辅助舰", "Dread": "无畏舰", "Dreads": "无畏舰", "Dreadnought": "无畏舰", "Dreadnoughts": "无畏舰",
+    "Lancer": "枪骑兵级无畏舰", "Lancers": "枪骑兵级无畏舰", "Carrier": "航空母舰", "Carriers": "航空母舰", "Super": "超级航母", "Supers": "超级航母",
+    "Supercarrier": "超级航母", "Supercarriers": "超级航母", "Titan": "泰坦", "Titans": "泰坦", "Blops": "黑隐特勤舰", "BLOPS": "黑隐特勤舰", "BlOps": "黑隐特勤舰",
+    "CovOps": "隐形特勤舰", "Cov Ops": "隐形特勤舰", "T3": "T3", "T3C": "战略巡洋舰", "T3Cs": "战略巡洋舰", "T3D": "战术驱逐舰", "T3Ds": "战术驱逐舰",
+    "Strategic Cruiser": "战略巡洋舰", "Strategic Cruisers": "战略巡洋舰", "Tactical Destroyer": "战术驱逐舰", "Tactical Destroyers": "战术驱逐舰",
+    "Logi": "后勤", "Logistics": "后勤", "Recon": "侦察舰", "Recons": "侦察舰", "Marauder": "掠夺舰", "JF": "战略货舰", "JFs": "战略货舰",
+    "Jump Freighter": "战略货舰", "Jump Freighters": "战略货舰", "Freighter": "货舰", "Freighters": "货舰", "Cyno": "诱导力场", "Cynos": "诱导力场",
+    "Covert Cyno": "隐秘诱导力场", "Capital": "旗舰", "Capitals": "旗舰", "Caps": "旗舰", "Exhumer": "采掘者", "Barge": "采矿驳船", "Barges": "采矿驳船",
+    "Mining Barge": "采矿驳船", "Interceptor": "截击舰", "Bomber": "隐形轰炸舰", "Bombers": "隐形轰炸舰", "Stealth Bomber": "隐形轰炸舰", "Stealth Bombers": "隐形轰炸舰",
+    "Command Ship": "指挥舰", "Command Ships": "指挥舰", "Command Destroyer": "指挥驱逐舰", "Command Destroyers": "指挥驱逐舰",
+    "Battleship": "战列舰", "Battleships": "战列舰", "Battlecruiser": "战列巡洋舰", "Battlecruisers": "战列巡洋舰", "Cruiser": "巡洋舰", "Cruisers": "巡洋舰",
+    "Destroyer": "驱逐舰", "Destroyers": "驱逐舰", "Frigate": "护卫舰", "Frigates": "护卫舰", "Assault Frigate": "突击护卫舰", "Assault Frigates": "突击护卫舰",
+    "Heavy Assault Cruiser": "重型突击巡洋舰", "Heavy Assault Cruisers": "重型突击巡洋舰", "Logistics Cruiser": "后勤舰", "Logistics Cruisers": "后勤舰",
+    "DST": "深层空间运输舰", "DSTs": "深层空间运输舰", "Blockade Runner": "偷运舰", "Blockade Runners": "偷运舰", "Hauler": "运输舰", "Haulers": "运输舰",
+    "Industrial": "运输舰", "Industrials": "运输舰", "Jump Clone": "远距克隆", "Jump Clones": "远距克隆", "Remap": "属性重置", "Remaps": "属性重置",
+    "remap": "属性重置", "remaps": "属性重置", "Bonus Remap": "额外属性重置", "Kill Rights": "击杀权", "Kill rights": "击杀权", "kill rights": "击杀权",
+    "Security Status": "安全等级", "Security status": "安全等级", "security status": "安全等级", "Sec Status": "安全等级", "sec status": "安全等级",
+    "NPC corp": "NPC 军团", "NPC Corp": "NPC 军团", "Omega": "欧米伽", "Alpha": "阿尔法", "Abyss": "深渊", "Abyssal": "深渊", "Incursion": "入侵", "Incursions": "入侵",
+    "Wormhole": "虫洞", "Wormholes": "虫洞", "WH": "虫洞", "Nullsec": "00 区", "nullsec": "00 区", "Null": "00 区", "Lowsec": "低安", "lowsec": "低安",
+    "Highsec": "高安", "highsec": "高安", "Hisec": "高安", "Ratting": "刷怪", "ratting": "刷怪", "Skill Injector": "技能注入器", "Skill Extractor": "技能提取器",
+    "Large Skill Injector": "大型技能注入器", "Unallocated SP": "未分配技能点", "unallocated SP": "未分配技能点", "Unallocated": "未分配",
+    "Implants": "植入体", "implants": "植入体", "Implant": "植入体", "Clone": "克隆", "Clones": "克隆", "Character Transfer": "角色转移", "character transfer": "角色转移",
+    "CCP": "CCP", "ccp": "CCP", "Quantum Anomaly": "Quantum Anomaly", "SkillQ": "SkillQ", "SKILLQ": "SkillQ", "PLEX": "PLEX", "Plex": "PLEX",
+    "killrights": "击杀权", "Killrights": "击杀权", "kill right": "击杀权", "Kill Right": "击杀权", "KR": "击杀权",
+    "SKILLQ overview": "SkillQ 技能概览", "Skillq overview": "SkillQ 技能概览", "jita": "吉他",
+    "Positive sec": "安全等级为正", "positive sec": "安全等级为正", "Positive Sec": "安全等级为正", "clean sec": "安全等级干净", "Clean sec": "安全等级干净",
+    "Positive Wallet": "钱包余额为正", "Positive wallet": "钱包余额为正", "positive wallet": "钱包余额为正",
+    "EVE": "EVE", "Eve": "EVE", "EVE Time": "EVE 时间", "Eve Time": "EVE 时间", "Char": "角色", "char": "角色", "Toon": "角色", "toon": "角色",
+    "Jita": "吉他", "JITA": "吉他", "Dodixie": "多迪谢", "Rens": "伦斯", "Hek": "赫克", "Perimeter": "皮尔米特",
+    "Shield": "护盾", "Armor": "装甲", "Armour": "装甲", "Hull": "结构", "Skills": "技能", "Skill Points": "技能点",
+    "Amarr": "艾玛", "Caldari": "加达里", "Gallente": "盖伦特", "Minmatar": "米玛塔尔", "Triglavian": "三神裔", "ORE": "ORE",
+    "Cyno Alt": "诱导力场小号", "Cyno Alts": "诱导力场小号", "alt": "小号", "alts": "小号", "Alt": "小号", "Alts": "小号",
+}
+# 小写写法（论坛里很常见）
+EVE_TERMS.update({w: EVE_TERMS[w.capitalize()] for w in (
+    "cyno", "cynos", "dread", "dreads", "dreadnought", "dreadnoughts", "carrier", "carriers", "super", "supers", "supercarrier", "supercarriers",
+    "titan", "titans", "fax", "logi", "logistics", "recon", "recons", "marauder", "freighter", "freighters", "battleship", "battleships",
+    "battlecruiser", "battlecruisers", "cruiser", "cruisers", "destroyer", "destroyers", "frigate", "frigates", "exhumer", "barge", "barges",
+    "hauler", "haulers", "bomber", "bombers", "interceptor", "wormhole", "wormholes", "clone", "clones", "capital", "capitals", "caps",
+    "blops", "dictor", "dictors", "interdictor", "interdictors", "omega", "alpha", "incursion", "incursions", "industrial", "industrials")})
+# 单个英文词的舰船名里容易和普通英文混淆的，不替换
+EVE_STOP = {"Sin", "Hel", "Lif", "Burst", "Probe", "Prospect", "Omen", "Moa", "Curse", "Vigil", "Echo", "Hound", "Wolf", "Hawk", "Venture", "Guardian", "Legion", "Retribution", "Vengeance"}
+
+
+class EveGlossary:
+    """游戏术语 → 国服官方中文名（翻译前替换并标成不翻译）：装配数据里的舰船、技能、植入体（单词名区分大小写），
+    多个词的装备 / 弹药 / 无人机 / 舰载机名（不区分大小写），以及 EVE_TERMS 里的缩写与船级"""
+
+    def __init__(self, dirs):
+        self.dirs = dirs
+        self.re = None
+        self.exact, self.lower = {}, {}
+        self.skills = {}   # 技能英文名（小写）-> 中文名：后面跟着等级时按技能名，否则按船级（去掉「操作」）
+        self.lock = threading.Lock()
+
+    def load(self):
+        with self.lock:
+            if self.re is not None:
+                return
+            names = {}
+            for d in self.dirs:
+                path = os.path.join(d or "", "fit-data.json")
+                if d and os.path.exists(path):
+                    with open(path) as fh:
+                        fd = json.load(fh)
+                    cat = {int(k): v[1] for k, v in fd["groups"].items()}
+                    for zh, en, group, *_ in fd["types"].values():
+                        c = cat.get(group)
+                        if not en or not zh or en == zh:
+                            continue
+                        if c == 16:
+                            self.skills[en.lower()] = zh
+                        multi = " " in en
+                        if c in (6, 16, 20) or (c in (7, 8, 18, 87, 32) and multi):
+                            if not multi and (en in EVE_STOP or len(en) < 4):
+                                continue
+                            names[en] = zh
+                    break
+            terms = {**names, **EVE_TERMS}
+            for en, zh in terms.items():   # 多个词的不区分大小写，单个词区分（避免和普通英文混淆）
+                if " " in en:
+                    self.lower[en.lower()] = zh
+                else:
+                    self.exact[en] = zh
+            alts = sorted(terms, key=len, reverse=True)
+            pat = "|".join(f"(?i:{re.escape(en)})" if " " in en else re.escape(en) for en in alts)
+            self.re = re.compile(r"(?<![\w-])(?:" + pat + r")(?![\w-])") if alts else False
+            log.info("游戏术语表：%d 条", len(terms))
+
+    def sub(self, text):
+        if self.re is None:
+            self.load()
+        if not self.re:
+            return text
+        def one(m):
+            w = m.group(0)
+            leveled = re.match(r"\s*(?:[IV]{1,3}|[1-5])(?![\w-])", m.string[m.end():])
+            skill = self.skills.get(w.lower())
+            if skill and leveled:      # Gallente Titan V：技能
+                zh = skill
+            else:                      # Gallente Titan pilot：船级
+                zh = self.exact.get(w) or self.lower.get(w.lower())
+                if zh and zh == skill and zh.endswith("操作"):
+                    zh = zh[:-2]
+            return f'<span class="notranslate">{zh}</span>' if zh else w
+        return self.re.sub(one, text)
+
+
+GLOSSARY = EveGlossary([])
+
+
+def zh_prep(html, keep=()):
+    """翻译前：链接文字不翻译；游戏术语换成官方中文名；ISK / 技能点数额不翻译（否则 95Bil 会被译成「95比尔」）"""
+    # 网址样式的链接文字不翻译，其余链接文字照常翻译
+    html = re.sub(r"(<a\b[^>]*>)((?:https?://|www\.)[^<]*)(</a>)", r'\1<span class="notranslate">\2</span>\3', html, flags=re.I)
+    out, skip = [], 0
+    for part in re.split(r"(<[^>]+>)", html):
+        if part.startswith("<"):
+            # 已标成不翻译的内容（链接文字）里不再替换
+            if re.match(r'<span class="notranslate">', part):
+                skip += 1
+            elif part == "</span>" and skip:
+                skip -= 1
+            out.append(part)
+        elif skip:
+            out.append(part)
+        else:
+            text = GLOSSARY.sub(part)
+            for name in keep:   # 发帖人等角色名原样保留
+                text = re.sub(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])", lambda m: f'<span class="notranslate">{m.group(0)}</span>', text)
+            out.append("".join(p if p.startswith("<") else AMOUNT_RE.sub(lambda m: f'<span class="notranslate">{m.group(0)}</span>', p)
+                               for p in re.split(r"(<[^>]+>)", text)))
+    return "".join(out)
+ISK_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*(?:b|bil|bill|billion|bn)\b(?!\s*sp)", re.I)
+
+
+def bazaar_kind(title):
+    t = title.lower()
+    if re.search(r"\bsold\b|\bclosed\b|\bwithdrawn\b", t):
+        return "sold"
+    if re.search(r"\bwtb\b|\bbuying\b|looking for", t):
+        return "wtb"
+    if re.search(r"\bwtt\b|\btrade\b", t):
+        return "wtt"
+    if "auction" in t:
+        return "auction"
+    if re.search(r"\bwts\b|\bselling\b|\bsale\b|\bsell\b", t):
+        return "wts"
+    return ""
+
+
+def bazaar_sp(title):
+    """标题里的技能点（百万）：优先取后面跟着 SP 的数字"""
+    best = None
+    for m in SP_RE.finditer(title):
+        if re.match(r"\s*isk", title[m.end():], re.I):
+            continue
+        v = float(m.group(1).replace(",", "."))
+        if not 0.5 <= v <= 700:
+            continue
+        if m.group(2):
+            return v
+        best = best if best is not None else v
+    return best
+
+
+def bazaar_ts(iso):
+    try:
+        return dt.datetime.fromisoformat((iso or "").replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0
+
+
+def bazaar_boards(html):
+    """1 楼里的 qsna.eu 角色（一帖卖多个角色时有多个），按出现顺序去重，最多 8 个"""
+    return list(dict.fromkeys(int(x) for x in QSNA_RE.findall(html or "")))[:8]
+
+
+def board_sp(d):
+    """qsna.eu 角色数据里的总技能点"""
+    info = ((d or {}).get("esiData") or {}).get("skills_info") or {}
+    return info.get("total_sp") or sum(s.get("skillpoints_in_skill") or 0 for s in info.get("skills") or [])
+
+
+def board_skills(d):
+    """qsna.eu 角色数据里的技能，压成「技能ID:等级,…」（列表按技能要求筛选用）"""
+    info = ((d or {}).get("esiData") or {}).get("skills_info") or {}
+    return ",".join(f"{x['skill_id']}:{x.get('trained_skill_level') or 0}" for x in info.get("skills") or [] if x.get("skill_id"))
+
+
+def bazaar_text(html):
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html or "")).strip()
+
+
+def bazaar_asks(text):
+    """正文里的报价：[[buyout|start|ask, 十亿 ISK]]，每种取第一个"""
+    out = {}
+    for m in ASK_RE.finditer(text):
+        w = m.group(1).lower()
+        kind = "buyout" if w.startswith(("buy", "b/o", "bo")) else "start" if w.startswith(("start", "bidding", "opening")) else "ask"
+        v = float(m.group(2).replace(",", "."))
+        if kind not in out and 0.1 <= v <= 5000:
+            out[kind] = v
+    return [[k, v] for k, v in out.items()]
+
+
+def bazaar_isk(title):
+    for m in ISK_RE.finditer(title):
+        v = float(m.group(1).replace(",", "."))
+        if 0.1 <= v <= 5000:
+            return v
+    return None
+
+
+def bazaar_price(row):
+    """排序用的价格（十亿 ISK）：一口价 > 要价 > 起拍价 > 标题里的数字"""
+    asks = dict(row.get("asks") or [])
+    return asks.get("buyout") or asks.get("ask") or asks.get("start") or row.get("isk")
+
+
+class Bazaar:
+    """官方论坛角色交易版块的只读代理（论坛没有开放跨域）：列表 / 搜索 / 帖子详情，短时缓存。
+    后台线程慢速读取近期帖子的 1 楼，提取技能点、报价、技能展示链接，存成索引（按技能点 / 价格 / 每技能点价格排序用）"""
+
+    def __init__(self, path=None):
+        self.cache = {}
+        self.lock = threading.Lock()
+        self.zh = collections.OrderedDict()   # 正文 md5 -> 中文译文
+        self.path = path
+        self.index = {}                       # 帖子 ID -> { row 列表行, sp, asks, board, at }
+        self.boards = {}                      # 技能展示站角色 ID -> (时间, 数据)
+        self.pages_done = 0                   # 本次启动后索引已读完的论坛列表页数
+        if path and os.path.exists(path):
+            try:
+                with open(path) as fh:
+                    self.index = {int(k): v for k, v in json.load(fh).items()}
+            except (OSError, ValueError):
+                log.warning("角色交易索引读取失败，重新建立")
+
+    def start(self):
+        threading.Thread(target=self.run, daemon=True, name="bazaar").start()
+        return self
+
+    def run(self):
+        time.sleep(20)
+        while True:
+            try:
+                self.crawl()
+            except Exception:
+                log.exception("角色交易索引出错")
+            time.sleep(BAZAAR_CRAWL_GAP)
+
+    def crawl(self):
+        cid, slug = BAZAAR_CAT
+        for page in range(BAZAAR_CRAWL_PAGES):
+            d = self.fetch(f"/c/{slug}/{cid}/l/latest.json?page={page}")
+            users = {u["id"]: u for u in d.get("users") or []}
+            for t in (d.get("topic_list") or {}).get("topics") or []:
+                if t.get("pinned") or t.get("category_id") != cid:
+                    continue
+                row = self.topic_row(t, users)
+                ix = self.index.get(t["id"])
+                if ix and ix.get("at", 0) > time.time() - 3 * 86400 and ("chars" in ix or not ix.get("board")):   # 1 楼三天内读过：只更新列表信息
+                    ix["row"] = row
+                    continue
+                try:
+                    info = self.op_info(self.fetch(f"/t/{t['id']}.json"))
+                except RuntimeError:
+                    continue
+                # 技能展示站：总技能点（标题和正文都没写时用）与各角色的技能等级（按技能要求筛选用）
+                info["chars"] = []
+                for b in info.pop("boards"):
+                    try:
+                        bd = self.board_data(b)
+                    except RuntimeError:
+                        continue
+                    if b == info["board"]:
+                        info["board_sp"] = round(board_sp(bd) / 1e6, 1) or None
+                    if sk := board_skills(bd):
+                        info["chars"].append([b, bd.get("characterName") or "", board_sp(bd), sk])
+                    time.sleep(1)
+                with self.lock:
+                    self.index[t["id"]] = {"row": row, **info}
+                time.sleep(2)
+            self.save()   # 每页存一次，重启不丢进度
+            self.pages_done = max(self.pages_done, page + 1)
+            self.zh_titles([t["title"] for t in (d.get("topic_list") or {}).get("topics") or [] if t.get("title")])   # 标题译文提前备好
+            if not (d.get("topic_list") or {}).get("more_topics_url"):
+                break
+        cutoff = time.time() - BAZAAR_KEEP_DAYS * 86400
+        with self.lock:
+            for k in [k for k, v in self.index.items() if bazaar_ts(v["row"].get("last_posted_at")) < cutoff]:
+                del self.index[k]
+        self.save()
+        log.info("角色交易索引：%d 帖", len(self.index))
+
+    def save(self):
+        if not self.path:
+            return
+        with self.lock:
+            data = json.dumps(self.index, ensure_ascii=False, separators=(",", ":"))
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as fh:
+            fh.write(data)
+        os.replace(tmp, self.path)
+
+    @staticmethod
+    def op_info(d):
+        posts = (d.get("post_stream") or {}).get("posts") or []
+        html = posts[0].get("cooked") or "" if posts and posts[0].get("post_number") == 1 else ""
+        text = bazaar_text(html)
+        m = BODY_SP_RE.search(text)
+        boards = bazaar_boards(html)
+        return {"sp": float(m.group(1).replace(",", ".")) if m else None, "asks": bazaar_asks(text),
+                "board": boards[0] if boards else None, "boards": boards, "at": time.time()}
+
+    def merge(self, row):
+        """列表行补上索引里的技能点、报价、技能展示站，并算出排序字段"""
+        ix = self.index.get(row["id"]) or {}
+        row = {**row, "sp": row.get("sp") or ix.get("sp") or ix.get("board_sp"), "asks": ix.get("asks") or [], "board": ix.get("board")}
+        row["price"] = bazaar_price(row)
+        row["ratio"] = round(row["price"] * 1000 / row["sp"]) if row["price"] and row["sp"] else None   # 每技能点多少 ISK
+        return row
+
+    def fetch(self, path):
+        now = time.time()
+        with self.lock:
+            hit = self.cache.get(path)
+        if hit and now - hit[0] < BAZAAR_TTL:
+            return hit[1]
+        try:
+            data, _ = get_json(FORUM + path, timeout=20, retries=2, headers={"Accept": "application/json"})
+        except Exception as e:
+            if hit:            # 论坛暂时不可用（含 429）：返回旧数据
+                return hit[1]
+            log.warning("论坛读取失败 %s: %s", path, e)
+            raise RuntimeError("官方论坛暂时无法访问，请稍后再试")
+        with self.lock:
+            if len(self.cache) > 500:
+                for k in sorted(self.cache, key=lambda k: self.cache[k][0])[:250]:
+                    del self.cache[k]
+            self.cache[path] = (now, data)
+        return data
+
+    @staticmethod
+    def avatar(tpl, size=64):
+        if not tpl:
+            return None
+        url = tpl.replace("{size}", str(size))
+        return url if url.startswith("http") else FORUM + url
+
+    def topic_row(self, t, users):
+        op = next((p.get("user_id") for p in t.get("posters") or [] if "Original Poster" in (p.get("description") or "")), None)
+        u = users.get(op) or {}
+        title = t.get("title") or ""
+        pinned = bool(t.get("pinned"))
+        return {"id": t["id"], "title": title, "slug": t.get("slug"), "kind": bazaar_kind(title) or ("" if pinned else "wts"),   # 没写前缀的基本都是出售
+                "sp": bazaar_sp(title), "isk": bazaar_isk(title),
+                "created_at": t.get("created_at"), "last_posted_at": t.get("last_posted_at") or t.get("bumped_at"),
+                "posts": t.get("posts_count") or 0, "views": t.get("views"), "likes": t.get("like_count"),
+                "closed": bool(t.get("closed") or t.get("archived")), "pinned": pinned,
+                "author": u.get("name") or (u.get("username") or "").replace("_", " ") or None, "avatar": self.avatar(u.get("avatar_template")),
+                "last_poster": (t.get("last_poster_username") or "").replace("_", " ") or None}
+
+    def topics(self, q):
+        page = max(0, min(int(q.get("page") or 0), 200))
+        order = q.get("order") or "activity"
+        if order not in ("activity", "created", "sp", "price", "ratio"):
+            raise ValueError("order 只能是 activity / created / sp / price / ratio")
+        term = (q.get("q") or "").strip()[:100]
+        cid, slug = BAZAAR_CAT
+        if order in ("sp", "price", "ratio"):
+            # 按技能点 / 价格 / 每技能点价格：从索引里排（只含后台已读过 1 楼的近期帖子）
+            asc = q.get("dir") == "asc"
+            with self.lock:
+                rows = [self.merge(v["row"]) for v in self.index.values()]
+            rows = [r for r in rows if r[order] is not None and not r["closed"] and r["kind"] in ("wts", "auction")
+                    and (not term or term.lower() in r["title"].lower())]
+            rows.sort(key=lambda r: r[order], reverse=not asc)
+            out = {"page": page, "more": len(rows) > (page + 1) * 30, "forum": f"{FORUM}/c/{slug}/{cid}", "indexed": len(self.index),
+                   "topics": rows[page * 30:(page + 1) * 30]}
+            return self.with_zh(out) if q.get("zh") else out
+        if term:
+            sq = f"{term} #{slug.split('/')[1]} order:{'latest_topic' if order == 'created' else 'latest'}"
+            d = self.fetch("/search.json?" + urllib.parse.urlencode({"q": sq, "page": page + 1}))
+            # 搜索结果的主题不带发帖人：用命中的帖子补（优先 1 楼）
+            ops = {}
+            for p in sorted(d.get("posts") or [], key=lambda p: p.get("post_number") or 0, reverse=True):
+                ops[p.get("topic_id")] = p
+            rows = []
+            for t in d.get("topics") or []:
+                if t.get("category_id") != cid:
+                    continue
+                p = ops.get(t["id"]) if (ops.get(t["id"]) or {}).get("post_number") == 1 else None
+                rows.append(self.topic_row({**t, "posters": [{"user_id": 0, "description": "Original Poster"}] if p else []},
+                                           {0: {"name": p.get("name"), "username": p.get("username"), "avatar_template": p.get("avatar_template")}} if p else {}))
+            more = bool((d.get("grouped_search_result") or {}).get("more_full_page_results"))
+        elif page == 0 and self.index:
+            # 首屏：后台索引里的全部近期帖子（约 3 个月）+ 论坛第 1 页的实时数据，一次给全
+            key = "created_at" if order == "created" else "last_posted_at"
+            qs = {"order": "created", "ascending": "false"} if order == "created" else {}
+            d = self.fetch(f"/c/{slug}/{cid}/l/latest.json?" + urllib.parse.urlencode(qs))
+            users = {u["id"]: u for u in d.get("users") or []}
+            tl = d.get("topic_list") or {}
+            live = {t["id"]: self.topic_row(t, users) for t in tl.get("topics") or [] if t.get("category_id") == cid}
+            with self.lock:
+                rows = {k: v["row"] for k, v in self.index.items()}
+            rows.update(live)
+            rows = [r for r in rows.values() if r.get("pinned")] + sorted([r for r in rows.values() if not r.get("pinned")], key=lambda r: bazaar_ts(r.get(key)), reverse=True)
+            more = bool(tl.get("more_topics_url"))
+        else:
+            # 加载更多：首屏已含索引本轮读过的前几页，接着读更早的论坛页（重复的帖子前端会去掉）
+            fp = page + max(0, self.pages_done - 1) if self.index else page
+            qs = {"page": fp, **({"order": "created", "ascending": "false"} if order == "created" else {})}
+            d = self.fetch(f"/c/{slug}/{cid}/l/latest.json?" + urllib.parse.urlencode(qs))
+            users = {u["id"]: u for u in d.get("users") or []}
+            tl = d.get("topic_list") or {}
+            rows = [self.topic_row(t, users) for t in tl.get("topics") or [] if t.get("category_id") == cid]
+            more = bool(tl.get("more_topics_url"))
+        out = {"page": page, "more": more, "forum": f"{FORUM}/c/{slug}/{cid}", "indexed": len(self.index), "topics": [self.merge(r) for r in rows]}
+        return self.with_zh(out) if q.get("zh") else out
+
+    def topic(self, q):
+        tid = int(q.get("id") or 0)
+        if tid <= 0:
+            raise ValueError("缺少 id")
+        d = self.fetch(f"/t/{tid}.json")
+        if d.get("category_id") != BAZAAR_CAT[0]:
+            raise KeyError("不是角色交易版块的帖子")
+        ps = d.get("post_stream") or {}
+        posts = list(ps.get("posts") or [])
+        have = {p["id"] for p in posts}
+        rest = [i for i in (ps.get("stream") or []) if i not in have][:max(0, BAZAAR_MAX_POSTS - len(posts))]
+        for i in range(0, len(rest), 50):
+            chunk = rest[i:i + 50]
+            more = self.fetch(f"/t/{tid}/posts.json?" + "&".join("post_ids[]=%d" % x for x in chunk))
+            posts += (more.get("post_stream") or {}).get("posts") or []
+        title = d.get("title") or ""
+        op_html = posts[0].get("cooked") or "" if posts and posts[0].get("post_number") == 1 else ""
+        op = bazaar_text(op_html)
+        body_sp = BODY_SP_RE.search(op)
+        boards = bazaar_boards(op_html)
+        return {"id": tid, "title": title, "url": f"{FORUM}/t/{d.get('slug') or 'topic'}/{tid}", "kind": bazaar_kind(title),
+                "sp": bazaar_sp(title) or (float(body_sp.group(1).replace(",", ".")) if body_sp else None), "isk": bazaar_isk(title), "asks": bazaar_asks(op),
+                "board": boards[0] if boards else None, "boards": boards, "created_at": d.get("created_at"), "last_posted_at": d.get("last_posted_at"),
+                "posts_count": d.get("posts_count"), "views": d.get("views"), "closed": bool(d.get("closed") or d.get("archived")),
+                "posts": [{"n": p.get("post_number"), "user": p.get("username"), "name": p.get("name") or (p.get("username") or "").replace("_", " "), "avatar": self.avatar(p.get("avatar_template")),
+                           "created_at": p.get("created_at"), "updated_at": p.get("updated_at"), "reply_to": p.get("reply_to_post_number"),
+                           "likes": next((a.get("count") for a in p.get("actions_summary") or [] if a.get("id") == 2), 0),
+                           "html": p.get("cooked") or ""} for p in sorted(posts, key=lambda p: p.get("post_number") or 0)]}
+
+    def translate(self, q):
+        """帖子各楼层的中文机器翻译（Google 翻译，保留 HTML 标签）：只翻译本版块帖子，译文按原文缓存"""
+        t = self.topic(q)
+        key = lambda h: hashlib.md5(h.encode()).hexdigest()
+        keep = sorted({n for p in t["posts"] for n in (p.get("name"), (p.get("user") or "").replace("_", " ")) if n and len(n) >= 3}, key=len, reverse=True)[:60]
+        todo = [p["html"] for p in t["posts"] if p["html"] and key(p["html"]) not in self.zh]
+        batch, size = [], 0
+        for h in todo + [None]:
+            if h is not None and (not batch or size + len(h) < 30000):
+                batch.append(h)
+                size += len(h)
+                continue
+            if batch:
+                body = urllib.parse.urlencode([("q", zh_prep(x, keep)) for x in batch]).encode()
+                try:
+                    res, _ = get_json(TRANSLATE_URL, timeout=30, retries=2, data=body,
+                                      headers={"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"})
+                except Exception as e:
+                    log.warning("翻译失败: %s", e)
+                    raise RuntimeError("翻译服务暂时不可用")
+                for src, zh in zip(batch, res or []):
+                    zh = zh[0] if isinstance(zh, list) else zh
+                    if isinstance(zh, str):
+                        zh = zh_fix(zh)
+                        with self.lock:
+                            self.zh[key(src)] = zh
+                            while len(self.zh) > 20000:
+                                self.zh.popitem(last=False)
+            batch, size = ([h], len(h)) if h is not None else ([], 0)
+        return {"id": t["id"], "title": self.zh_title(t["title"]),
+                "posts": {p["n"]: self.zh.get(key(p["html"])) for p in t["posts"] if p["html"]}}
+
+    def skills(self, q):
+        """卖家在 1 楼贴的 qsna.eu 技能展示：读其公开接口（ESI 格式的技能列表），缓存 30 分钟"""
+        t = self.topic(q)
+        cid = int(q.get("char") or 0) or t.get("board")
+        if not cid or cid not in t.get("boards"):
+            return {"source": None, "skills": None}
+        d = self.board_data(cid)
+        esi = d.get("esiData") or {}
+        skills = [[s["skill_id"], s.get("trained_skill_level") or 0, s.get("skillpoints_in_skill") or 0]
+                  for s in (esi.get("skills_info") or {}).get("skills") or [] if s.get("skill_id")]
+        info = esi.get("public_info") or {}
+        return {"source": "qsna.eu", "url": f"https://www.qsna.eu/eve/characters/{cid}/information", "character_id": cid,
+                "name": d.get("characterName") or info.get("name"), "birthday": info.get("birthday"), "updated_at": d.get("updatedAt"),
+                "total_sp": board_sp(d), "unallocated_sp": (esi.get("skills_info") or {}).get("unallocated_sp"),
+                "implants": esi.get("implants_info") or [], "skills": skills if skills else None}
+
+    def skillset(self, q):
+        """索引里各帖技能展示角色的技能等级：{帖子ID: [[角色ID, 角色名, 总技能点, "技能ID:等级,…"], …]}"""
+        with self.lock:
+            out = {k: v["chars"] for k, v in self.index.items() if v.get("chars")}
+            pending = sum(1 for v in self.index.values() if v.get("board") and "chars" not in v)
+        return {"topics": out, "pending": pending}
+
+    def board_data(self, cid):
+        hit = self.boards.get(cid)
+        if not hit or time.time() - hit[0] > 1800:
+            try:
+                d, _ = get_json(f"https://www.qsna.eu/api/eve/characters/{cid}", timeout=30, retries=2, headers={"Accept": "application/json"})
+            except Exception as e:
+                if not hit:
+                    log.warning("qsna.eu 读取失败 %s: %s", cid, e)
+                    raise RuntimeError("技能展示站 qsna.eu 暂时无法访问")
+                d = hit[1]
+            hit = (time.time(), d)
+            with self.lock:
+                self.boards[cid] = hit
+                while len(self.boards) > 500:
+                    self.boards.pop(next(iter(self.boards)))
+        return hit[1] or {}
+
+    def zh_titles(self, titles):
+        """列表里的帖子标题：未翻译过的一次批量翻译（失败就不显示译文）"""
+        todo = [t for t in dict.fromkeys(titles) if "t:" + t not in self.zh]
+        for i in range(100, len(todo), 100):   # 一次最多翻 100 条
+            self.zh_titles(todo[i:i + 100])
+        todo = todo[:100]
+        if todo:
+            esc = lambda t: zh_prep(t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+            try:
+                res, _ = get_json(TRANSLATE_URL, timeout=20, retries=1, data=urllib.parse.urlencode([("q", esc(t)) for t in todo]).encode(),
+                                  headers={"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"})
+                for t, zh in zip(todo, res or []):
+                    zh = zh[0] if isinstance(zh, list) else zh
+                    if isinstance(zh, str):
+                        with self.lock:
+                            self.zh["t:" + t] = html_lib.unescape(re.sub(r"<[^>]+>", "", zh_fix(zh))).strip()
+            except Exception as e:
+                log.warning("标题翻译失败: %s", e)
+        return [self.zh.get("t:" + t) for t in titles]
+
+    def with_zh(self, out):
+        if q_zh := [r["title"] for r in out["topics"]]:
+            for r, zh in zip(out["topics"], self.zh_titles(q_zh)):
+                r["title_zh"] = zh
+        return out
+
+    def zh_title(self, title):
+        k = "t:" + title
+        if k not in self.zh:
+            try:
+                src = zh_prep(title.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+                res, _ = get_json(TRANSLATE_URL, timeout=15, retries=1, data=urllib.parse.urlencode({"q": src}).encode(),
+                                  headers={"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"})
+                zh = res[0][0] if isinstance(res[0], list) else res[0]
+                zh = html_lib.unescape(re.sub(r"<[^>]+>", "", zh_fix(zh)))
+                self.zh[k] = zh
+            except Exception:
+                return None
+        return self.zh[k]
+
+
 # ---------------------------------------------------------------- 深渊装备估价
 class Abyssal:
     """MutaMarket 深渊装备估价代理：每个深渊类型一个随机森林模型（真实单件合同成交价训练），按 item_id 估价。
@@ -4305,13 +5046,18 @@ def kb_routes(api):
             "summary": api.summary, "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "shipfits": api.shipfits}
 
 
-def make_handler(api, static_dir, industry, abyssal, cn_apis=None):
+def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, cbg=None):
     apis = {"tq": api, **(cn_apis or {})}
     v1 = open_routes(api, industry, abyssal)
     v1_cn = {s: open_routes(a, industry, abyssal) for s, a in (cn_apis or {}).items()}
     post_limiter = RateLimiter(ABYSSAL_POST_RATE)
+    bazaar = bazaar or Bazaar()
+    cbg = cbg or Cbg()
     routes = {**kb_routes(api), "bpprices": api.bpprices, "couriers": api.couriers,
-              "contracts": lambda q: api.pc.list(q), "contracts/status": lambda q: api.pc.info(q), "obsvol": lambda q: api.obs.query(q)}
+              "contracts": lambda q: api.pc.list(q), "contracts/status": lambda q: api.pc.info(q), "obsvol": lambda q: api.obs.query(q),
+              "bazaar": bazaar.topics, "bazaar/topic": bazaar.topic, "bazaar/translate": bazaar.translate, "bazaar/skills": bazaar.skills,
+              "bazaar/cbg": cbg.items, "bazaar/cbg/detail": cbg.detail,
+              "bazaar/skillset": bazaar.skillset, "bazaar/cbg/skillset": cbg.skillset}
     kb = {s: kb_routes(a) for s, a in apis.items()}
 
     def kb_server(q):
@@ -4562,7 +5308,9 @@ def main():
         CnWorkers(cn_store, queue).start()
         cn_apis[name] = Api(cn_store)
         threading.Thread(target=cn_apis[name].warm, daemon=True).start()
-    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal, cn_apis))
+    GLOSSARY.dirs = [args.static, os.path.dirname(here), "/opt/eve/dist"]
+    bazaar = Bazaar(os.path.join(os.path.dirname(os.path.abspath(args.db)), "bazaar-index.json")).start()
+    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal, cn_apis, bazaar, Cbg().start()))
     log.info("击杀记录服务已启动 http://%s:%d", args.bind, args.port)
     server.serve_forever()
 

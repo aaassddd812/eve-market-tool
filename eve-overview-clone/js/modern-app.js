@@ -331,8 +331,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', wh: '#wh', guide: '#guide' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', wh: 'whView', guide: 'guideView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', bazaar: '#bazaar', wh: '#wh', guide: '#guide' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', bazaar: 'bazaarView', wh: 'whView', guide: 'guideView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -386,7 +386,7 @@ function switchView(view) {
   syncNavActive(true);
   for (const [v, id] of Object.entries(VIEW_IDS)) $(id).hidden = v !== view;
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
-  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选', guide: '教程分类', sov: '主权规划导航', abyss: '深渊装备类型', pi: '行星工业导航' }[view] || '';
+  $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选', guide: '教程分类', sov: '主权规划导航', abyss: '深渊装备类型', bazaar: '角色交易筛选', pi: '行星工业导航' }[view] || '';
   closeDrawer();
   if (prev !== view) {
     restoreScroll(viewScroll[view]);
@@ -410,6 +410,7 @@ function switchView(view) {
   if (view === 'war') openWar();
   if (view === 'sov') openSov();
   if (view === 'abyss') openAbyss();
+  if (view === 'bazaar') openBazaar();
   if (view === 'wh') openWormhole();
   if (view === 'guide') openGuides();
 }
@@ -418,7 +419,7 @@ function switchView(view) {
 const PAGE_SKELETON = {
   pi: ['piMain', { cards: 4, rows: 6 }], industry: ['industryMain', { tabs: 6, cards: 4, rows: 8 }], lp: ['lpMain', { tabs: 3, rows: 10 }],
   courier: ['courierMain', { tabs: 2, rows: 10 }], war: ['warMain', { tabs: 2, cards: 4, rows: 8 }], sov: ['sovMain', { cards: 4, rows: 6 }],
-  abyss: ['abyssMain', { tabs: 3, grid: 6 }], wh: ['whMain', { tabs: 6, cards: 4, rows: 6 }], guide: ['guideMain', { tabs: 3, rows: 8 }],
+  abyss: ['abyssMain', { tabs: 3, grid: 6 }], bazaar: ['bazaarMain', { rows: 10 }], wh: ['whMain', { tabs: 6, cards: 4, rows: 6 }], guide: ['guideMain', { tabs: 3, rows: 8 }],
   appraisal: ['apMain', { cards: 3, rows: 4 }], contracts: ['ctMain', { tabs: 2, rows: 10 }]
 };
 function showPageSkeleton(view) {
@@ -483,6 +484,23 @@ function loadAbyssModule() {
     return m;
   }).catch((error) => { abyssLoading = null; throw error; });
   return abyssLoading;
+}
+// 角色交易（宁静服：官方论坛 Character Bazaar）：首次进入时加载
+let bazaarLoading = null;
+function loadBazaarModule() {
+  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v11').then((m) => {
+    m.initBazaar({ esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices: getLiveHubPrices, fitData: () => loadFittingModule().then((f) => f.fitData()), closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
+    return m;
+  }).catch((error) => { bazaarLoading = null; throw error; });
+  return bazaarLoading;
+}
+async function openBazaar() {
+  try {
+    const m = await loadBazaarModule();
+    await m.showBazaar(location.hash.startsWith('#bazaar') ? location.hash : '#bazaar');
+  } catch (error) {
+    showToast('角色交易加载失败：' + error.message, 'error', 4000);
+  }
 }
 async function openAbyss() {
   try {
@@ -771,7 +789,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v74').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v75').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -1022,6 +1040,7 @@ const SIDEBARS = {
   guide: { id: 'guideSidebar', reopen: 'guideSidebarReopen', key: 'eve-guide-sidebar-collapsed' },
   sov: { id: 'sovSidebar', reopen: 'sovSidebarReopen', key: 'eve-sov-sidebar-collapsed' },
   abyss: { id: 'abyssSidebar', reopen: 'abyssSidebarReopen', key: 'eve-abyss-sidebar-collapsed' },
+  bazaar: { id: 'bazaarSidebar', reopen: 'bazaarSidebarReopen', key: 'eve-bazaar-sidebar-collapsed' },
   pi: { id: 'piSidebar', reopen: 'piSidebarReopen', key: 'eve-pi-sidebar-collapsed' }
 };
 
@@ -1071,6 +1090,9 @@ function initSidebar() {
   if (store.get('eve-abyss-sidebar-collapsed') === '1') setSidebarCollapsed('abyssSidebar', 'abyssSidebarReopen', true);
   $('abyssSidebarCollapse').addEventListener('click', () => toggleSidebar('abyss'));
   $('abyssSidebarReopen').addEventListener('click', () => toggleSidebar('abyss'));
+  if (store.get('eve-bazaar-sidebar-collapsed') === '1') setSidebarCollapsed('bazaarSidebar', 'bazaarSidebarReopen', true);
+  $('bazaarSidebarCollapse').addEventListener('click', () => toggleSidebar('bazaar'));
+  $('bazaarSidebarReopen').addEventListener('click', () => toggleSidebar('bazaar'));
   if (store.get('eve-pi-sidebar-collapsed') === '1') setSidebarCollapsed('piSidebar', 'piSidebarReopen', true);
   $('piSidebarCollapse').addEventListener('click', () => toggleSidebar('pi'));
   $('piSidebarReopen').addEventListener('click', () => toggleSidebar('pi'));
@@ -2913,6 +2935,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#war')) { if (state.currentView !== 'war') switchView('war'); return; }
     if (location.hash.startsWith('#sov')) { if (state.currentView !== 'sov') switchView('sov'); else openSov(); return; }
     if (location.hash.startsWith('#abyss')) { if (state.currentView !== 'abyss') switchView('abyss'); else openAbyss(); return; }
+    if (location.hash.startsWith('#bazaar')) { if (state.currentView !== 'bazaar') switchView('bazaar'); else openBazaar(); return; }
     if (location.hash.startsWith('#wh')) { if (state.currentView !== 'wh') switchView('wh'); else openWormhole(); return; }
     if (location.hash.startsWith('#guide')) { if (state.currentView !== 'guide') switchView('guide'); else openGuides(); return; }
     if (location.hash.startsWith('#arb')) { openArb({ updateHash: false }); return; }
@@ -5665,6 +5688,7 @@ function init() {
   if (location.hash.startsWith('#war')) switchView('war'); // 战争
   if (location.hash.startsWith('#sov')) switchView('sov'); // 主权规划
   if (location.hash.startsWith('#abyss')) switchView('abyss'); // 深渊市场
+  if (location.hash.startsWith('#bazaar')) switchView('bazaar'); // 角色交易
   if (location.hash.startsWith('#wh')) switchView('wh'); // 虫洞
   if (location.hash.startsWith('#guide')) switchView('guide'); // 教程
   renderFavorites();
@@ -5732,6 +5756,7 @@ const PAGE_PRELOAD = {
   war: () => loadWarModule().then((m) => m.preload()),
   sov: () => loadSovModule().then((m) => m.preload()),
   abyss: () => loadAbyssModule().then((m) => m.preload()),
+  bazaar: () => loadBazaarModule().then((m) => m.preload()),
   wh: () => loadWormholeModule().then((m) => m.preload()),
   guide: () => loadGuidesModule().then((m) => m.preload()),
   appraisal: () => loadAppraisalModule()

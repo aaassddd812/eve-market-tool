@@ -22,7 +22,7 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=75"></script>
+  <script src="js/i18n.js?v=80"></script>
   <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
   <script type="importmap">
     {
@@ -32,7 +32,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v182">
+  <link rel="stylesheet" href="css/modern-style.css?v=v191">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -107,6 +107,10 @@
         <button class="nav-btn" data-view="abyss" role="tab" title="深渊装备市场与估价（MutaMarket 数据）" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 4 7v10l8 5 8-5V7z"/><path d="m4 7 8 5 8-5M12 12v10"/></svg>
           <span>深渊</span>
+        </button>
+        <button class="nav-btn" data-view="bazaar" role="tab" title="角色交易：买卖角色（宁静服数据来自官方论坛 Character Bazaar，晨曦服来自网易藏宝阁）" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="7" r="3.5"/><path d="M3 20v-1.5A4.5 4.5 0 0 1 7.5 14h3"/><path d="M15 14h6l-2-2M21 18h-6l2 2"/></svg>
+          <span>角色交易</span>
         </button>
         <button class="nav-btn" data-view="wh" role="tab" title="虫洞：星系、虫洞类型、天象、质量计算、席拉连接" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12a2 2 0 1 0 2 2 4 4 0 1 0-4-4 6 6 0 1 0 6 6 8 8 0 1 0-8-8"/></svg>
@@ -689,6 +693,27 @@
         </div>
       </div>
 
+      <div class="view-container" id="bazaarView" hidden>
+        <aside class="sidebar ind-sidebar sov-sidebar" id="bazaarSidebar" aria-label="角色交易筛选">
+          <div class="sidebar-header">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+              <input type="search" id="bazaarSearch" placeholder="搜索帖子（英文关键词）" autocomplete="off" spellcheck="false" aria-label="搜索角色交易帖子">
+            </div>
+            <button class="collapse-btn" id="bazaarSidebarCollapse" title="收起侧边栏 ([)" aria-label="收起侧边栏">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+          </div>
+          <div class="sidebar-content ind-side" id="bazaarSide"></div>
+        </aside>
+        <div class="kb-scroll ind-scroll">
+          <button class="sidebar-reopen" id="bazaarSidebarReopen" title="展开侧边栏 ([)" aria-label="展开侧边栏" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+          </button>
+          <div class="kb-wrap" id="bazaarMain"></div>
+        </div>
+      </div>
+
       <div class="view-container" id="abyssView" hidden>
         <aside class="sidebar ind-sidebar sov-sidebar" id="abyssSidebar" aria-label="深渊装备类型">
           <div class="sidebar-header">
@@ -1088,6 +1113,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v237" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v248" type="module" data-cfasync="false"></script>
 </body>
 </html>

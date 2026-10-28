@@ -9,7 +9,7 @@
 (function () {
   'use strict';
   var KEY = 'eve-lang';
-  var VER = '75';
+  var VER = '80';
   var CN_TZ = /^Asia\/(Shanghai|Chongqing|Chungking|Harbin|Urumqi|Kashgar|Hong_Kong|Macau|Macao|Taipei)$/;
 
   function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
