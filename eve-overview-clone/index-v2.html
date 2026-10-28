@@ -22,7 +22,7 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=101"></script>
+  <script src="js/i18n.js?v=103"></script>
   <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
   <script type="importmap">
     {
@@ -32,7 +32,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v205">
+  <link rel="stylesheet" href="css/modern-style.css?v=v207">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -882,6 +882,7 @@
               <h2>尚未绑定 ESI</h2>
               <p>绑定后查看角色、资产、订单与钱包</p>
               <button class="btn btn-primary" id="bindEsiBtn">绑定 ESI</button>
+              <button class="btn btn-ghost" data-cloud-sync title="在别的浏览器同步过设置和角色？登录取回">云同步登录</button>
             </div>
 
             <div class="profile-accounts" id="profileAccounts" role="group" aria-label="已绑定角色" hidden></div>
@@ -900,6 +901,7 @@
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
                     <span>刷新数据</span>
                   </button>
+                  <button class="btn" data-cloud-sync title="把设置和绑定的角色同步到其他浏览器">云同步</button>
                   <button class="btn btn-danger-ghost" id="unbindEsiBtn">解绑</button>
                 </div>
                 </div>
@@ -1113,6 +1115,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v287" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v291" type="module" data-cfasync="false"></script>
 </body>
 </html>

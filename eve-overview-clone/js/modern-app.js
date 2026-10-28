@@ -1,4 +1,5 @@
 import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17';
+import * as CS from './cloud-sync.js?v=2';
 import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v13';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v35';
@@ -589,13 +590,14 @@ async function getLiveHubPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v51').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v53').then((m) => {
     m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       esiAccountFetch, esiAccountList, resolveTypeNames, hasScope, structureNameMap, saveStructureNames,
       readToken: () => state.esiToken || readEsiToken(),
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      openEsiBind: (group) => { switchView('profile'); openEsiModal(group); },
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
     });
     return m;
@@ -1996,6 +1998,7 @@ const SCOPE_GROUPS = [
   { id: 'fleet', name: '舰队', desc: '查看舰队成员（需舰队指挥）', scopes: ['esi-fleets.read_fleet.v1'] },
   // 新权限默认不勾（CCP 后台的应用要先开通，否则授权会被拒）
   { id: 'corpContracts', name: '军团合同', desc: '查看军团合同', scopes: ['esi-contracts.read_corporation_contracts.v1'], optIn: true },
+  { id: 'corpBp', name: '军团蓝图', desc: '制造页查看军团机库蓝图（需董事职位）', scopes: ['esi-corporations.read_blueprints.v1'], optIn: true },
   { id: 'mail', name: '游戏邮件', desc: '查看游戏邮件（只读）', scopes: ['esi-mail.read_mail.v1'], optIn: true },
   { id: 'corp', name: '军团管理', desc: '钱包、订单、工业、建筑、资产（需军团职位）',
     scopes: ['esi-characters.read_corporation_roles.v1', 'esi-wallet.read_corporation_wallets.v1', 'esi-markets.read_corporation_orders.v1',
@@ -2024,7 +2027,7 @@ function updateScopeGroupCount() {
 }
 // 登录端不接受的权限：曙光服的网易官方应用不支持蓝图权限（登录后报 invalid_scope）；
 // 其他被拒的权限在用户粘贴报错后记下（每个服务器分开），以后生成授权链接时去掉
-const SERVER_BAD_SCOPES = { infinity: ['esi-characters.read_blueprints.v1'] };
+const SERVER_BAD_SCOPES = { infinity: ['esi-characters.read_blueprints.v1', 'esi-corporations.read_blueprints.v1'] };
 const BAD_SCOPE_KEY = 'eve-esi-bad-scopes-' + SERVER.id;
 function badScopes() {
   return new Set([...(SERVER_BAD_SCOPES[SERVER.id] || []), ...String(store.get(BAD_SCOPE_KEY) || '').split(',').filter(Boolean)]);
@@ -3207,18 +3210,28 @@ function tokenRecord(data, base = {}) {
 }
 
 // 同时有多个请求发现令牌过期时只刷新一次（CCP 的刷新令牌用一次就会更换，并发刷新会让后一个失败）
+// 开了云同步时：刷新前先拉一次（别的浏览器可能已经刷新过，旧的刷新令牌已经作废），刷新后马上上传
 let refreshing = null;
 async function ensureEsiToken() {
-  const token = state.esiToken || readEsiToken();
+  let token = state.esiToken || readEsiToken();
   if (!token || !token.access_token) throw new Error('尚未绑定 ESI');
   if (Date.now() <= (token.expires_at || 0) - 60000) return token;
   if (!refreshing) {
     refreshing = (async () => {
+      if (await CS.pullTokens()) {
+        const synced = readEsiToken();
+        if (synced?.character_id === token.character_id) {
+          state.esiToken = synced;
+          if (Date.now() <= (synced.expires_at || 0) - 60000) return synced;
+          token = synced;
+        }
+      }
       try {
         const data = await ssoToken({ grant_type: 'refresh_token', refresh_token: token.refresh_token });
         const fresh = tokenRecord(data, token);
         try { Object.assign(fresh, tokenIdentity(data.access_token)); } catch { /* 保留原身份 */ }
         writeEsiToken(fresh);
+        CS.pushSoon();
         return fresh;
       } catch (error) {
         // 只有 CCP 明确拒绝（4xx）时才清除令牌；网络错误保留，下次再试
@@ -3239,16 +3252,21 @@ const accountRefreshing = new Map();
 async function accountToken(id) {
   const active = state.esiToken || readEsiToken();
   if (active?.character_id === id) return ensureEsiToken();
-  const token = readEsiAccounts().find((a) => a.character_id === id);
+  let token = readEsiAccounts().find((a) => a.character_id === id);
   if (!token) throw new Error('角色未绑定');
   if (Date.now() <= (token.expires_at || 0) - 60000) return token;
   if (!accountRefreshing.has(id)) {
     accountRefreshing.set(id, (async () => {
+      if (await CS.pullTokens()) {
+        const synced = readEsiAccounts().find((a) => a.character_id === id);
+        if (synced) { if (Date.now() <= (synced.expires_at || 0) - 60000) return synced; token = synced; }
+      }
       try {
         const data = await ssoToken({ grant_type: 'refresh_token', refresh_token: token.refresh_token });
         const fresh = tokenRecord(data, token);
         try { Object.assign(fresh, tokenIdentity(data.access_token)); } catch { /* 保留原身份 */ }
         writeEsiAccounts(readEsiAccounts().map((a) => (a.character_id === id ? fresh : a)));
+        CS.pushSoon();
         return fresh;
       } catch (error) {
         if (error.status >= 400 && error.status < 500) { removeEsiAccount(id); throw new Error(token.character_name + ' 登录已过期，请重新绑定'); }
@@ -5444,6 +5462,7 @@ function closeEsiModal() {
 
 function initESIModal() {
   $('bindEsiBtn').addEventListener('click', openEsiModal);
+  $$('[data-cloud-sync]').forEach((b) => b.addEventListener('click', () => CS.openCloudSync()));
   $('closeEsiModal').addEventListener('click', closeEsiModal);
   $('esiModal').querySelector('.modal-backdrop').addEventListener('click', closeEsiModal);
   $('generateAuthBtn').addEventListener('click', generateAuthLink);
@@ -5663,6 +5682,8 @@ function initOrderWatchBackground() {
 
 // ===== 初始化应用 =====
 function init() {
+  // 云同步拉到别处改的 ESI 令牌：当前角色的令牌直接换上（其余设置要刷新页面）
+  CS.initCloudSync({ esc, showToast, onApplied: (keys) => { if (keys.includes(serverKey('eve-esi-token'))) state.esiToken = readEsiToken(); } });
   initKillAlerts();
   initOrderWatchBackground();
   initWatchBackground();

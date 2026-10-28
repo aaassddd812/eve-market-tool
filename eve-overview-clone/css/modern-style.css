@@ -6879,3 +6879,14 @@ td .sov-auto-tag { margin-left: 4px; }
   .trade-barcell { min-width: 0; gap: 6px; }
   .trade-track { width: 44px; }
 }
+.ind-corp-div { margin-bottom: 10px; flex-wrap: wrap; }
+.cs-modal { max-width: 420px; }
+.cs-intro { margin: 0 0 12px; font-size: 0.8125rem; color: var(--text-secondary); }
+.cs-form { display: flex; flex-direction: column; gap: 10px; }
+.cs-form label { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: var(--text-secondary); }
+.cs-actions { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.cs-who { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; font-size: 1rem; }
+.cs-who .text-muted { font-size: 0.75rem; }
+.cs-msg { margin: 10px 0 0; font-size: 0.8125rem; color: var(--text-secondary); }
+.cs-tip { margin: 12px 0 0; font-size: 0.6875rem; color: var(--text-muted); }
+.profile-empty [data-cloud-sync] { margin-top: 8px; }

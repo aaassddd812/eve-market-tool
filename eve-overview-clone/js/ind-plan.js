@@ -5,6 +5,8 @@
 //   按制造 / 反应产线数排出的时间轴，购物清单可复制；「库存可造」按现有材料反推能造什么（工业清库）；
 // 「粘贴配装」：游戏装配窗口复制的 EFT 文本拆成舰船、装备、无人机 / 货舱物品，能造的按 件数 × 份数 ÷ 每流程产出（向上取整）加入规划，
 //   已在规划里的产品直接加流程；没有蓝图的（势力、官员装备等）列出来。
+// 军团蓝图（esi-corporations.read_blueprints.v1，游戏里要董事职位）：/corporations/{id}/blueprints/，同样的蓝图（类型、ME、TE、流程、机库）合并计数；
+//   机库分部名称读 /corporations/{id}/divisions/（有军团管理权限时），缓存 5 分钟。「只看我有的蓝图」也算上军团蓝图。
 // 「我的工业」蓝图的成本与每小时利润、一键加入规划；利润排行的「技能够造」「我有蓝图」筛选。
 // 研究公式：第 n 级时间 = 蓝图基础研究时间 × 等级倍数[n] ÷ 105（倍数 105、250、595、1414、3360、8000、19000、45255、107700、256000），
 //   技能冶金学（ME）/ 研究（TE）/ 科学（拷贝）每级 −5%、高级工业理论每级 −3%，工程复合体同制造的时间加成；
@@ -693,7 +695,7 @@ export function onPlanEvent(e) {
 }
 
 // ---------- 我的工业：蓝图成本与利润 ----------
-export async function mineBlueprintRows(bps, rerender) {
+export async function mineBlueprintRows(bps, rerender, tag = 'char') {
   const prodOf = new Map(Object.entries(X.D.data.bp).map(([pid, b]) => [b[0], Number(pid)]));
   const rows = bps.map((b) => {
     const pid = prodOf.get(b.type_id);
@@ -707,8 +709,9 @@ export async function mineBlueprintRows(bps, rerender) {
     return { b, pid, perUnit: cost / j.out, profit, ph: profit != null ? profit / (j.secs / 3600) : null };
   });
   // 行情：先用全服均价，后台读交易中心行情后再刷新一次
-  if (!S.mineLoaded && rerender) {
-    S.mineLoaded = true;
+  S.mineLoaded = S.mineLoaded || new Set();
+  if (!S.mineLoaded.has(tag) && rerender) {
+    S.mineLoaded.add(tag);
     const ids = new Set();
     for (const r of rows) if (r.pid) { ids.add(r.pid); X.BP(r.pid)[3].forEach(([id]) => ids.add(id)); }
     X.loadJita([...ids].slice(0, 1500)).then(rerender).catch(() => {});
@@ -729,21 +732,53 @@ function ownedFrom(list) {
   for (const [pid] of Object.entries(X.D.data.bp)) { const inv = X.invFor(Number(pid)); if (inv && set.has(prodOf.get(inv[0]))) set.add(Number(pid)); }
   return set;
 }
+export const CORP_BP_SCOPE = 'esi-corporations.read_blueprints.v1';
+const CORP_TTL = 5 * 60e3;
+// 返回 { list, divisions: Map(分部号 -> 名称), corp } 或 { error, noScope }
+export function loadCorpBps(force = false) {
+  const tk = X.ctx.readToken();
+  if (!tk?.access_token) return Promise.resolve(null);
+  if (!X.ctx.hasScope(tk, CORP_BP_SCOPE)) return Promise.resolve({ error: '没有军团蓝图权限', noScope: true });
+  const cid = tk.character_id;
+  const hit = S.corpBps;
+  if (!force && hit && hit.cid === cid && Date.now() - hit.at < CORP_TTL) return hit.promise;
+  const promise = (async () => {
+    const corp = (await X.ctx.fetchESI(`/characters/${cid}/`)).corporation_id;
+    const [rows, div] = await Promise.all([
+      X.ctx.esiAuthFetchPaged(`/corporations/${corp}/blueprints/`, 50),
+      X.ctx.hasScope(tk, 'esi-corporations.read_divisions.v1') ? X.ctx.esiAuthFetch(`/corporations/${corp}/divisions/`).catch(() => null) : null
+    ]);
+    const merged = new Map();
+    for (const b of rows || []) {
+      const d = /^CorpSAG(\d)$/.exec(b.location_flag || '')?.[1];
+      const division = d ? Number(d) : 0;   // 0：容器里或其他位置
+      const k = [b.type_id, b.material_efficiency, b.time_efficiency, b.runs, division].join('|');
+      const n = b.quantity > 0 ? b.quantity : 1;
+      const m = merged.get(k);
+      if (m) m.quantity += n; else merged.set(k, { ...b, quantity: n, division });
+    }
+    const divisions = new Map((div?.hangar || []).map((h) => [h.division, h.name || '']));
+    return { corp, list: [...merged.values()], divisions };
+  })().catch((e) => ({ error: /403|forbidden|role/i.test(e.message) ? '读取被拒绝：需要军团董事职位' : e.message }));
+  S.corpBps = { cid, at: Date.now(), promise };
+  return promise;
+}
 export function loadOwned() {
   if (!S.ownedLoading) S.ownedLoading = fetchOwned();
   return S.ownedLoading;
 }
 async function fetchOwned() {
+  const corp = (await loadCorpBps()) || {};   // 军团蓝图也算「我有的」
   try {
     const token = await X.ctx.ensureEsiToken();
     // 曙光服登录不支持蓝图权限，令牌里没有就不去请求（与「我的工业」一致）
     if (token.scopes && ![].concat(token.scopes).join(' ').includes('esi-characters.read_blueprints.v1')) throw new Error('未授权蓝图读取权限');
     const list = await X.ctx.esiAuthFetchPaged(`/characters/${token.character_id}/blueprints/`);
-    S.owned = ownedFrom(list || []);
+    S.owned = ownedFrom([...(list || []), ...(corp.list || [])]);
   } catch (e) {
     // ESI 读不到时用粘贴导入的蓝图
     const pasted = pastedBps();
-    if (pasted) { S.owned = ownedFrom(pasted.list); return S.owned; }
+    if (pasted || corp.list) { S.owned = ownedFrom([...(pasted?.list || []), ...(corp.list || [])]); return S.owned; }
     S.owned = new Set();
     S.ownedErr = e.message;
   }

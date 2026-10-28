@@ -43,6 +43,7 @@
   GET /api/kb/contracts/status                存档进度与各状态数量
   GET /api/kb/couriers                        全服公开快递合同（同一份快照，字段同 ESI /contracts/public/{region_id}/，另带 region_id、start_system_id）
   GET /api/kb/obsvol?server=tq&type=ID&regions=  本站观察成交量：交易中心挂单相邻快照的减少量 / 到期前消失量，按 UTC 日期累计（保留 31 天）
+ POST /api/kb/sync/{register,pull,push,delete}  设置云同步：用户名 + 浏览器由密码派生的登录密钥；内容在浏览器里加密，服务器只存密文
   POST /api/kb/wallet/sync                    钱包成交存档：带浏览器的 ESI 令牌（Authorization），同步并返回某角色某物品的成交 / 税费 / 工业任务
   POST /api/kb/wallet/delete                  删除某角色的全部钱包存档（同样校验令牌）
   击杀相关接口（status / feed / live / br / battles / top / summary / leaderboard / search / entity / kill / shipfits）可带 server=serenity|infinity 查国服
@@ -64,6 +65,7 @@ import datetime as dt
 import email.utils
 import gzip
 import hashlib
+import hmac
 import html as html_lib
 import io
 import json
@@ -4982,6 +4984,111 @@ class Wallet:
         return {"deleted": n}
 
 
+# ---------------------------------------------------------------- 设置云同步
+# 个人中心「云同步」：浏览器把本站的本地设置（收藏、税费技能、规划、排除列表等，不含 ESI 令牌）加密后存到服务器，
+# 换个浏览器用同一个用户名和密码登录就能取回，之后定时双向同步。
+# 密码不出浏览器：浏览器用 PBKDF2(密码, 用户名) 派生出「登录密钥」和「加密密钥」，只把登录密钥发来；
+# 服务器再对登录密钥加盐做 PBKDF2 后保存。数据用加密密钥 AES-GCM 加密，服务器看不到内容，忘记密码就无法解密。
+# push 带上次拉到的版本号 base，与服务器当前版本不一致时返回 409 和最新内容，由浏览器合并后再提交。
+SYNC_SCHEMA = """
+CREATE TABLE IF NOT EXISTS sync_user(user TEXT PRIMARY KEY, salt BLOB, hash BLOB, ver INTEGER, data TEXT, updated INTEGER, created INTEGER);
+"""
+SYNC_MAX = 4 * 1024 * 1024      # 一个账号最多存多少（加密后的 base64 文本）
+SYNC_RATE = 30                  # 每个 IP 每分钟最多请求次数
+SYNC_FAIL_MAX = 8               # 每个用户名 10 分钟内最多输错几次
+SYNC_USER_RE = re.compile(r"[A-Za-z0-9_\-.\u4e00-\u9fff]{2,24}")
+SYNC_AUTH_RE = re.compile(r"[0-9a-f]{64}")
+
+
+class SettingsSync:
+    def __init__(self, store):
+        self.store = store
+        self.fails = {}            # 用户名 -> [失败时间...]
+        self.lock = threading.Lock()
+        c = store.conn()
+        with store.write_lock:
+            c.executescript(SYNC_SCHEMA)
+            c.commit()
+
+    @staticmethod
+    def digest(auth, salt):
+        return hashlib.pbkdf2_hmac("sha256", bytes.fromhex(auth), salt, 100000)
+
+    def params(self, body):
+        user, auth = body.get("user"), body.get("auth")
+        if not isinstance(user, str) or not SYNC_USER_RE.fullmatch(user):
+            raise ValueError("用户名为 2–24 个字母、数字、汉字或 _ - .")
+        if not isinstance(auth, str) or not SYNC_AUTH_RE.fullmatch(auth):
+            raise ValueError("登录密钥无效")
+        return user.lower(), auth
+
+    def check(self, user, auth):
+        """校验登录密钥，返回账号行（ver, data, updated）；用户不存在 / 密码错都抛 PermissionError"""
+        now = time.time()
+        with self.lock:
+            recent = [t for t in self.fails.get(user, []) if now - t < 600]
+            self.fails[user] = recent
+            if len(recent) >= SYNC_FAIL_MAX:
+                raise PermissionError("密码错误次数太多，请 10 分钟后再试")
+        row = self.store.conn().execute("SELECT salt, hash, ver, data, updated FROM sync_user WHERE user=?", (user,)).fetchone()
+        if not row or not hmac.compare_digest(self.digest(auth, row[0]), row[1]):
+            with self.lock:
+                self.fails.setdefault(user, []).append(now)
+                if len(self.fails) > 20000:
+                    self.fails = {k: v for k, v in self.fails.items() if v and now - v[-1] < 600}
+            raise PermissionError("用户名或密码不对")
+        with self.lock:
+            self.fails.pop(user, None)
+        return row[2], row[3], row[4]
+
+    def register(self, body):
+        user, auth = self.params(body)
+        salt = os.urandom(16)
+        now = int(time.time())
+        c = self.store.conn()
+        with self.store.write_lock:
+            try:
+                c.execute("INSERT INTO sync_user VALUES(?,?,?,?,?,?,?)", (user, salt, self.digest(auth, salt), 0, None, now, now))
+                c.commit()
+            except sqlite3.IntegrityError:
+                raise ValueError("这个用户名已经有人用了")
+        return {"user": user, "ver": 0, "data": None, "updated": now}
+
+    def pull(self, body):
+        user, auth = self.params(body)
+        ver, data, updated = self.check(user, auth)
+        if body.get("have") == ver:   # 浏览器手上已经是这个版本：不回传数据
+            return {"user": user, "ver": ver, "same": True, "updated": updated}
+        return {"user": user, "ver": ver, "data": data, "updated": updated}
+
+    def push(self, body):
+        user, auth = self.params(body)
+        base, data = body.get("base"), body.get("data")
+        if type(base) is not int or not isinstance(data, str) or not data or len(data) > SYNC_MAX:
+            raise ValueError("data 应为不超过 4MB 的密文")
+        ver, cur, updated = self.check(user, auth)
+        if base != ver:
+            return {"conflict": True, "user": user, "ver": ver, "data": cur, "updated": updated}
+        now = int(time.time())
+        c = self.store.conn()
+        with self.store.write_lock:
+            n = c.execute("UPDATE sync_user SET ver=?, data=?, updated=? WHERE user=? AND ver=?", (ver + 1, data, now, user, ver)).rowcount
+            c.commit()
+        if not n:   # 并发提交：让浏览器重新拉取合并
+            ver, cur, updated = self.check(user, auth)
+            return {"conflict": True, "user": user, "ver": ver, "data": cur, "updated": updated}
+        return {"user": user, "ver": ver + 1, "updated": now}
+
+    def delete(self, body):
+        user, auth = self.params(body)
+        self.check(user, auth)
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("DELETE FROM sync_user WHERE user=?", (user,))
+            c.commit()
+        return {"deleted": True}
+
+
 class RateLimiter:
     """按 IP 的令牌桶：容量 rate，每秒恢复 rate / 60 个（用于深渊装备导入、钱包存档）"""
     def __init__(self, rate):
@@ -5106,6 +5213,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
             raise ValueError("server 只能是 " + " / ".join(apis))
         return srv
     wallet_limiter = RateLimiter(WALLET_RATE)
+    sync_limiter = RateLimiter(SYNC_RATE)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -5203,11 +5311,40 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("钱包存档错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
+        def sync(self, path):
+            # 设置云同步（同源调用，不带 CORS 头）；请求体不写日志
+            op = path[len("/api/kb/sync/"):]
+            if op not in ("register", "pull", "push", "delete"):
+                return self.send_json(404, {"error": "not found"})
+            ok, _, retry = sync_limiter.take(self.client_ip(), 5 if op == "register" else 1)
+            if not ok:
+                return self.send_json(429, {"error": f"请求太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= SYNC_MAX + 4096:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "请求体应为 JSON"})
+            try:
+                return self.send_json(200, getattr(api.sync, op)(body))
+            except PermissionError as e:
+                return self.send_json(403, {"error": str(e)})
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except Exception:
+                log.exception("云同步错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
         def do_POST(self):
-            # 钱包成交存档；其余是唯一的写入型开放接口：深渊装备导入 / 刷新估价（转发到 MutaMarket，按 IP 单独限流）
+            # 钱包成交存档、设置云同步；其余是唯一的写入型开放接口：深渊装备导入 / 刷新估价（转发到 MutaMarket，按 IP 单独限流）
             url = urllib.parse.urlparse(self.path)
             if url.path.startswith("/api/kb/wallet/"):
                 return self.wallet(url.path.rstrip("/"))
+            if url.path.startswith("/api/kb/sync/"):
+                return self.sync(url.path.rstrip("/"))
             cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
             err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
             path = url.path.rstrip("/")
@@ -5336,6 +5473,7 @@ def main():
     industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])
     api.obs = store.obs
     api.wallet = Wallet(store, industry)
+    api.sync = SettingsSync(store)
     abyssal = Abyssal(store)
     abyssal.model = store.abyssal_model
     cn_apis = {}

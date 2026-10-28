@@ -3,7 +3,8 @@
 //            推荐安装费最低的星系，显示吉他 30 天日均成交量。
 // 利润排行：按全服均价估算全部产品的每流程利润与每小时利润，前列可用吉他实时行情精算并显示成交量。
 // 制造地点：按星系工业指数排序（制造 / 发明 / 反应 / 研究），可按星域、周边跳数、安全等级筛选。
-// 我的工业：ESI 工业任务（esi-industry.read_character_jobs.v1）与角色蓝图（esi-characters.read_blueprints.v1），蓝图按自身 ME / TE 算成本与每小时利润。
+// 我的工业：ESI 工业任务（esi-industry.read_character_jobs.v1）与角色蓝图（esi-characters.read_blueprints.v1），蓝图按自身 ME / TE 算成本与每小时利润；
+//   有军团蓝图权限时再列军团机库里的蓝图（ind-plan.js 的 loadCorpBps），可按机库分部筛选。
 // 制造规划 / 库存可造、计算器里的解码器对比、发明次数、ME 影响、研究与拷贝：见 ind-plan.js。
 // 利润排行的价格与成交量先用交易中心快照（/api/v1/hubs/arbitrage），综合评分 = 每小时利润、日均成交额、利润率、买卖价差加权。
 // NPC 蓝图：npc-bp.json（build_npc_bp.mjs 生成），侧栏「NPC 蓝图」页与计算器蓝图卡片。
@@ -16,7 +17,7 @@
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
-import * as Plan from './ind-plan.js?v=v6';
+import * as Plan from './ind-plan.js?v=v7';
 import * as Chain from './ind-chain.js?v=2';
 import * as IS from './ind-structs.js?v=3';
 import { skPage } from './skeleton.js?v=v17';
@@ -1151,17 +1152,18 @@ async function renderMine(body) {
   body.innerHTML = '<div class="pi-loading">读取工业任务与蓝图…</div>';
   const token = await ctx.ensureEsiToken();
   const id = token.character_id;
-  let [jobs, bps] = await Promise.all([
+  let [jobs, bps, corp] = await Promise.all([
     ctx.esiAuthFetch(`/characters/${id}/industry/jobs/?include_completed=true`).catch((e) => ({ error: e.message })),
     // 曙光服登录不支持蓝图权限，令牌里没有就不去请求
     token.scopes && ![].concat(token.scopes).join(' ').includes('esi-characters.read_blueprints.v1')
       ? { error: SERVER.id === 'infinity' ? '曙光服不支持蓝图权限' : '未授权蓝图读取权限', noScope: true }
-      : ctx.esiAuthFetch(`/characters/${id}/blueprints/`).catch((e) => ({ error: e.message }))
+      : ctx.esiAuthFetch(`/characters/${id}/blueprints/`).catch((e) => ({ error: e.message })),
+    Plan.loadCorpBps()
   ]);
   if (F.tab !== 'mine') return;
   // ESI 读不到蓝图时用粘贴导入的
   if (bps.error && pasted) bps = pasted.list;
-  await drawMine(body, jobs, bps, bps === pasted?.list ? pasted : null);
+  await drawMine(body, jobs, bps, bps === pasted?.list ? pasted : null, corp);
 }
 
 // 粘贴导入游戏蓝图（ESI 读不到时使用；读得到时也可以导入，作为备用）
@@ -1175,7 +1177,7 @@ function pasteCard(pasted) {
   </details>`;
 }
 
-async function drawMine(body, jobs, bps, pasted) {
+async function drawMine(body, jobs, bps, pasted, corp) {
   const esc = ctx.esc, num = ctx.formatNumber;
   await fillNames([...(Array.isArray(jobs) ? jobs.map((j) => j.product_type_id || j.blueprint_type_id) : []), ...(Array.isArray(bps) ? bps.map((b) => b.type_id) : [])]);
   const name = tName;
@@ -1204,26 +1206,56 @@ async function drawMine(body, jobs, bps, pasted) {
     bpsHtml = bps.noScope ? `<p class="text-muted">${esc(bps.error)}</p>` : `<p class="text-muted">蓝图读取失败：${esc(bps.error)}</p>`;
   } else if (!bps.length) bpsHtml = '<p class="text-muted">没有蓝图</p>';
   else {
-    const draw = (rows) => {
-      const isk = ctx.formatISK;
-      const list = rows.slice().sort((a, b) => (b.ph ?? -Infinity) - (a.ph ?? -Infinity) || name(a.b.type_id).localeCompare(name(b.b.type_id), 'zh'));
-      return `<div class="pi-table-wrap ind-rank-wrap"><table class="pi-table"><thead><tr><th>蓝图</th><th>类型</th><th class="num">ME / TE</th><th class="num">剩余流程</th><th class="num pi-hide-sm">单个成本</th><th class="num pi-hide-sm">每流程利润</th><th class="num">每小时利润</th><th></th></tr></thead><tbody>${list.map(({ b, pid, perUnit, profit, ph }) => `<tr${pid ? ` data-ind-pick="${pid}" data-me="${b.material_efficiency}" data-te="${b.time_efficiency}" title="按这张蓝图的 ME / TE 打开计算器"` : ''}>
-        <td><div class="pi-prod"><img src="${BP_ICON(b.type_id, 32, b.runs !== -1)}" alt="" width="24" height="24" loading="lazy"><span>${esc(name(b.type_id))}${b.quantity > 1 ? `<small>×${num(b.quantity)}</small>` : ''}</span></div></td>
-        <td>${b.runs === -1 ? '原图' : '拷贝'}</td><td class="num">${b.material_efficiency} / ${b.time_efficiency}</td>
-        <td class="num">${b.runs === -1 ? '∞' : num(b.runs)}</td>
-        <td class="num pi-hide-sm">${perUnit != null ? isk(perUnit) : '—'}</td>
-        <td class="num pi-hide-sm ${profit == null ? '' : profit >= 0 ? 'up' : 'down'}">${profit != null ? isk(profit) : '—'}</td>
-        <td class="num ${ph == null ? '' : ph >= 0 ? 'pi-profit' : 'down'}">${ph != null ? isk(ph) : '—'}</td>
-        <td>${pid && profit != null ? `<button type="button" class="link-btn" data-plan-add="${pid}" data-runs="${b.runs === -1 ? 1 : b.runs}" data-me="${b.material_efficiency}" data-te="${b.time_efficiency}">加入规划</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
-        <p class="pi-note">按蓝图 ME / TE、材料全买估算</p>`;
-    };
-    const redraw = async () => { const el = $('indMineBps'); if (el && F.tab === 'mine') el.innerHTML = draw(await Plan.mineBlueprintRows(bps)); };
-    bpsHtml = `<div id="indMineBps">${draw(await Plan.mineBlueprintRows(bps, redraw))}</div>`;
+    const redraw = async () => { const el = $('indMineBps'); if (el && F.tab === 'mine') el.innerHTML = bpTable(await Plan.mineBlueprintRows(bps)); };
+    bpsHtml = `<div id="indMineBps">${bpTable(await Plan.mineBlueprintRows(bps, redraw))}</div>`;
   }
   body.innerHTML = `
     <div class="pi-card"><div class="pi-card-head"><h3>工业任务</h3></div>${jobsHtml}</div>
     <div class="pi-card"><div class="pi-card-head"><h3>我的蓝图</h3>${pasted ? '<span class="ind-tag-paste">粘贴导入</span>' : ''}</div>${bpsHtml}</div>
+    <div id="indCorpCard">${await corpBpsHtml(corp, () => redrawCorp(corp))}</div>
     ${pasteCard(Plan.pastedBps())}`;
+  MINE.corp = corp;
+}
+
+// 我的工业的蓝图表（角色蓝图、军团蓝图共用）
+function bpTable(rows, limit = 0) {
+  const isk = ctx.formatISK;
+  const name = tName, esc = ctx.esc, num = ctx.formatNumber;
+  const all = rows.slice().sort((a, b) => (b.ph ?? -Infinity) - (a.ph ?? -Infinity) || name(a.b.type_id).localeCompare(name(b.b.type_id), 'zh'));
+  const list = limit ? all.slice(0, limit) : all;
+  return `<div class="pi-table-wrap ind-rank-wrap"><table class="pi-table"><thead><tr><th>蓝图</th><th>类型</th><th class="num">ME / TE</th><th class="num">剩余流程</th><th class="num pi-hide-sm">单个成本</th><th class="num pi-hide-sm">每流程利润</th><th class="num">每小时利润</th><th></th></tr></thead><tbody>${list.map(({ b, pid, perUnit, profit, ph }) => `<tr${pid ? ` data-ind-pick="${pid}" data-me="${b.material_efficiency}" data-te="${b.time_efficiency}" title="按这张蓝图的 ME / TE 打开计算器"` : ''}>
+    <td><div class="pi-prod"><img src="${BP_ICON(b.type_id, 32, b.runs !== -1)}" alt="" width="24" height="24" loading="lazy"><span>${esc(name(b.type_id))}${b.quantity > 1 ? `<small>×${num(b.quantity)}</small>` : ''}</span></div></td>
+    <td>${b.runs === -1 ? '原图' : '拷贝'}</td><td class="num">${b.material_efficiency} / ${b.time_efficiency}</td>
+    <td class="num">${b.runs === -1 ? '∞' : num(b.runs)}</td>
+    <td class="num pi-hide-sm">${perUnit != null ? isk(perUnit) : '—'}</td>
+    <td class="num pi-hide-sm ${profit == null ? '' : profit >= 0 ? 'up' : 'down'}">${profit != null ? isk(profit) : '—'}</td>
+    <td class="num ${ph == null ? '' : ph >= 0 ? 'pi-profit' : 'down'}">${ph != null ? isk(ph) : '—'}</td>
+    <td>${pid && profit != null ? `<button type="button" class="link-btn" data-plan-add="${pid}" data-runs="${b.runs === -1 ? 1 : b.runs}" data-me="${b.material_efficiency}" data-te="${b.time_efficiency}">加入规划</button>` : ''}</td></tr>`).join('')}</tbody></table></div>
+    <p class="pi-note">${list.length < all.length ? `共 ${num(all.length)} 种，显示每小时利润前 ${num(list.length)} 种 · ` : ''}按蓝图 ME / TE、材料全买估算</p>`;
+}
+
+async function redrawCorp(corp) {
+  const el = $('indCorpCard');
+  if (el && F.tab === 'mine') el.innerHTML = await corpBpsHtml(corp, () => redrawCorp(corp));
+}
+// 军团蓝图卡片：没有权限时给授权入口；有机库分部时可筛选
+const MINE = { div: 0 };
+async function corpBpsHtml(corp, rerender) {
+  const esc = ctx.esc;
+  if (!corp) return '';
+  if (corp.noScope) {
+    return SERVER.id === 'infinity' ? '' : `<div class="pi-card"><div class="pi-card-head"><h3>军团蓝图</h3></div>
+      <p class="text-muted">需要「军团蓝图」权限，游戏里要有董事职位 <button type="button" class="link-btn" data-ind-corpbind>去授权</button></p></div>`;
+  }
+  if (corp.error) return `<div class="pi-card"><div class="pi-card-head"><h3>军团蓝图</h3></div><p class="text-muted">${esc(corp.error)}</p></div>`;
+  const divs = [...new Set(corp.list.map((b) => b.division))].sort((a, b) => (a || 9) - (b || 9));
+  if (MINE.div && !divs.includes(MINE.div)) MINE.div = 0;
+  const label = (d) => (d ? corp.divisions.get(d) || `机库 ${d}` : '其他位置');
+  const shown = MINE.div ? corp.list.filter((b) => b.division === MINE.div) : corp.list;
+  const own = (d) => Boolean(d && corp.divisions.get(d));   // 军团自己起的机库名不翻译
+  const pick = divs.length > 1 ? `<div class="segmented ind-corp-div">${[[0, '全部'], ...divs.map((d) => [d, label(d)])].map(([v, l]) => `<button type="button" data-ind-corpdiv="${v}" class="${MINE.div === v ? 'active' : ''}"${own(v) ? ' translate="no"' : ''}>${esc(l)}</button>`).join('')}</div>` : '';
+  const body = shown.length ? bpTable(await Plan.mineBlueprintRows(shown, rerender, 'corp'), 200) : '<p class="text-muted">没有蓝图</p>';
+  return `<div class="pi-card"><div class="pi-card-head"><h3>军团蓝图</h3><span class="text-muted">${ctx.formatNumber(corp.list.reduce((t, b) => t + b.quantity, 0))} 张</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-ind-corpreload>刷新</button></div>${pick}<div id="indCorpBps">${body}</div></div>`;
 }
 
 // ---------- 侧栏 ----------
@@ -1335,6 +1367,10 @@ function onClick(e) {
     drawCalc();
     return;
   }
+  if (e.target.closest('[data-ind-corpbind]')) { ctx.openEsiBind?.('corpBp'); return; }
+  const cd = e.target.closest('[data-ind-corpdiv]');
+  if (cd) { MINE.div = Number(cd.dataset.indCorpdiv); redrawCorp(MINE.corp); return; }
+  if (e.target.closest('[data-ind-corpreload]')) { Plan.loadCorpBps(true).then((c) => { MINE.corp = c; redrawCorp(c); }); return; }
   const bpp = e.target.closest('[data-bp-paste]');
   if (bpp) {
     if (bpp.dataset.bpPaste === 'clear') { Plan.savePastedBps(null); renderTab(); return; }
