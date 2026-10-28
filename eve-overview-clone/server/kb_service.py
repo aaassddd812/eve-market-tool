@@ -5447,6 +5447,7 @@ def main():
     parser.add_argument("--cn-days", type=int, default=0, help="国服击杀保留天数（0 = 永久保存）")
     parser.add_argument("--cn-db-dir", help="国服击杀库目录（默认与 --db 同目录，文件名 kb-<服务器>.sqlite）")
     parser.add_argument("--cn-queue", help="KM 广播队列名（默认按 --db 路径生成；同一台机器上的两个实例不能共用，否则会互相抢走击杀）")
+    parser.add_argument("--lite", action="store_true", help="演示用：只读已有数据，不启动任何后台采集 / 轮询 / 预计算")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -5457,18 +5458,20 @@ def main():
     store.abyssal_model = AbyssalModel(store)
     store.arb = HubArbitrage(store)
     store.obs = ObsVolume(store)
-    Workers(store, args.days, "r2z2" if args.live == "redisq" else args.live).start()
+    workers = Workers(store, args.days, "r2z2" if args.live == "redisq" else args.live)
+    if not args.lite:
+        workers.start()
     api = Api(store)
     api.arb = store.arb
     api.fw = FwTracker(store)
-    api.fw.start()
     api.mapk = MapKills(store)
-    api.mapk.start()
     api.pc = ContractArchive(store, args.contract_db or os.path.join(os.path.dirname(os.path.abspath(args.db)), "contracts.sqlite"),
                              args.contract_backfill, args.contract_keep)
-    api.pc.start()
-    threading.Thread(target=api.warm, daemon=True).start()
-    threading.Thread(target=lambda: (time.sleep(30), api.battle_history({"days": 30})), daemon=True).start()   # 历史会战先算好一份
+    if not args.lite:
+        for job in (api.fw, api.mapk, api.pc):
+            job.start()
+        threading.Thread(target=api.warm, daemon=True).start()
+        threading.Thread(target=lambda: (time.sleep(30), api.battle_history({"days": 30})), daemon=True).start()   # 历史会战先算好一份
     here = os.path.dirname(os.path.abspath(__file__))
     industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])
     api.obs = store.obs
@@ -5483,12 +5486,15 @@ def main():
         if name not in CN_KB:
             parser.error(f"--cn 只能是 {' / '.join(CN_KB)}")
         cn_store = Store(os.path.join(cn_dir, f"kb-{name}.sqlite"), dict(system_regions), args.cn_days + 1 if args.cn_days else 0, server=name)
-        CnWorkers(cn_store, queue).start()
         cn_apis[name] = Api(cn_store)
-        threading.Thread(target=cn_apis[name].warm, daemon=True).start()
+        if not args.lite:
+            CnWorkers(cn_store, queue).start()
+            threading.Thread(target=cn_apis[name].warm, daemon=True).start()
     GLOSSARY.dirs = [args.static, os.path.dirname(here), "/opt/eve/dist"]
-    bazaar = Bazaar(os.path.join(os.path.dirname(os.path.abspath(args.db)), "bazaar-index.json")).start()
-    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal, cn_apis, bazaar, Cbg().start()))
+    bazaar, cbg = Bazaar(os.path.join(os.path.dirname(os.path.abspath(args.db)), "bazaar-index.json")), Cbg()
+    if not args.lite:
+        bazaar.start(), cbg.start()
+    server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal, cn_apis, bazaar, cbg))
     log.info("击杀记录服务已启动 http://%s:%d", args.bind, args.port)
     server.serve_forever()
 

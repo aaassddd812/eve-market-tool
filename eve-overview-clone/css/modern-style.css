@@ -2522,6 +2522,7 @@ td.loc {
 .step-desc a { color: var(--accent-primary); }
 
 .auth-link-box { margin-top: 10px; }
+.esi-cb-here { margin-top: 10px; }
 
 .input-group { display: flex; gap: 8px; }
 

@@ -22,7 +22,7 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=103"></script>
+  <script src="js/i18n.js?v=104"></script>
   <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
   <script type="importmap">
     {
@@ -32,7 +32,7 @@
       }
     }
   </script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v207">
+  <link rel="stylesheet" href="css/modern-style.css?v=v208">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -1071,6 +1071,27 @@
       </div>
     </div>
 
+    <!-- 宁静服授权回调落地：只显示回调地址，由用户复制回原页面粘贴绑定 -->
+    <div class="modal" id="esiCbModal" hidden role="dialog" aria-modal="true" aria-labelledby="esiCbTitle">
+      <div class="modal-backdrop"></div>
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3 id="esiCbTitle">授权完成</h3>
+          <button class="modal-close" id="esiCbClose" aria-label="关闭">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="step-desc">复制下面的地址，回到原页面粘贴并点「绑定」</p>
+          <div class="input-group">
+            <input type="text" id="esiCbUrl" readonly aria-label="授权回调地址">
+            <button class="btn btn-primary" id="esiCbCopy">复制</button>
+          </div>
+          <button class="btn esi-cb-here" id="esiCbHere">在本页绑定</button>
+        </div>
+      </div>
+    </div>
+
     <!-- ESI 绑定模态框 -->
     <div class="modal" id="esiModal" hidden role="dialog" aria-modal="true" aria-labelledby="esiModalTitle">
       <div class="modal-backdrop"></div>
@@ -1115,6 +1136,6 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v291" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v292" type="module" data-cfasync="false"></script>
 </body>
 </html>

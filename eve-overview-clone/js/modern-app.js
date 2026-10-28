@@ -5381,7 +5381,7 @@ async function bindEsiCallback() {
 }
 
 // OAuth 回调落地：授权后 CCP 跳回 https://eve.navexor.top/?code=…&state=…
-// 自动弹开绑定框、填入回调地址并清掉地址栏参数，用户只需点「绑定」
+// 成功时只显示回调地址，由用户复制回原页面粘贴绑定（也可在本页绑定）；失败 / 权限被拒仍弹绑定框提示
 function handleEsiCallbackRedirect() {
   const params = new URLSearchParams(location.search);
   if (!params.has('code') && !params.has('error')) return;
@@ -5390,17 +5390,28 @@ function handleEsiCallbackRedirect() {
   if (pending?.server && pending.server !== SERVER.id) { setServer(pending.server); return; }
   const callbackUrl = location.href;
   history.replaceState(null, '', location.pathname + location.hash);
+  const bad = learnBadScope(callbackUrl);
+  if (!bad && !params.has('error')) {
+    const box = $('esiCbModal');
+    const close = () => { box.hidden = true; };
+    $('esiCbUrl').value = callbackUrl;
+    $('esiCbCopy').onclick = () => copyText(callbackUrl, '回调地址已复制');
+    $('esiCbHere').onclick = () => {
+      close();
+      openEsiModal();
+      $('callbackUrl').value = callbackUrl;
+      bindEsiCallback();
+    };
+    $('esiCbClose').onclick = close;
+    box.querySelector('.modal-backdrop').onclick = close;
+    box.hidden = false;
+    requestAnimationFrame(() => $('esiCbUrl').select());
+    return;
+  }
   openEsiModal();
   $('callbackUrl').value = callbackUrl;
-  const bad = learnBadScope(callbackUrl);
-  if (bad) {
-    rejectedScope(bad);
-  } else if (params.has('error')) {
-    setEsiStatus('授权失败：' + (params.get('error_description') || params.get('error')), 'error');
-  } else {
-    setEsiStatus('已获取回调，请点「绑定」', 'success');
-    $('bindCallbackBtn').focus();
-  }
+  if (bad) rejectedScope(bad);
+  else setEsiStatus('授权失败：' + (params.get('error_description') || params.get('error')), 'error');
 }
 
 let modalReturnFocus = null;
