@@ -3,6 +3,8 @@
 //   「材料效率影响」（ME 0–10 的成本与利润）、「研究与拷贝」（ME / TE 研究到目标等级、拷贝的时间与费用，以及研究后每流程省多少、几个流程回本）；
 // 「制造规划」页：多个产品一起规划——组件可选自制并逐级展开汇总，扣除库存（ESI 资产或粘贴），产线启动清单（每个任务的流程数与时间），
 //   按制造 / 反应产线数排出的时间轴，购物清单可复制；「库存可造」按现有材料反推能造什么（工业清库）；
+// 「粘贴配装」：游戏装配窗口复制的 EFT 文本拆成舰船、装备、无人机 / 货舱物品，能造的按 件数 × 份数 ÷ 每流程产出（向上取整）加入规划，
+//   已在规划里的产品直接加流程；没有蓝图的（势力、官员装备等）列出来。
 // 「我的工业」蓝图的成本与每小时利润、一键加入规划；利润排行的「技能够造」「我有蓝图」筛选。
 // 研究公式：第 n 级时间 = 蓝图基础研究时间 × 等级倍数[n] ÷ 105（倍数 105、250、595、1414、3360、8000、19000、45255、107700、256000），
 //   技能冶金学（ME）/ 研究（TE）/ 科学（拷贝）每级 −5%、高级工业理论每级 −3%，工程复合体同制造的时间加成；
@@ -23,11 +25,15 @@ export function initPlan(api) {
 const savePlan = () => X.ctx.store.setJSON(PLAN_KEY, { items: P.items, build: P.build, slots: P.slots, rslots: P.rslots, lanes: P.lanes, stock: P.stock, paste: P.paste, tab: P.tab });
 export const planCount = () => P.items.length;
 
-export function addToPlan(pid, { runs = 1, me = null, te = null, invent = null, dec = 0 } = {}) {
+function newItem(pid, { runs = 1, me = null, te = null, invent = null, dec = 0 } = {}) {
   const b = X.BP(pid);
-  if (!b) return;
   const inv = b[5] === 'm' && X.invFor(pid);
-  P.items.push({ pid, runs: Math.max(1, runs), me: b[5] === 'r' ? 0 : me ?? (inv && invent !== false ? null : X.F.me), te: b[5] === 'r' ? 0 : te ?? (inv && invent !== false ? null : X.F.te), invent: inv ? invent !== false : false, dec });
+  return { pid, runs: Math.max(1, runs), me: b[5] === 'r' ? 0 : me ?? (inv && invent !== false ? null : X.F.me), te: b[5] === 'r' ? 0 : te ?? (inv && invent !== false ? null : X.F.te), invent: inv ? invent !== false : false, dec };
+}
+export function addToPlan(pid, opts = {}) {
+  if (!X.BP(pid)) return;
+  const runs = opts.runs ?? 1;
+  P.items.push(newItem(pid, opts));
   savePlan();
   X.ctx.showToast(`已加入制造规划：${X.tName(pid)} ×${runs} 流程（共 ${P.items.length} 项）`, 'success', 2200);
 }
@@ -197,12 +203,16 @@ async function loadAssets(force) {
   return S.assets;
 }
 
+const tr = (t) => (window.I18N?.lang === 'en' && window.I18N.t ? window.I18N.t(t) : t);   // textarea 的占位文字不走自动翻译
 let nameIndex = null;
-function parsePaste(text) {
+function nameId(name) {
   if (!nameIndex) {
     nameIndex = new Map();
     for (const [id, t] of Object.entries(X.D.data.types)) { nameIndex.set(t[0], Number(id)); if (t[1]) nameIndex.set(t[1].toLowerCase(), Number(id)); }
   }
+  return nameIndex.get(name) ?? nameIndex.get(String(name).toLowerCase());
+}
+function parsePaste(text) {
   const map = new Map();
   const unknown = [];
   for (const raw of String(text || '').split(/\r?\n/)) {
@@ -212,11 +222,63 @@ function parsePaste(text) {
     const parts = line.split('\t').map((s) => s.trim());
     if (parts.length > 1) { name = parts[0]; qty = parts.slice(1).map((s) => s.replace(/[,\s]/g, '')).find((s) => /^\d+$/.test(s)); }
     else { const m = line.match(/^(.*?)\s*[x×*]?\s*([\d,]+)$/i); if (m) { name = m[1].trim(); qty = m[2].replace(/,/g, ''); } else name = line; }
-    const id = nameIndex.get(name) ?? nameIndex.get(String(name).toLowerCase());
+    const id = nameId(name);
     if (!id) { unknown.push(name); continue; }
     map.set(id, (map.get(id) || 0) + Number(qty || 1));
   }
   return { map, unknown };
+}
+
+// EFT 配装：[舰船, 名称]、每行一个装备（逗号后是装填的弹药，不算）、「名称 x数量」是无人机 / 货舱物品
+function parseFit(text) {
+  const need = new Map();
+  const unknown = [];
+  let ship = false;
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const line = raw.trim().replace(/\s*\/offline$/i, '');
+    if (!line || /^\[empty/i.test(line)) continue;
+    let name, n = 1;
+    const head = /^\[([^,\]]+)/.exec(line);
+    if (head) { if (ship) continue; ship = true; name = head[1]; }
+    else {
+      const q = /^(.*?)\s+x(\d+)$/i.exec(line);
+      if (q) { name = q[1]; n = Number(q[2]); } else name = line.split(',')[0];
+    }
+    name = name.trim();
+    const id = nameId(name);
+    if (!id) { unknown.push(name); continue; }
+    need.set(id, (need.get(id) || 0) + n);
+  }
+  return { need, unknown };
+}
+function importFit(text, copies) {
+  const { need, unknown } = parseFit(text);
+  if (!need.size) { S.fitMsg = { error: '没有识别出物品，请粘贴游戏装配窗口「复制到剪贴板」的文本' }; return; }
+  let added = 0;
+  const noBp = [];
+  for (const [id, n] of need) {
+    const b = X.BP(id);
+    if (!b) { noBp.push(id); continue; }
+    const runs = Math.ceil(n * copies / (b[1] || 1));
+    const it = P.items.find((x) => x.pid === id);
+    if (it) it.runs += runs; else P.items.push(newItem(id, { runs }));
+    added++;
+  }
+  savePlan();
+  S.fitMsg = { added, noBp, unknown };
+  if (added) S.fitOpen = false;
+  if (added) X.ctx.showToast(`配装已加入规划：${added} 种产品`, 'success', 2200);
+}
+function fitPanel() {
+  const esc = X.ctx.esc;
+  const m = S.fitMsg;
+  const msg = !m ? '' : m.error ? `<p class="ind-fit-msg down">${esc(m.error)}</p>`
+    : [m.noBp.length ? `没有蓝图、要买：${m.noBp.map((id) => esc(X.tName(id))).join('、')}` : '', m.unknown.length ? `不认识：${m.unknown.map(esc).join('、')}` : ''].filter(Boolean).map((t) => `<p class="ind-fit-msg">${t}</p>`).join('');
+  if (!S.fitOpen) return msg ? `<div class="ind-fit-res">${msg}</div>` : '';
+  return `<div class="ind-fit-paste">
+      <textarea class="pi-input ind-paste" data-plan-fittext rows="6" placeholder="${esc(tr('游戏装配窗口点「复制到剪贴板」，粘贴到这里'))}" aria-label="配装文本">${esc(S.fitText || '')}</textarea>
+      <div class="ind-fit-row"><label class="pi-inline"><span>造几套</span><input type="number" class="pi-input pi-tax" min="1" max="1000" step="1" value="${S.fitN || 1}" data-plan-fitn aria-label="造几套"></label>
+        <button type="button" class="btn btn-primary btn-sm" data-plan-fitadd>加入规划</button></div>${msg}</div>`;
 }
 
 function stockMap() {
@@ -371,7 +433,7 @@ export async function renderPlan(body) {
   }
   if (!P.items.length) {
     body.innerHTML = tabs + `<div class="pi-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h7"/><path d="M17 15v6M14 18h6"/></svg>
-      <p>还没有规划</p></div>` + stockSourceHtml();
+      <p>还没有规划</p><button type="button" class="btn btn-ghost btn-sm" data-plan-fit>粘贴配装</button></div>` + fitPanel() + stockSourceHtml();
     return;
   }
   body.innerHTML = tabs + `<div class="pi-loading" id="planLoading">读取行情…</div>`;
@@ -427,7 +489,8 @@ function drawPlan(body, tabs) {
         <div class="${r.profit >= 0 ? 'pi-stat-main' : 'ind-stat-loss'}"><span>总利润</span><b>${isk(r.profit)}</b></div>
         <div><span>全部完成约</span><b>${X.fmtTime(r.schedule.span)}</b></div>
       </div>
-      <div class="pi-card-head"><h3>产品</h3><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-clear>清空规划</button></div>
+      <div class="pi-card-head"><h3>产品</h3><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-fit title="把游戏里的配装拆成能造的舰船和装备加入规划">粘贴配装</button><button type="button" class="btn btn-ghost btn-sm" data-plan-clear>清空规划</button></div>
+      ${fitPanel()}
       <div class="pi-table-wrap"><table class="pi-table ind-plan-items"><thead><tr><th>产品</th><th class="num">流程</th><th class="num pi-hide-sm" title="拆成几个任务放到不同产线同时造">分批</th><th class="num pi-hide-sm">ME / TE</th><th class="num">产出</th><th class="num pi-hide-sm">成本</th><th class="num pi-hide-sm">卖出</th><th class="num">利润</th><th></th></tr></thead><tbody>${itemRows}</tbody></table></div>
       ${buildChips ? `<div class="ind-plan-build"><span class="text-muted">组件（点击切换自制 / 购买）：</span><div>${buildChips}</div></div>` : ''}
     </div>
@@ -573,6 +636,16 @@ export function onPlanEvent(e) {
     if (t.closest('[data-plan-assets]')) { S.assets = null; S.assetsErr = null; return 'plan'; }
     const add = t.closest('[data-plan-add]');
     if (add) { addToPlan(Number(add.dataset.planAdd), { runs: Number(add.dataset.runs) || 1, me: add.dataset.me != null ? Number(add.dataset.me) : null, te: add.dataset.te != null ? Number(add.dataset.te) : null, invent: add.dataset.me != null ? false : null }); return P.tab === 'stock' || X.F.tab !== 'plan' ? 'none' : 'plan'; }
+    if (t.closest('[data-plan-fit]')) { S.fitOpen = !S.fitOpen; S.fitMsg = null; return 'plan'; }
+    const fa = t.closest('[data-plan-fitadd]');
+    if (fa) {
+      const box = fa.closest('.ind-fit-paste');
+      S.fitText = box.querySelector('[data-plan-fittext]').value;
+      S.fitN = Math.min(1000, Math.max(1, Math.round(Number(box.querySelector('[data-plan-fitn]').value) || 1)));
+      importFit(S.fitText, S.fitN);
+      if (!S.fitOpen) S.fitText = '';
+      return 'plan';
+    }
     const del = t.closest('[data-plan-del]');
     if (del) { P.items.splice(Number(del.dataset.planDel), 1); savePlan(); return 'plan'; }
     if (t.closest('[data-plan-clear]')) { if (confirm('清空制造规划？')) { P.items = []; savePlan(); return 'plan'; } return 'none'; }

@@ -14,7 +14,7 @@
 //   卖单：每件到手 = 价格扣销售税 − 累计费用 / 总量，有收单成交记录时和平均收购成本比。
 //   改单以价格变化为准（游戏里改单必须改价）。
 
-import * as TF from './trade-fees.js?v=v5';
+import * as TF from './trade-fees.js?v=v6';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, typeName, locationName, resolveTypeNames, selectItem, store, serverKey, isActive
 const SET_KEY = 'eve-order-watch';

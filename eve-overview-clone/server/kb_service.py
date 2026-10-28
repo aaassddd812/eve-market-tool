@@ -3757,7 +3757,9 @@ ARB_HIST_DAYS = (1, 7, 14, 30)
 HIST_FIELDS = [f"{p}{k}" for p in ("med", "low", "high") for k in ARB_HIST_DAYS]
 HIST_COLS = ", ".join(HIST_FIELDS)
 # sshare：近 30 天成交量里有多少比例成交在卖单一侧（改单推荐用，见 sell_share）
-ARB_FIELDS = ["sell", "buy", "sell_qty", "buy_qty", "sell_depth", "buy_depth", "daily", "avg", "daily7", "daily1", "sshare"]
+# scomp / bcomp：改单竞争——最优价 ARB_DEPTH 以内、近 ARB_COMP_HOURS 小时发布或改过价的卖单 / 收单张数（ESI 的 issued 是最后修改时间）
+ARB_FIELDS = ["sell", "buy", "sell_qty", "buy_qty", "sell_depth", "buy_depth", "daily", "avg", "daily7", "daily1", "sshare", "scomp", "bcomp"]
+ARB_COMP_HOURS = 24
 
 
 def median(xs):
@@ -3864,9 +3866,9 @@ class HubArbitrage:
         b = book.setdefault(o["type_id"], ([], []))
         if o["is_buy_order"]:
             if (o.get("min_volume") or 1) <= 1:
-                b[1].append((o["price"], o["volume_remain"]))
+                b[1].append((o["price"], o["volume_remain"], o.get("issued") or ""))
         else:
-            b[0].append((o["price"], o["volume_remain"]))
+            b[0].append((o["price"], o["volume_remain"], o.get("issued") or ""))
 
     def snapshot(self, q):
         server = q.get("server") or "tq"
@@ -3949,16 +3951,19 @@ class HubArbitrage:
         hubs = list(cfg["hubs"].items())
         st = self.state.setdefault(server, {"asked": 0, "running": False, "progress": "", "error": None})
         rows = {}
+        fresh = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=ARB_COMP_HOURS)).strftime("%Y-%m-%dT%H:%M:%S")   # issued 是 ISO 字符串，直接按字符串比
         for k, (rid, _) in enumerate(hubs):
             for t, (sells, buys) in books[rid].items():
                 sells.sort()
                 buys.sort(reverse=True)
                 sell = sells[0][0] if sells else None
                 buy = buys[0][0] if buys else None
+                near_s = [o for o in sells if o[0] <= sell * (1 + ARB_DEPTH)] if sells else []
+                near_b = [o for o in buys if o[0] >= buy * (1 - ARB_DEPTH)] if buys else []
                 r = rows.setdefault(t, [None] * len(hubs))
-                r[k] = [sell, buy, sum(v for _, v in sells), sum(v for _, v in buys),
-                        sum(v for p, v in sells if p <= sell * (1 + ARB_DEPTH)) if sells else 0,
-                        sum(v for p, v in buys if p >= buy * (1 - ARB_DEPTH)) if buys else 0, None]
+                r[k] = [sell, buy, sum(o[1] for o in sells), sum(o[1] for o in buys),
+                        sum(o[1] for o in near_s), sum(o[1] for o in near_b),
+                        sum(1 for o in near_s if o[2] >= fresh), sum(1 for o in near_b if o[2] >= fresh)]
         del books
         # 先用已有的成交量发布一次（直接成交的方式马上能用），读完成交量再更新
         known = self.known_volumes(server)
@@ -3991,7 +3996,7 @@ class HubArbitrage:
                     out_full.append(None)
                     continue
                 d, a, d7, d1, ss, *m = (tuple(daily.get((rid, t)) or ()) + (None,) * n)[:n]
-                base = [*h[:6], rnd(d), round(a, 2) if a else None, rnd(d7), rnd(d1), ss]
+                base = [*h[:6], rnd(d), round(a, 2) if a else None, rnd(d7), rnd(d1), ss, h[6], h[7]]
                 out.append(base)
                 out_full.append(base + [rnd(v) for v in m])
             types[str(t)] = out
@@ -4015,6 +4020,9 @@ class HubArbitrage:
                 if e.code == 404:
                     continue                   # 当天文件还没生成
                 raise
+            except Exception as e:             # 下载中断等：这一天先跳过，下次刷新再补（不能让整轮汇总停在「读取成交量」）
+                log.warning("EVE Ref 市场历史 %s 读取失败：%s", key, e)
+                continue
             vol = {}
             rd = csv.DictReader(io.StringIO(bz2.decompress(body).decode()))
             for row in rd:

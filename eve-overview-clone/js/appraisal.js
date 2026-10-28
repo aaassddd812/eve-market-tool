@@ -8,7 +8,7 @@
 // 识别格式：制表符或两个以上空格分列，第一列物品名（游戏复制的名称后可能带 *），第二列数量；
 // 也支持「名称 x 数量」「数量 x 名称」「名称 数量」和单独一行物品名。
 import { SERVER } from './server.js?v=s4';
-import * as TF from './trade-fees.js?v=v5';
+import * as TF from './trade-fees.js?v=v6';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation,
           // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind, loadAbyssal() -> abyssal.js 模块
@@ -20,10 +20,9 @@ const A = { names: null, loading: null, orders: new Map(), result: null, hub: SE
 
 // 化矿设置：station npc / athanor / tatara；rig 0 / 1(T1) / 3(T2)；sec h / l / n（高安 / 低安 / 00 与虫洞）；imp 植入体加成 %；tax 再处理税 %
 const S = { station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0 };
-const SKILL = { reproc: 3385, eff: 3389, scrap: 12196 };
+const SKILL = TF.REPROC_SKILL;
 const level = TF.level, fees = TF.fees, pct2 = TF.pct2;
-const SEC = { h: 0, l: 0.06, n: 0.12 };
-const STRUCT = { athanor: 0.02, tatara: 0.055 };
+const SEC = TF.REPROC_SEC;
 const IMPLANTS = { 27175: 1, 27169: 2, 27174: 4 };   // 载诺 守财奴 提炼 RX-801 / 802 / 804
 
 export function initAppraisal(context) {
@@ -58,11 +57,7 @@ function loadReprocess() {
 }
 
 // 化矿率：skill 为物品的专属处理技能（0 = 碎铁处理）
-function yieldFor(skill) {
-  if (!skill) return 0.5 * (1 + 0.02 * level(SKILL.scrap));
-  const base = S.station === 'npc' ? 50 : (50 + S.rig) * (1 + SEC[S.sec]) * (1 + STRUCT[S.station]);
-  return base / 100 * (1 + 0.03 * level(SKILL.reproc)) * (1 + 0.02 * level(SKILL.eff)) * (1 + 0.02 * level(skill)) * (1 + S.imp / 100);
-}
+const yieldFor = (skill) => TF.reprocYield(skill, S);
 const pct = (v) => (v * 100).toFixed(1).replace(/\.0$/, '') + '%';
 const rangePct = (a, b) => (pct(a) === pct(b) ? pct(a) : `${pct(a).slice(0, -1)}–${pct(b)}`);
 

@@ -16,11 +16,12 @@
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
-import * as Plan from './ind-plan.js?v=v5';
+import * as Plan from './ind-plan.js?v=v6';
 import * as Chain from './ind-chain.js?v=2';
 import * as IS from './ind-structs.js?v=3';
 import { skPage } from './skeleton.js?v=v17';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
+import { loadVolumes } from './hub-compare.js?v=v13';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
@@ -104,7 +105,7 @@ export function initIndustry(context) {
 }
 
 // 表头排序（与市场中心订单簿一致）：点击表头按该列排序，再点一次反向；首次点击用该列更有用的方向
-const RANK_SORT_DIR = { name: 'asc', perUnit: 'asc', unit: 'desc', profit: 'desc', margin: 'desc', ph: 'desc', daily: 'desc', score: 'desc' };
+const RANK_SORT_DIR = { name: 'asc', perUnit: 'asc', unit: 'desc', profit: 'desc', margin: 'desc', ph: 'desc', m3: 'desc', daily: 'desc', score: 'desc' };
 const WHERE_SORT_DIR = { name: 'asc', region: 'asc', manufacturing: 'asc', invention: 'asc', reaction: 'asc', copying: 'asc',
   researching_material_efficiency: 'asc', researching_time_efficiency: 'asc', jumps: 'asc', stations: 'desc' };
 const sortTh = (attr, cur, dir, key, label, cls = '') => {
@@ -961,21 +962,23 @@ function rankRows() {
     const profit = revenue - cost;
     // 利润率超过 90% 的基本是有价无市（成本远低于挂单价），不参与排行
     if (revenue && profit / revenue > 0.9) continue;
-    const row = { pid, unit, cost, perUnit: cost / j.out, profit, margin: revenue ? profit / revenue : 0, ph: profit / (j.secs / 3600), secs: j.secs, inv: Boolean(inv), bpc: needBpc, daily: daily ?? 0 };
+    const vol = D.vols?.[pid];
+    const row = { pid, unit, cost, perUnit: cost / j.out, profit, margin: revenue ? profit / revenue : 0, ph: profit / (j.secs / 3600), m3: vol ? profit / (vol * j.out) : null, secs: j.secs, inv: Boolean(inv), bpc: needBpc, daily: daily ?? 0 };
     row.score = rankScore(row);
     if (D.mkt && F.rankScore && row.score < F.rankScore) continue;
     rows.push(row);
   }
   const key = F.rankSort, mul = F.rankDir === 'asc' ? 1 : -1;
   if (key === 'name') return rows.sort((a, b) => mul * tName(a.pid).localeCompare(tName(b.pid), 'zh'));
-  return rows.sort((a, b) => mul * (a[key] - b[key]));
+  const v = (x) => x[key] ?? (mul > 0 ? Infinity : -Infinity);   // 没有体积的排最后
+  return rows.sort((a, b) => mul * (v(a) - v(b)) || 0);
 }
 
 function renderRank(body) {
   const esc = ctx.esc, isk = ctx.formatISK;
-  if (!D.bpAll || D.mkt === undefined) {
+  if (!D.bpAll || D.mkt === undefined || !D.vols) {
     body.innerHTML = '<div class="pi-loading">读取合同与行情…</div>';
-    Promise.all([loadBpAll(), loadMarket()]).then(() => { if (F.tab === 'rank') renderRank(body); });
+    Promise.all([loadBpAll(), loadMarket(), loadVolumes().then((v) => { D.vols = v || {}; })]).then(() => { if (F.tab === 'rank') renderRank(body); });
     return;
   }
   const mkt = Boolean(D.mkt);
@@ -1000,6 +1003,7 @@ function renderRank(body) {
       <td class="num">${isk(x.profit)}</td>
       <td class="num pi-hide-sm">${(x.margin * 100).toFixed(1)}%</td>
       <td class="num ${x.ph >= 0 ? 'pi-profit' : 'down'}">${isk(x.ph)}</td>
+      <td class="num pi-hide-sm" title="${D.vols[x.pid] ? `每个 ${ctx.formatNumber(D.vols[x.pid])} m³` : '体积未知'}">${x.m3 == null ? '—' : isk(x.m3)}</td>
       <td class="num"${mkt ? '' : ` data-ind-vol="${x.pid}"`}>${mkt ? (x.daily >= 0.1 ? ctx.formatNumber(x.daily >= 10 ? Math.round(x.daily) : Math.round(x.daily * 10) / 10) : x.daily > 0 ? '<0.1' : '—') : '…'}</td>
       ${mkt ? `<td class="num"><span class="ind-score ind-score-${x.score >= 60 ? 'hi' : x.score >= 35 ? 'mid' : 'lo'}">${x.score}</span></td>` : ''}
     </tr>`).join('');
@@ -1024,9 +1028,9 @@ function renderRank(body) {
         ${R.rows.length ? exportBtnHtml('data-ind-export') : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap ind-rank-wrap"><table class="pi-table">
-      <thead><tr><th>#</th>${[['name', '产品', ''], ['perUnit', '单个成本', 'num pi-hide-sm'], ['unit', '单价', 'num pi-hide-sm'], ['profit', '每流程利润', 'num'], ['margin', '利润率', 'num pi-hide-sm'], ['ph', '每小时利润', 'num']]
+      <thead><tr><th>#</th>${[['name', '产品', ''], ['perUnit', '单个成本', 'num pi-hide-sm'], ['unit', '单价', 'num pi-hide-sm'], ['profit', '每流程利润', 'num'], ['margin', '利润率', 'num pi-hide-sm'], ['ph', '每小时利润', 'num'], ['m3', '<span title="每流程利润 ÷ 产出的包装体积，运去交易中心卖时看">每立方</span>', 'num pi-hide-sm']]
         .map(([k, l, c]) => sortTh('ind-sort', F.rankSort, F.rankDir, k, l, c)).join('')}${mkt ? sortTh('ind-sort', F.rankSort, F.rankDir, 'daily', '日均成交', 'num') + sortTh('ind-sort', F.rankSort, F.rankDir, 'score', '<span title="每小时利润 40%、日均成交额 30%、利润率 20%、买卖价差 10%">评分</span>', 'num') : '<th class="num">日均成交</th>'}</tr></thead>
-      <tbody>${rows || `<tr><td colspan="${mkt ? 9 : 8}" class="text-muted">没有符合条件的产品</td></tr>`}</tbody></table></div>
+      <tbody>${rows || `<tr><td colspan="${mkt ? 10 : 9}" class="text-muted">没有符合条件的产品</td></tr>`}</tbody></table></div>
       ${R.rows.length ? rankPager(R.page, pages, R.rows.length, off + 1, off + top.length, size) : ''}</div>`;
   if (mkt) return;
   // 前 25 行的成交量
@@ -1068,7 +1072,7 @@ function exportRank() {
     ['排名', (x) => x.rank], ['Type ID', (x) => x.pid], ['产品', (x) => tName(x.pid)],
     ['科技', (x) => ({ 1: 'T1', 2: 'T2', 3: 'T3' }[T(x.pid)[3]] || '')], ['合同拷贝', (x) => (x.bpc ? '是' : '')],
     ['单个成本', (x) => x.perUnit], ['单价', (x) => x.unit], ['每流程利润', (x) => x.profit], ['利润率 %', (x) => x.margin * 100],
-    ['每小时利润', (x) => x.ph], ['每流程耗时（小时）', (x) => x.secs / 3600],
+    ['每小时利润', (x) => x.ph], ['每立方利润', (x) => x.m3], ['每流程耗时（小时）', (x) => x.secs / 3600],
     ...(mkt ? [['日均成交', (x) => x.daily], ['评分', (x) => x.score]] : [])
   ];
   const n = exportCsv(F.rankAct === 'r' ? '反应利润排行' : '制造利润排行', cols, R.rows.map((x, i) => ({ ...x, rank: i + 1 })));

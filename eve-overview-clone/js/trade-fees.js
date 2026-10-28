@@ -171,6 +171,22 @@ export function flipProfit(buyPrice, sellPrice) {
   return sellPrice * (1 - f.sales - f.broker) - buyPrice * (1 + f.broker);
 }
 
+// 化矿率（估价页与倒卖排行的化矿排行共用）：skill 为物品的专属处理技能（0 = 碎铁处理）；
+// rp 是估价页的化矿设置 { station: npc / athanor / tatara, rig: 0 / 1 / 3, sec: h / l / n, imp: 植入体 %, tax: 再处理税 % }
+export const REPROC_SKILL = { reproc: 3385, eff: 3389, scrap: 12196 };
+export const REPROC_SEC = { h: 0, l: 0.06, n: 0.12 };
+const REPROC_STRUCT = { athanor: 0.02, tatara: 0.055 };
+export function reprocYield(skill, rp) {
+  if (!skill) return 0.5 * (1 + 0.02 * level(REPROC_SKILL.scrap));
+  const base = rp.station === 'npc' ? 50 : (50 + rp.rig) * (1 + REPROC_SEC[rp.sec]) * (1 + REPROC_STRUCT[rp.station]);
+  return base / 100 * (1 + 0.03 * level(REPROC_SKILL.reproc)) * (1 + 0.02 * level(REPROC_SKILL.eff)) * (1 + 0.02 * level(skill)) * (1 + rp.imp / 100);
+}
+// 估价页保存的化矿设置（没设置过用 NPC 空间站）
+export function reprocSettings() {
+  const d = { station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0 };
+  try { return { ...d, ...(JSON.parse(localStorage.getItem('eve-appraisal-v1'))?.rp || {}) }; } catch { return d; }
+}
+
 export const pct2 = (v) => (v * 100 + 1e-9).toFixed(2).replace(/0$/, '').replace(/\.0$/, '') + '%';
 export function summary() {
   const f = fees();

@@ -5857,6 +5857,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .hr-tag.hot { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
 .hr-tag.up { color: var(--success, #16a34a); background: color-mix(in srgb, var(--success, #16a34a) 14%, transparent); }
 .hr-tag.warn { color: var(--warning, #d97706); background: color-mix(in srgb, var(--warning, #d97706) 16%, transparent); }
+.hr-tag.mid { color: var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
 
 /* ===== 舰队对战模拟 / 伤害图表（fit-sim.js、fit-graph.js）===== */
 .graph-content { max-width: 980px; height: auto; }
@@ -6861,3 +6862,20 @@ td .sov-auto-tag { margin-left: 4px; }
 .tf-struct .cr-input { width: 80px; }
 .tf-struct-add { width: 100%; margin-bottom: 6px; }
 .ind-node.grp { margin-top: 10px; }
+.trade-week { margin: 0 0 8px; font-size: 0.8125rem; color: var(--text-secondary); }
+.trade-barcell { display: flex; align-items: center; gap: 8px; min-width: 160px; }
+.trade-barcell > span:last-child { flex: none; min-width: 64px; }
+.trade-track { flex: none; width: 100px; height: 8px; border-radius: 4px; background: var(--bg-tertiary, rgba(127,127,127,0.12)); overflow: hidden; }
+.trade-bar { display: block; height: 100%; border-radius: 4px; }
+.trade-bar.sell { background: var(--success, #16a34a); }
+.trade-bar.buy { background: var(--danger, #dc2626); opacity: 0.75; }
+.trade-cost-in { width: 110px; padding: 2px 6px; font-size: 0.75rem; margin-top: 2px; display: block; }
+.ind-fit-paste { margin: 8px 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.ind-fit-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ind-fit-msg { margin: 0; font-size: 0.75rem; color: var(--text-secondary); }
+.ind-fit-res { margin: 4px 0 8px; }
+.pi-empty .btn { margin-top: 8px; }
+@media (max-width: 600px) {
+  .trade-barcell { min-width: 0; gap: 6px; }
+  .trade-track { width: 44px; }
+}

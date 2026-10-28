@@ -5,6 +5,9 @@
 //   /characters/{id}/orders/history/       90 天内已结束的订单：过期 / 取消 / 全部成交（esi-markets.read_character_orders.v1）
 // 物品盈亏按成交均价配对：配对数量 = min(买入量, 卖出量)，配对利润 = 配对数量 × (卖出均价 − 买入均价)；
 // 净利润再减去同期实际缴纳的税费。只买没卖（囤货）或只卖没买（卖资产）的部分不计入配对利润。
+// 自填成本（本机，按角色）：自己造的、很早以前买的东西没有买入记录，可以给物品填每件成本，
+//   填了就按「卖出量 × (卖出均价 − 成本)」算这个物品的利润（替代配对）。
+// 每日现金流：成交明细按本地日期汇总每天卖出额、买入额，减去当天实缴税费得净现金流。
 import { skCards, skToolbar, skRows } from './skeleton.js?v=v17';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
@@ -12,6 +15,16 @@ let ctx;   // esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFe
 const S = { id: null, data: null, loading: null, view: 'items', q: '', sort: 'profit', dir: 'desc' };   // 点表头排序，同一列再点换方向
 const ROW_LIMIT = 300;
 const ORDER_STATE_ZH = { expired: '已过期', cancelled: '已取消' };
+const COST_KEY = 'eve-trade-cost';   // { 角色 ID: { 物品 ID: 每件成本 } }
+const costs = () => { try { return JSON.parse(localStorage.getItem(COST_KEY))?.[S.id] || {}; } catch { return {}; } };
+function setCost(id, v) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(COST_KEY)) || {}; } catch { /* 重建 */ }
+  const mine = { ...(all[S.id] || {}) };
+  if (v > 0) mine[id] = v; else delete mine[id];
+  all[S.id] = mine;
+  try { localStorage.setItem(COST_KEY, JSON.stringify(all)); } catch { /* 存不了就只在这次有效 */ }
+}
 
 export function initTrades(context) {
   ctx = context;
@@ -60,12 +73,15 @@ function summarize(data) {
     if (t.is_buy) { r.buyQty += t.quantity; r.buyIsk += isk; buyIsk += isk; buyN += 1; }
     else { r.sellQty += t.quantity; r.sellIsk += isk; sellIsk += isk; sellN += 1; }
   }
+  const own = costs();
   for (const r of byType.values()) {
     r.avgBuy = r.buyQty ? r.buyIsk / r.buyQty : null;
     r.avgSell = r.sellQty ? r.sellIsk / r.sellQty : null;
-    r.matched = Math.min(r.buyQty, r.sellQty);
-    r.profit = r.matched ? r.matched * (r.avgSell - r.avgBuy) : null;
-    r.margin = r.matched && r.avgBuy ? (r.avgSell - r.avgBuy) / r.avgBuy : null;
+    r.cost = own[r.id] || null;
+    r.matched = r.cost && r.sellQty ? r.sellQty : Math.min(r.buyQty, r.sellQty);
+    const base = r.cost || r.avgBuy;
+    r.profit = r.matched ? r.matched * (r.avgSell - base) : null;
+    r.margin = r.matched && base ? (r.avgSell - base) / base : null;
   }
   // 税费只统计成交记录覆盖的时间段
   const since = data.transactions.length ? new Date(data.transactions[data.transactions.length - 1].date).getTime() : Date.now();
@@ -118,9 +134,9 @@ function itemsTable(data, sum) {
       ${th('name', '物品')}${th('buy', '买入')}${th('sell', '卖出')}${th('profit', '配对利润')}${th('margin', '毛利率')}${th('volume', '成交额')}${th('recent', '最近成交')}
     </tr></thead><tbody>${list.slice(0, ROW_LIMIT).map((r) => `<tr>
       <td>${itemCell(data, r.id)}</td>
-      <td>${r.buyQty ? formatNumber(r.buyQty) + ' × ' + formatPrice(r.avgBuy) : '<span class="muted-cell">—</span>'}</td>
+      <td>${r.buyQty ? formatNumber(r.buyQty) + ' × ' + formatPrice(r.avgBuy) : '<span class="muted-cell">—</span>'}${r.sellQty ? `<button type="button" class="link-btn cell-sub" data-trade-cost="${r.id}" title="自己造的或以前买的，填每件成本来算利润">${r.cost ? '成本 ' + formatPrice(r.cost) : '填成本'}</button>` : ''}</td>
       <td>${r.sellQty ? formatNumber(r.sellQty) + ' × ' + formatPrice(r.avgSell) : '<span class="muted-cell">—</span>'}</td>
-      <td>${r.profit == null ? '<span class="muted-cell">' + (r.buyQty ? '只买入' : '只卖出') + '</span>' : signed(r.profit) + (r.matched < Math.max(r.buyQty, r.sellQty) ? `<span class="cell-sub">配对 ${formatNumber(r.matched)} 件</span>` : '')}</td>
+      <td>${r.profit == null ? '<span class="muted-cell">' + (r.buyQty ? '只买入' : '只卖出') + '</span>' : signed(r.profit) + (r.cost ? '<span class="cell-sub">按填的成本</span>' : r.matched < Math.max(r.buyQty, r.sellQty) ? `<span class="cell-sub">配对 ${formatNumber(r.matched)} 件</span>` : '')}</td>
       <td>${r.margin == null ? '<span class="muted-cell">—</span>' : `<span class="${r.margin >= 0 ? 'up' : 'down'}">${(r.margin * 100).toFixed(1)}%</span>`}</td>
       <td>${formatISK(r.buyIsk + r.sellIsk)}</td>
       <td>${esc(fmtTime(r.last))}</td></tr>`).join('')}</tbody></table></div>` +
@@ -146,6 +162,36 @@ function txTable(data) {
     (list.length > ROW_LIMIT ? `<p class="text-muted valuation-note">只显示最近 ${ROW_LIMIT} 笔（共 ${list.length} 笔）</p>` : '');
 }
 
+// 每日现金流：本地日期 -> 卖出 / 买入 / 税费
+function daysTable(data) {
+  const { formatISK } = ctx;
+  const key = (iso) => { const d = new Date(iso); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const days = new Map();
+  const day = (k) => { if (!days.has(k)) days.set(k, { k, sell: 0, buy: 0, fee: 0 }); return days.get(k); };
+  for (const t of data.transactions) { const d = day(key(t.date)); d[t.is_buy ? 'buy' : 'sell'] += t.quantity * t.unit_price; }
+  if (!days.size) return '<p class="text-muted">没有成交记录</p>';
+  const first = [...days.keys()].sort()[0];
+  for (const j of data.journal) {
+    if (j.ref_type !== 'transaction_tax' && j.ref_type !== 'brokers_fee') continue;
+    const k = key(j.date);
+    if (k >= first) day(k).fee += Math.abs(j.amount || 0);
+  }
+  const list = [...days.values()].sort((a, b) => (a.k < b.k ? 1 : -1));
+  const max = Math.max(...list.map((d) => Math.max(d.sell, d.buy)), 1);
+  const bar = (v, c) => `<span class="trade-track"><span class="trade-bar ${c}" style="width:${Math.max(v ? 2 : 0, v / max * 100).toFixed(1)}%"></span></span>`;
+  const week = list.slice(0, 7).reduce((t, d) => ({ sell: t.sell + d.sell, buy: t.buy + d.buy, fee: t.fee + d.fee }), { sell: 0, buy: 0, fee: 0 });
+  const net = (d) => d.sell - d.buy - d.fee;
+  return `<p class="trade-week">近 7 天：卖出 <b class="up">${formatISK(week.sell)}</b> · 买入 <b class="down">${formatISK(week.buy)}</b> · 净现金流 ${signed(net(week))}</p>
+    <div class="table-scroll"><table class="pc-mini-table trade-table trade-days"><thead><tr>
+      <th>日期</th><th>卖出</th><th>买入</th><th>税费</th><th>净现金流</th>
+    </tr></thead><tbody>${list.map((d) => `<tr>
+      <td>${d.k.slice(5)}</td>
+      <td><div class="trade-barcell">${bar(d.sell, 'sell')}<span>${d.sell ? formatISK(d.sell) : '—'}</span></div></td>
+      <td><div class="trade-barcell">${bar(d.buy, 'buy')}<span>${d.buy ? formatISK(d.buy) : '—'}</span></div></td>
+      <td>${d.fee ? formatISK(d.fee) : '—'}</td>
+      <td>${signed(net(d))}</td></tr>`).join('')}</tbody></table></div>`;
+}
+
 function ordersTable(data) {
   const { esc, formatPrice, formatNumber, locationName } = ctx;
   if (!data.orderScope) return '<p class="text-muted">无订单权限，需重新绑定 ESI</p>';
@@ -168,12 +214,14 @@ function ordersTable(data) {
     }).join('')}</tbody></table></div>`;
 }
 
+const bodyHtml = (data, sum) => (S.view === 'tx' ? txTable(data) : S.view === 'orders' ? ordersTable(data) : S.view === 'days' ? daysTable(data) : itemsTable(data, sum));
+
 function render(box, data) {
   const { esc, formatISK, formatNumber, valuationCard } = ctx;
   const sum = summarize(data);
   const fees = sum.tax + sum.broker;
   const days = Math.max(1, Math.round((Date.now() - sum.since) / 86400e3));
-  const views = [['items', '物品盈亏', sum.items.length], ['tx', '成交明细', data.transactions.length], ['orders', '历史订单', data.orders.length]];
+  const views = [['items', '物品盈亏', sum.items.length], ['days', '每日现金流', null], ['tx', '成交明细', data.transactions.length], ['orders', '历史订单', data.orders.length]];
   box.innerHTML =
     '<div class="valuation-grid">' +
       valuationCard('买入总额', formatISK(sum.buyIsk) + ' ISK', formatNumber(sum.buyN) + ' 笔成交', 'is-sell') +
@@ -184,14 +232,14 @@ function render(box, data) {
     '</div>' +
     '<div class="valuation-toolbar section-gap">' +
       '<div class="segmented" role="group" aria-label="交易记录视图">' +
-        views.map(([key, label, n]) => `<button data-trade-view="${key}" class="${S.view === key ? 'active' : ''}">${label} <span class="seg-count">${n}</span></button>`).join('') +
+        views.map(([key, label, n]) => `<button data-trade-view="${key}" class="${S.view === key ? 'active' : ''}">${label}${n == null ? '' : ` <span class="seg-count">${n}</span>`}</button>`).join('') +
       '</div>' +
-      '<div class="station-filter search-box trade-filter"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' +
-        `<input type="search" data-trade-q placeholder="筛选物品" autocomplete="off" aria-label="筛选物品" value="${esc(S.q)}"></div>` +
+      (S.view === 'days' ? '' : '<div class="station-filter search-box trade-filter"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' +
+        `<input type="search" data-trade-q placeholder="筛选物品" autocomplete="off" aria-label="筛选物品" value="${esc(S.q)}"></div>`) +
       '<span class="toolbar-spacer"></span>' +
       '<button class="btn btn-ghost" data-trade-reload>刷新</button>' +
     '</div>' +
-    `<div data-trade-body>${S.view === 'tx' ? txTable(data) : S.view === 'orders' ? ordersTable(data) : itemsTable(data, sum)}</div>` +
+    `<div data-trade-body>${bodyHtml(data, sum)}</div>` +
     `<p class="text-muted valuation-note" title="ESI 只提供最近约 30 天、最多 2500 条；配对利润按买卖均价，不含库存；税费取钱包流水实缴">最近 ${days} 天 · ${formatNumber(data.transactions.length)} 笔成交</p>`;
 }
 
@@ -204,11 +252,30 @@ function bind(box) {
     if (view) { S.view = view.dataset.tradeView; render(box, S.data); return; }
     const sort = e.target.closest('[data-trade-sort]');
     if (sort) { sortBy(box, sort.dataset.tradeSort); return; }
+    const cost = e.target.closest('[data-trade-cost]');
+    if (cost) {
+      const id = Number(cost.dataset.tradeCost);
+      const inp = document.createElement('input');
+      Object.assign(inp, { type: 'number', min: '0', step: 'any', className: 'pi-input trade-cost-in', value: costs()[id] || '', placeholder: '每件成本' });
+      inp.setAttribute('aria-label', '每件成本');
+      inp.dataset.tradeCostIn = id;
+      cost.replaceWith(inp);
+      inp.focus();
+      return;
+    }
     const type = e.target.closest('[data-trade-type]');
     if (type) { ctx.selectItem(Number(type.dataset.tradeType)); return; }
     if (e.target.closest('[data-trade-reload]')) renderTrades(box, true);
   });
+  // 填成本：回车或离开输入框就保存（清空 = 删除），重画
+  const saveCost = (inp) => { if (!inp.isConnected) return; setCost(Number(inp.dataset.tradeCostIn), Number(inp.value) || 0); render(box, S.data); };
+  box.addEventListener('focusout', (e) => { if (e.target.matches('[data-trade-cost-in]')) saveCost(e.target); });
   box.addEventListener('keydown', (e) => {
+    if (e.target.matches('[data-trade-cost-in]')) {
+      if (e.key === 'Enter') { e.preventDefault(); saveCost(e.target); }
+      if (e.key === 'Escape') render(box, S.data);
+      return;
+    }
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('th[data-trade-sort]')) { e.preventDefault(); sortBy(box, e.target.dataset.tradeSort); }
   });
   box.addEventListener('input', (e) => {
@@ -216,7 +283,7 @@ function bind(box) {
     S.q = e.target.value.trim();
     const body = box.querySelector('[data-trade-body]');
     const sum = summarize(S.data);
-    body.innerHTML = S.view === 'tx' ? txTable(S.data) : S.view === 'orders' ? ordersTable(S.data) : itemsTable(S.data, sum);
+    body.innerHTML = bodyHtml(S.data, sum);
   });
 }
 

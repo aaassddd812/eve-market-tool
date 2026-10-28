@@ -1,7 +1,7 @@
 import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17';
-import * as TF from './trade-fees.js?v=v5';
+import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v13';
-import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v34';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v35';
 import * as SM from './struct-markets.js?v=v6';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v8';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
@@ -589,7 +589,7 @@ async function getLiveHubPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v50').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v51').then((m) => {
     m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -728,7 +728,7 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v16').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v17').then((m) => {
     m.initAppraisal({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
       getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -4670,7 +4670,7 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v7').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v8').then((m) => {
     m.initOrderWatch({
       esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -4690,7 +4690,7 @@ function loadOrderWatch() {
 // 个人中心 · 交易记录与盈亏：首次打开时加载
 let tradesLoading = null;
 function loadTradesModule() {
-  if (!tradesLoading) tradesLoading = import('./trades.js?v=v6').then((m) => {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v7').then((m) => {
     m.initTrades({
       esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard,
