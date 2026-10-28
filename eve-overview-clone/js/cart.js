@@ -110,7 +110,7 @@ function render(fetchPrices = true) {
   const rows = list.map((x) => {
     const p = price(x.id);
     return `<tr>
-      <td class="cart-name"><img src="${ctx.eveTypeIcon(x.id)}" data-item-pop="${x.id}" alt="" width="24" height="24" loading="lazy"><button class="link-btn" data-cart-open="${x.id}">${esc(x.name)}</button></td>
+      <td><div class="cart-name"><img src="${ctx.eveTypeIcon(x.id)}" data-item-pop="${x.id}" alt="" width="24" height="24" loading="lazy"><button class="link-btn" data-cart-open="${x.id}">${esc(x.name)}</button></div></td>
       <td class="num"><input type="number" class="cr-input cart-qty" min="1" step="1" value="${Math.round(x.qty)}" data-cart-qty="${x.id}" aria-label="数量"></td>
       <td class="num">${p.sell != null ? ctx.formatISK(p.sell) : '—'}</td>
       <td class="num">${p.sell != null ? ctx.formatISK(p.sell * x.qty) : '—'}</td>
