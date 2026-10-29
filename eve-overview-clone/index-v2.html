@@ -36,15 +36,6 @@
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
   <script src="js/i18n.js?v=113"></script>
-  <!-- 星图使用 three.js，按需加载；import map 让其子模块能解析 'three' -->
-  <script type="importmap">
-    {
-      "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-      }
-    }
-  </script>
   <link rel="stylesheet" href="css/modern-style.css?v=v217">
 </head>
 <body>
@@ -1127,7 +1118,7 @@
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v302" type="module" data-cfasync="false"></script>
+  <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v303" type="module" data-cfasync="false"></script>
 </body>
 </html>

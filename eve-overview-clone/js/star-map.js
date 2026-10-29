@@ -2,11 +2,12 @@
 // 静态数据：map-data.json（build_map.mjs 由 CCP SDE 生成，星系真实三维坐标）
 // 实时数据：ESI 公开接口（主权、击杀、跳跃、入侵、势力战争、路线），无需授权
 // 渲染：three.js（WebGL），星系名与星域名绘制在叠加的 2D 画布上
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { Line2 } from 'three/addons/lines/Line2.js';
-import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
-import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+// three.js 0.160.0 放在本站（js/vendor/three/，附加模块已改成相对路径引用）：国内手机网络常连不上 jsDelivr，旧版 iOS 也不支持 import map
+import * as THREE from './vendor/three/three.module.min.js';
+import { OrbitControls } from './vendor/three/OrbitControls.js';
+import { Line2 } from './vendor/three/Line2.js';
+import { LineMaterial } from './vendor/three/LineMaterial.js';
+import { LineGeometry } from './vendor/three/LineGeometry.js';
 import * as JP from './jump-planner.js?v=v16';
 import * as ST from './standings.js?v=v4';
 import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s4';
