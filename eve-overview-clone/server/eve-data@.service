@@ -1,0 +1,9 @@
+[Unit]
+Description=EVE 站点数据更新（%i：tq 宁静 / cn 晨曦与曙光）
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/eve/data-update/repo/eve-overview-clone/server/data_update.sh %i
+Nice=10
+TimeoutStartSec=3h

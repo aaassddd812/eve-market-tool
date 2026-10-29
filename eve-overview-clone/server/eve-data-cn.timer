@@ -1,0 +1,10 @@
+[Unit]
+Description=每天北京时间 12:00 更新晨曦 / 曙光独有物品
+
+[Timer]
+OnCalendar=*-*-* 12:00:00 Asia/Shanghai
+Persistent=true
+Unit=eve-data@cn.service
+
+[Install]
+WantedBy=timers.target

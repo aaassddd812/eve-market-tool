@@ -1,0 +1,10 @@
+[Unit]
+Description=每天北京时间 20:00 检查宁静 SDE 并更新站点数据
+
+[Timer]
+OnCalendar=*-*-* 20:00:00 Asia/Shanghai
+Persistent=true
+Unit=eve-data@tq.service
+
+[Install]
+WantedBy=timers.target

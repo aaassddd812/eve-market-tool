@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """国服（晨曦 / 曙光）独有的舰船、装备、技能等：CCP 的 SDE 里没有，只能从网易 ESI 读取，生成 cn-extra-<服>.json。
 
-用法：python3 server/build_cn_extra.py <SDE 解压目录> [serenity] [infinity]
-  （在 eve-overview-clone 目录下运行；ESI 结果缓存在 server/.cn-cache/，重跑只请求新增的物品）
+用法：python3 server/build_cn_extra.py <SDE 解压目录> [serenity] [infinity] [--root 站点目录] [--cache 缓存目录] [--refresh-hours N]
+  （默认在 eve-overview-clone 目录下读写；ESI 结果缓存在 server/.cn-cache/，重跑只请求新增的物品）
+  --root：读 fit-data.json 等、写 cn-extra-<服>.json 与 i18n 的目录（定时任务直接指向线上静态目录）
+  --refresh-hours N：距上次全量刷新超过 N 小时就忽略缓存重读全部物品（国服改了已有物品的数值也能跟上）
+  文件只在内容变了时才写（先写临时文件再替换），没变不动；有更新时输出「已更新」。定时任务见 server/data_update.sh。
 
 做法：
   1. 比较宁静与国服 /universe/types/ 的全部 ID，找出国服独有的物品，逐个读详情（中英文名、分组、市场分组、属性、效果）
@@ -30,11 +33,14 @@ import json
 import os
 import re
 import sys
+import threading
+import time
 import urllib.error
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CACHE = os.path.join(ROOT, 'server', '.cn-cache')
+REFRESH = False   # True：本次运行忽略缓存，每个地址重读一次
 TQ = 'https://esi.evetech.net/latest'
 CN = 'https://ali-esi.evepc.163.com/latest'
 FIT_CATS = {6, 7, 8, 16, 18, 20, 32, 87}    # 与 build_fit_data.py 相同
@@ -51,13 +57,30 @@ HULL_RE = re.compile(r'^(Amarr|Caldari|Gallente|Minmatar|Precursor|ORE|Jove|Upwe
 
 
 # ---------- ESI（带磁盘缓存）----------
+ERR_LOCK = threading.Lock()
+
+
+def error_budget(headers):
+    """ESI 错误额度（每分钟 100 次 4xx/5xx，超了整个 IP 被封，线上服务也读不了）：剩得少就等到重置"""
+    remain, reset = (headers or {}).get('X-ESI-Error-Limit-Remain'), (headers or {}).get('X-ESI-Error-Limit-Reset')
+    if remain is not None and int(remain) < 30:
+        with ERR_LOCK:
+            time.sleep(int(reset or 60) + 1)
+
+
 def fetch(url):
     err = None
     for _ in range(5):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers={'User-Agent': 'EVE-Market-Tool build_cn_extra'}), timeout=30) as r:
+                error_budget(r.headers)
                 return json.load(r), r.headers
         except urllib.error.HTTPError as e:
+            if e.code == 420:   # 已经被限：等到重置再试
+                with ERR_LOCK:
+                    time.sleep(int(e.headers.get('X-ESI-Error-Limit-Reset') or 60) + 1)
+            else:
+                error_budget(e.headers)
             if e.code == 404:
                 return None, None
             err = e
@@ -71,9 +94,11 @@ class Cache:
     def __init__(self, name):
         self.path = os.path.join(CACHE, name + '.json')
         self.data = json.load(open(self.path)) if os.path.exists(self.path) else {}
+        self.seen = set()
 
     def many(self, urls, threads=16):
-        todo = [u for u in dict.fromkeys(urls) if u not in self.data]
+        todo = [u for u in dict.fromkeys(urls) if u not in self.data or (REFRESH and u not in self.seen)]
+        self.seen.update(todo)
         with cf.ThreadPoolExecutor(threads) as ex:
             for u, (v, _) in zip(todo, ex.map(fetch, todo)):
                 if v is not None:
@@ -83,7 +108,7 @@ class Cache:
                     self.data[u] = v
         if todo:
             os.makedirs(CACHE, exist_ok=True)
-            json.dump(self.data, open(self.path, 'w'), ensure_ascii=False)
+            write_if_changed(self.path, self.data, compact=False)
         return [self.data.get(u) for u in urls]
 
 
@@ -93,6 +118,32 @@ def all_ids(base, ds):
     with cf.ThreadPoolExecutor(8) as ex:
         for x in ex.map(lambda p: fetch(f'{base}/universe/types/?datasource={ds}&page={p}')[0], range(2, int(h['x-pages']) + 1)):
             out |= set(x or [])
+    return out
+
+
+def probe(url_of, start, misses=10):
+    """从 start 往后逐个试，连续 misses 个 404 就停（404 计入 ESI 错误额度，一次十几个）；返回 { ID: 详情 }"""
+    out, n, i = {}, 0, start
+    while n < misses:
+        v, _ = fetch(url_of(i))
+        if v is None:
+            n += 1
+        else:
+            out[i], n = v, 0
+        i += 1
+    return out
+
+
+def new_ids(base, ds, known):
+    """网易的物品列表（/universe/types/）和市场分组列表更新慢，新船上线当天常常还没有，详情接口却已经能读：
+    从已知最大的市场分组、国服独有物品 ID 往后试，新分组里的物品和新 ID 都算上"""
+    groups, _ = fetch(f'{base}/markets/groups/?datasource={ds}')
+    top = max([g for g in groups or [] if g < 30000] or [0])
+    out = set()
+    for v in probe(lambda g: f'{base}/markets/groups/{g}/?datasource={ds}', top + 1).values():
+        out |= set(v.get('types', []))
+    top = max([t for t in known | out if t < 1_000_000] or [0])
+    out |= set(probe(lambda t: f'{base}/universe/types/{t}/?datasource={ds}', top + 1))
     return out
 
 
@@ -107,6 +158,11 @@ ABBR = {'med': 'medium', 'dmg': 'damage', 'rof': 'rate', 'ac': 'autocannon', 'ar
         'railgun': 'railgun hybrid', 'blaster': 'blaster hybrid', 'autocannon': 'autocannon projectile',
         'artillery': 'artillery projectile', 'laser': 'laser energy'}
 SIZE = {'small', 'medium', 'large', 'capital', 'heavy', 'light'}
+# 推断不出的国服效果（名字连写、fighter 是停用词）：效果名 -> 技能，只用于推断失败的技能修正
+MANUAL = {
+    'SerpentisModifiedBonustoFighterDamageandHP': 23069,                  # 诛日级：舰载机伤害、护盾
+    'SerpentisModifiedBonustoSupportFighterWebRangeandStrength': 40573,   # 诛日级：后勤铁骑舰载机停滞缠绕距离、强度
+}
 STOP = {'ship', 'bonus', 'role', 'solar', 'flare', 'weapon', 'and', 'post', 'percent', 'location', 'modules',
         'requiring', 'owner', 'char', 'skill', 'set', 'operation', 'the', 'of', 'for', 'no', 'fighter', 'entity'}
 
@@ -168,6 +224,16 @@ class Inferer:
         best = max((len(set(et) & set(toks(n))) / max(1, len(set(et) | set(toks(n)))) for n in names), default=0)
         return s + best + 0.001 * len(names)
 
+    def pick(self, et, f, cands):
+        strong = self.strong(et, f)
+        both = [x for x in strong if x in cands]
+        if f != 2 and strong:
+            return both or strong
+        if both:
+            return both
+        ranked = sorted(cands, key=lambda x: -self.score(et, x, f, cands[x]))
+        return [x for x in ranked if (set(self.lt(x, f)) - SIZE) and (set(self.lt(x, f)) - SIZE) <= set(et)][:1]
+
     def mods(self, effect):
         """返回 (修正列表, 推断不出而丢弃的条数)"""
         out, done, dropped = [], set(), 0
@@ -184,18 +250,26 @@ class Inferer:
                 out.append([*key, 0])
                 continue
             cands = self.sig.get((key[0], key[1], key[2], key[4]), {})
-            strong = self.strong(et, f)
-            both = [x for x in strong if x in cands]
-            if f != 2 and strong:
-                picks = both or strong
-            elif both:
-                picks = both
-            else:
-                ranked = sorted(cands, key=lambda x: -self.score(et, x, f, cands[x]))
-                picks = [x for x in ranked if (set(self.lt(x, f)) - SIZE) and (set(self.lt(x, f)) - SIZE) <= set(et)][:1]
+            picks = self.pick(et, f, cands) or ([MANUAL[effect['name']]] if f in (3, 4) and effect['name'] in MANUAL else [])
             dropped += not picks
             out += [[*key, x] for x in picks]
         return out, dropped
+
+
+UPDATED = []
+
+
+def write_if_changed(path, data, compact=True):
+    """内容变了才写；先写临时文件再改名，线上读文件的请求不会读到写了一半的"""
+    text = json.dumps(data, ensure_ascii=False, separators=(',', ':') if compact else None)
+    if os.path.exists(path) and open(path, encoding='utf-8').read() == text:
+        return False
+    tmp = path + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as fh:
+        fh.write(text)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+    return True
 
 
 def num(v):
@@ -212,7 +286,8 @@ def build(ds, sde, tq_ids):
     skill_data = json.load(open(os.path.join(ROOT, 'skill-data.json')))
     cache = Cache(ds)
     q = f'datasource={ds}'
-    extra = sorted(all_ids(CN, ds) - tq_ids)
+    listed = all_ids(CN, ds) - tq_ids
+    extra = sorted(listed | (new_ids(CN, ds, listed) - tq_ids))
     zh = dict(zip(extra, cache.many([f'{CN}/universe/types/{t}/?{q}&language=zh' for t in extra])))
     zh = {k: v for k, v in zh.items() if v and (v.get('published') or v.get('group_id') in ADAPT_GROUPS)}
     ids = sorted(zh)
@@ -336,8 +411,8 @@ def build(ds, sde, tq_ids):
             'fit': {'attrs': out_attrs, 'effects': out_eff, 'groups': out_groups, 'markets': out_markets, 'types': out_types,
                     'patch': patch, **({'adapt': adapt} if adapt else {})},
             'skills': {'skills': sk, 'groups': sk_groups}}
-    with open(os.path.join(ROOT, f'cn-extra-{ds}.json'), 'w', encoding='utf-8') as fh:
-        json.dump(data, fh, ensure_ascii=False, separators=(',', ':'))
+    if write_if_changed(os.path.join(ROOT, f'cn-extra-{ds}.json'), data):
+        UPDATED.append(ds)
     ships = sum(1 for v in out_types.values() if out_groups.get(v[2], [0, 0])[1] == 6 or fit['groups'].get(str(v[2]), [0, 0])[1] == 6)
     print(f'{ds}: 独有物品 {len(ids)} · 目录分组 {len(out_cat)} · 装配物品 {len(out_types)}（舰船 {ships}）· 技能 {len(sk)}'
           f' · 新效果 {len(out_eff)}（丢弃无法推断的修正 {dropped} 条）· 新属性 {len(out_attrs)} · 舰船补丁 {len(patch)}'
@@ -398,11 +473,25 @@ def adapt_meta(ds, fit, out_types, zh, groups):
 
 
 def main():
-    if len(sys.argv) < 2:
-        sys.exit(__doc__)
-    sde = sys.argv[1]
-    servers = sys.argv[2:] or ['serenity', 'infinity']
+    global ROOT, CACHE, REFRESH
+    import argparse
+    ap = argparse.ArgumentParser(usage=__doc__)
+    ap.add_argument('sde')
+    ap.add_argument('servers', nargs='*', default=['serenity', 'infinity'])
+    ap.add_argument('--root')
+    ap.add_argument('--cache')
+    ap.add_argument('--refresh-hours', type=float, default=0)
+    args = ap.parse_args()
+    ROOT = os.path.abspath(args.root or ROOT)
+    CACHE = os.path.abspath(args.cache or CACHE)
+    sde, servers = args.sde, args.servers or ['serenity', 'infinity']
+    stamp = os.path.join(CACHE, 'last-refresh')
+    if args.refresh_hours and (not os.path.exists(stamp) or time.time() - os.path.getmtime(stamp) > args.refresh_hours * 3600):
+        REFRESH = True
+        print('全量刷新：忽略缓存重读全部物品')
     tq_ids = all_ids(TQ, 'tranquility')
+    if len(tq_ids) < 10000:   # 宁静 ESI 没读到：国服物品会全被当成独有，宁可这次不更新
+        sys.exit('宁静 ESI 物品列表读取失败，本次不更新')
     names = {}
     for ds in servers:
         for k, v in build(ds, sde, tq_ids).items():
@@ -410,7 +499,7 @@ def main():
     cn_path = os.path.join(ROOT, 'i18n', 'names-en-cn.json')
     old = json.load(open(cn_path)) if os.path.exists(cn_path) else {}
     old.update(names)
-    json.dump(old, open(cn_path, 'w'), ensure_ascii=False, separators=(',', ':'))
+    write_if_changed(cn_path, old)
     main_path = os.path.join(ROOT, 'i18n', 'names-en.json')
     full = json.load(open(main_path))
     added = 0
@@ -418,8 +507,13 @@ def main():
         if k not in full:
             full[k] = v
             added += 1
-    json.dump(full, open(main_path, 'w'), ensure_ascii=False, separators=(',', ':'))
+    if added:
+        write_if_changed(main_path, full)
     print(f'英文名：国服独有 {len(old)} 条，新并入 names-en.json {added} 条')
+    if REFRESH:
+        os.makedirs(CACHE, exist_ok=True)
+        open(stamp, 'w').close()
+    print('已更新：' + '、'.join(UPDATED) if UPDATED else '没有变化')
 
 
 if __name__ == '__main__':

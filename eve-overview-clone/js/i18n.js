@@ -9,7 +9,7 @@
 (function () {
   'use strict';
   var KEY = 'eve-lang';
-  var VER = '109';
+  var VER = '110';
   var CN_TZ = /^Asia\/(Shanghai|Chongqing|Chungking|Harbin|Urumqi|Kashgar|Hong_Kong|Macau|Macao|Taipei)$/;
 
   function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
@@ -46,6 +46,18 @@
     btn.addEventListener('click', function () { api.set(LANG === 'en' ? 'zh' : 'en'); });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindToggle); else bindToggle();
+
+  // 站点数据文件由服务器定时重新生成（宁静 SDE、国服网易 ESI，见 server/data_update.sh），文件名和 ?v= 不变：
+  // 每次都向服务器确认有没有新版（没变只回 304），不吃浏览器里的长期缓存
+  var FRESH = /\/(catalog|map-data(-\w+)?|npc-[\w-]+|type-names-zh|fit-data|fit-info|industry-data|skill-data|sov-data|wh-data|pi-data|lp-data(-\w+)?|reprocess-data|mutaplasmid-data|dogma-attr-zh|type-volume|ind-rigs|cn-extra-\w+|names-en)\.json$/;
+  var baseFetch = window.fetch.bind(window);
+  window.fetch = function (input, init) {
+    try {
+      var u = new URL(typeof input === 'string' ? input : input.url, location.href);
+      if (u.origin === location.origin && FRESH.test(u.pathname) && (!init || !init.method || init.method === 'GET')) init = Object.assign({}, init, { cache: 'no-cache' });
+    } catch (e) { /* 地址解析不了照常请求 */ }
+    return baseFetch(input, init);
+  };
   if (LANG !== 'en') return;
 
   // ---------- 英文模式 ----------
