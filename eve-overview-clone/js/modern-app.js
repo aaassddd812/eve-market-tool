@@ -1,9 +1,9 @@
 import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17';
 import * as CS from './cloud-sync.js?v=2';
 import * as TF from './trade-fees.js?v=v6';
-import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v13';
-import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v35';
-import * as SM from './struct-markets.js?v=v6';
+import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v14';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v38';
+import * as SM from './struct-markets.js?v=v7';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v8';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
@@ -2129,13 +2129,14 @@ async function regionMarketStructures(regionId, onStatus) {
 }
 
 // 读取一座建筑的全部订单，按物品分组；无权限返回 { denied }，订单太多返回 { tooBig }
-function structureMarket(id) {
-  const hit = structMarkets.get(id);
+function structureMarket(id, maxPages = STRUCT_MARKET_MAX_PAGES) {
+  let hit = structMarkets.get(id);
+  if (hit?.data?.tooBig && hit.data.pages <= maxPages) hit = null;   // 之前按小上限跳过，这次允许读
   const age = hit ? Date.now() - hit.at : Infinity;
   if (hit && age < STRUCT_MARKET_TTL) return hit.promise;
   if (hit?.data && age < STRUCT_MARKET_STALE) { refreshStructureMarket(id); return Promise.resolve(hit.data); }
   const entry = { at: Date.now() };
-  entry.promise = readStructureMarket(id).then((data) => { entry.data = data; return data; }).catch((error) => { structMarkets.delete(id); throw error; });
+  entry.promise = readStructureMarket(id, maxPages).then((data) => { entry.data = data; return data; }).catch((error) => { structMarkets.delete(id); throw error; });
   structMarkets.set(id, entry);
   return entry.promise;
 }
@@ -2144,14 +2145,14 @@ function refreshStructureMarket(id) {
   const hit = structMarkets.get(id);
   if (!hit?.data) return structureMarket(id);
   if (hit.refreshing) return hit.refreshing;
-  hit.refreshing = readStructureMarket(id).then((data) => {
+  hit.refreshing = readStructureMarket(id, hit.data.byType ? SM.PICKED_PAGES : STRUCT_MARKET_MAX_PAGES).then((data) => {
     structMarkets.set(id, { at: Date.now(), promise: Promise.resolve(data), data });
     structDataListeners.forEach((fn) => { try { fn(id); } catch { /* 单个监听出错不影响其他 */ } });
     return data;
   }).catch(() => hit.data).finally(() => { hit.refreshing = null; });
   return hit.refreshing;
 }
-function readStructureMarket(id) {
+function readStructureMarket(id, maxPages = STRUCT_MARKET_MAX_PAGES) {
   return (async () => {
     const token = await ensureEsiToken();
     const get = (page) => fetch(`${ESI_BASE}/markets/structures/${id}/?datasource=${SERVER.datasource}&page=${page}`, { headers: { Authorization: 'Bearer ' + token.access_token } });
@@ -2159,7 +2160,7 @@ function readStructureMarket(id) {
     if (first.status === 403 || first.status === 404) return { denied: true };
     if (!first.ok) throw new Error('ESI ' + first.status);
     const pages = Number(first.headers.get('X-Pages')) || 1;
-    if (pages > STRUCT_MARKET_MAX_PAGES) return { tooBig: true };
+    if (pages > maxPages) return { tooBig: true, pages };
     const lists = [await first.json()];
     for (let p = 2; p <= pages; p += 4) {
       const batch = Array.from({ length: Math.min(4, pages - p + 1) }, (_, i) => get(p + i).then((r) => (r.ok ? r.json() : [])));
@@ -2182,14 +2183,15 @@ function prefetchStructMarkets() {
   if (!token?.access_token || !hasScope(token, STRUCT_MARKET_SCOPE)) return null;
   structPrefetching = (async () => {
     const ids = (await SM.enabledStructs()).map((x) => x.id);
+    const picked = new Set(ids);
     if (state.regionId) ids.push(...await regionMarketStructures(state.regionId, () => {}).catch(() => []));
     for (const id of new Set(ids)) {
       const hit = structMarkets.get(id);
       const age = hit ? Date.now() - hit.at : Infinity;
       if (hit && !hit.data && age < STRUCT_MARKET_TTL) continue;          // 正在读
-      if (hit?.data && (hit.data.denied || hit.data.tooBig)) continue;    // 没权限 / 太大：后台不重试（403 计入 ESI 错误额度），用到时照旧按缓存时间重读
+      if (hit?.data && (hit.data.denied || (hit.data.tooBig && !(picked.has(id) && hit.data.pages <= SM.PICKED_PAGES)))) continue;    // 没权限 / 太大：后台不重试（403 计入 ESI 错误额度），用到时照旧按缓存时间重读
       if (age < STRUCT_MARKET_TTL - 60e3) continue;
-      await (hit?.data ? refreshStructureMarket(id) : structureMarket(id)).catch(() => null);
+      await (hit?.data && !hit.data.tooBig ? refreshStructureMarket(id) : structureMarket(id, picked.has(id) ? SM.PICKED_PAGES : STRUCT_MARKET_MAX_PAGES)).catch(() => null);
     }
   })().catch(() => {}).finally(() => { structPrefetching = null; });
   return structPrefetching;
@@ -2789,7 +2791,7 @@ function initContentTabs() {
   // 「近期损失」只对舰船显示，启动时不恢复到该标签
   if (!['orders', 'chart', 'history', 'hubs'].includes(state.contentTab)) state.contentTab = 'orders';
   if (REGIONS.length < 2) $('hubsTab').hidden = true;
-  SM.initStructMarkets({ getToken: ensureEsiToken, readToken: () => state.esiToken || readEsiToken(), hasScope, structureMarket, structureNameMap, saveStructureNames,
+  SM.initStructMarkets({ getToken: ensureEsiToken, readToken: () => state.esiToken || readEsiToken(), hasScope, structureMarket, forgetStructureMarket: (id) => structMarkets.delete(id), structureNameMap, saveStructureNames,
     systemRegions, esc, formatNumber });
   const structs = {
     load: SM.loadEnabledMarkets, quote: SM.structQuote, count: SM.enabledCount, open: SM.openStructManager, on: SM.onStructChange, readable: SM.readableStructs, enable: SM.enableStruct,

@@ -38,7 +38,7 @@
 // 预加载（prefetchHubRank，用过倒卖排行的浏览器在页面空闲时调用）：先取服务器汇总、包装体积、勾选建筑与自定义市场的挂单，
 //   打开倒卖排行时直接出结果；建筑订单后台刷新完（structs.onData）悄悄换上新数据，不显示「正在读取」。
 // 分类：打开倒卖排行时市场中心侧栏的物品目录换成分类列表（#arbSide），显示每个分类符合条件的物品数。
-import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v13';
+import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v14';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 
 let ctx = null;   // server, regions, esc, formatISK, formatPrice, formatNumber, TF, typeName, category, isGlobal, iconUrl, openItemPop, openItem
@@ -47,6 +47,10 @@ const POLL = 4000;
 const POLL_VOLUME = 20000;   // 服务器还在读成交量时，隔一会儿取一次新结果
 const MIN_PROFIT = [[0, '不限'], [1e6, '100 万'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿']];
 const MIN_DAILY = [[0, '不限'], [10, '10'], [100, '100'], [1000, '1000']];
+// 买入 / 卖出选了玩家建筑且那一侧挂单：建筑没有成交记录，算不出可做数量和预计利润，改按每件利润 + 直接成交深度筛
+const MIN_QTY = [[0, '不限'], [10, '10'], [100, '100'], [1000, '1000'], [1e4, '1 万']];
+const MIN_UNIT = [[0, '不限'], [1e4, '1 万'], [1e5, '10 万'], [1e6, '100 万'], [1e7, '1000 万']];
+const MIN_M3 = [[0, '不限'], [1e3, '1000'], [1e4, '1 万'], [1e5, '10 万'], [1e6, '100 万']];
 const DEMAND_MIN_DAY = [[0, '不限'], [1e6, '100 万'], [1e7, '1000 万'], [1e8, '1 亿']];
 const DEMAND_MIN_TURN = [[0, '不限'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿']];
 const DEMAND_MAX_STOCK = [[0, '不限'], [1, '1 天'], [3, '3 天'], [7, '7 天']];
@@ -64,7 +68,8 @@ const KINDS = ['demand', 'consume', 'relist', 'reproc'];
 const modeKind = () => (KINDS.includes(F.mode) ? F.mode : 'route');
 function sortState() {
   const m = modeKind();
-  const k = COLS[m][F[SORT_KEY[m]]] !== undefined ? F[SORT_KEY[m]] : { route: 'profit', demand: 'day', consume: 'use', relist: 'day', reproc: 'day' }[m];
+  let k = COLS[m][F[SORT_KEY[m]]] !== undefined ? F[SORT_KEY[m]] : { route: 'profit', demand: 'day', consume: 'use', relist: 'day', reproc: 'day' }[m];
+  if (m === 'route' && k === 'profit' && structOrder()) k = 'unit';   // 玩家建筑算不出预计利润，按每件利润排
   return { m, k, dir: F.sdir?.[m]?.[k] || (ASC.has(k) ? 'asc' : 'desc') };
 }
 function sortRows(rows) {
@@ -109,7 +114,7 @@ function pagerHtml(page, pages, total, from, to) {
 }
 const pageSize = () => (PAGE_SIZES.includes(Number(F.size)) ? Number(F.size) : 100);
 const RISING = 1.3, TIGHT = 2, HIGH = 1.15;   // 成交上涨：7 天 / 30 天 ≥ 1.3；库存少：库存 < 2 天；卖价偏高：卖价 ≥ 均价 × 1.15
-const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', rsort: 'day', edits: 3, rhub: 0, rcomp: 0, psort: 'day', pin: 's', pout: 'b', mode: 'sb', rmode: 'sb', med: 7, sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, strict: true, excl: [], custom: [] };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]
+const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', rsort: 'day', edits: 3, rhub: 0, rcomp: 0, psort: 'day', pin: 's', pout: 'b', mode: 'sb', rmode: 'sb', med: 7, sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, minUnit: 0, minM3: 0, minQty: 0, strict: true, excl: [], custom: [] };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]
 const CUSTOM_MAX = 3;
 const CUSTOM_TTL = 10 * 60e3;
 const customCache = new Map();   // 市场 ID -> { at, quotes }
@@ -158,7 +163,8 @@ async function loadStructs(box) {
     return { s, quotes };
   });
   S.smKey = S.sm.map((x) => x.s.id).join(',') + '@' + Date.now();
-  S.smNote = list.length ? `含 ${list.length} 座玩家建筑` : '';
+  const bad = list.failed || [];
+  S.smNote = [list.length ? `含 ${list.length} 座玩家建筑` : '', ...bad.slice(0, 3).map(({ s, why }) => `${s.label} ${why}，没算进来`)].filter(Boolean).join('；') + (bad.length > 3 ? `；另有 ${bad.length - 3} 座没算进来` : '');
   S.rows = null;
   if (box) render(box);
 }
@@ -259,7 +265,8 @@ function hubsOf(row, names, id) {
     if (!q || (q.sell == null && q.buy == null)) continue;
     const k = S.data.hubs.indexOf(s.region);
     const h = k >= 0 ? row[k] : null;
-    out.push({ id: s.id, name: s.label, struct: true, ...q, daily: h?.[6] ?? null, avg: h?.[7] ?? null, px: med(h) });
+    const own = S.sm.some((x) => x.s === s);   // 玩家建筑借用同星域交易中心的成交量，记下来源（自定义 NPC 市场本来就是星域成交量）
+    out.push({ id: s.id, name: s.label, struct: true, ...q, daily: h?.[6] ?? null, avg: h?.[7] ?? null, px: med(h), volFrom: own && h ? names[k] : '' });
   }
   return out;
 }
@@ -273,11 +280,12 @@ function compute() {
   if (S.rows && S.key === key) return S.rows;
   const f = ctx.TF.fees();
   const names = S.data.hubs.map((id) => ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id);
-  const score = ROUTE_SORT[F.sort] || ROUTE_SORT.profit;   // 按表头的利润类列排序时，每个物品也按这一项挑路线
+  const score = ROUTE_SORT[sortState().k] || ROUTE_SORT.profit;   // 按表头的利润类列排序时，每个物品也按这一项挑路线
   const fr = freight();
   // 买入 / 卖出选的建筑被取消勾选后按「全部」算
   const places = new Set([...S.data.hubs, ...S.sm.map((x) => x.s.id), ...S.cm.map((x) => x.s.id)]);
   const from = places.has(F.from) ? F.from : 0, to = places.has(F.to) ? F.to : 0;
+  const st = structOrder();
   const rows = [];
   const excl = new Set(F.excl);
   for (const [tid, row] of Object.entries(S.data.types)) {
@@ -292,7 +300,7 @@ function compute() {
       if (from && r.a.id !== from) continue;
       if (to && r.b.id !== to) continue;
       if (!F.local && r.local) continue;
-      const miss = missOf(r);
+      const miss = missOf(r, st);
       if (!miss) { if (better(r, best)) best = r; } else if (!F.strict && better(r, loose)) { loose = r; loose.miss = miss; }
     }
     if (best) rows.push({ id, cat, r: best });
@@ -794,9 +802,33 @@ function openItemModal(id) {
   ctx.openItemPop(id, { pinned: true, summary: x ? rowFacts(x) : null });
 }
 
+// 买入选了玩家建筑且挂收单，或卖出选了玩家建筑且挂卖单：这一侧没有自己的成交量
+const isStruct = (id) => S.sm.some((x) => x.s.id === id);
+const structOrder = () => (isStruct(F.from) && F.mode[0] !== 's') || (isStruct(F.to) && F.mode[1] !== 'b');
+// 两侧里知道的那一侧能做多少（都不知道为 null）
+const capOf = (r) => { const c = [r.capA, r.capB].filter((v) => v != null); return c.length ? Math.min(...c) : null; };
+// 挂单一侧的成交量借自同星域交易中心
+const volFrom = (r) => (F.mode[0] !== 's' && r.a.volFrom) || (F.mode[1] !== 'b' && r.b.volFrom) || '';
+// 可做数量：借用交易中心成交量的标「估」；挂单一侧算不出时显示直接成交一侧的上限「≤ N」
+function qtyCell(r) {
+  const { formatNumber, esc } = ctx;
+  if (r.qty) {
+    const v = volFrom(r);
+    return v ? `<span title="${esc(`玩家建筑没有成交记录，按同星域 ${v} 的成交量估`)}">${formatNumber(r.qty)} <small class="hc-sub">估</small></span>` : formatNumber(r.qty);
+  }
+  const c = capOf(r);
+  return c ? `<span title="挂单那一侧没有成交量，最多按直接成交那一侧的订单深度">≤ ${formatNumber(c)}</span>` : '—';
+}
 // 路线不符合哪个条件（符合时返回空串）
-function missOf(r) {
+function missOf(r, st) {
   if (r.unit <= 0) return '亏损';
+  if (F.minM3 && (r.perM3 ?? 0) < F.minM3) return '每立方利润低于门槛';
+  if (st) {
+    if (r.unit < F.minUnit) return '每件利润低于门槛';
+    const q = capOf(r);
+    if (F.minQty && q != null && q < F.minQty) return '可做数量低于门槛';
+    return '';
+  }
   if (!r.qty) return '算不出可做数量';
   if (r.total < F.minProfit) return '预计利润低于门槛';
   if (F.minDaily && Math.max(r.a.daily || 0, r.b.daily || 0) < F.minDaily) return '日均成交低于门槛';
@@ -844,7 +876,7 @@ function html(all0) {
       <td class="num ${cls}">${sign(r.unit)}</td>
       <td class="num ${cls}">${(r.margin * 100).toFixed(1)}%</td>
       <td class="num pi-hide-sm" title="${r.vol ? formatNumber(r.vol) + ' m³ / 件' : '体积未知'}">${r.perM3 != null ? formatISK(r.perM3) : '—'}</td>
-      <td class="num">${r.qty ? formatNumber(r.qty) : '—'}</td>
+      <td class="num">${qtyCell(r)}</td>
       <td class="num pi-hide-sm">${r.qty ? formatISK(r.cost * r.qty) : '—'}</td>
       <td class="num ${r.total ? 'up' : ''}">${r.total ? formatISK(r.total) : '—'}</td></tr>`;
   }).join('');
@@ -878,12 +910,14 @@ function html(all0) {
       ${S.showExcl && F.excl.length ? `<div class="ind-rank-row hr-excl"><span class="text-muted">已排除：</span>${F.excl.map((id) => `<span class="ka-chip">${esc(ctx.typeName(id))}<button type="button" class="ka-close" data-hr-unhide="${id}" title="恢复" aria-label="恢复">×</button></span>`).join('')}
         <button type="button" class="link-btn" data-hr-unhide-all>全部恢复</button></div>` : ''}
       <div class="ind-rank-row">
-        <div class="pi-inline"><span>预计利润 ≥</span>${select('minProfit', MIN_PROFIT)}</div>
-        <div class="pi-inline"><span>日均成交 ≥</span>${select('minDaily', MIN_DAILY)}</div>
+        ${structOrder() ? `<div class="pi-inline" title="玩家建筑没有成交记录，挂单算不出预计利润"><span>每件利润 ≥</span>${select('minUnit', MIN_UNIT)}</div>
+        <div class="pi-inline" title="直接成交那一侧最优价 5% 以内的订单件数，挡掉只有几件的钓鱼单"><span>可做数量 ≥</span>${select('minQty', MIN_QTY)}</div>` : `<div class="pi-inline"><span>预计利润 ≥</span>${select('minProfit', MIN_PROFIT)}</div>
+        <div class="pi-inline"><span>日均成交 ≥</span>${select('minDaily', MIN_DAILY)}</div>`}
+        <div class="pi-inline"><span>每立方利润 ≥</span>${select('minM3', MIN_M3)}</div>
       </div>`}
       ${C || RL || RP ? '' : `<div class="ind-rank-row">${freightHtml('hr')}</div>`}
       <p class="pi-note" title="${RP ? '在同一个交易中心买进物品、化矿、把产物卖掉。化矿率和再处理税用估价页的化矿设置，产出按期望值算。每天可做 = 日成交 × 份额（直接买不超过最优价 5% 以内的卖单数量），按化矿批量取整。' : RL ? '同一个交易中心挂收单收货、挂卖单出货。卖单侧成交占比：ESI 每天只有成交均价，按「均价 = f × 当天最高价 + (1 − f) × 当天最低价」解出，近 30 天按成交量加权；标「估」的是用现在的收单价、卖单价和 30 天均价近似。每天可做 = 收单侧、卖单侧每天成交量取小 × 份额；每件利润已扣销售税、两边中介费和每天的改单费。只推荐做什么，改成多少钱看市场行情。' : C ? `日成交量是五大交易中心所在星域的统计加起来（含周边玩家建筑）；消耗额 = 日成交额合计 + 近 7 天日均被击毁数 × 均价（只有宁静服有击杀数据）。建筑卖价是已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少。` : D ? `目标市场的成交量是整个星域的统计（含周边玩家建筑；自定义市场借用同星域交易中心的数据），库存天数用目标市场自己的卖单；建议数量 = 日均成交 × 份额 × 计划天数，不超过进货地卖单深度（挂收单按进货地日均成交 × 份额）。挂单价偏离 30 天成交均价太多的不算。` : '买入、卖出方式可以任意组合；中位价 / 最低价 / 最高价收出是按近 ' + daysLabel(F.med) + '的成交价挂单（付中介费），成交价偏离 30 天均价超过 60%–140% 的不用（乱价成交），现价偏离挂单价 20% 以上标「现价偏离」。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。'}">
-        ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${C || RL || RP ? '' : ` · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'}`} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${esc(S.smNote)}</span>` : ''}${S.cmNote ? ` · <span data-hr-cmnote>${esc(S.cmNote)}</span>` : ''}</p>
+        ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${C || RL || RP ? '' : ` · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'}`} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${S.smNote.split('；').map((t) => `<span>${esc(t)}</span>`).join('；')}</span>` : ''}${S.cmNote ? ` · <span data-hr-cmnote>${esc(S.cmNote)}</span>` : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table hr-table"><thead><tr>
       ${RP ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '交易中心')}${th('buy', '进货价', 'num pi-hide-sm', '挂收单的已加中介费')}${th('value', '化矿后', 'num pi-hide-sm', '一件化矿后的产物卖掉到手多少（已扣再处理税、销售税和中介费）')}${th('unit', '每件利润', 'num')}${th('margin', '利润率', 'num')}${th('qty', '每天可做', 'num')}${th('day', '每天利润', 'num')}${th('turn', '日成交额', 'num pi-hide-sm')}`

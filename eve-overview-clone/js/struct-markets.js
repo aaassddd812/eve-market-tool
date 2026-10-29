@@ -10,11 +10,12 @@ import * as JP from './jump-planner.js?v=v16';
 
 export const MARKET_STRUCTURE_TYPES = new Set([35833, 35834, 40340, 47512, 47513, 47514, 47515, 47516]);
 export const STRUCT_MARKET_SCOPE = 'esi-markets.structure_markets.v1';
+export const PICKED_PAGES = 300;   // 勾选的建筑大市场也读全（倒卖排行要拿它当买入 / 卖出地点），自动扫星域的只读 50 页以内
 const DEPTH = 0.05;            // 与交易中心比价相同：最优价 5% 以内算可成交深度
 const RESCAN_HINT = 7 * 86400e3;
 const SKIP_TTL = 3 * 86400e3;   // 扫描时读不了的建筑 3 天内不再试（403 / 404 都消耗错误额度）
 
-let ctx = null;   // getToken, readToken, hasScope, structureMarket, structureNameMap, saveStructureNames, systemRegions, regionName, esc, showToast, formatNumber
+let ctx = null;   // getToken, readToken, hasScope, structureMarket, forgetStructureMarket, structureNameMap, saveStructureNames, systemRegions, regionName, esc, showToast, formatNumber
 const listeners = new Set();
 let S = null;     // { cid, list: [{ id, name, system, type, status, pages, at, on, manual }], scanAt }
 let scanning = null;
@@ -79,22 +80,27 @@ export function structQuote(orders) {
   };
 }
 
-// 读取全部勾选建筑的市场（结果由 structureMarket 缓存 5 分钟）；返回 [{ s, byType }]，读不到的跳过
+// 读取全部勾选建筑的市场（结果由 structureMarket 缓存 5 分钟）；返回 [{ s, byType }]，读不到的跳过，记在 out.failed（[{ s, why }]）
 export async function loadEnabledMarkets(onProgress = () => {}) {
   const list = await enabledStructs();
-  const out = [];
+  const out = [], failed = [];
   let done = 0;
   const queue = list.slice();
   await Promise.all(Array.from({ length: 3 }, async () => {
     while (queue.length) {
       const s = queue.shift();
-      const r = await ctx.structureMarket(s.id).catch(() => null);
+      const r = await ctx.structureMarket(s.id, PICKED_PAGES).catch(() => null);
       if (r?.byType) out.push({ s, byType: r.byType });
-      else if (r?.denied) markStatus(s.id, 'denied');
+      else {
+        failed.push({ s, why: r?.denied ? '没有权限' : r?.tooBig ? '订单太多' : '读取失败' });
+        if (r?.denied) markStatus(s.id, 'denied');
+      }
       onProgress(++done, list.length);
     }
   }));
-  return out.sort((a, b) => list.indexOf(a.s) - list.indexOf(b.s));
+  out.sort((a, b) => list.indexOf(a.s) - list.indexOf(b.s));
+  out.failed = failed;
+  return out;
 }
 
 function markStatus(id, status) {
@@ -161,12 +167,13 @@ async function probeInto(ids, { manual = false, onProgress = () => {} } = {}) {
         byId.set(id, item);
         st.list.push(item);
       }
+      if (res.status === 'ok' && item.status !== 'ok') ctx.forgetStructureMarket(id);   // 之前缓存的「没有权限」作废，不然读市场时又被标回去
       if (res.status !== 'error') { item.status = res.status; item.pages = res.pages || 0; item.at = Date.now(); }
       if (manual) item.manual = true;
       onProgress(++done, total);
     }
   }));
-  if (authFail >= 3) throw new Error('当前授权读不了建筑市场，请重新绑定 ESI 并勾选「建筑市场」权限');
+  if (authFail && authFail >= Math.min(3, total)) throw new Error('当前授权读不了建筑市场，请重新绑定 ESI 并勾选「建筑市场」权限');
   st.list.sort((a, b) => (a.status === 'ok' ? 0 : 1) - (b.status === 'ok' ? 0 : 1) || (b.pages || 0) - (a.pages || 0) || a.name.localeCompare(b.name));
   save();
   emit();
@@ -268,6 +275,7 @@ function renderDialog() {
       <label><input type="checkbox" data-sm-on="${s.id}" ${s.on && s.status === 'ok' ? 'checked' : ''} ${s.status === 'ok' ? '' : 'disabled'}>
         <span class="sm-name">${esc(shortName(s.name, s.id))}<small>${s.id}${s.manual ? ' · 手动添加' : ''}</small></span></label>
       <span class="sm-badge ${cls}">${label}${s.status === 'ok' && s.pages ? ` · ${formatNumber(s.pages)} 页订单` : ''}</span>
+      ${s.status === 'ok' ? '' : `<button class="link-btn" data-sm-retry="${s.id}">重试</button>`}
       <button class="icon-btn small" data-sm-del="${s.id}" title="移除" aria-label="移除">✕</button></li>`;
   }).join('');
   const stale = st.scanAt && Date.now() - st.scanAt > RESCAN_HINT;
@@ -309,6 +317,20 @@ function bindDialog() {
         if (ids.length) await probeInto(ids, { manual: true });
         progress = (ids.length ? `添加了 ${ids.length} 座` : '没有识别到建筑') + (misses.length ? `；找不到：${misses.slice(0, 3).join('、')}${misses.length > 3 ? ' 等' : ''}（需完整名称或 ID）` : '');
       } catch (err) { progress = '添加失败：' + err.message; }
+      renderDialog();
+      return;
+    }
+    const retry = e.target.closest('[data-sm-retry]');
+    if (retry) {
+      const id = Number(retry.dataset.smRetry);
+      progress = '正在试读…';
+      renderDialog();
+      try {
+        await probeInto([id], { manual: true });
+        const item = state().list.find((s) => s.id === id);
+        if (item?.status === 'ok') { item.on = true; save(); emit(); }
+        progress = item?.status === 'ok' ? '可以读了，已勾选' : '还是读不了';
+      } catch (err) { progress = '试读失败：' + err.message; }
       renderDialog();
       return;
     }

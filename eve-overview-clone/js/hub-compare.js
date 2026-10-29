@@ -181,7 +181,9 @@ export function calcRoutes(hubs, mode, f, ship = null) {
       // 卖单挂在成交价，但现在卖出地的最低卖价（没有卖单就看收单）比它低很多：卖不动
       const curB = b.sell ?? b.buy;
       const devB = histSell && curB != null && curB < sellAt * (1 - DEV) ? 1 - curB / sellAt : 0;
-      out.push({ a, b, local, buyAt, sellAt, cost, shipCost, unit, qty, vol, perM3: vol ? unit / vol : null, margin: cost ? unit / cost : 0, total: unit > 0 ? unit * qty : 0, devA, devB });
+      // capA / capB：两侧各自能做多少，挂单一侧没有成交量（玩家建筑所在星域没有交易中心）时为 null
+      const capA = buyOrder && a.daily == null ? null : buyCap, capB = sellOrder && b.daily == null ? null : sellCap;
+      out.push({ a, b, local, buyAt, sellAt, cost, shipCost, unit, qty, capA, capB, vol, perM3: vol ? unit / vol : null, margin: cost ? unit / cost : 0, total: unit > 0 ? unit * qty : 0, devA, devB });
     }
   }
   return out;
