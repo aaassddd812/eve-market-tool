@@ -22,11 +22,13 @@
 import { SERVER, IS_TQ, serverKey, esiUrl, kbSiteLink } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v7';
 import * as AP from './alert-push.js?v=v1';
+import * as ST from './standings.js?v=v4';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
 const DEFAULTS = { on: false, jumps: 3, mail: true, web: false, sound: false, notify: false, pods: true, watchOn: false, watch: [],   // watch: [{ id, name, kind: character|corporation|alliance, mode: both|kills|losses }]
-  minValue: 0, classes: [], maxAge: 0, regionOn: false, regions: [], offlineMute: true };   // classes: 舰船类别（市场分组 ID），空 = 全部；regions: [{ id, name }]
+  minValue: 0, classes: [], maxAge: 0, regionOn: false, regions: [], offlineMute: true,   // classes: 舰船类别（市场分组 ID），空 = 全部；regions: [{ id, name }]
+  attSt: ['friend', 'neutral', 'hostile'] };   // 攻击者声望：攻击者里有这些归类（standings.js）的才提醒，三个都选 = 不过滤
 const MIN_VALUES = [[0, '不限'], [1e7, '1000 万'], [1e8, '1 亿'], [1e9, '10 亿'], [1e10, '100 亿']];
 const MAX_AGES = [[0, '不限'], [60, '1 分钟'], [180, '3 分钟'], [600, '10 分钟'], [1800, '30 分钟']];
 const KIND_ZH = { character: '角色', corporation: '军团', alliance: '联盟' };
@@ -55,6 +57,7 @@ function load() {
   if (!Array.isArray(T.watch)) T.watch = [];
   T.watch.forEach((e) => { if (!e.kind) e.kind = 'character'; });
   if (!Array.isArray(T.classes)) T.classes = [];
+  if (!Array.isArray(T.attSt) || !T.attSt.length) T.attSt = [...DEFAULTS.attSt];
   if (!Array.isArray(T.regions)) T.regions = [];
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(T)); } catch { /* 忽略 */ } }
@@ -79,6 +82,7 @@ export function initKillAlert(context) {
   load();
   AM.initAlertMail(ctx);   // 旧版收件人设置（T.mailSelf / mailTo）由 alert-mail.js 直接从存储里搬过去
   AM.onMailChange(renderPanel);
+  ST.onStandings(renderPanel);
   AP.onPushChange(renderPanel);
   AM.registerSource('kill', { label: '击杀预警', on: () => T.mail, set: (on) => update({ mail: on }) });
   window.addEventListener('eve-account-change', () => { S.system = 0; S.range = new Map(); S.charId = 0; restart(); });
@@ -220,6 +224,26 @@ function passes(k) {
   return true;
 }
 
+// ---------- 声望 ----------
+const entOf = (p) => (p ? { char: p.character_id || 0, corp: p.corporation_id || 0, alliance: p.alliance_id || 0 } : null);
+// 攻击者按声望归类计数 { friend, neutral, hostile }；没有声望数据返回 null。没有玩家攻击者（NPC）算中立
+function attStandings(k, affs) {
+  if (!ST.ready()) return null;
+  const n = { friend: 0, neutral: 0, hostile: 0 };
+  const att = k.att || [];
+  if (!att.length) { n.neutral = 1; return n; }
+  for (const id of att) n[ST.group(affs.get(id) || { char: id }) || 'neutral']++;
+  return n;
+}
+// 过滤条件里的「攻击者声望」：没绑定 / 没授权联系人时提示
+function stFilterHtml() {
+  const tip = '攻击者里至少有一名所选声望的玩家才提醒；同军团、同联盟、正声望算友方，负声望算敌对，NPC 击杀算中立';
+  const note = ST.ready() ? (T.attSt.length === 3 ? '全选 = 不过滤' : '') : ST.missingScope() ? '绑定 ESI 时勾选「联系人声望」后可用' : !ctx.tokenInfo() ? '绑定 ESI 后可用' : '读取联系人中…';
+  return `<div class="ka-opt ka-stack" title="${tip}"><span><b>攻击者声望</b>${note ? `<small>${note}</small>` : ''}</span>
+    <div class="ka-chips">${ST.GROUPS.map(([g, l]) => `<button type="button" class="ka-chip toggle st-chip-${g}${T.attSt.includes(g) ? ' on' : ''}" data-ka-st="${g}"${ST.ready() ? '' : ' disabled'}>${l}</button>`).join('')}</div></div>`;
+}
+const stSummary = (st) => (st ? ST.GROUPS.filter(([g]) => st[g]).map(([g, l]) => `${l} ${st[g]}`).join(' · ') : '');
+
 // ---------- 实时击杀 ----------
 async function pollLive() {
   if (S.busy || (!T.on && !watching())) return;
@@ -251,13 +275,18 @@ async function pollLive() {
     hits.forEach(({ k }) => S.seen.add(k.id));
     const types = await ctx.resolveTypeNames(hits.flatMap(({ k }) => [k.ship_type_id, k.final?.ship_type_id])).catch(() => new Map());
     const names = data.names || {};
+    // 声望：攻击者角色 → 军团 / 联盟（公开接口），按已绑定角色的联系人归类
+    const affs = ST.ready() ? await ST.affiliation(hits.flatMap(({ k }) => k.att || [])).catch(() => new Map()) : new Map();
     for (const { k, w, region } of hits) {
+      const st = attStandings(k, affs);
+      if (!w && st && !T.attSt.some((g) => st[g] > 0)) continue;   // 攻击者声望不符合（人物关注不过滤）
       raise({
         id: k.id, hash: k.hash, system: k.system_id, jumps: w || region ? jumpsTo(k.system_id) : S.range.get(k.system_id), time: k.time, value: k.value,
         watch: w ? { id: w.id, name: w.name, role: w.role, kind: w.kind } : null, region: region || null,
         ship: types.get(k.ship_type_id) || 'Type ' + k.ship_type_id,
         victim: names[k.victim?.character_id] || names[k.victim?.corporation_id] || ctx.officialName(k.victim?.corporation_id) || '',
-        attackers: k.attackers, final: names[k.final?.character_id] || (k.final?.ship_type_id ? types.get(k.final.ship_type_id) : '') || ''
+        attackers: k.attackers, final: names[k.final?.character_id] || (k.final?.ship_type_id ? types.get(k.final.ship_type_id) : '') || '',
+        vEnt: entOf(k.victim), st
       });
     }
   } catch { /* 网络错误：下次再试 */ } finally { S.busy = false; }
@@ -301,9 +330,16 @@ function raise(a) {
   if (!a.test) pushAlert(a);
 }
 
+// 推送、系统通知里的附加信息：价值、攻击者人数与声望归类（邮件跟随界面语言，不经 i18n 翻译）
+const ST_EN = { friend: 'friendly', neutral: 'neutral', hostile: 'hostile' };
+function extraText(a) {
+  const st = a.st ? ST.GROUPS.filter(([g]) => a.st[g]).map(([g, l]) => AM.L(l + ' ' + a.st[g], a.st[g] + ' ' + ST_EN[g])).join(AM.L('、', ', ')) : '';
+  return [a.value ? ctx.formatISK(a.value) + ' ISK' : '',
+    a.attackers ? AM.L(a.attackers + ' 名攻击者', a.attackers + (a.attackers === 1 ? ' attacker' : ' attackers')) + (st ? AM.L(`（${st}）`, ` (${st})`) : '') : ''].filter(Boolean).join(' · ');
+}
 // 企业微信 / 邮箱（alert-push.js）：一行文字 + 击杀详情链接（宁静服 zKillboard，国服击坠榜）
 function pushAlert(a) {
-  const extra = [a.value ? ctx.formatISK(a.value) + ' ISK' : '', a.attackers ? AM.L(a.attackers + ' 名攻击者', a.attackers + (a.attackers === 1 ? ' attacker' : ' attackers')) : ''].filter(Boolean).join(' · ');
+  const extra = extraText(a);
   const id = a.id && !a.hourly ? Number(a.id) : 0;
   AP.push('kill', { sig: 'kill|' + (a.id || a.time), text: AM.L(describe(a), describeEn(a)) + (extra ? ' · ' + extra : ''), url: id ? (IS_TQ ? `https://zkillboard.com/kill/${id}/` : kbSiteLink('kill', id)) : '' });
 }
@@ -321,7 +357,7 @@ function ring(a) {
   if (T.sound) beep(a.jumps === 0);
   if (T.notify && window.Notification?.permission === 'granted') {
     const title = a.watch ? AM.L('人物关注', 'Watchlist') : AM.L('击杀预警', 'Kill alert');
-    const extra = [a.value ? ctx.formatISK(a.value) + ' ISK' : '', a.attackers ? AM.L(a.attackers + ' 名攻击者', a.attackers + (a.attackers === 1 ? ' attacker' : ' attackers')) : ''].filter(Boolean).join(' · ');
+    const extra = extraText(a);
     const body = AM.L(describe(a), describeEn(a)) + (extra ? '\n' + extra : '');
     try {
       const n = new Notification(title, { body, tag: 'eve-kill-alert-' + id, renotify: true });
@@ -472,8 +508,8 @@ export function webAlert(a) {
   if (a.id && !a.hourly && !a.test) card.dataset.kaKill = a.id;
   card.innerHTML = `<div class="ka-head">${badge(a)}<b>${a.watch ? '人物关注' : '击杀预警'}</b>
       <button class="ka-close" data-ka-close aria-label="关闭">×</button></div>
-    <div class="ka-body">${ctx.esc(describe(a))}</div>
-    <div class="ka-meta">${a.value ? ctx.formatISK(a.value) + ' ISK · ' : ''}${a.attackers ? a.attackers + ' 名攻击者 · ' : ''}${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}</div>`;
+    <div class="ka-body">${a.vEnt ? ST.badge(a.vEnt) : ''}${ctx.esc(describe(a))}</div>
+    <div class="ka-meta">${a.value ? ctx.formatISK(a.value) + ' ISK · ' : ''}${a.attackers ? a.attackers + ' 名攻击者' + (a.st ? `（${stSummary(a.st)}）` : '') + ' · ' : ''}${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}</div>`;
   cards.prepend(card);
   while (cards.children.length > 4) cards.lastChild.remove();
   setTimeout(() => card.remove(), 45e3);
@@ -606,6 +642,7 @@ function drawPanel() {
       <label class="ka-opt" title="击杀记录收录有延迟，过旧的不再提醒"><span><b>只提醒多久内的</b></span><select class="cr-input" data-ka-num="maxAge" aria-label="时效">${opts(MAX_AGES, T.maxAge)}</select></label>
       <div class="ka-opt ka-stack"><span><b>舰船类别</b><small>${T.classes.length ? `已选 ${T.classes.length} 类` : '不选 = 全部'}</small></span>
         <div class="ka-chips">${(ctx.shipClasses?.() || []).map((c) => `<button type="button" class="ka-chip toggle${T.classes.includes(c.id) ? ' on' : ''}" data-ka-class="${c.id}">${ctx.esc(c.name)}</button>`).join('')}</div></div>
+      ${stFilterHtml()}
     </div>`, '<small>位置预警与星域监控</small>')}
     ${sec('人物关注', `<div class="ka-list">
       ${sw('watchOn', '开启人物提醒', '', '关注的角色 / 军团 / 联盟产生 KM 时提醒')}
@@ -618,7 +655,7 @@ function drawPanel() {
         <span>${ctx.esc(e.name)}${e.kind !== 'character' ? `<small> · ${KIND_ZH[e.kind]}</small>` : ''}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
         <button class="ka-close" data-ka-del="${e.id}" title="取消关注" aria-label="取消关注">×</button></li>`).join('')}</ul>` : ''}</div>
     </div>`)}
-    ${sec('最近预警', st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${ctx.esc(describe(a))}</span><small>${a.muted ? '离线未提醒 · ' : ''}${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有预警</p>')}
+    ${sec('最近预警', st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${a.vEnt ? ST.badge(a.vEnt) : ''}${ctx.esc(describe(a))}${a.st ? `<small class="ka-st">攻击者 ${stSummary(a.st)}</small>` : ''}</span><small>${a.muted ? '离线未提醒 · ' : ''}${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有预警</p>')}
     <p class="ka-note">网页需保持打开（可在后台）</p>`;
 }
 
@@ -638,6 +675,8 @@ export function mountPanel(el, opts) {
     if (e.target.closest('[data-ka-radd]')) { addRegion(panel.querySelector('[data-ka-region]').value); return; }
     const rdel = e.target.closest('[data-ka-rdel]');
     if (rdel) { update({ regions: T.regions.filter((r) => r.id !== Number(rdel.dataset.kaRdel)) }); return; }
+    const sg = e.target.closest('[data-ka-st]');
+    if (sg) { const g = sg.dataset.kaSt; const next = T.attSt.includes(g) ? T.attSt.filter((x) => x !== g) : [...T.attSt, g]; if (next.length) update({ attSt: next }); else ctx.showToast('至少选一种', 'error'); return; }
     const cls = e.target.closest('[data-ka-class]');
     if (cls) { const id = Number(cls.dataset.kaClass); update({ classes: T.classes.includes(id) ? T.classes.filter((x) => x !== id) : [...T.classes, id] }); return; }
     const del = e.target.closest('[data-ka-del]');

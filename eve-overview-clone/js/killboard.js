@@ -5,6 +5,7 @@
 import { SERVER, IS_TQ, HUB, NO_KB_MESSAGE, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { skCards, skRows, skEntityHead, skTitle } from './skeleton.js?v=v17';
 import { fullIn } from './eve-time.js?v=v1';
+import * as ST from './standings.js?v=v4';
 
 let app;
 
@@ -146,6 +147,9 @@ const partyLink = (kind, id, text) => {
   return linkable(kind, id) ? `<a class="kb-link" href="#kb/${kind}/${id}" data-kb-entity="${kind}:${id}" translate="no">${label}</a>` : label;
 };
 
+// 声望小标（已绑定角色的联系人，standings.js）：p 是击杀邮件里的受害者 / 攻击者
+const stOf = (p) => ST.badge({ char: p?.character_id, corp: p?.corporation_id, alliance: p?.alliance_id });
+
 const partyName = (id) => (id ? app.officialName(id) || factionTable.get(id) || names.get(id) || 'ID ' + id : '');
 const typeName = (id) => typeNames.get(id) || 'Type ' + id;
 
@@ -215,9 +219,9 @@ export function killTableHtml(kills, { me = null, showSide = false } = {}) {
         ${showSide ? `<td class="kb-side"><span class="pill ${loss ? 'sell' : 'buy'}">${loss ? '损失' : '击杀'}</span></td>` : ''}
         <td class="kb-ship"><span class="kb-ship-inner"><img src="${img(`types/${v.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
           <span><strong>${app.esc(typeName(v.ship_type_id))}</strong>${killTags(k.zkb)}</span></span></td>
-        <td class="kb-party kb-victim-cell"><strong translate="no">${app.esc(partyName(v.character_id) || partyName(v.corporation_id))}</strong>
+        <td class="kb-party kb-victim-cell"><strong translate="no">${stOf(v)}${app.esc(partyName(v.character_id) || partyName(v.corporation_id))}</strong>
           <span class="cell-sub" translate="no">${app.esc(partyName(v.corporation_id))}${v.alliance_id ? ' · ' + app.esc(partyName(v.alliance_id)) : ''}</span></td>
-        <td class="kb-party kb-final-cell"><strong${fb.character_id ? ' translate="no"' : ''}>${app.esc(partyName(fb.character_id) || typeName(fb.ship_type_id))}</strong>
+        <td class="kb-party kb-final-cell"><strong${fb.character_id ? ' translate="no"' : ''}>${stOf(fb)}${app.esc(partyName(fb.character_id) || typeName(fb.ship_type_id))}</strong>
           <span class="cell-sub">${k.attackers.length} 名攻击者</span></td>
         <td class="kb-loc"><strong>${app.esc(sys.name)} <span style="color:${sys.color}">${sys.secText}</span></strong>
           <span class="cell-sub">${app.esc(sys.region)}</span></td>
@@ -235,7 +239,7 @@ export function killCompactHtml(kills) {
   return kills.map((k) => `<button class="kb-item" data-kill="${k.killmail_id}">
       <img src="${img(`types/${k.victim.ship_type_id}/icon`, 64)}" alt="" width="30" height="30" loading="lazy">
       <span class="kb-item-text"><strong>${app.esc(typeName(k.victim.ship_type_id))}</strong>
-        <small translate="no">${app.esc(partyName(k.victim.character_id) || partyName(k.victim.corporation_id))}</small></span>
+        <small translate="no">${stOf(k.victim)}${app.esc(partyName(k.victim.character_id) || partyName(k.victim.corporation_id))}</small></span>
       <span class="kb-item-meta"><b>${app.formatISK(k.zkb.totalValue)}</b><small>${timeAgo(k.killmail_time)}</small></span>
     </button>`).join('');
 }
@@ -393,7 +397,7 @@ function renderKill(k, val, priceNote, insurance) {
     return `<div class="kb-attacker${a.final_blow ? ' final' : ''}">
         <img class="kb-avatar" src="${avatar}" alt="" width="36" height="36" loading="lazy">
         <div class="kb-attacker-main">
-          <strong>${a.character_id ? partyLink('character', a.character_id, who) : app.esc(who)}${a.final_blow ? '<span class="kb-tag final">最后一击</span>' : ''}</strong>
+          <strong>${stOf(a)}${a.character_id ? partyLink('character', a.character_id, who) : app.esc(who)}${a.final_blow ? '<span class="kb-tag final">最后一击</span>' : ''}</strong>
           <small>${a.corporation_id ? partyLink('corporation', a.corporation_id) : app.esc(partyName(a.faction_id))}${a.alliance_id ? ' · ' + partyLink('alliance', a.alliance_id) : ''}</small>
           <div class="kb-dmg"><i style="width:${pct.toFixed(1)}%"></i></div>
         </div>
@@ -418,7 +422,7 @@ function renderKill(k, val, priceNote, insurance) {
         <div class="kb-victim-line">
           ${v.character_id ? `<img class="kb-avatar lg" src="${img(`characters/${v.character_id}/portrait`, 128)}" alt="" width="56" height="56">` : ''}
           <div>
-            <h4>${v.character_id ? partyLink('character', v.character_id) : partyLink('corporation', v.corporation_id)}</h4>
+            <h4>${stOf(v)}${v.character_id ? partyLink('character', v.character_id) : partyLink('corporation', v.corporation_id)}</h4>
             <p>${v.corporation_id ? `<img src="${img(`corporations/${v.corporation_id}/logo`, 32)}" alt="" width="16" height="16">${partyLink('corporation', v.corporation_id)}` : ''}
                ${v.alliance_id ? ` · <img src="${img(`alliances/${v.alliance_id}/logo`, 32)}" alt="" width="16" height="16">${partyLink('alliance', v.alliance_id)}` : ''}</p>
           </div>

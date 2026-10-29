@@ -5,6 +5,8 @@ import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadH
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v38';
 import * as SM from './struct-markets.js?v=v7';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v9';
+import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v1';
+import * as ST from './standings.js?v=v4';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
@@ -273,15 +275,15 @@ document.addEventListener('input', (e) => { if (e.isComposing || window.__imeCom
 
 // ===== 视图切换 =====
 let fitNav = () => {};   // initNavigation 里赋值：重新计算顶栏哪些入口只留图标
-function syncNavActive(scroll) {
+function syncNavActive() {
   const arb = state.currentView === 'market' && !$('arbView').hidden;
   $$('.nav-btn').forEach((btn) => {
     const active = btn.dataset.view === state.currentView && btn.hasAttribute('data-arb') === arb;
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-selected', String(active));
-    if (scroll === true && active && MOBILE_QUERY.matches) btn.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // 手机导航可横向滑动
   });
   fitNav();   // 当前页的入口优先保留文字
+  syncMobileNav();
 }
 function initNavigation() {
   $$('.nav-btn').forEach((btn) => btn.addEventListener('click', () => {
@@ -384,7 +386,7 @@ function switchView(view) {
     restored = view in viewHashes || (!VIEW_HASH[view] && view !== 'market');
     history.replaceState(null, '', location.pathname + location.search + (viewHashes[view] || ''));
   }
-  syncNavActive(true);
+  syncNavActive();
   for (const [v, id] of Object.entries(VIEW_IDS)) $(id).hidden = v !== view;
   $('menuToggle').hidden = !SIDEBARS[view];   // 击杀记录页没有侧栏
   $('menuToggle').title = { market: '物品目录', profile: '个人中心导航', map: '星图控制', fit: '装配浏览器', industry: '制造导航', lp: 'LP 商店导航', courier: '快递筛选', guide: '教程分类', sov: '主权规划导航', abyss: '深渊装备类型', bazaar: '角色交易筛选', pi: '行星工业导航' }[view] || '';
@@ -537,7 +539,7 @@ async function openGuides() {
 // 战争（势力战争 + 军团战争）：首次进入时加载
 let warLoading = null;
 function loadWarModule() {
-  if (!warLoading) warLoading = import('./war.js?v=v12').then((m) => {
+  if (!warLoading) warLoading = import('./war.js?v=v13').then((m) => {
     m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
     return m;
   }).catch((error) => { warLoading = null; throw error; });
@@ -659,7 +661,7 @@ async function openEftFit(text) {
 // 快递合同：首次进入时加载
 let courierLoading = null;
 function loadCourierModule() {
-  if (!courierLoading) courierLoading = import('./courier.js?v=v9').then((m) => {
+  if (!courierLoading) courierLoading = import('./courier.js?v=v10').then((m) => {
     m.initCourier({
       esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
       // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
@@ -703,7 +705,7 @@ async function openCourier() {
 // 合同（公开合同存档 + 我的个人 / 军团 / 联盟合同）：首次进入时加载
 let contractsLoading = null;
 function loadContractsModule() {
-  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v6').then((m) => {
+  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v7').then((m) => {
     m.initContracts({
       esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, officialName, locationName, loadNpcNames, typeName,
       valuation, valuationCard, store, game: gameActions, regions: REGIONS, marketRegions: () => state.marketRegions, loadMarketRegions,
@@ -933,7 +935,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v56').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v57').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -976,7 +978,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v33').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v34').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance, valuation
     });
@@ -990,7 +992,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v55').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v56').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -2003,6 +2005,7 @@ const SCOPE_GROUPS = [
   { id: 'corpContracts', name: '军团合同', desc: '查看军团合同', scopes: ['esi-contracts.read_corporation_contracts.v1'], optIn: true },
   { id: 'corpBp', name: '军团蓝图', desc: '制造页查看军团机库蓝图（需董事职位）', scopes: ['esi-corporations.read_blueprints.v1'], optIn: true },
   { id: 'mail', name: '游戏邮件', desc: '查看游戏邮件（只读）', scopes: ['esi-mail.read_mail.v1'], optIn: true },
+  { id: 'contacts', name: '联系人声望', desc: '击杀、预警、本地等处的玩家显示蓝 / 红声望（个人、军团、联盟联系人）', scopes: ST.SCOPES, optIn: true },
   { id: 'corp', name: '军团管理', desc: '钱包、订单、工业、建筑、资产（需军团职位）',
     scopes: ['esi-characters.read_corporation_roles.v1', 'esi-wallet.read_corporation_wallets.v1', 'esi-markets.read_corporation_orders.v1',
       'esi-industry.read_corporation_jobs.v1', 'esi-corporations.read_structures.v1', 'esi-industry.read_corporation_mining.v1',
@@ -3084,6 +3087,7 @@ function writeEsiToken(token) {
   if (token) localStorage.setItem(serverKey('eve-esi-token'), JSON.stringify(token));
   else localStorage.removeItem(serverKey('eve-esi-token'));
   updateLocRegionBtn();
+  ST.refresh();   // 换了角色 / 重新绑定后重读声望
   if (!token && state.jumps) { state.jumps = null; charLoc.key = ''; updateJumpsColumn(); renderOrders(); }
 }
 
@@ -4676,7 +4680,7 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v7').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v8').then((m) => {
     m.initProfileMore({
       esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
@@ -4851,6 +4855,7 @@ async function loadContractsImpl() {
     .filter((id) => id && !officialName(id) && !state.esiNames.has(id));
   const named = await resolveNames(parties);
   for (const [key, value] of named.names) state.esiNames.set(key, value);
+  await ST.lookupIds(state.contracts.flatMap((c) => [c.issuer_id, c.acceptor_id]));   // 对方声望（发起人 / 接受人一定是角色）
   await resolveStructureNames(state.contracts.flatMap((c) => [c.start_location_id, c.end_location_id]));
 }
 
@@ -4892,7 +4897,7 @@ function renderContractList(box) {
         <td><span class="pill type-${c.type}">${esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))}</span></td>
         <td class="contract-title"><strong><span class="pill type-${c.type} type-inline">${esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))}</span>${esc(c.title || '（无标题）')}</strong><span class="cell-sub">#${c.contract_id}${roleText ? ' · ' + roleText : ''}</span></td>
         <td>${contractStatusPill(c)}</td>
-        <td>${counterpart ? esc(displayName(counterpart)) : '<span class="muted-cell">—</span>'}</td>
+        <td>${counterpart ? (counterpart === c.issuer_id || counterpart === c.acceptor_id ? ST.badge(ST.entById(counterpart)) : '') + esc(displayName(counterpart)) : '<span class="muted-cell">—</span>'}</td>
         <td class="num">${contractAmount(c)}</td>
         <td class="contract-loc">${contractLocation(c)}</td>
         <td class="num muted">${formatTime(c.date_issued)}</td>
@@ -5061,7 +5066,7 @@ async function renderContractDetail(box, c) {
     kv('类别', esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))) +
     kv('状态', contractStatusPill(c)) +
     kv('可见范围', esc(zhLabel(CONTRACT_AVAILABILITY_ZH, c.availability, c.availability)) + (c.for_corporation ? '（代表军团）' : '')) +
-    kv('发起人', esc(displayName(c.issuer_id))) +
+    kv('发起人', ST.badge(ST.entById(c.issuer_id)) + esc(displayName(c.issuer_id))) +
     kv('发起军团', c.issuer_corporation_id ? esc(displayName(c.issuer_corporation_id)) : '') +
     kv('指派对象', c.assignee_id ? esc(displayName(c.assignee_id)) : '') +
     kv('接受人', c.acceptor_id ? esc(displayName(c.acceptor_id)) : '') +
@@ -5603,7 +5608,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v12').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v13').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5626,7 +5631,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v19').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v20').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5700,6 +5705,7 @@ function initOrderWatchBackground() {
 function init() {
   // 云同步拉到别处改的 ESI 令牌：当前角色的令牌直接换上（其余设置要刷新页面）
   CS.initCloudSync({ esc, showToast, onApplied: (keys) => { if (keys.includes(serverKey('eve-esi-token'))) state.esiToken = readEsiToken(); } });
+  ST.initStandings({ tokenInfo: () => state.esiToken || readEsiToken(), hasScope, fetchPaged: esiAuthFetchPaged });
   initKillAlerts();
   initOrderWatchBackground();
   initWatchBackground();
@@ -5719,6 +5725,7 @@ function init() {
   initServerSwitch();
   initBattleWatch();
   initNavigation();
+  initMobileNav();
   initSidebar();
   initRegionSelect();
   initDetailActions();

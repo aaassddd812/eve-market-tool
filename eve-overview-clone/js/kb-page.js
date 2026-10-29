@@ -7,6 +7,7 @@ import { initBr, renderBr } from './kb-br.js?v=v28';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v1';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 import { SERVER, IS_TQ, HUB, eveImage, kbSiteLink } from './server.js?v=s4';
+import * as ST from './standings.js?v=v4';
 
 let app, kb;
 
@@ -79,6 +80,11 @@ function avatar(kind, id, size = 32) {
   return IMG(path, size);
 }
 
+// 声望小标（已绑定角色的联系人，standings.js）：p 带 character_id / corporation_id / alliance_id
+const stOf = (p) => ST.badge({ char: p?.character_id, corp: p?.corporation_id, alliance: p?.alliance_id });
+// 排行、实体页：只有一个 ID 与种类
+const stKind = (kind, id) => ST.badge({ [{ character: 'char', corporation: 'corp', alliance: 'alliance' }[kind] || 'x']: Number(id) });
+
 function entityLink(kind, id, text) {
   if (!id) return '';
   return `<a class="kb-link" href="#kb/${kind}/${id}" data-entity="${kind}:${id}" translate="no">${app.esc(text || partyName(id))}</a>`;
@@ -107,9 +113,9 @@ function feedRows(kills, { me } = {}) {
         ${side ? `<td class="kb-side"><span class="pill ${side === 'loss' ? 'sell' : 'buy'}">${side === 'loss' ? '损失' : '击杀'}</span></td>` : ''}
         <td class="kb-ship"><span class="kb-ship-inner"><img src="${IMG(`types/${k.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
           <span><strong>${app.esc(typeName(k.ship_type_id))}</strong>${k.solo ? '<span class="kb-tag solo">单刷</span>' : ''}${k.npc ? '<span class="kb-tag npc">NPC</span>' : ''}</span></span></td>
-        <td class="kb-party kb-victim-cell"><strong>${v.character_id ? entityLink('character', v.character_id) : entityLink('corporation', v.corporation_id)}</strong>
+        <td class="kb-party kb-victim-cell"><strong>${stOf(v)}${v.character_id ? entityLink('character', v.character_id) : entityLink('corporation', v.corporation_id)}</strong>
           <span class="cell-sub">${v.character_id ? entityLink('corporation', v.corporation_id) : ''}${v.alliance_id ? (v.character_id ? ' · ' : '') + entityLink('alliance', v.alliance_id) : ''}</span></td>
-        <td class="kb-party kb-final-cell"><strong>${f.character_id ? entityLink('character', f.character_id) : app.esc(typeName(f.ship_type_id))}</strong>
+        <td class="kb-party kb-final-cell"><strong>${stOf(f)}${f.character_id ? entityLink('character', f.character_id) : app.esc(typeName(f.ship_type_id))}</strong>
           <span class="cell-sub">${f.corporation_id && f.character_id ? entityLink('corporation', f.corporation_id) + ' · ' : ''}${k.attackers} 名攻击者</span></td>
         <td class="kb-loc"><strong><a class="kb-link" data-location="system:${k.system_id}">${app.esc(sys.name)}</a> <span style="color:${sys.color}">${sys.secText}</span></strong>
           <span class="cell-sub">${k.region_id ? `<a class="kb-link" data-location="region:${k.region_id}">${app.esc(partyName(k.region_id))}</a>` : ''}</span></td>
@@ -247,7 +253,7 @@ async function loadTop() {
         <img src="${IMG(`types/${k.ship_type_id}/render`, 128)}" alt="" width="72" height="72" loading="lazy">
         <span class="kb-top-text">
           <strong>${app.esc(typeName(k.ship_type_id))}</strong>
-          <small translate="no">${app.esc(partyName(k.victim.character_id) || partyName(k.victim.corporation_id))}</small>
+          <small translate="no">${stOf(k.victim)}${app.esc(partyName(k.victim.character_id) || partyName(k.victim.corporation_id))}</small>
           <small>${app.esc(kb.systemLabel(k.system_id).name)} · ${timeAgo(k.time)}</small>
         </span>
         <b>${app.formatISK(k.value)}</b>
@@ -541,7 +547,7 @@ function renderRankTable() {
       <td class="kb-rank-no"><span class="kb-rank${rank <= 3 ? ' top' : ''}">${rank}</span></td>
       <td><div class="kb-rank-who">
         <img src="${avatar(r.by, row.id, 64)}" alt="" width="32" height="32" loading="lazy">
-        <span><a class="kb-link" href="#kb/${r.by}/${row.id}" data-entity="${r.by}:${row.id}" translate="no">${app.esc(row.name || partyName(row.id))}</a>
+        <span>${r.by === 'character' ? stOf({ character_id: row.id, corporation_id: row.corporation_id, alliance_id: row.alliance_id }) : stKind(r.by, row.id)}<a class="kb-link" href="#kb/${r.by}/${row.id}" data-entity="${r.by}:${row.id}" translate="no">${app.esc(row.name || partyName(row.id))}</a>
           ${affHtml(row) ? `<small>${affHtml(row)}</small>` : ''}</span></div></td>
       ${detail ? `
       <td class="num"><b class="up">${fmtIsk(row.destroyed)}</b><small>${fmtN(row.kills)} 次击杀</small></td>
@@ -846,7 +852,8 @@ async function renderEntity(kind, id) {
       <img src="${avatar(kind, id, 128)}" alt="" width="72" height="72">
       <div>
         <span class="kb-entity-kind">${KIND_ZH[kind]}</span>
-        <h2 translate="no">${app.esc(name)}</h2>
+        <h2 translate="no">${stOf(kind === 'character' ? { character_id: Number(id), corporation_id: info.corporation_id, alliance_id: info.alliance_id }
+          : kind === 'corporation' ? { corporation_id: Number(id), alliance_id: info.alliance_id } : { alliance_id: Number(id) })}${app.esc(name)}</h2>
         <p>${sub.join(' · ')}</p>
       </div>
       <div class="kb-ext-links">
@@ -1064,7 +1071,7 @@ function route() {
 
 // ---------- 本地分析：频道成员名单 / 定向扫描（local-scan.js，首次打开时加载）----------
 async function renderLocalScan() {
-  const m = await import('./local-scan.js?v=v10');
+  const m = await import('./local-scan.js?v=v11');
   if (!location.hash.startsWith('#kb/local')) return;
   m.renderLocal($('kbMain'), {
     esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,

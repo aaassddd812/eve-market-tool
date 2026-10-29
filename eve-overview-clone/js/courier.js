@@ -9,6 +9,7 @@
 import { SERVER, IS_TQ, HUB, HUB_NAME } from './server.js?v=s4';
 import { SHIPS as HULLS, MODULES } from './courier-ships.js?v=v1';
 import { planJumpRoute, canJumpInto } from './jump-planner.js?v=v16';
+import * as ST from './standings.js?v=v4';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, openEftFit, hasEsiToken, tokenInfo, hasScope, officialName, loadNpcNames, resolveNames, resolveStructures, openEsiBind, openMapSystem, closeDrawer
 const $ = (id) => document.getElementById(id);
@@ -711,7 +712,8 @@ function openDetail(id) {
   $('courierModal').hidden = false;
   renderDetail(c);
   $('courierModal').querySelector('.modal-close')?.focus();
-  // 发布人名称（玩家角色 / 军团名只有英文原名）
+  // 发布人名称（玩家角色 / 军团名只有英文原名）与声望
+  ST.lookupIds([c.issuer_id]).then(() => { const el = S.open === c && $('crIssuer'); if (el) el.innerHTML = issuerHtml(c); });
   ctx.resolveNames([c.issuer_id, c.issuer_corporation_id]).then(({ names }) => {
     if (S.open !== c) return;
     c.issuerName = names.get(c.issuer_id);
@@ -766,7 +768,7 @@ async function copyEft(text) {
   }
 }
 
-const issuerHtml = (c) => `${esc(c.issuerName || '角色 ' + c.issuer_id)}<small>${esc(c.corpName || '军团 ' + c.issuer_corporation_id)}${c.for_corporation ? ' · 代表军团发布' : ''}</small>`;
+const issuerHtml = (c) => `${ST.badge({ ...ST.entById(c.issuer_id), corp: c.issuer_corporation_id })}${esc(c.issuerName || '角色 ' + c.issuer_id)}<small>${esc(c.corpName || '军团 ' + c.issuer_corporation_id)}${c.for_corporation ? ' · 代表军团发布' : ''}</small>`;
 
 function remain(ms) {
   if (!Number.isFinite(ms)) return '—';

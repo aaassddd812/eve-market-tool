@@ -8,10 +8,12 @@
 // 关键词监控：勾选的频道（或全部频道）里出现关键词（/正则/ 也可以）就提醒。游戏日志监控：战斗日志等出现关键词就提醒（例如被跃迁扰断）。
 // 提醒方式：提示音、网页卡片、系统通知、企业微信 / 邮箱（alert-push.js，在「微信 / 邮箱」标签页设置，这里只开关）、游戏内邮件（与击杀预警共用收件人与发信间隔，alert-mail.js；一段时间里的提醒合并成一封，
 //   多个标签页都在监听时按消息去重，邮件只发一次、提示音与系统通知只响一次；收件人在「邮件」标签页设置，这里勾选发给谁；英文界面发英文邮件）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
+// 声望：绑定 ESI 且授权了联系人时，报告人名字前显示声望小标（standings.js，按名字查角色 ID）。
 // 文件编码：聊天记录是 UTF-16 LE（带 BOM），游戏日志是 UTF-8；按 BOM 判断。文件名「频道名_YYYYMMDD_HHMMSS_角色ID.txt」。
 
 import * as AM from './alert-mail.js?v=v7';
 import * as AP from './alert-push.js?v=v1';
+import * as ST from './standings.js?v=v4';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem
 const KEY = 'eve-intel-v1';
@@ -62,6 +64,7 @@ export async function initIntel(context) {
   AM.initAlertMail(ctx);
   AM.onMailChange(renderPanel);
   AP.onPushChange(renderPanel);
+  ST.onStandings(renderPanel);
   AM.registerSource('intel', { label: '本地日志', on: () => T.mail, set: (on) => update({ mail: on }) });
   if (!supported()) return;
   S.dir = await idbGet('dir');
@@ -493,7 +496,7 @@ function card(title, body, r) {
   el.className = 'ka-card intel-card' + (r.jumps === 0 ? ' here' : '');
   if (r.system) el.dataset.sys = r.system;
   el.innerHTML = `<div class="ka-head"><span class="ka-badge">${r.type === 'intel' ? '敌情' : r.type === 'kw' ? '关键词' : '日志'}</span><b>${ctx.esc(title)}</b><button class="ka-close" data-ka-close aria-label="关闭">×</button></div>
-    <div class="ka-body">${ctx.esc(body)}</div><div class="ka-meta">${ctx.esc(r.channel)} · ${r.time.toLocaleTimeString('zh-CN', { hour12: false })}${r.system ? ' · 点击在星图查看' : ''}</div>`;
+    <div class="ka-body">${r.who ? ST.badge(ST.entByName(r.who)) : ''}${ctx.esc(body)}</div><div class="ka-meta">${ctx.esc(r.channel)} · ${r.time.toLocaleTimeString('zh-CN', { hour12: false })}${r.system ? ' · 点击在星图查看' : ''}</div>`;
   box.prepend(el);
   while (box.children.length > 4) box.lastChild.remove();
   setTimeout(() => el.remove(), 30e3);
@@ -510,6 +513,7 @@ const wordList = (key, ph) => `<div class="ka-opt ka-stack"><div class="ka-watch
 
 function renderPanel() {
   if (!panel || !shell.isOpen(panel)) return;
+  ST.lookupNames(S.reports.map((r) => r.who).filter(Boolean));   // 声望数据晚到时补查报告人
   const body = panel;
   // 重绘时保留正在输入的文字、焦点与滚动位置
   const keep = [...body.querySelectorAll('input[data-keep]')].map((el) => [el.dataset.keep, el.value, document.activeElement === el]);
@@ -570,7 +574,7 @@ function drawPanel() {
     </div>`)}
     ${sec('最近消息', S.reports.length ? `<ul class="ka-history">${S.reports.map((r) => `<li${r.system ? ` data-in-sys="${r.system}"` : ''}>
       <span class="ka-badge${r.clear ? ' clear' : ''}">${r.type !== 'intel' ? (r.type === 'kw' ? '关键词' : '日志') : r.clear ? '平安' : r.jumps == null ? '敌情' : r.jumps + ' 跳'}</span>
-      <span>${r.system ? `<b>${ctx.esc(r.name)}</b> ` : ''}${ctx.esc((r.who ? r.who + '：' : '') + r.msg)}<small> · ${ctx.esc(r.channel)}</small></span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有消息</p>')}`;
+      <span>${r.system ? `<b>${ctx.esc(r.name)}</b> ` : ''}${r.who ? ST.badge(ST.entByName(r.who)) + ctx.esc(r.who + '：') : ''}${ctx.esc(r.msg)}<small> · ${ctx.esc(r.channel)}</small></span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有消息</p>')}`;
 }
 
 // 把标签页挂到弹窗里（只挂一次）；opts：{ close() 关掉弹窗, isOpen(el) 这个标签页是否正显示 }

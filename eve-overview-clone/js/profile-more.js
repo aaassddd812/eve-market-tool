@@ -6,6 +6,7 @@
 //   军团  /characters/{id}/roles/ + 军团钱包 / 订单 / 工业 / 建筑 / 月矿 / 资产（「军团管理」权限，且需相应军团职位）
 // 数据按角色缓存 5 分钟，切换角色时清空。
 import { skCards, skRows } from './skeleton.js?v=v17';
+import * as ST from './standings.js?v=v4';
 
 let ctx;
 const cache = new Map();   // `${tab}:${key}` -> { id, at, promise }
@@ -205,6 +206,7 @@ async function renderFleet(box) {
       const wings = members ? await ctx.esiAuthFetch('/fleets/' + fleet.fleet_id + '/wings/?language=zh').catch(() => []) : [];
       const types = members ? await ctx.resolveTypeNames(members.map((m) => m.ship_type_id)) : new Map();
       const names = members ? (await ctx.resolveNames(members.map((m) => m.character_id)).catch(() => ({ names: new Map() }))).names : new Map();
+      if (members) await ST.lookupIds(members.map((m) => m.character_id));   // 成员声望（军团 / 联盟）
       return { fleet, members, membersError, wings, types, names };
     });
   } catch (error) { if (still('fleet', id)) box.innerHTML = fail('舰队', error); return; }
@@ -223,7 +225,7 @@ async function renderFleet(box) {
     ? table(['星系', '人数'], systems.map(([sys, n]) => tr([`<button class="link-btn" data-map-sys="${sys}">${esc(ctx.officialName(sys) || sys)}</button>`, n])))
     : S.fleetView === 'members'
       ? table(['成员', '舰船', '位置', '职位', '联队 / 中队'], members.map((m) => tr([
-        esc(names.get(m.character_id) || m.character_id), typeCell(types, m.ship_type_id), esc(ctx.officialName(m.solar_system_id) || m.solar_system_id) + (m.station_id ? '<span class="cell-sub">停靠中</span>' : ''),
+        ST.badge(ST.entById(m.character_id)) + esc(names.get(m.character_id) || m.character_id), typeCell(types, m.ship_type_id), esc(ctx.officialName(m.solar_system_id) || m.solar_system_id) + (m.station_id ? '<span class="cell-sub">停靠中</span>' : ''),
         esc(m.role_name || ROLE[m.role] || m.role), esc([wingName.get(m.wing_id), squadName.get(m.squad_id)].filter(Boolean).join(' / ') || '—')])))
       : table(['舰船', '数量', '占比'], ships.map(([t, n]) => tr([typeCell(types, t), n, (n / members.length * 100).toFixed(0) + '%'])));
   box.innerHTML =

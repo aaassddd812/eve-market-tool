@@ -3,10 +3,12 @@
 //   1. ESI /universe/ids/ 把名字换成角色 ID（每次最多 500 个），/characters/affiliation/ 查所属军团 / 联盟 / 势力（每次最多 1000 个）；
 //   2. 宁静服再查本站击杀记录服务 /api/v1/pilots（每次最多 200 名）：近 30 天击杀 / 损失、单挑、平均同伙人数、常用船、常去星系、最近活跃；
 //   3. 按联盟 / 军团统计人数，点一下可以隐藏（比如自己人），隐藏名单存在本浏览器。
+//   4. 已绑定 ESI 且授权了联系人时，名字前显示声望（standings.js），并统计敌对 / 中立 / 友方人数。
 // 国服没有公开击杀数据，只显示所属势力分布。
 // 定向扫描结果：扫描窗口里 Ctrl+A、Ctrl+C，每行「类型 ID<Tab>名称<Tab>类型<Tab>距离」（旧客户端没有类型 ID，按类型名用 /universe/ids/ 查）。
 //   类型所属的分组（舰船类别）与大类用 ESI /universe/types/、/universe/groups/ 查，缓存在本浏览器（eve-dscan-types-v1）；
 //   统计舰船总数、同格（显示距离的）、按舰船类别 / 型号的数量，标出旗舰、拦截泡、后勤、隐轰、侦察、黑隐与扫描探针，建筑、无人机与其他单列；可复制一行统计发到舰队频道。
+import * as ST from './standings.js?v=v4';
 
 let D;   // esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage, kb, loadTypes, systemName, typeName, fetchESI, copyText
 const IGNORE_KEY = 'eve-local-ignore-v1';
@@ -16,6 +18,8 @@ try { S.ignore = new Set(JSON.parse(localStorage.getItem(IGNORE_KEY) || '[]')); 
 const saveIgnore = () => { try { localStorage.setItem(IGNORE_KEY, JSON.stringify([...S.ignore])); } catch { /* 忽略 */ } };
 
 const esc = (s) => D.esc(s);
+// 声望（已绑定角色的联系人，standings.js）
+const entOf = (p) => ({ char: p.id, corp: p.corp, alliance: p.alliance });
 
 async function postJson(path, body) {
   const res = await fetch(D.esiUrl(path), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -301,7 +305,7 @@ function groupsHtml(kind) {
   const max = list[0]?.n || 1;
   return `<ul class="ls-groups">${list.slice(0, 15).map((g) => `<li class="${g.id && S.ignore.has(g.id) ? 'ignored' : ''}">
       ${g.id ? `<img src="${D.eveImage((kind === 'alliance' ? 'alliances/' : 'corporations/') + g.id + '/logo', 32)}" alt="" width="20" height="20" loading="lazy">` : '<i></i>'}
-      <span class="ls-gname">${g.id ? link(kind, g.id, orgName(g.id)) : kind === 'alliance' ? '无联盟' : '—'}</span>
+      <span class="ls-gname">${g.id ? ST.badge(kind === 'alliance' ? { alliance: g.id } : { corp: g.id }) + link(kind, g.id, orgName(g.id)) : kind === 'alliance' ? '无联盟' : '—'}</span>
       <span class="ls-bar"><em style="width:${(g.n / max) * 100}%"></em></span><b>${g.n}</b>
       ${g.id ? `<button class="btn btn-ghost btn-sm" data-ls-ignore="${g.id}" title="${S.ignore.has(g.id) ? '在名单里重新显示' : '在名单里隐藏（比如自己人）'}">${S.ignore.has(g.id) ? '显示' : '隐藏'}</button>` : ''}</li>`).join('')}
     </ul>${list.length > 15 ? `<p class="text-muted">另有 ${list.length - 15} 个${kind === 'alliance' ? '联盟' : '军团'}</p>` : ''}`;
@@ -320,7 +324,7 @@ function draw() {
     const t = threat(p), s = p.st;
     return `<tr>
       <td class="ls-pilot"><img src="${D.eveImage('characters/' + p.id + '/portrait', 64)}" alt="" width="28" height="28" loading="lazy">
-        <span>${link('character', p.id, p.name)}
+        <span>${ST.badge(entOf(p))}${link('character', p.id, p.name)}
         ${tags(p).map(([l, title]) => `<i class="ls-tag" title="${esc(title)}">${l}</i>`).join('')}</span></td>
       <td class="ls-org">${p.alliance ? `<span title="联盟">${esc(orgName(p.alliance))}</span>` : ''}<small>${esc(orgName(p.corp))}</small></td>
       ${D.kb ? `<td><span class="ls-threat ${t.level}">${t.label}</span></td>
@@ -348,6 +352,8 @@ function draw() {
         <div><b>${S.pilots.length}</b><small>名角色${shown.length < S.pilots.length ? `（显示 ${shown.length}）` : ''}</small></div>
         <div><b>${new Set(S.pilots.map((p) => p.alliance).filter(Boolean)).size}</b><small>个联盟</small></div>
         <div><b>${new Set(S.pilots.map((p) => p.corp)).size}</b><small>个军团</small></div>
+        ${ST.ready() ? (() => { const n = { friend: 0, neutral: 0, hostile: 0 }; for (const p of shown) n[ST.group(entOf(p))]++;
+          return `<div class="ls-lv"><b class="st-n-hostile">${n.hostile}</b><small>敌对</small></div><div class="ls-lv"><b>${n.neutral}</b><small>中立</small></div><div class="ls-lv"><b class="st-n-friend">${n.friend}</b><small>友方</small></div>`; })() : ''}
         ${D.kb ? `<div class="ls-lv"><b class="high">${lv.high}</b><small>高威胁</small></div><div class="ls-lv"><b class="mid">${lv.mid}</b><small>中威胁</small></div>
         <div><b>${D.formatNumber(shown.reduce((t, p) => t + (p.st?.kills || 0), 0))}</b><small>近 30 天击杀合计</small></div>` : ''}
       </div>
@@ -365,6 +371,7 @@ export function renderLocal(box, deps) {
   D = deps;
   S.box = box;
   draw();
+  if (!S.stBound) { S.stBound = true; ST.onStandings(() => { if (S.box?.isConnected) draw(); }); }
   if (box.dataset.lsBound) return;
   box.dataset.lsBound = '1';
   box.addEventListener('click', (e) => {

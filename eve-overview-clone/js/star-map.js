@@ -8,6 +8,7 @@ import { Line2 } from 'three/addons/lines/Line2.js';
 import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 import * as JP from './jump-planner.js?v=v16';
+import * as ST from './standings.js?v=v4';
 import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s4';
 
 let app;               // 主程序提供的工具函数
@@ -2234,7 +2235,7 @@ function showKillTip(item) {
     const who = liveName(p.character_id) || liveName(p.corporation_id) || fallback;
     const org = [p.character_id ? liveName(p.corporation_id) : '', liveName(p.alliance_id)].filter(Boolean).join(' · ');
     const pic = p.character_id ? img(`characters/${p.character_id}/portrait`) : p.corporation_id ? img(`corporations/${p.corporation_id}/logo`) : '';
-    return `<div class="kill-tip-party">${pic ? `<img src="${pic}" alt="" width="28" height="28">` : '<span class="kill-tip-blank"></span>'}<div translate="no"><b>${app.esc(who)}</b>${org ? `<small>${app.esc(org)}</small>` : ''}</div></div>`;
+    return `<div class="kill-tip-party">${pic ? `<img src="${pic}" alt="" width="28" height="28">` : '<span class="kill-tip-blank"></span>'}<div translate="no"><b>${ST.badge({ char: p.character_id, corp: p.corporation_id, alliance: p.alliance_id })}${app.esc(who)}</b>${org ? `<small>${app.esc(org)}</small>` : ''}</div></div>`;
   };
   const tags = [k.solo ? '单刷' : '', k.npc ? 'NPC 击杀' : ''].filter(Boolean).map((t) => `<i>${t}</i>`).join('');
   const where = s ? `${app.esc(s.name)} <span style="color:${secColor(s.sec)}">${secDisplay(s.sec).toFixed(1)}</span> · ${app.esc(regionName(s.region))}` : '虫洞空间';

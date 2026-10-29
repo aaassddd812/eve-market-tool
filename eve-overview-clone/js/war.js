@@ -6,6 +6,7 @@
 // 刷新倒计时：按 ESI 响应的 Expires 头（跨域可读的安全响应头）显示星系争夺进度（约每 30 分钟更新）与阵营统计 / 排行榜的下次刷新时间，
 //   归零后自动重新读取并就地更新（至少间隔 60 秒，避免 ESI 缓存未及时更新时反复请求）。
 import { esiUrl, SERVER } from './server.js?v=s4';
+import * as ST from './standings.js?v=v4';
 import { skPage } from './skeleton.js?v=v17';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 
@@ -292,6 +293,7 @@ async function loadWarPage() {
 }
 
 const side = (x) => ({ id: x.alliance_id || x.corporation_id, kind: x.alliance_id ? 'alliances' : 'corporations', isk: x.isk_destroyed || 0, ships: x.ships_killed || 0 });
+const stOf = (x) => ST.badge(x.kind === 'alliances' ? { alliance: x.id } : { corp: x.id });   // 对这一方的声望
 const warState = (w) => w.finished && new Date(w.finished) <= new Date() ? 'finished' : w.started && new Date(w.started) <= new Date() ? 'active' : 'declared';
 const STATE_ZH = { active: '进行中', declared: '已宣战（未开始）', finished: '已结束' };
 const fmtDay = (iso) => iso ? new Date(iso).toLocaleDateString('zh-CN') : '—';
@@ -304,9 +306,9 @@ function warsHtml() {
     const a = side(w.aggressor), d = side(w.defender);
     const st = warState(w);
     return `<tr class="au-row" data-war="${w.id}" tabindex="0">
-      <td><span class="war-party">${logo(a.kind, a.id, 22)}${esc(nameOf(a.id))}</span><span class="cell-sub">击毁 ${formatISK(a.isk)} · ${formatNumber(a.ships)} 艘</span></td>
+      <td><span class="war-party">${logo(a.kind, a.id, 22)}${stOf(a)}${esc(nameOf(a.id))}</span><span class="cell-sub">击毁 ${formatISK(a.isk)} · ${formatNumber(a.ships)} 艘</span></td>
       <td class="war-vs">${w.mutual ? '互相宣战' : '对'}</td>
-      <td><span class="war-party">${logo(d.kind, d.id, 22)}${esc(nameOf(d.id))}</span><span class="cell-sub">击毁 ${formatISK(d.isk)} · ${formatNumber(d.ships)} 艘${w.allies?.length ? ` · ${w.allies.length} 个盟友` : ''}</span></td>
+      <td><span class="war-party">${logo(d.kind, d.id, 22)}${stOf(d)}${esc(nameOf(d.id))}</span><span class="cell-sub">击毁 ${formatISK(d.isk)} · ${formatNumber(d.ships)} 艘${w.allies?.length ? ` · ${w.allies.length} 个盟友` : ''}</span></td>
       <td><span class="pill${st === 'active' ? ' sell' : ''}">${STATE_ZH[st]}</span></td>
       <td>${fmtDay(w.declared)}<span class="cell-sub">${w.finished ? '结束 ' + fmtDay(w.finished) : w.started ? '开始 ' + fmtDay(w.started) : ''}</span></td></tr>`;
   }).join('');
@@ -339,8 +341,8 @@ async function openWar(w) {
   const allies = w.allies || [];
   await nameAll(allies.map((x) => x.alliance_id || x.corporation_id));
   const head = `<div class="valuation-grid">
-      ${ctx.valuationCard(esc(nameOf(a.id)) + '（宣战方）', formatISK(a.isk) + ' ISK', `击毁 ${formatNumber(a.ships)} 艘`, 'is-sell')}
-      ${ctx.valuationCard(esc(nameOf(d.id)) + '（被宣战方）', formatISK(d.isk) + ' ISK', `击毁 ${formatNumber(d.ships)} 艘`, 'is-buy')}
+      ${ctx.valuationCard(stOf(a) + esc(nameOf(a.id)) + '（宣战方）', formatISK(a.isk) + ' ISK', `击毁 ${formatNumber(a.ships)} 艘`, 'is-sell')}
+      ${ctx.valuationCard(stOf(d) + esc(nameOf(d.id)) + '（被宣战方）', formatISK(d.isk) + ' ISK', `击毁 ${formatNumber(d.ships)} 艘`, 'is-buy')}
       ${ctx.valuationCard('状态', STATE_ZH[warState(w)], `宣战 ${fmtDay(w.declared)}${w.finished ? ' · 结束 ' + fmtDay(w.finished) : ''}`)}
     </div>
     <p class="dyn-meta">${w.mutual ? '互相宣战' : '单方宣战'} · ${w.open_for_allies ? '接受盟友加入' : '不接受盟友'}${allies.length ? ' · 盟友：' + allies.map((x) => esc(nameOf(x.alliance_id || x.corporation_id))).join('、') : ''}</p>

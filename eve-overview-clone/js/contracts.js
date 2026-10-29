@@ -5,6 +5,8 @@
 // 我的合同（绑定 ESI）：个人 /characters/{id}/contracts/，军团 /corporations/{id}/contracts/（「军团合同」权限）。
 //   ESI 没有联盟合同接口，「联盟」列出的是这两处里可见范围为联盟的合同（指派给联盟、但自己与军团都不是发起方 / 接受方的合同读不到）。
 
+import * as ST from './standings.js?v=v4';
+
 let ctx;   // esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, resolveStructures, officialName, locationName, loadNpcNames,
            // valuation, valuationCard, store, game, regions, marketRegions, loadMarketRegions, getTypeIndex, archive, esiAuthFetch, esiAuthFetchPaged,
            // hasEsiToken, tokenInfo, hasScopeGroup, scopeNeededHtml, openEsiBind, icon
@@ -42,6 +44,7 @@ export function initContracts(context) {
   S.type = saved.type || '';
   S.region = Number(saved.region) || 0;
   if (!ctx.archive && isPublic()) S.tab = 'me';
+  ST.onStandings(renderBody);   // 发起人声望查到后重画
 }
 const save = () => ctx.store.setJSON(KEY, { tab: S.tab, type: S.type, region: S.region });
 const isPublic = (tab = S.tab) => PUBLIC_TABS.some(([k]) => k === tab);
@@ -174,7 +177,7 @@ function publicRows() {
       <td><div class="ct-item">${it.main ? `<img src="${ctx.icon(it.main)}" data-item-pop="${it.main}" onerror="if(!this.dataset.bp){this.dataset.bp=1;this.src=this.src.replace('/icon','/bp')}" alt="" width="32" height="32" loading="lazy">` : '<span class="ct-noimg"></span>'}
         <span><b>${esc(it.text)}</b><span class="ct-show-sm"><span class="pill ct-type-${c.type}">${esc(TYPE_ZH[c.type] || c.type)}</span></span>${it.vol ? `<span class="cell-sub">${it.vol}${it.title ? ` · <span translate="no">${esc(unent(it.title))}</span>` : ''}</span>` : ''}${it.sub || it.more ? `<span class="cell-sub">${it.more ? `<span>等 ${it.more} 项</span>${it.sub ? ' · ' : ''}` : ''}${it.sub ? `<span translate="no">${esc(unent(it.sub))}</span>` : ''}</span>` : ''}</span></div></td>
       <td class="ct-hide-sm"><span class="pill ct-type-${c.type}">${esc(TYPE_ZH[c.type] || c.type)}</span>${S.tab !== c.status ? ` <span class="pill">${esc(STATUS_ZH[c.status] || c.status)}</span>` : ''}</td>
-      <td class="ct-hide-sm"><span>${esc(place(c))}</span><span class="cell-sub">${esc(nameOf(c.issuer_id))}${c.for_corp ? ' · <span>军团</span>' : ''}</span></td>
+      <td class="ct-hide-sm"><span>${esc(place(c))}</span><span class="cell-sub">${ST.badge(ST.entById(c.issuer_id))}${esc(nameOf(c.issuer_id))}${c.for_corp ? ' · <span>军团</span>' : ''}</span></td>
       <td class="num"><strong>${price ? formatISK(price) : '—'}</strong>${priceSub ? `<span class="cell-sub">${esc(priceSub)}</span>` : ''}</td>
       <td class="num ct-hide-sm">${c.type === 'courier' ? '<span class="muted-cell">—</span>' : (c.value ? formatISK(c.value) : '—') + tag}</td>
       <td class="ct-time">${time}</td>
@@ -246,7 +249,7 @@ function esiRows(list) {
     const [st, label] = esiStatus(c);
     const price = c.type === 'courier' ? c.reward : c.type === 'auction' ? c.price : c.price || c.reward;
     return `<tr class="ct-row" data-ct-esi="${c.contract_id}" tabindex="0">
-      <td><div class="ct-item"><span class="ct-noimg"></span><span>${c.title ? `<b translate="no">${esc(unent(c.title))}</b>` : '<b>（无标题）</b>'}<span class="ct-show-sm"><span class="pill ct-type-${c.type}">${esc(TYPE_ZH[c.type] || c.type)}</span> <span class="pill status-${st}">${esc(label)}</span></span><span class="cell-sub">${esc(nameOf(c.issuer_id))} · ${esc(AVAIL_ZH[c.availability] || c.availability)}${c.assignee_id && c.availability !== 'public' ? ' → ' + esc(nameOf(c.assignee_id)) : ''}</span></span></div></td>
+      <td><div class="ct-item"><span class="ct-noimg"></span><span>${c.title ? `<b translate="no">${esc(unent(c.title))}</b>` : '<b>（无标题）</b>'}<span class="ct-show-sm"><span class="pill ct-type-${c.type}">${esc(TYPE_ZH[c.type] || c.type)}</span> <span class="pill status-${st}">${esc(label)}</span></span><span class="cell-sub">${ST.badge(ST.entById(c.issuer_id))}${esc(nameOf(c.issuer_id))} · ${esc(AVAIL_ZH[c.availability] || c.availability)}${c.assignee_id && c.availability !== 'public' ? ' → ' + esc(nameOf(c.assignee_id)) : ''}</span></span></div></td>
       <td class="ct-hide-sm"><span class="pill ct-type-${c.type}">${esc(TYPE_ZH[c.type] || c.type)}</span> <span class="pill status-${st}">${esc(label)}</span></td>
       <td class="ct-hide-sm"><span>${esc(ctx.locationName(c.start_location_id))}</span>${c.type === 'courier' && c.end_location_id ? `<span class="cell-sub">→ ${esc(ctx.locationName(c.end_location_id))}</span>` : ''}</td>
       <td class="num"><strong>${price ? formatISK(price) : '—'}</strong>${c.type === 'courier' ? `<span class="cell-sub">抵押 ${formatISK(c.collateral)}</span>` : ''}</td>
@@ -298,6 +301,7 @@ function tableHead(pub) {
 function renderBody() {
   const box = $('ctBody');
   if (!box) return;
+  ST.lookupIds((isPublic() ? S.list : S.esi.get(S.tab)?.list || []).map((c) => c.issuer_id));
   if (isPublic()) {
     if (!ctx.archive) { box.innerHTML = '<div class="empty-state"><p>公开合同存档仅宁静服提供</p></div>'; return; }
     const why = S.tab === 'done' ? '到期前从公开列表消失的合同（被接受，或发起人手动删除，ESI 无法区分），拍卖含到期有出价的'
@@ -427,7 +431,7 @@ async function renderDetail(d) {
     kv('类别', esc(TYPE_ZH[c.type] || c.type)) +
     kv('状态', `<span class="pill${pub ? ' ct-st-' + c.status : ' status-' + esiStatus(c)[0]}">${esc(status)}</span>`) +
     (pub ? '' : kv('可见范围', `<span>${esc(AVAIL_ZH[c.availability] || c.availability)}</span>` + (c.for_corporation ? '<span>（代表军团）</span>' : ''))) +
-    kv('发起人', esc(nameOf(c.issuer_id)) + (pub && c.for_corp ? '<span>（代表军团）</span>' : '')) +
+    kv('发起人', ST.badge(ST.entById(c.issuer_id)) + esc(nameOf(c.issuer_id)) + (pub && c.for_corp ? '<span>（代表军团）</span>' : '')) +
     kv('发起军团', esc(nameOf(pub ? c.issuer_corp : c.issuer_corporation_id))) +
     (pub ? '' : kv('指派对象', c.assignee_id ? esc(nameOf(c.assignee_id)) : '') + kv('接受人', c.acceptor_id ? esc(nameOf(c.acceptor_id)) : '')) +
     kv(c.type === 'courier' ? '起点' : '地点', esc(pub ? place(c) : ctx.locationName(loc))) +
