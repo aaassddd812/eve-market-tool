@@ -2,20 +2,25 @@
 // 击杀预警（kill-alert.js）与本地日志（intel.js）合在一个弹窗里，两个标签页；检测与设置还是各自的模块，这里只管弹窗、标签切换和标签上的状态点。
 // 两个模块都是点到对应标签页时才加载（已开启的会在页面打开时由 modern-app.js 先加载）。上次看的标签页记在 eve-alert-tab。
 // 弹窗在电脑上固定 680×760（切换标签页不变大小），设置一栏排；手机上全屏。
-// 第三个标签页「邮件」（alert-mail.js）集中设置收件人与哪些预警发邮件；打开它时先加载两个预警模块（它们会登记自己的邮件开关）。
+// 第三个标签页「游戏邮件」（alert-mail.js）集中设置收件人与哪些预警发邮件；打开它时先加载两个预警模块（它们会登记自己的邮件开关）。
+// 第四个标签页「微信 / 邮箱」（alert-push.js）：企业微信群机器人与邮箱提醒。
 
 import * as AM from './alert-mail.js?v=v7';
+import * as AP from './alert-push.js?v=v1';
 import { skText } from './skeleton.js?v=v17';
 
-let deps = null;   // { loadKill, loadIntel, esc }
+let deps = null;   // { loadKill, loadIntel, esc, showToast }
 let modal = null;
 let tab = 'kill';
 const TAB_KEY = 'eve-alert-tab';
-const TABS = [['kill', '击杀预警'], ['intel', '本地日志'], ['mail', '邮件']];
-const state = { kill: false, intel: false, mail: false };
+const TABS = [['kill', '击杀预警'], ['intel', '本地日志'], ['mail', '游戏邮件'], ['push', '微信 / 邮箱']];
+const state = { kill: false, intel: false, mail: false, push: false };
 
 export function initAlertCenter(d) {
   deps = d;
+  AP.initAlertPush({ esc: d.esc, showToast: d.showToast });
+  AP.onPushChange(() => setTabState('push', AP.isOn()));
+  state.push = AP.isOn();
   try { const t = localStorage.getItem(TAB_KEY); if (TABS.some(([k]) => k === t)) tab = t; } catch { /* 忽略 */ }
 }
 
@@ -70,7 +75,7 @@ async function show(which) {
   const want = tab;
   const pane = modal.querySelector(`[data-ac-pane="${want}"]`);
   try {
-    const m = want === 'kill' ? await deps.loadKill() : want === 'intel' ? await deps.loadIntel()
+    const m = want === 'kill' ? await deps.loadKill() : want === 'intel' ? await deps.loadIntel() : want === 'push' ? AP
       : await Promise.allSettled([deps.loadKill(), deps.loadIntel()]).then(() => AM);
     m.mountPanel(pane, { close, isOpen });
     if (tab === want) m.showPanel();

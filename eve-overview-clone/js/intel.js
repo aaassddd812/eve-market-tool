@@ -6,11 +6,12 @@
 //   消息里含「clr / clear / 干净」等字样算报平安（星图标绿）。星系名同时认当前界面语言与英文名（ESI 取英文名，缓存在本地）。
 // 我的位置：绑定 ESI 且有位置权限时读角色位置；否则读本地频道日志里「Channel changed to Local」一行；都没有时用手动填的星系。
 // 关键词监控：勾选的频道（或全部频道）里出现关键词（/正则/ 也可以）就提醒。游戏日志监控：战斗日志等出现关键词就提醒（例如被跃迁扰断）。
-// 提醒方式：提示音、网页卡片、系统通知、游戏内邮件（与击杀预警共用收件人与发信间隔，alert-mail.js；一段时间里的提醒合并成一封，
+// 提醒方式：提示音、网页卡片、系统通知、企业微信 / 邮箱（alert-push.js，在「微信 / 邮箱」标签页设置，这里只开关）、游戏内邮件（与击杀预警共用收件人与发信间隔，alert-mail.js；一段时间里的提醒合并成一封，
 //   多个标签页都在监听时按消息去重，邮件只发一次、提示音与系统通知只响一次；收件人在「邮件」标签页设置，这里勾选发给谁；英文界面发英文邮件）。设置面板是右上角铃铛「预警」弹窗的「本地日志」标签页（alert-center.js）。
 // 文件编码：聊天记录是 UTF-16 LE（带 BOM），游戏日志是 UTF-8；按 BOM 判断。文件名「频道名_YYYYMMDD_HHMMSS_角色ID.txt」。
 
 import * as AM from './alert-mail.js?v=v7';
+import * as AP from './alert-push.js?v=v1';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem
 const KEY = 'eve-intel-v1';
@@ -60,6 +61,7 @@ export async function initIntel(context) {
   load();
   AM.initAlertMail(ctx);
   AM.onMailChange(renderPanel);
+  AP.onPushChange(renderPanel);
   AM.registerSource('intel', { label: '本地日志', on: () => T.mail, set: (on) => update({ mail: on }) });
   if (!supported()) return;
   S.dir = await idbGet('dir');
@@ -397,6 +399,7 @@ function raise(r) {
   const title = titleOf(r);
   const body = (r.who ? r.who + '：' : '') + r.msg;
   if (T.mail && !r.test) queueMail(r);
+  if (!r.test) AP.push('intel', { sig: 'intel|' + sigOf(r), text: `${title} · ${r.channel} · ${body}` });
   if (T.web) card(title, body, r);
   // 提示音、系统通知：多个标签页都在监听时同一条只响一次（网页卡片每个标签页各自显示）
   if (!(T.sound || T.notify) || (!r.test && !claim(r, 'eve-intel-rung'))) return;
@@ -415,8 +418,9 @@ function queueMail(r) {
   if (!S.mailTimer) S.mailTimer = setTimeout(flushMail, AM.nextSlot());
 }
 // 多个标签页都在读同一份日志时，同一条提醒只由先读到的那个处理（localStorage 记 5 分钟；k 区分邮件 / 提示音与通知）
+const sigOf = (r) => [r.type, r.channel, r.who, r.msg, +r.time, r.system || r.kw].join('|');
 function claim(r, k) {
-  const sig = [r.type, r.channel, r.who, r.msg, +r.time, r.system || r.kw].join('|');
+  const sig = sigOf(r);
   try {
     const now = Date.now();
     const m = JSON.parse(localStorage.getItem(k) || '{}');
@@ -552,6 +556,7 @@ function drawPanel() {
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
       ${sw('mail', '游戏内邮件', '', '发 EVE 邮件（每分钟最多一封，多条合并），需要绑定 ESI')}
       ${T.mail ? AM.pickerHtml('intel') : ''}
+      ${AP.switchHtml('intel')}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-in-test>测试提醒</button>${T.mail ? `<button class="btn btn-ghost btn-sm" data-in-testmail${ctx.tokenInfo() ? '' : ' disabled'}>发送测试邮件</button>` : ''}</div>`)}
     ${sec('频道关键词', `<div class="ka-list">
@@ -574,6 +579,7 @@ export function mountPanel(el, opts) {
   panel = el;
   shell = opts;
   AM.bindPicker(panel);
+  AP.bindSwitch(panel);
   panel.addEventListener('click', onClick);
   panel.addEventListener('change', onChangeEvt);
   panel.addEventListener('keydown', (e) => {

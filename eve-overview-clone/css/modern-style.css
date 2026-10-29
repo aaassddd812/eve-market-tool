@@ -4656,12 +4656,32 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .ac-tabs button { display: inline-flex; align-items: center; gap: 6px; }
 .ac-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); opacity: 0.35; }
 .ac-tabs .on .ac-dot { background: var(--success); opacity: 1; }
+/* 手机上四个标签一行放不下时横向滚动，不折行 */
+@media (max-width: 768px) { .ac-tabs { min-width: 0; overflow-x: auto; scrollbar-width: none; } .ac-tabs button { flex: none; white-space: nowrap; padding-inline: 6px; gap: 4px; } }
 .ac-pane > * { margin-bottom: 14px; }
 .ac-pane > .ka-note, .ac-pane > .ka-warn { margin: 0 0 14px; }
 /* 预警 · 邮件标签页：收件人每行右侧勾选接收哪种预警 */
 .am-row { cursor: default; flex-wrap: wrap; }
 .am-row > .ka-chips { flex: none; }
 .am-row > .ka-close, .am-del-gap { width: 22px; margin-left: 0; text-align: center; }
+/* 预警 · 微信 / 邮箱标签页：邮箱设置表单（标签在左、输入框占满） */
+.ap-form { gap: 8px; }
+.ap-field { display: flex; align-items: center; gap: 10px; }
+.ap-field > span { flex: none; min-width: 64px; white-space: nowrap; font-size: 0.8125rem; color: var(--text-secondary); }
+.ap-field > .cr-input { flex: 1; min-width: 0; }
+.ap-secret:not(:focus) { -webkit-text-security: disc; }
+/* 分区标题旁的「?」教程按钮与展开的教程 */
+.ap-help-btn { width: 16px; height: 16px; padding: 0; border-radius: 50%; border: 1px solid var(--border-primary); background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.6875rem; font-weight: 600; line-height: 14px; cursor: pointer; align-self: center; }
+.ap-help-btn:hover, .ap-help-btn.on { color: var(--accent-primary); border-color: var(--accent-primary); }
+.ap-help { margin: 0; padding: 10px 14px; border-radius: 8px; background: var(--bg-tertiary); font-size: 0.8125rem; line-height: 1.65; color: var(--text-primary); }
+.ap-help ol { margin: 0; padding-left: 20px; }
+.ap-help ol li + li { margin-top: 4px; }
+.ap-help ol ul { margin: 2px 0 0; padding-left: 16px; color: var(--text-secondary); }
+.ap-help ul { margin: 8px 0 0; padding-left: 18px; color: var(--text-secondary); font-size: 0.75rem; }
+.ap-server { display: grid; grid-template-columns: 1fr; gap: 8px; }
+.ap-server-line { display: flex; align-items: center; gap: 8px; padding-left: 74px; }
+.ap-form .ka-actions { margin: 4px 0 0; }
+@media (max-width: 768px) { .ap-server-line { padding-left: 0; } }
 .ka-chip.ka-chip-link { border-style: dashed; background: transparent; color: var(--accent-primary); }
 .ka-chip.on small { color: inherit; opacity: 0.8; }
 .am-pick { display: flex; align-items: baseline; gap: 10px; }

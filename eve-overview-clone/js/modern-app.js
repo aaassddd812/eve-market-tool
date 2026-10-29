@@ -4,7 +4,7 @@ import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v14';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v38';
 import * as SM from './struct-markets.js?v=v7';
-import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v8';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v9';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
@@ -5603,7 +5603,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v11').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v12').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5626,7 +5626,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v18').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v19').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5679,7 +5679,7 @@ function shipClassOf(typeId) {
 function initKillAlerts() {
   initCartButton();
   initIntelButton();
-  initAlertCenter({ loadKill: loadKillAlert, loadIntel, esc });
+  initAlertCenter({ loadKill: loadKillAlert, loadIntel, esc, showToast });
   $('killAlertBtn').addEventListener('click', () => openAlertCenter());
   // 已开启的话页面打开即开始检测
   let on = false;

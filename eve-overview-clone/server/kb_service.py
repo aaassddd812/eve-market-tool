@@ -65,19 +65,24 @@ import collections
 import concurrent.futures
 import csv
 import datetime as dt
+import email.message
 import email.utils
 import gzip
 import hashlib
 import hmac
 import html as html_lib
 import io
+import ipaddress
 import json
 import logging
 import math
 import mimetypes
 import os
 import re
+import smtplib
+import socket
 import sqlite3
+import ssl
 import tarfile
 import threading
 import time
@@ -5212,6 +5217,204 @@ class CharSale:
                 "pending": 0}
 
 
+# ---------------------------------------------------------------- 预警推送（企业微信群机器人、电子邮件）
+# 浏览器里的击杀预警 / 本地日志命中后，把要推送的内容交给本服务转发：
+#   企业微信：浏览器不能跨域调群机器人接口，由这里转发到 qyapi.weixin.qq.com（只接受机器人 key，不接受任意地址）
+#   邮件：浏览器不能直连 SMTP。用户在网页上填自己的发件邮箱、授权码（只存在用户浏览器里），每次发信连同内容一起带过来，
+#     这里登录用户的邮件服务器发给用户指定的一个收件地址；账号、授权码用完即丢，不保存、不写日志。
+#     只连公网地址的常用邮件端口（不能拿来探测内网），只发一个收件人，必须加密连接。
+# 内容只收标题和若干行文字（可带 http(s) 链接），排版在这里做，文字全部转义。
+PUSH_RATE = 30                  # 每个 IP 每分钟最多请求次数（全部推送接口合计）
+PUSH_WECOM_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+PUSH_MAIL_RE = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}")
+PUSH_HOST_RE = re.compile(r"(?=.{1,253}$)[A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63})+")
+PUSH_PORTS = (465, 587, 25, 2525)
+PUSH_LINES = 30                 # 一条推送最多几行
+PUSH_LINE_MAX = 300             # 每行最多几个字
+PUSH_WECOM_GAP = 3              # 同一个机器人两条至少隔几秒（企业微信限每分钟 20 条）
+PUSH_MAIL_GAP = 20              # 同一个发件账号两封至少隔几秒（浏览器按 60 秒合并，测试邮件不等）
+PUSH_MAIL_IP_DAY = 300          # 同一个 IP 每天最多发几封
+PUSH_TEST_PRIVATE = os.environ.get("EVE_PUSH_TEST_SMTP") == "1"   # 仅本机测试：允许连内网 / 不加密的邮件服务器
+
+
+class _PinnedSMTP:
+    # 连到事先检查过的 IP（防止检查后域名解析变成内网地址），证书校验仍按原域名
+    pin = None
+
+    def _get_socket(self, host, port, timeout):
+        return super()._get_socket(self.pin, port, timeout)
+
+
+class _PinnedSMTPSSL(_PinnedSMTP, smtplib.SMTP_SSL):
+    pass
+
+
+class _PinnedSMTPPlain(_PinnedSMTP, smtplib.SMTP):
+    pass
+
+
+class AlertPush:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.last = {}     # 机器人 key / 发件账号 -> 上次发送时间
+        self.daily = {}    # (ip:IP, 日期, 种类) -> 次数
+
+    # ---------- 公共 ----------
+    @staticmethod
+    def content(body):
+        title = str(body.get("title") or "").strip()[:100]
+        lines = body.get("lines")
+        if not title or not isinstance(lines, list) or not lines:
+            raise ValueError("缺少标题或内容")
+        out = []
+        for x in lines[:PUSH_LINES]:
+            x = x if isinstance(x, dict) else {"text": x}
+            text = str(x.get("text") or "").strip()[:PUSH_LINE_MAX]
+            url = str(x.get("url") or "")
+            if text:
+                out.append((text, url if re.fullmatch(r"https?://[^\s<>\"']{1,500}", url) else ""))
+        if not out:
+            raise ValueError("缺少内容")
+        return title, out, max(0, len(lines) - PUSH_LINES)
+
+    def gap(self, key, seconds):
+        now = time.time()
+        with self.lock:
+            wait = self.last.get(key, 0) + seconds - now
+            if wait > 0:
+                raise ValueError(f"发送太频繁，请 {int(wait) + 1} 秒后再试")
+            self.last[key] = now
+            if len(self.last) > 20000:
+                self.last = {k: t for k, t in self.last.items() if now - t < 600}
+
+    def count(self, key, kind, limit, msg):
+        day = time.strftime("%Y-%m-%d", time.gmtime())
+        with self.lock:
+            n = self.daily.get((key, day, kind), 0)
+            if n >= limit:
+                raise ValueError(msg)
+            if len(self.daily) > 50000:
+                self.daily = {k: v for k, v in self.daily.items() if k[1] == day}
+            self.daily[(key, day, kind)] = n + 1
+
+    # ---------- 企业微信 ----------
+    def wecom(self, body, ip=None):
+        key = str(body.get("key") or "").strip().lower()
+        if not PUSH_WECOM_RE.fullmatch(key):
+            raise ValueError("机器人地址不对：应为 https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…")
+        title, lines, more = self.content(body)
+        self.gap("wecom:" + key, PUSH_WECOM_GAP)
+        md = [f"**{self.md(title)}**"] + [f"> [{self.md(t)}]({u})" if u else f"> {self.md(t)}" for t, u in lines]
+        if more:
+            md.append(f"> ……另有 {more} 条")
+        text = "\n".join(md)
+        while len(text.encode()) > 4000:   # 企业微信 markdown 最长 4096 字节
+            md.pop(-1)
+            text = "\n".join(md + ["> ……"])
+        req = urllib.request.Request("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + key,
+                                     data=json.dumps({"msgtype": "markdown", "markdown": {"content": text}}, ensure_ascii=False).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                res = json.load(r)
+        except Exception as e:  # noqa: BLE001
+            raise EsiUnavailable(f"连不上企业微信：{e}") from e
+        code = res.get("errcode")
+        if code:
+            raise ValueError({93000: "机器人地址无效或已被移出群聊", 45009: "企业微信限流：同一个机器人每分钟最多 20 条",
+                              40058: "内容格式不对"}.get(code, f"企业微信返回错误 {code}：{res.get('errmsg', '')}"))
+        return {"ok": True}
+
+    @staticmethod
+    def md(s):
+        # 企业微信 markdown 不认转义：会打乱格式的符号换成全角
+        return s.translate(str.maketrans("[]<>*`", "［］＜＞＊｀"))
+
+    # ---------- 邮件（用户自己的发件邮箱）----------
+    @staticmethod
+    def resolve(host, port):
+        # 只连公网地址：返回第一个可用的公网 IP
+        try:
+            infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError as e:
+            raise ValueError(f"找不到邮件服务器 {host}") from e
+        ips = [i[4][0] for i in infos]
+        if not PUSH_TEST_PRIVATE and any(not ipaddress.ip_address(ip.split("%")[0]).is_global for ip in ips):
+            raise ValueError("邮件服务器地址不对")
+        return ips[0]
+
+    def mail(self, body, ip=None):
+        smtp = body.get("smtp") if isinstance(body.get("smtp"), dict) else {}
+        user = str(smtp.get("user") or "").strip()
+        password = str(smtp.get("password") or "")
+        host = str(smtp.get("host") or "").strip().lower().rstrip(".")
+        sec = smtp.get("security") or "ssl"
+        try:
+            port = int(smtp.get("port") or (465 if sec == "ssl" else 587))
+        except (TypeError, ValueError):
+            port = 0
+        to = str(body.get("to") or user).strip()
+        if len(user) > 120 or not PUSH_MAIL_RE.fullmatch(user):
+            raise ValueError("发件邮箱不对")
+        if len(to) > 120 or not PUSH_MAIL_RE.fullmatch(to):
+            raise ValueError("收件邮箱不对")
+        if not password or len(password) > 200:
+            raise ValueError("请填写授权码")
+        if not PUSH_HOST_RE.fullmatch(host) or port not in PUSH_PORTS:
+            raise ValueError("邮件服务器或端口不对")
+        if sec not in ("ssl", "starttls") and not (PUSH_TEST_PRIVATE and sec == "none"):
+            raise ValueError("只支持 SSL / STARTTLS 加密连接")
+        title, lines, more = self.content(body)
+        self.gap("mail:" + user.lower(), 0 if body.get("test") else PUSH_MAIL_GAP)
+        self.count("ip:" + (ip or ""), "mail", PUSH_MAIL_IP_DAY, "今天发的预警邮件太多了，明天再试")
+        en = body.get("lang") == "en"
+        esc = html_lib.escape
+        rows = "".join(f'<li style="margin:6px 0">{f"<a href={chr(34)}{esc(u)}{chr(34)}>{esc(t)}</a>" if u else esc(t)}</li>' for t, u in lines)
+        html = (f'<p style="font-size:15px;font-weight:600">{esc(title)}</p><ul style="padding-left:18px;font-size:14px">{rows}</ul>'
+                + ((f"<p>… and {more} more</p>" if en else f"<p>……另有 {more} 条</p>") if more else "")
+                + ('<p style="color:#888;font-size:12px">From EVE Market alerts. Turn them off under the bell (top right) → WeCom / Email.</p>' if en else
+                   '<p style="color:#888;font-size:12px">来自 EVE Market 预警，可在网站右上角铃铛的「微信 / 邮箱」里关闭。</p>'))
+        msg = email.message.EmailMessage()
+        msg["Subject"] = title
+        msg["From"] = email.utils.formataddr(("EVE Market", user))
+        msg["To"] = to
+        msg["Date"] = email.utils.formatdate(localtime=True)
+        msg["Message-ID"] = email.utils.make_msgid(domain=user.rsplit("@", 1)[-1])
+        msg.set_content(html_lib.unescape(re.sub(r"<[^>]+>", "", html.replace("</li>", "\n").replace("</p>", "\n\n"))))
+        msg.add_alternative(f'<div style="font-family:sans-serif;color:#222">{html}</div>', subtype="html")
+        pin = self.resolve(host, port)
+        stage = "connect"
+        try:
+            s = _PinnedSMTPSSL(timeout=20, context=ssl.create_default_context()) if sec == "ssl" else _PinnedSMTPPlain(timeout=20)
+            s.pin = pin
+            s._host = host   # 没在构造时连接，证书校验（SSL / STARTTLS）要用的域名得自己设
+            with s:
+                s.connect(host, port)
+                if sec == "starttls":
+                    s.starttls(context=ssl.create_default_context())
+                stage = "login"
+                if sec != "none":   # 不加密只在本机测试时允许，测试用的收信程序不要求登录
+                    s.login(user, password)
+                stage = "send"
+                s.send_message(msg, from_addr=user, to_addrs=[to])
+        except (smtplib.SMTPAuthenticationError, smtplib.SMTPServerDisconnected) as e:
+            if stage == "connect" or (stage == "send" and isinstance(e, smtplib.SMTPServerDisconnected)):
+                raise EsiUnavailable(f"连不上邮件服务器 {host}:{port}") from e
+            # QQ 邮箱授权码不对时直接断开连接，不回登录失败
+            raise ValueError("登录失败：发件邮箱或授权码不对（QQ / 163 等要用授权码，并在邮箱设置里开启 SMTP）") from e
+        except smtplib.SMTPRecipientsRefused as e:
+            raise ValueError("邮件服务器拒收这个收件地址") from e
+        except smtplib.SMTPSenderRefused as e:
+            raise ValueError(f"邮件服务器拒绝发信：{e.smtp_code} {e.smtp_error.decode(errors='replace')[:120]}") from e
+        except smtplib.SMTPDataError as e:
+            raise ValueError(f"邮件服务器拒收：{e.smtp_code} {e.smtp_error.decode(errors='replace')[:120]}") from e
+        except ssl.SSLError as e:
+            raise ValueError("加密连接失败，检查端口和加密方式（465 用 SSL，587 用 STARTTLS）") from e
+        except (OSError, smtplib.SMTPException) as e:
+            raise EsiUnavailable(f"连不上邮件服务器 {host}:{port}") from e
+        return {"ok": True}
+
+
 class RateLimiter:
     """按 IP 的令牌桶：容量 rate，每秒恢复 rate / 60 个（用于深渊装备导入、钱包存档）"""
     def __init__(self, rate):
@@ -5340,6 +5543,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     wallet_limiter = RateLimiter(WALLET_RATE)
     sync_limiter = RateLimiter(SYNC_RATE)
     sale_limiter = RateLimiter(SALE_RATE)
+    push_limiter = RateLimiter(PUSH_RATE)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -5470,6 +5674,35 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("角色挂售错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
+        def push(self, path):
+            # 预警推送（同源调用，不带 CORS 头）；机器人 key、邮箱账号、授权码不写日志
+            op = path[len("/api/kb/push/"):]
+            ops = {"wecom": api.push.wecom, "mail": api.push.mail}
+            if op not in ops:
+                return self.send_json(404, {"error": "not found"})
+            ip = self.client_ip()
+            ok, _, retry = push_limiter.take(ip)
+            if not ok:
+                return self.send_json(429, {"error": f"请求太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 32768:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "请求体应为 JSON"})
+            try:
+                return self.send_json(200, ops[op](body, ip))
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except EsiUnavailable as e:
+                return self.send_json(502, {"error": str(e)})
+            except Exception:
+                log.exception("预警推送错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
         def sync(self, path):
             # 设置云同步（同源调用，不带 CORS 头）；请求体不写日志
             op = path[len("/api/kb/sync/"):]
@@ -5506,6 +5739,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.sync(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/bazaar/sale/"):
                 return self.sale(url.path.rstrip("/"))
+            if url.path.startswith("/api/kb/push/"):
+                return self.push(url.path.rstrip("/"))
             cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
             err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
             path = url.path.rstrip("/")
@@ -5640,6 +5875,7 @@ def main():
     api.wallet = Wallet(store, industry)
     api.sync = SettingsSync(store)
     api.sale = CharSale(store, api.wallet)
+    api.push = AlertPush()
     abyssal = Abyssal(store)
     abyssal.model = store.abyssal_model
     cn_apis = {}

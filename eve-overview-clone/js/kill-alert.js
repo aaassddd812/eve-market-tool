@@ -7,6 +7,7 @@
 //   游戏内邮件（默认开）：给自己发一封 EVE 邮件（esi-mail.send_mail.v1），带击杀报告链接 killReport:ID:HASH，游戏里点开即可看 KM；
 //     同一分钟内的多条击杀合并成一封，两封之间至少隔 60 秒；同时开了多个标签页时只由一个标签页发送。
 //     收件人在「预警」弹窗的「邮件」标签页设置（alert-mail.js，与本地日志共用通讯录与发信间隔），这里勾选发给谁；英文界面发英文邮件。
+//   企业微信 / 邮箱（alert-push.js，在「微信 / 邮箱」标签页设置，这里只开关）：一行文字 + 击杀详情链接（pushAlert）。
 //   网页特效（默认关）：屏幕边缘红色闪烁 + 右上角预警卡片（点击查看击杀详情）。
 //   提示音、系统通知（默认关，与网页特效互相独立）：系统通知在浏览器后台也能看到，点击打开击杀详情；多个标签页同一条只响一次（ring）。
 // 人物关注（与位置预警相互独立，默认关闭）：关注的角色产生 KM 时提醒，可分别选「击杀」（参与击杀，含最后一击）/「损失」/「全部」。
@@ -18,8 +19,9 @@
 // 浏览器后台标签页的定时器会被降频（约每分钟一次），预警可能延迟。
 // 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
 
-import { SERVER, IS_TQ, serverKey, esiUrl } from './server.js?v=s4';
+import { SERVER, IS_TQ, serverKey, esiUrl, kbSiteLink } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v7';
+import * as AP from './alert-push.js?v=v1';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
@@ -77,6 +79,7 @@ export function initKillAlert(context) {
   load();
   AM.initAlertMail(ctx);   // 旧版收件人设置（T.mailSelf / mailTo）由 alert-mail.js 直接从存储里搬过去
   AM.onMailChange(renderPanel);
+  AP.onPushChange(renderPanel);
   AM.registerSource('kill', { label: '击杀预警', on: () => T.mail, set: (on) => update({ mail: on }) });
   window.addEventListener('eve-account-change', () => { S.system = 0; S.range = new Map(); S.charId = 0; restart(); });
   // 多个标签页：只有「领头」的标签页发游戏邮件，避免重复
@@ -295,6 +298,14 @@ function raise(a) {
   if (T.web) webAlert(a);
   ring(a);
   if (T.mail) queueMail(a);
+  if (!a.test) pushAlert(a);
+}
+
+// 企业微信 / 邮箱（alert-push.js）：一行文字 + 击杀详情链接（宁静服 zKillboard，国服击坠榜）
+function pushAlert(a) {
+  const extra = [a.value ? ctx.formatISK(a.value) + ' ISK' : '', a.attackers ? AM.L(a.attackers + ' 名攻击者', a.attackers + (a.attackers === 1 ? ' attacker' : ' attackers')) : ''].filter(Boolean).join(' · ');
+  const id = a.id && !a.hourly ? Number(a.id) : 0;
+  AP.push('kill', { sig: 'kill|' + (a.id || a.time), text: AM.L(describe(a), describeEn(a)) + (extra ? ' · ' + extra : ''), url: id ? (IS_TQ ? `https://zkillboard.com/kill/${id}/` : kbSiteLink('kill', id)) : '' });
 }
 
 // 提示音、系统通知：与网页特效各自独立；多个标签页同时收到同一条只响一次
@@ -573,6 +584,7 @@ function drawPanel() {
     ${sec('提醒方式', `<div class="ka-list">
       ${sw('mail', '游戏内邮件', '', '发 EVE 邮件，附击杀报告链接（每分钟最多一封，多条合并）')}
       ${T.mail ? AM.pickerHtml('kill') : ''}
+      ${AP.switchHtml('kill')}
       ${sw('web', '网页特效', '', '屏幕边缘红色闪烁 + 右上角预警卡片')}
       ${sw('sound', '提示音', '', '有新预警时播放提示音，本星系的更急促')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
@@ -616,6 +628,7 @@ export function mountPanel(el, opts) {
   panel = el;
   shell = opts;
   AM.bindPicker(panel);
+  AP.bindSwitch(panel);
   panel.addEventListener('click', (e) => {
     const t = e.target.closest('[data-ka-test]');
     if (t) { test(t.dataset.kaTest); return; }
