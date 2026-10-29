@@ -66,11 +66,12 @@ export async function renderSkills(box, character, characterId) {
 export function setSkillsMode(mode) { S.mode = mode === 'plan' ? 'plan' : 'list'; }
 const modeNav = () => `<div class="segmented sk-mode" role="tablist">${[['list', '技能'], ['plan', '技能规划']].map(([k, l]) => `<button data-sk-mode="${k}" class="${S.mode === k ? 'active' : ''}">${l}</button>`).join('')}</div>`;
 
-function drawPlan(box) {
+// opt.queue：把训练队列加为规划目标
+function drawPlan(box, opt) {
   box.dataset.skills = 'plan';
   clearInterval(timer); timer = 0;
   box.innerHTML = `${modeNav()}<div class="sk-plan-host"></div>`;
-  ctx.showPlan(box.querySelector('.sk-plan-host'));
+  ctx.showPlan(box.querySelector('.sk-plan-host'), opt);
 }
 
 // 植入体属性加成：ESI /implants/ + 各植入体的属性加成（dogma 175–179），算属性分配建议用
@@ -230,6 +231,7 @@ function bind(box, own) {
       return;
     }
     if (box.dataset.skills !== '1') return;
+    if (e.target.closest('[data-sk-plan-queue]')) { S.mode = 'plan'; drawPlan(box, { queue: true }); return; }
     const f = e.target.closest('[data-sk-filter]');
     if (f) { S.filter = f.dataset.skFilter; S.focusSearch = false; draw(box, currentOwn()); return; }
     const all = e.target.closest('[data-sk-all]');
@@ -303,7 +305,8 @@ function queueSection(queue, mine, rate) {
   const last = items[items.length - 1];
   const boxes = (lv) => `<span class="sk-boxes">${[1, 2, 3, 4, 5].map((n) => `<i class="${n < lv ? 'on' : n === lv ? 'queued' : ''}"></i>`).join('')}</span>`;
   const head = `<div class="sk-q-head"><h3>训练队列</h3>
-      <span class="sk-q-sum">${items.length} 项${paused ? ' · <b class="sk-q-paused">已暂停</b>' : ` · 全部完成还需 <b data-sk-cd="${last.end}" translate="no"></b> · <span translate="no">${esc(when(last.end))}</span>`}</span></div>`;
+      <span class="sk-q-sum">${items.length} 项${paused ? ' · <b class="sk-q-paused">已暂停</b>' : ` · 全部完成还需 <b data-sk-cd="${last.end}" translate="no"></b> · <span translate="no">${esc(when(last.end))}</span>`}</span>
+      <button type="button" class="btn btn-ghost btn-sm sk-q-plan" data-sk-plan-queue title="重排训练队列、补上缺的前置，可与想开的船一起排">规划队列</button></div>`;
   const c = items[0];
   const now = `<div class="sk-q-now" data-sk-now data-start="${c.start}" data-end="${c.end}" data-sp0="${c.sp0}" data-lv0="${c.lv0}" data-lv1="${c.lv1}">
       <div class="sk-q-now-top"><span class="sk-q-tag">${paused ? '已暂停' : '正在训练'}</span><b class="sk-q-now-name">${esc(c.name)} <em>${ROMAN[c.lv]}</em></b>${boxes(c.lv)}</div>

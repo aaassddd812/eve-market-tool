@@ -5,6 +5,7 @@
 // 训练时间：主属性 + 副属性 / 2 技能点每分钟（属性含植入体加成），Alpha 克隆减半；可算最佳属性重新分配（每项 17–27，共 99 点）。
 // 训练队列：ESI 只开放了读取（esi-skills.read_skillqueue.v1），没有写入接口，网页无法直接改游戏里的训练队列；
 // 「复制技能清单」每行「技能名 等级」，在游戏技能窗口的训练队列里 Ctrl+V 即可整批加入。
+// 目标也可以是游戏里现有的训练队列：按原顺序或短的先练重排，补上缺的前置，可与其他目标一起排；复制后先清空游戏队列再粘贴。
 import { commonFit } from './fit-kb.js?v=v28';
 
 let ctx;   // data, FE, getFit, savedFits, normalize, hasEsi, esiFetch, getEsiToken, getImplants, openEsiBind, esc, formatNumber, showToast, store
@@ -76,6 +77,10 @@ function save() {
 // 装配页 / 战场模拟带过来的装配：{ ship, fit, label }
 let pending = null;
 export function queuePlan(item) { pending = item; }
+// 技能页训练队列的「规划」：把训练队列加为目标
+let pendingQueue = false;
+export function planQueue() { pendingQueue = true; }
+const hasQueueTarget = () => P.targets.some((t) => t.kind === 'queue');
 
 export function mountPlan(el, restored = false) {
   const fresh = root !== el || !el.dataset.ready;
@@ -102,6 +107,10 @@ export function mountPlan(el, restored = false) {
     P.targets.unshift(t);
     save();
   }
+  if (pendingQueue) {
+    pendingQueue = false;
+    if (!hasQueueTarget()) { P.targets.unshift({ id: ++P.seq, kind: 'queue', order: 'keep' }); save(); }
+  }
   if (restored && root.querySelector('.sp-page') && C) return;
   render();
   loadChar();
@@ -119,7 +128,15 @@ function loadChar() {
     const [sk, q, at, imp] = await Promise.allSettled([get('/skills/'), get('/skillqueue/'), get('/attributes/'), ctx.getImplants()]);
     if (sk.status !== 'fulfilled') throw sk.reason;
     const list = sk.value.skills || [];
+    // 正在训练的技能：ESI 的技能点只在练完时更新，按队列起止时间推算当前进度
+    const spNow = new Map();
+    const now = Date.now();
+    for (const x of q.status === 'fulfilled' && Array.isArray(q.value) ? q.value : []) {
+      const a = Date.parse(x.start_date), b = Date.parse(x.finish_date);
+      if (a <= now && now < b && x.level_end_sp != null) { const s0 = x.training_start_sp ?? x.level_start_sp ?? 0; spNow.set(x.skill_id, s0 + (x.level_end_sp - s0) * (now - a) / (b - a)); }
+    }
     C = {
+      spNow,
       mode: 'esi', id, name: token.character_name || `角色 ${id}`,
       trained: new Map(list.map((x) => [x.skill_id, x.trained_skill_level || 0])),
       sp: new Map(list.map((x) => [x.skill_id, x.skillpoints_in_skill || 0])),
@@ -146,10 +163,10 @@ function baseAttrs() {
   const a = C?.attrs;
   return a ? Object.fromEntries(ATTRS.map(([, k]) => [k, a[k] || DEFAULT_ATTRS[k]])) : { ...DEFAULT_ATTRS };
 }
-// 已学等级（可选把训练队列里的也算上）
+// 已学等级（可选把训练队列里的也算上；训练队列本身是目标时不算）
 function haveLevels() {
   const have = new Map(C?.trained || []);
-  if (P.opt.queue && C?.queue) for (const q of C.queue) have.set(q.skill_id, Math.max(have.get(q.skill_id) || 0, q.finished_level));
+  if (P.opt.queue && C?.queue && !hasQueueTarget()) for (const q of C.queue) have.set(q.skill_id, Math.max(have.get(q.skill_id) || 0, q.finished_level));
   return have;
 }
 
@@ -172,6 +189,7 @@ function fitTypes(fit) {
 }
 // { need: [[技能, 等级]], good: [[技能, 等级]] }
 function reqsOf(t) {
+  if (t.kind === 'queue') return { need: (C?.queue || []).map((q) => [q.skill_id, q.finished_level]), good: [] };
   if (t.kind === 'skill') return { need: [[t.skill, t.level]], good: [] };
   if (t.kind === 'dir') return { need: [], good: enList(DIRS.find((d) => d.id === t.dir)?.skills || []) };
   const need = [...typeReqs(t.ship)];
@@ -217,7 +235,7 @@ function expand(reqs, lv, onEntry, onTouch) {
 function spOf(e, have) {
   const info = skillInfo(e.skill);
   const from = spForLevel(info.rank, e.level - 1);
-  const cur = e.level === (have.get(e.skill) || 0) + 1 ? Math.max(from, C?.sp?.get(e.skill) || 0) : from;
+  const cur = e.level === (have.get(e.skill) || 0) + 1 ? Math.max(from, C?.sp?.get(e.skill) || 0, Math.floor(C?.spNow?.get(e.skill) || 0)) : from;
   return Math.max(0, spForLevel(info.rank, e.level) - cur);
 }
 const costOf = (reqs, lv, have) => { let sp = 0; expand(reqs, new Map(lv), (e) => { sp += spOf(e, have); }); return sp; };
@@ -236,7 +254,7 @@ function buildPlan() {
       let bi = 0, bc = Infinity;
       left.forEach(([, reqs], i) => { const c = costOf(reqs, lv, have); if (c < bc) { bc = c; bi = i; } });
       const [t, reqs] = left.splice(bi, 1)[0];
-      const sorted = reqs.slice().sort((a, b) => costOf([a], lv, have) - costOf([b], lv, have));
+      const sorted = t.kind === 'queue' && t.order !== 'short' ? reqs : reqs.slice().sort((a, b) => costOf([a], lv, have) - costOf([b], lv, have));
       const keys = new Set();
       const touch = (s, L) => { for (let l = 1; l <= L; l++) keys.add(s + ':' + l); };
       expand(sorted, lv, (e) => {
@@ -257,7 +275,7 @@ function buildPlan() {
   const best = optimalRemap(entries, imp);
   const attrs = P.opt.remap && best ? best.attrs : cur;
   const rate = (e) => { const i = skillInfo(e.skill); return ((attrs[i.pri] + imp[i.pri]) + (attrs[i.sec] + imp[i.sec]) / 2) * (P.opt.alpha ? 0.5 : 1); };
-  const queueEnd = P.opt.queue && C?.queue?.length ? Math.max(Date.now(), ...C.queue.map((q) => (q.finish_date ? Date.parse(q.finish_date) : 0))) : Date.now();
+  const queueEnd = P.opt.queue && !hasQueueTarget() && C?.queue?.length ? Math.max(Date.now(), ...C.queue.map((q) => (q.finish_date ? Date.parse(q.finish_date) : 0))) : Date.now();
   let at = queueEnd;
   for (const e of entries) {
     e.min = e.sp / rate(e);
@@ -316,11 +334,13 @@ const dateTime = (ms) => new Date(ms).toLocaleString('zh-CN', { month: 'numeric'
 const dateOnly = (ms) => new Date(ms).toLocaleDateString('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric' });
 const skName = (id) => ctx.data.types.get(id)?.name || String(id);
 function targetName(t) {
+  if (t.kind === 'queue') return '训练队列';
   if (t.kind === 'ship') return ctx.data.types.get(t.ship)?.name || '';
   if (t.kind === 'dir') return DIRS.find((d) => d.id === t.dir)?.name || '';
   return `${skName(t.skill)} ${ROMAN[t.level]}`;
 }
 function targetIcon(t) {
+  if (t.kind === 'queue') return '<span class="sp-dir-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>';
   if (t.kind === 'ship') return `<img src="${IMG(t.ship)}" alt="" width="36" height="36" loading="lazy">`;
   if (t.kind === 'skill') return `<img src="${IMG(t.skill)}" alt="" width="36" height="36" loading="lazy">`;
   return '<span class="sp-dir-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 20h5v-5h5v-5h5V5h3"/></svg></span>';
@@ -352,7 +372,7 @@ function charHtml() {
   const esc = ctx.esc;
   if (!C) return '<section class="sp-char"><span class="sim-status busy">读取角色技能…</span></section>';
   const opts = `<div class="sp-char-opts">
-      ${C.queue ? `<label class="pi-check" title="训练队列里的技能按已学计算，规划从队列结束时开始"><input type="checkbox" data-sp-opt="queue"${P.opt.queue ? ' checked' : ''}><span>计入训练队列</span></label>` : ''}
+      ${C.queue && !hasQueueTarget() ? `<label class="pi-check" title="训练队列里的技能按已学计算，规划从队列结束时开始"><input type="checkbox" data-sp-opt="queue"${P.opt.queue ? ' checked' : ''}><span>计入训练队列</span></label>` : ''}
       <label class="pi-check" title="Alpha 克隆训练速度减半"><input type="checkbox" data-sp-opt="alpha"${P.opt.alpha ? ' checked' : ''}><span>Alpha 克隆</span></label>
       <label class="pi-check" title="按下方建议的属性分配计算训练时间"><input type="checkbox" data-sp-opt="remap"${P.opt.remap ? ' checked' : ''}><span>按最佳属性分配</span></label>
     </div>`;
@@ -369,6 +389,7 @@ function charHtml() {
   const qEnd = q?.length ? Math.max(...q.map((x) => (x.finish_date ? Date.parse(x.finish_date) : 0))) : 0;
   return `<section class="sp-char">
     <div class="sp-char-main"><span>${q ? (q.length ? `训练队列 ${q.length} 项，${qEnd ? dateOnly(qEnd) + ' 完成' : '已暂停'}` : '训练队列为空') : `训练队列读取失败${C.queueError ? '：' + esc(C.queueError) : ''}`}</span></div>
+    ${q?.length && !hasQueueTarget() ? '<button type="button" class="btn btn-ghost btn-sm" data-sp-add-queue title="重排训练队列、补上缺的前置、算属性分配">规划训练队列</button>' : ''}
     <div class="sp-attrs">${ATTRS.map(([, k, n]) => `<span><em>${n}</em><b>${base[k] + imp[k]}</b>${imp[k] ? `<small>+${imp[k]}</small>` : ''}</span>`).join('')}</div>
     ${opts}
   </section>`;
@@ -435,13 +456,13 @@ function targetsHtml() {
           <div class="segmented" role="group" aria-label="目标"><button type="button" data-sp-depth="fly" class="${t.depth !== 'good' ? 'active' : ''}" title="只算开船和装上装配需要的技能">能开</button><button type="button" data-sp-depth="good" class="${t.depth === 'good' ? 'active' : ''}" title="再加船体技能、武器与坦克支援技能到 IV 级">用好</button></div>
         </div>
         ${t.status === 'loading' ? '<small class="sim-loading">读取常见装配…</small>' : t.status === 'none' ? '<small class="sim-warn">没有常见装配，只算开船</small>' : ''}`
-      : '';
+      : t.kind === 'queue' ? queueSub(t) : '';
     return `<div class="sp-target" data-sp-target="${t.id}">
       ${targetIcon(t)}
       <div class="sp-t-main">
         <b>${esc(targetName(t))}</b>
         ${sub}
-        <div class="sp-t-status">${t.kind === 'dir' ? status(m, 'good', '练完') : status(m, 'need', t.kind === 'ship' ? '能开' : '练到')}${t.kind === 'ship' && t.depth === 'good' ? status(m, 'good', '用好') : ''}</div>
+        <div class="sp-t-status">${t.kind === 'dir' ? status(m, 'good', '练完') : status(m, 'need', t.kind === 'ship' ? '能开' : t.kind === 'queue' ? '练完' : '练到')}${t.kind === 'ship' && t.depth === 'good' ? status(m, 'good', '用好') : ''}</div>
       </div>
       <button type="button" class="icon-btn sim-del" data-sp-del title="移除" aria-label="移除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>`;
@@ -450,6 +471,17 @@ function targetsHtml() {
     <div class="sim-sec-head"><h4>规划目标 <small>${P.targets.length}</small></h4>${P.targets.length ? '<button type="button" class="link-btn" data-sp-clear>清空</button>' : ''}</div>
     <div class="sp-targets">${rows || '<p class="sim-empty">还没有目标</p>'}</div>
   </section>`;
+}
+
+// 训练队列目标：顺序、与游戏里现在的完成时间对比
+function queueSub(t) {
+  const q = C?.queue;
+  const end = q?.length ? Math.max(...q.map((x) => (x.finish_date ? Date.parse(x.finish_date) : 0))) : 0;
+  const info = !C || C.mode === 'none' ? '未绑定角色，读不到训练队列' : !q ? '训练队列读取失败' : !q.length ? '训练队列为空' : `${q.length} 项 · 游戏里${end ? ' ' + dateOnly(end) + ' 练完' : '已暂停'}`;
+  return `<div class="sp-t-ctl">
+      <div class="segmented" role="group" aria-label="顺序"><button type="button" data-sp-order="keep" class="${t.order !== 'short' ? 'active' : ''}" title="按游戏队列的顺序，缺的前置插到前面">原顺序</button><button type="button" data-sp-order="short" class="${t.order === 'short' ? 'active' : ''}" title="耗时短的先练，尽早多练完几项">短的先练</button></div>
+    </div>
+    <small class="sp-hint">${ctx.esc(info)}</small>`;
 }
 
 function resultHtml() {
@@ -474,16 +506,16 @@ function resultHtml() {
     const save = B.curMin - B.min;
     const a = C?.attrs;
     const when = a?.accrued_remap_cooldown_date && Date.parse(a.accrued_remap_cooldown_date) > Date.now() ? `${dateOnly(Date.parse(a.accrued_remap_cooldown_date))} 可重新分配` : a ? '现在可重新分配' : '';
-    const bonus = a?.bonus_remaps ? ` · 奖励 ${a.bonus_remaps} 次` : '';
+    const bonus = a?.bonus_remaps ? ` · <span>奖励 ${a.bonus_remaps} 次</span>` : '';
     remap = `<div class="sp-box sp-remap">
-      <div class="sim-sec-head"><h4>属性分配建议</h4>${when ? `<span class="sp-hint">${esc(when + bonus)}</span>` : ''}</div>
+      <div class="sim-sec-head"><h4>属性分配建议</h4>${when ? `<span class="sp-hint"><span>${esc(when)}</span>${bonus}</span>` : ''}</div>
       ${save > 60 ? `<div class="sp-remap-row">${ATTRS.map(([, k, n]) => { const d = B.attrs[k] - plan.cur[k]; return `<span><em>${n}</em><b>${B.attrs[k]}</b>${d ? `<small class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${d}</small>` : ''}</span>`; }).join('')}</div>` : ''}
       <p class="sp-hint">${save > 60 ? esc(`可少练 ${dur(save)}（${Math.round(save / B.curMin * 100)}%）`) : '当前分配已接近最佳'}</p>
     </div>`;
   }
   // 里程碑
   const ms = plan.milestones.flatMap(({ t, need, good }) => [
-    need?.missing ? { t, end: need.end, label: t.kind === 'ship' ? '能开' : '练到' } : null,
+    need?.missing ? { t, end: need.end, label: t.kind === 'ship' ? '能开' : t.kind === 'queue' ? '练完' : '练到' } : null,
     good?.missing ? { t, end: good.end, label: t.kind === 'dir' ? '练完' : '用好' } : null
   ]).filter(Boolean).sort((a, b) => a.end - b.end);
   const msHtml = ms.length ? `<div class="sp-box"><div class="sim-sec-head"><h4>里程碑</h4></div><ol class="sp-ms">${ms.map((m) => `<li><time>${esc(dateOnly(m.end))}</time><span class="sp-ms-tag">${m.label}</span><b>${esc(targetName(m.t))}</b></li>`).join('')}</ol></div>` : '';
@@ -579,7 +611,7 @@ function copyList() {
   // 英文界面下装配数据里的名称已换成英文（i18n.js），只能复制英文名
   const en = P.opt.lang === 'en' || window.I18N?.lang === 'en';
   const lines = E.slice(0, QUEUE_MAX).map((e) => { const t = ctx.data.types.get(e.skill); return `${(en ? t.en : t.name) || t.name} ${e.level}`; });
-  const msg = E.length > QUEUE_MAX ? `已复制前 ${QUEUE_MAX} 项（队列上限）` : `已复制 ${lines.length} 项，在游戏训练队列里 Ctrl+V 粘贴`;
+  const msg = E.length > QUEUE_MAX ? `已复制前 ${QUEUE_MAX} 项（队列上限）` : hasQueueTarget() ? `已复制 ${lines.length} 项：先清空游戏里的训练队列，再 Ctrl+V 粘贴` : `已复制 ${lines.length} 项，在游戏训练队列里 Ctrl+V 粘贴`;
   navigator.clipboard.writeText(lines.join('\n')).then(() => ctx.showToast(msg, 'success', 3500), () => window.prompt('复制技能清单', lines.join('\n')));
 }
 
@@ -613,6 +645,8 @@ function onClick(e) {
     return;
   }
   if ((x = el('[data-sp-del]'))) { const t = findTarget(x); P.targets = P.targets.filter((y) => y !== t); save(); render(); return; }
+  if (el('[data-sp-add-queue]')) { if (!hasQueueTarget()) addTarget({ kind: 'queue', order: 'keep' }); return; }
+  if ((x = el('[data-sp-order]'))) { const t = findTarget(x); t.order = x.dataset.spOrder; save(); render(); return; }
   if (el('[data-sp-clear]')) { P.targets = []; save(); render(); return; }
   if (el('[data-sp-all]')) { P.showAll = true; render(); return; }
   if ((x = el('[data-sp-lang]'))) { P.opt.lang = x.dataset.spLang; save(); x.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === x)); return; }

@@ -3737,6 +3737,7 @@ html.pie-open { overflow: hidden; }
 .sk-q-head h3 { font-size: 0.9375rem; margin: 0; }
 .sk-q-sum { font-size: 0.8125rem; color: var(--text-secondary); }
 .sk-q-sum b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.sk-q-plan { margin-left: auto; align-self: center; }
 .sk-q-paused { color: var(--warning) !important; }
 .sk-q-now { padding: 14px 16px; border-radius: var(--radius-md); background: var(--accent-soft); }
 .sk-q-now-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; margin-bottom: 10px; }
@@ -6239,7 +6240,6 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-burst button { padding: 2px 8px; border: 1px solid var(--border-primary); border-radius: 999px; background: none; font: inherit; color: var(--text-secondary); cursor: pointer; }
 .sim-burst button:hover { color: var(--text-primary); border-color: var(--border-secondary); }
 .sim-burst button.active { background: var(--accent-soft); border-color: transparent; color: var(--accent-primary); font-weight: 600; }
-.sim-phase input.pi-input { width: 64px; }
 .sim-ratio { font-size: 0.75rem; font-weight: 600; color: var(--text-primary); }
 .sim-v-mid .link-btn { font-size: 0.75rem; }
 /* 对照 */
@@ -6251,8 +6251,6 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-base .link-btn { margin-left: auto; }
 .sim-legend-base i { background: none !important; border: 1.5px dashed var(--text-muted); }
 .kb-br-plot .ln.sim-ln-base { stroke-width: 1.5; stroke-dasharray: 5 4; opacity: 0.55; }
-.sim-phase-ln { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
-.sim-phase-tx { fill: var(--text-muted); }
 /* 胜负原因 / 扫描 */
 .sim-insight, .sim-tactics { padding: 14px 16px; border-radius: var(--radius-lg); background: var(--bg-tertiary); }
 .sim-sec-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
@@ -6320,32 +6318,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-why .sim-badge { flex: none; }
 .sim-why .sim-side-b { --side: var(--br-b); }
 /* 战场回放 */
-.sim-replay, .sim-matchup { padding: 14px 16px; border-radius: var(--radius-lg); background: var(--bg-tertiary); }
-.sim-rp-ctl { display: flex; align-items: center; gap: 8px; }
-.sim-rp-ctl .btn { min-width: 64px; }
-.sim-rp-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.sim-rp-bar input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent-primary); }
-.sim-rp-time { flex: none; font-size: 0.8125rem; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
-.sim-rp-sides { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.sim-rp-side h5 { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 0.75rem; font-weight: 500; color: var(--text-secondary); }
-.sim-rp-side.side-b { --side: var(--br-b); }
-.sim-tiles { display: flex; flex-wrap: wrap; gap: 4px; max-height: 260px; overflow-y: auto; }
-.sim-tile { --sh: 100%; --ar: 100%; --hu: 100%; position: relative; display: flex; flex-direction: column; gap: 1px; width: 32px; padding: 2px 2px 3px; border: 1px solid transparent; border-radius: 5px; background: var(--bg-secondary); transition: opacity .2s, filter .2s; }
-.sim-tile img { width: 26px; height: 26px; margin: 0 auto 1px; border-radius: 3px; background: #0d1219; }
-.sim-tile i { display: block; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--text-muted) 22%, transparent); }
-.sim-tile i::before { content: ''; display: block; height: 100%; border-radius: 2px; transition: width .2s; }
-.sim-tile i.sh::before { width: var(--sh); background: #4fb3e8; }
-.sim-tile i.ar::before { width: var(--ar); background: #e0a24a; }
-.sim-tile i.hu::before { width: var(--hu); background: #9aa4ae; }
-.sim-tile.shot { border-color: var(--side, var(--br-a)); box-shadow: 0 0 0 1px var(--side, var(--br-a)); }
-.sim-rp-side.side-a .sim-tile.shot { --side: var(--br-b); }
-.sim-rp-side.side-b .sim-tile.shot { --side: var(--br-a); }
-.sim-tile.dead { opacity: .28; filter: grayscale(1); }
-.sim-replay.is-many .sim-tile { width: 22px; }
-.sim-replay.is-many .sim-tile img { width: 16px; height: 16px; }
-.sim-replay.is-many .sim-tile i { height: 2px; }
-.sim-rp-log { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-height: 26px; margin-top: 10px; }
-.sim-rp-log > small { font-size: 0.75rem; color: var(--text-muted); }
+.sim-matchup { padding: 14px 16px; border-radius: var(--radius-lg); background: var(--bg-tertiary); }
 .kb-br-plot .sim-rp-ln { stroke: var(--text-primary); stroke-width: 1.5; opacity: .55; pointer-events: none; }
 .sim-chart .kb-br-plot .hit { cursor: pointer; }
 /* 伤害与抗性 */
@@ -6373,7 +6346,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-dmg.ex, .sim-mu-bar i.ex { background: #e5a33b; }
 .sim-mu-tip { font-size: 0.8125rem; line-height: 1.55; color: var(--warning); }
 .sim-mu-ok { font-size: 0.8125rem; color: var(--success); }
-@media (max-width: 860px) { .sim-rp-sides, .sim-mu-cols { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 860px) { .sim-mu-cols { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 640px) {
   .sim-page > .sim-body, .sim-page > .sim-detail, .sim-page > .sp-page, .sk-plan-host > .sp-page { padding: 14px 12px; border-radius: var(--radius-lg); }
   .sim-opt-label { width: 100%; }
@@ -6970,3 +6943,189 @@ td .sov-auto-tag { margin-left: 4px; }
 .ka-chip.on.st-chip-friend { background: #3b82f6; border-color: #3b82f6; color: #fff; }
 .ka-chip.on.st-chip-hostile { background: var(--danger); border-color: var(--danger); color: #fff; }
 .ka-chip.on.st-chip-neutral { background: var(--text-muted); border-color: var(--text-muted); color: #fff; }
+
+/* ===== 战场模拟：3D 战场（fit-sim.js / sim-3d.js）===== */
+.sim-battle { padding: 14px 16px; border-radius: var(--radius-lg); background: var(--bg-tertiary); margin-bottom: 16px; }
+.sim-bt-status { font-size: 0.8125rem; color: var(--text-muted); }
+.sim-bt-status.live { color: var(--success); font-weight: 600; }
+.sim-3d { position: relative; height: 480px; border-radius: var(--radius-md, 10px); overflow: hidden; background: #05070c; touch-action: none; user-select: none; }
+.sim-3d:fullscreen { height: 100%; border-radius: 0; }
+.sim-3d-canvas { display: block; width: 100%; height: 100%; }
+.sim-3d-labels { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.sim-3d-hud { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; padding: 4px 12px; border-radius: 999px; background: rgba(10, 14, 22, 0.72); color: #e6ebf3; font-size: 0.8125rem; font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap; }
+.sim-3d-hud > span { display: inline-flex; align-items: center; gap: 6px; }
+.sim-3d-clock { min-width: 40px; text-align: center; color: #fff; }
+.sim-3d-tools { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 6px; }
+.sim-3d-tools button { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; background: rgba(10, 14, 22, 0.72); color: #cfd6e2; cursor: pointer; }
+.sim-3d-tools button:hover { color: #fff; border-color: rgba(255, 255, 255, 0.35); }
+.sim-3d-tools button.on { color: #fff; background: rgba(60, 90, 140, 0.8); border-color: rgba(140, 180, 255, 0.5); }
+.sim-3d-tools svg { width: 16px; height: 16px; }
+.sim-3d-tip { position: absolute; padding: 3px 8px; border-radius: 6px; background: rgba(10, 14, 22, 0.86); color: #fff; font-size: 0.75rem; pointer-events: none; white-space: nowrap; }
+.sim-3d-sel { position: absolute; left: 10px; bottom: 10px; width: 240px; max-width: calc(100% - 20px); display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 10px; background: rgba(10, 14, 22, 0.86); color: #e6ebf3; font-size: 0.8125rem; }
+.sim-3d-sel small { color: #9aa4b5; }
+.sim-3d-sel-head { display: flex; align-items: center; gap: 6px; }
+.sim-3d-sel-head b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sim-3d-sel-head img { border-radius: 4px; }
+.sim-3d-x { width: 22px; height: 22px; display: grid; place-items: center; padding: 0; border: 0; background: none; color: inherit; opacity: 0.7; cursor: pointer; }
+.sim-3d-x:hover { opacity: 1; }
+.sim-3d-x svg { width: 14px; height: 14px; }
+.sim-3d-bars { display: flex; flex-direction: column; gap: 3px; }
+.sim-3d-bars i { display: block; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.sim-3d-bars b { display: block; height: 100%; }
+.sim-3d-bars .sh b { background: #5aa9ff; }
+.sim-3d-bars .ar b { background: #f0b44a; }
+.sim-3d-bars .hu b { background: #e85d5d; }
+.sim-3d-fail { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: #9aa4b5; font-size: 0.875rem; }
+.sim-3d-bars .cp b { background: #c9d3e0; }
+.sim-3d-off { position: absolute; inset: 0; display: none; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 0 16px; text-align: center; }
+.sim-3d-off small { color: #8792a5; font-size: 0.75rem; }
+.sim-3d.is-off { height: 150px; }
+.sim-3d.is-off .sim-3d-off { display: flex; }
+.sim-3d.is-off .sim-3d-tools, .sim-3d.is-off .sim-3d-sel { display: none; }
+.sim-3d-load { position: absolute; top: 10px; left: 10px; display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-radius: 8px; background: rgba(10, 14, 22, 0.8); color: #cfd6e2; font-size: 0.75rem; pointer-events: none; }
+.sim-3d-load i { width: 110px; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
+.sim-3d-load b { display: block; height: 100%; background: #8fc3ff; transition: width 0.25s; }
+.sim-3d-load small { color: #8792a5; font-variant-numeric: tabular-nums; }
+.sim-3d-tg { display: flex; gap: 10px; }
+.sim-3d-tg .sim-pn-v { color: #e6ebf3; font-variant-numeric: tabular-nums; }
+/* 全屏：整屏都是 3D 场景，播放控制、舰队支援、事件、舰船状态都浮在场景上面 */
+.sim-battle:fullscreen { position: relative; margin: 0; padding: 0; border-radius: 0; overflow: hidden; background: #05070c; color: #e6ebf3;
+  --bg-primary: rgba(12, 16, 24, 0.96); --bg-secondary: rgba(12, 16, 24, 0.96); --bg-tertiary: rgba(255, 255, 255, 0.05); --bg-hover: rgba(255, 255, 255, 0.08);
+  --text-primary: #e6ebf3; --text-secondary: #b7c2d3; --text-muted: #8792a5; --border-primary: rgba(255, 255, 255, 0.14); color-scheme: dark; }
+.sim-battle:fullscreen .sim-3d { position: absolute; inset: 0; height: auto; border-radius: 0; }
+.sim-battle:fullscreen .sim-sec-head, .sim-battle:fullscreen .sim-hint { display: none; }
+.sim-battle:fullscreen .sim-bt-ctl { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: min(960px, calc(100% - 24px)); margin: 0; padding: 6px 10px; border-radius: 10px; background: rgba(10, 14, 22, 0.8); }
+.sim-battle:fullscreen .sim-bt-reinf { position: absolute; top: 10px; left: 10px; margin: 0; }
+.sim-battle:fullscreen .sim-bt-reinf .btn { background: rgba(10, 14, 22, 0.72); }
+.sim-battle:fullscreen .sim-bt-pop { position: absolute; top: 50px; left: 10px; z-index: 3; width: min(420px, calc(100% - 20px)); max-height: calc(100% - 130px); overflow-y: auto; margin: 0; }
+.sim-battle:fullscreen .sim-bt-log { position: absolute; top: 50px; right: 52px; flex-direction: column; align-items: flex-end; margin: 0; pointer-events: none; }
+.sim-battle:fullscreen .sim-3d-sel { bottom: auto; top: 50px; }
+.sim-battle:fullscreen .sim-3d-load { top: 50px; left: auto; right: 52px; }
+.sim-3d-panel { display: none; }
+.sim-battle:fullscreen .sim-3d-panel { position: absolute; left: 50%; transform: translateX(-50%); width: min(1400px, calc(100% - 24px)); bottom: 70px; display: grid; grid-template-columns: 1fr 1fr; align-items: end; gap: 8px; color: #e6ebf3; font-size: 0.75rem; }
+.sim-pn-side { display: flex; flex-direction: column; min-height: 0; max-height: 28vh; padding: 6px; border-radius: 10px; background: rgba(10, 14, 22, 0.8); }
+.sim-pn-side header { display: flex; align-items: center; gap: 8px; padding: 0 2px 5px; }
+.sim-pn-side header small { color: #8792a5; }
+/* 实时战损比：面板正中，比例大字 + 双色条，两边是各自损失 */
+.sim-pn-score { grid-column: 1 / -1; justify-self: center; display: flex; align-items: center; gap: 18px; padding: 8px 16px; border-radius: 12px; background: rgba(10, 14, 22, 0.86); border: 1px solid rgba(255, 255, 255, 0.1); }
+.sim-pn-lost { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; color: #b7c2d3; }
+.sim-pn-lost .n { color: #fff; font-size: 1rem; font-variant-numeric: tabular-nums; }
+.sim-pn-lost small { color: #8792a5; font-variant-numeric: tabular-nums; }
+.sim-pn-ratio { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
+.sim-pn-pct { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.sim-pn-pct b { font-size: 1.5rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.sim-pn-pct .pa { color: #7fb6ff; }
+.sim-pn-pct .pb { color: #ff7a6e; }
+.sim-pn-pct span { color: #8792a5; font-size: 0.75rem; }
+.sim-pn-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; gap: 2px; }
+.sim-pn-bar i { flex: 1 1 0; }
+.sim-pn-bar .a { background: #5b9bff; }
+.sim-pn-bar .b { background: #ff4b3e; }
+.sim-pn-bar.none i { background: rgba(255, 255, 255, 0.15); }
+.sim-pn-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 3px; overflow-y: auto; min-height: 0; align-content: start; }
+.sim-pn-ship { contain: layout paint style; content-visibility: auto; contain-intrinsic-size: auto 78px; display: flex; flex-direction: column; gap: 2px; padding: 3px 4px; border-radius: 6px; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.06); background: rgba(255, 255, 255, 0.03); }
+.sim-pn-ship:hover { background: rgba(255, 255, 255, 0.07); }
+.sim-pn-ship.sel { border-color: rgba(255, 255, 255, 0.55); }
+.sim-pn-top { display: flex; align-items: center; gap: 5px; }
+.sim-pn-top img { width: 14px; height: 14px; border-radius: 3px; flex: none; }
+.sim-pn-top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 0.6875rem; }
+.sim-pn-top .sim-pn-v { font-size: 0.625rem; }
+.sim-pn-v { color: #b7c2d3; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sim-pn-more { grid-column: 1 / -1; margin: 2px 4px; color: #8792a5; }
+/* 目标与锁定进度 */
+.sim-pn-tg { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 0.625rem; color: #8792a5; }
+.sim-pn-tg span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sim-pn-tg i { display: none; height: 2px; border-radius: 1px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.sim-pn-tg b { display: block; height: 100%; background: #ffd25a; }
+.sim-pn-tg.locking span { color: #ffd25a; }
+.sim-pn-tg.locking i { display: block; }
+.sim-3d-sel .sim-pn-tg { font-size: 0.75rem; }
+.sim-3d-sel .sim-pn-tg i { height: 3px; }
+/* 血条：盾、甲、构、容各一条，前面标字 */
+.sim-hp { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 1px 4px; font-size: 0.5625rem; line-height: 1; color: #8792a5; }
+.sim-hp i { display: block; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.sim-hp b { display: block; height: 100%; }
+.sim-hp .sh b { background: #5aa9ff; }
+.sim-hp .ar b { background: #f0b44a; }
+.sim-hp .hu b { background: #e85d5d; }
+.sim-hp .cp b { background: #c9d3e0; }
+.sim-3d-sel .sim-hp { font-size: 0.6875rem; gap: 3px 6px; }
+.sim-3d-sel .sim-hp i { height: 5px; }
+/* 装备：圆形图标，外圈像游戏里一样——运转中按周期走一圈（绿），装填中黄圈走装填进度，不计开启的红色划线（进度由脚本按回放算，不用动画） */
+.sim-pn-mods { display: flex; flex-wrap: wrap; gap: 1px; }
+.sim-pn-mod { position: relative; display: block; width: 14px; height: 14px; padding: 1.5px; border-radius: 50%; background: rgba(255, 255, 255, 0.14); opacity: 0.6; }
+.sim-pn-mod img { display: block; width: 11px; height: 11px; border-radius: 50%; background: #0b0f17; }
+.sim-pn-mod.on { opacity: 1; background: conic-gradient(#6fe08f var(--p, 100%), rgba(111, 224, 143, 0.22) 0); }
+.sim-pn-mod.rld { opacity: 0.9; background: conic-gradient(#f0b44a var(--p, 0%), rgba(240, 180, 74, 0.2) 0); }
+.sim-3d-sel .sim-pn-mod.rld::after { content: attr(data-s); position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-size: 0.6875rem; font-weight: 700; text-shadow: 0 0 3px #000, 0 0 3px #000; }
+.sim-pn-mod.off { opacity: 0.35; background: rgba(232, 93, 93, 0.5); }
+.sim-pn-mod.off::after { content: ''; position: absolute; left: 1px; right: 1px; top: 50%; border-top: 1.5px solid #e85d5d; transform: rotate(-45deg); }
+.sim-3d-sel .sim-pn-mod { width: 24px; height: 24px; }
+.sim-3d-sel .sim-pn-mod img { width: 20px; height: 20px; }
+.sim-3d-sel .sim-pn-mods { gap: 2px; }
+/* 舰队支援 */
+.sim-fl-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.sim-fl { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border-radius: 8px; background: var(--bg-tertiary); }
+.sim-fl-head { display: flex; align-items: baseline; gap: 8px; }
+.sim-fl-head small { color: var(--text-muted); }
+.sim-fl-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--text-muted); font-size: 0.75rem; }
+.sim-fl-ships { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 0.75rem; }
+.sim-fl-ships span { display: inline-flex; align-items: center; gap: 4px; }
+.sim-fl-ships img { border-radius: 3px; }
+.sim-fl-ships .is-cyno { color: #ffb15a; }
+.sim-fl-cyno { padding: 2px 8px; border: 1px solid var(--border-primary); border-radius: 999px; background: none; color: var(--text-muted); font-size: 0.75rem; cursor: pointer; white-space: nowrap; }
+.sim-fl-cyno.active { border-color: #ffb15a; color: #ffb15a; }
+.sim-fl-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sim-fl-ed { display: flex; flex-direction: column; gap: 8px; }
+.sim-fl-field { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 0.8125rem; }
+.sim-fl-field > span:first-child { min-width: 56px; color: var(--text-muted); }
+.sim-fl-field > small { color: var(--text-muted); font-size: 0.75rem; }
+.sim-fl-field input[type=number] { width: 72px; }
+.sim-fl-field input[data-fl-name] { flex: 1; min-width: 120px; }
+.sim-fl-from { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.sim-fl-from small { color: var(--text-muted); font-size: 0.75rem; margin-right: 2px; }
+.sim-fl-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 3px; border: 1px solid var(--border-primary); border-radius: 999px; background: none; color: var(--text-primary); font-size: 0.75rem; cursor: pointer; }
+.sim-fl-chip:hover { border-color: var(--accent-primary); }
+.sim-fl-chip img { border-radius: 50%; }
+/* 走位官 */
+.sim-lead { display: inline-flex; align-items: center; gap: 4px; font-size: 0.75rem; color: var(--text-muted); }
+.sim-lead select { max-width: 130px; }
+.sim-follow { margin-top: 4px; }
+.sim-lead-tag { display: inline-block; margin-top: 4px; font-style: normal; font-size: 0.75rem; color: var(--accent-primary); }
+.sim-bt-ctl { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+.sim-bt-ctl [data-bt-play] { min-width: 72px; }
+.sim-bt-ctl input[type=range] { flex: 1 1 160px; min-width: 120px; accent-color: var(--accent-primary); }
+.sim-bt-reinf { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.sim-bt-pop { margin-top: 8px; padding: 10px 12px; border-radius: 10px; background: var(--bg-secondary); border: 1px solid var(--border-primary); }
+.sim-bt-pop-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.sim-bt-pop-head small { flex: 1; color: var(--text-muted); font-size: 0.75rem; }
+.sim-bt-pop-list { display: flex; flex-direction: column; gap: 6px; max-height: 240px; overflow-y: auto; }
+.sim-bt-pop-row { display: flex; align-items: center; gap: 8px; font-size: 0.8125rem; }
+.sim-bt-pop-row > span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sim-bt-pop-row small { color: var(--text-muted); font-size: 0.6875rem; }
+.sim-bt-pop-row img { border-radius: 4px; }
+.sim-bt-pop-row input { width: 72px; }
+.sim-bt-search { position: relative; margin-top: 8px; }
+.sim-bt-search input { width: 100%; }
+.sim-bt-log { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; min-height: 22px; }
+.sim-bt-log .sim-kill > span { color: var(--text-muted); }
+.sim-bt-ev { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 4px; border-radius: 999px; font-size: 0.75rem; background: var(--bg-hover); }
+.sim-bt-ev small { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.sim-bt-ev > span:not(.sim-badge) { color: var(--text-muted); }
+@media (max-width: 768px) {
+  .sim-battle { padding: 10px; }
+  .sim-3d { height: 360px; }
+  .sim-3d-hud { top: 6px; gap: 8px; font-size: 0.75rem; }
+  .sim-3d-sel { width: auto; right: 10px; }
+  .sim-battle:fullscreen .sim-3d-panel { grid-template-columns: 1fr; bottom: 120px; }
+  .sim-pn-side { max-height: 18vh; }
+  .sim-pn-list { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
+  .sim-pn-score { gap: 10px; padding: 6px 10px; }
+  .sim-pn-ratio { min-width: 110px; }
+  .sim-pn-lost { flex-direction: column; align-items: center; gap: 0; }
+  .sim-pn-lost .sim-badge, .sim-pn-lost > span:not(.sim-badge) { display: none; }
+  .sim-battle:fullscreen .sim-bt-log { display: none; }
+  .sim-battle:fullscreen .sim-3d-sel { right: 52px; top: 84px; }
+  .sim-battle:fullscreen .sim-bt-reinf { top: 44px; }
+  .sim-battle:fullscreen .sim-bt-pop { top: 84px; max-height: calc(100% - 210px); }
+}

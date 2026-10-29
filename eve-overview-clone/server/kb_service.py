@@ -77,6 +77,7 @@ import json
 import logging
 import math
 import mimetypes
+mimetypes.add_type("image/webp", ".webp")
 import os
 import re
 import smtplib

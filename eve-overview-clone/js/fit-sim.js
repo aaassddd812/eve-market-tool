@@ -1,15 +1,15 @@
 // ===== 舰队对战模拟 =====
-// A / B 两方各若干艘舰船（每行：船型 + 装配 + 数量），按秒推进模拟交战：
-// 每艘船的属性由装配引擎（fit-engine.js，全部技能 5 级）算出；武器伤害按目标的信号半径、横向速度与交战距离计算命中（与装配页「对目标的有效 DPS」同一套公式），
-// 四种伤害分别乘目标当前那层的抗性，依次扣护盾、装甲、结构；本地维修、护盾自然回充、后勤遥修计入；
-// 换目标时要先锁定（锁定时间按扫描分辨率与目标信号半径），超出锁定距离锁不上；网子 / 标记 / 阻尼 / ECM / 中和 / 吸电作用于自己的目标（按距离与叠加惩罚）；
-// 电容逐秒结算，见底时耗电的装备按比例运转；每方可选技能（全 5 级 / 已绑定角色）、超载与指挥脉冲；交战距离可分两个阶段。
-// 不模拟：真正的走位、过热损坏、装备装填时间。
+// A / B 两方各若干艘舰船（每行：船型 + 装配 + 数量）。每艘船的属性由装配引擎（fit-engine.js）算出，
+// 交战在三维空间里逐 0.5 秒推进（sim-engine.js）：真实走位、按角速度与表面距离逐发掷骰的炮台、会飞的导弹、弹药装填、电容、
+// 电子战与遥修按实际距离与衰减计算；规则见 sim-engine.js 开头。
+// 战局不直接出结果：「战场」里实时推进，可暂停、调速；3D 视图（sim-3d.js）点按钮才加载，全屏时下方显示双方舰船状态；
+// 每方可预设支援舰队（跃迁 / 诱导进场，自定义位置，手动或定时进场），可设火力 / 后勤走位官；点一艘船可以让对面集火它；打完（或点「直接出结果」）才显示胜负与分析，之后可以拖动时间轴回放。
 // 结果附胜负原因、ISK 交换比、距离 × 机动扫描与落后一方至少需要的船数；可设为对照比较改动前后，可生成分享链接。
 // 装配来源：击杀记录里这型船最近阵亡时最常见的装配（fit-kb.js commonFit）、当前装配、我的装配、游戏内保存的装配（ESI）、EFT 文本，或空船；
 // 点舰船打开装配详情：看槽位与属性，从本场 / 最近常见的几套装配和自己的装配里换一套。
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失。
 import { commonFit } from './fit-kb.js?v=v28';
+import { createBattle, simulate } from './sim-engine.js?v=v9';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
 const $ = (id) => document.getElementById(id);
@@ -17,17 +17,17 @@ const IMG = (id, kind = 'icon', size = 32) => `https://images.evetech.net/types/
 const KEY = 'eve-fit-sim-v1';
 const DAMAGE_NAMES = ['电磁', '热能', '动能', '爆炸'];
 const LAYER_NAMES = ['护盾', '装甲', '结构'];
-const DISTANCES = [2, 5, 10, 20, 30, 50, 70];
-const DURATIONS = [[120, '2 分钟'], [300, '5 分钟'], [600, '10 分钟']];
+const DISTANCES = [5, 10, 20, 30, 50, 70, 100, 150];   // 开局两队相隔（km）
+const DURATIONS = [[120, '2 分钟'], [300, '5 分钟'], [600, '10 分钟'], [900, '15 分钟'], [1800, '30 分钟']];
 const FOCUS = [['weak', '最脆优先'], ['dps', '输出优先'], ['spread', '分散']];
-const TRANS = [[0, '静止'], [25, '慢速'], [50, '环绕'], [100, '全速']];
+const MOVES = [['orbit', '环绕'], ['range', '保持距离'], ['kite', '风筝']];
+const MOVE_TIP = { orbit: '在主力武器的理想距离上高速环绕目标（横向速度大，难被打中）', range: '停在主力武器的理想距离对射，横向速度小（舰队对射常用）', kite: '在最远射程环绕，敌人贴近就拉开距离' };
 // 常见打法：一键设置交战距离、目标机动与分阶段
 const SCENES = [
-  ['brawl', '近身缠斗', { dist: 2, trans: 50, phase: false }, '2 km · 环绕'],
-  ['mid', '中距对射', { dist: 10, trans: 25, phase: false }, '10 km · 慢速'],
-  ['kite', '高速风筝', { dist: 20, trans: 100, phase: false }, '20 km · 全速'],
-  ['snipe', '远程狙击', { dist: 70, trans: 0, phase: false }, '70 km · 静止'],
-  ['close', '先远后近', { dist: 30, trans: 25, phase: true, dist2: 5, at: 30 }, '30 km → 30 秒后 5 km']
+  ['brawl', '近身缠斗', { dist: 10, moveA: 'orbit', moveB: 'orbit' }, '10 km 开局 · 双方环绕'],
+  ['mid', '中距对射', { dist: 30, moveA: 'range', moveB: 'range' }, '30 km · 保持距离'],
+  ['snipe', '远程狙击', { dist: 100, moveA: 'range', moveB: 'range' }, '100 km · 保持距离'],
+  ['kite', '风筝对冲锋', { dist: 50, moveA: 'kite', moveB: 'orbit' }, 'A 风筝 · B 贴近环绕']
 ];
 const SQUAD = 15;   // 集火时每 15 艘船共用一个目标（大舰队会同时打多个目标，避免几百艘船打一艘的过量伤害）
 const SIDES = ['A', 'B'];
@@ -37,8 +37,9 @@ const AUTO = new Set(['battle', 'kb']);
 
 const S = {
   sides: { A: [], B: [] },
-  opt: { dist: 10, trans: 25, focus: 'weak', logi: true, ewar: true, cap: true, prop: false, max: 300, phase: false, dist2: 5, at: 30 },
+  opt: { dist: 30, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, prop: false, max: 1800 },
   sideOpt: { A: sideDefaults(), B: sideDefaults() },   // 每方：技能（max / esi）、超载、指挥脉冲
+  support: { A: [], B: [] },  // 每方预设的支援舰队 [{ id, name, rows, mode, ref, dist, dir, at }]
   esiSkills: null,            // 已绑定角色的技能 { name, levels }
   prices: null,               // 全服均价 Map
   sweep: null, base: null,    // 距离 × 机动扫描结果；对照（设为对照时的结果摘要）
@@ -61,15 +62,22 @@ export function initSim(context) {
   } catch { /* 默认 */ }
 }
 
-const packRows = (list) => list.map(({ ship, count, src, fit, label, kills, killsOther }) => ({ ship, count, src, kills, killsOther, fit: AUTO.has(src) ? null : fit, label: AUTO.has(src) ? '' : label }));
+const packRows = (list) => list.map(({ ship, count, src, fit, label, kills, killsOther, lead, move, cyno }) => ({ ship, count, src, kills, killsOther, fit: AUTO.has(src) ? null : fit, label: AUTO.has(src) ? '' : label, lead, move, cyno }));
+const packFleets = (list) => list.map(({ rows, ...f }) => ({ ...f, rows: packRows(rows) }));
+const loadRows = (list) => (list || []).filter((r) => ctx.data.types.has(r.ship)).map((r) => ({ ...r, id: ++S.seq, status: r.fit ? 'ok' : 'idle' }));
 function packState() {
-  return { opt: S.opt, side: S.sideOpt, title: S.title, back: S.back, real: S.real ? { A: [...S.real.A], B: [...S.real.B] } : null, sides: { A: packRows(S.sides.A), B: packRows(S.sides.B) } };
+  return { opt: S.opt, side: S.sideOpt, title: S.title, back: S.back, real: S.real ? { A: [...S.real.A], B: [...S.real.B] } : null, sides: { A: packRows(S.sides.A), B: packRows(S.sides.B) }, support: { A: packFleets(S.support.A), B: packFleets(S.support.B) } };
 }
 function loadState(st) {
   Object.assign(S.opt, st.opt || {});
+  // 旧版存档：固定距离 + 目标机动 → 开局距离 + 走位
+  for (const k of ['trans', 'phase', 'dist2', 'at']) delete S.opt[k];
+  if (!DISTANCES.includes(S.opt.dist)) S.opt.dist = DISTANCES.reduce((a, b) => (Math.abs(b - S.opt.dist) < Math.abs(a - S.opt.dist) ? b : a));
+  for (const k of ['moveA', 'moveB']) if (!MOVES.some(([v]) => v === S.opt[k])) S.opt[k] = 'orbit';
   for (const s of SIDES) S.sideOpt[s] = { ...sideDefaults(), ...(st.side?.[s] || {}) };
   if (!ctx.hasEsi?.()) for (const s of SIDES) S.sideOpt[s].skills = 'max';
-  for (const s of SIDES) S.sides[s] = (st.sides?.[s] || []).filter((r) => ctx.data.types.has(r.ship)).map((r) => ({ ...r, id: ++S.seq, status: r.fit ? 'ok' : 'idle' }));
+  for (const s of SIDES) S.sides[s] = loadRows(st.sides?.[s]);
+  for (const s of SIDES) S.support[s] = (st.support?.[s] || []).map((f) => ({ ...f, id: ++fleetSeq, rows: loadRows(f.rows) }));
   S.title = st.title || '';
   S.back = st.back || '';
   S.real = st.real ? { A: new Map(st.real.A || []), B: new Map(st.real.B || []) } : null;
@@ -91,7 +99,7 @@ export function mountSim(el, preset = null, restored = false) {
       Object.assign(S, { result: null, detail: null, base: null, sweep: null });
       save();
       render();
-      for (const s of SIDES) S.sides[s].forEach(resolveRow);
+      for (const s of SIDES) [...S.sides[s], ...fleetRows(s)].forEach(resolveRow);
       ensureEsiSkills();
       schedule(0);
       ctx.showToast('已打开分享的对局', 'success');
@@ -108,6 +116,7 @@ export function mountSim(el, preset = null, restored = false) {
     el.addEventListener('submit', onSubmit);
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && root?.offsetParent && S.detail) closeDetail(); });
     document.addEventListener('click', (e) => { if (S.menu && !e.target.closest('.sim-menu')) toggleMenu(false); });
+    document.addEventListener('fullscreenchange', () => updateBattleUi());
     let w = 0;
     window.addEventListener('resize', () => { if (root?.offsetParent && root.clientWidth !== w) { w = root.clientWidth; drawChart(); } });
   }
@@ -128,7 +137,7 @@ export function mountSim(el, preset = null, restored = false) {
   if (!fresh && restored && root.querySelector('#simBody')) { renderSides(); loadEsi(); return; }
   S.detail = null;
   render();
-  for (const s of SIDES) S.sides[s].forEach(resolveRow);
+  for (const s of SIDES) [...S.sides[s], ...fleetRows(s)].forEach(resolveRow);
   loadEsi();
   schedule(0);
 }
@@ -249,9 +258,10 @@ function ensureEsiSkills() {
   }).finally(() => { S.esiSkillsP = null; reprepare(); });
 }
 // 行在哪一方（新建还没加入的行按 A 方算，加入时会按所在方重新计算）
-const sideOf = (row) => SIDES.find((s) => S.sides[s].includes(row)) || 'A';
+const fleetRows = (s) => S.support[s].flatMap((f) => f.rows);
+const sideOf = (row) => SIDES.find((s) => S.sides[s].includes(row) || fleetRows(s).includes(row)) || 'A';
 function reprepare(list = SIDES) {
-  for (const s of list) for (const r of S.sides[s]) if (r.fit) prepare(r, s);
+  for (const s of list) for (const r of [...S.sides[s], ...fleetRows(s)]) if (r.fit) prepare(r, s);
   changed();
 }
 
@@ -259,42 +269,149 @@ function reprepare(list = SIDES) {
 const effName = (t) => t.effects.map((e) => ctx.data.effects.get(e)?.name);
 const SENSOR_TYPES = ['雷达', '光雷达', '磁力', '引力'];
 const ECM_STR = [241, 239, 240, 238];   // ECM 对雷达 / 光雷达 / 磁力 / 引力的干扰强度（与 FE.AT.sensors 顺序一致）
+// 武器开火特效（3D 视图用）：种类按装备组 / 名字，颜色按弹药（激光按晶体波段，导弹爆炸按主伤害类型），大小按弹药尺寸 / 导弹爆炸半径
+const LASER_COLOR = [[/radio/i, 0xff3322], [/microwave/i, 0xff6622], [/infrared/i, 0xff9933], [/standard/i, 0xffdd44], [/ultraviolet/i, 0xb070ff],
+  [/xray|x-ray/i, 0x77aaff], [/gamma/i, 0x5577ff], [/multifrequency/i, 0xfff2ff], [/conflagration/i, 0xff5522], [/scorch/i, 0xffcc33],
+  [/aurora/i, 0xff5577], [/gleam/i, 0xffeedd]];
+const DMG_COLOR = [0x88b8ff, 0xff7a3a, 0xdfe4ec, 0xffcf4a];   // EM、热能、动能、爆炸
+function gunFx(m, c, raw, turret) {
+  const name = m.type.en || '', ammo = c.type.en || '';
+  const size = Math.max(1, Math.min(4, m.attr(128) || c.attr(128) || 1));
+  const main = raw.indexOf(Math.max(...raw));
+  if (!turret) return { w: 'missile', c: DMG_COLOR[main] ?? 0xffcf4a, er: c.attr(654) || 50, v: c.attr(ctx.FE.AT.maxVelocity) || 3000 };
+  const g = m.type.group;
+  if (g === 53) return { w: /beam|tachyon/i.test(name) ? 'beam' : 'pulse', c: (LASER_COLOR.find(([re]) => re.test(ammo)) || [0, 0xffaa44])[1], s: size };
+  if (g === 74) return { w: /rail/i.test(name) ? 'rail' : 'blaster', c: /rail/i.test(name) ? 0x88c4ff : 0x9fe8ff, s: size };
+  if (g === 55) return { w: /artillery|howitzer/i.test(name) ? 'arty' : 'auto', c: 0xffb04a, s: size };
+  if (g === 4060) return { w: 'vorton', c: 0xa8d8ff, s: size };
+  return { w: 'disint', c: 0xff5a3a, s: size };
+}
+// 舰载机：普通攻击按爆炸半径 / 速度与最佳射程 + 失准范围，导弹技能按爆炸半径 / 速度与射程；衰减系数 = ln 衰减因子 / ln 衰减灵敏度
+const drfOf = (a, b) => (a > 0 && b > 0 && Math.log(b) ? Math.log(a) / Math.log(b) : 1);
+function fighterOf(f) {
+  const { FE } = ctx;
+  const ability = (dmgAttrs, multAttr, durAttr) => {
+    const cycle = f.attr(durAttr) / 1000;
+    const mult = f.attr(multAttr) || 1;
+    const dmg = dmgAttrs.map((a) => f.attr(a) * mult);
+    return cycle && dmg.some(Boolean) ? { dmg, cycle } : null;
+  };
+  const atk = ability(FE.AT.fighterAttackDmg, FE.AT.fighterAttackMult, FE.AT.fighterAttackDuration);
+  const msl = ability(FE.AT.fighterMissileDmg, FE.AT.fighterMissileMult, FE.AT.fighterMissileDuration);
+  if (atk) Object.assign(atk, { er: f.attr(2234), ev: f.attr(2235), drf: drfOf(f.attr(2231), f.attr(2232)), opt: f.attr(2236) || 5000, fall: f.attr(2237) || 0 });
+  if (msl) Object.assign(msl, { er: f.attr(2125), ev: f.attr(2126), drf: drfOf(f.attr(2127), f.attr(2128)), range: f.attr(2149) || 30000 });
+  if (!atk && !msl) return null;
+  return { squads: f.active, size: f.attr(FE.AT.fighterSquadronSize) || 1, vel: f.attr(FE.AT.maxVelocity) || 2000, orbit: f.attr(2223) || 3000,
+    cls: f.attr(FE.AT.fighterIsHeavy) ? 2 : f.attr(FE.AT.fighterIsSupport) ? 1 : 0, atk, msl };
+}
+const SLOT_ORDER = ['high', 'mid', 'low'];
 function unitTemplate(row) {
   const { FE } = ctx;
   const { calc, stats } = row;
   const ship = calc.ship;
   const d = stats.defense;
   const res = ['shield', 'armor', 'hull'].map((k) => FE.RESIST[k].map((a) => ship.attr(a)));
-  const remote = [], webs = [], paints = [], neuts = [], noses = [], damps = [], ecms = [];
+  const remote = [], webs = [], paints = [], neuts = [], noses = [], damps = [], ecms = [], points = [], localReps = [];
+  // 装备栏（状态面板用）：高、中、低槽；m 为在装备栏里的序号，引擎按序号记录每件装备是否在运转
+  const rack = [];
+  const idx = new Map();
+  for (const s of SLOT_ORDER) for (const m of calc.modules.filter((x) => x.slot === s).sort((a, b) => a.index - b.index)) {
+    idx.set(m, rack.length);
+    rack.push({ type: m.type.id, slot: s, state: m.state, charge: m.charge?.type.id || 0, off: forcedOff(row.fit.slots[s]?.[m.index]) || '', cycle: (m.attr(FE.AT.duration) || m.attr(FE.AT.speed)) / 1000 || 0, reload: (m.attr(1795) || 0) / 1000 });
+  }
+  const used = new Set();
+  // 弹药数：装备容量 / 弹药体积
+  const loads = (m) => (m.charge && m.charge.attr(FE.AT.volume) > 0 ? Math.floor(m.attr(FE.AT.capacity) / m.charge.attr(FE.AT.volume)) : 0);
   for (const m of calc.modules) {
     if ((FE.STATE_RANK[m.state] || 0) < 2) continue;
     const names = effName(m.type);
     const dur = m.attr(FE.AT.duration) / 1000 || m.attr(FE.AT.speed) / 1000;
     const range = m.attr(FE.AT.maxRange), falloff = m.attr(2044) || 0;
-    if (names.includes('shipModuleRemoteShieldBooster') || names.includes('shipModuleAncillaryRemoteShieldBooster')) remote.push({ layer: 0, rate: m.attr(FE.AT.shieldBonus) / dur, range, falloff });
+    const k = idx.get(m);
+    const mark = () => used.add(m);
+    // 跃迁扰断 / 扰频（拦截泡不算）：强度累加，超过对方跃迁稳定就走不掉
+    if (m.attr(105) > 0 && range > 0 && !names.includes('warpDisruptSphere')) { points.push({ str: m.attr(105), range, m: k }); mark(); }
+    // 本地维修（逐周期）：辅助护盾 / 装甲维修有弹药时不耗电，打完要装填
+    const ancillary = names.includes('fueledShieldBoosting') || names.includes('fueledArmorRepair');
+    const fuel = ancillary && m.charge ? loads(m) : 0;
+    const localRep = (layer, amt) => { localReps.push({ layer, amt, cycle: dur || 5, m: k, ammo: fuel > 0 ? fuel : Infinity, reload: (m.attr(1795) || 60000) / 1000, charged: fuel > 0 }); mark(); };
+    if (names.includes('shieldBoosting') || names.includes('fueledShieldBoosting')) localRep(0, m.attr(FE.AT.shieldBonus));
+    else if (names.includes('armorRepair')) localRep(1, m.attr(FE.AT.armorDamageAmount));
+    else if (names.includes('fueledArmorRepair')) localRep(1, m.attr(FE.AT.armorDamageAmount) * (m.charge ? m.attr(FE.AT.chargedArmorDamageMultiplier) || 1 : 1));
+    else if (names.includes('structureRepair')) localRep(2, m.attr(FE.AT.structureDamageAmount));
+    else if (names.includes('shipModuleRemoteShieldBooster') || names.includes('shipModuleAncillaryRemoteShieldBooster')) { remote.push({ layer: 0, amt: m.attr(FE.AT.shieldBonus), cycle: dur || 5, rate: m.attr(FE.AT.shieldBonus) / (dur || 5), range, falloff, m: k }); mark(); }
     else if (names.includes('shipModuleRemoteArmorRepairer') || names.includes('shipModuleAncillaryRemoteArmorRepairer') || names.includes('ShipModuleRemoteArmorMutadaptiveRepairer')) {
       const mult = names.includes('shipModuleAncillaryRemoteArmorRepairer') && m.charge ? m.attr(FE.AT.chargedArmorDamageMultiplier) || 1 : 1;
-      remote.push({ layer: 1, rate: m.attr(FE.AT.armorDamageAmount) * mult / dur, range, falloff });
-    } else if (names.includes('shipModuleRemoteHullRepairer')) remote.push({ layer: 2, rate: m.attr(FE.AT.structureDamageAmount) / dur, range, falloff });
-    else if (names.includes('remoteWebifierFalloff')) webs.push({ v: m.attr(FE.AT.speedFactor) / 100, range, falloff });
-    else if (names.includes('remoteTargetPaintFalloff')) paints.push({ v: m.attr(FE.AT.signatureRadiusBonus) / 100, range, falloff });
+      const amt = m.attr(FE.AT.armorDamageAmount) * mult;
+      remote.push({ layer: 1, amt, cycle: dur || 5, rate: amt / (dur || 5), range, falloff, m: k }); mark();
+    } else if (names.includes('shipModuleRemoteHullRepairer')) { remote.push({ layer: 2, amt: m.attr(FE.AT.structureDamageAmount), cycle: dur || 5, rate: m.attr(FE.AT.structureDamageAmount) / (dur || 5), range, falloff, m: k }); mark(); }
+    else if (names.includes('remoteWebifierFalloff')) { webs.push({ v: m.attr(FE.AT.speedFactor) / 100, range, falloff, m: k }); mark(); }
+    else if (names.includes('remoteTargetPaintFalloff')) { paints.push({ v: m.attr(FE.AT.signatureRadiusBonus) / 100, range, falloff, m: k }); mark(); }
     else if (!dur) continue;
-    else if (names.includes('energyNeutralizerFalloff')) neuts.push({ rate: m.attr(97) / dur, range, falloff });
-    else if (names.includes('energyNosferatuFalloff')) noses.push({ rate: m.attr(90) / dur, range, falloff });
-    else if (names.includes('remoteSensorDampFalloff')) damps.push({ scan: m.attr(566) / 100, lock: m.attr(309) / 100, range, falloff });
-    else if (names.includes('remoteECMFalloff')) ecms.push({ str: ECM_STR.map((a) => m.attr(a)), cycle: Math.max(1, Math.round(dur)), jam: Math.max(1, Math.round(m.attr(2822) / 1000 || dur)), range, falloff });
+    else if (names.includes('energyNeutralizerFalloff')) { neuts.push({ amt: m.attr(97), cycle: dur, rate: m.attr(97) / dur, range, falloff, m: k }); mark(); }
+    else if (names.includes('energyNosferatuFalloff')) { noses.push({ amt: m.attr(90), cycle: dur, rate: m.attr(90) / dur, range, falloff, m: k }); mark(); }
+    else if (names.includes('remoteSensorDampFalloff')) { damps.push({ scan: m.attr(566) / 100, lock: m.attr(309) / 100, range, falloff, m: k }); mark(); }
+    else if (names.includes('remoteECMFalloff')) { ecms.push({ str: ECM_STR.map((a) => m.attr(a)), cycle: Math.max(1, Math.round(dur)), jam: Math.max(1, Math.round(m.attr(2822) / 1000 || dur)), range, falloff, m: k }); mark(); }
   }
-  // 耗电的武器（能量 / 混合炮台）在电容不够时按比例停火；导弹、射弹、无人机不受影响
-  const capWeapon = stats.weapons.reduce((s, w) => s + (w.module.attr(FE.AT.capNeed) > 0 ? w.dps : 0), 0);
+  // 每门武器（空间模拟逐发计算）；fx 给 3D 视图画开火特效：伤害按弹药四种伤害的比例分配到这一发的总伤害
+  const guns = stats.weapons.map((w) => {
+    const m = w.module, c = m.charge, turret = Boolean(m.type.turret);
+    used.add(m);
+    const raw = FE.DAMAGE.map((a) => c.attr(a));
+    const rawSum = raw.reduce((a, b) => a + b, 0) || 1;
+    const cycle = m.attr(FE.AT.speed) / 1000;
+    // 弹夹：装备容量 / 弹药体积；频率晶体（有损坏几率属性）不用装填
+    const per = loads(m);
+    const crystal = (c.attr(783) || 0) > 0 || (m.attr(FE.AT.capNeed) > 0 && !per);
+    const g = { turret, cycle, volley: w.volley, dmg: raw.map((x) => x / rawSum * w.volley), capNeed: Math.max(0, m.attr(FE.AT.capNeed)),
+      ammo: crystal || per <= 0 ? Infinity : per, reload: (m.attr(1795) || 10000) / 1000, m: idx.get(m) };
+    g.fx = gunFx(m, c, raw, turret);
+    if (m.type.group === 4060) {
+      // 电涌投射器：按爆炸半径 / 速度算伤害，打中后跳到附近敌船
+      const er = m.attr(654) || c.attr(654), ev = m.attr(653) || c.attr(653);
+      Object.assign(g, { turret: true, vorton: true, reach: m.attr(FE.AT.maxRange), er, ev, drf: m.attr(1353) || c.attr(1353) || 1, arcRange: m.attr(3036) || 5000, arcs: m.attr(3037) || 1 });
+    } else if (turret) Object.assign(g, { opt: m.attr(FE.AT.maxRange), fall: m.attr(FE.AT.falloff), track: m.attr(FE.AT.trackingSpeed), sigRes: m.attr(620) || 40000, reach: m.attr(FE.AT.maxRange) + m.attr(FE.AT.falloff) });
+    else Object.assign(g, { mvel: c.attr(FE.AT.maxVelocity), flight: c.attr(FE.AT.explosionDelay) / 1000, reach: w.range, er: c.attr(654), ev: c.attr(653), drf: c.attr(1353) || 1 });
+    // 热能分解器：连续打同一目标每轮加成，到上限为止
+    if (m.type.group === 1986 && m.attr(2733) > 0) g.spool = { per: m.attr(2733), max: m.attr(2734) || 1.5 };
+    return g;
+  });
+  const control = calc.char?.attr(458) || 60000;
+  // 无人机：逐架按炮台公式（自身最佳射程、失准、跟踪、信号分辨率）；体积 5 / 10 / 25 为轻 / 中 / 重
+  const drones = (stats.droneDps || []).map(({ drone: x }) => {
+    const mult = x.attr(FE.AT.damageMultiplier) || 1;
+    const dmg = FE.DAMAGE.map((a) => x.attr(a) * mult);
+    const vel = x.attr(FE.AT.maxVelocity);
+    const vol = x.attr(FE.AT.volume);
+    const opt = x.attr(FE.AT.maxRange), fall = x.attr(FE.AT.falloff);
+    return { n: x.active, dmg, volley: dmg.reduce((a, b) => a + b, 0), cycle: x.attr(FE.AT.speed) / 1000 || 4, sigRes: x.attr(620) || 400, vel, sentry: vel < 1, control,
+      track: x.attr(FE.AT.trackingSpeed), opt, fall, attackRange: x.attr(247) || opt + fall * 2, fly: x.attr(416) || 1000, cruise: x.attr(508) || vel,
+      size: vol >= 25 ? 2 : vol >= 10 ? 1 : 0 };
+  }).filter((x) => x.n > 0 && x.volley > 0);
+  const fighters = calc.drones.filter((x) => x.type.category === 87 && x.active > 0).map(fighterOf).filter(Boolean);
+  // 一直开着的装备（抗性、推进器、损控等）：没被上面归类的已开启装备
+  let alwaysOn = 0;
+  for (const m of calc.modules) if ((FE.STATE_RANK[m.state] || 0) >= 2 && !used.has(m) && idx.get(m) < 32) alwaysOn |= 1 << idx.get(m);
+  // 走位用的距离：主力武器（输出占比最大的一类）的理想距离与最远射程
+  const best = guns.slice().sort((a, b) => b.volley / b.cycle - a.volley / a.cycle)[0];
+  const remoteReach = [...remote, ...webs, ...paints, ...neuts, ...noses, ...damps, ...ecms].map((x) => x.range + x.falloff * 0.5);
+  const pref = best ? (best.vorton ? best.reach * 0.85 : best.turret ? best.opt + best.fall * 0.4 : best.reach * 0.85)
+    : drones.length ? Math.min(control * 0.8, drones[0].sentry ? drones[0].opt + drones[0].fall * 0.5 : 20000)
+    : fighters.length ? 40000 : remoteReach.length ? Math.min(...remoteReach) * 0.85 : 10000;
+  const reach = best ? (best.vorton ? best.reach : best.turret ? best.opt + best.fall : best.reach * 0.95) : pref;
   const cap = stats.capacitor;
+  const gunCap = guns.reduce((t, g) => t + g.capNeed / (g.cycle || 1), 0);
   return {
+    guns, drones, fighters, fighter: stats.weapon.fighter, pref: Math.max(1000, pref), reach: Math.max(1500, reach),
+    points, align: stats.navigation.align || 5, stab: Math.abs(ship.attr(104) || 0),
+    radius: ship.attr(FE.AT.radius) || 50, tau: (stats.navigation.agility * stats.navigation.mass) / 1e6 || 1,
     max: [d.shield.hp, d.armor.hp, d.hull.hp], res,
     types: stats.weapon.types.slice(), dps: stats.weapon.total,
     sig: stats.navigation.signature, vel: stats.navigation.velocity, scanRes: stats.targeting.scanRes,
     lockRange: stats.targeting.range, sensor: stats.targeting.sensor, sensorIdx: Math.max(0, SENSOR_TYPES.indexOf(stats.targeting.sensorType)),
-    local: [d.reps.shield, d.reps.armor, d.reps.hull], regenC: d.shield.hp, regenTau: d.shield.hp && stats.defense.passiveRegen ? 2.5 * d.shield.hp / stats.defense.passiveRegen : 0,
-    cap: { max: cap.capacity, tau: cap.recharge, use: Math.max(0, cap.usage) }, capWeapon: stats.weapon.total ? capWeapon / stats.weapon.total : 0,
-    remote, webs, paints, neuts, noses, damps, ecms, ehp: d.ehp
+    local: [d.reps.shield, d.reps.armor, d.reps.hull], localReps, regenC: d.shield.hp, regenTau: d.shield.hp && stats.defense.passiveRegen ? 2.5 * d.shield.hp / stats.defense.passiveRegen : 0,
+    cap: { max: cap.capacity, tau: cap.recharge, use: Math.max(0, cap.usage), other: Math.max(0, cap.usage - gunCap) },
+    remote, webs, paints, neuts, noses, damps, ecms, ehp: d.ehp, rack, alwaysOn
   };
 }
 
@@ -318,250 +435,6 @@ function applyBursts(u, list) {
   v.ehp = u.ehp * ehp(v) / (ehp(u) || 1);
   v.regenC = v.max[0];
   return v;
-}
-
-// 锁定时间（秒）= 40000 / (扫描分辨率 × asinh(目标信号半径)²)
-const lockTime = (scanRes, sig) => (scanRes > 0 ? Math.min(60, 40000 / (scanRes * Math.asinh(sig) ** 2)) : 5);
-// 带衰减范围的装备在距离 d 的效果比例
-const rangeEff = (x, d) => (d <= x.range ? 1 : x.falloff > 0 ? 0.5 ** (((d - x.range) / x.falloff) ** 2) : 0);
-const PENALTY = (i) => Math.exp(-((i / 2.67) ** 2));
-// 简单的可复现随机数（分散火力用）
-function rng(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
-
-// ---------- 模拟 ----------
-export function simulate(sides, opt) {
-  const { FE } = ctx;
-  const trans = opt.trans / 100;
-  // 分阶段：从第 at 秒起改为第二个距离（粗略模拟接近 / 拉开）
-  const distAt = (t) => 1000 * (opt.phase && t >= opt.at ? opt.dist2 : opt.dist);
-  const capOn = opt.cap !== false;
-  const rand = rng(20261026);
-  const units = [];
-  const rows = [];
-  // 每方的统计（胜负原因分析用）：单位为「艘·秒」或 HP
-  const blank = () => ({ unitSec: 0, potential: 0, applied: 0, lockWait: 0, noRange: 0, jammed: 0, capped: 0, drained: 0 });
-  const tally = { A: blank(), B: blank() };
-  for (const s of SIDES) {
-    for (const row of sides[s]) {
-      if (!row.unit) continue;
-      const r = { row, side: s, lost: 0, dealt: 0, taken: 0, repaired: 0, n: row.count, killTimes: [] };
-      rows.push(r);
-      for (let i = 0; i < row.count; i++) {
-        const t = row.unit;
-        units.push({ side: s, r, t, hp: t.max.slice(), alive: true, target: null, lock: 0, repTarget: null, repLock: 0, ehpMax: t.ehp,
-          cap: t.cap.max, ratio: 1, jam: 0, ecmNext: t.ecms.map((_, k) => k), scanMult: 1, rangeMult: 1 });
-      }
-    }
-  }
-  const bySide = { A: units.filter((u) => u.side === 'A'), B: units.filter((u) => u.side === 'B') };
-  const totalHp = (list) => list.reduce((t, u) => t + u.hp[0] + u.hp[1] + u.hp[2], 0);
-  const maxHp = { A: totalHp(bySide.A) || 1, B: totalHp(bySide.B) || 1 };
-  const timeline = [{ t: 0, A: bySide.A.length, B: bySide.B.length, hpA: 1, hpB: 1 }];
-  const kills = [];
-  // 回放（只在主模拟里记录）：每秒每艘船三层 HP（0–200，0 = 阵亡）与当前目标
-  const rec = opt.record ? { units: units.map((u) => ({ side: u.side, ship: u.r.row.ship })), frames: [] } : null;
-  const index = rec && new Map(units.map((u, i) => [u, i]));
-  const snap = () => {
-    const hp = new Uint8Array(units.length * 3), tg = new Int16Array(units.length).fill(-1);
-    units.forEach((u, i) => {
-      if (!u.alive) return;
-      for (let l = 0; l < 3; l++) hp[i * 3 + l] = u.t.max[l] ? Math.round(u.hp[l] / u.t.max[l] * 200) : 0;
-      hp[i * 3 + 2] = Math.max(1, hp[i * 3 + 2]);
-      if (u.target?.alive) tg[i] = index.get(u.target);
-    });
-    rec.frames.push({ hp, tg });
-  };
-  if (rec) snap();
-  // 命中比例缓存：攻击方装配 × 目标装配 × 网 / 标记倍数 × 距离
-  const applyCache = new Map();
-  const applied = (u, v, velMult, sigMult, dist) => {
-    if (!u.t.dps) return 0;
-    const key = `${u.r.row.id}|${v.r.row.id}|${velMult.toFixed(2)}|${sigMult.toFixed(2)}|${dist}`;
-    let f = applyCache.get(key);
-    if (f === undefined) {
-      const target = { sig: v.t.sig * sigMult, vel: v.t.vel * velMult * trans };
-      f = FE.appliedDps(u.r.row.stats, target, dist) / u.t.dps;
-      applyCache.set(key, f);
-    }
-    return f;
-  };
-  const curEhp = (u) => u.hp[0] / mean(u.t.res[0]) + u.hp[1] / mean(u.t.res[1]) + u.hp[2] / mean(u.t.res[2]);
-  const relock = (u, v) => lockTime(u.t.scanRes * u.scanMult, v.t.sig);
-  const stack = (list, asc) => list.sort((a, b) => (asc ? a - b : b - a)).reduce((m, x, i) => m * (1 + x * PENALTY(i)), 1);
-
-  // 每方挑选集火目标：按策略排序后取前 K 个，攻击者轮流分配
-  function assignTargets(side) {
-    const enemies = bySide[side === 'A' ? 'B' : 'A'].filter((u) => u.alive);
-    const attackers = bySide[side].filter((u) => u.alive && (u.t.dps > 0 || u.t.webs.length || u.t.paints.length || u.t.neuts.length || u.t.noses.length || u.t.damps.length || u.t.ecms.length));
-    if (!enemies.length) return;
-    if (opt.focus === 'spread') {
-      for (const u of attackers) if (!u.target?.alive) { u.target = enemies[Math.floor(rand() * enemies.length)]; u.lock = relock(u, u.target); }
-      return;
-    }
-    const k = Math.max(1, Math.ceil(attackers.length / SQUAD));
-    const ranked = enemies.slice().sort(opt.focus === 'dps' ? (a, b) => b.t.dps - a.t.dps || curEhp(a) - curEhp(b) : (a, b) => curEhp(a) - curEhp(b));
-    const primaries = ranked.slice(0, k);
-    // 已在打的活目标继续打（换目标要重新锁定）；目标死了才换
-    const load = new Map(primaries.map((p) => [p, 0]));
-    for (const u of attackers) if (u.target?.alive && load.has(u.target)) load.set(u.target, load.get(u.target) + 1);
-    for (const u of attackers) {
-      if (u.target?.alive) continue;
-      let best = primaries[0];
-      for (const p of primaries) if (load.get(p) < load.get(best)) best = p;
-      load.set(best, load.get(best) + 1);
-      u.target = best;
-      u.lock = relock(u, best);
-    }
-  }
-  // 能不能对目标出手：没被 ECM 干扰、锁定距离够、已经锁上
-  const engaged = (u, t, dist) => u.jam <= t && dist <= u.t.lockRange * u.rangeMult && u.lock <= 0;
-
-  let t = 0;
-  for (; t < opt.max; t++) {
-    if (!bySide.A.some((u) => u.alive) || !bySide.B.some((u) => u.alive)) break;
-    const dist = distAt(t);
-    // 电容：先回充，再付这一秒所有开启装备的耗电；不够时耗电的装备（能量 / 混合炮台、维修、遥修、电子战、中和）按比例运转
-    for (const u of units) {
-      if (!u.alive) continue;
-      tally[u.side].unitSec += 1;
-      const c = u.t.cap;
-      if (!capOn || !c.use) { u.ratio = 1; continue; }
-      if (c.max && c.tau) { const x = Math.max(0.01, u.cap / c.max); u.cap = Math.min(c.max, u.cap + 10 * c.max / c.tau * (Math.sqrt(x) - x)); }
-      if (u.cap >= c.use) { u.cap -= c.use; u.ratio = 1; } else { u.ratio = Math.max(0, u.cap) / c.use; u.cap = 0; tally[u.side].capped += 1; }
-    }
-    assignTargets('A');
-    assignTargets('B');
-    // 电子战（网 / 标记 / 阻尼 / ECM）与中和 / 吸电：作用于自己的目标
-    const webs = new Map(), paints = new Map(), dScan = new Map(), dRange = new Map(), neutIn = new Map(), nos = [];
-    const push = (m, v, x) => (m.get(v) || m.set(v, []).get(v)).push(x);
-    for (const u of units) {
-      if (!u.alive || !u.target?.alive || !engaged(u, t, dist)) continue;
-      const v = u.target, k = u.ratio;
-      if (opt.ewar) {
-        for (const w of u.t.webs) push(webs, v, w.v * k * rangeEff(w, dist));
-        for (const p of u.t.paints) push(paints, v, p.v * k * rangeEff(p, dist));
-        for (const d of u.t.damps) { const e = k * rangeEff(d, dist); push(dScan, v, d.scan * e); push(dRange, v, d.lock * e); }
-        u.t.ecms.forEach((e, i) => {
-          if (t < u.ecmNext[i]) return;
-          u.ecmNext[i] = t + e.cycle;
-          const chance = e.str[v.t.sensorIdx] * k * rangeEff(e, dist) / Math.max(1, v.t.sensor);
-          if (rand() < chance) v.jam = Math.max(v.jam, t + e.jam);
-        });
-      }
-      if (capOn) {
-        for (const n of u.t.neuts) neutIn.set(v, (neutIn.get(v) || 0) + n.rate * k * rangeEff(n, dist));
-        for (const n of u.t.noses) nos.push([u, v, n.rate * k * rangeEff(n, dist)]);
-      }
-    }
-    const velMult = new Map(), sigMult = new Map();
-    for (const [v, list] of webs) velMult.set(v, stack(list, true));
-    for (const [v, list] of paints) sigMult.set(v, stack(list, false));
-    // 阻尼影响下一秒的锁定：扫描分辨率（锁定时间）与锁定距离
-    for (const u of units) { u.scanMult = 1; u.rangeMult = 1; }
-    for (const [v, list] of dScan) v.scanMult = stack(list, true);
-    for (const [v, list] of dRange) v.rangeMult = stack(list, true);
-    // 输出：累计每个目标承受的四种伤害
-    const incoming = new Map();
-    for (const u of units) {
-      if (!u.alive || !u.target?.alive) continue;
-      const T = tally[u.side];
-      if (u.jam > t) { T.jammed += 1; u.lock = relock(u, u.target); continue; }   // 被干扰：掉锁，干扰结束后重新锁定
-      if (dist > u.t.lockRange * u.rangeMult) { T.noRange += 1; continue; }
-      if (u.lock > 0) { u.lock -= 1; T.lockWait += 1; continue; }
-      const v = u.target;
-      const f = applied(u, v, velMult.get(v) || 1, sigMult.get(v) || 1, dist) * (1 - u.t.capWeapon * (1 - u.ratio));
-      T.potential += u.t.dps;
-      T.applied += u.t.dps * f;
-      if (!f) continue;
-      let inc = incoming.get(v);
-      if (!inc) incoming.set(v, (inc = { dmg: [0, 0, 0, 0], from: [] }));
-      for (let k = 0; k < 4; k++) inc.dmg[k] += u.t.types[k] * f;
-      inc.from.push([u, f]);
-    }
-    for (const [v, inc] of incoming) {
-      const raw = inc.dmg;
-      let left = raw.slice();
-      let dealt = 0;
-      for (let layer = 0; layer < 3 && left.some((x) => x > 0); layer++) {
-        const eff = left.reduce((s, x, k) => s + x * v.t.res[layer][k], 0);
-        if (eff <= 0) break;
-        if (eff <= v.hp[layer]) { v.hp[layer] -= eff; dealt += eff; left = null; break; }
-        const used = v.hp[layer] / eff;
-        dealt += v.hp[layer];
-        v.hp[layer] = 0;
-        left = left.map((x) => x * (1 - used));
-      }
-      v.r.taken += dealt;
-      // 输出按各攻击者的原始伤害占比分摊
-      const sumRaw = raw.reduce((s, x) => s + x, 0) || 1;
-      for (const [u, f] of inc.from) u.r.dealt += dealt * (u.t.dps * f) / sumRaw;
-      if (v.hp[2] <= 1e-6) {
-        v.alive = false;
-        v.r.lost += 1;
-        v.r.killTimes.push(t + 1);
-        kills.push({ t: t + 1, side: v.side, ship: v.r.row.ship, row: v.r });
-      }
-    }
-    // 中和 / 吸电：扣目标电容（吸电只在目标电容比例比自己高时吸得到）
-    for (const [v, amt] of neutIn) {
-      if (!v.alive) continue;
-      const d = Math.min(v.cap, amt);
-      v.cap -= d;
-      tally[v.side === 'A' ? 'B' : 'A'].drained += d;
-    }
-    for (const [u, v, amt] of nos) {
-      if (!v.alive || !u.t.cap.max || v.cap / (v.t.cap.max || 1) <= u.cap / u.t.cap.max) continue;
-      const d = Math.min(v.cap, amt);
-      v.cap -= d;
-      u.cap = Math.min(u.t.cap.max, u.cap + d);
-      tally[u.side].drained += d;
-    }
-    // 维修：本地维修（耗电，按电容比例）、护盾自然回充、后勤遥修
-    for (const u of units) {
-      if (!u.alive) continue;
-      for (let l = 0; l < 3; l++) if (u.t.local[l] && u.hp[l] < u.t.max[l]) u.hp[l] = Math.min(u.t.max[l], u.hp[l] + u.t.local[l] * u.ratio);
-      const C = u.t.regenC, tau = u.t.regenTau;
-      if (C && tau && u.hp[0] < C) { const x = u.hp[0] / C; u.hp[0] = Math.min(C, u.hp[0] + 10 * C / tau * (Math.sqrt(x) - x)); }
-    }
-    if (opt.logi) {
-      for (const u of units) {
-        if (!u.alive || !u.t.remote.length || u.jam > t) continue;
-        // 修受伤最重的队友（按遥修能修的那层），换目标要先锁定
-        const layer = u.t.remote[0].layer;
-        let best = null, worst = 0.98;
-        for (const a of bySide[u.side]) {
-          if (!a.alive || a === u || !a.t.max[layer]) continue;
-          const frac = a.hp[layer] / a.t.max[layer];
-          if (frac < worst) { worst = frac; best = a; }
-        }
-        if (!best) continue;
-        if (u.repTarget !== best) {
-          // 当前目标还没修满一半就不换，避免来回切
-          if (u.repTarget?.alive && u.repTarget.hp[layer] / u.repTarget.t.max[layer] < 0.5) best = u.repTarget;
-          else { u.repTarget = best; u.repLock = relock(u, best); }
-        }
-        if (u.repLock > 0) { u.repLock -= 1; continue; }
-        const a = u.repTarget;
-        for (const rep of u.t.remote) {
-          const room = a.t.max[rep.layer] - a.hp[rep.layer];
-          if (room <= 0) continue;
-          const amt = Math.min(room, rep.rate * u.ratio);
-          a.hp[rep.layer] += amt;
-          u.r.repaired += amt;
-        }
-      }
-    }
-    timeline.push({
-      t: t + 1,
-      A: bySide.A.filter((u) => u.alive).length, B: bySide.B.filter((u) => u.alive).length,
-      hpA: totalHp(bySide.A.filter((u) => u.alive)) / maxHp.A, hpB: totalHp(bySide.B.filter((u) => u.alive)) / maxHp.B
-    });
-    if (rec) snap();
-  }
-  const last = timeline[timeline.length - 1];
-  const winner = last.A && !last.B ? 'A' : last.B && !last.A ? 'B' : null;
-  const lead = winner || (last.hpA - last.hpB > 0.05 ? 'A' : last.hpB - last.hpA > 0.05 ? 'B' : null);
-  return { t, timeline, kills, rows, winner, lead, tally, rec, start: { A: bySide.A.length, B: bySide.B.length }, end: { A: last.A, B: last.B }, hp: { A: last.hpA, B: last.hpB } };
 }
 
 const mean = (r) => (r[0] + r[1] + r[2] + r[3]) / 4 || 1;
@@ -614,7 +487,7 @@ function sideFacts(R, s) {
     dps: R.t ? sum((r) => r.dealt) / R.t : 0,
     ehp: sum((r) => r.row.unit.ehp * r.n),
     reps: sum((r) => r.repaired), taken: sum((r) => r.taken),
-    capped: T.capped / sec, jammed: T.jammed / sec, noRange: T.noRange / sec, lockWait: T.lockWait / sec,
+    capped: T.capped / sec, jammed: T.jammed / sec, noRange: T.noRange / sec, lockWait: T.lockWait / sec, outRange: (T.outRange || 0) / sec,
     drained: T.drained,
     lockRange: Math.min(...rows.map((r) => r.row.unit.lockRange))
   };
@@ -641,6 +514,7 @@ function insightsHtml(R) {
     ${F.A.drained || F.B.drained ? line('中和 / 吸走电容', (f) => f.drained, (v) => ctx.formatISK(v) + ' GJ') : ''}
     ${anyOf('jammed') ? line('被 ECM 干扰', (f) => f.jammed, pct, false) : ''}
     ${anyOf('noRange') ? line('锁定距离不够', (f) => f.noRange, pct, false, '交战距离超过锁定距离、锁不上目标的时间占比') : ''}
+    ${anyOf('outRange') ? line('射程外', (f) => f.outRange, pct, false, '目标在武器射程外、没法开火的时间占比（还在接近或被风筝）') : ''}
     ${anyOf('lockWait') ? line('锁定等待', (f) => f.lockWait, pct, false, '换目标后等待锁定的时间占比') : ''}
     ${isk ? line('出场价值', (f, s) => isk[s].field, ctx.formatISK, true) + line('损失 ISK', (f, s) => isk[s].lost, ctx.formatISK, false) : ''}
   </tbody></table>`;
@@ -662,6 +536,7 @@ function tipsOf(R, F = { A: sideFacts(R, 'A'), B: sideFacts(R, 'B') }) {
     if (f.taken && f.reps / f.taken > 0.15) tip(1 + f.reps / f.taken * 2, `遥修抵消了 ${pct(f.reps / f.taken)} 的承伤`);
     if (f.capped > 0.1) tip(1 + f.capped * 4, `有 ${pct(f.capped)} 的时间电容见底（${g.drained ? '被中和' : '装备耗电太大'}）`);
     if (f.jammed > 0.05) tip(1 + f.jammed * 4, `有 ${pct(f.jammed)} 的时间被 ECM 干扰，无法锁定和输出`);
+    if (f.outRange > 0.15) tip(1.5 + f.outRange * 3, `有 ${pct(f.outRange)} 的时间目标在射程外（还在接近或被风筝）`);
     if (f.noRange > 0.05) tip(2 + f.noRange * 4, `锁定距离只有 ${num(f.lockRange / 1000)} km，有 ${pct(f.noRange)} 的时间够不到目标`);
   }
   return tips.sort((a, b) => b[0] - a[0]);
@@ -715,72 +590,586 @@ function matchupHtml(R) {
     <div class="sim-mu-cols">${block('A')}${block('B')}</div></section>`;
 }
 
-// ---------- 战场回放 ----------
-// 拖动时间轴或播放：每艘船一个小格（护盾 / 装甲 / 结构三条血条），阵亡变灰，正在被集火的描边
-const RP = { t: 0, pos: 0, playing: false, speed: 5, timer: 0 };
+// 引擎选项：单艘价值按全服均价（没读到价格时引擎改用 EHP 算战损）
+// 走位官：每方标了火力 / 后勤走位官的行（引擎取这一行第一艘还在场的船）
+const anchors = () => Object.fromEntries(SIDES.map((s) => [s, { dps: S.sides[s].find((r) => r.lead === 'dps')?.id, logi: S.sides[s].find((r) => r.lead === 'logi')?.id }]));
+const simOpt = (extra = {}) => ({ ...S.opt, anchors: anchors(), value: S.prices ? (row) => fitValue(row.fit) : null, ...extra });
+
+// ---------- 战场（3D 实时）----------
+// 设置一改就重新布阵（不开打）；「开战」后按所选速度实时推进，3D 视图读引擎的逐帧记录；打完显示结果，之后可拖动时间轴回放。
+// 战斗中：增援（本方舰船或搜索其他船型，落在本方出发点）、点一艘船让对面点名集火（整方一起打，打死后恢复自动选目标）。
+const BT = { b: null, view: null, host: null, t: 0, playing: false, speed: 2, sel: -1, raf: 0, last: 0, hud: 0, reinf: null, edit: null, finishing: false, want3d: false, names: true };
+const SPEEDS = [1, 2, 5, 10];
 let plotX = null;   // 走势图的时间 → 横坐标（回放位置线用）
-function replayHtml(R) {
-  if (!R.rec) return '';
-  const tiles = (s) => R.rec.units.map((u, i) => (u.side === s ? `<span class="sim-tile" data-i="${i}" title="${ctx.esc(ctx.data.types.get(u.ship)?.name || '')}"><img src="${IMG(u.ship)}" alt="" width="26" height="26" loading="lazy"><i class="sh"></i><i class="ar"></i><i class="hu"></i></span>` : '')).join('');
-  const many = R.rec.units.length > 240;
-  return `<section class="sim-replay${many ? ' is-many' : ''}">
-    <div class="sim-sec-head"><h4>战场回放</h4>
-      <div class="sim-rp-ctl">
-        <button type="button" class="btn btn-ghost btn-sm" data-sim-play>${RP.playing ? '暂停' : '播放'}</button>
-        <div class="segmented" role="group" aria-label="播放速度">${[1, 5, 20].map((v) => `<button type="button" data-sim-speed="${v}" class="${RP.speed === v ? 'active' : ''}">${v}×</button>`).join('')}</div>
-      </div></div>
-    <div class="sim-rp-bar"><input type="range" min="0" max="${R.t}" step="1" value="${Math.min(RP.t, R.t)}" data-sim-rp aria-label="回放时间"><span class="sim-rp-time" id="simRpTime"></span></div>
-    <div class="sim-rp-sides">
-      <div class="sim-rp-side side-a"><h5><span class="sim-badge">A 方</span><span id="simRpA"></span></h5><div class="sim-tiles">${tiles('A')}</div></div>
-      <div class="sim-rp-side side-b"><h5><span class="sim-badge sim-side-b">B 方</span><span id="simRpB"></span></h5><div class="sim-tiles">${tiles('B')}</div></div>
-    </div>
-    <div class="sim-rp-log" id="simRpLog"></div>
-    <p class="sim-hint">血条：护盾 / 装甲 / 结构；描边 = 被集火</p>
-  </section>`;
+const shipName = (id) => ctx.data.types.get(id)?.name || '';
+const clock = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+
+export const debugBattle = () => BT.b;   // 调试用（控制台查看战局、3D 视图）
+export const debugView = () => BT.view;
+function newBattle() {
+  // 预设了进场时间的支援舰队交给引擎按时进场
+  const support = SIDES.flatMap((s) => S.support[s].filter((f) => f.at != null).map((f) => ({ side: s, ...fleetSpec(f), at: f.at })));
+  resetPanel($('simBtPanel'));
+  BT.b = createBattle(S.sides, simOpt({ record: true, support }));
+  Object.assign(BT, { t: 0, playing: false, sel: -1, finishing: false });
+  S.result = null;
+  renderBattle();
 }
-function updateReplay(t) {
-  const R = S.result;
-  const box = root?.querySelector('.sim-replay');
-  if (!R?.rec || !box) return;
-  RP.pos = Math.max(0, Math.min(R.t, t));
-  RP.t = Math.floor(RP.pos);
-  const f = R.rec.frames[Math.min(RP.t, R.rec.frames.length - 1)];
-  const shot = new Set();
-  for (const x of f.tg) if (x >= 0) shot.add(x);
-  const alive = { A: 0, B: 0 };
-  box.querySelectorAll('.sim-tile').forEach((el) => {
-    const i = Number(el.dataset.i), dead = !f.hp[i * 3 + 2];
-    if (!dead) alive[R.rec.units[i].side] += 1;
-    el.classList.toggle('dead', dead);
-    el.classList.toggle('shot', !dead && shot.has(i));
-    el.style.setProperty('--sh', f.hp[i * 3] / 2 + '%');
-    el.style.setProperty('--ar', f.hp[i * 3 + 1] / 2 + '%');
-    el.style.setProperty('--hu', f.hp[i * 3 + 2] / 2 + '%');
+function renderBattle() {
+  const box = root?.querySelector('#simBattle');
+  if (!box) return;
+  if (!BT.b) { disposeView(); box.innerHTML = ''; return; }
+  if (!box.querySelector('.sim-battle')) {
+    disposeView();
+    box.innerHTML = `<section class="sim-battle" id="simBtSec">
+      <div class="sim-sec-head"><h4>战场</h4><span class="sim-bt-status" id="simBtStatus"></span></div>
+      <div class="sim-3d${BT.want3d ? '' : ' is-off'}" id="sim3d">
+        <div class="sim-3d-hud"><span class="a"><span class="sim-badge">A 方</span><b id="simBtA"></b></span><b class="sim-3d-clock" id="simBtClock"></b><span class="b"><b id="simBtB"></b><span class="sim-badge sim-side-b">B 方</span></span></div>
+        <div class="sim-3d-off"><button type="button" class="btn btn-primary btn-sm" data-bt-3d>加载 3D 画面</button><small>要下载舰船模型，不加载也能开战、看结果</small></div>
+        <div class="sim-3d-tools"><button type="button" data-bt-cam title="重置视角" aria-label="重置视角">${ICON.cam}</button><button type="button" data-bt-full title="全屏" aria-label="全屏">${ICON.full}</button><button type="button" data-bt-names class="${BT.names ? 'on' : ''}" title="显示舰船名" aria-label="显示舰船名" aria-pressed="${BT.names}">${ICON.names}</button></div>
+        <div class="sim-3d-load" id="simBtLoad" hidden><span>加载 3D 画面</span><i><b></b></i><small></small></div>
+        <div class="sim-3d-tip" id="simBtTip" hidden></div>
+        <div class="sim-3d-sel" id="simBtSel" hidden></div>
+        <div class="sim-3d-panel" id="simBtPanel"></div>
+        <p class="sim-3d-fail" hidden>这个浏览器不支持 3D（WebGL），只能直接看结果</p>
+      </div>
+      <div class="sim-bt-ctl">
+        <button type="button" class="btn btn-primary btn-sm" data-bt-play></button>
+        <div class="segmented" role="group" aria-label="速度">${SPEEDS.map((v) => `<button type="button" data-bt-speed="${v}" class="${BT.speed === v ? 'active' : ''}">${v}×</button>`).join('')}</div>
+        <input type="range" min="0" max="0" step="0.5" value="0" data-bt-seek aria-label="战斗时间">
+        <button type="button" class="btn btn-ghost btn-sm" data-bt-finish title="不看过程，直接算到结束">直接出结果</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-bt-restart title="回到开局（手动进场的支援与点名清空）">重新开始</button>
+      </div>
+      <div class="sim-bt-reinf"><button type="button" class="btn btn-ghost btn-sm" data-bt-reinf="A">A 方舰队支援</button><button type="button" class="btn btn-ghost btn-sm" data-bt-reinf="B">B 方舰队支援</button></div>
+      <div class="sim-bt-pop" id="simBtPop" hidden></div>
+      <div class="sim-bt-log" id="simBtLog"></div>
+      <p class="sim-hint">拖动旋转 · 滚轮或双指缩放 · 右键或双指拖动平移 · 点舰船查看并点名集火 · 双击舰船镜头跟随 · 全屏时下方显示双方舰船状态</p>
+    </section>`;
+    BT.host = box.querySelector('#sim3d');
+    if (BT.want3d) mountView(BT.host);
+  } else if (BT.view) BT.view.setRecord(BT.b.rec);
+  renderPop();
+  updateBattleUi();
+  startLoop();
+}
+function mountView(host) {
+  BT.host = host;
+  host.classList.remove('is-off');
+  loadBar(0, 0);
+  import('./sim-3d.js?v=v8').then((m) => {
+    if (BT.host !== host || !host.isConnected) return;
+    BT.view = m.createView(host, {
+      onPick: (i) => { BT.sel = i; updateBattleUi(); },
+      onFollow: (i) => { BT.sel = i; updateBattleUi(); },
+      onHover: (i, x, y) => {
+        const tip = $('simBtTip');
+        if (!tip) return;
+        if (i < 0 || !BT.b) { tip.hidden = true; return; }
+        const u = BT.b.rec.units[i];
+        tip.textContent = `${u.side} 方 · ${shipName(u.ship)}`;
+        tip.style.left = x + 12 + 'px';
+        tip.style.top = y + 12 + 'px';
+        tip.hidden = false;
+      },
+      onProgress: loadBar,
+      nameOf: (i) => shipName(BT.b?.rec.units[i]?.ship)
+    });
+    if (!BT.view) { host.querySelector('.sim-3d-fail').hidden = false; loadBar(1, 1); return; }
+    BT.view.setRecord(BT.b.rec);
+    BT.view.setLabels(BT.names);
+  }).catch(() => { host.querySelector('.sim-3d-fail').hidden = false; loadBar(1, 1); });
+}
+// 模型加载进度：total 为 0 时是 3D 引擎本身还在加载
+function loadBar(done, total) {
+  const el = $('simBtLoad');
+  if (!el) return;
+  el.hidden = total > 0 && done >= total;
+  el.querySelector('b').style.width = (total ? done / total * 100 : 8) + '%';
+  el.querySelector('span').textContent = total ? '加载舰船模型' : '加载 3D 画面';
+  el.querySelector('small').textContent = total ? `${done} / ${total}` : '';
+}
+function disposeView() {
+  BT.view?.dispose();
+  BT.view = null;
+  BT.host = null;
+}
+function startLoop() {
+  if (BT.raf) return;
+  BT.last = performance.now();
+  BT.raf = requestAnimationFrame(tick);
+}
+function tick(now) {
+  BT.raf = 0;
+  const b = BT.b;
+  if (!b || !BT.host?.isConnected) return;
+  const dt = Math.min(0.1, (now - BT.last) / 1000);
+  BT.last = now;
+  if (root.offsetParent && !document.hidden) {
+    if (BT.playing) {
+      const goal = BT.t + dt * BT.speed;
+      for (let n = 0; b.t < goal && !b.done && n < 80; n++) b.step();
+      BT.t = Math.min(goal, b.t);
+      if (b.done && BT.t >= b.t) BT.playing = false;
+      if (b.done && !S.result) finish();
+    }
+    if (BT.view) { BT.view.draw(BT.t, { sel: BT.sel, kills: b.kills }); BT.view.render(); }
+    if (now - BT.hud > 150) { BT.hud = now; updateBattleUi(); }
+  }
+  BT.raf = requestAnimationFrame(tick);
+}
+function finish() {
+  S.result = BT.b.result();
+  S.result.skipped = SIDES.flatMap((s) => S.sides[s]).filter((r) => !r.unit && (r.status === 'loading' || r.status === 'idle')).reduce((t, r) => t + r.count, 0);
+  renderResult();
+}
+// 不看过程直接打完（分段计算，不卡页面）
+async function finishNow() {
+  const b = BT.b;
+  if (!b || BT.finishing) return;
+  BT.finishing = true;
+  BT.playing = false;
+  updateBattleUi();
+  while (!b.done) {
+    const t0 = performance.now();
+    while (!b.done && performance.now() - t0 < 30) b.step();
+    await idle();
+    if (BT.b !== b) return;
+  }
+  BT.finishing = false;
+  BT.t = b.t;
+  if (!S.result) finish();
+  updateBattleUi();
+}
+function seek(t) {
+  if (!BT.b) return;
+  BT.playing = false;
+  BT.t = Math.max(0, Math.min(BT.b.t, t));
+  updateBattleUi();
+}
+function togglePlay() {
+  const b = BT.b;
+  if (!b || BT.finishing) return;
+  if (BT.playing) BT.playing = false;
+  else {
+    if (b.done && BT.t >= b.t) BT.t = 0;   // 打完了：从头回放
+    BT.playing = true;
+    BT.last = performance.now();
+  }
+  updateBattleUi();
+}
+// 当前帧（BT.t）每方存活 / 总数
+function aliveAt(t) {
+  const rec = BT.b.rec, f = rec.frames[Math.max(0, Math.min(rec.frames.length - 1, Math.floor(t / rec.dt)))];
+  const n = { A: 0, B: 0 }, all = { A: 0, B: 0 };
+  for (let i = 0; i < f.hp.length / 3; i++) { const s = rec.units[i].side; all[s]++; if (f.hp[i * 3 + 2]) n[s]++; }
+  return { n, all, f };
+}
+// 一艘船的装备（像游戏里一样的圆形图标）：运转中外圈按周期转一圈，装填中黄圈，被动装备不显示，不计开启的划掉
+const FE_ACTIVE = new Set(['active', 'overload']);
+function modsHtml(u) {
+  return u.rack.map((m, k) => (FE_ACTIVE.has(m.state) || m.off ? `<i class="sim-pn-mod${m.off ? ' off' : ''}" data-k="${k}" title="${ctx.esc(shipName(m.type))}${m.off ? ' · ' + ctx.esc(m.off) : ''}"><img src="${IMG(m.type)}" alt="" width="32" height="32" loading="lazy"></i>` : '')).join('');
+}
+// 外圈进度：运转中 = 这个周期走了多少（往回找最近一次开始新周期的帧），装填中 = 装填走了多少；big 时在图标上写装填剩余秒数
+function modProgress(i, k, cycle, reload, reloading) {
+  const F = BT.b.rec.frames, dt = BT.b.rec.dt, bit = 1 << k;
+  const fi = Math.max(0, Math.min(F.length - 1, Math.floor(BT.t / dt)));
+  if (reloading) {
+    let j = fi;
+    while (j > 0 && F[j - 1].rld?.[i] & bit) j--;
+    const start = F[j].t - dt, total = reload || 10;
+    return { p: Math.min(1, (BT.t - start) / total), left: Math.max(0, total - (BT.t - start)) };
+  }
+  if (!cycle) return { p: 1 };
+  for (let j = fi, n = Math.ceil(cycle / dt) + 1; j >= 0 && n > 0; j--, n--) {
+    if (F[j].fire?.[i] & bit) return { p: Math.max(0, Math.min(1, (BT.t - (F[j].t - dt)) / cycle)) };
+  }
+  return { p: 1 };
+}
+function paintMods(box, f, i, big = false) {
+  const act = f.act?.[i] || 0, rld = f.rld?.[i] || 0;
+  const rack = BT.b.rec.units[i].rack;
+  box.querySelectorAll('.sim-pn-mod').forEach((x) => {
+    const k = Number(x.dataset.k);
+    const on = k < 32 && Boolean(act & (1 << k)), re = k < 32 && Boolean(rld & (1 << k));
+    x.classList.toggle('on', on && !re);
+    x.classList.toggle('rld', re);
+    if (on || re) {
+      const m = rack[k], g = modProgress(i, k, m.cycle, m.reload, re);
+      x.style.setProperty('--p', (g.p * 100).toFixed(1) + '%');
+      if (big) x.dataset.s = re ? Math.ceil(g.left) : '';
+    } else if (big) x.dataset.s = '';
   });
-  const range = box.querySelector('[data-sim-rp]');
-  if (range && Number(range.value) !== RP.t) range.value = RP.t;
-  $('simRpTime').textContent = `${fmtSec(RP.t)} / ${fmtSec(R.t)}`;
-  $('simRpA').textContent = `存活 ${alive.A} / ${R.start.A}`;
-  $('simRpB').textContent = `存活 ${alive.B} / ${R.start.B}`;
-  const recent = R.kills.filter((k) => k.t <= RP.t && k.t > RP.t - 10).slice(-8).reverse();
-  $('simRpLog').innerHTML = recent.length ? `<small>最近 10 秒阵亡</small>${recent.map((k) => `<span class="sim-kill sim-kill-${k.side.toLowerCase()}"><small>${fmtSec(k.t)}</small><img src="${IMG(k.ship)}" alt="" width="20" height="20" loading="lazy">${ctx.esc(ctx.data.types.get(k.ship)?.name || '')}</span>`).join('')}` : '';
+}
+// 目标与锁定：锁定中显示进度
+function targetText(f, i) {
+  const tg = f.tg[i] >= 0 ? BT.b.rec.units[f.tg[i]] : null;
+  if (!tg) return { text: '没有目标', lock: -1 };
+  const lk = f.lk?.[i] || 255;
+  return { text: lk < 255 ? `锁定中 ${Math.round(lk / 2)}% · ${shipName(tg.ship)}` : `目标：${shipName(tg.ship)}`, lock: lk < 255 ? lk / 200 : -1 };
+}
+function paintTarget(el, f, i) {
+  const x = el.querySelector('.sim-pn-tg');
+  if (!x) return;
+  const g = targetText(f, i);
+  x.firstChild.textContent = g.text;
+  x.classList.toggle('locking', g.lock >= 0);
+  x.querySelector('b').style.width = g.lock >= 0 ? (g.lock * 100).toFixed(0) + '%' : '0';
+}
+const tgHtml = () => '<div class="sim-pn-tg"><span></span><i><b></b></i></div>';
+// 血条：依次为护盾、装甲、结构、电容，每条前面标明
+const HP_BARS = [['sh', '盾'], ['ar', '甲'], ['hu', '构'], ['cp', '容']];
+const hpBarsHtml = () => `<div class="sim-hp">${HP_BARS.map(([c, l]) => `<span>${l}</span><i class="${c}"><b></b></i>`).join('')}</div>`;
+function paintBars(el, f, i) {
+  const bars = el.querySelectorAll('.sim-hp b');
+  if (!bars.length) return;
+  for (let k = 0; k < 3; k++) bars[k].style.width = (f.hp[i * 3 + k] / 2).toFixed(0) + '%';
+  bars[3].style.width = ((f.cp?.[i] || 0) / 2).toFixed(0) + '%';
+}
+const speedText = (f, i) => `${ctx.formatNumber(f.spd?.[i] || 0)} m/s`;
+// 到当前时刻的战损：每方损失艘数、ISK（没读到价格时按 EHP），交换效率 = 对方损失 / 双方损失
+function liveLoss() {
+  const isk = Boolean(S.prices);
+  const out = { A: { n: 0, v: 0 }, B: { n: 0, v: 0 }, isk };
+  for (const k of BT.b.kills) {
+    if (k.at > BT.t) continue;
+    out[k.side].n += 1;
+    out[k.side].v += isk ? fitValue(k.row.row.fit) : k.row.row.unit?.ehp || 0;
+  }
+  const total = out.A.v + out.B.v;
+  out.A.eff = total ? out.B.v / total : null;
+  out.B.eff = total ? out.A.v / total : null;
+  return out;
+}
+// 全屏时的舰船状态面板：中间是实时战损比，两边是双方在场的船（小卡片，滑动查看）。
+// 卡片按船增删（不整块重画），只刷新滑到可见区域里的卡片，船多也不卡。
+// 每张卡片缓存要改的节点和上次写入的值，值没变不碰 DOM
+const PN = { cards: new Map(), seen: new Set(), io: null, built: false, at: 0 };
+function cardEl(i) {
+  const u = BT.b.rec.units[i];
+  const el = document.createElement('div');
+  el.className = 'sim-pn-ship';
+  el.dataset.btUnit = i;
+  el.innerHTML = `<div class="sim-pn-top"><img src="${IMG(u.ship)}" alt="" width="16" height="16" loading="lazy"><b>${ctx.esc(shipName(u.ship))}</b><span class="sim-pn-v"></span></div>${tgHtml()}${hpBarsHtml()}<div class="sim-pn-mods">${modsHtml(u)}</div>`;
+  const tg = el.querySelector('.sim-pn-tg');
+  return { el, v: el.querySelector('.sim-pn-v'), bars: [...el.querySelectorAll('.sim-hp b')], tg, tgText: tg.firstChild, tgBar: tg.querySelector('b'),
+    mods: [...el.querySelectorAll('.sim-pn-mod')].map((x) => ({ x, k: Number(x.dataset.k), cls: '', p: '' })), last: {}, sel: false };
+}
+const setText = (c, key, node, v) => { if (c.last[key] !== v) { c.last[key] = v; node.textContent = v; } };
+const setWidth = (c, key, node, v) => { if (c.last[key] !== v) { c.last[key] = v; node.style.width = v; } };
+function paintCard(c, f, i) {
+  setText(c, 'v', c.v, speedText(f, i));
+  for (let k = 0; k < 3; k++) setWidth(c, 'h' + k, c.bars[k], (f.hp[i * 3 + k] / 2).toFixed(0) + '%');
+  setWidth(c, 'cp', c.bars[3], ((f.cp?.[i] || 0) / 2).toFixed(0) + '%');
+  const g = targetText(f, i);
+  setText(c, 'tg', c.tgText, g.text);
+  const locking = g.lock >= 0;
+  if (c.last.locking !== locking) { c.last.locking = locking; c.tg.classList.toggle('locking', locking); }
+  setWidth(c, 'lk', c.tgBar, locking ? (g.lock * 100).toFixed(0) + '%' : '0');
+  const act = f.act?.[i] || 0, rld = f.rld?.[i] || 0, rack = BT.b.rec.units[i].rack;
+  for (const m of c.mods) {
+    const re = m.k < 32 && Boolean(rld & (1 << m.k)), on = !re && m.k < 32 && Boolean(act & (1 << m.k));
+    const cls = re ? 'rld' : on ? 'on' : '';
+    if (m.cls !== cls) { if (m.cls) m.x.classList.remove(m.cls); if (cls) m.x.classList.add(cls); m.cls = cls; }
+    if (cls) {
+      const p = (modProgress(i, m.k, rack[m.k].cycle, rack[m.k].reload, re).p * 100).toFixed(0) + '%';
+      if (m.p !== p) { m.p = p; m.x.style.setProperty('--p', p); }
+    }
+  }
+}
+function resetPanel(box) {
+  PN.io?.disconnect();
+  PN.cards.clear();
+  PN.seen.clear();
+  PN.built = false;
+  if (box) box.innerHTML = '';
+}
+function buildPanel(box) {
+  resetPanel(box);
+  box.innerHTML = `<div class="sim-pn-score">
+      <div class="sim-pn-lost a"><span class="sim-badge">A 方</span><span>损失</span><b class="n"></b><small class="v"></small></div>
+      <div class="sim-pn-ratio"><div class="sim-pn-pct"><b class="pa"></b><span>战损比</span><b class="pb"></b></div><div class="sim-pn-bar"><i class="a"></i><i class="b"></i></div></div>
+      <div class="sim-pn-lost b"><small class="v"></small><b class="n"></b><span>损失</span><span class="sim-badge sim-side-b">B 方</span></div>
+    </div>${SIDES.map((s) => `<div class="sim-pn-side sim-pn-${s.toLowerCase()}"><header><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span><small class="sim-pn-n"></small></header><div class="sim-pn-list" data-side="${s}"></div></div>`).join('')}`;
+  PN.io = new IntersectionObserver((list) => { for (const e of list) { const i = Number(e.target.dataset.btUnit); if (e.isIntersecting) PN.seen.add(i); else PN.seen.delete(i); } });
+  PN.built = true;
+}
+function updatePanel(f) {
+  const box = $('simBtPanel');
+  const sec = $('simBtSec');
+  if (!box || !sec) return;
+  if (document.fullscreenElement !== sec) { if (PN.built) resetPanel(box); return; }
+  if (!PN.built || !box.firstChild) buildPanel(box);
+  // 播放时面板每 0.3 秒刷新一次（比血条等 HUD 慢一点）
+  const now = performance.now();
+  if (BT.playing && now - PN.at < 300) return;
+  PN.at = now;
+  const rec = BT.b.rec;
+  const list = { A: [], B: [] };
+  for (let i = 0; i < f.hp.length / 3; i++) if (f.hp[i * 3 + 2] && !(rec.units[i].escaped != null && BT.t >= rec.units[i].escaped)) list[rec.units[i].side].push(i);
+  // 增删卡片：阵亡 / 撤离的移除，新进场的按顺序插入
+  const want = new Set([...list.A, ...list.B]);
+  for (const [i, c] of PN.cards) if (!want.has(i)) { PN.io.unobserve(c.el); c.el.remove(); PN.cards.delete(i); PN.seen.delete(i); }
+  for (const s of SIDES) {
+    const host = box.querySelector(`.sim-pn-list[data-side="${s}"]`);
+    let prev = null;
+    for (const i of list[s]) {
+      let c = PN.cards.get(i);
+      if (!c) {
+        c = cardEl(i);
+        PN.cards.set(i, c);
+        host.insertBefore(c.el, prev ? prev.nextSibling : host.firstChild);
+        PN.io.observe(c.el);
+      }
+      prev = c.el;
+    }
+    box.querySelector(`.sim-pn-${s.toLowerCase()} .sim-pn-n`).textContent = `${list[s].length} 艘`;
+  }
+  // 战损比
+  const loss = liveLoss();
+  for (const s of SIDES) {
+    const el = box.querySelector(`.sim-pn-lost.${s.toLowerCase()}`);
+    el.querySelector('.n').textContent = `${loss[s].n} 艘`;
+    el.querySelector('.v').textContent = loss.isk ? `${ctx.formatISK(loss[s].v)} ISK` : `${ctx.formatISK(loss[s].v)} EHP`;
+  }
+  const ea = loss.A.eff;
+  box.querySelector('.sim-pn-pct .pa').textContent = ea == null ? '—' : `${Math.round(ea * 100)}%`;
+  box.querySelector('.sim-pn-pct .pb').textContent = ea == null ? '—' : `${100 - Math.round(ea * 100)}%`;
+  box.querySelector('.sim-pn-bar .a').style.flexGrow = ea == null ? 1 : ea;
+  box.querySelector('.sim-pn-bar .b').style.flexGrow = ea == null ? 1 : 1 - ea;
+  box.querySelector('.sim-pn-bar').classList.toggle('none', ea == null);
+  // 只刷新看得见的卡片
+  for (const [i, c] of PN.cards) {
+    const sel = BT.sel === i;
+    if (c.sel !== sel) { c.sel = sel; c.el.classList.toggle('sel', sel); }
+    if (PN.seen.has(i)) paintCard(c, f, i);
+  }
+}
+function updateBattleUi() {
+  const b = BT.b;
+  const box = root?.querySelector('.sim-battle');
+  if (!b || !box) return;
+  const { n, all, f } = aliveAt(BT.t);
+  $('simBtA').textContent = `${n.A} / ${all.A}`;
+  $('simBtB').textContent = `${n.B} / ${all.B}`;
+  $('simBtClock').textContent = clock(BT.t);
+  const live = !b.done && BT.t >= b.t - 0.6;   // 引擎每步 0.5 秒，播放位置落后不到一步算实时
+  $('simBtStatus').textContent = BT.finishing ? '计算中…' : b.done ? (BT.t < b.t ? '回放中' : '战斗结束') : !b.t ? '已布阵，点「开战」' : BT.playing ? (live ? '交战中' : '回放中') : '已暂停';
+  $('simBtStatus').className = 'sim-bt-status' + (BT.playing && live ? ' live' : '');
+  const play = box.querySelector('[data-bt-play]');
+  play.textContent = BT.playing ? '暂停' : !b.t ? '开战' : b.done && BT.t >= b.t ? '重播' : '继续';
+  play.disabled = BT.finishing;
+  box.querySelector('[data-bt-finish]').hidden = b.done;
+  box.querySelectorAll('[data-bt-fl-go]').forEach((x) => { x.disabled = b.done || BT.finishing || !x.dataset.ok; });
+  const seekEl = box.querySelector('[data-bt-seek]');
+  seekEl.max = b.t;
+  if (document.activeElement !== seekEl) seekEl.value = BT.t;
+  // 选中的船
+  const sel = $('simBtSel');
+  const i = BT.sel;
+  if (BT.view && i >= 0 && i * 3 < f.hp.length) {
+    const u = b.rec.units[i];
+    const atk = u.side === 'A' ? 'B' : 'A';
+    const alive = f.hp[i * 3 + 2] > 0;
+    const isPrimary = b.primary[atk]?.i === i;
+    const canCall = alive && (live || (!b.done && !BT.playing));
+    // 内容没变时只更新血条（整块重画会让正在点的按钮失效）
+    const fol = BT.view?.following?.() === i;
+    const gone = b.rec.units[i].escaped != null && BT.t >= b.rec.units[i].escaped;
+    const key = [i, alive, isPrimary, canCall, fol, gone].join('|');
+    if (sel.dataset.key !== key) {
+      sel.dataset.key = key;
+      sel.innerHTML = `<div class="sim-3d-sel-head"><span class="sim-badge${u.side === 'B' ? ' sim-side-b' : ''}">${u.side} 方</span><img src="${IMG(u.ship)}" alt="" width="22" height="22"><b>${ctx.esc(shipName(u.ship))}</b><button type="button" class="sim-3d-x" data-bt-unsel aria-label="关闭">${ICON.x}</button></div>
+        ${alive ? `${hpBarsHtml()}
+        <small class="sim-3d-tg"><span class="sim-pn-v"></span></small>${tgHtml()}
+        ${u.rack.length ? `<div class="sim-pn-mods">${modsHtml(u)}</div>` : ''}
+        ${canCall ? `<button type="button" class="btn btn-sm ${isPrimary ? 'btn-ghost' : 'btn-primary'}" data-bt-primary="${atk}:${isPrimary ? -1 : i}">${isPrimary ? `取消 ${atk} 方点名` : `${atk} 方集火这艘`}</button>` : ''}` : `<small>${gone ? '已跃迁撤离' : '已被击毁'}</small>`}
+        ${gone ? '' : `<button type="button" class="btn btn-sm btn-ghost" data-bt-follow="${fol ? -1 : i}">${fol ? '取消跟随' : '镜头跟随'}</button>`}`;
+    }
+    const v = sel.querySelector('.sim-pn-v');
+    if (v) v.textContent = speedText(f, i);
+    paintTarget(sel, f, i);
+    paintBars(sel, f, i);
+    paintMods(sel, f, i, true);
+    sel.hidden = false;
+  } else sel.hidden = true;
+  updatePanel(f);
+  // 事件
+  const badge = (s) => `<span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span>`;
+  const ev = [
+    ...b.kills.filter((k) => k.at <= BT.t).slice(-6).map((k) => [k.at, `<span class="sim-kill sim-kill-${k.side.toLowerCase()}"><small>${clock(k.at)}</small><img src="${IMG(k.ship)}" alt="" width="18" height="18" loading="lazy">${ctx.esc(shipName(k.ship))}<span>阵亡</span></span>`]),
+    ...b.events.filter((e) => e.t <= BT.t).slice(-5).map((e) => [e.t, e.kind === 'reinforce'
+      ? `<span class="sim-bt-ev"><small>${clock(e.t)}</small>${badge(e.side)}<span>${e.cynoShip ? '诱导船跃迁进场' : e.mode === 'cyno' ? '诱导进场' : '跃迁进场'}</span>${e.name ? `<b>${ctx.esc(e.name)}</b>` : ''}<span>${e.n} 艘</span></span>`
+      : e.kind === 'cyno' ? `<span class="sim-bt-ev"><small>${clock(e.t)}</small>${badge(e.side)}${ctx.esc(shipName(e.ship))}<span>开启诱导</span></span>`
+      : e.kind === 'cyno-fail' ? `<span class="sim-bt-ev"><small>${clock(e.t)}</small>${badge(e.side)}${e.name ? `<b>${ctx.esc(e.name)}</b>` : ''}<span>诱导船被击毁，舰队进不来</span></span>`
+      : e.kind === 'escape' ? `<span class="sim-bt-ev"><small>${clock(e.t)}</small>${badge(e.side)}${ctx.esc(shipName(e.ship))}<span>跃迁撤离</span></span>`
+      : `<span class="sim-bt-ev"><small>${clock(e.t)}</small>${badge(e.side)}${e.unit >= 0 ? `<span>点名</span>${ctx.esc(shipName(b.rec.units[e.unit].ship))}` : '<span>取消点名</span>'}</span>`])
+  ].sort((x, y) => y[0] - x[0]).slice(0, 6);
+  const log = $('simBtLog');
+  const html = ev.map((x) => x[1]).join('');
+  if (log.innerHTML !== html) log.innerHTML = html;
   // 走势图上的回放位置
   const ln = root.querySelector('#simPlot .sim-rp-ln');
-  if (ln && plotX) { const x = plotX(RP.t); ln.setAttribute('x1', x); ln.setAttribute('x2', x); }
+  if (ln && plotX) { const x = plotX(BT.t); ln.setAttribute('x1', x); ln.setAttribute('x2', x); }
 }
-function playReplay(on = !RP.playing) {
-  const R = S.result;
-  RP.playing = on && Boolean(R?.rec);
-  clearInterval(RP.timer);
-  const btn = root?.querySelector('[data-sim-play]');
-  if (btn) btn.textContent = RP.playing ? '暂停' : '播放';
-  if (!RP.playing) return;
-  if (RP.t >= R.t) RP.pos = 0;
-  RP.timer = setInterval(() => {
-    if (!root?.offsetParent || S.result !== R) { playReplay(false); return; }
-    updateReplay(RP.pos + RP.speed / 5);
-    if (RP.t >= R.t) playReplay(false);
-  }, 200);
+
+// ---------- 舰队支援 ----------
+// 每方可以预设几支支援舰队：舰船（复制本方舰船的装配，或搜索船型读最近常见装配）、进场方式、位置（参照 + 方向 + 距离）、
+// 时机（手动，或开战后第 N 秒自动进场）。跃迁进场从远处减速落地（落地前不能被锁定），诱导进场在诱导点直接出现。
+const ENTRY = [['warp', '跃迁进场'], ['cyno', '诱导进场']];
+const ENTRY_TIP = { warp: '从远处减速落地，落地前不能被锁定', cyno: '在诱导点直接出现，散布约 5 km' };
+const REFS = [['own', '本方舰队'], ['enemy', '敌方舰队'], ['center', '战场中心']];
+const DIRS = [['back', '后方'], ['front', '前方'], ['left', '左侧'], ['right', '右侧'], ['up', '上方'], ['down', '下方']];
+const nameOf = (list, v) => (list.find(([k]) => k === v) || list[0])[1];
+let fleetSeq = 0;
+const newFleet = (side) => ({ id: ++fleetSeq, name: `支援舰队 ${S.support[side].length + 1}`, rows: [], mode: 'warp', ref: 'own', dist: 10, dir: 'back', at: null });
+const fleetSpec = (f) => ({ name: f.name, rows: f.rows.filter((r) => r.unit).map((r) => ({ row: r, count: r.count, cyno: f.mode === 'cyno' && Boolean(r.cyno) })), mode: f.mode, ref: f.ref, dist: f.dist, dir: f.dir });
+const cynoRows = (f) => (f.mode === 'cyno' ? f.rows.filter((r) => r.cyno) : []);
+// 诱导船：先跃迁到位开诱导，舰队随后跳来；诱导船先被打掉，其余舰船进不来
+const CYNO_TIP = '诱导船先跃迁到位开启诱导（原地不动），10 秒后其余舰船跳到它身边；诱导船在这之前被击毁，其余舰船进不来';
+const fleetOf = (side, id) => S.support[side].find((f) => f.id === id);
+function fleetCard(side, f) {
+  const ok = f.rows.some((r) => r.unit);
+  const n = f.rows.reduce((t, r) => t + r.count, 0);
+  return `<div class="sim-fl">
+    <div class="sim-fl-head"><b>${ctx.esc(f.name)}</b><small>${n} 艘</small></div>
+    <div class="sim-fl-meta"><span>${nameOf(ENTRY, f.mode)}</span><span>${nameOf(REFS, f.ref)}</span>${f.dist ? `<span>${nameOf(DIRS, f.dir)}</span><span>${f.dist} km</span>` : ''}<span>${f.at == null ? '手动进场' : `开战第 ${f.at} 秒自动进场`}</span>${cynoRows(f).length ? `<span>诱导船：${cynoRows(f).map((r) => ctx.esc(shipName(r.ship))).join('、')}</span>` : ''}</div>
+    <div class="sim-fl-ships">${f.rows.map((r) => `<span${f.mode === 'cyno' && r.cyno ? ' class="is-cyno"' : ''}><img src="${IMG(r.ship)}" alt="" width="20" height="20" loading="lazy">${ctx.esc(shipName(r.ship))} ×${r.count}</span>`).join('') || '<small>还没有舰船</small>'}</div>
+    <div class="sim-fl-acts"><button type="button" class="btn btn-primary btn-sm" data-bt-fl-go="${side}:${f.id}"${ok ? ' data-ok="1"' : ''}>进场</button><button type="button" class="btn btn-ghost btn-sm" data-fl-edit="${f.id}">编辑</button><button type="button" class="link-btn danger" data-fl-del="${side}:${f.id}">删除</button></div>
+  </div>`;
+}
+function fleetEditor(side, f) {
+  const opts = (list, v) => list.map(([k, l]) => `<option value="${k}"${v === k ? ' selected' : ''}>${l}</option>`).join('');
+  const mine = S.sides[side].filter((r) => r.unit);
+  return `<div class="sim-fl-ed" data-fl="${side}:${f.id}">
+    <label class="sim-fl-field"><span>名称</span><input class="pi-input" data-fl-name value="${ctx.esc(f.name)}" maxlength="30"></label>
+    <div class="sim-bt-pop-list">${f.rows.map((r) => `<div class="sim-bt-pop-row"><img src="${IMG(r.ship)}" alt="" width="24" height="24" loading="lazy"><span>${ctx.esc(shipName(r.ship))}${r.status === 'loading' ? '<small>读取装配…</small>' : r.label ? `<small>${ctx.esc(r.label)}</small>` : ''}</span>
+      ${f.mode === 'cyno' ? `<button type="button" class="sim-fl-cyno${r.cyno ? ' active' : ''}" data-fl-cyno="${r.id}" aria-pressed="${Boolean(r.cyno)}" title="${CYNO_TIP}">${r.cyno ? '诱导船' : '设为诱导船'}</button>` : ''}
+      <input type="number" class="pi-input" min="1" max="500" value="${r.count}" data-fl-n="${r.id}" aria-label="数量"><button type="button" class="sim-3d-x" data-fl-rm="${r.id}" aria-label="移除">${ICON.x}</button></div>`).join('') || '<p class="sim-empty">从下面添加舰船</p>'}</div>
+    ${mine.length ? `<div class="sim-fl-from"><small>复制本方舰船</small>${mine.map((r) => `<button type="button" class="sim-fl-chip" data-fl-copy="${r.id}"><img src="${IMG(r.ship)}" alt="" width="18" height="18" loading="lazy">${ctx.esc(shipName(r.ship))}</button>`).join('')}</div>` : ''}
+    <div class="sim-search sim-bt-search"><input type="search" class="pi-input" placeholder="搜索其他船型" data-bt-search="${side}" autocomplete="off"><div class="kb-suggest" data-bt-suggest hidden></div></div>
+    <div class="sim-fl-field"><span>进场方式</span><div class="segmented" role="group">${ENTRY.map(([k, l]) => `<button type="button" data-fl-mode="${k}" class="${f.mode === k ? 'active' : ''}" title="${ENTRY_TIP[k]}">${l}</button>`).join('')}</div><small>${f.mode === 'cyno' ? (cynoRows(f).length ? CYNO_TIP : '没设诱导船时，舰队直接在诱导点出现；可在上面把一行船设为诱导船') : ENTRY_TIP[f.mode]}</small></div>
+    <div class="sim-fl-field"><span>位置</span><select class="pi-input" data-fl-ref>${opts(REFS, f.ref)}</select><select class="pi-input" data-fl-dir>${opts(DIRS, f.dir)}</select><input type="number" class="pi-input" min="0" max="300" value="${f.dist}" data-fl-dist aria-label="距离"><span>km</span></div>
+    <div class="sim-fl-field"><span>时机</span><select class="pi-input" data-fl-when><option value="manual"${f.at == null ? ' selected' : ''}>手动进场</option><option value="auto"${f.at != null ? ' selected' : ''}>开战后自动进场</option></select>${f.at != null ? `<input type="number" class="pi-input" min="0" max="1800" value="${f.at}" data-fl-at aria-label="秒"><span>秒后</span>` : ''}</div>
+    <div class="sim-fl-acts"><button type="button" class="btn btn-primary btn-sm" data-fl-done>完成</button><button type="button" class="btn btn-ghost btn-sm" data-bt-fl-go="${side}:${f.id}"${f.rows.some((r) => r.unit) ? ' data-ok="1"' : ''}>立即进场</button></div>
+  </div>`;
+}
+function renderPop() {
+  const pop = $('simBtPop');
+  if (!pop) return;
+  const side = BT.reinf;
+  if (!side || !BT.b) { pop.hidden = true; return; }
+  // 装配读完会重画：保留正在输入的搜索框
+  const typing = pop.contains(document.activeElement) && document.activeElement.dataset.btSearch ? document.activeElement.value : null;
+  const ed = fleetOf(side, BT.edit);
+  pop.innerHTML = `<div class="sim-bt-pop-head"><b>${side} 方舰队支援</b><small>预设舰队，战斗中手动进场或到时间自动进场</small><button type="button" class="sim-3d-x" data-bt-reinf-close aria-label="关闭">${ICON.x}</button></div>
+    ${ed ? fleetEditor(side, ed) : `<div class="sim-fl-list">${S.support[side].map((f) => fleetCard(side, f)).join('') || '<p class="sim-empty">还没有支援舰队</p>'}</div>
+    <button type="button" class="btn btn-ghost btn-sm" data-fl-new="${side}">＋ 新建支援舰队</button>`}`;
+  pop.hidden = false;
+  if (typing != null) { const x = pop.querySelector('[data-bt-search]'); if (x) { x.value = typing; x.focus(); } }
+  updateBattleUi();
+}
+// 支援舰队改了：已布阵还没开打时重新布阵（自动进场的时间交给引擎）
+function fleetChanged(rebuild = false) {
+  save();
+  if (rebuild && BT.b && !BT.b.t) newBattle();
+  else renderPop();
+}
+async function addFleetShip(side, ship) {
+  const f = fleetOf(side, BT.edit);
+  if (!f) return;
+  const row = newRow(ship, 5, 'kb');
+  f.rows.push(row);
+  renderPop();
+  await resolveRow(row);
+  fleetChanged(f.at != null);
+}
+function deployFleet(side, id) {
+  const b = BT.b, f = fleetOf(side, id);
+  if (!b || b.done || !f) return;
+  BT.t = b.t;   // 在看回放时：回到当前战况再进场
+  const n = b.deploy(side, fleetSpec(f));
+  if (n) ctx.showToast(`${side} 方 ${f.name} ${nameOf(ENTRY, f.mode)} ×${n}`, 'success');
+  updateBattleUi();
+}
+function onFleetClick(e) {
+  const el = (sel) => e.target.closest(sel);
+  const side = BT.reinf;
+  let x;
+  if ((x = el('[data-bt-fl-go]'))) { const [s, id] = x.dataset.btFlGo.split(':'); deployFleet(s, Number(id)); return true; }
+  if (!side) return false;
+  if ((x = el('[data-fl-new]'))) { const f = newFleet(side); S.support[side].push(f); BT.edit = f.id; fleetChanged(); return true; }
+  if ((x = el('[data-fl-edit]'))) { BT.edit = Number(x.dataset.flEdit); renderPop(); return true; }
+  if ((x = el('[data-fl-del]'))) { const id = Number(x.dataset.flDel.split(':')[1]); const f = fleetOf(side, id); S.support[side] = S.support[side].filter((y) => y !== f); fleetChanged(f?.at != null); return true; }
+  const f = fleetOf(side, BT.edit);
+  if (!f) return false;
+  if (el('[data-fl-done]')) { BT.edit = null; renderPop(); return true; }
+  if ((x = el('[data-fl-rm]'))) { f.rows = f.rows.filter((r) => r.id !== Number(x.dataset.flRm)); fleetChanged(f.at != null); return true; }
+  if ((x = el('[data-fl-mode]'))) { f.mode = x.dataset.flMode; fleetChanged(f.at != null); return true; }
+  if ((x = el('[data-fl-cyno]'))) { const r = f.rows.find((y) => y.id === Number(x.dataset.flCyno)); if (r) r.cyno = !r.cyno; fleetChanged(f.at != null); return true; }
+  if ((x = el('[data-fl-copy]'))) {
+    const src = S.sides[side].find((r) => r.id === Number(x.dataset.flCopy));
+    if (!src) return true;
+    const row = Object.assign(newRow(src.ship, src.count, src.src, src.fit, src.label), { kills: src.kills, killsOther: src.killsOther });
+    f.rows.push(row);
+    resolveRow(row).then(() => fleetChanged(f.at != null));
+    return true;
+  }
+  if ((x = el('[data-bt-pick]'))) { const [s, ship] = x.dataset.btPick.split(':'); addFleetShip(s, Number(ship)); return true; }
+  return false;
+}
+function onFleetChange(e) {
+  const t = e.target;
+  const f = BT.reinf && fleetOf(BT.reinf, BT.edit);
+  if (!f || !t.closest('.sim-fl-ed')) return false;
+  const num = (lo, hi, d) => Math.max(lo, Math.min(hi, Math.round(Number(t.value)) || d));
+  if (t.matches('[data-fl-name]')) { f.name = t.value.trim() || f.name; save(); return true; }
+  if (t.matches('[data-fl-n]')) { const r = f.rows.find((y) => y.id === Number(t.dataset.flN)); if (r) r.count = num(1, 500, 1); fleetChanged(f.at != null); return true; }
+  if (t.matches('[data-fl-ref]')) f.ref = t.value;
+  else if (t.matches('[data-fl-dir]')) f.dir = t.value;
+  else if (t.matches('[data-fl-dist]')) f.dist = num(0, 300, 0);
+  else if (t.matches('[data-fl-when]')) f.at = t.value === 'auto' ? 30 : null;
+  else if (t.matches('[data-fl-at]')) f.at = num(0, 1800, 0);
+  else return false;
+  fleetChanged(true);
+  return true;
+}
+function onBattleClick(e) {
+  const el = (sel) => e.target.closest(sel);
+  let x;
+  if (el('[data-bt-play]')) { togglePlay(); return true; }
+  if ((x = el('[data-bt-speed]'))) { BT.speed = Number(x.dataset.btSpeed); x.parentElement.querySelectorAll('button').forEach((y) => y.classList.toggle('active', y === x)); return true; }
+  if (el('[data-bt-finish]')) { finishNow(); return true; }
+  if (el('[data-bt-restart]')) { newBattle(); renderResult(); return true; }
+  if (el('[data-bt-3d]')) { BT.want3d = true; if (BT.host) mountView(BT.host); return true; }
+  { const nb = el('[data-bt-names]'); if (nb) { BT.names = !BT.names; nb.classList.toggle('on', BT.names); nb.setAttribute('aria-pressed', BT.names); BT.view?.setLabels(BT.names); return true; } }
+  if (el('[data-bt-cam]')) { BT.view?.resetCamera(); updateBattleUi(); return true; }
+  if ((x = el('[data-bt-follow]'))) { BT.view?.follow(Number(x.dataset.btFollow)); updateBattleUi(); return true; }
+  if (el('[data-bt-full]')) { const h = $('simBtSec'); if (document.fullscreenElement) document.exitFullscreen(); else h?.requestFullscreen?.(); return true; }
+  if (el('[data-bt-unsel]')) { BT.sel = -1; updateBattleUi(); return true; }
+  if ((x = el('[data-bt-unit]'))) { BT.sel = Number(x.dataset.btUnit); updateBattleUi(); return true; }
+  if ((x = el('[data-bt-primary]'))) {
+    const [side, i] = x.dataset.btPrimary.split(':');
+    BT.t = BT.b.t;
+    BT.b.setPrimary(side, Number(i));
+    updateBattleUi();
+    return true;
+  }
+  if ((x = el('[data-bt-reinf]'))) { BT.reinf = BT.reinf === x.dataset.btReinf ? null : x.dataset.btReinf; BT.edit = null; renderPop(); return true; }
+  if (el('[data-bt-reinf-close]')) { BT.reinf = null; BT.edit = null; renderPop(); return true; }
+  return onFleetClick(e);
+}
+function onBattleInput(e) {
+  const t = e.target;
+  if (t.matches('[data-bt-seek]')) { seek(Number(t.value)); return true; }
+  if (t.dataset.btSearch) {
+    const box = t.parentElement.querySelector('[data-bt-suggest]');
+    const q = t.value.trim();
+    if (!q) { box.hidden = true; return true; }
+    box.innerHTML = shipSearch(q).map((x) => `<button type="button" class="kb-suggest-item" data-bt-pick="${t.dataset.btSearch}:${x.id}"><img src="${IMG(x.id)}" alt="" width="22" height="22" loading="lazy"><span>${ctx.esc(x.name)}</span><small>${ctx.esc(ctx.data.groups.get(x.group)?.name || '')}</small></button>`).join('') || '<p class="ind-side-empty">没有匹配的舰船</p>';
+    box.hidden = false;
+    return true;
+  }
+  return false;
 }
 
 // ---------- 参数扫描 / 至少需要几艘 ----------
@@ -790,16 +1179,16 @@ const idle = () => new Promise((r) => setTimeout(r, 0));
 async function runSweep() {
   if (!S.result) return;
   const seq = ++sweepSeq;
-  const total = DISTANCES.length * TRANS.length;
+  const total = DISTANCES.length * MOVES.length;
   S.sweep = { cells: {}, done: 0, total, need: null, running: true };
   renderTactics();
-  for (const [tr] of TRANS) {
+  for (const [mv] of MOVES) {
     for (const d of DISTANCES) {
       await idle();
       if (seq !== sweepSeq) return;
-      const R = simulate(S.sides, { ...S.opt, dist: d, trans: tr, phase: false });
-      const score = R.winner ? (R.end[R.winner] / Math.max(1, R.start[R.winner])) * (R.winner === 'A' ? 1 : -1) : R.hp.A - R.hp.B;
-      S.sweep.cells[`${d}:${tr}`] = { winner: R.winner, lead: R.lead, t: R.t, score };
+      const R = simulate(S.sides, simOpt({ dist: d, moveA: mv }));
+      const score = R.eff ? (R.eff.A - 0.5) * 2 : 0;
+      S.sweep.cells[`${d}:${mv}`] = { winner: R.winner, lead: R.lead, t: R.t, score };
       S.sweep.done += 1;
       renderTactics();
     }
@@ -810,7 +1199,7 @@ async function runSweep() {
   if (loser) {
     const base = S.sides[loser].reduce((t, r) => t + (r.unit ? r.count : 0), 0);
     const scaled = (m) => ({ ...S.sides, [loser]: S.sides[loser].map((r) => ({ ...r, count: Math.max(r.count, Math.round(r.count * m)) })) });
-    const wins = async (m) => { await idle(); const R = simulate(scaled(m), S.opt); return R.winner === loser; };
+    const wins = async (m) => { await idle(); const R = simulate(scaled(m), simOpt()); return R.winner === loser; };
     let need = null;
     if (await wins(5)) {
       let lo = 1, hi = 5;
@@ -832,25 +1221,25 @@ function renderTactics() {
   if (!box) return;
   if (!S.result) { box.innerHTML = ''; return; }
   const W = S.sweep;
-  const cur = (d, tr) => !S.opt.phase && S.opt.dist === d && S.opt.trans === tr;
-  const cell = (d, tr) => {
-    const c = W?.cells[`${d}:${tr}`];
+  const cur = (d, mv) => S.opt.dist === d && S.opt.moveA === mv;
+  const cell = (d, mv) => {
+    const c = W?.cells[`${d}:${mv}`];
     if (!c) return `<td><span class="sim-cell is-wait">${W?.running ? '…' : ''}</span></td>`;
     const side = c.winner || c.lead;
     const a = Math.min(1, Math.abs(c.score));
     const label = c.winner ? `${c.winner} 胜` : c.lead ? `${c.lead} 优` : '平';
-    return `<td><button type="button" class="sim-cell${side ? ' is-' + side.toLowerCase() : ''}${cur(d, tr) ? ' is-cur' : ''}" style="--a:${(0.15 + a * 0.6).toFixed(2)}" data-sim-cell="${d}:${tr}" title="${d} km · ${TRANS.find(([v]) => v === tr)[1]} · ${label}${c.winner ? ' · ' + fmtSec(c.t) : ''}">${label}</button></td>`;
+    return `<td><button type="button" class="sim-cell${side ? ' is-' + side.toLowerCase() : ''}${cur(d, mv) ? ' is-cur' : ''}" style="--a:${(0.15 + a * 0.6).toFixed(2)}" data-sim-cell="${d}:${mv}" title="${d} km · A 方${MOVES.find(([v]) => v === mv)[1]} · ${label}${c.winner ? ' · ' + fmtSec(c.t) : ''}">${label}</button></td>`;
   };
   const need = W?.need;
   const needHtml = !W || W.running ? '' : need ? (need.need ? `<p class="sim-need"><b>${need.side} 方</b>至少需 <b>${need.need}</b> 艘才能赢（现 ${need.base} 艘）</p>`
     : `<p class="sim-need"><b>${need.side} 方</b>加到 5 倍也赢不了</p>`) : '<p class="sim-need">没有明显落后的一方</p>';
   box.innerHTML = `<section class="sim-tactics">
-    <div class="sim-sec-head"><h4>距离与机动扫描</h4>
+    <div class="sim-sec-head"><h4>距离与走位扫描</h4>
       ${W?.running ? `<span class="sim-status busy">扫描中 ${W.done} / ${W.total}</span>` : `<button type="button" class="btn btn-ghost btn-sm" data-sim-sweep>${W ? '重新扫描' : '开始扫描'}</button>`}</div>
-    ${W ? `<div class="sim-grid-wrap"><table class="sim-grid"><thead><tr><th>目标机动 \\ 距离</th>${DISTANCES.map((d) => `<th>${d} km</th>`).join('')}</tr></thead>
-      <tbody>${TRANS.map(([tr, l]) => `<tr><th>${l}</th>${DISTANCES.map((d) => cell(d, tr)).join('')}</tr>`).join('')}</tbody></table></div>
+    ${W ? `<div class="sim-grid-wrap"><table class="sim-grid"><thead><tr><th>A 方走位 \\ 开局距离</th>${DISTANCES.map((d) => `<th>${d} km</th>`).join('')}</tr></thead>
+      <tbody>${MOVES.map(([mv, l]) => `<tr><th>${l}</th>${DISTANCES.map((d) => cell(d, mv)).join('')}</tr>`).join('')}</tbody></table></div>
       <p class="sim-hint">点格子切换到该设置</p>${needHtml}`
-    : '<p class="sim-hint">逐个模拟各距离 × 机动，并算出落后方需几艘</p>'}
+    : '<p class="sim-hint">逐个模拟各开局距离 × A 方走位（B 方按当前设置，不含手动增援与点名），并算出落后方需几艘</p>'}
   </section>`;
 }
 
@@ -859,7 +1248,7 @@ function setBaseline() {
   const R = S.result;
   if (!R) return;
   const isk = iskOf(R);
-  S.base = { t: R.t, winner: R.winner, lead: R.lead, lost: { A: R.start.A - R.end.A, B: R.start.B - R.end.B }, start: R.start, isk: isk ? { A: isk.A.lost, B: isk.B.lost } : null, timeline: R.timeline, at: new Date() };
+  S.base = { t: R.t, winner: R.winner, lead: R.lead, lost: { ...R.lost }, start: R.start, isk: isk ? { A: isk.A.lost, B: isk.B.lost } : null, timeline: R.timeline, at: new Date() };
   renderResult();
 }
 function baselineHtml(R) {
@@ -868,9 +1257,9 @@ function baselineHtml(R) {
   const isk = iskOf(R);
   const diff = (now, was, better) => { const d = now - was; return d ? `<em class="${(d < 0) === better ? 'good' : 'bad'}">${d > 0 ? '+' : ''}${ctx.formatNumber(d)}</em>` : ''; };
   const iskDiff = (s) => (isk && B.isk ? ` · ${ctx.formatISK(B.isk[s])} → ${ctx.formatISK(isk[s].lost)}` : '');
-  const res = (x) => (x.winner ? `${x.winner} 方获胜` : x.lead ? `${x.lead} 方占优` : '势均力敌');
+  const res = (x) => (x.winner ? `${x.winner} 方大胜` : x.lead ? `${x.lead} 方占优` : '势均力敌');
   return `<div class="sim-base"><b>对照组</b><span><span>${res(B)}</span> → <span>${res(R)}</span></span>
-    ${SIDES.map((s) => `<span><span>${s} 方损失</span> ${B.lost[s]} → ${R.start[s] - R.end[s]}${diff(R.start[s] - R.end[s], B.lost[s], true)}${iskDiff(s)}</span>`).join('')}
+    ${SIDES.map((s) => `<span><span>${s} 方损失</span> ${B.lost[s]} → ${R.lost[s]}${diff(R.lost[s], B.lost[s], true)}${iskDiff(s)}</span>`).join('')}
     <span><span>用时</span> <span>${fmtSec(B.t)}</span> → <span>${fmtSec(R.t)}</span></span>
     <button type="button" class="link-btn" data-sim-base-clear>清除对照</button></div>`;
 }
@@ -927,6 +1316,9 @@ const ICON = {
   save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  names: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5h16v2"/><path d="M12 5v14"/><path d="M9 19h6"/></svg>',
+  cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
+  full: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   mirror: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16V5a2 2 0 0 1 2-2h11"/></svg>'
 };
@@ -957,10 +1349,8 @@ function render() {
       </div>
       <div class="sim-opt-row">
         <span class="sim-opt-label">交战</span>
-        <label class="sim-opt"><span>距离</span><select class="pi-input" data-sim-opt-select="dist">${distOpts(S.opt.dist)}</select></label>
-        <label class="pi-check" title="开打一段时间后改到另一个距离（如先在远处对射，再贴近）"><input type="checkbox" data-sim-flag="phase"${S.opt.phase ? ' checked' : ''}><span>分阶段</span></label>
-        ${S.opt.phase ? `<label class="sim-opt sim-phase"><span>第</span><input type="number" class="pi-input" min="5" max="590" step="5" value="${S.opt.at}" data-sim-opt-num="at" aria-label="切换时间（秒）"><span>秒起改为</span><select class="pi-input" data-sim-opt-select="dist2">${distOpts(S.opt.dist2)}</select></label>` : ''}
-        <div class="sim-opt" title="目标横向速度 = 最大速度 × 这个比例；越快越难打中（大口径武器尤其明显）"><span>目标机动</span>${seg('trans', TRANS)}</div>
+        <label class="sim-opt" title="开局时两队相隔的距离，之后按各自的走位接近或拉开"><span>开局距离</span><select class="pi-input" data-sim-opt-select="dist">${distOpts(S.opt.dist)}</select></label>
+        ${SIDES.map((x) => `<label class="sim-opt"><span>${x} 方走位</span><select class="pi-input" data-sim-move="${x}" title="${MOVES.map(([v, l]) => l + '：' + MOVE_TIP[v]).join('&#10;')}">${MOVES.map(([v, l]) => `<option value="${v}"${S.opt['move' + x] === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>`).join('')}
       </div>
       <div class="sim-opt-row">
         <span class="sim-opt-label">规则</span>
@@ -976,14 +1366,18 @@ function render() {
     </div>
     <div id="simVerdict"></div>
     <div class="sim-sides" id="simSides"></div>
+    <div id="simBattle"></div>
     <div id="simResult"></div>
     <div id="simTactics"></div>
     <details class="sim-note">
       <summary>模拟规则与局限</summary>
-      <p>双方固定在交战距离；集火每 ${SQUAD} 艘打一个目标；长冷却装备不计开启；超载不计过热；指挥脉冲约为基础值 ${BURST_MULT.toFixed(1)} 倍；ISK 按全服均价。结果仅供参考。</p>
+      <p>三维空间逐 0.5 秒推进：按惯性加速与各自走位；炮台与无人机每发按实际角速度、距离掷骰（含三倍致命一击），导弹真实飞行、命中时按目标当时速度与信号半径算，舰载机、电涌投射器同样按爆炸半径与速度；热能分解器连续打同一目标逐轮加成；弹药打完要装填；维修、中和按周期结算；电子战、遥修按实际距离与衰减范围算。</p>
+      <p>一方没有输出舰船时，剩下的船对准后跃迁撤离（被扰断 / 扰频走不掉），撤离不算损失；胜负看双方损失价值之比（战损比）。</p>
+      <p>集火每 ${SQUAD} 艘打一个目标（点名集火时整方一起打）；长冷却装备不计开启；超载不计过热；指挥脉冲约为基础值 ${BURST_MULT.toFixed(1)} 倍；无人机、舰载机不会被击落；ISK 按全服均价。结果仅供参考。</p>
     </details>
   </div><div class="sim-detail" id="simDetail" hidden></div>`;
   renderSides();
+  renderBattle();
   renderResult();
   renderTactics();
 }
@@ -1027,6 +1421,7 @@ function rowHtml(side, r) {
       <button type="button" class="sim-row-name" data-sim-detail title="查看 / 更换装配"><b>${ctx.esc(t?.name || '')}</b><span>装配详情 ›</span></button>
       <div class="sim-row-info">${info}</div>
       <select class="plain-select sim-fit" data-sim-fit aria-label="装配">${fitOptions(r)}</select>
+      ${followHtml(side, r)}
     </div>
     <div class="sim-step" role="group" aria-label="数量">
       <button type="button" data-sim-step="-1" aria-label="减少"${r.count <= 1 ? ' disabled' : ''}>−</button>
@@ -1088,13 +1483,29 @@ function renderSides() {
   }
 }
 
-// 每方的设置：技能、超载、指挥脉冲
+// 走位官：火力走位官带队按走位方式移动，后勤走位官停在它后方的遥修距离内；各行可选跟哪个走位官，不跟的按定位走位
+const LEADS = [['dps', '火力走位官', '带队按本方走位方式移动，速度不超过最慢的跟随者；同一行的船都跟着它'], ['logi', '后勤走位官', '停在火力走位官后方的遥修距离内；同一行的船都跟着它']];
+function leadHtml(s) {
+  const list = S.sides[s];
+  if (!list.length) return '';
+  return LEADS.map(([k, l, tip]) => `<label class="sim-lead" title="${tip}"><span>${l}</span><select class="plain-select" data-sim-lead="${s}:${k}"><option value="">不设</option>${list.map((r) => `<option value="${r.id}"${r.lead === k ? ' selected' : ''}>${ctx.esc(shipName(r.ship))}</option>`).join('')}</select></label>`).join('');
+}
+// 行的走位：走位官所在行跟随走位官；其余可选跟火力 / 后勤走位官，或按定位走位
+function followHtml(side, r) {
+  const has = LEADS.filter(([k]) => S.sides[side].some((x) => x.lead === k));
+  if (!has.length) return '';
+  if (r.lead) return `<em class="sim-lead-tag">${nameOf(LEADS, r.lead)}</em>`;
+  const v = has.some(([k]) => k === r.move) ? r.move : 'role';
+  return `<select class="plain-select sim-follow" data-sim-follow aria-label="走位"><option value="role">按定位走位</option>${has.map(([k, l]) => `<option value="${k}"${v === k ? ' selected' : ''}>跟${l}</option>`).join('')}</select>`;
+}
+// 每方的设置：技能、超载、指挥脉冲、走位官
 function sideOptsHtml(s) {
   const o = S.sideOpt[s];
   const esi = ctx.hasEsi?.();
   return `<div class="sim-side-opts">
     ${esi ? `<select class="plain-select" data-sim-side-skills="${s}" aria-label="技能"><option value="max"${o.skills === 'max' ? ' selected' : ''}>技能全 5 级</option><option value="esi"${o.skills === 'esi' ? ' selected' : ''}>技能按${S.esiSkills ? ' ' + ctx.esc(S.esiSkills.name) : '我的角色'}</option></select>` : '<span class="sim-side-tag" title="绑定 ESI 后可以按自己角色的技能计算">技能全 5 级</span>'}
     <label class="pi-check" title="能超载的已开启装备全部超载（伤害、射速、维修、抗性等提升；不计过热损坏）"><input type="checkbox" data-sim-side-heat="${s}"${o.heat ? ' checked' : ''}><span>超载</span></label>
+    ${leadHtml(s)}
     <span class="sim-burst" role="group" aria-label="指挥脉冲"><span>指挥脉冲</span>${BURSTS.map(([k, l, tip]) => `<button type="button" class="${o.bursts.includes(k) ? 'active' : ''}" data-sim-burst="${s}:${k}" title="${tip}" aria-pressed="${o.bursts.includes(k)}">${l}</button>`).join('')}</span>
   </div>`;
 }
@@ -1202,13 +1613,12 @@ function onClick(e) {
   if (S.detail && e.target.closest('#simDetail')) { onDetailClick(e); return; }
   const el = (sel) => e.target.closest(sel);
   let x;
+  if (onBattleClick(e)) return;
   if (el('[data-sim-back]')) { history.back(); return; }
   if (el('[data-sim-menu]')) { toggleMenu(); return; }
   if (el('[data-sim-undo]')) { undoClear(); return; }
   if (el('[data-sim-share]')) { copyShare(); return; }
   if (el('[data-sim-sweep]')) { runSweep(); return; }
-  if (el('[data-sim-play]')) { playReplay(); return; }
-  if ((x = el('[data-sim-speed]'))) { RP.speed = Number(x.dataset.simSpeed); x.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === x)); return; }
   if ((x = el('[data-sim-scene]'))) {
     const sc = SCENES.find(([k]) => k === x.dataset.simScene);
     if (!sc) return;
@@ -1223,8 +1633,8 @@ function onClick(e) {
   if (el('[data-sim-base]')) { setBaseline(); return; }
   if (el('[data-sim-base-clear]')) { S.base = null; renderResult(); return; }
   if ((x = el('[data-sim-cell]'))) {
-    const [d, tr] = x.dataset.simCell.split(':').map(Number);
-    Object.assign(S.opt, { dist: d, trans: tr, phase: false });
+    const [d, mv] = x.dataset.simCell.split(':');
+    Object.assign(S.opt, { dist: Number(d), moveA: mv });
     save();
     const sweep = S.sweep;
     render();
@@ -1362,6 +1772,14 @@ function undoClear() {
 
 function onChange(e) {
   const t = e.target;
+  if (onFleetChange(e)) return;
+  if (t.dataset.simLead) {
+    const [side, kind] = t.dataset.simLead.split(':');
+    for (const r of S.sides[side]) if (r.lead === kind || String(r.id) === t.value) r.lead = String(r.id) === t.value ? kind : undefined;
+    changed();
+    return;
+  }
+  if (t.matches('[data-sim-follow]')) { findRow(t).row.move = t.value === 'role' ? undefined : t.value; changed(); return; }
   if (t.matches('[data-sim-fit]')) { setSource(findRow(t).row, t.value); return; }
   if (t.matches('[data-sim-count]')) {
     const { row } = findRow(t);
@@ -1369,6 +1787,7 @@ function onChange(e) {
     changed();
     return;
   }
+  if (t.dataset.simMove) { S.opt['move' + t.dataset.simMove] = t.value; save(); schedule(0); return; }
   if (t.dataset.simOptSelect) { S.opt[t.dataset.simOptSelect] = Number(t.value); save(); schedule(0); return; }
   if (t.dataset.simOptNum) { S.opt[t.dataset.simOptNum] = Math.max(5, Math.min(S.opt.max - 5, Math.round(Number(t.value) / 5) * 5 || 30)); t.value = S.opt[t.dataset.simOptNum]; save(); schedule(0); return; }
   if (t.dataset.simSideSkills) { S.sideOpt[t.dataset.simSideSkills].skills = t.value; save(); if (t.value === 'esi' && !S.esiSkills) ensureEsiSkills(); else reprepare([t.dataset.simSideSkills]); return; }
@@ -1376,7 +1795,6 @@ function onChange(e) {
   if (t.dataset.simFlag) {
     S.opt[t.dataset.simFlag] = t.checked;
     save();
-    if (t.dataset.simFlag === 'phase') { render(); schedule(0); return; }
     if (t.dataset.simFlag === 'prop') { for (const s of SIDES) S.sides[s].forEach((r) => { if (r.fit) prepare(r); }); renderSides(); }
     schedule(0);
   }
@@ -1384,7 +1802,7 @@ function onChange(e) {
 
 function onInput(e) {
   const t = e.target;
-  if (t.matches('[data-sim-rp]')) { playReplay(false); updateReplay(Number(t.value)); return; }
+  if (onBattleInput(e)) return;
   if (!t.dataset.simSearch) return;
   const side = t.dataset.simSearch;
   const box = root.querySelector(`[data-sim-suggest="${side}"]`);
@@ -1436,14 +1854,12 @@ function run() {
   root.querySelectorAll('[data-sim-scene]').forEach((b) => b.classList.toggle('active', Object.entries(SCENES.find(([k]) => k === b.dataset.simScene)[2]).every(([k, v]) => S.opt[k] === v)));
   const all = SIDES.flatMap((s) => S.sides[s]);
   const waiting = all.filter((r) => !r.unit && (r.status === 'loading' || r.status === 'idle'));
+  // 设置变了：重新布阵（不直接出结果，等用户开战）
   if (!S.sides.A.length || !S.sides.B.length || !SIDES.every((s) => S.sides[s].some((r) => r.unit))) {
     S.result = null;
-  } else {
-    const t0 = performance.now();
-    S.result = simulate(S.sides, { ...S.opt, record: true });
-    S.result.skipped = waiting.reduce((t, r) => t + r.count, 0);
-    S.result.ms = performance.now() - t0;
-  }
+    BT.b = null;
+    renderBattle();
+  } else newBattle();
   setStatus(waiting.length);
   renderResult();
 }
@@ -1484,17 +1900,21 @@ function renderVerdict() {
     return;
   }
   if (!R) { box.innerHTML = ''; return; }
-  const { winner, lead } = R;
-  const verdict = winner ? `${winner} 方获胜` : lead ? `未分胜负 · ${lead} 方占优` : '势均力敌';
-  const sub = winner ? `用时 ${fmtSec(R.t)}，剩余 ${R.end[winner]} / ${R.start[winner]} 艘` : `${fmtSec(R.t)} 后 A 方剩 ${R.end.A} 艘（${(R.hp.A * 100).toFixed(0)}% 血量），B 方剩 ${R.end.B} 艘（${(R.hp.B * 100).toFixed(0)}%）`;
-  const skipped = R.skipped ? `<span class="sim-warn">还有 ${R.skipped} 艘船的装配没读到，暂未计入</span>` : '';
+  // 胜负看战损：A 方击毁价值占双方损失的比例（有价格按 ISK，否则按 EHP）
   const isk = iskOf(R);
+  const eff = isk && isk.A.lost + isk.B.lost ? isk.A.eff : R.eff?.A ?? null;
+  const winner = eff == null ? null : eff >= 0.75 ? 'A' : eff <= 0.25 ? 'B' : null;
+  const lead = winner || (eff == null ? null : eff >= 0.55 ? 'A' : eff <= 0.45 ? 'B' : null);
+  const verdict = winner ? `${winner} 方大胜` : lead ? `${lead} 方占优` : eff == null ? '双方都没有损失' : '势均力敌';
+  const esc = SIDES.filter((s) => R.escaped[s]).map((s) => `${s} 方 ${R.escaped[s]} 艘撤离`).join('，');
+  const sub = `用时 ${fmtSec(R.t)} · A 方损失 ${R.lost.A} 艘，B 方损失 ${R.lost.B} 艘${esc ? '，' + esc : ''}${!isk && eff != null ? '（按 EHP 计战损，价格未读到）' : ''}`;
+  const skipped = R.skipped ? `<span class="sim-warn">还有 ${R.skipped} 艘船的装配没读到，暂未计入</span>` : '';
   const side = (s) => {
-    const lost = R.start[s] - R.end[s];
+    const lost = R.lost[s];
     const real = S.real?.[s] ? [...S.real[s].values()].reduce((a, b) => a + b, 0) : null;
-    return `<div class="sim-v-side side-${s.toLowerCase()}"><span class="sim-badge">${s} 方</span><b>${R.end[s]}</b><small>/ ${R.start[s]} 艘剩余</small>
+    return `<div class="sim-v-side side-${s.toLowerCase()}"><span class="sim-badge">${s} 方</span><b>${R.end[s]}</b><small>/ ${R.start[s]} 艘存活</small>
       <div class="sim-v-bar"><i style="width:${(R.end[s] / Math.max(1, R.start[s]) * 100).toFixed(1)}%"></i></div>
-      <small><span>损失</span> ${lost}${real != null ? ` · <span>实际损失</span> ${real}` : ''}</small>
+      <small><span>损失</span> ${lost}${R.escaped[s] ? ` · <span>撤离</span> ${R.escaped[s]}` : ''}${real != null ? ` · <span>实际损失</span> ${real}` : ''}</small>
       ${isk ? `<small><span>损失</span> ${ctx.formatISK(isk[s].lost)} ISK${isk[s].eff != null ? ` · <span>效率</span> ${pct(isk[s].eff)}` : ''}</small>` : ''}</div>`;
   };
   // ISK 交换比：A 方击毁 : A 方损失
@@ -1520,7 +1940,7 @@ function renderResult() {
     const rows = R.rows.filter((r) => r.side === s);
     const real = S.real?.[s];
     return `<div class="sim-res-side">
-      <h5><span class="sim-badge">${s} 方</span>损失 ${R.start[s] - R.end[s]} / ${R.start[s]}${real ? ` · 实际损失 ${[...real.values()].reduce((a, b) => a + b, 0)}` : ''}</h5>
+      <h5><span class="sim-badge">${s} 方</span>损失 ${R.lost[s]} / ${R.start[s]}${R.escaped[s] ? ` · 撤离 ${R.escaped[s]}` : ''}${real ? ` · 实际损失 ${[...real.values()].reduce((a, b) => a + b, 0)}` : ''}</h5>
       <div class="pi-table-wrap"><table class="pi-table sim-table">
         <thead><tr><th>舰船</th><th class="num">出场</th><th class="num">模拟损失</th>${real ? '<th class="num">实际损失</th>' : ''}${isk ? '<th class="num pi-hide-sm">损失 ISK</th>' : ''}<th class="num pi-hide-sm">输出</th><th class="num pi-hide-sm">承伤</th>${R.rows.some((r) => r.repaired) ? '<th class="num pi-hide-sm">遥修</th>' : ''}</tr></thead>
         <tbody>${rows.map((r) => `<tr>
@@ -1545,13 +1965,11 @@ function renderResult() {
       <div class="kb-br-plot" id="simPlot"><svg></svg><div class="kb-br-tip" id="simTip" hidden></div></div>
     </div>
     ${firsts.length ? `<div class="sim-kills"><h5>阵亡顺序</h5><div>${firsts.map((k) => `<span class="sim-kill sim-kill-${k.side.toLowerCase()}"><small>${fmtSec(k.t)}</small><img src="${IMG(k.ship)}" alt="" width="20" height="20" loading="lazy">${ctx.esc(ctx.data.types.get(k.ship)?.name || '')}</span>`).join('')}${R.kills.length > firsts.length ? `<span class="sim-more">…共 ${R.kills.length} 艘</span>` : ''}</div></div>` : ''}
-    ${replayHtml(R)}
     ${insightsHtml(R)}
     ${matchupHtml(R)}
     <div class="sim-res-cols">${table('A')}${table('B')}</div>
   </section>`;
   drawChart();
-  if (R.rec) updateReplay(RP.playing ? RP.pos : Math.min(RP.pos, R.t) || R.t);
   renderTactics();
 }
 
@@ -1597,8 +2015,7 @@ function drawChart() {
     <path d="${area('A')}" fill="url(#simGa)"/><path d="${area('B')}" fill="url(#simGb)"/>
     <path class="ln a" d="${line('A')}"/><path class="ln b" d="${line('B')}"/>
     ${base ? `<path class="ln a sim-ln-base" d="${line('A', base)}"/><path class="ln b sim-ln-base" d="${line('B', base)}"/>` : ''}
-    ${S.opt.phase && S.opt.at < tMax ? `<line class="sim-phase-ln" x1="${x(S.opt.at)}" x2="${x(S.opt.at)}" y1="${T}" y2="${T + ih}"/><text class="ax sim-phase-tx" x="${x(S.opt.at) + 4}" y="${T + 10}">→ ${S.opt.dist2} km</text>` : ''}
-    ${R.rec ? `<line class="sim-rp-ln" x1="${x(RP.t)}" x2="${x(RP.t)}" y1="${T}" y2="${T + ih}"/>` : ''}
+    ${R.rec ? `<line class="sim-rp-ln" x1="${x(BT.t)}" x2="${x(BT.t)}" y1="${T}" y2="${T + ih}"/>` : ''}
     <line class="cross" x1="0" x2="0" y1="${T}" y2="${T + ih}" visibility="hidden"/>`;
   const tip = $('simTip'), cross = svg.querySelector('.cross'), hit = svg.querySelector('.hit');
   hit.onmousemove = (e) => {
@@ -1618,8 +2035,7 @@ function drawChart() {
   // 点图：回放跳到这一秒
   hit.onclick = (e) => {
     const r = svg.getBoundingClientRect();
-    playReplay(false);
-    updateReplay(Math.min(R.t, Math.max(0, (e.clientX - r.left - L) / iw * tMax)));
+    seek(Math.min(R.t, Math.max(0, (e.clientX - r.left - L) / iw * tMax)));
   };
 }
 

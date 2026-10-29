@@ -7,8 +7,8 @@ import * as FE from './fit-engine.js?v=v27';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v27';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
-import { initSim, mountSim } from './fit-sim.js?v=v16';
-import { initPlan, mountPlan, queuePlan } from './skill-plan.js?v=v7';
+import { initSim, mountSim } from './fit-sim.js?v=v27';
+import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v8';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 import { makeFloat, pinBtn, closeBtn } from './float-pop.js?v=3';
@@ -141,7 +141,8 @@ export async function showSim(root, restored = false) {
 }
 
 // 技能规划（个人中心 · 技能页里的子页，用装配数据里的技能前置关系）
-export async function showPlan(root, restored = false) {
+// opt.queue：把训练队列加为目标（技能页训练队列的「规划队列」）
+export async function showPlan(root, restored = false, opt = null) {
   if (!F.data && !root.dataset.ready) root.innerHTML = skTitle(16) + skCards(4) + skRows(6);
   try {
     await ensureData();
@@ -150,6 +151,7 @@ export async function showPlan(root, restored = false) {
     return;
   }
   toolInit?.();
+  if (opt?.queue) planQueue();
   mountPlan(root, restored);
 }
 

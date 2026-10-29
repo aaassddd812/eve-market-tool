@@ -1,0 +1,9 @@
+{
+  "name": "eve-ship-models",
+  "private": true,
+  "type": "module",
+  "description": "从 EVE 客户端资源服务器转换舰船模型给战场模拟用",
+  "dependencies": {
+    "@carbonenginejs/runtime": "0.1.0-alpha.11"
+  }
+}

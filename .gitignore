@@ -11,3 +11,8 @@ desktop.ini
 
 # 国服数据构建缓存（build_cn_extra.py）
 .cn-cache/
+
+# 舰船模型转换（tools/ship-models）：依赖、下载缓存、产物都不进仓库
+eve-overview-clone/tools/ship-models/node_modules/
+eve-overview-clone/tools/ship-models/.cache/
+eve-overview-clone/ship-models/
