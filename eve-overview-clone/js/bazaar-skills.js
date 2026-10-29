@@ -171,7 +171,7 @@ export function analysisHtml(c, r, author, tab, picker = '') {
     <div class="bz-ana-head"><h3>技能分析</h3>${picker}
       <div class="segmented" role="tablist">${tabs.map(([k, l]) => `<button type="button" data-bz-tab="${k}" class="${tab === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       <span class="toolbar-spacer"></span>
-      <small class="text-muted">数据来自 <a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.source || 'qsna.eu')}</a> · <span translate="no">${esc(r.name)}</span> · ${spM(c.total)} SP${r.updated_at ? ' · 更新于 ' + new Date(r.updated_at).toLocaleDateString('zh-CN') : ''}</small></div>
+      <small class="text-muted">数据来自 ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.source || 'qsna.eu')}</a>` : esc(r.source)} · <span translate="no">${esc(r.name)}</span> · ${spM(c.total)} SP${r.updated_at ? ' · 更新于 ' + new Date(r.updated_at).toLocaleDateString('zh-CN') : ''}</small></div>
     ${nameOk ? '' : `<p class="bz-warn">技能展示的角色（<span translate="no">${esc(r.name)}</span>）与发帖人（<span translate="no">${esc(author)}</span>）不一致，请向卖家确认。</p>`}
     <div class="bz-ana-body">${tab === 'ships' ? shipsHtml(c, p) : tab === 'train' ? trainHtml(c) : tab === 'equip' ? equipHtml(c) : roleHtml(c, p)}</div>
   </div>`;

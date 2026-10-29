@@ -33,6 +33,9 @@
   GET /api/kb/bazaar/cbg/detail?id=           藏宝阁角色详情：技能、钱包、安全等级、军团历史、舰船与装配
   GET /api/kb/bazaar/skillset                 宁静：索引里各帖技能展示角色的技能等级（列表按「能开什么船 / 技能几级」筛选）
   GET /api/kb/bazaar/cbg/skillset             晨曦：藏宝阁各角色的技能等级（后台每 10 分钟补齐）
+  GET /api/kb/bazaar/sale?server=infinity     曙光：玩家自挂的在售角色（POST /api/kb/bazaar/sale/save|delete 带 ESI 令牌挂售 / 下架）
+  GET /api/kb/bazaar/sale/detail?server=&id=  自挂角色详情（服务器从 ESI 读取的技能、钱包等快照）
+  GET /api/kb/bazaar/sale/skillset?server=    自挂角色的技能等级
                                               order=sp|price|ratio（&dir=asc）时列表来自后台索引：近期帖子的 1 楼里解析出的技能点 / 报价
   GET /api/kb/bpprices?types=1,2               公开合同里的蓝图价格：原图最低价、拷贝每流程最低价（各取最便宜 5 份）；
                                                不带 types 时返回全部蓝图的 [原图最低价, 拷贝每流程最低价]
@@ -5089,6 +5092,126 @@ class SettingsSync:
         return {"deleted": True}
 
 
+# ---------------------------------------------------------------- 自挂角色（曙光服角色交易）
+# 曙光服没有藏宝阁这类交易渠道：玩家用本站绑定的 ESI 令牌挂售自己的角色，自填人民币价格和 QQ（不提供备注）。
+# 令牌只用于本次请求（证明角色归属、读取技能 / 钱包等快照），不落盘、不写日志；快照由服务器从 ESI 读取，卖家无法改动。
+# 挂单 SALE_DAYS 天后自动下架，卖家重新提交即续期并刷新快照
+SALE_SERVERS = ("infinity",)
+SALE_DAYS = 30
+SALE_RATE = 20                  # 每个 IP 每分钟最多提交次数
+SALE_PRICE_MAX = 10_000_000     # 价格上限（元）
+SALE_QQ_RE = re.compile(r"[0-9]{1,32}")
+SALE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS char_sale(server TEXT, char_id INTEGER, price INTEGER, qq TEXT, data TEXT, created INTEGER, updated INTEGER,
+  PRIMARY KEY(server, char_id));
+"""
+
+
+class CharSale:
+    def __init__(self, store, wallet):
+        self.store, self.esi = store, wallet.esi
+        c = store.conn()
+        with store.write_lock:
+            c.executescript(SALE_SCHEMA)
+            c.commit()
+
+    @staticmethod
+    def server_of(v):
+        if v not in SALE_SERVERS:
+            raise ValueError("角色挂售只支持：" + " / ".join(SALE_SERVERS))
+        return v
+
+    def snapshot(self, server, char, token):
+        """用令牌读技能（ESI 返回 200 才认为令牌属于这个角色），其余数据读不到就留空"""
+        sk, _ = self.esi(server, f"/characters/{char}/skills/", token)
+
+        def opt(path):
+            try:
+                return self.esi(server, path, token)[0]
+            except (PermissionError, EsiUnavailable):
+                return None
+        cfg = ARB_SERVERS[server]
+        try:
+            pub, _ = get_json(f"{cfg['esi']}/characters/{char}/?{cfg['qs']}", timeout=20, retries=2)
+        except Exception:
+            raise EsiUnavailable("角色公开信息读取失败") from None
+        loc, ship, clones = opt(f"/characters/{char}/location/"), opt(f"/characters/{char}/ship/"), opt(f"/characters/{char}/clones/")
+        ids = [i for i in (pub.get("corporation_id"), pub.get("alliance_id"), (loc or {}).get("solar_system_id"), (ship or {}).get("ship_type_id")) if i]
+        names = {r["id"]: r["name"] for r in resolve_names(ids, url=f"{cfg['esi']}/universe/names/?{cfg['qs']}")} if ids else {}
+        skills = sorted(([x["skill_id"], x.get("trained_skill_level") or 0, x.get("skillpoints_in_skill") or 0] for x in (sk or {}).get("skills") or []), key=lambda x: x[0])
+        return {
+            "name": pub.get("name") or str(char), "birthday": pub.get("birthday"), "sec": pub.get("security_status"),
+            "corp_id": pub.get("corporation_id"), "corp": names.get(pub.get("corporation_id")),
+            "alliance_id": pub.get("alliance_id"), "alliance": names.get(pub.get("alliance_id")),
+            "total_sp": (sk or {}).get("total_sp") or 0, "unallocated_sp": (sk or {}).get("unallocated_sp") or 0, "skills": skills,
+            "attrs": opt(f"/characters/{char}/attributes/"), "isk": opt(f"/characters/{char}/wallet/"),
+            "implants": opt(f"/characters/{char}/implants/"),
+            "system": names.get((loc or {}).get("solar_system_id")), "ship_type": (ship or {}).get("ship_type_id"),
+            "ship": names.get((ship or {}).get("ship_type_id")),
+            "jump_clones": len((clones or {}).get("jump_clones") or []) if clones else None,
+        }
+
+    def save(self, body, token):
+        server = self.server_of(body.get("server"))
+        char, price, qq = body.get("character_id"), body.get("price"), body.get("qq")
+        if type(char) is not int or char <= 0:
+            raise ValueError("character_id 应为正整数")
+        if type(price) is not int or not 0 < price <= SALE_PRICE_MAX:
+            raise ValueError(f"价格应为 1–{SALE_PRICE_MAX} 的整数（元）")
+        if not isinstance(qq, str) or not SALE_QQ_RE.fullmatch(qq):
+            raise ValueError("QQ 号只能是数字")
+        data = self.snapshot(server, char, token)
+        now = int(time.time())
+        c = self.store.conn()
+        with self.store.write_lock:
+            row = c.execute("SELECT created FROM char_sale WHERE server=? AND char_id=? AND updated>?", (server, char, now - SALE_DAYS * 86400)).fetchone()
+            c.execute("INSERT OR REPLACE INTO char_sale(server, char_id, price, qq, data, created, updated) VALUES(?,?,?,?,?,?,?)",
+                      (server, char, price, qq, json.dumps(data, ensure_ascii=False, separators=(",", ":")), row[0] if row else now, now))
+            c.commit()
+        return self.detail({"server": server, "id": str(char)})
+
+    def delete(self, body, token):
+        server = self.server_of(body.get("server"))
+        char = body.get("character_id")
+        if type(char) is not int or char <= 0:
+            raise ValueError("character_id 应为正整数")
+        self.esi(server, f"/characters/{char}/skills/", token)   # 校验令牌属于这个角色
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("DELETE FROM char_sale WHERE server=? AND char_id=?", (server, char))
+            c.commit()
+        return {"ok": True}
+
+    def rows(self, server, char=None):
+        cut = int(time.time()) - SALE_DAYS * 86400
+        sql = "SELECT char_id, price, qq, data, created, updated FROM char_sale WHERE server=? AND updated>?"
+        args = (server, cut) if char is None else (server, cut, char)
+        for cid, price, qq, data, created, updated in self.store.conn().execute(sql + (" AND char_id=?" if char is not None else ""), args):
+            d = json.loads(data)
+            yield {"id": cid, "price": price, "qq": qq, "created": created, "updated": updated,
+                   "expires": updated + SALE_DAYS * 86400, **d}
+
+    # GET /bazaar/sale?server=：在售角色（不含技能明细）
+    def items(self, q):
+        server = self.server_of(q.get("server") or "infinity")
+        return {"items": [{k: v for k, v in r.items() if k not in ("skills", "attrs", "implants")} | {"sp": r["total_sp"]}
+                          for r in self.rows(server)], "days": SALE_DAYS}
+
+    # GET /bazaar/sale/detail?server=&id=
+    def detail(self, q):
+        server = self.server_of(q.get("server") or "infinity")
+        cid = int(q.get("id") or 0)
+        for r in self.rows(server, cid):
+            return r
+        raise KeyError("挂单不存在或已过期")
+
+    # GET /bazaar/sale/skillset?server=：各角色技能等级（列表按「能开什么船 / 技能几级」筛选）
+    def skillset(self, q):
+        server = self.server_of(q.get("server") or "infinity")
+        return {"items": {r["id"]: [r["id"], r["name"], r["total_sp"], ",".join(f"{i}:{lv}" for i, lv, _ in r["skills"])] for r in self.rows(server)},
+                "pending": 0}
+
+
 class RateLimiter:
     """按 IP 的令牌桶：容量 rate，每秒恢复 rate / 60 个（用于深渊装备导入、钱包存档）"""
     def __init__(self, rate):
@@ -5204,7 +5327,9 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
               "contracts": lambda q: api.pc.list(q), "contracts/status": lambda q: api.pc.info(q), "obsvol": lambda q: api.obs.query(q),
               "bazaar": bazaar.topics, "bazaar/topic": bazaar.topic, "bazaar/translate": bazaar.translate, "bazaar/skills": bazaar.skills,
               "bazaar/cbg": cbg.items, "bazaar/cbg/detail": cbg.detail,
-              "bazaar/skillset": bazaar.skillset, "bazaar/cbg/skillset": cbg.skillset}
+              "bazaar/skillset": bazaar.skillset, "bazaar/cbg/skillset": cbg.skillset,
+              "bazaar/sale": lambda q: api.sale.items(q), "bazaar/sale/detail": lambda q: api.sale.detail(q),
+              "bazaar/sale/skillset": lambda q: api.sale.skillset(q)}
     kb = {s: kb_routes(a) for s, a in apis.items()}
 
     def kb_server(q):
@@ -5214,6 +5339,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
         return srv
     wallet_limiter = RateLimiter(WALLET_RATE)
     sync_limiter = RateLimiter(SYNC_RATE)
+    sale_limiter = RateLimiter(SALE_RATE)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -5311,6 +5437,39 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("钱包存档错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
+        def sale(self, path):
+            # 角色挂售（同源调用，不带 CORS 头）；令牌只用于本次请求，不写日志
+            op = path[len("/api/kb/bazaar/sale/"):]
+            if op not in ("save", "delete"):
+                return self.send_json(404, {"error": "not found"})
+            ok, _, retry = sale_limiter.take(self.client_ip())
+            if not ok:
+                return self.send_json(429, {"error": f"请求太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            auth = self.headers.get("Authorization") or ""
+            token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+            if not re.fullmatch(r"[A-Za-z0-9._~+/=-]{1,4096}", token):
+                return self.send_json(403, {"error": "令牌无效，请重新绑定这个角色"})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 8192:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "请求体应为 JSON"})
+            try:
+                return self.send_json(200, getattr(api.sale, op)(body, token))
+            except PermissionError:
+                return self.send_json(403, {"error": "令牌无效或缺少技能读取权限，请重新绑定这个角色"})
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except EsiUnavailable as e:
+                return self.send_json(502, {"error": str(e)})
+            except Exception:
+                log.exception("角色挂售错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
         def sync(self, path):
             # 设置云同步（同源调用，不带 CORS 头）；请求体不写日志
             op = path[len("/api/kb/sync/"):]
@@ -5345,6 +5504,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.wallet(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/sync/"):
                 return self.sync(url.path.rstrip("/"))
+            if url.path.startswith("/api/kb/bazaar/sale/"):
+                return self.sale(url.path.rstrip("/"))
             cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
             err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
             path = url.path.rstrip("/")
@@ -5403,7 +5564,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                     return self.send_json(200, api.pc.detail(int(parts[1])))
                 self.send_json(404, {"error": "not found"})
             except (KeyError, ValueError) as e:
-                self.send_json(404 if isinstance(e, KeyError) else 400, {"error": str(e)})
+                msg = str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)   # KeyError 的 str() 带引号
+                self.send_json(404 if isinstance(e, KeyError) else 400, {"error": msg})
             except Exception as e:
                 log.exception("接口错误")
                 self.send_json(500, {"error": str(e)})
@@ -5477,6 +5639,7 @@ def main():
     api.obs = store.obs
     api.wallet = Wallet(store, industry)
     api.sync = SettingsSync(store)
+    api.sale = CharSale(store, api.wallet)
     abyssal = Abyssal(store)
     abyssal.model = store.abyssal_model
     cn_apis = {}

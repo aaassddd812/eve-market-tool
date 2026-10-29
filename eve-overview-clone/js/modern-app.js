@@ -489,8 +489,11 @@ function loadAbyssModule() {
 // 角色交易（宁静服：官方论坛 Character Bazaar）：首次进入时加载
 let bazaarLoading = null;
 function loadBazaarModule() {
-  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v13').then((m) => {
-    m.initBazaar({ esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices: getLiveHubPrices, fitData: () => loadFittingModule().then((f) => f.fitData()), closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
+  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v15').then((m) => {
+    m.initBazaar({ esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices: getLiveHubPrices, fitData: () => loadFittingModule().then((f) => f.fitData()), closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
+      // 曙光服角色挂售：已绑定的角色与各自的令牌
+      copyText, accountToken, openEsiBind: () => { switchView('profile'); openEsiModal(); },
+      esiAccounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name || String(a.character_id) })) });
     return m;
   }).catch((error) => { bazaarLoading = null; throw error; });
   return bazaarLoading;

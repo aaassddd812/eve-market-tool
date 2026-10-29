@@ -7,11 +7,11 @@
 // 排序：最新回复 / 最新发布的首屏是后台索引里近 3 个月的全部帖子（合并论坛第 1 页实时数据），加载更多再读更早的论坛页；技能点 / 价格 / 每技能点价格读后端索引（后台慢速读取近期帖子 1 楼解析出的数据）。
 // 卖家贴了 qsna.eu 技能展示时，详情里分析角色定位、可开舰船、开某艘船还要多久（bazaar-skills.js）。
 // 列表标题：中文模式下附带后端批量机器翻译的标题（title_zh），原文作副标题。
-// 晨曦服改用网易藏宝阁的在售角色（bazaar-cbg.js），曙光服暂不支持。
-// 地址栏：#bazaar · #bazaar/t/<帖子ID>（晨曦：#bazaar/c/<藏宝阁订单号>）
+// 晨曦服改用网易藏宝阁的在售角色（bazaar-cbg.js），曙光服是玩家用 ESI 绑定的角色自行挂售（bazaar-sale.js）。
+// 地址栏：#bazaar · #bazaar/t/<帖子ID>（晨曦：#bazaar/c/<藏宝阁订单号>；曙光：#bazaar/s/<角色ID>、#bazaar/sell）
 import { IS_TQ, SERVER } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
-import * as BS from './bazaar-skills.js?v=6';
+import * as BS from './bazaar-skills.js?v=7';
 
 let ctx;   // esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices(ids) -> Map(id -> { sell, buy }), fitData() -> { data, FE }, closeDrawer
 const $ = (id) => document.getElementById(id);
@@ -61,7 +61,10 @@ function save() { ctx.store.set(STORE_KEY, JSON.stringify({ lang: S.lang, order:
 export function initBazaar(context) { ctx = context; load(); }
 const IS_CBG = SERVER.id === 'serenity';
 let CBG = null;
-const cbgModule = () => (CBG ||= import('./bazaar-cbg.js?v=8').then((m) => { m.initCbg(ctx); return m; }));
+const cbgModule = () => (CBG ||= import('./bazaar-cbg.js?v=9').then((m) => { m.initCbg(ctx); return m; }));
+const IS_SALE = SERVER.id === 'infinity';
+let SALE = null;
+const saleModule = () => (SALE ||= import('./bazaar-sale.js?v=2').then((m) => { m.initSale(ctx); return m; }));
 
 async function api(path) {
   const res = await fetch('/api/kb/bazaar' + path);
@@ -72,6 +75,7 @@ async function api(path) {
 
 export async function preload() {
   if (IS_CBG) { (await cbgModule()).preload(); return; }
+  if (IS_SALE) { (await saleModule()).preload(); return; }
   if (!IS_TQ || S.topics.length) return;
   await fetchList(false, true).catch(() => {});
 }
@@ -79,11 +83,12 @@ export async function preload() {
 export async function showBazaar(hash) {
   const main = $('bazaarMain');
   if (IS_CBG) { (await cbgModule()).showCbg(hash || location.hash); return; }
+  if (IS_SALE) { (await saleModule()).showSale(hash || location.hash); return; }
   if (!main.dataset.ready) { main.dataset.ready = '1'; bind(); }
   if (!IS_TQ) {
     $('bazaarSide').innerHTML = '';
     $('bazaarSearch').disabled = true;
-    main.innerHTML = '<div class="empty-state"><p>角色交易目前只支持宁静服（官方论坛 Character Bazaar）和晨曦服（网易藏宝阁）</p></div>';
+    main.innerHTML = '<div class="empty-state"><p>这个服务器暂不支持角色交易</p></div>';
     return;
   }
   route(hash || location.hash);
