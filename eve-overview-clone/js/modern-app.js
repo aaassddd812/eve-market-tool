@@ -4661,7 +4661,7 @@ async function renderProfileTab(tab) {
 // 个人中心 · 技能：首次打开时加载
 let skillsLoading = null;
 function loadSkillsModule() {
-  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v29').then((m) => {
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v30').then((m) => {
     m.initSkills({ esc, formatNumber, esiAuthFetch, store, showPlan: async (el) => (await loadFittingModule()).showPlan(el) });
     return m;
   }).catch((error) => { skillsLoading = null; throw error; });

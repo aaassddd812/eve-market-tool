@@ -3732,6 +3732,10 @@ html.pie-open { overflow: hidden; }
 .sk-q-stats > div > span { font-size: 0.75rem; color: var(--text-muted); }
 .sk-q-stats b { font-size: 1rem; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sk-q-stats b small { font-size: 0.75rem; font-weight: 400; color: var(--text-muted); }
+.sk-q-remap { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-secondary); }
+.sk-q-remap-t { font-size: 0.8125rem; font-weight: 600; }
+.sk-q-remap .sp-remap-row span { background: var(--bg-primary); }
+.sk-q-remap .sp-hint { margin-left: auto; }
 .sk-q-list-head, .sk-queue li { display: grid; grid-template-columns: 26px minmax(140px, 1fr) 90px 80px 96px 130px 92px; align-items: center; gap: 8px; }
 .sk-q-list-head { margin: 12px 0 2px; padding: 0 8px; font-size: 0.6875rem; color: var(--text-muted); }
 .sk-q-list-head span:nth-child(n+3), .sk-queue li > span:nth-child(n+3) { text-align: right; }

@@ -8,7 +8,7 @@ import { serverExtra } from './server-extra.js?v=2';
 let ctx;   // esc, formatNumber, esiAuthFetch, store, showPlan
 let data = null;
 let loading = null;
-const S = { filter: 'all', q: '', open: null, queue: null, queueFor: 0, attrs: null, mode: 'list' };
+const S = { filter: 'all', q: '', open: null, queue: null, queueFor: 0, attrs: null, imp: null, mode: 'list' };
 const ATTR_KEY = { 164: 'charisma', 165: 'intelligence', 166: 'memory', 167: 'perception', 168: 'willpower' };
 const OPEN_KEY = 'eve-skill-groups-open';
 const ATTR_ZH = { 164: '魅力', 165: '智力', 166: '记忆', 167: '感知', 168: '毅力' };
@@ -50,6 +50,10 @@ export async function renderSkills(box, character, characterId) {
       .then((a) => { if (S.queueFor === characterId) S.attrs = a; })
       .catch((e) => { if (S.queueFor === characterId) S.attrs = { error: e.message }; })
       .finally(() => { if (box.isConnected && box.dataset.skills === '1') draw(box, own); });
+    S.imp = null;
+    implantBonus(characterId)
+      .catch(() => Object.fromEntries(Object.values(ATTR_KEY).map((k) => [k, 0])))   // 没有植入体权限：按无植入体算
+      .then((b) => { if (S.queueFor === characterId) { S.imp = b; if (box.isConnected && box.dataset.skills === '1') draw(box, own); } });
   }
   box._skOwn = own;
   bind(box, own);
@@ -67,6 +71,55 @@ function drawPlan(box) {
   clearInterval(timer); timer = 0;
   box.innerHTML = `${modeNav()}<div class="sk-plan-host"></div>`;
   ctx.showPlan(box.querySelector('.sk-plan-host'));
+}
+
+// 植入体属性加成：ESI /implants/ + 各植入体的属性加成（dogma 175–179），算属性分配建议用
+const IMP_ATTR = { 175: 'charisma', 176: 'intelligence', 177: 'memory', 178: 'perception', 179: 'willpower' };
+const impTypes = new Map();
+async function implantBonus(characterId) {
+  const out = Object.fromEntries(Object.values(ATTR_KEY).map((k) => [k, 0]));
+  const ids = await ctx.esiAuthFetch('/characters/' + characterId + '/implants/');
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (!impTypes.has(id)) impTypes.set(id, ctx.esiAuthFetch('/universe/types/' + id + '/').catch(() => null));
+    for (const d of (await impTypes.get(id))?.dogma_attributes || []) if (IMP_ATTR[d.attribute_id]) out[IMP_ATTR[d.attribute_id]] += d.value;
+  }
+  return out;
+}
+
+// 最佳属性分配：每项 17–27，共 99 点；按队列剩余技能点（按主 / 副属性归组）算总时长最短的分配（同技能规划）
+function optimalRemap(groups, imp) {
+  const time = (a) => groups.reduce((t, g) => t + g.sp / ((a[g.p] + imp[g.p]) + (a[g.s] + imp[g.s]) / 2), 0);
+  let best = null;
+  const a = {};
+  for (let c = 0; c <= 10; c++) for (let i = 0; i <= 10 && c + i <= 14; i++) for (let m = 0; m <= 10 && c + i + m <= 14; m++) for (let p = 0; p <= 10 && c + i + m + p <= 14; p++) {
+    const w = 14 - c - i - m - p;
+    if (w > 10) continue;
+    [a.charisma, a.intelligence, a.memory, a.perception, a.willpower] = [17 + c, 17 + i, 17 + m, 17 + p, 17 + w];
+    const tm = time(a);
+    if (!best || tm < best.min) best = { min: tm, attrs: { ...a } };
+  }
+  best.curMin = time(S.attrs);
+  return best;
+}
+
+function remapHtml(items) {
+  const esc = ctx.esc;
+  if (!S.attrs || S.attrs.error || !S.imp) return '';
+  const now = Date.now();
+  const groups = new Map();
+  for (const it of items) {
+    if (!it.s) continue;
+    const sp = it.end > it.start && now > it.start ? (it.lv1 - it.sp0) * Math.min(1, (it.end - now) / (it.end - it.start)) : it.lv1 - it.sp0;
+    const k = ATTR_KEY[it.s[4]] + '|' + ATTR_KEY[it.s[5]];
+    if (sp > 0 && !k.includes('undefined')) groups.set(k, (groups.get(k) || 0) + sp);
+  }
+  if (!groups.size) return '';
+  const B = optimalRemap([...groups].map(([k, sp]) => { const [p, s] = k.split('|'); return { p, s, sp }; }), S.imp);
+  const save = B.curMin - B.min;
+  const good = save > 60;
+  return `<div class="sk-q-remap"><span class="sk-q-remap-t">属性分配建议</span>
+    ${good ? `<div class="sp-remap-row">${Object.entries(ATTR_KEY).map(([id, k]) => { const d = B.attrs[k] - S.attrs[k]; return `<span><em>${ATTR_ZH[id]}</em><b>${B.attrs[k]}</b>${d ? `<small class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${d}</small>` : ''}</span>`; }).join('')}</div>` : ''}
+    <span class="sp-hint">${good ? esc(`可少练 ${span(save * 60e3)}（${Math.round(save / B.curMin * 100)}%）`) : '当前分配已接近最佳'}</span></div>`;
 }
 
 // 属性条：五项属性 + 重新分配（每年 1 次免费，另有奖励次数）
@@ -271,7 +324,7 @@ function queueSection(queue, mine, rate) {
       <span class="sk-q-fin" translate="no">${it.end ? esc(when(it.end)) : ''}</span>
       <span class="sk-q-cd" ${it.end ? `data-sk-cd="${it.end}"` : ''} translate="no">${it.end ? '' : '已暂停'}</span>
     </li>`).join('');
-  return `<section class="sk-queue">${head}${now}${rest ? `<div class="sk-q-list-head"><span>#</span><span>技能</span><span>技能点</span><span>速度</span><span>耗时</span><span>完成于</span><span>剩余</span></div><ol>${rest}</ol>` : ''}</section>`;
+  return `<section class="sk-queue">${head}${now}${remapHtml(items)}${rest ? `<div class="sk-q-list-head"><span>#</span><span>技能</span><span>技能点</span><span>速度</span><span>耗时</span><span>完成于</span><span>剩余</span></div><ol>${rest}</ol>` : ''}</section>`;
 }
 
 // 每秒更新：倒计时、当前技能点与进度条；当前技能练完时重画（队列前移）
