@@ -28,13 +28,11 @@ python -m http.server 8899 --bind 127.0.0.1
    只更新 `index-v2.html` 的话，首页还引用旧的 `modern-app.js?v=…`，进而加载旧版本的各个模块——改了也看不到效果（曾因此导致本地红名悬浮窗一直是旧逻辑）。
 3. 为什么一定要同步：`.js / .css / .json / 图片` 按 `public, max-age=31536000, immutable` 缓存一年，浏览器和客户端只认 `?v=` 版本号；
    入口页（`index.html`）是 `no-cache`，每次都会重新取。所以改了文件必须改版本号，入口页必须是最新的，新版本号才会被用上。
-4. 部署完核对：首页和 `index-v2.html` 引用的 `modern-app.js` 版本号应该一致，且等于仓库里的：
+4. 部署完核对（一键脚本，比对线上首页、线上 `index-v2.html` 与仓库版引用的全部 `?v=` 版本号）：
    ```bash
-   curl -s https://eve.navexor.top/ | grep -o 'modern-app.js?v=v[0-9]*'
-   curl -s https://eve.navexor.top/index-v2.html | grep -o 'modern-app.js?v=v[0-9]*'
-   grep -o 'modern-app.js?v=v[0-9]*' eve-overview-clone/index-v2.html
+   bash eve-overview-clone/server/check-live.sh
    ```
-   不一致就是 `index.html` 没更新。悬浮窗页 `float.html` 也是入口页，同样直接覆盖。
+   不一致就是 `index.html` 没更新或这次改动没部署。悬浮窗页 `float.html` 也是入口页，同样直接覆盖。
 
 **桌面版**（Windows）：见仓库根目录 `desktop/README.md`。网站右上角「桌面版」按钮提供 `downloads/EVE-Tool-Downloader.exe` 下载器，
 运行后从 GitHub Releases 下载安装包；桌面版里网页会切换成左侧分组菜单栏的布局（浏览器加 `?desktop=1` 可预览）。
@@ -891,15 +889,6 @@ node build_reprocess.mjs <SDE 解压目录>   # 输出 eve-overview-clone/reproc
 - 列表中的人物、军团、联盟、星系、星域都可直接点击；地址栏 `#kb/alliance/ID` 等可分享
 - 击杀详情弹窗（击杀页、个人中心战斗记录、星图）里的人物 / 军团 / 联盟也可点击，直接打开对应统计页
 - 本站保留最近 30 天的全部击杀；筛选后的列表翻到 30 天以前时，自动改为实时查询 zKillboard（不入库）
-
-### 前端部署
-
-静态文件在服务器上的目录是 `/opt/eve/dist/`，仓库里只有 `index-v2.html`，但 nginx 首页 `/` 用的是 **`index.html`**——
-所以**每次部署都要把 `index-v2.html` 同时复制成 `index.html`**，只更新 index-v2.html 的话首页会一直加载旧代码
-（JS 按 `?v=` 版本号长期缓存，旧入口引用旧版本号，用户端永远拿不到新代码）。
-
-部署完跑 `bash server/check-live.sh` 检查：比对线上 `/`（index.html）、线上 `/index-v2.html` 与仓库版
-`index-v2.html` 引用的版本号，不一致会报出来。
 
 ### 击杀记录服务部署
 
