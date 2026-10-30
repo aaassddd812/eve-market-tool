@@ -14,6 +14,9 @@ python -m http.server 8899 --bind 127.0.0.1
 也可以用任意静态服务器（VS Code Live Server、nginx 等）。直接双击 index-v2.html 也可以运行，
 但通过 HTTP 服务打开更接近原站环境。
 
+**桌面版**（Windows）：见仓库根目录 `desktop/README.md`。网站右上角「桌面版」按钮提供 `downloads/EVE-Tool-Downloader.exe` 下载器，
+运行后从 GitHub Releases 下载安装包；桌面版里网页会切换成左侧分组菜单栏的布局（浏览器加 `?desktop=1` 可预览）。
+
 ## 文件结构
 
 ```

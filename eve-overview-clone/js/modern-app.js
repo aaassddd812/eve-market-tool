@@ -274,6 +274,7 @@ document.addEventListener('compositionend', (e) => {
 document.addEventListener('input', (e) => { if (e.isComposing || window.__imeComposing) e.stopImmediatePropagation(); }, true);
 
 // ===== 视图切换 =====
+const IS_DESKTOP = document.documentElement.classList.contains('is-desktop');
 let fitNav = () => {};   // initNavigation 里赋值：重新计算顶栏哪些入口只留图标
 function syncNavActive() {
   const arb = state.currentView === 'market' && !$('arbView').hidden;
@@ -305,6 +306,7 @@ function initNavigation() {
   const header = document.querySelector('.app-header');
   const nav = document.querySelector('.header-nav');
   if (!header || !nav) return;
+  if (IS_DESKTOP) { fitNav = initRail(header, nav); fitNav(); return; }   // 桌面版：菜单在左侧分组竖排，不用收图标
   const over = () => nav.scrollWidth > nav.clientWidth + 1;
   const fit = () => {
     const btns = [...nav.querySelectorAll('.nav-btn')];
@@ -2985,6 +2987,66 @@ function toggleContact(show = $('contactModal').hidden) {
       <button type="button" class="btn btn-ghost" data-contact-copy="${c.i}">复制</button>
     </div>`).join('') : '<p class="contact-note">联系方式整理中，稍后补上。</p>';
 }
+// ===== 桌面版 =====
+// 左侧菜单分组（按 data-view，倒卖排行用 arb）；没列出的入口（教程、个人中心）放在最下面不分组
+const RAIL_GROUPS = [
+  ['common', '常用', ['market', 'appraisal', 'fit', 'map', 'kb']],
+  ['trade', '交易', ['arb', 'contracts', 'courier', 'lp', 'abyss', 'bazaar']],
+  ['make', '生产', ['industry', 'pi']],
+  ['space', '宇宙与战斗', ['sim', 'war', 'sov', 'wh']]
+];
+// 桌面版左侧菜单：入口分组、每组可折叠（记在本机）；底部「收起 / 展开」整栏只留图标。返回同步当前页高亮的函数
+function initRail(header, nav) {
+  let folded = {};
+  try { folded = JSON.parse(localStorage.getItem('eve-rail-fold') || '{}') || {}; } catch { /* 默认全展开 */ }
+  const key = (b) => (b.hasAttribute('data-arb') ? 'arb' : b.dataset.view);
+  const btns = [...nav.querySelectorAll('.nav-btn')];
+  const rest = btns.filter((b) => !RAIL_GROUPS.some(([, , list]) => list.includes(key(b))));
+  for (const [id, name, list] of RAIL_GROUPS) {
+    const g = document.createElement('div');
+    g.className = 'rail-group' + (folded[id] ? ' folded' : '');
+    g.dataset.group = id;
+    g.innerHTML = `<button type="button" class="rail-group-head" aria-expanded="${!folded[id]}"><span>${name}</span><i class="rail-dot"></i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button><div class="rail-group-items"></div>`;
+    const box = g.lastElementChild;
+    for (const k of list) { const b = btns.find((x) => key(x) === k); if (b) box.appendChild(b); }
+    g.firstElementChild.addEventListener('click', () => {
+      const f = g.classList.toggle('folded');
+      g.firstElementChild.setAttribute('aria-expanded', String(!f));
+      folded[id] = f;
+      try { localStorage.setItem('eve-rail-fold', JSON.stringify(folded)); } catch { /* 无痕模式 */ }
+    });
+    nav.appendChild(g);
+  }
+  if (rest.length) { const g = document.createElement('div'); g.className = 'rail-group rail-rest'; rest.forEach((b) => g.appendChild(b)); nav.appendChild(g); }
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'icon-btn rail-toggle';
+  const sync = () => {
+    const mini = document.documentElement.classList.contains('rail-mini');
+    btn.title = mini ? '展开菜单' : '收起菜单';
+    btn.setAttribute('aria-label', btn.title);
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path d="${mini ? 'm13 10 2 2-2 2' : 'm15 10-2 2 2 2'}"/></svg>`;
+  };
+  btn.addEventListener('click', () => {
+    const mini = document.documentElement.classList.toggle('rail-mini');
+    try { localStorage.setItem('eve-rail', mini ? 'mini' : ''); } catch { /* 无痕模式 */ }
+    sync();
+  });
+  sync();
+  (header.querySelector('.header-actions') || header).appendChild(btn);
+  // 折叠的组里有当前页时在组标题上点一个点
+  return () => nav.querySelectorAll('.rail-group[data-group]').forEach((g) => g.classList.toggle('has-active', !!g.querySelector('.nav-btn.active')));
+}
+// 网页版右上角「桌面版」：说明 + 下载器
+function initDesktopDl() {
+  const modal = $('desktopModal');
+  if (!modal) return;
+  $('desktopDlBtn').addEventListener('click', () => { modal.hidden = false; });
+  modal.addEventListener('click', (e) => { if (e.target.closest('.modal-backdrop, [data-close-desktop]')) modal.hidden = true; });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) modal.hidden = true; });
+}
+
 function initContact() {
   $('contactBtn').addEventListener('click', () => toggleContact(true));
   $('contactModal').addEventListener('click', (e) => {
@@ -5701,6 +5763,7 @@ function init() {
   initHashRouting();
   initShortcuts();
   initContact();
+  initDesktopDl();
   if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
   if (location.hash.startsWith('#fit/sim')) history.replaceState(null, '', location.pathname + '#sim');   // 旧地址：对战模拟原在装配页

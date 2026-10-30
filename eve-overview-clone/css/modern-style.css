@@ -7175,3 +7175,63 @@ td .sov-auto-tag { margin-left: 4px; }
   .sim-battle:fullscreen .sim-bt-reinf { top: 44px; }
   .sim-battle:fullscreen .sim-bt-pop { top: 84px; max-height: calc(100% - 210px); }
 }
+
+/* ===== 桌面版（html.is-desktop）：菜单栏在左侧竖排，底部是工具按钮，可收起成只留图标 ===== */
+html.is-desktop { --header-h: 0px; --rail-w: 212px; }
+html.is-desktop.rail-mini { --rail-w: 64px; }
+html.is-desktop .app-shell { flex-direction: row; }
+html.is-desktop .app-header { width: var(--rail-w); height: auto; flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 10px 10px; border-bottom: 0; border-right: 1px solid var(--border-primary); transition: width var(--transition-fast); }
+html.is-desktop .header-brand { padding: 2px 6px 4px; }
+html.is-desktop .app-header .header-brand .brand-name { display: inline; }
+html.is-desktop .header-nav { flex-direction: column; gap: 1px; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; margin: 0 -4px; padding: 0 4px; }
+html.is-desktop .app-header .nav-btn { width: 100%; height: 34px; padding: 0 12px; gap: 12px; }
+html.is-desktop .app-header .nav-btn span { display: inline; overflow: hidden; text-overflow: ellipsis; }
+html.is-desktop .header-actions { flex: none; flex-wrap: wrap; gap: 2px 4px; padding-top: 10px; border-top: 1px solid var(--border-primary); }
+html.is-desktop .server-switch { flex: 1 1 100%; }
+html.is-desktop .server-status { width: 100%; min-width: 0; overflow: hidden; }
+html.is-desktop .server-status .status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.is-desktop .app-header .server-status .status-text { display: inline; }
+html.is-desktop .server-menu { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
+html.is-desktop .icon-btn.api-link span, html.is-desktop .contact-btn span { display: none; }
+html.is-desktop .icon-btn.api-link, html.is-desktop .contact-btn { width: 36px; padding: 0; }
+html.is-desktop .desktop-dl-btn, html.is-desktop .menu-btn { display: none !important; }
+html.is-desktop.rail-mini .app-header { padding: 14px 8px 10px; }
+html.is-desktop.rail-mini .app-header .header-brand .brand-name,
+html.is-desktop.rail-mini .app-header .nav-btn span,
+html.is-desktop.rail-mini .server-status .server-name,
+html.is-desktop.rail-mini .app-header .server-status .status-text,
+html.is-desktop.rail-mini .server-status .server-caret { display: none; }
+html.is-desktop.rail-mini .header-brand { justify-content: center; padding: 2px 0 4px; }
+html.is-desktop.rail-mini .app-header .nav-btn { justify-content: center; padding: 0; }
+html.is-desktop.rail-mini .header-actions { flex-direction: column; align-items: center; flex-wrap: nowrap; }
+html.is-desktop.rail-mini .server-switch { flex: none; }
+html.is-desktop.rail-mini .server-status { width: 36px; padding: 0; justify-content: center; }
+
+/* 网页版「桌面版」下载说明 */
+.desktop-content { max-width: 460px; }
+.desktop-body { display: flex; flex-direction: column; gap: 14px; }
+.desktop-intro { margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--text-secondary); }
+.desktop-points { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.desktop-points li { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.desktop-points b { font-size: 0.8125rem; font-weight: 600; }
+.desktop-points span { font-size: 0.75rem; line-height: 1.55; color: var(--text-muted); }
+.desktop-dl { align-self: flex-start; }
+html.is-desktop .header-nav::-webkit-scrollbar { display: block; width: 6px; }
+html.is-desktop .header-nav::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--border-primary); }
+/* 桌面版左侧菜单分组 */
+.rail-group { display: flex; flex-direction: column; gap: 1px; }
+.rail-group + .rail-group { margin-top: 6px; }
+.rail-group-head { display: flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px 0 12px; border-radius: var(--radius-sm, 6px); font: inherit; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); cursor: pointer; }
+.rail-group-head:hover { color: var(--text-primary); background: var(--bg-hover); }
+.rail-group-head span { flex: 1; text-align: left; }
+.rail-group-head svg { width: 13px; height: 13px; flex: none; transition: transform var(--transition-fast); }
+.rail-group.folded .rail-group-head svg { transform: rotate(-90deg); }
+.rail-dot { display: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-primary); }
+.rail-group.folded.has-active .rail-dot { display: block; }
+.rail-group.folded .rail-group-items { display: none; }
+.rail-group-items { display: flex; flex-direction: column; gap: 1px; }
+.rail-rest { padding-top: 6px; border-top: 1px solid var(--border-primary); }
+html.rail-mini .rail-group-head { display: none; }
+html.rail-mini .rail-group.folded .rail-group-items { display: flex; }
+html.rail-mini .rail-group + .rail-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border-primary); }
+@media (max-width: 768px) { .desktop-dl-btn { display: none; } }
