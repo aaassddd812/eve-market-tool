@@ -1,8 +1,20 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "线上网站只允许调用「用系统浏览器打开链接」",
-  "windows": ["main"],
-  "remote": { "urls": ["https://eve.navexor.top/*"] },
-  "permissions": ["opener:default"]
+  "description": "线上网站只允许：用系统浏览器打开链接、发系统通知、开关悬浮窗",
+  "windows": ["main", "float-*"],
+  "remote": {
+    "urls": [
+      "https://eve.navexor.top/*"
+    ]
+  },
+  "permissions": [
+    "opener:default",
+    "notification:default",
+    "allow-float-open",
+    "allow-float-pass",
+    "allow-float-drag",
+    "allow-float-close",
+    "allow-float-focus-main"
+  ]
 }

@@ -4,7 +4,9 @@
 //   也可切到表格视图（各中心卖 / 收一目了然）。可按涨跌、偏离均价、成交额、最接近触发的提醒排序。数据与单品「交易中心比价」相同（hub-compare.js，缓存 5 分钟）。
 // 到价提醒：每个物品可设若干条「某交易中心 卖价 / 收价 ≤ / ≥ 某价」（或一键「卖价跌 / 涨 5%、10%」），看板开着或后台监控开着时每 5 分钟检查一次；
 //   触发后网页提示（可选桌面通知、提示音），该条提醒停用，点「重新启用」再次监控。设置保存在本机。
+// 悬浮窗（float-feed.js）：到价提醒列表推给悬浮窗（pubFloat）；悬浮窗开着时后台照样每 5 分钟查一次价（不用开「后台监控到价」）。
 import { loadHubs } from './hub-compare.js?v=v14';
+import * as FF from './float-feed.js?v=v1';
 
 let ctx = null;   // isGlobal, fetchESI, fetchESIPaged, regions, esc, formatISK, formatPrice, formatNumber, showToast, typeName, iconUrl, openItem, favorites, toggleFavorite, store, isActive
 const KEY = 'eve-watch-board';
@@ -17,8 +19,9 @@ export function initWatchBoard(context) {
   Object.assign(W, ctx.store.getJSON(KEY, {}) || {});
   if (!W.alerts || typeof W.alerts !== 'object') W.alerts = {};
   if (W.bg && armedCount()) startBackground();
+  pubFloat();
 }
-const save = () => ctx.store.setJSON(KEY, W);
+const save = () => { ctx.store.setJSON(KEY, W); pubFloat(); };
 const hubName = (r) => r.hub.name.split(' ')[0].replace(/海\d+$/, '') || r.name;
 const armedCount = () => Object.values(W.alerts).flat().filter((a) => a.on).length;
 export const hasArmedAlerts = () => armedCount() > 0;
@@ -58,6 +61,7 @@ export async function showWatchBoard(box) {
     await loadAll(Date.now() - S.at > POLL ? ids : missing);
     S.busy = false;
     checkAlerts();
+    pubFloat();
     if (!ctx.isActive()) return;
   }
   draw(box);
@@ -103,6 +107,7 @@ function headHtml(ids) {
     <span class="toolbar-spacer"></span>
     ${ids.length ? `<select class="input wb-sort" data-wb-sort title="排序">${Object.entries(SORTS).map(([k, x]) => `<option value="${k}"${W.sort === k ? ' selected' : ''}>${x.label}</option>`).join('')}</select>
     <div class="segmented wb-seg">${seg('view', 'card', '卡片')}${seg('view', 'table', '表格')}</div>` : ''}
+    ${FF.buttonHtml('price')}
     <button class="btn btn-ghost btn-sm" data-wb-refresh ${S.busy ? 'disabled' : ''}>${S.busy ? '读取中…' : '刷新'}</button></div>
     <div class="wb-bar">${chk('bg', '后台监控到价', '看板关着时也每 5 分钟检查一次（网页开着才有效）')}${chk('notify', '桌面通知', '需要允许浏览器通知')}${chk('sound', '提示音', '触发时播放提示音')}
       <span class="text-muted">${armedCount() ? `${armedCount()} 条提醒监控中` : '点 🔔 给物品设到价提醒'}</span></div>`;
@@ -311,6 +316,39 @@ export function onChange(e, box) {
   draw(box);
 }
 
+// ---------- 悬浮窗 ----------
+// 每条提醒一行：已触发的排前面（最近触发的在最上），监控中的按离触发由近到远
+function pubFloat() {
+  const items = [];
+  for (const [id, list] of Object.entries(W.alerts)) {
+    const hubs = S.rows.get(Number(id));
+    list.forEach((a, i) => {
+      const h = hubs?.find((x) => x.region.id === a.hub);
+      const reg = h?.region || ctx.regions.find((r) => r.id === a.hub);
+      items.push({
+        key: id + ':' + i + ':' + (a.hit || 0), id: Number(id), icon: ctx.iconUrl(Number(id)), name: ctx.typeName(Number(id)),
+        hub: reg ? hubName(reg) : '', side: a.side, op: a.op, target: px(a.price), cur: px(h?.[a.side]),
+        gap: hubs ? alertGap(a, hubs) : null, on: a.on, hit: a.hit || 0
+      });
+    });
+  }
+  items.sort((x, y) => (x.on - y.on) || (y.hit - x.hit) || ((x.gap == null ? 9 : Math.abs(x.gap)) - (y.gap == null ? 9 : Math.abs(y.gap))));
+  FF.publish('price', { at: S.at, items });
+}
+// 悬浮窗打开时：马上查一次监控中的物品，并保证后台定时在跑
+export async function startFloat() {
+  if (!S.timer) startBackground();
+  const ids = armedIds();
+  if (!ids.length || (S.at && Date.now() - S.at < POLL && ids.every((id) => S.rows.has(id)))) { pubFloat(); return; }
+  if (S.busy) return;
+  S.busy = true;
+  await loadAll(ids);
+  S.busy = false;
+  checkAlerts();
+  pubFloat();
+}
+const armedIds = () => Object.keys(W.alerts).map(Number).filter((id) => W.alerts[id].some((a) => a.on));
+
 // ---------- 到价提醒 ----------
 function checkAlerts() {
   const hits = [];
@@ -341,12 +379,13 @@ function startBackground() {
   clearInterval(S.timer);
   S.timer = setInterval(async () => {
     const active = ctx.isActive();
-    if (!active && !(W.bg && armedCount())) return;
-    const ids = active ? ctx.favorites() : Object.keys(W.alerts).map(Number).filter((id) => W.alerts[id].some((a) => a.on));
+    if (!active && !((W.bg || FF.isOpen('price')) && armedCount())) return;
+    const ids = active ? ctx.favorites() : armedIds();
     S.busy = true;
     await loadAll(ids);
     S.busy = false;
     checkAlerts();
+    pubFloat();
     if (ctx.isActive()) draw(document.getElementById('watchBody'));
   }, POLL);
 }

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark light">
+  <link rel="icon" href="assets/favicon.svg?v=1" type="image/svg+xml">
+  <title>悬浮窗 · EVE</title>
+  <!-- 悬浮窗（击杀预警 / 到价提醒）：桌面版的原生置顶窗口、网页画中画里的 iframe 都加载这个页面，内容由主页面推过来（js/float-feed.js、js/float-view.js） -->
+  <script>
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('eve-theme'); } catch (e) {}
+      if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
+  </script>
+  <style>html.i18n-pending body { visibility: hidden; }</style>
+  <script src="js/i18n.js?v=131"></script>
+  <link rel="stylesheet" href="css/float.css?v=v1">
+</head>
+<body>
+  <div class="fl" id="fl">
+    <header class="fl-head" id="flHead">
+      <span class="fl-title" id="flTitle"></span>
+      <div class="fl-tabs" id="flTabs" hidden>
+        <button type="button" data-fl-kind="kill">击杀预警</button>
+        <button type="button" data-fl-kind="price">到价提醒</button>
+      </div>
+      <span class="fl-sp"></span>
+      <div class="fl-ctl" id="flCtl" hidden>
+        <button type="button" class="fl-btn" data-fl-alpha title="透明度" aria-label="透明度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg></button>
+        <button type="button" class="fl-btn" data-fl-pass title="鼠标穿透：点击直接落到下面的游戏上（在主窗口再点一次「悬浮窗」恢复）" aria-label="鼠标穿透"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 4 7 16 2.5-6.5L20 11z"/></svg></button>
+        <button type="button" class="fl-btn" data-fl-close title="关闭" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+    </header>
+    <main class="fl-body" id="flBody"></main>
+    <footer class="fl-foot" id="flFoot"></footer>
+  </div>
+  <script type="module" src="js/float-view.js?v=v1"></script>
+</body>
+</html>

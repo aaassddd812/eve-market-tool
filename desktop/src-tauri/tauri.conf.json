@@ -22,5 +22,15 @@
         "displayLanguageSelector": false
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEVDQkFBRkIwNUNENTM5MDgKUldRSU9kVmNzSys2N0hLZ0ppR2pVNHBaNDdaVUxWTGdRc2JEZElia0hSdTdvUi90TytreDI0VlQK",
+      "endpoints": [
+        "https://github.com/aaassddd812/eve-tool-desktop/releases/latest/download/latest.json",
+        "https://ghfast.top/https://github.com/aaassddd812/eve-tool-desktop/releases/latest/download/latest-mirror.json"
+      ],
+      "windows": { "installMode": "passive" }
+    }
   }
 }

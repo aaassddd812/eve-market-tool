@@ -8,6 +8,7 @@ import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v3';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
+import * as FF from './float-feed.js?v=v1';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
@@ -766,7 +767,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v62').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v63').then((m) => {
     m.initPi({ addToCart, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
@@ -1580,7 +1581,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v10').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v11').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -5663,7 +5664,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v20').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v21').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5717,6 +5718,14 @@ function initKillAlerts() {
   initCartButton();
   initIntelButton();
   initAlertCenter({ loadKill: loadKillAlert, loadIntel, esc, showToast });
+  // 悬浮窗（float-feed.js）：要哪种内容就加载对应模块；悬浮窗里点了击杀 / 物品，在主页面打开
+  FF.initFloatFeed({
+    showToast,
+    openKill: async (id) => { if (!id) return; const kb = await loadKillboard(); kb.openServiceKill(id); },
+    openItem: (id) => selectItem(id)
+  });
+  FF.setLoader('kill', loadKillAlert);
+  FF.setLoader('price', () => loadWatchBoard().then((m) => m.startFloat()));
   $('killAlertBtn').addEventListener('click', () => openAlertCenter());
   // 已开启的话页面打开即开始检测
   let on = false;

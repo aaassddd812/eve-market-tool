@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-float-close"
+description = "Enables the float_close command without any pre-configured scope."
+commands.allow = ["float_close"]
+
+[[permission]]
+identifier = "deny-float-close"
+description = "Denies the float_close command without any pre-configured scope."
+commands.deny = ["float_close"]

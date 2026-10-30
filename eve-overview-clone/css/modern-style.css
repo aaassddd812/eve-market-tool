@@ -7338,3 +7338,9 @@ html.rail-mini .rail-group + .rail-group { margin-top: 4px; padding-top: 4px; bo
 
 /* App 里隐藏下载入口 */
 html.is-app .desktop-dl-btn, html.is-app [data-mnav-act="desktopDlBtn"] { display: none !important; }
+
+/* 悬浮窗按钮（击杀预警标签页、自选看板；float-feed.js） */
+.float-open-btn { display: inline-flex; align-items: center; gap: 5px; }
+.float-open-btn svg { width: 14px; height: 14px; flex: none; }
+.ka-top { align-items: center; gap: 8px; }
+.ka-top .float-open-btn { margin-left: auto; flex: none; height: 32px; padding: 0 12px; font-size: 13px; }

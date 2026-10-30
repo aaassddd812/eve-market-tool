@@ -57,6 +57,7 @@ const F = {               // 表单状态（保存在本地）
   target: 0, rich: 'mid', tax: 10, price: 'sell',
   way: 'self',            // self 自产（采集）/ buy 买料加工
   inPrice: 'sell',        // 买料加工的原料价：sell 直接买卖单 / buy 挂收单
+  buyLevel: 0,            // 买料加工买哪一级原料：0 自动（P0–P3 里比较取收益最高的），1 / 2 / 3 = 只买 P1 / P2 / P3
   restock: 24,            // 买料加工的补货周期（小时），0 = 自动（按发射平台容量算最长周期）
   share: 10,              // 买料加工的成交量上限（占日成交 %），0 不限
   ecus: 0,                // 采集星的采集控制器个数，0 = 自动（采集头放到 CPU / 电网上限）
@@ -506,8 +507,12 @@ function planBuy(product, area) {
   const planets = Math.min(F.chars * F.perChar, avail);
   const outPrice = priceOf(product);
   if (!outPrice) return { product, error: '缺少行情' };
+  // 指定了买哪一级原料：只算这一级；产品不比它高就做不了
+  const L = F.buyLevel || 0;
+  if (L && tier <= L) return { product, error: `买 P${L} 只能加工 P${L + 1} 及以上的产品` };
   let best = null;
-  for (let buyTier = tier - 1; buyTier >= Math.max(0, tier - 3); buyTier--) {
+  const byTier = new Map();   // 每个买入层级的最优方案：成交量限制可能让第二名反超（applyMarketDepth 里再比一次）
+  for (let buyTier = L || tier - 1; buyTier >= (L || Math.max(0, tier - 3)); buyTier--) {
     const dem = { ...buyDemand(product, buyTier), product };
     if ([...dem.buy.keys()].some((id) => !inPriceOf(id))) continue;   // 买不到的原料
     // 每单位产品的利润：售价 − 原料 − 出口税 − 原料进口税
@@ -532,9 +537,11 @@ function planBuy(product, area) {
         profit: day * unit, unitCost, surplus: []
       };
       if (!best || plan.profit > best.profit) best = plan;
+      if (!byTier.get(buyTier) || plan.profit > byTier.get(buyTier).profit) byTier.set(buyTier, plan);
     }
   }
   if (!best) return { product, error: '放不下加工设施，或原料没有行情' };
+  best.alts = [...byTier.values()].filter((p) => p !== best && p.profit > 0);
   return best;
 }
 
@@ -1209,9 +1216,9 @@ const recentList = () => ctx.store.getJSON(RECENT_KEY, []).filter((id) => D.pi.c
 function pushRecent(id) {
   ctx.store.setJSON(RECENT_KEY, [id, ...recentList().filter((x) => x !== id)].slice(0, 8));
 }
-// 当前方式下可以规划的产品（买料加工没有 P0）
+// 当前方式下可以规划的产品（买料加工没有 P0，指定了买料等级时只有比它高的）
 function productsOfTier(t) {
-  if (F.way === 'buy' && t === 0) return [];
+  if (F.way === 'buy' && t <= (F.buyLevel || 0)) return [];
   return Object.keys(D.pi.commodities).map(Number).filter((id) => tierOf(id) === t && (t === 0 || D.schemByOut.has(id)))
     .sort((a, b) => cName(a).localeCompare(cName(b), 'zh'));
 }
@@ -1358,6 +1365,7 @@ function renderForm() {
     <div class="pi-field">
       <label>估算参数</label>
       ${buy ? `
+      <div class="pi-inline" title="从${HUB_NAME}买哪一级的原料来加工；自动 = 比较各级取收益最高的"><span>买料等级</span>${seg('buyLevel', [[0, '自动'], [1, 'P1'], [2, 'P2'], [3, 'P3']], F.buyLevel || 0)}</div>
       <div class="pi-inline"><span>原料价</span>${seg('inPrice', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.inPrice)}</div>
       <div class="pi-inline"><span>售价</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>
       <div class="pi-inline"><span>补货周期</span>${seg('restock', RESTOCKS, RESTOCKS.some(([h]) => h === F.restock) ? F.restock : '')}</div>
@@ -1386,12 +1394,13 @@ function bind() {
     const set = e.target.closest('[data-pi-set]');
     if (set) {
       const key = set.dataset.piSet;
-      F[key] = ['jumps', 'restock', 'share', 'ecus', 'level'].includes(key) ? Number(set.dataset.v) : set.dataset.v;
+      F[key] = ['jumps', 'restock', 'share', 'ecus', 'level', 'buyLevel'].includes(key) ? Number(set.dataset.v) : set.dataset.v;
       if (key === 'way' && F.way === 'buy' && F.target && tierOf(F.target) === 0) F.target = 0;
+      if (key === 'buyLevel' && F.target && tierOf(F.target) <= F.buyLevel) F.target = 0;   // 选中的产品做不了：回到自动推荐
       if (key === 'whCls') F.whSystem = 0;
       saveForm();
       renderForm();
-      if (key === 'way') renderSide();
+      if (key === 'way' || key === 'buyLevel') renderSide();
       if (key !== 'mode' && R.area) run();
       return;
     }
@@ -1554,7 +1563,8 @@ function renderResult() {
   const box = $('piResult');
   const area = R.area;
   if (!R.plans.length) {
-    box.innerHTML = areaSummary(area) + '<div class="pi-empty"><p>没有可行方案</p></div>';
+    const hint = F.way === 'buy' && F.buyLevel ? `<p class="text-muted">买 P${F.buyLevel} 加工都不赚钱，或原料成交量太小；可以换个买料等级或选「自动」</p>` : '';
+    box.innerHTML = areaSummary(area) + `<div class="pi-empty"><p>没有可行方案</p>${hint}</div>`;
     return;
   }
   if (R.plans.length === 1 && R.plans[0].error) {
@@ -1757,7 +1767,7 @@ function dailyVolume(id) {
 }
 // 买料加工：按吉他成交量限制行星数（每颗星的产量、采购量固定，按比例缩减）
 async function applyMarketDepth(plans) {
-  const ids = [...new Set(plans.filter((p) => !p.error).flatMap((p) => [p.product, ...p.dem.buy.keys()]))];
+  const ids = [...new Set(plans.filter((p) => !p.error).flatMap((p) => [p, ...(p.alts || [])]).flatMap((p) => [p.product, ...p.dem.buy.keys()]))];
   let done = 0;
   const queue = ids.slice();
   await Promise.all(Array.from({ length: 6 }, async () => {
@@ -1770,29 +1780,45 @@ async function applyMarketDepth(plans) {
   for (const plan of plans) {
     if (plan.error) continue;
     plan.depthChecked = true;
-    const perPlanet = plan.rate / plan.planets * 24;
-    const items = [[plan.product, 1], ...plan.dem.buy];
-    let cap = Infinity, worst = null;
-    for (const [id, q] of items) {
-      const v = await dailyVolume(id);
-      if (v == null) continue;
-      const c = Math.floor(v * F.share / 100 / (perPlanet * q));
-      if (c < cap) { cap = c; worst = { id, n: perPlanet * q, v }; }
+    const alts = plan.alts || [];
+    delete plan.alts;
+    await capByDepth(plan);
+    // 自动选买料等级时：其他等级缩减后可能更赚（比如 P3 原料成交太少，买 P2 自己加工反而能多建几颗星）
+    let best = plan.error ? null : plan;
+    for (const alt of alts) {
+      await capByDepth(alt);
+      if (!alt.error && alt.profit > 0 && (!best || alt.profit > best.profit)) best = alt;
     }
-    if (cap >= plan.planets) continue;
-    // 指定了产品时，连一颗行星都超出成交上限：说明原因，不要只显示「没有可行方案」
-    if (cap <= 0 && F.target) {
-      const pct = worst.v ? Math.round(worst.n / worst.v * 100) : Infinity;
-      plan.error = `受成交量限制：一颗行星每天就要${worst.id === plan.product ? '卖出' : '买入'}${cName(worst.id)} ${ctx.formatNumber(Math.round(worst.n))} 个，`
-        + `占${HUB_NAME}日成交 ${isFinite(pct) ? pct + '%' : '—（几乎没有成交）'}，超过「成交上限」${F.share}%。可以把成交上限调高或选「不限」`
-        + (F.restock && F.restock < 72 ? '，或把补货周期调长（每颗星的产量会降低）' : '');
-      continue;
+    if (best && best !== plan) {
+      for (const k of Object.keys(plan)) delete plan[k];
+      Object.assign(plan, best, { depthChecked: true });
     }
-    const k = cap / plan.planets;
-    plan.wanted = plan.planets;
-    for (const key of ['rate', 'revenue', 'cost', 'tax', 'profit']) plan[key] *= k;
-    plan.planets = plan.factories = cap;
   }
+}
+// 按成交量限制一个方案的行星数（就地修改）
+async function capByDepth(plan) {
+  const perPlanet = plan.rate / plan.planets * 24;
+  const items = [[plan.product, 1], ...plan.dem.buy];
+  let cap = Infinity, worst = null;
+  for (const [id, q] of items) {
+    const v = await dailyVolume(id);
+    if (v == null) continue;
+    const c = Math.floor(v * F.share / 100 / (perPlanet * q));
+    if (c < cap) { cap = c; worst = { id, n: perPlanet * q, v }; }
+  }
+  if (cap >= plan.planets) return;
+  // 指定了产品时，连一颗行星都超出成交上限：说明原因，不要只显示「没有可行方案」
+  if (cap <= 0 && F.target) {
+    const pct = worst.v ? Math.round(worst.n / worst.v * 100) : Infinity;
+    plan.error = `受成交量限制：一颗行星每天就要${worst.id === plan.product ? '卖出' : '买入'}${cName(worst.id)} ${ctx.formatNumber(Math.round(worst.n))} 个，`
+      + `占${HUB_NAME}日成交 ${isFinite(pct) ? pct + '%' : '—（几乎没有成交）'}，超过「成交上限」${F.share}%。可以把成交上限调高或选「不限」`
+      + (F.restock && F.restock < 72 ? '，或把补货周期调长（每颗星的产量会降低）' : '');
+    return;
+  }
+  const k = cap / plan.planets;
+  plan.wanted = plan.planets;
+  for (const key of ['rate', 'revenue', 'cost', 'tax', 'profit']) plan[key] *= k;
+  plan.planets = plan.factories = cap;
 }
 
 async function showDepth(plan) {

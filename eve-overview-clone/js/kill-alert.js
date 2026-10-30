@@ -18,11 +18,13 @@
 // 角色离线时不提醒（默认开）：每分钟读一次 ESI /characters/{id}/online/（esi-location.read_online.v1），离线期间的预警只记进「最近预警」，不发邮件 / 特效 / 提示音 / 通知。
 // 浏览器后台标签页的定时器会被降频（约每分钟一次），预警可能延迟。
 // 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
+// 悬浮窗（float-feed.js）：状态或最近预警有变化时把最近预警推给悬浮窗（floatData），标签页顶部有「悬浮窗」按钮。
 
 import { SERVER, IS_TQ, serverKey, esiUrl, kbSiteLink } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v7';
 import * as AP from './alert-push.js?v=v1';
 import * as ST from './standings.js?v=v4';
+import * as FF from './float-feed.js?v=v1';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
@@ -74,7 +76,24 @@ function watchText() {
 const muted = () => T.offlineMute && S.online === false;
 export const status = () => ({ on: T.on || watching() || regionWatching(), mail: T.mail, text: [T.on ? S.status : '', watchText(), muted() ? '角色离线，暂停提醒' : ''].filter(Boolean).join('；') || '预警未开启', area: S.status, system: S.systemName, count: S.range.size, history: S.history });
 export function onChange(fn) { subs.add(fn); return () => subs.delete(fn); }
-function notify() { for (const fn of subs) { try { fn(); } catch (e) { console.error(e); } } }
+function notify() {
+  for (const fn of subs) { try { fn(); } catch (e) { console.error(e); } }
+  FF.publish('kill', floatData());
+}
+// 悬浮窗显示的内容：最近预警（中英文各一份描述，悬浮窗按界面语言选）
+function floatData() {
+  const st = status();
+  return {
+    on: st.on, status: st.text,
+    items: st.history.map(floatItem)
+  };
+}
+const floatItem = (a) => ({
+  key: a.id + ':' + a.at, id: a.id, open: Boolean(a.id && !a.hourly), at: a.at, muted: Boolean(a.muted),
+  badge: a.watch ? (a.watch.role === 'loss' ? '损失' : '击杀') : a.region ? '星域' : a.jumps === 0 ? '本星系' : a.jumps + ' 跳',
+  tone: a.watch ? (a.watch.role === 'loss' ? 'loss' : 'kill') : !a.region && a.jumps <= 1 ? 'near' : '',
+  zh: describe(a), en: describeEn(a), value: a.value ? ctx.formatISK(a.value) + ' ISK' : ''
+});
 function setStatus(text) { S.status = text; notify(); }
 
 export function initKillAlert(context) {
@@ -90,6 +109,7 @@ export function initKillAlert(context) {
   setInterval(claimLeader, 10e3);
   claimLeader();
   restart();
+  FF.publish('kill', floatData());
 }
 
 function claimLeader() {
@@ -537,9 +557,12 @@ export function test(kind) {
   const a = { id: 0, test: true, system: S.system || 30000142, jumps: 2, time: new Date().toISOString(), ship: AM.L('金鹏级（测试）', 'Raven (test)'), victim: AM.L('测试飞行员', 'Test Pilot'), value: 432000000, attackers: 8 };
   a.systemName = S.systemName || sysName(a.system);
   if (kind === 'web') {
-    if (!T.web && !T.sound && !T.notify) { ctx.showToast('先打开网页特效、提示音或系统通知', 'info'); return; }
+    const float = FF.isOpen('kill');
+    if (!T.web && !T.sound && !T.notify && !float) { ctx.showToast('先打开网页特效、提示音或系统通知', 'info'); return; }
     if (T.web) webAlert(a);
     ring(a);
+    // 悬浮窗开着：临时插一条测试预警（不记进最近预警，下次刷新就没了）
+    if (float) { const d = floatData(); d.items.unshift({ ...floatItem({ ...a, at: Date.now() }), key: 'test:' + Date.now(), open: false }); FF.publish('kill', d); }
     return;
   }
   if (kind === 'mail') {
@@ -609,7 +632,7 @@ function drawPanel() {
   const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m < 60 ? m + ' 分钟前' : Math.floor(m / 60) + ' 小时前'; };
   const pill = (on, text) => `<span class="ka-status${on ? ' on' : ''}"><i></i>${ctx.esc(text)}</span>`;
   panel.innerHTML = `
-    <div class="ka-top">${pill(st.on, st.text)}</div>
+    <div class="ka-top">${pill(st.on, st.text)}${FF.buttonHtml('kill')}</div>
     ${token ? '' : '<p class="ka-warn">位置预警需要先在「个人中心」绑定 ESI</p>'}
     ${!S.hourly ? '' : `<p class="ka-warn" title="用 ESI 各星系过去一小时击杀数的增量判断，约每小时更新">${ctx.esc(SERVER.full)}没有实时击杀数据：提醒会延迟，星域监控与人物关注不可用</p>`}
     ${sec('位置预警', `<div class="ka-list">

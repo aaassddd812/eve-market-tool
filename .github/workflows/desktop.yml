@@ -4,6 +4,9 @@
 #   RELEASE_TOKEN               对 eve-tool-desktop 有 Contents 读写权限的 Fine-grained token
 #   ANDROID_KEYSTORE_B64        安卓签名密钥（jks 文件的 base64）
 #   ANDROID_KEYSTORE_PASSWORD   密钥库与密钥的密码（别名 eve-tool）
+#   TAURI_SIGNING_PRIVATE_KEY           自动更新签名私钥（cargo tauri signer generate 生成，公钥在 tauri.conf.json）
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  上面私钥的密码
+# 桌面版启动时读 Releases 最新版的 latest.json（直连失败再读 latest-mirror.json 走 ghfast 镜像）判断是否有更新
 # 一个平台失败时另一个照样发布
 name: desktop
 
@@ -40,6 +43,9 @@ jobs:
 
       - name: 编译安装包
         working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx --yes @tauri-apps/cli@^2 build --bundles nsis
 
       - name: 编译下载器
@@ -51,11 +57,21 @@ jobs:
 
       - name: 整理产物
         shell: pwsh
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
           $setup = Get-ChildItem desktop/src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
           Copy-Item $setup.FullName out/EVE-Tool-Setup.exe
           Copy-Item EVE-Tool-Downloader.exe out/
+          # 自动更新清单：签名是对安装包内容签的，改文件名不影响校验
+          $sig = (Get-Content "$($setup.FullName).sig" -Raw).Trim()
+          $url = "https://github.com/$env:RELEASE_REPO/releases/download/v$env:VERSION/EVE-Tool-Setup.exe"
+          $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          foreach ($m in @(@("latest.json", $url), @("latest-mirror.json", "https://ghfast.top/$url"))) {
+            $json = @{ version = $env:VERSION; notes = ""; pub_date = $date; platforms = @{ "windows-x86_64" = @{ signature = $sig; url = $m[1] } } } | ConvertTo-Json -Depth 5
+            [IO.File]::WriteAllText("out/$($m[0])", $json, (New-Object Text.UTF8Encoding $false))
+          }
           Get-ChildItem out | ForEach-Object { "{0}  {1:N0} bytes  sha256 {2}" -f $_.Name, $_.Length, (Get-FileHash $_.FullName).Hash }
 
       - uses: actions/upload-artifact@v4

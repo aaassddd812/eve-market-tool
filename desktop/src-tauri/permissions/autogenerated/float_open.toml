@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-float-open"
+description = "Enables the float_open command without any pre-configured scope."
+commands.allow = ["float_open"]
+
+[[permission]]
+identifier = "deny-float-open"
+description = "Denies the float_open command without any pre-configured scope."
+commands.deny = ["float_open"]
