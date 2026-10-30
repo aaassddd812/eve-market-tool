@@ -35,7 +35,7 @@ self.onmessage = async (e) => {
   else if (m.t === 'grabbed') { const p = grabs.get(m.id); grabs.delete(m.id); p?.(m.width ? { width: m.width, height: m.height, data: new Uint8ClampedArray(m.buffer) } : null); }
   else if (m.t === 'manual') { manual = m.rect; region = null; reset(); }
   else if (m.t === 'relocate') { region = null; reset(); }
-  else if (m.t === 'snapshot') { const f = await full(); self.postMessage({ t: 'snapshot', frame: f }, f ? [f.data.buffer] : []); }
+  else if (m.t === 'snapshot') { const f = await grab(null, true); self.postMessage({ t: 'snapshot', frame: f }, f ? [f.data.buffer] : []); }
   else if (m.t === 'options') sendOptions();
   else if (m.t === 'reocr') { const t = tracked.find((x) => x.id === m.id); if (t) sendOcr(t); }
   else if (m.t === 'stop') stop();
@@ -72,8 +72,8 @@ async function pump() {
   if (r === reader) self.postMessage({ t: 'ended' });
 }
 
-// 取画面：rect 为空取整帧
-async function grab(rect) {
+// 取画面：rect 为空取整帧；front：桌面版截不到被挡住的 EVE 时临时把它提到最上面（手动框选用）
+async function grab(rect, front = false) {
   if (mode === 'stream') {
     if (!latest) return null;
     const W = latest.displayWidth, H = latest.displayHeight;
@@ -87,7 +87,7 @@ async function grab(rect) {
   if (mode === 'grab') {
     const id = ++grabId;
     const p = new Promise((res) => { grabs.set(id, res); setTimeout(() => { if (grabs.delete(id)) res(null); }, 3000); });
-    self.postMessage({ t: 'grab', id, rect: rect || null });
+    self.postMessage({ t: 'grab', id, rect: rect || null, front });
     return p;
   }
   return null;

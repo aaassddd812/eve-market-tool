@@ -11,7 +11,7 @@
 // 模块各自发布内容（publish）；悬浮窗要内容而模块还没加载时，用登记的 loader 加载（loader 加载后会自己 publish）。
 
 const CH = 'eve-float';
-const FLOAT_V = 'v7';   // 跟 float.html 里 float-view.js 的版本号一致：改了悬浮窗页面就一起改，旧的画中画会重新加载
+const FLOAT_V = 'v8';   // 跟 float.html 里 float-view.js 的版本号一致：改了悬浮窗页面就一起改，旧的画中画会重新加载
 export const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名' };
 const snap = {};
 const loaders = {};

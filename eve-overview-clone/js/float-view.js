@@ -124,9 +124,17 @@ function renderLocal(d, body, foot) {
         <span class="fl-main"><b>${p.name ? `<span translate="no">${esc(p.name)}</span>` : `<span>${p.look === 'ocr' ? '识别中…' : '没认出来'}</span>`}</b>${p.name && !p.sure ? '<small class="fl-q" title="名字显示不全，没认出来">…?</small>' : ''}${p.org ? ` <small translate="no">${esc(p.org)}</small>` : ''}</span>
         ${p.st ? `<small class="fl-local-st"><span class="fl-k"><span>击杀</span> ${p.st.kills}</span> · <span class="fl-l"><span>损失</span> ${p.st.losses}</span>${p.st.ships.length ? ` · <span translate="no">${esc(p.st.ships.join(' / '))}</span>` : ''}</small>` : ''}</li>`;
     }).join('')}</ul>`
-      : d.waiting ? '' : `<p class="fl-empty">${!d.on ? '还没有名单' : d.hidden ? '本地没有红名 / 白名' : '还没有识别到名单'}</p>`)
-    + (d.waiting ? `<p class="fl-empty"><span>${d.waiting} 个红名正在识别名字…</span></p>` : '');
+      : d.colorOnly || d.moreRed || d.moreWhite ? '' : `<p class="fl-empty">${!d.on ? '还没有名单' : d.hidden ? '本地没有红名 / 白名' : '还没有识别到名单'}</p>`)
+    + (d.on ? countHtml(d, items.length) : '');
   foot.textContent = d.on ? (d.status || '') + (d.hidden ? ` · 另有 ${d.hidden} 人不是敌对或还在确认` : '') : '';
+}
+
+// 人数：只看色块时写红名、白名各几个；识别名字时写列表之外还有几个（颜色确认了、名字没认全）
+function countHtml(d, listed) {
+  const part = (n, cls, word) => (n ? `<span class="fl-n ${cls}"><b>${n}</b> <span>${word}</span></span>` : '');
+  if (d.colorOnly) return `<p class="fl-count">${d.reds || d.whites ? `<span>本地</span> ${part(d.reds, 'r', '个红名')}${part(d.whites, 'w', '个白名')}` : '<span>本地没有红名 / 白名</span>'}</p>`;
+  if (!d.moreRed && !d.moreWhite) return '';
+  return `<p class="fl-count"><span>${listed ? '还有' : '本地有'}</span> ${part(d.moreRed, 'r', '个红名')}${part(d.moreWhite, 'w', '个白名')}<small>名字没认全</small></p>`;
 }
 
 function renderPrice(d, body, foot) {

@@ -119,3 +119,10 @@ html.fl-passing .fl-btn[data-fl-pass] { background: var(--accent); color: #fff; 
 .fl-dot.friend { background: var(--accent); opacity: 1; }
 .fl-list li.fl-local.red, .fl-list li.fl-local.orange { background: var(--danger-soft); }
 .fl-q { margin-left: 3px; color: var(--warn); font-weight: 700; }
+
+/* 本地红名人数：只看色块时只显示这一块；识别名字时写列表之外还有几个 */
+.fl-count { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 0 0 6px; padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); color: var(--text); font-size: 13px; font-weight: 600; }
+.fl-count small { flex-basis: 100%; color: var(--text-2); font-weight: 500; font-size: 11px; }
+.fl-n b { font-size: 18px; }
+.fl-n.r b { color: var(--danger); }
+.fl-n.w b { color: var(--text); }

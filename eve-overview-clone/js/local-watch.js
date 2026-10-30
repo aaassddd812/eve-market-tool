@@ -13,7 +13,7 @@
 
 import * as AP from './alert-push.js?v=v2';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v6';
+import * as FF from './float-feed.js?v=v7';
 import { SERVER, IS_TQ } from './server.js?v=s4';
 
 let ctx;   // esc, showToast, resolveNames, resolveTypeNames, selfNames()
@@ -68,9 +68,9 @@ export const supported = () => Boolean(tauri() || navigator.mediaDevices?.getDis
 const whyNot = () => (!window.isSecureContext ? `浏览器只允许 https 地址的网页共享画面，现在是 http 地址。请用 https 打开本站；或者在浏览器地址栏打开 chrome://flags/#unsafely-treat-insecure-origin-as-secure（Edge 是 edge://flags），把 ${location.origin} 填进去、设为 Enabled，重启浏览器` : '这个浏览器不能共享画面：请用电脑版 Chrome / Edge');
 const running = () => Boolean(S.stream || S.native);
 // 截一次：返回 { width, height, buffer }（RGBA），截不到返回 null（原因记在 S.grabErr）
-async function nativeGrab(rect) {
+async function nativeGrab(rect, front = false) {
   try {
-    const buf = await tauri().invoke('local_grab', { rect: rect || null, hwnd: S.hwnd || null });
+    const buf = await tauri().invoke('local_grab', { rect: rect || null, hwnd: S.hwnd || null, front });
     const v = new DataView(buf);
     S.grabErr = '';
     return { width: v.getUint32(0, true), height: v.getUint32(4, true), buffer: buf.slice(8) };
@@ -87,7 +87,7 @@ export function status() {
   const on = running();
   const reds = S.rows.filter((r) => r.cls === 'red' || r.cls === 'orange').length;
   let text = on ? STATE_TEXT[S.state] || S.state : '本地红名未开启';
-  if (on && S.state === 'noframe' && S.native) text = S.grabErr === 'minimized' ? 'EVE 窗口最小化了，截不到画面' : S.grabErr === 'no-eve' ? '没找到 EVE 窗口：先打开游戏' : S.grabErr === 'gone' ? '选的 EVE 窗口关掉了：点「换窗口」重新选' : '截不到 EVE 窗口的画面';
+  if (on && S.state === 'noframe' && S.native) text = S.grabErr === 'minimized' ? 'EVE 窗口最小化了，截不到画面' : S.grabErr === 'no-eve' ? '没找到 EVE 窗口：先打开游戏' : S.grabErr === 'gone' ? '选的 EVE 窗口关掉了：点「换窗口」重新选' : S.grabErr === 'covered' ? 'EVE 窗口被挡住了，截不到画面：把游戏窗口放到前面' : '截不到 EVE 窗口的画面';
   if (on && S.state === 'locked') text = `监视中 · 本地 ${S.rows.length} 人${reds ? ` · 红名 ${reds}` : ''}`;
   return { on, alert: on && reds > 0, text };
 }
@@ -137,7 +137,7 @@ async function listWindows() {
       const buf = await tauri().invoke('local_grab', { rect: null, hwnd: w.id, thumb: 360 });
       const v = new DataView(buf);
       w.src = toUrl({ width: v.getUint32(0, true), height: v.getUint32(4, true), data: new Uint8ClampedArray(buf.slice(8)) });
-    } catch { w.src = ''; }
+    } catch { w.src = ''; w.blocked = true; }
     notify();
   }
 }
@@ -153,7 +153,7 @@ function windowsHtml() {
   const esc = ctx.esc;
   return `<div class="ka-opt ka-stack lw-opts"><span><b>选择要监视的 EVE 窗口</b><small>点一下就开始监视它；多开的话按角色名选${S.wins.length > 1 ? `（找到 ${S.wins.length} 个窗口）` : ''}</small></span>
     <div class="lw-opt-grid">${S.wins.map((w) => `<button type="button" class="lw-opt lw-win${w.title === T.win ? ' last' : ''}" data-lw-win="${w.id}">
-      ${w.src ? `<img src="${w.src}" alt="">` : `<span class="lw-win-ph">${w.minimized ? '最小化了' : '截图中…'}</span>`}
+      ${w.src ? `<img src="${w.src}" alt="">` : `<span class="lw-win-ph">${w.minimized ? '最小化了' : w.blocked ? '被挡住了，看不到预览' : '截图中…'}</span>`}
       <span class="lw-win-name"><span translate="no">${esc(w.name)}</span>${w.title === T.win ? ' <small>上次用的</small>' : ''}</span></button>`).join('')}</div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-lw-wins>刷新</button><button class="btn btn-ghost btn-sm" data-lw-wins-x>取消</button></div></div>`;
 }
@@ -164,7 +164,7 @@ function startWorker(native) {
   S.since = Date.now();
   S.options = undefined;
   S.rows = []; S.people.clear();
-  const w = new Worker(new URL('./local-worker.js?v=v5', import.meta.url), { type: 'module' });
+  const w = new Worker(new URL('./local-worker.js?v=v6', import.meta.url), { type: 'module' });
   S.worker = w;
   w.onmessage = onWorker;
   if (native) w.postMessage({ t: 'grab-mode' });
@@ -202,7 +202,7 @@ function grabFromVideo(rect) {
 function onWorker(e) {
   const m = e.data || {};
   if (m.t === 'grab' && S.native) {
-    nativeGrab(m.rect).then((img) => {
+    nativeGrab(m.rect, m.front).then((img) => {
       S.worker?.postMessage(img ? { t: 'grabbed', id: m.id, width: img.width, height: img.height, buffer: img.buffer } : { t: 'grabbed', id: m.id }, img ? [img.buffer] : []);
       if (!img && S.state !== 'noframe') { S.state = 'noframe'; notify(); }
     });
@@ -253,7 +253,18 @@ const alarming = (cls) => (cls === 'red' && T.red) || (cls === 'orange' && T.ora
 // 「只看色块」（withName 关）时红 / 橙颜色确认了就算，不等名字
 const hostile = (p) => !mine(p) && ((p.cls === 'red' || p.cls === 'orange')
   ? !T.withName || ((settled(p) || Date.now() - p.hostileAt > 2000) && !friendly(p))
-  : p.cls === 'none' && settled(p) && !friendly(p));
+  : p.cls === 'none' && (!T.withName || (settled(p) && !friendly(p))));
+// 本地里红名（红 / 橙，颜色已确认）与白名的人数：不算自己、不算查出来是友方的
+function counts() {
+  let red = 0, white = 0;
+  for (const p of S.people.values()) {
+    if (mine(p) || friendly(p)) continue;
+    if (p.cls === 'red' || p.cls === 'orange') red++;
+    else if (p.cls === 'none') white++;
+  }
+  return { red, white };
+}
+const countText = (c) => (c.red || c.white ? `本地 ${c.red} 个红名、${c.white} 个白名` : '本地没有红名 / 白名');
 
 function onRows(m) {
   findMates();
@@ -282,9 +293,11 @@ function onRows(m) {
 
 function raise(list) {
   const reds = list.filter((p) => p.cls === 'red' || p.cls === 'orange');
-  const title = reds.length ? `本地出现 ${reds.length} 个红名` : `本地来了 ${list.length} 个白名`;
+  // 只看色块（不识别名字）：只报人数
+  const colorOnly = !T.withName && !list[0].test;
+  const title = colorOnly ? `${reds.length ? '红名进本地' : '白名进本地'} · ${countText(counts())}` : reds.length ? `本地出现 ${reds.length} 个红名` : `本地来了 ${list.length} 个白名`;
   const at = Date.now();
-  const entry = { at, ids: list.map((p) => p.id), names: [], cls: reds.length ? 'red' : 'none', n: list.length, title };
+  const entry = { at, ids: colorOnly ? [] : list.map((p) => p.id), names: [], cls: reds.length ? 'red' : 'none', n: list.length, title, colorOnly };
   S.log.unshift(entry);
   S.log.length = Math.min(S.log.length, 30);
   S.lastAlert = at;
@@ -300,11 +313,11 @@ function raise(list) {
     const ps = entry.ids.map((id) => S.people.get(id)).filter(Boolean);
     if (T.withName && ps.some((p) => p.look === 'ocr') && Date.now() - t0 < 2000) { setTimeout(later, 200); return; }
     entry.names = ps.map((p) => p.name || '?');
-    const body = entry.names.join('、');
+    const body = colorOnly ? '' : entry.names.join('、');
     if (T.notify && window.Notification?.permission === 'granted') {
       try { const n = new Notification(title, { body, tag: 'eve-local', renotify: true }); n.onclick = () => window.focus(); } catch { /* 忽略 */ }
     }
-    if (!list[0].test) AP.push('local', { sig: 'local|' + at + '|' + body, text: `${title} · ${body}` });
+    if (!list[0].test) AP.push('local', { sig: 'local|' + at + '|' + body, text: body ? `${title} · ${body}` : title });
     notify();
   };
   if (T.withName) setTimeout(later, 200); else later();
@@ -347,7 +360,7 @@ function paintCard(entry) {
   if (!el) return;
   const ps = entry.ids.map((id) => S.people.get(id)).filter(Boolean);
   el.innerHTML = `<div class="ka-head"><span class="ka-badge">本地</span><b>${ctx.esc(entry.title)}</b><button class="ka-close" data-ka-close aria-label="关闭">×</button></div>
-    <div class="ka-body">${ps.length ? ps.map((p) => `<span class="lw-card-who"><i class="lw-dot ${p.cls}"></i>${p.name ? `<span translate="no">${ctx.esc(p.name)}</span>` : '<span>识别中…</span>'}${p.st ? ` <small>${statLine(p)}</small>` : ''}</span>`).join('') : ctx.esc(entry.names.join('、'))}</div>
+    <div class="ka-body">${entry.colorOnly ? '' : ps.length ? ps.map((p) => `<span class="lw-card-who"><i class="lw-dot ${p.cls}"></i>${p.name ? `<span translate="no">${ctx.esc(p.name)}</span>` : '<span>识别中…</span>'}${p.st ? ` <small>${statLine(p)}</small>` : ''}</span>`).join('') : ctx.esc(entry.names.join('、'))}</div>
     <div class="ka-meta">${new Date(entry.at).toLocaleTimeString('zh-CN', { hour12: false })}</div>`;
 }
 
@@ -372,6 +385,8 @@ let ocrQ = Promise.resolve();
 function ocrRow(m) {
   // 识别请求比名单（rows）先到：先建好这个人
   if (!S.people.has(m.id)) S.people.set(m.id, newPerson(m.id));
+  // 只看色块：不识别名字（打开「色块 + 人物名」时再补认）
+  if (!T.withName) { S.people.get(m.id).look = 'off'; return; }
   ocrQ = ocrQ.then(async () => {
     const p = S.people.get(m.id);
     if (!p) return;
@@ -461,14 +476,18 @@ function publishFloat() {
 export function floatData() {
   const st = status();
   const all = [...S.people.values()].filter((p) => !mine(p));
-  // 悬浮窗只放认出来、确认是敌对的人：颜色确认了、名字认出来、所属查完且不是友方；还在识别、没认出名字的都不显示
-  // （报警可以不等名字，悬浮窗不行）
+  // 悬浮窗只列认出来、确认是敌对的人（颜色确认了、名字认出来、所属查完且不是友方）；
+  // 颜色确认了但名字没认全的只写「还有 N 个红名」；只看色块（不识别名字）时不列人，只写红名、白名各几个
   const sure = (p) => hostile(p) && p.name && p.affDone && !friendly(p);
-  const people = all.filter((p) => (T.onlyHostile ? sure(p) : shown(p))).sort((a, b) => rank(a) - rank(b) || a.y - b.y);
-  // 颜色已确认是红 / 橙、名字还没认出来的人数（悬浮窗只写人数，不列出来）
-  const waiting = T.onlyHostile ? all.filter((p) => (p.cls === 'red' || p.cls === 'orange') && !sure(p) && !friendly(p)).length : 0;
+  const people = !T.withName ? [] : all.filter((p) => (T.onlyHostile ? sure(p) : shown(p))).sort((a, b) => rank(a) - rank(b) || a.y - b.y);
+  const c = counts();
+  const listed = (f) => people.filter((p) => f(p.cls)).length;
+  const moreRed = T.withName && T.onlyHostile ? Math.max(0, c.red - listed((x) => x === 'red' || x === 'orange')) : 0;
+  const moreWhite = T.withName && T.onlyHostile ? Math.max(0, c.white - listed((x) => x === 'none')) : 0;
   return {
-    on: st.on, status: st.text, clipped: S.clipped, n: S.rows.length, hidden: T.onlyHostile ? all.length - people.length - waiting : 0, waiting,
+    on: st.on, status: st.text, clipped: S.clipped && T.withName, n: S.rows.length,
+    hidden: T.withName && T.onlyHostile ? Math.max(0, all.length - people.length - moreRed - moreWhite) : 0,
+    colorOnly: !T.withName, reds: c.red, whites: c.white, moreRed, moreWhite,
     items: people.map((p) => ({
       id: p.charId || 0, key: p.id, cls: p.cls, name: p.name || '', sure: Boolean(p.charId) || !p.clipped, look: p.look, clipped: p.clipped,
       org: [p.allianceName, p.corpName].filter(Boolean).join(' · '),
@@ -507,7 +526,7 @@ function askPick() {
   S.worker.postMessage({ t: 'snapshot' });
 }
 function showPick(frame) {
-  if (!frame) { ctx.showToast('还没有收到画面', 'error'); return; }
+  if (!frame) { ctx.showToast(S.native && S.grabErr === 'minimized' ? 'EVE 窗口最小化了：先把游戏窗口还原' : '还没有收到画面', 'error'); return; }
   closePick();
   const wrap = document.createElement('div');
   wrap.className = 'lw-pick';
@@ -604,7 +623,7 @@ function drawPanel() {
       ${AP.switchHtml('local')}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-lw-test>测试提醒</button></div>`)}
-    ${sec(`本地名单${everyone.length ? `（${everyone.length}）` : ''}`, `<div class="ka-list">${sw('onlyHostile', '只显示红名 / 白名', hid ? `已隐藏 ${hid} 个友方` : '友方（蓝、绿、紫等）不显示', '关掉就显示本地里的所有人；悬浮窗也一样')}</div>` + (people.length ? `<ul class="lw-list">${people.map((p) => `<li class="lw-row ${p.cls}${mine(p) ? ' self' : ''}">
+    ${sec(`本地名单${everyone.length ? `（${everyone.length}）` : ''}`, `<div class="ka-list">${sw('onlyHostile', '只显示红名 / 白名', hid ? `已隐藏 ${hid} 个友方` : '友方（蓝、绿、紫等）不显示', '关掉就显示本地里的所有人；悬浮窗也一样')}</div>` + (!T.withName ? `<p class="ka-empty">${on ? `${countText(counts())}（只看色块，不识别名字）` : '开始监视后显示红名、白名人数'}</p>` : people.length ? `<ul class="lw-list">${people.map((p) => `<li class="lw-row ${p.cls}${mine(p) ? ' self' : ''}">
         <i class="lw-dot ${p.cls}" title="${CLS[p.cls] || ''}"></i>
         <span class="lw-who"><b>${p.charId ? `<a class="kb-link" href="#kb/character/${p.charId}" translate="no">${esc(p.name)}</a>` : p.name ? `<span translate="no">${esc(p.name)}</span>` : `<span>${p.look === 'ocr' ? '识别中…' : '没认出来'}</span>`}</b>${!p.charId && p.clipped && p.name ? `<small class="lw-unsure" title="${p.cand ? `名字显示不全，同前缀的有 ${p.cand} 个人` : '名字显示不全，没查到'}">…?</small>` : ''}${mine(p) ? ` <small${p.mate ? ' title="没有声望图标，又和本地里的友方同联盟 / 同军团，应该是你自己"' : !p.self ? ' title="开始监视时就在本地、一直没有声望图标，当作你自己"' : ''}>（我）</small>` : ''}
           <small>${p.charId ? ST.badge({ char: p.charId, corp: p.corp, alliance: p.alliance }) : ''}<span translate="no">${esc([p.allianceName, p.corpName].filter(Boolean).join(' · '))}</span>${p.st ? ` · ${statLine(p)}` : ''}</small></span>
@@ -646,6 +665,8 @@ export function mountPanel(el, opts) {
     }
     T[key] = s.checked;
     save();
+    // 打开「色块 + 人物名」：之前没认的名字补认
+    if (key === 'withName' && T.withName) for (const p of S.people.values()) if (p.look === 'off') { p.look = 'ocr'; S.worker?.postMessage({ t: 'reocr', id: p.id }); }
     notify();
   });
 }

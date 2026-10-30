@@ -29,11 +29,13 @@ pub async fn local_windows() -> Result<Vec<EveWindow>, String> {
     tauri::async_runtime::spawn_blocking(windows).await.map_err(|e| e.to_string())
 }
 
-// hwnd：用户选的窗口（不填自动找）；thumb：rect 为空时把整个画面缩到这个宽度（选窗口时的缩略图）
+// hwnd：用户选的窗口（不填自动找）；thumb：rect 为空时把整个画面缩到这个宽度（选窗口时的缩略图）；
+// front：PrintWindow 截不到、EVE 又被挡住时，把 EVE 临时提到最上面截一张再放回去（手动框选要整个画面时用）
 #[tauri::command]
-pub async fn local_grab(rect: Option<GrabRect>, hwnd: Option<i64>, thumb: Option<i32>) -> Result<tauri::ipc::Response, String> {
+pub async fn local_grab(rect: Option<GrabRect>, hwnd: Option<i64>, thumb: Option<i32>, front: Option<bool>) -> Result<tauri::ipc::Response, String> {
     let r = rect.map(|r| (r.x, r.y, r.w, r.h));
-    tauri::async_runtime::spawn_blocking(move || grab(r, hwnd, thumb))
+    let front = front.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || grab(r, hwnd, thumb, front))
         .await
         .map_err(|e| e.to_string())?
         .map(tauri::ipc::Response::new)
@@ -45,7 +47,7 @@ fn windows() -> Vec<EveWindow> {
 }
 
 #[cfg(not(windows))]
-fn grab(_rect: Option<(i32, i32, i32, i32)>, _hwnd: Option<i64>, _thumb: Option<i32>) -> Result<Vec<u8>, String> {
+fn grab(_rect: Option<(i32, i32, i32, i32)>, _hwnd: Option<i64>, _thumb: Option<i32>, _front: bool) -> Result<Vec<u8>, String> {
     Err("unsupported".into())
 }
 
@@ -64,7 +66,7 @@ fn windows() -> Vec<EveWindow> {
 }
 
 #[cfg(windows)]
-fn grab(rect: Option<(i32, i32, i32, i32)>, want: Option<i64>, thumb: Option<i32>) -> Result<Vec<u8>, String> {
+fn grab(rect: Option<(i32, i32, i32, i32)>, want: Option<i64>, thumb: Option<i32>, front: bool) -> Result<Vec<u8>, String> {
     use std::ptr::null_mut;
     use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::*;
@@ -113,18 +115,34 @@ fn grab(rect: Option<(i32, i32, i32, i32)>, want: Option<i64>, thumb: Option<i32
             && uncovered(hwnd, pt.x + x, pt.y + y, w, h)
             && BitBlt(small_dc, 0, 0, w, h, screen, pt.x + x, pt.y + y, SRCCOPY) != 0
             && !black(small_dc, 0, 0, w, h);
+        let mut covered = false;
         if !ok {
-            // 被挡住了（或要整个画面）：PrintWindow 把整个客户区画进内存再裁；
-            // 有的显卡驱动 / 游戏设置下 PrintWindow 截出来是全黑，再退回从屏幕上拷
+            // 被挡住了（或要整个画面）：PrintWindow 把整个客户区画进内存再裁
             let big_dc = CreateCompatibleDC(screen);
             let big = CreateCompatibleBitmap(screen, cw, ch);
             let old_big = SelectObject(big_dc, big as HGDIOBJ);
             ok = PrintWindow(hwnd, big_dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT) != 0 && !black(big_dc, x, y, w, h);
-            ok = if ok {
-                BitBlt(small_dc, 0, 0, w, h, big_dc, x, y, SRCCOPY) != 0
+            if ok {
+                ok = BitBlt(small_dc, 0, 0, w, h, big_dc, x, y, SRCCOPY) != 0;
+            } else if uncovered(hwnd, pt.x + x, pt.y + y, w, h) {
+                // 有的显卡驱动 / 游戏设置下 PrintWindow 截出来是全黑：这块露在屏幕上就从屏幕上拷
+                ok = BitBlt(small_dc, 0, 0, w, h, screen, pt.x + x, pt.y + y, SRCCOPY) != 0;
+            } else if front {
+                // 被挡住（比如手动框选时本程序盖在 EVE 上面）：把 EVE 临时置顶（不抢焦点）截一张，再放回去
+                use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetWindowPos, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE};
+                let flags = SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE;
+                let prev = GetForegroundWindow();
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, flags);
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                ok = BitBlt(small_dc, 0, 0, w, h, screen, pt.x + x, pt.y + y, SRCCOPY) != 0;
+                SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, flags);
+                if !prev.is_null() && prev != hwnd {
+                    SetWindowPos(prev, HWND_TOP, 0, 0, 0, 0, flags);
+                }
             } else {
-                BitBlt(small_dc, 0, 0, w, h, screen, pt.x + x, pt.y + y, SRCCOPY) != 0
-            };
+                // 截不到也不能从屏幕拷（拷到的是挡在前面的东西）
+                covered = true;
+            }
             SelectObject(big_dc, old_big);
             DeleteObject(big as HGDIOBJ);
             DeleteDC(big_dc);
@@ -160,6 +178,9 @@ fn grab(rect: Option<(i32, i32, i32, i32)>, want: Option<i64>, thumb: Option<i32
         DeleteObject(small as HGDIOBJ);
         DeleteDC(small_dc);
         ReleaseDC(null_mut(), screen);
+        if covered {
+            return Err("covered".into());
+        }
         if !ok || lines == 0 {
             return Err("capture".into());
         }
