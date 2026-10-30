@@ -16,6 +16,11 @@ python -m http.server 8899 --bind 127.0.0.1
 
 **桌面版**（Windows）：见仓库根目录 `desktop/README.md`。网站右上角「桌面版」按钮提供 `downloads/EVE-Tool-Downloader.exe` 下载器，
 运行后从 GitHub Releases 下载安装包；桌面版里网页会切换成左侧分组菜单栏的布局（浏览器加 `?desktop=1` 可预览）。
+安卓 App 同一个弹窗里下载 APK（手机上只显示安卓部分）。
+
+**手机布局**（≤768px，手机网页与安卓 App 共用）：底部标签栏 + 「全部」面板；个人中心首页是角色卡 + 功能宫格（`js/mobile-profile.js`），
+点进子页顶部有「‹ 个人中心」返回条（pushState，手机返回键回到宫格），子页不再显示角色大卡片和标签横条；
+统计 / 估值卡片两列紧凑；钱包、邮件、交易、挖矿、资产空间站表格改成卡片式列表（`#profileData[data-tab]`），基本信息改成分组列表。
 
 ## 文件结构
 

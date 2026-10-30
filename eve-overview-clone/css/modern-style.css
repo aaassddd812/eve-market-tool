@@ -7207,15 +7207,18 @@ html.is-desktop.rail-mini .header-actions { flex-direction: column; align-items:
 html.is-desktop.rail-mini .server-switch { flex: none; }
 html.is-desktop.rail-mini .server-status { width: 36px; padding: 0; justify-content: center; }
 
-/* 网页版「桌面版」下载说明 */
-.desktop-content { max-width: 460px; }
-.desktop-body { display: flex; flex-direction: column; gap: 14px; }
-.desktop-intro { margin: 0; font-size: 0.875rem; line-height: 1.6; color: var(--text-secondary); }
-.desktop-points { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
-.desktop-points li { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
-.desktop-points b { font-size: 0.8125rem; font-weight: 600; }
-.desktop-points span { font-size: 0.75rem; line-height: 1.55; color: var(--text-muted); }
-.desktop-dl { align-self: flex-start; }
+/* 下载弹窗：只列下载项 */
+.desktop-content { max-width: 420px; }
+.desktop-body { display: flex; flex-direction: column; gap: 8px; }
+.dl-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-primary); text-decoration: none; }
+.dl-item:hover { background: var(--bg-hover); }
+.dl-item > svg { flex: none; width: 22px; height: 22px; color: var(--accent-primary); }
+.dl-item > svg:last-child { width: 18px; height: 18px; color: var(--text-muted); }
+.dl-item span { flex: 1; display: flex; flex-direction: column; gap: 1px; }
+.dl-item b { font-size: 0.875rem; font-weight: 600; }
+.dl-item small { font-size: 0.75rem; color: var(--text-muted); }
+.dl-mirror { align-self: flex-end; font-size: 0.75rem; color: var(--text-muted); }
+.dl-mirror:hover { color: var(--accent-primary); }
 html.is-desktop .header-nav::-webkit-scrollbar { display: block; width: 6px; }
 html.is-desktop .header-nav::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--border-primary); }
 /* 桌面版左侧菜单分组 */
@@ -7235,3 +7238,103 @@ html.rail-mini .rail-group-head { display: none; }
 html.rail-mini .rail-group.folded .rail-group-items { display: flex; }
 html.rail-mini .rail-group + .rail-group { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border-primary); }
 @media (max-width: 768px) { .desktop-dl-btn { display: none; } }
+
+/* ===== 手机布局（≤768px）：个人中心首页功能宫格、子页返回条；数据卡片两列紧凑 ===== */
+.pm-grid, .pm-bar { display: none; }
+@media (max-width: 768px) {
+  .profile-container:not(.pm-sub) .profile-tabs,
+  .profile-container:not(.pm-sub) #profileData { display: none; }
+  .profile-container.pm-sub .profile-header,
+  .profile-container.pm-sub .profile-accounts,
+  .profile-container.pm-sub .profile-tabs,
+  .profile-container.pm-sub .pm-grid { display: none !important; }
+  .pm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+  .pm-tile { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-height: 96px; padding: 12px 12px 10px; border: 0; border-radius: var(--radius-lg); background: var(--bg-secondary); box-shadow: var(--shadow-sm); color: var(--text-primary); font: inherit; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  .pm-tile svg { width: 22px; height: 22px; margin-bottom: 5px; color: var(--accent-primary); }
+  .pm-tile b { font-size: 0.9375rem; font-weight: 600; }
+  .pm-tile small { font-size: 0.75rem; line-height: 1.4; color: var(--text-muted); }
+  .pm-tile:active { background: var(--bg-hover); }
+  .profile-container.pm-sub .pm-bar { position: sticky; top: 0; z-index: 30; display: flex; align-items: center; gap: 10px; margin: calc(-1 * var(--spacing-md)) calc(-1 * var(--spacing-md)) 12px; padding: 8px var(--spacing-md); background: color-mix(in srgb, var(--bg-primary) 90%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border-primary); }
+  .pm-back { display: inline-flex; align-items: center; gap: 2px; height: 34px; padding: 0 12px 0 6px; border: 0; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-secondary); font: inherit; font-size: 0.8125rem; cursor: pointer; }
+  .pm-back svg { width: 18px; height: 18px; }
+  .pm-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1rem; font-weight: 600; }
+
+  /* 角色卡：头像缩小，三个按钮一行 */
+  .profile-hero-main { gap: 12px; }
+  .profile-avatar { width: 56px; height: 56px; }
+  .profile-info h2 { font-size: 1.25rem; }
+  .profile-actions .btn { height: 34px; padding: 0 8px; font-size: 0.8125rem; }
+
+  /* 统计 / 估值卡片：两列、紧凑 */
+  .valuation-grid, .valuation-grid.wallet-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .stat-card, .valuation-card { padding: 10px 12px; box-shadow: none; }
+  .valuation-value, .stat-value { margin-top: 5px; font-size: 1.125rem; }
+  .valuation-label { white-space: normal; line-height: 1.3; }
+  .valuation-detail, .stat-meta { margin-top: 8px; padding-top: 6px; font-size: 0.6875rem; }
+}
+
+/* 个人中心表格在手机上改成卡片式列表：一行一条，主信息与金额在第一行，次要信息在第二行 */
+@media (max-width: 768px) {
+  #profileData :is(.wallet-mini, .mail-table, .trade-table, .station-summary),
+  #profileData[data-tab="mining"] .pc-mini-table { display: block; }
+  #profileData :is(.wallet-mini, .mail-table, .trade-table, .station-summary) thead,
+  #profileData[data-tab="mining"] .pc-mini-table thead { display: none; }
+  #profileData :is(.wallet-mini, .mail-table, .trade-table, .station-summary) tbody,
+  #profileData[data-tab="mining"] .pc-mini-table tbody { display: block; }
+  #profileData :is(.wallet-mini, .mail-table, .trade-table, .station-summary) tr,
+  #profileData[data-tab="mining"] .pc-mini-table tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 12px; align-items: baseline; padding: 10px 12px; border-bottom: 1px solid var(--border-primary); }
+  #profileData :is(.wallet-mini, .mail-table, .trade-table, .station-summary) td,
+  #profileData[data-tab="mining"] .pc-mini-table td { display: block; min-width: 0; padding: 0 !important; border: 0 !important; text-align: left; white-space: normal; }
+  #profileData :is(.wallet-mini, .mail-table, .trade-table, .station-summary) tr:last-child,
+  #profileData[data-tab="mining"] .pc-mini-table tr:last-child { border-bottom: 0; }
+  .m-sub { font-size: 0.75rem; color: var(--text-muted); }
+
+  /* 钱包：类型 | 金额 / 时间 | 对方 */
+  #profileData .wallet-mini td:nth-child(2) { grid-area: 1 / 1; font-weight: 600; }
+  #profileData .wallet-mini td:nth-child(4) { grid-area: 1 / 2; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #profileData .wallet-mini td:nth-child(1) { grid-area: 2 / 1; font-size: 0.75rem; color: var(--text-muted); }
+  #profileData .wallet-mini td:nth-child(3) { grid-area: 2 / 2; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 0.75rem; color: var(--text-muted); }
+
+  /* 邮件：主题 / 发件人 | 时间 */
+  #profileData .mail-table td.mail-subject { grid-area: 1 / 1 / 2 / 3; font-weight: 500; }
+  #profileData .mail-table tr.unread td.mail-subject { font-weight: 700; }
+  #profileData .mail-table td:nth-child(1) { grid-area: 2 / 1; font-size: 0.75rem; color: var(--text-secondary); }
+  #profileData .mail-table td:nth-child(3) { grid-area: 2 / 2; font-size: 0.75rem; color: var(--text-muted); }
+
+  /* 交易：物品 | 配对利润 / 买入 | 卖出 / 毛利率 · 成交额 · 最近成交 */
+  #profileData .trade-table tr { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  #profileData .trade-table td:nth-child(1) { grid-area: 1 / 1; }
+  #profileData .trade-table td:nth-child(4) { grid-area: 1 / 2; text-align: right; }
+  #profileData .trade-table td:nth-child(2) { grid-area: 2 / 1; font-size: 0.75rem; }
+  #profileData .trade-table td:nth-child(3) { grid-area: 2 / 2; font-size: 0.75rem; text-align: right; }
+  #profileData .trade-table td:nth-child(2)::before { content: '买入 '; color: var(--text-muted); }
+  #profileData .trade-table td:nth-child(3)::before { content: '卖出 '; color: var(--text-muted); }
+  html[lang="en"] #profileData .trade-table td:nth-child(2)::before { content: 'Buy '; }
+  html[lang="en"] #profileData .trade-table td:nth-child(3)::before { content: 'Sell '; }
+  #profileData .trade-table td:nth-child(n+5) { display: inline-block; font-size: 0.6875rem; color: var(--text-muted); }
+  #profileData .trade-table td:nth-child(5) { grid-area: 3 / 1; }
+  #profileData .trade-table td:nth-child(6) { grid-area: 3 / 2; text-align: right; }
+  #profileData .trade-table td:nth-child(7) { display: none; }
+
+  /* 资产总估值的空间站表：空间站 / 物品数 | 卖价 · 收价；其余估值列收起 */
+  #profileData .station-summary td:nth-child(1) { grid-area: 1 / 1 / 2 / 3; font-weight: 500; }
+  #profileData .station-summary td:nth-child(2) { grid-area: 2 / 1; font-size: 0.75rem; color: var(--text-muted); }
+  #profileData .station-summary td:nth-child(2)::after { content: ' 件'; }
+  html[lang="en"] #profileData .station-summary td:nth-child(2)::after { content: ' items'; }
+  #profileData .station-summary td:nth-child(3) { grid-area: 2 / 2; text-align: right; font-weight: 600; }
+  #profileData .station-summary td:nth-child(4) { grid-area: 3 / 2; text-align: right; font-size: 0.75rem; }
+  #profileData .station-summary td:nth-child(n+5) { display: none; }
+
+  /* 挖矿：矿种 / 日期星系 | 卖价估值；数量与收价估值在第二行 */
+  #profileData[data-tab="mining"] .pc-mini-table td:nth-child(1) { grid-area: 1 / 1; font-weight: 500; }
+  #profileData[data-tab="mining"] .pc-mini-table td:nth-child(n+2) { font-size: 0.75rem; color: var(--text-muted); }
+
+  /* 基本信息：分组列表（一组一张圆角卡片，条目之间细线分隔） */
+  #profileData[data-tab="info"] .info-grid { gap: 0; overflow: hidden; border-radius: var(--radius-lg); background: var(--bg-secondary); box-shadow: var(--shadow-sm); }
+  #profileData[data-tab="info"] .info-card { padding: 10px 12px; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  #profileData[data-tab="info"] .info-card + .info-card { border-top: 1px solid var(--border-primary); }
+  #profileData[data-tab="info"] .info-icon, #profileData[data-tab="info"] .info-icon img { width: 32px; height: 32px; }
+}
+
+/* App 里隐藏下载入口 */
+html.is-app .desktop-dl-btn, html.is-app [data-mnav-act="desktopDlBtn"] { display: none !important; }

@@ -1,6 +1,10 @@
-# 桌面版：在 Windows 上编译 Tauri 安装包与下载器，发布到公开仓库 wbw5780/eve-tool-desktop 的 Releases
+# 桌面版（Windows）与安卓版：编译安装包、下载器与 APK，发布到公开仓库 wbw5780/eve-tool-desktop 的 Releases
 # 触发：推送标签 desktop-v1.2.3（版本号取自标签），或在 Actions 页手动运行（版本号取自 tauri.conf.json）
-# 需要仓库 Secret：RELEASE_TOKEN（对 eve-tool-desktop 有 Contents 读写权限的 Fine-grained token）
+# 需要仓库 Secret：
+#   RELEASE_TOKEN               对 eve-tool-desktop 有 Contents 读写权限的 Fine-grained token
+#   ANDROID_KEYSTORE_B64        安卓签名密钥（jks 文件的 base64）
+#   ANDROID_KEYSTORE_PASSWORD   密钥库与密钥的密码（别名 eve-tool）
+# 一个平台失败时另一个照样发布
 name: desktop
 
 on:
@@ -12,8 +16,10 @@ env:
   RELEASE_REPO: aaassddd812/eve-tool-desktop
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -29,14 +35,8 @@ jobs:
 
       - name: 版本号
         id: ver
-        shell: pwsh
-        run: |
-          $conf = Get-Content desktop/src-tauri/tauri.conf.json -Raw | ConvertFrom-Json
-          $v = $conf.version
-          if ($env:GITHUB_REF_TYPE -eq 'tag') { $v = $env:GITHUB_REF_NAME -replace '^desktop-v', '' }
-          (Get-Content desktop/src-tauri/tauri.conf.json -Raw) -replace '"version": "[^"]+"', ('"version": "' + $v + '"') | Set-Content desktop/src-tauri/tauri.conf.json -Encoding utf8NoBOM
-          (Get-Content desktop/src-tauri/Cargo.toml -Raw) -replace '(?m)^version = "[^"]+"', ('version = "' + $v + '"') | Set-Content desktop/src-tauri/Cargo.toml -Encoding utf8NoBOM
-          "version=$v" >> $env:GITHUB_OUTPUT
+        shell: bash
+        run: bash desktop/set-version.sh
 
       - name: 编译安装包
         working-directory: desktop
@@ -60,18 +60,88 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: eve-tool-desktop-${{ steps.ver.outputs.version }}
+          name: windows
           path: out/*
+
+  android:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 版本号
+        id: ver
+        run: bash desktop/set-version.sh
+
+      - name: 编译 APK
+        working-directory: desktop
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          npx --yes @tauri-apps/cli@^2 android init --ci
+          npx --yes @tauri-apps/cli@^2 icon src-tauri/icons/icon.png
+          npx --yes @tauri-apps/cli@^2 android build --apk --target aarch64 --target armv7 --ci
+
+      - name: 签名
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          mkdir -p out
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/ks.jks"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          APK=$(find desktop/src-tauri/gen/android -name '*release-unsigned.apk' | head -1)
+          echo "unsigned: $APK"
+          "$BT/zipalign" -f -p 4 "$APK" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/ks.jks" --ks-pass env:KS_PASS --ks-key-alias eve-tool --key-pass env:KS_PASS --out out/EVE-Tool.apk "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" verify out/EVE-Tool.apk
+          rm -f "$RUNNER_TEMP/ks.jks"
+          ls -la out; sha256sum out/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: out/*
+
+  release:
+    needs: [windows, android]
+    if: ${{ !cancelled() && (needs.windows.result == 'success' || needs.android.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+
+      - run: ls -la out
 
       - name: 发布到公开仓库
         uses: softprops/action-gh-release@v2
         with:
           repository: ${{ env.RELEASE_REPO }}
           token: ${{ secrets.RELEASE_TOKEN }}
-          tag_name: v${{ steps.ver.outputs.version }}
+          tag_name: v${{ needs.windows.outputs.version || needs.android.outputs.version }}
           target_commitish: main
-          name: EVE 辅助工具 ${{ steps.ver.outputs.version }}
+          name: EVE 辅助工具 ${{ needs.windows.outputs.version || needs.android.outputs.version }}
           body: |
-            Windows 10 / 11 桌面版。下载 **EVE-Tool-Setup.exe** 直接安装，或用网站上的下载器（EVE-Tool-Downloader.exe）自动下载安装。
+            - Windows 10 / 11：下载 **EVE-Tool-Setup.exe** 直接安装，或用网站上的下载器（EVE-Tool-Downloader.exe）自动下载安装。
+            - 安卓：下载 **EVE-Tool.apk** 安装（需要允许「安装未知来源应用」）。
           files: out/*
           make_latest: true

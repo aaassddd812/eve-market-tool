@@ -1,7 +1,7 @@
 // ===== 手机导航（≤768px）=====
 // 顶栏的功能入口在手机上放不下（19 个），改成：
 //   底部标签栏：市场中心、倒卖排行、星图、击杀 + 「全部」；当前页不在这四个里时「全部」高亮。
-//   「全部」弹出底部面板：全部功能宫格，以及顶栏收起的语言、主题、API 文档、定制按钮。
+//   「全部」弹出底部面板：全部功能宫格，以及顶栏收起的语言、主题、API 文档、定制按钮和「下载 App」（App 里隐藏）。
 //   顶栏只留 ☰（当前页侧栏）、当前页名称、服务器、购物车、预警（隐藏规则在 CSS 的 768px 断点里）。
 // 所有按钮都转发点击给顶栏原来的按钮，切换逻辑、高亮都沿用 modern-app.js（syncNavActive 调 syncMobileNav）。
 
@@ -67,6 +67,7 @@ export function initMobileNav() {
         ${act('themeToggle', svg('themeToggle'), '切换主题')}
         ${act('contactBtn', svg('contactBtn'), '联系作者')}
         ${act('api', document.querySelector('.api-link svg')?.outerHTML || '', 'API 文档')}
+        ${act('desktopDlBtn', svg('desktopDlBtn'), '下载 App')}
       </div></div>`;
   document.body.appendChild(sheet);
 

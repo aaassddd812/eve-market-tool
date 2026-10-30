@@ -5,7 +5,8 @@ import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadH
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v38';
 import * as SM from './struct-markets.js?v=v7';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v9';
-import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v1';
+import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v3';
+import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
@@ -4620,6 +4621,7 @@ async function renderProfileTab(tab) {
   const ch = data.character || {};
   if (ch.__error) { box.innerHTML = '<p class="text-muted">角色信息读取失败：' + esc(ch.__error) + '</p>'; return; }
   box.dataset.skills = '';   // 技能页的训练队列异步返回时，只在仍停留在技能页时重绘
+  box.dataset.tab = tab;   // 手机布局按分栏重排表格（CSS #profileData[data-tab]）
 
   if (tab === 'skills') {
     try {
@@ -4799,6 +4801,7 @@ function switchProfileTab(tab, stationId) {
   if (tab === 'contracts') state.contractView.id = null;
   $$('.profile-tabs .tab-link').forEach((link) => link.classList.toggle('active', link.dataset.profile === tab));
   syncProfileNavActive(tab);
+  profileEntered(tab);   // 手机：从功能宫格进入子页
   document.querySelector('.profile-scroll')?.scrollTo({ top: 0 });
   // 要异步读取的分栏先换成骨架屏，不让上一个分栏的内容停留到新数据回来
   if (state.characterData && !['info', 'wallet', 'assets'].includes(tab)) $('profileData').innerHTML = skCards(4) + skToolbar(3) + skRows(8);
@@ -5548,6 +5551,7 @@ function initESIModal() {
     if (chip) switchEsiAccount(Number(chip.dataset.account));
   });
   $$('.profile-tabs .tab-link').forEach((link) => link.addEventListener('click', () => switchProfileTab(link.dataset.profile)));
+  initMobileProfile(MOBILE_QUERY, (tab) => switchProfileTab(tab));
 }
 
 

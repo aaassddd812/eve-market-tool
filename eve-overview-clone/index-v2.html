@@ -38,13 +38,14 @@
           document.documentElement.classList.add('is-desktop');
           if (localStorage.getItem('eve-rail') === 'mini') document.documentElement.classList.add('rail-mini');
         }
+        if (window.__EVE_APP__) document.documentElement.classList.add('is-app');   // 安卓 App：隐藏下载入口
       } catch (e) {}
     })();
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=127"></script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v233">
+  <script src="js/i18n.js?v=130"></script>
+  <link rel="stylesheet" href="css/modern-style.css?v=v238">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -164,8 +165,8 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9 9 0 0 1-3.9-.9L3 20.5l1.5-4.6A8 8 0 0 1 3.6 12 8.5 8.5 0 0 1 12 3.5a8.4 8.4 0 0 1 9 8z"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/></svg>
           <span>定制</span>
         </button>
-        <button class="icon-btn desktop-dl-btn" id="desktopDlBtn" title="下载桌面版" aria-label="下载桌面版">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+        <button class="icon-btn desktop-dl-btn" id="desktopDlBtn" title="下载 App" aria-label="下载 App">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
         </button>
         <button class="icon-btn" id="shortcutHelpBtn" title="快捷键 (?)" aria-label="快捷键">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/></svg>
@@ -1045,19 +1046,21 @@
       <div class="modal-backdrop"></div>
       <div class="modal-content desktop-content">
         <div class="modal-header">
-          <h3 id="desktopTitle">桌面版</h3>
+          <h3 id="desktopTitle">下载 App</h3>
           <button class="modal-close" data-close-desktop aria-label="关闭">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
         </div>
         <div class="modal-body desktop-body">
-          <p class="desktop-intro">独立窗口运行，菜单栏在左侧，功能和网页版完全一样，打开就是最新版。</p>
-          <ul class="desktop-points">
-            <li><b>先下载一个很小的下载器</b><span>运行后会自动从 GitHub 下载最新安装包并安装；GitHub 连不上时自动改用国内镜像</span></li>
-            <li><b>系统要求</b><span>Windows 10 / 11（用系统自带的 Edge WebView2 内核）</span></li>
-            <li><b>Windows 提示「已保护你的电脑」</b><span>点「更多信息」→「仍要运行」（程序暂未做代码签名）</span></li>
-          </ul>
-          <a class="btn btn-primary desktop-dl" href="downloads/EVE-Tool-Downloader.exe" download="EVE辅助工具下载器.exe">下载桌面版下载器</a>
+          <a class="dl-item" href="downloads/EVE-Tool-Downloader.exe" download="EVE辅助工具下载器.exe">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+            <span><b>Windows 桌面版</b><small>Windows 10 / 11</small></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          </a>
+          <a class="dl-item" href="https://github.com/wbw5780/eve-tool-desktop/releases/latest/download/EVE-Tool.apk">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M10 18h4"/></svg>
+            <span><b>安卓 App</b><small>APK</small></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          </a>
+          <a class="dl-mirror" href="https://ghfast.top/https://github.com/wbw5780/eve-tool-desktop/releases/latest/download/EVE-Tool.apk">安卓 App 国内镜像下载</a>
         </div>
       </div>
     </div>
@@ -1151,6 +1154,6 @@
   </div>
 
   <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v322" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v326" type="module" data-cfasync="false"></script>
 </body>
 </html>
