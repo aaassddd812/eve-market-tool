@@ -147,10 +147,10 @@ export function createBattle(sides, opt) {
     const v = { front: axis, back: scale(axis, -1), left: scale(right, -1), right, up, down: scale(up, -1) }[dir] || axis;
     return add(base, scale(v, distKm * 1000));
   };
-  // 舰队支援进场：spec = { rows: [{ row, count }], mode: warp | cyno, ref, dist, dir }
+  // 舰队支援进场：spec = { rows: [{ row, count }], mode: warp | cyno, ref, dist, dir }；spec.pos（米）给了就直接落在那里
   const jumps = [];   // 等诱导船开诱导后再跳进来的舰队
   B.deploy = (side, spec) => {
-    const at = B.spot(side, spec.ref, spec.dist, spec.dir);
+    const at = spec.pos ? spec.pos.slice() : B.spot(side, spec.ref, spec.dist, spec.dir);
     const lead = spec.mode === 'cyno' ? spec.rows.filter((x) => x.cyno) : [];
     if (lead.length) {
       // 诱导船先跃迁到位；落地后开诱导，舰队随后跳来

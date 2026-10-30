@@ -14,6 +14,7 @@ import { createFx } from './sim-fx.js?v=v4';
 const COLOR = { A: new THREE.Color(0x5b9bff), B: new THREE.Color(0xff4b3e) };
 const WRECK = new THREE.Color(0x8a9099);
 const KM = 1 / 1000;
+const tr = (t) => (window.I18N?.lang === 'en' && window.I18N.t ? window.I18N.t(t) : t);   // 画在画布上的文字不走自动翻译
 const ICON_PX = 18;        // 总览图标大小（CSS 像素）
 const RING_PX = 9.5;       // 选中圈半径（CSS 像素，刚好套住图标）
 const WRECK_ICON = BRACKETS.indexOf('wreck');
@@ -36,6 +37,9 @@ export function createView(host, hooks = {}) {
   renderer.domElement.after(lbl);
   const lctx = lbl.getContext('2d');
   let labels = true;
+  // 选支援落点：鼠标处画落点圈（贴在舰船所在的水平面上），点一下把落点（米）交给回调
+  let placing = null, mouse = null;
+  const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
   const scene = new THREE.Scene();
   const camera = new THREE.PerspectiveCamera(50, 1, 0.0002, 30000);
   const controls = new OrbitControls(camera, renderer.domElement);
@@ -427,8 +431,62 @@ export function createView(host, hooks = {}) {
     lastT = t;
   }
 
+  function planePoint(cx, cy) {
+    const r = renderer.domElement.getBoundingClientRect();
+    ndc.set((cx - r.left) / r.width * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    let y = 0, n = 0;
+    for (const d of drawn) if (d?.alive) { y += d.y; n++; }
+    plane.constant = -(n ? y / n : controls.target.y);
+    return ray.ray.intersectPlane(plane, new THREE.Vector3());
+  }
+  function drawPlacing() {
+    if (!placing || !mouse) return;
+    const p = planePoint(mouse[0], mouse[1]);
+    if (!p) return;
+    const w = lbl.width, h = lbl.height;
+    const scr = (v) => { vB.copy(v).project(camera); return [(vB.x + 1) / 2 * w, (1 - vB.y) / 2 * h, vB.z]; };
+    const R = Math.max(1, kmPerPx(p) * 34);   // 落点圈约 34 像素，贴着水平面
+    lctx.save();
+    lctx.strokeStyle = placing.color;
+    lctx.fillStyle = placing.color + '26';
+    lctx.lineWidth = 2 * dpr;
+    lctx.shadowColor = placing.color;
+    lctx.shadowBlur = 12 * dpr;
+    for (const k of [1, 0.45]) {
+      lctx.beginPath();
+      for (let a = 0; a <= 48; a++) {
+        const q = scr(vC.set(p.x + Math.cos(a / 48 * Math.PI * 2) * R * k, p.y, p.z + Math.sin(a / 48 * Math.PI * 2) * R * k));
+        if (a) lctx.lineTo(q[0], q[1]); else lctx.moveTo(q[0], q[1]);
+      }
+      lctx.closePath();
+      if (k === 1) lctx.fill();
+      lctx.stroke();
+    }
+    const c = scr(p);
+    lctx.beginPath();
+    lctx.arc(c[0], c[1], 3 * dpr, 0, Math.PI * 2);
+    lctx.fillStyle = placing.color;
+    lctx.fill();
+    // 说明：离本方 / 敌方舰队中心多远
+    const mid = (side) => { let x = 0, y = 0, z = 0, n = 0; drawn.forEach((d, i) => { if (d?.alive && rec.units[i].side === side) { x += d.x; y += d.y; z += d.z; n++; } }); return n ? vA.set(x / n, y / n, z / n).distanceTo(p) : null; };
+    const own = mid(placing.side), foe = mid(placing.side === 'A' ? 'B' : 'A');
+    const text = [tr(placing.label), [own != null ? tr(`距本方 ${own.toFixed(1)} km`) : '', foe != null ? tr(`距敌方 ${foe.toFixed(1)} km`) : ''].filter(Boolean).join(' · ')];
+    lctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
+    lctx.shadowBlur = 4 * dpr;
+    lctx.font = `600 ${12 * dpr}px system-ui, sans-serif`;
+    lctx.textBaseline = 'top';
+    lctx.fillStyle = '#fff';
+    const tx = Math.min(c[0] + 18 * dpr, w - lctx.measureText(text[0]).width - 8 * dpr);
+    lctx.fillText(text[0], tx, c[1] + 14 * dpr);
+    lctx.font = `${11 * dpr}px system-ui, sans-serif`;
+    lctx.fillStyle = '#cfd6e2';
+    lctx.fillText(text[1], tx, c[1] + 30 * dpr);
+    lctx.restore();
+  }
   function drawLabels() {
     lctx.clearRect(0, 0, lbl.width, lbl.height);
+    drawPlacing();
     if (!labels || !rec) return;
     const w = lbl.width, h = lbl.height;
     lctx.font = `${11 * dpr}px system-ui, sans-serif`;
@@ -472,11 +530,20 @@ export function createView(host, hooks = {}) {
   const el = renderer.domElement;
   el.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
   el.addEventListener('pointerup', (e) => {
+    if (placing && down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) {
+      const p = planePoint(e.clientX, e.clientY);
+      if (p) { const cb = placing.done; placing = null; el.style.cursor = ''; cb([p.x / KM, p.y / KM, p.z / KM]); }
+      down = null;
+      return;
+    }
     if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) hooks.onPick?.(pick(e).i);
     down = null;
   });
   el.addEventListener('dblclick', (e) => { const i = pick(e).i; if (i >= 0) { setFollow(i); hooks.onFollow?.(i); } });
-  el.addEventListener('pointermove', (e) => { if (e.pointerType === 'mouse' && !e.buttons) { const p = pick(e); hover = p.i; hooks.onHover?.(p.i, p.x, p.y); } });
+  el.addEventListener('pointermove', (e) => { mouse = [e.clientX, e.clientY]; });
+  el.addEventListener('pointerdown', (e) => { mouse = [e.clientX, e.clientY]; });
+  el.addEventListener('pointerleave', () => { mouse = null; });
+  el.addEventListener('pointermove', (e) => { if (placing) return; if (e.pointerType === 'mouse' && !e.buttons) { const p = pick(e); hover = p.i; hooks.onHover?.(p.i, p.x, p.y); } });
   el.addEventListener('pointerleave', () => { hover = -1; hooks.onHover?.(-1); });
 
   return {
@@ -492,6 +559,8 @@ export function createView(host, hooks = {}) {
     draw,
     render() { controls.update(); renderer.render(scene, camera); drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
+    // 选落点：opt = { side, color: '#rrggbb', label, done(pos) }；null 取消
+    setPlacing(opt) { placing = opt; el.style.cursor = opt ? 'crosshair' : ''; if (opt) { hover = -1; hooks.onHover?.(-1); } },
     resetCamera: fit,
     follow: setFollow,
     following: () => follow,

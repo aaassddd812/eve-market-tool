@@ -9,7 +9,7 @@
 // 点舰船打开装配详情：看槽位与属性，从本场 / 最近常见的几套装配和自己的装配里换一套。
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失。
 import { commonFit } from './fit-kb.js?v=v28';
-import { createBattle, simulate } from './sim-engine.js?v=v9';
+import { createBattle, simulate } from './sim-engine.js?v=v10';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
 const $ = (id) => document.getElementById(id);
@@ -111,10 +111,11 @@ export function mountSim(el, preset = null, restored = false) {
     el.addEventListener('click', onClick);
     el.addEventListener('change', onChange);
     el.addEventListener('input', onInput);
+    el.addEventListener('paste', onPaste);
     el.addEventListener('keydown', onKeydown);
     el.addEventListener('focusout', onFocusOut);
     el.addEventListener('submit', onSubmit);
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && root?.offsetParent && S.detail) closeDetail(); });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && root?.offsetParent && BT.placing) { endPlace(true); return; } if (e.key === 'Escape' && root?.offsetParent && S.detail) closeDetail(); });
     document.addEventListener('click', (e) => { if (S.menu && !e.target.closest('.sim-menu')) toggleMenu(false); });
     document.addEventListener('fullscreenchange', () => updateBattleUi());
     let w = 0;
@@ -609,6 +610,7 @@ export const debugView = () => BT.view;
 function newBattle() {
   // 预设了进场时间的支援舰队交给引擎按时进场
   const support = SIDES.flatMap((s) => S.support[s].filter((f) => f.at != null).map((f) => ({ side: s, ...fleetSpec(f), at: f.at })));
+  endPlace();
   resetPanel($('simBtPanel'));
   BT.b = createBattle(S.sides, simOpt({ record: true, support }));
   Object.assign(BT, { t: 0, playing: false, sel: -1, finishing: false });
@@ -629,6 +631,7 @@ function renderBattle() {
         <div class="sim-3d-tools"><button type="button" data-bt-cam title="重置视角" aria-label="重置视角">${ICON.cam}</button><button type="button" data-bt-full title="全屏" aria-label="全屏">${ICON.full}</button><button type="button" data-bt-names class="${BT.names ? 'on' : ''}" title="显示舰船名" aria-label="显示舰船名" aria-pressed="${BT.names}">${ICON.names}</button></div>
         <div class="sim-3d-load" id="simBtLoad" hidden><span>加载 3D 画面</span><i><b></b></i><small></small></div>
         <div class="sim-3d-tip" id="simBtTip" hidden></div>
+        <div class="sim-3d-place" id="simBtPlace" hidden><span></span><button type="button" class="btn btn-ghost btn-sm" data-bt-place-cancel>取消</button></div>
         <div class="sim-3d-sel" id="simBtSel" hidden></div>
         <div class="sim-3d-panel" id="simBtPanel"></div>
         <p class="sim-3d-fail" hidden>这个浏览器不支持 3D（WebGL），只能直接看结果</p>
@@ -636,7 +639,7 @@ function renderBattle() {
       <div class="sim-bt-ctl">
         <button type="button" class="btn btn-primary btn-sm" data-bt-play></button>
         <div class="segmented" role="group" aria-label="速度">${SPEEDS.map((v) => `<button type="button" data-bt-speed="${v}" class="${BT.speed === v ? 'active' : ''}">${v}×</button>`).join('')}</div>
-        <input type="range" min="0" max="0" step="0.5" value="0" data-bt-seek aria-label="战斗时间">
+        <div class="sim-bt-seek"><input type="range" min="0" max="0" step="0.5" value="0" data-bt-seek aria-label="战斗时间"><span id="simBtTime"></span></div>
         <button type="button" class="btn btn-ghost btn-sm" data-bt-finish title="不看过程，直接算到结束">直接出结果</button>
         <button type="button" class="btn btn-ghost btn-sm" data-bt-restart title="回到开局（手动进场的支援与点名清空）">重新开始</button>
       </div>
@@ -689,6 +692,7 @@ function loadBar(done, total) {
   el.querySelector('small').textContent = total ? `${done} / ${total}` : '';
 }
 function disposeView() {
+  BT.placing = null;
   BT.view?.dispose();
   BT.view = null;
   BT.host = null;
@@ -959,10 +963,12 @@ function updateBattleUi() {
   play.textContent = BT.playing ? '暂停' : !b.t ? '开战' : b.done && BT.t >= b.t ? '重播' : '继续';
   play.disabled = BT.finishing;
   box.querySelector('[data-bt-finish]').hidden = b.done;
-  box.querySelectorAll('[data-bt-fl-go]').forEach((x) => { x.disabled = b.done || BT.finishing || !x.dataset.ok; });
+  box.querySelectorAll('[data-bt-fl-go], [data-bt-fl-place]').forEach((x) => { x.disabled = b.done || BT.finishing || !x.dataset.ok; });
   const seekEl = box.querySelector('[data-bt-seek]');
   seekEl.max = b.t;
   if (document.activeElement !== seekEl) seekEl.value = BT.t;
+  seekEl.style.setProperty('--p', b.t ? Math.min(1, BT.t / b.t) : 0);
+  $('simBtTime').textContent = `${clock(BT.t)} / ${clock(b.t)}`;
   // 选中的船
   const sel = $('simBtSel');
   const i = BT.sel;
@@ -1034,7 +1040,7 @@ function fleetCard(side, f) {
     <div class="sim-fl-head"><b>${ctx.esc(f.name)}</b><small>${n} 艘</small></div>
     <div class="sim-fl-meta"><span>${nameOf(ENTRY, f.mode)}</span><span>${nameOf(REFS, f.ref)}</span>${f.dist ? `<span>${nameOf(DIRS, f.dir)}</span><span>${f.dist} km</span>` : ''}<span>${f.at == null ? '手动进场' : `开战第 ${f.at} 秒自动进场`}</span>${cynoRows(f).length ? `<span>诱导船：${cynoRows(f).map((r) => ctx.esc(shipName(r.ship))).join('、')}</span>` : ''}</div>
     <div class="sim-fl-ships">${f.rows.map((r) => `<span${f.mode === 'cyno' && r.cyno ? ' class="is-cyno"' : ''}><img src="${IMG(r.ship)}" alt="" width="20" height="20" loading="lazy">${ctx.esc(shipName(r.ship))} ×${r.count}</span>`).join('') || '<small>还没有舰船</small>'}</div>
-    <div class="sim-fl-acts"><button type="button" class="btn btn-primary btn-sm" data-bt-fl-go="${side}:${f.id}"${ok ? ' data-ok="1"' : ''}>进场</button><button type="button" class="btn btn-ghost btn-sm" data-fl-edit="${f.id}">编辑</button><button type="button" class="link-btn danger" data-fl-del="${side}:${f.id}">删除</button></div>
+    <div class="sim-fl-acts"><button type="button" class="btn btn-primary btn-sm" data-bt-fl-go="${side}:${f.id}"${ok ? ' data-ok="1"' : ''}>进场</button>${BT.view ? `<button type="button" class="btn btn-ghost btn-sm" data-bt-fl-place="${side}:${f.id}"${ok ? ' data-ok="1"' : ''} title="在 3D 战场上点一个位置，舰队落在那里">选位置进场</button>` : ''}<button type="button" class="btn btn-ghost btn-sm" data-fl-edit="${f.id}">编辑</button><button type="button" class="link-btn danger" data-fl-del="${side}:${f.id}">删除</button></div>
   </div>`;
 }
 function fleetEditor(side, f) {
@@ -1047,6 +1053,7 @@ function fleetEditor(side, f) {
       <input type="number" class="pi-input" min="1" max="500" value="${r.count}" data-fl-n="${r.id}" aria-label="数量"><button type="button" class="sim-3d-x" data-fl-rm="${r.id}" aria-label="移除">${ICON.x}</button></div>`).join('') || '<p class="sim-empty">从下面添加舰船</p>'}</div>
     ${mine.length ? `<div class="sim-fl-from"><small>复制本方舰船</small>${mine.map((r) => `<button type="button" class="sim-fl-chip" data-fl-copy="${r.id}"><img src="${IMG(r.ship)}" alt="" width="18" height="18" loading="lazy">${ctx.esc(shipName(r.ship))}</button>`).join('')}</div>` : ''}
     <div class="sim-search sim-bt-search"><input type="search" class="pi-input" placeholder="搜索其他船型" data-bt-search="${side}" autocomplete="off"><div class="kb-suggest" data-bt-suggest hidden></div></div>
+    <textarea class="pi-input sim-fl-scan" rows="1" data-fl-scan placeholder="${ctx.esc(trTa('粘贴定向扫描结果（扫描窗口里全选复制），按船型导入'))}" spellcheck="false"></textarea>
     <div class="sim-fl-field"><span>进场方式</span><div class="segmented" role="group">${ENTRY.map(([k, l]) => `<button type="button" data-fl-mode="${k}" class="${f.mode === k ? 'active' : ''}" title="${ENTRY_TIP[k]}">${l}</button>`).join('')}</div><small>${f.mode === 'cyno' ? (cynoRows(f).length ? CYNO_TIP : '没设诱导船时，舰队直接在诱导点出现；可在上面把一行船设为诱导船') : ENTRY_TIP[f.mode]}</small></div>
     <div class="sim-fl-field"><span>位置</span><select class="pi-input" data-fl-ref>${opts(REFS, f.ref)}</select><select class="pi-input" data-fl-dir>${opts(DIRS, f.dir)}</select><input type="number" class="pi-input" min="0" max="300" value="${f.dist}" data-fl-dist aria-label="距离"><span>km</span></div>
     <div class="sim-fl-field"><span>时机</span><select class="pi-input" data-fl-when><option value="manual"${f.at == null ? ' selected' : ''}>手动进场</option><option value="auto"${f.at != null ? ' selected' : ''}>开战后自动进场</option></select>${f.at != null ? `<input type="number" class="pi-input" min="0" max="1800" value="${f.at}" data-fl-at aria-label="秒"><span>秒后</span>` : ''}</div>
@@ -1083,12 +1090,41 @@ async function addFleetShip(side, ship) {
   await resolveRow(row);
   fleetChanged(f.at != null);
 }
-function deployFleet(side, id) {
+function deployFleet(side, id, pos = null) {
   const b = BT.b, f = fleetOf(side, id);
   if (!b || b.done || !f) return;
   BT.t = b.t;   // 在看回放时：回到当前战况再进场
-  const n = b.deploy(side, fleetSpec(f));
+  const n = b.deploy(side, pos ? { ...fleetSpec(f), pos } : fleetSpec(f));
   if (n) ctx.showToast(`${side} 方 ${f.name} ${nameOf(ENTRY, f.mode)} ×${n}`, 'success');
+  updateBattleUi();
+}
+// 选位置进场：暂停，鼠标处显示落点圈，点战场上一个位置后舰队落在那里，再恢复播放
+function startPlace(side, id) {
+  const f = fleetOf(side, id);
+  if (!BT.view || !f || !BT.b || BT.b.done) return;
+  const was = BT.playing;
+  BT.playing = false;
+  BT.placing = { side, id, was };
+  BT.reinf = null;
+  BT.edit = null;
+  renderPop();
+  const bar = $('simBtPlace');
+  bar.querySelector('span').textContent = `点击战场选择「${f.name}」的落点 · Esc 取消`;
+  bar.hidden = false;
+  BT.view.setPlacing({
+    side, color: side === 'A' ? '#5b9bff' : '#ff6b5e', label: `${f.name} · ${nameOf(ENTRY, f.mode)}`,
+    done: (pos) => { endPlace(); deployFleet(side, id, pos); if (was) togglePlay(); }
+  });
+  updateBattleUi();
+}
+function endPlace(resume = false) {
+  const p = BT.placing;
+  if (!p) return;
+  BT.placing = null;
+  BT.view?.setPlacing(null);
+  const bar = $('simBtPlace');
+  if (bar) bar.hidden = true;
+  if (resume && p.was) togglePlay();
   updateBattleUi();
 }
 function onFleetClick(e) {
@@ -1096,6 +1132,8 @@ function onFleetClick(e) {
   const side = BT.reinf;
   let x;
   if ((x = el('[data-bt-fl-go]'))) { const [s, id] = x.dataset.btFlGo.split(':'); deployFleet(s, Number(id)); return true; }
+  if ((x = el('[data-bt-fl-place]'))) { const [s, id] = x.dataset.btFlPlace.split(':'); startPlace(s, Number(id)); return true; }
+  if (el('[data-bt-place-cancel]')) { endPlace(true); return true; }
   if (!side) return false;
   if ((x = el('[data-fl-new]'))) { const f = newFleet(side); S.support[side].push(f); BT.edit = f.id; fleetChanged(); return true; }
   if ((x = el('[data-fl-edit]'))) { BT.edit = Number(x.dataset.flEdit); renderPop(); return true; }
@@ -1160,7 +1198,7 @@ function onBattleClick(e) {
 }
 function onBattleInput(e) {
   const t = e.target;
-  if (t.matches('[data-bt-seek]')) { seek(Number(t.value)); return true; }
+  if (t.matches('[data-bt-seek]')) { seek(Number(t.value)); t.style.setProperty('--p', Number(t.max) ? Number(t.value) / Number(t.max) : 0); return true; }
   if (t.dataset.btSearch) {
     const box = t.parentElement.querySelector('[data-bt-suggest]');
     const q = t.value.trim();
@@ -1459,9 +1497,9 @@ function renderSides() {
           <div class="kb-suggest" data-sim-suggest="${s}" hidden></div>
         </div>
         ${cur ? `<button type="button" class="btn btn-ghost" data-sim-add-current="${s}" title="把装配页当前的装配加入这一方">当前装配</button>` : ''}
-        <button type="button" class="btn btn-ghost" data-sim-eft="${s}">粘贴 EFT</button>
+        <button type="button" class="btn btn-ghost" data-sim-eft="${s}" title="粘贴 EFT 装配，或定向扫描结果（扫描窗口里全选复制，按船型导入）">粘贴 EFT / 扫描</button>
       </div>
-      ${adding ? `<div class="sim-eft"><textarea class="pi-input" rows="6" data-sim-eft-text placeholder="[Muninn, 舰队装配]&#10;…"></textarea><div><button type="button" class="btn btn-primary" data-sim-eft-go="${s}">加入</button><button type="button" class="btn btn-ghost" data-sim-eft-cancel>取消</button></div></div>` : ''}
+      ${adding ? `<div class="sim-eft"><textarea class="pi-input" rows="6" data-sim-eft-text placeholder="${ctx.esc(trTa('EFT 装配，如 [Muninn, 舰队装配]\n或定向扫描结果：扫描窗口里全选复制后粘贴，按船型直接导入'))}"></textarea><div><button type="button" class="btn btn-primary" data-sim-eft-go="${s}">加入</button><button type="button" class="btn btn-ghost" data-sim-eft-cancel>取消</button></div></div>` : ''}
       <div class="sim-rows">${list.map((r) => rowHtml(s, r)).join('') || '<p class="sim-empty">还没有舰船</p>'}</div>
       ${list.length ? `<div class="sim-side-foot"><button type="button" class="link-btn danger" data-sim-clear="${s}">清空 ${s} 方</button></div>` : ''}
     </section>`;
@@ -1519,6 +1557,71 @@ function shipSearch(q) {
     if (out.length >= 40) break;
   }
   return out.sort((a, b) => (a.name.toLowerCase().startsWith(s) ? 0 : 1) - (b.name.toLowerCase().startsWith(s) ? 0 : 1) || a.name.length - b.name.length).slice(0, 12);
+}
+
+// 输入框（textarea）里的文字不走自动翻译
+const trTa = (t) => (window.I18N?.lang === 'en' && window.I18N.t ? window.I18N.t(t) : t);
+// 定向扫描结果（扫描窗口里全选复制）：每行「类型 ID<Tab>名称<Tab>类型<Tab>距离」，旧客户端没有类型 ID；与本地分析同一种识别方式。
+// 只取舰船（不含太空舱），按船型计数；不像扫描结果时返回 null
+const SCAN_DIST = /^(-|[\d.,\s ]+\s*(m|km|au|米|千米|公里|天文单位|км|м|а\.?е\.?))$/i;
+const CAPSULES = new Set([670, 33328]);
+let shipByName = null;
+function parseScan(text) {
+  const lines = String(text).split(/\r?\n/).filter((l) => l.trim());
+  const rows = lines.map((l) => (l.includes('\t') ? l.split('\t') : l.trim().split(/[ \u00a0\u3000]{2,}/)).map((c) => c.trim().replace(/\*+$/, '').trim()))
+    .filter((c) => c.length >= 3 && SCAN_DIST.test(c[c.length - 1]));
+  if (!rows.length || rows.length < lines.length * 0.5) return null;
+  if (!shipByName) {
+    shipByName = new Map();
+    for (const t of ctx.data.types.values()) if (t.category === ctx.FE.CAT.ship) { shipByName.set(t.name.toLowerCase(), t.id); if (t.en) shipByName.set(t.en.toLowerCase(), t.id); }
+  }
+  const count = new Map();
+  for (const c of rows) {
+    const id = /^\d+$/.test(c[0]) && c.length >= 4 ? Number(c[0]) : shipByName.get(String(c[1]).toLowerCase());
+    if (!id || CAPSULES.has(id) || ctx.data.types.get(id)?.category !== ctx.FE.CAT.ship) continue;
+    count.set(id, (count.get(id) || 0) + 1);
+  }
+  return [...count].sort((a, b) => b[1] - a[1]);
+}
+// 扫描到的舰船并入列表（同船型的最近常见装配行合并数量），返回新加的行
+function addScanned(list, ships) {
+  const added = [];
+  for (const [ship, n] of ships) {
+    const same = list.find((r) => r.ship === ship && r.src === 'kb');
+    if (same) same.count = Math.min(500, same.count + n);
+    else { const r = newRow(ship, n, 'kb'); list.push(r); added.push(r); }
+  }
+  return added;
+}
+const scanToast = (ships) => ctx.showToast(ships.length ? `已从定向扫描导入 ${ships.reduce((t, x) => t + x[1], 0)} 艘（${ships.length} 种船）` : '扫描结果里没有舰船', ships.length ? 'success' : 'error');
+function importScanSide(side, ships) {
+  scanToast(ships);
+  if (!ships.length) return;
+  const added = addScanned(S.sides[side], ships);
+  S.adding = null;
+  undo = null;
+  changed();
+  added.forEach((r) => resolveRow(r));
+}
+function importScanFleet(f, ships) {
+  scanToast(ships);
+  if (!ships.length) return;
+  const added = addScanned(f.rows, ships);
+  renderPop();
+  Promise.all(added.map(resolveRow)).then(() => fleetChanged(f.at != null));
+}
+// 粘贴：装配 / 支援舰队的粘贴框里贴进定向扫描结果，直接导入
+function onPaste(e) {
+  const t = e.target;
+  if (!t.matches?.('[data-sim-eft-text], [data-fl-scan]')) return;
+  const ships = parseScan(e.clipboardData?.getData('text') || '');
+  if (!ships) {
+    if (t.matches('[data-fl-scan]')) { e.preventDefault(); ctx.showToast('没有识别出定向扫描结果：在扫描窗口里全选复制', 'error'); }
+    return;
+  }
+  e.preventDefault();
+  if (t.matches('[data-fl-scan]')) { const f = BT.reinf && fleetOf(BT.reinf, BT.edit); if (f) importScanFleet(f, ships); }
+  else if (S.adding) importScanSide(S.adding.side, ships);
 }
 
 function findRow(el) {
@@ -1731,7 +1834,10 @@ function onClick(e) {
   if (el('[data-sim-eft-cancel]')) { S.adding = null; renderSides(); return; }
   const go = el('[data-sim-eft-go]');
   if (go) {
-    const r = ctx.parseEft(root.querySelector('[data-sim-eft-text]').value);
+    const text = root.querySelector('[data-sim-eft-text]').value;
+    const ships = parseScan(text);
+    if (ships) { importScanSide(go.dataset.simEftGo, ships); return; }
+    const r = ctx.parseEft(text);
     if (r.error) { ctx.showToast('无法识别：' + r.error, 'error', 3500); return; }
     const row = newRow(r.fit.ship, 1, 'eft', ctx.normalize(r.fit), r.fit.name || 'EFT 装配');
     prepare(row);

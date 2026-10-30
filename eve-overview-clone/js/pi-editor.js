@@ -471,7 +471,7 @@ export function openTemplateEditor(json, { title = '殖民地模板', onSave = n
       <div class="pie-stage" id="pieStage">
         <canvas id="pieCanvas" class="pie-canvas"></canvas>
         <div class="pie-hud-top">
-          <div class="pie-title"><small>行星工业 · 殖民地模板</small><b>${env.esc(title)}</b></div>
+          <div class="pie-title"><b>${env.esc(title)}</b></div>
           <div class="pie-top-actions">
             <span class="pie-hint">拖动移动 · 滚轮缩放 · L 链接 · Del 删除</span>
             <button type="button" class="pie-x" data-pie="close" aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
