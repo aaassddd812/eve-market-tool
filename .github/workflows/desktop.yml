@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 env:
-  RELEASE_REPO: wbw5780/eve-tool-desktop
+  RELEASE_REPO: aaassddd812/eve-tool-desktop
 
 jobs:
   build:
