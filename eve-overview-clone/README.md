@@ -870,6 +870,15 @@ node build_reprocess.mjs <SDE 解压目录>   # 输出 eve-overview-clone/reproc
 - 击杀详情弹窗（击杀页、个人中心战斗记录、星图）里的人物 / 军团 / 联盟也可点击，直接打开对应统计页
 - 本站保留最近 30 天的全部击杀；筛选后的列表翻到 30 天以前时，自动改为实时查询 zKillboard（不入库）
 
+### 前端部署
+
+静态文件在服务器上的目录是 `/opt/eve/dist/`，仓库里只有 `index-v2.html`，但 nginx 首页 `/` 用的是 **`index.html`**——
+所以**每次部署都要把 `index-v2.html` 同时复制成 `index.html`**，只更新 index-v2.html 的话首页会一直加载旧代码
+（JS 按 `?v=` 版本号长期缓存，旧入口引用旧版本号，用户端永远拿不到新代码）。
+
+部署完跑 `bash server/check-live.sh` 检查：比对线上 `/`（index.html）、线上 `/index-v2.html` 与仓库版
+`index-v2.html` 引用的版本号，不一致会报出来。
+
 ### 击杀记录服务部署
 
 ```bash
