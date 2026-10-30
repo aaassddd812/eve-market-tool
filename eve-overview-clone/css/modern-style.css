@@ -4787,6 +4787,11 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .lw-card-who { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .lw-card-who + .lw-card-who { margin-top: 4px; }
 .lw-card-who small { color: var(--text-muted); }
+/* 自动找不到时的候选截图：点一下选中 */
+.lw-opt-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.lw-opt { padding: 4px; border: 0; border-radius: var(--radius-sm); background: var(--bg-primary); cursor: pointer; line-height: 0; }
+.lw-opt:hover, .lw-opt:focus-visible { background: color-mix(in srgb, var(--accent-primary) 35%, var(--bg-primary)); }
+.lw-opt img { max-height: 180px; max-width: 200px; border-radius: 4px; image-rendering: pixelated; }
 /* 手动框选：整屏显示共享画面的截图，拖出矩形 */
 .lw-pick { position: fixed; inset: 0; z-index: 1200; background: rgba(0, 0, 0, 0.82); display: flex; flex-direction: column; gap: 10px; padding: 12px; }
 .lw-pick-bar { display: flex; align-items: center; gap: 12px; color: #fff; flex-wrap: wrap; }

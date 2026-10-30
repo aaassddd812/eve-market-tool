@@ -6,8 +6,9 @@
 // 追踪：按名字那块的文字像素认人（图标闪烁不影响）；连续两帧都在才算新进本地（过滤一闪而过的杂讯）；
 //   一帧里超过一半的行都换了（换星系、自己滚动了列表）就把这批当作基线，不报警。
 //   每个人最近 0.5 秒里出现过的颜色：红 > 橙 > 友方；0.5 秒都没有图标才算「无图标」（白名，或自己）。
-// 发给主线程：{ t: 'status' } 定位状态，{ t: 'rows' } 当前名单（有变化或每秒一次），{ t: 'ocr', id, img } 新出现的人的名字截图。
-import { locate, scanRows, sameRow, rowImage } from './local-detect.js?v=v1';
+// 发给主线程：{ t: 'status' } 定位状态，{ t: 'rows' } 当前名单（有变化或每秒一次），{ t: 'ocr', id, img } 新出现的人的名字截图，
+//   { t: 'options', list } 自动找不到时几个像名单的区域的截图（连同上方的频道标签），给用户选。
+import { locate, scanRows, sameRow, rowImage } from './local-detect.js?v=v2';
 
 const TICK = 100, WINDOW = 500, GONE = 1500, RELOCATE = 2000;
 let mode = null;            // 'stream' | 'grab'
@@ -34,6 +35,7 @@ self.onmessage = async (e) => {
   else if (m.t === 'manual') { manual = m.rect; region = null; reset(); }
   else if (m.t === 'relocate') { region = null; reset(); }
   else if (m.t === 'snapshot') { const f = await full(); self.postMessage({ t: 'snapshot', frame: f }, f ? [f.data.buffer] : []); }
+  else if (m.t === 'options') sendOptions();
   else if (m.t === 'reocr') { const t = tracked.find((x) => x.id === m.id); if (t) sendOcr(t); }
   else if (m.t === 'stop') stop();
 };
@@ -181,4 +183,20 @@ function sendOcr(t) {
   if (!lastCrop || !region) return;
   const img = rowImage(lastCrop, region, t);
   self.postMessage({ t: 'ocr', id: t.id, clipped: t.clipped, img }, [img.data.buffer]);
+}
+
+// 自动找不到时：几个像名单的区域，各截一张图（往上多截几行，带上频道标签，最多 14 行高）
+async function sendOptions() {
+  const f = await full();
+  const L = f ? locate(f, {}) : null;
+  const list = [];
+  for (const r of L?.options || []) {
+    const x = Math.max(0, r.x - r.size), y = Math.max(0, Math.round(r.y - r.pitch * 4));
+    const w = Math.min(f.width, r.x + r.w + r.size) - x, h = Math.min(f.height, Math.round(r.y + Math.min(r.h, r.pitch * 10))) - y;
+    const data = new Uint8ClampedArray(w * h * 4);
+    for (let yy = 0; yy < h; yy++) data.set(f.data.subarray(((y + yy) * f.width + x) * 4, ((y + yy) * f.width + x + w) * 4), yy * w * 4);
+    // 选中后按手动框选处理：框住整个区域，四周留一个图标宽
+    list.push({ rect: { x: r.x - r.size, y: r.y - r.size, w: r.w + r.size * 2, h: r.h + r.size * 2 }, img: { width: w, height: h, data } });
+  }
+  self.postMessage({ t: 'options', list }, list.map((o) => o.img.data.buffer));
 }

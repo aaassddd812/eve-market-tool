@@ -4,6 +4,7 @@
 //    声望图标是一列竖直对齐、大小相同（界面 90% 时约 11px）、间距固定（约图标的 1.4 倍）的彩色小方块，连续 3 个以上算一个名单；
 //    名单上方的频道标签里有「本」字（窗口窄时「地」会被挡住，只认「本」）的就是本地。别的频道成员列表、空间站访客列表都对不上。
 //    返回列表区域（图标列左边到滚动条）、图标大小、行距。界面缩放不同时图标与行距跟着变，都从画面里量出来。
+//    没认出「本」字时返回最多 4 个像名单的区域（options），让用户从截图里选。
 // 2. scanRows：在锁定的区域里按行距切行，每行给出图标颜色（red / orange / friend / none）、名字那块的文字像素签名（认人用，图标闪烁不影响）、
 //    名字是否被截断（几行名字停在同一条截断边上，或结尾渐隐）。
 // 颜色按色相分，不写死具体数值：深浅、不同缩放下都适用。
@@ -104,7 +105,11 @@ export function locate(frame, opts = {}) {
   }
   out.sort((a, b) => b.ben - a.ben || b.icons - a.icons);
   const best = out[0];
-  if (!best || (!opts.within && best.ben < 0.5)) return { found: false, candidates: out.length };
+  // 没认出「本」字：把最像名单的几列（图标多的在前）交给用户选
+  if (!best || (!opts.within && best.ben < 0.5)) {
+    const options = out.sort((a, b) => b.icons - a.icons).slice(0, 4).map((c) => regionOf(frame, c, R));
+    return { found: false, candidates: out.length, options };
+  }
   return { found: true, region: regionOf(frame, best, R), candidates: out.length, score: best.ben };
 }
 

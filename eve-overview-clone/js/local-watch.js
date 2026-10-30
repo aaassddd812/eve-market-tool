@@ -1,6 +1,7 @@
 // ===== 本地红名（右上角铃铛「预警」弹窗的「本地红名」标签页）=====
 // 用户点「开始」后选择共享 EVE 窗口（浏览器 getDisplayMedia，只在本机处理，不上传），后台线程（local-worker.js）每 0.1 秒看一次本地频道成员列表：
-//   自动找到本地列表（local-detect.js：一列声望图标 + 上方频道标签的「本」字），找不到时可以在截图上手动框选；
+//   自动找到本地列表（local-detect.js：一列声望图标 + 上方频道标签的「本」字）；找了 8 秒找不到时把几个像名单的地方截图列出来让用户点选，
+//   都不是再让用户在整张截图上自己框选（选定的区域记在设置里，之后只在里面找）；
 //   红 / 橙图标（声望恶劣 / 不良、嫌犯等）一出现就报警；无图标（白名、中立）可选报警，要等名字认出来、确认不是自己之后才报。
 // 名字：新出现的人把名字那一行截下来交给文字识别（Tesseract.js，js/vendor/tesseract，本地运行），再用 ESI /universe/ids/ 换成角色；
 //   查不到（认错字母）或名字被截断（列表太窄）时在本站击杀记录里搜相近的名字（/api/kb/search），只有一个最像的才认，否则标「…?」，并提示把列表拉宽。
@@ -20,7 +21,8 @@ const DEFAULTS = { red: true, orange: true, neutral: false, sound: true, web: tr
 const T = { ...DEFAULTS };
 const S = {
   stream: null, worker: null, video: null, canvas: null, state: 'off', region: null, since: 0, ms: 0, clipped: false,
-  rows: [], people: new Map(), log: [], lastAlert: 0, alertTimer: 0, pick: null
+  rows: [], people: new Map(), log: [], lastAlert: 0, alertTimer: 0, pick: null,
+  options: undefined   // 自动找不到时给用户选的区域：undefined 还没截，null 正在截，[] 截好了
 };
 const OCR_BASE = new URL('./vendor/tesseract/', import.meta.url).href;
 const WHITE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -\'.';
@@ -77,9 +79,10 @@ async function start() {
   S.stream = stream;
   S.state = 'starting';
   S.since = Date.now();
+  S.options = undefined;
   S.rows = []; S.people.clear();
   track.addEventListener('ended', stop);
-  const w = new Worker(new URL('./local-worker.js?v=v1', import.meta.url), { type: 'module' });
+  const w = new Worker(new URL('./local-worker.js?v=v2', import.meta.url), { type: 'module' });
   S.worker = w;
   w.onmessage = onWorker;
   // Chrome / Edge：视频帧直接交给后台线程；其他浏览器：后台线程要画面时由这里从 <video> 截
@@ -130,12 +133,19 @@ function onWorker(e) {
   } else if (m.t === 'status') {
     const prev = S.state;
     S.state = m.state;
-    if (m.state === 'locked') S.region = m.region;
+    if (m.state === 'locked') { S.region = m.region; S.options = undefined; }
     if (m.state === 'locked' || m.state === 'lost') { S.rows = []; S.people.clear(); }
+    if (m.state === 'lost') S.since = Date.now();
+    // 找了 8 秒还没找到：截几个像名单的地方给用户选
+    if (m.state === 'locating' && S.options === undefined && Date.now() - S.since > 8000) askOptions();
     if (prev !== m.state) notify();
   } else if (m.t === 'rows') onRows(m);
   else if (m.t === 'ocr') ocrRow(m);
   else if (m.t === 'snapshot') showPick(m.frame);
+  else if (m.t === 'options') {
+    S.options = m.list.map((o) => ({ rect: o.rect, src: toUrl(o.img) }));
+    notify();
+  }
   else if (m.t === 'ended') stop();
 }
 
@@ -359,7 +369,26 @@ export function floatData() {
 const rank = (p) => ({ red: 0, orange: 1, none: 2, pending: 3, friend: 4 }[p.cls] ?? 5);
 export function startFloat() { S.floatOn = true; publishFloat(); }
 
-// ---------- 手动框选 ----------
+// ---------- 从截图里选 / 手动框选 ----------
+function askOptions() {
+  S.options = null;
+  S.worker?.postMessage({ t: 'options' });
+  notify();
+}
+function toUrl(img) {
+  const c = document.createElement('canvas');
+  c.width = img.width; c.height = img.height;
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(img.data.buffer || img.data), img.width, img.height), 0, 0);
+  return c.toDataURL();
+}
+function useRect(rect) {
+  if (rect) T.manual = rect; else delete T.manual;
+  save();
+  S.since = Date.now();
+  S.options = undefined;
+  S.worker?.postMessage({ t: 'manual', rect: rect || null });
+  notify();
+}
 function askPick() {
   if (!S.worker) return;
   S.worker.postMessage({ t: 'snapshot' });
@@ -396,14 +425,13 @@ function showPick(frame) {
     const rect = { x: Math.round(Math.min(a.x, b.x)), y: Math.round(Math.min(a.y, b.y)), w: Math.round(Math.abs(b.x - a.x)), h: Math.round(Math.abs(b.y - a.y)) };
     a = null;
     if (rect.w < 30 || rect.h < 30) { box.hidden = true; return; }
-    T.manual = rect; save();
-    S.worker?.postMessage({ t: 'manual', rect });
+    useRect(rect);
     closePick();
     ctx.showToast('已按框选的区域找本地列表', 'success');
   });
   wrap.addEventListener('click', (e) => {
     if (e.target.closest('[data-lw-pick-close]')) closePick();
-    else if (e.target.closest('[data-lw-pick-auto]')) { delete T.manual; save(); S.worker?.postMessage({ t: 'manual', rect: null }); closePick(); notify(); }
+    else if (e.target.closest('[data-lw-pick-auto]')) { useRect(null); closePick(); }
   });
 }
 function closePick() { S.pick?.remove(); S.pick = null; }
@@ -420,6 +448,17 @@ function renderPanel() {
   panel.innerHTML = drawPanel();
   sc.scrollTop = top;
 }
+// 自动找不到：列出截好的几个候选区域让用户点；都不是再自己框选
+function optionsHtml() {
+  if (T.manual) return '';
+  const tip = '确认本地频道窗口露在外面、成员列表显示着（不要最小化 EVE）';
+  if (S.options === null || S.options === undefined) return `<p class="ka-warn">还没找到本地频道：${tip}。正在截取可能的位置…</p>`;
+  if (!S.options.length) return `<p class="ka-warn">还没找到本地频道：${tip}。也可以点「手动框选」在截图上框出来</p>`;
+  return `<div class="ka-opt ka-stack lw-opts"><span><b>没认出哪个是本地频道，下面哪个是？</b><small>点一下就用它；都不是的话点「都不是，自己框选」</small></span>
+    <div class="lw-opt-grid">${S.options.map((o, i) => `<button type="button" class="lw-opt" data-lw-opt="${i}"><img src="${o.src}" alt="候选 ${i + 1}"></button>`).join('')}</div>
+    <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-lw-pick>都不是，自己框选</button><button class="btn btn-ghost btn-sm" data-lw-reopt>重新截取</button></div></div>`;
+}
+
 function drawPanel() {
   if (!supported()) return '<p class="ka-warn">当前浏览器不能共享画面，请用电脑版 Chrome 或 Edge</p>';
   const esc = ctx.esc;
@@ -434,7 +473,8 @@ function drawPanel() {
     ${sec('监视', `<div class="ka-list">
       <div class="ka-opt"><span><b>${on ? '正在监视' : '共享游戏画面'}</b><small>${on ? (S.region ? `本地列表 ${S.region.w}×${S.region.h}${T.manual ? '（手动框选）' : ''} · 每次 ${S.ms} 毫秒` : '') : '选择 EVE 窗口（或整个屏幕）'}</small></span>
         <span class="ka-ctl">${on ? `<button class="btn btn-ghost btn-sm" data-lw-pick>手动框选</button><button class="btn btn-ghost btn-sm" data-lw-stop>停止</button>` : '<button class="btn btn-primary btn-sm" data-lw-start>开始</button>'}</span></div>
-      ${slow ? '<p class="ka-warn">还没找到本地频道：确认本地频道窗口露在外面、成员列表显示着（不要最小化 EVE）。还是不行的话点「手动框选」</p>' : ''}
+      ${slow ? optionsHtml() : ''}
+      ${on && T.manual ? `<div class="ka-opt"><span><b>只在选定的区域里找</b><small>${S.state === 'manual-miss' ? '选定的区域里没有成员列表了（窗口挪动过？）' : '本地频道窗口挪动后要重新选'}</small></span><button class="btn btn-ghost btn-sm" data-lw-auto>改回自动识别</button></div>` : ''}
       ${on && S.clipped ? '<p class="ka-warn">有名字显示不全（标「…?」的没认出来）：把本地频道的成员列表拉宽一点就好</p>' : ''}
       ${sw('red', '红名报警', '声望恶劣、敌对', '图标为红色的人一出现就报警')}
       ${sw('orange', '橙名报警', '声望不良、嫌犯、罪犯', '图标为橙色 / 黄色的人一出现就报警')}
@@ -467,6 +507,9 @@ export function mountPanel(el, opts) {
     if (t('[data-lw-start]')) start();
     else if (t('[data-lw-stop]')) stop();
     else if (t('[data-lw-pick]')) askPick();
+    else if (t('[data-lw-opt]')) { const o = S.options?.[Number(t('[data-lw-opt]').dataset.lwOpt)]; if (o) { useRect(o.rect); ctx.showToast('已选定，开始监视这个列表', 'success'); } }
+    else if (t('[data-lw-reopt]')) askOptions();
+    else if (t('[data-lw-auto]')) useRect(null);
     else if (t('[data-lw-test]')) test();
     else if (t('[data-lw-me]')) { const n = t('[data-lw-me]').dataset.lwMe; if (!T.me.includes(n)) T.me.push(n); save(); for (const p of S.people.values()) if (isMe(p.raw)) p.self = true; notify(); }
     else if (t('[data-lw-unme]')) { T.me.splice(Number(t('[data-lw-unme]').dataset.lwUnme), 1); save(); notify(); }
