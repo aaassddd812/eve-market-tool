@@ -79,7 +79,8 @@ jobs:
           name: windows
           path: out/*
 
-  android:
+  android:              # 安卓编译太慢，暂时跳过；需要时删掉 if 恢复
+    if: ${{ false }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
