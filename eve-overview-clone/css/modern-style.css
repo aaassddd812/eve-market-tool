@@ -6435,6 +6435,27 @@ td .sov-auto-tag { margin-left: 4px; }
 .sp-for { display: flex; flex-wrap: wrap; gap: 2px 6px; margin-top: 2px; font-size: 0.6875rem; color: var(--text-muted); }
 .sp-for span { padding: 0 6px; border-radius: 999px; background: var(--bg-tertiary); }
 .sp-phase-head th { padding-top: 14px !important; text-align: left; background: transparent !important; }
+.sp-ul { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 5px; font-size: 0.6875rem; color: var(--text-secondary); }
+.sp-ul em { font-style: normal; font-weight: 600; color: var(--success); margin-right: 2px; }
+.sp-ul > span { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px 1px 3px; border-radius: 999px; background: var(--bg-tertiary); line-height: 18px; }
+.sp-ul > span:not(.sp-ul-ship) { padding-left: 8px; color: var(--text-muted); }
+.sp-ul-ship img { border-radius: 50%; background: #0d1219; }
+.sp-remap-tr td { padding: 6px 8px !important; white-space: normal !important; line-height: 1.6; }
+.sp-remap-tr td { background: color-mix(in srgb, var(--accent-primary) 8%, transparent) !important; }
+.sp-remap-tr td > span { margin-right: 10px; font-size: 0.75rem; }
+.sp-rm-tag { font-weight: 600; color: var(--accent-primary); }
+.sp-rm-at { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.sp-rm-attrs { color: var(--text-secondary); }
+.sp-remap-tr:first-child td { border-radius: var(--radius-md); }
+.sp-remap-two { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-secondary)); }
+.sp-remap-two p { margin: 0; font-size: 0.8125rem; }
+.sp-remap-two .btn { align-self: flex-start; }
+.sp-remap-two .sp-remap-row span { background: var(--bg-secondary); }
+.sp-remap-row > i { align-self: center; min-width: 44px; font-style: normal; font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); }
+.sp-imp { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sp-imp-tip { display: inline-flex; align-items: baseline; gap: 6px; padding: 4px 10px; border-radius: var(--radius-md); background: var(--bg-secondary); font-size: 0.75rem; }
+.sp-imp-tip b { color: var(--success); font-weight: 600; }
+.sp-hint .link-btn { font-size: inherit; }
 .sp-phase-head b { margin-right: 10px; font-size: 0.8125rem; color: var(--text-primary); }
 .sp-phase-head span { font-size: 0.75rem; font-weight: 400; color: var(--text-muted); }
 .sp-list .pi-table th { background: var(--bg-tertiary); }

@@ -51,7 +51,7 @@ const SHIELD_GROUP = 1209, ARMOR_GROUP = 1210;
 
 const P = {
   targets: [], seq: 0,
-  opt: { queue: true, alpha: false, remap: false, lang: 'zh' },
+  opt: { queue: true, alpha: false, remap: false, remap2: true, lang: 'zh' },
   tab: 'ship', skillLevel: 4, showAll: false
 };
 let C = null;            // 角色：{ id, name, trained, sp, queue, attrs, implants, error }
@@ -269,53 +269,184 @@ function buildPlan() {
   };
   phase('need', P.targets.map((t) => [t, R.get(t.id).need]));
   phase('good', P.targets.map((t) => [t, R.get(t.id).good]));
-  // 训练时间
+  // 训练时间：属性 + 植入体 + 加速器；重新分配按实际能用的时间（奖励次数现在就能用，每年一次的要等冷却）
   const imp = implantBonus();
   const cur = baseAttrs();
-  const best = optimalRemap(entries, imp);
-  const attrs = P.opt.remap && best ? best.attrs : cur;
-  const rate = (e) => { const i = skillInfo(e.skill); return ((attrs[i.pri] + imp[i.pri]) + (attrs[i.sec] + imp[i.sec]) / 2) * (P.opt.alpha ? 0.5 : 1); };
+  const boost = accelBonus();
+  const slots = remapSlots();
+  const G = groupsOf(entries);
+  const best = G.length ? { ...bestAttrs(G, imp, boost), curMin: timeOf(G, cur, imp, boost) } : null;
   const queueEnd = P.opt.queue && !hasQueueTarget() && C?.queue?.length ? Math.max(Date.now(), ...C.queue.map((q) => (q.finish_date ? Date.parse(q.finish_date) : 0))) : Date.now();
-  let at = queueEnd;
-  for (const e of entries) {
-    e.min = e.sp / rate(e);
-    e.start = at;
-    at += e.min * 60e3;
-    e.end = at;
+  let order = entries, remaps = [];
+  if (P.opt.remap && best) remaps = [{ from: 0, at: slots[0], attrs: best.attrs }];
+  const single = schedule(entries, queueEnd, imp, boost, cur, remaps);
+  // 能重新分配两次：按属性把技能分成两段，各配一次
+  let two = P.opt.remap && slots.length > 1 && best ? twoRemap(entries, queueEnd, imp, boost, cur, slots) : null;
+  if (two) {
+    const o = two.keys.map((k) => byKey.get(k));
+    const end2 = schedule(o, queueEnd, imp, boost, cur, two.remaps);
+    two = end2 < single - 3600e3 ? { ...two, save: (single - end2) / 60e3 } : null;
+    if (two && P.opt.remap2) { order = o; remaps = two.remaps; }
   }
+  const end = schedule(order, queueEnd, imp, boost, cur, remaps);
   // 每个目标两个阶段的完成时间
   const done = (id, name) => {
     const keys = reach.get(id + ':' + name);
     if (!keys) return null;
-    let end = 0, missing = 0;
-    for (const k of keys) { const e = byKey.get(k); if (e) { end = Math.max(end, e.end); missing += 1; } }
-    return { end: missing ? end : 0, missing };
+    let last = 0, missing = 0;
+    for (const k of keys) { const e = byKey.get(k); if (e) { last = Math.max(last, e.end); missing += 1; } }
+    return { end: missing ? last : 0, missing };
   };
   const milestones = P.targets.map((t) => ({ t, need: done(t.id, 'need'), good: done(t.id, 'good') }));
-  const total = { sp: entries.reduce((s, e) => s + e.sp, 0), min: entries.reduce((s, e) => s + e.min, 0) };
-  return { entries, milestones, total, start: queueEnd, end: at, best, cur, imp };
+  const total = { sp: order.reduce((s, e) => s + e.sp, 0), min: order.reduce((s, e) => s + e.min, 0) };
+  unlocks(order, have);
+  return { entries: order, milestones, total, start: queueEnd, end, best, cur, imp, boost, slots, two, twoOn: order !== entries };
 }
 
-// 最佳属性分配：每项 17–27，共 99 点；按规划里各技能的（主属性, 副属性）技能点总量算总时长最短的分配
-function optimalRemap(entries, imp) {
-  if (!entries.length) return null;
-  const groups = new Map();
-  for (const e of entries) { const i = skillInfo(e.skill); const k = i.pri + '|' + i.sec; groups.set(k, (groups.get(k) || 0) + e.sp); }
-  const G = [...groups].map(([k, sp]) => { const [p, s] = k.split('|'); return { p, s, sp }; });
-  const keys = ATTRS.map(([, k]) => k);
-  const time = (a) => G.reduce((t, g) => t + g.sp / ((a[g.p] + imp[g.p]) + (a[g.s] + imp[g.s]) / 2), 0);
-  let best = null;
-  const a = {};
+// 训练速度（技能点 / 分钟）
+const rateOf = (i, a, imp, boost) => ((a[i.pri] + imp[i.pri] + boost) + (a[i.sec] + imp[i.sec] + boost) / 2) * (P.opt.alpha ? 0.5 : 1);
+// 按（主属性, 副属性）合计技能点
+function groupsOf(entries) {
+  const g = new Map();
+  for (const e of entries) {
+    const i = skillInfo(e.skill);
+    const k = i.pri + '|' + i.sec;
+    if (!g.has(k)) g.set(k, { k, pri: i.pri, sec: i.sec, sp: 0 });
+    g.get(k).sp += e.sp;
+  }
+  return [...g.values()].sort((a, b) => b.sp - a.sp);
+}
+const timeOf = (G, a, imp, boost) => G.reduce((t, g) => t + g.sp / rateOf(g, a, imp, boost), 0);
+// 全部合法分配：每项 17–27，共 99 点
+const ALLOCS = (() => {
+  const out = [];
   for (let c = 0; c <= 10; c++) for (let i = 0; i <= 10 && c + i <= 14; i++) for (let m = 0; m <= 10 && c + i + m <= 14; m++) for (let p = 0; p <= 10 && c + i + m + p <= 14; p++) {
     const w = 14 - c - i - m - p;
-    if (w > 10) continue;
-    [a.charisma, a.intelligence, a.memory, a.perception, a.willpower] = [17 + c, 17 + i, 17 + m, 17 + p, 17 + w];
-    const tm = time(a);
-    if (!best || tm < best.min) best = { min: tm, attrs: { ...a } };
+    if (w <= 10) out.push({ charisma: 17 + c, intelligence: 17 + i, memory: 17 + m, perception: 17 + p, willpower: 17 + w });
   }
-  best.curMin = time(baseAttrs());
-  best.keys = keys;
+  return out;
+})();
+// 最佳属性分配：总时长最短
+function bestAttrs(G, imp, boost) {
+  let best = null;
+  for (const a of ALLOCS) { const min = timeOf(G, a, imp, boost); if (!best || min < best.min) best = { min, attrs: a }; }
   return best;
+}
+// 能重新分配的时间（最多两次）：奖励次数随时可用；每年一次的等冷却结束
+function remapSlots() {
+  const a = C?.attrs, now = Date.now();
+  if (!a) return [now];
+  const cd = a.accrued_remap_cooldown_date ? Date.parse(a.accrued_remap_cooldown_date) : 0;
+  return [...Array(Math.min(2, a.bonus_remaps || 0)).fill(now), Math.max(now, cd || 0)].sort((x, y) => x - y).slice(0, 2);
+}
+// 加速器：属性接口里没有，按游戏训练队列的实际速度反推（每项属性加了多少）
+function accelBonus() {
+  const imp = implantBonus(), a = baseAttrs(), xs = [];
+  for (const q of C?.queue || []) {
+    const t0 = Date.parse(q.start_date), t1 = Date.parse(q.finish_date), s0 = q.training_start_sp ?? q.level_start_sp;
+    const i = skillInfo(q.skill_id);
+    if (!i || !(t1 > t0) || s0 == null || q.level_end_sp == null || q.level_end_sp <= s0) continue;
+    const real = (q.level_end_sp - s0) / ((t1 - t0) / 60e3);
+    xs.push((real / (P.opt.alpha ? 0.5 : 1) - rateOf(i, a, imp, 0) * (P.opt.alpha ? 2 : 1)) / 1.5);
+  }
+  if (!xs.length) return 0;
+  const x = Math.round(xs.sort((p, q) => p - q)[xs.length >> 1]);
+  return x >= 1 && x <= 16 ? x : 0;
+}
+// 按顺序排时间。remaps：[{ from 从第几项起, at 最早时间, attrs }]，练到那一项且时间到了才换（记在条目的 remap 上）
+function schedule(order, start, imp, boost, attrs, remaps) {
+  let at = start, k = 0;
+  order.forEach((e, n) => {
+    e.remap = null;
+    while (k < remaps.length && n >= remaps[k].from && at >= remaps[k].at) { attrs = remaps[k].attrs; e.remap = { attrs, n: k + 1, of: remaps.length }; k += 1; }
+    e.min = e.sp / rateOf(skillInfo(e.skill), attrs, imp, boost);
+    e.start = at;
+    at += e.min * 60e3;
+    e.end = at;
+  });
+  return at;
+}
+// 前置在前的前提下按 prio 从小到大排
+function topoOrder(entries, prio) {
+  const idx = new Map(entries.map((e, i) => [e.key, i]));
+  const deps = entries.map((e) => {
+    const d = [];
+    if (idx.has(e.skill + ':' + (e.level - 1))) d.push(idx.get(e.skill + ':' + (e.level - 1)));
+    for (const [p, pl] of skillInfo(e.skill).t.skills) for (let l = 1; l <= pl; l++) if (idx.has(p + ':' + l)) d.push(idx.get(p + ':' + l));
+    return d;
+  });
+  const done = new Array(entries.length).fill(false), out = [];
+  while (out.length < entries.length) {
+    let bi = -1;
+    for (let i = 0; i < entries.length; i++) if (!done[i] && deps[i].every((j) => done[j]) && (bi < 0 || prio(i) < prio(bi))) bi = i;
+    if (bi < 0) break;
+    done[bi] = true;
+    out.push(entries[bi]);
+  }
+  return out.length === entries.length ? out : entries;
+}
+// 两次分配：把（主, 副属性）组分成两段，各算最佳分配，再按实际能分配的时间排出总时长最短的
+let twoCache = { key: '', val: null };
+function twoRemap(entries, start, imp, boost, cur, slots) {
+  const G = groupsOf(entries);
+  if (G.length < 2) return null;
+  const key = [entries.map((e) => e.key + '/' + Math.round(e.sp)).join(), JSON.stringify(imp), boost, P.opt.alpha, slots.map((t) => Math.round(t / 6e5)).join(), JSON.stringify(cur), start - Date.now() > 6e5 ? Math.round(start / 6e5) : 0].join('#');
+  if (twoCache.key === key) return twoCache.val;
+  const top = G.slice(0, 9), full = (1 << top.length) - 1;
+  const memo = new Map();
+  const bestOf = (m) => { if (!memo.has(m)) memo.set(m, bestAttrs(top.filter((_, i) => (m >> i) & 1), imp, boost)); return memo.get(m); };
+  const cand = [];
+  for (let m = 1; m < full; m++) cand.push({ m, min: bestOf(m).min + bestOf(full ^ m).min });
+  cand.sort((a, b) => a.min - b.min);
+  let val = null;
+  for (const { m } of cand.slice(0, 8)) {
+    const A1 = bestOf(m).attrs, A2 = bestOf(full ^ m).attrs;
+    const seg = new Map(top.map((g, i) => [g.k, (m >> i) & 1 ? 0 : 1]));
+    for (const g of G.slice(9)) seg.set(g.k, timeOf([g], A1, imp, boost) <= timeOf([g], A2, imp, boost) ? 0 : 1);
+    const segOf = (e) => { const i = skillInfo(e.skill); return seg.get(i.pri + '|' + i.sec); };
+    const order = topoOrder(entries, (i) => segOf(entries[i]) * 1e6 + i);
+    let from = 0;
+    order.forEach((e, n) => { if (segOf(e) === 0) from = n + 1; });
+    if (from <= 0 || from >= order.length) continue;
+    const remaps = [{ from: 0, at: slots[0], attrs: A1 }, { from, at: slots[1], attrs: A2 }];
+    const end = schedule(order, start, imp, boost, cur, remaps);
+    if (!val || end < val.end) val = { keys: order.map((e) => e.key), remaps, end, from };
+  }
+  twoCache = { key, val };
+  return val;
+}
+// 练完每一项新能开的船、能用的装备
+let unlockPool = null;
+function unlocks(order, have) {
+  if (!unlockPool) {
+    const { ship, module, drone } = ctx.FE.CAT;
+    unlockPool = [...ctx.data.types.values()].filter((t) => t.market && t.skills?.length && (t.category === ship || t.category === module || t.category === drone));
+  }
+  const idx = new Map(order.map((e, i) => [e.key, i]));
+  for (const e of order) e.unlock = null;
+  for (const t of unlockPool) {
+    let at = -1;
+    for (const [s, l] of t.skills) {
+      if ((have.get(s) || 0) >= l) continue;
+      const i = idx.get(s + ':' + l);
+      if (i == null) { at = Infinity; break; }
+      at = Math.max(at, i);
+    }
+    if (at < 0 || at === Infinity) continue;
+    const e = order[at];
+    e.unlock ||= { ships: [], mods: [] };
+    (t.category === ctx.FE.CAT.ship ? e.unlock.ships : e.unlock.mods).push(t);
+  }
+}
+// 属性植入体建议：哪一项换成 +5 省得最多
+function implantTips(plan) {
+  const G = groupsOf(plan.entries);
+  if (!G.length) return [];
+  const a = P.opt.remap && plan.best ? plan.best.attrs : plan.cur;
+  const t0 = timeOf(G, a, plan.imp, plan.boost);
+  return ATTRS.filter(([, k]) => plan.imp[k] < 5)
+    .map(([, k, n]) => ({ k, n, from: plan.imp[k], save: t0 - timeOf(G, a, { ...plan.imp, [k]: 5 }, plan.boost) }))
+    .filter((x) => x.save > 60).sort((x, y) => y.save - x.save).slice(0, 2);
 }
 
 // 大型技能注入器按角色总技能点递减：5M 以下 50 万、50M 以下 40 万、80M 以下 30 万，再往上 15 万
@@ -389,8 +520,8 @@ function charHtml() {
   const qEnd = q?.length ? Math.max(...q.map((x) => (x.finish_date ? Date.parse(x.finish_date) : 0))) : 0;
   return `<section class="sp-char">
     <div class="sp-char-main"><span>${q ? (q.length ? `训练队列 ${q.length} 项，${qEnd ? dateOnly(qEnd) + ' 完成' : '已暂停'}` : '训练队列为空') : `训练队列读取失败${C.queueError ? '：' + esc(C.queueError) : ''}`}</span></div>
-    ${q?.length && !hasQueueTarget() ? '<button type="button" class="btn btn-ghost btn-sm" data-sp-add-queue title="重排训练队列、补上缺的前置、算属性分配">规划训练队列</button>' : ''}
-    <div class="sp-attrs">${ATTRS.map(([, k, n]) => `<span><em>${n}</em><b>${base[k] + imp[k]}</b>${imp[k] ? `<small>+${imp[k]}</small>` : ''}</span>`).join('')}</div>
+    ${q?.length && !hasQueueTarget() ? '<button type="button" class="btn btn-ghost btn-sm" data-sp-add-queue title="队列里每项练完能开什么船、属性怎么分配最快、怎么排更省时间">规划训练队列</button>' : ''}
+    <div class="sp-attrs">${ATTRS.map(([, k, n]) => `<span><em>${n}</em><b>${base[k] + imp[k]}</b>${imp[k] ? `<small>+${imp[k]}</small>` : ''}</span>`).join('')}${plan?.boost ? `<span title="属性接口里没有加速器，按游戏训练队列的实际速度推算"><em>加速器</em><b>+${plan.boost}</b></span>` : ''}</div>
     ${opts}
   </section>`;
 }
@@ -479,7 +610,7 @@ function queueSub(t) {
   const end = q?.length ? Math.max(...q.map((x) => (x.finish_date ? Date.parse(x.finish_date) : 0))) : 0;
   const info = !C || C.mode === 'none' ? '未绑定角色，读不到训练队列' : !q ? '训练队列读取失败' : !q.length ? '训练队列为空' : `${q.length} 项 · 游戏里${end ? ' ' + dateOnly(end) + ' 练完' : '已暂停'}`;
   return `<div class="sp-t-ctl">
-      <div class="segmented" role="group" aria-label="顺序"><button type="button" data-sp-order="keep" class="${t.order !== 'short' ? 'active' : ''}" title="按游戏队列的顺序，缺的前置插到前面">原顺序</button><button type="button" data-sp-order="short" class="${t.order === 'short' ? 'active' : ''}" title="耗时短的先练，尽早多练完几项">短的先练</button></div>
+      <div class="segmented" role="group" aria-label="顺序"><button type="button" data-sp-order="keep" class="${t.order !== 'short' ? 'active' : ''}" title="按游戏里的顺序">原顺序</button><button type="button" data-sp-order="short" class="${t.order === 'short' ? 'active' : ''}" title="耗时短的先练，尽早多练完几项">短的先练</button></div>
     </div>
     <small class="sp-hint">${ctx.esc(info)}</small>`;
 }
@@ -505,12 +636,24 @@ function resultHtml() {
   if (B) {
     const save = B.curMin - B.min;
     const a = C?.attrs;
-    const when = a?.accrued_remap_cooldown_date && Date.parse(a.accrued_remap_cooldown_date) > Date.now() ? `${dateOnly(Date.parse(a.accrued_remap_cooldown_date))} 可重新分配` : a ? '现在可重新分配' : '';
+    const when = plan.slots[0] > Date.now() + 6e5 ? `${dateOnly(plan.slots[0])} 可重新分配` : a ? '现在可重新分配' : '';
     const bonus = a?.bonus_remaps ? ` · <span>奖励 ${a.bonus_remaps} 次</span>` : '';
+    const row = (A, ref, label = '') => `<div class="sp-remap-row">${label ? `<i>${label}</i>` : ''}${ATTRS.map(([, k, n]) => { const d = A[k] - ref[k]; return `<span><em>${n}</em><b>${A[k]}</b>${d ? `<small class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${d}</small>` : ''}</span>`; }).join('')}</div>`;
+    const T = plan.two;
+    const twoHtml = T ? `<div class="sp-remap-two">
+        <p><b>${esc(`能重新分配两次：分两段练，再少 ${dur(T.save)}`)}</b></p>
+        <p class="sp-hint">${esc(`先练 ${T.from} 项，${T.remaps[1].at > Date.now() + 6e5 ? dateOnly(T.remaps[1].at) + ' 后' : '练完后'}换第二套属性`)}</p>
+        ${row(T.remaps[0].attrs, plan.cur, '第一套')}${row(T.remaps[1].attrs, plan.cur, '第二套')}
+        <button type="button" class="btn btn-sm ${plan.twoOn ? 'btn-primary' : 'btn-ghost'}" data-sp-remap2 aria-pressed="${plan.twoOn}">${plan.twoOn ? '已按两次分配排序' : '按两次分配排序'}</button>
+      </div>` : '';
+    const tips = implantTips(plan);
+    const impHtml = tips.length ? `<div class="sp-imp"><span class="sp-hint">属性植入体</span>${tips.map((x) => `<span class="sp-imp-tip">${esc(x.from ? `${x.n} +${x.from} 换成 +5` : `${x.n} +5`)}<b>${esc(`少练 ${dur(x.save)}`)}</b></span>`).join('')}</div>` : '';
     remap = `<div class="sp-box sp-remap">
       <div class="sim-sec-head"><h4>属性分配建议</h4>${when ? `<span class="sp-hint"><span>${esc(when)}</span>${bonus}</span>` : ''}</div>
-      ${save > 60 ? `<div class="sp-remap-row">${ATTRS.map(([, k, n]) => { const d = B.attrs[k] - plan.cur[k]; return `<span><em>${n}</em><b>${B.attrs[k]}</b>${d ? `<small class="${d > 0 ? 'up' : 'down'}">${d > 0 ? '+' : ''}${d}</small>` : ''}</span>`; }).join('')}</div>` : ''}
-      <p class="sp-hint">${save > 60 ? esc(`可少练 ${dur(save)}（${Math.round(save / B.curMin * 100)}%）`) : '当前分配已接近最佳'}</p>
+      ${save > 60 ? row(B.attrs, plan.cur) : ''}
+      <p class="sp-hint">${save > 60 ? esc(`可少练 ${dur(save)}（${Math.round(save / B.curMin * 100)}%）`) : '当前分配已接近最佳'}${save > 60 && !P.opt.remap ? ' · <button type="button" class="link-btn" data-sp-remap-on>按这个分配排时间</button>' : ''}</p>
+      ${P.opt.remap ? twoHtml : ''}
+      ${impHtml}
     </div>`;
   }
   // 里程碑
@@ -522,24 +665,35 @@ function resultHtml() {
   // 清单
   const limit = P.showAll ? E.length : 80;
   let n = 0;
-  const section = (phase, title) => {
-    const list = E.filter((e) => e.phase === phase);
-    if (!list.length) return '';
-    const min = list.reduce((s, e) => s + e.min, 0);
-    const rows = list.map((e) => {
-      n += 1;
-      if (n > limit) return '';
-      const info = skillInfo(e.skill);
-      return `<tr>
+  const shortAttrs = (A) => ATTRS.map(([, k, nm]) => `${nm} ${A[k]}`).join(' · ');
+  const unlockHtml = (u) => {
+    if (!u) return '';
+    const ships = u.ships.slice(0, 4).map((t) => `<span class="sp-ul-ship"><img src="${IMG(t.id)}" alt="" width="16" height="16" loading="lazy">${esc(t.name)}</span>`).join('');
+    const more = u.ships.length > 4 ? `<span>${esc(`+${u.ships.length - 4} 艘`)}</span>` : '';
+    const mods = u.mods.length ? `<span title="${esc(u.mods.slice(0, 20).map((t) => t.name).join('、') + (u.mods.length > 20 ? ' …' : ''))}">${esc(`${u.mods.length} 种装备`)}</span>` : '';
+    return `<div class="sp-ul"><em>${u.ships.length ? '能开' : '能用'}</em>${ships}${more}${mods}</div>`;
+  };
+  const rowsOf = (list) => list.map((e) => {
+    n += 1;
+    if (n > limit) return '';
+    const info = skillInfo(e.skill);
+    const rm = e.remap ? `<tr class="sp-remap-tr"><td colspan="5"><span class="sp-rm-tag">${esc(e.remap.of > 1 ? `第 ${e.remap.n} 次重新分配属性` : '重新分配属性')}</span>${n > 1 ? `<span class="sp-rm-at">${esc(dateTime(e.start))}</span>` : ''}<span class="sp-rm-attrs">${esc(shortAttrs(e.remap.attrs))}</span></td></tr>` : '';
+    return `${rm}<tr>
         <td class="num sp-n">${n}</td>
-        <td><div class="sp-sk"><span class="sp-sk-name">${esc(info.t.name)}</span><span class="sp-lv">${ROMAN[e.level]}</span>${e.pre ? '<span class="sp-pre" title="其他技能的前置要求">前置</span>' : ''}</div></td>
+        <td><div class="sp-sk"><span class="sp-sk-name">${esc(info.t.name)}</span><span class="sp-lv">${ROMAN[e.level]}</span>${e.pre ? '<span class="sp-pre" title="其他技能的前置要求">前置</span>' : ''}</div>${unlockHtml(e.unlock)}</td>
         <td class="num pi-hide-sm">${ctx.formatNumber(e.sp)}</td>
         <td class="num">${dur(e.min)}</td>
         <td class="num pi-hide-sm">${esc(dateTime(e.end))}</td>
       </tr>`;
-    }).join('');
-    return `<tbody class="sp-phase"><tr class="sp-phase-head"><th colspan="5"><b>${title}</b><span>${list.length} 项 · ${dur(min)}</span></th></tr>${rows}</tbody>`;
+  }).join('');
+  const section = (list, title) => {
+    if (!list.length) return '';
+    const min = list.reduce((s, e) => s + e.min, 0);
+    return `<tbody class="sp-phase"><tr class="sp-phase-head"><th colspan="5"><b>${title}</b><span>${list.length} 项 · ${dur(min)}</span></th></tr>${rowsOf(list)}</tbody>`;
   };
+  const body = plan.twoOn
+    ? section(E.slice(0, plan.two.from), '第一段 · 第一套属性') + section(E.slice(plan.two.from), '第二段 · 第二套属性')
+    : section(E.filter((e) => e.phase === 'need'), '第一阶段 · 能开 / 能用') + section(E.filter((e) => e.phase === 'good'), '第二阶段 · 用好 / 发展方向');
   const list = `<div class="sp-box sp-list">
     <div class="sim-sec-head"><h4>训练顺序</h4>
       <div class="sp-copy">
@@ -548,11 +702,11 @@ function resultHtml() {
       </div></div>
     <div class="pi-table-wrap"><table class="pi-table sp-table">
       <thead><tr><th class="num">#</th><th>技能</th><th class="num pi-hide-sm">技能点</th><th class="num">时长</th><th class="num pi-hide-sm">完成时间</th></tr></thead>
-      ${section('need', '第一阶段 · 能开 / 能用')}${section('good', '第二阶段 · 用好 / 发展方向')}
+      ${body}
     </table></div>
     ${E.length > limit ? `<button type="button" class="btn btn-ghost btn-sm sp-more" data-sp-all>显示全部 ${E.length} 项</button>` : ''}
   </div>`;
-  return cards + msHtml + list + remap;
+  return cards + remap + msHtml + list;
 }
 
 // ---------- 搜索 ----------
@@ -646,6 +800,8 @@ function onClick(e) {
   }
   if ((x = el('[data-sp-del]'))) { const t = findTarget(x); P.targets = P.targets.filter((y) => y !== t); save(); render(); return; }
   if (el('[data-sp-add-queue]')) { if (!hasQueueTarget()) addTarget({ kind: 'queue', order: 'keep' }); return; }
+  if (el('[data-sp-remap2]')) { P.opt.remap2 = !plan?.twoOn; save(); render(); return; }
+  if (el('[data-sp-remap-on]')) { P.opt.remap = true; save(); render(); return; }
   if ((x = el('[data-sp-order]'))) { const t = findTarget(x); t.order = x.dataset.spOrder; save(); render(); return; }
   if (el('[data-sp-clear]')) { P.targets = []; save(); render(); return; }
   if (el('[data-sp-all]')) { P.showAll = true; render(); return; }

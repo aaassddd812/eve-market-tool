@@ -306,7 +306,7 @@ function queueSection(queue, mine, rate) {
   const boxes = (lv) => `<span class="sk-boxes">${[1, 2, 3, 4, 5].map((n) => `<i class="${n < lv ? 'on' : n === lv ? 'queued' : ''}"></i>`).join('')}</span>`;
   const head = `<div class="sk-q-head"><h3>训练队列</h3>
       <span class="sk-q-sum">${items.length} 项${paused ? ' · <b class="sk-q-paused">已暂停</b>' : ` · 全部完成还需 <b data-sk-cd="${last.end}" translate="no"></b> · <span translate="no">${esc(when(last.end))}</span>`}</span>
-      <button type="button" class="btn btn-ghost btn-sm sk-q-plan" data-sk-plan-queue title="重排训练队列、补上缺的前置，可与想开的船一起排">规划队列</button></div>`;
+      <button type="button" class="btn btn-ghost btn-sm sk-q-plan" data-sk-plan-queue title="队列里每项练完能开什么船、属性怎么分配最快、怎么排更省时间">规划队列</button></div>`;
   const c = items[0];
   const now = `<div class="sk-q-now" data-sk-now data-start="${c.start}" data-end="${c.end}" data-sp0="${c.sp0}" data-lv0="${c.lv0}" data-lv1="${c.lv1}">
       <div class="sk-q-now-top"><span class="sk-q-tag">${paused ? '已暂停' : '正在训练'}</span><b class="sk-q-now-name">${esc(c.name)} <em>${ROMAN[c.lv]}</em></b>${boxes(c.lv)}</div>

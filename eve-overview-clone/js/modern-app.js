@@ -797,7 +797,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v90').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v91').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -4670,7 +4670,7 @@ async function renderProfileTab(tab) {
 // 个人中心 · 技能：首次打开时加载
 let skillsLoading = null;
 function loadSkillsModule() {
-  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v31').then((m) => {
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v32').then((m) => {
     m.initSkills({ esc, formatNumber, esiAuthFetch, store, showPlan: async (el, opt) => (await loadFittingModule()).showPlan(el, false, opt) });
     return m;
   }).catch((error) => { skillsLoading = null; throw error; });
