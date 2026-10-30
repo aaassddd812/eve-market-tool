@@ -29,9 +29,9 @@ tauri-plugin-dialog = "2"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_UI_WindowsAndMessaging"] }
 
+# thin LTO + 默认 16 个代码生成单元：比全量 LTO + 单线程编译快很多，安装包只大一点（壳程序只开一个窗口，运行速度没区别）
 [profile.release]
-codegen-units = 1
-lto = true
+lto = "thin"
 opt-level = "s"
 panic = "abort"
 strip = true

@@ -8,21 +8,28 @@
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  上面私钥的密码
 # 桌面版启动时读 Releases 最新版的 latest.json（直连失败再读 latest-mirror.json 走 ghfast 镜像）判断是否有更新
 # 一个平台失败时另一个照样发布
+# 编译缓存：GitHub 的缓存按分支 / 标签隔离，标签触发的运行只能读到同一个标签或 main 上存的缓存，
+#   所以 main 上改了桌面版代码（或每周一次）时跑 warm 只编译不发布，把缓存存在 main 上，发版时就能用上；
+#   warm 与 windows 用同一个 shared-key 共用缓存。
 name: desktop
 
 on:
   push:
     tags: ['desktop-v*']
+    branches: [main]
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  schedule:
+    - cron: '0 20 * * 0'     # 每周一凌晨 4 点（北京时间）预热一次，缓存 7 天不用会被清掉
   workflow_dispatch:
 
 env:
   RELEASE_REPO: aaassddd812/eve-tool-desktop
 
 jobs:
-  windows:
+  # 只编译、不打包不发布：给 main 存编译缓存
+  warm:
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'workflow_dispatch' }}
     runs-on: windows-latest
-    outputs:
-      version: ${{ steps.ver.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,6 +38,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+          shared-key: windows-release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 编译（不打包）
+        working-directory: desktop
+        run: npx --yes @tauri-apps/cli@^2 build --no-bundle
+
+  windows:
+    if: ${{ startsWith(github.ref, 'refs/tags/desktop-v') || github.event_name == 'workflow_dispatch' }}
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # 缓存键在这一步按仓库里的 Cargo.toml 算（下面改版本号在它之后），和 warm 一致
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+          shared-key: windows-release
 
       - uses: actions/setup-node@v4
         with:
@@ -139,7 +171,7 @@ jobs:
 
   release:
     needs: [windows, android]
-    if: ${{ !cancelled() && (needs.windows.result == 'success' || needs.android.result == 'success') }}
+    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/desktop-v') || github.event_name == 'workflow_dispatch') && (needs.windows.result == 'success' || needs.android.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
