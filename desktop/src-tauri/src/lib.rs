@@ -32,7 +32,7 @@ pub fn run() {
         // 自动更新：启动时查 GitHub 发布仓库的 latest.json，有新版就弹窗询问
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, update_check, capture::local_grab])
+        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, update_check, capture::local_grab, capture::local_windows])
         // 关掉主窗口就退出（悬浮窗不单独留着）
         .on_window_event(|w, e| {
             if w.label() == "main" && matches!(e, tauri::WindowEvent::Destroyed) {
@@ -67,8 +67,8 @@ pub fn run() {
 }
 
 // ---------- 悬浮窗 ----------
-// 每种内容（kind）一个窗口，标签 float-<kind>；位置、大小由 window-state 插件记住。
-// 已经开着就恢复可点击并切到前面（鼠标穿透后从主窗口再点一次「悬浮窗」就能解开）。
+// 和网页版画中画一样只有一个悬浮窗（标签 float），顶部切换击杀预警 / 到价提醒 / 本地红名；位置、大小由 window-state 插件记住。
+// 已经开着就切到要的内容、恢复可点击并切到前面（鼠标穿透后从主窗口再点一次「悬浮窗」就能解开）。
 // 窗口建在异步命令里：Windows 上同步命令里建窗口会卡死。
 #[cfg(desktop)]
 #[tauri::command]
@@ -78,10 +78,10 @@ async fn float_open(app: tauri::AppHandle, webview: tauri::Webview, kind: String
     if kind.is_empty() {
         return Err("kind".into());
     }
-    let label = format!("float-{kind}");
-    if let Some(w) = app.get_webview_window(&label) {
+    let label = "float";
+    if let Some(w) = app.get_webview_window(label) {
         let _ = w.set_ignore_cursor_events(false);
-        let _ = w.eval("window.__floatPass && window.__floatPass(false)");
+        let _ = w.eval(format!("window.__floatPass && window.__floatPass(false); window.__floatKind && window.__floatKind('{kind}')"));
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
@@ -93,7 +93,7 @@ async fn float_open(app: tauri::AppHandle, webview: tauri::Webview, kind: String
     url.set_query(Some(&format!("kind={kind}")));
     url.set_fragment(None);
     let title: String = title.chars().take(40).collect();
-    WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
         .title(title)
         .inner_size(340.0, 420.0)
         .min_inner_size(220.0, 140.0)
@@ -111,7 +111,7 @@ async fn float_open(app: tauri::AppHandle, webview: tauri::Webview, kind: String
 // 下面几个只对悬浮窗自己生效
 #[cfg(desktop)]
 fn is_float(w: &tauri::WebviewWindow) -> bool {
-    w.label().starts_with("float-")
+    w.label() == "float" || w.label().starts_with("float-")
 }
 
 // 鼠标穿透：点击直接落到下面的游戏上
@@ -134,13 +134,14 @@ fn float_drag(window: tauri::WebviewWindow) -> Result<(), String> {
     window.start_dragging().map_err(|e| e.to_string())
 }
 
+// 直接销毁（不走关闭请求），异步命令里做，避免 Windows 上在主线程里关窗口没反应
 #[cfg(desktop)]
 #[tauri::command]
-fn float_close(window: tauri::WebviewWindow) -> Result<(), String> {
+async fn float_close(window: tauri::WebviewWindow) -> Result<(), String> {
     if !is_float(&window) {
         return Ok(());
     }
-    window.close().map_err(|e| e.to_string())
+    window.destroy().map_err(|e| e.to_string())
 }
 
 // 悬浮窗里点了击杀 / 物品：主窗口打开详情，切到前面

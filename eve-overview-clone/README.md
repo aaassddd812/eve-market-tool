@@ -20,7 +20,7 @@ python -m http.server 8899 --bind 127.0.0.1
 
 **悬浮窗**（击杀预警、到价提醒、本地红名）：「预警」弹窗的击杀预警标签页、自选看板顶部有「悬浮窗」按钮。悬浮窗是站内 `float.html?kind=kill|price|local`
 （`js/float-view.js` + `css/float.css`），只负责显示，内容由主页面经 BroadcastChannel 推过去（`js/float-feed.js`；`kill-alert.js` / `watch-board.js` 各自 publish）。
-桌面版开原生窗口：置顶、无边框、可调透明度、可鼠标穿透（主窗口再点一次「悬浮窗」解除），位置大小自动记住；
+桌面版开原生窗口：置顶、无边框、可调透明度、可鼠标穿透（主窗口再点一次「悬浮窗」解除），位置大小自动记住；和网页画中画一样只有一个窗口（标签 `float`），顶部切换内容，再点别的「悬浮窗」按钮由壳调 `__floatKind` 切过去（1.0.7 及更早每种内容各开一个窗口）；
 网页用 Chrome / Edge 116+ 的文档画中画（窗口里一个 iframe，可在两种内容之间切换），其他浏览器不显示按钮。悬浮窗里点击杀 / 物品在主页面打开详情。
 到价提醒的悬浮窗开着时，即使没开「后台监控到价」也每 5 分钟查一次价；「测试网页提醒」会往击杀悬浮窗插一条测试预警。
 游戏要用窗口化或无边框窗口，全屏模式会盖住悬浮窗。
@@ -965,7 +965,7 @@ node build_wormholes.mjs <SDE 解压目录> [anoik static.json]   # 输出 eve-o
 
 - 顶栏铃铛「预警」弹窗的「本地红名」标签页（`local-watch.js`，点到标签页或打开本地悬浮窗时才加载）。点「开始」后选择共享 EVE 窗口（`getDisplayMedia`），**画面只在本机处理，不上传**；每次打开网页都要重新点「开始」（浏览器规定）。
 - 后台线程（`local-worker.js`，module worker，后台标签页也不降频）每 0.1 秒看一次：Chrome / Edge 用 `MediaStreamTrackProcessor` 把视频帧直接交给后台线程；其他浏览器由主线程从 `<video>` 截。
-- 桌面版不走共享屏幕（WebView2 共享窗口会被 Windows 加一圈黄色录制边框）：Rust 命令 `local_grab`（`desktop/src-tauri/src/capture.rs`）找标题为「EVE」/「EVE - 角色名」的窗口，锁定列表后，列表那块露在屏幕上（9 个点 `WindowFromPoint` 都是 EVE）就只从屏幕拷这一小块（最省）；被挡住或要整个画面时用 `PrintWindow`（PW_RENDERFULLCONTENT）截客户区再裁，截出全黑再退回从屏幕拷；最小化不行。网页按 `window.__EVE_DESKTOP__` 的版本号判断：1.0.6 起用这个命令，旧版仍用共享屏幕（不能先调命令试，等返回后再调 `getDisplayMedia` 已不算用户点击触发，WebView2 会拒绝）。
+- 桌面版不走共享屏幕（WebView2 共享窗口会被 Windows 加一圈黄色录制边框）：Rust 命令 `local_grab`（`desktop/src-tauri/src/capture.rs`）找标题为「EVE」/「EVE - 角色名」的窗口，锁定列表后，列表那块露在屏幕上（9 个点 `WindowFromPoint` 都是 EVE）就只从屏幕拷这一小块（最省）；被挡住或要整个画面时用 `PrintWindow`（PW_RENDERFULLCONTENT）截客户区再裁，截出全黑再退回从屏幕拷；最小化不行。点「开始」后先调 `local_windows` 列出所有「EVE - 角色名」窗口（各截一张缩略图，最小化的标出来），用户选一个，之后每次 `local_grab` 都带上它的 `hwnd`（窗口关了报 `gone`，面板有「换窗口」；1.0.7 及更早没有 `local_windows`，不选、自动找）。网页按 `window.__EVE_DESKTOP__` 的版本号判断：1.0.6 起用这个命令，旧版仍用共享屏幕（不能先调命令试，等返回后再调 `getDisplayMedia` 已不算用户点击触发，WebView2 会拒绝）。
 - 网页版只能在 https（或本机地址）下用：http 页面没有 `navigator.mediaDevices`，面板会说明并给出 Chrome / Edge 的 flags 设置方法（演示站用）。
 - 找列表（`local-detect.js`）：声望图标是一列竖直对齐、大小相同、间距固定的彩色小方块（连续 3 个以上），名单上方频道标签里有「本」字（窗口窄时只露「本」）的就是本地；图标大小与行距从画面里量，界面缩放 80%–150% 都能认（找一次 30–160 毫秒）。找不到时 8 秒后提示「手动框选」：在截图上拖一个框，只在框里找（记在设置里）。
 - 每行：图标颜色按色相分红 / 橙 / 友方 / 无；认人靠名字那块的文字像素（图标闪烁不影响）；新的一行连续两帧都在才算进本地；一帧里超过一半的行都换了（换星系、滚动列表）算基线。一个人最近 0.5 秒里出现过红就算红（闪烁的图标灭的那一下不会变成白名），0.5 秒都没有图标才算白名。锁定后每次检查约 5–12 毫秒（1920×1080）。

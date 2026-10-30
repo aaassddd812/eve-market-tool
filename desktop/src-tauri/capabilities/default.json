@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "线上网站只允许：用系统浏览器打开链接、发系统通知、开关悬浮窗、截 EVE 窗口（本地红名）、手动检查更新",
-  "windows": ["main", "float-*"],
+  "windows": ["main", "float", "float-*"],
   "remote": {
     "urls": [
       "https://eve.navexor.top/*"
@@ -17,6 +17,7 @@
     "allow-float-close",
     "allow-float-focus-main",
     "allow-local-grab",
+    "allow-local-windows",
     "allow-update-check"
   ]
 }

@@ -13,7 +13,7 @@
 
 import * as AP from './alert-push.js?v=v2';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v5';
+import * as FF from './float-feed.js?v=v6';
 import { SERVER, IS_TQ } from './server.js?v=s4';
 
 let ctx;   // esc, showToast, resolveNames, resolveTypeNames, selfNames()
@@ -23,7 +23,8 @@ const T = { ...DEFAULTS };
 const S = {
   stream: null, worker: null, video: null, canvas: null, state: 'off', region: null, since: 0, ms: 0, clipped: false,
   rows: [], people: new Map(), log: [], lastAlert: 0, alertTimer: 0, pick: null,
-  options: undefined   // 自动找不到时给用户选的区域：undefined 还没截，null 正在截，[] 截好了
+  options: undefined,  // 自动找不到时给用户选的区域：undefined 还没截，null 正在截，[] 截好了
+  wins: null, hwnd: 0, winName: ''   // 桌面版：点「开始」后列出的 EVE 窗口（给用户选），选中的窗口与角色名
 };
 const OCR_BASE = new URL('./vendor/tesseract/', import.meta.url).href;
 const WHITE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -\'.';
@@ -69,7 +70,7 @@ const running = () => Boolean(S.stream || S.native);
 // 截一次：返回 { width, height, buffer }（RGBA），截不到返回 null（原因记在 S.grabErr）
 async function nativeGrab(rect) {
   try {
-    const buf = await tauri().invoke('local_grab', { rect: rect || null });
+    const buf = await tauri().invoke('local_grab', { rect: rect || null, hwnd: S.hwnd || null });
     const v = new DataView(buf);
     S.grabErr = '';
     return { width: v.getUint32(0, true), height: v.getUint32(4, true), buffer: buf.slice(8) };
@@ -86,7 +87,7 @@ export function status() {
   const on = running();
   const reds = S.rows.filter((r) => r.cls === 'red' || r.cls === 'orange').length;
   let text = on ? STATE_TEXT[S.state] || S.state : '本地红名未开启';
-  if (on && S.state === 'noframe' && S.native) text = S.grabErr === 'minimized' ? 'EVE 窗口最小化了，截不到画面' : S.grabErr === 'no-eve' ? '没找到 EVE 窗口：先打开游戏' : '截不到 EVE 窗口的画面';
+  if (on && S.state === 'noframe' && S.native) text = S.grabErr === 'minimized' ? 'EVE 窗口最小化了，截不到画面' : S.grabErr === 'no-eve' ? '没找到 EVE 窗口：先打开游戏' : S.grabErr === 'gone' ? '选的 EVE 窗口关掉了：点「换窗口」重新选' : '截不到 EVE 窗口的画面';
   if (on && S.state === 'locked') text = `监视中 · 本地 ${S.rows.length} 人${reds ? ` · 红名 ${reds}` : ''}`;
   return { on, alert: on && reds > 0, text };
 }
@@ -95,7 +96,7 @@ export function status() {
 async function start() {
   if (running()) return;
   if (!supported()) { ctx.showToast(whyNot(), 'error', 5000); return; }
-  if (tauri()) { startWorker(true); return; }
+  if (tauri()) { await listWindows(); return; }
   let stream;
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 10, max: 15 }, displaySurface: 'window' }, audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'include' });
@@ -120,6 +121,41 @@ async function start() {
     w.postMessage({ t: 'grab-mode' });
   }
   notify();
+}
+// 桌面版：列出所有 EVE 窗口让用户选（多开时知道监视的是哪个号），每个窗口截一张缩略图；
+// 1.0.7 及更早的客户端没有 local_windows：不选，自动找
+async function listWindows() {
+  let list;
+  try { list = await tauri().invoke('local_windows'); }
+  catch { S.hwnd = 0; S.winName = ''; startWorker(true); return; }
+  if (!list.length) { S.wins = null; ctx.showToast('没找到 EVE 窗口：先打开游戏', 'error', 5000); notify(); return; }
+  S.wins = list.map((w) => ({ ...w, name: w.title.replace(/^EVE( - )?/, '') || 'EVE', src: '' }));
+  notify();
+  for (const w of S.wins) {
+    if (w.minimized) continue;
+    try {
+      const buf = await tauri().invoke('local_grab', { rect: null, hwnd: w.id, thumb: 360 });
+      const v = new DataView(buf);
+      w.src = toUrl({ width: v.getUint32(0, true), height: v.getUint32(4, true), data: new Uint8ClampedArray(buf.slice(8)) });
+    } catch { w.src = ''; }
+    notify();
+  }
+}
+function useWindow(id) {
+  const w = S.wins?.find((x) => x.id === id);
+  if (!w) return;
+  if (w.minimized) { ctx.showToast('这个窗口最小化了：先把游戏窗口还原，再点「刷新」', 'info', 5000); return; }
+  S.hwnd = w.id; S.winName = w.name; S.wins = null;
+  T.win = w.title; save();
+  startWorker(true);
+}
+function windowsHtml() {
+  const esc = ctx.esc;
+  return `<div class="ka-opt ka-stack lw-opts"><span><b>选择要监视的 EVE 窗口</b><small>点一下就开始监视它；多开的话按角色名选${S.wins.length > 1 ? `（找到 ${S.wins.length} 个窗口）` : ''}</small></span>
+    <div class="lw-opt-grid">${S.wins.map((w) => `<button type="button" class="lw-opt lw-win${w.title === T.win ? ' last' : ''}" data-lw-win="${w.id}">
+      ${w.src ? `<img src="${w.src}" alt="">` : `<span class="lw-win-ph">${w.minimized ? '最小化了' : '截图中…'}</span>`}
+      <span class="lw-win-name"><span translate="no">${esc(w.name)}</span>${w.title === T.win ? ' <small>上次用的</small>' : ''}</span></button>`).join('')}</div>
+    <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-lw-wins>刷新</button><button class="btn btn-ghost btn-sm" data-lw-wins-x>取消</button></div></div>`;
 }
 // native：桌面版截图（后台线程每次要画面都经这里调 local_grab）
 function startWorker(native) {
@@ -550,8 +586,9 @@ function drawPanel() {
     <div class="ka-top"><span class="ka-status${on ? ' on' : ''}"><i></i>${esc(st.text)}</span>${FF.buttonHtml('local')}</div>
     <p class="ka-note">${tauri() ? '直接截取 EVE 窗口，自动找到本地频道的成员列表，每 0.1 秒看一次；画面只在本机处理，不会上传' : '共享 EVE 窗口后自动找到本地频道的成员列表，每 0.1 秒看一次；画面只在本机处理，不会上传'}</p>
     ${sec('监视', `<div class="ka-list">
-      <div class="ka-opt"><span><b>${on ? '正在监视' : tauri() ? '监视游戏画面' : '共享游戏画面'}</b><small>${on ? (S.region ? `本地列表 ${S.region.w}×${S.region.h}${T.manual ? '（手动框选）' : ''} · 每次 ${S.ms} 毫秒` : '') : tauri() ? '自动找到 EVE 窗口，游戏不要最小化' : '选择 EVE 窗口（或整个屏幕）'}</small></span>
-        <span class="ka-ctl">${on ? `<button class="btn btn-ghost btn-sm" data-lw-pick>手动框选</button><button class="btn btn-ghost btn-sm" data-lw-stop>停止</button>` : '<button class="btn btn-primary btn-sm" data-lw-start>开始</button>'}</span></div>
+      <div class="ka-opt"><span><b>${on ? (S.winName ? `正在监视：<span translate="no">${esc(S.winName)}</span>` : '正在监视') : tauri() ? '监视游戏画面' : '共享游戏画面'}</b><small>${on ? (S.region ? `本地列表 ${S.region.w}×${S.region.h}${T.manual ? '（手动框选）' : ''} · 每次 ${S.ms} 毫秒` : '') : tauri() ? '点「开始」后选择 EVE 窗口，游戏不要最小化' : '选择 EVE 窗口（或整个屏幕）'}</small></span>
+        <span class="ka-ctl">${on ? `${S.winName ? '<button class="btn btn-ghost btn-sm" data-lw-rewin>换窗口</button>' : ''}<button class="btn btn-ghost btn-sm" data-lw-pick>手动框选</button><button class="btn btn-ghost btn-sm" data-lw-stop>停止</button>` : S.wins ? '' : '<button class="btn btn-primary btn-sm" data-lw-start>开始</button>'}</span></div>
+      ${!on && S.wins ? windowsHtml() : ''}
       ${slow ? optionsHtml() : ''}
       ${on && T.manual ? `<div class="ka-opt"><span><b>只在选定的区域里找</b><small>${S.state === 'manual-miss' ? '选定的区域里没有成员列表了（窗口挪动过？）' : '本地频道窗口挪动后要重新选'}</small></span><button class="btn btn-ghost btn-sm" data-lw-auto>改回自动识别</button></div>` : ''}
       ${on && S.clipped ? '<p class="ka-warn">有名字显示不全（标「…?」的没认出来）：把本地频道的成员列表拉宽一点就好</p>' : ''}
@@ -585,6 +622,10 @@ export function mountPanel(el, opts) {
   panel.addEventListener('click', (e) => {
     const t = (sel) => e.target.closest(sel);
     if (t('[data-lw-start]')) start();
+    else if (t('[data-lw-win]')) useWindow(Number(t('[data-lw-win]').dataset.lwWin));
+    else if (t('[data-lw-wins]')) listWindows();
+    else if (t('[data-lw-wins-x]')) { S.wins = null; notify(); }
+    else if (t('[data-lw-rewin]')) { stop(); listWindows(); }
     else if (t('[data-lw-stop]')) stop();
     else if (t('[data-lw-pick]')) askPick();
     else if (t('[data-lw-opt]')) { const o = S.options?.[Number(t('[data-lw-opt]').dataset.lwOpt)]; if (o) { useRect(o.rect); ctx.showToast('已选定，开始监视这个列表', 'success'); } }

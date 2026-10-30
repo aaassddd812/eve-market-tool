@@ -178,6 +178,8 @@ function setPass(on) {
   invoke('float_pass', { on });
 }
 window.__floatPass = (on) => document.documentElement.classList.toggle('fl-passing', Boolean(on));
+// 桌面版只有一个悬浮窗：主窗口点别的「悬浮窗」按钮时由壳切换内容
+window.__floatKind = (k) => { if (KINDS[k]) setKind(k); };
 
 if (ipc) {
   document.documentElement.classList.add('fl-native');

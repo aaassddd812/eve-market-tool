@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-windows"
+description = "Enables the local_windows command without any pre-configured scope."
+commands.allow = ["local_windows"]
+
+[[permission]]
+identifier = "deny-local-windows"
+description = "Denies the local_windows command without any pre-configured scope."
+commands.deny = ["local_windows"]
