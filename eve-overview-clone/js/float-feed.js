@@ -9,6 +9,7 @@
 // 模块各自发布内容（publish）；悬浮窗要内容而模块还没加载时，用登记的 loader 加载（loader 加载后会自己 publish）。
 
 const CH = 'eve-float';
+const FLOAT_V = 'v4';   // 跟 float.html 里 float-view.js 的版本号一致：改了悬浮窗页面就一起改，旧的画中画会重新加载
 export const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名' };
 const snap = {};
 const loaders = {};
@@ -63,10 +64,12 @@ export async function openFloat(kind) {
     handlers.showToast?.('这个浏览器不支持悬浮窗：请用 Chrome / Edge，或下载桌面版', 'error', 5000);
     return;
   }
-  const src = `float.html?kind=${kind}&pip=1`;
+  const src = `float.html?kind=${kind}&pip=1&v=${FLOAT_V}`;
   if (pip && !pip.closed) {
     const f = pip.document.querySelector('iframe');
-    if (f) f.contentWindow.postMessage({ t: 'kind', kind }, location.origin);
+    // 画中画是网站更新前打开的（版本号不同）：重新加载成新版
+    if (f && !f.src.endsWith('&v=' + FLOAT_V)) f.src = src;
+    else if (f) f.contentWindow.postMessage({ t: 'kind', kind }, location.origin);
     pip.focus();
     return;
   }

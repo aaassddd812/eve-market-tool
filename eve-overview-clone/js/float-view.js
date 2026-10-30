@@ -1,7 +1,7 @@
 // ===== 悬浮窗页面（float.html）=====
 // 只负责显示：内容由主页面（float-feed.js）经 BroadcastChannel 推过来，这里不请求任何数据。
 // ?kind=kill 击杀预警 / price 到价提醒 / local 本地红名；?pip=1 在网页画中画的 iframe 里（标题栏可以切换内容）。
-// 桌面版原生窗口（有 __TAURI_INTERNALS__ 且不是画中画）：无边框，标题栏拖动窗口，另有透明度、鼠标穿透、关闭按钮。
+// 桌面版原生窗口（有 __TAURI_INTERNALS__ 且不是画中画）：无边框，标题栏拖动窗口，另有透明度、鼠标穿透、关闭按钮；和画中画一样顶部可以切换内容。
 
 const q = new URLSearchParams(location.search);
 const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名' };
@@ -94,7 +94,7 @@ function histHtml(a, first) {
       <span class="fl-hist-main"><span translate="no">${esc(r.ship)}</span>${r.other ? `<small> · <span>${r.loss ? '击杀者' : '受害者'}</span> <span translate="no">${esc(r.other)}</span></small>` : ''}</span>
       <small class="fl-hist-meta"><span translate="no">${esc(r.system)}</span>${r.value ? ` · <b translate="no">${esc(r.value)}</b>` : ''} · <span>${ago(r.at)}</span></small></li>`).join('')}</ul>` : '<p class="fl-hist-none">近期没有其他记录</p>';
   return `<div class="fl-hist${open ? ' open' : ''}">
-    <button type="button" class="fl-hist-sum" data-fl-exp="${esc(a.key)}" aria-expanded="${open}">${sum}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    <button type="button" class="fl-hist-sum" data-fl-exp="${esc(a.key)}" aria-expanded="${open}">${sum}<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
     ${open ? ships + rows : ''}</div>`;
 }
 
@@ -113,8 +113,8 @@ function renderLocal(d, body, foot) {
         <span class="fl-main"><b>${p.name ? `<span translate="no">${esc(p.name)}</span>` : `<span>${p.look === 'ocr' ? '识别中…' : '没认出来'}</span>`}</b>${p.name && !p.sure ? '<small class="fl-q" title="名字显示不全，没认出来">…?</small>' : ''}${p.org ? ` <small translate="no">${esc(p.org)}</small>` : ''}</span>
         ${p.st ? `<small class="fl-local-st"><span class="fl-k"><span>击杀</span> ${p.st.kills}</span> · <span class="fl-l"><span>损失</span> ${p.st.losses}</span>${p.st.ships.length ? ` · <span translate="no">${esc(p.st.ships.join(' / '))}</span>` : ''}</small>` : ''}</li>`;
     }).join('')}</ul>`
-      : `<p class="fl-empty">${d.on ? '还没有识别到名单' : '还没有名单'}</p>`);
-  foot.textContent = d.on ? d.status || '' : '';
+      : `<p class="fl-empty">${!d.on ? '还没有名单' : d.hidden ? '本地没有红名 / 白名' : '还没有识别到名单'}</p>`);
+  foot.textContent = d.on ? (d.status || '') + (d.hidden ? ` · 已隐藏 ${d.hidden} 个友方` : '') : '';
 }
 
 function renderPrice(d, body, foot) {
@@ -177,7 +177,8 @@ if (ipc) {
     invoke('float_drag');
   });
 }
-if (PIP) { $('flTabs').hidden = false; $('flTitle').hidden = true; }
+// 画中画与桌面版原生窗口都显示切换栏（击杀预警 / 到价提醒 / 本地红名），一个悬浮窗里就能切换
+if (PIP || ipc) { $('flTabs').hidden = false; $('flTitle').hidden = true; }
 
 render();
 hello();

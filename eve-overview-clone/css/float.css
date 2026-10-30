@@ -44,8 +44,10 @@ html.fl-native .fl { background: rgba(var(--bg), var(--fl-alpha)); border-radius
 html.fl-native .fl-head { cursor: move; }
 .fl-title { font-weight: 600; font-size: 13px; }
 .fl-sp { flex: 1; }
-.fl-tabs { display: flex; gap: 2px; background: var(--card); border-radius: 8px; padding: 2px; }
-.fl-tabs button { border: 0; background: none; color: var(--text-2); font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 6px; cursor: pointer; }
+.fl-tabs { display: flex; gap: 2px; background: var(--card); border-radius: 8px; padding: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.fl-tabs button { border: 0; background: none; color: var(--text-2); font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+html.fl-native .fl-head { padding-left: 8px; }
+html.fl-native .fl-tabs button { padding: 3px 8px; }
 .fl-tabs button.active { background: var(--accent); color: #fff; }
 .fl-ctl { display: flex; gap: 2px; }
 .fl-btn { width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--text-2); cursor: pointer; }

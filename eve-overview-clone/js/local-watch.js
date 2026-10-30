@@ -6,18 +6,18 @@
 // 名字：新出现的人把名字那一行截下来交给文字识别（Tesseract.js，js/vendor/tesseract，本地运行），再用 ESI /universe/ids/ 换成角色；
 //   查不到（认错字母）或名字被截断（列表太窄）时在本站击杀记录里搜相近的名字（/api/kb/search），只有一个最像的才认，否则标「…?」，并提示把列表拉宽。
 //   认出角色后查所属军团 / 联盟（standings.js）与近 30 天击杀记录（/api/v1/pilots），显示在名单与悬浮窗里。
-// 自己：已绑定 ESI 的角色名 + 名单里手动点「这是我」的名字，不报警。
+// 自己：已绑定 ESI 的角色名、名单里手动点「这是我」的名字，以及没有图标却和本地友方同联盟 / 同军团的人（游戏里只有自己那一行没有图标），不报警。
 // 提醒方式：提示音、网页卡片、系统通知、企业微信 / 邮箱（alert-push.js）、悬浮窗（float-feed.js 的 local 一栏）。
 // 设置存在 eve-localwatch-v1（不分服务器）。共享画面每次打开网页都要重新选择（浏览器规定），不会自动恢复。
 
 import * as AP from './alert-push.js?v=v2';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v2';
+import * as FF from './float-feed.js?v=v3';
 import { SERVER, IS_TQ } from './server.js?v=s4';
 
 let ctx;   // esc, showToast, resolveNames, resolveTypeNames, selfNames()
 const KEY = 'eve-localwatch-v1';
-const DEFAULTS = { red: true, orange: true, neutral: false, sound: true, web: true, notify: false, me: [] };
+const DEFAULTS = { red: true, orange: true, neutral: false, onlyHostile: true, sound: true, web: true, notify: false, me: [] };   // onlyHostile：名单与悬浮窗只显示红 / 橙 / 白名
 const T = { ...DEFAULTS };
 const S = {
   stream: null, worker: null, video: null, canvas: null, state: 'off', region: null, since: 0, ms: 0, clipped: false,
@@ -39,6 +39,7 @@ export function initLocalWatch(context) {
 }
 export function onChange(fn) { subs.add(fn); }
 function notify() {
+  findMates();
   // 报警后名字、击杀记录陆续查到：补进最近的报警与卡片
   for (const e of S.log) {
     if (Date.now() - e.at > 60e3) break;
@@ -155,9 +156,20 @@ const isMe = (name) => {
   return Boolean(n) && [...(ctx.selfNames?.() || []), ...T.me].some((x) => String(x).toLowerCase() === n);
 };
 const newPerson = (id) => ({ id, name: '', raw: '', look: 'ocr', alerted: false, first: Date.now(), cls: 'pending', y: 0 });
+// 自己那一行没有图标，同联盟 / 同军团的人在游戏里一定带蓝 / 绿星：
+// 没有图标、却和本地里带友方图标的人同联盟（或同军团）的，只可能是自己（或自己的另一个号）；绑定了 ESI 时也按联系人声望认友方
+function findMates() {
+  const orgs = new Set();
+  for (const p of S.people.values()) if (p.cls === 'friend' && p.affDone) { if (p.alliance) orgs.add(p.alliance); if (p.corp) orgs.add(p.corp); }
+  for (const p of S.people.values()) {
+    if (p.self || p.cls !== 'none' || !p.affDone) continue;
+    if (orgs.has(p.alliance) || orgs.has(p.corp) || ST.group({ char: p.charId, corp: p.corp, alliance: p.alliance }) === 'friend') { p.self = true; p.mate = true; }
+  }
+}
 const alarming = (cls) => (cls === 'red' && T.red) || (cls === 'orange' && T.orange);
 
 function onRows(m) {
+  findMates();
   S.ms = m.ms;
   S.clipped = m.clipped;
   const alive = new Set();
@@ -169,8 +181,8 @@ function onRows(m) {
     p.first = r.first;
     Object.assign(p, { cls: r.cls, y: r.y, clipped: r.clipped, base: r.base });
     if (!p.alerted && !p.self && alarming(r.cls)) { p.alerted = true; fire.push(p); }
-    // 白名：认出名字、确认不是自己后才报（基线里的不报：刚开始监视或换了星系）
-    if (!p.alerted && T.neutral && r.cls === 'none' && !r.base && p.look !== 'ocr' && !p.self) { p.alerted = true; fire.push(p); }
+    // 白名：认出名字、查到所属、确认不是自己后才报（基线里的不报：刚开始监视或换了星系）
+    if (!p.alerted && T.neutral && r.cls === 'none' && !r.base && (p.look === 'miss' || p.affDone) && !p.self) { p.alerted = true; fire.push(p); }
   }
   for (const id of S.people.keys()) if (!alive.has(id)) S.people.delete(id);
   S.rows = m.rows;
@@ -337,6 +349,7 @@ async function identify(p) {
   const { names } = await ctx.resolveNames([p.corp, p.alliance].filter(Boolean));
   p.corpName = names.get(p.corp) || '';
   p.allianceName = names.get(p.alliance) || '';
+  p.affDone = true;
   notify();
   const res = await fetch('/api/v1/pilots?ids=' + id + (IS_TQ ? '' : '&server=' + SERVER.id)).catch(() => null);
   const d = res?.ok ? await res.json().catch(() => ({})) : {};
@@ -355,9 +368,10 @@ function publishFloat() {
 }
 export function floatData() {
   const st = status();
-  const people = [...S.people.values()].filter((p) => !p.self).sort((a, b) => rank(a) - rank(b) || a.y - b.y);
+  const all = [...S.people.values()].filter((p) => !p.self);
+  const people = all.filter(shown).sort((a, b) => rank(a) - rank(b) || a.y - b.y);
   return {
-    on: st.on, status: st.text, clipped: S.clipped, n: S.rows.length,
+    on: st.on, status: st.text, clipped: S.clipped, n: S.rows.length, hidden: T.onlyHostile ? all.length - people.length : 0,
     items: people.map((p) => ({
       id: p.charId || 0, key: p.id, cls: p.cls, name: p.name || '', sure: Boolean(p.charId) || !p.clipped, look: p.look, clipped: p.clipped,
       org: [p.allianceName, p.corpName].filter(Boolean).join(' · '),
@@ -366,6 +380,8 @@ export function floatData() {
     }))
   };
 }
+// 「只显示红名 / 白名」开着时：友方（蓝、绿、紫等）、自己、刚出现还没定颜色的不显示
+const shown = (p) => !T.onlyHostile || (!p.self && (p.cls === 'red' || p.cls === 'orange' || p.cls === 'none'));
 const rank = (p) => ({ red: 0, orange: 1, none: 2, pending: 3, friend: 4 }[p.cls] ?? 5);
 export function startFloat() { S.floatOn = true; publishFloat(); }
 
@@ -465,7 +481,9 @@ function drawPanel() {
   const st = status();
   const on = st.on;
   const slow = on && S.state !== 'locked' && Date.now() - S.since > 8000;
-  const people = [...S.people.values()].sort((a, b) => a.y - b.y);
+  const everyone = [...S.people.values()];
+  const people = everyone.filter(shown).sort((a, b) => a.y - b.y);
+  const hid = everyone.length - people.length;
   const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m < 60 ? m + ' 分钟前' : Math.floor(m / 60) + ' 小时前'; };
   return `
     <div class="ka-top"><span class="ka-status${on ? ' on' : ''}"><i></i>${esc(st.text)}</span>${FF.buttonHtml('local')}</div>
@@ -487,12 +505,12 @@ function drawPanel() {
       ${AP.switchHtml('local')}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-lw-test>测试提醒</button></div>`)}
-    ${sec(`本地名单${people.length ? `（${people.length}）` : ''}`, people.length ? `<ul class="lw-list">${people.map((p) => `<li class="lw-row ${p.cls}${p.self ? ' self' : ''}">
+    ${sec(`本地名单${everyone.length ? `（${everyone.length}）` : ''}`, `<div class="ka-list">${sw('onlyHostile', '只显示红名 / 白名', hid ? `已隐藏 ${hid} 个友方` : '友方（蓝、绿、紫等）不显示', '关掉就显示本地里的所有人；悬浮窗也一样')}</div>` + (people.length ? `<ul class="lw-list">${people.map((p) => `<li class="lw-row ${p.cls}${p.self ? ' self' : ''}">
         <i class="lw-dot ${p.cls}" title="${CLS[p.cls] || ''}"></i>
-        <span class="lw-who"><b>${p.charId ? `<a class="kb-link" href="#kb/character/${p.charId}" translate="no">${esc(p.name)}</a>` : p.name ? `<span translate="no">${esc(p.name)}</span>` : `<span>${p.look === 'ocr' ? '识别中…' : '没认出来'}</span>`}</b>${!p.charId && p.clipped && p.name ? `<small class="lw-unsure" title="${p.cand ? `名字显示不全，同前缀的有 ${p.cand} 个人` : '名字显示不全，没查到'}">…?</small>` : ''}${p.self ? ' <small>（我）</small>' : ''}
+        <span class="lw-who"><b>${p.charId ? `<a class="kb-link" href="#kb/character/${p.charId}" translate="no">${esc(p.name)}</a>` : p.name ? `<span translate="no">${esc(p.name)}</span>` : `<span>${p.look === 'ocr' ? '识别中…' : '没认出来'}</span>`}</b>${!p.charId && p.clipped && p.name ? `<small class="lw-unsure" title="${p.cand ? `名字显示不全，同前缀的有 ${p.cand} 个人` : '名字显示不全，没查到'}">…?</small>` : ''}${p.self ? ` <small${p.mate ? ' title="没有声望图标，又和本地里的友方同联盟 / 同军团，应该是你自己"' : ''}>（我）</small>` : ''}
           <small>${p.charId ? ST.badge({ char: p.charId, corp: p.corp, alliance: p.alliance }) : ''}<span translate="no">${esc([p.allianceName, p.corpName].filter(Boolean).join(' · '))}</span>${p.st ? ` · ${statLine(p)}` : ''}</small></span>
         ${p.raw && !p.self && p.cls === 'none' ? `<button class="btn btn-ghost btn-sm" data-lw-me="${esc(p.raw)}" title="以后不对这个名字报警">这是我</button>` : ''}</li>`).join('')}</ul>`
-      : `<p class="ka-empty">${on ? '还没有识别到名单' : '开始监视后显示本地里的人'}</p>`)}
+      : `<p class="ka-empty">${!on ? '开始监视后显示本地里的人' : everyone.length ? '本地没有红名 / 白名' : '还没有识别到名单'}</p>`))}
     ${T.me.length ? sec('不报警的名字', `<div class="ka-chips">${T.me.map((n, i) => `<span class="ka-chip"><span translate="no">${esc(n)}</span><button class="ka-close" data-lw-unme="${i}" aria-label="移除">×</button></span>`).join('')}</div>`) : ''}
     ${sec('最近报警', S.log.length ? `<ul class="ka-history">${S.log.map((r) => `<li><span class="ka-badge${r.cls === 'red' ? '' : ' clear'}">${r.cls === 'red' ? '红名' : '白名'}</span><span translate="no">${esc(r.names.join('、') || '…')}</span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有报警</p>')}`;
 }
