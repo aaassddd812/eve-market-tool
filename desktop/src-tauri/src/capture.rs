@@ -1,7 +1,8 @@
 // ---------- 本地红名：截 EVE 窗口的画面 ----------
 // 网页版用浏览器的共享屏幕（getDisplayMedia），WebView2 里会走 Windows Graphics Capture，系统强制在被截的窗口外画一圈黄色边框；
-// 桌面版改由这里直接截：找到标题以「EVE」开头的游戏窗口，PrintWindow（PW_RENDERFULLCONTENT）把客户区画进内存，
-// 再按网页要的矩形（客户区坐标）裁下来返回。被别的窗口挡住也能截（最小化时截不到）。
+// 桌面版改由这里直接截：找到标题以「EVE」开头的游戏窗口，按网页要的矩形（客户区坐标）截下来返回。
+// 列表那块露在屏幕上时直接从屏幕拷这一小块（开销最小）；被别的窗口挡住时用 PrintWindow（PW_RENDERFULLCONTENT）把整个客户区画进内存再裁，
+// 所以被挡住也能截（最小化时截不到）。
 // 返回二进制：前 8 字节是宽、高（u32 小端），后面是 RGBA 像素。网页每 0.1 秒调一次（local-watch.js 的 grab 模式）。
 
 #[derive(serde::Deserialize)]
@@ -29,7 +30,7 @@ fn grab(_rect: Option<(i32, i32, i32, i32)>) -> Result<Vec<u8>, String> {
 #[cfg(windows)]
 fn grab(rect: Option<(i32, i32, i32, i32)>) -> Result<Vec<u8>, String> {
     use std::ptr::null_mut;
-    use windows_sys::Win32::Foundation::{HWND, RECT};
+    use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
     use windows_sys::Win32::Graphics::Gdi::*;
     use windows_sys::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
     use windows_sys::Win32::UI::WindowsAndMessaging::GetClientRect;
@@ -59,15 +60,32 @@ fn grab(rect: Option<(i32, i32, i32, i32)>) -> Result<Vec<u8>, String> {
             return Err("empty".into());
         }
         let screen = GetDC(null_mut());
-        let big_dc = CreateCompatibleDC(screen);
-        let big = CreateCompatibleBitmap(screen, cw, ch);
-        let old_big = SelectObject(big_dc, big as HGDIOBJ);
-        let ok = PrintWindow(hwnd, big_dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT) != 0;
-        // 裁出要的矩形
+        let mut pt = POINT { x: 0, y: 0 };
+        ClientToScreen(hwnd, &mut pt);
         let small_dc = CreateCompatibleDC(screen);
         let small = CreateCompatibleBitmap(screen, w, h);
         let old_small = SelectObject(small_dc, small as HGDIOBJ);
-        BitBlt(small_dc, 0, 0, w, h, big_dc, x, y, SRCCOPY);
+        // 只要列表那一块、且这块在屏幕上没被别的窗口挡住：直接从屏幕上拷这一小块，最省（每次零点几毫秒）
+        let mut ok = rect.is_some()
+            && uncovered(hwnd, pt.x + x, pt.y + y, w, h)
+            && BitBlt(small_dc, 0, 0, w, h, screen, pt.x + x, pt.y + y, SRCCOPY) != 0
+            && !black(small_dc, 0, 0, w, h);
+        if !ok {
+            // 被挡住了（或要整个画面）：PrintWindow 把整个客户区画进内存再裁；
+            // 有的显卡驱动 / 游戏设置下 PrintWindow 截出来是全黑，再退回从屏幕上拷
+            let big_dc = CreateCompatibleDC(screen);
+            let big = CreateCompatibleBitmap(screen, cw, ch);
+            let old_big = SelectObject(big_dc, big as HGDIOBJ);
+            ok = PrintWindow(hwnd, big_dc, PW_CLIENTONLY | PW_RENDERFULLCONTENT) != 0 && !black(big_dc, x, y, w, h);
+            ok = if ok {
+                BitBlt(small_dc, 0, 0, w, h, big_dc, x, y, SRCCOPY) != 0
+            } else {
+                BitBlt(small_dc, 0, 0, w, h, screen, pt.x + x, pt.y + y, SRCCOPY) != 0
+            };
+            SelectObject(big_dc, old_big);
+            DeleteObject(big as HGDIOBJ);
+            DeleteDC(big_dc);
+        }
         let mut bi: BITMAPINFO = std::mem::zeroed();
         bi.bmiHeader.biSize = std::mem::size_of::<BITMAPINFOHEADER>() as u32;
         bi.bmiHeader.biWidth = w;
@@ -81,11 +99,8 @@ fn grab(rect: Option<(i32, i32, i32, i32)>) -> Result<Vec<u8>, String> {
         out[4..8].copy_from_slice(&(h as u32).to_le_bytes());
         let lines = GetDIBits(small_dc, small, 0, h as u32, out[8..].as_mut_ptr().cast(), &mut bi, DIB_RGB_COLORS);
         SelectObject(small_dc, old_small);
-        SelectObject(big_dc, old_big);
         DeleteObject(small as HGDIOBJ);
-        DeleteObject(big as HGDIOBJ);
         DeleteDC(small_dc);
-        DeleteDC(big_dc);
         ReleaseDC(null_mut(), screen);
         if !ok || lines == 0 {
             return Err("capture".into());
@@ -97,6 +112,38 @@ fn grab(rect: Option<(i32, i32, i32, i32)>) -> Result<Vec<u8>, String> {
         }
         Ok(out)
     }
+}
+
+// 屏幕上这块矩形（屏幕坐标）是不是都露在外面：抽四角和中间等 9 个点，看最上层的窗口是不是 EVE
+#[cfg(windows)]
+unsafe fn uncovered(hwnd: windows_sys::Win32::Foundation::HWND, x: i32, y: i32, w: i32, h: i32) -> bool {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{GetAncestor, WindowFromPoint, GA_ROOT};
+    for i in 0..3 {
+        for j in 0..3 {
+            let p = POINT { x: x + (w - 1) * i / 2, y: y + (h - 1) * j / 2 };
+            let top = WindowFromPoint(p);
+            if top.is_null() || GetAncestor(top, GA_ROOT) != hwnd {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+// 抽几个点看是不是全黑（PrintWindow 截不到 DirectX 画面时就是全黑）
+#[cfg(windows)]
+unsafe fn black(dc: windows_sys::Win32::Graphics::Gdi::HDC, x: i32, y: i32, w: i32, h: i32) -> bool {
+    use windows_sys::Win32::Graphics::Gdi::GetPixel;
+    for i in 0..8 {
+        for j in 0..8 {
+            let c = GetPixel(dc, x + w * (2 * i + 1) / 16, y + h * (2 * j + 1) / 16);
+            if c != 0 && c != 0xFFFF_FFFF {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 // 游戏窗口：可见、没最小化、标题是「EVE」或「EVE - 角色名」；多开时先沿用上次的，再优先当前在前台的，否则取最大的

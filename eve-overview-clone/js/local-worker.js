@@ -5,13 +5,13 @@
 //   桌面版：这里发 { t: 'grab', rect } 让主线程调 Tauri 命令截 EVE 窗口，主线程把像素传回（{ t: 'grabbed' }）。
 // 追踪：按名字那块的文字像素认人（图标闪烁不影响）；连续两帧都在才算新进本地（过滤一闪而过的杂讯）；
 //   一帧里超过一半的行都换了（换星系、自己滚动了列表）就把这批当作基线，不报警。
-//   每个人最近 0.5 秒里出现过的颜色：红 > 橙 > 友方；红 / 橙要累计 3 帧以上、且多于友方图标的次数才算（确认前是 pending）；
+//   每个人最近 0.5 秒里出现过的颜色：红 > 橙 > 友方；红 / 橙要从第一次看到起持续 1.2 秒、累计 8 帧以上、且是友方图标次数的两倍以上才算（确认前是 pending）；
 //   0.5 秒都没有图标才算「无图标」（白名，或自己）。
 // 发给主线程：{ t: 'status' } 定位状态，{ t: 'rows' } 当前名单（有变化或每秒一次），{ t: 'ocr', id, img } 新出现的人的名字截图，
 //   { t: 'options', list } 自动找不到时几个像名单的区域的截图（连同上方的频道标签），给用户选。
 import { locate, scanRows, sameRow, rowImage } from './local-detect.js?v=v2';
 
-const TICK = 100, WINDOW = 500, GONE = 1500, RELOCATE = 2000, HITS = 3;
+const TICK = 100, WINDOW = 500, GONE = 1500, RELOCATE = 2000, HITS = 8, CONFIRM = 1200;
 let mode = null;            // 'stream' | 'grab'
 let reader = null, latest = null;
 let canvas = null, c2d = null;
@@ -152,7 +152,7 @@ function track(rows, now) {
   for (const row of fresh) {
     const p = pending.find((x) => sameRow(x.row, row));
     if (p && p.n >= 1) {
-      const t = { id: ++seq, sig: row.sig, on: row.on, w: row.w, h: row.h, y: row.y, clipped: row.clipped, first: p.first, last: now, red: 0, orange: 0, friend: 0, redN: 0, orangeN: 0, friendN: 0, base: now < baseUntil };
+      const t = { id: ++seq, sig: row.sig, on: row.on, w: row.w, h: row.h, y: row.y, clipped: row.clipped, first: p.first, last: now, red: 0, orange: 0, friend: 0, redN: 0, orangeN: 0, friendN: 0, red0: 0, orange0: 0, base: now < baseUntil };
       stamp(t, p.cls, p.at);
       stamp(t, row.cls, now);
       tracked.push(t);
@@ -162,14 +162,15 @@ function track(rows, now) {
   pending = next;
   for (let i = tracked.length - 1; i >= 0; i--) if (now - tracked[i].last > GONE) tracked.splice(i, 1);
 }
-// 每种颜色记最后一次看到的时间和累计次数
+// 每种颜色记第一次、最后一次看到的时间和累计次数
 function stamp(t, cls, at) {
-  if (cls === 'red') { t.red = at; t.redN++; } else if (cls === 'orange') { t.orange = at; t.orangeN++; } else if (cls === 'friend') { t.friend = at; t.friendN++; }
+  if (cls === 'red') { t.red = at; t.redN++; t.red0 ||= at; } else if (cls === 'orange') { t.orange = at; t.orangeN++; t.orange0 ||= at; } else if (cls === 'friend') { t.friend = at; t.friendN++; }
 }
-// 红 / 橙要确认：累计至少 HITS 帧看到，且比看到友方图标的次数多（偶尔一帧颜色认错、画面切换时的杂色都不算）
+// 红 / 橙要确认：从第一次看到起持续 CONFIRM 毫秒、累计至少 HITS 帧，且是友方图标次数的两倍以上（偶尔几帧颜色认错、画面切换、列表滚动时的杂色都不算）
+const sure = (n, first, last, t) => n >= HITS && last - first >= CONFIRM && n > t.friendN * 2;
 function clsOf(t, now) {
-  if (now - t.red <= WINDOW && t.redN >= HITS && t.redN > t.friendN) return 'red';
-  if (now - t.orange <= WINDOW && t.orangeN >= HITS && t.orangeN > t.friendN) return 'orange';
+  if (now - t.red <= WINDOW && sure(t.redN, t.red0, t.red, t)) return 'red';
+  if (now - t.orange <= WINDOW && sure(t.orangeN, t.orange0, t.orange, t)) return 'orange';
   if (now - t.red <= WINDOW || now - t.orange <= WINDOW) { if (t.friendN < t.redN + t.orangeN) return 'pending'; }
   if (now - t.friend <= WINDOW) return 'friend';
   return now - t.first >= WINDOW ? 'none' : 'pending';

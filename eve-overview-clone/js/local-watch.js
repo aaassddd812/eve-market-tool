@@ -2,7 +2,7 @@
 // 用户点「开始」后选择共享 EVE 窗口（浏览器 getDisplayMedia，只在本机处理，不上传），后台线程（local-worker.js）每 0.1 秒看一次本地频道成员列表：
 //   自动找到本地列表（local-detect.js：一列声望图标 + 上方频道标签的「本」字）；找了 8 秒找不到时把几个像名单的地方截图列出来让用户点选，
 //   都不是再让用户在整张截图上自己框选（选定的区域记在设置里，之后只在里面找）；
-//   红 / 橙图标（声望恶劣 / 不良、嫌犯等）连续几帧都看到、名字和所属查完确认不是自己或友方后报警（一般不到 1 秒，最多等 2 秒）；
+//   红 / 橙图标（声望恶劣 / 不良、嫌犯等）持续 1.2 秒以上都看到、名字和所属查完确认不是自己或友方后报警（一般 1.5 秒左右，最多等 3.5 秒）；
 //   无图标（白名、中立）可选报警，要等名字认出来、确认不是自己之后才报。
 // 名字：新出现的人把名字那一行截下来交给文字识别（Tesseract.js，js/vendor/tesseract，本地运行），再用 ESI /universe/ids/ 换成角色；
 //   查不到（认错字母）或名字被截断（列表太窄）时在本站击杀记录里搜相近的名字（/api/kb/search），只有一个最像的才认，否则标「…?」，并提示把列表拉宽。
@@ -52,7 +52,15 @@ function notify() {
   publishFloat();
 }
 // 桌面版：Rust 直接截 EVE 窗口（local_grab，desktop/src-tauri/src/capture.rs），不走浏览器共享屏幕（Windows 会给被共享的窗口加一圈黄框）
-const tauri = () => (window.__EVE_DESKTOP__ && window.__TAURI_INTERNALS__) || null;
+// 截图命令从桌面版 1.0.6 开始才有；旧版本（window.__EVE_DESKTOP__ 是版本号）还是走共享屏幕。
+// 要按版本判断、不能先调一次命令试：等命令返回后再调 getDisplayMedia 就不算用户点击触发的了，WebView2 会直接拒绝，弹不出选择窗口
+const NATIVE_FROM = [1, 0, 6];
+const tauri = () => {
+  const v = String(window.__EVE_DESKTOP__ || '').split('.').map(Number);
+  if (!window.__TAURI_INTERNALS__ || v.length < 3) return null;
+  for (let i = 0; i < 3; i++) if (v[i] !== NATIVE_FROM[i]) return v[i] > NATIVE_FROM[i] ? window.__TAURI_INTERNALS__ : null;
+  return window.__TAURI_INTERNALS__;
+};
 // 浏览器只在 https（或本机地址）的页面里允许共享屏幕
 export const supported = () => Boolean(tauri() || navigator.mediaDevices?.getDisplayMedia);
 // http 地址（演示站）：Chrome / Edge 可以在 chrome://flags 的「Insecure origins treated as secure」里加上这个地址，重启浏览器后就能用
@@ -87,12 +95,7 @@ export function status() {
 async function start() {
   if (running()) return;
   if (!supported()) { ctx.showToast(whyNot(), 'error', 5000); return; }
-  // 桌面版新版本有截图命令就用它；旧版本（没有这个命令）还是走共享屏幕
-  if (tauri()) {
-    await nativeGrab({ x: 0, y: 0, w: 1, h: 1 });
-    if (/^(no-eve|minimized|capture|empty)$/.test(S.grabErr) || !S.grabErr) { startWorker(true); return; }
-    if (!navigator.mediaDevices?.getDisplayMedia) { ctx.showToast('请更新桌面版', 'error'); return; }
-  }
+  if (tauri()) { startWorker(true); return; }
   let stream;
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 10, max: 15 }, displaySurface: 'window' }, audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'include' });
@@ -125,7 +128,7 @@ function startWorker(native) {
   S.since = Date.now();
   S.options = undefined;
   S.rows = []; S.people.clear();
-  const w = new Worker(new URL('./local-worker.js?v=v3', import.meta.url), { type: 'module' });
+  const w = new Worker(new URL('./local-worker.js?v=v4', import.meta.url), { type: 'module' });
   S.worker = w;
   w.onmessage = onWorker;
   if (native) w.postMessage({ t: 'grab-mode' });
