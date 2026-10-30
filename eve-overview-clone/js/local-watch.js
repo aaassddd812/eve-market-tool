@@ -2,7 +2,8 @@
 // 用户点「开始」后选择共享 EVE 窗口（浏览器 getDisplayMedia，只在本机处理，不上传），后台线程（local-worker.js）每 0.1 秒看一次本地频道成员列表：
 //   自动找到本地列表（local-detect.js：一列声望图标 + 上方频道标签的「本」字）；找了 8 秒找不到时把几个像名单的地方截图列出来让用户点选，
 //   都不是再让用户在整张截图上自己框选（选定的区域记在设置里，之后只在里面找）；
-//   红 / 橙图标（声望恶劣 / 不良、嫌犯等）一出现就报警；无图标（白名、中立）可选报警，要等名字认出来、确认不是自己之后才报。
+//   红 / 橙图标（声望恶劣 / 不良、嫌犯等）连续几帧都看到、名字和所属查完确认不是自己或友方后报警（一般不到 1 秒，最多等 2 秒）；
+//   无图标（白名、中立）可选报警，要等名字认出来、确认不是自己之后才报。
 // 名字：新出现的人把名字那一行截下来交给文字识别（Tesseract.js，js/vendor/tesseract，本地运行），再用 ESI /universe/ids/ 换成角色；
 //   查不到（认错字母）或名字被截断（列表太窄）时在本站击杀记录里搜相近的名字（/api/kb/search），只有一个最像的才认，否则标「…?」，并提示把列表拉宽。
 //   认出角色后查所属军团 / 联盟（standings.js）与近 30 天击杀记录（/api/v1/pilots），显示在名单与悬浮窗里。
@@ -50,8 +51,25 @@ function notify() {
   renderPanel();
   publishFloat();
 }
-export const supported = () => Boolean(navigator.mediaDevices?.getDisplayMedia);
-const running = () => Boolean(S.stream);
+// 桌面版：Rust 直接截 EVE 窗口（local_grab，desktop/src-tauri/src/capture.rs），不走浏览器共享屏幕（Windows 会给被共享的窗口加一圈黄框）
+const tauri = () => (window.__EVE_DESKTOP__ && window.__TAURI_INTERNALS__) || null;
+// 浏览器只在 https（或本机地址）的页面里允许共享屏幕
+export const supported = () => Boolean(tauri() || navigator.mediaDevices?.getDisplayMedia);
+// http 地址（演示站）：Chrome / Edge 可以在 chrome://flags 的「Insecure origins treated as secure」里加上这个地址，重启浏览器后就能用
+const whyNot = () => (!window.isSecureContext ? `浏览器只允许 https 地址的网页共享画面，现在是 http 地址。请用 https 打开本站；或者在浏览器地址栏打开 chrome://flags/#unsafely-treat-insecure-origin-as-secure（Edge 是 edge://flags），把 ${location.origin} 填进去、设为 Enabled，重启浏览器` : '这个浏览器不能共享画面：请用电脑版 Chrome / Edge');
+const running = () => Boolean(S.stream || S.native);
+// 截一次：返回 { width, height, buffer }（RGBA），截不到返回 null（原因记在 S.grabErr）
+async function nativeGrab(rect) {
+  try {
+    const buf = await tauri().invoke('local_grab', { rect: rect || null });
+    const v = new DataView(buf);
+    S.grabErr = '';
+    return { width: v.getUint32(0, true), height: v.getUint32(4, true), buffer: buf.slice(8) };
+  } catch (e) {
+    S.grabErr = String(e?.message || e);
+    return null;
+  }
+}
 const STATE_TEXT = {
   off: '未开启', starting: '正在启动…', locating: '正在找本地频道…', 'manual-miss': '框选的区域里没找到成员列表，请重新框选',
   noframe: '没有收到画面', lost: '本地列表不见了，正在重新找…', locked: '监视中'
@@ -60,6 +78,7 @@ export function status() {
   const on = running();
   const reds = S.rows.filter((r) => r.cls === 'red' || r.cls === 'orange').length;
   let text = on ? STATE_TEXT[S.state] || S.state : '本地红名未开启';
+  if (on && S.state === 'noframe' && S.native) text = S.grabErr === 'minimized' ? 'EVE 窗口最小化了，截不到画面' : S.grabErr === 'no-eve' ? '没找到 EVE 窗口：先打开游戏' : '截不到 EVE 窗口的画面';
   if (on && S.state === 'locked') text = `监视中 · 本地 ${S.rows.length} 人${reds ? ` · 红名 ${reds}` : ''}`;
   return { on, alert: on && reds > 0, text };
 }
@@ -67,7 +86,13 @@ export function status() {
 // ---------- 开始 / 停止 ----------
 async function start() {
   if (running()) return;
-  if (!supported()) { ctx.showToast('这个浏览器不能共享画面：请用电脑版 Chrome / Edge', 'error'); return; }
+  if (!supported()) { ctx.showToast(whyNot(), 'error', 5000); return; }
+  // 桌面版新版本有截图命令就用它；旧版本（没有这个命令）还是走共享屏幕
+  if (tauri()) {
+    await nativeGrab({ x: 0, y: 0, w: 1, h: 1 });
+    if (/^(no-eve|minimized|capture|empty)$/.test(S.grabErr) || !S.grabErr) { startWorker(true); return; }
+    if (!navigator.mediaDevices?.getDisplayMedia) { ctx.showToast('请更新桌面版', 'error'); return; }
+  }
   let stream;
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: { ideal: 10, max: 15 }, displaySurface: 'window' }, audio: false, selfBrowserSurface: 'exclude', surfaceSwitching: 'include' });
@@ -78,14 +103,8 @@ async function start() {
   const track = stream.getVideoTracks()[0];
   if (!track) return;
   S.stream = stream;
-  S.state = 'starting';
-  S.since = Date.now();
-  S.options = undefined;
-  S.rows = []; S.people.clear();
   track.addEventListener('ended', stop);
-  const w = new Worker(new URL('./local-worker.js?v=v2', import.meta.url), { type: 'module' });
-  S.worker = w;
-  w.onmessage = onWorker;
+  const w = startWorker(false);
   // Chrome / Edge：视频帧直接交给后台线程；其他浏览器：后台线程要画面时由这里从 <video> 截
   if (typeof window.MediaStreamTrackProcessor === 'function') {
     const proc = new window.MediaStreamTrackProcessor({ track });
@@ -97,8 +116,22 @@ async function start() {
     await S.video.play().catch(() => {});
     w.postMessage({ t: 'grab-mode' });
   }
+  notify();
+}
+// native：桌面版截图（后台线程每次要画面都经这里调 local_grab）
+function startWorker(native) {
+  S.native = native;
+  S.state = 'starting';
+  S.since = Date.now();
+  S.options = undefined;
+  S.rows = []; S.people.clear();
+  const w = new Worker(new URL('./local-worker.js?v=v3', import.meta.url), { type: 'module' });
+  S.worker = w;
+  w.onmessage = onWorker;
+  if (native) w.postMessage({ t: 'grab-mode' });
   if (T.manual) w.postMessage({ t: 'manual', rect: T.manual });
   notify();
+  return w;
 }
 function stop() {
   S.worker?.postMessage({ t: 'stop' });
@@ -106,6 +139,7 @@ function stop() {
   S.worker = null;
   S.stream?.getTracks().forEach((t) => t.stop());
   S.stream = null;
+  S.native = false;
   if (S.video) { S.video.srcObject = null; S.video = null; }
   S.state = 'off';
   S.rows = []; S.people.clear();
@@ -128,7 +162,12 @@ function grabFromVideo(rect) {
 
 function onWorker(e) {
   const m = e.data || {};
-  if (m.t === 'grab') {
+  if (m.t === 'grab' && S.native) {
+    nativeGrab(m.rect).then((img) => {
+      S.worker?.postMessage(img ? { t: 'grabbed', id: m.id, width: img.width, height: img.height, buffer: img.buffer } : { t: 'grabbed', id: m.id }, img ? [img.buffer] : []);
+      if (!img && S.state !== 'noframe') { S.state = 'noframe'; notify(); }
+    });
+  } else if (m.t === 'grab') {
     const img = grabFromVideo(m.rect);
     S.worker?.postMessage(img ? { t: 'grabbed', id: m.id, width: img.width, height: img.height, buffer: img.data.buffer } : { t: 'grabbed', id: m.id }, img ? [img.data.buffer] : []);
   } else if (m.t === 'status') {
@@ -158,18 +197,21 @@ const isMe = (name) => {
 const newPerson = (id) => ({ id, name: '', raw: '', look: 'ocr', alerted: false, first: Date.now(), cls: 'pending', y: 0 });
 // 自己那一行没有图标，同联盟 / 同军团的人在游戏里一定带蓝 / 绿星：
 // 没有图标、却和本地里带友方图标的人同联盟（或同军团）的，只可能是自己（或自己的另一个号）；绑定了 ESI 时也按联系人声望认友方
+let friendOrgs = new Set();
 function findMates() {
-  const orgs = new Set();
-  for (const p of S.people.values()) if (p.cls === 'friend' && p.affDone) { if (p.alliance) orgs.add(p.alliance); if (p.corp) orgs.add(p.corp); }
-  for (const p of S.people.values()) {
-    if (p.self || p.cls !== 'none' || !p.affDone) continue;
-    if (orgs.has(p.alliance) || orgs.has(p.corp) || ST.group({ char: p.charId, corp: p.corp, alliance: p.alliance }) === 'friend') { p.self = true; p.mate = true; }
-  }
+  friendOrgs = new Set();
+  for (const p of S.people.values()) if (p.cls === 'friend' && p.affDone) { if (p.alliance) friendOrgs.add(p.alliance); if (p.corp) friendOrgs.add(p.corp); }
+  for (const p of S.people.values()) if (!p.self && p.cls === 'none' && friendly(p)) { p.self = true; p.mate = true; }
 }
+// 查到所属后认得出是友方：和本地里带友方图标的人同联盟 / 同军团，或 ESI 联系人声望是友方
+const friendly = (p) => Boolean(p.affDone && (friendOrgs.has(p.alliance) || friendOrgs.has(p.corp) || ST.group({ char: p.charId, corp: p.corp, alliance: p.alliance }) === 'friend'));
+// 名字和所属查完了（或查不到），可以下结论
+const settled = (p) => p.look === 'miss' || p.affDone;
 const alarming = (cls) => (cls === 'red' && T.red) || (cls === 'orange' && T.orange);
 
 function onRows(m) {
   findMates();
+  S.state = 'locked';   // 暂时截不到画面后又恢复了
   S.ms = m.ms;
   S.clipped = m.clipped;
   const alive = new Set();
@@ -180,9 +222,11 @@ function onRows(m) {
     if (!p) { p = newPerson(r.id); S.people.set(r.id, p); }
     p.first = r.first;
     Object.assign(p, { cls: r.cls, y: r.y, clipped: r.clipped, base: r.base });
-    if (!p.alerted && !p.self && alarming(r.cls)) { p.alerted = true; fire.push(p); }
+    // 红 / 橙：后台线程已确认颜色；再等名字和所属查完（最多 2 秒），是自己或友方（颜色认错）就不报
+    if (alarming(r.cls) && !p.hostileAt) p.hostileAt = Date.now();
+    if (!p.alerted && !p.self && alarming(r.cls) && (settled(p) || Date.now() - p.hostileAt > 2000) && !friendly(p)) { p.alerted = true; fire.push(p); }
     // 白名：认出名字、查到所属、确认不是自己后才报（基线里的不报：刚开始监视或换了星系）
-    if (!p.alerted && T.neutral && r.cls === 'none' && !r.base && (p.look === 'miss' || p.affDone) && !p.self) { p.alerted = true; fire.push(p); }
+    if (!p.alerted && T.neutral && r.cls === 'none' && !r.base && settled(p) && !p.self && !friendly(p)) { p.alerted = true; fire.push(p); }
   }
   for (const id of S.people.keys()) if (!alive.has(id)) S.people.delete(id);
   S.rows = m.rows;
@@ -476,7 +520,7 @@ function optionsHtml() {
 }
 
 function drawPanel() {
-  if (!supported()) return '<p class="ka-warn">当前浏览器不能共享画面，请用电脑版 Chrome 或 Edge</p>';
+  if (!supported()) return `<p class="ka-warn">${whyNot()}</p>`;
   const esc = ctx.esc;
   const st = status();
   const on = st.on;
@@ -487,9 +531,9 @@ function drawPanel() {
   const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m < 60 ? m + ' 分钟前' : Math.floor(m / 60) + ' 小时前'; };
   return `
     <div class="ka-top"><span class="ka-status${on ? ' on' : ''}"><i></i>${esc(st.text)}</span>${FF.buttonHtml('local')}</div>
-    <p class="ka-note">共享 EVE 窗口后自动找到本地频道的成员列表，每 0.1 秒看一次；画面只在本机处理，不会上传</p>
+    <p class="ka-note">${tauri() ? '直接截取 EVE 窗口，自动找到本地频道的成员列表，每 0.1 秒看一次；画面只在本机处理，不会上传' : '共享 EVE 窗口后自动找到本地频道的成员列表，每 0.1 秒看一次；画面只在本机处理，不会上传'}</p>
     ${sec('监视', `<div class="ka-list">
-      <div class="ka-opt"><span><b>${on ? '正在监视' : '共享游戏画面'}</b><small>${on ? (S.region ? `本地列表 ${S.region.w}×${S.region.h}${T.manual ? '（手动框选）' : ''} · 每次 ${S.ms} 毫秒` : '') : '选择 EVE 窗口（或整个屏幕）'}</small></span>
+      <div class="ka-opt"><span><b>${on ? '正在监视' : tauri() ? '监视游戏画面' : '共享游戏画面'}</b><small>${on ? (S.region ? `本地列表 ${S.region.w}×${S.region.h}${T.manual ? '（手动框选）' : ''} · 每次 ${S.ms} 毫秒` : '') : tauri() ? '自动找到 EVE 窗口，游戏不要最小化' : '选择 EVE 窗口（或整个屏幕）'}</small></span>
         <span class="ka-ctl">${on ? `<button class="btn btn-ghost btn-sm" data-lw-pick>手动框选</button><button class="btn btn-ghost btn-sm" data-lw-stop>停止</button>` : '<button class="btn btn-primary btn-sm" data-lw-start>开始</button>'}</span></div>
       ${slow ? optionsHtml() : ''}
       ${on && T.manual ? `<div class="ka-opt"><span><b>只在选定的区域里找</b><small>${S.state === 'manual-miss' ? '选定的区域里没有成员列表了（窗口挪动过？）' : '本地频道窗口挪动后要重新选'}</small></span><button class="btn btn-ghost btn-sm" data-lw-auto>改回自动识别</button></div>` : ''}

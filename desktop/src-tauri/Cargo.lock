@@ -955,6 +955,7 @@ dependencies = [
 name = "eve-tool-desktop"
 version = "1.0.0"
 dependencies = [
+ "serde",
  "serde_json",
  "tauri",
  "tauri-build",
@@ -964,6 +965,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

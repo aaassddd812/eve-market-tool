@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-local-grab"
+description = "Enables the local_grab command without any pre-configured scope."
+commands.allow = ["local_grab"]
+
+[[permission]]
+identifier = "deny-local-grab"
+description = "Denies the local_grab command without any pre-configured scope."
+commands.deny = ["local_grab"]

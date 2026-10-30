@@ -1,8 +1,12 @@
 // EVE 辅助工具桌面版 / 安卓版：一个窗口直接打开线上网站（永远是最新版），
 // 页面加载前注入 app-init.js：标记运行环境（桌面版网页把菜单栏放到左侧；安卓版用手机布局），外部链接交给系统浏览器打开。
 // 桌面版另有悬浮窗（float_* 命令）：网页里点「悬浮窗」开一个置顶、无边框、半透明的小窗口，加载本站 float.html，
-// 内容（击杀预警、到价提醒）由主窗口的网页经 BroadcastChannel 推过去。
+// 内容（击杀预警、到价提醒、本地红名）由主窗口的网页经 BroadcastChannel 推过去。
+// 本地红名在桌面版由 local_grab 直接截 EVE 窗口（capture.rs），不走浏览器共享屏幕（那样 Windows 会给游戏窗口加一圈黄框）。
 use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+#[cfg(desktop)]
+mod capture;
 
 const SITE: &str = "https://eve.navexor.top/";
 
@@ -28,7 +32,7 @@ pub fn run() {
         // 自动更新：启动时查 GitHub 发布仓库的 latest.json，有新版就弹窗询问
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main])
+        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, capture::local_grab])
         // 关掉主窗口就退出（悬浮窗不单独留着）
         .on_window_event(|w, e| {
             if w.label() == "main" && matches!(e, tauri::WindowEvent::Destroyed) {

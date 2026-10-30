@@ -16,6 +16,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-notification = "2"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 
 # 只在桌面系统用：单实例、记住窗口状态、自动更新（及更新提示对话框）
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
@@ -23,6 +24,10 @@ tauri-plugin-window-state = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
+
+# 本地红名截 EVE 窗口（capture.rs）
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_Xps", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 codegen-units = 1
