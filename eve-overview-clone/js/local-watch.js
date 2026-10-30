@@ -164,7 +164,7 @@ function startWorker(native) {
   S.since = Date.now();
   S.options = undefined;
   S.rows = []; S.people.clear();
-  const w = new Worker(new URL('./local-worker.js?v=v6', import.meta.url), { type: 'module' });
+  const w = new Worker(new URL('./local-worker.js?v=v7', import.meta.url), { type: 'module' });
   S.worker = w;
   w.onmessage = onWorker;
   if (native) w.postMessage({ t: 'grab-mode' });

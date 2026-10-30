@@ -6,7 +6,7 @@
 // 追踪：按名字那块的文字像素认人（图标闪烁不影响）；连续两帧都在才算新进本地（过滤一闪而过的杂讯）；
 //   一帧里超过一半的行都换了（换星系、自己滚动了列表）就把这批当作基线，不报警。
 //   每个人最近 0.5 秒里出现过的颜色：红 > 橙 > 友方；红 / 橙要从第一次看到起持续 2 秒、累计 8 帧以上、且是友方图标次数的两倍以上才算（确认前是 pending）；
-//   0.5 秒都没有图标才算「无图标」（白名，或自己）；锁定列表时就在、之后一直没有图标的那一行标 mine（当作自己）。
+//   连续 2 秒都没有图标才算「无图标」（白名，或自己；刚进本地时图标可能晚一点才画出来，不能一进来就当白名）；锁定列表时就在、之后一直没有图标的那一行标 mine（当作自己）。
 // 发给主线程：{ t: 'status' } 定位状态，{ t: 'rows' } 当前名单（有变化或每秒一次），{ t: 'ocr', id, img } 新出现的人的名字截图，
 //   { t: 'options', list } 自动找不到时几个像名单的区域的截图（连同上方的频道标签），给用户选。
 import { locate, scanRows, sameRow, rowImage } from './local-detect.js?v=v2';
@@ -173,7 +173,8 @@ function clsOf(t, now) {
   if (now - t.orange <= WINDOW && sure(t.orangeN, t.orange0, t.orange, t)) return 'orange';
   if (now - t.red <= WINDOW || now - t.orange <= WINDOW) { if (t.friendN < t.redN + t.orangeN) return 'pending'; }
   if (now - t.friend <= WINDOW) return 'friend';
-  return now - t.first >= WINDOW ? 'none' : 'pending';
+  // 白名也要确认：从出现（或最后一次看到图标）起 CONFIRM 毫秒都没有图标
+  return now - Math.max(t.first, t.red, t.orange, t.friend) >= CONFIRM ? 'none' : 'pending';
 }
 
 function send(now, ms, clipped) {
