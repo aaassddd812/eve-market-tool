@@ -8,7 +8,7 @@ import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v3';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v4';
+import * as FF from './float-feed.js?v=v5';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
@@ -1581,7 +1581,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v14').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v15').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -3037,8 +3037,37 @@ function initRail(header, nav) {
   });
   sync();
   (header.querySelector('.header-actions') || header).appendChild(btn);
+  initUpdateBtn(header);
   // 折叠的组里有当前页时在组标题上点一个点
   return () => nav.querySelectorAll('.rail-group[data-group]').forEach((g) => g.classList.toggle('has-active', !!g.querySelector('.nav-btn.active')));
+}
+// 桌面版「检查更新」（左侧菜单底部一整行，带当前版本号）：调壳里的 update_check，
+// 有新版由壳弹窗询问、下载安装后重启；已是最新等结果在这里提示。1.0.6 及更早的客户端没有这个命令，提示重开客户端（启动时会自动查）
+function initUpdateBtn(header) {
+  const ipc = window.__TAURI_INTERNALS__;
+  const ver = String(window.__EVE_DESKTOP__ || '');
+  if (!ipc || !/^\d/.test(ver)) return;
+  const up = document.createElement('button');
+  up.type = 'button';
+  up.className = 'icon-btn rail-update';
+  up.title = '检查更新';
+  up.setAttribute('aria-label', '检查更新');
+  up.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg><span>检查更新</span><small translate="no">v${esc(ver)}</small>`;
+  up.addEventListener('click', async () => {
+    if (up.classList.contains('busy')) return;
+    up.classList.add('busy');
+    try {
+      const r = await ipc.invoke('update_check');
+      if (r === 'latest') showToast(`已经是最新版本（v${ver}）`, 'success');
+      else if (r === 'busy') showToast('正在检查更新…', 'info');
+    } catch (e) {
+      const m = String(e?.message || e);
+      if (/not found|not allowed/i.test(m)) showToast('这个版本还不能手动检查：关掉客户端重新打开，启动时会自动检查更新', 'info', 6000);
+      else showToast('检查更新失败：' + m, 'error', 6000);
+    }
+    up.classList.remove('busy');
+  });
+  (header.querySelector('.header-actions') || header).appendChild(up);
 }
 // 网页版右上角「桌面版」：说明 + 下载器
 function initDesktopDl() {
@@ -5665,7 +5694,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v24').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v25').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5718,7 +5747,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v6').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v7').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)

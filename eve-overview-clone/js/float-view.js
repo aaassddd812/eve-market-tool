@@ -124,7 +124,8 @@ function renderLocal(d, body, foot) {
         <span class="fl-main"><b>${p.name ? `<span translate="no">${esc(p.name)}</span>` : `<span>${p.look === 'ocr' ? '识别中…' : '没认出来'}</span>`}</b>${p.name && !p.sure ? '<small class="fl-q" title="名字显示不全，没认出来">…?</small>' : ''}${p.org ? ` <small translate="no">${esc(p.org)}</small>` : ''}</span>
         ${p.st ? `<small class="fl-local-st"><span class="fl-k"><span>击杀</span> ${p.st.kills}</span> · <span class="fl-l"><span>损失</span> ${p.st.losses}</span>${p.st.ships.length ? ` · <span translate="no">${esc(p.st.ships.join(' / '))}</span>` : ''}</small>` : ''}</li>`;
     }).join('')}</ul>`
-      : `<p class="fl-empty">${!d.on ? '还没有名单' : d.hidden ? '本地没有红名 / 白名' : '还没有识别到名单'}</p>`);
+      : d.waiting ? '' : `<p class="fl-empty">${!d.on ? '还没有名单' : d.hidden ? '本地没有红名 / 白名' : '还没有识别到名单'}</p>`)
+    + (d.waiting ? `<p class="fl-empty"><span>${d.waiting} 个红名正在识别名字…</span></p>` : '');
   foot.textContent = d.on ? (d.status || '') + (d.hidden ? ` · 另有 ${d.hidden} 人不是敌对或还在确认` : '') : '';
 }
 

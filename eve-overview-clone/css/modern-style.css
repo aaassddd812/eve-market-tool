@@ -7229,6 +7229,14 @@ html.is-desktop .app-header .server-status .status-text { display: inline; }
 html.is-desktop .server-menu { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
 html.is-desktop .icon-btn.api-link span, html.is-desktop .contact-btn span { display: none; }
 html.is-desktop .desktop-dl-btn, html.is-desktop .menu-btn { display: none !important; }
+/* 检查更新：一整行，右边是当前版本号；检查时图标转圈 */
+html.is-desktop .header-actions > .icon-btn.rail-update { grid-column: 1 / -1; justify-content: flex-start; gap: 8px; padding: 0 12px; }
+html.is-desktop .rail-update span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.is-desktop .rail-update small { margin-left: auto; flex: none; color: var(--text-muted); font-weight: 500; }
+html.is-desktop .rail-update.busy svg { animation: rail-spin 0.9s linear infinite; }
+@keyframes rail-spin { to { transform: rotate(360deg); } }
+html.is-desktop.rail-mini .header-actions > .icon-btn.rail-update { justify-content: center; padding: 0; }
+html.is-desktop.rail-mini .rail-update span, html.is-desktop.rail-mini .rail-update small { display: none; }
 html.is-desktop.rail-mini .app-header { padding: 14px 8px 10px; }
 html.is-desktop.rail-mini .app-header .header-brand .brand-name,
 html.is-desktop.rail-mini .app-header .nav-btn span,

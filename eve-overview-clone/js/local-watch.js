@@ -13,7 +13,7 @@
 
 import * as AP from './alert-push.js?v=v2';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v4';
+import * as FF from './float-feed.js?v=v5';
 import { SERVER, IS_TQ } from './server.js?v=s4';
 
 let ctx;   // esc, showToast, resolveNames, resolveTypeNames, selfNames()
@@ -425,10 +425,14 @@ function publishFloat() {
 export function floatData() {
   const st = status();
   const all = [...S.people.values()].filter((p) => !mine(p));
-  // 悬浮窗只放确认是敌对的人，颜色还没确认、名字还在查的不显示
-  const people = all.filter((p) => (T.onlyHostile ? hostile(p) : shown(p))).sort((a, b) => rank(a) - rank(b) || a.y - b.y);
+  // 悬浮窗只放认出来、确认是敌对的人：颜色确认了、名字认出来、所属查完且不是友方；还在识别、没认出名字的都不显示
+  // （报警可以不等名字，悬浮窗不行）
+  const sure = (p) => hostile(p) && p.name && p.affDone && !friendly(p);
+  const people = all.filter((p) => (T.onlyHostile ? sure(p) : shown(p))).sort((a, b) => rank(a) - rank(b) || a.y - b.y);
+  // 颜色已确认是红 / 橙、名字还没认出来的人数（悬浮窗只写人数，不列出来）
+  const waiting = T.onlyHostile ? all.filter((p) => (p.cls === 'red' || p.cls === 'orange') && !sure(p) && !friendly(p)).length : 0;
   return {
-    on: st.on, status: st.text, clipped: S.clipped, n: S.rows.length, hidden: T.onlyHostile ? all.length - people.length : 0,
+    on: st.on, status: st.text, clipped: S.clipped, n: S.rows.length, hidden: T.onlyHostile ? all.length - people.length - waiting : 0, waiting,
     items: people.map((p) => ({
       id: p.charId || 0, key: p.id, cls: p.cls, name: p.name || '', sure: Boolean(p.charId) || !p.clipped, look: p.look, clipped: p.clipped,
       org: [p.allianceName, p.corpName].filter(Boolean).join(' · '),

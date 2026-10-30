@@ -32,7 +32,7 @@ pub fn run() {
         // 自动更新：启动时查 GitHub 发布仓库的 latest.json，有新版就弹窗询问
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, capture::local_grab])
+        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, update_check, capture::local_grab])
         // 关掉主窗口就退出（悬浮窗不单独留着）
         .on_window_event(|w, e| {
             if w.label() == "main" && matches!(e, tauri::WindowEvent::Destroyed) {
@@ -56,7 +56,9 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move { check_update(handle).await });
+                tauri::async_runtime::spawn(async move {
+                    let _ = update_check(handle).await;
+                });
             }
             Ok(())
         })
@@ -153,18 +155,31 @@ fn float_focus_main(app: tauri::AppHandle) {
     }
 }
 
-// 查更新：失败（断网、GitHub 访问不了）就静默跳过，不打扰用户；
-// 用户点「现在更新」后下载安装包，Windows 上安装器会自动关闭本程序、装完再启动新版。
+// 查更新：启动时自动查一次，失败（断网、GitHub 访问不了）就静默跳过，不打扰用户；
+// 网页左侧菜单底部的「检查更新」调 update_check 手动查，结果返回给网页提示（latest 已是最新 / later 用户选了以后再说 / busy 正在查）。
+// 有新版时弹窗询问，用户点「现在更新」后下载安装包，Windows 上安装器会自动关闭本程序、装完再启动新版。
 #[cfg(desktop)]
-async fn check_update(app: tauri::AppHandle) {
+static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(desktop)]
+#[tauri::command]
+async fn update_check(app: tauri::AppHandle) -> Result<String, String> {
+    use std::sync::atomic::Ordering;
+    if CHECKING.swap(true, Ordering::SeqCst) {
+        return Ok("busy".into());
+    }
+    let r = check_update(app).await;
+    CHECKING.store(false, Ordering::SeqCst);
+    r.map(String::from)
+}
+
+#[cfg(desktop)]
+async fn check_update(app: tauri::AppHandle) -> Result<&'static str, String> {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     use tauri_plugin_updater::UpdaterExt;
-    let update = match app.updater() {
-        Ok(u) => match u.check().await {
-            Ok(Some(update)) => update,
-            _ => return,
-        },
-        Err(_) => return,
+    let update = match app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())? {
+        Some(update) => update,
+        None => return Ok("latest"),
     };
     let mut msg = format!("发现新版本 {}（当前 {}），现在更新吗？", update.version, update.current_version);
     if let Some(notes) = update.body.as_deref().filter(|n| !n.trim().is_empty()) {
@@ -178,7 +193,7 @@ async fn check_update(app: tauri::AppHandle) {
         .buttons(MessageDialogButtons::OkCancelCustom("现在更新".into(), "以后再说".into()))
         .blocking_show();
     if !yes {
-        return;
+        return Ok("later");
     }
     if let Err(e) = update.download_and_install(|_, _| {}, || {}).await {
         app.dialog()
@@ -186,7 +201,7 @@ async fn check_update(app: tauri::AppHandle) {
             .kind(MessageDialogKind::Error)
             .title("EVE 辅助工具 · 更新")
             .blocking_show();
-        return;
+        return Ok("failed");
     }
     app.restart();
 }
