@@ -46,7 +46,7 @@ jobs:
         shell: pwsh
         run: |
           $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          & $csc /nologo /codepage:65001 /target:winexe /optimize+ /out:EVE-Tool-Downloader.exe /win32icon:desktop/src-tauri/icons/icon.ico /r:System.Windows.Forms.dll /r:System.Drawing.dll desktop/downloader/Downloader.cs
+          & $csc /nologo /codepage:65001 /target:winexe /optimize+ /out:EVE-Tool-Downloader.exe /win32icon:desktop\src-tauri\icons\icon.ico /r:System.Windows.Forms.dll /r:System.Drawing.dll (Resolve-Path "desktop/downloader/Downloader.cs")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: 整理产物
