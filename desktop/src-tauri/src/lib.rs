@@ -92,6 +92,8 @@ async fn float_open(app: tauri::AppHandle, webview: tauri::Webview, kind: String
         .inner_size(340.0, 420.0)
         .min_inner_size(220.0, 140.0)
         .decorations(false)
+        // Windows 上无边框窗口默认带阴影，会多出一圈 1px 的直角边框，盖住网页里的圆角
+        .shadow(false)
         .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)

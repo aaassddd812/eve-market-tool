@@ -1,10 +1,10 @@
 // ===== 悬浮窗页面（float.html）=====
 // 只负责显示：内容由主页面（float-feed.js）经 BroadcastChannel 推过来，这里不请求任何数据。
-// ?kind=kill 击杀预警 / price 到价提醒；?pip=1 在网页画中画的 iframe 里（标题栏可以切换两种内容）。
+// ?kind=kill 击杀预警 / price 到价提醒 / local 本地红名；?pip=1 在网页画中画的 iframe 里（标题栏可以切换内容）。
 // 桌面版原生窗口（有 __TAURI_INTERNALS__ 且不是画中画）：无边框，标题栏拖动窗口，另有透明度、鼠标穿透、关闭按钮。
 
 const q = new URLSearchParams(location.search);
-const KINDS = { kill: '击杀预警', price: '到价提醒' };
+const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名' };
 let kind = KINDS[q.get('kind')] ? q.get('kind') : 'kill';
 const PIP = q.get('pip') === '1';
 const ipc = !PIP && window.__TAURI_INTERNALS__ ? window.__TAURI_INTERNALS__ : null;
@@ -16,6 +16,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const invoke = (cmd, args) => ipc?.invoke(cmd, args).catch(() => {});
 
 const data = {};
+const expanded = new Set();   // 手动展开了历史的预警（最新一条默认展开）
+const collapsed = new Set();  // 手动收起的
 let lastTop = {};      // kind -> 上次显示的第一条（新来的闪一下）
 let gotAny = false;
 
@@ -44,7 +46,7 @@ function setKind(k) {
 }
 
 // ---------- 显示 ----------
-const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m < 60 ? m + ' 分钟前' : Math.floor(m / 60) + ' 小时前'; };
+const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m < 60 ? m + ' 分钟前' : m < 2880 ? Math.floor(m / 60) + ' 小时前' : Math.floor(m / 1440) + ' 天前'; };
 const clock = (t) => new Date(t).toLocaleTimeString(EN ? 'en-GB' : 'zh-CN', { hour12: false });
 
 function render() {
@@ -59,6 +61,7 @@ function render() {
     return;
   }
   if (kind === 'kill') renderKill(d, body, foot);
+  else if (kind === 'local') renderLocal(d, body, foot);
   else renderPrice(d, body, foot);
 }
 
@@ -71,8 +74,46 @@ function renderKill(d, body, foot) {
     + (items.length ? `<ul class="fl-list">${items.map((a, i) => `<li class="fl-kill${a.tone ? ' ' + a.tone : ''}${i === 0 && fresh ? ' new' : ''}${a.open ? ' click' : ''}"${a.open ? ` data-fl-kill="${a.id}"` : ''}>
         <span class="fl-badge">${esc(a.badge)}</span>
         <span class="fl-main"${EN ? ' translate="no"' : ''}>${esc(EN ? a.en : a.zh)}</span>
-        <small>${a.value ? `<b translate="no">${esc(a.value)}</b> · ` : ''}${a.muted ? '<span>离线未提醒</span> · ' : ''}<span>${ago(a.at)}</span></small></li>`).join('')}</ul>`
+        <small>${a.value ? `<b translate="no">${esc(a.value)}</b> · ` : ''}${a.muted ? '<span>离线未提醒</span> · ' : ''}<span>${ago(a.at)}</span></small>
+        ${histHtml(a, i === 0)}</li>`).join('')}</ul>`
       : '<p class="fl-empty">还没有预警</p>');
+  foot.textContent = d.on ? d.status || '' : '';
+}
+
+// 受害者近 30 天历史：统计一行 + 最近 5 条击杀 / 损失（点击在主窗口打开）
+function histHtml(a, first) {
+  const h = a.hist;
+  if (!h) return '';
+  const open = expanded.has(a.key) || (first && !collapsed.has(a.key));
+  const sum = `<span class="fl-hist-who" translate="no">${esc(a.who)}</span> <span>近 30 天</span>
+    <span class="fl-k"><span>击杀</span> ${h.kills}</span><small translate="no">${esc(h.destroyed)}</small>
+    <span class="fl-l"><span>损失</span> ${h.losses}</span><small translate="no">${esc(h.lost)}</small>`;
+  const ships = h.ships.length ? `<div class="fl-hist-ships"><span>常开</span> ${h.ships.map(([n, c]) => `<span class="fl-chip"><span translate="no">${esc(n)}</span> ×${c}</span>`).join('')}</div>` : '';
+  const rows = h.recent.length ? `<ul class="fl-hist-list">${h.recent.map((r) => `<li${r.id ? ` class="click" data-fl-kill="${r.id}"` : ''}>
+      <span class="fl-tag ${r.loss ? 'l' : 'k'}">${r.loss ? '损失' : '击杀'}</span>
+      <span class="fl-hist-main"><span translate="no">${esc(r.ship)}</span>${r.other ? `<small> · <span>${r.loss ? '击杀者' : '受害者'}</span> <span translate="no">${esc(r.other)}</span></small>` : ''}</span>
+      <small class="fl-hist-meta"><span translate="no">${esc(r.system)}</span>${r.value ? ` · <b translate="no">${esc(r.value)}</b>` : ''} · <span>${ago(r.at)}</span></small></li>`).join('')}</ul>` : '<p class="fl-hist-none">近期没有其他记录</p>';
+  return `<div class="fl-hist${open ? ' open' : ''}">
+    <button type="button" class="fl-hist-sum" data-fl-exp="${esc(a.key)}" aria-expanded="${open}">${sum}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
+    ${open ? ships + rows : ''}</div>`;
+}
+
+// 本地名单：红 / 橙在前；每人一行所属与近 30 天击杀记录，新进本地的闪一下（点击在主窗口打开人物页）
+const CLS = { red: '红', orange: '橙', none: '白', friend: '友', pending: '…' };
+function renderLocal(d, body, foot) {
+  const items = d.items || [];
+  const flashed = lastTop.local || (lastTop.local = new Set());
+  body.innerHTML = (d.on ? '' : '<p class="fl-warn">本地红名没有开启：在主窗口右上角铃铛「本地红名」里点「开始」</p>')
+    + (d.on && d.clipped ? '<p class="fl-warn">有名字显示不全：把游戏里本地频道的成员列表拉宽一点</p>' : '')
+    + (items.length ? `<ul class="fl-list">${items.map((p) => {
+      const isNew = p.fresh && (p.cls === 'red' || p.cls === 'orange') && !flashed.has(p.key);
+      if (isNew) flashed.add(p.key);
+      return `<li class="fl-local ${p.cls}${isNew ? ' new' : ''}${p.id ? ' click' : ''}"${p.id ? ` data-fl-char="${p.id}"` : ''}>
+        <span class="fl-dot ${p.cls}" title="${CLS[p.cls] || ''}"></span>
+        <span class="fl-main"><b>${p.name ? `<span translate="no">${esc(p.name)}</span>` : `<span>${p.look === 'ocr' ? '识别中…' : '没认出来'}</span>`}</b>${p.name && !p.sure ? '<small class="fl-q" title="名字显示不全，没认出来">…?</small>' : ''}${p.org ? ` <small translate="no">${esc(p.org)}</small>` : ''}</span>
+        ${p.st ? `<small class="fl-local-st"><span class="fl-k"><span>击杀</span> ${p.st.kills}</span> · <span class="fl-l"><span>损失</span> ${p.st.losses}</span>${p.st.ships.length ? ` · <span translate="no">${esc(p.st.ships.join(' / '))}</span>` : ''}</small>` : ''}</li>`;
+    }).join('')}</ul>`
+      : `<p class="fl-empty">${d.on ? '还没有识别到名单' : '还没有名单'}</p>`);
   foot.textContent = d.on ? d.status || '' : '';
 }
 
@@ -95,8 +136,18 @@ function renderPrice(d, body, foot) {
 document.addEventListener('click', (e) => {
   const k = e.target.closest('[data-fl-kind]');
   if (k) { setKind(k.dataset.flKind); return; }
+  const exp = e.target.closest('[data-fl-exp]');
+  if (exp) {
+    const k = exp.dataset.flExp;
+    const open = exp.getAttribute('aria-expanded') === 'true';
+    if (open) { expanded.delete(k); collapsed.add(k); } else { collapsed.delete(k); expanded.add(k); }
+    render();
+    return;
+  }
   const kill = e.target.closest('[data-fl-kill]');
   if (kill) { post({ t: 'open-kill', id: Number(kill.dataset.flKill) }); invoke('float_focus_main'); return; }
+  const ch = e.target.closest('[data-fl-char]');
+  if (ch) { post({ t: 'open-char', id: Number(ch.dataset.flChar) }); invoke('float_focus_main'); return; }
   const item = e.target.closest('[data-fl-item]');
   if (item) { post({ t: 'open-item', id: Number(item.dataset.flItem) }); invoke('float_focus_main'); return; }
   if (e.target.closest('[data-fl-close]')) { invoke('float_close'); return; }

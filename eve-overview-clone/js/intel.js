@@ -12,7 +12,7 @@
 // 文件编码：聊天记录是 UTF-16 LE（带 BOM），游戏日志是 UTF-8；按 BOM 判断。文件名「频道名_YYYYMMDD_HHMMSS_角色ID.txt」。
 
 import * as AM from './alert-mail.js?v=v7';
-import * as AP from './alert-push.js?v=v1';
+import * as AP from './alert-push.js?v=v2';
 import * as ST from './standings.js?v=v4';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem

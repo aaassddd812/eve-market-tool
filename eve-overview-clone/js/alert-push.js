@@ -1,4 +1,4 @@
-// ===== 企业微信 / 邮箱提醒（击杀预警、本地日志共用）=====
+// ===== 企业微信 / 邮箱提醒（击杀预警、本地日志、本地红名共用）=====
 // 「预警」弹窗的「微信 / 邮箱」标签页（alert-center.js）：
 //   企业微信：群里添加「群机器人」，把它的 Webhook 地址填进来；
 //   邮箱：用户自己的发件邮箱 + 授权码（SMTP 服务器按邮箱域名自动填，也可手改），发给自己指定的收件邮箱；保存时先发一封测试，成功才保存。
@@ -7,7 +7,7 @@
 // 发送：push(src, { sig, text, url })。多个标签页同一条只发一次（sig 记在 localStorage 5 分钟）；
 //   同一渠道把一段时间里的提醒合并成一条（企业微信至少隔 5 秒，邮件至少隔 60 秒，上次发送时间多个标签页共用）。
 //   内容语言跟随界面语言（调用方用 alert-mail.js 的 L() 生成文字）。
-// 设置存在 eve-alert-push-v1（各服务器共用）：{ wecom: { key, use: { kill, intel } }, mail: { user, pass, to, host, port, security, ok, use } }；
+// 设置存在 eve-alert-push-v1（各服务器共用）：{ wecom: { key, use: { kill, intel, local } }, mail: { user, pass, to, host, port, security, ok, use } }；
 //   ok：测试邮件发成功过（这之后才推送）。
 
 import { SERVER } from './server.js?v=s4';
@@ -20,8 +20,8 @@ const LAST_KEY = 'eve-alert-push-last';
 const API = '/api/kb/push/';
 const CH = ['wecom', 'mail'];
 const GAP = { wecom: 5e3, mail: 60e3 };
-const SRC = [['kill', '击杀预警'], ['intel', '本地日志']];
-const P = { wecom: { key: '', use: { kill: true, intel: true } }, mail: { user: '', pass: '', to: '', host: '', port: 465, security: 'ssl', ok: false, use: { kill: true, intel: true } } };
+const SRC = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名']];
+const P = { wecom: { key: '', use: { kill: true, intel: true, local: true } }, mail: { user: '', pass: '', to: '', host: '', port: 465, security: 'ssl', ok: false, use: { kill: true, intel: true, local: true } } };
 const S = { edit: false, custom: false, help: '', busy: '', error: { wecom: '', mail: '' } };   // edit：正在修改邮箱设置；custom：展开了服务器设置；help：展开的教程
 // 标题旁「?」展开的教程：[步骤…]、[提示…]；步骤可以是 [文字, [分项…]]
 const HELP = {
@@ -122,7 +122,7 @@ function schedule(ch, extra = 0) {
   if (timer[ch]) return;
   timer[ch] = setTimeout(() => flush(ch), Math.max(2e3, lastSent(ch) + GAP[ch] - Date.now()) + extra);
 }
-const srcTitle = (s) => (s === 'kill' ? L('击杀预警', 'Kill alert') : L('本地日志', 'Local intel'));
+const srcTitle = (s) => (s === 'kill' ? L('击杀预警', 'Kill alert') : s === 'local' ? L('本地红名', 'Local reds') : L('本地日志', 'Local intel'));
 async function flush(ch) {
   timer[ch] = 0;
   const list = Q[ch].splice(0);

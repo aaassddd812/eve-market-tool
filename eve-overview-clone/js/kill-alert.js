@@ -19,12 +19,14 @@
 // 浏览器后台标签页的定时器会被降频（约每分钟一次），预警可能延迟。
 // 设置面板和本地日志合在右上角铃铛的「预警」弹窗里（alert-center.js），这里只画「击杀预警」标签页（mountPanel / showPanel）。
 // 悬浮窗（float-feed.js）：状态或最近预警有变化时把最近预警推给悬浮窗（floatData），标签页顶部有「悬浮窗」按钮。
+// 人物历史：每条预警出来后读受害者在击杀记录服务里近 30 天的统计（/api/v1/pilots）和最近 5 条击杀 / 损失（/api/kb/feed），
+//   悬浮窗里完整显示（最新一条展开），预警卡片、最近预警里显示一行摘要；同一角色 10 分钟内不重复读。
 
 import { SERVER, IS_TQ, serverKey, esiUrl, kbSiteLink } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v7';
-import * as AP from './alert-push.js?v=v1';
+import * as AP from './alert-push.js?v=v2';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v1';
+import * as FF from './float-feed.js?v=v2';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
@@ -92,7 +94,22 @@ const floatItem = (a) => ({
   key: a.id + ':' + a.at, id: a.id, open: Boolean(a.id && !a.hourly), at: a.at, muted: Boolean(a.muted),
   badge: a.watch ? (a.watch.role === 'loss' ? '损失' : '击杀') : a.region ? '星域' : a.jumps === 0 ? '本星系' : a.jumps + ' 跳',
   tone: a.watch ? (a.watch.role === 'loss' ? 'loss' : 'kill') : !a.region && a.jumps <= 1 ? 'near' : '',
-  zh: describe(a), en: describeEn(a), value: a.value ? ctx.formatISK(a.value) + ' ISK' : ''
+  zh: describe(a), en: describeEn(a), value: a.value ? ctx.formatISK(a.value) + ' ISK' : '',
+  who: a.victim || '', hist: a.hist ? floatHist(a.hist, a.id) : null
+});
+// 历史里去掉这条预警本身
+const floatHist = (h, self) => ({
+  kills: h.kills, losses: h.losses, destroyed: ctx.formatISK(h.destroyed), lost: ctx.formatISK(h.lost), solo: h.solo,
+  ships: h.ships.slice(0, 3),
+  recent: h.recent.filter((r) => !self || r.id !== self).map((r) => ({ ...r, value: r.value ? ctx.formatISK(r.value) : '', at: Date.parse(r.time) || 0 }))
+});
+// 测试预警用的示例历史
+const TEST_HIST = () => ({
+  kills: 12, losses: 3, destroyed: 2.15e9, lost: 3.2e8, solo: 2, ships: [[AM.L('金鹏级（测试）', 'Raven (test)'), 6]],
+  recent: [[false, 1.8e8, 20], [true, 3.2e8, 95], [false, 6.4e7, 260]].map(([loss, value, min], i) => ({
+    id: 0, loss, value, time: new Date(Date.now() - min * 60e3).toISOString(),
+    ship: AM.L(loss ? '金鹏级（测试）' : '狂怒者级（测试）', loss ? 'Raven (test)' : 'Rupture (test)'), system: S.systemName || sysName(30000142), other: AM.L('测试飞行员 ' + (i + 2), 'Test Pilot ' + (i + 2))
+  }))
 });
 function setStatus(text) { S.status = text; notify(); }
 
@@ -335,14 +352,58 @@ async function pollSystemKills() {
   } catch { /* 下次再试 */ }
 }
 
+// ---------- 人物历史 ----------
+const HIST_TTL = 10 * 60e3;
+const histCache = new Map();   // 角色 ID -> { at, p }
+function victimHistory(cid) {
+  const hit = histCache.get(cid);
+  if (hit && Date.now() - hit.at < HIST_TTL) return hit.p;
+  const srv = IS_TQ ? '' : '&server=' + SERVER.id;
+  const get = (url) => fetch(url + srv).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+  const p = (async () => {
+    const [pl, feed] = await Promise.all([get('/api/v1/pilots?ids=' + cid), get('/api/kb/feed?limit=5&character=' + cid)]);
+    const st = pl?.pilots?.[cid];
+    const kills = feed?.kills || [];
+    if (!st && !kills.length) return null;
+    const types = await ctx.resolveTypeNames([...(st?.ships || []).map(([t]) => t), ...kills.map((k) => k.ship_type_id)]).catch(() => new Map());
+    const tn = (id) => types.get(id) || 'Type ' + id;
+    const nm = feed?.names || {};
+    return {
+      kills: st?.kills ?? 0, losses: st?.losses ?? 0, destroyed: st?.destroyed || 0, lost: st?.lost || 0, solo: st?.solo || 0,
+      ships: (st?.ships || []).map(([t, n]) => [tn(t), n]),
+      recent: kills.map((k) => {
+        const loss = k.victim?.character_id === cid;
+        return { id: k.id, loss, ship: tn(k.ship_type_id), system: sysName(k.system_id), value: k.value || 0, time: k.time,
+          other: (loss ? nm[k.final?.character_id] : nm[k.victim?.character_id] || nm[k.victim?.corporation_id]) || '' };
+      })
+    };
+  })();
+  histCache.set(cid, { at: Date.now(), p });
+  if (histCache.size > 200) histCache.delete(histCache.keys().next().value);
+  return p;
+}
+// 一行摘要（预警卡片、最近预警）
+const histLine = (h) => (h ? `<small class="ka-hist-line"><span>近 30 天</span> <span class="k"><span>击杀</span> ${h.kills}</span> / <span class="l"><span>损失</span> ${h.losses}</span>${h.ships.length ? ` · <span>常开</span> ${ctx.esc(h.ships[0][0])}` : ''}</small>` : '');
+
 // ---------- 提醒 ----------
 function raise(a) {
   a.systemName = sysName(a.system);
   // 角色离线：只记进最近预警，不提醒
   if (muted()) a.muted = true;
-  S.history.unshift({ ...a, at: Date.now() });
+  const entry = { ...a, at: Date.now() };
+  S.history.unshift(entry);
   S.history.length = Math.min(S.history.length, 30);
   notify();
+  // 受害者的历史：读到后补进最近预警、悬浮窗和还在显示的预警卡片
+  if (!a.hourly && a.vEnt?.char) {
+    victimHistory(a.vEnt.char).then((h) => {
+      if (!h) return;
+      entry.hist = h;
+      notify();
+      const box = layer?.querySelector(`.ka-card[data-ka-kill="${a.id}"] .ka-hist`);
+      if (box) box.innerHTML = histLine(h);
+    });
+  }
   if (a.muted) return;
   if (T.web) webAlert(a);
   ring(a);
@@ -529,7 +590,8 @@ export function webAlert(a) {
   card.innerHTML = `<div class="ka-head">${badge(a)}<b>${a.watch ? '人物关注' : '击杀预警'}</b>
       <button class="ka-close" data-ka-close aria-label="关闭">×</button></div>
     <div class="ka-body">${a.vEnt ? ST.badge(a.vEnt) : ''}${ctx.esc(describe(a))}</div>
-    <div class="ka-meta">${a.value ? ctx.formatISK(a.value) + ' ISK · ' : ''}${a.attackers ? a.attackers + ' 名攻击者' + (a.st ? `（${stSummary(a.st)}）` : '') + ' · ' : ''}${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}</div>`;
+    <div class="ka-meta">${a.value ? ctx.formatISK(a.value) + ' ISK · ' : ''}${a.attackers ? a.attackers + ' 名攻击者' + (a.st ? `（${stSummary(a.st)}）` : '') + ' · ' : ''}${new Date(a.time).toLocaleTimeString('zh-CN', { hour12: false })}</div>
+    <div class="ka-hist">${histLine(a.hist)}</div>`;
   cards.prepend(card);
   while (cards.children.length > 4) cards.lastChild.remove();
   setTimeout(() => card.remove(), 45e3);
@@ -562,7 +624,7 @@ export function test(kind) {
     if (T.web) webAlert(a);
     ring(a);
     // 悬浮窗开着：临时插一条测试预警（不记进最近预警，下次刷新就没了）
-    if (float) { const d = floatData(); d.items.unshift({ ...floatItem({ ...a, at: Date.now() }), key: 'test:' + Date.now(), open: false }); FF.publish('kill', d); }
+    if (float) { const d = floatData(); d.items.unshift({ ...floatItem({ ...a, at: Date.now(), hist: TEST_HIST() }), key: 'test:' + Date.now(), open: false }); FF.publish('kill', d); }
     return;
   }
   if (kind === 'mail') {
@@ -678,7 +740,7 @@ function drawPanel() {
         <span>${ctx.esc(e.name)}${e.kind !== 'character' ? `<small> · ${KIND_ZH[e.kind]}</small>` : ''}</span><select class="cr-input" data-ka-wmode="${e.id}" aria-label="提醒类型">${Object.entries(MODE_ZH).map(([k, l]) => `<option value="${k}"${e.mode === k ? ' selected' : ''}>${l}</option>`).join('')}</select>
         <button class="ka-close" data-ka-del="${e.id}" title="取消关注" aria-label="取消关注">×</button></li>`).join('')}</ul>` : ''}</div>
     </div>`)}
-    ${sec('最近预警', st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${a.vEnt ? ST.badge(a.vEnt) : ''}${ctx.esc(describe(a))}${a.st ? `<small class="ka-st">攻击者 ${stSummary(a.st)}</small>` : ''}</span><small>${a.muted ? '离线未提醒 · ' : ''}${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有预警</p>')}
+    ${sec('最近预警', st.history.length ? `<ul class="ka-history">${st.history.map((a) => `<li${a.id && !a.hourly ? ` data-ka-open="${a.id}"` : ''}>${badge(a)}<span>${a.vEnt ? ST.badge(a.vEnt) : ''}${ctx.esc(describe(a))}${a.st ? `<small class="ka-st">攻击者 ${stSummary(a.st)}</small>` : ''}${histLine(a.hist)}</span><small>${a.muted ? '离线未提醒 · ' : ''}${ago(a.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有预警</p>')}
     <p class="ka-note">网页需保持打开（可在后台）</p>`;
 }
 

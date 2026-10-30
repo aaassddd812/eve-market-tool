@@ -6,7 +6,7 @@
   <meta name="color-scheme" content="dark light">
   <link rel="icon" href="assets/favicon.svg?v=1" type="image/svg+xml">
   <title>悬浮窗 · EVE</title>
-  <!-- 悬浮窗（击杀预警 / 到价提醒）：桌面版的原生置顶窗口、网页画中画里的 iframe 都加载这个页面，内容由主页面推过来（js/float-feed.js、js/float-view.js） -->
+  <!-- 悬浮窗（击杀预警 / 到价提醒 / 本地红名）：桌面版的原生置顶窗口、网页画中画里的 iframe 都加载这个页面，内容由主页面推过来（js/float-feed.js、js/float-view.js） -->
   <script>
     (function () {
       var t = null;
@@ -16,8 +16,8 @@
     })();
   </script>
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=131"></script>
-  <link rel="stylesheet" href="css/float.css?v=v1">
+  <script src="js/i18n.js?v=133"></script>
+  <link rel="stylesheet" href="css/float.css?v=v3">
 </head>
 <body>
   <div class="fl" id="fl">
@@ -26,6 +26,7 @@
       <div class="fl-tabs" id="flTabs" hidden>
         <button type="button" data-fl-kind="kill">击杀预警</button>
         <button type="button" data-fl-kind="price">到价提醒</button>
+        <button type="button" data-fl-kind="local">本地红名</button>
       </div>
       <span class="fl-sp"></span>
       <div class="fl-ctl" id="flCtl" hidden>
@@ -37,6 +38,6 @@
     <main class="fl-body" id="flBody"></main>
     <footer class="fl-foot" id="flFoot"></footer>
   </div>
-  <script type="module" src="js/float-view.js?v=v1"></script>
+  <script type="module" src="js/float-view.js?v=v3"></script>
 </body>
 </html>

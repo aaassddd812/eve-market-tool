@@ -85,3 +85,35 @@ html.fl-passing .fl-btn[data-fl-pass] { background: var(--accent); color: #fff; 
 .fl-price.hit .fl-val small { color: var(--ok); }
 .fl-list li.fl-price.new { animation-name: fl-flash-ok; }
 @keyframes fl-flash-ok { 0%, 40% { background: rgba(34, 197, 94, 0.32); } 100% { background: var(--ok-soft); } }
+
+/* 受害者近 30 天历史（最新一条默认展开） */
+.fl-hist { grid-column: 1 / -1; margin-top: 6px; border-radius: 6px; background: var(--card); }
+.fl-hist-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; width: 100%; padding: 5px 26px 5px 8px; position: relative; border: 0; background: none; color: var(--text-2); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; border-radius: 6px; }
+.fl-hist-sum:hover { background: var(--card-hover); }
+.fl-hist-sum svg { position: absolute; right: 6px; top: 7px; width: 13px; height: 13px; color: var(--muted); transition: transform 0.15s; }
+.fl-hist.open .fl-hist-sum svg { transform: rotate(180deg); }
+.fl-hist-who { font-weight: 600; color: var(--text); }
+.fl-k { color: var(--ok); font-weight: 600; }
+.fl-l { color: var(--danger); font-weight: 600; }
+.fl-hist-ships { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 8px 4px; font-size: 11px; color: var(--muted); }
+.fl-chip { padding: 1px 6px; border-radius: 5px; background: var(--card-hover); color: var(--text-2); }
+.fl-list .fl-hist-list { list-style: none; margin: 0; padding: 0 4px 4px; display: flex; flex-direction: column; gap: 2px; }
+.fl-list .fl-hist-list li { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; padding: 4px 6px; border-radius: 5px; background: none; font-size: 12px; }
+.fl-list .fl-hist-list li.click:hover { background: var(--card-hover); }
+.fl-hist-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-hist-meta { grid-column: 2; }
+.fl-tag { font-size: 10.5px; font-weight: 600; padding: 0 5px; border-radius: 4px; line-height: 17px; align-self: start; margin-top: 1px; }
+.fl-tag.k { background: var(--ok-soft); color: var(--ok); }
+.fl-tag.l { background: var(--danger-soft); color: var(--danger); }
+.fl-hist-none { margin: 0; padding: 2px 8px 6px; font-size: 11px; color: var(--muted); }
+
+/* 本地红名：每人一行，声望颜色圆点 + 名字 + 所属，下一行近 30 天击杀 / 损失与常开船 */
+.fl-local { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: baseline; }
+.fl-local .fl-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-local-st { grid-column: 2; }
+.fl-dot { width: 9px; height: 9px; border-radius: 3px; background: var(--muted); opacity: 0.5; }
+.fl-dot.red { background: var(--danger); opacity: 1; }
+.fl-dot.orange { background: #f97316; opacity: 1; }
+.fl-dot.friend { background: var(--accent); opacity: 1; }
+.fl-list li.fl-local.red, .fl-list li.fl-local.orange { background: var(--danger-soft); }
+.fl-q { margin-left: 3px; color: var(--warn); font-weight: 700; }

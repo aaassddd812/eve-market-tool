@@ -4,11 +4,11 @@ import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v14';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v38';
 import * as SM from './struct-markets.js?v=v7';
-import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v9';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v10';
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v3';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v1';
+import * as FF from './float-feed.js?v=v2';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
@@ -1581,7 +1581,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v11').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v12').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -5625,23 +5625,24 @@ function initCartButton() {
   syncCartBadge();
 }
 
-// ===== 预警（右上角铃铛，alert-center.js）：击杀预警、本地日志与邮件设置合在一个弹窗；铃铛的点任一开启就亮，本地日志刚有敌情时变红 =====
-const alertState = { kill: null, intel: null };
+// ===== 预警（右上角铃铛，alert-center.js）：击杀预警、本地日志、本地红名与邮件设置合在一个弹窗；铃铛的点任一开启就亮，本地日志刚有敌情或本地有红名时变红 =====
+const alertState = { kill: null, intel: null, local: null };
 function syncAlertBtn() {
   const btn = $('killAlertBtn');
-  const k = alertState.kill, i = alertState.intel;
-  btn.classList.toggle('on', Boolean(k?.on || i?.on));
-  btn.classList.toggle('alert', Boolean(i?.alert));
-  btn.title = `击杀预警：${k ? k.text : '未开启'}；本地日志：${i ? i.text : '未开启'}`;
+  const k = alertState.kill, i = alertState.intel, l = alertState.local;
+  btn.classList.toggle('on', Boolean(k?.on || i?.on || l?.on));
+  btn.classList.toggle('alert', Boolean(i?.alert || l?.alert));
+  btn.title = `击杀预警：${k ? k.text : '未开启'}；本地日志：${i ? i.text : '未开启'}${l?.on ? '；' + l.text : ''}`;
   setTabState('kill', k?.on);
   setTabState('intel', i?.on);
+  setTabState('local', l?.on);
   setTabState('mail', Boolean((k?.on && k.mail) || (i?.on && i.mail)));
 }
 
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v13').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v14').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5664,7 +5665,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v21').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v22').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5714,18 +5715,36 @@ function shipClassOf(typeId) {
   }
   return prev.id;
 }
+// ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
+let localModule = null;
+function loadLocal() {
+  if (!localModule) localModule = import('./local-watch.js?v=v1').then((m) => {
+    m.initLocalWatch({
+      esc, showToast, resolveNames, resolveTypeNames,
+      selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
+    });
+    const sync = () => { alertState.local = m.status(); syncAlertBtn(); };
+    m.onChange(sync);
+    sync();
+    return m;
+  }).catch((error) => { localModule = null; throw error; });
+  return localModule;
+}
+
 function initKillAlerts() {
   initCartButton();
   initIntelButton();
-  initAlertCenter({ loadKill: loadKillAlert, loadIntel, esc, showToast });
+  initAlertCenter({ loadKill: loadKillAlert, loadIntel, loadLocal, esc, showToast });
   // 悬浮窗（float-feed.js）：要哪种内容就加载对应模块；悬浮窗里点了击杀 / 物品，在主页面打开
   FF.initFloatFeed({
     showToast,
     openKill: async (id) => { if (!id) return; const kb = await loadKillboard(); kb.openServiceKill(id); },
-    openItem: (id) => selectItem(id)
+    openItem: (id) => selectItem(id),
+    openChar: (id) => { if (id) location.hash = '#kb/character/' + id; }
   });
   FF.setLoader('kill', loadKillAlert);
   FF.setLoader('price', () => loadWatchBoard().then((m) => m.startFloat()));
+  FF.setLoader('local', () => loadLocal().then((m) => m.startFloat()));
   $('killAlertBtn').addEventListener('click', () => openAlertCenter());
   // 已开启的话页面打开即开始检测
   let on = false;
