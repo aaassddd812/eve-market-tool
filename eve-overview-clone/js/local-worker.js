@@ -5,13 +5,13 @@
 //   桌面版：这里发 { t: 'grab', rect } 让主线程调 Tauri 命令截 EVE 窗口，主线程把像素传回（{ t: 'grabbed' }）。
 // 追踪：按名字那块的文字像素认人（图标闪烁不影响）；连续两帧都在才算新进本地（过滤一闪而过的杂讯）；
 //   一帧里超过一半的行都换了（换星系、自己滚动了列表）就把这批当作基线，不报警。
-//   每个人最近 0.5 秒里出现过的颜色：红 > 橙 > 友方；红 / 橙要从第一次看到起持续 1.2 秒、累计 8 帧以上、且是友方图标次数的两倍以上才算（确认前是 pending）；
-//   0.5 秒都没有图标才算「无图标」（白名，或自己）。
+//   每个人最近 0.5 秒里出现过的颜色：红 > 橙 > 友方；红 / 橙要从第一次看到起持续 2 秒、累计 8 帧以上、且是友方图标次数的两倍以上才算（确认前是 pending）；
+//   0.5 秒都没有图标才算「无图标」（白名，或自己）；锁定列表时就在、之后一直没有图标的那一行标 mine（当作自己）。
 // 发给主线程：{ t: 'status' } 定位状态，{ t: 'rows' } 当前名单（有变化或每秒一次），{ t: 'ocr', id, img } 新出现的人的名字截图，
 //   { t: 'options', list } 自动找不到时几个像名单的区域的截图（连同上方的频道标签），给用户选。
 import { locate, scanRows, sameRow, rowImage } from './local-detect.js?v=v2';
 
-const TICK = 100, WINDOW = 500, GONE = 1500, RELOCATE = 2000, HITS = 8, CONFIRM = 1200;
+const TICK = 100, WINDOW = 500, GONE = 1500, RELOCATE = 2000, HITS = 8, CONFIRM = 2000;
 let mode = null;            // 'stream' | 'grab'
 let reader = null, latest = null;
 let canvas = null, c2d = null;
@@ -23,7 +23,7 @@ let timer = 0, busy = false;
 let seq = 0;
 const tracked = [];         // { id, sig, on, w, h, y, clipped, first, last, red, orange, friend, base }
 let pending = [];           // { row, n, first }
-let baseUntil = 0;
+let baseUntil = 0, initUntil = 0;
 let lastSent = '', lastSentAt = 0;
 let grabId = 0;
 const grabs = new Map();
@@ -55,7 +55,7 @@ function stop() {
   reset();
 }
 function reset() {
-  tracked.length = 0; pending = []; baseUntil = Date.now() + 1500; lastSent = ''; lostAt = 0;
+  tracked.length = 0; pending = []; baseUntil = initUntil = Date.now() + 1500; lastSent = ''; lostAt = 0;
 }
 
 // 网页：一直读视频流，只留最新一帧
@@ -152,7 +152,7 @@ function track(rows, now) {
   for (const row of fresh) {
     const p = pending.find((x) => sameRow(x.row, row));
     if (p && p.n >= 1) {
-      const t = { id: ++seq, sig: row.sig, on: row.on, w: row.w, h: row.h, y: row.y, clipped: row.clipped, first: p.first, last: now, red: 0, orange: 0, friend: 0, redN: 0, orangeN: 0, friendN: 0, red0: 0, orange0: 0, base: now < baseUntil };
+      const t = { id: ++seq, sig: row.sig, on: row.on, w: row.w, h: row.h, y: row.y, clipped: row.clipped, first: p.first, last: now, red: 0, orange: 0, friend: 0, redN: 0, orangeN: 0, friendN: 0, red0: 0, orange0: 0, base: now < baseUntil, init: now < initUntil };
       stamp(t, p.cls, p.at);
       stamp(t, row.cls, now);
       tracked.push(t);
@@ -177,8 +177,9 @@ function clsOf(t, now) {
 }
 
 function send(now, ms, clipped) {
-  const rows = tracked.map((t) => ({ id: t.id, cls: clsOf(t, now), y: t.y, clipped: t.clipped, base: t.base, first: t.first })).sort((a, b) => a.y - b.y);
-  const key = rows.map((r) => r.id + r.cls + (r.clipped ? '!' : '')).join(',');
+  // mine：开始监视（锁定列表）时就在、一直没看到过图标（偶尔一两帧认错不算）
+  const rows = tracked.map((t) => ({ id: t.id, cls: clsOf(t, now), y: t.y, clipped: t.clipped, base: t.base, first: t.first, mine: t.init && t.redN + t.orangeN + t.friendN < 3 })).sort((a, b) => a.y - b.y);
+  const key = rows.map((r) => r.id + r.cls + (r.clipped ? '!' : '') + (r.mine ? 'm' : '')).join(',');
   if (key === lastSent && now - lastSentAt < 1000) return;
   lastSent = key; lastSentAt = now;
   self.postMessage({ t: 'rows', rows, ms, clipped, at: now });

@@ -1,6 +1,7 @@
 // ===== 悬浮窗（击杀预警、到价提醒、本地红名）：主页面这一侧 =====
 // 悬浮窗是站内的 float.html?kind=…，内容由主页面经 BroadcastChannel（eve-float）推过去，悬浮窗只负责显示：
-//   主页面 → 悬浮窗：{ t: 'snap', kind, data } 最新内容；{ t: 'ready' } 主页面刚打开（悬浮窗重新要一次内容）
+//   主页面 → 悬浮窗：{ t: 'snap', kind, data } 最新内容；{ t: 'ready' } 主页面刚打开（悬浮窗重新要一次内容）；
+//     { t: 'alert', kind } 刚响了一条新提醒（悬浮窗切到这个菜单）
 //   悬浮窗 → 主页面：{ t: 'hello', kind } 要内容；{ t: 'alive', kind } 每 20 秒报一次还开着；{ t: 'open-kill' | 'open-item' | 'open-char', id } 在主页面打开详情
 // 打开方式：
 //   桌面版（Tauri）：原生窗口，置顶、无边框、可半透明、可鼠标穿透（float_open 命令，见 desktop/src-tauri/src/lib.rs）。
@@ -9,7 +10,7 @@
 // 模块各自发布内容（publish）；悬浮窗要内容而模块还没加载时，用登记的 loader 加载（loader 加载后会自己 publish）。
 
 const CH = 'eve-float';
-const FLOAT_V = 'v4';   // 跟 float.html 里 float-view.js 的版本号一致：改了悬浮窗页面就一起改，旧的画中画会重新加载
+const FLOAT_V = 'v5';   // 跟 float.html 里 float-view.js 的版本号一致：改了悬浮窗页面就一起改，旧的画中画会重新加载
 export const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名' };
 const snap = {};
 const loaders = {};
@@ -48,6 +49,8 @@ export function publish(kind, data) {
   snap[kind] = data;
   send(kind);
 }
+// 新提醒：悬浮窗切到这个菜单（已经有悬浮窗在显示它就不切）
+export function alert(kind) { try { bc?.postMessage({ t: 'alert', kind }); } catch { /* 忽略 */ } }
 // 悬浮窗要这种内容时怎么加载对应模块
 export function setLoader(kind, fn) { loaders[kind] = () => Promise.resolve().then(fn).catch(() => {}); }
 // 有没有这种悬浮窗开着（到价提醒据此决定后台要不要接着查价）

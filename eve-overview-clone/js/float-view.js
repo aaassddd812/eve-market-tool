@@ -20,25 +20,36 @@ const expanded = new Set();   // 手动展开了历史的预警（最新一条�
 const collapsed = new Set();  // 手动收起的
 let lastTop = {};      // kind -> 上次显示的第一条（新来的闪一下）
 let gotAny = false;
+// 别的悬浮窗（桌面版每种内容可以各开一个窗口）正在显示什么：窗口 id -> { kind, at }
+const others = new Map();
+const ME = Math.random();
 
 const bc = typeof BroadcastChannel === 'function' ? new BroadcastChannel('eve-float') : null;
 const post = (m) => { try { bc?.postMessage(m); } catch { /* 忽略 */ } };
-const hello = () => post({ t: 'hello', kind });
+const hello = () => post({ t: 'hello', kind, id: ME });
 if (bc) {
   bc.onmessage = (e) => {
     const m = e.data || {};
     if (m.t === 'ready') hello();
     else if (m.t === 'snap' && KINDS[m.kind]) { data[m.kind] = m.data; gotAny = true; if (m.kind === kind) render(); }
+    else if ((m.t === 'hello' || m.t === 'alive') && KINDS[m.kind] && m.id) others.set(m.id, { kind: m.kind, at: Date.now() });
+    else if (m.t === 'alert' && KINDS[m.kind]) onAlert(m.kind);
   };
 }
 // 每 20 秒报一次还开着（主页面据此决定到价提醒要不要接着查价）
-setInterval(() => post({ t: 'alive', kind }), 20e3);
+setInterval(() => post({ t: 'alive', kind, id: ME }), 20e3);
 
 // 画中画里由主页面切换内容
 window.addEventListener('message', (e) => {
   if (e.origin !== location.origin || e.data?.t !== 'kind' || !KINDS[e.data.kind]) return;
   setKind(e.data.kind);
 });
+// 有新提醒：切到那个菜单（有切换栏时）。别的悬浮窗已经在显示它就不切；几个悬浮窗同时收到时错开一点，先切的报到后别的就不切了
+function onAlert(k) {
+  if (!(PIP || ipc) || k === kind) return;
+  const shown = () => [...others.values()].some((o) => o.kind === k && Date.now() - o.at < 25e3);
+  setTimeout(() => { if (k !== kind && !shown()) setKind(k); }, Math.round(ME * 150));
+}
 function setKind(k) {
   kind = k;
   hello();
@@ -114,7 +125,7 @@ function renderLocal(d, body, foot) {
         ${p.st ? `<small class="fl-local-st"><span class="fl-k"><span>击杀</span> ${p.st.kills}</span> · <span class="fl-l"><span>损失</span> ${p.st.losses}</span>${p.st.ships.length ? ` · <span translate="no">${esc(p.st.ships.join(' / '))}</span>` : ''}</small>` : ''}</li>`;
     }).join('')}</ul>`
       : `<p class="fl-empty">${!d.on ? '还没有名单' : d.hidden ? '本地没有红名 / 白名' : '还没有识别到名单'}</p>`);
-  foot.textContent = d.on ? (d.status || '') + (d.hidden ? ` · 已隐藏 ${d.hidden} 个友方` : '') : '';
+  foot.textContent = d.on ? (d.status || '') + (d.hidden ? ` · 另有 ${d.hidden} 人不是敌对或还在确认` : '') : '';
 }
 
 function renderPrice(d, body, foot) {
