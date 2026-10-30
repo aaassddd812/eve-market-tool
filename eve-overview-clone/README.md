@@ -14,6 +14,28 @@ python -m http.server 8899 --bind 127.0.0.1
 也可以用任意静态服务器（VS Code Live Server、nginx 等）。直接双击 index-v2.html 也可以运行，
 但通过 HTTP 服务打开更接近原站环境。
 
+### 部署到线上（eve.navexor.top）
+
+线上静态文件在 `/opt/eve/dist`（nginx `root /opt/eve/dist; index index.html;`，配置见 `server/eve.navexor.top.conf`）。**仓库里只有 `index-v2.html`，线上首页用的是 `index.html`**：
+访问 `https://eve.navexor.top/`、桌面版客户端、安卓 App、ESI 登录回调落到的都是 `index.html`，不是 `index-v2.html`。
+
+1. 把这次改动的文件复制到 `/opt/eve/dist` 下的同一路径（`js/`、`css/`、`i18n/`、`float.html` 等）。
+2. **每次都把 `index-v2.html` 同时复制成 `index.html`**（两份内容完全一样）：
+   ```bash
+   cp eve-overview-clone/index-v2.html /opt/eve/dist/index-v2.html
+   cp eve-overview-clone/index-v2.html /opt/eve/dist/index.html
+   ```
+   只更新 `index-v2.html` 的话，首页还引用旧的 `modern-app.js?v=…`，进而加载旧版本的各个模块——改了也看不到效果（曾因此导致本地红名悬浮窗一直是旧逻辑）。
+3. 为什么一定要同步：`.js / .css / .json / 图片` 按 `public, max-age=31536000, immutable` 缓存一年，浏览器和客户端只认 `?v=` 版本号；
+   入口页（`index.html`）是 `no-cache`，每次都会重新取。所以改了文件必须改版本号，入口页必须是最新的，新版本号才会被用上。
+4. 部署完核对：首页和 `index-v2.html` 引用的 `modern-app.js` 版本号应该一致，且等于仓库里的：
+   ```bash
+   curl -s https://eve.navexor.top/ | grep -o 'modern-app.js?v=v[0-9]*'
+   curl -s https://eve.navexor.top/index-v2.html | grep -o 'modern-app.js?v=v[0-9]*'
+   grep -o 'modern-app.js?v=v[0-9]*' eve-overview-clone/index-v2.html
+   ```
+   不一致就是 `index.html` 没更新。悬浮窗页 `float.html` 也是入口页，同样直接覆盖。
+
 **桌面版**（Windows）：见仓库根目录 `desktop/README.md`。网站右上角「桌面版」按钮提供 `downloads/EVE-Tool-Downloader.exe` 下载器，
 运行后从 GitHub Releases 下载安装包；桌面版里网页会切换成左侧分组菜单栏的布局（浏览器加 `?desktop=1` 可预览）。
 安卓 App 同一个弹窗里下载 APK（手机上只显示安卓部分）。
