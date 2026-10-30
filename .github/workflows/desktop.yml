@@ -83,21 +83,21 @@ jobs:
         with:
           workspaces: desktop/src-tauri
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-
       - name: 版本号
         id: ver
         run: bash desktop/set-version.sh
+
+      # 安卓的 Gradle 工程会反过来调用 Tauri CLI：用 cargo 安装的 CLI 生成工程，Gradle 就走 `cargo tauri`，不依赖 package.json
+      - name: 安装 Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
 
       - name: 编译 APK
         working-directory: desktop
         run: |
           export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
-          npx --yes @tauri-apps/cli@^2 android init --ci
-          npx --yes @tauri-apps/cli@^2 icon src-tauri/icons/icon.png
-          npx --yes @tauri-apps/cli@^2 android build --apk --target aarch64 --target armv7 --ci
+          cargo tauri android init --ci
+          cargo tauri icon src-tauri/icons/icon.png
+          cargo tauri android build --apk --target aarch64 --target armv7 --ci
 
       - name: 签名
         env:
