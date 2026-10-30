@@ -15,7 +15,7 @@ using System.Windows.Forms;
 
 static class Program
 {
-    const string Repo = "wbw5780/eve-tool-desktop";
+    const string Repo = "aaassddd812/eve-tool-desktop";
     const string Asset = "EVE-Tool-Setup.exe";
     static readonly string Direct = "https://github.com/" + Repo + "/releases/latest/download/" + Asset;
     // 依次尝试：GitHub 直连，然后是公共加速镜像（国内访问 GitHub 慢或连不上时）

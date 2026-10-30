@@ -1,4 +1,4 @@
-# 桌面版（Windows）与安卓版：编译安装包、下载器与 APK，发布到公开仓库 wbw5780/eve-tool-desktop 的 Releases
+# 桌面版（Windows）与安卓版：编译安装包、下载器与 APK，发布到公开仓库 aaassddd812/eve-tool-desktop 的 Releases
 # 触发：推送标签 desktop-v1.2.3（版本号取自标签），或在 Actions 页手动运行（版本号取自 tauri.conf.json）
 # 需要仓库 Secret：
 #   RELEASE_TOKEN               对 eve-tool-desktop 有 Contents 读写权限的 Fine-grained token
