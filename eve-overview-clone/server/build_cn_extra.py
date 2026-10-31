@@ -24,8 +24,9 @@
   云计算（技能组 4196）：把闲置舰船放进云计算后给当前舰船加成，效果直接改舰船属性；前端由玩家勾选放了哪些船才生效。
     fit.adapt.cloud: { 技能: [来源舰船, 对该级别全部种族(0/1), 带宽, 生效船级?] }；fit.adapt.hulls: { 种族船体技能: [种族, 级别] }
     生效船级（可省略）：技能描述写了「所有战列舰 / 所有舰船…」或官方公告写明的（CLOUD_FIX），为船级列表（不分种族）或 '*'（全部舰船）
-    生效对象：与来源舰船同级别（按种族船体技能），T1 / T2 / 海军型只对本族；需要两族技能的（海盗船）对全部种族；
-    官方列出过的舰船按官方表格（CLOUD_NEWS）。带宽：官方表格有的按表格，否则 T1 20、海军型 25、T2 30、其他势力 35
+    生效对象：与来源舰船同级别（按种族船体技能），T1 / T2 / 帝国海军型只对本族；特别版、海盗等非帝国海军势力（含三神裔、伊甸联合）对全部种族；
+    官方列出过的舰船按官方表格（CLOUD_NEWS）。带宽：官方表格有的按表格，否则特别版（市场分组「特别版舰船」）40、非帝国海军势力 35、
+    T2 30、帝国海军型 25、T1 20（T3 规则没写，按 35 本族）
 另外 fit.patch: { 已有舰船: [{ 属性: 国服值 }, [国服效果列表]] }：宁静服也有的舰船在国服的属性值 / 效果不同时（适性属性与效果、数值调整）按国服覆盖。
 """
 import collections
@@ -504,7 +505,7 @@ def build(ds, sde, tq_ids):
         effs = [x['effect_id'] for x in d.get('dogma_effects', []) if str(x['effect_id']) in fit['effects'] or x['effect_id'] in out_eff]
         if changed or sorted(effs) != sorted(old[6]):
             patch[t] = [changed, effs if sorted(effs) != sorted(old[6]) else None]
-    adapt = adapt_meta(ds, fit, out_types, zh, groups)
+    adapt = adapt_meta(ds, fit, out_types, zh, groups, markets)
     used_groups = {v[2] for v in out_types.values()} - {int(k) for k in fit['groups']}
     out_groups = {g: [groups[g]['name'], groups[g]['category_id']] for g in sorted(used_groups)}
     out_markets = {}
@@ -609,7 +610,10 @@ def cloud_src_en(name, ships):
     return best and best[1]
 
 
-def adapt_meta(ds, fit, out_types, zh, groups):
+EMPIRE = {'Amarr', 'Caldari', 'Gallente', 'Minmatar'}
+
+
+def adapt_meta(ds, fit, out_types, zh, groups, markets):
     """适性技能的等级上限、云计算技能的来源舰船 / 生效范围 / 带宽（没有这两组技能的服务器返回 None）"""
     adapt = [t for t in out_types if zh[t]['group_id'] in ADAPT_GROUPS]
     if not adapt:
@@ -621,6 +625,7 @@ def adapt_meta(ds, fit, out_types, zh, groups):
     hulls = {t: list(m.groups()) for t, v in allt.items() if (m := HULL_RE.match(v[1] or ''))}
     hulls.update({t: ['', 'Colossus'] for t, v in allt.items() if v[1] == 'Colossus'})   # 曙光的旗舰船级「巨像」，不分种族
     table = cloud_table()
+    market_name = lambda m: (fit['markets'].get(str(m)) or [(markets.get(m) or {}).get('name', '')])[0]
     # 长名优先：「磨难级海军型」先于「磨难级」；技能名也常省掉「级」（「达玛维克装甲值…」）
     by_name = sorted(((n, t) for t, v in ships.items() for n in {v[0], v[0].removesuffix('级')} if len(n) > 1), key=lambda x: -len(x[0]))
     cloud, unknown = {}, 0
@@ -639,9 +644,20 @@ def adapt_meta(ds, fit, out_types, zh, groups):
         if row:
             target, bw = row
             every = int(target.startswith('全部'))
-        else:
-            every = int(len(races) > 1)
-            bw = {1: 20, 2: 30}.get(v[4], 25 if v[4] == 4 and len(races) == 1 else 35)
+        elif market_name(v[3]).startswith('特别版'):   # 典藏 / 活动船，四族通用
+            every, bw = 1, 40
+        elif v[4] == 2:
+            every, bw = int(len(races) > 1), 30
+        elif not races or not races <= EMPIRE or len(races) > 1:   # 海盗、三神裔、伊甸联合等非帝国海军势力
+            every, bw = 1, 35
+        elif v[4] == 4 and re.search(r'Navy|Fleet', v[1] or ''):   # 帝国海军型 / 舰队型
+            every, bw = 0, 25
+        elif v[4] == 4:   # 单族的其他势力船
+            every, bw = 1, 35
+        elif v[4] in (0, 1):   # T1（宁静服数据里部分 T1 没有元组）
+            every, bw = 0, 20
+        else:   # T3
+            every, bw = 0, 35
         fix_bw, scope = CLOUD_FIX.get(v[0], (None, None))
         scope = scope or cloud_scope(zh[t].get('description'))
         # 来源舰船没有任何船体技能（赛季船、游艇等），也没写对象：按全部舰船（同系列的星耀级写的就是「所有舰船」）

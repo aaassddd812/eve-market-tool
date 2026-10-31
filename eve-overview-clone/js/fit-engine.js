@@ -253,7 +253,8 @@ export function computeFit(data, fit, skills = 'max') {
   const ship = new Item(data, shipType, 'ship');
   const skillItems = [];
   for (const t of data.skills) {
-    const level = Math.min(skills === 'max' ? 5 : (skills.get(t.id) || 0), t.maxLevel || 5);
+    // 云计算加成由云里的舰船提供，不看角色有没有这个技能
+    const level = Math.min(skills === 'max' || t.cloud ? 5 : (skills.get(t.id) || 0), t.maxLevel || 5);
     if (!level || (t.cloud && !cloudApplies(data, t.cloud, shipType))) continue;
     const base = new Map(t.attrs);
     base.set(AT.skillLevel, level);

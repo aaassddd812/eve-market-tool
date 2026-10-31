@@ -6,6 +6,7 @@
 // 训练队列：ESI 只开放了读取（esi-skills.read_skillqueue.v1），没有写入接口，网页无法直接改游戏里的训练队列；
 // 「复制技能清单」每行「技能名 等级」，在游戏技能窗口的训练队列里 Ctrl+V 即可整批加入。
 // 目标也可以是游戏里现有的训练队列：按原顺序或短的先练重排，补上缺的前置，可与其他目标一起排；复制后先清空游戏队列再粘贴。
+// 训练顺序（不换属性）：总时长与顺序无关，顺序只决定先练完哪些。可按目标 / 短的先练 / 先能开船排，再逐项上移、下移、置顶（连同前置），前置始终在前。
 import { commonFit } from './fit-kb.js?v=v28';
 
 let ctx;   // data, FE, getFit, savedFits, normalize, hasEsi, esiFetch, getEsiToken, getImplants, openEsiBind, esc, formatNumber, showToast, store
@@ -51,7 +52,8 @@ const SHIELD_GROUP = 1209, ARMOR_GROUP = 1210;
 
 const P = {
   targets: [], seq: 0,
-  opt: { queue: true, alpha: false, remap: false, remap2: true, lang: 'zh' },
+  opt: { queue: true, alpha: false, remap: false, remap2: true, lang: 'zh', order: 'target' },
+  manual: null,            // 手动调整后的顺序（条目 key）
   tab: 'ship', skillLevel: 4, showAll: false
 };
 let C = null;            // 角色：{ id, name, trained, sp, queue, attrs, implants, error }
@@ -67,11 +69,12 @@ export function initPlan(context) {
       P.targets = (st.targets || []).filter((t) => t && (t.kind !== 'ship' || ctx.data?.types?.has?.(t.ship) !== false));
       P.seq = P.targets.reduce((m, t) => Math.max(m, t.id || 0), 0);
       Object.assign(P.opt, st.opt || {});
+      P.manual = Array.isArray(st.manual) && st.manual.length ? st.manual : null;
     }
   } catch { /* 默认 */ }
 }
 function save() {
-  ctx.store.setJSON(KEY, { targets: P.targets.map((t) => (t.src === 'kb' ? { ...t, fit: null, label: '' } : t)), opt: P.opt });
+  ctx.store.setJSON(KEY, { targets: P.targets.map((t) => (t.src === 'kb' ? { ...t, fit: null, label: '' } : t)), opt: P.opt, manual: P.manual });
 }
 
 // 装配页 / 战场模拟带过来的装配：{ ship, fit, label }
@@ -274,14 +277,15 @@ function buildPlan() {
   const cur = baseAttrs();
   const boost = accelBonus();
   const slots = remapSlots();
+  const base = arrange(entries, have, cur, imp, boost);
   const G = groupsOf(entries);
   const best = G.length ? { ...bestAttrs(G, imp, boost), curMin: timeOf(G, cur, imp, boost) } : null;
   const queueEnd = P.opt.queue && !hasQueueTarget() && C?.queue?.length ? Math.max(Date.now(), ...C.queue.map((q) => (q.finish_date ? Date.parse(q.finish_date) : 0))) : Date.now();
-  let order = entries, remaps = [];
+  let order = base, remaps = [];
   if (P.opt.remap && best) remaps = [{ from: 0, at: slots[0], attrs: best.attrs }];
-  const single = schedule(entries, queueEnd, imp, boost, cur, remaps);
+  const single = schedule(base, queueEnd, imp, boost, cur, remaps);
   // 能重新分配两次：按属性把技能分成两段，各配一次
-  let two = P.opt.remap && slots.length > 1 && best ? twoRemap(entries, queueEnd, imp, boost, cur, slots) : null;
+  let two = P.opt.remap && slots.length > 1 && best ? twoRemap(base, queueEnd, imp, boost, cur, slots) : null;
   if (two) {
     const o = two.keys.map((k) => byKey.get(k));
     const end2 = schedule(o, queueEnd, imp, boost, cur, two.remaps);
@@ -300,7 +304,7 @@ function buildPlan() {
   const milestones = P.targets.map((t) => ({ t, need: done(t.id, 'need'), good: done(t.id, 'good') }));
   const total = { sp: order.reduce((s, e) => s + e.sp, 0), min: order.reduce((s, e) => s + e.min, 0) };
   unlocks(order, have);
-  return { entries: order, milestones, total, start: queueEnd, end, best, cur, imp, boost, slots, two, twoOn: order !== entries };
+  return { entries: order, milestones, total, start: queueEnd, end, best, cur, imp, boost, slots, two, twoOn: order !== base };
 }
 
 // 训练速度（技能点 / 分钟）
@@ -366,15 +370,19 @@ function schedule(order, start, imp, boost, attrs, remaps) {
   });
   return at;
 }
-// 前置在前的前提下按 prio 从小到大排
-function topoOrder(entries, prio) {
+// 每个条目直接依赖的条目下标（上一级 + 前置技能）
+function depsOf(entries) {
   const idx = new Map(entries.map((e, i) => [e.key, i]));
-  const deps = entries.map((e) => {
+  return entries.map((e) => {
     const d = [];
     if (idx.has(e.skill + ':' + (e.level - 1))) d.push(idx.get(e.skill + ':' + (e.level - 1)));
     for (const [p, pl] of skillInfo(e.skill).t.skills) for (let l = 1; l <= pl; l++) if (idx.has(p + ':' + l)) d.push(idx.get(p + ':' + l));
     return d;
   });
+}
+// 前置在前的前提下按 prio 从小到大排
+function topoOrder(entries, prio) {
+  const deps = depsOf(entries);
   const done = new Array(entries.length).fill(false), out = [];
   while (out.length < entries.length) {
     let bi = -1;
@@ -384,6 +392,89 @@ function topoOrder(entries, prio) {
     out.push(entries[bi]);
   }
   return out.length === entries.length ? out : entries;
+}
+// 训练顺序：target 按目标（上面的贪心）；short 每个阶段里短的先练；ship 每个阶段里尽早能开新船；再叠加手动调整
+function arrange(entries, have, cur, imp, boost) {
+  const ph = (e) => (e.phase === 'need' ? 0 : 1);
+  const minOf = (e) => e.sp / rateOf(skillInfo(e.skill), cur, imp, boost);
+  let out = entries;
+  if (P.opt.order === 'short') out = topoOrder(entries, (i) => ph(entries[i]) * 1e12 + minOf(entries[i]));
+  else if (P.opt.order === 'ship') { const r = shipRank(entries, have, minOf); out = topoOrder(entries, (i) => ph(entries[i]) * 1e9 + r[i]); }
+  if (P.manual) {
+    // 手动排过的按手动顺序；新出现的条目跟在自动顺序里它前面那一项后面
+    const m = new Map(P.manual.map((k, i) => [k, i]));
+    const pos = new Map();
+    let last = -1, k = 0;
+    for (const e of out) { if (m.has(e.key)) { last = m.get(e.key); k = 0; pos.set(e.key, last); } else pos.set(e.key, last + (++k) * 1e-5); }
+    const sorted = out.slice().sort((a, b) => pos.get(a.key) - pos.get(b.key));
+    out = topoOrder(sorted, (i) => i);
+  }
+  return out;
+}
+// 先能开船：每次挑还差最少时间就能开的船，把它缺的条目（含前置）排上；返回每个条目的名次
+function shipRank(entries, have, minOf) {
+  const idx = new Map(entries.map((e, i) => [e.key, i]));
+  const deps = depsOf(entries);
+  const close = (i, set) => { if (set.has(i)) return; set.add(i); for (const j of deps[i]) close(j, set); };
+  const cand = [];
+  for (const t of pool()) {
+    if (t.category !== ctx.FE.CAT.ship) continue;
+    const set = new Set();
+    let ok = true;
+    for (const [s, l] of t.skills) {
+      if ((have.get(s) || 0) >= l) continue;
+      const i = idx.get(s + ':' + l);
+      if (i == null) { ok = false; break; }
+      close(i, set);
+    }
+    if (ok && set.size) cand.push([...set].sort((a, b) => a - b));
+  }
+  const mins = entries.map(minOf);
+  const rank = new Array(entries.length).fill(Infinity);
+  let n = 0;
+  while (cand.length) {
+    let bi = 0, bc = Infinity;
+    cand.forEach((c, i) => { let m = 0; for (const j of c) if (rank[j] === Infinity) m += mins[j]; if (m < bc) { bc = m; bi = i; } });
+    for (const j of cand.splice(bi, 1)[0]) if (rank[j] === Infinity) rank[j] = n++;
+  }
+  return rank.map((r, i) => (r === Infinity ? n + i : r));
+}
+// 手动调整：上移 / 下移跳过自己的前置 / 依赖它的条目，置顶连同前置一起移到最前
+function moveEntry(key, how) {
+  const E = (plan?.entries || []).slice();
+  const i = E.findIndex((e) => e.key === key);
+  if (i < 0) return;
+  const deps = depsOf(E);
+  let next = null;
+  if (how === 'down') {
+    const post = new Set();
+    for (let j = i + 1; j < E.length; j++) if (deps[j].some((d) => d === i || post.has(d))) post.add(j);
+    let j = i + 1;
+    while (j < E.length && post.has(j)) j += 1;
+    if (j >= E.length) return;
+    const [y] = E.splice(j, 1);
+    E.splice(i, 0, y);
+    next = E;
+  } else {
+    const pre = new Set();
+    const walk = (j) => { for (const d of deps[j]) if (!pre.has(d)) { pre.add(d); walk(d); } };
+    walk(i);
+    if (how === 'top') {
+      const block = new Set([...pre, i]);
+      next = [...E.filter((_, j) => block.has(j)), ...E.filter((_, j) => !block.has(j))];
+    } else {
+      let j = i - 1;
+      while (j >= 0 && pre.has(j)) j -= 1;
+      if (j < 0) return;
+      const [x] = E.splice(j, 1);
+      E.splice(i, 0, x);
+      next = E;
+    }
+  }
+  if (next.every((e, j) => e === plan.entries[j])) return;
+  P.manual = next.map((e) => e.key);
+  save();
+  render();
 }
 // 两次分配：把（主, 副属性）组分成两段，各算最佳分配，再按实际能分配的时间排出总时长最短的
 let twoCache = { key: '', val: null };
@@ -417,14 +508,17 @@ function twoRemap(entries, start, imp, boost, cur, slots) {
 }
 // 练完每一项新能开的船、能用的装备
 let unlockPool = null;
-function unlocks(order, have) {
+function pool() {
   if (!unlockPool) {
     const { ship, module, drone } = ctx.FE.CAT;
     unlockPool = [...ctx.data.types.values()].filter((t) => t.market && t.skills?.length && (t.category === ship || t.category === module || t.category === drone));
   }
+  return unlockPool;
+}
+function unlocks(order, have) {
   const idx = new Map(order.map((e, i) => [e.key, i]));
   for (const e of order) e.unlock = null;
-  for (const t of unlockPool) {
+  for (const t of pool()) {
     let at = -1;
     for (const [s, l] of t.skills) {
       if ((have.get(s) || 0) >= l) continue;
@@ -673,37 +767,50 @@ function resultHtml() {
     const mods = u.mods.length ? `<span title="${esc(u.mods.slice(0, 20).map((t) => t.name).join('、') + (u.mods.length > 20 ? ' …' : ''))}">${esc(`${u.mods.length} 种装备`)}</span>` : '';
     return `<div class="sp-ul"><em>${u.ships.length ? '能开' : '能用'}</em>${ships}${more}${mods}</div>`;
   };
+  const canMove = !plan.twoOn;
+  const mvBtn = (how, label, path) => `<button type="button" class="icon-btn" data-sp-mv="${how}" title="${label}" aria-label="${label}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${path}</svg></button>`;
+  const mvHtml = canMove ? `<div class="sp-mv">${mvBtn('top', '置顶（连同前置）', '<path d="M5 4h14M12 20V9m-5 5 5-5 5 5"/>')}${mvBtn('up', '上移', '<path d="m6 15 6-6 6 6"/>')}${mvBtn('down', '下移', '<path d="m6 9 6 6 6-6"/>')}</div>` : '';
   const rowsOf = (list) => list.map((e) => {
     n += 1;
     if (n > limit) return '';
     const info = skillInfo(e.skill);
-    const rm = e.remap ? `<tr class="sp-remap-tr"><td colspan="5"><span class="sp-rm-tag">${esc(e.remap.of > 1 ? `第 ${e.remap.n} 次重新分配属性` : '重新分配属性')}</span>${n > 1 ? `<span class="sp-rm-at">${esc(dateTime(e.start))}</span>` : ''}<span class="sp-rm-attrs">${esc(shortAttrs(e.remap.attrs))}</span></td></tr>` : '';
-    return `${rm}<tr>
+    const rm = e.remap ? `<tr class="sp-remap-tr"><td colspan="${canMove ? 6 : 5}"><span class="sp-rm-tag">${esc(e.remap.of > 1 ? `第 ${e.remap.n} 次重新分配属性` : '重新分配属性')}</span>${n > 1 ? `<span class="sp-rm-at">${esc(dateTime(e.start))}</span>` : ''}<span class="sp-rm-attrs">${esc(shortAttrs(e.remap.attrs))}</span></td></tr>` : '';
+    return `${rm}<tr data-sp-key="${e.key}">
         <td class="num sp-n">${n}</td>
         <td><div class="sp-sk"><span class="sp-sk-name">${esc(info.t.name)}</span><span class="sp-lv">${ROMAN[e.level]}</span>${e.pre ? '<span class="sp-pre" title="其他技能的前置要求">前置</span>' : ''}</div>${unlockHtml(e.unlock)}</td>
         <td class="num pi-hide-sm">${ctx.formatNumber(e.sp)}</td>
         <td class="num">${dur(e.min)}</td>
         <td class="num pi-hide-sm">${esc(dateTime(e.end))}</td>
+        ${canMove ? `<td class="sp-mv-td">${mvHtml}</td>` : ''}
       </tr>`;
   }).join('');
   const section = (list, title) => {
     if (!list.length) return '';
     const min = list.reduce((s, e) => s + e.min, 0);
-    return `<tbody class="sp-phase"><tr class="sp-phase-head"><th colspan="5"><b>${title}</b><span>${list.length} 项 · ${dur(min)}</span></th></tr>${rowsOf(list)}</tbody>`;
+    return `<tbody class="sp-phase"><tr class="sp-phase-head"><th colspan="${canMove ? 6 : 5}"><b>${title}</b><span>${list.length} 项 · ${dur(min)}</span></th></tr>${rowsOf(list)}</tbody>`;
   };
+  // 手动调整把两个阶段穿插了就不再分段
+  const mixed = E.some((e, i) => e.phase === 'need' && E.slice(0, i).some((x) => x.phase === 'good'));
   const body = plan.twoOn
     ? section(E.slice(0, plan.two.from), '第一段 · 第一套属性') + section(E.slice(plan.two.from), '第二段 · 第二套属性')
+    : mixed ? section(E, '训练顺序 · 已手动调整')
     : section(E.filter((e) => e.phase === 'need'), '第一阶段 · 能开 / 能用') + section(E.filter((e) => e.phase === 'good'), '第二阶段 · 用好 / 发展方向');
+  const orderSeg = `<div class="segmented" role="group" aria-label="排序">${[['target', '按目标', '先练差得最少的目标，目标内短的先练'], ['short', '短的先练', '耗时短的先练，尽早多练完几项'], ['ship', '先能开船', '每次先排最快能开上新船的技能']].map(([k, l, tt]) => `<button type="button" data-sp-sort="${k}" class="${(P.opt.order || 'target') === k ? 'active' : ''}" title="${tt}">${l}</button>`).join('')}</div>`;
+  const orderNote = plan.twoOn
+    ? '<p class="sp-hint">已按两次属性分配排序，关掉后可手动调整顺序</p>'
+    : `<p class="sp-hint"><span>${P.opt.remap ? '属性只在开始时分配一次，总时长与顺序无关，顺序决定先练完哪些' : '不换属性时总时长与顺序无关，顺序决定先练完哪些'}</span>${P.manual ? ' · <span>已手动调整</span> · <button type="button" class="link-btn" data-sp-reset>恢复自动顺序</button>' : ' · <span>可逐项上移、下移、置顶，前置会自动跟着</span>'}</p>`;
   const list = `<div class="sp-box sp-list">
     <div class="sim-sec-head"><h4>训练顺序</h4>
       <div class="sp-copy">
+        ${plan.twoOn ? '' : orderSeg}
         ${window.I18N?.lang === 'en' ? '' : `<div class="segmented" role="group" aria-label="技能名语言"><button type="button" data-sp-lang="zh" class="${P.opt.lang !== 'en' ? 'active' : ''}" title="国服 / 中文客户端">中文名</button><button type="button" data-sp-lang="en" class="${P.opt.lang === 'en' ? 'active' : ''}" title="英文客户端">英文名</button></div>`}
         <button type="button" class="btn btn-primary btn-sm" data-sp-copy title="复制后在游戏技能队列里按 Ctrl+V 粘贴（一次最多 ${QUEUE_MAX} 项）">复制技能清单</button>
       </div></div>
     <div class="pi-table-wrap"><table class="pi-table sp-table">
-      <thead><tr><th class="num">#</th><th>技能</th><th class="num pi-hide-sm">技能点</th><th class="num">时长</th><th class="num pi-hide-sm">完成时间</th></tr></thead>
+      <thead><tr><th class="num">#</th><th>技能</th><th class="num pi-hide-sm">技能点</th><th class="num">时长</th><th class="num pi-hide-sm">完成时间</th>${canMove ? '<th class="sp-mv-td" aria-label="调整"></th>' : ''}</tr></thead>
       ${body}
     </table></div>
+    ${orderNote}
     ${E.length > limit ? `<button type="button" class="btn btn-ghost btn-sm sp-more" data-sp-all>显示全部 ${E.length} 项</button>` : ''}
   </div>`;
   return cards + remap + msHtml + list;
@@ -803,7 +910,10 @@ function onClick(e) {
   if (el('[data-sp-remap2]')) { P.opt.remap2 = !plan?.twoOn; save(); render(); return; }
   if (el('[data-sp-remap-on]')) { P.opt.remap = true; save(); render(); return; }
   if ((x = el('[data-sp-order]'))) { const t = findTarget(x); t.order = x.dataset.spOrder; save(); render(); return; }
-  if (el('[data-sp-clear]')) { P.targets = []; save(); render(); return; }
+  if (el('[data-sp-clear]')) { P.targets = []; P.manual = null; save(); render(); return; }
+  if ((x = el('[data-sp-sort]'))) { P.opt.order = x.dataset.spSort; P.manual = null; save(); render(); return; }
+  if (el('[data-sp-reset]')) { P.manual = null; save(); render(); return; }
+  if ((x = el('[data-sp-mv]'))) { moveEntry(x.closest('[data-sp-key]').dataset.spKey, x.dataset.spMv); return; }
   if (el('[data-sp-all]')) { P.showAll = true; render(); return; }
   if ((x = el('[data-sp-lang]'))) { P.opt.lang = x.dataset.spLang; save(); x.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === x)); return; }
   if (el('[data-sp-copy]')) { copyList(); return; }

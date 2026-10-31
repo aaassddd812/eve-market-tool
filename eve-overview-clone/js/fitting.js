@@ -3,12 +3,12 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v28';
+import * as FE from './fit-engine.js?v=v29';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v27';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
 import { initSim, mountSim } from './fit-sim.js?v=v30';
-import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v9';
+import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v10';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 import { makeFloat, pinBtn, closeBtn } from './float-pop.js?v=3';
@@ -915,7 +915,7 @@ function renderFit() {
     ${missing.length ? `<section class="fit-slots"><h4>缺少的技能<span>${missing.length}</span></h4><div class="fit-skill-list">${missing.map((m) => `<span>${app.esc(m.type?.name || '')} <b>${m.have} → ${m.need}</b></span>`).join('')}</div></section>` : ''}`;
 }
 
-// 曙光云计算：选择放进「云」的舰船，同船级（T1 / T2 / 海军型还要同种族）的舰船获得它们的云计算技能加成
+// 曙光云计算：选择放进「云」的舰船，同船级（T1 / T2 / 帝国海军型还要同种族）的舰船获得它们的云计算技能加成；带宽上限 100，装满即止
 function cloudHtml() {
   if (!F.data.cloud?.size) return '';
   const info = FE.cloudInfo(F.data, F.fit.ship);
@@ -929,12 +929,12 @@ function cloudHtml() {
     if (!byClass.has(g)) byClass.set(g, []);
     byClass.get(g).push(t);
   }
-  const options = [...byClass].sort((a, b) => a[0].localeCompare(b[0], 'zh')).map(([g, list]) => `<optgroup label="${app.esc(g)}">${list.sort((a, b) => a.name.localeCompare(b.name, 'zh')).map((t) => `<option value="${t.id}">${app.esc(t.name)}（带宽 ${F.data.cloud.get(t.id).bw}）</option>`).join('')}</optgroup>`).join('');
+  const options = [...byClass].sort((a, b) => a[0].localeCompare(b[0], 'zh')).map(([g, list]) => `<optgroup label="${app.esc(g)}">${list.sort((a, b) => a.name.localeCompare(b.name, 'zh')).map((t) => { const bw = F.data.cloud.get(t.id).bw; return `<option value="${t.id}"${used + bw > CLOUD_BW ? ' disabled' : ''}>${app.esc(t.name)}（带宽 ${bw}）</option>`; }).join('')}</optgroup>`).join('');
   const rows = info.map((c) => `<div class="fit-slot fit-cloud-row"><img src="${IMG(c.ship.id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(c.ship.name)}<small>带宽 ${c.bw}</small></span>
     <span class="fit-cloud-skills">${c.skills.map((k) => `<span class="${k.active ? 'is-on' : ''}" title="${cloudScope(k)}"><i>${app.esc(k.type?.name || '')}</i><b>${k.active ? '生效' : '不适用'}</b></span>`).join('')}</span>
     <button class="fit-remove" data-fit-cloud-remove="${c.ship.id}" aria-label="移除">×</button></div>`).join('');
   return `<section class="fit-slots"><h4>云计算<span class="${used > CLOUD_BW ? 'is-over' : ''}">带宽 ${used} / ${CLOUD_BW}${used > CLOUD_BW ? '（超出）' : ''}</span></h4>
-    ${rows}<div class="fit-slot is-empty"><select class="plain-select" data-fit-cloud-add aria-label="加入云计算的舰船"><option value="">加入云计算的舰船…</option>${options}</select></div></section>`;
+    ${rows}<div class="fit-slot is-empty"><select class="plain-select" data-fit-cloud-add aria-label="加入云计算的舰船"><option value="">${used >= CLOUD_BW ? '带宽已满' : `加入云计算的舰船…（剩余带宽 ${CLOUD_BW - used}）`}</option>${options}</select></div></section>`;
 }
 
 // 云计算技能的生效对象：写明了船级的按船级（不分种族），否则同船级

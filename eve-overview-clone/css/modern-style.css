@@ -6497,6 +6497,13 @@ td .sov-auto-tag { margin-left: 4px; }
 .sp-list .pi-table th { background: var(--bg-tertiary); }
 .sp-list .pi-table-wrap { max-height: none; border-radius: var(--radius-md); background: var(--bg-secondary); }
 .sp-more { align-self: center; }
+.sp-mv-td { width: 1%; padding-left: 0 !important; padding-right: 4px !important; }
+.sp-mv { display: flex; gap: 2px; opacity: 0.35; transition: opacity 0.15s; }
+.sp-table tr:hover .sp-mv, .sp-mv:focus-within { opacity: 1; }
+@media (hover: none) { .sp-mv { opacity: 0.8; } }
+.sp-mv .icon-btn { width: 24px; height: 24px; }
+.sp-mv .icon-btn svg { width: 14px; height: 14px; }
+.sp-list > .sp-hint { margin: 6px 2px 0; }
 .sp-note { margin-top: 8px; font-size: 0.75rem; color: var(--text-muted); }
 .sp-remap .sim-sec-head .sp-hint { margin: 0; }
 @media (max-width: 960px) { .sp-cols { grid-template-columns: minmax(0, 1fr); } }
