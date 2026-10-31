@@ -164,7 +164,7 @@ function startWorker(native) {
   S.since = Date.now();
   S.options = undefined;
   S.rows = []; S.people.clear(); S.gone.clear();
-  const w = new Worker(new URL('./local-worker.js?v=v9', import.meta.url), { type: 'module' });
+  const w = new Worker(new URL('./local-worker.js?v=v10', import.meta.url), { type: 'module' });
   S.worker = w;
   w.onmessage = onWorker;
   if (native) w.postMessage({ t: 'grab-mode' });
@@ -587,7 +587,9 @@ function optionsHtml() {
   if (T.manual) return '';
   const tip = '确认本地频道窗口露在外面、成员列表显示着（不要最小化 EVE）';
   if (S.options === null || S.options === undefined) return `<p class="ka-warn">还没找到本地频道：${tip}。正在截取可能的位置…</p>`;
-  if (!S.options.length) return `<p class="ka-warn">还没找到本地频道：${tip}。也可以点「手动框选」在截图上框出来</p>`;
+  // 一个像名单的地方都没有（比如本地只有一两个彩色图标）：直接让用户在截图上框出来
+  if (!S.options.length) return `<div class="ka-opt ka-stack lw-opts"><span><b>没认出本地频道</b><small>截一张游戏画面，把本地成员列表框出来就行（${tip}）</small></span>
+    <div class="ka-actions"><button class="btn btn-primary btn-sm" data-lw-pick>截图框选</button><button class="btn btn-ghost btn-sm" data-lw-reopt>重新截取</button></div></div>`;
   return `<div class="ka-opt ka-stack lw-opts"><span><b>没认出哪个是本地频道，下面哪个是？</b><small>点一下就用它；都不是的话点「都不是，自己框选」</small></span>
     <div class="lw-opt-grid">${S.options.map((o, i) => `<button type="button" class="lw-opt" data-lw-opt="${i}"><img src="${o.src}" alt="候选 ${i + 1}"></button>`).join('')}</div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-lw-pick>都不是，自己框选</button><button class="btn btn-ghost btn-sm" data-lw-reopt>重新截取</button></div></div>`;

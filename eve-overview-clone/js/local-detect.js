@@ -111,6 +111,11 @@ export function locate(frame, opts = {}) {
   }
   out.sort((a, b) => b.ben - a.ben || b.icons - a.icons);
   const best = out[0];
+  // 手动框选、框里彩色图标不够（白名多、人少）：框里的文字行就当名单
+  if (opts.within && (!best || best.ben < 0.5)) {
+    const B = boxList(frame, R);
+    if (B) return { found: true, region: regionOf(frame, B, R), candidates: out.length + 1, score: 0, by: 'box' };
+  }
   // 没认出「本」字：把最像名单的几列（图标多的在前）交给用户选
   if (!best || (!opts.within && best.ben < 0.5)) {
     const options = out.sort((a, b) => b.icons - a.icons).slice(0, 4).map((c) => regionOf(frame, c, R));
@@ -131,6 +136,33 @@ function textPitch(frame, ix, top, size) {
   }
   const d = starts.slice(1).map((y, i) => y - starts[i]).filter((v) => v >= size * 1.05 && v <= size * 2.2).sort((a, b) => a - b);
   return d.length ? d[d.length >> 1] : Math.round(size * 1.3);
+}
+
+// 框里的名单：逐像素行统计文字像素，连续有字的几行算一行（太矮的是分隔线）；第一行比下面靠左的是人数行（小人图标），跳过。
+// 名字左边对齐（取中位数），行距取相邻行起点间距的中位数（只有一行时按字高估），图标大小按行距估
+function boxList(frame, R) {
+  const W = frame.width, H = frame.height;
+  const xs = Math.max(0, R.x | 0), xe = Math.min(W, (R.x + R.w) | 0), ys = Math.max(0, R.y | 0), ye = Math.min(H, (R.y + R.h) | 0);
+  const lines = [];
+  let cur = null;
+  for (let y = ys; y <= ye; y++) {
+    if (y < ye && countIn(frame, xs, xe, y, y + 1, texty) > 0) { if (!cur) cur = { a: y, b: y }; cur.b = y; continue; }
+    if (cur && cur.b - cur.a >= 3) lines.push(cur);
+    cur = null;
+  }
+  for (const l of lines) {
+    l.left = xe;
+    for (let x = xs; x < xe; x++) if (countIn(frame, x, x + 1, l.a, l.b + 1, texty)) { l.left = x; break; }
+  }
+  const names = lines.length >= 2 && lines[0].left < lines[1].left - 3 ? lines.slice(1) : lines;
+  if (!names.length) return null;
+  const lefts = names.map((l) => l.left).sort((a, b) => a - b);
+  const nameL = lefts[lefts.length >> 1];   // 中位数：有的图标里有亮像素，那一行的左边会偏左
+  const d = names.slice(1).map((l, i) => l.a - names[i].a).sort((a, b) => a - b);
+  const pitch = d.length ? d[d.length >> 1] : Math.round((names[0].b - names[0].a + 1) * 1.15);
+  if (pitch < 8 || pitch > 40) return null;
+  const size = Math.max(6, Math.round(pitch * 0.77));
+  return { ix: Math.max(0, nameL - size - 2), top: names[0].a - 1, bottom: names[names.length - 1].a - 1, size, pitch, icons: 0 };
 }
 
 // 列表上方的频道标签里找「本」字，返回最高匹配度（交并比）
