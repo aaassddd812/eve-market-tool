@@ -62,6 +62,7 @@ const F = {               // 表单状态（保存在本地）
   share: 10,              // 买料加工的成交量上限（占日成交 %），0 不限
   ecus: 0,                // 采集星的采集控制器个数，0 = 自动（采集头放到 CPU / 电网上限）
   ecuYield: 0,            // 每个采集控制器的实际产量（P0/小时，游戏里采集程序显示的），0 = 按资源丰度估算
+  outTier: 0,             // 自动推荐只排某一级的最终产物：0 不限（收益最高的），1–4 = 只看 P1–P4
   level: 0                // 自产时每颗采集星直接产出的等级：0 自动，1 / 2 / 3 = 采齐所需 P0 在本星加工成 P1 / P2 / P3 再出口
 };
 
@@ -1237,7 +1238,7 @@ function renderSide() {
     return;
   }
   const recent = recentList().filter((id) => F.way !== 'buy' || tierOf(id) > 0);
-  const auto = `<button type="button" class="ind-side-item pi-side-auto${!F.target ? ' active' : ''}" data-pi-target="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>自动推荐</span><small>按日收益</small></button>`;
+  const auto = `<button type="button" class="ind-side-item pi-side-auto${!F.target ? ' active' : ''}" data-pi-target="0"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg><span>自动推荐</span><small>${F.outTier ? 'P' + F.outTier + ' · ' : ''}按日收益</small></button>`;
   const tree = [0, 1, 2, 3, 4].map((t) => {
     const ids = productsOfTier(t);
     if (!ids.length) return '';
@@ -1315,7 +1316,7 @@ function renderForm() {
       .sort((a, b) => cName(a).localeCompare(cName(b), 'zh'));
     return `<optgroup label="${TIER_NAMES[t]}">${ids.map((id) => `<option value="${id}"${F.target === id ? ' selected' : ''}>${ctx.esc(cName(id))}</option>`).join('')}</optgroup>`;
   }).join('');
-  const seg = (name, items, cur) => `<div class="segmented" role="group">${items.map(([v, label]) => `<button type="button" data-pi-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${label}</button>`).join('')}</div>`;
+  const seg = (name, items, cur, off = () => false) => `<div class="segmented" role="group">${items.map(([v, label]) => `<button type="button" data-pi-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}"${off(v) ? ' disabled' : ''}>${label}</button>`).join('')}</div>`;
   $('piForm').innerHTML = `
     <div class="pi-col">
     <div class="pi-field">
@@ -1325,6 +1326,7 @@ function renderForm() {
     <div class="pi-field">
       <label>目标产品</label>
       <select id="piTarget" class="pi-input"><option value="0"${!F.target ? ' selected' : ''}>自动推荐</option>${products}</select>
+      ${F.target ? '' : `<div class="pi-inline" title="自动推荐只排这一级的最终产物；自动 = 不限等级，按日收益排"><span>产物等级</span>${seg('outTier', [[0, '自动'], [1, 'P1'], [2, 'P2'], [3, 'P3'], [4, 'P4']], F.outTier || 0, (v) => buy && v && v <= (F.buyLevel || 0))}</div>`}
     </div>
     </div>
     <div class="pi-col">
@@ -1394,13 +1396,14 @@ function bind() {
     const set = e.target.closest('[data-pi-set]');
     if (set) {
       const key = set.dataset.piSet;
-      F[key] = ['jumps', 'restock', 'share', 'ecus', 'level', 'buyLevel'].includes(key) ? Number(set.dataset.v) : set.dataset.v;
+      F[key] = ['jumps', 'restock', 'share', 'ecus', 'level', 'buyLevel', 'outTier'].includes(key) ? Number(set.dataset.v) : set.dataset.v;
       if (key === 'way' && F.way === 'buy' && F.target && tierOf(F.target) === 0) F.target = 0;
       if (key === 'buyLevel' && F.target && tierOf(F.target) <= F.buyLevel) F.target = 0;   // 选中的产品做不了：回到自动推荐
+      if (key === 'buyLevel' && F.outTier && F.outTier <= F.buyLevel) F.outTier = 0;      // 产物等级不高于买料等级：不限
       if (key === 'whCls') F.whSystem = 0;
       saveForm();
       renderForm();
-      if (key === 'way' || key === 'buyLevel') renderSide();
+      if (key === 'way' || key === 'buyLevel' || key === 'outTier') renderSide();
       if (key !== 'mode' && R.area) run();
       return;
     }
@@ -1415,7 +1418,7 @@ function bind() {
   form.addEventListener('change', (e) => {
     const t = e.target;
     if (t.id === 'piRegion') F.region = Number(t.value);
-    else if (t.id === 'piTarget') { F.target = Number(t.value); renderSide(); }
+    else if (t.id === 'piTarget') { F.target = Number(t.value); saveForm(); renderForm(); renderSide(); return; }
     else if (t.dataset.piSec) F.sec[t.dataset.piSec] = t.checked;
     else if (t.dataset.piNum) {
       if (t.dataset.piNum === 'restock' && !t.value) return;
@@ -1480,6 +1483,7 @@ async function run() {
   if (F.target) plans = [plan(F.target, area)];
   else {
     plans = Object.keys(D.pi.commodities).map(Number).filter((id) => F.way === 'buy' ? D.schemByOut.has(id) : tierOf(id) === 0 || D.schemByOut.has(id))
+      .filter((id) => !F.outTier || tierOf(id) === F.outTier)
       .map((id) => plan(id, area)).filter((p) => !p.error && p.profit > 0)
       .sort((a, b) => b.profit - a.profit);
   }
@@ -1563,7 +1567,8 @@ function renderResult() {
   const box = $('piResult');
   const area = R.area;
   if (!R.plans.length) {
-    const hint = F.way === 'buy' && F.buyLevel ? `<p class="text-muted">买 P${F.buyLevel} 加工都不赚钱，或原料成交量太小；可以换个买料等级或选「自动」</p>` : '';
+    const hint = !F.target && F.outTier ? `<p class="text-muted">P${F.outTier} 产品在当前设置下都不赚钱；可以换个产物等级或选「自动」</p>`
+      : F.way === 'buy' && F.buyLevel ? `<p class="text-muted">买 P${F.buyLevel} 加工都不赚钱，或原料成交量太小；可以换个买料等级或选「自动」</p>` : '';
     box.innerHTML = areaSummary(area) + `<div class="pi-empty"><p>没有可行方案</p>${hint}</div>`;
     return;
   }
@@ -1584,7 +1589,7 @@ function renderResult() {
   box.innerHTML = `${areaSummary(area)}
     ${comboHtml(buyCombo())}
     ${R.plans.length > 1 ? `<div class="pi-card">
-      <div class="pi-card-head"><h3>推荐产品</h3><span class="text-muted">${priceNote}</span></div>
+      <div class="pi-card-head"><h3>${!F.target && F.outTier ? `P${F.outTier} 收益排名` : '推荐产品'}</h3><span class="text-muted">${priceNote}</span></div>
       <div class="pi-table-wrap"><table class="pi-table">
         <thead><tr><th>#</th><th>产品</th><th class="pi-hide-sm">方案</th><th class="num">日产量</th><th class="num pi-hide-sm">单价</th><th class="num">日净收益</th></tr></thead>
         <tbody>${rows}</tbody>

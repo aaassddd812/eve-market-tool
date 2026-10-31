@@ -1091,6 +1091,8 @@ button.stat-card:hover {
 }
 
 .segmented button:hover { color: var(--text-primary); }
+.segmented button:disabled { opacity: 0.4; cursor: not-allowed; }
+.segmented button:disabled:hover { color: inherit; }
 .segmented button.active { background: var(--bg-secondary); color: var(--text-primary); box-shadow: var(--shadow-sm); font-weight: 600; }
 
 .tabs-content { padding: var(--spacing-md); }
