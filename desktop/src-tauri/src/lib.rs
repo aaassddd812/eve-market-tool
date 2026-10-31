@@ -4,12 +4,26 @@
 // 内容（击杀预警、到价提醒、本地红名）由主窗口的网页经 BroadcastChannel 推过去；悬浮窗里点开的详情另开一个置顶窗口（float_detail）。
 // 本地红名在桌面版由 local_grab 直接截 EVE 窗口（capture.rs），不走浏览器共享屏幕（那样 Windows 会给游戏窗口加一圈黄框）。
 // 日志预警在桌面版由 logs_* 命令自动找、读 EVE 日志文件夹（logs.rs），不用在浏览器里选文件夹、每次重新授权。
+// 托盘：点主窗口 ✕ 先问最小化到托盘还是退出，可记住选择（tray.rs）。
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(desktop)]
 mod capture;
 #[cfg(desktop)]
 mod logs;
+#[cfg(desktop)]
+mod tray;
+
+// WebView2 启动参数：所有窗口必须一致（同一个数据目录只能用一套参数）。前三个是 wry 的默认值；
+// 后面关掉后台降速：主窗口最小化或藏到托盘时网页定时器照常跑，预警不会被拖慢
+#[cfg(windows)]
+const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-background-timer-throttling --disable-renderer-backgrounding --disable-backgrounding-occluded-windows";
+#[cfg(desktop)]
+fn browser_args<'a, R: tauri::Runtime, M: tauri::Manager<R>>(b: WebviewWindowBuilder<'a, R, M>) -> WebviewWindowBuilder<'a, R, M> {
+    #[cfg(windows)]
+    let b = b.additional_browser_args(BROWSER_ARGS);
+    b
+}
 
 const SITE: &str = "https://eve.navexor.top/";
 
@@ -24,22 +38,28 @@ pub fn run() {
     let builder = builder
         // 再次双击图标时切回已打开的窗口，不开第二个
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            use tauri::Manager;
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
+            tray::show_main(app);
         }))
-        // 记住窗口大小、位置与最大化状态
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // 记住窗口大小、位置与最大化状态（不记是否显示：藏在托盘时退出，下次启动也要显示出来；询问窗口不记）
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(tauri_plugin_window_state::StateFlags::all() - tauri_plugin_window_state::StateFlags::VISIBLE)
+                .with_denylist(&["close-ask"])
+                .build(),
+        )
         // 自动更新：启动时查 GitHub 发布仓库的 latest.json，有新版就弹窗询问
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, float_detail, update_check, capture::local_grab, capture::local_windows, logs::logs_dir, logs::logs_list, logs::logs_stat, logs::logs_read])
-        // 关掉主窗口就退出（悬浮窗不单独留着）
+        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, float_detail, update_check, capture::local_grab, capture::local_windows, logs::logs_dir, logs::logs_list, logs::logs_stat, logs::logs_read, tray::close_choice])
+        // 点主窗口 ✕：按设置藏到托盘 / 退出 / 先问（tray.rs）；主窗口真的关掉就退出（悬浮窗不单独留着）
         .on_window_event(|w, e| {
-            if w.label() == "main" && matches!(e, tauri::WindowEvent::Destroyed) {
-                tauri::Manager::app_handle(w).exit(0);
+            if w.label() != "main" {
+                return;
+            }
+            match e {
+                tauri::WindowEvent::CloseRequested { api, .. } => tray::on_close(w, api),
+                tauri::WindowEvent::Destroyed => tauri::Manager::app_handle(w).exit(0),
+                _ => {}
             }
         });
     builder
@@ -55,9 +75,13 @@ pub fn run() {
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(960.0, 600.0)
                 .center();
+            #[cfg(desktop)]
+            let win = browser_args(win);
             win.build()?;
             #[cfg(desktop)]
             {
+                // 托盘建不起来也照常启动（这时点关闭就直接退出）
+                let _ = tray::setup(app);
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     let _ = update_check(handle).await;
@@ -96,7 +120,7 @@ async fn float_open(app: tauri::AppHandle, webview: tauri::Webview, kind: String
     url.set_query(Some(&format!("kind={kind}")));
     url.set_fragment(None);
     let title: String = title.chars().take(40).collect();
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+    let b = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
         .title(title)
         .inner_size(340.0, 420.0)
         .min_inner_size(220.0, 140.0)
@@ -105,9 +129,8 @@ async fn float_open(app: tauri::AppHandle, webview: tauri::Webview, kind: String
         .shadow(false)
         .transparent(true)
         .always_on_top(true)
-        .skip_taskbar(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+        .skip_taskbar(true);
+    browser_args(b).build().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -180,16 +203,15 @@ async fn float_detail(app: tauri::AppHandle, webview: tauri::Webview, kind: Stri
     url.set_path("/float-detail.html");
     url.set_query(Some(&format!("kind={kind}&id={id}")));
     url.set_fragment(None);
-    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+    let b = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
         .title("详情")
         .inner_size(400.0, 600.0)
         .min_inner_size(300.0, 300.0)
         .decorations(false)
         .shadow(false)
         .always_on_top(true)
-        .skip_taskbar(true)
-        .build()
-        .map_err(|e| e.to_string())?;
+        .skip_taskbar(true);
+    browser_args(b).build().map_err(|e| e.to_string())?;
     Ok(())
 }
 

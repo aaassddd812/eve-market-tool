@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "close-ask",
+  "description": "点关闭按钮时弹出的询问窗口（本地页面 close.html）：只能回答最小化到托盘还是退出",
+  "windows": ["close-ask"],
+  "permissions": ["allow-close-choice"]
+}

@@ -10,9 +10,10 @@ Windows 10 / 11 桌面程序与安卓 App（Tauri 2，Windows 用系统自带的
   - 插件：系统通知（替换网页的 `window.Notification`）；仅桌面：单实例（再次双击切回已开窗口）、记住窗口位置与大小、自动更新。
 - `android/`：安卓工程补丁（工作流里 `tauri android init`、`tauri icon` 之后跑 `android/patch.sh`）：`MainActivity.kt` 让网页铺满全屏，并把状态栏 / 导航栏高度经 `EveApp` 交给网页（`app-init.js` 写到 `--sa-top` / `--sa-bottom`，安卓 WebView 不报 `env(safe-area-inset-*)`），键盘弹出时让出键盘高度；`res/` 是矢量自适应图标（背景铺满，图案缩在安全区里，各种遮罩形状都不裁）。
 - 日志预警（仅桌面，`src/logs.rs`）：`logs_dir` 自动找「文档\EVE\logs」（系统文档文件夹，含 OneDrive 重定向），`logs_list` / `logs_stat` / `logs_read` 只读地列出、读取 Chatlogs / Gamelogs 里的 .txt；网页 `intel.js` 把它们包成和浏览器文件夹句柄一样的接口，不用选文件夹、不用每次重新授权。
+- 托盘（仅桌面，`src/tray.rs`）：点主窗口 ✕ 时弹本地页面 `dist/close.html`（窗口 `close-ask`，权限只有 `allow-close-choice`，见 `capabilities/close-ask.json`）问「最小化到托盘 / 退出程序」，勾「记住我的选择」写到配置文件夹的 `close-action`（ask / tray / exit）；托盘右键菜单「点关闭按钮时」可以改回来。藏到托盘时网页照常运行（WebView2 关了后台降速，所有窗口用同一套启动参数 `BROWSER_ARGS`）。
 - 悬浮窗（仅桌面，`float_*` 命令）：网页点「悬浮窗」调 `float_open`，开一个置顶、无边框、透明背景、不占任务栏的窗口（标签 `float-<kind>`，加载本站 `float.html`），
   窗口里调 `float_drag`（拖动标题栏）、`float_pass`（鼠标穿透）、`float_close`、`float_focus_main`（点了详情切回主窗口）。远程网页调自定义命令要在 `build.rs` 的 AppManifest 里登记，
-  再在 `capabilities/default.json` 放行 `allow-float-*`。关掉主窗口时整个程序退出。
+  再在 `capabilities/default.json` 放行 `allow-float-*`。主窗口真正关掉（退出）时整个程序退出。
 - 自动更新（仅桌面，`lib.rs` 的 `check_update`）：启动时读 Releases 最新版的 `latest.json`（失败再读走 ghfast 镜像的 `latest-mirror.json`），版本比当前新就弹窗「现在更新 / 以后再说」，确认后下载安装包、校验签名、静默安装并重启；查不到更新或网络不通就静默跳过。网页内容本来就是线上最新的，只有壳（Rust、插件、权限）改动时才需要发新版。
 - `downloader/Downloader.cs`：下载器（.NET Framework 4.x WinForms，约 60 KB）。从 `aaassddd812/eve-tool-desktop` 的最新 Release 下载 `EVE-Tool-Setup.exe` 并启动安装；GitHub 连不上时依次改用 ghfast.top、gh-proxy.com 镜像；校验文件头与大小。
   网站「桌面版」弹窗提供的是 `eve-overview-clone/downloads/EVE-Tool-Downloader.exe`（Linux 上可用 `mcs -target:winexe -out:… -win32icon:src-tauri/icons/icon.ico -r:System.Windows.Forms.dll -r:System.Drawing.dll downloader/Downloader.cs` 重新编译）。
