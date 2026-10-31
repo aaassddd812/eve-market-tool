@@ -12,7 +12,7 @@
 //   锁定列表时就在、之后一直没有图标的只有一行时标 mine（当作自己）。
 // 发给主线程：{ t: 'status' } 定位状态，{ t: 'rows' } 当前名单（有变化或每秒一次），{ t: 'ocr', id, img } 新出现的人的名字截图，
 //   { t: 'options', list } 自动找不到时几个像名单的区域的截图（连同上方的频道标签），给用户选。
-import { locate, scanRows, sameRow, rowImage } from './local-detect.js?v=v5';
+import { locate, scanRows, sameRow, rowImage } from './local-detect.js?v=v6';
 
 const TICK = 100, WINDOW = 500, GONE = 1500, RELOCATE = 2000, HITS = 8, CONFIRM = 2000, PARK = 10 * 60e3;
 let mode = null;            // 'stream' | 'grab'

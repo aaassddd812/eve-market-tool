@@ -164,7 +164,7 @@ function startWorker(native) {
   S.since = Date.now();
   S.options = undefined;
   S.rows = []; S.people.clear(); S.gone.clear();
-  const w = new Worker(new URL('./local-worker.js?v=v10', import.meta.url), { type: 'module' });
+  const w = new Worker(new URL('./local-worker.js?v=v11', import.meta.url), { type: 'module' });
   S.worker = w;
   w.onmessage = onWorker;
   if (native) w.postMessage({ t: 'grab-mode' });
@@ -423,12 +423,14 @@ function lev(a, b) {
 }
 const cleanName = (s) => String(s || '').replace(/\s+/g, ' ').trim().replace(/^[^A-Za-z0-9]+|[^A-Za-z0-9]+$/g, '');
 
-// 名字 → 角色 ID：完整名字先查 ESI；查不到（文字识别认错一两个字母）或名字被截断时在本站按开头几个字母搜，
+// 名字 → 角色 ID：先按识别出的完整名字查 ESI；查不到（文字识别认错一两个字母）或名字被截断时在本站按开头几个字母搜，
 // 和识别结果最像（编辑距离最小、且在容许范围内）的只有一个才认；截断的名字只比较能看到的那一段。
 // 多个同样像的（常是同一人的一串小号）不猜：显示识别到的文字并标「…?」，免得显示别人的击杀记录
 async function identify(p) {
   let id = 0, cand = 0;
-  if (!p.clipped) id = (await ST.idsByName([p.raw])).get(p.raw.toLowerCase()) || 0;
+  // 判成截断的也先按完整名字查一次：几个名字碰巧一样长时会被误判成截断
+  id = (await ST.idsByName([p.raw])).get(p.raw.toLowerCase()) || 0;
+  if (id) p.clipped = false;
   if (!id) {
     const pre = (p.clipped ? p.raw.slice(0, -1) : p.raw).trim().toLowerCase();
     const tol = Math.max(1, Math.floor(pre.length * 0.2));

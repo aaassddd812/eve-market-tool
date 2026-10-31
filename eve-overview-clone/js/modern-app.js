@@ -3489,11 +3489,20 @@ async function getCharacterImplants() {
 async function esiAuthFetch(path, options = {}) {
   const token = await ensureEsiToken();
   const url = ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=' + SERVER.datasource;
-  const res = await fetch(url, {
-    method: options.method || 'GET',
-    headers: { Authorization: 'Bearer ' + token.access_token, 'Accept-Language': 'zh', ...(options.headers || {}) },
-    body: options.body
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method: options.method || 'GET',
+      headers: { Authorization: 'Bearer ' + token.access_token, 'Accept-Language': 'zh', ...(options.headers || {}) },
+      body: options.body
+    });
+  } catch (error) {
+    // 浏览器连不上 ESI（网络不通、被代理 / 广告拦截插件挡掉，或 ESI 出错时没带跨域头）：原样只有一句「Failed to fetch」
+    const host = new URL(ESI_BASE).host;
+    const e = new Error(`连不上 ${host}，请检查网络或代理、关掉拦截插件后点「刷新数据」重试（${error.message}）`);
+    e.network = true;
+    throw e;
+  }
   if (!res.ok) {
     // 保留 ESI 返回的错误说明（如缺少授权范围、装配数量已满）
     const error = new Error('ESI ' + res.status);
@@ -5810,7 +5819,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v15').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v16').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)

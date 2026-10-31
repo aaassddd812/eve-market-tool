@@ -283,14 +283,14 @@ export function scanRows(crop, reg) {
     // 名字那块的文字像素（签名）；滚动条的滑块（贯穿整行高度、1–2 像素宽的竖线）和它右边（窗口外的画面）不算文字。
     // 签名分三档：2 笔画（亮）、1 笔画边缘（抗锯齿，视频压缩时忽明忽暗）、0 背景；比对时只有笔画对背景才算不同
     const sig = new Uint8Array(nameW * h);
-    let on = 0, right = -1, peak = 0;
+    let on = 0, right = -1, peak = 0, ink = -1;   // ink：最靠右的亮笔画（背景亮点、渐隐不算）
     for (let x = 0; x < Math.min(nameW, sbLeft - nameX); x++) {
       if (sbCols.has(x + nameX)) continue;
       for (let yy = 0; yy < h; yy++) {
         const i = ((yi + yy) * W + x + nameX) * 4;
         if (texty(data[i], data[i + 1], data[i + 2])) {
           const mx = Math.max(data[i], data[i + 1], data[i + 2]);
-          if (mx >= 150) { sig[yy * nameW + x] = 2; on++; } else sig[yy * nameW + x] = 1;
+          if (mx >= 150) { sig[yy * nameW + x] = 2; on++; if (x > ink) ink = x; } else sig[yy * nameW + x] = 1;
           peak = Math.max(peak, mx);
         } else if (Math.max(data[i], data[i + 1], data[i + 2]) >= 90) sig[yy * nameW + x] = 1;
         if (x > right && dim(data[i], data[i + 1], data[i + 2])) right = x;
@@ -303,14 +303,16 @@ export function scanRows(crop, reg) {
       const i = ((yi + yy) * W + x + nameX) * 4;
       tail = Math.max(tail, data[i], data[i + 1], data[i + 2]);
     }
-    rows.push({ y: yi, cls: iconClass(crop, yi, h, iconW, pitch, size), sig, on, w: nameW, h, right, faded: right > 0 && tail < peak * 0.72 });
+    rows.push({ y: yi, cls: iconClass(crop, yi, h, iconW, pitch, size), sig, on, w: nameW, h, right, faded: right > 0 && tail < peak * 0.72, ink });
   }
   // 名字被截断：放不下的名字都停在同一条截断边附近。截断边 = 至少两行同时停住（±2 像素）的最靠右位置；
   // 截断处正好落在字间空隙时会早停几个像素，所以离截断边不到 0.6 个图标宽的都算；越过截断边的（背景亮点连上了）也算。
   // 只有一行被截断时靠结尾渐隐认出来
   const tol = Math.max(2, Math.round(size * 0.2));
   const rights = rows.map((r) => r.right).filter((x) => x > size * 4).sort((a, b) => b - a);
-  const edge = rights.find((x) => rights.filter((y) => y <= x && y >= x - tol).length >= 2) ?? Infinity;
+  let edge = rights.find((x) => rights.filter((y) => y <= x && y >= x - tol).length >= 2) ?? Infinity;
+  // 有名字的笔画明显越过这条边（超过一个图标宽）：只是几个名字碰巧一样长，不是截断边
+  if (rows.some((r) => r.ink > edge + size)) edge = Infinity;
   const near = edge - Math.round(size * 0.6);
   for (const r of rows) r.clipped = r.right > size * 4 && (r.right >= near || (r.faded && r.right >= rights[0] - tol));
   return { rows, phase };
