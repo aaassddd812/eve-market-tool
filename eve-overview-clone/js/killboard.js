@@ -309,21 +309,26 @@ export async function openKill(kill, options = {}) {
 const SERVICE_PRICE_NOTE = IS_TQ ? '总价值、掉落与摧毁价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）。'
   : `总价值、掉落与摧毁价值按${HUB.hub.name} 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取${SERVER.full}全服均价）。`;
 export function openServiceKill(id) {
-  return openKill(null, {
-    priceNote: SERVICE_PRICE_NOTE,
-    load: async () => {
-      const res = await fetch('/api/kb/kill/' + id + (IS_TQ ? '' : '?server=' + SERVER.id));
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || '击杀记录服务 ' + res.status);
-      for (const [k, v] of Object.entries(data.names || {})) if (v) names.set(Number(k), v);
-      const km = data.killmail;
-      const players = (km.attackers || []).filter((a) => a.character_id);
-      return {
-        kill: { ...km, zkb: { totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed, solo: players.length === 1, npc: !players.length, awox: false, locationID: null, valueLabel: IS_TQ ? '吉他中间价估值' : `${HUB.hub.name} 中间价估值` } },
-        prices: new Map(Object.entries(data.prices).map(([k, v]) => [Number(k), v]))
-      };
-    }
-  });
+  return openKill(null, { priceNote: SERVICE_PRICE_NOTE, load: () => loadServiceKill(id) });
+}
+// 悬浮窗（float-detail.html）里的击杀详情：主页面生成整页内容推过去；valSrc 为切换的估值价格来源
+export async function killDetail(id, valSrc = '') {
+  if (valSrc) app.valuation.set(valSrc);
+  const { kill } = await loadServiceKill(id);
+  const [val, insurance] = await Promise.all([killValuation(kill), app.getInsurance?.().catch(() => null), prepareKills([kill], { attackers: 'all' })]);
+  return { title: typeName(kill.victim.ship_type_id) + ' · 击杀详情', html: renderKill(kill, val, SERVICE_PRICE_NOTE, insurance?.get(kill.victim.ship_type_id)) };
+}
+async function loadServiceKill(id) {
+  const res = await fetch('/api/kb/kill/' + id + (IS_TQ ? '' : '?server=' + SERVER.id));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || '击杀记录服务 ' + res.status);
+  for (const [k, v] of Object.entries(data.names || {})) if (v) names.set(Number(k), v);
+  const km = data.killmail;
+  const players = (km.attackers || []).filter((a) => a.character_id);
+  return {
+    kill: { ...km, zkb: { totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed, solo: players.length === 1, npc: !players.length, awox: false, locationID: null, valueLabel: IS_TQ ? '吉他中间价估值' : `${HUB.hub.name} 中间价估值` } },
+    prices: new Map(Object.entries(data.prices).map(([k, v]) => [Number(k), v]))
+  };
 }
 
 function closeKill() {

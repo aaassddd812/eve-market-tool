@@ -7,7 +7,7 @@ import * as FE from './fit-engine.js?v=v29';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v27';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
-import { initSim, mountSim } from './fit-sim.js?v=v30';
+import { initSim, mountSim } from './fit-sim.js?v=v31';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v10';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
@@ -459,12 +459,39 @@ async function openTypeInfo(id, src = null) {
   if (!t) return;
   const body = $('fitInfoBody');
   const tabNow = body.dataset.open ? body.querySelector('[data-fi-tab].active')?.dataset.fiTab : null;
-  const meta = metaTag(t);
-  const isShip = t.category === FE.CAT.ship;
   const [names, info] = await Promise.all([dogmaNames(), fitInfo()]);
   if (infoFloat.id !== id) return;   // 读数据期间换了别的物品
   body.dataset.id = String(id);
   F.infoSrc = sourceType(src) === id ? src : null;
+  body.innerHTML = infoHtml(t, names, info, tabNow, Boolean(F.infoSrc));
+  body.dataset.open = '1';
+  body.querySelector('.fi-panes').scrollTop = 0;
+  infoDesc(id).then((text) => {
+    const el = $('fitInfoDesc');
+    if (el && body.dataset.id === String(id)) el.textContent = text;
+  });
+}
+// 物品描述（ESI，按界面语言）
+function infoDesc(id) {
+  const lang = window.I18N?.lang === 'en' ? 'en' : 'zh';
+  return app.fetchESI(`/universe/types/${id}/`, { headers: { 'Accept-Language': lang } }).then((d) => {
+    const text = String(d.description || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+    return text || (lang === 'en' ? 'No description' : '没有描述');
+  }).catch(() => '描述读取失败');
+}
+// 悬浮窗（float-detail.html）里的物品详情：主页面生成整页内容推过去（描述已填好，没有「替换」）
+export async function typeDetail(id) {
+  await ensureData();
+  const t = type(id);
+  if (!t) throw new Error('没有这个物品的数据');
+  const [names, info, desc] = await Promise.all([dogmaNames(), fitInfo(), infoDesc(id)]);
+  const html = infoHtml(t, names, info, null, false).replace('<div class="pi-loading">读取描述…</div>', app.esc(desc));
+  return { title: t.name, html: `<div class="fi-pop fi-float">${html}</div>` };
+}
+function infoHtml(t, names, info, tabNow, canSwap) {
+  const id = t.id;
+  const meta = metaTag(t);
+  const isShip = t.category === FE.CAT.ship;
   const rows = new Map();
   for (const [aid, v] of t.attrs) {
     const a = names.attrs[aid];
@@ -484,7 +511,7 @@ async function openTypeInfo(id, src = null) {
   // 替换后重新打开新物品时停在原来的标签页
   const first = tabs.some(([k]) => k === tabNow) ? tabNow : bonus && isShip ? 'bonus' : 'attrs';
   const pane = (key, html) => `<div class="fi-pane${key === first ? ' active' : ''}" data-fi-pane="${key}">${html}</div>`;
-  body.innerHTML = `<div class="fi-head">
+  return `<div class="fi-head">
       <img src="${IMG(id, isShip ? 'render' : 'icon', 128)}" alt="" width="72" height="72">
       <div class="fi-title"><span>${app.esc(F.data.groups.get(t.group)?.name || '')}${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${t.attrs.get(633) ? `<small>衍生等级 ${t.attrs.get(633)}</small>` : ''}</span>
         <h4>${app.esc(t.name)}</h4>${t.en && t.en !== t.name ? `<small translate="no">${app.esc(t.en)}</small>` : ''}</div>
@@ -494,17 +521,8 @@ async function openTypeInfo(id, src = null) {
     <div class="fi-panes">${pane('attrs', attrsHtml)}
     ${bonus ? pane('bonus', bonusHtml(bonus)) : ''}
     ${pane('skills', skillTreeHtml(t))}
-    ${variants.length > 1 ? pane('var', variantsHtml(variants, id, Boolean(F.infoSrc))) : ''}
+    ${variants.length > 1 ? pane('var', variantsHtml(variants, id, canSwap)) : ''}
     ${pane('desc', '<div class="fi-desc" id="fitInfoDesc" translate="no"><div class="pi-loading">读取描述…</div></div>')}</div>`;
-  body.dataset.open = '1';
-  body.querySelector('.fi-panes').scrollTop = 0;
-  const lang = window.I18N?.lang === 'en' ? 'en' : 'zh';
-  app.fetchESI(`/universe/types/${id}/`, { headers: { 'Accept-Language': lang } }).then((d) => {
-    const el = $('fitInfoDesc');
-    if (!el || body.dataset.id !== String(id)) return;
-    const text = String(d.description || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
-    el.textContent = text || (lang === 'en' ? 'No description' : '没有描述');
-  }).catch(() => { const el = $('fitInfoDesc'); if (el && body.dataset.id === String(id)) el.textContent = '描述读取失败'; });
 }
 
 // 舰船加成与衍生关系（fit-info.json，server/build_fit_info.py 由 SDE 生成），第一次打开详情时加载
@@ -932,7 +950,7 @@ function cloudHtml() {
   const options = [...byClass].sort((a, b) => a[0].localeCompare(b[0], 'zh')).map(([g, list]) => `<optgroup label="${app.esc(g)}">${list.sort((a, b) => a.name.localeCompare(b.name, 'zh')).map((t) => { const bw = F.data.cloud.get(t.id).bw; return `<option value="${t.id}"${used + bw > CLOUD_BW ? ' disabled' : ''}>${app.esc(t.name)}（带宽 ${bw}）</option>`; }).join('')}</optgroup>`).join('');
   const rows = info.map((c) => `<div class="fit-slot fit-cloud-row"><img src="${IMG(c.ship.id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(c.ship.name)}<small>带宽 ${c.bw}</small></span>
     <span class="fit-cloud-skills">${c.skills.map((k) => `<span class="${k.active ? 'is-on' : ''}" title="${cloudScope(k)}"><i>${app.esc(k.type?.name || '')}</i><b>${k.active ? '生效' : '不适用'}</b></span>`).join('')}</span>
-    <button class="fit-remove" data-fit-cloud-remove="${c.ship.id}" aria-label="移除">×</button></div>`).join('');
+    ${infoBtn(c.ship.id)}<button class="fit-remove" data-fit-cloud-remove="${c.ship.id}" aria-label="移除">×</button></div>`).join('');
   return `<section class="fit-slots"><h4>云计算<span class="${used > CLOUD_BW ? 'is-over' : ''}">带宽 ${used} / ${CLOUD_BW}${used > CLOUD_BW ? '（超出）' : ''}</span></h4>
     ${rows}<div class="fit-slot is-empty"><select class="plain-select" data-fit-cloud-add aria-label="加入云计算的舰船"><option value="">${used >= CLOUD_BW ? '带宽已满' : `加入云计算的舰船…（剩余带宽 ${CLOUD_BW - used}）`}</option>${options}</select></div></section>`;
 }
@@ -1028,7 +1046,7 @@ function implantsHtml(bound) {
   const rows = F.fit.implants.map((id) => {
     const t = type(id);
     const slot = t.attrs.get(IMPLANT_SLOT);
-    return `<div class="fit-slot"><img src="${IMG(id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(t.name)}<small>${slot ? '植入体槽位 ' + slot : '增效剂'}</small></span><button class="fit-remove" data-fit-implant-remove="${id}" aria-label="移除">×</button></div>`;
+    return `<div class="fit-slot"><img src="${IMG(id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(t.name)}<small>${slot ? '植入体槽位 ' + slot : '增效剂'}</small></span>${infoBtn(id)}<button class="fit-remove" data-fit-implant-remove="${id}" aria-label="移除">×</button></div>`;
   }).join('');
   return `<section class="fit-slots"><h4>植入体 / 增效剂<span><button class="link-btn" data-fit-imp>智能推荐</button>${bound ? '<button class="link-btn" data-fit-my-implants>导入当前角色的植入体</button>' : ''}</span></h4>
     ${rows}<div class="fit-slot is-empty" data-fit-empty-implant><span class="fit-slot-icon"></span><span>从左侧「植入体」中添加</span></div></section>`;

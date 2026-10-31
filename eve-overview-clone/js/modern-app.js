@@ -8,7 +8,7 @@ import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v3';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v7';
+import * as FF from './float-feed.js?v=v8';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
@@ -801,7 +801,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v93').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v95').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -982,7 +982,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v34').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v35').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance, valuation
     });
@@ -1581,7 +1581,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v17').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v18').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -5694,7 +5694,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v27').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v28').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5747,7 +5747,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v11').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v12').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
@@ -5769,7 +5769,14 @@ function initKillAlerts() {
     showToast,
     openKill: async (id) => { if (!id) return; const kb = await loadKillboard(); kb.openServiceKill(id); },
     openItem: (id) => selectItem(id),
-    openChar: (id) => { if (id) location.hash = '#kb/character/' + id; }
+    openChar: (id) => { if (id) location.hash = '#kb/character/' + id; },
+    openHash: (hash) => { location.hash = hash; },
+    // 悬浮窗里点了物品 / 击杀：详情在悬浮窗那边显示，这里只生成内容
+    detail: async (kind, id, opt) => {
+      if (kind === 'item') return (await loadFittingModule()).typeDetail(id);
+      if (kind === 'kill') return (await loadKillboard()).killDetail(id, opt.val);
+      throw new Error('kind');
+    }
   });
   FF.setLoader('kill', loadKillAlert);
   FF.setLoader('price', () => loadWatchBoard().then((m) => m.startFloat()));

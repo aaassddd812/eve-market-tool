@@ -1,7 +1,7 @@
 // EVE 辅助工具桌面版 / 安卓版：一个窗口直接打开线上网站（永远是最新版），
 // 页面加载前注入 app-init.js：标记运行环境（桌面版网页把菜单栏放到左侧；安卓版用手机布局），外部链接交给系统浏览器打开。
 // 桌面版另有悬浮窗（float_* 命令）：网页里点「悬浮窗」开一个置顶、无边框、半透明的小窗口，加载本站 float.html，
-// 内容（击杀预警、到价提醒、本地红名）由主窗口的网页经 BroadcastChannel 推过去。
+// 内容（击杀预警、到价提醒、本地红名）由主窗口的网页经 BroadcastChannel 推过去；悬浮窗里点开的详情另开一个置顶窗口（float_detail）。
 // 本地红名在桌面版由 local_grab 直接截 EVE 窗口（capture.rs），不走浏览器共享屏幕（那样 Windows 会给游戏窗口加一圈黄框）。
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
@@ -32,7 +32,7 @@ pub fn run() {
         // 自动更新：启动时查 GitHub 发布仓库的 latest.json，有新版就弹窗询问
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, update_check, capture::local_grab, capture::local_windows])
+        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, float_detail, update_check, capture::local_grab, capture::local_windows])
         // 关掉主窗口就退出（悬浮窗不单独留着）
         .on_window_event(|w, e| {
             if w.label() == "main" && matches!(e, tauri::WindowEvent::Destroyed) {
@@ -144,7 +144,7 @@ async fn float_close(window: tauri::WebviewWindow) -> Result<(), String> {
     window.destroy().map_err(|e| e.to_string())
 }
 
-// 悬浮窗里点了击杀 / 物品：主窗口打开详情，切到前面
+// 悬浮窗 / 详情窗口里要在主窗口打开的（市场价格、人物页等）：主窗口切到前面
 #[cfg(desktop)]
 #[tauri::command]
 fn float_focus_main(app: tauri::AppHandle) {
@@ -154,6 +154,40 @@ fn float_focus_main(app: tauri::AppHandle) {
         let _ = w.show();
         let _ = w.set_focus();
     }
+}
+
+// 悬浮窗里点开的击杀 / 物品详情：点了才开一个置顶窗口（标签 float-detail）加载本站 float-detail.html，跟网页里的详情弹窗一样，
+// 无边框、页面自己的标题栏拖动和 ✕ 关闭（float_drag / float_close），关掉就没了；还开着时再点别的就换内容并切到前面。内容由主窗口的网页生成。
+#[cfg(desktop)]
+#[tauri::command]
+async fn float_detail(app: tauri::AppHandle, webview: tauri::Webview, kind: String, id: u64) -> Result<(), String> {
+    use tauri::Manager;
+    if kind != "item" && kind != "kill" {
+        return Err("kind".into());
+    }
+    let label = "float-detail";
+    if let Some(w) = app.get_webview_window(label) {
+        let _ = w.eval(format!("window.__floatDetail && window.__floatDetail('{kind}', {id})"));
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        return Ok(());
+    }
+    let mut url = webview.url().map_err(|e| e.to_string())?;
+    url.set_path("/float-detail.html");
+    url.set_query(Some(&format!("kind={kind}&id={id}")));
+    url.set_fragment(None);
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+        .title("详情")
+        .inner_size(400.0, 600.0)
+        .min_inner_size(300.0, 300.0)
+        .decorations(false)
+        .shadow(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 // 查更新：启动时自动查一次，失败（断网、GitHub 访问不了）就静默跳过，不打扰用户；

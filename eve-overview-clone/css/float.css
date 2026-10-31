@@ -126,3 +126,7 @@ html.fl-passing .fl-btn[data-fl-pass] { background: var(--accent); color: #fff; 
 .fl-n b { font-size: 18px; }
 .fl-n.r b { color: var(--danger); }
 .fl-n.w b { color: var(--text); }
+/* 点开的击杀 / 物品详情（float-detail.html）叠在悬浮窗上 */
+.fl-detail { position: fixed; inset: 0; z-index: 20; background: rgb(var(--bg)); border-radius: inherit; overflow: hidden; }
+html.fl-native .fl-detail { border-radius: 10px; }
+.fl-detail iframe { display: block; width: 100%; height: 100%; border: 0; }

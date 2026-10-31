@@ -219,7 +219,8 @@ async function resolveRow(row) {
   }
   prepare(row);
   renderSides();
-  schedule(400);
+  // 支援舰队的船读完装配不重新布阵（否则正在进行的战斗会被重置），由 fleetChanged 处理
+  if (SIDES.some((s) => S.sides[s].includes(row))) schedule(400);
 }
 
 function emptyFit(ship) {

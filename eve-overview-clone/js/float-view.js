@@ -2,6 +2,7 @@
 // 只负责显示：内容由主页面（float-feed.js）经 BroadcastChannel 推过来，这里不请求任何数据。
 // ?kind=kill 击杀预警 / price 到价提醒 / local 本地红名；?pip=1 在网页画中画的 iframe 里（标题栏可以切换内容）。
 // 桌面版原生窗口（有 __TAURI_INTERNALS__ 且不是画中画）：无边框，标题栏拖动窗口，另有透明度、鼠标穿透、关闭按钮；和画中画一样顶部可以切换内容。
+// 点击击杀 / 物品：在悬浮窗这边看详情（float-detail.html）——桌面版点了才开一个置顶小窗、关掉就关了（float_detail 命令，旧版没有就叠在本窗口里），网页画中画叠在本窗口里。
 
 const q = new URLSearchParams(location.search);
 const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名' };
@@ -165,14 +166,36 @@ document.addEventListener('click', (e) => {
     return;
   }
   const kill = e.target.closest('[data-fl-kill]');
-  if (kill) { post({ t: 'open-kill', id: Number(kill.dataset.flKill) }); invoke('float_focus_main'); return; }
+  if (kill) { openDetail('kill', Number(kill.dataset.flKill)); return; }
   const ch = e.target.closest('[data-fl-char]');
   if (ch) { post({ t: 'open-char', id: Number(ch.dataset.flChar) }); invoke('float_focus_main'); return; }
   const item = e.target.closest('[data-fl-item]');
-  if (item) { post({ t: 'open-item', id: Number(item.dataset.flItem) }); invoke('float_focus_main'); return; }
+  if (item) { openDetail('item', Number(item.dataset.flItem)); return; }
   if (e.target.closest('[data-fl-close]')) { invoke('float_close'); return; }
   if (e.target.closest('[data-fl-alpha]')) { const i = ALPHAS.indexOf(alpha()); setAlpha(ALPHAS[(i + 1) % ALPHAS.length]); return; }
   if (e.target.closest('[data-fl-pass]')) setPass(true);
+});
+
+// ---------- 详情 ----------
+const DETAIL_V = 'v2';   // 跟 float-detail.html 里 float-detail.js 的版本一致
+function openDetail(kind, id) {
+  if (!(id > 0)) return;
+  if (ipc) { ipc.invoke('float_detail', { kind, id }).catch(() => overlay(kind, id)); return; }
+  overlay(kind, id);
+}
+// 叠在悬浮窗里的详情
+function overlay(kind, id) {
+  let box = document.querySelector('.fl-detail');
+  if (box) { box.querySelector('iframe').contentWindow.postMessage({ t: 'show', kind, id }, location.origin); return; }
+  box = document.createElement('div');
+  box.className = 'fl-detail';
+  box.innerHTML = `<iframe src="float-detail.html?kind=${kind}&id=${id}&v=${DETAIL_V}" title="详情"></iframe>`;
+  document.body.append(box);
+}
+window.addEventListener('message', (e) => {
+  if (e.origin !== location.origin) return;
+  if (e.data?.t === 'detail-close') document.querySelector('.fl-detail')?.remove();
+  else if (e.data?.t === 'focus-main') invoke('float_focus_main');
 });
 
 function alpha() { let a = 1; try { a = Number(localStorage.getItem(ALPHA_KEY)) || 1; } catch { /* 忽略 */ } return ALPHAS.includes(a) ? a : 1; }
