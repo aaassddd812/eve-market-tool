@@ -96,6 +96,7 @@ const ISOTOPE_ZH = { 16274: '氦同位素', 17887: '氧同位素', 17888: '氮�
 const ROUTE_COLORS = { gate: 0xffc400, jump: 0xff7a45 };
 const ROUTE_FLAGS = [['shortest', '最短路线'], ['secure', '安全优先'], ['insecure', '低安优先']];
 const FW_STATE_ZH = { uncontested: '未争夺', contested: '争夺中', vulnerable: '可被夺取', captured: '已被占领' };
+const INCURSION_COLOR = '#ff2bd6';   // 入侵星系：鲜艳的品红，在暗色星图上一眼能看到
 const INCURSION_STATE_ZH = { established: '已建立', mobilizing: '动员中', withdrawing: '撤退中' };
 
 // ---------- 工具 ----------
@@ -439,7 +440,7 @@ function computeLayer() {
       case 'distance': { const h = M.distance.hops[s.i]; c = h < 0 ? DIM_COLOR : DISTANCE_COLORS[DISTANCE_BUCKETS.findIndex(([lo, hi]) => h >= lo && h <= hi)]; break; }
       case 'adm': { const a = M.live.adm.get(s.id); c = a ? ADM_COLORS[Math.min(6, Math.max(1, Math.floor(a.vulnerability_occupancy_level || 1)))] : DIM_COLOR; break; }
       case 'campaigns': c = campaignSystems.has(s.id) ? '#ff6b3d' : DIM_COLOR; break;
-      case 'incursions': c = infested.has(s.id) ? '#b45cff' : DIM_COLOR; break;
+      case 'incursions': c = infested.has(s.id) ? INCURSION_COLOR : DIM_COLOR; break;
       case 'fw': { const f = M.live.fw.get(s.id); c = f ? factionColor(f.occupier_faction_id) : DIM_COLOR; break; }
       default: c = secColor(s.sec);
     }
@@ -447,6 +448,18 @@ function computeLayer() {
   }
   layerCache = { max, colors, infested };
   applyColors();
+}
+
+// 萨沙入侵：选「入侵」图层或地址 #map/incursions 时，镜头对准所有入侵星系、展开颜色说明里的入侵列表
+function showIncursions() {
+  if (M.layer !== 'incursions') setLayer('incursions');
+  setPanel('legend', true, false);   // 入侵列表在颜色说明里
+  const all = M.live.incursions.flatMap((inc) => inc.infested_solar_systems.map((id) => M.byId.get(id)?.i)).filter((i) => i != null);
+  if (all.length) fitTo(all, 1.6);
+  else app.showToast('现在没有萨沙入侵', 'info');
+}
+function layerFromHash() {
+  if (/^#map\/incursions\b/.test(location.hash) && M.layer !== 'incursions') showIncursions();
 }
 
 function setLayer(layer) {
@@ -1128,13 +1141,15 @@ function renderLegend() {
       const set = new Set(inc.infested_solar_systems.map((id) => M.byId.get(id)?.i).filter((i) => i != null));
       const key = 'inc:' + inc.constellation_id;
       add(key, set);
-      const staging = M.byId.get(inc.staging_solar_system_id);
-      rows.push(legendRow({
-        logo: `https://images.evetech.net/corporations/${inc.faction_id}/logo?size=32`,
-        label: constellationName(inc.constellation_id) + ' · ' + regionName(M.constellations.get(inc.constellation_id)?.region),
-        sub: `${zh(INCURSION_STATE_ZH, inc.state)} · 影响力 ${(inc.influence * 100).toFixed(0)}%${inc.has_boss ? ' · 首领出现' : ''}${staging ? ' · 集结：' + staging.name : ''}`,
-        count: set.size, key
-      }));
+      const pct = Math.round(inc.influence * 100);
+      const active = M.infoIncursion === inc.constellation_id && !$('mapInfo').hidden ? ' active' : '';
+      rows.push(`<button class="legend-row inc-row${active}" data-inc="${inc.constellation_id}" title="查看入侵详情">
+        <img src="https://images.evetech.net/corporations/${inc.faction_id}/logo?size=32" alt="" width="20" height="20" loading="lazy">
+        <span class="legend-label">${app.esc(incursionTitle(inc))}
+          <small>${app.esc(zh(INCURSION_STATE_ZH, inc.state))}${inc.has_boss ? ' · 首领出现' : ''} · ${set.size} 个星系</small>
+          <span class="inc-bar" title="萨沙影响力 ${pct}% · 玩家压制 ${100 - pct}%"><i style="width:${pct}%"></i><b></b></span></span>
+        <span class="legend-count inc-pct">${pct}%</span>
+      </button>`);
     }
   } else if (M.layer === 'fw') {
     const byFaction = new Map();
@@ -1328,7 +1343,9 @@ function bindSidebar() {
   });
   $('mapSidebar').addEventListener('click', (e) => {
     const layer = e.target.closest('[data-layer]');
-    if (layer) { setLayer(layer.dataset.layer); return; }
+    if (layer) { if (layer.dataset.layer === 'incursions') showIncursions(); else setLayer(layer.dataset.layer); return; }
+    const incRow = e.target.closest('[data-inc]');
+    if (incRow) { selectIncursion(Number(incRow.dataset.inc)); app.closeDrawer(); return; }
     const hlRow = e.target.closest('[data-hl]');
     if (hlRow) { toggleHighlight(hlRow.dataset.hl); return; }
     if (e.target.closest('[data-hl-clear]')) { M.highlight = null; M.highlightKey = null; renderLegend(); applyColors(); return; }
@@ -2688,6 +2705,7 @@ function clearJumpRange() {
 function closeInfo() {
   $('mapInfo').hidden = true;
   M.selected = null;
+  if (M.infoIncursion != null) { M.infoIncursion = null; if (M.layer === 'incursions') renderLegend(); }
   if (location.hash.startsWith('#map')) history.replaceState(null, '', location.pathname);
   if (M.layer === 'distance') { computeLayer(); renderLegend(); }
   invalidate();
@@ -2713,6 +2731,7 @@ function hopsBetween(a, b) {
 function selectSystem(i, center) {
   M.selected = i;
   M.infoRegion = null;
+  M.infoIncursion = null;
   if (center) centerOn(i);
   renderSystemInfo(M.systems[i]);
   history.replaceState(null, '', '#map=' + M.systems[i].id);   // 可分享的链接
@@ -2867,6 +2886,7 @@ function selectRegion(id) {
   const r = M.regions.get(id);
   if (!r) return;
   M.selected = null;
+  M.infoIncursion = null;
   fitTo(r.systems, 1.1);
   const counts = { 高安: 0, 低安: 0, '00': 0 };
   const owners = new Map();
@@ -2902,6 +2922,71 @@ function selectRegion(id) {
   if (SERVER.kb) loadPanelKills(`regionID/${id}/`, (kills) => [...kills].sort((a, b) => b.zkb.totalValue - a.zkb.totalValue).slice(0, 6),
     () => M.selected == null && M.infoRegion === id && !$('mapInfo').hidden);
   invalidate();
+}
+
+// ---------- 萨沙入侵详情 ----------
+// 颜色说明里点一处入侵：镜头对准该星座、高亮受影响星系，信息面板显示状态、影响力、集结星系与受影响星系列表
+const INCURSION_STATE_NOTE = {
+  established: '入侵已站稳，星座里各类入侵站点陆续刷出',
+  mobilizing: '入侵进入中段，站点照常刷新',
+  withdrawing: '入侵即将结束，结束后星座恢复正常'
+};
+function incursionTitle(inc) {
+  const secs = [...new Set(inc.infested_solar_systems.map((id) => M.byId.get(id)).filter(Boolean).map((x) => secClass(x.sec)))];
+  return constellationName(inc.constellation_id) + ' · ' + regionName(M.constellations.get(inc.constellation_id)?.region) + (secs.length ? '（' + secs.join(' / ') + '）' : '');
+}
+function selectIncursion(cid) {
+  const inc = M.live.incursions.find((x) => x.constellation_id === cid);
+  if (!inc) return;
+  const key = 'inc:' + cid;
+  if (M.highlightKey !== key) toggleHighlight(key);   // 高亮并对准受影响星系
+  M.selected = null;
+  M.infoRegion = null;
+  M.infoIncursion = cid;
+  renderIncursionInfo(inc);
+  renderLegend();
+  invalidate();
+}
+function renderIncursionInfo(inc) {
+  const pct = Math.round(inc.influence * 100);
+  const systems = inc.infested_solar_systems.map((id) => M.byId.get(id)).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+  const staging = M.byId.get(inc.staging_solar_system_id);
+  const region = M.constellations.get(inc.constellation_id)?.region;
+  const hops = (s) => (M.myLocation == null ? null : hopsBetween(M.myLocation, s.i));
+  const hopTxt = (s) => { const h = hops(s); return h == null ? '' : h < 0 ? '无法通过星门到达' : h === 0 ? '你在这里' : '距你 ' + h + ' 跳'; };
+  const counts = { 高安: 0, 低安: 0, '00': 0 };
+  for (const s of systems) counts[secClass(s.sec)] += 1;
+  $('mapInfo').innerHTML = `
+    <div class="map-info-head">
+      <img class="map-info-star" src="https://images.evetech.net/corporations/${inc.faction_id}/logo?size=64" alt="" width="44" height="44">
+      <div class="map-info-title"><h3>${app.esc(constellationName(inc.constellation_id))}</h3>
+        <p>萨沙入侵 · <button class="link-btn" data-info-region="${region}">${app.esc(regionName(region))}</button> · ${systems.length} 个星系</p></div>
+      <button class="map-info-close" data-info-close aria-label="关闭">×</button>
+    </div>
+    <div class="inc-detail">
+      <div class="inc-detail-row"><span class="inc-state ${app.esc(inc.state)}">${app.esc(zh(INCURSION_STATE_ZH, inc.state))}</span>${inc.has_boss ? '<span class="inc-state boss">首领出现</span>' : ''}</div>
+      <p class="map-info-note"><span>${app.esc(INCURSION_STATE_NOTE[inc.state] || '')}</span>${inc.has_boss ? '<span>；首领站点（母舰）已出现，打掉后入侵结束</span>' : ''}</p>
+      <div class="inc-influence"><div><span class="sansha">萨沙影响力 <b>${pct}%</b></span><span class="player">玩家压制 <b>${100 - pct}%</b></span></div>
+        <span class="inc-bar big"><i style="width:${pct}%"></i><b></b></span>
+        <p class="map-info-note">影响力越高，星座里的负面效果越强（护盾、装甲、伤害、跃迁等被削弱）；打完入侵站点会降低影响力，降到 0 时首领站点出现。</p></div>
+    </div>
+    ${staging ? `<div class="map-neighbors"><span>集结星系</span><div>
+      <button class="nbr-chip" data-sys="${staging.i}"><i style="background:${secColor(staging.sec)}"></i>${app.esc(staging.name)} ${secDisplay(staging.sec).toFixed(1)}${hopTxt(staging) ? `<small>${hopTxt(staging)}</small>` : ''}</button></div></div>` : ''}
+    <div class="map-neighbors"><span>受影响星系 · <span class="sec-hi">高安 ${counts['高安']}</span> · <span class="sec-lo">低安 ${counts['低安']}</span> · <span class="sec-null">00 ${counts['00']}</span></span><div>${systems.map((s) =>
+      `<button class="nbr-chip" data-sys="${s.i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)} ${secDisplay(s.sec).toFixed(1)}${s.id === inc.staging_solar_system_id ? '<small>集结</small>' : ''}</button>`).join('')}</div></div>
+    <div class="map-info-actions">
+      ${staging ? `<button class="btn" data-route-to="${staging.i}">集结星系设为终点</button>
+      <button class="btn btn-ghost" data-game-dest="${staging.id}" data-game-name="${app.esc(staging.name)}" title="在游戏里把集结星系设为自动导航目的地（角色需在线）">游戏内设目的地</button>
+      <button class="btn btn-ghost" data-copy="${app.esc(staging.name)}">复制集结星系</button>` : ''}
+    </div>
+    ${SERVER.kb ? `<div class="map-kills">
+      <div class="map-kills-head"><span>星座最近击杀</span><a href="https://zkillboard.com/constellation/${inc.constellation_id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
+      <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
+    </div>` : ''}`;
+  $('mapInfo').hidden = false;
+  const cid = inc.constellation_id;
+  if (SERVER.kb) loadPanelKills(`constellationID/${cid}/`, (kills) => kills.slice(0, 8),
+    () => M.selected == null && M.infoIncursion === cid && !$('mapInfo').hidden);
 }
 
 function bindInfo() {
@@ -2956,6 +3041,10 @@ export function initStarMap(context) {
     computeLayer();
     renderLegend();
     if (M.selected != null) renderSystemInfo(M.systems[M.selected]);
+    else if (M.infoIncursion != null && !$('mapInfo').hidden) {
+      const inc = M.live.incursions.find((x) => x.constellation_id === M.infoIncursion);
+      if (inc) renderIncursionInfo(inc);
+    }
     btn.disabled = false;
     btn.classList.remove('spinning');
   });
@@ -2990,7 +3079,8 @@ export async function showStarMap() {
       computeLayer();
       renderLegend();
       $('mapLoading').hidden = true;
-      focusFromHash();
+          focusFromHash();
+      layerFromHash();
       startLiveKills();
       LOC.off = false;
       startLocPoll();
@@ -3015,6 +3105,7 @@ export async function showStarMap() {
   // 从其他页面跳转过来（如会战提醒「在星图查看」）：定位到地址栏里的星系
   const target = /^#map=(\d+)/.exec(location.hash);
   if (target && M.byId.get(Number(target[1]))?.i !== M.selected) focusFromHash();
+  layerFromHash();
   if (M.selected != null) history.replaceState(null, '', '#map=' + M.systems[M.selected].id);
   if (Date.now() - M.live.loadedAt > LIVE_TTL && M.systems.length) {
     await loadLive();

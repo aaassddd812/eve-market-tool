@@ -19,8 +19,10 @@ const BR = {
   data: null, key: '',       // 当前结果与对应的查询
   parties: new Map(),        // 势力 id -> { id, kind, pilots:Set, kills:Set, losses, lost }
   side: new Map(),           // 势力 id -> 'A' | 'B'（未分配不记录）
-  view: 'A'                  // 窄屏下显示哪一方的明细
+  view: 'A',                 // 窄屏下显示哪一方的明细
+  pq: '', pside: 'all', pall: false   // 参战玩家：查询（名字或角色 ID）、只看哪一方、显示全部
 };
+const PILOT_LIMIT = 100;
 
 export function initBr(context) {
   ctx = context;
@@ -285,6 +287,8 @@ function summarize() {
   };
   BR.pilotShips = new Map();   // 角色 -> Set(舰船)
   BR.pilotParty = new Map();   // 角色 -> 势力
+  BR.pilotStats = new Map();   // 角色 -> { kills: Set(击杀), losses, lost }
+  const stat = (char) => { if (!BR.pilotStats.has(char)) BR.pilotStats.set(char, { kills: new Set(), losses: 0, lost: 0 }); return BR.pilotStats.get(char); };
   const addShip = (char, ship, pid) => {
     if (!char) return;
     BR.pilotParty.set(char, pid);
@@ -296,13 +300,14 @@ function summarize() {
     const vp = party(vCorp, vAlliance);
     vp.losses += 1;
     vp.lost += value;
-    if (vChar) vp.pilots.add(vChar);
+    if (vChar) { vp.pilots.add(vChar); const st = stat(vChar); st.losses += 1; st.lost += value; }
     addShip(vChar, ship, vp.id);
     const atkParties = new Set();
     for (const [char, corp, alliance, aship] of att) {
       const ap = party(corp, alliance);
       ap.pilots.add(char);
       ap.kills.add(id);
+      if (char) stat(char).kills.add(id);
       atkParties.add(ap.id);
       addShip(char, aship, ap.id);
     }
@@ -412,8 +417,11 @@ function renderResult() {
     ${unassigned.length ? `<section class="kb-br-col kb-br-third">
       <h4>未分配 / 第三方<span>${unassigned.length} 个势力</span></h4>
       <div class="kb-br-parties">${unassigned.map((p) => partyRow(p, null)).join('')}</div>
-    </section>` : ''}`;
+    </section>` : ''}
+    ${pilotsSection()}`;
   box.onclick = onResultClick;
+  // 参战玩家查询：只重画名单（整页重画会丢掉输入框的焦点）
+  box.oninput = (e) => { if (e.target.matches('[data-br-pq]')) { BR.pq = e.target.value; $('brPilots').innerHTML = pilotsBody(); } };
   if (BR.replay) mountReplay($('brReplay'), replayModel(A, B)); else stopReplay();
   drawTimeline();
   observeChart();
@@ -512,6 +520,51 @@ function sideColumn(s, st) {
     <h4>损失<span>${st.ships + st.pods} · ${ctx.app.formatISK(st.lost)} ISK</span></h4>
     <div>${losses ? `<div class="table-scroll kb-br-table"><table class="pc-mini-table kb-br-losses"><tbody>${losses}</tbody></table></div>${st.losses.length > 200 ? `<p class="text-muted kb-br-none">仅显示前 200 条</p>` : ''}` : '<p class="text-muted kb-br-none">没有损失</p>'}</div>
   </section>`;
+}
+
+// ---------- 参战玩家 ----------
+// 每名飞行员：所属势力与阵营、开过的舰船（不含太空舱）、参与的击杀、自己的损失；按阵营、参与击杀排序。
+// 查询框认名字（包含即可）或角色 ID；ID 不在这场战斗里时给出人物页链接
+function pilotsSection() {
+  const side = (c) => BR.side.get(BR.pilotParty.get(c)) || '';
+  const counts = { all: BR.pilotStats.size, A: 0, B: 0 };
+  for (const c of BR.pilotStats.keys()) { const s = side(c); if (s) counts[s] += 1; }
+  return `<section class="kb-br-col kb-br-pilots">
+    <h4>参战玩家<span>${ctx.app.formatNumber(BR.pilotStats.size)} 人</span></h4>
+    <div class="kb-br-ptools">
+      <label class="search-box kb-br-psearch"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="search" data-br-pq value="${ctx.app.esc(BR.pq)}" placeholder="查玩家：名字或角色 ID" autocomplete="off" spellcheck="false"></label>
+      <div class="segmented" role="group" aria-label="只看哪一方">${[['all', '全部'], ['A', 'A 方'], ['B', 'B 方']].map(([k, l]) => `<button data-br-pside="${k}" class="${BR.pside === k ? 'active' : ''}">${l}<small>${counts[k]}</small></button>`).join('')}</div>
+    </div>
+    <div id="brPilots">${pilotsBody()}</div>
+  </section>`;
+}
+function pilotsBody() {
+  const { esc, formatISK, formatNumber } = ctx.app;
+  const q = BR.pq.trim(), ql = q.toLowerCase(), qid = /^\d{5,}$/.test(q) ? Number(q) : 0;
+  const side = (c) => BR.side.get(BR.pilotParty.get(c)) || '';
+  let list = [...BR.pilotStats.keys()].filter((c) => BR.pside === 'all' || side(c) === BR.pside);
+  if (q) list = list.filter((c) => c === qid || String(ctx.partyName(c) || '').toLowerCase().includes(ql));
+  const order = { A: 0, B: 1, '': 2 };
+  list.sort((a, b) => order[side(a)] - order[side(b)] || BR.pilotStats.get(b).kills.size - BR.pilotStats.get(a).kills.size || BR.pilotStats.get(b).lost - BR.pilotStats.get(a).lost);
+  if (!list.length) {
+    return `<p class="text-muted kb-br-none">${q ? `这场战斗里没有「${esc(q)}」` : '没有玩家'}${qid ? ` · <a class="kb-link" href="#kb/character/${qid}">查看角色 ${qid} 的击杀记录</a>` : ''}</p>`;
+  }
+  const shown = BR.pall || q ? list : list.slice(0, PILOT_LIMIT);
+  const rows = shown.map((c) => {
+    const st = BR.pilotStats.get(c), s = side(c), party = BR.pilotParty.get(c);
+    const kind = BR.parties.get(party)?.kind || 'corporation';
+    const ships = [...(BR.pilotShips.get(c) || [])];
+    return `<tr>
+      <td class="kb-br-pilot"><img src="${ctx.avatar('character', c, 64)}" alt="" width="28" height="28" loading="lazy"><span>${ctx.entityLink('character', c)}<small translate="no">${party ? esc(ctx.partyName(party)) : ''}</small></span></td>
+      <td>${s ? `<i class="kb-br-badge ${s === 'A' ? 'side-a' : 'side-b'}">${s}</i>` : '<span class="text-muted">—</span>'}</td>
+      <td class="kb-br-pships">${ships.slice(0, 6).map((t) => `<img src="${ctx.IMG(`types/${t}/icon`, 32)}" alt="" width="22" height="22" loading="lazy" title="${esc(ctx.typeName(t))}">`).join('')}${ships.length > 6 ? `<small>+${ships.length - 6}</small>` : ''}${ships.length === 1 ? `<small class="kb-br-pship1">${esc(ctx.typeName(ships[0]))}</small>` : ''}</td>
+      <td class="num">${st.kills.size || ''}</td>
+      <td class="num${st.losses ? ' lost' : ''}">${st.losses ? `${st.losses}<small>${formatISK(st.lost)}</small>` : ''}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="table-scroll kb-br-table"><table class="pc-mini-table kb-br-ptable"><thead><tr><th>玩家</th><th>阵营</th><th>舰船</th><th class="num">参与击杀</th><th class="num">损失</th></tr></thead><tbody>${rows}</tbody></table></div>` +
+    (shown.length < list.length ? `<button class="btn btn-ghost btn-sm kb-br-pmore" data-br-pall>显示全部 ${formatNumber(list.length)} 人</button>` : '');
 }
 
 // ---------- 战况走势图 ----------
@@ -678,6 +731,13 @@ function onResultClick(e) {
   }
   if (el('[data-br-share]')) { ctx.app.copyText(location.origin + location.pathname + hashFor(), '战场统计链接已复制'); return; }
   if ((x = el('[data-br-view]'))) { BR.view = x.dataset.brView; renderResult(); return; }
+  if ((x = el('[data-br-pside]'))) {
+    BR.pside = x.dataset.brPside;
+    x.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === x));
+    $('brPilots').innerHTML = pilotsBody();
+    return;
+  }
+  if (el('[data-br-pall]')) { BR.pall = true; $('brPilots').innerHTML = pilotsBody(); return; }
   if ((x = el('[data-br-chart]'))) {
     BR.chart = x.dataset.brChart;
     x.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === x));

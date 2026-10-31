@@ -1,5 +1,5 @@
 // ===== 本地日志（右上角铃铛「预警」弹窗的第二个标签页）：敌情频道预警、频道关键词监控、游戏日志监控 =====
-// 默认关闭。用户主动选择 EVE 日志文件夹（Documents\EVE\logs）后，浏览器用 File System Access API 只读地读取聊天记录（Chatlogs）与游戏日志（Gamelogs）：
+// 默认关闭。桌面版自动找到 EVE 日志文件夹（Documents\EVE\logs，壳的 logs_* 命令）；网页版由用户主动选择后，浏览器用 File System Access API 只读地读取聊天记录（Chatlogs）与游戏日志（Gamelogs）：
 //   文件只在本机浏览器里读取，不会上传；只有电脑版 Chrome / Edge（86 以上）等 Chromium 浏览器支持，Firefox、Safari 和手机浏览器不支持。
 //   文件夹授权保存在本浏览器（IndexedDB），下次打开网页时浏览器可能要求再点一次「恢复监听」重新授权。
 // 敌情频道：勾选的频道里有人报星系名 → 判断与我的距离（星门跳数）→ 在范围内时提示音 / 网页卡片 / 系统通知，星图上标红；
@@ -31,7 +31,9 @@ const LOC_SCOPE = 'esi-location.read_location.v1';
 const POLL = 2000, SCAN = 20000, LOC_POLL = 30000;
 const LOCAL_NAMES = ['local', '本地'];
 const subs = new Set();
-export const supported = () => typeof window.showDirectoryPicker === 'function';
+// 桌面版（1.0.14 起）：壳的 logs_* 命令自动找、读「文档\EVE\logs」，不用选文件夹、不用每次重新授权
+const IPC = window.__EVE_DESKTOP__ ? window.__TAURI_INTERNALS__ : null;
+export const supported = () => typeof window.showDirectoryPicker === 'function' || Boolean(IPC);
 export const settings = () => T;
 export function onChange(fn) { subs.add(fn); }
 function notify() { for (const fn of subs) { try { fn(); } catch (e) { console.error(e); } } renderPanel(); }
@@ -57,6 +59,40 @@ function idb(mode, fn) {
 const idbGet = (k) => idb('readonly', (st) => st.get(k)).catch(() => null);
 const idbSet = (k, v) => idb('readwrite', (st) => st.put(v, k)).catch(() => null);
 
+// ---------- 桌面版：壳自动找到的日志文件夹，包成和浏览器文件夹句柄一样的接口（entries / getFile / slice），扫描、轮询照旧 ----------
+async function nativeDir() {
+  if (!IPC) return null;
+  let path = null;
+  try { path = await IPC.invoke('logs_dir'); } catch { return null; }   // 旧客户端没有这个命令
+  if (!path) return null;
+  const file = (sub, name) => ({
+    kind: 'file', name,
+    getFile: async () => {
+      const size = await IPC.invoke('logs_stat', { sub, name });
+      return { size, slice: (a, b) => ({ arrayBuffer: () => IPC.invoke('logs_read', { sub, name, offset: a, len: Math.max(0, b - a) }) }) };
+    }
+  });
+  const sub = (name) => ({
+    kind: 'directory', name,
+    async *entries() { for (const [n] of await IPC.invoke('logs_list', { sub: name })) yield [n, file(name, n)]; }
+  });
+  return {
+    kind: 'directory', name: path, native: true,
+    queryPermission: async () => 'granted', requestPermission: async () => 'granted',
+    getDirectoryHandle: async (name) => { await IPC.invoke('logs_list', { sub: name }); return sub(name); }   // 没有这个子文件夹时抛错
+  };
+}
+async function useNative(dir) {
+  S.dir = dir;
+  S.perm = 'granted';
+  S.files.clear();
+  T.picked = false;
+  save();
+  await resolveDirs(dir);
+  await scan(true);
+  if (!T.on) update({ on: true }); else start();
+}
+
 // ---------- 初始化 ----------
 export async function initIntel(context) {
   ctx = context;
@@ -67,7 +103,10 @@ export async function initIntel(context) {
   ST.onStandings(renderPanel);
   AM.registerSource('intel', { label: '本地日志', on: () => T.mail, set: (on) => update({ mail: on }) });
   if (!supported()) return;
-  S.dir = await idbGet('dir');
+  // 桌面版优先用自动找到的文件夹；用户自己选过别的文件夹（picked）就用选的
+  const auto = await nativeDir();
+  S.dir = (!T.picked && auto) || (await idbGet('dir')) || auto;
+  if (S.dir?.native) { S.perm = 'granted'; await resolveDirs(S.dir).catch(() => {}); }
   if (T.on && S.dir) resume(false);
 }
 
@@ -90,6 +129,8 @@ async function pickFolder() {
     await resolveDirs(dir);
     if (!S.chat && !S.game) { ctx.showToast('这个文件夹里没有 Chatlogs / Gamelogs，请选择 Documents\\EVE\\logs', 'error', 5000); return; }
     await idbSet('dir', dir);
+    T.picked = true;
+    save();
     S.perm = 'granted';
     S.files.clear();
     await scan(true);
@@ -541,8 +582,8 @@ function drawPanel() {
     <div class="ka-top"><span class="ka-status${status().on ? ' on' : ''}"><i></i>${ctx.esc(status().text)}</span></div>
     <p class="ka-note">只在本机读取日志，不会上传</p>
     ${sec('日志文件夹', `<div class="ka-list">
-      <div class="ka-opt"><span><b>${S.dir ? ctx.esc(S.dir.name) : '未选择'}</b><small>${S.dir ? `聊天记录 ${S.chat ? '✓' : '✗'} · 游戏日志 ${S.game ? '✓' : '✗'}` : `选 <code>${window.I18N?.lang === 'en' ? 'Documents' : '文档'}\\EVE\\logs</code>`}</small></span>
-        <span class="ka-ctl">${S.dir && S.perm !== 'granted' ? '<button class="btn btn-ghost btn-sm" data-in-resume>恢复监听</button>' : ''}<button class="btn btn-primary btn-sm" data-in-pick>${S.dir ? '重新选择' : '选择文件夹'}</button></span></div>
+      <div class="ka-opt"><span><b translate="no">${S.dir ? ctx.esc(S.dir.name) : '未选择'}</b><small>${S.dir ? `${S.dir.native ? '自动找到 · ' : ''}聊天记录 ${S.chat ? '✓' : '✗'} · 游戏日志 ${S.game ? '✓' : '✗'}` : IPC ? '没有自动找到，请手动选择 EVE 日志文件夹' : `选 <code>${window.I18N?.lang === 'en' ? 'Documents' : '文档'}\\EVE\\logs</code>`}</small></span>
+        <span class="ka-ctl">${S.dir && S.perm !== 'granted' ? '<button class="btn btn-ghost btn-sm" data-in-resume>恢复监听</button>' : ''}${IPC && !S.dir?.native ? '<button class="btn btn-ghost btn-sm" data-in-auto>自动识别</button>' : ''}<button class="btn btn-primary btn-sm" data-in-pick>${S.dir ? '重新选择' : '选择文件夹'}</button></span></div>
       ${sw('on', '开启本地日志监听')}
     </div>`)}
     ${sec('敌情频道', `<div class="ka-list">
@@ -610,6 +651,7 @@ function addWord(key, value) {
 async function onClick(e) {
   const t = (sel) => e.target.closest(sel);
   if (t('[data-in-pick]')) { pickFolder(); return; }
+  if (t('[data-in-auto]')) { nativeDir().then((d) => (d ? useNative(d) : ctx.showToast('没有找到 EVE 日志文件夹（文档\\EVE\\logs），请手动选择', 'error', 5000))); return; }
   if (t('[data-in-resume]')) {
     if (!T.on) { T.on = true; save(); }
     resume(true);
@@ -645,7 +687,11 @@ async function onChangeEvt(e) {
       const p = await Notification.requestPermission().catch(() => 'denied');
       if (p !== 'granted') { set.checked = false; ctx.showToast('浏览器没有允许通知', 'error'); return; }
     }
-    if (key === 'on' && set.checked && !S.dir) { set.checked = false; pickFolder(); return; }
+    if (key === 'on' && set.checked && !S.dir) {
+      const d = await nativeDir();
+      if (d) { useNative(d); return; }
+      set.checked = false; pickFolder(); return;
+    }
     if (key === 'mail' && set.checked && !ctx.tokenInfo()) { set.checked = false; ctx.showToast('游戏内邮件需要先在「个人中心」绑定 ESI', 'error', 4000); return; }
     if (key === 'on' && set.checked && S.perm !== 'granted') { T.on = true; save(); resume(true); return; }
     update({ [key]: set.checked });

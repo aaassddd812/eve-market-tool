@@ -3,10 +3,13 @@
 // 桌面版另有悬浮窗（float_* 命令）：网页里点「悬浮窗」开一个置顶、无边框、半透明的小窗口，加载本站 float.html，
 // 内容（击杀预警、到价提醒、本地红名）由主窗口的网页经 BroadcastChannel 推过去；悬浮窗里点开的详情另开一个置顶窗口（float_detail）。
 // 本地红名在桌面版由 local_grab 直接截 EVE 窗口（capture.rs），不走浏览器共享屏幕（那样 Windows 会给游戏窗口加一圈黄框）。
+// 日志预警在桌面版由 logs_* 命令自动找、读 EVE 日志文件夹（logs.rs），不用在浏览器里选文件夹、每次重新授权。
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(desktop)]
 mod capture;
+#[cfg(desktop)]
+mod logs;
 
 const SITE: &str = "https://eve.navexor.top/";
 
@@ -32,7 +35,7 @@ pub fn run() {
         // 自动更新：启动时查 GitHub 发布仓库的 latest.json，有新版就弹窗询问
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, float_detail, update_check, capture::local_grab, capture::local_windows])
+        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, float_detail, update_check, capture::local_grab, capture::local_windows, logs::logs_dir, logs::logs_list, logs::logs_stat, logs::logs_read])
         // 关掉主窗口就退出（悬浮窗不单独留着）
         .on_window_event(|w, e| {
             if w.label() == "main" && matches!(e, tauri::WindowEvent::Destroyed) {

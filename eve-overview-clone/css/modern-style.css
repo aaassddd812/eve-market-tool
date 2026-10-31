@@ -2063,11 +2063,36 @@ td.loc {
 .map-owner strong { font-size: 0.875rem; font-weight: 600; }
 
 .map-status { margin-top: 8px; padding: 6px 10px; border-radius: var(--radius-sm); font-size: 0.75rem; }
-.map-status.incursion { color: #b45cff; background: rgba(180, 92, 255, 0.12); }
+.map-status.incursion { color: #ff2bd6; background: rgba(255, 43, 214, 0.12); }
 .map-status.fw { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); }
 .map-status.adm { color: var(--buy-color); background: var(--buy-soft); }
 .map-status.campaign { color: #ff6b3d; background: rgba(255, 107, 61, 0.12); }
 .map-status.mine { color: var(--accent-primary); background: var(--accent-soft); }
+/* 萨沙入侵：颜色说明里的影响力进度条与入侵详情面板 */
+/* 左段品红 = 萨沙影响力，右段青色 = 剩下的部分（玩家打站点压下去的） */
+.inc-bar { display: flex; gap: 2px; height: 4px; margin-top: 5px; }
+.inc-bar i, .inc-bar b { display: block; height: 100%; border-radius: 2px; }
+.inc-bar i { flex: none; background: linear-gradient(90deg, #ff7ae6, #ff2bd6); }
+.inc-bar b { flex: 1; min-width: 0; background: linear-gradient(90deg, #12b8d6, #3fe0f5); }
+.inc-bar.big { height: 10px; margin: 6px 0 2px; }
+.inc-bar.big i, .inc-bar.big b { border-radius: 5px; }
+.inc-bar.big i { box-shadow: 0 0 8px rgba(255, 43, 214, 0.45); }
+.inc-bar.big b { box-shadow: 0 0 8px rgba(18, 184, 214, 0.4); }
+.legend-row.inc-row { align-items: center; padding-top: 7px; padding-bottom: 7px; }
+.legend-row.inc-row .legend-label small { white-space: nowrap; }
+.inc-pct { font-weight: 600; color: #ff2bd6; }
+.inc-detail { margin-top: 12px; padding: 12px; border-radius: var(--radius-md); background: rgba(255, 43, 214, 0.08); }
+.inc-detail .map-info-note { margin-top: 6px; }
+.inc-detail-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.inc-state { padding: 2px 10px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; color: #fff; background: #ff2bd6; }
+.inc-state.mobilizing { background: #e0780b; }
+.inc-state.withdrawing { background: var(--text-muted); }
+.inc-state.boss { background: var(--sell-color); }
+.inc-influence { margin-top: 12px; }
+.inc-influence > div { display: flex; justify-content: space-between; align-items: baseline; font-size: 0.8125rem; color: var(--text-secondary); }
+.inc-influence > div b { font-size: 1.125rem; font-variant-numeric: tabular-nums; }
+.inc-influence .sansha b { color: #ff2bd6; }
+.inc-influence .player b { color: #12b8d6; }
 
 .map-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 12px; }
 .map-stat { padding: 8px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); text-align: center; }
@@ -5542,30 +5567,32 @@ td .sov-auto-tag { margin-left: 4px; }
 .ind-pi-link:hover { background: color-mix(in srgb, var(--success) 12%, transparent); }
 
 /* ===== 资产：净值趋势 / 清仓小助手 ===== */
-.nw-card { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-secondary); }
+.nw-card { margin: 12px 0; padding: 14px 16px; border-radius: var(--radius-lg, 12px); background: var(--bg-secondary); box-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.06)); }
 .nw-head { display: flex; align-items: baseline; gap: 6px 14px; flex-wrap: wrap; }
 .nw-head h3 { margin: 0; font-size: 0.9375rem; }
-.nw-head > b { font-size: 1.0625rem; font-variant-numeric: tabular-nums; }
-.nw-delta { font-size: 0.75rem; font-variant-numeric: tabular-nums; }
-.nw-plot { position: relative; height: 170px; margin: 12px 0 0; }
-.nw-chart { display: block; width: 100%; height: 100%; overflow: visible; }
-.nw-grid { stroke: var(--border-primary); stroke-width: 1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
-.nw-line { fill: none; stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
-.nw-ylab { position: absolute; left: 0; transform: translateY(-100%); font-size: 0.6875rem; color: var(--text-muted); font-variant-numeric: tabular-nums; pointer-events: none; }
-.nw-dot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--accent-primary); border: 1.5px solid var(--bg-secondary); cursor: default; }
-.nw-dot:hover { transform: scale(1.5); }
-.nw-axis { display: flex; justify-content: space-between; font-size: 0.6875rem; color: var(--text-muted); margin-top: 4px; }
-.nw-total { stroke: var(--accent-primary); stroke-width: 2.2; }
-.nw-asset { stroke: var(--buy-color); }
-.nw-wallet { stroke: var(--warning); }
-.nw-orders { stroke: var(--violet); }
-.nw-legend { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 0.75rem; color: var(--text-secondary); margin-top: 4px; }
-.nw-key { display: inline-flex; align-items: center; gap: 4px; }
-.nw-key i { width: 12px; height: 3px; border-radius: 2px; background: currentColor; }
-.nw-key.nw-total i { background: var(--accent-primary); }
-.nw-key.nw-asset i { background: var(--buy-color); }
-.nw-key.nw-wallet i { background: var(--warning); }
-.nw-key.nw-orders i { background: var(--violet); }
+.nw-head > b { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.nw-delta { padding: 1px 8px; border-radius: 999px; font-size: 0.75rem; font-variant-numeric: tabular-nums; background: var(--bg-tertiary); }
+/* 当前构成：资产 / 订单 / 钱包 */
+.nw-mix { margin: 12px 0 4px; }
+.nw-mix-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--bg-tertiary); }
+.nw-mix-bar i { display: block; height: 100%; }
+.nw-mix-bar i + i { margin-left: 2px; }
+.nw-mix-keys { display: flex; gap: 4px 16px; flex-wrap: wrap; margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.nw-mix-keys span { display: inline-flex; align-items: center; gap: 5px; }
+.nw-mix-keys span i { width: 8px; height: 8px; border-radius: 2px; }
+.nw-mix-keys b { color: var(--text-primary); font-weight: 600; }
+.nw-mix .nw-s, .nw-mix-keys .nw-s i { background: var(--buy-color); }
+.nw-mix .nw-o, .nw-mix-keys .nw-o i { background: var(--violet); }
+.nw-mix .nw-w, .nw-mix-keys .nw-w i { background: var(--warning); }
+.nw-mix-keys span.nw-s, .nw-mix-keys span.nw-o, .nw-mix-keys span.nw-w { background: none; }
+.nw-trend { margin-top: 10px; }
+.nw-foot { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 0.75rem; color: var(--text-secondary); margin-top: 2px; }
+.nw-key { display: inline-flex; align-items: center; gap: 5px; }
+.nw-key i { width: 10px; height: 10px; border-radius: 3px; }
+.nw-key.bal i { height: 3px; border-radius: 2px; background: var(--accent-primary); }
+.nw-key.inc i { background: var(--buy-color); }
+.nw-key.out i { background: var(--sell-color); }
+.nw-foot .text-muted { margin-left: auto; font-size: inherit; }
 /* 清仓小助手：概览卡 → 筛选 → 出售计划（按交易中心分组）→ 物品表 */
 .clr-hero { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: center; gap: 16px 28px; margin: 4px 0 14px; padding: 18px 20px; border-radius: var(--radius-lg, 12px); background: var(--bg-secondary); box-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.06)); }
 .clr-hero-intro h3 { margin: 0; font-size: 1.25rem; }
@@ -7227,6 +7254,7 @@ td .sov-auto-tag { margin-left: 4px; }
 html.is-desktop { --header-h: 0px; --rail-w: 212px; }
 html.is-desktop.rail-mini { --rail-w: 64px; }
 html.is-desktop .app-shell { flex-direction: row; }
+html.is-desktop .app-body { min-width: 0; }   /* 左右排时主区域不能被里面最宽的内容撑开（否则窗口窄时右边的内容被截掉） */
 html.is-desktop .app-header { width: var(--rail-w); height: auto; flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 10px 10px; border-bottom: 0; border-right: 1px solid var(--border-primary); transition: width var(--transition-fast); }
 html.is-desktop .header-brand { padding: 2px 6px 4px; }
 html.is-desktop .app-header .header-brand .brand-name { display: inline; }
@@ -7409,3 +7437,46 @@ html.is-app .desktop-dl-btn, html.is-app [data-mnav-act="desktopDlBtn"] { displa
 .ka-history small.ka-hist-line, .ka-hist-line { display: block; font-size: 0.75rem; color: var(--text-muted); white-space: normal; }
 .ka-hist-line .k { color: var(--buy-color); }
 .ka-hist-line .l { color: var(--sell-color); }
+
+/* 个人中心 · 钱包：每日余额与收支（kb-charts.js 的 drawWallet，沿用 .kb-br-plot 图表样式） */
+.wallet-chart .kb-br-chart-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; margin-bottom: 8px; }
+.wallet-chart .kb-br-chart-head h4 { margin: 0; font-size: 0.9375rem; }
+.wallet-chart .kb-br-chart-head h4 small { margin-left: 8px; font-size: 0.75rem; font-weight: 400; color: var(--text-muted); }
+.wallet-chart .kb-chart-note { margin-left: auto; font-size: 0.75rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.wl-legend { display: flex; gap: 12px; font-size: 0.75rem; color: var(--text-secondary); }
+.wl-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.wl-legend i { width: 10px; height: 10px; border-radius: 3px; }
+.wl-legend .bal i { height: 3px; border-radius: 2px; background: var(--accent-primary); }
+.wl-legend .inc i { background: var(--buy-color); }
+.wl-legend .out i { background: var(--sell-color); }
+.wallet-chart .kb-br-plot .area { fill: url(#wlArea); }
+.nw-trend .area { fill: url(#nwArea); }
+.nw-card .kb-br-plot .ln.bal { stroke: var(--accent-primary); stroke-width: 2.25; }
+.nw-card .kb-br-plot .dot.bal { fill: var(--accent-primary); stroke: var(--bg-secondary); stroke-width: 1.5; }
+.nw-card .kb-br-plot .hl-dot { fill: var(--accent-primary); stroke: var(--bg-secondary); stroke-width: 2; }
+.nw-card .kb-br-plot .bar.inc { fill: var(--buy-color); opacity: 0.85; }
+.nw-card .kb-br-plot .bar.out { fill: var(--sell-color); opacity: 0.85; }
+.nw-card .kb-br-tip .inc { color: var(--buy-color); }
+.nw-card .kb-br-tip .out { color: var(--sell-color); }
+.nw-trend .kb-br-tip .part { color: var(--text-secondary); }
+
+/* 战场统计 · 参战玩家 */
+.kb-br-pilots { margin-top: 12px; }
+.kb-br-ptools { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.kb-br-psearch { flex: 1 1 240px; max-width: 360px; }
+.kb-br-ptools .segmented small { margin-left: 4px; font-size: 0.6875rem; color: var(--text-muted); }
+.kb-br-ptable td { vertical-align: middle; }
+.kb-br-pilot { display: flex; align-items: center; gap: 8px; min-width: 180px; }
+.kb-br-pilot img { border-radius: 50%; flex: none; }
+.kb-br-pilot span { display: flex; flex-direction: column; min-width: 0; }
+.kb-br-pilot small { font-size: 0.6875rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-br-ptable .kb-br-badge { width: 20px; height: 20px; font-size: 0.6875rem; }
+.kb-br-pships { white-space: nowrap; }
+.kb-br-pships > * { vertical-align: middle; }
+.kb-br-pships img { border-radius: 4px; vertical-align: middle; margin-right: 2px; }
+.kb-br-table .kb-br-pships small { display: inline; margin-left: 4px; font-size: 0.75rem; color: var(--text-secondary); }
+.kb-br-ptable td.num small { display: block; font-size: 0.6875rem; color: var(--text-muted); }
+.kb-br-ptable td.lost { color: var(--sell-color); }
+.kb-br-pmore { margin-top: 8px; }
+
+/* 星图 · 萨沙入侵按钮（右下角按钮组里，带当前入侵处数） */

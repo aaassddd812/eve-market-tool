@@ -939,7 +939,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v58').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v59').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -996,7 +996,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v59').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v60').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -2998,6 +2998,7 @@ const RAIL_GROUPS = [
   ['space', '宇宙与战斗', ['sim', 'war', 'sov', 'wh']]
 ];
 // 桌面版左侧菜单：入口分组、每组可折叠（记在本机）；底部「收起 / 展开」整栏只留图标。返回同步当前页高亮的函数
+const RAIL_NARROW = 1100;
 function initRail(header, nav) {
   let folded = {};
   try { folded = JSON.parse(localStorage.getItem('eve-rail-fold') || '{}') || {}; } catch { /* 默认全展开 */ }
@@ -3030,12 +3031,26 @@ function initRail(header, nav) {
     btn.setAttribute('aria-label', btn.title);
     btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/><path d="${mini ? 'm13 10 2 2-2 2' : 'm15 10-2 2 2 2'}"/></svg>`;
   };
+  // 窗口窄（< RAIL_NARROW）时自动收起，给内容让出位置（网页的窄屏样式按整个窗口宽度判断，不知道左边被菜单占了 212px）；
+  // 窄窗口下手动点「展开」就保持展开，直到窗口变宽再变窄
+  let opened = false;
+  const apply = () => {
+    let pref = '';
+    try { pref = localStorage.getItem('eve-rail') || ''; } catch { /* 无痕模式 */ }
+    const narrow = window.innerWidth < RAIL_NARROW;
+    if (!narrow) opened = false;
+    document.documentElement.classList.toggle('rail-mini', pref === 'mini' || (narrow && !opened));
+    sync();
+  };
   btn.addEventListener('click', () => {
-    const mini = document.documentElement.classList.toggle('rail-mini');
-    try { localStorage.setItem('eve-rail', mini ? 'mini' : ''); } catch { /* 无痕模式 */ }
+    const mini = !document.documentElement.classList.contains('rail-mini');
+    if (window.innerWidth < RAIL_NARROW) opened = !mini;   // 窄窗口下的手动展开 / 收起只管这一次，不改记住的偏好
+    else try { localStorage.setItem('eve-rail', mini ? 'mini' : ''); } catch { /* 无痕模式 */ }
+    document.documentElement.classList.toggle('rail-mini', mini);
     sync();
   });
-  sync();
+  window.addEventListener('resize', apply);
+  apply();
   (header.querySelector('.header-actions') || header).appendChild(btn);
   initUpdateBtn(header);
   // 折叠的组里有当前页时在组标题上点一个点
@@ -4491,7 +4506,7 @@ function bindAbyAssets(box) {
 let assetTools = null;
 let assetToolsLoading = null;
 function loadAssetTools() {
-  if (!assetToolsLoading) assetToolsLoading = import('./asset-tools.js?v=v4').then((m) => {
+  if (!assetToolsLoading) assetToolsLoading = import('./asset-tools.js?v=v5').then((m) => {
     m.initAssetTools({ esc, formatISK, formatNumber, typeName, serverKey, store, TF, server: SERVER.id, regions: REGIONS, showToast,
       isActive: () => !$('profileView').hidden && activeProfileTab() === 'assets' });
     assetTools = m;
@@ -4583,6 +4598,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
     '<div class="table-scroll"><table class="pc-mini-table station-summary"><thead><tr>' +
       '<th>空间站</th><th>物品数</th><th>卖价估值</th><th>收价估值</th><th>中间价估值</th>' + (showMid ? '<th>成交价估值</th>' : '') + '<th>占比（按卖价）</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  if (assetTools && box.querySelector('[data-nw-plot]')) loadKbCharts().then((m) => assetTools.bindNetWorth(box, m)).catch(() => {});
 }
 
 // 单个空间站：只显示本站物品与本站估值
@@ -4744,7 +4760,7 @@ async function renderProfileTab(tab) {
       valuationCard('钱包余额', walletOk ? formatPrice(data.wallet) + ' ISK' : '权限不足', '') +
       valuationCard('近期收入', formatISK(income) + ' ISK', '最近 ' + (journal ? journal.length : 0) + ' 条流水', 'is-buy') +
       valuationCard('近期支出', formatISK(Math.abs(spend)) + ' ISK', '', 'is-sell') +
-      '</div>';
+      '</div>' + (journal ? walletChartHtml(journal) : '');
     if (journal && journal.length) {
       html += '<div class="table-scroll"><table class="pc-mini-table wallet-mini"><thead><tr><th>时间</th><th>类型</th><th>对方</th><th>金额</th></tr></thead><tbody>' +
         journal.slice(0, 50).map((j) => profileRow([
@@ -4758,7 +4774,54 @@ async function renderProfileTab(tab) {
       html += '<p class="text-muted">暂无钱包流水</p>';
     }
     box.innerHTML = html;
+    bindWalletChart(box).catch(() => {});
   }
+}
+
+// 钱包每日统计：流水按本地日期汇总，每天的收入、支出与当天最后一笔后的余额（流水的 balance 字段）；没有流水的日子沿用前一天的余额。
+// 图由 kb-charts.js 的 drawWallet 画（与击杀统计图表同一套样式）
+let walletDays = [];
+const dayStart = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
+function walletChartHtml(journal) {
+  const list = journal.filter((j) => j.date && typeof j.balance === 'number').map((j) => ({ t: Date.parse(j.date), id: j.id || 0, b: j.balance, a: j.amount || 0 }))
+    .sort((x, y) => x.t - y.t || x.id - y.id);
+  walletDays = [];
+  if (!list.length) return '';
+  const byDay = new Map();
+  for (const j of list) {
+    const k = dayStart(j.t);
+    const d = byDay.get(k) || { t: k, bal: 0, inc: 0, out: 0 };
+    d.bal = j.b;
+    if (j.a > 0) d.inc += j.a; else d.out -= j.a;
+    byDay.set(k, d);
+  }
+  const first = dayStart(list[0].t), last = dayStart(Date.now());
+  let bal = list[0].b - list[0].a;   // 第一笔之前的余额
+  for (let t = first; t <= last; t = dayStart(t + 36 * 3600e3)) {   // 加 36 小时再取 0 点：跨夏令时也不会跳过或重复一天
+    const d = byDay.get(t);
+    if (d) bal = d.bal;
+    walletDays.push(d || { t, bal, inc: 0, out: 0 });
+  }
+  if (walletDays.length < 2) return '';
+  const inc = walletDays.reduce((s2, d) => s2 + d.inc, 0), out = walletDays.reduce((s2, d) => s2 + d.out, 0);
+  const startBal = list[0].b - list[0].a, endBal = walletDays[walletDays.length - 1].bal;
+  return `<div class="nw-card wallet-chart">
+    <div class="kb-br-chart-head">
+      <h4>每日余额与收支<small>最近 ${walletDays.length} 天</small></h4>
+      <div class="kb-br-legend wl-legend"><span class="bal"><i></i>余额</span><span class="inc"><i></i>收入</span><span class="out"><i></i>支出</span></div>
+      <span class="kb-chart-note">期间 <b class="${endBal >= startBal ? 'up' : 'down'}">${endBal >= startBal ? '+' : '−'}${esc(formatISK(Math.abs(endBal - startBal)))}</b> · 收入 ${esc(formatISK(inc))} · 支出 ${esc(formatISK(out))}</span>
+    </div>
+    <div class="kb-br-plot" data-wallet-plot><svg></svg><div class="kb-br-tip" hidden></div></div>
+  </div>`;
+}
+let kbChartsLoading = null;
+const loadKbCharts = () => (kbChartsLoading ||= import('./kb-charts.js?v=v3').catch((e) => { kbChartsLoading = null; throw e; }));
+async function bindWalletChart(box) {
+  const plot = box.querySelector('[data-wallet-plot]');
+  if (!plot || walletDays.length < 2) return;
+  const m = await loadKbCharts();
+  const date = (t, long) => { const d = new Date(t); return long ? d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }) : `${d.getMonth() + 1}/${d.getDate()}`; };
+  m.drawWallet(plot, walletDays, { isk: (v) => formatISK(v), date });
 }
 
 // 个人中心 · 技能：首次打开时加载
@@ -5671,7 +5734,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v14').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v15').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),

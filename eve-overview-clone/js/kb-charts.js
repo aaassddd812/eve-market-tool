@@ -273,3 +273,114 @@ export function drawHeat(root, act) {
     });
   });
 }
+
+// ---------- 个人中心 · 钱包：每日余额与收支 ----------
+// days：[{ t（当天 0 点，本地时间）, bal（当天最后一笔后的余额）, inc（收入）, out（支出，正数）}]，没有流水的日子沿用前一天的余额。
+// 上部是余额折线 + 渐变面积，下部是每天的收入（绿）/ 支出（红）柱；悬停显示当天明细。fmt：{ isk, date }（个人中心不经过 initKbCharts）
+export function drawWallet(plot, days, fmt) {
+  if (!plot || days.length < 2) return;
+  mount(plot, () => {
+    const W = Math.max(260, plot.clientWidth), H = W < 600 ? 200 : 230;
+    const L = 58, R = 14, T = 12, B = 24, iw = W - L - R, ih = H - T - B;
+    const gap = 22, h1 = Math.round((ih - gap) * 0.66), h2 = ih - gap - h1, y2 = T + h1 + gap;   // 余额区高度、收支区高度与顶边
+    const n = days.length, slot = iw / n;
+    const cx = (i) => L + i * slot + slot / 2;
+    const bals = days.map((d) => d.bal);
+    let lo = Math.min(...bals), hi = Math.max(...bals);
+    const pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.05 || 1;
+    lo = Math.max(0, lo - pad); hi += pad;
+    const yb = (v) => T + h1 - (v - lo) / (hi - lo) * h1;
+    const fm = nice(Math.max(...days.map((d) => Math.max(d.inc, d.out)), 1), 2);
+    const yf = (v) => y2 + h2 - v / fm.max * h2;
+    let g = `<defs><linearGradient id="wlArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent-primary)" stop-opacity=".32"/><stop offset="1" stop-color="var(--accent-primary)" stop-opacity="0"/></linearGradient></defs>`;
+    // 余额刻度：3 条
+    for (let k = 0; k <= 2; k++) {
+      const v = lo + (hi - lo) * (k / 2), y = yb(v);
+      g += `<line class="grid" x1="${L}" x2="${L + iw}" y1="${y}" y2="${y}"/><text class="ax" x="${L - 8}" y="${y + 4}" text-anchor="end">${fmt.isk(v)}</text>`;
+    }
+    g += `<line class="grid base" x1="${L}" x2="${L + iw}" y1="${y2 + h2}" y2="${y2 + h2}"/><text class="ax" x="${L - 8}" y="${yf(fm.max) + 4}" text-anchor="end">${fmt.isk(fm.max)}</text>`;
+    // 日期刻度：最多 7 个
+    const every = Math.max(1, Math.ceil(n / 7));
+    for (let i = 0; i < n; i += every) g += `<text class="ax" x="${cx(i)}" y="${H - 7}" text-anchor="middle">${fmt.date(days[i].t)}</text>`;
+    // 收支柱
+    const bw = Math.max(1.5, Math.min(10, slot / 2 - 1.5));
+    days.forEach((d, i) => {
+      if (d.inc) g += `<rect class="bar inc" x="${(cx(i) - bw - 0.75).toFixed(1)}" y="${yf(d.inc).toFixed(1)}" width="${bw.toFixed(1)}" height="${(y2 + h2 - yf(d.inc)).toFixed(1)}" rx="1.5"/>`;
+      if (d.out) g += `<rect class="bar out" x="${(cx(i) + 0.75).toFixed(1)}" y="${yf(d.out).toFixed(1)}" width="${bw.toFixed(1)}" height="${(y2 + h2 - yf(d.out)).toFixed(1)}" rx="1.5"/>`;
+    });
+    // 余额线与面积
+    const pts = days.map((d, i) => `${cx(i).toFixed(1)},${yb(d.bal).toFixed(1)}`);
+    g += `<path class="area" d="M${cx(0).toFixed(1)},${T + h1} L${pts.join(' L')} L${cx(n - 1).toFixed(1)},${T + h1} Z"/><polyline class="ln bal" points="${pts.join(' ')}"/>`;
+    if (n <= 45) g += days.map((d, i) => `<circle class="dot bal" cx="${cx(i).toFixed(1)}" cy="${yb(d.bal).toFixed(1)}" r="2.5"/>`).join('');
+    g += `<circle class="hl-dot" r="4.5" visibility="hidden"/>`;
+    const svg = setSvg(plot, W, H, `<rect class="hit" x="${L}" y="${T}" width="${iw}" height="${ih}"/>${g}<line class="cross" x1="0" x2="0" y1="${T}" y2="${y2 + h2}" visibility="hidden"/>`);
+    const dot = svg.querySelector('.hl-dot');
+    bindHover(plot, svg, { W, T }, (px) => {
+      const i = Math.min(n - 1, Math.max(0, Math.floor((px - L) / slot)));
+      const d = days[i];
+      dot.setAttribute('cx', cx(i)); dot.setAttribute('cy', yb(d.bal)); dot.setAttribute('visibility', 'visible');
+      const net = d.inc - d.out;
+      return { x: cx(i), html: `<b>${fmt.date(d.t, true)}</b><span>余额 ${fmt.isk(d.bal)} ISK</span><span class="inc">收入 +${fmt.isk(d.inc)}</span><span class="out">支出 −${fmt.isk(d.out)}</span><span class="${net >= 0 ? 'inc' : 'out'}">净 ${net >= 0 ? '+' : '−'}${fmt.isk(Math.abs(net))}</span>` };
+    });
+    svg.querySelector('.hit').addEventListener('pointerleave', () => dot.setAttribute('visibility', 'hidden'));
+  });
+}
+
+// ---------- 个人中心 · 资产估值：净值趋势 ----------
+// pts：[{ t（当天 0 点，本地时间）, total, s（资产）, o（订单）, w（钱包，null = 无权限）}]，只有打开过资产页的日子才有记录，横轴按时间排。
+// 上部是净值折线 + 渐变面积（纵轴按区间放大，看得出起伏），下部是比上一次记录的涨跌柱；悬停显示当天净值构成。
+export function drawNetWorth(plot, pts, fmt) {
+  if (!plot || pts.length < 2) return;
+  mount(plot, () => {
+    const W = Math.max(260, plot.clientWidth), H = W < 600 ? 200 : 230;
+    const L = 58, R = 14, T = 12, B = 24, iw = W - L - R, ih = H - T - B;
+    const gap = 22, h1 = Math.round((ih - gap) * 0.66), h2 = ih - gap - h1, y2 = T + h1 + gap;
+    const n = pts.length, t0 = pts[0].t, span = Math.max(1, pts[n - 1].t - t0);
+    const minGap = pts.slice(1).reduce((m, p, i) => Math.min(m, p.t - pts[i].t), Infinity);
+    const slot = Math.max(4, Math.min(40, iw * minGap / (span + minGap)));   // 两条记录间最小距离，决定柱宽
+    const px0 = L + slot / 2, pw = iw - slot;
+    const cx = (i) => px0 + (pts[i].t - t0) / span * pw;
+    let lo = Math.min(...pts.map((p) => p.total)), hi = Math.max(...pts.map((p) => p.total));
+    const pad = (hi - lo) * 0.12 || Math.abs(hi) * 0.05 || 1;
+    lo = Math.max(0, lo - pad); hi += pad;
+    const yb = (v) => T + h1 - (v - lo) / (hi - lo) * h1;
+    const chg = pts.map((p, i) => (i ? p.total - pts[i - 1].total : 0));
+    const fm = nice(Math.max(...chg.map(Math.abs), 1), 2);
+    const mid = y2 + h2 / 2, yc = (v) => mid - v / fm.max * (h2 / 2);
+    let g = `<defs><linearGradient id="nwArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent-primary)" stop-opacity=".32"/><stop offset="1" stop-color="var(--accent-primary)" stop-opacity="0"/></linearGradient></defs>`;
+    for (let k = 0; k <= 2; k++) {
+      const v = lo + (hi - lo) * (k / 2), y = yb(v);
+      g += `<line class="grid" x1="${L}" x2="${L + iw}" y1="${y}" y2="${y}"/><text class="ax" x="${L - 8}" y="${y + 4}" text-anchor="end">${fmt.isk(v)}</text>`;
+    }
+    g += `<line class="grid base" x1="${L}" x2="${L + iw}" y1="${mid}" y2="${mid}"/><text class="ax" x="${L - 8}" y="${yc(fm.max) + 4}" text-anchor="end">+${fmt.isk(fm.max)}</text><text class="ax" x="${L - 8}" y="${yc(-fm.max) + 4}" text-anchor="end">−${fmt.isk(fm.max)}</text>`;
+    // 日期刻度：按位置挑，最多 7 个、互相至少隔 56px
+    let lastX = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const x = cx(i);
+      if (x - lastX < Math.max(56, iw / 7) && i !== n - 1) continue;
+      if (i === n - 1 && x - lastX < 40) continue;
+      g += `<text class="ax" x="${x}" y="${H - 7}" text-anchor="middle">${fmt.date(pts[i].t)}</text>`;
+      lastX = x;
+    }
+    const bw = Math.max(1.5, Math.min(14, slot * 0.6));
+    chg.forEach((v, i) => {
+      if (!i || !v) return;
+      const y = Math.min(mid, yc(v)), h = Math.max(1, Math.abs(yc(v) - mid));
+      g += `<rect class="bar ${v > 0 ? 'inc' : 'out'}" x="${(cx(i) - bw / 2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="1.5"/>`;
+    });
+    const xy = pts.map((p, i) => `${cx(i).toFixed(1)},${yb(p.total).toFixed(1)}`);
+    g += `<path class="area" d="M${cx(0).toFixed(1)},${T + h1} L${xy.join(' L')} L${cx(n - 1).toFixed(1)},${T + h1} Z"/><polyline class="ln bal" points="${xy.join(' ')}"/>`;
+    if (n <= 60) g += pts.map((p, i) => `<circle class="dot bal" cx="${cx(i).toFixed(1)}" cy="${yb(p.total).toFixed(1)}" r="2.5"/>`).join('');
+    g += `<circle class="hl-dot" r="4.5" visibility="hidden"/>`;
+    const svg = setSvg(plot, W, H, `<rect class="hit" x="${L}" y="${T}" width="${iw}" height="${ih}"/>${g}<line class="cross" x1="0" x2="0" y1="${T}" y2="${y2 + h2}" visibility="hidden"/>`);
+    const dot = svg.querySelector('.hl-dot');
+    bindHover(plot, svg, { W, T }, (px) => {
+      let i = 0;
+      for (let k = 1; k < n; k++) if (Math.abs(cx(k) - px) < Math.abs(cx(i) - px)) i = k;
+      const p = pts[i], v = chg[i];
+      dot.setAttribute('cx', cx(i)); dot.setAttribute('cy', yb(p.total)); dot.setAttribute('visibility', 'visible');
+      return { x: cx(i), html: `<b>${fmt.date(p.t, true)}</b><span>净值 ${fmt.isk(p.total)} ISK</span>${i ? `<span class="${v >= 0 ? 'inc' : 'out'}">较上次 ${v >= 0 ? '+' : '−'}${fmt.isk(Math.abs(v))}</span>` : ''}<span class="part s">资产 ${fmt.isk(p.s)}</span><span class="part o">订单 ${fmt.isk(p.o)}</span><span class="part w">钱包 ${p.w == null ? '—' : fmt.isk(p.w)}</span>` };
+    });
+    svg.querySelector('.hit').addEventListener('pointerleave', () => dot.setAttribute('visibility', 'hidden'));
+  });
+}

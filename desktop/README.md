@@ -9,6 +9,7 @@ Windows 10 / 11 桌面程序与安卓 App（Tauri 2，Windows 用系统自带的
   - 只给线上站点开放 `opener:default`、`notification:default` 权限（`capabilities/default.json`）。
   - 插件：系统通知（替换网页的 `window.Notification`）；仅桌面：单实例（再次双击切回已开窗口）、记住窗口位置与大小、自动更新。
 - `android/`：安卓工程补丁（工作流里 `tauri android init`、`tauri icon` 之后跑 `android/patch.sh`）：`MainActivity.kt` 让网页铺满全屏，并把状态栏 / 导航栏高度经 `EveApp` 交给网页（`app-init.js` 写到 `--sa-top` / `--sa-bottom`，安卓 WebView 不报 `env(safe-area-inset-*)`），键盘弹出时让出键盘高度；`res/` 是矢量自适应图标（背景铺满，图案缩在安全区里，各种遮罩形状都不裁）。
+- 日志预警（仅桌面，`src/logs.rs`）：`logs_dir` 自动找「文档\EVE\logs」（系统文档文件夹，含 OneDrive 重定向），`logs_list` / `logs_stat` / `logs_read` 只读地列出、读取 Chatlogs / Gamelogs 里的 .txt；网页 `intel.js` 把它们包成和浏览器文件夹句柄一样的接口，不用选文件夹、不用每次重新授权。
 - 悬浮窗（仅桌面，`float_*` 命令）：网页点「悬浮窗」调 `float_open`，开一个置顶、无边框、透明背景、不占任务栏的窗口（标签 `float-<kind>`，加载本站 `float.html`），
   窗口里调 `float_drag`（拖动标题栏）、`float_pass`（鼠标穿透）、`float_close`、`float_focus_main`（点了详情切回主窗口）。远程网页调自定义命令要在 `build.rs` 的 AppManifest 里登记，
   再在 `capabilities/default.json` 放行 `allow-float-*`。关掉主窗口时整个程序退出。

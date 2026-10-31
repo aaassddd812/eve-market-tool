@@ -45,30 +45,26 @@ export function netWorthHtml(charId) {
     return `<span class="nw-delta ${d >= 0 ? 'up' : 'down'}">${label} ${d >= 0 ? '+' : ''}${isk(d)}（${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%）</span>`;
   };
   const head = `<div class="nw-head"><h3 title="资产按卖价 + 订单 + 钱包；每天记一笔，只存在本机浏览器">净值趋势</h3><b>${isk(total(last))} ISK</b>${delta(prev(1), '较前一天')}${delta(prev(7), '7 天')}${delta(prev(30), '30 天')}</div>`;
-  const note = last.w == null ? '<p class="pi-note">未计钱包（无权限）</p>' : '';
-  if (list.length < 2) return `<div class="nw-card">${head}<p class="text-muted">已记录今天，明天起显示曲线</p>${note}</div>`;
-  // 折线：SVG 只画线（随宽度拉伸），坐标文字与数据点用 HTML 定位，避免被拉变形
-  const t0 = new Date(list[0].d).getTime(), t1 = new Date(last.d).getTime();
-  const span = Math.max(DAY, t1 - t0);
-  const series = [
-    ['total', '净值', total],
-    ['asset', '资产', (p) => p.s],
-    ['wallet', '钱包', (p) => p.w || 0],
-    ['orders', '订单', (p) => p.o]
-  ];
-  const max = Math.max(...list.map(total)) * 1.08 || 1;
-  const x = (p) => ((new Date(p.d).getTime() - t0) / span) * 100;   // %
-  const y = (v) => (1 - v / max) * 100;                               // %
-  const lines = series.map(([cls, , f]) => `<polyline class="nw-line nw-${cls}" points="${list.map((p) => `${x(p).toFixed(2)},${y(f(p)).toFixed(2)}`).join(' ')}"/>`).join('');
-  const grid = [0.25, 0.5, 0.75].map((f) => `<line class="nw-grid" x1="0" x2="100" y1="${y(max * f)}" y2="${y(max * f)}"/>`).join('');
-  const ylab = [0.25, 0.5, 0.75].map((f) => `<span class="nw-ylab" style="top:${y(max * f)}%">${esc(isk(max * f))}</span>`).join('');
-  const dots = list.length <= 90 ? list.map((p) => `<i class="nw-dot" style="left:${x(p)}%;top:${y(total(p))}%" title="${p.d} · 净值 ${isk(total(p))} · 资产 ${isk(p.s)} · 钱包 ${p.w == null ? '—' : isk(p.w)} · 订单 ${isk(p.o)}"></i>`).join('') : '';
-  const fmtD = (t) => { const d = new Date(t); return `${d.getMonth() + 1}/${d.getDate()}`; };
-  const legend = series.map(([cls, label]) => `<span class="nw-key nw-${cls}"><i></i>${label}</span>`).join('');
-  return `<div class="nw-card">${head}
-    <div class="nw-plot"><svg class="nw-chart" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="净值趋势">${grid}${lines}</svg>${ylab}${dots}</div>
-    <div class="nw-axis"><span>${fmtD(t0)}</span><span>${fmtD(t0 + span / 2)}</span><span>${fmtD(t1)}</span></div>
-    <div class="nw-legend">${legend}<span class="text-muted">${list.length} 天记录</span></div>${note}</div>`;
+  // 当前构成：资产 / 订单 / 钱包 按比例的横条
+  const parts = [['s', '资产', last.s], ['o', '订单', last.o], ['w', '钱包', last.w || 0]].filter((x) => x[2] > 0);
+  const sum = parts.reduce((t, x) => t + x[2], 0) || 1;
+  const mix = `<div class="nw-mix"><div class="nw-mix-bar">${parts.map(([k, , v]) => `<i class="nw-${k}" style="width:${(v / sum * 100).toFixed(2)}%"></i>`).join('')}</div>
+    <div class="nw-mix-keys">${parts.map(([k, label, v]) => `<span class="nw-${k}"><i></i>${label} <b>${esc(isk(v))}</b> ${(v / sum * 100).toFixed(0)}%</span>`).join('')}${last.w == null ? '<span class="text-muted">未计钱包（无权限）</span>' : ''}</div></div>`;
+  if (list.length < 2) return `<div class="nw-card">${head}${mix}<p class="text-muted">已记录今天，明天起显示曲线</p></div>`;
+  // 折线由 kb-charts.js 的 drawNetWorth 画（bindNetWorth），与钱包每日统计同一套样式
+  return `<div class="nw-card">${head}${mix}
+    <div class="kb-br-plot nw-trend" data-nw-plot="${esc(String(charId))}"><svg></svg><div class="kb-br-tip" hidden></div></div>
+    <div class="nw-foot"><span class="nw-key bal"><i></i>净值</span><span class="nw-key inc"><i></i>上涨</span><span class="nw-key out"><i></i>下跌</span><span class="text-muted">${list.length} 天记录 · 只存在本机浏览器</span></div></div>`;
+}
+
+const localDay = (d) => { const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd).getTime(); };
+export function bindNetWorth(box, charts) {
+  const plot = box.querySelector('[data-nw-plot]');
+  if (!plot) return;
+  const pts = (ctx.store.getJSON(nwKey(plot.dataset.nwPlot), []) || []).filter((x) => x?.d)
+    .map((p) => ({ t: localDay(p.d), total: total(p), s: p.s, o: p.o, w: p.w }));
+  const date = (t, long) => { const d = new Date(t); return long ? d.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short' }) : `${d.getMonth() + 1}/${d.getDate()}`; };
+  charts.drawNetWorth(plot, pts, { isk: (v) => ctx.formatISK(v), date });
 }
 
 // ---------- 清仓小助手 ----------
