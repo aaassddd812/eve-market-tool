@@ -257,6 +257,119 @@ class Inferer:
         return out, dropped
 
 
+# ---------- 云计算效果的修正对象 ----------
+# 云计算技能的效果名是「…from17926Cruor…」这种，按名字推断常常落到技能自己或别的尺寸上；技能描述写清了加成对象，按描述定
+# （分组 / 技能 ID 取自 SDE）。描述里认不出对象的修正丢弃（少算好过加错）
+TURRET = {('S', 'E'): 3303, ('M', 'E'): 3306, ('L', 'E'): 3309, ('C', 'E'): 20327,
+          ('S', 'H'): 3301, ('M', 'H'): 3304, ('L', 'H'): 3307, ('C', 'H'): 21666,
+          ('S', 'P'): 3302, ('M', 'P'): 3305, ('L', 'P'): 3308, ('C', 'P'): 21667,
+          ('S', 'X'): 47870, ('M', 'X'): 47871, ('L', 'X'): 47872, ('C', 'X'): 52998}
+# 导弹：(描述里的写法, 技能, 发射器分组)，按顺序认、认到就从描述里去掉
+MISSILE = ((r'超大型巡航和鱼雷', [32435, 21668], [1674, 524]), (r'超大型巡航', [32435], [1674]), (r'超大型鱼雷', [21668], [524]),
+           (r'重型攻击', [25719], [771]), (r'重型快速', [], [1245]), (r'轻型快速', [], [511]),
+           (r'重型(?:导弹|、|，|和)', [3324], [510]), (r'轻型导弹', [3321], [509]), (r'火箭', [3320], [507]),
+           (r'巡航', [3326], [506]), (r'鱼雷', [3325], [508]))
+ATTR_NEUT, ATTR_NOS, ATTR_SPEED = 97, 90, 51
+
+
+def cloud_turrets(t):
+    t = t.replace('超大型', '')
+    sizes = [v for k, v in (('小型', 'S'), ('中型', 'M'), ('重型熵能', 'L'), ('大型', 'L')) if k in t]
+    races = [v for k, v in (('能量', 'E'), ('激光', 'E'), ('混合', 'H'), ('射弹', 'P'), ('熵能', 'X'), ('先驱者炮', 'X'), ('先驱者武器', 'X')) if k in t]
+    sizes = sizes or (['S', 'M', 'L', 'C'] if '所有炮台' in t else ['S', 'M', 'L'])
+    races = races or ['E', 'H', 'P', 'X']
+    return sorted({TURRET[(a, b)] for a in sizes for b in races})
+
+
+def cloud_missiles(t, launcher):
+    out = []
+    for pat, skills, groups in MISSILE:
+        if re.search(pat, t):
+            out += groups if launcher else skills
+            t = re.sub(pat, '', t)
+    if not out and not launcher and re.search(r'导弹|Missile', t):
+        out = [3319]   # 只说「导弹」：所有导弹都要「导弹发射器操作」
+    return sorted(set(out))
+
+
+def cloud_targets(f, attr, t):
+    """云计算修正的对象：f 2 分组（舰船上的装备）、3 技能（舰船上的装备）、4 技能（角色的弹药、无人机、探针）"""
+    if f == 2:
+        if '突击损' in t:
+            return [60]
+        if attr == ATTR_NEUT:
+            return [71]
+        if attr == ATTR_NOS:
+            return [68]
+        if '停滞缠绕光束' in t:
+            return [65]
+        if '超级武器' in t:
+            return [588]
+        if '增效剂' in t:
+            return [303]
+        if attr == ATTR_SPEED and '发射' in t:
+            return cloud_missiles(t, True)
+        if '炮台' in t:
+            return [53, 74, 55, 1986]
+        return []
+    if f == 3:
+        if '加力燃烧器' in t:
+            return [3450, 3454]
+        if '分析仪' in t:
+            return [13278, 21718]
+        if '装甲指挥' in t:
+            return [20494]
+        if '护盾指挥' in t:
+            return [3350]
+        if '立体炸弹' in t:
+            return [3421]
+        if '远程装甲' in t or '远距装甲' in t:
+            return [16069, 24568]
+        if '远程护盾' in t:
+            return [3422, 24571]
+        if '护盾回充增量器' in t:
+            return [3416, 21802] if '旗舰级' in t else [3416]
+        if '装甲维修器' in t:
+            return [3393]
+        if re.search(r'炮台|炮|熵能|武器', t):
+            return cloud_turrets(t)
+        return []
+    if f == 4:
+        if '停滞缠绕无人机' in t:
+            return [3435]   # 缠绕无人机要「推进阻扰」，别的无人机不要
+        if '无人机' in t or '铁骑' in t:
+            sized = [v for k, v in (('轻型', 24241), ('中型', 33699), ('重型', 3441)) if k in t]
+            extra = [v for k, v in (('岗哨', 23594), ('铁骑', 23069)) if k in t]
+            # 没说大小：「战斗无人机」是轻中重三种；只说「无人机」（没提岗哨）是全部无人机
+            if not sized:
+                sized = [24241, 33699, 3441] if '战斗' in t else [] if 23594 in extra else [3436]
+            return sorted(set(sized + extra))
+        if '探针' in t:
+            return [3412]
+        return cloud_missiles(t, False)
+    return []
+
+
+def cloud_mods(effect, text):
+    """云计算效果的修正：结构同 Inferer.mods，对象按技能描述（text）定"""
+    out, done, dropped = [], set(), 0
+    for m in effect.get('modifiers') or []:
+        f = FUNCS.get(m.get('func'))
+        if f is None:
+            continue
+        key = (f, DOMAINS.get(m.get('domain'), 5), m.get('modified_attribute_id', 0), m.get('modifying_attribute_id', 0), m.get('operator', 0))
+        if key in done:
+            continue
+        done.add(key)
+        if f not in (2, 3, 4):
+            out.append([*key, 0])
+            continue
+        picks = cloud_targets(f, key[2], text)
+        dropped += not picks
+        out += [[*key, x] for x in picks]
+    return out, dropped
+
+
 UPDATED = []
 
 
@@ -356,8 +469,16 @@ def build(ds, sde, tq_ids):
     cn_groups = {g: (groups_en.get(g) or {}).get('name') or '' for g in gids}
     inf = Inferer(sde, cn_skills, cn_groups)
     out_eff, dropped = {}, 0
+    # 云计算技能的效果：按技能名和描述定修正对象
+    cloud_text = collections.defaultdict(str)
+    for t in fit_ids:
+        if zh[t]['group_id'] == CLOUD_GROUP:
+            for x in zh[t].get('dogma_effects', []):
+                # 只看描述（技能名常和描述对不上，如「断崖级能量武器伤害」实际是射弹炮台）；描述没有中文时才加上名字
+                desc = (zh[t].get('description') or '').strip()
+                cloud_text[x['effect_id']] += desc if re.search(r'[\u4e00-\u9fff]', desc) else f"{zh[t]['name']} {desc}"
     for e, v in effects.items():
-        mods, n = inf.mods(v)
+        mods, n = cloud_mods(v, cloud_text[e]) if e in cloud_text else inf.mods(v)
         dropped += n
         out_eff[e] = [v['name'], v.get('effect_category', 0), mods]
     out_attrs = {a: [num(v.get('default_value', 0)), 1 if v.get('stackable', True) else 0, 1 if v.get('high_is_good', True) else 0, v.get('name', '')] for a, v in attrs.items()}
