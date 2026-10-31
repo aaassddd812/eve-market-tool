@@ -513,7 +513,7 @@ function buildScene() {
   controls.minDistance = 2;
   controls.maxDistance = 2600;
   controls.rotateSpeed = 0.6;
-  controls.zoomSpeed = 2;          // 滚轮 / 双指缩放灵敏度（默认 1）
+  controls.zoomSpeed = 3.5;          // 滚轮 / 双指缩放灵敏度（默认 1）
   controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
   controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
   controls.addEventListener('change', invalidate);
