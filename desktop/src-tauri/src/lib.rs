@@ -156,13 +156,13 @@ fn float_focus_main(app: tauri::AppHandle) {
     }
 }
 
-// 悬浮窗里点开的击杀 / 物品详情：点了才开一个置顶窗口（标签 float-detail）加载本站 float-detail.html，跟网页里的详情弹窗一样，
+// 悬浮窗里点开的击杀 / 物品 / 人物详情：点了才开一个置顶窗口（标签 float-detail）加载本站 float-detail.html，跟网页里的详情弹窗一样，
 // 无边框、页面自己的标题栏拖动和 ✕ 关闭（float_drag / float_close），关掉就没了；还开着时再点别的就换内容并切到前面。内容由主窗口的网页生成。
 #[cfg(desktop)]
 #[tauri::command]
 async fn float_detail(app: tauri::AppHandle, webview: tauri::Webview, kind: String, id: u64) -> Result<(), String> {
     use tauri::Manager;
-    if kind != "item" && kind != "kill" {
+    if !matches!(kind.as_str(), "item" | "kill" | "char") {
         return Err("kind".into());
     }
     let label = "float-detail";

@@ -4,7 +4,7 @@
 //     { t: 'alert', kind } 刚响了一条新提醒（悬浮窗切到这个菜单）
 //   悬浮窗 → 主页面：{ t: 'hello', kind } 要内容；{ t: 'alive', kind } 每 20 秒报一次还开着；{ t: 'open-kill' | 'open-item' | 'open-char', id } 在主页面打开详情；
 //     { t: 'open-hash', hash } 主页面切到这个地址（详情里的人物 / 军团链接）
-//   详情窗口（float-detail.html）→ 主页面：{ t: 'detail-req', rid, kind: 'item' | 'kill', id, opt } 要详情；主页面回 { t: 'detail', rid, title, html } 或 { t: 'detail', rid, error }
+//   详情窗口（float-detail.html）→ 主页面：{ t: 'detail-req', rid, kind: 'item' | 'kill' | 'char', id, opt } 要详情；主页面回 { t: 'detail', rid, title, html } 或 { t: 'detail', rid, error }
 // 打开方式：
 //   桌面版（Tauri）：原生窗口，置顶、无边框、可半透明、可鼠标穿透（float_open 命令，见 desktop/src-tauri/src/lib.rs）；
 //     和画中画一样只有一个窗口，再点别的「悬浮窗」按钮就切换内容（1.0.7 及更早每种内容各开一个窗口）。
@@ -13,7 +13,7 @@
 // 模块各自发布内容（publish）；悬浮窗要内容而模块还没加载时，用登记的 loader 加载（loader 加载后会自己 publish）。
 
 const CH = 'eve-float';
-const FLOAT_V = 'v9';   // 跟 float.html 里 float-view.js 的版本号一致：改了悬浮窗页面就一起改，旧的画中画会重新加载
+const FLOAT_V = 'v10';   // 跟 float.html 里 float-view.js 的版本号一致：改了悬浮窗页面就一起改，旧的画中画会重新加载
 export const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名' };
 const snap = {};
 const loaders = {};

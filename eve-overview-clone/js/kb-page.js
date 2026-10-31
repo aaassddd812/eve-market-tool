@@ -784,27 +784,69 @@ async function renderEntity(kind, id) {
   const main = $('kbMain');
   S.entity = { kind, id, side: 'all', feed: [], cursor: null, sort: { key: 'destroyed', dir: 'desc' } };
   main.innerHTML = entitySkeleton(kind);
-  let stats, info, lifetime, history;
+  let d;
   try {
-    [stats, info, lifetime, history] = await Promise.all([
-      api(`entity/${kind}/${id}?days=30`),
-      publicInfo(kind, id),
-      IS_TQ ? kb.fetchZkill(`stats/${kind}ID/${id}/`).catch(() => null) : null,
-      kind === 'character' ? app.fetchESI(`/characters/${id}/corporationhistory/`).catch(() => []) : []
-    ]);
+    d = await entityData(kind, id);
   } catch (error) {
-    main.innerHTML = '<p class="text-muted kb-empty">统计读取失败：' + app.esc(error.message) + '</p>';
+    if (S.entity?.id === id) main.innerHTML = '<p class="text-muted kb-empty">统计读取失败：' + app.esc(error.message) + '</p>';
     return;
   }
   if (S.entity?.id !== id) return;
-  Object.assign(S.entity, { stats, info, lifetime });
+  const { stats, lifetime } = d;
+  Object.assign(S.entity, { stats, info: d.info, lifetime });
+  const P = entityParts(kind, id, d);
+  main.innerHTML = `
+    ${BACK_LINK}
+    ${P.head}
+    ${P.lifetime}${monthlyHtml(lifetime)}${P.recent}
+    ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天）</small></h4><div id="kbMembers"></div>` : ''}
+    ${P.activity}${P.corpHistory}
+    ${P.ships}
+    <div class="kb-feed-head section-gap">
+      <h4 class="info-section-title">击杀记录</h4>
+      <div class="segmented" role="group">
+        ${[['all', '全部'], ['kills', '击杀'], ['losses', '损失']].map(([v, l]) => `<button data-entity-side="${v}" class="${v === 'all' ? 'active' : ''}">${l}</button>`).join('')}
+      </div>
+    </div>
+    <div id="kbEntityFeed">${skRows(8)}</div>
+    <button class="btn kb-more" id="kbEntityMore" hidden>加载更多</button>`;
+  mountMonthly(main, lifetime);
+  if (stats.members) renderMembers();
+  $('kbEntityMore').addEventListener('click', () => loadEntityFeed(false));
+  loadEntityFeed(true);
+}
+
+// 实体页的数据：最近 30 天统计、公开资料、zKillboard 生涯统计（宁静服）、人物的军团履历；相关名称与舰船类型都读好
+async function entityData(kind, id) {
+  const [stats, info, lifetime, history] = await Promise.all([
+    api(`entity/${kind}/${id}?days=30`),
+    publicInfo(kind, id),
+    IS_TQ ? kb.fetchZkill(`stats/${kind}ID/${id}/`).catch(() => null) : null,
+    kind === 'character' ? app.fetchESI(`/characters/${id}/corporationhistory/`).catch(() => []) : []
+  ]);
   if (stats.name) S.names.set(id, stats.name);
   if (info.name) S.names.set(id, info.name);
   const related = [info.corporation_id, info.alliance_id, ...history.map((h) => h.corporation_id)].filter((x) => x && !S.names.has(x) && !app.officialName(x));
   if (related.length) { const named = await app.resolveNames(related); for (const [k, v] of named.names) S.names.set(k, v); }
   await loadTypes([...stats.ships_used, ...stats.ships_lost].map((s) => s.ship_type_id));
-  if (S.entity?.id !== id) return;
+  return { stats, info, lifetime, history };
+}
 
+// 悬浮窗（float-detail.html）里的人物详情：实体页去掉图表、成员与翻页，击杀记录只列最近 20 条
+export async function charDetail(id) {
+  await ensureReady();
+  const [d, feed] = await Promise.all([entityData('character', id), api('feed?' + new URLSearchParams({ character: id, side: 'all', limit: 20 }))]);
+  absorbNames(feed.names);
+  await loadTypes(typesOf(feed.kills));
+  const P = entityParts('character', id, d);
+  return {
+    title: d.info.name || d.stats.name || partyName(id),
+    html: `<div class="kb-float">${P.head}${P.lifetime}${P.recent}${P.activity}${P.corpHistory}${P.ships}
+      <h4 class="info-section-title section-gap">最近击杀记录</h4>${feedTable(feed.kills, { me: { key: 'character_id', id } })}</div>`
+  };
+}
+
+function entityParts(kind, id, { stats, info, lifetime, history }) {
   const name = info.name || stats.name || partyName(id);
   const eff = stats.destroyed + stats.lost ? stats.destroyed / (stats.destroyed + stats.lost) * 100 : null;
   const sub = [];
@@ -846,9 +888,8 @@ async function renderEntity(kind, id) {
   const activity = activityHtml(stats);
   const corpHistory = kind === 'character' ? corpHistoryHtml(history) : '';
 
-  main.innerHTML = `
-    ${BACK_LINK}
-    <div class="kb-entity-head">
+  return {
+    head: `<div class="kb-entity-head">
       <img src="${avatar(kind, id, 128)}" alt="" width="72" height="72">
       <div>
         <span class="kb-entity-kind">${KIND_ZH[kind]}</span>
@@ -862,23 +903,10 @@ async function renderEntity(kind, id) {
         ${!IS_TQ && SERVER.kbSite ? `<a class="btn btn-ghost" href="${kbSiteLink({ character: 'pilot', corporation: 'corp', alliance: 'alliance' }[kind], id)}" target="_blank" rel="noopener">${app.esc(SERVER.kbSite.name)} ↗</a>` : ''}
         ${IS_TQ && kind !== 'character' ? `<a class="btn btn-ghost" href="https://evemaps.dotlan.net/${kind === 'alliance' ? 'alliance' : 'corp'}/${encodeURIComponent(name.replace(/ /g, '_'))}" target="_blank" rel="noopener">dotlan ↗</a>` : ''}
       </div>
-    </div>
-    ${lifetimeCards}${monthlyHtml(lifetime)}${recentCards}
-    ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天）</small></h4><div id="kbMembers"></div>` : ''}
-    ${activity}${corpHistory}
-    <div class="kb-mini-grid">${shipList(stats.ships_used, '常用舰船（击杀时）')}${shipList(stats.ships_lost, '损失的舰船')}</div>
-    <div class="kb-feed-head section-gap">
-      <h4 class="info-section-title">击杀记录</h4>
-      <div class="segmented" role="group">
-        ${[['all', '全部'], ['kills', '击杀'], ['losses', '损失']].map(([v, l]) => `<button data-entity-side="${v}" class="${v === 'all' ? 'active' : ''}">${l}</button>`).join('')}
-      </div>
-    </div>
-    <div id="kbEntityFeed">${skRows(8)}</div>
-    <button class="btn kb-more" id="kbEntityMore" hidden>加载更多</button>`;
-  mountMonthly(main, lifetime);
-  if (stats.members) renderMembers();
-  $('kbEntityMore').addEventListener('click', () => loadEntityFeed(false));
-  loadEntityFeed(true);
+    </div>`,
+    lifetime: lifetimeCards, recent: recentCards, activity, corpHistory,
+    ships: `<div class="kb-mini-grid">${shipList(stats.ships_used, '常用舰船（击杀时）')}${shipList(stats.ships_lost, '损失的舰船')}</div>`
+  };
 }
 
 // 最近 30 天活跃地区：星域（占比条）+ 星系（安全等级着色），点击可筛选击杀记录

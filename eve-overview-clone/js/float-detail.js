@@ -1,8 +1,8 @@
 // ===== 悬浮窗里的详情（float-detail.html）=====
-// ?kind=item|kill&id=…：物品详情（同装配页的物品详情）/ 击杀详情。只负责显示：经 BroadcastChannel（eve-float）向主页面要内容（detail-req），
+// ?kind=item|kill|char&id=…：物品详情（同装配页的物品详情）/ 击杀详情 / 人物详情（击杀记录页的人物页精简版）。只负责显示：经 BroadcastChannel（eve-float）向主页面要内容（detail-req），
 // 主页面生成整页 HTML 回过来（float-feed.js → typeDetail / killDetail）。
 // 桌面版是点了才开的无边框置顶窗口（float_detail 命令，标签 float-detail），✕ 关掉就关了；网页画中画里是叠在悬浮窗上的 iframe（关闭时通知外层悬浮窗）。
-// 详情里点别的物品在本窗口换内容（可返回）；市场价格、人物 / 军团链接、去装配页等需要整页的操作交给主窗口。
+// 详情里点别的物品、人物、击杀在本窗口换内容（可返回）；市场价格、人物 / 军团链接、去装配页等需要整页的操作交给主窗口。
 
 const q = new URLSearchParams(location.search);
 const EMBED = window.parent !== window;
@@ -10,7 +10,8 @@ const ipc = !EMBED && window.__TAURI_INTERNALS__ ? window.__TAURI_INTERNALS__ : 
 const invoke = (cmd, args) => ipc?.invoke(cmd, args).catch(() => {});
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const KINDS = new Set(['item', 'kill']);
+const KINDS = new Set(['item', 'kill', 'char']);
+const MAIN_MSG = { item: 'open-item', kill: 'open-kill', char: 'open-char' };
 
 const bc = typeof BroadcastChannel === 'function' ? new BroadcastChannel('eve-float') : null;
 const post = (m) => { try { bc?.postMessage(m); } catch { /* 忽略 */ } };
@@ -64,7 +65,7 @@ document.addEventListener('click', (e) => {
   let x;
   if (el('[data-fd-close]')) { close(); return; }
   if (el('[data-fd-back]')) { const p = back.pop(); if (p) load(p.kind, p.id, p.opt); return; }
-  if (el('[data-fd-main]')) { if (cur) toMain({ t: cur.kind === 'kill' ? 'open-kill' : 'open-item', id: cur.id }); return; }
+  if (el('[data-fd-main]')) { if (cur) toMain({ t: MAIN_MSG[cur.kind], id: cur.id }); return; }
   // 物品详情：标签页、点别的物品
   if ((x = el('[data-fi-tab]'))) { document.querySelectorAll('[data-fi-tab], [data-fi-pane]').forEach((n) => n.classList.toggle('active', (n.dataset.fiTab || n.dataset.fiPane) === x.dataset.fiTab)); return; }
   if ((x = el('[data-fit-info]'))) { e.preventDefault(); show('item', Number(x.dataset.fitInfo), {}, true); return; }
@@ -76,11 +77,15 @@ document.addEventListener('click', (e) => {
     return;
   }
   if (el('[data-kill-fit]')) { if (cur) toMain({ t: 'open-kill', id: cur.id }); return; }
+  // 人物详情的击杀记录：点一行在本窗口看这条击杀
+  if ((x = el('tr[data-kill]')) && !el('a')) { show('kill', Number(x.dataset.kill), {}, true); return; }
   // 站内链接（人物 / 军团 / 联盟）在主窗口打开；外部链接用系统浏览器
   if ((x = el('a[href]'))) {
     const href = x.getAttribute('href');
     e.preventDefault();
-    if (href.startsWith('#')) toMain({ t: 'open-hash', hash: href });
+    const who = /^#kb\/character\/(\d+)$/.exec(href);
+    if (who) show('char', Number(who[1]), {}, true);   // 人物在本窗口看，军团 / 联盟交给主窗口
+    else if (href.startsWith('#')) toMain({ t: 'open-hash', hash: href });
     else if (/^https?:/.test(href)) { if (ipc) ipc.invoke('plugin:opener|open_url', { url: href }).catch(() => window.open(href, '_blank', 'noopener')); else window.open(href, '_blank', 'noopener'); }
   }
 });

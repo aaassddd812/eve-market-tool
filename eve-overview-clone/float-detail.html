@@ -16,7 +16,7 @@
     })();
   </script>
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=145"></script>
+  <script src="js/i18n.js?v=146"></script>
   <link rel="stylesheet" href="css/modern-style.css?v=v245">
   <style>
     html, body { height: 100%; margin: 0; overflow: hidden; background: var(--bg-primary); }
@@ -36,6 +36,12 @@
     .fd-body .kb-ship-col { display: contents; }
     .fd-body .kb-ship-render { grid-row: 1; grid-column: 1; }
     .fd-body .kb-ship-actions { grid-row: 99; grid-column: 1 / -1; }
+    /* 人物详情 */
+    .kb-float .kb-entity-head { flex-wrap: wrap; gap: 12px; }
+    .kb-float .kb-entity-head img { width: 56px; height: 56px; }
+    .kb-float .kb-entity-head h2 { font-size: 1.125rem; }
+    .kb-float .valuation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .kb-float .kb-mini-grid, .kb-float .kb-activity { grid-template-columns: 1fr; }
   </style>
 </head>
 <body>
@@ -48,6 +54,6 @@
     </header>
     <main class="fd-body" id="fdBody"><p class="fd-msg">读取中…</p></main>
   </div>
-  <script type="module" src="js/float-detail.js?v=v2"></script>
+  <script type="module" src="js/float-detail.js?v=v3"></script>
 </body>
 </html>
