@@ -105,17 +105,17 @@ function parse(raw) {
   const skills = [...types.values()].filter((t) => t.category === CAT.skill);
   const char = new Map(Object.entries(raw.char || {}).map(([k, v]) => [Number(k), v]));
   const adapt = raw.adapt;
-  // 云计算：来源舰船 -> { bw 带宽, skills: [{ id, every 是否不限种族 }] }
+  // 云计算：来源舰船 -> { bw 带宽, skills: [{ id, every 是否不限种族, cls 生效船级（列表或 '*' 全部舰船，没有时按同船级） }] }
   const cloud = new Map();
   for (const id of adapt?.max1 || []) if (types.has(id)) types.get(id).maxLevel = 1;
-  for (const [id, [src, every, bw]] of Object.entries(adapt?.cloud || {})) {
+  for (const [id, [src, every, bw, cls]] of Object.entries(adapt?.cloud || {})) {
     const t = types.get(Number(id));
     if (!t || !types.has(src)) continue;
-    t.cloud = { src, every: !!every };
+    t.cloud = { src, every: !!every, cls };
     if (!cloud.has(src)) cloud.set(src, { bw, skills: [] });
     const c = cloud.get(src);
     c.bw = Math.max(c.bw, bw);
-    c.skills.push({ id: t.id, every: !!every });
+    c.skills.push({ id: t.id, every: !!every, cls });
   }
   const hulls = new Map(Object.entries(adapt?.hulls || {}).map(([k, v]) => [Number(k), v]));
   return { attrs, effects, groups, markets, types, byName, skills, char, cloud, hulls };
@@ -208,7 +208,8 @@ function multiply(v, list, stackable) {
 }
 
 // ---------- 云计算（曙光）----------
-// 云计算技能的加成只在「云」里放了来源舰船、且当前舰船与来源同船级（T1 / T2 / 海军型还要求同种族）时生效
+// 云计算技能的加成只在「云」里放了来源舰船、且当前舰船与来源同船级（T1 / T2 / 海军型还要求同种族）时生效；
+// 技能写明了对象的（「所有战列舰」「所有舰船」等）按写明的船级，不分种族
 let CLOUD = new Set();
 export function setCloud(ids) { CLOUD = new Set(ids || []); }
 
@@ -218,10 +219,12 @@ export function hullOf(data, type) {
   return null;
 }
 
-function cloudApplies(data, { src, every }, shipType) {
+function cloudApplies(data, { src, every, cls }, shipType) {
   if (!CLOUD.has(src)) return false;
-  const a = hullOf(data, data.types.get(src));
+  if (cls === '*') return true;
   const b = hullOf(data, shipType);
+  if (cls) return Boolean(b && cls.includes(b[1]));
+  const a = hullOf(data, data.types.get(src));
   return Boolean(a && b && a[1] === b[1] && (every || a[0] === b[0]));
 }
 
@@ -232,7 +235,7 @@ export function cloudInfo(data, shipId) {
     const c = data.cloud.get(id);
     return {
       ship: data.types.get(id), bw: c.bw,
-      skills: c.skills.map((s) => ({ type: data.types.get(s.id), every: s.every, active: Boolean(ship && cloudApplies(data, { src: id, every: s.every }, ship)) }))
+      skills: c.skills.map((s) => ({ type: data.types.get(s.id), every: s.every, cls: s.cls, active: Boolean(ship && cloudApplies(data, { src: id, every: s.every, cls: s.cls }, ship)) }))
     };
   });
 }

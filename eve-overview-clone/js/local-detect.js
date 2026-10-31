@@ -220,27 +220,33 @@ export function scanRows(crop, reg) {
   const h = Math.max(4, Math.round(pitch * 0.75));
   const nameX = iconW, nameW = W - iconW;
   const sbCols = scrollCols(crop, nameX, pitch);
+  const sbLeft = sbCols.size ? Math.min(...sbCols) : W;
   for (let y = phase; y + h <= H; y += pitch) {
     const yi = Math.round(y);
-    // 名字那块的文字像素（签名）；滚动条的滑块（贯穿整行高度、1–2 像素宽的竖线）不算文字
+    // 名字那块的文字像素（签名）；滚动条的滑块（贯穿整行高度、1–2 像素宽的竖线）和它右边（窗口外的画面）不算文字。
+    // 签名分三档：2 笔画（亮）、1 笔画边缘（抗锯齿，视频压缩时忽明忽暗）、0 背景；比对时只有笔画对背景才算不同
     const sig = new Uint8Array(nameW * h);
     let on = 0, right = -1, peak = 0;
-    for (let x = 0; x < nameW; x++) {
+    for (let x = 0; x < Math.min(nameW, sbLeft - nameX); x++) {
       if (sbCols.has(x + nameX)) continue;
       for (let yy = 0; yy < h; yy++) {
         const i = ((yi + yy) * W + x + nameX) * 4;
-        if (texty(data[i], data[i + 1], data[i + 2])) { sig[yy * nameW + x] = 1; on++; peak = Math.max(peak, data[i], data[i + 1], data[i + 2]); }
+        if (texty(data[i], data[i + 1], data[i + 2])) {
+          const mx = Math.max(data[i], data[i + 1], data[i + 2]);
+          if (mx >= 150) { sig[yy * nameW + x] = 2; on++; } else sig[yy * nameW + x] = 1;
+          peak = Math.max(peak, mx);
+        } else if (Math.max(data[i], data[i + 1], data[i + 2]) >= 90) sig[yy * nameW + x] = 1;
         if (x > right && dim(data[i], data[i + 1], data[i + 2])) right = x;
       }
     }
-    if (on < 6) continue;   // 空行
+    if (on < 4) continue;   // 空行
     // 结尾渐隐：最后半个图标宽里的最亮像素明显比整行文字暗
     let tail = 0;
     for (let x = Math.max(0, right - Math.round(size * 0.4)); x <= right; x++) for (let yy = 0; yy < h; yy++) {
       const i = ((yi + yy) * W + x + nameX) * 4;
       tail = Math.max(tail, data[i], data[i + 1], data[i + 2]);
     }
-    rows.push({ y: yi, cls: iconClass(crop, yi, h, iconW), sig, on, w: nameW, h, right, faded: right > 0 && tail < peak * 0.72 });
+    rows.push({ y: yi, cls: iconClass(crop, yi, h, iconW, pitch, size), sig, on, w: nameW, h, right, faded: right > 0 && tail < peak * 0.72 });
   }
   // 名字被截断：放不下的名字都停在同一条截断边附近。截断边 = 至少两行同时停住（±2 像素）的最靠右位置；
   // 截断处正好落在字间空隙时会早停几个像素，所以离截断边不到 0.6 个图标宽的都算；越过截断边的（背景亮点连上了）也算。
@@ -280,28 +286,52 @@ function rowHasColor(crop, y, iconW) {
   for (let x = 0; x < Math.min(W, iconW); x++) { const i = (y * W + x) * 4; if (colored(data[i], data[i + 1], data[i + 2])) return true; }
   return false;
 }
-// 图标颜色：彩色像素的平均色按色相归类
-function iconClass(crop, y, h, iconW) {
+// 图标颜色：彩色像素的平均色按色相归类。
+// 本地窗口半透明，没有图标的行会透出后面的画面（空间站里的棕色、橙色）：这时图标位置和行与行之间的缝隙是同一种颜色，算没有图标
+function iconClass(crop, y, h, iconW, pitch, size) {
   const { data, width: W, height: H } = crop;
-  let r = 0, g = 0, b = 0, n = 0;
-  for (let yy = y; yy < Math.min(H, y + h); yy++) for (let x = 0; x < Math.min(W, iconW); x++) {
-    const i = (yy * W + x) * 4;
-    if (colored(data[i], data[i + 1], data[i + 2])) { r += data[i]; g += data[i + 1]; b += data[i + 2]; n++; }
+  const avg = (ya, yb) => {
+    let r = 0, g = 0, b = 0, n = 0;
+    for (let yy = Math.max(0, ya); yy < Math.min(H, yb); yy++) for (let x = 0; x < Math.min(W, iconW); x++) {
+      const i = (yy * W + x) * 4;
+      if (colored(data[i], data[i + 1], data[i + 2])) { r += data[i]; g += data[i + 1]; b += data[i + 2]; n++; }
+    }
+    return n ? { r: r / n, g: g / n, b: b / n, n } : { n: 0 };
+  };
+  const c = avg(y, y + h);
+  if (c.n < 8) return 'none';
+  const { r, g, b } = c;
+  // 缝隙：图标上下各一两行（不碰相邻的图标）的平均色（不只算彩色像素：背景在缝隙里常常没那么鲜艳）
+  const gapH = Math.max(1, Math.floor((pitch - size) / 2));
+  let gr = 0, gg = 0, gb = 0, gn = 0;
+  for (const yy of [y - 2, y - 1 - gapH, y + size + 1, y + size + gapH].filter((v, i, a) => a.indexOf(v) === i)) {
+    if (yy < 0 || yy >= H || (yy >= y && yy < y + size)) continue;
+    for (let x = 0; x < Math.min(W, iconW); x++) { const i = (yy * W + x) * 4; gr += data[i]; gg += data[i + 1]; gb += data[i + 2]; gn++; }
   }
-  if (n < 8) return 'none';
-  r /= n; g /= n; b /= n;
+  if (gn && Math.abs(gr / gn - r) + Math.abs(gg / gn - g) + Math.abs(gb / gn - b) < 60) return 'none';
   if (r > g * 1.8 && r > b * 1.8) return g < r * 0.45 ? 'red' : 'orange';
   if (r > b * 1.8 && g > b * 1.4 && r >= g) return 'orange';   // 橙 / 黄（声望不良、嫌犯）
   return 'friend';                                               // 蓝、浅蓝、绿、紫等
 }
 
-// 两行名字是不是同一个人：文字像素签名的差异占比（允许背景变化造成的少量像素抖动）
+// 两行名字是不是同一个人：文字像素签名的差异占比（允许背景变化造成的少量像素抖动）。
+// 行距不是整数像素，滚动后按行距切出来的位置会差 1 像素，所以上下错开 1 像素也比一次
 export function sameRow(a, b) {
   if (a.w !== b.w || a.h !== b.h) return false;
-  if (Math.abs(a.on - b.on) > Math.max(6, a.on * 0.15)) return false;
-  let diff = 0;
-  for (let i = 0; i < a.sig.length; i++) if (a.sig[i] !== b.sig[i]) diff++;
-  return diff <= Math.max(6, Math.max(a.on, b.on) * 0.12);
+  if (Math.abs(a.on - b.on) > Math.max(8, Math.max(a.on, b.on) * 0.4)) return false;   // 亮笔画的多少随画面压缩浮动
+  const limit = Math.max(4, Math.min(a.on, b.on) * 0.1), w = a.w, h = a.h;
+  for (const dy of [0, 1, -1]) {
+    let diff = 0;
+    for (let y = 0; y < h && diff <= limit; y++) {
+      const yb = y + dy;
+      for (let x = 0; x < w; x++) {
+        const va = a.sig[y * w + x], vb = yb >= 0 && yb < h ? b.sig[yb * w + x] : 0;
+        if ((va === 2 && vb === 0) || (va === 0 && vb === 2)) { if (++diff > limit) break; }
+      }
+    }
+    if (diff <= limit) return true;
+  }
+  return false;
 }
 
 // 截一行名字给文字识别：放大、二值化成白底黑字（返回 RGBA 像素和宽高）

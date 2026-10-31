@@ -3,7 +3,7 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v27';
+import * as FE from './fit-engine.js?v=v28';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v27';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
@@ -931,11 +931,15 @@ function cloudHtml() {
   }
   const options = [...byClass].sort((a, b) => a[0].localeCompare(b[0], 'zh')).map(([g, list]) => `<optgroup label="${app.esc(g)}">${list.sort((a, b) => a.name.localeCompare(b.name, 'zh')).map((t) => `<option value="${t.id}">${app.esc(t.name)}（带宽 ${F.data.cloud.get(t.id).bw}）</option>`).join('')}</optgroup>`).join('');
   const rows = info.map((c) => `<div class="fit-slot fit-cloud-row"><img src="${IMG(c.ship.id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(c.ship.name)}<small>带宽 ${c.bw}</small></span>
-    <span class="fit-cloud-skills">${c.skills.map((k) => `<span class="${k.active ? 'is-on' : ''}" title="${k.every ? '同船级全部种族' : '同船级同种族'}"><i>${app.esc(k.type?.name || '')}</i><b>${k.active ? '生效' : '不适用'}</b></span>`).join('')}</span>
+    <span class="fit-cloud-skills">${c.skills.map((k) => `<span class="${k.active ? 'is-on' : ''}" title="${cloudScope(k)}"><i>${app.esc(k.type?.name || '')}</i><b>${k.active ? '生效' : '不适用'}</b></span>`).join('')}</span>
     <button class="fit-remove" data-fit-cloud-remove="${c.ship.id}" aria-label="移除">×</button></div>`).join('');
   return `<section class="fit-slots"><h4>云计算<span class="${used > CLOUD_BW ? 'is-over' : ''}">带宽 ${used} / ${CLOUD_BW}${used > CLOUD_BW ? '（超出）' : ''}</span></h4>
     ${rows}<div class="fit-slot is-empty"><select class="plain-select" data-fit-cloud-add aria-label="加入云计算的舰船"><option value="">加入云计算的舰船…</option>${options}</select></div></section>`;
 }
+
+// 云计算技能的生效对象：写明了船级的按船级（不分种族），否则同船级
+const HULL_ZH = { Frigate: '护卫舰', Destroyer: '驱逐舰', Cruiser: '巡洋舰', Battlecruiser: '战列巡洋舰', Battleship: '战列舰', Industrial: '工业舰', Freighter: '货舰', Carrier: '航空母舰', Dreadnought: '无畏舰', Titan: '泰坦', Colossus: '巨像', 'Strategic Cruiser': '战略巡洋舰', 'Tactical Destroyer': '战术驱逐舰' };
+const cloudScope = (k) => k.cls === '*' ? '全部舰船' : k.cls ? k.cls.map((c) => HULL_ZH[c] || c).join(' · ') : k.every ? '同船级全部种族' : '同船级同种族';
 
 function saveCloud(ids) {
   FE.setCloud(ids);
@@ -1010,12 +1014,12 @@ function dronesHtml() {
   const fighters = F.fit.drones.map((d, i) => [d, i]).filter(([d]) => isFighter(d));
   if (res.droneBay.total || drones.length) {
     html += `<section class="fit-slots"><h4>无人机<span>挂舱 ${fmt(res.droneBay.used)} / ${fmt(res.droneBay.total)} m³ · 带宽 ${fmt(res.bandwidth.used)} / ${fmt(res.bandwidth.total)}</span></h4>
-      ${drones.map(([d, i]) => droneRow(d, i, false)).join('') || '<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加</span></div>'}</section>`;
+      ${drones.map(([d, i]) => droneRow(d, i, false)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加</span></div></section>`;
   }
   if (res.fighterBay.total || fighters.length) {
     const roles = [['fighterLight', '轻型'], ['fighterSupport', '支援'], ['fighterHeavy', '重型']].filter(([k]) => res[k].total).map(([k, l]) => `${l} ${res[k].used}/${res[k].total}`).join(' · ');
     html += `<section class="fit-slots"><h4>舰载机<span>机库 ${fmt(res.fighterBay.used)} / ${fmt(res.fighterBay.total)} m³ · 发射管 ${res.fighterTubes.used} / ${res.fighterTubes.total}${roles ? ' · ' + roles : ''}</span></h4>
-      ${fighters.map(([d, i]) => droneRow(d, i, true)).join('') || '<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加舰载机</span></div>'}</section>`;
+      ${fighters.map(([d, i]) => droneRow(d, i, true)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加舰载机</span></div></section>`;
   }
   return html;
 }
@@ -1027,7 +1031,7 @@ function implantsHtml(bound) {
     return `<div class="fit-slot"><img src="${IMG(id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(t.name)}<small>${slot ? '植入体槽位 ' + slot : '增效剂'}</small></span><button class="fit-remove" data-fit-implant-remove="${id}" aria-label="移除">×</button></div>`;
   }).join('');
   return `<section class="fit-slots"><h4>植入体 / 增效剂<span><button class="link-btn" data-fit-imp>智能推荐</button>${bound ? '<button class="link-btn" data-fit-my-implants>导入当前角色的植入体</button>' : ''}</span></h4>
-    ${rows || '<div class="fit-slot is-empty" data-fit-empty-implant><span class="fit-slot-icon"></span><span>从左侧「植入体」中添加</span></div>'}</section>`;
+    ${rows}<div class="fit-slot is-empty" data-fit-empty-implant><span class="fit-slot-icon"></span><span>从左侧「植入体」中添加</span></div></section>`;
 }
 
 // ---------- 右侧：属性 ----------

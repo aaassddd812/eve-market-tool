@@ -3,15 +3,18 @@
 // 画面来源：
 //   网页：主线程把共享屏幕的视频轨道转成 VideoFrame 流（MediaStreamTrackProcessor）传进来，这里随时取最新一帧；
 //   桌面版：这里发 { t: 'grab', rect } 让主线程调 Tauri 命令截 EVE 窗口，主线程把像素传回（{ t: 'grabbed' }）。
-// 追踪：按名字那块的文字像素认人（图标闪烁不影响）；连续两帧都在才算新进本地（过滤一闪而过的杂讯）；
-//   一帧里超过一半的行都换了（换星系、自己滚动了列表）就把这批当作基线，不报警。
-//   每个人最近 0.5 秒里出现过的颜色：红 > 橙 > 友方；红 / 橙要从第一次看到起持续 2 秒、累计 8 帧以上、且是友方图标次数的两倍以上才算（确认前是 pending）；
-//   连续 2 秒都没有图标才算「无图标」（白名，或自己；刚进本地时图标可能晚一点才画出来，不能一进来就当白名）；锁定列表时就在、之后一直没有图标的那一行标 mine（当作自己）。
+// 追踪：按名字那块的文字像素认人（图标闪烁不影响；鼠标停在名字上时按原位置认）；连续两帧都在才算新进本地（过滤一闪而过的杂讯）；
+//   认得出的行都朝同一方向移了同样距离、没有原地不动的，是自己滚动了列表；一帧里超过一半的行都换了（换星系、滚得太快）也一样：这批当作基线，不报白名。
+//   滚出视野的人先存着（PARK），滚回来时认回原编号：名字不重认、报过的警不再报。位置被别人占了的行马上去掉。
+//   每个人最近 0.5 秒里出现过的颜色：红 > 橙 > 友方；红 / 橙要出现满 2 秒、最近 2 秒里四成以上的帧是这个颜色才算（确认前是 pending，
+//   本地窗口半透明，后面画面偶尔闪过的红 / 橙过不了）；
+//   连续 2 秒都没有图标才算「无图标」（白名，或自己；刚进本地时图标可能晚一点才画出来，不能一进来就当白名）；
+//   锁定列表时就在、之后一直没有图标的只有一行时标 mine（当作自己）。
 // 发给主线程：{ t: 'status' } 定位状态，{ t: 'rows' } 当前名单（有变化或每秒一次），{ t: 'ocr', id, img } 新出现的人的名字截图，
 //   { t: 'options', list } 自动找不到时几个像名单的区域的截图（连同上方的频道标签），给用户选。
-import { locate, scanRows, sameRow, rowImage } from './local-detect.js?v=v2';
+import { locate, scanRows, sameRow, rowImage } from './local-detect.js?v=v3';
 
-const TICK = 100, WINDOW = 500, GONE = 1500, RELOCATE = 2000, HITS = 8, CONFIRM = 2000;
+const TICK = 100, WINDOW = 500, GONE = 1500, RELOCATE = 2000, HITS = 8, CONFIRM = 2000, PARK = 10 * 60e3;
 let mode = null;            // 'stream' | 'grab'
 let reader = null, latest = null;
 let canvas = null, c2d = null;
@@ -23,6 +26,8 @@ let timer = 0, busy = false;
 let seq = 0;
 const tracked = [];         // { id, sig, on, w, h, y, clipped, first, last, red, orange, friend, base }
 let pending = [];           // { row, n, first }
+const parked = [];          // 滚出视野的人（滚回来时认回原编号）
+let scrollAt = 0;
 let baseUntil = 0, initUntil = 0;
 let lastSent = '', lastSentAt = 0;
 let grabId = 0;
@@ -55,7 +60,7 @@ function stop() {
   reset();
 }
 function reset() {
-  tracked.length = 0; pending = []; baseUntil = initUntil = Date.now() + 1500; lastSent = ''; lostAt = 0;
+  tracked.length = 0; parked.length = 0; pending = []; scrollAt = 0; baseUntil = initUntil = Date.now() + 1500; lastSent = ''; lostAt = 0;
 }
 
 // 网页：一直读视频流，只留最新一帧
@@ -136,42 +141,98 @@ async function tick() {
 
 function status(state, extra = {}) { self.postMessage({ t: 'status', state, ...extra }); }
 
+// 认人：和最近一帧的签名比，也和最后一次静止时的签名比（滚动中途画面模糊，最近一帧的签名可能已经走样）
+const same = (t, row) => sameRow(t, row) || Boolean(t.sig0 && sameRow({ w: t.w, h: t.h, sig: t.sig0, on: t.on0 }, row));
+
 function track(rows, now) {
-  const used = new Set(), fresh = [];
+  const used = new Set(), fresh = [], moves = [];
   for (const row of rows) {
-    const t = tracked.find((x) => !used.has(x.id) && sameRow(x, row));
+    const t = tracked.find((x) => !used.has(x.id) && same(x, row));
     if (t) {
       used.add(t.id);
+      moves.push(row.y - t.y);
       Object.assign(t, { sig: row.sig, on: row.on, y: row.y, clipped: row.clipped, last: now });
       stamp(t, row.cls, now);
     } else fresh.push(row);
   }
-  // 大半都换了：换星系或滚动了列表，这批算基线
-  if (rows.length >= 4 && fresh.length > rows.length * 0.5) baseUntil = now + 1000;
+  // 滚动：认得出的行大多朝同一方向移了同样的距离，而且没有原地不动的（有人进出时插入点上面的行不动）
+  const pitch = region.pitch, shift = new Map();
+  let still = 0;
+  for (const d of moves) if (Math.abs(d) >= pitch * 0.4) { const k = Math.round(d / pitch); shift.set(k, (shift.get(k) || 0) + 1); } else still++;
+  const most = Math.max(0, ...shift.values());
+  const scrolled = moves.length >= 3 && most >= moves.length * 0.8 && !still;
+  // 大半都换了（换星系、滚动太快一帧里认不出几个）也一样：这批算基线
+  if (scrolled || (rows.length >= 4 && fresh.length > rows.length * 0.5)) { baseUntil = now + 1000; scrollAt = now; }
+  else for (const t of tracked) if (used.has(t.id)) { t.sig0 = t.sig; t.on0 = t.on; }
+  // 没在滚动时，原位置上的名字只是变了样（鼠标停在名字上、行被高亮）：还是那个人
+  if (!scrolled) for (let i = fresh.length - 1; i >= 0; i--) {
+    const row = fresh[i];
+    const t = tracked.find((x) => !used.has(x.id) && now - x.last <= TICK * 3 && Math.abs(x.y - row.y) < pitch * 0.3);
+    if (!t) continue;
+    used.add(t.id);
+    Object.assign(t, { sig: row.sig, on: row.on, clipped: row.clipped, last: now });
+    stamp(t, row.cls, now);
+    fresh.splice(i, 1);
+  }
   const next = [];
   for (const row of fresh) {
     const p = pending.find((x) => sameRow(x.row, row));
     if (p && p.n >= 1) {
-      const t = { id: ++seq, sig: row.sig, on: row.on, w: row.w, h: row.h, y: row.y, clipped: row.clipped, first: p.first, last: now, red: 0, orange: 0, friend: 0, redN: 0, orangeN: 0, friendN: 0, red0: 0, orange0: 0, base: now < baseUntil, init: now < initUntil };
+      // 滚出去又滚回来的人：认回原来的编号（名字、颜色、报过警都保留）；不是在滚动时出现的算重新进本地
+      const k = now - scrollAt < 2000 ? parked.findIndex((x) => same(x, row)) : -1;
+      if (k >= 0) {
+        const t = parked.splice(k, 1)[0];
+        Object.assign(t, { sig: row.sig, on: row.on, y: row.y, clipped: row.clipped, last: now });
+        stamp(t, row.cls, now);
+        tracked.push(t);
+        used.add(t.id);
+        continue;
+      }
+      const t = { id: ++seq, sig: row.sig, on: row.on, w: row.w, h: row.h, y: row.y, clipped: row.clipped, first: p.first, last: now, red: 0, orange: 0, friend: 0, hist: [], base: now < baseUntil, init: now < initUntil };
       stamp(t, p.cls, p.at);
       stamp(t, row.cls, now);
       tracked.push(t);
+      used.add(t.id);
       sendOcr(t);
     } else next.push({ row, n: 1, first: p?.first || now, cls: row.cls, at: now });
   }
   pending = next;
-  for (let i = tracked.length - 1; i >= 0; i--) if (now - tracked[i].last > GONE) tracked.splice(i, 1);
+  // 这一帧没看到的人：位置已经被别人占了就马上去掉，否则等 GONE 毫秒（偶尔一两帧没认出）。
+  // 滚动中消失的是滚出了视野，不是离开本地：先存着，滚回来时认回去
+  for (let i = tracked.length - 1; i >= 0; i--) {
+    const t = tracked[i];
+    if (used.has(t.id)) continue;
+    const taken = rows.some((r) => Math.abs(r.y - t.y) < pitch * 0.5);
+    if (!taken && now - t.last <= GONE) continue;
+    tracked.splice(i, 1);
+    if (now - scrollAt < GONE + 1000) { parked.push(t); t.parkedAt = now; }
+  }
+  for (let i = parked.length - 1; i >= 0; i--) if (now - parked[i].parkedAt > PARK) parked.splice(i, 1);
 }
-// 每种颜色记第一次、最后一次看到的时间和累计次数
+// 每种颜色记最后一次看到的时间、有图标的累计帧数，另留最近 CONFIRM 毫秒里每帧的颜色（hist）
 function stamp(t, cls, at) {
-  if (cls === 'red') { t.red = at; t.redN++; t.red0 ||= at; } else if (cls === 'orange') { t.orange = at; t.orangeN++; t.orange0 ||= at; } else if (cls === 'friend') { t.friend = at; t.friendN++; }
+  if (cls === 'red') t.red = at; else if (cls === 'orange') t.orange = at; else if (cls === 'friend') t.friend = at;
+  if (cls !== 'none') t.iconN = (t.iconN || 0) + 1;   // 累计有图标的帧数（mine：一直没有图标的才当自己）
+  (t.hist ||= []).push({ at, cls });
+  while (t.hist.length && at - t.hist[0].at > CONFIRM) t.hist.shift();
 }
-// 红 / 橙要确认：从第一次看到起持续 CONFIRM 毫秒、累计至少 HITS 帧，且是友方图标次数的两倍以上（偶尔几帧颜色认错、画面切换、列表滚动时的杂色都不算）
-const sure = (n, first, last, t) => n >= HITS && last - first >= CONFIRM && n > t.friendN * 2;
+// 红 / 橙要确认：出现满 CONFIRM 毫秒，且最近 CONFIRM 毫秒里至少 HITS 帧、四成以上的帧是这个颜色、比友方图标多一倍
+// （透明窗口后面的画面偶尔闪过一片红 / 橙、列表滚动时的杂色都过不了；图标闪烁时一半的帧亮，能过）。确认过的之后看到就算
+function sure(t, color, now) {
+  if (t.ok?.[color]) return true;
+  const h = t.hist || [];
+  const n = h.filter((x) => x.cls === color).length, f = h.filter((x) => x.cls === 'friend').length;
+  if (now - t.first < CONFIRM || n < HITS || n < h.length * 0.4 || n <= f * 2) return false;
+  (t.ok ||= {})[color] = true;
+  return true;
+}
 function clsOf(t, now) {
-  if (now - t.red <= WINDOW && sure(t.redN, t.red0, t.red, t)) return 'red';
-  if (now - t.orange <= WINDOW && sure(t.orangeN, t.orange0, t.orange, t)) return 'orange';
-  if (now - t.red <= WINDOW || now - t.orange <= WINDOW) { if (t.friendN < t.redN + t.orangeN) return 'pending'; }
+  if (now - t.red <= WINDOW && sure(t, 'red', now)) return 'red';
+  if (now - t.orange <= WINDOW && sure(t, 'orange', now)) return 'orange';
+  if (now - t.red <= WINDOW || now - t.orange <= WINDOW) {
+    const h = t.hist || [];
+    if (h.filter((x) => x.cls === 'friend').length < h.filter((x) => x.cls === 'red' || x.cls === 'orange').length) return 'pending';
+  }
   if (now - t.friend <= WINDOW) return 'friend';
   // 白名也要确认：从出现（或最后一次看到图标）起 CONFIRM 毫秒都没有图标
   return now - Math.max(t.first, t.red, t.orange, t.friend) >= CONFIRM ? 'none' : 'pending';
@@ -179,7 +240,9 @@ function clsOf(t, now) {
 
 function send(now, ms, clipped) {
   // mine：开始监视（锁定列表）时就在、一直没看到过图标（偶尔一两帧认错不算）
-  const rows = tracked.map((t) => ({ id: t.id, cls: clsOf(t, now), y: t.y, clipped: t.clipped, base: t.base, first: t.first, mine: t.init && t.redN + t.orangeN + t.friendN < 3 })).sort((a, b) => a.y - b.y);
+  // 开始监视时就在、一直没有图标的只有一个人时才当作自己（有好几个说明里面有真白名，等认出名字再说）
+  const alone = tracked.filter((t) => t.init && (t.iconN || 0) < 3);
+  const rows = tracked.map((t) => ({ id: t.id, cls: clsOf(t, now), y: t.y, clipped: t.clipped, base: t.base, first: t.first, mine: alone.length === 1 && alone[0] === t })).sort((a, b) => a.y - b.y);
   const key = rows.map((r) => r.id + r.cls + (r.clipped ? '!' : '') + (r.mine ? 'm' : '')).join(',');
   if (key === lastSent && now - lastSentAt < 1000) return;
   lastSent = key; lastSentAt = now;

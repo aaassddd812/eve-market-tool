@@ -22,7 +22,7 @@ const DEFAULTS = { red: true, orange: true, neutral: false, withName: true, only
 const T = { ...DEFAULTS };
 const S = {
   stream: null, worker: null, video: null, canvas: null, state: 'off', region: null, since: 0, ms: 0, clipped: false,
-  rows: [], people: new Map(), log: [], lastAlert: 0, alertTimer: 0, pick: null,
+  rows: [], people: new Map(), gone: new Map(), log: [], lastAlert: 0, alertTimer: 0, pick: null,
   options: undefined,  // 自动找不到时给用户选的区域：undefined 还没截，null 正在截，[] 截好了
   wins: null, hwnd: 0, winName: ''   // 桌面版：点「开始」后列出的 EVE 窗口（给用户选），选中的窗口与角色名
 };
@@ -163,8 +163,8 @@ function startWorker(native) {
   S.state = 'starting';
   S.since = Date.now();
   S.options = undefined;
-  S.rows = []; S.people.clear();
-  const w = new Worker(new URL('./local-worker.js?v=v7', import.meta.url), { type: 'module' });
+  S.rows = []; S.people.clear(); S.gone.clear();
+  const w = new Worker(new URL('./local-worker.js?v=v8', import.meta.url), { type: 'module' });
   S.worker = w;
   w.onmessage = onWorker;
   if (native) w.postMessage({ t: 'grab-mode' });
@@ -181,7 +181,7 @@ function stop() {
   S.native = false;
   if (S.video) { S.video.srcObject = null; S.video = null; }
   S.state = 'off';
-  S.rows = []; S.people.clear();
+  S.rows = []; S.people.clear(); S.gone.clear();
   closePick();
   notify();
 }
@@ -213,7 +213,7 @@ function onWorker(e) {
     const prev = S.state;
     S.state = m.state;
     if (m.state === 'locked') { S.region = m.region; S.options = undefined; }
-    if (m.state === 'locked' || m.state === 'lost') { S.rows = []; S.people.clear(); }
+    if (m.state === 'locked' || m.state === 'lost') { S.rows = []; S.people.clear(); S.gone.clear(); }
     if (m.state === 'lost') S.since = Date.now();
     // 找了 8 秒还没找到：截几个像名单的地方给用户选
     if (m.state === 'locating' && S.options === undefined && Date.now() - S.since > 8000) askOptions();
@@ -276,7 +276,8 @@ function onRows(m) {
   for (const r of m.rows) {
     alive.add(r.id);
     let p = S.people.get(r.id);
-    if (!p) { p = newPerson(r.id); S.people.set(r.id, p); }
+    // 滚出视野又滚回来的人后台线程会给回原编号：名字、所属、报过警都接着用
+    if (!p) { p = S.gone.get(r.id) || newPerson(r.id); S.gone.delete(r.id); S.people.set(r.id, p); }
     p.first = r.first;
     Object.assign(p, { cls: r.cls, y: r.y, clipped: r.clipped, base: r.base, init: r.mine });
     // 红 / 橙：后台线程已确认颜色；默认再等名字和所属查完（最多 2 秒），是自己或友方（颜色认错）就不报
@@ -285,7 +286,8 @@ function onRows(m) {
     // 白名：认出名字、查到所属、确认不是自己后才报（基线里的不报：刚开始监视或换了星系）
     if (!p.alerted && T.neutral && r.cls === 'none' && !r.base && hostile(p)) { p.alerted = true; fire.push(p); }
   }
-  for (const id of S.people.keys()) if (!alive.has(id)) S.people.delete(id);
+  for (const [id, p] of S.people) if (!alive.has(id) && !p.test) { S.people.delete(id); p.goneAt = Date.now(); S.gone.set(id, p); }
+  for (const [id, p] of S.gone) if (Date.now() - p.goneAt > 10 * 60e3) S.gone.delete(id);
   S.rows = m.rows;
   if (fire.length) raise(fire);
   notify();
@@ -388,7 +390,7 @@ function ocrRow(m) {
   // 只看色块：不识别名字（打开「色块 + 人物名」时再补认）
   if (!T.withName) { S.people.get(m.id).look = 'off'; return; }
   ocrQ = ocrQ.then(async () => {
-    const p = S.people.get(m.id);
+    const p = S.people.get(m.id) || S.gone.get(m.id);
     if (!p) return;
     try {
       const w = await ocrWorker();

@@ -22,7 +22,8 @@
   舰船适性（技能组 4160）：技能把数值加到舰船的 shipAdaption* 属性上，舰船再用自己的效果加到装甲 / 抗性等；
     描述写「解锁后」的只有 1 级（fit.adapt.max1），其余按 5 级
   云计算（技能组 4196）：把闲置舰船放进云计算后给当前舰船加成，效果直接改舰船属性；前端由玩家勾选放了哪些船才生效。
-    fit.adapt.cloud: { 技能: [来源舰船, 对该级别全部种族(0/1), 带宽] }；fit.adapt.hulls: { 种族船体技能: [种族, 级别] }
+    fit.adapt.cloud: { 技能: [来源舰船, 对该级别全部种族(0/1), 带宽, 生效船级?] }；fit.adapt.hulls: { 种族船体技能: [种族, 级别] }
+    生效船级（可省略）：技能描述写了「所有战列舰 / 所有舰船…」或官方公告写明的（CLOUD_FIX），为船级列表（不分种族）或 '*'（全部舰船）
     生效对象：与来源舰船同级别（按种族船体技能），T1 / T2 / 海军型只对本族；需要两族技能的（海盗船）对全部种族；
     官方列出过的舰船按官方表格（CLOUD_NEWS）。带宽：官方表格有的按表格，否则 T1 20、海军型 25、T2 30、其他势力 35
 另外 fit.patch: { 已有舰船: [{ 属性: 国服值 }, [国服效果列表]] }：宁静服也有的舰船在国服的属性值 / 效果不同时（适性属性与效果、数值调整）按国服覆盖。
@@ -53,7 +54,7 @@ ADAPT_GROUPS = {4160, 4196}   # 舰船适性、云计算（曙光）
 CLOUD_GROUP = 4196
 CLOUD_NEWS = 'https://evepc.163.com/shuguang/news/20231116/38678_1120400.html'
 REQ_SKILLS = ('182', '183', '184', '1285', '1289', '1290')
-HULL_RE = re.compile(r'^(Amarr|Caldari|Gallente|Minmatar|Precursor|ORE|Jove|Upwell|EDENCOM|Triglavian) (Frigate|Destroyer|Cruiser|Battlecruiser|Battleship|Carrier|Dreadnought|Titan|Force Auxiliary|Industrial|Hauler|Freighter)$')
+HULL_RE = re.compile(r'^(Amarr|Caldari|Gallente|Minmatar|Precursor|ORE|Jove|Upwell|EDENCOM|Triglavian) (Frigate|Destroyer|Cruiser|Battlecruiser|Battleship|Carrier|Dreadnought|Titan|Force Auxiliary|Industrial|Hauler|Freighter|Strategic Cruiser|Tactical Destroyer)$')
 
 
 # ---------- ESI（带磁盘缓存）----------
@@ -438,6 +439,55 @@ def cloud_table():
     return out
 
 
+# 官方公告里写明的带宽 / 生效对象（游戏数据里没有，技能描述也没写的）：舰船中文名 -> (带宽或 None, 船级列表 / '*' 全部舰船 / None)
+CLOUD_FIX = {
+    '狂怒守卫者级': (40, ['Cruiser', 'Battlecruiser']),   # 2022-09-30 典藏宝箱公告：所有巡洋级别、带宽 40；之后「向上兼容一级」到战列巡洋舰
+    '复仇女神级': (None, ['Cruiser', 'Battlecruiser']),   # 惩戒女神级（旧译名），2022-11-07：对所有巡洋和战列巡洋级别船体
+    '传道者级': (None, ['Cruiser', 'Battlecruiser']),     # 2022-12-01：对所有巡洋和战列巡洋级别船体
+    '加百列级': (None, ['Colossus', 'Dreadnought', 'Titan']),   # 2023-12-20：对巨像、无畏舰、长枪无畏舰、泰坦有效
+    '变色龙级': (40, None),                               # 2024-04-09：★变色龙级的带宽「相比原版从 40 降低到了 30」
+    '★变色龙级': (30, None),
+}
+CLASS_ZH = (('战列巡洋', 'Battlecruiser'), ('战列', 'Battleship'), ('巡洋', 'Cruiser'), ('驱逐', 'Destroyer'), ('护卫', 'Frigate'),
+            ('工业', 'Industrial'), ('货舰', 'Freighter'), ('无畏', 'Dreadnought'), ('泰坦', 'Titan'), ('舰船', '*'))
+
+
+def cloud_scope(desc):
+    """技能描述里写了「所有战列舰的…」「所有巡洋、战列巡洋舰的…」「所有舰船释放的…」：返回船级列表或 '*'，没写返回 None（按同船级）"""
+    m = re.search(r'所有([^，。的上]+?)(?:的|释放|上)', desc or '')
+    if not m:
+        return None
+    out = []
+    for part in re.split(r'[、和与及]', m.group(1)):
+        hit = next((en for zh, en in CLASS_ZH if zh in part), None)
+        if hit == '*':
+            return '*'
+        if hit and hit not in out:
+            out.append(hit)
+    return out or None
+
+
+VARIANT = ('海军型', '舰队型')   # 「探索级海军型…」的来源是「探索级舰队型」，不能当成「探索级」
+FACTION_WORDS = {'imperial', 'republic', 'federation', 'federal', 'caldari', 'state', 'navy', 'fleet', 'issue', 'n'}
+
+
+def cloud_src_en(name, ships):
+    """中文名对不上（旧译名「惩戒级」= 复仇级、「共和舰队火尾鸡」等）时按英文名找来源舰船：
+    舰船英文名除势力词外的词都要出现在技能名里，且技能名第一个词属于舰船名；命中词多的优先（Slicer Navy → 帝国海军切割机级）"""
+    words = re.findall(r"[a-z0-9]+", (name or '').lower())
+    first = next((w for w in words if w != 'n'), None)
+    have, best = set(words), None
+    for sid, v in ships.items():
+        sw = set(re.findall(r"[a-z0-9]+", (v[1] or '').lower()))
+        core = sw - FACTION_WORDS
+        if not core or not core <= have or first not in sw:
+            continue
+        score = (len(sw & have), -len(sw - have))
+        if best is None or score > best[0]:
+            best = (score, sid)
+    return best and best[1]
+
+
 def adapt_meta(ds, fit, out_types, zh, groups):
     """适性技能的等级上限、云计算技能的来源舰船 / 生效范围 / 带宽（没有这两组技能的服务器返回 None）"""
     adapt = [t for t in out_types if zh[t]['group_id'] in ADAPT_GROUPS]
@@ -448,25 +498,35 @@ def adapt_meta(ds, fit, out_types, zh, groups):
     allt = {**{int(k): v for k, v in fit['types'].items()}, **out_types}
     ships = {t: v for t, v in allt.items() if category(v[2]) == 6}
     hulls = {t: list(m.groups()) for t, v in allt.items() if (m := HULL_RE.match(v[1] or ''))}
+    hulls.update({t: ['', 'Colossus'] for t, v in allt.items() if v[1] == 'Colossus'})   # 曙光的旗舰船级「巨像」，不分种族
     table = cloud_table()
-    by_name = sorted(((v[0], t) for t, v in ships.items()), key=lambda x: -len(x[0]))   # 长名优先：「磨难级海军型」先于「磨难级」
+    # 长名优先：「磨难级海军型」先于「磨难级」；技能名也常省掉「级」（「达玛维克装甲值…」）
+    by_name = sorted(((n, t) for t, v in ships.items() for n in {v[0], v[0].removesuffix('级')} if len(n) > 1), key=lambda x: -len(x[0]))
     cloud, unknown = {}, 0
     for t in adapt:
         if zh[t]['group_id'] != CLOUD_GROUP:
             continue
-        src = next((sid for n, sid in by_name if zh[t]['name'].startswith(n)), None)
+        name = zh[t]['name']
+        src = next((sid for n, sid in by_name if name.startswith(n) and not name[len(n):].lstrip('级').startswith(VARIANT)), None)
+        src = src or cloud_src_en(out_types[t][1], ships)
         if not src:
             unknown += 1
             continue
         v = ships[src]
-        races = {hulls[int(v[5][k])][0] for k in REQ_SKILLS if v[5].get(k) and int(v[5][k]) in hulls}
-        if v[0] in table:
-            target, bw = table[v[0]]
+        races = {hulls[int(v[5][k])][0] for k in REQ_SKILLS if v[5].get(k) and int(v[5][k]) in hulls} - {''}
+        row = table.get(v[0]) or table.get(v[0].replace('鲛', '蛟').replace('萨', '撒'))   # 公告和游戏里个别字写法不同
+        if row:
+            target, bw = row
             every = int(target.startswith('全部'))
         else:
             every = int(len(races) > 1)
             bw = {1: 20, 2: 30}.get(v[4], 25 if v[4] == 4 and len(races) == 1 else 35)
-        cloud[t] = [src, every, bw]
+        fix_bw, scope = CLOUD_FIX.get(v[0], (None, None))
+        scope = scope or cloud_scope(zh[t].get('description'))
+        # 来源舰船没有任何船体技能（赛季船、游艇等），也没写对象：按全部舰船（同系列的星耀级写的就是「所有舰船」）
+        if not scope and not any(v[5].get(k) and int(v[5][k]) in hulls for k in REQ_SKILLS):
+            scope = '*'
+        cloud[t] = [src, every, fix_bw or bw] + ([scope] if scope else [])
     if unknown:
         print(f'{ds}: {unknown} 个云计算技能找不到来源舰船（多为没有名称的 CloudComputingBoundItem），不生效')
     return {'max1': max1, 'cloud': cloud, 'hulls': hulls}
