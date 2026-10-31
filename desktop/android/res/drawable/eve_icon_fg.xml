@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 自适应图标前景：网站图标（assets/favicon.svg，64 单位）的图案原尺寸放在 108 单位画布正中，整个落在 66 单位的安全区里，各种形状的遮罩都不会裁掉 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android" xmlns:aapt="http://schemas.android.com/aapt"
+  android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+  <group android:translateX="22" android:translateY="22">
+    <path android:fillAlpha="0.75" android:pathData="M14.5,38.0 h5.0 a2.5,2.5 0 0 1 2.5,2.5 v11.0 a2.5,2.5 0 0 1 -2.5,2.5 h-5.0 a2.5,2.5 0 0 1 -2.5,-2.5 v-11.0 a2.5,2.5 0 0 1 2.5,-2.5 z">
+      <aapt:attr name="android:fillColor">
+        <gradient android:type="linear" android:startX="0" android:startY="54" android:endX="0" android:endY="38" android:startColor="#FF2F6FE0" android:endColor="#FF6FB4FF"/>
+      </aapt:attr>
+    </path>
+    <path android:fillAlpha="0.88" android:pathData="M29.5,29.0 h5.0 a2.5,2.5 0 0 1 2.5,2.5 v20.0 a2.5,2.5 0 0 1 -2.5,2.5 h-5.0 a2.5,2.5 0 0 1 -2.5,-2.5 v-20.0 a2.5,2.5 0 0 1 2.5,-2.5 z">
+      <aapt:attr name="android:fillColor">
+        <gradient android:type="linear" android:startX="0" android:startY="54" android:endX="0" android:endY="29" android:startColor="#FF2F6FE0" android:endColor="#FF6FB4FF"/>
+      </aapt:attr>
+    </path>
+    <path android:fillAlpha="1" android:pathData="M44.5,20.0 h5.0 a2.5,2.5 0 0 1 2.5,2.5 v29.0 a2.5,2.5 0 0 1 -2.5,2.5 h-5.0 a2.5,2.5 0 0 1 -2.5,-2.5 v-29.0 a2.5,2.5 0 0 1 2.5,-2.5 z">
+      <aapt:attr name="android:fillColor">
+        <gradient android:type="linear" android:startX="0" android:startY="54" android:endX="0" android:endY="20" android:startColor="#FF2F6FE0" android:endColor="#FF6FB4FF"/>
+      </aapt:attr>
+    </path>
+    <path android:pathData="M10,31 L25,21 L35,25 L51,11" android:strokeColor="#FFF5C451" android:strokeWidth="4" android:strokeLineCap="round" android:strokeLineJoin="round"/>
+    <path android:fillColor="#FFF5C451" android:pathData="M47,11 a4,4 0 1 0 8,0 a4,4 0 1 0 -8,0 z"/>
+  </group>
+</vector>

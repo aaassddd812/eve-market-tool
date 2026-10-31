@@ -146,6 +146,7 @@ jobs:
           export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           cargo tauri android init --ci
           cargo tauri icon src-tauri/icons/icon.png
+          bash android/patch.sh
           cargo tauri android build --apk --target aarch64 --target armv7 --ci
 
       - name: 签名

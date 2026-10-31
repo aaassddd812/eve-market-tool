@@ -8,6 +8,7 @@ Windows 10 / 11 桌面程序与安卓 App（Tauri 2，Windows 用系统自带的
   - 本站以外的链接、新窗口打开的链接交给系统浏览器（ESI 登录在浏览器里完成，复制回调地址粘贴回桌面版绑定）。
   - 只给线上站点开放 `opener:default`、`notification:default` 权限（`capabilities/default.json`）。
   - 插件：系统通知（替换网页的 `window.Notification`）；仅桌面：单实例（再次双击切回已开窗口）、记住窗口位置与大小、自动更新。
+- `android/`：安卓工程补丁（工作流里 `tauri android init`、`tauri icon` 之后跑 `android/patch.sh`）：`MainActivity.kt` 给内容区留出状态栏 / 导航栏 / 刘海和键盘的位置（安卓 15 起默认铺满全屏，网页顶栏会压在通知栏下面）；`res/` 是矢量自适应图标（背景铺满，图案缩在安全区里，各种遮罩形状都不裁）。
 - 悬浮窗（仅桌面，`float_*` 命令）：网页点「悬浮窗」调 `float_open`，开一个置顶、无边框、透明背景、不占任务栏的窗口（标签 `float-<kind>`，加载本站 `float.html`），
   窗口里调 `float_drag`（拖动标题栏）、`float_pass`（鼠标穿透）、`float_close`、`float_focus_main`（点了详情切回主窗口）。远程网页调自定义命令要在 `build.rs` 的 AppManifest 里登记，
   再在 `capabilities/default.json` 放行 `allow-float-*`。关掉主窗口时整个程序退出。
