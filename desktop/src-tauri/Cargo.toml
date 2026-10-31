@@ -1,6 +1,6 @@
 [package]
 name = "eve-tool-desktop"
-version = "1.0.12"
+version = "1.0.13"
 description = "EVE 辅助工具桌面版 / 安卓版"
 edition = "2021"
 
