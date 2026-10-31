@@ -50,6 +50,9 @@
   --transition-base: 200ms cubic-bezier(0.4, 0, 0.2, 1);
 
   --header-h: 56px;
+  /* 系统栏安全区：浏览器给 env()；安卓 App 铺满全屏，WebView 不报 env()，由壳把状态栏 / 导航栏高度写到 <html> 的这两个变量上 */
+  --sa-top: env(safe-area-inset-top, 0px);
+  --sa-bottom: env(safe-area-inset-bottom, 0px);
   --sidebar-w: 320px;
 
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
@@ -165,13 +168,14 @@ mark {
 
 /* ===== 头部导航 ===== */
 .app-header {
-  height: var(--header-h);
+  height: calc(var(--header-h) + var(--sa-top));
   flex-shrink: 0;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border-primary);
   display: flex;
   align-items: center;
   padding: 0 var(--spacing-md);
+  padding-top: var(--sa-top);   /* 顶栏底色铺到状态栏下面，内容让开 */
   gap: var(--spacing-lg);
   z-index: 100;
 }
@@ -282,14 +286,14 @@ mark {
 
 /* ===== 手机导航（mobile-nav.js）：底部标签栏 + 「全部」面板；电脑上不显示 ===== */
 .mobile-title, .mobile-tabbar { display: none; }
-.mobile-tabbar { flex: none; background: var(--bg-secondary); border-top: 1px solid var(--border-primary); padding-bottom: env(safe-area-inset-bottom); z-index: 100; }
+.mobile-tabbar { flex: none; background: var(--bg-secondary); border-top: 1px solid var(--border-primary); padding-bottom: var(--sa-bottom); z-index: 100; }
 .mtab { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 54px; color: var(--text-muted); font-size: 0.6875rem; font-weight: 500; -webkit-tap-highlight-color: transparent; }
 .mtab svg { width: 22px; height: 22px; flex: none; }
 .mtab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mtab.active { color: var(--accent-primary); }
 .msheet { position: fixed; inset: 0; z-index: 1300; }
 .msheet-backdrop { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.45); opacity: 0; transition: opacity 0.2s ease; }
-.msheet-panel { position: absolute; left: 0; right: 0; bottom: 0; max-height: 85dvh; overflow-y: auto; overscroll-behavior: contain; background: var(--bg-secondary); border-radius: 16px 16px 0 0; padding: 0 12px calc(12px + env(safe-area-inset-bottom)); transform: translateY(100%); transition: transform 0.22s ease; }
+.msheet-panel { position: absolute; left: 0; right: 0; bottom: 0; max-height: 85dvh; overflow-y: auto; overscroll-behavior: contain; background: var(--bg-secondary); border-radius: 16px 16px 0 0; padding: 0 12px calc(12px + var(--sa-bottom)); transform: translateY(100%); transition: transform 0.22s ease; }
 .msheet.open .msheet-backdrop { opacity: 1; }
 .msheet.open .msheet-panel { transform: none; }
 .msheet-grab { height: 22px; display: flex; align-items: center; justify-content: center; }
@@ -2604,7 +2608,7 @@ td.loc {
 @media (max-width: 768px) {
   :root { --sidebar-w: min(86vw, 340px); }
 
-  .app-header { padding: 0 8px; gap: 8px; }
+  .app-header { padding: var(--sa-top) 8px 0; gap: 8px; }
   .menu-btn { display: flex; }
   /* 顶栏只留 ☰、当前页名称、服务器、购物车、预警；功能入口在底部标签栏，语言 / 主题 / API / 定制收进「全部」面板 */
   .header-brand, .header-nav, .api-link, #contactBtn, #shortcutHelpBtn, #langToggle, #themeToggle { display: none; }
@@ -2685,7 +2689,7 @@ td.loc {
   .contract-title { min-width: 0; }
   .contract-types { flex-wrap: wrap; }
 
-  .toast-stack { left: 16px; right: 16px; bottom: calc(66px + env(safe-area-inset-bottom)); align-items: stretch; }   /* 在底部标签栏上面 */
+  .toast-stack { left: 16px; right: 16px; bottom: calc(66px + var(--sa-bottom)); align-items: stretch; }   /* 在底部标签栏上面 */
   .toast { max-width: none; }
 }
 
@@ -2809,7 +2813,7 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 
   /* 刘海屏 / 底部手势条安全区 */
   .app-header { padding-left: max(8px, env(safe-area-inset-left)); padding-right: max(8px, env(safe-area-inset-right)); }
-  .main-content, .kb-scroll, .profile-scroll, .map-sidebar-content, .profile-sidebar-content { padding-bottom: env(safe-area-inset-bottom); }
+  .main-content, .kb-scroll, .profile-scroll, .map-sidebar-content, .profile-sidebar-content { padding-bottom: var(--sa-bottom); }
 
   /* iOS 输入框字号小于 16px 时聚焦会自动放大页面 */
   input[type="search"], input[type="text"], input[type="number"], textarea { font-size: 16px; }
@@ -2821,7 +2825,7 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
   .modal { padding: 0; align-items: stretch; }
   .modal-content, .modal-content.kill-content, .modal-content.shortcut-content {
     max-width: none; max-height: none; height: 100%; border-radius: 0; border: 0;
-    padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+    padding-top: var(--sa-top); padding-bottom: var(--sa-bottom);
   }
   .modal-header { position: sticky; top: 0; z-index: 2; background: var(--bg-secondary); }
   .modal-body { flex: 1; padding: 16px; }
@@ -2940,7 +2944,7 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .map-panel-head.route-head { justify-content: space-between; }
 
 /* ===== 会战：全站提醒卡片 ===== */
-.battle-alerts { position: fixed; top: calc(var(--header-h) + 12px); right: 16px; z-index: 1500; display: flex; flex-direction: column; gap: 10px; width: min(360px, calc(100vw - 32px)); }
+.battle-alerts { position: fixed; top: calc(var(--header-h) + var(--sa-top) + 12px); right: 16px; z-index: 1500; display: flex; flex-direction: column; gap: 10px; width: min(360px, calc(100vw - 32px)); }
 .battle-alert {
   padding: 12px 14px; border: 1px solid rgba(180, 108, 255, 0.55); border-radius: var(--radius-lg);
   background: var(--bg-secondary); box-shadow: var(--shadow-lg), 0 0 0 3px rgba(180, 108, 255, 0.12);
@@ -2985,7 +2989,7 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .kb-battle-actions .link-btn { margin-right: auto; font-size: 0.75rem; }
 .kb-battle-actions .btn { height: 28px; padding: 0 10px; font-size: 0.75rem; }
 @media (max-width: 768px) {
-  .battle-alerts { top: calc(var(--header-h) + 8px); right: 8px; width: calc(100vw - 16px); }
+  .battle-alerts { top: calc(var(--header-h) + var(--sa-top) + 8px); right: 8px; width: calc(100vw - 16px); }
 }
 
 /* ===== 模拟装配 ===== */

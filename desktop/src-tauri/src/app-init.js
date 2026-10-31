@@ -1,6 +1,21 @@
 // 桌面版 / 安卓版注入脚本：每个页面加载前运行（Tauri initialization_script）
 // 桌面版设 __EVE_DESKTOP__（网页换左侧菜单），安卓版设 __EVE_APP__（网页用手机布局、隐藏下载入口）
 window.__FLAG__ = '__VERSION__';
+// 安卓版铺满全屏：壳（MainActivity 的 EveApp）给出状态栏 / 导航栏高度，写到 --sa-top / --sa-bottom 让网页顶栏、底栏让开；状态栏图标颜色跟网页主题
+(function () {
+  var app = window.EveApp;
+  if (!app) return;
+  window.__eveInsets = function (t, b) {
+    var s = document.documentElement.style;
+    s.setProperty('--sa-top', t + 'px');
+    s.setProperty('--sa-bottom', b + 'px');
+  };
+  try { window.__eveInsets(app.top(), app.bottom()); } catch (e) {}
+  var root = document.documentElement;
+  var theme = function () { try { app.lightBars(root.getAttribute('data-theme') === 'light'); } catch (e) {} };
+  new MutationObserver(theme).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+  theme();
+})();
 (function () {
   if (location.protocol !== 'https:' && location.protocol !== 'http:') return;
   // 本站以外的地址、新窗口打开的地址（ESI 登录、API 文档、外部资料）交给系统浏览器
