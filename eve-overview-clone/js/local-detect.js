@@ -1,7 +1,7 @@
 // ===== 本地红名：画面识别（纯计算，不碰 DOM；local-worker.js 与 local-watch.js 共用）=====
 // 输入是一帧画面 { data: RGBA, width, height }。
 // 1. locate：在整帧里找「本地」成员列表：
-//    声望图标是一列竖直对齐、大小相同（界面 90% 时约 11px）、间距固定（约图标的 1.4 倍）的彩色小方块，连续 3 个以上算一个名单；
+//    声望图标是一列竖直对齐、大小相同（界面 90% 时约 11px）、间距固定（约图标的 1.4 倍）的彩色小方块，连续 3 个以上算一个名单（人少、只有一两个彩色图标时，认出上方的「本」字也算，行距从名字的文字行量）；
 //    名单上方的频道标签里有「本」字（窗口窄时「地」会被挡住，只认「本」）的就是本地。别的频道成员列表、空间站访客列表都对不上。
 //    返回列表区域（图标列左边到滚动条）、图标大小、行距。界面缩放不同时图标与行距跟着变，都从画面里量出来。
 //    没认出「本」字时返回最多 4 个像名单的区域（options），让用户从截图里选。
@@ -85,7 +85,7 @@ export function locate(frame, opts = {}) {
   for (const g of cols) {
     g.sort((a, b) => a.y - b.y);
     let run = [g[0]];
-    const flush = () => { if (run.length >= (opts.within ? 2 : 3)) lists.push(run); };
+    const flush = () => { lists.push(run); };
     for (const c of g.slice(1)) {
       const dy = c.y - run[run.length - 1].y;
       if (dy >= c.s * 1.1 && dy <= c.s * 4.5) run.push(c); else { flush(); run = [c]; }
@@ -95,12 +95,18 @@ export function locate(frame, opts = {}) {
   const out = [];
   for (const run of lists) {
     const size = Math.round(run.reduce((a, c) => a + c.s, 0) / run.length);
-    const dys = run.slice(1).map((c, i) => c.y - run[i].y);
-    const base = Math.min(...dys);
-    const single = dys.filter((d) => d < base * 1.5);
-    const pitch = single.reduce((a, b) => a + b, 0) / single.length;
-    if (pitch > size * 2.2) continue;   // 行距太大：带头像的名单（空间站访客等）
-    const ben = opts.within ? 1 : benScore(frame, run[0].x, run[0].y, size, pitch);
+    // 人少时本地里可能只有一两个彩色图标（白名、自己没有图标）：这时行距从右边名字的文字行量，并且一定要认出「本」字
+    const weak = run.length < (opts.within ? 2 : 3);
+    let pitch;
+    if (run.length >= 2) {
+      const dys = run.slice(1).map((c, i) => c.y - run[i].y);
+      const base = Math.min(...dys);
+      const single = dys.filter((d) => d < base * 1.5);
+      pitch = single.reduce((a, b) => a + b, 0) / single.length;
+    } else pitch = textPitch(frame, run[0].x, run[0].y, size);
+    if (!pitch || pitch > size * 2.2) continue;   // 行距太大：带头像的名单（空间站访客等）
+    const ben = opts.within && !weak ? 1 : benScore(frame, run[0].x, run[0].y, size, pitch);
+    if (weak && ben < 0.5) continue;
     out.push({ ix: run[0].x, top: run[0].y, bottom: run[run.length - 1].y, size, pitch, icons: run.length, ben });
   }
   out.sort((a, b) => b.ben - a.ben || b.icons - a.icons);
@@ -111,6 +117,20 @@ export function locate(frame, opts = {}) {
     return { found: false, candidates: out.length, options };
   }
   return { found: true, region: regionOf(frame, best, R), candidates: out.length, score: best.ben };
+}
+
+// 只有一个图标时的行距：图标右边名字那一栏，相邻文字行起点的间距（取中位数）；量不出来（只有一行字）就按图标大小估
+function textPitch(frame, ix, top, size) {
+  const xa = ix + size + 1, xb = Math.min(frame.width, ix + size * 12);
+  const starts = [];
+  let prev = false;
+  for (let y = Math.max(0, Math.round(top - size * 8)); y < Math.min(frame.height, Math.round(top + size * 8)); y++) {
+    const on = countIn(frame, xa, xb, y, y + 1, texty) >= 2;
+    if (on && !prev) starts.push(y);
+    prev = on;
+  }
+  const d = starts.slice(1).map((y, i) => y - starts[i]).filter((v) => v >= size * 1.05 && v <= size * 2.2).sort((a, b) => a - b);
+  return d.length ? d[d.length >> 1] : Math.round(size * 1.3);
 }
 
 // 列表上方的频道标签里找「本」字，返回最高匹配度（交并比）
@@ -205,11 +225,16 @@ function vline(frame, x, ya, yb) {
 export function scanRows(crop, reg) {
   const { data, width: W, height: H } = crop;
   const { size, pitch, iconW } = reg;
-  // 行的起点：图标的上边（列里每个图标对行距取余的中位数），没有图标时沿用上次的
+  // 行的起点：图标的上边（列里每个图标对行距取余的中位数），没有图标时沿用上次的。
+  // 只认完整的图标（彩色连续够一个图标高）：图标闪烁到一半只亮下半截时，上边会错位（本地只有一个图标时整份名单的行都跟着错开）
   const tops = [];
+  const colorRow = [];
+  for (let y = 0; y < H; y++) colorRow.push(rowHasColor(crop, y, iconW));
   for (let y = 1; y < H; y++) {
-    const on = rowHasColor(crop, y, iconW), above = rowHasColor(crop, y - 1, iconW);
-    if (on && !above) tops.push(y);
+    if (!colorRow[y] || colorRow[y - 1]) continue;
+    let n = 0;
+    while (y + n < H && colorRow[y + n]) n++;
+    if (n >= size * 0.8) tops.push(y);
   }
   let phase = reg.phase ?? 0;
   if (tops.length) {
