@@ -94,19 +94,25 @@ pub fn run() {
 }
 
 // ---------- 悬浮窗 ----------
-// 和网页版画中画一样只有一个悬浮窗（标签 float），顶部切换击杀预警 / 到价提醒 / 本地红名；位置、大小由 window-state 插件记住。
+// 默认一个悬浮窗（标签 float），顶部切换击杀预警 / 到价提醒 / 本地红名 / 日志预警 / 频道翻译；位置、大小由 window-state 插件记住。
+// 1.0.16 起标签可以从悬浮窗里拖出来单独成窗（标签 float-w1、float-w2…），也能拖回别的悬浮窗：哪个内容在哪个窗口由网页记着（float.html），
+// 这里只按网页给的 win 开窗口，新拆出来的窗口开在鼠标松开的位置（x、y）；没给 win（旧网页）就是 float。
 // 已经开着就切到要的内容、恢复可点击并切到前面（鼠标穿透后从主窗口再点一次「悬浮窗」就能解开）。
 // 窗口建在异步命令里：Windows 上同步命令里建窗口会卡死。
 #[cfg(desktop)]
 #[tauri::command]
-async fn float_open(app: tauri::AppHandle, webview: tauri::Webview, kind: String, title: String) -> Result<(), String> {
+async fn float_open(app: tauri::AppHandle, webview: tauri::Webview, kind: String, title: String, win: Option<String>, x: Option<f64>, y: Option<f64>) -> Result<(), String> {
     use tauri::Manager;
     let kind: String = kind.chars().filter(|c| c.is_ascii_alphanumeric()).take(16).collect();
     if kind.is_empty() {
         return Err("kind".into());
     }
-    let label = "float";
-    if let Some(w) = app.get_webview_window(label) {
+    let label = match win.as_deref() {
+        None | Some("float") => "float".to_string(),
+        Some(w) if w.len() <= 12 && w.strip_prefix("float-w").is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())) => w.to_string(),
+        _ => return Err("win".into()),
+    };
+    if let Some(w) = app.get_webview_window(&label) {
         let _ = w.set_ignore_cursor_events(false);
         let _ = w.eval(format!("window.__floatPass && window.__floatPass(false); window.__floatKind && window.__floatKind('{kind}')"));
         let _ = w.unminimize();
@@ -117,19 +123,25 @@ async fn float_open(app: tauri::AppHandle, webview: tauri::Webview, kind: String
     // 跟主窗口同一个站点
     let mut url = webview.url().map_err(|e| e.to_string())?;
     url.set_path("/float.html");
-    url.set_query(Some(&format!("kind={kind}")));
+    url.set_query(Some(&format!("kind={kind}&win={label}")));
     url.set_fragment(None);
     let title: String = title.chars().take(40).collect();
-    let b = WebviewWindowBuilder::new(&app, label, WebviewUrl::External(url))
+    let mut b = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(url))
         .title(title)
-        .inner_size(340.0, 420.0)
+        .inner_size(480.0, 460.0)
         .min_inner_size(220.0, 140.0)
+        .resizable(true)
         .decorations(false)
         // Windows 上无边框窗口默认带阴影，会多出一圈 1px 的直角边框，盖住网页里的圆角
         .shadow(false)
         .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true);
+    if let (Some(x), Some(y)) = (x, y) {
+        if x.is_finite() && y.is_finite() {
+            b = b.position(x, y);
+        }
+    }
     browser_args(b).build().map_err(|e| e.to_string())?;
     Ok(())
 }

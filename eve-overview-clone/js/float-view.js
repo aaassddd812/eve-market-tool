@@ -2,6 +2,9 @@
 // 只负责显示：内容由主页面（float-feed.js）经 BroadcastChannel 推过来，这里不请求任何数据。
 // ?kind=kill 击杀预警 / price 到价提醒 / local 本地红名 / intel 日志预警 / chat 频道翻译；?pip=1 在网页画中画的 iframe 里（标题栏可以切换内容）。
 // 桌面版原生窗口（有 __TAURI_INTERNALS__ 且不是画中画）：无边框，标题栏拖动窗口，另有透明度、鼠标穿透、关闭按钮；和画中画一样顶部可以切换内容。
+// 标签栏：拖动标签调整顺序；桌面版 1.0.16+（壳在地址里带 win=）还能把标签拖到窗口外面单独成一个悬浮窗、拖到别的悬浮窗上合并，
+//   哪个内容在哪个窗口记在 localStorage（eve-float-layout-v1，主页面 float-feed.js 按它决定开哪个窗口），各窗口经 BroadcastChannel 同步。
+// 大小：桌面版拖边框 / 角改大小（无边框窗口，调 plugin:window|start_resize_dragging）；Ctrl + 滚轮、Ctrl + = / - / 0 或放大镜按钮缩放内容，每个窗口各记各的。
 // 点击击杀 / 物品 / 本地里的人：在悬浮窗这边看详情（float-detail.html）——桌面版点了才开一个置顶小窗、关掉就关了（float_detail 命令，旧版没有就叠在本窗口里），网页画中画叠在本窗口里。
 
 const q = new URLSearchParams(location.search);
@@ -9,9 +12,15 @@ const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红�
 let kind = KINDS[q.get('kind')] ? q.get('kind') : 'kill';
 const PIP = q.get('pip') === '1';
 const ipc = !PIP && window.__TAURI_INTERNALS__ ? window.__TAURI_INTERNALS__ : null;
+// 这个窗口的标签（float 主悬浮窗，float-w1… 拆出来的）；壳没带 win 就是旧版桌面版，不能拆分
+const SPLIT = Boolean(ipc) && q.has('win');
+const WIN = SPLIT && /^float-w\d{1,3}$/.test(q.get('win')) ? q.get('win') : 'float';
 const EN = window.I18N?.lang === 'en';
 const ALPHA_KEY = 'eve-float-alpha';
 const ALPHAS = [1, 0.85, 0.7, 0.55];
+const ZOOM_KEY = 'eve-float-zoom-' + WIN;
+const ZOOMS = [0.8, 0.9, 1, 1.1, 1.25, 1.4, 1.6];
+const LAYOUT_KEY = 'eve-float-layout-v1';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const invoke = (cmd, args) => ipc?.invoke(cmd, args).catch(() => {});
@@ -35,6 +44,9 @@ if (bc) {
     else if (m.t === 'snap' && KINDS[m.kind]) { data[m.kind] = m.data; gotAny = true; if (m.kind === kind) render(); }
     else if ((m.t === 'hello' || m.t === 'alive') && KINDS[m.kind] && m.id) others.set(m.id, { kind: m.kind, at: Date.now() });
     else if (m.t === 'alert' && KINDS[m.kind]) onAlert(m.kind);
+    else if (m.t === 'layout' && m.layout) { layout = cleanLayout(m.layout); applyLayout(); if (m.show?.win === WIN && KINDS[m.show.kind]) setKind(m.show.kind); }
+    else if (m.t === 'tab-drop' && SPLIT && m.from !== WIN && hits(m.sx, m.sy)) post({ t: 'tab-hit', rid: m.rid, win: WIN });
+    else if (m.t === 'tab-hit' && pending && m.rid === pending.rid && !pending.hit) pending.hit = m.win;
   };
 }
 // 每 20 秒报一次还开着（主页面据此决定到价提醒要不要接着查价）
@@ -47,11 +59,13 @@ window.addEventListener('message', (e) => {
 });
 // 有新提醒：切到那个菜单（有切换栏时）。别的悬浮窗已经在显示它就不切；几个悬浮窗同时收到时错开一点，先切的报到后别的就不切了
 function onAlert(k) {
-  if (!(PIP || ipc) || k === kind) return;
+  if (!(PIP || ipc) || k === kind || !mine().includes(k)) return;
   const shown = () => [...others.values()].some((o) => o.kind === k && Date.now() - o.at < 25e3);
   setTimeout(() => { if (k !== kind && !shown()) setKind(k); }, Math.round(ME * 150));
 }
 function setKind(k) {
+  // 主页面要看的内容在别的窗口里（或旧版壳）：挪到这个窗口
+  if (SPLIT && winOf(k) !== WIN) moveKind(k, WIN);
   kind = k;
   hello();
   render();
@@ -64,6 +78,7 @@ const clock = (t) => new Date(t).toLocaleTimeString(EN ? 'en-GB' : 'zh-CN', { ho
 function render() {
   document.title = KINDS[kind] + ' · EVE';
   $('flTitle').textContent = KINDS[kind];
+  renderTabs();
   for (const b of document.querySelectorAll('[data-fl-kind]')) {
     b.classList.toggle('active', b.dataset.flKind === kind);
     if (b.dataset.flKind === kind && b.offsetParent) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // 窄窗口里标签栏放不下时滚到当前标签
@@ -192,10 +207,159 @@ function renderPrice(d, body, foot) {
   foot.textContent = d.at ? `价格于 ${clock(d.at)} · 每 5 分钟更新` : '读取价格中…';
 }
 
+// ---------- 标签：顺序、分到哪个窗口 ----------
+function cleanLayout(l) {
+  const order = Array.isArray(l?.order) ? l.order.filter((k, i, a) => KINDS[k] && a.indexOf(k) === i) : [];
+  for (const k of Object.keys(KINDS)) if (!order.includes(k)) order.push(k);
+  const wins = {};
+  for (const k of order) if (/^float-w\d{1,3}$/.test(l?.wins?.[k] || '')) wins[k] = l.wins[k];
+  return { order, wins };
+}
+function readLayout() { try { return cleanLayout(JSON.parse(localStorage.getItem(LAYOUT_KEY) || 'null')); } catch { return cleanLayout(null); } }
+let layout = readLayout();
+const winOf = (k) => (SPLIT && layout.wins[k]) || 'float';
+const mine = () => layout.order.filter((k) => winOf(k) === WIN);
+function saveLayout(show) {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch { /* 忽略 */ }
+  post({ t: 'layout', layout, show });
+  applyLayout();
+}
+function moveKind(k, win) {
+  if (win === 'float') delete layout.wins[k];
+  else layout.wins[k] = win;
+  saveLayout();
+}
+// 布局变了：当前内容不在这个窗口了就换一个，窗口空了就关掉
+function applyLayout() {
+  const m = mine();
+  if (!m.length) { invoke('float_close'); return; }
+  if (!m.includes(kind)) setKind(m[0]);
+  else renderTabs();
+}
+function renderTabs() {
+  const box = $('flTabs');
+  const m = mine();
+  const html = m.map((k) => `<button type="button" data-fl-kind="${k}"${k === kind ? ' class="active"' : ''} title="${SPLIT ? '拖动调整顺序；拖到窗口外面单独成一个悬浮窗，拖到别的悬浮窗上合并' : '拖动调整顺序'}">${KINDS[k]}</button>`).join('');
+  if (box.dataset.html !== html) { box.dataset.html = html; box.innerHTML = html; }
+}
+// 屏幕上这一点在不在本窗口里
+const hits = (x, y) => x >= window.screenX && x < window.screenX + window.outerWidth && y >= window.screenY && y < window.screenY + window.outerHeight;
+
+let drag = null;      // 正在拖的标签
+let pending = null;   // 拖出窗口后等别的悬浮窗回应
+let noClick = false;  // 拖完松手时不算点击
+$('flTabs').addEventListener('pointerdown', (e) => {
+  const b = e.target.closest('[data-fl-kind]');
+  if (!b || e.button !== 0 || pending) return;
+  drag = { kind: b.dataset.flKind, x: e.clientX, y: e.clientY, on: false };
+  b.setPointerCapture(e.pointerId);
+});
+$('flTabs').addEventListener('pointermove', (e) => {
+  if (!drag) return;
+  if (!drag.on && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < 6) return;
+  drag.on = true;
+  const out = !inView(e);
+  const at = out ? null : dropAt(e);
+  document.documentElement.classList.add('fl-dragging');
+  for (const b of $('flTabs').children) {
+    b.classList.toggle('dragging', b.dataset.flKind === drag.kind);
+    b.classList.toggle('drop-at', b === at?.btn);
+  }
+  dragTip(out ? (SPLIT ? '松开：单独成一个悬浮窗（拖到别的悬浮窗上就合并过去）' : '桌面版可以把标签拖出来单独成窗') : '');
+});
+const endDrag = (e) => {
+  const d = drag;
+  drag = null;
+  document.documentElement.classList.remove('fl-dragging');
+  for (const b of $('flTabs').children) b.classList.remove('dragging', 'drop-at');
+  dragTip('');
+  if (!d?.on || e.type === 'pointercancel') return;
+  noClick = true;
+  setTimeout(() => { noClick = false; }, 0);
+  if (inView(e)) {
+    const at = dropAt(e);
+    if (!at || at.kind === d.kind) return;
+    const o = layout.order.filter((k) => k !== d.kind);
+    o.splice(o.indexOf(at.kind) + (at.after ? 1 : 0), 0, d.kind);
+    layout.order = o;
+    saveLayout();
+  } else if (SPLIT) dropOut(d.kind, e.screenX, e.screenY);
+};
+$('flTabs').addEventListener('pointerup', endDrag);
+$('flTabs').addEventListener('pointercancel', endDrag);
+const inView = (e) => e.clientX >= 0 && e.clientY >= 0 && e.clientX < window.innerWidth && e.clientY < window.innerHeight;
+// 松手处对着哪个标签（左半边插到它前面，右半边插到后面）
+function dropAt(e) {
+  const r0 = $('flTabs').getBoundingClientRect();
+  if (e.clientY < r0.top - 8 || e.clientY > r0.bottom + 8) return null;
+  let best = null;
+  for (const btn of $('flTabs').children) {
+    const r = btn.getBoundingClientRect();
+    const dist = Math.abs(e.clientX - (r.left + r.width / 2)) + Math.abs(e.clientY - (r.top + r.height / 2)) * 3;
+    if (!best || dist < best.dist) best = { btn, kind: btn.dataset.flKind, after: e.clientX > r.left + r.width / 2, dist };
+  }
+  return best;
+}
+function dragTip(text) {
+  let t = document.querySelector('.fl-drag-tip');
+  if (!text) { t?.remove(); return; }
+  if (!t) { t = document.createElement('div'); t.className = 'fl-drag-tip'; document.body.append(t); }
+  if (t.textContent !== text) t.textContent = text;
+}
+// 拖到窗口外面松手：落在别的悬浮窗上就合并过去，否则在松手的地方开一个新悬浮窗
+function dropOut(k, sx, sy) {
+  const rid = Math.random();
+  pending = { rid, hit: null };
+  post({ t: 'tab-drop', rid, kind: k, sx, sy, from: WIN });
+  setTimeout(() => {
+    const p = pending;
+    pending = null;
+    if (p.hit) {
+      layout.wins[k] = p.hit;
+      if (p.hit === 'float') delete layout.wins[k];
+      saveLayout({ kind: k, win: p.hit });
+      return;
+    }
+    if (mine().length === 1) return;   // 只剩这一个：拖出去等于挪窗口，不用拆
+    const used = new Set(Object.values(layout.wins));
+    let n = 1;
+    while (used.has('float-w' + n)) n++;
+    const win = 'float-w' + n;
+    layout.wins[k] = win;
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch { /* 忽略 */ }
+    ipc.invoke('float_open', { kind: k, title: KINDS[k], win, x: Math.max(0, sx - 60), y: Math.max(0, sy - 14) })
+      .then(() => saveLayout())
+      .catch(() => { delete layout.wins[k]; saveLayout(); });
+  }, 200);
+}
+
+// ---------- 缩放 ----------
+function zoom() { let z = 1; try { z = Number(localStorage.getItem(ZOOM_KEY)) || 1; } catch { /* 忽略 */ } return ZOOMS.includes(z) ? z : 1; }
+let zoomTimer = 0;
+function setZoom(z, tip) {
+  try { localStorage.setItem(ZOOM_KEY, String(z)); } catch { /* 忽略 */ }
+  $('fl').style.zoom = z === 1 ? '' : String(z);
+  if (!tip) return;
+  dragTip(`缩放 ${Math.round(z * 100)}%`);
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(() => dragTip(''), 900);
+}
+const zoomBy = (d) => { const i = ZOOMS.indexOf(zoom()); setZoom(d === 0 ? 1 : ZOOMS[Math.min(ZOOMS.length - 1, Math.max(0, i + d))], true); };
+document.addEventListener('wheel', (e) => { if (!e.ctrlKey) return; e.preventDefault(); zoomBy(e.deltaY < 0 ? 1 : -1); }, { passive: false });
+document.addEventListener('keydown', (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const d = e.key === '=' || e.key === '+' ? 1 : e.key === '-' ? -1 : e.key === '0' ? 0 : null;
+  if (d === null) return;
+  e.preventDefault();
+  zoomBy(d);
+});
+setZoom(zoom());
+
 // ---------- 交互 ----------
 document.addEventListener('click', (e) => {
   const k = e.target.closest('[data-fl-kind]');
-  if (k) { setKind(k.dataset.flKind); return; }
+  if (k) { if (!noClick) setKind(k.dataset.flKind); return; }
+  if (e.target.closest('[data-fl-zoom]')) { setZoom(ZOOMS[(ZOOMS.indexOf(zoom()) + 1) % ZOOMS.length], true); return; }
   const exp = e.target.closest('[data-fl-exp]');
   if (exp) {
     const k = exp.dataset.flExp;
@@ -250,7 +414,7 @@ function setPass(on) {
   invoke('float_pass', { on });
 }
 window.__floatPass = (on) => document.documentElement.classList.toggle('fl-passing', Boolean(on));
-// 桌面版只有一个悬浮窗：主窗口点别的「悬浮窗」按钮时由壳切换内容
+// 主窗口点「悬浮窗」按钮时由壳切换内容
 window.__floatKind = (k) => { if (KINDS[k]) setKind(k); };
 
 if (ipc) {
@@ -262,10 +426,21 @@ if (ipc) {
     if (e.button !== 0 || e.target.closest('button')) return;
     invoke('float_drag');
   });
+  // 无边框窗口：边框和四个角拖动改大小（新版壳才放行）
+  if (SPLIT) {
+    const DIRS = { n: 'North', s: 'South', e: 'East', w: 'West', ne: 'NorthEast', nw: 'NorthWest', se: 'SouthEast', sw: 'SouthWest' };
+    for (const d of Object.keys(DIRS)) {
+      const g = document.createElement('div');
+      g.className = 'fl-rz ' + d;
+      g.addEventListener('mousedown', (e) => { if (e.button === 0) { e.preventDefault(); invoke('plugin:window|start_resize_dragging', { value: DIRS[d] }); } });
+      document.body.append(g);
+    }
+  }
 }
 // 画中画与桌面版原生窗口都显示切换栏（击杀预警 / 到价提醒 / 本地红名 / 日志预警 / 频道翻译），一个悬浮窗里就能切换
 if (PIP || ipc) { $('flTabs').hidden = false; $('flTitle').hidden = true; }
 
+if (SPLIT && winOf(kind) !== WIN) moveKind(kind, WIN);
 render();
 hello();
 // 几秒内没有主页面回应：提示打开主窗口

@@ -1,0 +1,14 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "float",
+  "description": "悬浮窗（无边框）：按住边框 / 角拖动改大小（float.html 调 plugin:window|start_resize_dragging）",
+  "windows": ["float", "float-*"],
+  "remote": {
+    "urls": [
+      "https://eve.navexor.top/*"
+    ]
+  },
+  "permissions": [
+    "core:window:allow-start-resize-dragging"
+  ]
+}

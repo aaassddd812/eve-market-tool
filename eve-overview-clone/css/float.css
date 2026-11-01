@@ -44,8 +44,22 @@ html.fl-native .fl { background: rgba(var(--bg), var(--fl-alpha)); border-radius
 html.fl-native .fl-head { cursor: move; }
 .fl-title { font-weight: 600; font-size: 13px; }
 .fl-sp { flex: 1; }
-.fl-tabs { display: flex; gap: 2px; background: var(--card); border-radius: 8px; padding: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+/* 标签放不下就换行（不藏起来）；拖动调整顺序 / 拖出去单独成窗（float-view.js） */
+.fl-tabs { display: flex; flex-wrap: wrap; gap: 2px; background: var(--card); border-radius: 8px; padding: 2px; min-width: 0; touch-action: none; }
 .fl-tabs button { border: 0; background: none; color: var(--text-2); font: inherit; font-size: 12px; padding: 3px 7px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.fl-tabs button.dragging { opacity: 0.45; }
+.fl-tabs button.drop-at { background: var(--card-hover); color: var(--text); }
+html.fl-dragging, html.fl-dragging * { cursor: grabbing !important; }
+.fl-drag-tip { position: fixed; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 40; max-width: calc(100% - 20px); padding: 5px 10px; border-radius: 8px; background: var(--accent); color: #fff; font-size: 12px; pointer-events: none; text-align: center; }
+/* 桌面版无边框窗口：边框 / 角拖动改大小 */
+.fl-rz { position: fixed; z-index: 30; }
+.fl-rz.n, .fl-rz.s { left: 10px; right: 10px; height: 5px; cursor: ns-resize; }
+.fl-rz.n { top: 0; } .fl-rz.s { bottom: 0; }
+.fl-rz.e, .fl-rz.w { top: 10px; bottom: 10px; width: 5px; cursor: ew-resize; }
+.fl-rz.e { right: 0; } .fl-rz.w { left: 0; }
+.fl-rz.ne, .fl-rz.nw, .fl-rz.se, .fl-rz.sw { width: 10px; height: 10px; }
+.fl-rz.ne { top: 0; right: 0; cursor: nesw-resize; } .fl-rz.sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.fl-rz.nw { top: 0; left: 0; cursor: nwse-resize; } .fl-rz.se { bottom: 0; right: 0; cursor: nwse-resize; }
 html.fl-native .fl-head { padding-left: 8px; }
 html.fl-native .fl-tabs button { padding: 3px 6px; }
 .fl-tabs button.active { background: var(--accent); color: #fff; }
