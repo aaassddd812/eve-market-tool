@@ -779,6 +779,7 @@ function openSim() {
 
 // ---------- 分享图片 ----------
 const PERCENT = (v) => (v * 100).toFixed(1) + '%';
+const PLAYERS_IMG = 30;   // 分享图片每方最多列出的玩家
 
 function imageModel() {
   const d = BR.data;
@@ -788,7 +789,24 @@ function imageModel() {
   const pilots = BR.pilotParty.size;
   const total = d.kills.reduce((sum, k) => sum + k[4], 0);
   const names = d.systems.map((id) => ctx.kb.systemLabel(id).name);
-  const side = (st) => ({
+  // 参战玩家：每方按参与击杀、损失排序取前 PLAYERS_IMG 名
+  const players = (s) => {
+    const list = [...BR.pilotStats.keys()].filter((c) => BR.side.get(BR.pilotParty.get(c)) === s);
+    list.sort((a, b) => BR.pilotStats.get(b).kills.size - BR.pilotStats.get(a).kills.size || BR.pilotStats.get(b).lost - BR.pilotStats.get(a).lost);
+    return {
+      more: Math.max(0, list.length - PLAYERS_IMG),
+      list: list.slice(0, PLAYERS_IMG).map((c) => {
+        const st = BR.pilotStats.get(c), party = BR.pilotParty.get(c);
+        return {
+          name: ctx.partyName(c) || String(c), party: party ? ctx.partyName(party) || '' : '', avatar: ctx.avatar('character', c, 64),
+          ships: [...(BR.pilotShips.get(c) || [])].slice(0, 3).map((t) => ctx.IMG(`types/${t}/icon`, 32)),
+          kills: st.kills.size, losses: st.losses, lostText: st.lost >= 1e5 ? isk(st.lost) : ''
+        };
+      })
+    };
+  };
+  const side = (st, s) => ({
+    players: players(s),
     lostText: isk(st.lost), pilots: num(st.pilots.size), partyCount: st.parties.length,
     parties: st.parties.slice(0, 6).map((p) => ({
       name: ctx.partyName(p.id), logo: ctx.avatar(p.kind, p.id, 64), pilots: p.pilots.size, kills: p.kills.size, lost: p.lost, lostText: isk(p.lost)
@@ -805,7 +823,7 @@ function imageModel() {
   return {
     title: names.length > 4 ? `${names.slice(0, 4).join('、')} 等 ${names.length} 个星系` : names.join('、'),
     subtitle: `${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()}  ·  ${d.kills.length} 次击杀  ·  ${num(pilots)} 名飞行员  ·  总损失 ${isk(total)} ISK`,
-    sides: { A: side(A), B: side(B) },
+    sides: { A: side(A, 'A'), B: side(B, 'B') },
     ratio: info.ratio, verdict: info.verdict, winner: info.winner,
     shareA: info.pa, shareAText: PERCENT(info.pa), shareBText: PERCENT(1 - info.pa), eff: info.effText,
     cmps: [cmp('舰船损失', A.ships, B.ships), ...(A.pods + B.pods ? [cmp('太空舱', A.pods, B.pods)] : []),
@@ -826,7 +844,7 @@ async function shareImage(btn) {
   const old = label.textContent;
   label.textContent = '生成中…';
   try {
-    if (!imageModule) imageModule = import('./kb-br-image.js?v=v18r7');
+    if (!imageModule) imageModule = import('./kb-br-image.js?v=v18r8');
     const { renderBrImage } = await imageModule;
     const canvas = await renderBrImage(imageModel());
     const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));

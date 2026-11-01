@@ -1,11 +1,11 @@
 // ===== 悬浮窗页面（float.html）=====
 // 只负责显示：内容由主页面（float-feed.js）经 BroadcastChannel 推过来，这里不请求任何数据。
-// ?kind=kill 击杀预警 / price 到价提醒 / local 本地红名；?pip=1 在网页画中画的 iframe 里（标题栏可以切换内容）。
+// ?kind=kill 击杀预警 / price 到价提醒 / local 本地红名 / intel 日志预警 / chat 频道翻译；?pip=1 在网页画中画的 iframe 里（标题栏可以切换内容）。
 // 桌面版原生窗口（有 __TAURI_INTERNALS__ 且不是画中画）：无边框，标题栏拖动窗口，另有透明度、鼠标穿透、关闭按钮；和画中画一样顶部可以切换内容。
 // 点击击杀 / 物品 / 本地里的人：在悬浮窗这边看详情（float-detail.html）——桌面版点了才开一个置顶小窗、关掉就关了（float_detail 命令，旧版没有就叠在本窗口里），网页画中画叠在本窗口里。
 
 const q = new URLSearchParams(location.search);
-const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名' };
+const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名', intel: '日志预警', chat: '频道翻译' };
 let kind = KINDS[q.get('kind')] ? q.get('kind') : 'kill';
 const PIP = q.get('pip') === '1';
 const ipc = !PIP && window.__TAURI_INTERNALS__ ? window.__TAURI_INTERNALS__ : null;
@@ -64,7 +64,10 @@ const clock = (t) => new Date(t).toLocaleTimeString(EN ? 'en-GB' : 'zh-CN', { ho
 function render() {
   document.title = KINDS[kind] + ' · EVE';
   $('flTitle').textContent = KINDS[kind];
-  for (const b of document.querySelectorAll('[data-fl-kind]')) b.classList.toggle('active', b.dataset.flKind === kind);
+  for (const b of document.querySelectorAll('[data-fl-kind]')) {
+    b.classList.toggle('active', b.dataset.flKind === kind);
+    if (b.dataset.flKind === kind && b.offsetParent) b.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // 窄窗口里标签栏放不下时滚到当前标签
+  }
   const d = data[kind];
   const body = $('flBody'), foot = $('flFoot');
   if (!d) {
@@ -74,6 +77,8 @@ function render() {
   }
   if (kind === 'kill') renderKill(d, body, foot);
   else if (kind === 'local') renderLocal(d, body, foot);
+  else if (kind === 'intel') renderIntel(d, body, foot);
+  else if (kind === 'chat') renderChat(d, body, foot);
   else renderPrice(d, body, foot);
 }
 
@@ -138,6 +143,40 @@ function countHtml(d, listed) {
   return `<p class="fl-count"><span>${listed ? '还有' : '本地有'}</span> ${part(d.moreRed, 'r', '个红名')}${part(d.moreWhite, 'w', '个白名')}<small>名字没认全</small></p>`;
 }
 
+// 日志预警：敌情（星系、跳数）、关键词、游戏日志；点敌情在主窗口星图里看
+function renderIntel(d, body, foot) {
+  const items = d.items || [];
+  const top = items[0]?.key;
+  const fresh = top && lastTop.intel !== undefined && top !== lastTop.intel;
+  lastTop.intel = top;
+  const badge = (r) => (r.type !== 'intel' ? `<span>${r.type === 'kw' ? '关键词' : '日志'}</span>` : r.clear ? '<span>平安</span>' : r.jumps == null ? '<span>敌情</span>' : r.jumps === 0 ? '<span>本星系</span>' : `${r.jumps} <span>跳</span>`);
+  const tone = (r) => (r.type === 'intel' ? (r.clear ? ' kill' : r.jumps != null && r.jumps <= 1 ? ' near' : r.alert ? ' warn' : '') : ' warn');
+  body.innerHTML = (d.on ? '' : '<p class="fl-warn">本地日志监听没有开启：在主窗口右上角铃铛「本地日志」里开启</p>')
+    + (items.length ? `<ul class="fl-list">${items.map((r, i) => `<li class="fl-kill${tone(r)}${i === 0 && fresh ? ' new' : ''}${r.system ? ' click' : ''}"${r.system ? ` data-fl-sys="${r.system}"` : ''}>
+        <span class="fl-badge">${badge(r)}</span>
+        <span class="fl-main">${r.system ? `<b translate="no">${esc(r.name)}</b> ` : r.kw ? `<b translate="no">${esc(r.kw)}</b> ` : ''}${r.who ? `<span translate="no">${esc(r.who)}</span>${EN ? ': ' : '：'}` : ''}<span translate="no">${esc(r.msg)}</span></span>
+        <small><span translate="no">${esc(r.channel)}</span> · <span>${ago(r.at)}</span></small></li>`).join('')}</ul>`
+      : '<p class="fl-empty">还没有消息</p>');
+  foot.textContent = d.status || '';
+}
+
+// 频道翻译：译文在上、原文在下
+function renderChat(d, body, foot) {
+  const items = d.items || [];
+  const top = items[0]?.key;
+  const fresh = top && lastTop.chat !== undefined && top !== lastTop.chat;
+  lastTop.chat = top;
+  const warn = d.need === 'off' ? '频道翻译没有开启：在主窗口右上角铃铛「本地日志」里开启'
+    : d.need === 'log' ? '本地日志监听没有开启：在主窗口右上角铃铛「本地日志」里开启' : '';
+  body.innerHTML = (warn ? `<p class="fl-warn">${warn}</p>` : '')
+    + (items.length ? `<ul class="fl-list">${items.map((m, i) => `<li class="fl-chat${i === 0 && fresh ? ' new' : ''}">
+        <div class="fl-chat-head"><b translate="no">${esc(m.who)}</b><small><span translate="no">${esc(m.channel)}</span>${m.lang ? ` · <span translate="no">${esc(m.lang)}</span>` : ''} · ${clock(m.at)}</small></div>
+        <div class="fl-chat-text" translate="no">${esc(m.text)}</div>
+        <div class="fl-chat-src" translate="no">${esc(m.msg)}</div></li>`).join('')}</ul>`
+      : `<p class="fl-empty">${d.on ? '还没有需要翻译的消息' : '还没有翻译'}</p>`);
+  foot.textContent = d.status || '';
+}
+
 function renderPrice(d, body, foot) {
   const items = d.items || [];
   const top = items.find((x) => !x.on)?.key || '';
@@ -169,6 +208,8 @@ document.addEventListener('click', (e) => {
   if (kill) { openDetail('kill', Number(kill.dataset.flKill)); return; }
   const ch = e.target.closest('[data-fl-char]');
   if (ch) { openDetail('char', Number(ch.dataset.flChar)); return; }
+  const sys = e.target.closest('[data-fl-sys]');
+  if (sys) { post({ t: 'open-sys', id: Number(sys.dataset.flSys) }); invoke('float_focus_main'); return; }
   const item = e.target.closest('[data-fl-item]');
   if (item) { openDetail('item', Number(item.dataset.flItem)); return; }
   if (e.target.closest('[data-fl-close]')) { invoke('float_close'); return; }
@@ -222,7 +263,7 @@ if (ipc) {
     invoke('float_drag');
   });
 }
-// 画中画与桌面版原生窗口都显示切换栏（击杀预警 / 到价提醒 / 本地红名），一个悬浮窗里就能切换
+// 画中画与桌面版原生窗口都显示切换栏（击杀预警 / 到价提醒 / 本地红名 / 日志预警 / 频道翻译），一个悬浮窗里就能切换
 if (PIP || ipc) { $('flTabs').hidden = false; $('flTitle').hidden = true; }
 
 render();

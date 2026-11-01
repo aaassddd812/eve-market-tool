@@ -2594,6 +2594,353 @@ ZH_FIX = [("杀戮权", "击杀权"), ("跳跃克隆体", "远距克隆"), ("跳
           ("侦察船", "侦察舰"), ("跳跃货船", "战略货舰"), ("跳跃货轮", "战略货舰"), ("货轮", "货舰"), ("盾牌", "护盾"), ("中共", "CCP")]
 
 
+# 频道翻译（POST /api/kb/translate，网页 intel.js 用）：自动识别原文语言，译成中文或英文；游戏名词用游戏内的名字。
+#   名词：网页认出的星系名（terms，[[原文, 目标语言名], …]，每条消息一组）+ 术语表 GLOSSARY（舰船、装备、技能、常用缩写；译成英文时反查中文物品名）。
+#   翻译服务：kb-service 数据库同目录有 youdao.json（{"app_key": "…", "app_secret": "…"}，有道智云文本翻译）就用有道，没有或出错用谷歌翻译。
+#   先整句翻译一次拿到原文语言；含名词的消息再按原文语言翻译一次（谷歌：名词放进不翻译标记；有道：名词直接换成目标语言名）。不记日志，只在内存缓存译文。
+CHAT_TR_GOOGLE = "https://translate.googleapis.com/translate_a/t?client=gtx"
+CHAT_TR_YOUDAO = "https://openapi.youdao.com/api"
+CHAT_TR_RATE = 30               # 每个 IP 每分钟最多请求次数
+CHAT_TR_MAX = (40, 1000, 8000)  # 每次最多条数、每条最多字数、合计最多字数
+CHAT_TR_KEYS = {"path": None}   # youdao.json 的路径（启动时按 --db 设置）
+# 聊天里多半是普通英文的小写词：术语表不替换（super rare、starting capital、alpha / omega 账号除外）
+CHAT_TR_STOP = {"super", "supers", "capital", "capitals", "caps", "clone", "clones", "null", "industrial", "industrials", "remap", "remaps", "unallocated"}
+# 聊天里常见的游戏说法（不区分大小写，按词匹配）→ 国服叫法；译成中文时和术语表一起保留
+CHAT_TERMS = {
+    "vet": "老玩家", "vets": "老玩家", "veteran": "老玩家", "veterans": "老玩家", "dessie": "驱逐舰", "dessies": "驱逐舰", "dessy": "驱逐舰",
+    "standing": "声望", "standings": "声望", "agent": "代理人", "agents": "代理人", "career agent": "职业代理人", "career agents": "职业代理人",
+    "mission": "任务", "missions": "任务", "epic arc": "史诗任务线", "eve": "EVE", "fit": "装配", "fits": "装配", "fitting": "装配", "fittings": "装配",
+    "bpo": "蓝图原件", "bpos": "蓝图原件", "bpo's": "蓝图原件", "bpc": "蓝图拷贝", "bpcs": "蓝图拷贝", "bpc's": "蓝图拷贝",
+    "corp": "军团", "corps": "军团", "npc corp": "NPC 军团", "player corp": "玩家军团", "srp": "补损", "ship replacement": "舰船补损",
+    "faction warfare": "势力战争", "fw": "势力战争", "site": "地点", "sites": "地点", "isk": "ISK", "neut": "中立", "neuts": "中立",
+}
+CHAT_TERMS_RE = re.compile(r"(?<![\w-])(?:" + "|".join(re.escape(k) for k in sorted(CHAT_TERMS, key=len, reverse=True)) + r")(?![\w-])", re.I)
+_chat_tr_cache = collections.OrderedDict()
+_chat_tr_lock = threading.Lock()
+_chat_tr_pool = concurrent.futures.ThreadPoolExecutor(8)
+
+
+def youdao_keys():
+    path = CHAT_TR_KEYS["path"]
+    try:
+        with open(path) as fh:
+            k = json.load(fh)
+        return (k["app_key"], k["app_secret"]) if k.get("app_key") and k.get("app_secret") else None
+    except Exception:  # noqa: BLE001  没有配置
+        return None
+
+
+def chat_protect(text, tl, pairs):
+    """名词换成目标语言名：返回 (谷歌用的 HTML（名词在不翻译标记里）, 有道用的纯文本, 有没有名词)"""
+    segs = [(text, False)]
+    for src, dst in sorted(pairs, key=lambda x: len(x[0]), reverse=True):
+        out = []
+        for t, prot in segs:
+            if prot or not src:
+                out.append((t, prot))
+                continue
+            word = lambda c: re.match(r"[A-Za-z0-9]", c)   # 英文 / 数字开头结尾的按词匹配，中文按子串
+            parts = re.split((r"(?<![\w-])" if word(src[0]) else "") + "(" + re.escape(src) + ")" + (r"(?![\w-])" if word(src[-1]) else ""), t, flags=re.I)
+            for i, x in enumerate(parts):
+                if i % 2:
+                    out.append((dst, True))
+                elif x:
+                    out.append((x, False))
+        segs = out
+    html, plain, hit = [], [], False
+    for t, prot in segs:
+        if prot:
+            hit = True
+            html.append(f'<span class="notranslate">{html_lib.escape(t, quote=False)}</span>')
+            plain.append(t)
+            continue
+        h = html_lib.escape(t, quote=False)
+        g = GLOSSARY.sub(h, CHAT_TR_STOP) if tl == "zh-CN" else GLOSSARY.sub_en(h)
+        if g != h:
+            hit = True
+        html.append(g)
+        plain.append(html_lib.unescape(re.sub(r"<[^>]+>", "", g)))
+    return "".join(html), "".join(plain), hit
+
+
+def _google_tr(texts, tl, sl="auto", html=False):
+    url = f"{CHAT_TR_GOOGLE}&sl={sl}&tl={tl}" + ("&format=html" if html else "")
+    res, _ = get_json(url, timeout=15, retries=2, data=urllib.parse.urlencode([("q", x) for x in texts]).encode(),
+                      headers={"Content-Type": "application/x-www-form-urlencoded; charset=utf-8"})
+    out = []
+    for item in (res if isinstance(res, list) else [res]):
+        text, lang = (item[0], item[1] if len(item) > 1 else sl) if isinstance(item, list) else (item, sl)
+        if isinstance(text, str) and html:
+            text = re.sub(r"\s+([.,!?;:])", r"\1", html_lib.unescape(re.sub(r"<[^>]+>", "", text)))
+        out.append([text if isinstance(text, str) else None, lang if isinstance(lang, str) else ""])
+    return out
+
+
+YOUDAO_LANG = {"zh-CHS": "zh-CN", "zh-CHT": "zh-TW"}
+
+
+def _youdao_one(keys, text, tl, sl="auto"):
+    key, secret = keys
+    salt, now = os.urandom(8).hex(), str(int(time.time()))
+    inp = text if len(text) <= 20 else text[:10] + str(len(text)) + text[-10:]
+    sign = hashlib.sha256((key + inp + salt + now + secret).encode()).hexdigest()
+    data = urllib.parse.urlencode({"q": text, "from": {"zh-CN": "zh-CHS", "zh-TW": "zh-CHT"}.get(sl, sl), "to": "zh-CHS" if tl == "zh-CN" else "en",
+                                   "appKey": key, "salt": salt, "sign": sign, "signType": "v3", "curtime": now}).encode()
+    res, _ = get_json(CHAT_TR_YOUDAO, timeout=15, retries=2, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
+    if not isinstance(res, dict) or str(res.get("errorCode")) != "0" or not res.get("translation"):
+        raise RuntimeError(f"有道翻译返回错误 {res.get('errorCode') if isinstance(res, dict) else res}")
+    lang = str(res.get("l") or "").split("2")[0]
+    return [res["translation"][0], YOUDAO_LANG.get(lang, lang)]
+
+
+def _youdao_tr(keys, texts, tl, sl="auto"):
+    return list(_chat_tr_pool.map(lambda x: _youdao_one(keys, x, tl, sl), texts))
+
+
+# ---------- 大模型翻译：玩家自己配置的接口（地址、Key、模型都由网页随请求带来，服务器不保存、不写日志）----------
+# 协议：openai-chat（POST {base}/chat/completions）、openai-responses（POST {base}/responses）、anthropic（POST {base}/v1/messages）；
+# 模型列表从上游取（GET {base}/models 或 {base}/v1/models）。只连公网地址、不跟随跳转，避免被用来访问服务器内网。
+LLM_PROTOS = ("openai-chat", "openai-responses", "anthropic")
+LLM_TIMEOUT = 60
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **kw):
+        return None
+
+
+_llm_opener = urllib.request.build_opener(_NoRedirect)
+
+
+def llm_conf(c):
+    if not isinstance(c, dict):
+        raise ValueError("大模型设置不对")
+    proto, base, key, model = c.get("proto"), str(c.get("base") or "").strip().rstrip("/"), str(c.get("key") or "").strip(), str(c.get("model") or "").strip()
+    if proto not in LLM_PROTOS:
+        raise ValueError("协议只能是 OpenAI Chat / OpenAI Responses / Anthropic")
+    u = urllib.parse.urlparse(base)
+    if u.scheme not in ("http", "https") or not u.hostname or len(base) > 300 or u.query or u.fragment:
+        raise ValueError("接口地址不对：应为 https://… 开头的网址")
+    if not key or len(key) > 500 or any(ch in key for ch in "\r\n"):
+        raise ValueError("请填写 API Key")
+    try:
+        ips = [i[4][0] for i in socket.getaddrinfo(u.hostname, u.port or (443 if u.scheme == "https" else 80), type=socket.SOCK_STREAM)]
+    except OSError as e:
+        raise ValueError(f"找不到接口地址 {u.hostname}") from e
+    if any(not ipaddress.ip_address(ip.split("%")[0]).is_global for ip in ips):
+        raise ValueError("接口地址必须是公网地址")
+    path = u.path.rstrip("/")
+    if proto == "anthropic":   # 填 https://api.anthropic.com 或 …/v1 都行
+        root = base[:-3] if path.endswith("/v1") else base
+        api = root + "/v1"
+    else:                      # OpenAI 兼容：没写版本路径时补 /v1
+        api = base if re.search(r"/v\d+[a-z]*$", path) else base + "/v1"
+    return {"proto": proto, "api": api, "key": key, "model": model[:200]}
+
+
+def llm_http(conf, method, path, body=None):
+    headers = {"User-Agent": UA, "Accept": "application/json"}
+    if conf["proto"] == "anthropic":
+        headers.update({"x-api-key": conf["key"], "anthropic-version": "2026-10-21"})
+    else:
+        headers["Authorization"] = "Bearer " + conf["key"]
+    data = None
+    if body is not None:
+        data = json.dumps(body, ensure_ascii=False).encode()
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(conf["api"] + path, data=data, headers=headers, method=method)
+    try:
+        with _llm_opener.open(req, timeout=LLM_TIMEOUT) as res:
+            raw = res.read(8 << 20)
+    except urllib.error.HTTPError as e:
+        msg = ""
+        try:
+            err = json.loads(e.read(65536) or b"{}")
+            msg = (err.get("error") or {}).get("message") if isinstance(err.get("error"), dict) else err.get("error") or err.get("message")
+        except Exception:  # noqa: BLE001
+            pass
+        hint = {401: "API Key 不对", 403: "没有权限", 404: "接口地址或模型不对", 429: "上游限流或额度不足"}.get(e.code, "")
+        raise LlmError(f"上游返回 {e.code}{'（' + hint + '）' if hint else ''}{'：' + str(msg)[:200] if msg else ''}") from None
+    except (urllib.error.URLError, OSError) as e:
+        raise LlmError(f"连不上接口：{getattr(e, 'reason', e)}") from None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        raise LlmError("上游返回的不是 JSON（接口地址可能不对）") from None
+
+
+class LlmError(RuntimeError):
+    pass
+
+
+def llm_models(body):
+    """上游的模型列表（id 排序）"""
+    conf = llm_conf(body)
+    ids, after = [], None
+    for _ in range(10):   # Anthropic 分页：has_more / last_id
+        q = "?limit=1000" + (f"&after_id={urllib.parse.quote(after)}" if after else "") if conf["proto"] == "anthropic" else ""
+        res = llm_http(conf, "GET", "/models" + q)
+        items = res.get("data") if isinstance(res, dict) else res
+        ids += [str(m.get("id")) for m in items or [] if isinstance(m, dict) and m.get("id")]
+        if not (isinstance(res, dict) and res.get("has_more") and res.get("last_id")):
+            break
+        after = res["last_id"]
+    return {"models": sorted(set(ids))}
+
+
+# 提示词尽量短：每次请求都要发；输出每行「序号<TAB>译文」，比 JSON 省 token
+LLM_SYSTEM = {
+    "zh-CN": "把 EVE Online 游戏聊天译成简体中文：像玩家聊天一样自然意译；游戏名词用国服叫法，「名词」里给的照用；角色名原样保留；"
+             "缩写和错字按本意理解。每条输出一行：序号<TAB>译文；已是中文或无需翻译的只写序号。不要输出别的。",
+    "en": "Translate EVE Online in-game chat into natural English, like players talk; use official English names for game terms "
+          "(always use the given terms); keep character names unchanged. One line per message: index<TAB>translation; "
+          "for messages already in English or needing no translation, write only the index. Output nothing else.",
+}
+LLM_LINE = re.compile(r"^\s*\[?(\d+)\]?[\t ]*[:：|.、\t-]?[\t ]*(.*)$")
+# 译成中文时已经是中文的消息不发给模型（中文字为主、拉丁字母很少）
+is_zh = lambda t: bool(re.search(r"[\u4e00-\u9fff]", t)) and len(re.findall(r"[A-Za-z]", t)) <= len(re.findall(r"[\u4e00-\u9fff]", t)) // 2
+
+
+def llm_translate(conf, texts, tl, hints):
+    user = ("名词：" if tl == "zh-CN" else "Terms: ") + "；".join(f"{a}={b}" for a, b in hints[:300]) + "\n" if hints else ""
+    user += "\n".join(f"{i}\t{t}" for i, t in enumerate(texts))
+    system = LLM_SYSTEM[tl]
+    if conf["proto"] == "anthropic":
+        res = llm_http(conf, "POST", "/messages", {"model": conf["model"], "max_tokens": 16000, "system": system, "messages": [{"role": "user", "content": user}]})
+        res = res if isinstance(res, dict) else {}
+        if res.get("stop_reason") == "refusal":
+            raise LlmError("模型拒绝了这次翻译")
+        out = "".join(b.get("text", "") for b in res.get("content") or [] if isinstance(b, dict) and b.get("type") == "text")
+    elif conf["proto"] == "openai-responses":
+        res = llm_http(conf, "POST", "/responses", {"model": conf["model"], "instructions": system, "input": user})
+        res = res if isinstance(res, dict) else {}
+        out = res.get("output_text") if isinstance(res.get("output_text"), str) else "".join(
+            c.get("text", "") for o in res.get("output") or [] if isinstance(o, dict) and o.get("type") == "message"
+            for c in o.get("content") or [] if isinstance(c, dict) and c.get("type") in ("output_text", "text"))
+    else:
+        res = llm_http(conf, "POST", "/chat/completions", {"model": conf["model"], "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]})
+        res = res if isinstance(res, dict) else {}
+        msg = ((res.get("choices") or [{}])[0] or {}).get("message") or {}
+        c = msg.get("content")
+        out = c if isinstance(c, str) else "".join(x.get("text", "") for x in c or [] if isinstance(x, dict))
+    got, hit = [None] * len(texts), False
+    for line in (out or "").replace("```", "").splitlines():
+        m = LLM_LINE.match(line)
+        if m and int(m.group(1)) < len(texts):
+            hit = True
+            got[int(m.group(1))] = [m.group(2).strip(), ""]
+    if not hit:
+        raise LlmError("模型没有按要求返回结果，换个模型试试")
+    return [g or ["", ""] for g in got]
+
+
+def chat_hints(text, tl, pairs):
+    """给大模型的名词对照：网页带来的星系 / 人名 + 术语表 + 聊天常用说法里出现在消息中的"""
+    out = list(pairs)
+    if GLOSSARY.re is None:
+        GLOSSARY.load()
+    if tl == "zh-CN":
+        for m in GLOSSARY.re.finditer(text) if GLOSSARY.re else []:
+            w = m.group(0)
+            zh = re.sub(r"<[^>]+>", "", GLOSSARY.sub(w, CHAT_TR_STOP))
+            if zh != w:
+                out.append((w, zh))
+    else:
+        out += [(m.group(0), GLOSSARY.rev[m.group(0)]) for m in (GLOSSARY.rev_re.finditer(text) if GLOSSARY.rev_re else [])]
+    return out
+
+
+def chat_translate(body):
+    tl = body.get("tl")
+    q = body.get("q")
+    terms = body.get("terms") or []
+    if tl not in ("zh-CN", "en") or not isinstance(q, list) or not 0 < len(q) <= CHAT_TR_MAX[0] \
+            or not all(isinstance(x, str) and 0 < len(x) <= CHAT_TR_MAX[1] for x in q) or sum(map(len, q)) > CHAT_TR_MAX[2]:
+        raise ValueError("请求体应为 JSON：{q: [文字…], tl: 'zh-CN' | 'en', terms: [[[原文, 译名], …], …]}")
+    pairs = []
+    for i in range(len(q)):
+        t = terms[i] if isinstance(terms, list) and i < len(terms) and isinstance(terms[i], list) else []
+        p = [(str(a)[:100], str(b)[:100]) for a, b in (x for x in t[:20] if isinstance(x, list) and len(x) == 2)]
+        if tl == "zh-CN":
+            p += [(w, CHAT_TERMS[w.lower()]) for w in dict.fromkeys(m.group(0) for m in CHAT_TERMS_RE.finditer(q[i]))]
+        pairs.append(tuple(p))
+    llm = llm_conf(body["llm"]) if body.get("llm") else None
+    if llm and not llm["model"]:
+        raise ValueError("请先选择模型")
+    if llm:   # 大模型：一次整批翻译，名词对照放进提示词；按配置区分缓存
+        ck = lambda i: (tl, q[i], pairs[i], llm["api"], llm["model"])
+        with _chat_tr_lock:
+            out = [_chat_tr_cache.get(ck(i)) for i in range(len(q))]
+        for i in range(len(q)):
+            if out[i] is None and tl == "zh-CN" and is_zh(q[i]):
+                out[i] = ["", "zh-CN"]
+        todo = [i for i in range(len(q)) if out[i] is None]
+        if todo:
+            hints = list(dict.fromkeys(h for i in todo for h in chat_hints(q[i], tl, pairs[i]) if h[0].lower() != h[1].lower()))
+            res = llm_translate(llm, [q[i] for i in todo], tl, hints)
+            with _chat_tr_lock:
+                for i, v in zip(todo, res):
+                    if v is not None:
+                        out[i] = v
+                        _chat_tr_cache[ck(i)] = v
+                while len(_chat_tr_cache) > 20000:
+                    _chat_tr_cache.popitem(last=False)
+        return {"result": out, "via": "llm"}
+    keys = youdao_keys()
+    ck = lambda i: (tl, q[i], pairs[i])
+    with _chat_tr_lock:
+        out = [_chat_tr_cache.get(ck(i)) for i in range(len(q))]
+    todo = [i for i in range(len(q)) if out[i] is None]
+    if todo:
+        def run(texts, sl="auto", html=False, plain=None):
+            if keys:
+                try:
+                    return _youdao_tr(keys, plain or texts, tl, sl)
+                except Exception as e:  # noqa: BLE001
+                    log.warning("有道翻译失败，改用谷歌: %s", e)
+            return _google_tr(texts, tl, sl, html)
+        try:
+            first = run([q[i] for i in todo])
+            got = dict(zip(todo, first))
+            # 含游戏名词、且不是目标语言的：按原文语言再翻一次，名词保留游戏内的名字
+            again = {}
+            for i in todo:
+                text, lang = got.get(i) or [None, ""]
+                if not text or not lang or lang[:2] == tl[:2]:
+                    continue
+                h, plain, hit = chat_protect(q[i], tl, pairs[i])
+                if hit:
+                    again.setdefault(lang, []).append((i, h, plain))
+            for lang, items in again.items():
+                res = run([h for _, h, _ in items], sl=lang, html=True, plain=[p for _, _, p in items])
+                for (i, _, _), (text, _) in zip(items, res):
+                    if text:
+                        got[i] = [text, got[i][1]]
+        except Exception as e:  # noqa: BLE001
+            log.warning("频道翻译失败: %s", e)
+            raise RuntimeError("翻译服务暂时不可用")
+        with _chat_tr_lock:
+            for i, v in got.items():
+                if v and v[0]:
+                    _chat_tr_cache[ck(i)] = v
+            while len(_chat_tr_cache) > 20000:
+                _chat_tr_cache.popitem(last=False)
+        out = [o or got.get(i) for i, o in enumerate(out)]
+    return {"result": [chat_tidy(o, tl) for o in out], "via": "youdao" if keys else "google"}
+
+
+def chat_tidy(item, tl):
+    """译成中文后：修正常见误译（公司 → 军团等，同集市翻译），中文和英文 / 数字之间加空格"""
+    if not item or not item[0] or tl != "zh-CN":
+        return item
+    text = item[0]
+    for a, b in ZH_FIX:
+        text = text.replace(a, b)
+    text = re.sub(r"([A-Za-z0-9])([\u4e00-\u9fff])", r"\1 \2", text)
+    text = re.sub(r"([\u4e00-\u9fff])([A-Za-z0-9])", r"\1 \2", text)
+    return [text, item[1]]
+
+
 def zh_fix(html):
     parts = re.split(r'(<span class="notranslate">.*?</span>)', html, flags=re.S)
     for i in range(0, len(parts), 2):
@@ -2697,15 +3044,24 @@ class EveGlossary:
             alts = sorted(terms, key=len, reverse=True)
             pat = "|".join(f"(?i:{re.escape(en)})" if " " in en else re.escape(en) for en in alts)
             self.re = re.compile(r"(?<![\w-])(?:" + pat + r")(?![\w-])") if alts else False
+            # 反向（中文名 → 英文名，频道翻译译成英文时用）：只用装配数据里的物品名，按子串匹配，长的优先
+            self.rev = {}
+            for en, zh in names.items():
+                if len(zh) >= 2:
+                    self.rev.setdefault(zh, en)
+            self.rev_re = re.compile("|".join(re.escape(zh) for zh in sorted(self.rev, key=len, reverse=True))) if self.rev else False
             log.info("游戏术语表：%d 条", len(terms))
 
-    def sub(self, text):
+    def sub(self, text, skip=()):
+        """skip：这些写法原样不换（频道翻译里 super、capital 等小写词多半是普通英文）"""
         if self.re is None:
             self.load()
         if not self.re:
             return text
         def one(m):
             w = m.group(0)
+            if w in skip:
+                return w
             leveled = re.match(r"\s*(?:[IV]{1,3}|[1-5])(?![\w-])", m.string[m.end():])
             skill = self.skills.get(w.lower())
             if skill and leveled:      # Gallente Titan V：技能
@@ -2716,6 +3072,14 @@ class EveGlossary:
                     zh = zh[:-2]
             return f'<span class="notranslate">{zh}</span>' if zh else w
         return self.re.sub(one, text)
+
+    def sub_en(self, text):
+        """中文物品名 → 英文名（标成不翻译）"""
+        if self.re is None:
+            self.load()
+        if not self.rev_re:
+            return text
+        return self.rev_re.sub(lambda m: f'<span class="notranslate">{self.rev[m.group(0)]}</span>', text)
 
 
 GLOSSARY = EveGlossary([])
@@ -5545,6 +5909,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     sync_limiter = RateLimiter(SYNC_RATE)
     sale_limiter = RateLimiter(SALE_RATE)
     push_limiter = RateLimiter(PUSH_RATE)
+    chat_tr_limiter = RateLimiter(CHAT_TR_RATE)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -5704,6 +6069,27 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("预警推送错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
+        def chat_translate(self, models=False):
+            # 频道翻译转发（同源调用，不带 CORS 头）；请求体（含玩家的大模型 API Key）不写日志、不保存；models：取大模型的模型列表
+            ok, _, retry = chat_tr_limiter.take(self.client_ip())
+            if not ok:
+                return self.send_json(429, {"error": f"翻译太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 65536:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+                return self.send_json(200, llm_models(body) if models else chat_translate(body))
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e) or "请求体应为 JSON"})
+            except RuntimeError as e:
+                return self.send_json(503, {"error": str(e)})
+            except Exception:
+                log.exception("频道翻译错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
         def sync(self, path):
             # 设置云同步（同源调用，不带 CORS 头）；请求体不写日志
             op = path[len("/api/kb/sync/"):]
@@ -5742,6 +6128,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.sale(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/push/"):
                 return self.push(url.path.rstrip("/"))
+            if url.path.rstrip("/") in ("/api/kb/translate", "/api/kb/translate/models"):
+                return self.chat_translate(url.path.rstrip("/").endswith("/models"))
             cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
             err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
             path = url.path.rstrip("/")
@@ -5891,6 +6279,7 @@ def main():
             CnWorkers(cn_store, queue).start()
             threading.Thread(target=cn_apis[name].warm, daemon=True).start()
     GLOSSARY.dirs = [args.static, os.path.dirname(here), "/opt/eve/dist"]
+    CHAT_TR_KEYS["path"] = os.path.join(os.path.dirname(os.path.abspath(args.db)), "youdao.json")
     bazaar, cbg = Bazaar(os.path.join(os.path.dirname(os.path.abspath(args.db)), "bazaar-index.json")), Cbg()
     if not args.lite:
         bazaar.start(), cbg.start()

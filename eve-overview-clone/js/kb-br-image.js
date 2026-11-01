@@ -43,12 +43,15 @@ export async function renderBrImage(m) {
   for (const s of ['A', 'B']) {
     m.sides[s].parties.forEach((p) => urls.add(p.logo));
     m.sides[s].top.forEach((k) => urls.add(k.icon));
+    m.sides[s].players.list.forEach((p) => { urls.add(p.avatar); p.ships.forEach((u) => urls.add(u)); });
   }
   const images = new Map(await Promise.all([...urls].map(async (u) => [u, await loadImage(u)])));
 
   const rows = Math.max(m.sides.A.parties.length, m.sides.B.parties.length, 1);
   const tops = Math.max(m.sides.A.top.length, m.sides.B.top.length);
-  const H = 150 + 250 + 64 + m.cmps.length * 40 + 30 + 250 + 40 + 56 + rows * 46 + (tops ? 56 + tops * 46 : 0) + 30 + 64;
+  const prow = Math.max(m.sides.A.players.list.length, m.sides.B.players.list.length);
+  const pmore = m.sides.A.players.more || m.sides.B.players.more;
+  const H = 150 + 250 + 64 + m.cmps.length * 40 + 30 + 250 + 40 + 56 + rows * 46 + (tops ? 56 + tops * 46 : 0) + (prow ? 70 + prow * 42 + (pmore ? 24 : 0) : 0) + 30 + 64;
   const canvas = document.createElement('canvas');
   canvas.width = W * SCALE;
   canvas.height = H * SCALE;
@@ -337,6 +340,71 @@ export async function renderBrImage(m) {
   };
   column('A', PAD);
   column('B', PAD + colW + 24);
+
+  // ---------- 参战玩家：头像、所属、舰船、参与击杀 / 损失 ----------
+  if (prow) {
+    const py0 = endY + 36;
+    const players = (s, x) => {
+      const st = m.sides[s].players, color = s === 'A' ? C.a : C.b;
+      let cy = py0;
+      g.textAlign = 'left';
+      g.fillStyle = color;
+      g.font = font(700, 17, family);
+      g.fillText(`${s} 方 · 参战玩家`, x, cy);
+      g.fillStyle = C.muted;
+      g.font = font(400, 12, family);
+      g.textAlign = 'right';
+      g.fillText('损失', x + colW, cy);
+      g.fillText('参与击杀', x + colW - 128, cy);
+      g.textAlign = 'left';
+      cy += 16;
+      for (const p of st.list) {
+        const img = images.get(p.avatar);
+        rr(g, x, cy, 32, 32, 16);
+        g.save(); g.clip();
+        if (img) g.drawImage(img, x, cy, 32, 32); else { g.fillStyle = C.panel2; g.fillRect(x, cy, 32, 32); }
+        g.restore();
+        // 右侧：舰船图标 + 数字
+        let rx = x + colW;
+        g.textAlign = 'right';
+        g.font = font(600, 13, family);
+        g.fillStyle = p.losses ? '#f3a0a0' : C.muted;
+        g.fillText(fit(g, p.losses ? (p.lostText ? `${p.losses} · -${p.lostText}` : String(p.losses)) : '—', 116), rx, cy + 21);
+        rx -= 128;   // 损失一栏固定宽度，各行的击杀数、舰船图标对齐
+        g.fillStyle = p.kills ? C.text : C.muted;
+        g.font = font(700, 14, family);
+        g.fillText(p.kills ? String(p.kills) : '—', rx, cy + 21);
+        rx -= 30;
+        for (let i = p.ships.length - 1; i >= 0; i--) {
+          const si = images.get(p.ships[i]);
+          rx -= 24;
+          rr(g, rx, cy + 4, 24, 24, 5);
+          g.save(); g.clip();
+          if (si) g.drawImage(si, rx, cy + 4, 24, 24); else { g.fillStyle = C.panel2; g.fillRect(rx, cy + 4, 24, 24); }
+          g.restore();
+          rx -= 3;
+        }
+        g.textAlign = 'left';
+        const tw = rx - (x + 42) - 10;
+        g.fillStyle = C.text;
+        g.font = font(600, 14, family);
+        g.fillText(fit(g, p.name, tw), x + 42, cy + 14);
+        g.fillStyle = C.muted;
+        g.font = font(400, 11.5, family);
+        g.fillText(fit(g, p.party, tw), x + 42, cy + 29);
+        cy += 42;
+      }
+      if (st.more) {
+        g.fillStyle = C.muted;
+        g.font = font(400, 12, family);
+        g.fillText(`另有 ${st.more} 人`, x + 42, cy + 10);
+        cy += 24;
+      }
+      endY = Math.max(endY, cy);
+    };
+    players('A', PAD);
+    players('B', PAD + colW + 24);
+  }
 
   // ---------- 页脚 ----------
   const fy = endY + 20;

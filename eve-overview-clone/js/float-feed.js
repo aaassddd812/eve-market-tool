@@ -1,8 +1,8 @@
-// ===== 悬浮窗（击杀预警、到价提醒、本地红名）：主页面这一侧 =====
+// ===== 悬浮窗（击杀预警、到价提醒、本地红名、日志预警、频道翻译）：主页面这一侧 =====
 // 悬浮窗是站内的 float.html?kind=…，内容由主页面经 BroadcastChannel（eve-float）推过去，悬浮窗只负责显示：
 //   主页面 → 悬浮窗：{ t: 'snap', kind, data } 最新内容；{ t: 'ready' } 主页面刚打开（悬浮窗重新要一次内容）；
 //     { t: 'alert', kind } 刚响了一条新提醒（悬浮窗切到这个菜单）
-//   悬浮窗 → 主页面：{ t: 'hello', kind } 要内容；{ t: 'alive', kind } 每 20 秒报一次还开着；{ t: 'open-kill' | 'open-item' | 'open-char', id } 在主页面打开详情；
+//   悬浮窗 → 主页面：{ t: 'hello', kind } 要内容；{ t: 'alive', kind } 每 20 秒报一次还开着；{ t: 'open-kill' | 'open-item' | 'open-char' | 'open-sys', id } 在主页面打开详情（open-sys 星系在星图里）；
 //     { t: 'open-hash', hash } 主页面切到这个地址（详情里的人物 / 军团链接）
 //   详情窗口（float-detail.html）→ 主页面：{ t: 'detail-req', rid, kind: 'item' | 'kill' | 'char', id, opt } 要详情；主页面回 { t: 'detail', rid, title, html } 或 { t: 'detail', rid, error }
 // 打开方式：
@@ -13,13 +13,13 @@
 // 模块各自发布内容（publish）；悬浮窗要内容而模块还没加载时，用登记的 loader 加载（loader 加载后会自己 publish）。
 
 const CH = 'eve-float';
-const FLOAT_V = 'v10';   // 跟 float.html 里 float-view.js 的版本号一致：改了悬浮窗页面就一起改，旧的画中画会重新加载
-export const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名' };
+const FLOAT_V = 'v11';   // 跟 float.html 里 float-view.js 的版本号一致：改了悬浮窗页面就一起改，旧的画中画会重新加载
+export const KINDS = { kill: '击杀预警', price: '到价提醒', local: '本地红名', intel: '日志预警', chat: '频道翻译' };
 const snap = {};
 const loaders = {};
 const seen = {};     // kind -> 悬浮窗最后一次报到的时间
 let bc = null;
-let handlers = {};   // openKill(id), openItem(id), openChar(id), openHash(hash), detail(kind, id, opt) → { title, html }, showToast
+let handlers = {};   // openKill(id), openItem(id), openChar(id), openSys(id), openHash(hash), detail(kind, id, opt) → { title, html }, showToast
 let pip = null;      // 网页画中画窗口
 
 const tauri = () => (window.__EVE_DESKTOP__ && window.__TAURI_INTERNALS__) || null;
@@ -41,6 +41,7 @@ export function initFloatFeed(h) {
     } else if (m.t === 'open-kill') handlers.openKill?.(Number(m.id));
     else if (m.t === 'open-item') handlers.openItem?.(Number(m.id));
     else if (m.t === 'open-char') handlers.openChar?.(Number(m.id));
+    else if (m.t === 'open-sys') handlers.openSys?.(Number(m.id));
     else if (m.t === 'open-hash' && /^#[\w/-]+$/.test(m.hash || '')) handlers.openHash?.(m.hash);
     else if (m.t === 'detail-req' && m.rid && handlers.detail) {
       Promise.resolve().then(() => handlers.detail(m.kind, Number(m.id), m.opt || {}))

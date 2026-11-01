@@ -8,7 +8,7 @@ import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v3';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v9';
+import * as FF from './float-feed.js?v=v10';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
@@ -962,7 +962,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v59').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v60').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1604,7 +1604,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v19').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v20').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -5766,7 +5766,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v15').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v16').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5789,7 +5789,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v29').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v30').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5842,7 +5842,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v16').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v17').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
@@ -5865,6 +5865,7 @@ function initKillAlerts() {
     openKill: async (id) => { if (!id) return; const kb = await loadKillboard(); kb.openServiceKill(id); },
     openItem: (id) => selectItem(id),
     openChar: (id) => { if (id) location.hash = '#kb/character/' + id; },
+    openSys: (id) => { if (id) openMapSystem(id); },
     openHash: (hash) => { location.hash = hash; },
     // 悬浮窗里点了物品 / 击杀：详情在悬浮窗那边显示，这里只生成内容
     detail: async (kind, id, opt) => {
@@ -5877,6 +5878,8 @@ function initKillAlerts() {
   FF.setLoader('kill', loadKillAlert);
   FF.setLoader('price', () => loadWatchBoard().then((m) => m.startFloat()));
   FF.setLoader('local', () => loadLocal().then((m) => m.startFloat()));
+  FF.setLoader('intel', () => loadIntel().then((m) => m.startFloat()));
+  FF.setLoader('chat', () => loadIntel().then((m) => m.startFloat()));
   $('killAlertBtn').addEventListener('click', () => openAlertCenter());
   // 已开启的话页面打开即开始检测
   let on = false;

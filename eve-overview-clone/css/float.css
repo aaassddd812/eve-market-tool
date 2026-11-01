@@ -45,9 +45,9 @@ html.fl-native .fl-head { cursor: move; }
 .fl-title { font-weight: 600; font-size: 13px; }
 .fl-sp { flex: 1; }
 .fl-tabs { display: flex; gap: 2px; background: var(--card); border-radius: 8px; padding: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.fl-tabs button { border: 0; background: none; color: var(--text-2); font: inherit; font-size: 12px; padding: 3px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+.fl-tabs button { border: 0; background: none; color: var(--text-2); font: inherit; font-size: 12px; padding: 3px 7px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
 html.fl-native .fl-head { padding-left: 8px; }
-html.fl-native .fl-tabs button { padding: 3px 8px; }
+html.fl-native .fl-tabs button { padding: 3px 6px; }
 .fl-tabs button.active { background: var(--accent); color: #fff; }
 .fl-ctl { display: flex; gap: 2px; }
 .fl-btn { width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 6px; background: none; color: var(--text-2); cursor: pointer; }
@@ -130,3 +130,12 @@ html.fl-passing .fl-btn[data-fl-pass] { background: var(--accent); color: #fff; 
 .fl-detail { position: fixed; inset: 0; z-index: 20; background: rgb(var(--bg)); border-radius: inherit; overflow: hidden; }
 html.fl-native .fl-detail { border-radius: 10px; }
 .fl-detail iframe { display: block; width: 100%; height: 100%; border: 0; }
+
+/* 日志预警 / 频道翻译 */
+.fl-kill.warn .fl-badge { background: rgba(245, 158, 11, 0.16); color: var(--warn); }
+.fl-chat { display: flex; flex-direction: column; gap: 2px; }
+.fl-chat-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.fl-chat-head b { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fl-chat-head small { color: var(--muted); font-size: 11px; white-space: nowrap; margin-left: auto; }
+.fl-chat-text { overflow-wrap: anywhere; }
+.fl-chat-src { color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }

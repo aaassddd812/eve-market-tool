@@ -13,7 +13,7 @@
 
 import * as AP from './alert-push.js?v=v2';
 import * as ST from './standings.js?v=v4';
-import * as FF from './float-feed.js?v=v9';
+import * as FF from './float-feed.js?v=v10';
 import { SERVER, IS_TQ } from './server.js?v=s4';
 
 let ctx;   // esc, showToast, resolveNames, resolveTypeNames, selfNames()
