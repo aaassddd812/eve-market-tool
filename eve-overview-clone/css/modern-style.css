@@ -3523,6 +3523,22 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .pi-field > label { font-size: 0.8125rem; font-weight: 600; color: var(--text-secondary); }
 .pi-field .segmented { display: flex; }
 .pi-field .segmented button { flex: 1; padding: 0 6px; white-space: nowrap; }
+/* 自产「不采集」：点 P0 排除 / 恢复 */
+.pi-skip > summary { display: flex; align-items: baseline; gap: 10px; cursor: pointer; list-style: none; }
+.pi-skip > summary::-webkit-details-marker { display: none; }
+.pi-skip > summary > label { font-size: 0.8125rem; font-weight: 600; color: var(--text-secondary); cursor: pointer; }
+.pi-skip-sum { flex: 1; min-width: 0; font-size: 0.75rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-skip > summary::after { content: ''; width: 7px; height: 7px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: translateY(-2px) rotate(45deg); transition: transform var(--transition-fast); }
+.pi-skip[open] > summary::after { transform: translateY(1px) rotate(-135deg); }
+.pi-skip-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 4px; margin-top: 8px; }
+.pi-skip-chip { display: flex; align-items: center; gap: 6px; min-width: 0; height: 30px; padding: 0 8px 0 4px; border-radius: 8px; background: var(--bg-tertiary); color: var(--text-primary); font-size: 0.75rem; text-align: left; transition: background var(--transition-fast), opacity var(--transition-fast); }
+.pi-skip-chip:hover { background: var(--bg-hover, var(--bg-tertiary)); }
+.pi-skip-chip img { flex: none; border-radius: 4px; }
+.pi-skip-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-skip-chip.off { background: color-mix(in srgb, var(--sell-color, #ef4444) 12%, transparent); color: var(--text-muted); }
+.pi-skip-chip.off img { filter: grayscale(1); opacity: 0.5; }
+.pi-skip-chip.off span { text-decoration: line-through; }
+.pi-skip-reset { align-self: flex-start; margin-top: 6px; font-size: 0.75rem; color: var(--accent-primary); }
 .pi-inline .segmented button { padding: 0 4px; }
 .pi-input { width: 100%; height: 36px; padding: 0 10px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-primary); font: inherit; font-size: 0.8125rem; }
 .pi-input:focus { outline: none; border-color: var(--accent-primary); box-shadow: 0 0 0 3px var(--accent-ring); }
@@ -3710,7 +3726,8 @@ html.pie-open { overflow: hidden; }
 .pie-build .pie-link-btn.active { background: rgb(79 209 232 / 0.2); }
 
 /* 右侧信息栏 */
-.pie-side { display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow-y: auto; background: #0b1119; }
+.pie-side { display: flex; flex-direction: column; min-height: 0; background: #0b1119; }
+.pie-side-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; padding: 16px; overflow-y: auto; overscroll-behavior: contain; }
 .pie-panel { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-radius: 14px; background: rgb(255 255 255 / 0.035); }
 .pie-panel > header { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--pie-text); }
 .pie-panel > header em { font-style: normal; min-width: 18px; padding: 0 6px; border-radius: 9px; background: #e5484d; color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
@@ -3750,9 +3767,68 @@ html.pie-open { overflow: hidden; }
 .pie-problems li[data-pie-goto], .pie-problems li[data-pie-goto-link] { cursor: pointer; }
 .pie-problems li:hover { background: rgb(255 90 90 / 0.18); }
 .pie-ok { margin: 0; padding: 8px 12px; border-radius: 9px; background: rgb(52 211 153 / 0.12); color: #8af0c4; font-size: 13px; }
-.pie-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: auto; padding-top: 4px; }
+.pie-actions { flex: none; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 16px 16px; background: #0b1119; box-shadow: 0 -12px 16px -8px rgb(0 0 0 / 0.5); }
 .pie-actions .pie-btn { height: 36px; }
 .pie-actions .wide { grid-column: 1 / -1; height: 40px; }
+.pie-btn.game { background: rgb(79 209 232 / 0.16); color: #9eeaf7; font-weight: 600; }
+.pie-btn.game:hover { background: rgb(79 209 232 / 0.24); }
+.pie-gauge.over em { animation: pie-over 1s ease-in-out infinite alternate; }
+@keyframes pie-over { from { opacity: 0.6; } to { opacity: 1; box-shadow: 0 0 14px #ff5a5a; } }
+/* 产量、存储与维护（pi-sim.js 推演） */
+.pie-seg { display: inline-flex; margin-left: auto; padding: 2px; border-radius: 8px; background: rgb(255 255 255 / 0.05); }
+.pie-seg button { padding: 2px 8px; border-radius: 6px; white-space: nowrap; color: var(--pie-dim); font-size: 11px; font-weight: 500; }
+.pie-seg button.on { background: rgb(79 209 232 / 0.2); color: #dff8fc; }
+.pie-prod { width: 100%; border-collapse: collapse; font-size: 12px; }
+.pie-prod th, .pie-prod td { position: static; background: none !important; border: 0; color: var(--pie-text); }
+.pie-prod th { padding: 0 0 6px; color: var(--pie-dim); font-size: 11px; font-weight: 500; text-align: left; text-transform: none; letter-spacing: 0; }
+.pie-prod td { padding: 4px 0; vertical-align: middle; font-variant-numeric: tabular-nums; }
+.pie-prod .num { text-align: right; padding-left: 8px; white-space: nowrap; }
+.pie-prod td.num small { display: block; color: var(--pie-dim); font-size: 10px; }
+.pie-prod td.num b { font-weight: 600; color: #e9f4fb; }
+.pie-prod tr.own td { color: var(--pie-dim); }
+.pie-prod-name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pie-prod-name img { flex: none; border-radius: 50%; background: #05080e; box-shadow: 0 0 0 1.5px var(--c); }
+.pie-prod-name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pie-prod-name i { flex: none; font-style: normal; font-size: 10px; font-weight: 700; color: var(--c); }
+.pie-note { color: var(--pie-dim); font-size: 11px; line-height: 1.5; }
+.pie-sim-sum { margin: 0; padding: 8px 12px; border-radius: 9px; font-size: 12px; line-height: 1.5; }
+.pie-sim-sum.warn { background: rgb(255 177 2 / 0.12); color: #ffd27a; }
+.pie-sim-sum.ok { background: rgb(52 211 153 / 0.12); color: #8af0c4; }
+.pie-events { display: flex; flex-direction: column; gap: 2px; margin: -4px 0 0; padding: 0; list-style: none; font-size: 11px; color: var(--pie-dim); }
+.pie-events li { display: flex; gap: 8px; padding: 3px 6px; border-radius: 6px; cursor: pointer; }
+.pie-events li:hover { background: rgb(255 255 255 / 0.05); color: var(--pie-text); }
+.pie-events b { flex: none; min-width: 56px; font-weight: 600; color: #ffd27a; font-variant-numeric: tabular-nums; }
+.pie-chart { padding: 10px 10px 8px; border-radius: 10px; background: rgb(0 0 0 / 0.28); }
+.pie-chart svg { display: block; width: 100%; height: 92px; overflow: visible; }
+.pie-chart svg text { fill: var(--pie-dim); font-size: 9px; }
+.pie-chart .cap { stroke: rgb(255 90 90 / 0.4); stroke-dasharray: 3 3; }
+.pie-chart .base { stroke: rgb(255 255 255 / 0.1); }
+.pie-chart .cur { stroke: #fff; stroke-opacity: 0.7; stroke-width: 1; }
+.pie-chart polyline { vector-effect: non-scaling-stroke; }
+.pie-chart line { vector-effect: non-scaling-stroke; }
+.pie-chart-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 10px; color: var(--pie-dim); }
+.pie-chart-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.pie-chart-legend i { width: 10px; height: 3px; border-radius: 2px; }
+.pie-chart-legend i.dot { width: 7px; height: 7px; border-radius: 50%; }
+.pie-chart-legend i.r { background: #ff5a5a; }
+.pie-chart-legend i.o { background: #ffb102; }
+.pie-sim-at input[type=range] { width: 100%; accent-color: #4fd1e8; }
+.pie-sim-at b { color: var(--pie-text); font-weight: 600; }
+#pieSimRead { display: flex; flex-direction: column; gap: 8px; }
+.pie-hub { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: 10px; background: rgb(255 255 255 / 0.04); }
+.pie-hub-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 12px; }
+.pie-hub-head span { font-weight: 600; font-variant-numeric: tabular-nums; }
+.pie-hub-head small { font-weight: 400; color: var(--pie-dim); }
+.pie-fill { display: block; height: 6px; border-radius: 3px; overflow: hidden; background: rgb(255 255 255 / 0.08); }
+.pie-fill em { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, #2b8fd6, #5ec8ff); transition: width 0.12s; }
+.pie-fill.full em { background: #ff5a5a; box-shadow: 0 0 8px #ff5a5a; }
+.pie-hub-row { display: grid; grid-template-columns: 78px 1fr; gap: 6px; align-items: start; font-size: 11px; color: var(--pie-dim); }
+.pie-hub-row > span { padding-top: 3px; line-height: 1.3; }
+.pie-hub-row > span small { display: block; font-size: 10px; }
+.pie-hub-row > div { display: flex; flex-wrap: wrap; gap: 4px; }
+.pie-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 2px; border-radius: 999px; background: color-mix(in srgb, var(--c) 14%, transparent); color: var(--pie-text); }
+.pie-chip img { border-radius: 50%; background: #05080e; }
+.pie-chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
 
 @media (max-width: 900px) {
   .pie-dialog { grid-template-columns: 1fr; grid-template-rows: minmax(320px, 60%) 1fr; }
@@ -3909,7 +3985,8 @@ html.pie-open { overflow: hidden; }
 .ind-rank-row .pi-inline { flex: none; }
 .ind-rank-row label.pi-inline > span:first-child { width: auto; white-space: nowrap; }
 .ind-refine { margin-left: 8px; height: 28px; font-size: 0.75rem; }
-.ind-rank-wrap { max-height: 70vh; }
+/* 分页的排行（制造排行、倒卖排行）：整张表跟着页面滚，不在框里单独滚 */
+.ind-rank-wrap, .hr-wrap .pi-table-wrap { max-height: none; overflow-y: visible; }
 .ind-status { padding: 1px 8px; border-radius: 999px; font-size: 0.6875rem; background: var(--bg-tertiary); color: var(--text-secondary); }
 .ind-status.active { background: var(--accent-soft); color: var(--accent-primary); }
 .ind-status.ready { background: color-mix(in srgb, var(--buy-color) 15%, transparent); color: var(--buy-color); }

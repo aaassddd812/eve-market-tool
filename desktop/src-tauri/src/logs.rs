@@ -10,7 +10,8 @@ use std::time::{Duration, SystemTime};
 const SUBS: [&str; 2] = ["Chatlogs", "Gamelogs"];
 const MAX_READ: u64 = 4 << 20;
 
-fn find_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+// 可能的「文档」文件夹：系统的（含被 OneDrive 重定向的）在前，再试几个常见位置（行星模板 pi_tpl.rs 也用）
+pub fn doc_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
     use tauri::Manager;
     let mut cands = Vec::new();
     if let Ok(d) = app.path().document_dir() {
@@ -22,6 +23,10 @@ fn find_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
     cands
+}
+
+fn find_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
+    doc_dirs(app)
         .into_iter()
         .map(|d| d.join("EVE").join("logs"))
         .find(|d| SUBS.iter().any(|s| d.join(s).is_dir()))

@@ -4,9 +4,14 @@
 // 编辑：拖动设施、添加 / 删除 / 复制设施、连接 / 断开链接、链接升级、配方与采集头数、行星类型与指挥中心等级。
 // 检查与游戏导入一致的规则：设施间距 ≥ 0.012 弧度、路由最多 7 个设施、链接流量不超过容量、CPU / 电网不超出。
 // 路由按链接自动生成：采集控制器 → 最近的发射平台 / 储藏设施，工厂原料从仓储送来、产物送回仓储。
+// 画面：行星球面（按行星类型着色、带经纬网），新放的设施扫一道高光、删掉的淡出，电网 / CPU 超出时最后改动的设施泛红光；
+//   设施、物料颜色与游戏一致（P0 青、P1 橙、P2 黄、P3 金、P4 绿）。
+// 侧栏「产量」「存储与维护」：按 pi-sim.js 推演，拖时间轴看各仓储存量、满仓 / 断料时间、该取走和开局要装的东西。
+// 桌面版「存到游戏」：直接写进游戏的模板文件夹（pi_tpl_save 命令），游戏里行星的模板列表就能选到。
 import { angle, arc, basis, project, unproject, toVec } from './pi-globe.js?v=v19r12';
+import { simulate } from './pi-sim.js?v=v1';
 
-let env;   // pi, ptByCode, schemByOut, cName, tierOf, esc, formatNumber, showToast, CC_LEVELS, HEAD, headRate, ICON
+let env;   // pi, ptByCode, schemByOut, cName, tierOf, esc, formatNumber, showToast, CC_LEVELS, HEAD, headRate, ICON, PLANET_COLORS
 const $ = (id) => document.getElementById(id);
 
 export const SPACING = 0.0125;        // 生成模板时设施间距（弧度），略大于游戏下限
@@ -14,14 +19,18 @@ const MIN_SEP = 0.012;                // 游戏要求的最小间距（弧度）
 const SEP_TOL = 1e-4;
 const MAX_ROUTE = 7;                  // 路由最多经过 7 个设施
 const LINK_CAP = 1250;                // 0 级链接容量 m³/h，每升一级翻倍
+// 颜色跟图标外圈、游戏里的物料等级色一致
+const TIER_COLORS = ['#00e7ea', '#e96e00', '#ffb102', '#f3c700', '#9fe500'];
 const KINDS = {
-  launchpad: { label: '发射平台', color: '#5aa9ff' },
-  storage: { label: '储藏设施', color: '#a3b5d1' },
+  launchpad: { label: '发射平台', color: '#1f8fff' },
+  storage: { label: '储藏设施', color: '#1f8fff' },
   ecu: { label: '采集控制器', color: '#00e7ea' },
-  basic: { label: '基础工业设施', color: '#6fd27f' },
-  adv: { label: '高级工业设施', color: '#3fd0e0' },
-  ht: { label: '高科技工厂', color: '#d39bff' }
+  basic: { label: '基础工业设施', color: '#e96e00' },
+  adv: { label: '高级工业设施', color: '#ffb102' },
+  ht: { label: '高科技工厂', color: '#9fe500' }
 };
+const tierColor = (id) => TIER_COLORS[env.tierOf(id)] || '#9fb2c4';
+const pinColor = (p) => (p.kind === 'adv' && p.product && env.tierOf(p.product) === 3 ? TIER_COLORS[3] : KINDS[p.kind].color);
 const HUBS = new Set(['launchpad', 'storage']);
 // 地图与建造栏上的设施图标（游戏行星界面风格）
 const PIN_ICON = { launchpad: 'launchpad', storage: 'storage', ecu: 'ecu', basic: 'bfc', adv: 'afc-p2', ht: 'hfc' };
@@ -233,9 +242,68 @@ function drawScene(view) {
   cam.cx = w / 2; cam.cy = h / 2;
   const g = canvas.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawPlanet(g, view, w, h);
+  drawColony(g, view, w, h);
+}
+
+// ---------- 行星球面 ----------
+const hexRgb = (hex) => { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+// 经纬网间距：屏幕上大约 7 – 14 条
+const GRID_STEPS = [0.1, 0.2, 0.5, 1, 2, 5, 10, 15, 30].map((d) => (d * Math.PI) / 180);
+function drawPlanet(g, view, w, h) {
+  const { cam } = view;
+  const [r0, g0, b0] = hexRgb(env.PLANET_COLORS?.[view.model.code] || '#5f8fbf');
+  const rgb = (a, k = 1) => `rgba(${Math.round(r0 * k)},${Math.round(g0 * k)},${Math.round(b0 * k)},${a})`;
   g.fillStyle = '#000';
   g.fillRect(0, 0, w, h);
-  drawColony(g, view, w, h);
+  const R = cam.rpx;
+  // 球体：暗色底 + 左上方的受光
+  g.save();
+  g.beginPath(); g.arc(cam.cx, cam.cy, R, 0, Math.PI * 2); g.clip();
+  g.fillStyle = rgb(1, 0.13);
+  g.fillRect(0, 0, w, h);
+  const lr = Math.max(w, h) * 0.9;
+  const lit = g.createRadialGradient(w * 0.38, h * 0.3, 0, w * 0.38, h * 0.3, lr);
+  lit.addColorStop(0, rgb(0.22)); lit.addColorStop(0.55, rgb(0.07)); lit.addColorStop(1, rgb(0));
+  g.fillStyle = lit;
+  g.fillRect(0, 0, w, h);
+  // 经纬网
+  const span = Math.min(Math.PI, Math.max(w, h) / R);
+  const step = GRID_STEPS.find((s) => span / s <= 14) || GRID_STEPS[GRID_STEPS.length - 1];
+  const b = basis(cam);
+  const line = (pts, major) => {
+    g.beginPath();
+    let on = false;
+    for (const q of pts) {
+      const p = project(cam, b, q.th, q.ph);
+      if (!p.visible) { on = false; continue; }
+      if (on) g.lineTo(p.x, p.y); else g.moveTo(p.x, p.y);
+      on = true;
+    }
+    g.strokeStyle = rgb(major ? 0.2 : 0.09, 1.3);
+    g.lineWidth = major ? 1 : 0.8;
+    g.stroke();
+  };
+  const reach = Math.min(Math.PI / 2, span * 0.8);
+  const dph = Math.min(Math.PI, reach / Math.max(0.15, Math.sin(cam.th)));
+  const N = 40;
+  for (let k = Math.ceil((cam.th - reach) / step); k * step <= cam.th + reach; k++) {
+    const th = k * step;
+    if (th <= 0 || th >= Math.PI) continue;
+    line(Array.from({ length: N + 1 }, (_, j) => ({ th, ph: cam.ph - dph + (2 * dph * j) / N })), k % 5 === 0);
+  }
+  for (let k = Math.ceil((cam.ph - dph) / step); k * step <= cam.ph + dph; k++) {
+    const ph = k * step;
+    line(Array.from({ length: N + 1 }, (_, j) => ({ th: Math.max(0.001, Math.min(Math.PI - 0.001, cam.th - reach + (2 * reach * j) / N)), ph })), k % 5 === 0);
+  }
+  g.restore();
+  // 边缘（大气）光晕：拉远看到球体边缘时
+  if (R < Math.hypot(w, h)) {
+    const halo = g.createRadialGradient(cam.cx, cam.cy, R * 0.96, cam.cx, cam.cy, R * 1.08);
+    halo.addColorStop(0, rgb(0)); halo.addColorStop(0.35, rgb(0.35, 1.2)); halo.addColorStop(1, rgb(0));
+    g.fillStyle = halo;
+    g.beginPath(); g.arc(cam.cx, cam.cy, R * 1.08, 0, Math.PI * 2); g.fill();
+  }
 }
 
 // 设施图标按真实比例随缩放变化：图标直径约为最小间距的九成，相邻设施和游戏里一样几乎挨着
@@ -315,9 +383,11 @@ function drawColony(g, view, w, h) {
       const pts = [];
       for (let k = 1; k < rt.path.length; k++) pts.push(...arc(m.pins[rt.path[k - 1]], m.pins[rt.path[k]], 8).map(P));
       polyline(g, pts);
-      g.strokeStyle = inbound ? 'rgba(52,211,153,0.95)' : 'rgba(255,170,60,0.95)';
+      g.strokeStyle = tierColor(rt.type);
+      g.globalAlpha = inbound ? 0.75 : 0.95;
       g.lineWidth = inbound ? 5 : 2.5;
       g.stroke();
+      g.globalAlpha = 1;
     }
     g.setLineDash([]);
   }
@@ -328,12 +398,18 @@ function drawColony(g, view, w, h) {
     const s = P(p);
     if (!s.visible || s.x < -60 || s.y < -60 || s.x > w + 60 || s.y > h + 60) return;
     const k = KINDS[p.kind];
+    const color = pinColor(p);
     const selected = view.sel?.pin === i || view.linkFrom === i;
     const hovered = view.hover === i;
     const bad = info.crowded?.has(i);
+    // 新放的设施：弹出 + 图标上扫过一道高光
+    const age = !thumb && view.fx?.has(p) ? t - view.fx.get(p) : Infinity;
+    if (age > SHINE_END) view.fx?.delete(p);
+    const pop = age < POP_MS ? easeOutBack(Math.max(0, age) / POP_MS) : 1;
+    g.globalAlpha = age < 160 ? Math.max(0, age) / 160 : 1;
     // 底部光晕
     const glow = g.createRadialGradient(s.x, s.y, r * 0.7, s.x, s.y, r * (selected || hovered ? 2.6 : 2.1));
-    glow.addColorStop(0, k.color + (selected || hovered ? '77' : '44')); glow.addColorStop(1, k.color + '00');
+    glow.addColorStop(0, color + (selected || hovered ? '77' : '44')); glow.addColorStop(1, color + '00');
     g.fillStyle = glow;
     g.beginPath(); g.arc(s.x, s.y, r * 2.6, 0, Math.PI * 2); g.fill();
     // 采集头（采集球）：仿游戏内的半透明青白光盘，环绕在采集控制器外圈
@@ -356,11 +432,26 @@ function drawColony(g, view, w, h) {
     }
     // 设施图标（自带外圈）
     const img = icon(pinIconUrl(p.kind, p.product), redraw);
-    const size = r * 2.3;
+    const size = r * 2.3 * pop;
     if (img) g.drawImage(img, s.x - size / 2, s.y - size / 2, size, size);
     else {
-      g.fillStyle = '#0a1018'; g.strokeStyle = k.color; g.lineWidth = 2;
-      g.beginPath(); g.arc(s.x, s.y, r, 0, Math.PI * 2); g.fill(); g.stroke();
+      g.fillStyle = '#0a1018'; g.strokeStyle = color; g.lineWidth = 2;
+      g.beginPath(); g.arc(s.x, s.y, r * pop, 0, Math.PI * 2); g.fill(); g.stroke();
+    }
+    if (age >= SHINE_START && age < SHINE_END) shine(g, s, size / 2, (age - SHINE_START) / (SHINE_END - SHINE_START));
+    g.globalAlpha = 1;
+    // 电网 / CPU 超出：最后改动的那个设施泛红光、外圈红环一明一暗
+    if (!thumb && view.over && view.blame === p) {
+      const pulse = 0.55 + 0.45 * Math.sin(t / 260);
+      const veil = g.createRadialGradient(s.x, s.y, r * 0.35, s.x, s.y, r * 1.25);
+      veil.addColorStop(0, 'rgba(255,70,70,0)'); veil.addColorStop(1, `rgba(255,70,70,${0.5 * pulse})`);
+      g.fillStyle = veil;
+      g.beginPath(); g.arc(s.x, s.y, r * 1.25, 0, Math.PI * 2); g.fill();
+      g.save();
+      g.shadowColor = '#ff4a4a'; g.shadowBlur = 12 * pulse;
+      g.strokeStyle = `rgba(255,95,95,${0.5 + 0.5 * pulse})`; g.lineWidth = 2;
+      g.beginPath(); g.arc(s.x, s.y, r * 1.45, 0, Math.PI * 2); g.stroke();
+      g.restore();
     }
     if (p.kind === 'ecu' && p.heads && !headRing) {
       const bx = s.x + r * 0.78, by = s.y + r * 0.78;
@@ -381,7 +472,7 @@ function drawColony(g, view, w, h) {
     if (p.product && !HUBS.has(p.kind)) {
       const off = headRing ? r * (HEAD_RING + 1.15) : r * 0.9 * Math.SQRT2;   // 采集控制器的角标放在采集头外圈之外
       const bx = s.x + off * Math.SQRT1_2, by = s.y - off * Math.SQRT1_2, br = Math.max(6.5, r * 0.46);
-      g.fillStyle = '#05080e'; g.strokeStyle = 'rgba(255,255,255,0.55)'; g.lineWidth = 1;
+      g.fillStyle = '#05080e'; g.strokeStyle = tierColor(p.product); g.lineWidth = 1.2;
       g.beginPath(); g.arc(bx, by, br, 0, Math.PI * 2); g.fill(); g.stroke();
       const pimg = icon(env.ICON(p.product, 32), redraw);
       if (pimg) g.drawImage(pimg, bx - br * 0.82, by - br * 0.82, br * 1.64, br * 1.64);
@@ -409,6 +500,22 @@ function drawColony(g, view, w, h) {
     }
   });
 
+  // 删掉的设施：缩小淡出
+  if (!thumb && view.ghosts?.length) {
+    view.ghosts = view.ghosts.filter((gh) => t - gh.at < FADE_MS);
+    for (const gh of view.ghosts) {
+      const s = P(gh);
+      if (!s.visible) continue;
+      const e = Math.max(0, t - gh.at) / FADE_MS;
+      const img = icon(pinIconUrl(gh.kind, gh.product), redraw);
+      if (!img) continue;
+      const size = r * 2.3 * (1 - 0.45 * e);
+      g.globalAlpha = 1 - e;
+      g.drawImage(img, s.x - size / 2, s.y - size / 2, size, size);
+      g.globalAlpha = 1;
+    }
+  }
+
   // 悬停提示
   if (!thumb && view.hover != null && m.pins[view.hover] && view.hover !== view.sel?.pin) {
     const p = m.pins[view.hover];
@@ -426,13 +533,28 @@ function drawColony(g, view, w, h) {
     x = Math.max(6, Math.min(w - tw - 6, x));
     if (y < 6) y = s.y + r * 2 + 8;
     g.fillStyle = 'rgba(8,13,20,0.94)';
-    g.strokeStyle = KINDS[p.kind].color;
-    g.lineWidth = 1;
-    g.fillRect(x, y, tw, th);
-    g.strokeRect(x + 0.5, y + 0.5, tw - 1, th - 1);
+    g.beginPath(); g.roundRect(x, y, tw, th, 8); g.fill();
     g.textAlign = 'left'; g.textBaseline = 'top';
     lines.forEach((ln, k) => { g.fillStyle = k ? '#9fb2c4' : '#e8f1f8'; g.font = font(12, k ? 400 : 600); g.fillText(ln, x + 10, y + 7 + k * 17); });
   }
+}
+
+// ---------- 动画 ----------
+const POP_MS = 320, SHINE_START = 140, SHINE_END = 760, FADE_MS = 320;
+const easeOutBack = (x) => 1 + 2.2 * (x - 1) ** 3 + 1.2 * (x - 1) ** 2;
+// 圆形图标内斜向扫过的一道柔光
+function shine(g, s, rad, f) {
+  g.save();
+  g.beginPath(); g.arc(s.x, s.y, rad * 0.98, 0, Math.PI * 2); g.clip();
+  g.translate(s.x, s.y);
+  g.rotate(Math.PI / 4);
+  const x = (f * 2 - 1) * rad * 1.4, bw = rad * 0.55;
+  const band = g.createLinearGradient(x - bw, 0, x + bw, 0);
+  band.addColorStop(0, 'rgba(255,255,255,0)'); band.addColorStop(0.5, `rgba(255,255,255,${0.6 * Math.sin(Math.PI * f)})`); band.addColorStop(1, 'rgba(255,255,255,0)');
+  g.globalCompositeOperation = 'lighter';
+  g.fillStyle = band;
+  g.fillRect(x - bw, -rad * 1.5, bw * 2, rad * 3);
+  g.restore();
 }
 
 // ---------- 缩略预览 ----------
@@ -484,11 +606,11 @@ export function openTemplateEditor(json, { title = '殖民地模板', onSave = n
         </div>
         <div class="pie-hud-bottom" id="pieHud"></div>
       </div>
-      <aside class="pie-side" id="pieSide"></aside>
+      <aside class="pie-side"><div class="pie-side-body" id="pieSide"></div><div class="pie-actions" id="pieActions"></div></aside>
     </div>`;
   document.documentElement.classList.add('pie-open');
   const canvas = $('pieCanvas');
-  E.view = { canvas, model: m, cam: null, sel: null, linkFrom: null, hover: null };
+  E.view = { canvas, model: m, cam: null, sel: null, linkFrom: null, hover: null, fx: new Map(), ghosts: [], blame: null, over: false };
   E.view.redraw = () => requestDraw();
   canvas.addEventListener('pointerdown', onPointerDown);
   canvas.addEventListener('pointermove', onPointerMove);
@@ -510,6 +632,8 @@ function requestDraw() {
     if (!E.view || $('pieModal')?.hidden) return;
     E.view.t = t;
     E.view.info = autoRoutes(E.view.model);
+    const u = usage(E.view.model);
+    E.view.over = u.power > u.capP || u.cpu > u.capC;
     drawScene(E.view);
     requestDraw();
   });
@@ -598,13 +722,132 @@ function renderSide() {
       <header>导入检查${problems.length ? ` <em>${problems.length}</em>` : ''}</header>
       ${problems.length ? `<ul class="pie-problems">${problems.map((p) => `<li${p.pin != null ? ` data-pie-goto="${p.pin}"` : p.link != null ? ` data-pie-goto-link="${p.link}"` : ''}>${env.esc(p.text)}</li>`).join('')}</ul>` : '<p class="pie-ok">✓ 可导入游戏</p>'}
     </section>
-    <div class="pie-actions">
+    ${simHtml(m, { routes, problems, flow })}`;
+  // 保存 / 复制等按钮固定在侧栏底部，上面的内容单独滚动
+  $('pieActions').innerHTML = `
       ${E.onSave ? '<button type="button" class="pie-btn primary wide" data-pie="save">保存修改</button>' : ''}
-      <button type="button" class="pie-btn${E.onSave ? '' : ' primary wide'}" data-pie="copy">复制模板</button>
+      ${canSaveToGame() ? `<button type="button" class="pie-btn ${E.onSave ? 'game' : 'primary'} wide" data-pie="game" title="直接存进游戏的模板文件夹（文档\\EVE\\PlanetaryInteractionTemplates），游戏里行星的模板列表就能选到">存到游戏模板库</button>` : ''}
+      <button type="button" class="pie-btn${E.onSave || canSaveToGame() ? '' : ' primary wide'}" data-pie="copy">复制模板</button>
       <button type="button" class="pie-btn" data-pie="download">下载 .json</button>
       <button type="button" class="pie-btn" data-pie="import">导入 JSON</button>
-      <button type="button" class="pie-btn" data-pie="reset">还原</button>
+      <button type="button" class="pie-btn" data-pie="reset">还原</button>`;
+}
+
+// ---------- 产量与存储推演（pi-sim.js）----------
+const SIM_KEY = 'eve-pie-sim';
+const SIM_HOURS = [[24, '1 天'], [72, '3 天'], [168, '7 天'], [336, '14 天']];
+const PERIODS = [['h', '每小时', 1], ['d', '每天', 24], ['w', '每周', 168]];
+const HUB_LINE = ['#5ec8ff', '#ffb102', '#9fe500', '#e96e00', '#d39bff', '#ff7aa8'];
+const SIM = { hours: 72, period: 'd', at: 24 };
+try { Object.assign(SIM, JSON.parse(localStorage.getItem(SIM_KEY) || '{}')); } catch { /* 忽略 */ }
+if (!SIM_HOURS.some(([h]) => h === SIM.hours)) SIM.hours = 72;
+function saveSim() { try { localStorage.setItem(SIM_KEY, JSON.stringify(SIM)); } catch { /* 忽略 */ } }
+const fmtH = (x) => (x < 48 ? `${Math.round(x * 10) / 10} 小时` : `${Math.round((x / 24) * 10) / 10} 天`);
+const qtyText = (n) => env.formatNumber(Math.round(n));
+const pinName = (m, i) => `${KINDS[m.pins[i].kind].label} #${i + 1}`;
+const chip = (t, n) => `<span class="pie-chip" style="--c:${tierColor(t)}" title="${env.esc(env.cName(t))}"><img src="${env.ICON(t, 32)}" alt="" width="18" height="18"><b>${qtyText(n)}</b></span>`;
+
+function simHtml(m, info) {
+  if (!info.routes.length) { E.sim = null; return ''; }
+  const sim = simulate(m, info, { env, perHead: env.headRate(), hours: SIM.hours });
+  const run = simulate(m, info, { env, perHead: env.headRate(), hours: SIM.hours, steady: true });
+  E.sim = sim;
+  SIM.at = Math.min(Math.max(0, Number(SIM.at) || 0), sim.hours);
+  // 产量：推演期内的平均值，按所选周期换算
+  const [, , mult] = PERIODS.find(([k]) => k === SIM.period) || PERIODS[1];
+  const types = [...sim.idealMade.keys()].sort((a, b) => env.tierOf(b) - env.tierOf(a) || env.cName(a).localeCompare(env.cName(b), 'zh'));
+  const rows = types.map((t) => {
+    const gross = ((run.made.get(t) || 0) / run.hours) * mult;
+    const net = (((run.made.get(t) || 0) - (run.used.get(t) || 0)) / run.hours) * mult;
+    const ideal = ((run.idealMade.get(t) || 0) - (run.idealUsed.get(t) || 0)) * mult;
+    const own = net < 0.5 && (run.idealUsed.get(t) || 0) > 0;
+    return `<tr${own ? ' class="own"' : ''}><td><span class="pie-prod-name" style="--c:${tierColor(t)}"><img src="${env.ICON(t, 32)}" alt="" width="20" height="20"><span>${env.esc(env.cName(t))}</span><i>P${env.tierOf(t)}</i></span></td>
+      <td class="num">${qtyText(gross)}</td>
+      <td class="num">${own ? '<small>自用</small>' : `<b>${qtyText(net)}</b>${Math.abs(ideal - net) > Math.max(1, ideal * 0.03) ? `<small title="工厂满负荷、采集按头一天平均时的净产量">满负荷 ${qtyText(ideal)}</small>` : ''}`}</td></tr>`;
+  }).join('');
+  const seg = (attr, list, cur) => `<span class="pie-seg">${list.map(([v, label]) => `<button type="button" data-${attr}="${v}"${String(v) === String(cur) ? ' class="on"' : ''}>${label}</button>`).join('')}</span>`;
+  // 最早出问题的时刻：满仓或断料
+  const events = [
+    ...sim.hubs.filter((h) => h.fullAt != null).map((h) => ({ at: h.fullAt, pin: h.i, text: `${pinName(m, h.i)} 满仓` })),
+    ...sim.starved.map((f) => ({ at: f.at, pin: f.i, text: `${pinName(m, f.i)} 断料（缺${env.cName(f.type)}）` }))
+  ].sort((a, b) => a.at - b.at);
+  const first = events[0];
+  const sum = first
+    ? `<p class="pie-sim-sum warn"><b>${fmtH(first.at)}</b> 内要上线一次：之后${env.esc(first.text)}</p>`
+    : `<p class="pie-sim-sum ok">${fmtH(sim.hours)} 内不会满仓或断料</p>`;
+  return `<section class="pie-panel">
+      <header>产量${seg('pie-period', PERIODS.map(([k, l]) => [k, l]), SIM.period)}</header>
+      <table class="pie-prod"><thead><tr><th>物品</th><th class="num">毛产量</th><th class="num">净产量</th></tr></thead><tbody>${rows}</tbody></table>
+      <small class="pie-note">按时补货、取走时 ${fmtH(sim.hours)} 内的平均值：采集产量随采集程序时间衰减（头一天平均按每头 ${env.formatNumber(env.headRate())} / 小时），上游供不上会减产</small>
+    </section>
+    <section class="pie-panel">
+      <header>存储与维护${seg('pie-simh', SIM_HOURS, SIM.hours)}</header>
+      ${sum}
+      ${events.length > 1 ? `<ul class="pie-events">${events.slice(1, 6).map((e) => `<li data-pie-goto="${e.pin}"><b>${fmtH(e.at)}</b>${env.esc(e.text)}</li>`).join('')}</ul>` : ''}
+      ${chartHtml(sim)}
+      <label class="pie-row pie-sim-at"><span>时间轴 <b id="pieSimAt">${fmtH(SIM.at)}</b></span><input type="range" min="0" max="${sim.hours}" step="${sim.dt}" value="${SIM.at}" data-pie-prop="sim-at"></label>
+      <div id="pieSimRead">${simReadHtml(m, sim, SIM.at)}</div>
+    </section>`;
+}
+
+// 各仓储装了多满（随时间），竖线是时间轴所在位置
+function chartHtml(sim) {
+  const W = 300, H = 92, top = 8, bot = 16;
+  const y = (f) => top + (1 - Math.min(1, f)) * (H - top - bot);
+  const lines = sim.hubs.map((h, n) => {
+    const pts = [];
+    const every = Math.max(1, Math.floor(sim.steps / 150));
+    for (let k = 0; k <= sim.steps; k += every) pts.push(`${((k / sim.steps) * W).toFixed(1)},${y(h.fill[k] / h.cap).toFixed(1)}`);
+    return `<polyline points="${pts.join(' ')}" fill="none" stroke="${HUB_LINE[n % HUB_LINE.length]}" stroke-width="1.8" stroke-linejoin="round"/>`;
+  }).join('');
+  const marks = [
+    ...sim.hubs.filter((h) => h.fullAt != null).map((h) => `<circle cx="${((h.fullAt / sim.hours) * W).toFixed(1)}" cy="${y(1)}" r="3.5" fill="#ff5a5a"/>`),
+    ...sim.starved.map((f) => `<circle cx="${((f.at / sim.hours) * W).toFixed(1)}" cy="${H - bot}" r="3.5" fill="#ffb102"/>`)
+  ].join('');
+  const ticks = [0, 0.5, 1].map((f) => `<text x="${f * W}" y="${H - 3}" text-anchor="${f === 0 ? 'start' : f === 1 ? 'end' : 'middle'}">${fmtH(sim.hours * f)}</text>`).join('');
+  return `<div class="pie-chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <line x1="0" x2="${W}" y1="${y(1)}" y2="${y(1)}" class="cap"/><line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" class="base"/>
+      ${lines}${marks}<line id="pieSimCur" x1="${(SIM.at / sim.hours) * W}" x2="${(SIM.at / sim.hours) * W}" y1="0" y2="${H - bot}" class="cur"/>${ticks}</svg>
+    <div class="pie-chart-legend">${sim.hubs.map((h, n) => `<span><i style="background:${HUB_LINE[n % HUB_LINE.length]}"></i>${pinName(E.view.model, h.i)}</span>`).join('')}<span><i class="dot r"></i>满仓</span><span><i class="dot o"></i>断料</span></div></div>`;
+}
+
+// 时间轴所在时刻：每个仓储装了多少、开局要装什么
+function simReadHtml(m, sim, at) {
+  const k = Math.min(sim.steps, Math.round(at / sim.dt));
+  return sim.hubs.map((h) => {
+    const v = h.fill[k];
+    const stock = [...h.series].map(([t, arr]) => [t, arr[k]]).filter(([, n]) => n >= 1).sort((a, b) => b[1] * (env.pi.commodities[b[0]]?.[3] || 0) - a[1] * (env.pi.commodities[a[0]]?.[3] || 0));
+    const out = stock.filter(([t]) => !h.ext.has(t));
+    const left = stock.filter(([t]) => h.ext.has(t));
+    return `<div class="pie-hub">
+      <div class="pie-hub-head"><b>${pinName(m, h.i)}</b><span>${Math.round((v / h.cap) * 100)}%<small> · ${env.formatNumber(Math.round(v))} / ${env.formatNumber(h.cap)} m³</small></span></div>
+      <i class="pie-fill${v >= h.cap - 1 ? ' full' : ''}"><em style="width:${Math.min(100, (v / h.cap) * 100).toFixed(1)}%"></em></i>
+      ${h.initial.size ? `<div class="pie-hub-row"><span>开局装<small>（够 ${fmtH(h.refill)}）</small></span><div>${[...h.initial].map(([t, n]) => chip(t, n)).join('')}</div></div>` : ''}
+      ${left.length ? `<div class="pie-hub-row"><span>原料还剩</span><div>${left.map(([t, n]) => chip(t, n)).join('')}</div></div>` : ''}
+      <div class="pie-hub-row"><span>${at > 0 ? '可取走' : '存量'}</span><div>${out.length ? out.map(([t, n]) => chip(t, n)).join('') : '<small>空</small>'}</div></div>
     </div>`;
+  }).join('');
+}
+
+function updateSimRead() {
+  const sim = E.sim;
+  if (!sim || !E.view) return;
+  const read = $('pieSimRead');
+  if (read) read.innerHTML = simReadHtml(E.view.model, sim, SIM.at);
+  const label = $('pieSimAt');
+  if (label) label.textContent = fmtH(SIM.at);
+  const cur = $('pieSimCur');
+  if (cur) { const x = String((SIM.at / sim.hours) * 300); cur.setAttribute('x1', x); cur.setAttribute('x2', x); }
+}
+
+// ---------- 存到游戏（桌面版）----------
+export const canSaveToGame = () => Boolean(window.__EVE_DESKTOP__ && window.__TAURI_INTERNALS__);
+// 文件里的非 ASCII 字符（中文模板名）写成 \uXXXX，跟游戏自己导出的一样
+const asciiJson = (text) => text.replace(/[\u007f-￿]/g, (c) => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+export function saveToGame(json) {
+  return window.__TAURI_INTERNALS__.invoke('pi_tpl_save', { name: json.Cmt || 'template', text: asciiJson(templateText(json)) })
+    .then(() => env.showToast(`已存到游戏模板库：游戏里重新打开行星的模板列表就能看到「${json.Cmt}」`, 'success', 4000))
+    .catch((e) => env.showToast(/not found|not allowed|unknown/i.test(String(e)) ? '要更新桌面版才能直接存到游戏，先用「复制模板」' : '没有存进去：' + (e?.message || e), 'error', 4500));
 }
 
 // ---------- 交互 ----------
@@ -762,6 +1005,8 @@ function addPin(kind, from = null) {
   m.pins.push(pin);
   const i = m.pins.length - 1;
   if (hubs.length && !HUBS.has(kind)) m.links.push({ a: hubs[0][1], b: i, lv: 0 });
+  view.fx.set(pin, performance.now());
+  view.blame = pin;
   view.sel = { pin: i };
   changed();
   return i;
@@ -772,7 +1017,9 @@ function deleteSelected() {
   const m = view.model;
   if (view.sel?.pin != null) {
     const i = view.sel.pin;
-    m.pins.splice(i, 1);
+    const [gone] = m.pins.splice(i, 1);
+    view.ghosts.push({ th: gone.th, ph: gone.ph, kind: gone.kind, product: gone.product, at: performance.now() });
+    if (view.blame === gone) view.blame = null;
     m.links = m.links.filter((l) => l.a !== i && l.b !== i).map((l) => ({ ...l, a: l.a > i ? l.a - 1 : l.a, b: l.b > i ? l.b - 1 : l.b }));
   } else if (view.sel?.link != null) m.links.splice(view.sel.link, 1);
   else return;
@@ -820,6 +1067,10 @@ function onModalClick(e) {
   if (e.target.id === 'pieModal') { closeEditor(); return; }
   const add = e.target.closest('[data-pie-add]');
   if (add) { addPin(add.dataset.pieAdd); return; }
+  const simh = e.target.closest('[data-pie-simh]');
+  if (simh) { SIM.hours = Number(simh.dataset.pieSimh); SIM.at = Math.min(SIM.at ?? 0, SIM.hours); saveSim(); renderSide(); return; }
+  const per = e.target.closest('[data-pie-period]');
+  if (per) { SIM.period = per.dataset.piePeriod; saveSim(); renderSide(); return; }
   const go = e.target.closest('[data-pie-goto]');
   if (go) { focusPin(Number(go.dataset.pieGoto)); return; }
   const gol = e.target.closest('[data-pie-goto-link]');
@@ -838,13 +1089,14 @@ function onModalClick(e) {
   else if (act === 'import') importJson();
   else if (act === 'reset') {
     view.model = fromJson(JSON.parse(E.original));
-    view.sel = null; E.dirty = false;
+    view.sel = null; view.blame = null; E.dirty = false;
     requestDraw(); renderSide(); renderHud();
   } else if (act === 'copy') {
     navigator.clipboard.writeText(templateText(toJson(view.model)))
       .then(() => env.showToast('已复制模板，到游戏里「从剪贴板载入」', 'success'))
       .catch(() => env.showToast('浏览器阻止了复制，请改用下载', 'error'));
   } else if (act === 'download') downloadTemplate(toJson(view.model));
+  else if (act === 'game') saveToGame(toJson(view.model));
   else if (act === 'save') {
     const j = toJson(view.model);
     const u = usage(view.model);
@@ -880,8 +1132,8 @@ function onModalChange(e) {
   if (prop === 'code') { m.code = e.target.value; changed(); }
   else if (prop === 'cc') { m.cc = Number(e.target.value); changed(); }
   else if (prop === 'diam') { const d = Math.min(200000, Math.max(1000, Number(e.target.value) || 10000)); m.R = d / 2; e.target.value = d; changed(); }
-  else if (prop === 'product' && view.sel?.pin != null) { m.pins[view.sel.pin].product = Number(e.target.value) || null; changed(); }
-  else if (prop === 'heads' && view.sel?.pin != null) { m.pins[view.sel.pin].heads = Number(e.target.value); changed(); }
+  else if (prop === 'product' && view.sel?.pin != null) { m.pins[view.sel.pin].product = Number(e.target.value) || null; view.blame = m.pins[view.sel.pin]; changed(); }
+  else if (prop === 'heads' && view.sel?.pin != null) { m.pins[view.sel.pin].heads = Number(e.target.value); view.blame = m.pins[view.sel.pin]; changed(); }
   else if (prop === 'lv' && view.sel?.link != null) { m.links[view.sel.link].lv = Number(e.target.value); changed(); }
 }
 
@@ -889,8 +1141,10 @@ function onModalInput(e) {
   const prop = e.target.dataset.pieProp;
   if (!prop || !E.view) return;
   if (prop === 'name') { E.view.model.name = e.target.value; E.dirty = true; }
+  else if (prop === 'sim-at') { SIM.at = Number(e.target.value); saveSim(); updateSimRead(); }
   else if (prop === 'heads' && E.view.sel?.pin != null) {
     E.view.model.pins[E.view.sel.pin].heads = Number(e.target.value);
+    E.view.blame = E.view.model.pins[E.view.sel.pin];
     const b = e.target.closest('.pie-row')?.querySelector('.pie-heads');
     if (b) b.textContent = e.target.value;
     E.dirty = true;

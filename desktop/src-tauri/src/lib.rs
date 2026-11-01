@@ -12,6 +12,8 @@ mod capture;
 #[cfg(desktop)]
 mod logs;
 #[cfg(desktop)]
+mod pi_tpl;
+#[cfg(desktop)]
 mod tray;
 
 // WebView2 启动参数：所有窗口必须一致（同一个数据目录只能用一套参数）。前三个是 wry 的默认值；
@@ -50,7 +52,7 @@ pub fn run() {
         // 自动更新：启动时查 GitHub 发布仓库的 latest.json，有新版就弹窗询问
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, float_detail, update_check, capture::local_grab, capture::local_windows, logs::logs_dir, logs::logs_list, logs::logs_stat, logs::logs_read, tray::close_choice])
+        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, float_detail, update_check, capture::local_grab, capture::local_windows, logs::logs_dir, logs::logs_list, logs::logs_stat, logs::logs_read, pi_tpl::pi_tpl_save, tray::close_choice])
         // 点主窗口 ✕：按设置藏到托盘 / 退出 / 先问（tray.rs）；主窗口真的关掉就退出（悬浮窗不单独留着）
         .on_window_event(|w, e| {
             if w.label() != "main" {

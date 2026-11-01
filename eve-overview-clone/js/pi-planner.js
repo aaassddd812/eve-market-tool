@@ -5,7 +5,7 @@
 // 买料加工的补货周期：固定（12 小时 – 3 天或自定义小时数，产量受发射平台容量限制），或「自动」（工厂按 CPU / 电网建满，
 // 再按原料、产品体积与发射平台容量算出最长补货周期）；方案详情的「补货清单」给出每次补货要买的原料数量，可一键购买。
 // 数据：pi-data.json（build_pi.mjs 从 SDE 生成），map-data.json（星系、星门、星域）。
-import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v21';
+import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, canSaveToGame, saveToGame, SPACING } from './pi-editor.js?v=v22';
 import { angle } from './pi-globe.js?v=v19r12';
 import { SERVER, HUB } from './server.js?v=s4';
 import { skPage, skRows } from './skeleton.js?v=v17';
@@ -64,8 +64,10 @@ const F = {               // 表单状态（保存在本地）
   ecus: 0,                // 采集星的采集控制器个数，0 = 自动（采集头放到 CPU / 电网上限）
   ecuYield: 0,            // 每个采集控制器的实际产量（P0/小时，游戏里采集程序显示的），0 = 按资源丰度估算
   outTier: 0,             // 自动推荐只排某一级的最终产物：0 不限（收益最高的），1–4 = 只看 P1–P4
-  level: 0                // 自产时每颗采集星直接产出的等级：0 自动，1 / 2 / 3 = 采齐所需 P0 在本星加工成 P1 / P2 / P3 再出口
+  level: 0,               // 自产时每颗采集星直接产出的等级：0 自动，1 / 2 / 3 = 采齐所需 P0 在本星加工成 P1 / P2 / P3 再出口
+  skip: []                // 自产时不采集的 P0（默认都采）：规划当作地区里没有这种资源
 };
+let skipOpen = false;     // 「不采集」展开着
 
 const R = { area: null, plans: [], selected: 0, prices: new Map(), priceAt: 0, priceHub: 0, edits: new Map() };   // edits: 方案序号:模板 -> 修改后的模板
 
@@ -78,6 +80,7 @@ export function initPi(context) {
   ctx = context;
   Object.assign(F, ctx.store.getJSON(STORE_KEY, {}));
   F.sec = { high: true, low: true, null: true, ...F.sec };
+  F.skip = Array.isArray(F.skip) ? F.skip.map(Number).filter((id) => id > 0) : [];
 }
 
 // 模板编辑器需要的数据与工具
@@ -85,7 +88,7 @@ function editorEnv() {
   return {
     pi: D.pi, ptByCode: D.ptByCode, schemByOut: D.schemByOut, cName, tierOf,
     esc: ctx.esc, formatNumber: ctx.formatNumber, showToast: ctx.showToast,
-    CC_LEVELS, HEAD, headRate, ICON
+    CC_LEVELS, HEAD, headRate, ICON, PLANET_COLORS
   };
 }
 
@@ -181,12 +184,15 @@ function collectArea() {
   for (const p of planets) counts[p.code] = (counts[p.code] || 0) + 1;
   // 每种 P0 原材料可采集的行星数
   const resCount = new Map();
-  for (const [code, n] of Object.entries(counts)) for (const r of D.ptByCode[code].res) resCount.set(r, (resCount.get(r) || 0) + n);
+  for (const [code, n] of Object.entries(counts)) for (const r of D.ptByCode[code].res) if (canHarvest(r)) resCount.set(r, (resCount.get(r) || 0) + n);
   return { systems, planets, counts, resCount };
 }
 
 // ---------- 产能模型 ----------
 const ccCap = () => CC_LEVELS[F.cc];
+// 这种行星能不能采这种 P0（设为不采集的不算）
+const canHarvest = (p0) => F.way === 'buy' || !F.skip.includes(p0);
+const harvests = (code, p0) => D.ptByCode[code].res.includes(p0) && canHarvest(p0);
 const headRate = () => RICHNESS[F.rich]?.[0] || 500;
 const struct = (id) => D.pi.structures[id] || [0, 0];
 const perHour = (s, qty) => qty * 3600 / s.cycle;
@@ -613,7 +619,7 @@ function directDemand(x) {
   return dd;
 }
 // 能采齐 x 全部 P0 的行星类型
-const directCodes = (area, x) => { const need = [...directDemand(x).p0.keys()]; return Object.keys(area.counts).filter((c) => need.every((r) => D.ptByCode[c].res.includes(r))); };
+const directCodes = (area, x) => { const need = [...directDemand(x).p0.keys()]; return Object.keys(area.counts).filter((c) => need.every((r) => harvests(c, r))); };
 // 以 rate 单位/小时产出 x 时一颗行星的布局；放不下返回 null
 function directLayout(dd, rate, code, radius) {
   const pt = D.ptByCode[code];
@@ -701,6 +707,7 @@ function planProduct(product, area) {
   // P0：所有行星都采集，不加工直接出口
   if (tier === 0) {
     const avail = (area.resCount.get(product) || 0) * F.chars;
+    if (!canHarvest(product)) return { product, error: `${cName(product)}已设为不采集` };
     if (!avail) return { product, error: `地区内没有可采集${cName(product)}的行星` };
     const code = bestCodeFor(area, [product]);
     const ex = designExtractor(product, code, typicalRadius(area, [code]), null, true);
@@ -712,6 +719,7 @@ function planProduct(product, area) {
   if (tier === 1) {
     const p0 = p0Of(product);
     const avail = (area.resCount.get(p0) || 0) * F.chars;
+    if (!canHarvest(p0)) return { product, error: `要用到${cName(p0)}，已设为不采集` };
     if (!avail) return { product, error: `地区内没有可采集${cName(p0)}的行星` };
     const code = bestCodeFor(area, [p0]);
     const ex = designExtractor(p0, code, typicalRadius(area, [code]));
@@ -727,7 +735,7 @@ function planProduct(product, area) {
   if (tier === 2 && L !== 1) {
     const s2 = D.schemByOut.get(product);
     const p0s = s2.inputs.map(([p1]) => p0Of(p1));
-    const codes = Object.keys(area.counts).filter((c) => p0s.every((r) => D.ptByCode[c].res.includes(r)));
+    const codes = Object.keys(area.counts).filter((c) => p0s.every((r) => harvests(c, r)));
     if (codes.length) {
       const code = codes.sort((a, b) => area.counts[b] - area.counts[a])[0];
       const single = designSingleP2(product, code, typicalRadius(area, [code]));
@@ -742,7 +750,10 @@ function planProduct(product, area) {
   if (L === 2) return candidates[0] || { product, error: '地区内没有一种行星能同时采到这两种原料' };
   if (missing.length) {
     if (candidates.length) return candidates[0];
-    return { product, error: '地区内缺少原材料：' + [...new Set(missing.map(p0Of))].map(cName).join('、') };
+    const lack = [...new Set(missing.map(p0Of))];
+    const off = lack.filter((r) => !canHarvest(r));
+    if (off.length) return { product, error: `要用到${off.map(cName).join('、')}，已设为不采集` };
+    return { product, error: '地区内缺少原材料：' + lack.map(cName).join('、') };
   }
   const fCode = factoryCode(area, product);
   const codeByP1 = new Map(p1s.map((p1) => [p1, bestCodeFor(area, [p0Of(p1)])]));
@@ -751,10 +762,10 @@ function planProduct(product, area) {
   // 混合方案（工厂摊到采集星上）。P4 需要高科技工厂，只有贫瘠 / 温和行星能建：只让能在这两类行星上采集的 P1 兼工厂
   const needHT = [...dem.fac.keys()].some((o) => tierOf(o) === 4);
   const hostCodeByP1 = new Map(p1s.map((p1) => [p1, needHT
-    ? Object.keys(area.counts).filter((c) => D.ptByCode[c].ht && D.ptByCode[c].res.includes(p0Of(p1))).sort((a, b) => area.counts[b] - area.counts[a])[0] || null
+    ? Object.keys(area.counts).filter((c) => D.ptByCode[c].ht && harvests(c, p0Of(p1))).sort((a, b) => area.counts[b] - area.counts[a])[0] || null
     : codeByP1.get(p1)]));
   const fits2 = placer(area);
-  const extCodes = new Map(p1s.map((p1) => [p1, Object.keys(area.counts).filter((c) => D.ptByCode[c].res.includes(p0Of(p1)))]));
+  const extCodes = new Map(p1s.map((p1) => [p1, Object.keys(area.counts).filter((c) => harvests(c, p0Of(p1)))]));
   const hostCodes = new Map(p1s.map((p1) => [p1, needHT ? extCodes.get(p1).filter((c) => D.ptByCode[c].ht) : extCodes.get(p1)]));
   if (exOk && total >= p1s.length && L !== 1) {
     const ok = fits2.loose([...extCodes.values(), ...hostCodes.values()]) ? null : (n, hosts) => fits2(p1s.flatMap((p1) => [[extCodes.get(p1), n.get(p1) - hosts.get(p1)], [hostCodes.get(p1), hosts.get(p1)]]));
@@ -784,7 +795,7 @@ function typicalRadius(area, codes) {
 
 // 采集某些 P0 时选用的行星类型：地区里数量最多的
 function bestCodeFor(area, p0s) {
-  return Object.keys(area.counts).filter((c) => p0s.every((r) => D.ptByCode[c].res.includes(r)))
+  return Object.keys(area.counts).filter((c) => p0s.every((r) => harvests(c, r)))
     .sort((a, b) => area.counts[b] - area.counts[a])[0] || 'B';
 }
 
@@ -1335,6 +1346,7 @@ function renderForm() {
       <select id="piTarget" class="pi-input"><option value="0"${!F.target ? ' selected' : ''}>自动推荐</option>${products}</select>
       ${F.target ? '' : `<div class="pi-inline" title="自动推荐只排这一级的最终产物；自动 = 不限等级，按日收益排"><span>产物等级</span>${seg('outTier', [[0, '自动'], [1, 'P1'], [2, 'P2'], [3, 'P3'], [4, 'P4']], F.outTier || 0, (v) => buy && v && v <= (F.buyLevel || 0))}</div>`}
     </div>
+    ${buy ? '' : skipHtml()}
     </div>
     <div class="pi-col">
     <div class="pi-field">
@@ -1398,8 +1410,20 @@ function renderForm() {
     </div>`;
 }
 
+// 自产时不采集的 P0：点一下排除 / 恢复，默认都采
+function skipHtml() {
+  const p0s = Object.keys(D.pi.commodities).map(Number).filter((id) => tierOf(id) === 0).sort((a, b) => cName(a).localeCompare(cName(b), 'zh'));
+  const off = p0s.filter((id) => F.skip.includes(id));
+  return `<details class="pi-field pi-skip"${skipOpen ? ' open' : ''}>
+      <summary><label>不采集</label><span class="pi-skip-sum">${off.length ? `<span>${off.slice(0, 2).map((id) => ctx.esc(cName(id))).join('、')}</span>${off.length > 2 ? `<span> 等 ${off.length} 种</span>` : ''}` : '<span>无（都采）</span>'}</span></summary>
+      <div class="pi-skip-list">${p0s.map((id) => `<button type="button" class="pi-skip-chip${off.includes(id) ? ' off' : ''}" data-pi-skip="${id}" aria-pressed="${off.includes(id)}" title="${off.includes(id) ? '点一下恢复采集' : '点一下设为不采集'}"><img src="${ICON(id, 32)}" alt="" width="20" height="20" loading="lazy"><span>${ctx.esc(cName(id))}</span></button>`).join('')}</div>
+      ${off.length ? '<button type="button" class="pi-skip-reset" data-pi-skip="all">全部恢复采集</button>' : ''}
+    </details>`;
+}
+
 function bind() {
   const form = $('piForm');
+  form.addEventListener('toggle', (e) => { if (e.target.classList?.contains('pi-skip')) skipOpen = e.target.open; }, true);
   form.addEventListener('submit', (e) => { e.preventDefault(); run(); });
   form.addEventListener('click', (e) => {
     const set = e.target.closest('[data-pi-set]');
@@ -1414,6 +1438,15 @@ function bind() {
       renderForm();
       if (key === 'way' || key === 'buyLevel' || key === 'outTier') renderSide();
       if (key !== 'mode' && R.area) run();
+      return;
+    }
+    const skip = e.target.closest('[data-pi-skip]');
+    if (skip) {
+      const id = Number(skip.dataset.piSkip);
+      F.skip = skip.dataset.piSkip === 'all' ? [] : F.skip.includes(id) ? F.skip.filter((x) => x !== id) : [...F.skip, id];
+      saveForm();
+      renderForm();
+      if (R.area) run();
       return;
     }
     const pick = e.target.closest('[data-pi-pick]');
@@ -1697,6 +1730,7 @@ function renderDetail() {
       <div class="pi-tpl-actions">
         <button type="button" class="btn btn-primary" data-pi-copy="${i}">复制模板</button>
         <button type="button" class="btn btn-ghost" data-pi-download="${i}">下载 .json</button>
+        ${canSaveToGame() ? `<button type="button" class="btn btn-ghost" data-pi-game="${i}" title="直接存进游戏的模板文件夹，游戏里行星的模板列表就能选到">存到游戏</button>` : ''}
       </div>
     </div>`).join('');
 
@@ -1732,7 +1766,7 @@ function renderDetail() {
         <ol>
           <li>放置指挥中心并升到 ${F.cc} 级</li>
           ${plan.strategy === 'buy' ? `<li>原料经海关进口到发射平台</li>` : ''}
-          <li>复制模板，游戏内「模板 → 导入与导出 → 从剪贴板载入」；或把 .json 放进 <code>文档\\EVE\\PlanetaryInteractionTemplates</code></li>
+          <li>${canSaveToGame() ? '点「存到游戏」直接存进游戏的模板文件夹；或' : ''}复制模板，游戏内「模板 → 导入与导出 → 从剪贴板载入」；或把 .json 放进 <code>文档\\EVE\\PlanetaryInteractionTemplates</code></li>
           ${plan.strategy === 'buy' ? '' : '<li>摆放采集头、设定周期后提交</li>'}
         </ol>
       </div>
@@ -1893,6 +1927,8 @@ function onResultClick(e) {
       .catch(() => ctx.showToast('浏览器阻止了复制，请改用下载', 'error'));
     return;
   }
+  const game = e.target.closest('[data-pi-game]');
+  if (game) { saveToGame(R.templates[Number(game.dataset.piGame)].json); return; }
   const dl = e.target.closest('[data-pi-download]');
   if (dl) {
     const t = R.templates[Number(dl.dataset.piDownload)];
