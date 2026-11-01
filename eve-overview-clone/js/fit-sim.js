@@ -684,7 +684,7 @@ function renderBattle() {
         <div class="sim-3d${BT.want3d ? '' : ' is-off'}" id="sim3d">
           <div class="sim-3d-off"><button type="button" class="btn btn-primary btn-sm" data-bt-3d>加载 3D 画面</button><small>要下载舰船模型，不加载也能开战、看结果</small></div>
           <div class="sim-3d-tools">
-            <button type="button" data-bt-dir class="${BT.director ? 'on' : ''}" title="导播镜头：自动环绕战场，有船被击毁时切过去" aria-label="导播镜头" aria-pressed="${BT.director}">${ICON.dir}</button>
+            <button type="button" data-bt-dir class="${BT.director ? 'on' : ''}" title="导播镜头：自动环绕战场" aria-label="导播镜头" aria-pressed="${BT.director}">${ICON.dir}</button>
             <button type="button" data-bt-names class="${BT.names ? 'on' : ''}" title="显示名字与血条" aria-label="显示名字与血条" aria-pressed="${BT.names}">${ICON.names}</button>
             <button type="button" data-bt-cam title="重置视角" aria-label="重置视角">${ICON.cam}</button>
             <button type="button" data-bt-full title="全屏" aria-label="全屏">${ICON.full}</button>
@@ -710,7 +710,7 @@ function renderBattle() {
       <div class="sim-bt-reinf"><button type="button" class="btn btn-ghost btn-sm" data-bt-reinf="A">A 方舰队支援</button><button type="button" class="btn btn-ghost btn-sm" data-bt-reinf="B">B 方舰队支援</button></div>
       <div class="sim-bt-pop" id="simBtPop" hidden></div>
       <div class="sim-bt-log" id="simBtLog"></div>
-      <p class="sim-hint">拖动旋转 · 滚轮或双指缩放 · 右键或双指拖动平移 · 点舰船或两边名单查看并点名集火 · 双击舰船镜头跟随 · 导播镜头自动跟拍击毁</p>
+      <p class="sim-hint">拖动旋转 · 滚轮或双指缩放 · 右键或双指拖动平移 · 点舰船或两边名单查看并点名集火 · 双击舰船镜头跟随 · 导播镜头自动环绕战场</p>
     </section>`;
     BT.host = box.querySelector('#sim3d');
     if (BT.want3d) mountView(BT.host);
@@ -724,7 +724,7 @@ function mountView(host) {
   host.classList.remove('is-off');
   host.closest('.sim-stage')?.classList.remove('is-off');
   loadBar(0, 0);
-  import('./sim-3d.js?v=v11').then((m) => {
+  import('./sim-3d.js?v=v12').then((m) => {
     if (BT.host !== host || !host.isConnected) return;
     BT.view = m.createView(host, {
       onPick: (i) => { BT.sel = i; updateBattleUi(); },
@@ -918,11 +918,10 @@ function liveLoss() {
 }
 // ---------- 直播式比分条与双方名单（像 AT 比赛直播）----------
 // 比分条：两队（AT 赛显示队标、队名），中间是时间；按胜负方式显示存活与击毁价值、战损效率，或 AT 得分（见 paintScore）。
-// 名单在 3D 画面两边（窄屏 / 没加载 3D 时在下方）：一方不超过 RS_SOLO 艘时每艘一行（选手名或船名 + 护盾 / 装甲 / 结构三条血条，
-// 阵亡变灰划掉；没有选手名时超过 RS_PLAIN 艘就合并），更多时按船型合并成一行（存活 / 总数 + 存活船的平均血量）。点一行选中那艘船（合并行选第一艘还活着的）。
+// 名单在 3D 画面两边（窄屏 / 没加载 3D 时在下方）：每艘船一行（同型船也各自一行，多了就滚动，不显示滚动条）：
+// 选手名或船名（同型多艘时带编号）+ 当前速度与电容 + 护盾 / 装甲 / 结构三条血条，阵亡变灰划掉。点一行选中那艘船。
 // 每行缓存节点和上次写入的值，值没变不碰 DOM；击杀播报（谁击毁了谁）浮在画面上方。
 // 名字下面一排小图标：这艘船此刻正受到的电子战（红底，装备图标）和遥修（绿底），和 AT 直播一样。
-const RS_SOLO = 24, RS_PLAIN = 10;
 const RS = { n: -1, rows: [], head: {} };
 const EW_ORDER = ['scram', 'point', 'web', 'neut', 'nos', 'ecm', 'damp', 'paint', 'rs', 'ra', 'rh'];
 const EW_NAME = { scram: '跃迁扰频', point: '跃迁扰断', web: '停滞网', neut: '能量中和', nos: '能量吸取', ecm: 'ECM 干扰', damp: '感应抑阻', paint: '目标标记', rs: '护盾遥修', ra: '装甲遥修', rh: '结构遥修' };
@@ -973,22 +972,25 @@ function buildRoster() {
     if (!box) continue;
     const ids = [];
     rec.units.forEach((u, i) => { if (u.side === s) ids.push(i); });
-    const solo = ids.length <= (ids.some((i) => rowById(rec.units[i].row)?.pilot) ? RS_SOLO : RS_PLAIN);
-    let groups = ids.map((i) => [i]);
-    if (!solo) {
-      const m = new Map();
-      for (const i of ids) { const k = rec.units[i].ship; (m.get(k) || m.set(k, []).get(k)).push(i); }
-      groups = [...m.values()].sort((a, b) => b.length - a.length);
-    }
+    const groups = ids.map((i) => [i]);
+    // 没有选手名的同型船按出场顺序编号
+    const same = new Map(), no = new Map();
+    for (const i of ids) if (!pilotOf(i)) same.set(rec.units[i].ship, (same.get(rec.units[i].ship) || 0) + 1);
+    const label = (i) => {
+      const p = pilotOf(i), ship = rec.units[i].ship;
+      if (p || (same.get(ship) || 0) < 2) return nameHtml(i);
+      no.set(ship, (no.get(ship) || 0) + 1);
+      return `<b>${ctx.esc(shipName(ship))} ${no.get(ship)}</b>`;
+    };
     box.innerHTML = `<header><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span>${teamName(s) ? `<b translate="no">${ctx.esc(teamName(s))}</b>` : ''}<small class="n"></small></header>
       <div class="sim-rs-list">${groups.map((g) => {
         const i = g[0], u = rec.units[i], row = rowById(u.row);
-        const sub = solo ? (row?.pilot ? `<small>${ctx.esc(shipName(u.ship))}</small>` : '') : '<small class="c"></small>';
+        const sub = `<small>${pilotOf(i) ? `${ctx.esc(shipName(u.ship))} · ` : ''}<span class="sp" title="速度"></span> m/s · 电容 <span class="cp"></span></small>`;
         return `<div class="sim-rs-row" data-bt-unit="${i}"><img src="${IMG(u.ship)}" alt="" width="28" height="28" loading="lazy">
-          <div class="sim-rs-main"><span>${solo ? nameHtml(i) : `<b>${ctx.esc(shipName(u.ship))}</b>`}${solo && row?.flag ? '<em title="AT 旗舰">★</em>' : ''}</span>${sub}<span class="sim-rs-ew"></span></div>
+          <div class="sim-rs-main"><span>${label(i)}${row?.flag ? '<em title="AT 旗舰">★</em>' : ''}</span>${sub}<span class="sim-rs-ew"></span></div>
           <div class="sim-rs-hp"><i class="sh"><b></b></i><i class="ar"><b></b></i><i class="hu"><b></b></i></div></div>`;
       }).join('')}</div>`;
-    box.querySelectorAll('.sim-rs-row').forEach((el, k) => RS.rows.push({ el, units: groups[k], bars: [...el.querySelectorAll('.sim-rs-hp b')], c: el.querySelector('.c'), ew: el.querySelector('.sim-rs-ew'), last: {} }));
+    box.querySelectorAll('.sim-rs-row').forEach((el, k) => RS.rows.push({ el, units: groups[k], bars: [...el.querySelectorAll('.sim-rs-hp b')], sp: el.querySelector('.sp'), cp: el.querySelector('.cp'), ew: el.querySelector('.sim-rs-ew'), last: {} }));
     RS.head[s] = box.querySelector('header .n');
   }
 }
@@ -1014,7 +1016,9 @@ function paintRoster(f) {
     cnt[side][0] += alive;
     cnt[side][1] += total;
     for (let k = 0; k < 3; k++) setWidth(r, 'h' + k, r.bars[k], (alive ? hp[k] / alive / 2 : 0).toFixed(0) + '%');
-    if (r.c) setText(r, 'c', r.c, `${alive} / ${total}`);
+    const u0 = r.units[0], on = alive > 0 && u0 < nU;
+    setText(r, 'sp', r.sp, on ? String(f.spd[u0]) : '—');
+    setText(r, 'cp', r.cp, on ? Math.round(f.cp[u0] / 2) + '%' : '—');
     setClass(r, 'dead', total > 0 && !alive);
     setClass(r, 'wait', !total);
     setClass(r, 'sel', r.units.includes(BT.sel));

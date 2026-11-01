@@ -5,7 +5,7 @@
 //   开火、导弹、命中、阵亡爆炸由 sim-fx.js 按武器种类画；出击的无人机 / 舰载机中队也有总览图标；
 //   悬停、选中、点名集火的船，图标外套一圈细线（像游戏里一样贴着图标）；开启诱导、诱导进场的位置有一团闪光；
 //   跃迁撤离的船消失（不留残骸）。坐标单位：千米。模型逐个加载，hooks.onProgress(已加载, 总数) 报告进度。
-//   像联盟锦标赛（AT）直播一样：星云天空、名字下面三层血条；「导播镜头」自动环绕战场，有船被击毁时切过去拍几秒。
+//   像联盟锦标赛（AT）直播一样：星云天空、名字下面三层血条；「导播镜头」自动环绕战场。
 // 画质（opt.quality）：high 高画质；low 不画星云、按 1 倍像素渲染；auto 先按高画质画，持续低于 24 帧就降到低画质（hooks.onQuality）。
 // 观察者视角：拖动旋转、滚轮 / 双指缩放、右键 / 双指拖动平移；悬停显示舰船，点击选中，双击镜头跟随（手动转动镜头会退出导播，hooks.onDirector）。
 import * as THREE from './vendor/three/three.module.min.js';
@@ -270,32 +270,12 @@ export function createView(host, hooks = {}, opt = {}) {
     perf.n = 0;
     if (perf.slow >= 2) { applyLevel('low'); hooks.onQuality?.('low'); }
   }
-  // 导播镜头：平时绕战场中心慢慢转（离中心的距离按存活舰船散开的范围），有船被击毁就切到残骸近景拍 3.5 秒
-  let director = false, dirAng = 0.6, dirLast = 0, dirSeen = -1, dirCut = null, dirCutAt = 0;
-  function directorStep(t, kills) {
+  // 导播镜头：绕战场中心慢慢转，离中心的距离按存活舰船散开的范围（有船被击毁也不切近景）
+  let director = false, dirAng = 0.6, dirLast = 0;
+  function directorStep() {
     const now = performance.now(), dt = dirLast ? Math.min(0.1, (now - dirLast) / 1000) : 0;
     dirLast = now;
-    kills = kills || [];
-    if (dirSeen < 0 || t < lastT - 0.01) { dirSeen = 0; while (dirSeen < kills.length && kills[dirSeen].at <= t) dirSeen++; dirCut = null; }
-    let k = null;
-    while (dirSeen < kills.length && kills[dirSeen].at <= t) k = kills[dirSeen++];
-    if (k && t - k.at < 1.5 && now - dirCutAt > 4000 && drawn[k.unit]) {
-      const d = drawn[k.unit], r = Math.max(0.5, radiusOf(k.unit) * 14);
-      dirCut = { i: k.unit, until: now + 3500 };
-      dirCutAt = now;
-      dirAng += 1.3;
-      controls.target.set(d.x, d.y, d.z);
-      camera.position.set(d.x + Math.cos(dirAng) * r, d.y + r * 0.45, d.z + Math.sin(dirAng) * r);
-      return;
-    }
     dirAng += dt * 0.06;
-    if (dirCut && now < dirCut.until && drawn[dirCut.i]) {
-      const d = drawn[dirCut.i], r = camera.position.distanceTo(controls.target);
-      controls.target.set(d.x, d.y, d.z);
-      camera.position.set(d.x + Math.cos(dirAng) * r * 0.9, d.y + r * 0.42, d.z + Math.sin(dirAng) * r * 0.9);
-      return;
-    }
-    dirCut = null;
     let x = 0, y = 0, z = 0, n = 0;
     for (const d of drawn) if (d?.alive) { x += d.x; y += d.y; z += d.z; n++; }
     if (!n) return;
@@ -405,7 +385,7 @@ export function createView(host, hooks = {}, opt = {}) {
       }
     }
 
-    if (director && follow < 0) directorStep(t, opt.kills);
+    if (director && follow < 0) directorStep();
     // 模型实例
     const white = new THREE.Color(1, 1, 1), dark = new THREE.Color(0.22, 0.2, 0.2);
     const bp = [], bc = [], bs = [];
@@ -658,7 +638,6 @@ export function createView(host, hooks = {}, opt = {}) {
   return {
     setRecord(r) {
       rec = r;
-      dirSeen = -1;
       lastT = -1;
       lastN = -1;
       follow = -1;
@@ -669,7 +648,7 @@ export function createView(host, hooks = {}, opt = {}) {
     draw,
     render() { watchPerf(); sky.position.copy(camera.position); controls.update(); renderer.render(scene, camera); drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
-    setDirector(on) { director = on; dirSeen = -1; dirLast = 0; dirCut = null; if (on) { follow = -1; flyTo = null; } },
+    setDirector(on) { director = on; dirLast = 0; if (on) { follow = -1; flyTo = null; } },
     setQuality(q) { quality = q; perf.slow = 0; perf.t0 = 0; applyLevel(q === 'low' ? 'low' : 'high'); },
     // 选落点：opt = { side, color: '#rrggbb', label, done(pos) }；null 取消
     setPlacing(opt) { placing = opt; el.style.cursor = opt ? 'crosshair' : ''; if (opt) { hover = -1; hooks.onHover?.(-1); } },

@@ -7258,7 +7258,8 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-rs header small { margin-left: auto; color: #8792a5; font-variant-numeric: tabular-nums; }
 .sim-rs-b header { flex-direction: row-reverse; }
 .sim-rs-b header small { margin: 0 auto 0 0; }
-.sim-rs-list { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.sim-rs-list { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain; }
+.sim-rs-list::-webkit-scrollbar { display: none; }
 .sim-rs-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 46px; align-items: center; gap: 6px; padding: 3px 6px 3px 3px; border-radius: 6px; cursor: pointer; background: rgba(91, 155, 255, 0.1); transition: opacity .3s; }
 .sim-rs-b .sim-rs-row { grid-template-columns: 46px minmax(0, 1fr) 28px; padding: 3px 3px 3px 6px; background: rgba(255, 75, 62, 0.1); }
 .sim-rs-b .sim-rs-row > img { order: 3; }
