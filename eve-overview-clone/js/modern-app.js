@@ -582,8 +582,9 @@ async function openWar() {
 
 // 默认交易中心（吉他；曙光服为索巴色基）最低卖价 / 最高收购价：Map(id -> { sell, buy })
 // maxAge：只用这么新的缓存（资产估值沿用 12 小时缓存；制造等算利润的页面要求 1 小时内）
-async function getJitaPrices(ids, onProgress, { maxAge } = {}) {
-  const jita = REGIONS[0];
+// region：改用其它交易中心（星域 ID，须在 REGIONS 里），行星规划用
+async function getJitaPrices(ids, onProgress, { maxAge, region } = {}) {
+  const jita = REGIONS.find((r) => r.id === region) || REGIONS[0];
   await fetchHubPrices(jita, ids, onProgress, maxAge);
   return new Map(ids.map((id) => [id, hubPrice(jita, id)]).filter(([, v]) => v && !v.failed));
 }
@@ -789,7 +790,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v64').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v65').then((m) => {
     m.initPi({ addToCart, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）

@@ -1,5 +1,5 @@
 // ===== 行星工业规划 =====
-// 选择地区（星域，或某星系周边若干跳）、角色数与技能，按吉他行情为每种产品（P1–P4）算出最优的行星分配，
+// 选择地区（星域，或某星系周边若干跳）、角色数与技能，按所选交易中心（默认吉他）的行情为每种产品（P1–P4）算出最优的行星分配，
 // 给出每颗行星该放什么、预计日产量与收益，并生成游戏内可直接导入的殖民地模板（JSON）。
 // ESI 只有读取殖民地的接口，不能写入模板，所以模板通过「复制到剪贴板」或「下载 .json」导入游戏。
 // 买料加工的补货周期：固定（12 小时 – 3 天或自定义小时数，产量受发射平台容量限制），或「自动」（工厂按 CPU / 电网建满，
@@ -7,7 +7,7 @@
 // 数据：pi-data.json（build_pi.mjs 从 SDE 生成），map-data.json（星系、星门、星域）。
 import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, SPACING } from './pi-editor.js?v=v21';
 import { angle } from './pi-globe.js?v=v19r12';
-import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
+import { SERVER, HUB } from './server.js?v=s4';
 import { skPage, skRows } from './skeleton.js?v=v17';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, store, getHubPrices(ids) -> Map(id -> {sell, buy}), getMarketPriceMap
@@ -55,6 +55,7 @@ const F = {               // 表单状态（保存在本地）
   sec: { high: true, low: true, null: true },
   chars: 1, perChar: 6, cc: 5,
   target: 0, rich: 'mid', tax: 10, price: 'sell',
+  hub: HUB.id,            // 估价用的交易中心（星域 ID，见 server.js 的 regions）
   way: 'self',            // self 自产（采集）/ buy 买料加工
   inPrice: 'sell',        // 买料加工的原料价：sell 直接买卖单 / buy 挂收单
   buyLevel: 0,            // 买料加工买哪一级原料：0 自动（P0–P3 里比较取收益最高的），1 / 2 / 3 = 只买 P1 / P2 / P3
@@ -66,7 +67,12 @@ const F = {               // 表单状态（保存在本地）
   level: 0                // 自产时每颗采集星直接产出的等级：0 自动，1 / 2 / 3 = 采齐所需 P0 在本星加工成 P1 / P2 / P3 再出口
 };
 
-const R = { area: null, plans: [], selected: 0, prices: new Map(), priceAt: 0, edits: new Map() };   // edits: 方案序号:模板 -> 修改后的模板
+const R = { area: null, plans: [], selected: 0, prices: new Map(), priceAt: 0, priceHub: 0, edits: new Map() };   // edits: 方案序号:模板 -> 修改后的模板
+
+// 估价交易中心：存的星域不在当前服务器的列表里时用默认（吉他；曙光服为索巴色基）
+const hubRegion = () => SERVER.regions.find((r) => r.id === F.hub) || HUB;
+const hubLabel = (r) => r.hub.name.split(' ')[0].replace(/海\d+$/, '');
+const hubName = () => hubLabel(hubRegion());
 
 export function initPi(context) {
   ctx = context;
@@ -1317,6 +1323,7 @@ function renderForm() {
     return `<optgroup label="${TIER_NAMES[t]}">${ids.map((id) => `<option value="${id}"${F.target === id ? ' selected' : ''}>${ctx.esc(cName(id))}</option>`).join('')}</optgroup>`;
   }).join('');
   const seg = (name, items, cur, off = () => false) => `<div class="segmented" role="group">${items.map(([v, label]) => `<button type="button" data-pi-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}"${off(v) ? ' disabled' : ''}>${label}</button>`).join('')}</div>`;
+  const hubSeg = seg('hub', SERVER.regions.map((r) => [r.id, hubLabel(r)]), hubRegion().id);
   $('piForm').innerHTML = `
     <div class="pi-col">
     <div class="pi-field">
@@ -1367,9 +1374,10 @@ function renderForm() {
     <div class="pi-field">
       <label>估算参数</label>
       ${buy ? `
-      <div class="pi-inline" title="从${HUB_NAME}买哪一级的原料来加工；自动 = 比较各级取收益最高的"><span>买料等级</span>${seg('buyLevel', [[0, '自动'], [1, 'P1'], [2, 'P2'], [3, 'P3']], F.buyLevel || 0)}</div>
-      <div class="pi-inline"><span>原料价</span>${seg('inPrice', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.inPrice)}</div>
-      <div class="pi-inline"><span>售价</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>
+      <div class="pi-inline" title="从${hubName()}买哪一级的原料来加工；自动 = 比较各级取收益最高的"><span>买料等级</span>${seg('buyLevel', [[0, '自动'], [1, 'P1'], [2, 'P2'], [3, 'P3']], F.buyLevel || 0)}</div>
+      <div class="pi-inline"><span>交易中心</span>${hubSeg}</div>
+      <div class="pi-inline"><span>原料价</span>${seg('inPrice', [['sell', hubName() + '卖单'], ['buy', hubName() + '收单']], F.inPrice)}</div>
+      <div class="pi-inline"><span>售价</span>${seg('price', [['sell', hubName() + '卖单'], ['buy', hubName() + '收单']], F.price)}</div>
       <div class="pi-inline"><span>补货周期</span>${seg('restock', RESTOCKS, RESTOCKS.some(([h]) => h === F.restock) ? F.restock : '')}</div>
       <div class="pi-inline"><span>或自定义</span><input type="number" class="pi-input pi-tax" min="1" max="720" step="1" value="${RESTOCKS.some(([h]) => h === F.restock) ? '' : F.restock}" placeholder="如 30" data-pi-num="restock" aria-label="自定义补货周期（小时）"><span>小时补一次</span></div>
       <div class="pi-inline"><span>成交上限</span>${seg('share', [[5, '5%'], [10, '10%'], [20, '20%'], [0, '不限']], F.share)}</div>` : `
@@ -1377,7 +1385,8 @@ function renderForm() {
       <div class="pi-inline" title="采集星直接产出的等级：P2 / P3 = 一颗星采齐所需的全部原料、在本星加工好再出口；自动 = 比较各种方案取收益最高的"><span>每星产出</span>${seg('level', [[0, '自动'], [1, 'P1'], [2, 'P2'], [3, 'P3']], F.level || 0)}</div>
       <div class="pi-inline"><span>采集器</span>${seg('ecus', [[0, '自动'], [1, '1 个'], [2, '2 个'], [3, '3 个']], F.ecus)}</div>
       <div class="pi-inline"><span>单个产量</span><input type="number" class="pi-input pi-tax" min="0" step="100" value="${F.ecuYield || ''}" placeholder="选填" data-pi-num="ecuYield" aria-label="每个采集器的实际产量（每小时）"><span>/小时</span></div>
-      <div class="pi-inline"><span>价格</span>${seg('price', [['sell', HUB_NAME + '卖单'], ['buy', HUB_NAME + '收单']], F.price)}</div>`}
+      <div class="pi-inline"><span>交易中心</span>${hubSeg}</div>
+      <div class="pi-inline"><span>价格</span>${seg('price', [['sell', hubName() + '卖单'], ['buy', hubName() + '收单']], F.price)}</div>`}
       <div class="pi-inline"><span>海关税率</span><input type="number" class="pi-input pi-tax" min="0" max="100" step="0.5" value="${F.tax}" data-pi-num="tax"><span>%</span></div>
     </div>
     </div>
@@ -1396,7 +1405,7 @@ function bind() {
     const set = e.target.closest('[data-pi-set]');
     if (set) {
       const key = set.dataset.piSet;
-      F[key] = ['jumps', 'restock', 'share', 'ecus', 'level', 'buyLevel', 'outTier'].includes(key) ? Number(set.dataset.v) : set.dataset.v;
+      F[key] = ['jumps', 'restock', 'share', 'ecus', 'level', 'buyLevel', 'outTier', 'hub'].includes(key) ? Number(set.dataset.v) : set.dataset.v;
       if (key === 'way' && F.way === 'buy' && F.target && tierOf(F.target) === 0) F.target = 0;
       if (key === 'buyLevel' && F.target && tierOf(F.target) <= F.buyLevel) F.target = 0;   // 选中的产品做不了：回到自动推荐
       if (key === 'buyLevel' && F.outTier && F.outTier <= F.buyLevel) F.outTier = 0;      // 产物等级不高于买料等级：不限
@@ -1458,23 +1467,25 @@ function suggest(q) {
   box.hidden = false;
 }
 
-// 全部 P0–P4 商品的吉他行情（失败时退回全服均价）
+// 全部 P0–P4 商品在所选交易中心的行情（失败时退回全服均价）；换交易中心后重读
 async function loadPrices() {
-  if (R.prices.size && Date.now() - R.priceAt < 30 * 60e3) return;
+  const hub = hubRegion();
+  if (R.prices.size && R.priceHub === hub.id && Date.now() - R.priceAt < 30 * 60e3) return;
   const ids = Object.keys(D.pi.commodities).map(Number);
-  const [hub, avg] = await Promise.all([
-    ctx.getHubPrices(ids, (done, total) => { const el = $('piProgress'); if (el) el.textContent = `读取${HUB_NAME}行情 ${done}/${total}`; }).catch(() => new Map()),
+  const [map, avg] = await Promise.all([
+    ctx.getHubPrices(ids, (done, total) => { const el = $('piProgress'); if (el) el.textContent = `读取${hubName()}行情 ${done}/${total}`; }, { region: hub.id }).catch(() => new Map()),
     ctx.getMarketPriceMap().catch(() => new Map())
   ]);
-  R.prices = new Map(ids.map((id) => [id, { sell: hub.get(id)?.sell ?? null, buy: hub.get(id)?.buy ?? null, avg: avg.get(id) || 0 }]));
+  R.prices = new Map(ids.map((id) => [id, { sell: map.get(id)?.sell ?? null, buy: map.get(id)?.buy ?? null, avg: avg.get(id) || 0 }]));
   R.priceAt = Date.now();
+  R.priceHub = hub.id;
 }
 
 async function run() {
   const box = $('piResult');
   const area = collectArea();
   if (area.error) { box.innerHTML = `<div class="pi-empty"><p>${ctx.esc(area.error)}</p></div>`; return; }
-  box.innerHTML = `<div class="pi-loading" id="piProgress">读取${HUB_NAME}行情…</div>`;
+  box.innerHTML = `<div class="pi-loading" id="piProgress">读取${hubName()}行情…</div>`;
   try { await loadPrices(); } catch { /* 用已有行情 */ }
   R.area = area;
   demCache.clear();
@@ -1529,7 +1540,7 @@ function strategyLabel(p) {
   return `采集 × ${p.planets - p.factories} + 工厂 × ${p.factories}`;
 }
 
-const capBadge = (p) => ` <em class="pi-cap" title="卖出、买入各不超过${HUB_NAME}日成交的 ${F.share}%，只能用 ${p.planets} / ${p.wanted} 颗行星；多出的行星可以做别的产品">限成交量</em>`;
+const capBadge = (p) => ` <em class="pi-cap" title="卖出、买入各不超过${hubName()}日成交的 ${F.share}%，只能用 ${p.planets} / ${p.wanted} 颗行星；多出的行星可以做别的产品">限成交量</em>`;
 
 // 买料加工的多产品组合：每种产品受成交量限制只能用部分行星时，剩下的行星依次分给下一种产品。
 // 按每颗行星的日收益从高到低分配（只用核对过成交量的方案），收益按行星数线性折算。
@@ -1760,15 +1771,16 @@ function restockCard(plan) {
     </div>`;
 }
 
-// 市场深度：本方案日产量、日采购量占吉他（伏尔戈）近 30 天日均成交量的比例
+// 市场深度：本方案日产量、日采购量占所选交易中心星域近 30 天日均成交量的比例
 const history = new Map();
 function dailyVolume(id) {
-  if (!history.has(id)) {
-    history.set(id, (ctx.fetchESI ? ctx.fetchESI(`/markets/${HUB.id}/history/?type_id=${id}`) : Promise.reject(new Error('no esi')))
+  const region = hubRegion().id, key = region + ':' + id;
+  if (!history.has(key)) {
+    history.set(key, (ctx.fetchESI ? ctx.fetchESI(`/markets/${region}/history/?type_id=${id}`) : Promise.reject(new Error('no esi')))
       .then((h) => { const last = (Array.isArray(h) ? h : []).slice(-30); return last.length ? last.reduce((t, x) => t + x.volume, 0) / 30 : 0; })
-      .catch(() => { history.delete(id); return null; }));
+      .catch(() => { history.delete(key); return null; }));
   }
-  return history.get(id);
+  return history.get(key);
 }
 // 买料加工：按吉他成交量限制行星数（每颗星的产量、采购量固定，按比例缩减）
 async function applyMarketDepth(plans) {
@@ -1779,7 +1791,7 @@ async function applyMarketDepth(plans) {
     while (queue.length) {
       await dailyVolume(queue.shift());
       const el = $('piProgress');
-      if (el) el.textContent = `读取${HUB_NAME}成交量 ${++done}/${ids.length}`;
+      if (el) el.textContent = `读取${hubName()}成交量 ${++done}/${ids.length}`;
     }
   }));
   for (const plan of plans) {
@@ -1816,7 +1828,7 @@ async function capByDepth(plan) {
   if (cap <= 0 && F.target) {
     const pct = worst.v ? Math.round(worst.n / worst.v * 100) : Infinity;
     plan.error = `受成交量限制：一颗行星每天就要${worst.id === plan.product ? '卖出' : '买入'}${cName(worst.id)} ${ctx.formatNumber(Math.round(worst.n))} 个，`
-      + `占${HUB_NAME}日成交 ${isFinite(pct) ? pct + '%' : '—（几乎没有成交）'}，超过「成交上限」${F.share}%。可以把成交上限调高或选「不限」`
+      + `占${hubName()}日成交 ${isFinite(pct) ? pct + '%' : '—（几乎没有成交）'}，超过「成交上限」${F.share}%。可以把成交上限调高或选「不限」`
       + (F.restock && F.restock < 72 ? '，或把补货周期调长（每颗星的产量会降低）' : '');
     return;
   }
@@ -1840,7 +1852,7 @@ async function showDepth(plan) {
   if (!parts.length) return;
   const high = parts.some((p) => p.high);
   el.classList.toggle('warn', high);
-  el.innerHTML = `<span>占${HUB_NAME}日成交</span> ` + parts.map((p) => p.html).join(' · ') + (high ? ' <span>偏高会压价</span>' : '');
+  el.innerHTML = `<span>占${hubName()}日成交</span> ` + parts.map((p) => p.html).join(' · ') + (high ? ' <span>偏高会压价</span>' : '');
 }
 
 // 买料加工：每颗星的产量被什么卡住
