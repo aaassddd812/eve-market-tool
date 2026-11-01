@@ -5,9 +5,9 @@
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
 import * as FE from './fit-engine.js?v=v29';
 import * as MU from './fit-mutate.js?v=v4';
-import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v27';
+import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v28';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
-import { initSim, mountSim } from './fit-sim.js?v=v31';
+import { initSim, mountSim } from './fit-sim.js?v=v32';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v10';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
@@ -1483,7 +1483,14 @@ const ESI_SLOT = { high: ['HiSlot', 27], mid: ['MedSlot', 19], low: ['LoSlot', 1
 const ESI_SLOT_COUNT = { high: 8, mid: 8, low: 8, rig: 3, sub: 4 };
 const ESI_NUM_FLAG = { 5: 'Cargo', 87: 'DroneBay', 158: 'FighterBay' };
 const ESI_SCOPE_HINT = '授权缺少装配权限，请重新绑定 ESI';
-const esiList = { charId: null, fits: null, loading: false, error: '' };
+const esiList = { charId: null, fits: null, loading: false, error: '', ship: null };   // ship：分类视图里点开的舰船
+// 分类视图的船级（按舰船分组归类，没列到的归「其他」）
+const ESI_CLASSES = [
+  ['护卫舰', [25, 237, 324, 830, 831, 834, 893, 1283, 1527]], ['驱逐舰', [420, 541, 1305, 1534]],
+  ['巡洋舰', [26, 358, 832, 833, 894, 906, 963, 1972]], ['战列巡洋舰', [419, 540, 1201]], ['战列舰', [27, 898, 900]],
+  ['旗舰', [30, 485, 547, 659, 1538, 4594, 5120]], ['工业舰 / 采矿船', [28, 380, 463, 513, 543, 883, 902, 941, 1202, 4902]],
+];
+const esiClassOf = (t) => ESI_CLASSES.findIndex(([, g]) => g.includes(t?.group));
 
 function parseFlag(flag) {
   if (typeof flag === 'number') {
@@ -1679,6 +1686,7 @@ async function openEsiModal() {
   $('fitEsiModal').hidden = false;
   $('fitEsiSearch').value = '';
   $('fitEsiShipOnly').checked = true;   // 每次打开默认只看当前选择的舰船
+  esiList.ship = null;
   await loadEsiFits();
 }
 
@@ -1727,7 +1735,7 @@ function renderEsiList() {
   const ship = F.fit?.ship;
   $('fitEsiShipOnlyLabel').hidden = !ship;
   const shipOnly = ship && $('fitEsiShipOnly').checked;
-  const list = esiList.fits.filter((f) => !shipOnly || f.ship_type_id === ship).filter((f) => !q || f.name.toLowerCase().includes(q) || (type(f.ship_type_id)?.name || '').toLowerCase().includes(q) || (type(f.ship_type_id)?.en || '').toLowerCase().includes(q));
+  let list = esiList.fits.filter((f) => !shipOnly || f.ship_type_id === ship).filter((f) => !q || f.name.toLowerCase().includes(q) || (type(f.ship_type_id)?.name || '').toLowerCase().includes(q) || (type(f.ship_type_id)?.en || '').toLowerCase().includes(q));
   $('fitEsiCount').textContent = `${esiList.fits.length} / 500`;
   if (!list.length) {
     const text = !esiList.fits.length ? '游戏里还没有个人装配'
@@ -1736,7 +1744,23 @@ function renderEsiList() {
     box.innerHTML = `<p class="fit-esi-empty">${app.esc(text)}</p>`;
     return;
   }
-  box.innerHTML = list.map((f) => {
+  // 看全部且没搜索时分类显示：船级 → 有装配的舰船（点开）→ 装配
+  if (!shipOnly && !q && !esiList.ship) {
+    const byShip = new Map();
+    for (const f of list) byShip.set(f.ship_type_id, (byShip.get(f.ship_type_id) || 0) + 1);
+    const classes = ESI_CLASSES.map(([name]) => ({ name, ships: [] })).concat({ name: '其他', ships: [] });
+    for (const [id, n] of byShip) { const t = type(id), k = esiClassOf(t); classes[k < 0 ? classes.length - 1 : k].ships.push({ id, t, n }); }
+    box.innerHTML = classes.filter((c) => c.ships.length).map((c) => `<section class="fit-esi-class">
+      <h4>${c.name}<small>${c.ships.length} 艘 · ${c.ships.reduce((x, y) => x + y.n, 0)} 套</small></h4>
+      <div class="fit-esi-ships">${c.ships.sort((a, b) => (F.data.groups.get(a.t?.group)?.name || '').localeCompare(F.data.groups.get(b.t?.group)?.name || '', 'zh') || (a.t?.name || '').localeCompare(b.t?.name || '', 'zh')).map((x) => `<button type="button" class="fit-esi-ship" data-esi-ship="${x.id}">
+        <img src="${IMG(x.id, 'icon', 32)}" alt="" width="32" height="32" loading="lazy"><span><b>${app.esc(x.t?.name || '未知舰船 ' + x.id)}</b><small>${app.esc(F.data.groups.get(x.t?.group)?.name || '')} · ${x.n} 套</small></span></button>`).join('')}</div>
+    </section>`).join('');
+    return;
+  }
+  const back = !shipOnly && !q && esiList.ship ? `<button type="button" class="link-btn fit-esi-back" data-esi-back>‹ 全部舰船</button>` : '';
+  if (back) list = list.filter((f) => f.ship_type_id === esiList.ship);
+  if (back && !list.length) { esiList.ship = null; renderEsiList(); return; }   // 这艘船的装配删光了
+  box.innerHTML = back + list.map((f) => {
     const ship = type(f.ship_type_id);
     const mods = (f.items || []).filter((it) => parseFlag(it.flag).slot).length;
     return `<div class="fit-esi-row">
@@ -1753,6 +1777,8 @@ async function onEsiModalClick(e) {
   let x;
   if (el('.modal-backdrop, [data-fit-esi-close]')) { closeEsiModal(); return; }
   if (el('[data-fit-esi-refresh]')) { loadEsiFits(true); return; }
+  if ((x = el('[data-esi-ship]'))) { esiList.ship = Number(x.dataset.esiShip); renderEsiList(); $('fitEsiBody').scrollTop = 0; return; }
+  if (el('[data-esi-back]')) { esiList.ship = null; renderEsiList(); return; }
   if ((x = el('[data-esi-open]'))) {
     const f = esiList.fits.find((it) => it.fitting_id === Number(x.dataset.esiOpen));
     const r = f && fromEsiFit(f);

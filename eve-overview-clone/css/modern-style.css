@@ -3261,6 +3261,17 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .fit-esi-main b { font-weight: 600; font-size: 0.875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .fit-esi-main span { font-size: 0.75rem; color: var(--text-muted); }
 .fit-esi-row .btn { padding: 4px 10px; font-size: 0.75rem; }
+.fit-esi-class + .fit-esi-class { margin-top: 12px; }
+.fit-esi-class h4 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 6px; font-size: 0.8125rem; font-weight: 600; }
+.fit-esi-class h4 small { font-weight: 400; color: var(--text-muted); font-size: 0.75rem; }
+.fit-esi-ships { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 6px; }
+.fit-esi-ship { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 6px 8px; border: 0; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-primary); text-align: left; cursor: pointer; font: inherit; }
+.fit-esi-ship:hover { background: var(--bg-hover, rgba(127, 127, 127, 0.12)); }
+.fit-esi-ship img { border-radius: 4px; flex-shrink: 0; }
+.fit-esi-ship span { min-width: 0; display: flex; flex-direction: column; }
+.fit-esi-ship b { font-size: 0.8125rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fit-esi-ship small { font-size: 0.6875rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fit-esi-back { align-self: flex-start; margin: 0 0 4px 4px; font-size: 0.8125rem; }
 .fit-esi-empty { padding: 32px 12px; text-align: center; color: var(--text-muted); font-size: 0.8125rem; }
 .fit-esi-note { margin-top: 10px; font-size: 0.75rem; }
 
@@ -3995,13 +4006,15 @@ html.pie-open { overflow: hidden; }
 .fa-unit span { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 0.75rem; color: var(--text-muted); pointer-events: none; }
 .fa-field .segmented { display: flex; flex-wrap: wrap; }
 .fa-field .segmented button { flex: 1 1 auto; min-width: 0; padding: 0 6px; white-space: nowrap; }
-.fa-goals { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.fa-goal { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); text-align: left; }
+.fa-goals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.fa-goal, .fa-util { display: flex; align-items: center; justify-content: center; gap: 4px; padding: 8px 10px; border: 0; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-primary); font: inherit; cursor: pointer; }
 .fa-goal b { font-size: 0.8125rem; }
-.fa-goal small { font-size: 0.6875rem; color: var(--text-muted); line-height: 1.4; }
-.fa-goal:hover { border-color: var(--border-secondary); }
-.fa-goal.active { border-color: var(--accent-primary); background: var(--accent-soft); }
-.fa-goal.active b { color: var(--accent-primary); }
+.fa-goal:hover, .fa-util:hover { background: var(--bg-hover); }
+.fa-goal.active, .fa-util.active { background: var(--accent-soft); color: var(--accent-primary); }
+.fa-goal:disabled { opacity: .4; cursor: not-allowed; }
+.fa-utils { display: flex; flex-wrap: wrap; gap: 6px; }
+.fa-util { padding: 6px 12px; font-size: 0.8125rem; }
+.fa-util small { font-size: 0.625rem; padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--accent-primary) 18%, transparent); color: var(--accent-primary); }
 .fa-opts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
 .fa-opt { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 7px 2px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); text-align: center; min-width: 0; }
 .fa-opt b { font-size: 0.78125rem; white-space: nowrap; }
@@ -6459,7 +6472,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .sp-quick .plain-select { max-width: 100%; }
 .sp-hint { font-size: 0.75rem; line-height: 1.55; color: var(--text-muted); }
 .sp-dirs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
-.sp-dir { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-primary); text-align: left; cursor: pointer; font: inherit; }
+.sp-dir { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-primary); text-align: left; cursor: pointer; font: inherit; }
 .sp-dir b { font-size: 0.8125rem; font-weight: 600; }
 .sp-dir small { font-size: 0.6875rem; line-height: 1.4; color: var(--text-muted); }
 .sp-dir:hover { border-color: var(--accent-primary); }
@@ -7056,9 +7069,6 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-3d:fullscreen { height: 100%; border-radius: 0; }
 .sim-3d-canvas { display: block; width: 100%; height: 100%; }
 .sim-3d-labels { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-.sim-3d-hud { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 14px; padding: 4px 12px; border-radius: 999px; background: rgba(10, 14, 22, 0.72); color: #e6ebf3; font-size: 0.8125rem; font-variant-numeric: tabular-nums; pointer-events: none; white-space: nowrap; }
-.sim-3d-hud > span { display: inline-flex; align-items: center; gap: 6px; }
-.sim-3d-clock { min-width: 40px; text-align: center; color: #fff; }
 .sim-3d-tools { position: absolute; top: 10px; right: 10px; display: flex; flex-direction: column; gap: 6px; }
 .sim-3d-tools button { width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid rgba(255, 255, 255, 0.14); border-radius: 8px; background: rgba(10, 14, 22, 0.72); color: #cfd6e2; cursor: pointer; }
 .sim-3d-tools button:hover { color: #fff; border-color: rgba(255, 255, 255, 0.35); }
@@ -7102,40 +7112,14 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-battle:fullscreen .sim-bt-reinf { position: absolute; top: 10px; left: 10px; margin: 0; }
 .sim-battle:fullscreen .sim-bt-reinf .btn { background: rgba(10, 14, 22, 0.72); }
 .sim-battle:fullscreen .sim-bt-pop { position: absolute; top: 50px; left: 10px; z-index: 3; width: min(420px, calc(100% - 20px)); max-height: calc(100% - 130px); overflow-y: auto; margin: 0; }
-.sim-battle:fullscreen .sim-bt-log { position: absolute; top: 50px; right: 52px; flex-direction: column; align-items: flex-end; margin: 0; pointer-events: none; }
-.sim-battle:fullscreen .sim-3d-sel { bottom: auto; top: 50px; }
-.sim-battle:fullscreen .sim-3d-load { top: 50px; left: auto; right: 52px; }
-.sim-3d-panel { display: none; }
-.sim-battle:fullscreen .sim-3d-panel { position: absolute; left: 50%; transform: translateX(-50%); width: min(1400px, calc(100% - 24px)); bottom: 70px; display: grid; grid-template-columns: 1fr 1fr; align-items: end; gap: 8px; color: #e6ebf3; font-size: 0.75rem; }
-.sim-pn-side { display: flex; flex-direction: column; min-height: 0; max-height: 28vh; padding: 6px; border-radius: 10px; background: rgba(10, 14, 22, 0.8); }
-.sim-pn-side header { display: flex; align-items: center; gap: 8px; padding: 0 2px 5px; }
-.sim-pn-side header small { color: #8792a5; }
-/* 实时战损比：面板正中，比例大字 + 双色条，两边是各自损失 */
-.sim-pn-score { grid-column: 1 / -1; justify-self: center; display: flex; align-items: center; gap: 18px; padding: 8px 16px; border-radius: 12px; background: rgba(10, 14, 22, 0.86); border: 1px solid rgba(255, 255, 255, 0.1); }
-.sim-pn-lost { display: flex; align-items: baseline; gap: 6px; white-space: nowrap; color: #b7c2d3; }
-.sim-pn-lost .n { color: #fff; font-size: 1rem; font-variant-numeric: tabular-nums; }
-.sim-pn-lost small { color: #8792a5; font-variant-numeric: tabular-nums; }
-.sim-pn-ratio { display: flex; flex-direction: column; gap: 4px; min-width: 200px; }
-.sim-pn-pct { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-.sim-pn-pct b { font-size: 1.5rem; line-height: 1; font-variant-numeric: tabular-nums; }
-.sim-pn-pct .pa { color: #7fb6ff; }
-.sim-pn-pct .pb { color: #ff7a6e; }
-.sim-pn-pct span { color: #8792a5; font-size: 0.75rem; }
-.sim-pn-bar { display: flex; height: 6px; border-radius: 3px; overflow: hidden; gap: 2px; }
-.sim-pn-bar i { flex: 1 1 0; }
-.sim-pn-bar .a { background: #5b9bff; }
-.sim-pn-bar .b { background: #ff4b3e; }
-.sim-pn-bar.none i { background: rgba(255, 255, 255, 0.15); }
-.sim-pn-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 3px; overflow-y: auto; min-height: 0; align-content: start; }
-.sim-pn-ship { contain: layout paint style; content-visibility: auto; contain-intrinsic-size: auto 78px; display: flex; flex-direction: column; gap: 2px; padding: 3px 4px; border-radius: 6px; cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.06); background: rgba(255, 255, 255, 0.03); }
-.sim-pn-ship:hover { background: rgba(255, 255, 255, 0.07); }
-.sim-pn-ship.sel { border-color: rgba(255, 255, 255, 0.55); }
-.sim-pn-top { display: flex; align-items: center; gap: 5px; }
-.sim-pn-top img { width: 14px; height: 14px; border-radius: 3px; flex: none; }
-.sim-pn-top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 0.6875rem; }
-.sim-pn-top .sim-pn-v { font-size: 0.625rem; }
+.sim-battle:fullscreen .sim-bt-log { display: none; }
+.sim-battle:fullscreen .sim-3d-sel { bottom: 70px; }
+.sim-battle:fullscreen .sim-3d-load { bottom: 70px; }
+.sim-battle:fullscreen .sim-stage { position: static; display: block; }
+.sim-battle:fullscreen .sim-stage .sim-3d { height: auto; }
+.sim-battle:fullscreen .sim-rs { top: 56px; max-height: calc(100% - 136px); }
+.sim-battle:fullscreen .sim-stage .sim-3d-tools { top: 10px; bottom: auto; }
 .sim-pn-v { color: #b7c2d3; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.sim-pn-more { grid-column: 1 / -1; margin: 2px 4px; color: #8792a5; }
 /* 目标与锁定进度 */
 .sim-pn-tg { display: flex; flex-direction: column; gap: 1px; min-width: 0; font-size: 0.625rem; color: #8792a5; }
 .sim-pn-tg span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -7212,7 +7196,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-battle:fullscreen .sim-bt-seek input[type=range]::-moz-range-track { background: rgba(255, 255, 255, 0.14); }
 .sim-battle:fullscreen .sim-bt-seek span { color: #9aa6b8; }
 /* 选支援落点的提示条 */
-.sim-3d-place { position: absolute; top: 50px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px); padding: 6px 6px 6px 14px; border-radius: 999px; background: rgba(10, 14, 22, 0.86); color: #fff; font-size: 0.8125rem; box-shadow: 0 0 0 1px rgba(91, 155, 255, 0.35), 0 0 18px rgba(91, 155, 255, 0.35); }
+.sim-3d-place { position: absolute; top: 76px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px); padding: 6px 6px 6px 14px; border-radius: 999px; background: rgba(10, 14, 22, 0.86); color: #fff; font-size: 0.8125rem; box-shadow: 0 0 0 1px rgba(91, 155, 255, 0.35), 0 0 18px rgba(91, 155, 255, 0.35); }
 .sim-3d-place[hidden] { display: none; }
 .sim-3d-place span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sim-3d-place .btn { color: #cfd6e2; border-radius: 999px; }
@@ -7234,18 +7218,175 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-bt-ev { display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px 2px 4px; border-radius: 999px; font-size: 0.75rem; background: var(--bg-hover); }
 .sim-bt-ev small { color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .sim-bt-ev > span:not(.sim-badge) { color: var(--text-muted); }
+/* 直播式战场（像 AT 比赛直播）：上方比分条，两边双方名单（选手 / 船、三层血条），击杀播报在比分条下面；
+   窄屏和没加载 3D 时比分条和名单排在画面上下（跟随页面配色） */
+.sim-stage { position: relative; }
+.sim-stage .sim-3d:not(.is-off) { height: 560px; }
+.sim-sb { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 2; display: flex; align-items: center; gap: 14px; max-width: calc(100% - 480px); padding: 6px 12px; border-radius: 12px; background: rgba(8, 12, 20, 0.84); color: #e6ebf3; pointer-events: none; }
+.sim-sb-team { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sim-sb-team.b { flex-direction: row-reverse; text-align: right; }
+.sim-sb-team img { width: 34px; height: 34px; border-radius: 6px; flex: none; }
+.sim-sb-name { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.sim-sb-name b { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; }
+.sim-sb-name small { min-height: 1.1em; color: #9aa4b5; font-size: 0.6875rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sim-sb-team strong { font-size: 1.375rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sim-sb-team.a strong { color: #7fb6ff; }
+.sim-sb-team.b strong { color: #ff7a6e; }
+.sim-sb-mid { display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 120px; }
+.sim-sb-clock { font-size: 1rem; font-variant-numeric: tabular-nums; }
+.sim-sb-bar { display: flex; width: 100%; height: 5px; gap: 2px; border-radius: 3px; overflow: hidden; }
+.sim-sb-bar i { flex: 1 1 0; }
+.sim-sb-bar .a { background: #5b9bff; }
+.sim-sb-bar .b { background: #ff4b3e; }
+.sim-sb-bar.none i { background: color-mix(in srgb, currentColor 18%, transparent); }
+.sim-sb-pct { display: flex; justify-content: space-between; width: 100%; gap: 6px; font-size: 0.6875rem; color: #8792a5; font-variant-numeric: tabular-nums; }
+.sim-sb-pct .pa { color: #7fb6ff; }
+.sim-sb-pct .pb { color: #ff7a6e; }
+.sim-rs { position: absolute; top: 10px; z-index: 2; width: 220px; max-height: calc(100% - 64px); display: flex; flex-direction: column; padding: 6px; border-radius: 10px; background: rgba(8, 12, 20, 0.8); color: #e6ebf3; }
+.sim-rs:empty { display: none; }
+.sim-rs-a { left: 10px; }
+.sim-rs-b { right: 10px; }
+.sim-rs header { display: flex; align-items: center; gap: 6px; padding: 0 2px 6px; font-size: 0.75rem; }
+.sim-rs header b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sim-rs header small { margin-left: auto; color: #8792a5; font-variant-numeric: tabular-nums; }
+.sim-rs-b header { flex-direction: row-reverse; }
+.sim-rs-b header small { margin: 0 auto 0 0; }
+.sim-rs-list { display: flex; flex-direction: column; gap: 2px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.sim-rs-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 46px; align-items: center; gap: 6px; padding: 3px 6px 3px 3px; border-radius: 6px; cursor: pointer; background: rgba(91, 155, 255, 0.1); transition: opacity .3s; }
+.sim-rs-b .sim-rs-row { grid-template-columns: 46px minmax(0, 1fr) 28px; padding: 3px 3px 3px 6px; background: rgba(255, 75, 62, 0.1); }
+.sim-rs-b .sim-rs-row > img { order: 3; }
+.sim-rs-b .sim-rs-main { order: 2; text-align: right; }
+.sim-rs-b .sim-rs-main > span { justify-content: flex-end; }
+.sim-rs-row:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+.sim-rs-row.sel { background: color-mix(in srgb, currentColor 22%, transparent); }
+.sim-rs-row img { width: 28px; height: 28px; border-radius: 5px; }
+.sim-rs-main { min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.sim-rs-main > span { display: flex; align-items: center; gap: 3px; min-width: 0; }
+.sim-rs-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.75rem; font-weight: 600; }
+.sim-rs-main em { flex: none; font-style: normal; color: #ffd25a; font-size: 0.6875rem; }
+.sim-rs-main small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #8792a5; font-size: 0.625rem; font-variant-numeric: tabular-nums; }
+.sim-rs-row.called .sim-rs-main b { color: #ffd25a; }
+.sim-rs-row.dead { opacity: 0.4; }
+.sim-rs-row.dead .sim-rs-main b { text-decoration: line-through; }
+.sim-rs-ew { display: flex; gap: 2px; flex-wrap: wrap; }
+.sim-rs-ew:empty { display: none; }
+.sim-rs-ew i { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; background: rgba(255, 75, 62, 0.32); }
+.sim-rs-ew i.rep { background: rgba(62, 224, 143, 0.3); }
+.sim-rs-row .sim-rs-ew img { width: 16px; height: 16px; display: block; }
+.sim-rs-b .sim-rs-ew { justify-content: flex-end; }
+.sim-rs-row.wait { opacity: 0.3; }
+.sim-rs-hp { display: flex; flex-direction: column; gap: 2px; }
+.sim-rs-hp i { display: block; height: 3px; border-radius: 2px; background: color-mix(in srgb, currentColor 14%, transparent); overflow: hidden; }
+.sim-rs-hp b { display: block; height: 100%; transition: width .2s; }
+.sim-rs-hp .sh b { background: #5aa9ff; }
+.sim-rs-hp .ar b { background: #f0b44a; }
+.sim-rs-hp .hu b { background: #e85d5d; }
+.sim-stage .sim-3d-tools { top: auto; bottom: 10px; flex-direction: row; }
+.sim-stage .sim-3d-load { top: auto; bottom: 10px; }
+.sim-stage .sim-3d-sel { left: 50%; transform: translateX(-50%); }
+.sim-feed { position: absolute; top: 72px; left: 50%; transform: translateX(-50%); z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; pointer-events: none; }
+.sim-feed-k { display: flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: rgba(8, 12, 20, 0.78); color: #e6ebf3; font-size: 0.75rem; white-space: nowrap; animation: sim-feed-in .3s ease-out; }
+.sim-feed-k img { border-radius: 4px; }
+.sim-feed-k b { max-width: 130px; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.sim-feed-k.a > b:first-child { color: #9cc2ff; }
+.sim-feed-k.b > b:first-child { color: #ff9d94; }
+.sim-feed-k .v { color: #b7c2d3; text-decoration: line-through; }
+.sim-feed-k i { display: grid; place-items: center; color: #ffd25a; }
+.sim-feed-k svg { width: 12px; height: 12px; }
+@keyframes sim-feed-in { from { opacity: 0; transform: translateY(-4px); } }
+.sim-3d.is-off .sim-feed { display: none; }
+.sim-bt-q { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; font-size: 0.8125rem; color: var(--text-muted); }
+/* 没加载 3D：比分条、名单排在页面里 */
+.sim-stage.is-off { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.sim-stage.is-off .sim-sb { position: static; transform: none; grid-column: 1 / -1; justify-self: center; max-width: 100%; }
+.sim-stage.is-off .sim-3d { grid-column: 1 / -1; }
+.sim-stage.is-off .sim-rs { position: static; width: auto; max-height: 340px; }
+.sim-stage.is-off .sim-sb, .sim-stage.is-off .sim-rs { background: var(--bg-secondary); color: var(--text-primary); }
+/* 选赛弹窗（sim-at.js） */
+.sim-at-modal { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, 0.55); }
+.sim-at-dlg { width: min(860px, 100%); max-height: min(860px, calc(100vh - 32px)); display: flex; flex-direction: column; gap: 10px; padding: 16px 18px; border-radius: var(--radius-lg); background: var(--bg-primary); color: var(--text-primary); box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4); }
+.sim-at-head { display: flex; align-items: flex-start; gap: 10px; }
+.sim-at-head > div { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sim-at-head h3 { font-size: 1rem; }
+.sim-at-head small { color: var(--text-muted); font-size: 0.75rem; }
+.sim-at-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.sim-at-tools .segmented small { margin-left: 4px; opacity: 0.7; }
+.sim-at-search { flex: 1; min-width: 180px; }
+.sim-at-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+.sim-at-day { margin: 6px 0 0; font-size: 0.8125rem; color: var(--text-secondary); }
+.sim-at-match { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-radius: var(--radius-md, 10px); background: var(--bg-tertiary); }
+.sim-at-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 0.75rem; color: var(--text-muted); }
+.sim-at-meta a { margin-left: auto; color: var(--text-muted); }
+.sim-at-meta a:hover { color: var(--accent-primary, #2f6bff); }
+.sim-at-type { padding: 1px 8px; border-radius: 999px; font-weight: 600; background: var(--bg-hover); color: var(--text-secondary); }
+.sim-at-type.final { background: color-mix(in srgb, #f0b44a 22%, transparent); color: #c98a12; }
+.sim-at-fits { padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.sim-at-teams { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: start; gap: 10px; }
+.sim-at-teams > i { align-self: center; font-style: normal; font-weight: 700; font-size: 0.75rem; color: var(--text-muted); }
+.sim-at-team { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px; border-radius: 8px; background: color-mix(in srgb, var(--br-a) 9%, transparent); }
+.sim-at-team.red { background: color-mix(in srgb, var(--br-b) 9%, transparent); }
+.sim-at-team.won { background: color-mix(in srgb, var(--br-a) 18%, transparent); }
+.sim-at-team.red.won { background: color-mix(in srgb, var(--br-b) 18%, transparent); }
+.sim-at-tname { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.sim-at-tname img { width: 28px; height: 28px; border-radius: 5px; flex: none; }
+.sim-at-tname b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; }
+.sim-at-tname small { margin-left: auto; flex: none; color: var(--text-muted); font-size: 0.6875rem; }
+.sim-at-win { flex: none; padding: 0 6px; border-radius: 999px; font-size: 0.6875rem; font-weight: 700; color: #fff; background: var(--br-a); }
+.red .sim-at-win { background: var(--br-b); }
+.sim-at-ships { display: flex; flex-wrap: wrap; gap: 3px; }
+.sim-at-ships img { width: 26px; height: 26px; border-radius: 5px; }
+.sim-at-ships img.dead { opacity: 0.3; filter: grayscale(1); }
+.sim-at-ships img.flag { box-shadow: 0 0 0 2px #ffd25a; }
+.sim-at-foot { display: flex; align-items: center; gap: 10px; }
+.sim-at-foot .btn { margin-left: auto; }
+.sim-at-bans { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; font-size: 0.6875rem; color: var(--text-muted); }
+.sim-at-bans span { margin-right: 3px; }
+.sim-at-bans img { width: 18px; height: 18px; border-radius: 4px; opacity: 0.75; }
+.sim-at-bans img.blue { box-shadow: 0 0 0 1.5px var(--br-a); }
+.sim-at-bans img.red { box-shadow: 0 0 0 1.5px var(--br-b); }
+.sim-at-more { align-self: center; }
+.sim-at-empty { margin: 24px 0; text-align: center; color: var(--text-muted); }
+.sim-at-src { margin: 0; font-size: 0.6875rem; color: var(--text-muted); }
+.sim-at-src a { color: inherit; }
+.sim-row-pilot { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--text-secondary); }
+.sim-row-pilot em { font-style: normal; padding: 0 6px; border-radius: 999px; font-size: 0.6875rem; color: #b07a00; background: color-mix(in srgb, #ffd25a 25%, transparent); }
+.sim-row-pilot small { color: var(--danger, #e85d5d); font-size: 0.6875rem; }
+.sim-pilot { margin-left: 6px; color: var(--text-muted); font-size: 0.75rem; }
+.sim-v-team { grid-column: 1 / -1; contain: inline-size; display: flex; align-items: center; gap: 6px; min-width: 0; font-size: 0.8125rem; font-weight: 600; }
+.sim-v-team span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sim-v-team em { flex: none; font-style: normal; padding: 0 6px; border-radius: 999px; font-size: 0.6875rem; font-weight: 600; color: #fff; background: var(--side); }
 @media (max-width: 768px) {
   .sim-battle { padding: 10px; }
   .sim-3d { height: 360px; }
-  .sim-3d-hud { top: 6px; gap: 8px; font-size: 0.75rem; }
   .sim-3d-sel { width: auto; right: 10px; }
-  .sim-battle:fullscreen .sim-3d-panel { grid-template-columns: 1fr; bottom: 120px; }
-  .sim-pn-side { max-height: 18vh; }
-  .sim-pn-list { grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); }
-  .sim-pn-score { gap: 10px; padding: 6px 10px; }
-  .sim-pn-ratio { min-width: 110px; }
-  .sim-pn-lost { flex-direction: column; align-items: center; gap: 0; }
-  .sim-pn-lost .sim-badge, .sim-pn-lost > span:not(.sim-badge) { display: none; }
+  .sim-stage { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+  .sim-sb { position: static; transform: none; grid-column: 1 / -1; justify-self: stretch; justify-content: space-between; max-width: none; gap: 8px; padding: 6px 8px; }
+  .sim-sb-team { flex: 1 1 0; flex-direction: column; align-items: flex-start; gap: 0; }
+  .sim-sb-team.b { flex-direction: column; align-items: flex-end; }
+  .sim-sb-team img { display: none; }
+  .sim-sb-team .sim-sb-name { width: 100%; }
+  .sim-sb-team.b .sim-sb-name { align-items: flex-end; }
+  .sim-sb-name small { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .sim-sb-name b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+  .sim-rs-row { grid-template-columns: 24px minmax(0, 1fr) 34px; gap: 5px; }
+  .sim-rs-b .sim-rs-row { grid-template-columns: 34px minmax(0, 1fr) 24px; }
+  .sim-rs-row img { width: 24px; height: 24px; }
+  .sim-sb-team img { width: 26px; height: 26px; }
+  .sim-sb-team strong { font-size: 1.125rem; }
+  .sim-sb-mid { min-width: 80px; }
+  .sim-stage .sim-3d { grid-column: 1 / -1; }
+  .sim-stage .sim-3d:not(.is-off) { height: 360px; }
+  .sim-rs { position: static; width: auto; max-height: 260px; }
+  .sim-sb, .sim-rs { background: var(--bg-secondary); color: var(--text-primary); }
+  .sim-stage .sim-3d-sel { left: 10px; transform: none; }
+  .sim-feed { top: 10px; left: 10px; right: 10px; transform: none; }
+  .sim-feed-k { max-width: 100%; }
+  .sim-feed-k b { max-width: 34vw; }
+  .sim-at-teams { grid-template-columns: 1fr; }
+  .sim-at-teams > i { justify-self: center; }
+  .sim-battle:fullscreen .sim-rs { display: none; }
+  .sim-battle:fullscreen .sim-sb { position: absolute; top: 50px; left: 8px; right: 8px; z-index: 2; background: rgba(8, 12, 20, 0.84); color: #e6ebf3; }
+  .sim-battle:fullscreen .sim-feed { top: 120px; }
   .sim-battle:fullscreen .sim-bt-log { display: none; }
   .sim-battle:fullscreen .sim-3d-sel { right: 52px; top: 84px; }
   .sim-battle:fullscreen .sim-bt-reinf { top: 44px; }

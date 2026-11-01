@@ -5,11 +5,13 @@
 //   开火、导弹、命中、阵亡爆炸由 sim-fx.js 按武器种类画；出击的无人机 / 舰载机中队也有总览图标；
 //   悬停、选中、点名集火的船，图标外套一圈细线（像游戏里一样贴着图标）；开启诱导、诱导进场的位置有一团闪光；
 //   跃迁撤离的船消失（不留残骸）。坐标单位：千米。模型逐个加载，hooks.onProgress(已加载, 总数) 报告进度。
-// 观察者视角：拖动旋转、滚轮 / 双指缩放、右键 / 双指拖动平移；悬停显示舰船，点击选中，双击镜头跟随。
+//   像联盟锦标赛（AT）直播一样：星云天空、名字下面三层血条；「导播镜头」自动环绕战场，有船被击毁时切过去拍几秒。
+// 画质（opt.quality）：high 高画质；low 不画星云、按 1 倍像素渲染；auto 先按高画质画，持续低于 24 帧就降到低画质（hooks.onQuality）。
+// 观察者视角：拖动旋转、滚轮 / 双指缩放、右键 / 双指拖动平移；悬停显示舰船，点击选中，双击镜头跟随（手动转动镜头会退出导播，hooks.onDirector）。
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
 import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v5';
-import { createFx } from './sim-fx.js?v=v5';
+import { createFx } from './sim-fx.js?v=v6';
 
 const COLOR = { A: new THREE.Color(0x5b9bff), B: new THREE.Color(0xff4b3e) };
 const WRECK = new THREE.Color(0x8a9099);
@@ -19,14 +21,15 @@ const ICON_PX = 18;        // 总览图标大小（CSS 像素）
 const RING_PX = 9.5;       // 选中圈半径（CSS 像素，刚好套住图标）
 const WRECK_ICON = BRACKETS.indexOf('wreck');
 
-export function createView(host, hooks = {}) {
+export function createView(host, hooks = {}, opt = {}) {
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, logarithmicDepthBuffer: true });
   } catch {
     return null;
   }
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  let quality = opt.quality || 'auto', level = quality === 'low' ? 'low' : 'high';
+  let dpr = level === 'low' ? 1 : Math.min(2, window.devicePixelRatio || 1);
   renderer.setPixelRatio(dpr);
   renderer.setClearColor(0x04060b, 1);
   host.prepend(renderer.domElement);
@@ -86,6 +89,32 @@ export function createView(host, hooks = {}) {
     g.setAttribute('position', new THREE.BufferAttribute(p, 3));
     scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x8090a8, size: 1.5, sizeAttenuation: false })));
   }
+  // 星云天空（高画质）：跟着镜头走的大球，片元里按方向算分形噪声；最先画、不写深度
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(5000, 48, 24), new THREE.ShaderMaterial({
+    uniforms: { sun: { value: new THREE.Vector3(0.6, 0.5, 0.35).normalize() } },
+    vertexShader: `varying vec3 vD; void main() { vD = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `uniform vec3 sun; varying vec3 vD;
+      float h(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+      float n(vec3 x) { vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+        return mix(mix(mix(h(i), h(i + vec3(1, 0, 0)), f.x), mix(h(i + vec3(0, 1, 0)), h(i + vec3(1, 1, 0)), f.x), f.y),
+                   mix(mix(h(i + vec3(0, 0, 1)), h(i + vec3(1, 0, 1)), f.x), mix(h(i + vec3(0, 1, 1)), h(i + vec3(1, 1, 1)), f.x), f.y), f.z); }
+      float fbm(vec3 p) { float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * n(p); p = p * 2.03 + vec3(1.7, 9.2, 3.1); a *= 0.5; } return s; }
+      void main() {
+        vec3 d = normalize(vD);
+        float a = fbm(d * 2.2), b = fbm(d * 4.0 + vec3(a * 2.0));
+        float band = exp(-pow(dot(d, normalize(vec3(0.25, 1.0, -0.3))) * 2.2, 2.0));
+        vec3 col = vec3(0.01, 0.014, 0.026);
+        col += mix(vec3(0.11, 0.05, 0.22), vec3(0.04, 0.15, 0.28), a) * smoothstep(0.42, 0.85, b) * (0.3 + 0.7 * band);
+        col += vec3(0.32, 0.16, 0.07) * pow(smoothstep(0.55, 0.95, fbm(d * 3.0 + 5.0)), 2.0) * band * 0.55;
+        float s = max(0.0, dot(d, sun));
+        col += vec3(1.0, 0.86, 0.62) * (pow(s, 900.0) * 5.0 + pow(s, 14.0) * 0.1);
+        gl_FragColor = vec4(col, 1.0); }`,
+    side: THREE.BackSide, depthTest: false, depthWrite: false,
+  }));
+  sky.renderOrder = -10;
+  sky.frustumCulled = false;
+  sky.visible = level === 'high';
+  scene.add(sky);
 
   // 总览图标：屏幕空间的点精灵，图集里按类别取图
   const brGeo = new THREE.BufferGeometry();
@@ -216,6 +245,70 @@ export function createView(host, hooks = {}) {
   ringPts.renderOrder = 6;
   scene.add(ringPts);
   let hover = -1, sel = -1;
+  // 画质档位：改像素比，按像素算大小的图标 / 圈一起改
+  function applyLevel(l) {
+    level = l;
+    dpr = l === 'low' ? 1 : Math.min(2, window.devicePixelRatio || 1);
+    renderer.setPixelRatio(dpr);
+    brMat.uniforms.size.value = ICON_PX * dpr;
+    ringMat.uniforms.dpr.value = dpr;
+    sky.visible = l === 'high';
+    lastSize = '';
+    resize();
+  }
+  const perf = { t0: 0, last: 0, n: 0, slow: 0 };
+  // 自动画质：每 2 秒算一次帧率，连续两次低于 24 帧就降到低画质（切到别的标签页、中间停过 3 秒以上的重新算）
+  function watchPerf() {
+    if (quality !== 'auto' || level === 'low') return;
+    const now = performance.now();
+    if (!perf.t0 || now - perf.last > 3000) { perf.t0 = now; perf.n = 0; }
+    perf.last = now;
+    perf.n++;
+    if (now - perf.t0 < 2000) return;
+    perf.slow = perf.n * 1000 / (now - perf.t0) < 24 ? perf.slow + 1 : 0;
+    perf.t0 = now;
+    perf.n = 0;
+    if (perf.slow >= 2) { applyLevel('low'); hooks.onQuality?.('low'); }
+  }
+  // 导播镜头：平时绕战场中心慢慢转（离中心的距离按存活舰船散开的范围），有船被击毁就切到残骸近景拍 3.5 秒
+  let director = false, dirAng = 0.6, dirLast = 0, dirSeen = -1, dirCut = null, dirCutAt = 0;
+  function directorStep(t, kills) {
+    const now = performance.now(), dt = dirLast ? Math.min(0.1, (now - dirLast) / 1000) : 0;
+    dirLast = now;
+    kills = kills || [];
+    if (dirSeen < 0 || t < lastT - 0.01) { dirSeen = 0; while (dirSeen < kills.length && kills[dirSeen].at <= t) dirSeen++; dirCut = null; }
+    let k = null;
+    while (dirSeen < kills.length && kills[dirSeen].at <= t) k = kills[dirSeen++];
+    if (k && t - k.at < 1.5 && now - dirCutAt > 4000 && drawn[k.unit]) {
+      const d = drawn[k.unit], r = Math.max(0.5, radiusOf(k.unit) * 14);
+      dirCut = { i: k.unit, until: now + 3500 };
+      dirCutAt = now;
+      dirAng += 1.3;
+      controls.target.set(d.x, d.y, d.z);
+      camera.position.set(d.x + Math.cos(dirAng) * r, d.y + r * 0.45, d.z + Math.sin(dirAng) * r);
+      return;
+    }
+    dirAng += dt * 0.06;
+    if (dirCut && now < dirCut.until && drawn[dirCut.i]) {
+      const d = drawn[dirCut.i], r = camera.position.distanceTo(controls.target);
+      controls.target.set(d.x, d.y, d.z);
+      camera.position.set(d.x + Math.cos(dirAng) * r * 0.9, d.y + r * 0.42, d.z + Math.sin(dirAng) * r * 0.9);
+      return;
+    }
+    dirCut = null;
+    let x = 0, y = 0, z = 0, n = 0;
+    for (const d of drawn) if (d?.alive) { x += d.x; y += d.y; z += d.z; n++; }
+    if (!n) return;
+    const c = vC.set(x / n, y / n, z / n);
+    let span = 0;
+    for (const d of drawn) if (d?.alive) span = Math.max(span, Math.hypot(d.x - c.x, d.y - c.y, d.z - c.z));
+    const dist = Math.max(3, span * 2.4), e = 1 - Math.exp(-dt * 1.2);
+    controls.target.lerp(c, e);
+    camera.position.lerp(vB.set(c.x + Math.cos(dirAng) * dist * 0.9, c.y + dist * 0.42, c.z + Math.sin(dirAng) * dist * 0.9), e);
+  }
+  const onVis = () => { perf.t0 = 0; };
+  document.addEventListener('visibilitychange', onVis);
+  controls.addEventListener('start', () => { if (director) { director = false; hooks.onDirector?.(false); } });
 
   let rec = null;
   let lastT = -1, lastSize = '', lastN = -1, lastDrawT = 0;
@@ -270,6 +363,7 @@ export function createView(host, hooks = {}) {
   }
   // 镜头跟随第 i 艘船：先飞过去（离船几倍半径），之后随船移动
   function setFollow(i) {
+    if (i >= 0 && director) { director = false; hooks.onDirector?.(false); }
     follow = i;
     followAt = null;
     if (i < 0 || !drawn[i]) { flyTo = null; return; }
@@ -311,6 +405,7 @@ export function createView(host, hooks = {}) {
       }
     }
 
+    if (director && follow < 0) directorStep(t, opt.kills);
     // 模型实例
     const white = new THREE.Color(1, 1, 1), dark = new THREE.Color(0.22, 0.2, 0.2);
     const bp = [], bc = [], bs = [];
@@ -494,7 +589,9 @@ export function createView(host, hooks = {}) {
     lctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
     lctx.shadowBlur = 3 * dpr;
     // 挤在一起时与已写的名字重叠就不写（选中 / 悬停的船先写）
-    const boxes = [], lh = 13 * dpr;
+    const F = frameAt(lastDrawT), bw = 40 * dpr, bh = Math.max(1, 2 * dpr), lh = 13 * dpr + bh * 3 + 3 * dpr;
+    const HP_COL = ['#5aa9ff', '#f0b44a', '#e85d5d'];
+    const boxes = [];
     const order = drawn.map((p, i) => i).sort((a, b) => (b === sel || b === hover) - (a === sel || a === hover));
     for (const i of order) {
       const p = drawn[i];
@@ -503,11 +600,23 @@ export function createView(host, hooks = {}) {
       if (vA.z > 1 || Math.abs(vA.x) > 1.1 || Math.abs(vA.y) > 1.1) continue;
       const name = hooks.nameOf?.(i);
       if (!name) continue;
-      const x = (vA.x + 1) / 2 * w + 14 * dpr, y = (1 - vA.y) / 2 * h, tw = lctx.measureText(name).width;
+      const x = (vA.x + 1) / 2 * w + 14 * dpr, y = (1 - vA.y) / 2 * h - 4 * dpr, tw = Math.max(bw, lctx.measureText(name).width);
       if (boxes.some((r) => x < r[2] && x + tw > r[0] && Math.abs(y - r[1]) < lh)) continue;
       boxes.push([x, y, x + tw]);
       lctx.fillStyle = rec.units[i].side === 'A' ? '#9cc2ff' : '#ff9d94';
       lctx.fillText(name, x, y);
+      // 名字下面：护盾 / 装甲 / 结构
+      if (i * 3 < F.hp.length) {
+        lctx.shadowBlur = 0;
+        for (let k = 0; k < 3; k++) {
+          const by = y + 7 * dpr + k * (bh + 1 * dpr);
+          lctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
+          lctx.fillRect(x, by, bw, bh);
+          lctx.fillStyle = HP_COL[k];
+          lctx.fillRect(x, by, bw * F.hp[i * 3 + k] / 200, bh);
+        }
+        lctx.shadowBlur = 3 * dpr;
+      }
     }
   }
 
@@ -549,6 +658,7 @@ export function createView(host, hooks = {}) {
   return {
     setRecord(r) {
       rec = r;
+      dirSeen = -1;
       lastT = -1;
       lastN = -1;
       follow = -1;
@@ -557,13 +667,15 @@ export function createView(host, hooks = {}) {
       models.clear();
     },
     draw,
-    render() { controls.update(); renderer.render(scene, camera); drawLabels(); },
+    render() { watchPerf(); sky.position.copy(camera.position); controls.update(); renderer.render(scene, camera); drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
+    setDirector(on) { director = on; dirSeen = -1; dirLast = 0; dirCut = null; if (on) { follow = -1; flyTo = null; } },
+    setQuality(q) { quality = q; perf.slow = 0; perf.t0 = 0; applyLevel(q === 'low' ? 'low' : 'high'); },
     // 选落点：opt = { side, color: '#rrggbb', label, done(pos) }；null 取消
     setPlacing(opt) { placing = opt; el.style.cursor = opt ? 'crosshair' : ''; if (opt) { hover = -1; hooks.onHover?.(-1); } },
     resetCamera: fit,
     follow: setFollow,
     following: () => follow,
-    dispose() { ro.disconnect(); fx.dispose(); for (const m of models.values()) m.mesh?.dispose(); renderer.dispose(); renderer.forceContextLoss?.(); renderer.domElement.remove(); lbl.remove(); }
+    dispose() { ro.disconnect(); document.removeEventListener('visibilitychange', onVis); fx.dispose(); for (const m of models.values()) m.mesh?.dispose(); renderer.dispose(); renderer.forceContextLoss?.(); renderer.domElement.remove(); lbl.remove(); }
   };
 }

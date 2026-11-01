@@ -29,6 +29,7 @@
 // 胜负看战损：双方被击毁的价值（ISK，opt.value 给出单艘价值；没有价格时用 EHP）之比，不看谁被打光。
 // 记录（opt.record）：每步一帧，开火 / 遥修记为四元组 [开火方, 目标, 0 未命中 | 1 命中 | 2 遥修, 第几门武器]；
 //   每艘船带上各门武器的特效信息（rec.units[i].fx）与装备列表（rec.units[i].rack）；每帧另有速度、电容、锁定进度，装备运转 / 装填 / 开始新周期的位掩码，
+//   rec.units[i].ew 为电子战 / 遥修装备 [序号, web|scram|point|neut|nos|ecm|damp|paint|rs|ra|rh]，电子战作用于本帧目标 tg，遥修目标逐帧记在 rr（每 3 个数 [后勤, 目标, 装备序号]）；
 //   出击的无人机 / 舰载机位置（dr：每 5 个数 [母舰, x, y, z, 类别]，类别 0–3 轻 / 中 / 重 / 岗哨无人机，4–6 轻型 / 支援 / 重型舰载机）。
 
 const DT = 0.5;            // 一步的时长
@@ -71,6 +72,12 @@ function roleOf(t) {
   if (!t.guns.length && t.drones.length) return 'drone';
   return 'dps';
 }
+
+// 电子战与遥修装备（3D 特效、名单上的状态图标用）：[装备序号, 类别]；遥修的目标每帧另记（rr）
+const ewList = (t) => [
+  ...t.webs.map((x) => [x.m, 'web']), ...t.points.map((x) => [x.m, x.str >= 2 ? 'scram' : 'point']), ...t.neuts.map((x) => [x.m, 'neut']), ...t.noses.map((x) => [x.m, 'nos']),
+  ...t.ecms.map((x) => [x.m, 'ecm']), ...t.damps.map((x) => [x.m, 'damp']), ...t.paints.map((x) => [x.m, 'paint']), ...t.remote.map((x) => [x.m, ['rs', 'ra', 'rh'][x.layer]]),
+].filter(([m]) => m != null && m >= 0 && m < 32);
 
 // opt: { dist (km), focus: weak|dps|spread, logi, ewar, cap, max (秒), moveA / moveB: orbit|range|kite, record, seed, value(row) → 单艘 ISK,
 //        anchors: { A: { dps: 行 id, logi: 行 id }, B }, support: [{ side, rows: [{ row, count }], mode: warp|cyno, ref, dist (km), dir, at (秒) }] }
@@ -127,7 +134,7 @@ export function createBattle(sides, opt) {
       };
       if (u.warp) { u.pos = u.warp.from.slice(); u.vel = scale(from, -WARP_FROM / WARP_IN); }
       units.push(u);
-      if (rec) rec.units.push({ side, ship: row.ship, row: row.id, radius: tpl.radius, born: B.t, fx: tpl.guns.map((g) => g.fx || null), rack: tpl.rack || [], vel: tpl.vel, cap: tpl.cap.max });
+      if (rec) rec.units.push({ side, ship: row.ship, row: row.id, radius: tpl.radius, born: B.t, fx: tpl.guns.map((g) => g.fx || null), rack: tpl.rack || [], vel: tpl.vel, cap: tpl.cap.max, ew: ewList(tpl) });
     }
     return count;
   }
@@ -816,10 +823,11 @@ export function createBattle(sides, opt) {
     const n = units.length;
     const pos = new Float32Array(n * 3), hp = new Uint8Array(n * 3), tg = new Int32Array(n).fill(-1);
     const spd = new Uint16Array(n), cp = new Uint8Array(n), act = new Uint32Array(n), rld = new Uint32Array(n), fire = new Uint32Array(n), lk = new Uint8Array(n);
-    const dr = [];
+    const dr = [], rr = [];
     units.forEach((u, i) => {
       pos[i * 3] = u.pos[0]; pos[i * 3 + 1] = u.pos[1]; pos[i * 3 + 2] = u.pos[2];
       if (!u.alive) return;
+      u.rrep?.forEach((st, j) => { if (st.tgt?.alive) rr.push(i, st.tgt.i, u.t.remote[j].m); });
       for (let l = 0; l < 3; l++) hp[i * 3 + l] = u.t.max[l] ? Math.round(u.hp[l] / u.t.max[l] * 200) : 0;
       hp[i * 3 + 2] = Math.max(1, hp[i * 3 + 2]);
       spd[i] = Math.min(65535, Math.round(speedOf(u)));
@@ -835,13 +843,13 @@ export function createBattle(sides, opt) {
       for (const q of u.squads) if (q.pos) dr.push(i, q.pos[0], q.pos[1], q.pos[2], 4 + q.f.cls);
       u.rld = 0;
     });
-    rec.frames.push({ t: B.t, pos, hp, tg, shots, spd, cp, act, rld, fire, lk, dr: Float32Array.from(dr), pa: primary.A ? primary.A.i : -1, pb: primary.B ? primary.B.i : -1 });
+    rec.frames.push({ t: B.t, pos, hp, tg, shots, spd, cp, act, rld, fire, lk, dr: Float32Array.from(dr), rr: Int32Array.from(rr), pa: primary.A ? primary.A.i : -1, pb: primary.B ? primary.B.i : -1 });
   }
   timeline.push(point());
   if (rec) {
     const n = units.length, pos = new Float32Array(n * 3), hp = new Uint8Array(n * 3), cp = new Uint8Array(n).fill(200);
     units.forEach((u, i) => { pos.set(u.pos, i * 3); for (let l = 0; l < 3; l++) hp[i * 3 + l] = u.t.max[l] ? 200 : 0; hp[i * 3 + 2] = 200; });
-    rec.frames.push({ t: 0, pos, hp, tg: new Int32Array(n).fill(-1), shots: [], spd: new Uint16Array(n), cp, act: new Uint32Array(n), rld: new Uint32Array(n), fire: new Uint32Array(n), lk: new Uint8Array(n), dr: new Float32Array(0), pa: -1, pb: -1 });
+    rec.frames.push({ t: 0, pos, hp, tg: new Int32Array(n).fill(-1), shots: [], spd: new Uint16Array(n), cp, act: new Uint32Array(n), rld: new Uint32Array(n), fire: new Uint32Array(n), lk: new Uint8Array(n), dr: new Float32Array(0), rr: new Int32Array(0), pa: -1, pb: -1 });
   }
 
   // ---------- 结果 ----------
