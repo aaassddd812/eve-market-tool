@@ -7289,6 +7289,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .sim-rs-hp .sh b { background: #5aa9ff; }
 .sim-rs-hp .ar b { background: #f0b44a; }
 .sim-rs-hp .hu b { background: #e85d5d; }
+.sim-rs-hp .cp b { background: #c9d3e0; }
 .sim-stage .sim-3d-tools { top: auto; bottom: 10px; flex-direction: row; }
 .sim-stage .sim-3d-load { top: auto; bottom: 10px; }
 .sim-stage .sim-3d-sel { left: 50%; transform: translateX(-50%); }

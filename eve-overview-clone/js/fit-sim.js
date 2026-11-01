@@ -985,12 +985,12 @@ function buildRoster() {
     box.innerHTML = `<header><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span>${teamName(s) ? `<b translate="no">${ctx.esc(teamName(s))}</b>` : ''}<small class="n"></small></header>
       <div class="sim-rs-list">${groups.map((g) => {
         const i = g[0], u = rec.units[i], row = rowById(u.row);
-        const sub = `<small>${pilotOf(i) ? `${ctx.esc(shipName(u.ship))} · ` : ''}<span class="sp" title="速度"></span> m/s · 电容 <span class="cp"></span></small>`;
+        const sub = `<small>${pilotOf(i) ? `${ctx.esc(shipName(u.ship))} · ` : ''}<span class="sp" title="速度"></span> m/s</small>`;
         return `<div class="sim-rs-row" data-bt-unit="${i}"><img src="${IMG(u.ship)}" alt="" width="28" height="28" loading="lazy">
           <div class="sim-rs-main"><span>${label(i)}${row?.flag ? '<em title="AT 旗舰">★</em>' : ''}</span>${sub}<span class="sim-rs-ew"></span></div>
-          <div class="sim-rs-hp"><i class="sh"><b></b></i><i class="ar"><b></b></i><i class="hu"><b></b></i></div></div>`;
+          <div class="sim-rs-hp"><i class="sh"><b></b></i><i class="ar"><b></b></i><i class="hu"><b></b></i><i class="cp"><b></b></i></div></div>`;
       }).join('')}</div>`;
-    box.querySelectorAll('.sim-rs-row').forEach((el, k) => RS.rows.push({ el, units: groups[k], bars: [...el.querySelectorAll('.sim-rs-hp b')], sp: el.querySelector('.sp'), cp: el.querySelector('.cp'), ew: el.querySelector('.sim-rs-ew'), last: {} }));
+    box.querySelectorAll('.sim-rs-row').forEach((el, k) => RS.rows.push({ el, units: groups[k], bars: [...el.querySelectorAll('.sim-rs-hp b')], sp: el.querySelector('.sp'), ew: el.querySelector('.sim-rs-ew'), last: {} }));
     RS.head[s] = box.querySelector('header .n');
   }
 }
@@ -1018,7 +1018,7 @@ function paintRoster(f) {
     for (let k = 0; k < 3; k++) setWidth(r, 'h' + k, r.bars[k], (alive ? hp[k] / alive / 2 : 0).toFixed(0) + '%');
     const u0 = r.units[0], on = alive > 0 && u0 < nU;
     setText(r, 'sp', r.sp, on ? String(f.spd[u0]) : '—');
-    setText(r, 'cp', r.cp, on ? Math.round(f.cp[u0] / 2) + '%' : '—');
+    setWidth(r, 'h3', r.bars[3], on ? (f.cp[u0] / 2).toFixed(0) + '%' : '0%');
     setClass(r, 'dead', total > 0 && !alive);
     setClass(r, 'wait', !total);
     setClass(r, 'sel', r.units.includes(BT.sel));
