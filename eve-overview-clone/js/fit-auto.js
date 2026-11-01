@@ -103,8 +103,18 @@ export function shipProfile(shipType) {
   for (const t of data.types.values()) if (t.market && t.slot && t.slot !== 'rig' && t.slot !== 'sub' && !bonused.has(t.group) && bonusOf(t).size) bonused.add(t.group);
   const has = (groups) => groups.some((g) => bonused.has(g));
   const warfare = data.attrs.has(2469) ? 2469 : 0;
+  // 武器加成：加成作用在武器上，或作用在它能装的弹药上（导弹船的伤害加成多在导弹上）
+  const chargeBonus = new Map();
+  for (const t of data.types.values()) {
+    if (t.category !== FE.CAT.charge || !t.market) continue;
+    const b = bonusOf(t);
+    if (b.size) chargeBonus.set(t.group, true);
+  }
+  const weaponBonus = (t) => bonusOf(t).size > 0 || FE.AT.chargeGroups.some((a) => chargeBonus.get(t.attrs.get(a)));
+  const armed = [...data.types.values()].some((t) => t.market && t.slot === 'high' && (t.turret || t.launcher) && weaponBonus(t));
   const roles = [];
-  if (has(REMOTE_REP)) roles.push('logi');
+  // 有武器加成的船（如三神裔战斗舰也带远程维修加成）不当后勤船
+  if (has(REMOTE_REP) && !armed) roles.push('logi');
   if (has(EWAR)) roles.push('ewar');
   if (has(TACKLE_BONUS) || shipType.group === INTERDICTOR) roles.push('tackle');
   if (has(MINING_ALL)) roles.push('mining');
@@ -118,7 +128,7 @@ export function shipProfile(shipType) {
   const shieldPts = SHIELD_SELF.filter((a) => self.has(a)).length + (shieldRep ? 3 : 0) + (bonused.has(38) ? 2 : 0);
   const armorPts = ARMOR_SELF.filter((a) => self.has(a)).length + (armorRep ? 3 : 0) + (bonused.has(329) ? 2 : 0);
   const p = {
-    roles, bonused, bonusOf, covertCloak,
+    roles, bonused, bonusOf, weaponBonus, covertCloak,
     tank: shieldPts > armorPts ? 'shield' : armorPts > shieldPts ? 'armor' : null,
     rep: shieldRep || armorRep,
     labels: [...labels].filter(Boolean).slice(0, 12)
@@ -253,7 +263,8 @@ function buildCandidates(shipType, tankType, resistMode = 'active') {
   const fitCost = (t) => (t.attrs.get(FE.AT.cpu) || 0) + (t.attrs.get(FE.AT.power) || 0) * 2;
   // 同一族：分组 + 尺寸（按电网需求的数量级）；改装件按英文名去掉 I / II
   const family = (t) => (t.slot === 'rig' ? 'r:' + (t.en || t.name).replace(/\s+I{1,2}$/, '') : t.group + ':' + Math.round(Math.log2((t.attrs.get(FE.AT.power) || 0) + 1)));
-  const shipPower = shipType.attrs.get(FE.AT.powerOutput) || 1;
+  // 电网按技能后的值（电网管理等 +25%）：少安装座的船一门大武器就占大部分电网（如唤风级的电弧弦投射器）
+  const shipPower = FE.computeFit(data, { ship: shipType.id, slots: { high: [], mid: [], low: [], rig: [], sub: [] }, drones: [], implants: [] }, skillsArg())?.ship.attr(FE.AT.powerOutput) || shipType.attrs.get(FE.AT.powerOutput) || 1;
   const power = (t) => t.attrs.get(FE.AT.power) || 0;
   const prune = (list, sizes = 2) => {
     const fam = new Map();
@@ -331,17 +342,22 @@ function buildCandidates(shipType, tankType, resistMode = 'active') {
   const wfam = (t) => [t.group, t.attrs.get(FE.AT.chargeSize) || 0, Math.round(Math.log2(t.attrs.get(FE.AT.maxRange) || 1) * 2), Math.round(Math.log2((t.attrs.get(FE.AT.trackingSpeed) || 0) + 1e-3))].join(':');
   const wf = new Map();
   for (const t of all) {
-    if (t.slot !== 'high' || !(t.turret || t.launcher) || MINING_ALL.includes(t.group) || t.group === 737 || !fits(t) || polarized(t) || power(t) > shipPower * 0.6) continue;
+    if (t.slot !== 'high' || !(t.turret || t.launcher) || MINING_ALL.includes(t.group) || t.group === 737 || !fits(t) || polarized(t)) continue;
+    // 单门武器的电网上限：安装座多的船留出余量给其他装备，只有一两个安装座的放宽到装得下一门
+    // 舰船自身降低了这类武器的电网需求（轰炸舰的鱼雷、攻击战列巡洋舰的大型炮）时不按基础电网筛
+    const hp = t.turret ? shipType.attrs.get(FE.AT.turretSlots) : shipType.attrs.get(FE.AT.launcherSlots);
+    if (!P.bonusOf(t).has(FE.AT.power) && power(t) > shipPower * ((hp || 0) <= 2 ? 0.95 : 0.6)) continue;
     const k = wfam(t);
     if (!wf.has(k)) wf.set(k, []);
     wf.get(k).push(t);
   }
   // 炮台只用本船的尺寸（战列舰不装小炮，打小目标靠弹药 / 无人机）
   const tsize = (t) => t.attrs.get(FE.AT.chargeSize) || 0;
-  const natural = Math.max(0, ...[...wf.values()].flat().filter((t) => t.turret).map(tsize));
+  // 本船尺寸取改装件尺寸（小 / 中 / 大 / 旗舰），没有时取可用炮台里最大的
+  const natural = shipType.attrs.get(FE.AT.rigSize) || Math.max(0, ...[...wf.values()].flat().filter((t) => t.turret).map(tsize));
   const weapons = [];
   for (const vs of wf.values()) {
-    if (vs[0].turret && tsize(vs[0]) < natural) continue;
+    if (vs[0].turret && tsize(vs[0]) && tsize(vs[0]) !== natural && !P.bonusOf(vs[0]).has(FE.AT.power)) continue;
     const best = vs.reduce((a, b) => (quality(b) > quality(a) ? b : a));
     const cheap = vs.reduce((a, b) => (fitCost(b) < fitCost(a) ? b : a));
     weapons.push(best);
@@ -731,6 +747,19 @@ async function search(onProgress) {
     if (ROLES.has('command')) {
       let n = 0;
       for (const t of R.bursts.slice(0, 3)) n += await placeFixed(base, 'high', [t], 1, (r, k) => k, progress, 0.8);
+      // 弹药决定给什么加成（自己也吃到）：逐种试，取得分最高的
+      for (const m of base.slots.high) {
+        const t = m?.fixed && ctx.data.types.get(m.type);
+        if (!t || t.group !== BURST) continue;
+        let best = null;
+        for (const c of CHARGES.filter((c) => ctx.FE.chargeFits(t, c))) {
+          m.charge = c.id;
+          const r = evaluate(base);
+          await tick(progress);
+          if (r?.ok && (!best || r.score > best.score)) best = { score: r.score, id: c.id };
+        }
+        if (best) m.charge = best.id;
+      }
       count(n, '指挥脉冲波');
     }
     if (ROLES.has('logi')) {
@@ -776,23 +805,31 @@ async function search(onProgress) {
       const list = TGT || DIST ? cands.charges.filter((c) => FE.chargeFits(w, c)) : [bestCharge(w, cands.charges)].filter(Boolean);
       let best = null;
       for (const charge of list) {
-        const f = clone(base);
-        for (let i = 0; i < n; i++) f.slots.high[freeHigh[i]] = mod(w, charge);
-        const r = evaluate(f);
-        await tick(progress);
+        // 装满安装座电网 / CPU 不够时少装几门
+        let f, r;
+        for (let k = n; k >= 1; k--) {
+          f = clone(base);
+          for (let i = 0; i < k; i++) f.slots.high[freeHigh[i]] = mod(w, charge);
+          r = evaluate(f);
+          await tick(progress);
+          if (r?.ok) break;
+        }
         if (r && r.ok && (!best || r.dps > best.r.dps + 1e-6 || (r.dps > best.r.dps - 1e-6 && r.cost < best.r.cost))) best = { f, r, w };
       }
       if (best) options.push(best);
     }
   }
-  // 受舰船加成的武器优先（射程、跟踪等加成不体现在 DPS 里）
-  const wScore = (o) => o.r.dps * (P.bonusOf(o.w).size ? 1.15 : 1);
-  options.sort((a, b) => wScore(b) - wScore(a));
-  // 同一类武器（炮台 / 导弹）只保留最好的一种，最多两种方案
+  // 船对某些武器有加成（伤害、射速、射程、跟踪等）时只用这些武器：射程、跟踪类加成不体现在 DPS 里，
+  // 不限定的话纸面 DPS 高的无加成武器会胜出（如唤风级的电弧弦投射器射程加成被中子炮压过）
+  const bonusedW = options.filter((o) => P.weaponBonus(o.w));
+  const pool = bonusedW.length ? bonusedW : options;
+  pool.sort((a, b) => b.r.dps - a.r.dps);
+  // 同一类武器（同分组、同射程档：如长射程磁轨炮与短射程疾速炮分开）只保留最好的一种，最多两种方案
+  const wkey = (w) => w.group + ':' + Math.round(Math.log2(w.attrs.get(ctx.FE.AT.maxRange) || 1));
   const picked = [];
-  for (const o of options) {
+  for (const o of pool) {
     if (picked.length >= 2) break;
-    if (picked.some((p) => p.w.group === o.w.group)) continue;
+    if (picked.some((p) => wkey(p.w) === wkey(o.w))) continue;
     picked.push(o);
   }
   if (!picked.length) picked.push({ f: clone(base), r: evaluate(base) });
@@ -811,7 +848,7 @@ async function search(onProgress) {
     best.r = await swapPass(best.fit, oc, best.r, progress);
     best.r = await fillEmpty(best.fit, oc, best.r, progress);
     best.r = await thriftPass(best.fit, oc, best.r, progress);
-    best.bonus = o.w && P.bonusOf(o.w).size ? Math.log(1.15) : 0;
+    best.bonus = o.w && P.weaponBonus(o.w) ? Math.log(1.15) : 0;
     results.push(best);
   }
   results.sort((a, b) => b.r.score + b.bonus - a.r.score - a.bonus);
@@ -1134,6 +1171,11 @@ function toggleIn(key, v) {
   A[key] = [...set];
   ctx.store.setJSON(KEY, A);
 }
+// 装配页选了天象时注明（计算已按天象）
+function envText() {
+  const list = ctx.FE.envInfo?.(ctx.data, ctx.getFit().ship).filter((e) => e.active) || [];
+  return list.length ? `<p class="fa-hint">已按天象计算：<span translate="no">${list.map((e) => ctx.esc(window.I18N?.lang === 'en' ? e.en || e.name : e.name)).join('、')}</span></p>` : '';
+}
 function utilsHtml(ship, P) {
   const U = new Set(A.utils || []);
   const ewar = EWAR.filter((g) => P.bonused.has(g)).map((g) => ctx.data.groups.get(g)?.name).filter(Boolean);
@@ -1209,7 +1251,7 @@ function renderResults(results, { tankType, resistMode, roles, placed, selfRep }
   const aimed = A.target !== 'any' || A.range !== 'any';
   const aimText = aimed ? '对' + (A.target !== 'any' ? ctx.FE.TARGETS[A.target].name : '任意目标') + (A.range !== 'any' ? ` @ ${RANGES[A.range] / 1000} km` : '') + ' · ' : '';
   const roleText = roles.length || placed.length ? roles.map((r) => ROLE_NAME[r]).join(' / ') + (placed.length ? `（预留${placed.join('、')}）` : '') + ' · ' : '';
-  box.innerHTML = `<p class="fa-meta">${aimText}${roleText}${tankType === 'shield' ? '护盾' : '装甲'}坦克 · ${resistMode === 'active' ? '主动抗' : '被动抗'}${selfRep === 'yes' ? ' · 自修' : selfRep === 'no' ? ' · 不自修' : ''} · ${num(evals)} 种组合 · ${secs.toFixed(1)} 秒</p>` + results.map((x, i) => {
+  box.innerHTML = `<p class="fa-meta">${aimText}${roleText}${tankType === 'shield' ? '护盾' : '装甲'}坦克 · ${resistMode === 'active' ? '主动抗' : '被动抗'}${selfRep === 'yes' ? ' · 自修' : selfRep === 'no' ? ' · 不自修' : ''} · ${num(evals)} 种组合 · ${secs.toFixed(1)} 秒</p>${envText()}` + results.map((x, i) => {
     const r = x.r, st = r.st;
     const groups = FE.SLOTS.map((s) => {
       const counts = new Map();

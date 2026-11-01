@@ -373,7 +373,9 @@ function unitTemplate(row) {
     // 弹夹：装备容量 / 弹药体积；频率晶体（有损坏几率属性）不用装填
     const per = loads(m);
     const crystal = (c.attr(783) || 0) > 0 || (m.attr(FE.AT.capNeed) > 0 && !per);
-    const g = { turret, cycle, volley: w.volley, dmg: raw.map((x) => x / rawSum * w.volley), capNeed: Math.max(0, m.attr(FE.AT.capNeed)),
+    // 引擎给的是递增满的伤害，模拟里逐轮递增：先换回初始伤害
+    const vol0 = w.volley / (w.spool || 1);
+    const g = { turret, cycle, volley: vol0, dmg: raw.map((x) => x / rawSum * vol0), capNeed: Math.max(0, m.attr(FE.AT.capNeed)),
       ammo: crystal || per <= 0 ? Infinity : per, reload: (m.attr(1795) || 10000) / 1000, m: idx.get(m) };
     g.fx = gunFx(m, c, raw, turret);
     if (m.type.group === 4060) {

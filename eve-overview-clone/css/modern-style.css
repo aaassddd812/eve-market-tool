@@ -6747,6 +6747,13 @@ td .sov-auto-tag { margin-left: 4px; }
 .fit-cloud-skills i { font-style: normal; }
 .fit-cloud-skills b { margin-left: 6px; font-weight: 600; }
 .fit-cloud-skills span.is-on b { color: var(--success); }
+.fit-env-cat { flex-shrink: 0; padding: 2px 7px; border-radius: 6px; font-size: 0.6875rem; color: var(--accent-primary); background: var(--accent-soft); }
+.fit-env-state { margin-left: auto; font-size: 0.75rem; color: var(--text-muted); }
+.fit-env-state.is-on { color: var(--success); }
+.fit-env-desc { padding-left: 0; }
+.fit-env-desc .link-btn { font-size: 0.6875rem; }
+.fit-fleet-mode { margin-left: auto; }
+.fit-fleet-mode button { padding: 3px 8px; font-size: 0.75rem; }
 .fit-slots h4 span.is-over { color: var(--danger); }
 
 /* ===== 角色交易 ===== */

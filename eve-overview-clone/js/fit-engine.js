@@ -19,6 +19,7 @@ export const AT = {
   maxVelocity: 37, agility: 70, warpSpeedMultiplier: 600, baseWarpSpeed: 1281, signatureRadius: 552,
   maxTargetRange: 76, scanResolution: 564, maxLockedTargets: 192, sensors: [208, 209, 210, 211],
   shieldBonus: 68, armorDamageAmount: 84, structureDamageAmount: 83, chargedArmorDamageMultiplier: 1886,
+  spoolMax: 2734,
   speedFactor: 20, speedBoostFactor: 567, massAddition: 796, signatureRadiusBonus: 554,
   maxRange: 54, falloff: 158, trackingSpeed: 160, explosionDelay: 281,
   maxGroupFitted: 1544, maxTypeFitted: 2431, maxGroupActive: 763, maxActiveDrones: 352,
@@ -118,7 +119,12 @@ function parse(raw) {
     c.skills.push({ id: t.id, every: !!every, cls });
   }
   const hulls = new Map(Object.entries(adapt?.hulls || {}).map(([k, v]) => [Number(k), v]));
-  return { attrs, effects, groups, markets, types, byName, skills, char, cloud, hulls };
+  // 天象：id -> { name, en, cat, mods: [[func, domain, 被修改属性, 运算, 数值, 分组或技能, 适用名单]], desc: [[中文, 英文]] }
+  const env = new Map(Object.entries(raw.env?.items || {}).map(([id, [name, en, cat, mods, desc]]) => [Number(id), { id: Number(id), name, en, cat, mods, desc }]));
+  const envLists = new Map(Object.entries(raw.env?.lists || {}).map(([id, [inc, exc]]) => [Number(id), { inc: inc && new Set(inc), exc: new Set(exc) }]));
+  // 舰队加成（dbuff）：id -> { name, en, op, max 取最大 / 最小, mods: [[func, 被修改属性, 分组或技能]] }
+  const dbuffs = new Map(Object.entries(raw.dbuffs || {}).map(([id, [name, en, op, max, mods]]) => [Number(id), { id: Number(id), name, en, op, max: !!max, mods }]));
+  return { attrs, effects, groups, markets, types, byName, skills, char, cloud, hulls, env, envLists, dbuffs };
 }
 
 function slotOf(t) {
@@ -240,13 +246,89 @@ export function cloudInfo(data, shipId) {
   });
 }
 
+// ---------- 天象 ----------
+// 虫洞 / 超阈限风暴 / 三神裔入侵等星系环境、泰坦天象发生器、主权稳定发生器、活动效果：选中的对所有装配生效（战场模拟里双方都受影响）
+// 不在叠加惩罚的豁免范围内（与游戏一致：和装备的同类加成一起受惩罚）；部分条目只对名单里的舰船生效
+let ENV = [];
+export function setEnv(ids) { ENV = ids || []; }
+export const getEnv = () => ENV;
+const envFor = (data, list, shipType) => {
+  if (!list) return true;
+  const l = data.envLists?.get(list);
+  return !l || ((!l.inc || l.inc.has(shipType.id)) && !l.exc.has(shipType.id));
+};
+// 给界面用：选中的天象与对当前舰船是否生效
+export function envInfo(data, shipId) {
+  const ship = data.types.get(shipId);
+  return ENV.map((id) => data.env?.get(id)).filter(Boolean).map((e) => ({ ...e, active: Boolean(ship && e.mods.some((m) => envFor(data, m[6], ship))) }));
+}
+
+// ---------- 舰队加成（指挥脉冲波 / 泰坦天象发生器）----------
+// 弹药把加成编号与倍率写到脉冲波上，技能、舰船加成、心灵链接再提高数值；开启后对舰队（含自己）生效。
+// 同一种加成多个来源时只取最强的一个（按 dbuff 的取最大 / 最小）；与装备的同类加成一起受叠加惩罚
+export const BURST_GROUP = 1770, BURST_CHARGES = [1769, 1771, 1772, 1773, 1774, 4905];
+const BUFF_ATTRS = [[2468, 2469], [2470, 2471], [2472, 2473], [2536, 2537]];
+const BUFF_EFFECTS = new Set(['moduleBonusWarfareLinkArmor', 'moduleBonusWarfareLinkShield', 'moduleBonusWarfareLinkInfo', 'moduleBonusWarfareLinkSkirmish',
+  'moduleBonusWarfareLinkMining', 'moduleBonusWarfareLinkExpedition', 'moduleTitanEffectGenerator']);
+const buffsOf = (m) => BUFF_ATTRS.map(([i, v]) => [Math.round(m.attr(i)), m.attr(v)]).filter(([id, v]) => id && v);
+let FLEET = [];   // [[弹药, 'max' 全部舰船里最强 + 心灵链接 | 'cs' 指挥舰 + 心灵链接 | 'basic' 无舰船加成、无心灵链接]]
+export function setFleet(list) { FLEET = list || []; }
+export const getFleet = () => FLEET;
+const boostCache = new WeakMap();
+// 别人给的加成：按满技能，在能给这种加成的舰船里取最强的（或不带加成的普通船），装上同类最好的脉冲波和弹药算出数值
+export const COMMAND_SHIP = 540;
+export function fleetBoost(data, chargeId, mode = 'cs') {
+  if (!boostCache.has(data)) boostCache.set(data, new Map());
+  const cache = boostCache.get(data), key = chargeId + mode;
+  if (cache.has(key)) return cache.get(key);
+  const charge = data.types.get(chargeId);
+  let best = null;
+  if (charge && data.dbuffs?.size) {
+    const bursts = [...data.types.values()].filter((t) => t.group === BURST_GROUP && t.market && AT.chargeGroups.some((a) => t.attrs.get(a) === charge.group));
+    const burst = bursts.find((t) => t.meta === 2) || bursts[0];
+    const skills = new Set(burst?.skills.map(([id]) => id));
+    // 会提高这类脉冲波数值的舰船 / 植入体：效果里对需要该技能的物品修改加成数值
+    const boosts = (t) => t.effects.some((e) => data.effects.get(e)?.mods.some(([f, , mod, , , extra]) => f === 3 && skills.has(extra) && mod === 2469));
+    const all = [...data.types.values()].filter((t) => t.market);
+    const strong = all.filter((t) => t.category === CAT.ship && boosts(t));
+    // 指挥舰给不了的（采矿、远征）退回全部舰船里最强的
+    const cs = strong.filter((t) => t.group === COMMAND_SHIP);
+    const ships = mode === 'basic' ? [all.find((t) => t.category === CAT.ship && t.group === 419 && !boosts(t))] : mode === 'cs' && cs.length ? cs : strong;
+    const links = mode === 'basic' ? [null] : [null, ...all.filter((t) => t.category === CAT.implant && boosts(t))];
+    for (const ship of ships.filter(Boolean)) {
+      for (const link of links) {
+        const calc = computeFit(data, { ship: ship.id, slots: { high: [{ type: burst.id, state: 'active', charge: chargeId }] }, implants: link ? [link.id] : [] }, 'max', { alone: true });
+        const m = calc?.modules[0];
+        if (!m) continue;
+        const buffs = buffsOf(m);
+        const power = buffs.reduce((t, [, v]) => t + Math.abs(v), 0);
+        if (!best || power > best.power) best = { power, buffs, ship: ship.id, link: link?.id || 0, burst: burst.id };
+      }
+    }
+  }
+  cache.set(key, best);
+  return best;
+}
+// 给界面用：每种加成的名称与数值（抗性类按抗性的变化写正负）
+export function buffText(data, buffs) {
+  const resist = new Set(Object.values(RESIST).flat());
+  const en = typeof window !== 'undefined' && window.I18N?.lang === 'en';
+  return buffs.map(([id, v]) => {
+    const b = data.dbuffs?.get(id);
+    if (!b) return '';
+    const flip = b.mods.every(([, a]) => resist.has(a));
+    const val = b.op === 6 ? `${flip ? -v >= 0 ? '+' : '' : v >= 0 ? '+' : ''}${+(flip ? -v : v).toFixed(2)}%` : `${v >= 0 ? '+' : ''}${+v.toFixed(2)}`;
+    return `${en ? b.en : b.name} ${val}`;
+  }).filter(Boolean);
+}
+
 // ---------- 装配计算 ----------
 /**
  * fit: { ship: typeId, slots: { high: [mod|null], mid, low, rig, sub }, drones: [{ type, count, active }], implants: [typeId] }
  * mod: { type, state: 'offline'|'online'|'active'|'overload', charge: typeId|null }
  * skills: 'max'（全部 5 级）或 Map(skillId -> 等级)
  */
-export function computeFit(data, fit, skills = 'max') {
+export function computeFit(data, fit, skills = 'max', { alone = false } = {}) {
   const shipType = data.types.get(fit.ship);
   if (!shipType) return null;
   const char = new Item(data, null, 'char', data.char);
@@ -340,16 +422,44 @@ export function computeFit(data, fit, skills = 'max') {
   };
 
   const all = [ship, ...modules, ...charges, ...drones, ...implants, ...skillItems];
+  const bursts = [];   // 开着的指挥脉冲波 / 天象发生器：最后统一施加加成
   for (const item of all) {
     const exempt = EXEMPT.has(item.category);
     for (const eid of item.type.effects) {
       const effect = data.effects.get(eid);
       if (!effect || !active(item, effect)) continue;
+      if (BUFF_EFFECTS.has(effect.name)) { bursts.push(item); continue; }
       if (special(effect, item, { ship, exempt, shipItems, ownedItems })) continue;
       for (const [func, domain, modified, modifying, op, extra] of effect.mods) {
         if (op === 9) continue;
         for (const t of targets(func, domain, item, extra)) t.addMod(modified, { op, src: item, srcAttr: modifying, exempt });
       }
+    }
+  }
+  // 舰队加成：自己开着的脉冲波 + 选中的别人给的；同一种加成取最强
+  if (!alone) {
+    const buffs = new Map();
+    const add = (id, v) => {
+      const b = data.dbuffs?.get(id);
+      if (!b) return;
+      const old = buffs.get(id);
+      if (old === undefined || (b.max ? v > old : v < old)) buffs.set(id, v);
+    };
+    for (const m of bursts) for (const [id, v] of buffsOf(m)) add(id, v);
+    for (const [c, mode] of FLEET) for (const [id, v] of fleetBoost(data, c, mode)?.buffs || []) add(id, v);
+    const src = { kind: 'buff', type: { id: 0, skills: [] } };
+    for (const [id, v] of buffs) {
+      const b = data.dbuffs.get(id);
+      for (const [func, modified, extra] of b.mods) for (const t of targets(func, 1, src, extra)) t.addMod(modified, { op: b.op, src, exempt: false, fn: () => v });
+    }
+  }
+  for (const id of ENV) {
+    const e = data.env?.get(id);
+    if (!e) continue;
+    const src = { kind: 'env', type: { id, skills: [] } };
+    for (const [func, domain, modified, op, value, extra, list] of e.mods) {
+      if (!envFor(data, list, shipType)) continue;
+      for (const t of targets(func, domain, src, extra)) t.addMod(modified, { op, src, exempt: false, fn: () => value });
     }
   }
   return { data, fit, char, ship, modules, charges, drones, implants, skills: skillItems };
@@ -453,7 +563,9 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
   const droneDps = [];
   for (const m of activeMods) {
     if (!(m.type.turret || m.type.launcher) || !m.charge) continue;
-    const mult = m.type.turret ? m.attr(AT.damageMultiplier) : missileMult;
+    // 三神裔分解者：持续射击伤害递增，按递增满（与 Pyfa 默认一致）
+    const spool = 1 + (m.attr(AT.spoolMax) || 0);
+    const mult = (m.type.turret ? m.attr(AT.damageMultiplier) : missileMult) * spool;
     const dmg = DAMAGE.map((a) => m.charge.attr(a) * mult);
     const volley = dmg.reduce((s, x) => s + x, 0);
     const cycle = m.attr(AT.speed) / 1000;
@@ -463,7 +575,7 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
     weapon.volley += volley;
     dmg.forEach((x, i) => { weapon.types[i] += x / cycle; });
     weapons.push({
-      module: m, dps, volley,
+      module: m, dps, volley, spool,
       range: m.type.turret ? m.attr(AT.maxRange) : m.charge.attr(AT.maxVelocity) * m.charge.attr(AT.explosionDelay) / 1000,
       falloff: m.type.turret ? m.attr(AT.falloff) : 0
     });

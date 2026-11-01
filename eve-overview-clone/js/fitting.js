@@ -3,11 +3,11 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v29';
+import * as FE from './fit-engine.js?v=v30';
 import * as MU from './fit-mutate.js?v=v4';
-import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v28';
+import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v29';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
-import { initSim, mountSim } from './fit-sim.js?v=v32';
+import { initSim, mountSim } from './fit-sim.js?v=v33';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v10';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
@@ -21,12 +21,14 @@ const infoBtn = (id, tag = 'button') => tag === 'button'
   ? `<button type="button" class="fit-info-btn" data-fit-info="${id}" title="查看详情" aria-label="查看详情">${INFO_ICON}</button>`
   : `<span class="fit-info-btn" data-fit-info="${id}" role="button" title="查看详情" aria-label="查看详情">${INFO_ICON}</span>`;
 const IMG = (id, kind = 'icon', size = 32) => `https://images.evetech.net/types/${id}/${kind}?size=${size}`;
-const DATA_URL = './fit-data.json?v=v21r3';
+const DATA_URL = './fit-data.json?v=v22';
 const SAVE_KEY = 'eve-fits-v1';
 const CURRENT_KEY = 'eve-fit-current';
 const SETTINGS_KEY = 'eve-fit-settings';
 const CLOUD_KEY = 'eve-fit-cloud-' + SERVER.id;   // 曙光云计算：放进「云」的舰船
 const CLOUD_BW = 100;
+const ENV_KEY = 'eve-fit-env';   // 选中的天象（虫洞、风暴、泰坦天象发生器等）
+const FLEET_KEY = 'eve-fit-fleet';   // 舰队里别人给的指挥脉冲波加成 [[弹药, 强度]]
 const DRAFTS_KEY = 'eve-fit-drafts';   // 每艘船上次没保存的装配（舰船 -> 装配），最多留 30 艘
 
 const TABS = [
@@ -58,6 +60,8 @@ export function initFitting(context) {
   try { Object.assign(F, pick(app.store.getJSON(SETTINGS_KEY, {}), ['skillMode', 'onlyFits', 'tab'])); } catch { /* 默认设置 */ }
   if (F.skillMode === 'esi' && !app.hasEsiToken()) F.skillMode = 'max';
   try { FE.setCloud(app.store.getJSON(CLOUD_KEY, [])); } catch { /* 空云 */ }
+  try { FE.setEnv(app.store.getJSON(ENV_KEY, [])); } catch { /* 没有天象 */ }
+  try { FE.setFleet(app.store.getJSON(FLEET_KEY, [])); } catch { /* 没有舰队加成 */ }
   bindSidebar();
   initTypeInfo();
   $('fitMain').addEventListener('click', onMainClick);
@@ -930,6 +934,8 @@ function renderFit() {
     ${dronesHtml()}
     ${implantsHtml(bound)}
     ${cloudHtml()}
+    ${envHtml()}
+    ${fleetHtml()}
     ${missing.length ? `<section class="fit-slots"><h4>缺少的技能<span>${missing.length}</span></h4><div class="fit-skill-list">${missing.map((m) => `<span>${app.esc(m.type?.name || '')} <b>${m.have} → ${m.need}</b></span>`).join('')}</div></section>` : ''}`;
 }
 
@@ -953,6 +959,75 @@ function cloudHtml() {
     ${infoBtn(c.ship.id)}<button class="fit-remove" data-fit-cloud-remove="${c.ship.id}" aria-label="移除">×</button></div>`).join('');
   return `<section class="fit-slots"><h4>云计算<span class="${used > CLOUD_BW ? 'is-over' : ''}">带宽 ${used} / ${CLOUD_BW}${used > CLOUD_BW ? '（超出）' : ''}</span></h4>
     ${rows}<div class="fit-slot is-empty"><select class="plain-select" data-fit-cloud-add aria-label="加入云计算的舰船"><option value="">${used >= CLOUD_BW ? '带宽已满' : `加入云计算的舰船…（剩余带宽 ${CLOUD_BW - used}）`}</option>${options}</select></div></section>`;
+}
+
+// 天象：星系环境（虫洞 / 超阈限风暴 / 三神裔入侵等，同时只有一个）、泰坦天象发生器、主权稳定发生器（同时只有一个）、势力战争与活动效果
+// 选中的对所有装配生效（智能装配、战场模拟也按它算）
+const ENV_CATS = [['wh', '虫洞'], ['storm', '超阈限风暴'], ['space', '星系环境'], ['titan', '泰坦天象发生器'], ['sov', '主权升级'], ['fw', '势力战争'], ['event', '活动']];
+const ENV_ONE = { wh: 'system', storm: 'system', space: 'system', sov: 'sov' };   // 同组只能选一个，选新的替换旧的
+const ENV_SHOW = 6;   // 效果超过这么多条时折叠
+const envOpen = new Set();
+const envName = (e) => (window.I18N?.lang === 'en' ? e.en || e.name : e.name);
+function envHtml() {
+  if (!F.data.env?.size) return '';
+  const en = window.I18N?.lang === 'en';
+  const info = FE.envInfo(F.data, F.fit.ship);
+  const chosen = new Set(info.map((e) => e.id));
+  const catName = Object.fromEntries(ENV_CATS);
+  const rows = info.map((e) => {
+    const desc = e.desc.map((d) => d[en ? 1 : 0]);
+    const all = envOpen.has(e.id) || desc.length <= ENV_SHOW + 1;
+    return `<div class="fit-slot fit-cloud-row fit-env-row"><span class="fit-env-cat">${catName[e.cat] || ''}</span><span class="fit-slot-name" translate="no">${app.esc(envName(e))}</span>
+    <span class="fit-env-state${e.active ? ' is-on' : ''}">${e.active ? '生效' : '不适用'}</span>
+    <span class="fit-cloud-skills fit-env-desc" translate="no">${(all ? desc : desc.slice(0, ENV_SHOW)).map((d) => `<span>${app.esc(d)}</span>`).join('')}${all ? '' : `<button type="button" class="link-btn" data-fit-env-more="${e.id}">另 ${desc.length - ENV_SHOW} 项</button>`}</span>
+    <button class="fit-remove" data-fit-env-remove="${e.id}" aria-label="移除">×</button></div>`;
+  }).join('');
+  const byCat = new Map(ENV_CATS.map(([k]) => [k, []]));
+  for (const e of F.data.env.values()) if (!chosen.has(e.id)) byCat.get(e.cat)?.push(e);
+  const options = ENV_CATS.filter(([k]) => byCat.get(k).length).map(([k, l]) => `<optgroup label="${l}">${byCat.get(k)
+    .sort((a, b) => envName(a).localeCompare(envName(b), en ? 'en' : 'zh')).map((e) => `<option value="${e.id}">${app.esc(envName(e))}</option>`).join('')}</optgroup>`).join('');
+  return `<section class="fit-slots"><h4>天象<span>${info.length ? `${info.length} 项 · 对所有装配生效` : '虫洞、风暴、泰坦天象发生器、主权升级、活动'}</span></h4>
+    ${rows}<div class="fit-slot is-empty"><select class="plain-select" data-fit-env-add aria-label="添加天象"><option value="">添加天象…</option>${options}</select></div></section>`;
+}
+function saveEnv(ids) {
+  FE.setEnv(ids);
+  app.store.setJSON(ENV_KEY, ids);
+  recompute();
+}
+function addEnv(id) {
+  const e = F.data.env.get(id);
+  if (!e) return;
+  const one = ENV_ONE[e.cat];
+  saveEnv([...FE.getEnv().filter((x) => { const o = F.data.env.get(x); return o && (!one || ENV_ONE[o.cat] !== one); }), id]);
+}
+
+// 舰队加成：舰队里别人开的指挥脉冲波（满技能；强度可选指挥舰 / 全部舰船里最强（旗舰）/ 普通船，前两档带心灵链接）
+// 本船自己开着、装了弹药的脉冲波也对自己生效；同一种加成只取最强的
+const FLEET_MODES = [['cs', '指挥舰'], ['max', '最强'], ['basic', '普通船']];
+const FLEET_MODE_TIP = { cs: '指挥舰 + 心灵链接，满技能（采矿、远征按能给的最强舰船）', max: '全部舰船里最强（多为旗舰）+ 心灵链接，满技能', basic: '没有舰船加成、不带心灵链接，满技能' };
+function fleetHtml() {
+  if (!F.data.dbuffs?.size) return '';
+  const list = FE.getFleet();
+  const own = F.fit.slots.high.filter((m) => m && m.charge && m.state === 'active' && type(m.type)?.group === FE.BURST_GROUP).length;
+  const rows = list.map(([c, mode], i) => {
+    const b = FE.fleetBoost(F.data, c, mode);
+    const by = b ? [type(b.ship)?.name, b.link && type(b.link)?.name].filter(Boolean).join(' + ') : '';
+    return `<div class="fit-slot fit-cloud-row fit-env-row"><img src="${IMG(c)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(type(c)?.name || '')}${by ? `<small title="按这艘船给的加成计算">${app.esc(by)}</small>` : ''}</span>
+    <div class="segmented fit-fleet-mode" role="group" aria-label="加成强度">${FLEET_MODES.map(([k, l]) => `<button type="button" data-fit-fleet-mode="${i}" data-v="${k}" class="${mode === k ? 'active' : ''}" title="${FLEET_MODE_TIP[k]}">${l}</button>`).join('')}</div>
+    <span class="fit-cloud-skills fit-env-desc" translate="no">${FE.buffText(F.data, b?.buffs || []).map((d) => `<span>${app.esc(d)}</span>`).join('')}</span>
+    <button class="fit-remove" data-fit-fleet-remove="${i}" aria-label="移除">×</button></div>`;
+  }).join('');
+  const chosen = new Set(list.map(([c]) => c));
+  const groups = new Map(FE.BURST_CHARGES.map((g) => [g, []]));
+  for (const t of F.data.types.values()) if (t.market && groups.has(t.group) && !chosen.has(t.id)) groups.get(t.group).push(t);
+  const options = [...groups].filter(([, l]) => l.length).map(([g, l]) => `<optgroup label="${app.esc(F.data.groups.get(g)?.name || '')}">${l.map((t) => `<option value="${t.id}">${app.esc(t.name)}</option>`).join('')}</optgroup>`).join('');
+  return `<section class="fit-slots"><h4>舰队加成<span>${own ? `本船开着 ${own} 个指挥脉冲波，也计入 · ` : ''}同种加成取最强</span></h4>
+    ${rows}<div class="fit-slot is-empty"><select class="plain-select" data-fit-fleet-add aria-label="添加指挥脉冲波加成"><option value="">添加指挥脉冲波加成…</option>${options}</select></div></section>`;
+}
+function saveFleet(list) {
+  FE.setFleet(list);
+  app.store.setJSON(FLEET_KEY, list);
+  recompute();
 }
 
 // 云计算技能的生效对象：写明了船级的按船级（不分种族），否则同船级
@@ -1283,6 +1358,10 @@ async function onMainClick(e) {
     return;
   }
   if ((x = el('[data-fit-drone-remove]'))) { F.fit.drones.splice(Number(x.dataset.fitDroneRemove), 1); recompute(); return; }
+  if ((x = el('[data-fit-fleet-remove]'))) { saveFleet(FE.getFleet().filter((_, i) => i !== Number(x.dataset.fitFleetRemove))); return; }
+  if ((x = el('[data-fit-fleet-mode]'))) { saveFleet(FE.getFleet().map((f, i) => (i === Number(x.dataset.fitFleetMode) ? [f[0], x.dataset.v] : f))); return; }
+  if ((x = el('[data-fit-env-remove]'))) { saveEnv(FE.getEnv().filter((id) => id !== Number(x.dataset.fitEnvRemove))); return; }
+  if ((x = el('[data-fit-env-more]'))) { envOpen.add(Number(x.dataset.fitEnvMore)); recompute(); return; }
   if ((x = el('[data-fit-cloud-remove]'))) { saveCloud(FE.cloudInfo(F.data, F.fit.ship).map((c) => c.ship.id).filter((id) => id !== Number(x.dataset.fitCloudRemove))); return; }
   if ((x = el('[data-fit-implant-remove]'))) { F.fit.implants = F.fit.implants.filter((id) => id !== Number(x.dataset.fitImplantRemove)); recompute(); return; }
   if ((x = el('[data-fit-skill]'))) {
@@ -1310,6 +1389,10 @@ async function onMainClick(e) {
 }
 
 function onMainChange(e) {
+  const fleet = e.target.closest('[data-fit-fleet-add]');
+  if (fleet && fleet.value) { saveFleet([...FE.getFleet(), [Number(fleet.value), 'cs']]); return; }
+  const env = e.target.closest('[data-fit-env-add]');
+  if (env && env.value) { addEnv(Number(env.value)); return; }
   const cloud = e.target.closest('[data-fit-cloud-add]');
   if (cloud && cloud.value) { saveCloud([...FE.cloudInfo(F.data, F.fit.ship).map((c) => c.ship.id), Number(cloud.value)]); return; }
   const open = e.target.closest('[data-fit-open]');
