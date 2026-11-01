@@ -16,3 +16,8 @@ desktop.ini
 eve-overview-clone/tools/ship-models/node_modules/
 eve-overview-clone/tools/ship-models/.cache/
 eve-overview-clone/ship-models/
+jks
+*.jks
+*.jks.b64
+*.ks.pass
+*.eve-tool*
