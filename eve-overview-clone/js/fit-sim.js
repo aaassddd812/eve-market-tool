@@ -7,9 +7,11 @@
 // 结果附胜负原因、ISK 交换比、距离 × 机动扫描与落后一方至少需要的船数；可设为对照比较改动前后，可生成分享链接。
 // 装配来源：击杀记录里这型船最近阵亡时最常见的装配（fit-kb.js commonFit）、当前装配、我的装配、游戏内保存的装配（ESI）、EFT 文本，或空船；
 // 点舰船打开装配详情：看槽位与属性，从本场 / 最近常见的几套装配和自己的装配里换一套。
-// 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失。
+// 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失；
+// 「AT 赛」（sim-at.js）可选这一届联盟锦标赛已打过的比赛，双方选手各一行带进来（蓝队 A 方、红队 B 方），战场上像比赛直播一样显示两队名单与血条。
 import { commonFit } from './fit-kb.js?v=v28';
-import { createBattle, simulate } from './sim-engine.js?v=v10';
+import { createBattle, simulate } from './sim-engine.js?v=v11';
+import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
 const $ = (id) => document.getElementById(id);
@@ -37,13 +39,14 @@ const AUTO = new Set(['battle', 'kb']);
 
 const S = {
   sides: { A: [], B: [] },
-  opt: { dist: 30, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, prop: false, max: 1800 },
+  opt: { dist: 30, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, prop: false, max: 1800, score: 'isk' },
   sideOpt: { A: sideDefaults(), B: sideDefaults() },   // 每方：技能（max / esi）、超载、指挥脉冲
   support: { A: [], B: [] },  // 每方预设的支援舰队 [{ id, name, rows, mode, ref, dist, dir, at }]
   esiSkills: null,            // 已绑定角色的技能 { name, levels }
   prices: null,               // 全服均价 Map
   sweep: null, base: null,    // 距离 × 机动扫描结果；对照（设为对照时的结果摘要）
   title: '', real: null,      // 来自会战：标题与实际损失 { A: Map(ship -> n), B }
+  teams: null,                // 来自 AT 赛：{ id: 比赛, win: 实际胜方 A|B, A: { id: 联盟, name }, B }
   back: '',                   // 来自战场统计时的地址（「返回战场统计」）
   result: null, seq: 0, adding: null, chart: 'ships',
   esi: { fits: null, loading: false, error: '' },   // 已绑定角色的游戏内装配
@@ -56,17 +59,20 @@ const SAVES_MAX = 20;
 
 export function initSim(context) {
   ctx = context;
+  initAt(ctx);
+  const q = ctx.store.getJSON(Q_KEY, null);
+  if (QUALITY.some(([v]) => v === q)) BT.quality = q;
   try {
     const saved = ctx.store.getJSON(KEY, null);
     if (saved) loadState(saved);
   } catch { /* 默认 */ }
 }
 
-const packRows = (list) => list.map(({ ship, count, src, fit, label, kills, killsOther, lead, move, cyno }) => ({ ship, count, src, kills, killsOther, fit: AUTO.has(src) ? null : fit, label: AUTO.has(src) ? '' : label, lead, move, cyno }));
+const packRows = (list) => list.map(({ ship, count, src, fit, label, kills, killsOther, lead, move, cyno, pilot, pilotId, flag, realDead, at }) => ({ ship, count, src, kills, killsOther, fit: AUTO.has(src) ? null : fit, label: AUTO.has(src) ? '' : label, lead, move, cyno, pilot, pilotId, flag, realDead, at }));
 const packFleets = (list) => list.map(({ rows, ...f }) => ({ ...f, rows: packRows(rows) }));
 const loadRows = (list) => (list || []).filter((r) => ctx.data.types.has(r.ship)).map((r) => ({ ...r, id: ++S.seq, status: r.fit ? 'ok' : 'idle' }));
 function packState() {
-  return { opt: S.opt, side: S.sideOpt, title: S.title, back: S.back, real: S.real ? { A: [...S.real.A], B: [...S.real.B] } : null, sides: { A: packRows(S.sides.A), B: packRows(S.sides.B) }, support: { A: packFleets(S.support.A), B: packFleets(S.support.B) } };
+  return { opt: S.opt, side: S.sideOpt, title: S.title, back: S.back, real: S.real ? { A: [...S.real.A], B: [...S.real.B] } : null, teams: S.teams, sides: { A: packRows(S.sides.A), B: packRows(S.sides.B) }, support: { A: packFleets(S.support.A), B: packFleets(S.support.B) } };
 }
 function loadState(st) {
   Object.assign(S.opt, st.opt || {});
@@ -81,6 +87,7 @@ function loadState(st) {
   S.title = st.title || '';
   S.back = st.back || '';
   S.real = st.real ? { A: new Map(st.real.A || []), B: new Map(st.real.B || []) } : null;
+  S.teams = st.teams || null;
 }
 function save() {
   ctx.store.setJSON(KEY, packState());
@@ -125,6 +132,7 @@ export function mountSim(el, preset = null, restored = false) {
     S.title = preset.title || '';
     S.back = preset.back || '';
     S.real = preset.real ? Object.fromEntries(SIDES.map((s) => [s, new Map(preset.real[s] || [])])) : null;
+    S.teams = null;
     const isShip = (r) => ctx.data.types.get(r.ship)?.category === ctx.FE.CAT.ship;
     const row = (r) => Object.assign(newRow(r.ship, r.count, r.kills?.length || r.killsOther?.length ? 'battle' : 'kb'), { kills: r.kills || [], killsOther: r.killsOther || [] });
     S.sides.A = preset.a.filter(isShip).map(row);
@@ -197,8 +205,8 @@ async function resolveRow(row) {
     // 本场阵亡装配：先看本方这型船在这场的损失，没有再看对方同型船的损失；都没有时退回最近常见装配
     let r = null, label = '';
     if (src === 'battle') {
-      if (row.kills?.length) { r = await loadKb(row.ship, row.kills); if (r) label = `本场阵亡装配 ×${r.n}`; }
-      if (!r && row.killsOther?.length) { r = await loadKb(row.ship, row.killsOther); if (r) label = `本场对方同型船装配 ×${r.n}`; }
+      if (row.kills?.length) { r = await loadKb(row.ship, row.kills); if (r) label = row.at ? '比赛实际装配' : `本场阵亡装配 ×${r.n}`; }
+      if (!r && row.killsOther?.length) { r = await loadKb(row.ship, row.killsOther); if (r) label = row.at ? `AT 同型船实际装配 ×${r.n}` : `本场对方同型船装配 ×${r.n}`; }
     }
     if (!r) { r = await loadKb(row.ship); if (r) label = src === 'battle' ? `本场没有阵亡 · 常见装配 ×${r.n}` : `常见装配 ×${r.n}`; }
     if (row.src !== src) return;
@@ -476,6 +484,44 @@ function iskOf(R) {
   return out;
 }
 
+// ---------- AT 得分 ----------
+// 联盟锦标赛规则：击毁对方的船得它的分值；同型船第 k 艘（从 0 数）的分值 = 基础分 + k × 重复加价，这里按同型船平均摊到每艘；
+// 一方派出的总分不到上限（200）时，差额算给对方；全歼对方直接获胜。分值表来自 at-data.json（server/build_at.py 从官方配队表格生成）。
+const SCORE_MODES = [['isk', '看战损'], ['at', 'AT 得分']];
+const AT = { points: null, limit: 200, loading: false };
+function atReady() {
+  if (AT.points) return true;
+  if (!AT.loading) {
+    AT.loading = true;
+    loadAtData().then((d) => { AT.points = new Map(Object.entries(d.points || {}).map(([k, v]) => [Number(k), v])); AT.limit = d.limit || 200; scoreChanged(); })
+      .catch(() => { AT.loading = false; ctx.showToast?.('AT 分值表读取失败，先按战损显示', 'error'); });
+  }
+  return false;
+}
+// fielded / lost：{ A: Map(船型 → 艘数), B }；返回 { A: 得分, B, field: { A, B }, miss: 不在分值表里的艘数 }
+function atScore(fielded, lost) {
+  const out = { A: 0, B: 0, field: { A: 0, B: 0 }, miss: 0 };
+  const avg = { A: new Map(), B: new Map() };
+  for (const s of SIDES) for (const [ship, n] of fielded[s]) {
+    const p = AT.points.get(ship);
+    if (!p) { out.miss += n; continue; }
+    out.field[s] += n * p[0] + p[1] * n * (n - 1) / 2;
+    avg[s].set(ship, p[0] + p[1] * (n - 1) / 2);
+  }
+  for (const s of SIDES) {
+    const o = s === 'A' ? 'B' : 'A';
+    for (const [ship, n] of lost[o]) out[s] += n * (avg[o].get(ship) || 0);
+    out[s] += Math.max(0, AT.limit - out.field[o]);
+    out[s] = Math.round(out[s]);
+  }
+  return out;
+}
+const tally = (list) => { const m = new Map(); for (const [ship, n] of list) if (n) m.set(ship, (m.get(ship) || 0) + n); return m; };
+function scoreChanged() {
+  renderVerdict();
+  if (BT.b) { if (root?.querySelector('#simSb')) { $('simSb').innerHTML = scoreHtml(); } updateBattleUi(); }
+}
+
 // ---------- 胜负原因 ----------
 const pct = (x) => `${Math.round(x * 100)}%`;
 function sideFacts(R, s) {
@@ -600,7 +646,12 @@ const simOpt = (extra = {}) => ({ ...S.opt, anchors: anchors(), value: S.prices 
 // ---------- 战场（3D 实时）----------
 // 设置一改就重新布阵（不开打）；「开战」后按所选速度实时推进，3D 视图读引擎的逐帧记录；打完显示结果，之后可拖动时间轴回放。
 // 战斗中：增援（本方舰船或搜索其他船型，落在本方出发点）、点一艘船让对面点名集火（整方一起打，打死后恢复自动选目标）。
-const BT = { b: null, view: null, host: null, t: 0, playing: false, speed: 2, sel: -1, raf: 0, last: 0, hud: 0, reinf: null, edit: null, finishing: false, want3d: false, names: true };
+// 3D 画质：自动（网页默认：先按高画质画，持续卡顿就自动降到低画质）/ 高 / 低；桌面版默认高画质并自动加载 3D
+const DESKTOP = Boolean(window.__EVE_DESKTOP__);
+const Q_KEY = 'eve-sim-quality';
+const QUALITY = [['auto', '自动'], ['high', '高'], ['low', '低']];
+const BT = { b: null, view: null, host: null, t: 0, playing: false, speed: 2, sel: -1, raf: 0, last: 0, hud: 0, reinf: null, edit: null, finishing: false, want3d: DESKTOP, names: true,
+  quality: DESKTOP ? 'high' : 'auto', director: false };
 const SPEEDS = [1, 2, 5, 10];
 let plotX = null;   // 走势图的时间 → 横坐标（回放位置线用）
 const shipName = (id) => ctx.data.types.get(id)?.name || '';
@@ -612,7 +663,7 @@ function newBattle() {
   // 预设了进场时间的支援舰队交给引擎按时进场
   const support = SIDES.flatMap((s) => S.support[s].filter((f) => f.at != null).map((f) => ({ side: s, ...fleetSpec(f), at: f.at })));
   endPlace();
-  resetPanel($('simBtPanel'));
+  resetRoster();
   BT.b = createBattle(S.sides, simOpt({ record: true, support }));
   Object.assign(BT, { t: 0, playing: false, sel: -1, finishing: false });
   S.result = null;
@@ -626,16 +677,25 @@ function renderBattle() {
     disposeView();
     box.innerHTML = `<section class="sim-battle" id="simBtSec">
       <div class="sim-sec-head"><h4>战场</h4><span class="sim-bt-status" id="simBtStatus"></span></div>
-      <div class="sim-3d${BT.want3d ? '' : ' is-off'}" id="sim3d">
-        <div class="sim-3d-hud"><span class="a"><span class="sim-badge">A 方</span><b id="simBtA"></b></span><b class="sim-3d-clock" id="simBtClock"></b><span class="b"><b id="simBtB"></b><span class="sim-badge sim-side-b">B 方</span></span></div>
-        <div class="sim-3d-off"><button type="button" class="btn btn-primary btn-sm" data-bt-3d>加载 3D 画面</button><small>要下载舰船模型，不加载也能开战、看结果</small></div>
-        <div class="sim-3d-tools"><button type="button" data-bt-cam title="重置视角" aria-label="重置视角">${ICON.cam}</button><button type="button" data-bt-full title="全屏" aria-label="全屏">${ICON.full}</button><button type="button" data-bt-names class="${BT.names ? 'on' : ''}" title="显示舰船名" aria-label="显示舰船名" aria-pressed="${BT.names}">${ICON.names}</button></div>
-        <div class="sim-3d-load" id="simBtLoad" hidden><span>加载 3D 画面</span><i><b></b></i><small></small></div>
-        <div class="sim-3d-tip" id="simBtTip" hidden></div>
-        <div class="sim-3d-place" id="simBtPlace" hidden><span></span><button type="button" class="btn btn-ghost btn-sm" data-bt-place-cancel>取消</button></div>
-        <div class="sim-3d-sel" id="simBtSel" hidden></div>
-        <div class="sim-3d-panel" id="simBtPanel"></div>
-        <p class="sim-3d-fail" hidden>这个浏览器不支持 3D（WebGL），只能直接看结果</p>
+      <div class="sim-stage${BT.want3d ? '' : ' is-off'}" id="simStage">
+        <div class="sim-sb" id="simSb">${scoreHtml()}</div>
+        <div class="sim-3d${BT.want3d ? '' : ' is-off'}" id="sim3d">
+          <div class="sim-3d-off"><button type="button" class="btn btn-primary btn-sm" data-bt-3d>加载 3D 画面</button><small>要下载舰船模型，不加载也能开战、看结果</small></div>
+          <div class="sim-3d-tools">
+            <button type="button" data-bt-dir class="${BT.director ? 'on' : ''}" title="导播镜头：自动环绕战场，有船被击毁时切过去" aria-label="导播镜头" aria-pressed="${BT.director}">${ICON.dir}</button>
+            <button type="button" data-bt-names class="${BT.names ? 'on' : ''}" title="显示名字与血条" aria-label="显示名字与血条" aria-pressed="${BT.names}">${ICON.names}</button>
+            <button type="button" data-bt-cam title="重置视角" aria-label="重置视角">${ICON.cam}</button>
+            <button type="button" data-bt-full title="全屏" aria-label="全屏">${ICON.full}</button>
+          </div>
+          <div class="sim-feed" id="simBtFeed"></div>
+          <div class="sim-3d-load" id="simBtLoad" hidden><span>加载 3D 画面</span><i><b></b></i><small></small></div>
+          <div class="sim-3d-tip" id="simBtTip" hidden></div>
+          <div class="sim-3d-place" id="simBtPlace" hidden><span></span><button type="button" class="btn btn-ghost btn-sm" data-bt-place-cancel>取消</button></div>
+          <div class="sim-3d-sel" id="simBtSel" hidden></div>
+          <p class="sim-3d-fail" hidden>这个浏览器不支持 3D（WebGL），只能直接看结果</p>
+        </div>
+        <div class="sim-rs sim-rs-a" id="simRsA"></div>
+        <div class="sim-rs sim-rs-b" id="simRsB"></div>
       </div>
       <div class="sim-bt-ctl">
         <button type="button" class="btn btn-primary btn-sm" data-bt-play></button>
@@ -643,11 +703,12 @@ function renderBattle() {
         <div class="sim-bt-seek"><input type="range" min="0" max="0" step="0.5" value="0" data-bt-seek aria-label="战斗时间"><span id="simBtTime"></span></div>
         <button type="button" class="btn btn-ghost btn-sm" data-bt-finish title="不看过程，直接算到结束">直接出结果</button>
         <button type="button" class="btn btn-ghost btn-sm" data-bt-restart title="回到开局（手动进场的支援与点名清空）">重新开始</button>
+        <label class="sim-bt-q" title="自动：画面卡顿时自动降低画质（低画质不画星云、按 1 倍像素渲染）"><span>画质</span><select class="plain-select" data-bt-quality>${QUALITY.map(([v, l]) => `<option value="${v}"${BT.quality === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       </div>
       <div class="sim-bt-reinf"><button type="button" class="btn btn-ghost btn-sm" data-bt-reinf="A">A 方舰队支援</button><button type="button" class="btn btn-ghost btn-sm" data-bt-reinf="B">B 方舰队支援</button></div>
       <div class="sim-bt-pop" id="simBtPop" hidden></div>
       <div class="sim-bt-log" id="simBtLog"></div>
-      <p class="sim-hint">拖动旋转 · 滚轮或双指缩放 · 右键或双指拖动平移 · 点舰船查看并点名集火 · 双击舰船镜头跟随 · 全屏时下方显示双方舰船状态</p>
+      <p class="sim-hint">拖动旋转 · 滚轮或双指缩放 · 右键或双指拖动平移 · 点舰船或两边名单查看并点名集火 · 双击舰船镜头跟随 · 导播镜头自动跟拍击毁</p>
     </section>`;
     BT.host = box.querySelector('#sim3d');
     if (BT.want3d) mountView(BT.host);
@@ -659,8 +720,9 @@ function renderBattle() {
 function mountView(host) {
   BT.host = host;
   host.classList.remove('is-off');
+  host.closest('.sim-stage')?.classList.remove('is-off');
   loadBar(0, 0);
-  import('./sim-3d.js?v=v9').then((m) => {
+  import('./sim-3d.js?v=v11').then((m) => {
     if (BT.host !== host || !host.isConnected) return;
     BT.view = m.createView(host, {
       onPick: (i) => { BT.sel = i; updateBattleUi(); },
@@ -670,20 +732,27 @@ function mountView(host) {
         if (!tip) return;
         if (i < 0 || !BT.b) { tip.hidden = true; return; }
         const u = BT.b.rec.units[i];
-        tip.textContent = `${u.side} 方 · ${shipName(u.ship)}`;
+        tip.textContent = pilotOf(i) ? `${u.side} 方 · ${pilotOf(i)} · ${shipName(u.ship)}` : `${u.side} 方 · ${shipName(u.ship)}`;
         tip.style.left = x + 12 + 'px';
         tip.style.top = y + 12 + 'px';
         tip.hidden = false;
       },
       onProgress: loadBar,
-      nameOf: (i) => shipName(BT.b?.rec.units[i]?.ship)
-    });
+      nameOf: unitName,
+      onDirector: (on) => { BT.director = on; syncTool('dir', on); },
+      onQuality: () => ctx.showToast('3D 画面较卡，已自动降低画质（可在「画质」里改回）', 'info', 4000)
+    }, { quality: BT.quality });
     if (!BT.view) { host.querySelector('.sim-3d-fail').hidden = false; loadBar(1, 1); return; }
     BT.view.setRecord(BT.b.rec);
     BT.view.setLabels(BT.names);
+    BT.view.setDirector(BT.director);
   }).catch(() => { host.querySelector('.sim-3d-fail').hidden = false; loadBar(1, 1); });
 }
 // 模型加载进度：total 为 0 时是 3D 引擎本身还在加载
+function syncTool(name, on) {
+  const b = root?.querySelector(`[data-bt-${name}]`);
+  if (b) { b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); }
+}
 function loadBar(done, total) {
   const el = $('simBtLoad');
   if (!el) return;
@@ -810,7 +879,7 @@ function targetText(f, i) {
   const tg = f.tg[i] >= 0 ? BT.b.rec.units[f.tg[i]] : null;
   if (!tg) return { text: '没有目标', lock: -1 };
   const lk = f.lk?.[i] || 255;
-  return { text: lk < 255 ? `锁定中 ${Math.round(lk / 2)}% · ${shipName(tg.ship)}` : `目标：${shipName(tg.ship)}`, lock: lk < 255 ? lk / 200 : -1 };
+  return { text: lk < 255 ? `锁定中 ${Math.round(lk / 2)}% · ${unitName(f.tg[i])}` : `目标：${unitName(f.tg[i])}`, lock: lk < 255 ? lk / 200 : -1 };
 }
 function paintTarget(el, f, i) {
   const x = el.querySelector('.sim-pn-tg');
@@ -845,117 +914,175 @@ function liveLoss() {
   out.B.eff = total ? out.A.v / total : null;
   return out;
 }
-// 全屏时的舰船状态面板：中间是实时战损比，两边是双方在场的船（小卡片，滑动查看）。
-// 卡片按船增删（不整块重画），只刷新滑到可见区域里的卡片，船多也不卡。
-// 每张卡片缓存要改的节点和上次写入的值，值没变不碰 DOM
-const PN = { cards: new Map(), seen: new Set(), io: null, built: false, at: 0 };
-function cardEl(i) {
-  const u = BT.b.rec.units[i];
-  const el = document.createElement('div');
-  el.className = 'sim-pn-ship';
-  el.dataset.btUnit = i;
-  el.innerHTML = `<div class="sim-pn-top"><img src="${IMG(u.ship)}" alt="" width="16" height="16" loading="lazy"><b>${ctx.esc(shipName(u.ship))}</b><span class="sim-pn-v"></span></div>${tgHtml()}${hpBarsHtml()}<div class="sim-pn-mods">${modsHtml(u)}</div>`;
-  const tg = el.querySelector('.sim-pn-tg');
-  return { el, v: el.querySelector('.sim-pn-v'), bars: [...el.querySelectorAll('.sim-hp b')], tg, tgText: tg.firstChild, tgBar: tg.querySelector('b'),
-    mods: [...el.querySelectorAll('.sim-pn-mod')].map((x) => ({ x, k: Number(x.dataset.k), cls: '', p: '' })), last: {}, sel: false };
+// ---------- 直播式比分条与双方名单（像 AT 比赛直播）----------
+// 比分条：两队（AT 赛显示队标、队名），中间是时间；按胜负方式显示存活与击毁价值、战损效率，或 AT 得分（见 paintScore）。
+// 名单在 3D 画面两边（窄屏 / 没加载 3D 时在下方）：一方不超过 RS_SOLO 艘时每艘一行（选手名或船名 + 护盾 / 装甲 / 结构三条血条，
+// 阵亡变灰划掉；没有选手名时超过 RS_PLAIN 艘就合并），更多时按船型合并成一行（存活 / 总数 + 存活船的平均血量）。点一行选中那艘船（合并行选第一艘还活着的）。
+// 每行缓存节点和上次写入的值，值没变不碰 DOM；击杀播报（谁击毁了谁）浮在画面上方。
+// 名字下面一排小图标：这艘船此刻正受到的电子战（红底，装备图标）和遥修（绿底），和 AT 直播一样。
+const RS_SOLO = 24, RS_PLAIN = 10;
+const RS = { n: -1, rows: [], head: {} };
+const EW_ORDER = ['scram', 'point', 'web', 'neut', 'nos', 'ecm', 'damp', 'paint', 'rs', 'ra', 'rh'];
+const EW_NAME = { scram: '跃迁扰频', point: '跃迁扰断', web: '停滞网', neut: '能量中和', nos: '能量吸取', ecm: 'ECM 干扰', damp: '感应抑阻', paint: '目标标记', rs: '护盾遥修', ra: '装甲遥修', rh: '结构遥修' };
+// 这一帧每艘船受到的电子战 / 遥修：目标序号 → Map(类别 → 装备类型)
+function incoming(rec, f) {
+  const out = new Map();
+  const put = (j, kind, type) => { if (j == null || j < 0) return; const m = out.get(j) || out.set(j, new Map()).get(j); if (!m.has(kind)) m.set(kind, type); };
+  if (!f.act) return out;
+  rec.units.forEach((u, i) => {
+    if (!u.ew?.length || !f.act[i] || i * 3 >= f.hp.length || f.hp[i * 3 + 2] <= 0) return;
+    for (const [m, kind] of u.ew) if (kind[0] !== 'r' && f.act[i] & (1 << m)) put(f.tg[i], kind, u.rack[m]?.type);
+  });
+  const rr = f.rr || [];
+  for (let x = 0; x < rr.length; x += 3) { const u = rec.units[rr[x]]; const kind = u.ew?.find((y) => y[0] === rr[x + 2])?.[1]; if (kind) put(rr[x + 1], kind, u.rack[rr[x + 2]]?.type); }
+  return out;
+}
+let rowMap = null;   // 行 id → 舰船行（引擎记录里每艘船只有行 id）
+function rowById(id) {
+  if (!rowMap?.has(id)) {
+    rowMap = new Map();
+    for (const s of SIDES) for (const r of [...S.sides[s], ...fleetRows(s)]) rowMap.set(r.id, r);
+    if (!rowMap.has(id)) rowMap.set(id, null);
+  }
+  return rowMap.get(id);
+}
+const pilotOf = (i) => { const u = BT.b?.rec.units[i]; return (u && rowById(u.row)?.pilot) || ''; };
+const unitName = (i) => pilotOf(i) || shipName(BT.b?.rec.units[i]?.ship);
+// 选手名不翻译，船名照常翻译
+const nameHtml = (i, cls = '') => { const p = pilotOf(i); return `<b${cls ? ` class="${cls}"` : ''}${p ? ' translate="no"' : ''}>${ctx.esc(p || shipName(BT.b.rec.units[i].ship))}</b>`; };
+const teamName = (s) => S.teams?.[s]?.name || '';
+function resetRoster() { RS.n = -1; RS.rows = []; rowMap = null; }
+function scoreHtml() {
+  const team = (s) => {
+    const t = S.teams?.[s];
+    return `<div class="sim-sb-team ${s.toLowerCase()}">
+      ${t?.id ? `<img src="https://images.evetech.net/alliances/${t.id}/logo?size=64" alt="" width="34" height="34">` : `<span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span>`}
+      <div class="sim-sb-name">${t ? `<b translate="no" title="${ctx.esc(t.name)}">${ctx.esc(t.name)}</b>` : ''}<small class="v"></small></div>
+      <strong id="simBt${s}"></strong></div>`;
+  };
+  return `${team('A')}<div class="sim-sb-mid"><b class="sim-sb-clock" id="simBtClock"></b><div class="sim-sb-bar"><i class="a"></i><i class="b"></i></div><small class="sim-sb-pct"><span class="pa"></span><span class="m"></span><span class="pb"></span></small></div>${team('B')}`;
+}
+function buildRoster() {
+  const rec = BT.b.rec;
+  RS.n = rec.units.length;
+  RS.rows = [];
+  for (const s of SIDES) {
+    const box = $('simRs' + s);
+    if (!box) continue;
+    const ids = [];
+    rec.units.forEach((u, i) => { if (u.side === s) ids.push(i); });
+    const solo = ids.length <= (ids.some((i) => rowById(rec.units[i].row)?.pilot) ? RS_SOLO : RS_PLAIN);
+    let groups = ids.map((i) => [i]);
+    if (!solo) {
+      const m = new Map();
+      for (const i of ids) { const k = rec.units[i].ship; (m.get(k) || m.set(k, []).get(k)).push(i); }
+      groups = [...m.values()].sort((a, b) => b.length - a.length);
+    }
+    box.innerHTML = `<header><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span>${teamName(s) ? `<b translate="no">${ctx.esc(teamName(s))}</b>` : ''}<small class="n"></small></header>
+      <div class="sim-rs-list">${groups.map((g) => {
+        const i = g[0], u = rec.units[i], row = rowById(u.row);
+        const sub = solo ? (row?.pilot ? `<small>${ctx.esc(shipName(u.ship))}</small>` : '') : '<small class="c"></small>';
+        return `<div class="sim-rs-row" data-bt-unit="${i}"><img src="${IMG(u.ship)}" alt="" width="28" height="28" loading="lazy">
+          <div class="sim-rs-main"><span>${solo ? nameHtml(i) : `<b>${ctx.esc(shipName(u.ship))}</b>`}${solo && row?.flag ? '<em title="AT 旗舰">★</em>' : ''}</span>${sub}<span class="sim-rs-ew"></span></div>
+          <div class="sim-rs-hp"><i class="sh"><b></b></i><i class="ar"><b></b></i><i class="hu"><b></b></i></div></div>`;
+      }).join('')}</div>`;
+    box.querySelectorAll('.sim-rs-row').forEach((el, k) => RS.rows.push({ el, units: groups[k], bars: [...el.querySelectorAll('.sim-rs-hp b')], c: el.querySelector('.c'), ew: el.querySelector('.sim-rs-ew'), last: {} }));
+    RS.head[s] = box.querySelector('header .n');
+  }
 }
 const setText = (c, key, node, v) => { if (c.last[key] !== v) { c.last[key] = v; node.textContent = v; } };
 const setWidth = (c, key, node, v) => { if (c.last[key] !== v) { c.last[key] = v; node.style.width = v; } };
-function paintCard(c, f, i) {
-  setText(c, 'v', c.v, speedText(f, i));
-  for (let k = 0; k < 3; k++) setWidth(c, 'h' + k, c.bars[k], (f.hp[i * 3 + k] / 2).toFixed(0) + '%');
-  setWidth(c, 'cp', c.bars[3], ((f.cp?.[i] || 0) / 2).toFixed(0) + '%');
-  const g = targetText(f, i);
-  setText(c, 'tg', c.tgText, g.text);
-  const locking = g.lock >= 0;
-  if (c.last.locking !== locking) { c.last.locking = locking; c.tg.classList.toggle('locking', locking); }
-  setWidth(c, 'lk', c.tgBar, locking ? (g.lock * 100).toFixed(0) + '%' : '0');
-  const act = f.act?.[i] || 0, rld = f.rld?.[i] || 0, rack = BT.b.rec.units[i].rack;
-  for (const m of c.mods) {
-    const re = m.k < 32 && Boolean(rld & (1 << m.k)), on = !re && m.k < 32 && Boolean(act & (1 << m.k));
-    const cls = re ? 'rld' : on ? 'on' : '';
-    if (m.cls !== cls) { if (m.cls) m.x.classList.remove(m.cls); if (cls) m.x.classList.add(cls); m.cls = cls; }
-    if (cls) {
-      const p = (modProgress(i, m.k, rack[m.k].cycle, rack[m.k].reload, re).p * 100).toFixed(0) + '%';
-      if (m.p !== p) { m.p = p; m.x.style.setProperty('--p', p); }
+const setClass = (c, key, on) => { if (c.last[key] !== on) { c.last[key] = on; c.el.classList.toggle(key, on); } };
+function paintRoster(f) {
+  const rec = BT.b.rec, nU = f.hp.length / 3;
+  if (!$('simRsA')) return;
+  if (RS.n !== rec.units.length || (RS.rows[0] && !RS.rows[0].el.isConnected)) buildRoster();
+  const cnt = { A: [0, 0], B: [0, 0] };
+  const ewIn = incoming(rec, f);
+  for (const r of RS.rows) {
+    let alive = 0, total = 0, first = -1;
+    const hp = [0, 0, 0];
+    for (const i of r.units) {
+      if (i >= nU) continue;   // 这个时刻还没进场
+      total++;
+      const gone = rec.units[i].escaped != null && BT.t >= rec.units[i].escaped;
+      if (f.hp[i * 3 + 2] > 0 && !gone) { alive++; for (let k = 0; k < 3; k++) hp[k] += f.hp[i * 3 + k]; if (first < 0) first = i; }
     }
-  }
-}
-function resetPanel(box) {
-  PN.io?.disconnect();
-  PN.cards.clear();
-  PN.seen.clear();
-  PN.built = false;
-  if (box) box.innerHTML = '';
-}
-function buildPanel(box) {
-  resetPanel(box);
-  box.innerHTML = `<div class="sim-pn-score">
-      <div class="sim-pn-lost a"><span class="sim-badge">A 方</span><span>损失</span><b class="n"></b><small class="v"></small></div>
-      <div class="sim-pn-ratio"><div class="sim-pn-pct"><b class="pa"></b><span>战损比</span><b class="pb"></b></div><div class="sim-pn-bar"><i class="a"></i><i class="b"></i></div></div>
-      <div class="sim-pn-lost b"><small class="v"></small><b class="n"></b><span>损失</span><span class="sim-badge sim-side-b">B 方</span></div>
-    </div>${SIDES.map((s) => `<div class="sim-pn-side sim-pn-${s.toLowerCase()}"><header><span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span><small class="sim-pn-n"></small></header><div class="sim-pn-list" data-side="${s}"></div></div>`).join('')}`;
-  PN.io = new IntersectionObserver((list) => { for (const e of list) { const i = Number(e.target.dataset.btUnit); if (e.isIntersecting) PN.seen.add(i); else PN.seen.delete(i); } });
-  PN.built = true;
-}
-function updatePanel(f) {
-  const box = $('simBtPanel');
-  const sec = $('simBtSec');
-  if (!box || !sec) return;
-  if (document.fullscreenElement !== sec) { if (PN.built) resetPanel(box); return; }
-  if (!PN.built || !box.firstChild) buildPanel(box);
-  // 播放时面板每 0.3 秒刷新一次（比血条等 HUD 慢一点）
-  const now = performance.now();
-  if (BT.playing && now - PN.at < 300) return;
-  PN.at = now;
-  const rec = BT.b.rec;
-  const list = { A: [], B: [] };
-  for (let i = 0; i < f.hp.length / 3; i++) if (f.hp[i * 3 + 2] && !(rec.units[i].escaped != null && BT.t >= rec.units[i].escaped)) list[rec.units[i].side].push(i);
-  // 增删卡片：阵亡 / 撤离的移除，新进场的按顺序插入
-  const want = new Set([...list.A, ...list.B]);
-  for (const [i, c] of PN.cards) if (!want.has(i)) { PN.io.unobserve(c.el); c.el.remove(); PN.cards.delete(i); PN.seen.delete(i); }
-  for (const s of SIDES) {
-    const host = box.querySelector(`.sim-pn-list[data-side="${s}"]`);
-    let prev = null;
-    for (const i of list[s]) {
-      let c = PN.cards.get(i);
-      if (!c) {
-        c = cardEl(i);
-        PN.cards.set(i, c);
-        host.insertBefore(c.el, prev ? prev.nextSibling : host.firstChild);
-        PN.io.observe(c.el);
-      }
-      prev = c.el;
+    const side = rec.units[r.units[0]].side;
+    cnt[side][0] += alive;
+    cnt[side][1] += total;
+    for (let k = 0; k < 3; k++) setWidth(r, 'h' + k, r.bars[k], (alive ? hp[k] / alive / 2 : 0).toFixed(0) + '%');
+    if (r.c) setText(r, 'c', r.c, `${alive} / ${total}`);
+    setClass(r, 'dead', total > 0 && !alive);
+    setClass(r, 'wait', !total);
+    setClass(r, 'sel', r.units.includes(BT.sel));
+    setClass(r, 'called', r.units.includes(f.pa) || r.units.includes(f.pb));
+    const got = new Map();
+    for (const i of r.units) for (const [k, type] of ewIn.get(i) || []) if (!got.has(k)) got.set(k, type);
+    const key = EW_ORDER.filter((k) => got.has(k)).join();
+    if (r.last.ew !== key) {
+      r.last.ew = key;
+      r.ew.innerHTML = EW_ORDER.filter((k) => got.has(k)).map((k) => `<i class="${k[0] === 'r' ? 'rep' : ''}" title="${EW_NAME[k]}${got.get(k) ? ' · ' + ctx.esc(shipName(got.get(k))) : ''}"><img src="${IMG(got.get(k) || 0)}" alt="${EW_NAME[k]}" width="16" height="16"></i>`).join('');
     }
-    box.querySelector(`.sim-pn-${s.toLowerCase()} .sim-pn-n`).textContent = `${list[s].length} 艘`;
+    const pick = String(first >= 0 ? first : r.units[0]);
+    if (r.el.dataset.btUnit !== pick) r.el.dataset.btUnit = pick;
   }
-  // 战损比
-  const loss = liveLoss();
-  for (const s of SIDES) {
-    const el = box.querySelector(`.sim-pn-lost.${s.toLowerCase()}`);
-    el.querySelector('.n').textContent = `${loss[s].n} 艘`;
-    el.querySelector('.v').textContent = loss.isk ? `${ctx.formatISK(loss[s].v)} ISK` : `${ctx.formatISK(loss[s].v)} EHP`;
+  for (const s of SIDES) if (RS.head[s]) RS.head[s].textContent = `${cnt[s][0]} / ${cnt[s][1]}`;
+}
+function paintScore() {
+  const box = $('simSb');
+  if (!box) return;
+  const { n, all } = aliveAt(BT.t);
+  const q = (sel) => box.querySelector(sel);
+  // 比分条：看战损时大数字是存活 / 总数、队名下是击毁对方的价值，中间是双方效率；AT 得分时大数字是得分、队名下是击毁艘数与存活
+  let share = null, pa = '—', pb = '—';
+  if (S.opt.score === 'at' && atReady()) {
+    const units = BT.b.rec.units, lost = { A: new Map(), B: new Map() };
+    for (const k of BT.b.kills) if (k.at <= BT.t) lost[k.side].set(k.ship, (lost[k.side].get(k.ship) || 0) + 1);
+    const sc = atScore({ A: tally(units.filter((u) => u.side === 'A').map((u) => [u.ship, 1])), B: tally(units.filter((u) => u.side === 'B').map((u) => [u.ship, 1])) }, lost);
+    for (const s of SIDES) {
+      const o = s === 'A' ? 'B' : 'A', kills = [...lost[o].values()].reduce((x, y) => x + y, 0);
+      $('simBt' + s).textContent = sc[s];
+      q(`.sim-sb-team.${s.toLowerCase()} .v`).textContent = `击毁 ${kills} 艘 · 存活 ${n[s]} / ${all[s]}`;
+    }
+    if (sc.A + sc.B) { share = sc.A / (sc.A + sc.B); pa = `${sc.A} 分`; pb = `${sc.B} 分`; }
+    q('.sim-sb-pct .m').textContent = 'AT 得分';
+  } else {
+    const loss = liveLoss();
+    for (const s of SIDES) {
+      const o = s === 'A' ? 'B' : 'A';
+      $('simBt' + s).textContent = `${n[s]} / ${all[s]}`;
+      q(`.sim-sb-team.${s.toLowerCase()} .v`).textContent = loss[o].n ? `击毁 ${ctx.formatISK(loss[o].v)} ${loss.isk ? 'ISK' : 'EHP'}` : '';
+    }
+    share = loss.A.eff;
+    if (share != null) { pa = `${Math.round(share * 100)}%`; pb = `${100 - Math.round(share * 100)}%`; }
+    q('.sim-sb-pct .m').textContent = '战损效率';
   }
-  const ea = loss.A.eff;
-  box.querySelector('.sim-pn-pct .pa').textContent = ea == null ? '—' : `${Math.round(ea * 100)}%`;
-  box.querySelector('.sim-pn-pct .pb').textContent = ea == null ? '—' : `${100 - Math.round(ea * 100)}%`;
-  box.querySelector('.sim-pn-bar .a').style.flexGrow = ea == null ? 1 : ea;
-  box.querySelector('.sim-pn-bar .b').style.flexGrow = ea == null ? 1 : 1 - ea;
-  box.querySelector('.sim-pn-bar').classList.toggle('none', ea == null);
-  // 只刷新看得见的卡片
-  for (const [i, c] of PN.cards) {
-    const sel = BT.sel === i;
-    if (c.sel !== sel) { c.sel = sel; c.el.classList.toggle('sel', sel); }
-    if (PN.seen.has(i)) paintCard(c, f, i);
-  }
+  q('.sim-sb-pct .pa').textContent = pa;
+  q('.sim-sb-pct .pb').textContent = pb;
+  q('.sim-sb-bar .a').style.flexGrow = share == null ? 1 : share;
+  q('.sim-sb-bar .b').style.flexGrow = share == null ? 1 : 1 - share;
+  q('.sim-sb-bar').classList.toggle('none', share == null);
+}
+// 击杀播报：最近 15 秒内的最多 5 条，「击毁者 → 被击毁」，颜色是击毁方
+function paintFeed() {
+  const box = $('simBtFeed');
+  if (!box) return;
+  const ks = BT.b.kills.filter((k) => k.at <= BT.t && BT.t - k.at < 15).slice(-5);
+  const key = ks.map((k) => k.unit).join(',');
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  const units = BT.b.rec.units;
+  box.innerHTML = ks.map((k) => {
+    const by = k.by >= 0 ? units[k.by] : null;
+    return `<div class="sim-feed-k ${(by?.side || (k.side === 'A' ? 'B' : 'A')).toLowerCase()}">${by ? `${nameHtml(k.by)}<img src="${IMG(by.ship)}" alt="" width="20" height="20">` : ''}<i>${ICON.kill}</i><img src="${IMG(k.ship)}" alt="" width="20" height="20">${nameHtml(k.unit, 'v')}</div>`;
+  }).join('');
 }
 function updateBattleUi() {
   const b = BT.b;
   const box = root?.querySelector('.sim-battle');
   if (!b || !box) return;
-  const { n, all, f } = aliveAt(BT.t);
-  $('simBtA').textContent = `${n.A} / ${all.A}`;
-  $('simBtB').textContent = `${n.B} / ${all.B}`;
+  const { f } = aliveAt(BT.t);
   $('simBtClock').textContent = clock(BT.t);
   const live = !b.done && BT.t >= b.t - 0.6;   // 引擎每步 0.5 秒，播放位置落后不到一步算实时
   $('simBtStatus').textContent = BT.finishing ? '计算中…' : b.done ? (BT.t < b.t ? '回放中' : '战斗结束') : !b.t ? '已布阵，点「开战」' : BT.playing ? (live ? '交战中' : '回放中') : '已暂停';
@@ -985,7 +1112,7 @@ function updateBattleUi() {
     const key = [i, alive, isPrimary, canCall, fol, gone].join('|');
     if (sel.dataset.key !== key) {
       sel.dataset.key = key;
-      sel.innerHTML = `<div class="sim-3d-sel-head"><span class="sim-badge${u.side === 'B' ? ' sim-side-b' : ''}">${u.side} 方</span><img src="${IMG(u.ship)}" alt="" width="22" height="22"><b>${ctx.esc(shipName(u.ship))}</b><button type="button" class="sim-3d-x" data-bt-unsel aria-label="关闭">${ICON.x}</button></div>
+      sel.innerHTML = `<div class="sim-3d-sel-head"><span class="sim-badge${u.side === 'B' ? ' sim-side-b' : ''}">${u.side} 方</span><img src="${IMG(u.ship)}" alt="" width="22" height="22">${nameHtml(i)}${pilotOf(i) ? `<small>${ctx.esc(shipName(u.ship))}</small>` : ''}<button type="button" class="sim-3d-x" data-bt-unsel aria-label="关闭">${ICON.x}</button></div>
         ${alive ? `${hpBarsHtml()}
         <small class="sim-3d-tg"><span class="sim-pn-v"></span></small>${tgHtml()}
         ${u.rack.length ? `<div class="sim-pn-mods">${modsHtml(u)}</div>` : ''}
@@ -999,7 +1126,9 @@ function updateBattleUi() {
     paintMods(sel, f, i, true);
     sel.hidden = false;
   } else sel.hidden = true;
-  updatePanel(f);
+  paintRoster(f);
+  paintScore();
+  paintFeed();
   // 事件
   const badge = (s) => `<span class="sim-badge${s === 'B' ? ' sim-side-b' : ''}">${s} 方</span>`;
   const ev = [
@@ -1180,9 +1309,10 @@ function onBattleClick(e) {
   if (el('[data-bt-finish]')) { finishNow(); return true; }
   if (el('[data-bt-restart]')) { newBattle(); renderResult(); return true; }
   if (el('[data-bt-3d]')) { BT.want3d = true; if (BT.host) mountView(BT.host); return true; }
-  { const nb = el('[data-bt-names]'); if (nb) { BT.names = !BT.names; nb.classList.toggle('on', BT.names); nb.setAttribute('aria-pressed', BT.names); BT.view?.setLabels(BT.names); return true; } }
+  if (el('[data-bt-names]')) { BT.names = !BT.names; syncTool('names', BT.names); BT.view?.setLabels(BT.names); return true; }
+  if (el('[data-bt-dir]')) { BT.director = !BT.director; syncTool('dir', BT.director); BT.view?.setDirector(BT.director); return true; }
   if (el('[data-bt-cam]')) { BT.view?.resetCamera(); updateBattleUi(); return true; }
-  if ((x = el('[data-bt-follow]'))) { BT.view?.follow(Number(x.dataset.btFollow)); updateBattleUi(); return true; }
+  if ((x = el('[data-bt-follow]'))) { if (BT.director) { BT.director = false; syncTool('dir', false); BT.view?.setDirector(false); } BT.view?.follow(Number(x.dataset.btFollow)); updateBattleUi(); return true; }
   if (el('[data-bt-full]')) { const h = $('simBtSec'); if (document.fullscreenElement) document.exitFullscreen(); else h?.requestFullscreen?.(); return true; }
   if (el('[data-bt-unsel]')) { BT.sel = -1; updateBattleUi(); return true; }
   if ((x = el('[data-bt-unit]'))) { BT.sel = Number(x.dataset.btUnit); updateBattleUi(); return true; }
@@ -1354,11 +1484,14 @@ const ICON = {
   swap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4 3 8l4 4"/><path d="M3 8h14"/><path d="m17 20 4-4-4-4"/><path d="M21 16H7"/></svg>',
   save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>',
+  kill: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>',
   x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
   names: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7V5h16v2"/><path d="M12 5v14"/><path d="M9 19h6"/></svg>',
   cam: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
   full: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>',
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+  cup: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0V4z"/><path d="M7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4"/></svg>',
+  dir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m23 7-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>',
   mirror: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16V5a2 2 0 0 1 2-2h11"/></svg>'
 };
 
@@ -1376,6 +1509,7 @@ function render() {
           <button type="button" class="btn btn-ghost" data-sim-menu aria-expanded="false">${ICON.save}对局存档</button>
           <div class="sim-menu-pop" id="simMenu" hidden></div>
         </div>
+        <button type="button" class="btn btn-ghost" data-sim-at title="选一场这一届联盟锦标赛（AT）的比赛来模拟">${ICON.cup}AT 赛</button>
         <button type="button" class="btn btn-ghost" data-sim-share title="生成包含两方舰船、装配和选项的链接">${ICON.link}分享链接</button>
         <button type="button" class="btn btn-ghost" data-sim-swap title="交换 A / B 两方">${ICON.swap}交换两方</button>
         <button type="button" class="btn btn-ghost" data-sim-reset title="清空两方舰船">清空</button>
@@ -1394,6 +1528,7 @@ function render() {
       <div class="sim-opt-row">
         <span class="sim-opt-label">规则</span>
         <div class="sim-opt"><span>集火</span>${seg('focus', FOCUS)}</div>
+        <div class="sim-opt" title="看战损：按双方被击毁的价值（ISK）之比定胜负&#10;AT 得分：按联盟锦标赛规则，击毁对方的船得它的分值（官方分值表，同型船第二艘起加价），没派满 200 分的差额算给对方；全歼对方直接获胜"><span>胜负</span>${seg('score', SCORE_MODES)}</div>
         <label class="sim-opt"><span>最长</span><select class="pi-input" data-sim-opt-select="max">${DURATIONS.map(([v, l]) => `<option value="${v}"${S.opt.max === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
         <label class="pi-check"><input type="checkbox" data-sim-flag="logi"${S.opt.logi ? ' checked' : ''}><span>后勤遥修</span></label>
         <label class="pi-check" title="网子、标记、阻尼（扫描分辨率与锁定距离）、ECM（按干扰强度与传感器强度算概率）"><input type="checkbox" data-sim-flag="ewar"${S.opt.ewar ? ' checked' : ''}><span>电子战</span></label>
@@ -1438,7 +1573,7 @@ function sideTotals(list) {
 function fitOptions(row) {
   const cur = ctx.getFit();
   const saved = ctx.savedFits().filter((f) => f.ship === row.ship);
-  const opts = hasBattle(row) ? [['battle', '本场阵亡装配'], ['kb', '最近常见装配']] : [['kb', '最近常见装配']];
+  const opts = hasBattle(row) ? [['battle', row.at ? 'AT 实际装配' : '本场阵亡装配'], ['kb', '最近常见装配']] : [['kb', '最近常见装配']];
   if (cur?.ship === row.ship) opts.push(['current', '当前装配']);
   for (const f of saved) opts.push(['saved:' + f.id, '我的装配：' + (f.name || '未命名')]);
   for (const f of (S.esi.fits || []).filter((x) => x.ship === row.ship)) opts.push(['esi:' + f.esiId, '游戏装配：' + (f.name || '未命名')]);
@@ -1458,6 +1593,7 @@ function rowHtml(side, r) {
     <button type="button" class="sim-row-img" data-sim-detail title="查看 / 更换装配"><img src="${IMG(r.ship)}" alt="" width="36" height="36" loading="lazy"></button>
     <div class="sim-row-main">
       <button type="button" class="sim-row-name" data-sim-detail title="查看 / 更换装配"><b>${ctx.esc(t?.name || '')}</b><span>装配详情 ›</span></button>
+      ${r.pilot ? `<div class="sim-row-pilot"><span translate="no">${ctx.esc(r.pilot)}</span>${r.flag ? '<em>AT 旗舰</em>' : ''}${r.realDead ? '<small>实际阵亡</small>' : ''}</div>` : ''}
       <div class="sim-row-info">${info}</div>
       <select class="plain-select sim-fit" data-sim-fit aria-label="装配">${fitOptions(r)}</select>
       ${followHtml(side, r)}
@@ -1518,7 +1654,8 @@ function renderSides() {
     const any = SIDES.some((s) => S.sides[s].some(hasBattle));
     bulk.hidden = !any;
     root.querySelector('#simBulkRow').hidden = !any;
-    bulk.innerHTML = any ? '<div class="segmented" role="group"><button type="button" data-sim-src="battle">全部用本场阵亡装配</button><button type="button" data-sim-src="kb">全部用最近常见装配</button></div>' : '';
+    const at = SIDES.some((s) => S.sides[s].some((r) => r.at));
+    bulk.innerHTML = any ? `<div class="segmented" role="group"><button type="button" data-sim-src="battle">${at ? '全部用 AT 实际装配' : '全部用本场阵亡装配'}</button><button type="button" data-sim-src="kb">全部用最近常见装配</button></div>` : '';
   }
 }
 
@@ -1671,11 +1808,41 @@ function loadPreset(p) {
   S.title = '';
   S.back = '';
   S.real = null;
+  S.teams = null;
   S.result = null;
   render();
   save();
   for (const s of SIDES) S.sides[s].forEach(resolveRow);
   schedule(0);
+}
+
+// AT 赛的一场比赛（sim-at.js）：蓝队进 A 方、红队进 B 方，每名选手一行（装配用这型船最近常见的装配）；
+// 实际损失按选手记在行上（realDead），比赛限时 10 分钟
+function loadAt(m, d) {
+  // 装配：阵亡且有击杀记录的用比赛实际装配（决赛周）；其余用本场同型船的实际装配，再退到本届同队、本届任意队伍的同型船，都没有时用最近常见装配
+  const kmOf = (teams, ship) => teams.flatMap((x) => x.ships).filter((x) => x[0] === ship && x[5]).map((x) => x[5]);
+  const all = d.matches.flatMap((x) => [x.red, x.blue]);
+  const pool = (t, ship) => [[m.red, m.blue], all.filter((x) => x.id === t.id), all].map((teams) => kmOf(teams, ship)).find((x) => x.length) || [];
+  const side = (t) => t.ships.filter((x) => ctx.data.types.has(x[0])).map(([ship, pilotId, pilot, alive, flag, km]) => {
+    const other = km ? [] : pool(t, ship);
+    return Object.assign(newRow(ship, 1, km || other.length ? 'battle' : 'kb'), { pilot, pilotId, flag: flag ? 1 : undefined, realDead: alive ? 0 : 1, kills: km ? [km] : [], killsOther: other.slice(0, 60), at: 1 });
+  });
+  const lost = (t) => { const out = new Map(); for (const x of t.ships) if (!x[3]) out.set(x[0], (out.get(x[0]) || 0) + 1); return out; };
+  S.sides.A = side(m.blue);
+  S.sides.B = side(m.red);
+  S.support = { A: [], B: [] };
+  S.real = { A: lost(m.blue), B: lost(m.red) };
+  S.teams = { id: m.id, win: m.winner === 'blue' ? 'A' : 'B', A: { id: m.blue.id, name: m.blue.name }, B: { id: m.red.id, name: m.red.name } };
+  S.title = `${d.tournament} ${m.type === 'final' ? '决赛周' : '预选'} 第 ${m.no} 场 · ${m.blue.name} vs ${m.red.name}`;
+  S.back = '';
+  S.opt.max = 600;
+  S.opt.score = 'at';
+  Object.assign(S, { result: null, detail: null, base: null, sweep: null });
+  render();
+  save();
+  for (const s of SIDES) S.sides[s].forEach(resolveRow);
+  schedule(0);
+  root.querySelector('#simSides')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 // ---------- 对局存档 ----------
@@ -1774,12 +1941,14 @@ function onClick(e) {
   }
   if ((x = el('[data-sim-preset]'))) { loadPreset(PRESETS[Number(x.dataset.simPreset)]); return; }
   if (el('[data-sim-battles]')) { ctx.openBattles?.(); return; }
+  if (el('[data-sim-at]')) { openAt(document.body, loadAt); return; }
   const dt = el('[data-sim-detail]');
   if (dt) { const { side, row } = findRow(dt); openDetail(side, row.id); return; }
   const opt = el('[data-sim-opt]');
   if (opt) {
     const k = opt.dataset.simOpt;
-    S.opt[k] = k === 'focus' ? opt.dataset.v : Number(opt.dataset.v);
+    S.opt[k] = typeof S.opt[k] === 'string' ? opt.dataset.v : Number(opt.dataset.v);
+    if (k === 'score') { opt.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === opt)); save(); scoreChanged(); return; }
     opt.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === opt));
     save();
     schedule(0);
@@ -1853,6 +2022,7 @@ function onClick(e) {
     [S.sides.A, S.sides.B] = [S.sides.B, S.sides.A];
     [S.sideOpt.A, S.sideOpt.B] = [S.sideOpt.B, S.sideOpt.A];
     if (S.real) [S.real.A, S.real.B] = [S.real.B, S.real.A];
+    if (S.teams) S.teams = { ...S.teams, A: S.teams.B, B: S.teams.A, win: S.teams.win === 'A' ? 'B' : 'A' };
     S.base = null;
     changed();
     schedule(0);
@@ -1863,15 +2033,15 @@ function onClick(e) {
 let undo = null;
 function clearSides(list) {
   if (!list.some((s) => S.sides[s].length)) return;
-  undo = { sides: { A: S.sides.A, B: S.sides.B }, title: S.title, real: S.real, back: S.back };
+  undo = { sides: { A: S.sides.A, B: S.sides.B }, title: S.title, real: S.real, back: S.back, teams: S.teams };
   for (const s of list) S.sides[s] = [];
-  if (list.length === 2) { S.title = ''; S.real = null; S.back = ''; render(); }
+  if (list.length === 2) { S.title = ''; S.real = null; S.back = ''; S.teams = null; render(); }
   changed();
   renderVerdict();
 }
 function undoClear() {
   if (!undo) return;
-  Object.assign(S, { sides: undo.sides, title: undo.title, real: undo.real, back: undo.back });
+  Object.assign(S, { sides: undo.sides, title: undo.title, real: undo.real, back: undo.back, teams: undo.teams });
   undo = null;
   render();
   changed();
@@ -1886,6 +2056,7 @@ function onChange(e) {
     changed();
     return;
   }
+  if (t.matches('[data-bt-quality]')) { BT.quality = t.value; ctx.store.setJSON(Q_KEY, t.value); BT.view?.setQuality(t.value); return; }
   if (t.matches('[data-sim-follow]')) { findRow(t).row.move = t.value === 'role' ? undefined : t.value; changed(); return; }
   if (t.matches('[data-sim-fit]')) { setSource(findRow(t).row, t.value); return; }
   if (t.matches('[data-sim-count]')) {
@@ -1996,6 +2167,9 @@ function renderVerdict() {
         <button type="button" class="sim-start-card" data-sim-battles>
           <b>从真实会战导入</b><span>自动带入双方舰船和阵亡装配</span><em>去选会战 ›</em>
         </button>
+        <button type="button" class="sim-start-card sim-start-at" data-sim-at>
+          <b>AT 赛（联盟锦标赛）</b><span>这一届已打过的比赛，双方选手和阵容一键带入</span><em>去选比赛 ›</em>
+        </button>
         ${PRESETS.map((p, i) => {
           const a = presetSide(p.a), b = presetSide(p.b);
           if (!a.length || !b.length) return '';
@@ -2010,26 +2184,37 @@ function renderVerdict() {
   // 胜负看战损：A 方击毁价值占双方损失的比例（有价格按 ISK，否则按 EHP）
   const isk = iskOf(R);
   const eff = isk && isk.A.lost + isk.B.lost ? isk.A.eff : R.eff?.A ?? null;
-  const winner = eff == null ? null : eff >= 0.75 ? 'A' : eff <= 0.25 ? 'B' : null;
+  let winner = eff == null ? null : eff >= 0.75 ? 'A' : eff <= 0.25 ? 'B' : null;
   const lead = winner || (eff == null ? null : eff >= 0.55 ? 'A' : eff <= 0.45 ? 'B' : null);
-  const verdict = winner ? `${winner} 方大胜` : lead ? `${lead} 方占优` : eff == null ? '双方都没有损失' : '势均力敌';
+  let verdict = winner ? `${winner} 方大胜` : lead ? `${lead} 方占优` : eff == null ? '双方都没有损失' : '势均力敌';
+  // AT 得分：全歼对方直接获胜，否则比得分
+  const side2 = (s, k) => tally(R.rows.filter((r) => r.side === s).map((r) => [r.row.ship, r[k]]));
+  const at = S.opt.score === 'at' && atReady() ? atScore({ A: side2('A', 'n'), B: side2('B', 'n') }, { A: side2('A', 'lost'), B: side2('B', 'lost') }) : null;
+  if (at) {
+    const wipe = SIDES.find((s) => !R.end[s] && R.end[s === 'A' ? 'B' : 'A']);
+    winner = wipe ? (wipe === 'A' ? 'B' : 'A') : at.A > at.B ? 'A' : at.B > at.A ? 'B' : null;
+    verdict = winner ? `${winner} 方获胜${wipe ? '（全歼）' : ''}` : '平分';
+  }
   const esc = SIDES.filter((s) => R.escaped[s]).map((s) => `${s} 方 ${R.escaped[s]} 艘撤离`).join('，');
   const sub = `用时 ${fmtSec(R.t)} · A 方损失 ${R.lost.A} 艘，B 方损失 ${R.lost.B} 艘${esc ? '，' + esc : ''}${!isk && eff != null ? '（按 EHP 计战损，价格未读到）' : ''}`;
   const skipped = R.skipped ? `<span class="sim-warn">还有 ${R.skipped} 艘船的装配没读到，暂未计入</span>` : '';
   const side = (s) => {
     const lost = R.lost[s];
     const real = S.real?.[s] ? [...S.real[s].values()].reduce((a, b) => a + b, 0) : null;
-    return `<div class="sim-v-side side-${s.toLowerCase()}"><span class="sim-badge">${s} 方</span><b>${R.end[s]}</b><small>/ ${R.start[s]} 艘存活</small>
+    const team = S.teams?.[s] ? `<div class="sim-v-team"><span translate="no">${ctx.esc(S.teams[s].name)}</span>${S.teams.win === s ? '<em>比赛实际获胜</em>' : ''}</div>` : '';
+    return `<div class="sim-v-side side-${s.toLowerCase()}">${team}<span class="sim-badge">${s} 方</span><b>${R.end[s]}</b><small>/ ${R.start[s]} 艘存活</small>
       <div class="sim-v-bar"><i style="width:${(R.end[s] / Math.max(1, R.start[s]) * 100).toFixed(1)}%"></i></div>
       <small><span>损失</span> ${lost}${R.escaped[s] ? ` · <span>撤离</span> ${R.escaped[s]}` : ''}${real != null ? ` · <span>实际损失</span> ${real}` : ''}</small>
+      ${at ? `<small><span>AT 得分</span> <b class="sim-v-pts">${at[s]}</b> · <span>派出</span> ${Math.round(at.field[s])} 分</small>` : ''}
       ${isk ? `<small><span>损失</span> ${ctx.formatISK(isk[s].lost)} ISK${isk[s].eff != null ? ` · <span>效率</span> ${pct(isk[s].eff)}` : ''}</small>` : ''}</div>`;
   };
-  // ISK 交换比：A 方击毁 : A 方损失
+  // ISK 交换比：A 方击毁 : A 方损失（大于 1 说明 A 方赚了）；AT 得分时显示比分
   const why = tipsOf(R)[0];
-  const ratio = isk && isk.A.lost + isk.B.lost ? (isk.A.lost ? `ISK 交换比 1 : ${(isk.B.lost / isk.A.lost).toFixed(2)}` : 'A 方零损失') : '';
+  const ratio = at ? `AT 得分 ${at.A} : ${at.B}${at.miss ? `（${at.miss} 艘不在分值表里，按 0 分）` : ''}`
+    : isk && isk.A.lost + isk.B.lost ? (isk.A.lost ? `A 方 ISK 交换比 ${(isk.B.lost / isk.A.lost).toFixed(2)} : 1` : 'A 方零损失') : '';
   box.innerHTML = `<section class="sim-verdict${winner ? ' sim-win-' + winner.toLowerCase() : ''}">
     ${side('A')}
-    <div class="sim-v-mid"><b>${verdict}</b><span>${sub}</span>${ratio ? `<span class="sim-ratio" title="A 方损失 ISK : B 方损失 ISK（全服均价）">${ratio}</span>` : ''}${skipped}
+    <div class="sim-v-mid"><b>${verdict}</b><span>${sub}</span>${ratio ? `<span class="sim-ratio" title="${at ? '按联盟锦标赛规则：击毁对方的船得它的分值，派出不到 200 分的差额算给对方' : 'A 方击毁价值 : A 方损失价值（全服均价）'}">${ratio}</span>` : ''}${skipped}
       ${why ? `<span class="sim-why"><span class="sim-badge${why[1] === 'B' ? ' sim-side-b' : ''}">${why[1]} 方</span><span>${ctx.esc(why[2])}</span></span>` : ''}
       <button type="button" class="link-btn" data-sim-base title="记下这次结果，改完舰船 / 装配 / 设置后对比前后差异">${S.base ? '更新对照' : '设为对照'}</button></div>
     ${side('B')}
@@ -2051,8 +2236,8 @@ function renderResult() {
       <div class="pi-table-wrap"><table class="pi-table sim-table">
         <thead><tr><th>舰船</th><th class="num">出场</th><th class="num">模拟损失</th>${real ? '<th class="num">实际损失</th>' : ''}${isk ? '<th class="num pi-hide-sm">损失 ISK</th>' : ''}<th class="num pi-hide-sm">输出</th><th class="num pi-hide-sm">承伤</th>${R.rows.some((r) => r.repaired) ? '<th class="num pi-hide-sm">遥修</th>' : ''}</tr></thead>
         <tbody>${rows.map((r) => `<tr>
-          <td><div class="pi-prod"><img src="${IMG(r.row.ship)}" alt="" width="24" height="24" loading="lazy"><span>${ctx.esc(ctx.data.types.get(r.row.ship)?.name || '')}</span></div></td>
-          <td class="num">${r.n}</td><td class="num${r.lost ? ' sim-lost' : ''}">${r.lost}</td>${real ? `<td class="num">${real.get(r.row.ship) || 0}</td>` : ''}${isk ? `<td class="num pi-hide-sm" title="单艘 ${ctx.formatISK(r.value)} ISK">${r.lost ? ctx.formatISK(r.value * r.lost) : '—'}</td>` : ''}
+          <td><div class="pi-prod"><img src="${IMG(r.row.ship)}" alt="" width="24" height="24" loading="lazy"><span>${ctx.esc(ctx.data.types.get(r.row.ship)?.name || '')}</span>${r.row.pilot ? `<small class="sim-pilot" translate="no">${ctx.esc(r.row.pilot)}</small>` : ''}</div></td>
+          <td class="num">${r.n}</td><td class="num${r.lost ? ' sim-lost' : ''}">${r.lost}</td>${real ? `<td class="num">${r.row.realDead ?? (real.get(r.row.ship) || 0)}</td>` : ''}${isk ? `<td class="num pi-hide-sm" title="单艘 ${ctx.formatISK(r.value)} ISK">${r.lost ? ctx.formatISK(r.value * r.lost) : '—'}</td>` : ''}
           <td class="num pi-hide-sm">${ctx.formatISK(r.dealt)}</td><td class="num pi-hide-sm">${ctx.formatISK(r.taken)}</td>${R.rows.some((x) => x.repaired) ? `<td class="num pi-hide-sm">${r.repaired ? ctx.formatISK(r.repaired) : '—'}</td>` : ''}
         </tr>`).join('')}</tbody>
       </table></div>
@@ -2191,8 +2376,8 @@ async function candidates(row) {
     if (r?.list?.length) groups.push({ title, sub: `最近 ${r.total} 次损失`, items: r.list.map((g, i) => ({ key: `${prefix}:${i}`, fit: g.fit, label: `${title} #${i + 1}`, meta: `×${g.n}` })) });
   };
   if (row.fit) groups.push({ title: '正在使用', items: [{ key: 'row', fit: row.fit, label: row.label || '当前选择', meta: '' }] });
-  if (row.kills?.length) await kb('本场阵亡装配', row.kills, 'bk');
-  if (row.killsOther?.length) await kb('本场对方同型船装配', row.killsOther, 'bo');
+  if (row.kills?.length) await kb(row.at ? '比赛实际装配' : '本场阵亡装配', row.kills, 'bk');
+  if (row.killsOther?.length) await kb(row.at ? 'AT 同型船实际装配' : '本场对方同型船装配', row.killsOther, 'bo');
   await kb('最近常见装配', null, 'kb');
   const mine = [];
   const cur = ctx.getFit();

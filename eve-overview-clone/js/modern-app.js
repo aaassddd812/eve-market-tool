@@ -103,6 +103,28 @@ function esc(text) {
   return String(text == null ? '' : text).replace(/[&<>"']/g, (s) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[s]));
 }
 
+// 玩家写的游戏内文字（头衔、舰船名）：ESI 有时把舰船名返回成 Python 字面量（u'\u51c0\u5316…'），先还原；
+// 文字里的游戏标记照游戏里的样子显示：<color=0xAARRGGBB> / <color=#RRGGBB> 改文字颜色、<b> 加粗，其余标记去掉
+function gameHtml(text) {
+  let t = String(text == null ? '' : text);
+  const lit = t.match(/^u(['"])([\s\S]*)\1$/);
+  if (lit) t = lit[2].replace(/\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\(['"\\])/g, (_, u, x, c) => (u || x ? String.fromCharCode(parseInt(u || x, 16)) : c));
+  let out = '', open = 0, bold = false;
+  for (const part of t.split(/(<[^<>]*>)/)) {
+    const tag = part.match(/^<\s*(\/?)\s*(\w+)\s*(?:=\s*["']?([^"'>\s]+))?[^>]*>$/);
+    if (!tag) { out += esc(part); continue; }
+    const [, close, name, val] = tag, n = name.toLowerCase();
+    if (n === 'color' && !close) {
+      const hex = (val || '').replace(/^0x|^#/i, '');
+      const rgb = hex.length === 8 ? hex.slice(2) : hex.length === 6 ? hex : '';
+      if (/^[0-9a-f]{6}$/i.test(rgb)) { out += `<span style="color:#${rgb}">`; open++; }
+    } else if (n === 'color' && open) { out += '</span>'; open--; }
+    else if (n === 'b' && !close && !bold) { out += '<b>'; bold = true; }
+    else if (n === 'b' && close && bold) { out += '</b>'; bold = false; }
+  }
+  return out + '</span>'.repeat(open) + (bold ? '</b>' : '');
+}
+
 function formatISK(value) {
   if (value === null || value === undefined || isNaN(value)) return '—';
   const num = parseFloat(value);
@@ -801,7 +823,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v95').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v96').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -4703,14 +4725,14 @@ async function renderProfileTab(tab) {
         infoCard(ch.bloodline_corp_id ? 'corporations/' + ch.bloodline_corp_id + '/logo' : null, '血统', esc(ch.bloodline_name || '—'), false, 'users') +
         infoCard(charId ? 'characters/' + charId + '/portrait' : null, '性别', esc(zhLabel(GENDER_ZH, ch.gender, ch.gender || '—'))) +
         infoCard('types/' + GAME_ICON.capsule + '/icon', '生日', ch.birthday ? new Date(ch.birthday).toLocaleDateString('zh-CN') : '—') +
-        (ch.title ? infoCard(corpLogo, '头衔', esc(ch.title), false, 'award') : '')) +
+        (ch.title ? infoCard(corpLogo, '头衔', `<span translate="no">${gameHtml(ch.title)}</span>`, false, 'award') : '')) +
       infoSection('所属',
         infoCard(corpLogo, '军团', ch.corporation_id ? esc(displayName(ch.corporation_id)) : '—', false, 'building') +
         infoCard(ch.alliance_id ? 'alliances/' + ch.alliance_id + '/logo' : null, '联盟', ch.alliance_id ? esc(displayName(ch.alliance_id)) : '无', false, 'flag') +
         infoCard('corporations/' + GAME_ICON.concord + '/logo', '安全等级', sec !== undefined ? Number(sec).toFixed(2) : '—')) +
       infoSection('当前状态',
         infoCard(state.locationIconType ? 'types/' + state.locationIconType + '/icon' : null, '当前位置', esc(where), true, 'pin') +
-        infoCard(ship ? 'types/' + ship.ship_type_id + '/icon' : null, '当前舰船', ship ? esc(typeName(ship.ship_type_id)) + (ship.ship_name ? '（' + esc(ship.ship_name) + '）' : '') : '未公开', false, 'rocket') +
+        infoCard(ship ? 'types/' + ship.ship_type_id + '/icon' : null, '当前舰船', ship ? esc(typeName(ship.ship_type_id)) + (ship.ship_name ? `（<span translate="no">${gameHtml(ship.ship_name)}</span>）` : '') : '未公开', false, 'rocket') +
         infoCard('types/' + GAME_ICON.skillbook + '/icon', '技能', skillCount === null ? '权限不足' : skillCount + ' 项'));
     return;
   }

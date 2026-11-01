@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="color-scheme" content="dark light">
+<title>关闭 EVE 辅助工具</title>
+<!-- 点主窗口 ✕ 时的询问窗口（tray.rs 的 on_close 打开）：最小化到托盘 / 退出程序，可记住选择。本地页面，网站打不开时也能用 -->
+<style>
+  :root { --bg: #f4f6fa; --card: #fff; --text: #1d2433; --muted: #6b7385; --accent: #2f6bff; --soft: #e6edff; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #11151c; --card: #1a202b; --text: #e6e9ef; --muted: #8b93a5; --accent: #4d84ff; --soft: #24304a; } }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 14px/1.5 "Microsoft YaHei UI", "Segoe UI", sans-serif; user-select: none; }
+  body { display: flex; flex-direction: column; gap: 14px; padding: 18px 20px 16px; }
+  p { margin: 0; }
+  .hint { color: var(--muted); font-size: 12px; }
+  .btns { display: flex; gap: 10px; }
+  button { flex: 1; height: 36px; border: 0; border-radius: 8px; font: inherit; cursor: pointer; background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .12); }
+  button.primary { background: var(--accent); color: #fff; }
+  button:hover { filter: brightness(1.06); }
+  label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+  input { margin: 0; accent-color: var(--accent); }
+</style>
+</head>
+<body>
+  <div>
+    <p>要关闭窗口，还是最小化到托盘？</p>
+    <p class="hint">在托盘里预警照常运行，单击托盘图标打开主窗口</p>
+  </div>
+  <div class="btns">
+    <button type="button" class="primary" data-act="tray" autofocus>最小化到托盘</button>
+    <button type="button" data-act="exit">退出程序</button>
+  </div>
+  <label class="hint"><input type="checkbox" id="remember">记住我的选择，下次不再询问（可在托盘右键菜单里改）</label>
+<script>
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-act]');
+    if (!b) return;
+    window.__TAURI_INTERNALS__.invoke('close_choice', { action: b.dataset.act, remember: document.getElementById('remember').checked });
+  });
+  document.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+</script>
+</body>
+</html>
