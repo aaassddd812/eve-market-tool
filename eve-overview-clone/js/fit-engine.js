@@ -579,7 +579,8 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
   for (const m of activeMods) {
     if (!(m.type.turret || m.type.launcher) || !m.charge) continue;
     // 三神裔分解者：持续射击伤害递增，按递增满（与 Pyfa 默认一致）
-    const spool = 1 + (m.attr(AT.spoolMax) || 0);
+    // 只看自带这个属性的武器：属性表里它的默认值是 0.5，直接取会让所有武器都多算 50%
+    const spool = 1 + (m.type.attrs.has(AT.spoolMax) ? m.attr(AT.spoolMax) || 0 : 0);
     const mult = (m.type.turret ? m.attr(AT.damageMultiplier) : missileMult) * spool;
     const dmg = DAMAGE.map((a) => m.charge.attr(a) * mult);
     const volley = dmg.reduce((s, x) => s + x, 0);
@@ -699,6 +700,64 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
     slots: slotCount, used, resources, weapon, weapons, droneDps, defense, capacitor, navigation, targeting,
     cargo: ship.attr(AT.capacity), problems: problems(calc, slotCount, used, resources)
   };
+}
+
+// ---------- 对目标的有效 DPS ----------
+// 典型目标：信号半径（m）与环绕速度（m/s，按全部为横向速度计）
+export const TARGETS = {
+  frigate: { name: '护卫舰 / 驱逐舰', sig: 40, vel: 400 },
+  cruiser: { name: '巡洋舰 / 战列巡洋舰', sig: 140, vel: 230 },
+  battleship: { name: '战列舰', sig: 400, vel: 110 },
+  capital: { name: '旗舰 / 建筑', sig: 3000, vel: 40 }
+};
+// 炮台命中后的平均伤害倍数（含 1% 的 3 倍暴击）
+function turretMult(chance) {
+  const wreck = Math.min(chance, 0.01);
+  const normal = chance - wreck;
+  return wreck * 3 + (normal > 0 ? normal * ((0.01 + chance) / 2 + 0.49) : 0);
+}
+// 炮台：命中率 = 0.5^((角速度 × 信号分辨率 / (跟踪 × 目标信号))² + (max(0, 距离 − 最佳射程) / 失准范围)²)
+// 导弹：伤害比例 = min(1, 目标信号 / 爆炸半径, (目标信号 / 爆炸半径 × 爆炸速度 / 目标速度)^爆炸衰减系数)，飞行距离不到则为 0
+// target 为 null 表示不看体型；distance 为 0 表示不看距离（炮台按在最佳射程处算跟踪）。舰载机按满伤害计
+export function appliedDps(stats, target = null, distance = 0) {
+  let total = stats.weapon.fighter;
+  // 无人机：会飞的按信号比例（目标信号 / 无人机信号分辨率）和追不追得上算；岗哨（不会动）按炮台公式算
+  for (const { drone: d, dps } of stats.droneDps || []) {
+    let f = 1;
+    const sigRes = d.attr(620) || 0, vel = d.attr(AT.maxVelocity);
+    if (vel < 1) {
+      const optimal = d.attr(AT.maxRange), falloff = Math.max(1, d.attr(AT.falloff));
+      const dist = distance || optimal;
+      let exp = (Math.max(0, dist - optimal) / falloff) ** 2;
+      if (target && d.attr(AT.trackingSpeed) > 0) exp += ((target.vel / dist) * sigRes / (d.attr(AT.trackingSpeed) * target.sig)) ** 2;
+      f = Math.min(1, turretMult(0.5 ** exp));
+    } else if (target) {
+      f = Math.min(1, sigRes ? target.sig / sigRes : 1) * Math.min(1, vel / Math.max(1, target.vel));
+    }
+    total += dps * f;
+  }
+  for (const w of stats.weapons) {
+    const m = w.module;
+    let f = 1;
+    if (m.type.turret) {
+      const optimal = m.attr(AT.maxRange), falloff = Math.max(1, m.attr(AT.falloff));
+      let exp = distance ? (Math.max(0, distance - optimal) / falloff) ** 2 : 0;
+      if (target) {
+        const d = distance || Math.max(optimal, 1000);
+        const tracking = m.attr(AT.trackingSpeed);
+        exp += tracking > 0 ? ((target.vel / d) * (m.attr(620) || 40000) / (tracking * target.sig)) ** 2 : 0;
+      }
+      f = Math.min(1, turretMult(0.5 ** exp));   // 暴击带来的 1.5% 不计，避免有效 DPS 高于纸面
+    } else {
+      if (distance && w.range < distance) f = 0;
+      else if (target && m.charge) {
+        const er = m.charge.attr(654), ev = m.charge.attr(653), drf = m.charge.attr(1353) || 1;
+        if (er > 0) f = Math.min(1, target.sig / er, target.vel > 0 && ev > 0 ? ((target.sig / er) * (ev / target.vel)) ** drf : 1);
+      }
+    }
+    total += w.dps * f;
+  }
+  return total;
 }
 
 // 电容模拟：移植自 pyfa（eos/capSim.py，Entity 的电容模拟器）。从满电容开始，按激活时刻逐个扣电容，电容按游戏公式回充：
