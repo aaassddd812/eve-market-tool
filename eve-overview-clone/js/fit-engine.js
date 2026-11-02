@@ -13,7 +13,7 @@ export const AT = {
   hiSlots: 14, medSlots: 13, lowSlots: 12, rigSlots: 1137, maxSubSystems: 1367, turretSlots: 102, launcherSlots: 101,
   rigSize: 1547, droneCapacity: 283, droneBandwidth: 1271, droneBandwidthUsed: 1272,
   chargeSize: 128, chargeGroups: [604, 605, 606, 609], chargeRate: 56,
-  speed: 51, damageMultiplier: 64, duration: 73, capNeed: 6, capacitorBonus: 67, reactivationDelay: 669,
+  speed: 51, damageMultiplier: 64, duration: 73, capNeed: 6, capacitorBonus: 67, reactivationDelay: 669, colossusSpringboard: 5550,
   em: 114, explosive: 116, kinetic: 117, thermal: 118, missileDamageMultiplier: 212,
   shieldCapacity: 263, armorHP: 265, hp: 9, shieldRecharge: 479, capCapacity: 482, capRecharge: 55,
   maxVelocity: 37, agility: 70, warpSpeedMultiplier: 600, baseWarpSpeed: 1281, signatureRadius: 552,
@@ -465,6 +465,13 @@ export function computeFit(data, fit, skills = 'max', { alone = false } = {}) {
 }
 
 // 没有 modifierInfo 的少数效果
+// 国服巨像的旗舰武器能量栅格加成：效果名 -> 哪些装备（旗舰炮台按炮台技能，快速鱼雷按装备分组）
+const CAPITAL_TURRET_SKILLS = [20327, 21666, 21667];   // 旗舰级能量 / 混合 / 射弹炮台研究
+const SPRINGBOARD = {
+  ColossusXLTurretPGNeedLowerSpringboard1: (m) => m.type.turret && CAPITAL_TURRET_SKILLS.some((s) => m.requiresSkill(s)),
+  ColossusXLEnergyTurretPGNeedLowerSpringboard1: (m) => m.type.turret && m.requiresSkill(20327),
+  ColossusRapidTorpedoPGNeedLowerSpringboard1: (m) => m.type.group === 1673   // 快速鱼雷发射器
+};
 const MISSILE_DAMAGE_BONUS = { missileEMDmgBonus: AT.em, missileExplosiveDmgBonus: AT.explosive, missileThermalDmgBonus: AT.thermal, missileKineticDmgBonus2: AT.kinetic };
 
 function special(effect, item, { ship, exempt, shipItems, ownedItems }) {
@@ -510,6 +517,15 @@ function special(effect, item, { ship, exempt, shipItems, ownedItems }) {
       ship.addMod(AT.turretSlots, { op: OP.modAdd, src: item, srcAttr: AT.turretHardPointModifier, exempt: true });
       ship.addMod(AT.launcherSlots, { op: OP.modAdd, src: item, srcAttr: AT.launcherHardPointModifier, exempt: true });
       return true;
+    case 'ColossusXLTurretPGNeedLowerSpringboard1':
+    case 'ColossusXLEnergyTurretPGNeedLowerSpringboard1':
+    case 'ColossusRapidTorpedoPGNeedLowerSpringboard1': {
+      // 国服巨像（加百列级、血月级、索洛托尔级）：能装旗舰炮台 / 快速鱼雷，能量栅格需求按舰船的 ColossusRoleBonus1Springboard（−99%）降低。
+      // 效果数据里只有一条自己改自己的占位修改（客户端硬编码），按效果名对相应武器施加
+      const hit = SPRINGBOARD[effect.name];
+      for (const m of shipItems) if (m.kind === 'module' && hit(m)) m.addMod(AT.power, { op: OP.postPercent, src: item, srcAttr: AT.colossusSpringboard, exempt: true });
+      return true;
+    }
     case 'adaptiveArmorHardener':
       // 反应式装甲增强器：按初始的平均分配计算
       for (const a of RESIST.armor) ship.addMod(a, { op: OP.postMul, src: item, srcAttr: a, exempt });
