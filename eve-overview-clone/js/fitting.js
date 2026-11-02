@@ -47,7 +47,7 @@ const IMPLANT_SLOT = 331, BOOSTER_SLOT = 1087;
 const F = {
   data: null, loading: null,
   fit: null, calc: null, stats: null,
-  tab: 'ship', query: '', open: new Set(), slotFilter: null, onlyFits: true,
+  tab: 'ship', query: '', queries: {}, open: new Set(), slotFilter: null, onlyFits: true,
   selected: null,                 // { slot, index }：选中的装备（装填弹药用）
   infoSrc: null,                  // 详情弹窗是从装配里哪一项点开的（衍生替换用）
   skillMode: 'max', esi: null,
@@ -292,7 +292,14 @@ function bindSidebar() {
   });
 }
 
+// 每个分类各记各的搜索词：切走时记下，切回来时填回去
 function setTab(tab) {
+  const input = $('fitSearch');
+  if (input && tab !== F.tab) {
+    F.queries[F.tab] = input.value;
+    input.value = F.queries[tab] || '';
+    F.query = input.value.trim().toLowerCase();
+  }
   F.tab = tab;
   saveSettings();
   renderBrowserTabs();
@@ -1338,9 +1345,9 @@ async function onMainClick(e) {
   }
   if ((x = el('[data-fit-pick-charge]'))) {
     F.selected = parseRef(x.dataset.fitPickCharge);
-    F.query = '';
-    $('fitSearch').value = '';
+    F.queries.charge = '';
     setTab('charge');
+    if (F.query) { F.query = ''; $('fitSearch').value = ''; renderBrowser(); }
     renderFit();
     if (MOBILE()) app.openDrawer?.();
     return;
