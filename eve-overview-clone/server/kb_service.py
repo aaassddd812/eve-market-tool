@@ -24,7 +24,7 @@
   GET /api/kb/search?q=                       搜索人物 / 军团 / 联盟
   GET /api/kb/entity/<kind>/<id>?days=30      人物 / 军团 / 联盟统计（含成员明细）
   GET /api/kb/kill/<id>                       击杀邮件详情与逐项估价（原文按需取自 ESI，本地不保存）
-  GET /api/kb/shipfits?ship=ID&days=7[&limit=N][&kills=ID,…] 某型舰船最近 N 天（≤ 保留期）阵亡时的装配，相同装配合并计数（物品原文按需取自 ESI，提取结果存库）
+  GET /api/kb/shipfits?ship=ID&days=7[&limit=N][&kills=ID,…] 某型舰船最近 N 天（≤ 保留期）阵亡时的装配，相同装配合并计数（入库时从原文提取存库；缺的按需取自 ESI）
   GET /api/kb/bazaar?page=&order=activity|created&q=   官方论坛角色交易版块（宁静服）帖子列表 / 搜索（代理，缓存 2 分钟）
   GET /api/kb/bazaar/topic?id=                帖子详情（全部楼层，最多 200 层）
   GET /api/kb/bazaar/translate?id=            帖子各楼层的中文机器翻译（Google 翻译，按原文缓存）
@@ -225,6 +225,20 @@ SHIPFIT_KILLS = 60          # shipfits?kills=：最多指定的击杀数
 # 击杀邮件物品 flag → 槽位（模块与装填的弹药同 flag；区分由前端按物品类别完成）
 FIT_FLAGS = [("high", range(27, 35)), ("mid", range(19, 27)), ("low", range(11, 19)), ("rig", range(92, 100)),
              ("sub", range(125, 133)), ("drone", (87,)), ("fighter", (158,))]
+
+
+def extract_fit(km):
+    """击杀邮件 → 阵亡装配 {槽位: [[物品, 数量], …]}（存 km_fits；入库时就提取，对战模拟查装配不用再向 ESI 取原文）"""
+    groups = {}
+    for it in km["victim"].get("items") or []:
+        flag = it.get("flag")
+        slot = next((name for name, flags in FIT_FLAGS if flag in flags), None)
+        if not slot:
+            continue
+        qty = (it.get("quantity_destroyed") or 0) + (it.get("quantity_dropped") or 0)
+        g = groups.setdefault(slot, {})
+        g[it["item_type_id"]] = g.get(it["item_type_id"], 0) + qty
+    return {k: sorted([t, n] for t, n in v.items()) for k, v in groups.items()}
 UA = "EVE-Market-Tool KB service (+https://github.com/wbw5780/eve-market-tool)"
 FORGE = 10000002
 JITA_44 = 60003760
@@ -523,7 +537,7 @@ class Store:
                 part = ids[chunk:chunk + 900]
                 existing |= {r[0] for r in c.execute(f"SELECT id FROM killmails WHERE id IN ({','.join('?' * len(part))})", part)}
             cutoff = time.time() - self.retention * 86400 if self.retention else 0
-            km_rows, att_rows = [], []
+            km_rows, att_rows, fit_rows = [], [], []
             live_att = {}                        # 实时缓冲用：每条击杀全部玩家攻击者的角色 ID（击杀预警的人物关注要判断「参与击杀」）
             for km, km_hash in kms:
                 kid = km["killmail_id"]
@@ -544,6 +558,9 @@ class Store:
                     final.get("character_id"), final.get("corporation_id"), final.get("alliance_id"), final.get("ship_type_id")))
                 for a in players:
                     att_rows.append((kid, t, a["character_id"], a.get("corporation_id"), a.get("alliance_id"), a.get("ship_type_id")))
+                # 原文带物品时顺便存下阵亡装配（没有 items 字段的不存，查装配时再向 ESI 取）
+                if "items" in v:
+                    fit_rows.append((kid, v["ship_type_id"], t, json.dumps(extract_fit(km), separators=(",", ":"))))
                 if live:
                     live_att[kid] = ([a["character_id"] for a in players][:500],
                                      list(dict.fromkeys(x for a in players for x in (a.get("corporation_id"), a.get("alliance_id")) if x))[:200])
@@ -556,6 +573,7 @@ class Store:
                             self.pending_names.add(eid)
             c.executemany("INSERT OR IGNORE INTO killmails VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", km_rows)
             c.executemany("INSERT INTO attackers VALUES(?,?,?,?,?,?)", att_rows)
+            c.executemany("INSERT OR REPLACE INTO km_fits(id, ship, time, fit) VALUES(?,?,?,?)", fit_rows)
             c.commit()
             added = len(km_rows)
             if live:
@@ -1926,19 +1944,6 @@ class Api:
 
     # GET /kill/<id>
     # ---- 阵亡装配
-    @staticmethod
-    def extract_fit(km):
-        groups = {}
-        for it in km["victim"].get("items") or []:
-            flag = it.get("flag")
-            slot = next((name for name, flags in FIT_FLAGS if flag in flags), None)
-            if not slot:
-                continue
-            qty = (it.get("quantity_destroyed") or 0) + (it.get("quantity_dropped") or 0)
-            g = groups.setdefault(slot, {})
-            g[it["item_type_id"]] = g.get(it["item_type_id"], 0) + qty
-        return {k: sorted([t, n] for t, n in v.items()) for k, v in groups.items()}
-
     def shipfits(self, q):
         ship = int(q["ship"])
         days = max(1, min(int(q.get("days", 7)), self.store.retention or 3650))
@@ -1972,7 +1977,7 @@ class Api:
         def fetch(row):
             try:
                 km, _ = get_json(self.store.esi_url(f"/killmails/{row[0]}/{row[1]}/"), timeout=20, retries=2)
-                return row, self.extract_fit(km)
+                return row, extract_fit(km)
             except Exception:
                 return row, None
         if todo:

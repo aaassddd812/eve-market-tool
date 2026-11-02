@@ -181,11 +181,11 @@ function newRow(ship, count = 1, src = 'kb', fit = null, label = '') {
 
 // ---------- 装配来源 ----------
 const kbCache = new Map();   // 船型（+ 指定击杀）-> Promise<{ fit, n, list: [{ fit, n }], total } | null>
-// 同时最多查 6 种船（一场会战可能有几十种船）
+// 同时最多查 10 种船（一场会战可能有几十种船；生产站是 HTTP/2，不受浏览器每站 6 个连接的限制）
 let active = 0;
 const waiting = [];
 async function limited(fn) {
-  if (active >= 6) await new Promise((r) => waiting.push(r));
+  if (active >= 10) await new Promise((r) => waiting.push(r));
   active += 1;
   try { return await fn(); } finally { active -= 1; waiting.shift()?.(); }
 }
@@ -200,7 +200,7 @@ async function resolveRow(row) {
   if (!AUTO.has(row.src) || row.status === 'loading' || (row.status === 'ok' && row.fit)) { if (row.fit && !row.stats) prepare(row); return; }
   const src = row.src;
   row.status = 'loading';
-  renderSides();
+  renderSidesSoon();
   try {
     // 本场阵亡装配：先看本方这型船在这场的损失，没有再看对方同型船的损失；都没有时退回最近常见装配
     let r = null, label = '';
@@ -226,7 +226,7 @@ async function resolveRow(row) {
     row.error = error.message;
   }
   prepare(row);
-  renderSides();
+  renderSidesSoon();
   // 支援舰队的船读完装配不重新布阵（否则正在进行的战斗会被重置），由 fleetChanged 处理
   if (SIDES.some((s) => S.sides[s].includes(row))) schedule(400);
 }
@@ -902,7 +902,7 @@ function paintBars(el, f, i) {
   bars[3].style.width = ((f.cp?.[i] || 0) / 2).toFixed(0) + '%';
 }
 const speedText = (f, i) => `${ctx.formatNumber(f.spd?.[i] || 0)} m/s`;
-// 到当前时刻的战损：每方损失艘数、ISK（没读到价格时按 EHP），交换效率 = 对方损失 / 双方损失
+// 到当前时刻的战损：每方损失艘数、ISK（没读到价格时按 EHP）
 function liveLoss() {
   const isk = Boolean(S.prices);
   const out = { A: { n: 0, v: 0 }, B: { n: 0, v: 0 }, isk };
@@ -911,9 +911,6 @@ function liveLoss() {
     out[k.side].n += 1;
     out[k.side].v += isk ? fitValue(k.row.row.fit) : k.row.row.unit?.ehp || 0;
   }
-  const total = out.A.v + out.B.v;
-  out.A.eff = total ? out.B.v / total : null;
-  out.B.eff = total ? out.A.v / total : null;
   return out;
 }
 // ---------- 直播式比分条与双方名单（像 AT 比赛直播）----------
@@ -1040,7 +1037,7 @@ function paintScore() {
   if (!box) return;
   const { n, all } = aliveAt(BT.t);
   const q = (sel) => box.querySelector(sel);
-  // 比分条：看战损时大数字是存活 / 总数、队名下是击毁对方的价值，中间是双方效率；AT 得分时大数字是得分、队名下是击毁艘数与存活
+  // 比分条：看战损时大数字是存活 / 总数、队名下是损失艘数，中间是「A 方损失 : B 方损失」（价值，比例条同比例）；AT 得分时大数字是得分、队名下是击毁艘数与存活
   let share = null, pa = '—', pb = '—';
   if (S.opt.score === 'at' && atReady()) {
     const units = BT.b.rec.units, lost = { A: new Map(), B: new Map() };
@@ -1053,16 +1050,23 @@ function paintScore() {
     }
     if (sc.A + sc.B) { share = sc.A / (sc.A + sc.B); pa = `${sc.A} 分`; pb = `${sc.B} 分`; }
     q('.sim-sb-pct .m').textContent = 'AT 得分';
+    q('.sim-sb-pct').title = '';
   } else {
     const loss = liveLoss();
     for (const s of SIDES) {
       const o = s === 'A' ? 'B' : 'A';
       $('simBt' + s).textContent = `${n[s]} / ${all[s]}`;
-      q(`.sim-sb-team.${s.toLowerCase()} .v`).textContent = loss[o].n ? `击毁 ${ctx.formatISK(loss[o].v)} ${loss.isk ? 'ISK' : 'EHP'}` : '';
+      q(`.sim-sb-team.${s.toLowerCase()} .v`).textContent = loss[s].n ? `损失 ${loss[s].n} 艘` : '';
     }
-    share = loss.A.eff;
-    if (share != null) { pa = `${Math.round(share * 100)}%`; pb = `${100 - Math.round(share * 100)}%`; }
-    q('.sim-sb-pct .m').textContent = '战损效率';
+    const total = loss.A.v + loss.B.v;
+    if (total) {
+      share = loss.A.v / total;
+      const unit = loss.isk ? ' ISK' : ' EHP';
+      pa = ctx.formatISK(loss.A.v) + unit;
+      pb = ctx.formatISK(loss.B.v) + unit;
+    }
+    q('.sim-sb-pct .m').textContent = total ? ':' : '损失';
+    q('.sim-sb-pct').title = 'A 方损失 : B 方损失';
   }
   q('.sim-sb-pct .pa').textContent = pa;
   q('.sim-sb-pct .pb').textContent = pb;
@@ -1616,7 +1620,13 @@ function rowHtml(side, r) {
   </div>`;
 }
 
+// 几十种船陆续读完装配时，每帧最多重画一次（每读完一种都整表重画会卡住页面）
+let sidesFrame = 0;
+function renderSidesSoon() {
+  if (!sidesFrame) sidesFrame = requestAnimationFrame(() => { sidesFrame = 0; renderSides(); });
+}
 function renderSides() {
+  if (sidesFrame) { cancelAnimationFrame(sidesFrame); sidesFrame = 0; }
   const box = root?.querySelector('#simSides');
   if (!box) return;
   // 装配读完后会重画：保留正在输入的搜索框
@@ -2355,6 +2365,7 @@ function showDetailPane(on) {
 }
 
 function closeDetail() {
+  if (S.detail?.auto?.state === 'search') ctx.cancelCounterFit?.();
   S.detail = null;
   showDetailPane(false);
 }
@@ -2371,7 +2382,7 @@ async function openDetail(side, id, sel = 'row') {
   const groups = await candidates(row);
   if (S.detail?.token !== token) return;
   S.detail.groups = groups;
-  if (!groups.some((g) => g.items.some((x) => x.key === S.detail.sel))) S.detail.sel = 'row';
+  if (!detailGroups().some((g) => g.items.some((x) => x.key === S.detail.sel))) S.detail.sel = 'row';
   renderDetail();
 }
 
@@ -2398,6 +2409,120 @@ async function candidates(row) {
   return groups;
 }
 
+// ---------- 智能装配（针对对方阵容）----------
+// 按对方阵容（各型船的信号半径、速度、按血量加权的抗性，输出的伤害类型，想打的距离）用装配页的智能装配搜索（fit-auto.js counterFit），
+// 搜出的方案与正在使用的装配各按当前设置跑一次模拟，比较本方的战损交换（对方损失占双方总损失的比例）。
+const foeOf = (side) => (side === 'A' ? 'B' : 'A');
+function enemyOf(side) {
+  const rows = S.sides[foeOf(side)].filter((r) => r.unit);
+  if (!rows.length) return null;
+  const total = rows.reduce((t, r) => t + r.count * r.unit.ehp, 0) || 1;
+  // 权重最大的 12 型船当目标（几十型船逐个算太慢，小头影响不大）
+  const top = rows.map((r) => ({ u: r.unit, w: (r.count * r.unit.ehp) / total })).sort((a, b) => b.w - a.w).slice(0, 12);
+  const wsum = top.reduce((t, x) => t + x.w, 0) || 1;
+  const res = [0, 0, 0, 0];
+  for (const { u, w } of top) {
+    const hp = u.max.reduce((a, b) => a + b, 0) || 1;
+    for (let k = 0; k < 4; k++) res[k] += (w / wsum) * u.max.reduce((t, h, l) => t + (h / hp) * u.res[l][k], 0);
+  }
+  // 伤害类型比例与交战距离按对方各型船的输出加权
+  const dmg = [0, 0, 0, 0];
+  let dps = 0, pref = 0;
+  for (const r of rows) {
+    r.unit.types.forEach((v, k) => { dmg[k] += r.count * v; });
+    dps += r.count * r.unit.dps;
+    pref += r.count * r.unit.dps * r.unit.pref;
+  }
+  const sum = dmg.reduce((a, b) => a + b, 0);
+  // 距离 d 上对方打得到的输出比例：炮台按最佳射程 / 失准衰减，导弹、电涌按射程；无人机、舰载机按都打得到
+  const guns = rows.flatMap((r) => r.unit.guns.map((g) => ({ g, v: r.count * g.volley / (g.cycle || 1) })));
+  const always = rows.reduce((t, r) => t + r.count * (r.unit.fighter + r.unit.drones.reduce((a, x) => a + x.n * x.volley / (x.cycle || 4), 0)), 0);
+  const all = always + guns.reduce((t, x) => t + x.v, 0);
+  const incoming = (d) => (all ? (always + guns.reduce((t, { g, v }) => t + v * (g.turret && !g.vorton ? rangeEff({ range: g.opt, falloff: g.fall }, d) : d <= g.reach ? 1 : 0), 0)) / all : 1);
+  return {
+    targets: top.map(({ u, w }) => ({ sig: u.sig, vel: u.vel, w: w / wsum })), res, incoming,
+    profile: sum ? dmg.map((v) => v / sum) : [0.25, 0.25, 0.25, 0.25],
+    dist: dps ? Math.min(150000, pref / dps) : 0
+  };
+}
+const rangeEff = (x, d) => (d <= x.range ? 1 : x.falloff > 0 ? 0.5 ** (((d - x.range) / x.falloff) ** 2) : 0);
+// 换上这套装配跑模拟：返回本方的战损交换（几次不同随机数的平均，单次受命中掷骰影响大；null = 双方都没损失）
+const TRIAL_SEEDS = [20261026, 7, 1234567, 99991];
+async function trial(row, side, fit, step = () => {}) {
+  const tmp = { ...row, fit: ctx.normalize(JSON.parse(JSON.stringify(fit))) };
+  prepare(tmp, side);
+  if (!tmp.unit) return null;
+  const sides = { ...S.sides, [side]: S.sides[side].map((r) => (r === row ? tmp : r)) };
+  const effs = [];
+  for (const seed of TRIAL_SEEDS) {
+    await idle();
+    const R = simulate(sides, simOpt({ seed }));
+    if (R.eff) effs.push(R.eff[side]);
+    step();
+  }
+  return effs.length ? effs.reduce((a, b) => a + b, 0) / effs.length : null;
+}
+async function runCounter() {
+  const D = S.detail, row = detailRow();
+  if (!D || !row || D.auto?.state === 'search' || D.auto?.state === 'sim') return;
+  const enemy = enemyOf(D.side);
+  if (!enemy) { ctx.showToast(`${foeOf(D.side)} 方还没有读到装配的舰船`, 'info'); return; }
+  const token = D.token;
+  const so = S.sideOpt[D.side];
+  D.auto = { state: 'search', n: 0 };
+  renderDetail();
+  try {
+    const base = row.fit || emptyFit(row.ship);
+    const out = await ctx.counterFit({ fit: base, enemy, skills: so.skills === 'esi' && S.esiSkills ? S.esiSkills.levels : 'max', onProgress: (n) => {
+      if (S.detail?.token !== token) return;
+      D.auto.n = n;
+      const el = $('simDetail')?.querySelector('[data-sim-auto-n]');
+      if (el) el.textContent = ctx.formatNumber(n);
+    } });
+    if (S.detail?.token !== token) return;
+    D.auto = { state: 'sim', done: 0, total: (out.results.length + (row.fit ? 1 : 0)) * TRIAL_SEEDS.length };
+    renderDetail();
+    const step = () => {
+      D.auto.done += 1;
+      const el = $('simDetail')?.querySelector('[data-sim-auto-n]');
+      if (el) el.textContent = `${D.auto.done} / ${D.auto.total}`;
+    };
+    const now = row.fit ? await trial(row, D.side, row.fit, step) : null;
+    const items = [];
+    for (const [i, x] of out.results.entries()) {
+      await idle();
+      if (S.detail?.token !== token) return;
+      items.push({ key: 'auto:' + i, fit: x.fit, eff: await trial(row, D.side, x.fit, step), dps: x.r.dps });
+    }
+    items.sort((a, b) => (b.eff ?? -1) - (a.eff ?? -1));
+    const pct = (v) => (v == null ? '无损失' : Math.round(v * 100) + '%');
+    items.forEach((x, i) => { x.label = i ? '智能装配 · 备选' : '智能装配 · 推荐'; x.meta = '交换 ' + pct(x.eff); });
+    D.auto = { state: 'done', items, now, dist: enemy.dist };
+    if (items[0]) D.sel = items[0].key;
+  } catch (e) {
+    if (S.detail?.token !== token) return;
+    D.auto = { state: e.message === 'cancelled' ? 'idle' : 'error', error: e.message };
+  }
+  renderDetail();
+}
+// 详情左侧的装配分组：智能装配插在「正在使用」后面
+function detailGroups() {
+  const D = S.detail;
+  if (!D?.groups) return [];
+  const foe = foeOf(D.side), a = D.auto || { state: 'idle' };
+  const pct = (v) => (v == null ? '无损失' : Math.round(v * 100) + '%');
+  const g = { title: `智能装配 · 针对 ${foe} 方`, auto: true, items: a.items || [] };
+  if (a.state === 'done') {
+    const now = detailRow()?.fit && a.now != null ? a.now : null;
+    const worse = now != null && !a.items.some((x) => (x.eff ?? -1) > now);
+    g.note = `按 ${foe} 方阵容配装（对方主力想打 ${Math.round(a.dist / 1000)} km），各跑 ${TRIAL_SEEDS.length} 次模拟比较本方战损交换（对方损失占双方总损失）${now != null ? `；正在使用的装配 ${pct(now)}` : ''}${worse ? '，没有找到更好的方案' : ''}`;
+  }
+  if (a.state === 'error') g.note = '配装失败：' + a.error;
+  const list = D.groups.slice();
+  list.splice(list[0]?.items[0]?.key === 'row' ? 1 : 0, 0, g);
+  return list;
+}
+
 // 选中装配按模拟同样的规则计算（长冷却装备与推进器的开关）
 function evaluate(item) {
   if (!item.ev) {
@@ -2408,6 +2533,28 @@ function evaluate(item) {
   return item.ev;
 }
 
+// 列表里每套装配的摘要：主力武器（输出最高的一种，没有时取数量最多的无人机）与坦克类型（血量最多的一层）
+function brief(ev) {
+  const { data } = ctx;
+  const out = { id: 0, text: '', tank: '' };
+  const byType = new Map();
+  for (const w of ev.stats?.weapons || []) {
+    const id = w.module.type.id;
+    const e = byType.get(id) || { n: 0, dps: 0 };
+    e.n += 1; e.dps += w.dps;
+    byType.set(id, e);
+  }
+  const top = [...byType].sort((a, b) => b[1].dps - a[1].dps)[0];
+  if (top) Object.assign(out, { id: top[0], text: `${top[1].n}× ${data.types.get(top[0])?.name || ''}` });
+  else {
+    const d = (ev.fit?.drones || []).slice().sort((a, b) => b.count - a.count)[0];
+    if (d) Object.assign(out, { id: d.type, text: `${d.count}× ${data.types.get(d.type)?.name || ''}` });
+  }
+  const max = ev.unit?.max;
+  if (max) out.tank = ['护盾', '装甲', '结构'][max.indexOf(Math.max(...max))];
+  return out;
+}
+
 function renderDetail() {
   const pane = $('simDetail');
   const row = detailRow();
@@ -2415,15 +2562,29 @@ function renderDetail() {
   const { esc } = ctx;
   const t = ctx.data.types.get(row.ship);
   const D = S.detail;
-  const items = D.groups ? D.groups.flatMap((g) => g.items) : [];
+  const groups = detailGroups();
+  const items = groups.flatMap((g) => g.items);
   const sel = items.find((x) => x.key === D.sel) || (row.fit ? { key: 'row', fit: row.fit, label: row.label } : null);
+  const a = D.auto || { state: 'idle' };
+  const autoAct = a.state === 'search' ? `<p class="sim-dt-note sim-loading">正在搜索… <b data-sim-auto-n>${ctx.formatNumber(a.n || 0)}</b> 种组合 <button type="button" class="link-btn" data-sim-auto-stop>停止</button></p>`
+    : a.state === 'sim' ? `<p class="sim-dt-note sim-loading">模拟对比中… <b data-sim-auto-n>${a.done} / ${a.total}</b></p>`
+    : `<button type="button" class="btn btn-ghost sim-dt-auto" data-sim-auto-go title="按对方各型船的体型、速度、抗性与伤害类型挑武器、弹药和抗性，装备等级与预算按装配页智能装配的设置">${a.state === 'done' ? '重新配装' : `按 ${foeOf(D.side)} 方阵容配一套`}</button>`;
   const num = (v) => ctx.formatNumber(Math.round(v || 0));
-  const list = D.groups ? D.groups.map((g) => `<div class="sim-dt-group">
+  const list = D.groups ? groups.map((g) => `<div class="sim-dt-group">
       <h5>${esc(g.title)}${g.sub ? `<small>${esc(g.sub)}</small>` : ''}</h5>
-      ${g.items.map((x) => { const u = evaluate(x).unit; return `<button type="button" class="sim-dt-item${x.key === D.sel ? ' active' : ''}" data-sim-dt-pick="${esc(x.key)}">
-        <span><b>${esc(x.label)}</b>${x.meta ? `<em>${esc(x.meta)}</em>` : ''}</span>
-        <small>${u ? `${num(u.dps)} DPS · ${ctx.formatISK(u.ehp)} EHP` : '—'}</small></button>`; }).join('')}
-      ${g.note ? `<p class="sim-dt-note">${esc(g.note)}</p>` : ''}
+      ${g.items.map((x) => {
+        const ev = evaluate(x), u = ev.unit, w = brief(ev);
+        // 智能装配的交换比：比正在使用的好标绿，差标红
+        const tone = x.eff !== undefined && a.now != null ? ((x.eff ?? -1) > a.now ? ' good' : ' bad') : '';
+        return `<button type="button" class="sim-dt-item${x.key === D.sel ? ' active' : ''}" data-sim-dt-pick="${esc(x.key)}">
+        <span class="sim-dt-ico">${w.id ? `<img src="${IMG(w.id)}" alt="" width="32" height="32" loading="lazy">` : ''}</span>
+        <span class="sim-dt-txt">
+          <span class="sim-dt-top"><b>${esc(x.label)}</b>${x.meta ? `<em class="sim-dt-tag${tone}">${esc(x.meta)}</em>` : ''}</span>
+          <span class="sim-dt-wpn">${w.text ? esc(w.text) : '没有武器'}</span>
+          <span class="sim-dt-num">${u ? `<i><b>${num(u.dps)}</b> DPS</i><i><b>${ctx.formatISK(u.ehp)}</b> EHP</i>${w.tank ? `<i>${w.tank}</i>` : ''}` : '—'}</span>
+        </span></button>`;
+      }).join('')}
+      ${g.note ? `<p class="sim-dt-note">${esc(g.note)}</p>` : ''}${g.auto ? autoAct : ''}
     </div>`).join('') : '<p class="sim-loading sim-dt-note">读取装配…</p>';
   pane.innerHTML = `
     <div class="sim-dt-head">
@@ -2494,7 +2655,9 @@ function fitView(item, row) {
 function onDetailClick(e) {
   const row = detailRow();
   if (!row || e.target.closest('[data-sim-dt-back]')) { closeDetail(); return; }
-  const items = S.detail.groups ? S.detail.groups.flatMap((g) => g.items) : [];
+  if (e.target.closest('[data-sim-auto-go]')) { runCounter(); return; }
+  if (e.target.closest('[data-sim-auto-stop]')) { ctx.cancelCounterFit?.(); return; }
+  const items = detailGroups().flatMap((g) => g.items);
   const pick = e.target.closest('[data-sim-dt-pick]');
   if (pick) {
     S.detail.sel = pick.dataset.simDtPick;
@@ -2522,7 +2685,7 @@ function useFit(row, item) {
   row.src = 'pick';
   row.error = '';
   row.fit = ctx.normalize(JSON.parse(JSON.stringify(item.fit)));
-  row.label = item.label + (item.meta ? ' ' + item.meta : '');
+  row.label = item.key.startsWith('auto:') ? `智能装配 · 针对 ${foeOf(sideOf(row))} 方` : item.label + (item.meta ? ' ' + item.meta : '');
   row.status = 'ok';
   prepare(row);
   changed();

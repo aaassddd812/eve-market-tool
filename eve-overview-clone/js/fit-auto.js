@@ -8,6 +8,8 @@
 //   4. 替换：逐格尝试换成其他候选，直到不再变好
 // 技能：全 5 级，或按 ESI 角色（候选只保留角色能用的装备与弹药，属性按角色技能计算）。
 // 植入体：智能装配可勾选「同时推荐植入体」；装配页「智能植入体」只给当前装配推荐植入体（装备不动），见下方「植入体」一节。
+// 针对对手配装（counterFit，战场模拟用）：同样的搜索，输出按对对方各型船的有效 DPS（体型、速度、交战距离、对方抗性）计，
+//   EHP 按对方的伤害类型比例计，见下方「针对对手配装」一节。
 let ctx;   // data, FE, getFit, applyFit, esiLevels, prices, esc, formatNumber, formatISK, showToast, store
 const $ = (id) => document.getElementById(id);
 const KEY = 'eve-fit-auto-v1';
@@ -167,7 +169,7 @@ function reservedMid(shipType, mids) {
 function autoTank(shipType) {
   const P = shipProfile(shipType);
   if (P.tank) return { tank: P.tank, why: '舰船加成' };
-  const sub = (ctx.getFit().slots.sub || []).filter(Boolean);
+  const sub = (curFit().slots.sub || []).filter(Boolean);
   const calc = ctx.FE.computeFit(ctx.data, { ship: shipType.id, slots: { high: [], mid: [], low: [], rig: [], sub }, drones: [], implants: [] }, 'max');
   if (!calc) return { tank: 'shield', why: '' };
   const st = ctx.FE.fitStats(calc);
@@ -177,7 +179,10 @@ function autoTank(shipType) {
 }
 
 // ---------- 打分 ----------
-function skillsArg() { return A.skills === 'esi' && ctx.esiLevels() ? ctx.esiLevels() : 'max'; }
+function skillsArg() { return SKILLS || (A.skills === 'esi' && ctx.esiLevels() ? ctx.esiLevels() : 'max'); }
+// 针对对手配装时：BASE 为要配的船（不是装配页当前的装配），ENEMY 为对方阵容，SKILLS 为这一方的技能
+let BASE = null, ENEMY = null, SKILLS = null;
+const curFit = () => BASE || ctx.getFit();
 const ln = (x) => Math.log(Math.max(0, x) + 1);
 let ROLES = new Set();   // 当前搜索生效的定位
 let TGT = null, DIST = 0;   // 当前搜索的目标体型与交战距离
@@ -209,12 +214,15 @@ function evaluate(fit) {
   const { FE, data } = ctx;
   const calc = FE.computeFit(data, fit, skillsArg());
   if (!calc) return null;
-  const st = FE.fitStats(calc);
+  const st = ENEMY ? FE.fitStats(calc, { profile: ENEMY.profile }) : FE.fitStats(calc);
   // 资源超出、槽位 / 安装座不足、同组只能装 / 激活一个等都算装不下
   const ok = !st.problems.some((p) => p.level === 'error' || p.text.includes('同时只能激活'));
   // 选了目标体型或交战距离时，输出按对目标的有效 DPS 计（跟踪、信号分辨率、射程、导弹爆炸半径 / 速度）
   const paper = st.weapon.total, ehp = st.defense.ehp, speed = st.navigation.velocity;
-  const dps = TGT || DIST ? FE.appliedDps(st, TGT, DIST) : paper;
+  // 针对对手：在本船想打的距离上算有效 DPS；坦克按对方在这个距离打得到的比例折算（打不到的伤害不用扛）
+  const foe = ENEMY ? enemyTerms(st) : null;
+  const dps = foe ? foe.dps : TGT || DIST ? FE.appliedDps(st, TGT, DIST) : paper;
+  const tankV = foe ? ehp / foe.incoming : ehp;
   const active = st.defense.repsEhp.shield + st.defense.repsEhp.armor + st.defense.repsEhp.hull + st.defense.passiveRegenEhp;
   // 次要项：武器射程、锁定距离、电容续航（权重很小，只在主要指标相同时让索敌 / 电容类装备有用武之地）
   const range = st.weapons.length ? st.weapons.reduce((t, w) => t + w.range + w.falloff, 0) / st.weapons.length / 1000 : 0;
@@ -224,12 +232,12 @@ function evaluate(fit) {
   const cargo = st.cargo || 0;
   let score;
   // 后勤 / 采矿 / 运输：以本职指标为主，其余兼顾坦克
-  if (ROLES.has('logi')) score = ln(remote) + 0.4 * ln(ehp) + 0.05 * ln(speed);
-  else if (ROLES.has('mining')) score = ln(mining * 100) + 0.3 * ln(ehp) + 0.05 * ln(speed);
-  else if (ROLES.has('hauler')) score = ln(cargo) + 0.3 * ln(ehp) + 0.1 * ln(speed) - 0.1 * ln(st.navigation.align);
+  if (ROLES.has('logi')) score = ln(remote) + 0.4 * ln(tankV) + 0.05 * ln(speed);
+  else if (ROLES.has('mining')) score = ln(mining * 100) + 0.3 * ln(tankV) + 0.05 * ln(speed);
+  else if (ROLES.has('hauler')) score = ln(cargo) + 0.3 * ln(tankV) + 0.1 * ln(speed) - 0.1 * ln(st.navigation.align);
   else {
     const f = focusSet(), w = (k) => (k === 'dps' && A.weapon === 'none' ? 0 : FOCUS_W[k][f.has(k) ? 0 : 1]);
-    score = w('dps') * ln(dps) + w('tank') * ln(ehp) + w('speed') * ln(speed);
+    score = w('dps') * ln(dps) + w('tank') * ln(tankV) + w('speed') * ln(speed);
   }
   // 约束：不满足时大幅扣分（差得越多扣得越多）
   const short = (v, min) => (min > 0 && v < min ? 2 + 5 * (1 - v / min) : 0);
@@ -696,8 +704,8 @@ async function fillEmpty(fit, cands, cur, progress) {
 
 // 打分用的全局设定：舰船定位（可改成「当普通战斗船」）、目标体型与交战距离、自修（自动时有维修加成的战斗船自修）
 function setupScoring(shipType) {
-  TGT = ctx.FE.TARGETS[A.target] || null;
-  DIST = RANGES[A.range] || 0;
+  TGT = ENEMY ? null : ctx.FE.TARGETS[A.target] || null;
+  DIST = ENEMY ? ENEMY.dist : RANGES[A.range] || 0;
   const P = shipProfile(shipType);
   ROLES = new Set(A.role === 'combat' ? [] : P.roles);
   const fighting = !['logi', 'mining', 'hauler'].some((r) => ROLES.has(r));
@@ -707,7 +715,7 @@ function setupScoring(shipType) {
 
 async function search(onProgress) {
   const { FE, data } = ctx;
-  const cur = ctx.getFit();
+  const cur = curFit();
   const shipType = data.types.get(cur.ship);
   const base = { id: null, name: '', ship: cur.ship, slots: { high: [], mid: [], low: [], rig: [], sub: [] }, drones: [], implants: [...(cur.implants || [])] };
   // 战略巡洋舰沿用当前子系统
@@ -802,7 +810,7 @@ async function search(onProgress) {
       const n = Math.min(freeHigh.length, w.turret ? res.turrets.total - res.turrets.used : res.launchers.total - res.launchers.used);
       if (n <= 0) continue;
       // 弹药：不看目标时用伤害最高的；看目标 / 距离时逐种试装，取有效 DPS 最高的（远距离会选长射程弹药）
-      const list = TGT || DIST ? cands.charges.filter((c) => FE.chargeFits(w, c)) : [bestCharge(w, cands.charges)].filter(Boolean);
+      const list = TGT || DIST || ENEMY ? cands.charges.filter((c) => FE.chargeFits(w, c)) : [bestCharge(w, cands.charges)].filter(Boolean);
       let best = null;
       for (const charge of list) {
         // 装满安装座电网 / CPU 不够时少装几门
@@ -814,7 +822,9 @@ async function search(onProgress) {
           await tick(progress);
           if (r?.ok) break;
         }
-        if (r && r.ok && (!best || r.dps > best.r.dps + 1e-6 || (r.dps > best.r.dps - 1e-6 && r.cost < best.r.cost))) best = { f, r, w };
+        // 针对对手时按得分挑弹药（远程弹药 DPS 低，但能在对方打不到的距离输出）
+        const better = ENEMY ? !best || r?.score > best.r.score : !best || r.dps > best.r.dps + 1e-6 || (r.dps > best.r.dps - 1e-6 && r.cost < best.r.cost);
+        if (r && r.ok && better) best = { f, r, w };
       }
       if (best) options.push(best);
     }
@@ -823,7 +833,7 @@ async function search(onProgress) {
   // 不限定的话纸面 DPS 高的无加成武器会胜出（如唤风级的电弧弦投射器射程加成被中子炮压过）
   const bonusedW = options.filter((o) => P.weaponBonus(o.w));
   const pool = bonusedW.length ? bonusedW : options;
-  pool.sort((a, b) => b.r.dps - a.r.dps);
+  pool.sort((a, b) => (ENEMY ? b.r.score - a.r.score : b.r.dps - a.r.dps));
   // 同一类武器（同分组、同射程档：如长射程磁轨炮与短射程疾速炮分开）只保留最好的一种，最多两种方案
   const wkey = (w) => w.group + ':' + Math.round(Math.log2(w.attrs.get(ctx.FE.AT.maxRange) || 1));
   const picked = [];
@@ -864,6 +874,52 @@ async function search(onProgress) {
   }
   return { results, tankType, resistMode, evals, roles: [...ROLES], placed: [...new Set(placed)], selfRep: SELF_REP };
 }
+
+// ---------- 针对对手配装 ----------
+// 战场模拟的装配详情用：按对方阵容给某一行的船配一套装配（装备等级、预算沿用装配页智能装配的设置）。
+// enemy：{ targets: [{ sig, vel, w }]（对方各型船的信号半径、速度，w = 占对方总 EHP 的比例），
+//          res: [4]（对方按血量加权的平均伤害系数，1 − 抗性），profile: [4]（对方输出的伤害类型比例），
+//          dist（对方想打的距离，米；本船没有武器时用），incoming(d)（距离 d 上对方打得到的输出比例 0–1）}
+// 交战距离：本船主力武器的理想距离（与战场模拟的走位一致：炮台最佳射程 + 0.4 × 失准，导弹射程的 85%）
+// 有效 DPS = Σ 各型船权重 × 在这个距离对它的有效 DPS（跟踪、信号、射程）× 本船伤害类型对对方抗性的平均伤害系数
+function prefOf(st) {
+  const w = st.weapons.slice().sort((a, b) => b.dps - a.dps)[0];
+  if (!w) return ENEMY.dist;
+  const m = w.module;
+  return m.type.turret && m.type.group !== 4060 ? m.attr(ctx.FE.AT.maxRange) + 0.4 * m.attr(ctx.FE.AT.falloff) : w.range * 0.85;
+}
+function enemyTerms(st) {
+  const total = st.weapon.types.reduce((a, b) => a + b, 0);
+  const through = total ? st.weapon.types.reduce((t, v, i) => t + v * ENEMY.res[i], 0) / total : 1;
+  const d = prefOf(st);
+  let applied = 0;
+  for (const t of ENEMY.targets) applied += t.w * ctx.FE.appliedDps(st, t, d);
+  // 对方完全打不到也不当成无敌（会被追上、拉近）：至少按 15% 算
+  return { dps: applied * through, incoming: Math.max(0.15, ENEMY.incoming ? ENEMY.incoming(d) : 1), dist: d };
+}
+export async function counterFit({ fit, enemy, skills = 'max', onProgress }) {
+  if (S.running) throw new Error('智能装配正在计算，请稍后');
+  const saved = { ...A };
+  S.running = true;
+  S.cancel = false;
+  BASE = fit; ENEMY = enemy; SKILLS = skills;
+  // 按普通战斗船配（输出 + 坦克），功能装备按舰船加成，不看装配页设的最低要求、目标体型
+  Object.assign(A, { focus: ['dps', 'tank'], utils: defaultUtils(ctx.data.types.get(fit.ship)), utilsShip: fit.ship, tank: 'auto', resist: 'auto', selfRep: 'auto', weapon: 'auto',
+    minDps: 0, minEhp: 0, minSpeed: 0, capStable: false, role: 'auto', target: 'any', range: 'any', implants: false });
+  try {
+    const out = await search((n) => onProgress?.(n));
+    for (const x of out.results) {
+      for (const s of ctx.FE.SLOTS) for (const m of x.fit.slots[s]) if (m) delete m.fixed;
+      x.fit.implants = [...(fit.implants || [])];
+    }
+    return out;
+  } finally {
+    Object.assign(A, saved);
+    BASE = ENEMY = SKILLS = null;
+    S.running = false;
+  }
+}
+export function cancelCounterFit() { S.cancel = true; }
 
 // ---------- 植入体 ----------
 // 候选：1–10 号槽、市场有售、价格不超过植入体预算（按 ESI 角色时还要求技能够）的植入体。

@@ -5,9 +5,9 @@
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
 import * as FE from './fit-engine.js?v=v33';
 import * as MU from './fit-mutate.js?v=v4';
-import { initAutoFit, openAutoFit, openImplantAdvisor } from './fit-auto.js?v=v29';
+import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit } from './fit-auto.js?v=v30';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
-import { initSim, mountSim } from './fit-sim.js?v=v35';
+import { initSim, mountSim } from './fit-sim.js?v=v36';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v10';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
@@ -64,6 +64,7 @@ export function initFitting(context) {
   try { FE.setFleet(app.store.getJSON(FLEET_KEY, [])); } catch { /* 没有舰队加成 */ }
   bindSidebar();
   initTypeInfo();
+  initDrag();
   $('fitMain').addEventListener('click', onMainClick);
   $('fitMain').addEventListener('change', onMainChange);
   $('fitMain').addEventListener('input', onMainInput);
@@ -101,6 +102,8 @@ export function initFitting(context) {
     esiSkills: () => app.getCharacterSkills(),    // 已绑定角色的技能（战场模拟某一方按角色技能）
     // 在装配页打开（战场模拟的装配详情）：先记下，切到装配页时载入
     openInFitting: (fit) => { pendingFit = fit; app.openFit(); },
+    // 针对对方阵容的智能装配（战场模拟的装配详情）
+    counterFit, cancelCounterFit,
     esc: app.esc, formatNumber: app.formatNumber, formatISK: app.formatISK, showToast: app.showToast, store: app.store
   };
   toolInit = () => { initSim(toolCtx); initGraph(toolCtx); initPlan(planPageCtx); toolInit = null; };
@@ -386,7 +389,7 @@ function itemRow(t) {
   const meta = metaTag(t);
   const fitInfo = t.category === FE.CAT.module ? [t.attrs.get(FE.AT.cpu) ? `${fmt(t.attrs.get(FE.AT.cpu))} tf` : '', t.attrs.get(FE.AT.power) ? `${fmt(t.attrs.get(FE.AT.power))} MW` : '', t.attrs.get(FE.AT.upgradeCost) ? `校准 ${t.attrs.get(FE.AT.upgradeCost)}` : ''].filter(Boolean).join(' · ') : '';
   return `<button class="fit-item" data-fit-type="${t.id}" title="${app.esc(t.name + (t.en ? '\n' + t.en : ''))}">
-    <img src="${IMG(t.id)}" alt="" width="24" height="24" loading="lazy">
+    <img src="${IMG(t.id)}" alt="" width="24" height="24" loading="lazy" draggable="false">
     <span class="fit-item-name">${app.esc(t.name)}${fitInfo ? `<small>${fitInfo}</small>` : ''}</span>
     ${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${infoBtn(t.id, 'span')}
   </button>`;
@@ -474,7 +477,7 @@ async function openTypeInfo(id, src = null) {
   if (infoFloat.id !== id) return;   // 读数据期间换了别的物品
   body.dataset.id = String(id);
   F.infoSrc = sourceType(src) === id ? src : null;
-  body.innerHTML = infoHtml(t, names, info, tabNow, Boolean(F.infoSrc));
+  body.innerHTML = infoHtml(t, names, info, tabNow, Boolean(F.infoSrc), DRAG_CATS.has(t.category));
   body.dataset.open = '1';
   body.querySelector('.fi-panes').scrollTop = 0;
   infoDesc(id).then((text) => {
@@ -499,7 +502,7 @@ export async function typeDetail(id) {
   const html = infoHtml(t, names, info, null, false).replace('<div class="pi-loading">读取描述…</div>', app.esc(desc));
   return { title: t.name, html: `<div class="fi-pop fi-float">${html}</div>` };
 }
-function infoHtml(t, names, info, tabNow, canSwap) {
+function infoHtml(t, names, info, tabNow, canSwap, drag = false) {
   const id = t.id;
   const meta = metaTag(t);
   const isShip = t.category === FE.CAT.ship;
@@ -523,7 +526,7 @@ function infoHtml(t, names, info, tabNow, canSwap) {
   const first = tabs.some(([k]) => k === tabNow) ? tabNow : bonus && isShip ? 'bonus' : 'attrs';
   const pane = (key, html) => `<div class="fi-pane${key === first ? ' active' : ''}" data-fi-pane="${key}">${html}</div>`;
   return `<div class="fi-head">
-      <img src="${IMG(id, isShip ? 'render' : 'icon', 128)}" alt="" width="72" height="72">
+      <img src="${IMG(id, isShip ? 'render' : 'icon', 128)}" alt="" width="72" height="72"${drag ? ` class="fi-drag" data-fit-drag="${id}" draggable="false" title="按住拖到装配的槽位上"` : ''}>
       <div class="fi-title"><span>${app.esc(F.data.groups.get(t.group)?.name || '')}${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${t.attrs.get(633) ? `<small>衍生等级 ${t.attrs.get(633)}</small>` : ''}</span>
         <h4>${app.esc(t.name)}</h4>${t.en && t.en !== t.name ? `<small translate="no">${app.esc(t.en)}</small>` : ''}</div>
       ${t.market ? `<button type="button" class="btn btn-ghost btn-sm" data-fi-market="${id}">市场价格</button>` : ''}
@@ -650,6 +653,127 @@ function swapType(from, to) {
 
 function fmt(v, d = 1) {
   return Number.isInteger(v) ? app.formatNumber(v) : v.toFixed(d).replace(/\.0+$/, '');
+}
+
+// ---------- 拖放：左侧列表的物品、详情里的大图标按住拖到中间的槽位 ----------
+// 鼠标按住移动 6px 开始拖；触屏长按 0.3 秒开始拖（不影响滚动列表）。能放的位置淡淡标出，指到的位置变蓝（放不了变红）
+//   装备 / 子系统 → 同类槽位的那一格（有装备就替换，原来的弹药能用就留着）；弹药 → 那个装备；无人机 / 舰载机 / 植入体 → 对应区域
+const DRAG_CATS = new Set([FE.CAT.module, FE.CAT.subsystem, FE.CAT.charge, FE.CAT.drone, FE.CAT.fighter, FE.CAT.implant]);
+const DROP_KIND = { [FE.CAT.drone]: 'drone', [FE.CAT.fighter]: 'fighter', [FE.CAT.implant]: 'implant' };
+
+// 某个元素作为 t 的放置位置：{ el 高亮的元素, ok 能不能放, apply 放下 }；不是放置位置返回 null
+function dropTarget(t, node) {
+  if (!node?.closest || !F.fit) return null;
+  if (t.category === FE.CAT.module || t.category === FE.CAT.subsystem) {
+    const el = node.closest('#fitMain [data-fit-mod], #fitMain [data-fit-empty]');
+    if (!el) return null;
+    const { slot, index } = el.dataset.fitMod ? parseRef(el.dataset.fitMod) : { slot: el.dataset.fitEmpty, index: Number(el.dataset.fitIdx) };
+    const ok = slot === t.slot && !el.classList.contains('is-extra') && !FE.cannotFit(F.data, type(F.fit.ship), t);
+    return { el, ok, apply: () => putModule(t, slot, index) };
+  }
+  if (t.category === FE.CAT.charge) {
+    const el = node.closest('#fitMain [data-fit-mod]');
+    if (!el) return null;
+    const { slot, index } = parseRef(el.dataset.fitMod);
+    const m = F.fit.slots[slot][index];
+    return { el, ok: Boolean(m && FE.chargeFits(type(m.type), t)), apply: () => { m.charge = t.id; recompute(); } };
+  }
+  const kind = DROP_KIND[t.category];
+  const el = kind && node.closest('#fitMain [data-fit-drop]');
+  if (!el) return null;
+  return { el, ok: el.dataset.fitDrop === kind, apply: () => useType(t.id) };
+}
+
+// 装备放到指定槽位（替换那一格）；子系统按类别替换，同 addModule
+function putModule(t, slot, index) {
+  const why = FE.cannotFit(F.data, type(F.fit.ship), t);
+  if (why) { app.showToast(`${t.name}：${why}`, 'error'); return; }
+  if (slot === 'sub') { addModule(t); return; }
+  const list = F.fit.slots[slot];
+  const old = list[index];
+  const mod = { type: t.id, state: defaultState(t), charge: null };
+  if (old?.charge && FE.chargeFits(t, type(old.charge))) mod.charge = old.charge;
+  else mod.charge = list.find((m) => m && m.type === t.id && m.charge)?.charge || null;
+  while (list.length < index) list.push(null);
+  list[index] = mod;
+  F.selected = { slot, index };
+  recompute();
+}
+
+function initDrag() {
+  let pend = null;   // 按下还没开始拖：{ t, x, y, id, timer, pop }
+  let drag = null;   // 正在拖：{ t, ghost, hit, cands, pop }
+  let eatClick = false;
+  const source = (e) => e.target.closest?.('#fitBrowser [data-fit-type], [data-fit-drag]');
+  const stopTouchScroll = (e) => { if (drag) e.preventDefault(); };
+  const start = () => {
+    const { t, x, y, pop } = pend;
+    clearTimeout(pend.timer);
+    pend = null;
+    if (!F.fit) { app.showToast('请先选择一艘舰船', 'info'); return; }
+    if (MOBILE()) app.closeDrawer?.();
+    const ghost = document.createElement('img');
+    ghost.className = 'fit-drag-ghost';
+    ghost.src = IMG(t.id, 'icon', 64);
+    ghost.alt = '';
+    document.body.append(ghost);
+    document.body.classList.add('fit-dragging');
+    // 能放的位置先标出来
+    const cands = [...document.querySelectorAll('#fitMain [data-fit-mod], #fitMain [data-fit-empty], #fitMain [data-fit-drop]')].filter((el) => dropTarget(t, el)?.ok && dropTarget(t, el).el === el);
+    cands.forEach((el) => el.classList.add('fit-drop-cand'));
+    // 从详情弹窗拖出来：弹窗变淡并让鼠标穿过去，下面被盖住的槽位也能放
+    pop?.classList.add('fit-drag-from');
+    drag = { t, ghost, hit: null, cands, pop };
+    move(x, y);
+  };
+  const move = (x, y) => {
+    drag.ghost.style.transform = `translate(${x - 20}px, ${y - 20}px)`;
+    const hit = dropTarget(drag.t, document.elementFromPoint(x, y));
+    if (drag.hit?.el !== hit?.el || drag.hit?.ok !== hit?.ok) {
+      drag.hit?.el.classList.remove('fit-drop-ok', 'fit-drop-no');
+      hit?.el.classList.add(hit.ok ? 'fit-drop-ok' : 'fit-drop-no');
+    }
+    drag.hit = hit;
+  };
+  const end = (drop) => {
+    if (pend) { clearTimeout(pend.timer); pend = null; }
+    if (!drag) return;
+    const { t, ghost, hit, cands, pop } = drag;
+    drag = null;
+    ghost.remove();
+    pop?.classList.remove('fit-drag-from');
+    document.body.classList.remove('fit-dragging');
+    cands.forEach((el) => el.classList.remove('fit-drop-cand'));
+    hit?.el.classList.remove('fit-drop-ok', 'fit-drop-no');
+    eatClick = true;
+    setTimeout(() => { eatClick = false; }, 0);
+    if (!drop || !hit) return;
+    if (!hit.ok) { app.showToast(`${t.name} 不能放在这里`, 'error', 1800); return; }
+    hit.apply();
+  };
+  document.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || drag) return;
+    const src = source(e);
+    if (!src || e.target.closest('.fit-info-btn')) return;
+    const t = type(Number(src.dataset.fitType || src.dataset.fitDrag));
+    if (!t || !DRAG_CATS.has(t.category)) return;
+    pend = { t, x: e.clientX, y: e.clientY, id: e.pointerId, touch: e.pointerType === 'touch', pop: src.closest('.fi-pop') };
+    if (pend.touch) pend.timer = setTimeout(() => { if (pend) start(); }, 300);
+  });
+  document.addEventListener('pointermove', (e) => {
+    if (drag) { move(e.clientX, e.clientY); return; }
+    if (!pend || e.pointerId !== pend.id) return;
+    const far = Math.hypot(e.clientX - pend.x, e.clientY - pend.y);
+    if (pend.touch) { if (far > 10) { clearTimeout(pend.timer); pend = null; } return; }   // 触屏先移动了：是在滚动
+    if (far > 6) { pend.x = e.clientX; pend.y = e.clientY; start(); }
+  });
+  document.addEventListener('pointerup', () => end(true));
+  document.addEventListener('pointercancel', () => end(false));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && drag) end(false); });
+  document.addEventListener('touchmove', stopTouchScroll, { passive: false });
+  // 拖完松手时的那次点击不算「点击添加」
+  document.addEventListener('click', (e) => { if (eatClick) { e.stopPropagation(); e.preventDefault(); eatClick = false; } }, true);
+  document.addEventListener('contextmenu', (e) => { if (drag || pend?.touch) e.preventDefault(); });
 }
 
 // ---------- 使用物品 ----------
@@ -1053,7 +1177,7 @@ function problemsHtml(list) {
 }
 
 function moduleRow(slot, index, m, extra) {
-  const empty = `<div class="fit-slot is-empty${extra ? ' is-extra' : ''}" data-fit-empty="${slot}"><span class="fit-slot-icon"></span><span>${extra ? '超出槽位' : '空' + FE.SLOT_NAME[slot]}</span></div>`;
+  const empty = `<div class="fit-slot is-empty${extra ? ' is-extra' : ''}" data-fit-empty="${slot}" data-fit-idx="${index}"><span class="fit-slot-icon"></span><span>${extra ? '超出槽位' : '空' + FE.SLOT_NAME[slot]}</span></div>`;
   if (!m) return empty;
   const t = type(m.type);
   const item = F.calc.modules.find((x) => x.slot === slot && x.index === index);
@@ -1113,12 +1237,12 @@ function dronesHtml() {
   const drones = F.fit.drones.map((d, i) => [d, i]).filter(([d]) => !isFighter(d));
   const fighters = F.fit.drones.map((d, i) => [d, i]).filter(([d]) => isFighter(d));
   if (res.droneBay.total || drones.length) {
-    html += `<section class="fit-slots"><h4>无人机<span>挂舱 ${fmt(res.droneBay.used)} / ${fmt(res.droneBay.total)} m³ · 带宽 ${fmt(res.bandwidth.used)} / ${fmt(res.bandwidth.total)}</span></h4>
+    html += `<section class="fit-slots" data-fit-drop="drone"><h4>无人机<span>挂舱 ${fmt(res.droneBay.used)} / ${fmt(res.droneBay.total)} m³ · 带宽 ${fmt(res.bandwidth.used)} / ${fmt(res.bandwidth.total)}</span></h4>
       ${drones.map(([d, i]) => droneRow(d, i, false)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加</span></div></section>`;
   }
   if (res.fighterBay.total || fighters.length) {
     const roles = [['fighterLight', '轻型'], ['fighterSupport', '支援'], ['fighterHeavy', '重型']].filter(([k]) => res[k].total).map(([k, l]) => `${l} ${res[k].used}/${res[k].total}`).join(' · ');
-    html += `<section class="fit-slots"><h4>舰载机<span>机库 ${fmt(res.fighterBay.used)} / ${fmt(res.fighterBay.total)} m³ · 发射管 ${res.fighterTubes.used} / ${res.fighterTubes.total}${roles ? ' · ' + roles : ''}</span></h4>
+    html += `<section class="fit-slots" data-fit-drop="fighter"><h4>舰载机<span>机库 ${fmt(res.fighterBay.used)} / ${fmt(res.fighterBay.total)} m³ · 发射管 ${res.fighterTubes.used} / ${res.fighterTubes.total}${roles ? ' · ' + roles : ''}</span></h4>
       ${fighters.map(([d, i]) => droneRow(d, i, true)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加舰载机</span></div></section>`;
   }
   return html;
@@ -1130,7 +1254,7 @@ function implantsHtml(bound) {
     const slot = t.attrs.get(IMPLANT_SLOT);
     return `<div class="fit-slot"><img src="${IMG(id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(t.name)}<small>${slot ? '植入体槽位 ' + slot : '增效剂'}</small></span>${infoBtn(id)}<button class="fit-remove" data-fit-implant-remove="${id}" aria-label="移除">×</button></div>`;
   }).join('');
-  return `<section class="fit-slots"><h4>植入体 / 增效剂<span><button class="link-btn" data-fit-imp>智能推荐</button>${bound ? '<button class="link-btn" data-fit-my-implants>导入当前角色的植入体</button>' : ''}</span></h4>
+  return `<section class="fit-slots" data-fit-drop="implant"><h4>植入体 / 增效剂<span><button class="link-btn" data-fit-imp>智能推荐</button>${bound ? '<button class="link-btn" data-fit-my-implants>导入当前角色的植入体</button>' : ''}</span></h4>
     ${rows}<div class="fit-slot is-empty" data-fit-empty-implant><span class="fit-slot-icon"></span><span>从左侧「植入体」中添加</span></div></section>`;
 }
 
