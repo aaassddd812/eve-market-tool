@@ -13,7 +13,7 @@ export const AT = {
   hiSlots: 14, medSlots: 13, lowSlots: 12, rigSlots: 1137, maxSubSystems: 1367, turretSlots: 102, launcherSlots: 101,
   rigSize: 1547, droneCapacity: 283, droneBandwidth: 1271, droneBandwidthUsed: 1272,
   chargeSize: 128, chargeGroups: [604, 605, 606, 609], chargeRate: 56,
-  speed: 51, damageMultiplier: 64, duration: 73, capNeed: 6, capacitorBonus: 67,
+  speed: 51, damageMultiplier: 64, duration: 73, capNeed: 6, capacitorBonus: 67, reactivationDelay: 669,
   em: 114, explosive: 116, kinetic: 117, thermal: 118, missileDamageMultiplier: 212,
   shieldCapacity: 263, armorHP: 265, hp: 9, shieldRecharge: 479, capCapacity: 482, capRecharge: 55,
   maxVelocity: 37, agility: 70, warpSpeedMultiplier: 600, baseWarpSpeed: 1281, signatureRadius: 552,
@@ -46,6 +46,8 @@ const EXEMPT = new Set([CAT.ship, CAT.charge, CAT.skill, CAT.implant, CAT.subsys
 const EFFECT = { passive: 0, active: 1, target: 2, online: 4, overload: 5 };
 const STATE_RANK = { offline: 0, online: 1, active: 2, overload: 3 };
 const OP = { preAssign: -1, preMul: 0, preDiv: 1, modAdd: 2, modSub: 3, postMul: 4, postDiv: 5, postPercent: 6, postAssign: 7 };
+// 装备周期：取这些持续时间属性里最长的（同 pyfa rawCycleTime）：射速、持续时间、durationHighisGood、四种脉冲投射器
+const CYCLE_ATTRS = [51, 73, 3115, 2397, 2398, 2399, 2400];
 const PENALTY = (i) => Math.exp(-((i / 2.67) ** 2));
 const SLOT_EFFECT = { 12: 'high', 13: 'mid', 11: 'low', 2663: 'rig', 3772: 'sub' };
 export const SLOTS = ['high', 'mid', 'low', 'rig', 'sub'];
@@ -185,13 +187,10 @@ function applyMods(data, attrId, base, list) {
   v = multiply(v, vals(OP.preDiv).map(({ v: x, m }) => ({ x: x ? 1 / x : 1, m })), stackable);
   for (const { v: x } of vals(OP.modAdd)) v += x;
   for (const { v: x } of vals(OP.modSub)) v -= x;
-  // 后乘、后除、百分比在同一条叠加惩罚链上
-  const post = [
-    ...vals(OP.postMul).map(({ v: x, m }) => ({ x, m })),
-    ...vals(OP.postDiv).map(({ v: x, m }) => ({ x: x ? 1 / x : 1, m })),
-    ...vals(OP.postPercent).map(({ v: x, m }) => ({ x: 1 + x / 100, m }))
-  ];
-  v = multiply(v, post, stackable);
+  // 后乘、后除、百分比各自一条叠加惩罚链（跟游戏一致：堡垒 / 会战模块的射速百分比不跟伤害插件的后乘互相惩罚）
+  v = multiply(v, vals(OP.postMul).map(({ v: x, m }) => ({ x, m })), stackable);
+  v = multiply(v, vals(OP.postDiv).map(({ v: x, m }) => ({ x: x ? 1 / x : 1, m })), stackable);
+  v = multiply(v, vals(OP.postPercent).map(({ v: x, m }) => ({ x: 1 + x / 100, m })), stackable);
   const assign = vals(OP.postAssign);
   if (assign.length) v = assign[assign.length - 1].v;
   return v;
@@ -639,18 +638,30 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
     }
   };
 
-  // 电容
+  // 电容：照 pyfa 的电容模拟（逐次激活，每个周期开始时扣电容；周期 = 最长的持续时间属性 + 重新激活延迟）
   const capacity = ship.attr(AT.capCapacity);
   const tau = ship.attr(AT.capRecharge) / 1000;
+  const drains = [];
   let usage = 0;
   for (const m of activeMods) {
+    const cycle = Math.max(...CYCLE_ATTRS.map((a) => m.attr(a) || 0)) + (m.attr(AT.reactivationDelay) || 0);
+    if (!(cycle > 0)) continue;
+    // 电容注入器：装填后每个周期注入 capacitorBonus；弹舱打空要装填 10 秒
+    if (m.type.effects.some((e) => data.effects.get(e)?.name === 'powerBooster')) {
+      const bonus = m.charge ? m.charge.attr(AT.capacitorBonus) : 0;
+      if (!bonus) continue;
+      const vol = m.charge.type.attrs.get(AT.volume), room = m.type.attrs.get(AT.capacity);
+      const clip = vol && room ? Math.floor(room / vol + 1e-9) : 0;
+      drains.push({ cycle: Math.trunc(cycle), need: -bonus, clip, reload: INJECTOR_RELOAD, injector: true });
+      usage -= clip ? bonus * clip / (cycle * clip + INJECTOR_RELOAD) * 1000 : bonus / cycle * 1000;
+      continue;
+    }
     const need = m.attr(AT.capNeed);
-    const cycle = (m.attr(AT.duration) || m.attr(AT.speed)) / 1000;
-    if (need && cycle) usage += need / cycle;
-    // 电容注入器：装填后按每个周期注入的电容计
-    if (m.charge && m.type.effects.some((e) => data.effects.get(e)?.name === 'powerBooster') && cycle) usage -= m.charge.attr(AT.capacitorBonus) / cycle;
+    if (!need) continue;
+    drains.push({ cycle: Math.trunc(cycle), need, turret: m.type.turret });
+    usage += need / cycle * 1000;
   }
-  const capacitor = { capacity, recharge: tau, peak: tau ? 2.5 * capacity / tau : 0, usage, ...capStability(capacity, tau, usage) };
+  const capacitor = { capacity, recharge: tau, peak: tau ? 2.5 * capacity / tau : 0, usage, ...capSim(capacity, tau * 1000, drains) };
 
   // 机动与锁定
   const mass = ship.attr(AT.mass), agility = ship.attr(AT.agility);
@@ -674,81 +685,127 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
   };
 }
 
-// 电容是否稳定：充能速率 = 10C/τ × (√(c/C) − c/C)，峰值在 25% 处
-// ---------- 对目标的有效 DPS ----------
-// 典型目标：信号半径（m）与环绕速度（m/s，按全部为横向速度计）
-export const TARGETS = {
-  frigate: { name: '护卫舰 / 驱逐舰', sig: 40, vel: 400 },
-  cruiser: { name: '巡洋舰 / 战列巡洋舰', sig: 140, vel: 230 },
-  battleship: { name: '战列舰', sig: 400, vel: 110 },
-  capital: { name: '旗舰 / 建筑', sig: 3000, vel: 40 }
-};
-// 炮台命中后的平均伤害倍数（含 1% 的 3 倍暴击）
-function turretMult(chance) {
-  const wreck = Math.min(chance, 0.01);
-  const normal = chance - wreck;
-  return wreck * 3 + (normal > 0 ? normal * ((0.01 + chance) / 2 + 0.49) : 0);
-}
-// 炮台：命中率 = 0.5^((角速度 × 信号分辨率 / (跟踪 × 目标信号))² + (max(0, 距离 − 最佳射程) / 失准范围)²)
-// 导弹：伤害比例 = min(1, 目标信号 / 爆炸半径, (目标信号 / 爆炸半径 × 爆炸速度 / 目标速度)^爆炸衰减系数)，飞行距离不到则为 0
-// target 为 null 表示不看体型；distance 为 0 表示不看距离（炮台按在最佳射程处算跟踪）。舰载机按满伤害计
-export function appliedDps(stats, target = null, distance = 0) {
-  let total = stats.weapon.fighter;
-  // 无人机：会飞的按信号比例（目标信号 / 无人机信号分辨率）和追不追得上算；岗哨（不会动）按炮台公式算
-  for (const { drone: d, dps } of stats.droneDps || []) {
-    let f = 1;
-    const sigRes = d.attr(620) || 0, vel = d.attr(AT.maxVelocity);
-    if (vel < 1) {
-      const optimal = d.attr(AT.maxRange), falloff = Math.max(1, d.attr(AT.falloff));
-      const dist = distance || optimal;
-      let exp = (Math.max(0, dist - optimal) / falloff) ** 2;
-      if (target && d.attr(AT.trackingSpeed) > 0) exp += ((target.vel / dist) * sigRes / (d.attr(AT.trackingSpeed) * target.sig)) ** 2;
-      f = Math.min(1, turretMult(0.5 ** exp));
-    } else if (target) {
-      f = Math.min(1, sigRes ? target.sig / sigRes : 1) * Math.min(1, vel / Math.max(1, target.vel));
-    }
-    total += dps * f;
+// 电容模拟：移植自 pyfa（eos/capSim.py，Entity 的电容模拟器）。从满电容开始，按激活时刻逐个扣电容，电容按游戏公式回充：
+//   同种非炮台装备错开激活（炮台齐射不错开）；电容注入器在扣完电容后、电容有空位时才注入，弹舱打空装填 10 秒。
+//   到某次激活电容不够（扣成负数）就是撑不住，可维持时间 = 那一刻；6 小时内都没扣空算稳定，稳定值 = 最低点（激活前后取平均）。
+const CAP_SIM_MAX = 6 * 3600 * 1000;
+const INJECTOR_RELOAD = 10000;
+const CAP_MEMO = new Map();   // 自动配装会反复算同样的电容组合：按输入缓存结果
+function capSim(C, rechargeMs, drains) {
+  if (!drains.length || !C) return { stable: true, level: 1 };
+  if (!rechargeMs) return { stable: false, lasts: 0 };
+  const key = C + '/' + rechargeMs + '/' + drains.map((d) => [d.cycle, d.need, d.clip || 0, d.turret ? 1 : 0, d.injector ? 1 : 0].join()).sort().join(';');
+  let r = CAP_MEMO.get(key);
+  if (!r) {
+    r = runCapSim(C, rechargeMs, drains);
+    if (CAP_MEMO.size > 500) CAP_MEMO.clear();
+    CAP_MEMO.set(key, r);
   }
-  for (const w of stats.weapons) {
-    const m = w.module;
-    let f = 1;
-    if (m.type.turret) {
-      const optimal = m.attr(AT.maxRange), falloff = Math.max(1, m.attr(AT.falloff));
-      let exp = distance ? (Math.max(0, distance - optimal) / falloff) ** 2 : 0;
-      if (target) {
-        const d = distance || Math.max(optimal, 1000);
-        const tracking = m.attr(AT.trackingSpeed);
-        exp += tracking > 0 ? ((target.vel / d) * (m.attr(620) || 40000) / (tracking * target.sig)) ** 2 : 0;
-      }
-      f = Math.min(1, turretMult(0.5 ** exp));   // 暴击带来的 1.5% 不计，避免有效 DPS 高于纸面
-    } else {
-      if (distance && w.range < distance) f = 0;
-      else if (target && m.charge) {
-        const er = m.charge.attr(654), ev = m.charge.attr(653), drf = m.charge.attr(1353) || 1;
-        if (er > 0) f = Math.min(1, target.sig / er, target.vel > 0 && ev > 0 ? ((target.sig / er) * (ev / target.vel)) ** drf : 1);
+  return { ...r };
+}
+function runCapSim(C, rechargeMs, drains) {
+  // 事件：[时刻, 周期, 每次电容, 已打发数, 弹舱发数, 装填时间, 是否注入器]，按数组字典序出堆（同 Python heapq）
+  const heap = [];
+  const less = (a, b) => { for (let i = 0; i < 7; i++) if (a[i] !== b[i]) return a[i] < b[i]; return false; };
+  const push = (e) => {
+    heap.push(e);
+    for (let i = heap.length - 1; i > 0;) { const p = (i - 1) >> 1; if (!less(heap[i], heap[p])) break; [heap[i], heap[p]] = [heap[p], heap[i]]; i = p; }
+  };
+  const pop = () => {
+    const top = heap[0], last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      for (let i = 0; ;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < heap.length && less(heap[l], heap[m])) m = l;
+        if (r < heap.length && less(heap[r], heap[m])) m = r;
+        if (m === i) break;
+        [heap[i], heap[m]] = [heap[m], heap[i]];
+        i = m;
       }
     }
-    total += w.dps * f;
+    return top;
+  };
+  const gcd = (a, b) => { while (b) [a, b] = [b, a % b]; return a; };
+  const groups = new Map();
+  for (const d of drains) {
+    const key = [d.cycle, d.need, d.clip || 0, d.turret ? 1 : 0, d.injector ? 1 : 0].join();
+    const g = groups.get(key);
+    if (g) g.n++;
+    else groups.set(key, { ...d, n: 1 });
   }
-  return total;
-}
-
-function capStability(C, tau, usage) {
-  if (usage <= 0 || !C) return { stable: true, level: 1 };
-  if (!tau) return { stable: false, lasts: C / usage };
-  const k = usage * tau / (10 * C);
-  if (k <= 0.25) {
-    const x = (1 + Math.sqrt(1 - 4 * k)) / 2;
-    return { stable: true, level: x * x };
+  let period = 1, noPeriod = false;
+  for (const g of groups.values()) {
+    if (g.injector) {
+      noPeriod = true;
+      for (let i = 0; i < g.n; i++) push([0, g.cycle, g.need, 0, g.clip, g.reload, 1]);
+      continue;
+    }
+    let { cycle, need } = g;
+    if (g.turret) need *= g.n;
+    else cycle = Math.trunc(cycle / g.n);
+    if (cycle <= 0) continue;
+    period = period * cycle / gcd(period, cycle);
+    push([0, cycle, need, 0, 0, 0, 0]);
   }
-  // 不稳定：从满电容按 1 秒步长模拟到耗尽
-  let c = C, t = 0;
-  while (c > 0 && t < 36000) {
-    const r = c / C;
-    c += (10 * C / tau) * (Math.sqrt(r) - r) - usage;
-    t += 1;
+  if (noPeriod || !Number.isFinite(period)) period = CAP_SIM_MAX;
+  const tau = rechargeMs / 5;
+  let cap = C, capWrap = C, lowest = C, lowestPre = C, tLast = 0, tWrap = period;
+  let waiting = [], waitingKey = '', wrapKey = '';
+  const inject = (inj, t) => {
+    cap = Math.min(C, cap - inj[2]);
+    let next = t + inj[1], shot = inj[3] + 1;
+    if (inj[4] && shot % inj[4] === 0) { shot = 0; next += inj[5]; }
+    push([next, inj[1], inj[2], shot, inj[4], inj[5], 1]);
+  };
+  while (heap.length) {
+    const a = pop();
+    const tNow = a[0];
+    if (tNow >= CAP_SIM_MAX) { push(a); break; }
+    if (tNow > tLast) cap = (1 + (Math.sqrt(cap / C) - 1) * Math.exp((tLast - tNow) / tau)) ** 2 * C;
+    if (tNow !== tLast) {
+      if (cap < lowestPre) lowestPre = cap;
+      if (tNow === tWrap) {
+        waitingKey = waiting.map((w) => w.join()).sort().join('|');
+        if (cap >= capWrap && waitingKey === wrapKey) { push(a); break; }
+        capWrap = Math.round(cap * 10) / 10;
+        wrapKey = waitingKey;
+        tWrap += period;
+      }
+    }
+    tLast = tNow;
+    const need = a[2];
+    if (a[6] && cap - need > C) { waiting.push(a); continue; }
+    // 电容不够这次激活：先用等着的注入器补
+    while (need > cap && cap < C && waiting.length) {
+      const gap = Math.min(need - cap, C - cap);
+      const good = waiting.filter((w) => -w[2] >= gap);
+      const pick = good.length ? good.reduce((x, y) => (-y[2] < -x[2] ? y : x)) : waiting.reduce((x, y) => (-y[2] > -x[2] ? y : x));
+      waiting = waiting.filter((w) => w !== pick);
+      inject(pick, tNow);
+    }
+    cap = Math.min(C, cap - need);
+    if (cap < lowest) {
+      if (cap < 0) break;
+      lowest = cap;
+    }
+    // 扣完有空位：放得下的注入器里挑注入最多的
+    while (waiting.length && cap < C) {
+      const good = waiting.filter((w) => -w[2] <= C - cap);
+      if (!good.length) break;
+      const pick = good.reduce((x, y) => (-y[2] > -x[2] ? y : x));
+      waiting = waiting.filter((w) => w !== pick);
+      inject(pick, tNow);
+    }
+    let shot = a[3] + 1, next = tNow + a[1];
+    if (a[4] && shot % a[4] === 0) { shot = 0; next += a[5]; }
+    a[0] = next;
+    a[3] = shot;
+    push(a);
   }
-  return { stable: false, lasts: t };
+  if (cap <= 0) return { stable: false, lasts: tLast / 1000 };
+  return { stable: true, level: Math.min(1, (lowest + lowestPre) / (2 * C)) };
 }
 
 // ---------- 装配检查 ----------
