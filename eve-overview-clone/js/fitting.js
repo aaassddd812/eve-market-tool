@@ -1130,7 +1130,7 @@ function implantsHtml(bound) {
 // ---------- 右侧：属性 ----------
 // 属性用游戏内图标（tools/attr-icons.mjs 从客户端资源取到 assets/attr/），文字放在悬停提示里
 const SENSOR_ICON = { 雷达: 'radar', 光雷达: 'ladar', 磁力: 'magnet', 引力: 'gravi' };
-const ico = (k, label) => `<span class="fit-ico" title="${label}"><img src="assets/attr/${k}.png" alt="${label}" width="18" height="18" loading="lazy"></span>`;
+const ico = (k, label) => `<span class="fit-ico" title="${label}"><img src="assets/attr/${k}.png?v=1" alt="${label}" width="18" height="18" loading="lazy"></span>`;
 // 图标 + 名称 / 数值的两列格子（名称小字在上，悬停也显示）；cells：[图标, 名称, 数值, 数值的 class, 占满一行]，假值跳过
 const ivs = (cells) => `<div class="fit-ivs">${cells.filter(Boolean).map(([k, label, val, cls, wide]) => `<div class="fit-iv${wide ? ' is-wide' : ''}" title="${label}">${ico(k, label)}<span class="fit-iv-txt"><small>${label}</small><b class="${cls || ''}">${val}</b></span></div>`).join('')}</div>`;
 function renderStats() {
