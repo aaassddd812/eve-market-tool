@@ -20,6 +20,7 @@ python -m http.server 8899 --bind 127.0.0.1
 访问 `https://eve.navexor.top/`、桌面版客户端、安卓 App、ESI 登录回调落到的都是 `index.html`，不是 `index-v2.html`。
 
 1. 把这次改动的文件复制到 `/opt/eve/dist` 下的同一路径（`js/`、`css/`、`i18n/`、`float.html` 等）。
+   **二进制文件（PNG 等图片）绝不能过 `sed "s/\r$//"` 之类的文本处理**——内容会被改坏，状态码仍是 200 但图片裂开（曾因此全站属性图标损坏）。换行符规范化只用于 JS / CSS / HTML / JSON。
 2. **每次都把 `index-v2.html` 同时复制成 `index.html`**（两份内容完全一样）：
    ```bash
    cp eve-overview-clone/index-v2.html /opt/eve/dist/index-v2.html
