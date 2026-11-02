@@ -6,7 +6,7 @@
 //   2. 手动添加：建筑 ID、游戏内链接（showinfo:类型//ID）或名称（有建筑搜索权限时按名称搜）。
 // 结果按服务器 + 角色存在本地；勾选的建筑参与比价与排行。令牌只在浏览器里，服务器拿不到这些数据。
 import { SERVER, serverKey } from './server.js?v=s4';
-import * as JP from './jump-planner.js?v=v16';
+import * as JP from './jump-planner.js?v=v17';
 
 export const MARKET_STRUCTURE_TYPES = new Set([35833, 35834, 40340, 47512, 47513, 47514, 47515, 47516]);
 export const STRUCT_MARKET_SCOPE = 'esi-markets.structure_markets.v1';

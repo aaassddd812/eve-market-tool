@@ -8,7 +8,7 @@ import { OrbitControls } from './vendor/three/OrbitControls.js';
 import { Line2 } from './vendor/three/Line2.js';
 import { LineMaterial } from './vendor/three/LineMaterial.js';
 import { LineGeometry } from './vendor/three/LineGeometry.js';
-import * as JP from './jump-planner.js?v=v16';
+import * as JP from './jump-planner.js?v=v17';
 import * as ST from './standings.js?v=v4';
 import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s4';
 
@@ -338,6 +338,7 @@ async function loadLiveImpl(quiet) {
   if (kills.status === 'fulfilled') M.live.kills = new Map(kills.value.map((x) => [x.system_id, x]));
   if (jumps.status === 'fulfilled') M.live.jumps = new Map(jumps.value.map((x) => [x.system_id, x.ship_jumps]));
   if (incursions.status === 'fulfilled') M.live.incursions = incursions.value;
+  M.live.incursionsOk = incursions.status === 'fulfilled' || M.live.incursionsOk;
   if (fw.status === 'fulfilled') M.live.fw = new Map(fw.value.map((x) => [x.solar_system_id, x]));
   const failed = results.slice(0, 7).filter((r) => r.status === 'rejected').length;
   if (failed && !quiet) app.showToast(failed + ' 项实时数据加载失败，部分着色方式可能没有数据', 'error');
@@ -2326,7 +2327,7 @@ function danmaku(k, s) {
 }
 
 // ---------- 旗舰跳跃规划 ----------
-const J = { mode: 'gate', ships: null, loading: null, structures: null, esiSkills: null, settings: { ship: 23757, jdc: 5, jfc: 4, jf: 4, dock: 'any', skillSrc: 'manual' } };
+const J = { mode: 'gate', ships: null, loading: null, structures: null, esiSkills: null, settings: { ship: 23757, jdc: 5, jfc: 4, jf: 4, dock: 'any', skillSrc: 'manual', gates: false, incursion: true } };
 
 // 跳跃相关技能：跳跃引擎校准理论、跳跃燃料节约、战略货舰操作
 const JUMP_SKILLS = { jdc: 21611, jfc: 21610, jf: 29029 };
@@ -2378,6 +2379,8 @@ function bindJumpPlanner() {
   if (typeof J.settings.dock !== 'string') J.settings.dock = J.settings.dock ? 'npc' : 'any';   // 旧版是复选框
   $('jumpDock').value = J.settings.dock;
   $('jumpSkillSrc').value = J.settings.skillSrc || 'manual';
+  $('jumpGates').checked = J.settings.gates;
+  $('jumpIncursion').checked = J.settings.incursion;
   document.querySelectorAll('[data-route-mode]').forEach((btn) => btn.addEventListener('click', () => { setPanel('route', true); setRouteMode(btn.dataset.routeMode); }));
   const onChange = async (e) => {
     const manual = J.settings.skillSrc === 'manual';
@@ -2387,14 +2390,15 @@ function bindJumpPlanner() {
       jdc: manual ? Number($('jumpJdc').value) : J.settings.jdc,
       jfc: manual ? Number($('jumpJfc').value) : J.settings.jfc,
       jf: manual ? Number($('jumpJf').value) : J.settings.jf,
-      dock: $('jumpDock').value, skillSrc: $('jumpSkillSrc').value
+      dock: $('jumpDock').value, skillSrc: $('jumpSkillSrc').value,
+      gates: $('jumpGates').checked, incursion: $('jumpIncursion').checked
     };
     app.store.setJSON('eve-jump-settings', J.settings);
     if (e?.target?.id === 'jumpSkillSrc') await applySkillSource();
     else syncJumpOptions();
     if (M.route.length && J.mode === 'jump') planJump();
   };
-  for (const id of ['jumpShip', 'jumpJdc', 'jumpJfc', 'jumpJf', 'jumpDock', 'jumpSkillSrc']) $(id).addEventListener('change', onChange);
+  for (const id of ['jumpShip', 'jumpJdc', 'jumpJfc', 'jumpJf', 'jumpDock', 'jumpSkillSrc', 'jumpGates', 'jumpIncursion']) $(id).addEventListener('change', onChange);
   applySkillSource();
   $('jumpDockNote').addEventListener('click', async (e) => {
     if (!e.target.closest('[data-structures-refresh]')) return;
@@ -2592,7 +2596,18 @@ async function planJump() {
     order = bestWaypointOrder(a, order, to ? idx(to) : null, null, (p, q) => JP.lyBetween(M.systems[p], M.systems[q]));
   }
   const stops = [a, ...order, ...(to ? [idx(to)] : [])].filter((i, k, arr) => k === 0 || i !== arr[k - 1]);
-  const plan = planJumpStops(stops, { range, ...dockRule }, !to);
+  // 规避萨沙入侵：入侵星系既不落脚也不经过（起点、终点和途经点本身除外）
+  const avoid = new Set();
+  let incursionNote = '';
+  if (J.settings.incursion) {
+    await loadLive().catch(() => {});
+    for (const inc of M.live.incursions) for (const id of inc.infested_solar_systems) {
+      const s = M.byId.get(id);
+      if (s && !stops.includes(s.i)) avoid.add(s.i);
+    }
+    if (!M.live.incursionsOk) incursionNote = '萨沙入侵数据读取失败，本次没有规避';
+  }
+  const plan = planJumpStops(stops, { range, ...dockRule, avoid, gates: J.settings.gates, highsec: JP.canEnterHighSec(ship) }, !to);
   clearJumpRange();
   if (plan.error) {
     M.route = [];
@@ -2604,13 +2619,13 @@ async function planJump() {
   // 角色当前的跳跃疲劳（需要「跳跃疲劳」权限），作为第一跳之前的疲劳
   const fatigue = app.getFatigue ? await app.getFatigue().catch(() => null) : null;
   const sim = JP.simulate(plan.legs, ship, { jfc: sk.jfc, jfSkill: sk.jf, fatigue: fatigue?.minutes || 0 });
-  J.plan = { ...plan, sim, ship, origin: a, range, prefer: dockRule.prefer, fatigue };
+  J.plan = { ...plan, sim, ship, origin: a, range, prefer: dockRule.prefer, fatigue, avoided: avoid.size, incursionNote };
   M.route = [...plan.path, ...plan.gates];
   routeLine.material.color.setHex(ROUTE_COLORS.jump);
   updateRouteLine();
   fitTo(M.route, 1.25);
   renderJumpPlan();
-  $('routeSummary').textContent = `${sim.rows.length} 次跳跃` + (plan.stopAt.size ? ` · ${plan.stopAt.size} 个途经点` : '');
+  $('routeSummary').textContent = `${sim.jumps} 次跳跃` + (sim.gateCount ? ` · ${sim.gateCount} 个星门` : '') + (plan.stopAt.size ? ` · ${plan.stopAt.size} 个途经点` : '');
   const prices = await app.getMarketPriceMap().catch(() => new Map());
   const unit = prices.get(ship.fuelType);
   if (unit && J.plan?.sim === sim && $('jumpFuelIsk')) $('jumpFuelIsk').textContent = '≈ ' + app.formatISK(unit * sim.fuel) + ' ISK';
@@ -2635,7 +2650,7 @@ function planJumpStops(stops, opts, endIsVia = false) {
 }
 
 function renderJumpPlan() {
-  const { sim, gates, ship, path, landing, range, prefer, fatigue, stopAt, stops } = J.plan;
+  const { sim, gates, ship, path, landing, range, prefer, fatigue, stopAt, stops, avoided, incursionNote } = J.plan;
   const fatigueNote = fatigue?.minutes > 0 ? `<p class="jump-note warn">已计入角色当前的跳跃疲劳：剩余 ${JP.formatMinutes(fatigue.minutes)}（${new Date(fatigue.expires).toLocaleString('zh-CN', { hour12: false })} 消退）</p>`
     : fatigue ? '<p class="jump-note">角色当前没有跳跃疲劳</p>'
       : app.hasEsiToken() ? '<p class="jump-note">按零疲劳估算 · <button class="link-btn" data-scope-rebind="fatigue" title="授权后按角色实际疲劳计算">授权「跳跃疲劳」</button></p>' : '';
@@ -2655,7 +2670,7 @@ function renderJumpPlan() {
     if (stop) cls = (cls + ' is-stop').trim();
     return `<li class="${cls}"><button data-sys="${i}"><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}<span>${secDisplay(s.sec).toFixed(1)}</span>${tags}</button>${docks}${extra || ''}</li>`;
   };
-  const legs = sim.rows.map((r, k) => row(r.to,
+  const legs = sim.rows.map((r, k) => row(r.to, r.gate ? '<div class="jump-leg"><span>走星门</span></div>' :
     `<div class="jump-leg"><span>${r.ly.toFixed(2)} 光年</span><span>${app.formatNumber(r.fuel)} 燃料</span><span title="跳后重新激活冷却">冷却 ${JP.formatMinutes(r.cooldown)}</span><span title="跳后疲劳">疲劳 ${JP.formatMinutes(r.fatigue)}</span></div>`, '', stopAt.get(k + 1))).join('');
   // 多段路线：列出每段的跳跃次数
   const cut = [...new Set([0, ...stopAt.keys(), path.length - 1])];
@@ -2664,12 +2679,13 @@ function renderJumpPlan() {
   const dest = sys(gates.length ? gates[gates.length - 1] : landing);
   $('routeResult').innerHTML = `
     <div class="jump-summary">
-      <div><strong>${sim.rows.length}</strong><span>次跳跃</span></div>
+      <div><strong>${sim.jumps}</strong><span>次跳跃</span></div>${sim.gateCount ? `<div><strong>${sim.gateCount}</strong><span>个星门</span></div>` : ''}
       <div><strong>${sim.totalLy.toFixed(1)}</strong><span>光年</span></div>
       <div><strong>${app.formatNumber(sim.fuel)}</strong><span>${fuelName}</span></div>
     </div>
-    <p class="jump-note" title="按 CCP 规则估算（疲劳上限 5 小时、冷却上限 30 分钟），假设冷却结束立即起跳"><span id="jumpFuelIsk"></span>${sim.rows.length > 1 ? ` · 连续跳完约 ${JP.formatMinutes(sim.travel)}` : ''} · 到达后疲劳约 ${JP.formatMinutes(sim.finalFatigue)}，冷却 ${JP.formatMinutes(sim.finalCooldown)}</p>
+    ${sim.jumps ? `<p class="jump-note" title="按 CCP 规则估算（疲劳上限 5 小时、冷却上限 30 分钟），假设冷却结束立即起跳"><span id="jumpFuelIsk"></span>${sim.jumps > 1 ? ` · 连续跳完约 ${JP.formatMinutes(sim.travel)}` : ''} · 到达后疲劳约 ${JP.formatMinutes(sim.finalFatigue)}，冷却 ${JP.formatMinutes(sim.finalCooldown)}</p>` : '<p class="jump-note">全程走星门就能到，不需要跳跃</p>'}
     ${fatigueNote}
+    ${incursionNote ? `<p class="jump-note warn">${incursionNote}</p>` : avoided ? `<p class="jump-note">已规避 ${avoided} 个萨沙入侵星系</p>` : ''}
     ${prefer ? `<p class="jump-note${noDock.length ? ' warn' : ''}">${noDock.length ? `仍有 ${noDock.length} 处中途点无法停靠` : '所有中途点都可以停靠'}</p>` : ''}
     ${gates.length ? `<p class="jump-note warn">${app.esc(dest.name)} 不能直接跳入（高安等），跳到 ${app.esc(sys(landing).name)} 后再走 ${gates.length} 个星门</p>` : ''}
     <div class="route-summary"><span>${app.esc(ship.name)} · 最大 ${range.toFixed(2)} 光年</span>

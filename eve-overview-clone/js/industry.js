@@ -19,7 +19,7 @@
 import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
 import * as Plan from './ind-plan.js?v=v7';
 import * as Chain from './ind-chain.js?v=2';
-import * as IS from './ind-structs.js?v=3';
+import * as IS from './ind-structs.js?v=4';
 import { skPage } from './skeleton.js?v=v17';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 import { loadVolumes } from './hub-compare.js?v=v14';

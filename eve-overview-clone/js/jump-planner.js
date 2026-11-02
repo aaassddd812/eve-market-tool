@@ -67,6 +67,8 @@ export const STRUCTURES = {
 export const shipDockClass = (ship) => DOCK_CLASS[ship.group] || 'capital';
 export const canDockStructure = (ship, typeId) => Boolean(STRUCTURES[typeId]?.[1].includes(shipDockClass(ship)));
 export const canDockNpc = (ship) => NPC_DOCK.has(shipDockClass(ship));
+// 能走星门进入高安：战略货舰、黑隐特勤舰；旗舰不能进高安
+export const canEnterHighSec = (ship) => ['freighter', 'subcap'].includes(shipDockClass(ship));
 
 export function hasStructureScope(token) {
   if (!token?.scopes) return null;                 // 旧令牌没有记录授权范围：未知，读取时再判断
@@ -363,8 +365,8 @@ class Heap {
   get size() { return this.a.length; }
 }
 
-// 星门跳数（广度优先），用于终点在高安时找最近的可跳入星系
-function gateHops(systems, from, limit) {
+// 星门跳数（广度优先），用于终点在高安时找最近的可跳入星系；avoid 里的星系不经过
+function gateHops(systems, from, limit, avoid) {
   const hops = new Int16Array(systems.length).fill(-1);
   const prev = new Int32Array(systems.length).fill(-1);
   hops[from] = 0;
@@ -372,7 +374,7 @@ function gateHops(systems, from, limit) {
   for (let head = 0; head < queue.length; head++) {
     const cur = queue[head];
     if (hops[cur] >= limit) continue;
-    for (const n of systems[cur].nbr) if (hops[n] < 0) { hops[n] = hops[cur] + 1; prev[n] = cur; queue.push(n); }
+    for (const n of systems[cur].nbr) if (hops[n] < 0 && !avoid.has(n)) { hops[n] = hops[cur] + 1; prev[n] = cur; queue.push(n); }
   }
   return { hops, prev };
 }
@@ -380,12 +382,14 @@ function gateHops(systems, from, limit) {
 /**
  * 规划跳跃路线：先最少跳跃次数，再最短总光年。
  * options: { range, stops（中途必须停靠的星系 Set<index>，null 表示不限）,
- *            prefer（中途优先停靠的星系 Set<index>：先让无法停靠的中途点最少，再比跳跃次数和光年）, avoid: Set<index> }
+ *            prefer（中途优先停靠的星系 Set<index>：先让无法停靠的中途点最少，再比跳跃次数和光年）, avoid: Set<index>,
+ *            gates（中途可以走星门）, highsec（走星门时能否进入高安：只有战略货舰、黑隐特勤舰可以） }
  * 终点不能跳入（高安等）时，先跳到离终点星门数最少的可跳入星系，再走星门。
  */
 const NO_DOCK_PENALTY = 1e6;               // 每个无法停靠的中途点的代价，远大于任何跳跃次数差
+const GATE_COST = 250;                     // 走一个星门的代价：约 4 个星门抵一次跳跃（省燃料和疲劳）
 
-export function planJumpRoute(systems, from, to, { range, stops = null, prefer = null, avoid = new Set() }) {
+export function planJumpRoute(systems, from, to, { range, stops = null, prefer = null, avoid = new Set(), gates: useGates = false, highsec = false }) {
   const origin = systems[from], dest = systems[to];
   if (!canJumpFrom(origin)) return { error: `${origin.name} 位于${NO_JUMP_REASON[origin.region]}，无法使用跳跃引擎` };
   if (NO_JUMP_REGIONS.has(dest.region)) return { error: `${dest.name} 位于${NO_JUMP_REASON[dest.region]}，跳跃引擎无法进入` };
@@ -394,17 +398,19 @@ export function planJumpRoute(systems, from, to, { range, stops = null, prefer =
   // 候选落点：终点本身，或（终点不能跳入时）星门 15 跳以内的可跳入星系
   const targets = new Map();      // index → 落点后还需的星门数
   let gate = null;
-  if (canJumpInto(dest) && !avoid.has(to)) targets.set(to, 0);
+  const gateOk = (s) => useGates && (highsec || !isHighSec(s)) && !NO_JUMP_REGIONS.has(s.region) && !avoid.has(s.i);
+  if ((canJumpInto(dest) || gateOk(dest)) && !avoid.has(to)) targets.set(to, 0);
   else {
-    gate = gateHops(systems, to, 15);
+    gate = gateHops(systems, to, 15, avoid);
     systems.forEach((s, i) => { if (gate.hops[i] > 0 && canJumpInto(s) && !avoid.has(i)) targets.set(i, gate.hops[i]); });
     if (!targets.size) return { error: `${dest.name} 附近 15 个星门内没有可跳入的星系` };
   }
 
-  // Dijkstra：cost = 无法停靠的中途点 × 1e6 + 跳跃次数 × 1000 + 总光年
+  // Dijkstra：cost = 无法停靠的中途点 × 1e6 + 跳跃次数 × 1000 + 星门数 × 250 + 总光年
   const n = systems.length;
   const best = new Float64Array(n).fill(Infinity);
   const prev = new Int32Array(n).fill(-1);
+  const byGate = new Uint8Array(n);       // 1 表示经星门到达
   const heap = new Heap();
   best[from] = 0;
   heap.push({ i: from, cost: 0 });
@@ -415,6 +421,14 @@ export function planJumpRoute(systems, from, to, { range, stops = null, prefer =
     if (cost > best[i]) continue;
     if (targets.has(i) && i !== from) continue;   // 落点不再向外扩展
     const a = systems[i];
+    if (useGates) {
+      for (const g of a.nbr) {
+        if (!gateOk(systems[g])) continue;
+        const c = cost + GATE_COST;
+        if (c < best[g]) { best[g] = c; prev[g] = i; byGate[g] = 1; heap.push({ i: g, cost: c }); }
+      }
+      if (!canJumpFrom(a)) continue;
+    }
     for (const b of nodes) {
       if (b.i === i) continue;
       if (stops && !stops.has(b.i) && !targets.has(b.i)) continue;
@@ -423,7 +437,7 @@ export function planJumpRoute(systems, from, to, { range, stops = null, prefer =
       const ly = Math.sqrt(d2) / LY;
       if (ly > limit) continue;
       const c = cost + 1000 + ly + (prefer && !prefer.has(b.i) && !targets.has(b.i) ? NO_DOCK_PENALTY : 0);
-      if (c < best[b.i]) { best[b.i] = c; prev[b.i] = i; heap.push({ i: b.i, cost: c }); }
+      if (c < best[b.i]) { best[b.i] = c; prev[b.i] = i; byGate[b.i] = 0; heap.push({ i: b.i, cost: c }); }
     }
   }
 
@@ -439,7 +453,10 @@ export function planJumpRoute(systems, from, to, { range, stops = null, prefer =
   for (let i = pick; i >= 0; i = prev[i]) path.push(i);
   path.reverse();
   const legs = [];
-  for (let k = 1; k < path.length; k++) legs.push({ from: path[k - 1], to: path[k], ly: lyBetween(systems[path[k - 1]], systems[path[k]]) });
+  for (let k = 1; k < path.length; k++) {
+    legs.push(byGate[path[k]] ? { from: path[k - 1], to: path[k], ly: 0, gate: true }
+      : { from: path[k - 1], to: path[k], ly: lyBetween(systems[path[k - 1]], systems[path[k]]) });
+  }
 
   // 落点之后的星门路线（沿广度优先树回溯到终点）
   const gates = [];
@@ -449,26 +466,28 @@ export function planJumpRoute(systems, from, to, { range, stops = null, prefer =
   return { path, legs, gates, landing: pick };
 }
 
-// 逐跳估算燃料、冷却与疲劳（每次冷却结束立即起跳）
+// 逐跳估算燃料、冷却与疲劳（每次冷却结束立即起跳）；星门段不耗燃料、不计疲劳，按在冷却期间走完估算
 // fatigue：第一跳之前已有的疲劳（分钟，读自角色 ESI），默认 0
 export function simulate(legs, ship, { jfc, jfSkill, fatigue: start = 0 }) {
   const perLy = fuelPerLy(ship, jfc, jfSkill);
   let fatigue = Math.min(FATIGUE_CAP, Math.max(0, start)), elapsed = 0, fuel = 0;
+  const lastJump = legs.findLastIndex((l) => !l.gate);
   const rows = legs.map((leg, k) => {
+    if (leg.gate) return { ...leg, fuel: 0, depart: elapsed };
     const eff = leg.ly * ship.fatigue;
     const cooldown = Math.min(COOLDOWN_CAP, Math.max(fatigue / 10, 1 + eff));
     fatigue = Math.min(FATIGUE_CAP, Math.max(fatigue, 10) * (1 + eff));
     const legFuel = Math.ceil(leg.ly * perLy);
     fuel += legFuel;
     const row = { ...leg, fuel: legFuel, cooldown, fatigue, depart: elapsed };
-    if (k < legs.length - 1) {
+    if (k < lastJump) {
       elapsed += cooldown;
       fatigue = Math.max(0, fatigue - cooldown);   // 等待冷却期间疲劳同步衰减
     }
     return row;
   });
-  const last = rows[rows.length - 1];
-  return { rows, fuel, totalLy: legs.reduce((s, l) => s + l.ly, 0), travel: elapsed, finalFatigue: last?.fatigue || 0, finalCooldown: last?.cooldown || 0 };
+  const last = rows[lastJump];
+  return { rows, jumps: rows.filter((r) => !r.gate).length, gateCount: rows.filter((r) => r.gate).length, fuel, totalLy: legs.reduce((s, l) => s + l.ly, 0), travel: elapsed, finalFatigue: last?.fatigue || 0, finalCooldown: last?.cooldown || 0 };
 }
 
 export function formatMinutes(min) {

@@ -2790,6 +2790,7 @@ td.loc {
 .jump-skills .plain-select { width: 76px; height: 28px; flex: none; }
 .jump-range { font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; }
 .jump-range strong { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.jump-checks { display: flex; flex-wrap: wrap; gap: 6px 16px; }
 .jump-check { display: flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; }
 .jump-check input { accent-color: var(--accent-primary); }
 .jump-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }

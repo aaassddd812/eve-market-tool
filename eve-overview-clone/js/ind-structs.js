@@ -9,7 +9,7 @@
 //   3. 军团建筑在有军团资产权限（董事）时，从军团资产里读改装件：位置 = 建筑、栏位 RigSlot0–2
 // 按服务器存在本地，令牌只在浏览器里。
 import { serverKey } from './server.js?v=s4';
-import * as JP from './jump-planner.js?v=v16';
+import * as JP from './jump-planner.js?v=v17';
 
 let X = null;   // industry.js 传入：ctx, D, sysLabel, onChange(列表或数值变化后重算)
 const RD = { data: null, loading: null };
