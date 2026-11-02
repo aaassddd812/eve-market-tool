@@ -1128,6 +1128,11 @@ function implantsHtml(bound) {
 }
 
 // ---------- 右侧：属性 ----------
+// 属性用游戏内图标（tools/attr-icons.mjs 从客户端资源取到 assets/attr/），文字放在悬停提示里
+const SENSOR_ICON = { 雷达: 'radar', 光雷达: 'ladar', 磁力: 'magnet', 引力: 'gravi' };
+const ico = (k, label) => `<span class="fit-ico" title="${label}"><img src="assets/attr/${k}.png" alt="${label}" width="18" height="18" loading="lazy"></span>`;
+// 图标 + 名称 / 数值的两列格子（名称小字在上，悬停也显示）；cells：[图标, 名称, 数值, 数值的 class, 占满一行]，假值跳过
+const ivs = (cells) => `<div class="fit-ivs">${cells.filter(Boolean).map(([k, label, val, cls, wide]) => `<div class="fit-iv${wide ? ' is-wide' : ''}" title="${label}">${ico(k, label)}<span class="fit-iv-txt"><small>${label}</small><b class="${cls || ''}">${val}</b></span></div>`).join('')}</div>`;
 function renderStats() {
   const box = $('fitStats');
   if (!box) return;
@@ -1138,7 +1143,7 @@ function renderStats() {
   const bar = (label, v, unit = '', digits = 1) => {
     const pct = v.total ? Math.min(100, v.used / v.total * 100) : (v.used ? 100 : 0);
     const over = v.used > v.total + 1e-6;
-    return `<div class="fit-bar${over ? ' is-over' : ''}"><div class="fit-bar-head"><span>${label}</span><b>${fmt(v.used, digits)} / ${fmt(v.total, digits)}${unit}</b></div><i style="width:${pct.toFixed(1)}%"></i></div>`;
+    return `<div class="fit-bar${over ? ' is-over' : ''}"><div class="fit-bar-head"><span>${ico(label[0], label[1])}${label[1]}</span><b>${fmt(v.used, digits)} / ${fmt(v.total, digits)}${unit}</b></div><i style="width:${pct.toFixed(1)}%"></i></div>`;
   };
   const resRow = (label, values) => `<tr><th>${label}</th>${values.map((v) => `<td style="--r:${(v * 100).toFixed(0)}%">${(v * 100).toFixed(1)}%</td>`).join('')}</tr>`;
   const d = s.defense;
@@ -1148,61 +1153,73 @@ function renderStats() {
   box.innerHTML = `
     <section class="fit-stat-block">
       <h4>装配资源</h4>
-      ${bar('CPU', r.cpu, ' tf')}
-      ${bar('能量栅格', r.power, ' MW')}
-      ${r.calibration.total ? bar('校准值', r.calibration, '', 0) : ''}
-      <div class="fit-kv"><span>炮台安装座</span><b class="${r.turrets.used > r.turrets.total ? 'bad' : ''}">${r.turrets.used} / ${fmt(r.turrets.total)}</b></div>
-      <div class="fit-kv"><span>发射器安装座</span><b class="${r.launchers.used > r.launchers.total ? 'bad' : ''}">${r.launchers.used} / ${fmt(r.launchers.total)}</b></div>
+      ${bar(['cpu', 'CPU'], r.cpu, ' tf')}
+      ${bar(['power', '能量栅格'], r.power, ' MW')}
+      ${r.calibration.total ? bar(['calibration', '校准值'], r.calibration, '', 0) : ''}
+      ${ivs([
+        ['turret', '炮台安装座', `${r.turrets.used} / ${fmt(r.turrets.total)}`, r.turrets.used > r.turrets.total ? 'bad' : ''],
+        ['launcher', '发射器安装座', `${r.launchers.used} / ${fmt(r.launchers.total)}`, r.launchers.used > r.launchers.total ? 'bad' : '']
+      ])}
     </section>
     <section class="fit-stat-block">
       <h4>火力<b>${s.weapon.total.toFixed(1)} DPS</b></h4>
-      <div class="fit-kv"><span>炮台</span><b>${s.weapon.turret.toFixed(1)}</b></div>
-      <div class="fit-kv"><span>导弹</span><b>${s.weapon.missile.toFixed(1)}</b></div>
-      <div class="fit-kv"><span>无人机</span><b>${s.weapon.drone.toFixed(1)}</b></div>
-      ${s.weapon.fighter || r.fighterBay.total ? `<div class="fit-kv"><span>舰载机</span><b>${s.weapon.fighter.toFixed(1)}</b></div>` : ''}
-      <div class="fit-kv"><span>齐射伤害</span><b>${app.formatNumber(Math.round(s.weapon.volley))}</b></div>
+      ${ivs([
+        ['turret', '炮台', s.weapon.turret.toFixed(1)],
+        ['launcher', '导弹', s.weapon.missile.toFixed(1)],
+        ['drone', '无人机', s.weapon.drone.toFixed(1)],
+        (s.weapon.fighter || r.fighterBay.total) && ['fighter', '舰载机', s.weapon.fighter.toFixed(1)],
+        ['damage', '齐射伤害', app.formatNumber(Math.round(s.weapon.volley))]
+      ])}
       ${s.weapon.total ? `<div class="fit-dmg">${['em', 'th', 'ki', 'ex'].map((k, i) => `<i class="is-${k}" style="flex:${s.weapon.types[i] || 0.0001}" title="${['电磁', '热能', '动能', '爆炸'][i]} ${(s.weapon.types[i] / s.weapon.total * 100).toFixed(0)}%"></i>`).join('')}</div>` : ''}
     </section>
     <section class="fit-stat-block">
       <h4>防御<b>${app.formatNumber(Math.round(d.ehp))} EHP</b></h4>
       <table class="fit-resist">
-        <thead><tr><th></th><th class="is-em">电磁</th><th class="is-th">热能</th><th class="is-ki">动能</th><th class="is-ex">爆炸</th><th>HP</th></tr></thead>
+        <thead><tr><th></th><th class="is-em">${ico('em', '电磁')}</th><th class="is-th">${ico('th', '热能')}</th><th class="is-ki">${ico('ki', '动能')}</th><th class="is-ex">${ico('ex', '爆炸')}</th><th>HP</th></tr></thead>
         <tbody>
-          ${resRow('护盾', d.shield.resist).replace('</tr>', `<td class="hp">${app.formatNumber(Math.round(d.shield.hp))}</td></tr>`)}
-          ${resRow('装甲', d.armor.resist).replace('</tr>', `<td class="hp">${app.formatNumber(Math.round(d.armor.hp))}</td></tr>`)}
-          ${resRow('结构', d.hull.resist).replace('</tr>', `<td class="hp">${app.formatNumber(Math.round(d.hull.hp))}</td></tr>`)}
+          ${resRow(ico('shield', '护盾'), d.shield.resist).replace('</tr>', `<td class="hp">${app.formatNumber(Math.round(d.shield.hp))}</td></tr>`)}
+          ${resRow(ico('armor', '装甲'), d.armor.resist).replace('</tr>', `<td class="hp">${app.formatNumber(Math.round(d.armor.hp))}</td></tr>`)}
+          ${resRow(ico('hull', '结构'), d.hull.resist).replace('</tr>', `<td class="hp">${app.formatNumber(Math.round(d.hull.hp))}</td></tr>`)}
         </tbody>
       </table>
-      <div class="fit-kv"><span>护盾自然回充峰值</span><b>${d.passiveRegen.toFixed(1)} HP/s</b></div>
-      ${d.reps.shield ? `<div class="fit-kv"><span>护盾主动回充</span><b>${d.reps.shield.toFixed(1)} HP/s · ${d.repsEhp.shield.toFixed(1)} EHP/s</b></div>` : ''}
-      ${d.reps.armor ? `<div class="fit-kv"><span>装甲维修</span><b>${d.reps.armor.toFixed(1)} HP/s · ${d.repsEhp.armor.toFixed(1)} EHP/s</b></div>` : ''}
-      ${d.reps.hull ? `<div class="fit-kv"><span>结构维修</span><b>${d.reps.hull.toFixed(1)} HP/s</b></div>` : ''}
+      ${ivs([
+        ['recharge', '护盾自然回充峰值', `${d.passiveRegen.toFixed(1)} HP/s`, '', true],
+        d.reps.shield && ['shield', '护盾主动回充', `${d.reps.shield.toFixed(1)} HP/s · ${d.repsEhp.shield.toFixed(1)} EHP/s`, '', true],
+        d.reps.armor && ['repair', '装甲维修', `${d.reps.armor.toFixed(1)} HP/s · ${d.repsEhp.armor.toFixed(1)} EHP/s`, '', true],
+        d.reps.hull && ['hull', '结构维修', `${d.reps.hull.toFixed(1)} HP/s`, '', true]
+      ])}
       <p class="fit-hint">EHP 按四种伤害各 25% 计算</p>
     </section>
     <section class="fit-stat-block">
       <h4>电容<b class="${cap.stable ? 'good' : 'bad'}">${cap.stable ? '稳定 ' + (cap.level * 100).toFixed(1) + '%' : '可维持 ' + duration(cap.lasts)}</b></h4>
-      <div class="fit-kv"><span>容量</span><b>${app.formatNumber(Math.round(cap.capacity))} GJ</b></div>
-      <div class="fit-kv"><span>充能时间</span><b>${duration(cap.recharge)}</b></div>
-      <div class="fit-kv"><span>消耗 / 峰值回充</span><b>${cap.usage.toFixed(1)} / ${cap.peak.toFixed(1)} GJ/s</b></div>
+      ${ivs([
+        ['cap', '容量', `${app.formatNumber(Math.round(cap.capacity))} GJ`],
+        ['recharge', '充能时间', duration(cap.recharge)],
+        ['power', '消耗 / 峰值回充', `${cap.usage.toFixed(1)} / ${cap.peak.toFixed(1)} GJ/s`, cap.usage > cap.peak ? 'bad' : '', true]
+      ])}
     </section>
     <section class="fit-stat-block">
       <h4>机动</h4>
-      <div class="fit-kv"><span>最大速度</span><b>${fmt(s.navigation.velocity)} m/s</b></div>
-      <div class="fit-kv"><span>起跳时间</span><b>${s.navigation.align.toFixed(2)} 秒</b></div>
-      <div class="fit-kv"><span>跃迁速度</span><b>${fmt(s.navigation.warp, 2)} AU/s</b></div>
-      <div class="fit-kv"><span>信号半径</span><b>${fmt(s.navigation.signature)} m</b></div>
-      <div class="fit-kv"><span>质量</span><b>${app.formatNumber(Math.round(s.navigation.mass))} kg</b></div>
+      ${ivs([
+        ['velocity', '最大速度', `${fmt(s.navigation.velocity)} m/s`],
+        ['agility', '起跳时间', `${s.navigation.align.toFixed(2)} 秒`],
+        ['warp', '跃迁速度', `${fmt(s.navigation.warp, 2)} AU/s`],
+        ['sig', '信号半径', `${fmt(s.navigation.signature)} m`],
+        ['mass', '质量', `${app.formatNumber(Math.round(s.navigation.mass))} kg`, '', true]
+      ])}
     </section>
     <section class="fit-stat-block">
       <h4>锁定</h4>
-      <div class="fit-kv"><span>锁定距离</span><b>${dist(s.targeting.range)}</b></div>
-      <div class="fit-kv"><span>扫描分辨率</span><b>${fmt(s.targeting.scanRes)} mm</b></div>
-      <div class="fit-kv"><span>最大锁定数</span><b>${fmt(s.targeting.maxTargets)}</b></div>
-      <div class="fit-kv"><span>${s.targeting.sensorType}感应强度</span><b>${fmt(s.targeting.sensor)}</b></div>
+      ${ivs([
+        ['range', '锁定距离', dist(s.targeting.range)],
+        ['scanres', '扫描分辨率', `${fmt(s.targeting.scanRes)} mm`],
+        ['targets', '最大锁定数', fmt(s.targeting.maxTargets)],
+        [SENSOR_ICON[s.targeting.sensorType] || 'radar', `${s.targeting.sensorType}感应强度`, fmt(s.targeting.sensor)]
+      ])}
     </section>
     <section class="fit-stat-block">
       <h4>其他</h4>
-      <div class="fit-kv"><span>货柜舱</span><b>${fmt(s.cargo)} m³</b></div>
+      ${ivs([['cargo', '货柜舱', `${fmt(s.cargo)} m³`]])}
     </section>
     ${v ? `<section class="fit-stat-block">
       <h4>估价</h4>
