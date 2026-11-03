@@ -64,6 +64,7 @@ import calendar
 import collections
 import concurrent.futures
 import csv
+import ctypes
 import datetime as dt
 import email.message
 import email.utils
@@ -276,6 +277,42 @@ CN_PENDING = 5000             # 等待读取原文 / 估值的击杀最多缓存
 CN_QUEUE_GAP = 1.0            # 两次读队列的最小间隔（秒）：连续有击杀时不长轮询，太快会被 429
 
 log = logging.getLogger("kb")
+
+# 内存：HTTP 服务每个请求开一个新线程，glibc 默认最多开 8×核数 个 malloc 分配区，线程轮流落在不同分配区里，
+# 每个分配区都停在自己的峰值、碎片还不回系统，常驻内存只涨不降。启动时限制为 2 个分配区，并定期 malloc_trim。
+try:
+    LIBC = ctypes.CDLL("libc.so.6")
+    LIBC.mallopt(-8, 2)            # M_ARENA_MAX
+except (OSError, AttributeError):  # 非 glibc（macOS / Windows / musl）
+    LIBC = None
+MEM_UPKEEP = 600                   # 每 10 分钟清一次过期缓存并归还空闲内存
+
+
+def rss_mb():
+    try:
+        with open("/proc/self/status") as fh:
+            return next(int(l.split()[1]) // 1024 for l in fh if l.startswith("VmRSS:"))
+    except (OSError, StopIteration):
+        return 0
+
+
+def mem_upkeep(stores):
+    """清掉各库查询缓存里已过期的结果（缓存原先只在合同估价更新时整体清空，每 6 小时一次），再把空闲内存还给系统；每小时记一次内存。"""
+    n = 0
+    while True:
+        time.sleep(MEM_UPKEEP)
+        now = time.time()
+        dropped = 0
+        for st in stores:
+            for k, (at, _) in list(st.cache.items()):
+                if now - at > CACHE_TTL:
+                    st.cache.pop(k, None)
+                    dropped += 1
+        if LIBC:
+            LIBC.malloc_trim(0)
+        n += 1
+        if n % 6 == 0:
+            log.info("内存 %d MB · 查询缓存 %s 条 · 本轮清掉过期 %d 条", rss_mb(), "/".join(str(len(st.cache)) for st in stores), dropped)
 
 
 # ---------------------------------------------------------------- HTTP 工具
@@ -6288,6 +6325,7 @@ def main():
     bazaar, cbg = Bazaar(os.path.join(os.path.dirname(os.path.abspath(args.db)), "bazaar-index.json")), Cbg()
     if not args.lite:
         bazaar.start(), cbg.start()
+    threading.Thread(target=mem_upkeep, args=([store] + [a.store for a in cn_apis.values()],), daemon=True).start()
     server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal, cn_apis, bazaar, cbg))
     log.info("击杀记录服务已启动 http://%s:%d", args.bind, args.port)
     server.serve_forever()
