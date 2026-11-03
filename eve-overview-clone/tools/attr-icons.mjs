@@ -19,7 +19,8 @@ const ICONS = {
   damage: '26_64_1', rof: '22_32_21',
   velocity: '22_32_13', agility: '22_32_24', warp: '76_64_16', sig: '22_32_14', mass: '2_64_10',
   range: '22_32_15', scanres: '3_64_9', targets: '4_64_12', cargo: '3_64_13',
-  radar: '22_32_28', ladar: '22_32_27', magnet: '22_32_26', gravi: '22_32_25'
+  radar: '22_32_28', ladar: '22_32_27', magnet: '22_32_26', gravi: '22_32_25',
+  mining: '6_64_14', waste: '62_64_13'
 };
 
 async function fetchBuf(url) {

@@ -3,7 +3,7 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v33';
+import * as FE from './fit-engine.js?v=v34';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit } from './fit-auto.js?v=v30';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
@@ -1210,6 +1210,9 @@ function shortName(name) {
 function moduleNote(item) {
   const w = F.stats.weapons.find((x) => x.module === item);
   if (w) return `${w.dps.toFixed(1)} DPS · ${dist(w.range)}${w.falloff ? ' + ' + dist(w.falloff) : ''}`;
+  // 采矿器：最终数值（含突变、晶体、技能、船体、舰队脉冲）
+  const mn = F.stats.mining.miners.find((x) => x.module === item);
+  if (mn) return `单次 ${fmt(mn.amount)} m³ · 循环 ${mn.cycle.toFixed(1)} 秒 · ${mn.yps.toFixed(1)} m³/s`;
   return '';
 }
 
@@ -1303,6 +1306,16 @@ function renderStats() {
       ])}
       ${s.weapon.total ? `<div class="fit-dmg">${['em', 'th', 'ki', 'ex'].map((k, i) => `<i class="is-${k}" style="flex:${s.weapon.types[i] || 0.0001}" title="${['电磁', '热能', '动能', '爆炸'][i]} ${(s.weapon.types[i] / s.weapon.total * 100).toFixed(0)}%"></i>`).join('')}</div>` : ''}
     </section>
+    ${s.mining.total ? `<section class="fit-stat-block">
+      <h4>采矿<b>${s.mining.total.toFixed(1)} m³/s</b></h4>
+      ${ivs([
+        ['mining', '每小时产量', `${app.formatNumber(Math.round(s.mining.total * 3600))} m³`],
+        s.mining.drones && ['drone', '无人机', `${s.mining.drones.toFixed(1)} m³/s`],
+        s.mining.drones && ['mining', '采矿器', `${s.mining.modules.toFixed(1)} m³/s`],
+        ['waste', '残渣', `${s.mining.waste.toFixed(1)} m³/s`, s.mining.waste ? 'bad' : '']
+      ])}
+      <p class="fit-hint">含突变属性、晶体、技能、船体和舰队加成（大鱼的采矿脉冲在装配的「舰队加成」里添加），暴击按期望值计入</p>
+    </section>` : ''}
     <section class="fit-stat-block">
       <h4>防御<b>${app.formatNumber(Math.round(d.ehp))} EHP</b></h4>
       <table class="fit-resist">

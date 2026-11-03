@@ -20,6 +20,7 @@ export const AT = {
   maxTargetRange: 76, scanResolution: 564, maxLockedTargets: 192, sensors: [208, 209, 210, 211],
   shieldBonus: 68, armorDamageAmount: 84, structureDamageAmount: 83, chargedArmorDamageMultiplier: 1886,
   spoolMax: 2734,
+  miningAmount: 77, miningWastedVolumeMultiplier: 3153, miningWasteProbability: 3154, miningCritChance: 5967, miningCritBonusYield: 5969,
   speedFactor: 20, speedBoostFactor: 567, massAddition: 796, signatureRadiusBonus: 554,
   maxRange: 54, falloff: 158, trackingSpeed: 160, explosionDelay: 281,
   maxGroupFitted: 1544, maxTypeFitted: 2431, maxGroupActive: 763, maxActiveDrones: 352,
@@ -622,6 +623,31 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
   }
   weapon.total = weapon.turret + weapon.missile + weapon.drone + weapon.fighter;
 
+  // 采矿：照 pyfa，每秒产量 = 单次开采量 ÷ 循环，再按暴击期望（几率 × 额外倍数）加成；残渣 = 产量 × 残渣几率 × 残渣倍数
+  // 开采量、循环已含晶体、技能、船体、舰队脉冲；冰矿、气云同样按 m³ 计
+  const mining = { modules: 0, drones: 0, waste: 0, miners: [] };
+  const mine = (it, n) => {
+    const amount = it.attr(AT.miningAmount), cycle = it.attr(AT.duration) / 1000;
+    if (!amount || !cycle) return null;
+    const crit = it.attr(AT.miningCritChance) || 0, critBonus = it.attr(AT.miningCritBonusYield) || 0;
+    const wasteChance = Math.max(0, Math.min(1, (it.attr(AT.miningWasteProbability) || 0) / 100));
+    const yps = amount / cycle * (1 + crit * critBonus) * n;
+    const waste = amount / cycle * wasteChance * (it.attr(AT.miningWastedVolumeMultiplier) || 0) * n;
+    mining.waste += waste;
+    return { amount, cycle, crit, critBonus, wasteChance, yps, waste };
+  };
+  for (const m of activeMods) {
+    if (!m.type.attrs.has(AT.miningAmount)) continue;
+    const r = mine(m, 1);
+    if (r) { mining.modules += r.yps; mining.miners.push({ module: m, ...r }); }
+  }
+  for (const d of drones) {
+    if (!d.active || !d.type.attrs.has(AT.miningAmount)) continue;
+    const r = mine(d, d.active);
+    if (r) mining.drones += r.yps;
+  }
+  mining.total = mining.modules + mining.drones;
+
   // 防御
   const layer = (hpAttr, res) => {
     const hp = ship.attr(hpAttr);
@@ -697,7 +723,7 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
   };
 
   return {
-    slots: slotCount, used, resources, weapon, weapons, droneDps, defense, capacitor, navigation, targeting,
+    slots: slotCount, used, resources, weapon, weapons, droneDps, mining, defense, capacitor, navigation, targeting,
     cargo: ship.attr(AT.capacity), problems: problems(calc, slotCount, used, resources)
   };
 }
