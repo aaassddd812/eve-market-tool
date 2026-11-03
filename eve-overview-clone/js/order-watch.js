@@ -105,7 +105,8 @@ async function analyze(orders) {
         if (sells.length) sellRef = Math.min(...sells.map((x) => x.price));
       }
       const sys = o.system_id || m.list.find((x) => x.location_id === o.location_id)?.system_id;
-      const rivals = m.list.filter((x) => !mine.has(x.order_id) && x.is_buy_order === o.is_buy_order && (o.is_buy_order
+      // 角色订单接口里卖单不带 is_buy_order 字段（undefined），市场接口是 false，比较前统一成布尔值
+      const rivals = m.list.filter((x) => !mine.has(x.order_id) && !!x.is_buy_order === !!o.is_buy_order && (o.is_buy_order
         ? x.location_id === o.location_id || x.range === 'region' || (sys && x.system_id === sys && x.range !== 'station')
         : x.location_id === o.location_id));
       if (!rivals.length) { out.push({ o, state: 'alone', sellRef }); continue; }
