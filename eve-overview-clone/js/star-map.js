@@ -531,6 +531,15 @@ function buildScene() {
   controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
   controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
   controls.addEventListener('change', invalidate);
+  // 个性化设置「星图滚轮缩放」选了反向：在画布外层先截下滚轮，换成反向的再交给 OrbitControls（双指、触控板捏合、中键拖动不变）
+  canvas.parentElement.addEventListener('wheel', (e) => {
+    if (e.target !== canvas || e.__flipped || e.ctrlKey || app.store.getJSON('eve-prefs', {}).mapZoom !== 'reverse') return;
+    e.stopPropagation();
+    e.preventDefault();
+    const flip = new WheelEvent('wheel', { deltaX: e.deltaX, deltaY: -e.deltaY, deltaMode: e.deltaMode, clientX: e.clientX, clientY: e.clientY, shiftKey: e.shiftKey, bubbles: true, cancelable: true });
+    flip.__flipped = true;
+    canvas.dispatchEvent(flip);
+  }, { capture: true, passive: false });
 
   // 背景星空
   const bg = new Float32Array(2400 * 3);

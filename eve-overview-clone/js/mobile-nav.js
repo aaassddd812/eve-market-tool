@@ -65,6 +65,7 @@ export function initMobileNav() {
       <div class="msheet-acts">
         ${act('langToggle', '<b class="msheet-lang notranslate" translate="no"></b>', '语言')}
         ${act('themeToggle', svg('themeToggle'), '切换主题')}
+        ${act('prefsBtn', svg('prefsBtn'), '个性化设置')}
         ${act('contactBtn', svg('contactBtn'), '联系作者')}
         ${act('api', document.querySelector('.api-link svg')?.outerHTML || '', 'API 文档')}
         ${act('desktopDlBtn', svg('desktopDlBtn'), '下载 App')}

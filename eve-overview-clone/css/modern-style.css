@@ -511,6 +511,8 @@ mark {
 }
 
 .category.expanded > .category-items { display: block; }
+/* 个性化设置里关掉连接线：只留缩进 */
+html.no-tree-lines .category-items { border-left: 0; padding-left: 0; margin-left: 12px; }
 
 .item-btn {
   display: flex;
@@ -2637,8 +2639,8 @@ td.loc {
 
   .app-header { padding: var(--sa-top) 8px 0; gap: 8px; }
   .menu-btn { display: flex; }
-  /* 顶栏只留 ☰、当前页名称、服务器、购物车、预警；功能入口在底部标签栏，语言 / 主题 / API / 定制收进「全部」面板 */
-  .header-brand, .header-nav, .api-link, #contactBtn, #shortcutHelpBtn, #langToggle, #themeToggle { display: none; }
+  /* 顶栏只留 ☰、当前页名称、服务器、购物车、预警；功能入口在底部标签栏，语言 / 主题 / 个性化设置 / API / 定制收进「全部」面板 */
+  .header-brand, .header-nav, .api-link, #contactBtn, #shortcutHelpBtn, #langToggle, #prefsBtn, #themeToggle { display: none; }
   .mobile-title { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1rem; font-weight: 600; }
   .menu-btn[hidden] + .mobile-title { padding-left: 4px; }
   .mobile-tabbar { display: flex; }
@@ -6694,6 +6696,14 @@ td .sov-auto-tag { margin-left: 4px; }
 .contact-value { flex: 1; min-width: 0; font-size: 1rem; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text-primary); overflow-wrap: anywhere; }
 .contact-item .btn { flex: none; height: 30px; }
 .contact-note { font-size: 0.75rem; color: var(--text-muted); }
+/* 个性化设置弹窗：每项一张圆角卡片，左边说明、右边分段按钮 */
+.modal-content.prefs-content { max-width: 520px; }
+.prefs-body { display: flex; flex-direction: column; gap: 10px; }
+.prefs-row { display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.prefs-row .segmented { background: var(--bg-primary); flex: none; }
+.prefs-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.prefs-text b { font-size: 0.8125rem; }
+.prefs-text span { font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; }
 @media (max-width: 480px) {
   /* 窄屏收紧顶栏右侧按钮，服务器名过长时省略（当前页名称先省略） */
   .header-actions { gap: 2px; }

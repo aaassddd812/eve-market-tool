@@ -5,7 +5,7 @@ import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadH
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v38';
 import * as SM from './struct-markets.js?v=v8';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v10';
-import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v3';
+import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v4';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
 import * as FF from './float-feed.js?v=v11';
@@ -1019,7 +1019,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v61').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v62').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -3125,6 +3125,40 @@ function initContact() {
   });
 }
 
+// ===== 个性化设置（右上角滑块按钮）=====
+// 存在 eve-prefs（云同步会带上）；每项：键、标题、说明、选项 [值, 名称]，第一个选项是默认值
+const PREFS = [
+  ['mapZoom', '星图滚轮缩放', '向上滚动滚轮时放大还是缩小（触控板捏合、双指缩放不受影响）', [['normal', '向上滚放大'], ['reverse', '向上滚缩小']]],
+  ['treeLines', '分类目录连接线', '市场等页面左侧多级分类前面的竖线', [['on', '显示'], ['off', '隐藏']]]
+];
+function applyPrefs(p = store.getJSON('eve-prefs', {})) {
+  document.documentElement.classList.toggle('no-tree-lines', p.treeLines === 'off');
+}
+function renderPrefs() {
+  const p = store.getJSON('eve-prefs', {});
+  $('prefsBody').innerHTML = PREFS.map(([key, title, note, opts]) => `<div class="prefs-row">
+      <div class="prefs-text"><b>${title}</b><span>${note}</span></div>
+      <div class="segmented" role="group" aria-label="${title}">${opts.map(([v, label]) => `<button type="button" class="${(p[key] || opts[0][0]) === v ? 'active' : ''}" data-pref="${key}" data-pref-val="${v}" aria-pressed="${(p[key] || opts[0][0]) === v}">${label}</button>`).join('')}</div>
+    </div>`).join('');
+}
+function togglePrefs(show = $('prefsModal').hidden) {
+  $('prefsModal').hidden = !show;
+  if (show) renderPrefs();
+}
+function initPrefs() {
+  applyPrefs();
+  $('prefsBtn').addEventListener('click', () => togglePrefs(true));
+  $('prefsModal').addEventListener('click', (e) => {
+    if (e.target.closest('.modal-backdrop, [data-close-prefs]')) { togglePrefs(false); return; }
+    const b = e.target.closest('[data-pref]');
+    if (!b) return;
+    const p = { ...store.getJSON('eve-prefs', {}), [b.dataset.pref]: b.dataset.prefVal };
+    store.setJSON('eve-prefs', p);
+    applyPrefs(p);
+    renderPrefs();
+  });
+}
+
 // ===== 全局快捷键 =====
 function initShortcuts() {
   $('shortcutHelpBtn').addEventListener('click', () => toggleShortcutHelp(true));
@@ -3136,6 +3170,7 @@ function initShortcuts() {
       if (!$('killModal').hidden) { killboardModule?.closeKillModal(); return; }
       if (!$('shortcutModal').hidden) { toggleShortcutHelp(false); return; }
       if (!$('contactModal').hidden) { toggleContact(false); return; }
+      if (!$('prefsModal').hidden) { togglePrefs(false); return; }
       if (!$('esiModal').hidden) { closeEsiModal(); return; }
       if (isDrawerOpen()) { closeDrawer(); return; }
     }
@@ -5943,6 +5978,7 @@ function init() {
   initHashRouting();
   initShortcuts();
   initContact();
+  initPrefs();
   initDesktopDl();
   if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
