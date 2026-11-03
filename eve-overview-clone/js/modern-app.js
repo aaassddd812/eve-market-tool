@@ -3725,13 +3725,26 @@ async function universeTable(path) {
 }
 
 // 角色资产接口分页（X-Pages），每页 1000 条
+// 分页读取（资产等）：每页单独重试——国服 ESI 偶尔断开连接或返回 5xx / 420（网关出错时不带跨域头，浏览器只报「Failed to fetch」），
+// 资产多的角色页数多，任何一页失败都会让整份数据读不出来
 async function esiAuthFetchPaged(path, maxPages = 20) {
   const token = await ensureEsiToken();
   const get = async (page) => {
     const url = ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=' + SERVER.datasource + '&page=' + page;
-    const res = await fetch(url, { headers: { Authorization: 'Bearer ' + token.access_token } });
-    if (!res.ok) { const error = new Error('ESI ' + res.status); error.status = res.status; throw error; }
-    return res;
+    for (let attempt = 0; ; attempt += 1) {
+      let res = null, cause;
+      try {
+        res = await fetch(url, { headers: { Authorization: 'Bearer ' + token.access_token } });
+      } catch (error) { cause = error; }
+      if (res?.ok) return res;
+      const retry = !res || res.status >= 500 || res.status === 420 || res.status === 429;
+      if (retry && attempt < 2) { await new Promise((r) => setTimeout(r, 1500 * (attempt + 1))); continue; }
+      const where = page > 1 ? `第 ${page} 页` : '';
+      const error = res ? new Error(`ESI ${res.status}${where ? '（' + where + '）' : ''}`)
+        : new Error(`连不上 ${new URL(ESI_BASE).host}${where ? '（' + where + '）' : ''}，请检查网络或代理、关掉拦截插件后点「刷新数据」重试（${cause.message}）`);
+      if (res) error.status = res.status; else error.network = true;
+      throw error;
+    }
   };
   const first = await get(1);
   const pages = Math.min(Number(first.headers.get('X-Pages')) || 1, maxPages);
