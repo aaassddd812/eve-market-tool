@@ -337,10 +337,11 @@ function initNavigation() {
   const nav = document.querySelector('.header-nav');
   if (!header || !nav) return;
   if (IS_DESKTOP) { fitNav = initRail(header, nav); fitNav(); return; }   // 桌面版：菜单在左侧分组竖排，不用收图标
+  initNavMore(header, nav);
   const over = () => nav.scrollWidth > nav.clientWidth + 1;
   const fit = () => {
-    const btns = [...nav.querySelectorAll('.nav-btn')];
-    header.classList.remove('nav-nobrand', 'nav-tight');
+    const btns = [...nav.querySelectorAll(':scope > .nav-btn')];   // 「更多工具」里的不占顶栏宽度
+    header.classList.remove('nav-nobrand', 'nav-tight', 'nav-more-ico');
     btns.forEach((b) => b.classList.remove('nav-ico'));
     if (!over()) return;
     header.classList.add('nav-nobrand');   // 先收起品牌名
@@ -352,6 +353,7 @@ function initNavigation() {
       if (!over()) break;
       b.classList.add('nav-ico');
     }
+    if (over()) header.classList.add('nav-more-ico');
   };
   let raf = 0;
   const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(fit); };
@@ -363,6 +365,71 @@ function initNavigation() {
   document.fonts?.ready.then(schedule);
   schedule();
   fitNav = schedule;
+}
+
+// 网页版顶栏：常用入口留在顶栏，其余按分组收进「更多工具」；右侧只留服务器、语言、购物车、预警，其余收进「⋯」。
+// 下拉悬停即展开（离开稍等再收），点按钮也能开关，Esc / 点外面关闭。面板用 fixed 定位，不被导航栏的横向滚动裁掉。
+// 按钮是原来的元素搬进去的，点击、高亮逻辑不变；手机底栏仍从 .header-nav 里读按钮。
+const NAV_MAIN = ['market', 'arb', 'map', 'kb', 'fit', 'appraisal', 'plaza'];
+const NAV_MORE = [['交易', ['contracts', 'courier', 'lp', 'abyss', 'bazaar']], ['生产', ['industry', 'pi']], ['宇宙与战斗', ['sim', 'war', 'sov', 'wh']], ['其他', ['guide']]];
+const ACT_MORE = [['themeToggle', '切换主题'], ['prefsBtn', '个性化设置'], ['shortcutHelpBtn', '快捷键'], ['desktopDlBtn', '下载 App'], ['contactBtn', '联系作者'], [null, '开放 API 文档', '.api-link']];
+const CARET = '<svg class="hm-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+function hoverMenu(wrap, trigger, panel, align = 'left') {
+  let timer = 0;
+  const place = () => {
+    const r = trigger.getBoundingClientRect();
+    panel.style.top = `${r.bottom}px`;
+    const w = panel.offsetWidth;
+    const left = align === 'right' ? r.right - w : r.left;
+    panel.style.left = `${Math.max(8, Math.min(left, innerWidth - w - 8))}px`;
+  };
+  const open = () => { clearTimeout(timer); if (wrap.classList.contains('open')) return; wrap.classList.add('open'); trigger.setAttribute('aria-expanded', 'true'); place(); };
+  const close = () => { clearTimeout(timer); wrap.classList.remove('open'); trigger.setAttribute('aria-expanded', 'false'); };
+  const later = () => { clearTimeout(timer); timer = setTimeout(close, 180); };
+  for (const el of [trigger, panel]) {
+    el.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') open(); });
+    el.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') later(); });
+  }
+  trigger.addEventListener('click', () => (wrap.classList.contains('open') ? close() : open()));
+  panel.addEventListener('click', (e) => { if (e.target.closest('button, a')) close(); });
+  document.addEventListener('pointerdown', (e) => { if (wrap.classList.contains('open') && !wrap.contains(e.target)) close(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && wrap.classList.contains('open')) { close(); trigger.focus(); } });
+  addEventListener('resize', close);
+}
+function initNavMore(header, nav) {
+  const key = (b) => (b.hasAttribute('data-arb') ? 'arb' : b.dataset.view);
+  const btns = [...nav.querySelectorAll('.nav-btn')];
+  const find = (k) => btns.find((b) => key(b) === k);
+  const wrap = document.createElement('div');
+  wrap.className = 'hm nav-more';
+  wrap.innerHTML = `<button type="button" class="nav-btn-more" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>更多工具</span>${CARET}</button>
+    <div class="hm-panel nav-more-panel" role="menu"><div class="hm-box">${NAV_MORE.map(([name]) => `<div class="hm-group"><h5>${name}</h5><div class="hm-items"></div></div>`).join('')}</div></div>`;
+  const groups = wrap.querySelectorAll('.hm-items');
+  NAV_MORE.forEach(([, list], i) => list.forEach((k) => { const b = find(k); if (b) groups[i].appendChild(b); }));
+  // 新加的页面没列进分组时放「其他」
+  for (const b of btns) if (!b.parentElement.classList.contains('hm-items') && !NAV_MAIN.includes(key(b)) && key(b) !== 'profile') groups[groups.length - 1].appendChild(b);
+  const profile = find('profile');
+  if (profile) nav.insertBefore(wrap, profile); else nav.appendChild(wrap);
+  hoverMenu(wrap, wrap.firstElementChild, wrap.querySelector('.hm-panel'));
+
+  // 右侧按钮
+  const actions = header.querySelector('.header-actions');
+  if (!actions) return;
+  const more = document.createElement('div');
+  more.className = 'hm act-more';
+  more.innerHTML = `<button type="button" class="icon-btn" title="更多" aria-label="更多" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+    <div class="hm-panel act-more-panel" role="menu"><div class="hm-box"></div></div>`;
+  const box = more.querySelector('.hm-box');
+  for (const [id, label, sel] of ACT_MORE) {
+    const el = id ? document.getElementById(id) : actions.querySelector(sel);
+    if (!el) continue;
+    el.classList.add('hm-row');
+    el.removeAttribute('title');
+    el.insertAdjacentHTML('beforeend', `<span class="hm-label">${label}</span>`);
+    box.appendChild(el);
+  }
+  actions.appendChild(more);
+  hoverMenu(more, more.firstElementChild, more.querySelector('.hm-panel'), 'right');
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
@@ -683,7 +750,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v16').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v17').then((m) => {
     m.initLp({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,

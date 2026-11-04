@@ -323,28 +323,33 @@ function setTimes(id, n, box) {
 function buyListHtml(o) {
   const n = timesOf(o);
   const mats = o.bp ? o.bp[2].length : 0;
-  const btn = (kind, label, count) => `<button type="button" class="lp-act" data-lp-copy="${kind}:${o.id}"${count ? '' : ' disabled'}><span>${label}</span><small>${count} 项</small></button>`;
+  const tip = '复制后在游戏「市场 → 批量购买」里粘贴';
+  const btn = (kind, label, count) => `<button type="button" class="lp-act" data-lp-copy="${kind}:${o.id}" title="${tip}"${count ? '' : ' disabled'}><span>${label}</span><small>${count} 项</small></button>`;
   // 制造材料只在按「制造后卖产物」算时才需要
   const make = o.bp && F.bp !== 'bpc';
   const cartKind = make && o.req.length ? 'all' : o.req.length ? 'req' : 'mats';
-  return `<div class="lp-sec lp-buy"><h4>采购清单 <small>复制后在游戏「市场 → 批量购买」里粘贴</small></h4>
+  return `<div class="lp-sec lp-buy"><h4>采购</h4>
     <div class="lp-times-row"><label class="lp-times"><span>兑换次数</span><input type="number" class="pi-input" min="1" max="10000" step="1" value="${n}" data-lp-times="${o.id}" aria-label="兑换次数"></label>
       ${myMax(o) ? `<button type="button" class="link-btn" data-lp-max="${o.id}">按我的 LP 最多 ${ctx.formatNumber(myMax(o))} 次</button>` : ''}</div>
-    <p class="lp-need">共需 LP <b>${ctx.formatNumber(o.lp * n)}</b> · ISK <b>${ctx.formatISK(o.isk * n)}</b>${o.ak ? ` · AK <b>${ctx.formatNumber(o.ak * n)}</b>` : ''}</p>
+    <ul class="lp-lines lp-need"><li><span>共需 LP</span><b>${ctx.formatNumber(o.lp * n)}</b></li><li><span>ISK</span><b>${ctx.formatISK(o.isk * n)}</b></li>${o.ak ? `<li><span>AK</span><b>${ctx.formatNumber(o.ak * n)}</b></li>` : ''}</ul>
     <div class="lp-acts">
+      ${o.req.length || make ? `<button type="button" class="lp-act primary" data-lp-cart="${cartKind}:${o.id}"><span>加入购物车</span><small>${buyItems(o, cartKind).length} 项</small></button>` : ''}
       ${o.req.length ? btn('req', '复制兑换所需物品', o.req.length) : ''}
       ${make ? btn('mats', '复制制造材料', mats) : ''}
       ${make && o.req.length ? btn('all', '复制全部（合并同类）', buyLines(o, 'all').length) : ''}
-      ${o.req.length || make ? `<button type="button" class="lp-act primary" data-lp-cart="${cartKind}:${o.id}" title="${cartKind === 'all' ? '兑换所需物品与制造材料' : cartKind === 'req' ? '兑换所需物品' : '制造材料'}加入购物车"><span>加入购物车</span><small>${buyItems(o, cartKind).length} 项</small></button>` : '<p class="text-muted">不需要额外物品，只花 LP 和 ISK</p>'}
     </div></div>`;
 }
 
 function offerDetail(o, v) {
   const esc = ctx.esc, isk = ctx.formatISK, num = ctx.formatNumber;
-  const line = (id, q, side) => {
-    const p = price(id, side);
-    return `<li><img src="${ICON(id)}" data-item-pop="${id}" alt="" width="20" height="20" loading="lazy"><span>${esc(tName(id))} <small>× ${num(q)}</small></span><b>${p.v == null ? '无价格' : (side !== 'avg' && p.src === 'avg' ? '≈' : '') + isk(p.v * q)}</b></li>`;
+  // 明细表一行：物品 · 数量 · 价值
+  const row = (id, q, side, icon = ICON(id)) => {
+    const p = side ? price(id, side) : null;
+    return `<tr><td><span class="lp-item"><img src="${icon}"${side ? ` data-item-pop="${id}"` : ''} alt="" width="24" height="24" loading="lazy"><span>${esc(tName(id))}</span></span></td><td class="num">${num(q)}</td>
+      <td class="num">${!p ? '' : p.v == null ? '无价格' : (side !== 'avg' && p.src === 'avg' ? '≈' : '') + isk(p.v * q)}</td></tr>`;
   };
+  const sum = (label, value, cls = '') => `<tr class="lp-sum${cls}"><td colspan="2">${label}</td><td class="num">${value}</td></tr>`;
+  const head = (label, extra = '') => `<tr class="lp-group"><td colspan="3">${label}${extra ? `<span class="lp-pill">${extra}</span>` : ''}</td></tr>`;
   const corps = D.corpsByOffer.get(o.id) || [];
   const pid = o.bp ? o.bp[0] : o.type;
   const good = (x) => (x.missing || x.iskLp == null ? '' : x.iskLp >= 0 ? ' up' : ' down');
@@ -355,43 +360,40 @@ function offerDetail(o, v) {
     ${tile(o.bp && v.mode === 'bpc' ? '蓝图价值' : '产物价值', v.missing ? '—' : isk(v.revenue), o.bp && v.mode === 'bpc' ? '合同出售不扣税' : `已扣税费 ${F.tax}%`)}
     ${tile('花费', isk(v.cost), `ISK ${isk(o.isk)}${o.req.length ? ' + 物品 ' + isk(v.reqCost) : ''}${v.matCost ? ' + 材料 ' + isk(v.matCost) : ''}`)}
   </div>`;
-  // 蓝图：两种算法并排，点一下切换（与估价设置同步）
+  // 蓝图：两种算法，点一下切换（与估价设置同步）
   let modes = '';
   if (o.bp) {
-    const opt = (mode, title, desc) => {
+    const opt = (mode, title) => {
       const x = valueOf(o, mode);
       const off = mode === 'bpc' && !SERVER.kb;
-      return `<button type="button" class="lp-mode${v.mode === mode ? ' active' : ''}" data-lp-set="bp" data-v="${mode}"${off ? ' disabled' : ''}>
+      return `<button type="button" class="lp-mode${v.mode === mode ? ' active' : ''}" data-lp-set="bp" data-v="${mode}"${off ? ` disabled title="${esc(SERVER.full)}没有合同数据"` : ''}>
         <span class="lp-mode-title">${title}</span>
-        <b class="lp-mode-val${good(x)}">${off ? '—' : mode === 'bpc' && !D.bpAll ? '读取合同价…' : x.missing ? (mode === 'bpc' ? '合同里没有在售' : '缺少价格') : `${num(Math.round(x.iskLp))} <small>ISK/LP</small>`}</b>
-        <small>${off ? esc(SERVER.full) + '没有合同数据' : desc}</small></button>`;
+        <b class="lp-mode-val${good(x)}">${off ? '—' : mode === 'bpc' && !D.bpAll ? '读取合同价…' : x.missing ? (mode === 'bpc' ? '合同里没有在售' : '缺少价格') : `${num(Math.round(x.iskLp))} <small>ISK/LP</small>`}</b></button>`;
     };
-    const run = bpcRun(o);
-    modes = `<div class="lp-modes">
-      ${opt('make', '制造后卖产物', `造 ${num(o.qty)} 流程 ${esc(tName(pid))}，材料效率 0`)}
-      ${opt('bpc', '直接卖蓝图', run != null ? `合同最低每流程 ${isk(run)} × ${num(o.qty)} 流程` : '按公开合同里同种拷贝的最低每流程价')}
-    </div>`;
+    modes = `<div class="lp-modes">${opt('make', '制造后卖产物')}${opt('bpc', '直接卖蓝图')}</div>`;
   }
-  const secs = [];
-  secs.push(`<div class="lp-sec"><h4>花费</h4><ul class="lp-lines"><li><span>LP</span><b>${num(o.lp)}</b></li><li><span>ISK</span><b>${isk(o.isk)}</b></li>${o.ak ? `<li><span>分析师点数（AK）</span><b>${num(o.ak)}</b></li>` : ''}${o.req.map(([m, q]) => line(m, q, F.mat)).join('')}</ul></div>`);
+  // 左：产出明细
+  let rows = '';
   if (o.bp && v.mode !== 'bpc') {
     const [, pq, mats] = o.bp;
     const n = o.qty;
-    secs.push(`<div class="lp-sec"><h4>制造 <small>共 ${num(n)} 流程 · 材料效率 0</small></h4><ul class="lp-lines">${line(pid, pq * n, F.price)}<li><span>扣除税费 ${F.tax}%</span><b>${v.missing ? '—' : isk(v.revenue)}</b></li>
-      ${mats.map(([m, q]) => line(m, q * n, F.mat)).join('')}<li><span>材料合计</span><b>${isk(v.matCost)}</b></li></ul></div>`);
+    rows = head('产出', `${num(n)} 流程 · 材料效率 0`) + row(pid, pq * n, F.price) + sum(`扣除税费 ${F.tax}% 后`, v.missing ? '—' : isk(v.revenue))
+      + head('制造材料') + mats.map(([m, q]) => row(m, q * n, F.mat)).join('') + sum('材料合计', isk(v.matCost));
   } else if (o.bp) {
     const run = bpcRun(o);
-    secs.push(`<div class="lp-sec"><h4>直接卖蓝图 <small>公开合同价，数据约每小时更新</small></h4><ul class="lp-lines">
-      <li><img src="${BPC_ICON(o.type)}" alt="" width="20" height="20" loading="lazy"><span>${esc(tName(o.type))} <small>× ${num(o.qty)} 流程</small></span><b>${run == null ? '合同里没有在售' : isk(run * o.qty)}</b></li>
-      ${run != null ? `<li><span>合同最低每流程</span><b>${isk(run)}</b></li>` : ''}</ul></div>`);
+    rows = head('直接卖蓝图', run != null ? `每流程 ${isk(run)}` : '') + `<tr><td><span class="lp-item"><img src="${BPC_ICON(o.type)}" alt="" width="24" height="24" loading="lazy"><span>${esc(tName(o.type))}</span></span></td><td class="num">${num(o.qty)} 流程</td><td class="num">${run == null ? '合同里没有在售' : isk(run * o.qty)}</td></tr>`;
   } else {
-    secs.push(`<div class="lp-sec"><h4>产出</h4><ul class="lp-lines">${line(o.type, o.qty, F.price)}<li><span>扣除税费 ${F.tax}%</span><b>${v.missing ? '—' : isk(v.revenue)}</b></li></ul></div>`);
+    rows = head('产出') + row(o.type, o.qty, F.price) + sum(`扣除税费 ${F.tax}% 后`, v.missing ? '—' : isk(v.revenue));
   }
-  secs.push(`<div class="lp-sec"><h4>可兑换的军团 <small>${corps.length} 家</small></h4><div class="lp-corp-list">${corps.map((c) => `<button type="button" class="chip" data-lp-corp="${c}">${esc(corpName(c))}</button>`).join('')}</div></div>`);
-  secs.push(buyListHtml(o));
-  return `<div class="lp-detail2">
-    <div class="lp-detail-top">${tiles}<button type="button" class="lp-act lp-market-btn" data-lp-market="${pid}"><span>在市场中心查看${o.bp ? '产物' : ''}</span><small>${esc(tName(pid))}</small></button></div>
-    ${modes}<div class="lp-secs">${secs.join('')}</div></div>`;
+  if (o.req.length) rows += head('兑换所需物品') + o.req.map(([m, q]) => row(m, q, F.mat)).join('') + sum('物品合计', isk(v.reqCost));
+  const main = `<div class="lp-sec lp-main"><table class="lp-table"><thead><tr><th>物品</th><th class="num">数量</th><th class="num">价值</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  // 右：采购 · 军团 · 市场
+  const side = `<div class="lp-side">
+    ${buyListHtml(o)}
+    <div class="lp-sec"><h4>可兑换的军团 <span class="lp-pill">${corps.length}</span></h4><div class="lp-corp-list">${corps.map((c) => `<button type="button" class="chip" data-lp-corp="${c}">${esc(corpName(c))}</button>`).join('')}</div></div>
+    <button type="button" class="lp-act lp-market-btn" data-lp-market="${pid}" title="${esc(tName(pid))}"><span>在市场中心查看${o.bp ? '产物' : ''}</span><span aria-hidden="true">→</span></button>
+  </div>`;
+  return `<div class="lp-detail2">${tiles}${modes}<div class="lp-body">${main}${side}</div></div>`;
 }
 
 const tableHead = () => `<thead><tr><th class="lp-hide-sm">#</th>${sortTh('name', '兑换品')}${sortTh('lp', 'LP', 'num')}${sortTh('iskCost', 'ISK 费用', 'num lp-hide-md')}${sortTh('req', '物品 / 材料', 'num lp-hide-md')}${sortTh('revenue', '产物价值', 'num pi-hide-sm')}${sortTh('profit', '利润', 'num lp-hide-sm')}${sortTh('iskLp', 'ISK/LP', 'num')}<th class="num lp-hide-sm">日均成交</th></tr></thead>`;
