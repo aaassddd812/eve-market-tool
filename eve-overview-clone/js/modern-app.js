@@ -855,8 +855,8 @@ async function getLiveHubPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v56').then((m) => {
-    m.initIndustry({ addToCart,
+  if (!industryLoading) industryLoading = import('./industry.js?v=v57').then((m) => {
+    m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       esiAccountFetch, esiAccountList, resolveTypeNames, hasScope, structureNameMap, saveStructureNames,

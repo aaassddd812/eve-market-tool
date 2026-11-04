@@ -106,6 +106,7 @@ export function initIndustry(context) {
   if (F.rankSort === 'run') F.rankSort = 'profit';   // 旧版「每流程利润」按钮
   if (!RANK_SORT_DIR[F.rankSort]) { F.rankSort = 'ph'; F.rankDir = 'desc'; }
   if (!WHERE_SORT_DIR[F.whereSort]) { F.whereSort = F.idx || 'manufacturing'; F.whereDir = 'asc'; }
+  window.addEventListener('eve-all-chars', () => { if (!$('industryView').hidden && F.tab === 'mine') renderMine($('indBody')); });
 }
 
 // 表头排序（与市场中心订单簿一致）：点击表头按该列排序，再点一次反向；首次点击用该列更有用的方向
@@ -1188,6 +1189,7 @@ async function renderMine(body) {
     await drawMine(body, { hint: '需要先绑定 ESI' }, pasted.list, pasted);
     return;
   }
+  if (ctx.allChars.on()) { await renderMineAll(body); return; }
   body.innerHTML = '<div class="pi-loading">读取工业任务与蓝图…</div>';
   const token = await ctx.ensureEsiToken();
   const id = token.character_id;
@@ -1216,43 +1218,81 @@ function pasteCard(pasted) {
   </details>`;
 }
 
-async function drawMine(body, jobs, bps, pasted, corp) {
-  const esc = ctx.esc, num = ctx.formatNumber;
-  await fillNames([...(Array.isArray(jobs) ? jobs.map((j) => j.product_type_id || j.blueprint_type_id) : []), ...(Array.isArray(bps) ? bps.map((b) => b.type_id) : [])]);
-  const name = tName;
+function jobsHtml(jobs) {
+  const esc = ctx.esc, num = ctx.formatNumber, name = tName;
   const now = Date.now();
-  let jobsHtml;
-  if (jobs.hint) jobsHtml = `<p class="text-muted">${esc(jobs.hint)}</p>`;
-  else if (jobs.error) jobsHtml = `<p class="text-muted">工业任务读取失败：${esc(jobs.error)}</p>`;
-  else if (!jobs.length) jobsHtml = '<p class="text-muted">最近没有工业任务</p>';
-  else {
-    const order = { active: 0, ready: 1, paused: 2 };
-    const list = jobs.slice().sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || new Date(a.end_date) - new Date(b.end_date));
-    jobsHtml = `<div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>活动</th><th>蓝图 / 产品</th><th class="num">流程</th><th>状态</th><th class="num">剩余时间</th><th class="num pi-hide-sm">安装费</th></tr></thead><tbody>${list.slice(0, 100).map((j) => {
-      const left = new Date(j.end_date).getTime() - now;
-      const done = j.status === 'active' && left <= 0;
-      const pid = j.product_type_id || j.blueprint_type_id;
-      return `<tr${BP(pid) ? ` data-ind-pick="${pid}"` : ''}><td>${ACT_ZH[j.activity_id] || '活动 ' + j.activity_id}</td>
-        <td><div class="pi-prod"><img src="${anyIcon(pid, j.activity_id === 5 || j.activity_id === 8)}"${j.activity_id === 5 || j.activity_id === 8 ? '' : ` data-item-pop="${pid}"`} alt="" width="24" height="24" loading="lazy"><span>${esc(name(pid))}</span></div></td>
-        <td class="num">${num(j.runs)}</td>
-        <td><span class="ind-status ${done ? 'ready' : j.status}">${done ? '可交付' : STATUS_ZH[j.status] || j.status}</span></td>
-        <td class="num">${j.status === 'active' && left > 0 ? fmtTime(left / 1000) : '—'}</td>
-        <td class="num pi-hide-sm">${j.cost ? ctx.formatISK(j.cost) : '—'}</td></tr>`;
-    }).join('')}</tbody></table></div>`;
-  }
-  let bpsHtml;
-  if (bps.error) {
-    bpsHtml = bps.noScope ? `<p class="text-muted">${esc(bps.error)}</p>` : `<p class="text-muted">蓝图读取失败：${esc(bps.error)}</p>`;
-  } else if (!bps.length) bpsHtml = '<p class="text-muted">没有蓝图</p>';
-  else {
-    const redraw = async () => { const el = $('indMineBps'); if (el && F.tab === 'mine') el.innerHTML = bpTable(await Plan.mineBlueprintRows(bps)); };
-    bpsHtml = `<div id="indMineBps">${bpTable(await Plan.mineBlueprintRows(bps, redraw))}</div>`;
-  }
+  if (jobs.hint) return `<p class="text-muted">${esc(jobs.hint)}</p>`;
+  if (jobs.error) return `<p class="text-muted">工业任务读取失败：${esc(jobs.error)}</p>`;
+  if (!jobs.length) return '<p class="text-muted">最近没有工业任务</p>';
+  const order = { active: 0, ready: 1, paused: 2 };
+  const list = jobs.slice().sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9) || new Date(a.end_date) - new Date(b.end_date));
+  return `<div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>活动</th><th>蓝图 / 产品</th><th class="num">流程</th><th>状态</th><th class="num">剩余时间</th><th class="num pi-hide-sm">安装费</th></tr></thead><tbody>${list.slice(0, 100).map((j) => {
+    const left = new Date(j.end_date).getTime() - now;
+    const done = j.status === 'active' && left <= 0;
+    const pid = j.product_type_id || j.blueprint_type_id;
+    return `<tr${BP(pid) ? ` data-ind-pick="${pid}"` : ''}><td>${ACT_ZH[j.activity_id] || '活动 ' + j.activity_id}</td>
+      <td><div class="pi-prod"><img src="${anyIcon(pid, j.activity_id === 5 || j.activity_id === 8)}"${j.activity_id === 5 || j.activity_id === 8 ? '' : ` data-item-pop="${pid}"`} alt="" width="24" height="24" loading="lazy"><span>${esc(name(pid))}</span></div></td>
+      <td class="num">${num(j.runs)}</td>
+      <td><span class="ind-status ${done ? 'ready' : j.status}">${done ? '可交付' : STATUS_ZH[j.status] || j.status}</span></td>
+      <td class="num">${j.status === 'active' && left > 0 ? fmtTime(left / 1000) : '—'}</td>
+      <td class="num pi-hide-sm">${j.cost ? ctx.formatISK(j.cost) : '—'}</td></tr>`;
+  }).join('')}</tbody></table></div>`;
+}
+// 蓝图表；elId：后台读完行情后重绘的容器
+async function bpsHtml(bps, elId, redraw) {
+  const esc = ctx.esc;
+  if (bps.error) return bps.noScope ? `<p class="text-muted">${esc(bps.error)}</p>` : `<p class="text-muted">蓝图读取失败：${esc(bps.error)}</p>`;
+  if (!bps.length) return '<p class="text-muted">没有蓝图</p>';
+  return `<div id="${elId}">${bpTable(await Plan.mineBlueprintRows(bps, redraw))}</div>`;
+}
+const BP_SCOPE = 'esi-characters.read_blueprints.v1';
+
+async function drawMine(body, jobs, bps, pasted, corp) {
+  await fillNames([...(Array.isArray(jobs) ? jobs.map((j) => j.product_type_id || j.blueprint_type_id) : []), ...(Array.isArray(bps) ? bps.map((b) => b.type_id) : [])]);
+  const redraw = async () => { const el = $('indMineBps'); if (el && F.tab === 'mine') el.innerHTML = bpTable(await Plan.mineBlueprintRows(bps)); };
   body.innerHTML = `
-    <div class="pi-card"><div class="pi-card-head"><h3>工业任务</h3></div>${jobsHtml}</div>
-    <div class="pi-card"><div class="pi-card-head"><h3>我的蓝图</h3>${pasted ? '<span class="ind-tag-paste">粘贴导入</span>' : ''}</div>${bpsHtml}</div>
+    <div class="pi-card"><div class="pi-card-head"><h3>工业任务</h3><span class="toolbar-spacer"></span>${ctx.hasEsiToken() ? ctx.allChars.toggle() : ''}</div>${jobsHtml(jobs)}</div>
+    <div class="pi-card"><div class="pi-card-head"><h3>我的蓝图</h3>${pasted ? '<span class="ind-tag-paste">粘贴导入</span>' : ''}</div>${await bpsHtml(bps, 'indMineBps', redraw)}</div>
     <div id="indCorpCard">${await corpBpsHtml(corp, () => redrawCorp(corp))}</div>
     ${pasteCard(Plan.pastedBps())}`;
+  MINE.corp = corp;
+}
+
+// 全部角色：每个角色一节（工业任务 + 蓝图），军团蓝图仍按当前角色
+let mineGen = 0;
+async function renderMineAll(body) {
+  const gen = ++mineGen;
+  body.innerHTML = '<div class="pi-loading">读取工业任务与蓝图…</div>';
+  const chars = ctx.allChars.list();
+  const [rows, corp] = await Promise.all([
+    Promise.all(chars.map(async (a) => {
+      const [jobs, bps] = await Promise.all([
+        ctx.allChars.fetch(a.id, `/characters/${a.id}/industry/jobs/?include_completed=true`).catch((e) => ({ error: e.message })),
+        ctx.allChars.can(a.id, BP_SCOPE)
+          ? ctx.allChars.paged(a.id, `/characters/${a.id}/blueprints/`).catch((e) => ({ error: e.message }))
+          : { error: SERVER.id === 'infinity' ? '曙光服不支持蓝图权限' : '未授权蓝图读取权限', noScope: true }
+      ]);
+      return { a, jobs, bps };
+    })),
+    Plan.loadCorpBps()
+  ]);
+  if (F.tab !== 'mine' || gen !== mineGen) return;
+  await fillNames(rows.flatMap((r) => [...(Array.isArray(r.jobs) ? r.jobs.map((j) => j.product_type_id || j.blueprint_type_id) : []), ...(Array.isArray(r.bps) ? r.bps.map((b) => b.type_id) : [])]));
+  const redraw = async () => {
+    for (const r of rows) {
+      const el = $('indMineBps' + r.a.id);
+      if (el && F.tab === 'mine' && gen === mineGen) el.innerHTML = bpTable(await Plan.mineBlueprintRows(r.bps));
+    }
+  };
+  const groups = [];
+  for (const r of rows) {
+    groups.push(`<section class="ac-group">${ctx.allChars.head(r.a)}
+      <div class="pi-card"><div class="pi-card-head"><h3>工业任务</h3></div>${jobsHtml(r.jobs)}</div>
+      <div class="pi-card"><div class="pi-card-head"><h3>蓝图</h3></div>${await bpsHtml(r.bps, 'indMineBps' + r.a.id, redraw)}</div></section>`);
+  }
+  if (gen !== mineGen) return;
+  body.innerHTML = `<div class="valuation-toolbar"><span class="toolbar-spacer"></span>${ctx.allChars.toggle()}</div>${groups.join('')}
+    <div id="indCorpCard">${await corpBpsHtml(corp, () => redrawCorp(corp))}</div>`;
   MINE.corp = corp;
 }
 
