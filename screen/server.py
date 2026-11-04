@@ -482,7 +482,12 @@ class Stats:
                 x.dom_ip[dk][ip] += 1
                 x.dom_req[dk] += 1
         if not STATIC_EXT.search(path):
-            np_ = NUM_SEG.sub("/*", path)   # /api/kb/kill/123 -> /api/kb/kill/*，动态 ID 聚合
+            segs = path.strip("/").split("/")            # 截断到第3段（/api/kb/kill）；第3段是文件名则再收一层（/ship-models/m）
+            if len(segs) > 3:
+                segs = segs[:3]
+            if len(segs) == 3 and "." in segs[2]:
+                segs = segs[:2]
+            np_ = NUM_SEG.sub("/*", "/" + "/".join(segs))
             b.pages[np_] += 1
             tot.pages[np_] += 1
             self.seq += 1
