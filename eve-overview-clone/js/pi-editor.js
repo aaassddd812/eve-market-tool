@@ -702,7 +702,7 @@ function renderSide() {
       <div class="pie-sel-actions"><button type="button" class="pie-btn danger" data-pie="delete">删除链接</button></div>
     </section>`;
   } else {
-    sel = `<p class="pie-tip">${E.linkMode ? '依次点两个设施连接 / 断开' : '点设施或链接进行修改'}</p>`;
+    sel = E.linkMode ? '<p class="pie-tip">依次点两个设施连接 / 断开</p>' : '';
   }
   const counts = {};
   for (const p of m.pins) counts[p.kind] = (counts[p.kind] || 0) + 1;
@@ -763,7 +763,7 @@ function simHtml(m, info) {
     const own = net < 0.5 && (run.idealUsed.get(t) || 0) > 0;
     return `<tr${own ? ' class="own"' : ''}><td><span class="pie-prod-name" style="--c:${tierColor(t)}"><img src="${env.ICON(t, 32)}" alt="" width="20" height="20"><span>${env.esc(env.cName(t))}</span><i>P${env.tierOf(t)}</i></span></td>
       <td class="num">${qtyText(gross)}</td>
-      <td class="num">${own ? '<small>自用</small>' : `<b>${qtyText(net)}</b>${Math.abs(ideal - net) > Math.max(1, ideal * 0.03) ? `<small title="工厂满负荷、采集按头一天平均时的净产量">满负荷 ${qtyText(ideal)}</small>` : ''}`}</td></tr>`;
+      <td class="num">${own ? '<small>自用</small>' : `<b${Math.abs(ideal - net) > Math.max(1, ideal * 0.03) ? ` title="满负荷 ${qtyText(ideal)}"` : ''}>${qtyText(net)}</b>`}</td></tr>`;
   }).join('');
   const seg = (attr, list, cur) => `<span class="pie-seg">${list.map(([v, label]) => `<button type="button" data-${attr}="${v}"${String(v) === String(cur) ? ' class="on"' : ''}>${label}</button>`).join('')}</span>`;
   // 最早出问题的时刻：满仓或断料
@@ -778,7 +778,6 @@ function simHtml(m, info) {
   return `<section class="pie-panel">
       <header>产量${seg('pie-period', PERIODS.map(([k, l]) => [k, l]), SIM.period)}</header>
       <table class="pie-prod"><thead><tr><th>物品</th><th class="num">毛产量</th><th class="num">净产量</th></tr></thead><tbody>${rows}</tbody></table>
-      <small class="pie-note">按时补货、取走时 ${fmtH(sim.hours)} 内的平均值：采集产量随采集程序时间衰减（头一天平均按每头 ${env.formatNumber(env.headRate())} / 小时），上游供不上会减产</small>
     </section>
     <section class="pie-panel">
       <header>存储与维护${seg('pie-simh', SIM_HOURS, SIM.hours)}</header>
