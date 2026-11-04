@@ -24,7 +24,7 @@ body{padding:18px 22px 22px;min-height:100vh}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 
 /* 顶栏 */
-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-content:space-between;margin-bottom:14px}
 .brand{display:flex;align-items:center;gap:10px}
 .logo{width:30px;height:30px;border-radius:6px;display:block;box-shadow:0 0 0 1px rgba(0,0,0,.06) inset}
 .brand h1{font-size:16px;font-weight:600;letter-spacing:.2px}
@@ -35,7 +35,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .dot.live{animation:pulse 2s infinite}
 @keyframes pulse{50%{box-shadow:0 0 0 5px rgba(31,169,113,.05)}}
 
-.kpis{display:grid;grid-template-columns:repeat(7,1fr);gap:12px;margin-bottom:12px}
+.kpis{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:12px;margin-bottom:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
 .kpi{padding:12px 16px 11px;position:relative;overflow:hidden}
 .kpi .label{color:var(--sub);font-size:12px;display:flex;justify-content:space-between}
@@ -88,19 +88,19 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .panel>*{flex-shrink:0}
 .panel>#provBar{flex-shrink:1}
 #provBar{flex:1;min-height:0}
-#pages{max-height:238px;overflow-y:auto;scrollbar-width:thin}
+#pages{max-height:238px;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;margin:0 -8px}
 .rows{list-style:none}
-.rows li{position:relative;display:flex;justify-content:space-between;align-items:center;gap:12px;height:22px;line-height:22px;padding:0 8px;margin:0 -8px 2px;font-size:12px;border-radius:4px;overflow:hidden}
+.rows li{position:relative;display:flex;justify-content:space-between;align-items:center;gap:12px;height:22px;line-height:22px;padding:0 8px;margin:0 0 2px;font-size:12px;border-radius:4px;overflow:hidden}
 .rows li:last-child{margin-bottom:0}
 .rows li .bar{position:absolute;left:0;top:2px;bottom:2px;background:var(--orange-dim);border-radius:3px;z-index:0}
 .rows li span{position:relative;z-index:1}
 .rows li .p{flex:1 1 auto;min-width:0;font-family:var(--mono);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default}
 .rows li .num{flex:0 0 auto;color:var(--axis);text-align:right;min-width:40px}
-.srv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.srv{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:14px}
 .srv>div{background:#fafafb;border:1px solid var(--line);border-radius:6px;padding:7px 9px}
 .srv .n{font-size:12px;color:var(--sub)}
 .srv .v{font-family:var(--mono);font-size:18px;margin-top:2px}
-.srv .s{font-family:var(--mono);font-size:11px;color:var(--mute);white-space:nowrap}
+.srv .s{font-family:var(--mono);font-size:11px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .split{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--track);margin:6px 0 8px}
 .split i{display:block;height:100%;transition:width .6s}
 .split .a{background:var(--orange)}
@@ -126,11 +126,11 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   .feed{height:420px}
   .mapwrap{height:560px}
   #provBar{height:200px;flex:none}
-  .kpis{grid-template-columns:repeat(3,1fr)}
+  .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
 }
 @media (max-width:700px){
   body{padding:12px}
-  .kpis{grid-template-columns:repeat(2,1fr)}
+  .kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
   .mapwrap{grid-template-columns:1fr;height:auto}
   #map{height:380px;flex:none}
   .foreign{border-left:none;border-top:1px solid var(--line);max-height:240px}
@@ -357,10 +357,34 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     });
   });
 
+  // 容器尺寸会随数据填充（热门页面、实时流等）在首次渲染后变化，仅监听 window.resize 不够：
+  // provChart 在 init 时容器偏高，canvas 被定成 445px，之后容器缩到 ~130px 只露出前 2 行。
+  // 用 ResizeObserver 跟随容器实际尺寸重算 canvas，并按新高度重排省份条数。
   window.addEventListener('resize', function(){ mapChart.resize(); provChart.resize(); hourChart.resize(); });
+  if (window.ResizeObserver){
+    var ro = new ResizeObserver(function(entries){
+      entries.forEach(function(en){
+        var el = en.target;
+        if (el.id === 'map') mapChart.resize();
+        else if (el.id === 'hourChart') hourChart.resize();
+        else if (el.id === 'provBar'){ provChart.resize(); if (last) renderProv(last); }
+      });
+    });
+    ['map','provBar','hourChart'].forEach(function(id){ ro.observe($(id)); });
+  }
 
   // ---- 渲染
   var seen = {}, first = true, last = null;
+  // 省份排行：按容器实际高度取 5-10 条（每行约 20px），类目与数值同源同长，避免空槽/错位
+  function renderProv(d){
+    var h = $('provBar').clientHeight;
+    var n = h > 0 ? Math.max(5, Math.min(10, Math.floor((h - 4) / 20))) : 5;
+    var top = (d.provinces || []).filter(function(p){ return p && p.name && p.name !== '未知省份' && p.users > 0; }).slice(0, n);
+    provChart.setOption({
+      yAxis:{data:top.map(function(p){ return short(p.name) || p.name; })},
+      series:[{data:top.map(function(p){ return p.users; })}]
+    });
+  }
   function render(d){
     last = d;
     tween('k_users', d.today_users); tween('k_req', d.today_requests); tween('k_online', d.online_now);
@@ -401,8 +425,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     $('fTotal').textContent = ftotal ? fmt(ftotal) + ' 人' : '';
 
     // 省份排行
-    var top = d.provinces.filter(function(p){ return p.name !== '未知省份'; }).slice(0, Math.max(5, Math.min(10, Math.floor(($('provBar').clientHeight - 4) / 20))));
-    provChart.setOption({yAxis:{data:top.map(function(p){ return short(p.name); })}, series:[{data:top.map(function(p){ return p.users; })}]});
+    renderProv(d);
 
     // 热门页面
     var pmax = d.top_pages.length ? d.top_pages[0].count : 1;
