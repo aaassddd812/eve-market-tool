@@ -404,7 +404,7 @@ function killImageModel(k, val, near) {
     system: { name: sys.name, sec: sys.secText, level: sys.sec, region: sys.region },
     near: near?.text || '', station: k.zkb.locationID ? app.officialName(k.zkb.locationID) || '' : '',
     time: fullIn(Math.floor(Date.parse(k.killmail_time) / 1000), 'cn') + ' UTC+8',
-    eveTime: '游戏内时间 ' + fullIn(Math.floor(Date.parse(k.killmail_time) / 1000), 'eve') + ' UTC',
+    eveTime: fullIn(Math.floor(Date.parse(k.killmail_time) / 1000), 'eve') + ' UTC+0',
     attackerCount: k.attackers.length, damage: app.formatNumber(v.damage_taken || 0),
     tags: [z.solo && '单刷', z.npc && 'NPC', z.awox && '误伤'].filter(Boolean),
     value: app.formatISK(z.totalValue), dropped: app.formatISK(z.droppedValue), destroyed: app.formatISK(z.destroyedValue),
