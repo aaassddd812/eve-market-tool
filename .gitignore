@@ -25,3 +25,4 @@ jks
 screen/geo.sqlite
 screen/known_ips.json
 screen/*.log
+screen/new_events.jsonl

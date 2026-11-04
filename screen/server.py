@@ -20,6 +20,7 @@ HOST, PORT = "127.0.0.1", int(os.environ.get("EVE_SCREEN_PORT") or 8377)
 CST = timezone(timedelta(hours=8))
 DAU_TOTAL = "/opt/eve/stats/dau_total.json"
 KNOWN_IPS = os.path.join(BASE, "known_ips.json")
+NEW_EVENTS = os.path.join(BASE, "new_events.jsonl")   # 新 IP 发现时刻持久化，重启后 new_count_24h 不丢
 
 BOT = re.compile(r"bot|spider|crawl|curl|wget|python|go-http|httpclient|axios|okhttp|monitor|headless|scrapy|java/|masscan|zgrab", re.I)
 LINE = re.compile(r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d+) \S+ "([^"]*)" "([^"]*)"')
@@ -321,6 +322,20 @@ class KnownIPs:
                 self.set.update(x for x in arr if isinstance(x, str))
             except Exception as e:
                 print("known ips skip %s: %s" % (path, e), flush=True)
+        try:                                      # 重放持久化的新 IP 时刻（只留近48h）
+            import time as _t
+            lim = _t.time() - 48 * 3600
+            keep = []
+            with open(NEW_EVENTS) as f:
+                for line in f:
+                    try: ts = float(line.strip())
+                    except ValueError: continue
+                    if ts >= lim: keep.append(ts)
+            self.new_times.extend(sorted(keep))
+            with open(NEW_EVENTS, "w") as f:      # 顺手裁剪文件
+                f.writelines("%.3f\n" % t for t in keep)
+        except Exception:
+            pass
 
     def check(self, ip, t):
         h = ip_hash(ip)
@@ -329,6 +344,11 @@ class KnownIPs:
         self.set.add(h)
         self.pending.append(h)
         self.new_times.append(t)
+        try:
+            with open(NEW_EVENTS, "a") as f:
+                f.write("%.3f\n" % t)
+        except Exception:
+            pass
         return True
 
     def count_since(self, lim):
@@ -607,6 +627,7 @@ class Stats:
                 "countries": [{"name": k, "users": v} for k, v in ctry.most_common()],
                 "recent": recent,
                 "new_count_24h": self.known.count_since(now - self.WINDOW),
+                "total_users": len(self.known.set),
                 "hourly": hourly,
                 "top_pages": [{"path": p, "count": c} for p, c in tot.pages.most_common(10)],
                 "domain": {"old": len(tot.dom_ip["old"]), "new": len(tot.dom_ip["new"]),
