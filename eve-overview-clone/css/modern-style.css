@@ -258,7 +258,10 @@ mark {
 .app-header .hm-box .hm-row > span:not(.hm-label) { display: none; }
 .app-header .hm-box .hm-lang .hm-label { flex: 1; text-align: left; }
 .hm-lang b { padding: 0 8px; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.75rem; line-height: 22px; }
-.hm-label { white-space: nowrap; }
+.hm-label { display: none; white-space: nowrap; }
+.hm-box .hm-label { display: inline; }
+.hm[hidden], .hm-group[hidden] { display: none !important; }
+.hm-panel.up { padding-top: 0; padding-bottom: 6px; }
 @media (max-width: 768px) { .hm { display: none; } }
 .header-brand { flex: none; }
 
@@ -6836,6 +6839,21 @@ td .sov-auto-tag { margin-left: 4px; }
 .prefs-row:hover { background: var(--bg-hover); }
 .prefs-row input { flex: none; width: 16px; height: 16px; margin: 0; accent-color: var(--accent-primary); cursor: pointer; }
 .prefs-title { flex: 1 1 auto; min-width: 0; font-size: 0.8125rem; }
+/* 个性化设置 · 菜单布局 */
+.ml-section { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; padding: 14px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.ml-head { display: flex; align-items: center; gap: 8px; }
+.ml-tip { margin: -4px 0 0; font-size: 0.75rem; color: var(--text-muted); }
+.ml-board-head { margin-bottom: 6px; font-size: 0.8125rem; color: var(--text-secondary); }
+.ml-zones { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.ml-zone { display: flex; flex-direction: column; gap: 8px; min-height: 96px; padding: 10px; border-radius: var(--radius-md); background: var(--bg-secondary); transition: box-shadow var(--transition-fast); }
+.ml-zone.over { box-shadow: inset 0 0 0 2px var(--accent-primary); }
+.ml-zone h5 { margin: 0; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); }
+.ml-list { display: flex; flex-wrap: wrap; align-content: flex-start; gap: 6px; flex: 1; }
+.ml-chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; font-size: 0.8125rem; cursor: grab; user-select: none; }
+.ml-chip:hover { background: var(--accent-soft); color: var(--accent-primary); }
+.ml-chip svg { width: 15px; height: 15px; flex: none; }
+.ml-chip.dragging { opacity: 0.4; }
+.ml-chip .icon-sun { display: none; }
 @media (max-width: 480px) {
   /* 窄屏收紧顶栏右侧按钮，服务器名过长时省略（当前页名称先省略） */
   .header-actions { gap: 2px; }
@@ -7663,6 +7681,10 @@ td .sov-auto-tag { margin-left: 4px; }
 }
 
 /* ===== 桌面版（html.is-desktop）：菜单栏在左侧竖排，底部是工具按钮，可收起成只留图标 ===== */
+html.is-desktop .header-actions > .hm { display: flex; min-width: 0; }
+html.is-desktop .header-actions > .hm > .hm-dots { width: 100%; height: 36px; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-secondary); }
+html.is-desktop .header-actions > .hm > .hm-dots:hover, html.is-desktop .header-actions > .hm.open > .hm-dots { background: var(--bg-hover); color: var(--text-primary); }
+html.is-desktop.rail-mini .header-actions > .hm > .hm-dots { height: 34px; }
 html.is-desktop { --header-h: 0px; --rail-w: 212px; }
 html.is-desktop.rail-mini { --rail-w: 64px; }
 html.is-desktop .app-shell { flex-direction: row; }
@@ -7673,7 +7695,7 @@ html.is-desktop .app-header .header-brand .brand-name { display: inline; }
 html.is-desktop .header-nav { flex-direction: column; gap: 1px; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; margin: 0 -4px; padding: 0 4px; }
 html.is-desktop .app-header .nav-btn { width: 100%; height: 34px; padding: 0 12px; gap: 12px; }
 html.is-desktop .app-header .nav-btn span { display: inline; overflow: hidden; text-overflow: ellipsis; }
-html.is-desktop .header-actions { flex: none; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding-top: 10px; border-top: 1px solid var(--border-primary); }
+html.is-desktop .header-actions { flex: none; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; padding-top: 10px; border-top: 1px solid var(--border-primary); }
 html.is-desktop .server-switch { grid-column: 1 / -1; }
 /* 底部工具按钮：四列等宽的圆角方块，样式统一（API、联系作者不再单独描边 / 着色） */
 html.is-desktop .header-actions > .icon-btn { width: auto; height: 36px; padding: 0; gap: 0; border: 0; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.8125rem; font-weight: 600; letter-spacing: 0; }
@@ -7685,6 +7707,7 @@ html.is-desktop .server-status .status-text { min-width: 0; overflow: hidden; te
 html.is-desktop .app-header .server-status .status-text { display: inline; }
 html.is-desktop .server-menu { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
 html.is-desktop .icon-btn.api-link span, html.is-desktop .contact-btn span { display: none; }
+html.is-desktop .hm-box .icon-btn.api-link .hm-label, html.is-desktop .hm-box .contact-btn .hm-label { display: inline; }
 html.is-desktop .desktop-dl-btn, html.is-desktop .menu-btn { display: none !important; }
 /* 检查更新：一整行，右边是当前版本号；检查时图标转圈 */
 html.is-desktop .header-actions > .icon-btn.rail-update { grid-column: 1 / -1; justify-content: flex-start; gap: 8px; padding: 0 12px; }

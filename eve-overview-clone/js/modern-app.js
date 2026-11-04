@@ -339,7 +339,7 @@ function initNavigation() {
   const header = document.querySelector('.app-header');
   const nav = document.querySelector('.header-nav');
   if (!header || !nav) return;
-  if (IS_DESKTOP) { fitNav = initRail(header, nav); fitNav(); return; }   // 桌面版：菜单在左侧分组竖排，不用收图标
+  if (IS_DESKTOP) { fitNav = initRail(header, nav); fitNav(); initNavMore(header, null); return; }   // 桌面版：菜单在左侧分组竖排，不用收图标
   initNavMore(header, nav);
   const over = () => nav.scrollWidth > nav.clientWidth + 1;
   const fit = () => {
@@ -370,24 +370,32 @@ function initNavigation() {
   fitNav = schedule;
 }
 
-// 网页版顶栏：常用入口留在顶栏，其余按分组收进「更多工具」；右侧留服务器、购物车、预警、定制、下载，其余收进「⋯」。
+// 顶栏菜单布局。网页版：常用入口留在顶栏，其余按分组收进「更多工具」；右侧留服务器、购物车、预警、定制、下载，其余收进「⋯」。
+// 桌面版（左侧菜单）只整理底部的小按钮：常用的留着，其余收进「⋯」（向上弹出）。
+// 哪些留在外面、什么顺序可在「个性化设置 → 菜单布局」里拖动调整，记在本机（MENU_KEY）。
 // 下拉悬停即展开（离开稍等再收），点按钮也能开关，Esc / 点外面关闭。面板用 fixed 定位，不被导航栏的横向滚动裁掉。
 // 按钮是原来的元素搬进去的，点击、高亮逻辑不变；手机底栏仍从 .header-nav 里读按钮。
-const NAV_MAIN = ['market', 'arb', 'map', 'kb', 'fit', 'appraisal', 'plaza'];
+const NAV_MAIN = ['market', 'arb', 'map', 'kb', 'fit', 'appraisal', 'plaza', 'profile'];
 const NAV_MORE = [['交易', ['contracts', 'courier', 'lp', 'abyss', 'bazaar']], ['生产', ['industry', 'pi']], ['宇宙与战斗', ['sim', 'war', 'sov', 'wh']], ['其他', ['guide']]];
-const ACT_MORE = [['themeToggle', '切换主题'], ['prefsBtn', '个性化设置'], ['shortcutHelpBtn', '快捷键'], [null, '开放 API 文档', '.api-link']];
+// 可调整的小按钮：id → 名称（菜单里显示）；api 是 .api-link
+const ACT_ITEMS = [['cartBtn', '购物车'], ['killAlertBtn', '预警'], ['contactBtn', '定制'], ['desktopDlBtn', '下载'], ['langToggle', '语言'], ['themeToggle', '切换主题'], ['prefsBtn', '个性化设置'], ['shortcutHelpBtn', '快捷键'], ['api', '开放 API 文档']];
+const ACT_TOP = ['cartBtn', 'killAlertBtn', 'contactBtn', 'desktopDlBtn'];
+const MENU_KEY = 'eve-menu-layout';
 const MOBILE_UA = /Android|iPhone|iPad|iPod|Mobile|HarmonyOS/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
 const LANG_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>';
 const CARET = '<svg class="hm-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
+const DOTS = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>';
 function hoverMenu(wrap, trigger, panel, align = 'left') {
   let timer = 0;
+  const up = align === 'up';
   const place = () => {
     const r = trigger.getBoundingClientRect();
-    panel.style.top = `${r.bottom}px`;
     const w = panel.offsetWidth;
+    panel.style.top = `${up ? r.top - panel.offsetHeight : r.bottom}px`;
     const left = align === 'right' ? r.right - w : r.left;
     panel.style.left = `${Math.max(8, Math.min(left, innerWidth - w - 8))}px`;
   };
+  if (up) panel.classList.add('up');
   const open = () => { clearTimeout(timer); if (wrap.classList.contains('open')) return; wrap.classList.add('open'); trigger.setAttribute('aria-expanded', 'true'); place(); };
   const close = () => { clearTimeout(timer); wrap.classList.remove('open'); trigger.setAttribute('aria-expanded', 'false'); };
   const later = () => { clearTimeout(timer); timer = setTimeout(close, 180); };
@@ -401,40 +409,81 @@ function hoverMenu(wrap, trigger, panel, align = 'left') {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && wrap.classList.contains('open')) { close(); trigger.focus(); } });
   addEventListener('resize', close);
 }
-function initNavMore(header, nav) {
-  const key = (b) => (b.hasAttribute('data-arb') ? 'arb' : b.dataset.view);
-  const btns = [...nav.querySelectorAll('.nav-btn')];
-  const find = (k) => btns.find((b) => key(b) === k);
-  const wrap = document.createElement('div');
-  wrap.className = 'hm nav-more';
-  wrap.innerHTML = `<button type="button" class="nav-btn-more" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>更多工具</span>${CARET}</button>
-    <div class="hm-panel nav-more-panel" role="menu"><div class="hm-box">${NAV_MORE.map(([name]) => `<div class="hm-group"><h5>${name}</h5><div class="hm-items"></div></div>`).join('')}</div></div>`;
-  const groups = wrap.querySelectorAll('.hm-items');
-  NAV_MORE.forEach(([, list], i) => list.forEach((k) => { const b = find(k); if (b) groups[i].appendChild(b); }));
-  // 新加的页面没列进分组时放「其他」
-  for (const b of btns) if (!b.parentElement.classList.contains('hm-items') && !NAV_MAIN.includes(key(b)) && key(b) !== 'profile') groups[groups.length - 1].appendChild(b);
-  const profile = find('profile');
-  if (profile) nav.insertBefore(wrap, profile); else nav.appendChild(wrap);
-  hoverMenu(wrap, wrap.firstElementChild, wrap.querySelector('.hm-panel'));
 
-  // 右侧按钮
+const MENU = { nav: null, navWrap: null, groups: [], actions: null, more: null, box: null, acts: new Map(), langRow: null };
+const navKey = (b) => (b.hasAttribute('data-arb') ? 'arb' : b.dataset.view);
+const menuLayout = () => store.getJSON(MENU_KEY, {}) || {};
+// 当前布局：nav = 留在顶栏的入口（按顺序），act = 留在外面的小按钮（按顺序）；没调整过用默认
+function menuState() {
+  const l = menuLayout();
+  const navAll = MENU.nav ? [...MENU.nav.querySelectorAll('.nav-btn')].map(navKey) : [];
+  const actAll = [...MENU.acts.keys()];
+  const pick = (saved, dflt, all) => (Array.isArray(saved) ? saved : dflt).filter((k, n, a) => all.includes(k) && a.indexOf(k) === n);
+  return { nav: pick(l.nav, NAV_MAIN, navAll), navAll, act: pick(l.act, ACT_TOP, actAll), actAll };
+}
+function applyMenuLayout() {
+  const st = menuState();
+  if (MENU.nav) {
+    const btns = new Map([...MENU.nav.querySelectorAll('.nav-btn')].map((b) => [navKey(b), b]));
+    for (const k of st.nav) MENU.nav.insertBefore(btns.get(k), MENU.navWrap);
+    MENU.groups.forEach((g) => { g.items.innerHTML = ''; });
+    for (const [k, b] of btns) {
+      if (st.nav.includes(k)) continue;
+      const g = MENU.groups.find((x) => x.list.includes(k)) || MENU.groups[MENU.groups.length - 1];
+      g.items.appendChild(b);
+    }
+    MENU.groups.forEach((g) => { g.el.hidden = !g.items.children.length; });
+    MENU.navWrap.hidden = st.nav.length === st.navAll.length;
+    fitNav();
+  }
+  // 小按钮：留在外面的按顺序放在服务器切换后面，其余进「⋯」
+  let at = MENU.actions.querySelector('.server-switch');
+  for (const id of st.act) {
+    const el = MENU.acts.get(id);
+    el.classList.remove('hm-row');
+    if (id === 'langToggle') { el.hidden = false; MENU.langRow.hidden = true; }
+    at.after(el); at = el;
+  }
+  for (const id of st.actAll) {
+    if (st.act.includes(id)) continue;
+    const el = MENU.acts.get(id);
+    if (id === 'langToggle') { el.hidden = true; MENU.langRow.hidden = false; MENU.box.appendChild(MENU.langRow); continue; }
+    el.classList.add('hm-row');
+    MENU.box.appendChild(el);
+  }
+  MENU.more.hidden = !MENU.box.querySelector(':scope > :not([hidden])');
+}
+function initNavMore(header, nav) {
+  if (nav) {
+    MENU.nav = nav;
+    const wrap = document.createElement('div');
+    wrap.className = 'hm nav-more';
+    wrap.innerHTML = `<button type="button" class="nav-btn-more" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg><span>更多工具</span>${CARET}</button>
+      <div class="hm-panel nav-more-panel" role="menu"><div class="hm-box">${NAV_MORE.map(([name]) => `<div class="hm-group"><h5>${name}</h5><div class="hm-items"></div></div>`).join('')}</div></div>`;
+    MENU.groups = [...wrap.querySelectorAll('.hm-group')].map((el, n) => ({ el, items: el.lastElementChild, list: NAV_MORE[n][1] }));
+    nav.appendChild(wrap);
+    MENU.navWrap = wrap;
+    hoverMenu(wrap, wrap.firstElementChild, wrap.querySelector('.hm-panel'));
+  }
+
+  // 小按钮
   const actions = header.querySelector('.header-actions');
   if (!actions) return;
+  MENU.actions = actions;
   const more = document.createElement('div');
   more.className = 'hm act-more';
-  more.innerHTML = `<button type="button" class="icon-btn" title="更多" aria-label="更多" aria-haspopup="true" aria-expanded="false"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg></button>
+  more.innerHTML = `<button type="button" class="icon-btn hm-dots" title="更多" aria-label="更多" aria-haspopup="true" aria-expanded="false">${DOTS}</button>
     <div class="hm-panel act-more-panel" role="menu"><div class="hm-box"></div></div>`;
-  const box = more.querySelector('.hm-box');
-  for (const [id, label, sel] of ACT_MORE) {
-    const el = id ? document.getElementById(id) : actions.querySelector(sel);
-    if (!el) continue;
-    el.classList.add('hm-row');
-    el.removeAttribute('title');
-    el.insertAdjacentHTML('beforeend', `<span class="hm-label">${label}</span>`);
-    box.appendChild(el);
+  MENU.more = more;
+  MENU.box = more.querySelector('.hm-box');
+  for (const [id, label] of ACT_ITEMS) {
+    const el = id === 'api' ? actions.querySelector('.api-link') : document.getElementById(id);
+    if (!el || (IS_DESKTOP && id === 'desktopDlBtn')) continue;
+    if (id !== 'langToggle') el.insertAdjacentHTML('beforeend', `<span class="hm-label">${label}</span>`);
+    MENU.acts.set(id, el);
   }
-  // 语言：#langToggle 的文字由 i18n.js 维护（EN / 中文），菜单里另放一行转发点击，原按钮隐藏
-  const lang = document.getElementById('langToggle');
+  // 语言：#langToggle 的文字由 i18n.js 维护（EN / 中文），收进菜单时另放一行转发点击，原按钮隐藏
+  const lang = MENU.acts.get('langToggle');
   if (lang) {
     const row = document.createElement('button');
     row.type = 'button';
@@ -442,11 +491,75 @@ function initNavMore(header, nav) {
     row.innerHTML = `${LANG_ICON}<span class="hm-label">语言</span><b class="notranslate" translate="no">${lang.textContent.trim()}</b>`;
     row.addEventListener('click', () => lang.click());
     new MutationObserver(() => { row.lastElementChild.textContent = lang.textContent.trim(); }).observe(lang, { childList: true, characterData: true, subtree: true });
-    lang.hidden = true;
-    box.prepend(row);
+    MENU.langRow = row;
   }
-  actions.appendChild(more);
-  hoverMenu(more, more.firstElementChild, more.querySelector('.hm-panel'), 'right');
+  // 「⋯」放在留在外面的按钮后面（桌面版的收起菜单、更新按钮之前）
+  const last = [...actions.children].filter((c) => [...MENU.acts.values()].includes(c) || c.classList.contains('server-switch')).pop();
+  last.after(more);
+  hoverMenu(more, more.firstElementChild, more.querySelector('.hm-panel'), IS_DESKTOP ? 'up' : 'right');
+  applyMenuLayout();
+}
+
+// 个性化设置里的「菜单布局」：两栏（外面 / 收起来），拖动或点一下在两栏间移动，拖动可排序
+function menuLayoutHtml() {
+  if (!MENU.actions || MOBILE_QUERY.matches) return '';
+  const st = menuState();
+  const navLabel = (k) => { const b = [...MENU.nav.querySelectorAll('.nav-btn')].find((x) => navKey(x) === k); return [b.querySelector('svg')?.outerHTML || '', b.querySelector('span')?.textContent.trim() || k]; };
+  const actLabel = (k) => { const el = MENU.acts.get(k); return [k === 'langToggle' ? LANG_ICON : el.querySelector('svg')?.outerHTML || '', ACT_ITEMS.find(([id]) => id === k)[1]]; };
+  const chip = (kind, k, [icon, label]) => `<button type="button" class="ml-chip" draggable="true" data-ml="${kind}" data-ml-key="${k}">${icon}<span>${esc(label)}</span></button>`;
+  const zone = (kind, side, title, keys, lab) => `<div class="ml-zone" data-ml-zone="${kind}:${side}"><h5>${title}</h5><div class="ml-list">${keys.map((k) => chip(kind, k, lab(k))).join('')}</div></div>`;
+  const board = (kind, title, outTitle, inTitle, out, all, lab) => `<div class="ml-board"><div class="ml-board-head"><b>${title}</b></div>
+      <div class="ml-zones">${zone(kind, 'out', outTitle, out, lab)}${zone(kind, 'in', inTitle, all.filter((k) => !out.includes(k)), lab)}</div></div>`;
+  return `<section class="ml-section"><div class="ml-head"><b class="prefs-title">菜单布局</b><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-ml-reset>恢复默认</button></div>
+    <p class="ml-tip">拖动排序，或点一下在两栏之间移动</p>
+    ${MENU.nav ? board('nav', '功能入口', '顶栏', '更多工具', st.nav, st.navAll, navLabel) : ''}
+    ${board('act', '小按钮', IS_DESKTOP ? '菜单底部' : '顶栏右侧', '⋯ 菜单', st.act, st.actAll, actLabel)}</section>`;
+}
+function saveMenuZone(kind) {
+  const keys = [...$('prefsBody').querySelectorAll(`[data-ml-zone="${kind}:out"] .ml-chip`)].map((c) => c.dataset.mlKey);
+  store.setJSON(MENU_KEY, { ...menuLayout(), [kind]: keys });
+  applyMenuLayout();
+}
+function initMenuLayoutEditor() {
+  const body = $('prefsBody');
+  let drag = null;
+  body.addEventListener('click', (e) => {
+    if (e.target.closest('[data-ml-reset]')) { store.setJSON(MENU_KEY, {}); applyMenuLayout(); renderPrefs(); return; }
+    const c = e.target.closest('.ml-chip');
+    if (!c) return;
+    const zone = c.closest('.ml-zone');
+    const [kind, side] = zone.dataset.mlZone.split(':');
+    body.querySelector(`[data-ml-zone="${kind}:${side === 'out' ? 'in' : 'out'}"] .ml-list`).appendChild(c);
+    saveMenuZone(kind);
+  });
+  body.addEventListener('dragstart', (e) => {
+    const c = e.target.closest?.('.ml-chip');
+    if (!c) return;
+    drag = c;
+    c.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', c.dataset.mlKey);
+  });
+  body.addEventListener('dragend', () => { drag?.classList.remove('dragging'); drag = null; body.querySelectorAll('.ml-zone.over').forEach((z) => z.classList.remove('over')); });
+  body.addEventListener('dragover', (e) => {
+    const zone = e.target.closest?.('.ml-zone');
+    if (!drag || !zone || zone.dataset.mlZone.split(':')[0] !== drag.dataset.ml) return;
+    e.preventDefault();
+    body.querySelectorAll('.ml-zone.over').forEach((z) => z !== zone && z.classList.remove('over'));
+    zone.classList.add('over');
+    // 插到指针所在位置：找第一个中心在指针右边（同一行）或下方的按钮
+    const list = zone.querySelector('.ml-list');
+    const next = [...list.querySelectorAll('.ml-chip:not(.dragging)')].find((x) => {
+      const r = x.getBoundingClientRect();
+      return e.clientY < r.top || (e.clientY <= r.bottom && e.clientX < r.left + r.width / 2);
+    });
+    if (next) list.insertBefore(drag, next); else list.appendChild(drag);
+  });
+  body.addEventListener('drop', (e) => {
+    if (!drag) return;
+    e.preventDefault();
+    saveMenuZone(drag.dataset.ml);
+  });
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
@@ -3310,7 +3423,7 @@ function renderPrefs() {
   $('prefsBody').innerHTML = PREFS.map(([key, title, vals, dflt]) => `<label class="prefs-row">
       <input type="checkbox" data-pref="${key}"${(p[key] ? p[key] === vals[1] : dflt) ? ' checked' : ''}>
       <b class="prefs-title">${title}</b>
-    </label>`).join('');
+    </label>`).join('') + menuLayoutHtml();
 }
 function togglePrefs(show = $('prefsModal').hidden) {
   $('prefsModal').hidden = !show;
@@ -3345,6 +3458,7 @@ function lockModalSize() {
 
 function initPrefs() {
   applyPrefs();
+  initMenuLayoutEditor();
   $('prefsBtn').addEventListener('click', () => togglePrefs(true));
   $('prefsModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-close-prefs]')) togglePrefs(false);
