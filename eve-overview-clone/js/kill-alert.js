@@ -23,8 +23,8 @@
 //   悬浮窗里完整显示（最新一条展开），预警卡片、最近预警里显示一行摘要；同一角色 10 分钟内不重复读。
 
 import { SERVER, IS_TQ, serverKey, esiUrl, kbSiteLink } from './server.js?v=s4';
-import * as AM from './alert-mail.js?v=v7';
-import * as AP from './alert-push.js?v=v2';
+import * as AM from './alert-mail.js?v=v8';
+import * as AP from './alert-push.js?v=v3';
 import * as ST from './standings.js?v=v4';
 import * as FF from './float-feed.js?v=v11';
 

@@ -4,18 +4,19 @@
 // 弹窗在电脑上固定 680×760（切换标签页不变大小），设置一栏排；手机上全屏。
 // 第三个标签页「游戏邮件」（alert-mail.js）集中设置收件人与哪些预警发邮件；打开它时先加载两个预警模块（它们会登记自己的邮件开关）。
 // 「本地红名」（local-watch.js）：共享游戏画面，本地频道出现红名就报警。
+// 「虫洞求救」（sos-watch.js）：有人在虫洞里发求救时提醒（虫洞页「求救」也有入口）。
 // 「微信 / 邮箱」（alert-push.js）：企业微信群机器人与邮箱提醒。
 
-import * as AM from './alert-mail.js?v=v7';
-import * as AP from './alert-push.js?v=v2';
+import * as AM from './alert-mail.js?v=v8';
+import * as AP from './alert-push.js?v=v3';
 import { skText } from './skeleton.js?v=v17';
 
-let deps = null;   // { loadKill, loadIntel, loadLocal, esc, showToast }
+let deps = null;   // { loadKill, loadIntel, loadLocal, loadSos, esc, showToast }
 let modal = null;
 let tab = 'kill';
 const TAB_KEY = 'eve-alert-tab';
-const TABS = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名'], ['mail', '游戏邮件'], ['push', '微信 / 邮箱']];
-const state = { kill: false, intel: false, local: false, mail: false, push: false };
+const TABS = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名'], ['sos', '虫洞求救'], ['mail', '游戏邮件'], ['push', '微信 / 邮箱']];
+const state = { kill: false, intel: false, local: false, sos: false, mail: false, push: false };
 
 export function initAlertCenter(d) {
   deps = d;
@@ -76,8 +77,8 @@ async function show(which) {
   const want = tab;
   const pane = modal.querySelector(`[data-ac-pane="${want}"]`);
   try {
-    const m = want === 'kill' ? await deps.loadKill() : want === 'intel' ? await deps.loadIntel() : want === 'local' ? await deps.loadLocal() : want === 'push' ? AP
-      : await Promise.allSettled([deps.loadKill(), deps.loadIntel()]).then(() => AM);
+    const m = want === 'kill' ? await deps.loadKill() : want === 'intel' ? await deps.loadIntel() : want === 'local' ? await deps.loadLocal() : want === 'sos' ? await deps.loadSos() : want === 'push' ? AP
+      : await Promise.allSettled([deps.loadKill(), deps.loadIntel(), deps.loadSos()]).then(() => AM);
     m.mountPanel(pane, { close, isOpen });
     if (tab === want) m.showPanel();
   } catch (error) {

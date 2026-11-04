@@ -17,8 +17,8 @@
 //   设置只存在本浏览器（开了云同步时加密同步），每次翻译随请求经本站服务器转发给该接口，服务器不保存。
 // 悬浮窗（float-feed.js）：「日志预警」显示最近消息（敌情 / 关键词 / 游戏日志），「频道翻译」显示译文；有新预警时悬浮窗切到「日志预警」。
 
-import * as AM from './alert-mail.js?v=v7';
-import * as AP from './alert-push.js?v=v2';
+import * as AM from './alert-mail.js?v=v8';
+import * as AP from './alert-push.js?v=v3';
 import * as ST from './standings.js?v=v4';
 import * as FF from './float-feed.js?v=v11';
 

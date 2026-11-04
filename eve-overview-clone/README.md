@@ -98,6 +98,7 @@ eve-overview-clone/
 ├── pi-data.json         # 行星工业数据：各星系行星、设施、配方（build_pi.mjs 生成）
 ├── sov-data.json        # 主权规划数据：升级件、各星系恒星电力与行星殖民地资源（build_sov.mjs 生成）
 ├── wh-data.json         # 虫洞数据：虫洞星系等级 / 天象 / 固定出口 / 行星，全部虫洞类型属性（build_wormholes.mjs 生成）
+├── wh-sites.json        # 虫洞地点：各等级地点、刷怪波次、NPC 战斗数据、气云 / 矿区产出（build_whsites.py 生成，CC BY-SA 4.0）
 ├── server/build_fit_data.py # 由 SDE 生成 fit-data.json
 ├── fit-data.json        # 模拟装配数据：舰船 / 装备 / 弹药 / 无人机 / 技能 / 植入体的属性与效果
 ├── fit-info.json        # 物品详情用：舰船加成与衍生关系（server/build_fit_info.py 生成，打开详情时才加载）
@@ -934,6 +935,13 @@ WantedBy=multi-user.target
   天象及该等级下的全部效果数值。可一键转到「行星工业」按这个虫洞规划，外链 zKillboard / anoik.is。
   宁静服另有近 30 天活动（击杀数、总价值、被 NPC 击毁数、最近一次）、按北京时间的 24 小时活跃时段分布、出现最多的军团 / 联盟（推测住户或常来的猎人）与最近 20 次击杀（点开看详情）
 - **活跃度**（宁静服）：所有虫洞星系按 24 小时 / 7 天 / 30 天击杀排行，可按等级、天象筛选，列出固定出口；ESI 的星系击杀统计不含虫洞，数据来自本站击杀库
+- **星系页另有**：可能出现的游荡虫洞（出现等级含本星系、又不是固定出口类型的虫洞，另列任何星系都可能出现的小型虫洞）、本等级可刷出的地点（点开看波次与产出）、求救
+- **搜索框识别**：可直接粘贴游戏里复制的文本——星系链接（`showinfo:5//ID`）、J 星系名、虫洞代码 / 虫洞链接、地点名或休眠者名（中英文），认出来就直接打开
+- **地点**（`#wh/sites`，单个地点 `#wh/sites/<英文名>`）：按等级（C1–C6、C13、席拉、漂流者星系）列出战斗 / 数据 / 遗迹 / 气云 / 矿区地点与蓝色战利品价值；
+  地点页列出每一波刷哪些 NPC、几只、触发下一波的是谁、可能不出现的，标出网 / 扰 / 中和 / 遥修，每波全部刷出时的总 DPS；点 NPC 展开按伤害类型的 DPS、各伤害类型的 EHP（标出打哪种伤害最有效）、
+  护盾 / 装甲 / 结构、维修量、电子战数值与速度 / 信号半径 / 攻击距离 / 环绕距离；气云 / 矿区列出产出物、数量与体积。英文界面直接显示英文原名
+- **求救**（`#wh/sos`；星系页也有）：被困在虫洞里的玩家用绑定角色（需要位置读取权限）发求救，留言、悬赏、联系方式；星系由服务器读角色当前位置，只能在虫洞里发，
+  每个角色一条、48 小时过期，发布者可撤下（`GET /api/kb/wh/sos`、`POST /api/kb/wh/sos/{save,delete}`，令牌只用于本次请求）
 - **虫洞类型**：全部 102 种虫洞代码的出现位置、通往、存活时间、总质量、单次质量、质量回复、能否作固定出口，按代码搜索、按通往筛选
 - **天象**：磁星、黑洞、红巨星、脉冲星、沃尔夫-拉叶星、激变变星在 C1–C6 的效果数值（C13 按 C6，漂流者星系按 C2）与各有多少个星系
 - **质量计算**：选虫洞（或改总质量），逐次添加「进 / 出」与舰船质量（预设战列舰、希格斯锚定、战巡、巡洋舰、运输舰、旗舰等的冷 / 热质量，或自定义），
@@ -942,6 +950,9 @@ WantedBy=multi-user.target
   输入所在星系后按星门跳数排序，找最近的入口
 - **数据**：`build_wormholes.mjs` 从 CCP SDE 生成星系等级（星系 → 星座 → 星域的 wormholeClassID）、天象（次级恒星类型）、行星 / 卫星与虫洞类型属性（属性 1381–1385）；
   各星系的固定出口与虫洞出现在哪些等级不在 SDE 里，取自 anoik.is 的社区静态数据
+- **地点数据**：`build_whsites.py` 从 EVE University Wiki（CC BY-SA 4.0，MediaWiki API 取 Wormhole sites 分类全部页面）解析地点归属、每波刷怪（Template:Npcwh）、
+  蓝色战利品（Template:Whisk）与气云 / 矿区产出表，席拉 / 漂流者战斗地点名称补自 Pathfinder（MIT）；NPC 的伤害、EHP、维修、电子战由 SDE 属性计算，地点 / NPC / 产出的中文名取自 SDE。
+  生成的 wh-sites.json 同样按 CC BY-SA 4.0 提供，页面注明出处并链接原文。数据 / 遗迹 / 气云地点 SDE 没有中文名，显示英文原名；Wiki 上没有信号强度
 - **接口**：`GET /api/v1/wormholes/activity?days=` 与 `GET /api/v1/wormholes/systems/{id}`（击杀记录服务，见 api.html）
 
 ## 主权规划（v81）
@@ -965,6 +976,7 @@ WantedBy=multi-user.target
 ```bash
 node build_sov.mjs <SDE 解压目录>   # 输出 eve-overview-clone/sov-data.json
 node build_wormholes.mjs <SDE 解压目录> [anoik static.json]   # 输出 eve-overview-clone/wh-data.json（固定出口取自 anoik.is）
+python3 build_whsites.py <SDE 解压目录> [Wiki 缓存文件]        # 输出 eve-overview-clone/wh-sites.json（地点与波次，Wiki 页面缓存在 whsites-cache.json，删掉即重新抓取）
 ```
 
 ## 教程（v68：图文 Wiki + 视频）

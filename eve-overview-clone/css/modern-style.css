@@ -5522,6 +5522,8 @@ td .hc-sub { display: inline; margin-left: 6px; }
 .wh-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.8125rem; }
 .wh-chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--border-primary); border-radius: 999px; background: var(--bg-primary); color: var(--text-primary); font-size: 0.8125rem; }
 .wh-chip:hover { border-color: var(--accent-primary); }
+.wh-frig { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 12px 0 0; font-size: 0.8125rem; }
+.wh-frig .wh-chip, .wh-frig .wh-chip:hover { border-color: transparent; background: var(--bg-tertiary); }
 .wh-cls { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.6875rem; font-weight: 700; line-height: 1.5; color: #fff; background: #64748b; white-space: nowrap; vertical-align: middle; }
 .wh-c1 { background: #4f6bed; } .wh-c2 { background: #0e9aa7; } .wh-c3 { background: #2f9e44; } .wh-c4 { background: #a68a00; }
 .wh-c5 { background: #d9480f; } .wh-c6 { background: #c92a2a; } .wh-c13 { background: #7048e8; } .wh-c12 { background: #1c7ed6; }
@@ -6724,7 +6726,6 @@ td .sov-auto-tag { margin-left: 4px; }
 @media (max-width: 768px) { .icon-btn.contact-btn { padding: 0; width: 36px; } .icon-btn.contact-btn span { display: none; } }
 .modal-content.contact-content { max-width: 440px; }
 .contact-body { display: flex; flex-direction: column; gap: 14px; }
-.contact-intro { font-size: 0.875rem; color: var(--text-secondary); }
 .contact-offer { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .contact-offer li { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
 .contact-offer b { font-size: 0.8125rem; }
@@ -7799,3 +7800,87 @@ html.is-app .desktop-dl-btn, html.is-app [data-mnav-act="desktopDlBtn"] { displa
 .kb-br-pmore { margin-top: 8px; }
 
 /* 星图 · 萨沙入侵按钮（右下角按钮组里，带当前入侵处数） */
+
+/* 虫洞求救 */
+.wh-sos-title { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.wh-sos-title .wh-h { margin: 0; }
+.wh-sos-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.wh-sos-item { display: flex; gap: 12px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.wh-sos-item img { flex: none; width: 40px; height: 40px; border-radius: 50%; }
+.wh-sos-main { flex: 1; min-width: 0; }
+.wh-sos-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.wh-sos-head small { margin-left: auto; }
+.wh-sos-main p { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; }
+.wh-sos-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 4px; color: var(--text-secondary); font-size: 0.8125rem; }
+.wh-sos-meta:empty { display: none; }
+.wh-sos-reward { color: var(--warning, #f59e0b); font-weight: 600; }
+.wh-sos-form { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.wh-sos-form textarea { resize: vertical; min-height: 56px; }
+.wh-sos-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.wh-sos-row .pi-input[type=number] { width: 160px; }
+
+/* 虫洞地点 */
+.wh-chip.active { border-color: var(--accent-primary); background: var(--accent-primary); color: #fff; }
+.wh-site-groups { display: flex; flex-direction: column; gap: 10px; }
+.wh-site-group { display: flex; align-items: flex-start; gap: 10px; }
+.wh-site-group .wh-site-type { margin-top: 4px; }
+.wh-site-type { display: inline-block; flex: none; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
+.wh-st-combat { background: rgba(239, 68, 68, 0.14); color: #f87171; }
+.wh-st-data { background: rgba(59, 130, 246, 0.14); color: #60a5fa; }
+.wh-st-relic { background: rgba(245, 158, 11, 0.16); color: #fbbf24; }
+.wh-st-gas { background: rgba(16, 185, 129, 0.14); color: #34d399; }
+.wh-st-ore { background: rgba(139, 92, 246, 0.14); color: #a78bfa; }
+.wh-site-row, .wh-npc-row.is-click { cursor: pointer; }
+.wh-site-row:hover td, .wh-npc-row.is-click:hover td { background: var(--bg-tertiary); }
+.wh-wave + .wh-wave { margin-top: 12px; }
+.wh-wave { padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.wh-wave-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.wh-wave-table { background: transparent; }
+.wh-wave-table td { border-color: var(--border-primary); }
+.wh-npc-row.open td { border-bottom: 0; }
+.wh-npc-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.wh-ew { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; white-space: nowrap; }
+.wh-ew-web { background: rgba(59, 130, 246, 0.16); color: #60a5fa; }
+.wh-ew-scram { background: rgba(239, 68, 68, 0.16); color: #f87171; }
+.wh-ew-neut { background: rgba(139, 92, 246, 0.16); color: #a78bfa; }
+.wh-ew-rep { background: rgba(16, 185, 129, 0.16); color: #34d399; }
+.wh-ew-trig { background: rgba(245, 158, 11, 0.2); color: #fbbf24; }
+.wh-ew-opt { background: var(--bg-secondary); color: var(--text-secondary); }
+.wh-npc { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; padding: 4px 0 6px; }
+.wh-npc-block { padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-secondary); }
+.wh-npc-block h5 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin: 0 0 8px; font-size: 0.8125rem; font-weight: 600; }
+.wh-npc-block p { margin: 6px 0 0; font-size: 0.75rem; }
+.wh-dmg { display: flex; overflow: hidden; border-radius: 6px; font-size: 0.75rem; color: #fff; }
+.wh-dmg span { min-width: 0; padding: 3px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wh-dmg-0 { background: #3b82f6; }
+.wh-dmg-1 { background: #ef4444; }
+.wh-dmg-2 { background: #6b7280; }
+.wh-dmg-3 { background: #f59e0b; }
+.wh-npc-kv, .wh-npc-list { margin: 0; padding: 0; list-style: none; font-size: 0.8125rem; }
+.wh-npc-kv li { display: flex; justify-content: space-between; gap: 8px; padding: 2px 0; }
+.wh-npc-kv li.best b { color: var(--success, #10b981); }
+.wh-npc-list li { padding: 2px 0; }
+.wh-src { margin: 8px 0 0; font-size: 0.75rem; }
+[data-theme="light"] .wh-st-combat, [data-theme="light"] .wh-ew-scram { color: #dc2626; }
+[data-theme="light"] .wh-st-data, [data-theme="light"] .wh-ew-web { color: #2563eb; }
+[data-theme="light"] .wh-st-relic, [data-theme="light"] .wh-ew-trig { color: #b45309; }
+[data-theme="light"] .wh-st-gas, [data-theme="light"] .wh-ew-rep { color: #059669; }
+[data-theme="light"] .wh-st-ore, [data-theme="light"] .wh-ew-neut { color: #7c3aed; }
+
+/* 虫洞求救提醒：右下角卡片、预警弹窗里的最近求救 */
+.battle-alerts.sos-alerts { top: auto; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); }
+.sos-alert { border-color: rgba(245, 158, 11, 0.6); box-shadow: var(--shadow-lg), 0 0 0 3px rgba(245, 158, 11, 0.14); }
+.sos-alert .battle-alert-head strong { color: var(--warning); }
+.sos-recent { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; font-size: 0.8125rem; }
+.sos-recent li { padding: 8px 10px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.wh-sos-title .wh-sos-bell { margin-left: auto; }
+.wh-sos-title .wh-sos-bell.on { color: var(--accent-primary); background: var(--accent-soft); }
+.fb-form { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.fb-form h4 { margin: 0; font-size: 0.8125rem; }
+.fb-form textarea { resize: vertical; min-height: 84px; }
+.fb-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.fb-kinds button { height: 28px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--bg-secondary); color: var(--text-secondary); font: inherit; font-size: 0.75rem; cursor: pointer; }
+.fb-kinds button:hover { color: var(--text-primary); }
+.fb-kinds button.active { background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-secondary)); color: var(--accent-primary); font-weight: 600; }
+.fb-foot { display: flex; align-items: center; gap: 10px; }
+.fb-foot small { flex: 1; min-width: 0; font-size: 0.75rem; }

@@ -49,12 +49,17 @@
  POST /api/kb/sync/{register,pull,push,delete}  设置云同步：用户名 + 浏览器由密码派生的登录密钥；内容在浏览器里加密，服务器只存密文
   POST /api/kb/wallet/sync                    钱包成交存档：带浏览器的 ESI 令牌（Authorization），同步并返回某角色某物品的成交 / 税费 / 工业任务
   POST /api/kb/wallet/delete                  删除某角色的全部钱包存档（同样校验令牌）
+  GET  /api/kb/wh/sos?server=&system=         虫洞求救：被困在虫洞里的玩家发布的求救（不带 system 时列出全部未过期的）
+  POST /api/kb/wh/sos/{save,delete}           发布 / 撤下求救：带该角色的 ESI 令牌（需要位置权限），所在星系由服务器从 ESI 读取
+  POST /api/kb/feedback                       提交工单（右上角「定制」）：{kind, text, contact, page}，存进 feedback 表；
+                                              设了环境变量 EVE_FEEDBACK_WECOM（企业微信机器人 key 或完整地址）时同时推送给站长
   击杀相关接口（status / feed / live / br / battles / top / summary / leaderboard / search / entity / kill / shipfits）可带 server=serenity|infinity 查国服
 
 用法
   python3 kb_service.py --db kb.sqlite [--port 8291] [--days 180] [--cn-days 0] [--live auto|r2z2|poll|off] [--static DIR]
   宁静服保留 --days 天（首次启动从 EVE Ref 补齐这么多天，约每天 13 MB）；国服 --cn-days 为 0 时永久保存。
   --static 仅用于本地 / 演示环境：同时托管前端静态文件。
+  查看工单：python3 kb_service.py --db kb.sqlite --feedback 20（列出最近 20 条后退出）
 """
 
 import argparse
@@ -5743,6 +5748,105 @@ class CharSale:
                 "pending": 0}
 
 
+# ---------------------------------------------------------------- 虫洞求救
+# 被困在虫洞里的玩家发求救：用本站绑定的 ESI 令牌（需要位置权限）证明角色归属，所在星系由服务器从 ESI 读取（只能在虫洞里发，不能替别人或别的星系发）。
+# 每个角色同时只有一条，重新提交即更新并续期；SOS_HOURS 小时后自动过期。令牌只用于本次请求，不落盘、不写日志
+SOS_HOURS = 48
+SOS_RATE = 20                   # 每个 IP 每分钟最多提交次数
+SOS_WORDS_MAX = 200
+SOS_CONTACT_MAX = 60
+SOS_REWARD_MAX = 1_000_000_000_000
+SOS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS wh_sos(server TEXT, char_id INTEGER, name TEXT, corp_id INTEGER, system_id INTEGER, words TEXT, reward INTEGER,
+  contact TEXT, created INTEGER, updated INTEGER, PRIMARY KEY(server, char_id));
+CREATE INDEX IF NOT EXISTS wh_sos_system ON wh_sos(server, system_id);
+"""
+
+
+class WhSos:
+    def __init__(self, store, wallet):
+        self.store, self.esi = store, wallet.esi
+        c = store.conn()
+        with store.write_lock:
+            c.executescript(SOS_SCHEMA)
+            c.commit()
+
+    @staticmethod
+    def server_of(v):
+        if v not in ARB_SERVERS:
+            raise ValueError("server 只能是 " + " / ".join(ARB_SERVERS))
+        return v
+
+    @staticmethod
+    def char_of(body):
+        char = body.get("character_id")
+        if type(char) is not int or char <= 0:
+            raise ValueError("character_id 应为正整数")
+        return char
+
+    @staticmethod
+    def text(v, limit, label):
+        if v is None:
+            return ""
+        if not isinstance(v, str):
+            raise ValueError(label + "应为文字")
+        v = re.sub(r"[\x00-\x09\x0b-\x1f\x7f]", " ", v).strip()
+        if len(v) > limit:
+            raise ValueError(f"{label}最多 {limit} 个字")
+        return v
+
+    def location(self, server, char, token):
+        """用令牌读角色位置（ESI 返回 200 才认为令牌属于这个角色）"""
+        loc, _ = self.esi(server, f"/characters/{char}/location/", token)
+        return int((loc or {}).get("solar_system_id") or 0)
+
+    def save(self, body, token):
+        server, char = self.server_of(body.get("server")), self.char_of(body)
+        words = self.text(body.get("words"), SOS_WORDS_MAX, "留言")
+        contact = self.text(body.get("contact"), SOS_CONTACT_MAX, "联系方式")
+        reward = body.get("reward") or 0
+        if type(reward) is not int or not 0 <= reward <= SOS_REWARD_MAX:
+            raise ValueError("悬赏应为 0 到 1 万亿之间的整数（ISK）")
+        system = self.location(server, char, token)
+        if not 31000000 <= system < 32000000:
+            raise ValueError("你的角色现在不在虫洞里，只能在被困的虫洞星系里发求救")
+        cfg = ARB_SERVERS[server]
+        try:
+            pub, _ = get_json(f"{cfg['esi']}/characters/{char}/?{cfg['qs']}", timeout=20, retries=2)
+        except Exception:
+            raise EsiUnavailable("角色公开信息读取失败") from None
+        now = int(time.time())
+        c = self.store.conn()
+        with self.store.write_lock:
+            row = c.execute("SELECT created FROM wh_sos WHERE server=? AND char_id=? AND system_id=? AND updated>?",
+                            (server, char, system, now - SOS_HOURS * 3600)).fetchone()
+            c.execute("INSERT OR REPLACE INTO wh_sos(server, char_id, name, corp_id, system_id, words, reward, contact, created, updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                      (server, char, pub.get("name") or str(char), pub.get("corporation_id"), system, words, reward, contact, row[0] if row else now, now))
+            c.commit()
+        return {"ok": True, "system_id": system, "expires": now + SOS_HOURS * 3600}
+
+    def delete(self, body, token):
+        server, char = self.server_of(body.get("server")), self.char_of(body)
+        self.location(server, char, token)   # 校验令牌属于这个角色
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("DELETE FROM wh_sos WHERE server=? AND char_id=?", (server, char))
+            c.commit()
+        return {"ok": True}
+
+    # GET /wh/sos?server=&system=：未过期的求救，新的在前
+    def items(self, q):
+        server = self.server_of(q.get("server") or "tq")
+        sql = "SELECT char_id, name, corp_id, system_id, words, reward, contact, created, updated FROM wh_sos WHERE server=? AND updated>?"
+        args = [server, int(time.time()) - SOS_HOURS * 3600]
+        if q.get("system"):
+            sql += " AND system_id=?"
+            args.append(int(q["system"]))
+        rows = self.store.conn().execute(sql + " ORDER BY updated DESC LIMIT 200", args).fetchall()
+        keys = ("char_id", "name", "corp_id", "system_id", "words", "reward", "contact", "created", "updated")
+        return {"items": [dict(zip(keys, r)) | {"expires": r[8] + SOS_HOURS * 3600} for r in rows], "hours": SOS_HOURS}
+
+
 # ---------------------------------------------------------------- 预警推送（企业微信群机器人、电子邮件）
 # 浏览器里的击杀预警 / 本地日志命中后，把要推送的内容交给本服务转发：
 #   企业微信：浏览器不能跨域调群机器人接口，由这里转发到 qyapi.weixin.qq.com（只接受机器人 key，不接受任意地址）
@@ -5941,6 +6045,97 @@ class AlertPush:
         return {"ok": True}
 
 
+# ---------------------------------------------------------------- 工单 / 反馈
+# 右上角「定制」里提交：问题类型 + 内容 + 可选联系方式，存进 feedback 表（不记 IP）；按 IP 限流并限每日条数
+FEEDBACK_KINDS = {"bug": "功能出错", "data": "数据不对", "feature": "新功能建议", "custom": "定制需求", "other": "其他"}
+FEEDBACK_TEXT_MAX = 2000
+FEEDBACK_CONTACT_MAX = 100
+FEEDBACK_RATE = 3               # 每个 IP 每分钟最多提交次数
+FEEDBACK_DAILY = 20             # 每个 IP 每天最多提交条数
+FEEDBACK_SCHEMA = """
+CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, text TEXT, contact TEXT, page TEXT, server TEXT,
+  lang TEXT, created INTEGER);
+"""
+
+
+class Feedback:
+    def __init__(self, store, push):
+        self.store, self.push = store, push
+        self.wecom = (os.environ.get("EVE_FEEDBACK_WECOM") or "").strip()
+        m = re.search(r"key=([0-9a-fA-F-]{20,})", self.wecom)
+        self.wecom = m.group(1) if m else self.wecom
+        c = store.conn()
+        with store.write_lock:
+            c.executescript(FEEDBACK_SCHEMA)
+            c.commit()
+
+    @staticmethod
+    def clean(v, limit, label):
+        if v is None:
+            return ""
+        if not isinstance(v, str):
+            raise ValueError(label + "应为文字")
+        v = re.sub(r"[\x00-\x09\x0b-\x1f\x7f]", " ", v).strip()
+        if len(v) > limit:
+            raise ValueError(f"{label}最多 {limit} 字")
+        return v
+
+    def submit(self, body, ip):
+        kind = body.get("kind")
+        if kind not in FEEDBACK_KINDS:
+            raise ValueError("请选择问题类型")
+        text = self.clean(body.get("text"), FEEDBACK_TEXT_MAX, "反馈内容")
+        if len(text) < 4:
+            raise ValueError("反馈内容太短，请多写几个字")
+        contact = self.clean(body.get("contact"), FEEDBACK_CONTACT_MAX, "联系方式")
+        page = self.clean(body.get("page"), 300, "页面")
+        server = body.get("server") if body.get("server") in ARB_SERVERS else ""
+        lang = "en" if body.get("lang") == "en" else "zh"
+        self.push.count("ip:" + ip, "feedback", FEEDBACK_DAILY, "今天提交的工单太多了，请明天再试或直接发邮件")
+        now = int(time.time())
+        c = self.store.conn()
+        with self.store.write_lock:
+            cur = c.execute("INSERT INTO feedback(kind, text, contact, page, server, lang, created) VALUES(?,?,?,?,?,?,?)",
+                            (kind, text, contact, page, server, lang, now))
+            c.commit()
+        fid = cur.lastrowid
+        log.info("收到工单 #%s（%s）", fid, kind)
+        if self.wecom:
+            threading.Thread(target=self.notify, args=(fid, kind, text, contact, page), daemon=True).start()
+        return {"ok": True, "id": fid}
+
+    def notify(self, fid, kind, text, contact, page):
+        lines = [{"text": f"类型：{FEEDBACK_KINDS[kind]}"}] + [{"text": x} for x in text.splitlines() if x.strip()][:12]
+        if contact:
+            lines.append({"text": "联系方式：" + contact})
+        if page:
+            lines.append({"text": "页面：" + page})
+        try:
+            self.push.wecom({"key": self.wecom, "title": f"新工单 #{fid}", "lines": lines})
+        except Exception as e:  # noqa: BLE001
+            log.warning("工单 #%s 推送企业微信失败：%s", fid, e)
+
+    @staticmethod
+    def recent(db, n):
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            rows = conn.execute("SELECT id, kind, text, contact, page, server, lang, created FROM feedback ORDER BY id DESC LIMIT ?",
+                                (n,)).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        finally:
+            conn.close()
+        if not rows:
+            print("还没有工单")
+        for fid, kind, text, contact, page, server, lang, created in rows:
+            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(created))
+            print(f"#{fid}  {when}  [{FEEDBACK_KINDS.get(kind, kind)}]  {server or '-'}/{lang}  {page or ''}")
+            print("  " + text.replace("\n", "\n  "))
+            if contact:
+                print("  联系方式：" + contact)
+            print()
+
+
 class RateLimiter:
     """按 IP 的令牌桶：容量 rate，每秒恢复 rate / 60 个（用于深渊装备导入、钱包存档）"""
     def __init__(self, rate):
@@ -6058,7 +6253,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
               "bazaar/cbg": cbg.items, "bazaar/cbg/detail": cbg.detail,
               "bazaar/skillset": bazaar.skillset, "bazaar/cbg/skillset": cbg.skillset,
               "bazaar/sale": lambda q: api.sale.items(q), "bazaar/sale/detail": lambda q: api.sale.detail(q),
-              "bazaar/sale/skillset": lambda q: api.sale.skillset(q)}
+              "bazaar/sale/skillset": lambda q: api.sale.skillset(q), "wh/sos": lambda q: api.sos.items(q)}
     kb = {s: kb_routes(a) for s, a in apis.items()}
 
     def kb_server(q):
@@ -6069,7 +6264,9 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     wallet_limiter = RateLimiter(WALLET_RATE)
     sync_limiter = RateLimiter(SYNC_RATE)
     sale_limiter = RateLimiter(SALE_RATE)
+    sos_limiter = RateLimiter(SOS_RATE)
     push_limiter = RateLimiter(PUSH_RATE)
+    feedback_limiter = RateLimiter(FEEDBACK_RATE)
     chat_tr_limiter = RateLimiter(CHAT_TR_RATE)
 
     class Handler(BaseHTTPRequestHandler):
@@ -6168,6 +6365,39 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("钱包存档错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
+        def sos(self, path):
+            # 虫洞求救（同源调用，不带 CORS 头）；令牌只用于本次请求，不写日志
+            op = path[len("/api/kb/wh/sos/"):]
+            if op not in ("save", "delete"):
+                return self.send_json(404, {"error": "not found"})
+            ok, _, retry = sos_limiter.take(self.client_ip())
+            if not ok:
+                return self.send_json(429, {"error": f"请求太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            auth = self.headers.get("Authorization") or ""
+            token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+            if not re.fullmatch(r"[A-Za-z0-9._~+/=-]{1,4096}", token):
+                return self.send_json(403, {"error": "令牌无效，请重新绑定这个角色"})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 4096:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "请求体应为 JSON"})
+            try:
+                return self.send_json(200, getattr(api.sos, op)(body, token))
+            except PermissionError:
+                return self.send_json(403, {"error": "令牌无效或缺少位置读取权限，请重新绑定这个角色并勾选位置权限"})
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except EsiUnavailable as e:
+                return self.send_json(502, {"error": str(e)})
+            except Exception:
+                log.exception("虫洞求救错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
         def sale(self, path):
             # 角色挂售（同源调用，不带 CORS 头）；令牌只用于本次请求，不写日志
             op = path[len("/api/kb/bazaar/sale/"):]
@@ -6199,6 +6429,29 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.send_json(502, {"error": str(e)})
             except Exception:
                 log.exception("角色挂售错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
+        def feedback(self):
+            # 提交工单（同源调用，不带 CORS 头）
+            ip = self.client_ip()
+            ok, _, retry = feedback_limiter.take(ip)
+            if not ok:
+                return self.send_json(429, {"error": f"提交太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 16384:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "请求体应为 JSON"})
+            try:
+                return self.send_json(200, api.feedback.submit(body, ip))
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except Exception:
+                log.exception("工单提交错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
         def push(self, path):
@@ -6287,8 +6540,12 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.sync(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/bazaar/sale/"):
                 return self.sale(url.path.rstrip("/"))
+            if url.path.startswith("/api/kb/wh/sos/"):
+                return self.sos(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/push/"):
                 return self.push(url.path.rstrip("/"))
+            if url.path.rstrip("/") == "/api/kb/feedback":
+                return self.feedback()
             if url.path.rstrip("/") in ("/api/kb/translate", "/api/kb/translate/models"):
                 return self.chat_translate(url.path.rstrip("/").endswith("/models"))
             cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
@@ -6395,9 +6652,13 @@ def main():
     parser.add_argument("--cn-db-dir", help="国服击杀库目录（默认与 --db 同目录，文件名 kb-<服务器>.sqlite）")
     parser.add_argument("--cn-queue", help="KM 广播队列名（默认按 --db 路径生成；同一台机器上的两个实例不能共用，否则会互相抢走击杀）")
     parser.add_argument("--lite", action="store_true", help="演示用：只读已有数据，不启动任何后台采集 / 轮询 / 预计算")
+    parser.add_argument("--feedback", type=int, metavar="N", help="列出最近 N 条工单后退出")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    if args.feedback:
+        Feedback.recent(args.db, args.feedback)
+        return
 
     with open(args.system_regions, encoding="utf-8") as fh:
         system_regions = {int(k): v for k, v in json.load(fh).items()}
@@ -6425,7 +6686,9 @@ def main():
     api.wallet = Wallet(store, industry)
     api.sync = SettingsSync(store)
     api.sale = CharSale(store, api.wallet)
+    api.sos = WhSos(store, api.wallet)
     api.push = AlertPush()
+    api.feedback = Feedback(store, api.push)
     abyssal = Abyssal(store)
     abyssal.model = store.abyssal_model
     cn_apis = {}

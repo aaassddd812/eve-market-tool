@@ -1,4 +1,4 @@
-// ===== 预警邮件（击杀预警、本地日志共用）=====
+// ===== 预警邮件（击杀预警、本地日志、虫洞求救共用）=====
 // 「预警」弹窗的「邮件」标签页（alert-center.js）集中设置：收件人通讯录（自己 + 邮件列表、军团、联盟、其他角色，最多 10 个），
 //   每个收件人勾选接收哪种预警，以及哪种预警发邮件；击杀预警、本地日志标签页里只打开「游戏内邮件」并勾选收件人。
 //   读自己加入的邮件列表要 esi-mail.read_mail.v1；发给军团 / 联盟要有游戏里的群发权限，对方开了 CSPA 收费会发送失败。
@@ -19,8 +19,8 @@ const MAX = 10;
 export const EN = window.I18N?.lang === 'en';
 export const L = (zh, en) => (EN ? en : zh);
 export const KIND_ZH = { character: '角色', corporation: '军团', alliance: '联盟', mailing_list: '邮件列表' };
-const SRC = ['kill', 'intel'];
-const M = { book: [], use: { kill: ['self'], intel: ['self'] } };   // book: [{ id, name, kind: character|corporation|alliance|mailing_list }]
+const SRC = ['kill', 'intel', 'sos'];
+const M = { book: [], use: { kill: ['self'], intel: ['self'], sos: ['self'] } };   // book: [{ id, name, kind: character|corporation|alliance|mailing_list }]
 const S = { lastMail: 0, lists: null, error: '' };
 const subs = new Set();
 const sources = new Map();   // kill / intel → { label, on(), set(on) }，由两个模块登记

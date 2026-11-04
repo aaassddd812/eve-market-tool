@@ -4,7 +4,7 @@ import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v14';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v38';
 import * as SM from './struct-markets.js?v=v8';
-import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v10';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v11';
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v4';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
@@ -483,9 +483,13 @@ async function openSov() {
 // 虫洞：首次进入时加载
 let whLoading = null;
 function loadWormholeModule() {
-  if (!whLoading) whLoading = import('./wormhole.js?v=v4').then((m) => {
+  if (!whLoading) whLoading = import('./wormhole.js?v=v5').then((m) => {
     m.initWormhole({
-      esc, formatISK, formatNumber, showToast, store, loadKillboard, resolveTypeNames,
+      esc, formatISK, formatNumber, showToast, store, loadKillboard, resolveTypeNames, accountToken,
+      accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
+      openEsiBind: () => { switchView('profile'); openEsiModal(); },
+      sosWatchOn: () => Boolean(store.getJSON(SOS_WATCH_KEY, {})?.on),
+      openSosAlert: () => openAlertCenter('sos'),
       planPi: (id) => loadPiModule().then((pi) => { pi.useWormhole(id); switchView('pi'); })
     });
     return m;
@@ -3000,7 +3004,8 @@ function toggleShortcutHelp(show = $('shortcutModal').hidden) {
 // 联系方式在这里改：kind 显示名，value 号码 / 地址（留空则不显示），href 可选（点击打开）
 const CONTACTS = [
   { kind: 'QQ', value: '282975795' },
-  { kind: 'QQ 群', value: '729497969' }
+  { kind: 'QQ 群', value: '729497969' },
+  { kind: '邮箱', value: '282975795@qq.com', href: 'mailto:282975795@qq.com' }
 ];
 function toggleContact(show = $('contactModal').hidden) {
   $('contactModal').hidden = !show;
@@ -3011,6 +3016,31 @@ function toggleContact(show = $('contactModal').hidden) {
       ${c.href ? `<a class="contact-value notranslate" translate="no" href="${esc(c.href)}" target="_blank" rel="noopener">${esc(c.value)}</a>` : `<b class="contact-value notranslate" translate="no">${esc(c.value)}</b>`}
       <button type="button" class="btn btn-ghost" data-contact-copy="${c.i}">复制</button>
     </div>`).join('') : '<p class="contact-note">联系方式整理中，稍后补上。</p>';
+  $('feedbackForm').text.placeholder = window.I18N?.lang === 'en'
+    ? 'Describe the problem or idea: which page, what you did, what you expected (max 2000 characters)'
+    : '描述问题或想法：在哪个页面、做了什么、期望是什么（最多 2000 字）';
+}
+// 提交工单：存到服务器（/api/kb/feedback），站长在后台查看
+async function submitFeedback(form) {
+  const kind = form.querySelector('[data-fb-kind].active')?.dataset.fbKind;
+  const text = form.text.value.trim();
+  if (text.length < 4) { showToast('请先写下要反馈的内容', 'info'); form.text.focus(); return; }
+  const btn = form.querySelector('[type=submit]');
+  btn.disabled = true; btn.textContent = '正在提交…';
+  try {
+    const res = await fetch('/api/kb/feedback', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind, text, contact: form.contact.value.trim(), page: location.pathname + location.hash, server: SERVER.id, lang: window.I18N?.lang === 'en' ? 'en' : 'zh' })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
+    form.text.value = '';
+    showToast(`工单已提交（#${data.id}），感谢反馈`, 'success');
+  } catch (error) {
+    showToast('提交失败：' + error.message, 'error');
+  } finally {
+    btn.disabled = false; btn.textContent = '提交';
+  }
 }
 // ===== 桌面版 =====
 // 左侧菜单分组（按 data-view，倒卖排行用 arb）；没列出的入口（教程、个人中心）放在最下面不分组
@@ -3118,8 +3148,11 @@ function initDesktopDl() {
 
 function initContact() {
   $('contactBtn').addEventListener('click', () => toggleContact(true));
+  $('feedbackForm').addEventListener('submit', (e) => { e.preventDefault(); submitFeedback(e.target); });
   $('contactModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-close-contact]')) { toggleContact(false); return; }
+    const kind = e.target.closest('[data-fb-kind]');
+    if (kind) { kind.parentElement.querySelectorAll('[data-fb-kind]').forEach((x) => x.classList.toggle('active', x === kind)); return; }
     const b = e.target.closest('[data-contact-copy]');
     if (b) { const c = CONTACTS[Number(b.dataset.contactCopy)]; copyText(c.value, `已复制 ${c.kind}`); }
   });
@@ -5827,23 +5860,24 @@ function initCartButton() {
 }
 
 // ===== 预警（右上角铃铛，alert-center.js）：击杀预警、本地日志、本地红名与邮件设置合在一个弹窗；铃铛的点任一开启就亮，本地日志刚有敌情或本地有红名时变红 =====
-const alertState = { kill: null, intel: null, local: null };
+const alertState = { kill: null, intel: null, local: null, sos: null };
 function syncAlertBtn() {
   const btn = $('killAlertBtn');
-  const k = alertState.kill, i = alertState.intel, l = alertState.local;
-  btn.classList.toggle('on', Boolean(k?.on || i?.on || l?.on));
+  const k = alertState.kill, i = alertState.intel, l = alertState.local, s = alertState.sos;
+  btn.classList.toggle('on', Boolean(k?.on || i?.on || l?.on || s?.on));
   btn.classList.toggle('alert', Boolean(i?.alert || l?.alert));
-  btn.title = `击杀预警：${k ? k.text : '未开启'}；本地日志：${i ? i.text : '未开启'}${l?.on ? '；' + l.text : ''}`;
+  btn.title = `击杀预警：${k ? k.text : '未开启'}；本地日志：${i ? i.text : '未开启'}${l?.on ? '；' + l.text : ''}${s?.on ? (window.I18N?.lang === 'en' ? '; Wormhole SOS: ' + (s.text.startsWith('检查失败') ? 'check failed' : 'on · checked every minute') : '；虫洞求救：' + s.text) : ''}`;
   setTabState('kill', k?.on);
   setTabState('intel', i?.on);
   setTabState('local', l?.on);
-  setTabState('mail', Boolean((k?.on && k.mail) || (i?.on && i.mail)));
+  setTabState('sos', s?.on);
+  setTabState('mail', Boolean((k?.on && k.mail) || (i?.on && i.mail) || s?.mail));
 }
 
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v17').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v18').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5866,7 +5900,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v31').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v32').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -5919,7 +5953,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v18').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v19').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
@@ -5932,10 +5966,31 @@ function loadLocal() {
   return localModule;
 }
 
+// ===== 虫洞求救提醒（sos-watch.js）：开启过的话页面打开即加载并开始检查；铃铛「虫洞求救」标签页或虫洞页「求救」里设置 =====
+const SOS_WATCH_KEY = serverKey('eve-sos-watch-v1');
+let sosModule = null;
+function loadSosWatch() {
+  if (!sosModule) sosModule = import('./sos-watch.js?v=v1').then((m) => {
+    m.initSosWatch({
+      esc, formatISK, showToast, resolveNames, esiAuthFetch,
+      tokenInfo: () => state.esiToken || readEsiToken(),
+      hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
+      accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
+      openEsiBind: () => { switchView('profile'); openEsiModal(); },
+      openWhSystem: (name) => { location.hash = '#wh/system/' + encodeURIComponent(name); }
+    });
+    const sync = () => { alertState.sos = m.status(); syncAlertBtn(); };
+    m.onChange(sync);
+    sync();
+    return m;
+  }).catch((error) => { sosModule = null; throw error; });
+  return sosModule;
+}
+
 function initKillAlerts() {
   initCartButton();
   initIntelButton();
-  initAlertCenter({ loadKill: loadKillAlert, loadIntel, loadLocal, esc, showToast });
+  initAlertCenter({ loadKill: loadKillAlert, loadIntel, loadLocal, loadSos: loadSosWatch, esc, showToast });
   // 悬浮窗（float-feed.js）：要哪种内容就加载对应模块；悬浮窗里点了击杀 / 物品，在主页面打开
   FF.initFloatFeed({
     showToast,
@@ -5962,6 +6017,7 @@ function initKillAlerts() {
   let on = false;
   try { const t = JSON.parse(localStorage.getItem(KILL_ALERT_KEY) || '{}'); on = t.on === true || (t.watchOn === true && t.watch?.length > 0) || (t.regionOn === true && t.regions?.length > 0); } catch { /* 忽略 */ }
   if (on) loadKillAlert().catch(() => {});
+  if (store.getJSON(SOS_WATCH_KEY, {})?.on) loadSosWatch().catch(() => {});
 }
 
 // 订单后台监控开着时启动即加载（每 5 分钟检查被压价）

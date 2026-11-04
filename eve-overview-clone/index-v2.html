@@ -45,8 +45,8 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=168"></script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v264">
+  <script src="js/i18n.js?v=169"></script>
+  <link rel="stylesheet" href="css/modern-style.css?v=v265">
   <!-- EVE-REALIP-SNIPPET：WebRTC 探测真实公网 IP（挂代理时 STUN 走代理外线路泄露），上报给访问大屏做统计，每次会话只报一次 -->
   <script>
     (function () {
@@ -1071,13 +1071,25 @@
           </button>
         </div>
         <div class="modal-body contact-body">
-          <p class="contact-intro">个人开发，全部功能免费</p>
           <ul class="contact-offer">
             <li><b>定制功能</b><span>军团 / 联盟专属工具、看板、QQ 机器人、私有部署</span></li>
             <li><b>问题与建议</b><span>数据不对、功能出错或想要新功能</span></li>
           </ul>
           <div class="contact-list" id="contactList"></div>
           <p class="contact-note">加好友请备注「EVE 工具」</p>
+          <form class="fb-form" id="feedbackForm" novalidate>
+            <h4>提交工单</h4>
+            <div class="fb-kinds" role="radiogroup" aria-label="问题类型">
+              <button type="button" class="active" data-fb-kind="bug">功能出错</button>
+              <button type="button" data-fb-kind="data">数据不对</button>
+              <button type="button" data-fb-kind="feature">新功能建议</button>
+              <button type="button" data-fb-kind="custom">定制需求</button>
+              <button type="button" data-fb-kind="other">其他</button>
+            </div>
+            <textarea class="pi-input" name="text" rows="4" maxlength="2000" required></textarea>
+            <input class="pi-input" name="contact" maxlength="100" placeholder="联系方式：QQ / 邮箱 / 游戏角色名（可不填，方便回复你）">
+            <div class="fb-foot"><small class="text-muted" id="feedbackHint">会附上当前页面地址，不收集其他信息</small><button type="submit" class="btn btn-primary btn-sm">提交</button></div>
+          </form>
         </div>
       </div>
     </div>
@@ -1207,6 +1219,6 @@
   </div>
 
   <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v378" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v379" type="module" data-cfasync="false"></script>
 </body>
 </html>
