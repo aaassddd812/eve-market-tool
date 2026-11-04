@@ -892,7 +892,7 @@ function imageModel() {
 
 let imageModule = null;
 function shareImage() {
-  if (!imageModule) imageModule = Promise.all([import('./kb-br-image.js?v=v20'), import('./share-image.js?v=2')]);
+  if (!imageModule) imageModule = Promise.all([import('./kb-br-image.js?v=v21'), import('./share-image.js?v=3')]);
   const model = imageModel();
   const name = `战场统计-${ctx.kb.systemLabel(BR.data.systems[0]).name}-${fmtTime(BR.data.start).replace(/[: ]/g, '')}.png`;
   imageModule.then(([{ renderBrImage }, { openShareModal }]) => openShareModal({

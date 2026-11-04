@@ -194,6 +194,11 @@ export function openShareModal(opts) {
       <div class="modal-body">
         <div class="share-image-stage">
           <div class="share-image-preview"></div>
+          <div class="share-image-zoom" hidden>
+            <button type="button" data-zoom="-1" aria-label="缩小">−</button>
+            <button type="button" data-zoom="fit" title="适应窗口（双击图片也可切换）">100%</button>
+            <button type="button" data-zoom="1" aria-label="放大">+</button>
+          </div>
           <div class="share-image-busy"><span class="spinner"></span><span>正在生成图片…</span></div>
         </div>
         <div class="share-image-actions">
@@ -201,7 +206,7 @@ export function openShareModal(opts) {
             <button type="button" data-theme-pick="light">浅色</button>
             <button type="button" data-theme-pick="dark">深色</button>
           </div>
-          <span class="text-muted">手机上可长按图片保存</span>
+          <span class="text-muted">滚轮 / 双指缩放，拖动查看细节；手机上可长按图片保存</span>
           ${opts.link ? '<button class="btn btn-ghost" data-link>复制链接</button>' : ''}
           ${canCopy ? '<button class="btn btn-ghost" data-copy disabled>复制图片</button>' : ''}
           <a class="btn btn-primary is-disabled" data-download download="${app.esc(opts.fileName)}">下载图片</a>
@@ -210,6 +215,81 @@ export function openShareModal(opts) {
     </div>`;
   const box = modal.querySelector('.share-image-preview'), stage = modal.querySelector('.share-image-stage'), busy = modal.querySelector('.share-image-busy');
   const dl = modal.querySelector('[data-download]');
+  const zoomBar = modal.querySelector('.share-image-zoom'), zoomLabel = zoomBar.querySelector('[data-zoom="fit"]');
+  // 预览：默认整张图缩放到弹窗内完整显示；滚轮 / 双指 / 按钮缩放（以光标或双指中点为中心），放大后拖动平移，双击在适应与 2 倍之间切换
+  const view = { img: null, nw: 0, nh: 0, s: 1, x: 0, y: 0, fit: 1 };
+  const fitScale = () => Math.min(box.clientWidth / view.nw, box.clientHeight / view.nh);
+  const apply = () => {
+    if (!view.img) return;
+    const bw = box.clientWidth, bh = box.clientHeight, w = view.nw * view.s, h = view.nh * view.s;
+    // 小于窗口的方向居中，大于窗口的方向不留空边
+    view.x = w <= bw ? (bw - w) / 2 : Math.min(0, Math.max(bw - w, view.x));
+    view.y = h <= bh ? (bh - h) / 2 : Math.min(0, Math.max(bh - h, view.y));
+    view.img.style.width = w + 'px';
+    view.img.style.transform = `translate(${view.x}px, ${view.y}px)`;
+    box.classList.toggle('is-zoomed', view.s > view.fit * 1.001);
+    zoomLabel.textContent = Math.round(view.s / view.fit * 100) + '%';
+  };
+  const zoomTo = (s, cx = box.clientWidth / 2, cy = box.clientHeight / 2) => {
+    s = Math.min(Math.max(s, view.fit), Math.max(view.fit * 6, 1));
+    view.x = cx - (cx - view.x) * s / view.s;
+    view.y = cy - (cy - view.y) * s / view.s;
+    view.s = s;
+    apply();
+  };
+  const refit = () => {
+    if (!view.img) return;
+    const zoomed = view.s > view.fit * 1.001, old = view.fit;
+    view.fit = fitScale();
+    view.s = zoomed ? Math.max(view.s, view.fit) : view.fit;
+    if (!zoomed || old !== view.fit) apply();
+  };
+  const ro = new ResizeObserver(refit);
+  ro.observe(box);
+  box.addEventListener('wheel', (e) => {
+    if (!view.img) return;
+    e.preventDefault();
+    const r = box.getBoundingClientRect();
+    zoomTo(view.s * Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.04 : 0.001)), e.clientX - r.left, e.clientY - r.top);
+  }, { passive: false });
+  box.addEventListener('dblclick', (e) => {
+    if (!view.img) return;
+    const r = box.getBoundingClientRect();
+    zoomTo(view.s > view.fit * 1.001 ? view.fit : view.fit * 2, e.clientX - r.left, e.clientY - r.top);
+  });
+  // 拖动 / 双指缩放
+  const pts = new Map();
+  let pinch = null;
+  box.addEventListener('pointerdown', (e) => {
+    if (!view.img || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    box.setPointerCapture(e.pointerId);
+    if (pts.size === 2) {
+      const [a, b] = [...pts.values()];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s: view.s };
+    }
+    box.classList.add('is-dragging');
+  });
+  box.addEventListener('pointermove', (e) => {
+    const p = pts.get(e.pointerId);
+    if (!p) return;
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY;
+    if (pts.size >= 2 && pinch) {
+      const [a, b] = [...pts.values()], r = box.getBoundingClientRect();
+      zoomTo(pinch.s * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d, (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top);
+    } else if (pts.size === 1) {
+      view.x += dx; view.y += dy;
+      apply();
+    }
+  });
+  const up = (e) => {
+    pts.delete(e.pointerId);
+    if (pts.size < 2) pinch = null;
+    if (!pts.size) box.classList.remove('is-dragging');
+  };
+  box.addEventListener('pointerup', up);
+  box.addEventListener('pointercancel', up);
   const draw = async () => {
     const my = ++seq;
     modal.querySelectorAll('[data-theme-pick]').forEach((b) => b.classList.toggle('active', b.dataset.themePick === theme));
@@ -224,7 +304,19 @@ export function openShareModal(opts) {
       if (url) URL.revokeObjectURL(url);
       blob = next;
       url = URL.createObjectURL(blob);
-      box.innerHTML = `<img src="${url}" alt="${app.esc(opts.title)}">`;
+      const img = new Image();
+      img.src = url;
+      img.alt = opts.title;
+      img.draggable = false;
+      await img.decode().catch(() => {});
+      if (my !== seq || !modal.isConnected) return;
+      // 切换深浅色时图片尺寸不变，保留当前缩放位置
+      const same = view.img && view.nw === canvas.width && view.nh === canvas.height;
+      view.img = img; view.nw = canvas.width; view.nh = canvas.height;
+      box.replaceChildren(img);
+      if (!same) { view.fit = fitScale(); view.s = view.fit; }
+      apply();
+      zoomBar.hidden = false;
       dl.href = url;
       dl.classList.remove('is-disabled');
       modal.querySelector('[data-copy]')?.removeAttribute('disabled');
@@ -236,10 +328,16 @@ export function openShareModal(opts) {
       if (my === seq) busy.hidden = true;
     }
   };
-  const close = () => { seq++; modal.remove(); if (url) URL.revokeObjectURL(url); document.removeEventListener('keydown', onKey); };
+  const close = () => { seq++; ro.disconnect(); modal.remove(); if (url) URL.revokeObjectURL(url); document.removeEventListener('keydown', onKey); };
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   modal.addEventListener('click', async (e) => {
     if (e.target.closest('.modal-backdrop, [data-close]')) { close(); return; }
+    const z = e.target.closest('[data-zoom]');
+    if (z) {
+      if (z.dataset.zoom === 'fit') zoomTo(view.fit);
+      else zoomTo(view.s * (z.dataset.zoom === '1' ? 1.25 : 0.8));
+      return;
+    }
     const pick = e.target.closest('[data-theme-pick]');
     if (pick) {
       if (pick.dataset.themePick === theme) return;

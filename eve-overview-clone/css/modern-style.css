@@ -3547,9 +3547,17 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 .modal.share-image-modal { z-index: 1050; }
 .share-image-modal .modal-content { max-width: min(1260px, calc(100vw - 32px)); width: calc(100vw - 32px); }
 .share-image-stage { position: relative; border-radius: var(--radius-md); overflow: hidden; }
-.share-image-preview { height: min(72vh, 1100px); overflow-y: auto; background: #eef1f6; transition: background 150ms; }
+.share-image-preview { position: relative; height: min(72vh, 1100px); overflow: hidden; background: #eef1f6; transition: background 150ms; touch-action: none; user-select: none; }
 .share-image-preview.theme-dark { background: #0b0f17; }
-.share-image-preview img { display: block; width: 100%; max-width: 1200px; height: auto; margin: 0 auto; }
+.share-image-preview img { position: absolute; left: 0; top: 0; display: block; max-width: none; height: auto; transform-origin: 0 0; box-shadow: 0 4px 24px rgba(15, 23, 42, 0.12); }
+.share-image-preview.is-zoomed { cursor: grab; }
+.share-image-preview.is-zoomed.is-dragging { cursor: grabbing; }
+.share-image-zoom { position: absolute; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 999px; background: rgba(15, 23, 42, 0.72); backdrop-filter: blur(6px); }
+.share-image-stage.theme-dark .share-image-zoom { background: rgba(255, 255, 255, 0.16); }
+.share-image-zoom[hidden] { display: none; }
+.share-image-zoom button { min-width: 32px; height: 32px; padding: 0 8px; border: 0; border-radius: 999px; background: transparent; color: #fff; font-size: 1rem; line-height: 1; cursor: pointer; font-variant-numeric: tabular-nums; }
+.share-image-zoom button[data-zoom="fit"] { min-width: 56px; font-size: 0.8125rem; }
+.share-image-zoom button:hover { background: rgba(255, 255, 255, 0.16); }
 .share-image-busy { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #6f7d93; font-size: 0.875rem; background: rgba(238, 241, 246, 0.72); backdrop-filter: blur(2px); }
 .share-image-stage.theme-dark .share-image-busy { background: rgba(11, 15, 23, 0.72); color: #a3b0c3; }
 .share-image-busy[hidden] { display: none; }

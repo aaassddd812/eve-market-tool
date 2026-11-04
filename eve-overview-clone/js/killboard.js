@@ -458,7 +458,7 @@ let shareModules = null;
 function shareKill() {
   const args = shownArgs;
   if (!args) return;
-  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=3'), import('./share-image.js?v=2')]);
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=4'), import('./share-image.js?v=3')]);
   shareModules.then(async ([{ renderKillImage }, { openShareModal }]) => {
     const [val, near] = await Promise.all([killValuation(args.kill), nearestOf(args.kill)]);
     const model = killImageModel(args.kill, val, near);
