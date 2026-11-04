@@ -11,7 +11,7 @@
 // 研究公式：第 n 级时间 = 蓝图基础研究时间 × 等级倍数[n] ÷ 105（倍数 105、250、595、1414、3360、8000、19000、45255、107700、256000），
 //   技能冶金学（ME）/ 研究（TE）/ 科学（拷贝）每级 −5%、高级工业理论每级 −3%，工程复合体同制造的时间加成；
 //   费用按产品 EIV × 2% × 时间倍数 ×（研究 / 拷贝指数 × (1 − 建筑减免) + 设施税 + 4% SCC）估算。
-let X = null;   // industry.js 传入：ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, BP_ICON, selectProduct, renderTab, save, sysSec, secMul
+let X = null;   // industry.js 传入：ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, BP_ICON, selectProduct, renderTab, save, sysSec, secMul, myBp
 const PLAN_KEY = 'eve-industry-plan';
 const LEVEL_MUL = [0, 105, 250, 595, 1414, 3360, 8000, 19000, 45255, 107700, 256000];
 const SK = { science: 3402, research: 3403, metallurgy: 3409, advIndustry: 3388 };
@@ -703,7 +703,9 @@ export async function mineBlueprintRows(bps, rerender, tag = 'char') {
     const me = b.material_efficiency, te = b.time_efficiency;
     const j = X.job(pid, 1, me, te);
     if (j.items.some((it) => X.matPrice(it.id) == null)) return { b, pid };
-    const cost = j.items.reduce((t, it) => t + it.qty * X.matPrice(it.id) * (1 + X.matFee() / 100), 0) + j.cost;
+    // 拷贝且填过「我买的蓝图」：加上每流程的蓝图成本（原图视为已有，不计）
+    const bpRun = b.runs > 0 ? X.myBp(pid)?.perRun ?? 0 : 0;
+    const cost = j.items.reduce((t, it) => t + it.qty * X.matPrice(it.id) * (1 + X.matFee() / 100), 0) + j.cost + bpRun;
     const unit = X.prodPrice(pid);
     const profit = unit != null ? unit * j.out * (1 - X.sellFee() / 100) - cost : null;
     return { b, pid, perUnit: cost / j.out, profit, ph: profit != null ? profit / (j.secs / 3600) : null };

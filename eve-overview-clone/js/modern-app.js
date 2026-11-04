@@ -198,6 +198,7 @@ const ICONS = {
 };
 
 // 第二个参数兼容旧调用 showToast(msg, 4000)
+// 报错提示带「提交工单」按钮（停留更久），点开「定制」弹窗并预填报错内容
 function showToast(message, kindOrDuration = 'info', duration = 2600) {
   let kind = kindOrDuration;
   if (typeof kindOrDuration === 'number') { duration = kindOrDuration; kind = 'info'; }
@@ -206,8 +207,13 @@ function showToast(message, kindOrDuration = 'info', duration = 2600) {
   el.className = 'toast ' + kind;
   el.innerHTML = (ICONS[kind] || ICONS.info) + '<span></span>';
   el.querySelector('span').textContent = message;
+  if (kind === 'error') {
+    el.insertAdjacentHTML('beforeend', '<button type="button" class="toast-act">提交工单</button>');
+    el.querySelector('.toast-act').addEventListener('click', () => { el.remove(); openTicket('bug', (window.I18N?.lang === 'en' ? 'Error: ' : '报错：') + message); });
+    duration = Math.max(duration, 7000);
+  }
   stack.appendChild(el);
-  while (stack.children.length > 3) stack.firstElementChild.remove();
+  while (stack.querySelectorAll('.toast:not(.persist)').length > 3) stack.querySelector('.toast:not(.persist)').remove();
   requestAnimationFrame(() => el.classList.add('show'));
   setTimeout(() => {
     el.classList.remove('show');
@@ -626,7 +632,7 @@ async function getLiveHubPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v55').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v56').then((m) => {
     m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -3008,6 +3014,54 @@ const CONTACTS = [
   { kind: '邮箱', value: '282975795@qq.com', href: 'mailto:282975795@qq.com' }
 ];
 let feedbackModule = null;   // feedback.js：「定制」弹窗里的工单（提交 / 我的工单 / 工单管理）
+// 最近的脚本错误（附在报错 / 加载慢引导预填的工单里，方便定位）
+const recentErrors = [];
+const noteError = (msg) => { if (msg && !recentErrors.includes(msg)) { recentErrors.push(String(msg).slice(0, 300)); if (recentErrors.length > 3) recentErrors.shift(); } };
+window.addEventListener('error', (e) => { if (e.message) noteError(e.message + (e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno})` : '')); });
+window.addEventListener('unhandledrejection', (e) => noteError(e.reason?.message || String(e.reason || '')));
+// 打开「定制 → 提交工单」并预填
+function openTicket(kind, text) {
+  const extra = recentErrors.length ? (window.I18N?.lang === 'en' ? '\n\nRecent errors:\n' : '\n\n最近的错误：\n') + recentErrors.join('\n') : '';
+  toggleContact(true);
+  feedbackModule?.then((m) => m.prefill(kind, text + extra)).catch(() => {});
+}
+// 加载慢引导：页面上的加载占位（骨架屏 / 「读取…」）持续 SLOW_MS 以上仍未消失，右下角提示刷新或提交工单；
+// 同一页面关掉后不再提示，加载完成自动收起
+const SLOW_MS = 20000;
+const slowSeen = new WeakMap();
+const slowDismissed = new Set();
+function checkSlow() {
+  const now = Date.now();
+  let oldest = 0;
+  for (const el of document.querySelectorAll('.sk, .pi-loading')) {
+    if (!el.getClientRects().length || el.closest('[hidden]')) continue;
+    if (!slowSeen.has(el)) slowSeen.set(el, now);
+    oldest = Math.max(oldest, now - slowSeen.get(el));
+  }
+  const page = location.hash || '#';
+  let guide = $('slowGuide');
+  if (oldest < SLOW_MS || slowDismissed.has(page) || document.hidden) { guide?.remove(); return; }
+  if (guide) return;
+  guide = document.createElement('div');
+  guide.id = 'slowGuide';
+  guide.className = 'toast persist slow-guide show';
+  guide.innerHTML = `${ICONS.info}<span><b>页面加载时间较长</b><small>可能是网络或服务器繁忙。可以刷新重试；一直加载不出来，请提交工单告诉我们。</small></span>
+    <span class="slow-guide-acts"><button type="button" class="toast-act" data-slow="reload">刷新</button><button type="button" class="toast-act" data-slow="ticket">提交工单</button>
+    <button type="button" class="toast-x" data-slow="close" aria-label="关闭">×</button></span>`;
+  guide.addEventListener('click', (e) => {
+    const act = e.target.closest('[data-slow]')?.dataset.slow;
+    if (!act) return;
+    if (act === 'reload') { location.reload(); return; }
+    slowDismissed.add(page);
+    guide.remove();
+    const secs = Math.round(oldest / 1000), at = location.pathname + location.hash;
+    if (act === 'ticket') openTicket('bug', window.I18N?.lang === 'en'
+      ? `The page did not finish loading (waited over ${secs} s)\nPage: ${at}\nNetwork: ${navigator.onLine ? 'online' : 'offline'}`
+      : `页面长时间没有加载出来（等了 ${secs} 秒以上）\n页面：${at}\n网络：${navigator.onLine ? '在线' : '离线'}`);
+  });
+  $('toastStack').appendChild(guide);
+}
+setInterval(checkSlow, 3000);
 function toggleContact(show = $('contactModal').hidden) {
   $('contactModal').hidden = !show;
   if (!show) return;
@@ -3125,7 +3179,7 @@ function initDesktopDl() {
 
 function initContact() {
   $('contactBtn').addEventListener('click', () => toggleContact(true));
-  feedbackModule = import('./feedback.js?v=v1').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
+  feedbackModule = import('./feedback.js?v=v2').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
   $('contactModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-close-contact]')) { toggleContact(false); return; }
     const b = e.target.closest('[data-contact-copy]');
@@ -6006,6 +6060,7 @@ function initOrderWatchBackground() {
 
 // ===== 初始化应用 =====
 function init() {
+  window.__eveBooted = true;   // index-v2.html 里的兜底提示据此判断脚本是否加载成功
   // 云同步拉到别处改的 ESI 令牌：当前角色的令牌直接换上（其余设置要刷新页面）
   CS.initCloudSync({ esc, showToast, onApplied: (keys) => { if (keys.includes(serverKey('eve-esi-token'))) state.esiToken = readEsiToken(); } });
   ST.initStandings({ tokenInfo: () => state.esiToken || readEsiToken(), hasScope, fetchPaged: esiAuthFetchPaged });

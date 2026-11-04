@@ -5,11 +5,20 @@
 const TICKETS_KEY = 'eve-feedback-tickets';
 const SEEN_KEY = 'eve-feedback-seen';
 const KINDS = [['bug', '功能出错'], ['data', '数据不对'], ['feature', '新功能建议'], ['custom', '定制需求'], ['other', '其他']];
+const KIND_TIPS = { bug: '报错、按钮没反应、页面打不开', data: '价格、击杀、计算结果有误', feature: '想要的功能或改进', custom: '军团 / 联盟专属工具、私有部署', other: '其他问题或想说的话' };
+const KIND_ICONS = {
+  bug: '<path d="M8 2l1.9 1.9M16 2l-1.9 1.9M9 7.1V6a3 3 0 0 1 6 0v1.1"/><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6z"/><path d="M12 20v-9M6 13H2M22 13h-4M6 9.5 3 8M18 9.5 21 8M6 17l-3 1.5M18 17l3 1.5"/>',
+  data: '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
+  feature: '<path d="M9 18h6M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V16h8v-1.3A7 7 0 0 0 12 2z"/>',
+  custom: '<path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2.4-.6-.6-2.4z"/>',
+  other: '<circle cx="12" cy="12" r="9"/><path d="M8.5 12h.01M12 12h.01M15.5 12h.01"/>'
+};
+const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
 const STATUS = { open: '待处理', doing: '处理中', done: '已处理' };
 const KIND_NAME = Object.fromEntries(KINDS);
 
 let ctx = null;
-const S = { isAdmin: false, tab: 'new', kind: 'bug', draft: '', contact: '', mine: null, loading: false, admin: null, adminFilter: 'open', adminError: '' };
+const S = { isAdmin: false, tab: 'contact', kind: 'bug', draft: '', contact: '', mine: null, loading: false, admin: null, adminFilter: 'open', adminError: '' };
 
 const EN = () => window.I18N?.lang === 'en';
 const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
@@ -61,18 +70,22 @@ async function loadMine() {
 
 // ---------- 渲染 ----------
 function tabsHtml() {
-  const tabs = [['new', '提交工单'], ['mine', '我的工单']];
+  const tabs = [['contact', '联系作者'], ['new', '提交工单'], ['mine', '我的工单']];
   if (S.isAdmin) tabs.push(['admin', '工单管理']);
-  return `<div class="fb-tabs">${tabs.map(([k, l]) => `<button type="button" data-fb-tab="${k}"${S.tab === k ? ' class="active"' : ''}>${l}</button>`).join('')}</div>`;
+  return tabs.map(([k, l]) => `<button type="button" role="tab" data-fb-tab="${k}"${S.tab === k ? ' class="active" aria-selected="true"' : ''}>${l}</button>`).join('');
 }
 function formHtml() {
   const { esc } = ctx;
   const ph = EN() ? 'Describe the problem or idea: which page, what you did, what you expected (max 2000 characters)' : '描述问题或想法：在哪个页面、做了什么、期望是什么（最多 2000 字）';
-  return `<form class="fb-pane" data-fb-form novalidate>
-    <div class="fb-kinds" role="radiogroup" aria-label="问题类型">${KINDS.map(([k, l]) => `<button type="button" data-fb-kind="${k}"${S.kind === k ? ' class="active"' : ''}>${l}</button>`).join('')}</div>
-    <textarea class="pi-input" name="text" rows="4" maxlength="2000" placeholder="${ph}">${esc(S.draft)}</textarea>
-    <input class="pi-input" name="contact" maxlength="100" value="${esc(S.contact)}" placeholder="联系方式：QQ / 邮箱 / 游戏角色名（可不填，方便回复你）">
-    <div class="fb-foot"><small class="text-muted">会附上当前页面地址；处理进度和回复在「我的工单」里查看</small><button type="submit" class="btn btn-primary btn-sm">提交</button></div>
+  return `<form class="fb-pane fb-form" data-fb-form novalidate>
+    <div class="fb-field"><span class="fb-label">问题类型</span>
+      <div class="fb-kind-grid" role="radiogroup" aria-label="问题类型">${KINDS.map(([k, l]) => `<button type="button" role="radio" aria-checked="${S.kind === k}" data-fb-kind="${k}"${S.kind === k ? ' class="active"' : ''}>
+        ${svg(KIND_ICONS[k])}<span><b>${l}</b><small>${KIND_TIPS[k]}</small></span></button>`).join('')}</div></div>
+    <label class="fb-field"><span class="fb-label">详细描述<em class="fb-count" data-fb-count>${S.draft.length} / 2000</em></span>
+      <textarea class="pi-input" name="text" rows="6" maxlength="2000" placeholder="${ph}">${esc(S.draft)}</textarea></label>
+    <label class="fb-field"><span class="fb-label">联系方式<small>选填</small></span>
+      <input class="pi-input" name="contact" maxlength="100" value="${esc(S.contact)}" placeholder="QQ / 邮箱 / 游戏角色名，方便回复你"></label>
+    <div class="fb-foot"><small class="text-muted">会附上当前页面地址。处理进度和回复在「我的工单」里查看。</small><button type="submit" class="btn btn-primary">提交工单</button></div>
   </form>`;
 }
 function threadHtml(t, me) {
@@ -118,7 +131,11 @@ function adminHtml() {
 function render() {
   const box = $('feedbackBox');
   if (!box) return;
-  box.innerHTML = tabsHtml() + (S.tab === 'mine' ? mineHtml() : S.tab === 'admin' ? adminHtml() : formHtml());
+  $('feedbackTabs').innerHTML = tabsHtml();
+  const contact = S.tab === 'contact';
+  $('contactInfo').hidden = !contact;
+  box.hidden = contact;
+  box.innerHTML = contact ? '' : S.tab === 'mine' ? mineHtml() : S.tab === 'admin' ? adminHtml() : formHtml();
   syncDot();
 }
 
@@ -194,7 +211,11 @@ function onClick(e) {
   const tab = e.target.closest('[data-fb-tab]');
   if (tab) { if (tab.dataset.fbTab !== 'admin' || S.isAdmin) switchTab(tab.dataset.fbTab); return; }
   const kind = e.target.closest('[data-fb-kind]');
-  if (kind) { S.kind = kind.dataset.fbKind; kind.parentElement.querySelectorAll('[data-fb-kind]').forEach((x) => x.classList.toggle('active', x === kind)); return; }
+  if (kind) {
+    S.kind = kind.dataset.fbKind;
+    kind.parentElement.querySelectorAll('[data-fb-kind]').forEach((x) => { x.classList.toggle('active', x === kind); x.setAttribute('aria-checked', String(x === kind)); });
+    return;
+  }
   const filter = e.target.closest('[data-fb-filter]');
   if (filter) { S.adminFilter = filter.dataset.fbFilter; loadAdmin(); return; }
   const set = e.target.closest('[data-fb-set]');
@@ -216,7 +237,7 @@ function onSubmit(e) {
 function onInput(e) {
   const form = e.target.closest('[data-fb-form]');
   if (!form) return;
-  if (e.target.name === 'text') S.draft = e.target.value;
+  if (e.target.name === 'text') { S.draft = e.target.value; form.querySelector('[data-fb-count]').textContent = `${S.draft.length} / 2000`; }
   if (e.target.name === 'contact') S.contact = e.target.value;
 }
 
@@ -226,6 +247,7 @@ export function initFeedback(context) {
   box.addEventListener('click', onClick);
   box.addEventListener('submit', onSubmit);
   box.addEventListener('input', onInput);
+  $('feedbackTabs').addEventListener('click', onClick);
   render();
   // 只有站长 IP 会得到 200：显示「工单管理」
   fetch('/api/kb/feedback/admin/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
@@ -233,9 +255,18 @@ export function initFeedback(context) {
   // 有提交过的工单：打开页面时查一次有没有新回复
   if (read(TICKETS_KEY, []).length) setTimeout(() => loadMine().catch(() => {}), 3000);
 }
+// 报错 / 加载慢引导：切到「提交工单」并预填类型和内容
+export function prefill(kind, text) {
+  S.tab = 'new';
+  if (KIND_NAME[kind]) S.kind = kind;
+  S.draft = text;
+  render();
+  const ta = $('feedbackBox')?.querySelector('textarea');
+  if (ta) { ta.focus(); ta.setSelectionRange(0, 0); ta.scrollTop = 0; }
+}
 // 打开「定制」弹窗时调用：有未读回复就直接显示「我的工单」
 export function onOpen() {
-  if (S.mine && unread(S.mine) > 0 && S.tab === 'new') switchTab('mine');
+  if (S.mine && unread(S.mine) > 0 && S.tab !== 'admin') switchTab('mine');
   else if (S.tab === 'mine') switchTab('mine');
   else render();
 }
