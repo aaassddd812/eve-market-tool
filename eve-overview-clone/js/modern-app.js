@@ -366,8 +366,8 @@ function initNavigation() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', bazaar: '#bazaar', wh: '#wh', guide: '#guide' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', bazaar: 'bazaarView', wh: 'whView', guide: 'guideView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', bazaar: '#bazaar', wh: '#wh', plaza: '#plaza', guide: '#guide' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', bazaar: 'bazaarView', wh: 'whView', plaza: 'plazaView', guide: 'guideView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -447,6 +447,7 @@ function switchView(view) {
   if (view === 'abyss') openAbyss();
   if (view === 'bazaar') openBazaar();
   if (view === 'wh') openWormhole();
+  if (view === 'plaza') openPlaza();
   if (view === 'guide') openGuides();
 }
 
@@ -454,7 +455,7 @@ function switchView(view) {
 const PAGE_SKELETON = {
   pi: ['piMain', { cards: 4, rows: 6 }], industry: ['industryMain', { tabs: 6, cards: 4, rows: 8 }], lp: ['lpMain', { tabs: 3, rows: 10 }],
   courier: ['courierMain', { tabs: 2, rows: 10 }], war: ['warMain', { tabs: 2, cards: 4, rows: 8 }], sov: ['sovMain', { cards: 4, rows: 6 }],
-  abyss: ['abyssMain', { tabs: 3, grid: 6 }], bazaar: ['bazaarMain', { rows: 10 }], wh: ['whMain', { tabs: 6, cards: 4, rows: 6 }], guide: ['guideMain', { tabs: 3, rows: 8 }],
+  abyss: ['abyssMain', { tabs: 3, grid: 6 }], bazaar: ['bazaarMain', { rows: 10 }], wh: ['whMain', { tabs: 6, cards: 4, rows: 6 }], plaza: ['plazaMain', { tabs: 5, cards: 2, rows: 6 }], guide: ['guideMain', { tabs: 3, rows: 8 }],
   appraisal: ['apMain', { cards: 3, rows: 4 }], contracts: ['ctMain', { tabs: 2, rows: 10 }]
 };
 function showPageSkeleton(view) {
@@ -508,6 +509,28 @@ async function openWormhole() {
     await m.showWormhole(location.hash.startsWith('#wh') ? location.hash : '#wh');
   } catch (error) {
     showToast('虫洞页加载失败：' + error.message, 'error', 4000);
+  }
+}
+
+// 广场（招新 / 组队 / 集市 / 其他）：首次进入时加载
+let plazaLoading = null;
+function loadPlazaModule() {
+  if (!plazaLoading) plazaLoading = import('./plaza.js?v=v1').then((m) => {
+    m.initPlaza({
+      esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, accountToken, valuation, openTicket, game: gameActions,
+      accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
+      openEsiBind: () => { switchView('profile'); openEsiModal('fleet'); }
+    });
+    return m;
+  }).catch((error) => { plazaLoading = null; throw error; });
+  return plazaLoading;
+}
+async function openPlaza() {
+  try {
+    const m = await loadPlazaModule();
+    await m.showPlaza(location.hash.startsWith('#plaza') ? location.hash : '#plaza');
+  } catch (error) {
+    showToast('广场加载失败：' + error.message, 'error', 4000);
   }
 }
 
@@ -742,7 +765,7 @@ async function openCourier() {
 // 合同（公开合同存档 + 我的个人 / 军团 / 联盟合同）：首次进入时加载
 let contractsLoading = null;
 function loadContractsModule() {
-  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v7').then((m) => {
+  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v8').then((m) => {
     m.initContracts({
       esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, officialName, locationName, loadNpcNames, typeName,
       valuation, valuationCard, store, game: gameActions, regions: REGIONS, marketRegions: () => state.marketRegions, loadMarketRegions,
@@ -772,7 +795,7 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v19').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v20').then((m) => {
     m.initAppraisal({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
       getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
@@ -972,7 +995,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v63').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v64').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -984,6 +1007,7 @@ function loadKbPageModule() {
         switchView('sim');
       },
       getNpcNames: () => state.npcNames,
+      plazaRecruit: (corpId) => loadPlazaModule().then((m) => m.recruitOf(corpId)),
       // 市场分类「舰船」下的全部舰船（搜索用）
       shipTypes: () => {
         if (!state.shipTypeList && state.catalog) {
@@ -2986,6 +3010,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#abyss')) { if (state.currentView !== 'abyss') switchView('abyss'); else openAbyss(); return; }
     if (location.hash.startsWith('#bazaar')) { if (state.currentView !== 'bazaar') switchView('bazaar'); else openBazaar(); return; }
     if (location.hash.startsWith('#wh')) { if (state.currentView !== 'wh') switchView('wh'); else openWormhole(); return; }
+    if (location.hash.startsWith('#plaza')) { if (state.currentView !== 'plaza') switchView('plaza'); else openPlaza(); return; }
     if (location.hash.startsWith('#guide')) { if (state.currentView !== 'guide') switchView('guide'); else openGuides(); return; }
     if (location.hash.startsWith('#arb')) { openArb({ updateHash: false }); return; }
     if (location.hash.startsWith('#watch')) { openWatch({ updateHash: false }); return; }
@@ -3076,7 +3101,7 @@ function toggleContact(show = $('contactModal').hidden) {
 // ===== 桌面版 =====
 // 左侧菜单分组（按 data-view，倒卖排行用 arb）；没列出的入口（教程、个人中心）放在最下面不分组
 const RAIL_GROUPS = [
-  ['common', '常用', ['market', 'appraisal', 'fit', 'map', 'kb']],
+  ['common', '常用', ['market', 'appraisal', 'fit', 'map', 'kb', 'plaza']],
   ['trade', '交易', ['arb', 'contracts', 'courier', 'lp', 'abyss', 'bazaar']],
   ['make', '生产', ['industry', 'pi']],
   ['space', '宇宙与战斗', ['sim', 'war', 'sov', 'wh']]
@@ -6113,6 +6138,7 @@ function init() {
   if (location.hash.startsWith('#abyss')) switchView('abyss'); // 深渊市场
   if (location.hash.startsWith('#bazaar')) switchView('bazaar'); // 角色交易
   if (location.hash.startsWith('#wh')) switchView('wh'); // 虫洞
+  if (location.hash.startsWith('#plaza')) switchView('plaza'); // 广场
   if (location.hash.startsWith('#guide')) switchView('guide'); // 教程
   renderFavorites();
   bindPagePreload();
@@ -6181,6 +6207,7 @@ const PAGE_PRELOAD = {
   abyss: () => loadAbyssModule().then((m) => m.preload()),
   bazaar: () => loadBazaarModule().then((m) => m.preload()),
   wh: () => loadWormholeModule().then((m) => m.preload()),
+  plaza: () => loadPlazaModule().then((m) => m.preload()),
   guide: () => loadGuidesModule().then((m) => m.preload()),
   appraisal: () => loadAppraisalModule()
 };

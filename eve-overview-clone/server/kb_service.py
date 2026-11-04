@@ -51,6 +51,9 @@
   POST /api/kb/wallet/delete                  删除某角色的全部钱包存档（同样校验令牌）
   GET  /api/kb/wh/sos?server=&system=         虫洞求救：被困在虫洞里的玩家发布的求救（不带 system 时列出全部未过期的）
   POST /api/kb/wh/sos/{save,delete}           发布 / 撤下求救：带该角色的 ESI 令牌（需要位置权限），所在星系由服务器从 ESI 读取
+  GET  /api/kb/plaza?server=&kind=&corp=&char=&id=  广场：招新 / 组队 / 集市 / 其他帖子（未过期的，最近更新的在前）
+  POST /api/kb/plaza/{save,delete,contracts}  发帖 / 撤下 / 列出自己可挂的公开合同：带该角色的 ESI 令牌，军团、舰队、合同由服务器从 ESI 读取
+  POST /api/kb/plaza/admin/{check,delete}     站长删帖：仅 EVE_FEEDBACK_ADMIN_IPS 里的 IP
   POST /api/kb/feedback                       提交工单（右上角「定制」）：{kind, text, contact, page}，存进 feedback 表，返回 id + 查看凭证；
                                               设了环境变量 EVE_FEEDBACK_WECOM（企业微信机器人 key 或完整地址）时同时推送给站长
   POST /api/kb/feedback/{mine,follow}         提交者查看自己的工单（状态、回复）/ 追加说明：凭 id + 凭证
@@ -5851,6 +5854,275 @@ class WhSos:
         return {"items": [dict(zip(keys, r)) | {"expires": r[8] + SOS_HOURS * 3600} for r in rows], "hours": SOS_HOURS}
 
 
+# ---------------------------------------------------------------- 广场
+# 玩家用本站绑定的 ESI 角色发帖，分四类（令牌只用于本次请求，不落盘、不写日志）：
+#   招新 recruit：军团招新广告。服务器读角色公开信息确认所在军团，同一军团只保留一条；发布人或 CEO 可以修改 / 撤下，
+#     发布人已经离开军团时其他成员可以接手。
+#   组队 fleet：服务器读角色当前所在舰队，必须是舰队老板（能读 /fleets/{id}/）；附上人数、常见舰船与所在星系，每个角色一条。
+#   集市 market：挂自己发起的公开合同（ESI 个人合同里 可见范围=公开、待接受、发起人是本人 的），保存物品清单快照，合同到期时一起过期。
+#   其他 other：自由发帖，每个角色同时最多 PLAZA_OTHER_MAX 条。
+# 重新提交即更新并顶到最前、续期。站长（EVE_FEEDBACK_ADMIN_IPS）可以删除任意帖子。
+PLAZA_TTL = {"recruit": 30 * 86400, "fleet": 12 * 3600, "market": 30 * 86400, "other": 7 * 86400}
+PLAZA_TAGS = {
+    "recruit": ["新人友好", "PVP", "PVE", "工业", "挖矿", "虫洞", "00 区", "低安", "高安", "势力战争", "亚洲时区", "欧美时区"],
+    "fleet": ["PVE", "PVP", "挖矿", "虫洞", "深渊", "运输", "新人带飞", "势力战争", "游荡"],
+    "market": [],
+    "other": ["求助", "交流", "求购", "出售", "服务"],
+}
+PLAZA_RATE = 20                 # 每个 IP 每分钟最多提交次数
+PLAZA_TITLE_MAX = 60
+PLAZA_TEXT_MAX = 1000
+PLAZA_CONTACT_MAX = 80
+PLAZA_OTHER_MAX = 3
+PLAZA_MARKET_MAX = 30
+PLAZA_ITEMS_MAX = 200
+PLAZA_SCHEMA = """
+CREATE TABLE IF NOT EXISTS plaza(id INTEGER PRIMARY KEY AUTOINCREMENT, server TEXT, kind TEXT, key TEXT, char_id INTEGER, name TEXT,
+  corp_id INTEGER, alliance_id INTEGER, title TEXT, text TEXT, contact TEXT, tags TEXT, data TEXT, created INTEGER, updated INTEGER, expires INTEGER);
+CREATE UNIQUE INDEX IF NOT EXISTS plaza_key ON plaza(server, kind, key);
+CREATE INDEX IF NOT EXISTS plaza_list ON plaza(server, expires);
+"""
+PLAZA_COLS = ("id", "kind", "char_id", "name", "corp_id", "alliance_id", "title", "text", "contact", "tags", "data", "created", "updated", "expires")
+
+
+class Plaza:
+    def __init__(self, store, wallet):
+        self.store, self.wallet, self.esi = store, wallet, wallet.esi
+        c = store.conn()
+        with store.write_lock:
+            c.executescript(PLAZA_SCHEMA)
+            c.commit()
+
+    def pub(self, server, path):
+        cfg = ARB_SERVERS[server]
+        try:
+            data, _ = get_json(f"{cfg['esi']}{path}?{cfg['qs']}", timeout=20, retries=2)
+            return data or {}
+        except Exception:
+            raise EsiUnavailable("ESI 公开信息读取失败") from None
+
+    def names(self, server, ids):
+        ids = [i for i in dict.fromkeys(ids) if i]
+        if not ids:
+            return {}
+        cfg = ARB_SERVERS[server]
+        return {r["id"]: r["name"] for r in resolve_names(ids, url=f"{cfg['esi']}/universe/names/?{cfg['qs']}")}
+
+    def owner(self, server, char, token):
+        """令牌属于这个角色（ESI 返回 200）才继续；返回角色公开信息"""
+        self.esi(server, f"/characters/{char}/location/", token)
+        return self.pub(server, f"/characters/{char}/")
+
+    @staticmethod
+    def kind_of(v):
+        if v not in PLAZA_TTL:
+            raise ValueError("kind 只能是 " + " / ".join(PLAZA_TTL))
+        return v
+
+    @staticmethod
+    def tags_of(kind, v):
+        if v is None:
+            return []
+        if not isinstance(v, list) or len(v) > 6 or any(t not in PLAZA_TAGS[kind] for t in v):
+            raise ValueError("标签不在可选范围内")
+        return list(dict.fromkeys(v))
+
+    @staticmethod
+    def body_text(v):
+        return re.sub(r"\n{3,}", "\n\n", WhSos.text(v, PLAZA_TEXT_MAX, "内容"))
+
+    def row(self, server, pid):
+        r = self.store.conn().execute(f"SELECT {', '.join(PLAZA_COLS)}, key FROM plaza WHERE server=? AND id=?", (server, pid)).fetchone()
+        if not r:
+            raise ValueError("帖子不存在或已删除")
+        return dict(zip(PLAZA_COLS + ("key",), r))
+
+    @staticmethod
+    def out(r):
+        return {**{k: r[k] for k in PLAZA_COLS}, "tags": json.loads(r["tags"] or "[]"), "data": json.loads(r["data"] or "{}")}
+
+    def fleet(self, server, char, token):
+        try:
+            f, _ = self.esi(server, f"/characters/{char}/fleet/", token)
+        except PermissionError:
+            raise PermissionError("令牌无效或缺少「舰队」权限，请重新绑定这个角色并勾选舰队权限") from None
+        except EsiUnavailable as e:
+            if "404" in str(e):
+                raise ValueError("这个角色现在不在舰队里：先在游戏里建好舰队再来挂") from None
+            raise
+        fid = (f or {}).get("fleet_id")
+        try:
+            info, _ = self.esi(server, f"/fleets/{fid}/", token)
+            members, _ = self.esi(server, f"/fleets/{fid}/members/", token)
+        except (PermissionError, EsiUnavailable) as e:
+            if isinstance(e, EsiUnavailable) and "404" not in str(e):
+                raise
+            raise ValueError("只有舰队老板（建舰队的人）才能挂组队；可以请老板来挂，或在游戏里把老板转给自己") from None
+        ships = {}
+        for m in members or []:
+            ships[m.get("ship_type_id")] = ships.get(m.get("ship_type_id"), 0) + 1
+        try:
+            loc, _ = self.esi(server, f"/characters/{char}/location/", token)
+        except (PermissionError, EsiUnavailable):
+            loc = None
+        system = (loc or {}).get("solar_system_id")
+        return {"fleet_id": fid, "free_move": bool((info or {}).get("is_free_move")), "members": len(members or []),
+                "ships": sorted(([t, n] for t, n in ships.items() if t), key=lambda x: -x[1])[:6],
+                "system_id": system, "system": self.names(server, [system]).get(system) if system else None}
+
+    def my_contracts(self, server, char, token):
+        now = time.time()
+        out = []
+        for c in self.wallet.pages(server, f"/characters/{char}/contracts/", token):
+            if c.get("issuer_id") != char or c.get("availability") != "public" or c.get("status") != "outstanding":
+                continue
+            exp = epoch(c["date_expired"]) if c.get("date_expired") else 0
+            if exp and exp > now and c.get("type") in ("item_exchange", "auction", "courier"):
+                out.append(c | {"_exp": exp})
+        return out
+
+    def market(self, server, char, token, cid):
+        c = next((x for x in self.my_contracts(server, char, token) if x.get("contract_id") == cid), None)
+        if not c:
+            raise ValueError("没找到这份合同：只能挂自己发起的、可见范围为公开、还没被接的合同（ESI 合同列表约 5 分钟更新一次）")
+        items, _ = self.esi(server, f"/characters/{char}/contracts/{cid}/items/", token)
+        loc_id, loc, system = c.get("start_location_id"), None, None
+        try:
+            if loc_id and loc_id < 100_000_000:
+                st = self.pub(server, f"/universe/stations/{loc_id}/")
+                loc, system = st.get("name"), st.get("system_id")
+            elif loc_id:
+                st, _ = self.esi(server, f"/universe/structures/{loc_id}/", token)
+                loc, system = (st or {}).get("name"), (st or {}).get("solar_system_id")
+        except (PermissionError, EsiUnavailable):
+            pass
+        rows = [[i.get("type_id"), i.get("quantity") or 1, 1 if i.get("is_included") else 0, 1 if i.get("raw_quantity") == -2 else 0] for i in items or []]
+        data = {"contract_id": cid, "type": c.get("type"), "ctitle": c.get("title") or "", "price": c.get("price") or 0,
+                "reward": c.get("reward") or 0, "collateral": c.get("collateral") or 0, "buyout": c.get("buyout") or 0,
+                "volume": c.get("volume") or 0, "for_corp": bool(c.get("for_corporation")), "location_id": loc_id, "location": loc,
+                "system_id": system, "system": self.names(server, [system]).get(system) if system else None,
+                "end_location_id": c.get("end_location_id"), "n_items": len(rows), "items": rows[:PLAZA_ITEMS_MAX]}
+        return data, int(c["_exp"])
+
+    # POST /plaza/contracts：自己可以挂的公开合同（带令牌）
+    def contracts(self, body, token):
+        server, char = WhSos.server_of(body.get("server")), WhSos.char_of(body)
+        posted = {k for (k,) in self.store.conn().execute("SELECT key FROM plaza WHERE server=? AND kind='market' AND char_id=? AND expires>?",
+                                                          (server, char, int(time.time())))}
+        return {"items": [{k: c.get(k) for k in ("contract_id", "type", "title", "price", "reward", "collateral", "volume", "date_expired")}
+                          | {"posted": str(c["contract_id"]) in posted} for c in self.my_contracts(server, char, token)]}
+
+    # POST /plaza/save：发帖 / 更新（同一军团招新、同一角色组队、同一份合同只保留一条）
+    def save(self, body, token):
+        server, char = WhSos.server_of(body.get("server")), WhSos.char_of(body)
+        kind = self.kind_of(body.get("kind"))
+        title = WhSos.text(body.get("title"), PLAZA_TITLE_MAX, "标题")
+        text = self.body_text(body.get("text"))
+        contact = WhSos.text(body.get("contact"), PLAZA_CONTACT_MAX, "联系方式")
+        tags = self.tags_of(kind, body.get("tags"))
+        now = int(time.time())
+        expires = now + PLAZA_TTL[kind]
+        pid = body.get("id")
+        if pid is not None and (type(pid) is not int or pid <= 0):
+            raise ValueError("id 应为正整数")
+        c = self.store.conn()
+        if kind == "fleet":
+            data = self.fleet(server, char, token)
+            pubinfo = self.pub(server, f"/characters/{char}/")
+            key = str(char)
+        elif kind == "market":
+            cid = body.get("contract_id")
+            if type(cid) is not int or cid <= 0:
+                raise ValueError("请选择要挂的合同")
+            data, expires = self.market(server, char, token, cid)
+            pubinfo = self.pub(server, f"/characters/{char}/")
+            key = str(cid)
+            n = c.execute("SELECT COUNT(*) FROM plaza WHERE server=? AND kind='market' AND char_id=? AND expires>? AND key<>?", (server, char, now, key)).fetchone()[0]
+            if n >= PLAZA_MARKET_MAX:
+                raise ValueError(f"每个角色同时最多挂 {PLAZA_MARKET_MAX} 份合同")
+        else:
+            pubinfo = self.owner(server, char, token)
+            if not text and not title:
+                raise ValueError("请填写标题或内容")
+        if kind == "recruit":
+            corp = pubinfo.get("corporation_id") or 0
+            if corp < 2_000_000:
+                raise ValueError("这个角色在 NPC 军团里，不能发招新广告")
+            ci = self.pub(server, f"/corporations/{corp}/")
+            key = str(corp)
+            old = c.execute("SELECT char_id, name FROM plaza WHERE server=? AND kind='recruit' AND key=? AND expires>?", (server, key, now)).fetchone()
+            if old and old[0] != char and char != ci.get("ceo_id"):
+                if self.pub(server, f"/characters/{old[0]}/").get("corporation_id") == corp:
+                    raise ValueError(f"本军团的招新广告由 {old[1]} 发布，只有发布人或军团 CEO 可以修改")
+            names = self.names(server, [ci.get("alliance_id")])
+            data = {"corp_name": ci.get("name"), "ticker": ci.get("ticker"), "members": ci.get("member_count"), "ceo_id": ci.get("ceo_id"),
+                    "alliance_id": ci.get("alliance_id"), "alliance_name": names.get(ci.get("alliance_id")), "tax": ci.get("tax_rate"),
+                    "founded": ci.get("date_founded"), "url": (ci.get("url") or "")[:200]}
+        elif kind == "other":
+            data = {}
+            if pid:
+                r = self.row(server, pid)
+                if r["kind"] != "other" or r["char_id"] != char:
+                    raise ValueError("只能修改自己发的帖子")
+                key = r["key"]
+            else:
+                n = c.execute("SELECT COUNT(*) FROM plaza WHERE server=? AND kind='other' AND char_id=? AND expires>?", (server, char, now)).fetchone()[0]
+                if n >= PLAZA_OTHER_MAX:
+                    raise ValueError(f"每个角色同时最多 {PLAZA_OTHER_MAX} 条，可以先撤下旧的")
+                key = f"{char}:{now}:{secrets.token_hex(3)}"
+        corp, alli = pubinfo.get("corporation_id"), pubinfo.get("alliance_id")
+        nm = self.names(server, [corp, alli])
+        data |= {"author_corp": nm.get(corp), "author_alliance": nm.get(alli)}
+        vals = (char, pubinfo.get("name") or str(char), corp, alli, title, text, contact,
+                json.dumps(tags, ensure_ascii=False), json.dumps(data, ensure_ascii=False, separators=(",", ":")), now, expires)
+        with self.store.write_lock:
+            c.execute("DELETE FROM plaza WHERE expires<?", (now - 7 * 86400,))
+            old = c.execute("SELECT id FROM plaza WHERE server=? AND kind=? AND key=?", (server, kind, key)).fetchone()
+            if old:
+                c.execute("UPDATE plaza SET char_id=?, name=?, corp_id=?, alliance_id=?, title=?, text=?, contact=?, tags=?, data=?, updated=?, expires=? WHERE id=?",
+                          vals + (old[0],))
+                pid = old[0]
+            else:
+                pid = c.execute("INSERT INTO plaza(server, kind, key, char_id, name, corp_id, alliance_id, title, text, contact, tags, data, updated, expires, created) "
+                                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (server, kind, key) + vals + (now,)).lastrowid
+            c.commit()
+        return self.out(self.row(server, pid))
+
+    # POST /plaza/delete：发布人撤下（招新广告军团 CEO 也可以）
+    def delete(self, body, token):
+        server, char = WhSos.server_of(body.get("server")), WhSos.char_of(body)
+        pid = body.get("id")
+        if type(pid) is not int:
+            raise ValueError("id 应为整数")
+        r = self.row(server, pid)
+        self.owner(server, char, token)
+        if r["char_id"] != char and not (r["kind"] == "recruit" and self.pub(server, f"/corporations/{r['corp_id']}/").get("ceo_id") == char):
+            raise ValueError("只能撤下自己发的帖子")
+        return self.remove(server, pid)
+
+    def remove(self, server, pid):
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("DELETE FROM plaza WHERE server=? AND id=?", (server, pid))
+            c.commit()
+        return {"ok": True}
+
+    # GET /plaza?server=&kind=&corp=&char=&id=：未过期的帖子，最近更新的在前
+    def items(self, q):
+        server = WhSos.server_of(q.get("server") or "tq")
+        sql, args = f"SELECT {', '.join(PLAZA_COLS)} FROM plaza WHERE server=? AND expires>?", [server, int(time.time())]
+        if q.get("kind"):
+            sql += " AND kind=?"
+            args.append(self.kind_of(q["kind"]))
+        for k, col in (("corp", "corp_id"), ("char", "char_id"), ("id", "id")):
+            if q.get(k):
+                sql += f" AND {col}=?"
+                args.append(int(q[k]))
+        rows = self.store.conn().execute(sql + " ORDER BY updated DESC LIMIT 500", args).fetchall()
+        return {"items": [self.out(dict(zip(PLAZA_COLS, r))) for r in rows], "tags": PLAZA_TAGS,
+                "ttl": PLAZA_TTL, "other_max": PLAZA_OTHER_MAX}
+
+
 # ---------------------------------------------------------------- 预警推送（企业微信群机器人、电子邮件）
 # 浏览器里的击杀预警 / 本地日志命中后，把要推送的内容交给本服务转发：
 #   企业微信：浏览器不能跨域调群机器人接口，由这里转发到 qyapi.weixin.qq.com（只接受机器人 key，不接受任意地址）
@@ -6411,7 +6683,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
               "bazaar/cbg": cbg.items, "bazaar/cbg/detail": cbg.detail,
               "bazaar/skillset": bazaar.skillset, "bazaar/cbg/skillset": cbg.skillset,
               "bazaar/sale": lambda q: api.sale.items(q), "bazaar/sale/detail": lambda q: api.sale.detail(q),
-              "bazaar/sale/skillset": lambda q: api.sale.skillset(q), "wh/sos": lambda q: api.sos.items(q)}
+              "bazaar/sale/skillset": lambda q: api.sale.skillset(q), "wh/sos": lambda q: api.sos.items(q),
+              "plaza": lambda q: api.plaza.items(q)}
     kb = {s: kb_routes(a) for s, a in apis.items()}
 
     def kb_server(q):
@@ -6423,6 +6696,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     sync_limiter = RateLimiter(SYNC_RATE)
     sale_limiter = RateLimiter(SALE_RATE)
     sos_limiter = RateLimiter(SOS_RATE)
+    plaza_limiter = RateLimiter(PLAZA_RATE)
     push_limiter = RateLimiter(PUSH_RATE)
     feedback_limiter = RateLimiter(FEEDBACK_RATE)
     feedback_read_limiter = RateLimiter(30)
@@ -6555,6 +6829,51 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.send_json(502, {"error": str(e)})
             except Exception:
                 log.exception("虫洞求救错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
+        def plaza(self, path):
+            # 广场（同源调用，不带 CORS 头）：发帖 / 撤下 / 可挂的合同带角色令牌；admin/* 只认站长 IP；令牌只用于本次请求，不写日志
+            op = path[len("/api/kb/plaza/"):]
+            if op not in ("save", "delete", "contracts", "admin/check", "admin/delete"):
+                return self.send_json(404, {"error": "not found"})
+            ip = self.client_ip()
+            if op.startswith("admin/") and not api.feedback.admin_ip(ip):
+                return self.send_json(404, {"error": "not found"})
+            ok, _, retry = plaza_limiter.take(ip)
+            if not ok:
+                return self.send_json(429, {"error": f"请求太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 16384:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "请求体应为 JSON"})
+            try:
+                if op == "admin/check":
+                    return self.send_json(200, {"ok": True})
+                if op == "admin/delete":
+                    pid = body.get("id")
+                    if type(pid) is not int:
+                        raise ValueError("id 应为整数")
+                    log.info("站长删除广场帖子 %s", pid)
+                    return self.send_json(200, api.plaza.remove(WhSos.server_of(body.get("server")), pid))
+                auth = self.headers.get("Authorization") or ""
+                token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+                if not re.fullmatch(r"[A-Za-z0-9._~+/=-]{1,4096}", token):
+                    return self.send_json(403, {"error": "令牌无效，请重新绑定这个角色"})
+                return self.send_json(200, getattr(api.plaza, op)(body, token))
+            except PermissionError as e:
+                msg = e.args[0] if e.args and isinstance(e.args[0], str) else "令牌无效或缺少所需权限，请重新绑定这个角色"
+                return self.send_json(403, {"error": msg})
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except EsiUnavailable as e:
+                return self.send_json(502, {"error": str(e)})
+            except Exception:
+                log.exception("广场错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
         def sale(self, path):
@@ -6718,6 +7037,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.sale(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/wh/sos/"):
                 return self.sos(url.path.rstrip("/"))
+            if url.path.startswith("/api/kb/plaza/"):
+                return self.plaza(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/push/"):
                 return self.push(url.path.rstrip("/"))
             if url.path.rstrip("/") == "/api/kb/feedback" or url.path.startswith("/api/kb/feedback/"):
@@ -6868,6 +7189,7 @@ def main():
     api.sync = SettingsSync(store)
     api.sale = CharSale(store, api.wallet)
     api.sos = WhSos(store, api.wallet)
+    api.plaza = Plaza(store, api.wallet)
     api.push = AlertPush()
     api.feedback = Feedback(store, api.push)
     abyssal = Abyssal(store)

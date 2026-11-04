@@ -520,8 +520,7 @@ export function showAppraisal() {
             <button type="button" class="btn btn-ghost" id="apClear">清空</button>
             <button type="button" class="btn btn-primary" id="apGo">估价</button>
           </div>
-          <label class="ap-ratio"><span>比例</span><input type="number" id="apRatio" class="cr-input" min="1" max="1000" step="1" value="${A.ratio}" inputmode="numeric" aria-label="比例"><span>%</span>
-            <small>算出来的小计、合计、税后都乘上它，比如按 90% 收购；单价不变</small></label>
+          <label class="ap-ratio"><span>比例</span><input type="number" id="apRatio" class="cr-input" min="1" max="1000" step="1" value="${A.ratio}" inputmode="numeric" aria-label="比例"><span>%</span></label>
           <div class="ap-settings" id="apSettings">
             <details class="ap-rp" id="apSk">
               <summary><span>技能</span><small id="apSkSum"></small></summary>

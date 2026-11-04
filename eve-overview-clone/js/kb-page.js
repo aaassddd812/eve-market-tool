@@ -813,6 +813,11 @@ async function renderEntity(kind, id) {
     <button class="btn kb-more" id="kbEntityMore" hidden>加载更多</button>`;
   mountMonthly(main, lifetime);
   if (stats.members) renderMembers();
+  // 广场里有这个军团的招新广告时，头部加一个入口
+  if (kind === 'corporation') app.plazaRecruit?.(id).then((p) => {
+    const links = S.entity?.id === id && main.querySelector('.kb-ext-links');
+    if (p && links) links.insertAdjacentHTML('afterbegin', `<a class="btn btn-primary kb-recruit" href="#plaza/p/${p.id}">招新中</a>`);
+  }).catch(() => {});
   $('kbEntityMore').addEventListener('click', () => loadEntityFeed(false));
   loadEntityFeed(true);
 }

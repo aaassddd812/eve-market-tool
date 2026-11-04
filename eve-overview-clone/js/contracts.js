@@ -463,7 +463,7 @@ async function renderDetail(d) {
   const open = pub ? c.status === 'open' : c.status === 'outstanding';
   body.innerHTML = repost +
     `<div class="valuation-grid ct-grid">${cards}</div>
-    <div class="valuation-toolbar">${ctx.valuation.select('', vg.region)}<span class="toolbar-spacer"></span>${open ? `<button class="btn" data-ct-game="${c.contract_id}" title="需要「游戏内操作」权限，角色需在线">游戏内打开合同</button>` : ''}</div>
+    <div class="valuation-toolbar">${ctx.valuation.select('', vg.region)}<span class="toolbar-spacer"></span>${open ? `<button class="btn" data-ct-game="${c.contract_id}" title="需要「游戏内操作」权限，角色需在线">游戏内打开合同</button>` : ''}${!pub && open && c.availability === 'public' && !c.for_corporation ? `<a class="btn btn-primary" href="#plaza/market/new/${c.contract_id}/${c.issuer_id}" title="把这份公开合同挂到广场的集市，让更多人看到">挂到广场</a>` : ''}</div>
     <div class="kv-grid">${info}</div>
     ${c.type === 'courier' && pub ? '<p class="text-muted">公开快递合同的物品不对外公开</p>' : ''}
     ${table(given, vg, c.type === 'courier' ? '运送物品' : '提供物品')}${vw ? table(wanted, vw, '索取物品') : ''}

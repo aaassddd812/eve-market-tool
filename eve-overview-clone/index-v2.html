@@ -45,8 +45,8 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=172"></script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v268">
+  <script src="js/i18n.js?v=173"></script>
+  <link rel="stylesheet" href="css/modern-style.css?v=v269">
   <!-- EVE-REALIP-SNIPPET：WebRTC 探测真实公网 IP（挂代理时 STUN 走代理外线路泄露），上报给访问大屏做统计，每次会话只报一次 -->
   <script>
     (function () {
@@ -156,6 +156,10 @@
         <button class="nav-btn" data-view="wh" role="tab" title="虫洞：星系、虫洞类型、天象、质量计算、席拉连接" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12a2 2 0 1 0 2 2 4 4 0 1 0-4-4 6 6 0 1 0 6 6 8 8 0 1 0-8-8"/></svg>
           <span>虫洞</span>
+        </button>
+        <button class="nav-btn" data-view="plaza" role="tab" title="广场：军团招新、组队、集市（挂自己的公开合同）、其他" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg>
+          <span>广场</span>
         </button>
         <button class="nav-btn" data-view="guide" role="tab" title="教程" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg>
@@ -792,6 +796,12 @@
         </div>
       </div>
 
+      <div class="view-container" id="plazaView" hidden>
+        <div class="kb-scroll">
+          <div class="kb-wrap" id="plazaMain"></div>
+        </div>
+      </div>
+
       <div class="view-container" id="warView" hidden>
         <div class="kb-scroll">
           <div class="kb-wrap" id="warMain"></div>
@@ -1210,7 +1220,7 @@
   </div>
 
   <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v382" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v383" type="module" data-cfasync="false"></script>
   <script>
     // 兜底：主脚本 25 秒还没启动（网络 / CDN / 浏览器太旧），给出刷新和联系方式
     setTimeout(function () {
