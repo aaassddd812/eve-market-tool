@@ -19,8 +19,8 @@ const KINDS = [['all', '全部'], ['recruit', '招新'], ['fleet', '组队'], ['
 const KIND_NAME = Object.fromEntries(KINDS);
 const POST_KINDS = ['recruit', 'fleet', 'market', 'other'];
 const SECTION_MAX = 6;   // 「全部」里每类显示几条
-// 分类图标：游戏客户端窗口图标（res:/ui/texture/windowicons/recruitment · fleet · market · chatchannels），用作遮罩随主题着色。图标版权归 CCP。
-const kindIcon = (k) => `<i class="pz-kicon pz-k-${k}" aria-hidden="true"></i>`;
+// 分类图标：游戏客户端窗口图标原样显示（res:/ui/texture/windowicons/recruitment · fleet · market · chatchannels），底色同游戏里的深色。图标版权归 CCP。
+const kindIcon = (k) => `<span class="pz-kicon"><img src="assets/plaza/${k}.png?v=1" alt="" width="64" height="64"></span>`;
 const CT_TYPE = { item_exchange: '物品交换', auction: '拍卖', courier: '快递' };
 const FLEET_SCOPE = 'esi-fleets.read_fleet.v1';
 const IMG = (path, size = 64) => `https://images.evetech.net/${path}?size=${size}`;
@@ -152,12 +152,13 @@ function newPageHtml() {
   const f = S.form;
   const editing = Boolean(f?.id);
   const pick = POST_KINDS.map((k) => `<button type="button" class="pz-pick${f?.kind === k ? ' active' : ''}" data-pz-pick="${k}"${editing && f.kind !== k ? ' disabled' : ''}>
-      <span class="pz-pick-icon pz-ic-${k}">${kindIcon(k)}</span><b>${esc(KIND_NAME[k])}</b></button>`).join('');
-  return `<div class="pi-card pz-new-page">
-      <div class="pz-form-title"><button type="button" class="btn btn-ghost btn-sm" data-pz-back>← 返回广场</button><h3>${editing ? '修改帖子' : '发帖'}</h3></div>
-      <p class="pz-step"><span>1</span>${editing ? '分类' : '选择要发布到的分类'}</p>
-      <div class="pz-picks">${pick}</div>
-      ${f ? `<p class="pz-step"><span>2</span>填写内容</p>${formHtml()}` : ''}
+      ${kindIcon(k)}<b>${esc(KIND_NAME[k])}</b></button>`).join('');
+  return `<div class="pz-new-page">
+      <div class="pz-new-head"><button type="button" class="btn btn-ghost btn-sm" data-pz-back>← 返回广场</button><h3>${editing ? '修改帖子' : '发帖'}</h3></div>
+      <div class="pz-new-body">
+        <div class="pz-picks" role="radiogroup" aria-label="分类">${pick}</div>
+        <div class="pi-card pz-new-form">${f ? formHtml() : '<div class="pz-new-hint">选择要发布到的分类</div>'}</div>
+      </div>
     </div>`;
 }
 function paintList() {
@@ -213,7 +214,7 @@ function allHtml(mine) {
     const body = list.length ? `<div class="pz-grid">${list.slice(0, SECTION_MAX).map((p) => cardHtml(p, mine)).join('')}</div>`
       : `<div class="pz-sec-empty"><span class="text-muted">${q && all.length ? '没有匹配的帖子' : `现在还没有${KIND_NAME[k]}帖子`}</span>${q && all.length ? '' : `<button type="button" class="link-btn" data-pz-new="${k}">发一条</button>`}</div>`;
     return `<section class="pz-sec">
-      <div class="pz-sec-head"><span class="pz-pick-icon pz-ic-${k}">${kindIcon(k)}</span><h3>${esc(KIND_NAME[k])}</h3><span class="pz-count">${q ? `${list.length} / ${all.length}` : all.length}</span>
+      <div class="pz-sec-head">${kindIcon(k)}<h3>${esc(KIND_NAME[k])}</h3><span class="pz-count">${q ? `${list.length} / ${all.length}` : all.length}</span>
         <span class="toolbar-spacer"></span>${all.length ? `<button type="button" class="link-btn" data-pz-kind="${k}">查看全部${KIND_NAME[k]} →</button>` : ''}</div>
       ${body}</section>`;
   }).join('');
