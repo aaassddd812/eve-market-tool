@@ -35,7 +35,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .dot.live{animation:pulse 2s infinite}
 @keyframes pulse{50%{box-shadow:0 0 0 5px rgba(31,169,113,.05)}}
 
-.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:12px}
+.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-bottom:12px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
 .kpi{padding:12px 16px 11px;position:relative;overflow:hidden}
 .kpi .label{color:var(--sub);font-size:12px;display:flex;justify-content:space-between}
@@ -184,6 +184,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   <div class="card kpi"><div class="label">近24小时请求</div><div class="value num" id="k_req">–</div><div class="foot" id="k_req_f">&nbsp;</div></div>
   <div class="card kpi"><div class="label">当前在线</div><div class="value num" id="k_online">–</div><div class="foot">近 5 分钟活跃 IP</div></div>
   <div class="card kpi"><div class="label">每秒请求</div><div class="value num" id="k_rps">–</div><div class="foot">近 60 秒均值</div></div>
+  <div class="card kpi"><div class="label">新访客</div><div class="value num" id="k_new">–</div><div class="foot">近24小时首次出现</div></div>
   <div class="card kpi"><div class="label">近24小时峰值在线</div><div class="value num" id="k_peak">–</div><div class="foot" id="k_peak_f">&nbsp;</div></div>
 </section>
 
@@ -361,7 +362,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
   function render(d){
     last = d;
     tween('k_users', d.today_users); tween('k_req', d.today_requests); tween('k_online', d.online_now);
-    tween('k_rps', d.req_per_sec, 2); tween('k_peak', d.peak_online);
+    tween('k_rps', d.req_per_sec, 2); tween('k_peak', d.peak_online); tween('k_new', d.new_count_24h || 0);
     $('k_req_f').textContent = d.today_users ? '人均 ' + Math.round(d.today_requests / d.today_users) + ' 次' : ' ';
     $('k_peak_f').textContent = d.peak_time ? '出现于 ' + (d.peak_day === 'yesterday' ? '昨天 ' : '今天 ') + d.peak_time : ' ';
     $('updated').textContent = '更新于 ' + d.updated.slice(11);
