@@ -266,7 +266,7 @@ BR_DMG_WAIT = 12              # 战场统计：旧击杀缺伤害时向 ESI 补�
 BATTLE_CACHE = 5              # 会战结果缓存（秒），前端与实时击杀同为 6 秒轮询
 BATTLE_MIN_VALUE = 10_000_000  # 会战只统计价值 ≥ 1000 万 ISK 的击杀（过滤小船 / 诱饵等刷数）
 BATTLE_MIN_KILLS = 20           # 历史会战：60 分钟内同一星系击毁 ≥ 20 艘（与实时疑似会战默认口径相同）
-BATTLE_GAP = 30 * 60            # 历史会战：同一星系相邻击杀间隔不超过 30 分钟算同一场
+BATTLE_GAP = 20 * 60            # 同一星系相邻击杀间隔不超过 20 分钟算同一场；实时会战 20 分钟没有新击杀即视为结束
 BATTLE_HISTORY_CACHE = 600      # 历史会战结果缓存（秒）
 # 国服击杀：CEVE 市场的 KM 广播队列（长轮询，约 5 秒无新击杀返回空；id 为队列名，5 分钟没人读就作废），完整击杀邮件读网易 ESI；
 # 估值用主贸易中心空间站的最低卖 / 最高收中间价
@@ -1322,20 +1322,35 @@ class Api:
         kills = [k for _, k in items]
         return {"cursor": latest, "kills": kills, "names": self.with_names(kills)}
 
-    # GET /battles?window=60&min=20：疑似会战（时间窗内同一星系被击毁的舰船数，不含太空舱、NPC 击杀与价值 < BATTLE_MIN_VALUE 的击杀）
+    # GET /battles?window=60&min=20：疑似会战（时间窗内同一星系被击毁的舰船数，不含太空舱、NPC 击杀与价值 < BATTLE_MIN_VALUE 的击杀）；
+    # 最后一次击杀超过 BATTLE_GAP（20 分钟）就算结束、不再列出
     def battles(self, q):
         window = min(max(int(q.get("window", 60)), 5), 180)
         min_kills = min(max(int(q.get("min", 20)), 5), 2000)
 
         def run():
             c = self.store.conn()
-            since = int(time.time() - window * 60)
+            window_since = int(time.time() - window * 60)
             base = f"time >= ? AND npc = 0 AND ship_type NOT IN (670, 33328) AND value >= {BATTLE_MIN_VALUE}"
-            rows = c.execute(f"""SELECT system_id, region_id, COUNT(*), SUM(value), MIN(time), MAX(time) FROM killmails
-                                 WHERE {base} GROUP BY system_id HAVING COUNT(*) >= ? ORDER BY COUNT(*) DESC LIMIT 20""",
-                             (since, min_kills)).fetchall()
+            now = int(time.time())
+            cand = c.execute(f"""SELECT system_id FROM killmails WHERE {base} GROUP BY system_id
+                                 HAVING COUNT(*) >= ? AND MAX(time) >= ?""", (window_since, min_kills, now - BATTLE_GAP)).fetchall()
+            # 20 分钟没有新击杀的会战已结束；还在打的只从最近一次间隔超过 20 分钟之后算起（之前那场不并进来）
+            rows = []
+            for (sys_id,) in cand:
+                times = [t for (t,) in c.execute(f"SELECT time FROM killmails WHERE system_id = ? AND {base} ORDER BY time DESC", (sys_id, window_since))]
+                start = times[0]
+                for t in times[1:]:
+                    if start - t > BATTLE_GAP:
+                        break
+                    start = t
+                r = c.execute(f"""SELECT region_id, COUNT(*), SUM(value), MIN(time), MAX(time) FROM killmails
+                                  WHERE system_id = ? AND {base}""", (sys_id, start)).fetchone()
+                if r[1] >= min_kills:
+                    rows.append((sys_id, start) + tuple(r))
+            rows = sorted(rows, key=lambda r: r[3], reverse=True)[:20]
             out, ids = [], []
-            for sys_id, region, kills, value, start, end in rows:
+            for sys_id, since, region, kills, value, start, end in rows:
                 km_sql = f"SELECT id FROM killmails WHERE system_id = ? AND {base}"
                 pilots = c.execute(f"""SELECT COUNT(*) FROM (
                                          SELECT char FROM attackers WHERE km IN ({km_sql})
@@ -1369,7 +1384,7 @@ class Api:
         self.store.cache[("battles", window, min_kills)] = (time.time(), value)
         return value
 
-    # GET /battles/history?days=30：最近 N 天全部疑似会战（同一星系相邻击杀间隔 ≤ 30 分钟连成一段，段内任意 60 分钟击毁 ≥ 20 艘才算；口径同 /battles）。
+    # GET /battles/history?days=30：最近 N 天全部疑似会战（同一星系相邻击杀间隔 ≤ 20 分钟连成一段，段内任意 60 分钟击毁 ≥ 20 艘才算；口径同 /battles）。
     # 双方阵营按「谁打谁」划分：同一次击杀里一起出手的算友方，打了对方的算敌方，从参与最多的势力开始依次归队；两边都没有关系的算第三方。
     # 每方统计势力、人数、损失（艘 / ISK）、击毁（艘 / ISK），战损比 = 击毁 ÷（击毁 + 损失）。结果缓存 10 分钟，过期后先返回旧结果、后台重算。
     def battle_history(self, q):
