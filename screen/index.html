@@ -88,6 +88,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
 .panel>*{flex-shrink:0}
 .panel>#provBar{flex-shrink:1}
 #provBar{flex:1;min-height:0}
+#pages{max-height:300px;overflow-y:auto;scrollbar-width:thin}
 .rows{list-style:none}
 .rows li{position:relative;display:flex;justify-content:space-between;align-items:center;gap:12px;height:22px;line-height:22px;padding:0 8px;margin:0 -8px 2px;font-size:12px;border-radius:4px;overflow:hidden}
 .rows li:last-child{margin-bottom:0}
@@ -440,7 +441,7 @@ header{display:flex;align-items:center;justify-content:space-between;margin-bott
     fetch('api/stats', {cache:'no-store'}).then(function(r){ if (!r.ok) throw r.status; return r.json(); })
       .then(function(d){ $('dot').className = 'dot live'; render(d); })
       .catch(function(){ $('dot').className = 'dot off'; $('updated').textContent = '连接中断，重试中…'; })
-      .then(function(){ setTimeout(poll, 2000); });
+      .then(function(){ setTimeout(poll, 1000); });
   }
   poll();
 })();
