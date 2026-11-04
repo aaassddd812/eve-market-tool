@@ -3,13 +3,18 @@
 // 需要 esi-planets.manage_planets.v1（「行星殖民地」权限）。ESI 数据在游戏里打开该行星时才更新（last_update）。
 // 提取器到期时间、产物与每周期产量直接来自 ESI；仓库存量按 ESI 全服均价估值。
 
-let ctx;   // esc, formatISK, formatNumber, esiAuthFetch, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, valuation, hasScopeGroup, scopeNeededHtml, tokenInfo, openMapSystem
+let ctx;   // esc, formatISK, formatNumber, esiAccountFetch, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, valuation, hasScopeGroup, scopeNeededHtml, tokenInfo, openMapSystem, allChars
 const PLANET_TYPE = { temperate: '温和', barren: '贫瘠', oceanic: '海洋', ice: '冰体', gas: '气体', lava: '熔岩', storm: '风暴', plasma: '等离子' };
-let cache = null;   // { id, at, promise }
+const cache = new Map();   // 角色 ID -> { at, promise }
+let lastBox = null;
 
 export function initColonies(context) {
+  if (!ctx) {
+    window.addEventListener('eve-account-change', () => cache.clear());
+    // 切换「全部角色」后重绘（殖民地面板还开着时）
+    window.addEventListener('eve-all-chars', () => { if (lastBox?.isConnected && lastBox.offsetParent) renderColonies(lastBox); });
+  }
   ctx = context;
-  window.addEventListener('eve-account-change', () => { cache = null; });
 }
 
 function left(ms) {
@@ -18,13 +23,13 @@ function left(ms) {
   return d ? `${d} 天 ${h % 24} 小时` : h ? `${h} 小时 ${m} 分` : `${Math.max(1, m)} 分钟`;
 }
 
-async function load(force) {
-  const id = ctx.tokenInfo().character_id;
-  if (!force && cache && cache.id === id && Date.now() - cache.at < 5 * 60e3) return cache.promise;
+async function load(id, force) {
+  const hit = cache.get(id);
+  if (!force && hit && Date.now() - hit.at < 5 * 60e3) return hit.promise;
   const promise = (async () => {
-    const list = await ctx.esiAuthFetch('/characters/' + id + '/planets/');
+    const list = await ctx.esiAccountFetch(id, '/characters/' + id + '/planets/');
     const [layouts, names] = await Promise.all([
-      Promise.all(list.map((p) => ctx.esiAuthFetch(`/characters/${id}/planets/${p.planet_id}/`).catch((e) => ({ error: e.message })))),
+      Promise.all(list.map((p) => ctx.esiAccountFetch(id, `/characters/${id}/planets/${p.planet_id}/`).catch((e) => ({ error: e.message })))),
       Promise.all(list.map((p) => ctx.fetchESI(`/universe/planets/${p.planet_id}/?language=zh`).then((x) => x.name).catch(() => '行星 ' + p.planet_id)))
     ]);
     const typeIds = new Set();
@@ -43,8 +48,8 @@ async function load(force) {
     const schem = [...schematics].map((sid) => [sid, output.has(sid) ? types.get(output.get(sid)) || '配方 ' + sid : '配方 ' + sid]);
     return { list, layouts, names, types, schematics: new Map(schem) };
   })();
-  cache = { id, at: Date.now(), promise };
-  promise.catch(() => { if (cache?.promise === promise) cache = null; });
+  cache.set(id, { at: Date.now(), promise });
+  promise.catch(() => { if (cache.get(id)?.promise === promise) cache.delete(id); });
   return promise;
 }
 
@@ -83,31 +88,49 @@ function planetCard(p, layout, name, d) {
 }
 
 export async function renderColonies(box, force = false) {
-  const { esc, formatISK } = ctx;
+  const { esc } = ctx;
+  lastBox = box;
   if (!ctx.tokenInfo()) { box.innerHTML = '<div class="pi-card"><p class="text-muted">需要先绑定 ESI</p></div>'; return; }
-  if (!ctx.hasScopeGroup('planets')) { box.innerHTML = ctx.scopeNeededHtml('planets', '查看我的殖民地'); return; }
+  const all = ctx.allChars.on();
+  const me = ctx.tokenInfo().character_id;
+  const chars = all ? ctx.allChars.list() : [{ id: me }];
+  if (!all && !ctx.hasScopeGroup('planets')) { box.innerHTML = ctx.allChars.toggle() + ctx.scopeNeededHtml('planets', '查看我的殖民地'); return; }
+  const gen = (box.dataset.colGen = String(Number(box.dataset.colGen || 0) + 1));
   box.innerHTML = '<div class="pi-loading">读取殖民地…</div>';
-  let d;
-  try { d = await load(force); } catch (error) { box.innerHTML = `<p class="text-muted">殖民地读取失败：${esc(error.message)}</p>`; return; }
-  if (!d.list.length) { box.innerHTML = '<div class="pi-card"><p class="text-muted">当前角色没有行星殖民地</p></div>'; return; }
+  // 每个角色：{ a, d } 或 { a, error } / { a, noScope }
+  const rows = await Promise.all(chars.map(async (a) => {
+    if (all && !ctx.allChars.canGroup(a.id, 'planets')) return { a, noScope: true };
+    try { return { a, d: await load(a.id, force) }; } catch (error) { return { a, error }; }
+  }));
+  if (box.dataset.colGen !== gen) return;
+  if (!all && rows[0].error) { box.innerHTML = `<p class="text-muted">殖民地读取失败：${esc(rows[0].error.message)}</p>`; return; }
+  const ok = rows.filter((r) => r.d);
+  const layouts = ok.flatMap((r) => r.d.layouts);
+  const count = ok.reduce((t, r) => t + r.d.list.length, 0);
+  if (!all && !count) { box.innerHTML = ctx.allChars.toggle() + '<div class="pi-card"><p class="text-muted">当前角色没有行星殖民地</p></div>'; return; }
   const now = Date.now();
-  const expiries = d.layouts.flatMap((l) => (l.pins || []).filter((x) => x.extractor_details && x.expiry_time).map((x) => new Date(x.expiry_time).getTime()));
+  const expiries = layouts.flatMap((l) => (l.pins || []).filter((x) => x.extractor_details && x.expiry_time).map((x) => new Date(x.expiry_time).getTime()));
   const stopped = expiries.filter((t) => t <= now).length;
   const next = expiries.filter((t) => t > now).sort((a, b) => a - b)[0];
   // 仓库与发射台里的存量，按所选交易中心估值
   const stock = [];
-  for (const l of d.layouts) for (const pin of l.pins || []) if (!pin.schematic_id) for (const c of pin.contents || []) stock.push({ type_id: c.type_id, quantity: c.amount });
+  for (const l of layouts) for (const pin of l.pins || []) if (!pin.schematic_id) for (const c of pin.contents || []) stock.push({ type_id: c.type_id, quantity: c.amount });
   const val = await ctx.valuation.items(stock);
-  d = { ...d, val };
+  if (box.dataset.colGen !== gen) return;
+  const grid = (d) => '<div class="col-grid">' + d.list.map((p, i) => planetCard(p, d.layouts[i], d.names[i], { ...d, val })).join('') + '</div>';
+  const group = (r) => `<section class="ac-group">${ctx.allChars.head(r.a)}${
+    r.noScope ? '<p class="text-muted">没有「行星殖民地」权限</p>'
+    : r.error ? `<p class="text-muted">读取失败：${esc(r.error.message)}</p>`
+    : r.d.list.length ? grid(r.d) : '<p class="text-muted">没有行星殖民地</p>'}</section>`;
   box.innerHTML =
     '<div class="valuation-grid">' +
-      ctx.valuationCard('殖民地', d.list.length + ' 个', '') +
+      ctx.valuationCard('殖民地', count + ' 个', all ? ok.length + ' 个角色' : '') +
       ctx.valuationCard('提取器', expiries.length + ' 台', stopped ? `${stopped} 台已停止` : '全部运行中', stopped ? 'is-sell' : 'is-buy') +
       ctx.valuationCard('最早到期', next ? left(next - now) + '后' : '—', next ? new Date(next).toLocaleString('zh-CN', { hour12: false }) : '') +
       ctx.valuation.cards(val, '存量估值') +
     '</div>' +
-    `<div class="valuation-toolbar section-gap">${ctx.valuation.select('data-val-src', val.region)}<span class="toolbar-spacer"></span><button class="btn btn-ghost" data-col-reload>刷新</button></div>` +
-    '<div class="col-grid">' + d.list.map((p, i) => planetCard(p, d.layouts[i], d.names[i], d)).join('') + '</div>';
+    `<div class="valuation-toolbar section-gap">${ctx.valuation.select('data-val-src', val.region)}<span class="toolbar-spacer"></span>${ctx.allChars.toggle()}<button class="btn btn-ghost" data-col-reload>刷新</button></div>` +
+    (all ? rows.map(group).join('') : grid(ok[0].d));
   if (!box.dataset.colBound) {
     box.dataset.colBound = '1';
     box.addEventListener('click', (e) => {

@@ -8191,3 +8191,15 @@ a.pz-name:hover { color: var(--accent-primary); }
   .pz-grid { grid-template-columns: 1fr; }
   .pz-form-grid { grid-template-columns: 1fr; }
 }
+
+/* ===== 全部角色：按角色分节（行星、资产、钱包、挖矿、研究、克隆） ===== */
+.ac-toggle.active { background: var(--accent-primary); color: #fff; border-color: transparent; }
+.ac-group { margin-top: 14px; padding: 12px 14px 14px; border-radius: 12px; background: var(--bg-secondary); }
+.ac-group .col-card { background: var(--bg-tertiary, var(--bg-primary)); border: 0; }
+.ac-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; font-size: 0.9375rem; }
+.ac-head img { width: 28px; height: 28px; border-radius: 50%; }
+.ac-name { display: inline-flex; align-items: center; gap: 8px; padding: 0; color: var(--text-primary); font-weight: 600; }
+.ac-name:hover { color: var(--accent-primary); }
+.ac-name img { width: 20px; height: 20px; border-radius: 50%; flex: none; }
+.ac-table td:nth-child(n+2), .ac-table th:nth-child(n+2) { text-align: right; }
+.ac-group + .ac-group .ac-body > .valuation-toolbar { display: none; }   /* 估值来源只在第一节选一次 */

@@ -42,8 +42,8 @@ const table = (head, rows, cls = '') => `<div class="table-scroll"><table class=
 const tr = (cells) => '<tr>' + cells.map((c) => `<td>${c}</td>`).join('') + '</tr>';
 
 // 带缓存的读取：key 区分同一页面的不同数据
-function cached(key, fn) {
-  const id = me();
+function cached(key, fn, id = me()) {
+  if (id !== me()) key += '@' + id;   // 「全部角色」里其他角色的数据
   const hit = cache.get(key);
   if (hit && hit.id === id && Date.now() - hit.at < TTL) return hit.promise;
   const promise = fn(id);
@@ -54,26 +54,49 @@ function cached(key, fn) {
 // 渲染前确认仍停留在该页、角色没变
 const still = (tab, id) => ctx.isActive(tab) && me() === id;
 
+// ---------- 全部角色：克隆 / 挖矿 / 研究按角色各一节，每节用单角色的渲染 ----------
+const can = (id, scope) => (id === me() ? ctx.hasScope(scope) : ctx.allChars.can(id, scope));
+const canGroup = (id, g) => (id === me() ? ctx.hasScopeGroup(g) : ctx.allChars.canGroup(id, g));
+const get = (id, path) => (id === me() ? ctx.esiAuthFetch(path) : ctx.allChars.fetch(id, path));
+const getPaged = (id, path, max) => (id === me() ? ctx.esiAuthFetchPaged(path, max) : ctx.allChars.paged(id, path, max));
+const skillsOf = (id) => (id === me() ? ctx.getCharacterSkills()
+  : get(id, '/characters/' + id + '/skills/').then((d) => ({ levels: new Map((d.skills || []).map((x) => [x.skill_id, x.active_skill_level])) })));
+// one(el, id, alive)：把角色 id 的内容画进 el；alive() 为假时不再写入
+async function perChar(tab, box, one) {
+  const gen = (box.dataset.acGen = String(Number(box.dataset.acGen || 0) + 1));
+  if (!ctx.allChars.on()) {
+    const id = me();
+    const bar = ctx.allChars.toggle();
+    if (!bar) return one(box, id, () => still(tab, id));
+    box.innerHTML = `<div class="valuation-toolbar"><span class="toolbar-spacer"></span>${bar}</div><div class="ac-body"></div>`;
+    return one(box.lastElementChild, id, () => still(tab, id) && box.dataset.acGen === gen);
+  }
+  const list = ctx.allChars.list();
+  box.innerHTML = `<div class="valuation-toolbar"><span class="toolbar-spacer"></span>${ctx.allChars.toggle()}</div>` +
+    list.map((a) => `<section class="ac-group">${ctx.allChars.head(a)}<div class="ac-body" data-ac="${a.id}"></div></section>`).join('');
+  await Promise.all(list.map((a) => one(box.querySelector(`[data-ac="${a.id}"]`), a.id, () => ctx.isActive(tab) && box.dataset.acGen === gen)));
+}
+
 // ---------- 克隆 ----------
-async function renderClones(box) {
-  const id = me();
-  if (!ctx.hasScope('esi-clones.read_clones.v1')) { box.innerHTML = '<p class="text-muted" title="esi-clones.read_clones.v1">无克隆权限，需重新绑定 ESI</p>'; return; }
+const renderClones = (box) => perChar('clones', box, clonesOne);
+async function clonesOne(box, id, alive) {
+  if (!can(id, 'esi-clones.read_clones.v1')) { box.innerHTML = '<p class="text-muted" title="esi-clones.read_clones.v1">无克隆权限，需重新绑定 ESI</p>'; return; }
   box.innerHTML = loading('读取中…');
   let data;
   try {
     data = await cached('clones', async (cid) => {
       const [clones, implants, skills] = await Promise.all([
-        ctx.esiAuthFetch('/characters/' + cid + '/clones/'),
-        ctx.hasScope('esi-clones.read_implants.v1') ? ctx.esiAuthFetch('/characters/' + cid + '/implants/').catch(() => []) : Promise.resolve(null),
-        ctx.getCharacterSkills().catch(() => null)
+        get(cid, '/characters/' + cid + '/clones/'),
+        can(cid, 'esi-clones.read_implants.v1') ? get(cid, '/characters/' + cid + '/implants/').catch(() => []) : Promise.resolve(null),
+        skillsOf(cid).catch(() => null)
       ]);
       const types = await ctx.resolveTypeNames([...(implants || []), ...(clones.jump_clones || []).flatMap((c) => c.implants || [])]);
       const locs = [clones.home_location?.location_id, ...(clones.jump_clones || []).map((c) => c.location_id)].filter(Boolean);
       await ctx.resolveStructureNames(locs).catch(() => {});
       return { clones, implants, skills, types };
-    });
-  } catch (error) { if (still('clones', id)) box.innerHTML = fail('克隆', error); return; }
-  if (!still('clones', id)) return;
+    }, id);
+  } catch (error) { if (alive()) box.innerHTML = fail('克隆', error); return; }
+  if (!alive()) return;
   const { clones, implants, skills, types } = data;
   const sync = skills?.levels?.get(SKILL_INFOMORPH) || 0;
   const cooldown = (24 - sync) * 3600e3;
@@ -97,23 +120,23 @@ async function renderClones(box) {
 }
 
 // ---------- 挖矿 ----------
-async function renderMining(box) {
-  const id = me();
-  if (!ctx.hasScope('esi-industry.read_character_mining.v1')) { box.innerHTML = '<p class="text-muted" title="esi-industry.read_character_mining.v1">无挖矿记录权限，需重新绑定 ESI</p>'; return; }
+const renderMining = (box) => perChar('mining', box, miningOne);
+async function miningOne(box, id, alive) {
+  if (!can(id, 'esi-industry.read_character_mining.v1')) { box.innerHTML = '<p class="text-muted" title="esi-industry.read_character_mining.v1">无挖矿记录权限，需重新绑定 ESI</p>'; return; }
   box.innerHTML = loading('读取中…');
   let data;
   try {
     data = await cached('mining', async (cid) => {
-      const rows = await ctx.esiAuthFetchPaged('/characters/' + cid + '/mining/', 10);
+      const rows = await getPaged(cid, '/characters/' + cid + '/mining/', 10);
       const types = await ctx.resolveTypeNames(rows.map((r) => r.type_id));
       return { rows, types };
-    });
-  } catch (error) { if (still('mining', id)) box.innerHTML = fail('挖矿记录', error); return; }
-  if (!still('mining', id)) return;
+    }, id);
+  } catch (error) { if (alive()) box.innerHTML = fail('挖矿记录', error); return; }
+  if (!alive()) return;
   const { rows, types } = data;
   if (!rows.length) { box.innerHTML = '<p class="text-muted">最近 30 天没有挖矿记录</p>'; return; }
-  const val = await ctx.valuation.items(rows, (d, t) => { if (t > d && still('mining', id)) box.innerHTML = loading(`读取${val0().hub.name}行情 ${d}/${t}…`); });
-  if (!still('mining', id)) return;
+  const val = await ctx.valuation.items(rows, (d, t) => { if (t > d && alive()) box.innerHTML = loading(`读取${val0().hub.name}行情 ${d}/${t}…`); });
+  if (!alive()) return;
   const sellOf = (r) => (val.price(r.type_id).sell || 0) * r.quantity;
   const buyOf = (r) => (val.price(r.type_id).buy || 0) * r.quantity;
   const byType = new Map(), byDay = new Map();
@@ -149,19 +172,19 @@ function npcStations() {
   if (!npcPromise) npcPromise = fetch('./npc-data.json?v=2').then((r) => r.json()).then((d) => new Map(d.npcs.map((n) => [n[0], { station: n[4], system: n[5], corp: n[3] }]))).catch(() => { npcPromise = null; return new Map(); });
   return npcPromise;
 }
-async function renderResearch(box) {
-  const id = me();
-  if (!ctx.hasScopeGroup('research')) { box.innerHTML = ctx.scopeNeededHtml('research', '查看研究代理人'); return; }
+const renderResearch = (box) => perChar('research', box, researchOne);
+async function researchOne(box, id, alive) {
+  if (!canGroup(id, 'research')) { box.innerHTML = id === me() ? ctx.scopeNeededHtml('research', '查看研究代理人') : '<p class="text-muted">没有「研究代理人」权限</p>'; return; }
   box.innerHTML = loading('读取中…');
   let data;
   try {
     data = await cached('research', async (cid) => {
-      const [list, npcs] = await Promise.all([ctx.esiAuthFetch('/characters/' + cid + '/agents_research/'), npcStations()]);
+      const [list, npcs] = await Promise.all([get(cid, '/characters/' + cid + '/agents_research/'), npcStations()]);
       const types = await ctx.resolveTypeNames(list.map((r) => r.skill_type_id));
       return { list, npcs, types };
-    });
-  } catch (error) { if (still('research', id)) box.innerHTML = fail('研究代理人', error); return; }
-  if (!still('research', id)) return;
+    }, id);
+  } catch (error) { if (alive()) box.innerHTML = fail('研究代理人', error); return; }
+  if (!alive()) return;
   const { list, npcs, types } = data;
   if (!list.length) { box.innerHTML = '<p class="text-muted">没有进行中的研究</p>'; return; }
   const now = Date.now();

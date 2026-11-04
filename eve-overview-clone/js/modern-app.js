@@ -1028,9 +1028,9 @@ function loadPiModule() {
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
       renderColonies: async (box) => {
-        const c = await import('./pi-colonies.js?v=v4');
+        const c = await import('./pi-colonies.js?v=v5');
         c.initColonies({
-          esc, formatISK, formatNumber, esiAuthFetch, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, valuation,
+          esc, formatISK, formatNumber, esiAccountFetch, allChars, fetchESI, resolveTypeNames, officialName, gameImage, valuationCard, valuation,
           hasScopeGroup, scopeNeededHtml, openMapSystem, tokenInfo: () => state.esiToken || readEsiToken()
         });
         await c.renderColonies(box);
@@ -3778,6 +3778,35 @@ async function esiAccountFetch(id, path) {
 }
 const esiAccountList = () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name || '角色 ' + a.character_id, scopes: [].concat(a.scopes || []) }));
 
+// ===== 全部角色：行星、资产、钱包、挖矿等页可改为按角色列出浏览器里绑定的所有角色；默认关，只看个人中心选中的角色 =====
+// 所有页面共用一个开关（记在本机）；只绑了一个角色时不显示开关
+const ALL_CHARS_KEY = serverKey('eve-all-chars');
+let allCharsForce = null;   // 无痕模式下 localStorage 不可用时本次会话仍生效
+const allChars = {
+  available: () => readEsiAccounts().length > 1,
+  on: () => allChars.available() && (allCharsForce ?? store.get(ALL_CHARS_KEY) === '1'),
+  set(on) {
+    allCharsForce = on;
+    on ? store.set(ALL_CHARS_KEY, '1') : store.remove(ALL_CHARS_KEY);
+    window.dispatchEvent(new CustomEvent('eve-all-chars'));
+  },
+  // 当前角色排第一
+  list() {
+    const me = myCharacterId();
+    return esiAccountList().sort((a, b) => (b.id === me) - (a.id === me));
+  },
+  toggle: () => allChars.available()
+    ? `<button type="button" class="btn btn-ghost ac-toggle${allChars.on() ? ' active' : ''}" data-all-chars aria-pressed="${allChars.on()}">${icon('users')}<span>全部角色</span></button>` : '',
+  head: (a) => `<div class="ac-head"><img src="${gameImage('characters/' + a.id + '/portrait', 64)}" alt="" width="28" height="28" loading="lazy"><b translate="no">${esc(a.name)}</b></div>`,
+  can: (id, scope) => hasScope(readEsiAccounts().find((a) => a.character_id === id), scope),
+  canGroup: (id, group) => Boolean(SCOPE_GROUPS.find((x) => x.id === group)?.scopes.every((sc) => allChars.can(id, sc))),
+  fetch: esiAccountFetch,
+  paged: (id, path, max) => esiAuthFetchPaged(path, max, id)
+};
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-all-chars]')) allChars.set(!allChars.on());
+});
+
 // 已绑定角色的技能等级（skill_id -> 生效等级），缓存 10 分钟；跳跃规划与模拟装配共用
 let skillCache = null;   // { id, at, promise }
 function getCharacterSkills() {
@@ -4079,8 +4108,9 @@ async function universeTable(path) {
 // 角色资产接口分页（X-Pages），每页 1000 条
 // 分页读取（资产等）：每页单独重试——国服 ESI 偶尔断开连接或返回 5xx / 420（网关出错时不带跨域头，浏览器只报「Failed to fetch」），
 // 资产多的角色页数多，任何一页失败都会让整份数据读不出来
-async function esiAuthFetchPaged(path, maxPages = 20) {
-  const token = await ensureEsiToken();
+// id：读取其他已绑定角色（默认当前角色）
+async function esiAuthFetchPaged(path, maxPages = 20, id = null) {
+  const token = id ? await accountToken(id) : await ensureEsiToken();
   const get = async (page) => {
     const url = ESI_BASE + path + (path.includes('?') ? '&' : '?') + 'datasource=' + SERVER.datasource + '&page=' + page;
     for (let attempt = 0; ; attempt += 1) {
@@ -4914,6 +4944,7 @@ function loadAssetTools() {
 
 async function renderAssetsTab(box) {
   await loadAssetTools().catch(() => null);
+  if (allChars.on()) { await renderAllAssets(box); return; }
   const data = state.characterData;
   const assets = Array.isArray(data.assets) ? data.assets : null;
   if (!assets) { box.innerHTML = '<p class="text-muted">资产读取失败或权限不足' + (data.assets?.__error ? '：' + esc(data.assets.__error) : '') + '</p>'; return; }
@@ -4975,7 +5006,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
   const walletOk = typeof data.wallet === 'number';
   assetTools?.recordNetWorth(charId, { sell: assetSell, buy: assetBuy, orders: sellOrderTotal + buyOrderTotal, wallet: walletOk ? data.wallet : null });
   box.innerHTML =
-    assetToolbar(region, '<h3 class="asset-view-title">资产总估值</h3><button type="button" class="btn btn-ghost" id="clearanceBtn" title="每种物品去哪个交易中心卖、直接卖收单还是挂卖单">清仓小助手</button>') +
+    assetToolbar(region, '<h3 class="asset-view-title">资产总估值</h3><button type="button" class="btn btn-ghost" id="clearanceBtn" title="每种物品去哪个交易中心卖、直接卖收单还是挂卖单">清仓小助手</button>' + allChars.toggle()) +
     (assetTools ? assetTools.netWorthHtml(charId) : '') +
     '<div class="valuation-grid">' +
       valuationCard('资产估值 · 最低卖价', formatISK(assetSell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', assetSell * TF.netSell()), 'is-sell') +
@@ -4997,6 +5028,113 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
     '</tr></thead><tbody>' + rows + '</tbody></table></div>';
   if (assetTools && box.querySelector('[data-nw-plot]')) loadKbCharts().then((m) => assetTools.bindNetWorth(box, m)).catch(() => {});
 }
+
+// ===== 全部角色：资产 / 钱包按角色汇总 =====
+const allCharCache = new Map();   // 角色 ID -> { at, promise }（当前角色直接用已读好的数据）
+function charSummaryData(id) {
+  const d = state.characterData;
+  if (id === myCharacterId() && d) return Promise.resolve({ assets: d.assets, orders: d.orders, wallet: d.wallet, journal: d.journal });
+  const hit = allCharCache.get(id);
+  if (hit && Date.now() - hit.at < 5 * 60e3) return hit.promise;
+  const safe = (p) => p.catch((error) => ({ __error: error.message }));
+  const promise = Promise.all([
+    safe(allChars.paged(id, '/characters/' + id + '/assets/')),
+    safe(allChars.fetch(id, '/characters/' + id + '/orders/')),
+    safe(allChars.fetch(id, '/characters/' + id + '/wallet/')),
+    safe(allChars.fetch(id, '/characters/' + id + '/wallet/journal/?page=1'))
+  ]).then(([assets, orders, wallet, journal]) => {
+    if (Array.isArray(assets)) buildAssetLocations(assets);
+    return { assets, orders, wallet, journal };
+  });
+  allCharCache.set(id, { at: Date.now(), promise });
+  return promise;
+}
+const acName = (a) => `<button type="button" class="link-btn ac-name" data-ac-switch="${a.id}" title="切换到这个角色"><img src="${gameImage('characters/' + a.id + '/portrait', 32)}" alt="" width="20" height="20" loading="lazy"><span translate="no">${esc(a.name)}</span></button>`;
+const acFail = (x) => `<span class="text-muted" title="${esc(x?.__error || '')}">—</span>`;
+function bindAcSwitch(box) {
+  box.querySelectorAll('[data-ac-switch]').forEach((b) => b.addEventListener('click', () => {
+    switchEsiAccount(Number(b.dataset.acSwitch));
+    allChars.set(false);
+  }));
+}
+
+async function renderAllAssets(box) {
+  const seq = (state.assetRenderSeq = (state.assetRenderSeq || 0) + 1);
+  box.innerHTML = skCards(4) + skRows(6);
+  const chars = allChars.list();
+  const datas = await Promise.all(chars.map((a) => charSummaryData(a.id)));
+  if (seq !== state.assetRenderSeq || activeProfileTab() !== 'assets') return;
+  const lists = datas.map((d) => (Array.isArray(d.assets) ? d.assets : []));
+  const ctx = await ensureAssetPrices(box, lists.flat(), seq);
+  if (!ctx || activeProfileTab() !== 'assets') return;
+  const { region } = ctx;
+  const rows = chars.map((a, i) => {
+    const d = datas[i];
+    let sell = 0, buy = 0;
+    for (const x of lists[i]) {
+      const p = x.is_blueprint_copy ? null : hubPrice(region, x.type_id);
+      const q = valuationQuantity(x.quantity);
+      if (p?.sell != null) sell += p.sell * q;
+      if (p?.buy != null) buy += p.buy * q;
+    }
+    const orders = Array.isArray(d.orders) ? d.orders.reduce((t, o) => t + o.price * o.volume_remain, 0) : null;
+    const wallet = typeof d.wallet === 'number' ? d.wallet : null;
+    return { a, d, sell, buy, orders, wallet, ok: Array.isArray(d.assets), n: lists[i].length, locs: new Set(lists[i].map((x) => x.rootId)).size };
+  }).sort((x, y) => y.sell + (y.orders || 0) + (y.wallet || 0) - x.sell - (x.orders || 0) - (x.wallet || 0));
+  const tot = (k) => rows.reduce((t, r) => t + (r[k] || 0), 0);
+  const isk = (v) => (v == null ? '—' : formatISK(v));
+  box.innerHTML =
+    assetToolbar(region, '<h3 class="asset-view-title">全部角色资产</h3>' + allChars.toggle()) +
+    '<div class="valuation-grid">' +
+      valuationCard('资产估值 · 最低卖价', formatISK(tot('sell')) + ' ISK', rows.length + ' 个角色', 'is-sell') +
+      valuationCard('资产估值 · 最高收价', formatISK(tot('buy')) + ' ISK', '', 'is-buy') +
+      valuationCard('订单', formatISK(tot('orders')) + ' ISK', '', 'is-order') +
+      valuationCard('钱包', formatISK(tot('wallet')) + ' ISK', '') +
+      valuationCard('合计', formatISK(tot('sell') + tot('orders') + tot('wallet')) + ' ISK', '资产按卖价', 'is-total') +
+    '</div>' +
+    '<div class="table-scroll"><table class="pc-mini-table ac-table"><thead><tr>' +
+      '<th>角色</th><th>物品数</th><th>位置</th><th>卖价估值</th><th>收价估值</th><th>订单</th><th>钱包</th><th>合计</th>' +
+    '</tr></thead><tbody>' + rows.map((r) => '<tr>' +
+      `<td>${acName(r.a)}</td>` +
+      (r.ok ? `<td>${formatNumber(r.n)}</td><td>${r.locs}</td><td class="down">${isk(r.sell)}</td><td class="up">${isk(r.buy)}</td>`
+        : `<td>${acFail(r.d.assets)}</td><td></td><td></td><td></td>`) +
+      `<td>${r.orders == null ? acFail(r.d.orders) : isk(r.orders)}</td><td>${r.wallet == null ? acFail(r.d.wallet) : isk(r.wallet)}</td>` +
+      `<td><b>${formatISK(r.sell + (r.orders || 0) + (r.wallet || 0))}</b></td></tr>`).join('') +
+    '</tbody></table></div>';
+  bindAssetToolbar(region);
+  bindAcSwitch(box);
+}
+
+async function renderAllWallet(box) {
+  const chars = allChars.list();
+  box.innerHTML = skCards(3) + skRows(4);
+  const datas = await Promise.all(chars.map((a) => charSummaryData(a.id)));
+  if (activeProfileTab() !== 'wallet' || !allChars.on()) return;
+  const rows = chars.map((a, i) => {
+    const d = datas[i];
+    const journal = Array.isArray(d.journal) ? d.journal : null;
+    return { a, d, wallet: typeof d.wallet === 'number' ? d.wallet : null, journal,
+      inc: journal ? journal.filter((j) => j.amount > 0).reduce((t, j) => t + j.amount, 0) : 0,
+      out: journal ? -journal.filter((j) => j.amount < 0).reduce((t, j) => t + j.amount, 0) : 0 };
+  }).sort((x, y) => (y.wallet || 0) - (x.wallet || 0));
+  const tot = (k) => rows.reduce((t, r) => t + (r[k] || 0), 0);
+  box.innerHTML =
+    `<div class="valuation-toolbar"><span class="toolbar-spacer"></span>${allChars.toggle()}</div>` +
+    '<div class="valuation-grid wallet-grid">' +
+      valuationCard('钱包合计', formatPrice(tot('wallet')) + ' ISK', rows.length + ' 个角色') +
+      valuationCard('近期收入', formatISK(tot('inc')) + ' ISK', '', 'is-buy') +
+      valuationCard('近期支出', formatISK(tot('out')) + ' ISK', '', 'is-sell') +
+    '</div>' +
+    '<div class="table-scroll"><table class="pc-mini-table ac-table"><thead><tr><th>角色</th><th>余额</th><th>近期收入</th><th>近期支出</th></tr></thead><tbody>' +
+      rows.map((r) => '<tr>' + `<td>${acName(r.a)}</td>` +
+        `<td>${r.wallet == null ? acFail(r.d.wallet) : formatPrice(r.wallet)}</td>` +
+        (r.journal ? `<td class="up">+${formatISK(r.inc)}</td><td class="down">−${formatISK(r.out)}</td>` : `<td>${acFail(r.d.journal)}</td><td></td>`) + '</tr>').join('') +
+    '</tbody></table></div>';
+  bindAcSwitch(box);
+}
+window.addEventListener('eve-all-chars', () => {
+  if (state.currentView === 'profile' && state.characterData) renderProfileTab(activeProfileTab());
+});
 
 // 单个空间站：只显示本站物品与本站估值
 function renderStationAssets(box, station, groups, { region }) {
@@ -5148,12 +5286,18 @@ async function renderProfileTab(tab) {
     return;
   }
 
+  if (tab === 'wallet' && allChars.on()) {
+    await renderAllWallet(box);
+    return;
+  }
+
   if (tab === 'wallet') {
     const journal = Array.isArray(data.journal) ? data.journal : null;
     const walletOk = typeof data.wallet === 'number'; // ESI /wallet/ 直接返回余额数字
     const income = journal ? journal.filter((j) => j.amount > 0).reduce((t, j) => t + j.amount, 0) : 0;
     const spend = journal ? journal.filter((j) => j.amount < 0).reduce((t, j) => t + j.amount, 0) : 0;
-    let html = '<div class="valuation-grid wallet-grid">' +
+    let html = (allChars.available() ? `<div class="valuation-toolbar"><span class="toolbar-spacer"></span>${allChars.toggle()}</div>` : '') +
+      '<div class="valuation-grid wallet-grid">' +
       valuationCard('钱包余额', walletOk ? formatPrice(data.wallet) + ' ISK' : '权限不足', '') +
       valuationCard('近期收入', formatISK(income) + ' ISK', '最近 ' + (journal ? journal.length : 0) + ' 条流水', 'is-buy') +
       valuationCard('近期支出', formatISK(Math.abs(spend)) + ' ISK', '', 'is-sell') +
@@ -5234,9 +5378,9 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v8').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v9').then((m) => {
     m.initProfileMore({
-      esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
+      allChars, esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
       openMapSystem, game: gameActions, hasScopeGroup, scopeNeededHtml,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6019,6 +6163,7 @@ function initESIModal() {
     const btn = $('refreshProfileBtn');
     btn.disabled = true;
     btn.classList.add('spinning');
+    allCharCache.clear();
     loadCharacterData()
       .then(() => showToast('角色数据已刷新', 'success'))
       .catch((e) => showToast(e.message, 'error', 4000))
