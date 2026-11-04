@@ -3126,20 +3126,20 @@ function initContact() {
 }
 
 // ===== 个性化设置（右上角滑块按钮）=====
-// 存在 eve-prefs（云同步会带上）；每项：键、名称、选项 [值, 名称]，第一个选项是默认值
+// 存在 eve-prefs（云同步会带上）；每项一个勾选框：键、名称、[不勾选的值, 勾选的值]、默认是否勾选
 const PREFS = [
-  ['mapZoom', '星图反转鼠标方向', [['normal', '关'], ['reverse', '开']]],   // 只反转滚轮缩放
-  ['treeLines', '分类目录连接线', [['on', '显示'], ['off', '隐藏']]]
+  ['mapZoom', '星图反转鼠标方向', ['normal', 'reverse'], false],   // 只反转滚轮缩放
+  ['treeLines', '显示分类目录连接线', ['off', 'on'], true]
 ];
 function applyPrefs(p = store.getJSON('eve-prefs', {})) {
   document.documentElement.classList.toggle('no-tree-lines', p.treeLines === 'off');
 }
 function renderPrefs() {
   const p = store.getJSON('eve-prefs', {});
-  $('prefsBody').innerHTML = PREFS.map(([key, title, opts]) => `<div class="prefs-row">
+  $('prefsBody').innerHTML = PREFS.map(([key, title, vals, dflt]) => `<label class="prefs-row">
+      <input type="checkbox" data-pref="${key}"${(p[key] ? p[key] === vals[1] : dflt) ? ' checked' : ''}>
       <b class="prefs-title">${title}</b>
-      <div class="segmented" role="group" aria-label="${title}">${opts.map(([v, label]) => `<button type="button" class="${(p[key] || opts[0][0]) === v ? 'active' : ''}" data-pref="${key}" data-pref-val="${v}" aria-pressed="${(p[key] || opts[0][0]) === v}">${label}</button>`).join('')}</div>
-    </div>`).join('');
+    </label>`).join('');
 }
 function togglePrefs(show = $('prefsModal').hidden) {
   $('prefsModal').hidden = !show;
@@ -3149,13 +3149,15 @@ function initPrefs() {
   applyPrefs();
   $('prefsBtn').addEventListener('click', () => togglePrefs(true));
   $('prefsModal').addEventListener('click', (e) => {
-    if (e.target.closest('.modal-backdrop, [data-close-prefs]')) { togglePrefs(false); return; }
-    const b = e.target.closest('[data-pref]');
-    if (!b) return;
-    const p = { ...store.getJSON('eve-prefs', {}), [b.dataset.pref]: b.dataset.prefVal };
+    if (e.target.closest('.modal-backdrop, [data-close-prefs]')) togglePrefs(false);
+  });
+  $('prefsModal').addEventListener('change', (e) => {
+    const box = e.target.closest('[data-pref]');
+    if (!box) return;
+    const vals = PREFS.find(([key]) => key === box.dataset.pref)[2];
+    const p = { ...store.getJSON('eve-prefs', {}), [box.dataset.pref]: vals[box.checked ? 1 : 0] };
     store.setJSON('eve-prefs', p);
     applyPrefs(p);
-    renderPrefs();
   });
 }
 
