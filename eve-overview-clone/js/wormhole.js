@@ -51,8 +51,38 @@ const S = {
   holeQ: '', holeDest: 'all', scout: null, scoutAt: 0, scoutErr: null, origin: '', recent: [],
   mass: { hole: 'H296', total: 3300, steps: [] },
   sos: new Map(), sosForm: false,
-  siteCls: 0, site: '', siteType: 'all', npcOpen: new Set()
+  siteCls: 0, site: '', siteType: 'all', npcOpen: new Set(),
+  // 各列表的排序 [列, 方向] 与搜索词
+  sort: { act: ['kills', 'desc'], sites: ['type', 'asc'], holes: ['code', 'asc'], thera: ['jumps', 'asc'], sos: ['time', 'desc'] },
+  find: { act: '', sites: '', thera: '', sos: '' }
 };
+
+// ---------- 列表排序 / 搜索 ----------
+// 表头点一下按该列排序，再点反向；first = 第一次点时的方向（文字列升序，数字列降序）
+function sortTh(list, key, label, cls = '', first = 'desc') {
+  const [k, dir] = S.sort[list];
+  const on = k === key;
+  return `<th class="sortable${cls ? ' ' + cls : ''}${on ? ' sorted' : ''}" data-wh-sort="${list}:${key}" data-first="${first}" data-dir="${on ? dir : ''}" aria-sort="${on ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}" tabindex="0">${label}</th>`;
+}
+// 按当前排序列取值排序；取不到值（null）的总排在最后，同值保持原有顺序
+function sortRows(list, rows, getters) {
+  const [k, dir] = S.sort[list];
+  const g = getters[k];
+  if (!g) return rows;
+  const m = dir === 'asc' ? 1 : -1;
+  return rows.map((r) => [r, g(r)]).sort(([, x], [, y]) => {
+    if (x == null || y == null) return x == null ? (y == null ? 0 : 1) : -1;
+    return (typeof x === 'string' ? x.localeCompare(y, 'zh-CN') : x - y) * m;
+  }).map(([r]) => r);
+}
+const matchFind = (list, ...texts) => {
+  const q = S.find[list].trim().toUpperCase();
+  return !q || texts.some((t) => t != null && String(t).toUpperCase().includes(q));
+};
+function findBox(list, placeholder) {
+  return `<div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input type="search" data-wh-find="${list}" placeholder="${placeholder}" value="${ctx.esc(S.find[list])}" spellcheck="false" autocomplete="off" aria-label="${placeholder}"></div>`;
+}
 
 export function initWormhole(context) {
   ctx = context;
@@ -174,16 +204,18 @@ function render() {
   document.querySelectorAll('[data-wh-tab]').forEach((b) => b.classList.toggle('active', b.dataset.whTab === S.tab));
   setHash();
   const body = $('whBody');
+  let done;
   if (S.tab === 'system') body.innerHTML = systemHtml();
-  else if (S.tab === 'activity') renderActivity(body);
+  else if (S.tab === 'activity') done = renderActivity(body);
   else if (S.tab === 'sites') body.innerHTML = S.site && D.sites.sites[S.site] ? siteDetailHtml(S.site) : sitesHtml();
   else if (S.tab === 'holes') body.innerHTML = holesHtml();
   else if (S.tab === 'effects') body.innerHTML = effectsHtml();
   else if (S.tab === 'mass') body.innerHTML = massHtml();
-  else if (S.tab === 'thera') renderThera(body);
+  else if (S.tab === 'thera') done = renderThera(body);
   else if (S.tab === 'sos') { body.innerHTML = sosTabHtml(); loadSos('all'); }
   if (S.tab === 'system' && S.sys && IS_TQ) loadDetail(S.sys);
   if (S.tab === 'system' && S.sys) loadSos(S.sys);
+  return done;
 }
 
 // ---------- 星系 ----------
@@ -268,7 +300,10 @@ function holeRow(code, { showSrc = false } = {}) {
     ${showSrc ? `<td class="num pi-hide-sm">${h.regen ? formatNumber(h.regen / 1e6) + ' kt' : '—'}</td><td class="pi-hide-sm">${h.isStatic ? '可作固定出口' : ''}</td>` : ''}
   </tr>`;
 }
-const holeHead = (showSrc) => `<thead><tr><th>代码</th>${showSrc ? '<th>出现在</th>' : ''}<th>通往</th><th class="num">存活</th><th class="num">总质量</th><th class="num">单次质量</th><th>最大船型</th>${showSrc ? '<th class="num pi-hide-sm">质量回复</th><th class="pi-hide-sm"></th>' : ''}</tr></thead>`;
+// showSrc = 虫洞类型页的完整表（可排序）；星系页的固定出口 / 游荡虫洞只是几行，不排序
+const holeHead = (showSrc) => showSrc
+  ? `<thead><tr>${sortTh('holes', 'code', '代码', '', 'asc')}<th>出现在</th>${sortTh('holes', 'dest', '通往', '', 'asc')}${sortTh('holes', 'life', '存活', 'num')}${sortTh('holes', 'mass', '总质量', 'num')}${sortTh('holes', 'jump', '单次质量', 'num')}<th>最大船型</th>${sortTh('holes', 'regen', '质量回复', 'num pi-hide-sm')}<th class="pi-hide-sm"></th></tr></thead>`
+  : '<thead><tr><th>代码</th><th>通往</th><th class="num">存活</th><th class="num">总质量</th><th class="num">单次质量</th><th>最大船型</th></tr></thead>';
 
 function effectList(key, cls) {
   const e = EFFECTS[key];
@@ -387,20 +422,26 @@ async function renderActivity(body) {
   }
   const { esc, formatISK, formatNumber } = ctx;
   const data = S.act.get(days);
-  const rows = Object.entries(data.systems).map(([id, [kills, value, npc, last]]) => ({ s: D.sysById.get(Number(id)), kills, value, npc, last }))
+  const all = Object.entries(data.systems).map(([id, [kills, value, npc, last]]) => ({ s: D.sysById.get(Number(id)), kills, value, npc, last }))
     .filter((r) => r.s && (!S.actCls || r.s.cls === S.actCls) && (!S.actEff || (S.actEff === 'none' ? !r.s.effect : r.s.effect === S.actEff)))
     .sort((a, b) => b.kills - a.kills || b.value - a.value);
+  all.forEach((r, i) => { r.rank = i + 1; });
+  const rows = sortRows('act', all.filter((r) => matchFind('act', r.s.name, r.s.effect && EFFECTS[r.s.effect][0], ...r.s.statics)), {
+    name: (r) => r.s.name, cls: (r) => r.s.cls, eff: (r) => (r.s.effect ? EFFECTS[r.s.effect][0] : null),
+    kills: (r) => r.kills, value: (r) => r.value, npc: (r) => r.npc, last: (r) => new Date(r.last).getTime()
+  });
   const seg = (k, items) => `<div class="segmented">${items.map(([v, l]) => `<button type="button" data-wh-set="${k}" data-v="${v}" class="${String(S[k]) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
   const clsOpts = [[0, '全部'], ...[1, 2, 3, 4, 5, 6, 13].map((c) => [c, clsName(c)])];
   const effOpts = [['', '全部天象'], ['none', '无天象'], ...Object.entries(EFFECTS).map(([k, v]) => [k, v[0]])];
   body.innerHTML = `<div class="pi-card ind-rank-filters">
       <div class="ind-rank-row"><div class="pi-inline"><span>时间</span>${seg('actDays', [[1, '24 小时'], [7, '7 天'], [30, '30 天']])}</div>
         <div class="pi-inline"><span>等级</span>${seg('actCls', clsOpts)}</div>
-        <div class="pi-inline"><span>天象</span><select class="pi-input" data-wh-sel="actEff">${effOpts.map(([v, l]) => `<option value="${v}"${S.actEff === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div></div>
-      <p class="pi-note" title="击杀多说明有人住或常有人来猎杀；被 NPC 击毁多通常是有人在刷站点">${rows.length} 个星系有击杀，显示前 200</p></div>
-    <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table wh-table"><thead><tr><th class="pi-hide-sm">#</th><th>星系</th><th>等级</th><th class="pi-hide-sm">天象</th><th class="pi-hide-sm">固定出口</th><th class="num">击杀</th><th class="num">价值</th><th class="num pi-hide-sm">被 NPC 击毁</th><th class="num">最近</th></tr></thead><tbody>
-    ${rows.slice(0, 200).map((r, i) => `<tr data-wh-sys="${r.s.id}" class="wh-row">
-      <td class="pi-rank pi-hide-sm">${i + 1}</td><td><b>${esc(r.s.name)}</b></td><td>${clsTag(r.s.cls)}</td>
+        <div class="pi-inline"><span>天象</span><select class="pi-input" data-wh-sel="actEff">${effOpts.map(([v, l]) => `<option value="${v}"${S.actEff === v ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+        ${findBox('act', '搜索星系、天象或固定出口')}</div>
+      <p class="pi-note" title="击杀多说明有人住或常有人来猎杀；被 NPC 击毁多通常是有人在刷站点">${S.find.act.trim() ? `${all.length} 个星系有击杀，匹配 ${rows.length} 个` : `${all.length} 个星系有击杀`}，显示前 200 · 点表头排序，# 为击杀排名</p></div>
+    <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table wh-table"><thead><tr><th class="pi-hide-sm">#</th>${sortTh('act', 'name', '星系', '', 'asc')}${sortTh('act', 'cls', '等级', '', 'asc')}${sortTh('act', 'eff', '天象', 'pi-hide-sm', 'asc')}<th class="pi-hide-sm">固定出口</th>${sortTh('act', 'kills', '击杀', 'num')}${sortTh('act', 'value', '价值', 'num')}${sortTh('act', 'npc', '被 NPC 击毁', 'num pi-hide-sm')}${sortTh('act', 'last', '最近', 'num')}</tr></thead><tbody>
+    ${rows.slice(0, 200).map((r) => `<tr data-wh-sys="${r.s.id}" class="wh-row">
+      <td class="pi-rank pi-hide-sm">${r.rank}</td><td><b>${esc(r.s.name)}</b></td><td>${clsTag(r.s.cls)}</td>
       <td class="pi-hide-sm">${r.s.effect ? EFFECTS[r.s.effect][0] : '<span class="text-muted">—</span>'}</td>
       <td class="pi-hide-sm">${r.s.statics.map((c) => `${esc(c)}<small class="hc-sub">${clsName(D.holes.get(c)?.dest)}</small>`).join(' ')}</td>
       <td class="num">${formatNumber(r.kills)}</td><td class="num">${formatISK(r.value)}</td><td class="num pi-hide-sm">${formatNumber(r.npc)}</td>
@@ -449,24 +490,33 @@ function sysSitesHtml(s) {
 function sitesHtml() {
   const { esc, formatISK } = ctx;
   if (!S.siteCls) S.siteCls = D.sysById.get(S.sys)?.cls && SITE_CLS.includes(D.sysById.get(S.sys).cls) ? D.sysById.get(S.sys).cls : 1;
-  const list = sitesOfClass(S.siteCls).filter(([, x]) => S.siteType === 'all' || x.type === S.siteType);
-  const rows = SITE_TYPES.map(([t, label]) => {
-    const part = list.filter(([, x]) => x.type === t).sort((a, b) => (b[1].loot || 0) - (a[1].loot || 0));
-    return part.map(([n, x]) => {
-      const npcs = x.waves.reduce((sum, [, r]) => sum + r.length, 0);
-      return `<tr data-wh-site="${esc(n)}" class="wh-site-row">
-        <td><span class="wh-site-type wh-st-${t}">${label}</span></td>
+  // 有搜索词时在全部等级里找（名称、英文原名、NPC 名都算）
+  const q = S.find.sites.trim();
+  const npcNames = (x) => x.waves.flatMap(([, rows]) => rows.flatMap((r) => [r[1], npcOf(r[0])?.zh]));
+  const list = (q ? Object.entries(D.sites.sites) : sitesOfClass(S.siteCls))
+    .filter(([n, x]) => (S.siteType === 'all' || x.type === S.siteType) && (!q || matchFind('sites', n, x.zh, ...npcNames(x))));
+  const typeIdx = (t) => SITE_TYPES.findIndex(([k]) => k === t);
+  const base = list.slice().sort((a, b) => typeIdx(a[1].type) - typeIdx(b[1].type) || (b[1].loot || 0) - (a[1].loot || 0));
+  const rows = sortRows('sites', base, {
+    type: ([, x]) => typeIdx(x.type), name: ([n]) => siteName(n), loot: ([, x]) => x.loot || null,
+    waves: ([, x]) => x.waves.length || null, cls: ([, x]) => Math.min(...x.classes.map((c) => (c >= 1 && c <= 6 ? c : 100 + c)))
+  }).map(([n, x]) => {
+    const npcs = x.waves.reduce((sum, [, r]) => sum + r.length, 0);
+    const label = SITE_TYPES[typeIdx(x.type)]?.[1] || '';
+    return `<tr data-wh-site="${esc(n)}" class="wh-site-row">
+        <td><span class="wh-site-type wh-st-${x.type}">${label}</span></td>
         <td><b>${esc(siteName(n))}</b>${x.zh && !EN ? `<small class="hc-sub">${esc(n)}</small>` : ''}</td>
+        ${q ? `<td>${x.classes.map(clsTag).join(' ')}</td>` : ''}
         <td class="num">${x.loot ? formatISK(x.loot) : '—'}</td>
         <td class="num pi-hide-sm">${x.waves.length ? `${x.waves.length} 波 · ${npcs} 种` : x.res.length ? `${x.res.length} 种产出` : '—'}</td></tr>`;
-    }).join('');
   }).join('');
   return `<div class="pi-card ind-rank-filters"><div class="ind-rank-row">
       <div class="wh-chips">${SITE_CLS.filter((c) => sitesOfClass(c).length).map((c) => `<button type="button" class="wh-chip${S.siteCls === c ? ' active' : ''}" data-wh-set="siteCls" data-v="${c}">${clsName(c)}</button>`).join('')}</div>
-      <div class="pi-inline"><span>类型</span><select class="pi-input" data-wh-sel="siteType"><option value="all">全部</option>${SITE_TYPES.map(([t, l]) => `<option value="${t}"${S.siteType === t ? ' selected' : ''}>${l}</option>`).join('')}</select></div></div>
-      <p class="pi-note">${clsName(S.siteCls)} 共 ${list.length} 种地点 · 战斗地点按蓝色战利品价值排序（不含打捞）</p></div>
-    <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table wh-table"><thead><tr><th>类型</th><th>地点</th><th class="num">蓝色战利品</th><th class="num pi-hide-sm">内容</th></tr></thead>
-      <tbody>${rows || '<tr><td colspan="4" class="text-muted">没有这类地点</td></tr>'}</tbody></table></div></div>
+      <div class="pi-inline"><span>类型</span><select class="pi-input" data-wh-sel="siteType"><option value="all">全部</option>${SITE_TYPES.map(([t, l]) => `<option value="${t}"${S.siteType === t ? ' selected' : ''}>${l}</option>`).join('')}</select></div>
+      ${findBox('sites', '搜索地点或 NPC 名称（中英文）')}</div>
+      <p class="pi-note">${q ? `全部等级中匹配 ${list.length} 种地点` : `${clsName(S.siteCls)} 共 ${list.length} 种地点`} · 默认按类型、蓝色战利品价值（不含打捞）排序，点表头可换</p></div>
+    <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table wh-table"><thead><tr>${sortTh('sites', 'type', '类型', '', 'asc')}${sortTh('sites', 'name', '地点', '', 'asc')}${q ? sortTh('sites', 'cls', '等级', '', 'asc') : ''}${sortTh('sites', 'loot', '蓝色战利品', 'num')}${sortTh('sites', 'waves', '内容', 'num pi-hide-sm')}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="5" class="text-muted">${q ? '没有匹配的地点' : '没有这类地点'}</td></tr>`}</tbody></table></div></div>
     ${siteSourceNote()}`;
 }
 function siteSourceNote(url) {
@@ -574,7 +624,12 @@ function sosItems(key, showSys) {
   if (e.error) return `<p class="text-muted">求救读取失败：${esc(e.error)}</p>`;
   if (!e.items.length) return `<p class="text-muted">${showSys ? '现在没有人在虫洞里求救' : '这个星系现在没有人求救'}</p>`;
   const mine = new Set(myChars().map((a) => a.id));
-  return `<ul class="wh-sos-list">${e.items.map((x) => {
+  // 全部求救列表可搜索（角色、星系、留言、联系方式）和排序；星系页只有几条，按时间
+  const items = showSys ? sortRows('sos', e.items.filter((x) => matchFind('sos', x.name, D.sysById.get(x.system_id)?.name, x.words, x.contact)), {
+    time: (x) => x.updated, reward: (x) => x.reward || null
+  }) : e.items;
+  if (!items.length) return '<p class="text-muted">没有匹配的求救</p>';
+  return `<ul class="wh-sos-list">${items.map((x) => {
     const sys = D.sysById.get(x.system_id);
     return `<li class="wh-sos-item">
       <img src="https://images.evetech.net/characters/${x.char_id}/portrait?size=64" alt="" width="40" height="40" loading="lazy">
@@ -611,7 +666,10 @@ function sosHtml(id) {
 function sosTabHtml() {
   const on = ctx.sosWatchOn?.();
   return `<div class="pi-card" id="whSos"><div class="wh-sos-title"><h4 class="wh-h">当前求救</h4>
-      <button type="button" class="btn btn-ghost btn-sm wh-sos-bell${on ? ' on' : ''}" data-wh-sos-alert title="有新求救时用网页弹窗、提示音、企业微信、邮件或 EVE 邮件提醒你">${on ? '新求救提醒：已开启' : '开启新求救提醒'}</button></div>${sosListHtml('all', true)}</div>
+      <button type="button" class="btn btn-ghost btn-sm wh-sos-bell${on ? ' on' : ''}" data-wh-sos-alert title="有新求救时用网页弹窗、提示音、企业微信、邮件或 EVE 邮件提醒你">${on ? '新求救提醒：已开启' : '开启新求救提醒'}</button></div>
+      <div class="ind-rank-row wh-sos-tools">${findBox('sos', '搜索角色、星系、留言或联系方式')}
+        <div class="segmented">${[['time', '最新'], ['reward', '悬赏最高']].map(([k, l]) => `<button type="button" data-wh-sos-sort="${k}" class="${S.sort.sos[0] === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
+      ${sosListHtml('all', true)}</div>
     <div class="pi-card"><div class="wh-sos-title"><h4 class="wh-h">发布求救</h4></div>${sosFormHtml()}</div>`;
 }
 async function sosPost(op, body) {
@@ -656,7 +714,10 @@ async function deleteSos(id) {
 function holesHtml() {
   const { esc } = ctx;
   const q = S.holeQ.trim().toUpperCase();
-  const list = [...D.holes.values()].filter((h) => (!q || h.code.includes(q)) && (S.holeDest === 'all' || String(h.dest) === S.holeDest));
+  const list = sortRows('holes', [...D.holes.values()].filter((h) => (!q || h.code.includes(q)) && (S.holeDest === 'all' || String(h.dest) === S.holeDest)), {
+    code: (h) => h.code, dest: (h) => (h.code === 'K162' ? null : h.dest >= 1 && h.dest <= 6 ? h.dest : 100 + h.dest),
+    life: (h) => h.life || null, mass: (h) => h.mass || null, jump: (h) => h.jump || null, regen: (h) => h.regen || null
+  });
   const dests = [...new Set([...D.holes.values()].map((h) => h.dest))].filter((d) => d > 0).sort((a, b) => a - b);
   return `<div class="pi-card ind-rank-filters"><div class="ind-rank-row">
       <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -767,19 +828,26 @@ async function renderThera(body) {
   const map = await loadMap();
   const origin = S.origin && map.byName.get(S.origin.trim());
   const dist = origin ? bfs(map, origin.id) : null;
-  const rows = S.scout.map((x) => {
+  const SIZE_ORDER = ['small', 'medium', 'large', 'xlarge', 'capital'];
+  const all = S.scout.map((x) => {
     const inK = x.in_system_id < 31000000;
     const ksys = map.sys.get(x.in_system_id);
     return { x, inK, ksys, jumps: dist && inK ? dist.get(x.in_system_id) ?? null : null };
-  }).sort((a, b) => (a.jumps ?? 1e9) - (b.jumps ?? 1e9) || a.x.out_system_name.localeCompare(b.x.out_system_name) || b.x.remaining_hours - a.x.remaining_hours);
+  }).sort((a, b) => a.x.out_system_name.localeCompare(b.x.out_system_name) || b.x.remaining_hours - a.x.remaining_hours);
+  const rows = sortRows('thera', all.filter(({ x, inK, ksys }) => matchFind('thera', x.out_system_name, x.in_system_name, ksys?.name, inK ? map.regions.get(ksys?.region) : null, x.in_region_name, x.out_signature, x.in_signature, x.wh_type)), {
+    hub: (r) => r.x.out_system_name, sys: (r) => (r.inK ? r.ksys?.name : null) || r.x.in_system_name || '', region: (r) => (r.inK ? map.regions.get(r.ksys?.region) : null) || r.x.in_region_name || '',
+    type: (r) => r.x.wh_type || null, size: (r) => (SIZE_ORDER.includes(r.x.max_ship_size) ? SIZE_ORDER.indexOf(r.x.max_ship_size) : null),
+    left: (r) => r.x.remaining_hours ?? null, jumps: (r) => r.jumps
+  });
   const secTxt = (sec) => { const v = sec > 0 && sec < 0.05 ? 0.1 : Math.max(0, Math.round(sec * 10) / 10); return `<b class="${v >= 0.45 ? 'up' : v > 0 ? 'warn' : 'down'}">${v.toFixed(1)}</b>`; };
   const hub = (x) => x.out_system_id === 31000005 ? '席拉' : x.out_system_id === 30002086 ? '图尔努尔' : esc(x.out_system_name);
   body.innerHTML = `<div class="pi-card ind-rank-filters"><div class="ind-rank-row">
       <div class="pi-inline"><span>从</span><input type="search" class="pi-input wh-origin" data-wh-origin list="whOriginList" placeholder="输入所在星系（中文名，回车）" value="${esc(S.origin)}" spellcheck="false" aria-label="出发星系"></div>
       <datalist id="whOriginList">${S.origin ? '' : ''}</datalist>
+      ${findBox('thera', '搜索星系、星域、信号或虫洞类型')}
       <span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-wh-scout-reload>刷新</button></div>
-      <p class="pi-note">${rows.length} 个连接${origin ? ` · 按离 ${esc(origin.name)} 的跳数排序` : S.origin ? ' · <span class="warn">没找到这个星系</span>' : ' · 填所在星系可按跳数排序'} · EVE-Scout 数据 · 进出前确认信号还在</p></div>
-    <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table wh-table"><thead><tr><th>枢纽</th><th>枢纽内信号</th><th>对面星系</th><th class="pi-hide-sm">星域</th><th>对面信号</th><th class="pi-hide-sm">类型</th><th>最大船型</th><th class="num">剩余</th>${origin ? '<th class="num">跳数</th>' : ''}</tr></thead><tbody>
+      <p class="pi-note">${S.find.thera.trim() ? `${all.length} 个连接，匹配 ${rows.length} 个` : `${rows.length} 个连接`}${origin ? ` · 默认按离 ${esc(origin.name)} 的跳数排序` : S.origin ? ' · <span class="warn">没找到这个星系</span>' : ' · 填所在星系可按跳数排序'} · 点表头排序 · EVE-Scout 数据 · 进出前确认信号还在</p></div>
+    <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table wh-table"><thead><tr>${sortTh('thera', 'hub', '枢纽', '', 'asc')}<th>枢纽内信号</th>${sortTh('thera', 'sys', '对面星系', '', 'asc')}${sortTh('thera', 'region', '星域', 'pi-hide-sm', 'asc')}<th>对面信号</th>${sortTh('thera', 'type', '类型', 'pi-hide-sm', 'asc')}${sortTh('thera', 'size', '最大船型')}${sortTh('thera', 'left', '剩余', 'num')}${origin ? sortTh('thera', 'jumps', '跳数', 'num', 'asc') : ''}</tr></thead><tbody>
     ${rows.map(({ x, inK, ksys, jumps }) => `<tr>
       <td><b>${hub(x)}</b></td><td><code>${esc(x.out_signature || '')}</code></td>
       <td>${inK ? `${esc(ksys?.name || x.in_system_name)} ${ksys ? secTxt(ksys.sec) : ''}` : `${sysLink(x.in_system_id, x.in_system_name)} ${clsTag(D.sysById.get(x.in_system_id)?.cls ?? 0)}`}</td>
@@ -787,7 +855,7 @@ async function renderThera(body) {
       <td><code>${esc(x.in_signature || '')}</code></td><td class="pi-hide-sm">${esc(x.wh_type || '')}</td>
       <td>${SCOUT_SIZE[x.max_ship_size] || esc(x.max_ship_size || '')}</td>
       <td class="num">${x.remaining_hours != null ? x.remaining_hours + ' 小时' : '—'}</td>
-      ${origin ? `<td class="num">${jumps != null ? jumps : '—'}</td>` : ''}</tr>`).join('') || '<tr><td colspan="9" class="text-muted">当前没有已扫描的连接</td></tr>'}
+      ${origin ? `<td class="num">${jumps != null ? jumps : '—'}</td>` : ''}</tr>`).join('') || `<tr><td colspan="9" class="text-muted">${all.length ? '没有匹配的连接' : '当前没有已扫描的连接'}</td></tr>`}
     </tbody></table></div></div>`;
   const dl = $('whOriginList');
   if (dl && !dl.children.length) dl.innerHTML = [...map.byName.keys()].slice(0, 6000).map((n) => `<option value="${esc(n)}">`).join('');
@@ -817,6 +885,19 @@ function onClick(e) {
   if (sys) { openSystem(Number(sys.dataset.whSys)); return; }
   const pi = e.target.closest('[data-wh-pi]');
   if (pi) { ctx.planPi(Number(pi.dataset.whPi)); return; }
+  const sort = e.target.closest('[data-wh-sort]');
+  if (sort) {
+    const [list, key] = sort.dataset.whSort.split(':');
+    const [k, dir] = S.sort[list];
+    S.sort[list] = [key, k === key ? (dir === 'asc' ? 'desc' : 'asc') : sort.dataset.first];
+    render(); return;
+  }
+  const sosSort = e.target.closest('[data-wh-sos-sort]');
+  if (sosSort) {
+    S.sort.sos = [sosSort.dataset.whSosSort, 'desc'];
+    sosSort.parentElement.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === sosSort));
+    paintSos(); return;
+  }
   const set = e.target.closest('[data-wh-set]');
   if (set) { const k = set.dataset.whSet; S[k] = typeof S[k] === 'number' ? Number(set.dataset.v) : set.dataset.v; render(); return; }
   if (e.target.closest('[data-wh-scout-reload]')) { S.scoutAt = 0; render(); return; }
@@ -864,6 +945,18 @@ function onInput(e) {
     S.q = e.target.value;
     clearTimeout(inputTimer);
     inputTimer = setTimeout(() => { const pos = e.target.selectionStart; $('whBody').innerHTML = systemHtml(); if (S.sys && IS_TQ) loadDetail(S.sys); const inp = document.querySelector('[data-wh-search]'); inp.focus(); inp.setSelectionRange(pos, pos); }, 200);
+  } else if (e.target.matches('[data-wh-find]')) {
+    const list = e.target.dataset.whFind;
+    S.find[list] = e.target.value;
+    clearTimeout(inputTimer);
+    // 求救页只重画列表，不动下面正在填的求救表单
+    if (list === 'sos') { paintSos(); return; }
+    inputTimer = setTimeout(async () => {
+      const pos = e.target.selectionStart;
+      await render();
+      const inp = document.querySelector(`[data-wh-find="${list}"]`);
+      if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
+    }, 200);
   } else if (e.target.matches('[data-wh-holeq]')) {
     S.holeQ = e.target.value;
     clearTimeout(inputTimer);

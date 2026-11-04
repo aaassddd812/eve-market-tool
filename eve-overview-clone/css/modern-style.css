@@ -4347,6 +4347,9 @@ button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outl
 .ap-controls { display: flex; gap: 8px; align-items: center; }
 .ap-controls .select-wrap { flex: 1; min-width: 0; }
 .ap-controls .region-select { width: 100%; }
+.ap-ratio { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 0.85rem; color: var(--text-secondary); }
+.ap-ratio input { width: 72px; text-align: right; }
+.ap-ratio small { flex: 1 1 140px; color: var(--text-muted); font-size: 0.75rem; line-height: 1.4; }
 .ap-empty { padding: 72px 16px; border: 1px dashed var(--border-secondary); border-radius: var(--radius-lg); color: var(--text-muted); text-align: center; font-size: 0.875rem; }
 .ap-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
 .ap-stats > div { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-secondary); border: 1px solid var(--border-primary); min-width: 0; }
@@ -7804,6 +7807,7 @@ html.is-app .desktop-dl-btn, html.is-app [data-mnav-act="desktopDlBtn"] { displa
 /* 虫洞求救 */
 .wh-sos-title { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .wh-sos-title .wh-h { margin: 0; }
+.wh-sos-tools { margin-bottom: 10px; }
 .wh-sos-list { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .wh-sos-item { display: flex; gap: 12px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
 .wh-sos-item img { flex: none; width: 40px; height: 40px; border-radius: 50%; }

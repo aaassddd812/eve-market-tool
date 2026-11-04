@@ -489,7 +489,7 @@ async function openSov() {
 // 虫洞：首次进入时加载
 let whLoading = null;
 function loadWormholeModule() {
-  if (!whLoading) whLoading = import('./wormhole.js?v=v5').then((m) => {
+  if (!whLoading) whLoading = import('./wormhole.js?v=v6').then((m) => {
     m.initWormhole({
       esc, formatISK, formatNumber, showToast, store, loadKillboard, resolveTypeNames, accountToken,
       accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
@@ -772,7 +772,7 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v18').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v19').then((m) => {
     m.initAppraisal({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
       getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
