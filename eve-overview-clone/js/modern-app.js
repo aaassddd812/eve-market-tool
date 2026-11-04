@@ -425,7 +425,10 @@ function applyMenuLayout() {
   const st = menuState();
   if (MENU.nav) {
     const btns = new Map([...MENU.nav.querySelectorAll('.nav-btn')].map((b) => [navKey(b), b]));
+    MENU.nav.appendChild(MENU.navWrap);
     for (const k of st.nav) MENU.nav.insertBefore(btns.get(k), MENU.navWrap);
+    // 个人中心排在最后时，「更多工具」放在它前面（默认布局就是这样）
+    if (st.nav[st.nav.length - 1] === 'profile') MENU.nav.insertBefore(MENU.navWrap, btns.get('profile'));
     MENU.groups.forEach((g) => { g.items.innerHTML = ''; });
     for (const [k, b] of btns) {
       if (st.nav.includes(k)) continue;

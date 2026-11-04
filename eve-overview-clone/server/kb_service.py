@@ -99,6 +99,7 @@ import sqlite3
 import ssl
 import tarfile
 import threading
+import unicodedata
 import time
 import urllib.error
 import urllib.parse
@@ -5882,12 +5883,69 @@ CREATE TABLE IF NOT EXISTS plaza(id INTEGER PRIMARY KEY AUTOINCREMENT, server TE
 CREATE UNIQUE INDEX IF NOT EXISTS plaza_key ON plaza(server, kind, key);
 CREATE INDEX IF NOT EXISTS plaza_list ON plaza(server, expires);
 """
+# 违禁词：标题、内容、联系方式里出现就拒绝发帖并说出是哪个词。内置一份常见的（政治、色情、赌博、毒品、诈骗与现金交易、辱骂），
+# 站长可在数据库同目录的 plaza-banned.txt 里追加（每行一个，# 开头是注释；文件改了下次发帖时自动重新读取，不用重启）。
+# 比对前统一成小写半角并去掉空白、标点、零宽字符，「赌 博」「赌.博」「ＶＸ」这类写法也能认出来
+PLAZA_BANNED = (
+    # 政治
+    "法轮功", "法輪功", "法轮大法", "六四事件", "天安门事件", "台独", "藏独", "疆独", "港独", "反共", "共匪",
+    # 色情
+    "色情", "约炮", "裸聊", "援交", "嫖娼", "卖淫", "黄片", "成人视频", "porn",
+    # 赌博
+    "赌博", "博彩", "菠菜", "百家乐", "时时彩", "六合彩", "网赌", "赌场", "棋牌充值",
+    # 毒品、枪支
+    "冰毒", "海洛因", "大麻", "k粉", "摇头丸", "毒品", "出售枪支", "仿真枪",
+    # 诈骗、现金交易（游戏规则禁止现实货币交易 ISK / 代练）
+    "刷单", "洗钱", "套现", "代开发票", "办证", "人民币收isk", "人民币出isk", "rmb收isk", "rmb出isk", "人民币交易", "rmb交易", "现金交易", "支付宝转账",
+    "代练", "代刷", "低价plex", "plex代充", "rmt",
+    # 辱骂
+    "傻逼", "傻b", "煞笔", "操你妈", "草泥马", "你妈死了", "nmsl", "狗日的", "去死吧", "fuck", "nigger", "faggot",
+)
+
+
+class BannedWords:
+    def __init__(self, path):
+        self.path = path
+        self.mtime = None
+        self.extra = ()
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def norm(s):
+        return re.sub(r"[\W_]+", "", unicodedata.normalize("NFKC", s).lower())
+
+    def words(self):
+        try:
+            mtime = os.path.getmtime(self.path)
+        except OSError:
+            mtime = None
+        with self.lock:
+            if mtime != self.mtime:
+                self.mtime, self.extra = mtime, ()
+                if mtime is not None:
+                    try:
+                        with open(self.path, encoding="utf-8") as f:
+                            self.extra = tuple(w for w in (self.norm(x) for x in f if not x.lstrip().startswith("#")) if w)
+                    except (OSError, UnicodeDecodeError) as e:
+                        log.warning("读取 %s 失败：%s", self.path, e)
+            return PLAZA_BANNED_N + self.extra
+
+    def check(self, *texts):
+        t = self.norm(" ".join(x for x in texts if x))
+        for w in self.words():
+            if w in t:
+                raise ValueError(f"内容含有违禁词「{w}」，请修改后再发")
+
+
+PLAZA_BANNED_N = tuple(BannedWords.norm(w) for w in PLAZA_BANNED)
+
 PLAZA_COLS = ("id", "kind", "char_id", "name", "corp_id", "alliance_id", "title", "text", "contact", "tags", "data", "created", "updated", "expires")
 
 
 class Plaza:
     def __init__(self, store, wallet):
         self.store, self.wallet, self.esi = store, wallet, wallet.esi
+        self.banned = BannedWords(os.path.join(os.path.dirname(os.path.abspath(store.path)), "plaza-banned.txt"))
         c = store.conn()
         with store.write_lock:
             c.executescript(PLAZA_SCHEMA)
@@ -6020,6 +6078,7 @@ class Plaza:
         text = self.body_text(body.get("text"))
         contact = WhSos.text(body.get("contact"), PLAZA_CONTACT_MAX, "联系方式")
         tags = self.tags_of(kind, body.get("tags"))
+        self.banned.check(title, text, contact)
         now = int(time.time())
         expires = now + PLAZA_TTL[kind]
         pid = body.get("id")
