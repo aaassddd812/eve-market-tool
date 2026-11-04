@@ -515,7 +515,7 @@ async function openWormhole() {
 // 广场（招新 / 组队 / 集市 / 其他）：首次进入时加载
 let plazaLoading = null;
 function loadPlazaModule() {
-  if (!plazaLoading) plazaLoading = import('./plaza.js?v=v1').then((m) => {
+  if (!plazaLoading) plazaLoading = import('./plaza.js?v=v2').then((m) => {
     m.initPlaza({
       esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, accountToken, valuation, openTicket, game: gameActions,
       accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
@@ -683,7 +683,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v15').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v16').then((m) => {
     m.initLp({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,

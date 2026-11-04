@@ -5,7 +5,8 @@
 //   集市：挂自己发起的公开合同（服务器从 ESI 读合同与物品清单），合同到期一起下架；
 //   其他：自由发帖。
 // GET /api/kb/plaza?server= 读全部未过期帖子；POST /api/kb/plaza/{save,delete,contracts} 带角色令牌；站长 IP 可删帖（admin/*）。
-// 地址栏：#plaza/<类型> · #plaza/<类型>/new · #plaza/market/new/<合同ID>/<角色ID>（合同页「挂到广场」）· #plaza/recruit/corp/<军团ID> · #plaza/p/<帖子ID>
+// 列表：「全部」按分类分区显示（每类最新几条 +「查看全部」），也可以切到单个分类或「我的」；发帖是单独一页，先选分类再填表。
+// 地址栏：#plaza · #plaza/<类型> · #plaza/new[/<类型>] · #plaza/new/market/<合同ID>/<角色ID>（合同页「挂到广场」）· #plaza/recruit/corp/<军团ID> · #plaza/p/<帖子ID>
 import { SERVER } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
 
@@ -14,21 +15,19 @@ const $ = (id) => document.getElementById(id);
 const EN = window.I18N?.lang === 'en';
 const tr = (t) => (EN && window.I18N.t ? window.I18N.t(t) : t);   // confirm 里的文字不走自动翻译
 const STORE_KEY = 'eve-plaza-v1';
-const KINDS = [['recruit', '招新'], ['fleet', '组队'], ['market', '集市'], ['other', '其他'], ['mine', '我的']];
+const KINDS = [['all', '全部'], ['recruit', '招新'], ['fleet', '组队'], ['market', '集市'], ['other', '其他'], ['mine', '我的']];
 const KIND_NAME = Object.fromEntries(KINDS);
-const KIND_TIPS = {
-  recruit: '发军团招新广告：角色必须在这个军团里，同一军团只保留一条，发布人或 CEO 可以修改',
-  fleet: '舰队建好后挂出来：角色必须是舰队老板（需要「舰队」权限），附上人数、常见舰船和所在星系，12 小时后自动下架',
-  market: '把自己发起的公开合同挂出来：服务器从 ESI 读合同和物品清单，合同到期时一起下架',
-  other: '求助、交流、求购、服务等自由发帖，7 天后自动下架'
-};
+const POST_KINDS = ['recruit', 'fleet', 'market', 'other'];
+const SECTION_MAX = 6;   // 「全部」里每类显示几条
+// 分类图标：游戏客户端窗口图标（res:/ui/texture/windowicons/recruitment · fleet · market · chatchannels），用作遮罩随主题着色。图标版权归 CCP。
+const kindIcon = (k) => `<i class="pz-kicon pz-k-${k}" aria-hidden="true"></i>`;
 const CT_TYPE = { item_exchange: '物品交换', auction: '拍卖', courier: '快递' };
 const FLEET_SCOPE = 'esi-fleets.read_fleet.v1';
 const IMG = (path, size = 64) => `https://images.evetech.net/${path}?size=${size}`;
 const ICON = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
 
 const S = {
-  kind: 'recruit', q: '', tag: '', corp: 0, pid: 0,
+  kind: 'all', view: 'list', q: '', tag: '', corp: 0, pid: 0,
   items: null, tags: {}, at: 0, loading: null, error: '',
   form: null,              // { kind, char, id?, contract? }：正在填写的发帖表单
   contracts: new Map(),    // 角色 ID -> { loading, items, error }
@@ -99,7 +98,7 @@ export async function showPlaza(hash) {
     main.innerHTML = `<section class="pi-page pz-page">
       <div class="pi-head"><h2>广场</h2>
         <div class="segmented pz-tabs" role="tablist">${KINDS.map(([k, l]) => `<button type="button" data-pz-kind="${k}">${l}</button>`).join('')}</div>
-        <span class="toolbar-spacer"></span><button type="button" class="btn btn-primary btn-sm" data-pz-new>发帖</button></div>
+        <span class="toolbar-spacer"></span><button type="button" class="btn btn-primary btn-sm pz-new-btn" data-pz-new>${'<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>'}<span>发帖</span></button></div>
       <div id="pzBody">${skPage({ title: false, cards: 2, rows: 6 })}</div></section>`;
     main.addEventListener('click', onClick);
     main.addEventListener('input', onInput);
@@ -114,25 +113,52 @@ export async function showPlaza(hash) {
 function route(hash) {
   const m = /^#plaza\/?(\w+)?\/?([^/?]+)?\/?([^/?]+)?\/?([^/?]+)?/.exec(hash);
   if (!m) return;
-  S.corp = 0; S.pid = 0;
+  S.corp = 0; S.pid = 0; S.view = 'list';
   if (m[1] === 'p' && m[2]) { S.pid = Number(m[2]); return; }
-  if (KIND_NAME[m[1]]) S.kind = m[1];
-  if (m[2] === 'new' && S.kind !== 'mine') openForm(S.kind, { contract: Number(m[3]) || 0, char: Number(m[4]) || 0 });
+  // 发帖页：#plaza/new/<类型>/<合同ID>/<角色ID>；旧地址 #plaza/<类型>/new/<合同ID>/<角色ID> 同样认
+  const newPage = m[1] === 'new' ? [m[2], m[3], m[4]] : m[2] === 'new' ? [m[1], m[3], m[4]] : null;
+  if (newPage) {
+    S.view = 'new';
+    if (POST_KINDS.includes(newPage[0])) openForm(newPage[0], { contract: Number(newPage[1]) || 0, char: Number(newPage[2]) || 0 });
+    else S.form = null;
+    return;
+  }
+  S.kind = KIND_NAME[m[1]] ? m[1] : m[1] ? S.kind : 'all';
   if (m[1] === 'recruit' && m[2] === 'corp') S.corp = Number(m[3]) || 0;
 }
 function setHash() {
-  const h = S.pid ? `#plaza/p/${S.pid}` : S.corp ? `#plaza/recruit/corp/${S.corp}` : `#plaza/${S.kind}`;
+  const h = S.view === 'new' ? `#plaza/new${S.form ? '/' + S.form.kind : ''}` : S.pid ? `#plaza/p/${S.pid}` : S.corp ? `#plaza/recruit/corp/${S.corp}` : S.kind === 'all' ? '#plaza' : `#plaza/${S.kind}`;
   if (location.hash !== h) history.replaceState(null, '', location.pathname + location.search + h);
 }
 
 function render() {
   const body = $('pzBody');
   if (!body) return;
-  const shown = S.pid ? S.items?.find((p) => p.id === S.pid)?.kind || S.kind : S.kind;
-  document.querySelectorAll('[data-pz-kind]').forEach((b) => b.classList.toggle('active', b.dataset.pzKind === shown));
+  const shown = S.view === 'new' ? '' : S.pid ? S.items?.find((p) => p.id === S.pid)?.kind || S.kind : S.kind;
+  document.querySelectorAll('.pz-tabs [data-pz-kind]').forEach((b) => b.classList.toggle('active', b.dataset.pzKind === shown));
+  document.querySelector('.pz-new-btn')?.classList.toggle('hidden', S.view === 'new');
   setHash();
-  body.innerHTML = `${S.form ? formHtml() : ''}<div id="pzList">${listHtml()}</div>`;
-  if (S.form?.kind === 'market') loadContracts(S.form.char);
+  if (S.view === 'new') {
+    body.innerHTML = newPageHtml();
+    if (S.form?.kind === 'market') loadContracts(S.form.char);
+    return;
+  }
+  body.innerHTML = `<div id="pzList">${listHtml()}</div>`;
+}
+
+// 发帖页：先选分类（修改已有帖子时分类固定），再填表
+function newPageHtml() {
+  const { esc } = ctx;
+  const f = S.form;
+  const editing = Boolean(f?.id);
+  const pick = POST_KINDS.map((k) => `<button type="button" class="pz-pick${f?.kind === k ? ' active' : ''}" data-pz-pick="${k}"${editing && f.kind !== k ? ' disabled' : ''}>
+      <span class="pz-pick-icon pz-ic-${k}">${kindIcon(k)}</span><b>${esc(KIND_NAME[k])}</b></button>`).join('');
+  return `<div class="pi-card pz-new-page">
+      <div class="pz-form-title"><button type="button" class="btn btn-ghost btn-sm" data-pz-back>← 返回广场</button><h3>${editing ? '修改帖子' : '发帖'}</h3></div>
+      <p class="pz-step"><span>1</span>${editing ? '分类' : '选择要发布到的分类'}</p>
+      <div class="pz-picks">${pick}</div>
+      ${f ? `<p class="pz-step"><span>2</span>填写内容</p>${formHtml()}` : ''}
+    </div>`;
 }
 function paintList() {
   const box = $('pzList');
@@ -153,6 +179,7 @@ function listHtml() {
   if (!S.items) return S.error ? `<div class="pi-card"><p class="text-muted">广场读取失败：${esc(S.error)}</p></div>` : `<div class="pi-card"><div class="pi-loading">读取广场…</div></div>`;
   const mine = myIds();
   let list;
+  if (S.kind === 'all' && !S.pid) return allHtml(mine);
   if (S.pid) list = S.items.filter((p) => p.id === S.pid);
   else if (S.kind === 'mine') list = S.items.filter((p) => mine.has(p.char_id) || (p.kind === 'recruit' && mine.has(p.data?.ceo_id)));
   else list = S.items.filter((p) => p.kind === S.kind && (!S.corp || p.corp_id === S.corp));
@@ -162,17 +189,35 @@ function listHtml() {
   const head = S.pid ? `<div class="pi-card pz-filters"><div class="pz-filter-row"><button type="button" class="btn btn-ghost btn-sm" data-pz-kind="${esc(list[0]?.kind || S.kind)}">← 返回${esc(KIND_NAME[list[0]?.kind || S.kind])}</button></div></div>`
     : `<div class="pi-card pz-filters">
       <div class="pz-filter-row">
-        <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-          <input type="search" data-pz-q placeholder="搜索标题、内容、军团、星系、物品" value="${esc(S.q)}" spellcheck="false" autocomplete="off" aria-label="搜索广场"></div>
+        ${searchBox()}
         ${tags.length ? `<div class="wh-chips">${['', ...tags].map((t) => `<button type="button" class="wh-chip${S.tag === t ? ' active' : ''}" data-pz-tag="${esc(t)}">${t ? esc(t) : '全部'}</button>`).join('')}</div>` : ''}
-        <span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-pz-reload>刷新</button>
-      </div>
-      <p class="pi-note">${S.kind === 'mine' ? '你绑定的角色发的帖子' : esc(KIND_TIPS[S.kind])}${S.corp ? ' · <button type="button" class="link-btn" data-pz-kind="recruit">看全部招新</button>' : ''}</p></div>`;
+        <span class="toolbar-spacer"></span>${S.corp ? '<button type="button" class="btn btn-ghost btn-sm" data-pz-kind="recruit">看全部招新</button>' : ''}<button type="button" class="btn btn-ghost btn-sm" data-pz-reload>刷新</button>
+      </div></div>`;
   if (!list.length) {
     const empty = total ? '没有匹配的帖子' : S.kind === 'mine' ? '你还没有发过帖子' : S.corp ? '这个军团现在没有招新广告' : `现在还没有${KIND_NAME[S.kind]}帖子`;
-    return head + `<div class="pi-card pz-empty"><p class="text-muted">${empty}</p>${!total && S.kind !== 'mine' && !S.form ? '<button type="button" class="btn btn-primary btn-sm" data-pz-new>发第一条</button>' : ''}</div>`;
+    return head + `<div class="pi-card pz-empty"><p class="text-muted">${empty}</p>${!total && S.kind !== 'mine' ? `<button type="button" class="btn btn-primary btn-sm" data-pz-new="${S.kind}">发第一条</button>` : ''}</div>`;
   }
   return head + `<div class="pz-grid">${list.map((p) => cardHtml(p, mine)).join('')}</div>`;
+}
+
+const searchBox = () => `<div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+  <input type="search" data-pz-q placeholder="搜索标题、内容、军团、星系、物品" value="${ctx.esc(S.q)}" spellcheck="false" autocomplete="off" aria-label="搜索广场"></div>`;
+
+// 「全部」：按分类分区，每类最新 SECTION_MAX 条
+function allHtml(mine) {
+  const { esc } = ctx;
+  const q = S.q.trim();
+  const sections = POST_KINDS.map((k) => {
+    const all = S.items.filter((p) => p.kind === k);
+    const list = all.filter(matchQ);
+    const body = list.length ? `<div class="pz-grid">${list.slice(0, SECTION_MAX).map((p) => cardHtml(p, mine)).join('')}</div>`
+      : `<div class="pz-sec-empty"><span class="text-muted">${q && all.length ? '没有匹配的帖子' : `现在还没有${KIND_NAME[k]}帖子`}</span>${q && all.length ? '' : `<button type="button" class="link-btn" data-pz-new="${k}">发一条</button>`}</div>`;
+    return `<section class="pz-sec">
+      <div class="pz-sec-head"><span class="pz-pick-icon pz-ic-${k}">${kindIcon(k)}</span><h3>${esc(KIND_NAME[k])}</h3><span class="pz-count">${q ? `${list.length} / ${all.length}` : all.length}</span>
+        <span class="toolbar-spacer"></span>${all.length ? `<button type="button" class="link-btn" data-pz-kind="${k}">查看全部${KIND_NAME[k]} →</button>` : ''}</div>
+      ${body}</section>`;
+  }).join('');
+  return `<div class="pi-card pz-filters"><div class="pz-filter-row">${searchBox()}<span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-pz-reload>刷新</button></div></div>${sections}`;
 }
 
 function ago(ts) {
@@ -253,11 +298,10 @@ function formHtml() {
   const { esc } = ctx;
   const f = S.form;
   const chars = ctx.accounts?.() || [];
-  const close = '<button type="button" class="btn btn-ghost btn-sm" data-pz-cancel>取消</button>';
-  const title = `<div class="pz-form-title"><h4 class="wh-h">${f.id ? '修改' : '发布'}${esc(KIND_NAME[f.kind])}</h4><span class="toolbar-spacer"></span>${close}</div>`;
+  const close = '<button type="button" class="btn btn-ghost btn-sm" data-pz-back>取消</button>';
   if (!chars.length) {
-    return `<div class="pi-card pz-form">${title}<p class="text-muted">发帖要先绑定角色（服务器用角色的 ESI 授权确认军团、舰队和合同）</p>
-      <button type="button" class="btn btn-primary btn-sm" data-pz-bind>绑定角色</button></div>`;
+    return `<div class="pz-form"><p class="text-muted">发帖要先绑定角色（服务器用角色的 ESI 授权确认军团、舰队和合同）</p>
+      <div><button type="button" class="btn btn-primary btn-sm" data-pz-bind>绑定角色</button></div></div>`;
   }
   const old = f.id ? S.items?.find((p) => p.id === f.id) : null;
   const val = (k) => esc(old?.[k] ?? '');
@@ -282,17 +326,13 @@ function formHtml() {
               <span class="pz-ct-opt-price">${ctx.formatISK((c.type === 'courier' ? c.reward : c.price) || 0)}</span>${c.posted ? '<small class="pz-tag">已挂出</small>' : ''}</label>`).join('')}</div>`;
     middle = `<div class="pz-field"><span>合同</span>${list}</div>`;
   }
-  const hint = f.kind === 'fleet' ? '<small class="text-muted">人数、舰船和星系在提交时从舰队读取；舰队有变化时点「更新」即可</small>'
-    : f.kind === 'recruit' ? '<small class="text-muted">军团按角色当前所在军团确定，成员数、税率等从 ESI 读取</small>'
-      : f.kind === 'other' ? `<small class="text-muted">每个角色同时最多 ${S.otherMax} 条</small>` : '';
-  return `<form class="pi-card pz-form" data-pz-form>${title}
-    <p class="pi-note">${esc(KIND_TIPS[f.kind])}</p>
+  return `<form class="pz-form" data-pz-form>
     <div class="pz-form-grid">${charSel}
       <label class="pz-field pz-wide"><span>标题</span><input class="pi-input" name="title" maxlength="60" value="${val('title')}" placeholder="${esc(ph[0])}"></label></div>
     ${middle}${tags}
     <label class="pz-field"><span>内容</span>${textarea}</label>
     <label class="pz-field"><span>联系方式</span><input class="pi-input" name="contact" maxlength="80" value="${val('contact')}" placeholder="游戏内频道 / 邮件 / QQ 群（可不填）"></label>
-    <div class="pz-form-foot">${hint}<span class="toolbar-spacer"></span>${close}<button type="submit" class="btn btn-primary btn-sm">${f.id ? '保存' : '发帖'}</button></div>
+    <div class="pz-form-foot"><span class="toolbar-spacer"></span>${close}<button type="submit" class="btn btn-primary btn-sm">${f.id ? '保存' : '发帖'}</button></div>
   </form>`;
 }
 
@@ -344,7 +384,7 @@ async function submit(form) {
     S.form = null;
     S.contracts.delete(char);
     S.items = [p, ...(S.items || []).filter((x) => x.id !== p.id)];
-    S.kind = p.kind; S.pid = 0; S.corp = 0; S.q = ''; S.tag = '';
+    S.kind = p.kind; S.view = 'list'; S.pid = 0; S.corp = 0; S.q = ''; S.tag = '';
     ctx.showToast(f.id || p.created !== p.updated ? '已更新' : '已发布', 'success');
     render();
     resolveItemNames();
@@ -381,20 +421,28 @@ async function adminRemove(p) {
 }
 
 // ---------- 事件 ----------
+const toTop = () => $('plazaMain')?.closest('.kb-scroll')?.scrollTo({ top: 0 });
 function onClick(e) {
   const t = e.target;
   const kind = t.closest('[data-pz-kind]');
-  if (kind) { S.kind = kind.dataset.pzKind; S.pid = 0; S.corp = 0; S.tag = ''; if (S.form && S.kind !== 'mine' && S.form.kind !== S.kind && !S.form.id) openForm(S.kind); save(); render(); return; }
-  if (t.closest('[data-pz-new]')) {
-    if (S.form && S.form.kind === S.kind && !S.form.id) { S.form = null; render(); return; }
-    openForm(S.kind === 'mine' ? 'recruit' : S.kind);
-    if (S.kind === 'mine') S.kind = 'recruit';
-    S.pid = 0;
-    render();
-    $('pzBody')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  if (kind) { S.kind = kind.dataset.pzKind; S.view = 'list'; S.pid = 0; S.corp = 0; S.tag = ''; save(); render(); toTop(); return; }
+  const nw = t.closest('[data-pz-new]');
+  if (nw) {
+    // 发帖页：从某个分类点进来时直接选好这个分类
+    const k = nw.dataset.pzNew || (POST_KINDS.includes(S.kind) ? S.kind : '');
+    S.view = 'new'; S.pid = 0;
+    if (k) openForm(k); else S.form = null;
+    render(); toTop();
     return;
   }
-  if (t.closest('[data-pz-cancel]')) { S.form = null; render(); return; }
+  const pick = t.closest('[data-pz-pick]');
+  if (pick) {
+    if (S.form?.kind === pick.dataset.pzPick) return;
+    openForm(pick.dataset.pzPick, { char: S.form?.char });
+    render();
+    return;
+  }
+  if (t.closest('[data-pz-back]')) { S.view = 'list'; S.form = null; render(); toTop(); return; }
   if (t.closest('[data-pz-bind]')) { ctx.openEsiBind?.(); return; }
   if (t.closest('[data-pz-reload]')) { load(true).then(render); return; }
   const tag = t.closest('[data-pz-tag]');
@@ -414,10 +462,9 @@ function onClick(e) {
   if (edit) {
     const mine = myIds();
     const char = mine.has(edit.char_id) ? edit.char_id : edit.data?.ceo_id;
-    S.kind = edit.kind; S.pid = 0;
+    S.view = 'new'; S.pid = 0;
     openForm(edit.kind, { char, id: edit.id, contract: edit.data?.contract_id || 0 });   // id：表单里带出原来的文字
-    render();
-    $('pzBody')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    render(); toTop();
     return;
   }
   const del = find('data-pz-del');

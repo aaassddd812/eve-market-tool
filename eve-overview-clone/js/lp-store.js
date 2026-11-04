@@ -1,6 +1,6 @@
 // ===== LP 商店 =====
 // LP 商店：按军团浏览全部兑换项，计算每 LP 价值（ISK/LP）= (产物价值 − 所需物品成本 − ISK 费用) ÷ LP。
-//          蓝图拷贝两种算法（估价设置「蓝图兑换品」）：制造后卖产物 =「(产物价 − 材料价) × 流程数」（材料效率 0）；
+//          蓝图拷贝两种算法（估价设置「蓝图兑换品」）：制造后卖产物 =「产物价 × 流程数（扣税）− 材料价 × 流程数」（材料效率 0，材料计入花费）；
 //          直接卖蓝图 = 公开合同里同种拷贝的最低每流程价 × 流程数（击杀记录服务 /api/kb/bpprices，仅宁静服；合同出售不扣销售税）。
 // 全服排行：所有 LP 商店兑换项（按 offer 去重）的 ISK/LP 排行，前列可用吉他行情精算。
 // 我的 LP：ESI 角色忠诚点（esi-characters.read_loyalty.v1），按各军团最佳兑换估算价值。
@@ -45,7 +45,7 @@ export function initLp(context) {
 // 表头排序（与市场中心订单簿一致）：点击表头按该列排序，再点一次反向；首次点击用该列更有用的方向
 const SORT_DIR = { name: 'asc', lp: 'asc', iskCost: 'asc', req: 'asc', revenue: 'desc', profit: 'desc', iskLp: 'desc' };
 const SORT_KEY = {
-  lp: (r) => r.o.lp, iskCost: (r) => r.o.isk, req: (r) => r.v.reqCost,
+  lp: (r) => r.o.lp, iskCost: (r) => r.o.isk, req: (r) => r.v.reqCost + r.v.matCost,
   revenue: (r) => (r.v.missing ? null : r.v.revenue), profit: (r) => (r.v.missing ? null : r.v.profit), iskLp: (r) => (r.v.missing ? null : r.v.iskLp)
 };
 const sortTh = (key, label, cls = '') => {
@@ -113,20 +113,22 @@ function valueOf(o, mode = F.bp) {
     else if (side !== 'avg' && p.src === 'avg') approx = true;
     return p.v || 0;
   };
-  let unit, keep = 1 - F.tax / 100;
+  // 税费只算在卖出的产物上；制造材料是买入成本，计入花费
+  let unit, keep = 1 - F.tax / 100, matCost = 0;
   if (o.bp && mode === 'bpc') {
     unit = bpcRun(o);
     if (unit == null) { missing = true; unit = 0; }
     keep = 1;   // 合同出售不扣销售税
   } else if (o.bp) {
     const [pid, pq, mats] = o.bp;
-    unit = use(pid, F.price) * pq - mats.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0);
+    unit = use(pid, F.price) * pq;
+    matCost = mats.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0) * o.qty;
   } else unit = use(o.type, F.price);
   const revenue = unit * o.qty * keep;
   const reqCost = o.req.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0);
-  const cost = o.isk + reqCost;
+  const cost = o.isk + reqCost + matCost;
   const profit = revenue - cost;
-  return { revenue, reqCost, cost, profit, iskLp: o.lp ? profit / o.lp : null, missing, approx, mode: o.bp ? mode : null };
+  return { revenue, reqCost, matCost, cost, profit, iskLp: o.lp ? profit / o.lp : null, missing, approx, mode: o.bp ? mode : null };
 }
 
 function offerTypes(o) {
@@ -280,11 +282,11 @@ function offerRow(r, i, { showCorp = false } = {}) {
   return `
     <tr data-lp-open="${o.id}" class="${open ? 'active' : ''}" title="点击展开明细">
       <td class="pi-rank lp-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${o.bp ? BPC_ICON(o.type) : ICON(o.type)}"${o.bp ? '' : ` data-item-pop="${o.type}"`} alt="" width="28" height="28" loading="lazy"><span>${esc(tName(o.type))}${o.qty > 1 ? `<small>×${ctx.formatNumber(o.qty)}</small>` : ''}${o.bp ? `<small class="ind-tag-bpc" title="${v.mode === 'bpc' ? '蓝图拷贝：按公开合同最低每流程价 × 流程数估算' : '蓝图拷贝：按（产物价 − 材料价）× 流程数估算，材料效率 0'}">蓝图</small>` : ''}</span></div>
+      <td><div class="pi-prod"><img src="${o.bp ? BPC_ICON(o.type) : ICON(o.type)}"${o.bp ? '' : ` data-item-pop="${o.type}"`} alt="" width="28" height="28" loading="lazy"><span>${esc(tName(o.type))}${o.qty > 1 ? `<small>×${ctx.formatNumber(o.qty)}</small>` : ''}${o.bp ? `<small class="ind-tag-bpc" title="${v.mode === 'bpc' ? '蓝图拷贝：按公开合同最低每流程价 × 流程数估算' : '蓝图拷贝：按产物价（扣税）− 材料价，乘流程数估算，材料效率 0'}">蓝图</small>` : ''}</span></div>
         ${showCorp ? `<div class="lp-corps">${esc(corpName(corps[0]))}${corps.length > 1 ? ` 等 ${corps.length} 家` : ''}</div>` : ''}</td>
       <td class="num">${ctx.formatNumber(o.lp)}</td>
       <td class="num lp-hide-md">${o.isk ? isk(o.isk) : '—'}</td>
-      <td class="num lp-hide-md">${o.req.length ? isk(v.reqCost) : '—'}</td>
+      <td class="num lp-hide-md">${o.req.length || v.matCost ? isk(v.reqCost + v.matCost) : '—'}</td>
       <td class="num pi-hide-sm">${v.missing ? '—' : isk(v.revenue)}</td>
       <td class="num lp-hide-sm">${v.missing ? '—' : isk(v.profit)}</td>
       <td class="num ${cls}">${v.missing || v.iskLp == null ? '—' : (v.approx ? '≈' : '') + ctx.formatNumber(Math.round(v.iskLp))}</td>
@@ -351,7 +353,7 @@ function offerDetail(o, v) {
     ${tile('利润', v.missing ? '—' : isk(v.profit), `每次兑换${v.approx ? ' · ≈ 含全服均价' : ''}`, good(v))}
     ${tile('ISK/LP', v.missing || v.iskLp == null ? '—' : num(Math.round(v.iskLp)), `${num(o.lp)} LP`, good(v))}
     ${tile(o.bp && v.mode === 'bpc' ? '蓝图价值' : '产物价值', v.missing ? '—' : isk(v.revenue), o.bp && v.mode === 'bpc' ? '合同出售不扣税' : `已扣税费 ${F.tax}%`)}
-    ${tile('花费', isk(v.cost), `ISK ${isk(o.isk)}${o.req.length ? ' + 物品 ' + isk(v.reqCost) : ''}`)}
+    ${tile('花费', isk(v.cost), `ISK ${isk(o.isk)}${o.req.length ? ' + 物品 ' + isk(v.reqCost) : ''}${v.matCost ? ' + 材料 ' + isk(v.matCost) : ''}`)}
   </div>`;
   // 蓝图：两种算法并排，点一下切换（与估价设置同步）
   let modes = '';
@@ -374,7 +376,9 @@ function offerDetail(o, v) {
   secs.push(`<div class="lp-sec"><h4>花费</h4><ul class="lp-lines"><li><span>LP</span><b>${num(o.lp)}</b></li><li><span>ISK</span><b>${isk(o.isk)}</b></li>${o.ak ? `<li><span>分析师点数（AK）</span><b>${num(o.ak)}</b></li>` : ''}${o.req.map(([m, q]) => line(m, q, F.mat)).join('')}</ul></div>`);
   if (o.bp && v.mode !== 'bpc') {
     const [, pq, mats] = o.bp;
-    secs.push(`<div class="lp-sec"><h4>制造 <small>每流程用量 · 共 ${num(o.qty)} 流程 · 材料效率 0</small></h4><ul class="lp-lines">${line(pid, pq, F.price)}${mats.map(([m, q]) => line(m, q, F.mat)).join('')}</ul></div>`);
+    const n = o.qty;
+    secs.push(`<div class="lp-sec"><h4>制造 <small>共 ${num(n)} 流程 · 材料效率 0</small></h4><ul class="lp-lines">${line(pid, pq * n, F.price)}<li><span>扣除税费 ${F.tax}%</span><b>${v.missing ? '—' : isk(v.revenue)}</b></li>
+      ${mats.map(([m, q]) => line(m, q * n, F.mat)).join('')}<li><span>材料合计</span><b>${isk(v.matCost)}</b></li></ul></div>`);
   } else if (o.bp) {
     const run = bpcRun(o);
     secs.push(`<div class="lp-sec"><h4>直接卖蓝图 <small>公开合同价，数据约每小时更新</small></h4><ul class="lp-lines">
@@ -390,7 +394,7 @@ function offerDetail(o, v) {
     ${modes}<div class="lp-secs">${secs.join('')}</div></div>`;
 }
 
-const tableHead = () => `<thead><tr><th class="lp-hide-sm">#</th>${sortTh('name', '兑换品')}${sortTh('lp', 'LP', 'num')}${sortTh('iskCost', 'ISK 费用', 'num lp-hide-md')}${sortTh('req', '所需物品', 'num lp-hide-md')}${sortTh('revenue', '产物价值', 'num pi-hide-sm')}${sortTh('profit', '利润', 'num lp-hide-sm')}${sortTh('iskLp', 'ISK/LP', 'num')}<th class="num lp-hide-sm">日均成交</th></tr></thead>`;
+const tableHead = () => `<thead><tr><th class="lp-hide-sm">#</th>${sortTh('name', '兑换品')}${sortTh('lp', 'LP', 'num')}${sortTh('iskCost', 'ISK 费用', 'num lp-hide-md')}${sortTh('req', '物品 / 材料', 'num lp-hide-md')}${sortTh('revenue', '产物价值', 'num pi-hide-sm')}${sortTh('profit', '利润', 'num lp-hide-sm')}${sortTh('iskLp', 'ISK/LP', 'num')}<th class="num lp-hide-sm">日均成交</th></tr></thead>`;
 
 function sortRows(rows) {
   const mul = F.dir === 'asc' ? 1 : -1;
@@ -500,6 +504,7 @@ function exportRank() {
     ['LP', (r) => r.o.lp],
     ['ISK 费用', (r) => r.o.isk],
     ['所需物品', (r) => r.v.reqCost],
+    ['制造材料', (r) => r.v.matCost],
     ['产物价值', (r) => val(r.v, 'revenue')],
     ['利润', (r) => val(r.v, 'profit')],
     ['ISK/LP', (r) => val(r.v, 'iskLp')],
