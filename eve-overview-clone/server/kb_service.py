@@ -5870,7 +5870,8 @@ PLAZA_TAGS = {
     "market": [],
     "other": ["求助", "交流", "求购", "出售", "服务"],
 }
-PLAZA_RATE = 20                 # 每个 IP 每分钟最多提交次数
+PLAZA_RATE = 20                 # 每个 IP 每分钟最多提交次数（含撤下、读合同）
+PLAZA_POSTS = (2, 60)           # 发新帖：每个 IP 每 60 秒最多 2 条（编辑已有帖子不算）
 PLAZA_TITLE_MAX = 60
 PLAZA_TEXT_MAX = 1000
 PLAZA_CONTACT_MAX = 80
@@ -6391,6 +6392,7 @@ FEEDBACK_STATUS = {"open": "待处理", "doing": "处理中", "done": "已处理
 FEEDBACK_TEXT_MAX = 2000
 FEEDBACK_CONTACT_MAX = 100
 FEEDBACK_RATE = 3               # 每个 IP 每分钟最多提交次数
+FEEDBACK_POSTS = (2, 60)        # 新工单：每个 IP 每 60 秒最多 2 条（追加说明不算）
 FEEDBACK_DAILY = 20             # 每个 IP 每天最多提交条数
 FEEDBACK_MINE_MAX = 50          # 一次最多查多少条自己的工单
 FEEDBACK_SCHEMA = """
@@ -6625,6 +6627,30 @@ class Feedback:
             conn.close()
 
 
+class WindowLimiter:
+    """按 IP 的滑动窗口：period 秒内最多 n 次（只记成功的操作：先 check，成功后 add）"""
+    def __init__(self, n, period):
+        self.n, self.period, self.hits, self.lock = n, period, {}, threading.Lock()
+
+    def check(self, ip):
+        """还能做就返回 0，否则返回要等几秒"""
+        now = time.time()
+        with self.lock:
+            q = [t for t in self.hits.get(ip, ()) if t > now - self.period]
+            if q:
+                self.hits[ip] = q
+            else:
+                self.hits.pop(ip, None)
+            return 0 if len(q) < self.n else int(q[0] + self.period - now) + 1
+
+    def add(self, ip):
+        now = time.time()
+        with self.lock:
+            self.hits.setdefault(ip, []).append(now)
+            if len(self.hits) > 20000:
+                self.hits = {k: v for k, v in self.hits.items() if v[-1] > now - self.period}
+
+
 class RateLimiter:
     """按 IP 的令牌桶：容量 rate，每秒恢复 rate / 60 个（用于深渊装备导入、钱包存档）"""
     def __init__(self, rate):
@@ -6756,8 +6782,10 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     sale_limiter = RateLimiter(SALE_RATE)
     sos_limiter = RateLimiter(SOS_RATE)
     plaza_limiter = RateLimiter(PLAZA_RATE)
+    plaza_posts = WindowLimiter(*PLAZA_POSTS)
     push_limiter = RateLimiter(PUSH_RATE)
     feedback_limiter = RateLimiter(FEEDBACK_RATE)
+    feedback_posts = WindowLimiter(*FEEDBACK_POSTS)
     feedback_read_limiter = RateLimiter(30)
     chat_tr_limiter = RateLimiter(CHAT_TR_RATE)
 
@@ -6923,6 +6951,13 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
                 if not re.fullmatch(r"[A-Za-z0-9._~+/=-]{1,4096}", token):
                     return self.send_json(403, {"error": "令牌无效，请重新绑定这个角色"})
+                if op == "save" and not (isinstance(body, dict) and body.get("id")):
+                    wait = 0 if api.feedback.admin_ip(ip) else plaza_posts.check(ip)
+                    if wait:
+                        return self.send_json(429, {"error": f"发帖太频繁：每分钟最多 {PLAZA_POSTS[0]} 条，请 {wait} 秒后再试"}, {"Retry-After": str(wait)})
+                    out = api.plaza.save(body, token)
+                    plaza_posts.add(ip)
+                    return self.send_json(200, out)
                 return self.send_json(200, getattr(api.plaza, op)(body, token))
             except PermissionError as e:
                 msg = e.args[0] if e.args and isinstance(e.args[0], str) else "令牌无效或缺少所需权限，请重新绑定这个角色"
@@ -6999,7 +7034,12 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                     return self.send_json(200, api.feedback.mine(body))
                 if op == "follow":
                     return self.send_json(200, api.feedback.follow(body))
-                return self.send_json(200, api.feedback.submit(body, ip))
+                wait = 0 if api.feedback.admin_ip(ip) else feedback_posts.check(ip)
+                if wait:
+                    return self.send_json(429, {"error": f"提交太频繁：每分钟最多 {FEEDBACK_POSTS[0]} 条工单，请 {wait} 秒后再试"}, {"Retry-After": str(wait)})
+                out = api.feedback.submit(body, ip)
+                feedback_posts.add(ip)
+                return self.send_json(200, out)
             except PermissionError:
                 return self.send_json(403, {"error": "这条工单不是在这个浏览器提交的"})
             except ValueError as e:

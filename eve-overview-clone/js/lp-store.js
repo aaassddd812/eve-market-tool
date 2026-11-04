@@ -386,7 +386,7 @@ function offerDetail(o, v) {
     rows = head('产出') + row(o.type, o.qty, F.price) + sum(`扣除税费 ${F.tax}% 后`, v.missing ? '—' : isk(v.revenue));
   }
   if (o.req.length) rows += head('兑换所需物品') + o.req.map(([m, q]) => row(m, q, F.mat)).join('') + sum('物品合计', isk(v.reqCost));
-  const main = `<div class="lp-sec lp-main"><table class="lp-table"><thead><tr><th>物品</th><th class="num">数量</th><th class="num">价值</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const main = `<div class="lp-sec lp-main"><table class="lp-dtable"><thead><tr><th>物品</th><th class="num">数量</th><th class="num">价值</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   // 右：采购 · 军团 · 市场
   const side = `<div class="lp-side">
     ${buyListHtml(o)}
