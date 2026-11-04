@@ -624,6 +624,7 @@ CCP 的 SDE 里没有这些物品，`server/build_cn_extra.py` 从网易 ESI 读
 
 - **物品目录**：新的市场分组与物品加进市场侧栏，可搜索、看行情（晨曦约 2000 件，曙光约 6300 件）
 - **装配 / 战场模拟 / 技能规划**：独有舰船（晨曦 23 艘、曙光 45 艘）、装备、弹药、无人机、植入体的属性和效果并入装配数据；没有 SDE 的「舰船加成」说明和描述
+- **已有物品的国服改动**（`fit.patch`）：宁静服也有的舰船，国服属性 / 效果不同的按国服覆盖；限定舰船的装备（`canFitShipType` / `canFitShipGroup`）补上国服加进名单的独有舰船（如 ★提亚玛特级能装重型熵能分解者）
 - **技能页**：独有技能（如「索拉弗雷尔护卫舰操作」）按游戏分组显示
 - **英文名**：取 ESI `language=en`，并入 `i18n/names-en.json`（另存 `i18n/names-en-cn.json`，`build_names_en.py` 重建时会再并入）；网易没翻译的（ESI 返回 `item <ID>`）保留中文
 - **图标**：这些物品在 images.evetech.net 上没有图标，加载失败时自动换成网易图片服务器（晨曦 `image.evepc.163.com`、曙光 `image-infinity.evepc.163.com`，`/Type/<ID>_32|64.png`）

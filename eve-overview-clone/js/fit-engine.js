@@ -4,7 +4,7 @@
 // 不可叠加的属性对装备来源的乘法修改施加叠加惩罚（舰船、技能、植入体、子系统、弹药来源不受惩罚）。
 // 绝大多数加成来自效果的 modifierInfo；推进器提速、子系统槽位等少数效果在这里单独实现。
 
-import { serverExtra } from './server-extra.js?v=2';
+import { serverExtra } from './server-extra.js?v=3';
 
 // ---------- 常用属性 ----------
 export const AT = {

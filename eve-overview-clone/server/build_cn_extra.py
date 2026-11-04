@@ -27,7 +27,8 @@
     生效对象：与来源舰船同级别（按种族船体技能），T1 / T2 / 帝国海军型只对本族；特别版、海盗等非帝国海军势力（含三神裔、伊甸联合）对全部种族；
     官方列出过的舰船按官方表格（CLOUD_NEWS）。带宽：官方表格有的按表格，否则特别版（市场分组「特别版舰船」）40、非帝国海军势力 35、
     T2 30、帝国海军型 25、T1 20（T3 规则没写，按 35 本族）
-另外 fit.patch: { 已有舰船: [{ 属性: 国服值 }, [国服效果列表]] }：宁静服也有的舰船在国服的属性值 / 效果不同时（适性属性与效果、数值调整）按国服覆盖。
+另外 fit.patch: { 已有舰船: [{ 属性: 国服值 }, [国服效果列表]] }：宁静服也有的舰船在国服的属性值 / 效果不同时（适性属性与效果、数值调整）按国服覆盖；
+限定舰船的装备只补可装配舰船属性（国服独有舰船加进名单）。
 """
 import collections
 import concurrent.futures as cf
@@ -50,6 +51,9 @@ FUNCS = {'ItemModifier': 0, 'LocationModifier': 1, 'LocationGroupModifier': 2,
          'LocationRequiredSkillModifier': 3, 'OwnerRequiredSkillModifier': 4}
 DOMAINS = {'itemID': 0, 'shipID': 1, 'charID': 2, 'otherID': 3, 'structureID': 4, 'targetID': 5, 'target': 5}
 BASE_FIELDS = {'mass': 4, 'capacity': 38, 'volume': 161, 'radius': 162}
+# 限定可装配舰船的属性（canFitShipGroup01… / canFitShipType1…，与 fit-engine.js 的 AT.canFitShipGroup / canFitShipType 相同）
+CAN_FIT = {1298, 1299, 1300, 1301, 1872, 1879, 1880, 1881, 2065, 2396, 2476, 2477, 2478, 2479, 2480, 2481, 2482, 2483, 2484, 2485,
+           1302, 1303, 1304, 1305, 1944, 2103, 2463, 2486, 2487, 2488, 2758}
 SKILL_ATTRS = {'rank': 275, 'pri': 180, 'sec': 181}
 ADAPT_GROUPS = {4160, 4196}   # 舰船适性、云计算（曙光）
 CLOUD_GROUP = 4196
@@ -505,6 +509,16 @@ def build(ds, sde, tq_ids):
         effs = [x['effect_id'] for x in d.get('dogma_effects', []) if str(x['effect_id']) in fit['effects'] or x['effect_id'] in out_eff]
         if changed or sorted(effs) != sorted(old[6]):
             patch[t] = [changed, effs if sorted(effs) != sorted(old[6]) else None]
+    # 宁静服也有、限定舰船的装备：国服常把独有舰船加进可装配名单（如 ★提亚玛特级能装重型熵能分解者），只补这几项属性
+    can_fit_ids = sorted(int(k) for k, v in fit['types'].items() if fit['groups'].get(str(v[2]), [0, 0])[1] != 6 and any(str(x) in v[5] for x in CAN_FIT))
+    for t, d in zip(can_fit_ids, cache.many([f'{CN}/universe/types/{t}/?{q}&language=zh' for t in can_fit_ids])):
+        if not d:
+            continue
+        old = fit['types'][str(t)][5]
+        a = {str(x['attribute_id']): num(x['value']) for x in d.get('dogma_attributes', []) if x['attribute_id'] in CAN_FIT}
+        changed = {k: v for k, v in sorted(a.items(), key=lambda kv: int(kv[0])) if old.get(k) != v}
+        if changed:
+            patch[t] = [changed, None]
     adapt = adapt_meta(ds, fit, out_types, zh, groups, markets)
     used_groups = {v[2] for v in out_types.values()} - {int(k) for k in fit['groups']}
     out_groups = {g: [groups[g]['name'], groups[g]['category_id']] for g in sorted(used_groups)}
@@ -538,7 +552,7 @@ def build(ds, sde, tq_ids):
         UPDATED.append(ds)
     ships = sum(1 for v in out_types.values() if out_groups.get(v[2], [0, 0])[1] == 6 or fit['groups'].get(str(v[2]), [0, 0])[1] == 6)
     print(f'{ds}: 独有物品 {len(ids)} · 目录分组 {len(out_cat)} · 装配物品 {len(out_types)}（舰船 {ships}）· 技能 {len(sk)}'
-          f' · 新效果 {len(out_eff)}（丢弃无法推断的修正 {dropped} 条）· 新属性 {len(out_attrs)} · 舰船补丁 {len(patch)}'
+          f' · 新效果 {len(out_eff)}（丢弃无法推断的修正 {dropped} 条）· 新属性 {len(out_attrs)} · 补丁 {len(patch)}'
           + (f' · 适性 1 级技能 {len(adapt["max1"])} · 云计算 {len(adapt["cloud"])}' if adapt else ''))
     return names_en
 

@@ -6696,14 +6696,12 @@ td .sov-auto-tag { margin-left: 4px; }
 .contact-value { flex: 1; min-width: 0; font-size: 1rem; font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text-primary); overflow-wrap: anywhere; }
 .contact-item .btn { flex: none; height: 30px; }
 .contact-note { font-size: 0.75rem; color: var(--text-muted); }
-/* 个性化设置弹窗：每项一张圆角卡片，左边说明、右边分段按钮 */
+/* 个性化设置弹窗：每项一张圆角卡片，左边名称、右边分段按钮 */
 .modal-content.prefs-content { max-width: 520px; }
 .prefs-body { display: flex; flex-direction: column; gap: 10px; }
 .prefs-row { display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
 .prefs-row .segmented { background: var(--bg-primary); flex: none; }
-.prefs-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
-.prefs-text b { font-size: 0.8125rem; }
-.prefs-text span { font-size: 0.75rem; color: var(--text-muted); line-height: 1.5; }
+.prefs-title { flex: 1 1 auto; min-width: 0; font-size: 0.8125rem; }
 @media (max-width: 480px) {
   /* 窄屏收紧顶栏右侧按钮，服务器名过长时省略（当前页名称先省略） */
   .header-actions { gap: 2px; }

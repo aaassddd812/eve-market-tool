@@ -10,7 +10,7 @@ import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
 import * as FF from './float-feed.js?v=v11';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
-import { serverExtra, cnTypeImage } from './server-extra.js?v=2';
+import { serverExtra, cnTypeImage } from './server-extra.js?v=3';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
 
 // ===== 配置与常量 =====
@@ -824,7 +824,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v107').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v108').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -3126,18 +3126,18 @@ function initContact() {
 }
 
 // ===== 个性化设置（右上角滑块按钮）=====
-// 存在 eve-prefs（云同步会带上）；每项：键、标题、说明、选项 [值, 名称]，第一个选项是默认值
+// 存在 eve-prefs（云同步会带上）；每项：键、名称、选项 [值, 名称]，第一个选项是默认值
 const PREFS = [
-  ['mapZoom', '星图滚轮缩放', '向上滚动滚轮时放大还是缩小（触控板捏合、双指缩放不受影响）', [['normal', '向上滚放大'], ['reverse', '向上滚缩小']]],
-  ['treeLines', '分类目录连接线', '市场等页面左侧多级分类前面的竖线', [['on', '显示'], ['off', '隐藏']]]
+  ['mapZoom', '星图反转鼠标方向', [['normal', '关'], ['reverse', '开']]],   // 只反转滚轮缩放
+  ['treeLines', '分类目录连接线', [['on', '显示'], ['off', '隐藏']]]
 ];
 function applyPrefs(p = store.getJSON('eve-prefs', {})) {
   document.documentElement.classList.toggle('no-tree-lines', p.treeLines === 'off');
 }
 function renderPrefs() {
   const p = store.getJSON('eve-prefs', {});
-  $('prefsBody').innerHTML = PREFS.map(([key, title, note, opts]) => `<div class="prefs-row">
-      <div class="prefs-text"><b>${title}</b><span>${note}</span></div>
+  $('prefsBody').innerHTML = PREFS.map(([key, title, opts]) => `<div class="prefs-row">
+      <b class="prefs-title">${title}</b>
       <div class="segmented" role="group" aria-label="${title}">${opts.map(([v, label]) => `<button type="button" class="${(p[key] || opts[0][0]) === v ? 'active' : ''}" data-pref="${key}" data-pref-val="${v}" aria-pressed="${(p[key] || opts[0][0]) === v}">${label}</button>`).join('')}</div>
     </div>`).join('');
 }
@@ -4907,7 +4907,7 @@ async function bindWalletChart(box) {
 // 个人中心 · 技能：首次打开时加载
 let skillsLoading = null;
 function loadSkillsModule() {
-  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v32').then((m) => {
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v33').then((m) => {
     m.initSkills({ esc, formatNumber, esiAuthFetch, store, showPlan: async (el, opt) => (await loadFittingModule()).showPlan(el, false, opt) });
     return m;
   }).catch((error) => { skillsLoading = null; throw error; });
