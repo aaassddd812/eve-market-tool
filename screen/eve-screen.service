@@ -1,0 +1,16 @@
+[Unit]
+Description=EVE 站点实时访问大屏 (127.0.0.1:8377)
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/eve/screen
+ExecStart=/usr/bin/python3 -u /opt/eve/screen/server.py
+Restart=always
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

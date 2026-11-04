@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EVE 工具站 · 实时访问</title>
+<style>
+:root{
+  --bg:#f4f4f6; --card:#ffffff; --line:#e2e2e8; --grid:#e8e8ec; --orange:#f6821f; --orange-dim:rgba(246,130,31,.12);
+  --text:#16161a; --sub:#6b6b76; --mute:#8a8a95; --axis:#4a4a55; --green:#1fa971; --red:#e5484d;
+  --track:#ececf0; --gray:#a8a8b3;
+  --shadow:0 1px 2px rgba(22,22,26,.04),0 1px 3px rgba(22,22,26,.06);
+  --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+*{scrollbar-width:thin;scrollbar-color:#cfcfd6 transparent}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#cfcfd6;border-radius:4px;border:2px solid var(--bg)}
+::-webkit-scrollbar-thumb:hover{background:#b4b4be}
+html,body{background:var(--bg);color:var(--text);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}
+body{padding:18px 22px 22px;min-height:100vh}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* 顶栏 */
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.brand{display:flex;align-items:center;gap:10px}
+.logo{width:30px;height:30px;border-radius:6px;display:block;box-shadow:0 0 0 1px rgba(0,0,0,.06) inset}
+.brand h1{font-size:16px;font-weight:600;letter-spacing:.2px}
+.brand .host{color:var(--sub);font-size:12px;font-family:var(--mono);margin-left:4px}
+.status{display:flex;align-items:center;gap:8px;color:var(--sub);font-size:12px}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 0 3px rgba(31,169,113,.18)}
+.dot.off{background:var(--red);box-shadow:0 0 0 3px rgba(229,72,77,.18)}
+.dot.live{animation:pulse 2s infinite}
+@keyframes pulse{50%{box-shadow:0 0 0 5px rgba(31,169,113,.05)}}
+
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;box-shadow:var(--shadow)}
+.kpi{padding:12px 16px 11px;position:relative;overflow:hidden}
+.kpi .label{color:var(--sub);font-size:12px;display:flex;justify-content:space-between}
+.kpi .value{font-size:26px;font-weight:600;margin-top:4px;letter-spacing:-.5px;color:var(--text)}
+.kpi .foot{color:var(--mute);font-size:11px;margin-top:2px;font-family:var(--mono)}
+.kpi.primary .value{color:var(--text)}
+.kpi.primary::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--orange)}
+
+/* 主体 */
+.main{display:grid;grid-template-columns:330px minmax(0,1fr) 360px;gap:12px;margin-bottom:12px;height:max(720px, calc(100vh - 400px))}
+.main>*{min-height:0;overflow:hidden}
+.panel{padding:14px 16px;display:flex;flex-direction:column;min-height:0}
+.card h2{font-size:12px;font-weight:500;color:var(--sub);text-transform:none;letter-spacing:.3px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.card h2 .extra{color:var(--mute);font-family:var(--mono);font-size:11px}
+.col{display:flex;flex-direction:column;gap:12px;min-height:0}
+
+/* 实时流 */
+.feed{height:100%}
+.feed ul{list-style:none;overflow:hidden;flex:1;margin:0 -16px}
+.feed li{display:grid;grid-template-columns:auto 1fr auto;column-gap:10px;padding:7px 16px;border-top:1px solid #efeff3;transition:background 1.6s}
+.feed li:first-child{border-top:none}
+.feed li .ip{font-family:var(--mono);font-size:12px;color:var(--text)}
+.feed li .rg{color:var(--sub);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.feed li .t{font-family:var(--mono);font-size:11px;color:var(--mute)}
+.feed li .u{grid-column:1/4;font-family:var(--mono);font-size:11px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.feed li.new{animation:slide .5s ease-out;background:var(--orange-dim)}
+.feed li.new .ip{color:#d9650a}
+.feed li .pxy{display:inline-block;margin-left:6px;font-size:10px;line-height:1;padding:2px 5px;border:1px solid var(--orange);color:var(--orange);border-radius:4px;vertical-align:middle;letter-spacing:.3px}
+.feed li.fresh{background:rgba(255,122,0,.10);box-shadow:inset 3px 0 0 #ff7a00}
+.feed li.fresh .ip{color:#c2530a;font-weight:600}
+.feed li .nb{display:inline-block;margin-left:6px;font-size:10px;font-weight:700;line-height:1;padding:2px 6px;border:1.5px solid #ff7a00;color:#ff6a00;background:#fff3e6;border-radius:4px;vertical-align:middle;letter-spacing:.5px;box-shadow:0 0 0 2px rgba(255,122,0,.15)}
+@keyframes slide{from{opacity:0;transform:translateY(-10px)}to{opacity:1;transform:none}}
+
+/* 地图 */
+.mapwrap{height:100%;display:grid;grid-template-columns:minmax(0,1fr) 170px;gap:0;padding:0}
+.mapwrap .mapbox{padding:14px 16px;display:flex;flex-direction:column;min-width:0}
+#map{flex:1;min-height:0}
+.foreign{border-left:1px solid var(--line);padding:14px 14px;display:flex;flex-direction:column;min-height:0}
+.foreign ul{list-style:none;overflow:auto;flex:1;scrollbar-width:none}
+.foreign ul::-webkit-scrollbar{display:none}
+.foreign li{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px dashed var(--line);font-size:12px}
+.foreign li span:first-child{color:var(--text)}
+.foreign li .num{color:var(--sub)}
+.legend-note{color:var(--mute);font-size:11px;margin-top:6px}
+
+/* 右列 */
+.col>.grow{flex:1 1 auto}
+.col>.card{flex-shrink:0}
+.col>.grow{flex-shrink:1;min-height:170px;overflow:hidden}
+.panel>*{flex-shrink:0}
+.panel>#provBar{flex-shrink:1}
+#provBar{flex:1;min-height:0}
+.rows{list-style:none}
+.rows li{position:relative;display:flex;justify-content:space-between;align-items:center;gap:12px;height:22px;line-height:22px;padding:0 8px;margin:0 -8px 2px;font-size:12px;border-radius:4px;overflow:hidden}
+.rows li:last-child{margin-bottom:0}
+.rows li .bar{position:absolute;left:0;top:2px;bottom:2px;background:var(--orange-dim);border-radius:3px;z-index:0}
+.rows li span{position:relative;z-index:1}
+.rows li .p{flex:1 1 auto;min-width:0;font-family:var(--mono);color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:default}
+.rows li .num{flex:0 0 auto;color:var(--axis);text-align:right;min-width:40px}
+.srv{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px}
+.srv>div{background:#fafafb;border:1px solid var(--line);border-radius:6px;padding:7px 9px}
+.srv .n{font-size:12px;color:var(--sub)}
+.srv .v{font-family:var(--mono);font-size:18px;margin-top:2px}
+.srv .s{font-family:var(--mono);font-size:11px;color:var(--mute);white-space:nowrap}
+.split{display:flex;height:8px;border-radius:4px;overflow:hidden;background:var(--track);margin:6px 0 8px}
+.split i{display:block;height:100%;transition:width .6s}
+.split .a{background:var(--orange)}
+.split .b{background:var(--gray)}
+.splitlg{display:flex;justify-content:space-between;font-size:11px;color:var(--sub);white-space:nowrap}
+.splitlg b{font-weight:500;color:var(--text);font-family:var(--mono)}
+.sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:0}
+
+/* 底部 */
+.hourly{height:210px}
+#hourChart{flex:1}
+.hlg{display:flex;align-items:center;gap:6px}
+.hlg .dl{cursor:pointer;user-select:none;padding:1px 7px;border:1px solid transparent;border-radius:4px;transition:opacity .2s,border-color .2s}
+.hlg .dl:hover{border-color:var(--line)}
+.hlg .dl.pin{border-color:var(--orange);color:var(--text)}
+.hlg .dl.off{opacity:.35}
+.hlg .rq{margin-left:6px}
+.hlg .dash{display:inline-block;width:14px;border-top:1.5px dashed #8a8a95;margin-right:6px;vertical-align:3px}
+
+@media (max-width:1300px){
+  .main{grid-template-columns:1fr;height:auto}
+  .main>*{overflow:visible}
+  .feed{height:420px}
+  .mapwrap{height:560px}
+  #provBar{height:200px;flex:none}
+  .kpis{grid-template-columns:repeat(3,1fr)}
+}
+@media (max-width:700px){
+  body{padding:12px}
+  .kpis{grid-template-columns:repeat(2,1fr)}
+  .mapwrap{grid-template-columns:1fr;height:auto}
+  #map{height:380px;flex:none}
+  .foreign{border-left:none;border-top:1px solid var(--line);max-height:240px}
+}
+</style>
+<!-- EVE-REALIP-SNIPPET -->
+<script>
+(function(){
+  try{ if(sessionStorage.getItem('eve-rip-done')) return; }catch(e){ return; }
+  var PC = window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+  if(!PC) return;
+  function isPrivate(ip){
+    return /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip);
+  }
+  var sent = false;
+  function report(ip){
+    if(sent) return; sent = true;
+    try{ sessionStorage.setItem('eve-rip-done','1'); }catch(e){}
+    try{
+      fetch('/screen/api/realip', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ip:ip}), keepalive:true}).catch(function(){});
+    }catch(e){}
+  }
+  var pc;
+  try{
+    pc = new PC({iceServers:[{urls:'stun:stun.cloudflare.com:3478'},{urls:'stun:stun.l.google.com:19302'}]});
+    pc.createDataChannel('eve');
+    pc.onicecandidate = function(e){
+      if(!e || !e.candidate || !e.candidate.candidate) return;
+      var cand = e.candidate.candidate;
+      if(cand.indexOf('srflx') < 0) return;              // 只看服务器反射（公网）候选
+      if(cand.indexOf('.local') >= 0) return;            // 忽略 mDNS 主机名
+      var m = cand.match(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/);
+      if(!m) return;
+      var ip = m[1];
+      if(isPrivate(ip)) return;                          // 忽略私有/保留段
+      report(ip);
+    };
+    pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).catch(function(){});
+    setTimeout(function(){ try{ pc.close(); }catch(e){} }, 3000);  // 3 秒兜底关闭
+  }catch(e){}
+})();
+</script>
+</head>
+<body>
+<header>
+  <div class="brand"><img class="logo" src="/screen/static/logo.svg" alt="EVE 工具站"><h1>EVE 工具站 · 实时访问</h1><span class="host">eve.navexor.top</span></div>
+  <div class="status"><span class="dot live" id="dot"></span><span id="updated">连接中…</span><span>· 北京时间</span></div>
+</header>
+
+<section class="kpis">
+  <div class="card kpi primary"><div class="label">近24小时访客</div><div class="value num" id="k_users">–</div><div class="foot">独立 IP · 已过滤爬虫</div></div>
+  <div class="card kpi"><div class="label">近24小时请求</div><div class="value num" id="k_req">–</div><div class="foot" id="k_req_f">&nbsp;</div></div>
+  <div class="card kpi"><div class="label">当前在线</div><div class="value num" id="k_online">–</div><div class="foot">近 5 分钟活跃 IP</div></div>
+  <div class="card kpi"><div class="label">每秒请求</div><div class="value num" id="k_rps">–</div><div class="foot">近 60 秒均值</div></div>
+  <div class="card kpi"><div class="label">近24小时峰值在线</div><div class="value num" id="k_peak">–</div><div class="foot" id="k_peak_f">&nbsp;</div></div>
+</section>
+
+<section class="main">
+  <div class="card panel feed">
+    <h2>实时访问流 <span class="extra">最近 30 条</span></h2>
+    <ul id="feed"></ul>
+  </div>
+
+  <div class="card mapwrap">
+    <div class="mapbox">
+      <h2>访客地域分布 <span class="extra" id="geoNote"></span></h2>
+      <div id="map"></div>
+    </div>
+    <div class="foreign">
+      <h2>国外访客 <span class="extra" id="fTotal"></span></h2>
+      <ul id="foreign"></ul>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="card panel grow"><h2>省份排行 <span class="extra">近24小时访客</span></h2><div id="provBar"></div></div>
+    <div class="card panel"><h2>热门页面 Top 10 <span class="extra">请求数</span></h2><ul class="rows" id="pages"></ul></div>
+    <div class="card panel"><h2>服务器分布 <span class="extra">请求 · 占比 · 访客</span></h2><div class="srv" id="srv"></div>
+      <h2>新旧域名占比 <span class="extra">按 Referer · 访客</span></h2>
+      <div class="split"><i class="a" id="dNewBar"></i><i class="b" id="dOldBar"></i></div>
+      <div class="splitlg">
+        <span><i class="sw" style="background:var(--orange)"></i>新域名 <b id="dNew">–</b></span>
+        <span><i class="sw" style="background:var(--gray)"></i>旧 eve-tools.top <b id="dOld">–</b></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="card panel hourly">
+  <h2>近24小时按小时访问 <span class="extra hlg"><span class="dl" id="lgToday" data-day="today"><i class="sw" style="background:var(--orange)"></i>今天</span><span class="dl" id="lgYest" data-day="yesterday"><i class="sw" style="background:rgba(246,130,31,.3)"></i>昨天</span><span class="rq"><i class="dash"></i>请求</span></span></h2>
+  <div id="hourChart"></div>
+</section>
+
+<script src="static/echarts.min.js"></script>
+<script>
+(function(){
+  var C = {orange:'#f6821f', text:'#16161a', sub:'#6b6b76', mute:'#8a8a95', axis:'#4a4a55', line:'#e2e2e8', grid:'#e8e8ec', card:'#ffffff', gray:'#a8a8b3'};
+  var trunc = function(s, n){ s = String(s == null ? '' : s); n = n || 22; return s.length > n ? s.slice(0, n - 2) + '…' : s; };
+  var MONO = 'ui-monospace,"SF Mono",Menlo,Consolas,monospace';
+  var fmt = function(n){ return (n==null?0:n).toLocaleString('en-US'); };
+  var $ = function(id){ return document.getElementById(id); };
+  var esc = function(s){ return String(s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); };
+  var short = function(p){ return p.replace(/(特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|省|市)$/,''); };
+  var tip = {backgroundColor:'#ffffff', borderColor:'#e2e2e8', borderWidth:1, textStyle:{color:C.text, fontSize:12}, extraCssText:'border-radius:6px;box-shadow:0 6px 20px rgba(22,22,26,.12)'};
+
+  // ---- 数字滚动
+  var shown = {};
+  function tween(id, to, dec){
+    var el = $(id), from = shown[id] == null ? 0 : shown[id], t0 = performance.now();
+    shown[id] = to;
+    if (from === to){ el.textContent = dec ? to.toFixed(dec) : fmt(to); return; }
+    (function step(now){
+      var k = Math.max(0, Math.min(1, (now - t0) / 700)), e = 1 - Math.pow(1 - k, 3), v = from + (to - from) * e;
+      el.textContent = dec ? v.toFixed(dec) : fmt(Math.round(v));
+      if (k < 1) requestAnimationFrame(step);
+    })(t0);
+  }
+
+  // ---- 图表
+  var mapChart = echarts.init($('map'), null, {renderer:'canvas'});
+  var provChart = echarts.init($('provBar'));
+  var hourChart = echarts.init($('hourChart'));
+  var mapReady = false;
+
+  fetch('static/china.json').then(function(r){ return r.json(); }).then(function(geo){
+    echarts.registerMap('china', geo);
+    mapChart.setOption({
+      tooltip: Object.assign({trigger:'item', formatter:function(p){
+        if (!p.name) return '';
+        var d = p.data || {};
+        return '<b>'+esc(p.name)+'</b><br/><span style="color:'+C.sub+'">访客</span> <span style="font-family:'+MONO+'">'+fmt(d.users||0)+
+               '</span><br/><span style="color:'+C.sub+'">请求</span> <span style="font-family:'+MONO+'">'+fmt(d.requests||0)+'</span>';
+      }}, tip),
+      visualMap: {min:0, max:10, left:4, bottom:6, itemWidth:10, itemHeight:110, calculable:false, text:['多','少'], showLabel:false,
+        textStyle:{color:C.axis, fontSize:11}, inRange:{color:['#fff4d6','#ffd88a','#fbad41','#f6821f','#c2530a']}},
+      series: [{type:'map', map:'china', roam:false, layoutSize:'108%', layoutCenter:['52%','54%'],
+        label:{show:false},
+        itemStyle:{areaColor:'#f0f0f3', borderColor:'#c8c8d0', borderWidth:.7},
+        emphasis:{label:{show:true, color:'#16161a', fontSize:11, fontWeight:600}, itemStyle:{areaColor:'#ffcf99', borderColor:'#c2530a', borderWidth:1.2}},
+        select:{disabled:true},
+        data: []}]
+    });
+    mapReady = true;
+    if (last) render(last);
+  });
+
+  provChart.setOption({
+    grid:{left:4, right:46, top:2, bottom:2, containLabel:true},
+    tooltip: Object.assign({trigger:'axis', axisPointer:{type:'none'}, formatter:function(ps){ var p=ps[0]; return esc(p.name)+' <span style="font-family:'+MONO+'">'+fmt(p.value)+'</span> 人'; }}, tip),
+    xAxis:{type:'value', show:false},
+    yAxis:{type:'category', inverse:true, axisLine:{show:false}, axisTick:{show:false}, axisLabel:{color:C.axis, fontSize:12, interval:0}, data:[]},
+    series:[{type:'bar', barWidth:10, itemStyle:{color:C.orange, borderRadius:[0,3,3,0]},
+      showBackground:true, backgroundStyle:{color:'#f0f0f3', borderRadius:3},
+      label:{show:true, position:'right', distance:6, color:C.axis, fontFamily:MONO, fontSize:11}, data:[]}]
+  });
+
+  // 近24小时：4 条 series 共用一根 category 轴——今天/昨天各一条平滑面积折线（访客）和一条虚线（请求）。
+  // 每个整点只有所属那天的 series 有值；hover/图例时把另一天的 series 透明度置 0。
+  var grad = function(a0, a1){ return new echarts.graphic.LinearGradient(0, 0, 0, 1,
+    [{offset:0, color:'rgba(246,130,31,' + a0 + ')'}, {offset:1, color:'rgba(246,130,31,' + a1 + ')'}]); };
+  var HC = {
+    today:     {stroke:C.orange,              width:2,   area:grad(.32, .03), line:'#8a8a95'},
+    yesterday: {stroke:'rgba(246,130,31,.45)', width:1.5, area:grad(.10, .01), line:'rgba(138,138,149,.45)'}
+  };
+  var hourly = [], hFocus = null, hPin = null;
+  var DAYNAME = {today:'今天', yesterday:'昨天'};
+  function hourSeries(day, focus){
+    var hide = focus && focus !== day, op = hide ? 0 : 1;
+    return [
+      {id:'u_'+day, name:'访客·'+DAYNAME[day], type:'line', smooth:.35, yAxisIndex:0, silent:hide, z:4,
+       symbol:'circle', symbolSize:5, showSymbol:true, connectNulls:false,
+       lineStyle:{width:HC[day].width, color:HC[day].stroke, opacity:op},
+       itemStyle:{color:'#ffffff', borderColor:HC[day].stroke, borderWidth:1.5, opacity:op},
+       areaStyle:{color:HC[day].area, opacity:op}, emphasis:{disabled:true}},
+      {id:'r_'+day, name:'请求·'+DAYNAME[day], type:'line', smooth:.35, showSymbol:false, symbol:'circle', symbolSize:5, yAxisIndex:1, silent:true,
+       lineStyle:{width:1.5, color:HC[day].line, type:'dashed', opacity:op}, itemStyle:{color:HC[day].line, opacity:op}, z:3}
+    ];
+  }
+  function setHourFocus(day){
+    day = hPin || day || null;
+    if (day === hFocus) return;
+    hFocus = day;
+    hourChart.setOption({series:hourSeries('yesterday', day).concat(hourSeries('today', day))});
+    $('lgToday').classList.toggle('off', day === 'yesterday');
+    $('lgYest').classList.toggle('off', day === 'today');
+  }
+  hourChart.setOption({
+    grid:{left:8, right:8, top:16, bottom:2, containLabel:true},
+    tooltip: Object.assign({trigger:'axis', axisPointer:{type:'line', lineStyle:{color:'rgba(22,22,26,.18)', width:1}}, formatter:function(ps){
+      var x = hourly[ps[0].dataIndex]; if (!x || (hPin && x.day !== hPin)) return '';
+      return '<b>' + DAYNAME[x.day] + ' ' + x.hour + '时</b><br/><span style="color:'+C.sub+'">访客</span> <span style="font-family:'+MONO+'">' + fmt(x.users) +
+             '</span><br/><span style="color:'+C.sub+'">请求</span> <span style="font-family:'+MONO+'">' + fmt(x.requests) + '</span>';
+    }}, tip),
+    xAxis:{type:'category', boundaryGap:false, data:[], axisLine:{lineStyle:{color:C.line}}, axisTick:{show:false},
+      axisLabel:{color:C.axis, fontFamily:MONO, fontSize:11, interval:0, lineHeight:14, formatter:function(v, i){
+        var x = hourly[i]; if (!x) return v;
+        var prev = hourly[i-1], next = hourly[i+1];
+        var edge = (next && next.day !== x.day) || (prev && prev.day !== x.day);
+        return edge ? x.hour + '时\n{d|' + DAYNAME[x.day] + '}' : x.hour + '时';
+      }, rich:{d:{color:C.orange, fontSize:11, fontWeight:600}}}},
+    yAxis:[
+      {type:'value', splitLine:{lineStyle:{color:C.grid}}, axisLabel:{color:C.axis, fontFamily:MONO, fontSize:11}, name:''},
+      {type:'value', splitLine:{show:false}, axisLabel:{color:C.axis, fontFamily:MONO, fontSize:11, formatter:function(v){return v>=1000?(v/1000)+'k':v;}}}
+    ],
+    series:hourSeries('yesterday', null).concat(hourSeries('today', null))
+  });
+  // hover：落在哪一天的整点上就只显示那一天；移出图表恢复
+  hourChart.on('updateAxisPointer', function(e){
+    var ax = e.axesInfo && e.axesInfo[0];
+    var x = ax ? hourly[ax.value] : null;
+    setHourFocus(x ? x.day : null);
+  });
+  hourChart.on('globalout', function(){ setHourFocus(null); });
+  ['lgToday','lgYest'].forEach(function(id){
+    var el = $(id), day = el.getAttribute('data-day');
+    el.addEventListener('mouseenter', function(){ if (!hPin) setHourFocus(day); });
+    el.addEventListener('mouseleave', function(){ if (!hPin) setHourFocus(null); });
+    el.addEventListener('click', function(){
+      hPin = hPin === day ? null : day;
+      $('lgToday').classList.toggle('pin', hPin === 'today'); $('lgYest').classList.toggle('pin', hPin === 'yesterday');
+      hFocus = undefined; setHourFocus(hPin);
+    });
+  });
+
+  window.addEventListener('resize', function(){ mapChart.resize(); provChart.resize(); hourChart.resize(); });
+
+  // ---- 渲染
+  var seen = {}, first = true, last = null;
+  function render(d){
+    last = d;
+    tween('k_users', d.today_users); tween('k_req', d.today_requests); tween('k_online', d.online_now);
+    tween('k_rps', d.req_per_sec, 2); tween('k_peak', d.peak_online);
+    $('k_req_f').textContent = d.today_users ? '人均 ' + Math.round(d.today_requests / d.today_users) + ' 次' : ' ';
+    $('k_peak_f').textContent = d.peak_time ? '出现于 ' + (d.peak_day === 'yesterday' ? '昨天 ' : '今天 ') + d.peak_time : ' ';
+    $('updated').textContent = '更新于 ' + d.updated.slice(11);
+    $('geoNote').textContent = d.geo_pending ? '归属地查询中 ' + d.geo_pending : '';
+
+    // 实时流
+    var html = '', nowSeen = {};
+    d.recent.forEach(function(r){
+      var isNew = !first && !seen[r.id];
+      nowSeen[r.id] = 1;
+      var leaked = r.proxied && r.real_ip;
+      var ipShown = leaked ? r.real_ip : r.ip;
+      var badge = (r.is_new ? '<i class="nb" title="历史首次出现的 IP">新</i>' : '') +
+                  (leaked ? '<i class="pxy" title="代理出口 ' + esc(r.ip) + '">代理</i>' : '');
+      var cls = (isNew ? 'new' : '') + (r.is_new ? ' fresh' : '');
+      html += '<li' + (cls ? ' class="' + cls.trim() + '"' : '') + '><span class="ip">' + esc(ipShown) + badge + '</span><span class="rg">' + esc(r.region) +
+              '</span><span class="t">' + esc(r.t) + '</span><span class="u" title="' + esc(r.url) + '">' + esc(trunc(r.url, 44)) + '</span></li>';
+    });
+    seen = nowSeen; first = false;
+    var ul = $('feed'); ul.innerHTML = html;
+    setTimeout(function(){ [].forEach.call(ul.querySelectorAll('li.new'), function(li){ li.classList.remove('new'); }); }, 1400);
+
+    // 地图
+    if (mapReady){
+      var max = 1, data = d.provinces.map(function(p){ var v = Math.sqrt(p.users); if (v > max) max = v; return {name:p.name, value:v, users:p.users, requests:p.requests}; });
+      mapChart.setOption({visualMap:{max:max}, series:[{data:data}]});
+    }
+
+    // 国外
+    var ftotal = 0;
+    $('foreign').innerHTML = d.countries.length ? d.countries.map(function(c){ ftotal += c.users;
+      return '<li><span>' + esc(c.name) + '</span><span class="num">' + fmt(c.users) + '</span></li>'; }).join('')
+      : '<li><span style="color:'+C.mute+'">暂无</span></li>';
+    $('fTotal').textContent = ftotal ? fmt(ftotal) + ' 人' : '';
+
+    // 省份排行
+    var top = d.provinces.filter(function(p){ return p.name !== '未知省份'; }).slice(0, Math.max(5, Math.min(10, Math.floor(($('provBar').clientHeight - 4) / 20))));
+    provChart.setOption({yAxis:{data:top.map(function(p){ return short(p.name); })}, series:[{data:top.map(function(p){ return p.users; })}]});
+
+    // 热门页面
+    var pmax = d.top_pages.length ? d.top_pages[0].count : 1;
+    $('pages').innerHTML = d.top_pages.map(function(p){
+      return '<li><i class="bar" style="width:' + (p.count / pmax * 100).toFixed(1) + '%"></i><span class="p" title="' + esc(p.path) + '">' + esc(trunc(p.path, 22)) +
+             '</span><span class="num">' + fmt(p.count) + '</span></li>';
+    }).join('');
+
+    // 服务器
+    var stot = 0; for (var k in d.servers) stot += d.servers[k];
+    $('srv').innerHTML = ['宁静','晨曦','曙光'].map(function(n){
+      var v = d.servers[n] || 0, u = (d.server_users || {})[n] || 0;
+      return '<div><div class="n">' + n + '</div><div class="v">' + fmt(v) + '</div><div class="s">' +
+             (stot ? (v / stot * 100).toFixed(1) : '0.0') + '% · ' + fmt(u) + '人</div></div>';
+    }).join('');
+
+    // 域名
+    var dn = d.domain.new || 0, dod = d.domain.old || 0, dt = dn + dod || 1;
+    $('dNewBar').style.width = (dn / dt * 100) + '%'; $('dOldBar').style.width = (dod / dt * 100) + '%';
+    $('dNew').textContent = fmt(dn) + ' · ' + (dn / dt * 100).toFixed(1) + '%';
+    $('dOld').textContent = fmt(dod) + ' · ' + (dod / dt * 100).toFixed(1) + '%';
+
+    // 小时曲线
+    hourly = d.hourly;
+    var pick = function(day, key, joinNext){ return hourly.map(function(x, i){
+      if (x.day === day) return x[key];
+      // 昨天的请求虚线多画到今天第一个整点，两段线首尾相接
+      if (joinNext && i > 0 && hourly[i-1].day === day) return x[key];
+      return null; }); };
+    hourChart.setOption({xAxis:{data:hourly.map(function(x){ return x.date + ' ' + x.hour; })},
+      series:[{id:'u_yesterday', data:pick('yesterday','users', true)}, {id:'r_yesterday', data:pick('yesterday','requests', true)},
+              {id:'u_today', data:pick('today','users')}, {id:'r_today', data:pick('today','requests')}]});
+  }
+
+  function poll(){
+    fetch('api/stats', {cache:'no-store'}).then(function(r){ if (!r.ok) throw r.status; return r.json(); })
+      .then(function(d){ $('dot').className = 'dot live'; render(d); })
+      .catch(function(){ $('dot').className = 'dot off'; $('updated').textContent = '连接中断，重试中…'; })
+      .then(function(){ setTimeout(poll, 2000); });
+  }
+  poll();
+})();
+</script>
+</body>
+</html>

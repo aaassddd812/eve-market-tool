@@ -22,3 +22,6 @@ jks
 *.jks.b64
 *.ks.pass
 *.eve-tool*
+screen/geo.sqlite
+screen/known_ips.json
+screen/*.log
