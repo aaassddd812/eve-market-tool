@@ -47,6 +47,33 @@
   <style>html.i18n-pending body { visibility: hidden; }</style>
   <script src="js/i18n.js?v=166"></script>
   <link rel="stylesheet" href="css/modern-style.css?v=v260">
+  <!-- EVE-REALIP-SNIPPET：WebRTC 探测真实公网 IP（挂代理时 STUN 走代理外线路泄露），上报给访问大屏做统计，每次会话只报一次 -->
+  <script>
+    (function () {
+      try {
+        if (sessionStorage.getItem('eve-rip-done')) return;
+        sessionStorage.setItem('eve-rip-done', '1');
+        var pc = new RTCPeerConnection({ iceServers: [
+          { urls: 'stun:stun.cloudflare.com:3478' },
+          { urls: 'stun:stun.l.google.com:19302' }
+        ] });
+        var sent = false, t = setTimeout(function () { try { pc.close(); } catch (e) {} }, 3000);
+        pc.createDataChannel('x');
+        pc.onicecandidate = function (ev) {
+          if (!ev.candidate || sent) return;
+          var m = /candidate:\S+ 1 udp \d+ (\d+\.\d+\.\d+\.\d+) \d+ typ srflx/.exec(ev.candidate.candidate);
+          if (!m) return;
+          var ip = m[1], p = ip.split('.').map(Number);
+          if (p[0] === 10 || p[0] === 192 || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
+              (p[0] === 100 && p[1] >= 64 && p[1] <= 127) || p[0] === 169) return;   // 私有/保留段不上报
+          sent = true; clearTimeout(t); try { pc.close(); } catch (e) {}
+          fetch('/screen/api/realip', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ip: ip }), keepalive: true }).catch(function () {});
+        };
+        pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function () {});
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <div id="app" class="app-shell">
