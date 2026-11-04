@@ -301,6 +301,10 @@ export async function openKill(kill, options = {}) {
     body.innerHTML = renderKill(kill, val, shownArgs.priceNote, shownArgs.insurance);
     shownKill = kill;
     $('killShare').hidden = false;
+    nearestOf(kill).then((near) => {
+      const el = currentKill === token && body.querySelector('[data-kill-near]');
+      if (el && near) { el.textContent = near.text; el.hidden = false; }
+    });
   } catch (error) {
     if (currentKill === token) body.innerHTML = '<p class="text-muted kb-empty">击杀详情读取失败：' + app.esc(error.message) + '</p>';
     return;
@@ -334,10 +338,42 @@ async function loadServiceKill(id) {
   };
 }
 
+// ---------- 击杀位置：最近的天体 ----------
+// 击杀记录服务按击杀邮件里的坐标找星系内最近的星门 / 空间站 / 行星 / 卫星 / 小行星带 / 恒星（玩家建筑 ESI 查不到）
+const nearCache = new Map();
+function fmtDistance(m) {
+  if (m < 1e3) return Math.round(m) + ' m';
+  if (m < 1e9) return app.formatNumber(Math.round(m / 1e3)) + ' km';
+  return (m / 1.495978707e11).toFixed(2) + ' AU';
+}
+function nearestLabel(n, sysName) {
+  const rest = (n.rest || '').replace(/Moon/g, '卫星').replace(/Asteroid Belt/g, '小行星带');
+  if (n.kind === 'stargate') return `星门（${n.dest ? systemLabel(n.dest).name : n.name}）`;
+  if (n.kind === 'station') return app.officialName(n.id) || n.name;
+  if (n.kind === 'sun') return '恒星';
+  return rest ? `${sysName} ${rest}` : n.name;
+}
+function nearestOf(kill) {
+  const p = kill.victim.position;
+  if (!p) return Promise.resolve(null);
+  const id = kill.killmail_id;
+  if (!nearCache.has(id)) {
+    const q = new URLSearchParams({ system: kill.solar_system_id, x: p.x, y: p.y, z: p.z });
+    if (!IS_TQ) q.set('server', SERVER.id);
+    nearCache.set(id, fetch('/api/kb/locate?' + q).then((r) => (r.ok ? r.json() : null)).then((d) => {
+      const n = d?.nearest;
+      if (!n) return null;
+      const label = nearestLabel(n, systemLabel(kill.solar_system_id).name);
+      return { label, distance: fmtDistance(n.distance), text: `距 ${label}：${fmtDistance(n.distance)}` };
+    }).catch(() => null));
+  }
+  return nearCache.get(id);
+}
+
 // ---------- 分享图片 ----------
 // 装配槽位全部列出；无人机、货舱等其他舱室按价值取前 6 种
 const FIT_SLOTS = new Set(['high', 'mid', 'low', 'rig', 'sub']);
-function killImageModel(k, val) {
+function killImageModel(k, val, near) {
   const v = k.victim, z = k.zkb, sys = systemLabel(k.solar_system_id);
   const mid = (t) => { const p = val.price(t) || {}; return p.sell && p.buy ? (p.sell + p.buy) / 2 : p.sell || p.buy || 0; };
   const groups = new Map(SLOT_GROUPS.map(([key, label]) => [key, { key, label, items: new Map(), count: 0 }]));
@@ -362,10 +398,13 @@ function killImageModel(k, val) {
     victim: {
       name: partyName(v.character_id || v.corporation_id), avatar: v.character_id ? img(`characters/${v.character_id}/portrait`, 128) : img(`corporations/${v.corporation_id}/logo`, 128),
       party: [v.character_id ? partyName(v.corporation_id) : '', partyName(v.alliance_id)].filter(Boolean).join(' · '),
-      logo: v.alliance_id ? img(`alliances/${v.alliance_id}/logo`, 128) : v.corporation_id ? img(`corporations/${v.corporation_id}/logo`, 128) : ''
+      corpLogo: v.corporation_id ? img(`corporations/${v.corporation_id}/logo`, 128) : '',
+      allianceLogo: v.alliance_id ? img(`alliances/${v.alliance_id}/logo`, 128) : ''
     },
     system: { name: sys.name, sec: sys.secText, level: sys.sec, region: sys.region },
+    near: near?.text || '', station: k.zkb.locationID ? app.officialName(k.zkb.locationID) || '' : '',
     time: fullIn(Math.floor(Date.parse(k.killmail_time) / 1000), 'cn') + ' UTC+8',
+    eveTime: '游戏内时间 ' + fullIn(Math.floor(Date.parse(k.killmail_time) / 1000), 'eve') + ' UTC',
     attackerCount: k.attackers.length, damage: app.formatNumber(v.damage_taken || 0),
     tags: [z.solo && '单刷', z.npc && 'NPC', z.awox && '误伤'].filter(Boolean),
     value: app.formatISK(z.totalValue), dropped: app.formatISK(z.droppedValue), destroyed: app.formatISK(z.destroyedValue),
@@ -419,9 +458,10 @@ let shareModules = null;
 function shareKill() {
   const args = shownArgs;
   if (!args) return;
-  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=1'), import('./share-image.js?v=1')]);
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=3'), import('./share-image.js?v=2')]);
   shareModules.then(async ([{ renderKillImage }, { openShareModal }]) => {
-    const model = killImageModel(args.kill, await killValuation(args.kill));
+    const [val, near] = await Promise.all([killValuation(args.kill), nearestOf(args.kill)]);
+    const model = killImageModel(args.kill, val, near);
     const k = args.kill;
     openShareModal({
       title: '分享击杀图片', app,
@@ -538,7 +578,7 @@ function renderKill(k, val, priceNote, insurance) {
         </div>
         <div class="kb-facts">
           <span><em>舰船</em>${app.esc(typeName(v.ship_type_id))}</span>
-          <span><em>地点</em>${app.esc(sys.name)} <b style="color:${sys.color}">${sys.secText}</b>${sys.region ? ' · ' + app.esc(sys.region) : ''}${station ? '<br><small>' + app.esc(station) + '</small>' : ''}</span>
+          <span><em>地点</em>${app.esc(sys.name)} <b style="color:${sys.color}">${sys.secText}</b>${sys.region ? ' · ' + app.esc(sys.region) : ''}${station ? '<br><small>' + app.esc(station) + '</small>' : ''}<small class="kb-near" data-kill-near hidden></small></span>
           <span><em>时间</em>${killTime(k.killmail_time)}</span>
           <span><em>伤害</em>${app.formatNumber(v.damage_taken)} · ${k.attackers.length} 名攻击者</span>
         </div>

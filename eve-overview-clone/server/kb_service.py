@@ -431,6 +431,8 @@ CREATE TABLE IF NOT EXISTS abyssal_dyn(item_id INTEGER PRIMARY KEY, type_id INTE
 CREATE TABLE IF NOT EXISTS abyssal_models(type_id INTEGER PRIMARY KEY, model BLOB, stats TEXT, trained_at INTEGER);
 -- 阵亡装配：从击杀原文提取的各槽位物品（JSON），供 shipfits 统计常见装配
 CREATE TABLE IF NOT EXISTS km_fits(id INTEGER PRIMARY KEY, ship INTEGER, time INTEGER, fit TEXT);
+-- 星系内天体坐标（击杀位置找最近天体用；向 ESI 取一次后永久保存）：data = [[类型, ID, 名称, x, y, z, 星门目的星系], ...]
+CREATE TABLE IF NOT EXISTS celestials(system_id INTEGER PRIMARY KEY, data TEXT);
 CREATE INDEX IF NOT EXISTS kmfit_ship ON km_fits(ship, time);
 """
 
@@ -1561,6 +1563,57 @@ class Api:
         for k in br_keys[:-BR_CACHE_KEEP]:
             self.store.cache.pop(k, None)
         return value
+
+    # GET /locate?system=ID&x=&y=&z=：击杀位置最近的天体（星门 / 空间站 / 行星 / 卫星 / 小行星带 / 恒星）及距离（米）
+    def locate(self, q):
+        sid = int(q["system"])
+        x, y, z = float(q["x"]), float(q["y"]), float(q["z"])
+        items = self.system_celestials(sid)
+        if not items:
+            return {"nearest": None}
+        kind, cid, name, cx, cy, cz, dest = min(items, key=lambda it: (it[3] - x) ** 2 + (it[4] - y) ** 2 + (it[5] - z) ** 2)
+        dist = ((cx - x) ** 2 + (cy - y) ** 2 + (cz - z) ** 2) ** 0.5
+        # rest：去掉开头星系名的部分（如「VII - Moon 2」），前端换成本地化的星系名再拼
+        sys_name = next((it[2][:-len(" - Star")] for it in items if it[0] == "sun"), "")
+        rest = name[len(sys_name):].strip() if sys_name and name.startswith(sys_name) else ""
+        return {"nearest": {"kind": kind, "id": cid, "name": name, "rest": rest, "dest": dest, "distance": round(dist)}}
+
+    def system_celestials(self, sid):
+        if not hasattr(self, "celestial_cache"):
+            self.celestial_cache = {}
+            self.celestial_lock = threading.Lock()
+        if sid in self.celestial_cache:
+            return self.celestial_cache[sid]
+        with self.celestial_lock:            # 同一时间只取一个星系，避免并发重复请求
+            if sid in self.celestial_cache:
+                return self.celestial_cache[sid]
+            row = self.store.conn().execute("SELECT data FROM celestials WHERE system_id=?", (sid,)).fetchone()
+            if row:
+                self.celestial_cache[sid] = json.loads(row[0])
+                return self.celestial_cache[sid]
+            esi = self.store.esi_url
+            info, _ = get_json(esi(f"/universe/systems/{sid}/"), timeout=20, retries=2)
+            tasks = [("stargate", g) for g in info.get("stargates") or []] + [("station", st) for st in info.get("stations") or []]
+            for pl in info.get("planets") or []:
+                tasks.append(("planet", pl["planet_id"]))
+                tasks += [("moon", m) for m in pl.get("moons") or []] + [("belt", b) for b in pl.get("asteroid_belts") or []]
+            path = {"stargate": "stargates", "station": "stations", "planet": "planets", "moon": "moons", "belt": "asteroid_belts"}
+
+            def fetch(t):
+                kind, cid = t
+                d, _ = get_json(esi(f"/universe/{path[kind]}/{cid}/"), timeout=20, retries=2)
+                p = d.get("position") or {}
+                return [kind, cid, d.get("name") or "", p.get("x", 0), p.get("y", 0), p.get("z", 0), (d.get("destination") or {}).get("system_id")]
+            with concurrent.futures.ThreadPoolExecutor(SHIPFIT_WORKERS) as pool:
+                items = list(pool.map(fetch, tasks))
+            # 恒星在星系坐标原点
+            items.append(["sun", info.get("star_id"), (info.get("name") or "") + " - Star", 0, 0, 0, None])
+            with self.store.write_lock:
+                c = self.store.conn()
+                c.execute("INSERT OR REPLACE INTO celestials VALUES(?, ?)", (sid, json.dumps(items, separators=(",", ":"))))
+                c.commit()
+            self.celestial_cache[sid] = items
+            return items
 
     def fill_damage(self, rows):
         """旧击杀没存攻击者伤害：向 ESI 取原文补上。最多等 BR_DMG_WAIT 秒，返回期间是否补到了；
@@ -5968,13 +6021,13 @@ def match_route(routes, parts):
 
 # ---------------------------------------------------------------- HTTP 服务
 # 击杀相关接口按 ?server= 分到各服务器的库（其余接口的 server 参数含义不变）
-KB_ROUTES = ("status", "live", "battles", "battles/history", "feed", "top", "summary", "leaderboard", "search", "br", "shipfits")
+KB_ROUTES = ("status", "live", "battles", "battles/history", "feed", "top", "summary", "leaderboard", "search", "br", "shipfits", "locate")
 V1_KB_ROUTES = {"kills", "live", "top", "kill", "summary", "battles", "battle_report", "leaderboard", "entity", "pilots", "search", "ship_fits"}
 
 
 def kb_routes(api):
     return {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "feed": api.feed, "top": api.top,
-            "summary": api.summary, "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "shipfits": api.shipfits}
+            "summary": api.summary, "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "shipfits": api.shipfits, "locate": api.locate}
 
 
 def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, cbg=None):

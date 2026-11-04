@@ -962,7 +962,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v61').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v62').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1005,7 +1005,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v36').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v38').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, getInsurance, valuation, showToast, copyText
     });
@@ -3145,6 +3145,33 @@ function togglePrefs(show = $('prefsModal').hidden) {
   $('prefsModal').hidden = !show;
   if (show) renderPrefs();
 }
+// 弹窗固定大小：打开期间内容变化（切标签、加载完成、展开）时只变高不变矮，免得弹窗忽大忽小；关闭后复原。
+// 大弹窗在 CSS 里直接固定了高度；手机上弹窗是全屏，不处理
+function lockModalSize() {
+  if (!window.ResizeObserver) return;
+  const ro = new ResizeObserver((entries) => {
+    if (MOBILE_QUERY.matches) return;
+    for (const { target: c } of entries) {
+      const h = c.offsetHeight;
+      if (h > (c.lockH || 0)) { c.lockH = h; c.style.minHeight = Math.min(h, window.innerHeight * 0.9) + 'px'; }
+    }
+  });
+  const watch = (modal) => {
+    const c = modal.querySelector(':scope > .modal-content');
+    if (!c) return;
+    if (modal.hidden || !modal.isConnected) { ro.unobserve(c); c.lockH = 0; c.style.minHeight = ''; } else ro.observe(c);
+  };
+  document.querySelectorAll('.modal').forEach(watch);
+  const isModal = (n) => n.nodeType === 1 && n.classList.contains('modal');
+  new MutationObserver((list) => {
+    for (const m of list) {
+      if (m.type === 'attributes') { if (isModal(m.target)) watch(m.target); continue; }
+      m.addedNodes.forEach((n) => isModal(n) && watch(n));
+      m.removedNodes.forEach((n) => isModal(n) && watch(n));
+    }
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden'] });
+}
+
 function initPrefs() {
   applyPrefs();
   $('prefsBtn').addEventListener('click', () => togglePrefs(true));
@@ -5981,6 +6008,7 @@ function init() {
   initShortcuts();
   initContact();
   initPrefs();
+  lockModalSize();
   initDesktopDl();
   if (location.hash.startsWith('#map')) switchView('map');   // 星图分享链接
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接

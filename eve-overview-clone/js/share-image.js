@@ -192,7 +192,10 @@ export function openShareModal(opts) {
         <button class="modal-close" data-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
       <div class="modal-body">
-        <div class="share-image-preview"></div>
+        <div class="share-image-stage">
+          <div class="share-image-preview"></div>
+          <div class="share-image-busy"><span class="spinner"></span><span>正在生成图片…</span></div>
+        </div>
         <div class="share-image-actions">
           <div class="segmented" role="group" aria-label="图片配色">
             <button type="button" data-theme-pick="light">浅色</button>
@@ -205,14 +208,14 @@ export function openShareModal(opts) {
         </div>
       </div>
     </div>`;
-  const box = modal.querySelector('.share-image-preview');
+  const box = modal.querySelector('.share-image-preview'), stage = modal.querySelector('.share-image-stage'), busy = modal.querySelector('.share-image-busy');
   const dl = modal.querySelector('[data-download]');
   const draw = async () => {
     const my = ++seq;
     modal.querySelectorAll('[data-theme-pick]').forEach((b) => b.classList.toggle('active', b.dataset.themePick === theme));
     box.className = `share-image-preview theme-${theme}`;
-    if (!blob) box.innerHTML = '<div class="share-image-loading"><span class="spinner"></span>正在生成图片…</div>';
-    box.classList.add('is-busy');
+    stage.className = `share-image-stage theme-${theme}`;
+    busy.hidden = false;
     try {
       const canvas = await opts.render(theme);
       const next = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
@@ -227,10 +230,10 @@ export function openShareModal(opts) {
       modal.querySelector('[data-copy]')?.removeAttribute('disabled');
     } catch (error) {
       if (my !== seq) return;
-      if (!blob) box.innerHTML = `<p class="text-muted share-image-loading">生成图片失败：${app.esc(error.message)}</p>`;
+      if (!blob) box.innerHTML = `<p class="share-image-error">生成图片失败：${app.esc(error.message)}</p>`;
       else app.showToast('生成图片失败：' + error.message, 'error', 4000);
     } finally {
-      if (my === seq) box.classList.remove('is-busy');
+      if (my === seq) busy.hidden = true;
     }
   };
   const close = () => { seq++; modal.remove(); if (url) URL.revokeObjectURL(url); document.removeEventListener('keydown', onKey); };

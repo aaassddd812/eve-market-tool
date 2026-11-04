@@ -2227,6 +2227,8 @@ td.loc {
 .kb-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 16px; margin-top: 12px; font-size: 0.8125rem; }
 .kb-facts em { display: block; font-style: normal; font-size: 0.6875rem; color: var(--text-muted); }
 .kb-facts small { color: var(--text-muted); }
+.kb-facts .kb-near { display: block; }
+.kb-facts .kb-near[hidden] { display: none; }
 .kb-tags { margin-top: 8px; }
 .kb-tags .kb-tag:first-child { margin-left: 0; }
 .kb-values { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; min-width: 200px; }
@@ -2552,12 +2554,19 @@ td.loc {
 
 .modal-close:hover { color: var(--text-primary); background: var(--bg-hover); }
 .modal-close svg { width: 18px; height: 18px; }
-.modal-header .kill-share-btn { margin-left: auto; margin-right: 4px; }
-.modal-header .kill-share-btn svg { width: 17px; height: 17px; }
+.modal-head-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+.modal-head-actions .kill-share-btn svg { width: 17px; height: 17px; }
 .kb-share-btn { gap: 6px; }
 .kb-share-btn svg { width: 15px; height: 15px; }
 
 .modal-body { padding: 20px; overflow-y: auto; }
+/* 弹窗固定大小（电脑上）：带标签页、加载后内容会变的大弹窗直接固定高度，内容在里面滚动；
+   其余弹窗由 modern-app.js 的 lockModalSize 保证打开期间只变高不变矮（手机上弹窗本来就是全屏） */
+.modal-content > .modal-body { flex: 1 1 auto; min-height: 0; }
+@media (min-width: 769px) {
+  .modal-content.kill-content, .modal-content.cr-modal, .modal-content.au-modal, .modal-content.ct-modal, .modal-content.war-modal,
+  .modal-content.mut-modal, .modal-content.cart-modal, .modal-content.fit-esi-content { height: min(860px, 90vh); }
+}
 
 .steps { list-style: none; counter-reset: step; display: flex; flex-direction: column; gap: 20px; }
 .steps li { counter-increment: step; position: relative; padding-left: 38px; }
@@ -3534,12 +3543,19 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 }
 .kb-br-tools .btn svg { width: 15px; height: 15px; }
 .kb-br-tools .btn-primary { gap: 6px; }
-.share-image-modal .modal-content { max-width: 760px; width: calc(100vw - 32px); }
-.share-image-preview { position: relative; min-height: 220px; max-height: min(68vh, 900px); overflow-y: auto; border-radius: var(--radius-md); background: #eef1f6; }
+/* 分享图片：盖在击杀详情等弹窗之上；预览区固定高度（生成前后不跳动），图片按原始宽度 1200 显示，窄屏缩放 */
+.modal.share-image-modal { z-index: 1050; }
+.share-image-modal .modal-content { max-width: min(1260px, calc(100vw - 32px)); width: calc(100vw - 32px); }
+.share-image-stage { position: relative; border-radius: var(--radius-md); overflow: hidden; }
+.share-image-preview { height: min(72vh, 1100px); overflow-y: auto; background: #eef1f6; transition: background 150ms; }
 .share-image-preview.theme-dark { background: #0b0f17; }
-.share-image-preview img { display: block; width: 100%; height: auto; transition: opacity 150ms; }
-.share-image-preview.is-busy img { opacity: 0.45; }
-.share-image-loading { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 220px; margin: 0; color: #8a94a6; font-size: 0.8125rem; }
+.share-image-preview img { display: block; width: 100%; max-width: 1200px; height: auto; margin: 0 auto; }
+.share-image-busy { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: #6f7d93; font-size: 0.875rem; background: rgba(238, 241, 246, 0.72); backdrop-filter: blur(2px); }
+.share-image-stage.theme-dark .share-image-busy { background: rgba(11, 15, 23, 0.72); color: #a3b0c3; }
+.share-image-busy[hidden] { display: none; }
+.share-image-busy .spinner { width: 28px; height: 28px; border-width: 3px; }
+.share-image-error { display: flex; align-items: center; justify-content: center; height: 100%; margin: 0; color: #8a94a6; font-size: 0.875rem; }
+@media (max-width: 768px) { .share-image-preview { height: 62vh; } }
 .share-image-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .share-image-actions .text-muted { margin-right: auto; font-size: 0.75rem; }
 .share-image-actions .segmented button { padding: 0 14px; }

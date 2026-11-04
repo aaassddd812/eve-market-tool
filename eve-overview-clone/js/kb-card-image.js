@@ -1,6 +1,6 @@
 // ===== 击杀详情、人物 / 军团 / 联盟页的分享图片 =====
 // 纯 Canvas 绘制；配色、图片加载、画法小工具与弹窗在 share-image.js。数据模型由 killboard.js / kb-page.js 整理好传进来。
-import { W, THEMES, loadImages, rr, alpha, makeCanvas, crop, painter } from './share-image.js?v=1';
+import { W, THEMES, loadImages, rr, alpha, makeCanvas, crop, painter } from './share-image.js?v=2';
 
 const PAD = 40, IW = W - PAD * 2, GAP = 20;
 // 安全等级颜色（页面里是 CSS 变量，画布读不了，按图片配色取）
@@ -50,7 +50,7 @@ function chipRows(P, list, x, maxX) {
 // ---------------------------------------------------------------- 击杀
 export async function renderKillImage(m, theme = 'light') {
   const C = THEMES[theme] || THEMES.light;
-  const images = await loadImages([m.render, m.victim.avatar, m.victim.logo,
+  const images = await loadImages([m.render, m.victim.avatar, m.victim.corpLogo, m.victim.allianceLogo,
     ...m.groups.flatMap((gr) => gr.items.map((it) => it.icon)), ...m.attackers.flatMap((a) => [a.avatar, a.ship]),
     ...m.parties.map((p) => p.logo), ...m.ships.map((s) => s.icon)]);
   const { canvas, g } = makeCanvas(4000);
@@ -58,7 +58,8 @@ export async function renderKillImage(m, theme = 'light') {
 
   const x0 = PAD + 24 + 252 + 32, xr = W - PAD - 28;
   const chips = [{ text: `${m.system.name} ${m.system.sec}`, dot: secColor(C, m.system.level) }, ...(m.system.region ? [{ text: m.system.region }] : []),
-    { text: m.time }, { text: `${m.attackerCount} 名攻击者` }, { text: `承受伤害 ${m.damage}` }, ...m.tags.map((t) => ({ text: t, fg: C.b, bg: alpha(C.b, 0.12) }))];
+    ...(m.station ? [{ text: m.station }] : []), ...(m.near ? [{ text: m.near }] : []),
+    { text: m.time }, { text: m.eveTime }, { text: `${m.attackerCount} 名攻击者` }, { text: `承受伤害 ${m.damage}` }, ...m.tags.map((t) => ({ text: t, fg: C.b, bg: alpha(C.b, 0.12) }))];
   const crow = chipRows(P, chips, x0, xr);
   const HERO = Math.max(300, 150 + crow * 38 + 112);
   // 左列：装配分组；右列：攻击者
@@ -83,10 +84,10 @@ export async function renderKillImage(m, theme = 'light') {
   g.fillRect(PAD, top, IW, HERO);
   g.restore();
   P.pic(images.get(m.render), PAD + 24, top + 24, 252, 18);
-  // 右上角：联盟 / 军团图标
-  const logo = images.get(m.victim.logo);
-  if (logo) P.pic(logo, xr - 64, top + 24, 64, 14);
-  const nameMax = xr - x0 - (logo ? 80 : 0);
+  // 右上角：军团图标在左、联盟图标在右
+  const logos = [images.get(m.victim.corpLogo), images.get(m.victim.allianceLogo)].filter(Boolean);
+  logos.forEach((im, i) => P.pic(im, xr - 64 - (logos.length - 1 - i) * 76, top + 24, 64, 14));
+  const nameMax = xr - x0 - logos.length * 76;
   P.text(m.ship, x0, top + 62, { size: 34, weight: 800, max: nameMax });
   if (m.shipGroup) P.text(m.shipGroup, x0, top + 84, { size: 13, color: C.muted, max: nameMax });
   // 受害者

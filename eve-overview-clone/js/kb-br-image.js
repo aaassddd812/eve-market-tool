@@ -1,6 +1,6 @@
 // ===== 战场统计：生成分享图片 =====
 // 纯 Canvas 绘制（不依赖第三方库）；配色、图片加载与弹窗在 share-image.js。
-import { W, SCALE, THEMES, loadImage, rr, fit, font, alpha } from './share-image.js?v=1';
+import { W, SCALE, THEMES, loadImage, rr, fit, font, alpha } from './share-image.js?v=2';
 
 const PAD = 40, IW = W - PAD * 2, GAP = 20;
 
