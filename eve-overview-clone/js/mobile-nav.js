@@ -68,7 +68,7 @@ export function initMobileNav() {
         ${act('prefsBtn', svg('prefsBtn'), '个性化设置')}
         ${act('contactBtn', svg('contactBtn'), '联系作者')}
         ${act('api', document.querySelector('.api-link svg')?.outerHTML || '', 'API 文档')}
-        ${act('desktopDlBtn', svg('desktopDlBtn'), '下载 App')}
+        ${act('desktopDlBtn', svg('desktopDlBtn'), document.querySelector('#desktopDlBtn .dl-label')?.textContent || '下载 App')}
       </div></div>`;
   document.body.appendChild(sheet);
 

@@ -5,7 +5,7 @@ import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadH
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v38';
 import * as SM from './struct-markets.js?v=v8';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v11';
-import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v4';
+import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v5';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
 import * as FF from './float-feed.js?v=v11';
@@ -317,6 +317,9 @@ function syncNavActive() {
   syncMobileNav();
 }
 function initNavigation() {
+  // 下载按钮：手机访问写「下载 App」，电脑写「下载客户端」，点开都是同一个下载框（手机「全部」面板跟着用这个文字）
+  const dl = document.querySelector('#desktopDlBtn .dl-label');
+  if (dl && MOBILE_UA) dl.textContent = '下载 App';
   $$('.nav-btn').forEach((btn) => btn.addEventListener('click', () => {
     if (btn.hasAttribute('data-arb')) { openArb(); return; }
     if (btn.dataset.view === 'market' && state.currentView === 'market' && !$('arbView').hidden) { closeArbToCatalog(); return; }
@@ -367,12 +370,14 @@ function initNavigation() {
   fitNav = schedule;
 }
 
-// 网页版顶栏：常用入口留在顶栏，其余按分组收进「更多工具」；右侧只留服务器、语言、购物车、预警，其余收进「⋯」。
+// 网页版顶栏：常用入口留在顶栏，其余按分组收进「更多工具」；右侧留服务器、购物车、预警、定制、下载，其余收进「⋯」。
 // 下拉悬停即展开（离开稍等再收），点按钮也能开关，Esc / 点外面关闭。面板用 fixed 定位，不被导航栏的横向滚动裁掉。
 // 按钮是原来的元素搬进去的，点击、高亮逻辑不变；手机底栏仍从 .header-nav 里读按钮。
 const NAV_MAIN = ['market', 'arb', 'map', 'kb', 'fit', 'appraisal', 'plaza'];
 const NAV_MORE = [['交易', ['contracts', 'courier', 'lp', 'abyss', 'bazaar']], ['生产', ['industry', 'pi']], ['宇宙与战斗', ['sim', 'war', 'sov', 'wh']], ['其他', ['guide']]];
-const ACT_MORE = [['themeToggle', '切换主题'], ['prefsBtn', '个性化设置'], ['shortcutHelpBtn', '快捷键'], ['desktopDlBtn', '下载 App'], ['contactBtn', '联系作者'], [null, '开放 API 文档', '.api-link']];
+const ACT_MORE = [['themeToggle', '切换主题'], ['prefsBtn', '个性化设置'], ['shortcutHelpBtn', '快捷键'], [null, '开放 API 文档', '.api-link']];
+const MOBILE_UA = /Android|iPhone|iPad|iPod|Mobile|HarmonyOS/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+const LANG_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>';
 const CARET = '<svg class="hm-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>';
 function hoverMenu(wrap, trigger, panel, align = 'left') {
   let timer = 0;
@@ -427,6 +432,18 @@ function initNavMore(header, nav) {
     el.removeAttribute('title');
     el.insertAdjacentHTML('beforeend', `<span class="hm-label">${label}</span>`);
     box.appendChild(el);
+  }
+  // 语言：#langToggle 的文字由 i18n.js 维护（EN / 中文），菜单里另放一行转发点击，原按钮隐藏
+  const lang = document.getElementById('langToggle');
+  if (lang) {
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'hm-row hm-lang';
+    row.innerHTML = `${LANG_ICON}<span class="hm-label">语言</span><b class="notranslate" translate="no">${lang.textContent.trim()}</b>`;
+    row.addEventListener('click', () => lang.click());
+    new MutationObserver(() => { row.lastElementChild.textContent = lang.textContent.trim(); }).observe(lang, { childList: true, characterData: true, subtree: true });
+    lang.hidden = true;
+    box.prepend(row);
   }
   actions.appendChild(more);
   hoverMenu(more, more.firstElementChild, more.querySelector('.hm-panel'), 'right');

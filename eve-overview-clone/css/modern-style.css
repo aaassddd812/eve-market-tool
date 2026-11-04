@@ -256,6 +256,8 @@ mark {
 .app-header .hm-box .hm-row:hover { background: var(--bg-hover); color: var(--text-primary); border-color: transparent; }
 .app-header .hm-box .hm-row svg { width: 17px; height: 17px; flex: none; color: var(--text-secondary); }
 .app-header .hm-box .hm-row > span:not(.hm-label) { display: none; }
+.app-header .hm-box .hm-lang .hm-label { flex: 1; text-align: left; }
+.hm-lang b { padding: 0 8px; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.75rem; line-height: 22px; }
 .hm-label { white-space: nowrap; }
 @media (max-width: 768px) { .hm { display: none; } }
 .header-brand { flex: none; }
@@ -6809,6 +6811,8 @@ td .sov-auto-tag { margin-left: 4px; }
 }
 
 /* 右上角「定制」：联系作者弹窗（淡色底，不用边框） */
+.icon-btn.desktop-dl-btn { width: auto; gap: 4px; padding: 0 10px; font-size: 0.75rem; font-weight: 600; }
+.icon-btn.desktop-dl-btn svg { width: 15px; height: 15px; }
 .icon-btn.contact-btn { width: auto; gap: 4px; padding: 0 10px; font-size: 0.75rem; font-weight: 600; color: var(--accent-primary); background: color-mix(in srgb, var(--accent-primary) 10%, transparent); }
 .icon-btn.contact-btn svg { width: 15px; height: 15px; }
 .icon-btn.contact-btn:hover { background: color-mix(in srgb, var(--accent-primary) 18%, transparent); color: var(--accent-primary); }
