@@ -6140,7 +6140,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .hr-tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 0.625rem; font-weight: 600; line-height: 1.6; vertical-align: 1px; }
 .hr-tag.hot { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
 .hr-tag.up { color: var(--success, #16a34a); background: color-mix(in srgb, var(--success, #16a34a) 14%, transparent); }
-.hr-tag.warn { color: var(--warning, #d97706); background: color-mix(in srgb, var(--warning, #d97706) 16%, transparent); }
+.hr-tag.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, transparent); }
 .hr-tag.mid { color: var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
 
 /* ===== 舰队对战模拟 / 伤害图表（fit-sim.js、fit-graph.js）===== */
@@ -7875,12 +7875,46 @@ html.is-app .desktop-dl-btn, html.is-app [data-mnav-act="desktopDlBtn"] { displa
 .sos-recent li { padding: 8px 10px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
 .wh-sos-title .wh-sos-bell { margin-left: auto; }
 .wh-sos-title .wh-sos-bell.on { color: var(--accent-primary); background: var(--accent-soft); }
-.fb-form { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
-.fb-form h4 { margin: 0; font-size: 0.8125rem; }
-.fb-form textarea { resize: vertical; min-height: 84px; }
-.fb-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.fb-box { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.fb-tabs { display: flex; gap: 4px; }
+.fb-tabs button { position: relative; height: 30px; padding: 0 12px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-secondary); font: inherit; font-size: 0.8125rem; font-weight: 600; cursor: pointer; }
+.fb-tabs button:hover { color: var(--text-primary); }
+.fb-tabs button.active { background: var(--bg-secondary); color: var(--text-primary); box-shadow: var(--shadow-sm); }
+.fb-tabs button[data-count]:not([data-count=""])::after { content: attr(data-count); margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--danger); color: #fff; font-size: 0.6875rem; line-height: 16px; display: inline-block; }
+.fb-pane { display: flex; flex-direction: column; gap: 8px; }
+.fb-pane textarea { resize: vertical; min-height: 84px; }
+.fb-kinds { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .fb-kinds button { height: 28px; padding: 0 10px; border: 0; border-radius: 999px; background: var(--bg-secondary); color: var(--text-secondary); font: inherit; font-size: 0.75rem; cursor: pointer; }
 .fb-kinds button:hover { color: var(--text-primary); }
 .fb-kinds button.active { background: color-mix(in srgb, var(--accent-primary) 16%, var(--bg-secondary)); color: var(--accent-primary); font-weight: 600; }
 .fb-foot { display: flex; align-items: center; gap: 10px; }
 .fb-foot small { flex: 1; min-width: 0; font-size: 0.75rem; }
+.fb-empty { padding: 14px 0; font-size: 0.8125rem; text-align: center; }
+.fb-err { font-size: 0.8125rem; color: var(--danger); }
+.fb-foot-note { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 0.6875rem; }
+.fb-foot-note .link-btn { font-size: 0.6875rem; }
+.fb-ticket { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-secondary); }
+.fb-ticket.new { background: color-mix(in srgb, var(--danger) 8%, var(--bg-secondary)); }
+.fb-new { padding: 1px 8px; border-radius: 999px; font-size: 0.6875rem; font-weight: 600; background: var(--danger); color: #fff; }
+.fb-ticket-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.8125rem; }
+.fb-ticket-head small { margin-left: auto; font-size: 0.6875rem; }
+.fb-kind { font-size: 0.6875rem; color: var(--text-secondary); }
+.fb-status { padding: 1px 8px; border-radius: 999px; font-size: 0.6875rem; font-weight: 600; background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.fb-status.doing { background: color-mix(in srgb, var(--accent-primary) 16%, transparent); color: var(--accent-primary); }
+.fb-status.done { background: color-mix(in srgb, var(--success) 16%, transparent); color: var(--success); }
+.fb-text { font-size: 0.8125rem; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-primary); }
+.fb-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 0.6875rem; overflow-wrap: anywhere; }
+.fb-msg { padding: 6px 10px; border-radius: var(--radius-sm); background: var(--bg-tertiary); }
+.fb-msg.admin { background: color-mix(in srgb, var(--accent-primary) 10%, var(--bg-tertiary)); }
+.fb-msg small { font-size: 0.6875rem; color: var(--text-muted); }
+.fb-msg p { font-size: 0.8125rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fb-reply { display: flex; gap: 6px; align-items: center; }
+.fb-reply .pi-input { flex: 1; min-width: 0; }
+.fb-reply.admin { flex-direction: column; align-items: stretch; }
+.fb-reply.admin textarea { min-height: 52px; }
+.fb-reply-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fb-reply-actions .btn, .fb-reply .btn { height: 30px; padding: 0 12px; font-size: 0.8125rem; }
+.contact-btn { position: relative; }
+.contact-btn.has-dot::after { content: ""; position: absolute; top: 5px; right: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 2px var(--bg-primary); }
+.ind-bp-manual { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; margin-top: 10px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.8125rem; }
+.ind-bp-manual .ind-bp-price-in { width: 130px; }

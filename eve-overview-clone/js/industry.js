@@ -9,14 +9,15 @@
 // 利润排行的价格与成交量先用交易中心快照（/api/v1/hubs/arbitrage），综合评分 = 每小时利润、日均成交额、利润率、买卖价差加权。
 // NPC 蓝图：npc-bp.json（build_npc_bp.mjs 生成），侧栏「NPC 蓝图」页与计算器蓝图卡片。
 // 蓝图价格：市场有售的原图用吉他卖价；市场没有的（拷贝、派系等）用公开合同最低价（击杀记录服务 /api/kb/bpprices，
-//          数据来自 EVE Ref 公开合同快照）。可选择不计入、原图分摊到 N 个流程、或按拷贝每流程单价计入。
+//          数据来自 EVE Ref 公开合同快照）。可选择不计入、原图分摊到 N 个流程、按拷贝每流程单价计入，
+//          或手动填写自己买蓝图花的钱和可用流程数（按产品记在 eve-industry-bpcost，按服务器分开）。
 // 公式（与游戏一致）：
 //   材料 = max(流程数, ⌈round(基础 × 流程数 × (1 − ME%) × 建筑加成 × 改装件加成, 2)⌉)
 //   预估价值 EIV = Σ 基础材料数 × 调整价格 × 流程数
 //   安装费 = EIV × 星系指数 × (1 − 建筑减免) + EIV × (设施税 + 4% SCC 附加费)
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
-import { SERVER, HUB, HUB_NAME } from './server.js?v=s4';
+import { SERVER, HUB, HUB_NAME, serverKey } from './server.js?v=s4';
 import * as Plan from './ind-plan.js?v=v7';
 import * as Chain from './ind-chain.js?v=2';
 import * as IS from './ind-structs.js?v=4';
@@ -28,6 +29,7 @@ const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
 const RECENT_KEY = 'eve-industry-recent';
 const SIDE_PANE_KEY = 'eve-industry-side-pane';
+const BPCOST_KEY = serverKey('eve-industry-bpcost');   // 手动蓝图成本：产品 -> { price 总价, runs 可用流程数 }
 const JITA = HUB.hub.system, FORGE = HUB.id;   // 默认交易中心（吉他 / 曙光服为索巴色基）
 const SCC = 4;           // SCC 附加费 %
 const NPC_TAX = 0.25;    // NPC 空间站设施税 %
@@ -349,6 +351,20 @@ function invention(pid, decId = 0) {
 // 生产 units 个 pid 的成本：材料逐个按「购买」或「自制」（C.build 中的物品）计算，自制按比例分摊。
 // 能自制的有三种（ind-chain.js 的 kindOf）：bp 蓝图、pi 行星配方、ore 买矿石化矿；化矿的材料先记到 sink.ore，
 // 由 calc 合在一起解最便宜的矿石组合，第二遍按得到的化矿单价（K.oreUnit）计成本。sink.g 是层次图，只算单价时 sink 为 null
+// 手动蓝图成本：价格支持 50m / 1.2b / 300k 这类写法
+const bpCosts = () => ctx.store.getJSON(BPCOST_KEY, {}) || {};
+function setBpCost(pid, v) {
+  const all = bpCosts();
+  if (v) all[pid] = v; else delete all[pid];
+  ctx.store.setJSON(BPCOST_KEY, all);
+}
+function parseIsk(text) {
+  const m = String(text || '').replace(/[,\s]/g, '').toLowerCase().match(/^(\d+(?:\.\d+)?)([kmb亿万]?)(?:isk)?$/);
+  if (!m) return null;
+  const mul = { '': 1, k: 1e3, m: 1e6, b: 1e9, '万': 1e4, '亿': 1e8 }[m[2]];
+  return Math.round(Number(m[1]) * mul);
+}
+
 const K = { oreUnit: null };
 function produce(id, units, depth, sysId, sink) {
   const kind = Chain.kindOf(id);
@@ -405,7 +421,9 @@ function calc() {
   const bp = bpPrices(pid);
   const bpoPrice = bp.market ?? bp.bpo[0]?.[0] ?? null;
   const bpcPerRun = bp.bpc[0]?.[0] ?? null;
-  const autoMode = inv ? 'none' : !bp.onMarket && bpcPerRun != null ? 'bpc' : 'none';
+  const manual = bpCosts()[pid] || null;
+  const manualPerRun = manual ? manual.price / Math.max(1, manual.runs) : null;
+  const autoMode = manual ? 'manual' : inv ? 'none' : !bp.onMarket && bpcPerRun != null ? 'bpc' : 'none';
   let bpMode = C.bpMode || autoMode;
   if (bpMode === 'bpc' && bpcPerRun == null) bpMode = 'none';
   if (bpMode === 'bpo' && bpoPrice == null) bpMode = 'none';
@@ -452,15 +470,17 @@ function calc() {
   }
   const { raw, matCost, rows } = out;
   const invCost = inv ? inv.perRun * runs : 0;
-  const bpCost = bpMode === 'bpc' ? bpcPerRun * runs : bpMode === 'bpo' ? (bpoPrice / Math.max(1, C.bpoRuns)) * runs : 0;
+  const bpCost = bpMode === 'bpc' ? bpcPerRun * runs : bpMode === 'bpo' ? (bpoPrice / Math.max(1, C.bpoRuns)) * runs
+    : bpMode === 'manual' && manualPerRun != null ? manualPerRun * runs : 0;
   const total = matCost + j.cost + invCost + bpCost;
   if (out.g) out.g.nodes.get(pid).cost = total;
   const unitPrice = prodPrice(pid);
   const revenue = (unitPrice ?? 0) * j.out * (1 - sellFee() / 100);
   const profit = revenue - total;
   const profitNoBp = profit + bpCost;
-  const payback = bpoPrice != null && profitNoBp > 0 ? Math.ceil(bpoPrice / (profitNoBp / runs)) : null;
-  return { pid, act, me, te, runs, j, rows, raw, matCost, g: out.g, lp, inv, invCost, bp, bpoPrice, bpcPerRun, bpMode, bpCost, payback, total, unitPrice, revenue, profit, perUnit: total / j.out };
+  const payPrice = bpMode === 'manual' && manual ? manual.price : bpoPrice;
+  const payback = payPrice != null && profitNoBp > 0 ? Math.ceil(payPrice / (profitNoBp / runs)) : null;
+  return { pid, act, me, te, runs, j, rows, raw, matCost, g: out.g, lp, inv, invCost, bp, bpoPrice, bpcPerRun, bpMode, bpCost, manual, manualPerRun, payback, total, unitPrice, revenue, profit, perUnit: total / j.out };
 }
 
 // ---------- 页面框架 ----------
@@ -815,8 +835,15 @@ function bpCard(r) {
   const sysName = (id) => (id ? D.sys.get(id)?.name || '星系 ' + id : '玩家建筑');
   const bpoRows = bp.bpo.slice(0, 3).map((o) => `<li><b>${isk(o[0])}</b><span>ME ${o[1]} / TE ${o[2]} · ${esc(sysName(o[4]))}</span></li>`).join('');
   const bpcRows = bp.bpc.slice(0, 3).map((c) => `<li><b>${isk(c[0])}<small> / 流程</small></b><span>${c[1]} 流程共 ${isk(c[2])} · ME ${c[3]} / TE ${c[4]} · ${esc(sysName(c[6]))}</span></li>`).join('');
-  const modeOpts = [['none', '不计入'], ['bpo', '原图分摊'], ['bpc', '按拷贝单价']]
-    .filter(([k]) => k === 'none' || (k === 'bpo' ? r.bpoPrice != null : r.bpcPerRun != null));
+  const modeOpts = [['none', '不计入'], ['bpo', '原图分摊'], ['bpc', '按拷贝单价'], ['manual', '手动填写']]
+    .filter(([k]) => k === 'none' || k === 'manual' || (k === 'bpo' ? r.bpoPrice != null : r.bpcPerRun != null));
+  const m = r.manual;
+  const manualHtml = r.bpMode === 'manual' ? `<div class="ind-bp-manual">
+      <label class="pi-inline" title="买这张蓝图（原图或拷贝）花的总价，可写 50m、1.2b、300k"><span>蓝图总价</span><input type="text" class="pi-input ind-bp-price-in" inputmode="decimal" placeholder="如 50m" value="${m ? m.price : ''}" data-ind-bpcost="price"><span>ISK</span></label>
+      <label class="pi-inline" title="拷贝填流程数；原图填打算分摊的流程数"><span>可用</span><input type="number" class="pi-input pi-tax" min="1" max="1000000" value="${m ? m.runs : 1}" data-ind-bpcost="runs"><span>个流程</span></label>
+      <span class="text-muted">${m ? `每流程 ${isk(r.manualPerRun)}，本次计入 ${isk(r.bpCost)}` : '填写后按产品记住，下次自动计入'}</span>
+      ${m ? '<button type="button" class="link-btn" data-ind-bpcost-clear>清除</button>' : ''}
+    </div>` : '';
   return `<div class="pi-card"><div class="pi-card-head"><h3>蓝图</h3></div>
     <div class="ind-bp">
       <div class="ind-bp-col"><h4>市场原图</h4>${bp.onMarket ? (bp.market != null ? `<p class="ind-bp-price">${isk(bp.market)}</p>` : '<p class="text-muted">无卖单</p>') : '<p class="text-muted">不出售</p>'}</div>
@@ -828,8 +855,8 @@ function bpCard(r) {
       <span>蓝图成本</span>
       <div class="segmented">${modeOpts.map(([k, l]) => `<button data-ind-bpmode="${k}" class="${r.bpMode === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       ${r.bpMode === 'bpo' ? `<label class="pi-inline"><span>分摊到</span><input type="number" class="pi-input pi-tax" min="1" max="1000000" value="${C.bpoRuns}" data-ind-calc="bpoRuns"><span>个流程</span></label>` : ''}
-      <span class="text-muted">${r.payback ? `原图 ${ctx.formatNumber(r.payback)} 流程回本` : ''}</span>
-    </div>
+      <span class="text-muted">${r.payback ? `${r.bpMode === 'manual' ? '蓝图' : '原图'} ${ctx.formatNumber(r.payback)} 流程回本` : ''}</span>
+    </div>${manualHtml}
   </div>`;
 }
 
@@ -1485,7 +1512,8 @@ function onClick(e) {
   }
   if (e.target.closest('[data-ind-refine]')) refineRank();
   const mode = e.target.closest('[data-ind-bpmode]');
-  if (mode) { C.bpMode = mode.dataset.indBpmode; C.me = null; C.te = null; drawCalc(); }
+  if (mode) { C.bpMode = mode.dataset.indBpmode; C.me = null; C.te = null; drawCalc(); return; }
+  if (e.target.closest('[data-ind-bpcost-clear]')) { setBpCost(C.pid, null); drawCalc(); return; }
 }
 
 function refresh() {
@@ -1526,6 +1554,16 @@ function onChange(e) {
     else if (k === 'me') C.me = Math.max(0, Math.min(10, Math.round(Number(t.value) || 0)));
     else if (k === 'te') C.te = Math.max(0, Math.min(20, Math.round(Number(t.value) || 0)));
     else if (k === 'bpoRuns') C.bpoRuns = Math.max(1, Math.min(1000000, Math.round(Number(t.value) || 1)));
+    drawCalc();
+  } else if (t.dataset.indBpcost) {
+    const cur = bpCosts()[C.pid] || { price: 0, runs: 1 };
+    if (t.dataset.indBpcost === 'price') {
+      const v = parseIsk(t.value);
+      if (v == null) { ctx.showToast('价格格式不对，可写 50000000、50m、1.2b', 'info'); return; }
+      cur.price = v;
+    } else cur.runs = Math.max(1, Math.min(1000000, Math.round(Number(t.value) || 1)));
+    setBpCost(C.pid, cur.price > 0 ? cur : null);
+    C.bpMode = 'manual';
     drawCalc();
   }
 }

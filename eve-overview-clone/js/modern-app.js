@@ -626,7 +626,7 @@ async function getLiveHubPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v54').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v55').then((m) => {
     m.initIndustry({ addToCart,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -3007,6 +3007,7 @@ const CONTACTS = [
   { kind: 'QQ 群', value: '729497969' },
   { kind: '邮箱', value: '282975795@qq.com', href: 'mailto:282975795@qq.com' }
 ];
+let feedbackModule = null;   // feedback.js：「定制」弹窗里的工单（提交 / 我的工单 / 工单管理）
 function toggleContact(show = $('contactModal').hidden) {
   $('contactModal').hidden = !show;
   if (!show) return;
@@ -3016,31 +3017,7 @@ function toggleContact(show = $('contactModal').hidden) {
       ${c.href ? `<a class="contact-value notranslate" translate="no" href="${esc(c.href)}" target="_blank" rel="noopener">${esc(c.value)}</a>` : `<b class="contact-value notranslate" translate="no">${esc(c.value)}</b>`}
       <button type="button" class="btn btn-ghost" data-contact-copy="${c.i}">复制</button>
     </div>`).join('') : '<p class="contact-note">联系方式整理中，稍后补上。</p>';
-  $('feedbackForm').text.placeholder = window.I18N?.lang === 'en'
-    ? 'Describe the problem or idea: which page, what you did, what you expected (max 2000 characters)'
-    : '描述问题或想法：在哪个页面、做了什么、期望是什么（最多 2000 字）';
-}
-// 提交工单：存到服务器（/api/kb/feedback），站长在后台查看
-async function submitFeedback(form) {
-  const kind = form.querySelector('[data-fb-kind].active')?.dataset.fbKind;
-  const text = form.text.value.trim();
-  if (text.length < 4) { showToast('请先写下要反馈的内容', 'info'); form.text.focus(); return; }
-  const btn = form.querySelector('[type=submit]');
-  btn.disabled = true; btn.textContent = '正在提交…';
-  try {
-    const res = await fetch('/api/kb/feedback', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind, text, contact: form.contact.value.trim(), page: location.pathname + location.hash, server: SERVER.id, lang: window.I18N?.lang === 'en' ? 'en' : 'zh' })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'HTTP ' + res.status);
-    form.text.value = '';
-    showToast(`工单已提交（#${data.id}），感谢反馈`, 'success');
-  } catch (error) {
-    showToast('提交失败：' + error.message, 'error');
-  } finally {
-    btn.disabled = false; btn.textContent = '提交';
-  }
+  feedbackModule?.then((m) => m.onOpen()).catch(() => {});
 }
 // ===== 桌面版 =====
 // 左侧菜单分组（按 data-view，倒卖排行用 arb）；没列出的入口（教程、个人中心）放在最下面不分组
@@ -3148,11 +3125,9 @@ function initDesktopDl() {
 
 function initContact() {
   $('contactBtn').addEventListener('click', () => toggleContact(true));
-  $('feedbackForm').addEventListener('submit', (e) => { e.preventDefault(); submitFeedback(e.target); });
+  feedbackModule = import('./feedback.js?v=v1').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
   $('contactModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-close-contact]')) { toggleContact(false); return; }
-    const kind = e.target.closest('[data-fb-kind]');
-    if (kind) { kind.parentElement.querySelectorAll('[data-fb-kind]').forEach((x) => x.classList.toggle('active', x === kind)); return; }
     const b = e.target.closest('[data-contact-copy]');
     if (b) { const c = CONTACTS[Number(b.dataset.contactCopy)]; copyText(c.value, `已复制 ${c.kind}`); }
   });

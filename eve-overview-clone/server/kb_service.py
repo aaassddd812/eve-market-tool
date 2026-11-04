@@ -51,8 +51,10 @@
   POST /api/kb/wallet/delete                  删除某角色的全部钱包存档（同样校验令牌）
   GET  /api/kb/wh/sos?server=&system=         虫洞求救：被困在虫洞里的玩家发布的求救（不带 system 时列出全部未过期的）
   POST /api/kb/wh/sos/{save,delete}           发布 / 撤下求救：带该角色的 ESI 令牌（需要位置权限），所在星系由服务器从 ESI 读取
-  POST /api/kb/feedback                       提交工单（右上角「定制」）：{kind, text, contact, page}，存进 feedback 表；
+  POST /api/kb/feedback                       提交工单（右上角「定制」）：{kind, text, contact, page}，存进 feedback 表，返回 id + 查看凭证；
                                               设了环境变量 EVE_FEEDBACK_WECOM（企业微信机器人 key 或完整地址）时同时推送给站长
+  POST /api/kb/feedback/{mine,follow}         提交者查看自己的工单（状态、回复）/ 追加说明：凭 id + 凭证
+  POST /api/kb/feedback/admin/{check,list,reply,status}  站长查看全部工单、回复、改状态：仅 EVE_FEEDBACK_ADMIN_IPS 里的 IP
   击杀相关接口（status / feed / live / br / battles / top / summary / leaderboard / search / entity / kill / shipfits）可带 server=serenity|infinity 查国服
 
 用法
@@ -60,6 +62,7 @@
   宁静服保留 --days 天（首次启动从 EVE Ref 补齐这么多天，约每天 13 MB）；国服 --cn-days 为 0 时永久保存。
   --static 仅用于本地 / 演示环境：同时托管前端静态文件。
   查看工单：python3 kb_service.py --db kb.sqlite --feedback 20（列出最近 20 条后退出）
+  回复工单：python3 kb_service.py --db kb.sqlite --feedback-reply 12 "已修复，刷新即可" [--feedback-done]
 """
 
 import argparse
@@ -86,6 +89,7 @@ import mimetypes
 mimetypes.add_type("image/webp", ".webp")
 import os
 import re
+import secrets
 import smtplib
 import socket
 import sqlite3
@@ -6046,15 +6050,23 @@ class AlertPush:
 
 
 # ---------------------------------------------------------------- 工单 / 反馈
-# 右上角「定制」里提交：问题类型 + 内容 + 可选联系方式，存进 feedback 表（不记 IP）；按 IP 限流并限每日条数
+# 右上角「定制」里提交：问题类型 + 内容 + 可选联系方式，存进 feedback 表（不记 IP）；按 IP 限流并限每日条数。
+# 提交时返回一个随机凭证（库里只存哈希），浏览器记下 id + 凭证，用来查看自己的工单历史、处理状态和站长回复。
+# 站长：设环境变量 EVE_FEEDBACK_ADMIN_IPS=<IP 或网段，逗号分隔>，从这些 IP 访问时网页「定制」里出现「工单管理」，
+# 可查看全部工单、回复、改状态（管理接口只认这些 IP；依赖 nginx 设置 X-Real-IP，否则可被伪造）；
+# 也可以用命令行 --feedback N（列出）/ --feedback-reply ID 文字 [--feedback-done]（回复）
 FEEDBACK_KINDS = {"bug": "功能出错", "data": "数据不对", "feature": "新功能建议", "custom": "定制需求", "other": "其他"}
+FEEDBACK_STATUS = {"open": "待处理", "doing": "处理中", "done": "已处理"}
 FEEDBACK_TEXT_MAX = 2000
 FEEDBACK_CONTACT_MAX = 100
 FEEDBACK_RATE = 3               # 每个 IP 每分钟最多提交次数
 FEEDBACK_DAILY = 20             # 每个 IP 每天最多提交条数
+FEEDBACK_MINE_MAX = 50          # 一次最多查多少条自己的工单
 FEEDBACK_SCHEMA = """
 CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT, text TEXT, contact TEXT, page TEXT, server TEXT,
   lang TEXT, created INTEGER);
+CREATE TABLE IF NOT EXISTS feedback_reply(id INTEGER PRIMARY KEY AUTOINCREMENT, fid INTEGER, admin INTEGER, text TEXT, created INTEGER);
+CREATE INDEX IF NOT EXISTS feedback_reply_fid ON feedback_reply(fid);
 """
 
 
@@ -6064,10 +6076,29 @@ class Feedback:
         self.wecom = (os.environ.get("EVE_FEEDBACK_WECOM") or "").strip()
         m = re.search(r"key=([0-9a-fA-F-]{20,})", self.wecom)
         self.wecom = m.group(1) if m else self.wecom
+        self.admin_nets = []
+        for x in (os.environ.get("EVE_FEEDBACK_ADMIN_IPS") or "").replace(" ", "").split(","):
+            if x:
+                try:
+                    self.admin_nets.append(ipaddress.ip_network(x, strict=False))
+                except ValueError:
+                    log.warning("EVE_FEEDBACK_ADMIN_IPS 里的 %s 不是有效的 IP / 网段，已忽略", x)
         c = store.conn()
         with store.write_lock:
-            c.executescript(FEEDBACK_SCHEMA)
+            Feedback.migrate(c)
             c.commit()
+
+    @staticmethod
+    def migrate(c):
+        c.executescript(FEEDBACK_SCHEMA)
+        cols = {r[1] for r in c.execute("PRAGMA table_info(feedback)")}
+        for col, typ in (("token", "TEXT"), ("status", "TEXT DEFAULT 'open'"), ("updated", "INTEGER")):
+            if col not in cols:
+                c.execute(f"ALTER TABLE feedback ADD COLUMN {col} {typ}")
+
+    @staticmethod
+    def digest(token):
+        return hashlib.sha256(token.encode()).hexdigest()
 
     @staticmethod
     def clean(v, limit, label):
@@ -6078,6 +6109,12 @@ class Feedback:
         v = re.sub(r"[\x00-\x09\x0b-\x1f\x7f]", " ", v).strip()
         if len(v) > limit:
             raise ValueError(f"{label}最多 {limit} 字")
+        return v
+
+    @staticmethod
+    def fid_of(v):
+        if type(v) is not int or v <= 0:
+            raise ValueError("工单编号不对")
         return v
 
     def submit(self, body, ip):
@@ -6092,17 +6129,18 @@ class Feedback:
         server = body.get("server") if body.get("server") in ARB_SERVERS else ""
         lang = "en" if body.get("lang") == "en" else "zh"
         self.push.count("ip:" + ip, "feedback", FEEDBACK_DAILY, "今天提交的工单太多了，请明天再试或直接发邮件")
+        token = secrets.token_urlsafe(18)
         now = int(time.time())
         c = self.store.conn()
         with self.store.write_lock:
-            cur = c.execute("INSERT INTO feedback(kind, text, contact, page, server, lang, created) VALUES(?,?,?,?,?,?,?)",
-                            (kind, text, contact, page, server, lang, now))
+            cur = c.execute("INSERT INTO feedback(kind, text, contact, page, server, lang, created, token, status, updated) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                            (kind, text, contact, page, server, lang, now, self.digest(token), "open", now))
             c.commit()
         fid = cur.lastrowid
         log.info("收到工单 #%s（%s）", fid, kind)
         if self.wecom:
             threading.Thread(target=self.notify, args=(fid, kind, text, contact, page), daemon=True).start()
-        return {"ok": True, "id": fid}
+        return {"ok": True, "id": fid, "token": token, "created": now}
 
     def notify(self, fid, kind, text, contact, page):
         lines = [{"text": f"类型：{FEEDBACK_KINDS[kind]}"}] + [{"text": x} for x in text.splitlines() if x.strip()][:12]
@@ -6115,25 +6153,145 @@ class Feedback:
         except Exception as e:  # noqa: BLE001
             log.warning("工单 #%s 推送企业微信失败：%s", fid, e)
 
+    def rows(self, where, args, admin=False, limit=300):
+        c = self.store.conn()
+        rows = c.execute(f"SELECT id, kind, text, contact, page, server, lang, created, COALESCE(status, 'open'), COALESCE(updated, created) "
+                         f"FROM feedback WHERE {where} ORDER BY id DESC LIMIT {int(limit)}", args).fetchall()
+        if not rows:
+            return []
+        ids = [r[0] for r in rows]
+        replies = collections.defaultdict(list)
+        for fid, adm, text, created in c.execute(f"SELECT fid, admin, text, created FROM feedback_reply WHERE fid IN ({','.join('?' * len(ids))}) ORDER BY id",
+                                                 ids):
+            replies[fid].append({"admin": bool(adm), "text": text, "created": created})
+        out = []
+        for fid, kind, text, contact, page, server, lang, created, status, updated in rows:
+            x = {"id": fid, "kind": kind, "text": text, "status": status, "created": created, "updated": updated, "replies": replies[fid]}
+            if admin:
+                x.update(contact=contact, page=page, server=server, lang=lang)
+            out.append(x)
+        return out
+
+    # POST /feedback/mine {tickets: [{id, token}]}：自己提交过的工单（凭证不对的直接跳过）
+    def mine(self, body):
+        tickets = body.get("tickets")
+        if not isinstance(tickets, list):
+            raise ValueError("tickets 应为列表")
+        want = {}
+        for t in tickets[:FEEDBACK_MINE_MAX]:
+            if isinstance(t, dict) and type(t.get("id")) is int and isinstance(t.get("token"), str) and len(t["token"]) <= 64:
+                want[t["id"]] = self.digest(t["token"])
+        if not want:
+            return {"items": []}
+        ok = [fid for fid, tok in self.store.conn().execute(
+            f"SELECT id, token FROM feedback WHERE id IN ({','.join('?' * len(want))})", list(want)) if tok and hmac.compare_digest(tok, want[fid])]
+        return {"items": self.rows(f"id IN ({','.join('?' * len(ok))})", ok) if ok else []}
+
+    # 提交者追加说明（同样凭 id + 凭证）
+    def follow(self, body):
+        fid = self.fid_of(body.get("id"))
+        token = body.get("token")
+        text = self.clean(body.get("text"), FEEDBACK_TEXT_MAX, "回复内容")
+        if not text:
+            raise ValueError("请先写下回复内容")
+        row = self.store.conn().execute("SELECT token FROM feedback WHERE id=?", (fid,)).fetchone()
+        if not row or not row[0] or not isinstance(token, str) or not hmac.compare_digest(row[0], self.digest(token)):
+            raise PermissionError
+        self.add_reply(fid, False, text, "open")
+        if self.wecom:
+            threading.Thread(target=lambda: self.push.wecom({"key": self.wecom, "title": f"工单 #{fid} 有新回复", "lines": [{"text": x} for x in text.splitlines() if x.strip()][:12]}),
+                             daemon=True).start()
+        return {"ok": True}
+
+    def add_reply(self, fid, admin, text, status=None):
+        now = int(time.time())
+        c = self.store.conn()
+        with self.store.write_lock:
+            if not c.execute("SELECT 1 FROM feedback WHERE id=?", (fid,)).fetchone():
+                raise ValueError(f"没有工单 #{fid}")
+            if text:
+                c.execute("INSERT INTO feedback_reply(fid, admin, text, created) VALUES(?,?,?,?)", (fid, 1 if admin else 0, text, now))
+            if status:
+                c.execute("UPDATE feedback SET status=?, updated=? WHERE id=?", (status, now, fid))
+            else:
+                c.execute("UPDATE feedback SET updated=? WHERE id=?", (now, fid))
+            c.commit()
+
+    # ---------- 站长 ----------
+    def admin_ip(self, ip):
+        try:
+            addr = ipaddress.ip_address(ip.split("%")[0])
+        except ValueError:
+            return False
+        if addr.version == 6 and addr.ipv4_mapped:
+            addr = addr.ipv4_mapped
+        return any(addr in net for net in self.admin_nets)
+
+
+    def admin(self, op, body):
+        if op == "list":
+            status = body.get("status")
+            if status in FEEDBACK_STATUS:
+                return {"items": self.rows("COALESCE(status, 'open')=?", (status,), True)}
+            return {"items": self.rows("1", (), True)}
+        fid = self.fid_of(body.get("id"))
+        status = body.get("status")
+        if status is not None and status not in FEEDBACK_STATUS:
+            raise ValueError("状态不对")
+        if op == "reply":
+            text = self.clean(body.get("text"), FEEDBACK_TEXT_MAX, "回复内容")
+            if not text and not status:
+                raise ValueError("请先写下回复内容")
+            self.add_reply(fid, True, text, status or "doing")
+            return {"ok": True}
+        if op == "status":
+            if not status:
+                raise ValueError("状态不对")
+            self.add_reply(fid, True, "", status)
+            return {"ok": True}
+        raise ValueError("not found")
+
     @staticmethod
     def recent(db, n):
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         try:
-            rows = conn.execute("SELECT id, kind, text, contact, page, server, lang, created FROM feedback ORDER BY id DESC LIMIT ?",
+            rows = conn.execute("SELECT id, kind, text, contact, page, server, lang, created, COALESCE(status, 'open') FROM feedback ORDER BY id DESC LIMIT ?",
                                 (n,)).fetchall()
+            replies = collections.defaultdict(list)
+            for fid, adm, text in conn.execute("SELECT fid, admin, text FROM feedback_reply ORDER BY id"):
+                replies[fid].append((adm, text))
         except sqlite3.OperationalError:
             rows = []
         finally:
             conn.close()
         if not rows:
             print("还没有工单")
-        for fid, kind, text, contact, page, server, lang, created in rows:
+        for fid, kind, text, contact, page, server, lang, created, status in rows:
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(created))
-            print(f"#{fid}  {when}  [{FEEDBACK_KINDS.get(kind, kind)}]  {server or '-'}/{lang}  {page or ''}")
+            print(f"#{fid}  {when}  [{FEEDBACK_KINDS.get(kind, kind)}] [{FEEDBACK_STATUS.get(status, status)}]  {server or '-'}/{lang}  {page or ''}")
             print("  " + text.replace("\n", "\n  "))
             if contact:
                 print("  联系方式：" + contact)
+            for adm, t in replies.get(fid, []):
+                print(("  ↳ 站长：" if adm else "  ↳ 提交者：") + t.replace("\n", "\n    "))
             print()
+
+    @staticmethod
+    def reply_cli(db, fid, text, done):
+        conn = sqlite3.connect(db)
+        try:
+            Feedback.migrate(conn)
+            if not conn.execute("SELECT 1 FROM feedback WHERE id=?", (fid,)).fetchone():
+                print(f"没有工单 #{fid}")
+                return
+            now = int(time.time())
+            if text:
+                conn.execute("INSERT INTO feedback_reply(fid, admin, text, created) VALUES(?,?,?,?)", (fid, 1, text, now))
+            conn.execute("UPDATE feedback SET status=?, updated=? WHERE id=?", ("done" if done else "doing", now, fid))
+            conn.commit()
+            print(f"已回复工单 #{fid}（{'已处理' if done else '处理中'}）")
+        finally:
+            conn.close()
 
 
 class RateLimiter:
@@ -6267,6 +6425,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     sos_limiter = RateLimiter(SOS_RATE)
     push_limiter = RateLimiter(PUSH_RATE)
     feedback_limiter = RateLimiter(FEEDBACK_RATE)
+    feedback_read_limiter = RateLimiter(30)
     chat_tr_limiter = RateLimiter(CHAT_TR_RATE)
 
     class Handler(BaseHTTPRequestHandler):
@@ -6431,12 +6590,21 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("角色挂售错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
-        def feedback(self):
-            # 提交工单（同源调用，不带 CORS 头）
+        def feedback(self, path):
+            # 工单（同源调用，不带 CORS 头）：提交 / 自己的历史 / 追加说明 / 站长管理
+            op = path[len("/api/kb/feedback"):].strip("/")
+            if op not in ("", "mine", "follow", "admin/check", "admin/list", "admin/reply", "admin/status"):
+                return self.send_json(404, {"error": "not found"})
             ip = self.client_ip()
-            ok, _, retry = feedback_limiter.take(ip)
-            if not ok:
-                return self.send_json(429, {"error": f"提交太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            admin = op.startswith("admin/")
+            if admin and not api.feedback.admin_ip(ip):
+                return self.send_json(404, {"error": "not found"})
+            if op == "admin/check":   # 只有站长 IP 能走到这里：网页据此显示「工单管理」
+                return self.send_json(200, {"admin": True})
+            if not admin:
+                ok, _, retry = (feedback_read_limiter if op == "mine" else feedback_limiter).take(ip)
+                if not ok:
+                    return self.send_json(429, {"error": f"提交太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
             try:
                 length = int(self.headers.get("Content-Length") or 0)
                 if not 0 < length <= 16384:
@@ -6447,11 +6615,19 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
             except ValueError:
                 return self.send_json(400, {"error": "请求体应为 JSON"})
             try:
+                if admin:
+                    return self.send_json(200, api.feedback.admin(op[6:], body))
+                if op == "mine":
+                    return self.send_json(200, api.feedback.mine(body))
+                if op == "follow":
+                    return self.send_json(200, api.feedback.follow(body))
                 return self.send_json(200, api.feedback.submit(body, ip))
+            except PermissionError:
+                return self.send_json(403, {"error": "这条工单不是在这个浏览器提交的"})
             except ValueError as e:
                 return self.send_json(400, {"error": str(e)})
             except Exception:
-                log.exception("工单提交错误")
+                log.exception("工单错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
         def push(self, path):
@@ -6544,8 +6720,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.sos(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/push/"):
                 return self.push(url.path.rstrip("/"))
-            if url.path.rstrip("/") == "/api/kb/feedback":
-                return self.feedback()
+            if url.path.rstrip("/") == "/api/kb/feedback" or url.path.startswith("/api/kb/feedback/"):
+                return self.feedback(url.path.rstrip("/"))
             if url.path.rstrip("/") in ("/api/kb/translate", "/api/kb/translate/models"):
                 return self.chat_translate(url.path.rstrip("/").endswith("/models"))
             cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
@@ -6653,11 +6829,16 @@ def main():
     parser.add_argument("--cn-queue", help="KM 广播队列名（默认按 --db 路径生成；同一台机器上的两个实例不能共用，否则会互相抢走击杀）")
     parser.add_argument("--lite", action="store_true", help="演示用：只读已有数据，不启动任何后台采集 / 轮询 / 预计算")
     parser.add_argument("--feedback", type=int, metavar="N", help="列出最近 N 条工单后退出")
+    parser.add_argument("--feedback-reply", nargs=2, metavar=("ID", "TEXT"), help="回复工单后退出（状态改为处理中）")
+    parser.add_argument("--feedback-done", action="store_true", help="与 --feedback-reply 一起用：同时标为已处理")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.feedback:
         Feedback.recent(args.db, args.feedback)
+        return
+    if args.feedback_reply:
+        Feedback.reply_cli(args.db, int(args.feedback_reply[0]), args.feedback_reply[1].strip(), args.feedback_done)
         return
 
     with open(args.system_regions, encoding="utf-8") as fh:
