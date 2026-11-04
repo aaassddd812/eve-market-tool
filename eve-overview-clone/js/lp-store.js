@@ -1,6 +1,7 @@
 // ===== LP 商店 =====
 // LP 商店：按军团浏览全部兑换项，计算每 LP 价值（ISK/LP）= (产物价值 − 所需物品成本 − ISK 费用) ÷ LP。
-//          蓝图拷贝按「(产物价 − 材料价) × 数量」（材料效率 0）估值。
+//          蓝图拷贝两种算法（估价设置「蓝图兑换品」）：制造后卖产物 =「(产物价 − 材料价) × 流程数」（材料效率 0）；
+//          直接卖蓝图 = 公开合同里同种拷贝的最低每流程价 × 流程数（击杀记录服务 /api/kb/bpprices，仅宁静服；合同出售不扣销售税）。
 // 全服排行：所有 LP 商店兑换项（按 offer 去重）的 ISK/LP 排行，前列可用吉他行情精算。
 // 我的 LP：ESI 角色忠诚点（esi-characters.read_loyalty.v1），按各军团最佳兑换估算价值。
 // 价格：全服均价（一次请求，立即可用）或吉他卖单 / 收单（按物品逐个读取，有缓存）。
@@ -25,8 +26,8 @@ const TABS = [
   ['mine', '我的 LP', '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>']
 ];
 
-const D = { loading: null, data: null, avg: new Map(), offersByType: new Map(), corpById: new Map(), corpsByOffer: new Map(), history: new Map() };
-const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all' };
+const D = { loading: null, data: null, avg: new Map(), bpAll: null, bpLoading: null, offersByType: new Map(), corpById: new Map(), corpsByOffer: new Map(), history: new Map() };
+const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all', bp: 'make' };
 const S = { times: new Map(), q: '', rankQ: '', sideQ: '', open: new Set(), loadingJita: null, progress: '', refined: new Set(), mine: null, mineError: null, mineLoading: false, rendered: '' };
 const jita = new Map();   // 吉他行情 id -> { sell, buy }
 
@@ -36,6 +37,7 @@ export function initLp(context) {
   if (F.sort === 'isk') F.sort = 'iskLp';                   // 旧版排序按钮
   if (!SORT_DIR[F.sort]) { F.sort = 'iskLp'; F.dir = 'desc'; }
   if (F.dir !== 'asc' && F.dir !== 'desc') F.dir = SORT_DIR[F.sort];
+  if (F.bp !== 'bpc' || !SERVER.kb) F.bp = 'make';
   // 个人中心切换角色：「我的 LP」重新读取
   window.addEventListener('eve-account-change', () => { S.mine = null; S.mineError = null; });
 }
@@ -92,8 +94,18 @@ function price(id, side) {
   return a ? { v: a, src: 'avg' } : { v: null, src: null };
 }
 
-// 兑换项估值
-function valueOf(o) {
+// 公开合同里各蓝图的最低价：type_id -> [原图价, 拷贝每流程价]（只有宁静服有合同数据）
+function loadBpAll() {
+  if (D.bpAll || D.bpLoading || !SERVER.kb) return D.bpLoading;
+  D.bpLoading = fetch('/api/kb/bpprices').then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
+    .then((j) => { D.bpAll = new Map(Object.entries(j.all || {}).map(([k, v]) => [Number(k), v])); })
+    .finally(() => { D.bpLoading = null; if ($('lpMain')?.dataset.ready) refreshBody(); });
+  return D.bpLoading;
+}
+const bpcRun = (o) => D.bpAll?.get(o.type)?.[1] ?? null;
+
+// 兑换项估值；mode：蓝图兑换品按 make（制造后卖产物）还是 bpc（直接卖蓝图，合同价）算，默认跟估价设置
+function valueOf(o, mode = F.bp) {
   let missing = false, approx = false;
   const use = (id, side) => {
     const p = price(id, side);
@@ -101,16 +113,20 @@ function valueOf(o) {
     else if (side !== 'avg' && p.src === 'avg') approx = true;
     return p.v || 0;
   };
-  let unit;
-  if (o.bp) {
+  let unit, keep = 1 - F.tax / 100;
+  if (o.bp && mode === 'bpc') {
+    unit = bpcRun(o);
+    if (unit == null) { missing = true; unit = 0; }
+    keep = 1;   // 合同出售不扣销售税
+  } else if (o.bp) {
     const [pid, pq, mats] = o.bp;
     unit = use(pid, F.price) * pq - mats.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0);
   } else unit = use(o.type, F.price);
-  const revenue = unit * o.qty * (1 - F.tax / 100);
+  const revenue = unit * o.qty * keep;
   const reqCost = o.req.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0);
   const cost = o.isk + reqCost;
   const profit = revenue - cost;
-  return { revenue, reqCost, cost, profit, iskLp: o.lp ? profit / o.lp : null, missing, approx };
+  return { revenue, reqCost, cost, profit, iskLp: o.lp ? profit / o.lp : null, missing, approx, mode: o.bp ? mode : null };
 }
 
 function offerTypes(o) {
@@ -174,6 +190,7 @@ export async function showLp(hash = location.hash) {
   const main = $('lpMain');
   if (!D.data) main.innerHTML = skPage({ tabs: 3, rows: 10 });
   await loadData();
+  loadBpAll();   // 蓝图兑换品的合同价（详情里两种算法对比、「直接卖蓝图」模式用）
   const m = /^#lp(?:\/(store|rank|mine))?(?:\/(\d+))?/.exec(hash || '');
   if (m?.[1]) F.tab = m[1];
   if (m?.[1] === 'store' && m[2] && D.corpById.has(Number(m[2]))) F.corp = Number(m[2]);
@@ -225,18 +242,21 @@ function renderTab() {
 
 const seg = (name, items, cur) => `<div class="segmented" role="group">${items.map(([v, l]) => `<button type="button" data-lp-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
 const PRICE_ZH = { sell: HUB_NAME + '卖单', buy: HUB_NAME + '收单', avg: '全服均价' };
+const BP_ZH = { make: '制造后卖产物', bpc: '直接卖蓝图（合同价）' };
 
 // ---------- 设置 ----------
 function renderSettings() {
   const el = $('lpSettings');
   el.innerHTML = `
-    <summary><b>估价设置</b><span class="text-muted">产物按${PRICE_ZH[F.price]} · 材料按${PRICE_ZH[F.mat]} · 税费 ${F.tax}%</span></summary>
+    <summary><b>估价设置</b><span class="text-muted">产物按${PRICE_ZH[F.price]} · 材料按${PRICE_ZH[F.mat]} · 税费 ${F.tax}% · 蓝图${BP_ZH[F.bp]}</span></summary>
     <div class="ind-set-grid">
       <div class="pi-field"><label>产物卖出价</label>${seg('price', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.price)}
         </div>
       <div class="pi-field"><label>所需物品 / 蓝图材料买入价</label>${seg('mat', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.mat)}</div>
       <div class="pi-field"><label>卖出税费（%）</label><input type="number" class="pi-input lp-tax" data-lp-tax min="0" max="30" step="0.1" value="${F.tax}">
         </div>
+      <div class="pi-field"><label>蓝图兑换品</label>${SERVER.kb ? seg('bp', [['make', BP_ZH.make], ['bpc', BP_ZH.bpc]], F.bp)
+        : `<span class="text-muted">${ctx.esc(SERVER.full)}没有公开合同数据，蓝图按${BP_ZH.make}计算</span>`}</div>
     </div>`;
 }
 
@@ -260,7 +280,7 @@ function offerRow(r, i, { showCorp = false } = {}) {
   return `
     <tr data-lp-open="${o.id}" class="${open ? 'active' : ''}" title="点击展开明细">
       <td class="pi-rank lp-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${o.bp ? BPC_ICON(o.type) : ICON(o.type)}"${o.bp ? '' : ` data-item-pop="${o.type}"`} alt="" width="28" height="28" loading="lazy"><span>${esc(tName(o.type))}${o.qty > 1 ? `<small>×${ctx.formatNumber(o.qty)}</small>` : ''}${o.bp ? '<small class="ind-tag-bpc" title="蓝图拷贝：按（产物价 − 材料价）× 数量估算，材料效率 0">蓝图</small>' : ''}</span></div>
+      <td><div class="pi-prod"><img src="${o.bp ? BPC_ICON(o.type) : ICON(o.type)}"${o.bp ? '' : ` data-item-pop="${o.type}"`} alt="" width="28" height="28" loading="lazy"><span>${esc(tName(o.type))}${o.qty > 1 ? `<small>×${ctx.formatNumber(o.qty)}</small>` : ''}${o.bp ? `<small class="ind-tag-bpc" title="${v.mode === 'bpc' ? '蓝图拷贝：按公开合同最低每流程价 × 流程数估算' : '蓝图拷贝：按（产物价 − 材料价）× 流程数估算，材料效率 0'}">蓝图</small>` : ''}</span></div>
         ${showCorp ? `<div class="lp-corps">${esc(corpName(corps[0]))}${corps.length > 1 ? ` 等 ${corps.length} 家` : ''}</div>` : ''}</td>
       <td class="num">${ctx.formatNumber(o.lp)}</td>
       <td class="num lp-hide-md">${o.isk ? isk(o.isk) : '—'}</td>
@@ -301,38 +321,73 @@ function setTimes(id, n, box) {
 function buyListHtml(o) {
   const n = timesOf(o);
   const mats = o.bp ? o.bp[2].length : 0;
-  const btn = (kind, label, count) => `<button type="button" class="btn btn-ghost" data-lp-copy="${kind}:${o.id}"${count ? '' : ' disabled'}>${label}${count ? `（${count} 项）` : ''}</button>`;
-  return `<div class="lp-buy"><h4>复制采购清单</h4>
-    <label class="lp-times">兑换次数 <input type="number" class="pi-input" min="1" max="10000" step="1" value="${n}" data-lp-times="${o.id}" aria-label="兑换次数"></label>
-    ${myMax(o) ? `<button type="button" class="link-btn" data-lp-max="${o.id}">按我的 LP 最多 ${ctx.formatNumber(myMax(o))} 次</button>` : ''}
-    <p class="pi-note">共需 LP <b>${ctx.formatNumber(o.lp * n)}</b> · ISK <b>${ctx.formatISK(o.isk * n)}</b>${o.ak ? ` · AK <b>${ctx.formatNumber(o.ak * n)}</b>` : ''}</p>
-    <div class="lp-buy-btns">
-      ${o.req.length ? btn('req', '复制兑换所需物品', o.req.length) : '<span class="text-muted">无需额外物品</span>'}
-      ${o.bp ? btn('mats', '复制制造材料', mats) : ''}
-      ${o.bp && o.req.length ? btn('all', '复制全部（合并同类）', buyLines(o, 'all').length) : ''}
-      ${o.req.length || o.bp ? `<button type="button" class="btn btn-ghost" data-lp-cart="${o.bp && o.req.length ? 'all' : o.req.length ? 'req' : 'mats'}:${o.id}" title="${o.bp && o.req.length ? '兑换所需物品与制造材料' : o.req.length ? '兑换所需物品' : '制造材料'}加入购物车">加入购物车</button>` : ''}
+  const btn = (kind, label, count) => `<button type="button" class="lp-act" data-lp-copy="${kind}:${o.id}"${count ? '' : ' disabled'}><span>${label}</span><small>${count} 项</small></button>`;
+  // 制造材料只在按「制造后卖产物」算时才需要
+  const make = o.bp && F.bp !== 'bpc';
+  const cartKind = make && o.req.length ? 'all' : o.req.length ? 'req' : 'mats';
+  return `<div class="lp-sec lp-buy"><h4>采购清单 <small>复制后在游戏「市场 → 批量购买」里粘贴</small></h4>
+    <div class="lp-times-row"><label class="lp-times"><span>兑换次数</span><input type="number" class="pi-input" min="1" max="10000" step="1" value="${n}" data-lp-times="${o.id}" aria-label="兑换次数"></label>
+      ${myMax(o) ? `<button type="button" class="link-btn" data-lp-max="${o.id}">按我的 LP 最多 ${ctx.formatNumber(myMax(o))} 次</button>` : ''}</div>
+    <p class="lp-need">共需 LP <b>${ctx.formatNumber(o.lp * n)}</b> · ISK <b>${ctx.formatISK(o.isk * n)}</b>${o.ak ? ` · AK <b>${ctx.formatNumber(o.ak * n)}</b>` : ''}</p>
+    <div class="lp-acts">
+      ${o.req.length ? btn('req', '复制兑换所需物品', o.req.length) : ''}
+      ${make ? btn('mats', '复制制造材料', mats) : ''}
+      ${make && o.req.length ? btn('all', '复制全部（合并同类）', buyLines(o, 'all').length) : ''}
+      ${o.req.length || make ? `<button type="button" class="lp-act primary" data-lp-cart="${cartKind}:${o.id}" title="${cartKind === 'all' ? '兑换所需物品与制造材料' : cartKind === 'req' ? '兑换所需物品' : '制造材料'}加入购物车"><span>加入购物车</span><small>${buyItems(o, cartKind).length} 项</small></button>` : '<p class="text-muted">不需要额外物品，只花 LP 和 ISK</p>'}
     </div></div>`;
 }
 
 function offerDetail(o, v) {
-  const esc = ctx.esc, isk = ctx.formatISK;
+  const esc = ctx.esc, isk = ctx.formatISK, num = ctx.formatNumber;
   const line = (id, q, side) => {
     const p = price(id, side);
-    return `<li><img src="${ICON(id)}" data-item-pop="${id}" alt="" width="20" height="20" loading="lazy"><span>${esc(tName(id))} × ${ctx.formatNumber(q)}</span><b>${p.v == null ? '无价格' : (side !== 'avg' && p.src === 'avg' ? '≈' : '') + isk(p.v * q)}</b></li>`;
+    return `<li><img src="${ICON(id)}" data-item-pop="${id}" alt="" width="20" height="20" loading="lazy"><span>${esc(tName(id))} <small>× ${num(q)}</small></span><b>${p.v == null ? '无价格' : (side !== 'avg' && p.src === 'avg' ? '≈' : '') + isk(p.v * q)}</b></li>`;
   };
   const corps = D.corpsByOffer.get(o.id) || [];
-  const parts = [];
-  parts.push(`<div><h4>花费</h4><ul class="lp-lines"><li><span>LP</span><b>${ctx.formatNumber(o.lp)}</b></li><li><span>ISK</span><b>${isk(o.isk)}</b></li>${o.ak ? `<li><span>分析师点数（AK）</span><b>${ctx.formatNumber(o.ak)}</b></li>` : ''}${o.req.map(([m, q]) => line(m, q, F.mat)).join('')}</ul></div>`);
+  const pid = o.bp ? o.bp[0] : o.type;
+  const good = (x) => (x.missing || x.iskLp == null ? '' : x.iskLp >= 0 ? ' up' : ' down');
+  const tile = (label, value, sub = '', cls = '') => `<div class="lp-tile${cls}"><span>${label}</span><b>${value}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  const tiles = `<div class="lp-tiles">
+    ${tile('利润', v.missing ? '—' : isk(v.profit), `每次兑换${v.approx ? ' · ≈ 含全服均价' : ''}`, good(v))}
+    ${tile('ISK/LP', v.missing || v.iskLp == null ? '—' : num(Math.round(v.iskLp)), `${num(o.lp)} LP`, good(v))}
+    ${tile(o.bp && v.mode === 'bpc' ? '蓝图价值' : '产物价值', v.missing ? '—' : isk(v.revenue), o.bp && v.mode === 'bpc' ? '合同出售不扣税' : `已扣税费 ${F.tax}%`)}
+    ${tile('花费', isk(v.cost), `ISK ${isk(o.isk)}${o.req.length ? ' + 物品 ' + isk(v.reqCost) : ''}`)}
+  </div>`;
+  // 蓝图：两种算法并排，点一下切换（与估价设置同步）
+  let modes = '';
   if (o.bp) {
-    const [pid, pq, mats] = o.bp;
-    parts.push(`<div><h4>制造（每流程用量，共 ${ctx.formatNumber(o.qty)} 流程，材料效率 0）</h4><ul class="lp-lines">${line(pid, pq, F.price)}${mats.map(([m, q]) => line(m, q, F.mat)).join('')}</ul></div>`);
-  } else {
-    parts.push(`<div><h4>产出</h4><ul class="lp-lines">${line(o.type, o.qty, F.price)}<li><span>扣除税费 ${F.tax}%</span><b>${v.missing ? '—' : isk(v.revenue)}</b></li></ul></div>`);
+    const opt = (mode, title, desc) => {
+      const x = valueOf(o, mode);
+      const off = mode === 'bpc' && !SERVER.kb;
+      return `<button type="button" class="lp-mode${v.mode === mode ? ' active' : ''}" data-lp-set="bp" data-v="${mode}"${off ? ' disabled' : ''}>
+        <span class="lp-mode-title">${title}</span>
+        <b class="lp-mode-val${good(x)}">${off ? '—' : mode === 'bpc' && !D.bpAll ? '读取合同价…' : x.missing ? (mode === 'bpc' ? '合同里没有在售' : '缺少价格') : `${num(Math.round(x.iskLp))} <small>ISK/LP</small>`}</b>
+        <small>${off ? esc(SERVER.full) + '没有合同数据' : desc}</small></button>`;
+    };
+    const run = bpcRun(o);
+    modes = `<div class="lp-modes">
+      ${opt('make', '制造后卖产物', `造 ${num(o.qty)} 流程 ${esc(tName(pid))}，材料效率 0`)}
+      ${opt('bpc', '直接卖蓝图', run != null ? `合同最低每流程 ${isk(run)} × ${num(o.qty)} 流程` : '按公开合同里同种拷贝的最低每流程价')}
+    </div>`;
   }
-  parts.push(buyListHtml(o));
-  parts.push(`<div><h4>可兑换的军团（${corps.length}）</h4><div class="lp-corp-list">${corps.map((c) => `<button type="button" class="chip" data-lp-corp="${c}">${esc(corpName(c))}</button>`).join('')}</div>
-    <p class="pi-note"><button type="button" class="btn btn-ghost" data-lp-market="${o.bp ? o.bp[0] : o.type}">在市场中心查看产物</button></p></div>`);
-  return `<div class="lp-detail">${parts.join('')}</div>`;
+  const secs = [];
+  secs.push(`<div class="lp-sec"><h4>花费</h4><ul class="lp-lines"><li><span>LP</span><b>${num(o.lp)}</b></li><li><span>ISK</span><b>${isk(o.isk)}</b></li>${o.ak ? `<li><span>分析师点数（AK）</span><b>${num(o.ak)}</b></li>` : ''}${o.req.map(([m, q]) => line(m, q, F.mat)).join('')}</ul></div>`);
+  if (o.bp && v.mode !== 'bpc') {
+    const [, pq, mats] = o.bp;
+    secs.push(`<div class="lp-sec"><h4>制造 <small>每流程用量 · 共 ${num(o.qty)} 流程 · 材料效率 0</small></h4><ul class="lp-lines">${line(pid, pq, F.price)}${mats.map(([m, q]) => line(m, q, F.mat)).join('')}</ul></div>`);
+  } else if (o.bp) {
+    const run = bpcRun(o);
+    secs.push(`<div class="lp-sec"><h4>直接卖蓝图 <small>公开合同价，数据约每小时更新</small></h4><ul class="lp-lines">
+      <li><img src="${BPC_ICON(o.type)}" alt="" width="20" height="20" loading="lazy"><span>${esc(tName(o.type))} <small>× ${num(o.qty)} 流程</small></span><b>${run == null ? '合同里没有在售' : isk(run * o.qty)}</b></li>
+      ${run != null ? `<li><span>合同最低每流程</span><b>${isk(run)}</b></li>` : ''}</ul></div>`);
+  } else {
+    secs.push(`<div class="lp-sec"><h4>产出</h4><ul class="lp-lines">${line(o.type, o.qty, F.price)}<li><span>扣除税费 ${F.tax}%</span><b>${v.missing ? '—' : isk(v.revenue)}</b></li></ul></div>`);
+  }
+  secs.push(`<div class="lp-sec"><h4>可兑换的军团 <small>${corps.length} 家</small></h4><div class="lp-corp-list">${corps.map((c) => `<button type="button" class="chip" data-lp-corp="${c}">${esc(corpName(c))}</button>`).join('')}</div></div>`);
+  secs.push(buyListHtml(o));
+  return `<div class="lp-detail2">
+    <div class="lp-detail-top">${tiles}<button type="button" class="lp-act lp-market-btn" data-lp-market="${pid}"><span>在市场中心查看${o.bp ? '产物' : ''}</span><small>${esc(tName(pid))}</small></button></div>
+    ${modes}<div class="lp-secs">${secs.join('')}</div></div>`;
 }
 
 const tableHead = () => `<thead><tr><th class="lp-hide-sm">#</th>${sortTh('name', '兑换品')}${sortTh('lp', 'LP', 'num')}${sortTh('iskCost', 'ISK 费用', 'num lp-hide-md')}${sortTh('req', '所需物品', 'num lp-hide-md')}${sortTh('revenue', '产物价值', 'num pi-hide-sm')}${sortTh('profit', '利润', 'num lp-hide-sm')}${sortTh('iskLp', 'ISK/LP', 'num')}<th class="num lp-hide-sm">日均成交</th></tr></thead>`;
@@ -604,7 +659,8 @@ function onClick(e) {
   if (set) {
     F[set.dataset.lpSet] = set.dataset.v;
     save();
-    if (['price', 'mat'].includes(set.dataset.lpSet)) renderSettings();
+    if (['price', 'mat', 'bp'].includes(set.dataset.lpSet)) renderSettings();
+    if (set.dataset.lpSet === 'bp') loadBpAll();
     refreshBody();
     return;
   }
