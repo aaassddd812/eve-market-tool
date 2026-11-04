@@ -27,6 +27,7 @@ export function initKillboard(context) {
     if (e.target.closest('a[data-kb-entity]')) closeKill();
     const fit = e.target.closest('[data-kill-tab]');
     if (fit) switchKillTab(fit.dataset.killTab);
+    if (e.target.closest('[data-share-kill]') && shownKill) { shareKill(); return; }
     // 去装配页查看：关闭弹窗，在模拟装配中打开这艘船与击杀时的装配
     const go = e.target.closest('[data-kill-fit]');
     if (go && shownKill && !go.disabled) {
@@ -289,6 +290,7 @@ export async function openKill(kill, options = {}) {
   const modal = $('killModal');
   const body = $('killBody');
   modal.hidden = false;
+  $('killShare').hidden = true;
   body.innerHTML = skEntityHead() + skCards(3) + skTitle(12) + skRows(8, { img: 24 });
   try {
     if (options.load) ({ kill, prices: options.prices } = await options.load());
@@ -298,6 +300,7 @@ export async function openKill(kill, options = {}) {
     shownArgs = { kill, priceNote: options.priceNote, insurance: insurance?.get(kill.victim.ship_type_id) };
     body.innerHTML = renderKill(kill, val, shownArgs.priceNote, shownArgs.insurance);
     shownKill = kill;
+    $('killShare').hidden = false;
   } catch (error) {
     if (currentKill === token) body.innerHTML = '<p class="text-muted kb-empty">击杀详情读取失败：' + app.esc(error.message) + '</p>';
     return;
@@ -329,6 +332,107 @@ async function loadServiceKill(id) {
     kill: { ...km, zkb: { totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed, solo: players.length === 1, npc: !players.length, awox: false, locationID: null, valueLabel: IS_TQ ? '吉他中间价估值' : `${HUB.hub.name} 中间价估值` } },
     prices: new Map(Object.entries(data.prices).map(([k, v]) => [Number(k), v]))
   };
+}
+
+// ---------- 分享图片 ----------
+// 装配槽位全部列出；无人机、货舱等其他舱室按价值取前 6 种
+const FIT_SLOTS = new Set(['high', 'mid', 'low', 'rig', 'sub']);
+function killImageModel(k, val) {
+  const v = k.victim, z = k.zkb, sys = systemLabel(k.solar_system_id);
+  const mid = (t) => { const p = val.price(t) || {}; return p.sell && p.buy ? (p.sell + p.buy) / 2 : p.sell || p.buy || 0; };
+  const groups = new Map(SLOT_GROUPS.map(([key, label]) => [key, { key, label, items: new Map(), count: 0 }]));
+  for (const it of v.items || []) {
+    const gr = groups.get(slotGroup(it.flag));
+    const qty = (it.quantity_dropped || 0) + (it.quantity_destroyed || 0);
+    const key = it.item_type_id + (it.singleton === 2 ? ':bpc' : '');
+    const row = gr.items.get(key) || gr.items.set(key, { type: it.item_type_id, qty: 0, dropped: 0, value: 0 }).get(key);
+    row.qty += qty;
+    row.dropped += it.quantity_dropped || 0;
+    row.value += it.singleton === 2 ? 0 : mid(it.item_type_id) * qty;
+    gr.count += qty;
+  }
+  const total = k.attackers.reduce((s, a) => s + (a.damage_done || 0), 0) || 1;
+  const atk = [...k.attackers].sort((a, b) => (b.damage_done || 0) - (a.damage_done || 0));
+  const top = atk.slice(0, 10);
+  const final = atk.find((a) => a.final_blow);
+  if (final && !top.includes(final)) top[top.length - 1] = final;   // 最后一击总要列出
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    ship: typeName(v.ship_type_id), render: img(`types/${v.ship_type_id}/render`, 512),
+    victim: {
+      name: partyName(v.character_id || v.corporation_id), avatar: v.character_id ? img(`characters/${v.character_id}/portrait`, 128) : img(`corporations/${v.corporation_id}/logo`, 128),
+      party: [v.character_id ? partyName(v.corporation_id) : '', partyName(v.alliance_id)].filter(Boolean).join(' · '),
+      logo: v.alliance_id ? img(`alliances/${v.alliance_id}/logo`, 128) : v.corporation_id ? img(`corporations/${v.corporation_id}/logo`, 128) : ''
+    },
+    system: { name: sys.name, sec: sys.secText, level: sys.sec, region: sys.region },
+    time: fullIn(Math.floor(Date.parse(k.killmail_time) / 1000), 'cn') + ' UTC+8',
+    attackerCount: k.attackers.length, damage: app.formatNumber(v.damage_taken || 0),
+    tags: [z.solo && '单刷', z.npc && 'NPC', z.awox && '误伤'].filter(Boolean),
+    value: app.formatISK(z.totalValue), dropped: app.formatISK(z.droppedValue), destroyed: app.formatISK(z.destroyedValue),
+    dropShare: z.droppedValue + z.destroyedValue ? z.droppedValue / (z.droppedValue + z.destroyedValue) : 0,
+    valueNote: z.valueLabel || '',
+    groups: [...groups.values()].filter((gr) => gr.items.size).map((gr) => {
+      let rows = [...gr.items.values()];
+      let more = 0;
+      if (!FIT_SLOTS.has(gr.key)) { rows.sort((a, b) => b.value - a.value); more = Math.max(0, rows.length - 6); rows = rows.slice(0, 6); }
+      return {
+        label: gr.label, count: app.formatNumber(gr.count), more,
+        items: rows.map((r) => ({
+          icon: img(`types/${r.type}/icon`, 64), name: typeName(r.type), qty: app.formatNumber(r.qty), value: r.value ? app.formatISK(r.value) : '',
+          dropped: r.dropped && r.dropped === r.qty, part: r.dropped && r.dropped < r.qty ? '掉落 ' + app.formatNumber(r.dropped) : ''
+        }))
+      };
+    }),
+    attackers: top.map((a) => ({
+      name: partyName(a.character_id) || (a.ship_type_id ? typeName(a.ship_type_id) : partyName(a.corporation_id || a.faction_id)),
+      party: [a.corporation_id ? partyName(a.corporation_id) : partyName(a.faction_id), a.alliance_id ? partyName(a.alliance_id) : ''].filter(Boolean).join(' · '),
+      avatar: a.character_id ? img(`characters/${a.character_id}/portrait`, 64) : a.corporation_id ? img(`corporations/${a.corporation_id}/logo`, 64)
+        : a.faction_id ? img(`corporations/${a.faction_id}/logo`, 64) : img(`types/${a.ship_type_id}/icon`, 64),
+      round: !!a.character_id, ship: a.ship_type_id ? img(`types/${a.ship_type_id}/icon`, 64) : '',
+      final: !!a.final_blow, damage: app.formatNumber(a.damage_done || 0), pct: ((a.damage_done || 0) / total * 100).toFixed(1) + '%', share: (a.damage_done || 0) / total
+    })),
+    moreAttackers: Math.max(0, k.attackers.length - top.length),
+    parties: attackerParties(k.attackers, total),
+    ships: [...k.attackers.reduce((m, a) => (a.ship_type_id ? m.set(a.ship_type_id, (m.get(a.ship_type_id) || 0) + 1) : m), new Map())]
+      .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([t, n]) => ({ icon: img(`types/${t}/icon`, 64), name: typeName(t), count: n })),
+    footer: `${location.host} · 击杀 #${k.killmail_id}`,
+    generated: '生成于 ' + fullIn(now, 'cn') + ' UTC+8'
+  };
+}
+
+// 攻击方势力：按联盟（没有联盟按军团 / NPC 势力）合并，取伤害最多的 6 个
+function attackerParties(list, total) {
+  const m = new Map();
+  for (const a of list) {
+    const id = a.alliance_id || a.corporation_id || a.faction_id;
+    if (!id) continue;
+    const p = m.get(id) || m.set(id, { id, kind: a.alliance_id ? 'alliances' : 'corporations', pilots: 0, dmg: 0 }).get(id);
+    p.pilots += 1;
+    p.dmg += a.damage_done || 0;
+  }
+  return [...m.values()].sort((a, b) => b.dmg - a.dmg || b.pilots - a.pilots).slice(0, 6).map((p) => ({
+    name: partyName(p.id), logo: img(`${p.kind}/${p.id}/logo`, 64), pilots: p.pilots + ' 名飞行员', share: p.dmg / total, pct: (p.dmg / total * 100).toFixed(1) + '%'
+  }));
+}
+
+let shareModules = null;
+function shareKill() {
+  const args = shownArgs;
+  if (!args) return;
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=1'), import('./share-image.js?v=1')]);
+  shareModules.then(async ([{ renderKillImage }, { openShareModal }]) => {
+    const model = killImageModel(args.kill, await killValuation(args.kill));
+    const k = args.kill;
+    openShareModal({
+      title: '分享击杀图片', app,
+      fileName: `击杀-${typeName(k.victim.ship_type_id)}-${k.killmail_id}.png`,
+      render: (theme) => renderKillImage(model, theme),
+      link: SERVER.kb ? () => `https://zkillboard.com/kill/${k.killmail_id}/` : SERVER.kbSite ? () => kbSiteLink('kill', k.killmail_id) : null
+    });
+  }).catch((error) => {
+    shareModules = null;
+    app.showToast('生成图片失败：' + error.message, 'error', 4000);
+  });
 }
 
 function closeKill() {

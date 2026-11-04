@@ -262,6 +262,7 @@ BR_MAX_SYSTEMS = 30           # 战场统计：最多星系数
 BR_MAX_HOURS = 72             # 战场统计：最长时间段
 BR_MAX_KILLS = 5000           # 战场统计：最多击杀数
 BR_CACHE_KEEP = 50            # 战场统计：内存中保留的查询结果数
+BR_DMG_WAIT = 12              # 战场统计：旧击杀缺伤害时向 ESI 补，最多等这么多秒，没补完的在后台继续
 BATTLE_CACHE = 5              # 会战结果缓存（秒），前端与实时击杀同为 6 秒轮询
 BATTLE_MIN_VALUE = 10_000_000  # 会战只统计价值 ≥ 1000 万 ISK 的击杀（过滤小船 / 诱饵等刷数）
 BATTLE_MIN_KILLS = 20           # 历史会战：60 分钟内同一星系击毁 ≥ 20 艘（与实时疑似会战默认口径相同）
@@ -403,8 +404,8 @@ CREATE INDEX IF NOT EXISTS km_valliance ON killmails(v_alliance, time);
 CREATE INDEX IF NOT EXISTS km_ship ON killmails(ship_type, time);
 CREATE INDEX IF NOT EXISTS km_system ON killmails(system_id, time);
 CREATE INDEX IF NOT EXISTS km_region ON killmails(region_id, time);
--- 只保存玩家攻击者（NPC 不参与任何统计）
-CREATE TABLE IF NOT EXISTS attackers(km INTEGER, time INTEGER, char INTEGER, corp INTEGER, alliance INTEGER, ship INTEGER);
+-- 只保存玩家攻击者（NPC 不参与任何统计）；dmg 为造成的伤害，旧数据为 NULL（战场统计用到时再向 ESI 补）
+CREATE TABLE IF NOT EXISTS attackers(km INTEGER, time INTEGER, char INTEGER, corp INTEGER, alliance INTEGER, ship INTEGER, dmg INTEGER);
 CREATE INDEX IF NOT EXISTS att_char ON attackers(char, time);
 CREATE INDEX IF NOT EXISTS att_corp ON attackers(corp, time);
 CREATE INDEX IF NOT EXISTS att_alliance ON attackers(alliance, time);
@@ -446,6 +447,8 @@ class Store:
         if "raw" in {r[1] for r in conn.execute("PRAGMA table_info(killmails)")}:
             self.migrate(conn)
         conn.executescript(SCHEMA)
+        if "dmg" not in {r[1] for r in conn.execute("PRAGMA table_info(attackers)")}:
+            conn.execute("ALTER TABLE attackers ADD COLUMN dmg INTEGER")
         conn.commit()
         self.prices = {}
         self.adjusted = {}
@@ -594,7 +597,7 @@ class Store:
                     v.get("character_id"), v.get("corporation_id"), v.get("alliance_id"),
                     final.get("character_id"), final.get("corporation_id"), final.get("alliance_id"), final.get("ship_type_id")))
                 for a in players:
-                    att_rows.append((kid, t, a["character_id"], a.get("corporation_id"), a.get("alliance_id"), a.get("ship_type_id")))
+                    att_rows.append((kid, t, a["character_id"], a.get("corporation_id"), a.get("alliance_id"), a.get("ship_type_id"), a.get("damage_done") or 0))
                 # 原文带物品时顺便存下阵亡装配（没有 items 字段的不存，查装配时再向 ESI 取）
                 if "items" in v:
                     fit_rows.append((kid, v["ship_type_id"], t, json.dumps(extract_fit(km), separators=(",", ":"))))
@@ -609,7 +612,7 @@ class Store:
                         if eid and eid not in self.known_names:
                             self.pending_names.add(eid)
             c.executemany("INSERT OR IGNORE INTO killmails VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", km_rows)
-            c.executemany("INSERT INTO attackers VALUES(?,?,?,?,?,?)", att_rows)
+            c.executemany("INSERT INTO attackers(km, time, char, corp, alliance, ship, dmg) VALUES(?,?,?,?,?,?,?)", att_rows)
             c.executemany("INSERT OR REPLACE INTO km_fits(id, ship, time, fit) VALUES(?,?,?,?)", fit_rows)
             c.commit()
             added = len(km_rows)
@@ -1504,7 +1507,8 @@ class Api:
                 "battles": out, "names": self.names_for(ids)}
 
     # GET /br?systems=1,2,3&start=T&end=T：战场统计原始数据（时间为 Unix 秒）
-    # 返回紧凑数组以减小体积：kills[i] = [id, time, system, ship, value, v_char, v_corp, v_alliance, [[char, corp, alliance, ship], ...]]
+    # 返回紧凑数组以减小体积：kills[i] = [id, time, system, ship, value, v_char, v_corp, v_alliance, [[char, corp, alliance, ship, 伤害], ...]]
+    # dmg_missing：还没补到伤害的击杀数（补完前只缓存 15 秒，前端稍后刷新即可）
     def br(self, q):
         systems = sorted({int(x) for x in str(q.get("systems", "")).split(",") if x.strip()})
         if not systems:
@@ -1524,32 +1528,72 @@ class Api:
             return hit[1]
         c = self.store.conn()
         marks = ",".join("?" * len(systems))
-        rows = c.execute(f"""SELECT id, time, system_id, ship_type, value, v_char, v_corp, v_alliance FROM killmails
+        rows = c.execute(f"""SELECT id, time, system_id, ship_type, value, v_char, v_corp, v_alliance, hash FROM killmails
                              WHERE system_id IN ({marks}) AND time >= ? AND time < ? AND npc = 0
                              ORDER BY time LIMIT ?""", (*systems, start, end, BR_MAX_KILLS + 1)).fetchall()
         truncated = len(rows) > BR_MAX_KILLS
         rows = rows[:BR_MAX_KILLS]
-        att = collections.defaultdict(list)
-        ids = set()
         kids = [r[0] for r in rows]
-        for chunk in range(0, len(kids), 900):
-            part = kids[chunk:chunk + 900]
-            for km, char, corp, alliance, ship in c.execute(
-                    f"SELECT km, char, corp, alliance, ship FROM attackers WHERE km IN ({','.join('?' * len(part))})", part):
-                att[km].append([char, corp, alliance, ship])
-                ids.update((char, corp, alliance))
+
+        def load_attackers():
+            att = collections.defaultdict(list)
+            for chunk in range(0, len(kids), 900):
+                part = kids[chunk:chunk + 900]
+                for km, char, corp, alliance, ship, dmg in c.execute(
+                        f"SELECT km, char, corp, alliance, ship, dmg FROM attackers WHERE km IN ({','.join('?' * len(part))})", part):
+                    att[km].append([char, corp, alliance, ship, dmg])
+            return att
+        att = load_attackers()
+        nodmg = [r for r in rows if r[8] and any(a[4] is None for a in att.get(r[0], ()))]
+        if nodmg and self.fill_damage(nodmg):
+            att = load_attackers()
+        missing = sum(1 for r in rows if r[8] and any(a[4] is None for a in att.get(r[0], ())))
+        ids = {x for lst in att.values() for a in lst for x in a[:3]}
         kills = []
         for r in rows:
             ids.update(r[5:8])
             kills.append([r[0], r[1], r[2], r[3], round(r[4] or 0, 2), r[5], r[6], r[7], att.get(r[0], [])])
-        value = {"systems": systems, "start": start, "end": end, "kills": kills, "truncated": truncated,
+        value = {"systems": systems, "start": start, "end": end, "kills": kills, "truncated": truncated, "dmg_missing": missing,
                  "retention_days": self.store.retention, "names": self.names_for(ids)}
-        self.store.cache[key] = (time.time(), value)
+        self.store.cache[key] = (time.time() - (max(0, ttl - 15) if missing else 0), value)
         # 查询条件由用户决定，只保留最近的若干个结果，避免缓存无限增长
         br_keys = sorted((k for k in list(self.store.cache) if k[0] == "br"), key=lambda k: self.store.cache[k][0])
         for k in br_keys[:-BR_CACHE_KEEP]:
             self.store.cache.pop(k, None)
         return value
+
+    def fill_damage(self, rows):
+        """旧击杀没存攻击者伤害：向 ESI 取原文补上。最多等 BR_DMG_WAIT 秒，返回期间是否补到了；
+        没补完的在后台继续（同一击杀不会重复取）"""
+        if not hasattr(self, "dmg_pool"):
+            self.dmg_pool = concurrent.futures.ThreadPoolExecutor(SHIPFIT_WORKERS)
+            self.dmg_busy = set()
+        store = self.store
+
+        def fetch(kid, km_hash):
+            try:
+                km, _ = get_json(store.esi_url(f"/killmails/{kid}/{km_hash}/"), timeout=20, retries=2)
+                done = [(a.get("damage_done") or 0, kid, a["character_id"]) for a in (km or {}).get("attackers") or [] if a.get("character_id")]
+                if km:
+                    with store.write_lock:
+                        c = store.conn()
+                        c.executemany("UPDATE attackers SET dmg=? WHERE km=? AND char=?", done)
+                        c.execute("UPDATE attackers SET dmg=0 WHERE km=? AND dmg IS NULL", (kid,))   # 原文里对不上的，不再反复取
+                        c.commit()
+            except Exception:
+                pass
+            finally:
+                self.dmg_busy.discard(kid)
+        futs = []
+        for r in rows:
+            if r[0] in self.dmg_busy:
+                continue
+            self.dmg_busy.add(r[0])
+            futs.append(self.dmg_pool.submit(fetch, r[0], r[8]))
+        if not futs:
+            return False
+        concurrent.futures.wait(futs, timeout=BR_DMG_WAIT)
+        return True
 
     # GET /feed
     def constellation_systems(self, cid):
@@ -1936,6 +1980,13 @@ class Api:
             systems = c.execute(f"SELECT system_id, COUNT(*) n FROM killmails WHERE time >= ? AND ({vcol}=? OR id IN (SELECT km FROM attackers WHERE {acol}=? AND time >= ?)) GROUP BY system_id ORDER BY n DESC LIMIT 8",
                                 (since, eid, eid, since)).fetchall()
             result["systems"] = [{"system_id": r, "count": n} for r, n in systems]
+            # 最贵的击杀与损失（分享图片用）
+            result["top_losses"] = [row_summary(r) for r in c.execute(
+                f"SELECT {SUMMARY_COLS} FROM killmails WHERE {vcol}=? AND time >= ? ORDER BY value DESC LIMIT 5", (eid, since))]
+            result["top_kills"] = [row_summary(r) for r in c.execute(
+                f"SELECT {SUMMARY_COLS} FROM killmails WHERE time >= ? AND id IN (SELECT km FROM attackers WHERE {acol}=? AND time >= ? AND char IS NOT NULL) ORDER BY value DESC LIMIT 5",
+                (since, eid, since))]
+            result["names"] = self.with_names(result["top_kills"] + result["top_losses"])
             result["name"] = self.names_for([eid]).get(eid)
             return result
         return self.cached(("entity", kind, eid, days), run)

@@ -45,8 +45,8 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=165"></script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v259">
+  <script src="js/i18n.js?v=166"></script>
+  <link rel="stylesheet" href="css/modern-style.css?v=v260">
 </head>
 <body>
   <div id="app" class="app-shell">
@@ -967,6 +967,9 @@
       <div class="modal-content kill-content">
         <div class="modal-header">
           <h3 id="killTitle">击杀详情</h3>
+          <button class="modal-close kill-share-btn" id="killShare" data-share-kill aria-label="分享图片" title="分享图片" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>
+          </button>
           <button class="modal-close" data-close-kill aria-label="关闭">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
           </button>
@@ -1175,6 +1178,6 @@
   </div>
 
   <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v372" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v373" type="module" data-cfasync="false"></script>
 </body>
 </html>

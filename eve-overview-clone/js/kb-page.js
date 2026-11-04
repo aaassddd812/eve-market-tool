@@ -3,11 +3,12 @@
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v30';
+import { initBr, renderBr } from './kb-br.js?v=v31';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 import { SERVER, IS_TQ, HUB, eveImage, kbSiteLink } from './server.js?v=s4';
 import * as ST from './standings.js?v=v4';
+import { fullIn } from './eve-time.js?v=v1';
 
 let app, kb;
 
@@ -797,7 +798,7 @@ async function renderEntity(kind, id) {
   const P = entityParts(kind, id, d);
   main.innerHTML = `
     ${BACK_LINK}
-    ${P.head}
+    ${P.head.replace('<div class="kb-ext-links">', `<div class="kb-ext-links"><button class="btn btn-ghost kb-share-btn" data-entity-share title="生成${KIND_ZH[kind]}统计图片，可下载或复制后分享">${SHARE_SVG}<span>分享图片</span></button>`)}
     ${P.lifetime}${monthlyHtml(lifetime)}${P.recent}
     ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天）</small></h4><div id="kbMembers"></div>` : ''}
     ${P.activity}${P.corpHistory}
@@ -816,6 +817,86 @@ async function renderEntity(kind, id) {
   loadEntityFeed(true);
 }
 
+// ---------- 分享图片 ----------
+const SHARE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>';
+const KIND_EN = { character: 'PILOT', corporation: 'CORPORATION', alliance: 'ALLIANCE' };
+
+function entityImageModel(e) {
+  const { kind, id, stats, info, lifetime: z } = e;
+  const num = app.formatNumber, isk = app.formatISK;
+  const day = (d) => new Date(d).toLocaleDateString('zh-CN');
+  const eff = stats.destroyed + stats.lost ? stats.destroyed / (stats.destroyed + stats.lost) * 100 : null;
+  const subs = [], chips = [];
+  if (kind === 'character') {
+    if (info.corporation_id) subs.push({ text: partyName(info.corporation_id), icon: avatar('corporation', info.corporation_id, 64) });
+    if (info.alliance_id) subs.push({ text: partyName(info.alliance_id), icon: avatar('alliance', info.alliance_id, 64) });
+    if (info.birthday) chips.push('创建于 ' + day(info.birthday));
+  } else {
+    if (kind === 'corporation' && info.alliance_id) subs.push({ text: partyName(info.alliance_id), icon: avatar('alliance', info.alliance_id, 64) });
+    if (info.ticker) chips.push('[' + info.ticker + ']');
+    if (info.member_count) chips.push(num(info.member_count) + ' 名成员');
+    if (info.date_founded) chips.push('成立于 ' + day(info.date_founded));
+  }
+  const kill = (k) => {
+    const v = k.victim;
+    return {
+      icon: IMG(`types/${k.ship_type_id}/icon`, 64), ship: typeName(k.ship_type_id),
+      who: [partyName(v.character_id || v.corporation_id), partyName(v.alliance_id || (v.character_id ? v.corporation_id : 0))].filter(Boolean).join(' · '),
+      value: isk(k.value) + ' ISK', time: day(k.time)
+    };
+  };
+  const ship = (s) => ({ icon: IMG(`types/${s.ship_type_id}/icon`, 64), name: typeName(s.ship_type_id), count: s.count });
+  let life = null;
+  if (z && z.shipsDestroyed !== undefined) {
+    const le = (z.iskDestroyed || 0) + (z.iskLost || 0) ? z.iskDestroyed / (z.iskDestroyed + z.iskLost) * 100 : null;
+    life = {
+      kills: num(z.shipsDestroyed || 0), losses: num(z.shipsLost || 0), destroyed: isk(z.iskDestroyed || 0), lost: isk(z.iskLost || 0),
+      solo: num(z.soloKills || 0), soloLosses: num(z.soloLosses || 0), eff: le == null ? '—' : le.toFixed(1) + '%',
+      ratios: `危险度 ${z.dangerRatio ?? '—'}% · 团战 ${z.gangRatio ?? '—'}%`
+    };
+  }
+  const memberKind = kind === 'alliance' ? 'corporation' : 'character';
+  return {
+    kind, kindLabel: KIND_ZH[kind], kindEn: KIND_EN[kind], round: kind === 'character',
+    name: info.name || stats.name || partyName(id), avatar: avatar(kind, id, 256), subs, chips,
+    days: Math.round(stats.days || 30), valueLabel: VALUE_LABEL,
+    recent: {
+      kills: num(stats.kills), losses: num(stats.losses), destroyed: isk(stats.destroyed), lost: isk(stats.lost), solo: num(stats.solo_kills), eff,
+      finalBlows: stats.final_blows != null ? num(stats.final_blows) : null,
+      finalShare: stats.final_blows != null && stats.kills ? `占参与击杀 ${(stats.final_blows / stats.kills * 100).toFixed(0)}%` : ''
+    },
+    lifetime: life,
+    topKills: (stats.top_kills || []).map(kill), topLosses: (stats.top_losses || []).map(kill),
+    shipsUsed: stats.ships_used.slice(0, 6).map(ship), shipsLost: stats.ships_lost.slice(0, 6).map(ship),
+    regions: (stats.regions || []).slice(0, 6).map((r) => ({ name: partyName(r.region_id), count: r.count })),
+    systems: (stats.systems || []).slice(0, 6).map((x) => { const l = kb.systemLabel(x.system_id); return { name: l.name, sec: l.secText, level: l.sec, region: l.region, count: x.count }; }),
+    membersTitle: kind === 'alliance' ? '最活跃的成员军团' : '最活跃的成员',
+    members: (stats.members || []).filter((s) => s.destroyed > 0).slice(0, 8).map((s) => ({
+      icon: avatar(memberKind, s.id, 64), round: memberKind === 'character', name: s.name || partyName(s.id),
+      detail: `参与击杀 ${num(s.kills)} · 损失 ${num(s.losses)}`, value: isk(s.destroyed)
+    })),
+    footer: `${location.host} · ${VALUE_LABEL}`,
+    generated: '生成于 ' + fullIn(Math.floor(Date.now() / 1000), 'cn') + ' UTC+8'
+  };
+}
+
+let shareModules = null;
+function shareEntity() {
+  const e = S.entity;
+  if (!e?.stats) return;
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=1'), import('./share-image.js?v=1')]);
+  const model = entityImageModel(e);
+  shareModules.then(([{ renderEntityImage }, { openShareModal }]) => openShareModal({
+    title: `分享${KIND_ZH[e.kind]}图片`, app,
+    fileName: `${KIND_ZH[e.kind]}-${model.name}.png`,
+    render: (theme) => renderEntityImage(model, theme),
+    link: () => location.href
+  })).catch((error) => {
+    shareModules = null;
+    app.showToast('生成图片失败：' + error.message, 'error', 4000);
+  });
+}
+
 // 实体页的数据：最近 30 天统计、公开资料、zKillboard 生涯统计（宁静服）、人物的军团履历；相关名称与舰船类型都读好
 async function entityData(kind, id) {
   const [stats, info, lifetime, history] = await Promise.all([
@@ -826,9 +907,10 @@ async function entityData(kind, id) {
   ]);
   if (stats.name) S.names.set(id, stats.name);
   if (info.name) S.names.set(id, info.name);
+  absorbNames(stats.names);
   const related = [info.corporation_id, info.alliance_id, ...history.map((h) => h.corporation_id)].filter((x) => x && !S.names.has(x) && !app.officialName(x));
   if (related.length) { const named = await app.resolveNames(related); for (const [k, v] of named.names) S.names.set(k, v); }
-  await loadTypes([...stats.ships_used, ...stats.ships_lost].map((s) => s.ship_type_id));
+  await loadTypes([...stats.ships_used, ...stats.ships_lost, ...(stats.top_kills || []), ...(stats.top_losses || [])].map((s) => s.ship_type_id));
   return { stats, info, lifetime, history };
 }
 
@@ -1198,6 +1280,7 @@ export function initKbPage(context) {
       navigate(`#kb/${kind}/${id}`);
       return;
     }
+    if (e.target.closest('[data-entity-share]')) { shareEntity(); return; }
     if (e.target.closest('[data-kb-br]')) { navigate('#kb/br'); return; }
     if (e.target.closest('[data-kb-local]')) { navigate('#kb/local'); return; }
     if (e.target.closest('[data-kb-bh]')) { e.preventDefault(); navigate('#kb/battles'); return; }

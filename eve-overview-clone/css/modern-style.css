@@ -2552,6 +2552,10 @@ td.loc {
 
 .modal-close:hover { color: var(--text-primary); background: var(--bg-hover); }
 .modal-close svg { width: 18px; height: 18px; }
+.modal-header .kill-share-btn { margin-left: auto; margin-right: 4px; }
+.modal-header .kill-share-btn svg { width: 17px; height: 17px; }
+.kb-share-btn { gap: 6px; }
+.kb-share-btn svg { width: 15px; height: 15px; }
 
 .modal-body { padding: 20px; overflow-y: auto; }
 
@@ -3442,21 +3446,27 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 .kb-br-plot svg { display: block; width: 100%; height: auto; overflow: visible; }
 .kb-br-plot svg * { pointer-events: none; }
 .kb-br-plot .hit { fill: transparent; pointer-events: all; cursor: crosshair; }
-.kb-br-plot .grid { stroke: var(--border-primary); stroke-width: 1; stroke-dasharray: 3 4; }
-.kb-br-plot .grid.base { stroke: var(--border-secondary); stroke-dasharray: none; }
+.kb-br-plot .grid { stroke: var(--border-primary); stroke-width: 1; opacity: 0.7; }
+.kb-br-plot .grid.base { stroke: var(--border-secondary); opacity: 1; }
 .kb-br-plot .ax { fill: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .kb-br-plot .ax.side { font-size: 10.5px; font-weight: 600; }
 .kb-br-plot .ax.side.a { fill: var(--br-a); }
 .kb-br-plot .ax.side.b { fill: var(--br-b); }
-.kb-br-plot .ln { fill: none; stroke-width: 2.25; stroke-linejoin: round; }
+.kb-br-plot .ln { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
 .kb-br-plot .ln.a { stroke: var(--br-a); }
 .kb-br-plot .ln.b { stroke: var(--br-b); }
 .kb-br-plot .bar.a { fill: var(--br-a); }
 .kb-br-plot .bar.b { fill: var(--br-b); }
-.kb-br-plot .mk { stroke: var(--bg-secondary); stroke-width: 2; pointer-events: all; cursor: pointer; transition: r 120ms; }
+.kb-br-plot .mk { fill: var(--bg-secondary); stroke-width: 2.25; pointer-events: all; cursor: pointer; transition: r 120ms; }
 .kb-br-plot .mk:hover { r: 7; }
-.kb-br-plot .mk.a { fill: var(--br-a); }
-.kb-br-plot .mk.b { fill: var(--br-b); }
+.kb-br-plot .mk.a { stroke: var(--br-a); }
+.kb-br-plot .mk.b { stroke: var(--br-b); }
+.kb-br-plot .end, .kb-br-plot .hv { stroke: var(--bg-secondary); stroke-width: 2; }
+.kb-br-plot .end.a, .kb-br-plot .hv.a { fill: var(--br-a); }
+.kb-br-plot .end.b, .kb-br-plot .hv.b { fill: var(--br-b); }
+.kb-br-plot .endv { font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; paint-order: stroke; stroke: var(--bg-secondary); stroke-width: 4px; stroke-linejoin: round; }
+.kb-br-plot .endv.a { fill: var(--br-a); }
+.kb-br-plot .endv.b { fill: var(--br-b); }
 .kb-br-plot .cross { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 2 3; }
 .kb-br-tip { position: absolute; z-index: 2; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--bg-elevated, var(--bg-secondary)); border: 1px solid var(--border-primary); box-shadow: var(--shadow-lg); font-size: 0.75rem; white-space: nowrap; pointer-events: none; }
 .kb-br-tip b { font-weight: 600; margin-bottom: 2px; }
@@ -3524,11 +3534,16 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 }
 .kb-br-tools .btn svg { width: 15px; height: 15px; }
 .kb-br-tools .btn-primary { gap: 6px; }
-.kb-br-image-modal .modal-content { max-width: 760px; width: calc(100vw - 32px); }
-.kb-br-image-preview { max-height: min(68vh, 900px); overflow-y: auto; border-radius: var(--radius-md); background: #0b0f17; }
-.kb-br-image-preview img { display: block; width: 100%; height: auto; }
-.kb-br-image-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.kb-br-image-actions .text-muted { margin-right: auto; font-size: 0.75rem; }
+.share-image-modal .modal-content { max-width: 760px; width: calc(100vw - 32px); }
+.share-image-preview { position: relative; min-height: 220px; max-height: min(68vh, 900px); overflow-y: auto; border-radius: var(--radius-md); background: #eef1f6; }
+.share-image-preview.theme-dark { background: #0b0f17; }
+.share-image-preview img { display: block; width: 100%; height: auto; transition: opacity 150ms; }
+.share-image-preview.is-busy img { opacity: 0.45; }
+.share-image-loading { display: flex; align-items: center; justify-content: center; gap: 10px; min-height: 220px; margin: 0; color: #8a94a6; font-size: 0.8125rem; }
+.share-image-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.share-image-actions .text-muted { margin-right: auto; font-size: 0.75rem; }
+.share-image-actions .segmented button { padding: 0 14px; }
+.share-image-actions .btn.is-disabled { opacity: 0.5; pointer-events: none; }
 
 /* ===== 行星工业规划 ===== */
 /* 页内加载：上面一行说明（进度文字照常显示），下面画 4 行列表骨架（图标 + 两行文字） */
@@ -7751,6 +7766,7 @@ html.is-app .desktop-dl-btn, html.is-app [data-mnav-act="desktopDlBtn"] { displa
 .kb-br-pilot small { font-size: 0.6875rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb-br-ptable .kb-br-badge { width: 20px; height: 20px; font-size: 0.6875rem; }
 .kb-br-pships { white-space: nowrap; }
+.kb-br-ptable .kb-br-dmg { color: var(--text-secondary); }
 .kb-br-pships > * { vertical-align: middle; }
 .kb-br-pships img { border-radius: 4px; vertical-align: middle; margin-right: 2px; }
 .kb-br-table .kb-br-pships small { display: inline; margin-left: 4px; font-size: 0.75rem; color: var(--text-secondary); }
