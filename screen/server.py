@@ -26,6 +26,7 @@ BOT = re.compile(r"bot|spider|crawl|curl|wget|python|go-http|httpclient|axios|ok
 LINE = re.compile(r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d+) \S+ "([^"]*)" "([^"]*)"')
 XFF = re.compile(r'xff="([^"]+)"')
 STATIC_EXT = re.compile(r"\.(js|css|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|map|glb|gltf|bin|ktx2)$", re.I)
+NUM_SEG = re.compile(r"/\d+(?:\.\d+)*")   # 路径里的纯数字段（物品/击杀/人物 ID）
 SERVER_PARAM = re.compile(r"[?&]server=([A-Za-z]+)")
 SERVERS = {"serenity": "宁静", "infinity": "晨曦", "tq": "曙光"}
 OLD_DOMAIN, NEW_DOMAIN = "eve-tools.top", "eve.navexor.top"
@@ -481,8 +482,9 @@ class Stats:
                 x.dom_ip[dk][ip] += 1
                 x.dom_req[dk] += 1
         if not STATIC_EXT.search(path):
-            b.pages[path] += 1
-            tot.pages[path] += 1
+            np_ = NUM_SEG.sub("/*", path)   # /api/kb/kill/123 -> /api/kb/kill/*，动态 ID 聚合
+            b.pages[np_] += 1
+            tot.pages[np_] += 1
             self.seq += 1
             self.recent.append((self.seq, ip, url, t, is_new))
         self.geo.want(ip)
@@ -629,7 +631,7 @@ class Stats:
                 "new_count_24h": self.known.count_since(now - self.WINDOW),
                 "total_users": len(self.known.set),
                 "hourly": hourly,
-                "top_pages": [{"path": p, "count": c} for p, c in tot.pages.most_common(10)],
+                "top_pages": [{"path": p, "count": c} for p, c in tot.pages.most_common()],
                 "domain": {"old": len(tot.dom_ip["old"]), "new": len(tot.dom_ip["new"]),
                            "old_requests": tot.dom_req["old"], "new_requests": tot.dom_req["new"]},
                 "servers": {k: tot.srv.get(k, 0) for k in SERVERS.values()},
