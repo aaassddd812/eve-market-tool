@@ -63,6 +63,13 @@ let plan = null;         // 最近一次规划结果
 
 export function initPlan(context) {
   ctx = context;
+  // 换角色 / 个人中心「刷新数据」：丢掉旧角色的技能，页面还开着就重读
+  const reset = () => {
+    C = null; charP = null;
+    if (root?.isConnected && root.querySelector('.sp-page')) { render(); loadChar(); }
+  };
+  window.addEventListener('eve-account-change', reset);
+  window.addEventListener('eve-char-refresh', reset);
   try {
     const st = ctx.store.getJSON(KEY, null);
     if (st) {
@@ -124,7 +131,7 @@ export function mountPlan(el, restored = false) {
 function loadChar() {
   if (charP) return charP;
   if (!ctx.hasEsi()) { C = { mode: 'none' }; render(); return Promise.resolve(); }
-  charP = (async () => {
+  const p = charP = (async () => {
     const token = await ctx.getEsiToken();
     const id = token.character_id;
     const get = (p) => ctx.esiFetch(`/characters/${id}${p}`);
@@ -138,6 +145,7 @@ function loadChar() {
       const a = Date.parse(x.start_date), b = Date.parse(x.finish_date);
       if (a <= now && now < b && x.level_end_sp != null) { const s0 = x.training_start_sp ?? x.level_start_sp ?? 0; spNow.set(x.skill_id, s0 + (x.level_end_sp - s0) * (now - a) / (b - a)); }
     }
+    if (charP !== p) return;   // 读取期间换了角色
     C = {
       spNow,
       mode: 'esi', id, name: token.character_name || `角色 ${id}`,
@@ -149,8 +157,8 @@ function loadChar() {
       attrs: at.status === 'fulfilled' ? at.value : null,
       implants: imp.status === 'fulfilled' && Array.isArray(imp.value) ? imp.value : []
     };
-  })().catch((e) => { C = { mode: 'esi', error: e.message || String(e) }; }).finally(() => { render(); });
-  return charP;
+  })().catch((e) => { if (charP === p) C = { mode: 'esi', error: e.message || String(e) }; }).finally(() => { if (charP === p) render(); });
+  return p;
 }
 // 植入体加成：{ charisma: +n, … }
 function implantBonus() {

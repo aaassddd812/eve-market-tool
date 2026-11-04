@@ -1057,7 +1057,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v108').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v109').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -6164,6 +6164,8 @@ function initESIModal() {
     btn.disabled = true;
     btn.classList.add('spinning');
     allCharCache.clear();
+    skillCache = null;
+    window.dispatchEvent(new CustomEvent('eve-char-refresh'));   // 技能规划等缓存了角色数据的页面重读
     loadCharacterData()
       .then(() => showToast('角色数据已刷新', 'success'))
       .catch((e) => showToast(e.message, 'error', 4000))
