@@ -3605,6 +3605,9 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 .share-image-stage.theme-dark .share-image-busy { background: rgba(11, 15, 23, 0.72); color: #a3b0c3; }
 .share-image-busy[hidden] { display: none; }
 .share-image-busy .spinner { width: 28px; height: 28px; border-width: 3px; }
+.share-image-progress { width: min(280px, 70%); height: 6px; border-radius: 3px; background: rgba(120, 135, 160, 0.25); overflow: hidden; }
+.share-image-progress i { display: block; height: 100%; width: 0; border-radius: 3px; background: #4f8ff7; transition: width 0.2s ease; }
+[data-busy-text] { font-variant-numeric: tabular-nums; }
 .share-image-error { display: flex; align-items: center; justify-content: center; height: 100%; margin: 0; color: #8a94a6; font-size: 0.875rem; }
 @media (max-width: 768px) { .share-image-preview { height: 62vh; } }
 .share-image-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 12px; }

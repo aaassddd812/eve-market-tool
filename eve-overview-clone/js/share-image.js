@@ -52,9 +52,18 @@ export function loadImage(url) {
   }
   return imageCache.get(url);
 }
+// 预览弹窗生成图片期间设置：每下载完一张回调 (已完成, 总数)，弹窗里显示进度
+let progress = null;
 export async function loadImages(urls) {
   const list = [...new Set(urls)].filter(Boolean);
-  return new Map(await Promise.all(list.map(async (u) => [u, await loadImage(u)])));
+  const report = progress;
+  let done = 0;
+  report?.(0, list.length);
+  return new Map(await Promise.all(list.map(async (u) => {
+    const img = await loadImage(u);
+    report?.(++done, list.length);
+    return [u, img];
+  })));
 }
 
 export function rr(g, x, y, w, h, r) {
@@ -222,7 +231,7 @@ export function openShareModal(opts) {
             <button type="button" data-zoom="fit" title="适应窗口（双击图片也可切换）">100%</button>
             <button type="button" data-zoom="1" aria-label="放大">+</button>
           </div>
-          <div class="share-image-busy"><span class="spinner"></span><span>正在生成图片…</span></div>
+          <div class="share-image-busy"><span class="spinner"></span><span data-busy-text>正在准备数据…</span><div class="share-image-progress"><i data-busy-bar></i></div></div>
         </div>
         <div class="share-image-actions">
           <div class="segmented" role="group" aria-label="图片配色">
@@ -319,8 +328,15 @@ export function openShareModal(opts) {
     box.className = `share-image-preview theme-${theme}`;
     stage.className = `share-image-stage theme-${theme}`;
     busy.hidden = false;
+    // 进度：准备数据 → 下载头像与图标（按张数）→ 绘制导出
+    const busyText = busy.querySelector('[data-busy-text]'), busyBar = busy.querySelector('[data-busy-bar]');
+    const setBusy = (text, pct) => { if (my !== seq) return; busyText.textContent = text; busyBar.style.width = pct.toFixed(1) + '%'; };
+    setBusy('正在准备数据…', 3);
     try {
+      progress = (d, t) => setBusy(t ? `正在加载头像与图标 ${d} / ${t}` : '正在准备数据…', 5 + (t ? d / t : 0) * 85);
       const canvas = await opts.render(theme);
+      progress = null;
+      setBusy('正在绘制并导出图片…', 95);
       const next = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
       if (!next) throw new Error('浏览器无法导出图片');
       if (my !== seq || !modal.isConnected) return;
@@ -348,7 +364,7 @@ export function openShareModal(opts) {
       if (!blob) box.innerHTML = `<p class="share-image-error">生成图片失败：${app.esc(error.message)}</p>`;
       else app.showToast('生成图片失败：' + error.message, 'error', 4000);
     } finally {
-      if (my === seq) busy.hidden = true;
+      if (my === seq) { busy.hidden = true; progress = null; }
     }
   };
   const close = () => { seq++; ro.disconnect(); modal.remove(); if (url) URL.revokeObjectURL(url); document.removeEventListener('keydown', onKey); };
