@@ -1,8 +1,8 @@
 // ===== 战场统计（Battle Report）=====
 // 选择星系（可勾选星门邻近星系）与时间段，向击杀记录服务读取期间全部玩家击杀与攻击者，
-// 按联盟（无联盟时按军团）汇总，自动推测 A / B 双方阵营（可手动调整），统计双方人数、损失、舰船组成与损失明细。
-// 路由：#kb/br（设置）、#kb/br/<星系,…>/<开始>-<结束>[/<A 方,…>/<B 方,…>]（时间为 Unix 秒，可分享）
-import { initReplay, mountReplay, stopReplay, resizeReplay } from './kb-br-replay.js?v=v5';
+// 按联盟（无联盟时按军团）汇总，自动推测 A / B 双方阵营（可手动调整，多方混战时可加 C / D 方），统计各方人数、损失、舰船组成与损失明细。
+// 路由：#kb/br（设置）、#kb/br/<星系,…>/<开始>-<结束>[/<A 方,…>/<B 方,…>[/<C 方,…>[/<D 方,…>]]]（时间为 Unix 秒，可分享）
+import { initReplay, mountReplay, stopReplay, resizeReplay } from './kb-br-replay.js?v=v6';
 import { getTz, setTz, tzLabel, isoIn, parseIn } from './eve-time.js?v=v1';
 let ctx;                       // kb-page 提供的工具：app, kb, request, absorbNames, partyName, typeName, loadTypes, avatar, entityLink, IMG
 const $ = (id) => document.getElementById(id);
@@ -18,11 +18,22 @@ const BR = {
   start: 0, end: 0,          // Unix 秒
   data: null, key: '',       // 当前结果与对应的查询
   parties: new Map(),        // 势力 id -> { id, kind, pilots:Set, kills:Set, losses, lost }
-  side: new Map(),           // 势力 id -> 'A' | 'B'（未分配不记录）
+  side: new Map(),           // 势力 id -> 'A' | 'B' | 'C' | 'D'（未分配不记录）
   view: 'A',                 // 窄屏下显示哪一方的明细
   pq: '', pside: 'all', pall: false   // 参战玩家：查询（名字或角色 ID）、只看哪一方、显示全部
 };
 const PILOT_LIMIT = 100;
+const SIDE_ALL = ['A', 'B', 'C', 'D'];
+// 当前的各方：总有 A、B；C、D 有势力时才出现
+function sidesUsed() {
+  const used = new Set(BR.side.values());
+  return ['A', 'B', ...['C', 'D'].filter((s) => used.has(s))];
+}
+// 移出势力后 C 方空了而 D 方还有：D 改叫 C
+function compactSides() {
+  const used = new Set(BR.side.values());
+  if (!used.has('C') && used.has('D')) for (const [id, s] of BR.side) if (s === 'D') BR.side.set(id, 'C');
+}
 
 export function initBr(context) {
   ctx = context;
@@ -46,10 +57,10 @@ function defaultRange() {
 
 // ---------- 路由 ----------
 export function parseHash(hash) {
-  const m = /^#kb\/br(?:\/([\d,]+)\/(\d+)-(\d+)(?:\/([\d,]*|-)\/([\d,]*|-))?)?/.exec(hash);
+  const m = /^#kb\/br(?:\/([\d,]+)\/(\d+)-(\d+)(?:\/([\d,]*|-)\/([\d,]*|-)(?:\/([\d,]*|-))?(?:\/([\d,]*|-))?)?)?/.exec(hash);
   if (!m) return null;
   const ids = (v) => (v && v !== '-' ? v.split(',').map(Number).filter(Boolean) : []);
-  return m[1] ? { systems: ids(m[1]), start: Number(m[2]), end: Number(m[3]), a: ids(m[4]), b: ids(m[5]) } : {};
+  return m[1] ? { systems: ids(m[1]), start: Number(m[2]), end: Number(m[3]), a: ids(m[4]), b: ids(m[5]), c: ids(m[6]), d: ids(m[7]) } : {};
 }
 
 function hashFor(withSides = true) {
@@ -57,7 +68,7 @@ function hashFor(withSides = true) {
   let h = `#kb/br/${systems.join(',')}/${BR.start}-${BR.end}`;
   if (withSides && BR.side.size) {
     const list = (s) => [...BR.side].filter(([, v]) => v === s).map(([id]) => id).join(',') || '-';
-    h += `/${list('A')}/${list('B')}`;
+    h += '/' + sidesUsed().map(list).join('/');
   }
   return h;
 }
@@ -244,7 +255,7 @@ function go() {
   BR.side.clear();
   const hash = hashFor(false);
   history.pushState(null, '', hash);
-  loadResult({ systems, start: BR.start, end: BR.end, a: [], b: [] });
+  loadResult({ systems, start: BR.start, end: BR.end, a: [], b: [], c: [], d: [] });
 }
 
 // ---------- 读取与汇总 ----------
@@ -267,8 +278,8 @@ async function loadResult(p) {
   summarize();
   if (p.a?.length || p.b?.length) {
     BR.side.clear();
-    p.a.forEach((id) => BR.side.set(id, 'A'));
-    p.b.forEach((id) => BR.side.set(id, 'B'));
+    SIDE_ALL.forEach((s) => (p[s.toLowerCase()] || []).forEach((id) => BR.side.set(id, s)));
+    compactSides();
   } else {
     autoSides();
     history.replaceState(null, '', hashFor());
@@ -374,10 +385,16 @@ function autoSides() {
     }
     if (!changed) break;
   }
+  // 第三方：对 A、B 两边都下过手（各至少 3 次，且少的一边不低于多的三成）的势力单独算 C 方
+  const hostileTo = (p, s) => { let v = 0; for (const [id, n] of p.hostile) if (BR.side.get(id) === s && id !== p.id) v += n; return v; };
+  const third = list.filter((p) => p.id !== list[0].id).filter((p) => {
+    const a = hostileTo(p, 'A'), b = hostileTo(p, 'B');
+    return a >= 3 && b >= 3 && Math.min(a, b) >= 0.3 * Math.max(a, b);
+  });
+  for (const p of third) BR.side.set(p.id, 'C');
 }
 
 function sideStats(s) {
-  const other = s === 'A' ? 'B' : 'A';
   const st = { pilots: new Set(), parties: [], ships: 0, pods: 0, lost: 0, destroyed: 0, losses: [], fielded: new Map(), lostByType: new Map() };
   for (const p of BR.parties.values()) if (BR.side.get(p.id) === s) { st.parties.push(p); p.pilots.forEach((c) => st.pilots.add(c)); }
   for (const k of BR.data.kills) {
@@ -386,7 +403,7 @@ function sideStats(s) {
       st.lost += k[4];
       if (PODS.has(k[3])) st.pods += 1; else { st.ships += 1; st.lostByType.set(k[3], (st.lostByType.get(k[3]) || 0) + 1); }
       st.losses.push(k);
-    } else if (vs === other) {
+    } else if (vs && k[8].some((a) => BR.side.get(partyOf(a[1], a[2])) === s)) {
       st.destroyed += k[4];
     }
   }
@@ -406,7 +423,10 @@ function renderResult() {
     box.innerHTML = `<p class="kb-empty text-muted">没有玩家击杀${old ? `（仅存 ${d.retention_days - 1} 天）` : ''}</p>`;
     return;
   }
-  const A = sideStats('A'), B = sideStats('B');
+  const sides = sidesUsed();
+  const stats = Object.fromEntries(sides.map((s) => [s, sideStats(s)]));
+  const A = stats.A, B = stats.B;
+  if (!sides.includes(BR.view)) BR.view = 'A';
   const total = d.kills.reduce((s, k) => s + k[4], 0);
   const pilots = new Set([...BR.pilotParty.keys()]).size;
   const unassigned = [...BR.parties.values()].filter((p) => !BR.side.get(p.id)).sort((a, b) => b.pilots.size - a.pilots.size || b.lost - a.lost);
@@ -418,7 +438,7 @@ function renderResult() {
         <span class="text-muted">${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()} · ${d.kills.length} 次击杀 · ${ctx.app.formatNumber(pilots)} 名飞行员 · 总损失 ${ctx.app.formatISK(total)} ISK${d.truncated ? ' · 击杀过多，只统计前 5000 条' : ''}</span>
       </div>
       <div class="kb-br-tools">
-        <button class="btn btn-ghost" data-br-auto title="按击杀关系重新推测双方">重新分阵营</button>
+        <button class="btn btn-ghost" data-br-auto title="按击杀关系重新推测各方">重新分阵营</button>
         <button class="btn btn-ghost${BR.replay ? ' active' : ''}" data-br-replay title="按击杀邮件的时间点回放这场会战">战局复盘</button>
         <button class="btn btn-ghost" data-br-share>复制链接</button>
         ${ctx.app.openBattleSim ? '<button class="btn btn-ghost" data-br-sim title="按双方实际出场的舰船（装配取击杀记录里最常见的一套）进行战场模拟">战场模拟</button>' : ''}
@@ -428,14 +448,13 @@ function renderResult() {
       </div>
     </div>
     ${BR.replay ? '<div id="brReplay"></div>' : ''}
-    ${ratioHero(A, B)}
+    ${sides.length > 2 ? multiHero(sides, stats) : ratioHero(A, B)}
     ${timelineBox()}
     <div class="segmented kb-br-switch" role="group" aria-label="查看哪一方">
-      <button data-br-view="A" class="${BR.view === 'A' ? 'active' : ''}">A 方</button><button data-br-view="B" class="${BR.view === 'B' ? 'active' : ''}">B 方</button>
+      ${sides.map((s) => `<button data-br-view="${s}" class="${BR.view === s ? 'active' : ''}">${s} 方</button>`).join('')}
     </div>
-    <div class="kb-br-cols" data-view="${BR.view}">
-      ${sideColumn('A', A)}
-      ${sideColumn('B', B)}
+    <div class="kb-br-cols" data-view="${BR.view}" data-n="${sides.length}">
+      ${sides.map((s) => sideColumn(s, stats[s])).join('')}
     </div>
     ${unassigned.length ? `<section class="kb-br-col kb-br-third">
       <h4>未分配 / 第三方<span>${unassigned.length} 个势力</span></h4>
@@ -445,7 +464,7 @@ function renderResult() {
   box.onclick = onResultClick;
   // 参战玩家查询：只重画名单（整页重画会丢掉输入框的焦点）
   box.oninput = (e) => { if (e.target.matches('[data-br-pq]')) { BR.pq = e.target.value; $('brPilots').innerHTML = pilotsBody(); } };
-  if (BR.replay) mountReplay($('brReplay'), replayModel(A, B)); else stopReplay();
+  if (BR.replay) mountReplay($('brReplay'), replayModel(sides, stats)); else stopReplay();
   drawTimeline();
   observeChart();
 }
@@ -512,12 +531,38 @@ function ratioHero(A, B) {
   </section>`;
 }
 
+// 三方及以上：每方一张卡（损失、击毁、效率），下面是各方 ISK 损失占比
+function multiHero(sides, stats) {
+  const isk = ctx.app.formatISK, num = ctx.app.formatNumber;
+  const total = sides.reduce((t, s) => t + stats[s].lost, 0);
+  const card = (s) => {
+    const st = stats[s];
+    const eff = st.destroyed + st.lost ? st.destroyed / (st.destroyed + st.lost) : 0;
+    return `<div class="kb-br-mside side-${s.toLowerCase()}">
+      <div class="kb-br-side-name"><i class="kb-br-badge">${s}</i>${s} 方<small>${st.parties.length} 个势力 · ${num(st.pilots.size)} 人</small></div>
+      <div class="kb-br-ratio-isk">${isk(st.lost)}<small>ISK 损失</small></div>
+      <div class="kb-br-mstats"><span>击毁<b>${isk(st.destroyed)}</b></span><span>舰船损失<b>${num(st.ships)}</b></span><span>ISK 效率<b>${st.destroyed + st.lost ? (eff * 100).toFixed(1) + '%' : '—'}</b></span></div>
+    </div>`;
+  };
+  return `<section class="kb-br-ratio kb-br-multi">
+    <div class="kb-br-mcards" style="--n:${sides.length}">${sides.map(card).join('')}</div>
+    <div class="kb-br-share kb-br-mshare" title="各方 ISK 损失占比">${sides.map((s) => {
+      const w = total ? stats[s].lost / total : 1 / sides.length;
+      return w ? `<i class="side-${s.toLowerCase()}" style="width:${(w * 100).toFixed(2)}%">${w >= 0.06 ? `<span>${(w * 100).toFixed(1)}%</span>` : ''}</i>` : '';
+    }).join('')}</div>
+    <div class="kb-br-share-note"><span>ISK 损失占比</span></div>
+  </section>`;
+}
+
 function partyRow(p, side) {
-  const move = side === 'A' ? ['B'] : side === 'B' ? ['A'] : ['A', 'B'];
+  // 可移到的阵营：现有各方 + 下一个新的一方（最多 D 方）
+  const sides = sidesUsed();
+  if (sides.length < SIDE_ALL.length) sides.push(SIDE_ALL[sides.length]);
+  const move = sides.filter((s) => s !== side);
   return `<div class="kb-br-party">
     <img src="${ctx.avatar(p.kind, p.id, 32)}" alt="" width="28" height="28" loading="lazy">
     <div class="kb-br-party-main">${ctx.entityLink(p.kind, p.id)}<small>${p.pilots.size} 人 · 参与击杀 ${p.kills.size} · 损失 ${p.losses}（${ctx.app.formatISK(p.lost)}）</small></div>
-    <div class="kb-br-move">${move.map((m) => `<button class="m-${m.toLowerCase()}" data-br-move="${p.id}:${m}" title="移到 ${m} 方">${m}</button>`).join('')}${side ? `<button data-br-move="${p.id}:-" title="移出（不计入双方）">×</button>` : ''}</div>
+    <div class="kb-br-move">${move.map((m) => `<button class="m-${m.toLowerCase()}" data-br-move="${p.id}:${m}" title="移到 ${m} 方">${m}</button>`).join('')}${side ? `<button data-br-move="${p.id}:-" title="移出（不计入任何一方）">×</button>` : ''}</div>
   </div>`;
 }
 
@@ -552,14 +597,16 @@ const fmtDmg = (v) => (v >= 1e6 ? ctx.app.formatISK(v) : ctx.app.formatNumber(Ma
 // 查询框认名字（包含即可）或角色 ID；ID 不在这场战斗里时给出人物页链接
 function pilotsSection() {
   const side = (c) => BR.side.get(BR.pilotParty.get(c)) || '';
-  const counts = { all: BR.pilotStats.size, A: 0, B: 0 };
+  const sides = sidesUsed();
+  if (BR.pside !== 'all' && !sides.includes(BR.pside)) BR.pside = 'all';
+  const counts = { all: BR.pilotStats.size, A: 0, B: 0, C: 0, D: 0 };
   for (const c of BR.pilotStats.keys()) { const s = side(c); if (s) counts[s] += 1; }
   return `<section class="kb-br-col kb-br-pilots">
     <h4>参战玩家<span>${ctx.app.formatNumber(BR.pilotStats.size)} 人</span></h4>
     <div class="kb-br-ptools">
       <label class="search-box kb-br-psearch"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input type="search" data-br-pq value="${ctx.app.esc(BR.pq)}" placeholder="查玩家：名字或角色 ID" autocomplete="off" spellcheck="false"></label>
-      <div class="segmented" role="group" aria-label="只看哪一方">${[['all', '全部'], ['A', 'A 方'], ['B', 'B 方']].map(([k, l]) => `<button data-br-pside="${k}" class="${BR.pside === k ? 'active' : ''}">${l}<small>${counts[k]}</small></button>`).join('')}</div>
+      <div class="segmented" role="group" aria-label="只看哪一方">${[['all', '全部'], ...sides.map((s) => [s, s + ' 方'])].map(([k, l]) => `<button data-br-pside="${k}" class="${BR.pside === k ? 'active' : ''}">${l}<small>${counts[k]}</small></button>`).join('')}</div>
     </div>
     <div id="brPilots">${pilotsBody()}</div>
   </section>`;
@@ -570,7 +617,7 @@ function pilotsBody() {
   const side = (c) => BR.side.get(BR.pilotParty.get(c)) || '';
   let list = [...BR.pilotStats.keys()].filter((c) => BR.pside === 'all' || side(c) === BR.pside);
   if (q) list = list.filter((c) => c === qid || String(ctx.partyName(c) || '').toLowerCase().includes(ql));
-  const order = { A: 0, B: 1, '': 2 };
+  const order = { A: 0, B: 1, C: 2, D: 3, '': 4 };
   list.sort((a, b) => order[side(a)] - order[side(b)] || BR.pilotStats.get(b).kills.size - BR.pilotStats.get(a).kills.size || BR.pilotStats.get(b).lost - BR.pilotStats.get(a).lost);
   if (!list.length) {
     return `<p class="text-muted kb-br-none">${q ? `这场战斗里没有「${esc(q)}」` : '没有玩家'}${qid ? ` · <a class="kb-link" href="#kb/character/${qid}">查看角色 ${qid} 的击杀记录</a>` : ''}</p>`;
@@ -583,7 +630,7 @@ function pilotsBody() {
     const ships = [...(BR.pilotShips.get(c) || [])];
     return `<tr>
       <td class="kb-br-pilot"><img src="${ctx.avatar('character', c, 64)}" alt="" width="28" height="28" loading="lazy"><span>${ctx.entityLink('character', c)}<small translate="no">${party ? esc(ctx.partyName(party)) : ''}</small></span></td>
-      <td>${s ? `<i class="kb-br-badge ${s === 'A' ? 'side-a' : 'side-b'}">${s}</i>` : '<span class="text-muted">—</span>'}</td>
+      <td>${s ? `<i class="kb-br-badge side-${s.toLowerCase()}">${s}</i>` : '<span class="text-muted">—</span>'}</td>
       <td class="kb-br-pships">${ships.slice(0, 6).map((t) => `<img src="${ctx.IMG(`types/${t}/icon`, 32)}" alt="" width="22" height="22" loading="lazy" title="${esc(ctx.typeName(t))}">`).join('')}${ships.length > 6 ? `<small>+${ships.length - 6}</small>` : ''}${ships.length === 1 ? `<small class="kb-br-pship1">${esc(ctx.typeName(ships[0]))}</small>` : ''}</td>
       <td class="num kb-br-dmg">${st.dmg ? fmtDmg(st.dmg) : ''}</td>
       <td class="num">${st.kills.size || ''}</td>
@@ -626,23 +673,25 @@ function chartData() {
   const kills = BR.data.kills.filter((k) => BR.side.get(partyOf(k[6], k[7])));
   const t0 = BR.data.kills[0][1];
   const t1 = Math.max(BR.data.kills[BR.data.kills.length - 1][1], t0 + 300);
-  const cum = { A: [[t0, 0]], B: [[t0, 0]] };
-  const acc = { A: 0, B: 0 }, cnt = { A: 0, B: 0 };
+  const sides = sidesUsed();
+  const cum = Object.fromEntries(sides.map((s) => [s, [[t0, 0]]]));
+  const acc = Object.fromEntries(sides.map((s) => [s, 0])), cnt = { ...acc };
   for (const k of kills) {
     const s = BR.side.get(partyOf(k[6], k[7]));
     acc[s] += k[4];
     cnt[s] += 1;
     cum[s].push([k[1], acc[s], k]);
   }
-  return { kills, t0, t1, cum, acc, cnt };
+  return { kills, t0, t1, cum, acc, cnt, sides };
 }
 
 function drawTimeline() {
   const plot = $('brPlot');
   if (!plot || !BR.data?.kills.length) return;
   const cd = chartData();
-  const { t0, t1, cum, acc } = cd;
-  $('brLegend').innerHTML = `<span class="a"><i></i>A 方损失 <b>${ctx.app.formatISK(acc.A)}</b></span><span class="b"><i></i>B 方损失 <b>${ctx.app.formatISK(acc.B)}</b></span>`;
+  const { t0, t1, cum, acc, sides } = cd;
+  const lc = (s) => s.toLowerCase();
+  $('brLegend').innerHTML = sides.map((s) => `<span class="${lc(s)}"><i></i>${s} 方损失 <b>${ctx.app.formatISK(acc[s])}</b></span>`).join('');
   const W = Math.max(280, plot.clientWidth), H = W < 600 ? 190 : 230;
   const L = 54, R = 14, T = 18, B = 26;
   const iw = W - L - R, ih = H - T - B;
@@ -658,7 +707,7 @@ function drawTimeline() {
   const mode = BR.chart === 'bar' ? 'bar' : 'cum';
   let hover;
   if (mode === 'cum') {
-    const ax = niceAxis(Math.max(acc.A, acc.B));
+    const ax = niceAxis(Math.max(...sides.map((s) => acc[s])));
     const y = (v) => T + ih - v / ax.max * ih;
     let yt = '';
     for (let v = 0; v <= ax.max + ax.step / 2; v += ax.step) {
@@ -667,57 +716,77 @@ function drawTimeline() {
     // 折线连接每次损失后的累计值（不画阶梯，曲线更顺），最后延伸到结束时间
     const line = (pts) => pts.map(([t, v], i) => `${i ? 'L' : 'M'}${x(t).toFixed(1)},${y(v).toFixed(1)}`).join('') + `L${x(t1).toFixed(1)},${y(pts[pts.length - 1][1]).toFixed(1)}`;
     const area = (pts) => line(pts) + `L${x(t1).toFixed(1)},${y(0)}L${x(t0).toFixed(1)},${y(0)}Z`;
-    body = `<defs>
-        <linearGradient id="brGa" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--br-a)" stop-opacity=".18"/><stop offset=".75" stop-color="var(--br-a)" stop-opacity="0"/></linearGradient>
-        <linearGradient id="brGb" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--br-b)" stop-opacity=".18"/><stop offset=".75" stop-color="var(--br-b)" stop-opacity="0"/></linearGradient>
-      </defs>${yt}${xt}
-      <path d="${area(cum.A)}" fill="url(#brGa)"/><path d="${area(cum.B)}" fill="url(#brGb)"/>
-      <path class="ln a" d="${line(cum.A)}"/><path class="ln b" d="${line(cum.B)}"/>`;
+    body = `<defs>${sides.map((s) => `<linearGradient id="brG${lc(s)}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--br-${lc(s)})" stop-opacity=".18"/><stop offset=".75" stop-color="var(--br-${lc(s)})" stop-opacity="0"/></linearGradient>`).join('')}</defs>${yt}${xt}` +
+      sides.map((s) => `<path d="${area(cum[s])}" fill="url(#brG${lc(s)})"/>`).join('') +
+      sides.map((s) => `<path class="ln ${lc(s)}" d="${line(cum[s])}"/>`).join('');
     // 最贵的几次损失标记在曲线上
-    const big = [...cum.A.slice(1).map((p) => [...p, 'a']), ...cum.B.slice(1).map((p) => [...p, 'b'])].sort((p, q) => q[2][4] - p[2][4]).slice(0, 6);
+    const big = sides.flatMap((s) => cum[s].slice(1).map((p) => [...p, lc(s)])).sort((p, q) => q[2][4] - p[2][4]).slice(0, 6);
     body += big.map(([t, v, k, c]) => `<circle class="mk ${c}" cx="${x(t)}" cy="${y(v)}" r="4.5" data-kill="${k[0]}"><title>${esc(ctx.typeName(k[3]))} · ${isk(k[4])} ISK · ${fmtClock(t)}</title></circle>`).join('');
-    // 末端：圆点 + 累计值，两条线靠得太近时一个标在线上方、一个标在下方
-    const ends = ['A', 'B'].map((s) => ({ s, v: acc[s], y: y(acc[s]) }));
-    const close = Math.abs(ends[0].y - ends[1].y) < 18;
+    // 末端：圆点 + 累计值，标在线上方；从最低的一条开始，和下面的标签靠得太近就再往上挪
+    const ends = sides.map((s) => ({ s, v: acc[s], y: y(acc[s]) })).sort((p, q) => p.v - q.v);
+    let prev = Infinity;
     body += ends.map((e) => {
-      const below = close && e.v < ends[e.s === 'A' ? 1 : 0].v;
-      return `<circle class="end ${e.s.toLowerCase()}" cx="${x(t1)}" cy="${e.y}" r="4"/><text class="endv ${e.s.toLowerCase()}" x="${x(t1) - 10}" y="${below ? e.y + 17 : e.y - 9}" text-anchor="end">${isk(e.v)}</text>`;
+      const ty = Math.min(e.y - 9, prev - 15);
+      prev = ty;
+      return `<circle class="end ${lc(e.s)}" cx="${x(t1)}" cy="${e.y}" r="4"/><text class="endv ${lc(e.s)}" x="${x(t1) - 10}" y="${ty}" text-anchor="end">${isk(e.v)}</text>`;
     }).join('');
     const at = (pts, t) => { let v = 0; for (const p of pts) { if (p[0] > t) break; v = p[1]; } return v; };
     hover = (t) => {
-      const va = at(cum.A, t), vb = at(cum.B, t);
-      return { x: x(t), dots: [y(va), y(vb)], html: `<b>${fmtClock(t)}</b><span class="a">A 方累计 ${isk(va)}</span><span class="b">B 方累计 ${isk(vb)}</span>` };
+      const vs = sides.map((s) => at(cum[s], t));
+      return { x: x(t), dots: vs.map(y), html: `<b>${fmtClock(t)}</b>` + sides.map((s, i) => `<span class="${lc(s)}">${s} 方累计 ${isk(vs[i])}</span>`).join('') };
     };
   } else {
     const size = niceStep(t1 - t0, 48);
     const b0 = Math.floor(t0 / size) * size;
     const n = Math.floor((t1 - b0) / size) + 1;
-    const bins = Array.from({ length: n }, (_, i) => ({ t: b0 + i * size, A: 0, B: 0, nA: 0, nB: 0 }));
+    const bins = Array.from({ length: n }, (_, i) => ({ t: b0 + i * size, v: {}, c: {} }));
     for (const k of cd.kills) {
       const s = BR.side.get(partyOf(k[6], k[7]));
       const bin = bins[Math.floor((k[1] - b0) / size)];
-      bin[s] += k[4];
-      bin['n' + s] += 1;
+      bin.v[s] = (bin.v[s] || 0) + k[4];
+      bin.c[s] = (bin.c[s] || 0) + 1;
     }
-    const max = Math.max(...bins.map((b) => Math.max(b.A, b.B)), 1) * 1.1;
-    const mid = T + ih / 2;
-    const yh = (v) => v / max * (ih / 2);
     const xb = (t) => L + (t - b0) / (n * size) * iw;
     const bw = Math.max(1, iw / n - (iw / n > 6 ? 2 : 0.5));
-    let yt = `<line class="grid base" x1="${L}" x2="${L + iw}" y1="${mid}" y2="${mid}"/>`;
-    for (const f of [0.45, 0.9]) {
-      const v = max * f;
-      yt += `<line class="grid" x1="${L}" x2="${L + iw}" y1="${mid - yh(v)}" y2="${mid - yh(v)}"/><line class="grid" x1="${L}" x2="${L + iw}" y1="${mid + yh(v)}" y2="${mid + yh(v)}"/>`;
-      yt += `<text class="ax" x="${L - 8}" y="${mid - yh(v) + 4}" text-anchor="end">${isk(v)}</text><text class="ax" x="${L - 8}" y="${mid + yh(v) + 4}" text-anchor="end">${isk(v)}</text>`;
+    let yt = '';
+    if (sides.length === 2) {
+      // 两方：A 方向上、B 方向下
+      const max = Math.max(...bins.map((b) => Math.max(b.v.A || 0, b.v.B || 0)), 1) * 1.1;
+      const mid = T + ih / 2;
+      const yh = (v) => v / max * (ih / 2);
+      yt = `<line class="grid base" x1="${L}" x2="${L + iw}" y1="${mid}" y2="${mid}"/>`;
+      for (const f of [0.45, 0.9]) {
+        const v = max * f;
+        yt += `<line class="grid" x1="${L}" x2="${L + iw}" y1="${mid - yh(v)}" y2="${mid - yh(v)}"/><line class="grid" x1="${L}" x2="${L + iw}" y1="${mid + yh(v)}" y2="${mid + yh(v)}"/>`;
+        yt += `<text class="ax" x="${L - 8}" y="${mid - yh(v) + 4}" text-anchor="end">${isk(v)}</text><text class="ax" x="${L - 8}" y="${mid + yh(v) + 4}" text-anchor="end">${isk(v)}</text>`;
+      }
+      body = bins.map((b) => `${b.v.A ? `<rect class="bar a" x="${xb(b.t) + 1}" y="${mid - yh(b.v.A)}" width="${bw}" height="${yh(b.v.A)}" rx="1.5"/>` : ''}${b.v.B ? `<rect class="bar b" x="${xb(b.t) + 1}" y="${mid}" width="${bw}" height="${yh(b.v.B)}" rx="1.5"/>` : ''}`).join('') +
+        `<text class="ax side a" x="${L + 6}" y="${T + 10}">A 方损失 ↑</text><text class="ax side b" x="${L + 6}" y="${T + ih - 4}">B 方损失 ↓</text>`;
+    } else {
+      // 三方及以上：各方损失向上叠加
+      const ax = niceAxis(Math.max(...bins.map((b) => sides.reduce((t, s) => t + (b.v[s] || 0), 0)), 1));
+      const yv = (v) => T + ih - v / ax.max * ih;
+      for (let v = 0; v <= ax.max + ax.step / 2; v += ax.step) {
+        yt += `<line class="grid${v ? '' : ' base'}" x1="${L}" x2="${L + iw}" y1="${yv(v)}" y2="${yv(v)}"/><text class="ax" x="${L - 8}" y="${yv(v) + 4}" text-anchor="end">${axisIsk(v)}</text>`;
+      }
+      body = bins.map((b) => {
+        let base = 0;
+        return sides.map((s) => {
+          const v = b.v[s] || 0;
+          if (!v) return '';
+          const r = `<rect class="bar ${lc(s)}" x="${xb(b.t) + 1}" y="${yv(base + v)}" width="${bw}" height="${yv(base) - yv(base + v)}"/>`;
+          base += v;
+          return r;
+        }).join('');
+      }).join('');
     }
     xt = '';
     const xs = niceStep(n * size, Math.max(3, Math.floor(iw / 90)));
     for (let t = Math.ceil(b0 / xs) * xs; t <= b0 + n * size; t += xs) xt += `<text class="ax" x="${xb(t)}" y="${H - 8}" text-anchor="middle">${fmtClock(t)}</text>`;
-    body = `${yt}${xt}` + bins.map((b) => `${b.A ? `<rect class="bar a" x="${xb(b.t) + 1}" y="${mid - yh(b.A)}" width="${bw}" height="${yh(b.A)}" rx="1.5"/>` : ''}${b.B ? `<rect class="bar b" x="${xb(b.t) + 1}" y="${mid}" width="${bw}" height="${yh(b.B)}" rx="1.5"/>` : ''}`).join('') +
-      `<text class="ax side a" x="${L + 6}" y="${T + 10}">A 方损失 ↑</text><text class="ax side b" x="${L + 6}" y="${T + ih - 4}">B 方损失 ↓</text>`;
+    body = `${yt}${xt}` + body;
     hover = (t) => {
       const b = bins[Math.min(n - 1, Math.max(0, Math.floor((t - b0) / size)))];
-      return { x: xb(b.t) + 1 + bw / 2, html: `<b>${fmtClock(b.t)} – ${fmtClock(b.t + size)}</b><span class="a">A 方损失 ${isk(b.A)}（${b.nA} 艘）</span><span class="b">B 方损失 ${isk(b.B)}（${b.nB} 艘）</span>` };
+      return { x: xb(b.t) + 1 + bw / 2, html: `<b>${fmtClock(b.t)} – ${fmtClock(b.t + size)}</b>` + sides.map((s) => `<span class="${lc(s)}">${s} 方损失 ${isk(b.v[s] || 0)}（${b.c[s] || 0} 艘）</span>`).join('') };
     };
   }
   const svg = plot.querySelector('svg');
@@ -726,7 +795,7 @@ function drawTimeline() {
   svg.setAttribute('height', H);
   // 悬停层放在最底下（其余元素不接收鼠标事件），损失标记在最上层可点击打开详情
   svg.innerHTML = `<rect class="hit" x="${L}" y="${T}" width="${iw}" height="${ih}"/>` + body + `<line class="cross" id="brCross" x1="0" x2="0" y1="${T}" y2="${T + ih}" visibility="hidden"/>` +
-    '<circle class="hv a" r="4" visibility="hidden"/><circle class="hv b" r="4" visibility="hidden"/>';
+    sides.map((s) => `<circle class="hv ${lc(s)}" r="4" visibility="hidden"/>`).join('');
   const tip = $('brTip'), cross = svg.querySelector('#brCross'), hv = svg.querySelectorAll('.hv');
   const hit = svg.querySelector('.hit');
   hit.onmousemove = (e) => {
@@ -735,7 +804,7 @@ function drawTimeline() {
     const t = t0 + (px - L) / iw * (t1 - t0);
     const h = hover(Math.min(t1, Math.max(t0, t)));
     cross.setAttribute('x1', h.x); cross.setAttribute('x2', h.x); cross.setAttribute('visibility', 'visible');
-    // 累计图：两条线上各一个跟随的圆点
+    // 累计图：每条线上各一个跟随的圆点
     hv.forEach((c, i) => { if (h.dots) { c.setAttribute('cx', h.x); c.setAttribute('cy', h.dots[i]); } c.setAttribute('visibility', h.dots ? 'visible' : 'hidden'); });
     tip.innerHTML = h.html;
     tip.hidden = false;
@@ -765,6 +834,7 @@ function onResultClick(e) {
   if ((x = el('[data-br-move]'))) {
     const [id, side] = x.dataset.brMove.split(':');
     if (side === '-') BR.side.delete(Number(id)); else BR.side.set(Number(id), side);
+    compactSides();
     history.replaceState(null, '', hashFor());
     renderResult();
     return;
@@ -794,18 +864,19 @@ function onResultClick(e) {
   }
 }
 
-// 战局复盘的数据：按时间排序的击杀（标出损失方）与双方舰船组成
-function replayModel(A, B) {
+// 战局复盘的数据：按时间排序的击杀（标出损失方）与各方舰船组成
+function replayModel(sides, stats) {
   const kills = BR.data.kills.filter((k) => !PODS.has(k[3])).map(([id, t, sys, ship, value, vChar, vCorp, vAlliance]) => ({
     id, t, sys, ship, value, char: vChar, party: vAlliance || vCorp, side: BR.side.get(partyOf(vCorp, vAlliance)) || null
   }));
   const t0 = (kills[0]?.t || BR.data.start) - 60;
   const t1 = Math.max((kills[kills.length - 1]?.t || BR.data.end) + 30, t0 + 120);
-  return { key: BR.key + '|' + [...BR.side].join(','), kills, t0, t1, fielded: { A: A.fielded, B: B.fielded } };
+  return { key: BR.key + '|' + [...BR.side].join(','), kills, t0, t1, sides, fielded: Object.fromEntries(sides.map((s) => [s, stats[s].fielded])) };
 }
 
 // 战场模拟：每名飞行员按第一艘出现的舰船计一次（换船不重复计），实际损失按舰船类型对照
 function openSim() {
+  if (sidesUsed().length > 2) { ctx.app.showToast('战场模拟只支持两方：先把 C / D 方的势力移到 A、B 方或移出', 'info', 4000); return; }
   const side = (s) => {
     const st = sideStats(s);
     const count = new Map();
@@ -832,8 +903,11 @@ const PLAYERS_IMG = 30;   // 分享图片每方最多列出的玩家
 
 function imageModel() {
   const d = BR.data;
-  const A = sideStats('A'), B = sideStats('B');
+  const order = sidesUsed();
+  const stats = Object.fromEntries(order.map((s) => [s, sideStats(s)]));
+  const A = stats.A, B = stats.B;
   const info = ratioInfo(A, B);
+  const lostAll = order.reduce((t, s) => t + stats[s].lost, 0);
   const isk = ctx.app.formatISK, num = ctx.app.formatNumber;
   const pilots = BR.pilotParty.size;
   const total = d.kills.reduce((sum, k) => sum + k[4], 0);
@@ -857,6 +931,10 @@ function imageModel() {
   const side = (st, s) => ({
     players: players(s),
     lostText: isk(st.lost), pilots: num(st.pilots.size), partyCount: st.parties.length,
+    // 三方及以上的卡片：击毁、ISK 效率、损失占比
+    destroyedText: isk(st.destroyed),
+    effText: st.destroyed + st.lost ? PERCENT(st.destroyed / (st.destroyed + st.lost)) : '—',
+    share: lostAll ? st.lost / lostAll : 1 / order.length, shareText: PERCENT(lostAll ? st.lost / lostAll : 1 / order.length),
     parties: st.parties.slice(0, 6).map((p) => ({
       name: ctx.partyName(p.id), logo: ctx.avatar(p.kind, p.id, 64), pilots: p.pilots.size, kills: p.kills.size, lost: p.lost, lostText: isk(p.lost)
     })),
@@ -867,23 +945,23 @@ function imageModel() {
     }))
   });
   const cd = chartData();
-  const axis = niceAxis(Math.max(cd.acc.A, cd.acc.B));
+  const axis = niceAxis(Math.max(...order.map((s) => cd.acc[s])));
   const perPilot = (st) => (st.pilots.size ? st.lost / st.pilots.size : 0);
   const cmp = (label, a, b, f = num) => ({ label, a, b, aText: f(a), bText: f(b) });
   return {
     title: names.length > 4 ? `${names.slice(0, 4).join('、')} 等 ${names.length} 个星系` : names.join('、'),
     meta: [`${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()}`, `${d.kills.length} 次击杀`, `${num(pilots)} 名飞行员`, `总损失 ${isk(total)} ISK`],
-    sides: { A: side(A, 'A'), B: side(B, 'B') },
+    order, sides: Object.fromEntries(order.map((s) => [s, side(stats[s], s)])),
     ratio: info.ratio, verdict: info.verdict, winner: info.winner,
     shareA: info.pa, shareAText: PERCENT(info.pa), shareBText: PERCENT(1 - info.pa), eff: info.effText,
-    cmps: [cmp('舰船损失', A.ships, B.ships), ...(A.pods + B.pods ? [cmp('太空舱', A.pods, B.pods)] : []),
+    cmps: order.length > 2 ? [] : [cmp('舰船损失', A.ships, B.ships), ...(A.pods + B.pods ? [cmp('太空舱', A.pods, B.pods)] : []),
       cmp('参战人数', A.pilots.size, B.pilots.size), cmp('人均损失', perPilot(A), perPilot(B), isk)],
     series: {
-      t0: cd.t0, t1: cd.t1, A: cd.cum.A, B: cd.cum.B, axis,
+      t0: cd.t0, t1: cd.t1, lines: order.map((s) => ({ s, pts: cd.cum[s] })), axis,
       ticks: Array.from({ length: Math.round(axis.max / axis.step) + 1 }, (_, i) => ({ v: i * axis.step, label: axisIsk(i * axis.step) })),
       labels: Array.from({ length: 5 }, (_, i) => fmtClock(cd.t0 + (cd.t1 - cd.t0) * i / 4)),
       // 最贵的几次损失：在曲线上画圈
-      marks: [...cd.cum.A.slice(1).map((p) => [p[0], p[1], p[2][4], 'A']), ...cd.cum.B.slice(1).map((p) => [p[0], p[1], p[2][4], 'B'])].sort((a, b) => b[2] - a[2]).slice(0, 6)
+      marks: order.flatMap((s) => cd.cum[s].slice(1).map((p) => [p[0], p[1], p[2][4], s])).sort((a, b) => b[2] - a[2]).slice(0, 6)
     },
     footer: location.host + ' · 击杀数据按吉他中间价估值',
     generated: '生成于 ' + fmtTime(Math.floor(Date.now() / 1000)) + ' ' + tzLabel()
@@ -892,7 +970,7 @@ function imageModel() {
 
 let imageModule = null;
 function shareImage() {
-  if (!imageModule) imageModule = Promise.all([import('./kb-br-image.js?v=v21'), import('./share-image.js?v=3')]);
+  if (!imageModule) imageModule = Promise.all([import('./kb-br-image.js?v=v22'), import('./share-image.js?v=3')]);
   const model = imageModel();
   const name = `战场统计-${ctx.kb.systemLabel(BR.data.systems[0]).name}-${fmtTime(BR.data.start).replace(/[: ]/g, '')}.png`;
   imageModule.then(([{ renderBrImage }, { openShareModal }]) => openShareModal({

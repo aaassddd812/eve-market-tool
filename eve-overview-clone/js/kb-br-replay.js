@@ -2,7 +2,8 @@
 // 按真实击杀邮件的时间点回放一场会战：播放 / 暂停、倍速、拖动进度条（条上每根刻度是一次击杀，高度按损失价值）；
 // 随时间更新双方已损失的舰船数与 ISK、ISK 占比，舰船组成逐格显示剩余 / 出场（刚被击毁的格子闪一下），
 // 中间是击杀动态（最新在上，点开看详情——挂在击杀记录页里，沿用页面的 data-kill 点击）。
-// model：{ kills: [{ id, t, ship, value, side, char, party, sys }], t0, t1, fielded: { A: Map(ship -> n), B } }
+// model：{ kills: [{ id, t, ship, value, side, char, party, sys }], t0, t1, sides: ['A', 'B', …], fielded: { A: Map(ship -> n), B, … } }
+// 三方及以上：C / D 方的舰船格放在下面一行，比分与进度条刻度按各方颜色排开
 let ctx;   // IMG, typeName, partyName, systemLabel, esc, formatISK
 const SPEEDS = [10, 30, 60, 120, 300];
 const TILES = 24;
@@ -46,6 +47,7 @@ export function mountReplay(box, model) {
       <div class="br-rp-feed"><h5>击杀动态</h5><div id="rpFeed"></div></div>
       <div class="br-rp-side side-b" id="rpSideB"></div>
     </div>
+    ${model.sides.length > 2 ? `<div class="br-rp-extra">${model.sides.slice(2).map((s) => `<div class="br-rp-side side-${s.toLowerCase()}" id="rpSide${s}"></div>`).join('')}</div>` : ''}
   </section>`;
   box.querySelector('.br-rp').addEventListener('click', onClick);
   const range = box.querySelector('#rpRange');
@@ -64,9 +66,14 @@ function drawTrack() {
   const h = (v) => 3 + (Math.log10(Math.max(v, 1e5)) - 5) / Math.max(0.5, maxV - 5) * (mid - 5);
   const x = (t) => (t - t0) / (t1 - t0) * W;
   el.setAttribute('viewBox', `0 0 ${W} ${H}`);
-  el.innerHTML = `<rect class="br-rp-done" x="0" y="0" width="0" height="${H}"/><line class="br-rp-mid" x1="0" x2="${W}" y1="${mid}" y2="${mid}"/>`
-    + kills.map((k) => (k.side === 'A' ? `<rect class="a" x="${x(k.t).toFixed(1)}" y="${(mid - h(k.value)).toFixed(1)}" width="1.6" height="${h(k.value).toFixed(1)}"/>`
-      : k.side === 'B' ? `<rect class="b" x="${x(k.t).toFixed(1)}" y="${mid}" width="1.6" height="${h(k.value).toFixed(1)}"/>` : '')).join('')
+  const multi = RP.model.sides.length > 2;
+  // 三方及以上：都从底部向上，按各方颜色区分
+  const hm = (v) => h(v) * 2 - 4;
+  el.innerHTML = `<rect class="br-rp-done" x="0" y="0" width="0" height="${H}"/>${multi ? '' : `<line class="br-rp-mid" x1="0" x2="${W}" y1="${mid}" y2="${mid}"/>`}`
+    + kills.map((k) => (!k.side ? ''
+      : multi ? `<rect class="${k.side.toLowerCase()}" x="${x(k.t).toFixed(1)}" y="${(H - hm(k.value)).toFixed(1)}" width="1.6" height="${hm(k.value).toFixed(1)}"/>`
+      : k.side === 'A' ? `<rect class="a" x="${x(k.t).toFixed(1)}" y="${(mid - h(k.value)).toFixed(1)}" width="1.6" height="${h(k.value).toFixed(1)}"/>`
+      : `<rect class="b" x="${x(k.t).toFixed(1)}" y="${mid}" width="1.6" height="${h(k.value).toFixed(1)}"/>`)).join('')
     + `<line class="br-rp-head-line" x1="0" x2="0" y1="0" y2="${H}"/>`;
 }
 
@@ -136,25 +143,30 @@ function update(force) {
 }
 
 function renderState(idx) {
-  const { kills, fielded } = RP.model;
+  const { kills, fielded, sides } = RP.model;
   const { esc, formatISK: isk, IMG } = ctx;
-  const lost = { A: new Map(), B: new Map() }, n = { A: 0, B: 0 }, v = { A: 0, B: 0 };
+  const lost = {}, n = {}, v = {};
+  for (const s of sides) { lost[s] = new Map(); n[s] = 0; v[s] = 0; }
   for (let i = 0; i <= idx; i++) {
     const k = kills[i];
-    if (!k.side) continue;
+    if (!lost[k.side]) continue;
     n[k.side] += 1;
     v[k.side] += k.value;
     lost[k.side].set(k.ship, (lost[k.side].get(k.ship) || 0) + 1);
   }
-  const total = v.A + v.B;
+  const total = sides.reduce((t, s) => t + v[s], 0);
   const pa = total ? v.A / total * 100 : 50;
   // 与下方损失比一致：蓝条为 A 方损失占比、红条为 B 方
-  RP.box.querySelector('#rpScore').innerHTML = `
+  RP.box.querySelector('#rpScore').innerHTML = sides.length > 2
+    ? `<div class="br-rp-mscore">${sides.map((s) => `<div class="side-${s.toLowerCase()}"><span class="kb-br-badge">${s}</span><b>${n[s]}</b><small>艘 · ${isk(v[s])} ISK</small></div>`).join('')}</div>
+      <div class="br-rp-bar" title="ISK 损失占比">${sides.map((s) => `<i class="${s.toLowerCase()}" style="width:${total ? v[s] / total * 100 : 100 / sides.length}%"></i>`).join('')}</div>`
+    : `
     <div class="side-a"><span class="kb-br-badge">A</span><b>${n.A}</b><small>艘 · ${isk(v.A)} ISK</small></div>
     <div class="br-rp-bar" title="ISK 损失占比"><i class="a" style="width:${pa}%"></i><i class="b" style="width:${100 - pa}%"></i></div>
     <div class="side-b"><small>${isk(v.B)} ISK · 艘</small><b>${n.B}</b><span class="kb-br-badge">B</span></div>`;
+  RP.box.querySelector('#rpScore').classList.toggle('is-multi', sides.length > 2);
   const now = performance.now();
-  for (const s of ['A', 'B']) {
+  for (const s of sides) {
     const list = [...fielded[s]].sort((a, b) => b[1] - a[1]);
     const tiles = list.slice(0, TILES).map(([ship, total]) => {
       const l = Math.min(total, lost[s].get(ship) || 0);
