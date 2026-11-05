@@ -339,6 +339,56 @@ def http_get(url, timeout=60, data=None, headers=None):
         return body, res.headers
 
 
+# 头像 / 图标中转：分享图片在浏览器里直连图片服务器常常很慢或卡住，失败时改走这里（只允许 EVE 官方与网易的图片地址）。
+# 内存里按 LRU 缓存最近的图片（总共不超过 IMG_CACHE_BYTES），浏览器端再按 Cache-Control 缓存一周
+IMG_PROXY_RE = re.compile(r"^https://(images\.evetech\.net/(characters|corporations|alliances|types)/\d+/(portrait|logo|icon|render|bp|bpc)(\?size=\d+)?"
+                          r"|image\.evepc\.163\.com/(Character|Corporation|Alliance|Type|Render)/\d+_\d+\.(jpg|png))$")
+IMG_CACHE_BYTES = 48 * 1024 * 1024
+
+
+class ImageProxy:
+    def __init__(self):
+        self.cache = collections.OrderedDict()   # url -> (bytes, content-type)；失败的记 (None, 状态码) 5 分钟
+        self.size = 0
+        self.lock = threading.Lock()
+
+    def get(self, url):
+        if not IMG_PROXY_RE.match(url):
+            raise ValueError("不支持的图片地址")
+        with self.lock:
+            hit = self.cache.get(url)
+            if hit:
+                self.cache.move_to_end(url)
+                if hit[0] is not None or time.time() < hit[2]:
+                    return hit[0], hit[1]
+        code, body, ctype = 502, None, None
+        for attempt in range(3):
+            try:
+                body, headers = http_get(url, timeout=12)
+                ctype = headers.get("Content-Type") or "image/png"
+                break
+            except urllib.error.HTTPError as e:
+                code = e.code
+                if e.code == 404:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.5 * (attempt + 1))
+        with self.lock:
+            old = self.cache.pop(url, None)
+            if old and old[0]:
+                self.size -= len(old[0])
+            if body:
+                self.cache[url] = (body, ctype, 0)
+                self.size += len(body)
+                while self.size > IMG_CACHE_BYTES and self.cache:
+                    _, (b, _, _) = self.cache.popitem(last=False)
+                    self.size -= len(b or b"")
+            else:
+                self.cache[url] = (None, code, time.time() + 300)
+        return (body, ctype) if body else (None, code)
+
+
 def get_json(url, timeout=60, retries=3, fatal=(400, 404), **kw):
     """fatal：遇到这些 HTTP 状态码不重试，直接抛出（带令牌的 ESI 请求要把 401 / 403 当作结果）"""
     for attempt in range(retries):
@@ -6778,6 +6828,7 @@ def kb_routes(api):
 
 def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, cbg=None):
     apis = {"tq": api, **(cn_apis or {})}
+    image_proxy = ImageProxy()
     v1 = open_routes(api, industry, abyssal)
     v1_cn = {s: open_routes(a, industry, abyssal) for s, a in (cn_apis or {}).items()}
     post_limiter = RateLimiter(ABYSSAL_POST_RATE)
@@ -7200,6 +7251,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
             url = urllib.parse.urlparse(self.path)
             if url.path == "/api/v1" or url.path.startswith("/api/v1/"):
                 return self.open_api(url)
+            if url.path == "/api/kb/img":
+                return self.image(url)
             if url.path.startswith("/api/kb/"):
                 return self.api(url)
             if static_dir:
@@ -7228,6 +7281,22 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
             except Exception as e:
                 log.exception("接口错误")
                 self.send_json(500, {"error": str(e)})
+
+        def image(self, url):
+            q = urllib.parse.parse_qs(url.query)
+            try:
+                body, ctype = image_proxy.get((q.get("u") or [""])[0])
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            if body is None:
+                return self.send_json(ctype if ctype in (404,) else 502, {"error": "图片加载失败"}, {"Access-Control-Allow-Origin": "*"})
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "public, max-age=604800")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def static(self, path):
             rel = urllib.parse.unquote(path).lstrip("/") or "index.html"

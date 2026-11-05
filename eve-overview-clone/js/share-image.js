@@ -15,34 +15,55 @@ export const THEMES = {
 const THEME_KEY = 'eve-share-image-theme';   // 图片配色，默认浅色
 
 // 同一张图切换配色时不重复下载；失败的不缓存（下次生成再试）
-// 一张图可能要上百个头像 / 图标：同时最多下载 6 个，每个超时 15 秒、失败重试 2 次（换参数绕开失败的缓存），尽量都画进图里
+// 一张图可能要上百个头像 / 图标，两条路：直连图片服务器，或走本站中转（/api/kb/img，服务器端取图并缓存）。
+// 第一次生成时同一张图两条路同时取一次，谁先到以后就先走谁（各地网络不同：有的直连快，有的直连很慢），失败再换另一条；
+// 同时最多下载 12 个，每次超时 10 秒，尽量都画进图里
 const imageCache = new Map();
-const LIMIT = 6;
+const LIMIT = 12;
 let active = 0;
 const waiting = [];
 const slot = () => (active < LIMIT ? (active++, Promise.resolve()) : new Promise((r) => waiting.push(r)));
 const release = () => { const next = waiting.shift(); if (next) next(); else active--; };
-function tryLoad(url, n) {
+function tryLoad(src) {
   return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    const timer = setTimeout(() => { img.src = ''; resolve(null); }, 15000);
+    const timer = setTimeout(() => { img.src = ''; resolve(null); }, 10000);
     img.onload = () => { clearTimeout(timer); resolve(img.naturalWidth ? img : null); };
     img.onerror = () => { clearTimeout(timer); resolve(null); };
-    // 加参数区分缓存：避免复用页面里不带跨域头的缓存导致画布被污染
-    img.src = url + (url.includes('?') ? '&' : '?') + 'cors=' + n;
+    img.src = src;
   });
+}
+const viaProxy = (url) => '/api/kb/img?u=' + encodeURIComponent(url);
+// 直连时加参数区分缓存：避免复用页面里不带跨域头的缓存导致画布被污染
+const direct = (url, n) => url + (url.includes('?') ? '&' : '?') + 'cors=' + n;
+const PROXIED = /^https:\/\/(images\.evetech\.net|image\.evepc\.163\.com)\//;
+let route = null;   // Promise<'proxy' | 'direct'>：本页测出的较快线路
+function pickRoute(url) {
+  if (!route) {
+    route = new Promise((resolve) => {
+      let done = false;
+      const tag = Date.now().toString(36);   // 两边都不用缓存，比的是真实速度
+      const win = (r) => (img) => { if (img && !done) { done = true; resolve(r); } };
+      Promise.all([tryLoad(viaProxy(url) + '&probe=' + tag).then(win('proxy')), tryLoad(direct(url, 'p' + tag)).then(win('direct'))])
+        .then(() => { if (!done) { route = null; resolve('proxy'); } });   // 都失败：这次先走中转，下次重测
+    });
+  }
+  return route;
 }
 export function loadImage(url) {
   if (!url) return Promise.resolve(null);
   if (!imageCache.has(url)) {
     const p = (async () => {
+      const proxied = PROXIED.test(url);
+      const fast = proxied ? await pickRoute(url) : 'direct';
       await slot();
       try {
-        for (let n = 1; n <= 3; n++) {
-          const img = await tryLoad(url, n);
+        const tries = !proxied ? [direct(url, 1), direct(url, 2)]
+          : fast === 'proxy' ? [viaProxy(url), direct(url, 1), viaProxy(url) + '&r=2'] : [direct(url, 1), viaProxy(url), direct(url, 2)];
+        for (const src of tries) {
+          const img = await tryLoad(src);
           if (img) return img;
-          await new Promise((r) => setTimeout(r, 400 * n));
         }
         return null;
       } finally { release(); }
