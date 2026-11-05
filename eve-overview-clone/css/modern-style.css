@@ -3221,6 +3221,8 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .fit-mtip dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; margin: 0; }
 .fit-mtip dt { color: var(--text-secondary); }
 .fit-mtip dd { margin: 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.fit-mtip dd.is-up { color: var(--success); }
+.fit-mtip dd.is-down { color: var(--danger); }
 .fit-drag-ghost { position: fixed; left: 0; top: 0; z-index: 10000; width: 40px; height: 40px; border-radius: 9px; background: #0d1219; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); pointer-events: none; opacity: 0.92; }
 body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-select: none; }
 .fit-slot.fit-drop-cand, .fit-slots.fit-drop-cand { background: color-mix(in srgb, var(--accent-primary) 6%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); }

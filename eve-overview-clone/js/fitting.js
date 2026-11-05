@@ -1240,36 +1240,39 @@ async function modTipHtml(ref) {
     if (a === 20 && t.attrs.get(2428)) continue;
     const v = item.attr(a);
     if (!v) continue;
-    const [label, unit] = names.attrs[a];
+    const [label, unit, highGood] = names.attrs[a];
+    // 和装备基础属性比：变好标绿、变差标红。基础值为负的（减速、抗性加成、感应抑阻等）绝对值越大越强
+    const base = t.attrs.get(a);
+    const better = base < 0 ? Math.abs(v) > Math.abs(base) : highGood ? v > base : v < base;
+    const cls = Math.abs(v - base) <= Math.abs(base) * 1e-6 ? '' : better ? 'is-up' : 'is-down';
     const fuel = a === 714 && type(item.attr(713));
     // 长枪 / 收割者等持续伤害的末日武器：装备上的伤害是每跳伤害
     const tick = FE.DAMAGE.includes(a) && t.attrs.get(2264) ? '（每跳）' : '';
-    rows.push([fuel ? `${label}（${fuel.name}）` : label + tick, unit === 1 ? dist(v) : fuel ? app.formatNumber(v) : infoValue(a, v, unit, names.units)]);
+    rows.push([fuel ? `${label}（${fuel.name}）` : label + tick, unit === 1 ? dist(v) : fuel ? app.formatNumber(v) : infoValue(a, v, unit, names.units), cls]);
   }
   if (!rows.length) return '';
   return `<div class="fit-mtip-head"><img src="${IMG(t.id)}" alt="" width="24" height="24"><b>${app.esc(t.name)}</b>${m.state === 'overload' ? '<em>超载</em>' : ''}</div>
-    <dl>${rows.map(([k, v]) => `<dt>${app.esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
+    <dl>${rows.map(([k, v, cls]) => `<dt>${app.esc(k)}</dt><dd${cls ? ` class="${cls}"` : ''}>${v}</dd>`).join('')}</dl>`;
 }
 function initModTip() {
   const tip = document.createElement('div');
   tip.className = 'fit-mtip';
   tip.hidden = true;
   document.body.append(tip);
-  let timer = 0, cur = null;
+  let timer = 0, cur = null, mx = 0, my = 0;
   const hide = () => { clearTimeout(timer); cur = null; tip.hidden = true; };
-  const place = (row) => {
-    const r = row.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
-    const vw = innerWidth, vh = innerHeight;
-    // 优先放在行右侧，放不下放左侧，两侧都放不下放在行下方（再放不下放上方）
-    let x = r.right + 8, y = Math.min(r.top, vh - th - 8);
-    if (x + tw > vw - 8) x = r.left - tw - 8;
-    if (x < 8) {
-      x = Math.min(Math.max(8, r.left), vw - tw - 8);
-      y = r.bottom + 6 + th > vh - 8 ? r.top - th - 6 : r.bottom + 6;
-    }
-    y = Math.max(8, y);
-    tip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  // 跟着鼠标：放在指针右下方，超出窗口就翻到左边 / 上方
+  const place = () => {
+    const tw = tip.offsetWidth, th = tip.offsetHeight, G = 16;
+    let x = mx + G, y = my + G;
+    if (x + tw > innerWidth - 8) x = mx - tw - G;
+    if (y + th > innerHeight - 8) y = my - th - G;
+    tip.style.transform = `translate(${Math.round(Math.max(8, x))}px, ${Math.round(Math.max(8, y))}px)`;
   };
+  document.addEventListener('pointermove', (e) => {
+    mx = e.clientX; my = e.clientY;
+    if (cur && !tip.hidden) place();
+  }, { passive: true });
   document.addEventListener('pointerover', (e) => {
     if (e.pointerType !== 'mouse') return;
     const row = e.target.closest?.('#fitMain [data-fit-mod]');
@@ -1282,7 +1285,7 @@ function initModTip() {
       if (cur !== row || !row.isConnected || !html) return;
       tip.innerHTML = html;
       tip.hidden = false;
-      place(row);
+      place();
     }, 250);
   });
   document.addEventListener('pointerdown', hide, true);
