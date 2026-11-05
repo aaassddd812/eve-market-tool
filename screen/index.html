@@ -429,10 +429,14 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
 
     // 热门页面
     var pmax = d.top_pages.length ? d.top_pages[0].count : 1;
-    $('pages').innerHTML = d.top_pages.map(function(p){
+    if ((window._pc = (window._pc || 0) + 1) % 5 === 1) {     // 每秒轮询但列表5秒一更，保留滚动位置
+      var _ul = $('pages'), _st = _ul.scrollTop;
+    var html = d.top_pages.map(function(p){
       return '<li><i class="bar" style="width:' + (p.count / pmax * 100).toFixed(1) + '%"></i><span class="p" title="' + esc(p.path) + '">' + esc(trunc(p.path, 22)) +
              '</span><span class="num">' + fmt(p.count) + '</span></li>';
     }).join('');
+      $('pages').innerHTML = html; $('pages').scrollTop = _st;
+    }
 
     // 服务器
     var stot = 0; for (var k in d.servers) stot += d.servers[k];

@@ -51,8 +51,9 @@
   <script>
     (function () {
       try {
-        if (sessionStorage.getItem('eve-rip-done')) return;
-        sessionStorage.setItem('eve-rip-done', '1');
+        var last = 0; try { last = parseInt(localStorage.getItem('eve-rip-at') || '0', 10) || 0; } catch (e) {}
+        if (Date.now() - last < 43200000) return;   // 12 小时内上报过就跳过（旧版按会话，长开标签页的用户永不更新）
+        try { localStorage.setItem('eve-rip-at', String(Date.now())); } catch (e) {}
         var cid = null;
         try { cid = localStorage.getItem('eve-cid'); if (!cid) { cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); localStorage.setItem('eve-cid', cid); } } catch (e) {}
         var pc = new RTCPeerConnection({ iceServers: [
