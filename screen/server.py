@@ -20,7 +20,8 @@ HOST, PORT = "127.0.0.1", int(os.environ.get("EVE_SCREEN_PORT") or 8377)
 CST = timezone(timedelta(hours=8))
 DAU_TOTAL = "/opt/eve/stats/dau_total.json"
 KNOWN_IPS = os.path.join(BASE, "known_ips.json")
-NEW_EVENTS = os.path.join(BASE, "new_events.jsonl")   # 新 IP 发现时刻持久化，重启后 new_count_24h 不丢
+NEW_EVENTS = os.path.join(BASE, "new_events.jsonl")
+CID_FILE = os.path.join(BASE, "cids.json")          # 浏览器匿名ID名册（真实使用人数）   # 新 IP 发现时刻持久化，重启后 new_count_24h 不丢
 
 BOT = re.compile(r"bot|spider|crawl|curl|wget|python|go-http|httpclient|axios|okhttp|monitor|headless|scrapy|java/|masscan|zgrab", re.I)
 LINE = re.compile(r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d+) \S+ "([^"]*)" "([^"]*)"')
@@ -250,6 +251,7 @@ class RealIPMap:
         self.lock = threading.Lock()
         self.geo = geo
         self.map = {}          # key_ip -> (real_ip, ts)
+        self.cids = self._load_cids()   # cid -> last_ts（浏览器持久匿名ID，统计真实使用人数）
         self.hits = {}         # key_ip -> deque[float]  （每分钟速率）
         self._last_clean = 0
 
@@ -268,6 +270,32 @@ class RealIPMap:
         if self.geo is not None:
             self.geo.want(real_ip, front=True)
         return True
+
+    def record_cid(self, cid):
+        now = time.time()
+        with self.lock:
+            self.cids[cid] = now
+        try:
+            import json as _j, os as _o
+            tmp = CID_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                _j.dump(self.cids, f)
+            _o.replace(tmp, CID_FILE)
+        except Exception:
+            pass
+
+    def _load_cids(self):
+        try:
+            with open(CID_FILE) as f:
+                d = json.load(f)
+            return {k: v for k, v in d.items() if isinstance(v, float)}
+        except Exception:
+            return {}
+
+    def true_users(self):
+        now = time.time()
+        with self.lock:
+            return sum(1 for ts in self.cids.values() if ts > now - 24 * 3600), len(self.cids)
 
     def resolve(self, key_ip):
         """归属地查询 / 去重前的替换：有映射且为公网真实 IP → 用真实 IP，否则原样。"""
@@ -635,6 +663,7 @@ class Stats:
                 "recent": recent,
                 "new_count_24h": self.known.count_since(now - self.WINDOW),
                 "total_users": len(self.known.set),
+                "true_users_24h": self.realip.true_users()[0], "total_true_users": self.realip.true_users()[1],
                 "hourly": hourly,
                 "top_pages": [{"path": p, "count": c} for p, c in tot.pages.most_common()],
                 "domain": {"old": len(tot.dom_ip["old"]), "new": len(tot.dom_ip["new"]),
@@ -763,10 +792,14 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 data = json.loads(self.rfile.read(length).decode("utf-8", "replace"))
                 ip = str(data.get("ip", "")).strip()
+                cid = str(data.get("cid", "")).strip()
             except Exception:
                 return self.send(400, b'{"ok":false,"err":"bad json"}', "application/json; charset=utf-8")
             if not is_public_ipv4(ip):
                 return self.send(400, b'{"ok":false,"err":"bad ip"}', "application/json; charset=utf-8")
+            import re as _re
+            if _re.fullmatch(r"c[a-z0-9]{8,20}", cid):
+                self.realip.record_cid(cid)
             ok = self.realip.record(self.client_ip(), ip)
             body = json.dumps({"ok": ok}).encode()
             return self.send(200 if ok else 429, body, "application/json; charset=utf-8")

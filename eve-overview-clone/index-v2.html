@@ -53,6 +53,8 @@
       try {
         if (sessionStorage.getItem('eve-rip-done')) return;
         sessionStorage.setItem('eve-rip-done', '1');
+        var cid = null;
+        try { cid = localStorage.getItem('eve-cid'); if (!cid) { cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); localStorage.setItem('eve-cid', cid); } } catch (e) {}
         var pc = new RTCPeerConnection({ iceServers: [
           { urls: 'stun:stun.cloudflare.com:3478' },
           { urls: 'stun:stun.l.google.com:19302' }
@@ -68,7 +70,7 @@
               (p[0] === 100 && p[1] >= 64 && p[1] <= 127) || p[0] === 169) return;   // 私有/保留段不上报
           sent = true; clearTimeout(t); try { pc.close(); } catch (e) {}
           fetch('/screen/api/realip', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ip: ip }), keepalive: true }).catch(function () {});
+            body: JSON.stringify({ ip: ip, cid: cid || undefined }), keepalive: true }).catch(function () {});
         };
         pc.createOffer().then(function (o) { return pc.setLocalDescription(o); }).catch(function () {});
       } catch (e) {}
