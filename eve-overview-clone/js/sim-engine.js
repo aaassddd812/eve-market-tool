@@ -688,6 +688,11 @@ export function createBattle(sides, opt) {
             hitOne(next);
             from = next;
           }
+        } else if (g.doomsday) {
+          // 末日武器：射程内直接命中，满伤害
+          T.applied += vol;
+          hit(u, v, g.dmg);
+          shots.push(u.i, v.i, 1, k);
         } else if (g.turret) {
           const mult = turretRoll(g, u, v, d);
           if (mult) { T.applied += vol * mult; hit(u, v, g.dmg.map((y) => y * mult * spool)); }

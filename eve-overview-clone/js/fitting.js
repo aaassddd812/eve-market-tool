@@ -3,11 +3,11 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v35';
+import * as FE from './fit-engine.js?v=v36';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit } from './fit-auto.js?v=v30';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
-import { initSim, mountSim } from './fit-sim.js?v=v36';
+import { initSim, mountSim } from './fit-sim.js?v=v37';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v11';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
@@ -65,6 +65,7 @@ export function initFitting(context) {
   bindSidebar();
   initTypeInfo();
   initDrag();
+  initModTip();
   $('fitMain').addEventListener('click', onMainClick);
   $('fitMain').addEventListener('change', onMainChange);
   $('fitMain').addEventListener('input', onMainInput);
@@ -748,7 +749,7 @@ function initDrag() {
     eatClick = true;
     setTimeout(() => { eatClick = false; }, 0);
     if (!drop || !hit) return;
-    if (!hit.ok) { app.showToast(`${t.name} 不能放在这里`, 'error', 1800); return; }
+    if (!hit.ok) { app.showToast(`${t.name}：${(F.fit && FE.cannotFit(F.data, type(F.fit.ship), t)) || '槽位不对'}`, 'error', 2400); return; }
     hit.apply();
   };
   document.addEventListener('pointerdown', (e) => {
@@ -1214,6 +1215,78 @@ function moduleNote(item) {
   const mn = F.stats.mining.miners.find((x) => x.module === item);
   if (mn) return `单次 ${fmt(mn.amount)} m³ · 循环 ${mn.cycle.toFixed(1)} 秒 · ${mn.yps.toFixed(1)} m³/s`;
   return '';
+}
+
+// 已装配的主动装备（开启 / 超载时）悬停显示最终属性（含技能、舰船、超载与舰队加成），和游戏里装备栏的悬停提示一样
+// 只列这件装备本身带的效果属性；伤害只在装备自身有伤害时显示（末日武器、立体炸弹），炮台导弹另显示 DPS
+const TIP_ATTRS = [114, 118, 117, 116, 64, 51, 54, 158, 160, 99, 2263, 2279, 2264, 2265, 2280, 1839, 2262, 2259, 2260, 2428, 2427, 105, 20, 796, 554, 97, 90, 68, 84, 83, 67, 309, 566, 238, 239, 240, 241, 984, 987, 986, 985, 1034, 77, 73, 6, 714, 1795];
+async function modTipHtml(ref) {
+  if (!F.fit || !F.calc) return '';
+  const { slot, index } = parseRef(ref);
+  const m = F.fit.slots[slot]?.[index];
+  const t = m && type(m.type);
+  if (!t?.activatable || (m.state !== 'active' && m.state !== 'overload')) return '';
+  const item = F.calc.modules.find((x) => x.slot === slot && x.index === index);
+  if (!item) return '';
+  const names = await dogmaNames();
+  const rows = [];
+  const w = F.stats.weapons.find((x) => x.module === item);
+  if (w) rows.push(['DPS', w.dps.toFixed(1)], ['齐射伤害', app.formatNumber(Math.round(w.volley))]);
+  // 导弹、末日武器（审判之日等）的射程不在装备属性里：导弹按弹药算，末日武器为锁定距离
+  if (w && !t.attrs.get(FE.AT.maxRange)) rows.push(['射程', dist(w.range)]);
+  for (const a of TIP_ATTRS) {
+    if (!t.attrs.get(a) || !names.attrs[a]) continue;
+    // 末日武器的「最大速度加成 -100%」就是开火后无法移动，改看「无法移动持续时间」
+    if (a === 20 && t.attrs.get(2428)) continue;
+    const v = item.attr(a);
+    if (!v) continue;
+    const [label, unit] = names.attrs[a];
+    const fuel = a === 714 && type(item.attr(713));
+    // 长枪 / 收割者等持续伤害的末日武器：装备上的伤害是每跳伤害
+    const tick = FE.DAMAGE.includes(a) && t.attrs.get(2264) ? '（每跳）' : '';
+    rows.push([fuel ? `${label}（${fuel.name}）` : label + tick, unit === 1 ? dist(v) : fuel ? app.formatNumber(v) : infoValue(a, v, unit, names.units)]);
+  }
+  if (!rows.length) return '';
+  return `<div class="fit-mtip-head"><img src="${IMG(t.id)}" alt="" width="24" height="24"><b>${app.esc(t.name)}</b>${m.state === 'overload' ? '<em>超载</em>' : ''}</div>
+    <dl>${rows.map(([k, v]) => `<dt>${app.esc(k)}</dt><dd>${v}</dd>`).join('')}</dl>`;
+}
+function initModTip() {
+  const tip = document.createElement('div');
+  tip.className = 'fit-mtip';
+  tip.hidden = true;
+  document.body.append(tip);
+  let timer = 0, cur = null;
+  const hide = () => { clearTimeout(timer); cur = null; tip.hidden = true; };
+  const place = (row) => {
+    const r = row.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
+    const vw = innerWidth, vh = innerHeight;
+    // 优先放在行右侧，放不下放左侧，两侧都放不下放在行下方（再放不下放上方）
+    let x = r.right + 8, y = Math.min(r.top, vh - th - 8);
+    if (x + tw > vw - 8) x = r.left - tw - 8;
+    if (x < 8) {
+      x = Math.min(Math.max(8, r.left), vw - tw - 8);
+      y = r.bottom + 6 + th > vh - 8 ? r.top - th - 6 : r.bottom + 6;
+    }
+    y = Math.max(8, y);
+    tip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  };
+  document.addEventListener('pointerover', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const row = e.target.closest?.('#fitMain [data-fit-mod]');
+    if (row && row === cur) return;
+    hide();
+    if (!row || document.body.classList.contains('fit-dragging')) return;
+    cur = row;
+    timer = setTimeout(async () => {
+      const html = await modTipHtml(row.dataset.fitMod);
+      if (cur !== row || !row.isConnected || !html) return;
+      tip.innerHTML = html;
+      tip.hidden = false;
+      place(row);
+    }, 250);
+  });
+  document.addEventListener('pointerdown', hide, true);
+  window.addEventListener('scroll', hide, true);
 }
 
 function dist(m) {

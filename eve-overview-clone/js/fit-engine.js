@@ -266,6 +266,7 @@ export function envInfo(data, shipId) {
 // ---------- 舰队加成（指挥脉冲波 / 泰坦天象发生器）----------
 // 弹药把加成编号与倍率写到脉冲波上，技能、舰船加成、心灵链接再提高数值；开启后对舰队（含自己）生效。
 // 同一种加成多个来源时只取最强的一个（按 dbuff 的取最大 / 最小）；与装备的同类加成一起受叠加惩罚
+export const SUPERWEAPON_GROUP = 588;   // 末日武器（泰坦 / 干扰长枪等）：伤害在装备自身，不装弹药
 export const BURST_GROUP = 1770, BURST_CHARGES = [1769, 1771, 1772, 1773, 1774, 4905];
 const BUFF_ATTRS = [[2468, 2469], [2470, 2471], [2472, 2473], [2536, 2537]];
 const BUFF_EFFECTS = new Set(['moduleBonusWarfareLinkArmor', 'moduleBonusWarfareLinkShield', 'moduleBonusWarfareLinkInfo', 'moduleBonusWarfareLinkSkirmish',
@@ -574,7 +575,7 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
 
   // 火力
   const missileMult = char.attr(AT.missileDamageMultiplier);
-  const weapon = { turret: 0, missile: 0, drone: 0, fighter: 0, volley: 0, types: [0, 0, 0, 0] };
+  const weapon = { turret: 0, missile: 0, doomsday: 0, drone: 0, fighter: 0, volley: 0, types: [0, 0, 0, 0] };
   const weapons = [];
   const droneDps = [];
   for (const m of activeMods) {
@@ -596,6 +597,21 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
       range: m.type.turret ? m.attr(AT.maxRange) : m.charge.attr(AT.maxVelocity) * m.charge.attr(AT.explosionDelay) / 1000,
       falloff: m.type.turret ? m.attr(AT.falloff) : 0
     });
+  }
+  // 末日武器：长枪 / 收割者 / 玻色等持续伤害每跳 × 跳数（持续时间 / 跳伤周期）为一发的总伤害（与 Pyfa 一致）；
+  // 循环 = 持续时间 + 重新激活延迟。射程没有 maxRange 的（老式单体末日）按锁定距离
+  for (const m of activeMods) {
+    if (m.type.group !== SUPERWEAPON_GROUP || m.charge) continue;
+    const ticks = m.attr(2264) && m.attr(2265) ? Math.max(1, Math.round(m.attr(2264) / m.attr(2265))) : 1;
+    const dmg = DAMAGE.map((a) => (m.attr(a) || 0) * ticks);
+    const volley = dmg.reduce((s, x) => s + x, 0);
+    const cycle = ((m.attr(AT.duration) || 0) + (m.attr(AT.reactivationDelay) || 0)) / 1000;
+    if (!cycle || !volley) continue;
+    const dps = volley / cycle;
+    weapon.doomsday += dps;
+    weapon.volley += volley;
+    dmg.forEach((x, i) => { weapon.types[i] += x / cycle; });
+    weapons.push({ module: m, dps, volley, spool: 1, doomsday: true, range: m.attr(AT.maxRange) || ship.attr(AT.maxTargetRange), falloff: 0 });
   }
   for (const d of drones) {
     if (!d.active) continue;
@@ -621,7 +637,7 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
       dmg.forEach((x, i) => { weapon.types[i] += x / cycle * n; });
     }
   }
-  weapon.total = weapon.turret + weapon.missile + weapon.drone + weapon.fighter;
+  weapon.total = weapon.turret + weapon.missile + weapon.doomsday + weapon.drone + weapon.fighter;
 
   // 采矿：照 pyfa，每秒产量 = 单次开采量 ÷ 循环，再按暴击期望（几率 × 额外倍数）加成；残渣 = 产量 × 残渣几率 × 残渣倍数
   // 开采量、循环已含晶体、技能、船体、舰队脉冲；冰矿、气云同样按 m³ 计
@@ -776,7 +792,7 @@ export function appliedDps(stats, target = null, distance = 0) {
       f = Math.min(1, turretMult(0.5 ** exp));   // 暴击带来的 1.5% 不计，避免有效 DPS 高于纸面
     } else {
       if (distance && w.range < distance) f = 0;
-      else if (target && m.charge) {
+      else if (target && m.charge && !w.doomsday) {
         const er = m.charge.attr(654), ev = m.charge.attr(653), drf = m.charge.attr(1353) || 1;
         if (er > 0) f = Math.min(1, target.sig / er, target.vel > 0 && ev > 0 ? ((target.sig / er) * (ev / target.vel)) ** drf : 1);
       }

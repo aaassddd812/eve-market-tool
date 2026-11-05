@@ -10,7 +10,7 @@
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失；
 // 「AT 赛」（sim-at.js）可选这一届联盟锦标赛已打过的比赛，双方选手各一行带进来（蓝队 A 方、红队 B 方），战场上像比赛直播一样显示两队名单与血条。
 import { commonFit } from './fit-kb.js?v=v28';
-import { createBattle, simulate } from './sim-engine.js?v=v11';
+import { createBattle, simulate } from './sim-engine.js?v=v12';
 import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
@@ -367,6 +367,13 @@ function unitTemplate(row) {
   const guns = stats.weapons.map((w) => {
     const m = w.module, c = m.charge, turret = Boolean(m.type.turret);
     used.add(m);
+    // 末日武器：每个循环（5 分钟左右）打一发，命中即满伤害
+    if (w.doomsday) {
+      const raw = FE.DAMAGE.map((a) => m.attr(a) || 0), rawSum = raw.reduce((a, b) => a + b, 0) || 1;
+      const cycle = w.volley / w.dps;
+      return { doomsday: true, turret: false, cycle, volley: w.volley, dmg: raw.map((x) => x / rawSum * w.volley), capNeed: Math.max(0, m.attr(FE.AT.capNeed)),
+        ammo: Infinity, reload: 0, reach: w.range, m: idx.get(m), fx: { w: 'beam', c: DMG_COLOR[raw.indexOf(Math.max(...raw))] ?? 0xffcf4a, s: 4 } };
+    }
     const raw = FE.DAMAGE.map((a) => c.attr(a));
     const rawSum = raw.reduce((a, b) => a + b, 0) || 1;
     const cycle = m.attr(FE.AT.speed) / 1000;

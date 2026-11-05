@@ -3213,6 +3213,14 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .fit-slot.is-empty { border-style: dashed; color: var(--text-muted); font-size: 0.8125rem; background: transparent; }
 .fit-slot.is-empty:hover { color: var(--accent-primary); border-color: var(--accent-primary); background: var(--accent-soft); }
 /* 拖放：物品按住拖到槽位（fitting.js initDrag） */
+.fit-mtip { position: fixed; left: 0; top: 0; z-index: 1000; width: max-content; min-width: 220px; max-width: 300px; padding: 10px 14px 12px; border-radius: var(--radius-lg); background: var(--bg-tertiary); box-shadow: var(--shadow-lg); pointer-events: none; font-size: 13px; }
+.fit-mtip-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.fit-mtip-head img { border-radius: 6px; }
+.fit-mtip-head b { font-weight: 600; line-height: 1.3; }
+.fit-mtip-head em { margin-left: auto; padding: 1px 8px; border-radius: 999px; background: rgba(240, 120, 50, 0.18); color: #f08a4b; font-style: normal; font-size: 12px; }
+.fit-mtip dl { display: grid; grid-template-columns: 1fr auto; gap: 4px 16px; margin: 0; }
+.fit-mtip dt { color: var(--text-secondary); }
+.fit-mtip dd { margin: 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
 .fit-drag-ghost { position: fixed; left: 0; top: 0; z-index: 10000; width: 40px; height: 40px; border-radius: 9px; background: #0d1219; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); pointer-events: none; opacity: 0.92; }
 body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-select: none; }
 .fit-slot.fit-drop-cand, .fit-slots.fit-drop-cand { background: color-mix(in srgb, var(--accent-primary) 6%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 45%, transparent); }
