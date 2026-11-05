@@ -1057,7 +1057,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v111').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v112').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -3242,7 +3242,8 @@ let feedbackModule = null;   // feedback.js：「定制」弹窗里的工单（�
 // 最近的脚本错误（附在报错 / 加载慢引导预填的工单里，方便定位）
 const recentErrors = [];
 const noteError = (msg) => { if (msg && !recentErrors.includes(msg)) { recentErrors.push(String(msg).slice(0, 300)); if (recentErrors.length > 3) recentErrors.shift(); } };
-window.addEventListener('error', (e) => { if (e.message) noteError(e.message + (e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno})` : '')); });
+// ResizeObserver 回调里布局又变了时浏览器报的提示，无害（页面照常显示），不记
+window.addEventListener('error', (e) => { if (e.message && !/^ResizeObserver loop/.test(e.message)) noteError(e.message + (e.filename ? ` (${e.filename.split('/').pop()}:${e.lineno})` : '')); });
 window.addEventListener('unhandledrejection', (e) => noteError(e.reason?.message || String(e.reason || '')));
 // 打开「定制 → 提交工单」并预填
 function openTicket(kind, text) {

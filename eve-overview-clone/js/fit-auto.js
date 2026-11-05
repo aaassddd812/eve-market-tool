@@ -1216,7 +1216,7 @@ function renderForm() {
     ${section('植入体', `<div class="fa-checks"><label class="pi-check"><input type="checkbox" data-fa-check="implants"${A.implants ? ' checked' : ''}><span>同时推荐植入体</span></label></div>`
       + (A.implants ? field('植入体预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fa-num="impBudget"><span>百万 ISK</span></div>`, '按全服均价，0 为不限') : ''))}
     ${section('预算与技能', field('预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="10" value="${A.budget}" data-fa-num="budget"><span>百万 ISK</span></div>`, '不含船，按全服均价，0 为不限')
-      + field('技能', seg('skills', [['max', '全 5 级'], ['esi', bound ? '按角色' : '按角色（未读取）']]), help.skills))}
+      + field('技能', seg('skills', [['max', '全 5 级'], ['esi', bound || ctx.hasEsi() ? '按角色' : '按角色（未绑定）']]), help.skills))}
     <button type="submit" class="btn btn-primary fa-go">${S.running ? '计算中…' : '开始装配'}</button>`;
 }
 
@@ -1241,6 +1241,21 @@ function utilsHtml(ship, P) {
   return `<div class="fa-utils">${UTILS.filter(([k]) => (k !== 'ewar' || ewar.length) && (k !== 'cyno' || cyno)).map(([k, l, d]) => `<button type="button" class="fa-util${U.has(k) ? ' active' : ''}" data-fa-util="${k}" aria-pressed="${U.has(k)}" title="${ctx.esc(k === 'ewar' ? ewar.join('、') : d)}">${l}${def.has(k) ? '<small>有加成</small>' : ''}</button>`).join('')}</div>`;
 }
 
+// 选「按角色」技能但还没读过：没绑定 ESI 提示去绑定；绑定了就直接读取当前角色技能再切换
+async function useEsiSkills(btn, render) {
+  if (!ctx.hasEsi()) { ctx.showToast('按角色技能需要先在个人中心绑定 ESI 角色', 'info', 3500); return; }
+  btn.disabled = true;
+  btn.textContent = '读取技能中…';
+  try {
+    if (!(await ctx.loadEsiLevels())) throw new Error('没有读到技能');
+    A.skills = 'esi';
+    ctx.store.setJSON(KEY, A);
+  } catch (error) {
+    ctx.showToast('读取角色技能失败：' + error.message, 'error', 4000);
+  }
+  render();
+}
+
 function onClick(e) {
   if (e.target.closest('[data-fa-close]') || e.target.classList.contains('modal-backdrop')) { close(); return; }
   const fo = e.target.closest('[data-fa-focus]');
@@ -1250,7 +1265,7 @@ function onClick(e) {
   const set = e.target.closest('[data-fa-set]');
   if (set) {
     const k = set.dataset.faSet;
-    if (k === 'skills' && set.dataset.v === 'esi' && !ctx.esiLevels()) { ctx.showToast('请先在装配页切换到「按 ESI 角色」读取技能', 'error'); return; }
+    if (k === 'skills' && set.dataset.v === 'esi' && !ctx.esiLevels()) { useEsiSkills(set, renderForm); return; }
     A[k] = set.dataset.v;
     ctx.store.setJSON(KEY, A);
     renderForm();
@@ -1399,7 +1414,7 @@ function renderImpForm() {
     ${section('侧重', job ? `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量与起跳时间' }[job]}挑植入体，其次是坦克</p>`
       : `<div class="fa-goals">${FOCUS.map(([k, l]) => `<button type="button" class="fa-goal${focusSet().has(k) ? ' active' : ''}" data-fi-focus="${k}" aria-pressed="${focusSet().has(k)}"${k === 'dps' && A.weapon === 'none' ? ' disabled title="已选「不装武器」"' : ''}><b>${l}</b></button>`).join('')}</div><p class="fa-hint">可多选组合，如输出 + 速度（风筝）、坦克 + 速度</p>`)}
     ${section('预算与技能', `<div class="fa-field"><label>植入体预算</label><div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fi-num="impBudget"><span>百万 ISK</span></div><p class="fa-hint">按全服均价，0 为不限</p></div>
-      <div class="fa-field"><label>技能</label>${seg('skills', [['max', '全 5 级'], ['esi', bound ? '按角色' : '按角色（未读取）']])}${A.skills === 'esi' ? '<p class="fa-hint">只推荐技能够用的植入体</p>' : ''}</div>`)}
+      <div class="fa-field"><label>技能</label>${seg('skills', [['max', '全 5 级'], ['esi', bound || ctx.hasEsi() ? '按角色' : '按角色（未绑定）']])}${A.skills === 'esi' ? '<p class="fa-hint">只推荐技能够用的植入体</p>' : ''}</div>`)}
     <button type="submit" class="btn btn-primary fa-go">${IS.running ? '计算中…' : '推荐植入体'}</button>`;
 }
 
@@ -1410,7 +1425,7 @@ function onImpClick(e) {
   const set = e.target.closest('[data-fi-set]');
   if (set) {
     const k = set.dataset.fiSet;
-    if (k === 'skills' && set.dataset.v === 'esi' && !ctx.esiLevels()) { ctx.showToast('请先在装配页切换到「按 ESI 角色」读取技能', 'error'); return; }
+    if (k === 'skills' && set.dataset.v === 'esi' && !ctx.esiLevels()) { useEsiSkills(set, renderImpForm); return; }
     A[k] = set.dataset.v;
     ctx.store.setJSON(KEY, A);
     renderImpForm();

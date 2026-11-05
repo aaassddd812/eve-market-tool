@@ -5,7 +5,7 @@
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
 import * as FE from './fit-engine.js?v=v36';
 import * as MU from './fit-mutate.js?v=v4';
-import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit } from './fit-auto.js?v=v30';
+import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit } from './fit-auto.js?v=v31';
 import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
 import { initSim, mountSim } from './fit-sim.js?v=v37';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v11';
@@ -80,6 +80,9 @@ export function initFitting(context) {
     getFit: () => F.fit,
     applyFit,
     esiLevels: () => F.esi?.levels || null,
+    hasEsi: () => app.hasEsiToken(),
+    // 智能装配 / 智能植入体弹窗里选「按角色」：直接读取当前角色技能（装配页的技能模式不变）
+    loadEsiLevels: async () => { if (!F.esi) F.esi = await app.getCharacterSkills(); return F.esi?.levels || null; },
     prices: () => F.prices,
     esc: app.esc, formatNumber: app.formatNumber, formatISK: app.formatISK, showToast: app.showToast, store: app.store
   };
