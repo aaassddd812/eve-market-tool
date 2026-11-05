@@ -51,11 +51,12 @@
   <script>
     (function () {
       try {
-        var last = 0; try { last = parseInt(localStorage.getItem('eve-rip-at') || '0', 10) || 0; } catch (e) {}
-        if (Date.now() - last < 43200000) return;   // 12 小时内上报过就跳过（旧版按会话，长开标签页的用户永不更新）
-        try { localStorage.setItem('eve-rip-at', String(Date.now())); } catch (e) {}
         var cid = null;
         try { cid = localStorage.getItem('eve-cid'); if (!cid) { cid = 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10); localStorage.setItem('eve-cid', cid); } } catch (e) {}
+        try { if (cid) document.cookie = 'evecid=' + cid + ';max-age=31536000;path=/;samesite=lax'; } catch (e) {}   // 每次加载都带cookie，在线统计按cid数
+        var last = 0; try { last = parseInt(localStorage.getItem('eve-rip-at') || '0', 10) || 0; } catch (e) {}
+        if (Date.now() - last < 43200000) return;   // 12 小时内上报过就跳过WebRTC探测
+        try { localStorage.setItem('eve-rip-at', String(Date.now())); } catch (e) {}
         var pc = new RTCPeerConnection({ iceServers: [
           { urls: 'stun:stun.cloudflare.com:3478' },
           { urls: 'stun:stun.l.google.com:19302' }
