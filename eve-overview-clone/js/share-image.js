@@ -14,19 +14,42 @@ export const THEMES = {
 };
 const THEME_KEY = 'eve-share-image-theme';   // 图片配色，默认浅色
 
-// 同一张图切换配色时不重复下载
+// 同一张图切换配色时不重复下载；失败的不缓存（下次生成再试）
+// 一张图可能要上百个头像 / 图标：同时最多下载 6 个，每个超时 15 秒、失败重试 2 次（换参数绕开失败的缓存），尽量都画进图里
 const imageCache = new Map();
-export function loadImage(url) {
-  if (!url) return Promise.resolve(null);
-  if (!imageCache.has(url)) imageCache.set(url, new Promise((resolve) => {
+const LIMIT = 6;
+let active = 0;
+const waiting = [];
+const slot = () => (active < LIMIT ? (active++, Promise.resolve()) : new Promise((r) => waiting.push(r)));
+const release = () => { const next = waiting.shift(); if (next) next(); else active--; };
+function tryLoad(url, n) {
+  return new Promise((resolve) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
+    const timer = setTimeout(() => { img.src = ''; resolve(null); }, 15000);
+    img.onload = () => { clearTimeout(timer); resolve(img.naturalWidth ? img : null); };
+    img.onerror = () => { clearTimeout(timer); resolve(null); };
     // 加参数区分缓存：避免复用页面里不带跨域头的缓存导致画布被污染
-    img.src = url + (url.includes('?') ? '&' : '?') + 'cors=1';
-    setTimeout(() => resolve(null), 6000);
-  }));
+    img.src = url + (url.includes('?') ? '&' : '?') + 'cors=' + n;
+  });
+}
+export function loadImage(url) {
+  if (!url) return Promise.resolve(null);
+  if (!imageCache.has(url)) {
+    const p = (async () => {
+      await slot();
+      try {
+        for (let n = 1; n <= 3; n++) {
+          const img = await tryLoad(url, n);
+          if (img) return img;
+          await new Promise((r) => setTimeout(r, 400 * n));
+        }
+        return null;
+      } finally { release(); }
+    })();
+    imageCache.set(url, p);
+    p.then((img) => { if (!img) imageCache.delete(url); });
+  }
   return imageCache.get(url);
 }
 export async function loadImages(urls) {

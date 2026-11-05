@@ -1398,7 +1398,8 @@ class Api:
         return value
 
     # GET /battles/history?days=30：最近 N 天全部疑似会战（同一星系相邻击杀间隔 ≤ 20 分钟连成一段，段内任意 60 分钟击毁 ≥ 20 艘才算；口径同 /battles）。
-    # 双方阵营按「谁打谁」划分：同一次击杀里一起出手的算友方，打了对方的算敌方，从参与最多的势力开始依次归队；两边都没有关系的算第三方。
+    # 阵营按「谁打谁」划分，口径同战场统计页（kb-br.js autoSides）：同一次击杀里一起出手的算友方，打了对方的算敌方，
+    # 从人数最多的势力开始依次归入 A / B；对 A、B 两边都下过手的势力单独算 C 方（三方混战）；跟谁都没关系的算其他。
     # 每方统计势力、人数、损失（艘 / ISK）、击毁（艘 / ISK），战损比 = 击毁 ÷（击毁 + 损失）。结果缓存 10 分钟，过期后先返回旧结果、后台重算。
     def battle_history(self, q):
         days = min(max(int(q.get("days", 30)), 1), 30)
@@ -1454,22 +1455,28 @@ class Api:
                 battles.append((seg, peak))
         out, ids = [], []
         for seg, peak in battles:
-            kms = [r[0] for r in seg]
+            # 分队用的关系与人数按战场统计页的口径取：同一时间段（前后各放宽 10 分钟）该星系的全部玩家击杀，含太空舱与低价值击杀，
+            # 这样列表里分出的几方和点进「战场统计」后自动分出的一致；损失 / 击毁统计仍只算会战口径的击杀
+            t0 = seg[0][1] // 60 * 60 - 600
+            t1 = -(-seg[-1][1] // 60) * 60 + 600
+            full = c.execute("""SELECT id, v_char, COALESCE(v_alliance, v_corp), v_alliance IS NOT NULL, value FROM killmails
+                                WHERE system_id = ? AND time >= ? AND time < ? AND npc = 0""", (seg[0][2], t0, t1)).fetchall()
+            kms = [r[0] for r in full]
             att = collections.defaultdict(list)    # km -> [(char, 势力, 是否联盟)]
             for chunk in range(0, len(kms), 900):
                 part = kms[chunk:chunk + 900]
                 for km, ch, ent, is_al in c.execute(f"SELECT km, char, COALESCE(alliance, corp), alliance IS NOT NULL FROM attackers WHERE km IN ({','.join('?' * len(part))})", part):
                     att[km].append((ch, ent, is_al))
-            kind, inv, friend, enemy, chars = {}, collections.Counter(), collections.Counter(), collections.Counter(), collections.defaultdict(set)
-            for r in seg:
-                v = r[7]
+            kind, inv, friend, enemy, chars, lost_by = {}, collections.Counter(), collections.Counter(), collections.Counter(), collections.defaultdict(set), collections.Counter()
+            for km, v_char, v, v_al, val in full:
                 if v:
-                    kind[v] = r[8]
+                    kind[v] = v_al
                     inv[v] += 1
-                    if r[6]:
-                        chars[v].add(r[6])
+                    lost_by[v] += val or 0
+                    if v_char:
+                        chars[v].add(v_char)
                 ents = set()
-                for ch, ent, is_al in att[r[0]]:
+                for ch, ent, is_al in att[km]:
                     if ent:
                         kind[ent] = is_al
                         ents.add(ent)
@@ -1481,27 +1488,41 @@ class Api:
                     if v:
                         enemy[(min(e, v), max(e, v))] += 1
                 el = sorted(ents)
-                if len(el) <= 30:
+                if len(el) <= 60:
                     for a in range(len(el)):
                         for b in range(a + 1, len(el)):
                             friend[(el[a], el[b])] += 1
-            rel = lambda e, team: sum(friend[(min(e, t), max(e, t))] - enemy[(min(e, t), max(e, t))] for t in team)
-            teams, team_of = [[], []], {}
-            for e, _ in inv.most_common():
-                if not teams[0]:
-                    t = 0
-                else:
-                    s0, s1 = rel(e, teams[0]), rel(e, teams[1])
-                    if not teams[1]:
-                        t = 0 if s0 > 0 else 1 if s0 < 0 else None
-                    else:
-                        t = None if s0 == s1 == 0 else (0 if s0 >= s1 else 1)
-                if t is not None:
-                    teams[t].append(e)
-                    team_of[e] = t
-            stat = [{"losses": 0, "lost": 0.0, "kills": 0, "destroyed": 0.0, "ents": collections.Counter(), "e_kills": collections.Counter(), "e_losses": collections.Counter(), "e_lost": collections.Counter()} for _ in range(3)]
+            pair = lambda x, y: (min(x, y), max(x, y))
+            order = sorted(inv, key=lambda e: (-len(chars[e]), -lost_by[e]))
+            side = {order[0]: 0} if order else {}
+            def score(e, t):
+                return sum(friend[pair(e, x)] - 2 * enemy[pair(e, x)] for x, st in side.items() if st == t and x != e)
+            for rnd in range(3):
+                changed = False
+                for e in order:
+                    if rnd == 0 and e in side:
+                        continue
+                    a, b = score(e, 0), score(e, 1)
+                    t = (0 if a >= b else 1) if a > 0 or b > 0 else (1 if a < b else 0) if a < 0 or b < 0 else None
+                    if t is not None and side.get(e) != t and e != order[0]:
+                        side[e] = t
+                        changed = True
+                if not changed:
+                    break
+            def hostile_to(e, t):
+                return sum(enemy[pair(e, x)] for x, st in side.items() if st == t and x != e)
+            third = []
+            for e in order[1:]:
+                a, b = hostile_to(e, 0), hostile_to(e, 1)
+                if a >= 3 and b >= 3 and min(a, b) >= 0.3 * max(a, b):
+                    third.append(e)
+            for e in third:
+                side[e] = 2
+            team_of = side
+            teams = [[e for e in order if side.get(e) == t] for t in range(3)]
+            stat = [{"losses": 0, "lost": 0.0, "kills": 0, "destroyed": 0.0, "ents": collections.Counter(), "e_kills": collections.Counter(), "e_losses": collections.Counter(), "e_lost": collections.Counter()} for _ in range(4)]
             for r in seg:
-                vt = team_of.get(r[7], 2)
+                vt = team_of.get(r[7], 3)
                 s = stat[vt]
                 s["losses"] += 1
                 s["lost"] += r[5] or 0
@@ -1511,15 +1532,15 @@ class Api:
                 hit_teams = set()
                 for _, ent, _ in att[r[0]]:
                     if ent and ent != r[7]:
-                        stat[team_of.get(ent, 2)]["e_kills"][ent] += 1 if ent not in hit_teams else 0
+                        stat[team_of.get(ent, 3)]["e_kills"][ent] += 1 if ent not in hit_teams else 0
                         hit_teams.add(ent)
-                for t in {team_of.get(e, 2) for e in hit_teams}:
+                for t in {team_of.get(e, 3) for e in hit_teams}:
                     if t != vt:
                         stat[t]["kills"] += 1
                         stat[t]["destroyed"] += r[5] or 0
             def team_json(t, members):
                 s = stat[t]
-                top = sorted(members, key=lambda e: inv[e], reverse=True)
+                top = sorted(members, key=lambda e: (len(chars[e]), lost_by[e]), reverse=True)   # 同战场统计页：人数多的在前
                 ids.extend(top[:4])
                 return {"entities": [{"id": e, "kind": "alliance" if kind.get(e) else "corporation", "kills": s["e_kills"][e], "losses": s["e_losses"][e], "lost": round(s["e_lost"][e])} for e in top[:4]],
                         "n_entities": len(members), "pilots": len(set().union(*(chars[e] for e in members))) if members else 0,
@@ -1529,8 +1550,8 @@ class Api:
             all_chars = set().union(*chars.values()) if chars else set()
             out.append({"system_id": seg[0][2], "region_id": seg[0][3], "start": iso(seg[0][1]), "end": iso(seg[-1][1]),
                         "kills": len(seg), "peak": peak, "value": round(sum(r[5] or 0 for r in seg)), "pilots": len(all_chars),
-                        "teams": [team_json(0, teams[0]), team_json(1, teams[1])],
-                        "third": {"n_entities": len(others), "losses": stat[2]["losses"], "lost": round(stat[2]["lost"])},
+                        "teams": [team_json(t, teams[t]) for t in range(3 if teams[2] else 2)],
+                        "third": {"n_entities": len(others), "losses": stat[3]["losses"], "lost": round(stat[3]["lost"])},
                         "top": {"id": top[0], "ship_type_id": top[4], "value": round(top[5] or 0)}})
         out.sort(key=lambda b: b["end"], reverse=True)
         return {"days": days, "updated": iso(int(time.time())), "min": BATTLE_MIN_KILLS, "gap_minutes": BATTLE_GAP // 60,

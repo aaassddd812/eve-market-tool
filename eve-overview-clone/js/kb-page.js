@@ -3,7 +3,7 @@
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v34';
+import { initBr, renderBr } from './kb-br.js?v=v35';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 import { SERVER, IS_TQ, HUB, eveImage, kbSiteLink } from './server.js?v=s4';
@@ -735,14 +735,18 @@ function drawBh() {
     const tier = battles ? battles.battleTier(x.kills) : { key: 'small', name: '会战' };
     const mins = Math.max(1, Math.round((new Date(x.end) - new Date(x.start)) / 60e3));
     const r = bhRatio(x.teams[0], x.teams[1]);
+    const multi = x.teams.length > 2;
+    // 三方混战：每方卡片里各自带战损比
+    const own = (t) => { const n = t.destroyed + t.lost; return multi && n ? `<span>战损比 ${(t.destroyed / n * 100).toFixed(0)}%</span>` : ''; };
     const team = (t, cls) => `<div class="kb-bh-team ${cls}">
         <div class="kb-bh-team-head"><b>${fmtIsk(t.lost)}</b><small>损失 ISK</small></div>
         <div class="kb-bh-ents">${t.entities.length ? t.entities.map((e) => `<span class="kb-bh-ent"><img src="${avatar(e.kind, e.id, 32)}" alt="" width="18" height="18" loading="lazy">${entityLink(e.kind, e.id, partyName(e.id))}</span>`).join('') : '<span class="text-muted">—</span>'}
           ${t.n_entities > t.entities.length ? `<small class="text-muted">等 ${t.n_entities} 个势力</small>` : ''}</div>
-        <div class="kb-bh-nums"><span>约 ${fmtN(t.pilots)} 人</span><span class="up">击毁 ${fmtN(t.kills)} 艘 · ${fmtIsk(t.destroyed)}</span><span class="down">损失 ${fmtN(t.losses)} 艘</span></div>
+        <div class="kb-bh-nums"><span>约 ${fmtN(t.pilots)} 人</span><span class="up">击毁 ${fmtN(t.kills)} 艘 · ${fmtIsk(t.destroyed)}</span><span class="down">损失 ${fmtN(t.losses)} 艘</span>${own(t)}</div>
       </div>`;
     const sum = x.teams[0].lost + x.teams[1].lost;
-    const bar = sum ? `<div class="kb-bh-bar" title="双方损失 ISK 对比：蓝色越长左方打得越好（左方损失 ${fmtIsk(x.teams[0].lost)}，右方损失 ${fmtIsk(x.teams[1].lost)}）"><i class="a" style="width:${((x.teams[1].lost / sum) * 100).toFixed(1)}%"></i><i class="b" style="width:${((x.teams[0].lost / sum) * 100).toFixed(1)}%"></i></div>` : '';
+    const dsum = x.teams.reduce((n, t) => n + t.destroyed, 0);
+    const bar = multi ? (dsum ? `<div class="kb-bh-bar is-multi" title="各方击毁 ISK 占比">${x.teams.map((t, i) => t.destroyed ? `<i class="${'abc'[i]}" style="width:${(t.destroyed / dsum * 100).toFixed(1)}%"></i>` : '').join('')}</div>` : '') : sum ? `<div class="kb-bh-bar" title="双方损失 ISK 对比：蓝色越长左方打得越好（左方损失 ${fmtIsk(x.teams[0].lost)}，右方损失 ${fmtIsk(x.teams[1].lost)}）"><i class="a" style="width:${((x.teams[1].lost / sum) * 100).toFixed(1)}%"></i><i class="b" style="width:${((x.teams[0].lost / sum) * 100).toFixed(1)}%"></i></div>` : '';
     return `<article class="kb-bh tier-${tier.key}">
       <div class="kb-bh-head">
         <span class="kb-bh-tier"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/><path d="M14.5 6.5 18 3h3v3l-3.5 3.5"/><path d="m5 14 4 4"/><path d="m7 17-3 3"/><path d="m3 19 2 2"/></svg>${tier.name}</span>
@@ -750,9 +754,10 @@ function drawBh() {
         <span class="text-muted">${app.esc(sys.region || '')} · ${new Date(x.start).toLocaleString('zh-CN', { hour12: false, month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 起，持续 ${mins >= 120 ? (mins / 60).toFixed(1) + ' 小时' : mins + ' 分钟'}</span>
         <span class="kb-bh-stats"><b>${fmtN(x.kills)}</b> 艘 · 约 <b>${fmtN(x.pilots)}</b> 人 · <b>${fmtIsk(x.value)}</b> ISK</span>
       </div>
-      <div class="kb-bh-vs">${team(x.teams[0], 'left')}<span class="kb-bh-x">VS</span>${team(x.teams[1], 'right')}</div>
+      ${multi ? `<div class="kb-bh-vs is-multi">${x.teams.map((t, i) => team(t, 'side-' + 'abc'[i])).join('')}</div>`
+        : `<div class="kb-bh-vs">${team(x.teams[0], 'left')}<span class="kb-bh-x">VS</span>${team(x.teams[1], 'right')}</div>`}
       ${bar}
-      ${r.a != null || r.b != null ? `<div class="kb-bh-ratio"><span class="left"><small>战损比</small><b>${r.a == null ? '—' : (r.a * 100).toFixed(0) + '%'}</b></span><span class="right"><b>${r.b == null ? '—' : (r.b * 100).toFixed(0) + '%'}</b><small>战损比</small></span></div>` : ''}
+      ${multi ? '' : (r.a != null || r.b != null ? `<div class="kb-bh-ratio"><span class="left"><small>战损比</small><b>${r.a == null ? '—' : (r.a * 100).toFixed(0) + '%'}</b></span><span class="right"><b>${r.b == null ? '—' : (r.b * 100).toFixed(0) + '%'}</b><small>战损比</small></span></div>` : '')}
       <div class="kb-battle-actions">
         ${x.top ? `<button class="link-btn" data-kill="${x.top.id}" data-bh-top="${x.top.id}">最贵损失 ${app.esc(typeName(x.top.ship_type_id))} · ${fmtIsk(x.top.value)}</button>` : ''}
         ${x.third.losses ? `<span class="text-muted kb-bh-third">第三方损失 ${x.third.losses} 艘</span>` : ''}
@@ -763,7 +768,7 @@ function drawBh() {
   }).join('');
   box.innerHTML = cards + (rows ? `<div class="kb-bh-list">${rows}</div>` : '<p class="text-muted kb-empty">没有符合条件的会战</p>') +
     (list.length > b.shown ? `<div class="au-more"><button class="btn btn-ghost" data-bh-more>再显示 ${Math.min(BH_PAGE, list.length - b.shown)} 场（还有 ${list.length - b.shown} 场）</button></div>` : '') +
-    `<p class="text-muted valuation-note" title="口径：同一星系相邻击杀间隔不超过 ${b.data.gap_minutes} 分钟算同一场，场内任意 60 分钟击毁 ≥ ${b.data.min} 艘（不含太空舱、NPC 击杀与 10M ISK 以下）。 双方按「谁打谁」自动分队（一起出手的算友方），与双方都没有交火的算第三方；战损比 = 击毁 ÷（击毁 + 损失），按 ISK 算。价值为估算值">价值为估算值</p>`;
+    `<p class="text-muted valuation-note" title="口径：同一星系相邻击杀间隔不超过 ${b.data.gap_minutes} 分钟算同一场，场内任意 60 分钟击毁 ≥ ${b.data.min} 艘（不含太空舱、NPC 击杀与 10M ISK 以下）。 双方按「谁打谁」自动分队（一起出手的算友方），对两方都下过手的势力单独算一方（三方混战），与各方都没有交火的算第三方；战损比 = 击毁 ÷（击毁 + 损失），按 ISK 算。价值为估算值">价值为估算值</p>`;
 }
 
 // ---------- 人物 / 军团 / 联盟 ----------
@@ -889,7 +894,7 @@ let shareModules = null;
 function shareEntity() {
   const e = S.entity;
   if (!e?.stats) return;
-  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=4'), import('./share-image.js?v=3')]);
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=5'), import('./share-image.js?v=4')]);
   const model = entityImageModel(e);
   shareModules.then(([{ renderEntityImage }, { openShareModal }]) => openShareModal({
     title: `分享${KIND_ZH[e.kind]}图片`, app,

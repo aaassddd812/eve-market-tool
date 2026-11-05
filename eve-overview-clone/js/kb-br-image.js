@@ -1,6 +1,6 @@
 // ===== 战场统计：生成分享图片 =====
 // 纯 Canvas 绘制（不依赖第三方库）；配色、图片加载与弹窗在 share-image.js。
-import { W, SCALE, THEMES, loadImage, rr, fit, font, alpha } from './share-image.js?v=3';
+import { W, SCALE, THEMES, loadImages, rr, fit, font, alpha } from './share-image.js?v=4';
 
 const PAD = 40, IW = W - PAD * 2, GAP = 20;
 
@@ -16,20 +16,21 @@ export async function renderBrImage(m, theme = 'light') {
     m.sides[s].top.forEach((k) => urls.add(k.icon));
     m.sides[s].players.list.forEach((p) => { urls.add(p.avatar); p.ships.forEach((u) => urls.add(u)); });
   }
-  const images = new Map(await Promise.all([...urls].map(async (u) => [u, await loadImage(u)])));
+  const images = await loadImages([...urls]);
   const EXTRA = theme === 'dark' ? { C: '#22a565', D: '#a25ddc' } : { C: '#1c9a5c', D: '#8e4fd0' };
   const color = (s) => (s === 'A' ? C.a : s === 'B' ? C.b : EXTRA[s]);
 
-  // 势力 / 玩家卡片每行两方（三方、四方时分两行），同一行左右等高
+  // 势力 / 玩家卡片：两方、三方都放一行并排（三方时卡片窄，玩家卡片省掉伤害与舰船两栏），四方分两行；同一行等高
   const pairs = [];
-  for (let i = 0; i < order.length; i += 2) {
-    const pr = order.slice(i, i + 2), sd = pr.map((x) => m.sides[x]);
+  const per = order.length === 3 ? 3 : 2;
+  for (let i = 0; i < order.length; i += per) {
+    const pr = order.slice(i, i + per), sd = pr.map((x) => m.sides[x]);
     const rows = Math.max(...sd.map((x) => x.parties.length), 1);
     const more = sd.some((x) => x.more);
     const tops = Math.max(...sd.map((x) => x.top.length));
     const prow = Math.max(...sd.map((x) => x.players.list.length));
     const pmore = sd.some((x) => x.players.more);
-    pairs.push({ sides: pr, rows, more, tops,
+    pairs.push({ sides: pr, rows, more, tops, colW: (IW - GAP * (per - 1)) / per,
       SIDE: 72 + rows * 50 + (more ? 22 : 0) + (tops ? 58 + tops * 46 : 0) + 12,
       PLAY: prow ? 70 + prow * 40 + (pmore ? 30 : 0) + 12 : 0 });
   }
@@ -396,7 +397,6 @@ export async function renderBrImage(m, theme = 'light') {
   y += CHART;
 
   // ---------- 各方势力与最贵损失 ----------
-  const colW = (IW - GAP) / 2;
   // 卡片标题：徽章 + 标题，右侧可选小字
   const head = (s, x, cy, title, right) => {
     badge(s, x, cy - 19, 24);
@@ -406,8 +406,9 @@ export async function renderBrImage(m, theme = 'light') {
     g.fillText(title, x + 34, cy);
     if (right) { g.textAlign = 'right'; g.fillStyle = C.muted; g.font = font(400, 12, family); right(); }
   };
-  const column = (s, x0, { SIDE, rows, more, tops }) => {
-    const st = m.sides[s], x = x0 + 24, w = colW - 48;
+  const column = (s, x0, { SIDE, rows, more, tops, colW }) => {
+    const st = m.sides[s], x = x0 + 24, w = colW - 48, narrow = colW < 500;
+    const textW = w - (narrow ? 130 : 190);
     card(x0, y, colW, SIDE);
     // 顶部一条淡淡的阵营色
     g.save();
@@ -427,14 +428,14 @@ export async function renderBrImage(m, theme = 'light') {
       g.textAlign = 'left';
       g.fillStyle = C.text;
       g.font = font(600, 15, family);
-      g.fillText(fit(g, p.name, w - 190), x + 50, cy + 17);
+      g.fillText(fit(g, p.name, textW), x + 50, cy + 17);
       g.fillStyle = C.muted;
       g.font = font(400, 12, family);
-      g.fillText(fit(g, `${p.pilots} 人 · 参与击杀 ${p.kills}`, w - 190), x + 50, cy + 34);
+      g.fillText(fit(g, narrow ? `${p.pilots} 人 · 击杀 ${p.kills}` : `${p.pilots} 人 · 参与击杀 ${p.kills}`, textW), x + 50, cy + 34);
       g.textAlign = 'right';
       g.fillStyle = p.lost ? C.loss : C.muted;
       g.font = font(p.lost ? 700 : 500, 14, family);
-      g.fillText(p.lost ? `-${p.lostText}` : '无损失', x + w, cy + 24);
+      g.fillText(fit(g, p.lost ? `-${p.lostText}` : '无损失', narrow ? 76 : 140), x + w, cy + 24);
       cy += 50;
     }
     if (st.more) {
@@ -458,10 +459,10 @@ export async function renderBrImage(m, theme = 'light') {
         g.textAlign = 'left';
         g.fillStyle = C.text;
         g.font = font(600, 14.5, family);
-        g.fillText(fit(g, k.ship, w - 200), x + 48, cy + 16);
+        g.fillText(fit(g, k.ship, w - (narrow ? 165 : 200)), x + 48, cy + 16);
         g.fillStyle = C.muted;
         g.font = font(400, 12, family);
-        g.fillText(fit(g, k.pilot, w - 200), x + 48, cy + 32);
+        g.fillText(fit(g, k.pilot, w - (narrow ? 165 : 200)), x + 48, cy + 32);
         g.textAlign = 'right';
         g.fillStyle = C.text;
         g.font = font(700, 15, family);
@@ -471,14 +472,15 @@ export async function renderBrImage(m, theme = 'light') {
     }
   };
   // ---------- 参战玩家：头像、所属、舰船、参与击杀 / 损失 ----------
-  const players = (s, x0, PLAY) => {
-    const st = m.sides[s].players, x = x0 + 20, w = colW - 40;
+  const players = (s, x0, { PLAY, colW }) => {
+    const st = m.sides[s].players, x = x0 + 20, w = colW - 40, narrow = colW < 500;
+    const LOSS = narrow ? 92 : 110;   // 损失栏宽
     card(x0, y, colW, PLAY);
     let cy = y + 40;
     head(s, x, cy, `${s} 方 · 参战玩家`, () => {
       g.fillText('损失', x + w - 8, cy);
-      g.fillText('击杀', x + w - 118, cy);
-      g.fillText('伤害', x + w - 166, cy);
+      g.fillText('击杀', x + w - 8 - LOSS, cy);
+      if (!narrow) g.fillText('伤害', x + w - 166, cy);
     });
     cy += 18;
     st.list.forEach((p, i) => {
@@ -489,19 +491,23 @@ export async function renderBrImage(m, theme = 'light') {
       g.textAlign = 'right';
       g.font = font(600, 13, family);
       g.fillStyle = p.losses ? C.loss : C.muted;
-      g.fillText(fit(g, p.losses ? (p.lostText ? `${p.losses} · -${p.lostText}` : String(p.losses)) : '—', 100), rx, cy + 25);
-      rx -= 110;   // 损失、击杀、伤害三栏固定宽度，各行的数字和舰船图标对齐
+      g.fillText(fit(g, p.losses ? (p.lostText ? `${p.losses} · -${p.lostText}` : String(p.losses)) : '—', LOSS - 10), rx, cy + 25);
+      rx -= LOSS;   // 损失、击杀、伤害三栏固定宽度，各行的数字和舰船图标对齐
       g.fillStyle = p.kills ? C.text : C.muted;
       g.font = font(700, 14, family);
       g.fillText(p.kills ? String(p.kills) : '—', rx, cy + 25);
       rx -= 48;
-      g.fillStyle = p.dmgText ? C.sub : C.muted;
-      g.font = font(600, 13, family);
-      g.fillText(p.dmgText || '—', rx, cy + 25);
-      rx -= 82;
-      for (let j = p.ships.length - 1; j >= 0; j--) {
+      // 三方并排时卡片窄：只留最常用的一艘舰船，不画伤害
+      if (!narrow) {
+        g.fillStyle = p.dmgText ? C.sub : C.muted;
+        g.font = font(600, 13, family);
+        g.fillText(p.dmgText || '—', rx, cy + 25);
+        rx -= 82;
+      } else rx += 8;
+      const ships = narrow ? p.ships.slice(0, 1) : p.ships;
+      for (let j = ships.length - 1; j >= 0; j--) {
         rx -= 24;
-        pic(images.get(p.ships[j]), rx, cy + 8, 24, 6);
+        pic(images.get(ships[j]), rx, cy + 8, 24, 6);
         rx -= 4;
       }
       g.textAlign = 'left';
@@ -524,11 +530,11 @@ export async function renderBrImage(m, theme = 'light') {
   // 每两方一组：势力卡片一行、参战玩家一行
   for (const q of pairs) {
     y += GAP;
-    q.sides.forEach((s, i) => column(s, PAD + i * (colW + GAP), q));
+    q.sides.forEach((s, i) => column(s, PAD + i * (q.colW + GAP), q));
     y += q.SIDE;
     if (q.PLAY) {
       y += GAP;
-      q.sides.forEach((s, i) => players(s, PAD + i * (colW + GAP), q.PLAY));
+      q.sides.forEach((s, i) => players(s, PAD + i * (q.colW + GAP), q));
       y += q.PLAY;
     }
   }
