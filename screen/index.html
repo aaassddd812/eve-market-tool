@@ -181,13 +181,13 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
 </header>
 
 <section class="kpis">
-  <div class="card kpi primary"><div class="label">近24小时访客</div><div class="value num" id="k_users">–</div><div class="foot">独立 IP · 已过滤爬虫</div></div>
+  <div class="card kpi primary"><div class="label">近24小时用户</div><div class="value num" id="k_users">–</div><div class="foot">真实用户 · 浏览器ID 去重</div></div>
   <div class="card kpi"><div class="label">近24小时请求</div><div class="value num" id="k_req">–</div><div class="foot" id="k_req_f">&nbsp;</div></div>
   <div class="card kpi"><div class="label">当前在线</div><div class="value num" id="k_online">–</div><div class="foot">近 5 分钟活跃 IP</div></div>
   <div class="card kpi"><div class="label">近24小时峰值在线</div><div class="value num" id="k_peak">–</div><div class="foot" id="k_peak_f">&nbsp;</div></div>
   <div class="card kpi"><div class="label">每秒请求</div><div class="value num" id="k_rps">–</div><div class="foot">近 60 秒均值</div></div>
   <div class="card kpi"><div class="label">新访客</div><div class="value num" id="k_new">–</div><div class="foot">近24小时首次出现</div></div>
-  <div class="card kpi"><div class="label">总用户</div><div class="value num" id="k_total">–</div><div class="foot">历史累计独立 IP</div></div>
+  <div class="card kpi"><div class="label">总用户</div><div class="value num" id="k_total">–</div><div class="foot">历史累计真实用户</div></div>
 </section>
 
 <section class="main">
@@ -387,8 +387,8 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
   }
   function render(d){
     last = d;
-    tween('k_users', d.today_users); tween('k_req', d.today_requests); tween('k_online', d.online_now);
-    tween('k_rps', d.req_per_sec, 2); tween('k_peak', d.peak_online); tween('k_new', d.new_count_24h || 0); tween('k_total', d.total_users || 0);
+    tween('k_users', d.true_users_24h); tween('k_req', d.today_requests); tween('k_online', d.online_now);
+    tween('k_rps', d.req_per_sec, 2); tween('k_peak', d.peak_online); tween('k_new', d.new_count_24h || 0); tween('k_total', d.total_true_users);
     $('k_req_f').textContent = d.today_users ? '人均 ' + Math.round(d.today_requests / d.today_users) + ' 次' : ' ';
     $('k_peak_f').textContent = d.peak_time ? '出现于 ' + (d.peak_day === 'yesterday' ? '昨天 ' : '今天 ') + d.peak_time : ' ';
     $('updated').textContent = '更新于 ' + d.updated.slice(11);
