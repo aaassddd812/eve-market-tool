@@ -3,7 +3,7 @@
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v37';
+import { initBr, renderBr } from './kb-br.js?v=v38';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 import { SERVER, IS_TQ, HUB, eveImage, kbSiteLink } from './server.js?v=s4';
@@ -885,7 +885,7 @@ function entityImageModel(e) {
       icon: avatar(memberKind, s.id, 64), round: memberKind === 'character', name: s.name || partyName(s.id),
       detail: `参与击杀 ${num(s.kills)} · 损失 ${num(s.losses)}`, value: isk(s.destroyed)
     })),
-    footer: `${location.host} · ${VALUE_LABEL}`,
+    footer: VALUE_LABEL,
     generated: '生成于 ' + fullIn(Math.floor(Date.now() / 1000), 'cn') + ' UTC+8'
   };
 }
@@ -894,7 +894,7 @@ let shareModules = null;
 function shareEntity() {
   const e = S.entity;
   if (!e?.stats) return;
-  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=7'), import('./share-image.js?v=6')]);
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=8'), import('./share-image.js?v=7')]);
   const model = entityImageModel(e);
   shareModules.then(([{ renderEntityImage }, { openShareModal }]) => openShareModal({
     title: `分享${KIND_ZH[e.kind]}图片`, app,

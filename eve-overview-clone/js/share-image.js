@@ -87,6 +87,27 @@ export async function loadImages(urls) {
   })));
 }
 
+// 图片页脚里的网址：本地 / 演示 / 桌面版都写正式站网址
+export const SITE = /^https?:$/.test(location.protocol) && !/^(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(location.hostname) ? location.host : 'eve.navexor.top';
+// 页脚左侧的站点胶囊：站名 + 网址（醒目），基线在 y；返回宽度
+export function siteMark(g, C, x, y, family) {
+  const name = 'EVE 市场总览';
+  g.font = font(700, 14, family);
+  const nw = g.measureText(name).width;
+  g.font = font(700, 14, family);
+  const uw = g.measureText(SITE).width;
+  const w = 16 + nw + 12 + uw + 16;
+  rr(g, x, y - 20, w, 30, 15);
+  g.fillStyle = C.panel;
+  g.fill();
+  g.textAlign = 'left';
+  g.fillStyle = C.text;
+  g.fillText(name, x + 16, y);
+  g.fillStyle = C.a;
+  g.fillText(SITE, x + 16 + nw + 12, y);
+  return w;
+}
+
 export function rr(g, x, y, w, h, r) {
   g.beginPath();
   g.roundRect(x, y, w, h, r);
@@ -198,7 +219,8 @@ export function painter(g, C) {
       P.text('EVE Market', W - 40, y + 20, { size: 18, weight: 800, align: 'right' });
     },
     footer(left, right, y) {
-      P.text(left, 40, y, { size: 13, color: C.muted });
+      const w = siteMark(g, C, 40, y, family);
+      P.text(left, 40 + w + 14, y, { size: 13, color: C.muted });
       P.text(right, W - 40, y, { size: 13, color: C.muted, align: 'right' });
     },
     // 分区标题：小色块 + 标题 + 右侧小字

@@ -963,14 +963,14 @@ function imageModel() {
       // 最贵的几次损失：在曲线上画圈
       marks: order.flatMap((s) => cd.cum[s].slice(1).map((p) => [p[0], p[1], p[2][4], s])).sort((a, b) => b[2] - a[2]).slice(0, 6)
     },
-    footer: location.host + ' · 击杀数据按吉他中间价估值',
+    footer: '击杀数据按吉他中间价估值',
     generated: '生成于 ' + fmtTime(Math.floor(Date.now() / 1000)) + ' ' + tzLabel()
   };
 }
 
 let imageModule = null;
 function shareImage() {
-  if (!imageModule) imageModule = Promise.all([import('./kb-br-image.js?v=v25'), import('./share-image.js?v=6')]);
+  if (!imageModule) imageModule = Promise.all([import('./kb-br-image.js?v=v26'), import('./share-image.js?v=7')]);
   const model = imageModel();
   const name = `战场统计-${ctx.kb.systemLabel(BR.data.systems[0]).name}-${fmtTime(BR.data.start).replace(/[: ]/g, '')}.png`;
   imageModule.then(([{ renderBrImage }, { openShareModal }]) => openShareModal({

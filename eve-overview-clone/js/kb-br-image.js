@@ -1,6 +1,6 @@
 // ===== 战场统计：生成分享图片 =====
 // 纯 Canvas 绘制（不依赖第三方库）；配色、图片加载与弹窗在 share-image.js。
-import { W, SCALE, THEMES, loadImages, rr, fit, font, alpha } from './share-image.js?v=6';
+import { W, SCALE, THEMES, loadImages, rr, fit, font, alpha, siteMark } from './share-image.js?v=7';
 
 const PAD = 40, IW = W - PAD * 2, GAP = 20;
 
@@ -541,10 +541,11 @@ export async function renderBrImage(m, theme = 'light') {
 
   // ---------- 页脚 ----------
   const fy = y + 44;
+  const sw = siteMark(g, C, PAD, fy, family);
   g.textAlign = 'left';
   g.fillStyle = C.muted;
   g.font = font(400, 13, family);
-  g.fillText(m.footer, PAD, fy);
+  g.fillText(m.footer, PAD + sw + 14, fy);
   g.textAlign = 'right';
   g.fillText(m.generated, W - PAD, fy);
   // 按实际内容高度裁剪

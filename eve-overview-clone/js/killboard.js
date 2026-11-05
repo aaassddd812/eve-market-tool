@@ -434,7 +434,7 @@ function killImageModel(k, val, near) {
     parties: attackerParties(k.attackers, total),
     ships: [...k.attackers.reduce((m, a) => (a.ship_type_id ? m.set(a.ship_type_id, (m.get(a.ship_type_id) || 0) + 1) : m), new Map())]
       .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([t, n]) => ({ icon: img(`types/${t}/icon`, 64), name: typeName(t), count: n })),
-    footer: `${location.host} · 击杀 #${k.killmail_id}`,
+    footer: `击杀 #${k.killmail_id}`,
     generated: '生成于 ' + fullIn(now, 'cn') + ' UTC+8'
   };
 }
@@ -458,7 +458,7 @@ let shareModules = null;
 function shareKill() {
   const args = shownArgs;
   if (!args) return;
-  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=7'), import('./share-image.js?v=6')]);
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=8'), import('./share-image.js?v=7')]);
   shareModules.then(async ([{ renderKillImage }, { openShareModal }]) => {
     const [val, near] = await Promise.all([killValuation(args.kill), nearestOf(args.kill)]);
     const model = killImageModel(args.kill, val, near);
