@@ -7247,6 +7247,8 @@ td .sov-auto-tag { margin-left: 4px; }
 .bz-need-presets .bz-chip { font-size: 0.75rem; }
 .bz-eq-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 12px 0; }
 .bz-eq-tools .input { flex: 1; min-width: 200px; max-width: 360px; }
+.bz-sk-tools { margin: 12px 0; }
+.bz-ana .sk-group { background: var(--bg-tertiary); border-color: transparent; }
 .bz-eq-group { border-top: 1px solid var(--border-primary); }
 .bz-eq-group summary { display: flex; align-items: center; gap: 8px; padding: 7px 0; cursor: pointer; font-size: 0.8125rem; }
 .bz-eq-group summary b { font-weight: 500; }

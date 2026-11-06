@@ -6,7 +6,10 @@
 // 可开舰船按船级列出；开船耗时：还差的技能（含前置）逐级列出，训练速度 = 主属性 + 副属性 / 2 技能点每分钟，
 // 卖家的属性不公开，按新角色默认属性与「最优属性重置」（主 27、副 21、其余 17）各算一次，不含植入体。
 // 可用装备：市场上需要技能的装备、无人机、舰载机、子系统、弹药、植入体，按物品组列出能用的（可显示还不能用的及所需时间）。
+// 全部技能：按游戏技能分组列出每个技能的等级与技能点（同个人中心 · 技能），可搜索、按已学 / 未满级 / 未学筛选。
 // 列表筛选：「能开某船 / 能用某装备 / 能开某船级任意一艘 / 某技能几级」，按角色技能等级判断（needHtml / meets / bindNeed）。
+
+import { loadSkillData } from './skills-page.js?v=v34';
 
 const AT = { rank: 275, pri: 180, sec: 181 };
 const ATTR_KEYS = { 164: 'cha', 165: 'int', 166: 'mem', 167: 'per', 168: 'wil' };
@@ -38,7 +41,7 @@ export function makeChar(data, r) {
   const have = new Map(), sp = new Map();
   // 藏宝阁只给技能等级：技能点按等级与技能倍数（rank）推算
   for (const [id, lv, p] of r.skills || []) { have.set(id, lv); sp.set(id, p || spForLevel(skillInfo(data, id)?.rank || 1, lv)); }
-  return { data, have, sp, total: r.total_sp || [...sp.values()].reduce((a, b) => a + b, 0), shipsCache: null };
+  return { data, have, sp, total: r.total_sp || [...sp.values()].reduce((a, b) => a + b, 0), shipsCache: null, estimated: (r.skills || []).some((x) => x[1] > 0 && !x[2]) };
 }
 
 function skillInfo(data, id) {
@@ -166,14 +169,15 @@ export function analysisHtml(c, r, author, tab, picker = '') {
   const p = profile(c);
   const nameOk = !author || !r.name || r.name.toLowerCase() === author.toLowerCase();
   const eq = equipment(c);
-  const tabs = [['role', '角色定位'], ['ships', `可开舰船 ${p.fly.length}`], ['equip', `可用装备 ${eq.ok}`], ['train', '开船耗时']];
+  const trained = [...c.have.values()].filter((l) => l > 0).length;
+  const tabs = [['role', '角色定位'], ['skills', `全部技能 ${trained}`], ['ships', `可开舰船 ${p.fly.length}`], ['equip', `可用装备 ${eq.ok}`], ['train', '开船耗时']];
   return `<div class="pi-card bz-ana">
     <div class="bz-ana-head"><h3>技能分析</h3>${picker}
       <div class="segmented" role="tablist">${tabs.map(([k, l]) => `<button type="button" data-bz-tab="${k}" class="${tab === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       <span class="toolbar-spacer"></span>
       <small class="text-muted">数据来自 ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.source || 'qsna.eu')}</a>` : esc(r.source)} · <span translate="no">${esc(r.name)}</span> · ${spM(c.total)} SP${r.updated_at ? ' · 更新于 ' + new Date(r.updated_at).toLocaleDateString('zh-CN') : ''}</small></div>
     ${nameOk ? '' : `<p class="bz-warn">技能展示的角色（<span translate="no">${esc(r.name)}</span>）与发帖人（<span translate="no">${esc(author)}</span>）不一致，请向卖家确认。</p>`}
-    <div class="bz-ana-body">${tab === 'ships' ? shipsHtml(c, p) : tab === 'train' ? trainHtml(c) : tab === 'equip' ? equipHtml(c) : roleHtml(c, p)}</div>
+    <div class="bz-ana-body">${tab === 'skills' ? skillsHtml(c) : tab === 'ships' ? shipsHtml(c, p) : tab === 'train' ? trainHtml(c) : tab === 'equip' ? equipHtml(c) : roleHtml(c, p)}</div>
   </div>`;
 }
 
@@ -301,8 +305,88 @@ export function equipListHtml(c) {
   }).join('');
   return shown ? html : '<p class="text-muted">没有符合的装备。</p>';
 }
+// ---------- 全部技能 ----------
+let SKD = null, skQ = '', skF = 'all', skOpen = false, anaRerender = null;
+const ATTR_ZH = { 164: '魅力', 165: '智力', 166: '记忆', 167: '感知', 168: '毅力' };
+const ATTR_DEF = { 164: 19, 165: 20, 166: 20, 167: 20, 168: 20 };
+function skillsHtml(c) {
+  if (!SKD) {
+    loadSkillData().then((d) => { SKD = d; anaRerender?.(); }).catch(() => {});
+    return '<p class="text-muted">正在加载技能列表…</p>';
+  }
+  const all = Object.values(SKD.skills).length;
+  const five = [...c.have.values()].filter((l) => l === 5).length;
+  const trained = [...c.have.values()].filter((l) => l > 0).length;
+  return `<div class="bz-train-sum">
+      <div><span>总技能点</span><b>${spM(c.total)}</b></div>
+      <div><span>已学技能</span><b>${fmtNum(trained)} / ${fmtNum(all)}</b></div>
+      <div><span>V 级技能</span><b>${fmtNum(five)}</b></div>
+    </div>
+    <div class="skl-toolbar bz-sk-tools">
+      <div class="search-box sk-search">
+        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="search" data-bz-sk placeholder="搜索技能或技能组（中英文）" value="${esc(skQ)}" autocomplete="off" spellcheck="false">
+      </div>
+      <div class="segmented" role="group">${[['all', '全部'], ['trained', '已学'], ['partial', '未满级'], ['untrained', '未学']].map(([k, l]) => `<button type="button" data-bz-skf="${k}" class="${skF === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <button type="button" class="link-btn" data-bz-sk-all="1">全部展开</button><button type="button" class="link-btn" data-bz-sk-all="0">全部收起</button>
+    </div>
+    <div id="bzSkList" class="sk-groups">${skillListHtml(c)}</div>
+    ${c.estimated ? '<p class="text-muted bz-note">这个来源只给技能等级，技能点按等级推算。</p>' : ''}`;
+}
+export function skillListHtml(c) {
+  if (!SKD) return '';
+  const q = skQ;
+  const match = (s, lv) => (skF !== 'trained' || lv) && (skF !== 'untrained' || !lv) && (skF !== 'partial' || (lv && lv < 5));
+  const html = Object.entries(SKD.groups).map(([gid, gname]) => {
+    const list = Object.entries(SKD.skills).filter(([, s]) => s[2] === Number(gid))
+      .map(([id, s]) => ({ id: Number(id), name: s[0], en: s[1], rank: s[3], pri: s[4], sec: s[5], desc: s[6], lv: c.have.get(Number(id)) || 0, sp: c.sp.get(Number(id)) || 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+    const hitGroup = q && (gname.toLowerCase().includes(q));
+    const shown = list.filter((s) => match(s, s.lv) && (!q || hitGroup || s.name.toLowerCase().includes(q) || (s.en || '').toLowerCase().includes(q)));
+    if (!shown.length) return '';
+    const sp = list.reduce((t, s) => t + s.sp, 0), levels = list.reduce((t, s) => t + s.lv, 0), got = list.filter((s) => s.lv).length;
+    const rows = shown.map((s) => {
+      const rate = (ATTR_DEF[s.pri] || 20) + (ATTR_DEF[s.sec] || 20) / 2;
+      const need = s.lv < 5 ? spForLevel(s.rank, s.lv + 1) - s.sp : 0;
+      const title = `${s.desc || ''}\n\n主属性：${ATTR_ZH[s.pri] || '—'} · 副属性：${ATTR_ZH[s.sec] || '—'} · 训练倍数 ×${s.rank}` +
+        (need > 0 ? `\n升到 ${ROMAN[s.lv + 1]} 级约 ${dur(need / rate)}（默认属性）` : '');
+      return `<div class="skl-row${s.lv ? '' : ' untrained'}" title="${esc(title)}">
+        <span class="sk-name">${esc(s.name)}</span>
+        <span class="skl-rank">×${s.rank}</span>
+        <span class="sk-boxes" aria-label="${s.lv} 级">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= s.lv ? 'on' : ''}"></i>`).join('')}</span>
+        <span class="sk-sp">${s.lv ? fmtNum(Math.round(s.sp)) : '未学'}<small>${s.lv < 5 ? ' / ' + fmtNum(spForLevel(s.rank, Math.max(1, s.lv + 1))) : ''}</small></span>
+      </div>`;
+    }).join('');
+    return `<details class="sk-group"${q || skF !== 'all' || skOpen ? ' open' : ''}>
+      <summary><span class="sk-g-name">${esc(gname)}</span><span class="sk-g-count">${got} / ${list.length}</span>
+        <i class="sk-g-bar"><em style="width:${(levels / (list.length * 5) * 100).toFixed(1)}%"></em></i><span class="sk-g-sp">${fmtNum(Math.round(sp))} 技能点</span></summary>
+      <div class="sk-rows">${rows}</div></details>`;
+  }).join('');
+  return html || '<p class="text-muted">没有符合条件的技能。</p>';
+}
+
 // 技能分析里的输入控件（开船耗时的舰船、装备搜索、显示不能用的）：getChar() 返回当前角色，rerender() 重画技能分析
 export function bindAna(root, getChar, rerender, warn) {
+  anaRerender = rerender;
+  const skList = () => { const c = getChar(), box = document.getElementById('bzSkList'); if (c && box) box.innerHTML = skillListHtml(c); };
+  let skT = 0;
+  root.addEventListener('input', (e) => {
+    if (!e.target.matches('[data-bz-sk]')) return;
+    skQ = e.target.value.trim().toLowerCase();
+    clearTimeout(skT);
+    skT = setTimeout(skList, 150);
+  });
+  root.addEventListener('click', (e) => {
+    const f = e.target.closest('[data-bz-skf]');
+    if (f) {
+      skF = f.dataset.bzSkf;
+      f.parentElement.querySelectorAll('[data-bz-skf]').forEach((b) => b.classList.toggle('active', b === f));
+      skList();
+      return;
+    }
+    const a = e.target.closest('[data-bz-sk-all]');
+    if (a) { skOpen = a.dataset.bzSkAll === '1'; document.querySelectorAll('#bzSkList .sk-group').forEach((d) => { d.open = skOpen; }); }
+  });
   // 舰船：从候选里点选（input 事件，名字完全一致）立即计算；回车 / 离开输入框（change）时名字不完整也找最接近的
   root.addEventListener('input', (e) => {
     if (!e.target.matches('[data-bz-ship]')) return;

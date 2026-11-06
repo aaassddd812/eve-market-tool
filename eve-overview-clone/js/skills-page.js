@@ -30,6 +30,9 @@ function load() {
   return loading;
 }
 
+// 角色交易的技能分析也用这份技能列表（bazaar-skills.js 的「全部技能」）
+export const loadSkillData = () => load().then(() => data);
+
 // 各等级累计所需技能点：250 × 倍数 × √32^(等级-1)
 export const spForLevel = (rank, level) => (level <= 0 ? 0 : Math.ceil(250 * rank * Math.pow(Math.sqrt(32), level - 1)));
 
