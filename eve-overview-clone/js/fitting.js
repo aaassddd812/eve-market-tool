@@ -263,6 +263,9 @@ function skills() {
 }
 
 function recompute() {
+  F.preview = null;
+  // 点过的空槽位装上了东西、换了船：不再作为放置目标
+  if (F.target && (!F.fit || F.fit.ship !== F.target.ship || F.fit.slots[F.target.slot]?.[F.target.index])) F.target = null;
   if (F.fit) {
     F.calc = FE.computeFit(F.data, F.fit, skills());
     F.stats = F.calc ? FE.fitStats(F.calc) : null;
@@ -295,10 +298,51 @@ function bindSidebar() {
     const filter = e.target.closest('[data-fit-only]');
     if (filter) { F.onlyFits = filter.checked; saveSettings(); renderBrowser(); return; }
     const clear = e.target.closest('[data-fit-slot-clear]');
-    if (clear) { F.slotFilter = null; renderBrowser(); return; }
+    if (clear) { F.slotFilter = null; F.target = null; renderFit(); renderBrowser(); return; }
     const item = e.target.closest('[data-fit-type]');
     if (item) useType(Number(item.dataset.fitType));
   });
+  // 悬停预览：点过某个槽位（或选中了一件已装的装备）时，鼠标停在同类装备上就把它淡淡地放进那一格，右侧属性显示装上后的变化
+  const browser = $('fitBrowser');
+  let hoverTimer = 0;
+  browser.addEventListener('pointerover', (e) => {
+    if (e.pointerType !== 'mouse') return;
+    const id = Number(e.target.closest('[data-fit-type]')?.dataset.fitType) || 0;
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => previewType(id), id ? 60 : 120);
+  });
+  browser.addEventListener('pointerleave', () => { clearTimeout(hoverTimer); previewType(0); });
+}
+
+// 预览的放置位置：点过的空槽位，或选中的已装装备（替换它）；要和这件装备的槽位类型一致
+function previewTarget(t) {
+  if (!F.fit || !t || t.category !== FE.CAT.module || !t.slot || t.slot === 'sub') return null;
+  const tg = F.target || F.selected;
+  return tg && tg.slot === t.slot ? tg : null;
+}
+
+function previewType(id) {
+  const t = id ? type(id) : null;
+  const tg = previewTarget(t);
+  if (!tg || F.fit.slots[tg.slot][tg.index]?.type === id || FE.cannotFit(F.data, type(F.fit.ship), t)) {
+    if (F.preview) { F.preview = null; renderFit(); renderStats(); }
+    return;
+  }
+  if (F.preview?.type === id && F.preview.slot === tg.slot && F.preview.index === tg.index) return;
+  const fit = structuredClone(F.fit);
+  const list = fit.slots[tg.slot];
+  const old = list[tg.index];
+  const mod = { type: id, state: defaultState(t), charge: null };
+  if (old?.charge && FE.chargeFits(t, type(old.charge))) mod.charge = old.charge;
+  else mod.charge = list.find((m) => m && m.type === id && m.charge)?.charge || null;
+  while (list.length < tg.index) list.push(null);
+  list[tg.index] = mod;
+  const calc = FE.computeFit(F.data, fit, skills());
+  const stats = calc && FE.fitStats(calc);
+  if (!stats) return;
+  F.preview = { type: id, slot: tg.slot, index: tg.index, replace: Boolean(old), stats };
+  renderFit();
+  renderStats();
 }
 
 // 每个分类各记各的搜索词：切走时记下，切回来时填回去
@@ -354,7 +398,7 @@ function renderBrowser() {
   if (F.tab === 'module' || F.tab === 'charge' || F.tab === 'drone') {
     head.push(`<label class="fit-only"><input type="checkbox" data-fit-only${F.onlyFits ? ' checked' : ''}>只显示${F.tab === 'charge' ? '已装配武器可用的弹药' : '能装到当前舰船的'}</label>`);
   }
-  if (F.tab === 'module' && F.slotFilter) head.push(`<div class="fit-slot-filter">只看${FE.SLOT_NAME[F.slotFilter]} <button class="link-btn" data-fit-slot-clear>显示全部</button></div>`);
+  if (F.tab === 'module' && F.slotFilter) head.push(`<div class="fit-slot-filter">只看${FE.SLOT_NAME[F.slotFilter]}${F.target?.slot === F.slotFilter ? `<small>装到第 ${F.target.index + 1} 格 · 鼠标停在装备上可预览属性变化</small>` : ''} <button class="link-btn" data-fit-slot-clear>显示全部</button></div>`);
   if (F.query) {
     const q = F.query;
     const hits = list.filter((t) => t.name.toLowerCase().includes(q) || t.en.toLowerCase().includes(q))
@@ -859,6 +903,8 @@ function addModule(t) {
   const why = FE.cannotFit(F.data, type(F.fit.ship), t);
   if (why) { app.showToast(`${t.name}：${why}`, 'error'); return; }
   const slot = t.slot;
+  // 点过某个空槽位：装到那一格
+  if (F.target && F.target.slot === slot && slot !== 'sub') { putModule(t, slot, F.target.index); return; }
   const list = F.fit.slots[slot];
   const mod = { type: t.id, state: defaultState(t), charge: null };
   if (slot === 'sub') {
@@ -1185,7 +1231,10 @@ function problemsHtml(list) {
 }
 
 function moduleRow(slot, index, m, extra) {
-  const empty = `<div class="fit-slot is-empty${extra ? ' is-extra' : ''}" data-fit-empty="${slot}" data-fit-idx="${index}"><span class="fit-slot-icon"></span><span>${extra ? '超出槽位' : '空' + FE.SLOT_NAME[slot]}</span></div>`;
+  const pv = F.preview && F.preview.slot === slot && F.preview.index === index ? type(F.preview.type) : null;
+  if (pv) return `<div class="fit-slot is-ghost" title="预览：点击左侧装备装上"><img src="${IMG(pv.id)}" alt="" width="28" height="28"><span class="fit-slot-name"><span class="fit-slot-title">${app.esc(pv.name)}</span><small>${F.preview.replace ? '替换 ' + app.esc(type(m.type).name) : '预览'}</small></span></div>`;
+  const target = F.target && F.target.slot === slot && F.target.index === index;
+  const empty = `<div class="fit-slot is-empty${extra ? ' is-extra' : ''}${target ? ' is-target' : ''}" data-fit-empty="${slot}" data-fit-idx="${index}"><span class="fit-slot-icon"></span><span>${extra ? '超出槽位' : target ? '在左侧选择要装进这一格的装备' : '空' + FE.SLOT_NAME[slot]}</span></div>`;
   if (!m) return empty;
   const t = type(m.type);
   const item = F.calc.modules.find((x) => x.slot === slot && x.index === index);
@@ -1349,25 +1398,70 @@ function implantsHtml(bound) {
 const SENSOR_ICON = { 雷达: 'radar', 光雷达: 'ladar', 磁力: 'magnet', 引力: 'gravi' };
 const ico = (k, label) => `<span class="fit-ico" title="${label}"><img src="assets/attr/${k}.png?v=1" alt="${label}" width="18" height="18" loading="lazy"></span>`;
 // 图标 + 名称 / 数值的两列格子（名称小字在上，悬停也显示）；cells：[图标, 名称, 数值, 数值的 class, 占满一行]，假值跳过
-const ivs = (cells) => `<div class="fit-ivs">${cells.filter(Boolean).map(([k, label, val, cls, wide]) => `<div class="fit-iv${wide ? ' is-wide' : ''}" title="${label}">${ico(k, label)}<span class="fit-iv-txt"><small>${label}</small><b class="${cls || ''}">${val}</b></span></div>`).join('')}</div>`;
+const ivs = (cells) => `<div class="fit-ivs">${cells.filter(Boolean).map(([k, label, val, cls, wide]) => `<div class="fit-iv${wide ? ' is-wide' : ''}" title="${label}" data-k="${label}">${ico(k, label)}<span class="fit-iv-txt"><small>${label}</small><b class="${cls || ''}">${val}</b></span></div>`).join('')}</div>`;
 function renderStats() {
   const box = $('fitStats');
   if (!box) return;
   if (!F.fit || !F.stats) { box.innerHTML = ''; box.hidden = true; return; }
   box.hidden = false;
-  const s = F.stats;
+  refreshFitValue();
+  box.innerHTML = statsHtml(F.preview?.stats || F.stats);
+  if (F.preview) markStatDiff(box, statsHtml(F.stats));
+}
+
+// 预览时与当前装配逐项比较：变好标绿、变差标红，悬停看原来的数值
+const LOWER_BETTER = new Set(['CPU', '能量栅格', '校准值', '起跳时间', '信号半径', '质量', '充能时间', '消耗 / 峰值回充', '残渣']);
+const NO_DIFF = new Set(['炮台安装座', '发射器安装座']);
+function statNum(text) {
+  let m;
+  if ((m = /([\d.]+)\s*小时\s*(\d+)\s*分/.exec(text))) return m[1] * 3600 + m[2] * 60;
+  if ((m = /(\d+)\s*分\s*(\d+)\s*秒/.exec(text))) return m[1] * 60 + Number(m[2]);
+  if ((m = /([\d.]+)\s*km/.exec(text))) return m[1] * 1000;
+  m = /-?[\d,]*\.?\d+/.exec(text);
+  return m ? Number(m[0].replace(/,/g, '')) : NaN;
+}
+function markStatDiff(box, baseHtml) {
+  const base = document.createElement('div');
+  base.innerHTML = baseHtml;
+  const keyed = (root) => {
+    const map = new Map();
+    root.querySelectorAll('[data-k]').forEach((el) => map.set('k:' + el.dataset.k, el.querySelector('b')));
+    root.querySelectorAll('.fit-stat-block h4').forEach((h) => { const b = h.querySelector('b'); if (b) map.set('h:' + h.firstChild.textContent.trim(), b); });
+    root.querySelectorAll('.fit-resist tbody tr').forEach((tr, r) => tr.querySelectorAll('td').forEach((td, c) => map.set(`r:${r}:${c}`, td)));
+    return map;
+  };
+  const before = keyed(base);
+  for (const [key, el] of keyed(box)) {
+    const old = before.get(key);
+    if (!el || !old || old.textContent === el.textContent) continue;
+    const label = key.slice(2);
+    if (NO_DIFF.has(label)) continue;
+    let better;
+    if (key === 'h:电容') {
+      const a = old.textContent.includes('稳定'), b = el.textContent.includes('稳定');
+      better = a !== b ? b : statNum(el.textContent) > statNum(old.textContent);
+    } else {
+      const a = statNum(old.textContent), b = statNum(el.textContent);
+      if (!Number.isFinite(a) || !Number.isFinite(b) || a === b) continue;
+      better = LOWER_BETTER.has(label) ? b < a : b > a;
+    }
+    el.classList.add(better ? 'fit-diff-up' : 'fit-diff-down');
+    el.title = '装上前：' + old.textContent.trim();
+  }
+}
+
+function statsHtml(s) {
   const r = s.resources;
   const bar = (label, v, unit = '', digits = 1) => {
     const pct = v.total ? Math.min(100, v.used / v.total * 100) : (v.used ? 100 : 0);
     const over = v.used > v.total + 1e-6;
-    return `<div class="fit-bar${over ? ' is-over' : ''}"><div class="fit-bar-head"><span>${ico(label[0], label[1])}${label[1]}</span><b>${fmt(v.used, digits)} / ${fmt(v.total, digits)}${unit}</b></div><i style="width:${pct.toFixed(1)}%"></i></div>`;
+    return `<div class="fit-bar${over ? ' is-over' : ''}" data-k="${label[1]}"><div class="fit-bar-head"><span>${ico(label[0], label[1])}${label[1]}</span><b>${fmt(v.used, digits)} / ${fmt(v.total, digits)}${unit}</b></div><i style="width:${pct.toFixed(1)}%"></i></div>`;
   };
   const resRow = (label, values) => `<tr><th>${label}</th>${values.map((v) => `<td style="--r:${(v * 100).toFixed(0)}%">${(v * 100).toFixed(1)}%</td>`).join('')}</tr>`;
   const d = s.defense;
   const cap = s.capacitor;
-  refreshFitValue();
   const v = F.val;
-  box.innerHTML = `
+  return `
     <section class="fit-stat-block">
       <h4>装配资源</h4>
       ${bar(['cpu', 'CPU'], r.cpu, ' tf')}
@@ -1574,6 +1668,10 @@ async function onMainClick(e) {
   }
   if ((x = el('[data-fit-empty]'))) {
     F.slotFilter = x.dataset.fitEmpty;
+    const idx = Number(x.dataset.fitIdx);
+    const same = F.target && F.target.slot === F.slotFilter && F.target.index === idx;
+    F.target = x.classList.contains('is-extra') || same ? null : { slot: F.slotFilter, index: idx, ship: F.fit.ship };
+    renderFit();
     setTab('module');
     if (MOBILE()) app.openDrawer?.();
     return;
