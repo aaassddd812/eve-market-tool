@@ -181,7 +181,7 @@ function autoTank(shipType) {
 // ---------- 打分 ----------
 function skillsArg() { return SKILLS || (A.skills === 'esi' && ctx.esiLevels() ? ctx.esiLevels() : 'max'); }
 // 针对对手配装时：BASE 为要配的船（不是装配页当前的装配），ENEMY 为对方阵容，SKILLS 为这一方的技能
-let BASE = null, ENEMY = null, SKILLS = null;
+let BASE = null, ENEMY = null, SKILLS = null, FIXED = null;   // FIXED：AI 助手指定的必装装备（类型 ID）
 const curFit = () => BASE || ctx.getFit();
 const ln = (x) => Math.log(Math.max(0, x) + 1);
 let ROLES = new Set();   // 当前搜索生效的定位
@@ -624,6 +624,34 @@ async function swapPass(fit, cands, cur, progress) {
   return cur;
 }
 
+// 必装装备（AI 助手指定）装上就超出 CPU / 电网 / 校准值时：逐件放入让超出量减少最多的低槽 / 改装件，
+// 直到装得下或没有改善，之后的搜索才有可行的起点（否则每一步都「装不下」，什么都不会放）
+async function makeRoom(fit, cands, progress) {
+  const over = (r) => {
+    const x = r.st.resources, o = (k) => Math.max(0, x[k].used - x[k].total) / Math.max(1, x[k].total);
+    return o('cpu') + o('power') + o('calibration');
+  };
+  let cur = evaluate(fit);
+  const pool = { low: [...new Set([...cands.fitting.low, ...cands.bySlot.low])], rig: [...new Set([...cands.fitting.rig, ...cands.bySlot.rig])] };
+  while (cur && over(cur) > 0) {
+    let best = null;
+    for (const slot of ['low', 'rig']) {
+      const idx = fit.slots[slot].findIndex((m) => !m);
+      if (idx < 0) continue;
+      for (const t of pool[slot]) {
+        fit.slots[slot][idx] = mod(t);
+        const r = evaluate(fit);
+        await tick(progress);
+        if (r && (!best || over(r) < over(best.r) - 1e-9 || (over(r) < over(best.r) + 1e-9 && r.score > best.r.score))) best = { slot, idx, t, r };
+      }
+      fit.slots[slot][idx] = null;
+    }
+    if (!best || over(best.r) >= over(cur) - 1e-9) break;
+    fit.slots[best.slot][best.idx] = mod(best.t);
+    cur = best.r;
+  }
+}
+
 // 有空槽装不下时：先放一个 CPU / 电网辅助装备再继续填，取更好的；低槽 / 改装件已满时试着换掉其中一件
 async function withFitting(fit, cands, cur, progress) {
   let best = { fit, r: cur };
@@ -725,6 +753,12 @@ async function search(onProgress) {
   const slots = probe.st.slots;
   if (slots.sub && !base.slots.sub.length) throw new Error('战略巡洋舰请先装好子系统');
   for (const s of ['high', 'mid', 'low', 'rig']) base.slots[s] = Array(slots[s] || 0).fill(null);
+  // 必装装备先放好，之后不替换
+  for (const id of FIXED || []) {
+    const t = data.types.get(id), list = t?.slot && base.slots[t.slot];
+    const i = list ? list.findIndex((m) => !m) : -1;
+    if (i >= 0) list[i] = { ...mod(t), fixed: true };
+  }
 
   ensureUtils(shipType);
   const U = new Set(A.utils);
@@ -738,6 +772,7 @@ async function search(onProgress) {
   fuelCache.clear();
   evals = 0;
   const progress = () => onProgress(evals);
+  if (FIXED?.length) await makeRoom(base, cands, progress);
   const R = cands.role;
   const placed = [];   // 已预留的定位装备说明
   const count = (n, label) => { if (n) placed.push(label); };
@@ -920,6 +955,32 @@ export async function counterFit({ fit, enemy, skills = 'max', onProgress }) {
   }
 }
 export function cancelCounterFit() { S.cancel = true; }
+
+// ---------- AI 助手 ----------
+// 按要求自动配装（ai.js 的 auto_fit 工具）：fixed 为必装装备（类型 ID），其余参数同智能装配弹窗；
+// 不改装配页「智能装配」里保存的设置。返回 search() 的结果（results 按得分从高到低，r.met 表示满足全部最低要求）
+export async function aiAutoFit({ ship, fixed = [], focus = ['dps'], utils = null, weapon = 'auto', tank = 'auto', meta = 't2', budget = 0,
+  minDps = 0, minEhp = 0, minSpeed = 0, capStable = false, skills = 'max', onProgress } = {}) {
+  if (S.running) throw new Error('智能装配正在计算，请稍后');
+  const shipType = ctx.data.types.get(ship);
+  if (!shipType) throw new Error('无法识别舰船');
+  const saved = { ...A };
+  S.running = true;
+  S.cancel = false;
+  BASE = { id: null, name: '', ship, slots: { high: [], mid: [], low: [], rig: [], sub: [] }, drones: [], implants: [] };
+  SKILLS = skills; FIXED = fixed;
+  Object.assign(A, { focus, utils: utils || defaultUtils(shipType), utilsShip: ship, tank, resist: 'auto', selfRep: 'auto', weapon, meta, budget,
+    minDps, minEhp, minSpeed, capStable, role: 'auto', target: 'any', range: 'any', implants: false });
+  try {
+    const out = await search((n) => onProgress?.(n));
+    for (const x of out.results) for (const s of ctx.FE.SLOTS) for (const m of x.fit.slots[s]) if (m) delete m.fixed;
+    return out;
+  } finally {
+    Object.assign(A, saved);
+    BASE = SKILLS = FIXED = null;
+    S.running = false;
+  }
+}
 
 // ---------- 植入体 ----------
 // 候选：1–10 号槽、市场有售、价格不超过植入体预算（按 ESI 角色时还要求技能够）的植入体。

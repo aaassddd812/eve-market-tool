@@ -45,8 +45,8 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=192"></script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v287">
+  <script src="js/i18n.js?v=199"></script>
+  <link rel="stylesheet" href="css/modern-style.css?v=v292">
   <!-- EVE-REALIP-SNIPPET：WebRTC 探测真实公网 IP（挂代理时 STUN 走代理外线路泄露），上报给访问大屏做统计，每次会话只报一次 -->
   <script>
     (function () {
@@ -164,6 +164,10 @@
         <button class="nav-btn" data-view="plaza" role="tab" title="广场：军团招新、组队、集市（挂自己的公开合同）、其他" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg>
           <span>广场</span>
+        </button>
+        <button class="nav-btn" data-view="ai" role="tab" title="AI 助手：配船、查会战和击杀、看物价走势、读取角色数据" aria-selected="false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3C12.8 7.6 14.4 9.2 19 10C14.4 10.8 12.8 12.4 12 17C11.2 12.4 9.6 10.8 5 10C9.6 9.2 11.2 7.6 12 3Z"/><path d="M18.5 15C18.8 16.5 19.3 17 20.8 17.3C19.3 17.6 18.8 18.1 18.5 19.6C18.2 18.1 17.7 17.6 16.2 17.3C17.7 17 18.2 16.5 18.5 15Z"/></svg>
+          <span>AI 助手</span>
         </button>
         <button class="nav-btn" data-view="guide" role="tab" title="教程" aria-selected="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7z"/></svg>
@@ -805,6 +809,10 @@
         </div>
       </div>
 
+      <div class="view-container" id="aiView" hidden>
+        <div class="ai-shell" id="aiMain"></div>
+      </div>
+
       <div class="view-container" id="plazaView" hidden>
         <div class="kb-scroll">
           <div class="kb-wrap" id="plazaMain"></div>
@@ -1229,7 +1237,7 @@
   </div>
 
   <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v407" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v425" type="module" data-cfasync="false"></script>
   <script>
     // 兜底：主脚本 25 秒还没启动（网络 / CDN / 浏览器太旧），给出刷新和联系方式
     setTimeout(function () {

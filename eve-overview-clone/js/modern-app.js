@@ -386,7 +386,7 @@ function initNavigation() {
 // 哪些留在外面、什么顺序可在「个性化设置 → 菜单布局」里拖动调整，记在本机（MENU_KEY）。
 // 下拉悬停即展开（离开稍等再收），点按钮也能开关，Esc / 点外面关闭。面板用 fixed 定位，不被导航栏的横向滚动裁掉。
 // 按钮是原来的元素搬进去的，点击、高亮逻辑不变；手机底栏仍从 .header-nav 里读按钮。
-const NAV_MAIN = ['market', 'arb', 'map', 'kb', 'fit', 'appraisal', 'plaza', 'profile'];
+const NAV_MAIN = ['market', 'arb', 'map', 'kb', 'fit', 'appraisal', 'plaza', 'ai', 'profile'];
 const NAV_MORE = [['交易', ['contracts', 'courier', 'lp', 'abyss', 'bazaar']], ['生产', ['industry', 'pi']], ['宇宙与战斗', ['sim', 'war', 'sov', 'wh']], ['其他', ['guide']]];
 // 可调整的小按钮：id → 名称（菜单里显示）；api 是 .api-link
 const ACT_ITEMS = [['cartBtn', '购物车'], ['killAlertBtn', '预警'], ['contactBtn', '定制'], ['desktopDlBtn', '下载'], ['langToggle', '语言'], ['themeToggle', '切换主题'], ['prefsBtn', '个性化设置'], ['shortcutHelpBtn', '快捷键'], ['api', '开放 API 文档']];
@@ -577,8 +577,8 @@ function initMenuLayoutEditor() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', bazaar: '#bazaar', wh: '#wh', plaza: '#plaza', guide: '#guide' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', bazaar: 'bazaarView', wh: 'whView', plaza: 'plazaView', guide: 'guideView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', bazaar: '#bazaar', wh: '#wh', plaza: '#plaza', guide: '#guide', ai: '#ai' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', bazaar: 'bazaarView', wh: 'whView', plaza: 'plazaView', guide: 'guideView', ai: 'aiView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -660,6 +660,7 @@ function switchView(view) {
   if (view === 'wh') openWormhole();
   if (view === 'plaza') openPlaza();
   if (view === 'guide') openGuides();
+  if (view === 'ai') openAi();
 }
 
 // 按需加载的页面：模块还没下载完时先按页面布局画骨架（模块第一次显示时整块替换）
@@ -678,7 +679,7 @@ function showPageSkeleton(view) {
 // 主权规划：首次进入时加载
 let sovLoading = null;
 function loadSovModule() {
-  if (!sovLoading) sovLoading = import('./sov.js?v=v7').then((m) => {
+  if (!sovLoading) sovLoading = import('./sov.js?v=v8').then((m) => {
     m.initSov({
       esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
       getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -750,6 +751,46 @@ async function openPlaza() {
     await m.showPlaza(location.hash.startsWith('#plaza') ? location.hash : '#plaza');
   } catch (error) {
     showToast('广场加载失败：' + error.message, 'error', 4000);
+  }
+}
+
+// AI 助手：首次进入时加载；工具在浏览器里执行（装配引擎、击杀记录接口、ESI）
+let aiLoading = null;
+function loadAiModule() {
+  if (!aiLoading) aiLoading = import('./ai.js?v=v16').then((m) => {
+    m.initAi({
+      esc, formatISK, formatNumber, showToast, copyText, store, server: SERVER, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
+      hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+      tokenInfo: () => state.esiToken || readEsiToken(),
+      // 浏览器里绑定的全部角色（当前角色排第一）；按角色读 ESI
+      accounts: () => allChars.list(),
+      accountFetch: (id, path) => (id === myCharacterId() ? esiAuthFetch(path) : allChars.fetch(id, path)),
+      accountPaged: (id, path, max) => esiAuthFetchPaged(path, max, id === myCharacterId() ? null : id),
+      // 市场目录里的全部物品（装配数据里没有的物品按中文名搜索）
+      catalogTypes: () => {
+        if (!state.aiTypeList && state.catalog) state.aiTypeList = [...state.typeIndex.values()].map(({ type }) => ({ id: type.id, name: type.name }));
+        return state.aiTypeList || [];
+      },
+      hubPrices: (ids) => getJitaPrices(ids),
+      globalRegion: (id) => (GLOBAL_MARKET_TYPES.has(Number(id)) ? GLOBAL_MARKET_REGION : null),   // 伊甸币等全服统一市场
+      avgPrices: getMarketPriceMap,
+      fitting: loadFittingModule,
+      sov: loadSovModule,
+      openFit: async (c) => {
+        try { (await loadFittingModule()).queueCompactFit(c); } catch (error) { showToast('模拟装配加载失败：' + error.message, 'error', 4000); return; }
+        history.pushState(null, '', location.pathname + '#fit');
+        switchView('fit');
+      }
+    });
+    return m;
+  }).catch((error) => { aiLoading = null; throw error; });
+  return aiLoading;
+}
+async function openAi() {
+  try {
+    (await loadAiModule()).showAi();
+  } catch (error) {
+    showToast('AI 助手加载失败：' + error.message, 'error', 4000);
   }
 }
 
@@ -1076,7 +1117,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v115').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v120').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -3233,6 +3274,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#wh')) { if (state.currentView !== 'wh') switchView('wh'); else openWormhole(); return; }
     if (location.hash.startsWith('#plaza')) { if (state.currentView !== 'plaza') switchView('plaza'); else openPlaza(); return; }
     if (location.hash.startsWith('#guide')) { if (state.currentView !== 'guide') switchView('guide'); else openGuides(); return; }
+    if (location.hash.startsWith('#ai')) { if (state.currentView !== 'ai') switchView('ai'); return; }
     if (location.hash.startsWith('#arb')) { openArb({ updateHash: false }); return; }
     if (location.hash.startsWith('#watch')) { openWatch({ updateHash: false }); return; }
     const typeId = typeFromHash();
@@ -3323,7 +3365,7 @@ function toggleContact(show = $('contactModal').hidden) {
 // ===== 桌面版 =====
 // 左侧菜单分组（按 data-view，倒卖排行用 arb）；没列出的入口（教程、个人中心）放在最下面不分组
 const RAIL_GROUPS = [
-  ['common', '常用', ['market', 'appraisal', 'fit', 'map', 'kb', 'plaza']],
+  ['common', '常用', ['market', 'appraisal', 'fit', 'map', 'kb', 'plaza', 'ai']],
   ['trade', '交易', ['arb', 'contracts', 'courier', 'lp', 'abyss', 'bazaar']],
   ['make', '生产', ['industry', 'pi']],
   ['space', '宇宙与战斗', ['sim', 'war', 'sov', 'wh']]
@@ -4161,8 +4203,12 @@ async function esiAuthFetchPaged(path, maxPages = 20, id = null) {
 // 只有 location_type 为 item 时 location_id 才可能是另一件物品；国服物品 ID 会和 NPC 空间站 / 星系 ID 撞号，
 // 不判断类型时空间站里的东西会被当成装在某艘别处的船里
 const inItem = (a) => a.location_type === 'item' || a.location_type === 'other';
+// 在太空中驾驶的舰船本身不在资产列表里，只有船上的装配 / 货物指向它的物品 ID：按装配槽位 / 货柜这类位置标记认出来，不当成玩家建筑
+const SHIP_FLAG = /^(HiSlot|MedSlot|LoSlot|RigSlot|SubSystemSlot|Cargo|DroneBay|FighterBay|FighterTube|ShipHangar|FleetHangar|Specialized|FrigateEscapeBay|QuafeBay|BoosterBay|InfrastructureHangar|MobileDepotHold|StructureDeedBay)/;
+const spaceShips = new Set();
 function buildAssetLocations(assets) {
   const byItem = new Map(assets.map((a) => [a.item_id, a]));
+  for (const a of assets) if (inItem(a) && a.location_id >= 1e12 && !byItem.has(a.location_id) && SHIP_FLAG.test(a.location_flag || '')) spaceShips.add(Number(a.location_id));
   for (const asset of assets) {
     let cur = asset;
     let depth = 0;
@@ -4183,9 +4229,21 @@ function locationName(id) {
   const official = officialName(id);
   if (official) return official;
   if (id === ASSET_SAFETY_ID) return '资产安全';
+  const ship = state.characterData?.ship;
+  if (ship?.ship_item_id && Number(ship.ship_item_id) === Number(id)) {
+    const sys = state.characterData.location?.solar_system_id;
+    return `太空中 · ${ship.ship_name || state.typeNames?.get(ship.ship_type_id) || '当前舰船'}${sys ? '（' + (officialName(sys) || sys) + '）' : ''}`;
+  }
+  if (spaceShips.has(Number(id))) return '太空中的舰船（当前驾驶）';
   const known = structureNameOf(id) || state.esiNames?.get(Number(id));
   if (known) return known;
   return id >= 1e12 ? '玩家建筑（名称不公开）' : '位置 #' + id;
+}
+// 位置是太空中驾驶的舰船时，名字前放这艘船的图标（船型来自 /characters/{id}/ship/；没有该授权时认得出是船但不知道船型，不放图标）
+function locationIcon(id) {
+  const ship = state.characterData?.ship;
+  if (!ship?.ship_type_id || Number(ship.ship_item_id) !== Number(id)) return '';
+  return `<img class="loc-ship-icon" src="${IMAGE_BASE}/${ship.ship_type_id}/icon?size=32" alt="" width="20" height="20" loading="lazy">`;
 }
 
 // ===== 玩家建筑名称 =====
@@ -4251,7 +4309,7 @@ function loadSharedStructures() {
 // 解析一批建筑名称；未绑定 ESI 时只用缓存与共享数据。返回是否有新名称（调用方据此重绘）
 async function resolveStructureNames(ids) {
   const map = structureNameMap();
-  let list = [...new Set(ids.map(Number))].filter((id) => id >= 1e12 && !map.has(id));
+  let list = [...new Set(ids.map(Number))].filter((id) => id >= 1e12 && !map.has(id) && !spaceShips.has(id));   // 太空中的舰船不是建筑，不查
   if (!list.length) return false;
   await loadSharedStructures();
   list = list.filter((id) => !map.has(id));
@@ -5017,7 +5075,7 @@ function renderAssetsOverview(box, groups, { region, tradable }) {
   const rows = groups.map((g) => {
     const share = assetSell ? (g.sell / assetSell) * 100 : 0;
     return `<tr class="station-summary-row" data-open-station="${g.id}" tabindex="0" title="查看该空间站的资产">
-        <td><span class="station-link">${esc(g.name)}</span></td>
+        <td>${locationIcon(g.id)}<span class="station-link">${esc(g.name)}</span></td>
         <td>${formatNumber(g.assets.length)}</td>
         <td class="down">${g.sell ? formatISK(g.sell) : '—'}</td>
         <td class="up">${g.buy ? formatISK(g.buy) : '—'}</td>
@@ -5229,7 +5287,7 @@ function renderStationAssets(box, station, groups, { region }) {
     assetToolbar(region,
       '<button class="btn btn-ghost" data-back-assets title="返回资产总估值">' +
         '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg><span>资产估值</span></button>' +
-      '<h3 class="asset-view-title" title="' + esc(station.name) + '">' + esc(station.name) + '</h3>') +
+      '<h3 class="asset-view-title" title="' + esc(station.name) + '">' + locationIcon(station.id) + esc(station.name) + '</h3>') +
     '<div class="valuation-grid station-grid">' +
       valuationCard('本站估值 · 最低卖价', formatISK(station.sell) + ' ISK', sellPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有卖单' + netLine('挂卖单税后', station.sell * TF.netSell()), 'is-sell') +
       valuationCard('本站估值 · 最高收价', formatISK(station.buy) + ' ISK', buyPriced + '/' + nonBpc.length + ' 项在 ' + esc(region.hub.name) + ' 有收单' + netLine('卖给收单税后', station.buy * TF.netBuy()), 'is-buy') +
@@ -5547,7 +5605,7 @@ function renderProfileStationNav(stations) {
   const hasPrices = stations.some((s) => s.sell > 0);
   nav.innerHTML = stations.map((s) =>
     `<button class="profile-nav-station" data-profile="assets" data-station-id="${s.id}" title="${esc(s.name)}">
-        <span class="station-name">${esc(s.name)}</span>
+        <span class="station-name">${locationIcon(s.id)}${esc(s.name)}</span>
         <span class="station-meta">${s.assets.length} 项${hasPrices && s.sell ? ' · ' + formatISK(s.sell) : ''}</span>
       </button>`).join('');
   syncProfileNavActive();
@@ -6568,6 +6626,7 @@ function init() {
   if (location.hash.startsWith('#wh')) switchView('wh'); // 虫洞
   if (location.hash.startsWith('#plaza')) switchView('plaza'); // 广场
   if (location.hash.startsWith('#guide')) switchView('guide'); // 教程
+  if (location.hash.startsWith('#ai')) switchView('ai'); // AI 助手
   renderFavorites();
   bindPagePreload();
   loadServerStatus();

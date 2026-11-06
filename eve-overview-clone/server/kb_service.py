@@ -59,6 +59,7 @@
                                               设了环境变量 EVE_FEEDBACK_WECOM（企业微信机器人 key 或完整地址）时同时推送给站长
   POST /api/kb/feedback/{mine,follow}         提交者查看自己的工单（状态、回复）/ 追加说明：凭 id + 凭证
   POST /api/kb/feedback/admin/{check,list,reply,status}  站长查看全部工单、回复、改状态：仅 EVE_FEEDBACK_ADMIN_IPS 里的 IP
+  POST /api/kb/ai/{info,chat}                 AI 助手：本站模型（环境变量 EVE_AI_*）或玩家自己的接口，工具在浏览器里执行
   击杀相关接口（status / feed / live / br / battles / top / summary / leaderboard / search / entity / kill / shipfits）可带 server=serenity|infinity 查国服
 
 用法
@@ -3125,8 +3126,9 @@ def llm_conf(c):
     return {"proto": proto, "api": api, "key": key, "model": model[:200]}
 
 
-def llm_http(conf, method, path, body=None):
-    headers = {"User-Agent": UA, "Accept": "application/json"}
+def llm_open(conf, method, path, body=None, timeout=LLM_TIMEOUT, stream=False):
+    """向上游发请求，返回响应对象（调用方负责关闭）；出错时抛 LlmError"""
+    headers = {"User-Agent": UA, "Accept": "text/event-stream" if stream else "application/json"}
     if conf["proto"] == "anthropic":
         headers.update({"x-api-key": conf["key"], "anthropic-version": "2026-10-21"})
     else:
@@ -3137,8 +3139,7 @@ def llm_http(conf, method, path, body=None):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(conf["api"] + path, data=data, headers=headers, method=method)
     try:
-        with _llm_opener.open(req, timeout=LLM_TIMEOUT) as res:
-            raw = res.read(8 << 20)
+        return _llm_opener.open(req, timeout=timeout)
     except urllib.error.HTTPError as e:
         msg = ""
         try:
@@ -3147,17 +3148,153 @@ def llm_http(conf, method, path, body=None):
         except Exception:  # noqa: BLE001
             pass
         hint = {401: "API Key 不对", 403: "没有权限", 404: "接口地址或模型不对", 429: "上游限流或额度不足"}.get(e.code, "")
-        raise LlmError(f"上游返回 {e.code}{'（' + hint + '）' if hint else ''}{'：' + str(msg)[:200] if msg else ''}") from None
+        err = LlmError(f"上游返回 {e.code}{'（' + hint + '）' if hint else ''}{'：' + str(msg)[:200] if msg else ''}")
+        try:   # 上游限流时给的等待秒数（AI 助手据此自动重试）
+            err.retry = max(1, min(120, int(e.headers.get("Retry-After") or 0))) if e.code == 429 else 0
+        except ValueError:
+            err.retry = 0
+        raise err from None
     except (urllib.error.URLError, OSError) as e:
         raise LlmError(f"连不上接口：{getattr(e, 'reason', e)}") from None
+
+
+def llm_http(conf, method, path, body=None, timeout=LLM_TIMEOUT):
+    with llm_open(conf, method, path, body, timeout) as res:
+        try:
+            raw = res.read(8 << 20)
+        except OSError as e:
+            raise LlmError(f"连不上接口：{e}") from None
     try:
         return json.loads(raw)
     except ValueError:
         raise LlmError("上游返回的不是 JSON（接口地址可能不对）") from None
 
 
+def _sse(res):
+    """逐个产出上游 SSE 事件的 data（JSON）"""
+    data = []
+    for raw in res:
+        line = raw.decode("utf-8", "replace").rstrip("\r\n")
+        if line.startswith(":"):
+            continue
+        if line.startswith("data:"):
+            data.append(line[5:].lstrip(" "))
+            continue
+        if line or not data:
+            continue
+        text, data = "\n".join(data), []
+        if text.strip() == "[DONE]":
+            return
+        try:
+            ev = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(ev, dict):
+            yield ev
+    if data and data[0].strip() != "[DONE]":
+        try:
+            yield json.loads("\n".join(data))
+        except ValueError:
+            pass
+
+
+def _sse_error(ev):
+    e = ev.get("error") or (ev.get("response") or {}).get("error") or ev
+    msg = e.get("message") if isinstance(e, dict) else str(e)
+    err = LlmError(f"上游出错：{str(msg or '未知错误')[:200]}")
+    # 过载 / 限流：让浏览器等一会儿自动重试
+    kind = f"{e.get('type', '')} {e.get('code', '')} {msg}".lower() if isinstance(e, dict) else str(msg).lower()
+    if any(w in kind for w in ("overload", "rate_limit", "rate limit", "429", "529", "try again")):
+        err.retry = 15
+    return err
+
+
+def llm_stream(conf, path, body, on_text, timeout):
+    """流式调用上游：文字增量交给 on_text，结束后拼成与非流式相同结构的响应返回（三种协议共用后续解析）"""
+    proto = conf["proto"]
+    with llm_open(conf, "POST", path, body, timeout, stream=True) as res:
+        try:
+            if "json" in (res.headers.get("Content-Type") or ""):   # 上游不支持流式，直接给了完整结果
+                return json.loads(res.read(8 << 20))
+            if proto == "anthropic":
+                blocks, stop, usage = {}, None, None
+                for ev in _sse(res):
+                    t = ev.get("type")
+                    if t == "error":
+                        raise _sse_error(ev)
+                    if t == "content_block_start":
+                        b = dict(ev.get("content_block") or {})
+                        if b.get("type") == "tool_use":
+                            b["_json"] = ""
+                        blocks[ev.get("index", len(blocks))] = b
+                    elif t == "content_block_delta":
+                        b, d = blocks.setdefault(ev.get("index", 0), {"type": "text", "text": ""}), ev.get("delta") or {}
+                        dt = d.get("type")
+                        if dt == "text_delta":
+                            b["text"] = b.get("text", "") + d.get("text", "")
+                            on_text(d.get("text", ""))
+                        elif dt == "input_json_delta":
+                            b["_json"] = b.get("_json", "") + d.get("partial_json", "")
+                        elif dt == "thinking_delta":
+                            b["thinking"] = b.get("thinking", "") + d.get("thinking", "")
+                        elif dt == "signature_delta":
+                            b["signature"] = b.get("signature", "") + d.get("signature", "")
+                    elif t == "message_delta":
+                        stop = (ev.get("delta") or {}).get("stop_reason") or stop
+                        usage = ev.get("usage") or usage
+                content = []
+                for i in sorted(blocks):
+                    b = blocks[i]
+                    if "_json" in b:
+                        b["input"] = _ai_args(b.pop("_json") or "{}")
+                    content.append(b)
+                return {"content": content, "stop_reason": stop, "usage": usage}
+            if proto == "openai-responses":
+                final, items = None, []
+                for ev in _sse(res):
+                    t = ev.get("type")
+                    if t in ("error", "response.failed"):
+                        raise _sse_error(ev)
+                    if t == "response.output_text.delta":
+                        on_text(ev.get("delta") or "")
+                    elif t == "response.output_item.done" and isinstance(ev.get("item"), dict):
+                        items.append(ev["item"])
+                    elif t in ("response.completed", "response.incomplete"):
+                        final = ev.get("response") or {}
+                final = final or {}
+                if not final.get("output"):
+                    final["output"] = items
+                return final
+            text, reasoning, calls, finish, usage = "", "", {}, None, None
+            for ev in _sse(res):
+                if ev.get("error"):
+                    raise _sse_error(ev)
+                usage = ev.get("usage") or usage
+                for ch in ev.get("choices") or []:
+                    d = ch.get("delta") or {}
+                    if isinstance(d.get("content"), str) and d["content"]:
+                        text += d["content"]
+                        on_text(d["content"])
+                    if isinstance(d.get("reasoning_content"), str):
+                        reasoning += d["reasoning_content"]
+                    for tc in d.get("tool_calls") or []:
+                        c = calls.setdefault(tc.get("index", len(calls)), {"id": None, "type": "function", "function": {"name": "", "arguments": ""}})
+                        f = tc.get("function") or {}
+                        c["id"] = tc.get("id") or c["id"]
+                        if f.get("name") and f["name"] != c["function"]["name"]:
+                            c["function"]["name"] += f["name"]
+                        c["function"]["arguments"] += f.get("arguments") or ""
+                    finish = ch.get("finish_reason") or finish
+            msg = {"content": text, "tool_calls": [calls[i] for i in sorted(calls)]}
+            if reasoning:
+                msg["reasoning_content"] = reasoning
+            return {"choices": [{"message": msg, "finish_reason": finish}], "usage": usage}
+        except (OSError, ValueError) as e:
+            raise LlmError(f"上游连接中断：{e}") from None
+
+
 class LlmError(RuntimeError):
-    pass
+    retry = 0
 
 
 def llm_models(body):
@@ -6639,6 +6776,433 @@ class AlertPush:
         return {"ok": True}
 
 
+# ---------------------------------------------------------------- AI 助手
+# 网页「AI 助手」页（js/ai.js）：玩家用自然语言提问，大模型按需调用工具（配船算属性、查会战 / 击杀 / 物价 / 走势、读自己的 ESI），
+# 工具都在浏览器里执行（装配引擎、玩家的 ESI 令牌只在本机），服务器只负责把对话转成上游协议、带上系统提示词和工具定义。
+# POST /api/kb/ai/info  → 本站是否配了模型、今天还剩多少次
+# POST /api/kb/ai/chat  {messages, ctx, llm?} → 模型的一步：{text, calls: [{id, name, args}], raw, stop}；
+#   浏览器执行 calls 后把结果作为 tool 消息追加，再请求下一步，直到没有 calls。
+#   消息格式（与协议无关）：{role: user, text} / {role: assistant, text, calls, raw} / {role: tool, id, name, text}；
+#   raw 是上游原样的回复（同一协议时原样回传，保留推理 / 思考内容）。
+# 本站模型：环境变量 EVE_AI_PROTO（openai-chat / openai-responses / anthropic，默认 openai-chat）、EVE_AI_BASE、EVE_AI_KEY、EVE_AI_MODEL；
+#   EVE_AI_DAILY 每个 IP 每天可调用模型的次数（一次提问通常要 2–6 次，默认 200），EVE_AI_TOTAL 全站每天合计上限（默认 5000）。
+#   玩家也可以在网页里填自己的接口（随请求带来，服务器不保存、不写日志），不占本站额度。
+AI_RATE = 12                    # 每个 IP 每分钟最多调用模型次数（用自己接口时 ×3）
+AI_BODY_MAX = 800_000
+AI_MSG_MAX = 120
+AI_TEXT_MAX = 40_000            # 单条消息（含工具结果）最多字数
+AI_TIMEOUT = 150
+AI_MAX_TOKENS = 8000
+
+AI_SYSTEM = """你是「EVE 市场总览」网站里的 AI 助手，帮 EVE Online 玩家解决问题：配船、查战况和击杀、看物价和走势、读取玩家授权的角色数据（ESI）。
+
+工作方式：
+- 先用工具查，再回答；数字（价格、属性、击杀数）必须来自工具结果，不要凭记忆编。工具出错就换个参数再试，或如实告诉玩家。
+- 每一步都要调用模型，比较慢：尽量少走步骤。互不依赖的查询放在同一步里一起调用。
+  不要用 search_items 确认名字：auto_fit / compute_fit / market_price 等工具自己能识别中英文名，认不出时结果里会给建议。
+- 物品、舰船、星系名在回答里用国服中文名（工具结果里的名字），也可以括注英文。
+- 配船：有明确要求时先用 auto_fit 自动搜索；要自己写装配时直接写英文 EFT 交给 compute_fit（英文名一定能认；中文名要和游戏里完全一致才行），认不出的名字结果里会给建议。
+  对照玩家的要求（速度、DPS、EHP、电容、CPU / 能量栅格不能超、槽位够用）检查结果；不满足就调整后再算，直到满足或确认做不到。
+  auto_fit 的最佳方案会自动展示；用 compute_fit 自己算出的装配，满意后要调用 show_fit 展示给玩家（玩家可以一键在装配页打开），回答里简要说明思路和关键属性。没有特别说明时按全 5 级技能算。
+  击杀记录里有完整装配：玩家问实战里怎么配、击杀记录里有没有达到某指标的装配时用 kb_ship_fits（kb_kills 只有击杀概况，不含装配）。
+  常识：加力燃烧器（Afterburner）有 1MN / 10MN / 100MN，微型跃迁推进器（Microwarpdrive）有 5MN / 50MN / 500MN。
+- 角色：玩家可能在本站绑定了多个角色。「我的号 / 我哪个号…」先用 my_character 看有哪些角色，能不能开船用 my_characters_fly（会检查全部角色）；
+  「找个 / 买个能开 X 的号」是在角色交易里找在售角色，用 bazaar_search。意思不清时两样都查，分开说明。
+- 价格预估：用 market_history 看走势（成交均价、成交量、近期变化），结合游戏常识给出判断，并说明这只是参考。
+- 角色数据（资产、技能、钱包、订单、工业等）：用 my_character / esi_get；玩家没绑定 ESI 时请他去「个人中心」绑定。
+- 本站各页面的功能都有对应工具：路线 / 跳跃规划、制造成本与利润、LP 兑换、行星工业、虫洞、估价、合同、快递、倒卖、势力战争、主权规划（星系资源、升级件能否上线、劳动力运输、我的主权中心燃料）、教程、广场、人物情报等，能用工具算的就直接算，不要只给链接。
+  结果里有 page_link 时，回答末尾附上「在本站打开」的链接，方便玩家看完整页面。
+- 你只能查询，不能替玩家在游戏里做任何操作。工具真的覆盖不到的（如深渊装备估价），告诉玩家本站哪个页面能做并给出链接。
+- 本站页面（回答里可以写成 Markdown 链接，点击直接打开）：
+  市场中心（顶部第一项）：物品价格、订单、历史、自选，单个物品用 [名称](#type=物品ID)；[倒卖排行](#arb)：交易中心之间的差价利润；
+  [星图](#map)：路线规划、星系信息、跳跃距离与疲劳、强爆热点；[击杀](#kb)：击杀记录、会战战报、人物 / 军团 / 联盟统计、排行；
+  [装配](#fit)：模拟装配与属性、智能装配、击杀记录装配、广场装配；[战场模拟](#sim)：两支舰队按装配模拟交战；
+  [行星工业](#pi)：行星开发规划与收益；[制造](#ind)：蓝图制造 / 发明成本与利润、我的工业任务；[LP 商店](#lp)：忠诚点兑换收益；
+  [估价](#appr)：粘贴物品清单估价；[快递合同](#courier)；[合同](#contracts)：公开合同查询；[战争](#war)：势力战争与军团战争；
+  [主权](#sov)：主权规划；[深渊装备](#abyss)：深渊装备市场与估价；[角色交易](#bazaar)：买卖角色；
+  [虫洞](#wh)：虫洞星系、类型、天象、质量计算、席拉连接；[广场](#plaza)：军团招新、组队、集市；[教程](#guide)；
+  个人中心（右上角）：绑定 ESI 角色（可多个）、资产、钱包、订单、技能、行星、挖矿等角色数据。
+- 回答用玩家的语言，简洁，用 Markdown（列表、表格、粗体）。提到物品时可以写成 [名称](#type=物品ID) 的链接，点击会打开市场页。"""
+
+
+def _ai_obj(props, required=()):
+    return {"type": "object", "properties": props, "required": list(required), "additionalProperties": False}
+
+
+_S = lambda d: {"type": "string", "description": d}
+_I = lambda d: {"type": "integer", "description": d}
+AI_TOOLS = [
+    ("search_items", "按名称搜索物品 / 舰船 / 装备 / 弹药 / 无人机（中文或英文，支持部分名称），返回物品 ID、名称、分组。不确定准确名称时先搜。",
+     _ai_obj({"query": _S("名称或关键词"), "kind": {"type": "string", "enum": ["any", "ship", "module", "charge", "drone", "implant"], "description": "类别，默认 any"},
+              "limit": _I("最多返回几条，默认 15")}, ["query"])),
+    ("compute_fit", "用本站装配引擎（与游戏规则一致）计算一套装配的属性：DPS、EHP、抗性、电容、速度、锁定、CPU / 能量栅格占用、问题提示。"
+                    "eft 为 EFT 文本：第一行 [舰船名, 装配名]，之后按 低槽、中槽、高槽、改装件 分段（空行隔开），每行一个装备，"
+                    "「装备名, 弹药名」表示装弹，「无人机名 x5」表示无人机，行尾加 /offline 表示离线。装备名中英文都行。"
+                    "推进器、主动坦克等可激活的装备默认开启（速度就是开着推进器时的速度）。返回 fit_id，用于 show_fit。",
+     _ai_obj({"eft": _S("EFT 格式的装配文本"), "skills": {"type": "string", "enum": ["max", "character"], "description": "技能：max 全 5 级（默认），character 按玩家已绑定角色的技能"}}, ["eft"])),
+    ("auto_fit", "本站「智能装配」：按要求自动搜索整套装配（与游戏规则一致的装配引擎逐个试装，保证 CPU / 能量栅格 / 槽位装得下），"
+                 "返回最好的 1–3 种方案（各带 fit_id 和属性），最好的方案会自动以卡片展示给玩家（不用再调用 show_fit）。"
+                 "玩家给了要求（必装某装备、速度 / DPS / EHP 下限、侧重）时直接用它，比自己写 EFT 试错快得多；"
+                 "结果不满意再用 compute_fit 微调。搜索在玩家浏览器里进行，可能要十几秒。",
+     _ai_obj({"ship": _S("舰船名"), "required_modules": {"type": "array", "items": {"type": "string"}, "description": "必装的装备名（如 100MN Afterburner II），会先装好、不被替换"},
+              "focus": {"type": "array", "items": {"type": "string", "enum": ["dps", "tank", "speed"]}, "description": "侧重，可多选，默认 dps"},
+              "min_speed": {"type": "number", "description": "最低速度 m/s（推进器开启时）"}, "min_dps": {"type": "number", "description": "最低 DPS"},
+              "min_ehp": {"type": "number", "description": "最低 EHP"}, "cap_stable": {"type": "boolean", "description": "要求电容稳定"},
+              "weapon": {"type": "string", "enum": ["auto", "turret", "missile", "drone", "none"], "description": "武器类型，默认 auto"},
+              "tank": {"type": "string", "enum": ["auto", "shield", "armor"], "description": "坦克类型，默认 auto"},
+              "meta": {"type": "string", "enum": ["t1", "t2", "faction", "deadspace", "officer"], "description": "最高装备等级，默认 t2"},
+              "budget_million": {"type": "number", "description": "装备预算（百万 ISK，不含船），0 不限"},
+              "utilities": {"type": "array", "items": {"type": "string", "enum": ["point", "scram", "web", "neut", "cyno", "ewar"]}, "description": "功能装备：扰断、扰频、停滞网、中和、诱导、电子战；不填按舰船加成自动选"},
+              "skills": {"type": "string", "enum": ["max", "character"]}}, ["ship"])),
+    ("kb_ship_fits", "击杀记录里某型舰船最近阵亡时的实际装配（来自完整击杀邮件，相同装配合并），逐套用装配引擎算出速度、DPS、EHP 等"
+                     "（全 5 级技能、推进器开启（装了多个时只开一个），不含植入体和超载），可按最低速度 / DPS / EHP 筛选并排序，第一套会自动以卡片展示。"
+                     "玩家问实战里怎么配、击杀记录里有没有达到某指标的装配、参考别人的配法时用。",
+     _ai_obj({"ship": _S("舰船名"), "days": _I("最近几天，默认 30"),
+              "with_modules": {"type": "array", "items": {"type": "string"}, "description": "只看装了这些装备的装配（名称可不写型号，如 100MN Afterburner；推进装备会按它开启计算）"},
+              "min_speed": {"type": "number", "description": "最低速度 m/s"},
+              "min_dps": {"type": "number", "description": "最低 DPS"}, "min_ehp": {"type": "number", "description": "最低 EHP"},
+              "sort": {"type": "string", "enum": ["count", "speed", "dps", "ehp"], "description": "排序：出现次数（默认）、速度、DPS、EHP"},
+              "limit": _I("最多返回几套，默认 8")}, ["ship"])),
+    ("show_fit", "把 compute_fit 算过的装配作为卡片展示给玩家，带「在装配页打开」按钮。auto_fit / kb_ship_fits 的第一套已自动展示，不用再调用；要展示其他方案时用。",
+     _ai_obj({"fit_id": _S("compute_fit / auto_fit / kb_ship_fits 返回的 fit_id"), "title": _S("卡片标题，如「100MN 镰刀 · 2100 m/s」")}, ["fit_id"])),
+    ("market_price", "物品当前价格：主交易中心（默认吉他）最低卖价 / 最高收价，以及全服均价。",
+     _ai_obj({"items": {"type": "array", "items": {"type": "string"}, "description": "物品名称或 ID，最多 20 个"}}, ["items"])),
+    ("market_history", "物品在某星域的每日成交历史（ESI）：近 7 / 30 / 90 天成交均价、最高 / 最低、日均成交量、涨跌幅和每周均价序列，用于判断走势、预估价格。",
+     _ai_obj({"item": _S("物品名称或 ID"), "region": _S("星域名，默认主交易中心所在星域（如伏尔戈）"), "days": _I("看最近多少天，默认 90，最多 365")}, ["item"])),
+    ("kb_battles", "本站收录的疑似会战（同一星系短时间内大量击毁）：时间、星系、击毁数、总损失、参战人数和双方阵营。时间是 UTC。",
+     _ai_obj({"days": _I("最近几天，默认 2，最多 30"), "region": _S("只看某星域（可选）"), "min_kills": _I("最少击毁数（可选）"), "limit": _I("最多返回几场，默认 10")})),
+    ("kb_kills", "查询本站收录的击杀记录（可组合筛选），返回最近的击杀：时间、星系、受害者舰船 / 人物 / 军团、价值、攻击者数（不含装配；要看装配用 kb_ship_fits）。",
+     _ai_obj({"system": _S("星系名"), "region": _S("星域名"), "character": _S("人物名"), "corporation": _S("军团名"), "alliance": _S("联盟名"),
+              "side": {"type": "string", "enum": ["all", "kills", "losses"], "description": "配合人物 / 军团 / 联盟：击杀还是损失"},
+              "ship": _S("受害者舰船名"), "min_value": {"type": "number", "description": "最低价值（ISK）"},
+              "space": {"type": "string", "enum": ["k", "wh", "abyss"], "description": "k 常规空间、wh 虫洞、abyss 深渊"},
+              "solo": {"type": "boolean", "description": "只看单刷"}, "limit": _I("最多返回几条，默认 15，最多 50")})),
+    ("kb_entity", "人物 / 军团 / 联盟最近的击杀统计：击杀与损失数量和价值、常开舰船、活跃星系、活跃时段。",
+     _ai_obj({"name": _S("人物 / 军团 / 联盟名"), "kind": {"type": "string", "enum": ["any", "character", "corporation", "alliance"]}, "days": _I("最近几天，默认 30")}, ["name"])),
+    ("gank_risk", "高安星系的疑似强爆统计：次数、出现强爆的天数比例、最危险的时段、主要强爆团伙。不带星系时返回强爆最多的高安星系。",
+     _ai_obj({"system": _S("高安星系名（可选）"), "days": _I("7 / 30 / 90，默认 30")})),
+    ("route_plan", "星门路线规划（与星图「路线规划」同一数据）：起点到终点的跳数、每个星系的安全等级与星域、高安强爆热点，"
+                   "可加途经点（自动排最短顺序）、选最短 / 只走高安 / 少走高安、避开强爆热点。不填起点时用玩家角色当前位置。",
+     _ai_obj({"from": _S("起点星系（可选，默认角色当前位置）"), "to": _S("终点星系"), "via": {"type": "array", "items": {"type": "string"}, "description": "途经星系（可选）"},
+              "prefer": {"type": "string", "enum": ["shortest", "secure", "insecure"], "description": "shortest 最短（默认）、secure 只走高安、insecure 少走高安"},
+              "avoid_gank": {"type": "boolean", "description": "避开高安强爆热点"}, "auto_order": {"type": "boolean", "description": "途经点自动排最短顺序（默认是）"},
+              "character": _S("用哪个角色的当前位置作起点（可选）")}, ["to"])),
+    ("jump_plan", "旗舰 / 跳货 / 黑隐等的跳跃规划（与星图「跳跃规划」同一算法）：按舰船跳跃距离和角色技能算逐跳光年、燃料用量与估价、跳跃冷却与疲劳、总耗时。"
+                  "不填起点时用角色当前位置。",
+     _ai_obj({"ship": _S("能跳跃的舰船名（如 渡神级 / Rhea / 夜神级 / 黑隐特勤舰名）"), "from": _S("起点星系（可选）"), "to": _S("终点星系"),
+              "skills": {"type": "string", "enum": ["character", "max"], "description": "跳跃技能：character 按角色（默认，读不到时按全 5 级），max 全 5 级"},
+              "character": _S("哪个角色（可选）"), "gates": {"type": "boolean", "description": "允许途中走星门（默认只跳跃）"}}, ["ship", "to"])),
+    ("industry_cost", "制造 / 反应成本与利润（与本站「制造」计算器同一公式，技能全 5 级）：材料清单与价格、工作费、发明成本、总成本、单件成本、售价、利润、利润率、每小时利润。",
+     _ai_obj({"product": _S("产品名或 ID（中英文都行）"), "runs": _I("流程数，默认 1"), "me": _I("材料效率（默认：能发明的按发明蓝图，否则 10）"), "te": _I("时间效率"),
+              "system": _S("制造星系（默认吉他）"), "facility": {"type": "string", "enum": ["npc", "raitaru", "azbel", "sotiyo", "athanor", "tatara"], "description": "设施，默认 NPC 空间站"},
+              "rig": _I("改装件 0 / 1（T1）/ 2（T2）"), "tax": {"type": "number", "description": "设施税 %"},
+              "materials": {"type": "string", "enum": ["sell", "buy"], "description": "材料按卖价（默认）或收价买"}, "sell": {"type": "string", "enum": ["sell", "buy"], "description": "产品按卖价（默认）或收价卖"},
+              "invention": {"type": "boolean", "description": "T2 计入发明成本（默认是）"}, "decryptor": _S("发明用的解码器（可选）")}, ["product"])),
+    ("industry_profits", "制造 / 反应利润排行（与「制造」页利润排行同一数据）：按每小时利润 / 每流程利润 / 利润率排序。",
+     _ai_obj({"activity": {"type": "string", "enum": ["manufacturing", "reaction"]}, "category": {"type": "string", "enum": ["all", "ship", "module", "charge", "drone", "component", "structure", "implant"]},
+              "tech": {"type": "string", "enum": ["all", "1", "2", "3"]}, "sort": {"type": "string", "enum": ["profit_per_hour", "profit", "margin"]}, "limit": _I("默认 15"),
+              "system": _S("制造星系"), "facility": _S("设施"), "rig": _I("改装件 0/1/2")})),
+    ("industry_systems", "工业系统成本指数最低的星系（制造、发明、反应、拷贝、研究），可按安全等级和星域筛选。",
+     _ai_obj({"activity": {"type": "string", "enum": ["manufacturing", "invention", "reaction", "copying", "researching_material_efficiency", "researching_time_efficiency"]},
+              "security": _S("high / low / null，可逗号多选"), "region": _S("星域名（可选）"), "limit": _I("默认 15")})),
+    ("lp_offers", "LP 商店兑换收益（与「LP 商店」页同一公式）：每 LP 能换多少 ISK，按 ISK/LP 从高到低。不填军团时在全部 LP 商店里找最好的。",
+     _ai_obj({"corp": _S("NPC 军团名或势力名（可选）"), "item": _S("只看某个兑换物（可选）"), "limit": _I("默认 10"), "tax": {"type": "number", "description": "卖出税费 %，默认 3.4"}, "include_blueprints": {"type": "boolean", "description": "包含蓝图兑换项（默认不含）"}})),
+    ("pi_info", "行星工业产品：等级、生产配方（输入、周期、产出）、交易中心价格、买原料加工的利润、所需原料能在哪些行星类型采集；page_link 可在「行星工业」页直接算整条链的日收益。",
+     _ai_obj({"product": _S("行星产品名（P0–P4，中英文都行）")}, ["product"])),
+    ("pi_colonies", "读取玩家（全部已绑定角色或指定角色）的行星殖民地：所在星系、行星类型、等级、采集器数量和到期时间（已停的）、在产什么。",
+     _ai_obj({"character": _S("只看某个角色（可选）")})),
+    ("wormhole_info", "虫洞：虫洞星系（等级、天象效果、固定洞及其去向 / 质量 / 寿命 / 能过的船、近 30 天击杀与活跃军团）、虫洞类型代码（如 H296）的数据、席拉 / 图尔努尔当前连接（欧服）。",
+     _ai_obj({"system": _S("虫洞星系名如 J123456（可选）"), "wh_type": _S("虫洞类型代码（可选）"), "thera": {"type": "boolean", "description": "查席拉 / 图尔努尔连接"}})),
+    ("sov_system", "主权星系资源（与「主权规划」页同一份 SDE 数据）：恒星电力、各行星装天钩能给的电力（气体 / 风暴 / 等离子）/ 劳动力（温和 / 贫瘠 / 海洋）/ 试剂（冰体出超离子冰、熔岩出岩浆气），当前主权联盟与军事 / 工业 / 战略等级。"
+     "给 region 时列出星域内星系并按电力 / 劳动力 / 试剂排序（找适合装某升级件的星系）。",
+     _ai_obj({"system": _S("星系名（可选）"), "systems": {"type": "array", "items": {"type": "string"}, "description": "多个星系（可选）"}, "region": _S("星域名（可选，给了就按星域排序）"),
+              "sort": {"type": "string", "enum": ["power", "workforce", "ice", "gas"], "description": "星域排序，默认 power"}, "limit": _I("星域模式返回几个，默认 15")})),
+    ("sov_upgrades", "全部主权中心升级件：耗电、劳动力、电力 / 劳动力产出、燃料种类、每小时消耗和启动燃料、互斥组，以及电力 / 劳动力 / 运输规则。",
+     _ai_obj({})),
+    ("sov_plan", "主权规划（与「主权规划」页的一键规划同一套规则）：给若干星系和各自要装的升级件（按优先级排列），算每个星系电力 / 劳动力是否够、哪些升级件能上线、燃料消耗。"
+     "auto=true（默认）时自动补电力监控部门 / 劳动力机械工具，并在规划的星系间沿星门安排劳动力导出 / 导入 / 中转（同联盟，每个星系最多 3 个来源）。"
+     "save_to_page=true 时把规划写入本站主权规划页（玩家要你保存或想在页面上继续调整时用）。",
+     _ai_obj({"systems": {"type": "array", "description": "要规划的星系", "items": {"type": "object", "properties": {
+                  "system": _S("星系名"), "upgrades": {"type": "array", "items": {"type": "string"}, "description": "升级件名（中英文都行，如 超级旗舰建造设施、Cynosural Suppression、三钛合金勘探阵列3），按优先级排列"},
+                  "skyhooks_off": {"type": "array", "items": {"type": "string"}, "description": "不装天钩的行星（序号或罗马数字，如 VII），默认全装"}},
+                  "required": ["system"], "additionalProperties": False}},
+              "auto": {"type": "boolean", "description": "自动补产出件并安排劳动力运输，默认 true"}, "save_to_page": {"type": "boolean", "description": "写入主权规划页，默认 false"}}, ["systems"])),
+    ("sov_my_hubs", "读取玩家当前角色所在军团的主权中心和天钩（ESI，宁静服，需军团董事 / 站点经理等职位）：各星系电力 / 劳动力分配、升级件及上线状态、燃料仓剩余可烧多久、劳动力运输设置、易损窗口；天钩是否在产出、试剂库存。",
+     _ai_obj({"refresh": {"type": "boolean", "description": "重新从 ESI 读取（默认用已读的）"}})),
+    ("appraise", "估价：粘贴的物品清单（游戏里复制的资产 / 合同 / 货柜内容，每行「名称 数量」）按交易中心最低卖价、最高收价合计。",
+     _ai_obj({"text": _S("物品清单原文")}, ["text"])),
+    ("contracts_search", "公开合同（本站收录的合同存档）：按物品、关键词、类型、星域、价格筛选；可看在售、已成交、已过期。查某物品的合同价、找便宜的船 / 装备时用。",
+     _ai_obj({"item": _S("包含的物品（可选）"), "q": _S("标题关键词（可选）"), "type": {"type": "string", "enum": ["item_exchange", "auction", "courier"]}, "region": _S("星域（可选）"),
+              "status": {"type": "string", "enum": ["open", "done", "expired", "ended", "all"], "description": "默认 open 在售"}, "min_price": {"type": "number"}, "max_price": {"type": "number"},
+              "sort": {"type": "string", "enum": ["issued", "ended", "expires", "price", "value", "ratio", "volume"]}, "order": {"type": "string", "enum": ["asc", "desc"]},
+              "want": {"type": "boolean", "description": "收购合同（对方要物品）"}, "limit": _I("默认 15")})),
+    ("courier_contracts", "快递合同（跑货）：按每跳报酬排序，含起点到取货点的跳数、体积、抵押金。",
+     _ai_obj({"from": _S("玩家所在星系（可选，用来算取货跳数）"), "region": _S("只看某星域（可选）"), "max_volume": {"type": "number", "description": "最大体积 m³"},
+              "min_reward": {"type": "number"}, "max_collateral": {"type": "number"}, "limit": _I("默认 15")})),
+    ("hub_arbitrage", "交易中心倒卖（与「倒卖排行」同一数据）：五大交易中心之间的差价机会，按可做的总利润排序。",
+     _ai_obj({"mode": {"type": "string", "enum": ["instant", "sell_order"], "description": "instant 即买即卖（默认），sell_order 到卖出地挂单"},
+              "min_daily_volume": _I("卖出地最低日成交量，默认 10"), "max_unit_price": {"type": "number", "description": "单价上限（可选）"}, "limit": _I("默认 15")})),
+    ("faction_warfare", "势力战争现状：各势力人数、控制星系数、昨天 / 上周击杀与胜利点、可被夺取的星系。", _ai_obj({})),
+    ("guides_search", "搜索本站教程（文字与视频）。新手问怎么玩、某玩法怎么入门时用。", _ai_obj({"q": _S("关键词（可选，不填列出全部）")})),
+    ("guide_read", "读取一篇文字教程的正文。", _ai_obj({"id": _S("guides_search 返回的 id")}, ["id"])),
+    ("plaza_search", "本站广场：军团招新、组队、集市、装配分享、其他帖子。", _ai_obj({"kind": {"type": "string", "enum": ["recruit", "fleet", "market", "fit", "other"]}, "q": _S("关键词（可选）"), "limit": _I("默认 15")})),
+    ("pilot_intel", "人物情报（与「本地扫描」同一数据）：一批人物的军团 / 联盟、近 30 天击杀 / 损失、单挑、平均同伙人数、常用船、最近活跃。玩家贴本地频道名单问危险吗时用。",
+     _ai_obj({"names": {"type": "array", "items": {"type": "string"}, "description": "人物名（最多 100 个）"}}, ["names"])),
+    ("my_character", "玩家在本站绑定（ESI）的角色：不填 character 时列出全部已绑定角色的概况（名字、军团、联盟、钱包、位置、当前舰船、技能点，current 为当前选中的角色）；"
+                     "玩家说「我的号 / 我的角色」时指的是这些角色，可能有多个。没有绑定时返回提示。",
+     _ai_obj({"character": _S("只看某个角色（名字或 ID，可选）")})),
+    ("my_characters_fly", "逐个检查玩家所有已绑定角色能不能开某艘船 / 某船级（如泰坦、无畏舰）/ 用某装备、某技能够不够几级，"
+                          "按完整技能前置链判断；不能的给出还差哪些技能、差多少技能点、按角色属性要练多久。「我哪个号能开 X」「X 还要练多久」用它。",
+     _ai_obj({"ship": _S("舰船名、船级名（泰坦、超级航母、无畏舰、航空母舰、战力辅助舰、黑隐特勤舰、掠夺舰…）或装备名"),
+              "skills": {"type": "array", "items": {"type": "object", "properties": {"name": _S("技能名"), "level": _I("等级 1–5")}, "required": ["name"]}, "description": "另外要求的技能等级（可选）"}})),
+    ("bazaar_search", "本站「角色交易」：搜索在售的角色（买号）。宁静服来自官方论坛 Character Bazaar（ISK 报价，按卖家贴的 qsna.eu 技能展示判断技能），"
+                      "晨曦服来自网易藏宝阁（人民币），曙光服是玩家在本站自挂。price 的单位见结果里的 currency。可按能开某船 / 船级 / 用某装备、技能等级、技能点、价格筛选。"
+                      "玩家说「找个能开 X 的号」「买个号」时用它；结果里的 link 是本站详情页。",
+     _ai_obj({"can_fly": _S("能开的舰船名、船级名（如泰坦）或能用的装备名（可选）"),
+              "skills": {"type": "array", "items": {"type": "object", "properties": {"name": _S("技能名"), "level": _I("等级 1–5")}, "required": ["name"]}, "description": "技能等级要求（可选）"},
+              "min_sp_million": {"type": "number", "description": "最少技能点（百万）"}, "max_sp_million": {"type": "number", "description": "最多技能点（百万）"},
+              "max_price": {"type": "number", "description": "最高价格：宁静按十亿 ISK（填 60 即 60B），晨曦 / 曙光按人民币元"},
+              "sort": {"type": "string", "enum": ["price", "sp", "newest"], "description": "排序：价格从低到高（默认）、技能点从高到低、最新"},
+              "limit": _I("最多返回几个，默认 10")})),
+    ("esi_get", "用玩家的 ESI 授权读取角色数据（只读 GET）。path 例：/characters/{character_id}/assets/、/skills/、/skillqueue/、/wallet/journal/、"
+                "/wallet/transactions/、/orders/、/industry/jobs/、/contracts/、/blueprints/、/mining/、/implants/、/clones/、/loyalty/points/、"
+                "/killmails/recent/、/fittings/、/planets/、/standings/。{character_id} 会自动替换。结果里的 type_id 会附上中文名。"
+                "结果很多时（如资产）用 search 按物品名过滤，或用 summary 按物品汇总数量并附估价（全服均价与交易中心卖价，按价值从高到低）。",
+     _ai_obj({"path": _S("ESI 路径"), "character": _S("读哪个已绑定角色（名字或 ID，默认当前角色；多个角色时逐个调用）"), "search": _S("按物品 / 技能名过滤（中英文都行，可选）"), "summary": {"type": "boolean", "description": "按物品汇总数量（资产等列表）"},
+              "limit": _I("最多返回几条，默认 50，最多 200")}, ["path"])),
+]
+AI_TOOL_NAMES = {t[0] for t in AI_TOOLS}
+
+
+def ai_site_conf():
+    key = (os.environ.get("EVE_AI_KEY") or "").strip()
+    base = (os.environ.get("EVE_AI_BASE") or "").strip()
+    if not key or not base:
+        return None
+    return {"proto": (os.environ.get("EVE_AI_PROTO") or "openai-chat").strip(), "base": base, "key": key, "model": (os.environ.get("EVE_AI_MODEL") or "").strip()}
+
+
+def _ai_clean(v, limit):
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", v if isinstance(v, str) else "")[:limit]
+
+
+def ai_messages(raw):
+    """校验网页带来的对话（与协议无关的格式）"""
+    if not isinstance(raw, list) or not 0 < len(raw) <= AI_MSG_MAX:
+        raise ValueError("对话太长了，请点「新对话」重新开始")
+    out = []
+    for m in raw:
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant", "tool"):
+            raise ValueError("对话格式不对")
+        if m["role"] == "user":
+            text = _ai_clean(m.get("text"), AI_TEXT_MAX).strip()
+            if text:
+                out.append({"role": "user", "text": text})
+        elif m["role"] == "tool":
+            out.append({"role": "tool", "id": _ai_clean(m.get("id"), 200), "name": _ai_clean(m.get("name"), 64), "text": _ai_clean(m.get("text"), AI_TEXT_MAX) or "（空）"})
+        else:
+            calls = []
+            for c in m.get("calls") or []:
+                if isinstance(c, dict) and c.get("id") and c.get("name") in AI_TOOL_NAMES:
+                    calls.append({"id": _ai_clean(c["id"], 200), "name": c["name"], "args": c.get("args") if isinstance(c.get("args"), dict) else {}})
+            raw_ = m.get("raw") if isinstance(m.get("raw"), dict) else None
+            out.append({"role": "assistant", "text": _ai_clean(m.get("text"), AI_TEXT_MAX), "calls": calls, "raw": raw_})
+    if not out or out[0]["role"] != "user":
+        raise ValueError("对话格式不对")
+    # 工具调用与结果必须成对：没有结果的调用补一条「已取消」
+    fixed = []
+    for i, m in enumerate(out):
+        fixed.append(m)
+        if m["role"] == "assistant" and m["calls"]:
+            have = {x["id"] for x in out[i + 1:] if x["role"] == "tool"}
+            for c in m["calls"]:
+                if c["id"] not in have:
+                    fixed.append({"role": "tool", "id": c["id"], "name": c["name"], "text": "（已取消）"})
+    return fixed
+
+
+def ai_system(ctx):
+    ctx = ctx if isinstance(ctx, dict) else {}
+    lines = [AI_SYSTEM, "", "当前情况："]
+    lines.append("- 现在是 UTC " + time.strftime("%Y-%m-%d %H:%M", time.gmtime()) + (f"（玩家所在时区 UTC{_ai_clean(ctx.get('tz'), 8)}）" if ctx.get("tz") else ""))
+    srv = {"tq": "欧服（宁静 Tranquility）", "serenity": "国服晨曦（Serenity）", "infinity": "国服曙光（Infinity）"}.get(ctx.get("server"), "")
+    if srv:
+        lines.append("- 服务器：" + srv)
+    char = _ai_clean(ctx.get("character"), 80)
+    chars = [_ai_clean(x, 80) for x in (ctx.get("characters") or [])[:30] if isinstance(x, str)] if isinstance(ctx.get("characters"), list) else []
+    if len(chars) > 1:
+        lines.append(f"- 玩家在本站绑定了 {len(chars)} 个 ESI 角色：{'、'.join(chars)}（当前选中：{char or chars[0]}）")
+    else:
+        lines.append(f"- 玩家已绑定 ESI 角色：{char}" if char else "- 玩家还没有绑定 ESI 角色（读取角色数据的工具用不了）")
+    if ctx.get("lang") == "en":
+        lines.append("- 网页是英文界面：请用英文回答，名称用英文。")
+    return "\n".join(lines)
+
+
+def _ai_args(s):
+    if isinstance(s, dict):
+        return s
+    try:
+        v = json.loads(s or "{}")
+        return v if isinstance(v, dict) else {"_raw": str(s)[:2000]}
+    except ValueError:
+        return {"_raw": str(s)[:2000]}
+
+
+def ai_call(conf, path, body, on_text):
+    return llm_stream(conf, path, {**body, "stream": True}, on_text, AI_TIMEOUT) if on_text else llm_http(conf, "POST", path, body, AI_TIMEOUT)
+
+
+def ai_step(conf, system, msgs, on_text=None):
+    """调用上游一次，返回 {text, calls, raw, stop, usage}；on_text 不为空时流式调用，文字增量逐段交给它"""
+    proto, model = conf["proto"], conf["model"]
+    same = lambda m: m.get("raw") and m["raw"].get("proto") == proto and m["raw"].get("data") is not None
+    if proto == "anthropic":
+        tools = [{"name": n, "description": d, "input_schema": p} for n, d, p in AI_TOOLS]
+        out = []
+        for m in msgs:
+            if m["role"] == "user":
+                out.append({"role": "user", "content": m["text"]})
+            elif m["role"] == "tool":
+                block = {"type": "tool_result", "tool_use_id": m["id"], "content": m["text"]}
+                if out and out[-1]["role"] == "user" and isinstance(out[-1]["content"], list) and out[-1]["content"] and out[-1]["content"][0].get("type") == "tool_result":
+                    out[-1]["content"].append(block)
+                else:
+                    out.append({"role": "user", "content": [block]})
+            else:
+                if same(m) and isinstance(m["raw"]["data"], list):
+                    content = m["raw"]["data"]
+                else:
+                    content = ([{"type": "text", "text": m["text"]}] if m["text"] else []) + [{"type": "tool_use", "id": c["id"], "name": c["name"], "input": c["args"]} for c in m["calls"]]
+                out.append({"role": "assistant", "content": content or [{"type": "text", "text": "…"}]})
+        res = ai_call(conf, "/messages", {"model": model, "max_tokens": AI_MAX_TOKENS, "system": system, "messages": out, "tools": tools}, on_text)
+        res = res if isinstance(res, dict) else {}
+        blocks = [b for b in res.get("content") or [] if isinstance(b, dict)]
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
+        calls = [{"id": b.get("id"), "name": b.get("name"), "args": b.get("input") if isinstance(b.get("input"), dict) else {}} for b in blocks if b.get("type") == "tool_use"]
+        stop = res.get("stop_reason")
+        if stop == "refusal":
+            raise LlmError("模型拒绝回答这个问题")
+        return {"text": text, "calls": calls, "raw": {"proto": proto, "data": blocks}, "stop": stop, "usage": res.get("usage")}
+    if proto == "openai-responses":
+        tools = [{"type": "function", "name": n, "description": d, "parameters": p} for n, d, p in AI_TOOLS]
+        items = []
+        for m in msgs:
+            if m["role"] == "user":
+                items.append({"role": "user", "content": m["text"]})
+            elif m["role"] == "tool":
+                items.append({"type": "function_call_output", "call_id": m["id"], "output": m["text"]})
+            elif same(m) and isinstance(m["raw"]["data"], list):
+                items += m["raw"]["data"]
+            else:
+                if m["text"]:
+                    items.append({"role": "assistant", "content": m["text"]})
+                items += [{"type": "function_call", "call_id": c["id"], "name": c["name"], "arguments": json.dumps(c["args"], ensure_ascii=False)} for c in m["calls"]]
+        res = ai_call(conf, "/responses", {"model": model, "instructions": system, "input": items, "tools": tools, "store": False,
+                                           "max_output_tokens": AI_MAX_TOKENS}, on_text)
+        res = res if isinstance(res, dict) else {}
+        output = [o for o in res.get("output") or [] if isinstance(o, dict)]
+        text = "".join(c.get("text", "") for o in output if o.get("type") == "message" for c in o.get("content") or [] if isinstance(c, dict) and c.get("type") in ("output_text", "text"))
+        calls = [{"id": o.get("call_id"), "name": o.get("name"), "args": _ai_args(o.get("arguments"))} for o in output if o.get("type") == "function_call"]
+        # 回传时只留消息和工具调用，去掉服务器端 id（store=false 时上游不认；推理内容没有加密副本，不能回传）
+        keep = [{k: v for k, v in o.items() if k not in ("id", "status")} for o in output if o.get("type") in ("message", "function_call")]
+        return {"text": text, "calls": calls, "raw": {"proto": proto, "data": keep}, "stop": res.get("status"), "usage": res.get("usage")}
+    tools = [{"type": "function", "function": {"name": n, "description": d, "parameters": p}} for n, d, p in AI_TOOLS]
+    out = [{"role": "system", "content": system}]
+    for m in msgs:
+        if m["role"] == "user":
+            out.append({"role": "user", "content": m["text"]})
+        elif m["role"] == "tool":
+            out.append({"role": "tool", "tool_call_id": m["id"], "content": m["text"]})
+        else:
+            msg = {"role": "assistant", "content": m["text"] or None}
+            if m["calls"]:
+                msg["tool_calls"] = [{"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": json.dumps(c["args"], ensure_ascii=False)}} for c in m["calls"]]
+            if same(m) and isinstance(m["raw"]["data"], dict) and isinstance(m["raw"]["data"].get("reasoning_content"), str):
+                msg["reasoning_content"] = m["raw"]["data"]["reasoning_content"]   # DeepSeek 等思考模式调用工具时要求回传
+            out.append(msg)
+    res = ai_call(conf, "/chat/completions", {"model": model, "messages": out, "tools": tools, "max_tokens": AI_MAX_TOKENS}, on_text)
+    res = res if isinstance(res, dict) else {}
+    choice = (res.get("choices") or [{}])[0] or {}
+    msg = choice.get("message") or {}
+    c = msg.get("content")
+    text = c if isinstance(c, str) else "".join(x.get("text", "") for x in c or [] if isinstance(x, dict))
+    calls = [{"id": t.get("id"), "name": (t.get("function") or {}).get("name"), "args": _ai_args((t.get("function") or {}).get("arguments"))}
+             for t in msg.get("tool_calls") or [] if isinstance(t, dict)]
+    raw = {"reasoning_content": msg["reasoning_content"]} if isinstance(msg.get("reasoning_content"), str) else {}
+    return {"text": text, "calls": calls, "raw": {"proto": proto, "data": raw}, "stop": choice.get("finish_reason"), "usage": res.get("usage")}
+
+
+class Assistant:
+    def __init__(self):
+        self.daily = int(os.environ.get("EVE_AI_DAILY") or 200)
+        self.total = int(os.environ.get("EVE_AI_TOTAL") or 5000)
+        self.used, self.day, self.sum, self.lock = {}, "", 0, threading.Lock()
+        site = ai_site_conf()
+        self.site_model = site["model"] if site else ""
+        if site:
+            log.info("AI 助手：本站模型 %s（%s），每个 IP 每天 %d 次", site["model"], site["proto"], self.daily)
+
+    @staticmethod
+    def who(ip):
+        """额度按 IP 计；IPv6 按 /64"""
+        try:
+            a = ipaddress.ip_address(ip)
+            return str(ipaddress.ip_network(f"{ip}/64", strict=False)) if a.version == 6 else ip
+        except ValueError:
+            return ip
+
+    def _roll(self):
+        d = time.strftime("%Y-%m-%d", time.gmtime())
+        if d != self.day:
+            self.day, self.used, self.sum = d, {}, 0
+
+    def info(self, ip):
+        with self.lock:
+            self._roll()
+            left = max(0, self.daily - self.used.get(self.who(ip), 0)) if self.sum < self.total else 0
+        return {"site": bool(ai_site_conf()), "model": self.site_model, "daily": self.daily, "left": left}
+
+    def chat(self, body, ip, on_text=None):
+        msgs = ai_messages(body.get("messages"))
+        own = body.get("llm")
+        if own:
+            conf = llm_conf(own)
+            if not conf["model"]:
+                raise ValueError("请先选择模型")
+        else:
+            site = ai_site_conf()
+            if not site:
+                raise ValueError("本站还没有配置 AI 模型，可以在「设置」里填自己的接口")
+            conf = llm_conf(site)
+            with self.lock:
+                self._roll()
+                k = self.who(ip)
+                if self.sum >= self.total:
+                    raise LlmError("今天全站的 AI 额度已经用完了，明天再来，或在「设置」里填自己的接口")
+                if self.used.get(k, 0) >= self.daily:
+                    raise LlmError(f"今天的 {self.daily} 次额度已经用完了（UTC 0 点重置），也可以在「设置」里填自己的接口")
+                self.used[k] = self.used.get(k, 0) + 1
+                self.sum += 1
+        try:
+            res = ai_step(conf, ai_system(body.get("ctx")), msgs, on_text)
+        except Exception:
+            if not own:   # 上游出错不算次数
+                with self.lock:
+                    k = self.who(ip)
+                    self.used[k] = max(0, self.used.get(k, 0) - 1)
+                    self.sum = max(0, self.sum - 1)
+            raise
+        res["calls"] = [c for c in res["calls"] if c.get("id") and c.get("name")]
+        if not own:
+            with self.lock:
+                res["left"] = max(0, self.daily - self.used.get(self.who(ip), 0))
+        if len(json.dumps(res["raw"], ensure_ascii=False)) > 200_000:
+            res["raw"] = None
+        res.pop("usage", None)
+        return res
+
+
 # ---------------------------------------------------------------- 工单 / 反馈
 # 右上角「定制」里提交：问题类型 + 内容 + 可选联系方式，存进 feedback 表（不记 IP）；按 IP 限流并限每日条数。
 # 提交时返回一个随机凭证（库里只存哈希），浏览器记下 id + 凭证，用来查看自己的工单历史、处理状态和站长回复。
@@ -7048,6 +7612,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     feedback_posts = WindowLimiter(*FEEDBACK_POSTS)
     feedback_read_limiter = RateLimiter(30)
     chat_tr_limiter = RateLimiter(CHAT_TR_RATE)
+    ai_limiter = RateLimiter(AI_RATE * 3)
+    assistant = Assistant()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -7337,6 +7903,63 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("预警推送错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
+        def ai(self, chat):
+            # AI 助手（同源调用）：对话与玩家自己的 API Key 不写日志、不保存。本站模型每分钟 AI_RATE 次，自己的接口 ×3
+            # stream=true 时边收上游边转发（NDJSON：{"t": 文字增量} …，最后 {"done": 结果} 或 {"error": 原因}）；
+            # 第一段文字到达前出错仍按普通 JSON 返回错误码（浏览器据此自动重试）
+            ip = self.client_ip()
+            started = False
+
+            def line(obj):
+                self.wfile.write(json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode() + b"\n")
+                self.wfile.flush()
+
+            def on_text(t):
+                nonlocal started
+                if not t:
+                    return
+                if not started:
+                    started = True
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+                    self.send_header("Cache-Control", "no-cache")
+                    self.send_header("X-Accel-Buffering", "no")   # nginx 不缓冲，逐段送到浏览器
+                    self.end_headers()
+                line({"t": t})
+
+            def fail(code, msg, headers=None):
+                if not started:
+                    return self.send_json(code, {"error": msg}, headers)
+                try:
+                    line({"error": msg})
+                except OSError:
+                    pass
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= AI_BODY_MAX:
+                    raise ValueError("对话太长了，请点「新对话」重新开始" if length else "请求体应为 JSON")
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError("请求体应为 JSON")
+                if not chat:
+                    return self.send_json(200, assistant.info(ip))
+                ok, _, retry = ai_limiter.take(ip, 1 if body.get("llm") else 3)
+                if not ok:
+                    return self.send_json(429, {"error": f"太频繁了，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+                res = assistant.chat(body, ip, on_text if body.get("stream") else None)
+                return line({"done": res}) if started else self.send_json(200, res)
+            except (BrokenPipeError, ConnectionResetError):
+                return None   # 玩家点了停止
+            except ValueError as e:
+                return fail(400, str(e) or "请求体应为 JSON")
+            except LlmError as e:
+                return fail(503, str(e), {"Retry-After": str(e.retry)} if e.retry else None)
+            except RuntimeError as e:
+                return fail(503, str(e))
+            except Exception:
+                log.exception("AI 助手错误")
+                return fail(500, "服务器内部错误")
+
         def chat_translate(self, models=False):
             # 频道翻译转发（同源调用，不带 CORS 头）；请求体（含玩家的大模型 API Key）不写日志、不保存；models：取大模型的模型列表
             ok, _, retry = chat_tr_limiter.take(self.client_ip())
@@ -7404,6 +8027,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.feedback(url.path.rstrip("/"))
             if url.path.rstrip("/") in ("/api/kb/translate", "/api/kb/translate/models"):
                 return self.chat_translate(url.path.rstrip("/").endswith("/models"))
+            if url.path.rstrip("/") in ("/api/kb/ai/info", "/api/kb/ai/chat"):
+                return self.ai(url.path.rstrip("/").endswith("/chat"))
             cors = {"Access-Control-Allow-Origin": "*", "Access-Control-Expose-Headers": "Retry-After"}
             err = lambda code, msg, extra=None: self.send_json(code, {"error": {"code": code, "message": msg}}, {**cors, **(extra or {})})
             path = url.path.rstrip("/")

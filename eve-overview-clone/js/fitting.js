@@ -5,14 +5,15 @@
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
 import * as FE from './fit-engine.js?v=v36';
 import * as MU from './fit-mutate.js?v=v4';
-import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit } from './fit-auto.js?v=v31';
-import { initKbFits, openKbFits, openPlazaFits } from './fit-kb.js?v=v29';
+import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
+import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
 import { initSim, mountSim } from './fit-sim.js?v=v38';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v12';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 import { makeFloat, pinBtn, closeBtn } from './float-pop.js?v=3';
 import { SERVER } from './server.js?v=s4';
+import { serverExtra } from './server-extra.js?v=3';
 
 let app;
 const $ = (id) => document.getElementById(id);
@@ -295,14 +296,19 @@ function bindSidebar() {
       renderBrowser();
       return;
     }
+    const slotTab = e.target.closest('[data-fit-slot-tab]');
+    if (slotTab) {
+      F.slotFilter = slotTab.dataset.fitSlotTab || null;
+      if (F.target && F.target.slot !== F.slotFilter) { F.target = null; renderFit(); }
+      renderBrowser();
+      return;
+    }
     const filter = e.target.closest('[data-fit-only]');
     if (filter) { F.onlyFits = filter.checked; saveSettings(); renderBrowser(); return; }
-    const clear = e.target.closest('[data-fit-slot-clear]');
-    if (clear) { F.slotFilter = null; F.target = null; renderFit(); renderBrowser(); return; }
     const item = e.target.closest('[data-fit-type]');
     if (item) useType(Number(item.dataset.fitType));
   });
-  // 悬停预览：点过某个槽位（或选中了一件已装的装备）时，鼠标停在同类装备上就把它淡淡地放进那一格，右侧属性显示装上后的变化
+  // 悬停预览：鼠标停在装备上，就把它淡淡地放进点击后会装进的那一格，右侧属性显示装上后的变化
   const browser = $('fitBrowser');
   let hoverTimer = 0;
   browser.addEventListener('pointerover', (e) => {
@@ -314,11 +320,18 @@ function bindSidebar() {
   browser.addEventListener('pointerleave', () => { clearTimeout(hoverTimer); previewType(0); });
 }
 
-// 预览的放置位置：点过的空槽位，或选中的已装装备（替换它）；要和这件装备的槽位类型一致
+// 预览的放置位置：和点击时一样（点过的同类空槽位，否则第一个空位；槽位满了不预览）
 function previewTarget(t) {
   if (!F.fit || !t || t.category !== FE.CAT.module || !t.slot || t.slot === 'sub') return null;
-  const tg = F.target || F.selected;
-  return tg && tg.slot === t.slot ? tg : null;
+  if (F.target && F.target.slot === t.slot) return F.target;
+  const index = freeIndex(t.slot);
+  return index < 0 ? null : { slot: t.slot, index };
+}
+// 某类槽位第一个空位（没有返回 -1）
+function freeIndex(slot) {
+  const list = F.fit.slots[slot], total = F.stats?.slots[slot] || 0;
+  const idx = list.findIndex((m, i) => !m && i < total);
+  return idx >= 0 ? idx : list.length < total ? list.length : -1;
 }
 
 function previewType(id) {
@@ -398,7 +411,11 @@ function renderBrowser() {
   if (F.tab === 'module' || F.tab === 'charge' || F.tab === 'drone') {
     head.push(`<label class="fit-only"><input type="checkbox" data-fit-only${F.onlyFits ? ' checked' : ''}>只显示${F.tab === 'charge' ? '已装配武器可用的弹药' : '能装到当前舰船的'}</label>`);
   }
-  if (F.tab === 'module' && F.slotFilter) head.push(`<div class="fit-slot-filter">只看${FE.SLOT_NAME[F.slotFilter]}${F.target?.slot === F.slotFilter ? `<small>装到第 ${F.target.index + 1} 格 · 鼠标停在装备上可预览属性变化</small>` : ''} <button class="link-btn" data-fit-slot-clear>显示全部</button></div>`);
+  // 装备按槽位筛选（点装配里的空槽位也会切到对应槽位）
+  if (F.tab === 'module') {
+    const slots = FE.SLOTS.filter((s) => !F.stats || F.stats.slots[s] || F.slotFilter === s);
+    head.push(`<div class="fit-slot-tabs">${[[null, '全部'], ...slots.map((s) => [s, FE.SLOT_NAME[s]])].map(([s, n]) => `<button type="button" class="${F.slotFilter === s ? 'active' : ''}" data-fit-slot-tab="${s || ''}">${n}</button>`).join('')}</div>`);
+  }
   if (F.query) {
     const q = F.query;
     const hits = list.filter((t) => t.name.toLowerCase().includes(q) || t.en.toLowerCase().includes(q))
@@ -591,7 +608,10 @@ function infoHtml(t, names, info, tabNow, canSwap, drag = false) {
 
 // 舰船加成与衍生关系（fit-info.json，server/build_fit_info.py 由 SDE 生成），第一次打开详情时加载
 let fitInfoP = null;
-const fitInfo = () => fitInfoP || (fitInfoP = fetch('./fit-info.json?v=1').then((r) => r.json()).catch(() => { fitInfoP = null; return {}; }));
+// 国服独有舰船的加成在 cn-extra-<服>.json 的 fit.bonus（build_cn_extra.py 按效果生成）
+const fitInfo = () => fitInfoP || (fitInfoP = Promise.all([fetch('./fit-info.json?v=1').then((r) => r.json()), serverExtra()])
+  .then(([info, extra]) => (extra?.fit?.bonus ? { ...info, bonus: { ...info.bonus, ...extra.fit.bonus } } : info))
+  .catch(() => { fitInfoP = null; return {}; }));
 const BONUS_UNIT = { 105: '%', 104: 'x', 139: '+', 1: ' m', 144: ' AU/s' };
 
 // 加成说明：{物品ID|名称} 换成可点开详情的链接，其余文字转义
@@ -916,9 +936,7 @@ function addModule(t) {
     trimSlots();
     return;
   }
-  const total = F.stats?.slots[slot] || 0;
-  let idx = list.findIndex((m, i) => !m && i < total);
-  if (idx < 0 && list.length < total) idx = list.length;
+  const idx = freeIndex(slot);
   if (idx < 0) { app.showToast(`${FE.SLOT_NAME[slot]}已满`, 'error'); return; }
   // 同类武器自动装填与已装同型号相同的弹药
   const twin = list.find((m) => m && m.type === t.id && m.charge);
@@ -1232,7 +1250,7 @@ function problemsHtml(list) {
 
 function moduleRow(slot, index, m, extra) {
   const pv = F.preview && F.preview.slot === slot && F.preview.index === index ? type(F.preview.type) : null;
-  if (pv) return `<div class="fit-slot is-ghost" title="预览：点击左侧装备装上"><img src="${IMG(pv.id)}" alt="" width="28" height="28"><span class="fit-slot-name"><span class="fit-slot-title">${app.esc(pv.name)}</span><small>${F.preview.replace ? '替换 ' + app.esc(type(m.type).name) : '预览'}</small></span></div>`;
+  if (pv) return `<div class="fit-slot is-ghost"><img src="${IMG(pv.id)}" alt="" width="28" height="28"><span class="fit-slot-name"><span class="fit-slot-title">${app.esc(pv.name)}</span></span></div>`;
   const target = F.target && F.target.slot === slot && F.target.index === index;
   const empty = `<div class="fit-slot is-empty${extra ? ' is-extra' : ''}${target ? ' is-target' : ''}" data-fit-empty="${slot}" data-fit-idx="${index}"><span class="fit-slot-icon"></span><span>${extra ? '超出槽位' : target ? '在左侧选择要装进这一格的装备' : '空' + FE.SLOT_NAME[slot]}</span></div>`;
   if (!m) return empty;
@@ -1667,11 +1685,14 @@ async function onMainClick(e) {
     return;
   }
   if ((x = el('[data-fit-empty]'))) {
-    F.slotFilter = x.dataset.fitEmpty;
+    const slot = x.dataset.fitEmpty;
     const idx = Number(x.dataset.fitIdx);
-    const same = F.target && F.target.slot === F.slotFilter && F.target.index === idx;
-    F.target = x.classList.contains('is-extra') || same ? null : { slot: F.slotFilter, index: idx, ship: F.fit.ship };
+    const same = F.target && F.target.slot === slot && F.target.index === idx;
+    // 点空槽位：侧栏只看这类槽位，点的装备装进这一格；再点一次同一格取消选中（筛选保留，在侧栏切回「全部」）
+    F.target = x.classList.contains('is-extra') || same ? null : { slot, index: idx, ship: F.fit.ship };
+    if (F.target) F.slotFilter = slot;
     renderFit();
+    renderBrowser();
     setTab('module');
     if (MOBILE()) app.openDrawer?.();
     return;
@@ -2273,6 +2294,45 @@ export async function currentFit() {
   const mods = FE.SLOTS.reduce((n, s) => n + fit.slots[s].filter(Boolean).length, 0);
   return { fit: toCompact(fit), ship: fit.ship, shipName: type(fit.ship)?.name || '', name: fit.name || '', mods, dps: stats?.weapon.total || 0 };
 }
+// AI 助手（ai.js）：按 EFT 文本算装配属性；skillMode 'character' 按已绑定角色的技能（读不到时按全 5 级）
+// 返回 { fit, compact, stats, calc, data, unknown, missing } 或 { error }
+export async function aiFit(eft, skillMode = 'max') {
+  const data = await ensureData();
+  const r = parseEft(String(eft || ''));
+  if (r.error) return { error: r.error };
+  let levels = 'max';
+  if (skillMode === 'character' && app.hasEsiToken()) {
+    try { levels = (await app.getCharacterSkills()).levels; } catch { /* 按全 5 级 */ }
+  }
+  const keep = F.fit;
+  F.fit = r.fit;
+  try { autoActivateDrones(); } finally { F.fit = keep; }
+  const calc = FE.computeFit(data, r.fit, levels);
+  if (!calc) return { error: '无法计算这艘船' };
+  return {
+    fit: r.fit, compact: toCompact(r.fit), stats: FE.fitStats(calc), calc, data, unknown: r.unknown,
+    missing: levels === 'max' ? [] : FE.missingSkills(data, r.fit, levels).map((x) => `${x.type?.name || x.type} ${x.have}→${x.need}`)
+  };
+}
+
+// AI 助手：智能装配（必装装备 + 侧重 + 最低要求），返回最好的几种方案，每种带 EFT 文本供 aiFit 计算
+export async function aiAuto(opts) {
+  await ensureData();
+  let skills = 'max';
+  if (opts.skills === 'character' && app.hasEsiToken()) {
+    try { skills = (await app.getCharacterSkills()).levels; } catch { /* 按全 5 级 */ }
+  }
+  const out = await aiAutoFit({ ...opts, skills });
+  return out.results.slice(0, 3).map((x) => ({ fit: x.fit, met: x.r.met, eft: toEft(x.fit) }));
+}
+export const aiAutoCancel = cancelCounterFit;
+// AI 助手：击杀记录里这型船最近阵亡时的实际装配（同装配合并，按出现次数），每套带 EFT 文本供 aiFit 计算
+export async function aiKbFits(ship, days = 30) {
+  await ensureData();
+  const r = await commonFit(ship, { days, limit: 300, top: 300 });
+  return (r?.list || []).map((x) => ({ n: x.n, last: x.last, value: x.value, kill: x.kill, eft: toEft({ ...x.fit, name: `击杀记录 ×${x.n}` }) }));
+}
+
 // 广场「装配」帖子「在装配页打开」：进入装配页时载入
 export function queueCompactFit(c) {
   pendingFit = fromCompact(c);

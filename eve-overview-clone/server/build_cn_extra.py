@@ -27,7 +27,7 @@
     生效对象：与来源舰船同级别（按种族船体技能），T1 / T2 / 帝国海军型只对本族；特别版、海盗等非帝国海军势力（含三神裔、伊甸联合）对全部种族；
     官方列出过的舰船按官方表格（CLOUD_NEWS）。带宽：官方表格有的按表格，否则特别版（市场分组「特别版舰船」）40、非帝国海军势力 35、
     T2 30、帝国海军型 25、T1 20（T3 规则没写，按 35 本族）
-另外 fit.patch: { 已有舰船: [{ 属性: 国服值 }, [国服效果列表]] }：宁静服也有的舰船在国服的属性值 / 效果不同时（适性属性与效果、数值调整）按国服覆盖；
+另外 fit.patch: { 已有舰船 / 技能: [{ 属性: 国服值 }, [国服效果列表]] }：宁静服也有的舰船、技能在国服的属性值 / 效果不同时（适性属性与效果、数值调整）按国服覆盖；
 限定舰船的装备只补可装配舰船属性（国服独有舰船加进名单）。
 """
 import collections
@@ -463,8 +463,8 @@ def build(ds, sde, tq_ids):
 
     # 装配数据
     fit_ids = [t for t in ids if groups.get(zh[t]['group_id']) and groups[zh[t]['group_id']]['category_id'] in FIT_CATS]
-    # 宁静服也有的舰船：读国服的属性与效果，不同的地方作补丁
-    ship_ids = sorted(int(k) for k, v in fit['types'].items() if fit['groups'].get(str(v[2]), [0, 0])[1] == 6)
+    # 宁静服也有的舰船和技能：读国服的属性与效果，不同的地方作补丁（如国服「掠夺舰操作」多一个效果，按等级放大巡察者级的无人机加成）
+    ship_ids = sorted(int(k) for k, v in fit['types'].items() if fit['groups'].get(str(v[2]), [0, 0])[1] in (6, 16))
     cn_ships = {t: v for t, v in zip(ship_ids, cache.many([f'{CN}/universe/types/{t}/?{q}&language=zh' for t in ship_ids])) if v}
     eff_ids = sorted({e['effect_id'] for d in [*(zh[t] for t in fit_ids), *cn_ships.values()] for e in d.get('dogma_effects', [])} - {int(k) for k in fit['effects']})
     effects = {e: v for e, v in zip(eff_ids, cache.many([f'{CN}/dogma/effects/{e}/?{q}' for e in eff_ids])) if v}
@@ -511,6 +511,8 @@ def build(ds, sde, tq_ids):
         dflt = lambda k: (fit['attrs'].get(k) or out_attrs.get(int(k)) or [0])[0]
         # 宁静服没有、值又等于默认值的属性（如 ESI 多列的 charge / shieldCharge = 0）不用补
         changed = {k: v for k, v in sorted(a.items(), key=lambda kv: int(kv[0])) if old[5].get(k) != v and (k in old[5] or v != dflt(k))}
+        if fit['groups'].get(str(old[2]), [0, 0])[1] == 16:
+            changed.pop('162', None)   # 技能：ESI 多列的 radius = 1，没用
         effs = [x['effect_id'] for x in d.get('dogma_effects', []) if str(x['effect_id']) in fit['effects'] or x['effect_id'] in out_eff]
         if changed or sorted(effs) != sorted(old[6]):
             patch[t] = [changed, effs if sorted(effs) != sorted(old[6]) else None]
@@ -525,6 +527,7 @@ def build(ds, sde, tq_ids):
         if changed:
             patch[t] = [changed, None]
     adapt = adapt_meta(ds, fit, out_types, zh, groups, markets)
+    bonus = ship_bonus(sde, fit, out_types, out_eff, {**{int(k): v for k, v in fit['groups'].items()}, **{g: [groups[g]['name'], groups[g]['category_id']] for g in gids if groups.get(g)}}, patch, attrs, inf)
     used_groups = {v[2] for v in out_types.values()} - {int(k) for k in fit['groups']}
     out_groups = {g: [groups[g]['name'], groups[g]['category_id']] for g in sorted(used_groups)}
     out_markets = {}
@@ -551,13 +554,13 @@ def build(ds, sde, tq_ids):
     data = {'server': ds,
             'catalog': {'groups': list(out_cat.values())},
             'fit': {'attrs': out_attrs, 'effects': out_eff, 'groups': out_groups, 'markets': out_markets, 'types': out_types,
-                    'patch': patch, **({'adapt': adapt} if adapt else {})},
+                    'patch': patch, **({'adapt': adapt} if adapt else {}), **({'bonus': bonus} if bonus else {})},
             'skills': {'skills': sk, 'groups': sk_groups}}
     if write_if_changed(os.path.join(ROOT, f'cn-extra-{ds}.json'), data):
         UPDATED.append(ds)
     ships = sum(1 for v in out_types.values() if out_groups.get(v[2], [0, 0])[1] == 6 or fit['groups'].get(str(v[2]), [0, 0])[1] == 6)
     print(f'{ds}: 独有物品 {len(ids)} · 目录分组 {len(out_cat)} · 装配物品 {len(out_types)}（舰船 {ships}）· 技能 {len(sk)}'
-          f' · 新效果 {len(out_eff)}（丢弃无法推断的修正 {dropped} 条）· 新属性 {len(out_attrs)} · 补丁 {len(patch)}'
+          f' · 新效果 {len(out_eff)}（丢弃无法推断的修正 {dropped} 条）· 新属性 {len(out_attrs)} · 补丁 {len(patch)} · 舰船加成 {len(bonus)}'
           + (f' · 适性 1 级技能 {len(adapt["max1"])} · 云计算 {len(adapt["cloud"])}' if adapt else ''))
     return names_en
 
@@ -630,6 +633,93 @@ def cloud_src_en(name, ships):
 
 
 EMPIRE = {'Amarr', 'Caldari', 'Gallente', 'Minmatar'}
+
+
+# ---------- 舰船加成说明（装配页物品详情「加成」）：国服独有舰船没有 SDE 的 traits，按效果修正生成 ----------
+# 修正的来源属性被某个技能按等级放大（技能效果 preMul 舰船属性 × 技能等级）的算「每升一级」，否则算特有加成
+ATTR_LABEL = {64: ('伤害', 'damage'), 160: ('跟踪速度', 'tracking speed'), 68: ('回充量', 'boost amount'), 84: ('维修量', 'repair amount'),
+              73: ('运转周期', 'cycle time'), 6: ('启动消耗', 'activation cost'), 9: ('结构值', 'hull HP'), 263: ('护盾容量', 'shield HP'),
+              265: ('装甲值', 'armor HP'), 54: ('最佳射程', 'optimal range'), 158: ('失准范围', 'falloff'), 37: ('速度', 'velocity')}
+OP_UNIT = {6: 105, 2: 139, 0: 104, 4: 104}
+and_zh = lambda xs: '、'.join(xs[:-1]) + '和' + xs[-1] if len(xs) > 1 else xs[0]
+and_en = lambda xs: ', '.join(xs[:-1]) + ' and ' + xs[-1] if len(xs) > 1 else xs[0]
+
+
+def ship_bonus(sde, fit, out_types, out_eff, all_groups, patch, attrs_cn, inf):
+    names = {}
+    with open(os.path.join(sde, 'dogmaAttributes.jsonl')) as fh:
+        for line in fh:
+            a = json.loads(line)
+            dn = a.get('displayName') or {}
+            if dn.get('zh') or dn.get('en'):
+                names[a['_key']] = (dn.get('zh') or dn.get('en'), dn.get('en') or dn.get('zh'))
+    for a, v in attrs_cn.items():
+        if a not in names and v.get('display_name'):
+            names[a] = (v['display_name'], v['display_name'])
+    types = {**{int(k): v for k, v in fit['types'].items()}, **out_types}
+    effects = {**{int(k): v for k, v in fit['effects'].items()}, **out_eff}
+    cat = lambda t: all_groups.get(types[t][2], [0, 0])[1]
+    # 舰船属性 → 按等级放大它的技能
+    scale = {}
+    for t, v in types.items():
+        if cat(t) != 16:
+            continue
+        effs = (patch.get(t) or [None, None])[1] or v[6]
+        for e in effs:
+            for m in (effects.get(e) or [0, 0, []])[2]:
+                if m[0] == 0 and m[1] == 1 and m[3] == 280 and m[4] == 0:
+                    scale.setdefault(m[2], t)
+    gname = lambda g: (all_groups.get(g, [str(g)])[0], inf.gnames.get(g) or all_groups.get(g, [str(g)])[0])
+    out = {}
+    for t, v in out_types.items():
+        if cat(t) != 6:
+            continue
+        a = {int(k): x for k, x in v[5].items()}
+        lines = collections.OrderedDict()   # (技能或 0, 来源属性) -> { 目标: [被改属性] }
+        for e in v[6]:
+            for f, dom, mattr, sattr, op, extra in (effects.get(e) or [0, 0, []])[2]:
+                val = a.get(sattr)
+                if sattr == 280 or not val or op not in OP_UNIT or mattr not in names and mattr not in ATTR_LABEL:
+                    continue
+                if f == 0 and dom in (0, 1):
+                    tgt = ('舰船', 'ship')
+                elif f == 1:
+                    tgt = ('舰船上的装备', 'fitted modules')
+                elif f == 2:
+                    tgt = gname(extra)
+                elif f in (3, 4) and extra in types:
+                    tgt = ('{%d|%s}' % (extra, types[extra][0]), '{%d|%s}' % (extra, types[extra][1] or types[extra][0]))
+                else:
+                    continue
+                key = (scale.get(sattr, 0), val, op)   # 同一技能、同样数值的合成一行
+                lst = lines.setdefault(key, collections.OrderedDict()).setdefault(tgt, [])
+                if mattr not in lst:
+                    lst.append(mattr)
+        if not lines:
+            continue
+        sk, role = collections.OrderedDict(), []
+        for (skill, val, op), tgts in lines.items():
+            # 同样几项属性的目标合在一起：「{护盾回充增量器}和{装甲维修器}…」
+            by_attrs = collections.OrderedDict()
+            for tgt, ms in tgts.items():
+                by_attrs.setdefault(tuple(sorted(ms)), []).append(tgt)
+            zh_parts, en_parts = [], []
+            for ms, ts in by_attrs.items():
+                lab = [ATTR_LABEL.get(m) or tuple(re.sub(r'(加成|倍增系数| bonus| multiplier)$', '', x, flags=re.I) for x in names[m]) for m in ms]   # 「最大速度加成」+「加成」不重复
+                zh_parts.append('和'.join(x[0] for x in ts) + and_zh([l[0] for l in lab]))
+                en_parts.append(' and '.join(x[1] for x in ts) + ' ' + and_en([l[1] for l in lab]))
+            down = val < 0
+            row = [num(abs(val)), OP_UNIT[op], '；'.join(zh_parts) + ('降低' if down else '加成'), ('reduction in ' if down else 'bonus to ') + '; '.join(en_parts)]
+            (sk.setdefault(skill, []) if skill else role).append(row)
+        e = {}
+        if sk:
+            # 舰船的前置技能顺序（requiredSkill1、2…）在前
+            req = [a.get(x) for x in (182, 183, 184, 1285, 1289, 1290)]
+            e['s'] = sorted(([k, x] for k, x in sk.items()), key=lambda kv: req.index(kv[0]) if kv[0] in req else 9)
+        if role:
+            e['r'] = role
+        out[t] = e
+    return out
 
 
 def adapt_meta(ds, fit, out_types, zh, groups, markets):

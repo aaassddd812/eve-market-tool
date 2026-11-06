@@ -124,13 +124,13 @@ const topDrones = (g) => [...g.drones.values()].sort((a, b) => b.n - a.n)[0]?.li
 
 // 对战模拟（fit-sim.js）用：某型舰船最近 N 天（最近 limit 次损失里）最常见的装配（没有记录时为 null）
 // kills：只看这些击杀（一场会战里这型船的实际损失）
-export async function commonFit(ship, { days = 7, limit = 20, kills = null } = {}) {
+export async function commonFit(ship, { days = 7, limit = 20, kills = null, top = 12 } = {}) {
   const r = await fetch(`/api/kb/shipfits?ship=${ship}&days=${days}&limit=${limit}${kills?.length ? '&kills=' + kills.slice(0, 60).join(',') : ''}` + (IS_TQ ? '' : '&server=' + SERVER.id));
   if (!r.ok) throw new Error(r.status === 404 ? '需要击杀记录服务' : 'HTTP ' + r.status);
   const groups = merge((await r.json()).fits || []);
   if (!groups.length) return null;
   // list：全部装配分组（按出现次数），第一套即最常见的
-  const list = groups.slice(0, 12).map((g) => ({ fit: toFit(g, ship, []), n: g.n }));
+  const list = groups.slice(0, top).map((g) => ({ fit: toFit(g, ship, []), n: g.n, last: g.last, value: g.value, kill: g.ids[0] }));
   return { ...list[0], list, total: groups.reduce((t, g) => t + g.n, 0) };
 }
 

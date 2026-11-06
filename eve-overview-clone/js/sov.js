@@ -422,6 +422,134 @@ function autoCard() {
 // 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
 export const preload = () => loadData();
 
+// ---------- AI 助手（ai.js）：与本页同一套数据和规则 ----------
+const upInfo = (u) => ({ name: u.name, en: u.en, group: D.sov.groups[u.group] || u.group, exclusive_group: u.excl, power: u.power, workforce: u.wf,
+  ...(u.powerProd ? { power_output: u.powerProd } : {}), ...(u.wfProd ? { workforce_output: u.wfProd } : {}),
+  ...(u.fuel ? { fuel: D.sov.reagents[u.fuel].name, fuel_per_hour: u.upkeep, startup_fuel: u.startup } : {}) });
+function findUpgrade(q) {
+  const s = String(q || '').toLowerCase().replace(/[\s·\-_]/g, '');
+  const key = (x) => x.toLowerCase().replace(/[\s·\-_]/g, '');
+  const all = [...D.up.values()];
+  return all.find((u) => key(u.name) === s || key(u.en) === s) || all.find((u) => key(u.name).includes(s) || key(u.en).includes(s)) || null;
+}
+const sysLabel = (id) => { const s = D.sys.get(id); return s ? `${s.name}（${D.regions.get(s.region) || ''}）` : String(id); };
+function sysInfo(id, owners) {
+  const s = D.sys.get(id), o = owners?.get(id);
+  const planets = (s.res?.[1] || []).map(([pid, type, idx, value]) => {
+    const kind = PLANET[type]?.[1];
+    return { planet: `${s.name} ${ROMAN[idx] || idx}`, planet_id: pid, type: PLANET[type]?.[0] || type, skyhook_gives: kind === 'power' ? `电力 ${value}` : kind === 'wf' ? `劳动力 ${value}` : kind ? `${D.sov.reagents[kind].name} ${value}/小时` : '无' };
+  });
+  const sum = (k) => (s.res?.[1] || []).reduce((t, [, type, , v]) => t + (PLANET[type]?.[1] === k ? v : 0), 0);
+  return { system: sysLabel(id), system_id: id, security: Math.round(s.sec * 10) / 10, star_power: s.res?.[0] || 0, max_power: (s.res?.[0] || 0) + sum('power'), max_workforce: sum('wf'),
+    superionic_ice_per_hour: sum(ICE), magmatic_gas_per_hour: sum(GAS), planets,
+    ...(o ? { owner: ownerName(o), ...(o.dev ? { development: { military: o.dev[0], industrial: o.dev[1], strategic: o.dev[2] }, capital: Boolean(o.capital) } : {}) } : owners ? { owner: '无主' } : {}) };
+}
+// 查星系资源；region 给出时按电力 / 劳动力排出星域内的星系
+export async function aiSystems({ ids = [], regionId = 0, sort = 'power', limit = 15 }) {
+  await loadData();
+  const owners = await loadOwners().catch(() => null);
+  if (regionId) {
+    const k = sort === 'workforce' ? 'max_workforce' : sort === 'ice' ? 'superionic_ice_per_hour' : sort === 'gas' ? 'magmatic_gas_per_hour' : 'max_power';
+    const list = [...D.sys.values()].filter((s) => s.region === regionId && s.res).map((s) => sysInfo(s.id, owners)).sort((a, b) => b[k] - a[k]);
+    return { region: D.regions.get(regionId), count: list.length, sorted_by: k, systems: list.slice(0, limit).map(({ planets, ...x }) => x) };
+  }
+  return { systems: ids.filter((id) => D.sys.get(id)?.res).map((id) => sysInfo(id, owners)) };
+}
+export async function aiUpgrades() {
+  await loadData();
+  return { rules: '电力只能本星系用；劳动力可在同联盟星系间沿星门导出 / 导入（途经星系设为中转，每个星系最多 3 个导入来源）；同一互斥组只能装一个；升级件按优先级分配资源，电力监控部门 / 劳动力机械工具的产出只给优先级更低的升级件用；燃料需手动放进主权中心燃料仓，上线时一次性扣启动燃料',
+    upgrades: [...D.up.values()].map(upInfo) };
+}
+// 规划：plans = [{ id, upgrades: [名称], off: [不装天钩的行星 id] }]；auto 时按「一键规划」补电力监控 / 机械工具并配劳动力运输；save 时写入本页规划
+export async function aiPlan(plans, { auto = true, save: keep = false } = {}) {
+  await loadData();
+  const old = P;
+  const missing = [], clash = [];
+  P = { list: [], sys: {} };
+  for (const p of plans) {
+    if (!D.sys.get(p.id)?.res) { missing.push(sysLabel(p.id) + '（不是 00 主权星系或没有数据）'); continue; }
+    // 不装天钩的行星：行星 id、序号（7）、罗马数字（VII）或「星系名 VII」
+    const off = (p.off || []).map((x) => {
+      const t = String(x).trim().split(/\s+/).pop().toUpperCase();
+      const idx = /^\d+$/.test(t) && Number(t) < 100 ? Number(t) : ROMAN.indexOf(t);
+      return D.sys.get(p.id).res[1].find(([pid, , i]) => pid === Number(t) || (idx > 0 && i === idx))?.[0];
+    }).filter(Boolean);
+    const e = { off, ups: [], mode: '', to: 0, amount: 0 };
+    const used = new Map();
+    for (const q of p.upgrades || []) {
+      const u = findUpgrade(q);
+      if (!u) { missing.push(`升级件「${q}」`); continue; }
+      if (used.has(u.excl)) { clash.push(`${D.sys.get(p.id).name}：${u.name} 与 ${used.get(u.excl)} 同属互斥组 ${u.excl}，只能装一个，已忽略 ${u.name}`); continue; }
+      used.set(u.excl, u.name);
+      e.ups.push([u.id, true]);
+    }
+    P.list.push(p.id); P.sys[p.id] = e;
+  }
+  let res = null;
+  try {
+    if (auto) res = autoPlan();
+    const R = simulate();
+    const out = {
+      systems: P.list.map((id) => {
+        const r = R.get(id), e = P.sys[id];
+        return { system: sysLabel(id), system_id: id, power_total: r.powerTotal, power_free: r.freeP, workforce_total: r.wfTotal, workforce_free: r.freeW,
+          workforce_transport: e.mode ? { mode: MODE_NAME[e.mode], ...(e.mode === 'export' ? { to: sysLabel(e.to), amount: e.amount } : {}), ...(r.imp ? { imported: r.imp } : {}) } : '不运输',
+          upgrades: r.ups.map((x) => ({ name: x.u?.name || x.tid, state: { ok: '可上线', low: '资源不足（低电量）', off: '未启用', gone: '已移除' }[x.state], ...(e.ups.find(([t]) => t === x.u?.id)?.[2] ? { auto_added: true } : {}) })),
+          fuel_per_hour: Object.fromEntries(Object.entries(r.fuel).filter(([, v]) => v).map(([k, v]) => [D.sov.reagents[k].name, v])),
+          startup_fuel: Object.fromEntries(Object.entries(r.startup).filter(([, v]) => v).map(([k, v]) => [D.sov.reagents[k].name, v])),
+          skyhooks_off: e.off.length ? e.off : undefined, warnings: r.warn.length ? r.warn : undefined };
+      }),
+      ...(res ? { auto_plan: { added: res.added.map(([id, u]) => `${D.sys.get(id).name}：${u.name}`), transport: res.flows.map((f) => `${D.sys.get(f.from).name} → ${D.sys.get(f.to).name} ${f.amount}`), unmet_workforce: res.unmet.map(([id, n]) => `${D.sys.get(id).name} 缺 ${n}`) } } : {}),
+      ...(missing.length ? { not_found: missing } : {}), ...(clash.length ? { exclusive_conflicts: clash } : {})
+    };
+    if (keep) {
+      // 合并进本页已有规划（同星系覆盖）
+      for (const id of P.list) { if (!old.list.includes(id)) old.list.push(id); old.sys[id] = P.sys[id]; }
+      P = old; sortList(); S.autoRes = null; S.cur = plans[0]?.id || S.cur;
+      ctx.store.setJSON(STORE_KEY, P);
+      out.saved = true;
+    }
+    return out;
+  } finally {
+    if (!keep) P = old;
+  }
+}
+
+// 我的主权设施（当前角色所在军团，ESI）：与「我的主权设施」页同一份数据
+export async function aiMyHubs({ refresh = false } = {}) {
+  await loadData();
+  if (!IS_TQ) return { error: '主权中心 / 天钩接口只有宁静服（欧服）有' };
+  if (!ctx.hasEsiToken()) return { error: '没有绑定 ESI 角色', page_link: '#sov/esi' };
+  if (!ctx.hasScopeGroup?.('sov')) return { error: '当前角色授权缺少「主权设施」权限（esi-structures.read_corporation.v1），请到个人中心补授权', page_link: '#sov/esi' };
+  if (refresh || !S.esi || S.esi.error) { if (S.esiLoading) while (S.esiLoading) await new Promise((r) => setTimeout(r, 300)); else await loadEsi(); }
+  const d = S.esi, now = Date.now();
+  if (d.error) return { error: d.error, page_link: '#sov/esi' };
+  const name = (id) => D.sys.get(id)?.name || String(id);
+  return {
+    corporation: d.corpName, read_at: new Date(d.at).toISOString(), page_link: '#sov/esi',
+    hubs: d.hubs.map((h) => {
+      if (h.error) return { system: name(h.solar_system_id), error: h.error };
+      const bay = h.reagent_bay, conf = h.workforce_transport?.configuration || {}, res = h.resources || {};
+      return { system: name(h.solar_system_id), region: D.regions.get(D.sys.get(h.solar_system_id)?.region) || '',
+        power: { allocated: res.power?.allocated, available: res.power?.available }, workforce: { allocated: res.workforce?.allocated, available: res.workforce?.available },
+        upgrades: (h.upgrades || []).map((u) => ({ name: D.up.get(u.type_id)?.name || u.type_id, state: STATE_NAME[u.power_state] || u.power_state })),
+        fuel: (bay?.reagents || []).map((x) => {
+          const left = Math.max(0, x.amount - x.burning_per_hour * (now - Date.parse(bay.last_updated)) / 3600e3);
+          return { reagent: reagentName(x.type_id), left: Math.round(left), per_hour: x.burning_per_hour, hours_left: x.burning_per_hour ? Math.round(left / x.burning_per_hour) : null };
+        }),
+        workforce_transport: conf.export ? `导出 ${conf.export.amount} → ${name(conf.export.solar_system_id)}` : conf.import ? `导入 ← ${conf.import.sources.map((x) => name(x.solar_system_id)).join('、')}` : conf.transit ? '中转' : '不运输',
+        vulnerability_window: h.vulnerability_window || null };
+    }),
+    skyhooks: d.skyhooks.map((k) => {
+      const pl = planetInfo(k.planet_id);
+      if (k.error) return { planet: pl.name, error: k.error };
+      return { planet: pl.name, type: pl.type, active: k.is_active, state: SKYHOOK_STATE[k.state] || k.state,
+        reagents: (k.reagents || []).map((x) => ({ reagent: reagentName(x.type_id), secured: x.secured_stock, unsecured: x.unsecured_stock })),
+        ...(k.theft_vulnerability ? { theft_window: k.theft_vulnerability } : {}) };
+    })
+  };
+}
+
 export async function showSov(hash) {
   const main = $('sovMain');
   const m = /^#sov(?:\/(overview|esi|sys\/(\d+)))?/.exec(hash || '');
