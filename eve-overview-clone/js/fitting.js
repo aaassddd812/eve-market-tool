@@ -1051,6 +1051,7 @@ function renderFit() {
           <button class="btn btn-ghost" data-fit-import title="粘贴 EFT 格式文本">导入</button>
           <button class="btn btn-ghost" data-fit-export title="复制为 EFT 格式（可导入游戏或 Pyfa）">导出</button>
           <button class="btn btn-ghost" data-fit-share title="复制分享链接">分享</button>
+          <button class="btn btn-ghost" data-fit-pz-post title="把当前装配发到广场「装配」分类，供其他玩家借鉴">分享到广场</button>
           <button class="btn btn-ghost" data-fit-cart title="舰船、装备、弹药、无人机和植入体加入购物车（突变装备按原装备 + 突变质体）">加入购物车</button>
           <button class="btn btn-ghost" data-fit-esi-list title="${bound ? '读取已绑定角色在游戏里保存的装配' : '需要先绑定 ESI'}"${bound ? '' : ' disabled'}>游戏装配</button>
           <button class="btn btn-ghost" data-fit-esi-save title="${bound ? '通过 ESI 保存到游戏装配窗口（个人装配）' : '需要先绑定 ESI'}"${bound ? '' : ' disabled'}>存到游戏</button>
@@ -1622,6 +1623,7 @@ async function onMainClick(e) {
   if (el('[data-fit-delete]')) { deleteFit(); return; }
   if (el('[data-fit-import]')) { openModal(); return; }
   if (el('[data-fit-export]')) { app.copyText(toEft(F.fit), '已复制 EFT 文本'); return; }
+  if (el('[data-fit-pz-post]')) { app.openPlazaFit?.(); return; }
   if (el('[data-fit-share]')) { app.copyText(shareUrl(), '分享链接已复制'); return; }
   if (el('[data-fit-cart]')) { app.addToCart(fitShoppingList(F.fit)); return; }
   if (el('[data-fit-esi-list]')) { openEsiModal(); return; }

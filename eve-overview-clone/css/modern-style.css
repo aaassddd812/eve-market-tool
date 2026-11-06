@@ -8139,7 +8139,7 @@ a.pz-name:hover { color: var(--accent-primary); }
 .pz-author img { border-radius: 50%; }
 .pz-author small { color: var(--text-secondary); }
 .pz-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-.pz-actions .btn { background: var(--bg-tertiary); }
+.pz-actions .btn:not(.btn-primary) { background: var(--bg-tertiary); }
 .pz-admin { color: var(--danger, #e5484d); }
 .pz-fit-pick { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius-lg); background: var(--bg-tertiary); }
 .pz-fit-pick img { border-radius: 8px; }
