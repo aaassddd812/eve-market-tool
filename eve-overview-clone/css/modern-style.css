@@ -8141,6 +8141,16 @@ a.pz-name:hover { color: var(--accent-primary); }
 .pz-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .pz-actions .btn { background: var(--bg-tertiary); }
 .pz-admin { color: var(--danger, #e5484d); }
+.pz-fit-pick { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: var(--radius-lg); background: var(--bg-tertiary); }
+.pz-fit-pick img { border-radius: 8px; }
+.pz-fit-pick > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pz-fit-pick small { color: var(--text-secondary); font-size: 0.75rem; }
+.pz-fit-pick .pz-tag { margin-left: auto; }
+.pz-fit-pick + .link-btn { margin-top: 6px; align-self: flex-start; }
+.pz-fit-mods { gap: 6px 8px; }
+.fp-author { display: inline-flex; align-items: center; gap: 5px; font-size: 0.8125rem; color: var(--text-secondary); }
+.fp-author img { border-radius: 50%; }
+.fp-text { margin: 4px 0 8px; font-size: 0.8125rem; color: var(--text-secondary); white-space: pre-wrap; }
 .pz-ships { display: flex; flex-wrap: wrap; gap: 8px; font-size: 0.8125rem; color: var(--text-secondary); }
 .pz-ships span { display: inline-flex; align-items: center; gap: 2px; }
 .pz-ships img { border-radius: 4px; }

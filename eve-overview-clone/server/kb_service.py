@@ -5933,13 +5933,16 @@ class WhSos:
 #   组队 fleet：服务器读角色当前所在舰队，必须是舰队老板（能读 /fleets/{id}/）；附上人数、常见舰船与所在星系，每个角色一条。
 #   集市 market：挂自己发起的公开合同（ESI 个人合同里 可见范围=公开、待接受、发起人是本人 的），保存物品清单快照，合同到期时一起过期。
 #   其他 other：自由发帖，每个角色同时最多 PLAZA_OTHER_MAX 条。
+#   装配 fit：分享装配页的装配（data.fit 为装配页分享链接同样的紧凑格式，data.ship 为舰船），每个角色同时最多 PLAZA_FIT_MAX 条；
+#     装配页可按舰船读取（GET /plaza?kind=fit&ship=）一键套用。
 # 重新提交即更新并顶到最前、续期。站长（EVE_FEEDBACK_ADMIN_IPS）可以删除任意帖子。
-PLAZA_TTL = {"recruit": 30 * 86400, "fleet": 12 * 3600, "market": 30 * 86400, "other": 7 * 86400}
+PLAZA_TTL = {"recruit": 30 * 86400, "fleet": 12 * 3600, "market": 30 * 86400, "other": 7 * 86400, "fit": 180 * 86400}
 PLAZA_TAGS = {
     "recruit": ["新人友好", "PVP", "PVE", "工业", "挖矿", "虫洞", "00 区", "低安", "高安", "势力战争", "亚洲时区", "欧美时区"],
     "fleet": ["PVE", "PVP", "挖矿", "虫洞", "深渊", "运输", "新人带飞", "势力战争", "游荡"],
     "market": [],
     "other": ["求助", "交流", "求购", "出售", "服务"],
+    "fit": ["PVE", "PVP", "刷怪", "深渊", "虫洞", "挖矿", "运输", "探索", "舰队", "单刷", "新人", "低成本"],
 }
 PLAZA_RATE = 20                 # 每个 IP 每分钟最多提交次数（含撤下、读合同）
 PLAZA_POSTS = (2, 60)           # 发新帖：每个 IP 每 60 秒最多 2 条（编辑已有帖子不算）
@@ -5947,6 +5950,7 @@ PLAZA_TITLE_MAX = 60
 PLAZA_TEXT_MAX = 1000
 PLAZA_CONTACT_MAX = 80
 PLAZA_OTHER_MAX = 3
+PLAZA_FIT_MAX = 20
 PLAZA_MARKET_MAX = 30
 PLAZA_ITEMS_MAX = 200
 PLAZA_SCHEMA = """
@@ -6056,6 +6060,41 @@ class Plaza:
         if not isinstance(v, list) or len(v) > 6 or any(t not in PLAZA_TAGS[kind] for t in v):
             raise ValueError("标签不在可选范围内")
         return list(dict.fromkeys(v))
+
+    @staticmethod
+    def fit_of(v):
+        """装配页分享链接的紧凑格式：{s: 舰船, n: 名称, m: {槽位: [[装备, 弹药, 状态, 突变?] | 0]}, d: [[无人机, 数量, 激活]], i: [植入体]}"""
+        bad = ValueError("装配数据无效，请在装配页重新选择")
+        isint = lambda x: type(x) is int and 0 <= x < 2**31
+        if not isinstance(v, dict) or not isint(v.get("s")) or not v["s"]:
+            raise bad
+        if len(json.dumps(v, separators=(",", ":"))) > 12000:
+            raise ValueError("装配数据太大")
+        out = {"s": v["s"]}
+        name = v.get("n")
+        if name is not None:
+            out["n"] = WhSos.text(name, 60, "装配名称")
+        m = v.get("m") or {}
+        if not isinstance(m, dict) or any(k not in ("high", "mid", "low", "rig", "sub") for k in m):
+            raise bad
+        for slot, mods in m.items():
+            if not isinstance(mods, list) or len(mods) > 12:
+                raise bad
+            for x in mods:
+                if x != 0 and not (isinstance(x, list) and 3 <= len(x) <= 4 and all(isint(y) for y in x[:3]) and x[2] <= 3):
+                    raise bad
+        out["m"] = m
+        d = v.get("d")
+        if d is not None:
+            if not isinstance(d, list) or len(d) > 20 or any(not (isinstance(x, list) and len(x) == 3 and all(isint(y) for y in x)) for x in d):
+                raise bad
+            out["d"] = d
+        i = v.get("i")
+        if i is not None:
+            if not isinstance(i, list) or len(i) > 12 or not all(isint(y) for y in i):
+                raise bad
+            out["i"] = i
+        return out
 
     @staticmethod
     def body_text(v):
@@ -6189,17 +6228,23 @@ class Plaza:
             data = {"corp_name": ci.get("name"), "ticker": ci.get("ticker"), "members": ci.get("member_count"), "ceo_id": ci.get("ceo_id"),
                     "alliance_id": ci.get("alliance_id"), "alliance_name": names.get(ci.get("alliance_id")), "tax": ci.get("tax_rate"),
                     "founded": ci.get("date_founded"), "url": (ci.get("url") or "")[:200]}
-        elif kind == "other":
+        elif kind in ("other", "fit"):
             data = {}
+            if kind == "fit":
+                fit = self.fit_of(body.get("fit"))
+                data = {"ship": fit["s"], "fit": fit}
+                if not title:
+                    raise ValueError("请填写标题")
             if pid:
                 r = self.row(server, pid)
-                if r["kind"] != "other" or r["char_id"] != char:
+                if r["kind"] != kind or r["char_id"] != char:
                     raise ValueError("只能修改自己发的帖子")
                 key = r["key"]
             else:
-                n = c.execute("SELECT COUNT(*) FROM plaza WHERE server=? AND kind='other' AND char_id=? AND expires>?", (server, char, now)).fetchone()[0]
-                if n >= PLAZA_OTHER_MAX:
-                    raise ValueError(f"每个角色同时最多 {PLAZA_OTHER_MAX} 条，可以先撤下旧的")
+                cap = PLAZA_FIT_MAX if kind == "fit" else PLAZA_OTHER_MAX
+                n = c.execute("SELECT COUNT(*) FROM plaza WHERE server=? AND kind=? AND char_id=? AND expires>?", (server, kind, char, now)).fetchone()[0]
+                if n >= cap:
+                    raise ValueError(f"每个角色同时最多 {cap} 条，可以先撤下旧的")
                 key = f"{char}:{now}:{secrets.token_hex(3)}"
         corp, alli = pubinfo.get("corporation_id"), pubinfo.get("alliance_id")
         nm = self.names(server, [corp, alli])
@@ -6245,13 +6290,13 @@ class Plaza:
         if q.get("kind"):
             sql += " AND kind=?"
             args.append(self.kind_of(q["kind"]))
-        for k, col in (("corp", "corp_id"), ("char", "char_id"), ("id", "id")):
+        for k, col in (("corp", "corp_id"), ("char", "char_id"), ("id", "id"), ("ship", "json_extract(data, '$.ship')")):
             if q.get(k):
                 sql += f" AND {col}=?"
                 args.append(int(q[k]))
         rows = self.store.conn().execute(sql + " ORDER BY updated DESC LIMIT 500", args).fetchall()
         return {"items": [self.out(dict(zip(PLAZA_COLS, r))) for r in rows], "tags": PLAZA_TAGS,
-                "ttl": PLAZA_TTL, "other_max": PLAZA_OTHER_MAX}
+                "ttl": PLAZA_TTL, "other_max": PLAZA_OTHER_MAX, "fit_max": PLAZA_FIT_MAX}
 
 
 # ---------------------------------------------------------------- 预警推送（企业微信群机器人、电子邮件）
@@ -7003,7 +7048,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.send_json(429, {"error": f"请求太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
             try:
                 length = int(self.headers.get("Content-Length") or 0)
-                if not 0 < length <= 16384:
+                if not 0 < length <= 32768:
                     raise ValueError
                 body = json.loads(self.rfile.read(length))
                 if not isinstance(body, dict):

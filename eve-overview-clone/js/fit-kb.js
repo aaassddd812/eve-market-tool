@@ -163,3 +163,86 @@ function onClick(e) {
     ctx.showToast('已套用击杀记录装配', 'success');
   }
 }
+
+// ===== 广场装配 =====
+// 其他玩家在广场「装配」分类分享的当前舰船装配（/api/kb/plaza?kind=fit&ship=），按发布 / 更新时间排序，点「套用」载入装配页；
+// 顶部可以把当前装配发到广场（跳到广场发帖页，分类选好「装配」）
+const PZ = { posts: [], loading: 0 };
+const PORTRAIT = (id) => `https://images.evetech.net/characters/${id}/portrait?size=32`;
+
+export function openPlazaFits() {
+  let modal = $('fitPzModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'fitPzModal';
+    modal.className = 'modal fa-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.innerHTML = `<div class="modal-backdrop"></div><div class="modal-content fk-content">
+      <div class="modal-header"><h3 id="fpTitle">广场装配</h3><button class="modal-close" data-fp-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+      <div class="modal-body"><div class="fk-bar" id="fpBar"></div><div class="fk-list" id="fpList"></div></div></div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', onPzClick);
+  }
+  modal.hidden = false;
+  loadPz();
+}
+const closePz = () => { const m = $('fitPzModal'); if (m) m.hidden = true; };
+
+async function loadPz() {
+  const ship = ctx.getFit().ship;
+  $('fpTitle').textContent = `${ctx.data.types.get(ship)?.name || ''} · 广场装配`;
+  $('fpBar').innerHTML = '<span class="text-muted">其他玩家分享的这艘船的装配</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost" data-fp-share>把当前装配发到广场</button>';
+  const token = ++PZ.loading;
+  $('fpList').innerHTML = '<div class="fa-empty">读取广场…</div>';
+  try {
+    const r = await fetch(`/api/kb/plaza?server=${SERVER.id}&kind=fit&ship=${ship}`);
+    if (!r.ok) throw new Error(r.status === 404 ? '需要击杀记录服务' : 'HTTP ' + r.status);
+    const j = await r.json();
+    if (token !== PZ.loading) return;
+    PZ.posts = (j.items || []).filter((p) => p.data?.fit);
+    renderPz();
+  } catch (err) {
+    if (token === PZ.loading) $('fpList').innerHTML = `<div class="fa-empty">读取失败：${ctx.esc(err.message)}</div>`;
+  }
+}
+
+function renderPz() {
+  const { esc, data, FE } = ctx;
+  const name = (id) => data.types.get(id)?.name || id;
+  $('fpList').innerHTML = PZ.posts.map((p, i) => {
+    const fit = ctx.fromCompact(p.data.fit);
+    let dps = '';
+    try { const c = FE.computeFit(data, fit); if (c) dps = FE.fitStats(c).weapon.total.toFixed(0) + ' DPS'; } catch { /* 算不出来就不显示 */ }
+    const slots = FE.SLOTS.map((s) => {
+      const map = new Map();
+      for (const m of fit.slots[s]) if (m) map.set(m.type, (map.get(m.type) || 0) + 1);
+      if (!map.size) return '';
+      return `<div class="fa-slot"><span>${FE.SLOT_NAME[s]}</span><div>${[...map].map(([id, n]) => `<em title="${esc(name(id))}"><img src="${IMG(id)}" alt="" width="20" height="20" loading="lazy">${esc(name(id))}${n > 1 ? ` <b>×${n}</b>` : ''}</em>`).join('')}</div></div>`;
+    }).join('');
+    const drones = fit.drones.length ? `<div class="fa-slot"><span>无人机</span><div>${fit.drones.map((d) => `<em><img src="${IMG(d.type)}" alt="" width="20" height="20" loading="lazy">${esc(name(d.type))} <b>×${d.count}</b></em>`).join('')}</div></div>` : '';
+    const tags = (p.tags || []).map((t) => `<span class="pz-tag">${esc(t)}</span>`).join('');
+    return `<div class="fa-result fk-item">
+      <div class="fa-result-head"><b class="notranslate">${esc(p.title || p.data.fit.n || '')}</b>${dps ? `<span class="text-muted">${dps}</span>` : ''}${tags}
+        <span class="fp-author"><img src="${PORTRAIT(p.char_id)}" alt="" width="18" height="18" loading="lazy"><span class="notranslate">${esc(p.name)}</span></span>
+        <a class="link-btn" href="#plaza/p/${p.id}" data-fp-post>查看帖子</a>
+        <button type="button" class="btn btn-primary" data-fp-apply="${i}">套用</button></div>
+      ${p.text ? `<p class="fp-text notranslate">${esc(p.text)}</p>` : ''}
+      ${slots}${drones}
+    </div>`;
+  }).join('') || '<div class="fa-empty">还没有人分享这艘船的装配，可以把你的装配发到广场</div>';
+}
+
+function onPzClick(e) {
+  if (e.target.closest('[data-fp-close]') || e.target.classList.contains('modal-backdrop')) { closePz(); return; }
+  if (e.target.closest('[data-fp-post]')) { closePz(); return; }
+  if (e.target.closest('[data-fp-share]')) { closePz(); ctx.sharePlaza(); return; }
+  const a = e.target.closest('[data-fp-apply]');
+  if (a) {
+    const p = PZ.posts[Number(a.dataset.fpApply)];
+    const fit = ctx.fromCompact(p.data.fit);
+    if (!fit.name) fit.name = p.title || '';
+    ctx.applyFit(fit, true);
+    closePz();
+    ctx.showToast('已套用广场装配', 'success');
+  }
+}

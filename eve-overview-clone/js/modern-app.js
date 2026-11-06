@@ -230,21 +230,32 @@ async function copyText(text, label = '已复制') {
   }
 }
 
+// ESI 偶尔返回 502 / 503 / 504（官方服务器一时超时或繁忙），隔一会儿重试两次；仍失败给出可读的说明
+const ESI_RETRY = new Set([502, 503, 504]);
+async function esiFetch(url, options = {}) {
+  for (let i = 0; ; i++) {
+    const response = await fetch(url, options);
+    if (response.ok || !ESI_RETRY.has(response.status) || i >= 2) return response;
+    await new Promise((r) => setTimeout(r, 800 * (i + 1) + Math.random() * 400));
+  }
+}
+const esiError = (status) => new Error(ESI_RETRY.has(status) ? `官方 ESI 暂时无响应（${status}），已自动重试，请稍后再试` : `ESI ${status}`);
+
 async function fetchESI(endpoint, options = {}) {
   const url = endpoint.startsWith('http') ? endpoint : esiUrl(endpoint);
-  const response = await fetch(url, {
+  const response = await esiFetch(url, {
     ...options,
     headers: { 'Accept-Language': 'zh', ...options.headers }
   });
-  if (!response.ok) throw new Error(`ESI ${response.status}`);
+  if (!response.ok) throw esiError(response.status);
   return response.json();
 }
 
 // 市场订单接口分页（X-Pages），热门物品在大星域可能超过一页
 async function fetchESIPaged(endpoint, options = {}) {
   const sep = endpoint.includes('?') ? '&' : '?';
-  const first = await fetch(esiUrl(`${endpoint}${sep}page=1`), options);
-  if (!first.ok) throw new Error(`ESI ${first.status}`);
+  const first = await esiFetch(esiUrl(`${endpoint}${sep}page=1`), options);
+  if (!first.ok) throw esiError(first.status);
   const pages = Math.min(Number(first.headers.get('X-Pages')) || 1, 20);
   const results = [await first.json()];
   if (pages > 1) {
@@ -715,11 +726,19 @@ async function openWormhole() {
 // 广场（招新 / 组队 / 集市 / 其他）：首次进入时加载
 let plazaLoading = null;
 function loadPlazaModule() {
-  if (!plazaLoading) plazaLoading = import('./plaza.js?v=v3').then((m) => {
+  if (!plazaLoading) plazaLoading = import('./plaza.js?v=v4').then((m) => {
     m.initPlaza({
       esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, accountToken, valuation, openTicket, game: gameActions,
       accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
-      openEsiBind: () => { switchView('profile'); openEsiModal('fleet'); }
+      openEsiBind: () => { switchView('profile'); openEsiModal('fleet'); },
+      // 「装配」分类：读装配页当前装配、在装配页打开帖子里的装配
+      currentFit: async () => (await loadFittingModule()).currentFit(),
+      openFit: async (c) => {
+        try { (await loadFittingModule()).queueCompactFit(c); } catch (error) { showToast('模拟装配加载失败：' + error.message, 'error', 4000); return; }
+        history.pushState(null, '', location.pathname + '#fit');
+        switchView('fit');
+      },
+      gotoFit: () => { history.pushState(null, '', location.pathname + '#fit'); switchView('fit'); }
     });
     return m;
   }).catch((error) => { plazaLoading = null; throw error; });
@@ -1057,7 +1076,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v112').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v113').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -1069,6 +1088,7 @@ function loadFittingModule() {
       openPlan: () => openSkillPlan(),
       openEsiBind: () => { switchView('profile'); openEsiModal(); },
       openFit: () => { history.pushState(null, '', location.pathname + '#fit'); switchView('fit'); },
+      openPlazaFit: () => { history.pushState(null, '', location.pathname + '#plaza/new/fit'); switchView('plaza'); },
       openBattles: () => { history.pushState(null, '', location.pathname + '#kb/battles'); switchView('kb'); },
       openItem: (id) => { switchView('market'); selectItem(id); }
     });

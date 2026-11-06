@@ -6,9 +6,9 @@
 import * as FE from './fit-engine.js?v=v36';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit } from './fit-auto.js?v=v31';
-import { initKbFits, openKbFits } from './fit-kb.js?v=v28';
-import { initSim, mountSim } from './fit-sim.js?v=v37';
-import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v11';
+import { initKbFits, openKbFits, openPlazaFits } from './fit-kb.js?v=v29';
+import { initSim, mountSim } from './fit-sim.js?v=v38';
+import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v12';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
 import { makeFloat, pinBtn, closeBtn } from './float-pop.js?v=3';
@@ -80,6 +80,8 @@ export function initFitting(context) {
     getFit: () => F.fit,
     applyFit,
     esiLevels: () => F.esi?.levels || null,
+    fromCompact,
+    sharePlaza: () => app.openPlazaFit?.(),
     hasEsi: () => app.hasEsiToken(),
     // 智能装配 / 智能植入体弹窗里选「按角色」：直接读取当前角色技能（装配页的技能模式不变）
     loadEsiLevels: async () => { if (!F.esi) F.esi = await app.getCharacterSkills(); return F.esi?.levels || null; },
@@ -1039,6 +1041,7 @@ function renderFit() {
           <button class="btn btn-ghost fit-plan-btn" data-fit-auto title="按目标与约束自动装配">智能装配</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-imp title="装备不动，按目标推荐植入体">智能植入体</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-kb title="这艘船最近阵亡时的常见装配">击杀记录装配</button>
+          <button class="btn btn-ghost fit-plan-btn" data-fit-pz title="其他玩家在广场分享的这艘船的装配，也可以把当前装配发到广场">广场装配</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-graph title="有效 DPS 随距离、目标速度、信号半径变化的曲线（类似 Pyfa 的图表）">伤害图表</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-sim title="打开「战场模拟」页：两方舰队按装配模拟交战">战场模拟</button>
           <button class="btn btn-ghost fit-plan-btn" data-fit-skillplan title="按角色技能规划开这艘船、用好这套装配要练的技能">技能规划</button>
@@ -1625,6 +1628,7 @@ async function onMainClick(e) {
   if (el('[data-fit-auto]')) { openAutoFit(); return; }
   if (el('[data-fit-imp]')) { openImplantAdvisor(); return; }
   if (el('[data-fit-kb]')) { openKbFits(); return; }
+  if (el('[data-fit-pz]')) { openPlazaFits(); return; }
   if ((x = el('[data-fit-esi-save]'))) { saveToGame(x); return; }
 }
 
@@ -2138,14 +2142,44 @@ async function onEsiModalClick(e) {
 const STATE_CODE = { offline: 0, online: 1, active: 2, overload: 3 };
 const CODE_STATE = ['offline', 'online', 'active', 'overload'];
 
-function shareUrl() {
-  const f = F.fit;
-  const compact = {
+// 紧凑格式（分享链接、广场「装配」帖子共用）
+function toCompact(f) {
+  return JSON.parse(JSON.stringify({
     s: f.ship, n: f.name || undefined,
     m: Object.fromEntries(FE.SLOTS.filter((s) => f.slots[s].length).map((s) => [s, f.slots[s].map((m) => (m ? [m.type, m.charge || 0, STATE_CODE[m.state], ...(m.mut ? [[m.mut.base, m.mut.mutator, m.mut.attrs]] : [])] : 0))])),
     d: f.drones.length ? f.drones.map((d) => [d.type, d.count, d.active]) : undefined,
     i: f.implants.length ? f.implants : undefined
-  };
+  }));
+}
+function fromCompact(c) {
+  const fit = newFit(c.s);
+  fit.name = c.n || '';
+  for (const s of FE.SLOTS) fit.slots[s] = (c.m?.[s] || []).map((x) => (x ? { type: x[0], charge: x[1] || null, state: CODE_STATE[x[2]] || 'online', ...(x[3] ? { mut: { base: x[3][0], mutator: x[3][1], attrs: x[3][2] } } : {}) } : null));
+  fit.drones = (c.d || []).map(([t, count, active]) => ({ type: t, count, active }));
+  fit.implants = c.i || [];
+  return fit;
+}
+// 广场发「装配」帖：当前装配（紧凑格式）与摘要；没有装配时为 null
+// 还没进过装配页时读上次保存的当前装配
+export async function currentFit() {
+  const data = await ensureData();
+  let fit = F.fit, stats = F.stats;
+  if (!F.ready) {
+    const saved = app.store.getJSON(CURRENT_KEY, null);
+    fit = saved && data.types.has(saved.ship) ? normalize(saved) : null;
+    try { const c = fit && FE.computeFit(data, fit); stats = c ? FE.fitStats(c) : null; } catch { stats = null; }
+  }
+  if (!fit) return null;
+  const mods = FE.SLOTS.reduce((n, s) => n + fit.slots[s].filter(Boolean).length, 0);
+  return { fit: toCompact(fit), ship: fit.ship, shipName: type(fit.ship)?.name || '', name: fit.name || '', mods, dps: stats?.weapon.total || 0 };
+}
+// 广场「装配」帖子「在装配页打开」：进入装配页时载入
+export function queueCompactFit(c) {
+  pendingFit = fromCompact(c);
+}
+
+function shareUrl() {
+  const compact = toCompact(F.fit);
   const json = new TextEncoder().encode(JSON.stringify(compact));
   let bin = '';
   json.forEach((b) => { bin += String.fromCharCode(b); });
@@ -2158,11 +2192,7 @@ function loadFromHash() {
   try {
     const bin = atob(m[1].replace(/-/g, '+').replace(/_/g, '/'));
     const c = JSON.parse(new TextDecoder().decode(Uint8Array.from(bin, (ch) => ch.charCodeAt(0))));
-    const fit = newFit(c.s);
-    fit.name = c.n || '';
-    for (const s of FE.SLOTS) fit.slots[s] = (c.m?.[s] || []).map((x) => (x ? { type: x[0], charge: x[1] || null, state: CODE_STATE[x[2]] || 'online', ...(x[3] ? { mut: { base: x[3][0], mutator: x[3][1], attrs: x[3][2] } } : {}) } : null));
-    fit.drones = (c.d || []).map(([t, count, active]) => ({ type: t, count, active }));
-    fit.implants = c.i || [];
+    const fit = fromCompact(c);
     stashDraft(F.fit);
     F.fit = normalize(fit);
     history.replaceState(null, '', location.pathname + '#fit');

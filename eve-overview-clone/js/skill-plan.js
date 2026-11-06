@@ -7,7 +7,7 @@
 // 「复制技能清单」每行「技能名 等级」，在游戏技能窗口的训练队列里 Ctrl+V 即可整批加入。
 // 目标也可以是游戏里现有的训练队列：按原顺序或短的先练重排，补上缺的前置，可与其他目标一起排；复制后先清空游戏队列再粘贴。
 // 训练顺序（不换属性）：总时长与顺序无关，顺序只决定先练完哪些。可按目标 / 短的先练 / 先能开船排，再逐项上移、下移、置顶（连同前置），前置始终在前。
-import { commonFit } from './fit-kb.js?v=v28';
+import { commonFit } from './fit-kb.js?v=v29';
 
 let ctx;   // data, FE, getFit, savedFits, normalize, hasEsi, esiFetch, getEsiToken, getImplants, openEsiBind, esc, formatNumber, showToast, store
 const KEY = 'eve-skill-plan-v1';

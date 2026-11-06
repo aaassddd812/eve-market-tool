@@ -9,7 +9,7 @@
 // 点舰船打开装配详情：看槽位与属性，从本场 / 最近常见的几套装配和自己的装配里换一套。
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失；
 // 「AT 赛」（sim-at.js）可选这一届联盟锦标赛已打过的比赛，双方选手各一行带进来（蓝队 A 方、红队 B 方），战场上像比赛直播一样显示两队名单与血条。
-import { commonFit } from './fit-kb.js?v=v28';
+import { commonFit } from './fit-kb.js?v=v29';
 import { createBattle, simulate } from './sim-engine.js?v=v12';
 import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
 

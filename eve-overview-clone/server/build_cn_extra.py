@@ -164,10 +164,13 @@ ABBR = {'med': 'medium', 'dmg': 'damage', 'rof': 'rate', 'ac': 'autocannon', 'ar
         'railgun': 'railgun hybrid', 'blaster': 'blaster hybrid', 'autocannon': 'autocannon projectile',
         'artillery': 'artillery projectile', 'laser': 'laser energy'}
 SIZE = {'small', 'medium', 'large', 'capital', 'heavy', 'light'}
-# 推断不出的国服效果（名字连写、fighter 是停用词）：效果名 -> 技能，只用于推断失败的技能修正
+# 推断不出的国服效果（名字连写、fighter 是停用词）：效果名 -> 技能，或 { 被修改的属性: 技能 }，只用于推断失败的技能修正
 MANUAL = {
     'SerpentisModifiedBonustoFighterDamageandHP': 23069,                  # 诛日级：舰载机伤害、护盾
     'SerpentisModifiedBonustoSupportFighterWebRangeandStrength': 40573,   # 诛日级：后勤铁骑舰载机停滞缠绕距离、强度
+    'eliteBonusMarauderSentryHPandDamage': 23594,                         # 巡察者级：岗哨无人机伤害、HP（岗哨无人机操控理论）
+    # 巡察者级「巡察」堡垒装备：装甲维修、护盾回充（同宁静堡垒）；无人机伤害、射程、失准、速度（无人机都需要「无人机概论」）
+    'moduleBonusSacribisBastion': {84: 3393, 68: 3416, 64: 3436, 54: 3436, 158: 3436, 37: 3436},
 }
 STOP = {'ship', 'bonus', 'role', 'solar', 'flare', 'weapon', 'and', 'post', 'percent', 'location', 'modules',
         'requiring', 'owner', 'char', 'skill', 'set', 'operation', 'the', 'of', 'for', 'no', 'fighter', 'entity'}
@@ -256,7 +259,9 @@ class Inferer:
                 out.append([*key, 0])
                 continue
             cands = self.sig.get((key[0], key[1], key[2], key[4]), {})
-            picks = self.pick(et, f, cands) or ([MANUAL[effect['name']]] if f in (3, 4) and effect['name'] in MANUAL else [])
+            man = MANUAL.get(effect['name']) if f in (3, 4) else None
+            man = man.get(key[2]) if isinstance(man, dict) else man
+            picks = self.pick(et, f, cands) or ([man] if man else [])
             dropped += not picks
             out += [[*key, x] for x in picks]
         return out, dropped

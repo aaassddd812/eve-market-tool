@@ -3,6 +3,7 @@
 //   招新：军团招新广告，服务器读角色所在军团（同一军团一条，发布人或 CEO 可改）；
 //   组队：服务器读角色当前舰队，必须是舰队老板，附人数、常见舰船、所在星系；
 //   集市：挂自己发起的公开合同（服务器从 ESI 读合同与物品清单），合同到期一起下架；
+//   装配：分享装配页的当前装配（紧凑格式，同装配页分享链接），卡片里可以「在装配页打开」；装配页「广场装配」按舰船读取。
 //   其他：自由发帖。
 // GET /api/kb/plaza?server= 读全部未过期帖子；POST /api/kb/plaza/{save,delete,contracts} 带角色令牌；站长 IP 可删帖（admin/*）。
 // 列表：「全部」按分类分区显示（每类最新几条 +「查看全部」），也可以切到单个分类或「我的」；发帖是单独一页，先选分类再填表。
@@ -10,16 +11,17 @@
 import { SERVER } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
 
-let ctx = null;   // esc, formatISK, formatNumber, showToast, copyText, store, accounts, accountToken, openEsiBind, game, resolveTypeNames, valuation, openTicket
+let ctx = null;   // esc, formatISK, formatNumber, showToast, copyText, store, accounts, accountToken, openEsiBind, game, resolveTypeNames, valuation, openTicket, currentFit, openFit, gotoFit
 const $ = (id) => document.getElementById(id);
 const EN = window.I18N?.lang === 'en';
 const tr = (t) => (EN && window.I18N.t ? window.I18N.t(t) : t);   // confirm 里的文字不走自动翻译
 const STORE_KEY = 'eve-plaza-v1';
-const KINDS = [['all', '全部'], ['recruit', '招新'], ['fleet', '组队'], ['market', '集市'], ['other', '其他'], ['mine', '我的']];
+const KINDS = [['all', '全部'], ['recruit', '招新'], ['fleet', '组队'], ['market', '集市'], ['fit', '装配'], ['other', '其他'], ['mine', '我的']];
 const KIND_NAME = Object.fromEntries(KINDS);
-const POST_KINDS = ['recruit', 'fleet', 'market', 'other'];
+const POST_KINDS = ['recruit', 'fleet', 'market', 'fit', 'other'];
+const SLOT_ORDER = ['high', 'mid', 'low', 'rig', 'sub'];
 const SECTION_MAX = 6;   // 「全部」里每类显示几条
-// 分类图标：游戏客户端窗口图标原样显示（res:/ui/texture/windowicons/recruitment · fleet · market · chatchannels），底色同游戏里的深色。图标版权归 CCP。
+// 分类图标：游戏客户端窗口图标原样显示（res:/ui/texture/windowicons/recruitment · fleet · market · fitting · chatchannels），底色同游戏里的深色。图标版权归 CCP。
 const kindIcon = (k) => `<span class="pz-kicon"><img src="assets/plaza/${k}.png?v=1" alt="" width="64" height="64"></span>`;
 const CT_TYPE = { item_exchange: '物品交换', auction: '拍卖', courier: '快递' };
 const FLEET_SCOPE = 'esi-fleets.read_fleet.v1';
@@ -72,7 +74,8 @@ async function post(op, char, body) {
 async function resolveItemNames() {
   const market = (S.items || []).filter((p) => p.kind === 'market');
   const ids = [...new Set([...market.flatMap((p) => (p.data.items || []).map((i) => i[0])),
-    ...(S.items || []).filter((p) => p.kind === 'fleet').flatMap((p) => (p.data.ships || []).map((x) => x[0]))])].filter((id) => !S.names.has(id));
+    ...(S.items || []).filter((p) => p.kind === 'fleet').flatMap((p) => (p.data.ships || []).map((x) => x[0])),
+    ...(S.items || []).filter((p) => p.kind === 'fit').flatMap((p) => [p.data.ship, ...fitMods(p.data.fit).map((x) => x[0])])])].filter((id) => id && !S.names.has(id));
   if (ids.length) {
     try { for (const [id, n] of await ctx.resolveTypeNames(ids)) S.names.set(id, n); } catch { /* 名称读不到就显示 ID */ }
   }
@@ -166,13 +169,21 @@ function paintList() {
   if (box) box.innerHTML = listHtml();
 }
 
+// 装配帖子里的装备（按槽位顺序，同种合并计数）与无人机
+function fitMods(f) {
+  const map = new Map();
+  for (const s of SLOT_ORDER) for (const x of f?.m?.[s] || []) if (x) map.set(x[0], (map.get(x[0]) || 0) + 1);
+  for (const [t, n] of f?.d || []) map.set(t, (map.get(t) || 0) + n);
+  return [...map];
+}
+
 const myIds = () => new Set((ctx.accounts?.() || []).map((a) => a.id));
 const matchQ = (p) => {
   const q = S.q.trim().toUpperCase();
   if (!q) return true;
   const d = p.data || {};
   return [p.title, p.text, p.name, p.contact, d.corp_name, d.ticker, d.alliance_name, d.author_corp, d.system, d.location, d.ctitle,
-    ...(p.tags || []), ...(d.items || []).map((i) => S.names.get(i[0]))].some((t) => t && String(t).toUpperCase().includes(q));
+    ...(p.tags || []), ...(d.items || []).map((i) => S.names.get(i[0])), S.names.get(d.ship), d.fit?.n].some((t) => t && String(t).toUpperCase().includes(q));
 };
 
 function listHtml() {
@@ -269,6 +280,13 @@ function cardHtml(p, mine) {
     if (d.type !== 'courier' && items.length) extra = `<ul class="pz-items">${items.slice(0, 6).map(itemRow).join('')}</ul>${d.n_items > 6 ? `<small class="text-muted">共 ${d.n_items} 项</small>` : ''}`;
     if (wanted.length) extra += `<div class="pz-wanted"><span>索取：</span><ul class="pz-items">${wanted.slice(0, 4).map(itemRow).join('')}</ul></div>`;
     game = `<button type="button" class="btn btn-ghost btn-sm" data-pz-contract="${d.contract_id}" title="需要「游戏内操作」权限，角色需在线">游戏内打开合同</button>`;
+  } else if (p.kind === 'fit') {
+    const ship = S.names.get(d.ship) || '';
+    head = `<img class="pz-logo" src="${IMG(`types/${d.ship}/render`, 64)}" data-item-pop="${d.ship}" alt="" width="48" height="48" loading="lazy">
+      <div class="pz-head-main"><b class="pz-name notranslate">${esc(p.title || d.fit?.n || ship)}</b><small><span class="notranslate">${esc(ship)}</span> · <span class="notranslate">${esc(p.name)}</span></small></div>`;
+    const mods = fitMods(d.fit);
+    if (mods.length) extra = `<div class="pz-ships pz-fit-mods">${mods.slice(0, 16).map(([t, n]) => `<span title="${esc(S.names.get(t) || '')}"><img src="${ICON(t)}" data-item-pop="${t}" alt="" width="24" height="24" loading="lazy">${n > 1 ? '×' + n : ''}</span>`).join('')}${mods.length > 16 ? `<small class="text-muted">等 ${mods.length} 种</small>` : ''}</div>`;
+    game = `<button type="button" class="btn btn-primary btn-sm" data-pz-fit="${p.id}">在装配页打开</button>`;
   } else {
     head = `<img class="pz-logo round" src="${IMG(`characters/${p.char_id}/portrait`, 64)}" alt="" width="48" height="48" loading="lazy">
       <div class="pz-head-main"><b class="pz-name notranslate">${esc(p.title || '')}</b><small class="notranslate">${esc(p.name)}${d.author_corp ? ' · ' + esc(d.author_corp) : ''}</small></div>`;
@@ -293,6 +311,13 @@ function openForm(kind, extra = {}) {
   const chars = ctx.accounts?.() || [];
   const ok = (id) => chars.some((a) => a.id === id);
   S.form = { kind, ...extra, char: ok(extra.char) ? extra.char : ok(S.char) ? S.char : chars[0]?.id || 0 };
+  if (kind === 'fit') {
+    const form = S.form;
+    Promise.resolve(ctx.currentFit?.()).catch(() => null).then((cur) => {
+      form.cur = cur || null;
+      if (S.form === form) rerenderForm();
+    });
+  }
 }
 
 function formHtml() {
@@ -313,6 +338,7 @@ function formHtml() {
     recruit: ['一句话介绍，比如：XX 军团招新，00 刷怪包教包会', '军团介绍：活动内容、所在星域、时区、对新人的要求、福利……'],
     fleet: ['舰队目的，比如：C5 刷怪缺 2 个后勤', '要什么船、要不要语音、怎么分战利品、多久结束……'],
     market: ['可不填，默认用合同标题', '补充说明，比如：可小刀、支持批量……'],
+    fit: ['装配名称，比如：C3 单刷 · 低成本', '用途、打法、技能要求、注意事项……'],
     other: ['标题', '内容']
   }[f.kind];
   const textarea = `<textarea class="pi-input" name="text" rows="${f.kind === 'market' ? 2 : 4}" maxlength="1000" placeholder="${esc(EN ? tr(ph[1]) : ph[1])}">${val('text')}</textarea>`;
@@ -327,9 +353,21 @@ function formHtml() {
               <span class="pz-ct-opt-price">${ctx.formatISK((c.type === 'courier' ? c.reward : c.price) || 0)}</span>${c.posted ? '<small class="pz-tag">已挂出</small>' : ''}</label>`).join('')}</div>`;
     middle = `<div class="pz-field"><span>合同</span>${list}</div>`;
   }
+  if (f.kind === 'fit') {
+    const cur = f.cur, oldFit = old?.data?.fit;
+    const use = f.useCur || !oldFit ? cur : null;
+    const card = (x, label) => `<div class="pz-fit-pick"><img src="${IMG(`types/${x.ship}/render`, 64)}" alt="" width="40" height="40"><div><b class="notranslate">${esc(x.name || x.shipName)}</b><small><span class="notranslate">${esc(x.shipName)}</span> · ${x.mods} 件装备${x.dps ? ` · ${x.dps.toFixed(0)} DPS` : ''}</small></div><span class="pz-tag">${label}</span></div>`;
+    let pickHtml;
+    if (oldFit && !use) pickHtml = `<div class="pz-fit-pick"><img src="${IMG(`types/${old.data.ship}/render`, 64)}" alt="" width="40" height="40"><div><b class="notranslate">${esc(oldFit.n || S.names.get(old.data.ship) || '')}</b><small>保留原来的装配</small></div></div>`
+      + (cur ? '<button type="button" class="link-btn" data-pz-fit-cur>换成装配页当前的装配</button>' : '');
+    else if (use) pickHtml = card(use, '装配页当前装配') + '<button type="button" class="link-btn" data-pz-goto-fit>去装配页修改</button>';
+    else pickHtml = f.cur === undefined ? '<div class="pi-loading">读取装配页…</div>'
+      : '<p class="text-muted">装配页还没有装配：先在装配页选好舰船、装好装备，再回来发帖（或在装配页点「广场装配 → 把当前装配发到广场」）</p><div><button type="button" class="btn btn-primary btn-sm" data-pz-goto-fit>去装配页</button></div>';
+    middle = `<div class="pz-field"><span>装配</span>${pickHtml}</div>`;
+  }
   return `<form class="pz-form" data-pz-form>
     <div class="pz-form-grid">${charSel}
-      <label class="pz-field pz-wide"><span>标题</span><input class="pi-input" name="title" maxlength="60" value="${val('title')}" placeholder="${esc(ph[0])}"></label></div>
+      <label class="pz-field pz-wide"><span>标题</span><input class="pi-input" name="title" maxlength="60" value="${old ? val('title') : f.kind === 'fit' ? esc(f.cur?.name || '') : ''}" placeholder="${esc(ph[0])}"></label></div>
     ${middle}${tags}
     <label class="pz-field"><span>内容</span>${textarea}</label>
     <label class="pz-field"><span>联系方式</span><input class="pi-input" name="contact" maxlength="80" value="${val('contact')}" placeholder="游戏内频道 / 邮件 / QQ 群（可不填）"></label>
@@ -362,7 +400,7 @@ function rerenderForm() {
   const tags = [...form.querySelectorAll('[name=tags]:checked')].map((x) => x.value);
   form.outerHTML = formHtml();
   const nf = document.querySelector('[data-pz-form]');
-  for (const [k, v] of Object.entries(keep)) if (v != null && nf.elements[k]) nf.elements[k].value = v;
+  for (const [k, v] of Object.entries(keep)) if (v && nf.elements[k]) nf.elements[k].value = v;   // 空的不覆盖（装配读到后预填的标题）
   nf.querySelectorAll('[name=tags]').forEach((x) => { x.checked = tags.includes(x.value); });
 }
 
@@ -375,8 +413,14 @@ async function submit(form) {
     body.contract_id = Number(fd.get('contract')) || 0;
     if (!body.contract_id) { ctx.showToast('请选择要挂的合同', 'info'); return; }
   }
-  if (f.kind === 'other' && f.id) body.id = f.id;
+  if ((f.kind === 'other' || f.kind === 'fit') && f.id) body.id = f.id;
   if ((f.kind === 'recruit' || f.kind === 'other') && !body.title && !body.text) { ctx.showToast('请填写标题或内容', 'info'); return; }
+  if (f.kind === 'fit') {
+    const old = f.id ? S.items?.find((p) => p.id === f.id)?.data?.fit : null;
+    body.fit = f.useCur || !old ? f.cur?.fit : old;
+    if (!body.fit) { ctx.showToast('装配页还没有装配', 'info'); return; }
+    if (!body.title) { ctx.showToast('请填写标题', 'info'); return; }
+  }
   const btn = form.querySelector('[type=submit]');
   btn.disabled = true; btn.textContent = '正在提交…';
   try {
@@ -459,6 +503,10 @@ function onClick(e) {
   if (ct) { ctx.game.contract(Number(ct.dataset.pzContract)); return; }
   const rep = find('data-pz-report');
   if (rep) { ctx.openTicket?.('other', `举报广场帖子 #${rep.id}（${KIND_NAME[rep.kind]} · ${rep.name}${rep.title ? ' · ' + rep.title : ''}）\n原因：`); return; }
+  const fitPost = find('data-pz-fit');
+  if (fitPost) { ctx.openFit(fitPost.data.fit); return; }
+  if (t.closest('[data-pz-fit-cur]')) { S.form.useCur = true; rerenderForm(); return; }
+  if (t.closest('[data-pz-goto-fit]')) { ctx.gotoFit(); return; }
   const edit = find('data-pz-edit');
   if (edit) {
     const mine = myIds();
