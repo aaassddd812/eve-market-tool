@@ -8284,3 +8284,17 @@ a.pz-name:hover { color: var(--accent-primary); }
 .kb-br-cols[data-n="3"] .kb-br-move button, .kb-br-cols[data-n="4"] .kb-br-move button { width: 24px; height: 22px; }
 .kb-br-cols[data-n="3"] .kb-br-losses, .kb-br-cols[data-n="4"] .kb-br-losses { table-layout: fixed; }
 .kb-br-cols[data-n="3"] .kb-br-losses td.num, .kb-br-cols[data-n="4"] .kb-br-losses td.num { width: 104px; overflow: hidden; text-overflow: ellipsis; }
+/* 资产：舰船 / 集装箱收纳行 */
+.asset-table tr.asset-group { cursor: pointer; }
+.asset-table tr.asset-group:hover td { background: var(--bg-hover, var(--bg-tertiary)); }
+.asset-fold { display: inline-block; width: 0; height: 0; margin-right: 8px; vertical-align: middle; border-left: 5px solid var(--text-secondary); border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform .15s; }
+.asset-group.open .asset-fold { transform: rotate(90deg); }
+.asset-table tr.asset-child td { background: var(--bg-tertiary); }
+.asset-table tr.asset-child td:first-child { padding-left: 32px; }
+/* 击杀记录细筛选：价值门槛、空间、单刷、排除 NPC */
+.kb-fine { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-bottom: 10px; }
+.kb-fine-group { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.kb-fine-group small { margin-right: 4px; color: var(--text-secondary); font-size: 0.75rem; }
+.kb-fine button { height: 26px; padding: 0 10px; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.78rem; }
+.kb-fine button:hover { color: var(--text-primary); }
+.kb-fine button.active { background: var(--accent-primary); color: #fff; }

@@ -1271,6 +1271,8 @@ SUMMARY_COLS = "id, time, system_id, region_id, ship_type, value, attackers, sol
 ENTITY_COL = {"character": ("v_char", "char"), "corporation": ("v_corp", "corp"), "alliance": ("v_alliance", "alliance")}
 
 
+# 击杀列表的空间筛选：星系 ID 范围（K 空间 30xxxxxx、虫洞 31xxxxxx、深渊 32xxxxxx）
+FEED_SPACE = {"k": (30000000, 30999999), "wh": (31000000, 31999999), "abyss": (32000000, 32999999)}
 ZKILL_MOD = (("character", "characterID"), ("corporation", "corporationID"), ("alliance", "allianceID"),
              ("ship", "shipTypeID"), ("system", "solarSystemID"), ("constellation", "constellationID"), ("region", "regionID"))
 
@@ -1767,6 +1769,17 @@ class Api:
             systems = self.constellation_systems(int(q["constellation"])) or [0]
             where.append(f"system_id IN ({','.join('?' * len(systems))})")
             args += systems
+        # 细筛选（只查本地收录的记录，不转向 zKillboard）：最低价值、单刷、排除 NPC 击杀、空间类型
+        fine = False
+        if q.get("min"):
+            where.append("value>=?"); args.append(float(q["min"])); fine = True
+        if q.get("solo") == "1":
+            where.append("solo=1"); fine = True
+        if q.get("npc") == "0":
+            where.append("npc=0"); fine = True
+        space = FEED_SPACE.get(q.get("space") or "")
+        if space:
+            where.append("system_id BETWEEN ? AND ?"); args += list(space); fine = True
         side = q.get("side", "all")
         for kind, (vcol, acol) in ENTITY_COL.items():
             if q.get(kind):
@@ -1781,7 +1794,7 @@ class Api:
                     where.append(f"({loss} OR {kill})"); args += [eid, eid]
         # 开放接口（_local）只查本地保留期内的记录，不转向 zKillboard
         # 国服没有 zKillboard，只有本地收录的记录
-        path = None if q.get("_local") or self.store.server != "tq" else zkill_path(q, side)
+        path = None if q.get("_local") or fine or self.store.server != "tq" else zkill_path(q, side)
         cursor = q.get("cursor") or ""
         if cursor.startswith("z:"):
             if not path:

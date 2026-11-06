@@ -26,6 +26,7 @@ const S = {
   names: new Map(),          // 玩家角色 / 军团 / 联盟原名
   types: new Map(),
   filters: { ship: null, location: null },
+  fine: { min: 0, space: '', solo: false, npc: false },   // 细筛选：最低价值、空间、单刷、排除 NPC 击杀（只查本站收录）
   feed: [], cursor: null, feedSeq: 0, boardSeq: 0,
   lb: { side: 'losses', by: 'character', metric: 'value' },
   rank: null,                // 完整排行榜：{ side, by, metric, days, sort, filter, data, seq }
@@ -129,7 +130,7 @@ function feedRows(kills, { me } = {}) {
 const keptDays = () => (S.status?.retention_days || 181) - 1;
 const FEED_NOTICE = {
   get global_end() {
-    if (IS_TQ) return `仅存 ${keptDays()} 天，加筛选可查更早`;
+    if (IS_TQ) return fineOn() ? `价值 / 空间 / 单刷 / NPC 筛选只查本站最近 ${keptDays()} 天` : `仅存 ${keptDays()} 天，加舰船或地点筛选可查更早`;
     return S.status?.since ? `${SERVER.full}从 ${new Date(S.status.since).toLocaleDateString('zh-CN')} 起收录，没有更早的记录` : '没有更早的记录';
   },
   zkill_limit: 'zKillboard 最多查 2 万条，请缩小范围'
@@ -187,6 +188,7 @@ async function renderHome() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新</span>
           </button>
         </div>
+        <div class="kb-fine" id="kbFine"></div>
         <div id="kbFeed">${skRows(10)}</div>
         <button class="btn kb-more" id="kbMore" hidden>加载更多</button>
       </section>
@@ -200,6 +202,7 @@ async function renderHome() {
   $('kbRefresh').addEventListener('click', () => { loadFeed(true); loadSummary(); });
   $('kbMore').addEventListener('click', () => loadFeed(false));
   renderFilters();
+  renderFine();
   renderBoardControls();
   renderBattles();
   await Promise.all([loadSummary(), loadTop(), loadFeed(true), loadBoard()]);
@@ -268,7 +271,34 @@ function feedQuery() {
   const q = new URLSearchParams({ limit: 50 });
   if (S.filters.ship) q.set('ship', S.filters.ship.id);
   if (S.filters.location) q.set(S.filters.location.kind, S.filters.location.id);
+  const f = S.fine;
+  if (f.min) q.set('min', f.min);
+  if (f.space) q.set('space', f.space);
+  if (f.solo) q.set('solo', 1);
+  if (f.npc) q.set('npc', 0);
   return q;
+}
+const fineOn = () => !!(S.fine.min || S.fine.space || S.fine.solo || S.fine.npc);
+
+// 细筛选条：价值门槛、空间类型、单刷、排除 NPC 击杀
+const FINE_MIN = [[0, '不限'], [1e7, '1000万+'], [1e8, '1亿+'], [1e9, '10亿+'], [1e10, '100亿+']];
+const FINE_SPACE = [['', '全部'], ['k', 'K 空间'], ['wh', '虫洞'], ['abyss', '深渊']];
+function renderFine() {
+  const box = $('kbFine');
+  if (!box) return;
+  const f = S.fine;
+  const seg = (key, opts) => opts.map(([v, l]) => `<button type="button" data-fine="${key}:${v}"${String(f[key]) === String(v) ? ' class="active"' : ''}>${l}</button>`).join('');
+  box.innerHTML = `<span class="kb-fine-group"><small>价值</small>${seg('min', FINE_MIN)}</span>` +
+    `<span class="kb-fine-group"><small>空间</small>${seg('space', FINE_SPACE)}</span>` +
+    `<span class="kb-fine-group"><button type="button" data-fine="solo"${f.solo ? ' class="active"' : ''} title="只看一个人完成的击杀">单刷</button>` +
+    `<button type="button" data-fine="npc"${f.npc ? ' class="active"' : ''} title="去掉被 NPC 打死的记录">排除 NPC 击杀</button></span>`;
+}
+function setFine(spec) {
+  const [key, v] = spec.split(':');
+  if (key === 'solo' || key === 'npc') S.fine[key] = !S.fine[key];
+  else S.fine[key] = key === 'min' ? Number(v) : v;
+  renderFine();
+  loadFeed(true);
 }
 
 // 下一页要向 zKillboard 查询时（游标以 z: 开头）要等几秒，按钮上给出提示
@@ -1342,6 +1372,8 @@ export function initKbPage(context) {
       setFilter('ship', { id, name: app.shipTypes().find((s) => s.id === id)?.name || typeName(id) });
       return;
     }
+    const fine = e.target.closest('[data-fine]');
+    if (fine) { setFine(fine.dataset.fine); return; }
     const clear = e.target.closest('[data-clear-filter]');
     if (clear) { setFilter(clear.dataset.clearFilter, null); return; }
     if (e.target.closest('[data-kb-home]')) { e.preventDefault(); navigate('#kb'); return; }

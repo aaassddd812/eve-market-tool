@@ -1215,7 +1215,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v69').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v70').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -3425,7 +3425,7 @@ function initDesktopDl() {
 
 function initContact() {
   $('contactBtn').addEventListener('click', () => toggleContact(true));
-  feedbackModule = import('./feedback.js?v=v2').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
+  feedbackModule = import('./feedback.js?v=v3').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
   $('contactModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-close-contact]')) { toggleContact(false); return; }
     const b = e.target.closest('[data-contact-copy]');
@@ -4157,13 +4157,16 @@ async function esiAuthFetchPaged(path, maxPages = 20, id = null) {
 }
 
 // 资产可能装在舰船/集装箱里：沿 location_id 向上找到真正的位置（空间站/玩家建筑/星系）
+// 只有 location_type 为 item 时 location_id 才可能是另一件物品；国服物品 ID 会和 NPC 空间站 / 星系 ID 撞号，
+// 不判断类型时空间站里的东西会被当成装在某艘别处的船里
+const inItem = (a) => a.location_type === 'item' || a.location_type === 'other';
 function buildAssetLocations(assets) {
   const byItem = new Map(assets.map((a) => [a.item_id, a]));
   for (const asset of assets) {
     let cur = asset;
     let depth = 0;
-    asset.parent = byItem.get(asset.location_id) || null;
-    while (byItem.has(cur.location_id) && depth < 10) {
+    asset.parent = inItem(asset) ? byItem.get(asset.location_id) || null : null;
+    while (inItem(cur) && byItem.has(cur.location_id) && depth < 10) {
       cur = byItem.get(cur.location_id);
       depth += 1;
     }
@@ -5173,21 +5176,52 @@ function renderStationAssets(box, station, groups, { region }) {
   const splitPriced = nonBpc.filter((a) => splitOf(hubPrice(region, a.type_id)) != null).length;
   const kinds = new Set(list.map((a) => a.type_id)).size;
 
-  const rows = list.slice(0, ASSET_ROW_LIMIT).map((a) => {
-    const qty = valuationQuantity(a.quantity);
+  // 装在舰船 / 集装箱里的物品收进所在的顶层物品：顶层行显示件数与连同内容物的总价值，点一下展开明细
+  const worth = (a, k) => {
     const p = a.is_blueprint_copy ? null : hubPrice(region, a.type_id);
+    const v = k === 'mid' ? medOf(p) : p?.[k];
+    return v == null ? null : v * valuationQuantity(a.quantity);
+  };
+  const topOf = (a) => { let c = a; for (let i = 0; c.parent && i < 10; i += 1) c = c.parent; return c; };
+  const inside = new Map();
+  for (const a of list) if (a.parent) { const t = topOf(a); if (!inside.has(t)) inside.set(t, []); inside.get(t).push(a); }
+  const sum = (a, k) => [a, ...(inside.get(a) || [])].reduce((t, x) => t + (worth(x, k) || 0), 0);
+  const tops = list.filter((a) => !a.parent)
+    .map((a) => ({ a, sell: sum(a, 'sell') })).sort((x, y) => y.sell - x.sell);
+  const priceCells = (a, group) => {
+    const p = a.is_blueprint_copy ? null : hubPrice(region, a.type_id);
+    const cell = (k, cls) => {
+      const own = worth(a, k);
+      if (!group) return '<strong class="' + cls + '">' + (own == null ? '—' : formatISK(own)) + '</strong>';
+      const all = sum(a, k);
+      return `<strong class="${cls}" title="${esc('本体 ' + (own == null ? '—' : formatISK(own)) + ' + 内容物 ' + formatISK(all - (own || 0)))}">${all ? formatISK(all) : '—'}</strong>`;
+    };
+    const mid = () => {
+      const v = group ? sum(a, 'mid') : worth(a, 'mid');
+      return v ? `<span class="mid-cell">${formatISK(v)}</span>` : '<span class="muted-cell">—</span>';
+    };
+    return [
+      p?.sell == null ? '<span class="muted-cell">—</span>' : formatPrice(p.sell), cell('sell', 'down'),
+      p?.buy == null ? '<span class="muted-cell">—</span>' : formatPrice(p.buy), cell('buy', 'up'),
+      ...(showMid ? [mid()] : [])
+    ];
+  };
+  const nameCell = (a, name) => esc(name) + (a.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : '') +
+    (isMutated(name, a) ? ` <button class="pill dyn-btn" data-dyn="${a.type_id}:${a.item_id}" title="查看这件突变装备的真实属性">突变属性</button>` + abyAssetPill(a) : '');
+  const rows = tops.slice(0, ASSET_ROW_LIMIT).map(({ a }, i) => {
     const name = typeName(a.type_id);
-    return profileRow([
-      esc(name) + (a.is_blueprint_copy ? ' <span class="pill">蓝图副本</span>' : '') +
-        (isMutated(name, a) ? ` <button class="pill dyn-btn" data-dyn="${a.type_id}:${a.item_id}" title="查看这件突变装备的真实属性">突变属性</button>` + abyAssetPill(a) : ''),
-      formatNumber(a.quantity ?? 1),
-      p?.sell == null ? '<span class="muted-cell">—</span>' : formatPrice(p.sell),
-      '<strong class="down">' + (p?.sell == null ? '—' : formatISK(p.sell * qty)) + '</strong>',
-      p?.buy == null ? '<span class="muted-cell">—</span>' : formatPrice(p.buy),
-      '<strong class="up">' + (p?.buy == null ? '—' : formatISK(p.buy * qty)) + '</strong>',
-      ...(showMid ? [medOf(p) == null ? '<span class="muted-cell">—</span>' : `<span class="mid-cell" title="单价 ${formatPrice(medOf(p))}">${formatISK(medOf(p) * qty)}</span>`] : []),
-      esc(assetSlotLabel(a))
-    ], ` data-filter="${esc(name.toLowerCase())}"`);
+    const kids = inside.get(a);
+    if (!kids) return profileRow([nameCell(a, name), formatNumber(a.quantity ?? 1), ...priceCells(a, false), esc(assetSlotLabel(a))], ` data-filter="${esc(name.toLowerCase())}"`);
+    kids.sort((x, y) => (worth(y, 'sell') || 0) - (worth(x, 'sell') || 0));
+    const head = profileRow([
+      `<span class="asset-fold" aria-hidden="true"></span>` + nameCell(a, name) + ` <span class="pill">含 ${formatNumber(kids.length)} 件</span>`,
+      formatNumber(a.quantity ?? 1), ...priceCells(a, true), esc(assetSlotLabel(a))
+    ], ` class="asset-group" data-group="${i}" tabindex="0" title="点击展开 / 收起里面的物品" data-filter="${esc(name.toLowerCase())}"`);
+    return head + kids.map((k) => {
+      const kn = typeName(k.type_id);
+      return profileRow([nameCell(k, kn), formatNumber(k.quantity ?? 1), ...priceCells(k, false), esc(assetSlotLabel(k))],
+        ` class="asset-child" data-in="${i}" hidden data-filter="${esc(kn.toLowerCase())}"`);
+    }).join('');
   }).join('');
 
   box.innerHTML =
@@ -5209,12 +5243,36 @@ function renderStationAssets(box, station, groups, { region }) {
     '<div class="table-scroll"><table class="pc-mini-table asset-table"><thead><tr>' +
       '<th>物品</th><th>数量</th><th>最低卖价</th><th>卖价估值</th><th>最高收价</th><th>收价估值</th>' + (showMid ? '<th>成交价估值</th>' : '') + '<th>槽位</th>' +
     '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
-    (list.length > ASSET_ROW_LIMIT ? '<p class="text-muted valuation-note">另有 ' + (list.length - ASSET_ROW_LIMIT) + ' 项未显示</p>' : '');
+    (tops.length > ASSET_ROW_LIMIT ? '<p class="text-muted valuation-note">另有 ' + (tops.length - ASSET_ROW_LIMIT) + ' 项未显示</p>' : '');
 
-  $('stationFilter').addEventListener('input', debounce((e) => {
-    const q = e.target.value.trim().toLowerCase();
-    box.querySelectorAll('.asset-table tbody tr').forEach((tr) => { tr.hidden = !!q && !tr.dataset.filter.includes(q); });
-  }, 120));
+  // 筛选：命中内容物时连同所在的舰船一起显示；没有筛选时只显示已展开的内容物
+  const open = new Set();
+  const tbody = box.querySelector('.asset-table tbody');
+  const applyRows = () => {
+    const q = $('stationFilter')?.value.trim().toLowerCase() || '';
+    const hit = (tr) => !q || tr.dataset.filter.includes(q);
+    const groupHit = new Set();
+    tbody.querySelectorAll('tr.asset-child').forEach((tr) => {
+      const g = tr.dataset.in;
+      const self = q && hit(tr);
+      if (self) groupHit.add(g);
+      tr.hidden = !(self || (open.has(g) && (!q || hit(tbody.querySelector(`tr[data-group="${g}"]`)))));
+    });
+    tbody.querySelectorAll('tr:not(.asset-child)').forEach((tr) => {
+      tr.hidden = !hit(tr) && !groupHit.has(tr.dataset.group);
+      if (tr.dataset.group != null) tr.classList.toggle('open', open.has(tr.dataset.group) || groupHit.has(tr.dataset.group));
+    });
+  };
+  const toggle = (tr) => { const g = tr.dataset.group; if (open.has(g)) open.delete(g); else open.add(g); applyRows(); };
+  tbody.addEventListener('click', (e) => {
+    const tr = e.target.closest('tr.asset-group');
+    if (tr && !e.target.closest('button, a')) toggle(tr);
+  });
+  tbody.addEventListener('keydown', (e) => {
+    const tr = e.target.closest?.('tr.asset-group');
+    if (tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); toggle(tr); }
+  });
+  $('stationFilter').addEventListener('input', debounce(applyRows, 120));
 }
 
 async function renderProfileTab(tab) {

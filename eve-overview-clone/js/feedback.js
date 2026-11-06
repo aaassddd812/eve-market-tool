@@ -1,9 +1,12 @@
 // 工单：右上角「定制」弹窗里的「提交工单 / 我的工单 / 工单管理」。
 // 提交后服务器返回 id + 查看凭证，存在本浏览器（eve-feedback-tickets），凭它查看处理状态、站长回复，并可追加说明；
 // 有新的站长回复时「定制」按钮和「我的工单」上出现红点。「工单管理」只在服务器 EVE_FEEDBACK_ADMIN_IPS 里的 IP 访问时出现，
-// 可查看全部工单、回复、改状态。
+// 可查看全部工单、回复、改状态；有新工单或提交者追加说明（待处理且比上次看过更新）时同样在「定制」按钮和「工单管理」上提醒。
+// 页面开着时每 5 分钟（切回页面时）查一次，新增时弹提示。
 const TICKETS_KEY = 'eve-feedback-tickets';
 const SEEN_KEY = 'eve-feedback-seen';
+const ADMIN_SEEN_KEY = 'eve-feedback-admin-seen';
+const POLL_MS = 5 * 60e3;
 const KINDS = [['bug', '功能出错'], ['data', '数据不对'], ['feature', '新功能建议'], ['custom', '定制需求'], ['other', '其他']];
 const KIND_TIPS = { bug: '报错、按钮没反应、页面打不开', data: '价格、击杀、计算结果有误', feature: '想要的功能或改进', custom: '军团 / 联盟专属工具、私有部署', other: '其他问题或想说的话' };
 const KIND_ICONS = {
@@ -18,7 +21,7 @@ const STATUS = { open: '待处理', doing: '处理中', done: '已处理' };
 const KIND_NAME = Object.fromEntries(KINDS);
 
 let ctx = null;
-const S = { isAdmin: false, tab: 'contact', kind: 'bug', draft: '', contact: '', mine: null, loading: false, admin: null, adminFilter: 'open', adminError: '' };
+const S = { isAdmin: false, tab: 'contact', kind: 'bug', draft: '', contact: '', mine: null, loading: false, admin: null, adminFilter: 'open', adminError: '', adminOpen: null, polled: 0 };
 
 const EN = () => window.I18N?.lang === 'en';
 const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } };
@@ -49,11 +52,44 @@ function markSeen() {
   write(SEEN_KEY, seen);
   syncDot();
 }
+// 站长：待处理、且比上次在「工单管理」里看过更新的工单（新提交或提交者追加了说明）
+const adminFresh = (t) => t.status === 'open' && t.updated > (read(ADMIN_SEEN_KEY, {})[t.id] || 0);
+const adminCount = () => (S.isAdmin && S.adminOpen ? S.adminOpen.filter(adminFresh).length : 0);
+function markAdminSeen(items) {
+  const seen = read(ADMIN_SEEN_KEY, {});
+  for (const t of items || []) if (t.status === 'open') seen[t.id] = t.updated;
+  write(ADMIN_SEEN_KEY, seen);
+  syncDot();
+}
 function syncDot() {
   const n = S.mine ? unread(S.mine) : 0;
-  $('contactBtn')?.classList.toggle('has-dot', n > 0);
+  const a = adminCount();
+  const btn = $('contactBtn');
+  if (btn) {
+    btn.classList.toggle('has-dot', n + a > 0);
+    btn.title = [n ? `我的工单有 ${n} 条新回复` : '', a ? `有 ${a} 条工单待处理` : ''].filter(Boolean).join('，') || '联系作者 · 定制功能';
+  }
   const tab = document.querySelector('[data-fb-tab=mine]');
   if (tab) tab.dataset.count = n || '';
+  const adm = document.querySelector('[data-fb-tab=admin]');
+  if (adm) adm.dataset.count = a || '';
+}
+async function loadAdminOpen() {
+  S.adminOpen = (await api('/admin/list', { status: 'open' })).items;
+  syncDot();
+}
+// 定时查一次：只在页面可见时；新增时弹提示
+async function poll() {
+  if (document.hidden || Date.now() - S.polled < 60e3) return;
+  S.polled = Date.now();
+  const before = [S.mine ? unread(S.mine) : 0, adminCount()];
+  await Promise.all([
+    read(TICKETS_KEY, []).length ? loadMine().catch(() => {}) : null,
+    S.isAdmin ? loadAdminOpen().catch(() => {}) : null
+  ]);
+  const n = S.mine ? unread(S.mine) : 0, a = adminCount();
+  if (n > before[0]) ctx.showToast('你的工单有新回复，点右上角「定制」查看', 'info');
+  if (a > before[1]) ctx.showToast(`有 ${a} 条工单待处理，点右上角「定制」查看`, 'info');
 }
 
 async function loadMine() {
@@ -92,8 +128,8 @@ function threadHtml(t, me) {
   const { esc } = ctx;
   return `${t.replies.map((r) => `<div class="fb-msg${r.admin ? ' admin' : ''}"><small><span>${r.admin ? '站长回复' : me}</span> · ${fmt(r.created)}</small><p class="notranslate">${esc(r.text)}</p></div>`).join('')}`;
 }
-function ticketHead(t, fresh = false) {
-  return `<div class="fb-ticket-head"><b>#${t.id}</b><span class="fb-kind">${KIND_NAME[t.kind] || t.kind}</span><span class="fb-status ${t.status}">${STATUS[t.status] || t.status}</span>${fresh ? '<span class="fb-new">新回复</span>' : ''}
+function ticketHead(t, fresh = false, label = '新回复') {
+  return `<div class="fb-ticket-head"><b>#${t.id}</b><span class="fb-kind">${KIND_NAME[t.kind] || t.kind}</span><span class="fb-status ${t.status}">${STATUS[t.status] || t.status}</span>${fresh ? `<span class="fb-new">${label}</span>` : ''}
     <small class="text-muted">${fmt(t.created)}</small></div>`;
 }
 function mineHtml() {
@@ -118,7 +154,7 @@ function adminHtml() {
   else if (S.admin === null) list = '<p class="fb-empty text-muted">正在加载…</p>';
   else if (!S.admin.length) list = '<p class="fb-empty text-muted">没有工单</p>';
   else {
-    list = S.admin.map((t) => `<div class="fb-ticket">${ticketHead(t)}
+    list = S.admin.map((t) => `<div class="fb-ticket${adminFresh(t) ? ' new' : ''}">${ticketHead(t, adminFresh(t), '新动态')}
       <div class="fb-meta text-muted">${t.contact ? `<span><span>联系方式：</span><b class="notranslate">${esc(t.contact)}</b></span>` : ''}${t.page ? `<span class="notranslate">${esc(t.page)}</span>` : ''}<span>${esc(t.server || '-')} / ${t.lang === 'en' ? 'EN' : '中文'}</span></div>
       <p class="fb-text notranslate">${esc(t.text)}</p>${threadHtml(t, '提交者')}
       <form class="fb-reply admin" data-fb-admin="${t.id}"><textarea class="pi-input" name="text" rows="2" maxlength="2000" placeholder="回复提交者…"></textarea>
@@ -144,10 +180,11 @@ async function loadAdmin() {
   render();
   try {
     S.admin = (await api('/admin/list', S.adminFilter ? { status: S.adminFilter } : {})).items;
+    if (S.adminFilter === 'open') S.adminOpen = S.admin;
   } catch (error) {
     S.adminError = error.message;
   }
-  if (S.tab === 'admin') render();
+  if (S.tab === 'admin') { render(); markAdminSeen(S.admin); }
 }
 
 function switchTab(tab) {
@@ -251,9 +288,11 @@ export function initFeedback(context) {
   render();
   // 只有站长 IP 会得到 200：显示「工单管理」
   fetch('/api/kb/feedback/admin/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
-    .then((r) => { if (r.ok) { S.isAdmin = true; render(); } }).catch(() => {});
-  // 有提交过的工单：打开页面时查一次有没有新回复
-  if (read(TICKETS_KEY, []).length) setTimeout(() => loadMine().catch(() => {}), 3000);
+    .then((r) => { if (r.ok) { S.isAdmin = true; render(); loadAdminOpen().catch(() => {}); } }).catch(() => {});
+  // 有提交过的工单：打开页面时查一次有没有新回复；之后定时查
+  if (read(TICKETS_KEY, []).length) setTimeout(() => { S.polled = Date.now(); loadMine().catch(() => {}); }, 3000);
+  setInterval(poll, POLL_MS);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
 }
 // 报错 / 加载慢引导：切到「提交工单」并预填类型和内容
 export function prefill(kind, text) {
