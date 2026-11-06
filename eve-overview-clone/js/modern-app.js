@@ -757,7 +757,7 @@ async function openPlaza() {
 // AI 助手：首次进入时加载；工具在浏览器里执行（装配引擎、击杀记录接口、ESI）
 let aiLoading = null;
 function loadAiModule() {
-  if (!aiLoading) aiLoading = import('./ai.js?v=v16').then((m) => {
+  if (!aiLoading) aiLoading = import('./ai.js?v=v17').then((m) => {
     m.initAi({
       esc, formatISK, formatNumber, showToast, copyText, store, server: SERVER, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -1117,7 +1117,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v120').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v122').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,

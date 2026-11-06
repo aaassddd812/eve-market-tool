@@ -403,6 +403,59 @@ function tabTypes() {
   return [...F.data.types.values()].filter((t) => cats.includes(t.category));
 }
 
+// 模糊搜索：整串包含 > 空格分开的几段都能对上 > 中文按字顺序出现（「损控」→ 损伤控制）/ 英文按单词首字母（「dcii」→ Damage Control II），越紧凑越靠前；
+// 常用英文缩写（mwd、dda…）换成全名再搜一遍。返回 null 为不匹配
+const SEARCH_ALIAS = {
+  mwd: 'microwarpdrive', ab: 'afterburner', dc: 'damage control', dcu: 'damage control', dda: 'drone damage amplifier', bcs: 'ballistic control system',
+  mjd: 'micro jump drive', lse: 'large shield extender', mse: 'medium shield extender', asb: 'ancillary shield booster', aar: 'ancillary armor repairer',
+  eanm: 'energized adaptive nano membrane', tp: 'target painter', sebo: 'sensor booster', te: 'tracking enhancer', tc: 'tracking computer',
+  dlu: 'drone link augmentor', nos: 'nosferatu', neut: 'energy neutralizer', scram: 'warp scrambler', disruptor: 'warp disruptor', web: 'stasis webifier',
+  cap: 'capacitor', pdu: 'power diagnostic system', rcu: 'reactor control unit', mapc: 'micro auxiliary power core', ihs: 'inertial stabilizer',
+  nano: 'nanofiber internal structure', od: 'overdrive injector system', mag: 'magnetic field stabilizer', gyro: 'gyrostabilizer', hs: 'heat sink'
+};
+const CJK = /[\u3400-\u9fff]/;
+const ROMAN_WORD = /^(i|ii|iii|iv|v|x)$/;
+function inOrder(n, chars) {
+  let i = 0, first = -1, last = -1;
+  for (const c of chars) { const k = n.indexOf(c, i); if (k < 0) return null; if (first < 0) first = k; last = k; i = k + 1; }
+  return (last - first + 1 - chars.length) / (n.length + 1) + (first ? 0.3 : 0);
+}
+function scoreName(n, q) {
+  if (n.startsWith(q)) return 0;
+  if (n.includes(q)) return 1;
+  const words = q.split(/\s+/).filter(Boolean);
+  if (words.length > 1) {
+    let loose = 0;
+    for (const w of words) {
+      if (n.includes(w)) continue;
+      const k = CJK.test(w) && w.length > 1 ? inOrder(n, w) : null;
+      if (k == null) return null;
+      loose += 0.5 + k;
+    }
+    return 2 + loose;
+  }
+  if (CJK.test(q)) { const k = q.length > 1 ? inOrder(n, q) : null; return k == null ? null : 3 + k; }
+  // 英文：单词首字母（罗马数字整个算），如 dcii → damage control ii
+  const init = n.split(/[^a-z0-9]+/).filter(Boolean).map((w) => (ROMAN_WORD.test(w) ? w : w[0])).join('');
+  if (q.length > 1 && init.startsWith(q)) return 2.5;
+  if (q.length > 2 && init.includes(q)) return 3.5;
+  return null;
+}
+function fuzzyScore(t, q) {
+  // 整个就是缩写（lse）时只按全名搜，免得「lse」当子串匹配到 pulse
+  const ex = q.split(/\s+/).map((w) => SEARCH_ALIAS[w] || w).join(' ');
+  const qs = SEARCH_ALIAS[q] ? [ex] : ex !== q ? [q, ex] : [q];
+  let best = null;
+  for (const x of qs) {
+    for (const raw of [t.name, t.en]) {
+      if (!raw) continue;
+      const sc = scoreName(raw.toLowerCase(), x);
+      if (sc != null && (best == null || sc < best)) best = sc;
+    }
+  }
+  return best;
+}
+
 function renderBrowser() {
   if (!F.data) return;
   const box = $('fitBrowser');
@@ -418,9 +471,9 @@ function renderBrowser() {
   }
   if (F.query) {
     const q = F.query;
-    const hits = list.filter((t) => t.name.toLowerCase().includes(q) || t.en.toLowerCase().includes(q))
-      .sort((a, b) => (a.name.toLowerCase().startsWith(q) ? 0 : 1) - (b.name.toLowerCase().startsWith(q) ? 0 : 1) || a.name.length - b.name.length)
-      .slice(0, 200);
+    const hits = list.map((t) => [t, fuzzyScore(t, q)]).filter(([, sc]) => sc != null)
+      .sort((a, b) => a[1] - b[1] || a[0].name.length - b[0].name.length)
+      .slice(0, 200).map(([t]) => t);
     box.innerHTML = head.join('') + (hits.length ? '<div class="fit-list">' + hits.map(itemRow).join('') + '</div>' : '<p class="legend-empty">没有匹配的物品</p>');
     return;
   }
@@ -683,8 +736,10 @@ function variantsHtml(list, current, swappable) {
   return `<div class="fi-vars">${list.map((t) => {
     const meta = metaTag(t) || (t.meta === 1 ? ['T1', 't1'] : null);
     const res = t.category === FE.CAT.module ? [t.attrs.get(FE.AT.cpu) ? `${fmt(t.attrs.get(FE.AT.cpu))} tf` : '', t.attrs.get(FE.AT.power) ? `${fmt(t.attrs.get(FE.AT.power))} MW` : ''].filter(Boolean).join(' · ') : '';
-    return `<div class="fi-var${t.id === current ? ' is-current' : ''}"><button type="button" class="fi-var-main" data-fit-info="${t.id}">
-      <img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">
+    // 装备 / 弹药 / 无人机等能直接拖到装配的槽位上（点击仍是打开详情）
+    const drag = F.fit && DRAG_CATS.has(t.category) ? ` data-fit-drag="${t.id}" title="点击查看详情 · 按住拖到装配的槽位上"` : '';
+    return `<div class="fi-var${t.id === current ? ' is-current' : ''}"><button type="button" class="fi-var-main" data-fit-info="${t.id}"${drag}>
+      <img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy" draggable="false">
       <span class="fi-var-name">${app.esc(t.name)}${res ? `<small>${res}</small>` : ''}</span>
       ${t.attrs.get(633) ? `<small class="fi-var-ml">衍生等级 ${t.attrs.get(633)}</small>` : ''}
       ${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}

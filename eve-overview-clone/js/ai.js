@@ -18,13 +18,6 @@ const RESULT_MAX = 12000;       // 每个工具结果最多字数（发给模型
 const WIRE_MAX = 500000;        // 整个对话发给服务器的上限（超出时丢掉最早的几轮）
 const KB = '/api/kb/';
 const PROTOS = [['openai-chat', 'OpenAI Chat'], ['openai-responses', 'OpenAI Responses'], ['anthropic', 'Anthropic']];
-const EXAMPLES = [
-  '帮我配一艘镰刀，装 100MN 加力燃烧器，开启后速度要 2000 以上',
-  '昨晚有没有大规模会战？',
-  'PLEX 最近价格走势怎么样？预计接下来会涨还是跌？',
-  '看看我的资产里最值钱的十样东西',
-  '乌达玛最近强爆多吗？什么时段最危险？'
-];
 const TOOL_LABEL = {
   search_items: '搜索物品', auto_fit: '智能装配', compute_fit: '计算装配', show_fit: '展示装配', market_price: '查询价格', market_history: '查询价格走势',
   route_plan: '规划路线', jump_plan: '规划跳跃', industry_cost: '计算制造', industry_profits: '制造利润排行', industry_systems: '查询成本指数',
@@ -64,6 +57,13 @@ const ICON = {
   battle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>',
   chart: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>',
   box: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8M12 13v8"/></svg>',
+  route: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16"/></svg>',
+  factory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21V10l6 4V10l6 4V4h6v17z"/><path d="M7 17h2M12 17h2M17 17h2"/></svg>',
+  coins: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="9" cy="7" rx="6" ry="3"/><path d="M3 7v5c0 1.7 2.7 3 6 3s6-1.3 6-3V7"/><path d="M9 15v2c0 1.7 2.7 3 6 3s6-1.3 6-3v-5c0-1.7-2.7-3-6-3"/></svg>',
+  globe: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="6"/><ellipse cx="12" cy="12" rx="11" ry="3.5" transform="rotate(-20 12 12)"/></svg>',
+  flag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>',
+  user: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.3-4.9L4 8"/><path d="M4 4v4h4"/><path d="M4 13a8 8 0 0 0 14.3 4.9L20 16"/><path d="M20 20v-4h-4"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M12 8v5M12 16h.01"/></svg>'
 };
 
@@ -105,7 +105,7 @@ export function showAi() {
     });
     box.addEventListener('input', growInput);
   }
-  render();
+  if (!S.msgs.length) refreshSuggest(); else render();
   renderSettings();
   loadInfo();
   setTimeout(() => $('aiText')?.focus(), 30);
@@ -141,8 +141,95 @@ function renderHead() {
   m.setAttribute('aria-expanded', String(S.settings));
 }
 
-// 示例：图标、分类、问题
-const EXAMPLE_META = [['fit', '配船'], ['battle', '会战'], ['chart', '物价'], ['box', '我的资产 · 需绑定 ESI'], ['shield', '高安强爆']];
+// ---------- 推荐问题：覆盖全站功能，结合已绑定角色（所在星系、在开的船）和最近的会战 / 强爆，每次打开随机换 ----------
+const pickOne = (a) => a[Math.floor(Math.random() * a.length)];
+const pickTwo = (a) => { const x = pickOne(a); let y = pickOne(a); for (let i = 0; y === x && i < 9; i++) y = pickOne(a); return [x, y]; };
+const SG = {
+  ships: ['伊什塔级', '金鹏级', '狞獾级', '毒蜥级', '乌鸦级', '多米尼克斯级', 'Machariel', 'Vexor Navy Issue', 'Rattlesnake', 'Hurricane'],
+  goals: ['刷 4 级任务', '刷 00 异常', '高安刷深渊 T3', '小规模 PVP', '低安漫游'],
+  items: ['PLEX', '大型技能注入器', '三钛合金', '同位聚合体', '超噬矿', '技能提取器'],
+  hubs: ['吉他', '艾玛', '多迪谢', '伦斯', '赫克'],
+  danger: ['乌达玛', 'Niarja', 'Sivala', 'Tama'],
+  pi: ['机器人技术', '超级计算机', '纳米工厂', 'Broadcast Node'],
+  holes: ['H296', 'U210', 'B274', 'N062'],
+  sov: ['1DQ1-A', 'T5ZI-S', 'M-OEE8', '4-HWWF']
+};
+// [图标, 分类, 生成问题]；返回 null 表示当前条件下不适用
+const SUGGEST = [
+  ['fit', '配船', () => { const [s, g] = [pickOne(SG.ships), pickOne(SG.goals)]; return `帮我配一艘${s}，用来${g}，按我的技能能开的来`; }],
+  ['fit', '实战装配', () => `最近击杀记录里${pickOne(SG.ships)}大家都怎么配？`],
+  ['chart', '物价', () => `${pickOne(SG.items)}最近价格走势怎么样？接下来会涨还是跌？`],
+  ['chart', '倒卖', () => { const [a, b] = pickTwo(SG.hubs); return `${a}和${b}之间倒什么最赚钱？`; }],
+  ['route', '路线', () => { const [a, b] = pickTwo(SG.hubs); return `从${a}到${b}最安全怎么走，要多少跳？`; }],
+  ['route', '快递', () => `从${pickOne(SG.hubs)}出发有哪些报酬高的快递单？`],
+  ['factory', '制造', () => `造一艘${pickOne(SG.ships)}成本多少，能赚多少？`],
+  ['factory', '制造', () => pickOne(['现在高安造什么最赚钱？', '哪个高安星系制造成本指数最低？'])],
+  ['coins', 'LP 商店', () => pickOne(['现在哪个 LP 商店最划算？', '我有 50 万势力战争 LP，换什么最赚？'])],
+  ['globe', '行星工业', () => `${pickOne(SG.pi)}怎么造，利润怎么样？`],
+  ['globe', '虫洞', () => (ctx.server.id === 'tq' && Math.random() < 0.5 ? '现在席拉连着哪些星系？离吉他最近的是哪个？' : `${pickOne(SG.holes)} 虫洞通往哪里，能过什么船？`)],
+  ['flag', '主权规划', () => `${pickOne(SG.sov)} 能装哪些主权升级件，电力和劳动力够不够？`],
+  ['flag', '势力战争', () => '现在势力战争哪边占优？各战区情况怎么样？'],
+  ['box', '估价', () => '帮我估个价：三钛合金 100000、类晶体胶矿 50000、PLEX 10'],
+  ['box', '合同', () => `合同里现在最便宜的${pickOne(SG.ships)}多少钱？`],
+  ['shield', '高安强爆', () => `${pickOne(SG.danger)}最近强爆多吗？什么时段最危险？`],
+  ['user', '角色交易', () => pickOne(['帮我找个能开旗舰、价格 100 亿以内的号', '角色交易里能开泰坦的号一般多少钱？'])],
+  ['spark', '新手', () => pickOne(['新手怎么快速赚到第一个 10 亿？', '刚进游戏该先练哪些技能？'])]
+];
+const HINT = { at: 0, p: null, battle: null, gank: null, me: null };
+// 最近的会战 / 强爆热点 / 当前角色的位置和舰船：五分钟内只读一次，读到后重排推荐
+function loadHints() {
+  if (HINT.p || Date.now() - HINT.at < 300e3) return HINT.p;
+  HINT.at = Date.now();
+  const me = ctx.accounts?.()?.[0];
+  const has = (sc) => [].concat(me?.scopes || []).join(' ').includes(sc);
+  return (HINT.p = Promise.all([
+    kbGet('battles/history?days=2').then((d) => { const b = (d.battles || []).sort((x, y) => y.kills - x.kills)[0]; return b && mapData().then((m) => ({ system: m.systems.get(b.system_id)?.name, kills: b.kills })); }).catch(() => null),
+    kbGet('gank?days=7').then((d) => { const x = d.systems?.[0]; return x && mapData().then((m) => m.systems.get(x.id)?.name); }).catch(() => null),
+    me ? Promise.all([
+      has('esi-location.read_location.v1') ? ctx.accountFetch(me.id, `/characters/${me.id}/location/`).catch(() => null) : null,
+      has('esi-location.read_ship_type.v1') ? ctx.accountFetch(me.id, `/characters/${me.id}/ship/`).catch(() => null) : null
+    ]).then(async ([loc, ship]) => ({
+      name: me.name,
+      system: loc?.solar_system_id ? (await mapData()).systems.get(loc.solar_system_id)?.name : '',
+      ship: ship?.ship_type_id ? (await ctx.resolveTypeNames([ship.ship_type_id]).catch(() => new Map())).get(ship.ship_type_id) || '' : ''
+    })) : null
+  ]).then(([battle, gank, me]) => { Object.assign(HINT, { battle, gank, me }); }).finally(() => { HINT.p = null; }));
+}
+function suggestions() {
+  const out = [], used = new Set();
+  const add = (icon, tag, text) => { if (text && !used.has(text) && out.length < 6) { used.add(text); out.push({ icon, tag, text }); } };
+  const accts = ctx.accounts?.() || [];
+  const me = HINT.me;
+  // 跟玩家自己相关的（已绑定角色）
+  if (accts.length) {
+    const who = accts.length > 1 ? '我所有角色' : me?.name || '我';
+    add('box', '我的角色', pickOne([`看看${who}的资产里最值钱的十样东西`, `${who}现在能开哪些船？哪些差一点技能？`, '我的行星采集器有没有停的？', '我的工业任务什么时候做完？']));
+    if (me?.ship) add('fit', '我的舰船', `我在开的${me.ship}怎么配比较好？按我的技能来`);
+    else if (me?.system) add('route', '我的位置', `我现在在${me.system}，去${pickOne(SG.hubs.filter((h) => h !== me.system))}怎么走最安全？`);
+    if (me?.system && me?.ship && Math.random() < 0.6) add('shield', '我的位置', `我在${me.system}附近，最近这一带危险吗？`);
+  } else {
+    add('box', '我的角色 · 需绑定 ESI', pickOne(['看看我的资产里最值钱的十样东西', '我现在能开哪些船？']));
+  }
+  // 最近发生的事
+  if (HINT.battle?.system) add('battle', '最近会战', `${HINT.battle.system}最近那场会战（${HINT.battle.kills} 艘）谁赢了？双方损失多少？`);
+  else add('battle', '会战', '昨晚有没有大规模会战？');
+  if (HINT.gank && Math.random() < 0.7) add('shield', '高安强爆', `${HINT.gank}最近强爆多吗？什么时段最危险？`);
+  // 其余从全站功能里随机挑，同一分类只出一个
+  const tags = new Set(out.map((x) => x.tag));
+  for (const [icon, tag, make] of [...SUGGEST].sort(() => Math.random() - 0.5)) {
+    if (tags.has(tag)) continue;
+    const text = make();
+    if (text) { tags.add(tag); add(icon, tag, text); }
+  }
+  return out.sort(() => Math.random() - 0.5);
+}
+function refreshSuggest() {
+  S.sugg = suggestions();
+  if (!S.msgs.length) render();
+  // 实时数据第一次读到时再换一次（只在还没开始对话、玩家没手动换过时）
+  const p = loadHints();
+  if (p && !HINT.me && !HINT.battle) p.then(() => { if (!S.msgs.length && !S.busy) { S.sugg = suggestions(); render(); } });
+}
 
 function render() {
   const log = $('aiLog');
@@ -152,8 +239,9 @@ function render() {
   log.classList.toggle('is-empty', !S.msgs.length);
   if (!S.msgs.length) {
     log.innerHTML = `<div class="ai-hero"><span class="ai-hero-icon">${ICON.spark}</span><h2>有什么可以帮你？</h2></div>
-      <div class="ai-examples">${EXAMPLES.map((t, i) => `<button type="button" class="ai-example" data-ai-example="${i}">
-        <span class="ai-example-icon">${ICON[EXAMPLE_META[i][0]]}</span><span><small>${EXAMPLE_META[i][1]}</small><b>${esc(t)}</b></span></button>`).join('')}</div>`;
+      <div class="ai-examples">${(S.sugg || []).map((x) => `<button type="button" class="ai-example" data-ai-example>
+        <span class="ai-example-icon">${ICON[x.icon] || ICON.spark}</span><span><small>${esc(x.tag)}</small><b>${esc(x.text)}</b></span></button>`).join('')}</div>
+      <div class="ai-more"><button type="button" class="btn btn-ghost btn-sm" data-ai-more>${ICON.refresh}换一批</button></div>`;
   } else {
     // 同一轮里模型的多步（调用工具 → 回答）合成一块，只显示一个头像
     const results = new Map(S.msgs.filter((m) => m.role === 'tool').map((m) => [m.id, m]));
@@ -291,8 +379,9 @@ async function onClick(e) {
   if (pick) { S.llm.model = pick.dataset.aiPick; saveLlm(); renderSettings(); renderHead(); return; }
   if (t.closest('[data-ai-new]')) {
     if (S.busy) stop();
-    S.msgs = []; S.error = ''; saveChat(); render(); $('aiText').focus(); return;
+    S.msgs = []; S.error = ''; saveChat(); refreshSuggest(); $('aiText').focus(); return;
   }
+  if (t.closest('[data-ai-more]')) { S.sugg = suggestions(); render(); return; }
   if (t.closest('[data-ai-settings]')) { S.settings = !S.settings; renderSettings(); renderHead(); return; }
   if (t.closest('[data-ai-retry]')) { S.error = ''; run(); return; }
   if (t.closest('[data-ai-models]')) { fetchModels(); return; }
