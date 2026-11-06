@@ -4,6 +4,7 @@
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
 import { initBr, renderBr } from './kb-br.js?v=v38';
+import { gankSystemHtml, GANK_NOTE } from './kb-gank.js?v=v1';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 import { SERVER, IS_TQ, HUB, eveImage, kbSiteLink } from './server.js?v=s4';
@@ -26,7 +27,8 @@ const S = {
   names: new Map(),          // 玩家角色 / 军团 / 联盟原名
   types: new Map(),
   filters: { ship: null, location: null },
-  fine: { min: 0, space: '', solo: false, npc: false },   // 细筛选：最低价值、空间、单刷、排除 NPC 击杀（只查本站收录）
+  fine: { min: 0, space: '', solo: false, npc: false, gank: false },   // 细筛选：最低价值、空间、单刷、排除 NPC 击杀、疑似强爆（只查本站收录）
+  gank: { days: 30, seq: 0 },   // 高安强爆面板：统计天数、请求序号（只渲染最新一次）
   feed: [], cursor: null, feedSeq: 0, boardSeq: 0,
   lb: { side: 'losses', by: 'character', metric: 'value' },
   rank: null,                // 完整排行榜：{ side, by, metric, days, sort, filter, data, seq }
@@ -189,6 +191,7 @@ async function renderHome() {
           </button>
         </div>
         <div class="kb-fine" id="kbFine"></div>
+        <div id="kbGank" hidden></div>
         <div id="kbFeed">${skRows(10)}</div>
         <button class="btn kb-more" id="kbMore" hidden>加载更多</button>
       </section>
@@ -205,6 +208,7 @@ async function renderHome() {
   renderFine();
   renderBoardControls();
   renderBattles();
+  loadGank();
   await Promise.all([loadSummary(), loadTop(), loadFeed(true), loadBoard()]);
 }
 
@@ -276,9 +280,10 @@ function feedQuery() {
   if (f.space) q.set('space', f.space);
   if (f.solo) q.set('solo', 1);
   if (f.npc) q.set('npc', 0);
+  if (f.gank) q.set('gank', 1);
   return q;
 }
-const fineOn = () => !!(S.fine.min || S.fine.space || S.fine.solo || S.fine.npc);
+const fineOn = () => !!(S.fine.min || S.fine.space || S.fine.solo || S.fine.npc || S.fine.gank);
 
 // 细筛选条：价值门槛、空间类型、单刷、排除 NPC 击杀
 const FINE_MIN = [[0, '不限'], [1e7, '1000万+'], [1e8, '1亿+'], [1e9, '10亿+'], [1e10, '100亿+']];
@@ -291,14 +296,77 @@ function renderFine() {
   box.innerHTML = `<span class="kb-fine-group"><small>价值</small>${seg('min', FINE_MIN)}</span>` +
     `<span class="kb-fine-group"><small>空间</small>${seg('space', FINE_SPACE)}</span>` +
     `<span class="kb-fine-group"><button type="button" data-fine="solo"${f.solo ? ' class="active"' : ''} title="只看一个人完成的击杀">单刷</button>` +
-    `<button type="button" data-fine="npc"${f.npc ? ' class="active"' : ''} title="去掉被 NPC 打死的记录">排除 NPC 击杀</button></span>`;
+    `<button type="button" data-fine="npc"${f.npc ? ' class="active"' : ''} title="去掉被 NPC 打死的记录">排除 NPC 击杀</button>` +
+    `<button type="button" data-fine="gank"${f.gank ? ' class="active"' : ''} title="高安里被自杀式攻击打掉的船（攻击者随后被统合部击毁），同时显示强爆最多的高安星系">疑似强爆</button></span>`;
 }
 function setFine(spec) {
   const [key, v] = spec.split(':');
-  if (key === 'solo' || key === 'npc') S.fine[key] = !S.fine[key];
+  if (key === 'solo' || key === 'npc' || key === 'gank') S.fine[key] = !S.fine[key];
   else S.fine[key] = key === 'min' ? Number(v) : v;
   renderFine();
   loadFeed(true);
+  loadGank();
+}
+
+// ---------- 高安强爆 ----------
+// 判定：受害者被玩家击毁，且有攻击者在同一星系、前后 10 分钟内被 NPC（统合部）击毁——高安里只有非法攻击才会这样。
+// 按高安星系筛选时显示该星系的强爆风险（各时段出现概率、主要团伙、常被打的船）；勾「疑似强爆」且没选星系时显示强爆最多的高安星系
+function gankSystem() {
+  const loc = S.filters.location;
+  if (loc?.kind !== 'system') return null;
+  const sys = kb.systemLabel(Number(loc.id));
+  return sys.sec != null && sys.sec >= 0.5 ? { id: Number(loc.id), ...sys } : null;
+}
+const gankHelpers = () => ({ esc: app.esc, isk: app.formatISK, num: app.formatNumber, typeName, typeIcon: (t) => IMG(`types/${t}/icon`, 32),
+  avatar, entity: (kind, id) => entityLink(kind, id), ago: timeAgo });
+const daysSeg = () => `<div class="segmented kb-gank-days" role="group" aria-label="统计天数">${[7, 30, 90].map((d) =>
+  `<button type="button" data-gank-days="${d}"${S.gank.days === d ? ' class="active"' : ''}>${d} 天</button>`).join('')}</div>`;
+
+async function loadGank(retry = 0) {
+  const box = $('kbGank');
+  if (!box) return;
+  const sys = gankSystem();
+  if (!sys && !S.fine.gank) { box.hidden = true; box.innerHTML = ''; return; }
+  const seq = ++S.gank.seq;
+  box.hidden = false;
+  if (!retry) box.innerHTML = '<div class="kb-gank"><p class="text-muted">正在统计高安强爆…</p></div>';
+  try {
+    const d = await request('gank?' + new URLSearchParams(sys ? { system: sys.id, days: S.gank.days } : { days: S.gank.days }));
+    if (seq !== S.gank.seq || !$('kbGank')) return;
+    if (d.computing) {
+      box.innerHTML = '<div class="kb-gank"><p class="text-muted">正在统计强爆最多的高安星系，第一次要一两分钟…</p></div>';
+      if (retry < 40) setTimeout(() => { if (seq === S.gank.seq) loadGank(retry + 1); }, 4000);
+      return;
+    }
+    absorbNames(d.names);
+    if (sys) await loadTypes((d.ships || []).map((x) => x[0]));
+    if (seq !== S.gank.seq) return;
+    box.innerHTML = sys ? gankSystemHtml(sys, d, gankHelpers(), { head: daysSeg(),
+      foot: `<p class="kb-gank-note text-muted"><span>${GANK_NOTE}</span> <span>下方列表勾「疑似强爆」可只看这些击杀。</span></p>` }) : gankHotHtml(d);
+  } catch (error) {
+    if (seq === S.gank.seq) box.innerHTML = `<div class="kb-gank"><p class="text-muted">高安强爆统计读取失败：${app.esc(error.message)}</p></div>`;
+  }
+}
+
+function gankHotHtml(d) {
+  const span = d.span || d.days;
+  const list = (d.systems || []).slice(0, 12);
+  const rows = list.map((x, i) => {
+    const sys = kb.systemLabel(x.id);
+    return `<div class="kb-gank-hot">
+      <span class="kb-gank-rank">${i + 1}</span>
+      <span class="kb-gank-sys"><a class="kb-link" data-location="system:${x.id}" title="查看这个星系的强爆风险">${app.esc(sys.name)}</a> <b style="color:${sys.color}">${sys.secText}</b>${sys.region ? `<small>${app.esc(sys.region)}</small>` : ''}</span>
+      <span><b>${app.formatNumber(x.count)}</b> 次</span>
+      <span title="出现强爆的天数">${x.days_hit} / ${span} 天</span>
+      <span>${app.formatISK(x.value)} ISK</span>
+      <small class="text-muted">${timeAgo(x.last * 1000)}</small>
+    </div>`;
+  }).join('');
+  return `<div class="kb-gank">
+    <div class="kb-gank-head"><h4>高安强爆热点</h4><small class="text-muted">最近 ${span} 天共 ${app.formatNumber(d.total || 0)} 次疑似强爆 · 点星系名看各时段概率和主要团伙</small><span class="toolbar-spacer"></span>${daysSeg()}</div>
+    ${rows || '<p class="text-muted">没有发现疑似强爆记录</p>'}
+    <p class="kb-gank-note text-muted">${GANK_NOTE}</p>
+  </div>`;
 }
 
 // 下一页要向 zKillboard 查询时（游标以 z: 开头）要等几秒，按钮上给出提示
@@ -349,6 +417,7 @@ function setFilter(key, value) {
   if (location.hash !== '#kb') { history.pushState(null, '', '#kb'); renderHome(); return; }
   renderFilters();
   loadFeed(true);
+  loadGank();
 }
 
 // ---------- 疑似会战（数据由 battles.js 每分钟更新）----------
@@ -1372,6 +1441,8 @@ export function initKbPage(context) {
       setFilter('ship', { id, name: app.shipTypes().find((s) => s.id === id)?.name || typeName(id) });
       return;
     }
+    const gd = e.target.closest('[data-gank-days]');
+    if (gd) { S.gank.days = Number(gd.dataset.gankDays); loadGank(); return; }
     const fine = e.target.closest('[data-fine]');
     if (fine) { setFine(fine.dataset.fine); return; }
     const clear = e.target.closest('[data-clear-filter]');

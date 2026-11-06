@@ -45,8 +45,8 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=189"></script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v285">
+  <script src="js/i18n.js?v=191"></script>
+  <link rel="stylesheet" href="css/modern-style.css?v=v286">
   <!-- EVE-REALIP-SNIPPET：WebRTC 探测真实公网 IP（挂代理时 STUN 走代理外线路泄露），上报给访问大屏做统计，每次会话只报一次 -->
   <script>
     (function () {
@@ -589,6 +589,10 @@
                   <select id="routeFlag" class="plain-select" aria-label="路线偏好"></select>
                   <button class="btn btn-primary" id="routePlan">规划</button>
                   <button class="btn btn-ghost" id="routeClear">清除</button>
+                </div>
+                <div class="route-bridges" id="routeGank" hidden>
+                  <label class="route-check" title="绕开最近 30 天里 40% 以上的日子出现过疑似强爆（自杀式攻击）的高安星系；起点、终点和途经点除外，实在绕不开时仍会经过"><input type="checkbox" id="routeGankOn"><span>避开强爆热点</span></label>
+                  <span class="route-bridge-note">按本站击杀记录统计</span>
                 </div>
                 <div class="route-bridges" id="routeBridges">
                   <label class="route-check" title="把跳桥（安塞波克斯星门）当作一跳加入路线"><input type="checkbox" id="routeBridgeOn"><span>走跳桥</span></label>
@@ -1225,7 +1229,7 @@
   </div>
 
   <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v405" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v406" type="module" data-cfasync="false"></script>
   <script>
     // 兜底：主脚本 25 秒还没启动（网络 / CDN / 浏览器太旧），给出刷新和联系方式
     setTimeout(function () {

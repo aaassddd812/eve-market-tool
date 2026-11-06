@@ -10,6 +10,7 @@ import { LineMaterial } from './vendor/three/LineMaterial.js';
 import { LineGeometry } from './vendor/three/LineGeometry.js';
 import * as JP from './jump-planner.js?v=v17';
 import * as ST from './standings.js?v=v4';
+import { gankSystemHtml } from './kb-gank.js?v=v1';
 import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s4';
 
 let app;               // 主程序提供的工具函数
@@ -1379,6 +1380,16 @@ function bindSidebar() {
   for (const which of ['From', 'To']) bindSystemField($('route' + which), $('route' + which + 'List'));
   $('routeFlag').innerHTML = ROUTE_FLAGS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
   $('routePlan').addEventListener('click', planRoute);
+  // 避开强爆热点：记住选择；切换后有起终点就重新规划
+  const gk = $('routeGankOn');
+  if (gk) {
+    try { gk.checked = localStorage.getItem(GANK_KEY) === '1'; } catch { /* 忽略 */ }
+    $('routeGank').hidden = !SERVER.kb || J.mode === 'jump';
+    gk.addEventListener('change', () => {
+      try { localStorage.setItem(GANK_KEY, gk.checked ? '1' : '0'); } catch { /* 忽略 */ }
+      if ($('routeFrom').dataset.id && ($('routeTo').dataset.id || $('routeWaypoints').querySelector('input[data-id]'))) planRoute();
+    });
+  }
   bindJumpPlanner();
   // 反转：起点 ↔ 终点，途经点倒序
   const reverseRoute = () => {
@@ -1645,11 +1656,14 @@ function gateCosts(src, flag) {
   const prev = new Int32Array(n).fill(-1);
   dist.prev = prev;
   const br = bridgesOn() ? bridgeAdj() : null;
-  const weight = (i) => {
+  const avoid = M.gankAvoid;
+  const base = (i) => {
     if (flag === 'shortest') return 1;
     const hi = secClass(M.systems[i].sec) === '高安';
     return (flag === 'secure' ? hi : !hi) ? 1 : 50;
   };
+  // 避开强爆热点：一个热点算 50 跳的代价；安全优先时进低安的代价同时放大，保证「不进低安」仍然优先于「绕开热点」
+  const weight = avoid?.size ? (i) => (flag === 'secure' && base(i) > 1 ? 1e5 : base(i)) + (avoid.has(i) ? 50 : 0) : base;
   dist[src] = 0;
   // 二叉堆 Dijkstra，元素 [代价, 星系]
   const heap = [[0, src]];
@@ -1884,6 +1898,11 @@ function bindBridges() {
 // 一段路线：不走跳桥时直接问 ESI；走跳桥时本地先求最短路，把用到的跳桥（双向）作为 connections 交给 ESI，ESI 失败时用本地结果
 async function routeLeg(a, b, flag) {
   const base = `/route/${a}/${b}/?flag=${flag}`;
+  // 避开强爆热点：本地星门图上求路（ESI 的 avoid 会把整条路线判成不可达，这里绕不开时仍允许经过）
+  if (M.gankAvoid?.size) {
+    const path = localPath(gateCosts(M.byId.get(a).i, flag), M.byId.get(b).i);
+    if (path) return path.map((i) => M.systems[i].id);
+  }
   if (!bridgesOn()) return app.fetchESI(base);
   const path = localPath(gateCosts(M.byId.get(a).i, flag), M.byId.get(b).i);
   if (!path) return app.fetchESI(base);
@@ -1929,6 +1948,25 @@ function bestWaypointOrder(start, vias, end, flag, cost = null) {
   return order.reverse();
 }
 
+// ---------- 高安强爆热点（/api/kb/gank，最近 30 天）----------
+// 路线里经过的热点标出出现强爆的日子占比；勾「避开强爆热点」时绕开占比 ≥ GANK_AVOID_SHARE 的星系（起点、终点、途经点除外）
+const GANK_AVOID_SHARE = 0.4;
+const GANK_KEY = 'eve-route-gank';
+let gankHot = null;   // { at, map: 星系 ID -> { share, count, days_hit, span } }
+async function loadGankHot() {
+  if (!SERVER.kb) return null;
+  if (gankHot && Date.now() - gankHot.at < 3600e3) return gankHot;
+  try {
+    const r = await fetch('/api/kb/gank?days=30' + (SERVER.id === 'tq' ? '' : '&server=' + SERVER.id));
+    const d = r.ok ? await r.json() : null;
+    if (!d?.systems) return gankHot;   // 服务器还在统计：本次不标注
+    const span = d.span || 30;
+    gankHot = { at: Date.now(), map: new Map(d.systems.map((x) => [x.id, { ...x, span, share: x.days_hit / span }])) };
+  } catch { /* 没有击杀记录服务时不标注 */ }
+  return gankHot;
+}
+const gankAvoidOn = () => !!$('routeGankOn')?.checked;
+
 async function planRoute() {
   if (J.mode === 'jump') { planJump(); return; }
   const box = $('routeResult');
@@ -1946,6 +1984,9 @@ async function planRoute() {
   const flag = $('routeFlag').value;
   box.innerHTML = '<p class="legend-empty">正在规划路线…</p>';
   if ($('routeBridgeOn').checked && app.hasEsiToken()) await fetchBridges();
+  const hot = await loadGankHot();
+  const keep = new Set([from, ...vias, ...(to ? [to] : [])]);
+  M.gankAvoid = gankAvoidOn() && hot ? new Set([...hot.map].filter(([id, x]) => x.share >= GANK_AVOID_SHARE && !keep.has(id) && M.byId.has(id)).map(([id]) => M.byId.get(id).i)) : null;
   try {
     // 途经点顺序：自动时在本地星门图上求最短顺序，否则按填写顺序
     // 先在本地星门图上检查可达性，直接指出到不了的星系（波赫文、虫洞、被封锁的星系等）
@@ -1982,16 +2023,25 @@ async function planRoute() {
     const counts = { 高安: 0, 低安: 0, '00': 0 };
     M.route.forEach((i) => { counts[secClass(M.systems[i].sec)] += 1; });
     const multi = stops.length > 2;
+    const hotOn = M.route.filter((i) => hot?.map.has(M.systems[i].id) && !keep.has(M.systems[i].id));
+    const stillHot = hotOn.filter((i) => hot.map.get(M.systems[i].id).share >= GANK_AVOID_SHARE);
+    const gankLine = !hot ? (gankAvoidOn() ? '<p class="route-gank-note">强爆热点还在统计中，本次没有规避，稍后再规划一次</p>' : '')
+      : gankAvoidOn() ? `<p class="route-gank-note">${M.gankAvoid?.size ? `已避开最近 30 天里 ${Math.round(GANK_AVOID_SHARE * 100)}% 以上的日子出现过强爆的高安星系` : '没有需要避开的强爆热点'}${stillHot.length ? ` · 仍有 ${stillHot.length} 个绕不开（已标出）` : ''}</p>`
+      : hotOn.length ? `<p class="route-gank-note">路线经过 ${hotOn.length} 个高安强爆热点（已标出），可勾选「避开强爆热点」重新规划</p>` : '';
+    const gankTag = (s) => {
+      const x = hot?.map.get(s.id);
+      return x ? `<b class="route-gank-tag" title="最近 ${x.span} 天里有 ${x.days_hit} 天出现疑似强爆，共 ${x.count} 次">强爆 ${Math.round(x.share * 100)}%</b>` : '';
+    };
     const legLine = multi ? '<p class="route-legs">' + stops.map((id, k) => app.esc(M.byId.get(id).name) + (k < legs.length ? ` <small>${legs[k].length - 1} 跳</small> →` : '')).join(' ') + '</p>' : '';
     box.innerHTML =
       `<div class="route-summary"><span><strong>${M.route.length - 1}</strong> 跳${bridgeAt.size ? ` <span class="route-bridge-tag">含跳桥 ${bridgeAt.size}</span>` : ''} · <span class="sec-hi">高安 ${counts['高安']}</span> · <span class="sec-lo">低安 ${counts['低安']}</span> · <span class="sec-null">00 ${counts['00']}</span></span>` +
         `<span><button class="link-btn" data-game-route title="${multi || bridgeAt.size ? '把途经点、跳桥两端和终点依次写入游戏自动导航' : '在游戏里把终点设为目的地'}（角色需在线）">写入自动导航</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>` +
-      legLine +
+      legLine + gankLine +
       '<ol class="route-list">' + M.route.map((i, k) => {
         const s = M.systems[i];
         const tag = multi && stopAt.get(k);
         const cls = [tag ? 'is-stop' : '', bridgeAt.has(k) ? 'is-bridge' : ''].filter(Boolean).join(' ');
-        return `<li${cls ? ` class="${cls}"` : ''}><button data-sys="${i}"${bridgeAt.has(k) ? ' title="经跳桥到达"' : ''}><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}${bridgeAt.has(k) ? '<b class="route-bridge-tag">跳桥</b>' : ''}${tag ? `<em>${tag}</em>` : ''}<span>${secDisplay(s.sec).toFixed(1)}</span></button></li>`;
+        return `<li${cls ? ` class="${cls}"` : ''}><button data-sys="${i}"${bridgeAt.has(k) ? ' title="经跳桥到达"' : ''}><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}${bridgeAt.has(k) ? '<b class="route-bridge-tag">跳桥</b>' : ''}${gankTag(s)}${tag ? `<em>${tag}</em>` : ''}<span>${secDisplay(s.sec).toFixed(1)}</span></button></li>`;
       }).join('') + '</ol>';
     updateRouteLine();
     fitTo(M.route, 1.2);
@@ -2428,6 +2478,7 @@ async function setRouteMode(mode) {
   document.querySelectorAll('[data-route-mode]').forEach((b) => b.classList.toggle('active', b.dataset.routeMode === mode));
   $('jumpOptions').hidden = mode !== 'jump';
   $('routeFlag').hidden = mode === 'jump';
+  if ($('routeGank')) $('routeGank').hidden = mode === 'jump' || !SERVER.kb;
   syncBridgeUi();
   $('routeSummary').textContent = '';
   M.route = [];
@@ -2825,6 +2876,7 @@ function renderSystemInfo(s) {
       <button class="btn btn-ghost" data-game-dest="${s.id}" data-game-name="${app.esc(s.name)}" title="在游戏里设为自动导航目的地（角色需在线）">游戏内设目的地</button>
     </div>
     ${extLinks('system', s.id)}
+    ${SERVER.kb && secDisplay(s.sec) >= 0.5 ? '<div id="mapGank"></div>' : ''}
     ${SERVER.kb ? `<div class="map-kills">
       <div class="map-kills-head"><span>最近击杀</span><a href="https://zkillboard.com/system/${s.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
       <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
@@ -2832,6 +2884,27 @@ function renderSystemInfo(s) {
   $('mapInfo').hidden = false;
   renderAgents(s);
   if (SERVER.kb) loadPanelKills(`systemID/${s.id}/`, (kills) => kills.slice(0, 8), () => M.selected === s.i);
+  if ($('mapGank')) loadMapGank(s);
+}
+
+// 高安星系：最近 30 天疑似强爆（各时段出现概率、主要团伙），详细统计在击杀记录页
+async function loadMapGank(s) {
+  const box = () => (M.selected === s.i ? $('mapGank') : null);
+  try {
+    const res = await fetch(`/api/kb/gank?system=${s.id}&days=30${SERVER.id === 'tq' ? '' : '&server=' + SERVER.id}`);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const d = await res.json();
+    if (!box()) return;
+    const names = d.names || {};
+    box().innerHTML = gankSystemHtml(s, d, {
+      esc: app.esc, isk: app.formatISK, num: app.formatNumber, typeName: String, typeIcon: () => '',
+      avatar: (kind, id) => eveImage((kind === 'alliance' ? 'alliances/' : 'corporations/') + id + '/logo', 32),
+      entity: (kind, id) => `<a class="link-btn" href="#kb/${kind}/${id}" translate="no">${app.esc(names[id] || app.officialName(id) || 'ID ' + id)}</a>`,
+      ago: (ms) => { const h = (Date.now() - ms) / 3600e3; return h < 1 ? Math.max(1, Math.round(h * 60)) + ' 分钟前' : h < 24 ? Math.floor(h) + ' 小时前' : Math.floor(h / 24) + ' 天前'; }
+    }, { compact: true, foot: `<button type="button" class="btn btn-ghost btn-sm kb-gank-more" data-gank-kb="${s.id}">在击杀记录页看详细统计</button>` });
+  } catch {
+    if (box()) box().innerHTML = '';
+  }
 }
 
 // 星系面板：本星系的代理人与 NPC 人物，按空间站分组；从搜索点进来的人物展开并高亮
@@ -3017,6 +3090,8 @@ function renderIncursionInfo(inc) {
 function bindInfo() {
   $('mapInfo').addEventListener('click', (e) => {
     if (e.target.closest('[data-info-close]')) { closeInfo(); return; }
+    const gk = e.target.closest('[data-gank-kb]');
+    if (gk) { app.openKbSystem?.(Number(gk.dataset.gankKb)); return; }
     const sys = e.target.closest('[data-sys]');
     if (sys) { selectSystem(Number(sys.dataset.sys), true); return; }
     const reg = e.target.closest('[data-info-region]');

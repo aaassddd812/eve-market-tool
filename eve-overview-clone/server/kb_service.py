@@ -11,7 +11,8 @@
 
 接口（除钱包存档外只读，仅监听 127.0.0.1，由 nginx 反代 /api/kb/）
   GET /api/kb/status                          数据覆盖范围与运行状态
-  GET /api/kb/feed?cursor=&limit=&ship=&system=&constellation=&region=&character=&corporation=&alliance=&side=
+  GET /api/kb/gank?system=&days=30            高安疑似强爆：某星系的次数、各时段出现概率、主要团伙；不带 system 时为强爆最多的高安星系
+  GET /api/kb/feed?cursor=&limit=&ship=&system=&constellation=&region=&character=&corporation=&alliance=&side=&min=&space=&solo=&npc=&gank=
                                               击杀列表（最新在前）；side=kills|losses|all
                                               本地只保留 --days 天；带筛选条件时翻完本地记录后自动改为实时查询 zKillboard（不入库）
   GET /api/kb/live?after=N                    实时收录的新击杀（星图闪烁 / 弹幕），返回新的游标
@@ -1271,6 +1272,12 @@ SUMMARY_COLS = "id, time, system_id, region_id, ship_type, value, attackers, sol
 ENTITY_COL = {"character": ("v_char", "char"), "corporation": ("v_corp", "corp"), "alliance": ("v_alliance", "alliance")}
 
 
+# 疑似强爆（高安自杀式攻击）：受害者被玩家击毁，且某个攻击者在同一星系、前后 10 分钟内被 NPC（统合部 CONCORD）击毁。
+# {k} 为外层 killmails 的别名；只认高安（安全等级 ≥ 0.45）星系，低安哨戒炮打死人的不算
+GANK_EXISTS = ("({k}.npc=0 AND EXISTS(SELECT 1 FROM attackers ga JOIN killmails gx ON gx.v_char=ga.char AND gx.time BETWEEN {k}.time-600 AND {k}.time+600 "
+               "WHERE ga.km={k}.id AND gx.system_id={k}.system_id AND gx.npc=1))")
+GANK_DAYS = (7, 30, 90)
+GANK_HOT_TTL = 3 * 3600
 # 击杀列表的空间筛选：星系 ID 范围（K 空间 30xxxxxx、虫洞 31xxxxxx、深渊 32xxxxxx）
 FEED_SPACE = {"k": (30000000, 30999999), "wh": (31000000, 31999999), "abyss": (32000000, 32999999)}
 ZKILL_MOD = (("character", "characterID"), ("corporation", "corporationID"), ("alliance", "allianceID"),
@@ -1326,6 +1333,8 @@ class Api:
         self.lb_full = collections.OrderedDict()    # 完整排行榜（分页用）：(days, side, by, metric) -> (时间, ids, 次数, 价值)
         self.lb_lock = threading.Lock()
         self.pilot_cache, self.pilot_lock = collections.OrderedDict(), threading.Lock()
+        self.industry = None                        # 由 main 设置：星系安全等级（map-data.json）
+        self.gank_hot, self.gank_busy, self.gank_lock = {}, set(), threading.Lock()
 
     def names_for(self, ids):
         ids = [i for i in set(ids) if i]
@@ -1777,6 +1786,10 @@ class Api:
             where.append("solo=1"); fine = True
         if q.get("npc") == "0":
             where.append("npc=0"); fine = True
+        if q.get("gank") == "1":
+            hs = self.highsec()
+            where.append(GANK_EXISTS.format(k="killmails"))
+            where.append(f"system_id IN ({','.join('?' * len(hs))})"); args += hs; fine = True
         space = FEED_SPACE.get(q.get("space") or "")
         if space:
             where.append("system_id BETWEEN ? AND ?"); args += list(space); fine = True
@@ -1924,6 +1937,112 @@ class Api:
         return self.cached(("top", days, limit), run, force)
 
     # GET /summary
+    # ---------- 高安强爆 ----------
+    def highsec(self):
+        """高安星系 ID 列表（读 map-data.json，读不到时为空）"""
+        if getattr(self, "_highsec", None) is None:
+            try:
+                self._highsec = sorted(sid for sid, x in self.industry.map_systems().items() if x["sec"] >= 0.45)
+            except Exception:
+                log.exception("读取星系安全等级失败")
+                return [0]
+        return self._highsec or [0]
+
+    def gank_span(self, days):
+        """统计期实际覆盖的天数（库里最早的记录晚于统计期起点时按实际算）"""
+        now = int(time.time())
+        first = self.store.conn().execute("SELECT MIN(time) FROM killmails").fetchone()[0] or now
+        since = max(now - days * 86400, first)
+        return since, max(1, round((now - since) / 86400))
+
+    # GET /gank?system=ID&days=30：某个高安星系的强爆统计——次数、价值、出现强爆的天数、各小时（UTC）出现强爆的天数、
+    # 主要团伙（按联盟，没有联盟按军团）、常被打的舰船、最近几次；不带 system 时返回高安强爆最多的星系（后台算，缓存 3 小时）
+    def gank(self, q):
+        days = int(q.get("days", 30))
+        if days not in GANK_DAYS:
+            raise ValueError("days 只能是 7 / 30 / 90")
+        if not q.get("system"):
+            return self.gank_hotspots(days)
+        sid = int(q["system"])
+        since, span = self.gank_span(days)
+        c = self.store.conn()
+        rows = c.execute(f"SELECT k.id, k.time, k.value, k.ship_type FROM killmails k WHERE k.system_id=? AND k.time>=? AND {GANK_EXISTS.format(k='k')} "
+                         "ORDER BY k.time DESC", (sid, since)).fetchall()
+        hours = [set() for _ in range(24)]
+        week = [[0] * 24 for _ in range(7)]
+        ships = collections.Counter()
+        for _, t, _, ship in rows:
+            g = time.gmtime(t)
+            hours[g.tm_hour].add(t // 86400)
+            week[(g.tm_wday + 1) % 7][g.tm_hour] += 1
+            if ship not in (670, 33328):   # 太空舱（被强爆后顺手打掉的）不算进常被打的舰船
+                ships[ship] += 1
+        groups = {}
+        ids = [r[0] for r in rows]
+        for i in range(0, len(ids), 900):
+            part = ids[i:i + 900]
+            for km, t, corp, alliance, char in c.execute(f"SELECT km, time, corp, alliance, char FROM attackers WHERE km IN ({','.join('?' * len(part))})", part):
+                key = ("alliance", alliance) if alliance else ("corporation", corp)
+                if not key[1]:
+                    continue
+                gr = groups.setdefault(key, {"kms": set(), "chars": set(), "last": 0, "hours": [0] * 24})
+                if km not in gr["kms"]:
+                    gr["kms"].add(km)
+                    gr["hours"][time.gmtime(t).tm_hour] += 1
+                gr["chars"].add(char)
+                gr["last"] = max(gr["last"], t)
+        value = {r[0]: r[2] for r in rows}
+        top = sorted(groups.items(), key=lambda x: -len(x[1]["kms"]))[:10]
+        out_groups = [{"kind": k[0], "id": k[1], "count": len(g["kms"]), "pilots": len(g["chars"]), "last": g["last"],
+                       "value": sum(value[x] for x in g["kms"]), "hours": g["hours"]} for k, g in top]
+        recent = [{"id": r[0], "time": r[1], "value": r[2], "ship": r[3]} for r in rows[:8]]
+        return {"system": sid, "days": days, "span": span, "count": len(rows), "value": sum(r[2] for r in rows),
+                "days_hit": len({r[1] // 86400 for r in rows}), "hours": [len(h) for h in hours],
+                "activity": {"max": max(max(w) for w in week), **{str(d): week[d] for d in range(7)}},
+                "groups": out_groups, "ships": [[t, n] for t, n in ships.most_common(8)], "recent": recent,
+                "names": self.names_for([g["id"] for g in out_groups])}
+
+    def gank_hotspots(self, days):
+        hit = self.gank_hot.get(days)
+        if hit and time.time() - hit[0] < GANK_HOT_TTL:
+            return hit[1]
+        with self.gank_lock:
+            busy = days in self.gank_busy
+            self.gank_busy.add(days)
+        if not busy:
+            def bg():
+                try:
+                    self.gank_hot[days] = (time.time(), self._gank_hotspots(days))
+                except Exception:
+                    log.exception("统计高安强爆热点失败")
+                finally:
+                    self.gank_busy.discard(days)
+            threading.Thread(target=bg, daemon=True).start()
+        return hit[1] if hit else {"computing": True}
+
+    def _gank_hotspots(self, days):
+        since, span = self.gank_span(days)
+        hs = set(self.highsec())
+        c = self.store.conn()
+        # 从 NPC 击毁的玩家舰船出发，找同星系、前后几分钟内他参与的玩家击杀（比逐条判断全部击杀快得多）
+        # CROSS JOIN 固定连接顺序：SQLite 自己选的顺序会全表扫 attackers，慢上百倍
+        rows = c.execute("""SELECT DISTINCT k.id, k.system_id, k.time, k.value FROM killmails x
+            CROSS JOIN attackers a ON a.char=x.v_char AND a.time BETWEEN x.time-600 AND x.time+600
+            CROSS JOIN killmails k ON k.id=a.km
+            WHERE x.npc=1 AND x.v_char IS NOT NULL AND x.time>=? AND k.system_id=x.system_id AND k.npc=0""", (since - 600,)).fetchall()
+        per = {}
+        for kid, sid, t, v in rows:
+            if sid not in hs or t < since:
+                continue
+            p = per.setdefault(sid, {"count": 0, "value": 0.0, "last": 0, "days": set()})
+            p["count"] += 1
+            p["value"] += v
+            p["last"] = max(p["last"], t)
+            p["days"].add(t // 86400)
+        top = sorted(per.items(), key=lambda x: -x[1]["count"])[:30]
+        return {"days": days, "span": span, "at": int(time.time()), "total": sum(p["count"] for p in per.values()),
+                "systems": [{"id": sid, "count": p["count"], "value": p["value"], "last": p["last"], "days_hit": len(p["days"])} for sid, p in top]}
+
     def summary(self, q, force=False):
         hours = min(int(q.get("hours", 24)), 24 * 30)
 
@@ -2426,6 +2545,16 @@ class Industry:
                 with open(path, encoding="utf-8") as fh:
                     return json.load(fh)
         raise RuntimeError(f"找不到 {name}（用 --industry-dir 指定前端目录）")
+
+    def map_systems(self):
+        """只读星系表（不触发成本指数的网络请求）"""
+        with self.lock:
+            if self.systems is None:
+                m = self._load("map-data.json")
+                self.systems = {x[0]: {"name": x[1], "sec": x[5], "region": x[6]} for x in m["systems"]}
+                self.sys_by_name = {x[1].lower(): x[0] for x in m["systems"]}
+                self.regions = {r[0]: r[1] for r in m["regions"]}
+        return self.systems
 
     def ensure(self):
         with self.lock:
@@ -6875,13 +7004,14 @@ def match_route(routes, parts):
 
 # ---------------------------------------------------------------- HTTP 服务
 # 击杀相关接口按 ?server= 分到各服务器的库（其余接口的 server 参数含义不变）
-KB_ROUTES = ("status", "live", "battles", "battles/history", "feed", "top", "summary", "leaderboard", "search", "br", "shipfits", "locate")
+KB_ROUTES = ("status", "live", "battles", "battles/history", "feed", "top", "summary", "leaderboard", "search", "br", "shipfits", "locate", "gank")
 V1_KB_ROUTES = {"kills", "live", "top", "kill", "summary", "battles", "battle_report", "leaderboard", "entity", "pilots", "search", "ship_fits"}
 
 
 def kb_routes(api):
     return {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "feed": api.feed, "top": api.top,
-            "summary": api.summary, "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "shipfits": api.shipfits, "locate": api.locate}
+            "summary": api.summary, "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "shipfits": api.shipfits, "locate": api.locate,
+            "gank": api.gank}
 
 
 def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, cbg=None):
@@ -7433,6 +7563,7 @@ def main():
     industry = Industry(store, [args.industry_dir, args.static, os.path.dirname(here), "/opt/eve/dist"])
     api.obs = store.obs
     api.wallet = Wallet(store, industry)
+    api.industry = industry
     api.sync = SettingsSync(store)
     api.sale = CharSale(store, api.wallet)
     api.sos = WhSos(store, api.wallet)
@@ -7449,6 +7580,7 @@ def main():
             parser.error(f"--cn 只能是 {' / '.join(CN_KB)}")
         cn_store = Store(os.path.join(cn_dir, f"kb-{name}.sqlite"), dict(system_regions), args.cn_days + 1 if args.cn_days else 0, server=name)
         cn_apis[name] = Api(cn_store)
+        cn_apis[name].industry = industry
         if not args.lite:
             CnWorkers(cn_store, queue).start()
             threading.Thread(target=cn_apis[name].warm, daemon=True).start()

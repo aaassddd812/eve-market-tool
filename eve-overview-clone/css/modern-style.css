@@ -8298,3 +8298,50 @@ a.pz-name:hover { color: var(--accent-primary); }
 .kb-fine button { height: 26px; padding: 0 10px; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.78rem; }
 .kb-fine button:hover { color: var(--text-primary); }
 .kb-fine button.active { background: var(--accent-primary); color: #fff; }
+/* 击杀记录：高安强爆风险 / 热点 */
+.kb-gank { display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px; padding: 14px 16px; border-radius: var(--radius-lg); background: var(--bg-secondary); }
+.kb-gank-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.kb-gank-head h4 { margin: 0; font-size: 0.95rem; }
+.kb-gank-days button { height: 26px; padding: 0 10px; font-size: 0.78rem; }
+.kb-gank-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.kb-gank-stat { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.kb-gank-stat small, .kb-gank-stat span { color: var(--text-secondary); font-size: 0.75rem; }
+.kb-gank-stat b { font-size: 1.05rem; }
+.kb-gank-sub { margin: 4px 0 0; font-size: 0.8125rem; font-weight: 600; }
+.kb-gank-sub small { margin-left: 8px; font-weight: 400; color: var(--text-secondary); }
+.kb-gank-hours { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 3px; }
+.kb-gank-hour { display: flex; flex-direction: column; align-items: center; gap: 2px; min-width: 0; }
+.kb-gank-bar { display: flex; align-items: flex-end; width: 100%; height: 56px; border-radius: 4px; background: var(--bg-tertiary); overflow: hidden; }
+.kb-gank-bar i { width: 100%; border-radius: 4px 4px 0 0; background: var(--sell-color); }
+.kb-gank-hour em { font-style: normal; font-size: 0.625rem; color: var(--text-secondary); height: 12px; line-height: 12px; }
+.kb-gank-hour small { font-size: 0.6875rem; color: var(--text-secondary); }
+.kb-gank-cols { display: grid; grid-template-columns: 3fr 2fr; gap: 10px; }
+.kb-gank-panel { padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.kb-gank-panel h5 { margin-bottom: 6px; font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); }
+.kb-gank-panel .kb-mini-row > span { flex: 1; min-width: 0; }
+.kb-gank-group > span { display: flex; flex-direction: column; }
+.kb-gank-group small { color: var(--text-secondary); font-size: 0.72rem; }
+.kb-gank-hot { display: grid; grid-template-columns: 24px minmax(160px, 2fr) 70px 80px 1fr 80px; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.8125rem; }
+.kb-gank-hot small { color: var(--text-secondary); }
+.kb-gank-sys small { margin-left: 6px; }
+.kb-gank-rank { font-weight: 700; color: var(--text-secondary); text-align: center; }
+.kb-gank-note { margin: 0; font-size: 0.75rem; }
+.kb-gank-safe { margin: 0; color: var(--buy-color); }
+@media (max-width: 720px) {
+  .kb-gank-cols { grid-template-columns: 1fr; }
+  .kb-gank-hours { grid-template-columns: repeat(12, minmax(0, 1fr)); row-gap: 8px; }
+  .kb-gank-hot { grid-template-columns: 22px 1fr auto; }
+  .kb-gank-hot > span:nth-child(4), .kb-gank-hot > span:nth-child(5), .kb-gank-hot > small { display: none; }
+}
+/* 星图星系面板：高安强爆风险精简版 */
+.kb-gank.compact { margin: 12px 0 0; padding: 12px; gap: 8px; background: var(--bg-tertiary); }
+.kb-gank.compact .kb-gank-stats { grid-template-columns: 1fr 1fr; }
+.kb-gank.compact .kb-gank-stat, .kb-gank.compact .kb-gank-panel { background: var(--bg-secondary); }
+.kb-gank.compact .kb-gank-cols { grid-template-columns: 1fr; }
+.kb-gank.compact .kb-gank-bar { height: 36px; }
+.kb-gank.compact .kb-gank-hours { grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 2px; }
+.kb-gank.compact .kb-gank-sub small { display: block; margin: 2px 0 0; }
+.kb-gank-more { align-self: flex-start; }
+/* 路线规划：强爆热点标注 */
+.route-gank-tag { font-weight: 500; font-size: 0.6875rem; padding: 0 6px; border-radius: 4px; color: var(--sell-color); background: color-mix(in srgb, var(--sell-color) 14%, transparent); white-space: nowrap; }
+.route-gank-note { margin: 4px 0 6px; padding: 6px 10px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--sell-color) 10%, var(--bg-tertiary)); font-size: 0.75rem; color: var(--text-secondary); }

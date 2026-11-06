@@ -1215,7 +1215,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v70').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v72').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1273,7 +1273,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v62').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v63').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -1287,6 +1287,7 @@ function loadStarMapModule() {
       getFatigue,
       game: gameActions,
       loadKillboard,
+      openKbSystem,
       // 角色当前所在星系（需要 esi-location.read_location.v1）
       getMyLocation: async () => {
         const token = await ensureEsiToken();
