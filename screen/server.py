@@ -25,6 +25,7 @@ CID_FILE = os.path.join(BASE, "cids.json")          # 浏览器匿名ID名册（
 
 BOT = re.compile(r"bot|spider|crawl|curl|wget|python|go-http|httpclient|axios|okhttp|monitor|headless|scrapy|java/|masscan|zgrab", re.I)
 LINE = re.compile(r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d+) \S+ "([^"]*)" "([^"]*)"')
+CK_RE = re.compile(r'ck="([a-z0-9]{6,24})"')   # 浏览器cid cookie（真实用户口径）
 XFF = re.compile(r'xff="([^"]+)"')
 STATIC_EXT = re.compile(r"\.(js|css|png|jpe?g|gif|svg|ico|webp|woff2?|ttf|map|glb|gltf|bin|ktx2)$", re.I)
 NUM_SEG = re.compile(r"/\d+(?:\.\d+)*")   # 路径里的纯数字段（物品/击杀/人物 ID）
@@ -458,6 +459,7 @@ class Stats:
         self.last_seen = {}
         self.recent = deque(maxlen=30)
         self.req_times = deque()
+        self.last_ingest = time.time()   # 看门狗：最后一次从日志吃到数据的时刻
 
     def feed(self, line):
         m = LINE.match(line)
@@ -494,10 +496,13 @@ class Stats:
         for x in (b, tot):
             x.ip[ip] += 1
             x.req += 1
-        if t > self.last_seen.get(ip, 0):
-            self.last_seen[ip] = t
-        self.minute_ips.setdefault(mi, set()).add(ip)
+        ckm = CK_RE.search(line, m.end())
+        okey = ckm.group(1) if ckm else ip      # 在线/峰值按浏览器cid数，无cookie时退回IP
+        if t > self.last_seen.get(okey, 0):
+            self.last_seen[okey] = t
+        self.minute_ips.setdefault(mi, set()).add(okey)
         self.req_times.append(t)
+        self.last_ingest = time.time()
         sm = SERVER_PARAM.search(url)
         if sm and sm.group(1).lower() in SERVERS:
             name = SERVERS[sm.group(1).lower()]
@@ -704,6 +709,22 @@ def warmup(stats):
     return pos, ino
 
 
+def watchdog(stats):
+    """日志断流自愈：超过10分钟没吃到日志、且日志文件本身还在更新（有流量）→ 退出让 systemd 拉起。
+
+    tail 线程死了/卡住时它感知不到，所以必须是独立线程。
+    """
+    while True:
+        time.sleep(30)
+        try:
+            idle = time.time() - stats.last_ingest
+            if idle > 600 and os.path.getmtime(LOG) > stats.last_ingest + 60:
+                print("watchdog: no ingest for %ds while log is fresh, exiting for restart" % int(idle), flush=True)
+                os._exit(1)
+        except Exception as e:
+            print("watchdog error: %s" % e, flush=True)
+
+
 def tail(stats, pos, ino):
     f, buf = None, ""
     while True:
@@ -842,6 +863,7 @@ def main():
         known.count_since(time.time() - Stats.WINDOW)), flush=True)
     threading.Thread(target=geo.run, daemon=True).start()
     threading.Thread(target=tail, args=(stats, pos, ino), daemon=True).start()
+    threading.Thread(target=watchdog, args=(stats,), daemon=True).start()
     Handler.stats = stats
     Handler.realip = realip
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
