@@ -176,7 +176,7 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
 </head>
 <body>
 <header>
-  <div class="brand"><img class="logo" src="/screen/static/logo.svg" alt="EVE 工具站"><h1>EVE 工具站 · 实时访问</h1><span class="host">eve.navexor.top</span></div>
+  <div class="brand"><img class="logo" src="/screen/static/logo.svg?v=2" alt="EVE 工具站"><h1>EVE 工具站 · 实时访问</h1><span class="host">eve.navexor.top</span></div>
   <div class="status"><span class="dot live" id="dot"></span><span id="updated">连接中…</span><span>· 北京时间</span></div>
 </header>
 
@@ -226,7 +226,7 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
   <div id="hourChart"></div>
 </section>
 
-<script src="static/echarts.min.js"></script>
+<script src="static/echarts.min.js?v=2"></script>
 <script>
 (function(){
   var C = {orange:'#f6821f', text:'#16161a', sub:'#6b6b76', mute:'#8a8a95', axis:'#4a4a55', line:'#e2e2e8', grid:'#e8e8ec', card:'#ffffff', gray:'#a8a8b3'};
@@ -257,7 +257,7 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
   var hourChart = echarts.init($('hourChart'));
   var mapReady = false;
 
-  fetch('static/china.json').then(function(r){ return r.json(); }).then(function(geo){
+  fetch('static/china.json?v=2').then(function(r){ return r.json(); }).then(function(geo){
     echarts.registerMap('china', geo);
     mapChart.setOption({
       tooltip: Object.assign({trigger:'item', formatter:function(p){
