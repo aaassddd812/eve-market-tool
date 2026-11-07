@@ -1,5 +1,5 @@
 // ===== 个人中心 · 技能 =====
-// 按游戏技能分组列出全部 512 个技能：已训练等级、生效等级（Alpha 克隆受限时较低）、技能点、训练队列中的目标等级，
+// 按游戏技能分组列出全部 512 个技能（块状网格，技能组与组内技能可按名称 / 技能点排序）：已训练等级、生效等级（Alpha 克隆受限时较低）、技能点、训练队列中的目标等级，
 // 未学的技能灰显。数据：ESI /skills/（个人中心已读取）、/skillqueue/（需要 esi-skills.read_skillqueue.v1），skill-data.json（build_industry.mjs 生成）。
 // 角色属性：ESI /attributes/（esi-skills.read_skills.v1）。训练速度 = 主属性 + 副属性 / 2（技能点 / 分钟），据此估算每个技能升到下一级的时间。
 import { skCards, skRows } from './skeleton.js?v=v17';
@@ -8,7 +8,7 @@ import { serverExtra } from './server-extra.js?v=3';
 let ctx;   // esc, formatNumber, esiAuthFetch, store, showPlan
 let data = null;
 let loading = null;
-const S = { filter: 'all', q: '', open: null, queue: null, queueFor: 0, attrs: null, imp: null, mode: 'list' };
+const S = { filter: 'all', sort: 'name', gsort: new Map(), q: '', open: null, queue: null, queueFor: 0, attrs: null, imp: null, mode: 'list' };
 const ATTR_KEY = { 164: 'charisma', 165: 'intelligence', 166: 'memory', 167: 'perception', 168: 'willpower' };
 const OPEN_KEY = 'eve-skill-groups-open';
 const ATTR_ZH = { 164: '魅力', 165: '智力', 166: '记忆', 167: '感知', 168: '毅力' };
@@ -163,7 +163,10 @@ function draw(box, own) {
     const sp = list.reduce((t, s) => t + (mine.get(s.id)?.skillpoints_in_skill || 0), 0);
     const levels = list.reduce((t, s) => t + (mine.get(s.id)?.trained_skill_level || 0), 0);
     return { gid: Number(gid), name, list, shown: list.filter(match), sp, levels, trained: list.filter((s) => mine.get(s.id)?.trained_skill_level > 0).length };
-  }).sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+  }).sort((a, b) => (S.sort === 'sp' ? b.sp - a.sp : 0) || a.name.localeCompare(b.name, 'zh'));
+  // 按技能点排序：技能点多的在前（同技能点按训练倍数），一眼看出 V 级与最费技能点的技能
+  const spOf = (s) => mine.get(s.id)?.skillpoints_in_skill || 0;
+  const bySp = (a, b) => spOf(b) - spOf(a) || b.rank - a.rank || a.name.localeCompare(b.name, 'zh');
 
   const attrs = S.attrs && !S.attrs.error ? S.attrs : null;
   const rate = (s) => attrs ? (attrs[ATTR_KEY[s.pri]] || 0) + (attrs[ATTR_KEY[s.sec]] || 0) / 2 : 0;   // 技能点 / 分钟
@@ -182,7 +185,9 @@ function draw(box, own) {
 
   const groupHtml = groups.filter((g) => g.shown.length).map((g) => {
     const open = q || S.filter !== 'all' || S.open.has(g.gid);
-    const rows = g.shown.map((s) => {
+    const sort = S.gsort.get(g.gid) || S.sort;
+    const five = g.list.filter((s) => mine.get(s.id)?.trained_skill_level === 5).length;
+    const tiles = (sort === 'sp' ? [...g.shown].sort(bySp) : g.shown).map((s) => {
       const m = mine.get(s.id);
       const lv = m?.trained_skill_level || 0, act = m?.active_skill_level ?? lv, sp = m?.skillpoints_in_skill || 0;
       const target = queued.get(s.id) || 0;
@@ -192,18 +197,18 @@ function draw(box, own) {
       const eta = r && need > 0 ? dur(need / r) : '';
       const title = `${s.desc}\n\n主属性：${ATTR_ZH[s.pri] || '—'} · 副属性：${ATTR_ZH[s.sec] || '—'} · 训练倍数 ×${s.rank}` +
         (r ? `\n训练速度 ${r.toFixed(1)} 技能点 / 分钟（${Math.round(r * 60)} / 小时）${eta ? ` · 升到 ${ROMAN[lv + 1]} 级约 ${eta}` : ''}` : '');
-      return `<div class="skl-row${lv ? '' : ' untrained'}" title="${esc(title)}">
-        <span class="sk-name">${esc(s.name)}</span>
-        <span class="skl-rank">×${s.rank}</span>
+      return `<div class="bz-sk-tile${lv ? '' : ' untrained'}${lv === 5 ? ' is-v' : ''}" title="${esc(title)}">
+        <span class="bz-sk-name">${esc(s.name)}</span>
         <span class="sk-boxes" aria-label="${lv} 级">${boxes}</span>
-        <span class="sk-sp">${lv ? fmt(sp) : '未学'}<small>${lv < 5 ? ' / ' + fmt(spForLevel(s.rank, Math.max(1, lv + 1))) : ''}</small>${eta && lv ? `<small class="sk-eta">下一级约 ${eta}</small>` : ''}</span>
+        <small class="bz-sk-sp">${lv ? fmt(sp) : '未学'}${lv < 5 ? ' / ' + fmt(spForLevel(s.rank, Math.max(1, lv + 1))) : ''}<span> · ×${s.rank}</span></small>${eta && lv ? `<small class="bz-sk-sp">下一级约 ${eta}</small>` : ''}
       </div>`;
     }).join('');
     const pct = (g.levels / (g.list.length * 5)) * 100;
     return `<details class="sk-group" data-gid="${g.gid}"${open ? ' open' : ''}>
-      <summary><span class="sk-g-name">${esc(g.name)}</span><span class="sk-g-count">${g.trained} / ${g.list.length}</span>
+      <summary><span class="sk-g-name">${esc(g.name)}</span><span class="sk-g-count">${g.trained} / ${g.list.length}${five ? ` · V ${five}` : ''}</span>
         <i class="sk-g-bar"><em style="width:${pct.toFixed(1)}%"></em></i><span class="sk-g-sp">${fmt(g.sp)} 技能点</span></summary>
-      <div class="sk-rows">${rows}</div></details>`;
+      <div class="bz-sk-body"><div class="bz-sk-gsort">${[['name', '按名称'], ['sp', '按技能点']].map(([k, l]) => `<button type="button" class="link-btn${sort === k ? ' active' : ''}" data-sk-gsort="${g.gid}:${k}">${l}</button>`).join('')}</div>
+        <div class="bz-sk-grid">${tiles}</div></div></details>`;
   }).join('') || '<p class="text-muted">没有符合条件的技能</p>';
 
   box.innerHTML = `${modeNav()}${cards}${queueHtml}
@@ -213,6 +218,7 @@ function draw(box, own) {
         <input type="search" id="skSearch" placeholder="搜索技能（中英文）" value="${esc(S.q)}" autocomplete="off" spellcheck="false">
       </div>
       <div class="segmented" role="group">${[['all', '全部'], ['trained', '已学'], ['partial', '未满级'], ['untrained', '未学']].map(([k, l]) => `<button data-sk-filter="${k}" class="${S.filter === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <div class="segmented" role="group" title="技能组和组内技能的排序">${[['name', '按名称'], ['sp', '按技能点']].map(([k, l]) => `<button data-sk-sort="${k}" class="${S.sort === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       <button class="link-btn" data-sk-all="1">全部展开</button><button class="link-btn" data-sk-all="0">全部收起</button>
       <span class="skl-legend"><i class="on"></i>已学<i class="limited"></i>受克隆限制<i class="queued"></i>队列中</span>
     </div>
@@ -237,6 +243,10 @@ function bind(box, own) {
     if (e.target.closest('[data-sk-plan-queue]')) { S.mode = 'plan'; drawPlan(box, { queue: true }); return; }
     const f = e.target.closest('[data-sk-filter]');
     if (f) { S.filter = f.dataset.skFilter; S.focusSearch = false; draw(box, currentOwn()); return; }
+    const so = e.target.closest('[data-sk-sort]');
+    if (so) { S.sort = so.dataset.skSort; S.gsort.clear(); S.focusSearch = false; draw(box, currentOwn()); return; }
+    const gs = e.target.closest('[data-sk-gsort]');
+    if (gs) { const [gid, k] = gs.dataset.skGsort.split(':'); S.gsort.set(Number(gid), k); S.focusSearch = false; draw(box, currentOwn()); return; }
     const all = e.target.closest('[data-sk-all]');
     if (all) {
       const open = all.dataset.skAll === '1';

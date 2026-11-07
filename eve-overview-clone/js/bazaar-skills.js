@@ -9,7 +9,7 @@
 // 全部技能：按游戏技能分组列出每个技能的等级与技能点（同个人中心 · 技能），可搜索、按已学 / 未满级 / 未学筛选。
 // 列表筛选：「能开某船 / 能用某装备 / 能开某船级任意一艘 / 某技能几级」，按角色技能等级判断（needHtml / meets / bindNeed）。
 
-import { loadSkillData } from './skills-page.js?v=v34';
+import { loadSkillData } from './skills-page.js?v=v35';
 
 const AT = { rank: 275, pri: 180, sec: 181 };
 const ATTR_KEYS = { 164: 'cha', 165: 'int', 166: 'mem', 167: 'per', 168: 'wil' };

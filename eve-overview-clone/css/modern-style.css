@@ -7255,12 +7255,13 @@ td .sov-auto-tag { margin-left: 4px; }
 .bz-sk-gsort .link-btn.active { color: var(--accent-primary); font-weight: 600; }
 .bz-sk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; }
 .bz-sk-tile { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 2px 8px; padding: 7px 10px; border-radius: var(--radius-md, 8px); background: var(--bg-secondary); font-size: 0.8125rem; }
-.bz-sk-tile:hover { background: var(--bg-hover); }
+.sk-groups:not(#bzSkList) .bz-sk-tile { background: var(--bg-tertiary); }
+.sk-groups .bz-sk-tile:hover { background: var(--bg-hover); }
 .bz-sk-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bz-sk-tile.is-v .bz-sk-name { font-weight: 600; }
 .bz-sk-tile.untrained { color: var(--text-muted); }
 .bz-sk-tile.untrained .sk-boxes { opacity: 0.5; }
-.bz-sk-sp { grid-column: 1 / -1; color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 0.6875rem; }
+.bz-sk-sp { grid-column: 1 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-variant-numeric: tabular-nums; font-size: 0.6875rem; }
 .bz-sk-sp span { opacity: 0.7; }
 @media (max-width: 640px) { .bz-sk-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); } }
 .bz-eq-group { border-top: 1px solid var(--border-primary); }

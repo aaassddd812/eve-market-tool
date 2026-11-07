@@ -7,7 +7,7 @@
 // 地址栏：#bazaar · #bazaar/s/<角色ID> · #bazaar/sell
 import { SERVER, HUB_NAME, eveImage } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
-import * as BS from './bazaar-skills.js?v=9';
+import * as BS from './bazaar-skills.js?v=10';
 
 let ctx;   // 另有 esiAccounts() -> [{ id, name }]、accountToken(id)、openEsiBind()、copyText(text, label)
 const $ = (id) => document.getElementById(id);
