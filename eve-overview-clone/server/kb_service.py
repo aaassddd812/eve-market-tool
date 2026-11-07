@@ -19,6 +19,7 @@
   GET /api/kb/br?systems=1,2&start=T&end=T     战场统计：指定星系与时间段（Unix 秒）内的全部玩家击杀及攻击者（前端按联盟分阵营统计）
   GET /api/kb/battles?window=60&min=20        疑似会战：时间窗（分钟）内同一星系被击毁舰船数 ≥ min（不含太空舱与 1000 万 ISK 以下的击杀）
   GET /api/kb/battles/history?days=30         最近 N 天全部疑似会战，含双方阵营划分、损失 / 击毁与战损比（缓存 10 分钟）
+  GET /api/kb/battles/pilot?character=ID&days=180  这个人物最近 N 天参加过的会战（受本地保留期限制，返回实际天数）
   GET /api/kb/top?days=7&limit=8              指定天数内价值最高的损失
   GET /api/kb/summary?hours=24                指定小时内的总损失（含每小时分布）
   GET /api/kb/leaderboard?days=30&side=losses|kills&by=character|corporation|alliance&metric=value|count
@@ -1618,6 +1619,91 @@ class Api:
         out.sort(key=lambda b: b["end"], reverse=True)
         return {"days": days, "updated": iso(int(time.time())), "min": BATTLE_MIN_KILLS, "gap_minutes": BATTLE_GAP // 60,
                 "battles": out, "names": self.names_for(ids)}
+
+    # GET /battles/pilot?character=ID&days=180：这个人物最近 N 天参加过的会战（口径同 /battles/history：同一星系相邻击杀间隔 ≤ 20 分钟连成一段，
+    # 段内任意 60 分钟击毁 ≥ 20 艘）。先取他作为受害者 / 攻击者的击杀，按星系和时间聚成几簇，每簇只查该星系前后 6 小时的击杀来切段，
+    # 他的击杀落在某段前后 10 分钟内就算参加了这场。天数受本地保留期限制（宁静服按 --days，国服永久），返回实际天数。结果缓存 10 分钟。
+    def pilot_battles(self, q):
+        cid = int(q.get("character") or 0)
+        if cid <= 0:
+            raise ValueError("缺少 character")
+        days = min(max(int(q.get("days", 180)), 1), 180)
+        if self.store.retention:
+            days = min(days, self.store.retention)
+        key = (cid, days)
+        if not hasattr(self, "pb_cache"):
+            self.pb_cache = collections.OrderedDict()   # 按人物缓存，最多 500 个
+        hit = self.pb_cache.get(key)
+        if hit and time.time() - hit[0] < BATTLE_HISTORY_CACHE:
+            return hit[1]
+        c = self.store.conn()
+        since = int(time.time() - days * 86400)
+        ev = []   # (时间, 星系, 击杀 id, 舰船, 是否损失, 价值, 势力, 势力是否联盟)
+        for km, t, sysid, ship, val, ent, is_al in c.execute("""SELECT id, time, system_id, ship_type, value, COALESCE(v_alliance, v_corp), v_alliance IS NOT NULL FROM killmails
+                                                          WHERE v_char = ? AND time >= ? AND npc = 0""", (cid, since)):
+            ev.append((t, sysid, km, ship, True, val or 0, ent, is_al))
+        for km, t, sysid, ship, ent, is_al in c.execute("""SELECT a.km, a.time, k.system_id, a.ship, COALESCE(a.alliance, a.corp), a.alliance IS NOT NULL FROM attackers a JOIN killmails k ON k.id = a.km
+                                                     WHERE a.char = ? AND a.time >= ? AND k.npc = 0""", (cid, since)):
+            ev.append((t, sysid, km, ship, False, 0, ent, is_al))
+        ev.sort(key=lambda e: (e[1], e[0]))
+        clusters, cur = [], []
+        for e in ev:
+            if cur and (e[1] != cur[-1][1] or e[0] - cur[-1][0] > 6 * 3600):
+                clusters.append(cur)
+                cur = []
+            cur.append(e)
+        if cur:
+            clusters.append(cur)
+        out, ids = [], []
+        for cl in clusters:
+            rows = c.execute(f"""SELECT id, time, system_id, region_id, ship_type, value FROM killmails
+                                 WHERE system_id = ? AND time >= ? AND time <= ? AND npc = 0 AND ship_type NOT IN (670, 33328) AND value >= {BATTLE_MIN_VALUE}
+                                 ORDER BY time""", (cl[0][1], cl[0][0] - 6 * 3600, cl[-1][0] + 6 * 3600)).fetchall()
+            segs, seg = [], []
+            for r in rows:
+                if seg and r[1] - seg[-1][1] > BATTLE_GAP:
+                    segs.append(seg)
+                    seg = []
+                seg.append(r)
+            if seg:
+                segs.append(seg)
+            for seg in segs:
+                if len(seg) < BATTLE_MIN_KILLS:
+                    continue
+                j, peak = 0, 0
+                for i in range(len(seg)):
+                    while seg[i][1] - seg[j][1] > 3600:
+                        j += 1
+                    peak = max(peak, i - j + 1)
+                if peak < BATTLE_MIN_KILLS:
+                    continue
+                t0, t1 = seg[0][1] - 600, seg[-1][1] + 600
+                mine = [e for e in cl if t0 <= e[0] <= t1]
+                if not mine:
+                    continue
+                kms = [r[0] for r in seg]
+                pilots = set()
+                for chunk in range(0, len(kms), 900):
+                    part = kms[chunk:chunk + 900]
+                    pilots.update(ch for (ch,) in c.execute(f"SELECT DISTINCT char FROM attackers WHERE char IS NOT NULL AND km IN ({','.join('?' * len(part))})", part))
+                    pilots.update(ch for (ch,) in c.execute(f"SELECT v_char FROM killmails WHERE v_char IS NOT NULL AND id IN ({','.join('?' * len(part))})", part))
+                lost = [e for e in mine if e[4]]
+                ships = collections.Counter(e[3] for e in mine if e[3] and e[3] not in (670, 33328))
+                ent = collections.Counter((e[6], e[7]) for e in mine if e[6]).most_common(1)
+                if ent:
+                    ids.append(ent[0][0][0])
+                out.append({"system_id": seg[0][2], "region_id": seg[0][3], "start": iso(seg[0][1]), "end": iso(seg[-1][1]),
+                            "kills": len(seg), "peak": peak, "value": round(sum(r[5] or 0 for r in seg)), "pilots": len(pilots),
+                            "me": {"kills": len({e[2] for e in mine if not e[4]}), "ships": [s for s, _ in ships.most_common(4)],
+                                   "losses": [{"id": e[2], "ship_type_id": e[3], "value": round(e[5])} for e in lost[:6]],
+                                   "lost": round(sum(e[5] for e in lost)),
+                                   "entity": {"id": ent[0][0][0], "kind": "alliance" if ent[0][0][1] else "corporation"} if ent else None}})
+        out.sort(key=lambda b: b["end"], reverse=True)
+        value = {"days": days, "character": cid, "min": BATTLE_MIN_KILLS, "battles": out[:200], "names": self.names_for(ids)}
+        self.pb_cache[key] = (time.time(), value)
+        while len(self.pb_cache) > 500:
+            self.pb_cache.popitem(last=False)
+        return value
 
     # GET /br?systems=1,2,3&start=T&end=T：战场统计原始数据（时间为 Unix 秒）
     # 返回紧凑数组以减小体积：kills[i] = [id, time, system, ship, value, v_char, v_corp, v_alliance, [[char, corp, alliance, ship, 伤害], ...]]
@@ -7568,12 +7654,12 @@ def match_route(routes, parts):
 
 # ---------------------------------------------------------------- HTTP 服务
 # 击杀相关接口按 ?server= 分到各服务器的库（其余接口的 server 参数含义不变）
-KB_ROUTES = ("status", "live", "battles", "battles/history", "feed", "top", "summary", "leaderboard", "search", "br", "shipfits", "locate", "gank")
+KB_ROUTES = ("status", "live", "battles", "battles/history", "battles/pilot", "feed", "top", "summary", "leaderboard", "search", "br", "shipfits", "locate", "gank")
 V1_KB_ROUTES = {"kills", "live", "top", "kill", "summary", "battles", "battle_report", "leaderboard", "entity", "pilots", "search", "ship_fits"}
 
 
 def kb_routes(api):
-    return {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "feed": api.feed, "top": api.top,
+    return {"status": api.status, "live": api.live, "battles": api.battles, "battles/history": api.battle_history, "battles/pilot": api.pilot_battles, "feed": api.feed, "top": api.top,
             "summary": api.summary, "leaderboard": api.leaderboard, "search": api.search, "br": api.br, "shipfits": api.shipfits, "locate": api.locate,
             "gank": api.gank}
 

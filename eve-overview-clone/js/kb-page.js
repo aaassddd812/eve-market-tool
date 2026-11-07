@@ -906,6 +906,7 @@ async function renderEntity(kind, id) {
     ${P.lifetime}${monthlyHtml(lifetime)}${P.recent}
     ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天）</small></h4><div id="kbMembers"></div>` : ''}
     ${P.activity}${P.corpHistory}
+    ${kind === 'character' ? `<h4 class="info-section-title section-gap" id="kbPbTitle">参加过的会战<small>（最近 180 天）</small></h4><div id="kbPilotBattles">${skRows(3)}</div>` : ''}
     ${P.ships}
     <div class="kb-feed-head section-gap">
       <h4 class="info-section-title">击杀记录</h4>
@@ -924,6 +925,58 @@ async function renderEntity(kind, id) {
   }).catch(() => {});
   $('kbEntityMore').addEventListener('click', () => loadEntityFeed(false));
   loadEntityFeed(true);
+  if (kind === 'character') loadPilotBattles(id);
+}
+
+// ---------- 人物参加过的会战（/battles/pilot，最近 180 天，受本地保留期限制） ----------
+const PB_PAGE = 8;
+async function loadPilotBattles(id) {
+  let d;
+  try { d = await api(`battles/pilot?character=${id}&days=180`); } catch (error) {
+    const box = S.entity?.id === id && $('kbPilotBattles');
+    if (box) box.innerHTML = '<p class="text-muted">会战记录读取失败：' + app.esc(error.message) + '</p>';
+    return;
+  }
+  if (S.entity?.id !== id || !$('kbPilotBattles')) return;
+  absorbNames(d.names);
+  await loadTypes(d.battles.flatMap((b) => [...b.me.ships, ...b.me.losses.map((l) => l.ship_type_id)]));
+  S.entity.pb = { data: d, shown: PB_PAGE };
+  drawPilotBattles();
+}
+function drawPilotBattles() {
+  const box = $('kbPilotBattles'), pb = S.entity?.pb;
+  if (!box || !pb) return;
+  const { data: d, shown } = pb;
+  const title = $('kbPbTitle');
+  if (title) title.innerHTML = `参加过的会战<small>（最近 ${d.days} 天${d.battles.length ? ' · ' + d.battles.length + ' 场' : ''}）</small>`;
+  if (!d.battles.length) { box.innerHTML = `<p class="text-muted">最近 ${d.days} 天没有参加过会战（同一星系 60 分钟内击毁 ≥ ${d.min} 艘）。</p>`; return; }
+  const fmtIsk = app.formatISK, fmtN = app.formatNumber;
+  const ship = (t) => `<span class="kb-pb-ship"><img src="${IMG(`types/${t}/icon`, 32)}" alt="" width="18" height="18" loading="lazy">${app.esc(typeName(t))}</span>`;
+  const rows = d.battles.slice(0, shown).map((x) => {
+    const sys = kb.systemLabel(x.system_id);
+    const tier = battles ? battles.battleTier(x.kills) : { key: 'small', name: '会战' };
+    const mins = Math.max(1, Math.round((new Date(x.end) - new Date(x.start)) / 60e3));
+    const me = x.me;
+    const losses = me.losses.filter((l) => l.ship_type_id !== 670 && l.ship_type_id !== 33328);
+    return `<article class="kb-bh kb-pb tier-${tier.key}">
+      <div class="kb-bh-head">
+        <span class="kb-bh-tier">${tier.name}</span>
+        <a class="kb-link kb-bh-sys" data-location="system:${x.system_id}">${app.esc(sys.name)}</a> <b style="color:${sys.color}">${sys.secText}</b>
+        <span class="text-muted">${app.esc(sys.region || '')} · ${new Date(x.start).toLocaleString('zh-CN', { hour12: false, year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 起，持续 ${mins >= 120 ? (mins / 60).toFixed(1) + ' 小时' : mins + ' 分钟'}</span>
+        <span class="kb-bh-stats"><b>${fmtN(x.kills)}</b> 艘 · 约 <b>${fmtN(x.pilots)}</b> 人 · <b>${fmtIsk(x.value)}</b> ISK</span>
+      </div>
+      <div class="kb-pb-me">
+        ${me.entity ? `<span class="kb-bh-ent"><img src="${avatar(me.entity.kind, me.entity.id, 32)}" alt="" width="18" height="18" loading="lazy">${entityLink(me.entity.kind, me.entity.id, partyName(me.entity.id))}</span>` : ''}
+        ${me.ships.length ? `<span class="kb-pb-lbl">驾驶</span>${me.ships.map(ship).join('')}` : ''}
+        <span class="kb-pb-lbl">参与击杀</span><b class="up">${fmtN(me.kills)}</b>
+        <span class="kb-pb-lbl">损失</span>${losses.length ? losses.map((l) => `<button class="link-btn kb-pb-loss" data-kill="${l.id}" title="${fmtIsk(l.value)} ISK">${ship(l.ship_type_id)}</button>`).join('') + `<b class="down">${fmtIsk(me.lost)}</b>` : '<span class="text-muted">无</span>'}
+        <span class="toolbar-spacer"></span>
+        <button class="btn btn-ghost btn-sm" data-br-battle="${x.system_id}" data-start="${x.start}" data-end="${x.end}">战场统计</button>
+      </div>
+    </article>`;
+  }).join('');
+  box.innerHTML = `<div class="kb-bh-list">${rows}</div>` +
+    (d.battles.length > shown ? `<div class="au-more"><button class="btn btn-ghost" data-pb-more>再显示 ${Math.min(PB_PAGE, d.battles.length - shown)} 场（还有 ${d.battles.length - shown} 场）</button></div>` : '');
 }
 
 // ---------- 分享图片 ----------
@@ -1401,6 +1454,7 @@ export function initKbPage(context) {
       drawBhControls(); drawBh();
       return;
     }
+    if (e.target.closest('[data-pb-more]') && S.entity?.pb) { S.entity.pb.shown += PB_PAGE; drawPilotBattles(); return; }
     if (e.target.closest('[data-bh-more]') && S.bh) { S.bh.shown += BH_PAGE; drawBh(); return; }
     if (e.target.closest('[data-kb-rank]')) { e.preventDefault(); navigate(rankHash({ ...S.lb, days: 30 })); return; }
     const rk = e.target.closest('[data-rank]');

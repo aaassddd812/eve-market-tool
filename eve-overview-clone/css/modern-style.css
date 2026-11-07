@@ -6020,6 +6020,12 @@ td .sov-auto-tag { margin-left: 4px; }
 .kb-bh-entry { height: 28px; padding: 0 10px; font-size: 0.75rem; margin-left: auto; }
 .kb-bh-select { height: 32px; width: auto; }
 .kb-bh-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.kb-pb-me { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font-size: 0.8125rem; }
+.kb-pb-lbl { color: var(--text-muted); font-size: 0.75rem; }
+.kb-pb-ship { display: inline-flex; align-items: center; gap: 4px; }
+.kb-pb-ship img { border-radius: 3px; }
+.kb-pb-loss { color: inherit; }
+#kbPilotBattles .kb-bh-list { margin-top: 0; }
 .kb-bh { display: flex; flex-direction: column; gap: 10px; padding: 12px 14px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-secondary); }
 .kb-bh-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 8px; font-size: 0.8125rem; }
 .kb-bh-head .kb-tier-badge { margin-right: 0; }
@@ -7269,6 +7275,20 @@ td .sov-auto-tag { margin-left: 4px; }
 .bz-eq-group summary b { font-weight: 500; }
 .bz-eq-group .bz-ships { padding: 0 0 10px; }
 .bz-ships span.is-no { opacity: 0.45; }
+.bz-ships [data-bz-type] { cursor: default; }
+.bz-tip { max-width: 340px; }
+.bz-tip[hidden] { display: none; }
+.bz-tip-en { display: block; font-size: 11px; color: var(--text-muted); }
+.bz-tip-rows { display: flex; flex-direction: column; gap: 3px; }
+.bz-tip-row { display: grid; grid-template-columns: minmax(0, 1fr) auto 52px; align-items: baseline; gap: 8px; font-size: 12px; }
+.bz-tip-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bz-tip-row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.bz-tip-row small { text-align: right; white-space: nowrap; }
+.bz-tip-row.ok small { color: var(--success); }
+.bz-tip-row.no b, .bz-tip-row.no small { color: var(--danger); }
+.bz-tip-foot { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--border-primary); font-size: 12px; }
+.bz-tip-foot.ok { color: var(--success); }
+.bz-tip-foot.no { color: var(--text-secondary); }
 .bz-meta { margin-left: 3px; padding: 0 4px; border-radius: 4px; font-size: 0.625rem; font-style: normal; font-weight: 600; background: var(--bg-tertiary); color: var(--text-secondary); }
 .bz-meta.m2 { color: var(--accent-primary); }
 .bz-meta.m4, .bz-meta.m6 { color: var(--success); }

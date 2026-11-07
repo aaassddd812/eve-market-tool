@@ -7,7 +7,7 @@
 // 地址栏：#bazaar · #bazaar/c/<藏宝阁订单号>
 import { HUB_NAME, eveImage } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
-import * as BS from './bazaar-skills.js?v=10';
+import * as BS from './bazaar-skills.js?v=12';
 
 let ctx;
 const $ = (id) => document.getElementById(id);

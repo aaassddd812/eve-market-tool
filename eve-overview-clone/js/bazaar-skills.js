@@ -196,14 +196,26 @@ function roleHtml(c, p) {
     ${p.near.length ? `<div class="bz-role"><h4>差一点就能开（30 天内，默认属性）</h4><div class="bz-chips">${p.near.map((s) => `<button type="button" class="bz-chip is-btn" data-bz-train="${s.t.id}" title="${esc(groupName(c, s.t.group))}">${esc(s.t.name)}<small>${esc(groupName(c, s.t.group))}</small><b>${dur(s.min)}</b></button>`).join('')}</div></div>` : ''}`;
 }
 
+let shipOnly = true;   // 可开舰船：只显示能开的（取消后列出全部舰船，不能开的灰显并提示还差多久）
 function shipsHtml(c, p) {
-  const gs = [...p.byGroup.keys()].sort((a, b) => {
+  const tools = `<div class="bz-eq-tools"><label class="bz-check"><input type="checkbox" data-bz-ship-only${shipOnly ? ' checked' : ''}>只显示能开的</label></div>`;
+  const byGroup = new Map();
+  for (const s of shipOnly ? ships(c).filter((x) => !x.entries.length) : ships(c)) {
+    if (!byGroup.has(s.t.group)) byGroup.set(s.t.group, []);
+    byGroup.get(s.t.group).push(s);
+  }
+  const gs = [...byGroup.keys()].sort((a, b) => {
     const ia = GROUP_ORDER.indexOf(a), ib = GROUP_ORDER.indexOf(b);
     return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || groupName(c, a).localeCompare(groupName(c, b), 'zh-CN');
   });
-  if (!gs.length) return '<p class="text-muted">按卖家的技能，没有能开的舰船。</p>';
-  return `<div class="bz-ship-groups">${gs.map((g) => `<div class="bz-ship-group"><h4>${esc(groupName(c, g))}<small>${p.byGroup.get(g).length}</small></h4>
-    <div class="bz-ships">${p.byGroup.get(g).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')).map((t) => `<span title="${esc(t.en || '')}"><img src="${ICON(t.id)}" alt="" width="20" height="20" loading="lazy">${esc(t.name)}</span>`).join('')}</div></div>`).join('')}</div>`;
+  if (!gs.length) return tools + '<p class="text-muted">按卖家的技能，没有能开的舰船。</p>';
+  return tools + `<div class="bz-ship-groups">${gs.map((g) => {
+    const list = byGroup.get(g), ok = list.filter((s) => !s.entries.length).length;
+    return `<div class="bz-ship-group"><h4>${esc(groupName(c, g))}<small>${shipOnly ? ok : `${ok} / ${list.length}`}</small></h4>
+    <div class="bz-ships">${list.sort((a, b) => (a.entries.length > 0) - (b.entries.length > 0) || a.t.name.localeCompare(b.t.name, 'zh-CN')).map((s) => {
+      return `<span class="${s.entries.length ? 'is-no' : ''}" data-bz-type="${s.t.id}"><img src="${ICON(s.t.id)}" alt="" width="20" height="20" loading="lazy">${esc(s.t.name)}</span>`;
+    }).join('')}</div></div>`;
+  }).join('')}</div>`;
 }
 
 let trainShip = null;
@@ -282,7 +294,7 @@ function equipHtml(c) {
       ${cats.map(([n, a, b]) => `<div><span>${n}</span><b>${fmtNum(a)} / ${fmtNum(b)}</b></div>`).join('')}
     </div>
     <div class="bz-eq-tools"><input class="input" type="search" data-bz-eq placeholder="搜索装备（中英文都可以）" value="${esc(eqQ)}" autocomplete="off">
-      <label class="bz-check"><input type="checkbox" data-bz-eq-all${eqAll ? ' checked' : ''}>也显示还不能用的</label></div>
+      <label class="bz-check"><input type="checkbox" data-bz-eq-only${eqAll ? '' : ' checked'}>只显示能用的</label></div>
     <div id="bzEqList">${equipListHtml(c)}</div>
     <p class="text-muted bz-note">只列出市场上能买到、并且需要技能的物品；按技能等级判断，不考虑舰船限制。</p>`;
 }
@@ -299,8 +311,7 @@ export function equipListHtml(c) {
     const cat = EQ_CATS.find(([k]) => k === g.cat)?.[1] || '';
     return `<details class="bz-eq-group"${q ? ' open' : ''}><summary><b>${esc(gname)}</b><small class="text-muted">${cat}</small><span class="toolbar-spacer"></span><small class="${g.ok ? 'up' : 'text-muted'}">${g.ok} / ${g.items.length}</small></summary>
       <div class="bz-ships">${items.slice(0, 300).map((x) => {
-        const tip = x.ok ? (x.t.en || '') : '还差 ' + dur(defaultMinutes(missing(c, x.t.skills))) + '（默认属性）';
-        return `<span class="${x.ok ? '' : 'is-no'}" title="${esc(tip)}"><img src="${ICON(x.t.id)}" alt="" width="20" height="20" loading="lazy">${esc(x.t.name)}${META[x.t.meta] ? `<em class="bz-meta m${x.t.meta}">${META[x.t.meta]}</em>` : ''}</span>`;
+        return `<span class="${x.ok ? '' : 'is-no'}" data-bz-type="${x.t.id}"><img src="${ICON(x.t.id)}" alt="" width="20" height="20" loading="lazy">${esc(x.t.name)}${META[x.t.meta] ? `<em class="bz-meta m${x.t.meta}">${META[x.t.meta]}</em>` : ''}</span>`;
       }).join('')}</div></details>`;
   }).join('');
   return shown ? html : '<p class="text-muted">没有符合的装备。</p>';
@@ -328,7 +339,7 @@ function skillsHtml(c) {
         <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input type="search" data-bz-sk placeholder="搜索技能或技能组（中英文）" value="${esc(skQ)}" autocomplete="off" spellcheck="false">
       </div>
-      <div class="segmented" role="group">${[['all', '全部'], ['trained', '已学'], ['partial', '未满级'], ['untrained', '未学']].map(([k, l]) => `<button type="button" data-bz-skf="${k}" class="${skF === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <label class="bz-check"><input type="checkbox" data-bz-sk-trained${skF === 'trained' ? ' checked' : ''}>只显示已训练</label>
       <div class="segmented" role="group" title="技能组和组内技能的排序">${[['name', '按名称'], ['sp', '按技能点']].map(([k, l]) => `<button type="button" data-bz-sk-sort="${k}" class="${skSort === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       <button type="button" class="link-btn" data-bz-sk-all="1">全部展开</button><button type="button" class="link-btn" data-bz-sk-all="0">全部收起</button>
     </div>
@@ -366,7 +377,7 @@ export function skillListHtml(c) {
         <small class="bz-sk-sp">${s.lv ? spM(s.sp) : '未学'}<span> · ×${s.rank}</span></small>
       </div>`;
     }).join('');
-    const open = q || skF !== 'all' || skOpenG.has(gid);
+    const open = q || skOpenG.has(gid);
     return `<details class="sk-group" data-bz-gid="${gid}"${open ? ' open' : ''}>
       <summary><span class="sk-g-name">${esc(gname)}</span><span class="sk-g-count">${got} / ${list.length}${five ? ` · V ${five}` : ''}</span>
         <i class="sk-g-bar"><em style="width:${(levels / (list.length * 5) * 100).toFixed(1)}%"></em></i><span class="sk-g-sp">${fmtNum(Math.round(sp))} 技能点</span></summary>
@@ -376,9 +387,65 @@ export function skillListHtml(c) {
   return html || '<p class="text-muted">没有符合条件的技能。</p>';
 }
 
+// ---------- 悬停提示：舰船 / 装备需要的技能（含前置）、所需等级与角色当前等级 ----------
+function reqTipHtml(c, t) {
+  // 同一技能可能被多条前置要求，取最高等级
+  const need = new Map();
+  const all = (reqs, depth) => { for (const [s, L] of reqs) { if (depth > 12 || (need.get(s) || 0) >= L) continue; need.set(s, L); all(c.data.types.get(s)?.skills || [], depth + 1); } };
+  all(t.skills, 0);
+  const rows = [], seen = new Set();
+  const walk = (reqs, depth) => {
+    for (const [s] of reqs) {
+      if (seen.has(s) || depth > 12) continue;
+      seen.add(s);
+      const L = need.get(s), have = c.have.get(s) || 0;
+      rows.push({ s, L, depth, have });
+      const info = c.data.types.get(s);
+      if (info && have < L) walk(info.skills, depth + 1);   // 已满足的技能，前置一定也满足，不再展开
+    }
+  };
+  walk(t.skills, 0);
+  const m = missing(c, t.skills);
+  const sp = m.reduce((a, e) => a + e.sp, 0);
+  return `<div class="fit-mtip-head"><img src="${ICON(t.id)}" alt="" width="32" height="32"><div><b>${esc(t.name)}</b>${t.en && t.en !== t.name ? `<small class="bz-tip-en" translate="no">${esc(t.en)}</small>` : ''}</div></div>
+    ${rows.length ? `<div class="bz-tip-rows">${rows.map((r) => `<div class="bz-tip-row${r.have >= r.L ? ' ok' : ' no'}" style="padding-left:${r.depth * 12}px">
+      <span>${esc(c.data.types.get(r.s)?.name || '技能 ' + r.s)}</span><b>${ROMAN[r.L]}</b><small>${r.have >= r.L ? '✓' : r.have ? '当前 ' + ROMAN[r.have] : '未学'}</small></div>`).join('')}</div>` : '<p class="text-muted">不需要技能</p>'}
+    <div class="bz-tip-foot ${m.length ? 'no' : 'ok'}">${m.length ? `还差 ${spM(sp)} 技能点 · 约 ${dur(defaultMinutes(m))}（默认属性）` : '技能已满足'}</div>`;
+}
+let tipEl = null;
+function placeTip(e) {
+  const r = tipEl.getBoundingClientRect(), pad = 14;
+  let x = e.clientX + pad, y = e.clientY + pad;
+  if (x + r.width > innerWidth - 8) x = Math.max(8, e.clientX - pad - r.width);
+  if (y + r.height > innerHeight - 8) y = Math.max(8, innerHeight - 8 - r.height);
+  tipEl.style.transform = `translate(${x}px, ${y}px)`;
+}
+function bindTip(root, getChar) {
+  let cur = null;
+  root.addEventListener('mouseover', (e) => {
+    const el = e.target.closest?.('[data-bz-type]');
+    if (!el) { if (cur && !cur.isConnected) { cur = null; tipEl.hidden = true; } return; }   // 列表重画后原来的格子没了，不会触发 mouseout
+    if (el === cur) return;
+    const c = getChar(), t = c && c.data.types.get(Number(el.dataset.bzType));
+    if (!t) return;
+    cur = el;
+    if (!tipEl) { tipEl = document.createElement('div'); tipEl.className = 'fit-mtip bz-tip'; document.body.appendChild(tipEl); }
+    tipEl.innerHTML = reqTipHtml(c, t);
+    tipEl.hidden = false;
+    placeTip(e);
+  });
+  root.addEventListener('mousemove', (e) => { if (cur && tipEl && !tipEl.hidden) placeTip(e); });
+  root.addEventListener('mouseout', (e) => {
+    if (!cur || cur.contains(e.relatedTarget)) return;
+    cur = null;
+    if (tipEl) tipEl.hidden = true;
+  });
+}
+
 // 技能分析里的输入控件（开船耗时的舰船、装备搜索、显示不能用的）：getChar() 返回当前角色，rerender() 重画技能分析
 export function bindAna(root, getChar, rerender, warn) {
   anaRerender = rerender;
+  bindTip(root, getChar);
   const skList = () => { const c = getChar(), box = document.getElementById('bzSkList'); if (c && box) box.innerHTML = skillListHtml(c); };
   let skT = 0;
   root.addEventListener('input', (e) => {
@@ -388,13 +455,6 @@ export function bindAna(root, getChar, rerender, warn) {
     skT = setTimeout(skList, 150);
   });
   root.addEventListener('click', (e) => {
-    const f = e.target.closest('[data-bz-skf]');
-    if (f) {
-      skF = f.dataset.bzSkf;
-      f.parentElement.querySelectorAll('[data-bz-skf]').forEach((b) => b.classList.toggle('active', b === f));
-      skList();
-      return;
-    }
     const so = e.target.closest('[data-bz-sk-sort]');
     if (so) {
       skSort = so.dataset.bzSkSort;
@@ -418,10 +478,10 @@ export function bindAna(root, getChar, rerender, warn) {
       document.querySelectorAll('#bzSkList .sk-group').forEach((d) => { d.open = open; });
     }
   });
-  // 记住展开的技能组（排序、筛选重画后保持）；搜索 / 筛选时全部展开，不记
+  // 记住展开的技能组（排序、筛选重画后保持）；搜索时全部展开，不记
   root.addEventListener('toggle', (e) => {
     const d = e.target;
-    if (!d.matches?.('#bzSkList .sk-group') || skQ || skF !== 'all') return;
+    if (!d.matches?.('#bzSkList .sk-group') || skQ) return;
     const gid = Number(d.dataset.bzGid);
     if (d.open) skOpenG.add(gid); else skOpenG.delete(gid);
   }, true);
@@ -445,9 +505,11 @@ export function bindAna(root, getChar, rerender, warn) {
     box.innerHTML = equipListHtml(c);
   });
   root.addEventListener('change', (e) => {
-    if (!e.target.matches('[data-bz-eq-all]')) return;
+    if (e.target.matches('[data-bz-sk-trained]')) { skF = e.target.checked ? 'trained' : 'all'; skList(); return; }
+    if (e.target.matches('[data-bz-ship-only]')) { shipOnly = e.target.checked; rerender(); return; }
+    if (!e.target.matches('[data-bz-eq-only]')) return;
     const c = getChar(), box = document.getElementById('bzEqList');
-    setEqAll(e.target.checked);
+    setEqAll(!e.target.checked);
     if (c && box) box.innerHTML = equipListHtml(c);
   });
 }
