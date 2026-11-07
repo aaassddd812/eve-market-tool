@@ -2,6 +2,7 @@
 // 粘贴游戏里复制的合同物品列表（或仓库、装配、货柜清单），按交易中心挂单估价：
 // 每件物品的最低卖价、最高收价，合计「按卖单」「按收单」两种总价；收单量不够时另算按挂单深度能卖出的价值。
 // 技能与交易税费用全站共用的 trade-fees.js（市场详情、资产估值同一套设置）：卖给收单只交销售税，挂卖单另交中介费。
+// 每 m³ 价值：单价 ÷ 包装体积（type-volume.json，与倒卖排行同一份），挖矿、搬运时比较哪种更值钱。
 // 化矿估价：按 reprocess-data.json（build_reprocess.mjs 从 SDE 生成）算再处理产出，技能可自定义或读取已绑定角色。
 //   矿石 / 冰矿 / 卫星矿：(50 + 改装件) × (1 + 安全等级) × (1 + 建筑加成) × (1 + 提炼学概论 3%) × (1 + 提炼效率理论 2%) × (1 + 对应矿石处理 2%) × (1 + 植入体)
 //   NPC 空间站基础 50%，不吃改装件 / 建筑 / 安全等级加成；其它物品按碎铁处理：50% × (1 + 碎铁处理技术 2%)。
@@ -10,7 +11,7 @@
 import { SERVER } from './server.js?v=s4';
 import * as TF from './trade-fees.js?v=v6';
 
-let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation,
+let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation, loadVolumes,
           // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind, loadAbyssal() -> abyssal.js 模块
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-appraisal-v1';
@@ -68,6 +69,9 @@ const cpu = (v) => (v == null ? '—' : `<span class="ap-cp" data-ap-cp="${cpNum
 const cp = (v) => cpu(v == null ? null : v * K());
 const cpCard = (v) => (v == null ? '' : ` data-ap-cp="${cpNum(v * K())}" title="点击复制"`);
 const fmtK = (v) => ctx.formatISK(v * K());
+// 每 m³ 价值（单价 ÷ 包装体积，不乘比例）与体积显示
+const perM3 = (unit, r) => (unit == null || !r.vol ? null : unit / r.vol);
+const fmtM3 = (v) => `${ctx.formatNumber(v >= 100 ? Math.round(v) : Math.round(v * 100) / 100)} m³`;
 const ratioNote = () => (A.ratio === 100 ? null : `<span class="ap-warn">小计、合计、税后都已乘以比例 ${A.ratio}%（单价为市场原价）</span>`);
 const pct = (v) => (v * 100).toFixed(1).replace(/\.0$/, '') + '%';
 const rangePct = (a, b) => (pct(a) === pct(b) ? pct(a) : `${pct(a).slice(0, -1)}–${pct(b)}`);
@@ -185,11 +189,12 @@ async function appraise() {
   const mats = new Set();
   if (rp) for (const id of ids) { const m = rp.t[id]?.[2] || []; for (let i = 0; i < m.length; i += 2) mats.add(m[i]); }
   const all = [...new Set([...ids, ...mats])];
-  const [avg, , medV] = await Promise.all([
+  const [avg, , medV, vols] = await Promise.all([
     ctx.getMarketPriceMap().catch(() => new Map()),
     hubOrders(region, all, (d, t) => { const el = $('apProgress'); if (el) el.textContent = `读取${region.hub.name}挂单 ${d}/${t}`; }),
     // 成交中位价（与倒卖排行同一数据，宁静服才有）：一次请求带回 1 / 7 / 14 / 30 天，切天数不用重查
-    ctx.valuation.hasMed() ? ctx.valuation.items(ids.map((id) => ({ type_id: id, quantity: 1 }))).catch(() => null) : null
+    ctx.valuation.hasMed() ? ctx.valuation.items(ids.map((id) => ({ type_id: id, quantity: 1 }))).catch(() => null) : null,
+    ctx.loadVolumes().catch(() => ({}))
   ]);
   const rows = ids.map((id) => {
     const qty = items.get(id);
@@ -201,6 +206,7 @@ async function appraise() {
       id, qty, name: nameOf(id), failed: o.failed,
       sell: o.sell ?? null, buy: o.buy ?? null, avg: avg.get(id) || null,
       med: medV ? medV.price(id).med || null : null,
+      vol: vols?.[id] || null,
       depthSell, depthBuy
     };
   });
@@ -211,6 +217,9 @@ async function appraise() {
     buyTotal: sum((r) => r.buy != null && r.qty * r.buy),
     avgTotal: sum((r) => r.avg != null && r.qty * r.avg),
     depthSellTotal: sum((r) => r.depthSell.total),
+    // 总体积与按收单的每 m³ 价值（只算有体积的物品）
+    volTotal: sum((r) => r.vol && r.qty * r.vol),
+    volBuy: sum((r) => r.vol && r.buy != null && r.qty * r.buy),
     shortBuy: rows.filter((r) => r.buy != null && r.depthSell.filled < r.qty),
     noSell: rows.filter((r) => r.sell == null), noBuy: rows.filter((r) => r.buy == null)
   };
@@ -272,6 +281,8 @@ function reprocess() {
     rows, skip, mats,
     buyTotal: sum(rows, (r) => r.rpBuy), sellTotal: sum(rows, (r) => r.rpSell),
     directTotal: sum(rows, (r) => r.direct),
+    volUsed: sum(rows, (r) => r.vol && r.batches * r.portion * r.vol),
+    volBuy: sum(rows, (r) => r.vol && r.rpBuy),
     taxTotal: S.tax ? sum(mats, (m) => m.buy != null && m.qty * m.buy) * S.tax / 100 : 0,
     leftover: rows.filter((r) => r.left > 0),
     oreYield: ores.length ? rangePct(Math.min(...ores), Math.max(...ores)) : null
@@ -318,14 +329,16 @@ function marketHtml(R, rp) {
   const SP = applySplit(R);
   const sellNet = R.sellTotal * (1 - f.sales - f.broker), buyNet = R.buyTotal * (1 - f.sales);
   const sortKey = A.sort || 'sell';
-  const rows = R.rows.slice().sort((a, b) => ((b.qty * (b[sortKey] ?? 0)) - (a.qty * (a[sortKey] ?? 0))));
+  const rows = R.rows.slice().sort(sortKey === 'm3' ? (a, b) => (perM3(b.buy, b) ?? -1) - (perM3(a.buy, a) ?? -1)
+    : (a, b) => ((b.qty * (b[sortKey] ?? 0)) - (a.qty * (a[sortKey] ?? 0))));
   const body = rows.map((r) => {
     const short = r.buy != null && r.depthSell.filled < r.qty;
     return `<tr>
-      <td><div class="ap-item"><img src="${ICON(r.id)}" data-item-pop="${r.id}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a><small class="ap-unit">单价 卖 ${isk(r.sell)} · 收 ${isk(r.buy)}</small></span></div></td>
-      <td class="num">${ctx.formatNumber(r.qty)}</td>
+      <td><div class="ap-item"><img src="${ICON(r.id)}" data-item-pop="${r.id}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a><small class="ap-unit">单价 卖 ${isk(r.sell)} · 收 ${isk(r.buy)}${perM3(r.buy, r) != null ? ` · 收 ${ctx.formatISK(perM3(r.buy, r))}/m³` : ''}</small></span></div></td>
+      <td class="num">${ctx.formatNumber(r.qty)}${r.vol ? `<small class="ap-muted">${fmtM3(r.qty * r.vol)}</small>` : ''}</td>
       <td class="num ap-sell ap-hide-sm">${isk(r.sell)}</td>
       <td class="num ap-buy ap-hide-sm">${isk(r.buy)}</td>
+      <td class="num ap-buy ap-hide-sm">${isk(perM3(r.buy, r))}</td>
       <td class="num ap-sell ap-strong">${cp(r.sell == null ? null : r.qty * r.sell)}</td>
       <td class="num ap-buy ap-strong">${cp(r.buy == null ? null : r.qty * r.buy)}${short ? `<small title="收单总量不够">收单只够 ${ctx.formatNumber(r.depthSell.filled)}</small>` : ''}</td>
       <td class="num ap-hide-sm">${r.split == null ? '—' : `<span title="单价 ${ctx.formatISK(r.split)}">${cp(r.qty * r.split)}</span>`}</td>
@@ -344,13 +357,14 @@ function marketHtml(R, rp) {
       <div class="ap-stat-buy ap-cp"${cpCard(R.buyTotal)}><span>按最高收价</span><b>${fmtK(R.buyTotal)}</b><small>卖给收单税后 <em>${cp(buyNet)}</em>（−${pct2(f.sales)}）</small></div>
       <div class="ap-cp"${cpCard(SP.total)}><span title="（最低卖价 + 最高收价）÷ 2，卖单和收单都有的物品才计入">按买卖中间价</span><b>${fmtK(SP.total)}</b><small>${SP.n}/${R.rows.length} 种同时有卖单和收单</small></div>
       ${M ? `<div class="ap-stat-mid ap-cp"${cpCard(M.total)}><span title="${ctx.esc(R.region.hub.name)} 每日成交均价的中位数（与倒卖排行同一数据），不受挂单乱价影响">按成交中位价</span><b>${fmtK(M.total)}</b><small>${M.n}/${R.rows.length} 种有成交价${ctx.valuation.medDaysPicker(M.days)}</small></div>` : ''}
-      <div class="ap-cp"${cpCard(R.avgTotal)}><span>全服均价</span><b>${fmtK(R.avgTotal)}</b><small>${R.rows.length} 种 · ${ctx.formatNumber(R.rows.reduce((t, r) => t + r.qty, 0))} 件</small></div>
+      <div class="ap-cp"${cpCard(R.avgTotal)}><span>全服均价</span><b>${fmtK(R.avgTotal)}</b><small>${R.rows.length} 种 · ${ctx.formatNumber(R.rows.reduce((t, r) => t + r.qty, 0))} 件${R.volTotal ? ` · ${fmtM3(R.volTotal)}` : ''}</small></div>
     </div>
     ${rp && rp.rows.length ? `<button type="button" class="ap-rp-hint" data-ap-view="reproc">化矿后产物按收单约 <b>${fmtK(rp.buyTotal)}</b>${rp.directTotal ? `，${rp.buyTotal >= rp.directTotal ? '比直接卖收单多' : '比直接卖收单少'} ${pct(Math.abs(rp.buyTotal / rp.directTotal - 1))}` : ''} →</button>` : ''}
     ${notes.length ? `<ul class="ap-notes">${notes.map((n) => `<li>${n}</li>`).join('')}</ul>` : ''}
     <div class="ap-table-wrap"><table class="ap-table">
       <thead><tr>
         <th>物品</th><th class="num">数量</th><th class="num ap-hide-sm">最低卖价</th><th class="num ap-hide-sm">最高收价</th>
+        <th class="num ap-hide-sm"><button type="button" data-ap-sort="m3" class="${sortKey === 'm3' ? 'active' : ''}" title="最高收价 ÷ 包装体积，点击按它排序">收价/m³</button></th>
         <th class="num"><button type="button" data-ap-sort="sell" class="${sortKey === 'sell' ? 'active' : ''}">卖单小计</button></th>
         <th class="num"><button type="button" data-ap-sort="buy" class="${sortKey === 'buy' ? 'active' : ''}">收单小计</button></th>
         <th class="num ap-hide-sm"><button type="button" data-ap-sort="split" class="${sortKey === 'split' ? 'active' : ''}">中间价小计</button></th>
@@ -358,8 +372,8 @@ function marketHtml(R, rp) {
         <th class="num ap-hide-sm"><button type="button" data-ap-sort="avg" class="${sortKey === 'avg' ? 'active' : ''}">均价小计</button></th>
       </tr></thead>
       <tbody>${body}</tbody>
-      <tfoot><tr><td>合计</td><td></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-sell ap-strong">${cp(R.sellTotal)}</td><td class="num ap-buy ap-strong">${cp(R.buyTotal)}</td><td class="num ap-hide-sm ap-strong">${cp(SP.total)}</td>${M ? `<td class="num ap-mid ap-strong">${cp(M.total)}</td>` : ''}<td class="num ap-hide-sm">${cp(R.avgTotal)}</td></tr>
-        <tr class="ap-net"><td>税后</td><td></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-sell">${cp(sellNet)}</td><td class="num ap-buy">${cp(buyNet)}</td><td class="ap-hide-sm"></td>${M ? '<td></td>' : ''}<td class="ap-hide-sm"></td></tr></tfoot>
+      <tfoot><tr><td>合计</td><td class="num">${R.volTotal ? `<small class="ap-muted">${fmtM3(R.volTotal)}</small>` : ''}</td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-buy ap-hide-sm">${R.volTotal ? isk(R.volBuy / R.volTotal) : ''}</td><td class="num ap-sell ap-strong">${cp(R.sellTotal)}</td><td class="num ap-buy ap-strong">${cp(R.buyTotal)}</td><td class="num ap-hide-sm ap-strong">${cp(SP.total)}</td>${M ? `<td class="num ap-mid ap-strong">${cp(M.total)}</td>` : ''}<td class="num ap-hide-sm">${cp(R.avgTotal)}</td></tr>
+        <tr class="ap-net"><td>税后</td><td></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-sell">${cp(sellNet)}</td><td class="num ap-buy">${cp(buyNet)}</td><td class="ap-hide-sm"></td>${M ? '<td></td>' : ''}<td class="ap-hide-sm"></td></tr></tfoot>
     </table></div>`;
 }
 
@@ -375,6 +389,7 @@ function reprocHtml(R, rp) {
       <td class="num">${fmt(r.qty)}${r.left ? `<small title="不足一批（${fmt(r.portion)} 个）的部分不会化掉">剩 ${fmt(r.left)}</small>` : ''}</td>
       <td class="num ap-hide-sm" title="${ctx.esc(A.rp.skills[r.skill || SKILL.scrap] || '')}">${pct(r.y)}</td>
       <td class="num ap-buy ap-strong">${r.batches ? cp(r.rpBuy) : '—'}${r.missing ? `<small>${r.missing} 种产物没有收单</small>` : ''}</td>
+      <td class="num ap-buy">${r.batches && r.vol ? cpu(r.rpBuy / (r.batches * r.portion * r.vol)) : '—'}${perM3(r.buy, r) != null ? `<small class="ap-muted" title="原物品直接卖收单的每 m³ 价值">直接卖 ${ctx.formatISK(perM3(r.buy, r))}</small>` : ''}</td>
       <td class="num ap-hide-sm">${isk(r.direct)}</td>
       <td>${!r.batches ? '<span class="ap-tag">不足一批</span>' : better == null ? '<span class="ap-tag ap-tag-rp">化矿</span>' : better ? `<span class="ap-tag ap-tag-rp">化矿 +${pct(r.direct ? r.rpBuy / r.direct - 1 : 1)}</span>` : `<span class="ap-tag ap-tag-sell">直接卖</span>`}</td>
     </tr>`;
@@ -401,9 +416,9 @@ function reprocHtml(R, rp) {
     </div>
     <ul class="ap-notes">${notes.map((n) => `<li>${n}</li>`).join('')}</ul>
     <div class="ap-table-wrap"><table class="ap-table">
-      <thead><tr><th>物品</th><th class="num">数量</th><th class="num ap-hide-sm">化矿率</th><th class="num">化矿价值</th><th class="num ap-hide-sm">直接卖收单</th><th>建议</th></tr></thead>
+      <thead><tr><th>物品</th><th class="num">数量</th><th class="num ap-hide-sm">化矿率</th><th class="num">化矿价值</th><th class="num" title="化矿产物按收单的价值 ÷ 化掉的原物品包装体积">每 m³</th><th class="num ap-hide-sm">直接卖收单</th><th>建议</th></tr></thead>
       <tbody>${items}</tbody>
-      <tfoot><tr><td>合计</td><td></td><td class="ap-hide-sm"></td><td class="num ap-buy ap-strong">${cp(rp.buyTotal)}</td><td class="num ap-hide-sm">${isk(rp.directTotal || null)}</td><td></td></tr></tfoot>
+      <tfoot><tr><td>合计</td><td></td><td class="ap-hide-sm"></td><td class="num ap-buy ap-strong">${cp(rp.buyTotal)}</td><td class="num ap-buy">${rp.volUsed ? cpu(rp.volBuy / rp.volUsed) : ''}</td><td class="num ap-hide-sm">${isk(rp.directTotal || null)}</td><td></td></tr></tfoot>
     </table></div>
     <h3 class="ap-sub">化矿产物</h3>
     <div class="ap-table-wrap"><table class="ap-table">

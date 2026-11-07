@@ -1061,11 +1061,11 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v20').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v21').then((m) => {
     m.initAppraisal({ addToCart,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
       getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
-      valuation,
+      valuation, loadVolumes,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       getCharacterSkills, getCharacterImplants,
       openEsiBind: () => { switchView('profile'); openEsiModal(); },
@@ -1262,7 +1262,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v74').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v78').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1284,7 +1284,8 @@ function loadKbPageModule() {
             .map(({ type }) => ({ id: type.id, name: type.name }));
         }
         return state.shipTypeList || [];
-      }
+      },
+      shipClass
     });
     kbPageModule = m;
     return m;
@@ -2021,6 +2022,18 @@ function rootGroupId(groupId) {
   let group = state.categories.get(groupId);
   while (group?.parentId) group = state.categories.get(group.parentId);
   return group?.id;
+}
+
+// 舰船级别（战场统计 zKill 布局排序用）：[排序值, 级别名]。按市场分类第二层排大小，旗舰再按第三层细分；不是舰船返回 null
+const SHIP_CLASS_RANK = [1381, 1376, 1382, 1374, 1367, 1372, 1361, 1384, 1815, 1612, 391];
+const CAPITAL_RANK = [812, 817, 761, 2271, 1047, 1089, 766];
+function shipClass(typeId) {
+  const path = [];
+  for (let g = state.categories.get(state.typeIndex.get(typeId)?.groupId); g; g = state.categories.get(g.parentId)) path.unshift(g);
+  if (path[0]?.id !== SHIP_ROOT_GROUP || !path[1]) return null;
+  const rank = SHIP_CLASS_RANK.indexOf(path[1].id);
+  const sub = path[1].id === 1381 && path[2] ? CAPITAL_RANK.indexOf(path[2].id) : -1;
+  return [(rank < 0 ? SHIP_CLASS_RANK.length : rank) * 10 + (sub < 0 ? 9 : sub), (sub >= 0 ? path[2] : path[1]).name];
 }
 
 function syncLossesTab(groupId) {
