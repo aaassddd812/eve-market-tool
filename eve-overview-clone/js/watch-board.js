@@ -5,10 +5,14 @@
 // 到价提醒：每个物品可设若干条「某交易中心 卖价 / 收价 ≤ / ≥ 某价」（或一键「卖价跌 / 涨 5%、10%」），看板开着或后台监控开着时每 5 分钟检查一次；
 //   触发后网页提示（可选桌面通知、提示音），该条提醒停用，点「重新启用」再次监控。设置保存在本机。
 // 悬浮窗（float-feed.js）：到价提醒列表推给悬浮窗（pubFloat）；悬浮窗开着时后台照样每 5 分钟查一次价（不用开「后台监控到价」）。
+// 企业微信 / 邮箱（alert-push.js 的「到价提醒」）：触发时推一行；有渠道要推时网页开着就在后台查（同「后台监控到价」）。
+//   服务器托管（alert-host.js）：监控中的提醒交给服务器（hostedAlerts），网页关掉也查；每条提醒的 key 含启用时间，重新启用算新的一条。
 import { loadHubs } from './hub-compare.js?v=v15';
 import * as FF from './float-feed.js?v=v11';
+import * as AP from './alert-push.js?v=v10';
+import { L } from './alert-mail.js?v=v8';
 
-let ctx = null;   // isGlobal, fetchESI, fetchESIPaged, regions, esc, formatISK, formatPrice, formatNumber, showToast, typeName, iconUrl, openItem, favorites, toggleFavorite, store, isActive
+let ctx = null;   // isGlobal, fetchESI, fetchESIPaged, regions, esc, formatISK, formatPrice, formatNumber, showToast, typeName, iconUrl, openItem, favorites, toggleFavorite, store, isActive, openPush
 const KEY = 'eve-watch-board';
 const POLL = 5 * 60e3;
 const W = { alerts: {}, bg: false, notify: false, sound: false, view: 'card', sort: 'fav' };
@@ -18,10 +22,28 @@ export function initWatchBoard(context) {
   ctx = context;
   Object.assign(W, ctx.store.getJSON(KEY, {}) || {});
   if (!W.alerts || typeof W.alerts !== 'object') W.alerts = {};
-  if (W.bg && armedCount()) startBackground();
+  if (bgWanted() && armedCount()) startBackground();
   pubFloat();
+  AP.onPushChange(() => { if (bgWanted() && armedCount() && !S.timer) startBackground(); });
 }
-const save = () => { ctx.store.setJSON(KEY, W); pubFloat(); };
+const save = () => { ctx.store.setJSON(KEY, W); pubFloat(); AP.hostSync(); };
+// 网页关着看板时也要查价：开了「后台监控到价」，或者有企业微信 / 邮箱要推到价提醒
+const bgWanted = () => W.bg || AP.wants('price');
+const alertKey = (id, a) => `${id}:${a.hub}:${a.side}:${a.op}:${a.price}:${a.at || 0}`;
+// 交给服务器托管的提醒（监控中的）：交易中心空间站 + 星系；全服统一市场的物品看星域 19000001 的全部订单
+export function hostedAlerts() {
+  const out = [];
+  for (const [id, list] of Object.entries(W.alerts)) {
+    for (const a of list) {
+      if (!a.on) continue;
+      const r = ctx.regions.find((x) => x.id === a.hub);
+      const global = ctx.isGlobal(Number(id));
+      if (!r && !global) continue;
+      out.push({ key: alertKey(id, a), type: Number(id), region: global ? 19000001 : a.hub, global, station: r?.hub.id || 0, system: r?.hub.system || 0, side: a.side, op: a.op, price: a.price });
+    }
+  }
+  return out;
+}
 const hubName = (r) => r.hub.name.split(' ')[0].replace(/海\d+$/, '') || r.name;
 const armedCount = () => Object.values(W.alerts).flat().filter((a) => a.on).length;
 export const hasArmedAlerts = () => armedCount() > 0;
@@ -110,6 +132,7 @@ function headHtml(ids) {
     ${FF.buttonHtml('price')}
     <button class="btn btn-ghost btn-sm" data-wb-refresh ${S.busy ? 'disabled' : ''}>${S.busy ? '读取中…' : '刷新'}</button></div>
     <div class="wb-bar">${chk('bg', '后台监控到价', '看板关着时也每 5 分钟检查一次（网页开着才有效）')}${chk('notify', '桌面通知', '需要允许浏览器通知')}${chk('sound', '提示音', '触发时播放提示音')}
+      <button type="button" class="link-btn" data-wb-push title="触发时推送到企业微信 / 邮箱，也可以交给服务器托管（网页关掉也提醒）">推送到微信 / 邮箱</button>
       <span class="text-muted">${armedCount() ? `${armedCount()} 条提醒监控中` : '点 🔔 给物品设到价提醒'}</span></div>`;
 }
 
@@ -291,13 +314,14 @@ export async function onClick(e, box) {
   const del = t.closest('[data-wb-del]');
   if (del) { const [id, i] = del.dataset.wbDel.split(':').map(Number); W.alerts[id]?.splice(i, 1); if (!W.alerts[id]?.length) delete W.alerts[id]; save(); draw(box); return; }
   const re = t.closest('[data-wb-rearm]');
-  if (re) { const [id, i] = re.dataset.wbRearm.split(':').map(Number); const a = W.alerts[id]?.[i]; if (a) { a.on = true; delete a.hit; save(); } draw(box); return; }
+  if (re) { const [id, i] = re.dataset.wbRearm.split(':').map(Number); const a = W.alerts[id]?.[i]; if (a) { a.on = true; a.at = Date.now(); delete a.hit; save(); } draw(box); return; }
+  if (t.closest('[data-wb-push]')) { ctx.openPush(); return; }
   const unfav = t.closest('[data-wb-unfav]');
   if (unfav) { ctx.toggleFavorite(Number(unfav.dataset.wbUnfav)); draw(box); }
 }
 
 function addAlert(id, a, box) {
-  (W.alerts[id] ||= []).push({ ...a, on: true });
+  (W.alerts[id] ||= []).push({ ...a, on: true, at: Date.now() });
   S.edit = 0; save();
   const now = checkAlerts();
   if (!now) ctx.showToast('已添加到价提醒', 'success', 1600);
@@ -373,6 +397,16 @@ function checkAlerts() {
   }
   if (W.sound) beep();
   FF.alert('price');
+  const site = location.origin + location.pathname;
+  for (const x of hits) {
+    const hub = hubName(x.h.region), op = x.a.op === 'le' ? '≤' : '≥';
+    AP.push('price', {
+      sig: 'price:' + alertKey(x.id, x.a),
+      text: L(`${ctx.typeName(x.id)}：${hub}${x.a.side === 'buy' ? '收' : '卖'}价 ${px(x.v)}（${op} ${px(x.a.price)}）`,
+        `${ctx.typeName(x.id)}: ${x.h.region.en || hub} ${x.a.side === 'buy' ? 'buy' : 'sell'} price ${px(x.v)} (${op} ${px(x.a.price)})`),
+      url: `${site}#type=${x.id}`
+    });
+  }
   return hits.length;
 }
 
@@ -380,7 +414,7 @@ function startBackground() {
   clearInterval(S.timer);
   S.timer = setInterval(async () => {
     const active = ctx.isActive();
-    if (!active && !((W.bg || FF.isOpen('price')) && armedCount())) return;
+    if (!active && !((bgWanted() || FF.isOpen('price')) && armedCount())) return;
     const ids = active ? ctx.favorites() : armedIds();
     S.busy = true;
     await loadAll(ids);

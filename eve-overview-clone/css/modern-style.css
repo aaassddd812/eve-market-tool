@@ -3390,7 +3390,10 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 .kb-battle.tier-large { animation: tier-glow-strong 1.2s ease-in-out infinite; }
 .kb-battle-rule { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
 .kb-tier-chip { display: inline-flex; align-items: center; gap: 4px; color: rgb(var(--tier)); font-weight: 600; }
-.kb-battle-notify { margin-left: auto; font-size: 0.75rem; color: var(--text-secondary); }
+.kb-battle-notify { margin-left: auto; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 0.75rem; color: var(--text-secondary); }
+.kb-battle-notify .jump-check { white-space: nowrap; }
+.kb-battle-notify select.kb-battle-min { width: auto; min-width: 0; height: 28px; min-height: 0; padding: 0 26px 0 8px; font-size: 0.75rem; }
+.kb-battle-notify .link-btn { font-size: 0.75rem; }
 
 @keyframes tier-glow { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--tier), 0); } 50% { box-shadow: 0 0 0 3px rgba(var(--tier), 0.18), 0 0 16px rgba(var(--tier), 0.25); } }
 @keyframes tier-glow-strong { 0%, 100% { box-shadow: 0 0 0 1px rgba(var(--tier), 0.25), 0 0 6px rgba(var(--tier), 0.2); } 50% { box-shadow: 0 0 0 4px rgba(var(--tier), 0.3), 0 0 26px rgba(var(--tier), 0.45); } }
@@ -4973,6 +4976,8 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .ka-opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 46px; padding: 8px 14px; cursor: pointer; font-size: 0.8125rem; }
 .ka-list > .ka-opt + .ka-opt { border-top: 1px solid var(--border-primary); }
 .ka-opt > span:first-child { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
+.ka-opt > span.ap-use-label { flex: none; white-space: nowrap; }
+.ka-opt > span.ap-use-label + .ka-chips { justify-content: flex-end; }
 .ka-opt b { font-weight: 500; color: var(--text-primary); }
 .ka-opt small { color: var(--text-muted); font-size: 0.6875rem; overflow: hidden; text-overflow: ellipsis; }
 .ka-opt > .cr-input { width: auto; min-width: 110px; flex: none; }

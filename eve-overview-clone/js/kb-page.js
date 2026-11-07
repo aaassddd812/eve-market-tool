@@ -434,7 +434,9 @@ function renderBattles() {
       <h3 class="kb-section-title"><svg class="battle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/><path d="M14.5 6.5 18 3h3v3l-3.5 3.5"/><path d="m5 14 4 4"/><path d="m7 17-3 3"/><path d="m3 19 2 2"/></svg>${list.length ? `疑似会战 <b>${list.length}</b>` : '暂无疑似会战'}</h3>
       <span class="text-muted kb-battle-rule" title="不含太空舱、NPC 击杀与 10M ISK 以下">${rule}</span>
       <a class="btn btn-ghost kb-bh-entry" href="#kb/battles" data-kb-bh title="最近 30 天全部疑似会战、双方战损比，可筛选">近 30 天会战 ›</a>
-      <label class="jump-check kb-battle-notify"><input type="checkbox" data-battle-set="on"${set.on ? ' checked' : ''}><span>弹出提醒</span></label>
+      <span class="kb-battle-notify"><label class="jump-check"><span>提醒规模</span><select class="cr-input kb-battle-min" data-battle-set="min" aria-label="提醒规模">${tiers.map((t) => `<option value="${t.key}"${set.min === t.key ? ' selected' : ''}>${t.key === 'small' ? '全部' : t.name.replace('会战', '') + '以上'}</option>`).join('')}</select></label>
+        <label class="jump-check"><input type="checkbox" data-battle-set="on"${set.on ? ' checked' : ''}><span>弹出提醒</span></label>
+        <button type="button" class="link-btn" data-battle-push title="新会战推送到企业微信 / 邮箱，在「预警 → 微信 / 邮箱」里勾选「会战」">推送到微信 / 邮箱</button></span>
     </div>`;
   const cards = list.map((b) => {
     const sys = kb.systemLabel(b.system_id);
@@ -1423,6 +1425,7 @@ export function initKbPage(context) {
     if (!el || !battles) return;
     const key = el.dataset.battleSet;
     if (key === 'on') battles.setBattleSettings({ on: el.checked });
+    if (key === 'min') battles.setBattleSettings({ min: el.value });
   });
   const input = $('kbSearch');
   input.addEventListener('input', app.debounce(() => runSearch(input.value), 200));
@@ -1477,6 +1480,7 @@ export function initKbPage(context) {
     }
     const battleMap = e.target.closest('[data-battle-map]');
     if (battleMap) { app.openMapSystem(Number(battleMap.dataset.battleMap)); return; }
+    if (e.target.closest('[data-battle-push]')) { app.openPush(); return; }
     const loc = e.target.closest('[data-location], [data-pick-location]');
     if (loc) {
       e.preventDefault();

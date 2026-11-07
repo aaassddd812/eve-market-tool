@@ -6872,6 +6872,11 @@ class AlertPush:
 #     「角色离线时不提醒」读在线状态（esi-location.read_online.v1）。跳数按 map-data.json 的星门算。
 #   虫洞求救：本服务自己的求救表，有新求救就推。
 #   订单被压价：每 5 分钟读角色订单（esi-markets.read_character_orders.v1），同改单小助手的比价规则；玩家建筑里的订单要建筑市场权限。
+#   会战：每分钟看一次疑似会战（/battles 同口径），到了用户设的提醒规模就推；同一星系 6 小时内只推一次（同 js/battles.js）。
+#   到价提醒：自选看板里监控中的提醒（物品、交易中心、卖价 / 收价 ≤ / ≥ 某价），每 5 分钟用公开的星域订单检查（同 js/watch-board.js），
+#     触发过的记下来不再推（网页上重新启用会换一个 key）。
+#   角色提醒（同 js/char-alerts.js）：技能队列（练完、剩不到 24 小时、空了）、工业任务完成、行星开采器停了、订单全部成交 / 过期、
+#     合同（我发的被接 / 完成 / 失败 / 被拒，拍卖有新出价，收到指定给我的合同）。都是和上次读到的比，刚开启时只记下现状、不推。
 # 保存的东西：刷新令牌、企业微信机器人 key、邮箱账号和授权码、预警设置。整份加密后存进 hosted 表（密钥在数据库旁的 .hostkey 文件，
 #   或环境变量 EVE_HOSTED_KEY），数据库单独泄露时读不出来；服务器本身被攻破时仍可能泄露，所以要用户确认风险。
 #   刷新令牌每次使用都会更换，新的立刻写回。授权失效（用户在 CCP 撤销 / 改密码）时停掉要令牌的部分，网页上提示重新授权。
@@ -6892,12 +6897,32 @@ HOSTED_ORDER_GAP = 300          # 订单比价间隔（市场订单 ESI 缓存 5
 HOSTED_ORDER_MAX = 120          # 一个角色最多比价多少张订单
 HOSTED_SENT_KEEP = 20           # 状态里保留最近几条推送
 HOSTED_PUSH_GAP = {"wecom": 5, "mail": 60}
-HOSTED_SRCS = ("kill", "sos", "order")
+HOSTED_SRCS = ("kill", "sos", "order", "battle", "price", "skill", "job", "pi", "sold", "contract")
+HOSTED_LABELS = {"kill": ("击杀预警", "Kill alert"), "sos": ("虫洞求救", "Wormhole SOS"), "order": ("订单被压价", "Order undercut"), "battle": ("会战", "Battle"),
+                 "price": ("到价提醒", "Price alert"), "skill": ("技能队列", "Skill queue"), "job": ("工业任务", "Industry job"), "pi": ("行星开采", "PI extractor"),
+                 "sold": ("订单成交", "Order filled"), "contract": ("合同", "Contract")}
+HOSTED_PRICE_GAP = 300          # 到价提醒检查间隔（星域订单 ESI 缓存 5 分钟）
+HOSTED_PRICE_MAX = 200          # 最多托管多少条到价提醒
+# 角色提醒的检查间隔（秒，不短于 ESI 缓存：技能队列 2 分钟、工业 5 分钟、行星 10 分钟、订单 20 分钟、合同 5 分钟）
+HOSTED_CHAR_GAP = {"skill": 600, "job": 300, "pi": 1800, "sold": 1200, "contract": 300}
+HOSTED_SKILL_LOW = 24 * 3600    # 技能队列剩不到这么久就提醒
+HOSTED_PI_MAX = 12              # 最多读几颗行星
+HOSTED_BIDS_MAX = 5             # 最多查几个拍卖的出价
+HOSTED_GONE_KEEP = 3 * 3600     # 订单不见了但历史里还没有（历史接口缓存 1 小时）：最多等这么久
+HOSTED_ACT = {1: ("制造", "Manufacturing"), 3: ("时间效率研究", "TE research"), 4: ("材料效率研究", "ME research"), 5: ("复制", "Copying"),
+              7: ("逆向工程", "Reverse engineering"), 8: ("发明", "Invention"), 9: ("反应", "Reaction"), 11: ("反应", "Reaction")}
+HOSTED_CT = {"item_exchange": ("物品交换", "Item exchange"), "auction": ("拍卖", "Auction"), "courier": ("快递", "Courier"), "loan": ("借贷", "Loan")}
+HOSTED_BATTLE_GAP = 60
+HOSTED_BATTLE_WINDOW = 60
+HOSTED_BATTLE_TTL = 6 * 3600
+HOSTED_TIERS = (("large", 100, "大型会战", "Large battle"), ("medium", 50, "中型会战", "Medium battle"), ("small", BATTLE_MIN_KILLS, "小型会战", "Small battle"))
 HOSTED_TOKEN_URLS = {"tq": "https://login.eveonline.com/v2/oauth/token",
                      "serenity": "https://login.evepc.163.com/v2/oauth/token",
                      "infinity": "https://login-infinity.evepc.163.com/v2/oauth/token"}
 HOSTED_SCOPES = {"loc": "esi-location.read_location.v1", "online": "esi-location.read_online.v1",
-                 "orders": "esi-markets.read_character_orders.v1", "struct": "esi-markets.structure_markets.v1"}
+                 "orders": "esi-markets.read_character_orders.v1", "struct": "esi-markets.structure_markets.v1",
+                 "skill": "esi-skills.read_skillqueue.v1", "job": "esi-industry.read_character_jobs.v1", "pi": "esi-planets.manage_planets.v1",
+                 "contract": "esi-contracts.read_character_contracts.v1", "names": "esi-universe.read_structures.v1"}
 HOSTED_SCHEMA = """
 CREATE TABLE IF NOT EXISTS hosted(server TEXT, char_id INTEGER, name TEXT, secret TEXT, blob TEXT, state TEXT,
   created INTEGER, updated INTEGER, PRIMARY KEY(server, char_id));
@@ -6918,6 +6943,14 @@ def _price(v):
     return f"{float(v):,.2f}"
 
 
+def _ts(v):
+    """ESI 时间（2026-01-01T00:00:00Z）→ 秒；没有或格式不对返回 0"""
+    try:
+        return calendar.timegm(time.strptime(str(v)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, TypeError):
+        return 0
+
+
 class Hosted:
     def __init__(self, store, apis, industry, push, key_path):
         self.store, self.apis, self.industry, self.push = store, apis, industry, push
@@ -6931,12 +6964,15 @@ class Hosted:
         self.cursor = {}          # server -> 已处理到的实时击杀编号
         self.sos_seen = {}        # server -> 已处理到的求救更新时间
         self.sos_at = 0
+        self.battle_at = 0
         self.graphs = {}          # server -> 星门图：(星系 ID -> 下标, 邻接表, 星系表)；曙光服用自己的 map-data-infinity.json
         self.names = None         # 物品 ID -> (中文名, 英文名)
         self.pool = concurrent.futures.ThreadPoolExecutor(4, thread_name_prefix="hosted")
         self.market = {}          # (server, 星域, 物品, buy|sell) -> (时间, 订单)；多个角色共用
         self.structs = {}         # (server, 建筑) -> (时间, 订单)
         self.station_region = {}  # (server, 空间站) -> (星系, 星域)
+        self.loc_names = {}       # (server, 地点, en) -> 名称（空间站、建筑）
+        self.planet_names = {}    # (server, 行星) -> 名称
         for server, char, name, blob, state in c.execute("SELECT server, char_id, name, blob, state FROM hosted"):
             try:
                 self.subs[(server, char)] = self.runtime(server, char, name, self.open(blob), json.loads(state or "{}"))
@@ -7036,11 +7072,22 @@ class Hosted:
                        "watchOn": k.get("watchOn") is True, "watch": watch,
                        "regionOn": k.get("regionOn") is True, "regions": [{"id": r["id"], "name": str(r.get("name") or r["id"])[:40]} for r in regions]}
         out["sos"] = {"rewardOnly": (s.get("sos") or {}).get("rewardOnly") is True}
+        b = s.get("battle") if isinstance(s.get("battle"), dict) else {}
+        out["battle"] = {"min": b.get("min") if b.get("min") in ("small", "medium", "large") else "small"}
+        price = []
+        for a in (s.get("price") or [])[:HOSTED_PRICE_MAX] if isinstance(s.get("price"), list) else []:
+            if not isinstance(a, dict) or any(type(a.get(k)) is not int or a[k] <= 0 for k in ("type", "region")) or a.get("side") not in ("sell", "buy") \
+                    or a.get("op") not in ("le", "ge") or type(a.get("price")) not in (int, float) or not a["price"] > 0:
+                continue
+            price.append({"key": str(a.get("key") or "")[:80], "type": a["type"], "region": a["region"], "global": a.get("global") is True,
+                          "station": a["station"] if type(a.get("station")) is int else 0, "system": a["system"] if type(a.get("system")) is int else 0,
+                          "side": a["side"], "op": a["op"], "price": float(a["price"])})
+        out["price"] = price
         return out
 
     def runtime(self, server, char, name, cfg, state):
         return {"server": server, "char": char, "name": name, "cfg": cfg, "state": state, "access": "", "exp": 0, "dead": bool(state.get("token_error")),
-                "range": {}, "loc_at": 0, "online_at": 0, "order_at": 0, "busy": set(), "queue": {"wecom": [], "mail": []}, "last": {"wecom": 0, "mail": 0},
+                "range": {}, "loc_at": 0, "online_at": 0, "order_at": 0, "at": {}, "busy": set(), "queue": {"wecom": [], "mail": []}, "last": {"wecom": 0, "mail": 0},
                 "dirty": False, "tlock": threading.Lock()}
 
     # ---------- 令牌 ----------
@@ -7182,7 +7229,7 @@ class Hosted:
         if not sub:
             raise PermissionError("没有找到这个角色的托管")
         sub["cfg"] = {**sub["cfg"], **settings}
-        sub["range"], sub["loc_at"], sub["online_at"], sub["order_at"] = {}, 0, 0, 0
+        sub["range"], sub["loc_at"], sub["online_at"], sub["order_at"], sub["at"] = {}, 0, 0, 0, {}
         self.save_blob(sub)
         return {"ok": True}
 
@@ -7236,6 +7283,7 @@ class Hosted:
             if new:
                 kills[server] = (new, api)
         sos = self.new_sos(now) if now - self.sos_at >= HOSTED_SOS_GAP else {}
+        battles = self.new_battles(now, subs) if now - self.battle_at >= HOSTED_BATTLE_GAP else {}
         for sub in subs:
             cfg, srv = sub["cfg"], sub["server"]
             if "kill" in cfg["src"]:
@@ -7244,12 +7292,24 @@ class Hosted:
                     self.kill_match(sub, *kills[srv])
             if "sos" in cfg["src"] and sos.get(srv):
                 self.sos_match(sub, sos[srv])
+            if "battle" in cfg["src"] and srv in battles:
+                self.battle_match(sub, *battles[srv])
             if "order" in cfg["src"] and now - sub["order_at"] >= HOSTED_ORDER_GAP and "order" not in sub["busy"]:
                 sub["order_at"] = now
                 self.job(sub, "order", self.order_check)
+            for src, fn, gap in self.char_jobs():
+                # 到价提醒只用公开订单，授权失效也照查；角色提醒要令牌
+                if src in cfg["src"] and (src == "price" or not sub["dead"]) and now - sub["at"].get(src, 0) >= gap and src not in sub["busy"]:
+                    sub["at"][src] = now
+                    self.job(sub, src, fn)
             self.flush(sub, now)
             if sub["dirty"]:
                 self.save_state(sub)
+
+    def char_jobs(self):
+        return (("price", self.price_check, HOSTED_PRICE_GAP), ("skill", self.skill_check, HOSTED_CHAR_GAP["skill"]),
+                ("job", self.job_check, HOSTED_CHAR_GAP["job"]), ("pi", self.pi_check, HOSTED_CHAR_GAP["pi"]),
+                ("sold", self.sold_check, HOSTED_CHAR_GAP["sold"]), ("contract", self.contract_check, HOSTED_CHAR_GAP["contract"]))
 
     def job(self, sub, name, fn):
         sub["busy"].add(name)
@@ -7290,8 +7350,7 @@ class Hosted:
             items, sub["queue"][ch] = q[:PUSH_LINES], q[PUSH_LINES:]
             sub["last"][ch] = now
             kinds = {s for s, _, _ in items}
-            label = {"kill": ("击杀预警", "Kill alert"), "sos": ("虫洞求救", "Wormhole SOS"), "order": ("订单被压价", "Order undercut")}
-            title = (label[next(iter(kinds))][en] if len(kinds) == 1 else ("Alerts" if en else "预警")) + (" (hosted)" if en else "（服务器托管）") \
+            title = (HOSTED_LABELS[next(iter(kinds))][en] if len(kinds) == 1 else ("Alerts" if en else "预警")) + (" (hosted)" if en else "（服务器托管）") \
                 + ((f" ({len(items)})" if en else f"（{len(items)} 条）") if len(items) > 1 else "")
             body = {"title": title, "lines": [{"text": t, "url": u} for _, t, u in items], "lang": cfg["lang"]}
             c = cfg["ch"][ch]
@@ -7475,6 +7534,62 @@ class Hosted:
             self.enqueue(sub, "sos", text, url)
         self.mark(sub, "sos")
 
+    # ---------- 会战 ----------
+    def new_battles(self, now, subs):
+        """各服务器当前的会战：{server: (会战列表, 名称)}；只查有人托管会战的服务器（接口自带 5 秒缓存）"""
+        self.battle_at = now
+        out = {}
+        for server in {s["server"] for s in subs if "battle" in s["cfg"]["src"]}:
+            api = self.apis.get(server)
+            if not api:
+                continue
+            try:
+                data = api.battles({"window": str(HOSTED_BATTLE_WINDOW), "min": str(BATTLE_MIN_KILLS)})
+            except Exception:  # noqa: BLE001
+                log.warning("托管预警：%s 会战读取失败", server)
+                continue
+            out[server] = (data.get("battles") or [], data.get("names") or {})
+        return out
+
+    def battle_match(self, sub, battles, names):
+        # 每个托管各记一份已推送（星系 -> 时间；规模没到时不记，打大了再推）；刚开启时正在打的只记下、不推
+        cfg = sub["cfg"]
+        en = cfg["lang"] == "en"
+        need = next(n for k, n, *_ in HOSTED_TIERS if k == cfg.get("battle", {}).get("min", "small"))
+        first = "battles" not in sub["state"]
+        done = sub["state"].setdefault("battles", {})
+        now = int(time.time())
+        for k in [k for k, t in done.items() if now - t > HOSTED_BATTLE_TTL]:
+            del done[k]
+        for b in battles:
+            key = str(b["system_id"])
+            if b["kills"] < need or key in done:
+                continue
+            done[key] = now
+            if first:
+                continue
+            tier = next(t for t in HOSTED_TIERS if b["kills"] >= t[1] or t[0] == "small")
+            index, _, systems = self.map(sub["server"])
+            i = index.get(b["system_id"])
+            region = self.region_names(sub["server"]).get(systems[i][6]) if i is not None else ""
+            sysn = self.sys_name(sub["server"], b["system_id"], en)
+            where = sysn + ((f" ({self.tr(region, True)})" if en else f"（{region}）") if region else "")
+            sides = [names.get(str(x["id"])) or names.get(x["id"]) for x in b.get("sides", [])[:2]]
+            sides = [x for x in sides if x]
+            text = (f"{tier[3]} · {where} · {b['kills']} ships destroyed in {HOSTED_BATTLE_WINDOW} min · ~{b['pilots']} pilots · {_isk(b['value'])} ISK lost" if en
+                    else f"{tier[2]} · {where} · {HOSTED_BATTLE_WINDOW} 分钟内击毁 {b['kills']} 艘 · 约 {b['pilots']} 人 · 损失 {_isk(b['value'])} ISK") \
+                + (" · " + " vs ".join(sides) if sides else "")
+            self.enqueue(sub, "battle", text, f"{cfg['site']}#map={b['system_id']}" if cfg.get("site") else "")
+        sub["dirty"] = True
+        self.mark(sub, "battle")
+
+    def region_names(self, server):
+        key = "regions:" + server
+        if key not in self.graphs:
+            m = self.industry._load("map-data-infinity.json" if server == "infinity" else "map-data.json")
+            self.graphs[key] = {r[0]: r[1] for r in m["regions"]}
+        return self.graphs[key]
+
     # ---------- 订单被压价（规则同 js/order-watch.js 的 analyze）----------
     def region_of(self, sub, o):
         if o.get("region_id"):
@@ -7504,13 +7619,18 @@ class Hosted:
         if not region:
             return None
         o["system_id"] = o.get("system_id") or sid
-        key = (sub["server"], region, o["type_id"], buy)
+        return self.region_orders(sub["server"], region, o["type_id"], buy)
+
+    def region_orders(self, server, region, type_id, buy):
+        """星域里某物品的收单 / 卖单（公开接口，多个角色共用缓存 5 分钟）"""
+        now = time.time()
+        key = (server, region, type_id, buy)
         hit = self.market.get(key)
         if not hit or now - hit[0] > HOSTED_ORDER_GAP:
-            cfg = ARB_SERVERS[sub["server"]]
+            cfg = ARB_SERVERS[server]
             out, page, pages = [], 1, 1
             while page <= min(pages, 20):
-                data, h = get_json(f"{cfg['esi']}/markets/{region}/orders/?type_id={o['type_id']}&order_type={'buy' if buy else 'sell'}&page={page}"
+                data, h = get_json(f"{cfg['esi']}/markets/{region}/orders/?type_id={type_id}&order_type={'buy' if buy else 'sell'}&page={page}"
                                    + (f"&{cfg['qs']}" if cfg["qs"] else ""), timeout=30, retries=2)
                 out += data or []
                 pages, page = int(h.get("X-Pages") or 1), page + 1
@@ -7556,6 +7676,234 @@ class Hosted:
         for oid in list(alerted):
             if oid not in live:
                 del alerted[oid]
+
+    # ---------- 到价提醒（规则同 js/watch-board.js：交易中心空间站里的最低卖价 / 最高收价；全服统一市场的物品看整个星域）----------
+    def price_check(self, sub):
+        cfg = sub["cfg"]
+        en = cfg["lang"] == "en"
+        alerts = cfg.get("price") or []
+        done = set(sub["state"].get("price_hit") or [])
+        for a in alerts:
+            if a["key"] in done:
+                continue
+            lst = self.region_orders(sub["server"], a["region"], a["type"], a["side"] == "buy")
+            px = [x["price"] for x in lst if a["global"] or x["location_id"] == a["station"]]
+            if not px:
+                continue
+            v = max(px) if a["side"] == "buy" else min(px)
+            if not (v <= a["price"] if a["op"] == "le" else v >= a["price"]):
+                continue
+            done.add(a["key"])
+            name = self.type_name(a["type"], en)
+            hub = self.sys_name(sub["server"], a["system"], en) if a["system"] else ""
+            op = "≤" if a["op"] == "le" else "≥"
+            text = (f"{name}: {hub + ' ' if hub else ''}{'buy' if a['side'] == 'buy' else 'sell'} price {_price(v)} ({op} {_price(a['price'])})" if en
+                    else f"{name}：{hub}{'收' if a['side'] == 'buy' else '卖'}价 {_price(v)}（{op} {_price(a['price'])}）")
+            self.enqueue(sub, "price", text, f"{cfg['site']}#type={a['type']}" if cfg.get("site") else "")
+        keys = {a["key"] for a in alerts}
+        sub["state"]["price_hit"] = [k for k in done if k in keys]
+
+    # ---------- 角色提醒（同 js/char-alerts.js）：和上次读到的比，刚开启时只记下现状 ----------
+    def need(self, sub, scope):
+        if not self.has(sub, scope):
+            raise PermissionError("授权里没有这项权限，请重新授权")
+
+    @staticmethod
+    def who(sub, en=False):
+        return sub["name"] + " · "
+
+    def loc_name(self, sub, lid, en):
+        """空间站 / 玩家建筑 / 星系名；读不到返回空"""
+        if not lid:
+            return ""
+        if 30000000 <= lid < 33000000:
+            return self.sys_name(sub["server"], lid, en)
+        key = (sub["server"], lid, en)
+        if key not in self.loc_names:
+            name = ""
+            try:
+                if lid >= 10**12:
+                    if self.has(sub, "names"):
+                        name = (self.esi(sub, f"/universe/structures/{lid}/")[0] or {}).get("name") or ""
+                elif 60000000 <= lid < 64000000:
+                    cfg = ARB_SERVERS[sub["server"]]
+                    st, _ = get_json(f"{cfg['esi']}/universe/stations/{lid}/?language={'en' if en else 'zh'}" + (f"&{cfg['qs']}" if cfg["qs"] else ""), timeout=20, retries=2)
+                    name = (st or {}).get("name") or ""
+            except Exception:  # noqa: BLE001
+                return ""
+            self.loc_names[key] = name
+        return self.loc_names[key]
+
+    def skill_check(self, sub):
+        self.need(sub, "skill")
+        en = sub["cfg"]["lang"] == "en"
+        q, _ = self.esi(sub, f"/characters/{sub['char']}/skillqueue/")
+        now = time.time()
+        cur = {}
+        for e in q or []:
+            fin = _ts(e.get("finish_date"))
+            if fin:
+                cur[f"{e['skill_id']}:{e.get('finished_level', 0)}"] = fin
+        end = max(cur.values(), default=0)
+        st = sub["state"].get("skillq")
+        sub["state"]["skillq"] = nxt = {"q": {k: t for k, t in cur.items() if t > now}, "low": bool(st and st.get("low")) and 0 < end - now < HOSTED_SKILL_LOW,
+                                        "empty": end <= now}
+        if st is None:
+            nxt["low"] = 0 < end - now < HOSTED_SKILL_LOW
+            return
+        done = [k for k, t in st["q"].items() if cur.get(k, t) <= now]
+        if done:
+            names = [f"{self.type_name(int(k.split(':')[0]), en)} {'level ' if en else ''}{k.split(':')[1]}{'' if en else ' 级'}" for k in done[:8]]
+            self.enqueue(sub, "skill", self.who(sub, en) + ("Skill trained: " if en else "技能练完：") + ("、" if not en else ", ").join(names)
+                         + ((f" and {len(done) - 8} more" if en else f" 等 {len(done)} 个") if len(done) > 8 else ""))
+        if nxt["empty"] and not st.get("empty"):
+            paused = bool(q) and not cur   # 队列里有技能但没有完成时间：没在训练（如阿尔法克隆、欧米伽到期）
+            self.enqueue(sub, "skill", self.who(sub, en) + (("Skill queue is paused" if paused else "Skill queue is empty") if en
+                                                            else "技能队列没在训练" if paused else "技能队列已空，记得续上"))
+        elif 0 < end - now < HOSTED_SKILL_LOW and not st.get("low"):
+            h = max(1, round((end - now) / 3600))
+            self.enqueue(sub, "skill", self.who(sub, en) + (f"Skill queue ends in {h} h" if en else f"技能队列 {h} 小时后练完，记得续上"))
+            nxt["low"] = True
+
+    def job_check(self, sub):
+        self.need(sub, "job")
+        en = sub["cfg"]["lang"] == "en"
+        jobs, _ = self.esi(sub, f"/characters/{sub['char']}/industry/jobs/")
+        now = time.time()
+        ready = [j for j in jobs or [] if j.get("status") in ("active", "ready") and 0 < _ts(j.get("end_date")) <= now]
+        seen = sub["state"].get("jobs")
+        sub["state"]["jobs"] = [j["job_id"] for j in ready]
+        if seen is None:
+            return
+        for j in [j for j in ready if j["job_id"] not in set(seen)]:
+            act = HOSTED_ACT.get(j.get("activity_id"), ("工业任务", "Industry job"))[en]
+            name = self.type_name(j.get("product_type_id") or j.get("blueprint_type_id"), en)
+            where = self.loc_name(sub, j.get("facility_id") or j.get("station_id"), en)
+            text = (f"{act} done: {name} ×{j.get('runs', 1)}" if en else f"{act}完成：{name} ×{j.get('runs', 1)}") + (f" · {where}" if where else "")
+            self.enqueue(sub, "job", self.who(sub, en) + text)
+
+    def planet_name(self, sub, pid, sid, en):
+        key = (sub["server"], pid)
+        if key not in self.planet_names:
+            cfg = ARB_SERVERS[sub["server"]]
+            try:
+                self.planet_names[key] = (get_json(f"{cfg['esi']}/universe/planets/{pid}/?{cfg['qs']}", timeout=20, retries=2)[0] or {}).get("name") or ""
+            except Exception:  # noqa: BLE001
+                return self.sys_name(sub["server"], sid, en)
+        name = self.planet_names[key]
+        sysn_en = self.sys_name(sub["server"], sid, True)
+        # ESI 的行星名是「英文星系名 + 罗马数字」，中文界面换成中文星系名
+        return self.sys_name(sub["server"], sid, en) + name[len(sysn_en):] if name.startswith(sysn_en) else name or self.sys_name(sub["server"], sid, en)
+
+    def pi_check(self, sub):
+        self.need(sub, "pi")
+        en = sub["cfg"]["lang"] == "en"
+        planets, _ = self.esi(sub, f"/characters/{sub['char']}/planets/")
+        now = time.time()
+        stopped = {}
+        for p in (planets or [])[:HOSTED_PI_MAX]:
+            d, _ = self.esi(sub, f"/characters/{sub['char']}/planets/{p['planet_id']}/")
+            for pin in (d or {}).get("pins", []):
+                exp = _ts(pin.get("expiry_time"))
+                if "extractor_details" in pin and exp and exp <= now:
+                    stopped.setdefault(p["planet_id"], [p, []])[1].append(f"{p['planet_id']}:{pin['pin_id']}:{exp}")
+        seen = sub["state"].get("pi")
+        sub["state"]["pi"] = [k for _, keys in stopped.values() for k in keys]
+        if seen is None:
+            return
+        seen = set(seen)
+        for pid, (p, keys) in stopped.items():
+            n = len([k for k in keys if k not in seen])
+            if n:
+                name = self.planet_name(sub, pid, p.get("solar_system_id"), en)
+                self.enqueue(sub, "pi", self.who(sub, en) + (f"Extractor stopped: {name} ({n})" if en else f"行星开采器已停：{name}（{n} 个）"))
+
+    def sold_check(self, sub):
+        self.need(sub, "orders")
+        en = sub["cfg"]["lang"] == "en"
+        orders, _ = self.esi(sub, f"/characters/{sub['char']}/orders/")
+        now = int(time.time())
+        cur = {str(o["order_id"]): [o.get("volume_remain", 0), o["price"], o["type_id"], 1 if o.get("is_buy_order") else 0, o.get("volume_total", 0), o.get("location_id", 0)]
+               for o in orders or []}
+        prev = sub["state"].get("orders")
+        sub["state"]["orders"] = cur
+        if prev is None:
+            return
+        gone = sub["state"].setdefault("orders_gone", {})
+        for oid, p in prev.items():
+            if oid not in cur and oid not in gone:
+                gone[oid] = p + [now]
+        if not gone:
+            return
+        hist, _ = self.esi(sub, f"/characters/{sub['char']}/orders/history/")
+        by = {str(h["order_id"]): h for h in hist or []}
+        for oid, p in list(gone.items()):
+            h = by.get(oid)
+            if not h:
+                if now - p[6] > HOSTED_GONE_KEEP:
+                    del gone[oid]
+                continue
+            del gone[oid]
+            if h.get("state") == "cancelled":
+                continue
+            name, side = self.type_name(p[2], en), ("buy" if p[3] else "sell") if en else ("收单" if p[3] else "卖单")
+            where = self.loc_name(sub, p[5], en)
+            total, left, price = h.get("volume_total") or p[4], h.get("volume_remain", 0), h.get("price") or p[1]
+            if left == 0:
+                text = (f"Order filled: {name} {side} ×{total:,} @ {_price(price)} · {_isk(total * price)} ISK" if en
+                        else f"订单全部成交：{name} {side} ×{total:,} @ {_price(price)} · 共 {_isk(total * price)} ISK")
+            else:
+                text = (f"Order expired: {name} {side} {left:,}/{total:,} left @ {_price(price)}" if en
+                        else f"订单过期：{name} {side} 剩 {left:,}/{total:,} @ {_price(price)}")
+            self.enqueue(sub, "sold", self.who(sub, en) + text + (f" · {where}" if where else ""))
+
+    def contract_check(self, sub):
+        self.need(sub, "contract")
+        en = sub["cfg"]["lang"] == "en"
+        me = sub["char"]
+        cs, _ = self.esi(sub, f"/characters/{me}/contracts/")
+        cs = [c for c in cs or [] if not c.get("for_corporation") and (c.get("issuer_id") == me or c.get("assignee_id") == me)]
+        prev = sub["state"].get("contracts")
+        sub["state"]["contracts"] = {str(c["contract_id"]): c.get("status") for c in cs}
+        bids = sub["state"].setdefault("bids", {})
+        live = set()
+        out = []
+        for c in cs:
+            cid, status, mine = str(c["contract_id"]), c.get("status"), c.get("issuer_id") == me
+            kind = HOSTED_CT.get(c.get("type"), ("合同", "Contract"))[en]
+            title = c.get("title") or ""
+            label = kind + (f" “{title}”" if en and title else f"「{title}」" if title else "")
+            if mine and c.get("type") == "auction" and status == "outstanding" and len(live) < HOSTED_BIDS_MAX:
+                live.add(cid)
+                top = max((b.get("amount", 0) for b in self.esi(sub, f"/characters/{me}/contracts/{c['contract_id']}/bids/")[0] or []), default=0)
+                if top > bids.get(cid, 0) and prev is not None and cid in prev:
+                    out.append(f"New bid on {label}: {_isk(top)} ISK" if en else f"{label}有新出价：{_isk(top)} ISK")
+                bids[cid] = max(top, bids.get(cid, 0))
+            if prev is None:
+                continue
+            old = prev.get(cid)
+            if not mine:
+                if old is None and status == "outstanding":
+                    price = c.get("reward") if c.get("type") == "courier" else c.get("price")
+                    out.append((f"Contract assigned to you: {label}" if en else f"收到指定给你的合同：{label}") + (f" · {_isk(price)} ISK" if price else ""))
+                continue
+            if old is None or old == status:
+                continue
+            if c.get("type") == "courier":
+                route = " → ".join(x for x in (self.loc_name(sub, c.get("start_location_id"), en), self.loc_name(sub, c.get("end_location_id"), en)) if x)
+                msg = {"in_progress": ("Courier contract accepted", "快递合同被接了"), "finished": ("Courier contract delivered", "快递已送达"),
+                       "failed": ("Courier contract failed", "快递合同失败"), "rejected": ("Courier contract rejected", "快递合同被拒绝")}.get(status)
+                if msg:
+                    out.append(f"{msg[0] if en else msg[1]}{'' if not title else (' “' + title + '”' if en else '「' + title + '」')}" + (f" · {route}" if route else ""))
+            elif status in ("finished", "finished_issuer", "finished_contractor"):
+                price = bids.get(cid) or c.get("price") if c.get("type") == "auction" else c.get("price")
+                out.append((f"{label} completed" if en else f"{label}已完成") + (f" · {_isk(price)} ISK" if price else ""))
+            elif status == "rejected":
+                out.append(f"{label} rejected" if en else f"{label}被拒绝")
+        for k in [k for k in bids if k not in live]:
+            del bids[k]
+        for t in out:
+            self.enqueue(sub, "contract", self.who(sub, en) + t)
 
 
 # ---------------------------------------------------------------- AI 助手

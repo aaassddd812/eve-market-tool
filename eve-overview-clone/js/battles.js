@@ -2,7 +2,11 @@
 // 每 6 秒（与星图实时击杀同频）向击杀记录服务查询疑似会战（60 分钟内同一星系被击毁 ≥ 20 艘舰船，不含太空舱、NPC 击杀与 10M ISK 以下的击杀；20 分钟没有新击杀即视为结束），
 // 按规模分为小型 / 中型 / 大型三档；每场会战只弹出一次提醒（记录在浏览器本地，刷新页面也不会再弹），5 秒后自动消失。
 // 击杀记录页与星图通过 onBattles() 订阅。未部署击杀记录服务（404）时自动停用。国服按 server= 查各自的击杀库。
+// 提醒规模（min）：只提醒这一档及以上的会战（弹窗和推送都按它）；没到这一档的不记为已提醒，打大了再提醒。
+// 企业微信 / 邮箱（alert-push.js 的「会战」，默认不推）：新会战推一行文字；有渠道要推时后台标签页也接着查。
 import { SERVER, IS_TQ } from './server.js?v=s4';
+import * as AP from './alert-push.js?v=v10';
+import { L } from './alert-mail.js?v=v8';
 
 let app;
 const POLL = 6000;          // 与星图实时击杀轮询（LIVE_POLL）一致
@@ -15,7 +19,8 @@ export const BATTLE_TIERS = [
   { key: 'medium', name: '中型会战', min: 50, rank: 2 },
   { key: 'small', name: '小型会战', min: BATTLE_MIN, rank: 1 }
 ];
-const DEFAULTS = { on: true };
+const DEFAULTS = { on: true, min: 'small' };
+const TIER_EN = { large: 'Large battle', medium: 'Medium battle', small: 'Small battle' };
 const SEEN_KEY = 'eve-battle-alerted';   // 已提醒过的会战：星系 -> 首次提醒时间
 const SEEN_TTL = 6 * 3600e3;             // 6 小时内同一星系不再提醒（会战结束后过一段时间重新开打才算新会战）
 const ALERT_MS = 5000;                   // 弹窗停留时间
@@ -51,12 +56,13 @@ export function setBattleSettings(patch) {
   app.store.setJSON(KEY, B.settings);
   B.silent = true;            // 开启提醒时把当前会战记为已提醒，不补弹
   poll();
+  AP.hostSync();
 }
 
 export function initBattles(context) {
   app = context;
   const saved = app.store.getJSON(KEY, {}) || {};
-  B.settings = { on: saved.on !== false };   // 旧版本保存的时间窗口 / 阈值不再使用
+  B.settings = { on: saved.on !== false, min: BATTLE_TIERS.some((t) => t.key === saved.min) ? saved.min : 'small' };   // 旧版本保存的时间窗口 / 阈值不再使用
   loadSeen();
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
   poll();
@@ -64,7 +70,7 @@ export function initBattles(context) {
 }
 
 async function poll() {
-  if (B.disabled || document.hidden || B.busy) return;
+  if (B.disabled || (document.hidden && !AP.wants('battle')) || B.busy) return;
   B.busy = true;
   try {
     const res = await fetch(`/api/kb/battles?window=${BATTLE_WINDOW}&min=${BATTLE_MIN}` + (IS_TQ ? '' : '&server=' + SERVER.id));
@@ -78,8 +84,8 @@ async function poll() {
     B.list = data.battles || [];
     B.names = data.names || {};
     B.loaded = true;
-    if (B.settings.on && !B.silent) alertNew();
-    else markSeen(B.list);
+    if ((B.settings.on || AP.wants('battle')) && !B.silent) alertNew();
+    else markSeen(B.list.filter(big));
     B.silent = false;
     emit();
   } catch { /* 网络错误：下次再试 */ } finally {
@@ -92,6 +98,8 @@ function emit() {
 }
 
 // ---------- 提醒 ----------
+// 到了提醒规模
+const big = (b) => battleTier(b.kills).rank >= (BATTLE_TIERS.find((t) => t.key === B.settings.min)?.rank || 1);
 // 记为已提醒；顺便清掉过期记录。其他标签页可能也写过，先合并本地最新记录
 function markSeen(list) {
   if (!list.length) return;
@@ -107,14 +115,16 @@ async function alertNew() {
   // 只提醒从未提醒过的会战（规模升级也不再弹）；先读一遍本地记录，避免多个标签页重复弹
   const stored = app.store.getJSON(SEEN_KEY, {}) || {};
   const now = Date.now();
-  const fresh = B.list.filter((b) => {
+  const fresh = B.list.filter(big).filter((b) => {
     const at = B.seen.get(b.system_id) ?? Number(stored[b.system_id]);
     return !(at && now - at < SEEN_TTL);
   });
-  markSeen(B.list);
+  markSeen(B.list.filter(big));
   if (!fresh.length) return;
   const kb = await app.loadKillboard();
   await kb.ensureSystems();
+  for (const b of fresh) pushBattle(b, kb);
+  if (!B.settings.on) return;
   let box = document.getElementById('battleAlerts');
   if (!box) {
     box = document.createElement('div');
@@ -152,6 +162,21 @@ async function alertNew() {
     autoDismiss(card);
   }
   while (box.children.length > 4) box.lastElementChild.remove();
+}
+
+// 企业微信 / 邮箱：一行文字，链接到星图上的这个星系
+function pushBattle(b, kb) {
+  const tier = battleTier(b.kills);
+  const sys = kb.systemLabel(b.system_id);
+  const sides = b.sides.slice(0, 2).map((s) => B.names[s.id] || app.officialName(s.id)).filter(Boolean);
+  const where = sys.name + (sys.region ? L(`（${sys.region}）`, ` (${sys.region})`) : '');
+  AP.push('battle', {
+    sig: `battle|${b.system_id}|${b.start}`,
+    text: L(`${tier.name} · ${where} · ${BATTLE_WINDOW} 分钟内击毁 ${b.kills} 艘 · 约 ${b.pilots} 人 · 损失 ${app.formatISK(b.value)} ISK`,
+      `${TIER_EN[tier.key]} · ${where} · ${b.kills} ships destroyed in ${BATTLE_WINDOW} min · ~${b.pilots} pilots · ${app.formatISK(b.value)} ISK lost`)
+      + (sides.length ? ' · ' + sides.join(' vs ') : ''),
+    url: `${location.origin}${location.pathname}#map=${b.system_id}`
+  });
 }
 
 // 5 秒后淡出；鼠标停在弹窗上时暂停，移开后重新计时

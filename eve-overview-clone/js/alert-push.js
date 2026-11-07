@@ -1,4 +1,4 @@
-// ===== 企业微信 / 邮箱提醒（击杀预警、本地日志、本地红名、虫洞求救、订单被压价共用）=====
+// ===== 企业微信 / 邮箱提醒（击杀预警、本地日志、本地红名、虫洞求救、订单被压价、会战、到价提醒、角色提醒共用）=====
 // 「预警」弹窗的「微信 / 邮箱」标签页（alert-center.js）：
 //   企业微信：群里添加「群机器人」，把它的 Webhook 地址填进来；
 //   邮箱：用户自己的发件邮箱 + 授权码（SMTP 服务器按邮箱域名自动填，也可手改），发给自己指定的收件邮箱；保存时先发一封测试，成功才保存。
@@ -7,13 +7,14 @@
 // 发送：push(src, { sig, text, url })。多个标签页同一条只发一次（sig 记在 localStorage 5 分钟）；
 //   同一渠道把一段时间里的提醒合并成一条（企业微信至少隔 5 秒，邮件至少隔 60 秒，上次发送时间多个标签页共用）。
 //   内容语言跟随界面语言（调用方用 alert-mail.js 的 L() 生成文字）。
-// 设置存在 eve-alert-push-v1（各服务器共用）：{ wecom: { key, use: { kill, intel, local, sos, order } }, mail: { user, pass, to, host, port, security, ok, use } }；
+// 设置存在 eve-alert-push-v1（各服务器共用）：{ wecom: { key, use: { 提醒种类: 是否推送 } }, mail: { user, pass, to, host, port, security, ok, use } }；
+//   种类见 SRC；技能队列、工业任务、行星开采、订单成交、合同只能推送（char-alerts.js 在有渠道要推时才去读角色数据）。
 //   ok：测试邮件发成功过（这之后才推送）。
 // 下面还有「服务器托管」分区（alert-host.js）：托管了的预警由服务器推送，这里的 push 跳过，免得重复。
 
 import { SERVER } from './server.js?v=s4';
 import { L } from './alert-mail.js?v=v8';
-import * as AH from './alert-host.js?v=v3';
+import * as AH from './alert-host.js?v=v5';
 
 let ctx;   // esc, showToast
 const KEY = 'eve-alert-push-v1';
@@ -22,8 +23,12 @@ const LAST_KEY = 'eve-alert-push-last';
 const API = '/api/kb/push/';
 const CH = ['wecom', 'mail'];
 const GAP = { wecom: 5e3, mail: 60e3 };
-const SRC = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名'], ['sos', '虫洞求救'], ['order', '订单被压价']];
-const P = { wecom: { key: '', use: { kill: true, intel: true, local: true, sos: true, order: true } }, mail: { user: '', pass: '', to: '', host: '', port: 465, security: 'ssl', ok: false, use: { kill: true, intel: true, local: true, sos: true, order: true } } };
+// [种类, 名称, 说明]；会战默认不推（全服的会战，开了会比较多）
+const SRC = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名'], ['sos', '虫洞求救'], ['order', '订单被压价'], ['battle', '会战', '击杀页「疑似会战」，按那里设的提醒规模'],
+  ['price', '到价提醒', '自选看板里设的到价提醒'], ['skill', '技能队列', '当前角色的技能练完、队列剩不到 24 小时、队列空了'], ['job', '工业任务', '当前角色的制造、研究、发明、反应任务完成'],
+  ['pi', '行星开采', '当前角色的行星开采器停了'], ['sold', '订单成交', '当前角色的市场订单全部成交或过期'], ['contract', '合同', '当前角色发布的合同被接、完成、失败，拍卖有新出价，收到指定给你的合同']];
+const useDefault = () => Object.fromEntries(SRC.map(([s]) => [s, s !== 'battle']));
+const P = { wecom: { key: '', use: useDefault() }, mail: { user: '', pass: '', to: '', host: '', port: 465, security: 'ssl', ok: false, use: useDefault() } };
 const S = { edit: false, custom: false, help: '', busy: '', error: { wecom: '', mail: '' } };   // edit：正在修改邮箱设置；custom：展开了服务器设置；help：展开的教程
 // 标题旁「?」展开的教程：[步骤…]、[提示…]；步骤可以是 [文字, [分项…]]
 const HELP = {
@@ -90,6 +95,10 @@ export const isOn = () => CH.some((ch) => ready(ch) && SRC.some(([s]) => P[ch].u
 export const isReady = (ch) => ready(ch);
 export const uses = (ch, src) => Boolean(P[ch].use[src]);
 export function setUse(ch, src, on) { P[ch].use[src] = Boolean(on); changed(); }
+// 网页上有没有渠道要推这种提醒（服务器托管了的不算）：会战监测据此决定后台标签页要不要接着查
+export const wants = (src) => !AH.covers(src) && CH.some((ch) => ready(ch) && P[ch].use[src]);
+// 别的模块的设置变了：同步给服务器托管
+export const hostSync = () => AH.sync();
 
 async function post(op, body) {
   const res = await fetch(API + op, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -132,7 +141,10 @@ function schedule(ch, extra = 0) {
   if (timer[ch]) return;
   timer[ch] = setTimeout(() => flush(ch), Math.max(2e3, lastSent(ch) + GAP[ch] - Date.now()) + extra);
 }
-const srcTitle = (s) => (s === 'kill' ? L('击杀预警', 'Kill alert') : s === 'order' ? L('订单被压价', 'Order undercut') : s === 'local' ? L('本地红名', 'Local reds') : s === 'sos' ? L('虫洞求救', 'Wormhole SOS') : L('本地日志', 'Local intel'));
+const TITLE = { kill: ['击杀预警', 'Kill alert'], intel: ['本地日志', 'Local intel'], local: ['本地红名', 'Local reds'], sos: ['虫洞求救', 'Wormhole SOS'], order: ['订单被压价', 'Order undercut'],
+  battle: ['会战', 'Battle'], price: ['到价提醒', 'Price alert'], skill: ['技能队列', 'Skill queue'], job: ['工业任务', 'Industry job'], pi: ['行星开采', 'PI extractor'],
+  sold: ['订单成交', 'Order filled'], contract: ['合同', 'Contract'] };
+const srcTitle = (s) => L(...(TITLE[s] || TITLE.intel));
 async function flush(ch) {
   timer[ch] = 0;
   const list = Q[ch].splice(0);
@@ -199,7 +211,7 @@ function render() {
     if (focus) el.focus();
   }
 }
-const chips = (ch) => `<span class="ka-chips">${SRC.map(([s, l]) => `<button type="button" class="ka-chip toggle${P[ch].use[s] ? ' on' : ''}" data-ap-use="${ch}:${s}">${l}</button>`).join('')}</span>`;
+const chips = (ch) => `<span class="ka-chips">${SRC.map(([s, l, tip]) => `<button type="button" class="ka-chip toggle${P[ch].use[s] ? ' on' : ''}" data-ap-use="${ch}:${s}"${tip ? ` title="${tip}"` : ''}>${l}</button>`).join('')}</span>`;
 const errLine = (ch) => (S.error[ch] ? `<p class="ka-warn">发送失败：${ctx.esc(S.error[ch])}</p>` : '');
 function draw() {
   const esc = ctx.esc;
@@ -207,7 +219,7 @@ function draw() {
   const w = P.wecom;
   const wecom = w.key
     ? `<div class="ka-opt"><span><b>群机器人</b><small>key ${esc(w.key.slice(0, 8))}…</small></span><button class="btn btn-ghost btn-sm" data-ap-del="wecom">移除</button></div>
-       <div class="ka-opt"><span><b>推送</b></span>${chips('wecom')}</div>`
+       <div class="ka-opt"><span class="ap-use-label"><b>推送</b></span>${chips('wecom')}</div>`
     : `<div class="ka-opt ka-stack"><div class="ka-watch-add">
         <input type="text" class="cr-input" data-ap-in="wecom" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" autocomplete="off" spellcheck="false" aria-label="Webhook 地址">
         <button class="btn btn-primary btn-sm" data-ap-wecom>保存</button></div></div>`;
@@ -215,7 +227,7 @@ function draw() {
   const editing = !m.ok || S.edit;
   const mail = editing ? mailForm(m, busy) : `<div class="ka-opt"><span><b>${esc(m.to && m.to !== m.user ? `${m.user} → ${m.to}` : m.user)}</b><small>${esc(m.host)}</small></span>
        <span class="ka-chips"><button class="btn btn-ghost btn-sm" data-ap-edit>修改</button><button class="btn btn-ghost btn-sm" data-ap-del="mail">移除</button></span></div>
-       <div class="ka-opt"><span><b>推送</b></span>${chips('mail')}</div>`;
+       <div class="ka-opt"><span class="ap-use-label"><b>推送</b></span>${chips('mail')}</div>`;
   return `
     <section class="ka-sec">${head('wecom', '企业微信')}<div class="ka-list">${wecom}</div>${errLine('wecom')}
       ${w.key ? `<div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ap-test="wecom"${busy('test-wecom')}>发送测试</button></div>` : ''}</section>

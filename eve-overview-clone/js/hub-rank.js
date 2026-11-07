@@ -114,7 +114,7 @@ function pagerHtml(page, pages, total, from, to) {
 }
 const pageSize = () => (PAGE_SIZES.includes(Number(F.size)) ? Number(F.size) : 100);
 const RISING = 1.3, TIGHT = 2, HIGH = 1.15;   // 成交上涨：7 天 / 30 天 ≥ 1.3；库存少：库存 < 2 天；卖价偏高：卖价 ≥ 均价 × 1.15
-const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', rsort: 'day', edits: 3, rhub: 0, rcomp: 0, psort: 'day', pin: 's', pout: 'b', mode: 'sb', rmode: 'sb', med: 7, sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, minUnit: 0, minM3: 0, minQty: 0, strict: true, excl: [], custom: [] };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]
+const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', rsort: 'day', edits: 3, rhub: 0, rcomp: 0, psort: 'day', pin: 's', pout: 'b', mode: 'sb', rmode: 'sb', med: 7, sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, minUnit: 0, minM3: 0, minQty: 0, strict: true, excl: [], custom: [], maxVol: 0, noShip: false };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]；maxVol：单件体积上限（0 不限）；noShip：去掉舰船
 const CUSTOM_MAX = 3;
 const CUSTOM_TTL = 10 * 60e3;
 const customCache = new Map();   // 市场 ID -> { at, quotes }
@@ -129,6 +129,12 @@ if (!MED_DAYS.includes(Number(F.med))) F.med = 7;
 // 自定义市场的 ID：负数，不和交易中心 / 建筑 ID 冲突（星域 10000002 + 星系 30000142 → -2000142）
 const customId = (c) => -((c.region % 1e6) * 1e6 + (c.system ? c.system % 1e6 : 0));
 const save = () => { try { localStorage.setItem('eve-hub-rank', JSON.stringify(F)); } catch { /* 无痕模式 */ } };
+// 各模式共用的物品筛选：排除列表、单件包装体积上限、去掉舰船（体积未知的不按体积筛）
+function skipType(id, excl) {
+  if (ctx.isGlobal(id) || excl.has(id)) return true;
+  if (F.maxVol > 0 && (S.vols?.[id] || 0) > F.maxVol) return true;
+  return F.noShip && ctx.isShip(id);
+}
 
 export function initHubRank(context) {
   ctx = context;
@@ -293,7 +299,7 @@ function compute() {
   const excl = new Set(F.excl);
   for (const [tid, row] of Object.entries(S.data.types)) {
     const id = Number(tid);
-    if (ctx.isGlobal(id) || excl.has(id)) continue;
+    if (skipType(id, excl)) continue;
     const cat = ctx.category(id);
     if (!cat) continue;
     let best = null, loose = null;
@@ -346,7 +352,7 @@ function computeDemand() {
   for (const [tid, row] of Object.entries(S.data.types)) {
     const id = Number(tid);
     const h = row[ti];
-    if (!h || ctx.isGlobal(id) || excl.has(id)) continue;
+    if (!h || skipType(id, excl)) continue;
     const cat = ctx.category(id);
     if (!cat) continue;
     const d30 = h[6], d7 = h[8] ?? null, d1 = h[9] ?? null, avg = h[7];
@@ -405,7 +411,7 @@ function computeRelist() {
   const rows = [];
   for (const [tid, row] of Object.entries(S.data.types)) {
     const id = Number(tid);
-    if (ctx.isGlobal(id) || excl.has(id)) continue;
+    if (skipType(id, excl)) continue;
     const cat = ctx.category(id);
     if (!cat) continue;
     let best = null, loose = null;
@@ -461,7 +467,7 @@ function computeReproc() {
   for (const [tid, [portion, skill, m]] of Object.entries(S.rp.t)) {
     const id = Number(tid);
     const row = S.data.types[tid];
-    if (!row || excl.has(id) || ctx.isGlobal(id)) continue;
+    if (!row || skipType(id, excl)) continue;
     const cat = ctx.category(id);
     if (!cat) continue;
     const y = ctx.TF.reprocYield(skill, rp);
@@ -598,7 +604,7 @@ function computeConsume() {
   const rows = [];
   for (const [tid, row] of Object.entries(S.data.types)) {
     const id = Number(tid);
-    if (ctx.isGlobal(id) || excl.has(id)) continue;
+    if (skipType(id, excl)) continue;
     const cat = ctx.category(id);
     if (!cat) continue;
     let units = 0, turnover = 0, s7 = 0, s30 = 0, cheap = null, per = [];
@@ -901,7 +907,9 @@ function html(all0) {
         <button type="button" class="btn btn-primary btn-sm" data-hr-cadd${F.custom.length >= CUSTOM_MAX ? ' disabled' : ''}>添加</button>
         ${F.custom.map((c) => `<span class="ka-chip">${esc(c.sysName ? c.sysName + ' · ' + c.name : c.name)}<button type="button" class="ka-close" data-hr-cdel="${customId(c)}" aria-label="移除">×</button></span>`).join('')}
         <span class="pi-note" title="浏览器直接读该星域全部挂单；没有交易中心的星域无成交量数据，只能算直接成交">最多 ${CUSTOM_MAX} 个，大星域较慢</span></div>` : ''}
-      <div class="ind-rank-row"><div class="segmented">${[['route', '倒卖路线'], ['demand', '按销量选品'], ['relist', '改单推荐'], ['reproc', '化矿倒卖'], ['consume', '消耗排行']].map(([v, l]) => `<button type="button" data-hr-kind="${v}" class="${modeKind() === v ? 'active' : ''}">${l}</button>`).join('')}</div></div>
+      <div class="ind-rank-row"><div class="segmented">${[['route', '倒卖路线'], ['demand', '按销量选品'], ['relist', '改单推荐'], ['reproc', '化矿倒卖'], ['consume', '消耗排行']].map(([v, l]) => `<button type="button" data-hr-kind="${v}" class="${modeKind() === v ? 'active' : ''}">${l}</button>`).join('')}</div>
+        <label class="pi-inline" title="按包装体积算，单件体积大于这个数的物品不显示；留空不限"><span>单件体积 ≤</span><input type="number" class="pi-input pi-tax" min="0" step="any" value="${F.maxVol || ''}" placeholder="不限" data-hr-maxvol><span>m³</span></label>
+        <label class="pi-inline hr-check"><input type="checkbox" data-hr-noship ${F.noShip ? 'checked' : ''}><span>去掉舰船</span></label></div>
       ${C || D || RL || RP ? '' : `<div class="ind-rank-row">${modePicker('hr', F.mode, F.med)}</div>`}
       ${RP ? reprocControls() : RL ? relistControls() : C ? consumeControls() : D ? demandControls() : `<div class="ind-rank-row">
         <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
@@ -1251,6 +1259,8 @@ function bind(box) {
     if (sel) { F[sel.dataset.hrSel] = Number(sel.value); save(); render(box); return; }
     if (e.target.matches('[data-hr-local]')) { F.local = e.target.checked; save(); render(box); return; }
     if (e.target.matches('[data-hr-strict]')) { F.strict = e.target.checked; save(); render(box); return; }
+    if (e.target.matches('[data-hr-noship]')) { F.noShip = e.target.checked; save(); render(box); return; }
+    if (e.target.matches('[data-hr-maxvol]')) { F.maxVol = Math.max(0, Number(e.target.value) || 0); save(); render(box); return; }
     if (e.target.matches('[data-hr-rising]')) { F.rising = e.target.checked; save(); render(box); return; }
     if (e.target.matches('[data-hr-size]')) { F.size = Number(e.target.value); save(); render(box); return; }
     if (e.target.matches('[data-hr-jump]')) { goPage(box, Number(e.target.value) || 1); return; }

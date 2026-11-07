@@ -1,7 +1,8 @@
 // ===== 服务器托管预警（「预警 → 微信 / 邮箱」标签页的「服务器托管」分区，由 alert-push.js 画）=====
 // 网页或客户端开着时，预警都在本机检查；用户可以勾选几种预警交给击杀记录服务在后台检查（/api/kb/hosted/*，见 kb_service.py 的 Hosted），
 // 网页关掉也会推送到这里设置的企业微信 / 邮箱。默认关闭，开启前必须勾选「已了解风险」。
-//   能托管：击杀预警（人物关注、星域监控、按位置预警）、虫洞求救、订单被压价。本地日志、本地红名要读本机游戏日志 / 画面，不能托管。
+//   能托管：击杀预警（人物关注、星域监控、按位置预警）、虫洞求救、订单被压价、会战（按提醒规模）、到价提醒（自选看板里监控中的），
+//     以及授权角色的技能队列、工业任务、行星开采、订单成交 / 过期、合同。本地日志、本地红名要读本机游戏日志 / 画面，不能托管。
 //   授权：单独登录一次（只要勾选的预警用得到的权限），刷新令牌直接交给服务器，不存进本机账号，和浏览器里绑定的令牌互不影响。
 //   设置：开启时把击杀预警 / 虫洞求救的设置和企业微信 / 邮箱账号一起交给服务器；之后网页上改了会自动同步（sync，3 秒防抖，内容没变不发）。
 //   去重：托管期间，网页上同类提醒不再推送到企业微信 / 邮箱（alert-push.js 的 push 跳过 covers(src)），网页弹窗、提示音照旧。
@@ -11,15 +12,19 @@ import { SERVER, IS_TQ, serverKey, kbSiteLink } from './server.js?v=s4';
 
 const KEY = serverKey('eve-alert-hosted-v1');
 const API = '/api/kb/hosted/';
-const SRC = [['kill', '击杀预警'], ['sos', '虫洞求救'], ['order', '订单被压价']];
+const SRC = [['kill', '击杀预警'], ['sos', '虫洞求救'], ['order', '订单被压价'], ['battle', '会战'], ['price', '到价提醒'],
+  ['skill', '技能队列'], ['job', '工业任务'], ['pi', '行星开采'], ['sold', '订单成交'], ['contract', '合同']];
 const SCOPE = {
   loc: 'esi-location.read_location.v1', online: 'esi-location.read_online.v1',
-  orders: 'esi-markets.read_character_orders.v1', struct: 'esi-markets.structure_markets.v1'
+  orders: 'esi-markets.read_character_orders.v1', struct: 'esi-markets.structure_markets.v1',
+  skill: 'esi-skills.read_skillqueue.v1', job: 'esi-industry.read_character_jobs.v1', pi: 'esi-planets.manage_planets.v1',
+  contract: 'esi-contracts.read_character_contracts.v1', names: 'esi-universe.read_structures.v1'
 };
-const SCOPE_ZH = { [SCOPE.loc]: '角色位置', [SCOPE.online]: '在线状态', [SCOPE.orders]: '市场订单', [SCOPE.struct]: '建筑市场' };
+const SCOPE_ZH = { [SCOPE.loc]: '角色位置', [SCOPE.online]: '在线状态', [SCOPE.orders]: '市场订单', [SCOPE.struct]: '建筑市场',
+  [SCOPE.skill]: '技能队列', [SCOPE.job]: '工业任务', [SCOPE.pi]: '行星殖民地', [SCOPE.contract]: '合同', [SCOPE.names]: '建筑名称' };
 const SRC_ZH = Object.fromEntries(SRC.map(([k, l]) => [k, l]));
 
-let deps;   // esc, showToast, render, channels, lang；modern-app.js 给的 authLink, authFinish, killSettings, sosSettings, shipTypes
+let deps;   // esc, showToast, render, channels, lang；modern-app.js 给的 authLink, authFinish, killSettings, sosSettings, battleSettings, priceAlerts, shipTypes
 let H = null;   // 已托管：{ char, name, secret, src, scopes }
 const S = { pick: new Set(['kill', 'sos', 'order']), agree: false, step: false, busy: '', status: null, error: '', synced: '' };
 try { H = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { /* 忽略 */ }
@@ -49,6 +54,10 @@ async function scopesFor(src) {
   const out = [SCOPE.online];
   if (src.includes('kill') && (await deps.killSettings()).on) out.push(SCOPE.loc);
   if (src.includes('order')) out.push(SCOPE.orders, SCOPE.struct);
+  if (src.includes('sold') && !out.includes(SCOPE.orders)) out.push(SCOPE.orders);
+  for (const k of ['skill', 'job', 'pi', 'contract']) if (src.includes(k)) out.push(SCOPE[k]);
+  // 工业任务、订单、合同的地点可能在玩家建筑里，读名字要这项权限
+  if (['job', 'sold', 'contract'].some((k) => src.includes(k))) out.push(SCOPE.names);
   return out;
 }
 
@@ -68,6 +77,8 @@ async function settings(src) {
       regionOn: Boolean(k.regionOn), regions: (k.regions || []).map((r) => ({ id: r.id, name: r.name }))
     } : null,
     sos: src.includes('sos') ? { rewardOnly: Boolean((await deps.sosSettings()).rewardOnly) } : null,
+    battle: src.includes('battle') ? { min: (await deps.battleSettings()).min || 'small' } : null,
+    price: src.includes('price') ? await deps.priceAlerts() : null,
     site: location.origin + location.pathname,
     killUrl: IS_TQ ? 'https://zkillboard.com/kill/{id}/' : kbSiteLink('kill', '{id}') || ''
   };
@@ -191,7 +202,7 @@ ${cancel ? '<button class="btn btn-ghost btn-sm" data-ah-cancel>取消</button>'
 
 const RISKS = [
   '服务器会保存：这个角色的 ESI 授权（只含勾选的预警用得到的权限）、上面设置的企业微信机器人地址、邮箱账号和授权码。',
-  '这些信息加密保存，数据库单独泄露时读不出来；但服务器本身被攻破时仍可能泄露：别人可以读到你的位置和订单，用你的邮箱发信、往你的群里发消息。',
+  '这些信息加密保存，数据库单独泄露时读不出来；但服务器本身被攻破时仍可能泄露：别人可以读到你勾选的那些角色数据（位置、订单、技能队列、工业、行星、合同），用你的邮箱发信、往你的群里发消息。',
   '授权都是只读的，不能转账、交易或改游戏设置。',
   '随时可以关掉托管开关，服务器上的数据立即删除；也可以在 CCP 的第三方应用授权页撤销授权。',
   '托管期间，网页上同类提醒不再重复推送到企业微信 / 邮箱（网页弹窗、提示音照旧）；网页上改了预警设置会自动同步给服务器。'
