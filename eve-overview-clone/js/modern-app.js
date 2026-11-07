@@ -4,7 +4,8 @@ import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v40';
 import * as SM from './struct-markets.js?v=v8';
-import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v12';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v14';
+import * as AH from './alert-host.js?v=v2';
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v5';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
@@ -5533,7 +5534,7 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v10').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v12').then((m) => {
     m.initOrderWatch({
       esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -6134,36 +6135,82 @@ async function neteaseDevice() {
   return { device_id: data.device_id };
 }
 
+// 授权链接：PKCE 的 verifier 只保存在本机，CCP 换令牌时校验，授权码被截获也无法使用；host = 服务器托管预警的专用授权
+async function authUrl(scopes, host = false) {
+  const cfg = await ssoConfig();
+  const verifier = randomToken(48);
+  const challenge = b64url(await sha256(verifier));
+  const device = SERVER.needDevice ? await neteaseDevice() : {};
+  const authState = randomToken(24);
+  const pending = readPkce();
+  pending[authState] = { verifier, at: Date.now(), server: SERVER.id, ...(host ? { host: true } : {}) };
+  writePkce(pending);
+  const authorize = SSO_BASE + '/authorize?' + new URLSearchParams({
+    response_type: 'code',
+    redirect_uri: cfg.redirect_uri,
+    client_id: cfg.client_id,
+    scope: scopes.filter((sc) => !badScopes().has(sc)).join(' '),
+    state: authState,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    ...SERVER.authParams,
+    ...device
+  });
+  // 国服：先经网易 /account/logoff 登出旧会话再回跳授权页（ceve-market 同款做法），
+  // 浏览器残留的网易登录态会被自动清掉，不再出现 Missing Netease token；欧服保持直连
+  return IS_TQ
+    ? authorize
+    : SSO_BASE.replace(/\/v2\/oauth$/, '') + '/account/logoff?returnUrl=' + encodeURIComponent('/v2/oauth/authorize?' + authorize.split('?')[1]);
+}
+
+// 服务器托管预警（alert-host.js）：单独授权一次，换到的刷新令牌直接交给服务器，不存进本机账号
+async function hostAuthLink(scopes) {
+  const cfg = await ssoConfig();
+  return authUrl(scopes.filter((sc) => (cfg.scopes || []).includes(sc)), true);
+}
+async function hostAuthFinish(raw) {
+  const bad = learnBadScope(raw);
+  if (bad) throw new Error(`登录服务器不支持权限 ${bad}，请重新授权`);
+  let params;
+  try { params = new URL(raw, location.href).searchParams; } catch { throw new Error('地址格式不正确'); }
+  if (params.get('error')) throw new Error('授权失败：' + params.get('error'));
+  const code = params.get('code'), cbState = params.get('state');
+  if (!code || !cbState) throw new Error('地址里缺少 code 或 state，请复制登录后的完整地址');
+  const pending = readPkce();
+  const entry = pending[cbState];
+  if (!entry?.host) throw new Error(entry ? '这是绑定角色的登录地址，请粘贴到「绑定 ESI」里' : '授权已过期，请重新授权');
+  const cfg = await ssoConfig();
+  let data;
+  try {
+    const extra = SERVER.manualCallback ? { redirect_uri: cfg.redirect_uri } : {};
+    data = await ssoToken({ grant_type: 'authorization_code', code, code_verifier: entry.verifier, ...extra });
+  } catch (error) {
+    throw new Error('CCP 拒绝了授权（' + error.message + '）');
+  } finally {
+    delete pending[cbState];
+    writePkce(pending);
+  }
+  if (!data.refresh_token) throw new Error('登录服务器没有返回刷新令牌');
+  return { refresh_token: data.refresh_token, client_id: cfg.client_id };
+}
+// 击杀预警的舰船类别 → 舰船 ID（服务器没有市场分类）；按类别组合缓存
+let shipTypeCache = { key: '', ids: [] };
+function shipTypesOf(classes) {
+  const key = [...classes].sort().join(',');
+  if (shipTypeCache.key !== key) {
+    const want = new Set(classes);
+    shipTypeCache = { key, ids: [...state.typeIndex.keys()].filter((id) => want.has(shipClassOf(id))).slice(0, 3000) };
+  }
+  return shipTypeCache.ids;
+}
+
 async function generateAuthLink() {
   const btn = $('generateAuthBtn');
   btn.disabled = true;
   setEsiStatus('正在生成授权链接…');
   try {
     const cfg = await ssoConfig();
-    // PKCE：verifier 只保存在本机，CCP 换令牌时校验，授权码被截获也无法使用
-    const verifier = randomToken(48);
-    const challenge = b64url(await sha256(verifier));
-    const device = SERVER.needDevice ? await neteaseDevice() : {};
-    const authState = randomToken(24);
-    const pending = readPkce();
-    pending[authState] = { verifier, at: Date.now(), server: SERVER.id };
-    writePkce(pending);
-    const authorize = SSO_BASE + '/authorize?' + new URLSearchParams({
-      response_type: 'code',
-      redirect_uri: cfg.redirect_uri,
-      client_id: cfg.client_id,
-      scope: [...new Set([...(cfg.scopes || []), ...chosenExtraScopes()])].filter((sc) => !badScopes().has(sc)).join(' '),
-      state: authState,
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      ...SERVER.authParams,
-      ...device
-    });
-    // 国服：先经网易 /account/logoff 登出旧会话再回跳授权页（ceve-market 同款做法），
-    // 浏览器残留的网易登录态会被自动清掉，不再出现 Missing Netease token；欧服保持直连
-    const url = IS_TQ
-      ? authorize
-      : SSO_BASE.replace(/\/v2\/oauth$/, '') + '/account/logoff?returnUrl=' + encodeURIComponent('/v2/oauth/authorize?' + authorize.split('?')[1]);
+    const url = await authUrl([...new Set([...(cfg.scopes || []), ...chosenExtraScopes()])]);
     $('authLink').value = url;
     $('openAuthBtn').href = url;
     $('authLinkBox').hidden = false;
@@ -6199,6 +6246,7 @@ async function bindEsiCallback() {
     const pending = readPkce();
     const entry = pending[cbState];
     if (!entry) throw new Error('授权状态已过期，请重新生成链接');
+    if (entry.host) throw new Error('这是服务器托管预警的授权地址，请粘贴到「预警 → 微信 / 邮箱 → 服务器托管」里');
     let data;
     try {
       const extra = SERVER.manualCallback ? { redirect_uri: (await ssoConfig()).redirect_uri } : {};   // 网易换令牌要求带回调地址
@@ -6418,7 +6466,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v19').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v21').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6441,7 +6489,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v33').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v35').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6450,7 +6498,7 @@ function loadKillAlert() {
       openKill: async (id) => { if (!id) return; const kb = await loadKillboard(); kb.openServiceKill(id); },
       shipClasses, shipClassOf, regionList: regionListAll
     });
-    const sync = () => { alertState.kill = m.status(); syncAlertBtn(); };
+    const sync = () => { alertState.kill = m.status(); syncAlertBtn(); AH.sync(); };
     m.onChange(sync);
     sync();
     return m;
@@ -6494,7 +6542,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v20').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v22').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
@@ -6511,7 +6559,7 @@ function loadLocal() {
 const SOS_WATCH_KEY = serverKey('eve-sos-watch-v1');
 let sosModule = null;
 function loadSosWatch() {
-  if (!sosModule) sosModule = import('./sos-watch.js?v=v2').then((m) => {
+  if (!sosModule) sosModule = import('./sos-watch.js?v=v4').then((m) => {
     m.initSosWatch({
       esc, formatISK, showToast, resolveNames, esiAuthFetch,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6520,7 +6568,7 @@ function loadSosWatch() {
       openEsiBind: () => { switchView('profile'); openEsiModal(); },
       openWhSystem: (name) => { location.hash = '#wh/system/' + encodeURIComponent(name); }
     });
-    const sync = () => { alertState.sos = m.status(); syncAlertBtn(); };
+    const sync = () => { alertState.sos = m.status(); syncAlertBtn(); AH.sync(); };
     m.onChange(sync);
     sync();
     return m;
@@ -6531,7 +6579,9 @@ function loadSosWatch() {
 function initKillAlerts() {
   initCartButton();
   initIntelButton();
-  initAlertCenter({ loadKill: loadKillAlert, loadIntel, loadLocal, loadSos: loadSosWatch, esc, showToast });
+  initAlertCenter({ loadKill: loadKillAlert, loadIntel, loadLocal, loadSos: loadSosWatch, esc, showToast,
+    host: { authLink: hostAuthLink, authFinish: hostAuthFinish, shipTypes: shipTypesOf,
+      killSettings: () => loadKillAlert().then((m) => m.settings()), sosSettings: () => loadSosWatch().then((m) => m.settings()) } });
   // 悬浮窗（float-feed.js）：要哪种内容就加载对应模块；悬浮窗里点了击杀 / 物品，在主页面打开
   FF.initFloatFeed({
     showToast,

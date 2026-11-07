@@ -8,10 +8,10 @@
 // 「微信 / 邮箱」（alert-push.js）：企业微信群机器人与邮箱提醒。
 
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v4';
+import * as AP from './alert-push.js?v=v6';
 import { skText } from './skeleton.js?v=v17';
 
-let deps = null;   // { loadKill, loadIntel, loadLocal, loadSos, esc, showToast }
+let deps = null;   // { loadKill, loadIntel, loadLocal, loadSos, esc, showToast, host（服务器托管用，见 alert-host.js）}
 let modal = null;
 let tab = 'kill';
 const TAB_KEY = 'eve-alert-tab';
@@ -20,7 +20,7 @@ const state = { kill: false, intel: false, local: false, sos: false, mail: false
 
 export function initAlertCenter(d) {
   deps = d;
-  AP.initAlertPush({ esc: d.esc, showToast: d.showToast });
+  AP.initAlertPush({ esc: d.esc, showToast: d.showToast, host: d.host });
   AP.onPushChange(() => setTabState('push', AP.isOn()));
   state.push = AP.isOn();
   try { const t = localStorage.getItem(TAB_KEY); if (TABS.some(([k]) => k === t)) tab = t; } catch { /* 忽略 */ }

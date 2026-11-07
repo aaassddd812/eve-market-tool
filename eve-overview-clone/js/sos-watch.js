@@ -8,7 +8,7 @@
 
 import { SERVER, serverKey } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v4';
+import * as AP from './alert-push.js?v=v6';
 
 let ctx;   // esc, formatISK, showToast, resolveNames, accounts, tokenInfo, hasScope, openEsiBind, openWhSystem
 const KEY = serverKey('eve-sos-watch-v1');
@@ -35,6 +35,7 @@ export function initSosWatch(context) {
 }
 
 export function onChange(fn) { subs.add(fn); return () => subs.delete(fn); }
+export const settings = () => T;
 function notify() {
   for (const fn of subs) { try { fn(); } catch (e) { console.error(e); } }
   window.dispatchEvent(new CustomEvent('eve-sos-watch', { detail: { on: T.on } }));

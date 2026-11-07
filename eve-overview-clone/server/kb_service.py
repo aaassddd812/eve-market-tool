@@ -60,7 +60,9 @@
                                               设了环境变量 EVE_FEEDBACK_WECOM（企业微信机器人 key 或完整地址）时同时推送给站长
   POST /api/kb/feedback/{mine,follow}         提交者查看自己的工单（状态、回复）/ 追加说明：凭 id + 凭证
   POST /api/kb/feedback/admin/{check,list,reply,status}  站长查看全部工单、回复、改状态：仅 EVE_FEEDBACK_ADMIN_IPS 里的 IP
-  POST /api/kb/ai/{info,chat}                 AI 助手：本站模型（环境变量 EVE_AI_*）或玩家自己的接口，工具在浏览器里执行
+  POST /api/kb/hosted/{start,update,status,stop}  服务器托管预警：网页关掉后由本服务检查击杀预警 / 虫洞求救 / 订单被压价，推送到企业微信 / 邮箱
+                                              （用户单独授权，刷新令牌与推送账号加密保存，凭证管理；见 Hosted）
+ POST /api/kb/ai/{info,chat}                 AI 助手：本站模型（环境变量 EVE_AI_*）或玩家自己的接口，工具在浏览器里执行
   击杀相关接口（status / feed / live / br / battles / top / summary / leaderboard / search / entity / kill / shipfits）可带 server=serenity|infinity 查国服
 
 用法
@@ -73,6 +75,7 @@
 
 import argparse
 import array
+import base64
 import bz2
 import calendar
 import collections
@@ -6862,6 +6865,699 @@ class AlertPush:
         return {"ok": True}
 
 
+# ---------------------------------------------------------------- 服务器托管预警
+# 网页关掉也要提醒时，用户可以把部分预警交给本服务在后台检查，命中后推送到企业微信 / 邮箱（AlertPush）。默认不开，用户在
+# 「预警 → 微信 / 邮箱」里勾选要托管的预警、确认风险后单独授权一次（专用的 ESI 授权，和浏览器里绑定的令牌互不影响）。
+#   击杀预警：人物关注、星域监控只用公开的实时击杀；按位置预警要读角色位置（esi-location.read_location.v1），
+#     「角色离线时不提醒」读在线状态（esi-location.read_online.v1）。跳数按 map-data.json 的星门算。
+#   虫洞求救：本服务自己的求救表，有新求救就推。
+#   订单被压价：每 5 分钟读角色订单（esi-markets.read_character_orders.v1），同改单小助手的比价规则；玩家建筑里的订单要建筑市场权限。
+# 保存的东西：刷新令牌、企业微信机器人 key、邮箱账号和授权码、预警设置。整份加密后存进 hosted 表（密钥在数据库旁的 .hostkey 文件，
+#   或环境变量 EVE_HOSTED_KEY），数据库单独泄露时读不出来；服务器本身被攻破时仍可能泄露，所以要用户确认风险。
+#   刷新令牌每次使用都会更换，新的立刻写回。授权失效（用户在 CCP 撤销 / 改密码）时停掉要令牌的部分，网页上提示重新授权。
+# 管理：开启时返回一个凭证（只存在用户浏览器里，服务器存它的哈希），凭证 + 角色 ID 才能查看状态、改设置、停止托管；
+#   停止托管立即删除整行。凭证丢了（换浏览器 / 清缓存）可以重新授权开启，会覆盖原来的托管。
+# POST /api/kb/hosted/start   {server, client_id, refresh_token, settings} → {secret, character_id, name, scopes}
+# POST /api/kb/hosted/update  {server, character_id, secret, settings}
+# POST /api/kb/hosted/status  {server, character_id, secret} → 各项状态、最近推送
+# POST /api/kb/hosted/stop    {server, character_id, secret}
+HOSTED_RATE = 20                # 每个 IP 每分钟最多请求次数
+HOSTED_MAX = 2000               # 全站最多托管多少个角色
+HOSTED_BODY_MAX = 65536
+HOSTED_TICK = 3                 # 后台循环间隔（秒）
+HOSTED_LOC_GAP = 60             # 读角色位置的间隔
+HOSTED_ONLINE_GAP = 120         # 读在线状态的间隔
+HOSTED_SOS_GAP = 60
+HOSTED_ORDER_GAP = 300          # 订单比价间隔（市场订单 ESI 缓存 5 分钟）
+HOSTED_ORDER_MAX = 120          # 一个角色最多比价多少张订单
+HOSTED_SENT_KEEP = 20           # 状态里保留最近几条推送
+HOSTED_PUSH_GAP = {"wecom": 5, "mail": 60}
+HOSTED_SRCS = ("kill", "sos", "order")
+HOSTED_TOKEN_URLS = {"tq": "https://login.eveonline.com/v2/oauth/token",
+                     "serenity": "https://login.evepc.163.com/v2/oauth/token",
+                     "infinity": "https://login-infinity.evepc.163.com/v2/oauth/token"}
+HOSTED_SCOPES = {"loc": "esi-location.read_location.v1", "online": "esi-location.read_online.v1",
+                 "orders": "esi-markets.read_character_orders.v1", "struct": "esi-markets.structure_markets.v1"}
+HOSTED_SCHEMA = """
+CREATE TABLE IF NOT EXISTS hosted(server TEXT, char_id INTEGER, name TEXT, secret TEXT, blob TEXT, state TEXT,
+  created INTEGER, updated INTEGER, PRIMARY KEY(server, char_id));
+"""
+HOSTED_URL_RE = re.compile(r"https://[^\s<>\"'{}]{1,300}")
+HOSTED_PODS = (670, 33328)
+
+
+def _isk(v):
+    v = float(v or 0)
+    for n, s in ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K")):
+        if abs(v) >= n:
+            return f"{v / n:.2f}{s}"
+    return f"{v:,.2f}".rstrip("0").rstrip(".")
+
+
+def _price(v):
+    return f"{float(v):,.2f}"
+
+
+class Hosted:
+    def __init__(self, store, apis, industry, push, key_path):
+        self.store, self.apis, self.industry, self.push = store, apis, industry, push
+        self.key = self.load_key(key_path)
+        c = store.conn()
+        with store.write_lock:
+            c.executescript(HOSTED_SCHEMA)
+            c.commit()
+        self.lock = threading.Lock()
+        self.subs = {}            # (server, 角色) -> 运行中的托管（解密后的设置 + 运行状态）
+        self.cursor = {}          # server -> 已处理到的实时击杀编号
+        self.sos_seen = {}        # server -> 已处理到的求救更新时间
+        self.sos_at = 0
+        self.graphs = {}          # server -> 星门图：(星系 ID -> 下标, 邻接表, 星系表)；曙光服用自己的 map-data-infinity.json
+        self.names = None         # 物品 ID -> (中文名, 英文名)
+        self.pool = concurrent.futures.ThreadPoolExecutor(4, thread_name_prefix="hosted")
+        self.market = {}          # (server, 星域, 物品, buy|sell) -> (时间, 订单)；多个角色共用
+        self.structs = {}         # (server, 建筑) -> (时间, 订单)
+        self.station_region = {}  # (server, 空间站) -> (星系, 星域)
+        for server, char, name, blob, state in c.execute("SELECT server, char_id, name, blob, state FROM hosted"):
+            try:
+                self.subs[(server, char)] = self.runtime(server, char, name, self.open(blob), json.loads(state or "{}"))
+            except Exception:  # noqa: BLE001
+                log.warning("托管预警 %s:%s 读取失败，跳过", server, char)
+
+    # ---------- 加密（HMAC-SHA256 计数器模式 + 校验）----------
+    @staticmethod
+    def load_key(path):
+        env = os.environ.get("EVE_HOSTED_KEY")
+        if env:
+            return hashlib.sha256(env.encode()).digest()
+        if os.path.exists(path):
+            with open(path, "rb") as fh:
+                return fh.read()
+        key = secrets.token_bytes(32)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(key)
+        return key
+
+    def stream(self, nonce, n):
+        out = bytearray()
+        i = 0
+        while len(out) < n:
+            out += hmac.new(self.key, b"enc" + nonce + i.to_bytes(8, "big"), hashlib.sha256).digest()
+            i += 1
+        return bytes(out[:n])
+
+    def seal(self, obj):
+        raw = json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode()
+        nonce = secrets.token_bytes(16)
+        ct = bytes(a ^ b for a, b in zip(raw, self.stream(nonce, len(raw))))
+        tag = hmac.new(self.key, b"tag" + nonce + ct, hashlib.sha256).digest()[:16]
+        return base64.b64encode(nonce + tag + ct).decode()
+
+    def open(self, blob):
+        data = base64.b64decode(blob)
+        nonce, tag, ct = data[:16], data[16:32], data[32:]
+        if not hmac.compare_digest(tag, hmac.new(self.key, b"tag" + nonce + ct, hashlib.sha256).digest()[:16]):
+            raise ValueError("托管数据校验失败")
+        return json.loads(bytes(a ^ b for a, b in zip(ct, self.stream(nonce, len(ct)))))
+
+    # ---------- 设置 ----------
+    @staticmethod
+    def ids(v, limit, label):
+        if not isinstance(v, list) or len(v) > limit or any(type(x) is not int or x <= 0 for x in v):
+            raise ValueError(label + "格式不对")
+        return v
+
+    def clean(self, s):
+        """校验浏览器传来的设置，只留下认识的字段"""
+        try:
+            return self._clean(s)
+        except (TypeError, AttributeError, KeyError):
+            raise ValueError("设置格式不对") from None
+
+    def _clean(self, s):
+        if not isinstance(s, dict):
+            raise ValueError("缺少设置")
+        src = [x for x in HOSTED_SRCS if x in (s.get("src") or [])]
+        if not src:
+            raise ValueError("至少选一种要托管的预警")
+        ch = {}
+        w = s.get("wecom") if isinstance(s.get("wecom"), dict) else None
+        if w and w.get("key"):
+            key = str(w["key"]).strip().lower()
+            if not PUSH_WECOM_RE.fullmatch(key):
+                raise ValueError("企业微信机器人 key 不对")
+            ch["wecom"] = {"key": key, "use": [x for x in src if x in (w.get("use") or [])]}
+        m = s.get("mail") if isinstance(s.get("mail"), dict) else None
+        if m and m.get("user"):
+            smtp = {k: m.get(k) for k in ("user", "password", "host", "port", "security")}
+            if not all(isinstance(smtp[k], str) and 0 < len(smtp[k]) <= 200 for k in ("user", "password", "host")) or type(smtp["port"]) is not int \
+                    or not PUSH_MAIL_RE.fullmatch(smtp["user"]) or smtp["port"] not in PUSH_PORTS or smtp["security"] not in (("ssl", "starttls", "none") if PUSH_TEST_PRIVATE else ("ssl", "starttls")):
+                raise ValueError("邮箱设置不对")
+            to = str(m.get("to") or smtp["user"])
+            if not PUSH_MAIL_RE.fullmatch(to):
+                raise ValueError("收件邮箱不对")
+            ch["mail"] = {"smtp": smtp, "to": to, "use": [x for x in src if x in (m.get("use") or [])]}
+        if not any(c["use"] for c in ch.values()):
+            raise ValueError("企业微信和邮箱都没有设置，或者没有勾选要推送的预警")
+        out = {"src": src, "ch": ch, "lang": "en" if s.get("lang") == "en" else "zh"}
+        for k in ("site", "killUrl"):
+            v = str(s.get(k) or "")
+            out[k] = v if HOSTED_URL_RE.fullmatch(v.replace("{id}", "0")) else ""
+        k = s.get("kill") if isinstance(s.get("kill"), dict) else {}
+        watch = []
+        for e in (k.get("watch") or [])[:50]:
+            if isinstance(e, dict) and type(e.get("id")) is int and e.get("kind") in ("character", "corporation", "alliance"):
+                watch.append({"id": e["id"], "kind": e["kind"], "mode": e.get("mode") if e.get("mode") in ("both", "kills", "losses") else "both",
+                              "name": str(e.get("name") or e["id"])[:60]})
+        regions = [r for r in (k.get("regions") or [])[:20] if isinstance(r, dict) and type(r.get("id")) is int]
+        out["kill"] = {"on": k.get("on") is True, "jumps": min(10, max(1, int(k.get("jumps") or 3))), "pods": k.get("pods") is not False,
+                       "minValue": max(0, float(k.get("minValue") or 0)), "maxAge": max(0, int(k.get("maxAge") or 0)),
+                       "ships": self.ids(k.get("ships") or [], 3000, "舰船类别"), "offlineMute": k.get("offlineMute") is not False,
+                       "watchOn": k.get("watchOn") is True, "watch": watch,
+                       "regionOn": k.get("regionOn") is True, "regions": [{"id": r["id"], "name": str(r.get("name") or r["id"])[:40]} for r in regions]}
+        out["sos"] = {"rewardOnly": (s.get("sos") or {}).get("rewardOnly") is True}
+        return out
+
+    def runtime(self, server, char, name, cfg, state):
+        return {"server": server, "char": char, "name": name, "cfg": cfg, "state": state, "access": "", "exp": 0, "dead": bool(state.get("token_error")),
+                "range": {}, "loc_at": 0, "online_at": 0, "order_at": 0, "busy": set(), "queue": {"wecom": [], "mail": []}, "last": {"wecom": 0, "mail": 0},
+                "dirty": False, "tlock": threading.Lock()}
+
+    # ---------- 令牌 ----------
+    @staticmethod
+    def claims(access):
+        part = access.split(".")[1]
+        c = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+        char = int(str(c.get("sub") or "").split(":")[-1] or 0)
+        scp = c.get("scp") or []
+        return char, str(c.get("name") or char), [scp] if isinstance(scp, str) else list(scp)
+
+    @staticmethod
+    def refresh(server, client_id, token):
+        """用刷新令牌换新的访问令牌：返回 (访问令牌, 有效秒数, 新的刷新令牌)；令牌无效抛 PermissionError"""
+        req = urllib.request.Request(HOSTED_TOKEN_URLS[server], method="POST",
+                                     data=urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": token, "client_id": client_id}).encode(),
+                                     headers={"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "eve-market-hosted-alerts/1.0"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                d = json.load(r)
+        except urllib.error.HTTPError as e:
+            if e.code in (400, 401, 403):
+                raise PermissionError("授权已失效") from None
+            raise EsiUnavailable(f"登录服务器返回 {e.code}") from None
+        except Exception as e:  # noqa: BLE001
+            raise EsiUnavailable(f"连不上登录服务器：{type(e).__name__}") from None
+        if not d.get("access_token"):
+            raise PermissionError("授权已失效")
+        return d["access_token"], int(d.get("expires_in") or 1199), d.get("refresh_token") or token
+
+    def access(self, sub):
+        with sub["tlock"]:   # 刷新令牌用一次就换，同一角色不能并发刷新
+            return self._access(sub)
+
+    def _access(self, sub):
+        if sub["dead"]:
+            raise PermissionError("授权已失效")
+        if sub["access"] and sub["exp"] > time.time() + 60:
+            return sub["access"]
+        cfg = sub["cfg"]
+        try:
+            access, ttl, rt = self.refresh(sub["server"], cfg["client_id"], cfg["refresh"])
+        except PermissionError:
+            sub["dead"] = True
+            sub["state"]["token_error"] = "授权已失效（在 CCP 撤销了授权或改了密码），请重新授权"
+            sub["dirty"] = True
+            raise
+        sub["access"], sub["exp"] = access, time.time() + ttl
+        if rt != cfg["refresh"]:   # 刷新令牌换了：马上写回，否则重启后用旧的会失败
+            cfg["refresh"] = rt
+            self.save_blob(sub)
+        return access
+
+    def esi(self, sub, path, **params):
+        cfg = ARB_SERVERS[sub["server"]]
+        url = f"{cfg['esi']}{path}?" + "&".join(x for x in (urllib.parse.urlencode(params), cfg["qs"]) if x)
+        try:
+            return get_json(url, timeout=30, retries=2, fatal=(400, 401, 403, 404), headers={"Authorization": "Bearer " + self.access(sub)})
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                sub["exp"] = 0
+            raise EsiUnavailable(f"ESI 返回 {e.code}") from None
+
+    def esi_pages(self, sub, path, **params):
+        first, h = self.esi(sub, path, page=1, **params)
+        out = list(first or [])
+        for n in range(2, min(int(h.get("X-Pages") or 1), 20) + 1):
+            out += self.esi(sub, path, page=n, **params)[0] or []
+        return out
+
+    def has(self, sub, scope):
+        return HOSTED_SCOPES[scope] in sub["cfg"].get("scopes", [])
+
+    # ---------- 存取 ----------
+    def save_blob(self, sub):
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("UPDATE hosted SET blob=?, updated=? WHERE server=? AND char_id=?", (self.seal(sub["cfg"]), int(time.time()), sub["server"], sub["char"]))
+            c.commit()
+
+    def save_state(self, sub):
+        sub["dirty"] = False
+        try:
+            state = json.dumps(sub["state"], ensure_ascii=False)
+        except RuntimeError:   # 后台任务正在改：下一轮再存
+            sub["dirty"] = True
+            return
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("UPDATE hosted SET state=? WHERE server=? AND char_id=?", (state, sub["server"], sub["char"]))
+            c.commit()
+
+    def auth(self, body):
+        server = WhSos.server_of(body.get("server"))
+        char = WhSos.char_of(body)
+        secret = str(body.get("secret") or "")
+        row = self.store.conn().execute("SELECT secret FROM hosted WHERE server=? AND char_id=?", (server, char)).fetchone()
+        if not row or not hmac.compare_digest(row[0], hashlib.sha256(secret.encode()).hexdigest()):
+            raise PermissionError("没有找到这个角色的托管，或凭证不对（可能已在别的浏览器重新开启）")
+        return server, char
+
+    # ---------- 接口 ----------
+    def start(self, body, ip=None):
+        server = WhSos.server_of(body.get("server"))
+        client_id, rt = str(body.get("client_id") or ""), str(body.get("refresh_token") or "")
+        if not re.fullmatch(r"[0-9a-f]{32}", client_id) or not 10 < len(rt) < 4000:
+            raise ValueError("缺少授权信息，请重新授权")
+        settings = self.clean(body.get("settings"))
+        with self.lock:
+            if len(self.subs) >= HOSTED_MAX:
+                raise ValueError("托管名额已满，请稍后再试")
+        try:
+            access, ttl, rt = self.refresh(server, client_id, rt)
+        except PermissionError:
+            raise ValueError("授权无效或已过期，请重新授权") from None
+        char, name, scopes = self.claims(access)
+        if not char:
+            raise ValueError("授权里没有角色信息")
+        cfg = {**settings, "client_id": client_id, "refresh": rt, "scopes": scopes}
+        secret = secrets.token_urlsafe(24)
+        now = int(time.time())
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("INSERT OR REPLACE INTO hosted(server, char_id, name, secret, blob, state, created, updated) VALUES(?,?,?,?,?,?,?,?)",
+                      (server, char, name, hashlib.sha256(secret.encode()).hexdigest(), self.seal(cfg), "{}", now, now))
+            c.commit()
+        sub = self.runtime(server, char, name, cfg, {})
+        sub["access"], sub["exp"] = access, time.time() + ttl
+        with self.lock:
+            self.subs[(server, char)] = sub
+        log.info("托管预警开启 %s:%s %s", server, char, ",".join(settings["src"]))
+        return {"ok": True, "secret": secret, "character_id": char, "name": name, "scopes": scopes}
+
+    def update(self, body, ip=None):
+        server, char = self.auth(body)
+        settings = self.clean(body.get("settings"))
+        with self.lock:
+            sub = self.subs.get((server, char))
+        if not sub:
+            raise PermissionError("没有找到这个角色的托管")
+        sub["cfg"] = {**sub["cfg"], **settings}
+        sub["range"], sub["loc_at"], sub["online_at"], sub["order_at"] = {}, 0, 0, 0
+        self.save_blob(sub)
+        return {"ok": True}
+
+    def status(self, body, ip=None):
+        server, char = self.auth(body)
+        sub = self.subs.get((server, char))
+        if not sub:
+            raise PermissionError("没有找到这个角色的托管")
+        st, cfg = sub["state"], sub["cfg"]
+        return {"ok": True, "name": sub["name"], "src": cfg["src"], "scopes": cfg.get("scopes", []), "token_error": st.get("token_error") or "",
+                "checked": st.get("checked", {}), "errors": st.get("errors", {}), "sent": st.get("sent", []),
+                "system": st.get("system_name") or "", "online": st.get("online")}
+
+    def stop(self, body, ip=None):
+        server, char = self.auth(body)
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("DELETE FROM hosted WHERE server=? AND char_id=?", (server, char))
+            c.commit()
+        with self.lock:
+            self.subs.pop((server, char), None)
+        log.info("托管预警停止 %s:%s", server, char)
+        return {"ok": True}
+
+    # ---------- 后台 ----------
+    def start_worker(self):
+        threading.Thread(target=self.loop, daemon=True, name="hosted").start()
+
+    def loop(self):
+        for server, api in self.apis.items():
+            self.cursor[server] = api.store.live_n
+            self.sos_seen[server] = int(time.time())
+        while True:
+            try:
+                self.tick()
+            except Exception:  # noqa: BLE001
+                log.exception("托管预警出错")
+            time.sleep(HOSTED_TICK)
+
+    def tick(self):
+        now = time.time()
+        with self.lock:
+            subs = list(self.subs.values())
+        kills = {}
+        for server, api in self.apis.items():
+            buf = list(api.store.live_buf)
+            last = self.cursor.get(server, 0)
+            new = [k for n, k in buf if n > last]
+            if buf:
+                self.cursor[server] = buf[-1][0]
+            if new:
+                kills[server] = (new, api)
+        sos = self.new_sos(now) if now - self.sos_at >= HOSTED_SOS_GAP else {}
+        for sub in subs:
+            cfg, srv = sub["cfg"], sub["server"]
+            if "kill" in cfg["src"]:
+                self.kill_upkeep(sub, now)
+                if srv in kills:
+                    self.kill_match(sub, *kills[srv])
+            if "sos" in cfg["src"] and sos.get(srv):
+                self.sos_match(sub, sos[srv])
+            if "order" in cfg["src"] and now - sub["order_at"] >= HOSTED_ORDER_GAP and "order" not in sub["busy"]:
+                sub["order_at"] = now
+                self.job(sub, "order", self.order_check)
+            self.flush(sub, now)
+            if sub["dirty"]:
+                self.save_state(sub)
+
+    def job(self, sub, name, fn):
+        sub["busy"].add(name)
+
+        def run():
+            try:
+                fn(sub)
+                sub["state"].setdefault("errors", {}).pop(name, None)
+            except PermissionError as e:
+                sub["state"].setdefault("errors", {})[name] = str(e)
+            except Exception as e:  # noqa: BLE001
+                sub["state"].setdefault("errors", {})[name] = str(e)[:200]
+            finally:
+                sub["state"].setdefault("checked", {})[name] = int(time.time())
+                sub["dirty"] = True
+                sub["busy"].discard(name)
+        self.pool.submit(run)
+
+    def mark(self, sub, src):
+        sub["state"].setdefault("checked", {})[src] = int(time.time())
+        sub["dirty"] = True
+
+    def enqueue(self, sub, src, text, url=""):
+        for ch, c in sub["cfg"]["ch"].items():
+            if src in c["use"]:
+                sub["queue"][ch].append((src, text, url))
+        sent = sub["state"].setdefault("sent", [])
+        sent.insert(0, [int(time.time()), src, text])
+        del sent[HOSTED_SENT_KEEP:]
+        sub["dirty"] = True
+
+    def flush(self, sub, now):
+        cfg = sub["cfg"]
+        en = cfg["lang"] == "en"
+        for ch, q in sub["queue"].items():
+            if not q or now - sub["last"][ch] < HOSTED_PUSH_GAP[ch] or ch not in cfg["ch"]:
+                continue
+            items, sub["queue"][ch] = q[:PUSH_LINES], q[PUSH_LINES:]
+            sub["last"][ch] = now
+            kinds = {s for s, _, _ in items}
+            label = {"kill": ("击杀预警", "Kill alert"), "sos": ("虫洞求救", "Wormhole SOS"), "order": ("订单被压价", "Order undercut")}
+            title = (label[next(iter(kinds))][en] if len(kinds) == 1 else ("Alerts" if en else "预警")) + (" (hosted)" if en else "（服务器托管）") \
+                + ((f" ({len(items)})" if en else f"（{len(items)} 条）") if len(items) > 1 else "")
+            body = {"title": title, "lines": [{"text": t, "url": u} for _, t, u in items], "lang": cfg["lang"]}
+            c = cfg["ch"][ch]
+            try:
+                if ch == "wecom":
+                    self.push.wecom({**body, "key": c["key"]})
+                else:
+                    self.push.mail({**body, "smtp": c["smtp"], "to": c["to"]}, "hosted:" + str(sub["char"]))
+                sub["state"].setdefault("errors", {}).pop("push_" + ch, None)
+            except ValueError as e:
+                if "太频繁" in str(e):
+                    sub["queue"][ch] = items + sub["queue"][ch]
+                    continue
+                sub["state"].setdefault("errors", {})["push_" + ch] = str(e)[:200]
+            except Exception as e:  # noqa: BLE001
+                sub["state"].setdefault("errors", {})["push_" + ch] = str(e)[:200]
+            sub["dirty"] = True
+
+    # ---------- 名称、星图 ----------
+    def load_names(self):
+        """物品中文名（type-names-zh.json，缺的用 fit-data.json）、中文 → 英文（i18n/names-en.json）、虫洞星系名（wh-data.json）"""
+        if self.names is not None:
+            return
+        zh, en, wh = {}, {}, {}
+        for name, fn in (("fit-data.json", lambda d: zh.update({int(k): v[0] for k, v in d["types"].items()})),
+                         ("type-names-zh.json", lambda d: zh.update({int(k): v for k, v in d.items()})),
+                         ("i18n/names-en.json", en.update),
+                         ("wh-data.json", lambda d: wh.update({x[0]: x[1] for x in d["systems"]}))):
+            try:
+                fn(self.industry._load(name))
+            except Exception:  # noqa: BLE001
+                log.warning("托管预警：读不到 %s，相关名称用 ID", name)
+        self.names, self.en_names, self.wh_names = zh, en, wh
+
+    def tr(self, zh, en):
+        return self.en_names.get(zh, zh) if en else zh
+
+    def type_name(self, tid, en):
+        self.load_names()
+        n = self.names.get(tid)
+        return self.tr(n, en) if n else f"Type {tid}"
+
+    def map(self, server):
+        server = "infinity" if server == "infinity" else "tq"
+        if server not in self.graphs:
+            m = self.industry._load("map-data-infinity.json" if server == "infinity" else "map-data.json")
+            systems = m["systems"]
+            adj = [[] for _ in systems]
+            for a, b in m["gates"]:
+                adj[a].append(b)
+                adj[b].append(a)
+            self.graphs[server] = ({s[0]: i for i, s in enumerate(systems)}, adj, systems)
+        return self.graphs[server]
+
+    def sys_name(self, server, sid, en=False):
+        self.load_names()
+        index, _, systems = self.map(server)
+        i = index.get(sid)
+        return self.tr(systems[i][1], en) if i is not None else self.wh_names.get(sid) or str(sid)
+
+    def jumps_from(self, server, sid, limit):
+        index, adj, systems = self.map(server)
+        if sid not in index:
+            return {sid: 0}
+        dist = {index[sid]: 0}
+        frontier = [index[sid]]
+        for d in range(1, limit + 1):
+            nxt = []
+            for i in frontier:
+                for j in adj[i]:
+                    if j not in dist:
+                        dist[j] = d
+                        nxt.append(j)
+            frontier = nxt
+        return {systems[i][0]: d for i, d in dist.items()}
+
+    # ---------- 击杀预警 ----------
+    def kill_upkeep(self, sub, now):
+        k = sub["cfg"]["kill"]
+        if k["on"] and self.has(sub, "loc") and not sub["dead"] and now - sub["loc_at"] >= HOSTED_LOC_GAP and "loc" not in sub["busy"]:
+            sub["loc_at"] = now
+            self.job(sub, "loc", self.locate)
+        if k["offlineMute"] and self.has(sub, "online") and not sub["dead"] and now - sub["online_at"] >= HOSTED_ONLINE_GAP and "online" not in sub["busy"]:
+            sub["online_at"] = now
+            self.job(sub, "online", lambda s: s["state"].__setitem__("online", (self.esi(s, f"/characters/{s['char']}/online/")[0] or {}).get("online") is not False))
+
+    def locate(self, sub):
+        loc, _ = self.esi(sub, f"/characters/{sub['char']}/location/")
+        sid = int((loc or {}).get("solar_system_id") or 0)
+        if sid and (sid != sub["state"].get("system") or not sub["range"]):
+            sub["range"] = self.jumps_from(sub["server"], sid, sub["cfg"]["kill"]["jumps"])
+            sub["state"]["system"], sub["state"]["system_name"] = sid, self.sys_name(sub["server"], sid, sub["cfg"]["lang"] == "en")
+
+    def kill_match(self, sub, kills, api):
+        cfg = sub["cfg"]
+        k = cfg["kill"]
+        en = cfg["lang"] == "en"
+        if k["offlineMute"] and sub["state"].get("online") is False:
+            return
+        names = None
+        ships = set(k["ships"])
+        for x in kills:
+            if k["maxAge"]:
+                try:
+                    t = calendar.timegm(time.strptime(x["time"][:19], "%Y-%m-%dT%H:%M:%S"))
+                    if time.time() - t > k["maxAge"]:
+                        continue
+                except ValueError:
+                    pass
+            hit = None
+            if k["watchOn"]:
+                for e in k["watch"]:
+                    col = {"corporation": "corporation_id", "alliance": "alliance_id"}.get(e["kind"], "character_id")
+                    if e["mode"] != "kills" and x["victim"].get(col) == e["id"]:
+                        hit = ("loss", e)
+                        break
+                    if e["mode"] != "losses" and (x["final"].get(col) == e["id"] or e["id"] in (x.get("att") if e["kind"] == "character" else x.get("ao")) or []):
+                        hit = ("kill", e)
+                        break
+            region = None
+            if not hit:
+                pod = x["ship_type_id"] in HOSTED_PODS
+                if (pod and not k["pods"]) or (x["value"] or 0) < k["minValue"] or (ships and not pod and x["ship_type_id"] not in ships):
+                    continue
+                if k["on"] and x["system_id"] in sub["range"]:
+                    pass
+                elif k["regionOn"] and any(r["id"] == x["region_id"] for r in k["regions"]):
+                    region = next(r["name"] for r in k["regions"] if r["id"] == x["region_id"])
+                else:
+                    continue
+            if names is None:
+                names = api.with_names(kills)
+            ship = self.type_name(x["ship_type_id"], en)
+            victim = names.get(x["victim"].get("character_id")) or names.get(x["victim"].get("corporation_id")) or ""
+            sysn = self.sys_name(sub["server"], x["system_id"], en)
+            jumps = sub["range"].get(x["system_id"])
+            jt = (f"{jumps} jump{'s' if jumps != 1 else ''}" if en else f"{jumps} 跳") if jumps is not None else ""
+            whose = (f"{victim}'s " if en else f"{victim}的") if victim else ""
+            if hit:
+                role, e = hit
+                if en:
+                    text = f"{e['name']} lost a {ship} · {sysn}" if role == "loss" else f"{e['name']} killed {whose}{ship} · {sysn}"
+                else:
+                    text = f"关注的 {e['name']} 损失了{ship} · {sysn}" if role == "loss" else f"关注的 {e['name']} 参与击杀了{whose}{ship} · {sysn}"
+            elif region:
+                text = f"{region} · {sysn}: {whose}{ship} destroyed" if en else f"{region} · {sysn} {whose}{ship}被击毁"
+            else:
+                text = f"{sysn} ({jt}): {whose}{ship} destroyed" if en else f"{sysn}（{jt}）{whose}{ship}被击毁"
+            extra = [f"{_isk(x['value'])} ISK" if x.get("value") else "",
+                     (f"{x['attackers']} attacker{'s' if x['attackers'] != 1 else ''}" if en else f"{x['attackers']} 名攻击者") if x.get("attackers") else ""]
+            text += "".join(" · " + e for e in extra if e)
+            url = cfg["killUrl"].replace("{id}", str(x["id"])) if cfg.get("killUrl") else ""
+            self.enqueue(sub, "kill", text, url)
+        self.mark(sub, "kill")
+
+    # ---------- 虫洞求救 ----------
+    def new_sos(self, now):
+        self.sos_at = now
+        out = {}
+        c = self.store.conn()
+        for server in self.apis:
+            seen = self.sos_seen.get(server, int(now))
+            rows = c.execute("SELECT char_id, name, system_id, words, reward, contact, created, updated FROM wh_sos WHERE server=? AND created>? ORDER BY created",
+                             (server, seen)).fetchall()
+            if rows:
+                self.sos_seen[server] = rows[-1][6]
+                out[server] = rows
+        return out
+
+    def sos_match(self, sub, rows):
+        cfg = sub["cfg"]
+        en = cfg["lang"] == "en"
+        for char, name, sid, words, reward, contact, *_ in rows:
+            if char == sub["char"] or (cfg["sos"]["rewardOnly"] and not reward):
+                continue
+            sysn = self.sys_name(sub["server"], sid)
+            text = (f"{self.tr(sysn, True)} · {name} needs help" if en else f"{sysn} · {name} 求救") + ((": " if en else "：") + words if words else "") \
+                + ((f" · reward {_isk(reward)} ISK" if en else f" · 悬赏 {_isk(reward)} ISK") if reward else "") \
+                + ((f" · contact: {contact}" if en else f" · 联系：{contact}") if contact else "")
+            url = f"{cfg['site']}#wh/system/{urllib.parse.quote(sysn)}" if cfg.get("site") else ""
+            self.enqueue(sub, "sos", text, url)
+        self.mark(sub, "sos")
+
+    # ---------- 订单被压价（规则同 js/order-watch.js 的 analyze）----------
+    def region_of(self, sub, o):
+        if o.get("region_id"):
+            return o["region_id"], o.get("system_id")
+        key = (sub["server"], o["location_id"])
+        if key not in self.station_region:
+            cfg = ARB_SERVERS[sub["server"]]
+            st, _ = get_json(f"{cfg['esi']}/universe/stations/{o['location_id']}/?{cfg['qs']}", timeout=20, retries=2)
+            index, _, systems = self.map(sub["server"])
+            i = index.get(st["system_id"])
+            self.station_region[key] = (st["system_id"], systems[i][6] if i is not None else 0)
+        sid, rid = self.station_region[key]
+        return rid, sid
+
+    def market_for(self, sub, o, buy):
+        now = time.time()
+        if o["location_id"] >= 10**12:
+            if not self.has(sub, "struct"):
+                return None
+            key = (sub["server"], o["location_id"])
+            hit = self.structs.get(key)
+            if not hit or now - hit[0] > HOSTED_ORDER_GAP:
+                hit = (now, self.esi_pages(sub, f"/markets/structures/{o['location_id']}/"))
+                self.structs[key] = hit
+            return [x for x in hit[1] if x["type_id"] == o["type_id"]]
+        region, sid = self.region_of(sub, o)
+        if not region:
+            return None
+        o["system_id"] = o.get("system_id") or sid
+        key = (sub["server"], region, o["type_id"], buy)
+        hit = self.market.get(key)
+        if not hit or now - hit[0] > HOSTED_ORDER_GAP:
+            cfg = ARB_SERVERS[sub["server"]]
+            out, page, pages = [], 1, 1
+            while page <= min(pages, 20):
+                data, h = get_json(f"{cfg['esi']}/markets/{region}/orders/?type_id={o['type_id']}&order_type={'buy' if buy else 'sell'}&page={page}"
+                                   + (f"&{cfg['qs']}" if cfg["qs"] else ""), timeout=30, retries=2)
+                out += data or []
+                pages, page = int(h.get("X-Pages") or 1), page + 1
+            hit = (now, out)
+            self.market[key] = hit
+            if len(self.market) > 5000:
+                self.market = {k: v for k, v in self.market.items() if now - v[0] < HOSTED_ORDER_GAP}
+        return hit[1]
+
+    def order_check(self, sub):
+        if not self.has(sub, "orders"):
+            raise PermissionError("授权里没有订单权限，请重新授权")
+        en = sub["cfg"]["lang"] == "en"
+        orders, _ = self.esi(sub, f"/characters/{sub['char']}/orders/")
+        orders = (orders or [])[:HOSTED_ORDER_MAX]
+        mine = {o["order_id"] for o in orders}
+        alerted = sub["state"].setdefault("alerted", {})
+        live = set()
+        for o in orders:
+            buy = bool(o.get("is_buy_order"))
+            lst = self.market_for(sub, o, buy)
+            if lst is None:
+                continue
+            sid = o.get("system_id") or next((x.get("system_id") for x in lst if x["location_id"] == o["location_id"]), None)
+            rivals = [x["price"] for x in lst if x["order_id"] not in mine and bool(x.get("is_buy_order")) == buy and (
+                (x["location_id"] == o["location_id"] or x.get("range") == "region" or (sid and x.get("system_id") == sid and x.get("range") != "station"))
+                if buy else x["location_id"] == o["location_id"])]
+            if not rivals:
+                continue
+            best = max(rivals) if buy else min(rivals)
+            if not (best >= o["price"] if buy else best <= o["price"]):
+                continue
+            oid = str(o["order_id"])
+            live.add(oid)
+            if alerted.get(oid) == best:
+                continue
+            alerted[oid] = best
+            name = self.type_name(o["type_id"], en)
+            where = self.sys_name(sub["server"], sid, en) if sid else ""
+            text = (f"{name}: {'buy' if buy else 'sell'} order {_price(o['price'])} undercut, best {_price(best)}" if en
+                    else f"{name}：{'收单' if buy else '卖单'} {_price(o['price'])} 被压，对手 {_price(best)}") + (f" · {where}" if where else "")
+            self.enqueue(sub, "order", text)
+        for oid in list(alerted):
+            if oid not in live:
+                del alerted[oid]
+
+
 # ---------------------------------------------------------------- AI 助手
 # 网页「AI 助手」页（js/ai.js）：玩家用自然语言提问，大模型按需调用工具（配船算属性、查会战 / 击杀 / 物价 / 走势、读自己的 ESI），
 # 工具都在浏览器里执行（装配引擎、玩家的 ESI 令牌只在本机），服务器只负责把对话转成上游协议、带上系统提示词和工具定义。
@@ -7694,6 +8390,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     plaza_limiter = RateLimiter(PLAZA_RATE)
     plaza_posts = WindowLimiter(*PLAZA_POSTS)
     push_limiter = RateLimiter(PUSH_RATE)
+    hosted_limiter = RateLimiter(HOSTED_RATE)
     feedback_limiter = RateLimiter(FEEDBACK_RATE)
     feedback_posts = WindowLimiter(*FEEDBACK_POSTS)
     feedback_read_limiter = RateLimiter(30)
@@ -7960,6 +8657,38 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("工单错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
+        def hosted(self, path):
+            # 服务器托管预警；令牌、机器人 key、邮箱授权码不写日志
+            op = path[len("/api/kb/hosted/"):]
+            h = api.hosted
+            ops = {"start": h.start, "update": h.update, "status": h.status, "stop": h.stop}
+            if op not in ops:
+                return self.send_json(404, {"error": "not found"})
+            ip = self.client_ip()
+            ok, _, retry = hosted_limiter.take(ip)
+            if not ok:
+                return self.send_json(429, {"error": f"请求太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= HOSTED_BODY_MAX:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "请求体应为 JSON"})
+            try:
+                return self.send_json(200, ops[op](body, ip))
+            except PermissionError as e:
+                return self.send_json(403, {"error": str(e)})
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except EsiUnavailable as e:
+                return self.send_json(502, {"error": str(e)})
+            except Exception:
+                log.exception("托管预警接口错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
         def push(self, path):
             # 预警推送（同源调用，不带 CORS 头）；机器人 key、邮箱账号、授权码不写日志
             op = path[len("/api/kb/push/"):]
@@ -8109,6 +8838,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.plaza(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/push/"):
                 return self.push(url.path.rstrip("/"))
+            if url.path.startswith("/api/kb/hosted/"):
+                return self.hosted(url.path.rstrip("/"))
             if url.path.rstrip("/") == "/api/kb/feedback" or url.path.startswith("/api/kb/feedback/"):
                 return self.feedback(url.path.rstrip("/"))
             if url.path.rstrip("/") in ("/api/kb/translate", "/api/kb/translate/models"):
@@ -8301,6 +9032,8 @@ def main():
     if not args.lite:
         bazaar.start(), cbg.start()
     threading.Thread(target=mem_upkeep, args=([store] + [a.store for a in cn_apis.values()],), daemon=True).start()
+    api.hosted = Hosted(store, {"tq": api, **cn_apis}, industry, api.push, os.path.abspath(args.db) + ".hostkey")
+    api.hosted.start_worker()
     server = ThreadingHTTPServer((args.bind, args.port), make_handler(api, args.static, industry, abyssal, cn_apis, bazaar, cbg))
     log.info("击杀记录服务已启动 http://%s:%d", args.bind, args.port)
     server.serve_forever()

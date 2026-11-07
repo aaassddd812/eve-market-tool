@@ -9,9 +9,11 @@
 //   内容语言跟随界面语言（调用方用 alert-mail.js 的 L() 生成文字）。
 // 设置存在 eve-alert-push-v1（各服务器共用）：{ wecom: { key, use: { kill, intel, local, sos, order } }, mail: { user, pass, to, host, port, security, ok, use } }；
 //   ok：测试邮件发成功过（这之后才推送）。
+// 下面还有「服务器托管」分区（alert-host.js）：托管了的预警由服务器推送，这里的 push 跳过，免得重复。
 
 import { SERVER } from './server.js?v=s4';
 import { L } from './alert-mail.js?v=v8';
+import * as AH from './alert-host.js?v=v2';
 
 let ctx;   // esc, showToast
 const KEY = 'eve-alert-push-v1';
@@ -68,11 +70,15 @@ try {
   for (const ch of CH) if (saved?.[ch]) Object.assign(P[ch], saved[ch], { use: { ...P[ch].use, ...saved[ch].use } });
 } catch { /* 忽略 */ }
 
-export function initAlertPush(context) { ctx = ctx || context; }
+export function initAlertPush(context) {
+  ctx = ctx || context;
+  if (context.host) AH.initAlertHost({ ...context.host, esc: context.esc, showToast: context.showToast, render, channels: () => ({ P, ready }), lang: () => L('zh', 'en') });
+}
 export function onPushChange(fn) { subs.add(fn); }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(P)); } catch { /* 忽略 */ } }
 function changed() {
   save();
+  AH.sync();
   subs.forEach((fn) => { try { fn(); } catch (e) { console.error(e); } });
   render();
 }
@@ -115,7 +121,7 @@ function markSent(ch, at) {
 
 // 一条提醒：src 为 kill / intel，text 一行文字，url 可选（击杀详情）
 export function push(src, item) {
-  const chs = CH.filter((ch) => ready(ch) && P[ch].use[src]);
+  const chs = CH.filter((ch) => ready(ch) && P[ch].use[src] && !AH.covers(src));
   if (!chs.length || !claim(item.sig)) return;
   for (const ch of chs) {
     Q[ch].push({ src, text: item.text, url: item.url || '' });
@@ -214,7 +220,8 @@ function draw() {
     <section class="ka-sec">${head('wecom', '企业微信')}<div class="ka-list">${wecom}</div>${errLine('wecom')}
       ${w.key ? `<div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ap-test="wecom"${busy('test-wecom')}>发送测试</button></div>` : ''}</section>
     <section class="ka-sec">${head('mail', '邮箱')}<div class="ka-list">${mail}</div>${errLine('mail')}
-      ${editing ? '' : `<div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ap-test="mail"${busy('test-mail')}>发送测试</button></div>`}</section>`;
+      ${editing ? '' : `<div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ap-test="mail"${busy('test-mail')}>发送测试</button></div>`}</section>
+    ${AH.html()}`;
 }
 // 分区标题 + 「?」教程按钮；展开时标题下面显示步骤和提示
 function head(ch, label) {
@@ -288,6 +295,7 @@ export function mountPanel(el, opts) {
   panel = el;
   shell = opts;
   panel.addEventListener('click', (e) => {
+    if (AH.onClick(e.target)) return;
     const t = e.target.closest('[data-ap-help], [data-ap-wecom], [data-ap-save], [data-ap-edit], [data-ap-cancel], [data-ap-custom], [data-ap-test], [data-ap-del], [data-ap-use]');
     if (!t) return;
     if (t.dataset.apHelp) { S.help = S.help === t.dataset.apHelp ? '' : t.dataset.apHelp; render(); }
@@ -319,7 +327,9 @@ export function mountPanel(el, opts) {
       changed();
     }
   });
+  panel.addEventListener('change', (e) => AH.onChange(e.target));
   panel.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && AH.onEnter(e.target)) { e.preventDefault(); return; }
     if (e.key !== 'Enter' || !e.target.matches('[data-ap-in]')) return;
     e.preventDefault();
     if (e.target.dataset.apIn === 'wecom') saveWecom(); else saveMail();
@@ -332,4 +342,4 @@ export function mountPanel(el, opts) {
     if (el) el.textContent = host ? `${host}:${port}` : '按发件邮箱自动填写';
   });
 }
-export function showPanel() { render(); }
+export function showPanel() { render(); AH.shown(); }
