@@ -12,7 +12,8 @@ import { skCards, skToolbar, skRows } from './skeleton.js?v=v17';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
            // resolveStructureNames, locationName, gameImage, valuationCard, tokenInfo, hasScope, selectItem, isActive
-const S = { id: null, data: null, loading: null, view: 'items', q: '', sort: 'profit', dir: 'desc' };   // 点表头排序，同一列再点换方向
+const S = { id: null, data: null, loading: null, view: 'items', q: '', sort: 'profit', dir: 'desc', matchedOnly: false, side: 'all' };   // 点表头排序，同一列再点换方向；side：成交明细 / 历史订单按买入 / 卖出筛选
+const sideOk = (isBuy) => S.side === 'all' || (S.side === 'buy') === !!isBuy;
 const ROW_LIMIT = 300;
 const ORDER_STATE_ZH = { expired: '已过期', cancelled: '已取消' };
 const COST_KEY = 'eve-trade-cost';   // { 角色 ID: { 物品 ID: 每件成本 } }
@@ -120,7 +121,7 @@ function itemsTable(data, sum) {
   const get = getters[S.sort] || getters.profit;
   const sign = S.dir === 'asc' ? 1 : -1;
   const q = S.q.toLowerCase();
-  const list = sum.items.filter((r) => !q || typeName(data, r.id).toLowerCase().includes(q)).sort((a, b) => {
+  const list = sum.items.filter((r) => (!S.matchedOnly || r.profit != null) && (!q || typeName(data, r.id).toLowerCase().includes(q))).sort((a, b) => {
     const x = get(a), y = get(b);
     if (x == null || y == null) return x == null && y == null ? 0 : x == null ? 1 : -1;
     return (typeof x === 'string' ? x.localeCompare(y, 'zh') : x - y) * sign;
@@ -146,8 +147,8 @@ function itemsTable(data, sum) {
 function txTable(data) {
   const { esc, formatISK, formatPrice, formatNumber, locationName } = ctx;
   const q = S.q.toLowerCase();
-  const list = data.transactions.filter((t) => !q || typeName(data, t.type_id).toLowerCase().includes(q));
-  if (!list.length) return '<p class="text-muted">没有成交记录</p>';
+  const list = data.transactions.filter((t) => sideOk(t.is_buy) && (!q || typeName(data, t.type_id).toLowerCase().includes(q)));
+  if (!list.length) return `<p class="text-muted">${data.transactions.length ? '没有匹配的成交' : '没有成交记录'}</p>`;
   return `<div class="table-scroll"><table class="pc-mini-table trade-table"><thead><tr>
       <th>时间</th><th>物品</th><th>方向</th><th>数量</th><th>单价</th><th>金额</th><th>地点</th><th>对方</th>
     </tr></thead><tbody>${list.slice(0, ROW_LIMIT).map((t) => `<tr>
@@ -196,8 +197,8 @@ function ordersTable(data) {
   const { esc, formatPrice, formatNumber, locationName } = ctx;
   if (!data.orderScope) return '<p class="text-muted">无订单权限，需重新绑定 ESI</p>';
   const q = S.q.toLowerCase();
-  const list = data.orders.filter((o) => !q || typeName(data, o.type_id).toLowerCase().includes(q));
-  if (!list.length) return '<p class="text-muted">90 天内没有已结束的订单</p>';
+  const list = data.orders.filter((o) => sideOk(o.is_buy_order) && (!q || typeName(data, o.type_id).toLowerCase().includes(q)));
+  if (!list.length) return `<p class="text-muted">${data.orders.length ? '没有匹配的订单' : '90 天内没有已结束的订单'}</p>`;
   return `<div class="table-scroll"><table class="pc-mini-table trade-table"><thead><tr>
       <th>挂单时间</th><th>物品</th><th>方向</th><th>单价</th><th>成交 / 总量</th><th>状态</th><th>地点</th>
     </tr></thead><tbody>${list.slice(0, ROW_LIMIT).map((o) => {
@@ -236,11 +237,14 @@ function render(box, data) {
       '</div>' +
       (S.view === 'days' ? '' : '<div class="station-filter search-box trade-filter"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' +
         `<input type="search" data-trade-q placeholder="筛选物品" autocomplete="off" aria-label="筛选物品" value="${esc(S.q)}"></div>`) +
+      (S.view === 'items' ? `<label class="bz-check"><input type="checkbox" data-trade-matched${S.matchedOnly ? ' checked' : ''}>只看有配对利润</label>` : '') +
+      (S.view === 'tx' || S.view === 'orders' ? '<div class="segmented" role="group" aria-label="买卖方向">' +
+        [['all', '全部'], ['buy', '买入'], ['sell', '卖出']].map(([v, l]) => `<button type="button" data-trade-side="${v}" class="${S.side === v ? 'active' : ''}">${l}</button>`).join('') + '</div>' : '') +
       '<span class="toolbar-spacer"></span>' +
       '<button class="btn btn-ghost" data-trade-reload>刷新</button>' +
     '</div>' +
     `<div data-trade-body>${bodyHtml(data, sum)}</div>` +
-    `<p class="text-muted valuation-note" title="ESI 只提供最近约 30 天、最多 2500 条；配对利润按买卖均价，不含库存；税费取钱包流水实缴">最近 ${days} 天 · ${formatNumber(data.transactions.length)} 笔成交</p>`;
+    `<p class="text-muted valuation-note" title="ESI 只提供最近约 30 天、最多 2500 条；配对利润按买卖均价，不含库存；税费取钱包流水实缴">最近 ${days} 天 · ${formatNumber(data.transactions.length)} 笔成交 · ESI 缓存 1 小时，新成交最多晚 1 小时出现</p>`;
 }
 
 function bind(box) {
@@ -250,6 +254,8 @@ function bind(box) {
     if (!ctx.isActive() || !S.data) return;
     const view = e.target.closest('[data-trade-view]');
     if (view) { S.view = view.dataset.tradeView; render(box, S.data); return; }
+    const side = e.target.closest('[data-trade-side]');
+    if (side) { S.side = side.dataset.tradeSide; render(box, S.data); return; }
     const sort = e.target.closest('[data-trade-sort]');
     if (sort) { sortBy(box, sort.dataset.tradeSort); return; }
     const cost = e.target.closest('[data-trade-cost]');
@@ -277,6 +283,11 @@ function bind(box) {
       return;
     }
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('th[data-trade-sort]')) { e.preventDefault(); sortBy(box, e.target.dataset.tradeSort); }
+  });
+  box.addEventListener('change', (e) => {
+    if (!ctx.isActive() || !S.data || !e.target.matches('[data-trade-matched]')) return;
+    S.matchedOnly = e.target.checked;
+    render(box, S.data);
   });
   box.addEventListener('input', (e) => {
     if (!ctx.isActive() || !S.data || !e.target.matches('[data-trade-q]')) return;

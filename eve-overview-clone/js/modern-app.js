@@ -5553,7 +5553,7 @@ function loadOrderWatch() {
 // 个人中心 · 交易记录与盈亏：首次打开时加载
 let tradesLoading = null;
 function loadTradesModule() {
-  if (!tradesLoading) tradesLoading = import('./trades.js?v=v7').then((m) => {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v8').then((m) => {
     m.initTrades({
       esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard,
