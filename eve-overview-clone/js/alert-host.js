@@ -11,11 +11,7 @@ import { SERVER, IS_TQ, serverKey, kbSiteLink } from './server.js?v=s4';
 
 const KEY = serverKey('eve-alert-hosted-v1');
 const API = '/api/kb/hosted/';
-const SRC = [
-  ['kill', '击杀预警', '人物关注、星域监控；按位置预警要读角色位置'],
-  ['sos', '虫洞求救', '不需要额外权限'],
-  ['order', '订单被压价', '读角色订单与建筑市场，每 5 分钟比价一次']
-];
+const SRC = [['kill', '击杀预警'], ['sos', '虫洞求救'], ['order', '订单被压价']];
 const SCOPE = {
   loc: 'esi-location.read_location.v1', online: 'esi-location.read_online.v1',
   orders: 'esi-markets.read_character_orders.v1', struct: 'esi-markets.structure_markets.v1'
@@ -207,8 +203,7 @@ export function html() {
   const err = S.error ? `<p class="ka-warn">${esc(S.error)}</p>` : '';
   const head = '<h4 class="ka-h">服务器托管<small>网页关掉也提醒</small></h4>';
   if (!H) {
-    const rows = SRC.map(([k, l, sub]) => `<label class="ka-opt"><span><b>${l}</b><small>${sub}</small></span><input type="checkbox" class="ka-switch" data-ah-pick="${k}"${S.pick.has(k) ? ' checked' : ''}></label>`).join('')
-      + '<div class="ka-opt"><span><b>本地日志、本地红名</b><small>要读本机的游戏日志 / 画面，只能在本机运行</small></span></div>';
+    const rows = SRC.map(([k, l]) => `<label class="ka-opt"><span><b>${l}</b></span><input type="checkbox" class="ka-switch" data-ah-pick="${k}"${S.pick.has(k) ? ' checked' : ''}></label>`).join('');
     return `<section class="ka-sec">${head}
       <p class="ka-note">默认关闭：网页或客户端开着时，预警都在你自己的电脑上检查。勾选的预警交给本站服务器后台检查，网页关掉也会推送到上面设置的企业微信 / 邮箱。</p>
       <div class="ka-list">${rows}</div>

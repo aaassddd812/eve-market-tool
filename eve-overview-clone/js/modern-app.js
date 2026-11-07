@@ -4,8 +4,8 @@ import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v40';
 import * as SM from './struct-markets.js?v=v8';
-import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v14';
-import * as AH from './alert-host.js?v=v2';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v15';
+import * as AH from './alert-host.js?v=v3';
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v5';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
@@ -5534,7 +5534,7 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v12').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v13').then((m) => {
     m.initOrderWatch({
       esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -6466,7 +6466,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v21').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v22').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6489,7 +6489,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v35').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v36').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6542,7 +6542,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v22').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v23').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
@@ -6559,7 +6559,7 @@ function loadLocal() {
 const SOS_WATCH_KEY = serverKey('eve-sos-watch-v1');
 let sosModule = null;
 function loadSosWatch() {
-  if (!sosModule) sosModule = import('./sos-watch.js?v=v4').then((m) => {
+  if (!sosModule) sosModule = import('./sos-watch.js?v=v5').then((m) => {
     m.initSosWatch({
       esc, formatISK, showToast, resolveNames, esiAuthFetch,
       tokenInfo: () => state.esiToken || readEsiToken(),

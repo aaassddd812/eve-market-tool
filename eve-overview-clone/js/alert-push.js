@@ -13,7 +13,7 @@
 
 import { SERVER } from './server.js?v=s4';
 import { L } from './alert-mail.js?v=v8';
-import * as AH from './alert-host.js?v=v2';
+import * as AH from './alert-host.js?v=v3';
 
 let ctx;   // esc, showToast
 const KEY = 'eve-alert-push-v1';

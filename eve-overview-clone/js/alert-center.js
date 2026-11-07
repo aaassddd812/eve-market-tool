@@ -8,7 +8,7 @@
 // 「微信 / 邮箱」（alert-push.js）：企业微信群机器人与邮箱提醒。
 
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v6';
+import * as AP from './alert-push.js?v=v7';
 import { skText } from './skeleton.js?v=v17';
 
 let deps = null;   // { loadKill, loadIntel, loadLocal, loadSos, esc, showToast, host（服务器托管用，见 alert-host.js）}
