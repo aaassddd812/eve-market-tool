@@ -7,6 +7,7 @@ import * as SM from './struct-markets.js?v=v8';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v18';
 import * as AH from './alert-host.js?v=v5';
 import * as AP from './alert-push.js?v=v10';
+import * as BN from './back-nav.js?v=v1';
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v5';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v4';
@@ -629,7 +630,10 @@ function switchView(view) {
   if (prev !== view) recordVisit(view);
   if (!hashMatches) {
     restored = view in viewHashes || (!VIEW_HASH[view] && view !== 'market');
-    history.replaceState(null, '', location.pathname + location.search + (viewHashes[view] || ''));
+    // 手机 / App 上切页面记一条历史，返回键能回到上一页（back-nav.js）；后退途中切视图只改地址
+    const url = location.pathname + location.search + (viewHashes[view] || '');
+    // 历史里记下视图：市场、个人中心等没有自己的 hash，后退时靠它切回去
+    if (prev !== view && BN.enabled() && !BN.isPopping()) history.pushState({ view }, '', url); else history.replaceState({ view }, '', url);
   }
   syncNavActive();
   for (const [v, id] of Object.entries(VIEW_IDS)) $(id).hidden = v !== view;
@@ -3259,6 +3263,10 @@ function typeFromHash() {
 function initHashRouting() {
   initViewHashTracking();
   window.addEventListener('popstate', () => {
+    // 后退到 switchView 记下的视图（地址没有别的视图的 hash 时）
+    const v = history.state?.view;
+    if (v && VIEW_IDS[v] && state.currentView !== v && (!location.hash || ownsHash(v, location.hash))) { switchView(v); return; }
+    if (!v && !location.hash && BN.enabled() && state.currentView !== 'market') { switchView('market'); return; }
     // 击杀记录页 / 星图的地址由各自页面处理；从其他页面后退到这些地址时切换过去
     if (location.hash.startsWith('#kb')) { if (state.currentView !== 'kb') switchView('kb'); return; }
     if (location.hash.startsWith('#map')) { if (state.currentView !== 'map') switchView('map'); return; }
@@ -6653,6 +6661,7 @@ function initOrderWatchBackground() {
 // ===== 初始化应用 =====
 function init() {
   window.__eveBooted = true;   // index-v2.html 里的兜底提示据此判断脚本是否加载成功
+  BN.initBackNav({ showToast });   // 要在 initViewHashTracking 之前（它包在 back-nav 的 pushState 外面）
   // 云同步拉到别处改的 ESI 令牌：当前角色的令牌直接换上（其余设置要刷新页面）
   CS.initCloudSync({ esc, showToast, onApplied: (keys) => { if (keys.includes(serverKey('eve-esi-token'))) state.esiToken = readEsiToken(); } });
   ST.initStandings({ tokenInfo: () => state.esiToken || readEsiToken(), hasScope, fetchPaged: esiAuthFetchPaged });
