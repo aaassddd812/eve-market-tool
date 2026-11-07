@@ -7,6 +7,7 @@
 // 订单变化报告：每次读取后把订单快照（剩余数量、价格）存在本机，下次和当前订单、/orders/history/（90 天已结束订单）对比，
 //   列出新挂单、部分成交（成交数量 × 价格）、全部成交、过期、取消。
 // 后台监控（默认关）：每 5 分钟检查一次，有订单新被压价时网页提示，可选桌面通知与提示音；关闭页面就停止。
+//   也推送到企业微信 / 邮箱（alert-push.js，渠道在「预警 → 微信 / 邮箱」里设置，这里只开关「订单被压价」这一种）。
 // ESI 缓存：角色订单约 20 分钟、市场订单 5 分钟，所以「刷新」最快也是这个频率。
 // 订单账本（本机，按角色）：每次读到订单都记一笔——新挂单（中介费）、改价（issued 变了，按 trade-fees.js 的改单费）、成交（剩余减少）。
 //   费率按订单所在地点（brokerAt：按建筑单独填的 / 建筑默认 / NPC 技能声望）。两次读取之间改了多次只能记一次（ESI 缓存约 20 分钟）。
@@ -15,8 +16,10 @@
 //   改单以价格变化为准（游戏里改单必须改价）。
 
 import * as TF from './trade-fees.js?v=v6';
+import * as AP from './alert-push.js?v=v4';
+import { L } from './alert-mail.js?v=v8';
 
-let ctx;   // esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, typeName, locationName, resolveTypeNames, selectItem, store, serverKey, isActive
+let ctx;   // esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, typeName, locationName, resolveTypeNames, selectItem, store, serverKey, isActive, openPush
 const SET_KEY = 'eve-order-watch';
 const STRUCT_SCOPE = 'esi-markets.structure_markets.v1';
 const HIST_SCOPE = 'esi-markets.read_character_orders.v1';
@@ -264,7 +267,13 @@ function settingsHtml() {
   return `<div class="ow-bar"><button class="btn btn-ghost btn-sm" data-ow-refresh ${S.busy ? 'disabled' : ''}>${S.busy ? '检查中…' : '重新比价'}</button>
     <span class="text-muted">${S.checkedAt ? `比价于 ${new Date(S.checkedAt).toLocaleTimeString('zh-CN', { hour12: false })}` : ''}</span><span class="toolbar-spacer"></span>
     <button class="btn btn-ghost btn-sm" data-ow-fees title="${TF.summary()}">税费设置</button>
-    ${chk('bg', '后台监控被压价', '每 5 分钟检查一次（页面开着才有效），有订单新被压价时提醒')}${chk('notify', '桌面通知', '浏览器桌面通知，需要允许通知权限')}${chk('sound', '提示音', '被压价时播放提示音')}</div>`;
+    ${chk('bg', '后台监控被压价', '每 5 分钟检查一次（页面开着才有效），有订单新被压价时提醒')}${chk('notify', '桌面通知', '浏览器桌面通知，需要允许通知权限')}${chk('sound', '提示音', '被压价时播放提示音')}${pushHtml()}</div>`;
+}
+// 企业微信 / 邮箱：已设置的渠道显示开关，都没设置就给一个去设置的按钮
+function pushHtml() {
+  const chs = [['wecom', '企业微信'], ['mail', '邮箱']].filter(([ch]) => AP.isReady(ch));
+  if (!chs.length) return '<button type="button" class="btn btn-ghost btn-sm" data-ow-push-set title="在「预警 → 微信 / 邮箱」里设置企业微信群机器人或邮箱">推送到微信 / 邮箱</button>';
+  return chs.map(([ch, label]) => `<label class="pi-check" title="被压价时推送到${label}（在「预警 → 微信 / 邮箱」里设置）"><input type="checkbox" data-ow-push="${ch}"${AP.uses(ch, 'order') ? ' checked' : ''}${SET.bg ? '' : ' disabled'}><span>${label}</span></label>`).join('');
 }
 
 function draw(box) {
@@ -335,6 +344,7 @@ export async function onClick(e, box) {
   const copy = t.closest('[data-ow-copy]');
   if (copy) { ctx.copyText(copy.dataset.owCopy, '已复制建议价 ' + copy.dataset.owCopy); return true; }
   if (t.closest('[data-ow-fees]')) { TF.openFeeDialog(); return true; }
+  if (t.closest('[data-ow-push-set]')) { ctx.openPush(); return true; }
   const hist = t.closest('[data-ow-hist]');
   if (hist) {
     S.open = S.open || new Set();
@@ -358,6 +368,8 @@ export async function onClick(e, box) {
 }
 
 export function onChange(e, box) {
+  const p = e.target.closest('[data-ow-push]');
+  if (p) { AP.setUse(p.dataset.owPush, 'order', p.checked); return true; }
   const t = e.target.closest('[data-ow-set]');
   if (!t) return false;
   SET[t.dataset.owSet] = t.checked;
@@ -404,6 +416,14 @@ function notify(list) {
     try { new Notification('EVE 订单被压价', { body: text, tag: 'eve-order-watch' }); } catch { /* 部分浏览器只允许 Service Worker 通知 */ }
   }
   if (SET.sound) beep();
+  for (const r of list) {
+    const o = r.o;
+    AP.push('order', {
+      sig: `order:${o.order_id}:${r.best}`,
+      text: L(`${ctx.typeName(o.type_id)}：${o.is_buy_order ? '收单' : '卖单'} ${ctx.formatPrice(o.price)} 被压，对手 ${ctx.formatPrice(r.best)} · ${ctx.locationName(o.location_id)}`,
+        `${ctx.typeName(o.type_id)}: ${o.is_buy_order ? 'buy' : 'sell'} order ${ctx.formatPrice(o.price)} undercut, best ${ctx.formatPrice(r.best)} · ${ctx.locationName(o.location_id)}`)
+    });
+  }
 }
 function beep() {
   try {
