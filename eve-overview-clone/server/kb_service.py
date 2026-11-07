@@ -395,6 +395,68 @@ class ImageProxy:
         return (body, ctype) if body else (None, code)
 
 
+# ESI 中转：有些网络打得开本站却连不上 CCP 的 ESI / 登录服务器，浏览器直连失败时改走这里（js/esi-relay.js）。
+# 只转发到下面几个地址、只带白名单里的请求头，令牌原样转发，不记录不保存。
+# ESI 按出口 IP 统计错误次数（每分钟 100 次就封一阵），本服务自己也要用 ESI：剩余次数低于 RELAY_ERR_FLOOR 时暂停中转
+RELAY_HOSTS = {
+    "esi": "https://esi.evetech.net/",
+    "cnesi": "https://ali-esi.evepc.163.com/",
+    "login": "https://login.eveonline.com/v2/oauth/token",
+}
+RELAY_PATH_RE = re.compile(r"^[A-Za-z0-9_\-/.]{1,300}$")
+RELAY_REQ_HEADERS = ("Authorization", "Content-Type", "Accept", "Accept-Language", "If-None-Match", "X-Compatibility-Date", "X-Tenant")
+RELAY_RES_HEADERS = ("Content-Type", "ETag", "Expires", "Last-Modified", "X-Pages", "Retry-After", "X-Esi-Error-Limit-Remain",
+                     "X-Esi-Error-Limit-Reset", "X-Ratelimit-Group", "X-Ratelimit-Limit", "X-Ratelimit-Remaining", "X-Ratelimit-Used",
+                     "X-Compatibility-Date", "Warning")
+RELAY_RATE = 600            # 每个 IP 每分钟最多中转次数（市场订单翻页一次就几十个请求）
+RELAY_LOGIN_RATE = 20       # 换令牌：每个 IP 每分钟
+RELAY_BODY_LIMIT = 256 * 1024
+RELAY_ERR_FLOOR = 20
+
+
+class EsiRelay:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.pause_until = 0.0
+
+    def target(self, key, rest, query):
+        base = RELAY_HOSTS.get(key)
+        if not base:
+            raise ValueError("不支持的中转地址")
+        if key == "login":
+            if rest:
+                raise ValueError("不支持的中转地址")
+            return base
+        if not RELAY_PATH_RE.match(rest) or ".." in rest:
+            raise ValueError("不支持的中转地址")
+        return base + rest + ("?" + query if query else "")
+
+    def forward(self, method, url, headers, body):
+        """返回 (状态码, 响应头列表, 响应体)；连不上返回 (502, [], None)"""
+        if url.startswith(RELAY_HOSTS["esi"]) and time.time() < self.pause_until:
+            return 503, [("Retry-After", str(int(self.pause_until - time.time()) + 1))], None
+        req = urllib.request.Request(url, data=body, method=method,
+                                     headers={"User-Agent": UA, "Accept-Encoding": "gzip", **headers})
+        try:
+            res = urllib.request.urlopen(req, timeout=30)
+        except urllib.error.HTTPError as e:
+            res = e
+        except Exception:  # noqa: BLE001
+            return 502, [], None
+        with res:
+            data = res.read()
+            if res.headers.get("Content-Encoding") == "gzip":
+                data = gzip.decompress(data)
+            remain = res.headers.get("X-Esi-Error-Limit-Remain")
+            if remain and remain.isdigit() and int(remain) < RELAY_ERR_FLOOR:
+                reset = res.headers.get("X-Esi-Error-Limit-Reset") or "60"
+                with self.lock:
+                    self.pause_until = time.time() + (int(reset) if reset.isdigit() else 60)
+                log.warning("ESI 错误额度剩 %s，暂停中转 %s 秒", remain, reset)
+            out = [(k, res.headers[k]) for k in RELAY_RES_HEADERS if res.headers.get(k)]
+            return res.getcode(), out, data
+
+
 def get_json(url, timeout=60, retries=3, fatal=(400, 404), **kw):
     """fatal：遇到这些 HTTP 状态码不重试，直接抛出（带令牌的 ESI 请求要把 401 / 403 当作结果）"""
     for attempt in range(retries):
@@ -8745,6 +8807,9 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     chat_tr_limiter = RateLimiter(CHAT_TR_RATE)
     ai_limiter = RateLimiter(AI_RATE * 3)
     assistant = Assistant()
+    esi_relay = EsiRelay()
+    relay_limiter = RateLimiter(RELAY_RATE)
+    relay_login_limiter = RateLimiter(RELAY_LOGIN_RATE)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -9174,6 +9239,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
         def do_POST(self):
             # 钱包成交存档、设置云同步；其余是唯一的写入型开放接口：深渊装备导入 / 刷新估价（转发到 MutaMarket，按 IP 单独限流）
             url = urllib.parse.urlparse(self.path)
+            if url.path.startswith("/api/kb/relay/"):
+                return self.relay("POST")
             if url.path.startswith("/api/kb/wallet/"):
                 return self.wallet(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/sync/"):
@@ -9225,8 +9292,53 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("深渊估价错误")
                 return err(500, "服务器内部错误")
 
+        def relay(self, method):
+            url = urllib.parse.urlparse(self.path)
+            key, _, rest = url.path[len("/api/kb/relay/"):].partition("/")
+            try:
+                target = esi_relay.target(key, rest, url.query)
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            ip = self.client_ip()
+            ok, _, retry = (relay_login_limiter if key == "login" else relay_limiter).take(ip)
+            if not ok:
+                return self.send_json(429, {"error": "中转请求过于频繁，请稍后再试"}, {"Retry-After": str(retry)})
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > RELAY_BODY_LIMIT:
+                return self.send_json(413, {"error": "请求体过大"})
+            body = self.rfile.read(length) if length else (b"" if method in ("POST", "PUT") else None)
+            headers = {k: self.headers[k] for k in RELAY_REQ_HEADERS if self.headers.get(k)}
+            status, res_headers, data = esi_relay.forward(method, target, headers, body)
+            if data is None:
+                msg = "ESI 错误次数过多，中转暂停，请稍后再试" if status == 503 else "本站服务器也连不上官方服务器，请稍后再试"
+                return self.send_json(status, {"error": msg}, dict(res_headers))
+            gz = "gzip" in (self.headers.get("Accept-Encoding") or "") and len(data) > 1024
+            if gz:
+                data = gzip.compress(data, 5)
+            self.send_response(status)
+            for k, v in res_headers:
+                self.send_header(k, v)
+            self.send_header("Cache-Control", "no-store")
+            if gz:
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_PUT(self):
+            if self.path.startswith("/api/kb/relay/"):
+                return self.relay("PUT")
+            self.send_json(404, {"error": "not found"})
+
+        def do_DELETE(self):
+            if self.path.startswith("/api/kb/relay/"):
+                return self.relay("DELETE")
+            self.send_json(404, {"error": "not found"})
+
         def do_GET(self):
             url = urllib.parse.urlparse(self.path)
+            if url.path.startswith("/api/kb/relay/"):
+                return self.relay("GET")
             if url.path == "/api/v1" or url.path.startswith("/api/v1/"):
                 return self.open_api(url)
             if url.path == "/api/kb/img":
