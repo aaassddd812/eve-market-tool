@@ -22,7 +22,8 @@ export function loadChain() {
       for (const [, , out, outQty, inputs] of pi.schematics) S.pi.set(out, { outQty, inputs });
       for (const [id, c] of Object.entries(pi.commodities)) S.tier.set(Number(id), c[2]);
       for (const [id, [portion, skill, mats]] of Object.entries(rp.t)) {
-        if (!ORE_SKILLS.has(skill)) continue;
+        // 化矿批量为 1 的非冰矿是压矿改版前的「聚合高密度」批量压缩矿：市场上没有交易量，不参与选矿
+        if (!ORE_SKILLS.has(skill) || (portion === 1 && skill !== 18025)) continue;
         const out = [];
         for (let i = 0; i < mats.length; i += 2) out.push([mats[i], mats[i + 1] / portion]);
         S.ores.set(Number(id), { portion, out });
