@@ -306,7 +306,8 @@ export function equipListHtml(c) {
   return shown ? html : '<p class="text-muted">没有符合的装备。</p>';
 }
 // ---------- 全部技能 ----------
-let SKD = null, skQ = '', skF = 'all', skOpen = false, anaRerender = null;
+let SKD = null, skQ = '', skF = 'all', skSort = 'name', anaRerender = null;
+const skGSort = new Map(), skOpenG = new Set();   // 各技能组单独的排序、展开的技能组
 const ATTR_ZH = { 164: '魅力', 165: '智力', 166: '记忆', 167: '感知', 168: '毅力' };
 const ATTR_DEF = { 164: 19, 165: 20, 166: 20, 167: 20, 168: 20 };
 function skillsHtml(c) {
@@ -328,6 +329,7 @@ function skillsHtml(c) {
         <input type="search" data-bz-sk placeholder="搜索技能或技能组（中英文）" value="${esc(skQ)}" autocomplete="off" spellcheck="false">
       </div>
       <div class="segmented" role="group">${[['all', '全部'], ['trained', '已学'], ['partial', '未满级'], ['untrained', '未学']].map(([k, l]) => `<button type="button" data-bz-skf="${k}" class="${skF === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+      <div class="segmented" role="group" title="技能组和组内技能的排序">${[['name', '按名称'], ['sp', '按技能点']].map(([k, l]) => `<button type="button" data-bz-sk-sort="${k}" class="${skSort === k ? 'active' : ''}">${l}</button>`).join('')}</div>
       <button type="button" class="link-btn" data-bz-sk-all="1">全部展开</button><button type="button" class="link-btn" data-bz-sk-all="0">全部收起</button>
     </div>
     <div id="bzSkList" class="sk-groups">${skillListHtml(c)}</div>
@@ -337,30 +339,39 @@ export function skillListHtml(c) {
   if (!SKD) return '';
   const q = skQ;
   const match = (s, lv) => (skF !== 'trained' || lv) && (skF !== 'untrained' || !lv) && (skF !== 'partial' || (lv && lv < 5));
-  const html = Object.entries(SKD.groups).map(([gid, gname]) => {
+  // 按技能点排序：技能点多的在前（同技能点按训练倍数、名称），一眼看出 V 级与最费技能点的技能
+  const bySp = (a, b) => b.sp - a.sp || b.rank - a.rank || a.name.localeCompare(b.name, 'zh');
+  const byName = (a, b) => a.name.localeCompare(b.name, 'zh');
+  const groups = Object.entries(SKD.groups).map(([gid, gname]) => {
     const list = Object.entries(SKD.skills).filter(([, s]) => s[2] === Number(gid))
-      .map(([id, s]) => ({ id: Number(id), name: s[0], en: s[1], rank: s[3], pri: s[4], sec: s[5], desc: s[6], lv: c.have.get(Number(id)) || 0, sp: c.sp.get(Number(id)) || 0 }))
-      .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+      .map(([id, s]) => ({ id: Number(id), name: s[0], en: s[1], rank: s[3], pri: s[4], sec: s[5], desc: s[6], lv: c.have.get(Number(id)) || 0, sp: c.sp.get(Number(id)) || 0 }));
+    return { gid: Number(gid), gname, list, sp: list.reduce((t, s) => t + s.sp, 0) };
+  });
+  if (skSort === 'sp') groups.sort((a, b) => b.sp - a.sp || a.gname.localeCompare(b.gname, 'zh'));
+  const html = groups.map(({ gid, gname, list, sp }) => {
+    const sort = skGSort.get(gid) || skSort;
     const hitGroup = q && (gname.toLowerCase().includes(q));
-    const shown = list.filter((s) => match(s, s.lv) && (!q || hitGroup || s.name.toLowerCase().includes(q) || (s.en || '').toLowerCase().includes(q)));
+    const shown = list.filter((s) => match(s, s.lv) && (!q || hitGroup || s.name.toLowerCase().includes(q) || (s.en || '').toLowerCase().includes(q)))
+      .sort(sort === 'sp' ? bySp : byName);
     if (!shown.length) return '';
-    const sp = list.reduce((t, s) => t + s.sp, 0), levels = list.reduce((t, s) => t + s.lv, 0), got = list.filter((s) => s.lv).length;
-    const rows = shown.map((s) => {
+    const levels = list.reduce((t, s) => t + s.lv, 0), got = list.filter((s) => s.lv).length, five = list.filter((s) => s.lv === 5).length;
+    const tiles = shown.map((s) => {
       const rate = (ATTR_DEF[s.pri] || 20) + (ATTR_DEF[s.sec] || 20) / 2;
       const need = s.lv < 5 ? spForLevel(s.rank, s.lv + 1) - s.sp : 0;
       const title = `${s.desc || ''}\n\n主属性：${ATTR_ZH[s.pri] || '—'} · 副属性：${ATTR_ZH[s.sec] || '—'} · 训练倍数 ×${s.rank}` +
         (need > 0 ? `\n升到 ${ROMAN[s.lv + 1]} 级约 ${dur(need / rate)}（默认属性）` : '');
-      return `<div class="skl-row${s.lv ? '' : ' untrained'}" title="${esc(title)}">
-        <span class="sk-name">${esc(s.name)}</span>
-        <span class="skl-rank">×${s.rank}</span>
+      return `<div class="bz-sk-tile${s.lv ? '' : ' untrained'}${s.lv === 5 ? ' is-v' : ''}" title="${esc(title)}">
+        <span class="bz-sk-name">${esc(s.name)}</span>
         <span class="sk-boxes" aria-label="${s.lv} 级">${[1, 2, 3, 4, 5].map((n) => `<i class="${n <= s.lv ? 'on' : ''}"></i>`).join('')}</span>
-        <span class="sk-sp">${s.lv ? fmtNum(Math.round(s.sp)) : '未学'}<small>${s.lv < 5 ? ' / ' + fmtNum(spForLevel(s.rank, Math.max(1, s.lv + 1))) : ''}</small></span>
+        <small class="bz-sk-sp">${s.lv ? spM(s.sp) : '未学'}<span> · ×${s.rank}</span></small>
       </div>`;
     }).join('');
-    return `<details class="sk-group"${q || skF !== 'all' || skOpen ? ' open' : ''}>
-      <summary><span class="sk-g-name">${esc(gname)}</span><span class="sk-g-count">${got} / ${list.length}</span>
+    const open = q || skF !== 'all' || skOpenG.has(gid);
+    return `<details class="sk-group" data-bz-gid="${gid}"${open ? ' open' : ''}>
+      <summary><span class="sk-g-name">${esc(gname)}</span><span class="sk-g-count">${got} / ${list.length}${five ? ` · V ${five}` : ''}</span>
         <i class="sk-g-bar"><em style="width:${(levels / (list.length * 5) * 100).toFixed(1)}%"></em></i><span class="sk-g-sp">${fmtNum(Math.round(sp))} 技能点</span></summary>
-      <div class="sk-rows">${rows}</div></details>`;
+      <div class="bz-sk-body"><div class="bz-sk-gsort">${[['name', '按名称'], ['sp', '按技能点']].map(([k, l]) => `<button type="button" class="link-btn${sort === k ? ' active' : ''}" data-bz-sk-gsort="${gid}:${k}">${l}</button>`).join('')}</div>
+        <div class="bz-sk-grid">${tiles}</div></div></details>`;
   }).join('');
   return html || '<p class="text-muted">没有符合条件的技能。</p>';
 }
@@ -384,9 +395,36 @@ export function bindAna(root, getChar, rerender, warn) {
       skList();
       return;
     }
+    const so = e.target.closest('[data-bz-sk-sort]');
+    if (so) {
+      skSort = so.dataset.bzSkSort;
+      skGSort.clear();
+      so.parentElement.querySelectorAll('[data-bz-sk-sort]').forEach((b) => b.classList.toggle('active', b === so));
+      skList();
+      return;
+    }
+    const gs = e.target.closest('[data-bz-sk-gsort]');
+    if (gs) {
+      const [gid, k] = gs.dataset.bzSkGsort.split(':');
+      skGSort.set(Number(gid), k);
+      skList();
+      return;
+    }
     const a = e.target.closest('[data-bz-sk-all]');
-    if (a) { skOpen = a.dataset.bzSkAll === '1'; document.querySelectorAll('#bzSkList .sk-group').forEach((d) => { d.open = skOpen; }); }
+    if (a) {
+      const open = a.dataset.bzSkAll === '1';
+      skOpenG.clear();
+      if (open && SKD) Object.keys(SKD.groups).forEach((g) => skOpenG.add(Number(g)));
+      document.querySelectorAll('#bzSkList .sk-group').forEach((d) => { d.open = open; });
+    }
   });
+  // 记住展开的技能组（排序、筛选重画后保持）；搜索 / 筛选时全部展开，不记
+  root.addEventListener('toggle', (e) => {
+    const d = e.target;
+    if (!d.matches?.('#bzSkList .sk-group') || skQ || skF !== 'all') return;
+    const gid = Number(d.dataset.bzGid);
+    if (d.open) skOpenG.add(gid); else skOpenG.delete(gid);
+  }, true);
   // 舰船：从候选里点选（input 事件，名字完全一致）立即计算；回车 / 离开输入框（change）时名字不完整也找最接近的
   root.addEventListener('input', (e) => {
     if (!e.target.matches('[data-bz-ship]')) return;

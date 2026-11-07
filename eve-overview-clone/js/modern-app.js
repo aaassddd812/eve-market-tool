@@ -757,7 +757,7 @@ async function openPlaza() {
 // AI 助手：首次进入时加载；工具在浏览器里执行（装配引擎、击杀记录接口、ESI）
 let aiLoading = null;
 function loadAiModule() {
-  if (!aiLoading) aiLoading = import('./ai.js?v=v18').then((m) => {
+  if (!aiLoading) aiLoading = import('./ai.js?v=v19').then((m) => {
     m.initAi({
       esc, formatISK, formatNumber, showToast, copyText, store, server: SERVER, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -810,7 +810,7 @@ function loadAbyssModule() {
 // 角色交易（宁静服：官方论坛 Character Bazaar）：首次进入时加载
 let bazaarLoading = null;
 function loadBazaarModule() {
-  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v16').then((m) => {
+  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v17').then((m) => {
     m.initBazaar({ esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices: getLiveHubPrices, fitData: () => loadFittingModule().then((f) => f.fitData()), closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       // 曙光服角色挂售：已绑定的角色与各自的令牌
       copyText, accountToken, openEsiBind: () => { switchView('profile'); openEsiModal(); },

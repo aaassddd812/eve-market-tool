@@ -11,7 +11,7 @@
 // 地址栏：#bazaar · #bazaar/t/<帖子ID>（晨曦：#bazaar/c/<藏宝阁订单号>；曙光：#bazaar/s/<角色ID>、#bazaar/sell）
 import { IS_TQ, SERVER } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v17';
-import * as BS from './bazaar-skills.js?v=8';
+import * as BS from './bazaar-skills.js?v=9';
 
 let ctx;   // esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices(ids) -> Map(id -> { sell, buy }), fitData() -> { data, FE }, closeDrawer
 const $ = (id) => document.getElementById(id);
@@ -61,10 +61,10 @@ function save() { ctx.store.set(STORE_KEY, JSON.stringify({ lang: S.lang, order:
 export function initBazaar(context) { ctx = context; load(); }
 const IS_CBG = SERVER.id === 'serenity';
 let CBG = null;
-const cbgModule = () => (CBG ||= import('./bazaar-cbg.js?v=10').then((m) => { m.initCbg(ctx); return m; }));
+const cbgModule = () => (CBG ||= import('./bazaar-cbg.js?v=11').then((m) => { m.initCbg(ctx); return m; }));
 const IS_SALE = SERVER.id === 'infinity';
 let SALE = null;
-const saleModule = () => (SALE ||= import('./bazaar-sale.js?v=3').then((m) => { m.initSale(ctx); return m; }));
+const saleModule = () => (SALE ||= import('./bazaar-sale.js?v=4').then((m) => { m.initSale(ctx); return m; }));
 
 async function api(path) {
   const res = await fetch('/api/kb/bazaar' + path);
