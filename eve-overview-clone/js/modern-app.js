@@ -1,8 +1,8 @@
 import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17';
 import * as CS from './cloud-sync.js?v=2';
 import * as TF from './trade-fees.js?v=v6';
-import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v14';
-import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v38';
+import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v40';
 import * as SM from './struct-markets.js?v=v8';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v11';
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v5';
@@ -915,7 +915,7 @@ async function getLiveHubPrices(ids, onProgress) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v58').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v59').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -943,8 +943,8 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v18').then((m) => {
-    m.initLp({ addToCart,
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v19').then((m) => {
+    m.initLp({ addToCart, industry: loadIndustryModule,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -1900,7 +1900,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v21').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v22').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -3135,7 +3135,7 @@ function initContentTabs() {
   initItemPopups();
   initHubCompare({ structs, regionOrders, regionHistory, dropMarket: dropMarketCache, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
     skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8), openRank: () => openArb() });
-  initHubRank({ structs, quote: SM.structQuote, esiUrl, showToast, regionList: regionListAll, findSystem: findSystemByName, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
+  initHubRank({ structs, quote: SM.structQuote, regionOrders, esiUrl, showToast, regionList: regionListAll, findSystem: findSystemByName, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
     typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
     category: (id) => { const e = state.typeIndex.get(id); const g = e && state.categories.get(rootGroupId(e.groupId)); return g ? { id: g.id, name: g.name } : null; },
     iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`, openItemPop,

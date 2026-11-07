@@ -24,7 +24,7 @@ import * as Chain from './ind-chain.js?v=3';
 import * as IS from './ind-structs.js?v=4';
 import { skPage } from './skeleton.js?v=v17';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
-import { loadVolumes } from './hub-compare.js?v=v14';
+import { loadVolumes } from './hub-compare.js?v=v15';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';
@@ -492,6 +492,31 @@ function calc() {
 // restored：从其他页面切回且地址未变，保留当前页面（输入、展开状态、滚动位置）
 // 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
 export const preload = () => loadData();
+
+// LP 商店的蓝图兑换品：按制造页的设置（星系、设施、改装件、设施税、技能）算制造材料、安装费，并列出制造所需技能。
+// 蓝图拷贝材料效率按 0 算。lpEnv() 先加载制造数据与角色技能；lpMake(pid, runs) 没有这个产品的配方时返回 null。
+export async function lpEnv() { await loadData(); await ensureSkills(); }
+export function lpMake(pid, runs) {
+  if (!D.data || !BP(pid)) return null;
+  const j = job(pid, runs, 0, 0);
+  const fac = facilityFor(j.act, pid);
+  const esi = F.skills === 'esi' && D.skills;   // 没绑定角色时 lvl() 按全 5 级
+  return {
+    items: j.items.map((x) => [x.id, x.qty]), out: j.out, jobCost: j.cost, gross: j.gross, taxes: j.taxes, idx: j.idx, eiv: j.eiv,
+    skills: (BP(pid)[6] || []).map(([id, need]) => ({ id, name: tName(id), need, have: lvl(id) })), skillsBy: esi ? 'esi' : 'all5'
+  };
+}
+// 制造页设置的一句话说明，与卖出税费（按技能：会计学、经纪人关系；产物挂卖单时加中介费）
+export function lpSettings() {
+  const fac = facilityFor('m');
+  const facName = fac.s ? IS.shortName(fac.s) : F.fac === 'npc' || !D.data?.structures[F.fac] ? 'NPC 空间站' : D.data.structures[F.fac] + (F.rig ? ' + ' + RIGS[F.rig].name + ' 改装件' : '');
+  const sys = D.sys.get(fac.sys ?? F.sys);
+  return {
+    sys: sys?.name || '', idx: (D.indices.get(fac.sys ?? F.sys) || {}).manufacturing || 0, facName, facTax: facTax('m'),
+    skills: F.skills === 'esi' ? (D.skills ? 'esi' : 'esi-missing') : 'all5',
+    salesTax: salesTax(), brokerFee: brokerFee()
+  };
+}
 
 export async function showIndustry(hash = location.hash, restored = false) {
   const main = $('industryMain');

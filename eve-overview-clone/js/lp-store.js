@@ -2,6 +2,8 @@
 // LP 商店：按军团浏览全部兑换项，计算每 LP 价值（ISK/LP）= (产物价值 − 所需物品成本 − ISK 费用) ÷ LP。
 //          蓝图拷贝两种算法（估价设置「蓝图兑换品」）：制造后卖产物 =「产物价 × 流程数（扣税）− 材料价 × 流程数」（材料效率 0，材料计入花费）；
 //          直接卖蓝图 = 公开合同里同种拷贝的最低每流程价 × 流程数（击杀记录服务 /api/kb/bpprices，仅宁静服；合同出售不扣销售税）。
+//          制造按「制造」页的设置（industry.js 的 lpMake）：星系指数、设施与改装件的材料加成、安装费（含设施税与 SCC 附加费），并列出制造所需技能。
+// 卖出税费：默认按技能（制造页的技能设置：会计学减销售税，产物挂卖单时加经纪人关系后的中介费，挂收单买材料也加中介费），也可手动填。
 // 全服排行：所有 LP 商店兑换项（按 offer 去重）的 ISK/LP 排行，前列可用吉他行情精算。
 // 我的 LP：ESI 角色忠诚点（esi-characters.read_loyalty.v1），按各军团最佳兑换估算价值。
 // 价格：全服均价（一次请求，立即可用）或吉他卖单 / 收单（按物品逐个读取，有缓存）。
@@ -18,6 +20,7 @@ const ICON = (id, size = 32) => `https://images.evetech.net/types/${id}/icon?siz
 const BPC_ICON = (id, size = 32) => `https://images.evetech.net/types/${id}/bpc?size=${size}`;
 const LOGO = (id, size = 32) => eveImage(`corporations/${id}/logo`, size);
 const RANK_LIMIT = 200;
+const ROMAN = ['0', 'I', 'II', 'III', 'IV', 'V'];
 const REFINE_TOP = 40;
 
 const TABS = [
@@ -27,9 +30,29 @@ const TABS = [
 ];
 
 const D = { loading: null, data: null, avg: new Map(), bpAll: null, bpLoading: null, offersByType: new Map(), corpById: new Map(), corpsByOffer: new Map(), history: new Map() };
-const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all', bp: 'make' };
+const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, taxMode: 'skill', kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all', bp: 'make' };
 const S = { times: new Map(), q: '', rankQ: '', sideQ: '', open: new Set(), loadingJita: null, progress: '', refined: new Set(), mine: null, mineError: null, mineLoading: false, rendered: '' };
 const jita = new Map();   // 吉他行情 id -> { sell, buy }
+// 制造页模块（industry.js）：蓝图制造的材料、安装费、所需技能与按技能的税费；加载完之前按旧算法（材料效率 0、无安装费、手动税费）
+let IND = null, indLoading = null;
+function loadInd() {
+  if (!indLoading && ctx.industry) {
+    indLoading = ctx.industry().then(async (m) => { await m.lpEnv(); IND = m; })
+      .catch(() => { indLoading = null; })
+      .finally(() => { if ($('lpMain')?.dataset.ready && $('lpSettings')) { renderSettings(); refreshBody(); } });
+  }
+  return indLoading;
+}
+const skillTax = () => F.taxMode !== 'manual' && IND;
+// 卖出税费 %（产物）与买材料的中介费 %
+function sellTaxPct() {
+  if (!skillTax()) return F.tax;
+  const t = IND.lpSettings();
+  return t.salesTax + (F.price === 'buy' ? 0 : t.brokerFee);
+}
+const buyFeePct = () => (skillTax() && F.mat === 'buy' ? IND.lpSettings().brokerFee : 0);
+const pct = (x) => Math.round(x * 100) / 100;
+const makeOf = (o) => (o.bp && IND ? IND.lpMake(o.bp[0], o.qty) : null);
 
 export function initLp(context) {
   ctx = context;
@@ -114,7 +137,7 @@ function valueOf(o, mode = F.bp) {
     return p.v || 0;
   };
   // 税费只算在卖出的产物上；制造材料是买入成本，计入花费
-  let unit, keep = 1 - F.tax / 100, matCost = 0;
+  let unit, keep = 1 - sellTaxPct() / 100, matCost = 0, jobCost = 0, mk = null;
   if (o.bp && mode === 'bpc') {
     unit = bpcRun(o);
     if (unit == null) { missing = true; unit = 0; }
@@ -122,13 +145,18 @@ function valueOf(o, mode = F.bp) {
   } else if (o.bp) {
     const [pid, pq, mats] = o.bp;
     unit = use(pid, F.price) * pq;
-    matCost = mats.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0) * o.qty;
+    mk = makeOf(o);
+    // 有制造页数据时：材料按设施 / 改装件加成后的数量，另加安装费；否则材料效率 0、不计安装费
+    if (mk) { matCost = mk.items.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0); jobCost = mk.jobCost; }
+    else matCost = mats.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0) * o.qty;
   } else unit = use(o.type, F.price);
   const revenue = unit * o.qty * keep;
-  const reqCost = o.req.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0);
-  const cost = o.isk + reqCost + matCost;
+  const fee = 1 + buyFeePct() / 100;
+  const reqCost = o.req.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0) * fee;
+  matCost *= fee;
+  const cost = o.isk + reqCost + matCost + jobCost;
   const profit = revenue - cost;
-  return { revenue, reqCost, matCost, cost, profit, iskLp: o.lp ? profit / o.lp : null, missing, approx, mode: o.bp ? mode : null };
+  return { revenue, reqCost, matCost, jobCost, mk, cost, profit, iskLp: o.lp ? profit / o.lp : null, missing, approx, mode: o.bp ? mode : null };
 }
 
 function offerTypes(o) {
@@ -192,6 +220,8 @@ export async function showLp(hash = location.hash) {
   const main = $('lpMain');
   if (!D.data) main.innerHTML = skPage({ tabs: 3, rows: 10 });
   await loadData();
+  if (IND) IND.lpEnv().then(() => { if ($('lpSettings')) { renderSettings(); refreshBody(); } }).catch(() => {});   // 制造页的技能设置可能改过
+  else loadInd();     // 制造页设置：蓝图制造的材料加成、安装费、所需技能，按技能的税费
   loadBpAll();   // 蓝图兑换品的合同价（详情里两种算法对比、「直接卖蓝图」模式用）
   const m = /^#lp(?:\/(store|rank|mine))?(?:\/(\d+))?/.exec(hash || '');
   if (m?.[1]) F.tab = m[1];
@@ -250,13 +280,16 @@ const BP_ZH = { make: '制造后卖产物', bpc: '直接卖蓝图（合同价）
 function renderSettings() {
   const el = $('lpSettings');
   el.innerHTML = `
-    <summary><b>估价设置</b><span class="text-muted">产物按${PRICE_ZH[F.price]} · 材料按${PRICE_ZH[F.mat]} · 税费 ${F.tax}% · 蓝图${BP_ZH[F.bp]}</span></summary>
+    <summary><b>估价设置</b><span class="text-muted">产物按${PRICE_ZH[F.price]} · 材料按${PRICE_ZH[F.mat]} · 税费 ${pct(sellTaxPct())}%${skillTax() ? '（按技能）' : ''} · 蓝图${BP_ZH[F.bp]}</span></summary>
     <div class="ind-set-grid">
       <div class="pi-field"><label>产物卖出价</label>${seg('price', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.price)}
         </div>
       <div class="pi-field"><label>所需物品 / 蓝图材料买入价</label>${seg('mat', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.mat)}</div>
-      <div class="pi-field"><label>卖出税费（%）</label><input type="number" class="pi-input lp-tax" data-lp-tax min="0" max="30" step="0.1" value="${F.tax}">
-        </div>
+      <div class="pi-field"><label>卖出税费</label>${seg('taxMode', [['skill', '按技能'], ['manual', '手动']], F.taxMode === 'manual' ? 'manual' : 'skill')}
+        ${F.taxMode === 'manual' ? `<div class="pi-inline"><input type="number" class="pi-input lp-tax" data-lp-tax min="0" max="30" step="0.1" value="${F.tax}"><span>%</span></div>`
+          : IND ? (() => { const t = IND.lpSettings(); return `<small class="pi-hint">销售税 ${pct(t.salesTax)}%${F.price === 'buy' ? '' : ` + 中介费 ${pct(t.brokerFee)}%（挂卖单）`}${F.mat === 'buy' ? ` · 挂收单买材料加中介费 ${pct(t.brokerFee)}%` : ''} · ${t.skills === 'esi' ? '按角色技能' : t.skills === 'esi-missing' ? '未绑定角色，按全 5 级' : '技能全 5 级'}（<a href="#ind" class="kb-link">制造页设置</a>）</small>`; })()
+          : '<small class="pi-hint">读取技能设置…</small>'}</div>
+      <div class="pi-field"><label>蓝图制造</label>${IND ? (() => { const t = IND.lpSettings(); return `<span class="lp-make-set">${ctx.esc(t.sys)} · 制造指数 ${(t.idx * 100).toFixed(2)}% · ${ctx.esc(t.facName)} · 设施税 ${pct(t.facTax)}% + SCC 4%</span><small class="pi-hint">材料加成与安装费按<a href="#ind" class="kb-link">制造页的设置</a>，蓝图拷贝材料效率 0</small>`; })() : '<small class="pi-hint">读取制造设置…</small>'}</div>
       <div class="pi-field"><label>蓝图兑换品</label>${SERVER.kb ? seg('bp', [['make', BP_ZH.make], ['bpc', BP_ZH.bpc]], F.bp)
         : `<span class="text-muted">${ctx.esc(SERVER.full)}没有公开合同数据，蓝图按${BP_ZH.make}计算</span>`}</div>
     </div>`;
@@ -303,7 +336,9 @@ function buyItems(o, kind) {
   const sum = new Map();
   const add = (id, q) => sum.set(id, (sum.get(id) || 0) + q);
   if (kind !== 'mats') for (const [m, q] of o.req) add(m, q * n);
-  if (kind !== 'req' && o.bp) for (const [m, q] of o.bp[2]) add(m, q * o.qty * n);
+  const mk = kind !== 'req' && makeOf(o);
+  if (mk) for (const [m, q] of mk.items) add(m, q * n);
+  else if (kind !== 'req' && o.bp) for (const [m, q] of o.bp[2]) add(m, q * o.qty * n);
   return [...sum].map(([id, qty]) => ({ id, qty, name: tName(id) }));
 }
 const buyLines = (o, kind) => buyItems(o, kind).map((x) => `${x.name}\t${x.qty}`);
@@ -357,8 +392,8 @@ function offerDetail(o, v) {
   const tiles = `<div class="lp-tiles">
     ${tile('利润', v.missing ? '—' : isk(v.profit), `每次兑换${v.approx ? ' · ≈ 含全服均价' : ''}`, good(v))}
     ${tile('ISK/LP', v.missing || v.iskLp == null ? '—' : num(Math.round(v.iskLp)), `${num(o.lp)} LP`, good(v))}
-    ${tile(o.bp && v.mode === 'bpc' ? '蓝图价值' : '产物价值', v.missing ? '—' : isk(v.revenue), o.bp && v.mode === 'bpc' ? '合同出售不扣税' : `已扣税费 ${F.tax}%`)}
-    ${tile('花费', isk(v.cost), `ISK ${isk(o.isk)}${o.req.length ? ' + 物品 ' + isk(v.reqCost) : ''}${v.matCost ? ' + 材料 ' + isk(v.matCost) : ''}`)}
+    ${tile(o.bp && v.mode === 'bpc' ? '蓝图价值' : '产物价值', v.missing ? '—' : isk(v.revenue), o.bp && v.mode === 'bpc' ? '合同出售不扣税' : `已扣税费 ${pct(sellTaxPct())}%`)}
+    ${tile('花费', isk(v.cost), `ISK ${isk(o.isk)}${o.req.length ? ' + 物品 ' + isk(v.reqCost) : ''}${v.matCost ? ' + 材料 ' + isk(v.matCost) : ''}${v.jobCost ? ' + 安装费 ' + isk(v.jobCost) : ''}`)}
   </div>`;
   // 蓝图：两种算法，点一下切换（与估价设置同步）
   let modes = '';
@@ -377,15 +412,23 @@ function offerDetail(o, v) {
   if (o.bp && v.mode !== 'bpc') {
     const [, pq, mats] = o.bp;
     const n = o.qty;
-    rows = head('产出', `${num(n)} 流程 · 材料效率 0`) + row(pid, pq * n, F.price) + sum(`扣除税费 ${F.tax}% 后`, v.missing ? '—' : isk(v.revenue))
-      + head('制造材料') + mats.map(([m, q]) => row(m, q * n, F.mat)).join('') + sum('材料合计', isk(v.matCost));
+    const mk = v.mk;
+    rows = head('产出', `${num(n)} 流程 · 材料效率 0`) + row(pid, pq * n, F.price) + sum(`扣除税费 ${pct(sellTaxPct())}% 后`, v.missing ? '—' : isk(v.revenue))
+      + head('制造材料', mk ? '含设施加成' : '') + (mk ? mk.items : mats.map(([m, q]) => [m, q * n])).map(([m, q]) => row(m, q, F.mat)).join('') + sum(`材料合计${buyFeePct() ? `（含中介费 ${pct(buyFeePct())}%）` : ''}`, isk(v.matCost));
+    if (mk) {
+      const t = IND.lpSettings();
+      rows += head('制造安装费', `${esc(t.sys)} · 指数 ${(mk.idx * 100).toFixed(2)}%`)
+        + `<tr><td>星系成本（预估价值 ${isk(mk.eiv)} × 指数${t.facName !== 'NPC 空间站' ? ' − 设施减免' : ''}）</td><td></td><td class="num">${isk(mk.gross)}</td></tr>`
+        + `<tr><td>设施税 ${pct(t.facTax)}% + SCC 附加费 4%</td><td></td><td class="num">${isk(mk.taxes)}</td></tr>` + sum('安装费合计', isk(mk.jobCost));
+      if (mk.skills.length) rows += head('制造所需技能', mk.skillsBy === 'esi' ? '按角色技能' : '按全 5 级') + mk.skills.map((k) => `<tr class="${k.have != null && k.have < k.need ? 'lp-skill-no' : ''}"><td>${esc(k.name)}</td><td class="num">${ROMAN[k.need]}</td><td class="num">${k.have >= k.need ? '<span class="up">✓</span>' : `<span class="down">${k.have ? '当前 ' + ROMAN[k.have] : '未学'}</span>`}</td></tr>`).join('');
+    }
   } else if (o.bp) {
     const run = bpcRun(o);
     rows = head('直接卖蓝图', run != null ? `每流程 ${isk(run)}` : '') + `<tr><td><span class="lp-item"><img src="${BPC_ICON(o.type)}" alt="" width="24" height="24" loading="lazy"><span>${esc(tName(o.type))}</span></span></td><td class="num">${num(o.qty)} 流程</td><td class="num">${run == null ? '合同里没有在售' : isk(run * o.qty)}</td></tr>`;
   } else {
-    rows = head('产出') + row(o.type, o.qty, F.price) + sum(`扣除税费 ${F.tax}% 后`, v.missing ? '—' : isk(v.revenue));
+    rows = head('产出') + row(o.type, o.qty, F.price) + sum(`扣除税费 ${pct(sellTaxPct())}% 后`, v.missing ? '—' : isk(v.revenue));
   }
-  if (o.req.length) rows += head('兑换所需物品') + o.req.map(([m, q]) => row(m, q, F.mat)).join('') + sum('物品合计', isk(v.reqCost));
+  if (o.req.length) rows += head('兑换所需物品') + o.req.map(([m, q]) => row(m, q, F.mat)).join('') + sum(`物品合计${buyFeePct() ? `（含中介费 ${pct(buyFeePct())}%）` : ''}`, isk(v.reqCost));
   const main = `<div class="lp-sec lp-main"><table class="lp-dtable"><thead><tr><th>物品</th><th class="num">数量</th><th class="num">价值</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   // 右：采购 · 军团 · 市场
   const side = `<div class="lp-side">
@@ -507,6 +550,7 @@ function exportRank() {
     ['ISK 费用', (r) => r.o.isk],
     ['所需物品', (r) => r.v.reqCost],
     ['制造材料', (r) => r.v.matCost],
+    ['制造安装费', (r) => r.v.jobCost],
     ['产物价值', (r) => val(r.v, 'revenue')],
     ['利润', (r) => val(r.v, 'profit')],
     ['ISK/LP', (r) => val(r.v, 'iskLp')],
@@ -666,7 +710,7 @@ function onClick(e) {
   if (set) {
     F[set.dataset.lpSet] = set.dataset.v;
     save();
-    if (['price', 'mat', 'bp'].includes(set.dataset.lpSet)) renderSettings();
+    if (['price', 'mat', 'bp', 'taxMode'].includes(set.dataset.lpSet)) renderSettings();
     if (set.dataset.lpSet === 'bp') loadBpAll();
     refreshBody();
     return;

@@ -183,7 +183,11 @@ export function calcRoutes(hubs, mode, f, ship = null) {
       const devB = histSell && curB != null && curB < sellAt * (1 - DEV) ? 1 - curB / sellAt : 0;
       // capA / capB：两侧各自能做多少，挂单一侧没有成交量（玩家建筑所在星域没有交易中心）时为 null
       const capA = buyOrder && a.daily == null ? null : buyCap, capB = sellOrder && b.daily == null ? null : sellCap;
-      out.push({ a, b, local, buyAt, sellAt, cost, shipCost, unit, qty, capA, capB, vol, perM3: vol ? unit / vol : null, margin: cost ? unit / cost : 0, total: unit > 0 ? unit * qty : 0, devA, devB });
+      // 直接成交的价格离 30 天成交均价太远：买到的卖单远低于均价、卖给的收单远高于均价，多半是挂错价的单，
+      // 通常很快被人买走 / 撤掉（行情快照每小时更新），标「价格异常」，排行默认不列
+      const oddA = bm === 's' && a.avg && buyAt < a.avg * BAND[0] ? 1 - buyAt / a.avg : 0;
+      const oddB = sm === 'b' && b.avg && sellAt > b.avg * BAND[1] ? sellAt / b.avg - 1 : 0;
+      out.push({ a, b, local, buyAt, sellAt, cost, shipCost, unit, qty, capA, capB, vol, perM3: vol ? unit / vol : null, margin: cost ? unit / cost : 0, total: unit > 0 ? unit * qty : 0, devA, devB, oddA, oddB });
     }
   }
   return out;
@@ -197,6 +201,15 @@ export function devTip(r) {
   if (r.devB) out.push(`卖出地现在的最低卖价比挂卖单价低 ${Math.round(r.devB * 100)}%，可能卖不动`);
   return out.join('；');
 }
+// 价格异常的提示文字（没有异常返回空串）
+export function oddTip(r) {
+  const out = [];
+  if (r.oddA) out.push(`买入地这张卖单比 30 天成交均价低 ${Math.round(r.oddA * 100)}%，多半是挂错价的单，可能已经被人买走（行情快照每小时更新）`);
+  if (r.oddB) out.push(`卖出地这张收单比 30 天成交均价高 ${Math.round(r.oddB * 100)}%，多半是挂错价或骗局收单，可能已经撤掉（行情快照每小时更新）`);
+  return out.join('；');
+}
+// 路线后面的标签：价格异常 / 现价偏离
+export const routeTags = (r) => (oddTip(r) ? ` <b class="hr-tag warn" title="${oddTip(r)}">价格异常</b>` : '') + (devTip(r) ? ` <b class="hr-tag warn" title="${devTip(r)}">现价偏离</b>` : '');
 // 从全物品排行点进来时沿用排行的倒卖方式与中位价天数
 export function setHubMode(mode, med) {
   if (!MODES.some(([k]) => k === mode)) return;
@@ -249,7 +262,7 @@ function html(hubs, vol) {
   const shipOn = fr.m3 > 0 || fr.collat > 0;
   const pos = list.filter((r) => r.unit > 0);
   const routeRows = list.slice(0, 20).map((r) => `<tr class="${r.unit > 0 ? '' : 'hc-loss'}">
-      <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}${devTip(r) ? ` <b class="hr-tag warn" title="${devTip(r)}">现价偏离</b>` : ''}</td>
+      <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}${routeTags(r)}</td>
       <td class="num">${formatPrice(r.buyAt)}</td>
       <td class="num">${formatPrice(r.sellAt)}</td>
       <td class="num ${r.unit > 0 ? 'up' : 'down'}">${(r.unit > 0 ? '+' : '') + formatPrice(r.unit)}</td>

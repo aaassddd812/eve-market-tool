@@ -38,7 +38,7 @@
 // 预加载（prefetchHubRank，用过倒卖排行的浏览器在页面空闲时调用）：先取服务器汇总、包装体积、勾选建筑与自定义市场的挂单，
 //   打开倒卖排行时直接出结果；建筑订单后台刷新完（structs.onData）悄悄换上新数据，不显示「正在读取」。
 // 分类：打开倒卖排行时市场中心侧栏的物品目录换成分类列表（#arbSide），显示每个分类符合条件的物品数。
-import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v14';
+import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, oddTip, routeTags, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v15';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 
 let ctx = null;   // server, regions, esc, formatISK, formatPrice, formatNumber, TF, typeName, category, isGlobal, iconUrl, openItemPop, openItem
@@ -118,7 +118,7 @@ const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 
 const CUSTOM_MAX = 3;
 const CUSTOM_TTL = 10 * 60e3;
 const customCache = new Map();   // 市场 ID -> { at, quotes }
-const S = { page: 1, pageKey: '', data: null, loading: null, error: null, q: '', timer: 0, rows: null, key: '', vols: {}, sm: [], smKey: '', smNote: '', cm: [], cmKey: '', cmNote: '', showCustom: false, tq: '', tOpen: false };
+const S = { page: 1, pageKey: '', data: null, loading: null, error: null, q: '', timer: 0, rows: null, key: '', vols: {}, sm: [], smKey: '', smNote: '', cm: [], cmKey: '', cmNote: '', showCustom: false, tq: '', tOpen: false, top: [], liveVer: 0, liveRun: 0, liveNote: '' };
 try { Object.assign(F, JSON.parse(localStorage.getItem('eve-hub-rank') || '{}')); } catch { /* 用默认 */ }
 if (!Array.isArray(F.excl)) F.excl = [];
 if (!Array.isArray(F.custom)) F.custom = [];
@@ -257,7 +257,10 @@ function hubsOf(row, names, id) {
   const med = (h) => (h && idx[0] >= 0 ? { m: h[idx[0]], l: h[idx[1]], h: h[idx[2]] } : null);
   row.forEach((h, k) => {
     if (!h) return;
-    out.push({ id: S.data.hubs[k], name: names[k], sell: h[0], buy: h[1], sellQty: h[2], sellDepth: h[4], buyDepth: h[5], daily: h[6], avg: h[7], daily7: h[8] ?? null, daily1: h[9] ?? null, px: med(h) });
+    const x = { id: S.data.hubs[k], name: names[k], sell: h[0], buy: h[1], sellQty: h[2], sellDepth: h[4], buyDepth: h[5], daily: h[6], avg: h[7], daily7: h[8] ?? null, daily1: h[9] ?? null, px: med(h) };
+    const lq = liveQuote(x.id, id);   // 实时核对过的交易中心：挂单用实时的
+    if (lq) Object.assign(x, { sell: lq.sell, buy: lq.buy, sellQty: lq.sellQty, sellDepth: lq.sellDepth, buyDepth: lq.buyDepth, live: true });
+    if (x.sell != null || x.buy != null) out.push(x);
   });
   // 玩家建筑：同星域交易中心的日均成交与均价
   for (const { s, quotes } of [...S.sm, ...S.cm]) {
@@ -276,7 +279,7 @@ function compute() {
   if (F.mode === 'consume') return computeConsume();
   if (F.mode === 'relist') return computeRelist();
   if (F.mode === 'reproc') return computeReproc();
-  const key = JSON.stringify([{ ...F, cat: 0, sort: ROUTE_SORT[F.sort] ? F.sort : 'profit', sdir: 0, size: 0 }, ctx.TF.summary(), S.data?.updated, S.data?.fields?.length, freight(), S.smKey, S.cmKey]);
+  const key = JSON.stringify([{ ...F, cat: 0, sort: ROUTE_SORT[F.sort] ? F.sort : 'profit', sdir: 0, size: 0 }, ctx.TF.summary(), S.data?.updated, S.data?.fields?.length, freight(), S.smKey, S.cmKey, S.liveVer]);
   if (S.rows && S.key === key) return S.rows;
   const f = ctx.TF.fees();
   const names = S.data.hubs.map((id) => ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id);
@@ -822,6 +825,7 @@ function qtyCell(r) {
 // 路线不符合哪个条件（符合时返回空串）
 function missOf(r, st) {
   if (r.unit <= 0) return '亏损';
+  if (r.oddA || r.oddB) return '价格异常（疑似挂错价的单）';
   if (F.minM3 && (r.perM3 ?? 0) < F.minM3) return '每立方利润低于门槛';
   if (st) {
     if (r.unit < F.minUnit) return '每件利润低于门槛';
@@ -852,6 +856,7 @@ function html(all0) {
   S.page = Math.min(Math.max(1, S.page), pages);
   const off = (S.page - 1) * size;
   const top = list.slice(off, off + size);
+  S.top = modeKind() === 'route' ? top : [];
   const hubOpts = [[0, '全部'], ...S.data.hubs.map((id) => [id, ctx.regions.find((r) => r.id === id)?.hub.name.split(' ')[0].replace(/海\d+$/, '') || id]),
     ...S.sm.map(({ s }) => [s.id, s.label]), ...S.cm.map(({ s }) => [s.id, s.label])];
   const catName = F.cat ? catNameOf(F.cat) : '';
@@ -868,7 +873,7 @@ function html(all0) {
     const cls = r.unit > 0 ? 'up' : 'down';
     return `<tr data-hr-open="${x.id}"${x.off ? ` class="hr-off" title="不符合条件：${esc(r.miss)} · 点击查看物品详情"` : ' title="查看物品详情"'}>
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${devTip(r) ? ` <b class="hr-tag warn" title="${devTip(r)}">现价偏离</b>` : ''}</small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${routeTags(r)}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}</td>
       <td class="num pi-hide-sm">${px(r.buyAt)}</td>
@@ -917,7 +922,7 @@ function html(all0) {
       </div>`}
       ${C || RL || RP ? '' : `<div class="ind-rank-row">${freightHtml('hr')}</div>`}
       <p class="pi-note" title="${RP ? '在同一个交易中心买进物品、化矿、把产物卖掉。化矿率和再处理税用估价页的化矿设置，产出按期望值算。每天可做 = 日成交 × 份额（直接买不超过最优价 5% 以内的卖单数量），按化矿批量取整。' : RL ? '同一个交易中心挂收单收货、挂卖单出货。卖单侧成交占比：ESI 每天只有成交均价，按「均价 = f × 当天最高价 + (1 − f) × 当天最低价」解出，近 30 天按成交量加权；标「估」的是用现在的收单价、卖单价和 30 天均价近似。每天可做 = 收单侧、卖单侧每天成交量取小 × 份额；每件利润已扣销售税、两边中介费和每天的改单费。只推荐做什么，改成多少钱看市场行情。' : C ? `日成交量是五大交易中心所在星域的统计加起来（含周边玩家建筑）；消耗额 = 日成交额合计 + 近 7 天日均被击毁数 × 均价（只有宁静服有击杀数据）。建筑卖价是已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少。` : D ? `目标市场的成交量是整个星域的统计（含周边玩家建筑；自定义市场借用同星域交易中心的数据），库存天数用目标市场自己的卖单；建议数量 = 日均成交 × 份额 × 计划天数，不超过进货地卖单深度（挂收单按进货地日均成交 × 份额）。挂单价偏离 30 天成交均价太多的不算。` : '买入、卖出方式可以任意组合；中位价 / 最低价 / 最高价收出是按近 ' + daysLabel(F.med) + '的成交价挂单（付中介费），成交价偏离 30 天均价超过 60%–140% 的不用（乱价成交），现价偏离挂单价 20% 以上标「现价偏离」。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。'}">
-        ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${C || RL || RP ? '' : ` · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'}`} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${S.smNote.split('；').map((t) => `<span>${esc(t)}</span>`).join('；')}</span>` : ''}${S.cmNote ? ` · <span data-hr-cmnote>${esc(S.cmNote)}</span>` : ''}</p>
+        ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${C || RL || RP ? '' : ` · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'}`} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.top.length ? ` · <span data-hr-live title="快照每小时汇总；本页每一行的买入地、卖出地再用 ESI 实时订单核对（与市场中心同一份数据，5 分钟刷新）">${esc(S.liveNote || '本页已按实时订单核对')}</span>` : ''}${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${S.smNote.split('；').map((t) => `<span>${esc(t)}</span>`).join('；')}</span>` : ''}${S.cmNote ? ` · <span data-hr-cmnote>${esc(S.cmNote)}</span>` : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table hr-table"><thead><tr>
       ${RP ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '交易中心')}${th('buy', '进货价', 'num pi-hide-sm', '挂收单的已加中介费')}${th('value', '化矿后', 'num pi-hide-sm', '一件化矿后的产物卖掉到手多少（已扣再处理税、销售税和中介费）')}${th('unit', '每件利润', 'num')}${th('margin', '利润率', 'num')}${th('qty', '每天可做', 'num')}${th('day', '每天利润', 'num')}${th('turn', '日成交额', 'num pi-hide-sm')}`
@@ -967,7 +972,7 @@ function exportRows() {
     cols = [...base, ['买入地点', (x) => x.r.a.name], ['卖出地点', (x) => x.r.b.name], ['买入价', (x) => x.r.buyAt], ['卖出价', (x) => x.r.sellAt],
       ['每件利润', (x) => x.r.unit], ['利润率 %', (x) => x.r.margin * 100], ['每立方利润', (x) => x.r.perM3 ?? null], ['单件体积 m³', (x) => x.r.vol || null],
       ['可做数量', (x) => x.r.qty || 0], ['投入', (x) => (x.r.qty ? x.r.cost * x.r.qty : 0)], ['预计利润', (x) => x.r.total || 0],
-      ['现价偏离', (x) => (devTip(x.r) ? '是' : '')], ...miss];
+      ['现价偏离', (x) => (devTip(x.r) ? '是' : '')], ['价格异常', (x) => (oddTip(x.r) ? '是' : '')], ...miss];
   }
   const n = exportCsv(name, cols, list);
   ctx.showToast(`已导出 ${n} 行`, 'success', 1800);
@@ -1025,6 +1030,56 @@ function render(box) {
   if (focus != null) { const inp = box.querySelector('[data-hr-q]'); inp.focus(); inp.setSelectionRange(focus, focus); }
   if (tFocus != null && S.tOpen) { const inp = box.querySelector('[data-hr-tq]'); if (inp) { inp.focus(); inp.setSelectionRange(tFocus, tFocus); } }
   if (S.data.progress) poll(box);
+  if (S.top.length) verifyLive(box);
+}
+
+// ---------- 实时核对 ----------
+// 排行先用服务器的挂单快照（每小时汇总）选品；当前这一页每一行的买入地、卖出地再用 ESI 实时订单核对，
+// 订单走市场中心的缓存（regionOrders，5 分钟，与物品详情共用）。快照里的单已经被买走、改价时，核对后按实时价重算，路线变了的重新排序，
+// 新排进本页的物品接着核对。玩家建筑与自定义市场本来就是实时读的，不用核对。
+const LIVE_TTL = 5 * 60e3;
+const live = new Map();   // 星域:物品 -> { at, q }
+function liveQuote(region, id) {
+  const h = live.get(region + ':' + id);
+  return h && Date.now() - h.at < LIVE_TTL ? h.q : null;
+}
+function verifyLive(box) {
+  if (!ctx.regionOrders) return;
+  const hubIds = new Set(S.data.hubs);
+  const todo = [];
+  for (const x of S.top) {
+    for (const h of [x.r?.a, x.r?.b]) {
+      if (!h || !hubIds.has(h.id) || h.live) continue;
+      const k = h.id + ':' + x.id;
+      if (live.has(k) && Date.now() - live.get(k).at < LIVE_TTL) continue;
+      if (!todo.some((t) => t.k === k)) todo.push({ k, region: h.id, id: x.id });
+    }
+  }
+  if (!todo.length) { if (S.liveNote) { S.liveNote = ''; const n = box.querySelector('[data-hr-live]'); if (n) n.textContent = '本页已按实时订单核对'; } return; }
+  const run = ++S.liveRun;
+  let done = 0;
+  const note = () => { const n = box.querySelector('[data-hr-live]'); if (n) n.textContent = S.liveNote; };
+  S.liveNote = `实时核对 0/${todo.length}`;
+  note();
+  const queue = [...todo];
+  Promise.all(Array.from({ length: Math.min(8, queue.length) }, async () => {
+    while (queue.length && run === S.liveRun) {
+      const t = queue.shift();
+      const station = ctx.regions.find((r) => r.id === t.region)?.hub.id;
+      try {
+        const orders = await ctx.regionOrders(t.id, t.region);
+        live.set(t.k, { at: Date.now(), q: ctx.quote((orders || []).filter((o) => o.location_id === station)) });
+      } catch { live.set(t.k, { at: Date.now(), q: null }); }   // 读不到：沿用快照
+      S.liveNote = `实时核对 ${++done}/${todo.length}`;
+      note();
+    }
+  })).then(() => {
+    if (run !== S.liveRun || !box.isConnected || box.hidden) return;
+    S.liveNote = '';
+    S.liveVer++;
+    S.rows = null;
+    render(box);   // 重排后新进本页的物品会接着核对
+  });
 }
 
 // 用到成交价但手上的汇总没带这些字段：带 hist=1 再取一次

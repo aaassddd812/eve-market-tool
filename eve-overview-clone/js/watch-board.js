@@ -5,7 +5,7 @@
 // 到价提醒：每个物品可设若干条「某交易中心 卖价 / 收价 ≤ / ≥ 某价」（或一键「卖价跌 / 涨 5%、10%」），看板开着或后台监控开着时每 5 分钟检查一次；
 //   触发后网页提示（可选桌面通知、提示音），该条提醒停用，点「重新启用」再次监控。设置保存在本机。
 // 悬浮窗（float-feed.js）：到价提醒列表推给悬浮窗（pubFloat）；悬浮窗开着时后台照样每 5 分钟查一次价（不用开「后台监控到价」）。
-import { loadHubs } from './hub-compare.js?v=v14';
+import { loadHubs } from './hub-compare.js?v=v15';
 import * as FF from './float-feed.js?v=v11';
 
 let ctx = null;   // isGlobal, fetchESI, fetchESIPaged, regions, esc, formatISK, formatPrice, formatNumber, showToast, typeName, iconUrl, openItem, favorites, toggleFavorite, store, isActive
