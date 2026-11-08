@@ -458,11 +458,12 @@ let shareModules = null;
 function shareKill() {
   const args = shownArgs;
   if (!args) return;
-  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=8'), import('./share-image.js?v=7')]);
-  shareModules.then(async ([{ renderKillImage }, { openShareModal }]) => {
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=10'), import('./share-image.js?v=9')]);
+  shareModules.then(async ([{ renderKillImage }, { openShareModal, shareUrl }]) => {
     const [val, near] = await Promise.all([killValuation(args.kill), nearestOf(args.kill)]);
-    const model = killImageModel(args.kill, val, near);
     const k = args.kill;
+    // 二维码：有本站击杀记录服务的服务器扫码打开本站这条击杀
+    const model = { ...killImageModel(k, val, near), url: SERVER.kb ? shareUrl('#kb/kill/' + k.killmail_id) : null };
     openShareModal({
       title: '分享击杀图片', app,
       fileName: `击杀-${typeName(k.victim.ship_type_id)}-${k.killmail_id}.png`,

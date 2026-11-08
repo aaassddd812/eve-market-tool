@@ -1,6 +1,6 @@
 // ===== 击杀详情、人物 / 军团 / 联盟页的分享图片 =====
 // 纯 Canvas 绘制；配色、图片加载、画法小工具与弹窗在 share-image.js。数据模型由 killboard.js / kb-page.js 整理好传进来。
-import { W, THEMES, loadImages, rr, alpha, makeCanvas, crop, painter } from './share-image.js?v=7';
+import { W, THEMES, loadImages, rr, alpha, makeCanvas, crop, painter, qrSize } from './share-image.js?v=9';
 
 const PAD = 40, IW = W - PAD * 2, GAP = 20;
 // 安全等级颜色（页面里是 CSS 变量，画布读不了，按图片配色取）
@@ -67,12 +67,12 @@ export async function renderKillImage(m, theme = 'light') {
   const shipRows = Math.ceil(m.ships.length / 2);
   const rightH = 64 + m.attackers.length * 54 + (m.moreAttackers ? 26 : 0) +
     (m.parties.length ? 66 + m.parties.length * 44 : 0) + (shipRows ? 66 + shipRows * 42 : 0) + 14;
-  const H = 92 + HERO + GAP + Math.max(leftH, rightH, 120) + 90;
+  const top = Math.max(92, 40 + qrSize(m.url) + 24);   // 页眉右边的二维码比标签高，主卡片相应下移
+  const H = top + HERO + GAP + Math.max(leftH, rightH, 120) + 90;
   P.background(H, C.b, C.a);
-  P.header('击杀报告 · KILLMAIL', 40, C.b);
+  P.header('击杀报告 · KILLMAIL', 40, C.b, m.url);
 
   // ---------- 主卡片：舰船图、受害者、地点时间、价值 ----------
-  const top = 92;
   P.card(PAD, top, IW, HERO, 24);
   g.save();
   rr(g, PAD, top, IW, HERO, 24);
@@ -272,12 +272,12 @@ export async function renderEntityImage(m, theme = 'light') {
     ]);
   }
   const HERO = 212;
-  const H = 92 + HERO + GAP + 40 + 104 + (m.lifetime ? GAP + 40 + 104 : 0) + sections.reduce((s, c) => s + GAP + colsHeight(c), 0) + 100;
+  const top = Math.max(92, 40 + qrSize(m.url) + 24);
+  const H = top + HERO + GAP + 40 + 104 + (m.lifetime ? GAP + 40 + 104 : 0) + sections.reduce((s, c) => s + GAP + colsHeight(c), 0) + 100;
   P.background(H, C.a, effColor === C.muted ? C.a : effColor);
-  P.header(`${m.kindLabel}档案 · ${m.kindEn}`, 40, C.a);
+  P.header(`${m.kindLabel}档案 · ${m.kindEn}`, 40, C.a, m.url);
 
   // ---------- 主卡片 ----------
-  const top = 92;
   P.card(PAD, top, IW, HERO, 24);
   g.save();
   rr(g, PAD, top, IW, HERO, 24);

@@ -1,6 +1,6 @@
 // ===== 战场统计：生成分享图片 =====
 // 纯 Canvas 绘制（不依赖第三方库）；配色、图片加载与弹窗在 share-image.js。
-import { W, SCALE, THEMES, loadImages, rr, fit, font, alpha, siteMark } from './share-image.js?v=7';
+import { W, SCALE, THEMES, loadImages, rr, fit, font, alpha, siteMark, qrMark, qrSize } from './share-image.js?v=9';
 
 const PAD = 40, IW = W - PAD * 2, GAP = 20;
 
@@ -14,7 +14,7 @@ export async function renderBrImage(m, theme = 'light') {
   for (const s of order) {
     m.sides[s].parties.forEach((p) => urls.add(p.logo));
     m.sides[s].top.forEach((k) => urls.add(k.icon));
-    m.sides[s].players.list.forEach((p) => { urls.add(p.avatar); p.ships.forEach((u) => urls.add(u)); });
+    m.sides[s].players.list.forEach((p) => { urls.add(p.avatar); urls.add(p.corp?.logo); urls.add(p.alliance?.logo); p.ships.forEach((u) => urls.add(u)); });
   }
   const images = await loadImages([...urls]);
   const EXTRA = theme === 'dark' ? { C: '#22a565', D: '#a25ddc' } : { C: '#1c9a5c', D: '#8e4fd0' };
@@ -35,7 +35,7 @@ export async function renderBrImage(m, theme = 'light') {
       PLAY: prow ? 70 + prow * 40 + (pmore ? 30 : 0) + 12 : 0 });
   }
   const HERO = 292, TILE = multi ? 0 : 100, CHART = 300;
-  const H = 200 + HERO + GAP + (TILE ? TILE + GAP : 0) + CHART + pairs.reduce((t, q) => t + GAP + q.SIDE + (q.PLAY ? GAP + q.PLAY : 0), 0) + 180;
+  const H = Math.max(200, PAD + qrSize(m.url) + 32) + HERO + GAP + (TILE ? TILE + GAP : 0) + CHART + pairs.reduce((t, q) => t + GAP + q.SIDE + (q.PLAY ? GAP + q.PLAY : 0), 0) + 180;
   const canvas = document.createElement('canvas');
   canvas.width = W * SCALE;
   canvas.height = H * SCALE;
@@ -95,25 +95,31 @@ export async function renderBrImage(m, theme = 'light') {
   // ---------- 标题 ----------
   let y = PAD;
   chip('战场统计 · BATTLE REPORT', PAD, y, { bg: alpha(C.a, 0.14), fg: C.a, weight: 700, size: 13, h: 28 });
-  g.textAlign = 'right';
-  g.fillStyle = C.text;
-  g.font = font(800, 18, family);
-  g.fillText('EVE Market', W - PAD, y + 20);
+  // 右上角二维码（扫码打开本站这份战场统计）；标题与标签让开它和左边的说明文字
+  const qr = qrMark(g, C, m.url, W - PAD, y, family);
+  if (!qr) {
+    g.textAlign = 'right';
+    g.fillStyle = C.text;
+    g.font = font(800, 18, family);
+    g.fillText('EVE Market', W - PAD, y + 20);
+  }
+  const headR = qr ? W - PAD - qr - 120 : W - PAD;
+  const qrBottom = y + qr;
   y += 28 + 50;
   g.textAlign = 'left';
   g.fillStyle = C.text;
   g.font = font(800, 38, family);
-  g.fillText(fit(g, m.title, IW), PAD, y);
+  g.fillText(fit(g, m.title, headR - PAD), PAD, y);
   y += 20;
   // 时间、击杀数等：一行放不下就换行
   let cx = PAD;
   for (const t of m.meta) {
     g.font = font(500, 14, family);
     const w = g.measureText(t).width + 28;
-    if (cx > PAD && cx + w > W - PAD) { cx = PAD; y += 38; }
+    if (cx > PAD && cx + w > headR) { cx = PAD; y += 38; }
     cx += chip(t, cx, y) + 8;
   }
-  y += 30 + 32;
+  y = Math.max(y + 30 + 32, qrBottom + 32);
 
   // ---------- 损失比（三方及以上：每方一格） ----------
   const top = y;
@@ -515,9 +521,25 @@ export async function renderBrImage(m, theme = 'light') {
       g.fillStyle = C.text;
       g.font = font(600, 14, family);
       g.fillText(fit(g, p.name, nw), x + 42, cy + 18);
+      // 所属：军团图标 + 名字 · 联盟图标 + 名字；放不下两个名字时军团只画图标，名字留给联盟；旧数据没有时只写势力名
       g.fillStyle = C.muted;
       g.font = font(400, 11.5, family);
-      g.fillText(fit(g, p.party, nw), x + 42, cy + 33);
+      const orgs = [p.corp, p.alliance].filter(Boolean);
+      if (!orgs.length) g.fillText(fit(g, p.party, nw), x + 42, cy + 33);
+      else {
+        const ICON = 13, GAPX = 8;
+        const full = orgs.reduce((t, o) => t + ICON + 4 + g.measureText(o.name).width, 0) + GAPX * (orgs.length - 1);
+        let ox = x + 42;
+        orgs.forEach((o, j) => {
+          pic(images.get(o.logo), ox, cy + 23, ICON, 3);
+          const iconOnly = full > nw && orgs.length > 1 && j === 0;
+          if (iconOnly) { ox += ICON + 5; return; }
+          const w = j === orgs.length - 1 ? x + 42 + nw - ox : (nw - GAPX) / 2;
+          g.fillStyle = C.muted;
+          g.fillText(fit(g, o.name, w - ICON - 4), ox + ICON + 4, cy + 33);
+          ox += ICON + 4 + g.measureText(fit(g, o.name, w - ICON - 4)).width + GAPX;
+        });
+      }
       cy += 40;
     });
     if (st.more) {

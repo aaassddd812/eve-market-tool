@@ -1771,7 +1771,7 @@ class Api:
         return value
 
     # GET /br?systems=1,2,3&start=T&end=T：战场统计原始数据（时间为 Unix 秒）
-    # 返回紧凑数组以减小体积：kills[i] = [id, time, system, ship, value, v_char, v_corp, v_alliance, [[char, corp, alliance, ship, 伤害], ...]]
+    # 返回紧凑数组以减小体积：kills[i] = [id, time, system, ship, value, v_char, v_corp, v_alliance, [[char, corp, alliance, ship, 伤害], ...], 最后一击的角色]
     # dmg_missing：还没补到伤害的击杀数（补完前只缓存 15 秒，前端稍后刷新即可）
     def br(self, q):
         systems = sorted({int(x) for x in str(q.get("systems", "")).split(",") if x.strip()})
@@ -1792,7 +1792,7 @@ class Api:
             return hit[1]
         c = self.store.conn()
         marks = ",".join("?" * len(systems))
-        rows = c.execute(f"""SELECT id, time, system_id, ship_type, value, v_char, v_corp, v_alliance, hash FROM killmails
+        rows = c.execute(f"""SELECT id, time, system_id, ship_type, value, v_char, v_corp, v_alliance, hash, f_char FROM killmails
                              WHERE system_id IN ({marks}) AND time >= ? AND time < ? AND npc = 0
                              ORDER BY time LIMIT ?""", (*systems, start, end, BR_MAX_KILLS + 1)).fetchall()
         truncated = len(rows) > BR_MAX_KILLS
@@ -1816,7 +1816,7 @@ class Api:
         kills = []
         for r in rows:
             ids.update(r[5:8])
-            kills.append([r[0], r[1], r[2], r[3], round(r[4] or 0, 2), r[5], r[6], r[7], att.get(r[0], [])])
+            kills.append([r[0], r[1], r[2], r[3], round(r[4] or 0, 2), r[5], r[6], r[7], att.get(r[0], []), r[9] or 0])
         value = {"systems": systems, "start": start, "end": end, "kills": kills, "truncated": truncated, "dmg_missing": missing,
                  "retention_days": self.store.retention, "names": self.names_for(ids)}
         self.store.cache[key] = (time.time() - (max(0, ttl - 15) if missing else 0), value)

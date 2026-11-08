@@ -3,7 +3,7 @@
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v17';
-import { initBr, renderBr } from './kb-br.js?v=v42';
+import { initBr, renderBr } from './kb-br.js?v=v47';
 import { gankSystemHtml, GANK_NOTE } from './kb-gank.js?v=v1';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
@@ -443,7 +443,7 @@ function renderBattles() {
     const mins = Math.max(1, Math.round((new Date(b.end) - new Date(b.start)) / 60e3));
     const tier = battles.battleTier(b.kills);
     const sides = b.sides.map((x) => `<span class="kb-battle-side">${entityLink(x.kind, x.id, names[x.id] || partyName(x.id))}<small>击杀 ${x.kills} · 损失 ${x.losses}</small></span>`).join('');
-    return `<article class="kb-battle tier-${tier.key}">
+    return `<article class="kb-battle tier-${tier.key}" ${brCardAttrs(b)}>
         <div class="kb-battle-main">
           <strong><span class="kb-tier-badge"><i></i>${tier.name}</span><a class="kb-link" data-location="system:${b.system_id}">${app.esc(sys.name)}</a> <b style="color:${sys.color}">${sys.secText}</b></strong>
           <span class="text-muted">${app.esc(sys.region || '')} · 持续约 ${mins} 分钟 · 最近一次 ${timeAgo(b.end)}</span>
@@ -454,13 +454,15 @@ function renderBattles() {
           ${b.top ? `<button class="link-btn" data-kill="${b.top.id}">最贵损失 ${app.esc(typeName(b.top.ship_type_id))} · ${app.formatISK(b.top.value)}</button>` : ''}
           <button class="btn btn-ghost" data-battle-map="${b.system_id}">在星图查看</button>
           <button class="btn btn-ghost" data-br-battle="${b.system_id}" data-start="${b.start}" data-end="${b.end}">战场统计</button>
-          <button class="btn btn-ghost" data-location="system:${b.system_id}">只看这里</button>
         </div>
       </article>`;
   }).join('');
   box.innerHTML = head + (cards ? `<div class="kb-battle-list">${cards}</div>` : '');
   box.classList.toggle('is-empty', !list.length);
 }
+
+// 会战卡片整块可点：点空白处打开战场统计（卡片里的链接、按钮照常）
+const brCardAttrs = (x) => `data-br-battle="${x.system_id}" data-start="${x.start}" data-end="${x.end}" data-br-card title="打开战场统计"`;
 
 // 会战提醒「击杀记录」按钮：按星系筛选
 export function filterBySystem(id) {
@@ -848,7 +850,7 @@ function drawBh() {
     const sum = x.teams[0].lost + x.teams[1].lost;
     const dsum = x.teams.reduce((n, t) => n + t.destroyed, 0);
     const bar = multi ? (dsum ? `<div class="kb-bh-bar is-multi" title="各方击毁 ISK 占比">${x.teams.map((t, i) => t.destroyed ? `<i class="${'abc'[i]}" style="width:${(t.destroyed / dsum * 100).toFixed(1)}%"></i>` : '').join('')}</div>` : '') : sum ? `<div class="kb-bh-bar" title="双方损失 ISK 对比：蓝色越长左方打得越好（左方损失 ${fmtIsk(x.teams[0].lost)}，右方损失 ${fmtIsk(x.teams[1].lost)}）"><i class="a" style="width:${((x.teams[1].lost / sum) * 100).toFixed(1)}%"></i><i class="b" style="width:${((x.teams[0].lost / sum) * 100).toFixed(1)}%"></i></div>` : '';
-    return `<article class="kb-bh tier-${tier.key}">
+    return `<article class="kb-bh tier-${tier.key}" ${brCardAttrs(x)}>
       <div class="kb-bh-head">
         <span class="kb-bh-tier"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 17.5 3 6V3h3l11.5 11.5"/><path d="m13 19 6-6"/><path d="m16 16 4 4"/><path d="m19 21 2-2"/><path d="M14.5 6.5 18 3h3v3l-3.5 3.5"/><path d="m5 14 4 4"/><path d="m7 17-3 3"/><path d="m3 19 2 2"/></svg>${tier.name}</span>
         <a class="kb-link kb-bh-sys" data-location="system:${x.system_id}">${app.esc(sys.name)}</a> <b style="color:${sys.color}">${sys.secText}</b>
@@ -960,7 +962,7 @@ function drawPilotBattles() {
     const mins = Math.max(1, Math.round((new Date(x.end) - new Date(x.start)) / 60e3));
     const me = x.me;
     const losses = me.losses.filter((l) => l.ship_type_id !== 670 && l.ship_type_id !== 33328);
-    return `<article class="kb-bh kb-pb tier-${tier.key}">
+    return `<article class="kb-bh kb-pb tier-${tier.key}" ${brCardAttrs(x)}>
       <div class="kb-bh-head">
         <span class="kb-bh-tier">${tier.name}</span>
         <a class="kb-link kb-bh-sys" data-location="system:${x.system_id}">${app.esc(sys.name)}</a> <b style="color:${sys.color}">${sys.secText}</b>
@@ -1048,12 +1050,12 @@ let shareModules = null;
 function shareEntity() {
   const e = S.entity;
   if (!e?.stats) return;
-  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=8'), import('./share-image.js?v=7')]);
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=10'), import('./share-image.js?v=9')]);
   const model = entityImageModel(e);
-  shareModules.then(([{ renderEntityImage }, { openShareModal }]) => openShareModal({
+  shareModules.then(([{ renderEntityImage }, { openShareModal, shareUrl }]) => openShareModal({
     title: `分享${KIND_ZH[e.kind]}图片`, app,
     fileName: `${KIND_ZH[e.kind]}-${model.name}.png`,
-    render: (theme) => renderEntityImage(model, theme),
+    render: (theme) => renderEntityImage({ ...model, url: shareUrl(`#kb/${e.kind}/${e.id}`) }, theme),
     link: () => location.href
   })).catch((error) => {
     shareModules = null;
@@ -1340,7 +1342,12 @@ function route() {
   else if (location.hash.startsWith('#kb/rank')) renderRank(location.hash);
   else if (location.hash.startsWith('#kb/battles')) renderBattleHistory();
   else if (m) renderEntity(m[1], Number(m[2]));
-  else renderHome();
+  else {
+    renderHome();
+    // 击杀分享图片的二维码：#kb/kill/<id> 打开这条击杀，地址换回击杀记录首页
+    const kill = /^#kb\/kill\/(\d+)/.exec(location.hash);
+    if (kill) { history.replaceState(null, '', '#kb'); openKill(Number(kill[1])); }
+  }
 }
 
 // ---------- 本地分析：频道成员名单 / 定向扫描（local-scan.js，首次打开时加载）----------
@@ -1469,7 +1476,9 @@ export function initKbPage(context) {
     if (e.target.closest('[data-kb-rank-export]')) { exportRank(); return; }
     const pg = e.target.closest('[data-rank-page]');
     if (pg && S.rank && !pg.disabled) { setRank({ page: Number(pg.dataset.rankPage) }); return; }
-    const brBattle = e.target.closest('[data-br-battle]');
+    let brBattle = e.target.closest('[data-br-battle]');
+    // 整块卡片：点到卡片里的链接、按钮、输入框时交给它们自己；选中文字时不跳转
+    if (brBattle?.hasAttribute('data-br-card') && (e.target.closest('a, button, input, select, label, [data-kill], [data-location]') || String(window.getSelection?.() || ''))) brBattle = null;
     if (brBattle) {
       // 会战卡片：以会战星系与持续时间（前后各留 10 分钟）打开战场统计
       const { brBattle: sys, start, end } = brBattle.dataset;

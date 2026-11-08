@@ -2380,11 +2380,11 @@ td.loc {
 /* 宽屏：三张卡片竖排成紧凑横条（标题一行，数值与说明并排），总高与右侧每小时损失图对齐，不再被图撑出空白 */
 @media (min-width: 1101px) {
   .kb-summary { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
-  .kb-summary-cards { grid-template-columns: minmax(0, 1fr); grid-auto-rows: 1fr; gap: 8px; }
-  .kb-summary-cards .valuation-card { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "label label" "value detail"; align-content: center; gap: 4px 16px; padding: 10px 16px; }
-  .kb-summary-cards .valuation-label { grid-area: label; }
-  .kb-summary-cards .valuation-value { grid-area: value; margin-top: 0; }
-  .kb-summary-cards .valuation-detail { grid-area: detail; align-self: center; margin: 0; padding: 0; border: 0; text-align: right; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .kb-summary-cards:not(.kb-rank-cards) { grid-template-columns: minmax(0, 1fr); grid-auto-rows: 1fr; gap: 8px; }
+  .kb-summary-cards:not(.kb-rank-cards) .valuation-card { display: grid; grid-template-columns: auto minmax(0, 1fr); grid-template-areas: "label label" "value detail"; align-content: center; gap: 4px 16px; padding: 10px 16px; }
+  .kb-summary-cards:not(.kb-rank-cards) .valuation-label { grid-area: label; }
+  .kb-summary-cards:not(.kb-rank-cards) .valuation-value { grid-area: value; margin-top: 0; }
+  .kb-summary-cards:not(.kb-rank-cards) .valuation-detail { grid-area: detail; align-self: center; margin: 0; padding: 0; border: 0; text-align: right; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 }
 .kb-region-value .kb-link { color: inherit; }
 .kb-hours { padding: 14px 16px; border-radius: var(--radius-lg); background: var(--bg-secondary); box-shadow: var(--shadow-sm); }
@@ -4715,6 +4715,17 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .kb-rank-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
 .kb-rank-filter { flex: 1; min-width: 180px; max-width: 280px; margin-left: auto; }
 .kb-rank-cards { margin-bottom: 12px; }
+/* 近 30 天会战等排行页：三张卡片放一行（首页概览的竖排横条只用在首页） */
+@media (max-width: 768px) {
+  .kb-summary-cards.kb-rank-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .kb-summary-cards.kb-rank-cards > :first-child { grid-column: auto; }
+  .kb-summary-cards.kb-rank-cards .valuation-card { padding: 10px; min-width: 0; }
+  .kb-summary-cards.kb-rank-cards .valuation-value { font-size: 1.0625rem; }
+  .kb-summary-cards.kb-rank-cards .valuation-detail { display: none; }
+}
+/* 会战卡片整块可点，进入战场统计 */
+[data-br-card] { cursor: pointer; transition: background var(--transition-fast); }
+[data-br-card]:hover { background: var(--bg-hover); }
 .kb-rank-first { font-size: 1.125rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb-rank-wrap { border: 1px solid var(--border-primary); border-radius: var(--radius-lg); background: var(--bg-secondary); }
 .kb-rank-table { width: 100%; border-collapse: collapse; font-size: 0.8125rem; }
@@ -8578,6 +8589,26 @@ a.pz-name:hover { color: var(--accent-primary); }
 .kb-zk-hull { flex-shrink: 0; color: var(--text-secondary); font-size: 0.75rem; }
 .kb-zk-main small { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 0.6875rem; color: var(--text-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .kb-zk-main small img { border-radius: 3px; flex-shrink: 0; }
+.kb-zk-main small .kb-zk-org { display: inline-flex; align-items: center; gap: 4px; min-width: 0; flex: 0 1 auto; }
+.kb-zk-main small .kb-zk-org > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.kb-zk-main small .kb-zk-org + .kb-zk-org { flex-shrink: 2; margin-left: 4px; }
+/* 战况走势下面：阵营对比 / 玩家统计 */
+.kb-br-tabs { margin-bottom: 12px; }
+.kb-br-ptable { padding: 4px 4px 8px; border-radius: var(--radius-lg); background: var(--bg-secondary); box-shadow: var(--shadow-sm); }
+.kb-pt-table td { padding: 6px 10px; }
+.kb-pt-who { display: flex; align-items: center; gap: 8px; min-width: 180px; max-width: 300px; }
+.kb-pt-who > img { border-radius: 6px; flex-shrink: 0; }
+.kb-pt-who .kb-link { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-pt-ships { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
+.kb-pt-ships img { border-radius: 4px; }
+.kb-pt-ships small { font-size: 0.6875rem; color: var(--text-muted); margin-left: 2px; }
+.kb-pt-table .kb-br-badge { width: 20px; height: 20px; font-size: 0.6875rem; }
+@media (max-width: 768px) {
+  .kb-pt-table th:first-child, .kb-pt-table td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg-secondary); }
+  .kb-pt-who { min-width: 0; width: 150px; }
+}
+.kb-pt-foot > .text-muted > span + span::before { content: " · "; }
+.kb-pt-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px 0; font-size: 0.75rem; }
 .kb-zk-val { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; font-size: 0.75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .kb-zk-val b { color: var(--sell-color); font-weight: 700; }
 .kb-zk-val small { font-size: 0.6875rem; color: var(--text-muted); }

@@ -1,6 +1,8 @@
 // ===== 分享图片：共用的配色、Canvas 小工具与预览弹窗 =====
 // 战场统计、击杀详情、人物 / 军团 / 联盟页的分享图片都用这里的配色与弹窗；图片宽 1200，按 2 倍像素输出。
 // 头像、图标来自 images.evetech.net（允许跨域），加载失败时画占位色块。
+import qrcode from './qrcode-gen.js?v=1';
+
 export const W = 1200, SCALE = 2;
 export const THEMES = {
   light: {
@@ -149,6 +151,59 @@ export function crop(canvas, h) {
   return out;
 }
 
+// ---------- 二维码（分享图片右上角，扫码打开本站对应页面） ----------
+// 编码用开源库 qrcode-generator（js/qrcode-gen.js）：纠错等级 M、自动选版本，网址按 UTF-8 编码。返回 boolean[行][列]（true 为深色），编不了时返回 null
+export function qrMatrix(text) {
+  try {
+    qrcode.stringToBytes = qrcode.stringToBytesFuncs['UTF-8'];
+    const q = qrcode(0, 'M');
+    q.addData(text, 'Byte');
+    q.make();
+    const n = q.getModuleCount();
+    return Array.from({ length: n }, (_, r) => Array.from({ length: n }, (_, c) => q.isDark(r, c)));
+  } catch {
+    return null;
+  }
+}
+
+// 右上角的二维码卡片：白底（深色主题下也要白底才扫得出），左侧两行说明。right 为卡片右边缘，返回边长（没有网址时为 0）
+// 边长至少 112，网址长、模块多时放大，保证每个模块至少 2 像素（输出为 2 倍像素）
+const qrCache = new Map();
+const qrOf = (url) => { if (!qrCache.has(url)) qrCache.set(url, qrMatrix(url)); return qrCache.get(url); };
+export function qrSize(url) {
+  const mod = url && qrOf(url);
+  return mod ? Math.max(112, (mod.length + 6) * 2) : 0;
+}
+export function qrMark(g, C, url, right, y, family) {
+  const size = qrSize(url);
+  if (!size) return 0;
+  const mod = qrOf(url), n = mod.length, cell = size / (n + 6), x = right - size;
+  rr(g, x, y, size, size, 12);
+  g.fillStyle = '#ffffff';
+  g.fill();
+  g.fillStyle = '#0b0f17';
+  const o = cell * 3;
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (mod[r][c]) g.fillRect(x + o + c * cell, y + o + r * cell, cell + 0.02, cell + 0.02);
+  g.textAlign = 'right';
+  g.font = font(700, 14, family);
+  g.fillStyle = C.text;
+  g.fillText('扫码打开', x - 12, y + size - 26);
+  g.font = font(400, 12, family);
+  g.fillStyle = C.muted;
+  g.fillText('EVE 市场总览', x - 12, y + size - 8);
+  g.textAlign = 'left';
+  return size;
+}
+
+// 二维码里的网址：正式站用当前地址，本地 / 演示 / 桌面版换成正式站；非宁静服带上 ?server=，扫开后自动切到对应服务器
+export function shareUrl(hash) {
+  let server = null;
+  try { server = localStorage.getItem('eve-server'); } catch { /* 隐私模式：按宁静服 */ }
+  const local = !/^https?:$/.test(location.protocol) || /^(localhost|127\.|0\.0\.0\.0|\[::1\])/.test(location.hostname);
+  const base = local ? 'https://eve.navexor.top/' : location.origin + location.pathname;
+  return base + (server && server !== 'tq' ? '?server=' + server : '') + hash;
+}
+
 // 常用画法：卡片、文字、胶囊标签、圆角图片、背景光晕、页眉与页脚
 export function painter(g, C) {
   const family = getComputedStyle(document.body).fontFamily || 'sans-serif';
@@ -214,9 +269,10 @@ export function painter(g, C) {
       }
     },
     // 页眉：左边类别标签，右边站点名
-    header(label, y, color = C.a) {
+    // 页眉：左边类型标签，右边二维码（没有网址时写站名）
+    header(label, y, color = C.a, url = null) {
       P.chip(label, 40, y, { bg: alpha(color, 0.14), fg: color, weight: 700, size: 13, h: 28 });
-      P.text('EVE Market', W - 40, y + 20, { size: 18, weight: 800, align: 'right' });
+      if (!qrMark(g, C, url, W - 40, y, family)) P.text('EVE Market', W - 40, y + 20, { size: 18, weight: 800, align: 'right' });
     },
     footer(left, right, y) {
       const w = siteMark(g, C, 40, y, family);

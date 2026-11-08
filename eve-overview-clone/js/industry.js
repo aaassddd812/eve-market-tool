@@ -196,9 +196,12 @@ const salesTax = () => 7.5 * (1 - 0.11 * lvl(SKILL.accounting));   // %
 const brokerFee = () => Math.max(0, 3 - 0.3 * lvl(SKILL.broker));   // %
 
 // 价格：优先吉他实时行情，其次交易中心快照（每 30 分钟汇总），都没有时用全服均价
-function price(id, side) {
-  const j = jita.get(id) || D.mkt?.get(id);
+// strict：只认这一侧的挂单价（产品卖给收单时，没有收单就是卖不掉，不能拿卖单价或均价代替）；行情完全读不到时才退回均价
+function price(id, side, strict) {
+  const has = (x) => x && (x.sell != null || x.buy != null);
+  const j = [jita.get(id), D.mkt?.get(id)].find(has);
   const v = side === 'buy' ? j?.buy : j?.sell;
+  if (strict && (j || D.mkt)) return v > 0 ? v : null;
   return v ?? j?.sell ?? j?.buy ?? D.average.get(id) ?? null;
 }
 
@@ -233,7 +236,7 @@ function rankScore(x) {
 }
 const matPrice = (id) => price(id, F.mat === 'buy' ? 'buy' : 'sell');
 const matFee = () => (F.mat === 'buy' ? brokerFee() : 0);           // 挂收单买材料要付中介费
-const prodPrice = (id) => price(id, F.prod === 'buy' ? 'buy' : 'sell');
+const prodPrice = (id) => (F.prod === 'buy' ? price(id, 'buy', true) : price(id, 'sell'));
 const sellFee = () => salesTax() + (F.prod === 'sell' ? brokerFee() : 0);
 
 // 行情：物品不多时（计算器、排行精算）读和市场中心同一份实时订单（5 分钟缓存）；多时（生产规划）用服务器每小时的快照，缓存不超过 1 小时
@@ -817,7 +820,7 @@ function drawCalc() {
       </div>
       <div class="pi-stats ind-stats">
         <div><span>单个成本</span><b>${isk(r.perUnit)}</b></div>
-        <div><span>${HUB_NAME}${F.prod === 'sell' ? '卖价' : '收价'}</span><b>${r.unitPrice != null ? isk(r.unitPrice) : '无报价'}</b></div>
+        <div><span>${HUB_NAME}${F.prod === 'sell' ? '卖价' : '收价'}</span><b>${r.unitPrice != null ? isk(r.unitPrice) : F.prod === 'buy' ? '没有收单' : '无报价'}</b></div>
         <div class="${r.profit >= 0 ? 'pi-stat-main' : 'ind-stat-loss'}"><span>总利润</span><b>${isk(r.profit)}</b></div>
         <div><span>利润率</span><b>${margin.toFixed(1)}%</b></div>
         <div><span>制造时间</span><b>${fmtTime(r.j.secs)}</b></div>
