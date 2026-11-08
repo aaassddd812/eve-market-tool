@@ -43,7 +43,7 @@ export function initKillboard(context) {
     const args = shownArgs, tab = $('killBody').querySelector('[data-kill-tab].active')?.dataset.killTab;
     const val = await killValuation(args.kill);
     if (shownArgs !== args) return;
-    $('killBody').innerHTML = renderKill(args.kill, val, args.priceNote, args.insurance);
+    $('killBody').innerHTML = renderKill(args.kill, val, args.priceNote);
     if (tab) switchKillTab(tab);
   });
 }
@@ -192,11 +192,11 @@ function timeAgo(iso) {
   return new Date(iso).toLocaleDateString('zh-CN');
 }
 
-// 击杀时间：北京时间（UTC+8）为主，下面一行是游戏内时间（EVE 时间 = UTC）
+// 击杀时间：两行同样格式，北京时间（UTC+8）与游戏内时间（EVE 时间 = UTC）
 function killTime(iso) {
   const sec = Math.floor(Date.parse(iso) / 1000);
   if (!Number.isFinite(sec)) return '—';
-  return `${fullIn(sec, 'cn')} <small class="kb-tz">UTC+8</small><br><small class="text-muted">游戏内时间 ${fullIn(sec, 'eve')}</small>`;
+  return `${fullIn(sec, 'cn')} <small class="kb-tz">UTC+8</small><br>${fullIn(sec, 'eve')} <small class="kb-tz">UTC</small>`;
 }
 
 function killTags(z) {
@@ -278,7 +278,7 @@ function slotGroup(flag) {
 
 let currentKill = null;
 let shownKill = null;   // 弹窗中正在显示的击杀
-let shownArgs = null;   // 重绘所需：{ kill, priceNote, insurance }
+let shownArgs = null;   // 重绘所需：{ kill, priceNote }
 
 // options.priceNote：总价值的估值说明（单项按所选交易中心估值）
 // options.load：异步加载击杀数据（先打开弹窗显示加载状态）
@@ -295,10 +295,10 @@ export async function openKill(kill, options = {}) {
   try {
     if (options.load) ({ kill, prices: options.prices } = await options.load());
     if (currentKill !== token) return;
-    const [val, insurance] = await Promise.all([killValuation(kill), app.getInsurance?.().catch(() => null), prepareKills([kill], { attackers: 'all' })]);
+    const [val] = await Promise.all([killValuation(kill), prepareKills([kill], { attackers: 'all' })]);
     if (currentKill !== token) return;
-    shownArgs = { kill, priceNote: options.priceNote, insurance: insurance?.get(kill.victim.ship_type_id) };
-    body.innerHTML = renderKill(kill, val, shownArgs.priceNote, shownArgs.insurance);
+    shownArgs = { kill, priceNote: options.priceNote };
+    body.innerHTML = renderKill(kill, val, shownArgs.priceNote);
     shownKill = kill;
     $('killShare').hidden = false;
     nearestOf(kill).then((near) => {
@@ -322,8 +322,8 @@ export function openServiceKill(id) {
 export async function killDetail(id, valSrc = '') {
   if (valSrc) app.valuation.set(valSrc);
   const { kill } = await loadServiceKill(id);
-  const [val, insurance] = await Promise.all([killValuation(kill), app.getInsurance?.().catch(() => null), prepareKills([kill], { attackers: 'all' })]);
-  return { title: typeName(kill.victim.ship_type_id) + ' · 击杀详情', html: renderKill(kill, val, SERVICE_PRICE_NOTE, insurance?.get(kill.victim.ship_type_id)) };
+  const [val] = await Promise.all([killValuation(kill), prepareKills([kill], { attackers: 'all' })]);
+  return { title: typeName(kill.victim.ship_type_id) + ' · 击杀详情', html: renderKill(kill, val, SERVICE_PRICE_NOTE) };
 }
 async function loadServiceKill(id) {
   const res = await fetch('/api/kb/kill/' + id + (IS_TQ ? '' : '?server=' + SERVER.id));
@@ -404,7 +404,7 @@ function killImageModel(k, val, near) {
     system: { name: sys.name, sec: sys.secText, level: sys.sec, region: sys.region },
     near: near?.text || '', station: k.zkb.locationID ? app.officialName(k.zkb.locationID) || '' : '',
     time: fullIn(Math.floor(Date.parse(k.killmail_time) / 1000), 'cn') + ' UTC+8',
-    eveTime: fullIn(Math.floor(Date.parse(k.killmail_time) / 1000), 'eve') + ' UTC+0',
+    eveTime: fullIn(Math.floor(Date.parse(k.killmail_time) / 1000), 'eve') + ' UTC',
     attackerCount: k.attackers.length, damage: app.formatNumber(v.damage_taken || 0),
     tags: [z.solo && '单刷', z.npc && 'NPC', z.awox && '误伤'].filter(Boolean),
     value: app.formatISK(z.totalValue), dropped: app.formatISK(z.droppedValue), destroyed: app.formatISK(z.destroyedValue),
@@ -512,18 +512,7 @@ function itemRows(items, val, depth = 0) {
   }).join('');
 }
 
-// 保险：不知道受害者投的哪一档，列出铂金（最高）赔付，净损失按铂金赔付估算（未投保时损失更大）
-function insuranceHtml(levels, total) {
-  levels = (levels || []).filter((l) => l.payout > 0);
-  if (!levels.length) return '';
-  const top = levels[levels.length - 1];
-  const net = Math.max(0, total - (top.payout - top.cost));
-  return `<div class="kb-insurance" title="${app.esc(levels.map((l) => `${l.name}：保费 ${app.formatISK(l.cost)} / 赔付 ${app.formatISK(l.payout)}`).join('\n'))}">
-      <span>保险（${app.esc(top.name)}）赔付 <b>${app.formatISK(top.payout)}</b> · 保费 ${app.formatISK(top.cost)}</span>
-      <span>投保后净损失约 <b>${app.formatISK(net)}</b></span></div>`;
-}
-
-function renderKill(k, val, priceNote, insurance) {
+function renderKill(k, val, priceNote) {
   const v = k.victim;
   const z = k.zkb;
   const sys = systemLabel(k.solar_system_id);
@@ -590,11 +579,10 @@ function renderKill(k, val, priceNote, insurance) {
         <div class="kb-split"><span class="kb-dropped">掉落 ${app.formatISK(z.droppedValue)}</span><span class="kb-destroyed">摧毁 ${app.formatISK(z.destroyedValue)}</span></div>
         <div class="kb-hubval">${app.valuation.select('data-val-src', val.region)}
           <span class="kb-hubval-row"><span>最低卖价 <b>${app.formatISK(val.sell)}</b></span><span>最高收价 <b>${app.formatISK(val.buy)}</b></span></span></div>
-        ${insuranceHtml(insurance, z.totalValue)}
         ${k.zkb.valueLabel ? `<span class="kb-value-note">${app.esc(k.zkb.valueLabel)}</span>` : ''}
+        ${app.openKillFit ? '<div class="kb-fit-cta"><button class="btn btn-primary" data-kill-fit title="在模拟装配中打开这艘船与击杀时的装配">去装配页查看</button></div>' : ''}
       </div>
     </div>
-    ${app.openKillFit ? '<div class="kb-fit-cta"><button class="btn btn-primary" data-kill-fit title="在模拟装配中打开这艘船与击杀时的装配">去装配页查看</button></div>' : ''}
     <div class="segmented kb-tabs">
       <button data-kill-tab="fit" class="active">装配与物品</button>
       <button data-kill-tab="attackers">攻击者（${k.attackers.length}）</button>

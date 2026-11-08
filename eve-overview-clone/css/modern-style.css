@@ -2275,7 +2275,7 @@ td.loc {
 .kb-split { display: flex; flex-direction: row; align-items: baseline; justify-content: flex-end; gap: 12px; font-size: 0.8125rem; }
 .kb-dropped { color: var(--buy-color); }
 .kb-destroyed { color: var(--sell-color); }
-.kb-fit-cta { display: flex; justify-content: flex-end; margin-top: 12px; }
+.kb-fit-cta { display: flex; justify-content: flex-end; margin-top: 4px; }
 .kb-tabs { margin: 14px 0 10px; }
 
 .kb-pane { display: flex; flex-direction: column; gap: 10px; }
@@ -2333,7 +2333,7 @@ td.loc {
   .kb-head { grid-template-columns: 72px 1fr; }
   .kb-ship-render { width: 72px; height: 72px; }
   .kb-ship-actions { flex-direction: row; flex-wrap: wrap; }
-  .kb-ship-actions .btn { width: auto; }
+  .kb-ship-actions .btn { width: 100%; height: auto; min-height: 0; padding: 4px 2px; white-space: normal; line-height: 1.3; font-size: 0.6875rem; text-align: center; }   /* 舰船图只有 72px 宽：按钮文字换行，不压到右边的资料 */
   .kb-values { grid-column: 1 / -1; align-items: stretch; }
   .kb-total, .kb-split { text-align: left; align-items: flex-start; }
   .kb-facts { grid-template-columns: 1fr; }
@@ -4839,8 +4839,6 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 @media (max-width: 768px) { .col-grid { grid-template-columns: 1fr; } }
 
 /* 击杀详情 · 保险 */
-.kb-insurance { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; font-size: 0.75rem; color: var(--text-secondary); }
-.kb-insurance b { color: var(--text-primary); }
 .fit-note { font-size: 0.6875rem; color: var(--text-muted); margin-top: 4px; }
 .fit-val-src { margin-bottom: 6px; }
 .fit-val-src .select-wrap, .fit-val-src select { width: 100%; }
