@@ -896,14 +896,14 @@ node build_reprocess.mjs <SDE 解压目录>   # 输出 eve-overview-clone/reproc
 ### 击杀记录服务部署
 
 ```bash
-# 首次启动会导入最近 30 天的 EVE Ref 每日存档（约 50 万条，约 10 分钟），之后持续收录新击杀
-python3 server/kb_service.py --db /opt/eve/kb/kb.sqlite --port 8291 --days 30
+# 首次启动会导入最近 180 天的 EVE Ref 每日存档（约 300 万条，约 1 小时），之后持续收录新击杀；已有 30 天数据时只补缺的那些天
+python3 server/kb_service.py --db /opt/eve/kb/kb.sqlite --port 8291 --days 180
 ```
 
-- **占用**：数据库约 **10 MB / 天**（30 天约 310 MB），超出保留期的击杀每小时自动清理并把空间还给磁盘，体积不会持续增长
-- **30 天以前**：带筛选条件（人物 / 军团 / 联盟 / 舰船 / 地点）的列表翻完本地记录后，服务会接着实时查询 zKillboard，
+- **占用**：数据库约 **22 MB / 天**（2026-11 生产实测：30 天约 650 MB，180 天约 4 GB），超出保留期的击杀每小时自动清理并把空间还给磁盘，体积不会持续增长；改大 `--days` 前先确认磁盘够用
+- **保留期以前**：带筛选条件（人物 / 军团 / 联盟 / 舰船 / 地点）的列表翻完本地记录后，服务会接着实时查询 zKillboard，
   同样按吉他中间价估值，结果只放内存、不写数据库，列表中以分隔行标出。zKillboard 每个查询最多翻 100 页（2 万条），
-  活跃的大联盟可能查不到 30 天以前；没有筛选条件的全局列表 zKillboard 不支持，只显示保留期内的记录
+  活跃的大联盟可能查不到保留期以前；没有筛选条件的全局列表 zKillboard 不支持，只显示保留期内的记录
 - 本地只保存统计所需的字段和玩家攻击者，不存击杀邮件原文；打开击杀详情时按需向 ESI 获取（内存缓存最近 500 条）
 - 旧版（v10 首版，含原文）数据库在启动时会自动精简一次，期间需要约等于新库大小的临时空间
 
@@ -920,7 +920,7 @@ Description=EVE Market Tool KB service
 After=network-online.target
 
 [Service]
-ExecStart=/usr/bin/python3 /opt/eve/server/kb_service.py --db /opt/eve/kb/kb.sqlite --port 8291 --days 30
+ExecStart=/usr/bin/python3 /opt/eve/server/kb_service.py --db /opt/eve/kb/kb.sqlite --port 8291 --days 180
 Restart=always
 User=www-data
 
