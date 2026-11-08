@@ -400,7 +400,7 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
 
     // 实时流
     var html = '', nowSeen = {};
-    d.recent.forEach(function(r){
+    (BZ && d.recent_nbz && d.recent_nbz.length ? d.recent_nbz : d.recent).forEach(function(r){
       var isNew = !first && !seen[r.id];
       nowSeen[r.id] = 1;
       var leaked = r.proxied && r.real_ip;

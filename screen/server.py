@@ -458,6 +458,7 @@ class Stats:
         self.online_by_min = {}        # 分钟 -> 该分钟观测到的最大在线
         self.last_seen = {}
         self.recent = deque(maxlen=30)
+        self.recent_nbz = deque(maxlen=30)   # 不含战况轮询的访问流
         self.req_times = deque()
         self.req_times_nbz = deque()   # 不含战况轮询(battles/live)的请求时刻
         self.req_nbz = 0
@@ -531,6 +532,8 @@ class Stats:
             tot.pages[np_] += 1
             self.seq += 1
             self.recent.append((self.seq, ip, url, t, is_new))
+            if not (url.startswith("/api/kb/battles") or url.startswith("/api/kb/live")):
+                self.recent_nbz.append((self.seq, ip, url, t, is_new))
         self.geo.want(ip)
 
     def expire(self, now):
@@ -638,6 +641,7 @@ class Stats:
             req60 = sum(1 for x in self.req_times if x >= now - 60)
             req60_nbz = sum(1 for x in self.req_times_nbz if x >= now - 60)
             recent = []
+            recent_nbz = []
             for s, ip, url, t, is_new in reversed(self.recent):
                 real_raw, proxied = self.realip.info(ip)
                 recent.append({
@@ -647,6 +651,10 @@ class Stats:
                     "is_new": is_new,
                     "region": self.region_of(real_raw or ip) or "查询中",
                     "url": url[:120], "t": datetime.fromtimestamp(t, CST).strftime("%H:%M:%S")})
+
+                if not (url.startswith("/api/kb/battles") or url.startswith("/api/kb/live")):
+
+                    recent_nbz.append(recent[-1])
             today = datetime.fromtimestamp(now, CST).date()
             hourly = []
             for h in range(now // 3600 - 23, now // 3600 + 1):
@@ -677,6 +685,7 @@ class Stats:
                 "provinces": [{"name": k, "users": v, "requests": prov_r[k]} for k, v in prov_u.most_common()],
                 "countries": [{"name": k, "users": v} for k, v in ctry.most_common()],
                 "recent": recent,
+                "recent_nbz": recent_nbz,
                 "new_count_24h": self.known.count_since(now - self.WINDOW),
                 "total_users": len(self.known.set),
                 "true_users_24h": self.realip.true_users()[0], "total_true_users": self.realip.true_users()[1],
