@@ -575,7 +575,8 @@ html.no-tree-lines .category-items { border-left: 0; padding-left: 0; margin-lef
 .search-summary { padding: 4px 8px 8px; font-size: 0.75rem; color: var(--text-muted); }
 
 .search-hit { min-height: 44px; }
-.search-hit img, .mini-item img { flex-shrink: 0; border-radius: 4px; background: var(--bg-tertiary); }
+.tree-icon { width: 20px; height: 20px; }
+.search-hit img, .tree-icon, .mini-item img { flex-shrink: 0; border-radius: 4px; background: var(--bg-tertiary); }
 img.broken { opacity: 0; }
 
 .hit-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }

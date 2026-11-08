@@ -1717,6 +1717,7 @@ function setCategoryExpanded(category, expanded) {
 function renderItem(type, extra = '') {
   const active = state.selectedItem?.id === type.id ? ' active' : '';
   return `<button class="item-btn${active}" type="button" data-type-id="${type.id}" title="${esc(type.name)} · Type ${type.id}">
+      <img class="tree-icon" src="${IMAGE_BASE}/${type.id}/icon?size=32" alt="" loading="lazy" width="20" height="20">
       <span class="item-name">${extra || esc(type.name)}</span>
     </button>`;
 }
