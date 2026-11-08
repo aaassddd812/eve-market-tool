@@ -459,6 +459,8 @@ class Stats:
         self.last_seen = {}
         self.recent = deque(maxlen=30)
         self.req_times = deque()
+        self.req_times_nbz = deque()   # 不含战况轮询(battles/live)的请求时刻
+        self.req_nbz = 0
         self.last_ingest = time.time()   # 看门狗：最后一次从日志吃到数据的时刻
 
     def feed(self, line):
@@ -501,6 +503,10 @@ class Stats:
         if t > self.last_seen.get(okey, 0):
             self.last_seen[okey] = t
         self.minute_ips.setdefault(mi, set()).add(okey)
+        is_bz = url.startswith("/api/kb/battles") or url.startswith("/api/kb/live")
+        if not is_bz:
+            self.req_nbz += 1
+            self.req_times_nbz.append(t)
         self.req_times.append(t)
         self.last_ingest = time.time()
         sm = SERVER_PARAM.search(url)
@@ -578,6 +584,8 @@ class Stats:
         with self.lock:
             while self.req_times and self.req_times[0] < now - 60:
                 self.req_times.popleft()
+            while self.req_times_nbz and self.req_times_nbz[0] < now - 60:
+                self.req_times_nbz.popleft()
             self.expire(now)
             on = self.online(now)
             mi = now // 60
@@ -628,6 +636,7 @@ class Stats:
                 else:
                     ctry[COUNTRY_ALIAS.get(country, country) or cc] += 1
             req60 = sum(1 for x in self.req_times if x >= now - 60)
+            req60_nbz = sum(1 for x in self.req_times_nbz if x >= now - 60)
             recent = []
             for s, ip, url, t, is_new in reversed(self.recent):
                 real_raw, proxied = self.realip.info(ip)
@@ -654,8 +663,10 @@ class Stats:
                 "updated": datetime.fromtimestamp(now, CST).strftime("%Y-%m-%d %H:%M:%S"),
                 "today_users": len(real_req),
                 "today_requests": tot.req,
+                "req_nbz_24h": self.req_nbz,
                 "proxied_count": self.realip.proxied_count(),
                 "req_per_sec": round(req60 / 60.0, 2),
+                "rps_nbz": round(req60_nbz / 60.0, 2),
                 "online_now": self.online(now),
                 "peak_online": peak,
                 "peak_time": datetime.fromtimestamp(peak_t, CST).strftime("%H:%M") if peak_t else None,

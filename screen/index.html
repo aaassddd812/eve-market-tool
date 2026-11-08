@@ -88,6 +88,9 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
 .panel>*{flex-shrink:0}
 .panel>#provBar{flex-shrink:1}
 #provBar{flex:1;min-height:0}
+.bz-sw{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--sub);cursor:pointer;user-select:none;margin-left:12px}
+.bz-sw input{accent-color:var(--orange)}
+.bz-sw span{line-height:1}
 #pages{max-height:238px;overflow-y:auto;overflow-x:hidden;scrollbar-width:thin;margin:0 -8px}
 .rows{list-style:none}
 .rows li{position:relative;display:flex;justify-content:space-between;align-items:center;gap:12px;height:22px;line-height:22px;padding:0 8px;margin:0 0 2px;font-size:12px;border-radius:4px;overflow:hidden}
@@ -176,7 +179,8 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
 </head>
 <body>
 <header>
-  <div class="brand"><img class="logo" src="/screen/static/logo.svg?v=2" alt="EVE 工具站"><h1>EVE 工具站 · 实时访问</h1><span class="host">eve.navexor.top</span></div>
+  <div class="brand"><img class="logo" src="/screen/static/logo.svg?v=2" alt="EVE 工具站"><h1>EVE 工具站 · 实时访问</h1>
+      <label class="bz-sw" title="剔除 /api/kb/battles 与 /api/kb/live 的轮询请求，看真实功能流量"><input type="checkbox" id="bzFilter"><span>过滤战况</span></label><span class="host">eve.navexor.top</span></div>
   <div class="status"><span class="dot live" id="dot"></span><span id="updated">连接中…</span><span>· 北京时间</span></div>
 </header>
 
@@ -387,8 +391,8 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
   }
   function render(d){
     last = d;
-    tween('k_users', d.true_users_24h); tween('k_req', d.today_requests); tween('k_online', d.online_now);
-    tween('k_rps', d.req_per_sec, 2); tween('k_peak', d.peak_online); tween('k_new', d.new_count_24h || 0); tween('k_total', d.total_true_users);
+    tween('k_users', d.true_users_24h); tween('k_req', BZ ? d.req_nbz_24h : d.today_requests); tween('k_online', d.online_now);
+    tween('k_rps', BZ ? d.rps_nbz : d.req_per_sec, 2); tween('k_peak', d.peak_online); tween('k_new', d.new_count_24h || 0); tween('k_total', d.total_true_users);
     $('k_req_f').textContent = d.today_users ? '人均 ' + Math.round(d.today_requests / d.today_users) + ' 次' : ' ';
     $('k_peak_f').textContent = d.peak_time ? '出现于 ' + (d.peak_day === 'yesterday' ? '昨天 ' : '今天 ') + d.peak_time : ' ';
     $('updated').textContent = '更新于 ' + d.updated.slice(11);
@@ -428,10 +432,11 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
     renderProv(d);
 
     // 热门页面
-    var pmax = d.top_pages.length ? d.top_pages[0].count : 1;
+    var pages = BZ ? d.top_pages.filter(function(p){ return p.path !== "/api/kb/battles" && p.path !== "/api/kb/live"; }) : d.top_pages;
+    var pmax = pages.length ? pages[0].count : 1;
     if ((window._pc = (window._pc || 0) + 1) % 5 === 1) {     // 每秒轮询但列表5秒一更，保留滚动位置
       var _ul = $('pages'), _st = _ul.scrollTop;
-    var html = d.top_pages.map(function(p){
+    var html = pages.map(function(p){
       return '<li><i class="bar" style="width:' + (p.count / pmax * 100).toFixed(1) + '%"></i><span class="p" title="' + esc(p.path) + '">' + esc(trunc(p.path, 22)) +
              '</span><span class="num">' + fmt(p.count) + '</span></li>';
     }).join('');
@@ -462,6 +467,18 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
     hourChart.setOption({xAxis:{data:hourly.map(function(x){ return x.date + ' ' + x.hour; })},
       series:[{id:'u_yesterday', data:pick('yesterday','users', true)}, {id:'r_yesterday', data:pick('yesterday','requests', true)},
               {id:'u_today', data:pick('today','users')}, {id:'r_today', data:pick('today','requests')}]});
+  }
+
+  var BZ = false;
+  try { BZ = localStorage.getItem("eve-bz-filter") === "1"; } catch (e) {}
+  var bzEl = $("bzFilter");
+  if (bzEl) {
+    bzEl.checked = BZ;
+    bzEl.addEventListener("change", function () {
+      BZ = bzEl.checked;
+      try { localStorage.setItem("eve-bz-filter", BZ ? "1" : "0"); } catch (e) {}
+      window._pc = 0;   // 让热门页面立即重渲染
+    });
   }
 
   function poll(){
