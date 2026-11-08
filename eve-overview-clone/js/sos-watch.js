@@ -8,7 +8,7 @@
 
 import { SERVER, serverKey } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v10';
+import * as AP from './alert-push.js?v=v11';
 
 let ctx;   // esc, formatISK, showToast, resolveNames, accounts, tokenInfo, hasScope, openEsiBind, openWhSystem
 const KEY = serverKey('eve-sos-watch-v1');

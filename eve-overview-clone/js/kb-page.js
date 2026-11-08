@@ -436,7 +436,7 @@ function renderBattles() {
       <a class="btn btn-ghost kb-bh-entry" href="#kb/battles" data-kb-bh title="最近 30 天全部疑似会战、双方战损比，可筛选">近 30 天会战 ›</a>
       <span class="kb-battle-notify"><label class="jump-check"><span>提醒规模</span><select class="cr-input kb-battle-min" data-battle-set="min" aria-label="提醒规模">${tiers.map((t) => `<option value="${t.key}"${set.min === t.key ? ' selected' : ''}>${t.key === 'small' ? '全部' : t.name.replace('会战', '') + '以上'}</option>`).join('')}</select></label>
         <label class="jump-check"><input type="checkbox" data-battle-set="on"${set.on ? ' checked' : ''}><span>弹出提醒</span></label>
-        <button type="button" class="link-btn" data-battle-push title="新会战推送到企业微信 / 邮箱，在「预警 → 微信 / 邮箱」里勾选「会战」">推送到微信 / 邮箱</button></span>
+        <button type="button" class="link-btn" data-battle-push title="新会战推送到企业微信、邮箱、Server酱等，在「预警 → 消息推送」里勾选「会战」">消息推送</button></span>
     </div>`;
   const cards = list.map((b) => {
     const sys = kb.systemLabel(b.system_id);

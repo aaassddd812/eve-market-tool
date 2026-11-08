@@ -18,7 +18,7 @@
 // 悬浮窗（float-feed.js）：「日志预警」显示最近消息（敌情 / 关键词 / 游戏日志），「频道翻译」显示译文；有新预警时悬浮窗切到「日志预警」。
 
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v10';
+import * as AP from './alert-push.js?v=v11';
 import * as ST from './standings.js?v=v4';
 import * as FF from './float-feed.js?v=v11';
 

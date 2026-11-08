@@ -85,6 +85,7 @@ import ctypes
 import datetime as dt
 import email.message
 import email.utils
+import functools
 import gzip
 import hashlib
 import hmac
@@ -6758,9 +6759,10 @@ class Plaza:
                 "ttl": PLAZA_TTL, "other_max": PLAZA_OTHER_MAX, "fit_max": PLAZA_FIT_MAX}
 
 
-# ---------------------------------------------------------------- 预警推送（企业微信群机器人、电子邮件）
+# ---------------------------------------------------------------- 预警推送（企业微信群机器人、电子邮件、Server酱等）
 # 浏览器里的击杀预警 / 本地日志命中后，把要推送的内容交给本服务转发：
 #   企业微信：浏览器不能跨域调群机器人接口，由这里转发到 qyapi.weixin.qq.com（只接受机器人 key，不接受任意地址）
+#   Server酱、PushPlus、钉钉、飞书、Bark（PUSH_TOKEN）：同样只接受各自的 key / token，发到固定的官方地址
 #   邮件：浏览器不能直连 SMTP。用户在网页上填自己的发件邮箱、授权码（只存在用户浏览器里），每次发信连同内容一起带过来，
 #     这里登录用户的邮件服务器发给用户指定的一个收件地址；账号、授权码用完即丢，不保存、不写日志。
 #     只连公网地址的常用邮件端口（不能拿来探测内网），只发一个收件人，必须加密连接。
@@ -6775,6 +6777,15 @@ PUSH_LINE_MAX = 300             # 每行最多几个字
 PUSH_WECOM_GAP = 3              # 同一个机器人两条至少隔几秒（企业微信限每分钟 20 条）
 PUSH_MAIL_GAP = 20              # 同一个发件账号两封至少隔几秒（浏览器按 60 秒合并，测试邮件不等）
 PUSH_MAIL_IP_DAY = 300          # 同一个 IP 每天最多发几封
+# 只填 key 的渠道：名称、key 格式、加签密钥格式（None = 没有加签）；两条至少隔几秒
+PUSH_TOKEN = {
+    "sct": ("Server酱", re.compile(r"SCT[0-9A-Za-z]{10,60}|sctp\d{1,12}t[0-9A-Za-z]{10,60}"), None),
+    "pushplus": ("PushPlus", re.compile(r"[0-9a-f]{32}"), None),
+    "dingtalk": ("钉钉", re.compile(r"[0-9a-f]{64}"), re.compile(r"SEC[0-9a-f]{64}")),
+    "feishu": ("飞书", re.compile(r"(?:lark:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"), re.compile(r"[0-9A-Za-z]{10,64}")),
+    "bark": ("Bark", re.compile(r"[0-9A-Za-z]{16,40}"), None),
+}
+PUSH_TOKEN_GAP = 3
 PUSH_TEST_PRIVATE = os.environ.get("EVE_PUSH_TEST_SMTP") == "1"   # 仅本机测试：允许连内网 / 不加密的邮件服务器
 
 
@@ -6871,6 +6882,77 @@ class AlertPush:
         # 企业微信 markdown 不认转义：会打乱格式的符号换成全角
         return s.translate(str.maketrans("[]<>*`", "［］＜＞＊｀"))
 
+    # ---------- Server酱 / PushPlus / 钉钉 / 飞书 / Bark ----------
+    def token(self, ch, body, ip=None):
+        name, key_re, secret_re = PUSH_TOKEN[ch]
+        key = str(body.get("key") or "").strip()
+        if ch in ("pushplus", "dingtalk", "feishu"):
+            key = key.lower()
+        if not key_re.fullmatch(key):
+            raise ValueError(f"{name} 的 key 不对")
+        secret = str(body.get("secret") or "").strip()
+        if secret and not (secret_re and secret_re.fullmatch(secret)):
+            raise ValueError(f"{name} 的加签密钥不对")
+        title, lines, more = self.content(body)
+        self.gap(f"{ch}:{key}", PUSH_TOKEN_GAP)
+        en = body.get("lang") == "en"
+        more_text = (f"… and {more} more" if en else f"……另有 {more} 条") if more else ""
+        md = [f"- [{self.md(t)}]({u})" if u else f"- {self.md(t)}" for t, u in lines] + ([more_text] if more else [])
+        sign = None
+        if ch == "sct":
+            m = re.fullmatch(r"sctp(\d+)t.+", key)
+            url = f"https://{m.group(1)}.push.ft07.com/send/{key}.send" if m else f"https://sctapi.ftqq.com/{key}.send"
+            data = {"title": title, "desp": "\n".join(md)}
+        elif ch == "pushplus":
+            url, data = "https://www.pushplus.plus/send", {"token": key, "title": title, "content": "\n".join(md), "template": "markdown"}
+        elif ch == "dingtalk":
+            url = "https://oapi.dingtalk.com/robot/send?access_token=" + key
+            if secret:
+                ts = str(int(time.time() * 1000))
+                sign = base64.b64encode(hmac.new(secret.encode(), f"{ts}\n{secret}".encode(), hashlib.sha256).digest()).decode()
+                url += f"&timestamp={ts}&sign={urllib.parse.quote(sign)}"
+            # 机器人「自定义关键词」安全设置：内容里带上 EVE
+            data = {"msgtype": "markdown", "markdown": {"title": title, "text": f"#### {self.md(title)}\n\n" + "\n".join(md) + "\n\n— EVE Market"}}
+        elif ch == "feishu":
+            base = "https://open.larksuite.com" if key.startswith("lark:") else "https://open.feishu.cn"
+            url = f"{base}/open-apis/bot/v2/hook/{key.removeprefix('lark:')}"
+            rows = [[{"tag": "a", "text": t, "href": u}] if u else [{"tag": "text", "text": t}] for t, u in lines]
+            rows += ([[{"tag": "text", "text": more_text}]] if more else []) + [[{"tag": "text", "text": "— EVE Market"}]]
+            data = {"msg_type": "post", "content": {"post": {"en_us" if en else "zh_cn": {"title": title, "content": rows}}}}
+            if secret:
+                ts = str(int(time.time()))
+                data.update(timestamp=ts, sign=base64.b64encode(hmac.new(f"{ts}\n{secret}".encode(), b"", hashlib.sha256).digest()).decode())
+        else:
+            # Bark 是系统通知，只放纯文字；点通知打开第一条的链接
+            url = "https://api.day.app/push"
+            data = {"device_key": key, "title": title, "body": "\n".join([t for t, _ in lines] + ([more_text] if more else [])), "group": "EVE Market"}
+            link = next((u for _, u in lines if u), "")
+            if link:
+                data["url"] = link
+        req = urllib.request.Request(url, data=json.dumps(data, ensure_ascii=False).encode(), headers={"Content-Type": "application/json; charset=utf-8"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                res = json.load(r)
+        except urllib.error.HTTPError as e:
+            try:
+                res = json.load(e)
+            except Exception:  # noqa: BLE001
+                raise EsiUnavailable(f"{name} 返回 HTTP {e.code}") from e
+        except Exception as e:  # noqa: BLE001
+            raise EsiUnavailable(f"连不上{name}：{e}") from e
+        if not isinstance(res, dict):
+            raise EsiUnavailable(f"{name} 返回的内容不对")
+        code = res.get("errcode", res.get("code", res.get("StatusCode", 0)))
+        ok_code = 200 if ch in ("pushplus", "bark") else 0
+        if code != ok_code:
+            msg = str(res.get("errmsg") or res.get("msg") or res.get("message") or res.get("StatusMessage") or "")[:160]
+            if ch == "dingtalk" and code == 310000:
+                msg = "安全设置不通过：加签密钥不对，或者关键词没有设成 EVE（" + msg + "）"
+            elif ch == "feishu" and code == 19021:
+                msg = "签名校验失败：加签密钥不对"
+            raise ValueError(f"{name}返回错误 {code}：{msg}")
+        return {"ok": True}
+
     # ---------- 邮件（用户自己的发件邮箱）----------
     @staticmethod
     def resolve(host, port):
@@ -6913,8 +6995,8 @@ class AlertPush:
         rows = "".join(f'<li style="margin:6px 0">{f"<a href={chr(34)}{esc(u)}{chr(34)}>{esc(t)}</a>" if u else esc(t)}</li>' for t, u in lines)
         html = (f'<p style="font-size:15px;font-weight:600">{esc(title)}</p><ul style="padding-left:18px;font-size:14px">{rows}</ul>'
                 + ((f"<p>… and {more} more</p>" if en else f"<p>……另有 {more} 条</p>") if more else "")
-                + ('<p style="color:#888;font-size:12px">From EVE Market alerts. Turn them off under the bell (top right) → WeCom / Email.</p>' if en else
-                   '<p style="color:#888;font-size:12px">来自 EVE Market 预警，可在网站右上角铃铛的「微信 / 邮箱」里关闭。</p>'))
+                + ('<p style="color:#888;font-size:12px">From EVE Market alerts. Turn them off under the bell (top right) → Notifications.</p>' if en else
+                   '<p style="color:#888;font-size:12px">来自 EVE Market 预警，可在网站右上角铃铛的「消息推送」里关闭。</p>'))
         msg = email.message.EmailMessage()
         msg["Subject"] = title
         msg["From"] = email.utils.formataddr(("EVE Market", user))
@@ -6987,7 +7069,7 @@ HOSTED_SOS_GAP = 60
 HOSTED_ORDER_GAP = 300          # 订单比价间隔（市场订单 ESI 缓存 5 分钟）
 HOSTED_ORDER_MAX = 120          # 一个角色最多比价多少张订单
 HOSTED_SENT_KEEP = 20           # 状态里保留最近几条推送
-HOSTED_PUSH_GAP = {"wecom": 5, "mail": 60}
+HOSTED_PUSH_GAP = {"wecom": 5, "mail": 60, "sct": 60, "pushplus": 30, "dingtalk": 5, "feishu": 5, "bark": 5}
 HOSTED_SRCS = ("kill", "sos", "order", "battle", "price", "skill", "job", "pi", "sold", "contract")
 HOSTED_LABELS = {"kill": ("击杀预警", "Kill alert"), "sos": ("虫洞求救", "Wormhole SOS"), "order": ("订单被压价", "Order undercut"), "battle": ("会战", "Battle"),
                  "price": ("到价提醒", "Price alert"), "skill": ("技能队列", "Skill queue"), "job": ("工业任务", "Industry job"), "pi": ("行星开采", "PI extractor"),
@@ -7144,8 +7226,16 @@ class Hosted:
             if not PUSH_MAIL_RE.fullmatch(to):
                 raise ValueError("收件邮箱不对")
             ch["mail"] = {"smtp": smtp, "to": to, "use": [x for x in src if x in (m.get("use") or [])]}
+        for k, (name, key_re, secret_re) in PUSH_TOKEN.items():
+            t = s.get(k) if isinstance(s.get(k), dict) else None
+            if not (t and t.get("key")):
+                continue
+            key, secret = str(t["key"]).strip(), str(t.get("secret") or "").strip()
+            if not key_re.fullmatch(key) or (secret and not (secret_re and secret_re.fullmatch(secret))):
+                raise ValueError(f"{name}设置不对")
+            ch[k] = {"key": key, "secret": secret, "use": [x for x in src if x in (t.get("use") or [])]}
         if not any(c["use"] for c in ch.values()):
-            raise ValueError("企业微信和邮箱都没有设置，或者没有勾选要推送的预警")
+            raise ValueError("推送渠道都没有设置，或者没有勾选要推送的预警")
         out = {"src": src, "ch": ch, "lang": "en" if s.get("lang") == "en" else "zh"}
         for k in ("site", "killUrl"):
             v = str(s.get(k) or "")
@@ -7178,7 +7268,7 @@ class Hosted:
 
     def runtime(self, server, char, name, cfg, state):
         return {"server": server, "char": char, "name": name, "cfg": cfg, "state": state, "access": "", "exp": 0, "dead": bool(state.get("token_error")),
-                "range": {}, "loc_at": 0, "online_at": 0, "order_at": 0, "at": {}, "busy": set(), "queue": {"wecom": [], "mail": []}, "last": {"wecom": 0, "mail": 0},
+                "range": {}, "loc_at": 0, "online_at": 0, "order_at": 0, "at": {}, "busy": set(), "queue": {k: [] for k in HOSTED_PUSH_GAP}, "last": dict.fromkeys(HOSTED_PUSH_GAP, 0),
                 "dirty": False, "tlock": threading.Lock()}
 
     # ---------- 令牌 ----------
@@ -7448,6 +7538,8 @@ class Hosted:
             try:
                 if ch == "wecom":
                     self.push.wecom({**body, "key": c["key"]})
+                elif ch in PUSH_TOKEN:
+                    self.push.token(ch, {**body, "key": c["key"], "secret": c["secret"]})
                 else:
                     self.push.mail({**body, "smtp": c["smtp"], "to": c["to"]}, "hosted:" + str(sub["char"]))
                 sub["state"].setdefault("errors", {}).pop("push_" + ch, None)
@@ -9135,7 +9227,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
         def push(self, path):
             # 预警推送（同源调用，不带 CORS 头）；机器人 key、邮箱账号、授权码不写日志
             op = path[len("/api/kb/push/"):]
-            ops = {"wecom": api.push.wecom, "mail": api.push.mail}
+            ops = {"wecom": api.push.wecom, "mail": api.push.mail, **{k: functools.partial(api.push.token, k) for k in PUSH_TOKEN}}
             if op not in ops:
                 return self.send_json(404, {"error": "not found"})
             ip = self.client_ip()

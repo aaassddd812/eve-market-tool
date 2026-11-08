@@ -9,7 +9,7 @@
 //   服务器托管（alert-host.js）：监控中的提醒交给服务器（hostedAlerts），网页关掉也查；每条提醒的 key 含启用时间，重新启用算新的一条。
 import { loadHubs } from './hub-compare.js?v=v15';
 import * as FF from './float-feed.js?v=v11';
-import * as AP from './alert-push.js?v=v10';
+import * as AP from './alert-push.js?v=v11';
 import { L } from './alert-mail.js?v=v8';
 
 let ctx = null;   // isGlobal, fetchESI, fetchESIPaged, regions, esc, formatISK, formatPrice, formatNumber, showToast, typeName, iconUrl, openItem, favorites, toggleFavorite, store, isActive, openPush
@@ -132,7 +132,7 @@ function headHtml(ids) {
     ${FF.buttonHtml('price')}
     <button class="btn btn-ghost btn-sm" data-wb-refresh ${S.busy ? 'disabled' : ''}>${S.busy ? '读取中…' : '刷新'}</button></div>
     <div class="wb-bar">${chk('bg', '后台监控到价', '看板关着时也每 5 分钟检查一次（网页开着才有效）')}${chk('notify', '桌面通知', '需要允许浏览器通知')}${chk('sound', '提示音', '触发时播放提示音')}
-      <button type="button" class="link-btn" data-wb-push title="触发时推送到企业微信 / 邮箱，也可以交给服务器托管（网页关掉也提醒）">推送到微信 / 邮箱</button>
+      <button type="button" class="link-btn" data-wb-push title="触发时推送到企业微信、邮箱、Server酱等，也可以交给服务器托管（网页关掉也提醒）">消息推送</button>
       <span class="text-muted">${armedCount() ? `${armedCount()} 条提醒监控中` : '点 🔔 给物品设到价提醒'}</span></div>`;
 }
 

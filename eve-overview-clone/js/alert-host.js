@@ -1,11 +1,11 @@
-// ===== 服务器托管预警（「预警 → 微信 / 邮箱」标签页的「服务器托管」分区，由 alert-push.js 画）=====
+// ===== 服务器托管预警（「预警 → 消息推送」标签页的「服务器托管」分区，由 alert-push.js 画）=====
 // 网页或客户端开着时，预警都在本机检查；用户可以勾选几种预警交给击杀记录服务在后台检查（/api/kb/hosted/*，见 kb_service.py 的 Hosted），
 // 网页关掉也会推送到这里设置的企业微信 / 邮箱。默认关闭，开启前必须勾选「已了解风险」。
 //   能托管：击杀预警（人物关注、星域监控、按位置预警）、虫洞求救、订单被压价、会战（按提醒规模）、到价提醒（自选看板里监控中的），
 //     以及授权角色的技能队列、工业任务、行星开采、订单成交 / 过期、合同。本地日志、本地红名要读本机游戏日志 / 画面，不能托管。
 //   授权：单独登录一次（只要勾选的预警用得到的权限），刷新令牌直接交给服务器，不存进本机账号，和浏览器里绑定的令牌互不影响。
 //   设置：开启时把击杀预警 / 虫洞求救的设置和企业微信 / 邮箱账号一起交给服务器；之后网页上改了会自动同步（sync，3 秒防抖，内容没变不发）。
-//   去重：托管期间，网页上同类提醒不再推送到企业微信 / 邮箱（alert-push.js 的 push 跳过 covers(src)），网页弹窗、提示音照旧。
+//   去重：托管期间，网页上同类提醒不再推送到企业微信 / 邮箱等渠道（alert-push.js 的 push 跳过 covers(src)），网页弹窗、提示音照旧。
 // 本机只存 { 角色 ID, 名字, 凭证, 托管项, 权限 }（eve-alert-hosted-v1，按服务器），凭证用来查看状态、改设置、停止托管。
 
 import { SERVER, IS_TQ, serverKey, kbSiteLink } from './server.js?v=s4';
@@ -63,11 +63,13 @@ async function scopesFor(src) {
 
 // 交给服务器的设置：渠道账号 + 击杀预警 / 虫洞求救的设置（舰船类别换成舰船 ID 列表，服务器没有市场分类）
 async function settings(src) {
-  const { P, ready } = deps.channels();
+  const { P, ready, CH } = deps.channels();
   const use = (ch) => src.filter((s) => P[ch].use[s]);
+  // Server酱 / PushPlus / 钉钉 / 飞书 / Bark
+  const tk = Object.fromEntries(CH.filter((ch) => ch !== 'wecom' && ch !== 'mail').map((ch) => [ch, ready(ch) ? { key: P[ch].key, secret: P[ch].secret || '', use: use(ch) } : null]));
   const k = src.includes('kill') ? await deps.killSettings() : {};
   return {
-    src, lang: deps.lang(),
+    src, lang: deps.lang(), ...tk,
     wecom: ready('wecom') ? { key: P.wecom.key, use: use('wecom') } : null,
     mail: ready('mail') ? { user: P.mail.user, password: P.mail.pass, to: P.mail.to || P.mail.user, host: P.mail.host, port: Number(P.mail.port), security: P.mail.security, use: use('mail') } : null,
     kill: src.includes('kill') ? {
@@ -99,8 +101,8 @@ async function run(k, fn) {
 
 async function startAuth() {
   const src = [...S.pick];
-  const { ready } = deps.channels();
-  if (!ready('wecom') && !ready('mail')) { deps.showToast('先在上面设置企业微信或邮箱', 'error'); return; }
+  const { ready, CH } = deps.channels();
+  if (!CH.some(ready)) { deps.showToast('先在上面设置一个推送渠道（企业微信、邮箱、Server酱等）', 'error'); return; }
   if (!src.length) { deps.showToast('至少选一种要托管的预警', 'error'); return; }
   await run('auth', async () => {
     const url = await deps.authLink(await scopesFor(src));
@@ -201,11 +203,11 @@ ${cancel ? '<button class="btn btn-ghost btn-sm" data-ah-cancel>取消</button>'
 }
 
 const RISKS = [
-  '服务器会保存：这个角色的 ESI 授权（只含勾选的预警用得到的权限）、上面设置的企业微信机器人地址、邮箱账号和授权码。',
+  '服务器会保存：这个角色的 ESI 授权（只含勾选的预警用得到的权限）、上面设置的企业微信机器人地址、邮箱账号和授权码，以及 Server酱、钉钉等渠道的 key。',
   '这些信息加密保存，数据库单独泄露时读不出来；但服务器本身被攻破时仍可能泄露：别人可以读到你勾选的那些角色数据（位置、订单、技能队列、工业、行星、合同），用你的邮箱发信、往你的群里发消息。',
   '授权都是只读的，不能转账、交易或改游戏设置。',
   '随时可以关掉托管开关，服务器上的数据立即删除；也可以在 CCP 的第三方应用授权页撤销授权。',
-  '托管期间，网页上同类提醒不再重复推送到企业微信 / 邮箱（网页弹窗、提示音照旧）；网页上改了预警设置会自动同步给服务器。'
+  '托管期间，网页上同类提醒不再重复推送到企业微信 / 邮箱等渠道（网页弹窗、提示音照旧）；网页上改了预警设置会自动同步给服务器。'
 ];
 
 export function html() {
@@ -216,7 +218,7 @@ export function html() {
   if (!H) {
     const rows = SRC.map(([k, l]) => `<label class="ka-opt"><span><b>${l}</b></span><input type="checkbox" class="ka-switch" data-ah-pick="${k}"${S.pick.has(k) ? ' checked' : ''}></label>`).join('');
     return `<section class="ka-sec">${head}
-      <p class="ka-note">默认关闭：网页或客户端开着时，预警都在你自己的电脑上检查。勾选的预警交给本站服务器后台检查，网页关掉也会推送到上面设置的企业微信 / 邮箱。</p>
+      <p class="ka-note">默认关闭：网页或客户端开着时，预警都在你自己的电脑上检查。勾选的预警交给本站服务器后台检查，网页关掉也会推送到上面设置的渠道。</p>
       <div class="ka-list">${rows}</div>
       <div class="ap-help"><b>开启前请了解风险</b><ul>${RISKS.map((x) => `<li>${x}</li>`).join('')}</ul></div>
       <label class="ka-opt"><span><b>我已了解上述风险，同意由服务器保存这些信息</b></span><input type="checkbox" class="ka-switch" data-ah-agree${S.agree ? ' checked' : ''}></label>
@@ -234,7 +236,8 @@ export function html() {
     return `<label class="ka-opt"><span><b>${l}</b><small>${on ? (e ? '出错：' + esc(e) : checked(k) ? `上次检查 ${time(checked(k))}${extra}` : '等待第一次检查') : '未托管'}</small></span>
       <input type="checkbox" class="ka-switch" data-ah-src="${k}"${on ? ' checked' : ''}${S.busy ? ' disabled' : ''}></label>`;
   };
-  const pushErr = ['wecom', 'mail'].map((ch) => st?.errors?.['push_' + ch] ? `<p class="ka-warn">${ch === 'wecom' ? '企业微信' : '邮箱'}推送失败：${esc(st.errors['push_' + ch])}</p>` : '').join('');
+  const { CH, LABEL } = deps.channels();
+  const pushErr = CH.map((ch) => st?.errors?.['push_' + ch] ? `<p class="ka-warn">${LABEL[ch]}推送失败：${esc(st.errors['push_' + ch])}</p>` : '').join('');
   const sent = st?.sent?.length ? `<div class="ap-help"><b>最近推送</b><ul>${st.sent.slice(0, 5).map(([t, s, text]) => `<li>${time(t)} · ${SRC_ZH[s] || s} · ${esc(text)}</li>`).join('')}</ul></div>` : '';
   const need = S.need?.length ? `<p class="ka-warn">新加的预警需要${S.need.map((x) => SCOPE_ZH[x] || x).join('、')}权限，要重新授权一次</p>
     ${S.step ? authStep(esc, true) : `<div class="ka-actions"><button class="btn btn-primary btn-sm" data-ah-auth${busy('auth')}>重新授权</button><button class="btn btn-ghost btn-sm" data-ah-cancel>取消</button></div>`}` : '';

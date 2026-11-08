@@ -1,35 +1,47 @@
-// ===== 企业微信 / 邮箱提醒（击杀预警、本地日志、本地红名、虫洞求救、订单被压价、会战、到价提醒、角色提醒共用）=====
-// 「预警」弹窗的「微信 / 邮箱」标签页（alert-center.js）：
+// ===== 消息推送：企业微信 / 邮箱 / Server酱 / PushPlus / 钉钉 / 飞书 / Bark（击杀预警、本地日志、本地红名、虫洞求救、订单被压价、会战、到价提醒、角色提醒共用）=====
+// 「预警」弹窗的「消息推送」标签页（alert-center.js）：
 //   企业微信：群里添加「群机器人」，把它的 Webhook 地址填进来；
 //   邮箱：用户自己的发件邮箱 + 授权码（SMTP 服务器按邮箱域名自动填，也可手改），发给自己指定的收件邮箱；保存时先发一封测试，成功才保存。
-//   每个渠道分别勾选推送哪种预警。两种都经击杀记录服务转发（/api/kb/push/*，浏览器不能直接跨域调企业微信，也不能直连 SMTP），
+//   Server酱、PushPlus、钉钉、飞书、Bark（TK）：只填 key（钉钉、飞书可加签名密钥），保存时先发一条测试，成功才保存；没设置的收在「添加渠道」里。
+//   每个渠道分别勾选推送哪种预警。都经击杀记录服务转发（/api/kb/push/*，浏览器不能直接跨域调企业微信，也不能直连 SMTP），
 //   邮箱账号和授权码只存在本机浏览器，每次发信随请求带给服务器，服务器不保存。
 // 发送：push(src, { sig, text, url })。多个标签页同一条只发一次（sig 记在 localStorage 5 分钟）；
 //   同一渠道把一段时间里的提醒合并成一条（企业微信至少隔 5 秒，邮件至少隔 60 秒，上次发送时间多个标签页共用）。
 //   内容语言跟随界面语言（调用方用 alert-mail.js 的 L() 生成文字）。
-// 设置存在 eve-alert-push-v1（各服务器共用）：{ wecom: { key, use: { 提醒种类: 是否推送 } }, mail: { user, pass, to, host, port, security, ok, use } }；
+// 设置存在 eve-alert-push-v1（各服务器共用）：{ wecom: { key, use: { 提醒种类: 是否推送 } }, mail: { user, pass, to, host, port, security, ok, use }, sct / pushplus / …: { key, secret, use } }；
 //   种类见 SRC；技能队列、工业任务、行星开采、订单成交、合同只能推送（char-alerts.js 在有渠道要推时才去读角色数据）。
 //   ok：测试邮件发成功过（这之后才推送）。
 // 下面还有「服务器托管」分区（alert-host.js）：托管了的预警由服务器推送，这里的 push 跳过，免得重复。
 
 import { SERVER } from './server.js?v=s4';
 import { L } from './alert-mail.js?v=v8';
-import * as AH from './alert-host.js?v=v5';
+import * as AH from './alert-host.js?v=v6';
 
 let ctx;   // esc, showToast
 const KEY = 'eve-alert-push-v1';
 const SENT_KEY = 'eve-alert-pushed';
 const LAST_KEY = 'eve-alert-push-last';
 const API = '/api/kb/push/';
-const CH = ['wecom', 'mail'];
-const GAP = { wecom: 5e3, mail: 60e3 };
+// 只填 key 的渠道：名称、说明、输入框提示、从粘贴的内容里取 key 的正则、签名密钥（[提示, 格式]）、合并间隔
+const TK = {
+  sct: { name: 'Server酱', sub: '推送到微信', ph: 'SendKey（SCT 开头）', re: /(SCT[0-9A-Za-z]{10,60}|sctp\d{1,12}t[0-9A-Za-z]{10,60})/, gap: 60e3 },
+  pushplus: { name: 'PushPlus', sub: '推送到微信公众号', ph: 'token（32 位）', re: /\b([0-9a-f]{32})\b/i, gap: 30e3 },
+  dingtalk: { name: '钉钉', sub: '群机器人', ph: 'https://oapi.dingtalk.com/robot/send?access_token=…', re: /access_token=([0-9a-f]{64})/i, secret: ['加签密钥（SEC 开头，没开加签就留空）', /^SEC[0-9a-f]{64}$/], gap: 5e3 },
+  feishu: { name: '飞书', sub: '群机器人', ph: 'https://open.feishu.cn/open-apis/bot/v2/hook/…', re: /\/hook\/([0-9a-f-]{36})/i, secret: ['签名校验密钥（没开就留空）', /^[0-9A-Za-z]{10,64}$/], gap: 5e3 },
+  bark: { name: 'Bark', sub: 'iPhone 通知', ph: 'https://api.day.app/你的key/ 或 key', re: /^(?:https:\/\/api\.day\.app\/)?([0-9A-Za-z]{16,40})(?:\/.*)?$/, gap: 5e3 }
+};
+const CH = ['wecom', 'mail', ...Object.keys(TK)];
+const LABEL = { wecom: '企业微信', mail: '邮箱', ...Object.fromEntries(Object.entries(TK).map(([k, t]) => [k, t.name])) };
+const GAP = { wecom: 5e3, mail: 60e3, ...Object.fromEntries(Object.entries(TK).map(([k, t]) => [k, t.gap])) };
 // [种类, 名称, 说明]；会战默认不推（全服的会战，开了会比较多）
 const SRC = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名'], ['sos', '虫洞求救'], ['order', '订单被压价'], ['battle', '会战', '击杀页「疑似会战」，按那里设的提醒规模'],
   ['price', '到价提醒', '自选看板里设的到价提醒'], ['skill', '技能队列', '当前角色的技能练完、队列剩不到 24 小时、队列空了'], ['job', '工业任务', '当前角色的制造、研究、发明、反应任务完成'],
   ['pi', '行星开采', '当前角色的行星开采器停了'], ['sold', '订单成交', '当前角色的市场订单全部成交或过期'], ['contract', '合同', '当前角色发布的合同被接、完成、失败，拍卖有新出价，收到指定给你的合同']];
 const useDefault = () => Object.fromEntries(SRC.map(([s]) => [s, s !== 'battle']));
-const P = { wecom: { key: '', use: useDefault() }, mail: { user: '', pass: '', to: '', host: '', port: 465, security: 'ssl', ok: false, use: useDefault() } };
-const S = { edit: false, custom: false, help: '', busy: '', error: { wecom: '', mail: '' } };   // edit：正在修改邮箱设置；custom：展开了服务器设置；help：展开的教程
+const P = { wecom: { key: '', use: useDefault() }, mail: { user: '', pass: '', to: '', host: '', port: 465, security: 'ssl', ok: false, use: useDefault() },
+  ...Object.fromEntries(Object.keys(TK).map((k) => [k, { key: '', secret: '', use: useDefault() }])) };
+// edit：正在修改邮箱设置；custom：展开了服务器设置；help：展开的教程；adding：正在填写的 TK 渠道
+const S = { edit: false, custom: false, help: '', busy: '', adding: '', error: Object.fromEntries(CH.map((k) => [k, ''])) };
 // 标题旁「?」展开的教程：[步骤…]、[提示…]；步骤可以是 [文字, [分项…]]
 const HELP = {
   wecom: [[
@@ -54,6 +66,46 @@ const HELP = {
     '1 分钟内的多条提醒合并成一封发送',
     '账号和授权码只存在这台电脑的浏览器里，发信时经本站服务器转发，服务器不保存；换浏览器或清除网站数据后要重新填写',
     'Outlook / Hotmail 邮箱微软正在停用授权码登录，可能用不了，建议用 QQ 或 163 邮箱'
+  ]],
+  sct: [[
+    '打开 sct.ftqq.com，用微信扫码登录',
+    '在「SendKey」页面复制 SendKey（SCT 开头；Server酱³ 的 sctp 开头的也可以）',
+    '粘贴到上面，点「保存并发送测试」，微信里「方糖」服务号收到消息就成功了'
+  ], [
+    '免费版每天只能推 5 条，1 分钟内的多条提醒合并成一条；提醒多的话建议用企业微信、PushPlus 或钉钉',
+    'SendKey 相当于往你微信发消息的钥匙，不要发给别人'
+  ]],
+  pushplus: [[
+    '打开 www.pushplus.plus，用微信扫码登录，按提示关注「pushplus 推送加」公众号',
+    '在「发送消息 → 一对一消息」里复制你的 token',
+    '粘贴到上面，点「保存并发送测试」，公众号收到消息就成功了'
+  ], [
+    '30 秒内的多条提醒合并成一条；免费账号每天有条数上限，以 PushPlus 官网为准',
+    'token 相当于往你微信发消息的钥匙，不要发给别人'
+  ]],
+  dingtalk: [[
+    '钉钉群「设置 → 机器人 → 添加机器人 → 自定义」（需要群主或管理员）',
+    '安全设置勾选「加签」，复制 SEC 开头的密钥；也可以选「自定义关键词」，关键词填 EVE',
+    '完成后复制 Webhook 地址，连同加签密钥一起填到上面，点「保存并发送测试」'
+  ], [
+    '5 秒内的多条提醒合并成一条',
+    'Webhook 地址和加签密钥相当于往群里发消息的钥匙，不要发给别人'
+  ]],
+  feishu: [[
+    '飞书群「设置 → 群机器人 → 添加机器人 → 自定义机器人」',
+    '复制 Webhook 地址；安全设置可以开「签名校验」，把密钥一起填上（不要开「IP 白名单」）',
+    '填到上面，点「保存并发送测试」，群里收到消息就成功了；Lark 国际版也可以'
+  ], [
+    '5 秒内的多条提醒合并成一条',
+    'Webhook 地址相当于往群里发消息的钥匙，不要发给别人'
+  ]],
+  bark: [[
+    'iPhone / iPad 上从 App Store 安装 Bark',
+    '打开 App，复制首页上的示例地址（https://api.day.app/ 后面那一段就是 key）',
+    '粘贴到上面，点「保存并发送测试」，手机收到通知就成功了'
+  ], [
+    '只支持官方服务器 api.day.app；点通知会打开第一条提醒的链接',
+    'key 相当于往你手机发通知的钥匙，不要发给别人'
   ]]
 };
 // 常用邮箱的 SMTP 服务器（其它域名猜 smtp.域名:465，用户可改）
@@ -66,7 +118,7 @@ const PRESET = {
 };
 const presetOf = (user) => { const d = user.split('@')[1]?.toLowerCase() || ''; return PRESET[d] || [d ? 'smtp.' + d : '', 465, 'ssl']; };
 const SEC = { ssl: 'SSL', starttls: 'STARTTLS' };
-const Q = { wecom: [], mail: [] };
+const Q = Object.fromEntries(CH.map((k) => [k, []]));
 const timer = {};
 const subs = new Set();
 
@@ -77,7 +129,7 @@ try {
 
 export function initAlertPush(context) {
   ctx = ctx || context;
-  if (context.host) AH.initAlertHost({ ...context.host, esc: context.esc, showToast: context.showToast, render, channels: () => ({ P, ready }), lang: () => L('zh', 'en') });
+  if (context.host) AH.initAlertHost({ ...context.host, esc: context.esc, showToast: context.showToast, render, channels: () => ({ P, ready, CH, LABEL }), lang: () => L('zh', 'en') });
 }
 export function onPushChange(fn) { subs.add(fn); }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(P)); } catch { /* 忽略 */ } }
@@ -88,11 +140,13 @@ function changed() {
   render();
 }
 
-const ready = (ch) => (ch === 'wecom' ? Boolean(P.wecom.key) : P.mail.ok);
+const ready = (ch) => (ch === 'mail' ? P.mail.ok : Boolean(P[ch].key));
 // 有渠道在推送（标签上的状态点）
 export const isOn = () => CH.some((ch) => ready(ch) && SRC.some(([s]) => P[ch].use[s]));
 // 别的页面（改单小助手）自己画开关时用：渠道是否已设置、某种提醒推不推送
 export const isReady = (ch) => ready(ch);
+// 已设置的渠道：[[渠道, 名称]]
+export const readyList = () => CH.filter(ready).map((ch) => [ch, LABEL[ch]]);
 export const uses = (ch, src) => Boolean(P[ch].use[src]);
 export function setUse(ch, src, on) { P[ch].use[src] = Boolean(on); changed(); }
 // 网页上有没有渠道要推这种提醒（服务器托管了的不算）：会战监测据此决定后台标签页要不要接着查
@@ -162,8 +216,8 @@ async function flush(ch) {
 async function send(ch, title, lines, test = false) {
   markSent(ch, Date.now());
   try {
-    if (ch === 'wecom') await post('wecom', { key: P.wecom.key, title, lines });
-    else await post('mail', mailBody(P.mail, title, lines, test));
+    if (ch === 'mail') await post('mail', mailBody(P.mail, title, lines, test));
+    else await post(ch, { key: P[ch].key, secret: P[ch].secret || '', title, lines, lang: L('zh', 'en') });
     if (S.error[ch]) { S.error[ch] = ''; render(); }
   } catch (error) {
     console.warn('预警推送失败', ch, error);
@@ -176,13 +230,13 @@ const testTitle = () => L('预警测试', 'Alert test') + ' · ' + L(SERVER.name
 const testLines = () => [{ text: L('这是一条测试消息：EVE Market 预警可以正常送达。', 'This is a test: EVE Market alerts are being delivered.') }];
 
 // ---------- 击杀预警 / 本地日志标签页「提醒方式」里的两行开关 ----------
-// 已设置的渠道显示开关（即这种预警推不推送），没设置的显示「去设置」（跳到「微信 / 邮箱」标签页）
+// 已设置的渠道显示开关（即这种预警推不推送）；一个都没设置时显示一行「去设置」（跳到「消息推送」标签页）
+const subOf = (ch) => (ch === 'wecom' ? '群机器人' : ch === 'mail' ? P.mail.to || P.mail.user : TK[ch].sub);
 export function switchHtml(src) {
   const esc = ctx.esc;
-  const row = (ch, label, sub) => (ready(ch)
-    ? `<label class="ka-opt"><span><b>${label}</b><small>${esc(sub)}</small></span><input type="checkbox" class="ka-switch" data-ap-src="${ch}:${src}"${P[ch].use[src] ? ' checked' : ''}></label>`
-    : `<div class="ka-opt"><span><b>${label}</b><small>未设置</small></span><button type="button" class="ka-chip toggle ka-chip-link" data-ac-goto="push">去设置</button></div>`);
-  return row('wecom', '企业微信', '群机器人') + row('mail', '邮箱', P.mail.to || P.mail.user);
+  const on = CH.filter(ready);
+  if (!on.length) return '<div class="ka-opt"><span><b>消息推送</b><small>企业微信、邮箱、Server酱、钉钉等，未设置</small></span><button type="button" class="ka-chip toggle ka-chip-link" data-ac-goto="push">去设置</button></div>';
+  return on.map((ch) => `<label class="ka-opt"><span><b>${LABEL[ch]}</b><small>${esc(subOf(ch))}</small></span><input type="checkbox" class="ka-switch" data-ap-src="${ch}:${src}"${P[ch].use[src] ? ' checked' : ''}></label>`).join('');
 }
 // 开关的事件（每个面板容器绑一次）
 export function bindSwitch(box) {
@@ -197,7 +251,7 @@ export function bindSwitch(box) {
   });
 }
 
-// ---------- 「微信 / 邮箱」标签页 ----------
+// ---------- 「消息推送」标签页 ----------
 let panel = null;
 let shell = null;   // { close, isOpen }
 function render() {
@@ -233,7 +287,29 @@ function draw() {
       ${w.key ? `<div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ap-test="wecom"${busy('test-wecom')}>发送测试</button></div>` : ''}</section>
     <section class="ka-sec">${head('mail', '邮箱')}<div class="ka-list">${mail}</div>${errLine('mail')}
       ${editing ? '' : `<div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ap-test="mail"${busy('test-mail')}>发送测试</button></div>`}</section>
+    ${Object.keys(TK).map((ch) => tkSection(ch, busy)).join('')}
+    ${addRow()}
     ${AH.html()}`;
+}
+// Server酱 / PushPlus / 钉钉 / 飞书 / Bark：设置了或正在填写时显示一个分区
+function tkSection(ch, busy) {
+  const esc = ctx.esc, t = TK[ch], c = P[ch];
+  if (!c.key && S.adding !== ch) return '';
+  const body = c.key
+    ? `<div class="ka-opt"><span><b>${t.sub}</b><small>key ${esc(c.key.replace(/^lark:/, '').slice(0, 8))}…${c.secret ? '<span> · 已加签</span>' : ''}</small></span><button class="btn btn-ghost btn-sm" data-ap-del="${ch}">移除</button></div>
+       <div class="ka-opt"><span class="ap-use-label"><b>推送</b></span>${chips(ch)}</div>`
+    : `<div class="ka-opt ka-stack ap-form">
+        <input type="text" class="cr-input" data-ap-in="${ch}" placeholder="${esc(t.ph)}" autocomplete="off" spellcheck="false" aria-label="${t.name}">
+        ${t.secret ? `<input type="text" class="cr-input ap-secret" data-ap-in="${ch}-secret" placeholder="${esc(t.secret[0])}" autocomplete="off" spellcheck="false" aria-label="${esc(t.secret[0])}">` : ''}
+        <div class="ka-actions"><button class="btn btn-primary btn-sm" data-ap-tk="${ch}"${busy('save-' + ch)}>${S.busy === 'save-' + ch ? '发送测试中…' : '保存并发送测试'}</button><button class="btn btn-ghost btn-sm" data-ap-add="">取消</button></div></div>`;
+  return `<section class="ka-sec">${head(ch, t.name)}<div class="ka-list">${body}</div>${errLine(ch)}
+    ${c.key ? `<div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ap-test="${ch}"${busy('test-' + ch)}>发送测试</button></div>` : ''}</section>`;
+}
+// 还没设置的渠道收成一行按钮
+function addRow() {
+  const left = Object.keys(TK).filter((ch) => !P[ch].key && S.adding !== ch);
+  if (!left.length) return '';
+  return `<section class="ka-sec"><h4 class="ka-h">添加更多渠道</h4><div class="ka-list"><div class="ka-opt"><div class="ka-chips">${left.map((ch) => `<button type="button" class="ka-chip toggle" data-ap-add="${ch}" title="${TK[ch].sub}">+ <span>${TK[ch].name}</span></button>`).join('')}</div></div></div></section>`;
 }
 // 分区标题 + 「?」教程按钮；展开时标题下面显示步骤和提示
 function head(ch, label) {
@@ -275,6 +351,24 @@ function saveWecom() {
   changed();
 }
 const val = (k) => (panel.querySelector(`[data-ap-in="${k}"]`)?.value || '').trim();
+function saveToken(ch) {
+  const t = TK[ch];
+  const v = val(ch);
+  let key = (v.match(t.re) || [])[1] || '';
+  if (ch === 'feishu' && key && /larksuite\.com/i.test(v)) key = 'lark:' + key;
+  if (ch !== 'sct' && ch !== 'bark') key = key.toLowerCase();
+  if (!key) { ctx.showToast(`${t.name}的 key 不对，请按「?」里的教程复制`, 'error', 4000); return; }
+  const secret = t.secret ? val(ch + '-secret') : '';
+  if (secret && !t.secret[1].test(secret)) { ctx.showToast(`${t.name}的密钥不对`, 'error', 4000); return; }
+  run('save-' + ch, async () => {
+    await post(ch, { key, secret, title: testTitle(), lines: testLines(), lang: L('zh', 'en') });
+    Object.assign(P[ch], { key, secret });
+    S.adding = '';
+    S.error[ch] = '';
+    changed();
+    ctx.showToast(`已保存，测试消息已发到${t.name}，请查看`, 'success', 5000);
+  });
+}
 function saveMail() {
   const user = val('user'), pass = panel.querySelector('[data-ap-in="pass"]')?.value || '', to = val('to');
   const [host, port, security] = S.custom ? [val('host').toLowerCase(), Number(val('port')), val('sec')] : presetOf(user);
@@ -297,7 +391,7 @@ function saveMail() {
 function test(ch) {
   run('test-' + ch, async () => {
     await send(ch, testTitle(), testLines(), true);
-    ctx.showToast(ch === 'wecom' ? '测试消息已发送，请在企业微信群里查看' : '测试邮件已发送，请查收（没收到看看垃圾邮件）', 'success', 5000);
+    ctx.showToast(ch === 'mail' ? '测试邮件已发送，请查收（没收到看看垃圾邮件）' : ch === 'wecom' ? '测试消息已发送，请在企业微信群里查看' : `测试消息已发到${TK[ch].name}，请查看`, 'success', 5000);
   });
 }
 
@@ -308,10 +402,17 @@ export function mountPanel(el, opts) {
   shell = opts;
   panel.addEventListener('click', (e) => {
     if (AH.onClick(e.target)) return;
-    const t = e.target.closest('[data-ap-help], [data-ap-wecom], [data-ap-save], [data-ap-edit], [data-ap-cancel], [data-ap-custom], [data-ap-test], [data-ap-del], [data-ap-use]');
+    const t = e.target.closest('[data-ap-help], [data-ap-wecom], [data-ap-tk], [data-ap-add], [data-ap-save], [data-ap-edit], [data-ap-cancel], [data-ap-custom], [data-ap-test], [data-ap-del], [data-ap-use]');
     if (!t) return;
     if (t.dataset.apHelp) { S.help = S.help === t.dataset.apHelp ? '' : t.dataset.apHelp; render(); }
     else if (t.dataset.apWecom != null) saveWecom();
+    else if (t.dataset.apTk) saveToken(t.dataset.apTk);
+    else if (t.dataset.apAdd != null) {
+      S.adding = t.dataset.apAdd;
+      S.help = S.adding;   // 新加渠道时直接展开教程
+      render();
+      panel.querySelector(`[data-ap-in="${S.adding}"]`)?.focus();
+    }
     else if (t.dataset.apSave != null) saveMail();
     else if (t.dataset.apEdit != null || t.dataset.apCancel != null) {
       S.edit = t.dataset.apEdit != null;
@@ -328,8 +429,8 @@ export function mountPanel(el, opts) {
     } else if (t.dataset.apTest) test(t.dataset.apTest);
     else if (t.dataset.apDel) {
       const ch = t.dataset.apDel;
-      if (ch === 'wecom') P.wecom.key = '';
-      else Object.assign(P.mail, { pass: '', ok: false });
+      if (ch === 'mail') Object.assign(P.mail, { pass: '', ok: false });
+      else Object.assign(P[ch], { key: '', secret: '' });
       Q[ch].length = 0;
       S.error[ch] = '';
       changed();
@@ -344,7 +445,8 @@ export function mountPanel(el, opts) {
     if (e.key === 'Enter' && AH.onEnter(e.target)) { e.preventDefault(); return; }
     if (e.key !== 'Enter' || !e.target.matches('[data-ap-in]')) return;
     e.preventDefault();
-    if (e.target.dataset.apIn === 'wecom') saveWecom(); else saveMail();
+    const k = e.target.dataset.apIn.replace(/-secret$/, '');
+    if (k === 'wecom') saveWecom(); else if (TK[k]) saveToken(k); else saveMail();
   });
   // 改发件邮箱时，服务器那一行跟着变
   panel.addEventListener('input', (e) => {

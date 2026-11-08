@@ -5,17 +5,17 @@
 // 第三个标签页「游戏邮件」（alert-mail.js）集中设置收件人与哪些预警发邮件；打开它时先加载两个预警模块（它们会登记自己的邮件开关）。
 // 「本地红名」（local-watch.js）：共享游戏画面，本地频道出现红名就报警。
 // 「虫洞求救」（sos-watch.js）：有人在虫洞里发求救时提醒（虫洞页「求救」也有入口）。
-// 「微信 / 邮箱」（alert-push.js）：企业微信群机器人与邮箱提醒。
+// 「消息推送」（alert-push.js）：企业微信、邮箱、Server酱、PushPlus、钉钉、飞书、Bark。
 
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v10';
+import * as AP from './alert-push.js?v=v11';
 import { skText } from './skeleton.js?v=v17';
 
 let deps = null;   // { loadKill, loadIntel, loadLocal, loadSos, esc, showToast, host（服务器托管用，见 alert-host.js）}
 let modal = null;
 let tab = 'kill';
 const TAB_KEY = 'eve-alert-tab';
-const TABS = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名'], ['sos', '虫洞求救'], ['mail', '游戏邮件'], ['push', '微信 / 邮箱']];
+const TABS = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名'], ['sos', '虫洞求救'], ['mail', '游戏邮件'], ['push', '消息推送']];
 const state = { kill: false, intel: false, local: false, sos: false, mail: false, push: false };
 
 export function initAlertCenter(d) {
