@@ -23,7 +23,7 @@ KNOWN_IPS = os.path.join(BASE, "known_ips.json")
 NEW_EVENTS = os.path.join(BASE, "new_events.jsonl")
 CID_FILE = os.path.join(BASE, "cids.json")          # 浏览器匿名ID名册（真实使用人数）   # 新 IP 发现时刻持久化，重启后 new_count_24h 不丢
 
-BOT = re.compile(r"bot|spider|crawl|curl|wget|python|go-http|httpclient|axios|okhttp|monitor|headless|scrapy|java/|masscan|zgrab", re.I)
+BOT = re.compile(r"bot|spider|crawl|curl|wget|python|go-http|httpclient|axios|okhttp|monitor|headless|scrapy|java/|masscan|zgrab|deepseek-harness|skill-learning|eve-codex|eve-industry", re.I)
 LINE = re.compile(r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d+) \S+ "([^"]*)" "([^"]*)"')
 CK_RE = re.compile(r'ck="([a-z0-9]{6,24})"')   # 浏览器cid cookie（真实用户口径）
 XFF = re.compile(r'xff="([^"]+)"')
