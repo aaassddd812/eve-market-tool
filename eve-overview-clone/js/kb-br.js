@@ -182,7 +182,7 @@ function renderForm() {
     </div>
     <div class="kb-br-actions">
       <button class="btn btn-primary" data-br-go${BR.picked.length ? '' : ' disabled'}>生成战场统计</button>
-      <span class="text-muted">最多 ${MAX_SYSTEMS} 个星系、${MAX_HOURS} 小时，限本站已收录的时间段</span>
+      <span class="text-muted">最多 ${MAX_SYSTEMS} 个星系、${MAX_HOURS} 小时；宁静服超出本站保存期限的时间段从 zKillboard 读取</span>
     </div>`;
 }
 
@@ -274,7 +274,9 @@ async function loadResult(p) {
   box.innerHTML = `<div class="kb-br-loading"><span class="spinner"></span>正在读取击杀记录…</div>`;
   const key = `${p.systems.join(',')}|${p.start}|${p.end}`;
   try {
-    const data = BR.key === key && BR.data ? BR.data : await ctx.request(`br?systems=${p.systems.join(',')}&start=${p.start}&end=${p.end}`);
+    let data = BR.key === key && BR.data ? BR.data : await ctx.request(`br?systems=${p.systems.join(',')}&start=${p.start}&end=${p.end}`);
+    // 开始时间早于本站保存期限：整段改由浏览器直接从 zKillboard 读取，只放在本页内存里，服务器不存
+    if (!data.zk && beyondRetention(data, p.start)) data = await zkBattle(p, data, box);
     if (BR.key !== key) BR.zkAll = false;
     BR.data = data;
     BR.key = key;
@@ -297,6 +299,64 @@ async function loadResult(p) {
   }
   renderResult();
   refreshDamage();
+}
+
+// ---------- 超出保存期限：浏览器直接读 zKillboard ----------
+// zKillboard 不支持按起止时间查，只能按「星系 + 年 + 月」从新到旧翻页（每页 200 条，带完整击杀与估值）；
+// 翻到比开始时间更早就停。换成与服务端 /br 相同的紧凑数组：没有玩家攻击者的（NPC 击杀）不算，只留玩家攻击者，价值用 zKillboard 估值
+const ZK_PAGES = 60;   // 每个星系每个月最多翻的页数（吉他这样的星系一天约 200 条）
+const beyondRetention = (d, start) => Boolean(d.retention_days) && start < Date.now() / 1000 - (d.retention_days - 1) * 86400;
+async function zkBattle(p, local, box) {
+  const months = [];
+  for (let t = p.start; ; ) {
+    const d = new Date(t * 1000), y = d.getUTCFullYear(), m = d.getUTCMonth() + 1;
+    if (!months.some((x) => x[0] === y && x[1] === m)) months.push([y, m]);
+    const next = Date.UTC(y, m, 1) / 1000;   // 下个月 1 日
+    if (next >= p.end) break;
+    t = next;
+  }
+  const progress = (i, page) => {
+    const el = box.querySelector('.kb-br-loading');
+    if (el) el.innerHTML = `<span class="spinner"></span>超出本站保存期限（${local.retention_days - 1} 天），正在从 zKillboard 读取：星系 ${i}/${p.systems.length} · 第 ${page} 页`;
+  };
+  const kills = new Map();
+  let truncated = false;
+  for (const [i, sys] of p.systems.entries()) {
+    for (const [y, m] of months) {
+      for (let page = 1; page <= ZK_PAGES; page++) {
+        progress(i + 1, page);
+        const list = await ctx.kb.fetchZkill(`solarSystemID/${sys}/year/${y}/month/${m}/page/${page}/`)
+          .catch((e) => { throw new Error(`连不上 zKillboard（${e.message}），超出本站保存期限的时间段要从 zKillboard 读取`); });
+        if (!Array.isArray(list) || !list.length) break;
+        for (const km of list) {
+          const t = Date.parse(km.killmail_time) / 1000;
+          if (t >= p.start && t < p.end && km.victim) kills.set(km.killmail_id, km);
+        }
+        if (list.length < 200 || Date.parse(list[list.length - 1].killmail_time) / 1000 < p.start) break;
+        if (page === ZK_PAGES) truncated = true;
+      }
+    }
+  }
+  const rows = [];
+  for (const km of [...kills.values()].sort((a, b) => a.killmail_id - b.killmail_id)) {
+    const atts = km.attackers || [];
+    const players = atts.filter((a) => a.character_id);
+    if (!players.length) continue;
+    const v = km.victim, fin = atts.find((a) => a.final_blow) || atts[0] || {};
+    rows.push([km.killmail_id, Math.floor(Date.parse(km.killmail_time) / 1000), km.solar_system_id, v.ship_type_id, Math.round((km.zkb?.totalValue || 0) * 100) / 100,
+      v.character_id || null, v.corporation_id || null, v.alliance_id || null,
+      players.map((a) => [a.character_id, a.corporation_id || null, a.alliance_id || null, a.ship_type_id || null, a.damage_done || 0]), fin.character_id || 0]);
+  }
+  rows.sort((a, b) => a[1] - b[1]);
+  if (rows.length > 5000) { rows.length = 5000; truncated = true; }
+  // 名称：人物、军团、联盟一次最多解析 2000 个
+  const ids = [...new Set(rows.flatMap((k) => [k[5], k[6], k[7], ...k[8].flatMap((a) => a.slice(0, 3))]).filter(Boolean))];
+  const names = {};
+  for (let i = 0; i < ids.length; i += 2000) {
+    const r = await ctx.app.resolveNames(ids.slice(i, i + 2000)).catch(() => null);
+    r?.names?.forEach((n, id) => { names[id] = n; });
+  }
+  return { ...local, kills: rows, truncated, dmg_missing: 0, names, zk: true };
 }
 
 // 旧击杀的伤害由服务端向 ESI 补，补完前隔一会儿重新取一次，只更新参战玩家名单
@@ -432,7 +492,7 @@ function renderResult() {
   const box = $('brResult');
   if (!d.kills.length) {
     const old = d.retention_days && d.start < Date.now() / 1000 - d.retention_days * 86400;   // 0 = 永久保存（国服）
-    box.innerHTML = `<p class="kb-empty text-muted">没有玩家击杀${old ? `（仅存 ${d.retention_days - 1} 天）` : ''}</p>`;
+    box.innerHTML = `<p class="kb-empty text-muted">${d.zk ? '没有玩家击杀（zKillboard 上也没有）' : `没有玩家击杀${old ? `（仅存 ${d.retention_days - 1} 天）` : ''}`}</p>`;
     return;
   }
   const sides = sidesUsed();
@@ -447,7 +507,7 @@ function renderResult() {
     <div class="kb-br-summary">
       <div class="kb-br-title">
         <strong>${ctx.app.esc(sysList)}</strong>
-        <span class="text-muted">${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()} · ${d.kills.length} 次击杀 · ${ctx.app.formatNumber(pilots)} 名飞行员 · 总损失 ${ctx.app.formatISK(total)} ISK${d.truncated ? ' · 击杀过多，只统计前 5000 条' : ''}</span>
+        <span class="text-muted">${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()} · ${d.kills.length} 次击杀 · ${ctx.app.formatNumber(pilots)} 名飞行员 · 总损失 ${ctx.app.formatISK(total)} ISK${d.truncated ? ' · 击杀过多，只统计前 5000 条' : ''}${d.zk ? '<span class="kb-br-zk">超出本站保存期限，数据实时取自 zKillboard（价值为 zKillboard 估值）</span>' : ''}</span>
       </div>
       <div class="kb-br-tools">
         <div class="segmented kb-br-width" role="group" aria-label="宽度">

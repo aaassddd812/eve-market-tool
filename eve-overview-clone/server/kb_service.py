@@ -402,6 +402,7 @@ RELAY_HOSTS = {
     "esi": "https://esi.evetech.net/",
     "cnesi": "https://ali-esi.evepc.163.com/",
     "login": "https://login.eveonline.com/v2/oauth/token",
+    "zkill": ZKILL,           # zKillboard 接口（只读）：与本服务自己的 zKillboard 请求共用间隔，结果缓存 RELAY_ZKILL_TTL 秒
 }
 RELAY_PATH_RE = re.compile(r"^[A-Za-z0-9_\-/.]{1,300}$")
 RELAY_REQ_HEADERS = ("Authorization", "Content-Type", "Accept", "Accept-Language", "If-None-Match", "X-Compatibility-Date", "X-Tenant")
@@ -412,12 +413,40 @@ RELAY_RATE = 600            # 每个 IP 每分钟最多中转次数（市场订�
 RELAY_LOGIN_RATE = 20       # 换令牌：每个 IP 每分钟
 RELAY_BODY_LIMIT = 256 * 1024
 RELAY_ERR_FLOOR = 20
+RELAY_ZKILL_RATE = 90       # zKillboard 中转：每个 IP 每分钟（战场统计查旧时间段时一个星系一个月最多翻 60 页）
+RELAY_ZKILL_TTL = 600
+RELAY_ZKILL_WAIT = 40       # 排队等 zKillboard 间隔最多等这么久，超过返回 503（人多时不让请求一直挂着）
 
 
 class EsiRelay:
     def __init__(self):
         self.lock = threading.Lock()
         self.pause_until = 0.0
+        self.zk_cache = collections.OrderedDict()   # 网址 -> (时间, 响应体)
+
+    def zkill(self, url):
+        """zKillboard 中转：命中缓存直接返回；否则排队按 ZKILL_GAP 间隔请求（与 zkill_get 共用锁），返回 (状态码, 响应头列表, 响应体)"""
+        with self.lock:
+            hit = self.zk_cache.get(url)
+            if hit and time.time() - hit[0] < RELAY_ZKILL_TTL:
+                return 200, [("Content-Type", "application/json")], hit[1]
+        if not _zkill_lock.acquire(timeout=RELAY_ZKILL_WAIT):
+            return 503, [("Retry-After", "10")], None
+        try:
+            wait = _zkill_last[0] + ZKILL_GAP - time.time()
+            if wait > 0:
+                time.sleep(wait)
+            status, headers, data = self.forward("GET", url, {"Accept": "application/json"}, None)
+        finally:
+            _zkill_last[0] = time.time()
+            _zkill_lock.release()
+        if status == 200 and data is not None:
+            with self.lock:
+                self.zk_cache[url] = (time.time(), data)
+                self.zk_cache.move_to_end(url)
+                while len(self.zk_cache) > 300:
+                    self.zk_cache.popitem(last=False)
+        return status, headers, data
 
     def target(self, key, rest, query):
         base = RELAY_HOSTS.get(key)
@@ -8810,6 +8839,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     esi_relay = EsiRelay()
     relay_limiter = RateLimiter(RELAY_RATE)
     relay_login_limiter = RateLimiter(RELAY_LOGIN_RATE)
+    relay_zkill_limiter = RateLimiter(RELAY_ZKILL_RATE)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, fmt, *args):
@@ -9300,7 +9330,9 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
             except ValueError as e:
                 return self.send_json(400, {"error": str(e)})
             ip = self.client_ip()
-            ok, _, retry = (relay_login_limiter if key == "login" else relay_limiter).take(ip)
+            if key == "zkill" and method != "GET":
+                return self.send_json(405, {"error": "只支持读取"})
+            ok, _, retry = (relay_login_limiter if key == "login" else relay_zkill_limiter if key == "zkill" else relay_limiter).take(ip)
             if not ok:
                 return self.send_json(429, {"error": "中转请求过于频繁，请稍后再试"}, {"Retry-After": str(retry)})
             length = int(self.headers.get("Content-Length") or 0)
@@ -9308,9 +9340,10 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.send_json(413, {"error": "请求体过大"})
             body = self.rfile.read(length) if length else (b"" if method in ("POST", "PUT") else None)
             headers = {k: self.headers[k] for k in RELAY_REQ_HEADERS if self.headers.get(k)}
-            status, res_headers, data = esi_relay.forward(method, target, headers, body)
+            status, res_headers, data = esi_relay.zkill(target) if key == "zkill" else esi_relay.forward(method, target, headers, body)
             if data is None:
-                msg = "ESI 错误次数过多，中转暂停，请稍后再试" if status == 503 else "本站服务器也连不上官方服务器，请稍后再试"
+                msg = ("zKillboard 中转排队的人太多，请稍后再试" if key == "zkill" else "ESI 错误次数过多，中转暂停，请稍后再试") if status == 503 \
+                    else "本站服务器也连不上 zKillboard，请稍后再试" if key == "zkill" else "本站服务器也连不上官方服务器，请稍后再试"
                 return self.send_json(status, {"error": msg}, dict(res_headers))
             gz = "gzip" in (self.headers.get("Accept-Encoding") or "") and len(data) > 1024
             if gz:

@@ -3450,6 +3450,8 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 .kb-br-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .kb-br-title strong { font-size: 1.0625rem; }
 .kb-br-title .text-muted { font-size: 0.75rem; }
+.kb-br-zk::before { content: " · "; }
+.kb-br-zk { color: var(--warning); }
 .kb-br-tools { display: flex; gap: 8px; }
 .kb-br-tools .btn { height: 32px; font-size: 0.8125rem; }
 
