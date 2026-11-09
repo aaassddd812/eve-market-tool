@@ -186,6 +186,9 @@ async function renderHome() {
         <div class="kb-feed-head">
           <h3 class="kb-section-title">全部击杀记录</h3>
           <div class="kb-filters" id="kbFilters"></div>
+          <button class="btn btn-ghost" id="kbRefresh" title="刷新">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新</span>
+          </button>
         </div>
         <div class="kb-fine" id="kbFine"></div>
         <div id="kbGank" hidden></div>
@@ -199,6 +202,7 @@ async function renderHome() {
         <div id="kbBoard">${skBoard(10)}</div>
       </aside>
     </div>`;
+  $('kbRefresh').addEventListener('click', () => { loadFeed(true); loadSummary(); });
   startLive();
   $('kbMore').addEventListener('click', () => loadFeed(false));
   renderFilters();
@@ -436,7 +440,8 @@ async function freshFeed() {
   if (seq !== S.feedSeq || !$('kbFeed') || S.feedBusy) return;
   const top = S.feed[0];
   const at = (k) => Date.parse(k.time);
-  const newer = top ? data.kills.filter((k) => at(k) > at(top) || (at(k) === at(top) && k.id > top.id)) : data.kills;
+  const have = new Set(S.feed.map((k) => k.id));
+  const newer = top ? data.kills.filter((k) => !have.has(k.id) && (at(k) > at(top) || (at(k) === at(top) && k.id > top.id))) : data.kills;
   if (!newer.length) return;
   absorbNames(data.names);
   await loadTypes(typesOf(newer));
