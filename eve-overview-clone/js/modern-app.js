@@ -1005,7 +1005,7 @@ async function openEftFit(text) {
 // 快递合同：首次进入时加载
 let courierLoading = null;
 function loadCourierModule() {
-  if (!courierLoading) courierLoading = import('./courier.js?v=v11').then((m) => {
+  if (!courierLoading) courierLoading = import('./courier.js?v=v12').then((m) => {
     m.initCourier({
       esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
       // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
@@ -1340,7 +1340,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v63').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v64').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -2453,6 +2453,7 @@ const gameActions = {
   // 整条路线写入自动导航：第一个清空原有航点，其余依次追加
   route: async (ids, name = '') => {
     if (!ids.length) return false;
+    if (ids.length > 3 && hasScopeGroup('ui')) showToast(`正在写入 ${ids.length} 个航点…`, 'info', 2500);
     for (let i = 0; i < ids.length; i++) {
       if (!hasScopeGroup('ui')) return gameUi('/ui/autopilot/waypoint/', {}, '');
       try {

@@ -599,7 +599,7 @@ function renderSide() {
     </div>
     <div class="ind-side-section cr-side-sec">
       <h4>路线</h4>
-      ${seg('route', [['safe', '安全优先'], ['short', '最短']])}
+      ${seg('route', [['safe', '高安全等级优先'], ['short', '最短']])}
       <h4>路线安全</h4>
       ${seg('sec', [['any', '不限'], ['ls', '不进 00'], ['hs', '仅高安']])}
     </div>
@@ -820,7 +820,7 @@ function renderDetail(c) {
         ${stat('合同剩余', remain(c.expires - Date.now()), c.date_expired ? new Date(c.date_expired).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) + ' 到期' : '')}
         <div class="cr-stat"><span>发布人</span><b id="crIssuer">${issuerHtml(c)}</b></div>
       </div>
-      ${r ? `<div class="cr-section"><h4>路线 <small>${F.route === 'safe' ? '安全优先' : '最短路线'}</small></h4><div class="cr-hops">${hops}</div>${names ? `<div class="cr-hop-names">${names}</div>` : ''}</div>` : ''}
+      ${r ? `<div class="cr-section"><h4>路线 <small>${F.route === 'safe' ? '高安全等级优先' : '最短路线'}</small></h4><div class="cr-hops">${hops}</div>${names ? `<div class="cr-hop-names">${names}</div>` : ''}</div>` : ''}
       ${shipSection(c)}
       <div class="cr-section">
         <h4>评估 <span class="cr-score" style="--p:${c.score}">${c.score}</span><span class="cr-risk ${lvCls}">风险${lv} · ${c.risk}</span></h4>

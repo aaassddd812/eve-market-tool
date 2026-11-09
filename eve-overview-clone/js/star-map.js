@@ -35,7 +35,6 @@ const M = {
   highlight: null,     // Set<system index>：颜色说明中点选的高亮
   highlightKey: null,
   route: [],           // system index 数组
-  routeStops: [],      // 星门路线的途经点 + 终点（星系 ID），写入游戏自动导航用
   dirty: true,
   running: false,
   tween: null,
@@ -95,7 +94,8 @@ const DIM_COLOR = '#1f2632';
 
 const ISOTOPE_ZH = { 16274: '氦同位素', 17887: '氧同位素', 17888: '氮同位素', 17889: '氢同位素' };
 const ROUTE_COLORS = { gate: 0xffc400, jump: 0xff7a45 };
-const ROUTE_FLAGS = [['shortest', '最短路线'], ['secure', '安全优先'], ['insecure', '低安优先']];
+// secure：高安全等级优先（同 ESI）；safe：安全优先，在高安全等级优先的基础上再绕开最近有舰船被击毁的星系（本地星门图求路，见 routeRisk）
+const ROUTE_FLAGS = [['shortest', '最短路线'], ['secure', '高安全等级优先'], ['safe', '安全优先'], ['insecure', '低安优先']];
 const FW_STATE_ZH = { uncontested: '未争夺', contested: '争夺中', vulnerable: '可被夺取', captured: '已被占领' };
 const INCURSION_COLOR = '#ff2bd6';   // 入侵星系：鲜艳的品红，在暗色星图上一眼能看到
 const INCURSION_STATE_ZH = { established: '已建立', mobilizing: '动员中', withdrawing: '撤退中' };
@@ -326,6 +326,7 @@ async function loadLiveImpl(quiet) {
   // NPC 击杀按 24 小时（与游戏星图一致）：本站后端把 ESI 每小时快照累加；没有后端时退回 1 小时
   const d24 = k24.status === 'fulfilled' && k24.value?.hours ? k24.value : null;
   M.live.npc24 = d24 ? new Map(Object.entries(d24.systems).map(([id, v]) => [Number(id), v[2]])) : null;
+  M.live.ship24 = d24 ? new Map(Object.entries(d24.systems).map(([id, v]) => [Number(id), v[0]])) : null;
   M.live.npc24Info = d24 ? { hours: d24.hours, to: d24.to * 1000 } : null;
   if (structures.status === 'fulfilled') {
     M.live.adm = new Map();
@@ -1419,16 +1420,15 @@ function bindSidebar() {
   $('routeClear').addEventListener('click', () => {
     $('routeSummary').textContent = '';
     M.route = [];
-    M.routeStops = [];
     $('routeResult').innerHTML = '';
     clearJumpRange();
     updateRouteLine();
   });
   $('routeResult').addEventListener('click', (e) => {
     if (e.target.closest('[data-game-route]')) {
-      // 星门路线：游戏自动导航会自己寻路，只设终点；跳跃路线：落点依次写成航点
+      // 星门路线：每个星系都写成航点（只写终点的话游戏会按自己的设置重新规划）；跳跃路线：落点依次写成航点
       const ids = J.mode === 'jump' && J.plan ? J.plan.path.slice(1).map((i) => M.systems[i].id).concat(J.plan.gates.map((i) => M.systems[i].id))
-        : M.route.length ? M.routeStops : [];
+        : M.route.slice(1).map((i) => M.systems[i].id);
       if (ids.length) app.game.route(ids, M.systems[M.byId.get(ids[ids.length - 1]).i].name);
       return;
     }
@@ -1649,7 +1649,8 @@ function resolveRouteField(field) {
 }
 
 // 本地星门图上的单源最短路（给途经点排顺序、检查可达性、找出用到的跳桥；实际每段路线仍由 ESI 规划）
-// 安全优先 / 低安优先按 ESI 的思路给不想走的星系加大代价；勾选「走跳桥」时跳桥也算一跳。dist.prev 为前驱
+// 高安全等级优先 / 低安优先按 ESI 的思路给不想走的星系加大代价；安全优先再加上最近击毁的代价（M.routeRisk）；
+// 勾选「走跳桥」时跳桥也算一跳。dist.prev 为前驱
 function gateCosts(src, flag) {
   const n = M.systems.length;
   const dist = new Float64Array(n).fill(Infinity);
@@ -1657,13 +1658,16 @@ function gateCosts(src, flag) {
   dist.prev = prev;
   const br = bridgesOn() ? bridgeAdj() : null;
   const avoid = M.gankAvoid;
+  const hiOf = (i) => secClass(M.systems[i].sec) === '高安';
+  const risk = flag === 'safe' ? M.routeRisk : null;
   const base = (i) => {
     if (flag === 'shortest') return 1;
-    const hi = secClass(M.systems[i].sec) === '高安';
-    return (flag === 'secure' ? hi : !hi) ? 1 : 50;
+    if (flag === 'insecure') return hiOf(i) ? 50 : 1;
+    // 安全优先：进低安的代价远大于绕开击毁的代价，只要有全高安的路就不进低安（一路的击毁代价加起来也不会超过它）
+    return (hiOf(i) ? 1 : flag === 'safe' ? 1e4 : 50) + (risk?.get(i) || 0);
   };
-  // 避开强爆热点：一个热点算 50 跳的代价；安全优先时进低安的代价同时放大，保证「不进低安」仍然优先于「绕开热点」
-  const weight = avoid?.size ? (i) => (flag === 'secure' && base(i) > 1 ? 1e5 : base(i)) + (avoid.has(i) ? 50 : 0) : base;
+  // 避开强爆热点：一个热点算 50 跳的代价；（高）安全优先时进低安的代价同时放大，保证「不进低安」仍然优先于「绕开热点」
+  const weight = avoid?.size ? (i) => ((flag === 'secure' || flag === 'safe') && !hiOf(i) ? 1e5 : base(i)) + (avoid.has(i) ? 50 : 0) : base;
   dist[src] = 0;
   // 二叉堆 Dijkstra，元素 [代价, 星系]
   const heap = [[0, src]];
@@ -1897,7 +1901,12 @@ function bindBridges() {
 
 // 一段路线：不走跳桥时直接问 ESI；走跳桥时本地先求最短路，把用到的跳桥（双向）作为 connections 交给 ESI，ESI 失败时用本地结果
 async function routeLeg(a, b, flag) {
-  const base = `/route/${a}/${b}/?flag=${flag}`;
+  const base = `/route/${a}/${b}/?flag=${flag === 'safe' ? 'secure' : flag}`;
+  // 安全优先：ESI 不知道最近的击毁，只在本地星门图上求路
+  if (flag === 'safe') {
+    const path = localPath(gateCosts(M.byId.get(a).i, flag), M.byId.get(b).i);
+    if (path) return path.map((i) => M.systems[i].id);
+  }
   // 避开强爆热点：本地星门图上求路（ESI 的 avoid 会把整条路线判成不可达，这里绕不开时仍允许经过）
   if (M.gankAvoid?.size) {
     const path = localPath(gateCosts(M.byId.get(a).i, flag), M.byId.get(b).i);
@@ -1967,6 +1976,22 @@ async function loadGankHot() {
 }
 const gankAvoidOn = () => !!$('routeGankOn')?.checked;
 
+// 安全优先：最近有舰船被击毁的星系加代价（过去 1 小时每艘 4 跳、过去 24 小时每艘 0.5 跳，每个星系最多 40 跳；进低安另算 1 万跳），
+// 起点、终点、途经点不算。数据同星图的击毁着色（ESI 每小时快照；24 小时为本站后端累加，没有时只看 1 小时）
+const RISK_HOUR = 4, RISK_DAY = 0.5, RISK_MAX = 40;
+const killsOf = (id) => ({ hour: M.live.kills?.get(id)?.ship_kills || 0, day: M.live.ship24?.get(id) ?? null });
+async function routeRisk(keep) {
+  await loadLive(false, true).catch(() => {});
+  const out = new Map();
+  M.systems.forEach((s, i) => {
+    if (keep.has(s.id)) return;
+    const k = killsOf(s.id);
+    const r = Math.min(RISK_MAX, k.hour * RISK_HOUR + (k.day ?? 0) * RISK_DAY);
+    if (r > 0) out.set(i, r);
+  });
+  return out;
+}
+
 async function planRoute() {
   if (J.mode === 'jump') { planJump(); return; }
   const box = $('routeResult');
@@ -1986,6 +2011,7 @@ async function planRoute() {
   if ($('routeBridgeOn').checked && app.hasEsiToken()) await fetchBridges();
   const hot = await loadGankHot();
   const keep = new Set([from, ...vias, ...(to ? [to] : [])]);
+  M.routeRisk = flag === 'safe' ? await routeRisk(keep) : null;
   M.gankAvoid = gankAvoidOn() && hot ? new Set([...hot.map].filter(([id, x]) => x.share >= GANK_AVOID_SHARE && !keep.has(id) && M.byId.has(id)).map(([id]) => M.byId.get(id).i)) : null;
   try {
     // 途经点顺序：自动时在本地星门图上求最短顺序，否则按填写顺序
@@ -2014,11 +2040,6 @@ async function planRoute() {
     // 跳桥：route 里相邻但没有星门相连的两站
     const bridgeAt = new Set();
     for (let k = 1; k < M.route.length; k++) if (!isGateHop(M.route[k - 1], M.route[k])) bridgeAt.add(k);
-    // 写入游戏自动导航：途经点、终点，以及每座跳桥的两端（游戏自动导航不一定会走跳桥）
-    const stopIdx = new Set(stopAt.keys());
-    M.routeStops = M.route.map((i, k) => (k > 0 && (stopIdx.has(k) || bridgeAt.has(k) || bridgeAt.has(k + 1)) ? M.systems[i].id : null))
-      .filter((id, k, a) => id != null && id !== a[k - 1]);
-    if (!bridgeAt.size) M.routeStops = stops.slice(1);
     routeLine.material.color.setHex(ROUTE_COLORS.gate);
     const counts = { 高安: 0, 低安: 0, '00': 0 };
     M.route.forEach((i) => { counts[secClass(M.systems[i].sec)] += 1; });
@@ -2032,23 +2053,29 @@ async function planRoute() {
       const x = hot?.map.get(s.id);
       return x ? `<b class="route-gank-tag" title="最近 ${x.span} 天里有 ${x.days_hit} 天出现疑似强爆，共 ${x.count} 次">强爆 ${Math.round(x.share * 100)}%</b>` : '';
     };
+    const riskOn = M.route.filter((i, k) => k > 0 && killsOf(M.systems[i].id).hour + (killsOf(M.systems[i].id).day || 0) > 0);
+    const riskLine = flag === 'safe' ? `<p class="route-gank-note">已尽量绕开最近有舰船被击毁的星系（过去 1 小时${M.live.ship24 ? ' / 24 小时' : ''}${M.live.killsAt ? `，截至 ${hhmm(M.live.killsAt)}` : ''}）${riskOn.length ? ` · 路线上仍有 ${riskOn.length} 个星系最近有击毁（已标出）` : ' · 路线上最近都没有击毁'}</p>` : '';
+    const riskTag = (s) => {
+      if (flag !== 'safe') return '';
+      const k = killsOf(s.id);
+      return k.hour || k.day ? `<b class="route-gank-tag" title="过去 1 小时击毁 ${k.hour} 艘${k.day != null ? `，24 小时 ${k.day} 艘` : ''}">击毁 ${k.hour}${k.day != null ? '/' + k.day : ''}</b>` : '';
+    };
     const legLine = multi ? '<p class="route-legs">' + stops.map((id, k) => app.esc(M.byId.get(id).name) + (k < legs.length ? ` <small>${legs[k].length - 1} 跳</small> →` : '')).join(' ') + '</p>' : '';
     box.innerHTML =
       `<div class="route-summary"><span><strong>${M.route.length - 1}</strong> 跳${bridgeAt.size ? ` <span class="route-bridge-tag">含跳桥 ${bridgeAt.size}</span>` : ''} · <span class="sec-hi">高安 ${counts['高安']}</span> · <span class="sec-lo">低安 ${counts['低安']}</span> · <span class="sec-null">00 ${counts['00']}</span></span>` +
-        `<span><button class="link-btn" data-game-route title="${multi || bridgeAt.size ? '把途经点、跳桥两端和终点依次写入游戏自动导航' : '在游戏里把终点设为目的地'}（角色需在线）">写入自动导航</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>` +
-      legLine + gankLine +
+        `<span><button class="link-btn" data-game-route title="把路线上的每个星系依次写成游戏自动导航的航点，游戏会按这条路线走，不再自己规划（角色需在线）">写入自动导航</button> · <button class="link-btn" data-copy-route title="复制整条路线">复制路线</button></span></div>` +
+      legLine + gankLine + riskLine +
       '<ol class="route-list">' + M.route.map((i, k) => {
         const s = M.systems[i];
         const tag = multi && stopAt.get(k);
         const cls = [tag ? 'is-stop' : '', bridgeAt.has(k) ? 'is-bridge' : ''].filter(Boolean).join(' ');
-        return `<li${cls ? ` class="${cls}"` : ''}><button data-sys="${i}"${bridgeAt.has(k) ? ' title="经跳桥到达"' : ''}><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}${bridgeAt.has(k) ? '<b class="route-bridge-tag">跳桥</b>' : ''}${gankTag(s)}${tag ? `<em>${tag}</em>` : ''}<span>${secDisplay(s.sec).toFixed(1)}</span></button></li>`;
+        return `<li${cls ? ` class="${cls}"` : ''}><button data-sys="${i}"${bridgeAt.has(k) ? ' title="经跳桥到达"' : ''}><i style="background:${secColor(s.sec)}"></i>${app.esc(s.name)}${bridgeAt.has(k) ? '<b class="route-bridge-tag">跳桥</b>' : ''}${gankTag(s)}${riskTag(s)}${tag ? `<em>${tag}</em>` : ''}<span>${secDisplay(s.sec).toFixed(1)}</span></button></li>`;
       }).join('') + '</ol>';
     updateRouteLine();
     fitTo(M.route, 1.2);
     $('routeSummary').textContent = `${M.route.length - 1} 跳` + (multi ? ` · ${stops.length - 2 + (to ? 0 : 1)} 个途经点` : '');
   } catch (error) {
     M.route = [];
-    M.routeStops = [];
     $('routeSummary').textContent = '';
     box.innerHTML = '<p class="legend-empty">路线规划失败：' + app.esc(error.message) + (error.local ? '' : '（可能无法通过星门到达）') + '</p>';
     updateRouteLine();
