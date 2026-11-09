@@ -19,8 +19,8 @@
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME, serverKey } from './server.js?v=s4';
-import * as Plan from './ind-plan.js?v=v8';
-import * as Chain from './ind-chain.js?v=3';
+import * as Plan from './ind-plan.js?v=v9';
+import * as Chain from './ind-chain.js?v=5';
 import * as IS from './ind-structs.js?v=4';
 import { skPage } from './skeleton.js?v=v17';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
@@ -63,7 +63,7 @@ const STATUS_ZH = { active: '进行中', paused: '暂停', ready: '可交付', d
 const D = { loading: null, data: null, sys: new Map(), regions: new Map(), jumpsFromJita: null, adjusted: new Map(), average: new Map(), indices: new Map(), skills: null, history: new Map(),
   bpc: new Map(), bpAll: null, bpUpdated: null, mkt: undefined, mktAt: null };   // mkt：交易中心快照 id -> { sell, buy, daily }   // 蓝图合同价：蓝图 -> { o: 原图合同, c: 拷贝合同 }；bpAll：全部蓝图的 [原图最低, 拷贝每流程最低]
 const F = {
-  tab: 'calc', sys: JITA, fac: 'npc', rig: 0, rfac: 35836, rrig: 0, tax: 1, reproc: 69.6,
+  tab: 'calc', sys: JITA, fac: 'npc', rig: 0, rfac: 35836, rrig: 0, tax: 1, reproc: 69.6, oreM3: 0,
   mat: 'sell', prod: 'sell', skills: 'all5', me: 10, te: 20, subMe: 10,
   scope: 'region', jumps: 10, sec: { high: true, low: true, null: false },
   rankCat: 'all', rankTech: 'all', rankAct: 'm', rankSkill: false, rankOwned: false, rankVol: 0, rankScore: 0, rankSort: 'ph', rankDir: 'desc', rankSize: 100, rankNoOrders: false, idx: 'manufacturing', whereSort: null, whereDir: 'asc'
@@ -248,6 +248,18 @@ async function loadJita(ids, onProgress) {
   if (!need.length) return;
   const map = await (need.length <= LIVE_MAX ? ctx.getLiveHubPrices(need, onProgress) : ctx.getHubPrices(need, onProgress, { maxAge: 3600e3 })).catch(() => new Map());
   for (const id of need) jita.set(id, { ...(map.get(id) || {}), at: now });
+}
+
+// 化矿解出来用到、还没读过挂单（或读过超过 10 分钟）的矿石：读交易中心卖单后重算（市场中心的订单缓存共用）
+const oreDepthAt = new Map();   // 矿石 -> 读挂单的时间
+function loadOreDepth(ids) {
+  const now = Date.now();
+  const need = ids.filter((id) => !(now - (oreDepthAt.get(id) || 0) < 600e3));
+  if (!need.length) return;
+  need.forEach((id) => oreDepthAt.set(id, now));
+  ctx.getHubSellOrders(need).then((map) => {
+    for (const id of need) Chain.setDepth(id, map.get(id) ?? null);
+  }, () => need.forEach((id) => Chain.setDepth(id, null))).then(() => { if (F.tab === 'calc' && $('indCalc')) drawCalc(); });
 }
 
 async function dailyVolume(id) {
@@ -466,13 +478,14 @@ function calc() {
     const g = Chain.newGraph(pid, j.out, 0);
     const sink = { ore: new Map(), g };
     pass({ ore });
-    if (ore.size) { lp = Chain.solveOres(ore, F.reproc / 100); K.oreUnit = lp.unit; }
+    if (ore.size) { lp = Chain.solveOres(ore, F.reproc / 100); K.oreUnit = lp.unit; if (lp.depth) loadOreDepth([...lp.needDepth, ...lp.ores.keys()]); }
     out = pass(sink);
     K.oreUnit = null;
     if (lp) {
       Chain.addOres(g, lp);
       for (const [o, n] of lp.ores) out.raw.set(o, (out.raw.get(o) || 0) + n);
       for (const m of lp.missing) out.raw.set(m, (out.raw.get(m) || 0) + ore.get(m));
+      for (const [m, q] of lp.direct) out.raw.set(m, (out.raw.get(m) || 0) + q);
     }
     out.g = g;
   }
@@ -528,7 +541,7 @@ export async function showIndustry(hash = location.hash, restored = false) {
   await loadData();
   if (!planReady) {
     planReady = true;
-    Chain.initChain({ ctx, BP, T, tName, matPrice, ICON, F });
+    Chain.initChain({ ctx, BP, T, tName, matPrice, ICON, F, HUB: HUB_NAME, vol: (id) => D.vols?.[id], volReady: () => Boolean(D.vols) });
     IS.initStructs({ ctx, D, F, sysLabel, onChange: () => { renderSettings(); refresh(); } });
     Plan.initPlan({ server: SERVER.id, ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, selectProduct, renderTab, sysSec, secMul, myBp });
   }
@@ -732,7 +745,7 @@ async function renderCalc(body) {
     dig(C.pid, 0);
     Chain.oresFor([...deep]).forEach((o) => deep.add(o));
     for (const id of ids) deep.delete(id);
-    if (deep.size) await Promise.all([loadJita([...deep]), fillNames([...deep])]);
+    if (deep.size) await Promise.all([loadJita([...deep]), fillNames([...deep]), D.vols ? null : loadVolumes().then((v) => { D.vols = v || {}; })]);
     if (F.tab !== 'calc' || !$('indCalc')) return;
   }
   if (F.tab !== 'calc' || !$('indCalc')) return;
@@ -778,8 +791,10 @@ function drawCalc() {
   }).join('');
 
   // 购物清单（自制展开到最底层）
-  const shopping = [...r.raw.entries()].map(([id, q]) => [id, Math.ceil(q - 1e-9)]).sort((a, b) => (matPrice(b[0]) ?? 0) * b[1] - (matPrice(a[0]) ?? 0) * a[1]);
-  const shopRows = shopping.map(([id, q]) => `<tr><td><div class="pi-prod">${icon(id, 20)}<span>${esc(tName(id))}</span></div></td><td class="num">${num(q)}</td><td class="num">${isk(q * (matPrice(id) ?? 0))}</td></tr>`).join('');
+  // 矿石按实际挂单计价（买完便宜的挂单再买贵的）
+  const shopCost = (id, q) => r.lp?.oreCost.get(id) ?? q * (matPrice(id) ?? 0);
+  const shopping = [...r.raw.entries()].map(([id, q]) => [id, Math.ceil(q - 1e-9)]).sort((a, b) => shopCost(b[0], b[1]) - shopCost(a[0], a[1]));
+  const shopRows = shopping.map(([id, q]) => `<tr><td><div class="pi-prod">${icon(id, 20)}<span>${esc(tName(id))}</span></div></td><td class="num">${num(q)}</td><td class="num">${isk(shopCost(id, q))}</td></tr>`).join('');
   R.shopping = shopping;
 
   // 发明
@@ -1622,7 +1637,7 @@ function onChange(e) {
     return;
   }
   if (t.dataset.indNum) {
-    const lim = { tax: [0, 50], me: [0, 10], te: [0, 20], subMe: [0, 10], reproc: [30, 100] }[t.dataset.indNum];
+    const lim = { tax: [0, 50], me: [0, 10], te: [0, 20], subMe: [0, 10], reproc: [30, 100], oreM3: [0, 1e5] }[t.dataset.indNum];
     F[t.dataset.indNum] = Math.min(lim[1], Math.max(lim[0], Number(t.value) || 0));
     t.value = F[t.dataset.indNum];
     save(); renderSettings(); refresh();

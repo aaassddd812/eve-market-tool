@@ -5729,6 +5729,8 @@ td .hc-sub { display: inline; margin-left: 6px; }
 .ind-plan-tabs { margin-bottom: 12px; }
 .ind-plan-num { width: 64px; padding: 2px 6px; text-align: right; }
 .ind-plan-items .ind-plan-num { width: 52px; }
+.ind-plan-items .ind-plan-on { width: 44px; }
+.ind-plan-items .ind-plan-on .ka-switch { display: block; }
 .ind-plan-act { white-space: nowrap; text-align: right; }
 .ind-plan-act .link-btn + .link-btn { margin-left: 10px; }
 .ind-plan-build { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; font-size: 0.8125rem; }

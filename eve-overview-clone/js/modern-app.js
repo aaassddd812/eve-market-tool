@@ -918,13 +918,31 @@ async function getLiveHubPrices(ids, onProgress) {
   return out;
 }
 
+// 交易中心的卖单（制造页化矿按实际挂单量选矿石）：Map 物品 -> [[价格, 数量]…]；读不到的物品为 null
+async function getHubSellOrders(ids) {
+  const hub = REGIONS[0];
+  const out = new Map();
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < ids.length) {
+      const id = ids[cursor++];
+      try {
+        const orders = await regionOrders(id, hub.id);
+        out.set(id, orders.filter((o) => !o.is_buy_order && o.location_id === hub.hub.id).map((o) => [o.price, o.volume_remain]));
+      } catch { out.set(id, null); }
+    }
+  };
+  await Promise.all(Array.from({ length: 8 }, worker));
+  return out;
+}
+
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v60').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v62').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
-      getHubPrices: getJitaPrices, getLiveHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
+      getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       esiAccountFetch, esiAccountList, resolveTypeNames, hasScope, structureNameMap, saveStructureNames,
       readToken: () => state.esiToken || readEsiToken(),
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),

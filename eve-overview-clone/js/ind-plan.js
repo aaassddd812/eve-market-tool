@@ -2,6 +2,7 @@
 // 计算器里的「解码器对比」（每种解码器的总成本 / 利润，标出最优）与「发明次数」（按二项分布，约 95% 把握拿到所需拷贝要发明几次）、
 //   「材料效率影响」（ME 0–10 的成本与利润）、「研究与拷贝」（ME / TE 研究到目标等级、拷贝的时间与费用，以及研究后每流程省多少、几个流程回本）；
 // 「制造规划」页：多个产品一起规划——组件可选自制并逐级展开汇总，扣除库存（ESI 资产或粘贴），产线启动清单（每个任务的流程数与时间），
+//   每个产品可以停用（it.off：已经造好挂单、只想留着看成本的），停用的照样算成本 / 利润，但不进购物清单、产线和合计，
 //   按制造 / 反应产线数排出的时间轴，购物清单可复制；「库存可造」按现有材料反推能造什么（工业清库）；
 // 「粘贴配装」：游戏装配窗口复制的 EFT 文本拆成舰船、装备、无人机 / 货舱物品，能造的按 件数 × 份数 ÷ 每流程产出（向上取整）加入规划，
 //   已在规划里的产品直接加流程；没有蓝图的（势力、官员装备等）列出来。
@@ -299,8 +300,9 @@ function planCompute() {
   const need = new Map();       // 自制中间产品 -> 需要数量
   const buy = new Map();        // 购买材料 -> { need, have }
   const depth = new Map();      // 自制中间产品的最大层级
-  const items = P.items.map((it, i) => {
+  const all = P.items.map((it, i) => {
     const q = quote(it.pid, { runs: it.runs, me: it.me, te: it.te, invent: it.invent, dec: it.dec || 0, build: P.build });
+    if (it.off) return { it, q };
     // 分批：拆成 n 个任务放到不同产线同时造（时间与安装费按流程数等比例分摊）
     const n = Math.max(1, Math.min(it.split || 1, q.runs));
     for (let k = 0; k < n; k++) {
@@ -309,6 +311,7 @@ function planCompute() {
     }
     return { it, q };
   });
+  const items = all.filter(({ it }) => !it.off);   // 启用的产品
   const walk = (pid, d) => {
     for (const [id] of BP(pid)[3]) if (build.has(id) && BP(id)) { if ((depth.get(id) ?? -1) < d) { depth.set(id, d); walk(id, d + 1); } }
   };
@@ -346,7 +349,7 @@ function planCompute() {
   const bpCost = items.reduce((t, { q }) => t + q.bpCost, 0);
   const revenue = items.reduce((t, { q }) => t + q.revenue, 0);
   const total = matCost + install + invCost + bpCost;
-  return { items, jobs, shop, matCost, install, invCost, bpCost, revenue, total, profit: revenue - total, schedule: schedule(jobs) };
+  return { items: all, on: items, off: all.length - items.length, jobs, shop, matCost, install, invCost, bpCost, revenue, total, profit: revenue - total, schedule: schedule(jobs) };
 }
 
 // 产线：手动填条数，或按已绑定的各角色技能（大规模生产 / 高级大规模生产、大规模反应 / 高级大规模反应，各 +1 条/级）
@@ -457,9 +460,10 @@ function drawPlan(body, tabs) {
   S.lastPlan = r;
   const icon = (id, s = 24) => `<img src="${X.ICON(id)}" alt="" width="${s}" height="${s}" loading="lazy">`;
   const buildable = new Map();
-  for (const { q } of r.items) for (const m of q.rows) if (m.canBuild) buildable.set(m.id, true);
+  for (const { q } of r.on) for (const m of q.rows) if (m.canBuild) buildable.set(m.id, true);
   for (const j of r.jobs) if (j.depth > 0) for (const [id] of X.BP(j.pid)[3]) if (X.BP(id)) buildable.set(id, true);
-  const itemRows = r.items.map(({ it, q }, i) => `<tr>
+  const itemRows = r.items.map(({ it, q }, i) => `<tr class="${it.off ? 'is-done' : ''}">
+      <td class="ind-plan-on"><input type="checkbox" class="ka-switch" data-plan-on="${i}"${it.off ? '' : ' checked'} title="${it.off ? '已停用：不计入购物清单、产线和合计' : '启用：计入购物清单、产线和合计'}" aria-label="启用"></td>
       <td><div class="pi-prod">${icon(it.pid)}<span>${esc(X.tName(it.pid))}${q.inv ? '<small>发明</small>' : ''}</span></div></td>
       <td class="num"><input type="number" class="pi-input ind-plan-num" min="1" max="100000" value="${it.runs}" data-plan-item="${i}" data-k="runs"></td>
       <td class="num pi-hide-sm"><input type="number" class="pi-input ind-plan-num" min="1" max="50" value="${it.split || 1}" data-plan-item="${i}" data-k="split" title="拆成几个任务放到不同产线同时造"></td>
@@ -491,9 +495,9 @@ function drawPlan(body, tabs) {
         <div class="${r.profit >= 0 ? 'pi-stat-main' : 'ind-stat-loss'}"><span>总利润</span><b>${isk(r.profit)}</b></div>
         <div><span>全部完成约</span><b>${X.fmtTime(r.schedule.span)}</b></div>
       </div>
-      <div class="pi-card-head"><h3>产品</h3><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-fit title="把游戏里的配装拆成能造的舰船和装备加入规划">粘贴配装</button><button type="button" class="btn btn-ghost btn-sm" data-plan-clear>清空规划</button></div>
+      <div class="pi-card-head"><h3>产品</h3>${r.off ? `<span class="text-muted">已停用 ${r.off} 项，不计入购物清单、产线和合计</span>` : ''}<span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-fit title="把游戏里的配装拆成能造的舰船和装备加入规划">粘贴配装</button><button type="button" class="btn btn-ghost btn-sm" data-plan-clear>清空规划</button></div>
       ${fitPanel()}
-      <div class="pi-table-wrap"><table class="pi-table ind-plan-items"><thead><tr><th>产品</th><th class="num">流程</th><th class="num pi-hide-sm" title="拆成几个任务放到不同产线同时造">分批</th><th class="num pi-hide-sm">ME / TE</th><th class="num">产出</th><th class="num pi-hide-sm">成本</th><th class="num pi-hide-sm">卖出</th><th class="num">利润</th><th></th></tr></thead><tbody>${itemRows}</tbody></table></div>
+      <div class="pi-table-wrap"><table class="pi-table ind-plan-items"><thead><tr><th title="停用的产品照样显示成本和利润，但不计入购物清单、产线和合计">启用</th><th>产品</th><th class="num">流程</th><th class="num pi-hide-sm" title="拆成几个任务放到不同产线同时造">分批</th><th class="num pi-hide-sm">ME / TE</th><th class="num">产出</th><th class="num pi-hide-sm">成本</th><th class="num pi-hide-sm">卖出</th><th class="num">利润</th><th></th></tr></thead><tbody>${itemRows}</tbody></table></div>
       ${buildChips ? `<div class="ind-plan-build"><span class="text-muted">组件（点击切换自制 / 购买）：</span><div>${buildChips}</div></div>` : ''}
     </div>
     ${inventHtml(r)}
@@ -528,7 +532,7 @@ function charsHtml() {
 // 发明进度：已经发明了多少次、成功几张，按二项分布估算还要再发明几次
 function inventHtml(r) {
   const { esc, formatISK: isk, formatNumber: num } = X.ctx;
-  const list = r.items.map(({ it, q }, i) => ({ it, q, i })).filter((x) => x.q.inv);
+  const list = r.items.map(({ it, q }, i) => ({ it, q, i })).filter((x) => x.q.inv && !x.it.off);
   if (!list.length) return '';
   const rows = list.map(({ it, q, i }) => {
     const need = Math.ceil(q.runs / q.inv.runs);
@@ -648,6 +652,8 @@ export function onPlanEvent(e) {
       if (!S.fitOpen) S.fitText = '';
       return 'plan';
     }
+    const on = t.closest('[data-plan-on]');
+    if (on) { const it = P.items[Number(on.dataset.planOn)]; if (on.checked) delete it.off; else it.off = true; savePlan(); return 'plan'; }
     const del = t.closest('[data-plan-del]');
     if (del) { P.items.splice(Number(del.dataset.planDel), 1); savePlan(); return 'plan'; }
     if (t.closest('[data-plan-clear]')) { if (confirm('清空制造规划？')) { P.items = []; savePlan(); return 'plan'; } return 'none'; }
