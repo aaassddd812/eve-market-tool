@@ -546,6 +546,7 @@ mark {
 .category.expanded > .category-items { display: block; }
 /* 个性化设置里关掉连接线：只留缩进 */
 html.no-tree-lines .category-items { border-left: 0; padding-left: 0; margin-left: 12px; }
+html.no-tree-icons .tree-icon { display: none; }   /* 个性化设置可关掉目录图标 */
 
 .item-btn {
   display: flex;
@@ -8629,3 +8630,7 @@ a.pz-name:hover { color: var(--accent-primary); }
 .hr-plan .hc-head .pi-prod { margin-left: 8px; }
 .hr-plan-sum { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0; font-size: 0.9rem; }
 .hr-plan-sum > span { padding: 4px 10px; border-radius: 8px; background: var(--bg-tertiary, rgba(255,255,255,0.05)); }
+/* 改单小助手：物品名后的复制按钮 */
+.ow-name-copy { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-left: 4px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; vertical-align: middle; }
+.ow-name-copy:hover { background: var(--accent-soft); color: var(--accent-primary); }
+.ow-name-copy svg { width: 14px; height: 14px; }

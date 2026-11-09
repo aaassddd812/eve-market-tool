@@ -1688,7 +1688,11 @@ function buildCatalogIndex() {
   // 递归统计每个分类（含子分类）下的物品总数
   const countOf = (group) => {
     if (group.total !== undefined) return group.total;
-    group.total = group.types.length + (state.childGroups.get(group.id) || []).reduce((sum, child) => sum + countOf(child), 0);
+    const kids = state.childGroups.get(group.id) || [];
+    group.total = group.types.length + kids.reduce((sum, child) => sum + countOf(child), 0);
+    // 分类图标：没有官方分类图标接口，用分类（含子分类）里物品 ID 最小的那个物品的图标（一般是最早、最典型的那件）
+    group.icon = Math.min(...group.types.map((t) => t.id), ...kids.map((c) => c.icon || Infinity));
+    if (!Number.isFinite(group.icon)) group.icon = 0;
     return group.total;
   };
   state.catalog.groups.forEach(countOf);
@@ -1712,6 +1716,7 @@ function renderCategoryShell(group) {
   return `<div class="category" data-id="${group.id}" role="treeitem" aria-expanded="false">
       <button class="category-header" type="button">
         ${ICONS.chevron}
+        ${group.icon ? `<img class="tree-icon tree-cat-icon" src="${IMAGE_BASE}/${group.icon}/icon?size=32" alt="" loading="lazy" width="20" height="20">` : ''}
         <span class="category-name">${esc(group.name)}</span>
         <span class="category-count">${group.total}</span>
       </button>
@@ -3528,10 +3533,12 @@ function initContact() {
 // 存在 eve-prefs（云同步会带上）；每项一个勾选框：键、名称、[不勾选的值, 勾选的值]、默认是否勾选
 const PREFS = [
   ['mapZoom', '星图反转鼠标方向', ['normal', 'reverse'], false],   // 只反转滚轮缩放
-  ['treeLines', '显示分类目录连接线', ['off', 'on'], true]
+  ['treeLines', '显示分类目录连接线', ['off', 'on'], true],
+  ['treeIcons', '市场目录显示分类与物品图标', ['off', 'on'], true]
 ];
 function applyPrefs(p = store.getJSON('eve-prefs', {})) {
   document.documentElement.classList.toggle('no-tree-lines', p.treeLines === 'off');
+  document.documentElement.classList.toggle('no-tree-icons', p.treeIcons === 'off');
 }
 function renderPrefs() {
   const p = store.getJSON('eve-prefs', {});
@@ -5589,7 +5596,7 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v17').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v19').then((m) => {
     m.initOrderWatch({
       esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),

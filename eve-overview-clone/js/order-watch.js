@@ -21,6 +21,7 @@ import { L } from './alert-mail.js?v=v8';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, typeName, locationName, resolveTypeNames, selectItem, store, serverKey, isActive, openPush
 const SET_KEY = 'eve-order-watch';
+const ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
 const STRUCT_SCOPE = 'esi-markets.structure_markets.v1';
 const HIST_SCOPE = 'esi-markets.read_character_orders.v1';
 const POLL = 5 * 60e3;
@@ -308,6 +309,8 @@ function draw(box) {
     if (p.m == null) return `<span class="text-muted" title="${esc(p.tip)}">到手 ${ctx.formatISK(p.net)}</span>`;
     return `<b class="ow-margin ${p.m <= 0 ? 'bad' : p.m < 0.05 ? 'thin' : 'ok'}" title="${esc(p.tip)}">${pct(p.m)}</b>`;
   };
+  // 和估价页一样点价格复制（不带分隔符，方便粘贴到游戏里）
+  const cp = (v) => `<span class="ap-cp" data-ow-cp="${Math.round(v * 100) / 100}" title="点击复制">${px(v)}</span>`;
   const EV = { new: '新挂单', mod: '改价', fill: '成交', end: '结束' };
   const body = rows.map((r) => {
     const o = r.o;
@@ -321,12 +324,12 @@ function draw(box) {
       <small class="text-muted"><span>中介费 ${ctx.formatISK(e.fee)} · 改单费 ${ctx.formatISK(e.rel)}（${e.n} 次）</span> · <span>两次读取之间多次改单只能记一次</span></small></td></tr>` : '';
     const cool = COOLDOWN - (now - Date.parse(o.issued || 0));
     return `<tr class="ow-${r.state}">
-      <td><button class="link-btn ow-item" data-ow-item="${o.type_id}"><img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" data-item-pop="${o.type_id}" alt="" width="20" height="20" loading="lazy">${esc(ctx.typeName(o.type_id))}</button></td>
+      <td><button class="link-btn ow-item" data-ow-item="${o.type_id}"><img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" data-item-pop="${o.type_id}" alt="" width="20" height="20" loading="lazy">${esc(ctx.typeName(o.type_id))}</button><button type="button" class="ow-name-copy" data-ow-name="${o.type_id}" title="复制名称" aria-label="复制名称">${ICON_COPY}</button></td>
       <td>${o.is_buy_order ? '<span class="pill buy">收购</span>' : '<span class="pill sell">出售</span>'}</td>
       <td class="pi-hide-sm ow-loc">${esc(ctx.locationName(o.location_id))}</td>
-      <td class="num">${px(o.price)}</td>
+      <td class="num">${cp(o.price)}</td>
       <td class="num">${e ? `<button class="link-btn" data-ow-hist="${o.order_id}">${marginHtml(p)}</button>` : marginHtml(p)}</td>
-      <td class="num">${r.best != null ? px(r.best) + `<small class="text-muted"> ×${num(r.bestVol)}</small>` : '—'}</td>
+      <td class="num">${r.best != null ? cp(r.best) + `<small class="text-muted"> ×${num(r.bestVol)}</small>` : '—'}</td>
       <td>${STATE[r.state](r)}</td>
       <td class="num">${r.sug != null ? `<button class="btn btn-ghost btn-sm ow-copy" data-ow-copy="${r.sug}" title="复制后在游戏里修改订单粘贴">${px(r.sug)}</button><small class="text-muted ow-cool">改单费 ${ctx.formatISK(rel)}${after?.m != null ? ` · 改后 ${pct(after.m)}` : ''}</small>${cool > 0 ? `<small class="text-muted ow-cool" title="订单修改后 5 分钟内不能再改">${Math.ceil(cool / 60e3)} 分钟后可改</small>` : ''}` : '—'}</td>
       <td class="num pi-hide-sm">${e ? `<button class="link-btn ow-fee" data-ow-hist="${o.order_id}" title="点开看这张单的记录">${ctx.formatISK(fees)}${e.n ? `<small> · 改 ${e.n} 次</small>` : ''}</button>` : '—'}</td>
@@ -334,7 +337,7 @@ function draw(box) {
   }).join('');
   box.innerHTML = settingsHtml() + reportHtml(S.report) + `
     <div class="ow-sum"><span class="ow-state under">被压 ${cnt('under')}</span><span class="ow-state lead">领先 ${cnt('lead')}</span><span class="ow-state alone">只有我 ${cnt('alone')}</span>${cnt('unknown') ? `<span class="ow-state unknown">无法判断 ${cnt('unknown')}</span>` : ''}
-      <span class="text-muted" title="对手价再让一档（4 位有效数字）">点建议价复制</span></div>
+      <span class="text-muted" title="对手价再让一档（4 位有效数字）">点价格复制</span></div>
     <div class="table-scroll"><table class="pc-mini-table ow-table"><thead><tr><th>物品</th><th>方向</th><th class="pi-hide-sm">位置</th><th class="num">我的价格</th><th class="num" title="收单：同站最低卖价扣税费后，比每件成本（含已付中介费与改单费）；卖单：每件到手比平均收购成本">剩余利润</th><th class="num">对手最优</th><th>状态</th><th class="num">建议价</th><th class="num pi-hide-sm">已付费用</th><th class="num pi-hide-sm">剩余 / 总量</th></tr></thead><tbody>${body}</tbody></table></div>
     <p class="pi-note" title="卖单只和同一空间站 / 建筑的卖单比；收单还算上星系 / 星域范围的收单">玩家建筑订单需「建筑市场」权限</p>`;
 }
@@ -343,6 +346,10 @@ export async function onClick(e, box) {
   const t = e.target;
   const copy = t.closest('[data-ow-copy]');
   if (copy) { ctx.copyText(copy.dataset.owCopy, '已复制建议价 ' + copy.dataset.owCopy); return true; }
+  const nm = t.closest('[data-ow-name]');
+  if (nm) { ctx.copyText(ctx.typeName(Number(nm.dataset.owName)), '已复制名称'); return true; }
+  const cp = t.closest('[data-ow-cp]');
+  if (cp) { ctx.copyText(cp.dataset.owCp, '已复制 ' + cp.dataset.owCp); return true; }
   if (t.closest('[data-ow-fees]')) { TF.openFeeDialog(); return true; }
   if (t.closest('[data-ow-push-set]')) { ctx.openPush(); return true; }
   const hist = t.closest('[data-ow-hist]');
