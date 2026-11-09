@@ -109,6 +109,7 @@ export function initFitting(context) {
     esiSkills: () => app.getCharacterSkills(),    // 已绑定角色的技能（战场模拟某一方按角色技能）
     // 在装配页打开（战场模拟的装配详情）：先记下，切到装配页时载入
     openInFitting: (fit) => { pendingFit = fit; app.openFit(); },
+    openBattles: () => app.openBattles(),   // 战场模拟「从真实会战导入」：去近 30 天会战列表选一场
     // 针对对方阵容的智能装配（战场模拟的装配详情）
     counterFit, cancelCounterFit,
     esc: app.esc, formatNumber: app.formatNumber, formatISK: app.formatISK, showToast: app.showToast, store: app.store
