@@ -1691,7 +1691,7 @@ function buildCatalogIndex() {
     const kids = state.childGroups.get(group.id) || [];
     group.total = group.types.length + kids.reduce((sum, child) => sum + countOf(child), 0);
     // 分类图标：没有官方分类图标接口，用分类（含子分类）里物品 ID 最小的那个物品的图标（一般是最早、最典型的那件）
-    group.icon = Math.min(...group.types.map((t) => t.id), ...kids.map((c) => c.icon || Infinity));
+    group.icon = Math.min(...group.types.map((t) => t.id).filter(treeIconUrl), ...kids.map((c) => c.icon || Infinity));
     if (!Number.isFinite(group.icon)) group.icon = 0;
     return group.total;
   };
@@ -1716,7 +1716,7 @@ function renderCategoryShell(group) {
   return `<div class="category" data-id="${group.id}" role="treeitem" aria-expanded="false">
       <button class="category-header" type="button">
         ${ICONS.chevron}
-        ${group.icon ? `<img class="tree-icon tree-cat-icon" src="${IMAGE_BASE}/${group.icon}/icon?size=32" alt="" loading="lazy" width="20" height="20">` : ''}
+        ${group.icon ? `<img class="tree-icon tree-cat-icon" src="${treeIconUrl(group.icon)}" alt="" loading="lazy" width="20" height="20">` : ''}
         <span class="category-name">${esc(group.name)}</span>
         <span class="category-count">${group.total}</span>
       </button>
@@ -1740,7 +1740,7 @@ function setCategoryExpanded(category, expanded) {
 function renderItem(type, extra = '') {
   const active = state.selectedItem?.id === type.id ? ' active' : '';
   return `<button class="item-btn${active}" type="button" data-type-id="${type.id}" title="${esc(type.name)} · Type ${type.id}">
-      <img class="tree-icon" src="${IMAGE_BASE}/${type.id}/icon?size=32" alt="" loading="lazy" width="20" height="20">
+      ${treeIconUrl(type.id) ? `<img class="tree-icon" src="${treeIconUrl(type.id)}" alt="" loading="lazy" width="20" height="20">` : '<span class="tree-icon"></span>'}
       <span class="item-name">${extra || esc(type.name)}</span>
     </button>`;
 }
@@ -2039,6 +2039,27 @@ function initItemPopups() {
     }
   });
 }
+
+// 目录图标：蓝图和反应配方图片服务器只有 /bp 没有 /icon；涂装没有任何图片，用它所属舰船的图标
+// （涂装名以舰船名开头，如「霍克级艾玛工业制服涂装」，取最长的匹配；多舰船通用涂装匹配不到，图片加载失败时隐藏）
+const BP_ROOT_GROUP = 2, SKIN_ROOT_GROUP = 1954;
+let shipNames = null;
+function skinShip(name) {
+  if (!shipNames) {
+    shipNames = [];
+    state.typeIndex.forEach(({ type, groupId }) => { if (rootGroupId(groupId) === SHIP_ROOT_GROUP) shipNames.push(type); });
+    shipNames.sort((a, b) => b.name.length - a.name.length);
+  }
+  return shipNames.find((t) => name.startsWith(t.name))?.id || 0;
+}
+function treeIconUrl(id) {
+  const e = state.typeIndex.get(id);
+  const root = e && rootGroupId(e.groupId);
+  if (root === BP_ROOT_GROUP) return `${IMAGE_BASE}/${id}/bp?size=32`;
+  if (root === SKIN_ROOT_GROUP) { const ship = skinShip(e.type.name); return ship ? `${IMAGE_BASE}/${ship}/icon?size=32` : ''; }
+  return `${IMAGE_BASE}/${id}/icon?size=32`;
+}
+document.addEventListener('error', (e) => { if (e.target?.classList?.contains('tree-icon')) e.target.style.visibility = 'hidden'; }, true);
 
 // 舰船（市场根分类「舰船」）才显示「近期损失」
 const SHIP_ROOT_GROUP = 4;
@@ -5596,7 +5617,7 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v19').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v20').then((m) => {
     m.initOrderWatch({
       esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),

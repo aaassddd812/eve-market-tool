@@ -324,7 +324,7 @@ function draw(box) {
       <small class="text-muted"><span>中介费 ${ctx.formatISK(e.fee)} · 改单费 ${ctx.formatISK(e.rel)}（${e.n} 次）</span> · <span>两次读取之间多次改单只能记一次</span></small></td></tr>` : '';
     const cool = COOLDOWN - (now - Date.parse(o.issued || 0));
     return `<tr class="ow-${r.state}">
-      <td><button class="link-btn ow-item" data-ow-item="${o.type_id}"><img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" data-item-pop="${o.type_id}" alt="" width="20" height="20" loading="lazy">${esc(ctx.typeName(o.type_id))}</button><button type="button" class="ow-name-copy" data-ow-name="${o.type_id}" title="复制名称" aria-label="复制名称">${ICON_COPY}</button></td>
+      <td><div class="ow-name-cell"><button class="link-btn ow-item" data-ow-item="${o.type_id}"><img src="https://images.evetech.net/types/${o.type_id}/icon?size=32" data-item-pop="${o.type_id}" alt="" width="20" height="20" loading="lazy">${esc(ctx.typeName(o.type_id))}</button><button type="button" class="ow-name-copy" data-ow-name="${o.type_id}" title="复制名称" aria-label="复制名称">${ICON_COPY}</button></div></td>
       <td>${o.is_buy_order ? '<span class="pill buy">收购</span>' : '<span class="pill sell">出售</span>'}</td>
       <td class="pi-hide-sm ow-loc">${esc(ctx.locationName(o.location_id))}</td>
       <td class="num">${cp(o.price)}</td>
