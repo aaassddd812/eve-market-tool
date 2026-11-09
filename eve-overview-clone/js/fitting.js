@@ -116,7 +116,7 @@ export function initFitting(context) {
   toolInit = () => { initSim(toolCtx); initGraph(toolCtx); initPlan(planPageCtx); toolInit = null; };
   $('fitEsiModal').addEventListener('input', (e) => { if (e.target.id === 'fitEsiSearch') renderEsiList(); });
   $('fitEsiShipOnly').addEventListener('change', renderEsiList);
-  $('fitStats').addEventListener('change', (e) => { if (e.target.matches('[data-val-src]')) { app.valuation.set(e.target.value); renderStats(); } });
+  $('fitStats').addEventListener('change', (e) => { if (e.target.matches('[data-val-src]')) { app.valuation.set(e.target.value); renderStats(); renderBrowser(); } });
 }
 
 function pick(obj, keys) {
@@ -476,6 +476,7 @@ function renderBrowser() {
       .sort((a, b) => a[1] - b[1] || a[0].name.length - b[0].name.length)
       .slice(0, 200).map(([t]) => t);
     box.innerHTML = head.join('') + (hits.length ? '<div class="fit-list">' + hits.map(itemRow).join('') + '</div>' : '<p class="legend-empty">没有匹配的物品</p>');
+    loadRowPrices();
     return;
   }
   // 按市场分组展示：只显示含可见物品的分组
@@ -501,6 +502,7 @@ function renderBrowser() {
   box.innerHTML = head.join('') + (roots.length || noMarket.length
     ? roots.map((m) => group(m, 0)).join('') + (noMarket.length ? `<div class="fit-group open"><div class="fit-group-head is-static">其他（不在市场出售）<span>${noMarket.length}</span></div><div class="fit-list">${noMarket.sort(byMeta).slice(0, 300).map(itemRow).join('')}</div></div>` : '')
     : `<p class="legend-empty">${F.tab === 'charge' && F.onlyFits ? '先装上需要弹药的武器或装备' : '没有可显示的物品'}</p>`);
+  loadRowPrices();
 }
 
 const byName = (a, b) => a.name.localeCompare(b.name, 'zh');
@@ -512,8 +514,52 @@ function itemRow(t) {
   return `<button class="fit-item" data-fit-type="${t.id}" title="${app.esc(t.name + (t.en ? '\n' + t.en : ''))}">
     <img src="${IMG(t.id)}" alt="" width="24" height="24" loading="lazy" draggable="false">
     <span class="fit-item-name">${app.esc(t.name)}${fitInfo ? `<small>${fitInfo}</small>` : ''}</span>
-    ${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${infoBtn(t.id, 'span')}
+    ${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${t.market && t.category !== FE.CAT.ship ? `<span class="fit-item-price" data-fit-price="${t.id}">${priceText(t.id)}</span>` : ''}${infoBtn(t.id, 'span')}
   </button>`;
+}
+
+// ---------- 交易中心价格：左侧列表每个物品后面的最低卖价（舰船不列），详情里的最低卖 / 最高收 ----------
+// 来源和右侧「估价」同一个交易中心（app.valuation，切换后列表与详情跟着变），价格有本地缓存；列表展开时只查看得到的物品
+const HP = { region: null, map: new Map(), want: new Set(), timer: 0, waiters: [] };
+function hubPrices() {
+  const r = app.valuation.region();
+  if (HP.region !== r.id) { HP.region = r.id; HP.map.clear(); }
+  return HP.map;
+}
+const priceText = (id) => { const p = hubPrices().get(id); return !p ? '' : p.sell != null ? app.formatISK(p.sell) : '—'; };
+// 要价格的物品攒一下（0.15 秒）一起查
+function wantPrices(ids) {
+  const map = hubPrices();
+  for (const id of ids) if (!map.has(id)) HP.want.add(id);
+  if (!HP.want.size) return Promise.resolve();
+  const p = new Promise((res) => HP.waiters.push(res));
+  clearTimeout(HP.timer);
+  HP.timer = setTimeout(() => {
+    const list = [...HP.want], waiters = HP.waiters, region = HP.region;
+    HP.want.clear(); HP.waiters = [];
+    app.valuation.items(list.map((id) => ({ type_id: id, quantity: 1 }))).then((v) => {
+      if (HP.region === region) for (const id of list) HP.map.set(id, v.price(id));
+    }).catch(() => {}).finally(() => waiters.forEach((w) => w()));
+  }, 150);
+  return p;
+}
+function loadRowPrices() {
+  const els = [...$('fitBrowser').querySelectorAll('[data-fit-price]')];
+  const ids = els.filter((el) => !el.textContent).map((el) => Number(el.dataset.fitPrice));
+  if (!ids.length) return;
+  wantPrices(ids).then(() => {
+    for (const el of $('fitBrowser').querySelectorAll('[data-fit-price]')) el.textContent = priceText(Number(el.dataset.fitPrice));
+  });
+}
+function infoPriceHtml(id) {
+  const p = hubPrices().get(id);
+  const name = app.esc(app.valuation.region().hub.name);
+  return `<div class="fi-price-cell is-sell"><span>最低卖价</span><b>${p ? app.formatISK(p.sell) : '…'}</b></div><div class="fi-price-cell is-buy"><span>最高收价</span><b>${p ? app.formatISK(p.buy) : '…'}</b></div><small translate="no">${name}</small>`;
+}
+async function fillInfoPrice(id) {
+  await wantPrices([id]);
+  const el = document.querySelector(`[data-fi-price="${id}"]`);
+  if (el) el.innerHTML = infoPriceHtml(id);
 }
 
 // ---------- 物品详情（舰船 / 装备 / 弹药 / 无人机）：类似游戏里的「显示信息」----------
@@ -601,6 +647,7 @@ async function openTypeInfo(id, src = null) {
   body.innerHTML = infoHtml(t, names, info, tabNow, Boolean(F.infoSrc), DRAG_CATS.has(t.category));
   body.dataset.open = '1';
   body.querySelector('.fi-panes').scrollTop = 0;
+  if (t.market) fillInfoPrice(id);
   infoDesc(id).then((text) => {
     const el = $('fitInfoDesc');
     if (el && body.dataset.id === String(id)) el.textContent = text;
@@ -619,7 +666,7 @@ export async function typeDetail(id) {
   await ensureData();
   const t = type(id);
   if (!t) throw new Error('没有这个物品的数据');
-  const [names, info, desc] = await Promise.all([dogmaNames(), fitInfo(), infoDesc(id)]);
+  const [names, info, desc] = await Promise.all([dogmaNames(), fitInfo(), infoDesc(id), t.market ? Promise.race([wantPrices([id]), new Promise((r) => setTimeout(r, 4000))]) : null]);
   const html = infoHtml(t, names, info, null, false).replace('<div class="pi-loading">读取描述…</div>', app.esc(desc));
   return { title: t.name, html: `<div class="fi-pop fi-float">${html}</div>` };
 }
@@ -652,6 +699,7 @@ function infoHtml(t, names, info, tabNow, canSwap, drag = false) {
         <h4>${app.esc(t.name)}</h4>${t.en && t.en !== t.name ? `<small translate="no">${app.esc(t.en)}</small>` : ''}</div>
       ${t.market ? `<button type="button" class="btn btn-ghost btn-sm" data-fi-market="${id}">市场价格</button>` : ''}
     </div>
+    ${t.market ? `<div class="fi-price" data-fi-price="${id}">${infoPriceHtml(id)}</div>` : ''}
     <div class="segmented fi-tabs">${tabs.map(([k, l]) => `<button type="button" data-fi-tab="${k}" class="${k === first ? 'active' : ''}">${l}</button>`).join('')}</div>
     <div class="fi-panes">${pane('attrs', attrsHtml)}
     ${bonus ? pane('bonus', bonusHtml(bonus)) : ''}
@@ -1202,13 +1250,23 @@ function renderFit() {
     ${cloudHtml()}
     ${envHtml()}
     ${fleetHtml()}
-    ${gaps.length ? `<section class="fit-slots"><h4>${missing.length ? '缺少的技能' : '还没到 5 级的技能'}<span>${gaps.length}</span></h4><div class="fit-skill-list">${gaps.map((m) => `<span>${app.esc(m.type?.name || '')} <b>${m.have} → ${m.need}</b></span>`).join('')}</div></section>` : ''}`;
+    ${gaps.length ? `<section class="fit-slots"><h4>${missing.length ? '缺少的技能' : '还没到 5 级的技能'}<span>${gaps.length}</span></h4><div class="fit-skill-list">${gaps.map((m) => `<span>${app.esc(m.type?.name || '')} <b>${m.have} → ${m.need}</b> ${spText(spGap(m))}</span>`).join('')}</div></section>` : ''}`;
 }
 
+// 练到需要的等级还差多少技能点（每级累计 250 × 倍数 × √32^(等级-1)；已有技能点含正在练的那一级的进度）
+const spForLevel = (rank, level) => (level <= 0 ? 0 : Math.ceil(250 * rank * Math.pow(Math.sqrt(32), level - 1)));
+function spGap(m) {
+  const rank = m.type?.attrs?.get(275) || 1;
+  const have = Math.max(spForLevel(rank, m.have), F.esi?.sp?.get(m.type?.id) || 0);
+  return Math.max(0, spForLevel(rank, m.need) - have);
+}
+const spText = (n) => (n >= 1e6 ? `${fmt(n / 1e6, 2)}M` : n >= 1e3 ? `${fmt(n / 1e3, 0)}k` : String(n));
 // 技能缺口的标签：鼠标移上去（或键盘聚焦）弹出列表
 function skillPop(list, label, title) {
-  const rows = [...list].sort((a, b) => (b.need - b.have) - (a.need - a.have)).map((m) => `<span class="fit-skill-line"><span>${app.esc(m.type?.name || String(m.type))}</span><span class="fit-skill-lv">${'<i class="on"></i>'.repeat(m.have)}${'<i></i>'.repeat(m.need - m.have)}<em>${m.have} → ${m.need}</em></span></span>`).join('');
-  return `<span class="fit-skill-pop" tabindex="0"><span class="fit-missing">${label}</span><span class="fit-skill-card" role="tooltip"><b>${app.esc(title)}</b>${rows}</span></span>`;
+  const items = list.map((m) => ({ ...m, gap: spGap(m) })).sort((a, b) => b.gap - a.gap);
+  const total = items.reduce((a, m) => a + m.gap, 0);
+  const rows = items.map((m) => `<span class="fit-skill-line"><span>${app.esc(m.type?.name || String(m.type))}</span><span class="fit-skill-lv">${'<i class="on"></i>'.repeat(m.have)}${'<i></i>'.repeat(m.need - m.have)}<em>${m.have} → ${m.need}</em><small>${spText(m.gap)}</small></span></span>`).join('');
+  return `<span class="fit-skill-pop" tabindex="0"><span class="fit-missing">${label} · 差 ${spText(total)} 技能点</span><span class="fit-skill-card" role="tooltip"><b>${app.esc(title)}<span>共差 ${fmt(total, 0)} 技能点</span></b>${rows}</span></span>`;
 }
 
 // 曙光云计算：选择放进「云」的舰船，同船级（T1 / T2 / 帝国海军型还要同种族）的舰船获得它们的云计算技能加成；带宽上限 100，装满即止

@@ -3097,6 +3097,7 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .fit-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 12px 5px 16px; text-align: left; font-size: 0.8125rem; color: var(--text-primary); }
 .fit-item:hover { background: var(--accent-soft); }
 .fit-item img { border-radius: 4px; background: #0d1219; flex-shrink: 0; }
+.fit-item-price { flex-shrink: 0; font-size: 0.75rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .fit-item-name { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
 .fit-item-name, .fit-item-name small { white-space: nowrap; text-overflow: ellipsis; }
 .fit-item-name small { font-size: 0.6875rem; color: var(--text-muted); overflow: hidden; }
@@ -3123,6 +3124,13 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .fi-panes { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -20px -20px; padding: 0 20px 20px; scrollbar-gutter: stable; }
 .fi-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-shrink: 0; }
 .fi-head img { border-radius: 10px; background: #0d1219; flex-shrink: 0; }
+.fi-price { display: flex; align-items: stretch; gap: 8px; margin: -4px 0 14px; flex-shrink: 0; }
+.fi-price-cell { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; padding: 8px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
+.fi-price-cell span { font-size: 0.6875rem; color: var(--text-muted); }
+.fi-price-cell b { font-size: 0.9375rem; font-variant-numeric: tabular-nums; }
+.fi-price-cell.is-sell b { color: var(--danger, #f87171); }
+.fi-price-cell.is-buy b { color: var(--success); }
+.fi-price small { align-self: center; flex-shrink: 0; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.6875rem; color: var(--text-muted); }
 .fi-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .fi-title > span { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 0.75rem; color: var(--text-muted); }
 .fi-title > span small { font-size: inherit; }
@@ -3274,11 +3282,13 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 .fit-skill-list span { padding: 3px 8px; border-radius: 6px; font-size: 0.75rem; color: var(--text-secondary); background: var(--bg-tertiary); }
 .fit-skill-list b { color: var(--warning); font-weight: 600; }
 .fit-skill-pop { position: relative; display: inline-flex; outline: none; }
-.fit-skill-card { position: absolute; top: 100%; right: 0; z-index: 40; display: none; flex-direction: column; gap: 2px; min-width: 260px; max-width: min(360px, calc(100vw - 32px)); max-height: 360px; overflow-y: auto; margin-top: 6px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-elevated, var(--bg-secondary)); box-shadow: var(--shadow-lg); font-size: 0.75rem; color: var(--text-secondary); }
+.fit-skill-card { position: absolute; top: 100%; right: 0; z-index: 40; display: none; flex-direction: column; gap: 2px; width: max-content; min-width: 300px; max-width: min(460px, calc(100vw - 32px)); max-height: 360px; overflow-y: auto; margin-top: 6px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-elevated, var(--bg-secondary)); box-shadow: var(--shadow-lg); font-size: 0.75rem; color: var(--text-secondary); }
 .fit-skill-pop::after { content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 8px; }
 .fit-skill-pop:hover .fit-skill-card, .fit-skill-pop:focus-within .fit-skill-card { display: flex; }
-.fit-skill-card > b { margin-bottom: 4px; font-size: 0.8125rem; color: var(--text-primary); }
-.fit-skill-line { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.fit-skill-card > b { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 4px; font-size: 0.8125rem; color: var(--text-primary); }
+.fit-skill-card > b span { white-space: nowrap; font-size: 0.75rem; font-weight: 500; color: var(--warning); font-variant-numeric: tabular-nums; }
+.fit-skill-lv small { min-width: 48px; margin-left: 8px; text-align: right; color: var(--text-muted); font-size: 0.6875rem; font-variant-numeric: tabular-nums; }
+.fit-skill-line { white-space: nowrap; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 3px 0; }
 .fit-skill-lv { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .fit-skill-lv i { width: 7px; height: 7px; border-radius: 2px; background: color-mix(in srgb, var(--warning) 30%, transparent); }
 .fit-skill-lv i.on { background: var(--accent-primary, var(--success)); }

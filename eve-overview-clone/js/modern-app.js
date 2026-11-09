@@ -1141,7 +1141,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v124').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v126').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -3960,7 +3960,9 @@ function getCharacterSkills() {
       : await esiAuthFetch('/characters/' + id + '/skills/');
     // active_skill_level 为当前生效等级（Alpha 克隆受限时低于已训练等级）
     const levels = new Map((data.skills || []).map((x) => [x.skill_id, x.active_skill_level ?? x.trained_skill_level ?? 0]));
-    return { id, name: token.character_name || ('角色 ' + id), levels };
+    // 每个技能已有的技能点（装配页算「还差多少技能点」，含正在练的那一级的进度）
+    const sp = new Map((data.skills || []).map((x) => [x.skill_id, x.skillpoints_in_skill || 0]));
+    return { id, name: token.character_name || ('角色 ' + id), levels, sp };
   })();
   skillCache = { id, at: Date.now(), promise };
   promise.catch(() => { if (skillCache?.promise === promise) skillCache = null; });
