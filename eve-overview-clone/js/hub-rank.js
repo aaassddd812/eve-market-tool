@@ -37,6 +37,8 @@
 // 分页：全部结果都能看，每页 50 / 100 / 200 / 500 条。
 // 预加载（prefetchHubRank，用过倒卖排行的浏览器在页面空闲时调用）：先取服务器汇总、包装体积、勾选建筑与自定义市场的挂单，
 //   打开倒卖排行时直接出结果；建筑订单后台刷新完（structs.onData）悄悄换上新数据，不显示「正在读取」。
+// 按当前舰船规划（planHaul）：读角色正在开的船（装配页按装配与技能算出货舱容量），在当前筛选出来的路线里装满一船：
+//   见下方 planHaul 的说明；没绑定 ESI 时可以手填货舱容量。
 // 分类：打开倒卖排行时市场中心侧栏的物品目录换成分类列表（#arbSide），显示每个分类符合条件的物品数。
 import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, oddTip, routeTags, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v15';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
@@ -845,6 +847,93 @@ function missOf(r, st) {
   return '';
 }
 
+// ---------- 按当前舰船规划 ----------
+// 候选：当前筛选、排序后符合条件的跨中心路线（本地倒卖不用运），每件利润 > 0、算得出可做数量、知道体积。
+// 每个物品数量不超过可做数量、货舱剩余容量与剩余预算（不填不限），分别按每立方利润、利润率从高到低装，取利润高的那种装法。
+// 买入 / 卖出选了「全部」时每个物品的路线各不相同：按每一对买入地 → 卖出地各装一船，取利润最高的一条。
+// 利润已扣运费设置里的运费（自己开船运可把每立方运费设为 0）。
+function planHaul() {
+  const P = S.plan;
+  if (!(P.cargo > 0)) return null;
+  const groups = new Map();
+  for (const x of S.list || []) {
+    const r = x.r;
+    if (x.off || !r || r.local || !(r.unit > 0) || !(r.qty > 0) || !(r.vol > 0)) continue;
+    const k = r.a.id + '>' + r.b.id;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(x);
+  }
+  const fill = (list) => {
+    let room = P.cargo, isk = P.budget > 0 ? P.budget : Infinity;
+    const items = [];
+    for (const x of list) {
+      const r = x.r;
+      const n = Math.min(r.qty, Math.floor(room / r.vol + 1e-9), Math.floor(isk / r.cost));
+      if (n <= 0) continue;
+      items.push({ id: x.id, r, n });
+      room -= n * r.vol;
+      isk -= n * r.cost;
+    }
+    const sum = (f) => items.reduce((t, it) => t + it.n * f(it.r), 0);
+    return { items, profit: sum((r) => r.unit), cost: sum((r) => r.cost), m3: sum((r) => r.vol) };
+  };
+  let best = null;
+  for (const list of groups.values()) {
+    for (const key of ['perM3', 'margin']) {
+      const p = fill([...list].sort((x, y) => y.r[key] - x.r[key]));
+      if (p.items.length && (!best || p.profit > best.profit)) best = { ...p, a: list[0].r.a, b: list[0].r.b };
+    }
+  }
+  return best;
+}
+
+async function loadPlanShip(box) {
+  S.plan = { ...(S.plan || { budget: 0 }), loading: true, error: '' };
+  render(box);
+  try {
+    const c = await ctx.shipCargo();
+    Object.assign(S.plan, { cargo: Math.round(c.cargo * 100) / 100, shipName: c.shipName, name: c.name, ship: c.ship });
+  } catch (error) {
+    S.plan.error = error.message;
+  }
+  S.plan.loading = false;
+  render(box);
+}
+
+function planHtml() {
+  const P = S.plan;
+  if (!P || modeKind() !== 'route') return '';
+  const { esc, formatISK, formatPrice, formatNumber } = ctx;
+  const px = (v) => Math.abs(v) >= 1e6 ? formatISK(v) : formatPrice(v);
+  const plan = P.loading ? null : planHaul();
+  S.planOut = plan;
+  const shipLine = P.loading ? '<span class="pi-note">正在读取当前舰船…</span>'
+    : P.error ? `<span class="pi-note">读取当前舰船失败：${esc(P.error)}，可以手填货舱容量</span>`
+      : P.ship ? `<span class="pi-prod"><img src="${ctx.iconUrl(P.ship)}" alt="" width="28" height="28"><span>${esc(P.shipName)}${P.name && P.name !== P.shipName ? `<small>${esc(P.name)}</small>` : ''}</span></span>`
+        : '<span class="pi-note">没绑定 ESI，手填货舱容量</span>';
+  const body = P.loading ? '' : !(P.cargo > 0) ? '<p class="text-muted">填上货舱容量后开始规划</p>'
+    : !plan ? '<p class="text-muted">当前筛选下没有能装上船的跨中心路线（需要每件利润为正、算得出可做数量）；可以放宽买入 / 卖出地点或利润门槛</p>'
+      : `<p class="hr-plan-sum"><span>${esc(String(plan.a.name))} <span class="hc-arrow">→</span> ${esc(String(plan.b.name))}</span>
+        <span>${plan.items.length} 种物品</span>
+        <span>占用 ${formatNumber(Math.round(plan.m3))} / ${formatNumber(P.cargo)} m³（${Math.min(100, plan.m3 / P.cargo * 100).toFixed(0)}%）</span>
+        <span>投入 ${formatISK(plan.cost)}</span><span class="up">预计利润 ${formatISK(plan.profit)}</span></p>
+      <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>物品</th><th class="num">数量</th><th class="num pi-hide-sm">买入价</th><th class="num">投入</th><th class="num pi-hide-sm">卖出价</th><th class="num">利润</th><th class="num pi-hide-sm">体积</th></tr></thead><tbody>
+      ${plan.items.map(({ id, r, n }) => `<tr data-hr-open="${id}" title="查看物品详情"><td><div class="pi-prod"><img src="${ctx.iconUrl(id)}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(id))}</span></div></td>
+        <td class="num">${formatNumber(n)}</td><td class="num pi-hide-sm">${px(r.buyAt)}</td><td class="num">${formatISK(r.cost * n)}</td>
+        <td class="num pi-hide-sm">${px(r.sellAt)}</td><td class="num up">${formatISK(r.unit * n)}</td><td class="num pi-hide-sm">${formatNumber(Math.round(r.vol * n * 100) / 100)} m³</td></tr>`).join('')}
+      </tbody></table></div>`;
+  return `<div class="pi-card hr-plan">
+    <div class="hc-head"><h3>按当前舰船规划</h3>${shipLine}<span class="toolbar-spacer"></span>
+      ${ctx.hasEsiToken?.() ? `<button class="btn btn-ghost btn-sm" data-hr-plan-ship${P.loading ? ' disabled' : ''} title="重新读取角色现在开的船（资产数据最多晚 1 小时）">重新读取舰船</button>` : ''}
+      ${plan ? '<button class="btn btn-ghost btn-sm" data-hr-plan-copy title="复制为「物品名 数量」清单，可粘贴到游戏市场的多项购买">复制采购清单</button>' : ''}
+      <button type="button" class="ka-close" data-hr-plan-close title="收起" aria-label="收起">×</button></div>
+    <div class="ind-rank-row">
+      <label class="pi-inline" title="装配后的货舱容量（已算扩展货舱、改装件与技能）；可以改"><span>货舱</span><input type="number" class="pi-input pi-tax" min="0" step="any" value="${P.cargo || ''}" data-hr-plan-cargo><span>m³</span></label>
+      <label class="pi-inline" title="最多花多少 ISK 进货；留空不限"><span>预算</span><input type="number" class="pi-input" min="0" step="any" value="${P.budget || ''}" placeholder="不限" data-hr-plan-budget><span>ISK</span></label>
+      <span class="pi-note">按上面的买入 / 卖出地点与筛选条件装货，利润已扣运费设置里的运费</span></div>
+    ${body}</div>`;
+}
+
 const seg = (k, items) => `<div class="segmented">${items.map(([v, l]) => `<button type="button" data-hr-${k}="${v}" class="${String(F[k]) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
 const select = (k, items) => `<select class="pi-input" data-hr-sel="${k}">${items.map(([v, l]) => `<option value="${v}"${String(F[k]) === String(v) ? ' selected' : ''}>${ctx.esc(String(l))}</option>`).join('')}</select>`;
 
@@ -917,6 +1006,7 @@ function html(all0) {
         <div class="pi-inline"><span>买入</span>${select('from', hubOpts)}</div>
         <div class="pi-inline"><span>卖出</span>${select('to', hubOpts)}</div>
         <label class="pi-inline hr-check"><input type="checkbox" data-hr-local ${F.local ? 'checked' : ''}><span>含本地倒卖</span></label>
+        <button type="button" class="btn btn-ghost btn-sm" data-hr-plan title="读取角色现在开的船，按货舱容量规划这条路线买什么、买多少">按当前舰船规划</button>
         <label class="pi-inline hr-check" title="取消勾选后，亏损、算不出可做数量或没达到利润 / 成交量门槛的物品也列出来（灰色，排在后面）"><input type="checkbox" data-hr-strict ${F.strict ? 'checked' : ''}><span>只看符合条件的路线</span></label>
         ${F.excl.length ? `<button type="button" class="btn btn-ghost btn-sm" data-hr-excl-toggle>已排除 ${F.excl.length} 个物品</button>` : ''}
       </div>
@@ -932,6 +1022,7 @@ function html(all0) {
       <p class="pi-note" title="${RP ? '在同一个交易中心买进物品、化矿、把产物卖掉。化矿率和再处理税用估价页的化矿设置，产出按期望值算。每天可做 = 日成交 × 份额（直接买不超过最优价 5% 以内的卖单数量），按化矿批量取整。' : RL ? '同一个交易中心挂收单收货、挂卖单出货。卖单侧成交占比：ESI 每天只有成交均价，按「均价 = f × 当天最高价 + (1 − f) × 当天最低价」解出，近 30 天按成交量加权；标「估」的是用现在的收单价、卖单价和 30 天均价近似。每天可做 = 收单侧、卖单侧每天成交量取小 × 份额；每件利润已扣销售税、两边中介费和每天的改单费。只推荐做什么，改成多少钱看市场行情。' : C ? `日成交量是五大交易中心所在星域的统计加起来（含周边玩家建筑）；消耗额 = 日成交额合计 + 近 7 天日均被击毁数 × 均价（只有宁静服有击杀数据）。建筑卖价是已启用的玩家建筑市场里的最低卖价，百分比是比最便宜的交易中心贵多少。` : D ? `目标市场的成交量是整个星域的统计（含周边玩家建筑；自定义市场借用同星域交易中心的数据），库存天数用目标市场自己的卖单；建议数量 = 日均成交 × 份额 × 计划天数，不超过进货地卖单深度（挂收单按进货地日均成交 × 份额）。挂单价偏离 30 天成交均价太多的不算。` : '买入、卖出方式可以任意组合；中位价 / 最低价 / 最高价收出是按近 ' + daysLabel(F.med) + '的成交价挂单（付中介费），成交价偏离 30 天均价超过 60%–140% 的不用（乱价成交），现价偏离挂单价 20% 以上标「现价偏离」。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%，两端取小。日均成交是整个星域的 30 天平均；挂单价偏离 30 天成交均价太多（收单低于 60%、卖单高于 140%）的不算。'}">
         ${ok} 个物品符合条件${list.length > ok ? `，另有 ${list.length - ok} 个不符合` : ''}${C || RL || RP ? '' : ` · ${freight().m3 || freight().collat ? '跨中心路线已扣运费' : '未计运费'}`} · 行情 ${S.data.updated ? new Date(S.data.updated).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' }) : '—'} 汇总${S.top.length ? ` · <span data-hr-live title="快照每小时汇总；本页每一行的买入地、卖出地再用 ESI 实时订单核对（与市场中心同一份数据，5 分钟刷新）">${esc(S.liveNote || '本页已按实时订单核对')}</span>` : ''}${S.data.progress ? ` · <span title="读完后自动更新">服务器${esc(S.data.progress)}</span>` : ''}${S.smNote ? ` · <span data-hr-smnote>${S.smNote.split('；').map((t) => `<span>${esc(t)}</span>`).join('；')}</span>` : ''}${S.cmNote ? ` · <span data-hr-cmnote>${esc(S.cmNote)}</span>` : ''}</p>
     </div>
+    ${planHtml()}
     <div class="pi-card"><div class="pi-table-wrap"><table class="pi-table hr-table"><thead><tr>
       ${RP ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '交易中心')}${th('buy', '进货价', 'num pi-hide-sm', '挂收单的已加中介费')}${th('value', '化矿后', 'num pi-hide-sm', '一件化矿后的产物卖掉到手多少（已扣再处理税、销售税和中介费）')}${th('unit', '每件利润', 'num')}${th('margin', '利润率', 'num')}${th('qty', '每天可做', 'num')}${th('day', '每天利润', 'num')}${th('turn', '日成交额', 'num pi-hide-sm')}`
     : RL ? `${th('', '#', 'pi-hide-sm')}${th('name', '物品')}${th('', '交易中心')}${th('', '收单价', 'num pi-hide-sm')}${th('', '卖单价', 'num pi-hide-sm')}${th('unit', '每件利润', 'num', '已扣销售税、中介费和改单费')}${th('margin', '利润率', 'num')}${th('bias', '卖单侧成交', 'num', '成交量里有多少成交在卖单上；越接近 50% 两边越好做')}${th('qty', '每天可做', 'num', '收单侧、卖单侧每天成交量取小 × 份额')}${th('comp', '竞争', 'num', '近 24 小时在最优价附近改过价的对手单数，越少越好抢位置')}${th('day', '每天利润', 'num')}${th('turn', '日成交额', 'num pi-hide-sm')}`
@@ -1226,6 +1317,16 @@ function bind(box) {
     if (e.target.closest('[data-hr-fees]')) { ctx.TF.openFeeDialog(); return; }
     if (e.target.closest('[data-hr-structs]')) { closeTarget(box); ctx.structs.open(); return; }
     if (e.target.closest('[data-hr-export]')) { exportRows(); return; }
+    if (e.target.closest('[data-hr-plan],[data-hr-plan-ship]')) {
+      if (ctx.hasEsiToken?.()) loadPlanShip(box); else { S.plan = S.plan || { budget: 0 }; render(box); }
+      return;
+    }
+    if (e.target.closest('[data-hr-plan-close]')) { S.plan = null; render(box); return; }
+    if (e.target.closest('[data-hr-plan-copy]')) {
+      const text = (S.planOut?.items || []).map(({ id, n }) => `${ctx.typeName(id)} ${n}`).join('\n');
+      navigator.clipboard.writeText(text).then(() => ctx.showToast('已复制采购清单', 'success'), () => ctx.showToast('复制失败', 'error'));
+      return;
+    }
     if (e.target.closest('[data-hr-reload]')) { load(true).then(() => render(box)); return; }
     const hide = e.target.closest('[data-hr-hide]');
     if (hide) { F.excl = [...new Set([...F.excl, Number(hide.dataset.hrHide)])]; save(); render(box); return; }
@@ -1260,6 +1361,7 @@ function bind(box) {
     if (e.target.matches('[data-hr-local]')) { F.local = e.target.checked; save(); render(box); return; }
     if (e.target.matches('[data-hr-strict]')) { F.strict = e.target.checked; save(); render(box); return; }
     if (e.target.matches('[data-hr-noship]')) { F.noShip = e.target.checked; save(); render(box); return; }
+    if (e.target.matches('[data-hr-plan-cargo],[data-hr-plan-budget]') && S.plan) { S.plan[e.target.matches('[data-hr-plan-cargo]') ? 'cargo' : 'budget'] = Math.max(0, Number(e.target.value) || 0); render(box); return; }
     if (e.target.matches('[data-hr-maxvol]')) { F.maxVol = Math.max(0, Number(e.target.value) || 0); save(); render(box); return; }
     if (e.target.matches('[data-hr-rising]')) { F.rising = e.target.checked; save(); render(box); return; }
     if (e.target.matches('[data-hr-size]')) { F.size = Number(e.target.value); save(); render(box); return; }

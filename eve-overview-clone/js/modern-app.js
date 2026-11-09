@@ -2,7 +2,7 @@ import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17
 import * as CS from './cloud-sync.js?v=2';
 import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
-import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v41';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v42';
 import * as SM from './struct-markets.js?v=v8';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v19';
 import * as AH from './alert-host.js?v=v6';
@@ -1141,10 +1141,10 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v122').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v123').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
-      getCharacterSkills, getCharacterImplants, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
+      getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       openDrawer: () => { if (MOBILE_QUERY.matches) openDrawer(); },
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
@@ -3183,7 +3183,9 @@ function initContentTabs() {
     iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`, openItemPop,
     openItem: (id) => { switchContentTab('hubs'); selectItem(id); },
     openSide: () => { if (MOBILE_QUERY.matches) openDrawer(); else if ($('sidebar').classList.contains('collapsed')) toggleSidebar('market'); },
-    closeSide: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
+    closeSide: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
+    hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
+    shipCargo: () => loadFittingModule().then((m) => m.currentShipCargo()) });
   // 用过倒卖排行的浏览器：空闲时先把排行要的数据取好（建筑订单先由 startStructPrefetch 读，排行这里直接用缓存）
   let usedArb = false;
   try { usedArb = Boolean(localStorage.getItem('eve-hub-rank')); } catch { /* 无痕模式 */ }
@@ -3998,6 +4000,14 @@ function stationOwner(stationId) {
 async function getCharacterImplants() {
   const token = await ensureEsiToken();
   return esiAuthFetch('/characters/' + token.character_id + '/implants/');
+}
+
+// 已绑定角色当前驾驶的舰船，items 为船上的物品（装配、无人机、货舱；资产数据 ESI 最多缓存 1 小时）
+async function getCurrentShip() {
+  const token = await ensureEsiToken();
+  const id = token.character_id;
+  const [ship, assets] = await Promise.all([esiAuthFetch('/characters/' + id + '/ship/'), esiAuthFetchPaged('/characters/' + id + '/assets/')]);
+  return { ...ship, items: assets.filter((a) => a.location_id === ship.ship_item_id) };
 }
 
 async function esiAuthFetch(path, options = {}) {

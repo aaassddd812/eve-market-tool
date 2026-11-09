@@ -8625,3 +8625,7 @@ a.pz-name:hover { color: var(--accent-primary); }
 .kb-br-tools .kb-br-width { align-self: center; }
 @media (max-width: 1260px) { .kb-br-width { display: none !important; } }
 .ap-table td small.ap-muted { color: var(--text-muted); }
+/* 倒卖排行「按当前舰船规划」 */
+.hr-plan .hc-head .pi-prod { margin-left: 8px; }
+.hr-plan-sum { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 10px 0; font-size: 0.9rem; }
+.hr-plan-sum > span { padding: 4px 10px; border-radius: 8px; background: var(--bg-tertiary, rgba(255,255,255,0.05)); }

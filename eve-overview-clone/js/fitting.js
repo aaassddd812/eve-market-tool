@@ -1126,7 +1126,7 @@ function renderFit() {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2 4 7v10l8 5 8-5V7z"/><path d="M12 22V12M4 7l8 5 8-5"/></svg>
       <h3>从左侧选择一艘舰船开始装配</h3>
       <p class="fit-empty-tools"><button class="btn btn-ghost" data-fit-sim>战场模拟</button></p>
-      <p>也可以 <button class="link-btn" data-fit-import>导入 EFT 文本</button>${app.hasEsiToken() ? '、<button class="link-btn" data-fit-esi-list>读取游戏内装配</button>' : ''}${savedFits().length ? ` 或打开 <select class="plain-select" data-fit-open><option value="">我的装配…</option>${savedFits().map((f) => `<option value="${f.id}">${app.esc(f.name || type(f.ship)?.name || '未命名')}</option>`).join('')}</select>` : ''}</p>
+      <p>也可以 <button class="link-btn" data-fit-import>导入 EFT 文本</button>${app.hasEsiToken() ? '、<button class="link-btn" data-fit-esi-list>读取游戏内装配</button>、<button class="link-btn" data-fit-cur-ship>导入当前舰船</button>' : ''}${savedFits().length ? ` 或打开 <select class="plain-select" data-fit-open><option value="">我的装配…</option>${savedFits().map((f) => `<option value="${f.id}">${app.esc(f.name || type(f.ship)?.name || '未命名')}</option>`).join('')}</select>` : ''}</p>
     </div>`;
     if (MOBILE()) app.openDrawer?.();
     return;
@@ -1173,6 +1173,7 @@ function renderFit() {
           <button class="btn btn-ghost" data-fit-pz-post title="把当前装配发到广场「装配」分类，供其他玩家借鉴">分享到广场</button>
           <button class="btn btn-ghost" data-fit-cart title="舰船、装备、弹药、无人机和植入体加入购物车（突变装备按原装备 + 突变质体）">加入购物车</button>
           <button class="btn btn-ghost" data-fit-esi-list title="${bound ? '读取已绑定角色在游戏里保存的装配' : '需要先绑定 ESI'}"${bound ? '' : ' disabled'}>游戏装配</button>
+          <button class="btn btn-ghost" data-fit-cur-ship title="${bound ? '读取角色现在开着的船和船上的装配（资产数据最多晚 1 小时）' : '需要先绑定 ESI'}"${bound ? '' : ' disabled'}>当前舰船</button>
           <button class="btn btn-ghost" data-fit-esi-save title="${bound ? '通过 ESI 保存到游戏装配窗口（个人装配）' : '需要先绑定 ESI'}"${bound ? '' : ' disabled'}>存到游戏</button>
           ${F.fit.id ? '<button class="btn btn-ghost danger" data-fit-delete title="删除已保存的装配">删除</button>' : ''}
         </div>
@@ -1801,6 +1802,7 @@ async function onMainClick(e) {
   if (el('[data-fit-share]')) { app.copyText(shareUrl(), '分享链接已复制'); return; }
   if (el('[data-fit-cart]')) { app.addToCart(fitShoppingList(F.fit)); return; }
   if (el('[data-fit-esi-list]')) { openEsiModal(); return; }
+  if ((x = el('[data-fit-cur-ship]'))) { importCurrentShip(x); return; }
   if (el('[data-fit-auto]')) { openAutoFit(); return; }
   if (el('[data-fit-imp]')) { openImplantAdvisor(); return; }
   if (el('[data-fit-kb]')) { openKbFits(); return; }
@@ -2050,6 +2052,55 @@ function fromEsiFit(f) {
     }
   }
   return { fit, skipped };
+}
+
+// ---------- 当前舰船（ESI /ship/ + 资产）----------
+// 资产里船上的物品 location_id 指向舰船物品 ID，位置标记与游戏装配相同；已装填的弹药与装备同一槽位标记
+async function shipFit() {
+  const cur = await app.getCurrentShip();
+  const items = [], charges = [];
+  for (const it of cur.items) {
+    const t = type(it.type_id), where = parseFlag(it.location_flag);
+    if (where.slot && t?.category === FE.CAT.charge) { charges.push([where, t.id]); continue; }
+    if (where.slot || where.bay === 'DroneBay' || where.bay === 'FighterBay') items.push({ type_id: it.type_id, flag: it.location_flag, quantity: it.quantity });
+  }
+  const r = fromEsiFit({ ship_type_id: cur.ship_type_id, name: cur.ship_name || '', items });
+  if (r.error) return r;
+  for (const [w, id] of charges) {
+    const m = w.slot !== 'sub' && r.fit.slots[w.slot][w.index];
+    if (m && FE.chargeFits(type(m.type), type(id))) m.charge = id;
+  }
+  return r;
+}
+
+async function importCurrentShip(btn) {
+  btn.disabled = true;
+  try {
+    const r = await shipFit();
+    if (r.error) { app.showToast(r.error, 'error'); return; }
+    stashDraft(F.fit);
+    F.fit = r.fit;
+    F.selected = null;
+    autoActivateDrones();
+    recompute();
+    app.showToast(r.skipped ? `已导入当前舰船，${r.skipped} 项暂不支持已忽略` : '已导入当前舰船（资产数据最多晚 1 小时）', r.skipped ? 'info' : 'success', 4000);
+  } catch (error) {
+    app.showToast('读取当前舰船失败：' + esiErrorText(error), 'error', 4000);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// 倒卖排行「按当前舰船规划」：当前舰船装配后的货舱容量（按角色技能，读不到时按全 5 级）
+export async function currentShipCargo() {
+  const data = await ensureData();
+  const r = await shipFit();
+  if (r.error) throw new Error(r.error);
+  let levels = 'max';
+  try { levels = (await app.getCharacterSkills()).levels; } catch { /* 按全 5 级 */ }
+  const calc = FE.computeFit(data, r.fit, levels);
+  const cargo = calc ? FE.fitStats(calc).cargo : type(r.fit.ship)?.attrs.get(FE.AT.capacity) || 0;
+  return { ship: r.fit.ship, shipName: type(r.fit.ship)?.name || '', name: r.fit.name, cargo };
 }
 
 // ---------- 击杀邮件 → 装配 ----------
