@@ -8,7 +8,7 @@ import { gankSystemHtml, GANK_NOTE } from './kb-gank.js?v=v1';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 import { SERVER, IS_TQ, HUB, eveImage, kbSiteLink } from './server.js?v=s4';
-import * as ST from './standings.js?v=v4';
+import * as ST from './standings.js?v=v5';
 import { fullIn } from './eve-time.js?v=v1';
 
 let app, kb;
@@ -26,7 +26,7 @@ const BACK_LINK = '<a class="btn kb-br-back kb-back-btn" href="#kb" data-kb-home
 const S = {
   names: new Map(),          // 玩家角色 / 军团 / 联盟原名
   types: new Map(),
-  filters: { ship: null, location: null },
+  filters: { ships: [], locs: [], ents: [] },   // 首页击杀列表筛选，可多选：舰船 { id, name }、地点 { kind, id, name }、人物 / 军团 / 联盟 { kind, id, name }
   fine: { min: 0, space: '', solo: false, npc: false, gank: false },   // 细筛选：最低价值、空间、单刷、排除 NPC 击杀、疑似强爆（只查本站收录）
   gank: { days: 30, seq: 0 },   // 高安强爆面板：统计天数、请求序号（只渲染最新一次）
   feed: [], cursor: null, feedSeq: 0, boardSeq: 0,
@@ -186,9 +186,6 @@ async function renderHome() {
         <div class="kb-feed-head">
           <h3 class="kb-section-title">全部击杀记录</h3>
           <div class="kb-filters" id="kbFilters"></div>
-          <button class="btn btn-ghost" id="kbRefresh" title="刷新">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新</span>
-          </button>
         </div>
         <div class="kb-fine" id="kbFine"></div>
         <div id="kbGank" hidden></div>
@@ -202,7 +199,7 @@ async function renderHome() {
         <div id="kbBoard">${skBoard(10)}</div>
       </aside>
     </div>`;
-  $('kbRefresh').addEventListener('click', () => { loadFeed(true); loadSummary(); });
+  startLive();
   $('kbMore').addEventListener('click', () => loadFeed(false));
   renderFilters();
   renderFine();
@@ -273,8 +270,12 @@ async function loadTop() {
 
 function feedQuery() {
   const q = new URLSearchParams({ limit: 50 });
-  if (S.filters.ship) q.set('ship', S.filters.ship.id);
-  if (S.filters.location) q.set(S.filters.location.kind, S.filters.location.id);
+  const f0 = S.filters;
+  // 同一类多选之间是「或」：几种船、几个地点、几个人里任一个；不同类之间是「且」
+  const put = (key, list) => { if (list.length) q.set(key, list.map((x) => x.id).join(',')); };
+  put('ship', f0.ships);
+  for (const k of ['system', 'constellation', 'region']) put(k, f0.locs.filter((x) => x.kind === k));
+  for (const k of ['character', 'corporation', 'alliance']) put(k, f0.ents.filter((x) => x.kind === k));
   const f = S.fine;
   if (f.min) q.set('min', f.min);
   if (f.space) q.set('space', f.space);
@@ -312,7 +313,8 @@ function setFine(spec) {
 // 判定：受害者被玩家击毁，且有攻击者在同一星系、前后 10 分钟内被 NPC（统合部）击毁——高安里只有非法攻击才会这样。
 // 按高安星系筛选时显示该星系的强爆风险（各时段出现概率、主要团伙、常被打的船）；勾「疑似强爆」且没选星系时显示强爆最多的高安星系
 function gankSystem() {
-  const loc = S.filters.location;
+  const locs = S.filters.locs;
+  const loc = locs.length === 1 ? locs[0] : null;
   if (loc?.kind !== 'system') return null;
   const sys = kb.systemLabel(Number(loc.id));
   return sys.sec != null && sys.sec >= 0.5 ? { id: Number(loc.id), ...sys } : null;
@@ -393,6 +395,7 @@ async function loadFeed(reset) {
     if (seq !== S.feedSeq || !$('kbFeed')) return;
     S.feed = S.feed.concat(data.kills);
     S.cursor = data.cursor;
+    S.feedNotice = data.notice;
     box.innerHTML = feedTable(S.feed, { notice: data.notice });
     $('kbMore').hidden = !S.cursor;
   } catch (error) {
@@ -405,15 +408,63 @@ async function loadFeed(reset) {
   }
 }
 
+// ---------- 有新击杀就刷新：首页打开、页面可见时每 8 秒问一次实时接口（/live），有新击杀才按当前筛选重取第一页，把新的插到最前面 ----------
+const LIVE_MS = 8000;
+const live = { cursor: -1, timer: 0, busy: false, sumAt: 0 };
+function startLive() {
+  if (live.timer) return;
+  live.timer = setInterval(pollLive, LIVE_MS);
+}
+async function pollLive() {
+  if (live.busy || document.hidden || !$('kbFeed') || location.hash !== '#kb' || S.feedBusy) return;
+  live.busy = true;
+  try {
+    const d = await request(`live?after=${live.cursor}${live.cursor < 0 ? '&initial=0' : ''}`);
+    const first = live.cursor < 0;
+    live.cursor = d.cursor;
+    if (first || !d.kills?.length) return;
+    await freshFeed();
+    // 顶部统计不用每条都重算：最多一分钟一次
+    if (Date.now() - live.sumAt > 60e3) { live.sumAt = Date.now(); loadSummary(); }
+  } catch { /* 下次再试 */ } finally { live.busy = false; }
+}
+async function freshFeed() {
+  const seq = S.feedSeq;
+  const q = feedQuery();
+  q.set('limit', 30);
+  const data = await request('feed?' + q);
+  if (seq !== S.feedSeq || !$('kbFeed') || S.feedBusy) return;
+  const top = S.feed[0];
+  const at = (k) => Date.parse(k.time);
+  const newer = top ? data.kills.filter((k) => at(k) > at(top) || (at(k) === at(top) && k.id > top.id)) : data.kills;
+  if (!newer.length) return;
+  absorbNames(data.names);
+  await loadTypes(typesOf(newer));
+  if (seq !== S.feedSeq || !$('kbFeed')) return;
+  S.feed = newer.concat(S.feed);
+  if (!top) S.cursor = data.cursor;
+  $('kbFeed').innerHTML = feedTable(S.feed, { notice: S.feedNotice });
+  $('kbMore').hidden = !S.cursor;
+}
+
 function renderFilters() {
   const chips = [];
-  if (S.filters.ship) chips.push(`<span class="kb-chip"><img src="${IMG(`types/${S.filters.ship.id}/icon`, 32)}" alt="" width="16" height="16">${app.esc(S.filters.ship.name)}<button data-clear-filter="ship" aria-label="移除">×</button></span>`);
-  if (S.filters.location) chips.push(`<span class="kb-chip">${{ region: '星域', constellation: '星座' }[S.filters.location.kind] || '星系'} · ${app.esc(S.filters.location.name)}<button data-clear-filter="location" aria-label="移除">×</button></span>`);
+  const f = S.filters;
+  const x = (key, id) => `<button data-clear-filter="${key}:${id}" aria-label="移除">×</button>`;
+  for (const s of f.ships) chips.push(`<span class="kb-chip"><img src="${IMG(`types/${s.id}/icon`, 32)}" alt="" width="16" height="16">${app.esc(s.name)}${x('ships', s.id)}</span>`);
+  for (const l of f.locs) chips.push(`<span class="kb-chip">${{ region: '星域', constellation: '星座' }[l.kind] || '星系'} · ${app.esc(l.name)}${x('locs', l.id)}</span>`);
+  for (const e of f.ents) chips.push(`<span class="kb-chip"><img src="${avatar(e.kind, e.id, 32)}" alt="" width="16" height="16">${app.esc(e.name)}${x('ents', e.id)}</span>`);
+  if (chips.length > 1) chips.push('<button class="kb-chip kb-chip-clear" data-clear-filter="all">清空</button>');
   $('kbFilters').innerHTML = chips.join('');
 }
 
-function setFilter(key, value) {
-  S.filters[key] = value;
+// 筛选：add 加进同类（搜索框里逐个选，可多选）；set 只留这一个（点列表里的星系名等）；remove 去掉一个；all 全部清空
+function setFilter(key, op, item) {
+  const f = S.filters;
+  if (key === 'all') { f.ships = []; f.locs = []; f.ents = []; }
+  else if (op === 'remove') f[key] = f[key].filter((x) => x.id !== item);
+  else if (op === 'set') f[key] = [item];
+  else if (!f[key].some((x) => x.id === item.id)) f[key] = [...f[key], item];
   if (location.hash !== '#kb') { history.pushState(null, '', '#kb'); renderHome(); return; }
   renderFilters();
   loadFeed(true);
@@ -906,13 +957,13 @@ async function renderEntity(kind, id) {
   const P = entityParts(kind, id, d);
   main.innerHTML = `
     ${BACK_LINK}
-    ${P.head.replace('<div class="kb-ext-links">', `<div class="kb-ext-links"><button class="btn btn-ghost kb-share-btn" data-entity-share title="生成${KIND_ZH[kind]}统计图片，可下载或复制后分享">${SHARE_SVG}<span>分享图片</span></button>`)}
+    ${P.head.replace('<div class="kb-ext-links">', `<div class="kb-ext-links"><button class="btn btn-ghost kb-share-btn" data-entity-tofeed title="直接跳到下面的击杀记录">${DOWN_SVG}<span>击杀记录</span></button><button class="btn btn-ghost kb-share-btn" data-entity-share title="生成${KIND_ZH[kind]}统计图片，可下载或复制后分享">${SHARE_SVG}<span>分享图片</span></button>`)}
     ${P.lifetime}${monthlyHtml(lifetime)}${P.recent}
     ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天）</small></h4><div id="kbMembers"></div>` : ''}
     ${P.activity}${P.corpHistory}
     ${kind === 'character' ? `<h4 class="info-section-title section-gap" id="kbPbTitle">参加过的会战<small>（最近 180 天）</small></h4><div id="kbPilotBattles">${skRows(3)}</div>` : ''}
     ${P.ships}
-    <div class="kb-feed-head section-gap">
+    <div class="kb-feed-head section-gap" id="kbEntityFeedHead">
       <h4 class="info-section-title">击杀记录</h4>
       <div class="segmented" role="group">
         ${[['all', '全部'], ['kills', '击杀'], ['losses', '损失']].map(([v, l]) => `<button data-entity-side="${v}" class="${v === 'all' ? 'active' : ''}">${l}</button>`).join('')}
@@ -984,6 +1035,7 @@ function drawPilotBattles() {
 }
 
 // ---------- 分享图片 ----------
+const DOWN_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12l7 7 7-7"/></svg>';
 const SHARE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>';
 const KIND_EN = { character: 'PILOT', corporation: 'CORPORATION', alliance: 'ALLIANCE' };
 
@@ -1313,7 +1365,8 @@ function renderSuggest({ entities, ships, systems, constellations, regions }) {
   const group = (title, items) => items.length ? `<div class="kb-suggest-group">${title}</div>` + items.join('') : '';
   const ents = entities || [];
   const byKind = (kind) => ents.filter((e) => e.category === kind).slice(0, 6).map((e) =>
-    `<button class="kb-suggest-item" data-pick-entity="${kind}:${e.id}"><img src="${avatar(kind, e.id, 32)}" alt="" width="22" height="22" loading="lazy"><span>${app.esc(e.name)}</span><small>${KIND_ZH[kind]}统计</small></button>`);
+    `<div class="kb-suggest-row"><button class="kb-suggest-item" data-pick-entity="${kind}:${e.id}"><img src="${avatar(kind, e.id, 32)}" alt="" width="22" height="22" loading="lazy"><span>${app.esc(e.name)}</span><small>${KIND_ZH[kind]}统计</small></button>
+      <button class="kb-suggest-add" data-add-entity="${kind}:${e.id}" data-name="${app.esc(e.name)}" title="加入击杀列表筛选（可以选多个）">＋ 筛选</button></div>`);
   const html =
     (entities === null ? '<div class="kb-suggest-group">人物 / 军团 / 联盟 · 搜索中…</div>' :
       group('人物', byKind('character')) + group('军团', byKind('corporation')) + group('联盟', byKind('alliance'))) +
@@ -1352,7 +1405,7 @@ function route() {
 
 // ---------- 本地分析：频道成员名单 / 定向扫描（local-scan.js，首次打开时加载）----------
 async function renderLocalScan() {
-  const m = await import('./local-scan.js?v=v11');
+  const m = await import('./local-scan.js?v=v13');
   if (!location.hash.startsWith('#kb/local')) return;
   m.renderLocal($('kbMain'), {
     esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,
@@ -1444,6 +1497,14 @@ export function initKbPage(context) {
   document.addEventListener('click', (e) => { if (!e.target.closest('.kb-search')) $('kbSuggest').hidden = true; });
 
   $('kbView').addEventListener('click', (e) => {
+    const addEnt = e.target.closest('[data-add-entity]');
+    if (addEnt) {
+      const [kind, id] = addEnt.dataset.addEntity.split(':');
+      input.value = '';
+      $('kbSuggest').hidden = true;
+      setFilter('ents', 'add', { kind, id: Number(id), name: addEnt.dataset.name });
+      return;
+    }
     const entity = e.target.closest('[data-entity], [data-pick-entity]');
     if (entity) {
       e.preventDefault();
@@ -1453,6 +1514,7 @@ export function initKbPage(context) {
       return;
     }
     if (e.target.closest('[data-entity-share]')) { shareEntity(); return; }
+    if (e.target.closest('[data-entity-tofeed]')) { $('kbEntityFeedHead')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     if (e.target.closest('[data-kb-br]')) { navigate('#kb/br'); return; }
     if (e.target.closest('[data-kb-local]')) { navigate('#kb/local'); return; }
     if (e.target.closest('[data-kb-bh]')) { e.preventDefault(); navigate('#kb/battles'); return; }
@@ -1497,7 +1559,7 @@ export function initKbPage(context) {
       const name = kind === 'system' ? kb.systemLabel(Number(id)).name : partyName(Number(id));
       input.value = '';
       $('kbSuggest').hidden = true;
-      setFilter('location', { kind, id: Number(id), name });
+      setFilter('locs', loc.dataset.pickLocation ? 'add' : 'set', { kind, id: Number(id), name });
       return;
     }
     const ship = e.target.closest('[data-pick-ship]');
@@ -1505,7 +1567,7 @@ export function initKbPage(context) {
       const id = Number(ship.dataset.pickShip);
       input.value = '';
       $('kbSuggest').hidden = true;
-      setFilter('ship', { id, name: app.shipTypes().find((s) => s.id === id)?.name || typeName(id) });
+      setFilter('ships', 'add', { id, name: app.shipTypes().find((s) => s.id === id)?.name || typeName(id) });
       return;
     }
     const gd = e.target.closest('[data-gank-days]');
@@ -1513,7 +1575,7 @@ export function initKbPage(context) {
     const fine = e.target.closest('[data-fine]');
     if (fine) { setFine(fine.dataset.fine); return; }
     const clear = e.target.closest('[data-clear-filter]');
-    if (clear) { setFilter(clear.dataset.clearFilter, null); return; }
+    if (clear) { const [key, id] = clear.dataset.clearFilter.split(':'); setFilter(key, 'remove', Number(id)); return; }
     if (e.target.closest('[data-kb-home]')) { e.preventDefault(); navigate('#kb'); return; }
     const lb = e.target.closest('[data-lb]');
     if (lb) {

@@ -3,12 +3,13 @@
 //   1. ESI /universe/ids/ 把名字换成角色 ID（每次最多 500 个），/characters/affiliation/ 查所属军团 / 联盟 / 势力（每次最多 1000 个）；
 //   2. 宁静服再查本站击杀记录服务 /api/v1/pilots（每次最多 200 名）：近 30 天击杀 / 损失、单挑、平均同伙人数、常用船、常去星系、最近活跃；
 //   3. 按联盟 / 军团统计人数，点一下可以隐藏（比如自己人），隐藏名单存在本浏览器。
-//   4. 已绑定 ESI 且授权了联系人时，名字前显示声望（standings.js），并统计敌对 / 中立 / 友方人数。
+//   4. 已绑定 ESI 且授权了联系人时，名字前显示声望（standings.js），并统计敌对 / 中立 / 友方人数；
+//      勾选「按声望筛掉」后名单里不显示选中声望的人（默认同军团、同联盟），选择存在本浏览器。
 // 国服没有公开击杀数据，只显示所属势力分布。
 // 定向扫描结果：扫描窗口里 Ctrl+A、Ctrl+C，每行「类型 ID<Tab>名称<Tab>类型<Tab>距离」（旧客户端没有类型 ID，按类型名用 /universe/ids/ 查）。
 //   类型所属的分组（舰船类别）与大类用 ESI /universe/types/、/universe/groups/ 查，缓存在本浏览器（eve-dscan-types-v1）；
 //   统计舰船总数、同格（显示距离的）、按舰船类别 / 型号的数量，标出旗舰、拦截泡、后勤、隐轰、侦察、黑隐与扫描探针，建筑、无人机与其他单列；可复制一行统计发到舰队频道。
-import * as ST from './standings.js?v=v4';
+import * as ST from './standings.js?v=v5';
 
 let D;   // esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage, kb, loadTypes, systemName, typeName, fetchESI, copyText
 const IGNORE_KEY = 'eve-local-ignore-v1';
@@ -16,6 +17,12 @@ const MAX = 1000;
 const S = { text: '', mode: '', pilots: [], orgs: new Map(), scan: null, status: '', sort: 'threat', ignore: new Set(), busy: false, at: null, box: null };
 try { S.ignore = new Set(JSON.parse(localStorage.getItem(IGNORE_KEY) || '[]')); } catch { /* 忽略 */ }
 const saveIgnore = () => { try { localStorage.setItem(IGNORE_KEY, JSON.stringify([...S.ignore])); } catch { /* 忽略 */ } };
+// 按声望筛掉：on 是否勾选，cls 要筛掉的声望（standings.js 的 of().cls；自己算同军团）
+const STF_KEY = 'eve-local-stf-v1';
+const STF = [['corp', '同军团'], ['alliance', '同联盟'], ['excellent', '优秀'], ['good', '良好'], ['neutral', '中立'], ['bad', '不良'], ['terrible', '恶劣']];
+S.stf = { on: false, cls: new Set(['corp', 'alliance']) };
+try { const v = JSON.parse(localStorage.getItem(STF_KEY) || 'null'); if (v) S.stf = { on: Boolean(v.on), cls: new Set(v.cls || []) }; } catch { /* 忽略 */ }
+const saveStf = () => { try { localStorage.setItem(STF_KEY, JSON.stringify({ on: S.stf.on, cls: [...S.stf.cls] })); } catch { /* 忽略 */ } };
 
 const esc = (s) => D.esc(s);
 // 声望（已绑定角色的联系人，standings.js）
@@ -289,7 +296,16 @@ const SORTS = {
 };
 const link = (kind, id, text) => (D.kb ? `<a class="kb-link" href="#kb/${kind}/${id}" data-entity="${kind}:${id}">${esc(text)}</a>` : esc(text));
 const orgName = (id) => (id ? S.orgs.get(id) || 'ID ' + id : '');
-const hidden = (p) => S.ignore.has(p.alliance) || S.ignore.has(p.corp);
+const stCls = (p) => { const c = ST.of(entOf(p))?.cls; return c === 'self' ? 'corp' : c; };
+const stfHidden = (p) => S.stf.on && ST.ready() && S.stf.cls.has(stCls(p));
+const hidden = (p) => S.ignore.has(p.alliance) || S.ignore.has(p.corp) || stfHidden(p);
+function stfHtml() {
+  if (!ST.ready()) return '';
+  const n = S.stf.on ? S.pilots.filter(stfHidden).length : 0;
+  return `<div class="ls-stf"><label class="ls-stf-on"><input type="checkbox" data-ls-stf-on${S.stf.on ? ' checked' : ''}> 按声望筛掉</label>
+    <span class="ls-stf-ics">${STF.map(([k, l]) => `<button type="button" class="ls-stf-ic${S.stf.cls.has(k) ? ' on' : ''}" data-ls-stf="${k}" title="${l}" aria-label="${l}" aria-pressed="${S.stf.cls.has(k)}">${ST.icon(k)}</button>`).join('')}</span>
+    ${n ? `<span class="text-muted">已筛掉 ${n} 人</span>` : ''}</div>`;
+}
 
 function groupsHtml(kind) {
   const counts = new Map();
@@ -357,6 +373,7 @@ function draw() {
         ${D.kb ? `<div class="ls-lv"><b class="high">${lv.high}</b><small>高威胁</small></div><div class="ls-lv"><b class="mid">${lv.mid}</b><small>中威胁</small></div>
         <div><b>${D.formatNumber(shown.reduce((t, p) => t + (p.st?.kills || 0), 0))}</b><small>近 30 天击杀合计</small></div>` : ''}
       </div>
+      ${stfHtml()}
       <div class="ls-cols"><div><h3 class="ls-h">联盟</h3>${groupsHtml('alliance')}</div><div><h3 class="ls-h">军团</h3>${groupsHtml('corporation')}</div></div>
     </section>
     <section class="kb-section ls-card">
@@ -381,8 +398,13 @@ export function renderLocal(box, deps) {
     if (sort) { S.sort = sort.dataset.lsSort; draw(); return; }
     const ig = e.target.closest('[data-ls-ignore]');
     if (ig) { const id = Number(ig.dataset.lsIgnore); if (S.ignore.has(id)) S.ignore.delete(id); else S.ignore.add(id); saveIgnore(); draw(); return; }
+    const sf = e.target.closest('[data-ls-stf]');
+    if (sf) { const k = sf.dataset.lsStf; if (S.stf.cls.has(k)) S.stf.cls.delete(k); else S.stf.cls.add(k); saveStf(); draw(); return; }
     if (e.target.closest('[data-ls-unignore]')) { S.ignore.clear(); saveIgnore(); draw(); return; }
     if (e.target.closest('[data-ls-copy]') && S.scan) D.copyText(scanSummaryText(scanStats()));
+  });
+  box.addEventListener('change', (e) => {
+    if (e.target.matches('[data-ls-stf-on]')) { S.stf.on = e.target.checked; saveStf(); draw(); }
   });
   box.addEventListener('paste', (e) => {
     if (!e.target.matches('[data-ls-text]')) return;

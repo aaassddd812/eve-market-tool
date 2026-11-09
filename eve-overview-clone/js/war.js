@@ -6,7 +6,7 @@
 // 刷新倒计时：按 ESI 响应的 Expires 头（跨域可读的安全响应头）显示星系争夺进度（约每 30 分钟更新）与阵营统计 / 排行榜的下次刷新时间，
 //   归零后自动重新读取并就地更新（至少间隔 60 秒，避免 ESI 缓存未及时更新时反复请求）。
 import { esiUrl, SERVER } from './server.js?v=s4';
-import * as ST from './standings.js?v=v4';
+import * as ST from './standings.js?v=v5';
 import { skPage } from './skeleton.js?v=v17';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 

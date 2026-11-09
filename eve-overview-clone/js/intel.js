@@ -19,7 +19,7 @@
 
 import * as AM from './alert-mail.js?v=v8';
 import * as AP from './alert-push.js?v=v13';
-import * as ST from './standings.js?v=v4';
+import * as ST from './standings.js?v=v5';
 import * as FF from './float-feed.js?v=v11';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem

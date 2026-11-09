@@ -101,6 +101,9 @@ const STAR = svgOf('<path d="M7 2.75l1.25 2.7 2.95.33-2.2 2 .62 2.92L7 9.2l-2.62
 const PLUS = svgOf('<path d="M7 3.75v6.5M3.75 7h6.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/>');
 const MINUS = svgOf('<path d="M3.75 7h6.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/>');
 const SYM = { corp: STAR, alliance: STAR, excellent: PLUS, good: PLUS, bad: MINUS, terrible: MINUS };
+const EQ = svgOf('<path d="M4 5.4h6M4 8.6h6" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>');
+// 单独的声望图标（筛选按钮用）：cls 同 of().cls，中立是灰底等号
+export const icon = (cls) => `<i class="st-badge st-${cls}" aria-hidden="true">${cls === 'neutral' ? EQ : SYM[cls] || ''}</i>`;
 // 小标多在 translate="no" 的名字里，i18n.js 不翻译，这里直接按界面语言出文字
 const EN = window.I18N?.lang === 'en';
 const TIP = EN ? { corp: 'Same corporation', alliance: 'Same alliance', excellent: 'Excellent standing', good: 'Good standing', bad: 'Bad standing', terrible: 'Terrible standing' }

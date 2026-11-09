@@ -5,7 +5,7 @@
 // 我的合同（绑定 ESI）：个人 /characters/{id}/contracts/，军团 /corporations/{id}/contracts/（「军团合同」权限）。
 //   ESI 没有联盟合同接口，「联盟」列出的是这两处里可见范围为联盟的合同（指派给联盟、但自己与军团都不是发起方 / 接受方的合同读不到）。
 
-import * as ST from './standings.js?v=v4';
+import * as ST from './standings.js?v=v5';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, resolveStructures, officialName, locationName, loadNpcNames,
            // valuation, valuationCard, store, game, regions, marketRegions, loadMarketRegions, getTypeIndex, archive, esiAuthFetch, esiAuthFetchPaged,

@@ -10,7 +10,7 @@ import * as AP from './alert-push.js?v=v13';
 import * as BN from './back-nav.js?v=v1';
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v5';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
-import * as ST from './standings.js?v=v4';
+import * as ST from './standings.js?v=v5';
 import * as FF from './float-feed.js?v=v11';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=3';
@@ -864,7 +864,7 @@ async function openGuides() {
 // 战争（势力战争 + 军团战争）：首次进入时加载
 let warLoading = null;
 function loadWarModule() {
-  if (!warLoading) warLoading = import('./war.js?v=v13').then((m) => {
+  if (!warLoading) warLoading = import('./war.js?v=v14').then((m) => {
     m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
     return m;
   }).catch((error) => { warLoading = null; throw error; });
@@ -1005,7 +1005,7 @@ async function openEftFit(text) {
 // 快递合同：首次进入时加载
 let courierLoading = null;
 function loadCourierModule() {
-  if (!courierLoading) courierLoading = import('./courier.js?v=v12').then((m) => {
+  if (!courierLoading) courierLoading = import('./courier.js?v=v13').then((m) => {
     m.initCourier({
       esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
       // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
@@ -1049,7 +1049,7 @@ async function openCourier() {
 // 合同（公开合同存档 + 我的个人 / 军团 / 联盟合同）：首次进入时加载
 let contractsLoading = null;
 function loadContractsModule() {
-  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v8').then((m) => {
+  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v9').then((m) => {
     m.initContracts({
       esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, officialName, locationName, loadNpcNames, typeName,
       valuation, valuationCard, store, game: gameActions, regions: REGIONS, marketRegions: () => state.marketRegions, loadMarketRegions,
@@ -1280,7 +1280,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v85').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v89').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1326,7 +1326,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v48').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v49').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText
     });
@@ -1340,7 +1340,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v64').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v65').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -5602,7 +5602,7 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v9').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v10').then((m) => {
     m.initProfileMore({
       allChars, esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
@@ -6552,7 +6552,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v27').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v28').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6575,7 +6575,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v41').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v42').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6628,7 +6628,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v28').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v29').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
@@ -6644,7 +6644,7 @@ function loadLocal() {
 // ===== 总览预警（ov-watch.js）：看总览的类型一列，出现设定的东西就报警；点到标签页时才加载 =====
 let ovModule = null;
 function loadOv() {
-  if (!ovModule) ovModule = import('./ov-watch.js?v=6').then((m) => {
+  if (!ovModule) ovModule = import('./ov-watch.js?v=7').then((m) => {
     m.initOvWatch({ esc, showToast });
     const sync = () => { alertState.ov = m.status(); syncAlertBtn(); };
     m.onChange(sync);

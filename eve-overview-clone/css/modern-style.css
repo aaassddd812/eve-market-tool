@@ -2373,6 +2373,10 @@ td.loc {
 .kb-suggest-item > i { width: 8px; height: 8px; margin: 0 7px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
 .kb-suggest-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb-suggest-item small { font-size: 0.6875rem; color: var(--text-muted); white-space: nowrap; }
+.kb-suggest-row { display: flex; align-items: center; gap: 4px; }
+.kb-suggest-row .kb-suggest-item { flex: 1; min-width: 0; }
+.kb-suggest-add { flex: none; padding: 4px 8px; border-radius: var(--radius-sm); font-size: 0.75rem; color: var(--accent-primary); background: var(--accent-soft); white-space: nowrap; }
+.kb-suggest-add:hover { background: var(--accent-primary); color: #fff; }
 
 .kb-section { margin-top: var(--spacing-lg); }
 .kb-section-title { margin-bottom: 10px; font-size: 0.9375rem; font-weight: 600; }
@@ -2416,7 +2420,7 @@ td.loc {
 .kb-top-card > b { font-size: 1rem; color: var(--sell-color); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .kb-columns { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 20px; align-items: start; }
-.kb-feed-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.kb-feed-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; scroll-margin-top: 12px; }
 .kb-feed-head .kb-section-title, .kb-feed-head .info-section-title { margin: 0; }
 .kb-feed-head .info-section-title::after { display: none; }
 .kb-filters { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
@@ -2436,6 +2440,7 @@ td.loc {
 .kb-chip img { border-radius: 3px; }
 .kb-chip button { width: 20px; height: 20px; border-radius: 50%; font-size: 0.9375rem; line-height: 1; color: inherit; }
 .kb-chip button:hover { background: var(--accent-ring); }
+.kb-chip.kb-chip-clear { padding: 0 12px; cursor: pointer; border-color: transparent; background: var(--bg-tertiary); color: var(--text-secondary); }
 .kb-more { display: block; margin: 12px auto 0; }
 .kb-link { color: inherit; cursor: pointer; }
 .kb-link:hover { color: var(--accent-primary); text-decoration: underline; }
@@ -6198,6 +6203,15 @@ td .sov-auto-tag { margin-left: 4px; }
 /* 本地名单分析（js/local-scan.js） */
 .ls-input textarea { width: 100%; height: auto; min-height: 120px; padding: 6px 8px; text-align: left; font-family: inherit; resize: vertical; margin-top: 16px; }
 .ls-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
+.ls-stf { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; margin: 4px 0 14px; }
+.ls-stf-on { display: inline-flex; gap: 6px; align-items: center; font-size: 0.85rem; cursor: pointer; }
+.ls-stf-ics { display: inline-flex; gap: 4px; }
+.ls-stf-ic { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; background: transparent; cursor: pointer; opacity: 0.4; }
+.ls-stf-ic:hover { opacity: 0.7; }
+.ls-stf-ic.on { opacity: 1; background: var(--bg-tertiary); }
+.ls-stf-ic .st-badge { width: 18px; height: 18px; margin: 0; cursor: pointer; }
+.ls-stf-ic .st-badge svg { width: 18px; height: 18px; }
+.st-neutral { color: #8b95a5; }
 .ls-summary { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .ls-summary > div { flex: 1 1 110px; display: flex; flex-direction: column; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-tertiary); }
 .ls-summary b { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
@@ -8666,3 +8680,11 @@ a.pz-name:hover { color: var(--accent-primary); }
 .ov-add-row .pi-input { flex: 0 1 auto; min-width: 0; }
 .ov-add-row input.pi-input { flex: 1 1 160px; }
 .ov-card-who { display: block; }
+
+/* 回到顶部（to-top.js）：位置由脚本按当前滚动区设置 */
+.to-top { position: fixed; right: 20px; bottom: 20px; z-index: 980; display: flex; align-items: center; justify-content: center; width: 42px; height: 42px; padding: 0; border: 0; border-radius: 50%;
+  background: var(--accent-primary); color: #fff; box-shadow: var(--shadow-lg); cursor: pointer; opacity: 0; transform: translateY(10px); pointer-events: none; transition: opacity 0.18s, transform 0.18s; }
+.to-top.show { opacity: 0.9; transform: none; pointer-events: auto; }
+.to-top:hover { opacity: 1; }
+.to-top svg { width: 20px; height: 20px; }
+@media print { .to-top { display: none; } }

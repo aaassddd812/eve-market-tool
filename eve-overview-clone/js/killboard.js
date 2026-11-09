@@ -5,7 +5,7 @@
 import { SERVER, IS_TQ, HUB, NO_KB_MESSAGE, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { skCards, skRows, skEntityHead, skTitle } from './skeleton.js?v=v17';
 import { fullIn } from './eve-time.js?v=v1';
-import * as ST from './standings.js?v=v4';
+import * as ST from './standings.js?v=v5';
 
 let app;
 

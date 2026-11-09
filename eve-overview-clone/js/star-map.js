@@ -9,7 +9,7 @@ import { Line2 } from './vendor/three/Line2.js';
 import { LineMaterial } from './vendor/three/LineMaterial.js';
 import { LineGeometry } from './vendor/three/LineGeometry.js';
 import * as JP from './jump-planner.js?v=v17';
-import * as ST from './standings.js?v=v4';
+import * as ST from './standings.js?v=v5';
 import { gankSystemHtml } from './kb-gank.js?v=v1';
 import { SERVER, HUB, HUB_NAME, NO_KB_MESSAGE, serverKey, esiUrl, eveImage } from './server.js?v=s4';
 

@@ -1381,8 +1381,17 @@ ZKILL_MOD = (("character", "characterID"), ("corporation", "corporationID"), ("a
              ("ship", "shipTypeID"), ("system", "solarSystemID"), ("constellation", "constellationID"), ("region", "regionID"))
 
 
+def id_list(q, key):
+    """查询参数里逗号分隔的 ID（击杀列表的多选筛选），最多 50 个"""
+    return [int(x) for x in str(q.get(key) or "").split(",") if x.strip()][:50]
+
+
 def zkill_path(q, side):
-    """把列表筛选条件换成 zKillboard 查询路径；没有任何筛选时返回 None（zKillboard 不支持全局翻页）"""
+    """把列表筛选条件换成 zKillboard 查询路径；没有任何筛选时返回 None（zKillboard 不支持全局翻页）。
+    多选（同一类里多个，或地点 / 人物各混了几种）zKillboard 表达不了「或」，也返回 None，只查本地收录"""
+    for group in (("ship",), ("system", "constellation", "region"), tuple(ENTITY_COL)):
+        if sum(len(id_list(q, k)) for k in group) > 1:
+            return None
     mods = "".join(f"{name}/{int(q[key])}/" for key, name in ZKILL_MOD if q.get(key))
     if not mods:
         return None
@@ -1952,14 +1961,23 @@ class Api:
     def feed(self, q):
         limit = min(int(q.get("limit", 50)), 200)
         where, args = [], []
-        for key, col in (("ship", "ship_type"), ("system", "system_id"), ("region", "region_id")):
-            if q.get(key):
-                where.append(f"{col}=?")
-                args.append(int(q[key]))
-        if q.get("constellation"):
-            systems = self.constellation_systems(int(q["constellation"])) or [0]
-            where.append(f"system_id IN ({','.join('?' * len(systems))})")
-            args += systems
+        marks = lambda n: ",".join("?" * n)
+        ships = id_list(q, "ship")
+        if ships:
+            where.append(f"ship_type IN ({marks(len(ships))})"); args += ships
+        # 地点可多选（星系 / 星座 / 星域混选），任一个都算
+        locs, loc_args = [], []
+        systems = id_list(q, "system")
+        for cid in id_list(q, "constellation"):
+            systems += self.constellation_systems(cid)
+        if systems or q.get("constellation"):
+            systems = systems or [0]
+            locs.append(f"system_id IN ({marks(len(systems))})"); loc_args += systems
+        regions = id_list(q, "region")
+        if regions:
+            locs.append(f"region_id IN ({marks(len(regions))})"); loc_args += regions
+        if locs:
+            where.append("(" + " OR ".join(locs) + ")"); args += loc_args
         # 细筛选（只查本地收录的记录，不转向 zKillboard）：最低价值、单刷、排除 NPC 击杀、空间类型
         fine = False
         if q.get("min"):
@@ -1975,18 +1993,23 @@ class Api:
         space = FEED_SPACE.get(q.get("space") or "")
         if space:
             where.append("system_id BETWEEN ? AND ?"); args += list(space); fine = True
+        # 人物 / 军团 / 联盟可多选，任一个参与（作为受害者或攻击者）都算
         side = q.get("side", "all")
+        ents, ent_args = [], []
         for kind, (vcol, acol) in ENTITY_COL.items():
-            if q.get(kind):
-                eid = int(q[kind])
-                loss = f"{vcol}=?"
-                kill = f"id IN (SELECT km FROM attackers WHERE {acol}=?)"
-                if side == "losses":
-                    where.append(loss); args.append(eid)
-                elif side == "kills":
-                    where.append(kill); args.append(eid)
-                else:
-                    where.append(f"({loss} OR {kill})"); args += [eid, eid]
+            eids = id_list(q, kind)
+            if not eids:
+                continue
+            loss = f"{vcol} IN ({marks(len(eids))})"
+            kill = f"id IN (SELECT km FROM attackers WHERE {acol} IN ({marks(len(eids))}))"
+            if side == "losses":
+                ents.append(loss); ent_args += eids
+            elif side == "kills":
+                ents.append(kill); ent_args += eids
+            else:
+                ents.append(f"{loss} OR {kill}"); ent_args += eids + eids
+        if ents:
+            where.append("(" + " OR ".join(ents) + ")"); args += ent_args
         # 开放接口（_local）只查本地保留期内的记录，不转向 zKillboard
         # 国服没有 zKillboard，只有本地收录的记录
         path = None if q.get("_local") or fine or self.store.server != "tq" else zkill_path(q, side)

@@ -9,7 +9,7 @@
 import { SERVER, IS_TQ, HUB, HUB_NAME } from './server.js?v=s4';
 import { SHIPS as HULLS, MODULES } from './courier-ships.js?v=v1';
 import { planJumpRoute, canJumpInto } from './jump-planner.js?v=v17';
-import * as ST from './standings.js?v=v4';
+import * as ST from './standings.js?v=v5';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, openEftFit, hasEsiToken, tokenInfo, hasScope, officialName, loadNpcNames, resolveNames, resolveStructures, openEsiBind, openMapSystem, closeDrawer
 const $ = (id) => document.getElementById(id);
