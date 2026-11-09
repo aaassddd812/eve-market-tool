@@ -1004,8 +1004,9 @@ export function chargeCount(moduleType, chargeType) {
   return vol ? Math.max(1, Math.floor(cap / vol + 1e-9)) : 1;
 }
 
-// 装配用到的技能是否满足（返回 [{ type, need, have }]）；all5 时按「全部 5 级」比，返回还没到 5 级的
-export function missingSkills(data, fit, levels, all5 = false) {
+// 装配用到的技能是否满足（返回 [{ type, need, have }]）；
+// all5（会影响属性的技能 Set）时按「全部 5 级」比：影响属性的技能要 5 级，只是最低要求 / 前置的技能按要求等级
+export function missingSkills(data, fit, levels, all5 = null) {
   const need = new Map();
   const visit = (t) => {
     for (const [s, l] of t.skills) {
@@ -1018,7 +1019,34 @@ export function missingSkills(data, fit, levels, all5 = false) {
   const ids = [fit.ship, ...SLOTS.flatMap((s) => (fit.slots?.[s] || []).flatMap((m) => (m ? [m.type, m.charge] : []))),
     ...(fit.drones || []).map((d) => d.type), ...(fit.implants || [])].filter(Boolean);
   for (const id of ids) { const t = data.types.get(id); if (t) visit(t); }
-  return [...need].map(([s, l]) => [s, all5 ? 5 : l]).filter(([s, l]) => (levels.get(s) || 0) < l).map(([s, l]) => ({ type: data.types.get(s), need: l, have: levels.get(s) || 0 }));
+  // 要练到 5 级的技能，它们的前置也得满足
+  if (all5) for (const s of all5) { need.set(s, 5); const st = data.types.get(s); if (st && !visit.seen.has(s)) { visit.seen.add(s); visit(st); } }
+  return [...need].filter(([s, l]) => (levels.get(s) || 0) < l).map(([s, l]) => ({ type: data.types.get(s), need: l, have: levels.get(s) || 0 }));
+}
+
+// 哪些技能会影响这套装配的属性：全部 5 级算一遍，再把某个技能降到 0 级重算，舰船 / 装备 / 弹药 / 无人机自身有的属性或面板数值有变化就算
+// （只是前置、自身不加成任何东西的技能不算）。一次算一批 ids（每个技能约 2–3 毫秒，调用方分批让出主线程）；ctx 在多批之间复用
+export function skillImpactCtx(data, fit) {
+  const all5 = new Map(data.skills.map((s) => [s.id, 5]));
+  const sig = (c) => {
+    const items = [c.ship, ...c.modules, ...c.charges, ...c.drones];
+    const own = items.map((it) => [...it.base.keys()].map((a) => +it.attr(a).toPrecision(7)).join(',')).join('|');
+    const st = JSON.stringify(fitStats(c), (k, v) => (v && typeof v === 'object' && 'mods' in v ? undefined : typeof v === 'number' ? +v.toPrecision(7) : v instanceof Map ? [...v] : v));
+    return own + '#' + st;
+  };
+  const base = computeFit(data, fit, all5);
+  return { data, fit, all5, sig, base: base && sig(base) };
+}
+export function skillAffects(ctx, ids) {
+  if (!ctx.base) return [];
+  return ids.filter((id) => {
+    const t = ctx.data.types.get(id);
+    if (!t?.effects?.length) return false;
+    const m = new Map(ctx.all5);
+    m.set(id, 0);
+    const c = computeFit(ctx.data, ctx.fit, m);
+    return c && ctx.sig(c) !== ctx.base;
+  });
 }
 
 export { STATE_RANK };

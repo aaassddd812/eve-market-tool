@@ -3,7 +3,7 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v37';
+import * as FE from './fit-engine.js?v=v38';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
 import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
@@ -553,8 +553,7 @@ function loadRowPrices() {
 }
 function infoPriceHtml(id) {
   const p = hubPrices().get(id);
-  const name = app.esc(app.valuation.region().hub.name);
-  return `<div class="fi-price-cell is-sell"><span>最低卖价</span><b>${p ? app.formatISK(p.sell) : '…'}</b></div><div class="fi-price-cell is-buy"><span>最高收价</span><b>${p ? app.formatISK(p.buy) : '…'}</b></div><small translate="no">${name}</small>`;
+  return `<span>最低卖</span><b class="is-sell">${p ? app.formatISK(p.sell) : '…'}</b><span>最高收</span><b class="is-buy">${p ? app.formatISK(p.buy) : '…'}</b>`;
 }
 async function fillInfoPrice(id) {
   await wantPrices([id]);
@@ -696,10 +695,10 @@ function infoHtml(t, names, info, tabNow, canSwap, drag = false) {
   return `<div class="fi-head">
       <img src="${IMG(id, isShip ? 'render' : 'icon', 128)}" alt="" width="72" height="72"${drag ? ` class="fi-drag" data-fit-drag="${id}" draggable="false" title="按住拖到装配的槽位上"` : ''}>
       <div class="fi-title"><span>${app.esc(F.data.groups.get(t.group)?.name || '')}${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${t.attrs.get(633) ? `<small>衍生等级 ${t.attrs.get(633)}</small>` : ''}</span>
-        <h4>${app.esc(t.name)}</h4>${t.en && t.en !== t.name ? `<small translate="no">${app.esc(t.en)}</small>` : ''}</div>
+        <h4>${app.esc(t.name)}</h4>${t.en && t.en !== t.name ? `<small translate="no">${app.esc(t.en)}</small>` : ''}
+        ${t.market ? `<div class="fi-price" data-fi-price="${id}">${infoPriceHtml(id)}</div>` : ''}</div>
       ${t.market ? `<button type="button" class="btn btn-ghost btn-sm" data-fi-market="${id}">市场价格</button>` : ''}
     </div>
-    ${t.market ? `<div class="fi-price" data-fi-price="${id}">${infoPriceHtml(id)}</div>` : ''}
     <div class="segmented fi-tabs">${tabs.map(([k, l]) => `<button type="button" data-fi-tab="${k}" class="${k === first ? 'active' : ''}">${l}</button>`).join('')}</div>
     <div class="fi-panes">${pane('attrs', attrsHtml)}
     ${bonus ? pane('bonus', bonusHtml(bonus)) : ''}
@@ -1196,7 +1195,8 @@ function renderFit() {
   const missing = F.skillMode === 'esi' && F.esi ? FE.missingSkills(F.data, F.fit, F.esi.levels) : [];
   // 「全部 5 级」时，绑定了角色就顺便对照角色技能，列出这套装配用到、角色还没练到 5 级的
   if (F.skillMode === 'max' && bound && !F.esi) loadEsiQuiet();
-  const notFive = F.skillMode === 'max' && bound && F.esi ? FE.missingSkills(F.data, F.fit, F.esi.levels, true) : [];
+  const impact = F.skillMode === 'max' && bound && F.esi ? skillImpact() : null;
+  const notFive = impact ? FE.missingSkills(F.data, F.fit, F.esi.levels, impact) : [];
   const gaps = missing.length ? missing : notFive;
   box.innerHTML = `
     <div class="fit-head">
@@ -1241,7 +1241,7 @@ function renderFit() {
       <span class="fit-bulk"><button class="link-btn" data-fit-all="on" title="主动装备全部激活">全部开启</button><button class="link-btn" data-fit-all="off" title="主动装备全部停用">全部关闭</button><button class="link-btn danger" data-fit-clear title="清空全部装备、弹药和无人机">清空装备</button></span>
       ${missing.length ? skillPop(missing, `缺少 ${missing.length} 项技能`, '缺少的技能')
         : notFive.length ? skillPop(notFive, `还有 ${notFive.length} 项没到 5 级`, `${F.esi.name} 还没到 5 级的技能`)
-        : F.esi && (F.skillMode === 'esi' || bound) ? `<span class="fit-ok">${F.skillMode === 'esi' ? '技能满足' : '用到的技能都已 5 级'}</span>` : ''}
+        : F.skillMode === 'esi' && F.esi ? '<span class="fit-ok">技能满足</span>' : impact ? '<span class="fit-ok">影响属性的技能都已 5 级</span>' : ''}
     </div>
     ${problemsHtml(st.problems)}
     ${slotRows}
@@ -1900,6 +1900,32 @@ function onMainInput(e) {
     F.fit.name = e.target.value;
     app.store.setJSON(CURRENT_KEY, F.fit);
   }
+}
+
+// 「全部 5 级」时哪些技能会影响当前装配的属性（FE.skillAffects 逐个技能重算，每批 24 个让出主线程，算完重绘）；
+// 按装配内容缓存，没算完时返回 null（技能栏先不显示「没到 5 级」）。只算角色还没到 5 级的技能
+const IMPACT = { key: '', set: null, job: 0 };
+function skillImpact() {
+  const f = F.fit;
+  const key = JSON.stringify([f.ship, FE.SLOTS.map((s) => (f.slots?.[s] || []).map((m) => (m ? [m.type, m.charge || 0, m.state || '', m.mut ? JSON.stringify(m.mut) : ''] : 0))), f.drones, f.implants, F.esi.id]);
+  if (IMPACT.key === key) return IMPACT.set;
+  IMPACT.key = key; IMPACT.set = null;
+  const job = ++IMPACT.job;
+  const fit = structuredClone(f), levels = F.esi.levels;
+  const ids = F.data.skills.filter((t) => (levels.get(t.id) || 0) < 5 && t.effects?.length).map((t) => t.id);
+  const out = new Set();
+  let ctx = null, i = 0;
+  const step = () => {
+    if (job !== IMPACT.job) return;
+    ctx ||= FE.skillImpactCtx(F.data, fit);
+    for (const id of FE.skillAffects(ctx, ids.slice(i, i + 24))) out.add(id);
+    i += 24;
+    if (i < ids.length) { setTimeout(step, 0); return; }
+    IMPACT.set = out;
+    if (F.fit && F.skillMode === 'max') renderFit();
+  };
+  setTimeout(step, 0);
+  return null;
 }
 
 // 「全部 5 级」模式下静默读角色技能（失败不提示，只是不显示还没到 5 级的技能）

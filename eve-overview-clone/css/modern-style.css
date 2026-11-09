@@ -3124,13 +3124,10 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .fi-panes { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -20px -20px; padding: 0 20px 20px; scrollbar-gutter: stable; }
 .fi-head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-shrink: 0; }
 .fi-head img { border-radius: 10px; background: #0d1219; flex-shrink: 0; }
-.fi-price { display: flex; align-items: stretch; gap: 8px; margin: -4px 0 14px; flex-shrink: 0; }
-.fi-price-cell { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; padding: 8px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); }
-.fi-price-cell span { font-size: 0.6875rem; color: var(--text-muted); }
-.fi-price-cell b { font-size: 0.9375rem; font-variant-numeric: tabular-nums; }
-.fi-price-cell.is-sell b { color: var(--danger, #f87171); }
-.fi-price-cell.is-buy b { color: var(--success); }
-.fi-price small { align-self: center; flex-shrink: 0; max-width: 34%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.6875rem; color: var(--text-muted); }
+.fi-price { display: flex; align-items: baseline; gap: 4px 6px; flex-wrap: wrap; margin-top: 4px; font-size: 0.75rem; color: var(--text-muted); }
+.fi-price b { margin-right: 6px; font-variant-numeric: tabular-nums; }
+.fi-price b.is-sell { color: var(--danger, #f87171); }
+.fi-price b.is-buy { color: var(--success); }
 .fi-title { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .fi-title > span { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 0.75rem; color: var(--text-muted); }
 .fi-title > span small { font-size: inherit; }
