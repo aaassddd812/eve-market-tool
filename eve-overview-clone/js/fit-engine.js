@@ -1004,8 +1004,8 @@ export function chargeCount(moduleType, chargeType) {
   return vol ? Math.max(1, Math.floor(cap / vol + 1e-9)) : 1;
 }
 
-// 装配用到的技能是否满足（返回 [{ type, need, have }]）
-export function missingSkills(data, fit, levels) {
+// 装配用到的技能是否满足（返回 [{ type, need, have }]）；all5 时按「全部 5 级」比，返回还没到 5 级的
+export function missingSkills(data, fit, levels, all5 = false) {
   const need = new Map();
   const visit = (t) => {
     for (const [s, l] of t.skills) {
@@ -1018,7 +1018,7 @@ export function missingSkills(data, fit, levels) {
   const ids = [fit.ship, ...SLOTS.flatMap((s) => (fit.slots?.[s] || []).flatMap((m) => (m ? [m.type, m.charge] : []))),
     ...(fit.drones || []).map((d) => d.type), ...(fit.implants || [])].filter(Boolean);
   for (const id of ids) { const t = data.types.get(id); if (t) visit(t); }
-  return [...need].filter(([s, l]) => (levels.get(s) || 0) < l).map(([s, l]) => ({ type: data.types.get(s), need: l, have: levels.get(s) || 0 }));
+  return [...need].map(([s, l]) => [s, all5 ? 5 : l]).filter(([s, l]) => (levels.get(s) || 0) < l).map(([s, l]) => ({ type: data.types.get(s), need: l, have: levels.get(s) || 0 }));
 }
 
 export { STATE_RANK };

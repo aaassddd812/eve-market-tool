@@ -5,7 +5,7 @@
 //   行星开采：开采器到期停了；订单成交：订单不见了，到历史订单里看是全部成交还是过期（取消的不提醒；历史接口缓存 1 小时，最多等 3 小时）；
 //   合同：我发布的合同被接 / 完成 / 失败 / 被拒，拍卖有新出价，收到指定给我的合同。
 // 各项按 ESI 缓存分开读（GAP）；授权里缺权限的项跳过。网页弹出一条提示，同时推送。
-import * as AP from './alert-push.js?v=v11';
+import * as AP from './alert-push.js?v=v13';
 import { L } from './alert-mail.js?v=v8';
 
 let ctx;   // esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, fetchESI, typeName, resolveTypeNames, placeNames, sysName, store, serverKey, showToast

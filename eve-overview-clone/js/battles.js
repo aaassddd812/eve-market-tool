@@ -5,7 +5,7 @@
 // 提醒规模（min）：只提醒这一档及以上的会战（弹窗和推送都按它）；没到这一档的不记为已提醒，打大了再提醒。
 // 企业微信 / 邮箱（alert-push.js 的「会战」，默认不推）：新会战推一行文字；有渠道要推时后台标签页也接着查。
 import { SERVER, IS_TQ } from './server.js?v=s4';
-import * as AP from './alert-push.js?v=v11';
+import * as AP from './alert-push.js?v=v13';
 import { L } from './alert-mail.js?v=v8';
 
 let app;

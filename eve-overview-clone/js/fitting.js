@@ -3,7 +3,7 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v36';
+import * as FE from './fit-engine.js?v=v37';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
 import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
@@ -225,7 +225,8 @@ function syncSkillMode(restored = false) {
   const esi = app.hasEsiToken();
   if (esi !== lastEsi) restored = false;   // 期间绑定 / 解绑了 ESI，需要刷新技能选项
   lastEsi = esi;
-  if (F.skillMode === 'esi' && !esi) { F.skillMode = 'max'; F.esi = null; recompute(); }
+  if (!esi) F.esi = null;
+  if (F.skillMode === 'esi' && !esi) { F.skillMode = 'max'; recompute(); }
   else if (F.fit && !restored) renderFit();
 }
 
@@ -1145,6 +1146,10 @@ function renderFit() {
     return `<section class="fit-slots"><h4>${FE.SLOT_NAME[s]}<span>${st.used[s]} / ${fmt(total)}</span></h4>${rows.join('')}</section>`;
   }).join('');
   const missing = F.skillMode === 'esi' && F.esi ? FE.missingSkills(F.data, F.fit, F.esi.levels) : [];
+  // 「全部 5 级」时，绑定了角色就顺便对照角色技能，列出这套装配用到、角色还没练到 5 级的
+  if (F.skillMode === 'max' && bound && !F.esi) loadEsiQuiet();
+  const notFive = F.skillMode === 'max' && bound && F.esi ? FE.missingSkills(F.data, F.fit, F.esi.levels, true) : [];
+  const gaps = missing.length ? missing : notFive;
   box.innerHTML = `
     <div class="fit-head">
       <img class="fit-ship-img" src="${IMG(shipType.id, 'render', 128)}" alt="" width="88" height="88">
@@ -1186,7 +1191,9 @@ function renderFit() {
         <button data-fit-skill="esi" class="${F.skillMode === 'esi' ? 'active' : ''}"${bound ? '' : ' disabled title="需要先绑定 ESI"'}>${F.esi && F.skillMode === 'esi' ? app.esc(F.esi.name) + ' 的技能' : '按 ESI 角色'}</button>
       </div>
       <span class="fit-bulk"><button class="link-btn" data-fit-all="on" title="主动装备全部激活">全部开启</button><button class="link-btn" data-fit-all="off" title="主动装备全部停用">全部关闭</button><button class="link-btn danger" data-fit-clear title="清空全部装备、弹药和无人机">清空装备</button></span>
-      ${missing.length ? `<span class="fit-missing" title="${app.esc(missing.map((m) => `${m.type?.name || m.type} ${m.have} → ${m.need} 级`).join('\n'))}">缺少 ${missing.length} 项技能</span>` : F.skillMode === 'esi' && F.esi ? '<span class="fit-ok">技能满足</span>' : ''}
+      ${missing.length ? skillPop(missing, `缺少 ${missing.length} 项技能`, '缺少的技能')
+        : notFive.length ? skillPop(notFive, `还有 ${notFive.length} 项没到 5 级`, `${F.esi.name} 还没到 5 级的技能`)
+        : F.esi && (F.skillMode === 'esi' || bound) ? `<span class="fit-ok">${F.skillMode === 'esi' ? '技能满足' : '用到的技能都已 5 级'}</span>` : ''}
     </div>
     ${problemsHtml(st.problems)}
     ${slotRows}
@@ -1195,7 +1202,13 @@ function renderFit() {
     ${cloudHtml()}
     ${envHtml()}
     ${fleetHtml()}
-    ${missing.length ? `<section class="fit-slots"><h4>缺少的技能<span>${missing.length}</span></h4><div class="fit-skill-list">${missing.map((m) => `<span>${app.esc(m.type?.name || '')} <b>${m.have} → ${m.need}</b></span>`).join('')}</div></section>` : ''}`;
+    ${gaps.length ? `<section class="fit-slots"><h4>${missing.length ? '缺少的技能' : '还没到 5 级的技能'}<span>${gaps.length}</span></h4><div class="fit-skill-list">${gaps.map((m) => `<span>${app.esc(m.type?.name || '')} <b>${m.have} → ${m.need}</b></span>`).join('')}</div></section>` : ''}`;
+}
+
+// 技能缺口的标签：鼠标移上去（或键盘聚焦）弹出列表
+function skillPop(list, label, title) {
+  const rows = [...list].sort((a, b) => (b.need - b.have) - (a.need - a.have)).map((m) => `<span class="fit-skill-line"><span>${app.esc(m.type?.name || String(m.type))}</span><span class="fit-skill-lv">${'<i class="on"></i>'.repeat(m.have)}${'<i></i>'.repeat(m.need - m.have)}<em>${m.have} → ${m.need}</em></span></span>`).join('');
+  return `<span class="fit-skill-pop" tabindex="0"><span class="fit-missing">${label}</span><span class="fit-skill-card" role="tooltip"><b>${app.esc(title)}</b>${rows}</span></span>`;
 }
 
 // 曙光云计算：选择放进「云」的舰船，同船级（T1 / T2 / 帝国海军型还要同种族）的舰船获得它们的云计算技能加成；带宽上限 100，装满即止
@@ -1829,6 +1842,14 @@ function onMainInput(e) {
     F.fit.name = e.target.value;
     app.store.setJSON(CURRENT_KEY, F.fit);
   }
+}
+
+// 「全部 5 级」模式下静默读角色技能（失败不提示，只是不显示还没到 5 级的技能）
+let esiQuiet = null, esiQuietAt = 0;
+function loadEsiQuiet() {
+  if (esiQuiet || Date.now() - esiQuietAt < 300000) return;
+  esiQuietAt = Date.now();
+  esiQuiet = app.getCharacterSkills().then((r) => { F.esi = r || null; if (F.esi && F.fit && F.skillMode === 'max') renderFit(); }).catch(() => {}).finally(() => { esiQuiet = null; });
 }
 
 async function loadEsiSkills() {

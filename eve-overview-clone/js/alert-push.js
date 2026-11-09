@@ -34,7 +34,7 @@ const CH = ['wecom', 'mail', ...Object.keys(TK)];
 const LABEL = { wecom: '企业微信', mail: '邮箱', ...Object.fromEntries(Object.entries(TK).map(([k, t]) => [k, t.name])) };
 const GAP = { wecom: 5e3, mail: 60e3, ...Object.fromEntries(Object.entries(TK).map(([k, t]) => [k, t.gap])) };
 // [种类, 名称, 说明]；会战默认不推（全服的会战，开了会比较多）
-const SRC = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名'], ['sos', '虫洞求救'], ['order', '订单被压价'], ['battle', '会战', '击杀页「疑似会战」，按那里设的提醒规模'],
+const SRC = [['kill', '击杀预警'], ['intel', '本地日志'], ['local', '本地红名'], ['ov', '总览预警', '总览里出现设定的东西（泰坦怪、官员怪等）'], ['sos', '虫洞求救'], ['order', '订单被压价'], ['battle', '会战', '击杀页「疑似会战」，按那里设的提醒规模'],
   ['price', '到价提醒', '自选看板里设的到价提醒'], ['skill', '技能队列', '当前角色的技能练完、队列剩不到 24 小时、队列空了'], ['job', '工业任务', '当前角色的制造、研究、发明、反应任务完成'],
   ['pi', '行星开采', '当前角色的行星开采器停了'], ['sold', '订单成交', '当前角色的市场订单全部成交或过期'], ['contract', '合同', '当前角色发布的合同被接、完成、失败，拍卖有新出价，收到指定给你的合同']];
 const useDefault = () => Object.fromEntries(SRC.map(([s]) => [s, s !== 'battle']));
@@ -195,7 +195,7 @@ function schedule(ch, extra = 0) {
   if (timer[ch]) return;
   timer[ch] = setTimeout(() => flush(ch), Math.max(2e3, lastSent(ch) + GAP[ch] - Date.now()) + extra);
 }
-const TITLE = { kill: ['击杀预警', 'Kill alert'], intel: ['本地日志', 'Local intel'], local: ['本地红名', 'Local reds'], sos: ['虫洞求救', 'Wormhole SOS'], order: ['订单被压价', 'Order undercut'],
+const TITLE = { kill: ['击杀预警', 'Kill alert'], intel: ['本地日志', 'Local intel'], local: ['本地红名', 'Local reds'], ov: ['总览预警', 'Overview alert'], sos: ['虫洞求救', 'Wormhole SOS'], order: ['订单被压价', 'Order undercut'],
   battle: ['会战', 'Battle'], price: ['到价提醒', 'Price alert'], skill: ['技能队列', 'Skill queue'], job: ['工业任务', 'Industry job'], pi: ['行星开采', 'PI extractor'],
   sold: ['订单成交', 'Order filled'], contract: ['合同', 'Contract'] };
 const srcTitle = (s) => L(...(TITLE[s] || TITLE.intel));

@@ -11,7 +11,7 @@
 // 提醒方式：提示音、网页卡片、系统通知、企业微信 / 邮箱（alert-push.js）、悬浮窗（float-feed.js 的 local 一栏）。
 // 设置存在 eve-localwatch-v1（不分服务器）。共享画面每次打开网页都要重新选择（浏览器规定），不会自动恢复。
 
-import * as AP from './alert-push.js?v=v11';
+import * as AP from './alert-push.js?v=v13';
 import * as ST from './standings.js?v=v4';
 import * as FF from './float-feed.js?v=v11';
 import { SERVER, IS_TQ } from './server.js?v=s4';
@@ -62,6 +62,8 @@ const tauri = () => {
   for (let i = 0; i < 3; i++) if (v[i] !== NATIVE_FROM[i]) return v[i] > NATIVE_FROM[i] ? window.__TAURI_INTERNALS__ : null;
   return window.__TAURI_INTERNALS__;
 };
+// 总览预警（ov-watch.js）和这里共用画面来源：网页共享的视频轨道、桌面版选中的 EVE 窗口
+export const shared = { tauri, track: () => S.stream?.getVideoTracks()[0] || null, hwnd: () => S.hwnd || 0, winName: () => S.winName };
 // 浏览器只在 https（或本机地址）的页面里允许共享屏幕
 export const supported = () => Boolean(tauri() || navigator.mediaDevices?.getDisplayMedia);
 // http 地址（演示站）：Chrome / Edge 可以在 chrome://flags 的「Insecure origins treated as secure」里加上这个地址，重启浏览器后就能用
