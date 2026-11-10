@@ -30,6 +30,15 @@
       var t = null;
       try { t = localStorage.getItem('eve-theme'); } catch (e) {}
       if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      // 老界面用户第一次见新页面（没动过新界面的皮肤设置）：一次性切成深色（新界面按深色设计），之后仍可用主题按钮换回浅色
+      try {
+        var p = JSON.parse(localStorage.getItem('eve-prefs') || 'null') || {};
+        if (!('skin' in p) && !localStorage.getItem('eve-skin2-dark')) {
+          t = 'dark';
+          localStorage.setItem('eve-theme', 'dark');
+          localStorage.setItem('eve-skin2-dark', '1');
+        }
+      } catch (e) {}
       document.documentElement.setAttribute('data-theme', t);
       // 新页面（「EVE 风格」界面，个性化设置）：中文字体 MiSans（正文）、得意黑（大标题）只在开启时加载（切片字体，只下载页面用到的字）
       try {
