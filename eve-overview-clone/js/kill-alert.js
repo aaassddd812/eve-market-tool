@@ -365,12 +365,13 @@ function victimHistory(cid) {
     const st = pl?.pilots?.[cid];
     const kills = feed?.kills || [];
     if (!st && !kills.length) return null;
-    const types = await ctx.resolveTypeNames([...(st?.ships || []).map(([t]) => t), ...kills.map((k) => k.ship_type_id)]).catch(() => new Map());
+    const top = (st?.ships || []).slice(0, 3);   // 接口返回全部开过的船，常开只取前 3 种
+    const types = await ctx.resolveTypeNames([...top.map(([t]) => t), ...kills.map((k) => k.ship_type_id)]).catch(() => new Map());
     const tn = (id) => types.get(id) || 'Type ' + id;
     const nm = feed?.names || {};
     return {
       kills: st?.kills ?? 0, losses: st?.losses ?? 0, destroyed: st?.destroyed || 0, lost: st?.lost || 0, solo: st?.solo || 0,
-      ships: (st?.ships || []).map(([t, n]) => [tn(t), n]),
+      ships: top.map(([t, n]) => [tn(t), n]),
       recent: kills.map((k) => {
         const loss = k.victim?.character_id === cid;
         return { id: k.id, loss, ship: tn(k.ship_type_id), system: sysName(k.system_id), value: k.value || 0, time: k.time,

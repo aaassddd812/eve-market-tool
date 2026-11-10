@@ -396,9 +396,9 @@ function initNavigation() {
 // 下拉悬停即展开（离开稍等再收），点按钮也能开关，Esc / 点外面关闭。面板用 fixed 定位，不被导航栏的横向滚动裁掉。
 // 按钮是原来的元素搬进去的，点击、高亮逻辑不变；手机底栏仍从 .header-nav 里读按钮。
 const NAV_MAIN = ['market', 'arb', 'map', 'kb', 'fit', 'appraisal', 'plaza', 'ai', 'profile'];
-const NAV_MORE = [['交易', ['contracts', 'courier', 'lp', 'abyss', 'bazaar']], ['生产', ['industry', 'pi']], ['宇宙与战斗', ['sim', 'war', 'sov', 'wh']], ['其他', ['guide']]];
+const NAV_MORE = [['交易', ['arb', 'appraisal', 'contracts', 'courier', 'lp', 'abyss', 'bazaar']], ['生产', ['industry', 'pi']], ['宇宙与战斗', ['sim', 'war', 'sov', 'wh']], ['其他', ['plaza', 'guide']]];
 // 可调整的小按钮：id → 名称（菜单里显示）；api 是 .api-link
-const ACT_ITEMS = [['cartBtn', '购物车'], ['killAlertBtn', '预警'], ['contactBtn', '定制'], ['desktopDlBtn', '下载'], ['langToggle', '语言'], ['themeToggle', '切换主题'], ['prefsBtn', '个性化设置'], ['shortcutHelpBtn', '快捷键'], ['api', '开放 API 文档']];
+const ACT_ITEMS = [['cartBtn', '购物车'], ['killAlertBtn', '预警'], ['contactBtn', '联系'], ['desktopDlBtn', '下载'], ['langToggle', '语言'], ['themeToggle', '切换主题'], ['prefsBtn', '个性化设置'], ['shortcutHelpBtn', '快捷键'], ['api', '开放 API 文档']];
 const ACT_TOP = ['cartBtn', 'killAlertBtn', 'contactBtn', 'desktopDlBtn'];
 const MENU_KEY = 'eve-menu-layout';
 const MOBILE_UA = /Android|iPhone|iPad|iPod|Mobile|HarmonyOS/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
@@ -1147,7 +1147,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v132').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v142').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -1286,7 +1286,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v92').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v97').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1332,7 +1332,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v49').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v51').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText
     });
@@ -3565,11 +3565,17 @@ function initContact() {
 // ===== 个性化设置（右上角滑块按钮）=====
 // 存在 eve-prefs（云同步会带上）；每项一个勾选框：键、名称、[不勾选的值, 勾选的值]、默认是否勾选
 const PREFS = [
+  ['skin', '新页面（炭黑底、方角、科技感字体）', ['default', 'eve'], true],   // 默认开；关掉（default）才回老界面
   ['mapZoom', '星图反转鼠标方向', ['normal', 'reverse'], false],   // 只反转滚轮缩放
   ['treeLines', '显示分类目录连接线', ['off', 'on'], true],
   ['treeIcons', '市场目录显示分类与物品图标', ['off', 'on'], true]
 ];
 function applyPrefs(p = store.getJSON('eve-prefs', {})) {
+  // 「EVE 风格」界面：首帧由 index-v2.html 头部脚本先设好；这里处理在设置里切换
+  if (p.skin !== 'default') {
+    document.documentElement.dataset.skin = 'eve';
+    if (!$('misansCss')) document.head.insertAdjacentHTML('beforeend', '<link rel="stylesheet" id="misansCss" href="assets/fonts/misans/MiSansVF.min.css"><link rel="stylesheet" href="assets/fonts/smiley/smiley-sans.css">');
+  } else delete document.documentElement.dataset.skin;
   document.documentElement.classList.toggle('no-tree-lines', p.treeLines === 'off');
   document.documentElement.classList.toggle('no-tree-icons', p.treeIcons === 'off');
 }
@@ -3625,6 +3631,8 @@ function initPrefs() {
     const p = { ...store.getJSON('eve-prefs', {}), [box.dataset.pref]: vals[box.checked ? 1 : 0] };
     store.setJSON('eve-prefs', p);
     applyPrefs(p);
+    // 打开「EVE 风格界面」时切到深色（这套界面按深色设计；之后仍可用主题按钮换浅色）
+    if (box.dataset.pref === 'skin' && box.checked && state.theme !== 'dark') { store.set('eve-theme', 'dark'); applyTheme('dark'); }
   });
 }
 
@@ -6600,7 +6608,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v42').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v43').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),

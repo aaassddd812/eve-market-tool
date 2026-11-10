@@ -1,0 +1,3 @@
+Smiley Sans（得意黑）v2.0.1 by atelier-anchor, licensed under the SIL Open Font License 1.1 (https://openfontlicense.org).
+https://github.com/atelier-anchor/smiley-sans
+Sliced woff2 files from npm @chinese-fonts/dyh (MIT, cn-font-split).

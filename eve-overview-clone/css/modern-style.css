@@ -6232,6 +6232,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .ls-bar em { display: block; height: 100%; background: var(--accent-primary); }
 .ls-groups b { width: 28px; text-align: right; font-variant-numeric: tabular-nums; }
 .ls-table td { vertical-align: middle; }
+/* flex 放在格子里面的一层：td 本身设 flex 会脱离表格布局，行高和分隔线跟其他列对不齐 */
 .ls-pilot { display: flex; align-items: center; gap: 8px; min-width: 170px; }
 .ls-pilot img { border-radius: 4px; flex: none; }
 .ls-tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 0.6875rem; font-style: normal; color: var(--text-secondary); background: var(--bg-hover); }
@@ -6243,6 +6244,16 @@ td .sov-auto-tag { margin-left: 4px; }
 .ls-threat.mid { color: #1a1300; background: var(--warning, #f59e0b); }
 .ls-threat.low { color: var(--success); }
 .ls-ships { white-space: nowrap; }
+/* 角色定位标签（诱导看损失装配，其余按开过的船）：诱导 / 轻拦 / 重拦 / 火力 / 后勤 / 特种 / 旗舰 */
+.ls-tag.role-cyno { color: #f0b429; background: color-mix(in srgb, #f0b429 16%, transparent); }
+.ls-tag.role-tackle { color: #4dabf7; background: color-mix(in srgb, #4dabf7 16%, transparent); }
+.ls-tag.role-htackle { color: #748ffc; background: color-mix(in srgb, #748ffc 18%, transparent); }
+.ls-tag.role-dps { color: #ff6b6b; background: color-mix(in srgb, #ff6b6b 15%, transparent); }
+.ls-tag.role-logi { color: #51cf66; background: color-mix(in srgb, #51cf66 15%, transparent); }
+.ls-tag.role-special { color: #cc5de8; background: color-mix(in srgb, #cc5de8 16%, transparent); }
+.ls-tag.role-cap { color: #ff922b; background: color-mix(in srgb, #ff922b 16%, transparent); }
+.ls-lastkill { font-size: 0.8125rem; white-space: nowrap; }
+.ls-lastkill small { display: block; color: var(--text-muted); font-size: 0.75rem; }
 .ls-ships img { border-radius: 3px; margin-right: 2px; vertical-align: middle; }
 /* 本地分析：结果放在卡片里（与其他页面一致） */
 .ls-card { padding: 14px 16px; border: 1px solid var(--border-primary); border-radius: var(--radius-lg); background: var(--bg-secondary); }
@@ -8824,3 +8835,203 @@ a.pz-name:hover { color: var(--accent-primary); }
   #sidebar.m-search .msearch-cancel { display: flex; align-items: center; flex: none; height: 40px; padding: 0 10px; font-size: 0.9375rem; color: var(--accent-primary); -webkit-tap-highlight-color: transparent; }
   #sidebar.m-search .sidebar-tabs, #sidebar.m-search .sidebar-toolbar, #sidebar.m-search .sidebar-content { min-width: 0; }
 }
+
+/* ===== 「EVE 风格」界面（个性化设置里开启，<html data-skin="eve">） =====
+   炭黑底、方角面板、青蓝强调色、方正的科技感英文 / 数字字体（Chakra Petch，SIL OFL，文件在 assets/fonts）；
+   中文用小米 MiSans 可变字体（免费商用，切片 woff2 在 assets/fonts/misans，只在开启时由头部脚本加载）。
+   布局：电脑上各页面的侧栏和内容变成浮在炭黑底上的卡片，四周留 12px；输入框近黑底、灰色描边；标题用中等字重；表格行更松。
+   配色只在深色主题下替换；字体和方角在浅色主题下也生效。 */
+@font-face { font-family: 'Chakra Petch'; font-style: normal; font-weight: 400; font-display: swap; src: url(../assets/fonts/chakra-petch-400.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215; }
+@font-face { font-family: 'Chakra Petch'; font-style: normal; font-weight: 500; font-display: swap; src: url(../assets/fonts/chakra-petch-500.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215; }
+@font-face { font-family: 'Chakra Petch'; font-style: normal; font-weight: 600; font-display: swap; src: url(../assets/fonts/chakra-petch-600.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215; }
+@font-face { font-family: 'Chakra Petch'; font-style: normal; font-weight: 700; font-display: swap; src: url(../assets/fonts/chakra-petch-700.woff2) format('woff2'); unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215; }
+
+html[data-skin="eve"] {
+  --font-sans: 'Chakra Petch', 'MiSans VF', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'Chakra Petch', 'SF Mono', Consolas, monospace;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 6px;
+}
+html[data-skin="eve"]:not([data-theme="light"]) {
+  --bg-primary: #191d21;
+  --bg-secondary: #212529;
+  --bg-tertiary: #2a2f34;
+  --bg-elevated: #2b3036;
+  --bg-hover: rgba(255, 255, 255, 0.06);
+  --border-primary: #2c3136;
+  --border-secondary: #52525b;
+  --border-accent: #2b9bd6;
+  --text-primary: #ffffff;
+  --text-secondary: #d4d4d8;
+  --text-muted: #a1a1aa;
+  --accent-primary: #2b9bd6;
+  --accent-hover: #1f86bd;
+  --accent-soft: rgba(43, 155, 214, 0.14);
+  --accent-ring: rgba(43, 155, 214, 0.4);
+  --shadow-sm: none;
+  --shadow-md: 0 4px 14px rgb(0 0 0 / 0.35);
+  --shadow-lg: 0 14px 36px rgb(0 0 0 / 0.5);
+}
+html[data-skin="eve"] body { font-family: var(--font-sans); letter-spacing: 0.01em; }
+html[data-skin="eve"] input, html[data-skin="eve"] select, html[data-skin="eve"] textarea, html[data-skin="eve"] button { font-family: inherit; }
+/* 输入框：近黑底（游戏里的输入框风格） */
+html[data-skin="eve"]:not([data-theme="light"]) .search-box,
+html[data-skin="eve"]:not([data-theme="light"]) input[type="text"],
+html[data-skin="eve"]:not([data-theme="light"]) input[type="search"],
+html[data-skin="eve"]:not([data-theme="light"]) input[type="number"],
+html[data-skin="eve"]:not([data-theme="light"]) textarea,
+html[data-skin="eve"]:not([data-theme="light"]) select { background-color: #09090b; border-color: #52525b; }
+/* 原来无边框的下拉框（合同类型、排序等）也统一成黑底灰框，不然黑块没有边很突兀 */
+html[data-skin="eve"]:not([data-theme="light"]) select:not(.region-select) { min-height: 34px; padding: 0 8px; border: 1px solid #52525b; border-radius: var(--radius-md); color: var(--text-primary); }
+html[data-skin="eve"]:not([data-theme="light"]) .search-box:focus-within,
+html[data-skin="eve"]:not([data-theme="light"]) input:focus, html[data-skin="eve"]:not([data-theme="light"]) textarea:focus, html[data-skin="eve"]:not([data-theme="light"]) select:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 1px var(--accent-primary); }
+html[data-skin="eve"]:not([data-theme="light"]) .search-box input { background: transparent; }
+
+/* 顶栏：更深的底色，导航字更大，选中项是顶部一条青蓝色横线（不再是底色块） */
+html[data-skin="eve"]:not([data-theme="light"]) .app-header, html[data-skin="eve"]:not([data-theme="light"]) .mobile-tabbar { background: #111315; }
+@media (min-width: 769px) {
+  html[data-skin="eve"]:not(.is-desktop) { --header-h: 64px; }
+  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn,
+  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn-more { position: relative; height: 64px; border-radius: 0; font-size: 0.9375rem; background: none; }
+  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn:hover,
+  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn-more:hover { background: var(--bg-hover); }
+  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn.active,
+  html[data-skin="eve"]:not(.is-desktop) .nav-more:has(.nav-btn.active) > .nav-btn-more { background: none; color: var(--text-primary); }
+  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn.active::before,
+  html[data-skin="eve"]:not(.is-desktop) .nav-more:has(.nav-btn.active) > .nav-btn-more::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--accent-primary); }
+  html[data-skin="eve"]:not(.is-desktop) .app-header .hm-items .nav-btn { height: 36px; }
+  html[data-skin="eve"]:not(.is-desktop) .app-header .hm-items .nav-btn.active::before { top: 6px; bottom: 6px; right: auto; width: 3px; height: auto; }
+}
+/* 主按钮：实心青蓝 */
+html[data-skin="eve"]:not([data-theme="light"]) .btn-primary { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }
+html[data-skin="eve"]:not([data-theme="light"]) .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+/* 表格：每行一条填充底色，表头加粗白字 */
+html[data-skin="eve"]:not([data-theme="light"]) thead th { color: var(--text-primary); font-weight: 600; }
+html[data-skin="eve"]:not([data-theme="light"]) .orders-table tbody tr:nth-child(odd) td { background: rgba(255, 255, 255, 0.025); }
+
+/* 击杀页「近 7 天大额击杀」：舰船渲染大图做卡片封面 */
+html[data-skin="eve"] .kb-top { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+html[data-skin="eve"] .kb-top-card { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto; align-items: stretch; gap: 0; padding: 0; overflow: hidden; border: 0; }
+html[data-skin="eve"] .kb-top-card img { order: 1; width: 100%; height: auto; aspect-ratio: 1; object-fit: cover; border-radius: 0; background: #0d1014; }
+html[data-skin="eve"] .kb-top-text { order: 0; padding: 10px 12px 8px; }
+html[data-skin="eve"] .kb-top-text strong { font-size: 0.9375rem; }
+html[data-skin="eve"] .kb-top-card > b { order: 2; padding: 8px 12px 10px; text-align: center; font-size: 0.9375rem; }
+@media (max-width: 768px) { html[data-skin="eve"] .kb-top { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } }
+
+/* EVE 风格：质感（标题中等字重、更松的表格、面板无描边） */
+html[data-skin="eve"] h1, html[data-skin="eve"] h2, html[data-skin="eve"] h3, html[data-skin="eve"] .kb-section-title, html[data-skin="eve"] .modal-header h3 { font-weight: 500; letter-spacing: 0.01em; }
+html[data-skin="eve"] .detail-header h1 { font-size: 1.75rem; }
+html[data-skin="eve"] .pi-head h2, html[data-skin="eve"] .ap-head h2 { font-size: 1.5rem; }
+html[data-skin="eve"]:not([data-theme="light"]) .stat-card,
+html[data-skin="eve"]:not([data-theme="light"]) .valuation-card,
+html[data-skin="eve"]:not([data-theme="light"]) .kb-hours,
+html[data-skin="eve"]:not([data-theme="light"]) .kb-top-card { border-color: transparent; }
+@media (min-width: 769px) {
+  html[data-skin="eve"] tbody td { padding-top: 10px; padding-bottom: 10px; }
+
+  /* 布局：侧栏和内容浮在炭黑底上，四周 12px 间隔（星图是整幅画布，不加） */
+  html[data-skin="eve"] .view-container:not(#mapView) { padding: 12px; gap: 12px; }
+  html[data-skin="eve"] .view-container:not(#mapView) > .sidebar { border: 0; border-radius: var(--radius-xl); overflow: hidden; }
+  html[data-skin="eve"] .view-container:not(#mapView) > .sidebar.collapsed { margin-right: -12px; }
+  html[data-skin="eve"] .view-container:not(#mapView) > .main-content { border-radius: var(--radius-xl); }
+  html[data-skin="eve"] .detail-view, html[data-skin="eve"] .kb-wrap { padding: 4px 8px 16px; }
+}
+
+/* ===== 装配页空状态：热门舰船宫格（所有界面风格都有） ===== */
+.fit-hot { width: 100%; max-width: 980px; margin-top: 28px; text-align: left; }
+.fit-hot h4 { margin: 0 0 10px; font-size: 0.875rem; font-weight: 600; color: var(--text-secondary); }
+.fit-hot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.fit-hot-card { display: flex; flex-direction: column; overflow: hidden; border-radius: var(--radius-lg); background: var(--bg-secondary); box-shadow: var(--shadow-sm); text-align: center; transition: transform var(--transition-fast), box-shadow var(--transition-fast); }
+.fit-hot-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.fit-hot-card img { width: 100%; height: auto; aspect-ratio: 1; object-fit: cover; background: #0d1014; }
+.fit-hot-card span { padding: 8px 6px 10px; font-size: 0.8125rem; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 768px) { .fit-hot { margin-top: 16px; } .fit-hot-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; } .fit-hot-card span { font-size: 0.75rem; } }
+
+/* ===== EVE 风格：卡片布局（电脑网页） =====
+   每个页面的主内容区（市场 .main-content、各页 .kb-scroll / .fit-scroll / .profile-scroll）本身是一块深灰大卡片，
+   里面的小卡片反过来用页面底色（更深），和那个网站的 Fit Browser 一样是「深灰面板里放炭黑卡片」的层次。
+   星图（整幅画布）和 AI 助手（对话界面）不套卡片。 */
+@media (min-width: 769px) {
+  html[data-skin="eve"]:not([data-theme="light"]) .view-container:not(#mapView):not(#aiView) > :is(.main-content, .kb-scroll, .fit-scroll, .profile-scroll) {
+    background: #212529; border-radius: var(--radius-xl);
+    --bg-secondary: #191d21; --bg-tertiary: #2a2f34; --border-primary: #30363c;
+  }
+  html[data-skin="eve"][data-theme="light"] .view-container:not(#mapView):not(#aiView) > :is(.main-content, .kb-scroll, .fit-scroll, .profile-scroll) {
+    background: var(--bg-secondary); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm);
+  }
+  html[data-skin="eve"] .view-container:not(#mapView):not(#aiView) > :is(.kb-scroll, .fit-scroll, .profile-scroll) > :first-child { padding-top: 16px; }
+  html[data-skin="eve"] .ind-page, html[data-skin="eve"] .kb-wrap, html[data-skin="eve"] .detail-view { padding-left: 20px; padding-right: 20px; }
+}
+
+/* ===== EVE 风格：大标题用得意黑（斜体科技感，SIL OFL，切片 woff2 在 assets/fonts/smiley） ===== */
+html[data-skin="eve"] :is(.detail-header h1, .pi-head > h2, .ap-head > h2, .sim-head-main > h2, .kb-section-title, .empty-view h2, .fit-empty h3, .profile-name, .mobile-title, .modal-header h3, .fit-hot h4) {
+  font-family: 'Smiley Sans Oblique', 'Chakra Petch', 'MiSans VF', 'PingFang SC', sans-serif; font-weight: 400; letter-spacing: 0.02em;
+}
+html[data-skin="eve"] .detail-header h1 { font-size: 2rem; }
+html[data-skin="eve"] :is(.pi-head > h2, .ap-head > h2, .sim-head-main > h2) { font-size: 1.75rem; }
+html[data-skin="eve"] .kb-section-title { font-size: 1.25rem; }
+html[data-skin="eve"] .mobile-title { font-size: 1.1875rem; }
+
+/* ===== EVE 风格：「更多工具」下拉 ===== */
+html[data-skin="eve"]:not([data-theme="light"]) .hm-box { background: #0f1113; border: 1px solid #2c3136; }
+html[data-skin="eve"] .nav-more-panel .hm-group h5 { font-family: 'Smiley Sans Oblique', 'MiSans VF', sans-serif; font-weight: 400; font-size: 0.9375rem; color: var(--accent-primary); }
+
+/* EVE 风格：AI 助手输入框——整块近黑底灰框（里面的文本框不再单独套黑底和描边） */
+html[data-skin="eve"]:not([data-theme="light"]) .ai-composer { background: #09090b; border: 1px solid #52525b; border-radius: var(--radius-xl); box-shadow: none; }
+html[data-skin="eve"]:not([data-theme="light"]) .ai-composer:focus-within { border-color: var(--accent-primary); box-shadow: 0 0 0 1px var(--accent-primary); }
+html[data-skin="eve"] .ai-composer textarea, html[data-skin="eve"] .ai-composer textarea:focus { background: transparent; border: 0; box-shadow: none; min-height: 24px; }
+html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
+
+/* ===== 装配页「圆盘」视图（fitting.js radialHtml，整块 SVG） ===== */
+.fit-view-seg { margin-left: 4px; }
+.fit-radial-wrap { display: flex; flex-direction: column; align-items: center; gap: 10px; margin: 8px 0 16px; }
+.fit-radial { width: min(100%, 580px); aspect-ratio: 1; }
+.fr-svg { display: block; width: 100%; height: 100%; overflow: visible; user-select: none; }
+.fr-band { fill: none; stroke: #000; stroke-opacity: 0.62; }
+.fr-outer { fill: none; stroke: #050607; stroke-width: 15; }
+.fr-g-base { fill: none; stroke-width: 9; stroke-dasharray: 2.2 1.6; opacity: 0.28; }
+.fr-g-fill { fill: none; stroke-width: 9; stroke-dasharray: 2.2 1.6; filter: drop-shadow(0 0 2px currentColor); }
+.fr-g-cpu { color: #7bacc3; } .fr-g-power { color: #e0e0e0; } .fr-g-cal { color: #c7a85a; }
+.fr-gauge .fr-g-base, .fr-gauge .fr-g-fill { stroke: currentColor; }
+.fr-gauge.is-over { color: #ff4d4f; }
+.fr-hp circle { fill: none; stroke: #cfd6dc; stroke-width: 1.4; }
+.fr-hp circle.is-used { fill: #e8eef3; }
+.fr-hp circle.is-over { fill: #ff4d4f; stroke: #ff4d4f; }
+.fr-slot { cursor: pointer; outline: none; }
+/* 槽位格子照原版：灰色半透明底 + 细边；装了装备的按状态上色（灰 = 在线，绿 = 激活，红 = 超载），离线整体变暗 */
+.fr-tile { fill: rgba(153, 153, 153, 0.06); stroke: rgba(153, 153, 153, 0.32); stroke-width: 1; transition: fill 0.12s, stroke 0.12s; }
+.fr-slot.is-empty:hover .fr-tile, .fr-slot.is-target .fr-tile { fill: rgba(43, 155, 214, 0.22); stroke: #2b9bd6; }
+.fr-mod { --fr-c: #999; }
+.fr-mod.is-active { --fr-c: #1ee83c; }
+.fr-mod.is-overload { --fr-c: #ff2a2a; }
+.fr-mod .fr-tile { fill: var(--fr-c); fill-opacity: 0.1; stroke: var(--fr-c); stroke-opacity: 0.6; }
+.fr-mod.is-active .fr-tile, .fr-mod.is-overload .fr-tile { stroke-opacity: 1; }
+.fr-mark { fill: var(--fr-c); fill-opacity: 0.6; stroke: var(--fr-c); stroke-width: 0.6; pointer-events: none; }
+.fr-mod.is-offline .fr-tile, .fr-mod.is-offline .fr-mark, .fr-mod.is-offline .fr-icon { opacity: 0.3; }
+.fr-mod.is-error .fr-tile { fill: #ff4d4f; fill-opacity: 0.22; stroke: #ff4d4f; stroke-opacity: 1; }
+.fr-mod:hover .fr-tile { fill-opacity: 0.18; }
+.fr-slot.is-selected .fr-tile { stroke: #fff; stroke-opacity: 1; stroke-width: 1.8; }
+.fr-slot:focus-visible .fr-tile { stroke: #fff; stroke-opacity: 1; stroke-width: 1.8; }
+.fr-icon { pointer-events: none; }
+.fr-charge { opacity: 0.95; }
+/* 悬停时从格子内沿往圆心竖排的细线小图标（卸下装备、卸下弹药、离线），和原版一样只在悬停时出现；触屏没有悬停，改为选中时出现 */
+.fr-acts { display: none; }
+.fr-slot:hover .fr-acts, .fr-slot:focus-within .fr-acts { display: inline; }
+.fr-slot:hover .fr-charge { display: none; }
+@media (hover: none) { .fr-slot.is-selected .fr-acts { display: inline; } .fr-slot.is-selected .fr-charge { display: none; } }
+.fr-act { cursor: pointer; color: #c9c9c9; filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.9)); }
+.fr-act:hover { color: #fff; }
+.fr-act-hit, .fr-act-pad { fill: transparent; }
+.fr-act-line { fill: none; stroke: currentColor; stroke-width: 0.9; stroke-linecap: round; stroke-linejoin: round; }
+.fr-act-pw { stroke-width: 1.2; }
+.fr-act-fill { fill: currentColor; }
+.fit-radial-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; font-size: 0.75rem; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.fit-radial-legend i { display: inline-block; width: 14px; height: 4px; margin-right: 6px; vertical-align: middle; border-radius: 1px; }
+.lg-cpu { background: #7bacc3; } .lg-power { background: #e0e0e0; } .lg-cal { background: #c7a85a; }
+.fit-radial-sel { width: 100%; max-width: 760px; }
+.fit-radial-wrap > .fit-problems { width: 100%; max-width: 760px; margin-top: 0; }
+.fit-radial-tip { margin: 0; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-muted); font-size: 0.8125rem; text-align: center; }
+[data-theme="light"] .fr-hp circle { stroke: #3b4652; } [data-theme="light"] .fr-hp circle.is-used { fill: #3b4652; }
+[data-theme="light"] .fr-g-power { color: #6b7785; }

@@ -13,10 +13,18 @@
       try { t = localStorage.getItem('eve-theme'); } catch (e) {}
       if (t !== 'light' && t !== 'dark') t = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', t);
+      // 新页面（「EVE 风格」界面，个性化设置）：中文字体 MiSans（正文）、得意黑（大标题）只在开启时加载（切片字体，只下载页面用到的字）
+      try {
+        if ((JSON.parse(localStorage.getItem('eve-prefs') || '{}') || {}).skin !== 'default') {   // 默认就是新页面，只有在设置里关掉（skin = default）才用老界面
+          document.documentElement.setAttribute('data-skin', 'eve');
+          if (localStorage.getItem('eve-theme') !== 'light') document.documentElement.setAttribute('data-theme', 'dark');   // 这套界面默认深色，不跟随系统浅色；手动切过浅色的保留
+          document.write('<link rel="stylesheet" id="misansCss" href="assets/fonts/misans/MiSansVF.min.css"><link rel="stylesheet" href="assets/fonts/smiley/smiley-sans.css">');
+        }
+      } catch (e) {}
     })();
   </script>
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=244"></script>
+  <script src="js/i18n.js?v=252"></script>
   <!-- 连不上官方 ESI 时自动走本站中转（js/esi-relay.js） -->
   <script src="js/esi-relay.js?v=2"></script>
   <link rel="stylesheet" href="css/float.css?v=v8">

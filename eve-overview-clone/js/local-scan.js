@@ -2,6 +2,9 @@
 // 频道成员名单：游戏里在本地频道（或任意频道）的成员列表里 Ctrl+A、Ctrl+C，粘贴进来：
 //   1. ESI /universe/ids/ 把名字换成角色 ID（每次最多 500 个），/characters/affiliation/ 查所属军团 / 联盟 / 势力（每次最多 1000 个）；
 //   2. 宁静服再查本站击杀记录服务 /api/v1/pilots（每次最多 200 名）：近 30 天击杀 / 损失、单挑、平均同伙人数、常用船、常去星系、最近活跃；
+//      按参与击杀时开的船的舰船分组判断角色定位（轻拦 / 重拦 / 火力 / 后勤 / 特种 / 旗舰，见 ROLES）；
+//      「诱导」看最近 3 次损失的 ESI 原文里装没装诱导力场发生器（击杀记录里攻击者只有船型，看不到装配）；
+//      最近一次击杀读 ESI 原文坐标找星系内最近的天体（「星系 · 星门（Jita）127 km」，本站 /api/kb/locate）；
 //   3. 按联盟 / 军团统计人数，点一下可以隐藏（比如自己人），隐藏名单存在本浏览器。
 //   4. 已绑定 ESI 且授权了联系人时，名字前显示声望（standings.js），并统计敌对 / 中立 / 友方人数；
 //      勾选「按声望筛掉」后名单里不显示选中声望的人（默认同军团、同联盟），选择存在本浏览器。
@@ -11,7 +14,7 @@
 //   统计舰船总数、同格（显示距离的）、按舰船类别 / 型号的数量，标出旗舰、拦截泡、后勤、隐轰、侦察、黑隐与扫描探针，建筑、无人机与其他单列；可复制一行统计发到舰队频道。
 import * as ST from './standings.js?v=v5';
 
-let D;   // esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage, kb, loadTypes, systemName, typeName, fetchESI, copyText
+let D;   // esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage, kb, loadTypes, systemName, typeName, fetchESI, copyText, nearest（killboard.js 的 nearestOf）
 const IGNORE_KEY = 'eve-local-ignore-v1';
 const MAX = 1000;
 const S = { text: '', mode: '', pilots: [], orgs: new Map(), scan: null, status: '', sort: 'threat', ignore: new Set(), busy: false, at: null, box: null };
@@ -87,10 +90,14 @@ async function analyze(text) {
         for (const p of part) p.st = d.pilots?.[p.id] || null;
       }
       const ships = [...new Set(S.pilots.flatMap((p) => (p.st?.ships || []).map(([t]) => t)))];
-      if (ships.length) await D.loadTypes(ships);
+      if (ships.length) {
+        setStatus(`正在识别 ${ships.length} 种舰船的分组…`);
+        await Promise.all([D.loadTypes(ships.slice(0, 2000)), loadGroups(ships)]);
+      }
     }
     setStatus('');
     draw();
+    if (D.kb && D.nearest) locateLastKills();
   } catch (e) {
     setStatus('分析失败：' + e.message);
   } finally {
@@ -260,6 +267,76 @@ function scanHtml() {
       ${barList(st.others, (g) => `${scanTypeName(g.first)} · ${KIND_ZH[g.first.kind]}`, typeIcon)}</section>` : ''}`;
 }
 
+// ---------- 角色定位：按近 30 天参与击杀时开的船（舰船分组）----------
+// 每类占参与击杀次数 ≥ 25%（且至少 2 次）就标上，按占比排序最多标 2 个；其余战斗舰船都算「火力」
+const ROLES = [
+  ['tackle', '轻拦', [831, 541, 25, 1283]],                              // 截击舰、拦截舰（泡泡）、护卫舰、远征护卫舰
+  ['htackle', '重拦', [894]],                                            // 重型拦截巡洋舰
+  ['logi', '后勤', [832, 1527, 1538]],                                   // 后勤巡洋舰、后勤护卫舰、战力辅助舰
+  ['special', '特种', [830, 834, 833, 906, 898, 893]],                  // 隐形特勤舰、隐轰、侦察舰、黑隐、电子攻击舰
+  ['cap', '旗舰', [485, 547, 659, 30, 4594]],                           // 无畏、航母、超级航母、泰坦、枪骑兵无畏
+];
+// 不算进定位的：太空舱、穿梭机、新手护卫舰，以及采矿 / 工业 / 运输类
+const NOT_ROLE = new Set([29, 31, 237, 463, 543, 28, 380, 1202, 941, 883, 513, 902]);
+// 诱导力场发生器（普通、隐秘、工业）
+const CYNO = new Set([21096, 28646, 52694]);
+function roles(p) {
+  const s = p.st;
+  const out = [];
+  if (p.cyno) out.push({ key: 'cyno', label: '诱导', title: `最近 ${p.cyno[1]} 次损失里有 ${p.cyno[0]} 次装着诱导力场发生器` });
+  if (!s?.ships?.length) return out;
+  const c = typeCache();
+  const cnt = Object.fromEntries([...ROLES.map(([k]) => [k, 0]), ['dps', 0]]);
+  let total = 0;
+  for (const [t, n] of s.ships) {
+    const g = c.t[t];
+    if (!g || NOT_ROLE.has(g) || c.g[g]?.[1] !== 6) continue;
+    total += n;
+    cnt[ROLES.find(([, , gs]) => gs.includes(g))?.[0] || 'dps'] += n;
+  }
+  if (!total) return out;
+  const label = { ...Object.fromEntries(ROLES.map(([k, l]) => [k, l])), dps: '火力' };
+  return out.concat(Object.entries(cnt).filter(([, n]) => n >= 2 && n / total >= 0.25).sort((a, b) => b[1] - a[1]).slice(0, 2)
+    .map(([k, n]) => ({ key: k, label: label[k], title: `近 30 天参与的 ${total} 次击杀里 ${n} 次开${k === 'dps' ? '输出舰船' : label[k] + '类舰船'}（${Math.round((n / total) * 100)}%）` })));
+}
+
+// ---------- 最近一次击杀的位置（ESI 原文坐标 → 星系内最近的天体，killboard.js 的 nearestOf）与诱导检测 ----------
+// 按威胁排序先查前 LOC_MAX 名，6 个并发；查到一个刷新一次
+const LOC_MAX = 150;
+async function locateLastKills() {
+  const run = S.at;
+  const list = S.pilots.filter((p) => p.st?.last_kill || p.st?.recent_losses?.length).sort(SORTS.threat).slice(0, LOC_MAX);
+  let pending = 0;
+  const redraw = () => { if (!pending++) requestAnimationFrame(() => { pending = 0; if (S.at === run) draw(); }); };
+  await pool(list, 6, async (p) => {
+    // 最近 3 次损失有没有装诱导
+    const losses = p.st.recent_losses || [];
+    if (losses.length && !p.cyno) {
+      const kms = await Promise.all(losses.map(([id, hash]) => D.fetchESI(`/killmails/${id}/${hash}/`).catch(() => null)));
+      const n = kms.filter((k) => (k?.victim?.items || []).some((it) => CYNO.has(it.item_type_id))).length;
+      if (n) p.cyno = [n, kms.filter(Boolean).length];
+    }
+    if (p.st.last_kill && !p.loc) {
+      const [id, hash, , system] = p.st.last_kill;
+      try {
+        const km = await D.fetchESI(`/killmails/${id}/${hash}/`);
+        const near = await D.nearest({ ...km, killmail_id: id, solar_system_id: km.solar_system_id || system });
+        p.loc = near || { none: true };
+      } catch { p.loc = { none: true }; }
+    }
+    if (S.at === run) redraw();
+  });
+}
+function lastKillHtml(p) {
+  const lk = p.st?.last_kill;
+  if (!lk) return '—';
+  const [id, , at, system] = lk;
+  // 星系名已经单独显示：行星 / 卫星 / 小行星带去掉开头的星系名（「VI」写成「行星 VI」）
+  const where = (l) => { const sys = D.systemName(system); const rest = l.label.startsWith(sys + ' ') ? l.label.slice(sys.length + 1) : l.label; return l.kind === 'planet' && rest !== l.label ? '行星 ' + rest : rest; };
+  const near = p.loc && !p.loc.none ? `<small>距 ${esc(where(p.loc))}：${esc(p.loc.distance)}</small>` : p.loc ? '' : '<small class="text-muted">定位中…</small>';
+  return `<a class="kb-link" href="#kb/kill/${id}" title="${esc(ago(at))}">${esc(D.systemName(system))}</a>${near}`;
+}
+
 // 威胁程度：近 30 天击杀数、单挑数、击杀 / (击杀 + 损失)
 function threat(p) {
   const s = p.st;
@@ -274,8 +351,8 @@ function threat(p) {
 function tags(p) {
   const s = p.st, out = [];
   if (!s) return out;
+  for (const r of roles(p)) out.push([r.label, r.title, 'role-' + r.key]);
   if (s.solo >= 3 && s.solo >= s.kills * 0.2) out.push(['单挑', '近 30 天单人击杀 ' + s.solo + ' 次']);
-  if (s.gang >= 15) out.push(['抱团', '参与的击杀平均 ' + s.gang + ' 人']);
   if (s.kills + s.losses && s.losses >= s.kills * 2 && s.losses >= 3) out.push(['常被打', '近 30 天损失 ' + s.losses + ' 次']);
   return out;
 }
@@ -339,15 +416,16 @@ function draw() {
   const rows = shown.map((p) => {
     const t = threat(p), s = p.st;
     return `<tr>
-      <td class="ls-pilot"><img src="${D.eveImage('characters/' + p.id + '/portrait', 64)}" alt="" width="28" height="28" loading="lazy">
+      <td><div class="ls-pilot"><img src="${D.eveImage('characters/' + p.id + '/portrait', 64)}" alt="" width="28" height="28" loading="lazy">
         <span>${ST.badge(entOf(p))}${link('character', p.id, p.name)}
-        ${tags(p).map(([l, title]) => `<i class="ls-tag" title="${esc(title)}">${l}</i>`).join('')}</span></td>
+        ${tags(p).map(([l, title, cls]) => `<i class="ls-tag${cls ? ' ' + cls : ''}" title="${esc(title)}">${l}</i>`).join('')}</span></div></td>
       <td class="ls-org">${p.alliance ? `<span title="联盟">${esc(orgName(p.alliance))}</span>` : ''}<small>${esc(orgName(p.corp))}</small></td>
       ${D.kb ? `<td><span class="ls-threat ${t.level}">${t.label}</span></td>
       <td class="num">${s ? s.kills : '—'}</td><td class="num">${s ? s.losses : '—'}</td>
       <td class="num ls-hide-sm">${s && s.kills + s.losses ? Math.round(t.ratio * 100) + '%' : '—'}</td>
       <td class="num ls-hide-sm">${s?.gang ?? '—'}</td>
-      <td class="ls-ships ls-hide-sm">${(s?.ships || []).map(([id, n]) => `<img src="https://images.evetech.net/types/${id}/icon?size=32" alt="" width="22" height="22" title="${esc(D.typeName(id))} × ${n}" loading="lazy">`).join('')}</td>
+      <td class="ls-ships ls-hide-sm">${(s?.ships || []).slice(0, 3).map(([id, n]) => `<img src="https://images.evetech.net/types/${id}/icon?size=32" alt="" width="22" height="22" title="${esc(D.typeName(id))} × ${n}" loading="lazy">`).join('')}</td>
+      <td class="ls-lastkill">${lastKillHtml(p)}</td>
       <td class="ls-hide-md">${(s?.systems || []).slice(0, 2).map(([id]) => esc(D.systemName(id))).join('、') || '—'}</td>
       <td class="num">${s ? ago(s.last) : '—'}</td>` : ''}</tr>`;
   }).join('');
@@ -378,7 +456,7 @@ function draw() {
     </section>
     <section class="kb-section ls-card">
       <div class="table-scroll"><table class="data-table ls-table"><thead><tr>${th('name', '角色')}${th('org', '联盟 / 军团')}
-        ${D.kb ? `${th('threat', '威胁')}${th('kills', '击杀', 'num')}${th('losses', '损失', 'num')}<th class="num ls-hide-sm" title="击杀 ÷（击杀 + 损失）">击杀占比</th><th class="num ls-hide-sm" title="参与的击杀平均有多少名玩家">平均同伙</th><th class="ls-hide-sm">常用船</th><th class="ls-hide-md">常去星系</th>${th('last', '最近活跃', 'num')}` : ''}
+        ${D.kb ? `${th('threat', '威胁')}${th('kills', '击杀', 'num')}${th('losses', '损失', 'num')}<th class="num ls-hide-sm" title="击杀 ÷（击杀 + 损失）">击杀占比</th><th class="num ls-hide-sm" title="参与的击杀平均有多少名玩家">平均同伙</th><th class="ls-hide-sm">常用船</th><th title="最近一次参与击杀的星系，和击杀位置离最近天体（星门、空间站、行星等）的距离">最近击杀位置</th><th class="ls-hide-md">常去星系</th>${th('last', '最近活跃', 'num')}` : ''}
       </tr></thead><tbody>${rows}</tbody></table></div>
       ${D.kb ? '<p class="ka-note" title="威胁按击杀数、击杀占比与单挑次数估算">近 30 天击杀统计，威胁仅供参考</p>' : ''}
     </section>` : ''}`;

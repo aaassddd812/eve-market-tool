@@ -2480,7 +2480,7 @@ class Api:
             return result
         return self.cached(("entity", kind, eid, days), run)
 
-    # GET /api/v1/pilots?ids=1,2,3：本地频道名单分析，每名角色近 30 天的击杀 / 损失、单挑、平均同伙人数、常用船与常去星系
+    # GET /api/v1/pilots?ids=1,2,3：本地频道名单分析，每名角色近 30 天的击杀 / 损失、单挑、平均同伙人数、开过的船、常去星系与最近一次击杀
     def pilots(self, q):
         ids = list(dict.fromkeys(int(x) for x in str(q.get("ids", "")).split(",") if x.strip().isdigit()))
         if not ids:
@@ -2504,14 +2504,22 @@ class Api:
                 f"SELECT COUNT(*), COALESCE(SUM(value),0), COALESCE(SUM(solo),0), AVG(attackers), MAX(time) FROM killmails WHERE time >= ? AND id IN ({sub})",
                 (since, cid, since)).fetchone()
             losses, lost, last_l = c.execute("SELECT COUNT(*), COALESCE(SUM(value),0), MAX(time) FROM killmails WHERE v_char=? AND time >= ?", (cid, since)).fetchone()
-            ships = c.execute("SELECT ship, COUNT(DISTINCT km) n FROM attackers WHERE char=? AND time >= ? AND ship IS NOT NULL GROUP BY ship ORDER BY n DESC LIMIT 3",
+            # 全部开过的船（前端按舰船分组判断角色定位：诱导 / 轻拦 / 重拦 / 火力 / 后勤 / 特种；前 3 种显示为常用船）
+            ships = c.execute("SELECT ship, COUNT(DISTINCT km) n FROM attackers WHERE char=? AND time >= ? AND ship IS NOT NULL GROUP BY ship ORDER BY n DESC LIMIT 40",
                               (cid, since)).fetchall()
+            # 最近一次参与的击杀（前端用 ESI 原文里的坐标找最近天体：「星系 · 距星门 127 km」）
+            lk = c.execute("SELECT k.id, k.hash, k.time, k.system_id FROM attackers a JOIN killmails k ON k.id = a.km WHERE a.char=? AND a.time >= ? ORDER BY a.time DESC LIMIT 1",
+                           (cid, since)).fetchone()
             systems = c.execute(f"SELECT system_id, COUNT(*) n FROM killmails WHERE time >= ? AND (v_char=? OR id IN ({sub})) GROUP BY system_id ORDER BY n DESC LIMIT 3",
                                 (since, cid, cid, since)).fetchall()
+            # 最近 3 次损失（前端读 ESI 原文看装没装诱导力场发生器，判断是不是开诱导的）
+            lr = c.execute("SELECT id, hash FROM killmails WHERE v_char=? AND time >= ? AND hash IS NOT NULL ORDER BY time DESC LIMIT 3", (cid, since)).fetchall()
             last = max(last_k or 0, last_l or 0)
             row = {"kills": kills, "losses": losses, "destroyed": round(destroyed), "lost": round(lost), "solo": solo,
                    "gang": round(gang, 1) if gang else None, "last": iso(last) if last else None,
-                   "ships": [[s, n] for s, n in ships], "systems": [[s, n] for s, n in systems]}
+                   "ships": [[s, n] for s, n in ships], "systems": [[s, n] for s, n in systems],
+                   "last_kill": [lk[0], lk[1], iso(lk[2]), lk[3]] if lk and lk[1] else None,
+                   "recent_losses": [[i, h] for i, h in lr]}
             out[cid] = row
             with self.pilot_lock:
                 self.pilot_cache[cid] = (now, row)

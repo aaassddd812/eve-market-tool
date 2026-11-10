@@ -353,7 +353,7 @@ function nearestLabel(n, sysName) {
   if (n.kind === 'sun') return '恒星';
   return rest ? `${sysName} ${rest}` : n.name;
 }
-function nearestOf(kill) {
+export function nearestOf(kill) {
   const p = kill.victim.position;
   if (!p) return Promise.resolve(null);
   const id = kill.killmail_id;
@@ -364,7 +364,7 @@ function nearestOf(kill) {
       const n = d?.nearest;
       if (!n) return null;
       const label = nearestLabel(n, systemLabel(kill.solar_system_id).name);
-      return { label, distance: fmtDistance(n.distance), text: `距 ${label}：${fmtDistance(n.distance)}` };
+      return { label, kind: n.kind, rest: n.rest || '', distance: fmtDistance(n.distance), text: `距 ${label}：${fmtDistance(n.distance)}` };
     }).catch(() => null));
   }
   return nearCache.get(id);

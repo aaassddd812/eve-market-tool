@@ -965,6 +965,9 @@ function useType(id) {
 }
 
 const MOBILE = () => window.matchMedia('(max-width: 768px)').matches;
+// 装备显示方式：list（按槽位分组的列表）/ radial（圆盘：舰船图在中间，槽位绕成一圈，和游戏装配窗口相似）
+const VIEW_KEY = 'eve-fit-view';
+const fitView = () => { try { return localStorage.getItem(VIEW_KEY) === 'radial' ? 'radial' : 'list'; } catch { return 'list'; } };
 
 // ---------- 每艘船的草稿 ----------
 // 换船、打开已保存的装配、新建、导入前，把当前装配记为这艘船的草稿（只记有装备且与已保存版本不同的）；
@@ -1166,6 +1169,15 @@ function addImplant(t) {
   recompute();
 }
 
+// 空装配页的热门舰船宫格（舰船渲染大图），点一下开始装配
+const HOT_SHIPS = [32880, 587, 593, 16240, 626, 621, 24698, 17715, 12005, 638, 645, 29984];
+function shipGrid() {
+  const ships = HOT_SHIPS.map((id) => type(id)).filter(Boolean);
+  if (!ships.length) return '';
+  return `<section class="fit-hot"><h4>热门舰船</h4><div class="fit-hot-grid">${ships.map((t) => `<button type="button" class="fit-hot-card" data-fit-pick-ship="${t.id}">
+      <img src="${IMG(t.id, 'render', 256)}" alt="" width="256" height="256" loading="lazy" draggable="false"><span>${app.esc(t.name)}</span></button>`).join('')}</div></section>`;
+}
+
 // ---------- 中间：装配 ----------
 function renderFit() {
   const box = $('fitMain');
@@ -1177,8 +1189,9 @@ function renderFit() {
       <p class="mobile-only"><button class="btn btn-primary drawer-open-btn" data-open-drawer>打开舰船列表</button></p>
       <p class="fit-empty-tools"><button class="btn btn-ghost" data-fit-sim>战场模拟</button></p>
       <p>也可以 <button class="link-btn" data-fit-import>导入 EFT 文本</button>${app.hasEsiToken() ? '、<button class="link-btn" data-fit-esi-list>读取游戏内装配</button>、<button class="link-btn" data-fit-cur-ship>导入当前舰船</button>' : ''}${savedFits().length ? ` 或打开 <select class="plain-select" data-fit-open><option value="">我的装配…</option>${savedFits().map((f) => `<option value="${f.id}">${app.esc(f.name || type(f.ship)?.name || '未命名')}</option>`).join('')}</select>` : ''}</p>
+      ${shipGrid()}
     </div>`;
-    if (MOBILE()) app.openDrawer?.();
+    if (MOBILE() && !shipGrid()) app.openDrawer?.();   // 有热门舰船宫格时不自动弹出列表，直接点宫格
     return;
   }
   const shipType = type(F.fit.ship);
@@ -1240,13 +1253,16 @@ function renderFit() {
         <button data-fit-skill="max" class="${F.skillMode === 'max' ? 'active' : ''}">全部 5 级</button>
         <button data-fit-skill="esi" class="${F.skillMode === 'esi' ? 'active' : ''}"${bound ? '' : ' disabled title="需要先绑定 ESI"'}>${F.esi && F.skillMode === 'esi' ? app.esc(F.esi.name) + ' 的技能' : '按 ESI 角色'}</button>
       </div>
+      <div class="segmented fit-view-seg" role="group" aria-label="装备显示方式">
+        <button data-fit-view="list" class="${fitView() === 'list' ? 'active' : ''}">列表</button>
+        <button data-fit-view="radial" class="${fitView() === 'radial' ? 'active' : ''}">圆盘</button>
+      </div>
       <span class="fit-bulk"><button class="link-btn" data-fit-all="on" title="主动装备全部激活">全部开启</button><button class="link-btn" data-fit-all="off" title="主动装备全部停用">全部关闭</button><button class="link-btn danger" data-fit-clear title="清空全部装备、弹药和无人机">清空装备</button></span>
       ${missing.length ? skillPop(missing, `缺少 ${missing.length} 项技能`, '缺少的技能')
         : notFive.length ? skillPop(notFive, `还有 ${notFive.length} 项没到 5 级`, `${F.esi.name} 还没到 5 级的技能`)
         : F.skillMode === 'esi' && F.esi ? '<span class="fit-ok">技能满足</span>' : impact ? '<span class="fit-ok">影响属性的技能都已 5 级</span>' : ''}
     </div>
-    ${problemsHtml(st.problems)}
-    ${slotRows}
+    ${fitView() === 'radial' ? radialHtml(shipType, st) : problemsHtml(st.problems) + slotRows}
     ${dronesHtml()}
     ${implantsHtml(bound)}
     ${cloudHtml()}
@@ -1406,6 +1422,138 @@ function moduleRow(slot, index, m, extra) {
   </div>`;
 }
 
+// 圆盘视图（和游戏装配窗口相似）：舰船渲染图铺满圆心，外面一圈半透明黑色环带，每个槽位是环带上的一块扇形；高槽在上、中槽在右、低槽在下、改装件和子系统在左。在线的装备扇形是绿色，激活更亮，超载橙色，离线灰色。
+// 最外一圈细黑环上：左边 CPU、右边能量栅格、下边校准值的刻度条，右上 / 左上的小圆点是发射器 / 炮台安装座（实心 = 已用）。
+// 装备和弹药图标都正着放（不跟着圆周转，否则右边横着、下面倒着）。整个圆盘是一个 SVG；槽位是 <g data-fit-mod / data-fit-empty>，点击、拖放沿用列表的逻辑（点装备选中，点空槽在左侧选装备）。
+// 选中的装备在圆盘下面显示完整的一行（状态、超载、弹药、突变、移除）。超限警告也放在圆盘下面，出现 / 消失时圆盘不会上下跳。
+const RG = { c: 256, ship: 226, band: 196, bandW: 50, tileIn: 173, tileOut: 219, outer: 239, step: 11.5, tile: 10.4 };
+const RADIAL_START = { high: null, mid: -38, low: 52, rig: 148, sub: 190 };   // 各组第一个槽位的起始角度（顺时针，3 点钟为 0）；高槽以正上方居中
+const rad = (a) => a * Math.PI / 180;
+const pt = (r, a) => [RG.c + r * Math.cos(rad(a)), RG.c + r * Math.sin(rad(a))];
+const f2 = (v) => v.toFixed(2);
+function sector(r0, r1, a0, a1) {
+  const [x0, y0] = pt(r1, a0), [x1, y1] = pt(r1, a1), [x2, y2] = pt(r0, a1), [x3, y3] = pt(r0, a0);
+  return `M${f2(x0)} ${f2(y0)}A${r1} ${r1} 0 0 1 ${f2(x1)} ${f2(y1)}L${f2(x2)} ${f2(y2)}A${r0} ${r0} 0 0 0 ${f2(x3)} ${f2(y3)}Z`;
+}
+function arcPath(r, a0, a1) {
+  const [x0, y0] = pt(r, a0), [x1, y1] = pt(r, a1);
+  return `M${f2(x0)} ${f2(y0)}A${r} ${r} 0 ${Math.abs(a1 - a0) > 180 ? 1 : 0} ${a1 > a0 ? 1 : 0} ${f2(x1)} ${f2(y1)}`;
+}
+// 外环上的资源刻度条：从 a0 填到 a1 方向，按比例
+function gauge(kind, label, v, a0, a1, unit) {
+  const pct = v.total ? Math.min(1, v.used / v.total) : (v.used ? 1 : 0);
+  const over = v.used > v.total + 1e-6;
+  const tip = `${label} ${fmt(v.used, 1)} / ${fmt(v.total, 1)}${unit}`;
+  return `<g class="fr-gauge fr-g-${kind}${over ? ' is-over' : ''}"><title>${tip}</title>
+    <path class="fr-g-base" d="${arcPath(RG.outer, a0, a1)}"/>
+    ${pct > 0 ? `<path class="fr-g-fill" d="${arcPath(RG.outer, a0, a0 + (a1 - a0) * pct)}"/>` : ''}</g>`;
+}
+function hardpoints(kind, label, v, a0, dir) {
+  if (!v.total && !v.used) return '';
+  const n = Math.max(v.total, v.used);
+  let dots = '';
+  for (let i = 0; i < n; i++) {
+    const [x, y] = pt(RG.outer, a0 + dir * i * 3.6);
+    dots += `<circle cx="${f2(x)}" cy="${f2(y)}" r="3.4" class="${i < v.used ? (i >= v.total ? 'is-over' : 'is-used') : ''}"/>`;
+  }
+  return `<g class="fr-hp fr-hp-${kind}"><title>${label} ${v.used} / ${fmt(v.total)}</title>${dots}</g>`;
+}
+function radialHtml(shipType, st) {
+  const r = st.resources;
+  const tiles = [];
+  for (const s of FE.SLOTS) {
+    const total = st.slots[s] || 0;
+    const list = F.fit.slots[s];
+    const n = Math.max(total, list.length);
+    if (!n) continue;
+    const start = RADIAL_START[s] ?? -90 - (n * RG.step) / 2;
+    for (let i = 0; i < n; i++) tiles.push(radialSlot(s, i, list[i], i >= total, start + i * RG.step));
+  }
+  const sel = F.selected && F.fit.slots[F.selected.slot]?.[F.selected.index] ? F.selected : null;
+  return `<section class="fit-radial-wrap">
+    <div class="fit-radial">
+      <svg viewBox="0 0 512 512" class="fr-svg">
+        <defs>
+          <clipPath id="frShipClip"><circle cx="256" cy="256" r="${RG.ship}"/></clipPath>
+          <radialGradient id="frVignette" cx="50%" cy="50%" r="50%"><stop offset="72%" stop-color="#000" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="0.55"/></radialGradient>
+        </defs>
+        <image href="${IMG(shipType.id, 'render', 512)}" x="${256 - RG.ship}" y="${256 - RG.ship}" width="${RG.ship * 2}" height="${RG.ship * 2}" clip-path="url(#frShipClip)" preserveAspectRatio="xMidYMid slice"/>
+        <circle cx="256" cy="256" r="${RG.ship}" fill="url(#frVignette)"/>
+        <circle cx="256" cy="256" r="${RG.band}" class="fr-band" stroke-width="${RG.bandW}"/>
+        <circle cx="256" cy="256" r="${RG.outer}" class="fr-outer"/>
+        ${gauge('cpu', 'CPU', r.cpu, 140, 220, ' tf')}
+        ${gauge('power', '能量栅格', r.power, 40, -40, ' MW')}
+        ${r.calibration.total ? gauge('cal', '校准值', r.calibration, 112, 68, '') : ''}
+        ${hardpoints('launcher', '发射器安装座', r.launchers, -50, 1)}
+        ${hardpoints('turret', '炮台安装座', r.turrets, -130, -1)}
+        ${tiles.join('')}
+      </svg>
+    </div>
+    <div class="fit-radial-legend"><span><i class="lg-cpu"></i>CPU ${fmt(r.cpu.used, 1)} / ${fmt(r.cpu.total, 1)}</span><span><i class="lg-power"></i>能量栅格 ${fmt(r.power.used, 1)} / ${fmt(r.power.total, 1)}</span>${r.calibration.total ? `<span><i class="lg-cal"></i>校准值 ${fmt(r.calibration.used, 0)} / ${fmt(r.calibration.total, 0)}</span>` : ''}</div>
+    ${problemsHtml(st.problems)}
+    <div class="fit-radial-sel">${sel ? moduleRow(sel.slot, sel.index, F.fit.slots[sel.slot][sel.index], sel.index >= (st.slots[sel.slot] || 0)) : `<p class="fit-radial-tip">${MOBILE() ? '点圆盘上的装备调整状态、弹药或移除；点空槽添加装备' : '点圆盘上的装备调整状态、弹药或移除；点空槽后在左侧选装备，也可以直接拖到槽位上'}</p>`}</div>
+  </section>`;
+}
+function radialSlot(slot, index, m, extra, a0) {
+  const a1 = a0 + RG.tile, mid = (a0 + a1) / 2;
+  const d = sector(RG.tileIn, RG.tileOut, a0, a1);
+  const target = F.target && F.target.slot === slot && F.target.index === index;
+  if (!m) return `<g class="fr-slot is-empty${extra ? ' is-error' : ''}${target ? ' is-target' : ''}" data-fit-empty="${slot}" data-fit-idx="${index}" role="button" tabindex="0"><title>${extra ? '超出槽位' : '空' + FE.SLOT_NAME[slot]}</title><path class="fr-tile" d="${d}"/></g>`;
+  const t = type(m.type);
+  const item = F.calc.modules.find((q) => q.slot === slot && q.index === index);
+  const err = extra || F.stats.problems.some((q) => q.module === item && q.level === 'error');
+  const sel = F.selected && F.selected.slot === slot && F.selected.index === index;
+  const ct = m.charge && type(m.charge);
+  const [ix, iy] = pt((RG.tileIn + RG.tileOut) / 2 + 1, mid);
+  const S = 40;
+  let charge = '';
+  if (ct) {
+    const [cx, cy] = pt(RG.tileIn - 15, mid);
+    charge = `<image href="${IMG(ct.id)}" x="${f2(cx - 10)}" y="${f2(cy - 10)}" width="20" height="20" class="fr-charge"/>`;
+  }
+  // 和原版一样：被动装备在格子四角画小三角，主动装备在格子内沿画一条梯形；颜色随状态（灰 = 在线，绿 = 激活，红 = 超载，离线整体变暗）
+  const marks = t.activatable ? activeBar(a0, a1) : passiveMarks(a0, a1);
+  const st = m.state === 'overload' ? 'overload' : m.state === 'active' ? 'active' : m.state === 'offline' ? 'offline' : 'online';
+  return `<g class="fr-slot fr-mod is-${st}${sel ? ' is-selected' : ''}${err ? ' is-error' : ''}" data-fit-mod="${slot}:${index}" role="button" tabindex="0"><title>${app.esc(t.name)}${ct ? ' · ' + app.esc(ct.name) : ''}</title>
+    <path class="fr-tile" d="${d}"/>${marks}
+    <image class="fr-icon" href="${IMG(t.id, 'icon', 64)}" x="${f2(ix - S / 2)}" y="${f2(iy - S / 2)}" width="${S}" height="${S}"/>${charge}${radialActs(slot, index, m, t, a0, a1)}</g>`;
+}
+const poly = (pts) => `M${pts.map(([x, y]) => `${f2(x)} ${f2(y)}`).join('L')}Z`;
+// 主动装备：内沿中间一条梯形（底边贴着内弧）
+function activeBar(a0, a1) {
+  const r0 = RG.tileIn + 1.5, r1 = RG.tileIn + 6;
+  return `<path class="fr-mark" d="${poly([pt(r0, a0 + 1.3), pt(r1, a0 + 2.7), pt(r1, a1 - 2.7), pt(r0, a1 - 1.3)])}"/>`;
+}
+// 被动装备：四个角各一个小三角
+function passiveMarks(a0, a1) {
+  const dIn = 1.8, len = 5.5;
+  const tri = (r, dir, a, side) => {   // r：所在弧的半径，dir：往格子里的方向（+1 向外 / -1 向内），a：角所在的边，side：沿弧往格子里的方向
+    const rr = r + dir * dIn, aa = a + side * (dIn / r) * 57.3;
+    return poly([pt(rr, aa), pt(rr, aa + side * (len / r) * 57.3), pt(rr + dir * len * 0.55, aa)]);
+  };
+  return `<path class="fr-mark" d="${tri(RG.tileOut, -1, a0, 1)}${tri(RG.tileOut, -1, a1, -1)}${tri(RG.tileIn, 1, a0, 1)}${tri(RG.tileIn, 1, a1, -1)}"/>`;
+}
+// 悬停（或选中）时，从槽位往圆心方向竖排浮出的小图标（和原版圆盘一致）：卸下装备、卸下弹药（有弹药时）、离线 / 上线。
+// 图标始终正立；点击沿用列表的 data-fit-remove / data-fit-uncharge，离线切换用 data-fit-offline
+const RA_ICON = {
+  remove: '<path d="M-0.9 -2.9A4.4 4.4 0 1 1 -0.9 2.9M3.2 0H-5.6M-3.6 -2L-5.6 0L-3.6 2" class="fr-act-line"/>',
+  uncharge: '<path d="M-0.9 -2.9A4.4 4.4 0 1 1 -0.9 2.9M-1.6 0H-5.6M-3.6 -2L-5.6 0L-3.6 2" class="fr-act-line"/><path d="M2.1 2.1V-0.5Q2.1 -2.4 2.9 -2.9Q3.7 -2.4 3.7 -0.5V2.1Z" class="fr-act-fill"/>',
+  offline: '<path d="M0 -5.2V-0.6M-2.9 -3.6A4.6 4.6 0 1 0 2.9 -3.6" class="fr-act-line fr-act-pw"/>',
+};
+function radialActs(slot, index, m, t, a0, a1) {
+  const ref = `${slot}:${index}`;
+  const acts = [['remove', '卸下装备']];
+  if (m.charge) acts.push(['uncharge', '卸下弹药']);
+  if (slot !== 'rig' && slot !== 'sub') acts.push(['offline', m.state === 'offline' ? '上线' : '离线']);
+  const mid = (a0 + a1) / 2;
+  // 透明的扇形垫在图标列下面，鼠标从槽位移到图标上时不会中途丢掉悬停
+  const pad = `<path class="fr-act-pad" d="${sector(RG.tileIn - 16 - (acts.length - 1) * 13, RG.tileIn + 1, a0, a1)}"/>`;
+  return `<g class="fr-acts">${pad}${acts.map(([k, label], i) => {
+    const [x, y] = pt(RG.tileIn - 9 - i * 13, mid);
+    return `<g class="fr-act" data-fit-${k}="${ref}" transform="translate(${f2(x)} ${f2(y)})"><title>${label}</title><circle r="6.6" class="fr-act-hit"/>${RA_ICON[k]}</g>`;
+  }).join('')}</g>`;
+}
+
 function shortName(name) {
   return name.length > 14 ? name.slice(0, 13) + '…' : name;
 }
@@ -1428,10 +1576,11 @@ async function modTipHtml(ref) {
   const { slot, index } = parseRef(ref);
   const m = F.fit.slots[slot]?.[index];
   const t = m && type(m.type);
-  if (!t?.activatable || (m.state !== 'active' && m.state !== 'overload')) return '';
+  if (!t || (t.activatable && m.state !== 'active' && m.state !== 'overload')) return '';
   const item = F.calc.modules.find((x) => x.slot === slot && x.index === index);
   if (!item) return '';
   const names = await dogmaNames();
+  if (!t.activatable) return passiveTipHtml(t, m, item, names);
   const rows = [];
   const w = F.stats.weapons.find((x) => x.module === item);
   if (w) rows.push(['DPS', w.dps.toFixed(1)], ['齐射伤害', app.formatNumber(Math.round(w.volley))]);
@@ -1455,6 +1604,24 @@ async function modTipHtml(ref) {
   }
   if (!rows.length) return '';
   return `<div class="fit-mtip-head"><img src="${IMG(t.id)}" alt="" width="24" height="24"><b>${app.esc(t.name)}</b>${m.state === 'overload' ? '<em>超载</em>' : ''}</div>
+    <dl>${rows.map(([k, v, cls]) => `<dt>${app.esc(k)}</dt><dd${cls ? ` class="${cls}"` : ''}>${v}</dd>`).join('')}</dl>`;
+}
+// 被动装备（伤害控制以外的扩展器、伤害增幅、改装件等）的悬浮窗：列出它自己的加成属性（已算技能），跳过装配、元等级这类无关属性
+const PASSIVE_SKIP = new Set([...INFO_GROUPS[0][1], ...SKIP_INFO, 9, 422, 1692, 1768, 1211, 1212, 1271, 1544, 1298, 1299, 1300, 1301, 1872, 1879, 1880, 1881, 2113]);
+function passiveTipHtml(t, m, item, names) {
+  const rows = [];
+  for (const [a, base] of t.attrs) {
+    const n = names.attrs[a];
+    if (!n || !base || PASSIVE_SKIP.has(a) || [115, 116, 119, 129, 136, 137, 140, 142].includes(n[1])) continue;
+    const v = item.attr(a) ?? base;
+    const [label, unit, highGood] = n;
+    const better = base < 0 ? Math.abs(v) > Math.abs(base) : highGood ? v > base : v < base;
+    const cls = Math.abs(v - base) <= Math.abs(base) * 1e-6 ? '' : better ? 'is-up' : 'is-down';
+    rows.push([label, unit === 1 ? dist(v) : infoValue(a, v, unit, names.units), cls]);
+    if (rows.length >= 10) break;
+  }
+  if (!rows.length) return '';
+  return `<div class="fit-mtip-head"><img src="${IMG(t.id)}" alt="" width="24" height="24"><b>${app.esc(t.name)}</b>${m.state === 'offline' ? '<em>离线</em>' : ''}</div>
     <dl>${rows.map(([k, v, cls]) => `<dt>${app.esc(k)}</dt><dd${cls ? ` class="${cls}"` : ''}>${v}</dd>`).join('')}</dl>`;
 }
 function initModTip() {
@@ -1763,6 +1930,13 @@ async function onMainClick(e) {
     recompute();
     return;
   }
+  if ((x = el('[data-fit-offline]'))) {
+    const { slot, index } = parseRef(x.dataset.fitOffline);
+    const m = F.fit.slots[slot][index];
+    m.state = m.state === 'offline' ? defaultState(type(m.type)) : 'offline';
+    recompute();
+    return;
+  }
   if ((x = el('[data-fit-overload]'))) {
     const { slot, index } = parseRef(x.dataset.fitOverload);
     const m = F.fit.slots[slot][index];
@@ -1798,6 +1972,7 @@ async function onMainClick(e) {
     }).catch((e) => app.showToast('突变质体数据加载失败：' + e.message, 'error'));
     return;
   }
+  if ((x = el('[data-fit-pick-ship]'))) { setShip(Number(x.dataset.fitPickShip)); return; }
   if ((x = el('[data-fit-uncharge]'))) {
     const { slot, index } = parseRef(x.dataset.fitUncharge);
     F.fit.slots[slot][index].charge = null;
@@ -1856,6 +2031,11 @@ async function onMainClick(e) {
   if ((x = el('[data-fit-env-more]'))) { envOpen.add(Number(x.dataset.fitEnvMore)); recompute(); return; }
   if ((x = el('[data-fit-cloud-remove]'))) { saveCloud(FE.cloudInfo(F.data, F.fit.ship).map((c) => c.ship.id).filter((id) => id !== Number(x.dataset.fitCloudRemove))); return; }
   if ((x = el('[data-fit-implant-remove]'))) { F.fit.implants = F.fit.implants.filter((id) => id !== Number(x.dataset.fitImplantRemove)); recompute(); return; }
+  if ((x = el('[data-fit-view]'))) {
+    try { localStorage.setItem(VIEW_KEY, x.dataset.fitView); } catch { /* 忽略 */ }
+    renderFit();
+    return;
+  }
   if ((x = el('[data-fit-skill]'))) {
     const mode = x.dataset.fitSkill;
     if (mode === F.skillMode) return;
