@@ -535,7 +535,7 @@ function reprocRow(x, i) {
   const cls = x.unit > 0 ? 'up' : 'down';
   return `<tr data-hr-open="${x.id}"${x.off ? ` class="hr-off" title="不符合条件：${esc(x.miss)} · 点击查看物品详情"` : ' title="查看物品详情"'}>
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}</small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${mineTag(x.id)}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td>${esc(hubLabel(x.hub))}</td>
       <td class="num pi-hide-sm">${px(x.cost)}</td>
@@ -583,7 +583,7 @@ function relistRow(x, i) {
   const cls = x.unit > 0 ? 'up' : 'down';
   return `<tr data-hr-open="${x.id}" data-hr-mode-open="bs"${x.off ? ` class="hr-off" title="不符合条件：${esc(x.miss)} · 点击查看物品详情"` : ' title="查看物品详情"'}>
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)} <b class="hr-tag ${c}" title="${esc(tip)}">${bias}</b></small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${mineTag(x.id)} <b class="hr-tag ${c}" title="${esc(tip)}">${bias}</b></small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td>${esc(hubLabel(x.hub))}</td>
       <td class="num pi-hide-sm">${px(x.buy)}</td>
@@ -664,7 +664,7 @@ function consumeRow(x, i) {
   const markup = x.st && x.cheap ? x.st.price / x.cheap.price - 1 : null;
   return `<tr data-hr-open="${x.id}" title="查看物品详情">
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${x.trend >= RISING ? ' <b class="hr-tag up" title="近 7 天日均成交量比 30 天高 30% 以上">成交上涨</b>' : ''}</small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${mineTag(x.id)}${x.trend >= RISING ? ' <b class="hr-tag up" title="近 7 天日均成交量比 30 天高 30% 以上">成交上涨</b>' : ''}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td class="num up" title="${x.lossIsk ? `日成交额 ${formatISK(x.turnover)} + 被击毁折合每天 ${formatISK(x.lossIsk)}` : '日成交额合计'}">${formatISK(x.use)}</td>
       <td class="num pi-hide-sm">${formatISK(x.turnover)}</td>
@@ -759,7 +759,7 @@ function demandRow(x, i) {
   const trend = x.trend == null ? '—' : `<span class="${x.trend >= RISING ? 'up' : x.trend <= 1 / RISING ? 'down' : ''}">${x.trend >= 1 ? '+' : ''}${Math.round((x.trend - 1) * 100)}%</span>`;
   return `<tr data-hr-open="${x.id}" data-hr-mode-open="${r.mode}"${x.off ? ` class="hr-off" title="不符合条件：${esc(r.miss)} · 点击查看物品详情"` : ' title="查看物品详情"'}>
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${tags.map(([t, tip, c]) => ` <b class="hr-tag ${c}" title="${esc(tip)}">${t}</b>`).join('')}</small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${mineTag(x.id)}${tags.map(([t, tip, c]) => ` <b class="hr-tag ${c}" title="${esc(tip)}">${t}</b>`).join('')}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td title="进货价 ${px(r.buyAt)} · 卖出价 ${px(r.sellAt)}${x.soldOut ? '（估）' : ''}">${how}</td>
       <td class="num ${r.perDay ? 'up' : ''}">${r.perDay ? formatISK(r.perDay) : '—'}</td>
@@ -830,6 +830,33 @@ function qtyCell(r) {
   const c = capOf(r);
   return c ? `<span title="挂单那一侧没有成交量，最多按直接成交那一侧的订单深度">≤ ${formatNumber(c)}</span>` : '—';
 }
+// 我的挂单（已绑定 ESI、有订单权限时）：物品名后标「我的订单」，不用切回游戏看这个物品挂没挂过单；一分钟内不重读
+const MINE = { map: new Map(), at: 0, busy: false };
+async function loadMine() {
+  if (MINE.busy || Date.now() - MINE.at < 60e3 || !ctx.myOrders) return;
+  MINE.busy = true;
+  try {
+    const list = await ctx.myOrders();
+    const m = new Map();
+    for (const o of list || []) {
+      const e = m.get(o.type_id) || { buy: 0, sell: 0 };
+      if (o.is_buy_order) e.buy++; else e.sell++;
+      m.set(o.type_id, e);
+    }
+    const key = (x) => JSON.stringify([...x].sort((a, b) => a[0] - b[0]));
+    const changed = key(m) !== key(MINE.map);
+    MINE.map = m;
+    MINE.at = Date.now();
+    if (changed && S.box?.isConnected) render(S.box);
+  } catch { /* 读不到就不标 */ } finally { MINE.busy = false; }
+}
+function mineTag(id) {
+  const e = MINE.map.get(id);
+  if (!e) return '';
+  const tip = '你在这个物品上有' + [e.sell ? `卖单 ${e.sell} 张` : '', e.buy ? `收单 ${e.buy} 张` : ''].filter(Boolean).join('、');
+  return ` <b class="hr-tag mine" title="${ctx.esc(tip)}">我的订单</b>`;
+}
+
 // 路线不符合哪个条件（符合时返回空串）
 function missOf(r, st) {
   if (r.unit <= 0) return '亏损';
@@ -968,7 +995,7 @@ function html(all0) {
     const cls = r.unit > 0 ? 'up' : 'down';
     return `<tr data-hr-open="${x.id}"${x.off ? ` class="hr-off" title="不符合条件：${esc(r.miss)} · 点击查看物品详情"` : ' title="查看物品详情"'}>
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
-      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${routeTags(r)}</small></span>
+      <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${mineTag(x.id)}${routeTags(r)}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
       <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}</td>
       <td class="num pi-hide-sm">${px(r.buyAt)}</td>
@@ -1215,6 +1242,7 @@ export async function showHubRank(box, side) {
   if (!S.data || S.data.loading) await load();
   else if (Date.now() - (S.at || 0) > 10 * 60e3) load(true).then(() => render(box));   // 预加载的结果放久了：先显示，后台换新（服务器 30 分钟汇总一次）
   render(box);
+  loadMine();
   // 建筑市场缓存 5 分钟，过期或勾选变了再读
   if (ctx.structs?.count() && (!S.smKey || Date.now() - Number(S.smKey.split('@')[1]) > 5 * 60e3)) loadStructs(box);
   if (F.custom.length && (!S.cm.length || S.cm.some((x) => Date.now() - (customCache.get(x.s.id)?.at || 0) > CUSTOM_TTL))) loadCustom(box);

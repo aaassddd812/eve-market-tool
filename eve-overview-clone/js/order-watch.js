@@ -19,9 +19,10 @@ import * as TF from './trade-fees.js?v=v6';
 import * as AP from './alert-push.js?v=v13';
 import { L } from './alert-mail.js?v=v8';
 
-let ctx;   // esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, typeName, locationName, resolveTypeNames, selectItem, store, serverKey, isActive, openPush
+let ctx;   // esc, formatISK, formatPrice, formatNumber, showToast, copyText, addToCart, fetchESI, fetchESIPaged, esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, typeName, locationName, resolveTypeNames, selectItem, store, serverKey, isActive, openPush
 const SET_KEY = 'eve-order-watch';
 const ICON_COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+const ICON_CART = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>';
 const STRUCT_SCOPE = 'esi-markets.structure_markets.v1';
 const HIST_SCOPE = 'esi-markets.read_character_orders.v1';
 const POLL = 5 * 60e3;
@@ -337,6 +338,7 @@ function draw(box) {
   }).join('');
   box.innerHTML = settingsHtml() + reportHtml(S.report) + `
     <div class="ow-sum"><span class="ow-state under">被压 ${cnt('under')}</span><span class="ow-state lead">领先 ${cnt('lead')}</span><span class="ow-state alone">只有我 ${cnt('alone')}</span>${cnt('unknown') ? `<span class="ow-state unknown">无法判断 ${cnt('unknown')}</span>` : ''}
+      ${cnt('under') ? `<button type="button" class="btn btn-ghost btn-sm" data-ow-under-cart title="被压订单的物品一键加入购物车，在购物车里复制到游戏，就不用来回切换看哪些被压了">${ICON_CART}被压的加入购物车</button>` : ''}
       <span class="text-muted" title="对手价再让一档（4 位有效数字）">点价格复制</span></div>
     <div class="table-scroll"><table class="pc-mini-table ow-table"><thead><tr><th>物品</th><th>方向</th><th class="pi-hide-sm">位置</th><th class="num">我的价格</th><th class="num" title="收单：同站最低卖价扣税费后，比每件成本（含已付中介费与改单费）；卖单：每件到手比平均收购成本">剩余利润</th><th class="num">对手最优</th><th>状态</th><th class="num">建议价</th><th class="num pi-hide-sm">已付费用</th><th class="num pi-hide-sm">剩余 / 总量</th></tr></thead><tbody>${body}</tbody></table></div>
     <p class="pi-note" title="卖单只和同一空间站 / 建筑的卖单比；收单还算上星系 / 星域范围的收单">玩家建筑订单需「建筑市场」权限</p>`;
@@ -348,6 +350,12 @@ export async function onClick(e, box) {
   if (copy) { ctx.copyText(copy.dataset.owCopy, '已复制建议价 ' + copy.dataset.owCopy); return true; }
   const nm = t.closest('[data-ow-name]');
   if (nm) { ctx.copyText(ctx.typeName(Number(nm.dataset.owName)), '已复制名称'); return true; }
+  if (t.closest('[data-ow-under-cart]')) {
+    // 被压的订单的物品（同一物品只加一次，每种 1 件）
+    const ids = [...new Set((S.rows || []).filter((r) => r.state === 'under').map((r) => r.o.type_id))];
+    if (ids.length) ctx.addToCart(ids.map((id) => ({ id, name: ctx.typeName(id), qty: 1 })));
+    return true;
+  }
   const cp = t.closest('[data-ow-cp]');
   if (cp) { ctx.copyText(cp.dataset.owCp, '已复制 ' + cp.dataset.owCp); return true; }
   if (t.closest('[data-ow-fees]')) { TF.openFeeDialog(); return true; }

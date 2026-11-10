@@ -5805,6 +5805,8 @@ td .sov-auto-tag { margin-left: 4px; }
 .ow-rep-sec ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 2px; }
 .ow-rep-sec .pill { line-height: 16px; padding: 0 5px; font-size: 0.6875rem; }
 .ow-sum { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; font-size: 0.8125rem; }
+.ow-sum .btn { gap: 5px; }
+.ow-sum .btn svg { width: 14px; height: 14px; }
 .ow-state { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 0.75rem; line-height: 20px; white-space: nowrap; background: var(--bg-tertiary); color: var(--text-secondary); }
 .ow-state.under { background: var(--sell-soft); color: var(--sell-color); }
 .ow-state.lead { background: var(--buy-soft); color: var(--buy-color); }
@@ -6323,6 +6325,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .hr-tag.up { color: var(--success, #16a34a); background: color-mix(in srgb, var(--success, #16a34a) 14%, transparent); }
 .hr-tag.warn { color: var(--warning); background: color-mix(in srgb, var(--warning) 16%, transparent); }
 .hr-tag.mid { color: var(--text-secondary); background: color-mix(in srgb, var(--text-secondary) 12%, transparent); }
+.hr-tag.mine { color: var(--accent-primary); background: var(--accent-soft); }
 
 /* ===== 舰队对战模拟 / 伤害图表（fit-sim.js、fit-graph.js）===== */
 .graph-content { max-width: 980px; height: auto; }

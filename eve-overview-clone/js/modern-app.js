@@ -2,7 +2,7 @@ import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17
 import * as CS from './cloud-sync.js?v=2';
 import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
-import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v42';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v43';
 import * as SM from './struct-markets.js?v=v8';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v20';
 import * as AH from './alert-host.js?v=v6';
@@ -108,10 +108,16 @@ function esc(text) {
 
 // 玩家写的游戏内文字（头衔、舰船名）：ESI 有时把舰船名返回成 Python 字面量（u'\u51c0\u5316…'），先还原；
 // 文字里的游戏标记照游戏里的样子显示：<color=0xAARRGGBB> / <color=#RRGGBB> 改文字颜色、<b> 加粗，其余标记去掉
+// 舰船名太长时 ESI 连字面量一起截断，结尾的引号可能没有（u'CS \u6e38\u51fb…），也照样还原
+function pyText(text) {
+  const t = String(text == null ? '' : text);
+  const lit = t.match(/^u(['"])([\s\S]*?)\1?$/);
+  return lit ? lit[2].replace(/\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\(['"\\])/g, (_, u, x, c) => (u || x ? String.fromCharCode(parseInt(u || x, 16)) : c)) : t;
+}
+// /characters/{id}/ship/ 的结果：舰船名先还原（装配页、倒卖规划、AI 助手、资产位置等都直接用 ship_name）
+const fixShip = (path, d) => (d && /\/ship\/(\?|$)/.test(path) && d.ship_name ? { ...d, ship_name: pyText(d.ship_name) } : d);
 function gameHtml(text) {
-  let t = String(text == null ? '' : text);
-  const lit = t.match(/^u(['"])([\s\S]*)\1$/);
-  if (lit) t = lit[2].replace(/\\u([0-9a-fA-F]{4})|\\x([0-9a-fA-F]{2})|\\(['"\\])/g, (_, u, x, c) => (u || x ? String.fromCharCode(parseInt(u || x, 16)) : c));
+  let t = pyText(text);
   let out = '', open = 0, bold = false;
   for (const part of t.split(/(<[^<>]*>)/)) {
     const tag = part.match(/^<\s*(\/?)\s*(\w+)\s*(?:=\s*["']?([^"'>\s]+))?[^>]*>$/);
@@ -770,7 +776,7 @@ function loadAiModule() {
       tokenInfo: () => state.esiToken || readEsiToken(),
       // 浏览器里绑定的全部角色（当前角色排第一）；按角色读 ESI
       accounts: () => allChars.list(),
-      accountFetch: (id, path) => (id === myCharacterId() ? esiAuthFetch(path) : allChars.fetch(id, path)),
+      accountFetch: (id, path) => (id === myCharacterId() ? esiAuthFetch(path) : allChars.fetch(id, path).then((d) => fixShip(path, d))),
       accountPaged: (id, path, max) => esiAuthFetchPaged(path, max, id === myCharacterId() ? null : id),
       // 市场目录里的全部物品（装配数据里没有的物品按中文名搜索）
       catalogTypes: () => {
@@ -3202,7 +3208,7 @@ function initContentTabs() {
   initItemPopups();
   initHubCompare({ structs, regionOrders, regionHistory, dropMarket: dropMarketCache, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), fetchESI, fetchESIPaged, esc, formatISK, formatPrice, formatNumber, TF,
     skeleton: () => skTitle(10) + skRows(5) + skTitle(10) + skRows(8), openRank: () => openArb() });
-  initHubRank({ structs, quote: SM.structQuote, regionOrders, esiUrl, showToast, regionList: regionListAll, findSystem: findSystemByName, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
+  initHubRank({ myOrders: getMyOrders, structs, quote: SM.structQuote, regionOrders, esiUrl, showToast, regionList: regionListAll, findSystem: findSystemByName, server: SERVER.id, regions: REGIONS, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)), esc, formatISK, formatPrice, formatNumber, TF,
     typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
     category: (id) => { const e = state.typeIndex.get(id); const g = e && state.categories.get(rootGroupId(e.groupId)); return g ? { id: g.id, name: g.name } : null; },
     isShip: (id) => { const e = state.typeIndex.get(id); return Boolean(e && rootGroupId(e.groupId) === SHIP_ROOT_GROUP); },
@@ -4033,6 +4039,19 @@ async function getCharacterImplants() {
 }
 
 // 已绑定角色当前驾驶的舰船，items 为船上的物品（装配、无人机、货舱；资产数据 ESI 最多缓存 1 小时）
+// 自己的挂单（倒卖排行标「我的订单」）：个人中心读过就用那份，否则单独读（ESI 本身缓存约 20 分钟），5 分钟内复用；没绑定或没订单权限返回 null
+let myOrdersCache = null;
+async function getMyOrders() {
+  const token = state.esiToken || readEsiToken();
+  if (!token?.access_token || !hasScope(token, 'esi-markets.read_character_orders.v1')) return null;
+  const id = token.character_id;
+  if (Array.isArray(state.characterData?.orders) && myCharacterId() === id) return state.characterData.orders;
+  if (myOrdersCache?.id === id && Date.now() - myOrdersCache.at < 5 * 60e3) return myOrdersCache.list;
+  const list = await esiAuthFetch('/characters/' + id + '/orders/');
+  myOrdersCache = { id, at: Date.now(), list };
+  return list;
+}
+
 async function getCurrentShip() {
   const token = await ensureEsiToken();
   const id = token.character_id;
@@ -4064,7 +4083,7 @@ async function esiAuthFetch(path, options = {}) {
     error.esiError = await res.json().then((d) => d.error || '', () => '');
     throw error;
   }
-  return res.status === 204 ? null : res.json();
+  return res.status === 204 ? null : fixShip(path, await res.json());
 }
 
 // ===== 中文映射（官方中文，Accept-Language: zh 由 ESI 返回）=====
@@ -5619,9 +5638,9 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v21').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v23').then((m) => {
     m.initOrderWatch({
-      esc, formatISK, formatPrice, formatNumber, showToast, copyText, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
+      esc, formatISK, formatPrice, formatNumber, showToast, copyText, addToCart, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
       typeName, locationName, resolveTypeNames, store, serverKey,
