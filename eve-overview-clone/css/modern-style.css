@@ -2415,11 +2415,13 @@ td.loc {
 .kb-hist-del { flex: none; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--text-muted); font-size: 1rem; line-height: 1; }
 .kb-hist-del:hover { color: var(--text-primary); background: var(--bg-hover); }
 /* 可折叠小节（人物页历史军团），标题就是 summary，默认展开 */
-.kb-fold > summary { cursor: pointer; list-style: none; user-select: none; }
+.kb-fold > summary { display: flex; align-items: center; gap: 6px; cursor: pointer; list-style: none; user-select: none; }
 .kb-fold > summary::-webkit-details-marker { display: none; }
-.kb-fold > summary::before { content: '▸'; color: var(--text-muted); transition: transform 0.15s; display: inline-block; }
+.kb-fold > summary::before { content: '▸'; flex: none; width: 12px; font-size: 0.9375rem; color: var(--text-muted); transition: transform 0.15s; margin-bottom: 10px; }
 .kb-fold[open] > summary::before { transform: rotate(90deg); }
-.kb-fold > summary:hover { color: var(--accent-primary); }
+.kb-fold > summary > .info-section-title { flex: 1; min-width: 0; }
+.kb-fold:not([open]) > summary > .info-section-title, .kb-fold:not([open]) > summary::before { margin-bottom: 0; }
+.kb-fold > summary:hover > .info-section-title { color: var(--accent-primary); }
 
 .kb-section { margin-top: var(--spacing-lg); }
 .kb-section-title { margin-bottom: 10px; font-size: 0.9375rem; font-weight: 600; }

@@ -967,7 +967,7 @@ async function renderEntity(kind, id) {
     ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天）</small></h4><div id="kbMembers"></div>` : ''}
     ${P.activity}${P.corpHistory}
     ${kind === 'character' ? `<h4 class="info-section-title section-gap" id="kbPbTitle">参加过的会战<small>（最近 180 天）</small></h4><div id="kbPilotBattles">${skRows(3)}</div>` : ''}
-    ${P.ships}
+    ${/kb-mini-panel/.test(P.ships) ? `<h4 class="info-section-title section-gap">舰船<small>（最近 30 天）</small></h4>${P.ships}` : ''}
     <div class="kb-feed-head section-gap" id="kbEntityFeedHead">
       <h4 class="info-section-title">击杀记录</h4>
       <div class="segmented" role="group">
@@ -977,6 +977,7 @@ async function renderEntity(kind, id) {
     <div id="kbEntityFeed">${skRows(8)}</div>
     <button class="btn kb-more" id="kbEntityMore" hidden>加载更多</button>`;
   mountMonthly(main, lifetime);
+  foldSections(main);
   if (stats.members) renderMembers();
   // 广场里有这个军团的招新广告时，头部加一个入口
   if (kind === 'corporation') app.plazaRecruit?.(id).then((p) => {
@@ -986,6 +987,35 @@ async function renderEntity(kind, id) {
   $('kbEntityMore').addEventListener('click', () => loadEntityFeed(false));
   loadEntityFeed(true);
   if (kind === 'character') loadPilotBattles(id);
+}
+
+// 人物 / 军团 / 联盟页的每一节（生涯统计、月度统计、成员、历史军团、会战、舰船…）都能折叠，默认展开；
+// 收起的记在本机（按小节名），下次打开任何人物 / 军团 / 联盟页还是收起的。击杀记录不折叠。
+// 标题 h4 原样放进 summary（会战标题之后还会按 id 更新），标题后面到下一个标题之间的内容放进 details。
+const FOLD_KEY = 'eve-kb-fold';
+const foldKey = (h) => (h.firstChild?.textContent || h.textContent).trim();
+function foldedSet() { try { return new Set(JSON.parse(localStorage.getItem(FOLD_KEY) || '[]')); } catch { return new Set(); } }
+function foldSections(main) {
+  const closed = foldedSet();
+  for (const h of [...main.querySelectorAll(':scope > h4.info-section-title')]) {
+    const key = foldKey(h);
+    const det = document.createElement('details');
+    det.className = 'kb-fold' + (h.classList.contains('section-gap') ? ' section-gap' : '');
+    det.open = !closed.has(key);
+    det.dataset.fold = key;
+    const sum = document.createElement('summary');
+    h.before(det);
+    h.classList.remove('section-gap');
+    sum.append(h);
+    det.append(sum);
+    while (det.nextSibling && !(det.nextSibling.nodeType === 1 && (det.nextSibling.matches('h4.info-section-title, details.kb-fold, .kb-feed-head')))) det.append(det.nextSibling);
+    det.addEventListener('toggle', () => {
+      const set = foldedSet();
+      if (det.open) set.delete(key); else set.add(key);
+      try { localStorage.setItem(FOLD_KEY, JSON.stringify([...set])); } catch { /* 隐私模式 */ }
+      if (det.open && det.querySelector('canvas, .kb-chart')) mountMonthly(main, S.entity?.lifetime);   // 收起时画不了图，展开后补画
+    });
+  }
 }
 
 // ---------- 人物参加过的会战（/battles/pilot，最近 180 天，受本地保留期限制） ----------
@@ -1280,8 +1310,8 @@ function corpHistoryHtml(history) {
         <b>${span(from, to)}</b>
       </div>`;
   }).join('');
-  return `<details class="kb-fold section-gap" open><summary class="info-section-title">历史军团<small>（共 ${list.length} 段）</small></summary>
-    <section class="kb-mini-panel kb-history">${rows}</section></details>`;
+  return `<h4 class="info-section-title section-gap">历史军团<small>（共 ${list.length} 段）</small></h4>
+    <section class="kb-mini-panel kb-history">${rows}</section>`;
 }
 
 const MEMBER_COLS = [['name', '名称'], ['kills', '击杀'], ['destroyed', '击毁价值'], ['losses', '损失'], ['lost', '损失价值'], ['eff', 'ISK 效率']];
