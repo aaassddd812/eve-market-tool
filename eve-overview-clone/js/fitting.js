@@ -241,8 +241,11 @@ const PICK_PREVIEW = {
 function pickViewOnce() {
   let have = null;
   try { have = localStorage.getItem(VIEW_KEY); } catch { return; }   // 存不了就不弹（每次都会弹）
-  if (have || $('fitViewPick') || $('fitView')?.hidden) return;
-  let pick = MOBILE() ? 'list' : 'radial';
+  // 老用户（弹框出现前就有存下的视图）也强制看一次选择框，预选当前在用的；手动切换过视图开关的不再打扰
+  let picked = null;
+  try { picked = localStorage.getItem('eve-fit-view-picked'); } catch {}
+  if ((have && picked) || $('fitViewPick') || $('fitView')?.hidden) return;
+  let pick = have || (MOBILE() ? 'list' : 'radial');
   const card = (k, title, sub, note) => `<button type="button" class="fvp-card${pick === k ? ' is-on' : ''}" data-fvp="${k}" aria-pressed="${pick === k}">
       <span class="fvp-head"><b>${title}</b><small>${sub}</small><em>${note}</em></span>
       <span class="fvp-prev">${PICK_PREVIEW[k]}</span><span class="fvp-check" aria-hidden="true"></span></button>`;
@@ -264,7 +267,7 @@ function pickViewOnce() {
       <div class="fvp-foot"><button type="button" class="btn btn-primary" data-fvp-save>保存并关闭</button></div>
     </div>`;
   const save = () => {
-    try { localStorage.setItem(VIEW_KEY, pick); } catch { /* 忽略 */ }
+    try { localStorage.setItem(VIEW_KEY, pick); localStorage.setItem('eve-fit-view-picked', '1'); } catch { /* 忽略 */ }
     box.remove();
     document.removeEventListener('keydown', onKey, true);
     if (F.fit) renderFit();
@@ -2097,7 +2100,7 @@ async function onMainClick(e) {
   if ((x = el('[data-fit-cloud-remove]'))) { saveCloud(FE.cloudInfo(F.data, F.fit.ship).map((c) => c.ship.id).filter((id) => id !== Number(x.dataset.fitCloudRemove))); return; }
   if ((x = el('[data-fit-implant-remove]'))) { F.fit.implants = F.fit.implants.filter((id) => id !== Number(x.dataset.fitImplantRemove)); recompute(); return; }
   if ((x = el('[data-fit-view]'))) {
-    try { localStorage.setItem(VIEW_KEY, x.dataset.fitView); } catch { /* 忽略 */ }
+    try { localStorage.setItem(VIEW_KEY, x.dataset.fitView); localStorage.setItem('eve-fit-view-picked', '1'); } catch { /* 忽略 */ }
     renderFit();
     return;
   }
