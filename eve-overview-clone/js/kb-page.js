@@ -21,7 +21,22 @@ const CN_PRICE_NOTE = `单项与总价值按${HUB.hub.name} 最低卖价与最�
 const PRICE_NOTE = !IS_TQ ? CN_PRICE_NOTE : '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）；旗舰等吉他没有卖单的物品，按全服公开合同扣除附带物品后的最低价估算。';
 const KIND_ZH = { character: '人物', corporation: '军团', alliance: '联盟' };
 // 子页面顶部的返回按钮，与战场统计页同款
-const BACK_LINK = '<a class="btn kb-br-back kb-back-btn" href="#kb" data-kb-home><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span>返回击杀记录</span></a>';
+// 返回按钮：本次在击杀页里是从别的页（人物 / 军团 / 联盟、排行、会战…）点进来的，就退回上一页（浏览器后退，滚动位置等由各页自己处理）；
+// 直接打开链接进来的才回击杀记录首页。trail 是本次在击杀页里走过的地址，trailNames 记人物 / 军团 / 联盟页的名字，按钮上显示「返回 某某」
+const trail = [];
+const trailNames = new Map();
+function backLink() {
+  const prev = trail.length > 1 ? trail[trail.length - 2] : null;
+  const label = !prev || prev === '#kb' ? '返回击杀记录' : trailNames.has(prev) ? '返回 ' + trailNames.get(prev) : '返回上一页';
+  return `<a class="btn kb-br-back kb-back-btn" href="${prev ? app.esc(prev) : '#kb'}" data-kb-home><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span>${app.esc(label)}</span></a>`;
+}
+function noteTrail() {
+  const h = location.hash || '#kb';
+  if (trail[trail.length - 1] === h) return;
+  if (trail[trail.length - 2] === h) trail.pop();   // 后退回来的
+  else trail.push(h);
+  if (trail.length > 50) trail.splice(0, trail.length - 50);
+}
 
 const S = {
   names: new Map(),          // 玩家角色 / 军团 / 联盟原名
@@ -586,7 +601,7 @@ function renderRank(hash) {
   const prev = S.rank;
   S.rank = { ...parseRankHash(hash), size: rankSize(), filter: prev?.filter || '', data: null, seq: (prev?.seq || 0) + 1 };
   $('kbMain').innerHTML = `
-    ${BACK_LINK}
+    ${backLink()}
     <section class="kb-rank-page">
       <div class="kb-rank-head">
         <h2>排行榜</h2>
@@ -807,7 +822,7 @@ function renderBattleHistory() {
   S.rank = null;
   S.bh = { days: 30, size: 0, sec: 'all', region: '', q: '', sort: 'time', shown: BH_PAGE, ...(S.bh || {}), data: S.bh?.data || null };
   $('kbMain').innerHTML = `
-    ${BACK_LINK}
+    ${backLink()}
     <section class="kb-rank-page kb-bh-page">
       <div class="kb-rank-head"><h2>近 30 天疑似会战</h2><span class="text-muted" id="kbBhSub"></span></div>
       <div class="kb-rank-controls" id="kbBhControls"></div>
@@ -940,7 +955,7 @@ async function publicInfo(kind, id) {
 }
 
 function entitySkeleton(kind) {
-  return BACK_LINK + skEntityHead() +
+  return backLink() + skEntityHead() +
     (kind === 'character' ? skTitle(14) + skCards(5) : '') + skTitle(18) + skCards(6) +
     skTitle(12) + skToolbar(3) + skRows(8);
 }
@@ -959,9 +974,10 @@ async function renderEntity(kind, id) {
   if (S.entity?.id !== id) return;
   const { stats, lifetime } = d;
   Object.assign(S.entity, { stats, info: d.info, lifetime });
+  trailNames.set(location.hash, d.info?.name || stats.name || partyName(id));
   const P = entityParts(kind, id, d);
   main.innerHTML = `
-    ${BACK_LINK}
+    ${backLink()}
     ${P.head.replace('<div class="kb-ext-links">', `<div class="kb-ext-links"><button class="btn btn-ghost kb-share-btn" data-entity-tofeed title="直接跳到下面的击杀记录">${DOWN_SVG}<span>击杀记录</span></button><button class="btn btn-ghost kb-share-btn" data-entity-share title="生成${KIND_ZH[kind]}统计图片，可下载或复制后分享">${SHARE_SVG}<span>分享图片</span></button>`)}
     ${P.lifetime}${monthlyHtml(lifetime)}${P.recent}
     ${stats.members ? `<h4 class="info-section-title section-gap">${kind === 'alliance' ? '成员军团' : '成员'}<small>（最近 30 天）</small></h4><div id="kbMembers"></div>` : ''}
@@ -1455,6 +1471,7 @@ function navigate(hash) {
 let routed = false;
 function route() {
   routed = true;
+  noteTrail();
   const m = /^#kb\/(character|corporation|alliance)\/(\d+)/.exec(location.hash);
   $('kbSuggest').hidden = true;
   document.querySelector('#kbView .kb-scroll')?.scrollTo({ top: 0 });
@@ -1477,7 +1494,7 @@ async function renderLocalScan() {
   if (!location.hash.startsWith('#kb/local')) return;
   m.renderLocal($('kbMain'), {
     esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,
-    kb: true, server: IS_TQ ? '' : SERVER.id, back: BACK_LINK, loadTypes, typeName, systemName: (id) => kb.systemLabel(id).name, fetchESI: app.fetchESI, copyText: app.copyText, nearest: kb.nearestOf
+    kb: true, server: IS_TQ ? '' : SERVER.id, back: backLink(), loadTypes, typeName, systemName: (id) => kb.systemLabel(id).name, fetchESI: app.fetchESI, copyText: app.copyText, nearest: kb.nearestOf
   });
 }
 
@@ -1661,7 +1678,12 @@ export function initKbPage(context) {
     if (fine) { setFine(fine.dataset.fine); return; }
     const clear = e.target.closest('[data-clear-filter]');
     if (clear) { const [key, id] = clear.dataset.clearFilter.split(':'); setFilter(key, 'remove', Number(id)); return; }
-    if (e.target.closest('[data-kb-home]')) { e.preventDefault(); navigate('#kb'); return; }
+    if (e.target.closest('[data-kb-home]')) {
+      e.preventDefault();
+      if (trail.length > 1) history.back();   // popstate → route()，trail 在 noteTrail 里退一格
+      else navigate('#kb');
+      return;
+    }
     const lb = e.target.closest('[data-lb]');
     if (lb) {
       const [key, value] = lb.dataset.lb.split(':');

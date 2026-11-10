@@ -8966,6 +8966,35 @@ html[data-skin="eve"] .kb-top-text strong { font-size: 0.9375rem; }
 html[data-skin="eve"] .kb-top-card > b { order: 2; padding: 8px 12px 10px; text-align: center; font-size: 0.9375rem; }
 @media (max-width: 768px) { html[data-skin="eve"] .kb-top { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } }
 
+/* 行星模板编辑器侧栏：和新页面其它地方一致——炭灰底、方角面板、输入框 / 下拉框统一近黑底灰描边、主按钮蓝色。
+   编辑器本身总是深色，所以浅色主题下也用这套颜色 */
+html[data-skin="eve"] .pie-modal { --pie-text: #f4f4f5; --pie-dim: #a1a1aa; }
+html[data-skin="eve"] .pie-side, html[data-skin="eve"] .pie-actions { background: #212529; }
+html[data-skin="eve"] .pie-actions { box-shadow: 0 -1px 0 #2c3136; }
+html[data-skin="eve"] .pie-panel, html[data-skin="eve"] .pie-tip { border-radius: 4px; background: #2a2f34; }
+html[data-skin="eve"] .pie-panel > header { font-size: 0.875rem; font-weight: 500; color: #fff; }
+html[data-skin="eve"] .pie-modal .pie-input,
+html[data-skin="eve"] .pie-modal select.pie-input { height: 34px; min-height: 34px; padding: 0 10px; border: 1px solid #52525b; border-radius: 3px; background-color: #09090b; color: #fff; box-shadow: none; }
+html[data-skin="eve"] .pie-modal .pie-input:focus { border-color: #2b9bd6; box-shadow: 0 0 0 1px #2b9bd6; }
+html[data-skin="eve"] .pie-modal .pie-input option, html[data-skin="eve"] .pie-modal .pie-input optgroup { background: #09090b; }
+html[data-skin="eve"] .pie-row input[type=range] { accent-color: #2b9bd6; }
+html[data-skin="eve"] .pie-btn { border-radius: 3px; background: #343a40; color: #f4f4f5; }
+html[data-skin="eve"] .pie-btn:hover { background: #3d444b; }
+html[data-skin="eve"] .pie-btn.primary { background: #2b9bd6; color: #fff; }
+html[data-skin="eve"] .pie-btn.primary:hover { background: #1f86bd; }
+html[data-skin="eve"] .pie-btn.game { background: rgba(43, 155, 214, 0.18); color: #9fd6f3; }
+html[data-skin="eve"] .pie-btn.game:hover { background: rgba(43, 155, 214, 0.28); }
+html[data-skin="eve"] .pie-btn.danger { color: #ff8a8a; }
+html[data-skin="eve"] .pie-counts span, html[data-skin="eve"] .pie-io span { border-radius: 3px; background: #343a40; }
+html[data-skin="eve"] .pie-io span { background: rgb(52 211 153 / 0.14); }
+html[data-skin="eve"] .pie-io span.out { background: rgb(255 170 60 / 0.16); }
+html[data-skin="eve"] :is(.pie-ok, .pie-problems li, .pie-sim-sum, .pie-chart) { border-radius: 3px; }
+html[data-skin="eve"] .pie-chart { background: #191d21; }
+html[data-skin="eve"] .pie-seg { border-radius: 3px; background: #191d21; }
+html[data-skin="eve"] .pie-seg button { border-radius: 2px; }
+html[data-skin="eve"] .pie-seg button.on { background: #2b9bd6; color: #fff; }
+html[data-skin="eve"] .pie-events li { border-radius: 2px; }
+
 /* EVE 风格：质感（标题中等字重、更松的表格、面板无描边） */
 html[data-skin="eve"] h1, html[data-skin="eve"] h2, html[data-skin="eve"] h3, html[data-skin="eve"] .kb-section-title, html[data-skin="eve"] .modal-header h3 { font-weight: 500; letter-spacing: 0.01em; }
 html[data-skin="eve"] .detail-header h1 { font-size: 1.75rem; }

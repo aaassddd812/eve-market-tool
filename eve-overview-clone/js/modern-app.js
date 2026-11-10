@@ -1289,7 +1289,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v100').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v101').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1815,7 +1815,7 @@ function renderSearchResults(container) {
     results.slice(0, limit).map(({ type, group }) => {
       const active = state.selectedItem?.id === type.id ? ' active' : '';
       return `<button class="item-btn search-hit${active}" type="button" data-type-id="${type.id}" title="${esc(type.name)} · Type ${type.id}">
-          <img src="${IMAGE_BASE}/${type.id}/icon?size=32" alt="" loading="lazy" width="24" height="24">
+          <img src="${typeImg(type.id)}" alt="" loading="lazy" width="24" height="24">
           <span class="hit-text">
             <span class="item-name">${highlight(type.name, query)}</span>
             <span class="item-sub">${highlight(group.name, query)}</span>
@@ -1980,7 +1980,7 @@ function miniItem(typeId, { removable = false, movable = false } = {}) {
   const group = state.categories.get(entry.groupId);
   const active = state.selectedItem?.id === typeId ? ' active' : '';
   return `<div class="mini-item${active}" data-type-id="${typeId}" role="button" tabindex="0"${movable ? ' draggable="true"' : ''}>
-      <img src="${IMAGE_BASE}/${typeId}/icon?size=32" alt="" loading="lazy" width="28" height="28">
+      <img src="${typeImg(typeId)}" alt="" loading="lazy" width="28" height="28">
       <span class="hit-text">
         <span class="item-name">${esc(entry.type.name)}</span>
         <span class="item-sub">${esc(group?.name || '')}</span>
@@ -2037,7 +2037,7 @@ function renderQuickPicks() {
   $('quickPicks').innerHTML = ids.length
     ? '<div class="quick-title">常用物品</div><div class="quick-grid">' + ids.map((id) => {
       const { type } = state.typeIndex.get(id);
-      return `<button class="quick-chip" data-type-id="${id}" title="Type ${id}"><img src="${IMAGE_BASE}/${id}/icon?size=32" alt="" width="20" height="20" loading="lazy">${esc(type.name)}</button>`;
+      return `<button class="quick-chip" data-type-id="${id}" title="Type ${id}"><img src="${typeImg(id)}" alt="" width="20" height="20" loading="lazy">${esc(type.name)}</button>`;
     }).join('') + '</div>'
     : '';
 }
@@ -2084,7 +2084,7 @@ function loadWatchBoard() {
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
       typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
-      iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,
+      iconUrl: (id) => typeImg(id),
       openItem: (id) => selectItem(id),
       favorites: () => state.favorites.slice(),
       toggleFavorite,
@@ -2137,7 +2137,7 @@ async function selectItem(typeId, { updateHash = true } = {}) {
   setDetailVisible(true);
   const icon = $('itemIcon');
   icon.classList.remove('broken');
-  icon.src = `${IMAGE_BASE}/${typeId}/icon?size=64`;
+  icon.src = typeImg(typeId, 64);
   icon.alt = entry.type.name;
   $('itemName').textContent = entry.type.name;
   $('itemTypeId').textContent = `Type ${typeId}`;
@@ -2168,7 +2168,7 @@ function initItemPopups() {
   initItemPop({
     typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
     groupPath, copyText,
-    iconUrl: (id, size = 64) => `${IMAGE_BASE}/${id}/icon?size=${size}`,
+    iconUrl: (id, size = 64) => typeImg(id, size),
     openItem: (id) => { switchView('market'); selectItem(id); },
     loadPanel: async () => {
       if (itemPanelModule) return itemPanelModule;
@@ -2199,12 +2199,17 @@ function skinShip(name) {
   }
   return shipNames.find((t) => name.startsWith(t.name))?.id || 0;
 }
-function treeIconUrl(id) {
-  const e = state.typeIndex.get(id);
+function treeIconUrl(id, size = 32) {
+  const e = state.typeIndex.get(Number(id));
   const root = e && rootGroupId(e.groupId);
-  if (root === BP_ROOT_GROUP) return `${IMAGE_BASE}/${id}/bp?size=32`;
-  if (root === SKIN_ROOT_GROUP) { const ship = skinShip(e.type.name); return ship ? `${IMAGE_BASE}/${ship}/icon?size=32` : ''; }
-  return `${IMAGE_BASE}/${id}/icon?size=32`;
+  if (root === BP_ROOT_GROUP) return `${IMAGE_BASE}/${id}/bp?size=${size}`;
+  if (root === SKIN_ROOT_GROUP) { const ship = skinShip(e.type.name); return ship ? `${IMAGE_BASE}/${ship}/icon?size=${size}` : ''; }
+  return `${IMAGE_BASE}/${id}/icon?size=${size}`;
+}
+// 其它地方的物品图标（详情页头部、搜索结果、收藏 / 最近、常用物品、自选看板、物品弹窗、购物车）：和目录一样蓝图用 /bp、涂装用舰船图标；
+// 匹配不到舰船的涂装仍给 /icon（加载失败由各处自己隐藏）
+function typeImg(id, size = 32) {
+  return (state.typeIndex.size && treeIconUrl(id, size)) || `${IMAGE_BASE}/${id}/icon?size=${size}`;
 }
 document.addEventListener('error', (e) => { if (e.target?.classList?.contains('tree-icon')) e.target.style.visibility = 'hidden'; }, true);
 
@@ -3359,7 +3364,7 @@ function initContentTabs() {
     typeName: (id) => state.typeIndex.get(id)?.type.name || 'Type ' + id,
     category: (id) => { const e = state.typeIndex.get(id); const g = e && state.categories.get(rootGroupId(e.groupId)); return g ? { id: g.id, name: g.name } : null; },
     isShip: (id) => { const e = state.typeIndex.get(id); return Boolean(e && rootGroupId(e.groupId) === SHIP_ROOT_GROUP); },
-    iconUrl: (id) => `${IMAGE_BASE}/${id}/icon?size=32`, openItemPop,
+    iconUrl: (id) => typeImg(id), openItemPop,
     openItem: (id) => { switchContentTab('hubs'); selectItem(id); },
     openSide: () => { if (MOBILE_QUERY.matches) openDrawer(); else if ($('sidebar').classList.contains('collapsed')) toggleSidebar('market'); },
     closeSide: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
@@ -6691,7 +6696,7 @@ function openCartModal() {
     m.initCart({
       esc, formatISK, formatNumber, showToast, copyText, store, valuation, typeByName, readCart, writeCart, addToCart, esiUrl, favStar: favStarHtml,
       typeById: (id) => state.typeIndex.get(Number(id))?.type || null,
-      eveTypeIcon: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,
+      eveTypeIcon: (id) => typeImg(id),
       typeVolume: (id) => cartVolumes[id] || 0,
       isEn: () => window.I18N?.lang === 'en',
       openItem: (id) => { switchView('market'); selectItem(id); }
