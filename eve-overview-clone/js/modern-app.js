@@ -2211,7 +2211,21 @@ function treeIconUrl(id, size = 32) {
 function typeImg(id, size = 32) {
   return (state.typeIndex.size && treeIconUrl(id, size)) || `${IMAGE_BASE}/${id}/icon?size=${size}`;
 }
-document.addEventListener('error', (e) => { if (e.target?.classList?.contains('tree-icon')) e.target.style.visibility = 'hidden'; }, true);
+// 物品图标加载失败（蓝图没有 /icon，市场目录里没有的蓝图——LP 商店、合同、资产、击杀里的势力蓝图等——事先不知道是蓝图）：
+// 全站统一换成 /bp 再试一次；还失败才隐藏目录图标 / 交给各处自己的处理
+const ICON_RE = /(\/types\/\d+\/)icon(\?|$)/;
+document.addEventListener('error', (e) => {
+  const img = e.target;
+  if (img?.tagName !== 'IMG') return;
+  if (!img.dataset.bpTried && ICON_RE.test(img.src)) {
+    img.dataset.bpTried = '1';
+    e.stopImmediatePropagation();
+    img.classList.remove('broken');
+    img.src = img.src.replace(ICON_RE, '$1bp$2');
+    return;
+  }
+  if (img.classList.contains('tree-icon')) img.style.visibility = 'hidden';
+}, true);
 
 // 舰船（市场根分类「舰船」）才显示「近期损失」
 const SHIP_ROOT_GROUP = 4;
