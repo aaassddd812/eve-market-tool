@@ -238,6 +238,57 @@ const PICK_PREVIEW = {
     ${['高槽', '中槽', '低槽'].map((h, g) => { const y0 = 18 + g * 60; return `<text x="18" y="${y0 + 8}" fill="#8b949e" font-size="9" font-weight="700">${h}</text>` +
       [0, 1, 2].map((k) => `<rect x="18" y="${y0 + 14 + k * 14}" width="10" height="10" rx="2" fill="${g === 2 ? '#a67c52' : '#5d8f6a'}"/><rect x="34" y="${y0 + 16 + k * 14}" width="${86 - k * 14}" height="6" rx="3" fill="#c9d1d9" opacity=".75"/><rect x="${130 - k * 14}" y="${y0 + 16 + k * 14}" width="40" height="6" rx="3" fill="#6e7681" opacity=".55"/>`).join(''); }).join('')}</svg>`
 };
+// 选择框里的预览用真的装配界面画：一艘装满的幼龙级（圆盘取 SVG，列表取槽位行），算完把装配状态换回去；出错时退回示意图
+const PICK_SAMPLE = `[Drake, 预览]
+Ballistic Control System II
+Ballistic Control System II
+Damage Control II
+Co-Processor II
+Multispectrum Shield Hardener II
+Large Shield Extender II
+Large Shield Extender II
+10MN Afterburner II
+Kinetic Shield Hardener II
+Thermal Shield Hardener II
+Heavy Missile Launcher II, Scourge Fury Heavy Missile
+Heavy Missile Launcher II, Scourge Fury Heavy Missile
+Heavy Missile Launcher II, Scourge Fury Heavy Missile
+Heavy Missile Launcher II, Scourge Fury Heavy Missile
+Heavy Missile Launcher II, Scourge Fury Heavy Missile
+Heavy Missile Launcher II, Scourge Fury Heavy Missile
+Salvager I
+Medium Core Defense Field Extender I
+Medium Core Defense Field Extender I
+Medium Core Defense Field Extender I`;
+function pickPreviews() {
+  const keep = { fit: F.fit, calc: F.calc, stats: F.stats, selected: F.selected, target: F.target, preview: F.preview };
+  try {
+    const { fit } = parseEft(PICK_SAMPLE);
+    if (!fit) return PICK_PREVIEW;
+    for (const s of FE.SLOTS) for (const m of fit.slots[s]) if (m && type(m.type)?.activatable && s !== 'low') m.state = 'active';
+    const calc = FE.computeFit(F.data, fit, skills());
+    const stats = calc && FE.fitStats(calc);
+    if (!stats) return PICK_PREVIEW;
+    Object.assign(F, { fit, calc, stats, selected: null, target: null, preview: null });
+    const svg = /<svg viewBox="0 0 512 512"[\s\S]*<\/svg>/.exec(radialHtml(type(fit.ship), stats))?.[0];
+    const rows = FE.SLOTS.map((s) => {
+      const total = stats.slots[s] || 0;
+      if (!total) return '';
+      const r = [];
+      for (let i = 0; i < total; i++) r.push(moduleRow(s, i, fit.slots[s][i], false));
+      return `<section class="fit-slots"><h4>${FE.SLOT_NAME[s]}<span>${stats.used[s]} / ${fmt(total)}</span></h4>${r.join('')}</section>`;
+    }).join('');
+    return {
+      radial: svg ? `<div class="fit-radial fvp-live" inert>${svg.replace(/id="fr(ShipClip|Vignette)"/g, 'id="fvp$1"').replace(/url\(#fr(ShipClip|Vignette)\)/g, 'url(#fvp$1)')}</div>` : PICK_PREVIEW.radial,
+      list: `<div class="fvp-live fvp-list" inert>${rows}</div>`
+    };
+  } catch (error) {
+    console.warn('装配视图预览失败', error);
+    return PICK_PREVIEW;
+  } finally {
+    Object.assign(F, keep);
+  }
+}
 function pickViewOnce() {
   let have = null;
   try { have = localStorage.getItem(VIEW_KEY); } catch { return; }   // 存不了就不弹（每次都会弹）
@@ -246,9 +297,11 @@ function pickViewOnce() {
   try { picked = localStorage.getItem('eve-fit-view-picked'); } catch {}
   if ((have && picked) || $('fitViewPick') || $('fitView')?.hidden) return;
   let pick = have || (MOBILE() ? 'list' : 'radial');
-  const card = (k, title, sub, note) => `<button type="button" class="fvp-card${pick === k ? ' is-on' : ''}" data-fvp="${k}" aria-pressed="${pick === k}">
+  const prev = pickPreviews();
+  // 预览里是真的装配界面（带按钮），卡片不能再用 <button> 包
+  const card = (k, title, sub, note) => `<div class="fvp-card${pick === k ? ' is-on' : ''}" data-fvp="${k}" role="button" tabindex="0" aria-pressed="${pick === k}">
       <span class="fvp-head"><b>${title}</b><small>${sub}</small><em>${note}</em></span>
-      <span class="fvp-prev">${PICK_PREVIEW[k]}</span><span class="fvp-check" aria-hidden="true"></span></button>`;
+      <div class="fvp-prev fvp-prev-${k}">${prev[k]}</div><span class="fvp-check" aria-hidden="true"></span></div>`;
   const box = document.createElement('div');
   box.className = 'modal fvp-modal';
   box.id = 'fitViewPick';
@@ -1552,8 +1605,8 @@ function radialHtml(shipType, st) {
         ${gauge('cpu', 'CPU', r.cpu, 140, 220, ' tf')}
         ${gauge('power', '能量栅格', r.power, 40, -40, ' MW')}
         ${r.calibration.total ? gauge('cal', '校准值', r.calibration, 112, 68, '') : ''}
-        ${hardpoints('launcher', '发射器安装座', r.launchers, -50, 1)}
-        ${hardpoints('turret', '炮台安装座', r.turrets, -130, -1)}
+        ${hardpoints('launcher', '发射器安装座', r.launchers, -72, 1)}
+        ${hardpoints('turret', '炮台安装座', r.turrets, -108, -1)}
         ${tiles.join('')}
       </svg>
     </div>
@@ -1566,6 +1619,12 @@ function radialSlot(slot, index, m, extra, a0) {
   const a1 = a0 + RG.tile, mid = (a0 + a1) / 2;
   const d = sector(RG.tileIn, RG.tileOut, a0, a1);
   const target = F.target && F.target.slot === slot && F.target.index === index;
+  // 左侧装备悬停预览：和列表视图一样，把它淡淡地放进点击后会装进的那一格（灰色）
+  const pv = F.preview && F.preview.slot === slot && F.preview.index === index ? type(F.preview.type) : null;
+  if (pv) {
+    const [gx, gy] = pt((RG.tileIn + RG.tileOut) / 2 + 1, mid);
+    return `<g class="fr-slot fr-ghost"><path class="fr-tile" d="${d}"/><image class="fr-icon" href="${IMG(pv.id, 'icon', 64)}" x="${f2(gx - 20)}" y="${f2(gy - 20)}" width="40" height="40"/></g>`;
+  }
   if (!m) return `<g class="fr-slot is-empty${extra ? ' is-error' : ''}${target ? ' is-target' : ''}" data-fit-empty="${slot}" data-fit-idx="${index}" role="button" tabindex="0"><title>${extra ? '超出槽位' : '空' + FE.SLOT_NAME[slot]}</title><path class="fr-tile" d="${d}"/></g>`;
   const t = type(m.type);
   const item = F.calc.modules.find((q) => q.slot === slot && q.index === index);
@@ -1582,7 +1641,7 @@ function radialSlot(slot, index, m, extra, a0) {
   // 和原版一样：被动装备在格子四角画小三角，主动装备在格子内沿画一条梯形；颜色随状态（灰 = 在线，绿 = 激活，红 = 超载，离线整体变暗）
   const marks = t.activatable ? activeBar(a0, a1) : passiveMarks(a0, a1);
   const st = m.state === 'overload' ? 'overload' : m.state === 'active' ? 'active' : m.state === 'offline' ? 'offline' : 'online';
-  return `<g class="fr-slot fr-mod is-${st}${sel ? ' is-selected' : ''}${err ? ' is-error' : ''}" data-fit-mod="${slot}:${index}" role="button" tabindex="0"><title>${app.esc(t.name)}${ct ? ' · ' + app.esc(ct.name) : ''}</title>
+  return `<g class="fr-slot fr-mod is-${st}${sel ? ' is-selected' : ''}${err ? ' is-error' : ''}" data-fit-mod="${slot}:${index}" role="button" tabindex="0" aria-label="${app.esc(t.name)}${ct ? ' · ' + app.esc(ct.name) : ''}">
     <path class="fr-tile" d="${d}"/>${marks}
     <image class="fr-icon" href="${IMG(t.id, 'icon', 64)}" x="${f2(ix - S / 2)}" y="${f2(iy - S / 2)}" width="${S}" height="${S}"/>${charge}${radialActs(slot, index, m, t, a0, a1)}</g>`;
 }

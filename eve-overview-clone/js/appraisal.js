@@ -334,7 +334,7 @@ function marketHtml(R, rp) {
   const body = rows.map((r) => {
     const short = r.buy != null && r.depthSell.filled < r.qty;
     return `<tr>
-      <td><div class="ap-item"><img src="${ICON(r.id)}" data-item-pop="${r.id}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a><small class="ap-unit">单价 卖 ${isk(r.sell)} · 收 ${isk(r.buy)}${perM3(r.buy, r) != null ? ` · 收 ${ctx.formatISK(perM3(r.buy, r))}/m³` : ''}</small></span></div></td>
+      <td><div class="ap-item"><img src="${ICON(r.id)}" data-item-pop="${r.id}" alt="" width="28" height="28" loading="lazy"><span><span class="ap-name-row"><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a>${ctx.favStar ? ctx.favStar(r.id) : ''}</span><small class="ap-unit">单价 卖 ${isk(r.sell)} · 收 ${isk(r.buy)}${perM3(r.buy, r) != null ? ` · 收 ${ctx.formatISK(perM3(r.buy, r))}/m³` : ''}</small></span></div></td>
       <td class="num">${ctx.formatNumber(r.qty)}${r.vol ? `<small class="ap-muted">${fmtM3(r.qty * r.vol)}</small>` : ''}</td>
       <td class="num ap-sell ap-hide-sm">${isk(r.sell)}</td>
       <td class="num ap-buy ap-hide-sm">${isk(r.buy)}</td>
@@ -385,7 +385,7 @@ function reprocHtml(R, rp) {
   const items = rp.rows.slice().sort((a, b) => b.rpBuy - a.rpBuy).map((r) => {
     const better = r.direct == null ? null : r.rpBuy > r.direct;
     return `<tr>
-      <td><div class="ap-item"><img src="${ICON(r.id)}" data-item-pop="${r.id}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a><small class="ap-unit">${pct(r.y)} · ${ctx.esc(A.rp.skills[r.skill || SKILL.scrap] || '')}</small></span></div></td>
+      <td><div class="ap-item"><img src="${ICON(r.id)}" data-item-pop="${r.id}" alt="" width="28" height="28" loading="lazy"><span><span class="ap-name-row"><a href="#type=${r.id}" title="查看市场">${ctx.esc(r.name)}</a>${ctx.favStar ? ctx.favStar(r.id) : ''}</span><small class="ap-unit">${pct(r.y)} · ${ctx.esc(A.rp.skills[r.skill || SKILL.scrap] || '')}</small></span></div></td>
       <td class="num">${fmt(r.qty)}${r.left ? `<small title="不足一批（${fmt(r.portion)} 个）的部分不会化掉">剩 ${fmt(r.left)}</small>` : ''}</td>
       <td class="num ap-hide-sm" title="${ctx.esc(A.rp.skills[r.skill || SKILL.scrap] || '')}">${pct(r.y)}</td>
       <td class="num ap-buy ap-strong">${r.batches ? cp(r.rpBuy) : '—'}${r.missing ? `<small>${r.missing} 种产物没有收单</small>` : ''}</td>
@@ -395,7 +395,7 @@ function reprocHtml(R, rp) {
     </tr>`;
   }).join('');
   const mats = rp.mats.map((m) => `<tr>
-      <td><div class="ap-item"><img src="${ICON(m.id)}" data-item-pop="${m.id}" alt="" width="28" height="28" loading="lazy"><span><a href="#type=${m.id}" title="查看市场">${ctx.esc(m.name)}</a><small class="ap-unit">收 ${cpu(m.buy)} · 卖 ${cpu(m.sell)}</small></span></div></td>
+      <td><div class="ap-item"><img src="${ICON(m.id)}" data-item-pop="${m.id}" alt="" width="28" height="28" loading="lazy"><span><span class="ap-name-row"><a href="#type=${m.id}" title="查看市场">${ctx.esc(m.name)}</a>${ctx.favStar ? ctx.favStar(m.id) : ''}</span><small class="ap-unit">收 ${cpu(m.buy)} · 卖 ${cpu(m.sell)}</small></span></div></td>
       <td class="num">${fmt(m.qty)}</td>
       <td class="num ap-buy ap-hide-sm">${cpu(m.buy)}</td>
       <td class="num ap-buy ap-strong">${cp(m.buy == null ? null : m.qty * m.buy)}</td>

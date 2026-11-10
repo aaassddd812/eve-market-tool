@@ -1280,8 +1280,8 @@ function corpHistoryHtml(history) {
         <b>${span(from, to)}</b>
       </div>`;
   }).join('');
-  return `<h4 class="info-section-title section-gap">历史军团<small>（共 ${list.length} 段）</small></h4>
-    <section class="kb-mini-panel kb-history">${rows}</section>`;
+  return `<details class="kb-fold section-gap" open><summary class="info-section-title">历史军团<small>（共 ${list.length} 段）</small></summary>
+    <section class="kb-mini-panel kb-history">${rows}</section></details>`;
 }
 
 const MEMBER_COLS = [['name', '名称'], ['kills', '击杀'], ['destroyed', '击毁价值'], ['losses', '损失'], ['lost', '损失价值'], ['eff', 'ISK 效率']];
@@ -1344,7 +1344,7 @@ let searchSeq = 0;
 async function runSearch(text) {
   const box = $('kbSuggest');
   const q = text.trim().toLowerCase();
-  if (q.length < 2) { box.hidden = true; return; }
+  if (q.length < 2) { ++searchSeq; renderHistory(); return; }
   const seq = ++searchSeq;
   const local = localSearch(q);
   renderSuggest({ ...local, entities: null });
@@ -1352,6 +1352,39 @@ async function runSearch(text) {
   try { entities = (await api('search?q=' + encodeURIComponent(q))).results; } catch { /* 服务不可用时只显示本地结果 */ }
   if (seq !== searchSeq) return;
   renderSuggest({ ...local, entities });
+}
+
+// 搜索历史：点过的建议项（人物 / 军团 / 联盟 / 舰船 / 星系 / 星座 / 星域），存在本机，输入框为空时显示
+const HIST_KEY = 'eve-kb-search-hist', HIST_MAX = 12;
+function loadHistory() {
+  try { const v = JSON.parse(localStorage.getItem(HIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+function saveHistory(list) {
+  try { localStorage.setItem(HIST_KEY, JSON.stringify(list.slice(0, HIST_MAX))); } catch { /* 隐私模式等 */ }
+}
+function pushHistory(attr, value, name) {
+  if (!name) return;
+  saveHistory([{ a: attr, v: value, n: name }, ...loadHistory().filter((h) => !(h.a === attr && h.v === value))]);
+}
+function renderHistory() {
+  const box = $('kbSuggest');
+  const list = loadHistory();
+  if (!list.length) { box.hidden = true; return; }
+  const row = (h, i) => {
+    let icon = '<i></i>', tag = '';
+    if (h.a === 'entity') { const [kind, id] = h.v.split(':'); icon = `<img src="${avatar(kind, id, 32)}" alt="" width="22" height="22" loading="lazy">`; tag = KIND_ZH[kind] || ''; }
+    else if (h.a === 'ship') { icon = `<img src="${IMG(`types/${h.v}/icon`, 32)}" alt="" width="22" height="22" loading="lazy">`; tag = '舰船'; }
+    else {
+      const [kind, id] = h.v.split(':');
+      if (kind === 'system') { const l = kb.systemLabel(Number(id)); icon = `<i style="background:${l.color}"></i>`; tag = l.region || '星系'; }
+      else tag = kind === 'region' ? '星域' : '星座';
+    }
+    const data = h.a === 'entity' ? `data-pick-entity="${app.esc(h.v)}"` : h.a === 'ship' ? `data-pick-ship="${app.esc(h.v)}"` : `data-pick-location="${app.esc(h.v)}"`;
+    return `<div class="kb-suggest-row"><button class="kb-suggest-item" ${data}>${icon}<span>${app.esc(h.n)}</span><small>${app.esc(tag)}</small></button>
+      <button class="kb-hist-del" data-hist-del="${i}" title="从搜索历史删除" aria-label="删除">×</button></div>`;
+  };
+  box.innerHTML = `<div class="kb-suggest-group kb-hist-head"><span>最近搜索</span><button data-hist-clear>清空</button></div>${list.map(row).join('')}`;
+  box.hidden = false;
 }
 
 function localSearch(q) {
@@ -1496,9 +1529,26 @@ export function initKbPage(context) {
   input.addEventListener('input', app.debounce(() => runSearch(input.value), 200));
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { input.value = ''; $('kbSuggest').hidden = true; }
-    if (e.key === 'Enter') { $('kbSuggest').querySelector('.kb-suggest-item')?.click(); e.preventDefault(); }
+    if (e.key === 'Enter' && input.value.trim().length >= 2) { $('kbSuggest').querySelector('.kb-suggest-item')?.click(); e.preventDefault(); }
   });
-  input.addEventListener('focus', () => { if (input.value.trim().length >= 2) runSearch(input.value); });
+  input.addEventListener('focus', () => runSearch(input.value));
+  // 记下点过的建议项（在击杀页总的点击处理之前），历史里的删除 / 清空按钮也在这里处理
+  $('kbSuggest').addEventListener('click', (e) => {
+    const del = e.target.closest('[data-hist-del]');
+    if (del || e.target.closest('[data-hist-clear]')) {
+      e.stopPropagation();
+      saveHistory(del ? loadHistory().filter((_, i) => i !== Number(del.dataset.histDel)) : []);
+      renderHistory();
+      input.focus();
+      return;
+    }
+    const it = e.target.closest('[data-pick-entity], [data-add-entity], [data-pick-ship], [data-pick-location]');
+    if (!it) return;
+    const name = it.dataset.name || it.querySelector('span')?.firstChild?.textContent.trim();
+    if (it.dataset.pickShip) pushHistory('ship', it.dataset.pickShip, name);
+    else if (it.dataset.pickLocation) pushHistory('loc', it.dataset.pickLocation, name);
+    else pushHistory('entity', it.dataset.pickEntity || it.dataset.addEntity, name);
+  });
   document.addEventListener('click', (e) => { if (!e.target.closest('.kb-search')) $('kbSuggest').hidden = true; });
 
   $('kbView').addEventListener('click', (e) => {

@@ -918,15 +918,27 @@ class Workers:
             threading.Thread(target=arb.ingest, args=("tq", books), daemon=True).start()
 
     def price_loop(self):
+        fails = 0
         while True:
             try:
                 self.refresh_prices()
                 self.prices_ready.set()
+                fails, wait = 0, PRICE_TTL
             except Exception as e:
-                log.warning("价格刷新失败：%s", e)
+                # 失败（常见于刚重启时 ESI 504 / 错误额度用完）不等满一小时：3、6、12 分钟……最多 30 分钟后重试，
+                # 否则倒卖排行要一直卡在「等待后台价格任务」直到下一小时
+                fails += 1
+                wait = min(180 * 2 ** (fails - 1), 1800)
+                log.warning("价格刷新失败：%s，%d 秒后重试", e, wait)
+                arb = getattr(self.store, "arb", None)
+                if arb:
+                    with arb.lock:
+                        st = arb.state.setdefault("tq", {"asked": 0, "running": False, "progress": "", "error": None})
+                        if not arb.data.get("tq"):
+                            st["progress"] = f"后台读取订单失败（{e}），约 {wait // 60} 分钟后自动重试"
             if self.store.state["backfill"] == "完成":
                 self.store.prune()  # 实时入库会持续写入，每小时清理一次超出保留期的击杀
-            time.sleep(PRICE_TTL)
+            time.sleep(wait)
 
     # ---- 公开合同估价：吉他没有卖单的物品（旗舰、部分建筑）用全服公开合同的最低价
     # 只看体积大、售价高的物品交换合同；合同里恰好一件「吉他无卖单」的物品，扣除其余附带物品的市场价后作为它的价格

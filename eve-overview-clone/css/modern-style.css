@@ -615,6 +615,38 @@ img.broken { opacity: 0; }
 
 .clear-recent { display: block; margin: 8px auto; }
 
+/* 物品名后的收藏星标（估价、购物车） */
+.fav-star { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: var(--radius-sm); color: var(--text-muted); opacity: .55; transition: opacity var(--transition-fast), color var(--transition-fast), background var(--transition-fast); }
+.fav-star svg { width: 14px; height: 14px; fill: none; }
+.fav-star:hover { opacity: 1; color: var(--warning, #f5b301); background: var(--bg-hover); }
+.fav-star.on { opacity: 1; color: var(--warning, #f5b301); }
+.fav-star.on svg { fill: currentColor; }
+.ap-name-row { display: flex; align-items: center; gap: 2px; min-width: 0; }
+
+/* 收藏文件夹 */
+.fav-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 8px 6px; }
+.fav-dir { border-radius: var(--radius-sm); }
+.fav-dir-head { cursor: pointer; }
+.fav-dir-head .fav-folder-ico { width: 16px; height: 16px; flex: none; color: var(--accent-primary); }
+.fav-dir.open > .fav-dir-head .category-chevron { transform: rotate(90deg); }
+.fav-dir-head .mini-remove { width: 24px; height: 24px; }
+.fav-dir-head:hover .mini-remove, .fav-dir-head .mini-remove:focus-visible { opacity: 1; }
+.fav-dir-head [data-fav-dir-rename]:hover { color: var(--accent-primary); background: var(--accent-soft); }
+.fav-dir-items { padding-left: 14px; }
+.fav-dir-empty { padding: 6px 8px; font-size: 0.75rem; color: var(--text-muted); }
+.fav-loose { min-height: 24px; border-radius: var(--radius-sm); }
+.fav-loose-title { padding: 8px 8px 4px; font-size: 0.6875rem; color: var(--text-muted); }
+.fav-dragging .fav-loose { min-height: 48px; }
+.fav-dir.drop-over > .fav-dir-head, .fav-loose.drop-over { background: var(--accent-soft); color: var(--accent-primary); }
+.mini-move:hover { color: var(--accent-primary); background: var(--accent-soft); }
+#favoritesList { position: relative; }
+.fav-menu { position: absolute; z-index: 30; min-width: 150px; max-height: 260px; overflow-y: auto; padding: 4px; border-radius: var(--radius-md); background: var(--bg-elevated, var(--bg-secondary)); box-shadow: var(--shadow-lg, 0 8px 24px rgb(0 0 0 / .4)); }
+.fav-menu-title { padding: 4px 8px; font-size: 0.6875rem; color: var(--text-muted); }
+.fav-menu button { display: block; width: 100%; padding: 6px 8px; border-radius: var(--radius-sm); text-align: left; font-size: 0.8125rem; color: var(--text-secondary); }
+.fav-menu button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.fav-menu button.on { color: var(--accent-primary); font-weight: 600; }
+@media (hover: none) { .mini-move, .fav-dir-head .mini-remove { opacity: .7; } }
+
 /* 骨架屏 */
 .skeleton-list { display: flex; flex-direction: column; gap: 10px; padding: 8px; }
 .skeleton-list i {
@@ -2377,6 +2409,17 @@ td.loc {
 .kb-suggest-row .kb-suggest-item { flex: 1; min-width: 0; }
 .kb-suggest-add { flex: none; padding: 4px 8px; border-radius: var(--radius-sm); font-size: 0.75rem; color: var(--accent-primary); background: var(--accent-soft); white-space: nowrap; }
 .kb-suggest-add:hover { background: var(--accent-primary); color: #fff; }
+.kb-hist-head { display: flex; align-items: center; justify-content: space-between; }
+.kb-hist-head button { font-size: 0.6875rem; color: var(--text-muted); padding: 2px 6px; border-radius: var(--radius-sm); }
+.kb-hist-head button:hover { color: var(--accent-primary); background: var(--bg-hover); }
+.kb-hist-del { flex: none; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--text-muted); font-size: 1rem; line-height: 1; }
+.kb-hist-del:hover { color: var(--text-primary); background: var(--bg-hover); }
+/* 可折叠小节（人物页历史军团），标题就是 summary，默认展开 */
+.kb-fold > summary { cursor: pointer; list-style: none; user-select: none; }
+.kb-fold > summary::-webkit-details-marker { display: none; }
+.kb-fold > summary::before { content: '▸'; color: var(--text-muted); transition: transform 0.15s; display: inline-block; }
+.kb-fold[open] > summary::before { transform: rotate(90deg); }
+.kb-fold > summary:hover { color: var(--accent-primary); }
 
 .kb-section { margin-top: var(--spacing-lg); }
 .kb-section-title { margin-bottom: 10px; font-size: 0.9375rem; font-weight: 600; }
@@ -8887,7 +8930,8 @@ html[data-skin="eve"]:not([data-theme="light"]) select { background-color: #0909
 html[data-skin="eve"]:not([data-theme="light"]) select:not(.region-select) { min-height: 34px; padding: 0 8px; border: 1px solid #52525b; border-radius: var(--radius-md); color: var(--text-primary); }
 html[data-skin="eve"]:not([data-theme="light"]) .search-box:focus-within,
 html[data-skin="eve"]:not([data-theme="light"]) input:focus, html[data-skin="eve"]:not([data-theme="light"]) textarea:focus, html[data-skin="eve"]:not([data-theme="light"]) select:focus { border-color: var(--accent-primary); box-shadow: 0 0 0 1px var(--accent-primary); }
-html[data-skin="eve"]:not([data-theme="light"]) .search-box input { background: transparent; }
+html[data-skin="eve"]:not([data-theme="light"]) .search-box input,
+html[data-skin="eve"]:not([data-theme="light"]) .search-box input:focus { background: transparent; border-color: transparent; box-shadow: none; }   /* 外框已经亮起，里面的输入框别再套一圈 */
 
 /* 顶栏：更深的底色，导航字更大，选中项是顶部一条青蓝色横线（不再是底色块） */
 html[data-skin="eve"]:not([data-theme="light"]) .app-header, html[data-skin="eve"]:not([data-theme="light"]) .mobile-tabbar { background: #111315; }
@@ -9002,6 +9046,9 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .fr-slot { cursor: pointer; outline: none; }
 /* 槽位格子照原版：灰色半透明底 + 细边；装了装备的按状态上色（灰 = 在线，绿 = 激活，红 = 超载），离线整体变暗 */
 .fr-tile { fill: rgba(153, 153, 153, 0.06); stroke: rgba(153, 153, 153, 0.32); stroke-width: 1; transition: fill 0.12s, stroke 0.12s; }
+.fr-ghost { pointer-events: none; }
+.fr-ghost .fr-tile { fill: rgba(153, 153, 153, 0.28); stroke: rgba(200, 200, 200, 0.7); }
+.fr-ghost .fr-icon { opacity: 0.45; }
 .fr-slot.is-empty:hover .fr-tile, .fr-slot.is-target .fr-tile { fill: rgba(43, 155, 214, 0.22); stroke: #2b9bd6; }
 .fr-mod { --fr-c: #999; }
 .fr-mod.is-active { --fr-c: #1ee83c; }
@@ -9049,14 +9096,22 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .fvp-head em { font-style: normal; font-size: 0.8125rem; color: var(--text-muted); }
 .fvp-prev { display: flex; justify-content: center; padding: 10px; border-radius: var(--radius-md); background: #050607; }
 .fvp-prev svg { width: 100%; max-width: 230px; aspect-ratio: 1; display: block; }
+.fvp-live { pointer-events: none; user-select: none; }
+.fvp-prev .fit-radial.fvp-live { width: 100%; max-width: 250px; margin: 0 auto; }
+.fvp-prev .fit-radial.fvp-live svg { max-width: none; }
+/* 列表预览：真的槽位行，缩小后放进和圆盘一样高的框里，底部渐隐 */
+.fvp-prev-list { height: 270px; overflow: hidden; align-items: flex-start; background: var(--bg-secondary); -webkit-mask-image: linear-gradient(#000 82%, transparent); mask-image: linear-gradient(#000 82%, transparent); }
+.fvp-list { width: 100%; zoom: 0.72; }
+.fvp-list .fit-slots { margin-bottom: 8px; }
+@media (max-width: 768px) { .fvp-prev-list { height: 190px; } .fvp-list { zoom: 0.62; } .fvp-prev .fit-radial.fvp-live { max-width: 190px; } }
 .fvp-check { position: absolute; top: 14px; right: 14px; width: 24px; height: 24px; border-radius: 50%; background: var(--bg-hover); }
 .fvp-card.is-on .fvp-check { background: var(--accent-primary, #2b9bd6) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / 15px no-repeat; }
 .fvp-foot { display: flex; justify-content: flex-end; padding: 14px 20px 18px; }
 @media (max-width: 768px) {
   .fvp-modal .modal-content { max-height: none; border-radius: 0; }
   .fvp-cards { grid-template-columns: minmax(0, 1fr); }
-  .fvp-card { flex-direction: row; align-items: center; }
-  .fvp-prev { width: 110px; flex: none; padding: 6px; order: -1; }
+  .fvp-card { gap: 10px; padding: 12px; }
+  .fvp-prev { padding: 6px; }
   .fvp-foot { margin-top: auto; }
   .fvp-foot .btn { width: 100%; }
 }

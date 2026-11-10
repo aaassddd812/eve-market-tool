@@ -67,7 +67,7 @@ function syncDot() {
   const btn = $('contactBtn');
   if (btn) {
     btn.classList.toggle('has-dot', n + a > 0);
-    btn.title = [n ? `我的工单有 ${n} 条新回复` : '', a ? `有 ${a} 条工单待处理` : ''].filter(Boolean).join('，') || '联系作者 · 定制功能';
+    btn.title = [n ? `我的工单有 ${n} 条新回复` : '', a ? `有 ${a} 条工单待处理` : ''].filter(Boolean).join('，') || '联系作者';
   }
   const tab = document.querySelector('[data-fb-tab=mine]');
   if (tab) tab.dataset.count = n || '';

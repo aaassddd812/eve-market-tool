@@ -2,7 +2,7 @@ import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17
 import * as CS from './cloud-sync.js?v=2';
 import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
-import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v43';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v44';
 import * as SM from './struct-markets.js?v=v8';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v20';
 import * as AH from './alert-host.js?v=v6';
@@ -86,6 +86,7 @@ const state = {
   marketPricePromise: null,
   catalogReady: null,
   favorites: store.getJSON('eve-favorites', []),
+  favDirs: normFavDirs(store.getJSON('eve-fav-folders', null)),   // 收藏文件夹：{ folders: [{ id, name, open }], of: { typeId: 文件夹 id } }
   recent: store.getJSON('eve-recent', []),
   orderSort: {
     sell: { key: 'price', dir: 'asc' },
@@ -203,6 +204,8 @@ const ICONS = {
   info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>',
   star: '<svg viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
+  folder: '<svg class="fav-folder-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2.5h8.5A1.5 1.5 0 0 1 21 9v9.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></svg>',
+  edit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>',
   chevron: '<svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>'
 };
 
@@ -1085,8 +1088,8 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v21').then((m) => {
-    m.initAppraisal({ addToCart,
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v22').then((m) => {
+    m.initAppraisal({ addToCart, favStar: favStarHtml,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
       getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
       valuation, loadVolumes,
@@ -1147,7 +1150,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v146').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v148').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -1286,7 +1289,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v98').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v99').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1584,7 +1587,8 @@ function initSidebar() {
 
   // 目录树、收藏、最近：统一事件委托
   $('catalogTree').addEventListener('click', onListClick);
-  $('favoritesList').addEventListener('click', onListClick);
+  $('favoritesList').addEventListener('click', onFavClick);
+  initFavDrag();
   $('recentList').addEventListener('click', onListClick);
   $('quickPicks').addEventListener('click', onListClick);
   $('catalogTree').addEventListener('keydown', onTreeKeydown);
@@ -1828,6 +1832,7 @@ function isFavorite(typeId) {
 function toggleFavorite(typeId) {
   if (isFavorite(typeId)) {
     state.favorites = state.favorites.filter((id) => id !== typeId);
+    if (state.favDirs.of[typeId]) { delete state.favDirs.of[typeId]; saveFavDirs(); }
     showToast('已取消收藏', 'info', 1500);
   } else {
     state.favorites = [typeId, ...state.favorites];
@@ -1837,6 +1842,128 @@ function toggleFavorite(typeId) {
   renderFavorites();
   renderQuickPicks();
   updateFavButton();
+  const on = isFavorite(typeId);
+  document.querySelectorAll(`[data-fav-star="${typeId}"]`).forEach((b) => {
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-pressed', String(on));
+    b.title = on ? '取消收藏' : '加入收藏';
+  });
+}
+
+// 物品名后面的收藏星标（估价、购物车等处用）：点击在全局捕获阶段处理，不触发所在行的其它点击
+function favStarHtml(typeId) {
+  const id = Number(typeId);
+  if (!id) return '';
+  const on = isFavorite(id);
+  return `<button type="button" class="fav-star${on ? ' on' : ''}" data-fav-star="${id}" title="${on ? '取消收藏' : '加入收藏'}" aria-pressed="${on}" aria-label="收藏">${ICONS.star}</button>`;
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('[data-fav-star]');
+  if (!b) return;
+  e.preventDefault();
+  e.stopPropagation();
+  toggleFavorite(Number(b.dataset.favStar));
+}, true);
+
+// ===== 收藏文件夹（和游戏里的收藏夹一样）：文件夹在上，未分类的物品在下；拖动物品到文件夹，或点物品上的文件夹按钮选 =====
+function normFavDirs(d) {
+  d = d && typeof d === 'object' ? d : {};
+  const folders = Array.isArray(d.folders) ? d.folders.filter((f) => f && f.id && f.name).map((f) => ({ id: String(f.id), name: String(f.name).slice(0, 40), open: f.open !== false })) : [];
+  const ids = new Set(folders.map((f) => f.id));
+  const of = {};
+  if (d.of && typeof d.of === 'object') for (const [k, v] of Object.entries(d.of)) if (ids.has(String(v))) of[k] = String(v);
+  return { folders, of };
+}
+function saveFavDirs() { store.setJSON('eve-fav-folders', state.favDirs); }
+function favDirOf(typeId) { return state.favDirs.of[typeId] || ''; }
+function moveFav(typeId, dirId) {
+  if (dirId) state.favDirs.of[typeId] = dirId; else delete state.favDirs.of[typeId];
+  saveFavDirs();
+  renderFavorites();
+}
+function newFavDir(thenMove) {
+  const name = (prompt('文件夹名称', '新文件夹') || '').trim().slice(0, 40);
+  if (!name) return;
+  const id = 'd' + Date.now().toString(36);
+  state.favDirs.folders.push({ id, name, open: true });
+  if (thenMove) state.favDirs.of[thenMove] = id;
+  saveFavDirs();
+  renderFavorites();
+}
+function closeFavMenu() { $('favoritesList').querySelector('.fav-menu')?.remove(); }
+function openFavMenu(btn, typeId) {
+  closeFavMenu();
+  const cur = favDirOf(typeId);
+  const menu = document.createElement('div');
+  menu.className = 'fav-menu';
+  menu.innerHTML = `<div class="fav-menu-title">移到文件夹</div>
+    ${[{ id: '', name: '未分类' }, ...state.favDirs.folders].map((f) => `<button data-fav-to="${esc(f.id)}" data-fav-id="${typeId}"${f.id === cur ? ' class="on"' : ''}>${esc(f.name)}</button>`).join('')}
+    <button data-fav-to-new="${typeId}">＋ 新建文件夹</button>`;
+  const list = $('favoritesList');
+  list.appendChild(menu);
+  const r = btn.getBoundingClientRect(), lr = list.getBoundingClientRect();
+  menu.style.top = (r.bottom - lr.top + list.scrollTop + 4) + 'px';
+  menu.style.right = Math.max(8, lr.right - r.right) + 'px';
+}
+document.addEventListener('click', (e) => { if (!e.target.closest?.('.fav-menu, [data-fav-move]')) closeFavMenu(); });
+
+function onFavClick(event) {
+  const t = (sel) => event.target.closest(sel);
+  let el;
+  if (t('[data-fav-newdir]')) { newFavDir(); return; }
+  if ((el = t('[data-fav-move]'))) { event.stopPropagation(); openFavMenu(el, Number(el.dataset.favMove)); return; }
+  if ((el = t('[data-fav-to]'))) { closeFavMenu(); moveFav(Number(el.dataset.favId), el.dataset.favTo); return; }
+  if ((el = t('[data-fav-to-new]'))) { closeFavMenu(); newFavDir(Number(el.dataset.favToNew)); return; }
+  const dir = t('[data-fav-dir]');
+  const f = dir && state.favDirs.folders.find((x) => x.id === dir.dataset.favDir);
+  if (f && t('[data-fav-dir-rename]')) {
+    const name = (prompt('重命名文件夹', f.name) || '').trim().slice(0, 40);
+    if (name) { f.name = name; saveFavDirs(); renderFavorites(); }
+    return;
+  }
+  if (f && t('[data-fav-dir-del]')) {
+    const n = state.favorites.filter((id) => favDirOf(id) === f.id).length;
+    if (n && !confirm(`删除文件夹「${f.name}」？里面的 ${n} 个物品会移到未分类（不会取消收藏）`)) return;
+    state.favDirs.folders = state.favDirs.folders.filter((x) => x !== f);
+    for (const k of Object.keys(state.favDirs.of)) if (state.favDirs.of[k] === f.id) delete state.favDirs.of[k];
+    saveFavDirs();
+    renderFavorites();
+    return;
+  }
+  if (f && t('.fav-dir-head')) { f.open = !f.open; saveFavDirs(); renderFavorites(); return; }
+  onListClick(event);
+}
+
+// 拖动收藏物品到文件夹 / 未分类区域（手机上用物品上的文件夹按钮）
+function initFavDrag() {
+  const list = $('favoritesList');
+  const zone = (e) => e.target.closest('[data-fav-drop]');
+  list.addEventListener('dragstart', (e) => {
+    const it = e.target.closest('.mini-item[data-type-id]');
+    if (!it) return;
+    e.dataTransfer.setData('text/x-eve-fav', it.dataset.typeId);
+    e.dataTransfer.effectAllowed = 'move';
+    list.classList.add('fav-dragging');
+  });
+  list.addEventListener('dragend', () => { list.classList.remove('fav-dragging'); list.querySelectorAll('.drop-over').forEach((x) => x.classList.remove('drop-over')); });
+  list.addEventListener('dragover', (e) => {
+    const z = zone(e);
+    if (!z || !e.dataTransfer.types.includes('text/x-eve-fav')) return;
+    e.preventDefault();
+    list.querySelectorAll('.drop-over').forEach((x) => x !== z && x.classList.remove('drop-over'));
+    z.classList.add('drop-over');
+  });
+  list.addEventListener('dragleave', (e) => { const z = zone(e); if (z && !z.contains(e.relatedTarget)) z.classList.remove('drop-over'); });
+  list.addEventListener('drop', (e) => {
+    const z = zone(e);
+    const id = Number(e.dataTransfer.getData('text/x-eve-fav'));
+    if (!z || !id) return;
+    e.preventDefault();
+    const to = z.dataset.favDrop;
+    const f = state.favDirs.folders.find((x) => x.id === to);
+    if (f) f.open = true;
+    moveFav(id, to);
+  });
 }
 
 function updateFavButton() {
@@ -1847,17 +1974,18 @@ function updateFavButton() {
   btn.title = on ? '取消收藏 (F)' : '加入收藏 (F)';
 }
 
-function miniItem(typeId, { removable = false } = {}) {
+function miniItem(typeId, { removable = false, movable = false } = {}) {
   const entry = state.typeIndex.get(typeId);
   if (!entry) return '';
   const group = state.categories.get(entry.groupId);
   const active = state.selectedItem?.id === typeId ? ' active' : '';
-  return `<div class="mini-item${active}" data-type-id="${typeId}" role="button" tabindex="0">
+  return `<div class="mini-item${active}" data-type-id="${typeId}" role="button" tabindex="0"${movable ? ' draggable="true"' : ''}>
       <img src="${IMAGE_BASE}/${typeId}/icon?size=32" alt="" loading="lazy" width="28" height="28">
       <span class="hit-text">
         <span class="item-name">${esc(entry.type.name)}</span>
         <span class="item-sub">${esc(group?.name || '')}</span>
       </span>
+      ${movable ? `<button class="mini-remove mini-move" data-fav-move="${typeId}" title="移到文件夹" aria-label="移到文件夹">${ICONS.folder}</button>` : ''}
       ${removable ? `<button class="mini-remove" data-unfav="${typeId}" title="取消收藏" aria-label="取消收藏">${ICONS.close}</button>` : ''}
     </div>`;
 }
@@ -1867,8 +1995,21 @@ function renderFavorites() {
   $('favCount').hidden = !count;
   $('favCount').textContent = count;
   if (!state.catalog) return;
-  $('favoritesList').innerHTML = count
-    ? state.favorites.map((id) => miniItem(id, { removable: true })).join('')
+  const { folders } = state.favDirs;
+  const known = new Set(folders.map((f) => f.id));
+  const item = (id) => miniItem(id, { removable: true, movable: true });
+  const loose = state.favorites.filter((id) => !known.has(favDirOf(id)));
+  const dirs = folders.map((f) => {
+    const ids = state.favorites.filter((id) => favDirOf(id) === f.id);
+    return `<div class="fav-dir${f.open ? ' open' : ''}" data-fav-dir="${esc(f.id)}" data-fav-drop="${esc(f.id)}">
+      <div class="category-header fav-dir-head" role="button" tabindex="0" aria-expanded="${f.open}">${ICONS.chevron}${ICONS.folder}<span class="category-name">${esc(f.name)}</span><span class="category-count">${ids.length}</span>
+        <button class="mini-remove" data-fav-dir-rename title="重命名" aria-label="重命名">${ICONS.edit}</button><button class="mini-remove" data-fav-dir-del title="删除文件夹" aria-label="删除文件夹">${ICONS.close}</button></div>
+      ${f.open ? `<div class="fav-dir-items">${ids.map(item).join('') || '<p class="fav-dir-empty">空文件夹，把物品拖到这里</p>'}</div>` : ''}
+    </div>`;
+  }).join('');
+  $('favoritesList').innerHTML = count || folders.length
+    ? `<div class="fav-tools"><button class="link-btn" data-fav-newdir>＋ 新建文件夹</button>${folders.length ? '<span class="sidebar-hint">拖动物品到文件夹</span>' : ''}</div>
+      ${dirs}<div class="fav-loose" data-fav-drop="">${folders.length && loose.length ? '<div class="fav-loose-title">未分类</div>' : ''}${loose.map(item).join('')}</div>`
     : `<div class="empty-state">${ICONS.star}<p>暂无收藏物品</p></div>`;
 }
 
@@ -3380,7 +3521,7 @@ function toggleShortcutHelp(show = $('shortcutModal').hidden) {
   $('shortcutModal').hidden = !show;
 }
 
-// ===== 联系作者 · 定制功能（右上角「定制」按钮）=====
+// ===== 联系作者（右上角「定制」按钮）=====
 // 联系方式在这里改：kind 显示名，value 号码 / 地址（留空则不显示），href 可选（点击打开）
 const CONTACTS = [
   { kind: 'QQ', value: '282975795' },
@@ -3554,7 +3695,7 @@ function initDesktopDl() {
 
 function initContact() {
   $('contactBtn').addEventListener('click', () => toggleContact(true));
-  feedbackModule = import('./feedback.js?v=v3').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
+  feedbackModule = import('./feedback.js?v=v4').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
   $('contactModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-close-contact]')) { toggleContact(false); return; }
     const b = e.target.closest('[data-contact-copy]');
@@ -6546,9 +6687,9 @@ function typeByName(name) {
   return state.typeByNameMap.get(key) || null;
 }
 function openCartModal() {
-  if (!cartModule) cartModule = Promise.all([import('./cart.js?v=v4'), loadVolumes().then((v) => { cartVolumes = v || {}; })]).then(([m]) => {
+  if (!cartModule) cartModule = Promise.all([import('./cart.js?v=v5'), loadVolumes().then((v) => { cartVolumes = v || {}; })]).then(([m]) => {
     m.initCart({
-      esc, formatISK, formatNumber, showToast, copyText, store, valuation, typeByName, readCart, writeCart, addToCart, esiUrl,
+      esc, formatISK, formatNumber, showToast, copyText, store, valuation, typeByName, readCart, writeCart, addToCart, esiUrl, favStar: favStarHtml,
       typeById: (id) => state.typeIndex.get(Number(id))?.type || null,
       eveTypeIcon: (id) => `${IMAGE_BASE}/${id}/icon?size=32`,
       typeVolume: (id) => cartVolumes[id] || 0,

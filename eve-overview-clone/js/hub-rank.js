@@ -116,7 +116,7 @@ function pagerHtml(page, pages, total, from, to) {
 }
 const pageSize = () => (PAGE_SIZES.includes(Number(F.size)) ? Number(F.size) : 100);
 const RISING = 1.3, TIGHT = 2, HIGH = 1.15;   // 成交上涨：7 天 / 30 天 ≥ 1.3；库存少：库存 < 2 天；卖价偏高：卖价 ≥ 均价 × 1.15
-const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', rsort: 'day', edits: 3, rhub: 0, rcomp: 0, psort: 'day', pin: 's', pout: 'b', mode: 'sb', rmode: 'sb', med: 7, sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, minUnit: 0, minM3: 0, minQty: 0, strict: true, excl: [], custom: [], maxVol: 0, noShip: false };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]；maxVol：单件体积上限（0 不限）；noShip：去掉舰船
+const F = { sdir: {}, size: 100, csort: 'use', lossOnly: false, target: 0, win: 7, share: 10, days: 3, minDay: 0, minTurn: 0, maxStock: 0, rising: false, dsort: 'day', rsort: 'day', edits: 3, rhub: 0, rcomp: 0, psort: 'day', pin: 's', pout: 'b', mode: 'sb', rmode: 'sb', med: 7, sort: 'profit', from: 0, to: 0, local: true, cat: 0, minProfit: 1e7, minDaily: 0, minUnit: 0, minM3: 0, minQty: 0, strict: true, excl: [], custom: [], maxVol: 0, noShip: false, planGoal: 'profit', planCap: 0 };   // excl：排除的物品 ID；custom：[{ region, name, system, sysName }]；maxVol：单件体积上限（0 不限）；noShip：去掉舰船
 const CUSTOM_MAX = 3;
 const CUSTOM_TTL = 10 * 60e3;
 const customCache = new Map();   // 市场 ID -> { at, quotes }
@@ -879,9 +879,18 @@ function missOf(r, st) {
 // 每个物品数量不超过可做数量、货舱剩余容量与剩余预算（不填不限），分别按每立方利润、利润率从高到低装，取利润高的那种装法。
 // 买入 / 卖出选了「全部」时每个物品的路线各不相同：按每一对买入地 → 卖出地各装一船，取利润最高的一条。
 // 利润已扣运费设置里的运费（自己开船运可把每立方运费设为 0）。
+// 装货方式（F.planGoal）：
+//   profit 利润最高（默认）：上面这种装法；
+//   roi 投入少回报高：按利润率从高到低装，取「利润 ÷ 投入」最高的路线（利润不到利润最高方案 1/4 的路线不选，免得只装几件小东西）；
+//   fast 好卖优先：按卖出地日均成交从高到低装，每种最多装卖出地 1 天的成交量，取利润最高的路线。
+// 单种上限（F.planCap）：每种物品最多占货舱 / 预算的这个比例，分散风险。
+const PLAN_GOALS = [['profit', '利润最高', '尽量多赚：按每立方利润或利润率装满，取利润最高的路线'], ['roi', '投入少回报高', '每 1 ISK 投入赚得最多：按利润率装，取回报率最高的路线（利润太少的路线不选）'], ['fast', '好卖优先', '卖出地成交量大的先装，每种最多装 1 天的成交量，到了好出手']];
+const PLAN_CAPS = [[0, '不限'], [0.5, '50%'], [0.25, '25%'], [0.1, '10%']];
 function planHaul() {
   const P = S.plan;
   if (!(P.cargo > 0)) return null;
+  const goal = PLAN_GOALS.some(([k]) => k === F.planGoal) ? F.planGoal : 'profit';
+  const cap = Number(F.planCap) || 0;
   const groups = new Map();
   for (const x of S.list || []) {
     const r = x.r;
@@ -892,10 +901,12 @@ function planHaul() {
   }
   const fill = (list) => {
     let room = P.cargo, isk = P.budget > 0 ? P.budget : Infinity;
+    const capM3 = cap ? P.cargo * cap : Infinity, capIsk = cap && P.budget > 0 ? P.budget * cap : Infinity;
     const items = [];
     for (const x of list) {
       const r = x.r;
-      const n = Math.min(r.qty, Math.floor(room / r.vol + 1e-9), Math.floor(isk / r.cost));
+      let n = Math.min(r.qty, Math.floor(Math.min(room, capM3) / r.vol + 1e-9), Math.floor(Math.min(isk, capIsk) / r.cost));
+      if (goal === 'fast' && r.b.daily > 0) n = Math.min(n, Math.floor(r.b.daily));
       if (n <= 0) continue;
       items.push({ id: x.id, r, n });
       room -= n * r.vol;
@@ -904,14 +915,20 @@ function planHaul() {
     const sum = (f) => items.reduce((t, it) => t + it.n * f(it.r), 0);
     return { items, profit: sum((r) => r.unit), cost: sum((r) => r.cost), m3: sum((r) => r.vol) };
   };
-  let best = null;
+  const sorts = goal === 'roi' ? [(x, y) => y.r.margin - x.r.margin]
+    : goal === 'fast' ? [(x, y) => (y.r.b.daily || 0) - (x.r.b.daily || 0) || y.r.margin - x.r.margin]
+      : [(x, y) => y.r.perM3 - x.r.perM3, (x, y) => y.r.margin - x.r.margin];
+  const plans = [];
   for (const list of groups.values()) {
-    for (const key of ['perM3', 'margin']) {
-      const p = fill([...list].sort((x, y) => y.r[key] - x.r[key]));
-      if (p.items.length && (!best || p.profit > best.profit)) best = { ...p, a: list[0].r.a, b: list[0].r.b };
+    for (const by of sorts) {
+      const p = fill([...list].sort(by));
+      if (p.items.length && p.profit > 0) plans.push({ ...p, a: list[0].r.a, b: list[0].r.b });
     }
   }
-  return best;
+  if (!plans.length) return null;
+  const top = Math.max(...plans.map((p) => p.profit));
+  if (goal === 'roi') return plans.filter((p) => p.profit >= top / 4).sort((x, y) => y.profit / y.cost - x.profit / x.cost)[0];
+  return plans.find((p) => p.profit === top);
 }
 
 async function loadPlanShip(box) {
@@ -943,7 +960,7 @@ function planHtml() {
       : `<p class="hr-plan-sum"><span>${esc(String(plan.a.name))} <span class="hc-arrow">→</span> ${esc(String(plan.b.name))}</span>
         <span>${plan.items.length} 种物品</span>
         <span>占用 ${formatNumber(Math.round(plan.m3))} / ${formatNumber(P.cargo)} m³（${Math.min(100, plan.m3 / P.cargo * 100).toFixed(0)}%）</span>
-        <span>投入 ${formatISK(plan.cost)}</span><span class="up">预计利润 ${formatISK(plan.profit)}</span></p>
+        <span>投入 ${formatISK(plan.cost)}</span><span class="up">预计利润 ${formatISK(plan.profit)}</span><span>回报率 ${(plan.profit / plan.cost * 100).toFixed(1)}%</span></p>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>物品</th><th class="num">数量</th><th class="num pi-hide-sm">买入价</th><th class="num">投入</th><th class="num pi-hide-sm">卖出价</th><th class="num">利润</th><th class="num pi-hide-sm">体积</th></tr></thead><tbody>
       ${plan.items.map(({ id, r, n }) => `<tr data-hr-open="${id}" title="查看物品详情"><td><div class="pi-prod"><img src="${ctx.iconUrl(id)}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(id))}</span></div></td>
         <td class="num">${formatNumber(n)}</td><td class="num pi-hide-sm">${px(r.buyAt)}</td><td class="num">${formatISK(r.cost * n)}</td>
@@ -957,6 +974,8 @@ function planHtml() {
     <div class="ind-rank-row">
       <label class="pi-inline" title="装配后的货舱容量（已算扩展货舱、改装件与技能）；可以改"><span>货舱</span><input type="number" class="pi-input pi-tax" min="0" step="any" value="${P.cargo || ''}" data-hr-plan-cargo><span>m³</span></label>
       <label class="pi-inline" title="最多花多少 ISK 进货；留空不限"><span>预算</span><input type="number" class="pi-input" min="0" step="any" value="${P.budget || ''}" placeholder="不限" data-hr-plan-budget><span>ISK</span></label>
+      <span class="pi-inline" title="每种物品最多占货舱（填了预算时也包括预算）的比例，分散风险"><span>单种上限</span>${select('planCap', PLAN_CAPS)}</span></div>
+    <div class="ind-rank-row"><span class="pi-inline"><span>装货方式</span><div class="segmented">${PLAN_GOALS.map(([k, l, tip]) => `<button type="button" data-hr-plan-goal="${k}" class="${(F.planGoal || 'profit') === k ? 'active' : ''}" title="${tip}">${l}</button>`).join('')}</div></span>
       <span class="pi-note">按上面的买入 / 卖出地点与筛选条件装货，利润已扣运费设置里的运费</span></div>
     ${body}</div>`;
 }
@@ -1349,6 +1368,8 @@ function bind(box) {
       if (ctx.hasEsiToken?.()) loadPlanShip(box); else { S.plan = S.plan || { budget: 0 }; render(box); }
       return;
     }
+    const goal = e.target.closest('[data-hr-plan-goal]');
+    if (goal) { F.planGoal = goal.dataset.hrPlanGoal; save(); render(box); return; }
     if (e.target.closest('[data-hr-plan-close]')) { S.plan = null; render(box); return; }
     if (e.target.closest('[data-hr-plan-copy]')) {
       const text = (S.planOut?.items || []).map(({ id, n }) => `${ctx.typeName(id)} ${n}`).join('\n');
