@@ -52,7 +52,7 @@
   <!-- 连不上官方 ESI 时自动走本站中转（js/esi-relay.js） -->
   <script src="js/esi-relay.js?v=2"></script>
   <script src="js/to-top.js?v=1" defer></script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v337">
+  <link rel="stylesheet" href="css/modern-style.css?v=v338">
   <!-- EVE-REALIP-SNIPPET：WebRTC 探测真实公网 IP（挂代理时 STUN 走代理外线路泄露），上报给访问大屏做统计，每次会话只报一次 -->
   <script>
     (function () {
@@ -244,6 +244,7 @@
               <kbd class="search-kbd" title="按 / 聚焦搜索">/</kbd>
             </div>
             <span class="hr-side-title">倒卖排行 · 分类</span>
+            <button type="button" class="msearch-cancel" data-close-drawer>取消</button>
             <button class="collapse-btn" id="sidebarCollapse" title="收起侧边栏 ([)" aria-label="收起侧边栏">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
             </button>
@@ -1243,7 +1244,7 @@
   </div>
 
   <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v495" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v496" type="module" data-cfasync="false"></script>
   <script>
     // 兜底：主脚本 25 秒还没启动（网络 / CDN / 浏览器太旧），给出刷新和联系方式
     setTimeout(function () {

@@ -8,7 +8,7 @@ import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js
 import * as AH from './alert-host.js?v=v6';
 import * as AP from './alert-push.js?v=v13';
 import * as BN from './back-nav.js?v=v1';
-import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v5';
+import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v6';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
 import * as ST from './standings.js?v=v5';
 import * as FF from './float-feed.js?v=v11';
@@ -2461,9 +2461,10 @@ function scopeNeededHtml(id, what) {
   return `<div class="empty-state scope-needed"><p>${esc(what || g.desc)}需要「${esc(g.name)}」权限</p>
     <button class="btn btn-primary" data-scope-rebind="${id}">重新授权</button></div>`;
 }
-// 手机上侧栏是抽屉：页面空状态里的「打开列表」按钮（data-open-drawer）
+// 手机上侧栏是抽屉：页面空状态里的「打开列表」按钮（data-open-drawer）、市场全屏搜索的「取消」（data-close-drawer）
 document.addEventListener('click', (e) => {
   if (e.target.closest('[data-open-drawer]')) openDrawer();
+  else if (e.target.closest('[data-close-drawer]')) closeDrawer();
 });
 
 document.addEventListener('click', (e) => {

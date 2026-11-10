@@ -318,7 +318,7 @@ mark {
 [data-theme="light"] #themeToggle .icon-moon, [data-theme="light"] .msheet-act .icon-moon { display: none; }
 
 /* ===== 手机导航（mobile-nav.js）：底部标签栏 + 「全部」面板；电脑上不显示 ===== */
-.mobile-title, .mobile-tabbar { display: none; }
+.mobile-title, .mobile-tabbar, .mobile-back, .msearch-cancel { display: none; }
 .mobile-tabbar { flex: none; background: var(--bg-secondary); border-top: 1px solid var(--border-primary); padding-bottom: var(--sa-bottom); z-index: 100; }
 .mtab { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 54px; color: var(--text-muted); font-size: 0.6875rem; font-weight: 500; -webkit-tap-highlight-color: transparent; }
 .mtab svg { width: 22px; height: 22px; flex: none; }
@@ -2698,7 +2698,7 @@ td.loc {
   /* 顶栏只留 ☰、当前页名称、服务器、购物车、预警；功能入口在底部标签栏，语言 / 主题 / 个性化设置 / API / 定制收进「全部」面板 */
   .header-brand, .header-nav, .api-link, #contactBtn, #shortcutHelpBtn, #langToggle, #prefsBtn, #themeToggle { display: none; }
   .mobile-title { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1rem; font-weight: 600; }
-  .menu-btn[hidden] + .mobile-title { padding-left: 4px; }
+  .mobile-title { order: -1; padding-left: 8px; }   /* 页名在最左，侧栏按钮（搜索 / 筛选）挪到右边和其他按钮放一起 */
   .mobile-tabbar { display: flex; }
   /* 分段标签（各页的子页切换）：文字不折行，放不下时横向滑动 */
   .segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
@@ -8761,4 +8761,66 @@ a.pz-name:hover { color: var(--accent-primary); }
 
   /* 侧栏在手机上是抽屉：空状态里的“打开列表”按钮 */
   .drawer-open-btn { margin-top: 10px; }
+}
+
+/* ===== 手机：按常见 App 的样子 ===== */
+@media (max-width: 768px) {
+  /* 底部标签栏：选中项图标后面一块圆角底色（Material 3 风格），点按无蓝色高亮 */
+  .mobile-tabbar { -webkit-user-select: none; user-select: none; }
+  .mtab { height: 60px; gap: 2px; }
+  .mtab svg { box-sizing: border-box; width: 56px; height: 30px; padding: 4px 16px; border-radius: 15px; transition: background var(--transition-fast); }
+  .mtab.active svg { background: var(--accent-soft); }
+  .mtab.active span { font-weight: 600; }
+  .mtab:active svg { background: var(--bg-hover); }
+  html.m-typing .mobile-tabbar { display: none; }
+
+  /* 「全部」面板：分组 */
+  .msheet-group + .msheet-group { margin-top: 6px; }
+  .msheet-gtitle { margin: 4px 6px 2px; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); }
+
+  /* 页面里和顶栏同名的大标题不再重复 */
+  .m-dup { display: none !important; }   /* 各页标题自己设了 display（如战场模拟的 flex） */
+  .pi-head:has(> h2.m-dup:only-child), .ap-head:has(> h2.m-dup:only-child) { display: none; }
+
+  /* 页面级子标签（制造、LP、合同、广场、虫洞）：常见 App 的顶部标签——整行横向滑动，选中项文字加粗、下方一条短横线 */
+  .ind-tabs-mobile, .pz-tabs, .wh-tabs, .ct-tabbar > .ct-tabs:first-child {
+    display: flex; flex-wrap: nowrap; width: 100%; max-width: 100%; gap: 2px; padding: 0; border-radius: 0; background: none; overflow-x: auto; scrollbar-width: none;
+  }
+  .ind-tabs-mobile button, .pz-tabs button, .wh-tabs button, .ct-tabbar > .ct-tabs:first-child button {
+    position: relative; flex: none; height: 40px; padding: 0 12px; border-radius: 0; background: none; box-shadow: none; font-size: 0.875rem; color: var(--text-secondary); white-space: nowrap;
+  }
+  .ind-tabs-mobile button.active, .pz-tabs button.active, .wh-tabs button.active, .ct-tabbar > .ct-tabs:first-child button.active { background: none; box-shadow: none; color: var(--text-primary); font-weight: 600; }
+  .ind-tabs-mobile button.active::after, .pz-tabs button.active::after, .wh-tabs button.active::after, .ct-tabbar > .ct-tabs:first-child button.active::after {
+    content: ''; position: absolute; left: 50%; bottom: 2px; width: 20px; height: 3px; margin-left: -10px; border-radius: 2px; background: var(--accent-primary);
+  }
+  .ct-tabbar > .ct-tabs:first-child { flex-basis: 100%; }
+
+  /* 点按反馈：去掉系统蓝色高亮，按下时轻微变暗 */
+  button, a, [role="button"], .nav-btn, .msheet-item { -webkit-tap-highlight-color: transparent; }
+  .btn:active, .icon-btn:active { opacity: 0.7; }
+}
+/* 触屏没有悬停：点过的顶栏按钮不留下悬停底色 */
+@media (max-width: 768px) and (hover: none) {
+  .app-header .icon-btn:hover { background: none; color: var(--text-secondary); }
+  .app-header { -webkit-user-select: none; user-select: none; }
+}
+
+/* ===== 手机：二级页面返回、市场全屏搜索（mobile-nav.js） ===== */
+@media (max-width: 768px) {
+  .mobile-back:not([hidden]) { display: flex; order: -2; width: 36px; margin-right: -6px; padding: 0; }
+  .mobile-back svg { width: 22px; height: 22px; }
+  .mobile-back:not([hidden]) ~ .mobile-title { padding-left: 0; }
+
+  /* 物品目录：从顶部出现、盖住整个屏幕（包括顶栏和标签栏），搜索框 + 「取消」在最上面 */
+  #sidebar.m-search {
+    position: fixed; inset: 0; z-index: 1200; width: auto; padding-top: var(--sa-top); box-shadow: none;
+    transform: translateY(-16px); opacity: 0; visibility: hidden;
+    transition: transform 0.2s ease, opacity 0.2s ease, visibility 0s linear 0.2s;
+  }
+  #sidebar.m-search.drawer-open { transform: none; opacity: 1; visibility: visible; transition: transform 0.2s ease, opacity 0.2s ease; }
+  #sidebar.m-search .sidebar-header { min-width: 0; padding: 8px 4px 8px 12px; border-bottom: 0; }
+  #sidebar.m-search .search-box { flex: 1; min-width: 0; height: 40px; padding: 0 14px; border-radius: 20px; }
+  #sidebar.m-search .search-kbd, #sidebar.m-search #sidebarCollapse { display: none; }
+  #sidebar.m-search .msearch-cancel { display: flex; align-items: center; flex: none; height: 40px; padding: 0 10px; font-size: 0.9375rem; color: var(--accent-primary); -webkit-tap-highlight-color: transparent; }
+  #sidebar.m-search .sidebar-tabs, #sidebar.m-search .sidebar-toolbar, #sidebar.m-search .sidebar-content { min-width: 0; }
 }
