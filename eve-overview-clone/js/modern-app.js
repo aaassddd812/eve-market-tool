@@ -3565,7 +3565,7 @@ function initContact() {
 // ===== 个性化设置（右上角滑块按钮）=====
 // 存在 eve-prefs（云同步会带上）；每项一个勾选框：键、名称、[不勾选的值, 勾选的值]、默认是否勾选
 const PREFS = [
-  ['skin', '新页面（炭黑底、方角、科技感字体）', ['default', 'eve'], true],   // 默认开；关掉（default）才回老界面
+  ['skin', '新页面', ['default', 'eve'], true],   // 默认开；关掉（default）才回老界面
   ['mapZoom', '星图反转鼠标方向', ['normal', 'reverse'], false],   // 只反转滚轮缩放
   ['treeLines', '显示分类目录连接线', ['off', 'on'], true],
   ['treeIcons', '市场目录显示分类与物品图标', ['off', 'on'], true]
