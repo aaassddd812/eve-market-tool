@@ -190,9 +190,11 @@ async function limited(fn) {
   try { return await fn(); } finally { active -= 1; waiting.shift()?.(); }
 }
 // 击杀记录装配（按船型 + 指定击杀缓存，详情面板的候选列表也用它）
+// 最近常见装配：先看最近 7 天；冷门船 7 天里没人死过时，放宽到服务器保存的全部记录（仍是最近 20 次损失）
 function loadKb(ship, kills = null) {
   const key = kills?.length ? ship + ':' + kills.join(',') : String(ship);
-  if (!kbCache.has(key)) kbCache.set(key, limited(() => commonFit(ship, kills?.length ? { kills } : {})).catch((e) => { kbCache.delete(key); throw e; }));
+  const get = () => (kills?.length ? commonFit(ship, { kills }) : commonFit(ship).then((r) => r || commonFit(ship, { days: 3650 })));
+  if (!kbCache.has(key)) kbCache.set(key, limited(get).catch((e) => { kbCache.delete(key); throw e; }));
   return kbCache.get(key);
 }
 const hasBattle = (row) => Boolean(row.kills?.length || row.killsOther?.length);
@@ -216,7 +218,7 @@ async function resolveRow(row) {
       row.status = 'ok';
     } else {
       row.fit = emptyFit(row.ship);
-      row.label = '无阵亡记录 · 空船';
+      row.label = '击杀记录里没有这型船 · 空船';
       row.status = 'none';
     }
   } catch (error) {
@@ -2637,7 +2639,7 @@ function fitView(item, row) {
     const res = LAYER_NAMES.map((l, i) => `<tr><th>${l}</th>${u.res[i].map((r) => `<td style="--r:${Math.round((1 - r) * 100)}%">${Math.round((1 - r) * 100)}%</td>`).join('')}<td class="hp">${ctx.formatISK(u.max[i])}</td></tr>`).join('');
     const remote = u.remote.reduce((s, x) => s + x.rate, 0);
     const local = u.local.reduce((a, b) => a + (b || 0), 0);
-    stats = `<div class="sim-dt-cards">
+    stats = `<div class="sim-dt-over"><div class="sim-dt-cards">
         <div><small>DPS</small><b>${num(u.dps)}</b>${u.dps ? dmgBar : ''}</div>
         <div><small>EHP</small><b>${ctx.formatISK(u.ehp)}</b></div>
         <div><small>最大速度</small><b>${num(u.vel)}<em>m/s</em></b></div>
@@ -2647,7 +2649,7 @@ function fitView(item, row) {
         ${remote ? `<div><small>遥修</small><b>${num(remote)}<em>HP/s</em></b></div>` : ''}
         ${u.webs.length || u.paints.length ? `<div><small>网子 / 标记</small><b>${u.webs.length} / ${u.paints.length}</b></div>` : ''}
       </div>
-      <table class="fit-resist sim-dt-res"><thead><tr><th></th>${DAMAGE_NAMES.map((n, j) => `<th class="is-${DK[j]}">${n}</th>`).join('')}<th>HP</th></tr></thead><tbody>${res}</tbody></table>`;
+      <table class="fit-resist sim-dt-res"><thead><tr><th></th>${DAMAGE_NAMES.map((n, j) => `<th class="is-${DK[j]}">${n}</th>`).join('')}<th>HP</th></tr></thead><tbody>${res}</tbody></table></div>`;
   }
   const using = item.key === 'row';
   return `<div class="sim-dt-view-head"><h5>${esc(item.label)}</h5>

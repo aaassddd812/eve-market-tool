@@ -723,9 +723,9 @@ function resultHtml() {
   if (!plan) return '';
   if (!P.targets.length) return '<div class="sp-box sp-empty-res"><p class="sim-empty">训练顺序显示在这里</p></div>';
   const E = plan.entries;
-  const card = (label, value, detail = '') => `<div class="valuation-card"><span class="valuation-label">${label}</span><strong class="valuation-value">${value}</strong><span class="valuation-detail">${detail}</span></div>`;
+  const card = (label, value, detail = '') => `<div class="sp-stat"><small>${label}</small><b>${value}</b>${detail ? `<em>${detail}</em>` : ''}</div>`;
   const wait = (plan.start - Date.now()) / 60e3;
-  const cards = `<div class="valuation-grid sp-cards">
+  const cards = `<div class="sp-box sp-stats">
     ${card('总训练时间', E.length ? dur(plan.total.min) : '—', wait > 1 ? `接在当前队列后` : '')}
     ${card('预计完成', E.length ? esc(dateOnly(plan.end)) : '—')}
     ${card('需要技能点', ctx.formatNumber(plan.total.sp), plan.total.sp ? `≈ ${Math.ceil(plan.total.sp / injectorSp())} 个大型注入器` : '')}
