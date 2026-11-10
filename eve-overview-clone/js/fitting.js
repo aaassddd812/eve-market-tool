@@ -214,10 +214,75 @@ export async function showFitting(restored = false) {
     renderBrowser();
     recompute();
     F.ready = true;
+    pickViewOnce();
     return;
   }
   if (loadPending() || loadFromHash()) { recompute(); renderBrowser(); restored = false; }
   syncSkillMode(restored);
+  pickViewOnce();
+}
+
+// ---------- 第一次进装配页：大框选显示方式（圆盘 / 列表），和原版一样 ----------
+// 没选过（eve-fit-view 为空）才弹；电脑默认选中圆盘、手机默认列表；选完存起来，之后在装配上方的「列表 / 圆盘」切换
+const PICK_PREVIEW = {
+  radial: `<svg viewBox="0 0 200 200" aria-hidden="true"><defs><radialGradient id="fvpG" cx="50%" cy="45%" r="55%"><stop offset="0" stop-color="#9fb4c8"/><stop offset="1" stop-color="#26303a"/></radialGradient></defs>
+    <clipPath id="fvpClip"><circle cx="100" cy="100" r="88"/></clipPath>
+    <circle cx="100" cy="100" r="92" fill="#0b0d0f"/><circle cx="100" cy="100" r="88" fill="url(#fvpG)"/>
+    <image href="${IMG(24698, 'render', 256)}" x="12" y="12" width="176" height="176" clip-path="url(#fvpClip)" preserveAspectRatio="xMidYMid slice"/>
+    <circle cx="100" cy="100" r="76" fill="none" stroke="rgba(10,12,14,.72)" stroke-width="26"/>
+    ${[-130, -117, -104, -91, -78, -65, -38, -25, -12, 1, 52, 65, 78, 91, 148, 161, 174].map((a, i) => { const r = Math.PI / 180, a0 = (a) * r, a1 = (a + 10.5) * r, R0 = 64, R1 = 88;
+      const pts = [[R1, a0], [R1, a1], [R0, a1], [R0, a0]].map(([R, t]) => `${(100 + R * Math.cos(t)).toFixed(1)},${(100 + R * Math.sin(t)).toFixed(1)}`).join(' ');
+      return `<polygon points="${pts}" fill="${i < 6 || (i >= 6 && i < 8) ? 'rgba(30,232,60,.14)' : 'rgba(153,153,153,.1)'}" stroke="${i < 8 ? '#1ee83c' : '#777'}" stroke-width="1"/>`; }).join('')}
+    <circle cx="100" cy="100" r="96" fill="none" stroke="#2b3138" stroke-width="3"/></svg>`,
+  list: `<svg viewBox="0 0 200 200" aria-hidden="true"><rect x="8" y="8" width="184" height="184" rx="6" fill="#0b0d0f"/>
+    ${['高槽', '中槽', '低槽'].map((h, g) => { const y0 = 18 + g * 60; return `<text x="18" y="${y0 + 8}" fill="#8b949e" font-size="9" font-weight="700">${h}</text>` +
+      [0, 1, 2].map((k) => `<rect x="18" y="${y0 + 14 + k * 14}" width="10" height="10" rx="2" fill="${g === 2 ? '#a67c52' : '#5d8f6a'}"/><rect x="34" y="${y0 + 16 + k * 14}" width="${86 - k * 14}" height="6" rx="3" fill="#c9d1d9" opacity=".75"/><rect x="${130 - k * 14}" y="${y0 + 16 + k * 14}" width="40" height="6" rx="3" fill="#6e7681" opacity=".55"/>`).join(''); }).join('')}</svg>`
+};
+function pickViewOnce() {
+  let have = null;
+  try { have = localStorage.getItem(VIEW_KEY); } catch { return; }   // 存不了就不弹（每次都会弹）
+  if (have || $('fitViewPick') || $('fitView')?.hidden) return;
+  let pick = MOBILE() ? 'list' : 'radial';
+  const card = (k, title, sub, note) => `<button type="button" class="fvp-card${pick === k ? ' is-on' : ''}" data-fvp="${k}" aria-pressed="${pick === k}">
+      <span class="fvp-head"><b>${title}</b><small>${sub}</small><em>${note}</em></span>
+      <span class="fvp-prev">${PICK_PREVIEW[k]}</span><span class="fvp-check" aria-hidden="true"></span></button>`;
+  const box = document.createElement('div');
+  box.className = 'modal fvp-modal';
+  box.id = 'fitViewPick';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-labelledby', 'fvpTitle');
+  box.innerHTML = `<div class="modal-backdrop"></div>
+    <div class="modal-content fvp-content">
+      <div class="modal-header"><h3 id="fvpTitle">选择装配视图</h3></div>
+      <div class="modal-body">
+        <div class="fvp-cards">
+          ${card('radial', '圆盘', '适合电脑和平板', '和游戏装配窗口一样的环形，舰船图在中间')}
+          ${card('list', '列表', '适合手机', '按槽位一行一件，信息完整、方便快速改')}
+        </div>
+      </div>
+      <div class="fvp-foot"><button type="button" class="btn btn-primary" data-fvp-save>保存并关闭</button></div>
+    </div>`;
+  const save = () => {
+    try { localStorage.setItem(VIEW_KEY, pick); } catch { /* 忽略 */ }
+    box.remove();
+    document.removeEventListener('keydown', onKey, true);
+    if (F.fit) renderFit();
+  };
+  const onKey = (e) => { if (e.key === 'Escape' || e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); save(); } };
+  box.addEventListener('click', (e) => {
+    const c = e.target.closest('[data-fvp]');
+    if (c) {
+      pick = c.dataset.fvp;
+      box.querySelectorAll('[data-fvp]').forEach((b) => { b.classList.toggle('is-on', b === c); b.setAttribute('aria-pressed', String(b === c)); });
+      if (e.detail > 1) save();   // 双击直接保存
+      return;
+    }
+    if (e.target.closest('[data-fvp-save]')) save();
+  });
+  document.addEventListener('keydown', onKey, true);
+  document.body.append(box);
+  box.querySelector('[data-fvp-save]').focus();
 }
 
 // 绑定 / 解绑 ESI 后刷新技能来源

@@ -9035,3 +9035,28 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .fit-radial-tip { margin: 0; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-secondary); color: var(--text-muted); font-size: 0.8125rem; text-align: center; }
 [data-theme="light"] .fr-hp circle { stroke: #3b4652; } [data-theme="light"] .fr-hp circle.is-used { fill: #3b4652; }
 [data-theme="light"] .fr-g-power { color: #6b7785; }
+
+/* ===== 装配页第一次进入：选择视图（圆盘 / 列表）大框 ===== */
+.fvp-content { max-width: 860px; }
+.fvp-modal .modal-body { padding: 18px 20px 4px; overflow: auto; }
+.fvp-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.fvp-card { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 16px; text-align: left; border-radius: var(--radius-lg); background: var(--bg-tertiary); border: 2px solid transparent; color: var(--text-primary); cursor: pointer; transition: background 0.15s, border-color 0.15s; }
+.fvp-card:hover { background: var(--bg-hover); }
+.fvp-card.is-on { border-color: var(--accent-primary, #2b9bd6); background: color-mix(in srgb, var(--accent-primary, #2b9bd6) 16%, var(--bg-tertiary)); }
+.fvp-head { display: flex; flex-direction: column; gap: 2px; padding-right: 34px; }
+.fvp-head b { font-size: 1.125rem; letter-spacing: 0.02em; }
+.fvp-head small { font-weight: 600; color: var(--text-secondary); }
+.fvp-head em { font-style: normal; font-size: 0.8125rem; color: var(--text-muted); }
+.fvp-prev { display: flex; justify-content: center; padding: 10px; border-radius: var(--radius-md); background: #050607; }
+.fvp-prev svg { width: 100%; max-width: 230px; aspect-ratio: 1; display: block; }
+.fvp-check { position: absolute; top: 14px; right: 14px; width: 24px; height: 24px; border-radius: 50%; background: var(--bg-hover); }
+.fvp-card.is-on .fvp-check { background: var(--accent-primary, #2b9bd6) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.5 4.5L19 7.5'/%3E%3C/svg%3E") center / 15px no-repeat; }
+.fvp-foot { display: flex; justify-content: flex-end; padding: 14px 20px 18px; }
+@media (max-width: 768px) {
+  .fvp-modal .modal-content { max-height: none; border-radius: 0; }
+  .fvp-cards { grid-template-columns: minmax(0, 1fr); }
+  .fvp-card { flex-direction: row; align-items: center; }
+  .fvp-prev { width: 110px; flex: none; padding: 6px; order: -1; }
+  .fvp-foot { margin-top: auto; }
+  .fvp-foot .btn { width: 100%; }
+}

@@ -179,7 +179,7 @@ async function renderHome() {
     <section class="kb-summary" id="kbSummary">${skSummary()}</section>
     <section class="kb-section">
       <h3 class="kb-section-title">最近 7 天最高损失</h3>
-      <div class="kb-top" id="kbTop">${skTopCards(10)}</div>
+      <div class="kb-top" id="kbTop">${skTopCards(14)}</div>
     </section>
     <div class="kb-columns">
       <section class="kb-section kb-feed-panel">
@@ -253,7 +253,7 @@ function renderStatus() {
 async function loadTop() {
   const box = $('kbTop');
   try {
-    const data = await api('top?days=7&limit=10');
+    const data = await api('top?days=7&limit=14');
     absorbNames(data.names);
     await loadTypes(data.kills.map((k) => k.ship_type_id));
     if (!$('kbTop')) return;
@@ -1423,7 +1423,7 @@ let started = false;
 
 function homeSkeleton() {
   return `<section class="kb-summary">${skSummary()}</section>
-    <section class="kb-section">${skTitle(14)}<div class="kb-top">${skTopCards(10)}</div></section>
+    <section class="kb-section">${skTitle(14)}<div class="kb-top">${skTopCards(14)}</div></section>
     <div class="kb-columns"><section class="kb-section kb-feed-panel">${skTitle(16)}${skRows(10)}</section>
       <aside class="kb-section kb-board">${skTitle(30)}${skBoard(10)}</aside></div>`;
 }
@@ -1442,7 +1442,7 @@ function ensureReady() {
 // 空闲时预取：模块与星系数据、首页的统计 / 最高损失 / 最新击杀 / 默认排行榜，以及需要的名称
 export async function prefetchKbHome() {
   await ensureReady();
-  const paths = ['summary?hours=24', 'status', 'top?days=7&limit=10', 'feed?' + feedQuery(),
+  const paths = ['summary?hours=24', 'status', 'top?days=7&limit=14', 'feed?' + feedQuery(),
     `leaderboard?days=30&side=${S.lb.side}&by=${S.lb.by}&metric=${S.lb.metric}&limit=20`];
   const at = Date.now();
   const jobs = paths.map((path) => {

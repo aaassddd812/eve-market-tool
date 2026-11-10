@@ -1474,7 +1474,7 @@ class Api:
         while True:
             try:
                 self.summary({"hours": "24"}, force=True)
-                self.top({"days": "7", "limit": "8"}, force=True)
+                self.top({"days": "7", "limit": "14"}, force=True)   # 和击杀记录首页「最近 7 天最高损失」同一个缓存键
                 for side in ("losses", "kills"):
                     for by in ENTITY_COL:
                         for metric in ("value", "count"):
