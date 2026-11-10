@@ -18,7 +18,7 @@ const STORE_KEY = 'eve-appraisal-v1';
 const ICON = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
 
 // ratio：比例 %，算出来的小计、合计、税后都再乘上它（比如收购按 90%），单价保持市场原价
-const A = { names: null, loading: null, orders: new Map(), result: null, hub: SERVER.regions[0].id, view: 'market', rp: null, rpLoading: null, char: null, ratio: 100 };
+const A = { names: null, loading: null, orders: new Map(), result: null, hub: SERVER.regions[0].id, view: 'market', rp: null, rpLoading: null, char: null, ratio: 100, cmp: [], cmpState: new Map() };
 
 // 化矿设置：station npc / athanor / tatara；rig 0 / 1(T1) / 3(T2)；sec h / l / n（高安 / 低安 / 00 与虫洞）；imp 植入体加成 %；tax 再处理税 %
 const S = { station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0 };
@@ -33,6 +33,7 @@ export function initAppraisal(context) {
   A.hub = ctx.valuation.region().id;   // 交易中心与全站估值共用同一个选择
   if (saved.view === 'reproc') A.view = 'reproc';
   if (Number.isFinite(saved.ratio) && saved.ratio > 0) A.ratio = saved.ratio;
+  if (Array.isArray(saved.cmp)) A.cmp = saved.cmp.filter((c) => c && (c.k === 'hub' || (c.k === 'st' && c.id > 0)) && Number.isFinite(Number(c.id))).slice(0, 8);
   if (saved.rp && typeof saved.rp === 'object') {
     const r = saved.rp;
     if (['npc', 'athanor', 'tatara'].includes(r.station)) S.station = r.station;
@@ -46,7 +47,7 @@ export function initAppraisal(context) {
 }
 
 function save() {
-  ctx.store.setJSON(STORE_KEY, { hub: A.hub, view: A.view, rp: S, ratio: A.ratio });
+  ctx.store.setJSON(STORE_KEY, { hub: A.hub, view: A.view, rp: S, ratio: A.ratio, cmp: A.cmp });
 }
 
 function loadReprocess() {
@@ -224,7 +225,118 @@ async function appraise() {
     noSell: rows.filter((r) => r.sell == null), noBuy: rows.filter((r) => r.buy == null)
   };
   render();
+  loadCompare();
 }
+
+// ---------- 多地点比价：在主交易中心之外叠加其它交易中心 / 玩家建筑（可多选），每个地点的卖单 / 收单价都显示 ----------
+// A.cmp：[{ k: 'hub', id: 星域 id } | { k: 'st', id: 建筑 id, name }]，存在估价设置里；
+// 价格缓存在 A.orders（交易中心 key = 星域 id，建筑 key = 'st' + 建筑 id），玩家建筑整座读一次（ESI 建筑市场权限，modern-app 缓存 5 分钟）
+const cmpKey = (c) => (c.k === 'st' ? 'st' + c.id : String(c.id));
+const cmpSource = (c) => (c.k === 'hub' ? ctx.valuation.sources.find((r) => r.id === c.id) : null);
+function cmpName(c) {
+  if (c.k === 'hub') return cmpSource(c)?.hub.name || '交易中心 ' + c.id;
+  return ctx.structs?.readable().find((s) => s.id === c.id)?.name || c.name || '建筑 ' + c.id;
+}
+async function loadCompare() {
+  const R = A.result;
+  if (!R || !A.cmp.length) return;
+  const ids = R.rows.map((r) => r.id);
+  await Promise.all(A.cmp.map(async (c) => {
+    const key = cmpKey(c);
+    if (c.k === 'hub' && key === String(R.region.id)) return;
+    if (ids.every((id) => A.orders.has(key + ':' + id))) { A.cmpState.delete(key); return; }
+    A.cmpState.set(key, { loading: true });
+    try {
+      if (c.k === 'hub') {
+        const region = cmpSource(c);
+        if (!region) throw new Error('没有这个交易中心');
+        await hubOrders(region, ids, () => {});
+      } else {
+        if (!ctx.structs) throw new Error('不支持');
+        const m = await ctx.structs.market(c.id);
+        if (!m?.byType) throw new Error(m?.denied ? '没有权限读这个建筑的市场' : m?.tooBig ? '订单太多读不了' : '读取失败');
+        for (const id of ids) {
+          const orders = m.byType.get(id) || [];
+          const sells = orders.filter((o) => !o.is_buy_order).sort((a, b) => a.price - b.price);
+          const buys = orders.filter((o) => o.is_buy_order).sort((a, b) => b.price - a.price);
+          A.orders.set(key + ':' + id, { sell: sells[0]?.price ?? null, buy: buys[0]?.price ?? null, buys: buys.map((o) => [o.price, o.volume_remain, o.min_volume || 1]), sells: sells.map((o) => [o.price, o.volume_remain]) });
+        }
+      }
+      A.cmpState.delete(key);
+    } catch (e) {
+      A.cmpState.set(key, { error: e.message || String(e) });
+    }
+    if (A.result === R) render();
+  }));
+  if (A.result === R) render();
+}
+// 每个比价地点的合计（不含和主交易中心相同的）
+function cmpTotals(R) {
+  return A.cmp.filter((c) => !(c.k === 'hub' && c.id === R.region.id)).map((c) => {
+    const key = cmpKey(c), st = A.cmpState.get(key) || {};
+    const ready = !st.loading && !st.error && R.rows.every((r) => A.orders.has(key + ':' + r.id));
+    const get = (id) => (ready ? A.orders.get(key + ':' + id) || {} : {});
+    let sell = 0, buy = 0, nSell = 0, nBuy = 0;
+    for (const r of R.rows) {
+      const o = get(r.id);
+      if (o.sell != null) { sell += o.sell * r.qty; nSell += 1; }
+      if (o.buy != null) { buy += o.buy * r.qty; nBuy += 1; }
+    }
+    return { c, key, name: cmpName(c), st, ready, get, sell, buy, nSell, nBuy };
+  });
+}
+function cmpHtml(R, T) {
+  const chips = A.cmp.map((c, i) => `<span class="ap-cmp-chip${c.k === 'st' ? ' is-st' : ''}">${c.k === 'st' ? '<i title="玩家建筑"></i>' : ''}${ctx.esc(cmpName(c))}<button type="button" data-ap-cmp-del="${i}" title="移除" aria-label="移除">×</button></span>`).join('');
+  const head = `<div class="ap-cmp-head"><b>多地点比价</b>${chips}<button type="button" class="btn btn-ghost btn-sm" data-ap-cmp-add>＋ 添加地点</button>
+    ${A.cmp.length ? '' : '<span class="text-muted">叠加其它交易中心或玩家建筑，每个地点的卖单 / 收单价一起列出来</span>'}</div>`;
+  if (!T.length) return `<div class="ap-cmp">${head}</div>`;
+  const all = [{ name: R.region.hub.name, main: true, ready: true, sell: R.sellTotal, buy: R.buyTotal, nSell: R.rows.length - R.noSell.length, nBuy: R.rows.length - R.noBuy.length }, ...T];
+  const ok = all.filter((x) => x.ready);
+  const n = R.rows.length;
+  // 只在物品都有挂单的地点之间比（缺物品的合计偏小，不能当最便宜）
+  const bestSell = Math.min(...ok.filter((x) => x.nSell === n).map((x) => x.sell)), bestBuy = Math.max(...ok.filter((x) => x.nBuy === n).map((x) => x.buy));
+  const row = (x) => `<tr${x.main ? ' class="is-main"' : ''}><td>${ctx.esc(x.name)}${x.main ? '<small>主</small>' : ''}</td>${!x.ready
+    ? `<td colspan="4" class="${x.st?.error ? 'ap-warn' : 'text-muted'}">${x.st?.error ? ctx.esc(x.st.error) : '读取中…'}</td>`
+    : `<td class="num ap-sell${x.nSell && x.sell === bestSell ? ' is-best' : ''}">${cp(x.nSell ? x.sell : null)}</td><td class="num ap-muted">${x.nSell}/${n}</td>
+       <td class="num ap-buy${x.nBuy && x.buy === bestBuy ? ' is-best' : ''}">${cp(x.nBuy ? x.buy : null)}</td><td class="num ap-muted">${x.nBuy}/${n}</td>`}</tr>`;
+  return `<div class="ap-cmp">${head}
+    <div class="ap-table-wrap"><table class="ap-table ap-cmp-table"><thead><tr><th>地点</th><th class="num">按最低卖价</th><th class="num">有卖单</th><th class="num">按最高收价</th><th class="num">有收单</th></tr></thead>
+    <tbody>${all.map(row).join('')}</tbody></table></div>
+    <p class="ap-muted ap-cmp-note">蓝底：买入最便宜（卖价合计最低）/ 卖出最划算（收价合计最高）的地点，只在物品都有挂单的地点之间比；下面每个物品比主交易中心更好的价格加粗</p></div>`;
+}
+// 添加地点：交易中心 + 能读市场的玩家建筑，可搜索；玩家建筑的发现 / 按名称搜索添加在「我的建筑市场」里
+function cmpPopHtml(q = '') {
+  const have = new Set(A.cmp.map(cmpKey));
+  const lq = q.trim().toLowerCase();
+  const hubs = ctx.valuation.sources.filter((r) => r.id !== A.hub && !have.has(String(r.id)) && (!lq || r.hub.name.toLowerCase().includes(lq)));
+  const sts = (ctx.structs?.readable() || []).filter((s) => !have.has('st' + s.id) && (!lq || s.name.toLowerCase().includes(lq)));
+  const scope = ctx.structs?.hasScope();
+  return `<input type="search" class="cr-input" data-ap-cmp-q placeholder="搜索交易中心 / 玩家建筑" value="${ctx.esc(q)}" autocomplete="off">
+    <div class="ap-cmp-list">
+      ${hubs.length ? `<div class="ap-cmp-group">交易中心</div>${hubs.map((r) => `<button type="button" data-ap-cmp-pick="hub:${r.id}">${ctx.esc(r.hub.name)}</button>`).join('')}` : ''}
+      ${sts.length ? `<div class="ap-cmp-group">玩家建筑</div>${sts.map((s) => `<button type="button" data-ap-cmp-pick="st:${s.id}" data-name="${ctx.esc(s.name)}"><i></i>${ctx.esc(s.name)}</button>`).join('')}` : ''}
+      ${!hubs.length && !sts.length ? '<p class="text-muted">没有匹配的地点</p>' : ''}
+    </div>
+    ${ctx.structs ? `<button type="button" class="btn btn-ghost btn-sm ap-cmp-manage" data-ap-cmp-manage>${scope ? '搜索 / 添加更多玩家建筑…' : '绑定 ESI 后可添加玩家建筑…'}</button>` : ''}`;
+}
+function openCmpPop(btn) {
+  closeCmpPop();
+  const pop = document.createElement('div');
+  pop.className = 'ap-cmp-pop';
+  pop.innerHTML = cmpPopHtml();
+  btn.closest('.ap-cmp-head').append(pop);
+  pop.querySelector('[data-ap-cmp-q]').focus();
+  pop.addEventListener('input', (e) => {
+    if (!e.target.matches('[data-ap-cmp-q]')) return;
+    const q = e.target.value;
+    pop.innerHTML = cmpPopHtml(q);
+    const inp = pop.querySelector('[data-ap-cmp-q]');
+    inp.focus();
+    inp.setSelectionRange(q.length, q.length);
+  });
+}
+function closeCmpPop() { document.querySelector('.ap-cmp-pop')?.remove(); }
+document.addEventListener('click', (e) => { if (!e.target.closest?.('.ap-cmp-pop, [data-ap-cmp-add]')) closeCmpPop(); });
 
 // 深渊装备卡片在 #apAby（render() 只重绘 #apResult，不影响它）
 async function mountAbyssal(text) {
@@ -324,6 +436,7 @@ function applyMed(R) {
 
 function marketHtml(R, rp) {
   const isk = cpu;
+  const T = cmpTotals(R);
   const f = fees();
   const M = R.hasMed ? applyMed(R) : null;
   const SP = applySplit(R);
@@ -344,6 +457,7 @@ function marketHtml(R, rp) {
       <td class="num ap-hide-sm">${r.split == null ? '—' : `<span title="单价 ${ctx.formatISK(r.split)}">${cp(r.qty * r.split)}</span>`}</td>
       ${M ? `<td class="num ap-mid">${r.mid == null ? '—' : `<span title="单价 ${ctx.formatISK(r.mid)}">${cp(r.qty * r.mid)}</span>`}</td>` : ''}
       <td class="num ap-hide-sm">${cp(r.avg == null ? null : r.qty * r.avg)}</td>
+      ${T.map((x) => { const o = x.get(r.id); return `<td class="num ap-cmp-cell">${!x.ready ? '<span class="ap-muted">…</span>' : `<span class="ap-sell${o.sell != null && r.sell != null && o.sell < r.sell ? ' is-better' : ''}" title="卖单小计（最低卖价 ${ctx.formatISK(o.sell ?? 0)}）">${cp(o.sell == null ? null : r.qty * o.sell)}</span><span class="ap-buy${o.buy != null && r.buy != null && o.buy > r.buy ? ' is-better' : ''}" title="收单小计（最高收价 ${ctx.formatISK(o.buy ?? 0)}）">${cp(o.buy == null ? null : r.qty * o.buy)}</span>`}</td>`; }).join('')}
     </tr>`;
   }).join('');
   const notes = [ratioNote()].filter(Boolean);
@@ -361,6 +475,7 @@ function marketHtml(R, rp) {
     </div>
     ${rp && rp.rows.length ? `<button type="button" class="ap-rp-hint" data-ap-view="reproc">化矿后产物按收单约 <b>${fmtK(rp.buyTotal)}</b>${rp.directTotal ? `，${rp.buyTotal >= rp.directTotal ? '比直接卖收单多' : '比直接卖收单少'} ${pct(Math.abs(rp.buyTotal / rp.directTotal - 1))}` : ''} →</button>` : ''}
     ${notes.length ? `<ul class="ap-notes">${notes.map((n) => `<li>${n}</li>`).join('')}</ul>` : ''}
+    ${cmpHtml(R, T)}
     <div class="ap-table-wrap"><table class="ap-table">
       <thead><tr>
         <th>物品</th><th class="num">数量</th><th class="num ap-hide-sm">最低卖价</th><th class="num ap-hide-sm">最高收价</th>
@@ -370,10 +485,11 @@ function marketHtml(R, rp) {
         <th class="num ap-hide-sm"><button type="button" data-ap-sort="split" class="${sortKey === 'split' ? 'active' : ''}">中间价小计</button></th>
         ${M ? `<th class="num"><button type="button" data-ap-sort="mid" class="${sortKey === 'mid' ? 'active' : ''}">成交价小计</button></th>` : ''}
         <th class="num ap-hide-sm"><button type="button" data-ap-sort="avg" class="${sortKey === 'avg' ? 'active' : ''}">均价小计</button></th>
+        ${T.map((x) => `<th class="num ap-cmp-th" title="${ctx.esc(x.name)}：上 卖单小计 / 下 收单小计">${ctx.esc(x.name)}<small>卖 / 收</small></th>`).join('')}
       </tr></thead>
       <tbody>${body}</tbody>
-      <tfoot><tr><td>合计</td><td class="num">${R.volTotal ? `<small class="ap-muted">${fmtM3(R.volTotal)}</small>` : ''}</td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-buy ap-hide-sm">${R.volTotal ? isk(R.volBuy / R.volTotal) : ''}</td><td class="num ap-sell ap-strong">${cp(R.sellTotal)}</td><td class="num ap-buy ap-strong">${cp(R.buyTotal)}</td><td class="num ap-hide-sm ap-strong">${cp(SP.total)}</td>${M ? `<td class="num ap-mid ap-strong">${cp(M.total)}</td>` : ''}<td class="num ap-hide-sm">${cp(R.avgTotal)}</td></tr>
-        <tr class="ap-net"><td>税后</td><td></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-sell">${cp(sellNet)}</td><td class="num ap-buy">${cp(buyNet)}</td><td class="ap-hide-sm"></td>${M ? '<td></td>' : ''}<td class="ap-hide-sm"></td></tr></tfoot>
+      <tfoot><tr><td>合计</td><td class="num">${R.volTotal ? `<small class="ap-muted">${fmtM3(R.volTotal)}</small>` : ''}</td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-buy ap-hide-sm">${R.volTotal ? isk(R.volBuy / R.volTotal) : ''}</td><td class="num ap-sell ap-strong">${cp(R.sellTotal)}</td><td class="num ap-buy ap-strong">${cp(R.buyTotal)}</td><td class="num ap-hide-sm ap-strong">${cp(SP.total)}</td>${M ? `<td class="num ap-mid ap-strong">${cp(M.total)}</td>` : ''}<td class="num ap-hide-sm">${cp(R.avgTotal)}</td>${T.map((x) => `<td class="num ap-cmp-cell">${x.ready ? `<span class="ap-sell">${cp(x.nSell ? x.sell : null)}</span><span class="ap-buy">${cp(x.nBuy ? x.buy : null)}</span>` : ''}</td>`).join('')}</tr>
+        <tr class="ap-net"><td>税后</td><td></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="ap-hide-sm"></td><td class="num ap-sell">${cp(sellNet)}</td><td class="num ap-buy">${cp(buyNet)}</td><td class="ap-hide-sm"></td>${M ? '<td></td>' : ''}<td class="ap-hide-sm"></td>${T.map(() => '<td></td>').join('')}</tr></tfoot>
     </table></div>`;
 }
 
@@ -592,6 +708,17 @@ export function showAppraisal() {
       render();
       return;
     }
+    if (e.target.closest('[data-ap-cmp-add]')) { if (document.querySelector('.ap-cmp-pop')) closeCmpPop(); else openCmpPop(e.target.closest('[data-ap-cmp-add]')); return; }
+    const pick = e.target.closest('[data-ap-cmp-pick]');
+    if (pick) {
+      const [k, id] = pick.dataset.apCmpPick.split(':');
+      A.cmp.push(k === 'st' ? { k, id: Number(id), name: pick.dataset.name || '' } : { k, id: Number(id) });
+      save(); closeCmpPop(); render(); loadCompare();
+      return;
+    }
+    const del = e.target.closest('[data-ap-cmp-del]');
+    if (del) { A.cmp.splice(Number(del.dataset.apCmpDel), 1); save(); render(); return; }
+    if (e.target.closest('[data-ap-cmp-manage]')) { closeCmpPop(); ctx.structs?.open(); return; }
     if (e.target.closest('[data-ap-copy]')) ctx.copyText(resultText(), '已复制估价结果');
     if (e.target.closest('[data-ap-cart]')) ctx.addToCart(A.result.rows.map((r) => ({ id: r.id, qty: r.qty, name: r.name })));
   });

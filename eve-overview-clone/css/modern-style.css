@@ -4508,6 +4508,30 @@ span.ap-cp:hover { background: var(--accent-soft); }
 .ap-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .ap-table td small { display: block; font-size: 0.6875rem; color: var(--warning); font-weight: 400; }
 .ap-item { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 估价：多地点比价 */
+.ap-cmp { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; padding: 12px 14px; border-radius: var(--radius-lg); background: var(--bg-secondary); }
+.ap-cmp-head { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.ap-cmp-head > b { margin-right: 4px; font-size: 0.875rem; font-weight: 600; }
+.ap-cmp-head > .text-muted { font-size: 0.75rem; }
+.ap-cmp-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; border-radius: var(--radius-md); background: var(--accent-soft); color: var(--accent-primary); font-size: 0.8125rem; }
+.ap-cmp-chip i, .ap-cmp-list button i { width: 7px; height: 7px; border-radius: 50%; background: #f5a623; flex: none; }
+.ap-cmp-chip button { width: 20px; height: 20px; border-radius: var(--radius-sm); color: inherit; opacity: .7; }
+.ap-cmp-chip button:hover { opacity: 1; background: var(--bg-hover); }
+.ap-cmp-pop { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; width: min(340px, 90vw); display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: var(--radius-lg); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
+.ap-cmp-pop .cr-input { width: 100%; }
+.ap-cmp-list { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; }
+.ap-cmp-group { padding: 6px 8px 2px; font-size: 0.6875rem; color: var(--text-muted); }
+.ap-cmp-list button { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); text-align: left; font-size: 0.8125rem; color: var(--text-secondary); }
+.ap-cmp-list button:hover { background: var(--bg-hover); color: var(--text-primary); }
+.ap-cmp-manage { align-self: flex-start; }
+.ap-cmp-table td small { display: inline-block; width: auto; margin-left: 6px; padding: 0 5px; border-radius: var(--radius-sm); background: var(--accent-soft); color: var(--accent-primary); font-size: 0.6875rem; }
+.ap-cmp-table tr.is-main td { font-weight: 600; }
+.ap-cmp-table td.is-best { background: var(--accent-soft); }
+.ap-cmp-note { margin: 0; font-size: 0.75rem; }
+.ap-cmp-th small { display: block; font-weight: 400; color: var(--text-muted); font-size: 0.6875rem; }
+.ap-cmp-th { max-width: 120px; white-space: normal; }
+.ap-cmp-cell > span { display: block; line-height: 1.35; }
+.ap-cmp-cell .is-better { font-weight: 700; filter: brightness(1.25); }
 .ap-item img { border-radius: 4px; flex: none; }
 .ap-item a { color: var(--text-primary); text-decoration: none; white-space: normal; }
 .ap-item a:hover { color: var(--accent-primary); }
@@ -8965,6 +8989,15 @@ html[data-skin="eve"] .kb-top-text { order: 0; padding: 10px 12px 8px; }
 html[data-skin="eve"] .kb-top-text strong { font-size: 0.9375rem; }
 html[data-skin="eve"] .kb-top-card > b { order: 2; padding: 8px 12px 10px; text-align: center; font-size: 0.9375rem; }
 @media (max-width: 768px) { html[data-skin="eve"] .kb-top { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } }
+
+/* 击杀详情：舰船分组名、装配圆盘（左）+ 物品列表（右），手机上上下排 */
+.kb-ship-group { display: block; margin-top: 2px; font-size: 0.75rem; color: var(--text-muted); }
+.kb-fit-wrap.has-radial { display: grid; grid-template-columns: minmax(0, 360px) minmax(0, 1fr); gap: 18px; align-items: start; }
+.kb-radial { position: sticky; top: 0; }
+.kb-radial .fit-radial { width: 100%; }
+.kb-radial .fr-acts, .kb-radial .fr-act-pad { display: none; }
+.kb-radial .fr-slot { cursor: default; }
+@media (max-width: 860px) { .kb-fit-wrap.has-radial { grid-template-columns: minmax(0, 1fr); } .kb-radial { position: static; max-width: 340px; margin: 0 auto; } }
 
 /* 行星模板编辑器侧栏：和新页面其它地方一致——炭灰底、方角面板、输入框 / 下拉框统一近黑底灰描边、主按钮蓝色。
    编辑器本身总是深色，所以浅色主题下也用这套颜色 */

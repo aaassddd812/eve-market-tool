@@ -44,6 +44,7 @@ export function initKillboard(context) {
     const val = await killValuation(args.kill);
     if (shownArgs !== args) return;
     $('killBody').innerHTML = renderKill(args.kill, val, args.priceNote);
+    mountKillRadial(args.kill);
     if (tab) switchKillTab(tab);
   });
 }
@@ -300,6 +301,7 @@ export async function openKill(kill, options = {}) {
     shownArgs = { kill, priceNote: options.priceNote };
     body.innerHTML = renderKill(kill, val, shownArgs.priceNote);
     shownKill = kill;
+    mountKillRadial(kill);
     $('killShare').hidden = false;
     nearestOf(kill).then((near) => {
       const el = currentKill === token && body.querySelector('[data-kill-near]');
@@ -490,6 +492,22 @@ export function closeKillModal() {
   closeKill();
 }
 
+// 舰船分组名 + 圆盘装配（装配数据约 480 KB，第一次打开击杀详情时加载，之后有缓存）
+const radialCache = new Map();   // killmail_id -> { group, svg }
+function mountKillRadial(kill) {
+  if (!app.killRadial) return;
+  const id = kill.killmail_id;
+  const apply = (r) => {
+    if (shownKill?.killmail_id !== id || !r) return;
+    const g = $('killBody').querySelector('[data-kill-group]');
+    if (g && r.group) { g.textContent = r.group; g.hidden = false; }
+    const box = $('killBody').querySelector('[data-kill-radial]');
+    if (box && r.svg) { box.innerHTML = `<div class="fit-radial kb-radial-svg">${r.svg}</div>`; box.hidden = false; box.closest('.kb-fit-wrap')?.classList.add('has-radial'); }
+  };
+  if (radialCache.has(id)) { apply(radialCache.get(id)); return; }
+  app.killRadial(kill).then((r) => { radialCache.set(id, r); if (radialCache.size > 30) radialCache.delete(radialCache.keys().next().value); apply(r); }).catch(() => {});
+}
+
 function switchKillTab(tab) {
   $$('#killBody [data-kill-tab]').forEach((b) => b.classList.toggle('active', b.dataset.killTab === tab));
   $$('#killBody .kb-pane').forEach((p) => { p.hidden = p.dataset.pane !== tab; });
@@ -567,7 +585,7 @@ function renderKill(k, val, priceNote) {
           </div>
         </div>
         <div class="kb-facts">
-          <span><em>舰船</em>${app.esc(typeName(v.ship_type_id))}</span>
+          <span><em>舰船</em>${app.esc(typeName(v.ship_type_id))}<small class="kb-ship-group" data-kill-group hidden></small></span>
           <span><em>地点</em>${app.esc(sys.name)} <b style="color:${sys.color}">${sys.secText}</b>${sys.region ? ' · ' + app.esc(sys.region) : ''}${station ? '<br><small>' + app.esc(station) + '</small>' : ''}<small class="kb-near" data-kill-near hidden></small></span>
           <span><em>时间</em>${killTime(k.killmail_time)}</span>
           <span><em>伤害</em>${app.formatNumber(v.damage_taken)} · ${k.attackers.length} 名攻击者</span>
@@ -587,7 +605,7 @@ function renderKill(k, val, priceNote) {
       <button data-kill-tab="fit" class="active">装配与物品</button>
       <button data-kill-tab="attackers">攻击者（${k.attackers.length}）</button>
     </div>
-    <div class="kb-pane" data-pane="fit"><div class="kb-fit-cols"><span>最低卖价</span><span>最高收价</span></div>${fit}<p class="valuation-note" title="${app.esc(priceNote || (SERVER.kb ? '总价值为 zKillboard 估值' : '总价值按 ESI 全服均价估算'))}">按${app.esc(val.region.hub.name)}估值</p></div>
+    <div class="kb-pane" data-pane="fit"><div class="kb-fit-wrap"><div class="kb-radial" data-kill-radial hidden></div><div class="kb-fit-list"><div class="kb-fit-cols"><span>最低卖价</span><span>最高收价</span></div>${fit}<p class="valuation-note" title="${app.esc(priceNote || (SERVER.kb ? '总价值为 zKillboard 估值' : '总价值按 ESI 全服均价估算'))}">按${app.esc(val.region.hub.name)}估值</p></div></div></div>
     <div class="kb-pane" data-pane="attackers" hidden>${attackers}</div>`;
 }
 

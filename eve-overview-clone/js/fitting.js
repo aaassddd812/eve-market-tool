@@ -2529,6 +2529,34 @@ export async function queueKillFit(km) {
   return true;
 }
 
+// 击杀详情里的圆盘：用装配页同一套圆盘画出这艘船击杀时的装配（只看，不能点；悬停显示装备名），顺带给出舰船分组名（「拦截舰」等）。
+// 算的时候临时换掉装配页的状态，算完换回去，不影响装配页正在编辑的装配
+export async function killRadial(km) {
+  const data = await ensureData();
+  const ship = data.types.get(km.victim.ship_type_id);
+  const group = ship ? data.groups.get(ship.group)?.name || '' : '';
+  if (!ship || ship.category !== FE.CAT.ship) return { group, svg: '' };
+  const keep = { fit: F.fit, calc: F.calc, stats: F.stats, selected: F.selected, target: F.target, preview: F.preview };
+  try {
+    const r = fromKillmail(km);
+    if (r.error) return { group, svg: '' };
+    const calc = FE.computeFit(data, r.fit, 'max');
+    const stats = calc && FE.fitStats(calc);
+    if (!stats) return { group, svg: '' };
+    Object.assign(F, { fit: r.fit, calc, stats, selected: null, target: null, preview: null });
+    let svg = /<svg viewBox="0 0 512 512"[\s\S]*<\/svg>/.exec(radialHtml(ship, stats))?.[0] || '';
+    svg = svg.replace(/id="fr(ShipClip|Vignette)"/g, 'id="km$1"').replace(/url\(#fr(ShipClip|Vignette)\)/g, 'url(#km$1)')
+      .replace(/ data-fit-[a-z-]+="[^"]*"| role="button"| tabindex="0"/g, '')
+      .replace(/(<g class="fr-slot fr-mod[^"]*" aria-label="([^"]*)">)/g, '$1<title>$2</title>');
+    return { group, svg };
+  } catch (error) {
+    console.warn('击杀圆盘失败', error);
+    return { group, svg: '' };
+  } finally {
+    Object.assign(F, keep);
+  }
+}
+
 // 其他页面（快递推荐用船）带来的 EFT 装配：同样先记下，进入装配页时载入
 let pendingEft = null;
 export function queueEftFit(text) {

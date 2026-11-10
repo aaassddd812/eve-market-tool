@@ -1088,8 +1088,9 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v22').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v23').then((m) => {
     m.initAppraisal({ addToCart, favStar: favStarHtml,
+      structs: { readable: SM.readableStructs, hasScope: SM.hasStructScope, open: SM.openStructManager, market: (id) => structureMarket(id, SM.PICKED_PAGES) },
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
       getTypeIndex: async () => { if (!state.catalog && state.catalogReady) await state.catalogReady; return state.typeIndex; },
       valuation, loadVolumes,
@@ -1150,7 +1151,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v148').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v149').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -1335,9 +1336,10 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v51').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v52').then((m) => {
     m.initKillboard({
-      esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText
+      esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText,
+      killRadial: async (km) => (await loadFittingModule()).killRadial(km)
     });
     killboardModule = m;
     return m;
