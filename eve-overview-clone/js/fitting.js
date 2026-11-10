@@ -954,7 +954,7 @@ function initDrag() {
 function useType(id) {
   const t = type(id);
   if (!t) return;
-  if (t.category === FE.CAT.ship) { setShip(id); return; }
+  if (t.category === FE.CAT.ship) { setShip(id); if (MOBILE()) app.closeDrawer?.(); return; }
   if (!F.fit) { app.showToast('请先选择一艘舰船', 'info'); setTab('ship'); return; }
   if (t.category === FE.CAT.module || t.category === FE.CAT.subsystem) addModule(t);
   else if (t.category === FE.CAT.charge) loadCharge(t);
@@ -1173,7 +1173,8 @@ function renderFit() {
   if (!F.fit) {
     box.innerHTML = `<div class="fit-empty">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 2 4 7v10l8 5 8-5V7z"/><path d="M12 22V12M4 7l8 5 8-5"/></svg>
-      <h3>从左侧选择一艘舰船开始装配</h3>
+      <h3><span class="desktop-only">从左侧选择一艘舰船开始装配</span><span class="mobile-only">选择一艘舰船开始装配</span></h3>
+      <p class="mobile-only"><button class="btn btn-primary drawer-open-btn" data-open-drawer>打开舰船列表</button></p>
       <p class="fit-empty-tools"><button class="btn btn-ghost" data-fit-sim>战场模拟</button></p>
       <p>也可以 <button class="link-btn" data-fit-import>导入 EFT 文本</button>${app.hasEsiToken() ? '、<button class="link-btn" data-fit-esi-list>读取游戏内装配</button>、<button class="link-btn" data-fit-cur-ship>导入当前舰船</button>' : ''}${savedFits().length ? ` 或打开 <select class="plain-select" data-fit-open><option value="">我的装配…</option>${savedFits().map((f) => `<option value="${f.id}">${app.esc(f.name || type(f.ship)?.name || '未命名')}</option>`).join('')}</select>` : ''}</p>
     </div>`;
@@ -1380,7 +1381,7 @@ function moduleRow(slot, index, m, extra) {
   const pv = F.preview && F.preview.slot === slot && F.preview.index === index ? type(F.preview.type) : null;
   if (pv) return `<div class="fit-slot is-ghost"><img src="${IMG(pv.id)}" alt="" width="28" height="28"><span class="fit-slot-name"><span class="fit-slot-title">${app.esc(pv.name)}</span></span></div>`;
   const target = F.target && F.target.slot === slot && F.target.index === index;
-  const empty = `<div class="fit-slot is-empty${extra ? ' is-extra' : ''}${target ? ' is-target' : ''}" data-fit-empty="${slot}" data-fit-idx="${index}"><span class="fit-slot-icon"></span><span>${extra ? '超出槽位' : target ? '在左侧选择要装进这一格的装备' : '空' + FE.SLOT_NAME[slot]}</span></div>`;
+  const empty = `<div class="fit-slot is-empty${extra ? ' is-extra' : ''}${target ? ' is-target' : ''}" data-fit-empty="${slot}" data-fit-idx="${index}"><span class="fit-slot-icon"></span><span>${extra ? '超出槽位' : target ? (MOBILE() ? '在列表里选择要装进这一格的装备' : '在左侧选择要装进这一格的装备') : '空' + FE.SLOT_NAME[slot]}</span></div>`;
   if (!m) return empty;
   const t = type(m.type);
   const item = F.calc.modules.find((x) => x.slot === slot && x.index === index);
@@ -1519,12 +1520,12 @@ function dronesHtml() {
   const fighters = F.fit.drones.map((d, i) => [d, i]).filter(([d]) => isFighter(d));
   if (res.droneBay.total || drones.length) {
     html += `<section class="fit-slots" data-fit-drop="drone"><h4>无人机<span>挂舱 ${fmt(res.droneBay.used)} / ${fmt(res.droneBay.total)} m³ · 带宽 ${fmt(res.bandwidth.used)} / ${fmt(res.bandwidth.total)}</span></h4>
-      ${drones.map(([d, i]) => droneRow(d, i, false)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加</span></div></section>`;
+      ${drones.map(([d, i]) => droneRow(d, i, false)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>${MOBILE() ? '点这里从「无人机」中添加' : '从左侧「无人机」中添加'}</span></div></section>`;
   }
   if (res.fighterBay.total || fighters.length) {
     const roles = [['fighterLight', '轻型'], ['fighterSupport', '支援'], ['fighterHeavy', '重型']].filter(([k]) => res[k].total).map(([k, l]) => `${l} ${res[k].used}/${res[k].total}`).join(' · ');
     html += `<section class="fit-slots" data-fit-drop="fighter"><h4>舰载机<span>机库 ${fmt(res.fighterBay.used)} / ${fmt(res.fighterBay.total)} m³ · 发射管 ${res.fighterTubes.used} / ${res.fighterTubes.total}${roles ? ' · ' + roles : ''}</span></h4>
-      ${fighters.map(([d, i]) => droneRow(d, i, true)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>从左侧「无人机」中添加舰载机</span></div></section>`;
+      ${fighters.map(([d, i]) => droneRow(d, i, true)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>${MOBILE() ? '点这里从「无人机」中添加舰载机' : '从左侧「无人机」中添加舰载机'}</span></div></section>`;
   }
   return html;
 }
@@ -1536,7 +1537,7 @@ function implantsHtml(bound) {
     return `<div class="fit-slot"><img src="${IMG(id)}" alt="" width="28" height="28" loading="lazy"><span class="fit-slot-name">${app.esc(t.name)}<small>${slot ? '植入体槽位 ' + slot : '增效剂'}</small></span>${infoBtn(id)}<button class="fit-remove" data-fit-implant-remove="${id}" aria-label="移除">×</button></div>`;
   }).join('');
   return `<section class="fit-slots" data-fit-drop="implant"><h4>植入体 / 增效剂<span><button class="link-btn" data-fit-imp>智能推荐</button>${bound ? '<button class="link-btn" data-fit-my-implants>导入当前角色的植入体</button>' : ''}</span></h4>
-    ${rows}<div class="fit-slot is-empty" data-fit-empty-implant><span class="fit-slot-icon"></span><span>从左侧「植入体」中添加</span></div></section>`;
+    ${rows}<div class="fit-slot is-empty" data-fit-empty-implant><span class="fit-slot-icon"></span><span>${MOBILE() ? '点这里从「植入体」中添加' : '从左侧「植入体」中添加'}</span></div></section>`;
 }
 
 // ---------- 右侧：属性 ----------

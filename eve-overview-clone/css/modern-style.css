@@ -6259,7 +6259,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .ds-tag.logi { color: var(--success); }
 .ds-copy { margin: 0 0 12px; }
 .ds-copy .text-muted { font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
-@media (max-width: 900px) { .ls-cols { grid-template-columns: 1fr; } .ls-hide-md { display: none; } }
+@media (max-width: 900px) { .ls-cols { grid-template-columns: minmax(0, 1fr); } .ls-hide-md { display: none; } }
 @media (max-width: 640px) { .ls-hide-sm { display: none; } }
 .map-ext { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 10px; font-size: 0.8125rem; }
 .map-ext span { color: var(--text-muted); font-size: 0.75rem; }
@@ -8703,3 +8703,62 @@ a.pz-name:hover { color: var(--accent-primary); }
 .to-top:hover { opacity: 1; }
 .to-top svg { width: 20px; height: 20px; }
 @media print { .to-top { display: none; } }
+
+/* ===== 手机适配补充 ===== */
+@media (max-width: 768px) {
+  /* 击杀页顶部：搜索框占满一行（列方向 flex:1 会把高度压扁），两个入口按钮并排，状态单独一行 */
+  .kb-topbar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .kb-topbar .kb-search { grid-column: 1 / -1; flex: none; height: 42px; }
+  .kb-topbar .kb-br-entry { justify-content: center; width: 100%; background: var(--bg-secondary); }
+  .kb-topbar .kb-status { grid-column: 1 / -1; }
+
+  /* 个人中心表格改成卡片后，斑马纹放到整行上，不再一格一块深色 */
+  .pc-mini-table tbody tr:nth-child(even) td { background: none; }
+  .pc-mini-table tbody tr:nth-child(even) { background: color-mix(in srgb, var(--bg-tertiary) 40%, transparent); }
+
+  /* 估值来源下拉占满一行，地点名不再被截断 */
+  .valuation-toolbar .val-src { flex: 1 1 100%; }
+
+  /* 市场订单：一单一张卡片 —— 方向 物品 | 状态 / 我的价格 | 建议价 / 对手最优 | 剩余利润 */
+  .ow-table, .ow-table tbody { display: block; }
+  .ow-table thead { display: none; }
+  .table-scroll:has(> .ow-table) { overflow-x: visible; }
+  .ow-table tbody tr:not(.ow-hist) { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-primary); }
+  .ow-table tbody tr:not(.ow-hist) td { display: block; min-width: 0; padding: 0 !important; border: 0 !important; text-align: left; white-space: normal; }
+  .ow-table td:nth-child(2) { grid-area: 1 / 1; }
+  .ow-table td:nth-child(1) { grid-area: 1 / 2 / 2 / 4; font-weight: 500; }
+  .ow-table td:nth-child(1) .ow-item { min-width: 0; color: var(--text-primary); font-size: 0.875rem; }
+  .ow-table td:nth-child(4) { grid-area: 2 / 1 / 3 / 3; font-size: 0.8125rem; }
+  .ow-table td:nth-child(7) { grid-area: 2 / 3; justify-self: end; text-align: right; }
+  .ow-table td:nth-child(6) { grid-area: 3 / 1 / 4 / 3; font-size: 0.75rem; color: var(--text-muted); }
+  .ow-table td:nth-child(8) { grid-area: 3 / 3 / 5 / 4; justify-self: end; text-align: right !important; align-self: start; }
+  .ow-table td:nth-child(6) small { font-size: inherit; }
+  .ow-table td:nth-child(5) { grid-area: 4 / 1 / 5 / 3; font-size: 0.75rem; }
+  .ow-table td:nth-child(3) { grid-area: 5 / 1 / 6 / 4; display: block !important; max-width: none; font-size: 0.75rem; color: var(--text-muted); }
+  .ow-table td:nth-child(n+9) { display: none !important; }
+  .ow-table td:nth-child(4)::before { content: '我的价格 '; color: var(--text-muted); font-size: 0.75rem; }
+  .ow-table td:nth-child(6)::before { content: '对手最优 '; }
+  .ow-table td:nth-child(5)::before { content: '剩余利润 '; color: var(--text-muted); }
+  html[lang="en"] .ow-table td:nth-child(4)::before { content: 'Mine '; }
+  html[lang="en"] .ow-table td:nth-child(6)::before { content: 'Best rival '; }
+  html[lang="en"] .ow-table td:nth-child(5)::before { content: 'Margin '; }
+  .ow-table tr.ow-hist { display: block; }
+  .ow-table tr.ow-hist td { display: block; padding: 8px 12px; }
+
+  /* 物品页顶部：游戏内打开、刷新只留图标，星域下拉不再被挤到只剩几个字 */
+  .detail-actions #gameMarketBtn span, .detail-actions #refreshBtn span, .detail-actions #locRegionBtn span { display: none; }
+  .detail-actions #gameMarketBtn, .detail-actions #refreshBtn, .detail-actions #locRegionBtn { flex: none; width: 40px; padding: 0; justify-content: center; }
+
+  /* 战场统计：工具按钮换行；多方卡片里势力数 / 人数换到名字下面，「A 方」不再竖排 */
+  .kb-br-tools { flex-wrap: wrap; }
+  .kb-br-mside { padding: 12px; }
+  .kb-br-mside .kb-br-side-name { flex-wrap: wrap; gap: 2px 8px; }
+  .kb-br-mside .kb-br-side-name small { flex-basis: 100%; }
+
+  /* 战场模拟：手机上去掉外层大框，A / B 方卡片直接铺满，多出左右各十几像素 */
+  .sim-page > .sim-body { padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+  .sim-side { padding: 12px; }
+
+  /* 侧栏在手机上是抽屉：空状态里的“打开列表”按钮 */
+  .drawer-open-btn { margin-top: 10px; }
+}

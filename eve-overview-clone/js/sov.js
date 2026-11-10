@@ -600,7 +600,7 @@ function renderSide(R) {
 }
 
 function introHtml() {
-  return '<div class="pi-card sov-intro"><p class="text-muted">在左侧搜索星系、星座或星域加入规划</p></div>';
+  return '<div class="pi-card sov-intro"><p class="text-muted desktop-only">在左侧搜索星系、星座或星域加入规划</p><p class="text-muted mobile-only">搜索星系、星座或星域加入规划</p><p class="mobile-only"><button class="btn btn-primary drawer-open-btn" data-open-drawer>搜索星系</button></p></div>';
 }
 
 function searchHits(q) {

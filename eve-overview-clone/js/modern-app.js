@@ -691,7 +691,7 @@ function showPageSkeleton(view) {
 // 主权规划：首次进入时加载
 let sovLoading = null;
 function loadSovModule() {
-  if (!sovLoading) sovLoading = import('./sov.js?v=v8').then((m) => {
+  if (!sovLoading) sovLoading = import('./sov.js?v=v9').then((m) => {
     m.initSov({
       esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
       getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -1147,7 +1147,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v131').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v132').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -2461,6 +2461,11 @@ function scopeNeededHtml(id, what) {
   return `<div class="empty-state scope-needed"><p>${esc(what || g.desc)}需要「${esc(g.name)}」权限</p>
     <button class="btn btn-primary" data-scope-rebind="${id}">重新授权</button></div>`;
 }
+// 手机上侧栏是抽屉：页面空状态里的「打开列表」按钮（data-open-drawer）
+document.addEventListener('click', (e) => {
+  if (e.target.closest('[data-open-drawer]')) openDrawer();
+});
+
 document.addEventListener('click', (e) => {
   const b = e.target.closest('[data-scope-rebind]');
   if (b) { if (state.currentView !== 'profile') switchView('profile'); openEsiModal(b.dataset.scopeRebind); }
