@@ -62,28 +62,15 @@ jobs:
           Copy-Item $setup.FullName out/EVE-Lite-Setup.exe
           Get-ChildItem out | ForEach-Object { "{0}  {1:N0} bytes  sha256 {2}" -f $_.Name, $_.Length, (Get-FileHash $_.FullName).Hash }
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows
-          path: out/*
-
-  release:
-    needs: [windows]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: out
-          merge-multiple: true
-
+      # 直接发布，不经 artifact 中转（私有仓库的构件存储配额满了会卡住发布；产物 2-3 MB，直接传更快）
       - name: 发布到公开仓库
         uses: softprops/action-gh-release@v2
         with:
           repository: ${{ env.RELEASE_REPO }}
           token: ${{ secrets.RELEASE_TOKEN }}
-          tag_name: lite-v${{ needs.windows.outputs.version }}
+          tag_name: lite-v${{ steps.ver.outputs.version }}
           target_commitish: main
-          name: EVE 收益助手 ${{ needs.windows.outputs.version }}
+          name: EVE 收益助手 ${{ steps.ver.outputs.version }}
           body: |
             Windows 10 / 11：下载 **EVE-Lite-Setup.exe** 直接安装。
             角色、技能、钱包与刷怪收益、资产、订单，以及深渊收益（自动识别进出深渊、读游戏日志、粘贴货柜估价）。
