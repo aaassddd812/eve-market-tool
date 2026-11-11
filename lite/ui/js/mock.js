@@ -58,7 +58,7 @@
       { order_id: 11, type_id: 47895, price: 4100000, volume_remain: 0, volume_total: 5, location_id: 60003760, issued: ago(120), state: 'completed' }],
     '/universe/structures/1035466617946/': { name: 'Perimeter - Demo Industries 星城' }
   };
-  var NAMES = { 98000001: 'Demo Industries', 99000001: 'Demo Alliance', 30000142: '吉他', 60003760: '吉他 IV - 卫星 4 - 加达里海军 组装车间', 60008494: '艾玛 VIII - 皇室专署集团 学院', 30002187: '艾玛', 32000123: 'J-深渊 123', 1000125: '统一合作关系部', 1000035: '加达里海军', 2120000002: 'Trader Bob' };
+  var NAMES = { 98000001: 'Demo Industries', 99000001: 'Demo Alliance', 30000142: '吉他', 60003760: 'Jita IV - Moon 4 - Caldari Navy Assembly Plant', 60008494: 'Amarr VIII (Oris) - Emperor Family Academy', 30002187: '艾玛', 32000123: 'J-深渊 123', 1000125: '统一合作关系部', 1000035: '加达里海军', 2120000002: 'Trader Bob' };
 
   var json = function (body, status, headers) { return Promise.resolve(new Response(JSON.stringify(body), { status: status || 200, headers: headers || { 'Content-Type': 'application/json' } })); };
   window.__MOCK__ = function (url, opts) {
@@ -68,6 +68,7 @@
       if (u.pathname === '/type-names-zh.json') return fetch('/eve-overview-clone/type-names-zh.json');
       if (u.pathname === '/skill-data.json') return fetch('/eve-overview-clone/skill-data.json');
       if (u.pathname === '/map-data.json') return fetch('/eve-overview-clone/map-data.json');
+      if (u.pathname === '/npc-names-zh.json') return fetch('/eve-overview-clone/npc-names-zh.json');
       if (u.pathname === '/i18n/names-en.json') return fetch('/eve-overview-clone/i18n/names-en.json');
       if (u.pathname === '/api/v1/prices') {
         var types = {};
@@ -137,4 +138,19 @@
       { id: 'm2', char: CID, charName: NAME, start: now - 30 * 3600e3, end: now - 30 * 3600e3 + 17 * 60e3, sys: 32000110, startShip: 47466, ship: 670, died: true, filament: 47895, qty: 1, extra: 0, auto: true }
     ], set: { filament: 47895, qty: 1, extra: 0, side: 'sell', monitor: true, range: '7d' } }));
   }
+})();
+// 预览版本号与自动更新：?mock=…&upd=1 时假装有新版本 0.2.1
+(function () {
+  var q = new URLSearchParams(location.search);
+  if (!q.has('mock')) return;
+  window.__MOCK_VERSION__ = '0.2.0';
+  if (q.get('upd') !== '1') return;
+  window.__MOCK_UPDATER__ = {
+    check: function () {
+      return new Promise(function (ok) { setTimeout(function () { ok({ version: '0.2.1', downloadAndInstall: function (cb) {
+        return new Promise(function (done) { cb({ event: 'Started', data: { contentLength: 100 } }); var n = 0;
+          var t = setInterval(function () { n += 20; cb({ event: 'Progress', data: { chunkLength: 20 } }); if (n >= 100) { clearInterval(t); cb({ event: 'Finished' }); done(); } }, 300); });
+      } }); }, 300); });
+    }
+  };
 })();

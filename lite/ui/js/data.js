@@ -39,11 +39,28 @@ export function loadTypeNames() {
 const extraNames = new Map(store.get('lite-names', []));   // ESI 解析过的名称（星系、空间站、非市场物品…），存在本机
 export function typeName(id) { return zhNames?.get(Number(id)) || extraNames.get(Number(id)) || '物品 ' + id; }
 export const findTypes = (pred) => (zhNames ? [...zhNames].filter(([, n]) => pred(n)) : []);
-export const nameOf = (id) => zhNames?.get(Number(id)) || extraNames.get(Number(id)) || null;
+export const nameOf = (id) => npcNames?.get(Number(id)) || zhNames?.get(Number(id)) || extraNames.get(Number(id)) || null;
+
+// NPC 空间站、星系、星座、星域、NPC 军团 / 角色的官方中文名（本站 npc-names-zh.json，约 0.9MB，和网站资产页同一份）。
+// ESI /universe/names/ 不支持中文，只返回英文名，所以先查这张表，查不到的才问 ESI
+let npcNames = null, npcP = null;
+export function loadNpcNames() {
+  npcP ||= http(SITE + '/npc-names-zh.json').then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status)))).then((d) => {
+    npcNames = new Map();
+    for (const t of ['stations', 'systems', 'constellations', 'regions', 'corporations', 'characters']) for (const [k, v] of Object.entries(d?.[t] || {})) npcNames.set(Number(k), v);
+    // 之前用 ESI 解析存下的英文名作废，以中文表为准
+    let n = 0;
+    for (const id of [...extraNames.keys()]) if (npcNames.has(id)) { extraNames.delete(id); n++; }
+    if (n) store.set('lite-names', [...extraNames].slice(-5000));
+    return npcNames;
+  }).catch(() => { npcP = null; return null; });
+  return npcP;
+}
 
 // ESI /universe/names/：一次最多 1000 个；查不到的（玩家建筑等）跳过
 export async function resolveNames(ids) {
-  const want = [...new Set(ids.map(Number))].filter((id) => id > 0 && id < 2 ** 31 && !nameOf(id));
+  await loadNpcNames();
+  const want = [...new Set(ids.map(Number))].filter((id) => id > 0 && id < 2 ** 31 && !nameOf(id) && !noName.has(id));
   for (let i = 0; i < want.length; i += 1000) {
     const batch = want.slice(i, i + 1000);
     try {
@@ -53,8 +70,10 @@ export async function resolveNames(ids) {
       await Promise.all(batch.map(async (id) => { try { const [r] = await esiPost('/universe/names/?language=zh', [id]); if (r) extraNames.set(r.id, r.name); } catch { /* 跳过 */ } }));
     }
   }
+  for (const id of want) if (!nameOf(id)) noName.add(id);   // ESI 也查不到的：这次运行内不再问
   if (want.length) store.set('lite-names', [...extraNames].slice(-5000));
 }
+const noName = new Set();
 // 玩家建筑名称（需要 esi-universe.read_structures.v1，且角色有停靠权限）
 export async function structureName(acc, id) {
   if (nameOf(id)) return nameOf(id);

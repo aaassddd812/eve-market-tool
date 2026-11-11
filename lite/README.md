@@ -13,6 +13,11 @@
   - 游戏日志（`gamelog.js`）：读每一趟的战斗统计。
   - 剪贴板（`clip.js` + `src-tauri/src/clip.rs`）：在游戏里复制货柜，程序自动记入对应的一趟，再按本站价格估值。
 
+- **使用人数统计**（`ui/js/meta.js`）：每次启动向本站 `POST /api/kb/lite/ping` 发 `{iid, ver, server}`。`iid` 是第一次运行时随机生成的安装 ID，不含角色、账号、令牌。站长查看：在 `EVE_FEEDBACK_ADMIN_IPS` 里的 IP 打开 `/api/kb/lite/stats`，或在服务器上运行 `kb_service.py --db <库> --lite-stats`。
+- **自动更新**（`meta.js` + tauri-plugin-updater）：启动 5 秒后检查一次，之后每 6 小时一次，左下角也能手动「检查更新」。读 `eve-tool-desktop` 发布 `lite-latest` 里的 `lite.json`，直连失败走 ghfast 镜像。有新版本时左下角提示，点了才下载安装。安装包用和桌面版同一把私钥签名。0.1.x 没有更新功能，要手动装一次 0.2.0。
+- **ESI 缓存**（`esi.js`）：GET 结果按服务器、角色和路径缓存在内存里，有效期按 ESI 的 `Expires` 头，所以切换页面不重复请求。顶部「刷新」清空缓存。
+- **中文名称**：空间站、星系、NPC 军团用本站 `npc-names-zh.json`（和网站资产页同一份）。ESI `/universe/names/` 只返回英文，只用来查表里没有的。
+
 ## 日志与剪贴板的处理细节
 
 - **增量读取**（`logscan.js`）：
@@ -47,5 +52,5 @@
 - 推送标签 `lite-v0.1.0` 触发，或在 Actions 页手动运行。
 - 编译 NSIS 安装包 `EVE-Lite-Setup.exe`，发到公开仓库 `aaassddd812/eve-tool-desktop` 的 Releases，用和桌面版相同的 `RELEASE_TOKEN`。
 - 发布时设了 `make_latest: false`，不占桌面版自动更新读取的「最新版本」。
+- 安装包发好后，再把 `lite.json` / `lite-mirror.json` 覆盖到固定标签 `lite-latest` 的发布，已安装的程序据此更新。签名用 Secret `TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`，和桌面版共用。
 - 打包前会去掉 `mock.js`。
-- 暂时没有自动更新。

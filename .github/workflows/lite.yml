@@ -1,7 +1,9 @@
 # EVE 收益助手（lite/，界面打包在程序里的独立 Windows 程序）：编译 NSIS 安装包，发布到公开仓库 aaassddd812/eve-tool-desktop 的 Releases
 # 触发：推送标签 lite-v0.1.0（版本号取自标签），或在 Actions 页手动运行（版本号取自 lite/src-tauri/tauri.conf.json）
-# 需要仓库 Secret：RELEASE_TOKEN（与桌面版共用，对 eve-tool-desktop 有 Contents 读写权限）
-# 发布时 make_latest: false：桌面版的自动更新读的是该仓库「最新版本」的 latest.json，收益助手的发布不能占掉这个位置
+# 需要仓库 Secret（都与桌面版共用）：RELEASE_TOKEN（对 eve-tool-desktop 有 Contents 读写权限）、
+#   TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD（自动更新签名，公钥在 lite/src-tauri/tauri.conf.json）
+# 发布时 make_latest: false：桌面版的自动更新读的是该仓库「最新版本」的 latest.json，收益助手的发布不能占掉这个位置。
+# 收益助手的自动更新读固定标签 lite-latest 那个发布里的 lite.json / lite-mirror.json（每次发布覆盖），指向本次 lite-v<版本> 的安装包
 name: lite
 
 on:
@@ -61,14 +63,28 @@ jobs:
 
       - name: 编译安装包
         working-directory: lite
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx --yes @tauri-apps/cli@^2 build --bundles nsis
 
       - name: 整理产物
         shell: pwsh
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           New-Item -ItemType Directory -Force out | Out-Null
           $setup = Get-ChildItem lite/src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
           Copy-Item $setup.FullName out/EVE-Lite-Setup.exe
+          # 自动更新清单（签名对安装包内容签，改文件名不影响校验）：放进单独的目录，发到 lite-latest
+          New-Item -ItemType Directory -Force upd | Out-Null
+          $sig = (Get-Content "$($setup.FullName).sig" -Raw).Trim()
+          $url = "https://github.com/$env:RELEASE_REPO/releases/download/lite-v$env:VERSION/EVE-Lite-Setup.exe"
+          $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          foreach ($m in @(@("lite.json", $url), @("lite-mirror.json", "https://ghfast.top/$url"))) {
+            $json = @{ version = $env:VERSION; notes = ""; pub_date = $date; platforms = @{ "windows-x86_64" = @{ signature = $sig; url = $m[1] } } } | ConvertTo-Json -Depth 5
+            [IO.File]::WriteAllText("upd/$($m[0])", $json, (New-Object Text.UTF8Encoding $false))
+          }
           Get-ChildItem out | ForEach-Object { "{0}  {1:N0} bytes  sha256 {2}" -f $_.Name, $_.Length, (Get-FileHash $_.FullName).Hash }
 
       # 直接发布，不经 artifact 中转（私有仓库的构件存储配额满了会卡住发布；产物 2-3 MB，直接传更快）
@@ -84,4 +100,17 @@ jobs:
             Windows 10 / 11：下载 **EVE-Lite-Setup.exe** 直接安装。
             角色、技能、钱包与刷怪收益、资产、订单，以及深渊收益（自动识别进出深渊、读游戏日志、粘贴货柜估价）。
           files: out/*
+          make_latest: false
+
+      # 先发好安装包，再更新清单：已安装的程序读到新清单时安装包一定已经在了
+      - name: 更新自动更新清单（lite-latest）
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.RELEASE_REPO }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+          tag_name: lite-latest
+          target_commitish: main
+          name: EVE 收益助手 · 自动更新清单
+          body: 收益助手自动更新用的清单（lite.json），指向最新的 lite-v 版本。下载安装包请到对应的「EVE 收益助手 x.y.z」发布。
+          files: upd/*
           make_latest: false

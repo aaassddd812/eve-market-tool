@@ -59,6 +59,8 @@
   POST /api/kb/feedback                       提交工单（右上角「定制」）：{kind, text, contact, page}，存进 feedback 表，返回 id + 查看凭证；
                                               设了环境变量 EVE_FEEDBACK_WECOM（企业微信机器人 key 或完整地址）时同时推送给站长
   POST /api/kb/feedback/{mine,follow}         提交者查看自己的工单（状态、回复）/ 追加说明：凭 id + 凭证
+  POST /api/kb/lite/ping                      收益助手（lite/ 独立程序）启动上报 {iid, ver, server}，统计使用人数
+  GET  /api/kb/lite/stats                     收益助手使用人数：仅 EVE_FEEDBACK_ADMIN_IPS 里的 IP（命令行 --lite-stats 同样内容）
   POST /api/kb/feedback/admin/{check,list,reply,status}  站长查看全部工单、回复、改状态：仅 EVE_FEEDBACK_ADMIN_IPS 里的 IP
   POST /api/kb/hosted/{start,update,status,stop}  服务器托管预警：网页关掉后由本服务检查击杀预警 / 虫洞求救 / 订单被压价，推送到企业微信 / 邮箱
                                               （用户单独授权，刷新令牌与推送账号加密保存，凭证管理；见 Hosted）
@@ -8805,6 +8807,88 @@ class Feedback:
             conn.close()
 
 
+# ---------------------------------------------------------------- 收益助手（lite/ 独立程序）使用人数
+# 程序每次启动 POST /api/kb/lite/ping {iid, ver, server}：iid 是安装时随机生成的 ID（不含角色、账号信息，也不记 IP），
+# 只用来数有多少台电脑在用、每天多少人打开。站长查看：GET /api/kb/lite/stats（仅 EVE_FEEDBACK_ADMIN_IPS），
+# 或命令行 --lite-stats。按天的活跃记录保留 400 天。
+LITE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS lite_install(iid TEXT PRIMARY KEY, first INTEGER, last INTEGER, ver TEXT, server TEXT, starts INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS lite_day(day TEXT, iid TEXT, PRIMARY KEY(day, iid)) WITHOUT ROWID;
+"""
+LITE_SERVERS = ("tq", "serenity", "infinity")
+
+
+class LiteStats:
+    def __init__(self, store):
+        self.store = store
+        c = store.conn()
+        with store.write_lock:
+            c.executescript(LITE_SCHEMA)
+            c.commit()
+        self.pruned = ""
+
+    def ping(self, body):
+        iid = str(body.get("iid") or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}", iid):
+            raise ValueError("iid 无效")
+        ver = str(body.get("ver") or "")[:20]
+        if not re.fullmatch(r"[0-9A-Za-z.+-]*", ver):
+            ver = ""
+        server = body.get("server") if body.get("server") in LITE_SERVERS else ""
+        now = int(time.time())
+        day = time.strftime("%Y-%m-%d", time.gmtime(now))
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.execute("INSERT INTO lite_install(iid, first, last, ver, server, starts) VALUES(?,?,?,?,?,1) "
+                      "ON CONFLICT(iid) DO UPDATE SET last = excluded.last, ver = excluded.ver, server = excluded.server, starts = starts + 1",
+                      (iid, now, now, ver, server))
+            c.execute("INSERT OR IGNORE INTO lite_day(day, iid) VALUES(?, ?)", (day, iid))
+            if self.pruned != day:
+                self.pruned = day
+                c.execute("DELETE FROM lite_day WHERE day < ?", (time.strftime("%Y-%m-%d", time.gmtime(now - 400 * 86400)),))
+            c.commit()
+        return {"ok": True}
+
+    @staticmethod
+    def summary(c):
+        now = int(time.time())
+        d = lambda n: time.strftime("%Y-%m-%d", time.gmtime(now - n * 86400))
+        one = lambda sql, *a: c.execute(sql, a).fetchone()[0] or 0
+        active = lambda n: one("SELECT COUNT(DISTINCT iid) FROM lite_day WHERE day > ?", d(n))
+        return {
+            "installs": one("SELECT COUNT(*) FROM lite_install"),
+            "starts": one("SELECT SUM(starts) FROM lite_install"),
+            "active": {"today": one("SELECT COUNT(*) FROM lite_day WHERE day = ?", d(0)), "7d": active(7), "30d": active(30)},
+            "new": {"today": one("SELECT COUNT(*) FROM lite_install WHERE first >= ?", now - now % 86400),
+                    "7d": one("SELECT COUNT(*) FROM lite_install WHERE first > ?", now - 7 * 86400),
+                    "30d": one("SELECT COUNT(*) FROM lite_install WHERE first > ?", now - 30 * 86400)},
+            "versions": dict(c.execute("SELECT ver, COUNT(*) FROM lite_install WHERE last > ? GROUP BY ver ORDER BY 2 DESC", (now - 30 * 86400,)).fetchall()),
+            "servers": dict(c.execute("SELECT server, COUNT(*) FROM lite_install WHERE last > ? GROUP BY server ORDER BY 2 DESC", (now - 30 * 86400,)).fetchall()),
+            "daily": [{"day": k, "active": v} for k, v in c.execute("SELECT day, COUNT(*) FROM lite_day WHERE day > ? GROUP BY day ORDER BY day", (d(30),))],
+        }
+
+    def stats(self):
+        return self.summary(self.store.conn())
+
+    @staticmethod
+    def stats_cli(db):
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        try:
+            s = LiteStats.summary(conn)
+        except sqlite3.OperationalError:
+            print("还没有收益助手的使用记录")
+            return
+        finally:
+            conn.close()
+        print(f"安装总数 {s['installs']}，累计启动 {s['starts']} 次")
+        print(f"活跃：今天 {s['active']['today']}，7 天 {s['active']['7d']}，30 天 {s['active']['30d']}")
+        print(f"新增：今天 {s['new']['today']}，7 天 {s['new']['7d']}，30 天 {s['new']['30d']}")
+        print("30 天内的版本：" + ("，".join(f"{k or '未知'} {v}" for k, v in s["versions"].items()) or "无"))
+        print("30 天内的服务器：" + ("，".join(f"{k or '未知'} {v}" for k, v in s["servers"].items()) or "无"))
+        for r in s["daily"]:
+            print(f"  {r['day']}  {r['active']}")
+
+
 class WindowLimiter:
     """按 IP 的滑动窗口：period 秒内最多 n 次（只记成功的操作：先 check，成功后 add）"""
     def __init__(self, n, period):
@@ -8968,6 +9052,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     feedback_limiter = RateLimiter(FEEDBACK_RATE)
     feedback_posts = WindowLimiter(*FEEDBACK_POSTS)
     feedback_read_limiter = RateLimiter(30)
+    lite_limiter = RateLimiter(6)          # 收益助手启动上报：每个 IP 每分钟 6 次（网吧 / 同一出口多台电脑也够）
     chat_tr_limiter = RateLimiter(CHAT_TR_RATE)
     ai_limiter = RateLimiter(AI_RATE * 3)
     assistant = Assistant()
@@ -9188,6 +9273,25 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.send_json(502, {"error": str(e)})
             except Exception:
                 log.exception("角色挂售错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
+        def lite_ping(self):
+            # 收益助手启动上报（程序走 Tauri HTTP，不受 CORS 限制，不带 CORS 头）
+            ok, _, retry = lite_limiter.take(self.client_ip())
+            if not ok:
+                return self.send_json(429, {"error": "too many requests"}, {"Retry-After": str(retry)})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 1024:
+                    raise ValueError("请求体应为 JSON")
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError("请求体应为 JSON")
+                return self.send_json(200, api.lite.ping(body))
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except Exception:
+                log.exception("收益助手上报错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
         def feedback(self, path):
@@ -9422,6 +9526,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.hosted(url.path.rstrip("/"))
             if url.path.rstrip("/") == "/api/kb/feedback" or url.path.startswith("/api/kb/feedback/"):
                 return self.feedback(url.path.rstrip("/"))
+            if url.path.rstrip("/") == "/api/kb/lite/ping":
+                return self.lite_ping()
             if url.path.rstrip("/") in ("/api/kb/translate", "/api/kb/translate/models"):
                 return self.chat_translate(url.path.rstrip("/").endswith("/models"))
             if url.path.rstrip("/") in ("/api/kb/ai/info", "/api/kb/ai/chat"):
@@ -9511,6 +9617,10 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.open_api(url)
             if url.path == "/api/kb/img":
                 return self.image(url)
+            if url.path.rstrip("/") == "/api/kb/lite/stats":   # 收益助手使用人数：只给站长 IP，别人看到 404
+                if not api.feedback.admin_ip(self.client_ip()):
+                    return self.send_json(404, {"error": "not found"})
+                return self.send_json(200, api.lite.stats())
             if url.path.startswith("/api/kb/"):
                 return self.api(url)
             if static_dir:
@@ -9599,11 +9709,15 @@ def main():
     parser.add_argument("--feedback", type=int, metavar="N", help="列出最近 N 条工单后退出")
     parser.add_argument("--feedback-reply", nargs=2, metavar=("ID", "TEXT"), help="回复工单后退出（状态改为处理中）")
     parser.add_argument("--feedback-done", action="store_true", help="与 --feedback-reply 一起用：同时标为已处理")
+    parser.add_argument("--lite-stats", action="store_true", help="显示收益助手（lite/ 独立程序）的使用人数后退出")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.feedback:
         Feedback.recent(args.db, args.feedback)
+        return
+    if args.lite_stats:
+        LiteStats.stats_cli(args.db)
         return
     if args.feedback_reply:
         Feedback.reply_cli(args.db, int(args.feedback_reply[0]), args.feedback_reply[1].strip(), args.feedback_done)
@@ -9640,6 +9754,7 @@ def main():
     api.plaza = Plaza(store, api.wallet)
     api.push = AlertPush()
     api.feedback = Feedback(store, api.push)
+    api.lite = LiteStats(store)
     abyssal = Abyssal(store)
     abyssal.model = store.abyssal_model
     cn_apis = {}

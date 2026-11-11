@@ -1,9 +1,9 @@
 // 主界面：侧栏页面切换、顶部角色切换 / 添加 / 移除、服务器切换；各页面是 views/*.js 的 render(box, acc)
-// 后台常驻：深渊位置监控（views/abyss.js）、日志增量扫描（logscan.js）、剪贴板监控（clip.js）
-import { inApp, store } from './platform.js';
+// 后台常驻：深渊位置监控（views/abyss.js）、日志增量扫描（logscan.js）、剪贴板监控（clip.js）、启动上报与自动更新（meta.js）
+import { store } from './platform.js';
 import { SERVERS, SERVER, setServer, portrait } from './servers.js';
-import { accounts, activeAccount, setActive, removeAccount, startLogin, finishLogin } from './esi.js';
-import { esc, loadTypeNames } from './data.js';
+import { accounts, activeAccount, setActive, removeAccount, startLogin, finishLogin, clearEsiCache } from './esi.js';
+import { esc, loadTypeNames, loadNpcNames } from './data.js';
 import * as overview from './views/overview.js';
 import * as skills from './views/skills.js';
 import * as wallet from './views/wallet.js';
@@ -13,6 +13,7 @@ import * as orders from './views/orders.js';
 import * as live from './views/live.js';
 import * as LS from './logscan.js';
 import * as CLIP from './clip.js';
+import * as META from './meta.js';
 
 const VIEWS = { overview, skills, wallet, live, abyss, assets, orders };
 const $ = (id) => document.getElementById(id);
@@ -48,12 +49,14 @@ export async function render() {
     box.innerHTML = `<div class="empty"><h3>还没有添加角色</h3><p>添加角色后可以查看角色、技能、钱包与刷怪收益、资产和订单，并自动记录每一趟深渊。<br>令牌只保存在这台电脑上。</p><button class="btn primary" data-act="add">＋ 添加角色</button></div>`;
     return;
   }
-  box.innerHTML = '<div class="loading">加载中…</div>';
+  // 切换页面：数据有缓存时几乎立刻画好，不闪「加载中」；超过 200 毫秒还没好才显示
+  const prev = box.firstElementChild;
+  const slow = setTimeout(() => { if (my === seq && box.firstElementChild === prev) box.innerHTML = '<div class="loading">加载中…</div>'; }, 200);
   try {
     await VIEWS[current].render(box, acc, { isCurrent: () => my === seq, rerender: render });
   } catch (e) {
     if (my === seq) box.innerHTML = `<div class="empty">加载失败：${esc(e.message)}<br><button class="btn" data-act="retry">重试</button></div>`;
-  }
+  } finally { clearTimeout(slow); }
 }
 
 // ---------- 登录 ----------
@@ -106,7 +109,7 @@ document.addEventListener('click', (e) => {
   if (act === 'retry') render();
 });
 $('addChar').addEventListener('click', openLogin);
-$('refreshBtn').addEventListener('click', () => render());
+$('refreshBtn').addEventListener('click', () => { clearEsiCache(); render(); });
 $('openLogin').addEventListener('click', doOpenLogin);
 $('loginDone').addEventListener('click', doFinish);
 $('loginCancel').addEventListener('click', () => $('loginDlg').close());
@@ -115,10 +118,11 @@ $('callbackInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' &&
 const sel = $('serverSel');
 sel.innerHTML = Object.values(SERVERS).map((s) => `<option value="${s.id}"${s.id === SERVER.id ? ' selected' : ''}>${s.name}（${s.sub}）</option>`).join('');
 sel.addEventListener('change', () => setServer(sel.value));
-$('appVer').textContent = inApp ? '' : '浏览器预览';
 
 loadTypeNames().catch((e) => toast('物品名称加载失败：' + e.message, 'error', 5000));
+loadNpcNames();   // 空间站 / 星系 / NPC 军团的中文名
 abyss.restartMonitor();
 LS.start();      // 日志增量扫描（赏金、采矿、本地频道）
 CLIP.start();    // 剪贴板（游戏里复制的货柜）
+META.start();    // 启动上报（统计使用人数）、自动更新
 render();

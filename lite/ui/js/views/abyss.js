@@ -298,7 +298,7 @@ function draw() {
     <div class="head-row"><h3>深渊收益</h3>
       <div class="monitor"><span class="dot${D.set.monitor && timer ? ' on' : ''}"></span>
         <label><input type="checkbox" data-monitor ${D.set.monitor ? 'checked' : ''}> 自动识别进出深渊</label>
-        <span class="muted small">${monitored.length ? '监控 ' + monitored.map((a) => esc(a.character_name)).join('、') + '，每 12 秒读一次位置；聊天日志的本地频道也会补记' : '没有角色有位置权限，只按聊天日志的本地频道识别'}</span></div>
+        ${monitored.length ? '' : '<span class="muted small">没有角色有位置权限，只按聊天日志的本地频道识别</span>'}</div>
       <label class="small"><input type="checkbox" data-clip ${D.set.clip ? 'checked' : ''}> 游戏里复制货柜自动记入</label>
       <span class="grow"></span>
       <button class="btn sm" data-manual>手动记录一趟</button>

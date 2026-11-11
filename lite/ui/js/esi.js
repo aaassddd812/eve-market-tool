@@ -183,13 +183,34 @@ async function request(path, acc, { page, method = 'GET', body } = {}) {
   }
 }
 
-export const esiPublic = async (path, opts) => (await request(path, null, opts)).json();
-export const esiAuth = async (acc, path) => (await request(path, acc)).json();
-export async function esiPaged(acc, path, max = 30) {
-  const first = await request(path, acc, { page: 1 });
-  const pages = Math.min(Number(first.headers.get('X-Pages')) || 1, max);
-  const all = [await first.json()];
-  for (let p = 2; p <= pages; p++) all.push(await (await request(path, acc, { page: p })).json());
-  return all.flat();
+// GET 结果缓存在内存里（按服务器 + 角色 + 路径）：切换页面时直接用，不重复请求。
+// 有效期按 ESI 的 Expires 头（ESI 自己的缓存时间，位置 5 秒、钱包 2 分钟、资产 1 小时…），没有这个头时位置类 5 秒、其余 2 分钟；
+// 同一个请求正在进行时共用一个。顶部「刷新」清空缓存。
+const cache = new Map();
+const expiry = (res, path) => {
+  const exp = Date.parse(res.headers.get('Expires') || '');
+  return Number.isFinite(exp) && exp > Date.now() ? exp : Date.now() + (/\/(location|ship|online)\/$/.test(path) ? 5e3 : 12e4);
+};
+function cached(key, load) {
+  const hit = cache.get(key);
+  if (hit && (hit.p || hit.exp > Date.now())) return hit.p || Promise.resolve(hit.data);
+  const p = load().then(({ data, exp }) => { cache.set(key, { data, exp }); return data; }, (e) => { cache.delete(key); throw e; });
+  cache.set(key, { p });
+  return p;
+}
+export function clearEsiCache() { cache.clear(); }
+const ckey = (acc, path) => SERVER.id + ':' + (acc?.character_id || 0) + ':' + path;
+
+export const esiPublic = (path, opts) => (opts?.page ? request(path, null, opts).then((r) => r.json())
+  : cached(ckey(null, path), async () => { const r = await request(path, null, opts); return { data: await r.json(), exp: expiry(r, path) }; }));
+export const esiAuth = (acc, path) => cached(ckey(acc, path), async () => { const r = await request(path, acc); return { data: await r.json(), exp: expiry(r, path) }; });
+export function esiPaged(acc, path, max = 30) {
+  return cached(ckey(acc, path) + '#' + max, async () => {
+    const first = await request(path, acc, { page: 1 });
+    const pages = Math.min(Number(first.headers.get('X-Pages')) || 1, max);
+    const all = [await first.json()];
+    for (let p = 2; p <= pages; p++) all.push(await (await request(path, acc, { page: p })).json());
+    return { data: all.flat(), exp: expiry(first, path) };
+  });
 }
 export const esiPost = async (path, body, acc = null) => (await request(path, acc, { method: 'POST', body })).json();

@@ -207,3 +207,20 @@ tr.clickable { cursor: pointer; }
   .stats, .valuation-grid, .combat { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .run-detail { grid-template-columns: 1fr; }
 }
+
+/* 资产：位置行原地展开 */
+.loc-table .caret { display: inline-block; width: 18px; font-size: 14px; color: var(--muted); }
+.loc-table tr.sel .caret { color: var(--accent); }
+.loc-table tr.loc-open > td { padding: 0 0 8px; background: transparent; white-space: normal; }
+.loc-items { margin: 0 0 4px 16px; padding: 10px 12px; border-radius: var(--r-lg); background: var(--bg3); }
+.loc-items .head-row { margin-bottom: 6px; }
+.loc-items th { background: var(--bg3); }
+.loc-items tbody tr:nth-child(odd) td { background: rgba(255, 255, 255, 0.03); }
+
+/* 左下角：版本号、检查更新、新版本提示 */
+.ver-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 30px; }
+.ver-row .btn.sm { height: 26px; padding: 0 8px; }
+.upd-box { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-radius: var(--r-lg); background: var(--accent-soft); font-size: 12px; }
+.upd-title { font-weight: 600; color: var(--text); }
+.upd-msg { color: var(--text2); word-break: break-all; }
+.upd-box .btn { width: 100%; }
