@@ -5741,7 +5741,7 @@ async function renderProfileTab(tab) {
 
 // 钱包 · 刷怪收益（ratting.js）：第 1 页流水满了（ESI 每页 2500 条）就补读全部页，赏金可能在后面几页
 let rattingLoading = null;
-const loadRattingModule = () => (rattingLoading ||= import('./ratting.js?v=1').catch((e) => { rattingLoading = null; throw e; }));
+const loadRattingModule = () => (rattingLoading ||= import('./ratting.js?v=2').catch((e) => { rattingLoading = null; throw e; }));
 async function mountRatting(box, journal) {
   const slot = box.querySelector('[data-ratting]');
   if (!slot) return;

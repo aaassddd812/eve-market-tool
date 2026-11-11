@@ -8122,7 +8122,6 @@ html.is-app .desktop-dl-btn, html.is-app [data-mnav-act="desktopDlBtn"] { displa
 .rat-live-note b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .rat-table td { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rat-table tr.rat-live td { background: color-mix(in srgb, var(--buy-color) 6%, transparent); }
-.rat-foot { margin: 8px 0 0; font-size: 0.75rem; }
 @media (max-width: 760px) {
   .valuation-grid.rat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rat-head .rat-seg { margin-left: 0; }

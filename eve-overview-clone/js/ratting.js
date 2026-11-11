@@ -75,7 +75,6 @@ export function rattingHtml(journal, c) {
   const live = all.filter((s) => !s.essOnly).pop();
   const liveOn = !!live && now - live.end <= GAP;
   const isk = (v) => ctx.formatISK(v);
-  const oldest = (journal || []).reduce((m, j) => Math.min(m, Date.parse(j.date) || m), now);
 
   const seg = RANGES.map(([k, l]) => `<button type="button" class="${k === range ? 'active' : ''}" data-rat-range="${k}">${l}</button>`).join('');
   const sysName = (s) => {
@@ -105,7 +104,6 @@ export function rattingHtml(journal, c) {
     </div>
     <div class="table-scroll"><table class="pc-mini-table rat-table"><thead><tr><th>开始</th><th>时长</th><th>星系</th><th>NPC</th><th>税前</th><th>军团税</th><th>到手</th><th>每小时</th></tr></thead><tbody>${rows}</tbody></table></div>`
       : '<p class="text-muted">这段时间没有赏金记录。</p>'}
-    <p class="text-muted rat-foot">只算钱包里的赏金和 ESS 到账，掉落、打捞、任务物品不在内。ESI 流水只保留约 30 天${oldest < now ? '，当前数据从 ' + new Date(oldest).toLocaleDateString('zh-CN') + ' 开始' : ''}。</p>
   </div>`;
 }
 
