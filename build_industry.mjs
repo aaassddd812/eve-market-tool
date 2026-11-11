@@ -8,6 +8,7 @@
 //   decryptors 解码器 -> [成功率倍数, 材料效率, 时间效率, 流程数]
 //   res     制造蓝图 -> [ME 研究基础时间, TE 研究基础时间, 拷贝每流程时间]（秒；研究各级时间 = 基础 × 等级倍数）
 //   structures 工业建筑类型 -> 中文名
+//   skt     蓝图要求的技能里带「每级减少制造时间」的 -> 每级百分比（如 T2 的工程学 / 物理学技能 1%，高级舰船建造研究 1%）
 // skill-data.json：
 //   skills  技能 -> [中文名, 英文名, 分组, 等级倍数(rank), 主属性, 副属性, 说明]
 //   groups  技能分组 -> 中文名
@@ -42,7 +43,7 @@ await eachLine("metaGroups", (o) => { metas[o._key] = zh(o.name); });
 
 const DECRYPTOR_GROUP = 1304;
 const SKILL_CATEGORY = 16;
-const ATTR = { rank: 275, primary: 180, secondary: 181, decProb: 1112, decME: 1113, decTE: 1114, decRuns: 1124 };
+const ATTR = { rank: 275, primary: 180, secondary: 181, decProb: 1112, decME: 1113, decTE: 1114, decRuns: 1124, mfgTimePerLevel: 1982 };
 const dogma = new Map();
 await eachLine("typeDogma", (o) => {
   const t = types.get(o._key);
@@ -129,9 +130,12 @@ for (const id of usedGroups) {
 }
 const outCats = Object.fromEntries([...usedCats].map((id) => [id, zh(cats.get(id)?.name)]));
 
+const skt = {};
+for (const [id, d] of dogma) if (d[ATTR.mfgTimePerLevel]) skt[id] = -d[ATTR.mfgTimePerLevel];
+
 await writeFile("eve-overview-clone/industry-data.json", JSON.stringify({
   source: "CCP SDE (JSONL)", generatedAt: new Date().toISOString(),
-  bp, inv, types: outTypes, groups: outGroups, cats: outCats, metas, decryptors, structures, res
+  bp, inv, types: outTypes, groups: outGroups, cats: outCats, metas, decryptors, structures, res, skt
 }));
 
 // 技能

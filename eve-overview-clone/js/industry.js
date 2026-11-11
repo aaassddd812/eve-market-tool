@@ -6,6 +6,7 @@
 // 我的工业：ESI 工业任务（esi-industry.read_character_jobs.v1）与角色蓝图（esi-characters.read_blueprints.v1），蓝图按自身 ME / TE 算成本与每小时利润；
 //   有军团蓝图权限时再列军团机库里的蓝图（ind-plan.js 的 loadCorpBps），可按机库分部筛选。
 // 制造规划 / 库存可造、计算器里的解码器对比、发明次数、ME 影响、研究与拷贝：见 ind-plan.js。
+// 设施：成品（F.fac，可选「自动」按产品挑我的建筑里加成最好的）、自制组件（F.cfac）、发明 / 研究 / 拷贝（F.ifac）、反应（F.rfac）分开选，见 facilityFor。
 // 利润排行的价格与成交量先用交易中心快照（/api/v1/hubs/arbitrage），综合评分 = 每小时利润、日均成交额、利润率、买卖价差加权。
 // NPC 蓝图：npc-bp.json（build_npc_bp.mjs 生成），侧栏「NPC 蓝图」页与计算器蓝图卡片。
 // 蓝图价格：市场有售的原图用吉他卖价；市场没有的（拷贝、派系等）用公开合同最低价（击杀记录服务 /api/kb/bpprices，
@@ -17,9 +18,10 @@
 //   预估价值 EIV = Σ 基础材料数 × 调整价格 × 流程数
 //   安装费 = EIV × 星系指数 × (1 − 建筑减免) + EIV × (设施税 + 4% SCC 附加费)
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
+//          × 蓝图要求的专属技能（industry-data 的 skt：T2 要求的工程学 / 物理学、高级舰船建造研究等每级 1%）× 制造植入体（BX-801/802/804）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME, serverKey } from './server.js?v=s4';
-import * as Plan from './ind-plan.js?v=v10';
+import * as Plan from './ind-plan.js?v=v14';
 import * as Chain from './ind-chain.js?v=5';
 import * as IS from './ind-structs.js?v=4';
 import { skPage } from './skeleton.js?v=v17';
@@ -49,6 +51,14 @@ const FACILITIES = {
   35835: { me: 0, te: 0, cost: 0, act: 'r' },
   35836: { me: 0, te: 25, cost: 0, act: 'r' }
 };
+// 工业植入体（第 8 / 7 / 6 槽）：时间减少百分比。研究与拷贝的在 ind-plan.js 的 scienceJob 里用
+export const IMPLANTS = {
+  m: { 27170: 1, 27167: 2, 27171: 4 },          // 制造时间 BX-801 / 802 / 804
+  me: { 27182: 1, 27176: 3, 27181: 5 },         // 材料效率研究时间 MY-701 / 703 / 705
+  te: { 27180: 1, 27177: 3, 27179: 5 },         // 时间效率研究时间 RR-601 / 603 / 605
+  c: { 27185: 1, 27178: 3, 27184: 5 }           // 拷贝时间 SC-801 / 803 / 805
+};
+const IMP_LABEL = { m: ['制造', 'BX'], me: ['ME 研究', 'MY'], te: ['TE 研究', 'RR'], c: ['拷贝', 'SC'] };
 const RIGS = [{ me: 0, te: 0, name: '无' }, { me: 2, te: 20, name: 'T1' }, { me: 2.4, te: 24, name: 'T2' }];
 const secMul = (sec) => (sec >= 0.45 ? 1 : sec > 0 ? 1.9 : 2.1);   // 改装件加成随安全等级放大
 
@@ -64,7 +74,7 @@ const D = { loading: null, data: null, sys: new Map(), regions: new Map(), jumps
   bpc: new Map(), bpAll: null, bpUpdated: null, mkt: undefined, mktAt: null };   // mkt：交易中心快照 id -> { sell, buy, daily }   // 蓝图合同价：蓝图 -> { o: 原图合同, c: 拷贝合同 }；bpAll：全部蓝图的 [原图最低, 拷贝每流程最低]
 const F = {
   tab: 'calc', sys: JITA, fac: 'npc', rig: 0, rfac: 35836, rrig: 0, tax: 1, reproc: 69.6, oreM3: 0,
-  mat: 'sell', prod: 'sell', skills: 'all5', me: 10, te: 20, subMe: 10,
+  mat: 'sell', prod: 'sell', skills: 'all5', me: 10, te: 20, subMe: 10, imp: { m: 0, me: 0, te: 0, c: 0 },
   scope: 'region', jumps: 10, sec: { high: true, low: true, null: false },
   rankCat: 'all', rankTech: 'all', rankAct: 'm', rankSkill: false, rankOwned: false, rankVol: 0, rankScore: 0, rankSort: 'ph', rankDir: 'desc', rankSize: 100, rankNoOrders: false, idx: 'manufacturing', whereSort: null, whereDir: 'asc'
 };
@@ -110,7 +120,7 @@ export function initIndustry(context) {
 }
 
 // 表头排序（与市场中心订单簿一致）：点击表头按该列排序，再点一次反向；首次点击用该列更有用的方向
-const RANK_SORT_DIR = { name: 'asc', perUnit: 'asc', unit: 'desc', profit: 'desc', margin: 'desc', ph: 'desc', m3: 'desc', daily: 'desc', score: 'desc' };
+const RANK_SORT_DIR = { name: 'asc', perUnit: 'asc', unit: 'desc', profit: 'desc', margin: 'desc', ph: 'desc', m3: 'desc', daily: 'desc', pd: 'desc', score: 'desc' };
 const WHERE_SORT_DIR = { name: 'asc', region: 'asc', manufacturing: 'asc', invention: 'asc', reaction: 'asc', copying: 'asc',
   researching_material_efficiency: 'asc', researching_time_efficiency: 'asc', jumps: 'asc', stations: 'desc' };
 const sortTh = (attr, cur, dir, key, label, cls = '') => {
@@ -125,7 +135,7 @@ function loadData() {
   if (!D.loading) {
     D.loading = (async () => {
       const [data, map, prices, indices] = await Promise.all([
-        fetch('industry-data.json?v=3').then((r) => { if (!r.ok) throw new Error('industry-data.json ' + r.status); return r.json(); }),
+        fetch('industry-data.json?v=4').then((r) => { if (!r.ok) throw new Error('industry-data.json ' + r.status); return r.json(); }),
         fetch(SERVER.mapData).then((r) => { if (!r.ok) throw new Error('星图数据 ' + r.status); return r.json(); }),
         ctx.fetchESI('/markets/prices/').catch(() => []),
         ctx.fetchESI('/industry/systems/').catch(() => [])
@@ -188,8 +198,32 @@ const sysLabel = (id) => {
 
 // ---------- 技能与价格 ----------
 async function ensureSkills() {
-  if (F.skills !== 'esi' || !ctx.hasEsiToken()) { D.skills = null; return; }
+  if (F.skills !== 'esi' || !ctx.hasEsiToken()) { D.skills = null; D.imp = null; return; }
   try { D.skills = (await ctx.getCharacterSkills()).levels; } catch { D.skills = null; }
+  // 角色当前的工业植入体（需要 esi-clones.read_implants.v1；读不到时用设置里手选的）
+  if (D.impFor !== ctx.readToken()?.character_id) {
+    D.impFor = ctx.readToken()?.character_id;
+    try {
+      const ids = await ctx.getCharacterImplants();
+      D.imp = Object.fromEntries(Object.entries(IMPLANTS).map(([k, m]) => [k, Math.max(0, ...(ids || []).map((id) => m[id] || 0))]));
+    } catch { D.imp = null; }
+  }
+}
+// 植入体时间减少百分比：读角色时按角色当前植入体，否则按设置
+const impPct = (k) => (F.skills === 'esi' && D.skills && D.imp ? D.imp[k] : F.imp?.[k]) || 0;
+// 计算器「制造时间」悬停说明：技能和植入体各减了多少
+function timeNote(r) {
+  if (r.act === 'r') return `反应理论 ${lvl(SKILL.reactions)} 级 −${4 * lvl(SKILL.reactions)}%`;
+  const skt = D.data.skt || {};
+  const parts = [`工业理论 ${lvl(SKILL.industry)} 级 −${4 * lvl(SKILL.industry)}%`, `高级工业理论 ${lvl(SKILL.advIndustry)} 级 −${3 * lvl(SKILL.advIndustry)}%`];
+  for (const [id] of BP(r.pid)[6] || []) if (skt[id]) parts.push(`${tName(id)} ${lvl(id)} 级 −${skt[id] * lvl(id)}%`);
+  if (impPct('m')) parts.push(`植入体 −${impPct('m')}%`);
+  return parts.join('\n') + `\nTE ${r.te}`;
+}
+// 蓝图专属技能的时间系数（每门要求的技能每级 skt%）
+function bpSkillMul(pid) {
+  const skt = D.data.skt || {};
+  return (BP(pid)?.[6] || []).reduce((m, [id]) => m * (skt[id] ? 1 - skt[id] / 100 * lvl(id) : 1), 1);
 }
 const lvl = (id) => (F.skills === 'esi' && D.skills ? D.skills.get(id) || 0 : 5);
 const salesTax = () => 7.5 * (1 - 0.11 * lvl(SKILL.accounting));   // %
@@ -308,28 +342,47 @@ function bpPrices(pid) {
 
 // ---------- 计算 ----------
 // 设施：F.fac / F.rfac 为 's:<key>' 时用「我的建筑」（加成按产品分类、星系用建筑所在星系、税率用建筑自己的）
-function facilityFor(act, pid) {
-  const key = act === 'r' ? F.rfac : F.fac;
-  const s = typeof key === 'string' && key.startsWith('s:') ? IS.get(key.slice(2)) : null;
+//   F.fac = 'auto'：每个产品从「我的建筑」里挑能做这项活动、对它加成最好的一座（先比材料、再比时间、再比安装费）
+//   F.cfac：自制组件（制造规划 / 计算器里选了自制的材料）在哪造，空 = 和成品同一处
+//   F.ifac：发明、拷贝、研究在哪做，空 = 和制造同一处
+// role：'comp' 表示在造组件
+function facKey(act, role) {
+  if (act === 'r') return F.rfac;
+  if (act !== 'm') return F.ifac || F.fac;
+  return role === 'comp' && F.cfac ? F.cfac : F.fac;
+}
+function autoStruct(act, pid) {
+  const g = pid ? T(pid)[2] : 0, c = g ? D.data.groups[g]?.[1] || 0 : 0;
+  let best = null;
+  for (const st of IS.structs()) {
+    if (!IS.canDo(st, act)) continue;
+    const b = IS.bonus(st, act, g, c);
+    const score = b.me * 1e6 + b.te * 1e3 + b.cost;
+    if (!best || score > best.score) best = { st, score };
+  }
+  return best?.st || null;
+}
+function facilityFor(act, pid, role) {
+  const key = facKey(act, role);
+  const s = key === 'auto' ? autoStruct(act, pid) : typeof key === 'string' && key.startsWith('s:') ? IS.get(key.slice(2)) : null;
   if (s && IS.canDo(s, act)) {
     const g = pid ? T(pid)[2] : 0;
-    return { ...IS.bonus(s, act, g, g ? D.data.groups[g]?.[1] || 0 : 0), rig: { me: 0, te: 0 }, sys: s.system || undefined, s };
+    return { ...IS.bonus(s, act, g, g ? D.data.groups[g]?.[1] || 0 : 0), rig: { me: 0, te: 0 }, sys: s.system || undefined, s, name: IS.shortName(s) };
   }
-  if (act === 'r') return { ...FACILITIES[F.rfac] || FACILITIES[35836], rig: RIGS[F.rrig] };
-  return { ...FACILITIES[F.fac] || FACILITIES.npc, rig: RIGS[F.rig] };
+  if (act === 'r') return { ...FACILITIES[F.rfac] || FACILITIES[35836], rig: RIGS[F.rrig], name: (D.data.structures[F.rfac] || '精炼厂') + (F.rrig ? ' + ' + RIGS[F.rrig].name : '') };
+  // 组件 / 科研单独选了 NPC 空间站；或者制造设施是 NPC / 自动但没有合适的建筑
+  if (key === 'npc' || !FACILITIES[F.fac] || F.fac === 'npc') return { ...FACILITIES.npc, rig: RIGS[0], npc: true, name: 'NPC 空间站' };
+  return { ...FACILITIES[F.fac], rig: RIGS[F.rig], name: D.data.structures[F.fac] + (F.rig ? ' + ' + RIGS[F.rig].name + ' 改装件' : '') };
 }
-const facTax = (act) => {
-  const f = facilityFor(act);
-  if (f.s) return IS.taxOf(f.s, act, F.tax);
-  return act !== 'r' && (F.fac === 'npc' || !FACILITIES[F.fac]) ? NPC_TAX : F.tax;
-};
+const facTaxOf = (f, act) => (f.s ? IS.taxOf(f.s, act, F.tax) : f.npc ? NPC_TAX : F.tax);
+const facTax = (act, pid, role) => facTaxOf(facilityFor(act, pid, role), act);
 const sysSec = (id = F.sys) => D.sys.get(id)?.sec ?? 0.5;
 const costIndex = (act, id = F.sys) => (D.indices.get(id) || {})[act === 'r' ? 'reaction' : 'manufacturing'] || 0;
 
 // 一个任务的材料、EIV、安装费、时间
-function job(pid, runs, me, te, sysId) {
+function job(pid, runs, me, te, sysId, role) {
   const [, qty, time, mats, , act] = BP(pid);
-  const fac = facilityFor(act, pid);
+  const fac = facilityFor(act, pid, role);
   sysId = sysId ?? fac.sys ?? F.sys;
   const sm = secMul(sysSec(sysId));
   const mul = (1 - fac.me / 100) * (1 - (fac.rig.me * sm) / 100);
@@ -340,10 +393,10 @@ function job(pid, runs, me, te, sysId) {
   const eiv = mats.reduce((t, [id, base]) => t + base * runs * (D.adjusted.get(id) || 0), 0);
   const idx = costIndex(act, sysId);
   const gross = eiv * idx * (1 - fac.cost / 100);
-  const taxes = eiv * (facTax(act) + SCC) / 100;
-  const skillMul = act === 'r' ? 1 - 0.04 * lvl(SKILL.reactions) : (1 - 0.04 * lvl(SKILL.industry)) * (1 - 0.03 * lvl(SKILL.advIndustry));
+  const taxes = eiv * (facTaxOf(fac, act) + SCC) / 100;
+  const skillMul = act === 'r' ? 1 - 0.04 * lvl(SKILL.reactions) : (1 - 0.04 * lvl(SKILL.industry)) * (1 - 0.03 * lvl(SKILL.advIndustry)) * bpSkillMul(pid) * (1 - impPct('m') / 100);
   const secs = time * runs * (1 - te / 100) * (1 - fac.te / 100) * (1 - (fac.rig.te * sm) / 100) * skillMul;
-  return { act, out: qty * runs, items, eiv, idx, gross, taxes, cost: gross + taxes, secs };
+  return { act, out: qty * runs, items, eiv, idx, gross, taxes, cost: gross + taxes, secs, fac: fac.name, facId: fac.s?.id || null };
 }
 
 // 发明：每个 T2 流程分摊的发明成本
@@ -358,11 +411,13 @@ function invention(pid, decId = 0) {
   const runs = Math.max(1, runsPer + dec[3]);
   const eivProduct = BP(pid)[3].reduce((t, [id, b]) => t + b * (D.adjusted.get(id) || 0), 0);
   const fac = facilityFor('i', pid);
-  const jobCost = eivProduct * 0.02 * ((D.indices.get(fac.sys ?? F.sys) || {}).invention || 0) * (1 - fac.cost / 100) + eivProduct * 0.02 * (facTax('i') + SCC) / 100;
+  const jobCost = eivProduct * 0.02 * ((D.indices.get(fac.sys ?? F.sys) || {}).invention || 0) * (1 - fac.cost / 100) + eivProduct * 0.02 * (facTaxOf(fac, 'i') + SCC) / 100;
+  // 发明一次的时间：蓝图发明时间 × 高级工业理论（每级 −3%）× 建筑时间加成
+  const secs = (inv[4] || 0) * (1 - 0.03 * lvl(SKILL.advIndustry)) * (1 - fac.te / 100);
   const dcCost = dcs.reduce((t, [id, q]) => t + q * (matPrice(id) ?? 0), 0);
   const decCost = decId ? matPrice(decId) ?? 0 : 0;
   const attempt = dcCost + decCost + jobCost;
-  return { t1bp, prob, runs, me: 2 + dec[1], te: 4 + dec[2], dcs, dcCost, decCost, jobCost, attempt, perRun: attempt / (prob * runs) };
+  return { t1bp, prob, runs, me: 2 + dec[1], te: 4 + dec[2], dcs, dcCost, decCost, jobCost, attempt, perRun: attempt / (prob * runs), secs, fac: fac.name, facId: fac.s?.id || null };
 }
 
 // 生产 units 个 pid 的成本：材料逐个按「购买」或「自制」（C.build 中的物品）计算，自制按比例分摊。
@@ -416,8 +471,9 @@ function supply(id, need, depth, sysId, sink, parent) {
 function buildCost(pid, units, depth, sysId, sink = null) {
   const [, qty, , , , act] = BP(pid);
   const runs = Math.ceil(units / qty);
-  const me = act === 'r' ? 0 : F.subMe;
-  const j = job(pid, runs, me, 0, sysId);
+  const own = act === 'r' ? null : Plan.ownedBp(pid);   // 自己有这张蓝图时按它的 ME / TE
+  const me = act === 'r' ? 0 : own?.me ?? F.subMe;
+  const j = job(pid, runs, me, own?.te ?? 0, sysId, 'comp');
   const share = units / (runs * qty);
   let cost = j.cost * share;
   const raw = new Map();
@@ -525,7 +581,7 @@ export function lpMake(pid, runs) {
 // 制造页设置的一句话说明，与卖出税费（按技能：会计学、经纪人关系；产物挂卖单时加中介费）
 export function lpSettings() {
   const fac = facilityFor('m');
-  const facName = fac.s ? IS.shortName(fac.s) : F.fac === 'npc' || !D.data?.structures[F.fac] ? 'NPC 空间站' : D.data.structures[F.fac] + (F.rig ? ' + ' + RIGS[F.rig].name + ' 改装件' : '');
+  const facName = fac.name;
   const sys = D.sys.get(fac.sys ?? F.sys);
   return {
     sys: sys?.name || '', idx: (D.indices.get(fac.sys ?? F.sys) || {}).manufacturing || 0, facName, facTax: facTax('m'),
@@ -543,7 +599,7 @@ export async function showIndustry(hash = location.hash, restored = false) {
     planReady = true;
     Chain.initChain({ ctx, BP, T, tName, matPrice, ICON, F, HUB: HUB_NAME, vol: (id) => D.vols?.[id], volReady: () => Boolean(D.vols) });
     IS.initStructs({ ctx, D, F, sysLabel, onChange: () => { renderSettings(); refresh(); } });
-    Plan.initPlan({ server: SERVER.id, ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, selectProduct, renderTab, sysSec, secMul, myBp });
+    Plan.initPlan({ server: SERVER.id, BP_ICON, ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, facTaxOf, SCC, ICON, selectProduct, renderTab, sysSec, secMul, myBp, impPct });
   }
   await Promise.all([ensureSkills(), IS.loadRigs().catch(() => {})]);
   const m = /^#ind(?:\/(calc|rank|where|mine|plan|npc))?(?:\/(\d+))?/.exec(hash || '');
@@ -618,15 +674,23 @@ function renderSettings() {
   // 我的建筑：下拉选择（能做该活动的），旁边是管理按钮
   const mySel = (name, act, cur) => {
     const list = IS.structs().filter((x) => IS.canDo(x, act));
-    return `<div class="pi-inline ind-my"><select class="pi-input" data-ind-sel="${name}"><option value="">我的建筑…</option>${list.map((x) => `<option value="s:${ctx.esc(x.key)}"${cur === 's:' + x.key ? ' selected' : ''}>${ctx.esc(IS.shortName(x))}</option>`).join('')}</select><button type="button" class="btn btn-ghost" data-ind-structs>管理</button></div>`;
+    return `<div class="pi-inline ind-my"><select class="pi-input" data-ind-sel="${name}"><option value="">我的建筑…</option>${name === 'fac' && list.length > 1 ? `<option value="auto"${cur === 'auto' ? ' selected' : ''}>自动：每个产品挑加成最好的</option>` : ''}${list.map((x) => `<option value="s:${ctx.esc(x.key)}"${cur === 's:' + x.key ? ' selected' : ''}>${ctx.esc(IS.shortName(x))}</option>`).join('')}</select><button type="button" class="btn btn-ghost" data-ind-structs>管理</button></div>`;
   };
   const facHint = (f, act) => {
     const tePct = (100 - (100 - f.te) * (1 - f.rig.te * secMul(sysSec(f.sys)) / 100)).toFixed(1);
     const mePct = Math.round((f.me + f.rig.me * secMul(sysSec(f.sys))) * 100) / 100;
-    return `<small class="pi-hint">${f.s ? sysLabel(f.s.system) + ' · ' : ''}ME −${mePct}% · TE −${tePct}% · 安装费 −${f.cost}%${f.s ? ` · 税 ${facTax(act)}%` : ''}${f.s && act === 'm' && C.pid ? '（按当前产品）' : ''}</small>`;
+    return `<small class="pi-hint">${act === 'm' && F.fac === 'auto' ? `自动选建筑${C.pid ? `，当前产品用 ${ctx.esc(f.name)}` : ''} · ` : ''}${f.s ? sysLabel(f.s.system) + ' · ' : ''}ME −${mePct}% · TE −${tePct}% · 安装费 −${f.cost}%${f.s ? ` · 税 ${facTaxOf(f, act)}%` : ''}${f.s && act === 'm' && C.pid ? '（按当前产品）' : ''}</small>`;
   };
-  const facName = fac.s ? IS.shortName(fac.s) : F.fac === 'npc' || !D.data.structures[F.fac] ? 'NPC 空间站' : D.data.structures[F.fac] + (F.rig ? ' + ' + RIGS[F.rig].name + ' 改装件' : '');
+  const facName = F.fac === 'auto' ? '自动选建筑' : fac.name;
   const idx = D.indices.get(fac.sys ?? F.sys) || {};
+  // 组件 / 科研单独选设施：空 = 跟上面一样
+  const subSel = (name, act, sameLabel) => {
+    const cur = F[name] || '';
+    const list = IS.structs().filter((x) => IS.canDo(x, act));
+    const opts = [['', sameLabel], ['npc', 'NPC 空间站'], ...(list.length > 1 ? [['auto', '自动：挑加成最好的']] : []), ...list.map((x) => ['s:' + x.key, IS.shortName(x)])];
+    return `<select class="pi-input" data-ind-fsel="${name}">${opts.map(([v, l]) => `<option value="${ctx.esc(v)}"${cur === v ? ' selected' : ''}>${ctx.esc(l)}</option>`).join('')}</select>`;
+  };
+  const cf = facilityFor('m', undefined, 'comp'), xf = facilityFor('i');
   el.innerHTML = `
     <summary><b>制造设置</b><span class="text-muted">${sysLabel(fac.sys ?? F.sys)} · 制造指数 ${((idx.manufacturing || 0) * 100).toFixed(2)}% · ${ctx.esc(facName)} · 技能${F.skills === 'esi' ? (D.skills ? '按角色' : '（未绑定，按全 5 级）') : '全 5 级'}</span></summary>
     <div class="ind-set-grid">
@@ -635,11 +699,15 @@ function renderSettings() {
           <input type="search" id="indSys" placeholder="输入星系名" value="${ctx.esc(D.sys.get(F.sys)?.name || '')}" autocomplete="off" spellcheck="false"><div class="kb-suggest" id="indSysSuggest" hidden></div></div>
         ${fac.s ? '<small class="pi-hint">选了我的建筑时按建筑所在星系算</small>' : ''}</div>
       <div class="pi-field"><label>制造设施</label>${seg('fac', facOpts, F.fac)}${mySel('fac', 'm', F.fac)}
-        ${!fac.s && F.fac !== 'npc' ? `<div class="pi-inline"><span>改装件</span>${seg('rig', RIGS.map((r, i) => [i, r.name]), F.rig)}</div>` : ''}
+        ${!fac.s && FACILITIES[F.fac] && F.fac !== 'npc' ? `<div class="pi-inline"><span>改装件</span>${seg('rig', RIGS.map((r, i) => [i, r.name]), F.rig)}</div>` : ''}
         ${facHint(fac, 'm')}</div>
       <div class="pi-field"><label>反应设施</label>${seg('rfac', rfacOpts, F.rfac)}${mySel('rfac', 'r', F.rfac)}
         ${rfac.s ? '' : `<div class="pi-inline"><span>改装件</span>${seg('rrig', RIGS.map((r, i) => [i, r.name]), F.rrig)}</div>`}
         ${rfac.s ? facHint(rfac, 'r') : ''}</div>
+      <div class="pi-field"><label>组件与科研</label>
+        <div class="pi-inline"><span>自制组件</span>${subSel('cfac', 'm', '和成品同一处')}</div>
+        <div class="pi-inline"><span>发明 / 研究</span>${subSel('ifac', 'i', '和制造同一处')}</div>
+        <small class="pi-hint">${F.cfac ? `组件：${ctx.esc(F.cfac === 'auto' ? '按组件自动选' : cf.name)}` : '组件和成品在同一处造'} · ${F.ifac ? `科研：${ctx.esc(F.ifac === 'auto' ? '自动选' : xf.name)}${xf.s ? ` · 税 ${facTaxOf(xf, 'i')}%` : ''}` : '科研和制造同一处'}</small></div>
       <div class="pi-field"><label>税费</label>
         <div class="pi-inline"><span>建筑税</span><input type="number" class="pi-input pi-tax" min="0" max="50" step="0.1" value="${F.tax}" data-ind-num="tax"><span>%</span></div>
         <small class="pi-hint">卖出税 ${salesTax().toFixed(2)}% · 中介费 ${brokerFee().toFixed(2)}%</small></div>
@@ -653,6 +721,10 @@ function renderSettings() {
           <div class="pi-num"><span>默认 TE</span><input type="number" class="pi-input" min="0" max="20" step="2" value="${F.te}" data-ind-num="te"></div>
           <div class="pi-num"><span>组件 ME</span><input type="number" class="pi-input" min="0" max="10" value="${F.subMe}" data-ind-num="subMe"></div>
         </div></div>
+      <div class="pi-field"><label>工业植入体</label>
+        ${F.skills === 'esi' && D.skills && D.imp ? `<small class="pi-hint">按角色当前植入体：${Object.keys(IMPLANTS).map((k) => `${IMP_LABEL[k][0]} ${D.imp[k] ? '−' + D.imp[k] + '%' : '无'}`).join(' · ')}</small>`
+          : `<div class="pi-grid2">${Object.entries(IMPLANTS).map(([k, m]) => `<label class="pi-num"><span>${IMP_LABEL[k][0]}</span><select class="pi-input" data-ind-imp="${k}"><option value="0">无</option>${[...new Set(Object.values(m))].sort((a, b) => a - b).map((v) => `<option value="${v}"${F.imp?.[k] === v ? ' selected' : ''}>${IMP_LABEL[k][1]} −${v}%</option>`).join('')}</select></label>`).join('')}</div>
+          ${F.skills === 'esi' && D.skills ? '<small class="pi-hint">读不到角色植入体（没有植入体权限），按这里手选的算</small>' : ''}`}</div>
     </div>`;
   el.open = open;
 }
@@ -838,7 +910,7 @@ function drawCalc() {
         <div><span>${HUB_NAME}${F.prod === 'sell' ? '卖价' : '收价'}</span><b>${r.unitPrice != null ? isk(r.unitPrice) : F.prod === 'buy' ? '没有收单' : '无报价'}</b></div>
         <div class="${r.profit >= 0 ? 'pi-stat-main' : 'ind-stat-loss'}"><span>总利润</span><b>${isk(r.profit)}</b></div>
         <div><span>利润率</span><b>${margin.toFixed(1)}%</b></div>
-        <div><span>制造时间</span><b>${fmtTime(r.j.secs)}</b></div>
+        <div title="${esc(timeNote(r))}"><span>制造时间</span><b>${fmtTime(r.j.secs)}</b></div>
         <div><span>每小时利润</span><b>${isk(hours ? r.profit / hours : 0)}</b></div>
         <div><span>日均成交（${HUB_NAME}）</span><b id="indVol">…</b></div>
       </div>
@@ -1048,6 +1120,8 @@ function rankRows() {
     if (revenue && profit / revenue > 0.9) continue;
     const vol = D.vols?.[pid];
     const row = { pid, unit, cost, perUnit: cost / j.out, profit, margin: revenue ? profit / revenue : 0, ph: profit / (j.secs / 3600), m3: vol ? profit / (vol * j.out) : null, secs: j.secs, inv: Boolean(inv), bpc: !myb && needBpc, mine: Boolean(myb), daily: daily ?? 0 };
+    // 每天可赚：一条产线一天能造的流程数和交易中心日均成交能消化的流程数取小，再乘每流程利润（成交量太小时每小时利润再高也赚不到）
+    row.pd = D.mkt ? profit * Math.min(86400 / j.secs, (daily || 0) / j.out) : null;
     row.score = rankScore(row);
     if (D.mkt && F.rankScore && row.score < F.rankScore) continue;
     rows.push(row);
@@ -1089,6 +1163,7 @@ function renderRank(body) {
       <td class="num ${x.ph >= 0 ? 'pi-profit' : 'down'}">${isk(x.ph)}</td>
       <td class="num pi-hide-sm" title="${D.vols[x.pid] ? `每个 ${ctx.formatNumber(D.vols[x.pid])} m³` : '体积未知'}">${x.m3 == null ? '—' : isk(x.m3)}</td>
       <td class="num"${mkt ? '' : ` data-ind-vol="${x.pid}"`}>${mkt ? (x.daily >= 0.1 ? ctx.formatNumber(x.daily >= 10 ? Math.round(x.daily) : Math.round(x.daily * 10) / 10) : x.daily > 0 ? '<0.1' : '—') : '…'}</td>
+      ${mkt ? `<td class="num pi-hide-sm ${x.pd >= 0 ? '' : 'down'}" title="一条产线每天 ${(86400 / x.secs).toFixed(86400 / x.secs < 10 ? 2 : 0)} 个流程，和日均成交量取小">${isk(x.pd)}</td>` : ''}
       ${mkt ? `<td class="num"><span class="ind-score ind-score-${x.score >= 60 ? 'hi' : x.score >= 35 ? 'mid' : 'lo'}">${x.score}</span></td>` : ''}
     </tr>`).join('');
   body.innerHTML = `
@@ -1113,8 +1188,8 @@ function renderRank(body) {
     </div>
     <div class="pi-card"><div class="pi-table-wrap ind-rank-wrap"><table class="pi-table">
       <thead><tr><th>#</th>${[['name', '产品', ''], ['perUnit', '单个成本', 'num pi-hide-sm'], ['unit', '单价', 'num pi-hide-sm'], ['profit', '每流程利润', 'num'], ['margin', '利润率', 'num pi-hide-sm'], ['ph', '每小时利润', 'num'], ['m3', '<span title="每流程利润 ÷ 产出的包装体积，运去交易中心卖时看">每立方</span>', 'num pi-hide-sm']]
-        .map(([k, l, c]) => sortTh('ind-sort', F.rankSort, F.rankDir, k, l, c)).join('')}${mkt ? sortTh('ind-sort', F.rankSort, F.rankDir, 'daily', '日均成交', 'num') + sortTh('ind-sort', F.rankSort, F.rankDir, 'score', '<span title="每小时利润 40%、日均成交额 30%、利润率 20%、买卖价差 10%">评分</span>', 'num') : '<th class="num">日均成交</th>'}</tr></thead>
-      <tbody>${rows || `<tr><td colspan="${mkt ? 10 : 9}" class="text-muted">没有符合条件的产品</td></tr>`}</tbody></table></div>
+        .map(([k, l, c]) => sortTh('ind-sort', F.rankSort, F.rankDir, k, l, c)).join('')}${mkt ? sortTh('ind-sort', F.rankSort, F.rankDir, 'daily', '日均成交', 'num') + sortTh('ind-sort', F.rankSort, F.rankDir, 'pd', '<span title="每流程利润 × min(一条产线每天能造的流程, 日均成交量能卖掉的流程)">每天可赚</span>', 'num pi-hide-sm') + sortTh('ind-sort', F.rankSort, F.rankDir, 'score', '<span title="每小时利润 40%、日均成交额 30%、利润率 20%、买卖价差 10%">评分</span>', 'num') : '<th class="num">日均成交</th>'}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="${mkt ? 11 : 9}" class="text-muted">没有符合条件的产品</td></tr>`}</tbody></table></div>
       ${R.rows.length ? rankPager(R.page, pages, R.rows.length, off + 1, off + top.length, size) : ''}</div>`;
   if (mkt) return;
   // 前 25 行的成交量
@@ -1157,7 +1232,7 @@ function exportRank() {
     ['科技', (x) => ({ 1: 'T1', 2: 'T2', 3: 'T3' }[T(x.pid)[3]] || '')], ['合同拷贝', (x) => (x.bpc ? '是' : '')],
     ['单个成本', (x) => x.perUnit], ['单价', (x) => x.unit], ['每流程利润', (x) => x.profit], ['利润率 %', (x) => x.margin * 100],
     ['每小时利润', (x) => x.ph], ['每立方利润', (x) => x.m3], ['每流程耗时（小时）', (x) => x.secs / 3600],
-    ...(mkt ? [['日均成交', (x) => x.daily], ['评分', (x) => x.score]] : [])
+    ...(mkt ? [['日均成交', (x) => x.daily], ['每天可赚', (x) => x.pd], ['评分', (x) => x.score]] : [])
   ];
   const n = exportCsv(F.rankAct === 'r' ? '反应利润排行' : '制造利润排行', cols, R.rows.map((x, i) => ({ ...x, rank: i + 1 })));
   ctx.showToast(`已导出 ${n} 行`, 'success', 1800);
@@ -1631,9 +1706,19 @@ function refresh() {
 function onChange(e) {
   const t = e.target;
   if (planResult(F.tab === 'calc' ? Plan.onCalcEvent(e) : Plan.onPlanEvent(e))) return;
+  if (t.dataset.indFsel) {
+    F[t.dataset.indFsel] = t.value;
+    save(); renderSettings(); refresh();
+    return;
+  }
   if (t.dataset.indSel) {
     if (t.value) { F[t.dataset.indSel] = t.value; save(); }
     renderSettings(); refresh();
+    return;
+  }
+  if (t.dataset.indImp) {
+    F.imp = { ...(F.imp || {}), [t.dataset.indImp]: Number(t.value) || 0 };
+    save(); renderSettings(); refresh();
     return;
   }
   if (t.dataset.indNum) {

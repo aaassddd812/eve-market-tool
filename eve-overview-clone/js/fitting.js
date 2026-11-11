@@ -383,6 +383,7 @@ function cleanMut(mut, aby) {
 }
 
 function skills() {
+  if (F.skillMode === 'custom' && F.data) return customLevels();
   return F.skillMode === 'esi' && F.esi ? F.esi.levels : 'max';
 }
 
@@ -1397,6 +1398,7 @@ function renderFit() {
       <span>技能</span>
       <div class="segmented" role="group" aria-label="技能来源">
         <button data-fit-skill="max" class="${F.skillMode === 'max' ? 'active' : ''}">全部 5 级</button>
+        <button data-fit-skill="custom" class="${F.skillMode === 'custom' ? 'active' : ''}" title="把影响这套装配的技能逐个设成想要的等级">自定义</button>
         <button data-fit-skill="esi" class="${F.skillMode === 'esi' ? 'active' : ''}"${bound ? '' : ' disabled title="需要先绑定 ESI"'}>${F.esi && F.skillMode === 'esi' ? app.esc(F.esi.name) + ' 的技能' : '按 ESI 角色'}</button>
       </div>
       <div class="segmented fit-view-seg" role="group" aria-label="装备显示方式">
@@ -1404,6 +1406,7 @@ function renderFit() {
         <button data-fit-view="radial" class="${fitView() === 'radial' ? 'active' : ''}">圆盘</button>
       </div>
       <span class="fit-bulk"><button class="link-btn" data-fit-all="on" title="主动装备全部激活">全部开启</button><button class="link-btn" data-fit-all="off" title="主动装备全部停用">全部关闭</button><button class="link-btn danger" data-fit-clear title="清空全部装备、弹药和无人机">清空装备</button></span>
+      ${F.skillMode === 'custom' ? `<button type="button" class="btn btn-ghost btn-sm" data-fit-csk-open>设置技能等级${(() => { const lv = customLevels(); const n = [...new Set([...(CIMPACT.set || []), ...requiredLevels().keys()])].filter((id) => (lv.get(id) ?? 5) < 5).length; return n ? `（${n} 项低于 5 级）` : ''; })()}</button>` : ''}
       ${missing.length ? skillPop(missing, `缺少 ${missing.length} 项技能`, '缺少的技能')
         : notFive.length ? skillPop(notFive, `还有 ${notFive.length} 项没到 5 级`, `${F.esi.name} 还没到 5 级的技能`)
         : F.skillMode === 'esi' && F.esi ? '<span class="fit-ok">技能满足</span>' : impact ? '<span class="fit-ok">影响属性的技能都已 5 级</span>' : ''}
@@ -2233,6 +2236,7 @@ async function onMainClick(e) {
     renderFit();
     return;
   }
+  if (el('[data-fit-csk-open]')) { openCsk(); return; }
   if ((x = el('[data-fit-skill]'))) {
     const mode = x.dataset.fitSkill;
     if (mode === F.skillMode) return;
@@ -2240,6 +2244,7 @@ async function onMainClick(e) {
     saveSettings();
     if (mode === 'esi') await loadEsiSkills();
     recompute();
+    if (mode === 'custom') openCsk();
     return;
   }
   if (el('[data-fit-my-implants]')) { importMyImplants(); return; }
@@ -2284,6 +2289,131 @@ function onMainInput(e) {
 // 「全部 5 级」时哪些技能会影响当前装配的属性（FE.skillAffects 逐个技能重算，每批 24 个让出主线程，算完重绘）；
 // 按装配内容缓存，没算完时返回 null（技能栏先不显示「没到 5 级」）。只算角色还没到 5 级的技能
 const IMPACT = { key: '', set: null, job: 0 };
+
+// ---------- 自定义技能等级（技能来源「自定义」） ----------
+// 用户改过的等级存在本机（所有装配共用）；没改过的按 5 级。实际等级不低于这套装配的要求（舰船 / 装备 / 弹药 / 无人机 / 植入体
+// 需要的技能及其前置），换了要求更高的装备会自动抬上去，用户的设置保留不动。
+const CUSTOM_KEY = 'eve-fit-custom-skills';
+let customMap = null;
+function customSaved() {
+  if (!customMap) {
+    customMap = new Map();
+    try { for (const [k, v] of Object.entries(app.store.getJSON(CUSTOM_KEY, {}) || {})) if (v >= 0 && v <= 5) customMap.set(Number(k), Math.round(v)); } catch { /* 坏数据就当没有 */ }
+  }
+  return customMap;
+}
+const saveCustom = () => app.store.setJSON(CUSTOM_KEY, Object.fromEntries(customSaved()));
+// 这套装配要求的最低等级：技能 id -> 等级
+function requiredLevels(fit = F.fit) {
+  if (!fit || !F.data) return new Map();
+  return new Map(FE.missingSkills(F.data, fit, new Map()).filter((x) => x.type).map((x) => [x.type.id, x.need]));
+}
+function customLevels(fit = F.fit) {
+  const req = requiredLevels(fit);
+  const saved = customSaved();
+  return new Map(F.data.skills.map((t) => [t.id, Math.max(saved.get(t.id) ?? 5, req.get(t.id) || 0)]));
+}
+// 影响这套装配属性的技能（所有带效果的技能逐个降到 0 级试算，分批让出主线程；装配不变时用缓存）
+const CIMPACT = { key: '', set: null, job: 0 };
+function customImpact() {
+  const f = F.fit;
+  const key = JSON.stringify([f.ship, FE.SLOTS.map((s) => (f.slots?.[s] || []).map((m) => (m ? [m.type, m.charge || 0, m.state || '', m.mut ? JSON.stringify(m.mut) : ''] : 0))), f.drones, f.implants]);
+  if (CIMPACT.key === key) return CIMPACT.set;
+  CIMPACT.key = key; CIMPACT.set = null;
+  const job = ++CIMPACT.job;
+  const fit = structuredClone(f);
+  const ids = F.data.skills.filter((t) => t.effects?.length).map((t) => t.id);
+  const out = new Set();
+  let ctx = null, i = 0;
+  const step = () => {
+    if (job !== CIMPACT.job) return;
+    ctx ||= FE.skillImpactCtx(F.data, fit);
+    for (const id of FE.skillAffects(ctx, ids.slice(i, i + 24))) out.add(id);
+    i += 24;
+    if (i < ids.length) { setTimeout(step, 0); return; }
+    CIMPACT.set = out;
+    if (F.fit && F.skillMode === 'custom') { renderFit(); renderCsk(); }
+  };
+  setTimeout(step, 0);
+  return null;
+}
+// 自定义技能弹窗：按技能分组列出影响这套装配的技能和装配要求的技能，每个技能 5 个点，点第 n 个点就是 n 级
+// （再点当前等级的那个点降一级；低于装配要求的点锁住）
+function cskBodyHtml() {
+  const impact = customImpact();
+  const req = requiredLevels();
+  const levels = customLevels();
+  const ids = new Set([...(impact || []), ...req.keys()]);
+  const groups = new Map();
+  for (const id of ids) {
+    const t = type(id);
+    if (!t) continue;
+    const g = F.data.groups.get(t.group)?.name || '其他';
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(t);
+  }
+  const low = [...ids].filter((id) => (levels.get(id) ?? 5) < 5).length;
+  const body = [...groups].sort((a, b) => a[0].localeCompare(b[0], 'zh')).map(([g, list]) => `<div class="fit-csk-group"><h5>${app.esc(g)}</h5>${list.sort((a, b) => a.name.localeCompare(b.name, 'zh')).map((t) => {
+    const min = req.get(t.id) || 0, lv = levels.get(t.id);
+    const dots = [1, 2, 3, 4, 5].map((n) => `<button type="button" class="fit-dot${n <= lv ? ' on' : ''}${n <= min ? ' lock' : ''}" data-fit-csk-dot="${t.id}:${n}" title="${n <= min ? `这套装配至少要 ${min} 级` : n + ' 级'}" aria-label="${n} 级"></button>`).join('');
+    return `<div class="fit-csk${lv < 5 ? ' is-low' : ''}" title="${impact && !impact.has(t.id) ? '只是前置要求，本身不影响属性' : ''}"><span class="fit-csk-name">${app.esc(t.name)}</span><span class="fit-dots">${dots}</span><b class="fit-csk-lv">${lv}</b></div>`;
+  }).join('')}</div>`).join('');
+  return `<div class="fit-csk-acts"><button type="button" class="btn btn-ghost btn-sm" data-fit-csk-all="5">全部 5 级</button><button type="button" class="btn btn-ghost btn-sm" data-fit-csk-all="min">全部降到装配要求</button>${app.hasEsiToken() ? '<button type="button" class="btn btn-ghost btn-sm" data-fit-csk-all="esi">按 ESI 角色填入</button>' : ''}
+      <span class="text-muted">${impact ? `${ids.size} 项${low ? `，${low} 项低于 5 级` : ''}` : '正在找影响这套装配的技能…'}</span></div>
+    <p class="fit-hint">点第几个点就是几级，再点一次降一级；锁住的点是这套装配的最低要求。改动对所有装配生效，存在本机</p>
+    ${body || (impact ? '<p class="text-muted">这套装配没有用到可调的技能</p>' : '')}`;
+}
+function renderCsk() {
+  const m = $('fitCskModal');
+  if (m && !m.hidden && F.fit) $('fitCskBody').innerHTML = cskBodyHtml();
+}
+function openCsk() {
+  let modal = $('fitCskModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'fitCskModal';
+    modal.className = 'modal fa-modal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.innerHTML = `<div class="modal-backdrop" data-fit-csk-close></div><div class="modal-content fit-csk-content">
+      <div class="modal-header"><h3>自定义技能等级</h3><button class="modal-close" data-fit-csk-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+      <div class="modal-body" id="fitCskBody"></div></div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', onCskClick);
+  }
+  modal.hidden = false;
+  renderCsk();
+}
+async function onCskClick(e) {
+  const el = (sel) => e.target.closest(sel);
+  let x;
+  if (el('[data-fit-csk-close]')) { $('fitCskModal').hidden = true; return; }
+  if ((x = el('[data-fit-csk-dot]'))) {
+    const [id, n] = x.dataset.fitCskDot.split(':').map(Number);
+    const min = requiredLevels().get(id) || 0;
+    const cur = customLevels().get(id);
+    const lv = Math.max(min, n === cur ? n - 1 : n);
+    if (lv === cur) return;
+    customSaved().set(id, lv);
+    saveCustom();
+    recompute();
+    renderCsk();
+    return;
+  }
+  if ((x = el('[data-fit-csk-all]'))) {
+    const how = x.dataset.fitCskAll;
+    const ids = [...new Set([...(CIMPACT.set || []), ...requiredLevels().keys()])];
+    const m = customSaved();
+    if (how === 'esi') {
+      if (!F.esi) await loadEsiQuiet2();
+      if (!F.esi) { app.showToast('读取角色技能失败', 'error'); return; }
+      for (const id of ids) m.set(id, F.esi.levels.get(id) || 0);
+    } else for (const id of ids) m.set(id, how === '5' ? 5 : 0);   // 降到 0 后按装配要求自动抬到最低
+    saveCustom();
+    recompute();
+    renderCsk();
+  }
+}
 function skillImpact() {
   const f = F.fit;
   const key = JSON.stringify([f.ship, FE.SLOTS.map((s) => (f.slots?.[s] || []).map((m) => (m ? [m.type, m.charge || 0, m.state || '', m.mut ? JSON.stringify(m.mut) : ''] : 0))), f.drones, f.implants, F.esi.id]);
@@ -2313,6 +2443,10 @@ function loadEsiQuiet() {
   if (esiQuiet || Date.now() - esiQuietAt < 300000) return;
   esiQuietAt = Date.now();
   esiQuiet = app.getCharacterSkills().then((r) => { F.esi = r || null; if (F.esi && F.fit && F.skillMode === 'max') renderFit(); }).catch(() => {}).finally(() => { esiQuiet = null; });
+}
+
+async function loadEsiQuiet2() {
+  try { F.esi = await app.getCharacterSkills(); } catch { F.esi = null; }
 }
 
 async function loadEsiSkills() {

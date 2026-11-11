@@ -948,10 +948,10 @@ async function getHubSellOrders(ids) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v63').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v67').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
-      getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
+      getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, getCharacterImplants, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       esiAccountFetch, esiAccountList, resolveTypeNames, hasScope, structureNameMap, saveStructureNames,
       readToken: () => state.esiToken || readEsiToken(),
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -1151,7 +1151,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v152').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v154').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,

@@ -3752,6 +3752,7 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 .pi-check.sec-low span { color: var(--warning); }
 .pi-check.sec-null span { color: var(--sell-color); }
 .pi-grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.pi-grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .pi-num { display: flex; flex-direction: column; gap: 4px; font-size: 0.6875rem; color: var(--text-muted); }
 .pi-hint { font-size: 0.6875rem; color: var(--text-muted); line-height: 1.5; }
 .pi-go { height: 42px; font-size: 0.9375rem; font-weight: 600; gap: 8px; }
@@ -5843,6 +5844,11 @@ td .hc-sub { display: inline; margin-left: 6px; }
 .ind-gantt-bar.d1 { background: #2f9e6f; }
 .ind-gantt-bar.d2 { background: #c98a1b; }
 .ind-gantt-bar.d3 { background: #9b5de5; }
+.ind-gantt-bar.inv { background: #c4497a; }
+.ind-gantt-bar.cp { background: #5b6cc9; }
+.ind-stock-loc { flex-wrap: wrap; gap: 8px 16px; }
+.pi-table td.warn { color: var(--warning); }
+.ind-shop-to { font-size: 0.75rem; color: var(--text-muted); max-width: 220px; }
 .ind-gantt-axis { position: relative; height: 18px; font-size: 0.6875rem; color: var(--text-muted); }
 .ind-gantt-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .ind-gantt-axis span:first-child { transform: none; }
@@ -9198,3 +9204,21 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
   .fvp-foot { margin-top: auto; }
   .fvp-foot .btn { width: 100%; }
 }
+
+/* 装配页：自定义技能等级（技能来源「自定义」） */
+.fit-csk-content { max-width: 760px; width: calc(100vw - 32px); }
+.fit-csk-content .modal-body { display: block; max-height: min(72vh, 720px); overflow: auto; }
+.fit-csk-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin-bottom: 6px; font-size: 0.8125rem; }
+.fit-csk-group { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; margin-bottom: 12px; }
+.fit-csk-group h5 { grid-column: 1 / -1; margin: 0; font-size: 0.75rem; font-weight: 600; color: var(--text-muted); }
+.fit-csk { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 6px 10px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.8125rem; color: var(--text-secondary); }
+.fit-csk-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fit-csk-lv { flex: none; width: 1em; text-align: center; font-weight: 600; color: var(--text-primary); }
+.fit-csk.is-low .fit-csk-name, .fit-csk.is-low .fit-csk-lv { color: var(--warning); }   /* 低于 5 级标橙色 */
+.fit-dots { display: flex; gap: 4px; flex: none; }
+.fit-dot { width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50%; background: var(--bg-primary); box-shadow: inset 0 0 0 2px var(--border-secondary); cursor: pointer; transition: background .12s, box-shadow .12s; }
+.fit-dot:hover { box-shadow: inset 0 0 0 2px var(--accent-primary); }
+.fit-dot.on { background: var(--accent-primary); box-shadow: none; }
+.fit-dot.lock { cursor: not-allowed; opacity: .55; }
+.fit-dot.lock:hover { box-shadow: none; }
+.fit-dot.lock:not(.on) { box-shadow: inset 0 0 0 2px var(--border-secondary); }
