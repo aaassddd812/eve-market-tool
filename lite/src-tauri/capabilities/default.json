@@ -1,0 +1,22 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "主窗口：用系统浏览器打开 EVE 登录页、读 EVE 日志文件夹（只读）、向 ESI / EVE 登录服务器 / 本站发请求",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "window-state:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://esi.evetech.net/*" },
+        { "url": "https://login.eveonline.com/*" },
+        { "url": "https://ali-esi.evepc.163.com/*" },
+        { "url": "https://login.evepc.163.com/*" },
+        { "url": "https://login-infinity.evepc.163.com/*" },
+        { "url": "https://eve.navexor.top/*" }
+      ]
+    }
+  ]
+}

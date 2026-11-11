@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EVE 收益助手</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="side">
+      <div class="brand"><span class="logo">◆</span><span>EVE 收益助手</span></div>
+      <nav class="nav" id="nav">
+        <button data-view="overview" class="active"><i>◎</i>角色概览</button>
+        <button data-view="skills"><i>✦</i>技能</button>
+        <button data-view="wallet"><i>¤</i>钱包与刷怪</button>
+        <button data-view="live"><i>⏱</i>实时收益</button>
+        <button data-view="abyss"><i>◈</i>深渊收益</button>
+        <button data-view="assets"><i>▤</i>资产</button>
+        <button data-view="orders"><i>⇅</i>订单</button>
+      </nav>
+      <div class="side-foot">
+        <label class="server-pick">服务器
+          <select id="serverSel"></select>
+        </label>
+        <div class="muted small" id="appVer"></div>
+      </div>
+    </aside>
+    <main class="main">
+      <header class="topbar">
+        <div class="chars" id="chars"></div>
+        <button class="btn" id="addChar">＋ 添加角色</button>
+        <button class="btn ghost" id="refreshBtn" title="重新读取当前页面">刷新</button>
+      </header>
+      <section class="view" id="view"></section>
+    </main>
+  </div>
+
+  <dialog class="modal" id="loginDlg">
+    <form method="dialog" class="modal-box">
+      <h3>添加角色</h3>
+      <ol class="steps">
+        <li>点「打开登录页」，在浏览器里登录 EVE 账号并选择角色、授权。</li>
+        <li>授权后浏览器会停在一个空白页，<b>复制地址栏的完整地址</b>。</li>
+        <li>粘贴到下面，点「完成」。</li>
+      </ol>
+      <div class="row"><button type="button" class="btn" id="openLogin">打开登录页</button><span class="muted small" id="loginHint"></span></div>
+      <textarea id="callbackInput" rows="3" placeholder="https://…?code=…&state=…"></textarea>
+      <p class="err" id="loginErr"></p>
+      <div class="row end">
+        <button type="button" class="btn ghost" value="cancel" id="loginCancel">取消</button>
+        <button type="button" class="btn primary" id="loginDone">完成</button>
+      </div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast" hidden></div>
+  <script src="js/mock.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

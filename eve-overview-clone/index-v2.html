@@ -12,7 +12,12 @@
       try { en = localStorage.getItem('eve-lang') === 'en'; } catch (e) {}
       document.documentElement.innerHTML = '<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>' + (en ? 'EVE login' : 'EVE 登录')
         + '</title></head><body style="margin:0;padding:24px 16px;font:13px/1.6 system-ui,sans-serif;color:#888">'
-        + (en ? 'Copy the full address from the address bar and paste it back on the original page.' : '复制地址栏的完整地址，回到原页面粘贴并点「绑定」') + '</body>';
+        + (en ? 'Copy the full address from the address bar and paste it back on the original page.' : '复制地址栏的完整地址，回到原页面粘贴并点「绑定」')
+        + '<p><button id="cp" style="padding:6px 14px;border:0;border-radius:8px;background:#3b9eff;color:#fff;font:inherit;cursor:pointer">' + (en ? 'Copy address' : '复制地址') + '</button> <span id="cpm"></span></p></body>';
+      document.getElementById('cp').onclick = function () {
+        var done = function () { document.getElementById('cpm').textContent = en ? 'Copied' : '已复制'; };
+        if (navigator.clipboard) navigator.clipboard.writeText(location.href).then(done, function () {}); else done();
+      };
     })();
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">

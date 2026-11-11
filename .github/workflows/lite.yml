@@ -1,0 +1,91 @@
+# EVE 收益助手（lite/，界面打包在程序里的独立 Windows 程序）：编译 NSIS 安装包，发布到公开仓库 aaassddd812/eve-tool-desktop 的 Releases
+# 触发：推送标签 lite-v0.1.0（版本号取自标签），或在 Actions 页手动运行（版本号取自 lite/src-tauri/tauri.conf.json）
+# 需要仓库 Secret：RELEASE_TOKEN（与桌面版共用，对 eve-tool-desktop 有 Contents 读写权限）
+# 发布时 make_latest: false：桌面版的自动更新读的是该仓库「最新版本」的 latest.json，收益助手的发布不能占掉这个位置
+name: lite
+
+on:
+  push:
+    tags: ['lite-v*']
+  workflow_dispatch:
+
+env:
+  RELEASE_REPO: aaassddd812/eve-tool-desktop
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: lite/src-tauri
+          shared-key: lite-release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 版本号
+        id: ver
+        shell: bash
+        run: |
+          conf=lite/src-tauri/tauri.conf.json
+          v=$(sed -n 's/^  "version": "\([^"]*\)".*/\1/p' "$conf")
+          if [ "$GITHUB_REF_TYPE" = tag ]; then v=${GITHUB_REF_NAME#lite-v}; fi
+          sed -i "s/^  \"version\": \"[^\"]*\"/  \"version\": \"$v\"/" "$conf"
+          sed -i "0,/^version = \"[^\"]*\"/s//version = \"$v\"/" lite/src-tauri/Cargo.toml
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "version $v"
+
+      # 浏览器预览用的模拟数据不打包进程序
+      - name: 去掉预览用的模拟数据
+        shell: bash
+        run: |
+          rm lite/ui/js/mock.js
+          sed -i '/js\/mock.js/d' lite/ui/index.html
+
+      - name: 编译安装包
+        working-directory: lite
+        run: npx --yes @tauri-apps/cli@^2 build --bundles nsis
+
+      - name: 整理产物
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out | Out-Null
+          $setup = Get-ChildItem lite/src-tauri/target/release/bundle/nsis/*.exe | Select-Object -First 1
+          Copy-Item $setup.FullName out/EVE-Lite-Setup.exe
+          Get-ChildItem out | ForEach-Object { "{0}  {1:N0} bytes  sha256 {2}" -f $_.Name, $_.Length, (Get-FileHash $_.FullName).Hash }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+
+  release:
+    needs: [windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+
+      - name: 发布到公开仓库
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.RELEASE_REPO }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+          tag_name: lite-v${{ needs.windows.outputs.version }}
+          target_commitish: main
+          name: EVE 收益助手 ${{ needs.windows.outputs.version }}
+          body: |
+            Windows 10 / 11：下载 **EVE-Lite-Setup.exe** 直接安装。
+            角色、技能、钱包与刷怪收益、资产、订单，以及深渊收益（自动识别进出深渊、读游戏日志、粘贴货柜估价）。
+          files: out/*
+          make_latest: false
