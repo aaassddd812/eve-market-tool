@@ -2345,6 +2345,12 @@ td.loc {
 .kb-attacker-main small { display: block; font-size: 0.75rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb-dmg { height: 4px; margin-top: 5px; border-radius: 2px; background: var(--bg-tertiary); overflow: hidden; }
 .kb-dmg i { display: block; height: 100%; background: var(--sell-color); }
+.kb-attacker-party { display: flex !important; flex-wrap: wrap; align-items: center; gap: 2px 10px; }
+.kb-attacker-party span { display: inline-flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-party-logo { border-radius: 3px; background: #0d1219; flex: none; }
+.kb-attacker.is-focus { background: color-mix(in srgb, var(--accent-primary) 14%, transparent); border-color: color-mix(in srgb, var(--accent-primary) 55%, var(--border-primary)); }
+.kb-tag.focus { background: color-mix(in srgb, var(--accent-primary) 22%, transparent); color: var(--accent-primary); }
+.kb-tab-dot { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: var(--accent-primary); vertical-align: middle; }
 .kb-attacker-gear { display: flex; gap: 4px; }
 .kb-attacker-gear img { border-radius: 4px; background: #0d1219; }
 .kb-attacker-dmg { min-width: 70px; text-align: right; }

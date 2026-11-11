@@ -43,7 +43,7 @@ export function initKillboard(context) {
     const args = shownArgs, tab = $('killBody').querySelector('[data-kill-tab].active')?.dataset.killTab;
     const val = await killValuation(args.kill);
     if (shownArgs !== args) return;
-    $('killBody').innerHTML = renderKill(args.kill, val, args.priceNote);
+    $('killBody').innerHTML = renderKill(args.kill, val, args.priceNote, args.focus);
     mountKillRadial(args.kill);
     if (tab) switchKillTab(tab);
   });
@@ -247,9 +247,9 @@ export function killCompactHtml(kills) {
 }
 
 // 列表点击 → 详情；kills 用于按 ID 查找
-export function bindKillClicks(container, kills) {
+export function bindKillClicks(container, kills, opts = {}) {
   const byId = new Map(kills.map((k) => [k.killmail_id, k]));
-  const open = (el) => { const k = byId.get(Number(el.dataset.kill)); if (k) openKill(k); };
+  const open = (el) => { const k = byId.get(Number(el.dataset.kill)); if (k) openKill(k, { focus: opts.focus }); };
   container.addEventListener('click', (e) => { const el = e.target.closest('[data-kill]'); if (el && container.contains(el)) open(el); });
   container.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;
@@ -283,6 +283,7 @@ let shownArgs = null;   // 重绘所需：{ kill, priceNote }
 
 // options.priceNote：总价值的估值说明（单项按所选交易中心估值）
 // options.load：异步加载击杀数据（先打开弹窗显示加载状态）
+// options.focus：{ kind: 'character' | 'corporation' | 'alliance', id }——从某人 / 军团 / 联盟的页面点进来时，攻击者里属于它的行高亮
 export async function openKill(kill, options = {}) {
   const token = {};
   currentKill = token;
@@ -298,8 +299,8 @@ export async function openKill(kill, options = {}) {
     if (currentKill !== token) return;
     const [val] = await Promise.all([killValuation(kill), prepareKills([kill], { attackers: 'all' })]);
     if (currentKill !== token) return;
-    shownArgs = { kill, priceNote: options.priceNote };
-    body.innerHTML = renderKill(kill, val, shownArgs.priceNote);
+    shownArgs = { kill, priceNote: options.priceNote, focus: options.focus || null };
+    body.innerHTML = renderKill(kill, val, shownArgs.priceNote, shownArgs.focus);
     shownKill = kill;
     mountKillRadial(kill);
     $('killShare').hidden = false;
@@ -530,7 +531,8 @@ function itemRows(items, val, depth = 0) {
   }).join('');
 }
 
-function renderKill(k, val, priceNote) {
+function renderKill(k, val, priceNote, focus = null) {
+  const isFocus = (a) => Boolean(focus?.id && a[focus.kind + '_id'] === focus.id);
   const v = k.victim;
   const z = k.zkb;
   const sys = systemLabel(k.solar_system_id);
@@ -551,11 +553,13 @@ function renderKill(k, val, priceNote) {
         : a.faction_id ? img(`corporations/${a.faction_id}/logo`, 64) : img(`types/${a.ship_type_id}/icon`, 64);
     const who = partyName(a.character_id) || (a.ship_type_id ? typeName(a.ship_type_id) : partyName(a.corporation_id || a.faction_id));
     const pct = (a.damage_done || 0) / total * 100;
-    return `<div class="kb-attacker${a.final_blow ? ' final' : ''}">
+    const logo = (kind, id) => `<img class="kb-party-logo" src="${img(`${kind}/${id}/logo`, 32)}" alt="" width="16" height="16" loading="lazy">`;
+    const mine = isFocus(a);
+    return `<div class="kb-attacker${a.final_blow ? ' final' : ''}${mine ? ' is-focus' : ''}">
         <img class="kb-avatar" src="${avatar}" alt="" width="36" height="36" loading="lazy">
         <div class="kb-attacker-main">
-          <strong>${stOf(a)}${a.character_id ? partyLink('character', a.character_id, who) : app.esc(who)}${a.final_blow ? '<span class="kb-tag final">最后一击</span>' : ''}</strong>
-          <small>${a.corporation_id ? partyLink('corporation', a.corporation_id) : app.esc(partyName(a.faction_id))}${a.alliance_id ? ' · ' + partyLink('alliance', a.alliance_id) : ''}</small>
+          <strong>${stOf(a)}${a.character_id ? partyLink('character', a.character_id, who) : app.esc(who)}${a.final_blow ? '<span class="kb-tag final">最后一击</span>' : ''}${mine ? '<span class="kb-tag focus">当前查看</span>' : ''}</strong>
+          <small class="kb-attacker-party">${a.corporation_id ? `<span>${logo('corporations', a.corporation_id)}${partyLink('corporation', a.corporation_id)}</span>` : a.faction_id ? `<span>${logo('corporations', a.faction_id)}${app.esc(partyName(a.faction_id))}</span>` : ''}${a.alliance_id ? `<span>${logo('alliances', a.alliance_id)}${partyLink('alliance', a.alliance_id)}</span>` : ''}</small>
           <div class="kb-dmg"><i style="width:${pct.toFixed(1)}%"></i></div>
         </div>
         <div class="kb-attacker-gear">
@@ -603,7 +607,7 @@ function renderKill(k, val, priceNote) {
     </div>
     <div class="segmented kb-tabs">
       <button data-kill-tab="fit" class="active">装配与物品</button>
-      <button data-kill-tab="attackers">攻击者（${k.attackers.length}）</button>
+      <button data-kill-tab="attackers">攻击者（${k.attackers.length}）${focus && k.attackers.some(isFocus) ? '<span class="kb-tab-dot" title="当前查看的在攻击者里"></span>' : ''}</button>
     </div>
     <div class="kb-pane" data-pane="fit"><div class="kb-fit-wrap"><div class="kb-radial" data-kill-radial hidden></div><div class="kb-fit-list"><div class="kb-fit-cols"><span>最低卖价</span><span>最高收价</span></div>${fit}<p class="valuation-note" title="${app.esc(priceNote || (SERVER.kb ? '总价值为 zKillboard 估值' : '总价值按 ESI 全服均价估算'))}">按${app.esc(val.region.hub.name)}估值</p></div></div></div>
     <div class="kb-pane" data-pane="attackers" hidden>${attackers}</div>`;

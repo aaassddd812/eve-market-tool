@@ -1290,7 +1290,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v101').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v102').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1336,7 +1336,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v52').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v53').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText,
       killRadial: async (km) => (await loadFittingModule()).killRadial(km)
@@ -6386,7 +6386,7 @@ async function renderEsiCombat(box) {
     '</div>' +
     '<div class="kb-list">' + kb.killTableHtml(shown, { me, showSide: true }) + '</div>' +
     '<p class="text-muted valuation-note" title="角色最近 200 条击杀邮件，价值按全服均价估算">数据：' + esc(SERVER.full) + ' ESI</p>';
-  kb.bindKillClicks(box.querySelector('.kb-list'), kills);
+  kb.bindKillClicks(box.querySelector('.kb-list'), kills, { focus: { kind: 'character', id: me } });
 }
 
 async function renderCombatTab(box) {
@@ -6443,7 +6443,7 @@ async function renderCombatTab(box) {
     '</div>' +
     '<div class="kb-list">' + kb.killTableHtml(shown, { me, showSide: true }) + '</div>' +
     '<p class="text-muted valuation-note">数据：zKillboard</p>';
-  kb.bindKillClicks(box.querySelector('.kb-list'), kills);
+  kb.bindKillClicks(box.querySelector('.kb-list'), kills, { focus: { kind: 'character', id: me } });
 }
 
 // ===== ESI 绑定 =====
