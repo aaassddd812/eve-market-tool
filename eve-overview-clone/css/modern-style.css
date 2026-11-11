@@ -8109,6 +8109,25 @@ html.is-app .desktop-dl-btn, html.is-app [data-mnav-act="desktopDlBtn"] { displa
 .nw-card .kb-br-tip .out { color: var(--sell-color); }
 .nw-trend .kb-br-tip .part { color: var(--text-secondary); }
 
+/* 个人中心 · 钱包 · 刷怪收益（ratting.js） */
+.rat-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; margin-bottom: 10px; }
+.rat-head h4 { margin: 0; font-size: 0.9375rem; }
+.rat-head h4 small { margin-left: 8px; font-size: 0.75rem; font-weight: 400; color: var(--text-muted); }
+.rat-head .rat-seg { margin-left: auto; }
+.rat-extra { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8125rem; color: var(--text-secondary); }
+.rat-extra input { width: 64px; padding: 4px 8px; border: 0; border-radius: 8px; background: var(--bg-tertiary); color: var(--text-primary); font: inherit; font-variant-numeric: tabular-nums; }
+.valuation-grid.rat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); margin-bottom: 10px; }
+.rat-on { display: inline-block; padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--buy-color) 16%, transparent); color: var(--buy-color); font-size: 0.6875rem; font-weight: 600; vertical-align: 1px; }
+.rat-live-note { margin: 0 0 10px; padding: 8px 12px; border-radius: 10px; background: color-mix(in srgb, var(--buy-color) 8%, var(--bg-tertiary)); font-size: 0.8125rem; color: var(--text-secondary); }
+.rat-live-note b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.rat-table td { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rat-table tr.rat-live td { background: color-mix(in srgb, var(--buy-color) 6%, transparent); }
+.rat-foot { margin: 8px 0 0; font-size: 0.75rem; }
+@media (max-width: 760px) {
+  .valuation-grid.rat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rat-head .rat-seg { margin-left: 0; }
+}
+
 /* 战场统计 · 参战玩家 */
 .kb-br-psearch { flex: 1 1 240px; max-width: 360px; }
 .kb-br-pmore { margin-top: 8px; }

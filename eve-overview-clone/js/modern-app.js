@@ -5720,7 +5720,7 @@ async function renderProfileTab(tab) {
       valuationCard('钱包余额', walletOk ? formatPrice(data.wallet) + ' ISK' : '权限不足', '') +
       valuationCard('近期收入', formatISK(income) + ' ISK', '最近 ' + (journal ? journal.length : 0) + ' 条流水', 'is-buy') +
       valuationCard('近期支出', formatISK(Math.abs(spend)) + ' ISK', '', 'is-sell') +
-      '</div>' + (journal ? walletChartHtml(journal) : '');
+      '</div>' + (journal ? walletChartHtml(journal) : '') + (journal ? '<div data-ratting></div>' : '');
     if (journal && journal.length) {
       html += '<div class="table-scroll"><table class="pc-mini-table wallet-mini"><thead><tr><th>时间</th><th>类型</th><th>对方</th><th>金额</th></tr></thead><tbody>' +
         journal.slice(0, 50).map((j) => profileRow([
@@ -5735,6 +5735,35 @@ async function renderProfileTab(tab) {
     }
     box.innerHTML = html;
     bindWalletChart(box).catch(() => {});
+    if (journal) mountRatting(box, journal);
+  }
+}
+
+// 钱包 · 刷怪收益（ratting.js）：第 1 页流水满了（ESI 每页 2500 条）就补读全部页，赏金可能在后面几页
+let rattingLoading = null;
+const loadRattingModule = () => (rattingLoading ||= import('./ratting.js?v=1').catch((e) => { rattingLoading = null; throw e; }));
+async function mountRatting(box, journal) {
+  const slot = box.querySelector('[data-ratting]');
+  if (!slot) return;
+  try {
+    const m = await loadRattingModule();
+    const cid = myCharacterId();
+    let list = journal;
+    if (journal.length >= 2500) {
+      if (state.characterData.journalAllFor !== cid) {
+        state.characterData.journalAll = await esiAuthFetchPaged('/characters/' + cid + '/wallet/journal/', 20).catch(() => null);
+        state.characterData.journalAllFor = cid;
+      }
+      list = state.characterData.journalAll || journal;
+    }
+    const draw = () => {
+      if (!slot.isConnected) return;
+      slot.innerHTML = m.rattingHtml(list, { esc, formatISK, formatNumber, valuationCard, systemName: (id) => officialName(id) || 'ID ' + id });
+      m.bindRatting(slot, draw);
+    };
+    draw();
+  } catch (error) {
+    slot.innerHTML = '<p class="text-muted">刷怪收益加载失败：' + esc(error.message) + '</p>';
   }
 }
 

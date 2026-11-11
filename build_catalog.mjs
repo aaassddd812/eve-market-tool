@@ -95,6 +95,19 @@ if (sdeDir) {
     typeNames.set(t._key, zh);
   }
   console.log(`SDE Chinese names applied (${fixed} changed)`);
+  // 市场分组名同样以 SDE 为准：ESI 有些分组（如 1034 反应材料、475 制造和研究）中文名返回空，会显示成「市场组 1034」
+  let groupFixed = 0;
+  const groupById = new Map(groups.map((g) => [g.id, g]));
+  for (const line of (await readFile(`${sdeDir}/marketGroups.jsonl`, "utf8")).split("\n")) {
+    if (!line) continue;
+    const m = JSON.parse(line);
+    const zh = m.name && typeof m.name === "object" ? m.name.zh || m.name.en : "";
+    const g = groupById.get(m._key);
+    if (!zh || !g || g.name === zh) continue;
+    g.name = zh;
+    groupFixed += 1;
+  }
+  console.log(`SDE market group names applied (${groupFixed} changed)`);
 }
 
 const missingTypeIds = typeIds.filter((id) => !typeNames.has(id));
