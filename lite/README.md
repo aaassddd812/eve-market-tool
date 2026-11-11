@@ -31,9 +31,13 @@
   - 只读，不清空也不改写剪贴板。
   - 复制的清单记为「进行中或 30 分钟内刚结束的那一趟」出深渊后的货柜，同时当作下一趟进深渊前的货柜。手动改过的货柜不会被覆盖。
 
+## 界面
+
+和网站「新页面」同一套样式（`ui/app.css`）：炭黑底、左侧菜单栏、内容区深灰大卡片、方角、青蓝强调色，字体 Chakra Petch（英文 / 数字）、MiSans VF（中文）、得意黑（大标题）。字体文件不重复放进仓库，打包时从 `eve-overview-clone/assets/fonts` 复制到 `ui/fonts`（已忽略）。
+
 ## 开发
 
-- 浏览器预览：在仓库 `eve-market-tool/` 目录起静态服务，例如 `python3 -m http.server 18400`，打开 `/lite/ui/index.html?mock=1`。用的是 `ui/js/mock.js` 的模拟数据，`?mock=abyss` 时角色在深渊里。模拟复制货柜：控制台运行 `__mockCopy('名称\t数量')`。
+- 浏览器预览：在仓库 `eve-market-tool/` 目录起静态服务，例如 `python3 -m http.server 18400`，打开 `/lite/ui/index.html?mock=1`。预览前先复制字体：`F=eve-overview-clone/assets/fonts; mkdir -p lite/ui/fonts && cp $F/chakra-petch-*.woff2 lite/ui/fonts/ && cp -r $F/misans $F/smiley lite/ui/fonts/`。用的是 `ui/js/mock.js` 的模拟数据，`?mock=abyss` 时角色在深渊里。模拟复制货柜：控制台运行 `__mockCopy('名称\t数量')`。
 - 检查 Rust 代码（不链接）：在 `lite/src-tauri` 里运行 `cargo check --target x86_64-pc-windows-msvc`。HTTP 用系统 TLS（native-tls），不编译 ring。
 - 网络请求走 `tauri-plugin-http`，能访问的地址列在 `src-tauri/capabilities/default.json`：ESI、CCP / 网易登录、本站。
 

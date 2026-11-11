@@ -50,6 +50,15 @@ jobs:
           rm lite/ui/js/mock.js
           sed -i '/js\/mock.js/d' lite/ui/index.html
 
+      # 字体和网站新页面相同（Chakra Petch / MiSans / 得意黑），从网站目录复制进来，仓库里不放第二份
+      - name: 复制字体
+        shell: bash
+        run: |
+          F=eve-overview-clone/assets/fonts
+          mkdir -p lite/ui/fonts
+          cp $F/chakra-petch-*.woff2 $F/OFL-ChakraPetch.txt lite/ui/fonts/
+          cp -r $F/misans $F/smiley lite/ui/fonts/
+
       - name: 编译安装包
         working-directory: lite
         run: npx --yes @tauri-apps/cli@^2 build --bundles nsis
