@@ -3,7 +3,7 @@
 //   「材料效率影响」（ME 0–10 的成本与利润）、「研究与拷贝」（ME / TE 研究到目标等级、拷贝的时间与费用，以及研究后每流程省多少、几个流程回本）；
 // 「制造规划」页：多个产品一起规划——组件可选自制并逐级展开汇总，扣除库存（ESI 资产或粘贴），产线启动清单（每个任务的流程数与时间），
 //   每个产品可以停用（it.off：已经造好挂单、只想留着看成本的），停用的照样算成本 / 利润，但不进购物清单、产线和合计，
-//   按制造 / 反应产线数排出的时间轴，购物清单可复制；「库存可造」按现有材料反推能造什么（工业清库）；
+//   按制造 / 反应产线数排出的时间轴（「自动拆分」：多流程的任务——成品和自制组件都算——按空闲产线自动拆成几批同时造），购物清单可复制；「库存可造」按现有材料反推能造什么（工业清库）；
 // 「粘贴配装」：游戏装配窗口复制的 EFT 文本拆成舰船、装备、无人机 / 货舱物品，能造的按 件数 × 份数 ÷ 每流程产出（向上取整）加入规划，
 //   已在规划里的产品直接加流程；没有蓝图的（势力、官员装备等）列出来。
 // 军团蓝图（esi-corporations.read_blueprints.v1，游戏里要董事职位）：/corporations/{id}/blueprints/，同样的蓝图（类型、ME、TE、流程、机库）合并计数；
@@ -16,7 +16,7 @@ let X = null;   // industry.js 传入：ctx, D, F, C, BP, T, tName, invFor, job,
 const PLAN_KEY = 'eve-industry-plan';
 const LEVEL_MUL = [0, 105, 250, 595, 1414, 3360, 8000, 19000, 45255, 107700, 256000];
 const SK = { science: 3402, research: 3403, metallurgy: 3409, advIndustry: 3388 };
-const P = { items: [], build: [], slots: 10, rslots: 10, lanes: 'manual', stock: 'none', paste: '', tab: 'plan' };
+const P = { items: [], build: [], slots: 10, rslots: 10, lanes: 'manual', auto: true, stock: 'none', paste: '', tab: 'plan' };
 const FOLD = {};   // 计算器里折叠卡片的展开状态（本次会话内）
 const S = { assets: null, assetsErr: null, assetsBusy: false, owned: null, ownedLoading: null, chars: null, charsLoading: null };   // chars：按人物分配产线时各角色的产线数与进行中的任务
 
@@ -25,7 +25,7 @@ export function initPlan(api) {
   Object.assign(P, X.ctx.store.getJSON(PLAN_KEY, {}) || {});
   P.items = (P.items || []).filter((it) => X.BP(it.pid));
 }
-const savePlan = () => X.ctx.store.setJSON(PLAN_KEY, { items: P.items, build: P.build, slots: P.slots, rslots: P.rslots, lanes: P.lanes, stock: P.stock, paste: P.paste, tab: P.tab });
+const savePlan = () => X.ctx.store.setJSON(PLAN_KEY, { items: P.items, build: P.build, slots: P.slots, rslots: P.rslots, lanes: P.lanes, auto: P.auto, stock: P.stock, paste: P.paste, tab: P.tab });
 export const planCount = () => P.items.length;
 
 function newItem(pid, { runs = 1, me = null, te = null, invent = null, dec = 0 } = {}) {
@@ -303,8 +303,8 @@ function planCompute() {
   const all = P.items.map((it, i) => {
     const q = quote(it.pid, { runs: it.runs, me: it.me, te: it.te, invent: it.invent, dec: it.dec || 0, build: P.build });
     if (it.off) return { it, q };
-    // 分批：拆成 n 个任务放到不同产线同时造（时间与安装费按流程数等比例分摊）
-    const n = Math.max(1, Math.min(it.split || 1, q.runs));
+    // 分批：拆成 n 个任务放到不同产线同时造（时间与安装费按流程数等比例分摊）；自动拆分时先不拆，由排产按空闲产线拆
+    const n = P.auto ? 1 : Math.max(1, Math.min(it.split || 1, q.runs));
     for (let k = 0; k < n; k++) {
       const runs = Math.floor(q.runs / n) + (k < q.runs % n ? 1 : 0);
       jobs.push({ pid: it.pid, runs, secs: q.j.secs * runs / q.runs, cost: q.j.cost * runs / q.runs, act: q.act, depth: 0, me: q.me, te: q.te, top: i, batch: n > 1 ? k + 1 : 0, batches: n });
@@ -367,6 +367,26 @@ function laneDefs() {
   return { m: lanes('m'), r: r.length ? r : manual('r', P.rslots), byChar: true };
 }
 
+// 自动拆分（同一层、同一种产线的任务）：目标时长 T = max(最长的单个流程, (这层总耗时 + 各产线还要忙的时间) ÷ 产线数)，
+// 比 T 长的多流程任务拆成 ⌈耗时 ÷ T⌉ 批（不超过流程数和产线数），流程数尽量平均；时间、安装费按流程数分摊。
+// 材料按整单算（拆开后游戏里每个任务分别取整，每种材料最多多 1 个 / 批）
+function autoSplit(list, ls, barrier) {
+  if (!list.length) return list;
+  const busy = ls.reduce((t, l) => t + Math.max(0, l.t - barrier), 0);
+  const total = list.reduce((t, j) => t + j.secs, 0) + busy;
+  const T = Math.max(...list.map((j) => j.secs / j.runs), total / ls.length);
+  const out = [];
+  for (const j of list) {
+    const n = Math.max(1, Math.min(j.runs, ls.length, Math.ceil(j.secs / T - 1e-9)));
+    if (n === 1) { out.push(j); continue; }
+    for (let k = 0; k < n; k++) {
+      const runs = Math.floor(j.runs / n) + (k < j.runs % n ? 1 : 0);
+      out.push({ ...j, runs, secs: j.secs * runs / j.runs, cost: j.cost * runs / j.runs, extra: k ? 0 : j.extra, batch: k + 1, batches: n });
+    }
+  }
+  return out;
+}
+
 // 时间轴：深层（先要造的组件）先排，每层等上一层全部完成；每个任务放到最早空出来的产线
 function schedule(jobs) {
   const defs = laneDefs();
@@ -376,7 +396,9 @@ function schedule(jobs) {
   const out = [];
   for (const d of levels) {
     let levelEnd = barrier;
-    const list = jobs.filter((j) => j.depth === d).sort((a, b) => b.secs - a.secs);
+    let list = jobs.filter((j) => j.depth === d);
+    if (P.auto) list = ['m', 'r'].flatMap((kind) => autoSplit(list.filter((j) => (j.act === 'r' ? 'r' : 'm') === kind), lanes[kind], barrier));
+    list.sort((a, b) => b.secs - a.secs);
     for (const j of list) {
       const kind = j.act === 'r' ? 'r' : 'm';
       const ls = lanes[kind];
@@ -466,7 +488,7 @@ function drawPlan(body, tabs) {
       <td class="ind-plan-on"><input type="checkbox" class="ka-switch" data-plan-on="${i}"${it.off ? '' : ' checked'} title="${it.off ? '已停用：不计入购物清单、产线和合计' : '启用：计入购物清单、产线和合计'}" aria-label="启用"></td>
       <td><div class="pi-prod">${icon(it.pid)}<span>${esc(X.tName(it.pid))}${q.inv ? '<small>发明</small>' : ''}</span></div></td>
       <td class="num"><input type="number" class="pi-input ind-plan-num" min="1" max="100000" value="${it.runs}" data-plan-item="${i}" data-k="runs"></td>
-      <td class="num pi-hide-sm"><input type="number" class="pi-input ind-plan-num" min="1" max="50" value="${it.split || 1}" data-plan-item="${i}" data-k="split" title="拆成几个任务放到不同产线同时造"></td>
+      <td class="num pi-hide-sm">${P.auto ? '<span class="text-muted" title="按空闲产线自动拆分（在「产线时间轴」里可以关掉）">自动</span>' : `<input type="number" class="pi-input ind-plan-num" min="1" max="50" value="${it.split || 1}" data-plan-item="${i}" data-k="split" title="拆成几个任务放到不同产线同时造">`}</td>
       <td class="num pi-hide-sm">${q.act === 'r' ? '—' : `<input type="number" class="pi-input ind-plan-num" min="0" max="10" value="${q.me}" data-plan-item="${i}" data-k="me"> / <input type="number" class="pi-input ind-plan-num" min="0" max="20" step="2" value="${q.te}" data-plan-item="${i}" data-k="te">`}</td>
       <td class="num">${num(q.j.out)}</td>
       <td class="num pi-hide-sm">${isk(q.total)}</td>
@@ -476,7 +498,7 @@ function drawPlan(body, tabs) {
   const buildChips = [...buildable.keys()].sort((a, b) => X.tName(a).localeCompare(X.tName(b), 'zh')).map((id) => `<button type="button" class="ind-build-btn${P.build.includes(id) ? ' on' : ''}" data-plan-build="${id}">${esc(X.tName(id))}<small>${P.build.includes(id) ? '自制' : '购买'}</small></button>`).join('');
   const jobRows = r.schedule.bars.slice().sort((a, b) => a.start - b.start || b.depth - a.depth).map((j) => `<tr>
       <td><div class="pi-prod">${icon(j.pid, 20)}<span>${esc(X.tName(j.pid))}</span></div></td>
-      <td>${j.act === 'r' ? '反应' : '制造'}${j.depth ? `<small class="hc-sub">组件 · 第 ${j.depth} 层${j.extra > 0 ? ` · 多出 ${num(j.extra)} 个` : ''}</small>` : j.batch ? `<small class="hc-sub">第 ${j.batch} / ${j.batches} 批</small>` : ''}</td>
+      <td>${j.act === 'r' ? '反应' : '制造'}${j.depth ? `<small class="hc-sub">组件 · 第 ${j.depth} 层${j.batch ? ` · 第 ${j.batch} / ${j.batches} 批` : ''}${j.extra > 0 ? ` · 多出 ${num(j.extra)} 个` : ''}</small>` : j.batch ? `<small class="hc-sub">第 ${j.batch} / ${j.batches} 批</small>` : ''}</td>
       <td class="num">${num(j.runs)}</td><td class="num pi-hide-sm">${j.act === 'r' ? '—' : `${j.me} / ${j.te}`}</td>
       <td class="num">${X.fmtTime(j.secs)}</td><td class="num pi-hide-sm">${isk(j.cost)}</td>
       <td class="num pi-hide-sm">${esc(j.laneLabel)} 号线 · ${j.start ? X.fmtTime(j.start) + ' 后' : '立即'}</td></tr>`).join('');
@@ -513,9 +535,10 @@ function drawPlan(body, tabs) {
 
 function lanesHtml() {
   const accounts = X.ctx.esiAccountList?.() || [];
+  const auto = `<label class="pi-inline" title="多流程的任务（成品和自制组件）按空闲产线自动拆成几批同时造，尽量缩短总时间；关掉后成品按「分批」手动拆，组件不拆"><input type="checkbox" class="ka-switch" data-plan-auto${P.auto ? ' checked' : ''}><span>自动拆分</span></label>`;
   const seg = accounts.length ? `<div class="segmented">${[['manual', '手动'], ['chars', `按人物（${accounts.length}）`]].map(([k, l]) => `<button type="button" data-plan-lanes="${k}" class="${P.lanes === k ? 'active' : ''}">${l}</button>`).join('')}</div>` : '';
-  if (accounts.length && P.lanes === 'chars') return seg;
-  return `${seg}<div class="pi-inline"><span>制造产线</span><input type="number" class="pi-input pi-tax" min="1" max="50" value="${P.slots}" data-plan-num="slots"><span>反应产线</span><input type="number" class="pi-input pi-tax" min="1" max="50" value="${P.rslots}" data-plan-num="rslots"></div>`;
+  if (accounts.length && P.lanes === 'chars') return auto + seg;
+  return `${auto}${seg}<div class="pi-inline"><span>制造产线</span><input type="number" class="pi-input pi-tax" min="1" max="50" value="${P.slots}" data-plan-num="slots"><span>反应产线</span><input type="number" class="pi-input pi-tax" min="1" max="50" value="${P.rslots}" data-plan-num="rslots"></div>`;
 }
 
 function charsHtml() {
@@ -567,7 +590,7 @@ function ganttHtml(sch) {
       ${l.busy ? `<i class="ind-gantt-bar busy" style="left:0;width:${Math.max(0.6, (l.busy / sch.span) * 100)}%" title="已有任务 · ${X.fmtTime(l.busy)} 后空出">已有任务</i>` : ''}
       ${l.bars.map((b) => `<i class="ind-gantt-bar d${Math.min(b.depth, 3)}" style="left:${(b.start / sch.span) * 100}%;width:${Math.max(0.6, (b.secs / sch.span) * 100)}%" title="${esc(X.tName(b.pid))} ×${b.runs} · ${X.fmtTime(b.secs)}">${esc(X.tName(b.pid))}</i>`).join('')}</div></div>`).join('')}
     <div class="ind-gantt-row"><span class="ind-gantt-label"></span><div class="ind-gantt-axis">${axis}</div></div></div>
-    <p class="pi-note">组件逐层先造${sch.byChar ? '，已扣除进行中的任务' : ''}</p>`;
+    <p class="pi-note">组件逐层先造${P.auto ? '，多流程的任务按空闲产线自动拆批' : ''}${sch.byChar ? '，已扣除进行中的任务' : ''}</p>`;
 }
 
 function stockSourceHtml() {
@@ -664,6 +687,7 @@ export function onPlanEvent(e) {
       Object.assign(X.C, { runs: it.runs, me: it.me, te: it.te, invent: it.invent, dec: it.dec || 0, build: new Set(P.build) });
       return 'calc';
     }
+    if (t.matches('[data-plan-auto]')) { P.auto = t.checked; savePlan(); return 'plan'; }
     const ln = t.closest('[data-plan-lanes]');
     if (ln) { P.lanes = ln.dataset.planLanes; savePlan(); return 'plan'; }
     if (t.closest('[data-plan-chars]')) { S.chars = null; return 'plan'; }

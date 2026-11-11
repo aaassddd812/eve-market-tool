@@ -19,7 +19,7 @@
 //   时间 = 基础 × 流程数 × (1 − TE%) × 建筑 × 改装件 × 技能（工业理论 4%/级、高级工业理论 3%/级；反应 4%/级）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME, serverKey } from './server.js?v=s4';
-import * as Plan from './ind-plan.js?v=v9';
+import * as Plan from './ind-plan.js?v=v10';
 import * as Chain from './ind-chain.js?v=5';
 import * as IS from './ind-structs.js?v=4';
 import { skPage } from './skeleton.js?v=v17';
