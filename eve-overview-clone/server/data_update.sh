@@ -76,11 +76,11 @@ if [ "$MODE" = tq ]; then
   done
   log build_fit_data; python3 "$SRC/server/build_fit_data.py" "$SDE/sde.zip" "$SRC/fit-data.json"
   log build_fit_info; python3 "$SRC/server/build_fit_info.py" "$SDE/sde.zip" "$SRC/fit-data.json" "$SRC/fit-info.json"
-  # 物品目录（ESI 市场分组 + 中文名）：在临时目录里跑（脚本写 ./dist/），中文名缓存用站点现有的
+  # 物品目录（ESI 市场分组 + 中文名）：在临时目录里跑（脚本写 ./dist/），中文名以 SDE 为准，SDE 没有的用站点现有缓存
   log build_catalog
   rm -rf "$WORK/catalog" && mkdir -p "$WORK/catalog/dist"
   cp "$SITE/type-names-zh.json" "$WORK/catalog/dist/" 2>/dev/null || true
-  (cd "$WORK/catalog" && node "$REPO/build_catalog.mjs" > /dev/null)
+  (cd "$WORK/catalog" && node "$REPO/build_catalog.mjs" "$SDE" > /dev/null)
   cp "$WORK/catalog/dist/catalog.json" "$WORK/catalog/dist/type-names-zh.json" "$SRC/"
   # 英文名对照表要并入国服独有物品的英文名：用站点上最新的那份
   cp "$SITE/i18n/names-en-cn.json" "$SRC/i18n/" 2>/dev/null || true

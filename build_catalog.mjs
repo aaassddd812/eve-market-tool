@@ -80,6 +80,22 @@ try {
 } catch {
   // The cache is optional; missing or invalid cache is rebuilt below.
 }
+// 缓存里的名字一旦写入就不会再查 ESI，CCP 之后改名 / 修正（比如两个涂装名字对调）就一直是旧的。
+// 给了 SDE 目录（node build_catalog.mjs <SDE>）就用 SDE 里的中文名覆盖缓存，SDE 没有的才沿用缓存或查 ESI。
+const sdeDir = process.argv[2];
+if (sdeDir) {
+  const wanted = new Set(typeIds); // 市场物品 + 缓存里已有的其他物品（击杀记录等也用这份名字）
+  let fixed = 0;
+  for (const line of (await readFile(`${sdeDir}/types.jsonl`, "utf8")).split("\n")) {
+    if (!line) continue;
+    const t = JSON.parse(line);
+    const zh = t.name && typeof t.name === "object" ? t.name.zh : "";
+    if (!zh || !(wanted.has(t._key) || typeNames.has(t._key))) continue;
+    if (typeNames.get(t._key) !== zh) fixed += 1;
+    typeNames.set(t._key, zh);
+  }
+  console.log(`SDE Chinese names applied (${fixed} changed)`);
+}
 
 const missingTypeIds = typeIds.filter((id) => !typeNames.has(id));
 const typeResults = await mapConcurrent(
