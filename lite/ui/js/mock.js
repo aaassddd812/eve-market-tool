@@ -21,7 +21,7 @@
   [[0.2, 6], [26, 9]].forEach(function (s) {
     for (var k = 0; k < s[1]; k++) {
       var gross = 9000000 + ((n * 7919) % 6000000);
-      journal.push({ id: 9700 + n, date: ago(s[0] + (s[1] - 1 - k) / 3), ref_type: 'bounty_prizes', first_party_id: 1000125, second_party_id: CID, amount: Math.round(gross * 0.9), tax: Math.round(gross * 0.1), context_id: 30002187, context_id_type: 'eve_system', reason: '23331: 3,23332: 1' });
+      journal.push({ id: 9700 + n, date: ago(s[0] + (s[1] - 1 - k) / 3), ref_type: 'bounty_prizes', first_party_id: 1000125, second_party_id: CID, amount: Math.round(gross * 0.9), tax: q.get('notax') === '1' ? 0 : Math.round(gross * 0.1), context_id: 30002187, context_id_type: 'eve_system', reason: '23331: 3,23332: 1' });
       n++;
     }
   });
@@ -33,6 +33,7 @@
 
   var ESI = {
     '/characters/{c}/': { name: NAME, corporation_id: 98000001, alliance_id: 99000001, security_status: 3.42 },
+    '/corporations/98000001/': { name: 'Demo Industries', tax_rate: 0.08 },   // 军团税按这个税率算（流水里的 tax 是 10%，用来看出确实按税率）；?notax=1 时流水不带税额
     '/characters/{c}/wallet/': 2345678901.23,
     '/characters/{c}/location/': inAbyss ? { solar_system_id: 32000123 } : { solar_system_id: 30000142, station_id: 60003760 },
     '/characters/{c}/ship/': { ship_type_id: ship, ship_name: 'Gila Run', ship_item_id: 1 },

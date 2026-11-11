@@ -3,6 +3,8 @@
 //   赏金（bounty_prizes）每 20 分钟结算一次，amount 是扣完军团税到手的钱，tax 是交给军团的税（tax_receiver_id 收税军团），
 //   context_id 是星系，reason 是这 20 分钟打掉的 NPC「类型ID: 数量,…」。ESS 托管到账（ess_escrow_transfer）同样带税。
 //   相邻两次结算间隔不超过 45 分钟（允许中间空一次）算同一段；每段时长 = 首末结算间隔 + 第一次结算前的 20 分钟。
+//   军团税一律按 ESI 读到的军团税率算（ctx.corpTaxRate，0–1，来自 /corporations/{id}/ 的 tax_rate）：税 = 到手 × 税率 ÷ (1 − 税率)；
+//   读不到税率（corpTaxRate 为 null）时才用流水里的 tax 字段。
 //   掉落、打捞、蓝图等不经过钱包，这里算不到。军团税以外的扣除（联盟税、租地费等）可以填一个百分比，存在本机。
 const TICK = 20 * 60e3, GAP = 45 * 60e3;
 const EXTRA_KEY = 'eve-ratting-extra';
@@ -19,10 +21,13 @@ const isEss = (j) => j.ref_type === 'ess_escrow_transfer';
 const npcCount = (reason) => String(reason || '').split(',').reduce((t, part) => t + (Number(part.split(':')[1]) || 0), 0);
 
 // 流水 → 刷怪时段（时间正序）
-export function rattingSessions(journal) {
+// rate：ESI 读到的军团税率（0–1）；null / undefined 表示没读到，改用流水里的 tax。返回的数组带 taxMode：'rate' 按税率 / 'journal' 按流水
+export function rattingSessions(journal, rate = null) {
+  const useRate = typeof rate === 'number' && rate >= 0 && rate < 1;
   const list = (journal || []).filter((j) => (isBounty(j) || isEss(j)) && j.date && j.amount > 0)
-    .map((j) => ({ t: Date.parse(j.date), net: j.amount, tax: Math.abs(j.tax || 0), ess: isEss(j), sys: j.context_id_type === 'eve_system' ? j.context_id : 0, npc: isBounty(j) ? npcCount(j.reason) : 0 }))
+    .map((j) => ({ t: Date.parse(j.date), net: j.amount, tax: useRate ? j.amount * rate / (1 - rate) : Math.abs(j.tax || 0), ess: isEss(j), sys: j.context_id_type === 'eve_system' ? j.context_id : 0, npc: isBounty(j) ? npcCount(j.reason) : 0 }))
     .sort((a, b) => a.t - b.t);
+  const taxMode = useRate ? 'rate' : 'journal';
   const blank = (t) => ({ start: t, end: t, ticks: 0, net: 0, tax: 0, essNet: 0, npc: 0, sys: new Map() });
   // 先只用赏金分段
   const sessions = [];
@@ -42,6 +47,7 @@ export function rattingSessions(journal) {
   }
   sessions.sort((a, b) => a.start - b.start);
   for (const s of sessions) s.ms = s.essOnly ? 0 : s.end - s.start + TICK;
+  sessions.taxMode = taxMode;
   return sessions;
 }
 
@@ -57,7 +63,7 @@ const rangeStart = (r) => {
 
 export function rattingHtml(journal, c) {
   ctx = c;
-  const all = rattingSessions(journal);
+  const all = rattingSessions(journal, c.corpTaxRate);
   if (!all.length) {
     return `<div class="nw-card rat-card"><div class="rat-head"><h4>刷怪收益</h4></div>
       <p class="text-muted">最近的钱包流水里没有赏金记录。刷怪后赏金每 20 分钟结算一次，ESI 流水大约有 5 分钟到 1 小时的缓存。</p></div>`;
@@ -101,7 +107,7 @@ export function rattingHtml(journal, c) {
       ${ctx.valuationCard('每小时到手', isk(perH(keep, ms)) + ' ISK', '共 ' + fmtDur(ms) + '，' + ss.filter((s) => !s.essOnly).length + ' 段', 'is-total')}
       ${ctx.valuationCard('到手合计', isk(keep) + ' ISK', extra ? '已再扣 ' + extra + '%（' + isk(extraCut) + '）' : (ess ? '含 ESS ' + isk(ess) : ctx.formatNumber(ticks) + ' 次结算'), 'is-buy')}
       ${ctx.valuationCard('税前赏金', isk(net + tax) + ' ISK', npc ? '击毁 NPC ' + ctx.formatNumber(npc) + ' 艘' : '')}
-      ${ctx.valuationCard('军团税', isk(tax) + ' ISK', '实际税率 ' + taxRate.toFixed(1) + '%', 'is-sell')}
+      ${ctx.valuationCard('军团税', isk(tax) + ' ISK', all.taxMode === 'rate' ? '军团税率 ' + (c.corpTaxRate * 100).toFixed(1) + '%' : '实际税率 ' + taxRate.toFixed(1) + '%（读不到军团税率，按流水）', 'is-sell')}
     </div>
     <div class="table-scroll"><table class="pc-mini-table rat-table"><thead><tr><th>开始</th><th>时长</th><th>星系</th><th>NPC</th><th>税前</th><th>军团税</th><th>到手</th><th>每小时</th></tr></thead><tbody>${rows}</tbody></table></div>`
       : '<p class="text-muted">这段时间没有赏金记录。</p>'}

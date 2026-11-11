@@ -23,7 +23,7 @@ export const AT = {
   miningAmount: 77, miningWastedVolumeMultiplier: 3153, miningWasteProbability: 3154, miningCritChance: 5967, miningCritBonusYield: 5969,
   speedFactor: 20, speedBoostFactor: 567, massAddition: 796, signatureRadiusBonus: 554,
   maxRange: 54, falloff: 158, trackingSpeed: 160, explosionDelay: 281,
-  maxGroupFitted: 1544, maxTypeFitted: 2431, maxGroupActive: 763, maxActiveDrones: 352,
+  maxGroupFitted: 1544, maxTypeFitted: 2431, maxGroupActive: 763, maxActiveDrones: 352, droneControlDistance: 458,
   skillLevel: 280, subSystemSlot: 1366, fitsToShipType: 1380,
   hiSlotModifier: 1374, medSlotModifier: 1375, lowSlotModifier: 1376, turretHardPointModifier: 1368, launcherHardPointModifier: 1369,
   fighterCapacity: 2055, fighterTubes: 2216, fighterLightSlots: 2217, fighterSupportSlots: 2218, fighterHeavySlots: 2219,
@@ -735,7 +735,8 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
   const targeting = {
     range: ship.attr(AT.maxTargetRange), scanRes: ship.attr(AT.scanResolution),
     maxTargets: Math.min(ship.attr(AT.maxLockedTargets), char.attr(AT.maxLockedTargets)),
-    sensor: sensorValues[sensorIdx], sensorType: ['雷达', '光雷达', '磁力', '引力'][sensorIdx]
+    sensor: sensorValues[sensorIdx], sensorType: ['雷达', '光雷达', '磁力', '引力'][sensorIdx],
+    droneControl: char.attr(AT.droneControlDistance)   // 无人机控制距离（角色属性：基础 20 km + 技能 + 无人机链接增效器 + 船体加成）
   };
 
   return {

@@ -1151,7 +1151,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v149').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v152').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -5741,7 +5741,7 @@ async function renderProfileTab(tab) {
 
 // 钱包 · 刷怪收益（ratting.js）：第 1 页流水满了（ESI 每页 2500 条）就补读全部页，赏金可能在后面几页
 let rattingLoading = null;
-const loadRattingModule = () => (rattingLoading ||= import('./ratting.js?v=2').catch((e) => { rattingLoading = null; throw e; }));
+const loadRattingModule = () => (rattingLoading ||= import('./ratting.js?v=5').catch((e) => { rattingLoading = null; throw e; }));
 async function mountRatting(box, journal) {
   const slot = box.querySelector('[data-ratting]');
   if (!slot) return;
@@ -5756,9 +5756,20 @@ async function mountRatting(box, journal) {
       }
       list = state.characterData.journalAll || journal;
     }
+    // 军团税率（公开接口，按军团缓存）：刷怪收益的军团税按它算
+    const corp = state.characterData.character?.corporation_id;
+    let corpTaxRate = null;
+    if (corp) {
+      state.corpTaxRates ||= new Map();
+      if (!state.corpTaxRates.has(corp)) {
+        const r = await fetchESI('/corporations/' + corp + '/').then((c) => (typeof c.tax_rate === 'number' ? c.tax_rate : null)).catch(() => null);
+        if (r !== null) state.corpTaxRates.set(corp, r);
+        corpTaxRate = r;
+      } else corpTaxRate = state.corpTaxRates.get(corp);
+    }
     const draw = () => {
       if (!slot.isConnected) return;
-      slot.innerHTML = m.rattingHtml(list, { esc, formatISK, formatNumber, valuationCard, systemName: (id) => officialName(id) || 'ID ' + id });
+      slot.innerHTML = m.rattingHtml(list, { esc, formatISK, formatNumber, valuationCard, corpTaxRate, systemName: (id) => officialName(id) || 'ID ' + id });
       m.bindRatting(slot, draw);
     };
     draw();

@@ -3,7 +3,7 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v38';
+import * as FE from './fit-engine.js?v=v39';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
 import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
@@ -457,8 +457,33 @@ function freeIndex(slot) {
   return idx >= 0 ? idx : list.length < total ? list.length : -1;
 }
 
+// 无人机 / 舰载机的悬停预览：和点击一样往挂舱（机库）里加 1 架（1 个中队），装不下就不预览
+function previewDrone(t) {
+  const fighter = t.category === FE.CAT.fighter;
+  const res = F.stats.resources;
+  const bay = fighter ? res.fighterBay : res.droneBay;
+  const vol = (t.attrs.get(FE.AT.volume) || 0) * (fighter ? t.attrs.get(FE.AT.fighterSquadronSize) || 1 : 1);
+  if (!bay.total || (vol && bay.used + vol > bay.total + 1e-6)) {
+    if (F.preview) { F.preview = null; renderFit(); renderStats(); }
+    return;
+  }
+  if (F.preview?.type === t.id && F.preview.drone) return;
+  const fit = structuredClone(F.fit);
+  const d = fit.drones.find((x) => x.type === t.id);
+  if (d) d.count += 1;
+  else fit.drones.push({ type: t.id, count: 1, active: 0 });
+  autoActivateDrones(fit);
+  const calc = FE.computeFit(F.data, fit, skills());
+  const stats = calc && FE.fitStats(calc);
+  if (!stats) return;
+  F.preview = { type: t.id, drone: true, fighter, slot: null, index: -1, stats };
+  renderFit();
+  renderStats();
+}
+
 function previewType(id) {
   const t = id ? type(id) : null;
+  if (F.fit && t && (t.category === FE.CAT.drone || t.category === FE.CAT.fighter)) return previewDrone(t);
   const tg = previewTarget(t);
   if (!tg || F.fit.slots[tg.slot][tg.index]?.type === id || FE.cannotFit(F.data, type(F.fit.ship), t)) {
     if (F.preview) { F.preview = null; renderFit(); renderStats(); }
@@ -1205,20 +1230,20 @@ function addDrone(t) {
 const isFighter = (d) => type(d.type)?.category === FE.CAT.fighter;
 
 // 在带宽与同时操作上限内尽量激活无人机；舰载机在发射管与轻型 / 支援 / 重型位内尽量出击
-function autoActivateDrones() {
-  const calc = FE.computeFit(F.data, F.fit, skills());
+function autoActivateDrones(fit = F.fit) {
+  const calc = FE.computeFit(F.data, fit, skills());
   const limit = calc.char.attr(FE.AT.maxActiveDrones);
   let bw = calc.ship.attr(FE.AT.droneBandwidth);
   let n = 0;
   let tubes = calc.ship.attr(FE.AT.fighterTubes);
   const role = { light: calc.ship.attr(FE.AT.fighterLightSlots), support: calc.ship.attr(FE.AT.fighterSupportSlots), heavy: calc.ship.attr(FE.AT.fighterHeavySlots) };
-  for (const d of F.fit.drones.filter(isFighter)) {
+  for (const d of fit.drones.filter(isFighter)) {
     const t = type(d.type);
     const r = t.attrs.get(FE.AT.fighterIsHeavy) ? 'heavy' : t.attrs.get(FE.AT.fighterIsSupport) ? 'support' : 'light';
     d.active = 0;
     while (d.active < d.count && tubes > 0 && role[r] > 0) { d.active++; tubes--; role[r]--; }
   }
-  for (const d of F.fit.drones.filter((x) => !isFighter(x))) {
+  for (const d of fit.drones.filter((x) => !isFighter(x))) {
     const per = type(d.type).attrs.get(FE.AT.droneBandwidthUsed) || 0;
     d.active = 0;
     while (d.active < d.count && n < limit && (per === 0 || bw >= per - 1e-6)) { d.active++; n++; bw -= per; }
@@ -1733,6 +1758,42 @@ async function modTipHtml(ref) {
   return `<div class="fit-mtip-head"><img src="${IMG(t.id)}" alt="" width="24" height="24"><b>${app.esc(t.name)}</b>${m.state === 'overload' ? '<em>超载</em>' : ''}</div>
     <dl>${rows.map(([k, v, cls]) => `<dt>${app.esc(k)}</dt><dd${cls ? ` class="${cls}"` : ''}>${v}</dd>`).join('')}</dl>`;
 }
+// 无人机 / 舰载机的悬浮窗：伤害（已算技能、船体和装备加成）、射程、速度、耐久、带宽等；变好标绿、变差标红（和基础属性比）
+const DRONE_TIP_ATTRS = [64, 51, 54, 158, 160, 37, 508, 620, 552, 263, 265, 9, 77, 1272];
+async function droneTipHtml(i) {
+  if (!F.fit || !F.calc) return '';
+  const d = F.fit.drones[i];
+  const item = F.calc.drones[i];
+  const t = d && type(d.type);
+  if (!t || !item) return '';
+  const names = await dogmaNames();
+  const fighter = t.category === FE.CAT.fighter;
+  const rows = [];
+  if (!fighter) {
+    const dmg = FE.DAMAGE.map((a) => (item.attr(a) || 0) * (item.attr(FE.AT.damageMultiplier) || 1)).reduce((x, y) => x + y, 0);
+    const cycle = (item.attr(FE.AT.speed) || 0) / 1000;
+    if (dmg && cycle) {
+      rows.push(['每架 DPS', (dmg / cycle).toFixed(1)]);
+      if (d.active) rows.push([`激活 ${d.active} 架合计`, (dmg / cycle * d.active).toFixed(1) + ' DPS']);
+      rows.push(['每架齐射伤害', app.formatNumber(Math.round(dmg))]);
+    }
+  } else {
+    rows.push(['每中队架数', String(t.attrs.get(FE.AT.fighterSquadronSize) || 1)]);
+  }
+  for (const a of DRONE_TIP_ATTRS) {
+    if (!t.attrs.get(a) || !names.attrs[a]) continue;
+    const v = item.attr(a);
+    if (!v) continue;
+    const [label, unit, highGood] = names.attrs[a];
+    const base = t.attrs.get(a);
+    const better = base < 0 ? Math.abs(v) > Math.abs(base) : highGood ? v > base : v < base;
+    const cls = Math.abs(v - base) <= Math.abs(base) * 1e-6 ? '' : better ? 'is-up' : 'is-down';
+    rows.push([label, unit === 1 ? dist(v) : infoValue(a, v, unit, names.units), cls]);
+  }
+  if (!rows.length) return '';
+  return `<div class="fit-mtip-head"><img src="${IMG(t.id)}" alt="" width="24" height="24"><b>${app.esc(t.name)}</b></div>
+    <dl>${rows.map(([k, v, cls]) => `<dt>${app.esc(k)}</dt><dd${cls ? ` class="${cls}"` : ''}>${v}</dd>`).join('')}</dl>`;
+}
 // 被动装备（伤害控制以外的扩展器、伤害增幅、改装件等）的悬浮窗：列出它自己的加成属性（已算技能），跳过装配、元等级这类无关属性
 const PASSIVE_SKIP = new Set([...INFO_GROUPS[0][1], ...SKIP_INFO, 9, 422, 1692, 1768, 1211, 1212, 1271, 1544, 1298, 1299, 1300, 1301, 1872, 1879, 1880, 1881, 2113]);
 function passiveTipHtml(t, m, item, names) {
@@ -1772,13 +1833,13 @@ function initModTip() {
   }, { passive: true });
   document.addEventListener('pointerover', (e) => {
     if (e.pointerType !== 'mouse') return;
-    const row = e.target.closest?.('#fitMain [data-fit-mod]');
+    const row = e.target.closest?.('#fitMain [data-fit-mod], #fitMain [data-fit-drone-row]');
     if (row && row === cur) return;
     hide();
     if (!row || document.body.classList.contains('fit-dragging')) return;
     cur = row;
     timer = setTimeout(async () => {
-      const html = await modTipHtml(row.dataset.fitMod);
+      const html = row.dataset.fitDroneRow != null ? await droneTipHtml(Number(row.dataset.fitDroneRow)) : await modTipHtml(row.dataset.fitMod);
       if (cur !== row || !row.isConnected || !html) return;
       tip.innerHTML = html;
       tip.hidden = false;
@@ -1797,7 +1858,7 @@ function droneRow(d, i, fighter) {
   const t = type(d.type);
   const size = fighter ? t.attrs.get(FE.AT.fighterSquadronSize) || 1 : 1;
   const unit = fighter ? '中队' : '架';
-  return `<div class="fit-slot fit-drone">
+  return `<div class="fit-slot fit-drone" data-fit-drone-row="${i}">
     <img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">
     <span class="fit-slot-name">${app.esc(t.name)}<small>${fighter ? `每中队 ${size} 架 · 出击 ${d.active} / ${d.count}` : `激活 ${d.active} / ${d.count}`}</small></span>
     <span class="fit-stepper" title="数量（${unit}）"><button data-fit-drone="${i}:count:-1" aria-label="减少">−</button><b>${d.count}</b><button data-fit-drone="${i}:count:1" aria-label="增加">+</button></span>
@@ -1807,6 +1868,14 @@ function droneRow(d, i, fighter) {
   </div>`;
 }
 
+// 悬停预览中的无人机 / 舰载机：挂舱里多一行淡淡的「名称 +1」
+function droneGhost(fighter) {
+  const pv = F.preview?.drone && F.preview.fighter === fighter ? type(F.preview.type) : null;
+  if (!pv) return '';
+  const has = F.fit.drones.some((d) => d.type === pv.id);
+  return `<div class="fit-slot is-ghost"><img src="${IMG(pv.id)}" alt="" width="28" height="28"><span class="fit-slot-name"><span class="fit-slot-title">${app.esc(pv.name)}</span><small>${has ? '再加 1 ' + (fighter ? '个中队' : '架') : '+1 ' + (fighter ? '个中队' : '架')}</small></span></div>`;
+}
+
 function dronesHtml() {
   const res = F.stats.resources;
   let html = '';
@@ -1814,12 +1883,12 @@ function dronesHtml() {
   const fighters = F.fit.drones.map((d, i) => [d, i]).filter(([d]) => isFighter(d));
   if (res.droneBay.total || drones.length) {
     html += `<section class="fit-slots" data-fit-drop="drone"><h4>无人机<span>挂舱 ${fmt(res.droneBay.used)} / ${fmt(res.droneBay.total)} m³ · 带宽 ${fmt(res.bandwidth.used)} / ${fmt(res.bandwidth.total)}</span></h4>
-      ${drones.map(([d, i]) => droneRow(d, i, false)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>${MOBILE() ? '点这里从「无人机」中添加' : '从左侧「无人机」中添加'}</span></div></section>`;
+      ${drones.map(([d, i]) => droneRow(d, i, false)).join('')}${droneGhost(false)}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>${MOBILE() ? '点这里从「无人机」中添加' : '从左侧「无人机」中添加'}</span></div></section>`;
   }
   if (res.fighterBay.total || fighters.length) {
     const roles = [['fighterLight', '轻型'], ['fighterSupport', '支援'], ['fighterHeavy', '重型']].filter(([k]) => res[k].total).map(([k, l]) => `${l} ${res[k].used}/${res[k].total}`).join(' · ');
     html += `<section class="fit-slots" data-fit-drop="fighter"><h4>舰载机<span>机库 ${fmt(res.fighterBay.used)} / ${fmt(res.fighterBay.total)} m³ · 发射管 ${res.fighterTubes.used} / ${res.fighterTubes.total}${roles ? ' · ' + roles : ''}</span></h4>
-      ${fighters.map(([d, i]) => droneRow(d, i, true)).join('')}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>${MOBILE() ? '点这里从「无人机」中添加舰载机' : '从左侧「无人机」中添加舰载机'}</span></div></section>`;
+      ${fighters.map(([d, i]) => droneRow(d, i, true)).join('')}${droneGhost(true)}<div class="fit-slot is-empty" data-fit-empty-drone><span class="fit-slot-icon"></span><span>${MOBILE() ? '点这里从「无人机」中添加舰载机' : '从左侧「无人机」中添加舰载机'}</span></div></section>`;
   }
   return html;
 }
@@ -1976,7 +2045,8 @@ function statsHtml(s) {
         ['range', '锁定距离', dist(s.targeting.range)],
         ['scanres', '扫描分辨率', `${fmt(s.targeting.scanRes)} mm`],
         ['targets', '最大锁定数', fmt(s.targeting.maxTargets)],
-        [SENSOR_ICON[s.targeting.sensorType] || 'radar', `${s.targeting.sensorType}感应强度`, fmt(s.targeting.sensor)]
+        [SENSOR_ICON[s.targeting.sensorType] || 'radar', `${s.targeting.sensorType}感应强度`, fmt(s.targeting.sensor)],
+        (r.droneBay.total || r.bandwidth.total || r.fighterBay.total) && ['drone', '无人机控制距离', dist(s.targeting.droneControl || 0)]
       ])}
     </section>
     <section class="fit-stat-block">

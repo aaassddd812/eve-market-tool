@@ -1,5 +1,5 @@
 // 钱包与刷怪：余额、刷怪收益（../ratting.js，与网站同一个模块）、最近流水
-import { esiAuth, esiPaged } from '../esi.js';
+import { esiAuth, esiPaged, esiPublic } from '../esi.js';
 import { esc, formatISK, formatPrice, formatNumber, resolveNames, nameOf } from '../data.js';
 import * as R from '../ratting.js';
 
@@ -17,9 +17,11 @@ const card = (label, value, detail, kind = '') => {
 
 export async function render(box, acc, { isCurrent }) {
   const id = acc.character_id;
-  const [balance, journal] = await Promise.all([
+  const [balance, journal, corpTaxRate] = await Promise.all([
     esiAuth(acc, `/characters/${id}/wallet/`),
-    esiPaged(acc, `/characters/${id}/wallet/journal/`, 20)
+    esiPaged(acc, `/characters/${id}/wallet/journal/`, 20),
+    // 军团税率：刷怪收益的军团税按它算；读不到给 null，改用流水里的税额
+    esiPublic(`/characters/${id}/`).then((c) => esiPublic(`/corporations/${c.corporation_id}/`)).then((c) => (typeof c.tax_rate === 'number' ? c.tax_rate : null)).catch(() => null)
   ]);
   await resolveNames([...journal.flatMap((j) => [j.first_party_id, j.second_party_id]), ...journal.filter((j) => j.context_id_type === 'eve_system').map((j) => j.context_id)]);
   if (!isCurrent()) return;
@@ -41,7 +43,7 @@ export async function render(box, acc, { isCurrent }) {
   const slot = box.querySelector('[data-ratting]');
   const draw = () => {
     if (!slot.isConnected) return;
-    slot.innerHTML = R.rattingHtml(journal, { esc, formatISK, formatNumber, valuationCard: card, systemName: (sid) => nameOf(sid) || 'ID ' + sid });
+    slot.innerHTML = R.rattingHtml(journal, { esc, formatISK, formatNumber, valuationCard: card, corpTaxRate, systemName: (sid) => nameOf(sid) || 'ID ' + sid });
     R.bindRatting(slot, draw);
   };
   draw();
