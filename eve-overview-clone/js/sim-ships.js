@@ -60,6 +60,7 @@ function geometry(url) {
       g.setIndex(new THREE.BufferAttribute(idx, 1));
       g.computeBoundingSphere();
       g.userData.areas = head.areas;
+      if (head.min && head.max) g.userData.ext = [0, 1, 2].map((k) => Math.max(-head.min[k], head.max[k]));   // 包围盒半轴（米，客户端 GetLocalBoundingBox）
       return g;
     }).catch(() => null));
   }
@@ -130,7 +131,7 @@ export function loadShipModel(key, renderer, env) {
         mats.push(material(a, { a: ta, n: tn, x: tx }, env));
       }
       if (!mats.length) return null;
-      return { geometry: g, materials: mats, r: def.r, boosters: def.boosters || [], boosterColor: def.boosterColor };
+      return { geometry: g, materials: mats, r: def.r, c: def.c || [0, 0, 0], ext: g.userData.ext || null, boosters: def.boosters || [], boosterColor: def.boosterColor, bst: def.bst || null, loc: def.loc || {} };
     })());
   }
   return modelCache.get(key);

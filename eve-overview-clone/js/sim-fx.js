@@ -8,7 +8,11 @@
 // 电子战 / 遥修（rec.units[i].ew，装备开着才画）：网子紫色波纹、扰频橙色 / 扰断蓝色光环一圈圈推向目标、
 //   中和琥珀色电弧 / 吸电紫色倒流（新周期时一闪）、ECM 彩色闪电、阻尼绿色雾流、标记红色细光、
 //   遥修护盾蓝 / 装甲橙 / 结构灰的光点流向被修的船；目标身上同色光晕。图案按屏幕像素排布，拉远拉近疏密不变。
+// opt.tex（驾驶模拟）：改用游戏客户端的特效贴图（tools/ui-assets/fetch.mjs --fx 转换到 assets/eveui/fx/，版权归 CCP）：
+//   柔光 / 星芒 / 光环用游戏的粒子贴图，火球和爆炸按游戏的 9 × 9 帧爆炸序列逐帧播放，光束横截面用游戏的光束贴图。
+//   贴图加载完之前（或加载失败）用程序画的图集。ready() 告诉调用方贴图是否已就绪（加载失败也算就绪）。
 import * as THREE from './vendor/three/three.module.min.js';
+import { createClientFx } from './sim-cfx.js?v=v4';
 
 const KM = 1 / 1000;
 const SIZE_M = [0, 1, 2, 4, 10];                 // 武器尺寸（小 / 中 / 大 / 超大）→ 宽度倍数
@@ -17,10 +21,16 @@ const SHIELD = new THREE.Color(0x7fc4ff);
 const FIRE = new THREE.Color(0xffa04a);
 const MISSILE = new THREE.Color(0xffe2a8);
 const TRAIL = new THREE.Color(0.95, 0.78, 0.55);
+const PUFF = new THREE.Color(0.2822, 0.2443, 0.2224);
 // 电子战 / 遥修：类别 → [图案序号, 颜色, 宽度（米）, 最小像素宽]
+// 电子战 / 遥修：[图案, 颜色, 起点宽（米）, 最小像素, 终点宽 = 目标半径 × 倍数（0 = 和起点一样）]
+// 颜色取客户端 fisfx/module/*.black 的 DiffuseColor：
+//   网子 stasisweb 0.61/0.68/1.0（锥形漩涡罩向目标）；扰频 warpscrambler 0.31/0.59/0.87（闪电束）；扰断 warpdisruptor 0.32/0.88/0.71（交叉线 + 目标光环）；
+//   中和 energydestabilization 1.0/0.52/0.46；吸电 energyvampire 0.88/0.90/1.0 闪电 + 1.0/0.47/0.25；ECM ecm_tr 0.68/0.83/1.0（只在目标身上的漩涡）；
+//   阻尼 sensordampener 0.67/0.80/1.0（锥形波纹）；标记 targetpaint 1.0/0.26/0.19（锥形）；遥修护盾 shieldtransfer 0.47/0.83/1.0、装甲 remotearmorrepair 1.0/0.44/0
 export const EW = {
-  web: [0, 0x9c7bff, 60, 5], scram: [1, 0xff7a3a, 40, 4], point: [2, 0x5ac8ff, 40, 4], neut: [3, 0xffb04a, 30, 3], nos: [4, 0xc86bff, 30, 3],
-  ecm: [5, 0xffffff, 30, 3.5], damp: [6, 0x9be86b, 90, 7], paint: [7, 0xff4f6a, 12, 1.6], rs: [8, 0x5fb8ff, 45, 4], ra: [8, 0xffb347, 45, 4], rh: [8, 0xc8ccd6, 45, 4],
+  web: [0, 0x9badff, 20, 4, 2.6], scram: [1, 0x5096de, 26, 3], point: [2, 0x52dfb5, 22, 3], neut: [3, 0xff8574, 40, 4, 1.6], nos: [4, 0xe1e6ff, 26, 3],
+  ecm: [5, 0xadd4ff, 0, 0], damp: [6, 0xaacbff, 18, 4, 2.4], paint: [7, 0xff4330, 8, 2, 1.8], rs: [8, 0x77d4ff, 45, 4], ra: [8, 0xff7000, 45, 4], rh: [8, 0xc8ccd6, 45, 4],
 };
 const EW_COL = Object.fromEntries(Object.entries(EW).map(([k, v]) => [k, new THREE.Color(v[1])]));
 const hash = (a, b = 0, c = 0) => { let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
@@ -95,56 +105,96 @@ function quadBatch(attrs, material) {
   };
 }
 
-export function createFx(scene, renderer) {
+export function createFx(scene, renderer, opt = {}) {
   const res = new THREE.Vector2(1, 1);
   const tex = atlas();
+  // 游戏特效贴图（灰度：亮度 = 强度）
+  const ccp = { value: 0 }, cSpr = { value: null }, cExp = { value: null }, cBeam = { value: null };
+  const ccp2 = { value: 0 }, cTur = { value: null }, cShd = { value: null }, cRamp = { value: null }, cFire = { value: null };
+  const time = { value: 0 };
+  let ccpReady = !opt.tex;
+  if (opt.tex) {
+    const base = opt.tex.replace(/\/?$/, '/');
+    const ld = new THREE.TextureLoader();
+    const one = (f) => new Promise((ok, no) => ld.load(base + f, ok, undefined, no));
+    Promise.all(['sprites.webp', 'explosion.webp', 'beam.webp'].map(one)).then(([a, b, c]) => {
+      for (const t of [a, b, c]) { t.colorSpace = THREE.NoColorSpace; t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; }
+      cSpr.value = a; cExp.value = b; cBeam.value = c; ccp.value = 1;
+    }).catch(() => { /* 用程序画的图集 */ }).finally(() => { ccpReady = true; });
+    // 第二批：游戏炮塔弹道噪声（射弹 / 激光 / 混合三格，RGB 各一层）、护盾受击格纹、死亡爆炸色带、火团。缺了就退回第一批的画法
+    Promise.all(['turret.webp', 'shield.webp', 'ramp.png', 'fire.webp'].map(one)).then(([a, b, c, d]) => {
+      for (const t of [a, b, c, d]) { t.colorSpace = THREE.NoColorSpace; t.generateMipmaps = false; t.minFilter = THREE.LinearFilter; }
+      a.wrapS = a.wrapT = THREE.ClampToEdgeWrapping;
+      b.wrapS = b.wrapT = THREE.RepeatWrapping; b.generateMipmaps = true; b.minFilter = THREE.LinearMipmapLinearFilter;
+      c.wrapS = c.wrapT = d.wrapS = d.wrapT = THREE.ClampToEdgeWrapping;
+      cTur.value = a; cShd.value = b; cRamp.value = c; cFire.value = d; ccp2.value = 1;
+    }).catch(() => {});
+  }
+  // 火球贴图格：游戏贴图时按进度取爆炸序列的帧（2 + 帧号 / 100），尺寸放大（序列帧在格子里偏小）
+  const fireTile = (prog) => (ccp.value ? 2 + Math.min(80, Math.max(0, Math.floor(prog * 81))) / 100 : 2);
+  const fireScale = () => (ccp.value ? 1.7 : 1);
   // 光束 / 曳光：屏幕空间的带子，宽度按米换算成像素、不小于 minpx；style 1 为拖尾（尾部渐隐）
   const ribbonMat = new THREE.ShaderMaterial({
-    uniforms: { res: { value: res } },
+    uniforms: { res: { value: res }, ccp, cBeam, ccp2, cTur, time },
     vertexShader: `${LOG_V}
-      attribute vec3 pa; attribute vec3 pb; attribute vec2 corner; attribute vec4 col; attribute vec3 wst; uniform vec2 res;
-      varying vec2 vUv; varying vec4 vCol; varying float vStyle;
+      attribute vec3 pa; attribute vec3 pb; attribute vec2 corner; attribute vec4 col; attribute vec4 wst; uniform vec2 res;
+      varying vec3 vQ; varying vec4 vCol; varying float vStyle; varying float vTex; varying float vLen;
       void main() {
         mat4 pv = projectionMatrix * viewMatrix;
         vec4 ca = pv * vec4(pa, 1.0), cb = pv * vec4(pb, 1.0);
-        float e = 1e-5;
+        // 自己在近平面稍前处裁掉镜头后面那一段（不交给 GPU 裁，否则端点投到几亿像素外，带子插值会坏成一条粗白条）
+        float e = max(1e-5, projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0) * 1.05);
         if (ca.w < e && cb.w < e) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
         if (ca.w < e) ca = mix(ca, cb, (e - ca.w) / (cb.w - ca.w));
         if (cb.w < e) cb = mix(cb, ca, (e - cb.w) / (ca.w - cb.w));
         vec2 sa = ca.xy / ca.w * res, sb = cb.xy / cb.w * res;
-        vec2 d = sb - sa; d = length(d) > 1e-4 ? normalize(d) : vec2(1.0, 0.0);
+        vec2 d = sb - sa; vLen = length(d) * 0.5; d = length(d) > 1e-4 ? normalize(d) : vec2(1.0, 0.0);
         vec2 nr = vec2(-d.y, d.x);
         vec4 c = corner.x < 0.5 ? ca : cb;
         float px = wst.x * projectionMatrix[1][1] * res.y * 0.5 / c.w;
-        float w = max(px, wst.y);
+        float w = min(max(px, wst.y), max(wst.y, 24.0)); vTex = wst.w;   // 贴近镜头时不超过 24 像素宽
         c.xy += nr * corner.y * w / res * c.w;
         gl_Position = c;
-        vUv = corner; vCol = col; vCol.a *= clamp(px / max(wst.y, 1e-3) * 0.4 + 0.65, 0.65, 1.0); vStyle = wst.z;
+        // 带子坐标按屏幕线性插值（乘 w、片元里再除）：一端被裁到镜头跟前时，透视插值会把整条带子都算成中线 → 一条粗白条
+        vQ = vec3(corner * c.w, c.w); vCol = col; vCol.a *= clamp(px / max(wst.y, 1e-3) * 0.4 + 0.65, 0.65, 1.0); vStyle = wst.z;
         #include <logdepthbuf_vertex>
       }`,
     fragmentShader: `${LOG_F}
-      varying vec2 vUv; varying vec4 vCol; varying float vStyle;
+      uniform float ccp; uniform sampler2D cBeam; uniform float ccp2; uniform sampler2D cTur; uniform float time;
+      varying vec3 vQ; varying vec4 vCol; varying float vStyle; varying float vTex; varying float vLen;
       void main() {
         #include <logdepthbuf_fragment>
+        vec2 vUv = vQ.xy / vQ.z;
         float a = 1.0 - abs(vUv.y);
         float core = pow(a, 5.0), glow = pow(a, 1.6) * 0.55;
+        if (ccp > 0.5) { float p = texture2D(cBeam, vec2(vUv.y * 0.5 + 0.5, 0.5)).r; glow = p * p * 0.8 + pow(a, 2.0) * 0.3; core *= 0.9 + 0.3 * p; }
+        // 游戏炮塔弹道的噪声贴图：两层沿弹道反向滚动（一快一慢），R / G / B 各当一层，调制光晕和亮芯
+        if (ccp2 > 0.5 && vTex > 0.5) {
+          float tile = floor(vTex + 0.5) - 1.0, sx = vUv.x * vLen / 220.0, vy = vUv.y * 0.4 + 0.5;
+          vec3 n1 = texture2D(cTur, vec2((tile + clamp(fract(sx - time * 1.9), 0.01, 0.99)) / 6.0, vy)).rgb;
+          vec3 n2 = texture2D(cTur, vec2((tile + clamp(fract(sx * 0.37 + time * 0.8), 0.01, 0.99)) / 6.0, 1.0 - vy)).rgb;
+          glow *= 0.6 + 0.6 * n1.g * (0.5 + 0.6 * n2.r) + 0.2 * n2.b;
+          core *= 0.8 + 0.35 * n1.r;
+        }
+        if (vStyle > 1.5) { core = 0.0; glow = pow(a, 2.2) * 0.55; }   // 光晕层：只有柔光，替代游戏画面的泛光
         float k = (core + glow) * vCol.a;
-        if (vStyle > 0.5) k *= vUv.x * vUv.x;
+        if (vStyle > 0.5 && vStyle < 1.5 || vStyle > 2.5) k *= vUv.x * vUv.x;
         gl_FragColor = vec4(mix(vCol.rgb, vec3(1.0), core * 0.65) * k, 1.0);
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
-  const ribbons = quadBatch({ pa: 3, pb: 3, corner: 2, col: 4, wst: 3 }, ribbonMat);
+  const ribbons = quadBatch({ pa: 3, pb: 3, corner: 2, col: 4, wst: 4 }, ribbonMat);
   // 电子战光束：和光束同样的屏幕空间带子，片元里按类别画图案（vD 为沿光束的屏幕像素 / 20）
   const ewMat = new THREE.ShaderMaterial({
-    uniforms: { res: { value: res }, time: { value: 0 } },
+    uniforms: { res: { value: res }, time },
     vertexShader: `${LOG_V}
-      attribute vec3 pa; attribute vec3 pb; attribute vec2 corner; attribute vec4 col; attribute vec4 wst; uniform vec2 res;
-      varying vec2 vUv; varying vec4 vCol; varying float vKind; varying float vLen; varying float vSeed;
+      attribute vec3 pa; attribute vec3 pb; attribute vec2 corner; attribute vec4 col; attribute vec4 wst; attribute float wb; uniform vec2 res;
+      varying vec3 vQ; varying vec4 vCol; varying float vKind; varying float vLen; varying float vSeed;
       void main() {
         mat4 pv = projectionMatrix * viewMatrix;
         vec4 ca = pv * vec4(pa, 1.0), cb = pv * vec4(pb, 1.0);
-        float e = 1e-5;
+        // 自己在近平面稍前处裁掉镜头后面那一段（不交给 GPU 裁，否则端点投到几亿像素外，带子插值会坏成一条粗白条）
+        float e = max(1e-5, projectionMatrix[3][2] / (projectionMatrix[2][2] - 1.0) * 1.05);
         if (ca.w < e && cb.w < e) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }
         if (ca.w < e) ca = mix(ca, cb, (e - ca.w) / (cb.w - ca.w));
         if (cb.w < e) cb = mix(cb, ca, (e - cb.w) / (ca.w - cb.w));
@@ -152,38 +202,44 @@ export function createFx(scene, renderer) {
         vec2 d = sb - sa; vLen = length(d) * 0.5 / 20.0; d = length(d) > 1e-4 ? normalize(d) : vec2(1.0, 0.0);
         vec2 nr = vec2(-d.y, d.x);
         vec4 c = corner.x < 0.5 ? ca : cb;
-        float px = wst.x * projectionMatrix[1][1] * res.y * 0.5 / c.w;
-        float w = clamp(px, wst.y, wst.y * 2.5);   // 拉近时不无限变粗
+        float wm = corner.x < 0.5 ? wst.x : (wb > 0.0 ? wb : wst.x);   // 锥形：终点宽另给
+        float px = wm * projectionMatrix[1][1] * res.y * 0.5 / c.w;
+        float w = wb > 0.0 ? clamp(px, wst.y, 90.0) : clamp(px, wst.y, wst.y * 2.5);   // 光束拉近时不无限变粗；锥形照实际大小
         c.xy += nr * corner.y * w / res * c.w;
         gl_Position = c;
-        vUv = corner; vCol = col; vKind = wst.z; vSeed = wst.w;
+        vQ = vec3(corner * c.w, c.w); vCol = col; vKind = wst.z; vSeed = wst.w;   // 同上，屏幕线性插值
         #include <logdepthbuf_vertex>
       }`,
     fragmentShader: `${LOG_F}
-      uniform float time; varying vec2 vUv; varying vec4 vCol; varying float vKind; varying float vLen; varying float vSeed;
+      uniform float time; varying vec3 vQ; varying vec4 vCol; varying float vKind; varying float vLen; varying float vSeed;
       vec3 hue(float h) { return clamp(abs(fract(h + vec3(0.0, 0.667, 0.333)) * 6.0 - 3.0) - 1.0, 0.0, 1.0); }
       void main() {
         #include <logdepthbuf_fragment>
+        vec2 vUv = vQ.xy / vQ.z;
         float u = vUv.x, v = vUv.y, d = u * vLen, T = time + vSeed * 10.0;
         int k = int(vKind + 0.5);
         vec3 col = vCol.rgb;
         float a = 1.0 - abs(v), core = pow(a, 5.0), glow = pow(a, 1.6) * 0.5, m = 1.0;
-        if (k == 0) {                       // 网子：一波波紫色波纹推向目标
-          m = 0.25 + 0.9 * pow(0.5 + 0.5 * sin(d * 5.0 - T * 9.0), 3.0); glow *= 1.3;
-        } else if (k == 1 || k == 2) {      // 扰频 / 扰断：一圈圈光环
-          float r = fract(d * (k == 1 ? 0.9 : 0.6) - T * 1.4);
-          m = 0.18 + 1.6 * smoothstep(0.7, 0.95, r) * (1.0 - smoothstep(0.95, 1.0, r)); core *= 0.6;
-        } else if (k == 3 || k == 4) {      // 中和 / 吸电：抖动的电弧；吸电亮斑从目标流回来
+        if (k == 0 || k == 6 || k == 7) {   // 锥形罩：边缘亮（菲涅耳）、中间透；网子 = 焦散漩涡往回卷，阻尼 = 波纹格往目标推，标记 = 细红锥
+          float edge = pow(abs(v), 3.0) * 0.8 + 0.18;
+          core = 0.0;
+          if (k == 0) { float sw = sin(v * 4.0 + u * 7.0 + T * 1.6) * sin(-v * 2.5 + u * 4.0 - T * 1.1); m = (0.35 + 0.9 * sw * sw) * edge; glow = 0.45; }
+          else if (k == 6) { m = (0.3 + 0.9 * pow(0.5 + 0.5 * sin(u * 18.0 - T * 5.0), 4.0)) * (0.75 + 0.25 * sin(v * 6.0)) * edge; glow = 0.45; }
+          else { m = (0.5 + 0.5 * pow(0.5 + 0.5 * sin(d * 2.5 - T * 3.0), 2.0)) * edge * 1.6; glow = 0.6; core = pow(a, 8.0) * 0.6; }
+          m *= smoothstep(0.0, 0.25, u);   // 起点收尖
+        } else if (k == 1) {                // 扰频：两道抖动的蓝色闪电缠在一起，忽明忽暗
+          float j1 = sin(d * 6.1 + T * 27.0 + vSeed * 9.0) * 0.3 + sin(d * 15.0 - T * 19.0) * 0.15;
+          float j2 = sin(d * 4.3 - T * 23.0 + vSeed * 5.0) * 0.35 + sin(d * 11.0 + T * 31.0) * 0.12;
+          core = (pow(max(0.0, 1.0 - abs(v - j1) * 1.7), 14.0) + pow(max(0.0, 1.0 - abs(v - j2) * 1.7), 14.0) * 0.8) * 1.3;
+          glow *= 0.7; m = 0.75 + 0.25 * sin(T * 13.0 + vSeed * 7.0);
+        } else if (k == 2) {                // 扰断：细亮芯 + 一节节交叉线往目标推
+          float r = fract(d * 1.4 - T * 2.6);
+          m = 0.45 + 1.1 * smoothstep(0.55, 0.7, r) * (1.0 - smoothstep(0.85, 1.0, r)); core *= 1.2;
+        } else if (k == 3 || k == 4) {      // 中和（锥形 + 电弧）/ 吸电（电弧，亮斑从目标流回来）
           float j = sin(d * 7.3 + T * 31.0 + vSeed * 9.0) * 0.32 + sin(d * 17.0 - T * 23.0) * 0.18;
           core = pow(max(0.0, 1.0 - abs(v - j) * 1.6), 14.0) * 1.4; glow *= 0.6;
-          if (k == 4) m = 0.4 + 0.9 * pow(0.5 + 0.5 * sin(d * 3.0 + T * 8.0), 4.0);
-        } else if (k == 5) {                // ECM：彩色锯齿闪电
-          float j = (fract(sin(floor(d * 3.0 + T * 12.0) * 43.7) * 917.0) - 0.5) * 0.9;
-          core = pow(max(0.0, 1.0 - abs(v - j) * 1.8), 10.0) * 1.3; col = hue(u * 1.5 - T * 0.7) * 0.8 + 0.25;
-        } else if (k == 6) {                // 阻尼：柔和的绿色雾流
-          m = 0.45 + 0.4 * sin(d * 1.6 - T * 3.0 + sin(d * 4.7 + T) * 1.5); core *= 0.25; glow *= 1.2;
-        } else if (k == 7) {                // 标记：细红光，轻微闪烁
-          m = 0.8 + 0.2 * sin(T * 14.0); glow *= 0.5;
+          if (k == 3) { glow += pow(abs(v), 3.0) * 0.35; }
+          else { m = 0.4 + 0.9 * pow(0.5 + 0.5 * sin(d * 3.0 + T * 8.0), 4.0); col = mix(col, vec3(1.0, 0.47, 0.25), 0.5 * m * (1.0 - abs(v))); }
         } else {                            // 遥修：光点流向被修的船
           float r = fract(d * 1.2 - T * 2.2);
           m = 0.3 + 1.4 * exp(-pow((r - 0.5) * 5.0, 2.0)); glow *= 1.1;
@@ -194,7 +250,7 @@ export function createFx(scene, renderer) {
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
-  const ewBeams = quadBatch({ pa: 3, pb: 3, corner: 2, col: 4, wst: 4 }, ewMat);
+  const ewBeams = quadBatch({ pa: 3, pb: 3, corner: 2, col: 4, wst: 4, wb: 1 }, ewMat);
   ewBeams.mesh.renderOrder = 2;
   scene.add(ewBeams.mesh);
   ribbons.mesh.renderOrder = 3;
@@ -202,7 +258,7 @@ export function createFx(scene, renderer) {
 
   // 精灵（闪光、火球、冲击波、导弹头）：始终面向镜头，尺寸按米、不小于 minpx
   const spriteMat = new THREE.ShaderMaterial({
-    uniforms: { res: { value: res }, map: { value: tex } },
+    uniforms: { res: { value: res }, map: { value: tex }, ccp, cSpr, cExp, ccp2, cRamp, cFire },
     vertexShader: `${LOG_V}
       attribute vec3 center; attribute vec2 corner; attribute vec4 col; attribute vec4 sz; uniform vec2 res;
       varying vec2 vUv; varying vec4 vCol; varying float vTile;
@@ -218,11 +274,32 @@ export function createFx(scene, renderer) {
         #include <logdepthbuf_vertex>
       }`,
     fragmentShader: `${LOG_F}
-      uniform sampler2D map; varying vec2 vUv; varying vec4 vCol; varying float vTile;
+      uniform sampler2D map; uniform sampler2D cSpr; uniform sampler2D cExp; uniform float ccp; uniform float ccp2; uniform sampler2D cRamp; uniform sampler2D cFire;
+      varying vec2 vUv; varying vec4 vCol; varying float vTile;
+      // 死亡爆炸色带：横向 = 冷却（左白热 → 右暗红），纵向 = 时间（上 = 刚炸）
+      vec3 ramp(float heat, float prog) { return texture2D(cRamp, vec2(clamp(1.0 - heat, 0.02, 0.98), clamp(1.0 - prog, 0.02, 0.98))).rgb; }
       void main() {
         #include <logdepthbuf_fragment>
-        float a = texture2D(map, vec2((vTile + vUv.x) / 4.0, vUv.y)).a * vCol.a;
-        gl_FragColor = vec4(mix(vCol.rgb, vec3(1.0), a * a * 0.35) * a, 1.0);
+        float a;
+        vec3 col = vCol.rgb;
+        if (ccp > 0.5 && vTile > 1.95 && vTile < 2.95) {          // 爆炸序列的一帧（9 × 9）
+          float f = floor((vTile - 2.0) * 100.0 + 0.5);
+          vec2 cell = vec2(mod(f, 9.0), floor(f / 9.0));
+          a = texture2D(cExp, vec2((cell.x + vUv.x) / 9.0, 1.0 - (cell.y + 1.0 - vUv.y) / 9.0)).r * 1.5;
+          if (ccp2 > 0.5) col = mix(col, ramp(min(1.0, a * 0.8), f / 80.0) * 1.7, 0.75);
+        } else if (ccp2 > 0.5 && vTile > 4.95 && vTile < 5.995) {  // 火团（fireshape），按进度用色带上色
+          float prog = (vTile - 5.0) * 100.0 / 99.0;
+          float v = texture2D(cFire, vUv).r;
+          a = smoothstep(prog * 0.8, prog * 0.8 + 0.35, v) * 1.3;
+          col = ramp(v * (1.0 - prog * 0.7), prog) * 1.8;
+        } else if (ccp > 0.5) {                                     // 柔光 / 星芒 / 喷口 / 光环
+          float s = vTile > 3.5 ? 2.0 : vTile > 2.5 ? 3.0 : floor(vTile + 0.01);
+          a = texture2D(cSpr, vec2((s + vUv.x) / 4.0, vUv.y)).r;
+        } else {
+          a = texture2D(map, vec2((min(3.0, floor(vTile + 0.01)) + vUv.x) / 4.0, vUv.y)).a;
+        }
+        a *= vCol.a;
+        gl_FragColor = vec4(mix(col, vec3(1.0), a * a * 0.35) * a, 1.0);
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
   });
@@ -238,6 +315,7 @@ export function createFx(scene, renderer) {
   shieldGeo.setAttribute('iDir', iDir);
   shieldGeo.setAttribute('iCol', iCol);
   const shieldMat = new THREE.ShaderMaterial({
+    uniforms: { ccp2, cShd },
     vertexShader: `${LOG_V}
       attribute vec3 iDir; attribute vec4 iCol; varying vec3 vN; varying vec3 vDir; varying vec4 vCol; varying vec3 vView;
       void main() {
@@ -247,16 +325,19 @@ export function createFx(scene, renderer) {
         #include <logdepthbuf_vertex>
       }`,
     fragmentShader: `${LOG_F}
+      uniform float ccp2; uniform sampler2D cShd;
       varying vec3 vN; varying vec3 vDir; varying vec4 vCol; varying vec3 vView;
       void main() {
         #include <logdepthbuf_fragment>
         float d = dot(vN, vDir);
         float age = vCol.a;                                   // 0 → 1
-        float spot = smoothstep(0.55 - age * 0.5, 1.0, d);
-        float wave = exp(-pow((d - (1.0 - age * 1.1)) * 9.0, 2.0)) * 0.8;
-        float hex = 0.75 + 0.25 * sin(vN.x * 60.0) * sin(vN.y * 60.0) * sin(vN.z * 60.0);
-        float a = (spot * (1.0 - age) * 0.9 + wave * (1.0 - age)) * hex;
-        a *= 0.55 + 0.45 * abs(dot(vN, vView));
+        float spot = smoothstep(0.93 - age * 0.06, 1.0, d);
+        float wave = exp(-pow((d - (0.985 - age * 0.12)) * 40.0, 2.0)) * 0.7 * step(0.8, d);
+        float hex = 0.85 + 0.15 * sin(vN.x * 90.0) * sin(vN.y * 90.0) * sin(vN.z * 90.0);
+        // 游戏护盾的格纹：按球面经纬度铺（绕一圈 4 次），格线亮、格子里暗
+        if (ccp2 > 0.5) hex = 0.2 + 1.5 * texture2D(cShd, vec2(atan(vN.z, vN.x) * 0.6366, vN.y * 1.3 + 0.5)).r;
+        float a = (spot * (1.0 - age) * 0.8 + wave * (1.0 - age)) * hex;
+        a *= (0.35 + 0.35 * abs(dot(vN, vView))) * 0.6;
         gl_FragColor = vec4(vCol.rgb * a, 1.0);
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
@@ -272,7 +353,10 @@ export function createFx(scene, renderer) {
   let nShield = 0;
 
   // 绘制工具
-  const ribbon = (a, b, widthM, minPx, color, alpha, streak = 0) => ribbons.push({ pa: [a.x, a.y, a.z], pb: [b.x, b.y, b.z], col: [color.r, color.g, color.b, alpha], wst: [widthM * KM, minPx, streak] });
+  // tx：弹道噪声贴图 0 不用 / 1 自动炮 / 2 光束激光 / 3 疾速炮 / 4 脉冲激光 / 5 磁轨炮 / 6 火炮
+  const ribbon = (a, b, widthM, minPx, color, alpha, streak = 0, tx = 0) => ribbons.push({ pa: [a.x, a.y, a.z], pb: [b.x, b.y, b.z], col: [color.r, color.g, color.b, alpha], wst: [widthM * KM, minPx, streak, tx] });
+  // 光晕：同一段弹道外面再套一层 4 倍宽的柔光（streak 为真时同样尾部渐隐）
+  const halo = (a, b, widthM, minPx, color, alpha, streak = 0) => ribbon(a, b, widthM * 4, minPx * 4, color, alpha * 0.45, streak ? 3 : 2);
   const sprite = (p, sizeM, minPx, color, alpha, tile = 0, rot = 0) => sprites.push({ center: [p.x, p.y, p.z], col: [color.r, color.g, color.b, alpha], sz: [sizeM * KM, minPx, tile, rot] });
   function shieldHit(center, rKm, dir, age, color = SHIELD) {
     if (nShield >= MAXS) return;
@@ -296,7 +380,7 @@ export function createFx(scene, renderer) {
       sprite(vE.copy(toPos).addScaledVector(dir, rKm * 1.25), 20 * size, 2.5, SHIELD, f * 0.9, 1, seed * 6);
     } else {
       const p = vE.copy(toPos).addScaledVector(dir, rKm * 0.55);
-      sprite(p, 30 * size * (0.6 + age), 2.5, FIRE, f, 2, seed * 6);
+      sprite(p, 30 * size * (0.6 + age) * fireScale(), 2.5, FIRE, f, fireTile(age / 0.8), seed * 6);
       sprite(p, 14 * size, 2, color, f * f, 1, seed * 5);
       for (let k = 0; k < 3; k++) {               // 火花
         const a = hash(seed * 7 + k, 1) * Math.PI * 2, b = hash(seed * 7 + k, 2) - 0.5;
@@ -322,6 +406,34 @@ export function createFx(scene, renderer) {
     return out.addScaledVector(side, rKm * (1.6 + hash(seed, 7) * 2)).addScaledVector(d, 0.25);
   }
 
+  // 客户端装备特效（sim-cfx.js，只在给了 opt.tex 时用；某一类素材没加载好之前用下面的旧画法）
+  const cfx = opt.tex ? createClientFx(scene, opt.tex.replace(/\/?$/, '/') + 'cfx/') : null;
+  const CFX = new Set(['web', 'scram', 'point', 'neut', 'nos', 'ecm', 'damp']);
+  const qI = new THREE.Quaternion();
+  function clientFx(P, i, j, m, kind, t, k) {
+    if (!cfx || !CFX.has(kind) || !P.camera || !cfx.ready(kind)) return false;
+    // 本周期开始了多久：有周期起点记录（fire 位）的按它；电脑控制的网子 / 扰频 / 阻尼等在模拟里是一直开着的，
+    // 没有周期记录，就从这次开启算起按装备周期循环（客户端每个周期 Repeat 一次 play_start）
+    let age = cycleStart(P.rec, k, i, m, t, 30);
+    if (age < 0) {
+      const F = P.rec.frames, bm = 1 << m;
+      let b = 0;
+      while (b < 3000 && F[k - b - 1]?.act?.[i] & bm) b++;
+      const cyc = P.rec.units[i].ew?.find((y) => y[0] === m)?.[2] || 5;
+      const f0 = F[Math.max(0, Math.min(k - b, F.length - 1))];
+      age = f0 ? Math.max(0, t - (f0.t - P.rec.dt)) % cyc : 0;
+    }
+    return cfx.play(kind, `${i}:${m}`, age, {
+      src: P.at(i), dst: P.at(j), R: P.radiusM(j),
+      srcExt: P.extentOf(i)?.map((x) => x * 1.2), dstExt: P.extentOf(j)?.map((x) => x * 1.2),
+      srcQ: P.heading[i] || qI, dstQ: P.heading[j] || qI,
+    });
+  }
+  // 装备本周期开始了多久（往回找这门装备的 fire 位）
+  const cycleStart = (rec, k, i, m, t, maxAge) => {
+    for (let b = 0; ; b++) { const fr = rec.frames[k - b]; if (!fr || t - fr.t > maxAge) return -1; if (fr.fire?.[i] & (1 << m)) return Math.max(0, t - (fr.t - rec.dt)); }
+  };
+
   // 电子战 / 遥修：本帧开着的装备（act 位）画到目标（电子战 = 本帧目标 tg，遥修 = rr）；中和 / 吸电 / ECM 新周期（fire 位）时一闪
   const cycleAge = (rec, k, i, m, t) => {
     for (let b = 0; b < 12; b++) { const fr = rec.frames[k - b]; if (!fr) break; if (fr.fire?.[i] & (1 << m)) return Math.max(0, t - (fr.t - rec.dt)); }
@@ -330,13 +442,29 @@ export function createFx(scene, renderer) {
   function ewBeam(P, i, j, m, kind, t, k) {
     const e = EW[kind], to = P.at(j);
     if (!e || !to) return;
+    if (clientFx(P, i, j, m, kind, t, k)) return;
     const from = hardpoint(vA, i, 20 + m, P);
-    let a = 0.75;
+    const c = EW_COL[kind], rKm = P.radiusOf(j), sd = hash(i, m);
+    let a = kind === 'web' || kind === 'damp' ? 0.32 : 0.75;
     if (kind === 'neut' || kind === 'nos' || kind === 'ecm') a = 0.3 + 0.9 * Math.exp(-cycleAge(P.rec, k, i, m, t) * 2.2);
-    ewBeams.push({ pa: [from.x, from.y, from.z], pb: [to.x, to.y, to.z], col: [EW_COL[kind].r, EW_COL[kind].g, EW_COL[kind].b, a], wst: [e[2] * KM, e[3], e[0], hash(i, m)] });
-    const rKm = P.radiusOf(j);
-    sprite(to, rKm * 1600, 8, EW_COL[kind], 0.06 + a * 0.06, 0);
-    if (kind === 'scram' || kind === 'point') sprite(to, rKm * 1000 * (2 + ((t * 0.9 + hash(i, m)) % 1) * 2.5), 8, EW_COL[kind], 0.35 * (1 - ((t * 0.9 + hash(i, m)) % 1)), 3);
+    // ECM（ecm_tr）：没有光束，只在目标身上一团转动的淡蓝波纹（两层反向转）
+    if (kind === 'ecm') {
+      sprite(to, rKm * 2600, 10, c, 0.22 * a, 3, t * 0.9 + sd * 6);
+      sprite(to, rKm * 2000, 8, c, 0.3 * a, 0, -t * 1.3);
+      sprite(to, rKm * 1300, 6, c, 0.35 * a, 1, t * 2.1);
+      return;
+    }
+    ewBeams.push({ pa: [from.x, from.y, from.z], pb: [to.x, to.y, to.z], col: [c.r, c.g, c.b, a], wst: [e[2] * KM, e[3], e[0], sd], wb: [e[4] ? rKm * e[4] : 0] });
+    sprite(to, rKm * 1600, 8, c, 0.05 + a * 0.05, 0);
+    if (kind === 'scram') {           // 目标处一团蓝光，跟着闪电一起跳（客户端点光源 100 / 250 米）
+      const f = 0.6 + 0.4 * Math.abs(Math.sin(t * 11 + sd * 9) * Math.sin(t * 4.3));
+      sprite(to, rKm * 1000 + 250, 8, c, 0.35 * f, 0); sprite(to, rKm * 1000 + 100, 5, c, 0.5 * f, 1, t * 3);
+    }
+    if (kind === 'point') {           // 扰断：目标处一圈圈光环往外扩（rings_01）
+      const ph = (t * 0.9 + sd) % 1;
+      sprite(to, rKm * 1000 * (2 + ph * 2.5), 8, c, 0.4 * (1 - ph), 3);
+    }
+    if (kind === 'paint') sprite(to, rKm * 1000 * 1.4, 6, c, 0.35 + 0.15 * Math.sin(t * 6 + sd * 5), 1, t * 0.5);   // 标记：目标上一颗红色瞄准光
   }
   function ewar(P, t, k) {
     const rec = P.rec, fr = rec.frames[Math.min(k, rec.frames.length - 1)];
@@ -355,62 +483,109 @@ export function createFx(scene, renderer) {
     }
   }
 
-  // 一发炮台射击
-  function turretShot(P, fx, from, to, hit, tf, t, seed) {
+  // 一发炮台射击。时间线照客户端开火特效（model/turret/*/*_fx.black 的 TriCurveSet 关键帧和 constParameters）：
+  //   脉冲激光 强度 0.001 秒到 1、0.2 秒 0.25、0.55 秒熄灭，7 Hz 闪烁；光束激光 0.01 秒 0.75、0.3 秒 1、1.28 秒 0.05、1.5 秒熄灭，16 Hz 闪烁；
+  //   疾速炮 三发等离子团（0.014 / 0.092 / 0.171 秒）；磁轨炮 一发弹丸，弹道留一道光 0.61 秒后 1.25 秒内淡掉；
+  //   自动炮 0.5 秒的一串曳光弹（0.75 秒前淡完）；火炮 0.09 秒起大炮口闪光、0.28 秒熄，炮弹落点 1.5 倍强度的爆闪
+  const crv = (K, x) => { if (x <= K[0][0]) return K[0][1]; for (let i = 1; i < K.length; i++) if (x < K[i][0]) { const [t0, v0] = K[i - 1], [t1, v1] = K[i]; return v0 + (v1 - v0) * (x - t0) / (t1 - t0); } return K[K.length - 1][1]; };
+  const K_PULSE = [[0, 0], [0.001, 1], [0.2, 0.25], [0.55, 0]];
+  const K_BEAM = [[0, 0], [0.01, 0.75], [0.3, 1], [1.276, 0.05], [1.5, 0]];
+  const K_RAIL = [[0, 0], [0.014, 1], [0.61, 1], [0.9, 0.106], [1.25, 0]];
+  const K_AUTO = [[0, 0], [0.001, 1], [0.5, 1], [0.75, 0.035], [0.85, 0]];
+  const K_HIT = [[0, 1], [0.03, 1], [0.07, 0.1], [0.3, 0]];          // 疾速 / 磁轨落点光（Dest_Light_Intensity）
+  const K_ARTY_MZ = [[0, 0], [0.094, 0], [0.095, 1.43], [0.117, 0.25], [0.65, 0]];
+  const K_ARTY_HIT = [[0, 1.5], [0.005, 1], [0.087, 0.39], [0.32, 0.093], [0.8, 0]];
+  const flick = (t, hz, amp, seed) => 1 - amp * (0.5 + 0.5 * Math.sin((t * hz + seed) * Math.PI * 2));
+  function splash(Tp, rT, A, s, k, color, shieldUp, seed, age) {
+    if (k <= 0.01) return;
+    const dir = vD.copy(A).sub(Tp).normalize();
+    if (shieldUp) { shieldHit(Tp, rT * 1.25, dir, Math.min(0.9, 1 - k)); sprite(vE.copy(Tp).addScaledVector(dir, rT * 1.25), 36 * s, 4, color, Math.min(1, k), 1, seed * 6 + age * 3); }
+    else { const p = vE.copy(Tp).addScaledVector(dir, rT * 0.55); sprite(p, 40 * s, 4, FIRE, Math.min(1, k) * 0.9, fireTile(Math.min(0.99, age)), seed * 6); sprite(p, 20 * s, 3, color, Math.min(1, k), 1, seed * 5); }
+  }
+  function turretShot(P, fx, from, to, hit, tf, t, seed, g) {
     const age = t - tf;
-    const s = SIZE_M[fx.s || 1];
+    // 游戏里炮塔弹道比实际米数夸张得多（再加上画面泛光）：宽度 / 闪光统一放大 2.5 倍
+    const s = SIZE_M[fx.s || 1] * 2.5;
     const color = new THREE.Color(fx.c);
-    const A = hardpoint(new THREE.Vector3(), from, seed % 8, P);
+    // 有炮塔模型时从这门炮的炮塔打出（同槽 a / b 挂点按发次轮流），否则用船上的散列点
+    const A = P.mount?.(from, P.rec.units[from].gm?.[g], seed, new THREE.Vector3()) || hardpoint(new THREE.Vector3(), from, seed % 8, P);
     const rT = P.radiusOf(to);
     const Tp = P.at(to);
     const B = aimPoint(new THREE.Vector3(), A, Tp, from, to, seed, hit, rT);
     const dist = A.distanceTo(B);
     const shieldUp = P.shield(to);
+    const sd = hash(seed, 9);
     switch (fx.w) {
       case 'pulse': {
-        if (age < 0.32) { ribbon(A, B, 5 * s, 1.4, color, (1 - age / 0.32) * (0.8 + 0.2 * Math.sin(age * 90))); sprite(A, 25 * s, 2, color, 1 - age / 0.32, 1); }
-        if (hit) impact(null, 0, Tp, rT, A, s, age - 0.05, color, shieldUp, seed);
+        const k = crv(K_PULSE, age) * flick(age, 7, 0.5, sd);
+        if (k > 0.005) {
+          ribbon(A, B, 5 * s, 2.4, color, k, 0, 4); halo(A, B, 5 * s, 2.4, color, k);
+          sprite(A, 36 * s, 3.5, color, k * 0.85, 1, seed);
+          if (hit) splash(Tp, rT, A, s, k * 1.2, color, shieldUp, seed, age);
+        }
         break;
       }
       case 'beam': case 'disint': {
-        const life = fx.w === 'disint' ? 1.4 : 1.1;
-        if (age < life) {
-          const k = Math.min(1, age / 0.08) * Math.min(1, (life - age) / 0.25);
-          ribbon(A, B, (fx.w === 'disint' ? 7 : 6) * s * (0.85 + 0.15 * Math.sin(age * 40 + seed)), 1.4, color, k);
-          sprite(A, 22 * s, 2, color, k * 0.8, 1, age * 3);
-          if (hit) impact(null, 0, Tp, rT, A, s * 0.8, (age % 0.4), color, shieldUp, seed + Math.floor(age / 0.4));
+        const k = crv(K_BEAM, fx.w === 'disint' ? age * 0.8 : age) * flick(age, 16, 0.2, sd);
+        if (k > 0.005) {
+          ribbon(A, B, (fx.w === 'disint' ? 7 : 6) * s, 2.4, color, k, 0, 2); halo(A, B, 6 * s, 2.4, color, k);
+          sprite(A, 32 * s, 3.5, color, k * 0.7, 1, age * 3);
+          if (hit) splash(Tp, rT, A, s * 0.9, k, color, shieldUp, seed + Math.floor(age / 0.4), age % 0.4);
         }
         break;
       }
-      case 'blaster': case 'auto': {
-        const n = fx.w === 'auto' ? 3 : 2, speed = fx.w === 'auto' ? 7 : 9;   // 千米 / 秒（画面速度）
-        const travel = Math.min(0.5, Math.max(0.08, dist / speed));
-        for (let b = 0; b < n; b++) {
-          const ab = age - b * 0.07;
-          if (ab < 0) continue;
+      case 'blaster': {
+        // 三团等离子，6 km/s，落点各闪一下
+        const travel = Math.min(0.47, Math.max(0.06, dist / 6));
+        [0.014, 0.092, 0.171].forEach((d0, b) => {
+          const ab = age - d0;
+          if (ab < 0) return;
           const u = ab / travel;
           if (u <= 1) {
-            const head = vC.copy(A).lerp(B, u), tail = vD.copy(A).lerp(B, Math.max(0, u - Math.min(0.35, (fx.w === 'auto' ? 0.12 : 0.2) * s / Math.max(dist, 0.01))));
-            ribbon(tail, head, (fx.w === 'auto' ? 2.5 : 5) * s, 1.2, color, 1, 1);
-            if (fx.w === 'blaster') sprite(head, 10 * s, 1.5, color, 0.9, 0);
+            const head = vC.copy(A).lerp(B, u), tail = vD.copy(A).lerp(B, Math.max(0, u - Math.min(0.3, 0.18 * s / Math.max(dist, 0.01))));
+            ribbon(tail, head, 5 * s, 2.3, color, 1, 1, 3); halo(tail, head, 5 * s, 2.3, color, 1, 1);
+            sprite(head, 11 * s, 3.1, color, 0.95, 0);
           }
-          if (b === 0 && ab < 0.12) sprite(A, (fx.w === 'auto' ? 18 : 22) * s, 2, fx.w === 'auto' ? FIRE : color, 1 - ab / 0.12, 1, seed);
-          if (hit && b < 2) impact(null, 0, Tp, rT, A, s * 0.7, ab - travel, color, shieldUp, seed + b);
+          if (ab < 0.06) sprite(A, 20 * s, 3.5, color, 1 - ab / 0.06, 1, seed + b);
+          if (hit) splash(Tp, rT, A, s * 0.7, crv(K_HIT, ab - travel) * (ab >= travel ? 1 : 0), color, shieldUp, seed + b, ab - travel);
+        });
+        break;
+      }
+      case 'rail': {
+        // 一发弹丸 24 km/s；弹道留下一道光，按 K_RAIL 淡掉
+        const travel = Math.min(0.5, Math.max(0.04, dist / 24));
+        const u = Math.min(1, age / travel), k = crv(K_RAIL, age);
+        if (k > 0.005) { ribbon(A, vC.copy(A).lerp(B, u), 2.2 * s, 2, color, k * 0.75, 0, 5); halo(A, vC.copy(A).lerp(B, u), 2.2 * s, 2, color, k * 0.6); }
+        if (age < travel) { vE.copy(A).lerp(B, Math.max(0, u - Math.min(0.25, 0.5 * s / Math.max(dist, 0.01)))); ribbon(vE, vC.copy(A).lerp(B, u), 4 * s, 2.4, color, 1, 1, 5); halo(vE, vC, 4 * s, 2.4, color, 1, 1); }
+        if (age < 0.15) sprite(A, 32 * s, 4.5, color, 1 - age / 0.15, 1, seed);
+        if (hit && age >= travel) splash(Tp, rT, A, s, crv(K_HIT, age - travel), color, shieldUp, seed, age - travel);
+        break;
+      }
+      case 'auto': {
+        // 0.5 秒一串曳光弹（每 0.055 秒一发、19 km/s），炮口按 12 Hz 闪
+        const travel = Math.min(0.35, Math.max(0.05, dist / 19));
+        const k = crv(K_AUTO, age);
+        if (age < 0.5) sprite(A, 16 * s, 3.5, FIRE, flick(age, 12, 0.7, sd), 1, seed + Math.floor(age * 12));
+        for (let b = 0; b < 9; b++) {
+          const ab = age - b * 0.055;
+          if (ab < 0) break;
+          const u = ab / travel;
+          if (u <= 1) {
+            const head = vC.copy(A).lerp(B, u), tail = vD.copy(A).lerp(B, Math.max(0, u - Math.min(0.35, 0.12 * s / Math.max(dist, 0.01))));
+            ribbon(tail, head, 2.5 * s, 2.2, color, k, 1, 1); halo(tail, head, 2.5 * s, 2.2, color, k * 0.8, 1);
+          }
+          if (hit && b % 3 === 0) splash(Tp, rT, A, s * 0.6, crv(K_HIT, ab - travel) * (ab >= travel ? 1 : 0), color, shieldUp, seed + b, ab - travel);
         }
         break;
       }
-      case 'rail': case 'arty': {
-        const speed = fx.w === 'rail' ? 14 : 6;
-        const travel = Math.min(0.5, Math.max(0.08, dist / speed));
-        const u = age / travel;
-        if (fx.w === 'rail' && age < 0.45) ribbon(A, vC.copy(A).lerp(B, Math.min(1, u)), 2.5 * s, 1, color, (1 - age / 0.45) * 0.7, 0);
-        if (u <= 1) ribbon(vD.copy(A).lerp(B, Math.max(0, u - Math.min(0.25, (fx.w === 'rail' ? 0.5 : 0.3) * s / Math.max(dist, 0.01)))), vC.copy(A).lerp(B, u), (fx.w === 'rail' ? 4 : 7) * s, 1.4, color, 1, 1);
-        if (age < (fx.w === 'arty' ? 0.3 : 0.15)) {
-          const k = 1 - age / (fx.w === 'arty' ? 0.3 : 0.15);
-          sprite(A, (fx.w === 'arty' ? 70 : 30) * s, 3, fx.w === 'arty' ? FIRE : color, k, 1, seed);
-          if (fx.w === 'arty') sprite(A, 90 * s * (1 + age * 2), 3, FIRE, k * 0.6, 2, seed);
-        }
-        if (hit) impact(null, 0, Tp, rT, A, s * (fx.w === 'arty' ? 1.5 : 1), age - travel, color, shieldUp, seed);
+      case 'arty': {
+        // 大炮口闪光（0.095 秒起），炮弹 9 km/s、最长 0.7 秒，落点强爆闪
+        const travel = Math.min(0.7, Math.max(0.12, dist / 9));
+        const mz = crv(K_ARTY_MZ, age);
+        if (mz > 0.01) { sprite(A, 70 * s, 4.5, FIRE, Math.min(1, mz), 1, seed); sprite(A, 90 * s * (1 + age * 2) * fireScale(), 4.5, FIRE, Math.min(1, mz) * 0.6, fireTile(Math.min(0.99, age / 0.65)), seed); }
+        const ab = age - 0.095, u = ab / travel;
+        if (ab >= 0 && u <= 1) { vE.copy(A).lerp(B, Math.max(0, u - Math.min(0.25, 0.3 * s / Math.max(dist, 0.01)))); ribbon(vE, vC.copy(A).lerp(B, u), 7 * s, 2.4, color, 1, 1, 6); halo(vE, vC, 7 * s, 2.4, color, 1, 1); }
+        if (hit && ab >= travel) splash(Tp, rT, A, s * 1.5, crv(K_ARTY_HIT, ab - travel), color, shieldUp, seed, ab - travel);
         break;
       }
       case 'vorton': {
@@ -420,7 +595,7 @@ export function createFx(scene, renderer) {
           for (let j = 1; j <= segs; j++) {
             const p = A.clone().lerp(B, j / segs);
             if (j < segs) p.add(vE.set(hash(seed, j, phase) - 0.5, hash(seed, j + 9, phase) - 0.5, hash(seed, j + 19, phase) - 0.5).multiplyScalar(dist * 0.08));
-            ribbon(prev, p, 3 * s, 1.2, color, k);
+            ribbon(prev, p, 3 * s, 2.2, color, k);
             prev = p;
           }
         }
@@ -428,8 +603,39 @@ export function createFx(scene, renderer) {
         break;
       }
       default:
-        if (age < 0.4) ribbon(A, B, 3 * s, 1.2, color, 1 - age / 0.4);
+        if (age < 0.4) ribbon(A, B, 3 * s, 2.2, color, 1 - age / 0.4);
     }
+  }
+
+  // 末日武器（structure/doomsday/doomsday_t1_fx.black，24 秒时间线压到本武器的预热 + 出伤时长）：
+  //   预热：开火方船头一团越胀越大的光球（SphereScaling 0.025 → 0.42）+ 闪电亮斑（LightningFocal），亮度一路爬升；
+  //   出伤：一道粗光柱（主束），落点持续爆闪；结束 0.5 秒内收掉
+  const DOOM = new THREE.Color(0x9fd6ff);
+  function doomsday(P, d, t) {
+    if (t < d.t0 || t > d.end + 0.6) return;
+    const A0 = P.at(d.f), T = P.at(d.to);
+    if (!A0 || !T) return;
+    const A = hardpoint(vA, d.f, 30, P).clone();
+    const rF = P.radiusOf(d.f) / KM, rT = P.radiusOf(d.to);
+    const warn = Math.max(0.1, d.fire - d.t0);
+    if (t < d.fire) {
+      const u = (t - d.t0) / warn;                                   // 0 → 1
+      const sc = crv([[0, 0.025], [0.29, 0.05], [0.5, 0.11], [0.66, 0.15], [0.74, 0.2], [0.76, 0.42], [1, 0.42]], u);
+      sprite(A, rF * sc * 4, 6, DOOM, 0.35 + 0.65 * u, 0);
+      sprite(A, rF * sc * 2.2, 4, new THREE.Color(1, 1, 1), 0.4 + 0.6 * u, 1, t * 0.5);
+      for (let j = 0; j < 4; j++) {                                  // 闪电亮斑
+        if (hash(d.f, j, Math.floor(t * 9)) > 0.25 + 0.5 * (1 - u)) continue;
+        vB.set(hash(d.f, j, 1) - 0.5, hash(d.f, j, 2) - 0.5, hash(d.f, j, 3) - 0.5).normalize().multiplyScalar(rF * KM * sc * 1.6);
+        ribbon(A, vC.copy(A).add(vB), 3, 1, DOOM, 0.8 * u, 0);
+      }
+      return;
+    }
+    const age = t - d.fire, out = Math.max(0, Math.min(1, (d.end + 0.5 - t) / 0.5));
+    const k = Math.min(1, age / 0.15) * out * flick(t, 6, 0.15, d.f);
+    ribbon(A, T, 300, 8, DOOM, k, 0, 2); halo(A, T, 300, 8, DOOM, k);
+    ribbon(A, T, 90, 3, new THREE.Color(1, 1, 1), k * 0.9, 0, 0);
+    sprite(A, rF * 1.2, 8, DOOM, k, 1, t);
+    splash(T, rT, A, 6, k * (0.8 + 0.4 * flick(t, 9, 0.6, d.to)), DOOM, P.shield(d.to), d.f * 31 + Math.floor(t * 3), (t * 3) % 1);
   }
 
   // 导弹：二次贝塞尔路径，起点朝船头外偏，终点是目标当前位置
@@ -449,6 +655,12 @@ export function createFx(scene, renderer) {
     const ctrl = vD.copy(S).addScaledVector(out, Math.min(dist * 0.35, 4));
     const bez = (u, o) => o.set(0, 0, 0).addScaledVector(S, (1 - u) ** 2).addScaledVector(ctrl, 2 * u * (1 - u)).addScaledVector(T, u * u);
     const color = new THREE.Color(fx.c);
+    // 发射口烟团（launcher/*_fx.black：puff.dds 粒子，0.38 秒内按 50 个 / 秒喷出，灰 0.28）
+    if (age < 0.9) for (let k = 0; k < 4; k++) {
+      const ak = age - k * 0.09;
+      if (ak < 0 || ak > 0.8) continue;
+      sprite(vB.copy(S).addScaledVector(out, ak * 0.15 + k * 0.02), 14 + ak * 40, 2, PUFF, 0.5 * (1 - ak / 0.8), 0);
+    }
     if (t < t1) {
       const u = Math.min(0.995, age / dur);
       const head = bez(u, new THREE.Vector3());
@@ -468,7 +680,7 @@ export function createFx(scene, renderer) {
       if (a < 1.1) {
         const k = 1 - a / 1.1;
         const r = fx.er * 2;                       // 爆炸直径 = 2 × 爆炸半径
-        sprite(T, r * (0.5 + a * 0.9), 3, color, k, 2, seed);
+        sprite(T, r * (0.5 + a * 0.9) * fireScale(), 3, color, ccp.value ? Math.min(1, k * 1.6) : k, fireTile(a / 1.1), seed);
         sprite(T, r * 0.6, 3, new THREE.Color(1, 1, 1), k * k, 1, seed);
         if (a < 0.6 && P.shield(m.to)) shieldHit(T, P.radiusOf(m.to) * 1.25, vE.copy(S).sub(T).normalize(), a / 0.6);
       }
@@ -491,9 +703,16 @@ export function createFx(scene, renderer) {
       const off = vB.set(hash(x.unit, k, 1) - 0.5, hash(x.unit, k, 2) - 0.5, hash(x.unit, k, 3) - 0.5).multiplyScalar(r * KM * 1.2);
       const ak = a - k * 0.12;
       if (ak < 0) continue;
-      sprite(vC.copy(c).add(off), r * (2 + ak * 1.6), 10, FIRE, Math.max(0, 1 - ak / 2.6) * 0.9, 2, x.unit * 3 + k);
+      sprite(vC.copy(c).add(off), r * (2 + ak * 1.6) * fireScale(), 10, FIRE, ccp.value ? Math.min(1, ak < 2.6 ? 1 : 0) : Math.max(0, 1 - ak / 2.6) * 0.9, fireTile(ak / 2.6), x.unit * 3 + k);
     }
-    if (a < 1.8) sprite(c, r * (3 + a * 9), 14, new THREE.Color(1, 0.8, 0.55), (1 - a / 1.8) * 0.4, 3, 0);
+    if (a < 1.8) sprite(c, r * (3 + a * 9) * (ccp.value ? 1.4 : 1), 14, new THREE.Color(1, 0.8, 0.55), (1 - a / 1.8) * (ccp.value ? 0.7 : 0.4), 3, ccp.value ? a * 0.3 : 0);
+    // 游戏火团：几团慢慢胀大、转动、按色带由白热转暗红后烧散
+    if (ccp2.value) for (let k = 0; k < 3; k++) {
+      const ak = a - 0.05 - k * 0.18;
+      if (ak < 0 || ak > 2.4) continue;
+      const off = vB.set(hash(x.unit, k, 5) - 0.5, hash(x.unit, k, 6) - 0.5, hash(x.unit, k, 7) - 0.5).multiplyScalar(r * KM * 0.8);
+      sprite(vC.copy(c).add(off), r * (2.6 + ak * 1.8 + k * 0.5), 12, FIRE, 0.9, 5 + Math.min(99, Math.floor(ak / 2.4 * 99)) / 100, hash(x.unit, k, 8) * 6 + ak * 0.25 * (k % 2 ? 1 : -1));
+    }
   }
 
   return {
@@ -501,7 +720,8 @@ export function createFx(scene, renderer) {
     update(t, P, kills) {
       renderer.getDrawingBufferSize(res);
       ribbons.begin(); sprites.begin(); ewBeams.begin();
-      ewMat.uniforms.time.value = performance.now() / 1000;
+      if (cfx && P.camera) cfx.begin(P.camera, t);
+      time.value = performance.now() / 1000;
       nShield = 0;
       const rec = P.rec, dt = rec.dt;
       const k = Math.floor(t / dt);
@@ -523,8 +743,8 @@ export function createFx(scene, renderer) {
             continue;
           }
           const fx = rec.units[from].fx?.[g];
-          if (!fx || fx.w === 'missile') continue;
-          turretShot(P, fx, from, to, kind === 1, tf, t, seed);
+          if (!fx || fx.w === 'missile' || fx.w === 'doom') continue;
+          turretShot(P, fx, from, to, kind === 1, tf, t, seed, g);
         }
       }
       // 导弹：按发射时间排序，看最近 45 秒发射的
@@ -536,12 +756,15 @@ export function createFx(scene, renderer) {
         if (m.t1 != null && t > m.t1 + 1.2) continue;
         missile(P, m, j, t);
       }
+      for (const d of rec.dooms || []) doomsday(P, d, t);
       for (const x of kills || []) death(P, x, t);
       ribbons.end(); sprites.end(); ewBeams.end();
+      cfx?.end();
       shields.count = nShield;
       shields.instanceMatrix.needsUpdate = true;
       iDir.needsUpdate = iCol.needsUpdate = true;
     },
-    dispose() { tex.dispose(); ribbons.mesh.geometry.dispose(); sprites.mesh.geometry.dispose(); ewBeams.mesh.geometry.dispose(); shieldGeo.dispose(); },
+    ready: () => ccpReady,
+    dispose() { cfx?.dispose(); tex.dispose(); for (const t of [cSpr, cExp, cBeam, cTur, cShd, cRamp, cFire]) t.value?.dispose(); ribbons.mesh.geometry.dispose(); sprites.mesh.geometry.dispose(); ewBeams.mesh.geometry.dispose(); shieldGeo.dispose(); },
   };
 }

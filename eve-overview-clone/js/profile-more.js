@@ -6,7 +6,7 @@
 //   军团  /characters/{id}/roles/ + 军团钱包 / 订单 / 工业 / 建筑 / 月矿 / 资产（「军团管理」权限，且需相应军团职位）
 // 数据按角色缓存 5 分钟，切换角色时清空。
 import { skCards, skRows } from './skeleton.js?v=v17';
-import * as ST from './standings.js?v=v5';
+import * as ST from './standings.js?v=v6';
 
 let ctx;
 const cache = new Map();   // `${tab}:${key}` -> { id, at, promise }

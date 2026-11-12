@@ -7,11 +7,14 @@
 //   跃迁撤离的船消失（不留残骸）。坐标单位：千米。模型逐个加载，hooks.onProgress(已加载, 总数) 报告进度。
 //   像联盟锦标赛（AT）直播一样：星云天空、名字下面三层血条；「导播镜头」自动环绕战场。
 // 画质（opt.quality）：high 高画质；low 不画星云、按 1 倍像素渲染；auto 先按高画质画，持续低于 24 帧就降到低画质（hooks.onQuality）。
+// 驾驶模拟用：opt.fx = 游戏特效贴图目录（sim-fx.js）；loadState() 报告模型 / 星空 / 特效贴图是否都加载好了（开局前等它）；
+// setTactical({ center, opt, fall, lock }) 打开战术视图（游戏的 Ctrl + D）：以 center 那艘船为中心的水平网格盘（距离圈、方位线），
+//   武器最佳射程（淡色实心）、失准范围（渐隐）、锁定距离（虚线圈），每艘船一条竖线连到网格平面（单位千米；null 关闭）。
 // 观察者视角：拖动旋转、滚轮 / 双指缩放、右键 / 双指拖动平移；悬停显示舰船，点击选中，双击镜头跟随（手动转动镜头会退出导播，hooks.onDirector）。
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
-import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v5';
-import { createFx } from './sim-fx.js?v=v6';
+import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v9';
+import { createFx } from './sim-fx.js?v=v25';
 
 const COLOR = { A: new THREE.Color(0x5b9bff), B: new THREE.Color(0xff4b3e) };
 const WRECK = new THREE.Color(0x8a9099);
@@ -20,6 +23,128 @@ const tr = (t) => (window.I18N?.lang === 'en' && window.I18N.t ? window.I18N.t(t
 const ICON_PX = 18;        // 总览图标大小（CSS 像素）
 const RING_PX = 9.5;       // 选中圈半径（CSS 像素，刚好套住图标）
 const WRECK_ICON = BRACKETS.indexOf('wreck');
+const BR_COLS = 16;        // 游戏图标图集：16×16 格
+const WRECK_PATH = 'shared/brackets/wreck.png';   // 残骸（客户端 wreck 组的图标）
+
+// ── 后处理（照客户端 Tr2PostProcessRenderer 的流程和 postprocess/downsample、upsample、tonemapping 着色器）──
+// 场景画进半浮点缓冲，里面存 sRGB 编码值（和客户端一样：船体 quadv5、尾焰等着色器结尾自己做线性 → sRGB）。
+// 泛光：逐级减半降采样 6 次（13 点滤波）→ 每级横向、纵向高斯模糊，半径 = 该级最长边 × sizeScale × stepNSize × 0.01 →
+//       从最粗一级往上加，每级乘 stepNTint × brightness ÷ 6。
+// 合成：场景解码成线性；泛光过 Uncharted2 曲线后加上去；乘曝光；再过 Uncharted2：U(2c) ÷ U(W)；sRGB 编码；加抖动。
+// 数值是 Tr2PPBloomEffect / Tr2PPTonemappingEffect 的默认值。动态曝光（按画面直方图自动调）没做，曝光固定为 1。
+const BLOOM = { sizeScale: 4, brightness: 0.2, size: [0.3, 1, 2, 10, 30, 64], tint: [0.3465, 0.138, 0.1176, 0.066, 0.066, 0.061] };
+const TONE = { A: 0.125, B: 0.25, C: 0.1, D: 0.15, E: 0.021, F: 0.3, W: 2.5 };   // shoulderStrength、linearStrength、linearAngle、toeStrength、toeNumerator、toeDenominator、whiteScale
+function createPost(renderer) {
+  const gl = renderer.getContext();
+  if (!renderer.capabilities.isWebGL2 || !(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))) return null;
+  const VS = 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+  const mk = (uniforms, fs) => new THREE.ShaderMaterial({ uniforms, vertexShader: VS, fragmentShader: fs, depthTest: false, depthWrite: false });
+  const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+  quad.frustumCulled = false;
+  const qs = new THREE.Scene(); qs.add(quad);
+  const qc = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  // postprocess/downsample（LUNINANCE_PRESERVE_OFF）：中间 4 点 ×0.125，外围 4 组 2×2 各 ×0.03125
+  const down = mk({ tex: { value: null }, inv: { value: new THREE.Vector2() } }, `uniform sampler2D tex; uniform vec2 inv; varying vec2 vUv;
+    vec3 T(float x, float y) { return texture2D(tex, vUv + vec2(x, y) * inv).rgb; }
+    void main() {
+      vec3 c = T(0.0, 0.0), a = T(-2.0, -2.0), b = T(0.0, -2.0), d = T(2.0, -2.0), e = T(-2.0, 0.0), f = T(2.0, 0.0), g = T(-2.0, 2.0), h = T(0.0, 2.0), i = T(2.0, 2.0);
+      vec3 o = (T(-1.0, -1.0) + T(1.0, -1.0) + T(-1.0, 1.0) + T(1.0, 1.0)) * 0.125;
+      o += ((a + b + e + c) + (d + b + c + f) + (g + e + c + h) + (i + f + h + c)) * 0.03125;
+      gl_FragColor = vec4(o, 1.0);
+    }`);
+  // postprocess/upsample：高斯多点采样；第二遍（纵向）= 模糊结果 × 权重 + 更粗一级
+  const up = mk({ tex: { value: null }, last: { value: null }, dir: { value: new THREE.Vector2() }, taps: { value: new Float32Array(256) }, count: { value: 0 }, tint: { value: new THREE.Vector3() }, second: { value: 0 } },
+    `uniform sampler2D tex, last; uniform vec2 dir; uniform vec4 taps[64]; uniform int count; uniform vec3 tint; uniform float second; varying vec2 vUv;
+    void main() {
+      vec3 o = vec3(0.0);
+      for (int k = 0; k < 64; k++) {
+        if (k >= count) break;
+        vec4 t = taps[k];
+        o += texture2D(tex, vUv + dir * t.y).rgb * t.x + texture2D(tex, vUv + dir * t.w).rgb * t.z;
+      }
+      gl_FragColor = vec4(second > 0.5 ? o * tint + texture2D(last, vUv).rgb : o, 1.0);
+    }`);
+  const tone = mk({ scene: { value: null }, bloom: { value: null }, exposure: { value: 1 }, useBloom: { value: 1 } },
+    `uniform sampler2D scene, bloom; uniform float exposure, useBloom; varying vec2 vUv;
+    const float A = ${TONE.A.toFixed(4)}, B = ${TONE.B.toFixed(4)}, C = ${TONE.C.toFixed(4)}, D = ${TONE.D.toFixed(4)}, E = ${TONE.E.toFixed(4)}, F = ${TONE.F.toFixed(4)}, W = ${TONE.W.toFixed(4)};
+    vec3 U(vec3 x) { return (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F; }
+    void main() {
+      vec3 c = texture2D(scene, vUv).rgb;
+      c = mix(pow(abs(c + 0.055) * 0.947867, vec3(2.4)), c * 0.077399, vec3(lessThan(c, vec3(0.04045))));
+      float wInv = 1.0 / U(vec3(W)).x;
+      vec3 b = texture2D(bloom, vUv).rgb * useBloom;
+      c = (c + max(U(2.0 * b), 0.0) * wInv) * exposure;
+      c = max(U(2.0 * max(c, 0.0)), 0.0) * wInv;
+      c = mix(1.055 * pow(c, vec3(0.416667)) - 0.055, c * 12.92, vec3(lessThan(c, vec3(0.003131))));
+      c += fract(dot(gl_FragCoord.xy, vec2(0.754878, 0.569840))) * 0.003922 - 0.001961;
+      gl_FragColor = vec4(c, 1.0);
+    }`);
+  let sceneRT = null, mips = [], ups = [], size = '';
+  const rt = (w, h, o = {}) => new THREE.WebGLRenderTarget(Math.max(1, w), Math.max(1, h), { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, ...o });
+  function resize(w, h) {
+    if (`${w}x${h}` === size) return;
+    size = `${w}x${h}`;
+    for (const t of [sceneRT, ...mips, ...ups]) t?.dispose();
+    sceneRT = rt(w, h, { depthBuffer: true, samples: 4 });
+    // 标准材质往这个缓冲里写 sRGB 编码值（three 只对 XR 渲染目标按贴图色彩空间输出）
+    sceneRT.isXRRenderTarget = true; sceneRT.texture.colorSpace = THREE.SRGBColorSpace;
+    mips = []; ups = [];
+    let k = 0.5;
+    for (let i = 0; i < 6; i++, k *= 0.5) {
+      if (Math.trunc(Math.min(w, h) * k) === 0) break;
+      mips.push(rt(Math.trunc(w * k), Math.trunc(h * k))); ups.push(rt(Math.trunc(w * k), Math.trunc(h * k)));
+    }
+  }
+  // GaussianData.calculateGaussianPassParameters：每两个相邻像素并成一次线性采样
+  function gauss(radius, norm, out) {
+    const R = Math.min(Math.max(radius, 0.0001), 127), ir = Math.ceil(R);
+    const nd = (x) => Math.exp(-Math.PI * 5 * (x * x / (R * R)));
+    const t = [];
+    let sum = 0;
+    for (let i = -ir; i <= ir; i += 2) {
+      const w = nd(i), ow = i === ir ? 0 : nd(i + 1), sw = w + ow;
+      if (sw === 0) continue;
+      const off = (i + ow / sw) * norm;
+      sum += sw;
+      if (off < -1 || off > 1) continue;
+      t.push(sw, off);
+    }
+    if ((t.length / 2) % 2) t.push(0, 0);
+    out.fill(0);
+    for (let k = 0; k < t.length && k < 256; k += 2) { out[k] = t[k] / sum; out[k + 1] = t[k + 1]; }
+    return Math.min(64, t.length / 4);
+  }
+  const draw = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(qs, qc); };
+  function render(scene, camera) {
+    const v = renderer.getDrawingBufferSize(new THREE.Vector2());
+    resize(v.x, v.y);
+    renderer.setRenderTarget(sceneRT);
+    renderer.render(scene, camera);
+    // 降采样
+    let src = sceneRT;
+    for (const m of mips) { down.uniforms.tex.value = src.texture; down.uniforms.inv.value.set(1 / src.width, 1 / src.height); draw(down, m); src = m; }
+    // 升采样：先全部横向，再从粗到细纵向
+    const U = up.uniforms, n = mips.length, rad = (i) => Math.max(mips[i].width, mips[i].height) * BLOOM.sizeScale * BLOOM.size[i] * 0.01;
+    for (let i = n - 1; i >= 0; i--) {
+      U.tex.value = mips[i].texture; U.second.value = 0; U.dir.value.set(1, 0);
+      U.count.value = gauss(rad(i), 1 / mips[i].width, U.taps.value);
+      draw(up, ups[i]);
+    }
+    let last = null;
+    for (let i = n - 1; i >= 0; i--) {
+      U.tex.value = ups[i].texture; U.last.value = last ? last.texture : null; U.second.value = 1; U.dir.value.set(0, 1);
+      U.count.value = gauss(rad(i), 1 / mips[i].height, U.taps.value);
+      U.tint.value.setScalar(last || i === n - 1 ? BLOOM.tint[i] * BLOOM.brightness / 6 : 0);
+      if (!last) U.last.value = blackTex;
+      draw(up, mips[i]);
+      last = mips[i];
+    }
+    tone.uniforms.scene.value = sceneRT.texture; tone.uniforms.bloom.value = last ? last.texture : blackTex; tone.uniforms.useBloom.value = last ? 1 : 0;
+    draw(tone, null);
+  }
+  const blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); blackTex.needsUpdate = true;
+  return { render, dispose() { for (const t of [sceneRT, ...mips, ...ups]) t?.dispose(); } };
+}
 
 export function createView(host, hooks = {}, opt = {}) {
   let renderer;
@@ -29,9 +154,13 @@ export function createView(host, hooks = {}, opt = {}) {
     return null;
   }
   let quality = opt.quality || 'auto', level = quality === 'low' ? 'low' : 'high';
+  const brkOf = typeof opt.brackets === 'function' ? opt.brackets : null;   // 游戏图标查表（驾驶模拟）；没有时用战场模拟的图集
+  const iconPx = brkOf ? 16 : ICON_PX;
   let dpr = level === 'low' ? 1 : Math.min(2, window.devicePixelRatio || 1);
   renderer.setPixelRatio(dpr);
   renderer.setClearColor(0x04060b, 1);
+  // 后处理（泛光 + 色调映射）：驾驶模拟打开（opt.post），只在高画质档用
+  const post = opt.post ? createPost(renderer) : null;
   host.prepend(renderer.domElement);
   renderer.domElement.className = 'sim-3d-canvas';
   // 舰船名：叠在 3D 画面上的 2D 画布，写在图标右边
@@ -58,7 +187,8 @@ export function createView(host, hooks = {}, opt = {}) {
   // 光照：一个恒星方向光 + 环境反射（深蓝星云渐变，金属漆面靠它出反光）
   const sun = new THREE.DirectionalLight(0xfff2e0, 3.2);
   sun.position.set(0.6, 0.5, 0.35);
-  scene.add(sun, new THREE.AmbientLight(0x8090b0, 0.25));
+  const amb = new THREE.AmbientLight(0x8090b0, 0.25);
+  scene.add(sun, amb);
   let env = null;
   {
     const pm = new THREE.PMREMGenerator(renderer);
@@ -78,7 +208,8 @@ export function createView(host, hooks = {}, opt = {}) {
     pm.dispose();
   }
 
-  // 远处的星空
+  // 远处的星空（用游戏星空贴图时不画）
+  const starPts = [];
   {
     const n = 1500, p = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
@@ -87,7 +218,9 @@ export function createView(host, hooks = {}, opt = {}) {
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(p, 3));
-    scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color: 0x8090a8, size: 1.5, sizeAttenuation: false })));
+    const pts = new THREE.Points(g, new THREE.PointsMaterial({ color: 0x8090a8, size: 1.5, sizeAttenuation: false }));
+    starPts.push(pts);
+    scene.add(pts);
   }
   // 星云天空（高画质）：跟着镜头走的大球，片元里按方向算分形噪声；最先画、不写深度
   const sky = new THREE.Mesh(new THREE.SphereGeometry(5000, 48, 24), new THREE.ShaderMaterial({
@@ -115,16 +248,34 @@ export function createView(host, hooks = {}, opt = {}) {
   sky.frustumCulled = false;
   sky.visible = level === 'high';
   scene.add(sky);
+  // 游戏星空（opt.skybox = 立方体六个面的目录，px / nx / py / ny / pz / nz.webp，tools/ui-assets/fetch.mjs --sky 转换）：
+  // 加载好后当背景，代替程序生成的星云和星点
+  let skyCube = null, skyState = opt.skybox ? 'loading' : 'ok';
+  if (opt.skybox) {
+    new THREE.CubeTextureLoader().setPath(opt.skybox.replace(/\/?$/, '/')).load(['px', 'nx', 'py', 'ny', 'pz', 'nz'].map((f) => f + '.webp'), (t) => {
+      t.colorSpace = THREE.SRGBColorSpace;
+      skyCube = t;
+      scene.background = t;
+      const pm = new THREE.PMREMGenerator(renderer);
+      env = pm.fromCubemap(t).texture;
+      pm.dispose();
+      for (const m of models.values()) for (const mt of m.def?.materials || []) { mt.envMap = env; mt.needsUpdate = true; }
+      amb.intensity = 0;
+      sky.visible = false;
+      for (const p of starPts) p.visible = false;
+      skyState = 'ok';
+    }, undefined, () => { skyState = 'fail'; });
+  }
 
   // 总览图标：屏幕空间的点精灵，图集里按类别取图
   const brGeo = new THREE.BufferGeometry();
   let brCap = 0;
   const brMat = new THREE.ShaderMaterial({
-    uniforms: { atlas: { value: null }, n: { value: BRACKETS.length }, size: { value: ICON_PX * dpr } },
+    uniforms: { atlas: { value: null }, grid: { value: new THREE.Vector2(brkOf ? BR_COLS : BRACKETS.length, brkOf ? BR_COLS : 1) }, size: { value: iconPx * dpr } },
     vertexShader: `attribute vec4 tint; attribute float icon; varying vec4 vTint; varying float vIcon; uniform float size;
       void main() { vTint = tint; vIcon = icon; gl_PointSize = size; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: `uniform sampler2D atlas; uniform float n; varying vec4 vTint; varying float vIcon;
-      void main() { vec4 t = texture2D(atlas, vec2((vIcon + gl_PointCoord.x) / n, gl_PointCoord.y)); if (t.a * vTint.a < 0.02) discard; gl_FragColor = vec4(t.rgb * vTint.rgb, t.a * vTint.a); }`,
+    fragmentShader: `uniform sampler2D atlas; uniform vec2 grid; varying vec4 vTint; varying float vIcon;
+      void main() { vec4 t = texture2D(atlas, (vec2(mod(vIcon, grid.x), floor(vIcon / grid.x)) + gl_PointCoord) / grid); if (t.a * vTint.a < 0.02) discard; gl_FragColor = vec4(t.rgb * vTint.rgb, t.a * vTint.a); }`,
     transparent: true, depthTest: false, depthWrite: false,
   });
   const brPts = new THREE.Points(brGeo, brMat);
@@ -132,23 +283,96 @@ export function createView(host, hooks = {}, opt = {}) {
   brPts.renderOrder = 5;
   brPts.visible = false;
   scene.add(brPts);
-  bracketAtlas().then((t) => { brMat.uniforms.atlas.value = t; brPts.visible = true; });
+  // 游戏图标（opt.brackets(typeID) → 相对 opt.ui 的贴图路径，客户端 bracketMgr.GetBracketIcon 的查表结果）：
+  // 用到哪张加载哪张，画进 16×16 格（每格 32 像素，16 像素原图放大 2 倍）的图集；屏幕上按客户端的 16×16 画
+  const brSlots = new Map();
+  let brCanvas = null, brTex = null;
+  function brSlot(path) {
+    if (!path) return -1;
+    let k = brSlots.get(path);
+    if (k != null) return k;
+    k = brSlots.size;
+    if (k >= BR_COLS * BR_COLS) return -1;
+    brSlots.set(path, k);
+    const im = new Image();
+    im.onload = () => { const x = brCanvas.getContext('2d'); x.imageSmoothingEnabled = false; x.drawImage(im, (k % BR_COLS) * 32, Math.floor(k / BR_COLS) * 32, 32, 32); brTex.needsUpdate = true; };
+    im.src = `${opt.ui || 'assets/eveui/'}${path}?v=1`;
+    return k;
+  }
+  if (brkOf) {
+    brCanvas = document.createElement('canvas');
+    brCanvas.width = brCanvas.height = BR_COLS * 32;
+    brTex = new THREE.CanvasTexture(brCanvas);
+    brTex.flipY = false; brTex.colorSpace = THREE.SRGBColorSpace; brTex.generateMipmaps = false;
+    brTex.magFilter = brTex.minFilter = THREE.LinearFilter;
+    brMat.uniforms.atlas.value = brTex; brPts.visible = true;
+  } else bracketAtlas().then((t) => { brMat.uniforms.atlas.value = t; brPts.visible = true; });
 
   // 舰船模型：每种外观一个 InstancedMesh
   let shipIndex = null;
   loadShipIndex().then((x) => { shipIndex = x; lastN = -1; });
   const models = new Map();   // 外观键 → { state: 'loading'|'ok'|'none', mesh, def, units: [i] }
   const keyOf = (i) => shipIndex?.types?.[rec.units[i].ship]?.m || null;
-  const iconOf = (i) => Math.max(0, BRACKETS.indexOf(shipIndex?.types?.[rec.units[i].ship]?.b || 'frigate'));
+  const iconOf = (i) => (brkOf ? brSlot(brkOf(rec.units[i].ship)) : Math.max(0, BRACKETS.indexOf(shipIndex?.types?.[rec.units[i].ship]?.b || 'frigate')));
+  const wreckIcon = () => (brkOf ? brSlot(WRECK_PATH) : WRECK_ICON);
   const radiusOf = (i) => (shipIndex?.models?.[keyOf(i)]?.r || rec.units[i].radius || 50) * KM;
+  // 残骸（客户端 Wreck：船爆了换成独立的残骸类型 / 模型）：护卫舰级 wreck_s，驱逐 ~ 巡洋 / 工业 / 采矿驳船 wreck_m，战巡以上 wreck_l
+  // （旗舰各有专属残骸外形，还没转换，暂用 wreck_l）
+  const WRECK_OF = { frigate: 's', rookie: 's', shuttle: 's', capsule: 's', miningfrigate: 's', destroyer: 'm', cruiser: 'm', industrial: 'm', miningbarge: 'm' };
+  const wreckKeyOf = (i) => (shipIndex?.wrecks && !rec.units[i].drone ? shipIndex.wrecks[WRECK_OF[shipIndex.types?.[rec.units[i].ship]?.b] || 'l'] || null : null);
+  const wreckReady = (i) => models.get(wreckKeyOf(i))?.state === 'ok';
+  // 炮塔（客户端 TurretSet.FitTurrets）：高槽 N 的炮 / 发射器挂到船体上名字以 locator_turret_N 开头的每个挂点（a / b / c 都挂），
+  // 挂点矩阵带朝向和缩放；模型是 EveTurretSet 的几何，静止姿态（还没做转向目标）
+  const tModels = new Map();   // 炮塔模型键 → { state, def, mesh, cap, list }
+  const mounts = [];           // 每艘船：[{ k, mat（船体局部，已镜像到 three 坐标）, ri（装备序号）}]
+  const MX = new THREE.Matrix4().makeScale(-1, 1, 1);
+  function tModel(k) {
+    let m = tModels.get(k);
+    if (!m) {
+      m = { state: 'loading', def: null, mesh: null, cap: 0, list: [] };
+      tModels.set(k, m);
+      loadShipModel(k, renderer, env).then((def) => { if (!def) { m.state = 'none'; return; } m.def = def; m.state = 'ok'; });
+    }
+    return m;
+  }
+  function mountsOf(i, def) {
+    if (mounts[i]) return mounts[i];
+    const tur = shipIndex?.turrets, L = def?.loc?.turrets;
+    const out = [];
+    if (tur && L?.length) {
+      (rec.units[i].rack || []).forEach((r, ri) => {
+        const k = r.slot === 'high' ? tur[r.type] : null;
+        if (!k) return;
+        const n = Number(String(r.key).split(':')[1]) + 1;
+        for (const [nm, a] of L) if (parseInt(nm, 10) === n) out.push({ k, mat: MX.clone().multiply(new THREE.Matrix4().fromArray(a)).multiply(MX), ri });
+        tModel(k);
+      });
+    }
+    return (mounts[i] = out);
+  }
+  // 某件装备的炮塔在世界里的位置（炮塔模型包围球心）；第 pick 个挂点（同一槽 a / b 轮流）；没有炮塔模型时返回 null
+  function mountAt(i, ri, pick, out) {
+    const L = mounts[i], d = drawn[i];
+    if (!L?.length || !d?.alive || ri == null || ri < 0) return null;
+    const mine = L.filter((x) => x.ri === ri);
+    if (!mine.length) return null;
+    const mt = mine[Math.abs(pick | 0) % mine.length], c = tModels.get(mt.k)?.def?.c || [0, 0, 0];
+    out.set(-c[0], c[1], c[2]).applyMatrix4(mt.mat).multiplyScalar(KM);
+    if (heading[i]) out.applyQuaternion(heading[i]);
+    out.x += d.x; out.y += d.y; out.z += d.z;
+    return out;
+  }
   function syncModels() {
     if (!shipIndex || !rec) return;
-    const want = new Map();
-    rec.units.forEach((u, i) => { const k = keyOf(i); if (k) (want.get(k) || want.set(k, []).get(k)).push(i); });
+    const want = new Map(), wrecks = new Set();
+    rec.units.forEach((u, i) => {
+      const k = keyOf(i); if (k) (want.get(k) || want.set(k, []).get(k)).push(i);
+      const w = wreckKeyOf(i); if (w) { wrecks.add(w); (want.get(w) || want.set(w, []).get(w)).push(i); }
+    });
     for (const [k, units] of want) {
       let m = models.get(k);
       if (!m) {
-        m = { state: 'loading', units, mesh: null };
+        m = { state: 'loading', units, mesh: null, wreck: wrecks.has(k) };
         models.set(k, m);
         loadShipModel(k, renderer, env).then((def) => {
           if (models.get(k) !== m) return;
@@ -165,12 +389,112 @@ export function createView(host, hooks = {}, opt = {}) {
     }
     progress();
   }
+  // 无人机 / 舰载机模型：按需加载，实例数按当前在太空中的数量增长
+  const dModels = new Map();
+  function droneModel(k) {
+    let m = dModels.get(k);
+    if (!m) {
+      m = { state: 'loading', cap: 0, mesh: null, def: null };
+      dModels.set(k, m);
+      loadShipModel(k, renderer, env).then((def) => { if (!def) { m.state = 'none'; return; } m.def = def; m.state = 'ok'; });
+    }
+    return m;
+  }
   function progress() {
     let done = 0;
     for (const m of models.values()) if (m.state !== 'loading') done++;
     hooks.onProgress?.(done, models.size);
   }
+  // 船身叠加特效（EveMeshOverlayEffect，dx9/model/effect/*_skinned.black）：船体网格再画一遍加色层。
+  // 画法照客户端着色器 spaceobject/v3/skinned_fxv3（反汇编）：
+  //   颜色 = 菲涅尔 × Layer1 × Layer2 × 遮罩 × BaseColor；UV = uv × Transform.xy + Transform.zw + Scroll.xy × 时间 + Scroll.zw
+  //   菲涅尔：d = sat(V·N − F.z)，x = (1 − d)^F.x；F.y ≥ 0 → x × F.y（边缘亮），F.y < 0 → (1 − min(x, 1)) × (−F.y)（正面亮）
+  //   BaseColor = 颜色曲线 × 绑定倍数 gain（文件里的 TriValueBinding.scale）
+  // keys = 颜色曲线（秒, rgb），每个周期重播一次；曲线是否拉伸到模块周期（timeScale）在 effects.fsdbinary 里，还没解出来，这里按曲线自身时长
+  const HFX = {
+    sb: { keys: [[0, [0, 0, 0]], [0.1, [0.0706, 0.098, 0.1333]], [1, [0, 0, 0]]], gain: 5000, F: [0.1, -0.1, 0.1], l1: 'caustics', l2: 'waves', mask: 'caustics2', t1: [3, 3, 0, 0], s1: [0, 0, 5, 0], t2: [3, 3, 0, 0], s2: [0, -1, 0, 0] },
+    ar: { keys: [[0, [0, 0, 0]], [0.1, [0.1059, 0.1333, 0.1059]], [6, [0, 0, 0]]], gain: 200, F: [4, 5, 0.1], l1: 'build3', l2: 'build3', mask: '', t1: [3, 3, 0, 0], s1: [0, 0, 0, 0], t2: [0.5, 0.5, 0, 0], s2: [0, -0.025, 0, 0] },
+    hr: { keys: [[0, [0, 0, 0]], [0.1, [1, 0.749, 0.3412]], [6, [0, 0, 0]]], gain: 200, F: [4, 5, 0.1], l1: 'build3', l2: 'build3', mask: 'caustics3', t1: [3, 3, 0, 0], s1: [0.2, 0, 0, 0], t2: [3, -3, 0, 0], s2: [-0.2, 0.1, 0, 0] },
+    sh: { keys: [[0, [0, 0, 0]], [0.5, [0.5529, 0.7333, 0.9686]], [9.5, [0.5529, 0.7333, 0.9686]], [10, [0, 0, 0]]], gain: 5, F: [0.1, -0.1, -0.744], l1: 'caustics2', l2: 'caustics2', mask: 'caustics2', t1: [1, 1, 0, 0], s1: [0.05, 0.1, 5, 0], t2: [1, -1, 0, 0], s2: [0.05, 0.1, 0, 0], loop: true },
+    ah: { keys: [[0, [0, 0, 0]], [0.5, [0.1294, 0.1059, 0.0706]], [19.5, [0.4392, 0.3647, 0.2549]], [20, [0, 0, 0]]], gain: 5, F: [12, 20, 0.1], l1: 'caustics2', l2: 'waves', mask: 'caustics2', t1: [1, 1, 0, 0], s1: [0, 0, 5, 0], t2: [0, 0.5, 0, 0], s2: [0, -0.3, 0, 0], loop: true },
+  };
+  for (const h of Object.values(HFX)) h.len = h.keys[h.keys.length - 1][0];
+  const hfxTex = {};
+  const hullTex = (n) => {
+    if (!n) return null;
+    if (!hfxTex[n]) {
+      const tx = new THREE.TextureLoader().load(`${opt.fx || 'assets/eveui/fx/'}hull/${n}.png?v=1`);
+      tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+      hfxTex[n] = tx;
+    }
+    return hfxTex[n];
+  };
+  const hfxMats = {};
+  const whiteTex = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); whiteTex.needsUpdate = true;
+  function hfxMat(kind) {
+    if (hfxMats[kind]) return hfxMats[kind];
+    const h = HFX[kind];
+    return (hfxMats[kind] = new THREE.ShaderMaterial({
+      uniforms: { t1: { value: hullTex(h.l1) }, t2: { value: hullTex(h.l2) }, tm: { value: hullTex(h.mask) || whiteTex },
+        l1t: { value: new THREE.Vector4(...h.t1) }, l1s: { value: new THREE.Vector4(...h.s1) }, l2t: { value: new THREE.Vector4(...h.t2) }, l2s: { value: new THREE.Vector4(...h.s2) },
+        F: { value: new THREE.Vector3(...h.F) }, time: { value: 0 } },
+      vertexShader: `varying vec2 vUv; varying vec3 vN, vV, vCol;
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+        void main() {
+          mat4 im = modelMatrix * instanceMatrix;
+          vec4 wp = im * vec4(position, 1.0);
+          vN = mat3(im) * normal; vV = normalize(cameraPosition - wp.xyz); vUv = uv;
+          vCol = vec3(1.0);
+          #ifdef USE_INSTANCING_COLOR
+          vCol = instanceColor;
+          #endif
+          gl_Position = projectionMatrix * viewMatrix * wp;
+          #include <logdepthbuf_vertex>
+        }`,
+      fragmentShader: `uniform sampler2D t1, t2, tm; uniform vec4 l1t, l1s, l2t, l2s; uniform vec3 F; uniform float time; varying vec2 vUv; varying vec3 vN, vV, vCol;
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
+        ${SRGB_GLSL}
+        void main() {
+          #include <logdepthbuf_fragment>
+          float d = clamp(dot(vV, normalize(vN)) - F.z, 0.0, 1.0);
+          float x = pow(1.0 - d, F.x);
+          float fres = F.y < 0.0 ? (1.0 - min(x, 1.0)) * -F.y : x * F.y;
+          vec3 a = texture2D(t1, vUv * l1t.xy + l1t.zw + l1s.xy * time + l1s.zw).rgb * texture2D(t2, vUv * l2t.xy + l2t.zw + l2s.xy * time + l2s.zw).rgb * texture2D(tm, vUv).rgb;
+          gl_FragColor = vec4(fres * a * vCol, 1.0);   // 原版不做 sRGB 转换，直接写进场景缓冲
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+  }
+  const hfxColor = new THREE.Color();
+  function hfxCurve(h, age) {
+    const K = h.keys;
+    if (age <= 0 || age >= h.len) return null;
+    let j = 1;
+    while (j < K.length - 1 && K[j][0] < age) j++;
+    const [t0, c0] = K[j - 1], [t1, c1] = K[j], f = (age - t0) / Math.max(1e-6, t1 - t0);
+    return hfxColor.setRGB(c0[0] + (c1[0] - c0[0]) * f, c0[1] + (c1[1] - c0[1]) * f, c0[2] + (c1[2] - c0[2]) * f).multiplyScalar(h.gain);
+  }
+  // 第 i 艘船第 m 件装备：维修类 = 离最近一次周期开始（fire 位）过了多久；抗性类 = 连续开着多久（按曲线长度循环，对应客户端每周期 Repeat 重播）
+  function hfxAge(i, m, t, h) {
+    const F = rec.frames, dt = rec.dt, k = Math.max(0, Math.min(F.length - 1, Math.floor(t / dt))), bitm = 1 << m;
+    if (!(F[k].act?.[i] & bitm)) return -1;   // 关掉就移除（ShipRenderEffect.Stop）
+    if (h.loop) {
+      let b = 0;
+      while (b < 200 && F[k - b - 1] && F[k - b - 1].act?.[i] & bitm) b++;
+      return (t - (F[k - b].t - dt)) % h.len;
+    }
+    for (let b = 0; b <= Math.ceil(h.len / dt) + 1; b++) {
+      const fr = F[k - b];
+      if (!fr) break;
+      if (fr.fire?.[i] & bitm) return t - (fr.t - dt);
+    }
+    return -1;
+  }
   function build(m) {
+    if (m.hfx) for (const x of Object.values(m.hfx)) { scene.remove(x); x.dispose(); }
+    m.hfx = {};
     if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); }
     m.mesh = new THREE.InstancedMesh(m.def.geometry, m.def.materials, m.units.length);
     m.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -207,6 +531,135 @@ export function createView(host, hooks = {}, opt = {}) {
   const bst = new THREE.Points(bstGeo, bstMat);
   bst.frustumCulled = false;
   scene.add(bst);
+  // 喷口火焰：照客户端着色器 booster/boostervolumetric（ps_5_0 反汇编）翻的体积光线步进。
+  // 每个喷口一个盒子（x、y ∈ ±1，z ∈ −1…0，喷口在 z = 0），盒子的缩放 = SOF 喷口 transform（x/y = 口径，z = 长度 ×(0.5 + 0.5×强度)）。
+  // 射线穿过盒子最多走 12 步；每一步：3D 噪声扰动采样点（振幅从 NoiseAmplitudeStart 过渡到 End）→ 渐变贴图（u = 沿长度，v 按强度选行；
+  // A = 这一段的截面半径，RGB = 亮度）→ 形状图集（按 atlasIndex 选格子，xy ÷ 截面半径）→ 累加 渐变 × 形状 × Color0。最后线性转 sRGB。
+  const fxDir = opt.fx || 'assets/eveui/fx/';
+  const rawTex = (name, mip = false) => {
+    const tx = new THREE.TextureLoader().load(`${fxDir}${name}?v=1`);
+    tx.flipY = false; tx.generateMipmaps = mip;
+    tx.minFilter = mip ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter; tx.magFilter = THREE.LinearFilter;
+    return tx;
+  };
+  const gradTex = rawTex('booster.png'), shapeTex = rawTex('booster-shape.png', true), sharpTex = rawTex('whitesharp.png', true);
+  const noise2Tex = rawTex('noise2d.png'); noise2Tex.wrapS = noise2Tex.wrapT = THREE.RepeatWrapping;
+  // 3D 噪声（noise32cube_volume：32³ RGB）：切片图 32×1024 拼回 3D 贴图
+  const noise3 = new THREE.Data3DTexture(new Uint8Array(32 * 32 * 32 * 4).fill(128), 32, 32, 32);
+  noise3.format = THREE.RGBAFormat; noise3.minFilter = noise3.magFilter = THREE.LinearFilter;
+  noise3.wrapS = noise3.wrapT = noise3.wrapR = THREE.RepeatWrapping; noise3.needsUpdate = true;
+  {
+    const im = new Image();
+    im.onload = () => {
+      const c = document.createElement('canvas'); c.width = 32; c.height = 1024;
+      const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(im, 0, 0);
+      noise3.image.data.set(g.getImageData(0, 0, 32, 1024).data); noise3.needsUpdate = true;
+    };
+    im.src = `${fxDir}noise32.png?v=1`;
+  }
+  const SRGB_GLSL = `vec3 toSrgb(vec3 c) { c = max(c, 0.0); return mix(1.055 * pow(c, vec3(0.416667)) - 0.055, c * 12.92, vec3(lessThan(c, vec3(0.003131)))); }`;
+  const flameGeo = new THREE.InstancedBufferGeometry();
+  {
+    const b = new THREE.BoxGeometry(2, 2, 1); b.translate(0, 0, -0.5);
+    flameGeo.setAttribute('position', b.attributes.position); flameGeo.setIndex(b.index);
+  }
+  let flameCap = 0;
+  // 每个实例：矩阵 4 列、噪声振幅起 / 止、噪声频率（w = 时间系数）、颜色、(种子, 图集格, 强度)
+  const FLAME_ATTR = [['iM0', 4], ['iM1', 4], ['iM2', 4], ['iM3', 4], ['iA0', 3], ['iA1', 3], ['iFq', 4], ['iCol', 3], ['iMisc', 3]];
+  const flameMat = new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    uniforms: { grad: { value: gradTex }, shape: { value: shapeTex }, noise: { value: noise3 }, time: { value: 0 } },
+    vertexShader: `in vec4 iM0, iM1, iM2, iM3; in vec3 iA0, iA1, iCol, iMisc; in vec4 iFq;
+      out vec3 vPos, vCam, vA0, vA1, vCol, vMisc, vScale; out vec4 vFq;
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      void main() {
+        mat4 m = mat4(iM0, iM1, iM2, iM3);
+        vPos = position; vCam = (inverse(m) * vec4(cameraPosition, 1.0)).xyz;
+        vA0 = iA0; vA1 = iA1; vCol = iCol; vMisc = iMisc; vFq = iFq;
+        gl_Position = iMisc.z <= 0.0001 ? vec4(0.0) : projectionMatrix * viewMatrix * m * vec4(position, 1.0);
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: `precision highp sampler3D;
+      uniform sampler2D grad, shape; uniform sampler3D noise; uniform float time;
+      in vec3 vPos, vCam, vA0, vA1, vCol, vMisc; in vec4 vFq;
+      out vec4 outColor;
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      ${SRGB_GLSL}
+      void main() {
+        #include <logdepthbuf_fragment>
+        // 画的是盒子背面：这里是射线穿出点；穿入点用射线和盒子求交（镜头在盒子里时从镜头处开始）
+        vec3 rd = vPos - vCam, inv = 1.0 / rd;
+        vec3 ta = (vec3(-1.0, -1.0, -1.0) - vCam) * inv, tb = (vec3(1.0, 1.0, 0.0) - vCam) * inv, tn = min(ta, tb);
+        float tE = max(max(tn.x, tn.y), max(tn.z, 0.0));
+        vec3 pe = vCam + rd * tE, d = vPos - pe;
+        if (dot(d, d) < 0.00001) discard;
+        int n = max(2, int(min(1.0, length(d * vec3(1.0, 1.0, 2.0))) * 12.0));
+        vec3 st = d / float(n - 1), p = pe;
+        float I = vMisc.z;
+        float tN = vFq.w * time + vMisc.x;
+        float gv = (clamp(I * 0.5, 0.0, 1.0) * 0.375 + 0.0625) * 0.5;          // 渐变图上半张 = GradientMap0 的 8 行
+        float cell = 31.0 / 256.0, off = vMisc.y / 8.0 + 0.5 / 256.0;           // 形状图集：256 高、8 格
+        vec4 acc = vec4(0.0);
+        for (int k = 0; k < 12; k++) {
+          if (k >= n) break;
+          vec3 nc = p * vFq.xyz;
+          vec3 nz = texture(noise, vec3(nc.xy, nc.z * p.z * p.z + tN)).xyz - 0.5;
+          vec3 q = p + nz * (vA0 - p.z * (vA1 - vA0));
+          vec4 g = texture(grad, vec2(-q.z, gv));
+          if (g.a > 0.0 && (g.r > 0.0 || g.g > 0.0 || g.b > 0.0)) {
+            vec2 uv = q.xy / g.a * 0.5 + 0.5;
+            if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0) acc += g * textureLod(shape, vec2(uv.x, uv.y * cell + off), 0.1 / g.a / g.a) * vec4(vCol, 0.0);
+          }
+          p += st;
+        }
+        float f = clamp((I - 0.01) * 50.0, 0.0, 1.0);
+        acc *= length(d) * 0.666667 / float(n) * f * f * (3.0 - 2.0 * f);
+        outColor = vec4(toSrgb(acc.rgb), 1.0);
+      }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.BackSide,
+  });
+  const flames = new THREE.Mesh(flameGeo, flameMat);
+  flames.frustumCulled = false;
+  scene.add(flames);
+  // 喷口光点：着色器 booster/boosterglowanimated —— 朝向镜头的矩形贴图（whitesharp），颜色 ×4、噪声闪烁 0.8–1.0、线性转 sRGB。
+  // 每个喷口 3 张（glow、对称光晕、横向光晕；尺寸 = 口径 × glowScale / symHaloScale / haloScaleX·Y）—— 张数和尺寸是引擎 C++ 定的，这里按 CCP 公开的 ccpwgl 库的做法
+  const glowGeo = new THREE.InstancedBufferGeometry();
+  glowGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-0.5, -0.5, 0, 0.5, -0.5, 0, 0.5, 0.5, 0, -0.5, 0.5, 0]), 3));
+  glowGeo.setIndex([0, 1, 2, 0, 2, 3]);
+  let glowCap = 0;
+  const GLOW_ATTR = [['iPos', 3], ['iSize', 3], ['iCol', 3]];   // iSize = 宽、高、闪烁相位
+  const glowMat = new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    uniforms: { map: { value: sharpTex }, nz: { value: noise2Tex }, time: { value: 0 } },
+    vertexShader: `in vec3 iPos, iSize, iCol; uniform sampler2D nz; uniform float time; out vec2 vUv; out vec3 vCol;
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
+      void main() {
+        vec4 mv = viewMatrix * vec4(iPos, 1.0);
+        mv.xy += position.xy * iSize.xy;
+        vUv = position.xy + 0.5;
+        vCol = iCol * (texture(nz, vec2(time * 0.5 + iSize.z, 0.0)).r * 0.2 + 0.8);
+        gl_Position = projectionMatrix * mv;
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: `uniform sampler2D map; in vec2 vUv; in vec3 vCol; out vec4 outColor;
+      #include <common>
+      #include <logdepthbuf_pars_fragment>
+      ${SRGB_GLSL}
+      void main() {
+        #include <logdepthbuf_fragment>
+        outColor = vec4(toSrgb(texture(map, vUv).rgb * vCol * 4.0), 1.0);
+      }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  });
+  const glows = new THREE.Mesh(glowGeo, glowMat);
+  glows.frustumCulled = false;
+  scene.add(glows);
+  // 没有喷口参数的模型（旧数据）用的默认值
+  const BST_DEF = { c0: [10.6, 13.2, 15], a0: [-0.06, -0.06, -0.06], a1: [0.19, 0.19, 0.19], fq: [0.18, 0.18, -0.006, 0.1], glow: [10, 0.004, 0.008, 0.016], halo: [35, 2, 0.008, 0.02, 0.035], sym: 10 };
+  const mBst = new THREE.Matrix4(), mBst2 = new THREE.Matrix4();
 
   // 诱导进场的闪光（世界空间大小随距离缩放，与尾焰同一套着色器）
   const flashGeo = new THREE.BufferGeometry();
@@ -217,13 +670,38 @@ export function createView(host, hooks = {}, opt = {}) {
   flash.frustumCulled = false;
   scene.add(flash);
   // 开火特效；P 是给特效模块的查询接口
-  const fx = createFx(scene, renderer);
+  const fx = createFx(scene, renderer, { tex: opt.fx });
   const atV = [];
+  // 每帧模型循环结束后把炮塔实例写进各自的 InstancedMesh
+  const lastModel = () => { let l = null; for (const m of models.values()) if (m.state === 'ok' && m.mesh) l = m; return l; };
+  function flushTurrets() {
+    for (const tm of tModels.values()) {
+      if (tm.state !== 'ok') continue;
+      const n = tm.list.length;
+      if (n > tm.cap) {
+        tm.cap = Math.ceil(n * 1.5) + 4;
+        if (tm.mesh) { scene.remove(tm.mesh); tm.mesh.dispose(); }
+        tm.mesh = new THREE.InstancedMesh(tm.def.geometry, tm.def.materials, tm.cap);
+        tm.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        tm.mesh.frustumCulled = false;
+        scene.add(tm.mesh);
+      }
+      if (!tm.mesh) continue;
+      for (let c = 0; c < n; c++) tm.mesh.setMatrixAt(c, tm.list[c]);
+      tm.mesh.count = n;
+      tm.mesh.instanceMatrix.needsUpdate = true;
+      tm.list.length = 0;
+    }
+  }
   const P = {
+    mount: (i, ri, pick, out) => mountAt(i, ri, pick, out),
     get rec() { return rec; },
+    get camera() { return camera; },
     at: (i) => atV[i] || null,
     posAt: (i, t, out) => posAt(i, t, out),
     radiusOf: (i) => radiusOf(i),
+    extentOf: (i) => models.get(keyOf(i))?.def?.ext || null,   // 包围盒半轴（米）
+    radiusM: (i) => shipIndex?.models?.[keyOf(i)]?.r || rec.units[i].radius || 50,
     get heading() { return heading; },
     shield: (i) => { const F = frameAt(lastDrawT); return i * 3 < F.hp.length && F.hp[i * 3] > 0; },
   };
@@ -245,16 +723,268 @@ export function createView(host, hooks = {}, opt = {}) {
   ringPts.renderOrder = 6;
   scene.add(ringPts);
   let hover = -1, sel = -1;
+
+  // 战术视图：照客户端 tacticalNavigation/tacticalCompass.py + res:/ui/inflight/tactical/*.black 的参数
+  //   暗盘（黑 0.157，半径一半以外淡到 0）、距离圈（白，主圈 0.33 / 次圈 0.125，越靠外越淡）、16 条方位线（北向橙色）、
+  //   锁定距离圈（红 0.5 / 1.0 相间的虚线）、悬停装备时的最佳 / 失准圈（红 0.66 / 0.33）和两层红色渐变；
+  //   每艘船一条竖线连到盘面 + 落点锚标：青 0.3 / 有敌意红 0.5 / 当前目标白 0.5
+  let tac = null;
+  // 距离圈（千米）：按游戏录屏里看到的刻度（5 / 10 / 20 / 30 / 40 / 50 / 75 / 100 / 150 / 200 …）；
+  // 客户端 _RANGES 反编译出来是 8..25 连号，和画面对不上，没用
+  const TAC_RANGES = [5, 10, 20, 30, 40, 50, 75, 100, 150, 200, 250, 300, 400, 500];
+  const TAC_MAJOR = new Set([50, 100, 200, 300, 500]);
+  const TAC_N = TAC_RANGES.length;
+  const tacMat = new THREE.ShaderMaterial({
+    uniforms: { R: { value: 150 }, base: { value: 0 }, rings: { value: new Float32Array(TAC_N) }, ringA: { value: new Float32Array(TAC_N) }, lock: { value: 0 }, opt: { value: 0 }, fall: { value: 0 } },
+    vertexShader: `#include <common>
+      #include <logdepthbuf_pars_vertex>
+      uniform float R; varying vec2 vP;
+      void main() { vP = position.xy * R; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: `#include <common>
+      #include <logdepthbuf_pars_fragment>
+      uniform float R; uniform float base; uniform float rings[${TAC_N}]; uniform float ringA[${TAC_N}]; uniform float lock; uniform float opt; uniform float fall; varying vec2 vP;
+      float ln(float d, float fw) { return 1.0 - smoothstep(0.6 * fw, 1.6 * fw, abs(d)); }
+      vec4 over(vec4 dst, vec3 c, float a) { a = clamp(a, 0.0, 1.0); return vec4(mix(dst.rgb, c, a / max(1e-4, a + dst.a * (1.0 - a))), a + dst.a * (1.0 - a)); }
+      float ramp(float t, float a, float b) { return t <= a ? 0.0 : t < b ? (t - a) / (b - a) : t < 1.0 ? 1.0 - (t - b) / (1.0 - b) : 0.0; }
+      void main() {
+        #include <logdepthbuf_fragment>
+        float r = length(vP), fw = max(fwidth(r), 1e-5), t = r / R;
+        if (t > 1.0) discard;
+        // 暗盘
+        vec4 o = vec4(0.0, 0.0, 0.0, 0.157 * (t < 0.5 ? 1.0 : 1.0 - (t - 0.5) / 0.5));
+        // 最佳 / 失准渐变（加色的红）
+        vec3 red = vec3(1.0, 0.1, 0.025);
+        if (opt > 0.0) {
+          o = over(o, vec3(1.0, 0.0, 0.0), 0.078 * ramp(r / opt, 0.2, 0.4));
+          if (fall > opt) o = over(o, vec3(1.0, 0.0, 0.0), 0.078 * ramp(r / (fall * 1.1), 0.6, 0.8));
+        }
+        // 距离圈
+        float a = 0.0;
+        for (int i = 0; i < ${TAC_N}; i++) a += ln(r - rings[i], fw) * ringA[i];
+        o = over(o, vec3(1.0), a);
+        // 方位线：每 22.5° 一条，离船 2 km 起淡入、5 km 处到位
+        float ang = atan(-vP.y, vP.x), seg = PI / 8.0;
+        float k = floor(ang / seg + 0.5), ad = (ang - k * seg) * r;
+        float m = mod(k + 16.0, 4.0), q = mod(k + 16.0, 16.0);
+        float la = m < 0.5 ? 0.05 : abs(m - 2.0) < 0.5 ? 0.025 : 0.015;
+        vec3 lc = vec3(1.0);
+        if (abs(q - 4.0) < 0.5) { la = 0.25; lc = vec3(0.9, 0.6, 0.2); }
+        o = over(o, lc, ln(ad, fw) * la * smoothstep(base + 2.0, base + 5.0, r));
+        // 锁定距离：红 0.5 / 1.0 相间（每四分之一圈 40 段）
+        if (lock > 0.0) o = over(o, red, ln(r - lock, fw) * (fract(ang * 80.0 / PI) < 0.5 ? 0.5 : 1.0));
+        if (opt > 0.0) {
+          o = over(o, red, ln(r - opt, fw) * 0.66);
+          if (fall > opt) o = over(o, red, ln(r - fall, fw) * 0.33);
+        }
+        if (o.a < 0.003) discard;
+        gl_FragColor = o;
+      }`,
+    transparent: true, depthWrite: false, side: THREE.DoubleSide,
+  });
+  const tacDisc = new THREE.Mesh(new THREE.CircleGeometry(1, 128), tacMat);
+  tacDisc.rotation.x = -Math.PI / 2;
+  tacDisc.renderOrder = 1;
+  tacDisc.frustumCulled = false;
+  tacDisc.visible = false;
+  scene.add(tacDisc);
+  // 连线 / 锚标 / 速度箭头按客户端 tacticalOverlay 的三个着色器（connector / anchor / velocity）在标签层上画（都是加色混合、按屏幕像素算宽度）
+  //   客户端贴图只用颜色通道：anchor.dds 的 R = 锁定距离内的样子、G = 距离外的暗样子；arrow_tactical.dds 的 RGB = 形状
+  function chanTex(src, ch, done) {
+    const im = new Image();
+    im.onload = () => {
+      const cv = document.createElement('canvas');
+      cv.width = im.width; cv.height = im.height;
+      const g = cv.getContext('2d');
+      g.drawImage(im, 0, 0);
+      const d = g.getImageData(0, 0, cv.width, cv.height), a = d.data;
+      for (let k = 0; k < a.length; k += 4) { const v = a[k + ch]; a[k] = a[k + 1] = a[k + 2] = 255; a[k + 3] = v; }
+      g.putImageData(d, 0, 0);
+      done(cv);
+    };
+    im.src = src;
+  }
+  function tintCv(cv, rgb) {
+    const o = document.createElement('canvas');
+    o.width = cv.width; o.height = cv.height;
+    const g = o.getContext('2d');
+    g.drawImage(cv, 0, 0);
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = `rgb(${rgb.map((v) => Math.round(v * 255)).join(',')})`;
+    g.fillRect(0, 0, o.width, o.height);
+    return o;
+  }
+  const tacTex = { anchorIn: null, anchorOut: null, arrow: [] };
+  chanTex('assets/eveui/tactical/anchor.png?v=1', 0, (cv) => { tacTex.anchorIn = cv; });
+  chanTex('assets/eveui/tactical/anchor.png?v=1', 1, (cv) => { tacTex.anchorOut = cv; });
+  // 速度箭头三种颜色（velocityEffect DiffuseColor0 / 1 / 2）：0 = 速度方向（青），1 = 直冲我来的分量（红），2 = 距离变化率（白）
+  const TAC_VCOL = [[0, 0.675, 0.9294, 0.3], [1, 0.0745, 0.0237, 0.5], [1, 1, 1, 0.4996]];
+  chanTex('assets/eveui/tactical/arrow_tactical.png?v=1', 0, (cv) => { tacTex.arrow = TAC_VCOL.map((c) => tintCv(cv, c)); });
+  let tacR = 0, tacBase = -1, tacLabelKm = [];
+  function drawTac() {
+    const c = tac && drawn[tac.center];
+    tacDisc.visible = Boolean(c);
+    if (!c) return;
+    // 盘面范围（客户端 SetTargetingRange）：max(150 km, 锁定距离 × 1.1)，取到刚好盖过它的那一圈
+    const base = radiusOf(tac.center), act = Math.max(150, (tac.lock || 0) * 1.1);
+    let top = TAC_RANGES[TAC_N - 1];
+    for (const r of TAC_RANGES) { top = r; if (r > act) break; }
+    const R = top + base;
+    if (R !== tacR || base !== tacBase) {
+      tacR = R; tacBase = base; tacLabelKm = [];
+      const rg = tacMat.uniforms.rings.value, ra = tacMat.uniforms.ringA.value;
+      TAC_RANGES.forEach((r, i) => {
+        const ar = r + base;
+        if (ar > R) { rg[i] = -1e6; ra[i] = 0; return; }
+        rg[i] = ar; ra[i] = (TAC_MAJOR.has(r) ? 0.33 : 0.125) * (0.75 * Math.pow((R - ar) / R, 0.4) + 0.25);
+        tacLabelKm.push(r);
+      });
+    }
+    tacDisc.position.set(c.x, c.y, c.z);
+    tacDisc.scale.setScalar(R);
+    const U = tacMat.uniforms;
+    U.R.value = R; U.base.value = base;
+    U.lock.value = tac.lock ? tac.lock + base : 0;
+    U.opt.value = tac.opt ? tac.opt + base : 0;
+    U.fall.value = tac.opt && tac.fall ? tac.opt + tac.fall + base : 0;
+  }
+  // ---- 每个物体的连线 / 锚标 / 速度箭头（客户端 tacticalOverlay.red 的 connector / anchor / velocity 三个着色器）----
+  // 速度箭头长度 = 1 秒位移 × s，s = clamp(视深(米)^K × M, 1, 10)（距离变化率那种 clamp 到 5）；K、M 在常量缓冲里，反编译拿不到，这里是估的
+  const ARW_K = 1, ARW_M = 0.00005;
+  const tq = new THREE.Vector3();
+  function tScr(x, y, z) { tq.set(x, y, z).project(camera); return tq.z > 1 || tq.z < -1 ? null : [(tq.x + 1) / 2 * lbl.width, (1 - tq.y) / 2 * lbl.height]; }
+  function tDepth(x, y, z) { tq.set(x, y, z).applyMatrix4(camera.matrixWorldInverse); return Math.max(1e-6, -tq.z); }
+  const tPxPerKm = (dep) => lbl.height / (2 * dep * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)));
+  function tVel(i, t) {
+    const a = posAt(i, t, vA), b = posAt(i, t + rec.dt, vB);
+    return a && b ? [(b.x - a.x) / rec.dt, (b.y - a.y) / rec.dt, (b.z - a.z) / rec.dt] : [0, 0, 0];
+  }
+  const arwScale = (d, hi) => Math.max(1, Math.min(hi, Math.pow(tDepth(d.x, d.y, d.z) * 1000, ARW_K) * ARW_M));
+  // 线条：客户端连线横截面是三角形（中间最亮、两边淡到 0），这里叠三层近似
+  function tStroke(pts, al, w) {
+    if (pts.length < 2 || al <= 0.003) return;
+    lctx.beginPath();
+    lctx.moveTo(pts[0][0], pts[0][1]);
+    for (let k = 1; k < pts.length; k++) lctx.lineTo(pts[k][0], pts[k][1]);
+    for (const m of [1, 2 / 3, 1 / 3]) { lctx.lineWidth = w * m * dpr; lctx.strokeStyle = `rgba(255,255,255,${al / 3})`; lctx.stroke(); }
+  }
+  // 箭头：线宽 14 像素，贴图纵向 1 张 = 1 个线宽长，箭尖在终点，超过一张的部分取贴图最后一行（钳边）
+  function tArrow(k, a, b, al) {
+    const img = tacTex.arrow[k];
+    if (!img || !a || !b || al <= 0.003) return;
+    const W = 14 * dpr, dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+    const f = k === 1 ? 1 : Math.max(0, Math.min(1, (L - W / 2) * 0.5 / dpr));   // 比半个线宽还短就淡掉
+    if (L < 0.5 || f <= 0) return;
+    lctx.save();
+    lctx.translate(b[0], b[1]);
+    lctx.rotate(Math.atan2(dx / L, -dy / L));
+    lctx.globalAlpha = al * f;
+    const hl = Math.min(L, W);
+    lctx.drawImage(img, 0, 0, img.width, img.height * hl / W, -W / 2, 0, W, hl);
+    if (L > W) lctx.drawImage(img, 0, img.height - 1, img.width, 1, -W / 2, W, W, L - W);
+    lctx.restore();
+  }
+  function drawTacOverlay() {
+    const c = tac && rec && drawn[tac.center];
+    if (!c) return;
+    const R = tacR, fade = Math.max((tac.lock || 0) * 0.25, 50);
+    const pulse = 0.625 + 0.375 * Math.sin(performance.now() / 1000 * 8);
+    const cv = tVel(tac.center, lastDrawT);
+    lctx.save();
+    lctx.globalCompositeOperation = 'lighter';
+    // 选中的物体：一条从自己出发的淡直线（STYLE_FAINT，白 0.1）
+    if (sel >= 0 && sel !== tac.center && drawn[sel]?.alive) {
+      const a = tScr(c.x, c.y, c.z), b = tScr(drawn[sel].x, drawn[sel].y, drawn[sel].z);
+      if (a && b) { lctx.beginPath(); lctx.moveTo(a[0], a[1]); lctx.lineTo(b[0], b[1]); lctx.lineWidth = 1.5 * dpr; lctx.strokeStyle = 'rgba(255,255,255,0.1)'; lctx.stroke(); }
+    }
+    drawn.forEach((d, i) => {
+      if (!d?.alive) return;
+      const ego = i === tac.center;
+      const dx = d.x - c.x, dy = d.y - c.y, dz = d.z - c.z, dist = Math.hypot(dx, dy, dz), hd = Math.hypot(dx, dz);
+      if (!ego && dist > R + fade) return;
+      const f = ego ? 1 : 1 - Math.max(0, Math.min(1, (dist - R) / fade));
+      const aggr = !ego && Boolean(tac.aggr?.(i));
+      if (!ego && hd > 1e-6) {
+        // 连线：以自己为球心、半径 = 直线距离的大圆弧，从物体一直落到盘面上同一方位；在盘面上方 0.3、下方 0.2
+        const ux = dx / dist, uy = dy / dist, uz = dz / dist, ex = dx / hd, ez = dz / hd;
+        const om = Math.acos(Math.max(-1, Math.min(1, ux * ex + uz * ez))), so = Math.sin(om);
+        const N = Math.max(1, Math.ceil(om / 0.04)), pts = [];
+        for (let k = 0; k <= N; k++) {
+          const tt = k / N, s0 = om < 1e-4 ? 1 - tt : Math.sin((1 - tt) * om) / so, s1 = om < 1e-4 ? tt : Math.sin(tt * om) / so;
+          const p = tScr(c.x + (ux * s0 + ex * s1) * dist, c.y + uy * s0 * dist, c.z + (uz * s0 + ez * s1) * dist);
+          if (p) pts.push(p);
+        }
+        tStroke(pts, (d.y >= c.y ? 0.3 : 0.2) * f, 4);
+        // 锚标：平躺在盘面上，大小 = 0.026 × 视深(米)^0.875；锁定距离内用贴图 R 通道、外面用 G 通道（暗）
+        const ax = c.x + ex * dist, az = c.z + ez * dist, ap = tScr(ax, c.y, az), img = dist <= R ? tacTex.anchorIn : tacTex.anchorOut;
+        if (ap && img) {
+          const dep = tDepth(ax, c.y, az), px = 0.026 * Math.pow(dep * 1000, 0.875) / 1000 * tPxPerKm(dep);
+          lctx.globalAlpha = f;
+          lctx.drawImage(img, ap[0] - px / 2, ap[1] - px / 2, px, px);
+          lctx.globalAlpha = 1;
+        }
+      }
+      // 速度箭头
+      const v = tVel(i, lastDrawT), sp = Math.hypot(v[0], v[1], v[2]) * 1000;
+      if (sp < 0.5) return;
+      const x = Math.max(0, Math.min(1, (sp - 40000) * 1.7e-5)), vf = (1 - (3 - 2 * x) * x * x) * f;   // 40 ~ 98.8 km/s 之间淡出（着色器常数 1.7e-5）
+      const s = arwScale(d, 10), off = radiusOf(i), vn = sp / 1000;
+      const sx = d.x + v[0] / vn * off, sy = d.y + v[1] / vn * off, sz = d.z + v[2] / vn * off;
+      const col = (k) => TAC_VCOL[k][3] * vf * (aggr ? pulse : 1);
+      tArrow(0, tScr(sx, sy, sz), tScr(sx + v[0] * s, sy + v[1] * s, sz + v[2] * s), col(0));
+      if (ego || dist < 1e-6) return;
+      const rx = dx / dist, ry = dy / dist, rz = dz / dist;
+      // 红：直冲我来的那部分速度（速度方向和指向我的方向夹角余弦 > 0.65 才有），长度 × 2
+      if (aggr) {
+        const cs = Math.max(0, -(v[0] * rx + v[1] * ry + v[2] * rz) / vn), g = Math.max(0, Math.min(1, (cs - 0.65) * 2.898551));
+        const k = (v[0] * rx + v[1] * ry + v[2] * rz) * g * s * 2;
+        if (g > 0) tArrow(1, tScr(d.x, d.y, d.z), tScr(d.x + rx * k, d.y + ry * k, d.z + rz * k), col(1));
+      }
+      // 白：选中物体的距离变化率（1 秒后的距离 − 现在的距离），沿连线方向
+      if (i === sel) {
+        const nd = Math.hypot(d.x + v[0] - c.x - cv[0], d.y + v[1] - c.y - cv[1], d.z + v[2] - c.z - cv[2]);
+        const k = (nd - dist) * arwScale(d, 5);
+        tArrow(2, tScr(d.x, d.y, d.z), tScr(d.x + rx * k, d.y + ry * k, d.z + rz * k), col(2));
+      }
+    });
+    lctx.restore();
+  }
+  // 距离圈上的千米数（每圈四个方位各一个）在屏幕上的位置，给界面层画字
+  function tacLabels() {
+    const c = tac && drawn[tac.center];
+    if (!c) return [];
+    const out = [], w = host.clientWidth, h = host.clientHeight;
+    for (const r of tacLabelKm) {
+      const d = r + tacBase;
+      for (const [dx, dz] of [[d, 0], [-d, 0], [0, d], [0, -d]]) {
+        vA.set(c.x + dx, c.y, c.z + dz).project(camera);
+        if (vA.z > 1 || Math.abs(vA.x) > 1 || Math.abs(vA.y) > 1) continue;
+        out.push([(vA.x + 1) / 2 * w, (1 - vA.y) / 2 * h, r]);
+      }
+    }
+    return out;
+  }
   // 画质档位：改像素比，按像素算大小的图标 / 圈一起改
   function applyLevel(l) {
     level = l;
     dpr = l === 'low' ? 1 : Math.min(2, window.devicePixelRatio || 1);
     renderer.setPixelRatio(dpr);
-    brMat.uniforms.size.value = ICON_PX * dpr;
+    brMat.uniforms.size.value = iconPx * dpr;
     ringMat.uniforms.dpr.value = dpr;
-    sky.visible = l === 'high';
+    sky.visible = l === 'high' && !skyCube;
     lastSize = '';
     resize();
+  }
+  // opt.fov：固定视角（弧度，客户端镜头动态移动关着时 = default_fov 1.0）；opt.dynFov：按距离变
+  function dynFov() {
+    if (!opt.dynFov && !opt.fov) return;
+    const prop = Math.max(0, Math.min(1, camera.position.distanceTo(controls.target) * 1000 / 800000));
+    const fov = THREE.MathUtils.radToDeg(opt.dynFov ? 0.55 + prop ** 0.35 * 0.55 : opt.fov);
+    if (Math.abs(fov - camera.fov) < 1e-3) return;
+    camera.fov = fov;
+    camera.updateProjectionMatrix();
+    bstMat.uniforms.scale.value = host.clientHeight * dpr / 2 / Math.tan(THREE.MathUtils.degToRad(fov / 2));
   }
   const perf = { t0: 0, last: 0, n: 0, slow: 0 };
   // 自动画质：每 2 秒算一次帧率，连续两次低于 24 帧就降到低画质（切到别的标签页、中间停过 3 秒以上的重新算）
@@ -288,15 +1018,19 @@ export function createView(host, hooks = {}, opt = {}) {
   }
   const onVis = () => { perf.t0 = 0; };
   document.addEventListener('visibilitychange', onVis);
-  controls.addEventListener('start', () => { if (director) { director = false; hooks.onDirector?.(false); } });
+  controls.addEventListener('start', () => { if (director) { director = false; hooks.onDirector?.(false); } if (track >= 0) { track = -1; hooks.onTrack?.(-1); } });
 
   let rec = null;
   let lastT = -1, lastSize = '', lastN = -1, lastDrawT = 0;
   let follow = -1, followAt = null, flyTo = null;
+  // 跟踪（客户端 SetAsCameraInterest）：镜头留在跟随的船上，转到让被跟踪的物体一直在船的正前方；手动拖镜头就停
+  let track = -1;
   const tmp = new THREE.Object3D();
   const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3();
   const drawn = [];      // 本帧每艘船的位置（千米，悬停 / 选中用）
   const heading = [];    // 每艘船最后的朝向（停下 / 成为残骸后保持）
+  const bank = [], bankT = [];   // 每艘船当前侧倾角（弧度）和上次更新的时间
+  const qBank = new THREE.Quaternion(), AXIS_Z = new THREE.Vector3(0, 0, 1);
 
   function resize() {
     const w = host.clientWidth, h = host.clientHeight;
@@ -367,9 +1101,24 @@ export function createView(host, hooks = {}, opt = {}) {
       const esc = rec.units[i].escaped;
       if (!p || (esc != null && t >= esc)) continue;   // 没入场 / 已跃迁离场
       const alive = F.hp[i * 3 + 2] > 0 || (i * 3 >= F.hp.length);
+      if (!alive && rec.units[i].drone) continue;   // 无人机被打爆不留残骸（只有爆炸）
       const q = posAt(i, t + rec.dt, vB) || p;
       if (!heading[i]) heading[i] = new THREE.Quaternion();
-      if (alive && q.distanceToSquared(p) > 1e-12) { tmp.position.copy(p); tmp.lookAt(q); heading[i].copy(tmp.quaternion); }
+      if (alive && q.distanceToSquared(p) > 1e-12) {
+        tmp.position.copy(p); tmp.lookAt(q); heading[i].copy(tmp.quaternion);
+        // 转弯侧倾：客户端没有（姿态由服务器下发），这里按水平转向角速度近似：bank = clamp(-2 × ω, ±30°)，平滑进出弯
+        const o = posAt(i, Math.max(0, t - rec.dt), vC);
+        let target = 0;
+        if (o && p.distanceToSquared(o) > 1e-12) {
+          const ax = p.x - o.x, az = p.z - o.z, bx = q.x - p.x, bz = q.z - p.z;
+          const w = Math.atan2(ax * bz - az * bx, ax * bx + az * bz) / rec.dt;   // 绕世界上方向的转向角速度（弧度 / 秒）
+          target = Math.max(-0.52, Math.min(0.52, 2 * w));
+        }
+        const k = Math.min(1, Math.max(0, t - (bankT[i] ?? t)) * 1.5);
+        bank[i] = (bank[i] || 0) + (target - (bank[i] || 0)) * k;
+        bankT[i] = t;
+        if (bank[i]) heading[i].multiply(qBank.setFromAxisAngle(AXIS_Z, bank[i]));
+      }
       drawn[i] = { x: p.x, y: p.y, z: p.z, alive };
     }
     // 镜头跟随
@@ -385,37 +1134,101 @@ export function createView(host, hooks = {}, opt = {}) {
       }
     }
 
+    if (track >= 0) {
+      const e = drawn[follow], g = drawn[track];
+      if (!g?.alive || !e) { track = -1; hooks.onTrack?.(-1); }
+      else {
+        vA.set(e.x - g.x, e.y - g.y, e.z - g.z);
+        if (vA.lengthSq() > 1e-12) {
+          vA.normalize(); vA.y += 0.2; vA.normalize();
+          vB.copy(controls.target).addScaledVector(vA, camera.position.distanceTo(controls.target));
+          camera.position.lerp(vB, 0.12);
+        }
+      }
+    }
     if (director && follow < 0) directorStep();
     // 模型实例
     const white = new THREE.Color(1, 1, 1), dark = new THREE.Color(0.22, 0.2, 0.2);
-    const bp = [], bc = [], bs = [];
+    const bp = [], bc = [], bs = [], fl = [], gw = [];
+    const hfxNow = performance.now() / 1000;
     for (const m of models.values()) {
       if (m.state !== 'ok' || !m.mesh) continue;
       let c = 0;
+      for (const o of Object.values(m.hfx || {})) o.userData.n = 0;
       for (const i of m.units) {
         const d = drawn[i];
         if (!d) continue;
+        // 残骸模型只画死了的船；原船模型在残骸模型加载好之后就不再画死了的（没有残骸模型时仍用变暗的原船）
+        if (m.wreck ? d.alive : !d.alive && wreckReady(i)) continue;
         tmp.position.set(d.x, d.y, d.z);
         tmp.quaternion.copy(heading[i] || tmp.quaternion.identity());
-        if (!d.alive) tmp.rotateY(t * 0.02 + i);   // 残骸慢慢打转
+        // 残骸不转：客户端 Wreck.SetBallRotation 直接沿用爆掉那艘船的姿态（yaw/pitch/roll），之后静止
         tmp.scale.setScalar(KM);
         tmp.updateMatrix();
         m.mesh.setMatrixAt(c, tmp.matrix);
-        m.mesh.setColorAt(c, d.alive ? white : dark);
+        m.mesh.setColorAt(c, d.alive || m.wreck ? white : dark);
         c++;
+        if (d.alive && !m.wreck) for (const mt of mountsOf(i, m.def)) {
+          const tm = tModels.get(mt.k);
+          if (tm?.state === 'ok') tm.list.push(new THREE.Matrix4().multiplyMatrices(tmp.matrix, mt.mat));
+        }
+        // 船身叠加特效：同一种特效多件装备取最亮的
         if (d.alive) {
-          const col = COLOR[rec.units[i].side];
-          for (const b of m.def.boosters) {
-            vA.set(-b[0], b[1], b[2]).applyMatrix4(tmp.matrix);
-            bp.push(vA.x, vA.y, vA.z);
-            bc.push(0.35 + col.r * 0.2, 0.55 + col.g * 0.2, 0.9);
-            bs.push(b[3] * 2.6 * KM);
+          const rack = rec.units[i].rack || [];
+          const best = {};
+          for (let j = 0; j < rack.length && j < 32; j++) {
+            const kind = rack[j].hfx;
+            if (!kind || !HFX[kind]) continue;
+            const col = hfxCurve(HFX[kind], hfxAge(i, j, t, HFX[kind]));
+            if (col && (!best[kind] || col.r + col.g + col.b > best[kind].r + best[kind].g + best[kind].b)) best[kind] = col.clone();
+          }
+          for (const kind in best) {
+            let o = m.hfx[kind];
+            if (!o) {
+              o = m.hfx[kind] = new THREE.InstancedMesh(m.def.geometry, hfxMat(kind), m.units.length);
+              o.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+              o.setColorAt(0, white);
+              o.frustumCulled = false; o.renderOrder = 2;
+              o.userData.n = 0;
+              scene.add(o);
+            }
+            o.setMatrixAt(o.userData.n, tmp.matrix);
+            o.setColorAt(o.userData.n, best[kind]);
+            o.userData.n++;
+          }
+        }
+        if (d.alive) {
+          // 强度：当前速度 / 最大速度（客户端 FitBoosters 把 maxVelocity 交给引擎；引擎内部的强度曲线未知，这里直接用速度比，开推进器时超过 1）
+          const u = rec.units[i], sp = F.spd ? F.spd[i] : 0;
+          const I = Math.max(0, Math.min(2, sp / Math.max(1, u.vel || 1)));
+          if (I > 0.0001) {
+            const B = m.def.bst || BST_DEF;
+            const zk = 0.5 + 0.5 * Math.min(1, I), gk = Math.min(1, I);
+            const gl = B.glow || BST_DEF.glow, hl = B.halo || BST_DEF.halo, sym = B.sym ?? BST_DEF.sym;
+            for (const b of m.def.boosters) {
+              // 盒子：船矩阵 × 平移到喷口 × 缩放（米）
+              mBst.makeScale(b[3], b[3], b[4] * zk).setPosition(-b[0], b[1], b[2]);
+              mBst2.multiplyMatrices(tmp.matrix, mBst);
+              fl.push(...mBst2.elements, ...(B.a0 || BST_DEF.a0), ...(B.a1 || BST_DEF.a1), ...(B.fq || BST_DEF.fq), ...(B.c0 || BST_DEF.c0), (i * 7.13 + b[0]) % 1, b[5] || 0, I);
+              vA.set(-b[0], b[1], b[2]).applyMatrix4(tmp.matrix);
+              const ph = (i * 0.37 + b[1] * 0.11) % 1, w = b[3] * KM;
+              gw.push(vA.x, vA.y, vA.z, w * gl[0], w * gl[0], ph, gl[1] * gk, gl[2] * gk, gl[3] * gk);
+              gw.push(vA.x, vA.y, vA.z, w * sym, w * sym, ph, hl[2] * gk, hl[3] * gk, hl[4] * gk);
+              gw.push(vA.x, vA.y, vA.z, w * hl[0], w * hl[1], ph, hl[2] * gk, hl[3] * gk, hl[4] * gk);
+            }
           }
         }
       }
       m.mesh.count = c;
       m.mesh.instanceMatrix.needsUpdate = true;
       if (m.mesh.instanceColor) m.mesh.instanceColor.needsUpdate = true;
+      if (m === lastModel()) flushTurrets();
+      for (const o of Object.values(m.hfx || {})) {
+        o.count = o.userData.n;
+        o.instanceMatrix.needsUpdate = true;
+        if (o.instanceColor) o.instanceColor.needsUpdate = true;
+        o.material.uniforms.time.value = hfxNow;
+      }
     }
     if (bp.length / 3 > bstCap) { bstCap = Math.ceil(bp.length / 3 * 1.5) + 64; bstGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bstCap * 3), 3)); bstGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(bstCap * 3), 3)); bstGeo.setAttribute('size', new THREE.BufferAttribute(new Float32Array(bstCap), 1)); }
     if (bstCap) {
@@ -423,6 +1236,22 @@ export function createView(host, hooks = {}, opt = {}) {
       bstGeo.attributes.position.needsUpdate = bstGeo.attributes.color.needsUpdate = bstGeo.attributes.size.needsUpdate = true;
       bstGeo.setDrawRange(0, bp.length / 3);
     }
+    // 喷口火焰 / 光点实例
+    const fill = (geo, ATTR, data, cap) => {
+      const stride = ATTR.reduce((a, x) => a + x[1], 0), n = data.length / stride;
+      if (n > cap) { cap = Math.ceil(n * 1.5) + 32; for (const [name, w] of ATTR) geo.setAttribute(name, new THREE.InstancedBufferAttribute(new Float32Array(cap * w), w)); }
+      if (cap) {
+        let o = 0;
+        const A = ATTR.map(([name, w]) => [geo.attributes[name].array, w]);
+        for (let j = 0; j < n; j++) for (const [arr, w] of A) for (let c = 0; c < w; c++) arr[j * w + c] = data[o++];
+        for (const [name] of ATTR) geo.attributes[name].needsUpdate = true;
+      }
+      geo.instanceCount = n;
+      return cap;
+    };
+    flameCap = fill(flameGeo, FLAME_ATTR, fl, flameCap);
+    glowCap = fill(glowGeo, GLOW_ATTR, gw, glowCap);
+    flameMat.uniforms.time.value = glowMat.uniforms.time.value = performance.now() / 1000;
 
     // 总览图标：模型在屏幕上够大时淡出
     const ip = [], it = [], ii = [];
@@ -432,25 +1261,63 @@ export function createView(host, hooks = {}, opt = {}) {
       vA.set(d.x, d.y, d.z);
       const px = radiusOf(i) / kmPerPx(vA);
       const hasModel = models.get(keyOf(i))?.state === 'ok';
-      const a = hasModel ? Math.max(0, Math.min(1, 1 - (px - 14) / 26)) : 1;
+      const a = hasModel && !brkOf ? Math.max(0, Math.min(1, 1 - (px - 14) / 26)) : 1;
       if (a <= 0 && opt.sel !== i) continue;
+      const ic = d.alive ? iconOf(i) : wreckIcon();
+      if (ic < 0) continue;
       const c = d.alive ? COLOR[rec.units[i].side] : WRECK;
       const hi = opt.sel === i ? 1.35 : 1;
       ip.push(d.x, d.y, d.z);
       it.push(Math.min(1, c.r * hi), Math.min(1, c.g * hi), Math.min(1, c.b * hi), Math.max(a, opt.sel === i ? 0.5 : 0) * (d.alive ? 1 : 0.8));
-      ii.push(d.alive ? iconOf(i) : WRECK_ICON);
+      ii.push(ic);
     }
     // 无人机 / 舰载机：前后两帧按顺序对上（同一母舰、同一类别）就插值
     const F2 = rec.frames[Math.min(rec.frames.length - 1, Math.floor(t / rec.dt) + 1)];
     const fk = F2 === F ? 0 : Math.max(0, Math.min(1, (t - F.t) / (F2.t - F.t || 1)));
-    for (let j = 0; j < F.dr.length; j += 5) {
+    // 每架 6 个数：母舰、x、y、z、类别、类型 ID；有模型的画模型（朝向 = 前后两帧的移动方向），模型在屏幕上够大时图标淡出
+    const dPos = new Map();   // 外观键 → [x, y, z, 朝向四元数…]
+    for (let j = 0; j < F.dr.length; j += 6) {
       const o = F.dr[j];
       if (!drawn[o]?.alive) continue;
-      const same = F2.dr[j] === o && F2.dr[j + 4] === F.dr[j + 4];
-      for (let k = 1; k <= 3; k++) ip.push((F.dr[j + k] + (same ? (F2.dr[j + k] - F.dr[j + k]) * fk : 0)) * KM);
+      const same = F2.dr[j] === o && F2.dr[j + 5] === F.dr[j + 5];
+      const x = (F.dr[j + 1] + (same ? (F2.dr[j + 1] - F.dr[j + 1]) * fk : 0)) * KM, y = (F.dr[j + 2] + (same ? (F2.dr[j + 2] - F.dr[j + 2]) * fk : 0)) * KM, z = (F.dr[j + 3] + (same ? (F2.dr[j + 3] - F.dr[j + 3]) * fk : 0)) * KM;
+      const key = shipIndex?.types?.[F.dr[j + 5]]?.m;
+      let a = 1;
+      if (key) {
+        const dm = droneModel(key);
+        if (dm.state === 'ok') {
+          vA.set(x, y, z);
+          const px = (shipIndex.models[key]?.r || 5) * KM / kmPerPx(vA);
+          a = Math.max(0, Math.min(1, 1 - (px - 6) / 10));
+          tmp.position.set(x, y, z);
+          if (same) { vB.set(F2.dr[j + 1] * KM, F2.dr[j + 2] * KM, F2.dr[j + 3] * KM); if (vB.distanceToSquared(vA.set(F.dr[j + 1] * KM, F.dr[j + 2] * KM, F.dr[j + 3] * KM)) > 1e-14) { tmp.lookAt(vB.add(tmp.position).sub(vA)); } }
+          (dPos.get(key) || dPos.set(key, []).get(key)).push(tmp.position.x, tmp.position.y, tmp.position.z, tmp.quaternion.x, tmp.quaternion.y, tmp.quaternion.z, tmp.quaternion.w);
+          tmp.quaternion.identity();
+        }
+      }
+      const dic = brkOf ? brSlot(brkOf(F.dr[j + 5])) : DRONE_BRACKETS[F.dr[j + 4]] ?? DRONE_BRACKETS[0];
+      if (a <= 0 || dic < 0) continue;
+      ip.push(x, y, z);
       const c = COLOR[rec.units[o].side];
-      it.push(c.r, c.g, c.b, 1);
-      ii.push(DRONE_BRACKETS[F.dr[j + 4]] ?? DRONE_BRACKETS[0]);
+      it.push(c.r, c.g, c.b, a);
+      ii.push(dic);
+    }
+    for (const [k, m] of dModels) {
+      if (m.state !== 'ok') continue;
+      const L = dPos.get(k) || [];
+      const cnt = L.length / 7;
+      if (cnt > m.cap) { m.cap = Math.ceil(cnt * 1.5) + 4; if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); } m.mesh = new THREE.InstancedMesh(m.def.geometry, m.def.materials, m.cap); m.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.mesh.frustumCulled = false; scene.add(m.mesh); }
+      if (!m.mesh) continue;
+      for (let c = 0; c < cnt; c++) {
+        tmp.position.set(L[c * 7], L[c * 7 + 1], L[c * 7 + 2]);
+        tmp.quaternion.set(L[c * 7 + 3], L[c * 7 + 4], L[c * 7 + 5], L[c * 7 + 6]);
+        tmp.scale.setScalar(KM);
+        tmp.updateMatrix();
+        m.mesh.setMatrixAt(c, tmp.matrix);
+      }
+      tmp.quaternion.identity(); tmp.scale.setScalar(1);
+      m.mesh.count = cnt;
+      m.mesh.instanceMatrix.needsUpdate = true;
     }
     if (ip.length / 3 > brCap) { brCap = Math.ceil(ip.length / 3 * 1.5) + 64; brGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(brCap * 3), 3)); brGeo.setAttribute('tint', new THREE.BufferAttribute(new Float32Array(brCap * 4), 4)); brGeo.setAttribute('icon', new THREE.BufferAttribute(new Float32Array(brCap), 1)); }
     if (brCap) {
@@ -466,6 +1333,7 @@ export function createView(host, hooks = {}, opt = {}) {
       atV[i] = (atV[i] || new THREE.Vector3()).set(d.x, d.y, d.z);
     }
     fx.update(t, P, opt.kills);
+    drawTac();
     // 诱导进场闪光：进场后 4 秒内先亮后暗
     {
       const fp = flashGeo.attributes.position.array, fc = flashGeo.attributes.color.array, fs = flashGeo.attributes.size.array;
@@ -561,6 +1429,7 @@ export function createView(host, hooks = {}, opt = {}) {
   }
   function drawLabels() {
     lctx.clearRect(0, 0, lbl.width, lbl.height);
+    drawTacOverlay();
     drawPlacing();
     if (!labels || !rec) return;
     const w = lbl.width, h = lbl.height;
@@ -600,6 +1469,23 @@ export function createView(host, hooks = {}, opt = {}) {
     }
   }
 
+  // 屏幕上一点对应的飞行方向（镜头射线方向，单位向量）
+  function dirAt(cx, cy) {
+    const r = renderer.domElement.getBoundingClientRect();
+    if (!r.width) return null;
+    ndc.set((cx - r.left) / r.width * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+    ray.setFromCamera(ndc, camera);
+    const d = ray.ray.direction;
+    return [d.x, d.y, d.z];
+  }
+  // 第 i 艘船在屏幕上的位置（CSS 像素，相对画布）；不在画面里返回 null
+  function screenOf(i) {
+    const p = drawn[i];
+    if (!p) return null;
+    vA.set(p.x, p.y, p.z).project(camera);
+    if (vA.z > 1) return null;
+    return [(vA.x + 1) / 2 * host.clientWidth, (1 - vA.y) / 2 * host.clientHeight];
+  }
   // 悬停 / 点击：按屏幕距离找最近的船
   function pick(ev) {
     const r = renderer.domElement.getBoundingClientRect();
@@ -625,10 +1511,16 @@ export function createView(host, hooks = {}, opt = {}) {
       down = null;
       return;
     }
-    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) hooks.onPick?.(pick(e).i);
+    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) hooks.onPick?.(pick(e).i, e);
     down = null;
   });
-  el.addEventListener('dblclick', (e) => { const i = pick(e).i; if (i >= 0) { setFollow(i); hooks.onFollow?.(i); } });
+  el.addEventListener('dblclick', (e) => {
+    const i = pick(e).i;
+    // 驾驶模拟：双击空白处朝那个方向飞（hooks.onDblEmpty 收到单位方向向量）
+    if (i < 0 && hooks.onDblEmpty) { const d = dirAt(e.clientX, e.clientY); if (d) hooks.onDblEmpty(d, e); return; }
+    if (i >= 0 && hooks.onFollowDbl === false) return;
+    if (i >= 0) { setFollow(i); hooks.onFollow?.(i); }
+  });
   el.addEventListener('pointermove', (e) => { mouse = [e.clientX, e.clientY]; });
   el.addEventListener('pointerdown', (e) => { mouse = [e.clientX, e.clientY]; });
   el.addEventListener('pointerleave', () => { mouse = null; });
@@ -641,12 +1533,14 @@ export function createView(host, hooks = {}, opt = {}) {
       lastT = -1;
       lastN = -1;
       follow = -1;
-      heading.length = 0;
+      heading.length = 0; bank.length = 0; bankT.length = 0;
+      mounts.length = 0;
+      for (const tm of tModels.values()) { tm.list.length = 0; if (tm.mesh) tm.mesh.count = 0; }
       for (const m of models.values()) if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); }
       models.clear();
     },
     draw,
-    render() { watchPerf(); sky.position.copy(camera.position); controls.update(); renderer.render(scene, camera); drawLabels(); },
+    render() { watchPerf(); sky.position.copy(camera.position); controls.update(); dynFov(); if (post && level === 'high') post.render(scene, camera); else { renderer.setRenderTarget(null); renderer.render(scene, camera); } drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
     setDirector(on) { director = on; dirLast = 0; if (on) { follow = -1; flyTo = null; } },
     setQuality(q) { quality = q; perf.slow = 0; perf.t0 = 0; applyLevel(q === 'low' ? 'low' : 'high'); },
@@ -654,7 +1548,27 @@ export function createView(host, hooks = {}, opt = {}) {
     setPlacing(opt) { placing = opt; el.style.cursor = opt ? 'crosshair' : ''; if (opt) { hover = -1; hooks.onHover?.(-1); } },
     resetCamera: fit,
     follow: setFollow,
+    screenOf,
+    dirAt,
+    // 拾取射线（米）：鼠标位置 → { o: 镜头位置, d: 单位方向 }
+    rayAt(cx, cy) { const d = dirAt(cx, cy); if (!d) return null; return { o: [camera.position.x / KM, camera.position.y / KM, camera.position.z / KM], d }; },
+    // 世界坐标（米）→ 画布 CSS 像素；在镜头后面返回 null
+    project(p) { vA.set(p[0] * KM, p[1] * KM, p[2] * KM).project(camera); if (vA.z > 1) return null; return [(vA.x + 1) / 2 * host.clientWidth, (1 - vA.y) / 2 * host.clientHeight]; },
+    // 第 i 艘船这一帧画在哪（米）
+    drawnPos(i) { const p = drawn[i]; return p ? [p.x / KM, p.y / KM, p.z / KM] : null; },
+    // 镜头离跟随的船的距离（千米）
+    zoomTo(km) { const d = vA.copy(camera.position).sub(controls.target); camera.position.copy(controls.target).addScaledVector(d.normalize(), km); },
     following: () => follow,
+    track(i) { track = i; },
+    tracking: () => track,
+    setTactical(cfg) { tac = cfg || null; drawTac(); },
+    tacLabels,
+    // 加载进度：舰船索引、模型（已完成 / 总数，加载失败也算完成）、星空、特效贴图
+    loadState() {
+      let done = 0;
+      for (const m of models.values()) if (m.state !== 'loading') done++;
+      return { index: Boolean(shipIndex), done, total: models.size, sky: skyState !== 'loading', fx: fx.ready() };
+    },
     dispose() { ro.disconnect(); document.removeEventListener('visibilitychange', onVis); fx.dispose(); for (const m of models.values()) m.mesh?.dispose(); renderer.dispose(); renderer.forceContextLoss?.(); renderer.domElement.remove(); lbl.remove(); }
   };
 }

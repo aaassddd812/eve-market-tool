@@ -12,7 +12,7 @@
 // 定向扫描结果：扫描窗口里 Ctrl+A、Ctrl+C，每行「类型 ID<Tab>名称<Tab>类型<Tab>距离」（旧客户端没有类型 ID，按类型名用 /universe/ids/ 查）。
 //   类型所属的分组（舰船类别）与大类用 ESI /universe/types/、/universe/groups/ 查，缓存在本浏览器（eve-dscan-types-v1）；
 //   统计舰船总数、同格（显示距离的）、按舰船类别 / 型号的数量，标出旗舰、拦截泡、后勤、隐轰、侦察、黑隐与扫描探针，建筑、无人机与其他单列；可复制一行统计发到舰队频道。
-import * as ST from './standings.js?v=v5';
+import * as ST from './standings.js?v=v6';
 
 let D;   // esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage, kb, loadTypes, systemName, typeName, fetchESI, copyText, nearest（killboard.js 的 nearestOf）
 const IGNORE_KEY = 'eve-local-ignore-v1';

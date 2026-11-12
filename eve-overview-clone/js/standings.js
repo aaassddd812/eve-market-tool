@@ -122,10 +122,11 @@ const nameIds = new Map(); // 小写名字 → 角色 ID（0 = 查不到）
 const AFF_TTL = 60 * 60e3;
 const tried = new Map();   // 'i' + 角色 ID / 'n' + 名字 → 上次查询时间
 // 角色 ID 列表 → Map(角色 ID → { char, corp, alliance })
-export async function affiliation(ids) {
+// sure：调用方已确定都是角色（如击杀搜索里的人物结果）——2016 年前的老角色 ID 在 1 亿 ~ 21 亿之间，和老军团 / 联盟同段，默认会被跳过
+export async function affiliation(ids, { sure = false } = {}) {
   const now = Date.now();
   // 只查角色 ID（军团 98xxxxxx、联盟 99xxxxxx 混进来整批会被 ESI 拒绝）
-  const need = [...new Set(ids.filter(Boolean).map(Number))].filter((id) => (id < 98e6 || id >= 2.1e9) && !(aff.get(id)?.at > now - AFF_TTL));
+  const need = [...new Set(ids.filter(Boolean).map(Number))].filter((id) => (sure || id < 98e6 || id >= 2.1e9) && !(aff.get(id)?.at > now - AFF_TTL));
   for (let i = 0; i < need.length; i += 1000) {
     try {
       const res = await fetch(esiUrl('/characters/affiliation/'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(need.slice(i, i + 1000)) });

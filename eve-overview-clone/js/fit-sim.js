@@ -10,7 +10,7 @@
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失；
 // 「AT 赛」（sim-at.js）可选这一届联盟锦标赛已打过的比赛，双方选手各一行带进来（蓝队 A 方、红队 B 方），战场上像比赛直播一样显示两队名单与血条。
 import { commonFit } from './fit-kb.js?v=v30';
-import { createBattle, simulate } from './sim-engine.js?v=v12';
+import { createBattle, simulate } from './sim-engine.js?v=v23';
 import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
@@ -241,9 +241,11 @@ function emptyFit(ship) {
 // 有重新激活延迟的装备（突击型损伤控制等，开几秒要冷却一分钟以上）不能一直开着，按在线不开启计算
 const REACTIVATION_DELAY = 669;
 // 返回不计开启的原因（null = 按装配里的状态）
-function forcedOff(m) {
+function forcedOff(m, key) {
   const { FE, data } = ctx;
   if (!m || (FE.STATE_RANK[m.state] || 0) < 2) return null;
+  // 驾驶模拟：玩家没开的装备（槽位:序号）
+  if (key && S.opt.offKeys?.has(key)) return '未开启';
   const t = data.types.get(m.type);
   if ((t?.attrs.get(REACTIVATION_DELAY) || 0) > 0) return '长冷却，不计开启';
   // 推进器（微型跃迁推进器 / 加力燃烧器）：按选项开或关
@@ -254,8 +256,10 @@ function prepare(row, side = sideOf(row)) {
   const { FE, data } = ctx;
   const so = S.sideOpt[side] || sideDefaults();
   // 超载：能超载的已开启装备全部超载（不计过热损坏）
-  const state = (m) => (forcedOff(m) ? { ...m, state: 'online' } : so.heat && m.state === 'active' && data.types.get(m.type)?.overloadable ? { ...m, state: 'overload' } : m);
-  const fit = { ...row.fit, slots: Object.fromEntries(FE.SLOTS.map((s) => [s, (row.fit.slots[s] || []).map((m) => (m ? state(m) : m))])) };
+  // 驾驶模拟：玩家换过的弹药（槽位:序号 → 弹药类型）
+  const chg = (m, key) => (key && S.opt.chargeOv?.has(key) ? { ...m, charge: S.opt.chargeOv.get(key) } : m);
+  const state = (m0, key, m = chg(m0, key)) => (forcedOff(m, key) ? { ...m, state: 'online' } : so.heat && m.state === 'active' && data.types.get(m.type)?.overloadable ? { ...m, state: 'overload' } : m);
+  const fit = { ...row.fit, slots: Object.fromEntries(FE.SLOTS.map((s) => [s, (row.fit.slots[s] || []).map((m, i) => (m ? state(m, `${s}:${i}`) : m))])) };
   const skills = so.skills === 'esi' && S.esiSkills ? S.esiSkills.levels : 'max';
   row.calc = FE.computeFit(data, fit, skills);
   row.stats = row.calc ? FE.fitStats(row.calc) : null;
@@ -279,6 +283,10 @@ function reprepare(list = SIDES) {
 
 // ---------- 单艘船的战斗属性 ----------
 const effName = (t) => t.effects.map((e) => ctx.data.effects.get(e)?.name);
+// 开着时船身播放的叠加特效（客户端按效果 guid 选特效文件：effects.ShieldBoosting → shieldboosting_skinned 等）
+const HULL_FX = { shieldBoosting: 'sb', fueledShieldBoosting: 'sb', armorRepair: 'ar', fueledArmorRepair: 'ar', structureRepair: 'hr',
+  modifyActiveShieldResonancePostPercent: 'sh', modifyActiveArmorResonancePostPercent: 'ah', adaptiveArmorHardener: 'ah', shipModuleNonRepeatingArmorHardener: 'ah' };
+const hullFx = (t) => { for (const n of effName(t)) if (HULL_FX[n]) return HULL_FX[n]; return ''; };
 const SENSOR_TYPES = ['雷达', '光雷达', '磁力', '引力'];
 const ECM_STR = [241, 239, 240, 238];   // ECM 对雷达 / 光雷达 / 磁力 / 引力的干扰强度（与 FE.AT.sensors 顺序一致）
 // 武器开火特效（3D 视图用）：种类按装备组 / 名字，颜色按弹药（激光按晶体波段，导弹爆炸按主伤害类型），大小按弹药尺寸 / 导弹爆炸半径
@@ -313,7 +321,7 @@ function fighterOf(f) {
   if (atk) Object.assign(atk, { er: f.attr(2234), ev: f.attr(2235), drf: drfOf(f.attr(2231), f.attr(2232)), opt: f.attr(2236) || 5000, fall: f.attr(2237) || 0 });
   if (msl) Object.assign(msl, { er: f.attr(2125), ev: f.attr(2126), drf: drfOf(f.attr(2127), f.attr(2128)), range: f.attr(2149) || 30000 });
   if (!atk && !msl) return null;
-  return { squads: f.active, size: f.attr(FE.AT.fighterSquadronSize) || 1, vel: f.attr(FE.AT.maxVelocity) || 2000, orbit: f.attr(2223) || 3000,
+  return { type: f.type.id, squads: f.active, size: f.attr(FE.AT.fighterSquadronSize) || 1, vel: f.attr(FE.AT.maxVelocity) || 2000, orbit: f.attr(2223) || 3000,
     cls: f.attr(FE.AT.fighterIsHeavy) ? 2 : f.attr(FE.AT.fighterIsSupport) ? 1 : 0, atk, msl };
 }
 const SLOT_ORDER = ['high', 'mid', 'low'];
@@ -323,13 +331,15 @@ function unitTemplate(row) {
   const ship = calc.ship;
   const d = stats.defense;
   const res = ['shield', 'armor', 'hull'].map((k) => FE.RESIST[k].map((a) => ship.attr(a)));
-  const remote = [], webs = [], paints = [], neuts = [], noses = [], damps = [], ecms = [], points = [], localReps = [];
+  const remote = [], webs = [], paints = [], neuts = [], noses = [], damps = [], ecms = [], points = [], localReps = [], injectors = [];
   // 装备栏（状态面板用）：高、中、低槽；m 为在装备栏里的序号，引擎按序号记录每件装备是否在运转
   const rack = [];
   const idx = new Map();
   for (const s of SLOT_ORDER) for (const m of calc.modules.filter((x) => x.slot === s).sort((a, b) => a.index - b.index)) {
     idx.set(m, rack.length);
-    rack.push({ type: m.type.id, slot: s, state: m.state, charge: m.charge?.type.id || 0, off: forcedOff(row.fit.slots[s]?.[m.index]) || '', cycle: (m.attr(FE.AT.duration) || m.attr(FE.AT.speed)) / 1000 || 0, reload: (m.attr(1795) || 0) / 1000 });
+    rack.push({ type: m.type.id, key: `${s}:${m.index}`, hfx: hullFx(m.type), slot: s, state: m.state, charge: m.charge?.type.id || 0, off: forcedOff(row.fit.slots[s]?.[m.index]) || '', cycle: (m.attr(FE.AT.duration) || m.attr(FE.AT.speed)) / 1000 || 0, reload: (m.attr(1795) || 0) / 1000,
+      // 每个周期开头扣的电容（capacitorNeed）、最远作用距离（maxRange）、失准范围（falloffEffectiveness）—— 玩家开装备时检查用
+      cap: Math.max(0, m.attr(FE.AT.capNeed) || 0), rng: m.attr(FE.AT.maxRange) || 0, fall: m.attr(2044) || 0, heat: { abs: m.attr(1180) || 0, dmg: m.attr(1211) || 0, hp: m.attr(9) || 40, spd: (m.attr(1223) || 0) / 100 } });
   }
   const used = new Set();
   // 弹药数：装备容量 / 弹药体积
@@ -342,11 +352,18 @@ function unitTemplate(row) {
     const k = idx.get(m);
     const mark = () => used.add(m);
     // 跃迁扰断 / 扰频（拦截泡不算）：强度累加，超过对方跃迁稳定就走不掉
-    if (m.attr(105) > 0 && range > 0 && !names.includes('warpDisruptSphere')) { points.push({ str: m.attr(105), range, m: k }); mark(); }
+    if (m.attr(105) > 0 && range > 0 && !names.includes('warpDisruptSphere')) { points.push({ str: m.attr(105), range, cycle: dur, m: k }); mark(); }
     // 本地维修（逐周期）：辅助护盾 / 装甲维修有弹药时不耗电，打完要装填
     const ancillary = names.includes('fueledShieldBoosting') || names.includes('fueledArmorRepair');
     const fuel = ancillary && m.charge ? loads(m) : 0;
-    const localRep = (layer, amt) => { localReps.push({ layer, amt, cycle: dur || 5, m: k, ammo: fuel > 0 ? fuel : Infinity, reload: (m.attr(1795) || 60000) / 1000, charged: fuel > 0 }); mark(); };
+    const localRep = (layer, amt) => { localReps.push({ layer, amt, cycle: dur || 5, m: k, ammo: fuel > 0 ? fuel : Infinity, reload: (m.attr(1795) || 60000) / 1000, charged: fuel > 0, ovA: ((layer === 0 ? m.attr(1231) : m.attr(1230)) || 0) / 100, ovC: (m.attr(1206) || 0) / 100 }); mark(); };
+    // 电容注入器：每个周期开始时注入弹药的电量；弹舱打空装填 10 秒（驾驶模拟逐次算，其它按平均耗电）
+    if (names.includes('powerBooster')) {
+      const bonus = m.charge ? m.charge.attr(FE.AT.capacitorBonus) : 0;
+      if (bonus > 0) injectors.push({ bonus, cycle: dur || 12, m: k, ammo: loads(m) || 1, reload: 10 });
+      mark();
+      continue;
+    }
     if (names.includes('shieldBoosting') || names.includes('fueledShieldBoosting')) localRep(0, m.attr(FE.AT.shieldBonus));
     else if (names.includes('armorRepair')) localRep(1, m.attr(FE.AT.armorDamageAmount));
     else if (names.includes('fueledArmorRepair')) localRep(1, m.attr(FE.AT.armorDamageAmount) * (m.charge ? m.attr(FE.AT.chargedArmorDamageMultiplier) || 1 : 1));
@@ -357,12 +374,12 @@ function unitTemplate(row) {
       const amt = m.attr(FE.AT.armorDamageAmount) * mult;
       remote.push({ layer: 1, amt, cycle: dur || 5, rate: amt / (dur || 5), range, falloff, m: k }); mark();
     } else if (names.includes('shipModuleRemoteHullRepairer')) { remote.push({ layer: 2, amt: m.attr(FE.AT.structureDamageAmount), cycle: dur || 5, rate: m.attr(FE.AT.structureDamageAmount) / (dur || 5), range, falloff, m: k }); mark(); }
-    else if (names.includes('remoteWebifierFalloff')) { webs.push({ v: m.attr(FE.AT.speedFactor) / 100, range, falloff, m: k }); mark(); }
-    else if (names.includes('remoteTargetPaintFalloff')) { paints.push({ v: m.attr(FE.AT.signatureRadiusBonus) / 100, range, falloff, m: k }); mark(); }
+    else if (names.includes('remoteWebifierFalloff')) { webs.push({ v: m.attr(FE.AT.speedFactor) / 100, range, falloff, cycle: dur, m: k }); mark(); }
+    else if (names.includes('remoteTargetPaintFalloff')) { paints.push({ v: m.attr(FE.AT.signatureRadiusBonus) / 100, range, falloff, cycle: dur, m: k }); mark(); }
     else if (!dur) continue;
     else if (names.includes('energyNeutralizerFalloff')) { neuts.push({ amt: m.attr(97), cycle: dur, rate: m.attr(97) / dur, range, falloff, m: k }); mark(); }
     else if (names.includes('energyNosferatuFalloff')) { noses.push({ amt: m.attr(90), cycle: dur, rate: m.attr(90) / dur, range, falloff, m: k }); mark(); }
-    else if (names.includes('remoteSensorDampFalloff')) { damps.push({ scan: m.attr(566) / 100, lock: m.attr(309) / 100, range, falloff, m: k }); mark(); }
+    else if (names.includes('remoteSensorDampFalloff')) { damps.push({ scan: m.attr(566) / 100, lock: m.attr(309) / 100, range, falloff, cycle: dur, m: k }); mark(); }
     else if (names.includes('remoteECMFalloff')) { ecms.push({ str: ECM_STR.map((a) => m.attr(a)), cycle: Math.max(1, Math.round(dur)), jam: Math.max(1, Math.round(m.attr(2822) / 1000 || dur)), range, falloff, m: k }); mark(); }
   }
   // 每门武器（空间模拟逐发计算）；fx 给 3D 视图画开火特效：伤害按弹药四种伤害的比例分配到这一发的总伤害
@@ -373,8 +390,11 @@ function unitTemplate(row) {
     if (w.doomsday) {
       const raw = FE.DAMAGE.map((a) => m.attr(a) || 0), rawSum = raw.reduce((a, b) => a + b, 0) || 1;
       const cycle = w.volley / w.dps;
-      return { doomsday: true, turret: false, cycle, volley: w.volley, dmg: raw.map((x) => x / rawSum * w.volley), capNeed: Math.max(0, m.attr(FE.AT.capNeed)),
-        ammo: Infinity, reload: 0, reach: w.range, m: idx.get(m), fx: { w: 'beam', c: DMG_COLOR[raw.indexOf(Math.max(...raw))] ?? 0xffcf4a, s: 4 } };
+      // 预热（doomsdayWarningDuration）之后才出伤；长枪 / 收割者等在持续时间里按伤害周期一跳一跳打
+      const dur = (m.attr(2264) || 0) / 1000, tick = (m.attr(2265) || 0) / 1000;
+      const ticks = dur && tick ? Math.max(1, Math.round(dur / tick)) : 1;
+      return { doomsday: true, turret: false, type: m.type.id, warn: (m.attr(2262) || 0) / 1000, ticks, tick: ticks > 1 ? tick : 0, cycle, volley: w.volley, dmg: raw.map((x) => x / rawSum * w.volley), capNeed: Math.max(0, m.attr(FE.AT.capNeed)),
+        ammo: Infinity, reload: 0, reach: w.range, m: idx.get(m), fx: { w: 'doom', c: 0x9fd6ff, s: 4 } };
     }
     const raw = FE.DAMAGE.map((a) => c.attr(a));
     const rawSum = raw.reduce((a, b) => a + b, 0) || 1;
@@ -384,9 +404,12 @@ function unitTemplate(row) {
     const crystal = (c.attr(783) || 0) > 0 || (m.attr(FE.AT.capNeed) > 0 && !per);
     // 引擎给的是递增满的伤害，模拟里逐轮递增：先换回初始伤害
     const vol0 = w.volley / (w.spool || 1);
-    const g = { turret, cycle, volley: vol0, dmg: raw.map((x) => x / rawSum * vol0), capNeed: Math.max(0, m.attr(FE.AT.capNeed)),
+    const g = { turret, type: m.type.id, cycle, volley: vol0, dmg: raw.map((x) => x / rawSum * vol0), capNeed: Math.max(0, m.attr(FE.AT.capNeed)),
       ammo: crystal || per <= 0 ? Infinity : per, reload: (m.attr(1795) || 10000) / 1000, m: idx.get(m) };
     g.fx = gunFx(m, c, raw, turret);
+    // 超载：伤害、射速加成（百分比）
+    g.ovD = (m.attr(1210) || 0) / 100;
+    g.ovR = (m.attr(1205) || 0) / 100;
     if (m.type.group === 4060) {
       // 电涌投射器：按爆炸半径 / 速度算伤害，打中后跳到附近敌船
       const er = m.attr(654) || c.attr(654), ev = m.attr(653) || c.attr(653);
@@ -405,9 +428,9 @@ function unitTemplate(row) {
     const vel = x.attr(FE.AT.maxVelocity);
     const vol = x.attr(FE.AT.volume);
     const opt = x.attr(FE.AT.maxRange), fall = x.attr(FE.AT.falloff);
-    return { n: x.active, dmg, volley: dmg.reduce((a, b) => a + b, 0), cycle: x.attr(FE.AT.speed) / 1000 || 4, sigRes: x.attr(620) || 400, vel, sentry: vel < 1, control,
+    return { type: x.type.id, n: x.active, dmg, volley: dmg.reduce((a, b) => a + b, 0), cycle: x.attr(FE.AT.speed) / 1000 || 4, sigRes: x.attr(620) || 400, vel, sentry: vel < 1, control,
       track: x.attr(FE.AT.trackingSpeed), opt, fall, attackRange: x.attr(247) || opt + fall * 2, fly: x.attr(416) || 1000, cruise: x.attr(508) || vel,
-      size: vol >= 25 ? 2 : vol >= 10 ? 1 : 0 };
+      size: vol >= 25 ? 2 : vol >= 10 ? 1 : 0, ent: droneEnt(x) };
   }).filter((x) => x.n > 0 && x.volley > 0);
   const fighters = calc.drones.filter((x) => x.type.category === 87 && x.active > 0).map(fighterOf).filter(Boolean);
   // 一直开着的装备（抗性、推进器、损控等）：没被上面归类的已开启装备
@@ -431,8 +454,23 @@ function unitTemplate(row) {
     sig: stats.navigation.signature, vel: stats.navigation.velocity, scanRes: stats.targeting.scanRes,
     lockRange: stats.targeting.range, sensor: stats.targeting.sensor, sensorIdx: Math.max(0, SENSOR_TYPES.indexOf(stats.targeting.sensorType)),
     local: [d.reps.shield, d.reps.armor, d.reps.hull], localReps, regenC: d.shield.hp, regenTau: d.shield.hp && stats.defense.passiveRegen ? 2.5 * d.shield.hp / stats.defense.passiveRegen : 0,
-    cap: { max: cap.capacity, tau: cap.recharge, use: Math.max(0, cap.usage), other: Math.max(0, cap.usage - gunCap) },
-    remote, webs, paints, neuts, noses, damps, ecms, ehp: d.ehp, rack, alwaysOn
+    cap: { max: cap.capacity, tau: cap.recharge, use: Math.max(0, cap.usage), other: Math.max(0, cap.usage - gunCap), otherNoInj: Math.max(0, cap.usage - gunCap + injectors.reduce((t, x) => t + x.bonus * x.ammo / (x.cycle * x.ammo + x.reload), 0)) },
+    injectors, remote, webs, paints, neuts, noses, damps, ecms, ehp: d.ehp, rack, alwaysOn
+  };
+}
+
+// 无人机放出后的实体（驾驶模拟里能被锁定、能被打）：护盾 263 / 装甲 265 / 结构 9、三层抗性、信号半径 552、半径 162、护盾回充 479（毫秒）
+function droneEnt(x) {
+  const { FE } = ctx;
+  const max = [x.attr(263) || 0, x.attr(265) || 0, x.attr(9) || 1];
+  const res = ['shield', 'armor', 'hull'].map((k) => FE.RESIST[k].map((a) => x.attr(a) || 1));
+  const ehp = max.reduce((t, h, l) => t + h / Math.max(0.05, res[l].reduce((a, b) => a + b, 0) / 4), 0);
+  const vel = x.attr(FE.AT.maxVelocity);
+  return {
+    guns: [], drones: [], fighters: [], fighter: 0, pref: 1000, reach: 1500, points: [], align: 1, stab: 0,
+    radius: x.attr(FE.AT.radius) || 5, tau: 1, max, res, types: [], dps: 0, sig: x.attr(552) || 25, vel, scanRes: x.attr(564) || 0,
+    lockRange: 0, sensor: 0, sensorIdx: 0, local: [0, 0, 0], localReps: [], regenC: max[0], regenTau: max[0] ? (x.attr(479) || 0) / 1000 : 0,
+    cap: { max: 0, tau: 0, use: 0, other: 0, otherNoInj: 0 }, injectors: [], remote: [], webs: [], paints: [], neuts: [], noses: [], damps: [], ecms: [], ehp, rack: [], alwaysOn: 0
   };
 }
 
@@ -733,7 +771,7 @@ function mountView(host) {
   host.classList.remove('is-off');
   host.closest('.sim-stage')?.classList.remove('is-off');
   loadBar(0, 0);
-  import('./sim-3d.js?v=v12').then((m) => {
+  import('./sim-3d.js?v=v46').then((m) => {
     if (BT.host !== host || !host.isConnected) return;
     BT.view = m.createView(host, {
       onPick: (i) => { BT.sel = i; updateBattleUi(); },
@@ -2699,3 +2737,53 @@ function useFit(row, item) {
   prepare(row);
   changed();
 }
+
+// ---------- 驾驶模拟（pilot.js）用 ----------
+// 按船型和装配算出战斗单位：没给装配时用击杀记录最近常见装配，没有就是空船。技能按 A 方设置。
+// 返回 { row, off, prop, variant }：row.unit 为推进器开启时的属性，off 为推进器关闭时的属性，prop 为推进器在装备栏里的序号（没有为 -1）；
+// variant(装备栏序号[], { 序号: 弹药类型 }) = 这几件主动装备关着、换了这些弹药时的属性（玩家开关推进器、抗性、感应增强器、换弹药时切换；按组合缓存）
+export async function pilotRow(ship, fit = null, label = '', prep = null) {
+  const row = newRow(ship, 1, fit ? 'manual' : 'kb', fit, label);
+  if (!fit) {
+    const r = await loadKb(ship).catch(() => null);
+    row.fit = r ? ctx.normalize(r.fit) : emptyFit(ship);
+    row.label = r ? `常见装配 ×${r.n}` : '击杀记录里没有这型船 · 空船';
+    // 船炸的时候还在太空里的无人机不会记进击杀邮件，无人机船最常见的那套经常是空舱：从同型船别的击杀记录里拿最常见的一组无人机补上
+    const bw = ctx.data.types.get(ship)?.attrs.get(ctx.FE.AT.droneBandwidth) || 0;
+    if (r && bw > 0 && !(row.fit.drones || []).length) {
+      const alt = (r.list || []).find((x) => x.fit?.drones?.length);
+      if (alt) { row.fit.drones = alt.fit.drones.map((d) => ({ ...d, active: 0 })); row.label += ' · 无人机取自别的击杀记录'; }
+    }
+  }
+  prep?.(row.fit);   // 驾驶模拟：装配里没激活的无人机按带宽激活（击杀记录装配的无人机都在舱里）
+  const was = S.opt.prop;
+  try {
+    S.opt.prop = false;
+    prepare(row, 'A');
+    const off = row.unit;
+    S.opt.prop = true;
+    prepare(row, 'A');
+    const prop = (row.unit?.rack || []).findIndex((m) => { const t = ctx.data.types.get(m.type); return t?.attrs.has(ctx.FE.AT.speedBoostFactor) && t.attrs.has(ctx.FE.AT.massAddition); });
+    const rack = row.unit?.rack || [], cache = new Map();
+    const variant = (list, charges = {}) => {
+      const keys = [...new Set(list)].filter((i) => rack[i]).sort((a, b) => a - b);
+      const ch = Object.entries(charges).filter(([i, c]) => rack[i] && c && c !== rack[i].charge).sort((a, b) => a[0] - b[0]);
+      const k = keys.join(',') + '|' + ch.map(([i, c]) => `${i}=${c}`).join(',');
+      if (!keys.length && !ch.length) return row.unit;
+      if (!cache.has(k)) {
+        const p0 = S.opt.prop, o0 = S.opt.offKeys, c0 = S.opt.chargeOv;
+        try {
+          S.opt.prop = true;
+          S.opt.offKeys = new Set(keys.map((i) => rack[i].key));
+          S.opt.chargeOv = new Map(ch.map(([i, c]) => [rack[i].key, Number(c)]));
+          const r = { ...row };
+          prepare(r, 'A');
+          cache.set(k, r.unit || row.unit);
+        } finally { S.opt.prop = p0; S.opt.offKeys = o0; S.opt.chargeOv = c0; }
+      }
+      return cache.get(k);
+    };
+    return { row, off, prop, variant };
+  } finally { S.opt.prop = was; }
+}
+export { shipSearch as pilotShipSearch };

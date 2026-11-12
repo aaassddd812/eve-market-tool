@@ -8,9 +8,9 @@ import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js
 import * as AH from './alert-host.js?v=v6';
 import * as AP from './alert-push.js?v=v13';
 import * as BN from './back-nav.js?v=v1';
-import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v6';
+import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v7';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
-import * as ST from './standings.js?v=v5';
+import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=3';
@@ -398,8 +398,8 @@ function initNavigation() {
 // 哪些留在外面、什么顺序可在「个性化设置 → 菜单布局」里拖动调整，记在本机（MENU_KEY）。
 // 下拉悬停即展开（离开稍等再收），点按钮也能开关，Esc / 点外面关闭。面板用 fixed 定位，不被导航栏的横向滚动裁掉。
 // 按钮是原来的元素搬进去的，点击、高亮逻辑不变；手机底栏仍从 .header-nav 里读按钮。
-const NAV_MAIN = ['market', 'arb', 'map', 'kb', 'fit', 'appraisal', 'plaza', 'ai', 'profile'];
-const NAV_MORE = [['交易', ['arb', 'appraisal', 'contracts', 'courier', 'lp', 'abyss', 'bazaar']], ['生产', ['industry', 'pi']], ['宇宙与战斗', ['sim', 'war', 'sov', 'wh']], ['其他', ['plaza', 'guide']]];
+const NAV_MAIN = ['market', 'arb', 'map', 'kb', 'pilot', 'fit', 'appraisal', 'plaza', 'ai', 'profile'];
+const NAV_MORE = [['交易', ['arb', 'appraisal', 'contracts', 'courier', 'lp', 'abyss', 'bazaar']], ['生产', ['industry', 'pi']], ['宇宙与战斗', ['sim', 'pilot', 'war', 'sov', 'wh']], ['其他', ['plaza', 'guide']]];
 // 可调整的小按钮：id → 名称（菜单里显示）；api 是 .api-link
 const ACT_ITEMS = [['cartBtn', '购物车'], ['killAlertBtn', '预警'], ['contactBtn', '联系'], ['desktopDlBtn', '下载'], ['langToggle', '语言'], ['themeToggle', '切换主题'], ['prefsBtn', '个性化设置'], ['shortcutHelpBtn', '快捷键'], ['api', '开放 API 文档']];
 const ACT_TOP = ['cartBtn', 'killAlertBtn', 'contactBtn', 'desktopDlBtn'];
@@ -589,8 +589,8 @@ function initMenuLayoutEditor() {
 }
 
 // 各视图在地址栏里的 hash 前缀（市场中心为空或 #type=）
-const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', bazaar: '#bazaar', wh: '#wh', plaza: '#plaza', guide: '#guide', ai: '#ai' };
-const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', bazaar: 'bazaarView', wh: 'whView', plaza: 'plazaView', guide: 'guideView', ai: 'aiView' };
+const VIEW_HASH = { map: '#map', kb: '#kb', sim: '#sim', pilot: '#fly', fit: '#fit', pi: '#pi', industry: '#ind', lp: '#lp', appraisal: '#appr', courier: '#courier', contracts: '#contracts', war: '#war', sov: '#sov', abyss: '#abyss', bazaar: '#bazaar', wh: '#wh', plaza: '#plaza', guide: '#guide', ai: '#ai' };
+const VIEW_IDS = { market: 'marketView', profile: 'profileView', map: 'mapView', kb: 'kbView', sim: 'simView', pilot: 'pilotView', fit: 'fitView', pi: 'piView', industry: 'industryView', lp: 'lpView', appraisal: 'appraisalView', courier: 'courierView', contracts: 'contractsView', war: 'warView', sov: 'sovView', abyss: 'abyssView', bazaar: 'bazaarView', wh: 'whView', plaza: 'plazaView', guide: 'guideView', ai: 'aiView' };
 // 离开视图时记住地址栏 hash 与滚动位置，切回来时恢复，页面保持离开前的样子
 const viewHashes = {};
 const viewScroll = {};
@@ -661,6 +661,7 @@ function switchView(view) {
   else starMapModule?.hideStarMap();
   if (view === 'kb') openKbPage(restored);
   if (view === 'sim') openSimPage(restored);
+  if (view === 'pilot') openPilotPage();
   if (view === 'fit') openFitting(restored);
   if (view === 'pi') openPi();
   if (view === 'industry') openIndustry(restored);
@@ -873,7 +874,7 @@ async function openGuides() {
 // 战争（势力战争 + 军团战争）：首次进入时加载
 let warLoading = null;
 function loadWarModule() {
-  if (!warLoading) warLoading = import('./war.js?v=v14').then((m) => {
+  if (!warLoading) warLoading = import('./war.js?v=v15').then((m) => {
     m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
     return m;
   }).catch((error) => { warLoading = null; throw error; });
@@ -1014,7 +1015,7 @@ async function openEftFit(text) {
 // 快递合同：首次进入时加载
 let courierLoading = null;
 function loadCourierModule() {
-  if (!courierLoading) courierLoading = import('./courier.js?v=v13').then((m) => {
+  if (!courierLoading) courierLoading = import('./courier.js?v=v14').then((m) => {
     m.initCourier({
       esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
       // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
@@ -1058,7 +1059,7 @@ async function openCourier() {
 // 合同（公开合同存档 + 我的个人 / 军团 / 联盟合同）：首次进入时加载
 let contractsLoading = null;
 function loadContractsModule() {
-  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v9').then((m) => {
+  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v10').then((m) => {
     m.initContracts({
       esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, officialName, locationName, loadNpcNames, typeName,
       valuation, valuationCard, store, game: gameActions, regions: REGIONS, marketRegions: () => state.marketRegions, loadMarketRegions,
@@ -1151,7 +1152,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v154').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v210').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -1181,6 +1182,18 @@ async function openSimPage(restored = false) {
   } catch (error) {
     console.error('战场模拟加载失败:', error);
     showToast('战场模拟加载失败：' + error.message, 'error', 4000);
+  }
+}
+
+// 驾驶模拟（pilot.js）：与装配页共用装配模块和数据
+async function openPilotPage() {
+  try {
+    const m = await loadFittingModule();
+    if (!location.hash.startsWith('#fly')) history.replaceState(null, '', location.pathname + '#fly');
+    await m.showPilot($('pilotMain'));
+  } catch (error) {
+    console.error('驾驶模拟加载失败:', error);
+    showToast('驾驶模拟加载失败：' + error.message, 'error', 4000);
   }
 }
 
@@ -1290,7 +1303,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v102').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v104').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1336,7 +1349,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v53').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v54').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText,
       killRadial: async (km) => (await loadFittingModule()).killRadial(km)
@@ -1351,7 +1364,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v65').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v66').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,
@@ -1789,12 +1802,38 @@ function highlight(text, query) {
   return esc(text.slice(0, at)) + '<mark>' + esc(text.slice(at, at + query.length)) + '</mark>' + esc(text.slice(at + query.length));
 }
 
+// 分类的上级路径（不含自己）：「舰船 / 护卫舰 / 标准护卫舰」
+function groupPath(group) {
+  const names = [];
+  for (let g = group.parentId ? state.categories.get(group.parentId) : null; g; g = g.parentId ? state.categories.get(g.parentId) : null) names.unshift(g.name);
+  return names.join(' / ');
+}
+
+// 搜索：物品名 / 物品 ID，以及分类名 —— 名字匹配的分类单独列在最上面（可展开），分类（含任一上级分类）匹配的物品也列出
 function renderSearchResults(container) {
   const query = state.searchQuery.toLowerCase();
   const idQuery = /^\d+$/.test(query) ? Number(query) : null;
   const results = [];
+  // 名字匹配的分类：完全相同 > 开头相同 > 包含；同分时层级浅的、物品多的在前
+  const catHits = [];
+  const hitCat = new Map();   // 分类 ID → 自己或上级是否匹配
+  const catMatch = (g) => {
+    if (hitCat.has(g.id)) return hitCat.get(g.id);
+    const own = g.name.toLowerCase().includes(query);
+    const up = g.parentId && state.categories.has(g.parentId) ? catMatch(state.categories.get(g.parentId)) : false;
+    hitCat.set(g.id, own || up);
+    return own || up;
+  };
+  if (idQuery === null) state.catalog.groups.forEach((g) => {
+    const n = g.name.toLowerCase();
+    if (!g.total || !n.includes(query)) return;
+    const path = groupPath(g);
+    catHits.push({ g, score: n === query ? 0 : n.startsWith(query) ? 1 : 2, depth: path ? path.split(' / ').length : 0, path });
+  });
+  // 同分：层级浅的在前，再按上级路径（「舰船」排在「舰船涂装」前），最后物品多的在前
+  catHits.sort((a, b) => a.score - b.score || a.depth - b.depth || a.path.localeCompare(b.path, 'zh-CN') || b.g.total - a.g.total);
   state.catalog.groups.forEach((group) => {
-    const groupHit = group.name.toLowerCase().includes(query);
+    const groupHit = idQuery === null && catMatch(group);
     group.types.forEach((type) => {
       const name = type.name.toLowerCase();
       let score = -1;
@@ -1807,13 +1846,26 @@ function renderSearchResults(container) {
     });
   });
 
-  if (!results.length) {
+  if (!results.length && !catHits.length) {
     container.innerHTML = '<div class="empty-state"><p>未找到 “' + esc(state.searchQuery) + '”</p></div>';
     return;
   }
   results.sort((a, b) => a.score - b.score || a.type.name.length - b.type.name.length || a.type.name.localeCompare(b.type.name, 'zh-CN'));
-  const limit = 200;
-  container.innerHTML = `<div class="search-summary">找到 ${results.length.toLocaleString()} 项${results.length > limit ? `，显示前 ${limit} 项` : ''}</div>` +
+  const limit = 200, catLimit = 12;
+  const cats = catHits.slice(0, catLimit).map(({ g }) => {
+    const path = groupPath(g);
+    return `<div class="category search-cat" data-id="${g.id}" role="treeitem" aria-expanded="false">
+      <button class="category-header" type="button" title="${esc(path ? path + ' / ' + g.name : g.name)}">
+        ${ICONS.chevron}
+        ${g.icon ? `<img class="tree-icon tree-cat-icon" src="${treeIconUrl(g.icon)}" alt="" loading="lazy" width="20" height="20">` : ''}
+        <span class="hit-text"><span class="category-name">${highlight(g.name, query)}</span>${path ? `<span class="item-sub">${esc(path)}</span>` : ''}</span>
+        <span class="category-count">${g.total}</span>
+      </button>
+      <div class="category-items" role="group"></div>
+    </div>`;
+  }).join('');
+  container.innerHTML = (catHits.length ? `<div class="search-summary">分类 ${catHits.length.toLocaleString()} 个${catHits.length > catLimit ? `，显示前 ${catLimit} 个` : ''}（点开查看分类里的物品）</div>${cats}` : '') +
+    (results.length ? `<div class="search-summary">物品 ${results.length.toLocaleString()} 项${results.length > limit ? `，显示前 ${limit} 项` : ''}</div>` : '') +
     results.slice(0, limit).map(({ type, group }) => {
       const active = state.selectedItem?.id === type.id ? ' active' : '';
       return `<button class="item-btn search-hit${active}" type="button" data-type-id="${type.id}" title="${esc(type.name)} · Type ${type.id}">
@@ -3506,6 +3558,7 @@ function initHashRouting() {
     if (location.hash.startsWith('#kb')) { if (state.currentView !== 'kb') switchView('kb'); return; }
     if (location.hash.startsWith('#map')) { if (state.currentView !== 'map') switchView('map'); return; }
     if (location.hash.startsWith('#sim')) { if (state.currentView !== 'sim') switchView('sim'); return; }
+    if (location.hash.startsWith('#fly')) { if (state.currentView !== 'pilot') switchView('pilot'); return; }
     if (location.hash.startsWith('#plan')) { openSkillPlan(); return; }
     if (location.hash.startsWith('#fit/sim')) { history.replaceState(null, '', location.pathname + '#sim'); switchView('sim'); return; }
     if (location.hash.startsWith('#fit')) { if (state.currentView !== 'fit') switchView('fit'); return; }
@@ -3616,7 +3669,7 @@ const RAIL_GROUPS = [
   ['common', '常用', ['market', 'appraisal', 'fit', 'map', 'kb', 'plaza', 'ai']],
   ['trade', '交易', ['arb', 'contracts', 'courier', 'lp', 'abyss', 'bazaar']],
   ['make', '生产', ['industry', 'pi']],
-  ['space', '宇宙与战斗', ['sim', 'war', 'sov', 'wh']]
+  ['space', '宇宙与战斗', ['sim', 'pilot', 'war', 'sov', 'wh']]
 ];
 // 桌面版左侧菜单：入口分组、每组可折叠（记在本机）；底部「收起 / 展开」整栏只留图标。返回同步当前页高亮的函数
 const RAIL_NARROW = 1100;
@@ -5837,7 +5890,7 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v10').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v11').then((m) => {
     m.initProfileMore({
       allChars, esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
@@ -6787,7 +6840,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v28').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v29').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6810,7 +6863,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v43').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v44').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -6863,7 +6916,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v29').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v30').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
@@ -6879,7 +6932,7 @@ function loadLocal() {
 // ===== 总览预警（ov-watch.js）：看总览的类型一列，出现设定的东西就报警；点到标签页时才加载 =====
 let ovModule = null;
 function loadOv() {
-  if (!ovModule) ovModule = import('./ov-watch.js?v=7').then((m) => {
+  if (!ovModule) ovModule = import('./ov-watch.js?v=8').then((m) => {
     m.initOvWatch({ esc, showToast });
     const sync = () => { alertState.ov = m.status(); syncAlertBtn(); };
     m.onChange(sync);
@@ -7024,6 +7077,7 @@ function init() {
   if (location.hash.startsWith('#kb')) switchView('kb');     // 击杀记录分享链接
   if (location.hash.startsWith('#fit/sim')) history.replaceState(null, '', location.pathname + '#sim');   // 旧地址：对战模拟原在装配页
   if (location.hash.startsWith('#sim')) switchView('sim');   // 战场模拟
+  if (location.hash.startsWith('#fly')) switchView('pilot');   // 驾驶模拟
   if (location.hash.startsWith('#plan')) openSkillPlan();    // 旧地址：技能规划已移到个人中心 · 技能
   if (location.hash.startsWith('#fit')) switchView('fit');   // 装配分享链接
   if (location.hash.startsWith('#pi')) switchView('pi');     // 行星工业
@@ -7097,6 +7151,7 @@ const PAGE_PRELOAD = {
   map: () => loadStarMapModule().then((m) => m.preloadStarMap()),
   fit: () => loadFittingModule().then((m) => m.preloadFitting()),
   sim: () => loadFittingModule().then((m) => m.preloadFitting()),
+  pilot: () => loadFittingModule().then((m) => m.preloadFitting()),
   plan: () => loadFittingModule().then((m) => m.preloadFitting()),
   pi: () => loadPiModule().then((m) => m.preload()),
   industry: () => loadIndustryModule().then((m) => m.preload()),

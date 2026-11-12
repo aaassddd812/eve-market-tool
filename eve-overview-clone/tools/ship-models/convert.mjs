@@ -1,6 +1,8 @@
 // 舰船模型转换：EVE 客户端资源服务器 → 战场模拟用的静态文件（ship-models/）
 //
-// 用法：node --max-old-space-size=6000 convert.mjs --sde <SDE 目录> [--out <输出目录>] [--only 587,24690] [--max 2048] [--keep-cache]
+// 用法：node --max-old-space-size=6000 convert.mjs --sde <SDE 目录> [--out <输出目录>] [--only 587,24690] [--cats 6,18,87] [--build 3628513] [--max 2048] [--keep-cache] [--wrecks] [--turrets]
+//   --wrecks：另外转通用残骸 wreck_s / wreck_m / wreck_l（SDE 残骸组 186：护卫舰级 s、驱逐 ~ 巡洋 m、战巡 ~ 战列 l），index.wrecks 记 { s, m, l: 模型键 }
+//   --turrets：另外转炮塔 / 发射器模型（装备 graphicFile 在 model/turret/ 下的 EveTurretSet），index.turrets 记 { 装备 typeID: 模型键 }
 //
 // 流程（只用公开资源，不需要客户端）：
 //   1. binaries.eveonline.com 取当前客户端版本 → resfileindex（res:/ 路径 → 下载地址）
@@ -51,7 +53,8 @@ async function fetchBuf(url, tries = 4) {
 // ── 资源索引 ──
 const INDEX = new Map();
 async function loadIndex() {
-  const build = JSON.parse((await fetchBuf(BIN + 'eveclient_TQ.json')).toString()).build;
+  // --build：固定客户端版本（新版 SOF 数据有解析库还不认识的字段时用旧版）
+  const build = args.build || JSON.parse((await fetchBuf(BIN + 'eveclient_TQ.json')).toString()).build;
   const app = (await fetchBuf(`${BIN}eveonline_${build}.txt`)).toString();
   const want = app.split('\n').map((l) => l.split(',')).filter((p) => p[0] === 'app:/resfileindex.txt');
   for (const [, path] of want) {
@@ -59,6 +62,22 @@ async function loadIndex() {
       const p = l.split(',');
       if (p[1]) INDEX.set(p[0].toLowerCase(), p[1]);
     }
+  }
+  // 固定旧版本时：每个船体单独的 .black（含受损火焰 / 受击定位点）新版本才有这些定位点，这一类条目一律用最新版的
+  if (args.build) {
+    try {
+      const latest = JSON.parse((await fetchBuf(BIN + 'eveclient_TQ.json')).toString()).build;
+      const app2 = (await fetchBuf(`${BIN}eveonline_${latest}.txt`)).toString();
+      let n = 0;
+      for (const [, path] of app2.split('\n').map((l) => l.split(',')).filter((p) => p[0] === 'app:/resfileindex.txt')) {
+        for (const l of (await fetchBuf(BIN + path)).toString().split('\n')) {
+          const p = l.split(',');
+          const k = (p[0] || '').toLowerCase();
+          if (p[1] && k.startsWith('res:/dx9/model/spaceobjectfactory/hulls/')) { INDEX.set(k, p[1]); n++; }
+        }
+      }
+      log('从最新版本', latest, '补船体文件条目', n);
+    } catch (e) { log('最新版索引读取失败（不影响模型，只是没有定位点）', e.message); }
   }
   log('客户端版本', build, '资源条目', INDEX.size);
   return build;
@@ -143,9 +162,9 @@ async function writeGeometry(resPath, file) {
 // ── 材质参数 ──
 const PARAMS = ['DiffuseColor', 'FresnelColor', 'Gloss', 'DustDiffuseColor'];
 const shaderKind = (p) => { const f = String(p).toLowerCase(); if (!/\/quad\//.test(f)) return null; if (/glass/.test(f)) return 'glass'; if (/heat/.test(f)) return 'heat'; return 'quad'; };
-function areaOf(a) {
+function areaOf(a, forceQuad = false) {
   const e = a.effect || {};
-  const kind = shaderKind(e.effectFilePath);
+  const kind = forceQuad ? 'quad' : shaderKind(e.effectFilePath);
   if (!kind) return null;
   const cp = Object.fromEntries((e.constParameters || []).map((p) => [p.name, Array.from(p.value || [])]));
   const rs = Object.fromEntries((e.resources || []).map((r) => [r.name, r.resourcePath]));
@@ -166,11 +185,35 @@ async function main() {
   log('读取 SOF 数据…');
   const black = await CjsBlackFormat.read(new Uint8Array(await getRes('res:/dx9/model/spaceobjectfactory/data.black')));
   const sof = await S.EveSOF.Create({ black: black.object, resFileIndex: [...INDEX.keys()] });
+  // --probe 外观DNA：只打印这艘船的喷口参数（不写文件），排查用
+  if (args.probe) {
+    const v = await sof.BuildValuesFromDNA(String(args.probe));
+    const b = v?.boosters || {};
+    console.log(JSON.stringify(Object.fromEntries(Object.entries(b).filter(([k]) => k !== 'items').map(([k, x]) => [k, ArrayBuffer.isView(x) ? Array.from(x) : x])), null, 1));
+    console.log('items', JSON.stringify((b.items || []).slice(0, 2)));
+    const hd = await sof.GetHullData(String(args.probe).split(':')[0]);
+    console.log('hull keys', Object.keys(hd || {}).join(','));
+    for (const k of ['children', 'childSets']) console.log(k, JSON.stringify(hd?.[k], (kk, v) => (ArrayBuffer.isView(v) ? undefined : v)).slice(0, 1500));
+    for (const k of Object.keys(hd || {})) if (/locator/i.test(k)) console.log(k, JSON.stringify(hd[k], (kk, v) => (ArrayBuffer.isView(v) ? Array.from(v).map((x) => +(+x).toFixed(2)) : v)).slice(0, 1500));
+    return;
+  }
 
   // SDE：已发布舰船
   const groups = new Map(jsonl('groups.jsonl').map((g) => [g._key, g]));
   const graphics = new Map(jsonl('graphics.jsonl').map((g) => [g._key, g]));
-  const ships = jsonl('types.jsonl').filter((t) => t.published && groups.get(t.groupID)?.categoryID === 6 && (!ONLY || ONLY.has(t._key)));
+  // --cats 18,87：只转这些类别（默认舰船 6）；无人机 18、舰载机 87 和舰船用同一套 SOF 外观
+  const CATS = new Set(String(args.cats || '6').split(',').map(Number));
+  const allTypes = jsonl('types.jsonl');
+  const ships = allTypes.filter((t) => t.published && CATS.has(groups.get(t.groupID)?.categoryID) && (!ONLY || ONLY.has(t._key)));
+  // 通用残骸（每个尺寸取一个代表类型就够，外观都一样）
+  const WRECK_SIZE = { wreck_s: 's', wreck_m: 'm', wreck_l: 'l' };
+  if (args.wrecks) {
+    const seen = new Set();
+    for (const t of allTypes) {
+      const h = t.groupID === 186 ? graphics.get(t.graphicID)?.sofHullName : null;
+      if (h && WRECK_SIZE[h] && !seen.has(h)) { seen.add(h); ships.push(t); }
+    }
+  }
   const byDna = new Map();
   for (const t of ships) {
     const g = graphics.get(t.graphicID);
@@ -183,6 +226,7 @@ async function main() {
 
   const index = existsSync(join(OUT, 'index.json')) ? JSON.parse(readFileSync(join(OUT, 'index.json'), 'utf8')) : { types: {}, models: {} };
   const geoDone = new Map();
+  const locCache = new Map();
   const texJobs = new Map();
   let ok = 0, bad = 0;
   for (const [dna, types] of byDna) {
@@ -203,14 +247,33 @@ async function main() {
         if (!texJobs.has(tk)) texJobs.set(tk, a.tex);
         a.tex = { k: tk, has: Object.keys(a.tex).join('') };
       }
-      const boosters = (v.boosters?.items || []).map((b) => { const m = b.transform; return [m[12], m[13], m[14], Math.hypot(m[0], m[1], m[2]), Math.hypot(m[8], m[9], m[10])].map((x) => +x.toFixed(2)); });
+      // 喷口：[x, y, z, 口径, 长度, 渐变行0, 渐变行1, 有尾迹]
+      const boosters = (v.boosters?.items || []).map((b) => { const m = b.transform; return [m[12], m[13], m[14], Math.hypot(m[0], m[1], m[2]), Math.hypot(m[8], m[9], m[10])].map((x) => +x.toFixed(2)).concat(b.atlasIndex0 || 0, b.atlasIndex1 || 0, b.hasTrail ? 1 : 0); });
+      // 喷口外观（SOF EveBoosterSet2）：两层火焰颜色（HDR）、光点 / 横向光晕、尾迹、跃迁时颜色
+      const BS = v.boosters || {};
+      const cpOf = (e) => Object.fromEntries((e?.constParameters || []).map((p) => [p.name, Array.from(p.value || []).map((x) => +(+x).toFixed(4))]));
+      const rgb = (c) => Array.from(c || [0, 0, 0]).slice(0, 3).map((x) => +(+x).toFixed(5));
+      const be = cpOf(BS.effect), te = cpOf(BS.trails?.effect);
+      const bst = { c0: rgb(be.Color0), c1: rgb(be.Color1), a0: rgb(be.NoiseAmplitudeStart0), a1: rgb(be.NoiseAmplitudeEnd0), fq: (be.NoiseFrequency0 || [0, 0, 0, 0]).slice(0, 4), wc0: rgb(be.WarpColor0), wc1: rgb(be.WarpColor1), ns: [(be.NoiseSpeed0 || [0])[0], (be.NoiseSpeed1 || [0])[0]],
+        glow: [+BS.glowScale || 0, ...rgb(BS.glowColor)], halo: [+BS.haloScaleX || 0, +BS.haloScaleY || 0, ...rgb(BS.haloColor)], sym: +BS.symHaloScale || 0,
+        wglow: rgb(BS.warpGlowColor), whalo: rgb(BS.warpHaloColor), trail: te.TrailSize || null, trailC: te.TrailColor ? rgb(te.TrailColor) : null, on: BS.alwaysOn ? 1 : 0 };
       const hd = await sof.GetHullData(hull);
+      // 船体定位点（受损火焰 vds_trail、受击点 damage）：SOF 数据里是空的，在船体自己的 .black 里；这里先下载，全部模型写完后统一读（hull-locators.mjs）
+      const loc = {};
+      const hullBlack = `res:/dx9/model/spaceobjectfactory/hulls/${hull}.black`;
+      if (!locCache.has(hull)) {
+        let file = '';
+        if (hasRes(hullBlack)) { try { await getRes(hullBlack); file = cacheFile(hullBlack); } catch (e) { log('船体文件下载失败', hull, e.message); } }
+        locCache.set(hull, { file, keys: [] });
+      }
+      locCache.get(hull).keys.push(key);
       const model = {
         dna, geo: `g/${hull}.bin`, r: +(+v.boundingSphereRadius).toFixed(1), c: Array.from(v.boundingSphereCenter || [0, 0, 0]).map((x) => +(+x).toFixed(1)),
-        areas, boosters, boosterColor: Array.from(v.boosters?.glowColor || [0.01, 0.02, 0.03]).slice(0, 3), cat: hd?.category || '',
+        areas, boosters, bst, loc, boosterColor: Array.from(v.boosters?.glowColor || [0.01, 0.02, 0.03]).slice(0, 3), cat: hd?.category || '',
       };
       writeFileSync(join(OUT, 'm', key + '.json'), JSON.stringify(model));
       index.models[key] = { r: model.r };
+      if (WRECK_SIZE[hull]) { (index.wrecks ||= {})[WRECK_SIZE[hull]] = key; ok++; continue; }
       for (const t of types) index.types[t._key] = { m: key, b: bracketOf(groups.get(t.groupID)?.name?.en, model.cat) };
       ok++;
       if (ok % 20 === 0) log('模型', ok, '/', byDna.size);
@@ -220,6 +283,70 @@ async function main() {
     }
   }
   log('几何完成', ok, '失败', bad, '贴图组', texJobs.size);
+  // 定位点：一次读完，写回各模型
+  {
+    const jobs = Object.fromEntries([...locCache].filter(([, v]) => v.file).map(([h, v]) => [h, v.file]));
+    const r = spawnSync(process.execPath, [join(HERE, 'hull-locators.mjs')], { input: JSON.stringify(jobs), encoding: 'utf8', maxBuffer: 1 << 28, cwd: HERE });
+    if (r.status !== 0) log('定位点读取出错', (r.stderr || '').slice(0, 500));
+    else {
+      if (r.stderr) log('定位点：部分船体读取失败', r.stderr.trim().split('\n').length, '个，例如', r.stderr.trim().split('\n')[0].slice(0, 200));
+      const got = JSON.parse(r.stdout || '{}');
+      let n = 0;
+      for (const [h, v] of locCache) {
+        if (!got[h] || !Object.keys(got[h]).length) continue;
+        for (const k of v.keys) { const f = join(OUT, 'm', k + '.json'); const m = JSON.parse(readFileSync(f, 'utf8')); m.loc = got[h]; writeFileSync(f, JSON.stringify(m)); n++; }
+      }
+      log('定位点写入', n, '个外观');
+    }
+  }
+
+  // 炮塔模型（EveTurretSet）：几何 + quadv5 材质（Mtl1~4 颜色 / 光泽、发光色）照船体一样转，挂点在船体 loc.turrets
+  if (args.turrets) {
+    const tByPath = new Map();
+    for (const t of allTypes) {
+      if (!t.published || groups.get(t.groupID)?.categoryID !== 7) continue;
+      const gf = String(graphics.get(t.graphicID)?.graphicFile || '').toLowerCase();
+      if (!gf.includes('/model/turret/')) continue;
+      const bp = gf.replace(/\.red$/, '.black');
+      if (!tByPath.has(bp)) tByPath.set(bp, []);
+      tByPath.get(bp).push(t._key);
+    }
+    let tn = 0;
+    index.turrets = index.turrets || {};
+    const tFiles = {};
+    await pool([...tByPath.keys()].filter(hasRes), 6, async (bp) => { try { await getRes(bp); tFiles[bp] = cacheFile(bp); } catch (e) { log('炮塔文件下载失败', bp, e.message); } });
+    const tr = spawnSync(process.execPath, [join(HERE, 'turret-sets.mjs')], { input: JSON.stringify(tFiles), encoding: 'utf8', maxBuffer: 1 << 28, cwd: HERE });
+    if (tr.stderr) log('炮塔文件读取：', tr.stderr.trim().split('\n').length, '个失败，例如', tr.stderr.trim().split('\n')[0].slice(0, 200));
+    const tSets = tr.status === 0 ? JSON.parse(tr.stdout || '{}') : {};
+    for (const [bp, ids] of tByPath) {
+      try {
+        if (!hasRes(bp)) throw new Error('没有 ' + bp);
+        const ts = tSets[bp];
+        if (ts?.type !== 'EveTurretSet') throw new Error('不是 EveTurretSet：' + ts?.type);
+        const geo = ts.geometryResPath;
+        if (!geo || !hasRes(geo)) throw new Error('没有几何 ' + geo);
+        // 同名文件在 s / m / l 目录各有一份（如 blast_neutron_t1），键里带上 model/turret/ 之后的整段路径
+        const key = 'turret_' + bp.split('/model/turret/')[1].replace(/\.black$/, '').replace(/\//g, '_');
+        const file = join(OUT, 'g', key + '.bin');
+        const gi = existsSync(file) ? null : await writeGeometry(geo, file);
+        const head = gi || JSON.parse(readFileSync(file).subarray(8, 8 + readFileSync(file).readUInt32LE(4)).toString().trim().replace(/\0+$/, ''));
+        const nAreas = Math.max(1, (head.areas || [0]).length);
+        const a = areaOf({ name: 'turret', effect: ts.effect, index: 0, count: nAreas }, true);
+        if (!a) throw new Error('材质读不了');
+        const set = JSON.stringify(a.tex), tk = md5(set);
+        if (!texJobs.has(tk)) texJobs.set(tk, a.tex);
+        a.tex = { k: tk, has: Object.keys(a.tex).join('') };
+        const bs = Array.from(ts.boundingSphere || [0, 0, 0, 1]).map((x) => +(+x).toFixed(2));
+        const model = { geo: `g/${key}.bin`, r: bs[3], c: bs.slice(0, 3), areas: [a], boosters: [], bst: null, loc: {}, boosterColor: [0, 0, 0], cat: 'turret',
+          pitchMin: +ts.sysBonePitchMin || 0, clip: +(+ts.bottomClipHeight || 0).toFixed(3), fx: String(ts.firingEffectResPath || '').toLowerCase() };
+        writeFileSync(join(OUT, 'm', key + '.json'), JSON.stringify(model));
+        index.models[key] = { r: model.r };
+        for (const id of ids) index.turrets[id] = key;
+        tn++;
+      } catch (e) { log('炮塔跳过', bp, e.message); }
+    }
+    log('炮塔模型', tn, '/', tByPath.size);
+  }
 
   // 贴图：分批下载 → textures.py 转 WebP → 删除缓存的 DDS
   const todo = [...texJobs].filter(([k]) => !existsSync(join(OUT, 't', k + '_x.webp')));

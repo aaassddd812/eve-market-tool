@@ -574,6 +574,9 @@ html.no-tree-icons .tree-icon { display: none; }   /* 个性化设置可关掉�
 .item-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .search-summary { padding: 4px 8px 8px; font-size: 0.75rem; color: var(--text-muted); }
+.search-cat > .category-header { min-height: 44px; }
+.search-cat > .category-header .hit-text { flex: 1; }
+.category + .search-summary { margin-top: 6px; }
 
 .search-hit { min-height: 44px; }
 .tree-icon { width: 20px; height: 20px; }
@@ -2411,6 +2414,7 @@ td.loc {
 .kb-suggest-item > i { width: 8px; height: 8px; margin: 0 7px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
 .kb-suggest-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .kb-suggest-item small { font-size: 0.6875rem; color: var(--text-muted); white-space: nowrap; }
+.kb-suggest-item img.kb-suggest-org { border-radius: 3px; margin-left: -4px; }
 .kb-suggest-row { display: flex; align-items: center; gap: 4px; }
 .kb-suggest-row .kb-suggest-item { flex: 1; min-width: 0; }
 .kb-suggest-add { flex: none; padding: 4px 8px; border-radius: var(--radius-sm); font-size: 0.75rem; color: var(--accent-primary); background: var(--accent-soft); white-space: nowrap; }
@@ -2520,6 +2524,8 @@ td.loc {
 .kb-entity-kind { font-size: 0.75rem; color: var(--text-muted); }
 .kb-entity-head h2 { font-size: 1.5rem; font-weight: 700; line-height: 1.25; }
 .kb-entity-head p { margin-top: 2px; font-size: 0.8125rem; color: var(--text-secondary); }
+.kb-head-org { display: inline-flex; align-items: center; gap: 5px; vertical-align: middle; }
+.kb-head-org img { border-radius: 3px; background: #0d1219; flex: none; }
 .kb-members td:first-child { white-space: normal; }
 .kb-member { display: inline-flex; align-items: center; gap: 8px; }
 .kb-member img { border-radius: 4px; background: #0d1219; }
@@ -3140,6 +3146,15 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .fit-slot-tabs button { padding: 3px 10px; border: 0; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-secondary); font: inherit; font-size: 0.75rem; cursor: pointer; }
 .fit-slot-tabs button:hover { color: var(--text-primary); }
 .fit-slot-tabs button.active { background: var(--accent-soft); color: var(--accent-primary); font-weight: 600; }
+/* 弹药页：已装武器一排，点了只看它的弹药 */
+.fit-charge-mods { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; }
+.fit-charge-mods button { position: relative; display: grid; place-items: center; min-width: 36px; height: 36px; padding: 0 8px; border: 0; border-radius: 8px; background: var(--bg-tertiary); color: var(--text-secondary); font: inherit; font-size: 0.75rem; cursor: pointer; }
+.fit-charge-mods button.fit-cm { width: 36px; padding: 0; }
+.fit-charge-mods button img { width: 28px; height: 28px; border-radius: 4px; }
+.fit-charge-mods button em { position: absolute; right: -3px; bottom: -3px; min-width: 15px; padding: 0 3px; border-radius: 8px; background: var(--bg-primary); color: var(--text-secondary); font-size: 0.625rem; font-style: normal; line-height: 15px; }
+.fit-charge-mods button:hover { color: var(--text-primary); background: var(--bg-hover, var(--bg-tertiary)); }
+.fit-charge-mods button.active { background: var(--accent-soft); color: var(--accent-primary); font-weight: 600; }
+.fit-charge-for { margin: 0; padding: 0 14px 6px; font-size: 0.75rem; color: var(--text-secondary); }
 .fit-group-head {
   display: flex; align-items: center; gap: 6px; width: 100%; padding: 7px 12px; text-align: left;
   font-size: 0.8125rem; color: var(--text-primary);
@@ -7132,6 +7147,8 @@ td .sov-auto-tag { margin-left: 4px; }
 .float-pop.dragging { user-select: none; }
 .float-pop.pinned [data-float-drag] { cursor: move; }
 .ip-pop { width: min(880px, calc(100vw - 16px)); height: min(640px, calc(100vh - 16px)); }
+/* 电脑上可以拖右下角放大，表格列多时看得全 */
+@media (min-width: 769px) { .ip-pop { resize: both; min-width: 420px; min-height: 360px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); } }
 .fi-pop { width: min(640px, calc(100vw - 16px)); height: min(720px, calc(100vh - 16px)); }
 .fi-pop .modal-header { gap: 4px; padding: 10px 12px 10px 20px; }
 .ip-head { cursor: move; }
@@ -7186,7 +7203,10 @@ td .sov-auto-tag { margin-left: 4px; }
 .ipc-chart-tall { height: 380px; }
 .ipc-hint { display: flex; align-items: center; gap: 10px; min-height: 26px; font-size: 0.6875rem; margin-top: 4px; }
 .ipc-unzoom { height: 24px; font-size: 0.6875rem; }
-.ipc-table-wrap { overflow-x: auto; }
+/* 价格历史 / 成交记录表：在固定高度的框里上下左右滚（横向滚动条一直在框底部看得到，不用先滚到表格最后），表头固定 */
+.ipc-table-wrap { overflow: auto; max-height: max(220px, min(520px, calc(100vh - 430px))); overscroll-behavior-x: contain; }
+.ipc-table-wrap thead { position: sticky; top: 0; z-index: 1; }
+.ipc-table-wrap thead th { background: var(--bg-secondary); }
 .ipc-hist, .ipc-tx { font-size: 0.75rem; }
 .ipc-hist td, .ipc-hist th, .ipc-tx td, .ipc-tx th { padding: 4px 8px; white-space: nowrap; }
 .ipc-th-group { text-align: center; border-bottom: 1px solid var(--border-primary); }
@@ -7210,6 +7230,8 @@ td .sov-auto-tag { margin-left: 4px; }
   .ip-body { padding: 0 12px 12px; }
   .ipc-books { grid-template-columns: 1fr; }
   .ipc-book-box { height: 240px; }
+  .ipc-table-wrap { max-height: max(240px, calc(100vh - 420px)); }
+  .ipc-hist td, .ipc-hist th, .ipc-tx td, .ipc-tx th { padding: 4px 6px; }
   .ipc-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ipc-chart, .ipc-chart-tall { height: 300px; }
   .ip-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -9228,3 +9250,477 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .fit-dot.lock { cursor: not-allowed; opacity: .55; }
 .fit-dot.lock:hover { box-shadow: none; }
 .fit-dot.lock:not(.on) { box-shadow: inset 0 0 0 2px var(--border-secondary); }
+
+/* ===== 驾驶模拟（pilot.js）：游戏客户端原版贴图 + EVE Sans Neue 字体（assets/eveui/，版权归 CCP）===== */
+@font-face { font-family: "EVE Sans Neue"; src: url("../assets/eveui/fonts/evesansneue-regular.otf") format("opentype"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "EVE Sans Neue"; src: url("../assets/eveui/fonts/evesansneue-bold.otf") format("opentype"); font-weight: 700; font-display: swap; }
+.pl-view { overflow: hidden; }
+.pl-main { flex: 1; min-width: 0; position: relative; overflow: auto; background: #05070b; }
+.pl-page { position: absolute; inset: 0; color: #d6dde5; }
+.pl-stage { font-family: "EVE Sans Neue", system-ui, sans-serif; }
+.pl-setup { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; overflow: auto;
+  background: radial-gradient(ellipse at 30% 20%, rgba(60, 90, 130, 0.35), transparent 60%), radial-gradient(ellipse at 80% 80%, rgba(110, 60, 40, 0.25), transparent 55%), #05070b; }
+.pl-win { width: min(760px, 100%); }
+.pl-win.pl-w { background: rgba(10, 13, 17, 0.88); }
+.pl-win-head { padding: 16px 20px 12px; background: rgba(255, 255, 255, 0.04); }
+.pl-win-head h3 { margin: 0 0 4px; font-size: 1.15rem; letter-spacing: 0.04em; color: #f2f5f8; }
+.pl-win-head span { font-size: 0.82rem; color: #9aa7b4; }
+.pl-setup-grid { display: grid; gap: 18px; padding: 18px 20px; }
+.pl-field > label { display: block; margin-bottom: 8px; font-size: 0.78rem; letter-spacing: 0.06em; color: #8fa0b0; text-transform: uppercase; }
+.pl-field select { margin-top: 8px; width: 100%; }
+.pl-ship, .pl-foe { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pl-foes { display: grid; gap: 8px; margin-bottom: 8px; }
+.pl-foe input { width: 72px; }
+.pl-chip { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); }
+.pl-chip img { width: 28px; height: 28px; border-radius: 50%; }
+.pl-search { position: relative; flex: 1; min-width: 200px; }
+.pl-search input { width: 100%; }
+.pl-results { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); max-height: 300px; overflow: auto; padding: 4px; border-radius: 8px; background: #161c25; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); }
+.pl-results button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: inherit; text-align: left; cursor: pointer; }
+.pl-results button:hover { background: rgba(255, 255, 255, 0.08); }
+.pl-results img { width: 24px; height: 24px; }
+.pl-setup-foot { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 20px 18px; }
+.pl-setup-foot small { flex: 1; min-width: 240px; color: #8494a4; line-height: 1.6; }
+
+.pl-stage { position: absolute; inset: 0; overflow: hidden; background: #04060b; user-select: none; -webkit-user-select: none; }
+.pl-3d { position: absolute; inset: 0; }
+.pl-3d canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.pl-3d-load { position: absolute; left: 50%; top: 45%; transform: translateX(-50%); margin: 0; color: #9aa7b4; font-size: 0.9rem; }
+.pl-marks { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+/* 游戏按钮（当前客户端的按钮样式）：紧凑高 24px；底色 = 主题暗色 #305665 不透明度 0.2，1px 同色描边；
+   悬停底色 0.6、描边换主题亮色 #58A7BF；按下浅灰底黑字；不可用 #303030 */
+.pl-btn { display: inline-flex; align-items: center; justify-content: center; height: 24px; padding: 0 12px; border: 1px solid #305665; border-radius: 0;
+  background: rgba(48, 86, 101, 0.2); color: rgba(255, 255, 255, 0.75); font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s; }
+.pl-btn:hover { background: rgba(48, 86, 101, 0.6); border-color: #58a7bf; }
+.pl-btn.on { background: rgba(48, 86, 101, 0.6); border-color: #58a7bf; color: rgba(255, 255, 255, 0.9); }
+.pl-btn:active:not(:disabled) { background: #d9d9d9; border-color: #d9d9d9; color: #000; }
+.pl-btn:disabled { background: rgba(48, 48, 48, 0.2); border-color: rgba(48, 48, 48, 0.6); color: rgba(255, 255, 255, 0.3); }
+.pl-clock { margin-left: 6px; font-size: 0.85rem; color: #9aa7b4; font-variant-numeric: tabular-nums; }
+/* 锁定的目标：上方居中一排 */
+.pl-targets { position: absolute; top: 16px; right: 420px; display: flex; flex-direction: row-reverse; flex-wrap: wrap; justify-content: flex-start; align-items: flex-start; pointer-events: none; }
+.pl-tgt { position: relative; display: flex; flex-direction: column; align-items: center; width: 110px; padding: 0; border: 0; background: none; color: rgba(255, 255, 255, 0.75); font: inherit; pointer-events: auto; }
+.pl-tgt canvas { width: 100px; height: 100px; }
+.pl-tgt:hover canvas { background: radial-gradient(circle, rgba(255, 255, 255, 0.05) 0 49px, transparent 50px); }
+.pl-tgt-l { display: flex; flex-direction: column; align-items: center; width: 100%; font-size: 11px; line-height: 13px; text-shadow: 0 0 3px #000; }
+.pl-tgt-l > * { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 11px; }
+.pl-tgt-w { display: grid; grid-template-columns: repeat(4, auto); justify-content: center; margin-top: 2px; }
+.pl-tgt-w img { width: var(--sz, 32px); height: var(--sz, 32px); }
+/* 窗口照当前客户端（Photon）：背后场景模糊后压暗、降饱和；1px 白边（不透明度 0.1）；
+   当前窗口顶边一条 1px 主题色线（#58A7BF，0.5）；紧凑标题栏 32px，标题 12px，当前窗口白 0.9、其余白 0.5 */
+.pl-w { --pl-accent: #58a7bf; --pl-tint: 48, 86, 101; position: relative; pointer-events: auto; background: rgba(10, 10, 10, 0.62);
+  -webkit-backdrop-filter: blur(12px) saturate(0.5) brightness(0.55); backdrop-filter: blur(12px) saturate(0.5) brightness(0.55); }
+.pl-w::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
+.pl-w::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px; z-index: 3; pointer-events: none; background: var(--pl-accent); opacity: 0; transition: opacity 0.4s; }
+.pl-w.is-act::before { opacity: 0.5; }
+.pl-wh { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 8px; font-size: 12px; color: rgba(255, 255, 255, 0.5); transition: color 0.3s; }
+.pl-w.is-act .pl-wh { color: rgba(255, 255, 255, 0.9); }
+.pl-wh .pl-wi { display: none; }
+.pl-wh span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-wb { width: 16px; height: 16px; opacity: 0.45; }
+/* 选中的物体（客户端 selectedItemWnd）：
+   空：左 16、上 18 一行「没有选择物体」，EveCaptionMedium 20px、白 0.5；
+   有：上面图标列（64px，左右 8、上 2）+ 名字（行高 24）/ 距离，EveLabelMedium 14px 白 0.9；底下按钮行（WindowSegmentUnderlay 底），按钮 32、间距 4 */
+#plSel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.pl-sel-empty { margin: 18px 0 0 16px; width: 256px; font: 400 20px/1.1 "EVE Sans Neue", system-ui, sans-serif; letter-spacing: -0.01em; color: rgba(255, 255, 255, 0.5); }
+.pl-sel-top { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 2px 8px 0; overflow: hidden; }
+.pl-sel-top > img { width: 64px; height: 64px; flex: none; }
+.pl-sel-txt { display: flex; flex-direction: column; min-width: 0; font-size: 14px; line-height: 20px; color: rgba(255, 255, 255, 0.9); }
+.pl-sel-txt b { font-weight: 400; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: clip; }
+.pl-sel-acts { flex: none; display: flex; gap: 4px; padding: 8px; background: rgba(255, 255, 255, 0.03); }
+.pl-sel-acts button { position: relative; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.75; transition: opacity 0.15s; }
+.pl-sel-acts button:hover { opacity: 1; }
+.pl-sel-acts button[aria-disabled="true"] { opacity: 0.25; cursor: default; }
+.pl-sel-acts img { width: 32px; height: 32px; }
+.pl-sel-acts img.rev { position: absolute; inset: 0; }
+/* 选中物体按钮的悬停提示：在按钮下方，指针朝上；两列（动作名 / 快捷键），不可用时多一行原因 */
+.pl-htip .b { padding: 8px 12px; }
+.pl-htip .ptr { bottom: auto; top: -12px; clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.pl-htip .r.head { min-height: 18px; }
+.pl-htip .r.head span { color: rgba(255, 255, 255, 0.9); }
+.pl-htip .r.why { min-height: 18px; color: rgba(255, 255, 255, 0.75); }
+/* 设置默认距离的数量框（uix.QtyPopup） */
+.pl-qty { position: absolute; left: 50%; top: 30%; z-index: 70; width: 300px; transform: translateX(-50%); padding: 12px 16px 16px; background: rgba(20, 20, 22, 0.96); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.6); color: rgba(255, 255, 255, 0.75); font-size: 13px; }
+.pl-qty-h { margin-bottom: 8px; font-size: 14px; color: rgba(255, 255, 255, 0.9); }
+.pl-qty p { margin: 0 0 10px; line-height: 1.4; }
+.pl-qty input { width: 100%; height: 26px; padding: 0 6px; border: 1px solid rgba(255, 255, 255, 0.15); background: rgba(0, 0, 0, 0.3); color: rgba(255, 255, 255, 0.9); font: inherit; }
+.pl-qty input:focus { outline: 0; border-color: #58a7bf; }
+.pl-qty-b { display: flex; justify-content: flex-end; gap: 6px; margin-top: 12px; }
+/* 总览照客户端：页签栏 32px（底部 1px 白 0.1 分隔线，选中页签白 0.9 + 下方 1px 主题色线，其余白 0.5）；
+   行高照录像约 16px；NPC 行不铺底色，只把图标染红；默认列 图标 22 / 距离 / 名称 112 / 类型 112 / 速度 58，距离和速度右对齐；文字白 0.75；
+   敌对行底色 (1, 0.1, 0.1) 按一半不透明度；悬停 / 选中用主题暗色 #305665 不透明度 0.2 / 0.4 */
+.pl-ov { flex: 1; min-height: 140px; display: flex; flex-direction: column; }
+/* 总览（客户端 overviewWindow / OverviewScrollEntry / SortHeaders / TabGroup）：
+   标签页 高 32、13px 常规体、标签间距 24、无底色；未选 0.5 白、选中 / 悬停 0.9；选中下方 1px 主题色线（#58A7BF，带光）；整排下面 1px 白 0.1 分隔线 */
+.pl-ov-tabs { position: relative; display: flex; gap: 24px; overflow: hidden; height: 32px; margin: 0 8px; font-size: 12px; font-weight: 700; box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1); }
+.pl-ov-tabs button { position: relative; flex: 0 0 auto; padding: 0; border: 0; background: none; color: var(--c); font: inherit; white-space: nowrap; }
+.pl-ov-line { position: absolute; bottom: 0; left: 0; width: 0; height: 1px; background: #b0b0b0; pointer-events: none; transition: left 0.15s ease-out, width 0.15s ease-out, background-color 0.3s; }
+.pl-w.is-act .pl-ov-line { background: #58a7bf; box-shadow: 0 0 4px rgba(88, 167, 191, 0.75); }
+/* 总览标题：游戏截图里总览是窗口堆叠里的一页，标题按页签样式画（约 16px，下面 1px 选中线 + 整排白 0.1 分隔线） */
+.pl-win-ov .pl-wh { height: 36px; box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1); margin: 0 8px; padding: 0; }
+.pl-win-ov .pl-wh > span { flex: 0 1 auto; align-self: stretch; display: flex; align-items: center; font-size: 16px; position: relative; }
+.pl-win-ov .pl-wh > span::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: #b0b0b0; }
+.pl-win-ov.is-act .pl-wh > span::after { background: #58a7bf; box-shadow: 0 0 4px rgba(88, 167, 191, 0.75); }
+.pl-win-ov .pl-wh > button:first-of-type { margin-left: auto; }
+.pl-ov tr.none td { color: rgba(255, 255, 255, 0.5); text-align: left !important; cursor: default; }
+.pl-ov-body { flex: 1; overflow: auto; padding: 0 0 8px; }
+/* 行：高 24、13px、白 0.9、字影 (1,1) 黑 0.6；列内边距 8；距离 / 速度靠右 */
+.pl-ov table { border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+/* 表头：高 24、11px 宽体、白 0.5（悬停 0.9），无底色、无分隔线；排序箭头 16×16 靠右 */
+.pl-ov th { position: sticky; top: 0; z-index: 1; height: 24px; padding: 0 8px; background: none; color: rgba(255, 255, 255, 0.5); font: 400 12px "EVE Sans Neue", system-ui, sans-serif; text-align: left; white-space: nowrap; overflow: hidden; }
+.pl-ov th:hover { color: rgba(255, 255, 255, 0.9); }
+.pl-ov th:first-child { font-size: 0; }
+.pl-ov th img { width: 16px; height: 16px; vertical-align: -4px; margin-left: 3px; opacity: 0.75; }
+.pl-ov :is(th, td):is(:nth-child(2), :nth-child(5)) { text-align: right; }
+.pl-ov td { height: 17px; line-height: 17px; padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: clip; color: rgba(255, 255, 255, 0.9); text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.6); }
+.pl-ov td:first-child { padding: 0 0 0 3px; }
+.pl-ov td:last-child { position: relative; }
+.pl-ovew { position: absolute; right: 2px; top: 0; display: flex; flex-direction: row-reverse; gap: 1px; pointer-events: auto; }
+.pl-ovew:empty { display: none; }
+.pl-ovew img { width: 16px; height: 16px; display: block; }
+/* 受到的电子战提示条：客户端 buffBarContainer，船体面板上方居中，高 44；每格 48×40 */
+.pl-buffs { position: absolute; left: 0; bottom: 200px; height: 44px; transform: translateX(-50%); display: flex; align-items: center; pointer-events: none; }
+.pl-buff { width: 48px; height: 40px; flex: 0 0 auto; display: flex; justify-content: center; overflow: hidden; pointer-events: auto; animation: pl-bufin 0.25s ease-out; }
+@keyframes pl-bufin { from { width: 0; } to { width: 48px; } }
+.pl-buff .bf { position: relative; width: 40px; height: 40px; flex: 0 0 40px; }
+.pl-buff .bf > * { position: absolute; inset: 0; width: 40px; height: 40px; }
+.pl-buff .sh { background: url("../assets/eveui/classes/shipui/ewarbar/ewarbarshadow.png?v=1") center / 100% 100%; opacity: 0.25; }
+.pl-buff .sb, .pl-buff .sg { -webkit-mask: center / 100% 100% no-repeat; mask: center / 100% 100% no-repeat; mix-blend-mode: plus-lighter; }
+.pl-buff .sb { -webkit-mask-image: url("../assets/eveui/classes/shipui/ewarbar/ewarbarunderlayclean.png?v=1"); mask-image: url("../assets/eveui/classes/shipui/ewarbar/ewarbarunderlayclean.png?v=1"); opacity: 0.2; }
+.pl-buff .sg { -webkit-mask-image: url("../assets/eveui/classes/shipui/ewarbar/ewarbarunderlaygrad.png?v=1"); mask-image: url("../assets/eveui/classes/shipui/ewarbar/ewarbarunderlaygrad.png?v=1"); opacity: 0.25; }
+.pl-buff.off .sb, .pl-buff.off .sg { background: rgb(179, 0, 0); }
+.pl-buff.def .sb, .pl-buff.def .sg { background: rgb(0, 153, 153); }
+/* 倒计时圈（ModuleEffectTimer）：左右两个半圈（ewarCounterLeft / Right），用旋转的半边遮罩（ewarCounterGauge）倒着擦掉；
+   不透明度 0.65，电子战橙 (1, 0.3, 0)、遥修青 (0, 0.8, 0.8)；这里用从 12 点顺时针增长的扇形遮罩代替旋转遮罩 */
+.pl-buff .tm { position: absolute; inset: 0; opacity: 0.65; --a: 0deg;
+  -webkit-mask: conic-gradient(transparent 0 var(--a), #000 0); mask: conic-gradient(transparent 0 var(--a), #000 0); }
+.pl-buff .tm[hidden] { display: none; }
+.pl-buff .tm > i { position: absolute; inset: 0; background: rgb(255, 77, 0); -webkit-mask: center / 100% 100% no-repeat; mask: center / 100% 100% no-repeat; }
+.pl-buff.def .tm > i { background: rgb(0, 204, 204); }
+.pl-buff .tm > .r { -webkit-mask-image: url("../assets/eveui/classes/shipui/ewarbar/ewarcounterright.png?v=1"); mask-image: url("../assets/eveui/classes/shipui/ewarbar/ewarcounterright.png?v=1"); }
+.pl-buff .tm > .l { -webkit-mask-image: url("../assets/eveui/classes/shipui/ewarbar/ewarcounterleft.png?v=1"); mask-image: url("../assets/eveui/classes/shipui/ewarbar/ewarcounterleft.png?v=1"); }
+/* 图标：16×16 白色类别图标（玩家船不染色），右下角 10×10 状态旗（填色 0.75）；锁定框 activeTarget 18×18，被锁 hostileBracket 闪 */
+.pl-ovi { position: relative; display: block; width: 18px; height: 16px; margin-top: 1px; }
+.pl-ovi > img { position: absolute; left: 0; top: 0; width: 16px; height: 16px; }
+.pl-ovi > i { position: absolute; left: -1px; top: -1px; width: 18px; height: 18px; display: none; pointer-events: none; }
+.pl-ovi > .tg { background: url("../assets/eveui/classes/bracket/activetarget.png?v=1") center / 18px 18px no-repeat; opacity: 0.5; }
+.pl-ov tr.locked .pl-ovi > .tg { display: block; }
+.pl-ov tr.act .pl-ovi > .tg { display: block; opacity: 1; }
+.pl-ovi > .hb { background: rgba(255, 204, 0, 0.6); -webkit-mask: url("../assets/eveui/classes/bracket/hostilebracket.png?v=1") center / 18px 18px no-repeat; mask: url("../assets/eveui/classes/bracket/hostilebracket.png?v=1") center / 18px 18px no-repeat; animation: pl-ovhb 0.5s linear infinite; }
+.pl-ov tr:is(.aggr, .atk) .pl-ovi > .hb { display: block; }
+.pl-ov tr.atk .pl-ovi > .hb { background: rgba(204, 0, 0, 0.6); }
+@keyframes pl-ovhb { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+/* 正在锁：28×28 的四角白框（0.5）每 50 毫秒缩 2 像素到 14，再从头来 */
+.pl-ovi > .lk { left: -6px; top: -6px; width: 28px; height: 28px; --k: rgba(255, 255, 255, 0.5);
+  background: linear-gradient(var(--k), var(--k)) 0 0 / 5px 2px, linear-gradient(var(--k), var(--k)) 0 0 / 2px 5px, linear-gradient(var(--k), var(--k)) 100% 0 / 5px 2px, linear-gradient(var(--k), var(--k)) 100% 0 / 2px 5px,
+    linear-gradient(var(--k), var(--k)) 0 100% / 5px 2px, linear-gradient(var(--k), var(--k)) 0 100% / 2px 5px, linear-gradient(var(--k), var(--k)) 100% 100% / 5px 2px, linear-gradient(var(--k), var(--k)) 100% 100% / 2px 5px;
+  background-repeat: no-repeat; animation: pl-ovlk 0.4s steps(7) infinite; }
+.pl-ov tr.locking .pl-ovi > .lk { display: block; }
+@keyframes pl-ovlk { from { transform: scale(1); } to { transform: scale(0.5); } }
+.pl-ovi > .fl { position: absolute; right: -1px; bottom: -2px; width: 10px; height: 10px; display: none; }
+/* 状态旗：stateFlag.FlagIcon，底色 0.75 + 8×8 白色符号（FlagIcon/8/{iconIndex+1}.png）。敌方按 −10 声望（StandingHorrible：红 0.75,0,0，符号 4 = 减号），友方按同舰队（SameFleet：紫 0.6,0.15,0.9，符号 1 = 人形） */
+.pl-ov tr.hostile .pl-ovi > .fl { display: block; background: rgba(191, 0, 0, 0.75) url("../assets/eveui/classes/flagicon/8/4.png?v=1") center / 8px 8px no-repeat; }
+.pl-ov tr.friend .pl-ovi > .fl { display: block; background: rgba(153, 38, 230, 0.75) url("../assets/eveui/classes/flagicon/8/1.png?v=1") center / 8px 8px no-repeat; }
+.pl-ov tr.drone { cursor: default; }
+.pl-ov tr { cursor: pointer; }
+/* 悬停 / 选中：主题暗色 #305665，0.2 / 0.4，底下留 1 像素缝 */
+.pl-ov tr td { background: linear-gradient(var(--rb, transparent), var(--rb, transparent)) 0 0 / 100% calc(100% - 1px) no-repeat; transition: --rb 0.3s; }
+.pl-ov tr:hover { --rb: rgba(48, 86, 101, 0.2); }
+.pl-ov tr.sel { --rb: rgba(48, 86, 101, 0.4); }
+/* 伤害信息（照游戏 CombatMessage）：底边在画面高度 32%（至少 225px）处，新行在最下，旧行上推、淡出；字号 12；
+   伤害数字粗体，打出去青色 #00ffff、打到自己红色 #cc0000；“对 / 来自”用淡色（白 0.47）小两号 */
+.pl-dmsg { position: absolute; left: 50%; top: max(32%, 225px); z-index: 4; width: 0; height: 0; pointer-events: none; user-select: none; }
+.pl-dmsg-l { position: absolute; left: 0; bottom: 0; display: none; white-space: nowrap; color: rgba(255, 255, 255, 0.75); font-size: 12px; line-height: 20px; text-shadow: 0 0 3px #000, 0 0 1px #000; will-change: transform, opacity; }
+.pl-dmsg-l b { font-weight: 700; }
+.pl-dmsg-l b.out { color: #00ffff; }
+.pl-dmsg-l b.in { color: #cc0000; }
+.pl-dmsg-l small { font-size: 10px; color: rgba(255, 255, 255, 0.47); }
+.pl-dmsg-l strong { font-weight: 700; color: #fff; }
+.pl-dmsg-l em { display: inline-flex; vertical-align: -3px; }
+.pl-dmsg-l em img { width: 15px; height: 15px; }
+/* 提示：画面中上方，几秒后淡出 */
+/* HUD 上方动作提示（客户端 action_indication）：宽 800 居中、HUD 上方 8 像素，没有底，标题白色可发光闪，正文灰白；出现 / 消失 0.3 秒 */
+.pl-ind { position: absolute; left: 50%; bottom: 208px; z-index: 4; width: 800px; max-width: calc(100% - 120px); transform: translateX(-50%); text-align: center; pointer-events: none; opacity: 0; transition: opacity 0.3s; }
+.pl-ind.on { opacity: 1; }
+.pl-ind-c { display: inline-flex; align-items: center; gap: 4px; }
+.pl-ind-c img { width: 32px; height: 32px; }
+.pl-ind b { font-size: 20px; line-height: 26px; font-weight: 400; color: #fff; text-shadow: 0 0 2px rgba(0, 0, 0, 0.9); }
+.pl-ind b.blink { animation: pl-ind-glow 0.5s linear; }
+@keyframes pl-ind-glow { 0% { text-shadow: 0 0 2px rgba(0, 0, 0, 0.9); } 20% { text-shadow: 0 0 10px rgba(255, 255, 255, 0.7), 0 0 2px #000; } 40% { text-shadow: 0 0 2px rgba(0, 0, 0, 0.9); } 60% { text-shadow: 0 0 10px rgba(255, 255, 255, 0.7), 0 0 2px #000; } 80%, 100% { text-shadow: 0 0 2px rgba(0, 0, 0, 0.9); } }
+.pl-ind p { margin: 0; font-size: 13px; line-height: 18px; color: rgba(255, 255, 255, 0.75); text-shadow: 0 0 2px rgba(0, 0, 0, 0.9); }
+.pl-log { height: 100%; overflow-y: auto; padding: 4px 8px; font-size: 12px; line-height: 17px; color: rgba(255, 255, 255, 0.75); }
+.pl-log time { color: rgba(255, 255, 255, 0.45); }
+.pl-log .bad { color: #f39058; }
+.pl-log .good { color: #9fe39a; }
+.pl-neo button.imp::after { content: ""; position: absolute; right: 0; top: 16px; width: 2px; height: 16px; background: #f39058; }
+.pl-dmsg-l i { font-style: normal; }
+/* 窗口：绝对定位，拖标题栏移动，右下角缩放，最小化只留标题栏 */
+.pl-stage > .pl-w { position: absolute; z-index: 5; display: flex; flex-direction: column; min-width: 200px; }
+.pl-stage > .pl-w[hidden] { display: none; }
+.pl-stage > .pl-w.min { height: 32px !important; }
+.pl-w.min .pl-wbody, .pl-w.min .pl-wrs { display: none; }
+.pl-wh { flex: none; cursor: move; touch-action: none; user-select: none; }
+.pl-wi { width: 16px; height: 16px; opacity: 0.85; }
+.pl-wh button { width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; opacity: 0.5; }
+.pl-wh button:hover { opacity: 1; }
+.pl-wh button img { width: 16px; height: 16px; }
+.pl-wbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+.pl-wbody > * { flex: none; }
+.pl-wbody > .pl-ov-body { flex: 1; }
+/* 窗口拉伸手柄（客户端 carbonui Resizer / ResizeHandle）：四边 8px 宽、四角 8×8；主题色，平时看不见、悬停 0.5、拖动中 1。
+   边上是一条 2×64 的 resize_handle_edge 贴图居中贴边，角上是 8×8 的 resize_handle_corner（原图朝左上，其他角转过去） */
+.pl-wrs { position: absolute; z-index: 3; touch-action: none; opacity: 0; transition: opacity 0.3s; }
+.pl-wrs:hover { opacity: 0.5; transition-duration: 0.15s; }
+.pl-wrs.on { opacity: 1; }
+.pl-wrs::before { content: ""; position: absolute; background: var(--pl-accent); filter: drop-shadow(0 0 2px var(--pl-accent));
+  -webkit-mask: var(--m) center / 100% 100%; mask: var(--m) center / 100% 100%; }
+.pl-wrs:is(.n, .s) { left: 8px; right: 8px; height: 8px; cursor: ns-resize; }
+.pl-wrs:is(.w, .e) { top: 8px; bottom: 8px; width: 8px; cursor: ew-resize; }
+.pl-wrs.n { top: 0; } .pl-wrs.s { bottom: 0; } .pl-wrs.w { left: 0; } .pl-wrs.e { right: 0; }
+.pl-wrs:is(.n, .s)::before { --m: url("../assets/eveui/classes/window/resize_handle_edge_horizontal.png?v=1"); left: calc(50% - 32px); width: 64px; height: 2px; }
+.pl-wrs:is(.w, .e)::before { --m: url("../assets/eveui/classes/window/resize_handle_edge_vertical.png?v=1"); top: calc(50% - 32px); height: 64px; width: 2px; }
+.pl-wrs.n::before { top: 0; } .pl-wrs.s::before { bottom: 0; transform: rotate(180deg); }
+.pl-wrs.w::before { left: 0; } .pl-wrs.e::before { right: 0; transform: rotate(180deg); }
+.pl-wrs:is(.nw, .ne, .sw, .se) { width: 8px; height: 8px; }
+.pl-wrs:is(.nw, .ne, .sw, .se)::before { --m: url("../assets/eveui/classes/window/resize_handle_corner.png?v=1"); inset: 0; }
+.pl-wrs.nw { left: 0; top: 0; cursor: nwse-resize; }
+.pl-wrs.ne { right: 0; top: 0; cursor: nesw-resize; } .pl-wrs.ne::before { transform: rotate(90deg); }
+.pl-wrs.se { right: 0; bottom: 0; cursor: nwse-resize; } .pl-wrs.se::before { transform: rotate(180deg); }
+.pl-wrs.sw { left: 0; bottom: 0; cursor: nesw-resize; } .pl-wrs.sw::before { transform: rotate(-90deg); }
+/* 总览表头列宽拖动条（客户端 SortHeaders.Header 的 scaler：TORIGHT_NOPUSH，宽 4，左右拖动光标） */
+.pl-ovsc { position: absolute; top: 0; right: 0; bottom: 0; width: 4px; cursor: ew-resize; touch-action: none; }
+.pl-ovsc:hover, .pl-ovsc.on { background: rgba(255, 255, 255, 0.15); }
+.pl-ctl { display: flex; gap: 4px; align-items: center; padding: 0 8px 8px; }
+/* 左侧 Neocom（照游戏 neocomContainer / baseNeocomButton）：默认宽 48，按钮正方形，图标四周留 4（40px），
+   平时银灰 #b0b0b0、悬停变白；开着的窗口右边一条 2×8 的银灰竖线；底下时钟高 20、字号 11、黑 0.4 底 */
+/* 客户端 BlurredSceneUnderlay：采样模糊过的场景，深色主题非聚焦时去色压暗（0.3）、0.75 不透明，基色 #0A0A0A */
+.pl-neo { position: absolute; left: 0; top: 0; bottom: 0; z-index: 6; width: 48px; display: flex; flex-direction: column;
+  background: rgba(10, 10, 10, 0.3); -webkit-backdrop-filter: blur(16px) saturate(0.3) brightness(0.45); backdrop-filter: blur(16px) saturate(0.3) brightness(0.45); }
+.pl-neo-eve { display: grid; place-items: center; width: 48px; height: 48px; flex: none; }
+.pl-neo-eve img { width: 40px; height: 40px; opacity: 0.69; }
+.pl-stage .pl-neo button { position: relative; flex: none; width: 48px; height: 48px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; }
+.pl-neo button img { width: 40px; height: 40px; opacity: 0.69; filter: grayscale(1); }
+.pl-neo button:hover img { opacity: 1; filter: grayscale(1) drop-shadow(0 0 4px rgba(255, 255, 255, 0.4)); }
+.pl-neo button.on::after { content: ""; position: absolute; right: 0; top: 20px; width: 2px; height: 8px; background: #b0b0b0; }
+.pl-stage .pl-neo .pl-neo-reset { margin-top: auto; }
+.pl-neo .pl-neo-reset img { opacity: 0.45; }
+.pl-neo-clock { flex: none; display: grid; place-items: center; height: 20px; background: rgba(0, 0, 0, 0.4); color: rgba(255, 255, 255, 0.9); font-size: 11px; font-variant-numeric: tabular-nums; }
+/* 无人机窗口（客户端 dronesWindow / droneGroupHeader / droneEntry）：
+   表头高 24、白 0.05 底，箭头 16px 在左 4，文字左 24、白 0.9；悬停时右边淡入 20px 按钮（图标 16）；
+   行高 24、文字左 4；太空中的行左边 16px 状态图标，右边三条血（结构 / 装甲 / 护盾，各 32×4，剩余 #B0B0B0 加色、损伤 #991F24），右边距 8 */
+#plDrones { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.pl-dr-sec { display: flex; flex-direction: column; min-height: 0; }
+.pl-dr-sec.top { flex: 1; }
+.pl-dr-sec.bot { flex: none; padding-top: 4px; }
+.pl-dr-sec.bot .pl-dr-list { max-height: var(--botmax, 120px); }
+.pl-dr-sec.top.fold + .pl-dr-sec.bot .pl-dr-list { max-height: none; }
+.pl-dr-sec.top.fold { flex: none; }
+.pl-dr-sec.top.fold + .pl-dr-sec.bot { flex: 1; max-height: none; }
+.pl-dr-h { position: relative; flex: none; display: flex; align-items: center; height: 24px; padding: 0 0 0 24px; background: rgba(255, 255, 255, 0.05); color: rgba(255, 255, 255, 0.9); font-size: 14px; cursor: pointer; user-select: none; }
+.pl-dr-h .car { position: absolute; left: 4px; top: 4px; width: 16px; height: 16px; opacity: 0.75; }
+.pl-dr-h > span:first-of-type { flex: 1; white-space: nowrap; overflow: hidden; }
+.pl-dr-h .btns { display: flex; align-items: center; opacity: 0; transition: opacity 0.1s; }
+.pl-dr-h:hover .btns { opacity: 1; }
+.pl-dr-h .btns button { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.75; }
+.pl-dr-h .btns button:hover { opacity: 1; }
+.pl-dr-h .btns img { width: 16px; height: 16px; }
+.pl-dr-h .sep { width: 1px; height: 16px; margin: 0 4px; background: rgba(255, 255, 255, 0.1); }
+.pl-dr-list { flex: 1; min-height: 0; overflow: auto; padding-top: 2px; }
+.pl-dr-row { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 4px; font-size: 14px; color: rgba(255, 255, 255, 0.9); }
+.pl-dr-row > span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; }
+.pl-dr-row em { font-style: normal; }
+.pl-dr-row .st { width: 16px; height: 16px; margin-left: -2px; flex: none; }
+.pl-dr-row .hp { flex: none; display: flex; gap: 2px; }
+.pl-dr-row .hp b { width: 32px; height: 4px; background: linear-gradient(90deg, #b0b0b0 calc(var(--f) * 100%), #991f24 0); }
+.pl-dr-none { height: 24px; line-height: 24px; padding-left: 4px; font-size: 14px; color: rgba(255, 255, 255, 0.5); }
+/* 舰船属性窗口 */
+.pl-ship-head { display: flex; gap: 10px; align-items: center; padding: 2px 10px 6px; }
+.pl-ship-head img { width: 48px; height: 48px; }
+.pl-ship-head div { display: flex; flex-direction: column; font-size: 0.74rem; color: #8494a4; }
+.pl-ship-head b { color: #eef2f6; font-weight: 400; font-size: 0.9rem; }
+.pl-kv { width: calc(100% - 20px); margin: 0 10px 14px; border-collapse: collapse; font-size: 0.75rem; }
+.pl-stage .pl-kv th, .pl-stage .pl-kv td { padding: 2px 0; border: 0; text-align: left; font-weight: 400; }
+.pl-stage .pl-kv th { color: #8494a4; white-space: nowrap; padding-right: 10px; }
+.pl-stage .pl-kv td { color: #dfe6ec; white-space: normal; }
+/* 船体面板 + 装备栏：照客户端 shipHud 的坐标（中间圆盘 160px，底边居中；装备栏从圆心右边 62px 开始，
+   每格 64×64：slotMainCombined 底座 + 48×48 装备图标；周期指示是左右两个半圈，半透明 0.5；开着的装备绿色光晕） */
+.pl-hud { position: absolute; left: 50%; bottom: 0; width: 0; height: 200px; }
+.pl-hud-c { position: absolute; left: -180px; bottom: 0; width: 360px; height: 200px; cursor: default; }
+.pl-spd { position: absolute; bottom: 61px; width: 12px; height: 12px; padding: 0; border: 0; background: none; opacity: 0.75; }
+.pl-spd { left: -53px; }
+.pl-spd.max { left: 40px; }
+.pl-spd:hover { opacity: 1; }
+.pl-spd img { width: 12px; height: 12px; display: block; }
+.pl-rack { position: absolute; left: 62px; bottom: 25px; width: 512px; height: 152px; pointer-events: none; }
+.pl-mod { --rl: -180deg; --rr: -180deg; position: absolute; width: 64px; height: 64px; padding: 0; border: 0; pointer-events: auto; cursor: pointer;
+  background: url("../assets/eveui/classes/shipui/slotmaincombined.png?v=1") center / 64px 64px no-repeat; }
+.pl-mod > img { position: absolute; z-index: 2; left: 8px; top: 8px; width: 48px; height: 48px; pointer-events: none; }
+.pl-mod.passive { cursor: default; }
+.pl-mod.passive > img { opacity: 0.6; }
+.pl-mod-ovl { position: absolute; left: 16px; top: 5px; width: 32px; height: 16px; z-index: 7; pointer-events: none;
+  background: url("../assets/eveui/classes/shipui/slotoverloaddisabled.png?v=1") center / 32px 16px no-repeat; }
+.pl-mod-ovl.can { pointer-events: auto; background-image: url("../assets/eveui/classes/shipui/slotoverloadoff.png?v=1"); }
+.pl-mod.ovl .pl-mod-ovl.can { background-image: url("../assets/eveui/classes/shipui/slotoverloadon.png?v=1"); }
+.pl-slot { position: absolute; width: 64px; height: 64px; pointer-events: none; opacity: 0; transition: opacity 0.15s;
+  background: url("../assets/eveui/classes/shipui/slotmaincombined.png?v=1") center / 64px 64px no-repeat; }
+.pl-rack.dragging .pl-slot { opacity: 0.7; pointer-events: auto; }
+.pl-mod.drag-src > img { opacity: 0.2; }
+/* 拖动时同型号的武器一圈闪（客户端 slotRamp 满圈，cos 呼吸） */
+.pl-mod.ghl .pl-ramp { opacity: 1; animation: pl-ghl 3.14s ease-in-out infinite; }
+.pl-mod.ghl .pl-ramp i { transform: none; }
+@keyframes pl-ghl { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+.pl-mod > s { position: absolute; left: 14px; top: 35px; z-index: 6; width: 12px; height: 10px; text-decoration: none; font-size: 9px; line-height: 10px;
+  text-align: center; color: #fff; background: rgb(130, 0, 0); -webkit-mask: url("../assets/eveui/classes/shipui/slotstackunderlay.png?v=1") center / 100% 100% no-repeat;
+  mask: url("../assets/eveui/classes/shipui/slotstackunderlay.png?v=1") center / 100% 100% no-repeat; }
+.pl-dmg { position: absolute; left: 8px; top: 8px; width: 48px; height: 48px; z-index: 3; pointer-events: none; background: center / 100% 100% no-repeat; animation: pl-blink 1s linear infinite; }
+.pl-dmg:not([style*="url"]) { display: none; }
+.pl-mod.burnt > img { opacity: 0.25; }
+/* 等目标 / 装填：图标 250 毫秒一闪 */
+.pl-mod:is(.wait, .rld) > img { animation: pl-iblink 0.5s steps(1) infinite; }
+@keyframes pl-iblink { 0% { opacity: 0.25; } 50% { opacity: 1; } }
+.pl-rkov { position: absolute; width: 20px; height: 20px; padding: 0; border: 0; pointer-events: auto; background: center / 20px 20px no-repeat; }
+.pl-rkov[data-pl-rkov="high"] { background-image: url("../assets/eveui/classes/shipui/overloadbtnhioff.png?v=1"); }
+.pl-rkov[data-pl-rkov="mid"] { background-image: url("../assets/eveui/classes/shipui/overloadbtnmedoff.png?v=1"); }
+.pl-rkov[data-pl-rkov="low"] { background-image: url("../assets/eveui/classes/shipui/overloadbtnlooff.png?v=1"); }
+.pl-rkov.on[data-pl-rkov="high"] { background-image: url("../assets/eveui/classes/shipui/overloadbtnhion.png?v=1"); }
+.pl-rkov.on[data-pl-rkov="mid"] { background-image: url("../assets/eveui/classes/shipui/overloadbtnmedon.png?v=1"); }
+.pl-rkov.on[data-pl-rkov="low"] { background-image: url("../assets/eveui/classes/shipui/overloadbtnloon.png?v=1"); }
+.pl-rkov:hover { filter: brightness(1.5); }
+.pl-rack :is(.pl-mod, .pl-rkov, .pl-grpall):focus { outline: none; }
+.pl-grpall { position: absolute; left: 0; top: 9px; width: 16px; height: 16px; padding: 0; border: 0; pointer-events: auto; opacity: 0.75;
+  background: url("../assets/eveui/icons/73_16_252.png?v=1") center / 16px 16px no-repeat; }
+.pl-grpall.un { background-image: url("../assets/eveui/icons/73_16_251.png?v=1"); }
+.pl-grpall:hover { opacity: 1; }
+.pl-ramp { position: absolute; inset: 0; z-index: 4; opacity: 0; pointer-events: none; }
+.pl-mod.cyc .pl-ramp { opacity: 0.5; }
+.pl-ramp b { position: absolute; left: 0; top: 0; width: 32px; height: 64px; overflow: hidden; }
+.pl-ramp b:last-child { left: 32px; }
+.pl-ramp i { position: absolute; top: 0; left: 0; width: 64px; height: 64px; transform: rotate(var(--rl));
+  background: url("../assets/eveui/classes/shipui/slotrampleft.png?v=1") 0 0 / 32px 64px no-repeat; }
+.pl-ramp b:last-child i { left: -32px; transform: rotate(var(--rr)); background-image: url("../assets/eveui/classes/shipui/slotrampright.png?v=1"); background-position: 32px 0; }
+.pl-mod.rld .pl-ramp i { filter: sepia(1) saturate(4) hue-rotate(-10deg); }
+.pl-mod::before { content: ""; position: absolute; inset: 2px; z-index: 1; pointer-events: none; opacity: 0; background: rgb(61, 171, 41);
+  -webkit-mask: url("../assets/eveui/classes/shipui/slotglow.png?v=1") center / 100% 100% no-repeat; mask: url("../assets/eveui/classes/shipui/slotglow.png?v=1") center / 100% 100% no-repeat; }
+.pl-mod.on::before { animation: pl-glow 1s linear infinite; }
+/* 停用中：红光闪到这一轮结束 */
+.pl-mod.busy::before { background: rgb(255, 33, 0); animation: pl-glow 1s linear infinite; }
+@keyframes pl-glow { 0%, 100% { opacity: 0.75; } 50% { opacity: 0; } }
+@keyframes pl-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.pl-mod::after { content: ""; position: absolute; inset: 10px; z-index: 5; pointer-events: none; opacity: 0;
+  background: url("../assets/eveui/classes/shipui/slothilite.png?v=1") center / 100% 100% no-repeat; }
+.pl-mod:not(.passive):hover::after { opacity: 1; }
+.pl-mod em { position: absolute; left: 26px; top: 35px; z-index: 6; width: 24px; height: 10px; font-style: normal; background: #000;
+  -webkit-mask: url("../assets/eveui/classes/shipui/slotquantityunderlay.png?v=1") center / 100% 100% no-repeat; mask: url("../assets/eveui/classes/shipui/slotquantityunderlay.png?v=1") center / 100% 100% no-repeat; }
+.pl-mod em span { position: absolute; left: 3px; top: 0; font-size: 9px; line-height: 10px; letter-spacing: 1px; color: rgba(255, 255, 255, 0.9); }
+.pl-mod em:has(span:empty) { display: none; }
+.pl-end { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, 0.45); }
+.pl-end-win { width: min(480px, calc(100% - 32px)); padding: 22px; text-align: center; }
+.pl-end-win h3 { margin: 0 0 10px; color: #f2f5f8; }
+.pl-end-win p { color: #9aa7b4; font-size: 0.86rem; }
+@media (max-width: 900px) {
+  .pl-hud { transform: scale(0.78); transform-origin: bottom center; }
+}
+.pl-setup .pl-results { position: static; margin-top: 4px; }
+.pl-stage .pl-ov th, .pl-stage .pl-ov td { border: 0; line-height: 17px; }
+.pl-stage .pl-ov th { line-height: 24px; }
+.pl-stage .pl-ov td { padding-top: 0; padding-bottom: 0; }
+html[data-skin="eve"] .pl-stage .pl-ov td { padding-top: 0; padding-bottom: 0; height: 17px; font-size: 12px; }
+html[data-skin="eve"] .pl-stage .pl-ov th { padding-top: 0; padding-bottom: 0; height: 24px; font-size: 12px; }
+/* 开局加载画面：游戏的转圈贴图 + 进度条，加载完淡出 */
+.pl-loading { position: absolute; inset: 0; z-index: 50; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 45%, #0c1520 0%, #04060b 70%); transition: opacity 0.5s; }
+.pl-loading.out { opacity: 0; pointer-events: none; }
+.pl-loading-box { display: flex; flex-direction: column; align-items: center; gap: 8px; width: 280px; color: #9aa7b4; font-size: 0.8rem; text-align: center; }
+.pl-loading-box b { color: #e6edf3; font-size: 1rem; font-weight: 400; letter-spacing: 0.04em; }
+.pl-spin { width: 64px; height: 64px; margin-bottom: 6px; position: relative; }
+.pl-spin img { width: 64px; height: 64px; display: block; animation: pl-spin 0.9s linear infinite; filter: drop-shadow(0 0 6px rgba(0, 172, 237, 0.5)); }
+.pl-spin::after { content: ""; position: absolute; inset: 10px; border-radius: 50%; background: radial-gradient(circle, rgba(0, 172, 237, 0.18), transparent 70%); animation: pl-pulse 1.8s ease-in-out infinite; }
+@keyframes pl-spin { to { transform: rotate(360deg); } }
+@keyframes pl-pulse { 50% { opacity: 0.3; } }
+.pl-loadbar { width: 100%; height: 3px; margin-top: 6px; background: rgba(255, 255, 255, 0.08); }
+.pl-loadbar i { display: block; width: 0; height: 100%; background: #00aced; box-shadow: 0 0 8px rgba(0, 172, 237, 0.8); transition: width 0.25s; }
+/* 船体面板左边的按钮簇（客户端 HudButtonsCont）：簇 64×132，右边缘在中心左 80，顶在面板 49 */
+.pl-hbtns { position: absolute; left: -144px; bottom: 19px; width: 64px; height: 132px; z-index: 4; }
+.pl-hbtn { position: absolute; width: 36px; height: 36px; padding: 0; border: 0; display: grid; place-items: center;
+  background: url("../assets/eveui/classes/shipui/utilbtnbaseandshadow.png?v=1") center / 100% 100% no-repeat; }
+.pl-hbtn > img { grid-area: 1 / 1; width: 32px; height: 32px; pointer-events: none; }
+/* 开着：utilBtnGlow 染主题色 0.6；悬停：底座再叠一层 0.63 灰（相加） */
+.pl-hbtn > i { grid-area: 1 / 1; width: 36px; height: 36px; pointer-events: none; opacity: 0;
+  background: rgba(0, 172, 237, 0.6); -webkit-mask: url("../assets/eveui/classes/shipui/utilbtnglow.png?v=1") center / 100% 100% no-repeat; mask: url("../assets/eveui/classes/shipui/utilbtnglow.png?v=1") center / 100% 100% no-repeat; }
+.pl-hbtn.on > i { opacity: 1; }
+.pl-hbtn:hover { filter: brightness(1.45); }
+.pl-hbtn.na { cursor: default; }
+.pl-hbtn .sw { animation: pl-radar 4s linear infinite; }
+@keyframes pl-radar { to { transform: rotate(360deg); } }
+@media (max-width: 900px) { .pl-hbtn.na, .pl-hbtn:not([data-pl-tac]) { display: none; } }
+/* 鼠标指针：游戏客户端的指针贴图（热点 16, 15；高分屏用 _x2）*/
+.pl-stage {
+  --cur-default: url("../assets/eveui/cursor/cursor00.png?v=1") 16 15, default;
+  --cur-menu: url("../assets/eveui/cursor/cursor01.png?v=1") 16 15, context-menu;
+  --cur-hand: url("../assets/eveui/cursor/cursor21.png?v=1") 16 15, pointer;
+  --cur-ibeam: url("../assets/eveui/cursor/cursor07.png?v=1") 16 15, text;
+  --cur-nwse: url("../assets/eveui/cursor/cursor15.png?v=1") 16 15, nwse-resize;
+  --cur-nesw: url("../assets/eveui/cursor/cursor13.png?v=1") 16 15, nesw-resize;
+  --cur-ew: url("../assets/eveui/cursor/cursor16.png?v=1") 16 15, ew-resize;
+  --cur-ns: url("../assets/eveui/cursor/cursor17.png?v=1") 16 15, ns-resize;
+  --cur-lock: url("../assets/eveui/cursor/cursor05.png?v=1") 16 15, crosshair;
+  --cur-move: url("../assets/eveui/cursor/cursor33.png?v=1") 16 15, crosshair;
+}
+@media (min-resolution: 1.5dppx) {
+  .pl-stage {
+    --cur-default: image-set(url("../assets/eveui/cursor/cursor00.png?v=1") 1x, url("../assets/eveui/cursor/cursor00_x2.png?v=1") 2x) 16 15, default;
+    --cur-menu: image-set(url("../assets/eveui/cursor/cursor01.png?v=1") 1x, url("../assets/eveui/cursor/cursor01_x2.png?v=1") 2x) 16 15, context-menu;
+    --cur-hand: image-set(url("../assets/eveui/cursor/cursor21.png?v=1") 1x, url("../assets/eveui/cursor/cursor21_x2.png?v=1") 2x) 16 15, pointer;
+    --cur-ibeam: image-set(url("../assets/eveui/cursor/cursor07.png?v=1") 1x, url("../assets/eveui/cursor/cursor07_x2.png?v=1") 2x) 16 15, text;
+    --cur-nwse: image-set(url("../assets/eveui/cursor/cursor15.png?v=1") 1x, url("../assets/eveui/cursor/cursor15_x2.png?v=1") 2x) 16 15, nwse-resize;
+    --cur-ns: image-set(url("../assets/eveui/cursor/cursor17.png?v=1") 1x, url("../assets/eveui/cursor/cursor17_x2.png?v=1") 2x) 16 15, ns-resize;
+    --cur-ew: image-set(url("../assets/eveui/cursor/cursor16.png?v=1") 1x, url("../assets/eveui/cursor/cursor16_x2.png?v=1") 2x) 16 15, ew-resize;
+    --cur-nesw: image-set(url("../assets/eveui/cursor/cursor13.png?v=1") 1x, url("../assets/eveui/cursor/cursor13_x2.png?v=1") 2x) 16 15, nesw-resize;
+    --cur-lock: image-set(url("../assets/eveui/cursor/cursor05.png?v=1") 1x, url("../assets/eveui/cursor/cursor05_x2.png?v=1") 2x) 16 15, crosshair;
+    --cur-move: image-set(url("../assets/eveui/cursor/cursor33.png?v=1") 1x, url("../assets/eveui/cursor/cursor33_x2.png?v=1") 2x) 16 15, crosshair;
+  }
+}
+.pl-stage, .pl-stage * { cursor: var(--cur-default); }
+.pl-stage :is(button, .pl-mod, .pl-tgt), .pl-stage .pl-ov tr { cursor: var(--cur-hand); }
+.pl-stage .pl-mod.passive, .pl-stage .pl-dr-sec .pl-btn:disabled { cursor: var(--cur-default); }
+.pl-stage :is(input, textarea) { cursor: var(--cur-ibeam); }
+.pl-stage .pl-wrs:is(.nw, .se) { cursor: var(--cur-nwse); }
+.pl-stage .pl-wrs:is(.ne, .sw) { cursor: var(--cur-nesw); }
+.pl-stage :is(.pl-wrs.w, .pl-wrs.e, .pl-ovsc) { cursor: var(--cur-ew); }
+.pl-stage .pl-wrs:is(.n, .s) { cursor: var(--cur-ns); }
+.pl-stage.cur-ship .pl-3d canvas { cursor: var(--cur-menu); }
+.pl-stage.cur-move .pl-3d canvas, .pl-stage.cur-move .pl-ov tr { cursor: var(--cur-move); }
+.pl-stage.cur-lock .pl-3d canvas, .pl-stage.cur-lock .pl-ov tr { cursor: var(--cur-lock); }
+
+/* ---------- 驾驶模拟：船体面板选项 / 装备提示 / 装备右键菜单 ---------- */
+/* 选项按钮：客户端 optionsCont 在 256×256 叠加层的 (190, 194)，叠加层居中在面板圆心 → 圆心右 62、下 66 */
+.pl-hudopt { position: absolute; left: 62px; top: 166px; width: 16px; height: 16px; padding: 0; border: 0; background: none; opacity: 0.6; pointer-events: auto; cursor: pointer; z-index: 8; }
+.pl-hudopt:hover { opacity: 1; }
+.pl-hudopt img { width: 16px; height: 16px; display: block; }
+/* UtilMenu：底色 #0b0a12，内边距 8，条目左 4、高 = 字高 + 4 */
+.pl-umenu, .pl-cmenu { position: absolute; z-index: 60; padding: 8px; min-width: 160px; background: rgba(11, 10, 18, 0.96); border-radius: 2px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6); color: #ddd; font-size: 12px; pointer-events: auto; }
+.pl-umenu hr, .pl-cmenu hr { border: 0; height: 1px; margin: 6px 0; background: rgba(255, 255, 255, 0.1); }
+.pl-um-e, .pl-cmenu button { display: flex; align-items: center; gap: 4px; width: 100%; padding: 2px 4px; border: 0; background: none; color: inherit;
+  font: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
+.pl-um-e img { width: 16px; height: 16px; flex: none; }
+.pl-um-e:hover, .pl-cmenu button:hover { background: rgba(255, 255, 255, 0.12); }
+.pl-um-e.off { opacity: 0.35; cursor: default; }
+.pl-um-e.off:hover { background: none; }
+.pl-cmenu { max-height: 70%; overflow-y: auto; }
+/* 装备提示：TooltipPanel 4 列、外边距 16、底色 0.75（framewithpointer 深灰 26）、指针朝下 24px */
+.pl-mtip { position: absolute; z-index: 55; pointer-events: none; }
+.pl-mtip .b { padding: 12px 16px; max-width: 320px; background: rgba(26, 26, 26, 0.88); border-radius: 3px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55); color: #ddd; font-size: 12px; }
+.pl-mtip .ptr { position: absolute; bottom: -12px; width: 24px; height: 12px; background: rgba(26, 26, 26, 0.88); clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.pl-mtip .r { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 0; }
+.pl-mtip .r > img, .pl-mtip .r > i { width: 26px; height: 26px; flex: none; }
+.pl-mtip .r.big > img { width: 32px; height: 32px; }
+.pl-mtip .r > span { flex: 1; line-height: 1.35; }
+.pl-mtip .r kbd { font: inherit; color: #aaa; margin-left: 12px; }
+.pl-mtip .r.head { min-height: 20px; }
+.pl-mtip .r.vals span { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.pl-mtip .r.vals em { display: inline-flex; align-items: center; gap: 2px; font-style: normal; }
+.pl-mtip .r.vals em img { width: 20px; height: 20px; }
+.pl-mtip .r.st { min-height: 24px; font-size: 14px; }
+/* 空槽位：客户端 8_64_11/10/9，24×24、透明 0.25 */
+.pl-slot.empty { opacity: 1; pointer-events: auto; }
+.pl-slot.empty > img { position: absolute; left: 20px; top: 20px; width: 24px; height: 24px; opacity: 0.25; }

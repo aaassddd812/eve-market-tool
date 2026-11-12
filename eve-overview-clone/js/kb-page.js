@@ -8,7 +8,7 @@ import { gankSystemHtml, GANK_NOTE } from './kb-gank.js?v=v1';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 import { SERVER, IS_TQ, HUB, eveImage, kbSiteLink } from './server.js?v=s4';
-import * as ST from './standings.js?v=v5';
+import * as ST from './standings.js?v=v6';
 import { fullIn } from './eve-time.js?v=v1';
 
 let app, kb;
@@ -1204,14 +1204,16 @@ function entityParts(kind, id, { stats, info, lifetime, history }) {
   const name = info.name || stats.name || partyName(id);
   const eff = stats.destroyed + stats.lost ? stats.destroyed / (stats.destroyed + stats.lost) * 100 : null;
   const sub = [];
+  // 军团 / 联盟：图标 + 名字
+  const org = (k, oid) => `<span class="kb-head-org"><img src="${avatar(k, oid, 32)}" alt="" width="20" height="20" loading="lazy">${entityLink(k, oid)}</span>`;
   if (kind === 'character') {
-    if (info.corporation_id) sub.push(entityLink('corporation', info.corporation_id));
-    if (info.alliance_id) sub.push(entityLink('alliance', info.alliance_id));
+    if (info.corporation_id) sub.push(org('corporation', info.corporation_id));
+    if (info.alliance_id) sub.push(org('alliance', info.alliance_id));
     if (info.birthday) sub.push('创建于 ' + new Date(info.birthday).toLocaleDateString('zh-CN'));
   } else {
     if (info.ticker) sub.push('[' + app.esc(info.ticker) + ']');
     if (info.member_count) sub.push(app.formatNumber(info.member_count) + ' 名成员');
-    if (kind === 'corporation' && info.alliance_id) sub.push(entityLink('alliance', info.alliance_id));
+    if (kind === 'corporation' && info.alliance_id) sub.push(org('alliance', info.alliance_id));
     if (info.date_founded) sub.push('成立于 ' + new Date(info.date_founded).toLocaleDateString('zh-CN'));
   }
 
@@ -1401,6 +1403,15 @@ async function runSearch(text) {
   try { entities = (await api('search?q=' + encodeURIComponent(q))).results; } catch { /* 服务不可用时只显示本地结果 */ }
   if (seq !== searchSeq) return;
   renderSuggest({ ...local, entities });
+  // 补上人物所属军团 / 联盟（图标 + 名字提示），查到后再画一次
+  const chars = entities.filter((e) => e.category === 'character').slice(0, 6).map((e) => e.id);
+  if (!chars.length) return;
+  const aff = await ST.affiliation(chars, { sure: true }).catch(() => null);
+  if (!aff || seq !== searchSeq) return;
+  const orgs = [...aff.values()].flatMap((a) => [a.corp, a.alliance]).filter((x) => x && !app.officialName(x) && !S.names.has(x));
+  if (orgs.length) { try { const named = await app.resolveNames(orgs); for (const [k, v] of named.names) S.names.set(k, v); } catch { /* 只显示图标 */ } }
+  if (seq !== searchSeq) return;
+  renderSuggest({ ...local, entities, aff });
 }
 
 // 搜索历史：点过的建议项（人物 / 军团 / 联盟 / 舰船 / 星系 / 星座 / 星域），存在本机，输入框为空时显示
@@ -1447,12 +1458,14 @@ function localSearch(q) {
   return { ships: pick(app.shipTypes(), 6), systems: pick(systems, 6), constellations: pick(constellations, 4), regions: pick(regions, 4) };
 }
 
-function renderSuggest({ entities, ships, systems, constellations, regions }) {
+function renderSuggest({ entities, ships, systems, constellations, regions, aff }) {
   const box = $('kbSuggest');
   const group = (title, items) => items.length ? `<div class="kb-suggest-group">${title}</div>` + items.join('') : '';
   const ents = entities || [];
+  const orgIcon = (k, oid) => oid ? `<img class="kb-suggest-org" src="${avatar(k, oid, 32)}" alt="" width="18" height="18" loading="lazy" title="${app.esc((k === 'alliance' ? '联盟：' : '军团：') + partyName(oid))}">` : '';
+  const orgsOf = (kind, id) => { const a = kind === 'character' ? aff?.get(id) : null; return a ? orgIcon('corporation', a.corp) + orgIcon('alliance', a.alliance) : ''; };
   const byKind = (kind) => ents.filter((e) => e.category === kind).slice(0, 6).map((e) =>
-    `<div class="kb-suggest-row"><button class="kb-suggest-item" data-pick-entity="${kind}:${e.id}"><img src="${avatar(kind, e.id, 32)}" alt="" width="22" height="22" loading="lazy"><span>${app.esc(e.name)}</span><small>${KIND_ZH[kind]}统计</small></button>
+    `<div class="kb-suggest-row"><button class="kb-suggest-item" data-pick-entity="${kind}:${e.id}"><img src="${avatar(kind, e.id, 32)}" alt="" width="22" height="22" loading="lazy"><span>${app.esc(e.name)}</span>${orgsOf(kind, e.id)}<small>${KIND_ZH[kind]}统计</small></button>
       <button class="kb-suggest-add" data-add-entity="${kind}:${e.id}" data-name="${app.esc(e.name)}" title="加入击杀列表筛选（可以选多个）">＋ 筛选</button></div>`);
   const html =
     (entities === null ? '<div class="kb-suggest-group">人物 / 军团 / 联盟 · 搜索中…</div>' :
@@ -1493,7 +1506,7 @@ function route() {
 
 // ---------- 本地分析：频道成员名单 / 定向扫描（local-scan.js，首次打开时加载）----------
 async function renderLocalScan() {
-  const m = await import('./local-scan.js?v=v17');
+  const m = await import('./local-scan.js?v=v18');
   if (!location.hash.startsWith('#kb/local')) return;
   m.renderLocal($('kbMain'), {
     esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,

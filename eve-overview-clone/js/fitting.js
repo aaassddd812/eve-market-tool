@@ -7,7 +7,7 @@ import * as FE from './fit-engine.js?v=v39';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
 import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
-import { initSim, mountSim } from './fit-sim.js?v=v40';
+import { initSim, mountSim, pilotRow, pilotShipSearch } from './fit-sim.js?v=v79';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v13';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
@@ -50,6 +50,7 @@ const F = {
   fit: null, calc: null, stats: null,
   tab: 'ship', query: '', queries: {}, open: new Set(), slotFilter: null, onlyFits: true,
   selected: null,                 // { slot, index }：选中的装备（装填弹药用）
+  chargeFor: new Set(), chargeShut: new Set(),   // 弹药页：只看勾选的这几种装备（类型 ID）能用的弹药（一个不选 = 全部），分组默认全展开（chargeShut = 手动收起的分组）
   infoSrc: null,                  // 详情弹窗是从装配里哪一项点开的（衍生替换用）
   skillMode: 'max', esi: null,
   prices: null
@@ -153,6 +154,29 @@ export async function showSim(root, restored = false) {
   const preset = pendingSim;
   pendingSim = null;
   mountSim(root, preset, restored && !preset);
+}
+
+// 驾驶模拟页（独立菜单）：开一艘船打 NPC，用战场模拟的引擎、3D 画面和装配计算
+let pilotMod = null;
+export async function showPilot(root) {
+  if (!F.data && !root.dataset.ready) root.innerHTML = skTitle(16) + skCards(2);
+  try {
+    await ensureData();
+  } catch (error) {
+    root.innerHTML = '<p class="text-muted kb-empty">装配数据加载失败：' + app.esc(error.message) + '</p>';
+    return;
+  }
+  toolInit?.();
+  await MU.loadMuta().catch(() => {});
+  if (!pilotMod) {
+    pilotMod = await import('./pilot.js?v=v52');
+    pilotMod.initPilot({ get data() { return F.data; }, FE, shipSearch: pilotShipSearch, savedFits, normalize,
+      // 无人机一架都没激活时按带宽激活（不改原装配）
+      pilotRow: (ship, fit, label) => pilotRow(ship, fit, label, (f) => { if (f?.drones?.length && !f.drones.some((d) => d.active)) autoActivateDrones(f); }),
+      hasEsi: () => app.hasEsiToken(), esiFits: loadEsiFitList, getFit: () => F.fit,
+      esc: app.esc, formatNumber: app.formatNumber, showToast: app.showToast, store: app.store });
+  }
+  pilotMod.mountPilot(root);
 }
 
 // 技能规划（个人中心 · 技能页里的子页，用装配数据里的技能前置关系）
@@ -416,7 +440,18 @@ function bindSidebar() {
     const toggle = e.target.closest('[data-fit-group]');
     if (toggle) {
       const id = toggle.dataset.fitGroup;
-      if (F.open.has(id)) F.open.delete(id); else F.open.add(id);
+      const set = F.tab === 'charge' && chargeForTypes().length ? F.chargeShut : F.open;
+      if (set.has(id)) set.delete(id); else set.add(id);
+      renderBrowser();
+      return;
+    }
+    const cf = e.target.closest('[data-fit-charge-for]');
+    if (cf) {
+      // 多选：点一下勾上 / 取消；一个都不选就是全部
+      const id = Number(cf.dataset.fitChargeFor);
+      const next = new Set(chargeForTypes().map((t) => t.id));
+      if (next.has(id)) next.delete(id); else next.add(id);
+      setChargeFor(next);
       renderBrowser();
       return;
     }
@@ -536,6 +571,7 @@ function visible(t) {
       if (t.slot && F.stats && !F.stats.slots[t.slot]) return false;
     }
   }
+  if (F.tab === 'charge' && chargeForTypes().length) return chargeForTypes().some((m) => FE.chargeFits(m, t));
   if (F.tab === 'charge' && F.onlyFits && F.fit) {
     const mods = fittedModules();
     if (!mods.some(({ m }) => FE.chargeFits(type(m.type), t))) return false;
@@ -610,7 +646,14 @@ function renderBrowser() {
   const box = $('fitBrowser');
   const list = tabTypes().filter(visible);
   const head = [];
-  if (F.tab === 'module' || F.tab === 'charge' || F.tab === 'drone') {
+  // 弹药页最上面一排：已装上、要装弹药 / 脚本的装备图标，可多选，只看勾上的装备能用的弹药（全展开）；一个不选就是全部
+  const cur = F.tab === 'charge' ? chargeForTypes() : [];
+  if (F.tab === 'charge') {
+    const mods = chargeModules(), on = new Set(cur.map((t) => t.id));
+    if (mods.length) head.push(`<div class="fit-charge-mods">${mods.map(({ t, n }) => `<button type="button" class="fit-cm${on.has(t.id) ? ' active' : ''}" data-fit-charge-for="${t.id}" aria-pressed="${on.has(t.id)}" title="${app.esc(t.name)}${n > 1 ? ' × ' + n : ''}"><img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">${n > 1 ? `<em>${n}</em>` : ''}</button>`).join('')}</div>`);
+    if (cur.length) head.push(`<p class="fit-charge-for">${cur.length === 1 ? `${app.esc(cur[0].name)} 可用的弹药` : `已选 ${cur.length} 种装备可用的弹药`}</p>`);
+  }
+  if ((F.tab === 'module' || F.tab === 'drone' || F.tab === 'charge') && !cur.length) {
     head.push(`<label class="fit-only"><input type="checkbox" data-fit-only${F.onlyFits ? ' checked' : ''}>只显示${F.tab === 'charge' ? '已装配武器可用的弹药' : '能装到当前舰船的'}</label>`);
   }
   // 装备按槽位筛选（点装配里的空槽位也会切到对应槽位）
@@ -639,7 +682,7 @@ function renderBrowser() {
   const typeSet = new Set(list.map((t) => t.id));
   const group = (m, depth) => {
     const key = 'm' + m.id;
-    const open = F.open.has(key) || (roots.length === 1 && depth === 0);
+    const open = F.tab === 'charge' && chargeForTypes().length ? !F.chargeShut.has(key) : F.open.has(key) || (roots.length === 1 && depth === 0);
     const kids = m.children.filter((c) => count.get(c.id)).sort(byName);
     const items = m.types.filter((t) => typeSet.has(t.id)).sort(byMeta);
     return `<div class="fit-group${open ? ' open' : ''}">
@@ -1200,6 +1243,31 @@ function addModule(t) {
   recompute();
 }
 
+// 弹药页顶部那排：当前装配里要装弹药的装备（同型号只列一次）
+function chargeModules() {
+  if (!F.fit) return [];
+  const seen = new Map();
+  for (const { m } of fittedModules()) {
+    const t = type(m.type);
+    if (t && !seen.has(t.id) && FE.AT.chargeGroups.some((a) => t.attrs.get(a))) seen.set(t.id, { t, n: 0, charge: m.charge });
+    if (seen.has(m.type)) seen.get(m.type).n++;
+  }
+  return [...seen.values()];
+}
+// 当前勾选的装备类型（已经不在装配里的不算）
+function chargeForTypes() {
+  if (!F.chargeFor.size || !F.fit) return [];
+  const fitted = new Set(fittedModules().map(({ m }) => m.type));
+  return [...F.chargeFor].filter((id) => fitted.has(id)).map(type).filter(Boolean);
+}
+// ids：Set / 数组 / 单个类型 ID（从装配里跳过来时只勾这一个）
+function setChargeFor(ids) {
+  F.chargeFor = new Set(ids == null ? [] : typeof ids === 'number' ? [ids] : ids);
+  F.chargeShut.clear();
+  F.queries.charge = '';
+  if (F.tab === 'charge' && F.query) { F.query = ''; $('fitSearch').value = ''; }
+}
+
 function fittedModules() {
   const out = [];
   for (const s of FE.SLOTS) F.fit.slots[s].forEach((m, i) => { if (m) out.push({ m, slot: s, index: i }); });
@@ -1210,8 +1278,11 @@ function loadCharge(t) {
   const mods = fittedModules().filter(({ m }) => FE.chargeFits(type(m.type), t));
   if (!mods.length) { app.showToast(`没有能装填 ${t.name} 的装备`, 'error'); return; }
   // 选中了某个装备：装填同型号的全部装备；否则装填所有能用的
+  // 弹药页勾选了装备时：只装填勾上的、能用这种弹药的装备
   const sel = F.selected && F.fit.slots[F.selected.slot][F.selected.index];
-  const targets = sel && FE.chargeFits(type(sel.type), t) ? mods.filter(({ m }) => m.type === sel.type) : mods;
+  const ft = new Set(chargeForTypes().filter((m) => FE.chargeFits(m, t)).map((m) => m.id));
+  const targets = ft.size ? mods.filter(({ m }) => ft.has(m.type))
+    : sel && FE.chargeFits(type(sel.type), t) ? mods.filter(({ m }) => m.type === sel.type) : mods;
   targets.forEach(({ m }) => { m.charge = t.id; });
   app.showToast(`已为 ${targets.length} 个装备装填 ${t.name}`, 'success', 1800);
   recompute();
@@ -1576,7 +1647,36 @@ function moduleRow(slot, index, m, extra) {
 // 装备和弹药图标都正着放（不跟着圆周转，否则右边横着、下面倒着）。整个圆盘是一个 SVG；槽位是 <g data-fit-mod / data-fit-empty>，点击、拖放沿用列表的逻辑（点装备选中，点空槽在左侧选装备）。
 // 选中的装备在圆盘下面显示完整的一行（状态、超载、弹药、突变、移除）。超限警告也放在圆盘下面，出现 / 消失时圆盘不会上下跳。
 const RG = { c: 256, ship: 226, band: 196, bandW: 50, tileIn: 173, tileOut: 219, outer: 239, step: 11.5, tile: 10.4 };
-const RADIAL_START = { high: null, mid: -38, low: 52, rig: 148, sub: 190 };   // 各组第一个槽位的起始角度（顺时针，3 点钟为 0）；高槽以正上方居中
+const RADIAL_START = { high: null, mid: -38, low: 52, rig: 148, sub: 190 };   // 各组第一个槽位的理想起始角度（顺时针，3 点钟为 0）；高槽以正上方居中
+// 槽位排布：先按理想角度放，和前一组挨上就顺延，绕一圈撞到高槽就从后往前挤；还放不下（T3 巡洋舰装满子系统后槽位很多）就整体缩小格子再排。
+// 返回 { k: 缩放, start: { 组: 起始角度 } }
+function radialLayout(counts) {
+  const order = FE.SLOTS.filter((x) => counts[x] > 0);
+  const GAP = 3;
+  for (let k = 1; k > 0.4; k *= 0.96) {
+    const step = RG.step * k, tile = RG.tile * k;
+    const span = (x) => (counts[x] - 1) * step + tile;
+    const start = {};
+    let prevEnd = null, first = null;
+    for (const x of order) {
+      let a = x === 'high' ? -90 - span(x) / 2 : RADIAL_START[x] ?? -90;
+      if (first != null) { while (a < first) a += 360; if (prevEnd != null && a < prevEnd + GAP) a = prevEnd + GAP; }
+      start[x] = a;
+      if (first == null) first = a;
+      prevEnd = a + span(x);
+    }
+    // 最后一组越过了第一组（绕一圈）：从后往前挤
+    let limit = first + 360 - GAP;
+    for (let i = order.length - 1; i > 0; i--) {
+      const x = order[i];
+      if (start[x] + span(x) > limit) start[x] = limit - span(x);
+      limit = start[x] - GAP;
+    }
+    const ok = order.every((x, i) => i === 0 || start[x] >= start[order[i - 1]] + span(order[i - 1]) + GAP - 1e-6);
+    if (ok) return { k, start };
+  }
+  return { k: 0.4, start: Object.fromEntries(order.map((x, i) => [x, -90 + i * 72])) };
+}
 const rad = (a) => a * Math.PI / 180;
 const pt = (r, a) => [RG.c + r * Math.cos(rad(a)), RG.c + r * Math.sin(rad(a))];
 const f2 = (v) => v.toFixed(2);
@@ -1610,13 +1710,12 @@ function hardpoints(kind, label, v, a0, dir) {
 function radialHtml(shipType, st) {
   const r = st.resources;
   const tiles = [];
+  const counts = Object.fromEntries(FE.SLOTS.map((s) => [s, Math.max(st.slots[s] || 0, F.fit.slots[s].length)]));
+  const L = radialLayout(counts);
   for (const s of FE.SLOTS) {
     const total = st.slots[s] || 0;
     const list = F.fit.slots[s];
-    const n = Math.max(total, list.length);
-    if (!n) continue;
-    const start = RADIAL_START[s] ?? -90 - (n * RG.step) / 2;
-    for (let i = 0; i < n; i++) tiles.push(radialSlot(s, i, list[i], i >= total, start + i * RG.step));
+    for (let i = 0; i < counts[s]; i++) tiles.push(radialSlot(s, i, list[i], i >= total, L.start[s] + i * RG.step * L.k, L.k));
   }
   const sel = F.selected && F.fit.slots[F.selected.slot]?.[F.selected.index] ? F.selected : null;
   return `<section class="fit-radial-wrap">
@@ -1643,15 +1742,16 @@ function radialHtml(shipType, st) {
     <div class="fit-radial-sel">${sel ? moduleRow(sel.slot, sel.index, F.fit.slots[sel.slot][sel.index], sel.index >= (st.slots[sel.slot] || 0)) : `<p class="fit-radial-tip">${MOBILE() ? '点圆盘上的装备调整状态、弹药或移除；点空槽添加装备' : '点圆盘上的装备调整状态、弹药或移除；点空槽后在左侧选装备，也可以直接拖到槽位上'}</p>`}</div>
   </section>`;
 }
-function radialSlot(slot, index, m, extra, a0) {
-  const a1 = a0 + RG.tile, mid = (a0 + a1) / 2;
+function radialSlot(slot, index, m, extra, a0, k = 1) {
+  const a1 = a0 + RG.tile * k, mid = (a0 + a1) / 2;
   const d = sector(RG.tileIn, RG.tileOut, a0, a1);
   const target = F.target && F.target.slot === slot && F.target.index === index;
   // 左侧装备悬停预览：和列表视图一样，把它淡淡地放进点击后会装进的那一格（灰色）
   const pv = F.preview && F.preview.slot === slot && F.preview.index === index ? type(F.preview.type) : null;
   if (pv) {
     const [gx, gy] = pt((RG.tileIn + RG.tileOut) / 2 + 1, mid);
-    return `<g class="fr-slot fr-ghost"><path class="fr-tile" d="${d}"/><image class="fr-icon" href="${IMG(pv.id, 'icon', 64)}" x="${f2(gx - 20)}" y="${f2(gy - 20)}" width="40" height="40"/></g>`;
+    const g = 40 * Math.min(1, k + 0.08);
+    return `<g class="fr-slot fr-ghost"><path class="fr-tile" d="${d}"/><image class="fr-icon" href="${IMG(pv.id, 'icon', 64)}" x="${f2(gx - g / 2)}" y="${f2(gy - g / 2)}" width="${f2(g)}" height="${f2(g)}"/></g>`;
   }
   if (!m) return `<g class="fr-slot is-empty${extra ? ' is-error' : ''}${target ? ' is-target' : ''}" data-fit-empty="${slot}" data-fit-idx="${index}" role="button" tabindex="0"><title>${extra ? '超出槽位' : '空' + FE.SLOT_NAME[slot]}</title><path class="fr-tile" d="${d}"/></g>`;
   const t = type(m.type);
@@ -1660,7 +1760,7 @@ function radialSlot(slot, index, m, extra, a0) {
   const sel = F.selected && F.selected.slot === slot && F.selected.index === index;
   const ct = m.charge && type(m.charge);
   const [ix, iy] = pt((RG.tileIn + RG.tileOut) / 2 + 1, mid);
-  const S = 40;
+  const S = 40 * Math.min(1, k + 0.08);   // 格子缩小时图标跟着缩，不压到隔壁
   let charge = '';
   if (ct) {
     const [cx, cy] = pt(RG.tileIn - 15, mid);
@@ -2181,7 +2281,7 @@ async function onMainClick(e) {
   }
   if ((x = el('[data-fit-pick-charge]'))) {
     F.selected = parseRef(x.dataset.fitPickCharge);
-    F.queries.charge = '';
+    setChargeFor(F.fit.slots[F.selected.slot][F.selected.index]?.type);
     setTab('charge');
     if (F.query) { F.query = ''; $('fitSearch').value = ''; renderBrowser(); }
     renderFit();
@@ -2207,7 +2307,12 @@ async function onMainClick(e) {
     const ref = parseRef(x.dataset.fitMod);
     F.selected = F.selected && F.selected.slot === ref.slot && F.selected.index === ref.index ? null : ref;
     renderFit();
-    if (F.tab === 'charge') renderBrowser();
+    if (F.tab === 'charge') {
+      // 在弹药页点装配里的装备：要装弹药的就切到它能用的弹药
+      const mt = F.selected && type(F.fit.slots[ref.slot][ref.index]?.type);
+      if (mt && FE.AT.chargeGroups.some((a) => mt.attrs.get(a))) setChargeFor(mt.id);
+      renderBrowser();
+    }
     return;
   }
   if ((x = el('[data-fit-drone]'))) {

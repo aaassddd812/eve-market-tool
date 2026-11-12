@@ -14,7 +14,7 @@ const TABS = ['market', 'map', 'kb', '*', 'profile'];   // * 是「全部」
 const ROOTS = new Set(['market', 'map', 'kb', 'profile']);   // 标签栏里的一级页面（个人中心的子页有自己的返回条）
 const GROUPS = [
   ['交易', ['market', 'arb', 'appraisal', 'contracts', 'courier', 'lp', 'abyss', 'bazaar']],
-  ['战斗', ['kb', 'sim', 'fit', 'war', 'sov', 'wh']],
+  ['战斗', ['kb', 'sim', 'pilot', 'fit', 'war', 'sov', 'wh']],
   ['工业', ['industry', 'pi']],
   ['更多', ['map', 'ai', 'plaza', 'guide', 'profile']]
 ];
