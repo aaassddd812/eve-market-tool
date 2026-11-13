@@ -28,7 +28,7 @@ const SKIES = ['a01', 'c01', 'g01', 'm01'];
 const SKY_NAME = { '': '随机', a01: '艾玛', c01: '加达里', g01: '盖伦特', m01: '米玛塔尔' };
 const DT = 0.5;
 const S = {
-  set: { ship: 0, fit: 'kb', foes: [], dist: 30, sky: '', tac: true },
+  set: { ship: 0, fit: 'kb', foes: [], allies: [], dist: 30, sky: '', tac: true, tab: 'solo', ptab: 'rec', mmode: '1v1', mcap: MATCH_CAPS[0], mskill: 'esi', mroomf: '', mpub: true, pfit: null, pid: '' },
   b: null, me: null, on: null, off: null, prop: -1, view: null, raf: 0, last: 0, t: 0, paused: false, sel: -1, keys: new Set(),
   names: [], brk: [], log: [], ended: false, loading: false, orbit: 0, keep: 0, ovAt: 0
 };

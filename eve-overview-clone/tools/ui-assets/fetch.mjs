@@ -55,6 +55,8 @@ const FILES = [
   ...['frigate', 'destroyer', 'cruiser', 'battlecruiser', 'battleship', 'carrier', 'dreadnought', 'titan', 'industrial', 'capsule', 'shuttle', 'rookie', 'miningbarge', 'freighter', 'forceauxiliary', 'supercarrier', 'industrialcommand', 'miningfrigate'].map((n) => `ui/texture/shared/brackets/${n}_16.png`),
   ...CONTROL.flatMap((n) => [`ui/texture/eveicon/control_icons/${n}_16px.png`, `ui/texture/eveicon/control_icons/${n}_32px.png`]),
   'ui/texture/loadingwheel.png', 'ui/texture/loadingwheel_full.png',
+  // 装配页侧栏「有装配的船」筛选：游戏装配浏览器的个人 / 社区装配筛选图标、舰船图标
+  'ui/texture/windowicons/member.png', 'ui/texture/classes/fitting/tabcommunityfits.png', 'ui/texture/classes/fitting/tabfittings.png',
   'ui/texture/shared/hamburgermenu_large.png',   // Neocom 顶上的 EVE 菜单
   'ui/texture/icons/73_16_251.png', 'ui/texture/icons/73_16_252.png',   // 装备栏「全部编组 / 取消编组」
   ...['56_64_5', 'target_killed', 'target_killed_skull'].map((n) => `ui/texture/icons/${n}.png`),   // 锁定目标：无人机图标、击毁标记

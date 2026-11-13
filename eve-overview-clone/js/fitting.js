@@ -172,7 +172,7 @@ export async function showPilot(root) {
   toolInit?.();
   await MU.loadMuta().catch(() => {});
   if (!pilotMod) {
-    pilotMod = await import('./pilot.js?v=v66');
+    pilotMod = await import('./pilot.js?v=v67');
     pilotMod.initPilot({ get data() { return F.data; }, FE, shipSearch: pilotShipSearch, savedFits, normalize,
       // 无人机一架都没激活时按带宽激活（不改原装配）
       pilotRow: (ship, fit, label, o) => pilotRow(ship, fit, label, (f) => { if (f?.drones?.length && !f.drones.some((d) => d.active)) autoActivateDrones(f); }, o),
@@ -731,10 +731,11 @@ const byName = (a, b) => a.name.localeCompare(b.name, 'zh');
 const byMeta = (a, b) => (a.meta || 1) - (b.meta || 1) || a.name.localeCompare(b.name, 'zh');
 
 // ---------- 舰船页：船下面展开这艘船的装配（我的装配 / 游戏装配 / 广场），像游戏装配窗口的「舰船与装配」----------
+// 图标用游戏装配浏览器顶上的筛选按钮（hullAndHardwareTypeBrowser.py）：个人装配 = 人像，社区装配 = tabCommunityFits；网站保存的装配游戏里没有，用装配浏览器的舰船图标
 const SRC_ICON = {
-  saved: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>',
-  esi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h4M8 10v4"/><circle cx="15" cy="11" r="1"/><circle cx="18" cy="13" r="1"/></svg>',
-  plaza: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg>'
+  saved: '<i class="fit-src-i" style="-webkit-mask-image:url(assets/eveui/classes/fitting/tabfittings.png);mask-image:url(assets/eveui/classes/fitting/tabfittings.png)"></i>',
+  esi: '<i class="fit-src-i" style="-webkit-mask-image:url(assets/eveui/windowicons/member.png);mask-image:url(assets/eveui/windowicons/member.png)"></i>',
+  plaza: '<i class="fit-src-i" style="-webkit-mask-image:url(assets/eveui/classes/fitting/tabcommunityfits.png);mask-image:url(assets/eveui/classes/fitting/tabcommunityfits.png)"></i>'
 };
 const FIT_SRC = { saved: '我的装配', esi: '游戏装配（ESI）', plaza: '广场装配' };
 const FS = { esi: null, esiBusy: false, esiChar: 0, plaza: null, plazaAt: 0, plazaBusy: false };

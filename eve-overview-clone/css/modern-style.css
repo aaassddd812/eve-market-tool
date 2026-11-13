@@ -9798,6 +9798,7 @@ html[data-skin="eve"] .pl-stage .pl-ov th { padding-top: 0; padding-bottom: 0; h
 .fit-src-bar { display: flex; gap: 6px; padding: 8px 12px 4px; }
 .fit-src { position: relative; display: inline-grid; place-items: center; width: 36px; height: 30px; border-radius: 8px; background: var(--bg-tertiary, rgba(255, 255, 255, 0.06)); color: var(--text-secondary); }
 .fit-src svg { width: 17px; height: 17px; }
+.fit-src-i { display: block; width: 20px; height: 20px; background: currentColor; -webkit-mask: center / contain no-repeat; mask: center / contain no-repeat; }
 .fit-src:hover:not(:disabled) { color: var(--text-primary); }
 .fit-src.active { background: var(--accent-primary); color: #fff; }
 .fit-src:disabled { opacity: 0.4; cursor: not-allowed; }
