@@ -799,7 +799,7 @@ function renderStage() {
   sw?.addEventListener('pointerout', onHintOut);
   sw?.addEventListener('contextmenu', onSelCtx);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v69').then((m) => {
+  import('./sim-3d.js?v=v70').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {

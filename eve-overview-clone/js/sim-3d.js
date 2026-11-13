@@ -19,8 +19,8 @@ import { createCelestials, sunLight } from './sim-cel.js?v=7';
 import { createWarpTunnel } from './sim-warp.js?v=3';
 import { createFlare } from './sim-flare.js?v=3';
 
-const COLOR = { A: new THREE.Color(0x5b9bff), B: new THREE.Color(0xff4b3e) };
 const WRECK = new THREE.Color(0x8a9099);
+const WHITE = new THREE.Color(1, 1, 1), OWN_COL = new THREE.Color(0.7, 0.7, 0.7);
 const KM = 1 / 1000;
 const tr = (t) => (window.I18N?.lang === 'en' && window.I18N.t ? window.I18N.t(t) : t);   // 画在画布上的文字不走自动翻译
 const ICON_PX = 18;        // 总览图标大小（CSS 像素）
@@ -515,6 +515,36 @@ export function createView(host, hooks = {}, opt = {}) {
   brPts.renderOrder = 5;
   brPts.visible = false;
   scene.add(brPts);
+  // 状态旗（客户端 inSpaceBracket.UpdateFlagAndBackground + stateFlag.FlagIcon）：图标左上角 (9, 8) 处 9×9 的小方块，
+  // 底色 0.75 + 8×8 白色符号；跟总览同一套——敌方按 −10 声望（红 0.75,0,0，符号 4 = 减号），友方按同舰队（紫 0.6,0.15,0.9，符号 1 = 人形）
+  const FLAGS = [['rgba(191, 0, 0, 0.75)', 4], ['rgba(153, 38, 230, 0.75)', 1]];
+  const flCanvas = document.createElement('canvas');
+  flCanvas.width = 18 * FLAGS.length; flCanvas.height = 18;
+  const flTex = new THREE.CanvasTexture(flCanvas);
+  flTex.flipY = false; flTex.colorSpace = THREE.SRGBColorSpace; flTex.generateMipmaps = false;
+  flTex.magFilter = flTex.minFilter = THREE.NearestFilter;
+  FLAGS.forEach(([bg, n], k) => {
+    const x = flCanvas.getContext('2d');
+    x.fillStyle = bg; x.fillRect(k * 18, 0, 18, 18);
+    const im = new Image();
+    im.onload = () => { x.imageSmoothingEnabled = false; x.drawImage(im, k * 18 + 1, 1, 16, 16); flTex.needsUpdate = true; };
+    im.src = `${opt.ui || 'assets/eveui/'}classes/flagicon/8/${n}.png?v=1`;
+  });
+  flTex.needsUpdate = true;
+  const flGeo = new THREE.BufferGeometry();
+  let flCap = 0;
+  const flMat = new THREE.ShaderMaterial({
+    uniforms: { atlas: { value: flTex }, n: { value: FLAGS.length }, size: { value: 9 * dpr }, off: { value: new THREE.Vector2() } },
+    vertexShader: `attribute vec2 fl; varying vec2 vFl; uniform float size; uniform vec2 off;
+      void main() { vFl = fl; gl_PointSize = size; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position.xy += off * gl_Position.w; }`,
+    fragmentShader: `uniform sampler2D atlas; uniform float n; varying vec2 vFl;
+      void main() { vec4 t = texture2D(atlas, vec2((vFl.x + gl_PointCoord.x) / n, gl_PointCoord.y)); gl_FragColor = vec4(t.rgb, t.a * vFl.y); }`,
+    transparent: true, depthTest: false, depthWrite: false,
+  });
+  const flPts = new THREE.Points(flGeo, flMat);
+  flPts.frustumCulled = false;
+  flPts.renderOrder = 6;
+  scene.add(flPts);
   // 游戏图标（opt.brackets(typeID) → 相对 opt.ui 的贴图路径，客户端 bracketMgr.GetBracketIcon 的查表结果）：
   // 用到哪张加载哪张，画进 16×16 格（每格 32 像素，16 像素原图放大 2 倍）的图集；屏幕上按客户端的 16×16 画
   const brSlots = new Map();
@@ -1366,6 +1396,7 @@ export function createView(host, hooks = {}, opt = {}) {
     dpr = l === 'low' ? 1 : Math.min(2, window.devicePixelRatio || 1);
     renderer.setPixelRatio(dpr);
     brMat.uniforms.size.value = iconPx * dpr;
+    flMat.uniforms.size.value = 9 * dpr;
     ringMat.uniforms.dpr.value = dpr;
     sky.visible = l === 'high' && !skyCube;
     lastSize = '';
@@ -1697,7 +1728,7 @@ export function createView(host, hooks = {}, opt = {}) {
     flameMat.uniforms.time.value = glowMat.uniforms.time.value = performance.now() / 1000;
 
     // 总览图标：模型在屏幕上够大时淡出
-    const ip = [], it = [], ii = [];
+    const ip = [], it = [], ii = [], fp = [], ff = [];
     // 天体图标（灰白，按总览页签过滤：hooks.celShown）
     celUpdate();
     if (brkOf) for (let c = 0; c < cels.count(); c++) {
@@ -1718,11 +1749,15 @@ export function createView(host, hooks = {}, opt = {}) {
       if (a <= 0 && opt.sel !== i) continue;
       const ic = d.alive ? iconOf(i) : wreckIcon();
       if (ic < 0) continue;
-      const c = d.alive ? COLOR[sideOf(rec.units[i].side)] : WRECK;
+      // 图标颜色（客户端 bracketVarious.GetIconColor）：舰船一律 OVERVIEW_NORMAL_COLOR 白色，自己的船 OVERVIEW_OWN_SHIP_COLOR 0.7 灰；敌我看旁边的状态旗
+      const own = i === hooks.self?.();
+      const c = d.alive ? (own ? OWN_COL : WHITE) : WRECK;
       const hi = opt.sel === i ? 1.35 : 1;
+      const al = Math.max(a, opt.sel === i ? 0.5 : 0) * (d.alive ? 1 : 0.8);
       ip.push(d.x, d.y, d.z);
-      it.push(Math.min(1, c.r * hi), Math.min(1, c.g * hi), Math.min(1, c.b * hi), Math.max(a, opt.sel === i ? 0.5 : 0) * (d.alive ? 1 : 0.8));
+      it.push(Math.min(1, c.r * hi), Math.min(1, c.g * hi), Math.min(1, c.b * hi), al);
       ii.push(ic);
+      if (d.alive && !own) { fp.push(d.x, d.y, d.z); ff.push(sideOf(rec.units[i].side) === 'A' ? 1 : 0, al); }
     }
     // 无人机 / 舰载机：前后两帧按顺序对上（同一母舰、同一类别）就插值
     const F2 = rec.frames[Math.min(rec.frames.length - 1, Math.floor(t / rec.dt) + 1)];
@@ -1751,9 +1786,9 @@ export function createView(host, hooks = {}, opt = {}) {
       const dic = brkOf ? brSlot(brkOf(F.dr[j + 5])) : DRONE_BRACKETS[F.dr[j + 4]] ?? DRONE_BRACKETS[0];
       if (a <= 0 || dic < 0) continue;
       ip.push(x, y, z);
-      const c = COLOR[sideOf(rec.units[o].side)];
-      it.push(c.r, c.g, c.b, a);
+      it.push(1, 1, 1, a);
       ii.push(dic);
+      fp.push(x, y, z); ff.push(sideOf(rec.units[o].side) === 'A' ? 1 : 0, a);
     }
     for (const [k, m] of dModels) {
       if (m.state !== 'ok') continue;
@@ -1777,6 +1812,15 @@ export function createView(host, hooks = {}, opt = {}) {
       brGeo.attributes.position.array.set(ip); brGeo.attributes.tint.array.set(it); brGeo.attributes.icon.array.set(ii);
       brGeo.attributes.position.needsUpdate = brGeo.attributes.tint.needsUpdate = brGeo.attributes.icon.needsUpdate = true;
       brGeo.setDrawRange(0, ip.length / 3);
+    }
+    if (fp.length / 3 > flCap) { flCap = Math.ceil(fp.length / 3 * 1.5) + 64; flGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(flCap * 3), 3)); flGeo.setAttribute('fl', new THREE.BufferAttribute(new Float32Array(flCap * 2), 2)); }
+    if (flCap) {
+      flGeo.attributes.position.array.set(fp); flGeo.attributes.fl.array.set(ff);
+      flGeo.attributes.position.needsUpdate = flGeo.attributes.fl.needsUpdate = true;
+      flGeo.setDrawRange(0, fp.length / 3);
+      // 旗子中心相对图标中心：(9 + 4.5 − 8, 8 + 4.5 − 8) = (5.5, 4.5) 像素，换成裁剪空间
+      const cw = renderer.domElement.width / dpr || 1, ch = renderer.domElement.height / dpr || 1;
+      flMat.uniforms.off.value.set(5.5 * 2 / cw, -4.5 * 2 / ch);
     }
 
     // 开火、导弹、命中、阵亡爆炸（sim-fx.js）
