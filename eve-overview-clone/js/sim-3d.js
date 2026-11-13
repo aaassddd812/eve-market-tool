@@ -13,10 +13,11 @@
 // 观察者视角：拖动旋转、滚轮 / 双指缩放、右键 / 双指拖动平移；悬停显示舰船，点击选中，双击镜头跟随（手动转动镜头会退出导播，hooks.onDirector）。
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
-import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v10';
+import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v11';
 import { createFx } from './sim-fx.js?v=v35';
-import { createCelestials, sunLight } from './sim-cel.js?v=5';
+import { createCelestials, sunLight } from './sim-cel.js?v=7';
 import { createWarpTunnel } from './sim-warp.js?v=3';
+import { createFlare } from './sim-flare.js?v=3';
 
 const COLOR = { A: new THREE.Color(0x5b9bff), B: new THREE.Color(0xff4b3e) };
 const WRECK = new THREE.Color(0x8a9099);
@@ -241,12 +242,13 @@ function createPost(renderer) {
     return Math.min(64, t.length / 4);
   }
   const draw = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(qs, qc); };
-  // distScene：有可见内容时先画进扭曲缓冲（清成 0，加色叠加）
-  function render(scene, camera, distScene) {
+  // distScene：有可见内容时先画进扭曲缓冲（清成 0，加色叠加）；after：场景画完后往场景缓冲里再叠加的东西（恒星镜头光晕）
+  function render(scene, camera, distScene, after) {
     const v = renderer.getDrawingBufferSize(new THREE.Vector2());
     resize(v.x, v.y);
     renderer.setRenderTarget(sceneRT);
     renderer.render(scene, camera);
+    after?.();
     const useDist = Boolean(distScene?.children.some((o) => o.visible));
     if (useDist) {
       const cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha();
@@ -341,6 +343,8 @@ export function createView(host, hooks = {}, opt = {}) {
   scene.add(sun, amb);
   // 天体（驾驶模拟，rec.cel）：恒星、行星、卫星；有恒星时方向光改成真实的恒星方向
   const cels = createCelestials(scene, { load: (k) => loadModel(k), env: () => [env, envI] });   // 空间站 / 星门模型用舰船的加载器和环境反射
+  // 恒星镜头光晕（sim-flare.js）：场景之后、泛光之前叠加
+  const flare = opt.fx ? createFlare(renderer, scene, camera, `${opt.fx}lensflare/`) : null;
   // 跃迁隧道（驾驶模拟：hooks.warpFx() 给出自己船的跃迁状态）
   const tunnel = opt.fx && hooks.warpFx ? createWarpTunnel(scene, `${opt.fx}warp/`) : null;
   let shakeN = 0;
@@ -477,7 +481,13 @@ export function createView(host, hooks = {}, opt = {}) {
       bg.visible = true;
       skyCube = neb;
       const pm = new THREE.PMREMGenerator(renderer);
-      env = pm.fromCubemap(refl).texture;
+      // EveSpaceSceneEnvMap 在 quadv5 / 炮塔 quadv5 里带 Tr2sRGB=1 注解（_refl.dds 是 DXT3），客户端采样时先 sRGB → 线性；
+      // refl 本身还给背景着色器取 alpha、给跃迁隧道用，所以另做一份 sRGB 的给船体反射
+      const reflS = refl.clone();
+      reflS.colorSpace = THREE.SRGBColorSpace;
+      reflS.needsUpdate = true;
+      env = pm.fromCubemap(reflS).texture;
+      reflS.dispose();
       tunnel?.setEnv(refl);
       pm.dispose();
       envI = sc.reflectionIntensity ?? 1;
@@ -1700,7 +1710,7 @@ export function createView(host, hooks = {}, opt = {}) {
     }
     for (let i = 0; i < n; i++) {
       const d = drawn[i];
-      if (!d) continue;
+      if (!d || (hooks.unitShown && !hooks.unitShown(i))) continue;
       vA.set(d.x, d.y, d.z);
       const px = radiusOf(i) / kmPerPx(vA);
       const hasModel = models.get(keyOf(i))?.state === 'ok';
@@ -1945,7 +1955,7 @@ export function createView(host, hooks = {}, opt = {}) {
     const x = ev.clientX - r.left, y = ev.clientY - r.top;
     let best = -1, bd = 22 * 22;
     drawn.forEach((p, i) => {
-      if (!p) return;
+      if (!p || (hooks.unitShown && !hooks.unitShown(i))) return;
       vA.set(p.x, p.y, p.z).project(camera);
       if (vA.z > 1) return;
       const sx = (vA.x + 1) / 2 * r.width, sy = (1 - vA.y) / 2 * r.height;
@@ -2004,12 +2014,13 @@ export function createView(host, hooks = {}, opt = {}) {
       ORG[0] = ORG[1] = ORG[2] = 0;
       followAt = null;
       cels.set(r?.cel);
+      flare?.set(r?.cel);
       const st = cels.sunType();
       if (st != null) { const c = sunLight(st); sun.color.setRGB(c[0], c[1], c[2]); }
       else { sun.position.set(0.6, 0.5, 0.35); sky.material.uniforms.sun.value.set(0.6, 0.5, 0.35).normalize(); }
     },
     draw,
-    render() { watchPerf(); controls.update(); dynFov(); sky.position.copy(camera.position); bg.position.copy(camera.position); if (rec?.cel?.length) celUpdate(); const shook = warpFrame(); if (post && level === 'high') post.render(scene, camera, tunnel?.distScene); else { renderer.setRenderTarget(null); renderer.render(scene, camera); } if (shook) camera.quaternion.copy(shakeQ); drawLabels(); },
+    render() { watchPerf(); controls.update(); dynFov(); sky.position.copy(camera.position); bg.position.copy(camera.position); if (rec?.cel?.length) celUpdate(); const shook = warpFrame(); const hi = post && level === 'high'; flare?.update(ORG, !hi); if (hi) post.render(scene, camera, tunnel?.distScene, flare?.draw); else { renderer.setRenderTarget(null); renderer.render(scene, camera); flare?.draw(); } if (shook) camera.quaternion.copy(shakeQ); drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
     // 自己在哪一方（匹配对战里可能在 B 方）：自己这方画蓝色、对面画红色
     setOwnSide(s) { ownSide = s === 'B' ? 'B' : 'A'; },

@@ -2,19 +2,21 @@
 // 天体数据来自 pilot-systems.json（SDE 真实星系，celOf 转成以交战点为原点的米坐标），记录里是 rec.cel。
 // 距离动辄几个 AU，远超镜头远裁剪面（3 万 km），所以照常见的「缩放空间」画法：离镜头超过 NEAR 的天体，
 //   沿视线拉近到 NEAR 处、半径按同一比例缩小——屏幕上的位置和角大小都不变，只是深度换了。
-// 恒星：客户端是 sun_*.red 模型 + 镜头光晕（lensflare .black），这里先用朝向镜头的加色辉光代替，
+// 恒星：客户端是 sun_*.red 模型 + 镜头光晕（lensflare .black，见 sim-flare.js）；没有光晕数据的恒星类型用朝向镜头的加色辉光代替，
 //   颜色取该恒星 graphicID 的 emissiveColor（客户端 sun.py），照船的方向光改成真实的恒星方向。
 // 行星、卫星：客户端按 shaderPreset 加载模板 .red + 高度图（几百 MB 贴图，还没转换），
 //   这里先用程序化着色：按行星类型配色的分形噪声地表 / 气态条带、晨昏线、向阳边缘的大气辉光（配色是近似的，不是客户端数据）。
 // 空间站、星门：近处画游戏模型（sim-station.js）；小行星带：没有模型，只有总览图标（sim-3d 画）。
 import * as THREE from './vendor/three/three.module.min.js';
-import { createStations } from './sim-station.js?v=1';
+import { createStations } from './sim-station.js?v=2';
 
 const KM = 1 / 1000;
 const NEAR = 15000;   // 千米：再远就按比例拉近
 // 恒星发光色（graphicIDs.emissiveColor，按恒星 typeID）；没有的按黄色 sun_yellow_01a
 const SUN_COL = { 45037: [5, 3.765, 2.608], 3799: [5, 4.451, 4.902], 3800: [6, 3.694, 2.047] };
 const SUN_DEF = [5, 4.470588, 3.235294];
+// 有镜头光晕数据的恒星类型（和 sim-flare.js 的 FLARE_OF_SUN 一致）
+const FLARED = new Set([45037, 3799, 3800]);
 // 远处照船的光：同色相、饱和度减半、明度 1.5（客户端 sun.py 的 sunDiffuseColor）
 export function sunLight(type) {
   const e = SUN_COL[type] || SUN_DEF, mx = Math.max(...e), mn = Math.min(...e), s = (mx - mn) / mx * 0.5;
@@ -108,6 +110,8 @@ export function createCelestials(scene, opt = {}) {
       const o = { c, mesh: null };
       if (c.group === 6) {
         sunI = i;
+        // 有客户端镜头光晕的恒星（sim-flare.js：光晕里自带太阳核心辉光）不再叠这个占位辉光
+        if (FLARED.has(c.type)) { list.push(o); return; }
         tex ||= glowTex();
         const e = SUN_COL[c.type] || SUN_DEF, m = Math.max(...e);
         sunSpr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, color: new THREE.Color(e[0] / m, e[1] / m, e[2] / m), blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: false, transparent: true }));
@@ -148,8 +152,9 @@ export function createCelestials(scene, opt = {}) {
         mesh.scale.setScalar(r);
       }
       if (i === sunI) {
-        sunSpr.position.copy(p);
         sunDir.set(rx, ry, rz).normalize();
+        if (!sunSpr) continue;
+        sunSpr.position.copy(p);
         sunSpr.scale.setScalar(0.45);
       }
     }

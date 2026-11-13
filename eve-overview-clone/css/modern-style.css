@@ -9360,10 +9360,10 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-tgt-l > * { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 11px; }
 .pl-tgt-w { display: grid; grid-template-columns: repeat(4, auto); justify-content: center; margin-top: 2px; }
 .pl-tgt-w img { width: var(--sz, 32px); height: var(--sz, 32px); }
-/* 窗口照当前客户端（Photon）：背后场景模糊后压暗、降饱和；1px 白边（不透明度 0.1）；
-   当前窗口顶边一条 1px 主题色线（#58A7BF，0.5）；紧凑标题栏 32px，标题 12px，当前窗口白 0.9、其余白 0.5 */
-.pl-w { --pl-accent: #58a7bf; --pl-tint: 48, 86, 101; position: relative; pointer-events: auto; background: rgba(10, 10, 10, 0.62);
-  -webkit-backdrop-filter: blur(12px) saturate(0.5) brightness(0.55); backdrop-filter: blur(12px) saturate(0.5) brightness(0.55); }
+/* 窗口照当前客户端（Photon）：背后场景模糊、轻微压暗，保留场景色调（实拍录像里窗口后面的空间站白色区域透出来约 0.5~0.6 倍亮度、模糊很重，色相不变）；
+   1px 白边（不透明度 0.1）；当前窗口顶边一条 1px 主题色线（#58A7BF，0.5）；紧凑标题栏 32px，标题 12px，当前窗口白 0.9、其余白 0.5 */
+.pl-w { --pl-accent: #58a7bf; --pl-tint: 48, 86, 101; position: relative; pointer-events: auto; background: rgba(10, 10, 10, 0.08);
+  -webkit-backdrop-filter: blur(20px) brightness(0.62); backdrop-filter: blur(20px) brightness(0.62); }
 .pl-w::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
 .pl-w::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px; z-index: 3; pointer-events: none; background: var(--pl-accent); opacity: 0; transition: opacity 0.4s; }
 .pl-w.is-act::before { opacity: 0.5; }
@@ -9411,10 +9411,6 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-ov-line { position: absolute; bottom: 0; left: 0; width: 0; height: 1px; background: #b0b0b0; pointer-events: none; transition: left 0.15s ease-out, width 0.15s ease-out, background-color 0.3s; }
 .pl-w.is-act .pl-ov-line { background: #58a7bf; box-shadow: 0 0 4px rgba(88, 167, 191, 0.75); }
 /* 总览标题：游戏截图里总览是窗口堆叠里的一页，标题按页签样式画（约 16px，下面 1px 选中线 + 整排白 0.1 分隔线） */
-.pl-win-ov .pl-wh { height: 36px; box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1); margin: 0 8px; padding: 0; }
-.pl-win-ov .pl-wh > span { flex: 0 1 auto; align-self: stretch; display: flex; align-items: center; font-size: 16px; position: relative; }
-.pl-win-ov .pl-wh > span::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: #b0b0b0; }
-.pl-win-ov.is-act .pl-wh > span::after { background: #58a7bf; box-shadow: 0 0 4px rgba(88, 167, 191, 0.75); }
 .pl-win-ov .pl-wh > button:first-of-type { margin-left: auto; }
 .pl-ov tr.none td { color: rgba(255, 255, 255, 0.5); text-align: left !important; cursor: default; }
 .pl-ov-body { flex: 1; overflow: auto; padding: 0 0 8px; }
@@ -9519,6 +9515,8 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-wh button { width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; opacity: 0.5; }
 .pl-wh button:hover { opacity: 1; }
 .pl-wh button img { width: 16px; height: 16px; }
+.pl-w.locked .pl-wrs { display: none; }
+.pl-w.locked .pl-wh { cursor: default; }
 .pl-wbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 .pl-wbody > * { flex: none; }
 .pl-wbody > .pl-ov-body { flex: 1; }
@@ -9680,7 +9678,8 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-stage .pl-ov th { line-height: 24px; }
 .pl-stage .pl-ov td { padding-top: 0; padding-bottom: 0; }
 html[data-skin="eve"] .pl-stage .pl-ov td { padding-top: 0; padding-bottom: 0; height: 17px; font-size: 12px; }
-html[data-skin="eve"] .pl-stage .pl-ov th { padding-top: 0; padding-bottom: 0; height: 24px; font-size: 12px; }
+html[data-skin="eve"] .pl-stage .pl-ov th { padding-top: 0; padding-bottom: 0; height: 24px; font-size: 12px; font-weight: 400; color: rgba(255, 255, 255, 0.5); text-transform: none; letter-spacing: 0; }
+html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9); }
 /* 开局加载画面：游戏的转圈贴图 + 进度条，加载完淡出 */
 .pl-loading { position: absolute; inset: 0; z-index: 50; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 45%, #0c1520 0%, #04060b 70%); transition: opacity 0.5s; }
 .pl-loading.out { opacity: 0; pointer-events: none; }
@@ -9766,20 +9765,25 @@ html[data-skin="eve"] .pl-stage .pl-ov th { padding-top: 0; padding-bottom: 0; h
 .pl-mtip { position: absolute; z-index: 55; pointer-events: none; }
 /* 船体面板悬停提示（电容 / 护盾装甲结构）：底板同装备提示；三列 图标、标题 + 数值、百分比 16 号粗体 */
 .pl-htip { position: absolute; z-index: 55; pointer-events: none; }
-.pl-htip .b { padding: 4px 8px 4px 6px; background: rgba(26, 26, 26, 0.88); border-radius: 3px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55); color: #ddd; font-size: 12px; }
+.pl-htip .b { padding: 6px 12px 6px 8px; background: rgba(12, 12, 12, 0.94); border-radius: 3px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55); color: #ddd; font-size: 14px; }
+/* 实拍录像：船体面板 / 装备的提示框没有指针三角，图标约 24px，名字粗体、数值在下一行，字号 14 */
+.pl-htip:not(.pl-mtip) .ptr, .pl-mtip:not(.pl-htip) .ptr { display: none; }
+.pl-htip:not(.pl-mtip) .r { gap: 10px; padding: 4px 0; }
+.pl-htip:not(.pl-mtip) .r > img { width: 24px; height: 24px; }
 .pl-htip .ptr { position: absolute; bottom: -8px; width: 24px; height: 8px; background: rgba(26, 26, 26, 0.88); clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .pl-htip .r { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
 .pl-htip .r > img { flex: none; }
 .pl-htip .r > span { min-width: 100px; flex: 1; line-height: 1.35; white-space: nowrap; }
 .pl-htip .r > span b { color: #fff; }
-.pl-htip .r > em { font-style: normal; font-weight: 700; font-size: 16px; color: #fff; margin-top: -2px; padding-left: 8px; }
-.pl-mtip .b { padding: 12px 16px; max-width: 320px; background: rgba(26, 26, 26, 0.88); border-radius: 3px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55); color: #ddd; font-size: 12px; }
+.pl-htip .r > em { font-style: normal; font-weight: 700; font-size: 14px; color: rgba(255, 255, 255, 0.8); align-self: flex-start; padding: 2px 0 0 12px; }
+.pl-mtip .b { padding: 10px 14px; max-width: 340px; background: rgba(12, 12, 12, 0.94); border-radius: 3px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55); color: #ddd; font-size: 14px; }
 .pl-mtip .ptr { position: absolute; bottom: -12px; width: 24px; height: 12px; background: rgba(26, 26, 26, 0.88); clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .pl-mtip .r { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 0; }
 .pl-mtip .r > img, .pl-mtip .r > i { width: 26px; height: 26px; flex: none; }
 .pl-mtip .r.big > img { width: 32px; height: 32px; }
 .pl-mtip .r > span { flex: 1; line-height: 1.35; }
-.pl-mtip .r kbd { font: inherit; color: #aaa; margin-left: 12px; }
+.pl-mtip .r kbd { margin-left: 16px; padding: 1px 6px; border-radius: 2px; background: rgba(255, 255, 255, 0.12); color: rgba(255, 255, 255, 0.75); font: 700 12px/18px inherit; font-family: inherit; }
+.pl-mtip .r.big b { font-size: 15px; color: #fff; }
 .pl-mtip .r.head { min-height: 20px; }
 .pl-mtip .r.vals span { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .pl-mtip .r.vals em { display: inline-flex; align-items: center; gap: 2px; font-style: normal; }

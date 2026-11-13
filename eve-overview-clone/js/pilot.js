@@ -10,7 +10,7 @@
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
 import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v30';
-import { loadShipIndex } from './sim-ships.js?v=v10';
+import { loadShipIndex } from './sim-ships.js?v=v11';
 import { warpShake } from './sim-warp.js?v=3';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v4';
 import { bindUnit, pilotUnit } from './sim-unit.js?v=v4';
@@ -528,7 +528,7 @@ function winLayout() {
 function saveWins() {
   const out = {};
   for (const el of root.querySelectorAll('[data-win]')) {
-    out[el.dataset.win] = { x: Number(el.dataset.hx ?? el.offsetLeft), y: Number(el.dataset.hy ?? el.offsetTop), w: el.offsetWidth, h: el.classList.contains('min') ? Number(el.dataset.h) || el.offsetHeight : el.offsetHeight, open: !el.hidden, min: el.classList.contains('min') };
+    out[el.dataset.win] = { x: Number(el.dataset.hx ?? el.offsetLeft), y: Number(el.dataset.hy ?? el.offsetTop), w: el.offsetWidth, h: el.classList.contains('min') ? Number(el.dataset.h) || el.offsetHeight : el.offsetHeight, open: !el.hidden, min: el.classList.contains('min'), lock: el.classList.contains('locked') };
   }
   ctx.store.setJSON(WIN_KEY, out);
 }
@@ -584,7 +584,7 @@ function ovAutoFit(k) {
 function winsHtml() {
   return WINS.filter((w) => !w.need || w.need()).map((w) => `<div class="pl-w pl-win-${w.id}${w.id === 'ov' ? ' pl-ov' : ''}${w.nokill ? ' nokill' : ''}" data-win="${w.id}" hidden>
     <div class="pl-wh" data-win-drag><img class="pl-wi" src="${UI}windowicons/${w.icon}.png?v=1" alt=""><span${w.id === 'ov' ? ' id="plOvTitle"' : ''}>${w.id === 'ov' ? ovTitle() : w.title}</span>
-      <button type="button" data-win-min title="最小化"><img src="${UI}eveicon/system_icons/minimize_16px.png?v=1" alt=""></button>${w.nokill ? '' : `<button type="button" data-win-close title="关闭"><img src="${UI}classes/window/btnclose.png?v=1" alt=""></button>`}</div>
+      <button type="button" data-win-lock title="锁定窗口"><img src="${UI}classes/window/btnunlock.png?v=1" alt=""></button><button type="button" data-win-min title="最小化"><img src="${UI}eveicon/system_icons/minimize_16px.png?v=1" alt=""></button>${w.nokill ? '' : `<button type="button" data-win-close title="关闭"><img src="${UI}classes/window/btnclose.png?v=1" alt=""></button>`}</div>
     <div class="pl-wbody">${winBody[w.id]()}</div>
     ${WIN_RS.map((d) => `<i class="pl-wrs ${d}" data-win-resize="${d}"></i>`).join('')}</div>`).join('');
 }
@@ -617,6 +617,15 @@ document.addEventListener('fullscreenchange', () => {
   });
 });
 
+// 锁定窗口：标题栏锁图标换成「已锁」，不能拖动和缩放
+function lockWin(el, on) {
+  if (!el) return;
+  el.classList.toggle('locked', on);
+  const b = el.querySelector('[data-win-lock]');
+  if (!b) return;
+  b.title = tr(on ? '解锁窗口' : '锁定窗口');
+  b.querySelector('img').src = `${UI}classes/window/${on ? 'btnlock' : 'btnunlock'}.png?v=1`;
+}
 function placeWins(reset = false) {
   const stage = root.querySelector('#plStage');
   if (!stage) return;
@@ -631,6 +640,7 @@ function placeWins(reset = false) {
     el.dataset.h = h;
     el.hidden = s0 ? !s0.open : Boolean(d.closed);
     el.classList.toggle('min', Boolean(s0?.min));
+    lockWin(el, Boolean(s0?.lock));
     el.dataset.hx = Math.round(x); el.dataset.hy = Math.round(y);
     moveWin(el, x, y, true);
   }
@@ -676,6 +686,7 @@ function onWinPointer(e) {
   const drag = e.target.closest('[data-win-drag]') && !e.target.closest('button');
   const rs = e.target.closest('[data-win-resize]'), dir = rs?.dataset.winResize || '';
   if (!drag && !rs) return;
+  if (win.classList.contains('locked')) return;   // 锁定的窗口不能拖动、缩放（客户端窗口标题栏的锁）
   e.preventDefault();
   const stage = root.querySelector('#plStage');
   const W = stage.clientWidth, H = stage.clientHeight;
@@ -788,7 +799,7 @@ function renderStage() {
   sw?.addEventListener('pointerout', onHintOut);
   sw?.addEventListener('contextmenu', onSelCtx);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v63').then((m) => {
+  import('./sim-3d.js?v=v68').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -800,7 +811,8 @@ function renderStage() {
       self: () => S.me?.i ?? -1,
       onPickCel: (c, e) => { if (S.mv) mvAbort(); pickCel(c, e); },
       onDblCel: (c) => celDbl(c),
-      celShown: (c) => { const x = S.b?.cel[c]; return Boolean(x) && ovShowsGroup(x.group); },
+      celShown: (c) => { const x = S.b?.cel[c]; return Boolean(x) && !ovPvp() && ovShowsGroup(x.group); },
+      unitShown: (i) => { const v = S.b?.units[i]; return !v || onGrid(v); },
       celName: (c) => { const x = S.b?.cel[c]; return x && S.me ? `${x.name}  ${fmtDist(celDist(S.me, x))}` : ''; },
       onFollowDbl: false,
       nameOf: (i) => (i === S.sel ? S.names[i] : ''),
@@ -1425,6 +1437,7 @@ function onClick(e) {
   if (t.closest('[data-pl-tac]')) { toggleTac(); return; }
   if (t.closest('[data-win-reset]')) { ctx.store.setJSON(WIN_KEY, {}); placeWins(true); return; }
   if ((x = t.closest('[data-win-close]'))) { toggleWin(x.closest('[data-win]').dataset.win, false); return; }
+  if ((x = t.closest('[data-win-lock]'))) { lockWin(x.closest('[data-win]'), !x.closest('[data-win]').classList.contains('locked')); saveWins(); return; }
   if ((x = t.closest('[data-win-min]'))) { const w = x.closest('[data-win]'); w.classList.toggle('min'); if (!w.classList.contains('min')) w.style.height = (Number(w.dataset.h) || 200) + 'px'; saveWins(); return; }
   if ((x = t.closest('[data-pl-drones]'))) { setDrones(x.dataset.plDrones === '1'); return; }
   if ((x = t.closest('[data-pl-dist]'))) { S.set.dist = Number(x.dataset.plDist); save(); renderSetup(); return; }
@@ -1585,7 +1598,7 @@ function updHudTip() {
     : [0, 1, 2].map((l) => [u.hp[l], u.t.max[l] || 0]);
   h.el.querySelectorAll('.r').forEach((row, i) => {
     const [cur, max] = vals[i], name = esc(tr(HUD_TIP_ROWS[h.k][i][2]));
-    const txt = `${h.k === 'cap' ? name : `<b>${name}</b>`}<br>${n(Math.min(cur, max))} / ${n(max)}`, p = pct(max ? cur / max : 0);
+    const txt = `<b>${name}</b><br>${n(Math.min(cur, max))} / ${n(max)}`, p = pct(max ? cur / max : 0);
     if (row.children[1].innerHTML !== txt) row.children[1].innerHTML = txt;
     if (row.children[2].textContent !== p) row.children[2].textContent = p;
   });
@@ -2560,6 +2573,9 @@ function ovLine() {
   ln.style.left = `${on.offsetLeft}px`;
   ln.style.width = `${on.offsetWidth}px`;
 }
+// 同一网格（引擎 GRID，约 8000 km，船心距离）：总览和太空里的图标只显示这个范围内的船
+const onGrid = (v) => !S.me || v === S.me || Math.hypot(v.pos[0] - S.me.pos[0], v.pos[1] - S.me.pos[1], v.pos[2] - S.me.pos[2]) <= GRID;
+const ovPvp = () => OV_TABS[S.ovTab ?? 0][1] === 'defaultpvp';
 // 这一页显示不显示某个类型（配置还没加载完时全显示）
 const ovShows = (type) => ovShowsGroup(ctx.data.types.get(type)?.group);
 const ovShowsGroup = (g) => {
@@ -2576,12 +2592,14 @@ function renderOverview() {
   if (!body || !u) return;
   if (!ovPresets) loadOvPresets();
   const P = u.pilot;
-  // 舰船：全星系的都列（游戏里别的网格上的船要靠扫描才找得到，这里当作已经扫到，好跃迁追过去）；天体按页签的物品组过滤（「跃迁到」等）
-  const list = S.b.units.filter((v) => v !== u && v.alive && !v.warp && ovShows(v.r.row.ship)).map((v) => ({ k: 'u' + v.i, v, d: surf(u, v) }));
-  (S.b.cel || []).forEach((c, i) => { if (ovShowsGroup(c.group)) list.push({ k: 'c' + i, c, ci: i, d: celDist(u, c) }); });
+  // 舰船：只列同一网格里的（客户端只知道自己周围的球，别的网格上的船要扫描才找得到）；天体按页签的物品组过滤（「跃迁到」等）
+  // PVP 页签：只列敌方舰船——天体、空间站、友军、无人机都不列（按用户的游戏内 PVP 页签）
+  const pvp = ovPvp();
+  const list = S.b.units.filter((v) => v !== u && v.alive && !v.warp && onGrid(v) && (!pvp || v.side !== u.side) && ovShows(v.r.row.ship)).map((v) => ({ k: 'u' + v.i, v, d: surf(u, v) }));
+  if (!pvp) (S.b.cel || []).forEach((c, i) => { if (ovShowsGroup(c.group)) list.push({ k: 'c' + i, c, ci: i, d: celDist(u, c) }); });
   // 太空中的无人机（敌我都有）也列出来，只看不点
   for (const o of S.b.units) {
-    if (!o.alive) continue;
+    if (!o.alive || pvp) continue;
     o.drones.forEach((dr, n) => { if (dr.pos && !dr.e && ovShows(dr.g.type) && Math.hypot(dr.pos[0] - u.pos[0], dr.pos[1] - u.pos[1], dr.pos[2] - u.pos[2]) <= GRID) list.push({ k: `d${o.i}-${n}`, dr, o, d: surf(u, { pos: dr.pos }) }); });
   }
   list.sort((a, b) => a.d - b.d);
@@ -2655,7 +2673,8 @@ function selActs(v) {
   const P = S.me.pilot;
   if (v?.cel != null) {
     const near = celDist(S.me, S.b.cel[v.cel]) < 150000;
-    return SEL_ACTS.filter((a) => a.k === 'approach' || a.k === 'warp').map((a) => ({ ...a, off: a.k === 'warp' && near ? a.off : '' }));
+    // 客户端对天体也列出整排按钮（不能用的变灰）；这里环绕、保持距离、锁定、观察、跟踪对天体还没做
+    return SEL_ACTS.map((a) => ({ ...a, off: a.k === 'approach' ? '' : a.k === 'warp' ? (near ? a.off : '') : '驾驶模拟里对天体暂不支持' }));
   }
   return SEL_ACTS.map((a) => {
     if (a.k === 'warp') a = { ...a, off: surf(S.me, v) < 150000 ? a.off : '' };
@@ -2675,7 +2694,7 @@ function renderSel(soft = false) {
     const key = `c${S.selC}:${acts.map((a) => a.k + (a.off ? 'x' : '')).join(',')}`;
     if (soft && box.dataset.k === key) { box.querySelector('.pl-sel-dist').textContent = fmtDist(d); return; }
     box.dataset.k = key;
-    box.innerHTML = `<div class="pl-sel-top"><img src="${celIcon(c)}" alt="" class="cel"><div class="pl-sel-txt"><b>${esc(c.name)}</b><span class="pl-sel-dist">${fmtDist(d)}</span></div></div>
+    box.innerHTML = `<div class="pl-sel-top"><img src="${IMG(c.type, 'icon', 64)}" alt="" onerror="this.onerror=null;this.className='cel';this.src='${celIcon(c)}'"><div class="pl-sel-txt"><b>${esc(c.name)}</b><span class="pl-sel-dist">${fmtDist(d)}</span></div></div>
       <div class="pl-sel-acts">${acts.map((a) => `<button type="button" data-pl-act="${a.k}"${a.off ? ' aria-disabled="true"' : ''} data-pl-hint="${a.k}">${CI(a.ic)}</button>`).join('')}</div>`;
     return;
   }
@@ -2689,7 +2708,7 @@ function renderSel(soft = false) {
   if (soft && box.dataset.k === key) { box.querySelector('.pl-sel-dist').textContent = fmtDist(d); return; }
   box.dataset.k = key;
   // 名字：有人开的船写角色名，没人开的写类型名（uix.GetSlimItemName）；距离行只有数字（到表面的距离）
-  box.innerHTML = `<div class="pl-sel-top"><img src="${IMG(v.r.row.ship, 'icon', 64)}" alt=""><div class="pl-sel-txt"><b>${esc(S.names[v.i])}</b><span class="pl-sel-dist">${fmtDist(d)}</span></div></div>
+  box.innerHTML = `<div class="pl-sel-top"><img src="${IMG(v.r.row.ship, 'render', 64)}" alt=""><div class="pl-sel-txt"><b>${esc(S.names[v.i])}</b><span class="pl-sel-dist">${fmtDist(d)}</span></div></div>
     <div class="pl-sel-acts">${acts.map((a) => `<button type="button" data-pl-act="${a.k}"${a.off ? ' aria-disabled="true"' : ''} data-pl-hint="${a.k}">${CI(a.ic)}${a.rev ? `<img class="rev" src="${UI}icons/44_32_8.png?v=1" alt="">` : ''}</button>`).join('')}</div>`;
 }
 // 按钮悬停提示（两列：动作名 + 快捷键，不可用时下面再一行原因；指针朝上）
