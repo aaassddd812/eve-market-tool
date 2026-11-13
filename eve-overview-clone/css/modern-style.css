@@ -2500,6 +2500,7 @@ td.loc {
 .kb-link { color: inherit; cursor: pointer; }
 .kb-link:hover { color: var(--accent-primary); text-decoration: underline; }
 .cell-sub .kb-link { color: var(--text-muted); }
+.kb-org-ic { width: 14px; height: 14px; margin-right: 4px; border-radius: 2px; vertical-align: -3px; background: #0d1219; }
 
 .kb-board { position: sticky; top: 0; padding: 14px; border: 1px solid var(--border-primary); border-radius: var(--radius-lg); background: var(--bg-secondary); box-shadow: var(--shadow-sm); margin-top: var(--spacing-lg); }
 .kb-board .kb-section-title { margin-bottom: 12px; }

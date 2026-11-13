@@ -93,6 +93,8 @@ function typesOf(kills) {
   return kills.flatMap((k) => [k.ship_type_id, k.final.ship_type_id]);
 }
 
+// 列表里角色名下面的军团 / 联盟：前面带 14px 的徽标
+const orgLink = (kind, id) => `<img class="kb-org-ic" src="${avatar(kind, id, 32)}" alt="" width="14" height="14" loading="lazy">${entityLink(kind, id)}`;
 function avatar(kind, id, size = 32) {
   if (!id) return '';
   const path = kind === 'character' ? `characters/${id}/portrait` : kind === 'alliance' ? `alliances/${id}/logo` : `corporations/${id}/logo`;
@@ -133,9 +135,9 @@ function feedRows(kills, { me } = {}) {
         <td class="kb-ship"><span class="kb-ship-inner"><img src="${IMG(`types/${k.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
           <span><strong>${app.esc(typeName(k.ship_type_id))}</strong>${k.solo ? '<span class="kb-tag solo">单刷</span>' : ''}${k.npc ? '<span class="kb-tag npc">NPC</span>' : ''}</span></span></td>
         <td class="kb-party kb-victim-cell"><strong>${stOf(v)}${v.character_id ? entityLink('character', v.character_id) : entityLink('corporation', v.corporation_id)}</strong>
-          <span class="cell-sub">${v.character_id ? entityLink('corporation', v.corporation_id) : ''}${v.alliance_id ? (v.character_id ? ' · ' : '') + entityLink('alliance', v.alliance_id) : ''}</span></td>
+          <span class="cell-sub">${v.character_id ? orgLink('corporation', v.corporation_id) : ''}${v.alliance_id ? (v.character_id ? ' · ' : '') + orgLink('alliance', v.alliance_id) : ''}</span></td>
         <td class="kb-party kb-final-cell"><strong>${stOf(f)}${f.character_id ? entityLink('character', f.character_id) : app.esc(typeName(f.ship_type_id))}</strong>
-          <span class="cell-sub">${f.corporation_id && f.character_id ? entityLink('corporation', f.corporation_id) + ' · ' : ''}${k.attackers} 名攻击者</span></td>
+          <span class="cell-sub">${f.corporation_id && f.character_id ? orgLink('corporation', f.corporation_id) + ' · ' : ''}${k.attackers} 名攻击者</span></td>
         <td class="kb-loc"><strong><a class="kb-link" data-location="system:${k.system_id}">${app.esc(sys.name)}</a> <span style="color:${sys.color}">${sys.secText}</span></strong>
           <span class="cell-sub">${k.region_id ? `<a class="kb-link" data-location="region:${k.region_id}">${app.esc(partyName(k.region_id))}</a>` : ''}</span></td>
         <td class="num kb-value"><strong>${app.formatISK(k.value)}</strong><span class="cell-sub">${timeAgo(k.time)}</span></td>
