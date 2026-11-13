@@ -137,7 +137,7 @@ function feedRows(kills, { me } = {}) {
         <td class="kb-party kb-victim-cell"><strong>${stOf(v)}${v.character_id ? entityLink('character', v.character_id) : entityLink('corporation', v.corporation_id)}</strong>
           <span class="cell-sub">${v.character_id ? orgLink('corporation', v.corporation_id) : ''}${v.alliance_id ? (v.character_id ? ' · ' : '') + orgLink('alliance', v.alliance_id) : ''}</span></td>
         <td class="kb-party kb-final-cell"><strong>${stOf(f)}${f.character_id ? entityLink('character', f.character_id) : app.esc(typeName(f.ship_type_id))}</strong>
-          <span class="cell-sub">${f.corporation_id && f.character_id ? orgLink('corporation', f.corporation_id) + ' · ' : ''}${k.attackers} 名攻击者</span></td>
+          <span class="cell-sub">${f.corporation_id && f.character_id ? orgLink('corporation', f.corporation_id) + ' · ' : ''}${f.alliance_id && f.character_id ? orgLink('alliance', f.alliance_id) + ' · ' : ''}${k.attackers} 名攻击者</span></td>
         <td class="kb-loc"><strong><a class="kb-link" data-location="system:${k.system_id}">${app.esc(sys.name)}</a> <span style="color:${sys.color}">${sys.secText}</span></strong>
           <span class="cell-sub">${k.region_id ? `<a class="kb-link" data-location="region:${k.region_id}">${app.esc(partyName(k.region_id))}</a>` : ''}</span></td>
         <td class="num kb-value"><strong>${app.formatISK(k.value)}</strong><span class="cell-sub">${timeAgo(k.time)}</span></td>
