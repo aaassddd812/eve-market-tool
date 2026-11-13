@@ -9794,3 +9794,65 @@ html[data-skin="eve"] .pl-stage .pl-ov th { padding-top: 0; padding-bottom: 0; h
 .pl-ally select { margin-top: 8px; }
 .pl-drive { padding: 2px 10px; border-radius: 999px; background: rgba(88, 160, 220, 0.35); color: #e8f2ff; font-size: 0.8rem; }
 .pl-big .pl-mt-st { flex-direction: column; align-items: flex-start; }
+/* 装配页 · 舰船页：顶上的装配来源筛选（图标按钮，可多选），有装配的船可以展开 */
+.fit-src-bar { display: flex; gap: 6px; padding: 8px 12px 4px; }
+.fit-src { position: relative; display: inline-grid; place-items: center; width: 36px; height: 30px; border-radius: 8px; background: var(--bg-tertiary, rgba(255, 255, 255, 0.06)); color: var(--text-secondary); }
+.fit-src svg { width: 17px; height: 17px; }
+.fit-src:hover:not(:disabled) { color: var(--text-primary); }
+.fit-src.active { background: var(--accent-primary); color: #fff; }
+.fit-src:disabled { opacity: 0.4; cursor: not-allowed; }
+.fit-src em { position: absolute; top: -5px; right: -6px; min-width: 16px; padding: 0 4px; border-radius: 999px; background: var(--bg-secondary); color: var(--text-secondary); font: 600 0.625rem/16px var(--font-sans, inherit); font-style: normal; text-align: center; box-shadow: var(--shadow-sm); }
+.fit-src.active em { color: var(--accent-primary); }
+.fit-ship-row { display: flex; align-items: center; }
+.fit-ship-row > .fit-item { flex: 1; min-width: 0; }
+.fit-ship-x { flex: none; display: inline-flex; align-items: center; gap: 2px; height: 26px; margin-right: 6px; padding: 0 4px 0 6px; border-radius: 6px; color: var(--text-muted); font-size: 0.6875rem; }
+.fit-ship-x em { font-style: normal; font-variant-numeric: tabular-nums; }
+.fit-ship-x svg { width: 14px; height: 14px; transition: transform var(--transition-fast); }
+.fit-ship-x:hover { background: var(--accent-soft); color: var(--text-primary); }
+.fit-ship-row.open .fit-ship-x svg { transform: rotate(90deg); }
+.fit-ship-fits { display: flex; flex-direction: column; padding: 0 0 4px; }
+.fit-sf { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 12px 4px 48px; text-align: left; font-size: 0.78rem; color: var(--text-primary); }
+.fit-sf:hover { background: var(--accent-soft); }
+.fit-sf > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fit-sf > small { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 0.6875rem; }
+.fit-sf-src { flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; color: var(--text-muted); }
+.fit-sf-src svg { width: 14px; height: 14px; }
+.fit-sf-src.is-esi { color: #6cc4e8; }
+.fit-sf-src.is-saved { color: #8fd48f; }
+.fit-sf-src.is-plaza { color: #e8b86c; }
+/* 驾驶模拟 · 匹配大厅：左边房间列表，右边我的出战 */
+.pl-lobby { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 0; min-height: 520px; }
+.pl-lobby-main { display: flex; flex-direction: column; min-width: 0; padding: 22px 24px 24px 28px; }
+.pl-lobby-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.pl-lobby-head h4 { margin: 0; font-size: 1.05rem; color: #f2f5f8; }
+.pl-lobby-sp { flex: 1; }
+.pl-rtable { flex: 1; display: flex; flex-direction: column; border-radius: 10px; background: rgba(255, 255, 255, 0.03); overflow: hidden; }
+.pl-rrow { display: grid; grid-template-columns: minmax(150px, 2fr) 56px 1fr 80px 96px 64px 92px; align-items: center; gap: 10px; padding: 8px 14px; font-size: 0.88rem; color: #c9d3dd; }
+.pl-rrow > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-rrow > span:last-child { text-align: right; overflow: visible; }
+.pl-rhead { background: rgba(255, 255, 255, 0.05); color: #8fa0b0; font-size: 0.78rem; letter-spacing: 0.04em; }
+#plRooms .pl-rrow:nth-child(even) { background: rgba(255, 255, 255, 0.025); }
+#plRooms .pl-rrow:hover { background: rgba(88, 160, 220, 0.12); }
+.pl-rrow.off { opacity: 0.5; }
+.pl-rown { display: flex; align-items: center; gap: 8px; }
+.pl-rown .pl-chip { padding: 0; background: none; }
+.pl-rown .pl-chip b { display: none; }
+.pl-rown .pl-chip img { width: 30px; height: 30px; }
+.pl-rown > b { overflow: hidden; text-overflow: ellipsis; color: #f2f5f8; }
+.pl-rempty { margin: 0; padding: 60px 16px; text-align: center; color: #8494a4; }
+#plRooms > .text-muted { padding: 60px 16px; text-align: center; margin: 0; }
+.pl-lobby-side { display: flex; flex-direction: column; gap: 20px; padding: 22px 28px 26px 24px; background: rgba(255, 255, 255, 0.035); }
+.pl-lobby-side .pl-field > label, .pl-lobby-side #plMatch > label { display: block; margin: 0 0 8px; font-size: 0.85rem; letter-spacing: 0.06em; color: #8fa0b0; }
+.pl-lobby-side #plMatch > label:not(:first-child) { margin-top: 14px; }
+.pl-lobby-side .pl-ship .pl-search { flex-basis: 100%; }
+.pl-lobby-side .pl-mt-go { margin: 22px 0 12px; }
+.pl-lobby-side .pl-mt-go .btn { width: 100%; min-width: 0; padding: 12px; font-size: 1.1rem; letter-spacing: 0.08em; }
+.pl-lobby-side .pl-mt-row { justify-content: space-between; }
+.pl-lobby-side .pl-mt-st { margin-top: 4px; }
+@media (max-width: 900px) {
+  .pl-lobby { grid-template-columns: minmax(0, 1fr); }
+  .pl-lobby-side { order: -1; padding: 18px 16px; }
+  .pl-lobby-main { padding: 18px 16px; }
+  .pl-rrow { grid-template-columns: minmax(110px, 1fr) 44px 64px 60px 66px; }
+  .pl-rrow > span:nth-child(5), .pl-rrow > span:nth-child(6) { display: none; }
+}

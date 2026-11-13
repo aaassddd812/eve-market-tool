@@ -53,13 +53,16 @@ const F = {
   chargeFor: new Set(), chargeShut: new Set(),   // 弹药页：只看勾选的这几种装备（类型 ID）能用的弹药（一个不选 = 全部），分组默认全展开（chargeShut = 手动收起的分组）
   infoSrc: null,                  // 详情弹窗是从装配里哪一项点开的（衍生替换用）
   skillMode: 'max', esi: null,
-  prices: null
+  prices: null,
+  fitSrc: new Set(),              // 舰船页顶上的装配来源筛选（多选）：saved 我的装配 / esi 游戏装配 / plaza 广场；一个不选 = 全部舰船
+  shipOpen: new Set()             // 舰船页展开了装配列表的舰船
 };
 
 // ---------- 入口 ----------
 export function initFitting(context) {
   app = context;
   try { Object.assign(F, pick(app.store.getJSON(SETTINGS_KEY, {}), ['skillMode', 'onlyFits', 'tab'])); } catch { /* 默认设置 */ }
+  try { const src = app.store.getJSON(SETTINGS_KEY, {}).fitSrc; if (Array.isArray(src)) F.fitSrc = new Set(src.filter((k) => FIT_SRC[k])); } catch { /* 默认不筛选 */ }
   if (F.skillMode === 'esi' && !app.hasEsiToken()) F.skillMode = 'max';
   try { FE.setCloud(app.store.getJSON(CLOUD_KEY, [])); } catch { /* 空云 */ }
   try { FE.setEnv(app.store.getJSON(ENV_KEY, [])); } catch { /* 没有天象 */ }
@@ -126,7 +129,7 @@ function pick(obj, keys) {
 }
 
 function saveSettings() {
-  app.store.setJSON(SETTINGS_KEY, { skillMode: F.skillMode, onlyFits: F.onlyFits, tab: F.tab });
+  app.store.setJSON(SETTINGS_KEY, { skillMode: F.skillMode, onlyFits: F.onlyFits, tab: F.tab, fitSrc: [...F.fitSrc] });
 }
 
 let toolInit = null;   // 装配数据到了再初始化战场模拟 / 伤害图表（它们需要读取本机装配）
@@ -169,7 +172,7 @@ export async function showPilot(root) {
   toolInit?.();
   await MU.loadMuta().catch(() => {});
   if (!pilotMod) {
-    pilotMod = await import('./pilot.js?v=v65');
+    pilotMod = await import('./pilot.js?v=v66');
     pilotMod.initPilot({ get data() { return F.data; }, FE, shipSearch: pilotShipSearch, savedFits, normalize,
       // 无人机一架都没激活时按带宽激活（不改原装配）
       pilotRow: (ship, fit, label, o) => pilotRow(ship, fit, label, (f) => { if (f?.drones?.length && !f.drones.some((d) => d.active)) autoActivateDrones(f); }, o),
@@ -449,6 +452,26 @@ function bindSidebar() {
       renderBrowser();
       return;
     }
+    const src = e.target.closest('[data-fit-src]');
+    if (src) {
+      const k = src.dataset.fitSrc;
+      if (F.fitSrc.has(k)) F.fitSrc.delete(k); else F.fitSrc.add(k);
+      F.shipShut = new Set();
+      saveSettings();
+      renderBrowser();
+      return;
+    }
+    const sx = e.target.closest('[data-fit-ship-x]');
+    if (sx) {
+      const id = Number(sx.dataset.fitShipX);
+      const open = sx.getAttribute('aria-expanded') === 'true';
+      F.shipShut = F.shipShut || new Set();
+      if (open) { F.shipOpen.delete(id); F.shipShut.add(id); } else { F.shipOpen.add(id); F.shipShut.delete(id); }
+      renderBrowser();
+      return;
+    }
+    const sf = e.target.closest('[data-fit-sf]');
+    if (sf) { const [k, ...rest] = sf.dataset.fitSf.split(':'); openSourceFit(k, rest.join(':')); return; }
     const cf = e.target.closest('[data-fit-charge-for]');
     if (cf) {
       // 多选：点一下勾上 / 取消；一个都不选就是全部
@@ -566,6 +589,7 @@ function renderBrowserTabs() {
 
 // 当前标签页、筛选条件下可见的物品
 function visible(t) {
+  if (F.tab === 'ship' && F.fitSrc.size && !fitsOf(t.id).length) return false;
   const shipType = F.fit && type(F.fit.ship);
   if (F.tab === 'module') {
     if (F.slotFilter && t.slot !== F.slotFilter) return false;
@@ -648,6 +672,7 @@ function fuzzyScore(t, q) {
 function renderBrowser() {
   if (!F.data) return;
   const box = $('fitBrowser');
+  if (F.tab === 'ship') buildFitIndex();
   const list = tabTypes().filter(visible);
   const head = [];
   // 弹药页最上面一排：已装上、要装弹药 / 脚本的装备图标，可多选，只看勾上的装备能用的弹药（全展开）；一个不选就是全部
@@ -657,6 +682,7 @@ function renderBrowser() {
     if (mods.length) head.push(`<div class="fit-charge-mods">${mods.map(({ t, n }) => `<button type="button" class="fit-cm${on.has(t.id) ? ' active' : ''}" data-fit-charge-for="${t.id}" aria-pressed="${on.has(t.id)}" title="${app.esc(t.name)}${n > 1 ? ' × ' + n : ''}"><img src="${IMG(t.id)}" alt="" width="28" height="28" loading="lazy">${n > 1 ? `<em>${n}</em>` : ''}</button>`).join('')}</div>`);
     if (cur.length) head.push(`<p class="fit-charge-for">${cur.length === 1 ? `${app.esc(cur[0].name)} 可用的弹药` : `已选 ${cur.length} 种装备可用的弹药`}</p>`);
   }
+  if (F.tab === 'ship') { loadFitSources(); buildFitIndex(); head.push(fitSrcBar()); }
   if ((F.tab === 'module' || F.tab === 'drone' || F.tab === 'charge') && !cur.length) {
     head.push(`<label class="fit-only"><input type="checkbox" data-fit-only${F.onlyFits ? ' checked' : ''}>只显示${F.tab === 'charge' ? '已装配武器可用的弹药' : '能装到当前舰船的'}</label>`);
   }
@@ -670,7 +696,7 @@ function renderBrowser() {
     const hits = list.map((t) => [t, fuzzyScore(t, q)]).filter(([, sc]) => sc != null)
       .sort((a, b) => a[1] - b[1] || a[0].name.length - b[0].name.length)
       .slice(0, 200).map(([t]) => t);
-    box.innerHTML = head.join('') + (hits.length ? '<div class="fit-list">' + hits.map(itemRow).join('') + '</div>' : '<p class="legend-empty">没有匹配的物品</p>');
+    box.innerHTML = head.join('') + (hits.length ? '<div class="fit-list">' + hits.map(rowOf).join('') + '</div>' : `<p class="legend-empty">${F.tab === 'ship' && F.fitSrc.size ? '没有符合的舰船' : '没有匹配的物品'}</p>`);
     loadRowPrices();
     return;
   }
@@ -686,22 +712,96 @@ function renderBrowser() {
   const typeSet = new Set(list.map((t) => t.id));
   const group = (m, depth) => {
     const key = 'm' + m.id;
-    const open = F.tab === 'charge' && chargeForTypes().length ? !F.chargeShut.has(key) : F.open.has(key) || (roots.length === 1 && depth === 0);
+    // 舰船页按装配来源筛选时分组全展开（筛出来的船不多）
+    const open = F.tab === 'charge' && chargeForTypes().length ? !F.chargeShut.has(key) : F.open.has(key) || (roots.length === 1 && depth === 0) || (F.tab === 'ship' && F.fitSrc.size > 0);
     const kids = m.children.filter((c) => count.get(c.id)).sort(byName);
     const items = m.types.filter((t) => typeSet.has(t.id)).sort(byMeta);
     return `<div class="fit-group${open ? ' open' : ''}">
       <button class="fit-group-head" data-fit-group="${key}" style="padding-left:${8 + depth * 12}px"><svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>${app.esc(m.name)}<span>${count.get(m.id)}</span></button>
-      ${open ? kids.map((c) => group(c, depth + 1)).join('') + (items.length ? `<div class="fit-list" style="--depth:${depth + 1}">${items.map(itemRow).join('')}</div>` : '') : ''}
+      ${open ? kids.map((c) => group(c, depth + 1)).join('') + (items.length ? `<div class="fit-list" style="--depth:${depth + 1}">${items.map(rowOf).join('')}</div>` : '') : ''}
     </div>`;
   };
   box.innerHTML = head.join('') + (roots.length || noMarket.length
     ? roots.map((m) => group(m, 0)).join('') + (noMarket.length ? `<div class="fit-group open"><div class="fit-group-head is-static">其他（不在市场出售）<span>${noMarket.length}</span></div><div class="fit-list">${noMarket.sort(byMeta).slice(0, 300).map(itemRow).join('')}</div></div>` : '')
-    : `<p class="legend-empty">${F.tab === 'charge' && F.onlyFits ? '先装上需要弹药的武器或装备' : '没有可显示的物品'}</p>`);
+    : `<p class="legend-empty">${F.tab === 'charge' && F.onlyFits ? '先装上需要弹药的武器或装备' : F.tab === 'ship' && F.fitSrc.size ? fitSrcEmpty() : '没有可显示的物品'}</p>`);
   loadRowPrices();
 }
 
 const byName = (a, b) => a.name.localeCompare(b.name, 'zh');
 const byMeta = (a, b) => (a.meta || 1) - (b.meta || 1) || a.name.localeCompare(b.name, 'zh');
+
+// ---------- 舰船页：船下面展开这艘船的装配（我的装配 / 游戏装配 / 广场），像游戏装配窗口的「舰船与装配」----------
+const SRC_ICON = {
+  saved: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>',
+  esi: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 12h4M8 10v4"/><circle cx="15" cy="11" r="1"/><circle cx="18" cy="13" r="1"/></svg>',
+  plaza: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 9h8M8 13h5"/></svg>'
+};
+const FIT_SRC = { saved: '我的装配', esi: '游戏装配（ESI）', plaza: '广场装配' };
+const FS = { esi: null, esiBusy: false, esiChar: 0, plaza: null, plazaAt: 0, plazaBusy: false };
+function loadFitSources() {
+  // 游戏装配：绑定了 ESI 才读（和「游戏装配」窗口同一份缓存）
+  if (app.hasEsiToken() && !FS.esiBusy && FS.esi === null) {
+    FS.esiBusy = true;
+    loadEsiFitList().then((l) => { FS.esi = l; }).catch(() => { FS.esi = []; }).finally(() => { FS.esiBusy = false; if (F.tab === 'ship') renderBrowser(); });
+  }
+  // 广场：全部「装配」帖（最多 500 条），10 分钟刷新
+  if (!FS.plazaBusy && Date.now() - FS.plazaAt > 600e3) {
+    FS.plazaBusy = true;
+    fetch(`/api/kb/plaza?server=${SERVER.id}&kind=fit`).then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.status))))
+      .then((j) => { FS.plaza = (j.items || []).filter((p) => p.data?.fit); FS.plazaAt = Date.now(); })
+      .catch(() => { FS.plaza = FS.plaza || []; FS.plazaAt = Date.now() - 540e3; })   // 失败 1 分钟后再试
+      .finally(() => { FS.plazaBusy = false; if (F.tab === 'ship') renderBrowser(); });
+  }
+}
+// 舰船 → 全部来源的装配（每次渲染舰船页重建一次）
+let fitIdx = null;
+function buildFitIndex() {
+  const idx = new Map();
+  const add = (ship, x) => { if (!idx.has(ship)) idx.set(ship, []); idx.get(ship).push(x); };
+  for (const f of savedFits()) add(f.ship, { src: 'saved', key: String(f.id), name: f.name || '未命名' });
+  for (const f of FS.esi || []) add(f.ship, { src: 'esi', key: String(f.esiId), name: f.name || '未命名' });
+  for (const p of FS.plaza || []) add(Number(p.data.ship), { src: 'plaza', key: String(p.id), name: p.title || p.data.fit.n || '未命名', by: p.name });
+  fitIdx = idx;
+  return idx;
+}
+// 这艘船的装配：按顶上选中的来源（一个不选 = 全部来源）
+function fitsOf(ship) {
+  const all = (fitIdx || buildFitIndex()).get(ship) || [];
+  return F.fitSrc.size ? all.filter((x) => F.fitSrc.has(x.src)) : all;
+}
+function fitSrcBar() {
+  const n = (k) => { let c = 0; for (const list of fitIdx.values()) if (list.some((x) => x.src === k)) c++; return c; };
+  return `<div class="fit-src-bar" role="group" aria-label="只看有装配的舰船">${Object.entries(FIT_SRC).map(([k, label]) => {
+    const off = k === 'esi' && !app.hasEsiToken();
+    const busy = (k === 'esi' && FS.esiBusy) || (k === 'plaza' && FS.plazaBusy && !FS.plaza);
+    const cnt = off || busy ? 0 : n(k);
+    return `<button type="button" class="fit-src${F.fitSrc.has(k) ? ' active' : ''}" data-fit-src="${k}" aria-pressed="${F.fitSrc.has(k)}" title="只看有${label}的舰船${off ? '（需要先绑定 ESI）' : busy ? '（读取中）' : `：${cnt} 艘`}" aria-label="${label}"${off ? ' disabled' : ''}>${SRC_ICON[k]}${cnt ? `<em>${cnt}</em>` : ''}</button>`;
+  }).join('')}</div>`;
+}
+const fitSrcEmpty = () => ([...F.fitSrc].some((k) => (k === 'esi' && FS.esiBusy) || (k === 'plaza' && FS.plazaBusy)) ? '读取中…' : '没有符合的舰船');
+function rowOf(t) {
+  if (F.tab !== 'ship') return itemRow(t);
+  const fits = fitsOf(t.id);
+  if (!fits.length) return itemRow(t);
+  const open = F.shipOpen.has(t.id) || (F.fitSrc.size > 0 && !F.shipShut?.has(t.id));
+  return `<div class="fit-ship-row${open ? ' open' : ''}">${itemRow(t)}<button type="button" class="fit-ship-x" data-fit-ship-x="${t.id}" aria-expanded="${open}" title="${fits.length} 套装配"><em>${fits.length}</em><svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></button></div>
+    ${open ? `<div class="fit-ship-fits">${fits.map((f) => `<button type="button" class="fit-sf" data-fit-sf="${f.src}:${app.esc(f.key)}" title="${app.esc(FIT_SRC[f.src] + (f.by ? ' · ' + f.by : ''))}"><i class="fit-sf-src is-${f.src}">${SRC_ICON[f.src]}</i><span class="notranslate">${app.esc(f.name)}</span>${f.by ? `<small class="notranslate">${app.esc(f.by)}</small>` : ''}</button>`).join('')}</div>` : ''}`;
+}
+// 点船下面的装配：打开它（同装配页其他打开方式）
+function openSourceFit(src, key) {
+  let fit = null;
+  if (src === 'saved') fit = savedFits().find((f) => String(f.id) === key);
+  else if (src === 'esi') fit = (FS.esi || []).find((f) => String(f.esiId) === key);
+  else if (src === 'plaza') { const p = (FS.plaza || []).find((x) => String(x.id) === key); if (p) { fit = fromCompact(p.data.fit); if (!fit.name) fit.name = p.title || ''; } }
+  if (!fit) { app.showToast('装配不存在或已删除', 'error'); return; }
+  stashDraft(F.fit);
+  F.fit = normalize(fit);
+  if (src !== 'saved') F.fit.id = null;   // 游戏装配 / 广场装配：保存时存成新的「我的装配」
+  F.selected = null;
+  if (src !== 'saved') autoActivateDrones();
+  recompute();
+  renderBrowser();
+}
 
 function itemRow(t) {
   const meta = metaTag(t);
@@ -2598,6 +2698,7 @@ function saveFit() {
   dropDraft(F.fit.ship);   // 保存后这艘船就没有遗留的草稿了
   app.showToast('装配已保存在本机浏览器', 'success');
   renderFit();
+  if (F.tab === 'ship') renderBrowser();
 }
 
 function deleteFit() {
@@ -2606,6 +2707,7 @@ function deleteFit() {
   F.fit.id = null;
   app.showToast('已删除', 'success');
   renderFit();
+  if (F.tab === 'ship') renderBrowser();
 }
 
 // ---------- EFT 导入导出 ----------

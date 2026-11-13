@@ -11,7 +11,7 @@
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
 import { createBattle } from './sim-engine.js?v=v28';
 import { loadShipIndex } from './sim-ships.js?v=v10';
-import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS } from './pilot-rules.js?v=v2';
+import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf } from './pilot-rules.js?v=v2';
 import { bindUnit, pilotUnit } from './sim-unit.js?v=v2';
 import { buildMatch, stepMatch } from './match-sim.js?v=v2';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
@@ -60,7 +60,7 @@ export function initPilot(context) {
   const ot = Number(ctx.store.getJSON(OV_KEY, 0));
   S.ovTab = ot >= 0 && ot < OV_TABS.length ? ot : 0;
   if (saved && typeof saved === 'object') Object.assign(S.set, { ship: Number(saved.ship) || 0, fit: saved.fit || 'kb', foes: Array.isArray(saved.foes) ? saved.foes : [], dist: DISTS.includes(saved.dist) ? saved.dist : 30, sky: SKIES.includes(saved.sky) ? saved.sky : '', tac: saved.tac !== false, mmode: saved.mmode === '2v2' ? '2v2' : '1v1', mcap: MATCH_CAPS.includes(saved.mcap) ? saved.mcap : MATCH_CAPS[0],
-    tab: saved.tab === 'match' ? 'match' : 'solo', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
+    tab: saved.tab === 'match' ? 'match' : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
     pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '',
     allies: Array.isArray(saved.allies) ? saved.allies.filter((a) => a && Number(a.ship)).slice(0, 8).map((a) => ({ ship: Number(a.ship), fit: typeof a.fit === 'string' ? a.fit : 'kb', count: Math.max(1, Math.min(20, Number(a.count) || 1)) })) : [] });
   const hud = ctx.store.getJSON(HUD_KEY, null);
@@ -335,10 +335,23 @@ function renderSetup() {
         </div>
       </div>
       <div class="pl-setup-foot"><button type="button" class="btn btn-primary" data-pl-go${S.loading ? ' disabled' : ''}>${S.loading ? '准备中…' : '起飞'}</button></div>`;
-  const match = `<div class="pl-setup-grid">
-        ${meField}
-        <div class="pl-field" id="plMatch">${matchInner()}</div>
-        <div class="pl-field pl-span"><label>公开房间</label><div id="plRooms">${roomsInner()}</div></div>
+  // 大厅布局：左边房间列表（筛选 + 表格 + 邀请码），右边我的出战（船、规则、快速匹配、开房间）
+  const match = `<div class="pl-lobby">
+        <section class="pl-lobby-main">
+          <div class="pl-lobby-head"><h4>公开房间</h4>
+            <div class="segmented" role="group" aria-label="模式筛选">${[['', '全部'], ['1v1', '1v1'], ['2v2', '2v2']].map(([k, l]) => `<button type="button" data-pl-mrf="${k}" class="${S.set.mroomf === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+            <span class="pl-lobby-sp"></span>
+            <input type="text" class="pi-input pl-mt-in" maxlength="6" placeholder="输入邀请码" data-pl-mcode autocomplete="off" spellcheck="false"><button type="button" class="btn btn-ghost btn-sm" data-pl-mj>加入房间</button>
+          </div>
+          <div class="pl-rtable">
+            <div class="pl-rrow pl-rhead"><span>房主</span><span>模式</span><span>舰船级别</span><span>价值上限</span><span>技能</span><span>人数</span><span></span></div>
+            <div id="plRooms">${roomsInner()}</div>
+          </div>
+        </section>
+        <aside class="pl-lobby-side">
+          ${meField}
+          <div class="pl-field" id="plMatch">${matchInner()}</div>
+        </aside>
       </div>`;
   root.innerHTML = `<div class="pl-page"><section class="pl-setup" id="plSetup">
     <div class="pl-win pl-w pl-big">
@@ -1120,35 +1133,43 @@ const MH = {
   onErr: (m) => { if (!PUB.wait) return false; PUB.wait = null; ctx.showToast(m.msg, 'error'); renderPresets(); return !m.fatal; },
   onPreset: (m) => { PUB.wait = null; ctx.showToast(m.del ? '已删除公开预设' : '已公开分享，其他玩家在「玩家分享」里能看到', 'success'); PUB.list = null; renderPresets(); if (!m.del) { S.set.ptab = 'pub'; save(); renderPresets(); } },
 };
+const SKILL_NAME = { esi: '角色技能', max: '全 5 级' };
 function matchInner() {
   const err = MT.err ? `<p class="pl-mt-err">${esc(MT.err)}</p>` : '';
   if (!canMatch()) return `<p class="text-muted">要先在个人中心绑定 EVE 角色（ESI）才能匹配</p>`;
   if (MT.state === 'connecting') return `<p class="text-muted">正在连接匹配服务…</p>${err}`;
+  const rule = (x) => `${esc(x.mode)} · ${esc(MATCH_BRACKETS[x.bracket]?.name || x.bracket)} · 上限 ${capName(x.cap)} · ${SKILL_NAME[x.skills] || ''}`;
   if (MT.state === 'queued' && MT.queued) {
     const q = MT.queued;
-    return `<div class="pl-mt-st"><b>正在匹配 ${esc(MODE_NAME[q.mode] || q.mode)}</b><span>${esc(MATCH_BRACKETS[q.bracket]?.name || q.bracket)} · 装配价值上限 ${capName(q.cap)} · 这套 ${(q.value / 1e6).toFixed(1)}M ISK · 队列 ${q.n} 人</span>
-      <button type="button" class="btn btn-ghost btn-sm" data-pl-mx>取消</button></div>${err}`;
+    return `<div class="pl-mt-st"><b>正在匹配…</b><span>${rule(q)}</span><span>这套装配 ${(q.value / 1e6).toFixed(1)}M ISK · 队列 ${q.n} 人</span>
+      <button type="button" class="btn btn-ghost btn-sm" data-pl-mx>取消匹配</button></div>${err}`;
   }
   if (MT.state === 'room' && MT.room) {
     const r = MT.room;
-    return `<div class="pl-mt-st"><b>${r.pub ? '公开房间' : '私人房间'} · 邀请码 <span class="pl-mt-code" translate="no">${esc(r.code)}</span></b><span>${esc(r.mode)} · ${esc(MATCH_BRACKETS[r.bracket]?.name || r.bracket)} · 上限 ${capName(r.cap)}</span>
+    return `<div class="pl-mt-st"><b>${r.pub ? '公开房间' : '私人房间'} · 邀请码 <span class="pl-mt-code" translate="no">${esc(r.code)}</span></b><span>${rule(r)}</span>
       <span>${r.members.map((x) => `${shipChip(x.ship)} <b translate="no">${esc(x.name)}</b>`).join(' ')}</span>
-      <button type="button" class="btn btn-ghost btn-sm" data-pl-mx>取消</button></div>${err}`;
+      <button type="button" class="btn btn-ghost btn-sm" data-pl-mx>关闭房间</button></div>${err}`;
   }
   const mode = S.set.mmode || '1v1', cap = MATCH_CAPS.includes(S.set.mcap) ? S.set.mcap : MATCH_CAPS[0];
-  return `<label>模式</label><div class="pl-mt-row"><div class="segmented" role="group" aria-label="模式">${Object.keys(MODE_NAME).map((k) => `<button type="button" data-pl-mm="${k}" class="${mode === k ? 'active' : ''}">${k}</button>`).join('')}</div></div>
-    <label>装配价值上限</label><div class="pl-mt-row"><div class="segmented" role="group" aria-label="装配价值上限">${MATCH_CAPS.map((c) => `<button type="button" data-pl-mc="${c}" class="${cap === c ? 'active' : ''}">${capName(c)}</button>`).join('')}</div></div>
-    <div class="pl-mt-row pl-mt-go"><button type="button" class="btn btn-primary" data-pl-mq>随机匹配</button></div>
-    <label>开房间</label><div class="pl-mt-row"><div class="segmented" role="group" aria-label="房间类型">${[[1, '公开'], [0, '私人']].map(([v, l]) => `<button type="button" data-pl-mpub="${v}" class="${S.set.mpub === Boolean(v) ? 'active' : ''}">${l}</button>`).join('')}</div><button type="button" class="btn btn-ghost btn-sm" data-pl-mr>创建房间</button></div>
-    <div class="pl-mt-row"><input type="text" class="pi-input pl-mt-in" maxlength="6" placeholder="输入邀请码" data-pl-mcode autocomplete="off" spellcheck="false"><button type="button" class="btn btn-ghost btn-sm" data-pl-mj>加入房间</button></div>${err}`;
+  const seg = (label, attr, list, cur) => `<label>${label}</label><div class="segmented" role="group" aria-label="${label}">${list.map(([v, l]) => `<button type="button" ${attr}="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+  return `${seg('模式', 'data-pl-mm', Object.keys(MODE_NAME).map((k) => [k, k]), mode)}
+    ${seg('装配价值上限', 'data-pl-mc', MATCH_CAPS.map((c) => [c, capName(c)]), cap)}
+    ${seg('技能', 'data-pl-msk', Object.entries(SKILL_NAME), S.set.mskill)}
+    <div class="pl-mt-go"><button type="button" class="btn btn-primary" data-pl-mq>快速匹配</button></div>
+    <div class="pl-mt-row"><div class="segmented" role="group" aria-label="房间类型">${[[1, '公开'], [0, '私人']].map(([v, l]) => `<button type="button" data-pl-mpub="${v}" class="${S.set.mpub === Boolean(v) ? 'active' : ''}">${l}</button>`).join('')}</div><button type="button" class="btn btn-ghost btn-sm" data-pl-mr>创建房间</button></div>${err}`;
 }
 function roomsInner() {
   if (!canMatch()) return '<p class="text-muted">—</p>';
   if (!MT.rooms) return `<p class="text-muted">${MT.state === 'off' ? '未连接' : '正在读取…'}</p>`;
-  if (!MT.rooms.length) return '<p class="text-muted">暂时没有公开房间</p>';
-  return `<div class="pl-rooms">${MT.rooms.map((r) => `<div class="pl-room">${shipChip(r.ship)}<b translate="no">${esc(r.owner)}</b>
-    <span>${esc(r.mode)} · ${esc(MATCH_BRACKETS[r.bracket]?.name || r.bracket)} · 上限 ${capName(r.cap)}</span>
-    <button type="button" class="btn btn-ghost btn-sm" data-pl-mjoin="${esc(r.code)}"${MT.state === 'idle' ? '' : ' disabled'}>加入房间</button></div>`).join('')}</div>`;
+  const list = MT.rooms.filter((r) => !S.set.mroomf || r.mode === S.set.mroomf);
+  if (!list.length) return `<p class="pl-rempty">${MT.rooms.length ? '没有这个模式的房间' : '暂时没有公开房间'}</p>`;
+  // 我的船级别不同的房间进不去：灰掉，悬停说明
+  const mine = bracketOf(ctx.data.types.get(S.set.ship)?.group);
+  return list.map((r) => {
+    const why = r.bracket !== mine ? `你的船是${MATCH_BRACKETS[mine]?.name || '不能参赛的舰船'}，这个房间要${MATCH_BRACKETS[r.bracket]?.name}` : MT.state !== 'idle' ? '先取消正在进行的匹配或房间' : '';
+    return `<div class="pl-rrow${r.bracket !== mine ? ' off' : ''}"><span class="pl-rown">${shipChip(r.ship)}<b translate="no">${esc(r.owner)}</b></span><span>${esc(r.mode)}</span><span>${esc(MATCH_BRACKETS[r.bracket]?.name || r.bracket)}</span><span>${capName(r.cap)}</span><span>${SKILL_NAME[r.skills] || ''}</span><span>1 / 2</span>
+      <span><button type="button" class="btn btn-primary btn-sm" data-pl-mjoin="${esc(r.code)}"${why ? ` disabled title="${esc(why)}"` : ''}>加入房间</button></span></div>`;
+  }).join('');
 }
 // 打开「匹配对战」页签：连上服务器，每 5 秒刷新一次公开房间
 let roomsTimer = 0;
@@ -1172,7 +1193,7 @@ async function matchGo(kind, code = '') {
     if (!(await matchConnect(MH, () => ctx.getEsiToken()))) { MH.onState(); return; }
     const cap = MATCH_CAPS.includes(S.set.mcap) ? S.set.mcap : MATCH_CAPS[0];
     if (kind === 'join') matchSend({ op: 'join', code, fit });
-    else matchSend({ op: kind, mode: S.set.mmode || '1v1', fit, cap, pub: S.set.mpub });
+    else matchSend({ op: kind, mode: S.set.mmode || '1v1', fit, cap, skills: S.set.mskill, pub: S.set.mpub });
   } catch (e) { MT.err = e.message; MH.onState(); }
 }
 // 服务器配好对局：按对局信息建同样的战斗（同一个种子、同样的装配和技能），画面用驾驶模拟的
@@ -1299,6 +1320,8 @@ function onClick(e) {
   if ((x = t.closest('[data-pl-punpub]'))) { unpublishPreset(x.dataset.plPunpub); return; }
   if ((x = t.closest('[data-pl-puse]'))) { usePub(x.dataset.plPuse); return; }
   if (t.closest('[data-pl-preload]')) { PUB.list = null; loadPub(); renderPresets(); return; }
+  if ((x = t.closest('[data-pl-msk]'))) { S.set.mskill = x.dataset.plMsk; save(); MH.onState(); return; }
+  if ((x = t.closest('[data-pl-mrf]'))) { S.set.mroomf = x.dataset.plMrf; save(); root.querySelectorAll('[data-pl-mrf]').forEach((b) => b.classList.toggle('active', b === x)); MH.onRooms(); return; }
   if ((x = t.closest('[data-pl-mpub]'))) { S.set.mpub = x.dataset.plMpub === '1'; save(); MH.onState(); return; }
   if ((x = t.closest('[data-pl-mjoin]'))) { matchGo('join', x.dataset.plMjoin); return; }
   if ((x = t.closest('[data-pl-pdel]'))) { delPreset(x.dataset.plPdel); return; }

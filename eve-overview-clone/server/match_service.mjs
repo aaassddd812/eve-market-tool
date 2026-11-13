@@ -7,8 +7,8 @@
 //   WS  /api/match/ws       消息都是 JSON：
 //     客户端 → 服务器
 //       hello { server: tq|serenity|infinity, id: 角色 ID, token: ESI 访问令牌 }   用令牌读这个角色的技能（令牌和角色对不上 ESI 会拒绝）
-//       queue { mode: 1v1|2v2, fit, cap }      随机匹配；cap = 装配价值上限（MATCH_CAPS，0 不限）
-//       room  { mode, fit, cap, pub }          开房间：1v1 = 约战（对方加入直接开打），2v2 = 组队（两人一起去排 2v2）；pub = 公开（出现在房间列表里），否则只能凭邀请码加入
+//       queue { mode: 1v1|2v2, fit, cap, skills }  随机匹配；cap = 装配价值上限（MATCH_CAPS，0 不限）；skills = esi 角色真实技能 / max 全 5 级（只和同一种匹配）
+//       room  { mode, fit, cap, skills, pub }  开房间：1v1 = 约战（对方加入直接开打），2v2 = 组队（两人一起去排 2v2）；pub = 公开（出现在房间列表里），否则只能凭邀请码加入
 //       join  { code, fit }                    用邀请码加入
 //       rooms {}                               本服的公开房间列表
 //       preset_pub { p } · preset_del { id }   发布 / 删除自己的公开预设（驾驶模拟的单人场景）
@@ -17,10 +17,10 @@
 //       act { a: 指令 }                        驾驶指令（格式见 js/pilot-rules.js cleanOp）
 //       leave {}                               认输（船直接算被击毁）
 //     服务器 → 客户端
-//       hi { id, name } · err { msg } · queued { mode, bracket, cap, value, n } · room { code, mode, bracket, cap, pub, members } · idle {}
-//       rooms { list: [{ code, mode, bracket, cap, owner, ship }] } · preset_ok { id, del? }
+//       hi { id, name } · err { msg } · queued { mode, bracket, cap, skills, value, n } · room { code, mode, bracket, cap, skills, pub, members } · idle {}
+//       rooms { list: [{ code, mode, bracket, cap, skills, owner, ship }] } · preset_ok { id, del? }
 //       match { mid, you, info }（info = 对局信息，见 js/match-sim.js）· go {} · tick { k, ops, s, rk } · end { winner, reason, t, stats }
-// 匹配限制：同一游戏服务器、同舰船级别（护卫 / 驱逐 / 巡洋 / 战巡 / 战列，T1 T2 同级）、同一档装配价值上限、必须用 ESI 登录角色（真实技能，装配要练得了）。
+// 匹配限制：同一游戏服务器、同舰船级别（护卫 / 驱逐 / 巡洋 / 战巡 / 战列，T1 T2 同级）、同一档装配价值上限、同一种技能（角色真实技能 / 全 5 级）；必须用 ESI 登录角色。
 // 每个游戏服务器一个工作线程（match_worker.mjs）：装配数据各服不同（国服独有物品）。
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -161,7 +161,8 @@ const rooms = new Map();    // 邀请码 → { code, srv, mode, bracket, cap, co
 const matches = new Map();  // mid → { srv, conns: [c…]（按 p）, at }
 const CODE_CH = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const newCode = () => { let s; do { s = Array.from(crypto.randomBytes(6), (x) => CODE_CH[x % CODE_CH.length]).join(''); } while (rooms.has(s)); return s; };
-const qKey = (srv, mode, bracket, cap) => `${srv}|${mode}|${bracket}|${cap}`;
+const qKey = (srv, mode, bracket, cap, skills) => `${srv}|${mode}|${bracket}|${cap}|${skills}`;
+const SKILLS = ['esi', 'max'];
 const MODES = { '1v1': 1, '2v2': 2 };
 
 function leaveAll(c, why = null) {
@@ -191,11 +192,14 @@ function leaveAll(c, why = null) {
   if (why) send(c, { op: 'idle' });
 }
 function roomUpdate(R) {
-  for (const o of R.conns) send(o, { op: 'room', code: R.code, mode: R.mode, bracket: R.bracket, cap: R.cap, pub: R.pub, members: R.conns.map((x) => ({ name: x.name, ship: x.fit?.ship })) });
+  for (const o of R.conns) send(o, { op: 'room', code: R.code, mode: R.mode, bracket: R.bracket, cap: R.cap, skills: R.skills, pub: R.pub, members: R.conns.map((x) => ({ name: x.name, ship: x.fit?.ship })) });
 }
-async function checkFit(c, fit, cap) {
+async function checkFit(c, fit, cap, skills) {
   if (!MATCH_CAPS.includes(cap)) throw new Error('装配价值上限不对');
-  const r = await call(c.srv, { t: 'check', fit, levels: c.levels });
+  if (!SKILLS.includes(skills)) throw new Error('技能选项不对');
+  // 全 5 级：工作线程按全部技能 5 级检查和开局
+  const r = await call(c.srv, { t: 'check', fit, levels: skills === 'max' ? 'max' : c.levels });
+  if (r.ok) r.v.levels = skills === 'max' ? 'max' : c.levels;
   if (!r.ok) throw new Error(r.err);
   if (cap && r.v.value > cap) throw new Error(`装配价值 ${(r.v.value / 1e6).toFixed(1)}M ISK 超过上限 ${cap / 1e6}M`);
   return r.v;
@@ -204,8 +208,8 @@ function enqueue(entry, key) {
   if (!queues.has(key)) queues.set(key, []);
   const list = queues.get(key);
   list.push(entry);
-  const [, mode, bracket, cap] = key.split('|');
-  for (const c of entry.conns) { c.q = { key }; send(c, { op: 'queued', mode, bracket, cap: Number(cap), value: c.check.value, n: list.reduce((s, e) => s + e.conns.length, 0) }); }
+  const [, mode, bracket, cap, skills] = key.split('|');
+  for (const c of entry.conns) { c.q = { key }; send(c, { op: 'queued', mode, bracket, cap: Number(cap), skills, value: c.check.value, n: list.reduce((s, e) => s + e.conns.length, 0) }); }
   tryMatch(key);
 }
 function tryMatch(key) {
@@ -236,7 +240,7 @@ async function startMatch(srv, [A, B]) {
   const mid = crypto.randomUUID();
   const all = [...A.map((c) => [c, 'A']), ...B.map((c) => [c, 'B'])];
   for (const [c] of all) { c.q = null; c.room = null; c.mid = mid; }
-  const players = all.map(([c, side], p) => ({ p, side, name: c.name, id: c.id, fit: c.check.fit, levels: c.levels, bracket: c.check.bracket, value: c.check.value }));
+  const players = all.map(([c, side], p) => ({ p, side, name: c.name, id: c.id, fit: c.check.fit, levels: c.check.levels, bracket: c.check.bracket, value: c.check.value }));
   const seed = crypto.randomBytes(4).readUInt32BE() || 1;
   matches.set(mid, { srv, conns: all.map(([c]) => c), at: Date.now() });
   const r = await call(srv, { t: 'start', mid, players, seed });
@@ -291,7 +295,7 @@ async function onMsg(c, m) {
   if (m.op === 'cancel') { leaveAll(c, 'cancel'); return; }
   if (m.op === 'rooms') {
     const list = [...rooms.values()].filter((R) => R.pub && R.srv === c.srv && R.conns.length < 2 && !R.conns.includes(c)).sort((a, b) => b.at - a.at).slice(0, 50)
-      .map((R) => ({ code: R.code, mode: R.mode, bracket: R.bracket, cap: R.cap, owner: R.owner.name, ship: R.owner.fit?.ship }));
+      .map((R) => ({ code: R.code, mode: R.mode, bracket: R.bracket, cap: R.cap, skills: R.skills, owner: R.owner.name, ship: R.owner.fit?.ship }));
     return send(c, { op: 'rooms', list });
   }
   if (m.op === 'preset_pub') {
@@ -326,12 +330,13 @@ async function onMsg(c, m) {
     try {
       leaveAll(c);
       const cap = Number(m.cap) || 0;
-      c.check = await checkFit(c, m.fit, cap);
+      const skills = m.skills === 'max' ? 'max' : 'esi';
+      c.check = await checkFit(c, m.fit, cap, skills);
       c.fit = c.check.fit;
       if (c.closed || c.mid != null) return;
-      if (m.op === 'queue') enqueue({ conns: [c], at: Date.now() }, qKey(c.srv, m.mode, c.check.bracket, cap));
+      if (m.op === 'queue') enqueue({ conns: [c], at: Date.now() }, qKey(c.srv, m.mode, c.check.bracket, cap, skills));
       else {
-        const R = { code: newCode(), srv: c.srv, mode: m.mode, bracket: c.check.bracket, cap, pub: Boolean(m.pub), owner: c, conns: [c], at: Date.now() };
+        const R = { code: newCode(), srv: c.srv, mode: m.mode, bracket: c.check.bracket, cap, skills, pub: Boolean(m.pub), owner: c, conns: [c], at: Date.now() };
         rooms.set(R.code, R);
         c.room = R.code;
         roomUpdate(R);
@@ -348,7 +353,7 @@ async function onMsg(c, m) {
     c.busy = true;
     try {
       leaveAll(c);
-      c.check = await checkFit(c, m.fit, R.cap);
+      c.check = await checkFit(c, m.fit, R.cap, R.skills);
       c.fit = c.check.fit;
       if (c.check.bracket !== R.bracket) throw new Error(`这个房间是${MATCH_BRACKETS[R.bracket].name}级别，你的船是${MATCH_BRACKETS[c.check.bracket].name}`);
       if (!rooms.has(R.code) || R.conns.length >= 2 || c.closed) throw new Error('房间已满或已关闭');
@@ -359,7 +364,7 @@ async function onMsg(c, m) {
       rooms.delete(R.code);
       for (const o of R.conns) o.room = null;
       if (R.mode === '1v1') startMatch(R.srv, [[R.conns[0]], [R.conns[1]]]);
-      else enqueue({ conns: R.conns.slice(), at: Date.now() }, qKey(R.srv, '2v2', R.bracket, R.cap));
+      else enqueue({ conns: R.conns.slice(), at: Date.now() }, qKey(R.srv, '2v2', R.bracket, R.cap, R.skills));
     } catch (e) { send(c, { op: 'err', msg: e.message }); send(c, { op: 'idle' }); } finally { c.busy = false; }
   }
 }

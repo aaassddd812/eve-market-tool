@@ -93,7 +93,7 @@ function cleanFit(f, ship, open = false) {
   return fit;
 }
 function check({ fit: f, levels }) {
-  const lv = new Map(levels);
+  const lv = new Map(levels === 'max' ? allFive() : levels);
   const ship = data.types.get(Number(f?.ship));
   if (!ship || ship.category !== FE.CAT.ship) throw new Error('不是舰船');
   const bracket = PR.bracketOf(ship.group);
@@ -142,6 +142,9 @@ function cleanPreset(p) {
   const allies = (Array.isArray(p.allies) ? p.allies : []).slice(0, 8).map((x) => ({ ship: shipOf(x?.ship).id, count: Math.max(1, Math.min(20, Math.round(Number(x?.count)) || 1)), fit: x?.fit === 'hull' ? 'hull' : 'kb' }));
   return { name, ship: ship.id, fit, foes, allies, dist: P_DISTS.includes(p.dist) ? p.dist : 30, sky: P_SKIES.includes(p.sky) ? p.sky : '' };
 }
+// 全部技能 5 级（匹配选「全 5 级」时用）
+let ALL5 = null;
+const allFive = () => (ALL5 ||= [...data.types.values()].filter((t) => t.category === FE.CAT.skill).map((t) => [t.id, 5]));
 async function value(fit) {
   const p = await loadPrices();
   let v = p.get(fit.ship) || 0;
@@ -154,7 +157,7 @@ async function value(fit) {
 const matches = new Map();
 function startMatch({ mid, players, seed }) {
   const dist = PR.MATCH_BRACKETS[players[0].bracket]?.dist || 30;
-  const info = { seed, dist, max: PR.MATCH_MAX, players: players.map((x) => ({ p: x.p, side: x.side, name: x.name, id: x.id, fit: x.fit, levels: x.levels, value: x.value })) };
+  const info = { seed, dist, max: PR.MATCH_MAX, players: players.map((x) => ({ p: x.p, side: x.side, name: x.name, id: x.id, fit: x.fit, levels: x.levels === 'max' ? allFive() : x.levels, value: x.value })) };
   const M = Object.assign(MS.buildMatch({ pilotUnit: SU.pilotUnit, createBattle }, info), { mid, ready: new Set(), ended: false, timer: null });
   for (const x of M.P) Object.assign(x, { ops: [], gone: 0 });
   M.info = info;
