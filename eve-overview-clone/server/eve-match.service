@@ -1,0 +1,22 @@
+[Unit]
+Description=EVE 驾驶模拟匹配对战（WebSocket，127.0.0.1:8292，nginx 反代 /api/match/）
+After=network-online.target
+
+[Service]
+# 服务文件放 /opt/eve/match-service（match_service.mjs + match_worker.mjs）；前端模块和装配数据读站点目录
+WorkingDirectory=/opt/eve/match-service
+Environment=EVE_MATCH_ROOT=/opt/eve/dist
+Environment=EVE_MATCH_PORT=8292
+# 只收本站页面发起的连接（浏览器 WebSocket 带 Origin）
+Environment=EVE_MATCH_ORIGINS=https://eve.navexor.top
+# 启动时先加载的服务器（其余第一次有人来时再加载）
+Environment=EVE_MATCH_PRELOAD=tq,serenity,infinity
+# 公开预设存这里（presets.json）
+Environment=EVE_MATCH_DATA=/opt/eve/match-service/data
+ExecStart=/usr/local/bin/node /opt/eve/match-service/match_service.mjs
+Restart=always
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target

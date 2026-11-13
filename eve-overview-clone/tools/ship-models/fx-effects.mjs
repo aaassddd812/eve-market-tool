@@ -44,6 +44,9 @@ const EFFECTS = {
   smart_th: 'res:/fisfx/module/smartbomb_plasma_tr_t1a.black',
   smart_ki: 'res:/fisfx/module/smartbomb_graviton_tr_t1a.black',
   smart_ex: 'res:/fisfx/module/smartbomb_photon_tr_t1a.black',
+  // 脉冲波投射器：服务器在力场中心生成 AOE 信标（dogma aoe_beacon_*，effectID 7050～7058），客户端在信标上播这两个
+  aoecycle: 'res:/fisfx/module/modular_aoecycle_tr_t1a.black',
+  aoepulse: 'res:/fisfx/module/modular_aoepulse_tr_t1a.black',
 };
 // 不需要的字段（声音、观察者、灯光以外的运行时对象）
 const DROP = new Set(['observers', 'audio', 'stretchAudio', 'sourceTriObserver', 'controllers', 'fxAttributes']);

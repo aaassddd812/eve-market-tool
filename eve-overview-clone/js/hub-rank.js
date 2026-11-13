@@ -1016,7 +1016,7 @@ function html(all0) {
       <td class="pi-rank pi-hide-sm">${i + 1}</td>
       <td><div class="pi-prod"><img src="${ctx.iconUrl(x.id)}" data-item-pop="${x.id}" alt="" width="28" height="28" loading="lazy"><span>${esc(ctx.typeName(x.id))}<small>${esc(x.cat.name)}${mineTag(x.id)}${routeTags(r)}</small></span>
         <button type="button" class="hr-hide" data-hr-hide="${x.id}" title="排除这个物品（以后不在排行里出现，可在上方「已排除」里恢复）" aria-label="排除">×</button></div></td>
-      <td>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}</td>
+      <td class="hr-route" title="${esc(r.local ? `${r.a.name}（本地）` : `${r.a.name} → ${r.b.name}`)}"><div>${r.local ? `${name(r.a)} <small class="hc-sub">本地</small>` : `${name(r.a)} <span class="hc-arrow">→</span> ${name(r.b)}`}</div></td>
       <td class="num pi-hide-sm">${px(r.buyAt)}</td>
       <td class="num pi-hide-sm">${px(r.sellAt)}</td>
       <td class="num ${cls}">${sign(r.unit)}</td>

@@ -55,7 +55,7 @@ const mean = (r) => (r[0] + r[1] + r[2] + r[3]) / 4 || 1;
 const missileApply = (sig, V, er, ev, drf) => (er > 0 ? Math.min(1, sig / er, V > 0 && ev > 0 ? ((sig / er) * (ev / V)) ** drf : 1) : 1);
 // 下一个周期开始：上一周期刚结束（差不到一步）就接着算，保持节奏；停过（锁定、射程外）就从现在重新开始，不补打
 const nextCycle = (next, t, cycle) => (t - next > DT ? t : next) + cycle;
-function rng(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
+function rng(seed) { let s = seed >>> 0 || 1; const f = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); f.get = () => s; f.set = (v) => { s = v >>> 0 || 1; }; return f; }
 
 // 向量小工具（[x, y, z]）
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -221,6 +221,29 @@ export function createBattle(sides, opt) {
     primary[side] = v;
     events.push({ t: B.t, kind: 'primary', side, unit: v ? v.i : -1 });
     if (v) for (const u of units) if (ready(u) && u.side === side && attacks(u) && !u.pilot && u.target !== v) { u.target = v; setLock(u, v); }
+  };
+
+  // ---------- 联机校正（匹配模式）----------
+  // 服务器每步之后发 snap()，客户端跟着同样的指令走完同一步后 applySnap() 覆盖：随机数状态、每艘船的位置 / 速度 / 朝向 / 血量 / 电容 / 武器计时、击毁记录。
+  // 同一套代码、同一个种子，正常情况下两边本来就一样；不同浏览器的数学函数末位可能不同，靠这个拉回来
+  B.snap = () => ({
+    t: B.t, rs: rand.get(),
+    u: units.map((u) => [u.alive ? 1 : 0, u.pos, u.vel, u.face, u.hp, u.cap, u.guns.map((g) => [g.next, g.ammo, g.reloadUntil, g.last])]),
+    k: kills.map((k) => [k.at, k.unit, k.by]),
+  });
+  B.applySnap = (S0) => {
+    rand.set(S0.rs);
+    S0.u.forEach((x, i) => {
+      const u = units[i];
+      if (!u) return;
+      u.pos = x[1].slice(); u.vel = x[2].slice(); u.face = x[3].slice(); u.hp = x[4].slice(); u.cap = x[5];
+      x[6].forEach((g, k) => { const st = u.guns[k]; if (st) [st.next, st.ammo, st.reloadUntil, st.last] = g; });
+      if (!x[0] && u.alive) { u.alive = false; u.r.lost += 1; u.r.killTimes.push(Math.ceil(B.t)); }
+      else if (x[0] && !u.alive) { u.alive = true; u.r.lost -= 1; }
+    });
+    // 击毁记录以服务器为准
+    kills.length = 0;
+    for (const [at, i, by] of S0.k) { const v = units[i]; if (v) kills.push({ t: Math.ceil(at), at, side: v.side, ship: v.r.row.ship, row: v.r, unit: i, by, drone: Boolean(v.isDrone) }); }
   };
 
   // ---------- 玩家驾驶 ----------

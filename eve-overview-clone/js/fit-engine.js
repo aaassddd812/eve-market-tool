@@ -31,7 +31,7 @@ export const AT = {
   fighterAttackDmg: [2227, 2228, 2229, 2230], fighterAttackMult: 2226, fighterAttackDuration: 2233,
   fighterMissileDmg: [2131, 2132, 2133, 2134], fighterMissileMult: 2130, fighterMissileDuration: 2182,
   canFitShipGroup: [1298, 1299, 1300, 1301, 1872, 1879, 1880, 1881, 2065, 2396, 2476, 2477, 2478, 2479, 2480, 2481, 2482, 2483, 2484, 2485],
-  canFitShipType: [1302, 1303, 1304, 1305, 1944, 2103, 2463, 2486, 2487, 2488, 2758],
+  canFitShipType: [1302, 1303, 1304, 1305, 1944, 2103, 2463, 2486, 2487, 2488, 2758, 5948],
   reqSkills: [[182, 277], [183, 278], [184, 279], [1285, 1286], [1289, 1287], [1290, 1288]]
 };
 // 抗性：电磁、热能、动能、爆炸
@@ -431,9 +431,11 @@ export function computeFit(data, fit, skills = 'max', { alone = false } = {}) {
       if (!effect || !active(item, effect)) continue;
       if (BUFF_EFFECTS.has(effect.name)) { bursts.push(item); continue; }
       if (special(effect, item, { ship, exempt, shipItems, ownedItems })) continue;
+      // 损伤控制（damageControl）的抗性加成不参与叠加惩罚（独立组）
+      const ex = exempt || effect.name === 'damageControl';
       for (const [func, domain, modified, modifying, op, extra] of effect.mods) {
         if (op === 9) continue;
-        for (const t of targets(func, domain, item, extra)) t.addMod(modified, { op, src: item, srcAttr: modifying, exempt });
+        for (const t of targets(func, domain, item, extra)) t.addMod(modified, { op, src: item, srcAttr: modifying, exempt: ex });
       }
     }
   }

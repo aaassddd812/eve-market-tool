@@ -108,7 +108,7 @@ function usage(m) {
   return { cpu, power, capC, capP };
 }
 
-function shortest(m, from, isTarget) {
+function shortest(m, from, isTarget, viaEcu = false) {
   const adj = m.pins.map(() => []);
   for (const l of m.links) { adj[l.a].push(l.b); adj[l.b].push(l.a); }
   const prev = new Map([[from, -1]]);
@@ -120,6 +120,8 @@ function shortest(m, from, isTarget) {
       for (let n = cur; n !== -1; n = prev.get(n)) path.unshift(n);
       return path;
     }
+    // 不从采集控制器中转：游戏导入模板时会跳过路径上经过采集控制器的路由（客户端 colonyTemplateLoading.py）
+    if (!viaEcu && cur !== from && m.pins[cur].kind === 'ecu') continue;
     for (const n of adj[cur]) if (!prev.has(n)) { prev.set(n, cur); queue.push(n); }
   }
   return null;
@@ -144,7 +146,11 @@ function autoRoutes(m) {
     const label = `${KINDS[p.kind].label} #${i + 1}`;
     if (!p.product) { problems.push({ pin: i, text: `${label} 未设置${p.kind === 'ecu' ? '采集资源' : '配方'}` }); return; }
     const path = nearestHub(i);
-    if (!path) { problems.push({ pin: i, text: `${label} 没有链接到发射平台或储藏设施` }); return; }
+    if (!path) {
+      const via = shortest(m, i, hub, true);
+      problems.push({ pin: i, text: via ? `${label} 只能经过采集控制器连到发射平台，游戏导入时会跳过这条路由，请直接链接到发射平台或其他设施` : `${label} 没有链接到发射平台或储藏设施` });
+      return;
+    }
     if (path.length > MAX_ROUTE) problems.push({ pin: i, text: `${label} 的路由经过 ${path.length} 个设施，超过 ${MAX_ROUTE} 个上限` });
     if (p.kind === 'ecu') {
       const perHour = Math.max(1, Math.round(p.heads * env.headRate()));

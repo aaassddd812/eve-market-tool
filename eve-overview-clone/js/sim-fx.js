@@ -529,16 +529,27 @@ export function createFx(scene, renderer, opt = {}) {
       cfx.play('mjdjump', `mjd:${e.unit}:${e.t}`, t - e.t, { dst: new THREE.Vector3(...e.to).multiplyScalar(KM), R: P.radiusM(e.unit) });
     }
   }
-  // 脉冲波投射器的力场（引擎事件 kind 'field'）：客户端 effects.SuperWeaponAOE*（modular_*_tr_t1a.red，服务器下发）这套还没对上，
-  // 先在力场位置画一个半径 doomsdayAOERange 的半透明球（颜色按电子战种类）；生效前后各 1 秒淡入淡出，中和 / ECM（一次性）亮 2 秒
+  // 脉冲波投射器的力场（引擎事件 kind 'field'）：服务器在出伤时刻的目标位置生成 AOE 信标，客户端在信标上播
+  // modular_aoepulse_tr_t1a（生成那一刻）和 modular_aoecycle_tr_t1a（力场持续期间循环）。两个文件根节点自带 3500 的缩放（波前最后约 17 km），
+  // 按 ShipEffect 还要乘信标球半径——信标半径没有依据，这里取 1（按文件里的绝对尺寸）
+  // 特效素材没到时退回画一个半径 doomsdayAOERange 的半透明球（颜色按电子战种类）
   const FIELD_COL = { web: 'web', paint: 'paint', damp: 'damp', track: 'td', guide: 'gd', bubble: 'point', neut: 'neut', ecm: 'ecm' };
   const fieldMeshes = new Map();
   function fieldFx(P, t) {
     for (const b of fieldMeshes.values()) b.visible = false;
+    const real = cfx && P.camera && cfx.ready('aoepulse') && cfx.ready('aoecycle');
     for (const e of P.rec.events || []) {
       if (e.kind !== 'field' || !e.pos) continue;
       const one = e.end - e.at < 0.5, end = one ? e.at + 2 : e.end;
-      if (t < e.at || t > end + 1) continue;
+      if (t < e.at || t > end + 4) continue;
+      const dst = new THREE.Vector3(e.pos[0] * KM, e.pos[1] * KM, e.pos[2] * KM);
+      if (real) {
+        const lp = cfx.length('aoepulse'), lc = cfx.length('aoecycle') || 2;
+        if (t - e.at < lp + 0.05) cfx.play('aoepulse', `fp:${e.unit}:${e.at}`, t - e.at, { dst, R: 1 });
+        if (!one && t < e.end) cfx.play('aoecycle', `fc:${e.unit}:${e.at}`, (t - e.at) % lc, { dst, R: 1 });
+        continue;
+      }
+      if (t > end + 1) continue;
       let b = fieldMeshes.get(e);
       if (!b) {
         const mat = bubbleMat.clone();
@@ -547,7 +558,7 @@ export function createFx(scene, renderer, opt = {}) {
       }
       const a = Math.min(1, (t - e.at) / (one ? 0.3 : 1), Math.max(0, end + (one ? 0 : 1) - t) / (one ? 1.7 : 1));
       b.material.uniforms.a.value = 0.45 * Math.max(0, a);
-      b.position.set(e.pos[0] * KM, e.pos[1] * KM, e.pos[2] * KM);
+      b.position.copy(dst);
       b.scale.setScalar(e.r * KM);
       b.visible = true;
     }

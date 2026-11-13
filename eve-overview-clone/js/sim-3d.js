@@ -14,7 +14,7 @@
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
 import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v10';
-import { createFx } from './sim-fx.js?v=v30';
+import { createFx } from './sim-fx.js?v=v31';
 
 const COLOR = { A: new THREE.Color(0x5b9bff), B: new THREE.Color(0xff4b3e) };
 const WRECK = new THREE.Color(0x8a9099);
@@ -270,6 +270,8 @@ function createPost(renderer) {
 }
 
 export function createView(host, hooks = {}, opt = {}) {
+  let ownSide = 'A';
+  const sideOf = (s) => (ownSide === 'A' ? s : s === 'A' ? 'B' : 'A');
   let renderer;
   try {
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, logarithmicDepthBuffer: true });
@@ -342,8 +344,10 @@ export function createView(host, hooks = {}, opt = {}) {
   }
 
   // 远处的星空（用游戏星空贴图时不画）
+  // STARS：星点开关。游戏星空的三层平铺星点（StarMap）和这里的兜底星点看着不对，先关掉，只留星云
+  const STARS = false;
   const starPts = [];
-  {
+  if (STARS) {
     const n = 1500, p = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
       const v = new THREE.Vector3().randomDirection().multiplyScalar(8000 + Math.random() * 6000);
@@ -425,7 +429,7 @@ export function createView(host, hooks = {}, opt = {}) {
             float m = textureCube(alpha, d).a;
             vec2 t = 1.0 - clamp((vec2(m) - ab1.xz) / (ab1.yw - ab1.xz), 0.0, 1.0);
             float t3 = 1.0 - clamp((m - ab2.x) / (ab2.y - ab2.x), 0.0, 1.0);
-            vec3 c = max((sp.w * (s1 * t.x + s2 * t.y + s3 * t3) + textureCube(neb, d).rgb) * tint, 0.0);
+            vec3 c = max((${STARS ? 'sp.w' : '0.0'} * (s1 * t.x + s2 * t.y + s3 * t3) + textureCube(neb, d).rgb) * tint, 0.0);
             gl_FragColor = vec4(mix(1.055 * pow(c, vec3(0.416667)) - 0.055, c * 12.92, vec3(lessThan(c, vec3(0.0031308)))), 1.0);
           }`,
         side: THREE.BackSide, depthTest: false, depthWrite: false,
@@ -597,8 +601,7 @@ export function createView(host, hooks = {}, opt = {}) {
   };
   // 紧急船体激能器（effects.Invulnerability → fisfx/module/invulnerability_ov_t1a.black）：两层 fx3dv5（spaceobject/v5/fx/fx3dv5 反汇编）
   //   菲涅尔同上（F.y = 亮度曲线 × 绑定倍数）；n = 体积(p×L1T.x + L1T.yzw + frac(L1S.x×时间) + L1S.yzw).x × 体积(同理 L2).y，p = 模型空间坐标
-  //   遮罩 = 2D(|p − L3C| × L3T.xy + L3T.zw + frac(L3S.xy×时间) + L3S.zw)；颜色 = n × 遮罩.rgb × cb0[8] + 遮罩.a × cb0[9]
-  //   cb0[8] / cb0[9] 当成 BaseColor / FxColor（常量槽位顺序是按着色器用法推的）
+  //   遮罩 = 2D(|p − L3C| × L3T.xy + L3T.zw + frac(L3S.xy×时间) + L3S.zw)；颜色 = n × 遮罩.rgb × FxColor + 遮罩.a × BaseColor（已核对像素着色器）
   //   曲线：Brightness（Hermite）绑到第一层 F.y ×5、第二层 ×1.42；UvOffset 0→1（10 秒）绑到第一层 L1S.w ×0.75、L2S.w ×1
   const BRIGHT = [[0, 0, 0, 0, 2], [0.35484, 0.745, 1.50169, 0.82593, 2], [1, 1, 0, 0, 1], [9, 1, 0, 0, 1], [9.57309, 0.72643, -0.7423, -0.99647, 2], [10, 0, 0, 0, 2]];
   const HFX3 = {
@@ -690,7 +693,7 @@ export function createView(host, hooks = {}, opt = {}) {
     };
     im.src = `${opt.fx || 'assets/eveui/fx/'}hull/voronoi3d.png?v=1`;
   }
-  // 模型空间坐标：客户端用顶点坐标直接采样（UV 缩放 7～14），按米算在大船上会重复几百次，这里按模型包围球归一化到 [-1, 1]
+  // 模型空间坐标：客户端蒙皮版直接用船的米制局部坐标采样（不归一化，大船上纹理就是更密）；这里按模型包围球归一化到 [-1, 1]，是近似
   function fx3dMat(P, def) {
     vorLoad();
     const mk = new THREE.Vector4(...P.base), fk = new THREE.Vector4(...P.fx);
@@ -728,7 +731,7 @@ export function createView(host, hooks = {}, opt = {}) {
           vec3 o1 = vec3(l1s.yz, l1s.w + uvw.x * vCol.y), o2 = vec3(l2s.yz, l2s.w + uvw.y * vCol.y);
           float n = texture(vol, fract(l1s.x * time) + o1 + vP * l1t.x + l1t.yzw).x * texture(vol, fract(l2s.x * time) + o2 + vP * l2t.x + l2t.yzw).y;
           vec4 m = texture2D(tm, length(vP) * l3t.xy + l3t.zw + fract(l3s.xy * time) + l3s.zw);
-          gl_FragColor = vec4(fres * (n * m.rgb * base.rgb + m.a * fxc.rgb), 1.0);
+          gl_FragColor = vec4(fres * (n * m.rgb * fxc.rgb + m.a * base.rgb), 1.0);
         }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     });
@@ -1618,7 +1621,7 @@ export function createView(host, hooks = {}, opt = {}) {
       if (a <= 0 && opt.sel !== i) continue;
       const ic = d.alive ? iconOf(i) : wreckIcon();
       if (ic < 0) continue;
-      const c = d.alive ? COLOR[rec.units[i].side] : WRECK;
+      const c = d.alive ? COLOR[sideOf(rec.units[i].side)] : WRECK;
       const hi = opt.sel === i ? 1.35 : 1;
       ip.push(d.x, d.y, d.z);
       it.push(Math.min(1, c.r * hi), Math.min(1, c.g * hi), Math.min(1, c.b * hi), Math.max(a, opt.sel === i ? 0.5 : 0) * (d.alive ? 1 : 0.8));
@@ -1651,7 +1654,7 @@ export function createView(host, hooks = {}, opt = {}) {
       const dic = brkOf ? brSlot(brkOf(F.dr[j + 5])) : DRONE_BRACKETS[F.dr[j + 4]] ?? DRONE_BRACKETS[0];
       if (a <= 0 || dic < 0) continue;
       ip.push(x, y, z);
-      const c = COLOR[rec.units[o].side];
+      const c = COLOR[sideOf(rec.units[o].side)];
       it.push(c.r, c.g, c.b, a);
       ii.push(dic);
     }
@@ -1805,7 +1808,7 @@ export function createView(host, hooks = {}, opt = {}) {
       const x = (vA.x + 1) / 2 * w + 14 * dpr, y = (1 - vA.y) / 2 * h - 4 * dpr, tw = Math.max(bw, lctx.measureText(name).width);
       if (boxes.some((r) => x < r[2] && x + tw > r[0] && Math.abs(y - r[1]) < lh)) continue;
       boxes.push([x, y, x + tw]);
-      lctx.fillStyle = rec.units[i].side === 'A' ? '#9cc2ff' : '#ff9d94';
+      lctx.fillStyle = sideOf(rec.units[i].side) === 'A' ? '#9cc2ff' : '#ff9d94';
       lctx.fillText(name, x, y);
       // 名字下面：护盾 / 装甲 / 结构
       if (i * 3 < F.hp.length) {
@@ -1895,6 +1898,8 @@ export function createView(host, hooks = {}, opt = {}) {
     draw,
     render() { watchPerf(); sky.position.copy(camera.position); bg.position.copy(camera.position); controls.update(); dynFov(); if (post && level === 'high') post.render(scene, camera); else { renderer.setRenderTarget(null); renderer.render(scene, camera); } drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
+    // 自己在哪一方（匹配对战里可能在 B 方）：自己这方画蓝色、对面画红色
+    setOwnSide(s) { ownSide = s === 'B' ? 'B' : 'A'; },
     setDirector(on) { director = on; dirLast = 0; if (on) { follow = -1; flyTo = null; } },
     setQuality(q) { quality = q; perf.slow = 0; perf.t0 = 0; applyLevel(q === 'low' ? 'low' : 'high'); },
     // 选落点：opt = { side, color: '#rrggbb', label, done(pos) }；null 取消
