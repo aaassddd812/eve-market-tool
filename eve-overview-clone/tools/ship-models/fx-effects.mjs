@@ -27,6 +27,23 @@ const EFFECTS = {
   nos: 'res:/fisfx/module/energyvampire_st_t1a.black',
   ecm: 'res:/fisfx/module/ecm_tr_t1a.black',
   damp: 'res:/fisfx/module/sensordampener_st_t1a.black',
+  // 下面这些按客户端 effects.json（效果 GUID → graphicID → graphicIDs 的文件）：
+  // 跟踪扰断 effects.TrackingDisruption 21350；制导扰断 / 远程感应增强 effects.ElectronicAttributeModifyTarget 21034；
+  // 远程电容传输 effects.EnergyTransfer 21010；远程跟踪电脑 effects.TurretWeaponRangeTrackingSpeedMultiplyTarget 21026；
+  // ECM 脉冲 effects.ECMBurst 21020；跃迁扰断力场 effects.WarpDisruptFieldGenerating 20396；微型跃迁引擎 MicroJumpDriveEngage 21232 / Jump 21229；
+  // 立体炸弹 effects.EMPWave 用装备自己的 graphicID（四种伤害各一个）
+  td: 'res:/fisfx/module/trackingdisruptor_st_t1a.black',
+  gd: 'res:/fisfx/module/sensorbooster_st_t1a.black',
+  rc: 'res:/fisfx/module/energytransfer_st_t1a.black',
+  rt: 'res:/fisfx/module/trackingboosttarget_st_t1a.black',
+  burst: 'res:/fisfx/module/ecmburst_tr_t1a.black',
+  bubble: 'res:/fisfx/generic/warp_disruption/warp_disruption_field_generator.black',
+  mjd: 'res:/fisfx/module/mjd_tr_t1a.black',
+  mjdjump: 'res:/fisfx/module/mjdjump_tr_t1a.black',
+  smart_em: 'res:/fisfx/module/smartbomb_emp_tr_t1a.black',
+  smart_th: 'res:/fisfx/module/smartbomb_plasma_tr_t1a.black',
+  smart_ki: 'res:/fisfx/module/smartbomb_graviton_tr_t1a.black',
+  smart_ex: 'res:/fisfx/module/smartbomb_photon_tr_t1a.black',
 };
 // 不需要的字段（声音、观察者、灯光以外的运行时对象）
 const DROP = new Set(['observers', 'audio', 'stretchAudio', 'sourceTriObserver', 'controllers', 'fxAttributes']);

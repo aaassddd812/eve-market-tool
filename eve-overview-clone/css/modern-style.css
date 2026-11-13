@@ -9280,6 +9280,27 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-results button:hover { background: rgba(255, 255, 255, 0.08); }
 .pl-results img { width: 24px; height: 24px; }
 .pl-setup-foot { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 20px 18px; }
+/* 预设场景：圆角填充小卡片（选中的高亮底色），我的预设带删除 */
+.pl-presets { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pl-presets.mine { margin-top: 8px; }
+.pl-presets.mine > small { width: 100%; color: #8494a4; font-size: 0.74rem; }
+.pl-preset { display: inline-flex; align-items: center; border-radius: 999px; background: rgba(255, 255, 255, 0.07); }
+.pl-preset.on { background: rgba(88, 160, 220, 0.32); }
+.pl-preset button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px 4px 4px; border: 0; background: none; color: inherit; font: inherit; font-size: 0.84rem; cursor: pointer; border-radius: 999px; }
+.pl-preset button:hover { background: rgba(255, 255, 255, 0.08); }
+.pl-preset button img { width: 24px; height: 24px; border-radius: 50%; }
+.pl-preset button.x { padding: 4px 10px 4px 2px; color: #8494a4; }
+.pl-psave { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.pl-psave input { flex: 1; min-width: 180px; }
+/* 查看装配：盖在设置页上的卡片（内容沿用战场模拟装配详情的样式） */
+.pl-fitview { position: fixed; inset: 0; z-index: 1000; display: flex; align-items: flex-start; justify-content: center; padding: 40px 16px; overflow: auto; background: rgba(2, 4, 8, 0.72); }
+.pl-fitview-card { width: min(900px, 100%); padding: 16px 18px 6px; border-radius: 12px; background: #0e131a; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); }
+.pl-fitview-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.pl-fitview-head > div { display: flex; flex-direction: column; flex: 1; min-width: 160px; }
+.pl-fitview-head b { color: #f2f5f8; font-size: 1rem; }
+.pl-fitview-head small { color: #8494a4; font-size: 0.78rem; }
+.pl-fitview-body .sim-dt-over { margin-bottom: 12px; }
+@media (max-width: 760px) { .pl-fitview { padding: 12px 8px; } .pl-fitview-body .sim-dt-over { grid-template-columns: minmax(0, 1fr); } }
 .pl-setup-foot small { flex: 1; min-width: 240px; color: #8494a4; line-height: 1.6; }
 
 .pl-stage { position: absolute; inset: 0; overflow: hidden; background: #04060b; user-select: none; -webkit-user-select: none; }
@@ -9452,6 +9473,7 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-log time { color: rgba(255, 255, 255, 0.45); }
 .pl-log .bad { color: #f39058; }
 .pl-log .good { color: #9fe39a; }
+.pl-log .neg { color: #ff8080; }
 .pl-neo button.imp::after { content: ""; position: absolute; right: 0; top: 16px; width: 2px; height: 16px; background: #f39058; }
 .pl-dmsg-l i { font-style: normal; }
 /* 窗口：绝对定位，拖标题栏移动，右下角缩放，最小化只留标题栏 */
@@ -9709,6 +9731,15 @@ html[data-skin="eve"] .pl-stage .pl-ov th { padding-top: 0; padding-bottom: 0; h
 .pl-cmenu { max-height: 70%; overflow-y: auto; }
 /* 装备提示：TooltipPanel 4 列、外边距 16、底色 0.75（framewithpointer 深灰 26）、指针朝下 24px */
 .pl-mtip { position: absolute; z-index: 55; pointer-events: none; }
+/* 船体面板悬停提示（电容 / 护盾装甲结构）：底板同装备提示；三列 图标、标题 + 数值、百分比 16 号粗体 */
+.pl-htip { position: absolute; z-index: 55; pointer-events: none; }
+.pl-htip .b { padding: 4px 8px 4px 6px; background: rgba(26, 26, 26, 0.88); border-radius: 3px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55); color: #ddd; font-size: 12px; }
+.pl-htip .ptr { position: absolute; bottom: -8px; width: 24px; height: 8px; background: rgba(26, 26, 26, 0.88); clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.pl-htip .r { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.pl-htip .r > img { flex: none; }
+.pl-htip .r > span { min-width: 100px; flex: 1; line-height: 1.35; white-space: nowrap; }
+.pl-htip .r > span b { color: #fff; }
+.pl-htip .r > em { font-style: normal; font-weight: 700; font-size: 16px; color: #fff; margin-top: -2px; padding-left: 8px; }
 .pl-mtip .b { padding: 12px 16px; max-width: 320px; background: rgba(26, 26, 26, 0.88); border-radius: 3px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.55); color: #ddd; font-size: 12px; }
 .pl-mtip .ptr { position: absolute; bottom: -12px; width: 24px; height: 12px; background: rgba(26, 26, 26, 0.88); clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .pl-mtip .r { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 2px 0; }

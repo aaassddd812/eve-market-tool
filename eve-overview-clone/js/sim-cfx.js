@@ -378,6 +378,13 @@ export function createClientFx(scene, base) {
   return {
     // 这一类特效能不能用（JSON / 网格 / 贴图都到了）；第一次问时开始加载
     ready: (kind) => load(kind).ok,
+    // 第一个曲线组（play_start）最长曲线的时长（秒）：timeScale 的特效按 时长 / 装备周期 拉伸（客户端 Start 里的 scaleValue）
+    length(kind) {
+      const d = load(kind);
+      if (!d.ok) return 0;
+      if (d.len == null) d.len = Math.max(0, ...(d.json.curveSets?.[0]?.curves || []).map((c) => { const K = c?.keys; return K?.length ? K[K.length - 1].time * (c.timeScale ?? 1) : 0; }));
+      return d.len;
+    },
     begin(camera, t, lowQ = false) {
       frame++;
       time.value = t;
@@ -425,9 +432,10 @@ export function createClientFx(scene, base) {
           transformNode(root.stretchObject, mW.compose(sv, QS, SQ.set(1, 1, len)), ctx);
         }
       } else {
-        // ShipEffect：放在目标船位置，按目标半径缩放（transformFlags 未知，见说明）
+        // ShipEffect：放在目标船位置，按目标半径缩放（transformFlags 未知，见说明）；o.rot = 跟船转（FX_TF_ROTATION_BALL，场景朝向换到客户端的镜像坐标）
         toEve(dv, o.dst);
-        transformNode(root, mW.compose(dv, QS.identity(), SQ.setScalar(o.R || 1)), ctx);
+        if (o.rot) QS.set(o.rot.x, -o.rot.y, -o.rot.z, o.rot.w); else QS.identity();
+        transformNode(root, mW.compose(dv, QS, SQ.setScalar(o.R || 1)), ctx);
       }
       for (const x of inst.meshes) {
         x.m.visible = !!x.node._vis;

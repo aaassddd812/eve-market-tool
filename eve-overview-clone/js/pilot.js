@@ -9,8 +9,8 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle } from './sim-engine.js?v=v23';
-import { loadShipIndex } from './sim-ships.js?v=v9';
+import { createBattle } from './sim-engine.js?v=v27';
+import { loadShipIndex } from './sim-ships.js?v=v10';
 
 let ctx = null;
 let root = null;
@@ -42,6 +42,77 @@ export function initPilot(context) {
   window.addEventListener('blur', () => { S.keys.clear(); S.ctrl = false; cursorMode(); });
 }
 const save = () => ctx.store.setJSON(KEY, S.set);
+// 预设场景：内置几个常见对局（我的船用击杀记录常见装配），玩家也能把当前设置存成自己的预设（存在本机）
+const PRESET_KEY = 'eve-pilot-presets';
+const PRESETS = [
+  { id: 'p1', name: '护卫舰单挑', ship: 587, foes: [{ ship: 603, count: 1 }], dist: 10 },
+  { id: 'p2', name: '巡洋舰打护卫舰小队', ship: 629, foes: [{ ship: 587, count: 3 }], dist: 10 },
+  { id: 'p3', name: '被拦截舰缠住', ship: 621, foes: [{ ship: 11198, count: 2 }, { ship: 22456, count: 1 }], dist: 20 },
+  { id: 'p4', name: '战巡对战巡', ship: 24702, foes: [{ ship: 24698, count: 1 }], dist: 30 },
+  { id: 'p5', name: '战列舰被小船围攻', ship: 644, foes: [{ ship: 587, count: 3 }, { ship: 603, count: 3 }], dist: 20 },
+  { id: 'p6', name: '无人机船对决', ship: 12005, foes: [{ ship: 17715, count: 1 }], dist: 30 },
+  { id: 'p7', name: '战列舰对决', ship: 641, foes: [{ ship: 638, count: 1 }], dist: 50 },
+];
+const userPresets = () => { try { const l = ctx.store.getJSON(PRESET_KEY, []); return Array.isArray(l) ? l.filter((x) => x && x.ship && Array.isArray(x.foes)) : []; } catch { return []; } };
+const samePreset = (p) => p.ship === S.set.ship && (p.fit || 'kb') === S.set.fit && p.dist === S.set.dist && (p.sky ?? S.set.sky) === S.set.sky
+  && p.foes.length === S.set.foes.length && p.foes.every((f, i) => f.ship === S.set.foes[i].ship && f.count === S.set.foes[i].count);
+function applyPreset(p) {
+  Object.assign(S.set, { ship: p.ship, fit: p.fit || 'kb', foes: p.foes.map((f) => ({ ship: f.ship, count: f.count })), dist: DISTS.includes(p.dist) ? p.dist : S.set.dist });
+  if (p.sky != null && (p.sky === '' || SKIES.includes(p.sky))) S.set.sky = p.sky;
+  save();
+  renderSetup();
+}
+function savePreset() {
+  const box = root.querySelector('[data-pl-pname]');
+  const name = (box?.value || '').trim().slice(0, 40) || `${typeName(S.set.ship)} 对 ${S.set.foes.map((f) => `${typeName(f.ship)}×${f.count}`).join('、')}`;
+  if (!S.set.foes.length) { ctx.showToast('先加至少一个敌人', 'error'); return; }
+  const list = userPresets().filter((x) => x.name !== name);
+  list.unshift({ id: 'u' + Date.now().toString(36), name, ship: S.set.ship, fit: S.set.fit, foes: S.set.foes.map((f) => ({ ship: f.ship, count: f.count })), dist: S.set.dist, sky: S.set.sky });
+  ctx.store.setJSON(PRESET_KEY, list.slice(0, 30));
+  ctx.showToast('已保存预设「' + name + '」', 'success');
+  renderSetup();
+}
+function delPreset(id) {
+  ctx.store.setJSON(PRESET_KEY, userPresets().filter((x) => x.id !== id));
+  renderSetup();
+}
+const presetHtml = () => {
+  const mine = userPresets();
+  const chip = (p, own) => `<span class="pl-preset${samePreset(p) ? ' on' : ''}"><button type="button" data-pl-preset="${esc(p.id)}" title="${esc(`${typeName(p.ship)} 对 ${p.foes.map((f) => `${typeName(f.ship)}×${f.count}`).join('、')} · ${p.dist} km`)}"><img src="${IMG(p.ship, 'icon', 32)}" alt="" loading="lazy">${esc(p.name)}</button>${own ? `<button type="button" class="x" data-pl-pdel="${esc(p.id)}" title="删除这个预设" aria-label="删除这个预设">×</button>` : ''}</span>`;
+  return `<div class="pl-presets">${PRESETS.map((p) => chip(p, false)).join('')}</div>
+    ${mine.length ? `<div class="pl-presets mine"><small>我的预设</small>${mine.map((p) => chip(p, true)).join('')}</div>` : ''}
+    <div class="pl-psave"><input type="text" class="pi-input" maxlength="40" placeholder="给当前设置起个名字（可不填）" data-pl-pname><button type="button" class="btn btn-ghost btn-sm" data-pl-psave>保存为我的预设</button></div>`;
+};
+// 查看装配：和战场模拟「装配详情」同一套内容（属性 + 按槽位的装备）；我的船按当前选的装配来源，敌人是击杀记录常见装配
+const fitViews = new Map();
+async function viewFit(who) {
+  const foe = who.startsWith('f:') ? S.set.foes[Number(who.slice(2))] : null;
+  const ship = foe ? foe.ship : S.set.ship, key = foe ? 'kb' : S.set.fit;
+  const k = ship + '|' + key;
+  S.fitView = { k, ship, who, busy: !fitViews.has(k) };
+  renderFitView();
+  if (!fitViews.has(k)) {
+    try {
+      const fit = key === 'kb' ? null : await fitFor(ship, key);
+      const r = await ctx.pilotRow(ship, fit ? ctx.normalize(fit) : null, fit?.name || '');
+      fitViews.set(k, { row: r.row, label: r.row.label || fit?.name || '' });
+    } catch (error) { fitViews.set(k, { error: error.message }); }
+    if (S.fitView?.k === k) { S.fitView.busy = false; renderFitView(); }
+  }
+}
+function renderFitView() {
+  let box = root.querySelector('#plFitView');
+  const v = S.fitView;
+  if (!v) { box?.remove(); return; }
+  if (!box) { box = document.createElement('div'); box.id = 'plFitView'; box.className = 'pl-fitview'; root.querySelector('#plSetup')?.append(box); }
+  const d = fitViews.get(v.k);
+  const body = v.busy ? '<p class="text-muted">正在计算装配…</p>' : d?.error ? `<p class="text-muted">${esc('装配算不出来：' + d.error)}</p>` : ctx.fitHtml ? ctx.fitHtml(d.row.fit, d.row.unit, true) : '';
+  box.innerHTML = `<div class="pl-fitview-card" role="dialog" aria-label="查看装配">
+    <div class="pl-fitview-head"><img src="${IMG(v.ship, 'icon', 64)}" alt="" width="40" height="40"><div><b>${esc(typeName(v.ship))}</b><small>${esc(v.who === 'me' ? '我的船' : '敌人')}${d?.label ? ' · ' + esc(d.label) : ''}</small></div>
+      ${!v.busy && d?.row && ctx.openInFitting ? '<button type="button" class="btn btn-ghost btn-sm" data-pl-fvopen title="在装配页打开这套装配，可以改装备后存成「我的装配」再来驾驶">在装配页打开</button>' : ''}
+      <button type="button" class="btn btn-ghost btn-sm" data-pl-fvclose>关闭</button></div>
+    <div class="pl-fitview-body">${body}</div></div>`;
+}
 // 船体面板选项（客户端 settings.user.ui：showPassiveModules 1、showEmptySlots 0、showReadout 0、readoutType 1（百分比）、
 // showModuleTooltips 1、lockModules 0、lockOverload 0 —— 括号里是客户端的默认值）
 const HUD_KEY = 'eve-pilot-hud';
@@ -134,13 +205,17 @@ function renderSetup() {
       <div class="pl-win-head"><h3>驾驶模拟</h3><span>开一艘船打 NPC：走位、锁定、开关装备都像在游戏里一样，属性按装配和全部 5 级技能计算</span></div>
       <div class="pl-setup-grid">
         <div class="pl-field">
+          <label>预设场景</label>
+          ${presetHtml()}
+        </div>
+        <div class="pl-field">
           <label>我的船</label>
-          <div class="pl-ship">${shipChip(ship)}<div class="pl-search"><input type="search" class="pi-input" placeholder="搜索船名换一艘" data-pl-q="me" autocomplete="off"><div class="pl-results" data-pl-res="me" hidden></div></div></div>
+          <div class="pl-ship">${shipChip(ship)}<button type="button" class="btn btn-ghost btn-sm" data-pl-view="me">查看装配</button><div class="pl-search"><input type="search" class="pi-input" placeholder="搜索船名换一艘" data-pl-q="me" autocomplete="off"><div class="pl-results" data-pl-res="me" hidden></div></div></div>
           <select class="plain-select" data-pl-fit>${fits.map(([k, l]) => `<option value="${esc(k)}"${k === S.set.fit ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
         </div>
         <div class="pl-field">
           <label>敌人（NPC，用击杀记录常见装配）</label>
-          <div class="pl-foes">${S.set.foes.map((f, i) => `<div class="pl-foe">${shipChip(f.ship)}<input type="number" class="pi-input" min="1" max="20" value="${f.count}" data-pl-count="${i}" aria-label="数量"><button type="button" class="btn btn-ghost btn-sm" data-pl-del="${i}">移除</button></div>`).join('') || '<p class="text-muted">还没有敌人</p>'}</div>
+          <div class="pl-foes">${S.set.foes.map((f, i) => `<div class="pl-foe">${shipChip(f.ship)}<input type="number" class="pi-input" min="1" max="20" value="${f.count}" data-pl-count="${i}" aria-label="数量"><button type="button" class="btn btn-ghost btn-sm" data-pl-view="f:${i}">查看装配</button><button type="button" class="btn btn-ghost btn-sm" data-pl-del="${i}">移除</button></div>`).join('') || '<p class="text-muted">还没有敌人</p>'}</div>
           <div class="pl-search"><input type="search" class="pi-input" placeholder="搜索船名加敌人" data-pl-q="foe" autocomplete="off"><div class="pl-results" data-pl-res="foe" hidden></div></div>
         </div>
         <div class="pl-field">
@@ -156,6 +231,7 @@ function renderSetup() {
         <small>操作：点船选中 · Ctrl + 点击锁定 · 按住 Q / W / E 点船 = 靠近 / 环绕 / 保持距离 · 双击太空朝那里飞 · F1–F8 开关高槽装备 · Ctrl + 空格停船</small></div>
     </div>
   </section></div>`;
+  if (S.fitView) renderFitView();
 }
 const shipChip = (id) => `<span class="pl-chip"><img src="${IMG(id, 'icon', 32)}" alt="" loading="lazy"><b>${esc(typeName(id))}</b></span>`;
 
@@ -185,10 +261,11 @@ async function fitFor(ship, key) {
 async function launch() {
   if (S.loading) return;
   S.loading = true;
+  S.fitView = null;
   renderSetup();
   try {
     const fit = await fitFor(S.set.ship, S.set.fit);
-    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '');
+    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true });
     S.fitLabel = mine.row.label || fit?.name || '';
     if (!mine.row.unit) throw new Error('这个装配算不出属性');
     // 同型敌人只算一次装配
@@ -213,15 +290,19 @@ function start(mine, foes) {
   S.on = mine.row.unit;
   S.off = mine.off || mine.row.unit;
   S.prop = mine.prop;
+  S.mwd = Boolean(mine.mwd);   // 推进器是微型跃迁推进器：被扰频时关掉、开不起来
   S.variant = mine.variant || (() => S.on);
   // 自己身上的主动装备（推进器、抗性、感应增强器、跟踪电脑、损控等）：和游戏一样默认关着，玩家点了才开；
   // 开关时整船属性换成对应组合（fit-sim variant）
   S.auto = (S.on.rack || []).map((_, i) => i).filter((i) => i === S.prop || (S.on.alwaysOn & (1 << i)));
-  S.selfMods = new Set(S.auto);
+  // 立体炸弹、ECM 脉冲、跃迁扰断力场、微跳：不用目标，目标没了也不停
+  S.selfMods = new Set([...S.auto, ...['smarts', 'bursts', 'bubbles', 'mjds'].flatMap((k) => (S.on[k] || []).map((x) => x.m))]);
   S.ovCache = new Map();
   S.charges = {};
+  // 指挥脉冲波：每个周期开头把加成刷新到「这一轮开始 + buffDuration」，停了以后加成留到时间到为止
+  S.bexp = new Map();
   me.unit = S.variant(S.auto);
-  const b = createBattle({ A: [me], B: foes }, { dist: S.set.dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: 3600, record: true, droneUnits: true, seed: (Math.random() * 2 ** 31) | 0, onHit: logHit });
+  const b = createBattle({ A: [me], B: foes }, { dist: S.set.dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: 3600, record: true, droneUnits: true, seed: (Math.random() * 2 ** 31) | 0, onHit: logHit, onDrain: logDrain });
   S.b = b;
   const calc = mine.row.calc;
   const maxLocks = Math.max(1, Math.min(calc?.ship?.attr(192) || 5, calc?.char?.attr(192) || 5));
@@ -231,7 +312,7 @@ function start(mine, foes) {
   S.names = b.units.map((u, i) => (i === 0 ? tr('我') : `${typeName(u.r.row.ship)} ${b.units.filter((x, k) => k <= i && x.r === u.r).length}`));
   S.modOn = new Map();
   // 指向性装备（要对着目标开的电子战），开之前 / 每个周期要查距离
-  S.me.pilot.targeted = new Set(['points', 'webs', 'paints', 'damps', 'ecms', 'neuts', 'noses'].flatMap((k) => (S.me.t[k] || []).map((x) => x.m)));
+  S.me.pilot.targeted = new Set(['points', 'webs', 'paints', 'damps', 'ecms', 'neuts', 'noses', 'tds', 'gds', 'rcaps', 'rsbs', 'rtcs', 'fields'].flatMap((k) => (S.me.t[k] || []).map((x) => x.m)));
   rackInit();
   Object.assign(S, { t: 0, paused: false, sel: -1, log: [], killN: 0, lastAct: null, logAt: 0, ended: false, ovAt: 0 });
   const pref = Math.round((S.on.pref || 5000) / 500) * 500;
@@ -276,7 +357,7 @@ const WINS = [
 ];
 const WIN_KEY = 'eve-pilot-wins';
 const winBody = {
-  ctl: () => `<div class="pl-ctl"><button type="button" class="pl-btn" data-pl-exit>返回设置</button><button type="button" class="pl-btn" data-pl-pause>暂停</button><button type="button" class="pl-btn" data-pl-restart>重来</button><span class="pl-clock" id="plClock"></span></div>`,
+  ctl: () => `<div class="pl-ctl"><button type="button" class="pl-btn" data-pl-exit>返回设置</button><button type="button" class="pl-btn" data-pl-pause>暂停</button><button type="button" class="pl-btn" data-pl-restart>重来</button><button type="button" class="pl-btn" data-pl-full>${document.fullscreenElement ? '退出全屏' : '全屏'}</button><span class="pl-clock" id="plClock"></span></div>`,
   sel: () => '<div id="plSel"></div>',
   ov: () => `<div class="pl-ov-tabs">${OV_TABS.map(([n, , c], i) => `<button type="button" data-pl-ovtab="${i}" style="--c:${c}"${i === S.ovTab ? ' class="on"' : ''}>${n}</button>`).join('')}<i class="pl-ov-line"></i></div><div class="pl-ov-body"><table style="width:${ovCols().reduce((a, b) => a + b, 0)}px"><colgroup>${ovCols().map((w) => `<col style="width:${w}px">`).join('')}</colgroup><thead><tr><th></th><th class="srt">距离<img src="${UI}eveicon/system_icons/caret_up_16px.png?v=1" alt=""><i class="pl-ovsc" data-ov-scale="1"></i></th><th>名字<i class="pl-ovsc" data-ov-scale="2"></i></th><th>类型<i class="pl-ovsc" data-ov-scale="3"></i></th><th>速度 (m/s)<i class="pl-ovsc" data-ov-scale="4"></i></th></tr></thead><tbody id="plOv"></tbody></table></div>`,
   drones: () => '<div id="plDrones"></div>',
@@ -356,6 +437,30 @@ function neocomHtml() {
     <button type="button" data-win-reset title="窗口恢复默认位置" class="pl-neo-reset"><img src="${UI}windowicons/navigation.png?v=1" alt=""></button><time class="pl-neo-clock" id="plNeoClock" title="EVE 时间"></time></nav>`;
 }
 // 按保存的位置（没有就用默认）摆放，并限制在画面里
+// 全屏：只把驾驶画面（#plStage）铺满屏幕，去掉网站导航和页边。贴着右边 / 下边的窗口切换后仍贴着
+function toggleFull() {
+  const stage = root.querySelector('#plStage');
+  if (!stage) return;
+  stage.dataset.fw = stage.clientWidth; stage.dataset.fh = stage.clientHeight;
+  if (document.fullscreenElement) { document.exitFullscreen?.().catch(() => {}); return; }
+  (stage.requestFullscreen || stage.webkitRequestFullscreen)?.call(stage)?.catch?.(() => {});
+}
+document.addEventListener('fullscreenchange', () => {
+  const stage = root?.querySelector('#plStage');
+  for (const b of document.querySelectorAll('[data-pl-full]')) b.textContent = tr(document.fullscreenElement ? '退出全屏' : '全屏');
+  if (!stage) return;
+  const W0 = Number(stage.dataset.fw) || 0, H0 = Number(stage.dataset.fh) || 0;
+  requestAnimationFrame(() => {
+    const W = stage.clientWidth, H = stage.clientHeight;
+    if (W0 && H0) for (const el of stage.querySelectorAll('[data-win]')) {
+      const x = Number(el.dataset.hx ?? el.offsetLeft), y = Number(el.dataset.hy ?? el.offsetTop), w = el.offsetWidth, h = el.offsetHeight;
+      const nx = x + w >= W0 - 24 ? x + (W - W0) : x, ny = y + h >= H0 - 24 ? y + (H - H0) : y;
+      if (nx !== x || ny !== y) moveWin(el, nx, ny);
+    }
+    stage.dataset.fw = W; stage.dataset.fh = H;
+  });
+});
+
 function placeWins(reset = false) {
   const stage = root.querySelector('#plStage');
   if (!stage) return;
@@ -374,6 +479,7 @@ function placeWins(reset = false) {
     moveWin(el, x, y, true);
   }
   if (!stage.querySelector('[data-win].is-act')) setActWin(stage.querySelector('[data-win="ov"]:not([hidden])'));
+  stage.dataset.fw = W; stage.dataset.fh = H;
   syncNeo();
 }
 // keep：只是画面变了，原位置（dataset.hx / hy）不动；否则这就是新的原位置
@@ -508,6 +614,9 @@ function renderStage() {
   renderRack();
   renderSel();
   root.querySelector('#plHud').addEventListener('click', onHudClick);
+  const hc = root.querySelector('#plHudC');
+  hc.addEventListener('pointermove', onHudMove);
+  hc.addEventListener('pointerleave', hideHudTip);
   const rk = root.querySelector('#plRack');
   rk.addEventListener('dragstart', onRackDragStart);
   rk.addEventListener('dragend', onRackDragEnd);
@@ -523,7 +632,7 @@ function renderStage() {
   sw?.addEventListener('pointerout', onHintOut);
   sw?.addEventListener('contextmenu', onSelCtx);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v46').then((m) => {
+  import('./sim-3d.js?v=v51').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -688,6 +797,7 @@ function tick(now) {
     if (S.view) { S.view.draw(t, { sel: S.sel, kills: b.kills }); S.view.render(); }
     drawMarks();
     drawHud();
+    updHudTip();
     drawTargets();
     updateRack();
     if (now - S.ovAt > 500) { S.ovAt = now; renderOverview(); renderSel(true); renderDrones(); refreshTip(); ovLine(); }
@@ -704,7 +814,7 @@ function beforeStep() {
   const u = S.me;
   if (!u?.alive || (!S.auto?.length && !Object.keys(S.charges || {}).length)) return;
   const P = u.pilot, t = S.b.t;
-  const isOn = (i) => P.on.has(i) || (S.rk?.deact.get(i)?.end > t);
+  const isOn = (i) => P.on.has(i) || (S.rk?.deact.get(i)?.end > t) || S.bexp?.get(i) > t;
   const off = S.auto.filter((i) => !isOn(i));
   let x = S.variant(off, S.charges || {});
   // 推进器超载：速度加成那一段按 overloadSpeedFactorBonus 放大
@@ -727,7 +837,38 @@ const BUFF_INFO = {
   nos: ['ewEnergyVampire', '1_64_3', '被吸掠电容'], neut: ['ewEnergyNeut', '12_64_4', '被中和电容'],
   rs: ['shieldTransfer', '1_64_16', '护盾传输'], ra: ['remoteArmorRepair', 'remote_armor_repair', '装甲维修'], rh: ['remoteHullRepair', 'remote_hull_repairer', '结构维修'],
 };
-const BUFF_DEF = new Set(['rs', 'ra', 'rh']);
+// 指挥脉冲波（自己开的也算，客户端 dbuff 收到就显示）：弹药组 → 槽位（Slot_ShieldBurst 等，图标 appConst.iconShieldBurst 等）
+const BURST_SLOT = { 1769: 'bShield', 1774: 'bArmor', 1773: 'bInfo', 1772: 'bSkirmish', 1771: 'bMining', 4905: 'bExpedition' };
+Object.assign(BUFF_INFO, {
+  bShield: ['shieldBurst', 'modules/fleetboost_shieldbase', '护盾脉冲波'], bArmor: ['armorBurst', 'modules/fleetboost_armorbase', '装甲脉冲波'],
+  bInfo: ['informationBurst', 'modules/fleetboost_infobase', '信息战脉冲波'], bSkirmish: ['skirmishBurst', 'modules/fleetboost_skirmishbase', '游击战脉冲波'],
+  bMining: ['miningBurst', 'modules/fleetboost_miningbase', '开采脉冲波'], bExpedition: ['expeditionBurst', 'modules/fleetboost_expeditionbase', '远征脉冲波'],
+});
+// 武器扰断 / 友方辅助（客户端 Slot_EwTrackingDisrupt 等，图标 appConst.iconModuleTrackingDisruptor 1639 → 5_64_7、GuidanceDisruptor 21437 → 5_64_17、
+// RemoteTracking 3346 → 74_64_8、EnergyTransfer 1035 → 1_64_2、SensorBooster 74 → 3_64_9）；提示标题 = 客户端 UI/Inflight/EwarHints/* 的中文原文
+Object.assign(BUFF_INFO, {
+  td: ['ewTrackingDisrupt', '5_64_7', '被索敌扰断'], gd: ['ewGuidanceDisrupt', '5_64_17', '被制导干扰'],
+  rt: ['remoteTracking', '74_64_8', '强化跟踪'], rc: ['energyTransfer', '1_64_2', '能量传输'], rb: ['sensorBooster', '3_64_9', '感应增强'],
+});
+const BUFF_DEF = new Set(['rs', 'ra', 'rh', 'rt', 'rc', 'rb', ...Object.values(BURST_SLOT)]);
+// 自己身上还有效的脉冲波加成：槽位 → { buffs: Map(加成 → 数值，同种取最强), end: 最晚到期, dur }
+function burstsOnMe() {
+  const out = new Map(), t = S.b.t;
+  for (const [i, end] of S.bexp || []) {
+    const bu = S.on.rack[i]?.burst, k = bu && BURST_SLOT[bu.grp];
+    if (!k || end <= t) continue;
+    let e = out.get(k);
+    if (!e) out.set(k, (e = { buffs: new Map(), end: 0, dur: bu.dur }));
+    for (const [id, v] of bu.buffs) {
+      const b = ctx.data.dbuffs?.get(id), old = e.buffs.get(id);
+      if (old === undefined || (b?.max ? v > old : v < old)) e.buffs.set(id, v);
+    }
+    if (end > e.end) { e.end = end; e.dur = bu.dur; }
+  }
+  return out;
+}
+// 剩余时间（客户端 FormatTimeIntervalShortWritten：「1分 5秒」）
+const fmtLeft = (sec) => { const s0 = Math.max(0, Math.ceil(sec)), m = Math.floor(s0 / 60); return m ? `${m}分 ${s0 % 60}秒` : `${s0}秒`; };
 const buffIcon = (k) => `${UI}icons/${BUFF_INFO[k][1]}.png?v=1`;
 const buffHint = (k) => tr(BUFF_INFO[k][2]);   // 总览里 tr 是行变量，这里另起名字
 // 客户端 tactical.jammersByJammingType：服务器发来 EWAR 通知才算（ECM 只有干扰成功的周期才有）
@@ -739,10 +880,21 @@ function ewarOnMe(u) {
   for (const v of S.b.units) {
     if (!v.alive || v === u) continue;
     if (v.target === u) {
-      for (const x of v.t.points) if (on(v, x)) add(x.str >= 2 ? 'scram' : 'point', v);
-      for (const [k, l] of [['web', v.t.webs], ['damp', v.t.damps], ['paint', v.t.paints], ['nos', v.t.noses], ['neut', v.t.neuts]]) for (const x of l) if (on(v, x)) add(k, v);
+      for (const x of v.t.points) if (on(v, x)) add(x.str >= 2 && !x.focus ? 'scram' : 'point', v);
+      for (const [k, l] of [['web', v.t.webs], ['damp', v.t.damps], ['paint', v.t.paints], ['nos', v.t.noses], ['neut', v.t.neuts], ['td', v.t.tds || []], ['gd', v.t.gds || []]]) for (const x of l) if (on(v, x)) add(k, v);
     }
     if (v.rrep) v.t.remote.forEach((rep, j) => { if (v.rrep[j]?.tgt === u) add(['rs', 'ra', 'rh'][rep.layer], v); });
+    // 友方辅助（远程电容传输 / 感应增强 / 跟踪电脑）：引擎每步记在 aOut
+    for (const [x, m] of v.aOut || []) if (x === u) { const k = (v.t.rcaps || []).some((y) => y.m === m) ? 'rc' : (v.t.rsbs || []).some((y) => y.m === m) ? 'rb' : 'rt'; add(k, v); }
+    // 跃迁扰断力场：在泡泡里就算「跃迁被干扰」
+    for (const x of v.t.bubbles || []) if (on(v, x) && Math.hypot(v.pos[0] - u.pos[0], v.pos[1] - u.pos[1], v.pos[2] - u.pos[2]) <= x.range) add('point', v);
+  }
+  // 脉冲波投射器的力场：在里面就算对应的电子战（来源 = 开的那艘船）
+  for (const f of S.b.fields || []) {
+    if (!f.pos || t < f.at || f.u === u || Math.hypot(f.pos[0] - u.pos[0], f.pos[1] - u.pos[1], f.pos[2] - u.pos[2]) > f.x.radius) continue;
+    const k = { web: 'web', paint: 'paint', damp: 'damp', bubble: 'point', guide: 'gd', track: 'td' }[f.x.kind];
+    if (k) add(k, f.u);
+    if (f.x.kind === 'track' && (f.x.mvel || f.x.ev)) add('gd', f.u);
   }
   // ECM：只有干扰成功、还没到期的才算；同时开着但没干扰上的记为「失败的尝试」
   const jams = [...(u.jamBy?.values() || [])].filter((j) => j.end > t && j.u.alive);
@@ -784,6 +936,8 @@ function renderBuffs() {
   if (!box || !u) return;
   const ew = u.alive ? ewarOnMe(u) : new Map();
   S.ewar = ew;
+  // 脉冲波加成和遥修一样是友方格子，倒计时圈显示加成还剩多久
+  if (u.alive) for (const [k, b] of burstsOnMe()) ew.set(k, { from: new Map(), fail: new Map(), jam: { t0: b.end - b.dur, end: b.end }, burst: b });
   const have = new Map([...box.children].map((x) => [x.dataset.k, x]));
   for (const [k, el] of have) if (!ew.has(k)) el.remove();
   for (const [k, e] of ew) {
@@ -801,7 +955,9 @@ function renderBuffs() {
     }
     // 提示：标题 + 每个来源「N x 船名」（EwarAttackerNPC2：只显示船名），ECM 另列「失败的尝试」
     const rows = (m) => [...m].sort((a, b) => b[1] - a[1]).map(([v, c]) => `${c}x  ${S.names[v.i]}`);
-    const tip = [buffHint(k), ...rows(e.from), ...(e.fail.size ? [tr('失败的尝试'), ...rows(e.fail)] : [])].join('\n');
+    // 脉冲波：每种加成一行「数值 名称 剩余时间」（BuffHintProvider.GetDbuffHintItemList）
+    const bRows = e.burst ? [...e.burst.buffs].map(([id, v]) => `${ctx.FE.buffText(ctx.data, [[id, v]])[0] || ''}  ${tr(fmtLeft(e.burst.end - S.b.t))}`) : [];
+    const tip = [buffHint(k), ...rows(e.from), ...(e.fail.size ? [tr('失败的尝试'), ...rows(e.fail)] : []), ...bRows].join('\n');
     if (el.title !== tip) el.title = tip;
     // 倒计时圈（ModuleEffectTimer，倒数模式，白 0.65；电子战按钮用橙 1,0.3,0、遥修用青 0,0.8,0.8）：只有干扰（OnJamStart）有
     const tm = el.querySelector('.tm');
@@ -826,10 +982,26 @@ function afterStep() {
       for (const y of members(x.i)) Pm.on.delete(y);
       const name = typeName(S.on.rack[x.i]?.type);
       if (x.k === 'cap') pushLog(`${name}需要${x.need.toFixed(1)}单位电荷。电容器只有${Math.max(0, x.got).toFixed(1)}单位。`, 'bad');
+      else if (x.k === 'mjd') pushLog(`${name}：跳跃完成`, 'good');
+      else if (x.k === 'mjdScram') pushLog(`${name}因跃迁扰频而停止运转`, 'bad');
+      else if (x.k === 'decloak') pushLog(`距离其他物体太近（2000米内），${name}已停止运转`, 'bad');
       else pushLog(`${S.names[x.v.i]}距离太远，无法对其使用${name}，目标必须在${Math.round(x.rng).toLocaleString('en-US')}米内。`, 'bad');
     }
   }
   rackStep();
+  // 指挥脉冲波：开着的每轮开头刷新加成到期时间
+  const bt = S.b.t;
+  if (u.alive) for (const i of Pm.on) {
+    const bu = S.on.rack[i]?.burst;
+    if (!bu?.dur) continue;
+    const cs = cycStart(i, bt);
+    if (cs != null && cs + bu.dur > (S.bexp.get(i) || 0)) S.bexp.set(i, cs + bu.dur);
+  }
+  // 被跃迁扰频：微型跃迁推进器立即停机（客户端：服务器把装备停掉，日志里一条通知）
+  if (u.scram && S.mwd && S.prop >= 0 && (Pm.on.has(S.prop) || S.rk?.wait.has(S.prop))) {
+    for (const x of members(S.prop)) { Pm.on.delete(x); S.rk?.deact.delete(x); S.rk?.wait.delete(x); }
+    pushLog(`${typeName(S.on.rack[S.prop].type)}因跃迁扰频而停止运转`, 'bad');
+  }
   renderBuffs();
   // 当前目标被打掉：武器、电子战自动停下（和游戏一样），推进器、维修不变
   const P = u.pilot;
@@ -872,6 +1044,8 @@ function lockUnit(v) {
   const P = u.pilot;
   if (P.locks.has(v)) { P.active = v; return; }
   if (P.locks.size >= P.maxLocks) { pushLog(`最多同时锁定 ${P.maxLocks} 个目标`, 'bad'); return; }
+  if (u.cloak) { pushLog('隐形状态下无法锁定目标', 'bad'); return; }
+  if ((u.pilot.lockBlock || 0) > S.b.t) { pushLog(`刚解除隐形，还需要${fmtLeft(u.pilot.lockBlock - S.b.t)}才能锁定目标`, 'bad'); return; }
   if (!S.b.lock(u, v)) { pushLog(`${S.names[v.i]} 超出锁定距离（${fmtDist(u.t.lockRange * u.rangeMult)}）`, 'bad'); return; }
   pushLog(`开始锁定 ${S.names[v.i]}`, 'sys');
 }
@@ -925,6 +1099,19 @@ function toggleModule(m, e) {
 function canActivate(m) {
   const u = S.me, P = u.pilot, x = S.on.rack[m];
   if (!x) return false;
+  if (m === S.prop && S.mwd && u.scram) { pushLog(`你的舰船正被跃迁扰频，无法启动${typeName(x.type)}`, 'bad'); return false; }
+  // 微型跃迁引擎：被扰频开不起来；跳过之后要等重启延迟
+  if ((u.t.mjds || []).some((y) => y.m === m)) {
+    if (u.scram) { pushLog(`你的舰船正被跃迁扰频，无法启动${typeName(x.type)}`, 'bad'); return false; }
+    const left = (P.cool?.get(m) || 0) - S.b.t;
+    if (left > 0) { pushLog(`${typeName(x.type)}还需要${fmtLeft(left)}才能再次启动`, 'bad'); return false; }
+  }
+  // 隐形装置：2000 米内有别的物体开不了；关掉后要等重启延迟。隐形时开别的装备 = 先解除隐形
+  if ((u.t.cloaks || []).some((y) => y.m === m)) {
+    const left = (P.cool?.get(m) || 0) - S.b.t;
+    if (left > 0) { pushLog(`${typeName(x.type)}还需要${fmtLeft(left)}才能再次启动`, 'bad'); return false; }
+    if (S.b.cloakNear(u)) { pushLog(`距离其他物体太近（2000米内），无法启动${typeName(x.type)}`, 'bad'); return false; }
+  } else if (u.cloak) for (const y of u.t.cloaks || []) P.on.delete(y.m);
   const g = u.t.guns.find((y) => y.m === m);
   const need = g ? g.capNeed : (u.t.localReps || []).some((y) => y.m === m && y.charged) ? 0 : x.cap || 0;
   if (need > 0 && u.cap < need) { pushLog(`${typeName(x.type)}需要${need.toFixed(1)}单位电荷。电容器只有${Math.max(0, u.cap).toFixed(1)}单位。`, 'bad'); return false; }
@@ -962,7 +1149,7 @@ function toggleable() {
   if (toggleCache?.t === S.on) return toggleCache.set;
   const t = S.on, set = new Set();
   for (const g of t.guns) if (g.m != null) set.add(g.m);
-  for (const k of ['webs', 'points', 'paints', 'damps', 'ecms', 'neuts', 'noses', 'localReps', 'remote', 'injectors']) for (const x of t[k] || []) if (x.m != null) set.add(x.m);
+  for (const k of ['webs', 'points', 'paints', 'damps', 'ecms', 'neuts', 'noses', 'localReps', 'remote', 'injectors', 'smarts', 'bursts', 'tds', 'gds', 'rcaps', 'rsbs', 'rtcs', 'mjds', 'bubbles', 'fields']) for (const x of t[k] || []) if (x.m != null) set.add(x.m);
   for (const i of S.auto || []) set.add(i);
   toggleCache = { t, set };
   return set;
@@ -980,6 +1167,12 @@ function onClick(e) {
     return;
   }
   if ((x = t.closest('[data-pl-del]'))) { S.set.foes.splice(Number(x.dataset.plDel), 1); save(); renderSetup(); return; }
+  if ((x = t.closest('[data-pl-preset]'))) { const p = [...PRESETS, ...userPresets()].find((y) => y.id === x.dataset.plPreset); if (p) applyPreset(p); return; }
+  if ((x = t.closest('[data-pl-pdel]'))) { delPreset(x.dataset.plPdel); return; }
+  if (t.closest('[data-pl-psave]')) { savePreset(); return; }
+  if ((x = t.closest('[data-pl-view]'))) { viewFit(x.dataset.plView); return; }
+  if (t.closest('[data-pl-fvclose]') || t.matches('.pl-fitview')) { S.fitView = null; renderFitView(); return; }
+  if (t.closest('[data-pl-fvopen]')) { const d = fitViews.get(S.fitView?.k); if (d?.row?.fit) { S.fitView = null; ctx.openInFitting(ctx.normalize(JSON.parse(JSON.stringify(d.row.fit)))); } return; }
   if ((x = t.closest('[data-pl-sky]'))) { S.set.sky = x.dataset.plSky; save(); renderSetup(); return; }
   if ((x = t.closest('[data-win-open]'))) { toggleWin(x.dataset.winOpen); return; }
   if (t.closest('[data-pl-tac]')) { toggleTac(); return; }
@@ -991,6 +1184,7 @@ function onClick(e) {
   if (t.closest('[data-pl-go]')) { launch(); return; }
   if (t.closest('[data-pl-exit]')) { S.b = null; S.me = null; renderSetup(); return; }
   if (t.closest('[data-pl-restart]')) { S.b = null; launch(); return; }
+  if (t.closest('[data-pl-full]')) { toggleFull(); return; }
   if ((x = t.closest('[data-pl-pause]'))) { S.paused = !S.paused; x.textContent = tr(S.paused ? '继续' : '暂停'); x.classList.toggle('on', S.paused); return; }
   if ((x = t.closest('[data-pl-hudopt]'))) { toggleHudMenu(x); return; }
   if ((x = t.closest('[data-pl-hudset]'))) { setHud(x.dataset.plHudset); return; }
@@ -1066,6 +1260,63 @@ function onHudClick(e) {
   if (y < 22 || Math.hypot(x, y) > 74) return;
   const f = (45 + Math.atan(x / y) * 180 / Math.PI) / 90;
   setSpeed(f < 0.05 ? 0 : f > 0.95 ? 1 : f);
+}
+
+// 船体面板悬停提示：电容（CapacitorContainer.LoadTooltipPanel，pickRadius 30）、护盾 / 装甲 / 结构（HpGauges.LoadDamageTooltip，
+// shieldGauge pickRadius 74；下半圈是速度表 pickRadius 72，那里不出）。三列：图标、标题 + 「当前 / 最大」、百分比（16 号粗体），10 毫秒刷新
+function hudHit(e) {
+  const c = root.querySelector('#plHudC'), r = c.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * HUD.W - HUD.cx, y = (e.clientY - r.top) / r.height * HUD.H - (HUD.cy - 1);
+  const d = Math.hypot(x, y);
+  if (d <= 30) return 'cap';
+  if (y >= 22 && d <= 72) return null;
+  return d <= 74 ? 'hp' : null;
+}
+let hudTipTimer = 0;
+function onHudMove(e) {
+  const k = S.me ? hudHit(e) : null;
+  if (k === (S.htip?.k ?? S.htipWait)) return;
+  hideHudTip();
+  if (!k) return;
+  S.htipWait = k;
+  hudTipTimer = setTimeout(() => showHudTip(k), 200);
+}
+function hideHudTip() {
+  clearTimeout(hudTipTimer);
+  S.htip = null; S.htipWait = null;
+  root?.querySelector('.pl-htip')?.remove();
+}
+const HUD_TIP_ROWS = { cap: [['1_64_1', 40, '电容']], hp: [['1_64_13', 36, '护盾'], ['1_64_9', 36, '装甲'], ['2_64_12', 36, '结构']] };
+function showHudTip(k) {
+  const stage = root.querySelector('#plStage'), c = root.querySelector('#plHudC');
+  if (!stage || !c || !S.me) return;
+  const el = document.createElement('div');
+  el.className = 'pl-htip';
+  el.innerHTML = `<div class="b">${HUD_TIP_ROWS[k].map(([ic, sz]) => `<div class="r"><img src="${UI}icons/${ic}.png?v=1" alt="" width="${sz}" height="${sz}"><span></span><em></em></div>`).join('')}</div><i class="ptr"></i>`;
+  stage.appendChild(el);
+  S.htip = { k, el };
+  updHudTip();
+  // 在圆的正上方居中，指针朝下
+  const st = stage.getBoundingClientRect(), r = c.getBoundingClientRect();
+  const sc = r.width / HUD.W, ox = r.left - st.left + HUD.cx * sc, oy = r.top - st.top + (HUD.cy - 1 - (k === 'cap' ? 30 : 74)) * sc;
+  const x = Math.max(4, Math.min(st.width - el.offsetWidth - 4, ox - el.offsetWidth / 2));
+  el.style.left = `${Math.round(x)}px`;
+  el.style.top = `${Math.round(oy - el.offsetHeight - 8)}px`;
+  el.querySelector('.ptr').style.left = `${Math.round(ox - x - 12)}px`;
+}
+function updHudTip() {
+  const h = S.htip, u = S.me;
+  if (!h || !u) return;
+  const n = (v) => Math.round(Math.max(0, v)).toLocaleString('en-US'), pct = (f) => `${Math.round(Math.max(0, Math.min(1, f)) * 100)}%`;
+  const vals = h.k === 'cap'
+    ? [[u.cap, u.t.cap.max || 0]]
+    : [0, 1, 2].map((l) => [u.hp[l], u.t.max[l] || 0]);
+  h.el.querySelectorAll('.r').forEach((row, i) => {
+    const [cur, max] = vals[i], name = esc(tr(HUD_TIP_ROWS[h.k][i][2]));
+    const txt = `${h.k === 'cap' ? name : `<b>${name}</b>`}<br>${n(Math.min(cur, max))} / ${n(max)}`, p = pct(max ? cur / max : 0);
+    if (row.children[1].innerHTML !== txt) row.children[1].innerHTML = txt;
+    if (row.children[2].textContent !== p) row.children[2].textContent = p;
+  });
 }
 
 // ---------- 船体面板：照客户端 shipHud 的贴图和坐标拼 ----------
@@ -2278,6 +2529,18 @@ function logHit(h) {
   e.missile = e.missile && Boolean(h.missile);
   if (h.mult) { e.hits++; e.dmg += h.dmg; e.q = Math.max(e.q, qualityOf(h.mult)); h.raw.forEach((x, k) => { e.raw[k] += x; }); }
 }
+// 中和 / 吸电（客户端 OnEnergyNeutAttacker / Defender、OnEnergyNosAttacker / Defender，属于战斗消息里的「电容战」一类）：
+// 屏幕上和伤害一样飘一行，日志窗口也记一条。这几条消息的原文不在客户端本地化数据里（服务器下发），文字是照英文客户端的格式写的
+function logDrain(h) {
+  const me = S.me;
+  if (!me || (h.f !== me && h.v !== me) || (h.nos && !(h.amt > 0.5))) return;
+  const out = h.f === me, other = out ? h.v : h.f;
+  const mod = typeName(h.f.t.rack?.[h.m]?.type);
+  const amt = Math.round(h.amt);
+  const what = h.nos ? (out ? `+${amt} GJ 能量吸取自` : `-${amt} GJ 能量被吸取至`) : `${amt} GJ 能量被中和`;
+  M.queue.push({ at: performance.now(), e: { html: `<b class="${out ? 'out' : 'in'}">${esc(what)}</b> <strong>${esc(S.names[other.i] || '')}</strong><span>${esc(` - ${mod}`)}</span>` } });
+  pushLog(`${what} ${S.names[other.i] || ''} - ${mod}`, out ? 'good' : 'neg');
+}
 // 每步模拟结束：把这一步合好的行放进队列
 function flushHits() {
   const now = performance.now();
@@ -2291,6 +2554,7 @@ function flushHits() {
   M.pend.clear();
 }
 function msgHtml(e) {
+  if (e.html) return e.html;
   const n = (x) => esc(x);
   // 没打中是整句（AttackMiss / AttackMissBanked / AttackMissR / AttackMissRD）
   if (!e.hits) return `<i>${n(e.dir === 'out' ? (e.shots > 1 ? `你的一组${e.weapon}完全没有打中${e.name}` : `你的${e.weapon}完全没有打中${e.name}`) : e.drone ? `${e.name}的${e.weapon}完全没有击中你` : `${e.name}完全没有打中你`)}</i>`;

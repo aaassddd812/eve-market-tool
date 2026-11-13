@@ -131,7 +131,7 @@ export function loadShipModel(key, renderer, env) {
         mats.push(material(a, { a: ta, n: tn, x: tx }, env));
       }
       if (!mats.length) return null;
-      return { geometry: g, materials: mats, r: def.r, c: def.c || [0, 0, 0], ext: g.userData.ext || null, boosters: def.boosters || [], boosterColor: def.boosterColor, bst: def.bst || null, loc: def.loc || {} };
+      return { geometry: g, materials: mats, r: def.r, c: def.c || [0, 0, 0], ext: g.userData.ext || null, boosters: def.boosters || [], boosterColor: def.boosterColor, bst: def.bst || null, loc: def.loc || {}, se: def.se || null };
     })());
   }
   return modelCache.get(key);

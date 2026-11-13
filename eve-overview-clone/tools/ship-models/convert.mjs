@@ -270,6 +270,8 @@ async function main() {
       const model = {
         dna, geo: `g/${hull}.bin`, r: +(+v.boundingSphereRadius).toFixed(1), c: Array.from(v.boundingSphereCenter || [0, 0, 0]).map((x) => +(+x).toFixed(1)),
         areas, boosters, bst, loc, boosterColor: Array.from(v.boosters?.glowColor || [0.01, 0.02, 0.03]).slice(0, 3), cat: hd?.category || '',
+        // 护盾外形椭球（SOF 船体 shapeEllipsoidCenter / Radius，客户端护盾受击特效贴在它上面）：[中心 xyz, 半轴 xyz]，米，船体坐标
+        se: hd?.shapeEllipsoidRadius ? [...Array.from(hd.shapeEllipsoidCenter || [0, 0, 0]), ...Array.from(hd.shapeEllipsoidRadius)].map((x) => +(+x).toFixed(1)) : null,
       };
       writeFileSync(join(OUT, 'm', key + '.json'), JSON.stringify(model));
       index.models[key] = { r: model.r };

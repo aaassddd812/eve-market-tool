@@ -528,6 +528,11 @@ function special(effect, item, { ship, exempt, shipItems, ownedItems }) {
       for (const m of shipItems) if (m.kind === 'module' && hit(m)) m.addMod(AT.power, { op: OP.postPercent, src: item, srcAttr: AT.colossusSpringboard, exempt: true });
       return true;
     }
+    case 'emergencyHullEnergizer':
+      // 紧急船体激能器（effects.Invulnerability）：效果数据里没有修改器（服务器脚本）。开着时按装备自己的
+      // hullEmDamageResonance 974 / hullThermal 977 / hullKinetic 976 / hullExplosive 975 乘到船的结构抗性上
+      [974, 977, 976, 975].forEach((src, k) => ship.addMod(RESIST.hull[k], { op: OP.postMul, src: item, srcAttr: src, exempt }));
+      return true;
     case 'adaptiveArmorHardener':
       // 反应式装甲增强器：按初始的平均分配计算
       for (const a of RESIST.armor) ship.addMod(a, { op: OP.postMul, src: item, srcAttr: a, exempt });

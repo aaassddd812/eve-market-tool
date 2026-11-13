@@ -13,8 +13,8 @@
 // 观察者视角：拖动旋转、滚轮 / 双指缩放、右键 / 双指拖动平移；悬停显示舰船，点击选中，双击镜头跟随（手动转动镜头会退出导播，hooks.onDirector）。
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
-import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v9';
-import { createFx } from './sim-fx.js?v=v25';
+import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v10';
+import { createFx } from './sim-fx.js?v=v30';
 
 const COLOR = { A: new THREE.Color(0x5b9bff), B: new THREE.Color(0xff4b3e) };
 const WRECK = new THREE.Color(0x8a9099);
@@ -31,8 +31,15 @@ const WRECK_PATH = 'shared/brackets/wreck.png';   // 残骸（客户端 wreck �
 // 泛光：逐级减半降采样 6 次（13 点滤波）→ 每级横向、纵向高斯模糊，半径 = 该级最长边 × sizeScale × stepNSize × 0.01 →
 //       从最粗一级往上加，每级乘 stepNTint × brightness ÷ 6。
 // 合成：场景解码成线性；泛光过 Uncharted2 曲线后加上去；乘曝光；再过 Uncharted2：U(2c) ÷ U(W)；sRGB 编码；加抖动。
-// 数值是 Tr2PPBloomEffect / Tr2PPTonemappingEffect 的默认值。动态曝光（按画面直方图自动调）没做，曝光固定为 1。
+// 数值是 Tr2PPBloomEffect / Tr2PPTonemappingEffect 的默认值（EVE 只走 Uncharted2 分支，default postprocess.black 里的 slope / toe 等是 ACES 参数、EVE 不用）。
+// 动态曝光（Tr2PostProcessRenderer::RenderDynamicExposure，照 ccpwgl2 的 WebGL 实现）：
+//   每个像素 sRGB 解码、Rec.709 亮度，按 ln(亮度) 在 ln(minLuminance)~ln(maxLuminance) 间分 64 桶 →
+//   取像素数 0.9 / 0.98 分位上的亮度（桶内插值），平均 = 两者中点；scale = clamp(0.5 ÷ 平均, 2^minExposure, 2^maxExposure)，目标 = 0.5 ÷ scale；
+//   在平方根空间按 1 − e^(−速度 × dt) 追目标（变亮 increaseSpeed，变暗 decreaseSpeed）；
+//   合成时曝光 = middleValue ÷ mix(0.5, 适应值, influence)（tonemapping 动态曝光分支的反汇编）。
+//   需要浮点混合（EXT_float_blend）；没有时曝光固定为 1。
 const BLOOM = { sizeScale: 4, brightness: 0.2, size: [0.3, 1, 2, 10, 30, 64], tint: [0.3465, 0.138, 0.1176, 0.066, 0.066, 0.061] };
+const EXPO = { influence: 1, middleValue: 0.55, minExposure: -3.7, maxExposure: 10, minLuminance: 0.4649, maxLuminance: 10, minBrightness: 0.9, maxBrightness: 0.98, increaseSpeed: 2, decreaseSpeed: 1.5 };   // Tr2PPDynamicExposureEffect 类默认值
 const TONE = { A: 0.125, B: 0.25, C: 0.1, D: 0.15, E: 0.021, F: 0.3, W: 2.5 };   // shoulderStrength、linearStrength、linearAngle、toeStrength、toeNumerator、toeDenominator、whiteScale
 function createPost(renderer) {
   const gl = renderer.getContext();
@@ -64,8 +71,8 @@ function createPost(renderer) {
       }
       gl_FragColor = vec4(second > 0.5 ? o * tint + texture2D(last, vUv).rgb : o, 1.0);
     }`);
-  const tone = mk({ scene: { value: null }, bloom: { value: null }, exposure: { value: 1 }, useBloom: { value: 1 } },
-    `uniform sampler2D scene, bloom; uniform float exposure, useBloom; varying vec2 vUv;
+  const tone = mk({ scene: { value: null }, bloom: { value: null }, expo: { value: null }, useExpo: { value: 0 }, useBloom: { value: 1 } },
+    `uniform sampler2D scene, bloom, expo; uniform float useExpo, useBloom; varying vec2 vUv;
     const float A = ${TONE.A.toFixed(4)}, B = ${TONE.B.toFixed(4)}, C = ${TONE.C.toFixed(4)}, D = ${TONE.D.toFixed(4)}, E = ${TONE.E.toFixed(4)}, F = ${TONE.F.toFixed(4)}, W = ${TONE.W.toFixed(4)};
     vec3 U(vec3 x) { return (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F; }
     void main() {
@@ -73,12 +80,125 @@ function createPost(renderer) {
       c = mix(pow(abs(c + 0.055) * 0.947867, vec3(2.4)), c * 0.077399, vec3(lessThan(c, vec3(0.04045))));
       float wInv = 1.0 / U(vec3(W)).x;
       vec3 b = texture2D(bloom, vUv).rgb * useBloom;
+      float exposure = useExpo > 0.5 ? ${EXPO.middleValue.toFixed(4)} / mix(0.5, texture2D(expo, vec2(0.0625, 0.5)).r, ${EXPO.influence.toFixed(4)}) : 1.0;
       c = (c + max(U(2.0 * b), 0.0) * wInv) * exposure;
       c = max(U(2.0 * max(c, 0.0)), 0.0) * wInv;
       c = mix(1.055 * pow(c, vec3(0.416667)) - 0.055, c * 12.92, vec3(lessThan(c, vec3(0.003131))));
       c += fract(dot(gl_FragCoord.xy, vec2(0.754878, 0.569840))) * 0.003922 - 0.001961;
       gl_FragColor = vec4(c, 1.0);
     }`);
+  // 动态曝光：直方图（64 × 1 浮点，每像素一个点加色混合）→ 测量（8 × 1，前后两帧来回读写）
+  const expo = (() => {
+    if (!gl.getExtension('EXT_float_blend')) return null;
+    const compile = (type, src) => { const sh = gl.createShader(type); gl.shaderSource(sh, src); gl.compileShader(sh); if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh)); return sh; };
+    let prog;
+    try {
+      prog = gl.createProgram();
+      gl.attachShader(prog, compile(gl.VERTEX_SHADER, `#version 300 es
+        precision highp float; precision highp int;
+        uniform highp sampler2D uSource; uniform ivec2 uSize; uniform vec2 uLogLuminance;
+        void main() {
+          ivec2 pixel = ivec2(gl_VertexID % uSize.x, gl_VertexID / uSize.x);
+          vec3 c = texelFetch(uSource, pixel, 0).rgb;
+          vec3 lin = mix(pow(abs((c + 0.055) * 0.9478673), vec3(2.4)), c * 0.07739938, lessThan(c, vec3(0.04045)));
+          float lum = dot(lin, vec3(0.2125, 0.7154, 0.0721));
+          float t = (log(lum) - uLogLuminance.x) / (uLogLuminance.y - uLogLuminance.x);
+          t = t >= 0.0 ? min(t, 1.0) : 0.0;
+          int bin = min(int(t * 64.0), 63);
+          gl_Position = vec4((float(bin) + 0.5) / 32.0 - 1.0, 0.0, 0.0, 1.0);
+          gl_PointSize = 1.0;
+        }`));
+      gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, '#version 300 es\nprecision highp float; out vec4 color; void main() { color = vec4(1.0); }'));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+    } catch (e) { console.warn('dynamic exposure', e); return null; }
+    const loc = { src: gl.getUniformLocation(prog, 'uSource'), size: gl.getUniformLocation(prog, 'uSize'), log: gl.getUniformLocation(prog, 'uLogLuminance') };
+    const vao = gl.createVertexArray();
+    const fRT = (w) => new THREE.WebGLRenderTarget(w, 1, { type: THREE.FloatType, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, depthBuffer: false, generateMipmaps: false });
+    const hist = fRT(64), buf = [fRT(8), fRT(8)];
+    let cur = 0, primed = false;
+    const measure = new THREE.ShaderMaterial({
+      glslVersion: THREE.GLSL3,
+      uniforms: { uHistogram: { value: hist.texture }, uPrevious: { value: null }, uTime: { value: 0 },
+        uLuminance: { value: new THREE.Vector4(Math.log(EXPO.minLuminance), Math.log(EXPO.maxLuminance), EXPO.minBrightness, EXPO.maxBrightness) },
+        uAdaptation: { value: new THREE.Vector4(EXPO.increaseSpeed, EXPO.decreaseSpeed, EXPO.minExposure, EXPO.maxExposure) } },
+      vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: `precision highp float; precision highp int;
+        uniform highp sampler2D uHistogram, uPrevious; uniform vec4 uLuminance, uAdaptation; uniform float uTime;
+        out vec4 color;
+        float bins[64];
+        float PercentileLuminance(uint c) {
+          if (c == 0u) return 0.0;
+          uint remaining = c; float pos = 0.0;
+          for (int i = 0; i < 64; ++i) { uint count = uint(bins[i]); if (count >= remaining) { pos = (float(i) + float(remaining) / float(count)) * 0.015625; break; } remaining -= count; }
+          return exp(mix(uLuminance.x, uLuminance.y, pos));
+        }
+        float PercentilePosition(uint c) {
+          uint remaining = c;
+          for (int i = 0; i < 64; ++i) { uint count = uint(bins[i]); if (remaining < count) return float(i) + float(remaining) / float(count); remaining -= count; }
+          return 0.0;
+        }
+        void main() {
+          int element = int(gl_FragCoord.x);
+          float previous = texelFetch(uPrevious, ivec2(element, 0), 0).x;
+          uint total = 0u;
+          for (int i = 0; i < 64; ++i) { bins[i] = texelFetch(uHistogram, ivec2(i, 0), 0).x; total += uint(bins[i]); }
+          uint low = uint(float(total) * uLuminance.z), high = uint(float(total) * uLuminance.w);
+          float lumLow = PercentileLuminance(low), lumHigh = PercentileLuminance(high);
+          float value = previous;
+          if (element == 3) value = PercentilePosition(low);
+          else if (element == 4) value = PercentilePosition(high);
+          else if (element == 5) value = lumLow;
+          else if (element == 6) value = lumHigh;
+          else if (element == 1) value = uTime;
+          else if (element == 0) {
+            float average = mix(lumLow, lumHigh, 0.5);
+            float scale = average < 0.0001 ? 5000.0 : 0.5 / average;
+            scale = max(min(scale, exp2(uAdaptation.w)), exp2(uAdaptation.z));
+            float target = 0.5 / scale;
+            float speed = previous < target ? uAdaptation.x : uAdaptation.y;
+            float lastTime = texelFetch(uPrevious, ivec2(1, 0), 0).x;
+            float k = max(1.0 - exp(-speed * (uTime - lastTime)), 0.0);
+            float adapted = mix(sqrt(previous), sqrt(target), k);
+            value = adapted * adapted;
+          }
+          color = vec4(value);
+        }`,
+      depthTest: false, depthWrite: false,
+    });
+    const t0 = performance.now();
+    return {
+      // src：解析好的场景缓冲（sRGB 编码的半浮点）；返回本帧的曝光缓冲贴图
+      run(src) {
+        const tex = renderer.properties.get(src.texture).__webglTexture;
+        if (!tex) return null;
+        if (!primed) { const cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha(); renderer.setClearColor(0x000000, 0); for (const b of buf) { renderer.setRenderTarget(b); renderer.clear(); } renderer.setClearColor(cc, ca); primed = true; }
+        renderer.setRenderTarget(hist);
+        renderer.resetState();
+        renderer.setRenderTarget(hist);
+        gl.viewport(0, 0, 64, 1);
+        gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE); gl.disable(gl.SCISSOR_TEST);
+        gl.colorMask(true, true, true, true);
+        gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.enable(gl.BLEND); gl.blendEquation(gl.FUNC_ADD); gl.blendFunc(gl.ONE, gl.ONE);
+        gl.useProgram(prog);
+        gl.bindVertexArray(vao);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.uniform1i(loc.src, 0); gl.uniform2i(loc.size, src.width, src.height); gl.uniform2f(loc.log, Math.log(EXPO.minLuminance), Math.log(EXPO.maxLuminance));
+        gl.drawArrays(gl.POINTS, 0, src.width * src.height);
+        gl.disable(gl.BLEND);
+        gl.bindVertexArray(null);
+        renderer.resetState();
+        const prev = buf[cur], next = buf[1 - cur];
+        measure.uniforms.uPrevious.value = prev.texture;
+        measure.uniforms.uTime.value = (performance.now() - t0) / 1000 + 1000;   // 缓冲初始为 0：第一帧直接到目标
+        draw(measure, next);
+        cur = 1 - cur;
+        return next.texture;
+      },
+      dispose() { hist.dispose(); for (const b of buf) b.dispose(); gl.deleteProgram(prog); gl.deleteVertexArray(vao); },
+    };
+  })();
   let sceneRT = null, mips = [], ups = [], size = '';
   const rt = (w, h, o = {}) => new THREE.WebGLRenderTarget(Math.max(1, w), Math.max(1, h), { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, ...o });
   function resize(w, h) {
@@ -140,10 +260,13 @@ function createPost(renderer) {
       last = mips[i];
     }
     tone.uniforms.scene.value = sceneRT.texture; tone.uniforms.bloom.value = last ? last.texture : blackTex; tone.uniforms.useBloom.value = last ? 1 : 0;
+    let ex = null;
+    try { ex = expo?.run(sceneRT) || null; } catch (e) { console.warn('dynamic exposure', e); }
+    tone.uniforms.expo.value = ex || blackTex; tone.uniforms.useExpo.value = ex ? 1 : 0;
     draw(tone, null);
   }
   const blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); blackTex.needsUpdate = true;
-  return { render, dispose() { for (const t of [sceneRT, ...mips, ...ups]) t?.dispose(); } };
+  return { render, dispose() { for (const t of [sceneRT, ...mips, ...ups]) t?.dispose(); expo?.dispose(); } };
 }
 
 export function createView(host, hooks = {}, opt = {}) {
@@ -185,11 +308,21 @@ export function createView(host, hooks = {}, opt = {}) {
   renderer.domElement.addEventListener('pointerdown', (e) => { controls.zoomSpeed = e.pointerType === 'touch' ? 1.4 : 5; });
 
   // 光照：一个恒星方向光 + 环境反射（深蓝星云渐变，金属漆面靠它出反光）
-  const sun = new THREE.DirectionalLight(0xfff2e0, 3.2);
+  // 恒星颜色照客户端 sun.py：远处 sunDiffuseColor = 恒星发光色（graphicIDs.emissiveColor）的色相、饱和度减半、明度 1.5；
+  // 这里取黄色恒星 sun_yellow_01a（5, 4.47, 3.24）。quadv5 的直射光 = 恒星色 × NdotL ×（漫反射 + π × 高光），
+  // three 的漫反射多除了 π，所以光强给 π
+  const sun = new THREE.DirectionalLight(0xffffff, Math.PI);
+  {
+    const e = [5, 4.470588, 3.235294], mx = Math.max(...e), mn = Math.min(...e), s = (mx - mn) / mx * 0.5;
+    const c = e.map((x) => 1.5 * (1 - s * (mx - x) / (mx - mn || 1)));   // 同色相、饱和度 s、明度 1.5
+    sun.color.setRGB(c[0], c[1], c[2]);
+  }
   sun.position.set(0.6, 0.5, 0.35);
   const amb = new THREE.AmbientLight(0x8090b0, 0.25);
   scene.add(sun, amb);
-  let env = null;
+  let env = null, envI = 1;   // 环境反射贴图、强度（场景的 reflectionIntensity）
+  // 载入模型时套上当前的环境反射（星空晚到时下面统一换）
+  const loadModel = (k) => loadShipModel(k, renderer, env).then((def) => { if (def) for (const mt of def.materials) { mt.envMap = env; mt.envMapIntensity = envI; } return def; });
   {
     const pm = new THREE.PMREMGenerator(renderer);
     const s = new THREE.Scene();
@@ -248,23 +381,67 @@ export function createView(host, hooks = {}, opt = {}) {
   sky.frustumCulled = false;
   sky.visible = level === 'high';
   scene.add(sky);
-  // 游戏星空（opt.skybox = 立方体六个面的目录，px / nx / py / ny / pz / nz.webp，tools/ui-assets/fetch.mjs --sky 转换）：
-  // 加载好后当背景，代替程序生成的星云和星点
+  // 游戏星空（opt.skybox = tools/ui-assets/fetch.mjs --sky 转换的目录）：照客户端 EveSpaceScene 的背景着色器 background.fx 画——
+  //   星云立方体（HDR，sRGB 编码存）+ 三层平铺星点（StarMap 按立方体面坐标平铺 4 / 5 / 6 次，
+  //   反射立方体的 alpha 按 AlphaBlend1 / 2 的区间决定每层星点在哪里出现），整体 × Tint × nebulaIntensity；
+  //   船体环境反射用同一场景的反射立方体（客户端 EveSpaceSceneEnvMap = envMap1ResPath，即 *_cube_refl），乘 reflectionIntensity
   let skyCube = null, skyState = opt.skybox ? 'loading' : 'ok';
+  const bg = new THREE.Mesh(new THREE.SphereGeometry(5000, 32, 16));
+  bg.renderOrder = -11;
+  bg.frustumCulled = false;
+  bg.visible = false;
+  scene.add(bg);
   if (opt.skybox) {
-    new THREE.CubeTextureLoader().setPath(opt.skybox.replace(/\/?$/, '/')).load(['px', 'nx', 'py', 'ny', 'pz', 'nz'].map((f) => f + '.webp'), (t) => {
-      t.colorSpace = THREE.SRGBColorSpace;
-      skyCube = t;
-      scene.background = t;
+    const dir = opt.skybox.replace(/\/?$/, '/');
+    const faces = ['px', 'nx', 'py', 'ny', 'pz', 'nz'].map((f) => f + '.webp');
+    const cube = (path, cs) => new Promise((ok, no) => new THREE.CubeTextureLoader().setPath(path).load(faces, (t) => { t.colorSpace = cs; ok(t); }, undefined, no));
+    const tex2d = (url) => new Promise((ok, no) => new THREE.TextureLoader().load(url, ok, undefined, no));
+    Promise.all([
+      cube(dir, THREE.SRGBColorSpace), cube(dir + 'refl/', THREE.NoColorSpace), tex2d(dir + '../stars.webp'),
+      fetch(dir + 'scene.json').then((r) => (r.ok ? r.json() : {})).catch(() => ({})),
+    ]).then(([neb, refl, star, sc]) => {
+      star.wrapS = star.wrapT = THREE.RepeatWrapping;
+      star.colorSpace = THREE.NoColorSpace;
+      star.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      star.needsUpdate = true;
+      const v4 = (a, d) => new THREE.Vector4(...(a || d));
+      bg.material = new THREE.ShaderMaterial({
+        uniforms: {
+          neb: { value: neb }, alpha: { value: refl }, star: { value: star },
+          sp: { value: v4(sc.starParameters, [4, 5, 6, 0.8]) }, ab1: { value: v4(sc.alphaBlend1, [0.0615, 0.7616, 0.7004, 1]) }, ab2: { value: v4(sc.alphaBlend2, [0.2198, 0.8375, 0, 0]) },
+          // nebulaIntensity：m01 的场景文件里没写，按 1 处理（引擎默认值没拿到）
+          tint: { value: new THREE.Vector3(...(sc.tint || [1, 1, 1]).slice(0, 3)).multiplyScalar(sc.nebulaIntensity ?? 1) },
+        },
+        vertexShader: 'varying vec3 vD; void main() { vD = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+        // 第 2、3 层星点的平移量（Layer 2 / 3 x、y offset）场景文件里没写，取 0
+        fragmentShader: `uniform samplerCube neb, alpha; uniform sampler2D star; uniform vec4 sp, ab1, ab2; uniform vec3 tint; varying vec3 vD;
+          void main() {
+            vec3 d = vec3(-vD.x, vD.y, vD.z);   // 和 three 的立方体背景同向
+            vec3 a = abs(d);
+            float ma = max(max(a.x, a.y), a.z);
+            vec3 sel = vec3(greaterThanEqual(a, vec3(ma)));
+            vec2 uv = (vec2(dot(sel, vec3(d.z, -d.z, d.x)), dot(sel, vec3(d.y, d.x, -d.y))) / ma + 1.0) * 0.5;
+            vec3 s1 = texture2D(star, uv * sp.x).rgb, s2 = texture2D(star, uv * sp.y).rgb, s3 = texture2D(star, uv * sp.z).rgb;
+            float m = textureCube(alpha, d).a;
+            vec2 t = 1.0 - clamp((vec2(m) - ab1.xz) / (ab1.yw - ab1.xz), 0.0, 1.0);
+            float t3 = 1.0 - clamp((m - ab2.x) / (ab2.y - ab2.x), 0.0, 1.0);
+            vec3 c = max((sp.w * (s1 * t.x + s2 * t.y + s3 * t3) + textureCube(neb, d).rgb) * tint, 0.0);
+            gl_FragColor = vec4(mix(1.055 * pow(c, vec3(0.416667)) - 0.055, c * 12.92, vec3(lessThan(c, vec3(0.0031308)))), 1.0);
+          }`,
+        side: THREE.BackSide, depthTest: false, depthWrite: false,
+      });
+      bg.visible = true;
+      skyCube = neb;
       const pm = new THREE.PMREMGenerator(renderer);
-      env = pm.fromCubemap(t).texture;
+      env = pm.fromCubemap(refl).texture;
       pm.dispose();
-      for (const m of models.values()) for (const mt of m.def?.materials || []) { mt.envMap = env; mt.needsUpdate = true; }
-      amb.intensity = 0;
+      envI = sc.reflectionIntensity ?? 1;
+      for (const set of [models, tModels, dModels]) for (const m of set.values()) for (const mt of m.def?.materials || []) { mt.envMap = env; mt.envMapIntensity = envI; mt.needsUpdate = true; }
+      amb.intensity = 0;   // quadv5 没有环境光常量，暗面只靠环境立方体
       sky.visible = false;
       for (const p of starPts) p.visible = false;
       skyState = 'ok';
-    }, undefined, () => { skyState = 'fail'; });
+    }).catch(() => { skyState = 'fail'; });
   }
 
   // 总览图标：屏幕空间的点精灵，图集里按类别取图
@@ -331,7 +508,7 @@ export function createView(host, hooks = {}, opt = {}) {
     if (!m) {
       m = { state: 'loading', def: null, mesh: null, cap: 0, list: [] };
       tModels.set(k, m);
-      loadShipModel(k, renderer, env).then((def) => { if (!def) { m.state = 'none'; return; } m.def = def; m.state = 'ok'; });
+      loadModel(k).then((def) => { if (!def) { m.state = 'none'; return; } m.def = def; m.state = 'ok'; });
     }
     return m;
   }
@@ -374,7 +551,7 @@ export function createView(host, hooks = {}, opt = {}) {
       if (!m) {
         m = { state: 'loading', units, mesh: null, wreck: wrecks.has(k) };
         models.set(k, m);
-        loadShipModel(k, renderer, env).then((def) => {
+        loadModel(k).then((def) => {
           if (models.get(k) !== m) return;
           if (!def) { m.state = 'none'; progress(); return; }
           m.def = def;
@@ -396,7 +573,7 @@ export function createView(host, hooks = {}, opt = {}) {
     if (!m) {
       m = { state: 'loading', cap: 0, mesh: null, def: null };
       dModels.set(k, m);
-      loadShipModel(k, renderer, env).then((def) => { if (!def) { m.state = 'none'; return; } m.def = def; m.state = 'ok'; });
+      loadModel(k).then((def) => { if (!def) { m.state = 'none'; return; } m.def = def; m.state = 'ok'; });
     }
     return m;
   }
@@ -418,7 +595,144 @@ export function createView(host, hooks = {}, opt = {}) {
     sh: { keys: [[0, [0, 0, 0]], [0.5, [0.5529, 0.7333, 0.9686]], [9.5, [0.5529, 0.7333, 0.9686]], [10, [0, 0, 0]]], gain: 5, F: [0.1, -0.1, -0.744], l1: 'caustics2', l2: 'caustics2', mask: 'caustics2', t1: [1, 1, 0, 0], s1: [0.05, 0.1, 5, 0], t2: [1, -1, 0, 0], s2: [0.05, 0.1, 0, 0], loop: true },
     ah: { keys: [[0, [0, 0, 0]], [0.5, [0.1294, 0.1059, 0.0706]], [19.5, [0.4392, 0.3647, 0.2549]], [20, [0, 0, 0]]], gain: 5, F: [12, 20, 0.1], l1: 'caustics2', l2: 'waves', mask: 'caustics2', t1: [1, 1, 0, 0], s1: [0, 0, 5, 0], t2: [0, 0.5, 0, 0], s2: [0, -0.3, 0, 0], loop: true },
   };
+  // 紧急船体激能器（effects.Invulnerability → fisfx/module/invulnerability_ov_t1a.black）：两层 fx3dv5（spaceobject/v5/fx/fx3dv5 反汇编）
+  //   菲涅尔同上（F.y = 亮度曲线 × 绑定倍数）；n = 体积(p×L1T.x + L1T.yzw + frac(L1S.x×时间) + L1S.yzw).x × 体积(同理 L2).y，p = 模型空间坐标
+  //   遮罩 = 2D(|p − L3C| × L3T.xy + L3T.zw + frac(L3S.xy×时间) + L3S.zw)；颜色 = n × 遮罩.rgb × cb0[8] + 遮罩.a × cb0[9]
+  //   cb0[8] / cb0[9] 当成 BaseColor / FxColor（常量槽位顺序是按着色器用法推的）
+  //   曲线：Brightness（Hermite）绑到第一层 F.y ×5、第二层 ×1.42；UvOffset 0→1（10 秒）绑到第一层 L1S.w ×0.75、L2S.w ×1
+  const BRIGHT = [[0, 0, 0, 0, 2], [0.35484, 0.745, 1.50169, 0.82593, 2], [1, 1, 0, 0, 1], [9, 1, 0, 0, 1], [9.57309, 0.72643, -0.7423, -0.99647, 2], [10, 0, 0, 0, 2]];
+  const HFX3 = {
+    hi: { len: 10, curve: BRIGHT, passes: [
+      { F: [2, 5, 0], l1t: [10, 0, 0, 0], l1s: [-0.5, 0, 0, 0], l1w: 0.75, l2t: [14, 0, 0, 0], l2s: [0.5, 0, 0, 0], l2w: 1, l3t: [-0.5, -0.25, -0.5, 0.75], l3s: [0.5, 0.33, 0, 0], base: [0.5059, 0.7843, 1, 1], fx: [0.6, 0.8863, 1, 1], mask: 'gradientbeat_02e' },
+      { F: [0.1, 1.42, 0], l1t: [7, 0, 0, 0], l1s: [-0.5, 0, 0, 1.416], l1w: 0, l2t: [12, 0, 0, 0], l2s: [0.5, 0, 0, 1], l2w: 0, l3t: [-0.333, -0.333, 0, 0], l3s: [0.1, 0.2, 0, 0], base: [0.2667, 0.4314, 0.5333, 1], fx: [0.2196, 0.3176, 0.4471, 1], mask: 'gradientbeat_02f' },
+    ] },
+  };
   for (const h of Object.values(HFX)) h.len = h.keys[h.keys.length - 1][0];
+  Object.assign(HFX, HFX3);
+  // 隐形装置（effects.Cloak → fisfx/cloaking/cloaking.black，EveMeshOverlayEffect）。客户端曲线：
+  //   CloakAmount 0 → 1.13（4.9 秒，线性）绑到船的 clipSphereFactor（从一个损伤定位点开始溶解）；FresnelTweaker 0.35 → 1.3（3.01 秒）→ 0.35（6 秒，Hermite）绑到叠加层 F.y
+  //   解除隐形（effects.Uncloak）= 同一组曲线倒着放（scale −1，从 6 秒开始）；别人的船去掉加色 / 扭曲层（只剩溶解），自己的船保留
+  // 这里简化：溶解没做（CloakAmount ≥ 1 时整船不画，之前照常画）；fxcloakv5 的六边形 / 噪声层、扭曲层、过渡层没移植，
+  //   只画 CloakWaves_widefresnel 的菲涅尔（F = 16, 曲线, 0.25；FxColor）+ CloakColor 的底色，菲涅尔公式借用上面的 skinned_fxv3
+  HFX.ck = { ghost: true, len: 6 };
+  const CK_FRES = [[0, 0.35, 0, 0.009, 2], [3.01, 1.3, -0.028, -0.028, 2], [6, 0.35, -0.012, 0, 2]];
+  let ghostMat = null;
+  function cloakMat() {
+    return (ghostMat ||= new THREE.ShaderMaterial({
+      uniforms: { time: { value: 0 } },
+      vertexShader: `varying vec3 vN, vV, vCol;
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+        void main() {
+          mat4 im = modelMatrix * instanceMatrix;
+          vec4 wp = im * vec4(position, 1.0);
+          vN = mat3(im) * normal; vV = normalize(cameraPosition - wp.xyz);
+          vCol = vec3(0.0);
+          #ifdef USE_INSTANCING_COLOR
+          vCol = instanceColor;
+          #endif
+          gl_Position = projectionMatrix * viewMatrix * wp;
+          #include <logdepthbuf_vertex>
+        }`,
+      fragmentShader: `varying vec3 vN, vV, vCol;
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
+        void main() {
+          #include <logdepthbuf_fragment>
+          float d = clamp(dot(vV, normalize(vN)) - 0.25, 0.0, 1.0);
+          float fres = pow(1.0 - d, 16.0) * vCol.x;
+          gl_FragColor = vec4(fres * vec3(0.4275, 0.4627, 0.4824) + vec3(0.0118, 0.0196, 0.0235), 1.0);
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    }));
+  }
+  // 第 i 艘船的隐形状态：{ hidden（整船不画）, fy（菲涅尔曲线值）}；没开 / 早已解除 → null
+  function cloakAt(i, t) {
+    const rack = rec.units[i].rack || [];
+    const j = rack.findIndex((x) => x.hfx === 'ck');
+    if (j < 0 || j >= 32) return null;
+    const F = rec.frames, dt = rec.dt, k = Math.max(0, Math.min(F.length - 1, Math.floor(t / dt))), bitm = 1 << j;
+    let a;
+    if (F[k].act?.[i] & bitm) a = hfxAge(i, j, t, { loop: true, len: 1e9 });
+    else {
+      let b = 0;
+      const n = Math.ceil(6 / dt) + 1;
+      while (b < n && F[k - b] && !(F[k - b].act?.[i] & bitm)) b++;
+      if (b >= n || !F[k - b]) return null;
+      a = 6 - (t - F[k - b].t);   // 倒着放
+      if (a <= 0) return null;
+    }
+    return { hidden: Math.min(1.13, 1.13 * a / 4.9) >= 1, fy: curveAt(CK_FRES, Math.min(a, 6)) };
+  }
+  // 曲线求值：[时间, 值, 左切线, 右切线, 插值]；插值 1 = 线性，2 = Hermite（用前一键的右切线、后一键的左切线）
+  function curveAt(K, t) {
+    if (t <= K[0][0]) return K[0][1];
+    let j = 1;
+    while (j < K.length - 1 && K[j][0] < t) j++;
+    const a = K[j - 1], b = K[j], d = Math.max(1e-6, b[0] - a[0]), f = Math.min(1, (t - a[0]) / d);
+    if (a[4] !== 2) return a[1] + (b[1] - a[1]) * f;
+    const f2 = f * f, f3 = f2 * f;
+    return (2 * f3 - 3 * f2 + 1) * a[1] + (f3 - 2 * f2 + f) * d * a[3] + (-2 * f3 + 3 * f2) * b[1] + (f3 - f2) * d * b[2];
+  }
+  // 体积噪声 3dfx_voronoi_02a（128³ DXT5 → 64³，竖排切片 voronoi3d.png）
+  const vor3 = new THREE.Data3DTexture(new Uint8Array(64 * 64 * 64 * 4).fill(64), 64, 64, 64);
+  vor3.format = THREE.RGBAFormat; vor3.magFilter = THREE.LinearFilter; vor3.minFilter = THREE.LinearMipmapLinearFilter; vor3.generateMipmaps = true;
+  vor3.wrapS = vor3.wrapT = vor3.wrapR = THREE.RepeatWrapping; vor3.needsUpdate = true;
+  let vorAsked = false;
+  function vorLoad() {
+    if (vorAsked) return;
+    vorAsked = true;
+    const im = new Image();
+    im.onload = () => {
+      const c = document.createElement('canvas'); c.width = 64; c.height = 4096;
+      const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(im, 0, 0);
+      vor3.image.data.set(g.getImageData(0, 0, 64, 4096).data); vor3.needsUpdate = true;
+    };
+    im.src = `${opt.fx || 'assets/eveui/fx/'}hull/voronoi3d.png?v=1`;
+  }
+  // 模型空间坐标：客户端用顶点坐标直接采样（UV 缩放 7～14），按米算在大船上会重复几百次，这里按模型包围球归一化到 [-1, 1]
+  function fx3dMat(P, def) {
+    vorLoad();
+    const mk = new THREE.Vector4(...P.base), fk = new THREE.Vector4(...P.fx);
+    const mt = hullTex(P.mask);
+    return new THREE.ShaderMaterial({
+      uniforms: { vol: { value: vor3 }, tm: { value: mt }, F: { value: new THREE.Vector3(...P.F) },
+        l1t: { value: new THREE.Vector4(...P.l1t) }, l1s: { value: new THREE.Vector4(...P.l1s) }, l2t: { value: new THREE.Vector4(...P.l2t) }, l2s: { value: new THREE.Vector4(...P.l2s) },
+        l3t: { value: new THREE.Vector4(...P.l3t) }, l3s: { value: new THREE.Vector4(...P.l3s) }, uvw: { value: new THREE.Vector2(P.l1w, P.l2w) },
+        base: { value: mk }, fxc: { value: fk }, time: { value: 0 }, oc: { value: new THREE.Vector3(...(def?.c || [0, 0, 0])) }, orr: { value: 1 / Math.max(1, def?.r || 1) } },
+      vertexShader: `uniform vec3 oc; uniform float orr; varying vec3 vP, vN, vV, vCol;
+        #include <common>
+        #include <logdepthbuf_pars_vertex>
+        void main() {
+          mat4 im = modelMatrix * instanceMatrix;
+          vec4 wp = im * vec4(position, 1.0);
+          vN = mat3(im) * normal; vV = normalize(cameraPosition - wp.xyz); vP = (position - oc) * orr;
+          vCol = vec3(0.0);
+          #ifdef USE_INSTANCING_COLOR
+          vCol = instanceColor;
+          #endif
+          gl_Position = projectionMatrix * viewMatrix * wp;
+          #include <logdepthbuf_vertex>
+        }`,
+      // vCol.x = 亮度曲线，vCol.y = UvOffset 曲线
+      fragmentShader: `precision highp sampler3D; uniform sampler3D vol; uniform sampler2D tm; uniform vec3 F; uniform vec4 l1t, l1s, l2t, l2s, l3t, l3s, base, fxc; uniform vec2 uvw; uniform float time;
+        varying vec3 vP, vN, vV, vCol;
+        #include <common>
+        #include <logdepthbuf_pars_fragment>
+        void main() {
+          #include <logdepthbuf_fragment>
+          float fy = F.y * vCol.x;
+          float d = clamp(dot(vV, normalize(vN)) - F.z, 0.0, 1.0);
+          float x = pow(1.0 - d, F.x);
+          float fres = fy < 0.0 ? (1.0 - min(x, 1.0)) * -fy : x * fy;
+          vec3 o1 = vec3(l1s.yz, l1s.w + uvw.x * vCol.y), o2 = vec3(l2s.yz, l2s.w + uvw.y * vCol.y);
+          float n = texture(vol, fract(l1s.x * time) + o1 + vP * l1t.x + l1t.yzw).x * texture(vol, fract(l2s.x * time) + o2 + vP * l2t.x + l2t.yzw).y;
+          vec4 m = texture2D(tm, length(vP) * l3t.xy + l3t.zw + fract(l3s.xy * time) + l3s.zw);
+          gl_FragColor = vec4(fres * (n * m.rgb * base.rgb + m.a * fxc.rgb), 1.0);
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+  }
   const hfxTex = {};
   const hullTex = (n) => {
     if (!n) return null;
@@ -431,8 +745,11 @@ export function createView(host, hooks = {}, opt = {}) {
   };
   const hfxMats = {};
   const whiteTex = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1); whiteTex.needsUpdate = true;
-  function hfxMat(kind) {
+  function hfxMat(kind, def) {
     if (hfxMats[kind]) return hfxMats[kind];
+    const [, base, pass] = /^(\w+?)(?:#(\d))?$/.exec(kind);
+    if (HFX[base]?.passes) return fx3dMat(HFX[base].passes[+pass || 0], def);
+    if (HFX[base]?.ghost) return cloakMat();   // 每个模型一份（模型中心 / 半径不同）
     const h = HFX[kind];
     return (hfxMats[kind] = new THREE.ShaderMaterial({
       uniforms: { t1: { value: hullTex(h.l1) }, t2: { value: hullTex(h.l2) }, tm: { value: hullTex(h.mask) || whiteTex },
@@ -493,7 +810,7 @@ export function createView(host, hooks = {}, opt = {}) {
     return -1;
   }
   function build(m) {
-    if (m.hfx) for (const x of Object.values(m.hfx)) { scene.remove(x); x.dispose(); }
+    if (m.hfx) for (const x of Object.values(m.hfx)) { scene.remove(x); x.dispose(); if (x.material !== ghostMat && !Object.values(hfxMats).includes(x.material)) x.material.dispose(); }
     m.hfx = {};
     if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); }
     m.mesh = new THREE.InstancedMesh(m.def.geometry, m.def.materials, m.units.length);
@@ -693,6 +1010,7 @@ export function createView(host, hooks = {}, opt = {}) {
       tm.list.length = 0;
     }
   }
+  const shT = new THREE.Object3D(), qI = new THREE.Quaternion();
   const P = {
     mount: (i, ri, pick, out) => mountAt(i, ri, pick, out),
     get rec() { return rec; },
@@ -703,7 +1021,18 @@ export function createView(host, hooks = {}, opt = {}) {
     extentOf: (i) => models.get(keyOf(i))?.def?.ext || null,   // 包围盒半轴（米）
     radiusM: (i) => shipIndex?.models?.[keyOf(i)]?.r || rec.units[i].radius || 50,
     get heading() { return heading; },
-    shield: (i) => { const F = frameAt(lastDrawT); return i * 3 < F.hp.length && F.hp[i * 3] > 0; },
+    shield: (i) => { const F = frameAt(lastDrawT); return i * 3 < F.hp.length && F.hp[i * 3] > 0 ? i + 1 : 0; },
+    // 护盾椭球（模型的 se：船体坐标的中心、半轴，米；几何镜像了 X）→ 世界矩阵（千米）
+    shell: (i, out) => {
+      const se = models.get(keyOf(i))?.def?.se, d = drawn[i];
+      if (!se || !d) return null;
+      shT.position.set(-se[0], se[1], se[2]).applyQuaternion(heading[i] || qI).multiplyScalar(KM);
+      shT.position.x += d.x; shT.position.y += d.y; shT.position.z += d.z;
+      shT.quaternion.copy(heading[i] || qI);
+      shT.scale.set(se[3] * KM, se[4] * KM, se[5] * KM);
+      shT.updateMatrix();
+      return out.copy(shT.matrix);
+    },
   };
   // 悬停 / 选中 / 点名集火圈：屏幕空间的细圆（1 像素线宽），贴着总览图标
   const ringGeo = new THREE.BufferGeometry();
@@ -1049,12 +1378,21 @@ export function createView(host, hooks = {}, opt = {}) {
   const kmPerPx = (p) => 2 * Math.max(1e-6, camera.position.distanceTo(p)) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / Math.max(1, host.clientHeight);
 
   // 帧插值：第 i 艘船在时间 t 的位置（千米）；还没入场返回 null
+  // 微跳事件（引擎 events 里 kind = mjd，t = 落地那一帧的时间）：单位 → 落地帧时间集合
+  let jumpN = -1, jumpRec = null;
+  const jumps = new Map();
+  function jumped(i, t) {
+    const ev = rec.events || [];
+    if (ev.length !== jumpN || jumpRec !== rec) { jumpN = ev.length; jumpRec = rec; jumps.clear(); for (const e of ev) if (e.kind === 'mjd') (jumps.get(e.unit) || jumps.set(e.unit, new Set()).get(e.unit)).add(e.t); }
+    return jumps.get(i)?.has(t) || false;
+  }
   function posAt(i, t, out) {
     const F = rec.frames, dt = rec.dt;
     const k = Math.max(0, Math.min(F.length - 1, Math.floor(t / dt)));
     const a = F[k], b = F[Math.min(F.length - 1, k + 1)];
     if (i * 3 >= a.pos.length) return null;
-    const f = b === a || i * 3 >= b.pos.length ? 0 : Math.max(0, Math.min(1, (t - a.t) / (b.t - a.t || 1)));
+    // 微跳：客户端是瞬移（原地消失、落点出现），这一段不插值，到下一帧直接跳过去
+    const f = b === a || i * 3 >= b.pos.length || jumped(i, b.t) ? 0 : Math.max(0, Math.min(1, (t - a.t) / (b.t - a.t || 1)));
     out.set(
       (a.pos[i * 3] + (b.pos[i * 3] - a.pos[i * 3]) * f) * KM,
       (a.pos[i * 3 + 1] + (b.pos[i * 3 + 1] - a.pos[i * 3 + 1]) * f) * KM,
@@ -1165,10 +1503,13 @@ export function createView(host, hooks = {}, opt = {}) {
         // 残骸不转：客户端 Wreck.SetBallRotation 直接沿用爆掉那艘船的姿态（yaw/pitch/roll），之后静止
         tmp.scale.setScalar(KM);
         tmp.updateMatrix();
-        m.mesh.setMatrixAt(c, tmp.matrix);
-        m.mesh.setColorAt(c, d.alive || m.wreck ? white : dark);
-        c++;
-        if (d.alive && !m.wreck) for (const mt of mountsOf(i, m.def)) {
+        const ck = d.alive && !m.wreck ? cloakAt(i, t) : null;
+        if (!ck?.hidden) {
+          m.mesh.setMatrixAt(c, tmp.matrix);
+          m.mesh.setColorAt(c, d.alive || m.wreck ? white : dark);
+          c++;
+        }
+        if (d.alive && !m.wreck && !ck?.hidden) for (const mt of mountsOf(i, m.def)) {
           const tm = tModels.get(mt.k);
           if (tm?.state === 'ok') tm.list.push(new THREE.Matrix4().multiplyMatrices(tmp.matrix, mt.mat));
         }
@@ -1179,13 +1520,25 @@ export function createView(host, hooks = {}, opt = {}) {
           for (let j = 0; j < rack.length && j < 32; j++) {
             const kind = rack[j].hfx;
             if (!kind || !HFX[kind]) continue;
-            const col = hfxCurve(HFX[kind], hfxAge(i, j, t, HFX[kind]));
+            const H = HFX[kind];
+            if (H.ghost) {   // 隐形：亮度曲线值放进实例颜色
+              if (ck) best[kind] = new THREE.Color(ck.fy, 0, 0);
+              continue;
+            }
+            if (H.passes) {   // fx3dv5 类：实例颜色带曲线值（亮度、UvOffset）；开着时每个模块周期从头播一次（10 秒曲线，周期 17.5 秒）
+              const age = hfxAge(i, j, t, { loop: true, len: rack[j].cycle || H.len });
+              if (age < 0 || age >= H.len) continue;
+              const c = new THREE.Color(curveAt(H.curve, age), age / H.len, 0);
+              if (!best[kind + '#0'] || c.r > best[kind + '#0'].r) H.passes.forEach((_, p) => { best[kind + '#' + p] = c; });
+              continue;
+            }
+            const col = hfxCurve(H, hfxAge(i, j, t, H));
             if (col && (!best[kind] || col.r + col.g + col.b > best[kind].r + best[kind].g + best[kind].b)) best[kind] = col.clone();
           }
           for (const kind in best) {
             let o = m.hfx[kind];
             if (!o) {
-              o = m.hfx[kind] = new THREE.InstancedMesh(m.def.geometry, hfxMat(kind), m.units.length);
+              o = m.hfx[kind] = new THREE.InstancedMesh(m.def.geometry, hfxMat(kind, m.def), m.units.length);
               o.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
               o.setColorAt(0, white);
               o.frustumCulled = false; o.renderOrder = 2;
@@ -1197,7 +1550,7 @@ export function createView(host, hooks = {}, opt = {}) {
             o.userData.n++;
           }
         }
-        if (d.alive) {
+        if (d.alive && !ck?.hidden) {
           // 强度：当前速度 / 最大速度（客户端 FitBoosters 把 maxVelocity 交给引擎；引擎内部的强度曲线未知，这里直接用速度比，开推进器时超过 1）
           const u = rec.units[i], sp = F.spd ? F.spd[i] : 0;
           const I = Math.max(0, Math.min(2, sp / Math.max(1, u.vel || 1)));
@@ -1540,7 +1893,7 @@ export function createView(host, hooks = {}, opt = {}) {
       models.clear();
     },
     draw,
-    render() { watchPerf(); sky.position.copy(camera.position); controls.update(); dynFov(); if (post && level === 'high') post.render(scene, camera); else { renderer.setRenderTarget(null); renderer.render(scene, camera); } drawLabels(); },
+    render() { watchPerf(); sky.position.copy(camera.position); bg.position.copy(camera.position); controls.update(); dynFov(); if (post && level === 'high') post.render(scene, camera); else { renderer.setRenderTarget(null); renderer.render(scene, camera); } drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
     setDirector(on) { director = on; dirLast = 0; if (on) { follow = -1; flyTo = null; } },
     setQuality(q) { quality = q; perf.slow = 0; perf.t0 = 0; applyLevel(q === 'low' ? 'low' : 'high'); },

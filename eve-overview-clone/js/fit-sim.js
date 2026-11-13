@@ -10,7 +10,7 @@
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失；
 // 「AT 赛」（sim-at.js）可选这一届联盟锦标赛已打过的比赛，双方选手各一行带进来（蓝队 A 方、红队 B 方），战场上像比赛直播一样显示两队名单与血条。
 import { commonFit } from './fit-kb.js?v=v30';
-import { createBattle, simulate } from './sim-engine.js?v=v23';
+import { createBattle, simulate } from './sim-engine.js?v=v27';
 import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
@@ -247,7 +247,8 @@ function forcedOff(m, key) {
   // 驾驶模拟：玩家没开的装备（槽位:序号）
   if (key && S.opt.offKeys?.has(key)) return '未开启';
   const t = data.types.get(m.type);
-  if ((t?.attrs.get(REACTIVATION_DELAY) || 0) > 0) return '长冷却，不计开启';
+  // 驾驶模拟里自己的船：隐形装置由玩家开（重启延迟在引擎里算）
+  if ((t?.attrs.get(REACTIVATION_DELAY) || 0) > 0 && !(S.opt.cloakOk && effName(t).some((n) => CLOAK_EFFECTS.includes(n)))) return '长冷却，不计开启';
   // 推进器（微型跃迁推进器 / 加力燃烧器）：按选项开或关
   if (!S.opt.prop && t?.attrs.has(FE.AT.speedBoostFactor) && t.attrs.has(FE.AT.massAddition)) return '推进器未开启';
   return null;
@@ -285,7 +286,11 @@ function reprepare(list = SIDES) {
 const effName = (t) => t.effects.map((e) => ctx.data.effects.get(e)?.name);
 // 开着时船身播放的叠加特效（客户端按效果 guid 选特效文件：effects.ShieldBoosting → shieldboosting_skinned 等）
 const HULL_FX = { shieldBoosting: 'sb', fueledShieldBoosting: 'sb', armorRepair: 'ar', fueledArmorRepair: 'ar', structureRepair: 'hr',
-  modifyActiveShieldResonancePostPercent: 'sh', modifyActiveArmorResonancePostPercent: 'ah', adaptiveArmorHardener: 'ah', shipModuleNonRepeatingArmorHardener: 'ah' };
+  modifyActiveShieldResonancePostPercent: 'sh', modifyActiveArmorResonancePostPercent: 'ah', adaptiveArmorHardener: 'ah', shipModuleNonRepeatingArmorHardener: 'ah',
+  emergencyHullEnergizer: 'hi', cloaking: 'ck', cloakingWarpSafe: 'ck', cloakingPrototype: 'ck' };
+const CLOAK_EFFECTS = ['cloaking', 'cloakingWarpSafe', 'cloakingPrototype'];
+// 脉冲波投射器的效果名 → 种类
+const AOE_FIELD = { doomsdayAOEWeb: 'web', doomsdayAOENeut: 'neut', doomsdayAOEPaint: 'paint', doomsdayAOETrack: 'track', doomsdayAOEGuide: 'guide', doomsdayAOEDamp: 'damp', doomsdayAOEBubble: 'bubble', doomsdayAOEECM: 'ecm' };
 const hullFx = (t) => { for (const n of effName(t)) if (HULL_FX[n]) return HULL_FX[n]; return ''; };
 const SENSOR_TYPES = ['雷达', '光雷达', '磁力', '引力'];
 const ECM_STR = [241, 239, 240, 238];   // ECM 对雷达 / 光雷达 / 磁力 / 引力的干扰强度（与 FE.AT.sensors 顺序一致）
@@ -324,6 +329,7 @@ function fighterOf(f) {
   return { type: f.type.id, squads: f.active, size: f.attr(FE.AT.fighterSquadronSize) || 1, vel: f.attr(FE.AT.maxVelocity) || 2000, orbit: f.attr(2223) || 3000,
     cls: f.attr(FE.AT.fighterIsHeavy) ? 2 : f.attr(FE.AT.fighterIsSupport) ? 1 : 0, atk, msl };
 }
+const BURST_ATTRS = [[2468, 2469], [2470, 2471], [2472, 2473], [2536, 2537]];   // 同 fit-engine BUFF_ATTRS
 const SLOT_ORDER = ['high', 'mid', 'low'];
 function unitTemplate(row) {
   const { FE } = ctx;
@@ -332,6 +338,8 @@ function unitTemplate(row) {
   const d = stats.defense;
   const res = ['shield', 'armor', 'hull'].map((k) => FE.RESIST[k].map((a) => ship.attr(a)));
   const remote = [], webs = [], paints = [], neuts = [], noses = [], damps = [], ecms = [], points = [], localReps = [], injectors = [];
+  // 其余主动装备：立体炸弹 smarts、ECM 脉冲 bursts、跟踪 / 制导扰断 tds / gds、远程电容传输 rcaps、远程感应增强 rsbs、远程跟踪 rtcs、微型跃迁引擎 mjds、跃迁扰断力场 bubbles
+  const smarts = [], bursts = [], tds = [], gds = [], rcaps = [], rsbs = [], rtcs = [], mjds = [], bubbles = [], cloaks = [], fields = [];
   // 装备栏（状态面板用）：高、中、低槽；m 为在装备栏里的序号，引擎按序号记录每件装备是否在运转
   const rack = [];
   const idx = new Map();
@@ -339,20 +347,36 @@ function unitTemplate(row) {
     idx.set(m, rack.length);
     rack.push({ type: m.type.id, key: `${s}:${m.index}`, hfx: hullFx(m.type), slot: s, state: m.state, charge: m.charge?.type.id || 0, off: forcedOff(row.fit.slots[s]?.[m.index]) || '', cycle: (m.attr(FE.AT.duration) || m.attr(FE.AT.speed)) / 1000 || 0, reload: (m.attr(1795) || 0) / 1000,
       // 每个周期开头扣的电容（capacitorNeed）、最远作用距离（maxRange）、失准范围（falloffEffectiveness）—— 玩家开装备时检查用
-      cap: Math.max(0, m.attr(FE.AT.capNeed) || 0), rng: m.attr(FE.AT.maxRange) || 0, fall: m.attr(2044) || 0, heat: { abs: m.attr(1180) || 0, dmg: m.attr(1211) || 0, hp: m.attr(9) || 40, spd: (m.attr(1223) || 0) / 100 } });
+      cap: Math.max(0, m.attr(FE.AT.capNeed) || 0), rng: m.attr(FE.AT.maxRange) || 0, fall: m.attr(2044) || 0, heat: { abs: m.attr(1180) || 0, dmg: m.attr(1211) || 0, hp: m.attr(9) || 40, spd: (m.attr(1223) || 0) / 100 },
+      // 指挥脉冲波：给的加成（warfareBuffNID / Value）、加成持续时间（buffDuration）、弹药组（决定 buff 栏哪一格）
+      ...(m.type.group === FE.BURST_GROUP && m.charge ? { burst: { buffs: BURST_ATTRS.map(([a, b]) => [Math.round(m.attr(a)), m.attr(b)]).filter(([id, v]) => id && v), dur: (m.attr(2535) || 0) / 1000, grp: m.charge.type.group } } : {}) });
   }
   const used = new Set();
   // 弹药数：装备容量 / 弹药体积
   const loads = (m) => (m.charge && m.charge.attr(FE.AT.volume) > 0 ? Math.floor(m.attr(FE.AT.capacity) / m.charge.attr(FE.AT.volume)) : 0);
   for (const m of calc.modules) {
-    if ((FE.STATE_RANK[m.state] || 0) < 2) continue;
     const names = effName(m.type);
+    // 微型跃迁引擎（重启延迟 180 秒，平时按「长冷却，不计开启」关着）：驾驶模拟里玩家自己开；预热 = 周期时间，跳 mjdJumpRange（2066）
+    if ((names.includes('microJumpDrive') || names.includes('microJumpPortalDrive') || names.includes('microJumpPortalDriveCapital')) && m.state !== 'offline') {
+      mjds.push({ spool: (m.attr(FE.AT.duration) || 12000) / 1000, range: m.attr(2066) || 100000, delay: (m.attr(REACTIVATION_DELAY) || 0) / 1000, m: idx.get(m) }); used.add(m);
+      if (rack[idx.get(m)]) rack[idx.get(m)].off = '';
+      continue;
+    }
+    // 隐形装置：解除后 cloakingTargetingDelay（560）内不能锁定，重启延迟 moduleReactivationDelay（669）；
+    // 不标为已用 → 留在 alwaysOn 里，开关由玩家决定（降速等属性走 variant）
+    if (names.some((n) => CLOAK_EFFECTS.includes(n)) && m.state !== 'offline') {
+      cloaks.push({ m: idx.get(m), delay: (m.attr(560) || 0) / 1000, cool: (m.attr(REACTIVATION_DELAY) || 0) / 1000 });
+      continue;
+    }
+    if ((FE.STATE_RANK[m.state] || 0) < 2) continue;
     const dur = m.attr(FE.AT.duration) / 1000 || m.attr(FE.AT.speed) / 1000;
     const range = m.attr(FE.AT.maxRange), falloff = m.attr(2044) || 0;
     const k = idx.get(m);
     const mark = () => used.add(m);
     // 跃迁扰断 / 扰频（拦截泡不算）：强度累加，超过对方跃迁稳定就走不掉
     if (m.attr(105) > 0 && range > 0 && !names.includes('warpDisruptSphere')) { points.push({ str: m.attr(105), range, cycle: dur, m: k }); mark(); }
+    // 跃迁扰断力场装了聚焦脚本：不再是泡泡，变成要锁定的单目标扰断（射程按脚本改过的 maxRange，脚本自带 24 km），强度视为无穷、不关微型跃迁推进器
+    if (names.includes('warpDisruptSphere') && m.charge) { points.push({ str: 1e6, focus: true, range: range || m.charge.attr(1317) || 24000, cycle: dur, m: k }); mark(); continue; }
     // 本地维修（逐周期）：辅助护盾 / 装甲维修有弹药时不耗电，打完要装填
     const ancillary = names.includes('fueledShieldBoosting') || names.includes('fueledArmorRepair');
     const fuel = ancillary && m.charge ? loads(m) : 0;
@@ -381,6 +405,30 @@ function unitTemplate(row) {
     else if (names.includes('energyNosferatuFalloff')) { noses.push({ amt: m.attr(90), cycle: dur, rate: m.attr(90) / dur, range, falloff, m: k }); mark(); }
     else if (names.includes('remoteSensorDampFalloff')) { damps.push({ scan: m.attr(566) / 100, lock: m.attr(309) / 100, range, falloff, cycle: dur, m: k }); mark(); }
     else if (names.includes('remoteECMFalloff')) { ecms.push({ str: ECM_STR.map((a) => m.attr(a)), cycle: Math.max(1, Math.round(dur)), jam: Math.max(1, Math.round(m.attr(2822) / 1000 || dur)), range, falloff, m: k }); mark(); }
+    // 立体炸弹（empWave）：每个周期开头对 empFieldRange（99）内所有船造成伤害（伤害属性在装备上）
+    else if (names.includes('empWave')) { smarts.push({ dmg: FE.DAMAGE.map((a) => m.attr(a) || 0), range: m.attr(99) || 0, cycle: dur, type: m.type.id, m: k }); mark(); }
+    // ECM 脉冲（ECMBurstJammer）：每个周期开头对 ecmBurstRange（142）内所有船按强度掷骰
+    else if (names.includes('ECMBurstJammer')) { bursts.push({ str: ECM_STR.map((a) => m.attr(a)), range: m.attr(142) || 0, cycle: dur, jam: Math.max(1, Math.round(m.attr(2822) / 1000 || dur)), m: k }); mark(); }
+    // 武器扰断：跟踪扰断（最佳射程 351 / 失准 349 / 跟踪 767）、制导扰断（导弹速度 547 / 飞行时间 596 / 爆炸速度 847 / 爆炸半径 848），百分比，脚本已算进装备属性
+    else if (names.includes('shipModuleTrackingDisruptor')) { tds.push({ opt: m.attr(351) / 100, fall: m.attr(349) / 100, track: m.attr(767) / 100, range, falloff, cycle: dur, m: k }); mark(); }
+    else if (names.some((n) => AOE_FIELD[n])) {
+      // 超级航母脉冲波投射器（doomsdayAOE*）：对锁定的目标开，预热 doomsdayWarningDuration 后在目标位置生成半径 doomsdayAOERange 的力场，
+      // 持续 doomsdayAOEDuration（中和没有持续时间：一次性）；周期 = 效果的持续时间属性（73 或 2397～2400），一次开一轮
+      const kind = AOE_FIELD[names.find((n) => AOE_FIELD[n])];
+      const cyc = Math.max(m.attr(FE.AT.duration) || 0, ...[2397, 2398, 2399, 2400].map((a) => m.attr(a) || 0)) / 1000;
+      fields.push({ kind, warn: (m.attr(2262) || 0) / 1000, radius: m.attr(2279) || 0, life: (m.attr(2280) || 0) / 1000, reach: m.attr(FE.AT.maxRange) || 0, cycle: cyc, sig: m.attr(2281) || 0,
+        web: m.attr(FE.AT.speedFactor) / 100, paint: m.attr(FE.AT.signatureRadiusBonus) / 100, scan: m.attr(566) / 100, lock: m.attr(309) / 100,
+        opt: m.attr(351) / 100, fall: m.attr(349) / 100, track: m.attr(767) / 100, mvel: m.attr(547) / 100, flight: m.attr(596) / 100, ev: m.attr(847) / 100, er: m.attr(848) / 100,
+        amt: m.attr(97) || 0, str: [241, 239, 240, 238].map((a) => m.attr(a) || 0), cap: Math.max(0, m.attr(FE.AT.capNeed) || 0), m: k });
+      mark();
+    }
+    else if (names.includes('shipModuleGuidanceDisruptor')) { gds.push({ mvel: m.attr(547) / 100, flight: m.attr(596) / 100, ev: m.attr(847) / 100, er: m.attr(848) / 100, range, falloff, cycle: dur, m: k }); mark(); }
+    // 远程电容传输（powerTransferAmount 90）、远程感应增强（扫描分辨率 566 / 锁定距离 309）、远程跟踪电脑（351 / 349 / 767）：作用于友方
+    else if (names.includes('shipModuleRemoteCapacitorTransmitter')) { rcaps.push({ amt: m.attr(90), range, falloff, cycle: dur, m: k }); mark(); }
+    else if (names.includes('remoteSensorBoostFalloff')) { rsbs.push({ scan: m.attr(566) / 100, lock: m.attr(309) / 100, range, falloff, cycle: dur, m: k }); mark(); }
+    else if (names.includes('shipModuleRemoteTrackingComputer')) { rtcs.push({ opt: m.attr(351) / 100, fall: m.attr(349) / 100, track: m.attr(767) / 100, range, falloff, cycle: dur, m: k }); mark(); }
+    // 跃迁扰断力场（重型拦截舰的泡泡，warpDisruptSphere）：warpScrambleRange（103）内所有船都跑不掉
+    else if (names.includes('warpDisruptSphere')) { bubbles.push({ range: m.attr(103) || 0, str: m.attr(105) || 100, cycle: dur, m: k }); mark(); }
   }
   // 每门武器（空间模拟逐发计算）；fx 给 3D 视图画开火特效：伤害按弹药四种伤害的比例分配到这一发的总伤害
   const guns = stats.weapons.map((w) => {
@@ -438,7 +486,7 @@ function unitTemplate(row) {
   for (const m of calc.modules) if ((FE.STATE_RANK[m.state] || 0) >= 2 && !used.has(m) && idx.get(m) < 32) alwaysOn |= 1 << idx.get(m);
   // 走位用的距离：主力武器（输出占比最大的一类）的理想距离与最远射程
   const best = guns.slice().sort((a, b) => b.volley / b.cycle - a.volley / a.cycle)[0];
-  const remoteReach = [...remote, ...webs, ...paints, ...neuts, ...noses, ...damps, ...ecms].map((x) => x.range + x.falloff * 0.5);
+  const remoteReach = [...remote, ...webs, ...paints, ...neuts, ...noses, ...damps, ...ecms, ...tds, ...gds].map((x) => x.range + x.falloff * 0.5);
   const pref = best ? (best.vorton ? best.reach * 0.85 : best.turret ? best.opt + best.fall * 0.4 : best.reach * 0.85)
     : drones.length ? Math.min(control * 0.8, drones[0].sentry ? drones[0].opt + drones[0].fall * 0.5 : 20000)
     : fighters.length ? 40000 : remoteReach.length ? Math.min(...remoteReach) * 0.85 : 10000;
@@ -455,7 +503,7 @@ function unitTemplate(row) {
     lockRange: stats.targeting.range, sensor: stats.targeting.sensor, sensorIdx: Math.max(0, SENSOR_TYPES.indexOf(stats.targeting.sensorType)),
     local: [d.reps.shield, d.reps.armor, d.reps.hull], localReps, regenC: d.shield.hp, regenTau: d.shield.hp && stats.defense.passiveRegen ? 2.5 * d.shield.hp / stats.defense.passiveRegen : 0,
     cap: { max: cap.capacity, tau: cap.recharge, use: Math.max(0, cap.usage), other: Math.max(0, cap.usage - gunCap), otherNoInj: Math.max(0, cap.usage - gunCap + injectors.reduce((t, x) => t + x.bonus * x.ammo / (x.cycle * x.ammo + x.reload), 0)) },
-    injectors, remote, webs, paints, neuts, noses, damps, ecms, ehp: d.ehp, rack, alwaysOn
+    injectors, remote, webs, paints, neuts, noses, damps, ecms, smarts, bursts, tds, gds, rcaps, rsbs, rtcs, mjds, bubbles, cloaks, fields, ehp: d.ehp, rack, alwaysOn
   };
 }
 
@@ -771,7 +819,7 @@ function mountView(host) {
   host.classList.remove('is-off');
   host.closest('.sim-stage')?.classList.remove('is-off');
   loadBar(0, 0);
-  import('./sim-3d.js?v=v46').then((m) => {
+  import('./sim-3d.js?v=v51').then((m) => {
     if (BT.host !== host || !host.isConnected) return;
     BT.view = m.createView(host, {
       onPick: (i) => { BT.sel = i; updateBattleUi(); },
@@ -2646,10 +2694,20 @@ function renderDetail() {
 }
 
 function fitView(item, row) {
-  const { esc, FE, data } = ctx;
+  const { esc } = ctx;
   const ev = evaluate(item);
-  const u = ev.unit;
-  const fit = ev.fit;
+  const using = item.key === 'row';
+  return `<div class="sim-dt-view-head"><h5>${esc(item.label)}</h5>
+      <div class="sim-dt-actions">
+        <button type="button" class="btn btn-primary" data-sim-dt-use${using ? ' disabled' : ''}>${using ? '正在使用' : '使用这套装配'}</button>
+        <button type="button" class="btn btn-ghost" data-sim-dt-open title="在装配页打开这套装配，可以改装备后再加入模拟">在装配页打开</button>
+      </div></div>
+    ${fitBody(ev.fit, ev.unit)}`;
+}
+// 装配内容（属性卡片 + 抗性表 + 按槽位的装备列表）：战场模拟的装配详情、驾驶模拟的「查看装配」共用
+// pilot：驾驶模拟里看（推进器、微型跃迁引擎等都由玩家自己开关，不标「未开启 / 不计开启」）
+export function fitBody(fit, u, pilot = false) {
+  const { esc, FE, data } = ctx;
   const num = (v) => ctx.formatNumber(Math.round(v || 0));
   const name = (id) => esc(data.types.get(id)?.name || '#' + id);
   const icon = (id, sz = 24) => `<img src="${IMG(id, 'icon', 32)}" alt="" width="${sz}" height="${sz}" loading="lazy">`;
@@ -2659,7 +2717,7 @@ function fitView(item, row) {
     // 同装备同弹药同状态合并成一行
     const grouped = [];
     for (const m of mods) {
-      const off = forcedOff(m);
+      const off = pilot ? null : forcedOff(m);
       const k = `${m.type}|${m.charge || ''}|${m.state}|${off || ''}`;
       const g = grouped.find((x) => x.k === k);
       if (g) g.n += 1; else grouped.push({ k, m, off, n: 1 });
@@ -2689,13 +2747,7 @@ function fitView(item, row) {
       </div>
       <table class="fit-resist sim-dt-res"><thead><tr><th></th>${DAMAGE_NAMES.map((n, j) => `<th class="is-${DK[j]}">${n}</th>`).join('')}<th>HP</th></tr></thead><tbody>${res}</tbody></table></div>`;
   }
-  const using = item.key === 'row';
-  return `<div class="sim-dt-view-head"><h5>${esc(item.label)}</h5>
-      <div class="sim-dt-actions">
-        <button type="button" class="btn btn-primary" data-sim-dt-use${using ? ' disabled' : ''}>${using ? '正在使用' : '使用这套装配'}</button>
-        <button type="button" class="btn btn-ghost" data-sim-dt-open title="在装配页打开这套装配，可以改装备后再加入模拟">在装配页打开</button>
-      </div></div>
-    ${stats}
+  return `${stats}
     <div class="sim-dt-slots">${slots}${drones}${!slots && !drones ? '<p class="sim-dt-note">没有装备</p>' : ''}</div>`;
 }
 
@@ -2742,7 +2794,7 @@ function useFit(row, item) {
 // 按船型和装配算出战斗单位：没给装配时用击杀记录最近常见装配，没有就是空船。技能按 A 方设置。
 // 返回 { row, off, prop, variant }：row.unit 为推进器开启时的属性，off 为推进器关闭时的属性，prop 为推进器在装备栏里的序号（没有为 -1）；
 // variant(装备栏序号[], { 序号: 弹药类型 }) = 这几件主动装备关着、换了这些弹药时的属性（玩家开关推进器、抗性、感应增强器、换弹药时切换；按组合缓存）
-export async function pilotRow(ship, fit = null, label = '', prep = null) {
+export async function pilotRow(ship, fit = null, label = '', prep = null, o = {}) {
   const row = newRow(ship, 1, fit ? 'manual' : 'kb', fit, label);
   if (!fit) {
     const r = await loadKb(ship).catch(() => null);
@@ -2756,8 +2808,11 @@ export async function pilotRow(ship, fit = null, label = '', prep = null) {
     }
   }
   prep?.(row.fit);   // 驾驶模拟：装配里没激活的无人机按带宽激活（击杀记录装配的无人机都在舱里）
-  const was = S.opt.prop;
+  // 装配里「在线」（关着）的主动装备也算进来：驾驶时开不开由玩家决定（开局自身装备都关着）
+  row.fit = { ...row.fit, slots: Object.fromEntries(Object.entries(row.fit.slots || {}).map(([k, l]) => [k, (l || []).map((m) => (m && m.state === 'online' && ctx.data.types.get(m.type)?.activatable ? { ...m, state: 'active' } : m))])) };
+  const was = S.opt.prop, wasCk = S.opt.cloakOk;
   try {
+    S.opt.cloakOk = !!o.self;   // 玩家自己的船：隐形装置可以开
     S.opt.prop = false;
     prepare(row, 'A');
     const off = row.unit;
@@ -2771,19 +2826,23 @@ export async function pilotRow(ship, fit = null, label = '', prep = null) {
       const k = keys.join(',') + '|' + ch.map(([i, c]) => `${i}=${c}`).join(',');
       if (!keys.length && !ch.length) return row.unit;
       if (!cache.has(k)) {
-        const p0 = S.opt.prop, o0 = S.opt.offKeys, c0 = S.opt.chargeOv;
+        const p0 = S.opt.prop, o0 = S.opt.offKeys, c0 = S.opt.chargeOv, k0 = S.opt.cloakOk;
         try {
           S.opt.prop = true;
+          S.opt.cloakOk = !!o.self;
           S.opt.offKeys = new Set(keys.map((i) => rack[i].key));
           S.opt.chargeOv = new Map(ch.map(([i, c]) => [rack[i].key, Number(c)]));
           const r = { ...row };
           prepare(r, 'A');
           cache.set(k, r.unit || row.unit);
-        } finally { S.opt.prop = p0; S.opt.offKeys = o0; S.opt.chargeOv = c0; }
+        } finally { S.opt.prop = p0; S.opt.offKeys = o0; S.opt.chargeOv = c0; S.opt.cloakOk = k0; }
       }
       return cache.get(k);
     };
-    return { row, off, prop, variant };
-  } finally { S.opt.prop = was; }
+    // 微型跃迁推进器（有信号半径惩罚的推进器）：被扰频时要关掉；电脑船换成 off 的属性（sim-engine）
+    const mwd = prop >= 0 && (ctx.data.types.get(rack[prop].type)?.attrs.get(ctx.FE.AT.signatureRadiusBonus) || 0) > 0;
+    if (mwd) row.unitOff = off;
+    return { row, off, prop, variant, mwd };
+  } finally { S.opt.prop = was; S.opt.cloakOk = wasCk; }
 }
 export { shipSearch as pilotShipSearch };

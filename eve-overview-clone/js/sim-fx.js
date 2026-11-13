@@ -12,7 +12,7 @@
 //   柔光 / 星芒 / 光环用游戏的粒子贴图，火球和爆炸按游戏的 9 × 9 帧爆炸序列逐帧播放，光束横截面用游戏的光束贴图。
 //   贴图加载完之前（或加载失败）用程序画的图集。ready() 告诉调用方贴图是否已就绪（加载失败也算就绪）。
 import * as THREE from './vendor/three/three.module.min.js';
-import { createClientFx } from './sim-cfx.js?v=v4';
+import { createClientFx } from './sim-cfx.js?v=v5';
 
 const KM = 1 / 1000;
 const SIZE_M = [0, 1, 2, 4, 10];                 // 武器尺寸（小 / 中 / 大 / 超大）→ 宽度倍数
@@ -31,6 +31,8 @@ const PUFF = new THREE.Color(0.2822, 0.2443, 0.2224);
 export const EW = {
   web: [0, 0x9badff, 20, 4, 2.6], scram: [1, 0x5096de, 26, 3], point: [2, 0x52dfb5, 22, 3], neut: [3, 0xff8574, 40, 4, 1.6], nos: [4, 0xe1e6ff, 26, 3],
   ecm: [5, 0xadd4ff, 0, 0], damp: [6, 0xaacbff, 18, 4, 2.4], paint: [7, 0xff4330, 8, 2, 1.8], rs: [8, 0x77d4ff, 45, 4], ra: [8, 0xff7000, 45, 4], rh: [8, 0xc8ccd6, 45, 4],
+  // 下面几类只在客户端特效素材没加载好时用这套旧画法（颜色是我取的近似，不是客户端值）
+  td: [6, 0xffb36b, 18, 4, 2.4], gd: [6, 0xffd36b, 18, 4, 2.4], rc: [8, 0xfff0a0, 30, 3], rb: [8, 0x9fd8ff, 30, 3], rt: [8, 0xb0ffd0, 30, 3],
 };
 const EW_COL = Object.fromEntries(Object.entries(EW).map(([k, v]) => [k, new THREE.Color(v[1])]));
 const hash = (a, b = 0, c = 0) => { let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
@@ -336,7 +338,7 @@ export function createFx(scene, renderer, opt = {}) {
         float hex = 0.85 + 0.15 * sin(vN.x * 90.0) * sin(vN.y * 90.0) * sin(vN.z * 90.0);
         // 游戏护盾的格纹：按球面经纬度铺（绕一圈 4 次），格线亮、格子里暗
         if (ccp2 > 0.5) hex = 0.2 + 1.5 * texture2D(cShd, vec2(atan(vN.z, vN.x) * 0.6366, vN.y * 1.3 + 0.5)).r;
-        float a = (spot * (1.0 - age) * 0.8 + wave * (1.0 - age)) * hex;
+        float a = (spot * 0.8 + wave) * hex;   // 随时间的衰减已乘进颜色（客户端 TemporalFadeoutMap）
         a *= (0.35 + 0.35 * abs(dot(vN, vView))) * 0.6;
         gl_FragColor = vec4(vCol.rgb * a, 1.0);
       }`,
@@ -350,7 +352,7 @@ export function createFx(scene, renderer, opt = {}) {
   const tmp = new THREE.Object3D();
   const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3(), vD = new THREE.Vector3(), vE = new THREE.Vector3();
   const q = new THREE.Quaternion();
-  let nShield = 0;
+  let nShield = 0, curP = null;
 
   // 绘制工具
   // tx：弹道噪声贴图 0 不用 / 1 自动炮 / 2 光束激光 / 3 疾速炮 / 4 脉冲激光 / 5 磁轨炮 / 6 火炮
@@ -358,16 +360,31 @@ export function createFx(scene, renderer, opt = {}) {
   // 光晕：同一段弹道外面再套一层 4 倍宽的柔光（streak 为真时同样尾部渐隐）
   const halo = (a, b, widthM, minPx, color, alpha, streak = 0) => ribbon(a, b, widthM * 4, minPx * 4, color, alpha * 0.45, streak ? 3 : 2);
   const sprite = (p, sizeM, minPx, color, alpha, tile = 0, rot = 0) => sprites.push({ center: [p.x, p.y, p.z], col: [color.r, color.g, color.b, alpha], sz: [sizeM * KM, minPx, tile, rot] });
-  function shieldHit(center, rKm, dir, age, color = SHIELD) {
-    if (nShield >= MAXS) return;
-    tmp.position.copy(center);
-    tmp.quaternion.identity();
-    tmp.scale.setScalar(rKm);
-    tmp.updateMatrix();
-    shields.setMatrixAt(nShield, tmp.matrix);
-    iDir.setXYZ(nShield, dir.x, dir.y, dir.z);
-    iCol.setXYZW(nShield, color.r, color.g, color.b, Math.min(1, age));
+  // 护盾泡：有船体护盾椭球时（客户端护盾受击特效贴在 SOF 的 shapeEllipsoid 上）按椭球、随船转；否则用 1.25 倍包围球。
+  // u = P.shield(目标)（目标序号 + 1，0 = 护盾没了）。返回受击方向上护盾表面的点（放闪光用）
+  // 客户端 fisfx/impact/temporalfadeout_01a.dds 的 R 通道（512 点取 33 点），按冲击已过的寿命比例查：
+  // 一开始全亮，0.2 处降到约 0.4，平台后渐隐到 0（客户端按 1 − 剩余寿命比例查同一张图）
+  const FADE = [1, 1, 0.988, 0.871, 0.725, 0.561, 0.424, 0.345, 0.357, 0.427, 0.4, 0.412, 0.4, 0.373, 0.416, 0.392, 0.369, 0.353, 0.325, 0.298, 0.271, 0.239, 0.208, 0.176, 0.145, 0.11, 0.0784, 0.0588, 0.0353, 0.0235, 0, 0, 0];
+  const fadeAt = (t) => { const x = Math.min(1, Math.max(0, t)) * (FADE.length - 1), i = Math.min(FADE.length - 2, Math.floor(x)); return FADE[i] + (FADE[i + 1] - FADE[i]) * (x - i); };
+  const shellM = new THREE.Matrix4(), shellI = new THREE.Matrix3(), hitP = new THREE.Vector3(), lDir = new THREE.Vector3();
+  function shieldHit(center, rKm, dir, age, color = SHIELD, u = 0) {
+    let m = null;
+    if (u > 0 && curP?.shell?.(u - 1, shellM)) {
+      m = shellM;
+      lDir.copy(dir).applyMatrix3(shellI.setFromMatrix4(m).invert()).normalize();   // 世界方向 → 单位球上的方向
+    } else {
+      tmp.position.copy(center); tmp.quaternion.identity(); tmp.scale.setScalar(rKm * 1.25); tmp.updateMatrix();
+      m = tmp.matrix;
+      lDir.copy(dir);
+    }
+    hitP.copy(lDir).applyMatrix4(m);
+    if (nShield >= MAXS) return hitP;
+    shields.setMatrixAt(nShield, m);
+    iDir.setXYZ(nShield, lDir.x, lDir.y, lDir.z);
+    const f = fadeAt(age);
+    iCol.setXYZW(nShield, color.r * f, color.g * f, color.b * f, Math.min(1, age));
     nShield++;
+    return hitP;
   }
 
   // 命中效果：护盾波纹 + 表面闪光，或船体火光 + 火花
@@ -376,8 +393,7 @@ export function createFx(scene, renderer, opt = {}) {
     const dir = vD.copy(fromPos).sub(toPos).normalize();
     const f = 1 - age / 0.8;
     if (shieldUp) {
-      shieldHit(toPos, rKm * 1.25, dir, age / 0.8);
-      sprite(vE.copy(toPos).addScaledVector(dir, rKm * 1.25), 20 * size, 2.5, SHIELD, f * 0.9, 1, seed * 6);
+      sprite(vE.copy(shieldHit(toPos, rKm, dir, age / 0.8, SHIELD, shieldUp)), 20 * size, 2.5, SHIELD, f * 0.9, 1, seed * 6);
     } else {
       const p = vE.copy(toPos).addScaledVector(dir, rKm * 0.55);
       sprite(p, 30 * size * (0.6 + age) * fireScale(), 2.5, FIRE, f, fireTile(age / 0.8), seed * 6);
@@ -408,10 +424,11 @@ export function createFx(scene, renderer, opt = {}) {
 
   // 客户端装备特效（sim-cfx.js，只在给了 opt.tex 时用；某一类素材没加载好之前用下面的旧画法）
   const cfx = opt.tex ? createClientFx(scene, opt.tex.replace(/\/?$/, '/') + 'cfx/') : null;
-  const CFX = new Set(['web', 'scram', 'point', 'neut', 'nos', 'ecm', 'damp']);
+  const CFX = new Set(['web', 'scram', 'point', 'neut', 'nos', 'ecm', 'damp', 'td', 'gd', 'rc', 'rb', 'rt']);
+  const CFX_FILE = { rb: 'gd' };   // 远程感应增强和制导扰断在客户端是同一个效果（ElectronicAttributeModifyTarget → SensorBooster_St）
   const qI = new THREE.Quaternion();
   function clientFx(P, i, j, m, kind, t, k) {
-    if (!cfx || !CFX.has(kind) || !P.camera || !cfx.ready(kind)) return false;
+    if (!cfx || !CFX.has(kind) || !P.camera || !cfx.ready(CFX_FILE[kind] || kind)) return false;
     // 本周期开始了多久：有周期起点记录（fire 位）的按它；电脑控制的网子 / 扰频 / 阻尼等在模拟里是一直开着的，
     // 没有周期记录，就从这次开启算起按装备周期循环（客户端每个周期 Repeat 一次 play_start）
     let age = cycleStart(P.rec, k, i, m, t, 30);
@@ -423,7 +440,7 @@ export function createFx(scene, renderer, opt = {}) {
       const f0 = F[Math.max(0, Math.min(k - b, F.length - 1))];
       age = f0 ? Math.max(0, t - (f0.t - P.rec.dt)) % cyc : 0;
     }
-    return cfx.play(kind, `${i}:${m}`, age, {
+    return cfx.play(CFX_FILE[kind] || kind, `${i}:${m}`, age, {
       src: P.at(i), dst: P.at(j), R: P.radiusM(j),
       srcExt: P.extentOf(i)?.map((x) => x * 1.2), dstExt: P.extentOf(j)?.map((x) => x * 1.2),
       srcQ: P.heading[i] || qI, dstQ: P.heading[j] || qI,
@@ -466,13 +483,90 @@ export function createFx(scene, renderer, opt = {}) {
     }
     if (kind === 'paint') sprite(to, rKm * 1000 * 1.4, 6, c, 0.35 + 0.15 * Math.sin(t * 6 + sd * 5), 1, t * 0.5);   // 标记：目标上一颗红色瞄准光
   }
+  // 范围装备（立体炸弹 / ECM 脉冲 / 跃迁扰断力场 / 微跳预热）：画在自己船上，不需要目标
+  const AREA = /^(smart_|burst$|bubble$|mjd$)/;
+  const bubbleMat = new THREE.ShaderMaterial({
+    uniforms: { col: { value: new THREE.Color(0x9fc8ff) }, a: { value: 0.35 } },
+    vertexShader: `${LOG_V} varying vec3 vN, vV; void main() { vec4 mv = modelViewMatrix * vec4(position, 1.0); vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); gl_Position = projectionMatrix * mv;
+      #include <logdepthbuf_vertex>
+    }`,
+    fragmentShader: `${LOG_F} uniform vec3 col; uniform float a; varying vec3 vN, vV; void main() {
+      #include <logdepthbuf_fragment>
+      float f = 1.0 - abs(dot(normalize(vN), normalize(vV))); gl_FragColor = vec4(col * (0.08 + pow(f, 3.0)) * a, 1.0); }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  });
+  const bubbleGeo = new THREE.SphereGeometry(1, 48, 24);
+  const bubbles = new Map();
+  function areaFx(P, i, m, kind, cyc, range, t, k) {
+    const at = P.at(i);
+    if (!at) return;
+    const age = Math.max(0, cycleStart(P.rec, k, i, m, t, Math.max(cyc, 1) + 1));
+    if (kind === 'bubble') {
+      // 客户端 warp_disruption_field_generator（EveEffectRoot2 + 粒子 + 专用 warpdisruptionbubble.fx）这套播放器还画不了：先画一个按 warpScrambleRange 的半透明球
+      let b = bubbles.get(i);
+      if (!b) { b = new THREE.Mesh(bubbleGeo, bubbleMat); b.renderOrder = 3; scene.add(b); bubbles.set(i, b); }
+      b.position.copy(at); b.scale.setScalar(range * KM); b.visible = true; b.userData.seen = t;
+      return;
+    }
+    if (age < 0) return;
+    // 立体炸弹（EMPWave：装备图形 × empFieldRange / 1000）、ECM 脉冲（ShipEffect，按自身包围球半径）、微跳预热（MicroJumpDriveEngage，按包围球半径、跟船转）
+    const file = kind, R = kind.startsWith('smart_') ? range / 1000 : P.radiusM(i);
+    if (cfx && P.camera && cfx.ready(file)) {
+      const len = cfx.length(file);
+      if (len > 0 && age * len / cyc > len + 0.05) return;
+      cfx.play(file, `${i}:${m}`, age, { dst: at, R, rot: kind === 'mjd' ? P.heading[i] : null }, len > 0 && cyc > 0 ? len / cyc : 1);
+      return;
+    }
+    // 素材没到：一圈往外扩的光
+    const f = Math.min(1, age / Math.max(0.5, cyc * 0.3));
+    if (kind.startsWith('smart_') || kind === 'burst') sprite(at, range * 2 * f, 8, EW_COL.rb, 0.4 * (1 - f), 3);
+  }
+  // 微跳落点（MicroJumpDriveJump：落点处按包围球半径，不拉伸时间）
+  function mjdJumps(P, t) {
+    if (!cfx || !P.camera) return;
+    for (const e of P.rec.events || []) {
+      if (e.kind !== 'mjd' || t < e.t || t > e.t + 4 || !cfx.ready('mjdjump')) continue;
+      cfx.play('mjdjump', `mjd:${e.unit}:${e.t}`, t - e.t, { dst: new THREE.Vector3(...e.to).multiplyScalar(KM), R: P.radiusM(e.unit) });
+    }
+  }
+  // 脉冲波投射器的力场（引擎事件 kind 'field'）：客户端 effects.SuperWeaponAOE*（modular_*_tr_t1a.red，服务器下发）这套还没对上，
+  // 先在力场位置画一个半径 doomsdayAOERange 的半透明球（颜色按电子战种类）；生效前后各 1 秒淡入淡出，中和 / ECM（一次性）亮 2 秒
+  const FIELD_COL = { web: 'web', paint: 'paint', damp: 'damp', track: 'td', guide: 'gd', bubble: 'point', neut: 'neut', ecm: 'ecm' };
+  const fieldMeshes = new Map();
+  function fieldFx(P, t) {
+    for (const b of fieldMeshes.values()) b.visible = false;
+    for (const e of P.rec.events || []) {
+      if (e.kind !== 'field' || !e.pos) continue;
+      const one = e.end - e.at < 0.5, end = one ? e.at + 2 : e.end;
+      if (t < e.at || t > end + 1) continue;
+      let b = fieldMeshes.get(e);
+      if (!b) {
+        const mat = bubbleMat.clone();
+        mat.uniforms.col.value = (EW_COL[FIELD_COL[e.k]] || new THREE.Color(0x9fc8ff)).clone();
+        b = new THREE.Mesh(bubbleGeo, mat); b.renderOrder = 3; scene.add(b); fieldMeshes.set(e, b);
+      }
+      const a = Math.min(1, (t - e.at) / (one ? 0.3 : 1), Math.max(0, end + (one ? 0 : 1) - t) / (one ? 1.7 : 1));
+      b.material.uniforms.a.value = 0.45 * Math.max(0, a);
+      b.position.set(e.pos[0] * KM, e.pos[1] * KM, e.pos[2] * KM);
+      b.scale.setScalar(e.r * KM);
+      b.visible = true;
+    }
+  }
   function ewar(P, t, k) {
     const rec = P.rec, fr = rec.frames[Math.min(k, rec.frames.length - 1)];
+    for (const b of bubbles.values()) b.visible = false;
+    fieldFx(P, t);
     if (!fr?.act) return;
+    for (let i = 0; i < rec.units.length; i++) {
+      const ew = rec.units[i].ew, act = fr.act[i];
+      if (!act || !ew?.length) continue;
+      for (const [m, kind, cyc, range] of ew) if (AREA.test(kind) && act & (1 << m)) areaFx(P, i, m, kind, cyc, range || 0, t, k);
+    }
+    mjdJumps(P, t);
     for (let i = 0; i < rec.units.length; i++) {
       const ew = rec.units[i].ew, act = fr.act[i], j = fr.tg[i];
       if (!ew?.length || !act || j == null || j < 0 || !P.at(i)) continue;
-      for (const [m, kind] of ew) if (kind[0] !== 'r' && act & (1 << m)) ewBeam(P, i, j, m, kind, t, k);
+      for (const [m, kind] of ew) if (kind[0] !== 'r' && !AREA.test(kind) && act & (1 << m)) ewBeam(P, i, j, m, kind, t, k);
     }
     const rr = fr.rr || [];
     for (let x = 0; x < rr.length; x += 3) {
@@ -499,7 +593,7 @@ export function createFx(scene, renderer, opt = {}) {
   function splash(Tp, rT, A, s, k, color, shieldUp, seed, age) {
     if (k <= 0.01) return;
     const dir = vD.copy(A).sub(Tp).normalize();
-    if (shieldUp) { shieldHit(Tp, rT * 1.25, dir, Math.min(0.9, 1 - k)); sprite(vE.copy(Tp).addScaledVector(dir, rT * 1.25), 36 * s, 4, color, Math.min(1, k), 1, seed * 6 + age * 3); }
+    if (shieldUp) sprite(vE.copy(shieldHit(Tp, rT, dir, Math.min(0.9, 1 - k), SHIELD, shieldUp)), 36 * s, 4, color, Math.min(1, k), 1, seed * 6 + age * 3);
     else { const p = vE.copy(Tp).addScaledVector(dir, rT * 0.55); sprite(p, 40 * s, 4, FIRE, Math.min(1, k) * 0.9, fireTile(Math.min(0.99, age)), seed * 6); sprite(p, 20 * s, 3, color, Math.min(1, k), 1, seed * 5); }
   }
   function turretShot(P, fx, from, to, hit, tf, t, seed, g) {
@@ -682,7 +776,7 @@ export function createFx(scene, renderer, opt = {}) {
         const r = fx.er * 2;                       // 爆炸直径 = 2 × 爆炸半径
         sprite(T, r * (0.5 + a * 0.9) * fireScale(), 3, color, ccp.value ? Math.min(1, k * 1.6) : k, fireTile(a / 1.1), seed);
         sprite(T, r * 0.6, 3, new THREE.Color(1, 1, 1), k * k, 1, seed);
-        if (a < 0.6 && P.shield(m.to)) shieldHit(T, P.radiusOf(m.to) * 1.25, vE.copy(S).sub(T).normalize(), a / 0.6);
+        if (a < 0.6 && P.shield(m.to)) shieldHit(T, P.radiusOf(m.to), vE.copy(S).sub(T).normalize(), a / 0.6, SHIELD, P.shield(m.to));
       }
     } else if (t - t1 < 0.4) {
       const p = bez(1, new THREE.Vector3());
@@ -716,8 +810,10 @@ export function createFx(scene, renderer, opt = {}) {
   }
 
   return {
-    // P：{ rec, frames 访问, at(i) 当前位置, posAt(i, t, out), radiusOf(i)（千米）, heading[], shield(i) 护盾是否还在 }
+    // P：{ rec, frames 访问, at(i) 当前位置, posAt(i, t, out), radiusOf(i)（千米）, heading[], shield(i) 护盾还在时 = i + 1、没了 = 0,
+    //      shell(i, out) 护盾椭球的变换矩阵（单位球 → 世界，千米；没有椭球数据时返回 null）}
     update(t, P, kills) {
+      curP = P;
       renderer.getDrawingBufferSize(res);
       ribbons.begin(); sprites.begin(); ewBeams.begin();
       if (cfx && P.camera) cfx.begin(P.camera, t);
@@ -740,6 +836,14 @@ export function createFx(scene, renderer, opt = {}) {
           if (kind === 2) {
             const age = t - tf;
             if (age < 0.8) sprite(P.at(to), P.radiusOf(to) * 1800, 12, REP, (1 - age / 0.8) * 0.5, 0);
+            continue;
+          }
+          // 立体炸弹扫到目标（客户端 EMPWave：命中在 500 毫秒 × 距离 / 范围 之后冒出来，波扩散到那里才有冲击）
+          if (kind === 3) {
+            const e = rec.units[from].ew?.find((y) => y[0] === g), R = e?.[3] || 5000;
+            const t0 = fr.t - dt + 0.5 * Math.min(1, P.at(from).distanceTo(P.at(to)) / KM / R);
+            const age = t - t0;
+            if (age >= 0 && age < 0.6) splash(P.at(to), P.radiusOf(to), P.at(from), 8, 1 - age / 0.6, SHIELD, P.shield(to), seed, age);
             continue;
           }
           const fx = rec.units[from].fx?.[g];
@@ -765,6 +869,6 @@ export function createFx(scene, renderer, opt = {}) {
       iDir.needsUpdate = iCol.needsUpdate = true;
     },
     ready: () => ccpReady,
-    dispose() { cfx?.dispose(); tex.dispose(); for (const t of [cSpr, cExp, cBeam, cTur, cShd, cRamp, cFire]) t.value?.dispose(); ribbons.mesh.geometry.dispose(); sprites.mesh.geometry.dispose(); ewBeams.mesh.geometry.dispose(); shieldGeo.dispose(); },
+    dispose() { cfx?.dispose(); for (const b of bubbles.values()) scene.remove(b); for (const b of fieldMeshes.values()) { scene.remove(b); b.material.dispose(); } bubbleGeo.dispose(); bubbleMat.dispose(); tex.dispose(); for (const t of [cSpr, cExp, cBeam, cTur, cShd, cRamp, cFire]) t.value?.dispose(); ribbons.mesh.geometry.dispose(); sprites.mesh.geometry.dispose(); ewBeams.mesh.geometry.dispose(); shieldGeo.dispose(); },
   };
 }

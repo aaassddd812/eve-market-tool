@@ -71,16 +71,22 @@ const cap = (a, m) => { const l = len(a); return l > m ? scale(a, m / l) : a; };
 function roleOf(t) {
   if (!t.dps && t.remote.length) return 'logi';
   if (t.fighters?.length && t.fighter >= t.dps * 0.5) return 'carrier';
-  if (!t.dps && (t.ecms.length || t.damps.length || t.paints.length || t.neuts.length || t.webs.length || t.points.length)) return t.radius < 200 && (t.points.length || t.webs.length) ? 'tackle' : 'ewar';
+  if (!t.dps && (t.ecms.length || t.damps.length || t.paints.length || t.neuts.length || t.webs.length || t.points.length || t.tds?.length || t.gds?.length || t.bursts?.length || t.bubbles?.length)) return t.radius < 200 && (t.points.length || t.webs.length) ? 'tackle' : 'ewar';
   if ((t.points.length || t.webs.length) && t.radius < 200) return 'tackle';
   if (!t.guns.length && t.drones.length) return 'drone';
   return 'dps';
 }
 
+const L = (t, k) => t[k] || [];
 // 电子战与遥修装备（3D 特效、名单上的状态图标用）：[装备序号, 类别, 周期（秒）]；遥修的目标每帧另记（rr）
 const ewList = (t) => [
-  ...t.webs.map((x) => [x.m, 'web', x.cycle]), ...t.points.map((x) => [x.m, x.str >= 2 ? 'scram' : 'point', x.cycle]), ...t.neuts.map((x) => [x.m, 'neut', x.cycle]), ...t.noses.map((x) => [x.m, 'nos', x.cycle]),
+  ...t.webs.map((x) => [x.m, 'web', x.cycle]), ...t.points.map((x) => [x.m, x.str >= 2 && !x.focus ? 'scram' : 'point', x.cycle]), ...t.neuts.map((x) => [x.m, 'neut', x.cycle]), ...t.noses.map((x) => [x.m, 'nos', x.cycle]),
   ...t.ecms.map((x) => [x.m, 'ecm', x.cycle]), ...t.damps.map((x) => [x.m, 'damp', x.cycle]), ...t.paints.map((x) => [x.m, 'paint', x.cycle]), ...t.remote.map((x) => [x.m, ['rs', 'ra', 'rh'][x.layer], x.cycle]),
+  ...L(t, 'tds').map((x) => [x.m, 'td', x.cycle]), ...L(t, 'gds').map((x) => [x.m, 'gd', x.cycle]),
+  ...L(t, 'rcaps').map((x) => [x.m, 'rc', x.cycle]), ...L(t, 'rsbs').map((x) => [x.m, 'rb', x.cycle]), ...L(t, 'rtcs').map((x) => [x.m, 'rt', x.cycle]),
+  // 范围装备（没有目标，画在自己身上）：立体炸弹带主伤害类型 smart_em / th / ki / ex
+  ...L(t, 'smarts').map((x) => [x.m, 'smart_' + ['em', 'th', 'ki', 'ex'][x.dmg.indexOf(Math.max(...x.dmg))], x.cycle, x.range]), ...L(t, 'bursts').map((x) => [x.m, 'burst', x.cycle, x.range]),
+  ...L(t, 'bubbles').map((x) => [x.m, 'bubble', x.cycle, x.range]), ...L(t, 'mjds').map((x) => [x.m, 'mjd', x.spool, x.range]),
 ].filter(([m]) => m != null && m >= 0 && m < 32);
 
 // opt: { dist (km), focus: weak|dps|spread, logi, ewar, cap, max (秒), moveA / moveB: orbit|range|kite, record, seed, value(row) → 单艘 ISK,
@@ -90,6 +96,8 @@ export function createBattle(sides, opt) {
   const capOn = opt.cap !== false;
   // 逐发命中回调（驾驶模拟的战斗日志用）：{ f 开火方, v 目标, type 武器 / 无人机类型, mult 炮台伤害倍数（0 = 未命中）, dmg 实际伤害, raw 各类型伤害, missile }
   const onHit = opt.onHit || null;
+  // 中和 / 吸电每次生效：{ f: 施放者, v: 目标, m: 装备序号, amt: 实际转移的电量, nos }（驾驶模拟写战斗日志）
+  const onDrain = opt.onDrain || null;
   const units = [];
   const rows = [];
   const rowOf = new Map();
@@ -136,6 +144,9 @@ export function createBattle(sides, opt) {
         lrep: (tpl.localReps || []).map((x) => ({ next: B.t + rand() * x.cycle, ammo: x.ammo, reloadUntil: 0, pend: 0 })),
         rrep: tpl.remote.map(() => ({ end: 0, tgt: null })),
         drain: [...tpl.neuts.map(() => ({ next: 0 })), ...tpl.noses.map(() => ({ next: 0 }))],
+        // 立体炸弹 / ECM 脉冲 / 远程电容传输的周期；友方辅助装备（电容传输、感应增强、跟踪电脑）当前对象
+        aoe: [...L(tpl, 'smarts'), ...L(tpl, 'bursts')].map(() => ({ next: B.t + rand() * 2 })), rcn: L(tpl, 'rcaps').map(() => ({ next: 0 })), assist: null, aOut: [],
+        optMult: 1, fallMult: 1, trackMult: 1, mvelMult: 1, flightMult: 1, erMult: 1, evMult: 1,
         drones: tpl.drones.flatMap((g) => Array.from({ length: g.n }, () => ({ g, pos: null, vel: [0, 0, 0], target: null, next: 0, dir: rand() < 0.5 ? 1 : -1 }))),
         squads: (tpl.fighters || []).flatMap((f) => Array.from({ length: f.squads }, () => ({ f, pos: null, vel: [0, 0, 0], target: null, next: 0, nextM: 0, dir: rand() < 0.5 ? 1 : -1 }))),
         warp: from ? { t0: B.t, to: pos.slice(), from: add(pos, scale(from, WARP_FROM)) } : null
@@ -223,7 +234,8 @@ export function createBattle(sides, opt) {
   // 开始锁定 / 解锁（玩家）
   B.lock = (u, v) => {
     const P = u.pilot;
-    if (!P || !v?.alive || v === u || P.locks.has(v) || P.locks.size >= P.maxLocks) return false;
+    if (!P || !v?.alive || v === u || v.cloak || P.locks.has(v) || P.locks.size >= P.maxLocks) return false;
+    if (u.cloak || (P.lockBlock || 0) > B.t) return false;
     if (surf(u, v) > u.t.lockRange * u.rangeMult) return false;
     const T = relock(u, v);
     P.locks.set(v, T);
@@ -263,7 +275,7 @@ export function createBattle(sides, opt) {
   const relock = (u, v) => lockTime(u.t.scanRes * u.scanMult, v.t.sig * v.sigMult);
   // 开始锁定：记下总锁定时间（回放显示锁定进度）
   const setLock = (u, v) => { u.lock = u.lockAll = relock(u, v); };
-  const attacks = (u) => u.t.dps > 0 || u.t.webs.length || u.t.paints.length || u.t.neuts.length || u.t.noses.length || u.t.damps.length || u.t.ecms.length;
+  const attacks = (u) => u.t.dps > 0 || u.t.webs.length || u.t.paints.length || u.t.neuts.length || u.t.noses.length || u.t.damps.length || u.t.ecms.length || L(u.t, 'tds').length || L(u.t, 'gds').length;
   const speedOf = (u) => len(u.vel);
   // 相对角速度（弧度 / 秒）：相对速度垂直于连线的分量 / 中心距离；a、b 为 { pos, vel }
   const angular = (a, b) => {
@@ -277,7 +289,9 @@ export function createBattle(sides, opt) {
   const turretRoll = (g, from, v, d) => {
     const sig = v.t.sig * v.sigMult;
     const w = angular(from, v);
-    const chance = 0.5 ** ((g.track > 0 ? (w * g.sigRes / (g.track * sig || 1)) ** 2 : 0) + (Math.max(0, d - g.opt) / Math.max(1, g.fall)) ** 2);
+    // 开火方被跟踪扰断 / 受远程跟踪电脑加成：最佳射程、失准范围、跟踪速度按倍数（无人机不受影响）
+    const track = g.track * (from.trackMult ?? 1), opt = g.opt * (from.optMult ?? 1), fall = g.fall * (from.fallMult ?? 1);
+    const chance = 0.5 ** ((track > 0 ? (w * g.sigRes / (track * sig || 1)) ** 2 : 0) + (Math.max(0, d - opt) / Math.max(1, fall)) ** 2);
     const x = rand();
     if (x >= chance) return 0;
     return x < 0.01 ? 3 : x + 0.49;
@@ -291,7 +305,7 @@ export function createBattle(sides, opt) {
 
   // ---------- 选目标 ----------
   function assignTargets(side) {
-    const enemies = units.filter((u) => ready(u) && u.side !== side && !u.isDrone);
+    const enemies = units.filter((u) => ready(u) && u.side !== side && !u.isDrone && !u.cloak);
     // 无人机实体（驾驶模拟）：没有舰船可打时才打；有舰船时，闲着的攻击者有一定概率去打在打本方的无人机
     const foeDrones = units.filter((u) => ready(u) && u.side !== side && u.isDrone);
     if (!enemies.length && foeDrones.length) { for (const u of units) if (ready(u) && u.side === side && attacks(u) && !u.pilot && !u.target?.alive) { u.target = foeDrones[Math.floor(rand() * foeDrones.length)]; setLock(u, u.target); } return; }
@@ -674,6 +688,7 @@ export function createBattle(sides, opt) {
     const P = u.pilot, rack = u.t.rack || [];
     P.cyc = P.cyc || new Map();
     P.msgs = P.msgs || [];
+    P.started = new Set();   // 这一步开始了新周期的装备（立体炸弹、ECM 脉冲、电容传输、微跳按它生效）
     const skip = new Set([...u.t.guns.map((g) => g.m), ...(u.t.injectors || []).map((x) => x.m)]);
     const charged = new Set((u.t.localReps || []).filter((x) => x.charged).map((x) => x.m));   // 辅助维修装了电容弹药：不耗电
     const live = new Set(P.on);
@@ -700,8 +715,222 @@ export function createBattle(sides, opt) {
         u.cap -= m.cap;
       }
       P.cyc.set(i, (next != null && t - next < m.cycle ? next : t) + m.cycle);
+      P.started.add(i);
     }
   };
+  // 范围装备没有目标：电脑船只在范围内有敌船、没有本方舰船时才开（游戏里立体炸弹 / ECM 脉冲敌我都打；
+  // NPC 什么时候开在服务器上，客户端没有依据——这是本模拟器自己的策略）
+  // 范围按船心距离量（客户端 EMPWave.py：ballpark.DistanceBetween，球心距，不扣两船半径）
+  const aoeWanted = (u, range) => {
+    let foe = false;
+    for (const x of units) {
+      if (!ready(x) || x === u || x.isDrone || center(u, x) > range) continue;
+      if (x.side === u.side) return false;
+      foe = true;
+    }
+    return foe;
+  };
+  // 立体炸弹 / ECM 脉冲：每个周期开头对范围内所有船（不分敌我，不含自己）生效；跃迁扰断力场：开着时范围内所有船跑不掉
+  function areaStep(alive, t, on) {
+    for (const u of alive) {
+      const sm = L(u.t, 'smarts'), bu = L(u.t, 'bursts');
+      [...sm, ...bu].forEach((x, j) => {
+        const isBomb = j < sm.length, st = u.aoe[j];
+        if (!st) return;
+        let go;
+        if (u.pilot) { if (!u.pilot.on.has(x.m)) return; bit(u, x.m); go = u.pilot.started?.has(x.m); }
+        else {
+          if (u.ratio < 0.5 || (!aoeWanted(u, x.range) && t >= st.next)) return;
+          bit(u, x.m);
+          go = t >= st.next;
+          if (go) st.next = nextCycle(st.next, t, x.cycle);
+        }
+        if (!go) return;
+        fired(u, x.m);
+        for (const v of units) {
+          if (!ready(v) || v === u || center(u, v) > x.range) continue;
+          if (isBomb) {
+            const raw = x.dmg.slice();
+            const got = hit(u, v, raw);
+            shots.push(u.i, v.i, 3, x.m);   // 画面：冲击波扫到目标时冒一下（sim-fx 按 500 毫秒 × 距离 / 半径 延迟，客户端 EMPWave）
+            if (v.side !== u.side) tally[u.side].applied += got;
+            onHit?.({ f: u, v, type: x.type, mult: 1, dmg: got, raw, missile: true, aoe: true });
+          } else if (v.t.sensor > 0 || x.str.some(Boolean)) {
+            const chance = x.str[v.t.sensorIdx] / Math.max(1, v.t.sensor);
+            if (rand() < chance) {
+              v.jam = Math.max(v.jam, t + x.jam);
+              (v.jamBy || (v.jamBy = new Map())).set(`${u.i}:${x.m}`, { u, m: x.m, t0: t, end: t + x.jam, burst: true });
+            }
+          }
+        }
+        // 立体炸弹也打掉范围内飞行中的导弹（自己的除外）
+        if (isBomb) for (let k = missiles.length - 1; k >= 0; k--) { const mm = missiles[k]; if (mm.u !== u && len(sub(mm.pos, u.pos)) <= x.range) { if (mm.rec) mm.rec.t1 = t; missiles.splice(k, 1); } }
+      });
+      for (const x of L(u.t, 'bubbles')) {
+        if (u.pilot ? !u.pilot.on.has(x.m) : u.ratio < 0.5 || !aoeWanted(u, x.range * 1.5)) continue;
+        bit(u, x.m);
+        for (const v of units) if (ready(v) && v !== u && center(u, v) <= x.range) v.pointed += x.str;
+      }
+    }
+  }
+  // 远程电容传输 / 远程感应增强 / 远程跟踪电脑：玩家对当前目标开；电脑船挑范围内的队友（电容传输给电容比例最低的，其余给输出最高的）
+  function assistStep(alive, t, on, putW, put, bScan, bRange) {
+    for (const u of alive) {
+      u.aOut = [];
+      const rc = L(u.t, 'rcaps'), rb = L(u.t, 'rsbs'), rt = L(u.t, 'rtcs');
+      if (!rc.length && !rb.length && !rt.length) continue;
+      if (u.jam > t) continue;
+      const reach = Math.max(...[...rc, ...rb, ...rt].map((x) => x.range + x.falloff));
+      let v;
+      if (u.pilot) v = u.target?.alive && u.lock <= 0 ? u.target : null;
+      else {
+        v = u.assist;
+        if (!v || !ready(v) || surf(u, v) > reach) {
+          v = null;
+          let best = -Infinity;
+          for (const a of alive) {
+            if (a === u || a.side !== u.side || a.isDrone || surf(u, a) > reach) continue;
+            const sc = rc.length ? 1 - Math.max(0, a.cap) / (a.t.cap.max || 1) : a.t.dps;
+            if (sc > best) { best = sc; v = a; }
+          }
+          u.assist = v;
+        }
+      }
+      if (!v) continue;
+      const d = surf(u, v), k = u.pilot ? 1 : u.ratio;
+      rc.forEach((x, j) => {
+        if (!on(u, x)) return;
+        const e = rangeEff(x, d);
+        if (e <= 0.01) return;
+        bit(u, x.m); u.aOut.push([v, x.m]);
+        const st = u.rcn[j];
+        const go = u.pilot ? u.pilot.started?.has(x.m) : t >= st.next;
+        if (!go) return;
+        if (!u.pilot) st.next = nextCycle(st.next, t, x.cycle);
+        fired(u, x.m);
+        if (capOn) v.cap = Math.min(v.t.cap.max, v.cap + x.amt * k * e);
+      });
+      for (const x of rb) { if (!on(u, x)) continue; const e = k * rangeEff(x, d); if (e <= 0.01) continue; put(bScan, v, x.scan * e); put(bRange, v, x.lock * e); bit(u, x.m); u.aOut.push([v, x.m]); }
+      for (const x of rt) { if (!on(u, x)) continue; const e = k * rangeEff(x, d); if (e <= 0.01) continue; putW(v, 'opt', x.opt * e); putW(v, 'fall', x.fall * e); putW(v, 'track', x.track * e); bit(u, x.m); u.aOut.push([v, x.m]); }
+    }
+  }
+  // 微型跃迁引擎（只有玩家用）：开启后预热一个周期，然后沿船头朝向跳 mjdJumpRange（停船时保持最后的朝向）；被扰频开不起来 / 预热中被扰频就失败；
+  // 跳完装备进入重启延迟（P.cool：装备序号 → 可再开的时间）
+  function mjdStep(alive, t) {
+    for (const u of alive) {
+      const P = u.pilot;
+      if (!P) continue;
+      // 船头朝向 = 航向；停下来时保持最后的朝向（开局朝着敌人）
+      if (speedOf(u) > 1) u.head = norm(u.vel); else if (!u.head) u.head = norm(u.face || [1, 0, 0]);
+      for (const x of L(u.t, 'mjds')) {
+        if (!P.on.has(x.m)) { if (u.mjd?.m === x.m) u.mjd = null; continue; }
+        if (u.scram) { P.on.delete(x.m); u.mjd = null; (P.msgs ||= []).push({ k: 'mjdScram', i: x.m }); continue; }
+        if (!u.mjd) { u.mjd = { m: x.m, t0: t, at: t + x.spool }; fired(u, x.m); }
+        bit(u, x.m);
+        if (t + DT < u.mjd.at) continue;
+        const dir = u.head;
+        const from = u.pos.slice();
+        u.pos = add(u.pos, scale(dir, x.range));
+        u.mjd = null;
+        P.on.delete(x.m);
+        (P.cool ||= new Map()).set(x.m, t + DT + x.delay);
+        (P.msgs ||= []).push({ k: 'mjd', i: x.m });
+        events.push({ t: t + DT, kind: 'mjd', unit: u.i, from, to: u.pos.slice() });
+      }
+    }
+  }
+  // 隐形装置（玩家）：开着时别的船锁不到、已有的锁定断开、自己的锁定也全丢；
+  // 离任何船 / 无人机 2000 米内（客户端 appConst.minCloakingDistance，按表面距离算）自动解除；
+  // 解除后 cloakingTargetingDelay 内不能锁定，重启延迟 moduleReactivationDelay 后才能再开（同微跳的 P.cool）
+  const CLOAK_DIST = 2000;
+  const nearAny = (u) => units.some((x) => x !== u && x.alive && !x.warp && surf(u, x) < CLOAK_DIST);
+  B.cloakNear = (u) => nearAny(u);
+  function cloakStep(alive, t) {
+    for (const u of alive) {
+      const P = u.pilot, cl = L(u.t, 'cloaks');
+      if (!P || !cl.length) { u.cloak = false; continue; }
+      let c = cl.find((x) => P.on.has(x.m));
+      if (c && nearAny(u)) { P.on.delete(c.m); (P.msgs ||= []).push({ k: 'decloak', i: c.m }); c = null; }
+      if (c && !u.cloak) {
+        for (const v of [...P.locks.keys()]) B.unlock(u, v);
+        // 开隐形时其他装备全部停下（客户端：隐形状态下装备不能运转）
+        for (const i of [...P.on]) if (i !== c.m) P.on.delete(i);
+        u.cloakM = c.m;
+      }
+      if (!c && u.cloak) {
+        const x = cl.find((y) => y.m === u.cloakM) || cl[0];
+        P.lockBlock = t + x.delay;
+        (P.cool ||= new Map()).set(x.m, t + x.cool);
+      }
+      u.cloak = !!c;
+      if (c) bit(u, c.m);
+    }
+    for (const v of units) if (v.target?.cloak) { v.target = null; v.lock = v.lockAll = 0; }
+  }
+  // 超级航母脉冲波投射器（doomsdayAOE*）：对目标开，预热 warn 秒后在目标当时的位置生成半径 radius 的力场，持续 life 秒；
+  // 力场里的船（不分敌我，不含开的那艘）受对应的电子战（叠加惩罚和普通电子战一起算）；中和 / ECM 只在生成的那一刻结算一次
+  // 电脑船：目标在 maxRange 内、目标周围 radius 内没有本方舰船才开（客户端没有依据——本模拟器自己的策略）
+  const fieldsLive = [];
+  B.fields = fieldsLive;
+  const inField = (f, v) => len(sub(v.pos, f.pos)) <= f.x.radius;
+  function fieldStart(alive, t) {
+    for (const u of alive) {
+      const fl = L(u.t, 'fields');
+      if (!fl.length) continue;
+      u.fieldEnd ||= fl.map(() => 0);
+      fl.forEach((x, j) => {
+        const P = u.pilot, v = P ? P.active : u.target;
+        if (P) {
+          if (!P.on.has(x.m)) return;
+          bit(u, x.m);
+          // 一次只开一轮（disallowRepeatingActivation）：这一轮跑完就停
+          if (u.fieldEnd[j] > t && t + DT >= u.fieldEnd[j]) { P.on.delete(x.m); return; }
+          if (!P.started?.has(x.m) || u.fieldEnd[j] > t) return;
+          if (!v?.alive || v.cloak) return;
+        } else {
+          if (t < u.fieldEnd[j] || !v?.alive || v.cloak || !engaged(u, v) || center(u, v) > x.reach || u.ratio <= 0.5) return;
+          if (units.some((w) => w.alive && w.side === u.side && !w.isDrone && w !== u && center(v, w) <= x.radius)) return;
+          bit(u, x.m);
+        }
+        u.fieldEnd[j] = t + x.cycle;
+        fired(u, x.m);
+        const f = { u, x, v, t0: t, at: t + x.warn, end: t + x.warn + Math.max(x.life, DT), pos: null, done: false };
+        if (rec) { f.rec = { kind: 'field', k: x.kind, unit: u.i, to: v.i, t: t, at: f.at, end: f.end, r: x.radius, pos: null }; events.push(f.rec); }
+        fieldsLive.push(f);
+      });
+    }
+  }
+  function fieldApply(t, put, putW, webs, paints, dScan, dRange) {
+    for (let i = fieldsLive.length - 1; i >= 0; i--) {
+      const f = fieldsLive[i], x = f.x;
+      if (t >= f.end) { fieldsLive.splice(i, 1); continue; }
+      if (t + DT < f.at) continue;
+      if (!f.pos) { f.pos = (f.v.alive ? f.v.pos : f.v.pos).slice(); if (f.rec) f.rec.pos = f.pos.slice(); }
+      for (const w of units) {
+        if (!ready(w) || w === f.u || !inField(f, w)) continue;
+        (w.fieldsOn ||= new Set()).add(x.kind);
+        if (x.kind === 'web') put(webs, w, x.web);
+        else if (x.kind === 'paint') put(paints, w, x.paint);
+        else if (x.kind === 'damp') { put(dScan, w, x.scan); put(dRange, w, x.lock); }
+        else if (x.kind === 'track' || x.kind === 'guide') for (const k of ['opt', 'fall', 'track', 'mvel', 'flight', 'ev', 'er']) { if (x[k]) putW(w, k, x[k]); }
+        else if (x.kind === 'bubble') w.pointed += 100;
+        if (f.done) continue;
+        if (x.kind === 'neut' && capOn) {
+          // 中和量按目标信号半径 / doomsdayAOESignatureRadius 缩小（小于 1 时）
+          const amt = Math.max(0, Math.min(w.cap, x.amt * (x.sig > 0 ? Math.min(1, w.t.sig * w.sigMult / x.sig) : 1)));
+          w.cap -= amt;
+          tally[f.u.side].drained += amt;
+          onDrain?.({ f: f.u, v: w, m: x.m, amt, nos: false });
+        } else if (x.kind === 'ecm') {
+          if (rand() < x.str[w.t.sensorIdx] / Math.max(1, w.t.sensor)) {
+            w.jam = Math.max(w.jam, f.end);
+            (w.jamBy || (w.jamBy = new Map())).set(`${f.u.i}:${x.m}`, { u: f.u, m: x.m, t0: t, end: f.end, burst: true });
+          }
+        }
+      }
+      f.done = true;
+    }
+  }
   // ---------- 一步 ----------
   let shots = [];
   B.step = () => {
@@ -741,11 +970,15 @@ export function createBattle(sides, opt) {
     }
     // 一直开着的装备（抗性、推进器、损控等）：电容够就算运转
     for (const u of alive) if (u.ratio > 0.5) u.act |= u.t.alwaysOn || 0;
+    cloakStep(alive, t);
     assignTargets('A');
     assignTargets('B');
     // 电子战（作用于自己的目标，按距离）
     const webs = new Map(), paints = new Map(), dScan = new Map(), dRange = new Map();
-    for (const u of alive) u.pointed = 0;
+    // 武器扰断（负）/ 远程跟踪电脑、远程感应增强（正）：按属性分开收集，正负各自算叠加惩罚
+    const wd = new Map(), bScan = new Map(), bRange = new Map();
+    const putW = (v, k, x) => { let o = wd.get(v); if (!o) wd.set(v, (o = {})); (o[k] ||= []).push(x); };
+    for (const u of alive) { u.pointed = 0; u.scram = false; }
     const put = (m, v, x) => (m.get(v) || m.set(v, []).get(v)).push(x);
     pilotLocks(alive);
     // 玩家开着的装备才运转
@@ -755,11 +988,15 @@ export function createBattle(sides, opt) {
       if (!v?.alive || !engaged(u, v)) continue;
       const d = surf(u, v), k = u.ratio;
       // 跃迁扰断 / 扰频：一直开着（不受电子战开关影响，决定对方能不能跑）
-      for (const x of u.t.points) if (on(u, x) && d <= x.range) { v.pointed += x.str * (u.ratio > 0.5 ? 1 : 0); bit(u, x.m); }
+      // 强度 ≥ 2 的是跃迁扰频器：同时让对方的微型跃迁推进器停机、开不起来
+      // 聚焦脚本的跃迁扰断力场（focus）：单目标、强度视为无穷，只禁跃迁，不关微型跃迁推进器 / 微跳
+      for (const x of u.t.points) if (on(u, x) && d <= x.range) { const ok = u.ratio > 0.5; v.pointed += x.str * (ok ? 1 : 0); if (ok && x.str >= 2 && !x.focus) v.scram = true; bit(u, x.m); }
       if (opt.ewar) {
         for (const w of u.t.webs) { if (!on(u, w)) continue; const e = rangeEff(w, d); put(webs, v, w.v * k * e); bit(u, w.m, e > 0.01); }
         for (const p of u.t.paints) { if (!on(u, p)) continue; const e = rangeEff(p, d); put(paints, v, p.v * k * e); bit(u, p.m, e > 0.01); }
         for (const x of u.t.damps) { if (!on(u, x)) continue; const e = k * rangeEff(x, d); put(dScan, v, x.scan * e); put(dRange, v, x.lock * e); bit(u, x.m, e > 0.01); }
+        for (const x of L(u.t, 'tds')) { if (!on(u, x)) continue; const e = k * rangeEff(x, d); putW(v, 'opt', x.opt * e); putW(v, 'fall', x.fall * e); putW(v, 'track', x.track * e); bit(u, x.m, e > 0.01); }
+        for (const x of L(u.t, 'gds')) { if (!on(u, x)) continue; const e = k * rangeEff(x, d); putW(v, 'mvel', x.mvel * e); putW(v, 'flight', x.flight * e); putW(v, 'ev', x.ev * e); putW(v, 'er', x.er * e); bit(u, x.m, e > 0.01); }
         u.t.ecms.forEach((e, i) => {
           if (!on(u, e)) return;
           if (rangeEff(e, d) > 0.01) bit(u, e.m);
@@ -785,20 +1022,40 @@ export function createBattle(sides, opt) {
           if (t >= st.next) {
             st.next = nextCycle(st.next, t, x.cycle);
             fired(u, x.m);
-            const amt = Math.min(v.cap, x.amt * k * e);
+            const amt = Math.max(0, Math.min(v.cap, x.amt * k * e));
             if (nos) {
-              if (u.t.cap.max && v.cap / (v.t.cap.max || 1) > u.cap / u.t.cap.max) { v.cap -= amt; u.cap = Math.min(u.t.cap.max, u.cap + amt); tally[u.side].drained += amt; }
-            } else { v.cap -= amt; tally[u.side].drained += amt; }
+              // 吸电：对方电容比例比自己高才吸得到；自己电容满了多出来的不算
+              if (u.t.cap.max && v.cap / (v.t.cap.max || 1) > u.cap / u.t.cap.max) { const got = Math.min(amt, u.t.cap.max - u.cap); v.cap -= amt; u.cap = Math.min(u.t.cap.max, u.cap + amt); tally[u.side].drained += amt; onDrain?.({ f: u, v, m: x.m, amt: got, nos: true }); }
+              else onDrain?.({ f: u, v, m: x.m, amt: 0, nos: true });
+            } else { v.cap -= amt; tally[u.side].drained += amt; onDrain?.({ f: u, v, m: x.m, amt, nos: false }); }
           }
           bit(u, x.m);
         });
       }
     }
-    for (const u of alive) { u.velMult = 1; u.sigMult = 1; u.scanMult = 1; u.rangeMult = 1; }
+    areaStep(alive, t, on);
+    for (const w of units) w.fieldsOn = null;
+    fieldStart(alive, t);
+    fieldApply(t, put, putW, webs, paints, dScan, dRange);
+    assistStep(alive, t, on, putW, put, bScan, bRange);
+    mjdStep(alive, t);
+    // 被扰频的电脑船：装的是微型跃迁推进器的换成推进器关着的属性（玩家的船由驾驶模拟自己关）
+    for (const u of alive) {
+      const off = u.r.row.unitOff;
+      if (!off || u.pilot) continue;
+      const want = u.scram ? off : u.r.row.unit;
+      if (u.t !== want) u.t = want;
+    }
+    for (const u of alive) { u.velMult = 1; u.sigMult = 1; u.scanMult = 1; u.rangeMult = 1; u.optMult = u.fallMult = u.trackMult = u.mvelMult = u.flightMult = u.erMult = u.evMult = 1; }
     for (const [v, l] of webs) v.velMult = stack(l, true);
     for (const [v, l] of paints) v.sigMult = stack(l, false);
     for (const [v, l] of dScan) v.scanMult = stack(l, true);
     for (const [v, l] of dRange) v.rangeMult = stack(l, true);
+    for (const [v, l] of bScan) v.scanMult *= stack(l, false);
+    for (const [v, l] of bRange) v.rangeMult *= stack(l, false);
+    // 同一属性的加成和减益各自排序算叠加惩罚（dogma 里正负分开），再相乘
+    const both = (l) => stack(l.filter((x) => x < 0), true) * stack(l.filter((x) => x > 0), false);
+    for (const [v, o] of wd) for (const [k, l] of Object.entries(o)) v[k + 'Mult'] = both(l);
 
     // 没有输出舰船的一方：剩下的船开始撤离
     for (const side of SIDES) {
@@ -881,8 +1138,9 @@ export function createBattle(sides, opt) {
           const got = mult ? (T.applied += vol * mult, hit(u, v, raw)) : 0;
           onHit?.({ f: u, v, type: g.type, mult, dmg: got, raw });
           shots.push(u.i, v.i, mult ? 1 : 0, k);
-        } else if (d <= g.reach) {
-          const m = { u, v, pos: u.pos.slice(), life: g.flight, g, t0: t, ovF };
+        } else if (d <= g.reach * u.mvelMult * u.flightMult) {
+          // 制导扰断：发射时按开火方当时的导弹速度 / 飞行时间 / 爆炸半径 / 爆炸速度倍数
+          const m = { u, v, pos: u.pos.slice(), life: g.flight * u.flightMult, g, t0: t, ovF, mv: u.mvelMult, er: u.erMult, ev: u.evMult };
           missiles.push(m);
           if (rec) { m.rec = { f: u.i, to: v.i, t0: t, t1: null, hit: false, k }; rec.missiles.push(m.rec); }
         }
@@ -907,11 +1165,11 @@ export function createBattle(sides, opt) {
     // 导弹飞行
     for (let i = missiles.length - 1; i >= 0; i--) {
       const m = missiles[i], v = m.v, g = m.g;
-      const off = sub(v.pos, m.pos), dd = len(off) - v.t.radius, stepLen = g.mvel * DT;
+      const off = sub(v.pos, m.pos), dd = len(off) - v.t.radius, stepLen = g.mvel * (m.mv || 1) * DT;
       let done = false;
       if (!v.alive) done = true;
       else if (dd <= stepLen) {
-        const f = missileApply(v.t.sig * v.sigMult, speedOf(v), g.er, g.ev, g.drf);
+        const f = missileApply(v.t.sig * v.sigMult, speedOf(v), g.er * (m.er || 1), g.ev * (m.ev || 1), g.drf);
         tally[m.u.side].applied += g.volley * f;
         const raw = g.dmg.map((x) => x * f * (m.ovF || 1));
         onHit?.({ f: m.u, v, type: g.type, mult: 1, dmg: hit(m.u, v, raw), raw, missile: true });
@@ -1032,6 +1290,7 @@ export function createBattle(sides, opt) {
       pos[i * 3] = u.pos[0]; pos[i * 3 + 1] = u.pos[1]; pos[i * 3 + 2] = u.pos[2];
       if (!u.alive) return;
       u.rrep?.forEach((st, j) => { if (st.tgt?.alive) rr.push(i, st.tgt.i, u.t.remote[j].m); });
+      for (const [x, m] of u.aOut || []) if (x.alive) rr.push(i, x.i, m);
       for (let l = 0; l < 3; l++) hp[i * 3 + l] = u.t.max[l] ? Math.round(u.hp[l] / u.t.max[l] * 200) : 0;
       hp[i * 3 + 2] = Math.max(1, hp[i * 3 + 2]);
       spd[i] = Math.min(65535, Math.round(speedOf(u)));
