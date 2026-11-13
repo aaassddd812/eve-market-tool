@@ -28,9 +28,7 @@ const trailNames = new Map();
 function backLink() {
   const prev = trail.length > 1 ? trail[trail.length - 2] : null;
   const label = !prev || prev === '#kb' ? '返回击杀记录' : trailNames.has(prev) ? '返回 ' + trailNames.get(prev) : '返回上一页';
-  // 从击杀首页往里点了 3 层及以上（首页 → A → B → C）：旁边多一个直接回首页的按钮
-  const root = depth() >= 3 ? `<a class="btn kb-br-back kb-back-btn" href="#kb" data-kb-root><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/></svg><span>回到击杀记录首页</span></a>` : '';
-  return `<a class="btn kb-br-back kb-back-btn" href="${prev ? app.esc(prev) : '#kb'}" data-kb-home><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span>${app.esc(label)}</span></a>${root}`;
+  return `<a class="btn kb-br-back kb-back-btn" href="${prev ? app.esc(prev) : '#kb'}" data-kb-home><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg><span>${app.esc(label)}</span></a>`;
 }
 // 当前页在首页下面第几层：trail 里最后一个 #kb 之后有几页（直接打开链接进来、没经过首页的，从第一页算起）
 function depth() {
@@ -43,6 +41,8 @@ function noteTrail() {
   if (trail[trail.length - 2] === h) trail.pop();   // 后退回来的
   else trail.push(h);
   if (trail.length > 50) trail.splice(0, trail.length - 50);
+  // 从击杀首页往里点了 3 层及以上（首页 → A → B → C）：右下角「回到顶部」上面多一个回首页的图标按钮（to-top.js）
+  window.toTopHome?.(depth() >= 3 ? () => navigate('#kb') : null, '#kb', '回到击杀记录首页');
 }
 
 const S = {
@@ -1703,7 +1703,6 @@ export function initKbPage(context) {
     if (fine) { setFine(fine.dataset.fine); return; }
     const clear = e.target.closest('[data-clear-filter]');
     if (clear) { const [key, id] = clear.dataset.clearFilter.split(':'); setFilter(key, 'remove', Number(id)); return; }
-    if (e.target.closest('[data-kb-root]')) { e.preventDefault(); navigate('#kb'); return; }
     if (e.target.closest('[data-kb-home]')) {
       e.preventDefault();
       if (trail.length > 1) history.back();   // popstate → route()，trail 在 noteTrail 里退一格

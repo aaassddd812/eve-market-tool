@@ -2911,7 +2911,25 @@ function drawMsgs(now) {
   }
 }
 // 日志：所有回执、错误原因、击毁都只进「日志」窗口（客户端的报错走日志，不上屏）；窗口关着时来了错误，左侧栏日志按钮亮橙色指示
+// 屏幕中上方的通知框（客户端 carbonui QuickMessage）：宽 300、水平居中，底边在 max(画面高 × 0.2, 175) 处；
+// 底子是 MenuUnderlay（#0b0a12 模糊底 + 0.1 白边），出现时淡入 0.3 秒、高度 0.15 秒展开，每条新消息闪一下（0.3 秒），5 秒后关掉
+function quickMsg(text) {
+  const stage = root?.querySelector('#plStage');
+  if (!stage) return;
+  let el = stage.querySelector('.pl-qmsg');
+  const fresh = !el;
+  if (fresh) { el = document.createElement('div'); el.className = 'pl-qmsg'; el.innerHTML = '<i></i><p></p>'; stage.appendChild(el); }
+  el.querySelector('p').textContent = tr(text);
+  el.style.top = `${Math.max(0, Math.max(stage.clientHeight * 0.2, 175) - el.offsetHeight)}px`;
+  const fl = el.querySelector('i');
+  fl.style.animation = 'none'; void fl.offsetWidth; fl.style.animation = '';
+  if (fresh) el.classList.add('in');
+  clearTimeout(quickMsg.t);
+  quickMsg.t = setTimeout(() => el.remove(), 5000);
+}
 function pushLog(text, kind = '') {
+  // 失败提示（服务器回的 UserError，比如电容不够、目标太远、暂不支持）同时弹在屏幕上
+  if (kind === 'bad') quickMsg(text);
   S.log.push({ t: S.b ? S.b.t : 0, text, kind });
   if (S.log.length > 200) S.log.shift();
   const w = root?.querySelector('[data-win="log"]');

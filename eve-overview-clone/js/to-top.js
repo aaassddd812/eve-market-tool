@@ -16,8 +16,24 @@
     document.body.appendChild(btn);
   }
   function rootOf(t) { return t === document || t === document.documentElement || t === document.body ? document.scrollingElement || document.documentElement : t; }
+  // 额外的「回首页」按钮（击杀页往里点了好几层时由页面登记）：贴在回到顶部按钮上面；只在地址以 prefix 开头时显示
+  var home = null, homeFn = null, homePrefix = '';
+  window.toTopHome = function (fn, prefix, label) {
+    homeFn = fn; homePrefix = prefix || '';
+    if (fn && !home) {
+      home = document.createElement('button');
+      home.type = 'button';
+      home.className = 'to-top to-top-home';
+      home.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-8 9 8M5 10v10h14V10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      home.addEventListener('click', function () { if (homeFn) homeFn(); });
+      document.body.appendChild(home);
+    }
+    if (home && label) { home.title = label; home.setAttribute('aria-label', label); }
+    if (!raf) raf = requestAnimationFrame(update);
+  };
   function update() {
     raf = 0;
+    placeHome();
     var el = cur;
     var show = Boolean(el && el.isConnected && el.scrollTop > Math.max(400, el.clientHeight) && el.getClientRects().length);
     if (!btn) { if (!show) return; make(); }
@@ -27,6 +43,20 @@
     var r = whole ? { right: innerWidth, bottom: innerHeight } : el.getBoundingClientRect();
     btn.style.right = Math.max(0, document.documentElement.clientWidth - r.right) + 20 + 'px';
     btn.style.bottom = Math.max(0, innerHeight - r.bottom) + 20 + 'px';
+    placeHome();
+  }
+  function placeHome() {
+    if (!home) return;
+    var on = Boolean(homeFn) && location.hash.indexOf(homePrefix) === 0;
+    home.classList.toggle('show', on);
+    if (!on) return;
+    // 回到顶部按钮在：贴在它上面；不在：占它的位置（按当前滚动区的右下角）
+    var up = btn && btn.classList.contains('show');
+    var el = cur && cur.isConnected && cur.getClientRects().length ? cur : null;
+    var whole = !el || el === (document.scrollingElement || document.documentElement);
+    var r = whole ? { right: innerWidth, bottom: innerHeight } : el.getBoundingClientRect();
+    home.style.right = Math.max(0, document.documentElement.clientWidth - r.right) + 20 + 'px';
+    home.style.bottom = Math.max(0, innerHeight - r.bottom) + 20 + (up ? 52 : 0) + 'px';
   }
   document.addEventListener('scroll', function (e) {
     var el = rootOf(e.target);
