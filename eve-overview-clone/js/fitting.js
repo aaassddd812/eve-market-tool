@@ -172,7 +172,7 @@ export async function showPilot(root) {
   toolInit?.();
   await MU.loadMuta().catch(() => {});
   if (!pilotMod) {
-    pilotMod = await import('./pilot.js?v=v89');
+    pilotMod = await import('./pilot.js?v=v91');
     pilotMod.initPilot({ get data() { return F.data; }, FE, shipSearch: pilotShipSearch, savedFits, normalize,
       // 无人机一架都没激活时按带宽激活（不改原装配）
       pilotRow: (ship, fit, label, o) => pilotRow(ship, fit, label, (f) => { if (f?.drones?.length && !f.drones.some((d) => d.active)) autoActivateDrones(f); }, o),

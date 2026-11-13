@@ -1399,7 +1399,12 @@ function pickUnit(i, e) {
   renderSel();
   renderOverview(true);
 }
-const toggleModule = (m, e) => R.toggleModule(m, Boolean(e?.shiftKey));
+// 主动装备但驾驶模拟没做（不在可开关列表里）：点了给提示，不再没反应；真正的被动装备客户端点了也没反应
+const unsupported = (m) => { const x = S.on?.rack?.[m]; return Boolean(x && !toggleable().has(m) && ctx.data.types.get(x.type)?.activatable); };
+const toggleModule = (m, e) => {
+  if (S.me?.alive && unsupported(m) && !e?.shiftKey) { const x = S.on.rack[m]; pushLog(`驾驶模拟里暂不支持启动${typeName(x.type)}`, 'bad'); return; }
+  R.toggleModule(m, Boolean(e?.shiftKey));
+};
 const { canActivate, activate, cycleOf, cycStart, toggleable } = R;
 
 // ---------- 点击 ----------
@@ -2089,7 +2094,7 @@ function renderRack() {
       }
       const m = rack[i];
       const cnt = members(i).length;
-      const tip = `${typeName(m.type)}${cnt > 1 ? ` ×${cnt}` : ''}${chargeOf(i) ? ' · ' + typeName(chargeOf(i)) : ''}${kind === 'tog' ? ` (${key(r, n + 1)})` : ' · 被动'}${canOverload(i) ? ' · Shift + 点击超载' : ''}${m.off ? ' · ' + m.off : ''}`;
+      const tip = `${typeName(m.type)}${cnt > 1 ? ` ×${cnt}` : ''}${chargeOf(i) ? ' · ' + typeName(chargeOf(i)) : ''}${kind === 'tog' ? ` (${key(r, n + 1)})` : unsupported(i) ? ' · 驾驶模拟里暂不支持' : ' · 被动'}${canOverload(i) ? ' · Shift + 点击超载' : ''}${m.off ? ' · ' + m.off : ''}`;
       // 装了弹药时按钮显示弹药的图标（和游戏一样）
       const icon = IMG(chargeOf(i) || m.type, 'icon', 64);
       html += `<button type="button" class="pl-mod ${kind}" data-pl-mod="${i}" data-pl-slot="${r}:${n}" draggable="${S.hud.lockMods ? 'false' : 'true'}" style="${pos}"${S.hud.tips ? '' : ` title="${esc(tip)}"`} aria-label="${esc(tip)}">
@@ -2247,9 +2252,10 @@ function updateRack() {
         if (em) em.textContent = rld ? '' : st.ammo;
       }
       if (!rld && P.on.has(i)) {
-        const cyc = x?.cycle || S.on.rack[i]?.cycle || 5;
+        // 没有持续时间的装备（隐形装置：效果没有 durationAttributeID）只有开 / 关两态，不画周期圈（客户端 DoActivateRampsThread：duration ≤ 0 直接返回）
+        const cyc = x?.cycle || S.on.rack[i]?.cycle || 0;
         if (x && st.next > 0) p = Math.max(0, Math.min(1, 1 - (st.next - t) / cyc));
-        else { const t0 = S.modOn.get(i) ?? t; p = (((t - t0) % cyc) + cyc) % cyc / cyc; }
+        else if (cyc > 0) { const t0 = S.modOn.get(i) ?? t; p = (((t - t0) % cyc) + cyc) % cyc / cyc; }
       }
     }
     // 停用中：红光闪到这一轮结束，圈接着走完
