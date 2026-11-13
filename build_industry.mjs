@@ -64,7 +64,8 @@ const res = {};
 const bpByProduct = new Map();
 const inventionRaw = [];
 await eachLine("blueprints", (o) => {
-  const bpType = types.get(o.blueprintTypeID);
+  const bpid = bpid ?? o._key;   // 新版 SDE（3698585 起）去掉了 blueprintTypeID，只留 _key
+  const bpType = types.get(bpid);
   if (!bpType || bpType.published === false) return;
   for (const [act, code] of [["manufacturing", "m"], ["reaction", "r"]]) {
     const a = o.activities[act];
@@ -74,10 +75,10 @@ await eachLine("blueprints", (o) => {
     if (!pt || !pt.published || !pt.marketGroupID) continue;
     if (bp[prod.typeID] && code === "m" && bp[prod.typeID][5] === "m") continue;   // 少数产品有多张蓝图，保留第一张
     // 最后一项：蓝图能否在 NPC 市场买到（1 / 0）；买不到的 T1 蓝图多来自 LP 商店或掉落
-    bp[prod.typeID] = [o.blueprintTypeID, prod.quantity, a.time, pairs(a.materials), o.maxProductionLimit || 1, code, skillPairs(a.skills), bpType.marketGroupID ? 1 : 0];
-    bpByProduct.set(o.blueprintTypeID, prod.typeID);
-    if (code === "m") res[o.blueprintTypeID] = [o.activities.research_material?.time || 0, o.activities.research_time?.time || 0, o.activities.copying?.time || 0];
-    used.add(prod.typeID); used.add(o.blueprintTypeID);
+    bp[prod.typeID] = [bpid, prod.quantity, a.time, pairs(a.materials), o.maxProductionLimit || 1, code, skillPairs(a.skills), bpType.marketGroupID ? 1 : 0];
+    bpByProduct.set(bpid, prod.typeID);
+    if (code === "m") res[bpid] = [o.activities.research_material?.time || 0, o.activities.research_time?.time || 0, o.activities.copying?.time || 0];
+    used.add(prod.typeID); used.add(bpid);
     a.materials.forEach((m) => used.add(m.typeID));
     (a.skills || []).forEach((s) => used.add(s.typeID));
   }
@@ -90,8 +91,8 @@ for (const o of inventionRaw) {
   const a = o.activities.invention;
   for (const p of a.products) {
     if (!bpByProduct.has(p.typeID)) continue;
-    inv[p.typeID] = [o.blueprintTypeID, p.probability || 0, p.quantity || 1, pairs(a.materials), a.time, skillPairs(a.skills)];
-    used.add(o.blueprintTypeID);
+    inv[p.typeID] = [bpid, p.probability || 0, p.quantity || 1, pairs(a.materials), a.time, skillPairs(a.skills)];
+    used.add(bpid);
     a.materials.forEach((m) => used.add(m.typeID));
     a.skills.forEach((s) => used.add(s.typeID));
   }
