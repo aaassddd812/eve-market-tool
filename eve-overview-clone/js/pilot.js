@@ -799,7 +799,7 @@ function renderStage() {
   sw?.addEventListener('pointerout', onHintOut);
   sw?.addEventListener('contextmenu', onSelCtx);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v68').then((m) => {
+  import('./sim-3d.js?v=v69').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -817,7 +817,8 @@ function renderStage() {
       onFollowDbl: false,
       nameOf: (i) => (i === S.sel ? S.names[i] : ''),
       onHover: (i) => { S.hoverShip = i >= 0; cursorMode(); },
-      onTrack: () => renderSel()
+      onTrack: () => renderSel(),
+      onCtx: (i, c, e) => { if (!S.mv && S.me && i === S.me.i) { e.preventDefault(); selfMenu(e); } }
     }, { brackets: brkPath, ui: UI, quality: 'auto', skybox: `${UI}sky/${S.sky}/`, fx: `${UI}fx/`, post: true, fov: 1.0 });   // 客户端环绕镜头 default_fov = 1.0 弧度（「镜头动态移动」关着时）
     if (!S.view) { S.noView = tr('这个浏览器不支持 3D（WebGL）'); return; }
     // 指定空间点航行（客户端 navigation.py + positionalControl）：按住 Q、鼠标在太空里且没按键时开始；左键拖动（转镜头）取消；
@@ -2756,6 +2757,13 @@ function warpMenu(e, off) {
     ...(off ? [] : WARP_DISTS.map((d) => [`跃迁至 ${km(d)}内${d === cur ? '（默认）' : ''}`, () => tgt && warpTo(tgt, d)])),
     ['设置默认距离', () => { S.cm = WARP_DISTS.map((d) => [`${km(d)}内${d === cur ? ' ✓' : ''}`, () => ctx.store.setJSON(WARPD_KEY, d)]); cmenuAt(e); }]
   ];
+  cmenuAt(e);
+}
+// 右键自己的船（客户端 menusvc._CelestialMenu 里对自己船给的条目，按原顺序）：停止舰船、重置视角
+function selfMenu(e) {
+  hideHint();
+  closeMenus();
+  S.cm = [['停止舰船', () => cmd({ cmd: 'stop', tgt: null })], ['重置视角', () => S.view?.follow(S.me?.i ?? 0)]];
   cmenuAt(e);
 }
 function cmenuAt(e) {

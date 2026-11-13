@@ -1891,8 +1891,7 @@ export function createView(host, hooks = {}, opt = {}) {
     lctx.shadowColor = 'rgba(0, 0, 0, 0.9)';
     lctx.shadowBlur = 3 * dpr;
     // 挤在一起时与已写的名字重叠就不写（选中 / 悬停的船先写）
-    const F = frameAt(lastDrawT), bw = 40 * dpr, bh = Math.max(1, 2 * dpr), lh = 13 * dpr + bh * 3 + 3 * dpr;
-    const HP_COL = ['#5aa9ff', '#f0b44a', '#e85d5d'];
+    const lh = 13 * dpr;
     const boxes = [];
     for (const c of new Set([selC, hoverC])) {
       const p = c >= 0 && cels.pos(c), name = p && hooks.celName?.(c);
@@ -1912,23 +1911,11 @@ export function createView(host, hooks = {}, opt = {}) {
       if (vA.z > 1 || Math.abs(vA.x) > 1.1 || Math.abs(vA.y) > 1.1) continue;
       const name = hooks.nameOf?.(i);
       if (!name) continue;
-      const x = (vA.x + 1) / 2 * w + 14 * dpr, y = (1 - vA.y) / 2 * h - 4 * dpr, tw = Math.max(bw, lctx.measureText(name).width);
+      const x = (vA.x + 1) / 2 * w + 14 * dpr, y = (1 - vA.y) / 2 * h - 4 * dpr, tw = lctx.measureText(name).width;
       if (boxes.some((r) => x < r[2] && x + tw > r[0] && Math.abs(y - r[1]) < lh)) continue;
       boxes.push([x, y, x + tw]);
       lctx.fillStyle = sideOf(rec.units[i].side) === 'A' ? '#9cc2ff' : '#ff9d94';
       lctx.fillText(name, x, y);
-      // 名字下面：护盾 / 装甲 / 结构
-      if (i * 3 < F.hp.length) {
-        lctx.shadowBlur = 0;
-        for (let k = 0; k < 3; k++) {
-          const by = y + 7 * dpr + k * (bh + 1 * dpr);
-          lctx.fillStyle = 'rgba(255, 255, 255, 0.16)';
-          lctx.fillRect(x, by, bw, bh);
-          lctx.fillStyle = HP_COL[k];
-          lctx.fillRect(x, by, bw * F.hp[i * 3 + k] / 200, bh);
-        }
-        lctx.shadowBlur = 3 * dpr;
-      }
     }
   }
 
@@ -1986,6 +1973,8 @@ export function createView(host, hooks = {}, opt = {}) {
     if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) { const p = pick(e); if (p.c >= 0 && hooks.onPickCel) hooks.onPickCel(p.c, e); else hooks.onPick?.(p.i, e); }
     down = null;
   });
+  // 右键：把鼠标下的船 / 天体交给外面（自己船的右键菜单等）
+  el.addEventListener('contextmenu', (e) => { if (placing) return; const p = pick(e); hooks.onCtx?.(p.i, p.c, e); });
   el.addEventListener('dblclick', (e) => {
     const pk = pick(e), i = pk.i;
     if (pk.c >= 0 && hooks.onDblCel) { hooks.onDblCel(pk.c, e); return; }
