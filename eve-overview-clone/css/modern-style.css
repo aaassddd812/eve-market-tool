@@ -9857,3 +9857,9 @@ html[data-skin="eve"] .pl-stage .pl-ov th { padding-top: 0; padding-bottom: 0; h
   .pl-rrow { grid-template-columns: minmax(110px, 1fr) 44px 64px 60px 66px; }
   .pl-rrow > span:nth-child(5), .pl-rrow > span:nth-child(6) { display: none; }
 }
+/* 驾驶模拟 · 跃迁：HUD 上方提示的进度条（对准进度），总览里的天体行，选中物体窗口的天体图标 */
+.pl-ind-bar { display: block; width: 220px; height: 4px; margin: 6px auto 0; background: rgba(255, 255, 255, 0.15); }
+.pl-ind-bar[hidden] { display: none; }
+.pl-ind-bar s { display: block; height: 100%; width: 0; background: rgba(255, 255, 255, 0.85); text-decoration: none; transition: width 0.25s linear; }
+.pl-ov tr.cel td { color: rgba(255, 255, 255, 0.8); }
+.pl-sel-top img.cel { width: 32px; height: 32px; margin: 8px; object-fit: contain; image-rendering: auto; }

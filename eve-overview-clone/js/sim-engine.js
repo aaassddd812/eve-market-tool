@@ -45,6 +45,11 @@ const LOGI_LOCKS = 4;      // 后勤同时锁定的队友数
 const WARP_IN = 3;         // 跃迁进场的减速时间（秒）
 const WARP_FROM = 150000;  // 跃迁进场从多远处减速
 const CYNO_JUMP = 10;      // 诱导开启后，舰队跳过来所需时间（秒）
+// 玩家跃迁（驾驶模拟）：曲线照客户端 Destiny::WarpDistance 的闭式解重写，规则见 B.warpTo
+export const AU = 149597870700;
+export const MIN_WARP = 150000;   // 最短跃迁距离（appConst.minWarpDistance，按表面距离）
+export const GRID = 8e6;          // 同一网格的范围（米）：电脑船只理会这个距离内的敌人，总览只列这个距离内的舰船。客户端的网格大小是动态的，这里取约 8000 km
+const ALIGN_COS = Math.cos(5 * Math.PI / 180);   // 对准判定：速度 ≥ 75% 且航向偏差在 5° 内（客户端只显示进度，起跳由服务器判；角度为公开资料的说法）
 
 const PENALTY = (i) => Math.exp(-((i / 2.67) ** 2));
 const stack = (list, asc) => list.sort((a, b) => (asc ? a - b : b - a)).reduce((m, x, i) => m * (1 + x * PENALTY(i)), 1);
@@ -56,6 +61,24 @@ const missileApply = (sig, V, er, ev, drf) => (er > 0 ? Math.min(1, sig / er, V 
 // 下一个周期开始：上一周期刚结束（差不到一步）就接着算，保持节奏；停过（锁定、射程外）就从现在重新开始，不补打
 const nextCycle = (next, t, cycle) => (t - next > DT ? t : next) + cycle;
 function rng(seed) { let s = seed >>> 0 || 1; const f = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); f.get = () => s; f.set = (v) => { s = v >>> 0 || 1; }; return f; }
+
+// 跃迁曲线（客户端 Destiny::WarpDistance）：k = 跃迁速度（AU/s），j = min(k/3, 2)，D = 跃迁距离（米）
+//   峰值 vmax = min((D+1)·k·j/(k+j), k·AU)；加速段走过 e^{kt}（速率取 max(起跳速率, k·e^{kt})），巡航 vmax，减速段速率 vmax·e^{−j·t}
+//   减速到 min(最大速度/2, 100 m/s) 以下时出跃迁，保留这个速率沿跃迁方向滑行
+export function warpCurve(D, k, v0 = 0, maxV = 0) {
+  const j = Math.min(k / 3, 2);
+  const vmax = Math.min((D + 1) * k * j / (k + j), k * AU);
+  const tA = Math.log(vmax / k) / k, tC = Math.max(0, D / vmax - 1 / k - 1 / j + 1 / vmax);
+  const exit = Math.min(maxV * 0.5, 100) || 100;
+  const tE = tA + tC + Math.log(vmax / Math.min(exit, vmax * 0.999)) / j;   // 出跃迁的时刻
+  const at = (t) => {
+    if (t < tA) return { s: Math.exp(k * t), v: Math.max(v0, k * Math.exp(k * t)) };
+    if (t - tA < tC) return { s: vmax / k + vmax * (t - tA), v: vmax };
+    const t3 = t - tA - tC;
+    return { s: Math.min(D, vmax / k + vmax * tC + (vmax / j) * (1 - Math.exp(-j * t3))), v: vmax * Math.exp(-j * t3) };
+  };
+  return { k, j, vmax, tA, tC, tE, exit, at };
+}
 
 // 向量小工具（[x, y, z]）
 const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
@@ -246,6 +269,10 @@ export function createBattle(sides, opt) {
     for (const [at, i, by] of S0.k) { const v = units[i]; if (v) kills.push({ t: Math.ceil(at), at, side: v.side, ship: v.r.row.ship, row: v.r, unit: i, by, drone: Boolean(v.isDrone) }); }
   };
 
+  // 天体（驾驶模拟的跃迁目的地）：opt.cel = [{ name, group, pos（米）, radius, land（0 km 落点离中心的距离） }]
+  B.cel = opt.cel || [];
+  if (rec) rec.cel = B.cel;
+
   // ---------- 玩家驾驶 ----------
   B.takeControl = (i, maxLocks = 5) => {
     const u = units[i];
@@ -273,6 +300,66 @@ export function createBattle(sides, opt) {
     P.lockAll.delete(v);
     if (P.active === v) P.active = [...P.locks.keys()][0] || null;
   };
+  // 跃迁至（玩家）：tgt = 舰船单位或 { cel: 天体序号 }，dist = 落点距离（米，0–100 km）
+  // 先对准：全速朝目标点飞，速度 ≥ 75% 且航向偏差 ≤ 5° 时起跳（warpStart）；返回 true 或失败原因
+  //   near 距离不到 150 km · scram 被扰断 / 扰频 / 在泡里 · cloak 开着普通隐形装置 · gone 目标不在了 · warping 已经在跃迁
+  const warpPoint = (u, w) => {
+    if (w.cel != null) {
+      const c = B.cel[w.cel];
+      if (!c) return null;
+      const off = sub(u.pos, c.pos), d = len(off);
+      return add(c.pos, scale(d > 1 ? scale(off, 1 / d) : [1, 0, 0], c.land || c.radius || 0));
+    }
+    return w.u?.alive && !w.u.warp ? w.u.pos.slice() : null;
+  };
+  const warpGap = (u, w, pt) => Math.max(0, len(sub(pt, u.pos)) - u.t.radius - (w.u ? w.u.t.radius : 0));
+  B.warpTo = (u, tgt, dist = 0) => {
+    const P = u.pilot;
+    if (!P || !u.alive) return 'gone';
+    if (u.warp) return 'warping';
+    const w = tgt?.cel != null ? { cel: tgt.cel } : { u: tgt };
+    const pt = warpPoint(u, w);
+    if (!pt) return 'gone';
+    if (warpGap(u, w, pt) < MIN_WARP) return 'near';
+    if (u.cloak && !u.cloakWarp) return 'cloak';
+    if (u.pointed > u.t.stab) return 'scram';
+    Object.assign(P, { cmd: 'warp', wp: { ...w, dist: Math.max(0, Math.min(100000, dist)), t0: B.t }, tgt: null, pt: null, dir: null });
+    return true;
+  };
+  // 对准进度（客户端 spaceMgr：min(速度/75%, (cos+1)/1.99)^3）：HUD 进度条用
+  B.alignProgress = (u) => {
+    const P = u.pilot, pt = P?.cmd === 'warp' && P.wp ? warpPoint(u, P.wp) : null;
+    if (!pt) return 0;
+    const V = u.t.vel * u.velMult, sp = len(u.vel);
+    const cos = sp > V * 0.01 ? dot(scale(u.vel, 1 / sp), norm(sub(pt, u.pos))) : -1;
+    return Math.min(Math.min(1, sp / Math.max(1, V) / 0.75), (cos + 1) / 1.99) ** 3;
+  };
+  // 起跳：扣电容（不够就按电容缩短距离），清掉锁定，关掉推进器 / 微跳（pilot-rules 收到 warpStart 处理），无人机留在原地
+  function warpStart(u) {
+    const P = u.pilot, w = P.wp, pt = warpPoint(u, w);
+    if (!pt) { P.cmd = 'stop'; P.wp = null; (P.msgs ||= []).push({ k: 'warpGone' }); return; }
+    if (u.pointed > u.t.stab) { P.cmd = 'stop'; P.wp = null; (P.msgs ||= []).push({ k: 'warpScram' }); return; }
+    const dir = norm(sub(pt, u.pos));
+    const end = add(pt, scale(dir, -w.dist));   // 落点 = 目标点沿来向退 dist 米
+    let D = len(sub(end, u.pos));
+    const per = u.t.warpCap * u.t.mass / AU;   // 每米耗电
+    if (capOn && per > 0) {
+      const can = Math.max(0, u.cap) / per;
+      if (can < D) { D = can; (P.msgs ||= []).push({ k: 'warpLowCap' }); }
+      u.cap -= D * per;
+    }
+    if (D < 1000) { P.cmd = 'stop'; P.wp = null; return; }
+    for (const v of [...P.locks.keys()]) B.unlock(u, v);
+    const c = warpCurve(D, u.t.warp, len(u.vel), u.t.vel * u.velMult);
+    u.warp = { go: true, t0: B.t + DT, from: u.pos.slice(), dir, D, c, name: w.cel != null ? B.cel[w.cel]?.name : w.u?.r.row.label || '' };
+    P.cmd = 'stop';
+    P.wp = null;
+    (P.msgs ||= []).push({ k: 'warpStart' });
+    // 别人看到的出 / 入跃迁闪光时刻（WarpFlash.py）：加速度过 310000 m/s² 再随机延迟 0–250 毫秒起跳闪光；减速度回到 −215000 m/s² 以内落地闪光
+    const tOut = Math.min(c.tA, Math.max(0, Math.log(310000 / (c.k * c.k)) / c.k));
+    const tIn = Math.min(c.tE, c.tA + c.tC + Math.max(0, Math.log(c.vmax * c.j / 215000) / c.j));
+    events.push({ t: B.t + DT, kind: 'warp', unit: u.i, side: u.side, D, dir, tOut: B.t + DT + tOut + ((u.i * 9301 + Math.round(B.t * 100) * 49297) % 233280) / 233280 * 0.25, tIn: B.t + DT + tIn });
+  }
   function pilotLocks(alive) {
     for (const u of alive) {
       const P = u.pilot;
@@ -328,7 +415,9 @@ export function createBattle(sides, opt) {
 
   // ---------- 选目标 ----------
   function assignTargets(side) {
-    const enemies = units.filter((u) => ready(u) && u.side !== side && !u.isDrone && !u.cloak);
+    // 跃迁走、不在同一网格的敌人：电脑船不再追打（客户端里看不到别的网格上的船）
+    for (const u of units) if (u.target && !u.pilot && u.side === side && center(u, u.target) > GRID) { u.target = null; u.lock = u.lockAll = 0; }
+    const enemies = units.filter((u) => ready(u) && u.side !== side && !u.isDrone && !u.cloak && units.some((w) => w.side === side && ready(w) && !w.pilot && center(w, u) <= GRID));
     // 无人机实体（驾驶模拟）：没有舰船可打时才打；有舰船时，闲着的攻击者有一定概率去打在打本方的无人机
     const foeDrones = units.filter((u) => ready(u) && u.side !== side && u.isDrone);
     if (!enemies.length && foeDrones.length) { for (const u of units) if (ready(u) && u.side === side && attacks(u) && !u.pilot && !u.target?.alive) { u.target = foeDrones[Math.floor(rand() * foeDrones.length)]; setLock(u, u.target); } return; }
@@ -423,6 +512,7 @@ export function createBattle(sides, opt) {
     const prefs = followers.map((f) => (mode === 'kite' ? f.t.reach * 0.9 : f.t.pref)).sort((x, y) => x - y);
     const R = prefs.length ? prefs[Math.floor(prefs.length / 2)] : a.t.pref;
     const slow = Math.min(a.t.vel * a.velMult, ...followers.map((f) => f.t.vel * f.velMult * 0.92));
+    if (!a.target?.alive && len(sub(enemyCen, a.pos)) > GRID) return [0, 0, 0];   // 敌人都跃迁走了：原地待命
     const ref = a.target?.alive ? a.target : { pos: enemyCen, vel: [0, 0, 0], t: { radius: 0 } };
     // 风筝：敌人贴近到距离的 60% 以内就直接背向拉开
     if (mode === 'kite' && len(sub(enemyCen, a.pos)) < R * 0.6) return scale(norm(sub(a.pos, enemyCen)), slow);
@@ -433,6 +523,12 @@ export function createBattle(sides, opt) {
     const P = u.pilot, v = P.tgt?.alive && !P.tgt.warp ? P.tgt : null;
     const V = maxV * Math.max(0, Math.min(1, P.speed));
     if (P.cmd === 'dir' && P.dir) return scale(P.dir, V);
+    // 跃迁对准：全速朝目标点（不看速度比例）
+    if (P.cmd === 'warp' && P.wp) {
+      const pt = warpPoint(u, P.wp);
+      if (!pt) { P.cmd = 'stop'; P.wp = null; (P.msgs ||= []).push({ k: 'warpGone' }); return [0, 0, 0]; }
+      return scale(norm(sub(pt, u.pos)), maxV);
+    }
     // 飞向空间中的点（客户端 GotoPoint：Q + 两次点击选点）：到点停下；接近时按剩余距离减速
     if (P.cmd === 'point' && P.pt) {
       const off = sub(P.pt, u.pos), d = len(off);
@@ -489,7 +585,7 @@ export function createBattle(sides, opt) {
     }
     if (!v) {
       const off = sub(enemyCen, u.pos);
-      return len(off) < 1000 ? [0, 0, 0] : scale(norm(off), maxV);
+      return len(off) < 1000 || len(off) > GRID ? [0, 0, 0] : scale(norm(off), maxV);
     }
     const lockR = u.t.lockRange * u.rangeMult * 0.95;
     if (u.role === 'tackle') {
@@ -506,9 +602,26 @@ export function createBattle(sides, opt) {
   }
   function move() {
     const t = B.t;
+    // 玩家跃迁：按曲线走；减速到出跃迁速度以下时落地，保留出跃迁速度沿跃迁方向滑行（之后按停船减速）
+    for (const u of units) {
+      if (!u.alive || !u.warp?.go) continue;
+      const w = u.warp, T = t + DT - w.t0;
+      if (T < 0) continue;
+      const x = w.c.at(T);
+      if (T >= w.c.tE || x.s >= w.D) {
+        u.pos = add(w.from, scale(w.dir, Math.min(x.s, w.D)));
+        u.vel = scale(w.dir, w.c.exit);
+        u.warp = null;
+        if (u.pilot) (u.pilot.msgs ||= []).push({ k: 'warpEnd' });
+        events.push({ t: B.t + DT, kind: 'warpEnd', unit: u.i, side: u.side });
+        continue;
+      }
+      u.pos = add(w.from, scale(w.dir, x.s));
+      u.vel = scale(w.dir, x.v);
+    }
     // 跃迁进场：减速落地
     for (const u of units) {
-      if (!u.alive || !u.warp) continue;
+      if (!u.alive || !u.warp || u.warp.go) continue;
       const s = Math.min(1, (t + DT - u.warp.t0) / WARP_IN);
       const p = add(u.warp.to, scale(sub(u.warp.from, u.warp.to), (1 - s) ** 3));
       u.vel = scale(sub(p, u.pos), 1 / DT);
@@ -625,6 +738,8 @@ export function createBattle(sides, opt) {
       const d = u.drones[k], g = d.g;
       // 无人机实体被打爆：从母舰的无人机里去掉
       if (d.e && !d.e.alive && !d.e.escaped) { u.drones.splice(k, 1); continue; }
+      // 母舰跃迁走了（或不在同一网格）：无人机留在原地待命，回到控制距离内才重新听指挥（客户端：你将要跃迁远离你的无人机）
+      if (d.pos && (u.warp || len(sub(d.pos, u.pos)) > Math.max(g.control || 0, 1e5))) { d.vel = [0, 0, 0]; d.target = null; if (d.e) d.e.vel = d.vel; continue; }
       // 玩家：无人机按指令放出 / 收回（pilot.drones），放出后打当前目标
       if (u.pilot && !u.pilot.drones) { if (d.e) droneHide(d); d.pos = null; d.target = null; continue; }
       const go = v && surf(u, v) <= g.control ? v : null;
@@ -886,6 +1001,7 @@ export function createBattle(sides, opt) {
         (P.cool ||= new Map()).set(x.m, t + x.cool);
       }
       u.cloak = !!c;
+      u.cloakWarp = Boolean(c?.warp);
       if (c) bit(u, c.m);
     }
     for (const v of units) if (v.target?.cloak) { v.target = null; v.lock = v.lockAll = 0; }
@@ -1086,6 +1202,13 @@ export function createBattle(sides, opt) {
       if (mine.length && !mine.some((u) => (u.t.dps > 0 || u.pilot) && !u.escaping) && !units.some((u) => u.alive && u.warp && u.side === side) && !jumps.some((j) => j.side === side)) for (const u of mine) if (!u.escaping && !u.pilot) u.escaping = t || DT;
     }
     move();
+    // 玩家跃迁：对准完成（速度 ≥ 75%、航向偏差 ≤ 5°）就起跳
+    for (const u of alive) {
+      const P = u.pilot;
+      if (!P || P.cmd !== 'warp' || !P.wp || !u.alive || u.warp) continue;
+      const pt = warpPoint(u, P.wp), V = u.t.vel * u.velMult, sp = len(u.vel);
+      if (pt && sp >= V * 0.75 && sp > 0 && dot(scale(u.vel, 1 / sp), norm(sub(pt, u.pos))) >= ALIGN_COS) warpStart(u);
+    }
     // 对准完成、没被扰断的离场
     for (const u of alive) {
       if (!u.escaping || !u.alive || t - u.escaping < u.t.align || u.pointed > u.t.stab) continue;
@@ -1306,8 +1429,9 @@ export function createBattle(sides, opt) {
     if (Number.isInteger(B.t) || B.done) timeline.push(point());
     if (!rec) return;
     const n = units.length;
-    const pos = new Float32Array(n * 3), hp = new Uint8Array(n * 3), tg = new Int32Array(n).fill(-1);
-    const spd = new Uint16Array(n), cp = new Uint8Array(n), act = new Uint32Array(n), rld = new Uint32Array(n), fire = new Uint32Array(n), lk = new Uint8Array(n);
+    // 位置用双精度：跃迁动辄几个 AU，单精度只剩十几公里的精度；wp：0 正常 / 1 对准跃迁中 / 2 跃迁中
+    const pos = new Float64Array(n * 3), hp = new Uint8Array(n * 3), tg = new Int32Array(n).fill(-1), wp = new Uint8Array(n);
+    const spd = new Float32Array(n), cp = new Uint8Array(n), act = new Uint32Array(n), rld = new Uint32Array(n), fire = new Uint32Array(n), lk = new Uint8Array(n);
     const dr = [], rr = [];
     units.forEach((u, i) => {
       pos[i * 3] = u.pos[0]; pos[i * 3 + 1] = u.pos[1]; pos[i * 3 + 2] = u.pos[2];
@@ -1316,7 +1440,8 @@ export function createBattle(sides, opt) {
       for (const [x, m] of u.aOut || []) if (x.alive) rr.push(i, x.i, m);
       for (let l = 0; l < 3; l++) hp[i * 3 + l] = u.t.max[l] ? Math.round(u.hp[l] / u.t.max[l] * 200) : 0;
       hp[i * 3 + 2] = Math.max(1, hp[i * 3 + 2]);
-      spd[i] = Math.min(65535, Math.round(speedOf(u)));
+      spd[i] = u.warp?.go ? len(u.vel) : Math.round(speedOf(u));
+      wp[i] = u.warp?.go ? 2 : u.pilot?.cmd === 'warp' ? 1 : 0;
       cp[i] = u.t.cap.max ? Math.round(Math.max(0, u.cap) / u.t.cap.max * 200) : 0;
       act[i] = u.act >>> 0;
       rld[i] = u.rld >>> 0;
@@ -1330,13 +1455,13 @@ export function createBattle(sides, opt) {
       for (const q of u.squads) if (q.pos) dr.push(i, q.pos[0], q.pos[1], q.pos[2], 4 + q.f.cls, q.f.type || 0);
       u.rld = 0;
     });
-    rec.frames.push({ t: B.t, pos, hp, tg, shots, spd, cp, act, rld, fire, lk, dr: Float32Array.from(dr), rr: Int32Array.from(rr), pa: primary.A ? primary.A.i : -1, pb: primary.B ? primary.B.i : -1 });
+    rec.frames.push({ t: B.t, pos, hp, tg, shots, spd, cp, act, rld, fire, lk, wp, dr: Float64Array.from(dr), rr: Int32Array.from(rr), pa: primary.A ? primary.A.i : -1, pb: primary.B ? primary.B.i : -1 });
   }
   timeline.push(point());
   if (rec) {
-    const n = units.length, pos = new Float32Array(n * 3), hp = new Uint8Array(n * 3), cp = new Uint8Array(n).fill(200);
+    const n = units.length, pos = new Float64Array(n * 3), hp = new Uint8Array(n * 3), cp = new Uint8Array(n).fill(200);
     units.forEach((u, i) => { pos.set(u.pos, i * 3); for (let l = 0; l < 3; l++) hp[i * 3 + l] = u.t.max[l] ? 200 : 0; hp[i * 3 + 2] = 200; });
-    rec.frames.push({ t: 0, pos, hp, tg: new Int32Array(n).fill(-1), shots: [], spd: new Uint16Array(n), cp, act: new Uint32Array(n), rld: new Uint32Array(n), fire: new Uint32Array(n), lk: new Uint8Array(n), dr: new Float32Array(0), rr: new Int32Array(0), pa: -1, pb: -1 });
+    rec.frames.push({ t: 0, pos, hp, tg: new Int32Array(n).fill(-1), shots: [], spd: new Float32Array(n), wp: new Uint8Array(n), cp, act: new Uint32Array(n), rld: new Uint32Array(n), fire: new Uint32Array(n), lk: new Uint8Array(n), dr: new Float32Array(0), rr: new Int32Array(0), pa: -1, pb: -1 });
   }
 
   // ---------- 结果 ----------

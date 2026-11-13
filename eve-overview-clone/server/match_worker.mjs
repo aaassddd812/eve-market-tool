@@ -31,6 +31,8 @@ const { createBattle } = await mod('js/sim-engine.js');
 const PR = await import(pathToFileURL(path.join(ROOT, 'js/pilot-rules.js')).href + '?v=v1');
 const MS = await mod('js/match-sim.js');
 const data = await FE.loadFitData('./fit-data.json');
+// 星系天体（驾驶模拟的跃迁目的地，pilot-systems.json）：和客户端一样按种子选星系；读不到就没有天体（不能跃迁到天体）
+const systems = await readFile(path.join(ROOT, 'pilot-systems.json'), 'utf8').then(JSON.parse).catch(() => null);
 SU.bindUnit({ FE, data }, {});
 
 const DT_MS = 500;
@@ -158,7 +160,7 @@ const matches = new Map();
 function startMatch({ mid, players, seed }) {
   const dist = PR.MATCH_BRACKETS[players[0].bracket]?.dist || 30;
   const info = { seed, dist, max: PR.MATCH_MAX, players: players.map((x) => ({ p: x.p, side: x.side, name: x.name, id: x.id, fit: x.fit, levels: x.levels === 'max' ? allFive() : x.levels, value: x.value })) };
-  const M = Object.assign(MS.buildMatch({ pilotUnit: SU.pilotUnit, createBattle }, info), { mid, ready: new Set(), ended: false, timer: null });
+  const M = Object.assign(MS.buildMatch({ pilotUnit: SU.pilotUnit, createBattle, systems }, info), { mid, ready: new Set(), ended: false, timer: null });
   for (const x of M.P) Object.assign(x, { ops: [], gone: 0 });
   M.info = info;
   M.log = [];   // 每一步执行的指令（掉线重连的人从头重放）
@@ -237,7 +239,7 @@ parentPort.on('message', async (m) => {
     else if (m.t === 'op') {
       const M = matches.get(m.mid), x = M?.P[m.p];
       if (!x) return;
-      const a = PR.cleanOp(m.a, M.b.units.length, x.nRack);
+      const a = PR.cleanOp(m.a, M.b.units.length, x.nRack, M.b.cel.length);
       if (a && x.ops.length < 20) x.ops.push(a);
     } else if (m.t === 'gone') { const x = matches.get(m.mid)?.P[m.p]; if (x) x.gone = m.on ? Date.now() : 0; }
     else if (m.t === 'leave') { const M = matches.get(m.mid), x = M?.P[m.p]; if (x) { x.ops.length = 0; selfDestruct(M, x); } }

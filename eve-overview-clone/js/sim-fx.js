@@ -12,7 +12,7 @@
 //   柔光 / 星芒 / 光环用游戏的粒子贴图，火球和爆炸按游戏的 9 × 9 帧爆炸序列逐帧播放，光束横截面用游戏的光束贴图。
 //   贴图加载完之前（或加载失败）用程序画的图集。ready() 告诉调用方贴图是否已就绪（加载失败也算就绪）。
 import * as THREE from './vendor/three/three.module.min.js';
-import { createClientFx } from './sim-cfx.js?v=v5';
+import { createClientFx } from './sim-cfx.js?v=v7';
 
 const KM = 1 / 1000;
 const SIZE_M = [0, 1, 2, 4, 10];                 // 武器尺寸（小 / 中 / 大 / 超大）→ 宽度倍数
@@ -526,7 +526,44 @@ export function createFx(scene, renderer, opt = {}) {
     if (!cfx || !P.camera) return;
     for (const e of P.rec.events || []) {
       if (e.kind !== 'mjd' || t < e.t || t > e.t + 4 || !cfx.ready('mjdjump')) continue;
-      cfx.play('mjdjump', `mjd:${e.unit}:${e.t}`, t - e.t, { dst: new THREE.Vector3(...e.to).multiplyScalar(KM), R: P.radiusM(e.unit) });
+      cfx.play('mjdjump', `mjd:${e.unit}:${e.t}`, t - e.t, { dst: new THREE.Vector3(...e.to).sub(new THREE.Vector3(...(P.org?.() || [0, 0, 0]))).multiplyScalar(KM), R: P.radiusM(e.unit) });
+    }
+  }
+  // 别人的出 / 入跃迁闪光（WarpFlash.py）：自己的船只有隧道。短于 4 万 km 的跃迁不播
+  // 起跳：在闪光那一刻的位置放 warp_out，缩放 (r, r, 8)，r = 0.0039·R + 2.5（R = 包围球半径，米）；船上叠 warp_glow，缩放 (r/2, r/2, 6)，朝运动方向；1.5 秒后清掉
+  // 落地：在落地闪光那一刻的位置放 warp_in_glow（同时最多 5 个，多的用 warp_in_noglow），缩放 0.7778·R^0.3534；
+  //       船上叠 warp_glow，缩放 0.125·(9e-8·R² + 0.005·R + 0.6898)·(1, 1, 3)，跟船的位置和朝向；3 秒后清掉
+  const wDir = new THREE.Vector3(), wAt = new THREE.Vector3(), wAt2 = new THREE.Vector3();
+  function warpFlashes(P, t) {
+    if (!cfx || !P.camera) return;
+    const me = P.self?.() ?? -1, glowLen = cfx.length('warpglow') || 0.5;
+    let glows = 0;
+    for (const e of P.rec.events || []) {
+      if (e.kind !== 'warp' || e.tOut == null || e.unit === me || e.D < 4e7) continue;
+      const R = P.radiusM(e.unit);
+      const ao = t - e.tOut;
+      if (ao >= 0 && ao < 1.5 && cfx.ready('warpout') && cfx.ready('warpglow')) {
+        const r = 0.0039 * R + 2.5;
+        wDir.set(e.dir[0], e.dir[1], e.dir[2]);
+        const p0 = P.posAt(e.unit, e.tOut, wAt);
+        if (p0) cfx.play('warpout', `wo:${e.unit}:${e.t}`, ao, { dst: p0, dir: wDir, S: [r, r, 8] });
+        const cur = P.at(e.unit);
+        if (ao < glowLen && cur) cfx.play('warpglow', `wog:${e.unit}:${e.t}`, ao, { dst: cur, dir: wDir, S: [r / 2, r / 2, 6] });
+      }
+      const ai = t - e.tIn;
+      if (ai >= 0 && ai < 3) {
+        const kind = glows < 5 ? 'warpin' : 'warpin2';
+        if (kind === 'warpin') glows++;
+        if (!cfx.ready(kind)) continue;
+        const sc = 0.7778 * Math.pow(R, 0.3534);
+        const p1 = P.posAt(e.unit, e.tIn, wAt2);
+        if (p1) cfx.play(kind, `wi:${e.unit}:${e.t}`, ai, { dst: p1, S: [sc, sc, sc] });
+        const cur = P.at(e.unit);
+        if (ai < glowLen && cur && cfx.ready('warpglow')) {
+          const g = 0.125 * (9e-8 * R * R + 0.005 * R + 0.6898);
+          cfx.play('warpglow', `wig:${e.unit}:${e.t}`, ai, { dst: cur, rot: P.heading[e.unit], S: [g, g, 3 * g] });
+        }
+      }
     }
   }
   // 脉冲波投射器的力场（引擎事件 kind 'field'）：服务器在出伤时刻的目标位置生成 AOE 信标，客户端在信标上播
@@ -542,7 +579,7 @@ export function createFx(scene, renderer, opt = {}) {
       if (e.kind !== 'field' || !e.pos) continue;
       const one = e.end - e.at < 0.5, end = one ? e.at + 2 : e.end;
       if (t < e.at || t > end + 4) continue;
-      const dst = new THREE.Vector3(e.pos[0] * KM, e.pos[1] * KM, e.pos[2] * KM);
+      const o = P.org?.() || [0, 0, 0], dst = new THREE.Vector3((e.pos[0] - o[0]) * KM, (e.pos[1] - o[1]) * KM, (e.pos[2] - o[2]) * KM);
       if (real) {
         const lp = cfx.length('aoepulse'), lc = cfx.length('aoecycle') || 2;
         if (t - e.at < lp + 0.05) cfx.play('aoepulse', `fp:${e.unit}:${e.at}`, t - e.at, { dst, R: 1 });
@@ -567,6 +604,7 @@ export function createFx(scene, renderer, opt = {}) {
     const rec = P.rec, fr = rec.frames[Math.min(k, rec.frames.length - 1)];
     for (const b of bubbles.values()) b.visible = false;
     fieldFx(P, t);
+    warpFlashes(P, t);
     if (!fr?.act) return;
     for (let i = 0; i < rec.units.length; i++) {
       const ew = rec.units[i].ew, act = fr.act[i];

@@ -107,6 +107,38 @@ export function makeRules(S, H) {
     }
     u.t = x;
   }
+  // 跃迁（客户端原文：Messages 1682 / 1687 / 1679 / 850）
+  function warpMsg(x) {
+    const P = S.me.pilot;
+    if (x.k === 'warpScram') log('有外部因素禁止你的跃迁引擎执行该指令。', 'bad');
+    else if (x.k === 'warpLowCap') log('能量不足，不能直接跃迁到目的地，将跃迁到能量所允许的最大距离处。', 'bad');
+    else if (x.k === 'warpGone') log('跃迁目标定位出错。目标可能已消失。', 'bad');
+    else if (x.k === 'warpStart') {
+      // 起跳：推进器、微型跃迁引擎自动关掉；锁定已清空，要目标的装备（武器、电子战等）也停下；抗性、本地维修等照常
+      let off = false;
+      const mjd = new Set((S.me.t.mjds || []).map((y) => y.m));
+      const self = (m) => S.selfMods.has(m) || [...(S.me.t.localReps || []), ...(S.me.t.injectors || [])].some((y) => y.m === m);
+      for (const m of [...P.on]) {
+        const prop = m === S.prop || mjd.has(m);
+        if (!prop && self(m)) continue;
+        P.on.delete(m);
+        S.rk?.wait.delete(m);
+        if (prop) off = true;
+      }
+      if (S.rk) for (const m of [...S.rk.wait]) if (!self(m)) S.rk.wait.delete(m);
+      if (off) log('某些已激活的装备会干扰跃迁流程，因此在跃迁进行前这些装备被自动关闭。', 'bad');
+    }
+  }
+  // 跃迁至：tgt = 舰船单位或 { cel: 天体序号 }，dist = 落点距离（米）
+  function warpTo(tgt, dist = 0) {
+    const u = S.me;
+    if (!u?.alive) return false;
+    if (u.warp) return false;
+    const r = S.b.warpTo(u, tgt, dist);
+    if (r === true) return true;
+    log({ near: '你所处的距离不适合跃迁', scram: '有外部因素禁止你的跃迁引擎执行该指令。', cloak: '隐形时无法跃迁。', gone: '你的跃迁引擎无法定位目标' }[r] || '你的跃迁引擎无法定位目标', 'bad');
+    return false;
+  }
   function afterStep() {
     const u = S.me;
     if (!u) return;
@@ -114,6 +146,7 @@ export function makeRules(S, H) {
     const Pm = u.pilot;
     if (Pm.msgs?.length) {
       for (const x of Pm.msgs.splice(0)) {
+        if (x.k.startsWith('warp')) { warpMsg(x); continue; }
         if (!S.rk) continue;
         for (const y of members(x.i)) Pm.on.delete(y);
         const name = typeName(S.on.rack[x.i]?.type);
@@ -176,6 +209,7 @@ export function makeRules(S, H) {
   function toggleModule(m, shift = false) {
     const u = S.me;
     if (!u?.alive || !S.rk) return;
+    if (u.warp && !u.pilot.on.has(m)) { log('你正处于跃迁状态，其所产生的干扰阻止了你的系统正常运作。', 'bad'); return; }
     const P = u.pilot, rk = S.rk;
     if (!toggleable().has(m)) return;
     m = masterOf(m);
@@ -312,6 +346,8 @@ export function makeRules(S, H) {
     const P = u.pilot;
     if (P.locks.has(v)) { P.active = v; return; }
     if (P.locks.size >= P.maxLocks) { log(`最多同时锁定 ${P.maxLocks} 个目标`, 'bad'); return; }
+    if (u.warp) { log(`你正处于跃迁状态，跃迁干扰阻止你的感应器对${nameOf(v)}进行目标锁定。`, 'bad'); return; }
+    if (v.warp) { log(`${nameOf(v)}正处于跃迁状态，它阻止了你的感应器对其进行目标锁定。`, 'bad'); return; }
     if (u.cloak) { log('隐形状态下无法锁定目标', 'bad'); return; }
     if ((P.lockBlock || 0) > S.b.t) { log(`刚解除隐形，还需要${fmtLeft(P.lockBlock - S.b.t)}才能锁定目标`, 'bad'); return; }
     if (!S.b.lock(u, v)) { log(`${nameOf(v)} 超出锁定距离（${fmtDist(u.t.lockRange * u.rangeMult)}）`, 'bad'); return; }
@@ -325,7 +361,8 @@ export function makeRules(S, H) {
   // 飞行指令：{ cmd: stop|approach|orbit|keep|dir|point, tgt, dist, dir, point }
   function cmd(c) {
     const P = S.me?.pilot;
-    if (!P || !S.me.alive) return false;
+    if (!P || !S.me.alive || S.me.warp) return false;
+    if (P.cmd === 'warp') P.wp = null;   // 别的飞行指令取消正在对准的跃迁
     Object.assign(P, c);
     if (c.cmd !== 'stop' && P.speed === 0) P.speed = 1;
     return true;
@@ -334,6 +371,7 @@ export function makeRules(S, H) {
   function setSpeed(frac) {
     const P = S.me?.pilot;
     if (!P) return;
+    if (S.me.warp) { log('跃迁中不能改变速度', 'bad'); return; }
     if (frac <= 0) { cmd({ cmd: 'stop', tgt: null }); return; }
     P.speed = frac;
     if (P.cmd === 'stop') { const fw = Math.hypot(...S.me.vel) > 1 ? S.me.vel : S.me.face; const l = Math.hypot(...fw) || 1; Object.assign(P, { cmd: 'dir', dir: fw.map((x) => x / l) }); }
@@ -348,7 +386,7 @@ export function makeRules(S, H) {
   return {
     prep, bind, rackInit, syncGroupState, setGroups, masterOf, members, canOverload, isGun, sameKind,
     beforeStep, afterStep, rackStep, toggleModule, canActivate, activate, cycleOf, cycStart, toggleable,
-    toggleOverload, setRackOverload, toggleRackOverload, setAmmo, reloadMods, lock, unlock, cmd, setSpeed, setDrones, changed,
+    toggleOverload, setRackOverload, toggleRackOverload, setAmmo, reloadMods, lock, unlock, cmd, setSpeed, setDrones, changed, warpTo,
     setRand: (f) => { rand = f || Math.random; },
   };
 }
@@ -367,17 +405,28 @@ export const bracketOf = (group) => Object.keys(MATCH_BRACKETS).find((k) => MATC
 export const MATCH_CAPS = [50e6, 200e6, 0];
 export const MATCH_MAX = 600;   // 一局最长 10 分钟
 // 战斗参数：服务器、客户端必须完全一样（同一个种子才能算出同样的结果）
-export const matchBattleOpt = (seed, dist) => ({ dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: MATCH_MAX + 1, record: true, droneUnits: true, seed });
+export const matchBattleOpt = (seed, dist, cel = []) => ({ dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: MATCH_MAX + 1, record: true, droneUnits: true, seed, cel });
+// 星系（跃迁目的地）：pilot-systems.json（tools/pilot-systems.py 从 SDE 抽的真实星系），每张星空一个；交战点在第一个星门外侧
+// 匹配对战按种子选星空（客户端、服务器算出同一个）；celOf 把星系转成引擎的天体列表（坐标以交战点为原点，米）
+export const SYS_SKIES = ['a01', 'c01', 'g01', 'm01'];
+export const matchSky = (seed) => SYS_SKIES[(seed >>> 0) % SYS_SKIES.length];
+// typesEn：给了就用英文名（英文界面；pilot-systems.json 每行第 9 项是英文名，typesEn 是类型英文名）
+export function celOf(sys, types = {}, typesEn = null) {
+  if (!sys?.cel) return [];
+  const f = sys.fight || [0, 0, 0];
+  return sys.cel.map(([name, group, type, x, y, z, radius, land, en]) => ({ name: (typesEn && en) || name, group, type, typeName: (typesEn || types)[type] || types[type] || '', pos: [x - f[0], y - f[1], z - f[2]], radius, land }));
+}
 export function seededRand(seed) { let s = seed >>> 0 || 1; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); }
 // 玩家指令（客户端发给服务器，服务器盖上步数后原样发给所有人，各自用 applyOp 执行）：
 //   lock / unlock { u } · tog { m, shift } · ammo { m, type } · reload { list } · cmd { cmd, u, dist, dir, pt } · speed { f } · drones { on }
+//   warp { u（舰船单位）| c（天体序号）, dist（落点距离，米） }
 //   groups { list: [[主, [从…]]] } · rov { r, on（省略 = 切换） } · ov { m }
 const CMDS = ['stop', 'approach', 'orbit', 'keep', 'dir', 'point'];
 const fin = (x) => typeof x === 'number' && Number.isFinite(x);
 const vec = (v) => Array.isArray(v) && v.length === 3 && v.every(fin);
 const idx = (x, n) => Number.isInteger(x) && x >= 0 && x < n;
 // 格式检查（服务器收到时查一遍；内容合不合规则由规则函数自己判断）：返回整理过的指令或 null
-export function cleanOp(a, nUnits, nRack) {
+export function cleanOp(a, nUnits, nRack, nCel = 0) {
   if (!a || typeof a !== 'object') return null;
   switch (a.a) {
     case 'lock': case 'unlock': return idx(a.u, nUnits) ? { a: a.a, u: a.u } : null;
@@ -387,6 +436,12 @@ export function cleanOp(a, nUnits, nRack) {
     case 'reload': return Array.isArray(a.list) && a.list.length <= nRack && a.list.every((x) => idx(x, nRack)) ? { a: 'reload', list: [...new Set(a.list)] } : null;
     case 'speed': return fin(a.f) ? { a: 'speed', f: Math.max(0, Math.min(1, a.f)) } : null;
     case 'drones': return { a: 'drones', on: Boolean(a.on) };
+    case 'warp': {
+      if ((a.u == null) === (a.c == null)) return null;
+      if (a.u != null && !idx(a.u, nUnits)) return null;
+      if (a.c != null && !idx(a.c, nCel)) return null;
+      return { a: 'warp', ...(a.u != null ? { u: a.u } : { c: a.c }), dist: fin(a.dist) ? Math.max(0, Math.min(100000, a.dist)) : 0 };
+    }
     case 'rov': return RACKS.includes(a.r) ? { a: 'rov', r: a.r, ...(a.on == null ? {} : { on: Boolean(a.on) }) } : null;
     case 'groups': return Array.isArray(a.list) && a.list.length <= nRack && a.list.every((g) => Array.isArray(g) && idx(g[0], nRack) && Array.isArray(g[1]) && g[1].length < nRack && g[1].every((x) => idx(x, nRack)))
       ? { a: 'groups', list: a.list.map(([m, sl]) => [m, sl.slice()]) } : null;
@@ -414,6 +469,7 @@ export function applyOp(R, S, a) {
     case 'reload': return R.reloadMods(a.list);
     case 'speed': return R.setSpeed(a.f);
     case 'drones': return R.setDrones(a.on);
+    case 'warp': return R.warpTo(a.c != null ? { cel: a.c } : U(a.u), a.dist);
     case 'rov': return a.on == null ? R.toggleRackOverload(a.r) : R.setRackOverload(a.r, a.on);
     case 'groups': return R.setGroups(a.list);
     case 'cmd': {

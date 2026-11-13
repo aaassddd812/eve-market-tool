@@ -1,9 +1,9 @@
 // ===== 匹配对局的建局和每一步（服务器 server/match_worker.mjs、客户端 pilot.js 共用，两边必须完全一样）=====
 // info = 服务器发下来的对局信息 { seed, dist, players: [{ p, side, name, fit, levels }] }（fit 是服务器检查过的装配，levels 是角色真实技能）。
 // 单位序号：A 方玩家在前，同方按 p 顺序；每个玩家一份规则状态（pilot-rules makeRules），客户端自己那份用页面的 S 和带日志的规则。
-import * as PR from './pilot-rules.js?v=v2';
+import * as PR from './pilot-rules.js?v=v4';
 
-// deps = { pilotUnit（sim-unit）, createBattle（sim-engine） }；pick(p) 可返回 { S, R } 替换某个玩家的状态和规则；opt = 额外战斗参数（客户端的命中回调）
+// deps = { pilotUnit（sim-unit）, createBattle（sim-engine）, systems（pilot-systems.json，跃迁目的地；没有就没有天体）, en（英文界面：天体用英文名） }；pick(p) 可返回 { S, R } 替换某个玩家的状态和规则；opt = 额外战斗参数（客户端的命中回调）
 export function buildMatch(deps, info, pick = () => null, opt = {}) {
   const P = info.players.map((pl) => {
     const mine = deps.pilotUnit(pl.fit, { skills: new Map(pl.levels), self: true });
@@ -17,7 +17,7 @@ export function buildMatch(deps, info, pick = () => null, opt = {}) {
     return { ...pl, S, R, row, calc: mine.calc, nRack: mine.unit?.rack?.length || 0 };
   });
   const order = [...P.filter((x) => x.side === 'A'), ...P.filter((x) => x.side === 'B')];
-  const b = deps.createBattle({ A: order.filter((x) => x.side === 'A').map((x) => x.row), B: order.filter((x) => x.side === 'B').map((x) => x.row) }, { ...PR.matchBattleOpt(info.seed, info.dist), ...opt });
+  const b = deps.createBattle({ A: order.filter((x) => x.side === 'A').map((x) => x.row), B: order.filter((x) => x.side === 'B').map((x) => x.row) }, { ...PR.matchBattleOpt(info.seed, info.dist, PR.celOf(deps.systems?.systems?.[PR.matchSky(info.seed)], deps.systems?.types, deps.en ? deps.systems?.typesEn : null)), ...opt });
   order.forEach((x, i) => {
     x.S.b = b;
     const maxLocks = Math.max(1, Math.min(x.calc?.ship?.attr(192) || 5, x.calc?.char?.attr(192) || 5));

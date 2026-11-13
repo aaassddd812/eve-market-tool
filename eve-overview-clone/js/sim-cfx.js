@@ -284,7 +284,7 @@ export function createClientFx(scene, base) {
       if (mesh?.geo && d.geo[mesh.geo]) {
         for (const [list, blend] of [['opaqueAreas', 0], ['transparentAreas', 1], ['additiveAreas', 2]]) {
           for (const area of mesh[list] || []) {
-            const fx = area.effect, kind = SHADER_OF[String(fx?.effectFilePath || '').split('/').pop()];
+            const fx = area.effect, kind = SHADER_OF[String(fx?.effectFilePath || '').split('/').pop().toLowerCase()];
             if (!kind) continue;
             const S = SHADERS[kind];
             const uniforms = { time, camF, DiffuseColor: { value: new THREE.Vector4(1, 1, 1, 1) }, Brightness: { value: 1 } };
@@ -317,11 +317,21 @@ export function createClientFx(scene, base) {
   const qA = new THREE.Quaternion(), vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3(), vD = new THREE.Vector3(), mA = new THREE.Matrix4(), mB = new THREE.Matrix4();
   const V3 = (a, d = 0) => vA.set(a?.[0] ?? d, a?.[1] ?? d, a?.[2] ?? d);
   function transformNode(node, parent, ctx) {
-    if (!node || node.display === false) return;
+    if (!node) return;
+    // display 可能被曲线绑定写成 0 / 1
+    if (node.display != null && !node.display) { hideTree(node); return; }
     if (node.hideOnLowQuality && ctx.lowQ) { hideTree(node); return; }
     const w = (node._w ||= new THREE.Matrix4());
-    const s = node.scaling || [1, 1, 1], r = node.rotation || [0, 0, 0, 1], t = node.translation || [0, 0, 0];
+    let s = node.scaling || [1, 1, 1];
+    const r = node.rotation || [0, 0, 0, 1], t = node.translation || [0, 0, 0];
     const mod = node.modifier || 0;
+    if (node.useDistanceBasedScale) {
+      // 按镜头距离缩放：fovHeight = sin(视角 / 2) × 距离，缩放 × arg1 / fovHeight^arg2 × fovHeight
+      const pos = vB.set(t[0], t[1], t[2]).applyMatrix4(parent);
+      const fh = Math.sin(ctx.fov * 0.5) * pos.distanceTo(ctx.eye);
+      const k = fh > 0 ? (node.distanceBasedScaleArg1 ?? 0) / Math.pow(fh, node.distanceBasedScaleArg2 ?? 0) * fh : 0;
+      s = [s[0] * k, s[1] * k, s[2] * k];
+    }
     if (mod === 100 || mod === 101 || mod === 102) {
       // EVE_CAMERA_ROTATION_ALIGNED：Z 轴指向镜头（换到父节点的基里算），X 轴取镜头右方向
       w.copy(parent).multiply(mA.makeTranslation(t[0], t[1], t[2]));
@@ -338,7 +348,13 @@ export function createClientFx(scene, base) {
       w.multiply(mA).multiply(mB.makeScale(s[0], s[1], s[2]));
     } else {
       w.copy(parent).multiply(mA.compose(V3(t), qA.set(r[0], r[1], r[2], r[3]), vB.set(s[0], s[1], s[2])));
-      if (mod === 3) {
+      if (mod === 1 || mod === 4) {
+        // BILLBOARD（SIMPLE_HALO 另乘朝向系数，这里没有用到的特效，按公告板处理）：保留位置，三轴换成镜头的 右 / 上 / 后，缩放 = 自身 × 父节点各轴长度
+        const e = parent.elements;
+        const sx = s[0] * Math.hypot(e[0], e[1], e[2]), sy = s[1] * Math.hypot(e[4], e[5], e[6]), sz = s[2] * Math.hypot(e[8], e[9], e[10]);
+        const pos = vB.setFromMatrixPosition(w);
+        w.makeBasis(vC.copy(ctx.right).multiplyScalar(sx), vD.copy(ctx.up).multiplyScalar(sy), vA.copy(ctx.back).multiplyScalar(sz)).setPosition(pos);
+      } else if (mod === 3) {
         // LOOK_AT_CAMERA：保留位置，X = −右、Y = 上、Z = 指向镜头；缩放 = 自身 × 父节点各轴长度
         const pos = vB.setFromMatrixPosition(w);
         const fwd = vC.copy(pos).sub(ctx.eye).normalize();
@@ -373,7 +389,7 @@ export function createClientFx(scene, base) {
   let frame = 0;
   const S1 = new THREE.Vector3(), S2 = new THREE.Vector3(), sv = new THREE.Vector3(), dv = new THREE.Vector3(), V0 = new THREE.Vector3(), FW = new THREE.Vector3(), Y1 = new THREE.Vector3(0, 1, 0), ONE = new THREE.Vector3(1, 1, 1), SQ = new THREE.Vector3(), QS = new THREE.Quaternion(), mW = new THREE.Matrix4();
   const toEve = (out, p) => out.set(-p.x / KM, p.y / KM, p.z / KM);
-  const ctx = { eye: new THREE.Vector3(), right: new THREE.Vector3(), lowQ: false };
+  const ctx = { eye: new THREE.Vector3(), right: new THREE.Vector3(), up: new THREE.Vector3(), back: new THREE.Vector3(), fov: 1, lowQ: false };
 
   return {
     // 这一类特效能不能用（JSON / 网格 / 贴图都到了）；第一次问时开始加载
@@ -391,6 +407,9 @@ export function createClientFx(scene, base) {
       toEve(ctx.eye, camera.position);
       const r = vA.setFromMatrixColumn(camera.matrixWorld, 0);
       ctx.right.set(-r.x, r.y, r.z);
+      r.setFromMatrixColumn(camera.matrixWorld, 1); ctx.up.set(-r.x, r.y, r.z);
+      r.setFromMatrixColumn(camera.matrixWorld, 2); ctx.back.set(-r.x, r.y, r.z);
+      ctx.fov = THREE.MathUtils.degToRad(camera.fov || 60);
       camera.getWorldDirection(camF.value);
       ctx.lowQ = lowQ;
     },
@@ -433,9 +452,12 @@ export function createClientFx(scene, base) {
         }
       } else {
         // ShipEffect：放在目标船位置，按目标半径缩放（transformFlags 未知，见说明）；o.rot = 跟船转（FX_TF_ROTATION_BALL，场景朝向换到客户端的镜像坐标）
+        // o.dir：朝向 = 从 (0,0,1) 转到这个方向（场景坐标，换到客户端坐标再算）；o.S：三轴缩放 [x, y, z]
         toEve(dv, o.dst);
-        if (o.rot) QS.set(o.rot.x, -o.rot.y, -o.rot.z, o.rot.w); else QS.identity();
-        transformNode(root, mW.compose(dv, QS, SQ.setScalar(o.R || 1)), ctx);
+        if (o.dir) QS.setFromUnitVectors(FW.set(0, 0, 1), V0.set(-o.dir.x, o.dir.y, o.dir.z).normalize());
+        else if (o.rot) QS.set(o.rot.x, -o.rot.y, -o.rot.z, o.rot.w); else QS.identity();
+        if (o.S) SQ.set(o.S[0], o.S[1], o.S[2]); else SQ.setScalar(o.R || 1);
+        transformNode(root, mW.compose(dv, QS, SQ), ctx);
       }
       for (const x of inst.meshes) {
         x.m.visible = !!x.node._vis;

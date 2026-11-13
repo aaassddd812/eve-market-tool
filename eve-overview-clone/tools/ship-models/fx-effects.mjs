@@ -47,6 +47,11 @@ const EFFECTS = {
   // 脉冲波投射器：服务器在力场中心生成 AOE 信标（dogma aoe_beacon_*，effectID 7050～7058），客户端在信标上播这两个
   aoecycle: 'res:/fisfx/module/modular_aoecycle_tr_t1a.black',
   aoepulse: 'res:/fisfx/module/modular_aoepulse_tr_t1a.black',
+  // 别人的跃迁闪光（客户端 WarpFlash.py）：起跳 warp_out + 船上 warp_glow；落地 warp_in_glow（同时最多 5 个）/ warp_in_noglow
+  warpout: 'res:/fisfx/jump/warp/warp_out.black',
+  warpglow: 'res:/fisfx/jump/warp/warp_glow.black',
+  warpin: 'res:/fisfx/jump/warp/warp_in_glow.black',
+  warpin2: 'res:/fisfx/jump/warp/warp_in_noglow.black',
 };
 // 不需要的字段（声音、观察者、灯光以外的运行时对象）
 const DROP = new Set(['observers', 'audio', 'stretchAudio', 'sourceTriObserver', 'controllers', 'fxAttributes']);

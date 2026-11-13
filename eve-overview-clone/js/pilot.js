@@ -9,11 +9,12 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle } from './sim-engine.js?v=v28';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v30';
 import { loadShipIndex } from './sim-ships.js?v=v10';
-import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf } from './pilot-rules.js?v=v2';
-import { bindUnit, pilotUnit } from './sim-unit.js?v=v2';
-import { buildMatch, stepMatch } from './match-sim.js?v=v2';
+import { warpShake } from './sim-warp.js?v=3';
+import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v4';
+import { bindUnit, pilotUnit } from './sim-unit.js?v=v4';
+import { buildMatch, stepMatch } from './match-sim.js?v=v4';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 
 let ctx = null;
@@ -52,10 +53,15 @@ const RM = {
   toggleRackOverload: (r) => mAct({ a: 'rov', r }),
   cmd: (c) => (S.me?.alive ? mAct({ a: 'cmd', cmd: c.cmd, u: c.tgt ? c.tgt.i : undefined, dist: c.dist, dir: c.dir, pt: c.pt }) : false),
   syncGroupState: () => mAct({ a: 'groups', list: [...S.rk.grp] }),
+  warpTo: (tgt, dist) => (S.me?.alive && !S.me.warp ? mAct({ a: 'warp', ...(tgt?.cel != null ? { c: tgt.cel } : { u: tgt.i }), dist }) : false),
 };
 
+// 星系天体（跃迁目的地，tools/pilot-systems.py 生成）：页面一加载就预读，起飞 / 匹配开局前要用
+let SYS = null, sysP = null;
+const loadSys = () => (sysP ||= fetch('pilot-systems.json?v=2').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => (SYS = d)));
 export function initPilot(context) {
   ctx = context;
+  loadSys();
   const saved = ctx.store.getJSON(KEY, null);
   const ot = Number(ctx.store.getJSON(OV_KEY, 0));
   S.ovTab = ot >= 0 && ot < OV_TABS.length ? ot : 0;
@@ -435,6 +441,7 @@ async function launch() {
       const r = await cache.get(k);
       if (r.row.unit) allies.push({ ...r.row, id: 'a' + allies.length, count: a.count });
     }
+    await loadSys();
     S.loading = false;
     start(mine, foes, allies);
   } catch (error) {
@@ -449,7 +456,9 @@ function start(mine, foes, allies = []) {
   RL.setRand(Math.random);
   const me = { ...mine.row, id: 'me', count: 1 };
   me.unit = R.prep(mine);
-  const b = createBattle({ A: [me, ...allies], B: foes }, { dist: S.set.dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: 3600, record: true, droneUnits: true, seed: (Math.random() * 2 ** 31) | 0, onHit: logHit, onDrain: logDrain });
+  // 星空先定下来：天体（星系）跟着星空走
+  S.sky = SKIES.includes(S.set.sky) ? S.set.sky : SKIES[Math.floor(Math.random() * SKIES.length)];
+  const b = createBattle({ A: [me, ...allies], B: foes }, { cel: celOf(SYS?.systems?.[S.sky], SYS?.types, window.I18N?.lang === 'en' ? SYS?.typesEn : null), dist: S.set.dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: 3600, record: true, droneUnits: true, seed: (Math.random() * 2 ** 31) | 0, onHit: logHit, onDrain: logDrain });
   S.b = b;
   const calc = mine.row.calc;
   const maxLocks = Math.max(1, Math.min(calc?.ship?.attr(192) || 5, calc?.char?.attr(192) || 5));
@@ -729,7 +738,7 @@ function hudBtnsHtml() {
 }
 function renderStage() {
   disposeView();
-  const sky = SKIES.includes(S.set.sky) ? S.set.sky : SKIES[Math.floor(Math.random() * SKIES.length)];
+  const sky = S.sky || SKIES[0];
   root.innerHTML = `<div class="pl-page"><section class="pl-stage" id="plStage">
     <div class="pl-3d" id="pl3d"><p class="pl-3d-load" id="plLoad" hidden></p></div>
     <canvas class="pl-marks" id="plMarks"></canvas>
@@ -746,7 +755,7 @@ function renderStage() {
       <div class="pl-buffs" id="plBuffs"></div>
     </div>
     <div class="pl-dmsg" id="plDmsg" aria-live="off"></div>
-    <div class="pl-ind" id="plInd" aria-live="polite"><div class="pl-ind-c"><img alt="" hidden><b></b></div><p></p></div>
+    <div class="pl-ind" id="plInd" aria-live="polite"><div class="pl-ind-c"><img alt="" hidden><b></b></div><p></p><i class="pl-ind-bar" hidden><s></s></i></div>
     <div class="pl-end" id="plEnd" hidden></div>
     <div class="pl-loading" id="plLoading"><div class="pl-loading-box">
       <div class="pl-spin"><img src="${UI}classes/loadingwheel/spinner.png?v=1" alt=""></div>
@@ -779,12 +788,20 @@ function renderStage() {
   sw?.addEventListener('pointerout', onHintOut);
   sw?.addEventListener('contextmenu', onSelCtx);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v52').then((m) => {
+  import('./sim-3d.js?v=v63').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
       onPick: (i, e) => { if (S.mv && (i < 0 || S.mv.state === 'y')) { mvAddPoint(); return; } if (S.mv) mvAbort(); pickUnit(i, e); },
       onDblEmpty: (d) => { if (!S.mv) cmd({ cmd: 'dir', dir: d, tgt: null }); },
+      // 天体：图标按总览页签过滤；点击选中（S / Q 加点击 = 跃迁 / 接近），双击同总览；选中 / 悬停时写名字和距离
+      // 跃迁隧道：自己的船在跃迁中时给出方向、速度比（÷ 3 AU × 跃迁速度倍率）、淡入淡出、镜头抖动强度
+      warpFx: () => warpFx(),
+      self: () => S.me?.i ?? -1,
+      onPickCel: (c, e) => { if (S.mv) mvAbort(); pickCel(c, e); },
+      onDblCel: (c) => celDbl(c),
+      celShown: (c) => { const x = S.b?.cel[c]; return Boolean(x) && ovShowsGroup(x.group); },
+      celName: (c) => { const x = S.b?.cel[c]; return x && S.me ? `${x.name}  ${fmtDist(celDist(S.me, x))}` : ''; },
       onFollowDbl: false,
       nameOf: (i) => (i === S.sel ? S.names[i] : ''),
       onHover: (i) => { S.hoverShip = i >= 0; cursorMode(); },
@@ -884,7 +901,7 @@ function cursorMode() {
 
 // ---------- HUD 上方的动作提示（客户端 shipHud/action_indication）：宽 800 居中、在 HUD 上面 8 像素，
 // 标题白色发光（可闪一下）+ 正文灰白，出现 / 消失 0.3 秒；临时提示 2 秒。按住快捷键的提示优先，其次临时提示 ----------
-const IND = { short: null, temp: null, tTimer: 0, sTimer: 0, cur: null };
+const IND = { short: null, temp: null, warp: null, tTimer: 0, sTimer: 0, cur: null };
 function indTemp(cap, text = '', blink = true) {
   IND.temp = { cap, text };
   clearTimeout(IND.tTimer);
@@ -901,10 +918,11 @@ function indShort(d, delay) {
 function indUpdate(blink) {
   const el = root?.querySelector('#plInd');
   if (!el) return;
-  const d = IND.short || IND.temp;
+  const d = IND.short || IND.warp || IND.temp;
   if (d && d !== IND.cur) {
     el.querySelector('b').textContent = tr(d.cap);
     el.querySelector('p').textContent = d.text ? tr(d.text) : '';
+    el.querySelector('.pl-ind-bar').hidden = d.prog == null;
   }
   IND.cur = d;
   el.classList.toggle('on', Boolean(d));
@@ -943,8 +961,9 @@ function tick(now) {
       if (S.t - S.endAt > 2.5) root.querySelector('#plEnd')?.removeAttribute('hidden');
     }
     const t = S.ended ? Math.min(S.t, S.endAt + 6) : Math.min(S.t, b.t);
-    if (S.view) { S.view.draw(t, { sel: S.sel, kills: b.kills }); S.view.render(); }
+    if (S.view) { S.view.draw(t, { sel: S.sel, selC: S.selC, kills: b.kills }); S.view.render(); }
     drawMarks();
+    warpInd();
     drawHud();
     updHudTip();
     drawTargets();
@@ -1125,7 +1144,7 @@ const MH = {
   onState: () => { const box = root?.querySelector('#plMatch'); if (box) box.innerHTML = matchInner(); MH.onRooms(); },
   onMatch: (m) => startMatchView(m),
   onGo: () => { if (S.match) S.match.go = true; },
-  onTick: (m) => { if (S.match && !S.match.res) S.match.q.push(m); },
+  onTick: (m) => { if (S.matchWait) S.matchWait.push(m); else if (S.match && !S.match.res) S.match.q.push(m); },
   onEnd: (m) => { try { sessionStorage.removeItem(LIVE_KEY); } catch { /* 隐私模式 */ } if (S.match) S.match.res = m; else MH.onState(); },
   onLost: () => { if (S.match) pushLog('与匹配服务断开，正在重连…', 'bad'); },
   onRooms: () => { const box = root?.querySelector('#plRooms'); if (box) box.innerHTML = roomsInner(); },
@@ -1198,13 +1217,16 @@ async function matchGo(kind, code = '') {
 }
 // 服务器配好对局：按对局信息建同样的战斗（同一个种子、同样的装配和技能），画面用驾驶模拟的
 function startMatchView(m) {
+  // 星系文件还没读到：读完再建（这段时间服务器发来的步数先存着）（天体要和服务器一样，否则跃迁指令会算出不同的结果）
+  if (!SYS && !m.noSys) { S.matchWait = []; loadSys().then(() => { const q = S.matchWait; S.matchWait = null; startMatchView({ ...m, noSys: true }); if (S.match) S.match.q.push(...q); }); return; }
   stopLoop();
   disposeView();
   S.fitView = null;
   bindUnit(ctx, {});
   S.match = { mid: m.mid, you: m.you, info: m.info, q: [], go: Boolean(m.started), sent: false, res: null };
   try { sessionStorage.setItem(LIVE_KEY, m.mid); } catch { /* 隐私模式 */ }
-  const M = buildMatch({ pilotUnit, createBattle }, m.info, (p) => (p === m.you ? { S, R: RL } : null), { onHit: logHit, onDrain: logDrain });
+  S.sky = matchSky(m.info.seed);
+  const M = buildMatch({ pilotUnit, createBattle, systems: SYS, en: window.I18N?.lang === 'en' }, m.info, (p) => (p === m.you ? { S, R: RL } : null), { onHit: logHit, onDrain: logDrain });
   S.match.M = M;
   R = RM;
   const me = m.info.players[m.you];
@@ -1267,6 +1289,74 @@ function end() {
     <div><button type="button" class="btn btn-primary" data-pl-restart>再来一次</button> <button type="button" class="btn btn-ghost" data-pl-exit>返回设置</button></div></div>`;
 }
 
+// ---------- 跃迁 ----------
+// 默认的「跃迁至」距离（客户端设置 WarpTo，0 ~ 100 km；选中物体窗口右键跃迁按钮可改），记在本机
+const WARP_DISTS = [0, 10000, 20000, 30000, 50000, 70000, 100000];
+const WARPD_KEY = 'eve-pilot-warpd';
+const warpD = () => { const v = Number(ctx.store.getJSON(WARPD_KEY, 0)); return WARP_DISTS.includes(v) ? v : 0; };
+function warpTo(tgt, dist = warpD()) {
+  if (!R.warpTo(tgt, dist)) return;
+  // 客户端 UI/Drones/WarpWarningMessage
+  if (S.me.drones.some((d) => d.pos)) pushLog('你将要跃迁远离你的无人机。', 'bad');
+  S.view?.follow?.(S.me.i);
+  renderSel();
+}
+// 天体：总览图标（客户端 brackets 按组）、到表面的距离
+const CEL_BRK = { 6: 'sun', 7: 'planet', 8: 'moon', 9: 'asteroidbelt', 10: 'stargate', 15: 'station' };
+const celIcon = (c) => `${UI}shared/brackets/${CEL_BRK[c.group] || 'planet'}.png?v=1`;
+const celDist = (u, c) => Math.max(0, Math.hypot(c.pos[0] - u.pos[0], c.pos[1] - u.pos[1], c.pos[2] - u.pos[2]) - (c.radius || 0) - u.t.radius);
+function pickCel(i, e) {
+  const c = S.b?.cel[i];
+  if (!c) return;
+  S.sel = -1;
+  S.selC = i;
+  if (S.keys.has('s')) warpTo({ cel: i });
+  else if (S.keys.has('q')) celApproach(i);
+  renderSel();
+  renderOverview(true);
+}
+// 接近天体：飞向它的 0 km 落点
+function celApproach(i) {
+  const c = S.b.cel[i], u = S.me, off = [u.pos[0] - c.pos[0], u.pos[1] - c.pos[1], u.pos[2] - c.pos[2]], d = Math.hypot(...off) || 1;
+  const pt = c.pos.map((x, k) => x + off[k] / d * (c.land || c.radius || 0));
+  if (R.cmd({ cmd: 'point', pt, tgt: null })) pushLog(`靠近 ${c.name}`, 'sys');
+}
+function warpFx() {
+  const u = S.me, w = u?.warp;
+  if (!u?.alive || !w?.go || !S.b) return null;
+  const t = Math.max(0, S.b.t - w.t0), x = w.c.at(Math.min(t, w.c.tE));
+  const decel = w.c.tA + w.c.tC;
+  return {
+    dir: w.dir, sf: x.v / (3 * AU * (u.t.warpMul || 1)),
+    fi: Math.min(1, t / 1.5), fo: Math.max(0, Math.min(1, (t - decel) / 1.5)),
+    shake: warpShake(x.v, u.t.vel, u.t.warp),
+  };
+}
+// HUD 上方的跃迁提示（客户端 spaceMgr 的 HudActionIndication）：对准时「正在建立跃迁航向」+ 进度条，跃迁中「跃迁引擎启动」；副标题「目的地：…」
+function warpInd() {
+  const u = S.me, P = u?.pilot;
+  let d = null;
+  if (u?.alive && u.warp?.go) {
+    const w = u.warp, x = w.c.at(Math.max(0, S.b.t - w.t0));
+    d = { cap: '跃迁引擎启动', text: `目的地：${w.name || ''}`, dist: Math.max(0, w.D - x.s), warp: true };
+  } else if (u?.alive && P.cmd === 'warp' && P.wp) {
+    const name = P.wp.cel != null ? S.b.cel[P.wp.cel]?.name : S.names[P.wp.u?.i];
+    d = { cap: '正在建立跃迁航向', text: `目的地：${name || ''}`, prog: S.b.alignProgress(u) };
+  }
+  const was = IND.warp;
+  // 标题、目的地没变：沿用原来的对象（提示框只在换内容时重画），只更新进度和剩余距离
+  if (d && was && d.cap === was.cap && d.text === was.text) { Object.assign(was, d); d = was; }
+  IND.warp = d;
+  if (d !== was) indUpdate(d && d.cap !== was?.cap);
+  const el = root?.querySelector('#plInd');
+  if (el && d && IND.cur === d) {
+    const bar = el.querySelector('.pl-ind-bar');
+    bar.hidden = d.prog == null;
+    if (d.prog != null) bar.firstChild.style.width = `${Math.round(d.prog * 100)}%`;
+    el.querySelector('p').textContent = tr(d.text) + (d.dist != null ? `  ${fmtDist(d.dist)}` : '');
+  }
+}
+
 // ---------- 指令 ----------
 function cmd(c) {
   if (!R.cmd(c)) return;
@@ -1282,6 +1372,7 @@ function pickUnit(i, e) {
   const v = S.b?.units[i];
   if (!v) return;
   S.sel = i;
+  S.selC = -1;
   if (v !== S.me && v.alive) {
     if ((e?.ctrlKey || e?.metaKey) && e?.shiftKey) act('unlock', v);
     else if (e?.ctrlKey || e?.metaKey) lockUnit(v);
@@ -1367,18 +1458,34 @@ function onClick(e) {
   if ((x = t.closest('[data-pl-act]'))) { if (x.getAttribute('aria-disabled') !== 'true') act(x.dataset.plAct); return; }
   if ((x = t.closest('[data-pl-ovtab]'))) { setOvTab(Number(x.dataset.plOvtab)); return; }
   if ((x = t.closest('[data-pl-ov]'))) { pickUnit(Number(x.dataset.plOv), e); }
+  if ((x = t.closest('[data-pl-ovc]'))) { pickCel(Number(x.dataset.plOvc), e); }
 }
 function onDbl(e) {
   const th = e.target.closest('.pl-ov thead th');
   if (th) { ovAutoFit(th.cellIndex); return; }
   const x = e.target.closest('[data-pl-ov]');
   if (x) { const v = S.b?.units[Number(x.dataset.plOv)]; if (v?.alive && v !== S.me) cmd({ cmd: 'approach', tgt: v }); }
+  // 双击天体：150 km 内接近，再远就对准（客户端 menusvc.py：双击按距离决定）
+  const c = e.target.closest('[data-pl-ovc]');
+  if (c) celDbl(Number(c.dataset.plOvc));
 }
-function act(a, v = S.b?.units[S.sel]) {
+function celDbl(i) {
+  const cc = S.b?.cel[i], u = S.me;
+  if (!cc || !u) return;
+  if (celDist(u, cc) < 150000) celApproach(i);
+  else { const off = cc.pos.map((x, k) => x - u.pos[k]), l = Math.hypot(...off) || 1; if (R.cmd({ cmd: 'dir', dir: off.map((x) => x / l), tgt: null })) pushLog(`正在朝向${cc.name}`, 'sys'); }
+}
+function act(a, v = S.selC >= 0 ? null : S.b?.units[S.sel]) {
   if (a === 'stop') { cmd({ cmd: 'stop', tgt: null }); return; }
+  if (!v && S.selC >= 0 && S.b?.cel[S.selC]) {
+    if (a === 'warp') warpTo({ cel: S.selC });
+    if (a === 'approach') celApproach(S.selC);
+    renderSel();
+    return;
+  }
   if (!v || v === S.me || !v.alive) return;
   if (a === 'approach') cmd({ cmd: 'approach', tgt: v });
-  if (a === 'warp') pushLog('你所处的距离不适合跃迁', 'bad');
+  if (a === 'warp') warpTo(v);
   if (a === 'orbit') cmd({ cmd: 'orbit', tgt: v, dist: S.orbit });
   if (a === 'keep') cmd({ cmd: 'keep', tgt: v, dist: S.keep });
   if (a === 'lock') lockUnit(v);
@@ -1662,7 +1769,8 @@ function drawHud() {
   x.textBaseline = 'middle';
   x.fillStyle = 'rgba(255,255,255,0.9)';
   x.shadowColor = 'rgba(0,0,0,0.8)'; x.shadowBlur = 2;
-  x.fillText(v < 100 ? `${v.toFixed(1)} m/s` : `${Math.round(v)} m/s`, cx, cy + 52);
+  // 跃迁中：客户端速度表写「（正在跃迁）」（UI/Inflight/WarpSpeedNotification），悬停提示里是速度
+  x.fillText(u.warp?.go ? tr('（正在跃迁）') : v < 100 ? `${v.toFixed(1)} m/s` : `${Math.round(v)} m/s`, cx, cy + 52);
   x.shadowBlur = 0;
   // 悬停提示：电容 / 三层血量的具体数值（客户端是鼠标提示）
   if (!S.hudTipAt || performance.now() - S.hudTipAt > 500) {
@@ -2453,9 +2561,10 @@ function ovLine() {
   ln.style.width = `${on.offsetWidth}px`;
 }
 // 这一页显示不显示某个类型（配置还没加载完时全显示）
-const ovShows = (type) => {
+const ovShows = (type) => ovShowsGroup(ctx.data.types.get(type)?.group);
+const ovShowsGroup = (g) => {
   const set = ovPresets?.[OV_TABS[S.ovTab ?? 0][1]];
-  return !set || set.has(ctx.data.types.get(type)?.group);
+  return !set || set.has(g);
 };
 const surf = (u, v) => Math.max(0, Math.hypot(v.pos[0] - u.pos[0], v.pos[1] - u.pos[1], v.pos[2] - u.pos[2]) - u.t.radius - (v.t?.radius || 0));
 const AU = 149597870700;
@@ -2467,11 +2576,13 @@ function renderOverview() {
   if (!body || !u) return;
   if (!ovPresets) loadOvPresets();
   const P = u.pilot;
+  // 舰船：全星系的都列（游戏里别的网格上的船要靠扫描才找得到，这里当作已经扫到，好跃迁追过去）；天体按页签的物品组过滤（「跃迁到」等）
   const list = S.b.units.filter((v) => v !== u && v.alive && !v.warp && ovShows(v.r.row.ship)).map((v) => ({ k: 'u' + v.i, v, d: surf(u, v) }));
+  (S.b.cel || []).forEach((c, i) => { if (ovShowsGroup(c.group)) list.push({ k: 'c' + i, c, ci: i, d: celDist(u, c) }); });
   // 太空中的无人机（敌我都有）也列出来，只看不点
   for (const o of S.b.units) {
     if (!o.alive) continue;
-    o.drones.forEach((dr, n) => { if (dr.pos && !dr.e && ovShows(dr.g.type)) list.push({ k: `d${o.i}-${n}`, dr, o, d: surf(u, { pos: dr.pos }) }); });
+    o.drones.forEach((dr, n) => { if (dr.pos && !dr.e && ovShows(dr.g.type) && Math.hypot(dr.pos[0] - u.pos[0], dr.pos[1] - u.pos[1], dr.pos[2] - u.pos[2]) <= GRID) list.push({ k: `d${o.i}-${n}`, dr, o, d: surf(u, { pos: dr.pos }) }); });
   }
   list.sort((a, b) => a.d - b.d);
   // 什么都没有：一行「没有发现任何东西」（UI/Common/NothingFound）
@@ -2493,6 +2604,10 @@ function renderOverview() {
         tr.dataset.plOv = v.i;
         // 图标格（客户端 SpaceObjectIcon）：16×16 舰船类别图标 + 角上 10×10 状态旗 + 锁定 / 被锁的框
         tr.innerHTML = `<td><span class="pl-ovi"><img src="${typeIcon(v.r.row.ship, S.brk[v.i] || 'frigate')}" alt=""><i class="tg"></i><i class="hb"></i><i class="lk"></i><b class="fl"></b></span></td><td></td><td>${esc(S.names[v.i])}</td><td>${esc(typeName(v.r.row.ship))}</td><td><span class="sp"></span><span class="pl-ovew"></span></td>`;
+      } else if (x.c) {
+        tr.dataset.plOvc = x.ci;
+        tr.className = 'cel';
+        tr.innerHTML = `<td><span class="pl-ovi"><img src="${celIcon(x.c)}" alt=""></span></td><td></td><td>${esc(x.c.name)}</td><td>${esc(x.c.typeName || '')}</td><td><span class="sp"></span></td>`;
       } else {
         tr.className = `drone ${x.o.side !== u.side ? 'hostile' : 'friend'}`;
         tr.innerHTML = `<td><span class="pl-ovi"><img src="${typeIcon(x.dr.g.type, 'dronelightscout')}" alt=""></span></td><td></td><td>${esc(typeName(x.dr.g.type))}</td><td>${esc(typeName(x.dr.g.type))}</td><td><span class="sp"></span></td>`;
@@ -2515,8 +2630,9 @@ function renderOverview() {
         box.innerHTML = ew ? ew.split(',').map((k) => `<img src="${buffIcon(k)}" alt="" title="${esc(buffHint(k))}">`).join('') : '';
       }
     }
+    if (x.c) tr.classList.toggle('sel', x.ci === S.selC);
     tr.cells[1].textContent = fmtDist(x.d);
-    tr.cells[4].firstChild.textContent = Math.round(Math.hypot(...(v ? v.vel : x.dr.vel))).toLocaleString('en-US');
+    tr.cells[4].firstChild.textContent = x.c ? '0' : Math.round(Math.hypot(...(v ? v.vel : x.dr.vel))).toLocaleString('en-US');
     if (body.children[n] !== tr) body.insertBefore(tr, body.children[n] || null);
   });
 }
@@ -2537,7 +2653,12 @@ const SEL_ACTS = [
 ];
 function selActs(v) {
   const P = S.me.pilot;
+  if (v?.cel != null) {
+    const near = celDist(S.me, S.b.cel[v.cel]) < 150000;
+    return SEL_ACTS.filter((a) => a.k === 'approach' || a.k === 'warp').map((a) => ({ ...a, off: a.k === 'warp' && near ? a.off : '' }));
+  }
   return SEL_ACTS.map((a) => {
+    if (a.k === 'warp') a = { ...a, off: surf(S.me, v) < 150000 ? a.off : '' };
     const rev = a.rev && ((a.k === 'lock' && P.locks.has(v)) || (a.k === 'look' && S.view?.following?.() === v.i));
     const tracking = a.k === 'track' && S.view?.tracking?.() === v.i;
     return { ...a, ...(rev ? a.rev : {}), ic: tracking ? 'camera_untrack' : a.ic, rev, tracking };
@@ -2547,13 +2668,24 @@ function renderSel(soft = false) {
   const box = root.querySelector('#plSel'), u = S.me;
   if (!box || !u) return;
   const v = S.b.units[S.sel];
+  // 选中天体
+  const c = S.selC >= 0 ? S.b.cel?.[S.selC] : null;
+  if (c) {
+    const d = celDist(u, c), acts = selActs({ cel: S.selC });
+    const key = `c${S.selC}:${acts.map((a) => a.k + (a.off ? 'x' : '')).join(',')}`;
+    if (soft && box.dataset.k === key) { box.querySelector('.pl-sel-dist').textContent = fmtDist(d); return; }
+    box.dataset.k = key;
+    box.innerHTML = `<div class="pl-sel-top"><img src="${celIcon(c)}" alt="" class="cel"><div class="pl-sel-txt"><b>${esc(c.name)}</b><span class="pl-sel-dist">${fmtDist(d)}</span></div></div>
+      <div class="pl-sel-acts">${acts.map((a) => `<button type="button" data-pl-act="${a.k}"${a.off ? ' aria-disabled="true"' : ''} data-pl-hint="${a.k}">${CI(a.ic)}</button>`).join('')}</div>`;
+    return;
+  }
   // 没选东西：左上一行大字「没有选择物体」（EveCaptionMedium 20px，白 0.5），按钮行清空
   if (!v || v === u || !v.alive) {
     if (box.dataset.k !== 'none') { box.dataset.k = 'none'; box.innerHTML = `<div class="pl-sel-empty">${esc(tr('没有选择物体'))}</div>`; }
     return;
   }
   const d = surf(u, v), acts = selActs(v);
-  const key = `${v.i}:${acts.map((a) => a.k + (a.tracking ? 't' : '')).join(',')}`;
+  const key = `${v.i}:${acts.map((a) => a.k + (a.tracking ? 't' : '') + (a.off ? 'x' : '')).join(',')}`;
   if (soft && box.dataset.k === key) { box.querySelector('.pl-sel-dist').textContent = fmtDist(d); return; }
   box.dataset.k = key;
   // 名字：有人开的船写角色名，没人开的写类型名（uix.GetSlimItemName）；距离行只有数字（到表面的距离）
@@ -2562,7 +2694,7 @@ function renderSel(soft = false) {
 }
 // 按钮悬停提示（两列：动作名 + 快捷键，不可用时下面再一行原因；指针朝上）
 function hintHtml(k) {
-  const v = S.b?.units[S.sel];
+  const v = S.selC >= 0 ? { cel: S.selC } : S.b?.units[S.sel];
   const a = v && selActs(v).find((x) => x.k === k);
   if (!a) return '';
   return `<div class="r head"><span>${esc(tr(a.tracking ? '停止跟踪' : a.n))}</span>${a.key ? `<kbd>${esc(a.key)}</kbd>` : ''}</div>${a.off ? `<div class="r why">${esc(tr(a.off))}</div>` : ''}`;
@@ -2589,14 +2721,30 @@ function onSelCtx(e) {
   if (!b) return;
   e.preventDefault();
   const a = SEL_ACTS.find((x) => x.k === b.dataset.plAct);
-  if (!a?.dflt) return;
+  if (!a?.dflt && a?.k !== 'warp') return;
   hideHint();
   closeMenus();
+  if (a.k === 'warp') { warpMenu(e, b.getAttribute('aria-disabled') === 'true'); return; }
   S.cm = [[a.dflt === 'orbit' ? '设置默认“环绕”距离' : '设置默认的“保持距离”', () => qtyPopup(a.dflt)]];
+  cmenuAt(e);
+}
+// 跃迁按钮右键（客户端 menusvc 的「跃迁至」子菜单）：「{distance}内」0 ~ 100 km，再加「设置默认距离」
+function warpMenu(e, off) {
+  const tgt = S.selC >= 0 ? { cel: S.selC } : S.b?.units[S.sel];
+  const km = (d) => (d ? `${d / 1000} km` : '0 m');
+  const cur = warpD();
+  S.cm = [
+    ...(off ? [] : WARP_DISTS.map((d) => [`跃迁至 ${km(d)}内${d === cur ? '（默认）' : ''}`, () => tgt && warpTo(tgt, d)])),
+    ['设置默认距离', () => { S.cm = WARP_DISTS.map((d) => [`${km(d)}内${d === cur ? ' ✓' : ''}`, () => ctx.store.setJSON(WARPD_KEY, d)]); cmenuAt(e); }]
+  ];
+  cmenuAt(e);
+}
+function cmenuAt(e) {
+  root?.querySelector('.pl-cmenu')?.remove();
   const stage = root.querySelector('#plStage'), st = stage.getBoundingClientRect();
   const el = document.createElement('div');
   el.className = 'pl-cmenu';
-  el.innerHTML = `<button type="button" data-pl-cm="0">${esc(tr(S.cm[0][0]))}</button>`;
+  el.innerHTML = S.cm.map(([l], i) => `<button type="button" data-pl-cm="${i}">${esc(tr(l))}</button>`).join('');
   stage.appendChild(el);
   let x = e.clientX - st.left, y = e.clientY - st.top - 8;
   if (x + el.offsetWidth > st.width) x -= el.offsetWidth + 2;

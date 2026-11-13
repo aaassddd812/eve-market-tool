@@ -14,7 +14,9 @@
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
 import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v10';
-import { createFx } from './sim-fx.js?v=v31';
+import { createFx } from './sim-fx.js?v=v35';
+import { createCelestials, sunLight } from './sim-cel.js?v=5';
+import { createWarpTunnel } from './sim-warp.js?v=3';
 
 const COLOR = { A: new THREE.Color(0x5b9bff), B: new THREE.Color(0xff4b3e) };
 const WRECK = new THREE.Color(0x8a9099);
@@ -25,6 +27,7 @@ const RING_PX = 9.5;       // 选中圈半径（CSS 像素，刚好套住图标�
 const WRECK_ICON = BRACKETS.indexOf('wreck');
 const BR_COLS = 16;        // 游戏图标图集：16×16 格
 const WRECK_PATH = 'shared/brackets/wreck.png';   // 残骸（客户端 wreck 组的图标）
+const CEL_BRK = { 6: 'shared/brackets/sun.png', 7: 'shared/brackets/planet.png', 8: 'shared/brackets/moon.png', 9: 'shared/brackets/asteroidbelt.png', 10: 'shared/brackets/stargate.png', 15: 'shared/brackets/station.png' };
 
 // ── 后处理（照客户端 Tr2PostProcessRenderer 的流程和 postprocess/downsample、upsample、tonemapping 着色器）──
 // 场景画进半浮点缓冲，里面存 sRGB 编码值（和客户端一样：船体 quadv5、尾焰等着色器结尾自己做线性 → sRGB）。
@@ -71,12 +74,14 @@ function createPost(renderer) {
       }
       gl_FragColor = vec4(second > 0.5 ? o * tint + texture2D(last, vUv).rgb : o, 1.0);
     }`);
-  const tone = mk({ scene: { value: null }, bloom: { value: null }, expo: { value: null }, useExpo: { value: 0 }, useBloom: { value: 1 } },
-    `uniform sampler2D scene, bloom, expo; uniform float useExpo, useBloom; varying vec2 vUv;
+  // 扭曲缓冲（跃迁隧道的 warptunneldistortion 等写入的屏幕偏移，单位像素）：合成时按它挪动场景的采样位置
+  const tone = mk({ scene: { value: null }, bloom: { value: null }, expo: { value: null }, useExpo: { value: 0 }, useBloom: { value: 1 }, dist: { value: null }, useDist: { value: 0 }, inv: { value: new THREE.Vector2() } },
+    `uniform sampler2D scene, bloom, expo, dist; uniform float useExpo, useBloom, useDist; uniform vec2 inv; varying vec2 vUv;
     const float A = ${TONE.A.toFixed(4)}, B = ${TONE.B.toFixed(4)}, C = ${TONE.C.toFixed(4)}, D = ${TONE.D.toFixed(4)}, E = ${TONE.E.toFixed(4)}, F = ${TONE.F.toFixed(4)}, W = ${TONE.W.toFixed(4)};
     vec3 U(vec3 x) { return (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F; }
     void main() {
-      vec3 c = texture2D(scene, vUv).rgb;
+      vec2 uv = useDist > 0.5 ? vUv + texture2D(dist, vUv).xy * inv : vUv;
+      vec3 c = texture2D(scene, uv).rgb;
       c = mix(pow(abs(c + 0.055) * 0.947867, vec3(2.4)), c * 0.077399, vec3(lessThan(c, vec3(0.04045))));
       float wInv = 1.0 / U(vec3(W)).x;
       vec3 b = texture2D(bloom, vUv).rgb * useBloom;
@@ -199,13 +204,14 @@ function createPost(renderer) {
       dispose() { hist.dispose(); for (const b of buf) b.dispose(); gl.deleteProgram(prog); gl.deleteVertexArray(vao); },
     };
   })();
-  let sceneRT = null, mips = [], ups = [], size = '';
+  let sceneRT = null, distRT = null, mips = [], ups = [], size = '';
   const rt = (w, h, o = {}) => new THREE.WebGLRenderTarget(Math.max(1, w), Math.max(1, h), { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, ...o });
   function resize(w, h) {
     if (`${w}x${h}` === size) return;
     size = `${w}x${h}`;
-    for (const t of [sceneRT, ...mips, ...ups]) t?.dispose();
+    for (const t of [sceneRT, distRT, ...mips, ...ups]) t?.dispose();
     sceneRT = rt(w, h, { depthBuffer: true, samples: 4 });
+    distRT = rt(w, h);
     // 标准材质往这个缓冲里写 sRGB 编码值（three 只对 XR 渲染目标按贴图色彩空间输出）
     sceneRT.isXRRenderTarget = true; sceneRT.texture.colorSpace = THREE.SRGBColorSpace;
     mips = []; ups = [];
@@ -235,11 +241,22 @@ function createPost(renderer) {
     return Math.min(64, t.length / 4);
   }
   const draw = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(qs, qc); };
-  function render(scene, camera) {
+  // distScene：有可见内容时先画进扭曲缓冲（清成 0，加色叠加）
+  function render(scene, camera, distScene) {
     const v = renderer.getDrawingBufferSize(new THREE.Vector2());
     resize(v.x, v.y);
     renderer.setRenderTarget(sceneRT);
     renderer.render(scene, camera);
+    const useDist = Boolean(distScene?.children.some((o) => o.visible));
+    if (useDist) {
+      const cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha();
+      renderer.setRenderTarget(distRT);
+      renderer.setClearColor(0x000000, 0); renderer.clear();
+      renderer.render(distScene, camera);
+      renderer.setClearColor(cc, ca);
+    }
+    tone.uniforms.dist.value = useDist ? distRT.texture : blackTex; tone.uniforms.useDist.value = useDist ? 1 : 0;
+    tone.uniforms.inv.value.set(1 / v.x, 1 / v.y);
     // 降采样
     let src = sceneRT;
     for (const m of mips) { down.uniforms.tex.value = src.texture; down.uniforms.inv.value.set(1 / src.width, 1 / src.height); draw(down, m); src = m; }
@@ -266,7 +283,7 @@ function createPost(renderer) {
     draw(tone, null);
   }
   const blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); blackTex.needsUpdate = true;
-  return { render, dispose() { for (const t of [sceneRT, ...mips, ...ups]) t?.dispose(); expo?.dispose(); } };
+  return { render, dispose() { for (const t of [sceneRT, distRT, ...mips, ...ups]) t?.dispose(); expo?.dispose(); } };
 }
 
 export function createView(host, hooks = {}, opt = {}) {
@@ -322,6 +339,29 @@ export function createView(host, hooks = {}, opt = {}) {
   sun.position.set(0.6, 0.5, 0.35);
   const amb = new THREE.AmbientLight(0x8090b0, 0.25);
   scene.add(sun, amb);
+  // 天体（驾驶模拟，rec.cel）：恒星、行星、卫星；有恒星时方向光改成真实的恒星方向
+  const cels = createCelestials(scene, { load: (k) => loadModel(k), env: () => [env, envI] });   // 空间站 / 星门模型用舰船的加载器和环境反射
+  // 跃迁隧道（驾驶模拟：hooks.warpFx() 给出自己船的跃迁状态）
+  const tunnel = opt.fx && hooks.warpFx ? createWarpTunnel(scene, `${opt.fx}warp/`) : null;
+  let shakeN = 0;
+  const shakeQ = new THREE.Quaternion(), shakeE = new THREE.Euler(), shakeR = new THREE.Quaternion();
+  function warpFrame() {
+    const ws = tunnel ? hooks.warpFx() : null;
+    tunnel?.update(camera, ws);
+    // 镜头抖动（Warp.py ShakeCamera）：每秒重发一次「0.5 秒升到 2 × 强度、5 秒降到 0」→ 近似为平滑跟随 2 × 强度；
+    // 客户端 shaker 的噪声频率和幅度换算没拿到，这里按每单位 0.01 弧度的平滑噪声（推断）
+    shakeN += ((ws ? 2 * ws.shake : 0) - shakeN) * 0.08;
+    if (shakeN < 1e-4) return false;
+    const t = performance.now() / 1000, k = shakeN * 0.01;
+    shakeE.set(k * (Math.sin(t * 57.1) * 0.6 + Math.sin(t * 23.3 + 1.7) * 0.4), k * (Math.sin(t * 61.7 + 0.5) * 0.6 + Math.sin(t * 19.9 + 2.9) * 0.4), 0);
+    shakeQ.copy(camera.quaternion);
+    camera.quaternion.multiply(shakeR.setFromEuler(shakeE));
+    return true;
+  }
+  function celUpdate() {
+    const d = cels.update(camera, ORG);
+    if (d) { sun.position.copy(d); sky.material.uniforms.sun.value.copy(d); }
+  }
   let env = null, envI = 1;   // 环境反射贴图、强度（场景的 reflectionIntensity）
   // 载入模型时套上当前的环境反射（星空晚到时下面统一换）
   const loadModel = (k) => loadShipModel(k, renderer, env).then((def) => { if (def) for (const mt of def.materials) { mt.envMap = env; mt.envMapIntensity = envI; } return def; });
@@ -438,6 +478,7 @@ export function createView(host, hooks = {}, opt = {}) {
       skyCube = neb;
       const pm = new THREE.PMREMGenerator(renderer);
       env = pm.fromCubemap(refl).texture;
+      tunnel?.setEnv(refl);
       pm.dispose();
       envI = sc.reflectionIntensity ?? 1;
       for (const set of [models, tModels, dModels]) for (const m of set.values()) for (const mt of m.def?.materials || []) { mt.envMap = env; mt.envMapIntensity = envI; mt.needsUpdate = true; }
@@ -648,6 +689,16 @@ export function createView(host, hooks = {}, opt = {}) {
         }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     }));
+  }
+  // 别人跃迁时船模型藏起来（WarpFlashOut 起跳闪光时隐藏，WarpFlashIn 落地闪光时再出现；短于 4 万 km 的跃迁不藏）
+  const WARP_HID = { hidden: true, fy: 0 };
+  let warpEv = null, warpEvN = -1, warpEvR = null;
+  function warpHidden(i, t) {
+    const ev = rec.events || [];
+    if (warpEvR !== rec || warpEvN !== ev.length) { warpEvR = rec; warpEvN = ev.length; warpEv = ev.filter((e) => e.kind === 'warp' && e.tOut != null && e.D >= 4e7); }
+    if (!warpEv.length || i === (hooks.self?.() ?? -1)) return false;
+    for (const e of warpEv) if (e.unit === i && t >= e.tOut && t < e.tIn) return true;
+    return false;
   }
   // 第 i 艘船的隐形状态：{ hidden（整船不画）, fy（菲涅尔曲线值）}；没开 / 早已解除 → null
   function cloakAt(i, t) {
@@ -1015,6 +1066,8 @@ export function createView(host, hooks = {}, opt = {}) {
   }
   const shT = new THREE.Object3D(), qI = new THREE.Quaternion();
   const P = {
+    org: () => ORG,   // 浮动原点（米）：场景坐标 = (世界坐标 − ORG) / 1000
+    self: () => hooks.self?.() ?? -1,   // 自己的船（有跃迁隧道，不播出 / 入跃迁闪光）
     mount: (i, ri, pick, out) => mountAt(i, ri, pick, out),
     get rec() { return rec; },
     get camera() { return camera; },
@@ -1054,7 +1107,7 @@ export function createView(host, hooks = {}, opt = {}) {
   ringPts.frustumCulled = false;
   ringPts.renderOrder = 6;
   scene.add(ringPts);
-  let hover = -1, sel = -1;
+  let hover = -1, sel = -1, hoverC = -1, selC = -1;
 
   // 战术视图：照客户端 tacticalNavigation/tacticalCompass.py + res:/ui/inflight/tactical/*.black 的参数
   //   暗盘（黑 0.157，半径一半以外淡到 0）、距离圈（白，主圈 0.33 / 次圈 0.125，越靠外越淡）、16 条方位线（北向橙色）、
@@ -1355,6 +1408,19 @@ export function createView(host, hooks = {}, opt = {}) {
   let rec = null;
   let lastT = -1, lastSize = '', lastN = -1, lastDrawT = 0;
   let follow = -1, followAt = null, flyTo = null;
+  // 浮动原点（米，双精度）：跃迁动辄几个 AU，GPU 的单精度在那么远只剩几米到几公里的精度，模型会碎。
+  // 画的时候所有世界坐标先减去 ORG；镜头注视点离 ORG 超过 REBASE 就把原点挪过去，镜头和注视点一起平移（画面不变）
+  const ORG = [0, 0, 0], REBASE = 5e5;
+  function rebase(wx, wy, wz) {
+    const dx = wx - ORG[0], dy = wy - ORG[1], dz = wz - ORG[2];
+    if (dx * dx + dy * dy + dz * dz < REBASE * REBASE) return;
+    ORG[0] = wx; ORG[1] = wy; ORG[2] = wz;
+    vA.set(dx * KM, dy * KM, dz * KM);
+    camera.position.sub(vA);
+    controls.target.sub(vA);
+    followAt?.sub(vA);
+    for (const d of drawn) if (d) { d.x -= vA.x; d.y -= vA.y; d.z -= vA.z; }
+  }
   // 跟踪（客户端 SetAsCameraInterest）：镜头留在跟随的船上，转到让被跟踪的物体一直在船的正前方；手动拖镜头就停
   let track = -1;
   const tmp = new THREE.Object3D();
@@ -1397,9 +1463,9 @@ export function createView(host, hooks = {}, opt = {}) {
     // 微跳：客户端是瞬移（原地消失、落点出现），这一段不插值，到下一帧直接跳过去
     const f = b === a || i * 3 >= b.pos.length || jumped(i, b.t) ? 0 : Math.max(0, Math.min(1, (t - a.t) / (b.t - a.t || 1)));
     out.set(
-      (a.pos[i * 3] + (b.pos[i * 3] - a.pos[i * 3]) * f) * KM,
-      (a.pos[i * 3 + 1] + (b.pos[i * 3 + 1] - a.pos[i * 3 + 1]) * f) * KM,
-      (a.pos[i * 3 + 2] + (b.pos[i * 3 + 2] - a.pos[i * 3 + 2]) * f) * KM);
+      (a.pos[i * 3] + (b.pos[i * 3] - a.pos[i * 3]) * f - ORG[0]) * KM,
+      (a.pos[i * 3 + 1] + (b.pos[i * 3 + 1] - a.pos[i * 3 + 1]) * f - ORG[1]) * KM,
+      (a.pos[i * 3 + 2] + (b.pos[i * 3 + 2] - a.pos[i * 3 + 2]) * f - ORG[2]) * KM);
     return out;
   }
   const frameAt = (t) => rec.frames[Math.max(0, Math.min(rec.frames.length - 1, Math.floor(t / rec.dt)))];
@@ -1409,7 +1475,7 @@ export function createView(host, hooks = {}, opt = {}) {
     follow = -1; flyTo = null;
     const f = rec.frames[rec.frames.length - 1];
     const box = new THREE.Box3();
-    for (let i = 0; i < f.pos.length; i += 3) box.expandByPoint(vA.set(f.pos[i] * KM, f.pos[i + 1] * KM, f.pos[i + 2] * KM));
+    for (let i = 0; i < f.pos.length; i += 3) box.expandByPoint(vA.set((f.pos[i] - ORG[0]) * KM, (f.pos[i + 1] - ORG[1]) * KM, (f.pos[i + 2] - ORG[2]) * KM));
     const c = box.getCenter(new THREE.Vector3()), span = Math.max(8, box.getSize(vB).length());
     controls.target.copy(c);
     camera.position.set(c.x + span * 0.15, c.y + span * 0.55, c.z + span * 0.95);
@@ -1433,8 +1499,14 @@ export function createView(host, hooks = {}, opt = {}) {
     const F = frameAt(t);
     lastDrawT = t;
     sel = opt.sel ?? -1;
+    selC = opt.selC ?? -1;
     const n = rec.units.length;
     if (n !== lastN) { lastN = n; syncModels(); }
+    {
+      const w = follow >= 0 ? posAt(follow, t, vC) : null;
+      if (w) rebase(w.x / KM + ORG[0], w.y / KM + ORG[1], w.z / KM + ORG[2]);
+      else rebase(controls.target.x / KM + ORG[0], controls.target.y / KM + ORG[1], controls.target.z / KM + ORG[2]);
+    }
     // 舰船位置、朝向
     for (let i = 0; i < n; i++) {
       const p = posAt(i, t, vA);
@@ -1506,7 +1578,7 @@ export function createView(host, hooks = {}, opt = {}) {
         // 残骸不转：客户端 Wreck.SetBallRotation 直接沿用爆掉那艘船的姿态（yaw/pitch/roll），之后静止
         tmp.scale.setScalar(KM);
         tmp.updateMatrix();
-        const ck = d.alive && !m.wreck ? cloakAt(i, t) : null;
+        const ck = d.alive && !m.wreck ? (warpHidden(i, t) ? WARP_HID : cloakAt(i, t)) : null;
         if (!ck?.hidden) {
           m.mesh.setMatrixAt(c, tmp.matrix);
           m.mesh.setColorAt(c, d.alive || m.wreck ? white : dark);
@@ -1517,7 +1589,7 @@ export function createView(host, hooks = {}, opt = {}) {
           if (tm?.state === 'ok') tm.list.push(new THREE.Matrix4().multiplyMatrices(tmp.matrix, mt.mat));
         }
         // 船身叠加特效：同一种特效多件装备取最亮的
-        if (d.alive) {
+        if (d.alive && ck !== WARP_HID) {
           const rack = rec.units[i].rack || [];
           const best = {};
           for (let j = 0; j < rack.length && j < 32; j++) {
@@ -1556,16 +1628,21 @@ export function createView(host, hooks = {}, opt = {}) {
         if (d.alive && !ck?.hidden) {
           // 强度：当前速度 / 最大速度（客户端 FitBoosters 把 maxVelocity 交给引擎；引擎内部的强度曲线未知，这里直接用速度比，开推进器时超过 1）
           const u = rec.units[i], sp = F.spd ? F.spd[i] : 0;
-          const I = Math.max(0, Math.min(2, sp / Math.max(1, u.vel || 1)));
+          // 跃迁中（客户端 ship.EnterWarp）：boosters.warpIntensity = 1，强度固定为 1，换跃迁颜色（warpGlowColor / warpHaloColor / WarpColor0）
+          const warping = F.wp ? F.wp[i] === 2 : false;
+          const I = warping ? 1 : Math.max(0, Math.min(2, sp / Math.max(1, u.vel || 1)));
           if (I > 0.0001) {
             const B = m.def.bst || BST_DEF;
             const zk = 0.5 + 0.5 * Math.min(1, I), gk = Math.min(1, I);
-            const gl = B.glow || BST_DEF.glow, hl = B.halo || BST_DEF.halo, sym = B.sym ?? BST_DEF.sym;
+            let gl = B.glow || BST_DEF.glow, hl = B.halo || BST_DEF.halo;
+            const sym = B.sym ?? BST_DEF.sym;
+            if (warping && B.wglow) gl = [gl[0], ...B.wglow];
+            if (warping && B.whalo) hl = [hl[0], hl[1], ...B.whalo];
             for (const b of m.def.boosters) {
               // 盒子：船矩阵 × 平移到喷口 × 缩放（米）
               mBst.makeScale(b[3], b[3], b[4] * zk).setPosition(-b[0], b[1], b[2]);
               mBst2.multiplyMatrices(tmp.matrix, mBst);
-              fl.push(...mBst2.elements, ...(B.a0 || BST_DEF.a0), ...(B.a1 || BST_DEF.a1), ...(B.fq || BST_DEF.fq), ...(B.c0 || BST_DEF.c0), (i * 7.13 + b[0]) % 1, b[5] || 0, I);
+              fl.push(...mBst2.elements, ...(B.a0 || BST_DEF.a0), ...(B.a1 || BST_DEF.a1), ...(B.fq || BST_DEF.fq), ...((warping && B.wc0) || B.c0 || BST_DEF.c0), (i * 7.13 + b[0]) % 1, b[5] || 0, I);
               vA.set(-b[0], b[1], b[2]).applyMatrix4(tmp.matrix);
               const ph = (i * 0.37 + b[1] * 0.11) % 1, w = b[3] * KM;
               gw.push(vA.x, vA.y, vA.z, w * gl[0], w * gl[0], ph, gl[1] * gk, gl[2] * gk, gl[3] * gk);
@@ -1611,6 +1688,16 @@ export function createView(host, hooks = {}, opt = {}) {
 
     // 总览图标：模型在屏幕上够大时淡出
     const ip = [], it = [], ii = [];
+    // 天体图标（灰白，按总览页签过滤：hooks.celShown）
+    celUpdate();
+    if (brkOf) for (let c = 0; c < cels.count(); c++) {
+      const p = cels.pos(c), cc = rec.cel[c];
+      if (!p || (hooks.celShown && !hooks.celShown(c))) continue;
+      const k = brSlot(CEL_BRK[cc.group] || CEL_BRK[7]);
+      if (k < 0) continue;
+      const on = c === (opt.selC ?? -1) || c === hoverC;
+      ip.push(p.x, p.y, p.z); it.push(on ? 1 : 0.78, on ? 1 : 0.8, on ? 1 : 0.84, on ? 1 : 0.8); ii.push(k);
+    }
     for (let i = 0; i < n; i++) {
       const d = drawn[i];
       if (!d) continue;
@@ -1636,7 +1723,7 @@ export function createView(host, hooks = {}, opt = {}) {
       const o = F.dr[j];
       if (!drawn[o]?.alive) continue;
       const same = F2.dr[j] === o && F2.dr[j + 5] === F.dr[j + 5];
-      const x = (F.dr[j + 1] + (same ? (F2.dr[j + 1] - F.dr[j + 1]) * fk : 0)) * KM, y = (F.dr[j + 2] + (same ? (F2.dr[j + 2] - F.dr[j + 2]) * fk : 0)) * KM, z = (F.dr[j + 3] + (same ? (F2.dr[j + 3] - F.dr[j + 3]) * fk : 0)) * KM;
+      const x = (F.dr[j + 1] + (same ? (F2.dr[j + 1] - F.dr[j + 1]) * fk : 0) - ORG[0]) * KM, y = (F.dr[j + 2] + (same ? (F2.dr[j + 2] - F.dr[j + 2]) * fk : 0) - ORG[1]) * KM, z = (F.dr[j + 3] + (same ? (F2.dr[j + 3] - F.dr[j + 3]) * fk : 0) - ORG[2]) * KM;
       const key = shipIndex?.types?.[F.dr[j + 5]]?.m;
       let a = 1;
       if (key) {
@@ -1646,7 +1733,7 @@ export function createView(host, hooks = {}, opt = {}) {
           const px = (shipIndex.models[key]?.r || 5) * KM / kmPerPx(vA);
           a = Math.max(0, Math.min(1, 1 - (px - 6) / 10));
           tmp.position.set(x, y, z);
-          if (same) { vB.set(F2.dr[j + 1] * KM, F2.dr[j + 2] * KM, F2.dr[j + 3] * KM); if (vB.distanceToSquared(vA.set(F.dr[j + 1] * KM, F.dr[j + 2] * KM, F.dr[j + 3] * KM)) > 1e-14) { tmp.lookAt(vB.add(tmp.position).sub(vA)); } }
+          if (same) { vB.set((F2.dr[j + 1] - ORG[0]) * KM, (F2.dr[j + 2] - ORG[1]) * KM, (F2.dr[j + 3] - ORG[2]) * KM); if (vB.distanceToSquared(vA.set((F.dr[j + 1] - ORG[0]) * KM, (F.dr[j + 2] - ORG[1]) * KM, (F.dr[j + 3] - ORG[2]) * KM)) > 1e-14) { tmp.lookAt(vB.add(tmp.position).sub(vA)); } }
           (dPos.get(key) || dPos.set(key, []).get(key)).push(tmp.position.x, tmp.position.y, tmp.position.z, tmp.quaternion.x, tmp.quaternion.y, tmp.quaternion.z, tmp.quaternion.w);
           tmp.quaternion.identity();
         }
@@ -1699,7 +1786,7 @@ export function createView(host, hooks = {}, opt = {}) {
         const age = t - e.t;
         if (age < 0 || age > 4) continue;
         const k = age < 0.4 ? age / 0.4 : 1 - (age - 0.4) / 3.6;
-        fp.set([e.pos[0] * KM, e.pos[1] * KM, e.pos[2] * KM], c * 3);
+        fp.set([(e.pos[0] - ORG[0]) * KM, (e.pos[1] - ORG[1]) * KM, (e.pos[2] - ORG[2]) * KM], c * 3);
         fc.set([1.2 * k, 0.75 * k, 0.35 * k], c * 3);
         fs[c] = (8 + age * 6) * k;
         c++;
@@ -1797,6 +1884,16 @@ export function createView(host, hooks = {}, opt = {}) {
     const F = frameAt(lastDrawT), bw = 40 * dpr, bh = Math.max(1, 2 * dpr), lh = 13 * dpr + bh * 3 + 3 * dpr;
     const HP_COL = ['#5aa9ff', '#f0b44a', '#e85d5d'];
     const boxes = [];
+    for (const c of new Set([selC, hoverC])) {
+      const p = c >= 0 && cels.pos(c), name = p && hooks.celName?.(c);
+      if (!name) continue;
+      vA.copy(p).project(camera);
+      if (vA.z > 1) continue;
+      const x = (vA.x + 1) / 2 * w + 14 * dpr, y = (1 - vA.y) / 2 * h - 4 * dpr;
+      lctx.fillStyle = '#d8dde4';
+      lctx.fillText(name, x, y);
+      boxes.push([x, y, x + lctx.measureText(name).width]);
+    }
     const order = drawn.map((p, i) => i).sort((a, b) => (b === sel || b === hover) - (a === sel || a === hover));
     for (const i of order) {
       const p = drawn[i];
@@ -1855,7 +1952,16 @@ export function createView(host, hooks = {}, opt = {}) {
       const d = (sx - x) ** 2 + (sy - y) ** 2;
       if (d < bd) { bd = d; best = i; }
     });
-    return { i: best, x, y };
+    let bc = -1;
+    if (best < 0 && rec?.cel) for (let c = 0; c < cels.count(); c++) {
+      const p = cels.pos(c);
+      if (!p || (hooks.celShown && !hooks.celShown(c))) continue;
+      vA.copy(p).project(camera);
+      if (vA.z > 1) continue;
+      const d = ((vA.x + 1) / 2 * r.width - x) ** 2 + ((1 - vA.y) / 2 * r.height - y) ** 2;
+      if (d < bd) { bd = d; bc = c; }
+    }
+    return { i: best, c: bc, x, y };
   }
   let down = null;
   const el = renderer.domElement;
@@ -1863,15 +1969,16 @@ export function createView(host, hooks = {}, opt = {}) {
   el.addEventListener('pointerup', (e) => {
     if (placing && down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) {
       const p = planePoint(e.clientX, e.clientY);
-      if (p) { const cb = placing.done; placing = null; el.style.cursor = ''; cb([p.x / KM, p.y / KM, p.z / KM]); }
+      if (p) { const cb = placing.done; placing = null; el.style.cursor = ''; cb([p.x / KM + ORG[0], p.y / KM + ORG[1], p.z / KM + ORG[2]]); }
       down = null;
       return;
     }
-    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) hooks.onPick?.(pick(e).i, e);
+    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) { const p = pick(e); if (p.c >= 0 && hooks.onPickCel) hooks.onPickCel(p.c, e); else hooks.onPick?.(p.i, e); }
     down = null;
   });
   el.addEventListener('dblclick', (e) => {
-    const i = pick(e).i;
+    const pk = pick(e), i = pk.i;
+    if (pk.c >= 0 && hooks.onDblCel) { hooks.onDblCel(pk.c, e); return; }
     // 驾驶模拟：双击空白处朝那个方向飞（hooks.onDblEmpty 收到单位方向向量）
     if (i < 0 && hooks.onDblEmpty) { const d = dirAt(e.clientX, e.clientY); if (d) hooks.onDblEmpty(d, e); return; }
     if (i >= 0 && hooks.onFollowDbl === false) return;
@@ -1880,8 +1987,8 @@ export function createView(host, hooks = {}, opt = {}) {
   el.addEventListener('pointermove', (e) => { mouse = [e.clientX, e.clientY]; });
   el.addEventListener('pointerdown', (e) => { mouse = [e.clientX, e.clientY]; });
   el.addEventListener('pointerleave', () => { mouse = null; });
-  el.addEventListener('pointermove', (e) => { if (placing) return; if (e.pointerType === 'mouse' && !e.buttons) { const p = pick(e); hover = p.i; hooks.onHover?.(p.i, p.x, p.y); } });
-  el.addEventListener('pointerleave', () => { hover = -1; hooks.onHover?.(-1); });
+  el.addEventListener('pointermove', (e) => { if (placing) return; if (e.pointerType === 'mouse' && !e.buttons) { const p = pick(e); hover = p.i; hoverC = p.c; hooks.onHover?.(p.i, p.x, p.y, p.c); } });
+  el.addEventListener('pointerleave', () => { hover = -1; hoverC = -1; hooks.onHover?.(-1); });
 
   return {
     setRecord(r) {
@@ -1894,9 +2001,15 @@ export function createView(host, hooks = {}, opt = {}) {
       for (const tm of tModels.values()) { tm.list.length = 0; if (tm.mesh) tm.mesh.count = 0; }
       for (const m of models.values()) if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); }
       models.clear();
+      ORG[0] = ORG[1] = ORG[2] = 0;
+      followAt = null;
+      cels.set(r?.cel);
+      const st = cels.sunType();
+      if (st != null) { const c = sunLight(st); sun.color.setRGB(c[0], c[1], c[2]); }
+      else { sun.position.set(0.6, 0.5, 0.35); sky.material.uniforms.sun.value.set(0.6, 0.5, 0.35).normalize(); }
     },
     draw,
-    render() { watchPerf(); sky.position.copy(camera.position); bg.position.copy(camera.position); controls.update(); dynFov(); if (post && level === 'high') post.render(scene, camera); else { renderer.setRenderTarget(null); renderer.render(scene, camera); } drawLabels(); },
+    render() { watchPerf(); controls.update(); dynFov(); sky.position.copy(camera.position); bg.position.copy(camera.position); if (rec?.cel?.length) celUpdate(); const shook = warpFrame(); if (post && level === 'high') post.render(scene, camera, tunnel?.distScene); else { renderer.setRenderTarget(null); renderer.render(scene, camera); } if (shook) camera.quaternion.copy(shakeQ); drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
     // 自己在哪一方（匹配对战里可能在 B 方）：自己这方画蓝色、对面画红色
     setOwnSide(s) { ownSide = s === 'B' ? 'B' : 'A'; },
@@ -1905,15 +2018,26 @@ export function createView(host, hooks = {}, opt = {}) {
     // 选落点：opt = { side, color: '#rrggbb', label, done(pos) }；null 取消
     setPlacing(opt) { placing = opt; el.style.cursor = opt ? 'crosshair' : ''; if (opt) { hover = -1; hooks.onHover?.(-1); } },
     resetCamera: fit,
+    // 镜头转到「从注视点看向 p（米）」的方向（距离不变）
+    lookToward(p) {
+      vA.set((p[0] - ORG[0]) * KM, (p[1] - ORG[1]) * KM, (p[2] - ORG[2]) * KM).sub(controls.target).normalize();
+      const d = camera.position.distanceTo(controls.target);
+      camera.position.copy(controls.target).addScaledVector(vA, -d);
+      camera.lookAt(controls.target);
+    },
     follow: setFollow,
     screenOf,
     dirAt,
     // 拾取射线（米）：鼠标位置 → { o: 镜头位置, d: 单位方向 }
-    rayAt(cx, cy) { const d = dirAt(cx, cy); if (!d) return null; return { o: [camera.position.x / KM, camera.position.y / KM, camera.position.z / KM], d }; },
+    rayAt(cx, cy) { const d = dirAt(cx, cy); if (!d) return null; return { o: [camera.position.x / KM + ORG[0], camera.position.y / KM + ORG[1], camera.position.z / KM + ORG[2]], d }; },
     // 世界坐标（米）→ 画布 CSS 像素；在镜头后面返回 null
-    project(p) { vA.set(p[0] * KM, p[1] * KM, p[2] * KM).project(camera); if (vA.z > 1) return null; return [(vA.x + 1) / 2 * host.clientWidth, (1 - vA.y) / 2 * host.clientHeight]; },
+    project(p) {
+      vA.set((p[0] - ORG[0]) * KM, (p[1] - ORG[1]) * KM, (p[2] - ORG[2]) * KM).sub(camera.position);
+      const l = vA.length();
+      if (l > 15000) vA.multiplyScalar(15000 / l);   // 远处（天体）：只要方向
+      vA.add(camera.position).project(camera); if (vA.z > 1) return null; return [(vA.x + 1) / 2 * host.clientWidth, (1 - vA.y) / 2 * host.clientHeight]; },
     // 第 i 艘船这一帧画在哪（米）
-    drawnPos(i) { const p = drawn[i]; return p ? [p.x / KM, p.y / KM, p.z / KM] : null; },
+    drawnPos(i) { const p = drawn[i]; return p ? [p.x / KM + ORG[0], p.y / KM + ORG[1], p.z / KM + ORG[2]] : null; },
     // 镜头离跟随的船的距离（千米）
     zoomTo(km) { const d = vA.copy(camera.position).sub(controls.target); camera.position.copy(controls.target).addScaledVector(d.normalize(), km); },
     following: () => follow,

@@ -103,7 +103,7 @@ function unitTemplate(row) {
     // 隐形装置：解除后 cloakingTargetingDelay（560）内不能锁定，重启延迟 moduleReactivationDelay（669）；
     // 不标为已用 → 留在 alwaysOn 里，开关由玩家决定（降速等属性走 variant）
     if (names.some((n) => CLOAK_EFFECTS.includes(n)) && m.state !== 'offline') {
-      cloaks.push({ m: idx.get(m), delay: (m.attr(560) || 0) / 1000, cool: (m.attr(REACTIVATION_DELAY) || 0) / 1000 });
+      cloaks.push({ m: idx.get(m), delay: (m.attr(560) || 0) / 1000, cool: (m.attr(REACTIVATION_DELAY) || 0) / 1000, warp: names.includes('cloakingWarpSafe') });   // 隐秘行动隐形装置可以带隐形跃迁
       continue;
     }
     if ((FE.STATE_RANK[m.state] || 0) < 2) continue;
@@ -234,6 +234,8 @@ function unitTemplate(row) {
   return {
     guns, drones, fighters, fighter: stats.weapon.fighter, pref: Math.max(1000, pref), reach: Math.max(1500, reach),
     points, align: stats.navigation.align || 5, stab: Math.abs(ship.attr(104) || 0),
+    // 跃迁：速度（AU/s，客户端 infosvc 按 max(1, baseWarpSpeed) × warpSpeedMultiplier）、每 AU 每千克耗电 warpCapacitorNeed（153）、质量
+    warp: Math.max(1, ship.attr(1281) || 3) * (ship.attr(600) || 1), warpMul: ship.attr(600) || 1, warpCap: ship.attr(153) || 0, mass: stats.navigation.mass || 0,
     radius: ship.attr(FE.AT.radius) || 50, tau: (stats.navigation.agility * stats.navigation.mass) / 1e6 || 1,
     max: [d.shield.hp, d.armor.hp, d.hull.hp], res,
     types: stats.weapon.types.slice(), dps: stats.weapon.total,

@@ -3,6 +3,11 @@
 // 用法：node --max-old-space-size=6000 convert.mjs --sde <SDE 目录> [--out <输出目录>] [--only 587,24690] [--cats 6,18,87] [--build 3628513] [--max 2048] [--keep-cache] [--wrecks] [--turrets]
 //   --wrecks：另外转通用残骸 wreck_s / wreck_m / wreck_l（SDE 残骸组 186：护卫舰级 s、驱逐 ~ 巡洋 m、战巡 ~ 战列 l），index.wrecks 记 { s, m, l: 模型键 }
 //   --turrets：另外转炮塔 / 发射器模型（装备 graphicFile 在 model/turret/ 下的 EveTurretSet），index.turrets 记 { 装备 typeID: 模型键 }
+//   --celestials [pilot-systems.json]：不转舰船，改转星门（组 10）/ 空间站（组 15）。这些类型 SDE 里 published=false，所以不看 published；
+//     客户端 station.py / stargate.py 和舰船一样按 graphicID 拼 SOF DNA。给了 pilot-systems.json 就只转里面出现的类型（可再加 --only）；
+//     index.cel 记 { typeID: 模型键 }（不进 index.types，免得被当成舰船）。模型半径 2–60 km，贴图建议 --max 1024
+//     例：node --max-old-space-size=6000 convert.mjs --celestials ../../pilot-systems.json --max 1024 --cache <新建的空目录>
+//   --cache <目录>：下载缓存放这里（默认 tools/ship-models/.cache）
 //
 // 流程（只用公开资源，不需要客户端）：
 //   1. binaries.eveonline.com 取当前客户端版本 → resfileindex（res:/ 路径 → 下载地址）
@@ -24,7 +29,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const args = Object.fromEntries(process.argv.slice(2).join(' ').split('--').filter(Boolean).map((s) => { const [k, ...v] = s.trim().split(/\s+/); return [k, v.join(' ') || true]; }));
 const SDE = args.sde || resolve(HERE, '../../../../sde');
 const OUT = resolve(args.out || join(HERE, '../../ship-models'));
-const CACHE = join(HERE, '.cache');
+const CACHE = resolve(args.cache || join(HERE, '.cache'));
 const MAX = Number(args.max) || 2048;
 const ONLY = args.only ? new Set(String(args.only).split(',').map(Number)) : null;
 const BIN = 'https://binaries.eveonline.com/';
@@ -204,7 +209,14 @@ async function main() {
   // --cats 18,87：只转这些类别（默认舰船 6）；无人机 18、舰载机 87 和舰船用同一套 SOF 外观
   const CATS = new Set(String(args.cats || '6').split(',').map(Number));
   const allTypes = jsonl('types.jsonl');
-  const ships = allTypes.filter((t) => t.published && CATS.has(groups.get(t.groupID)?.categoryID) && (!ONLY || ONLY.has(t._key)));
+  // --celestials：星门 / 空间站（按组选，不看 published）
+  const CEL = args.celestials ? new Set([10, 15]) : null;
+  const celIn = typeof args.celestials === 'string'
+    ? new Set(Object.values(JSON.parse(readFileSync(resolve(args.celestials), 'utf8')).systems).flatMap((s) => (s.cel || []).filter((r) => CEL.has(r[1])).map((r) => r[2])))
+    : null;
+  const ships = CEL
+    ? allTypes.filter((t) => CEL.has(t.groupID) && (!celIn || celIn.has(t._key)) && (!ONLY || ONLY.has(t._key)))
+    : allTypes.filter((t) => t.published && CATS.has(groups.get(t.groupID)?.categoryID) && (!ONLY || ONLY.has(t._key)));
   // 通用残骸（每个尺寸取一个代表类型就够，外观都一样）
   const WRECK_SIZE = { wreck_s: 's', wreck_m: 'm', wreck_l: 'l' };
   if (args.wrecks) {
@@ -276,6 +288,7 @@ async function main() {
       writeFileSync(join(OUT, 'm', key + '.json'), JSON.stringify(model));
       index.models[key] = { r: model.r };
       if (WRECK_SIZE[hull]) { (index.wrecks ||= {})[WRECK_SIZE[hull]] = key; ok++; continue; }
+      if (CEL) { for (const t of types) (index.cel ||= {})[t._key] = key; ok++; continue; }
       for (const t of types) index.types[t._key] = { m: key, b: bracketOf(groups.get(t.groupID)?.name?.en, model.cat) };
       ok++;
       if (ok % 20 === 0) log('模型', ok, '/', byDna.size);
@@ -363,7 +376,7 @@ async function main() {
       if (src.n) jobs.push({ out: join(OUT, 't', k + '_n.webp'), kind: 'n', src, max: MAX });
       jobs.push({ out: join(OUT, 't', k + '_x.webp'), kind: 'x', src, max: MAX });
     });
-    const r = spawnSync('python3', [join(HERE, 'textures.py')], { input: JSON.stringify(jobs), encoding: 'utf8', maxBuffer: 1 << 26 });
+    const r = spawnSync('python3', ['-I', join(HERE, 'textures.py')], { input: JSON.stringify(jobs), encoding: 'utf8', maxBuffer: 1 << 26 });
     if (r.status !== 0) log('贴图转换出错', r.stderr.slice(0, 500));
     else if (r.stderr) log(r.stderr.trim().slice(0, 500));
     if (!args['keep-cache']) for (const p of paths) rmSync(p, { force: true });

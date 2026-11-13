@@ -250,7 +250,7 @@ async function loadMarket() {
     D.mkt = new Map();
     for (const [k, v] of Object.entries(d.types)) {
       const x = v[h];
-      if (x && (x[0] != null || x[1] != null)) D.mkt.set(Number(k), { sell: x[0], buy: x[1], daily: x[6] || 0 });
+      if (x && (x[0] != null || x[1] != null)) D.mkt.set(Number(k), { sell: x[0], buy: x[1], daily: x[6] || 0, avg: x[7] || 0 });
     }
     D.mktAt = d.updated || null;
   } catch { D.mkt = null; }
@@ -568,6 +568,8 @@ export const preload = () => loadData();
 // LP 商店的蓝图兑换品：按制造页的设置（星系、设施、改装件、设施税、技能）算制造材料、安装费，并列出制造所需技能。
 // 蓝图拷贝材料效率按 0 算。lpEnv() 先加载制造数据与角色技能；lpMake(pid, runs) 没有这个产品的配方时返回 null。
 export async function lpEnv() { await loadData(); await ensureSkills(); }
+// LP 商店的日均成交 / 日均成交额：与利润排行共用同一份交易中心快照（只下载一次）；读不到时为 null
+export const lpMarket = () => loadMarket();
 export function lpMake(pid, runs) {
   if (!D.data || !BP(pid)) return null;
   const j = job(pid, runs, 0, 0);
