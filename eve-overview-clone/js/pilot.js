@@ -14,7 +14,7 @@ import { loadShipIndex } from './sim-ships.js?v=v10';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS } from './pilot-rules.js?v=v2';
 import { bindUnit, pilotUnit } from './sim-unit.js?v=v2';
 import { buildMatch, stepMatch } from './match-sim.js?v=v2';
-import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v3';
+import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 
 let ctx = null;
 let root = null;

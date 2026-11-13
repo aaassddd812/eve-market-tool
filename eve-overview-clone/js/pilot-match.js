@@ -6,7 +6,7 @@ import { SERVER } from './server.js?v=s4';
 
 export const MT = { ws: null, state: 'off', me: null, err: '', queued: null, room: null, rooms: null, H: null, getToken: null, mid: null, retry: 0, timer: 0 };
 const ls = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
-const url = () => ls('eve-match-url') || `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/match/ws`;
+const url = () => ls('eve-match-url') || `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host === 'eve.navexor.top' || location.protocol === 'http:' ? location.host : 'eve.navexor.top'}/api/match/ws`;   // CDN 域名不转 WebSocket，直连源站
 // 公开预设（HTTP，不用登录）：本地测试时跟着「eve-match-url」走
 const api = (p) => (ls('eve-match-url') || '').replace(/^ws/, 'http').replace(/\/api\/match\/ws.*$/, '') + '/api/match/' + p;
 async function getJson(p) {
