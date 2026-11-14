@@ -9,12 +9,12 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v30';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v31';
 import { loadShipIndex } from './sim-ships.js?v=v11';
 import { warpShake } from './sim-warp.js?v=3';
-import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v4';
+import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v5';
 import { bindUnit, pilotUnit } from './sim-unit.js?v=v5';
-import { buildMatch, stepMatch } from './match-sim.js?v=v4';
+import { buildMatch, stepMatch } from './match-sim.js?v=v5';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 
 let ctx = null;
@@ -799,7 +799,7 @@ function renderStage() {
   sw?.addEventListener('pointerout', onHintOut);
   sw?.addEventListener('contextmenu', onSelCtx);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v72').then((m) => {
+  import('./sim-3d.js?v=v73').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -1180,7 +1180,8 @@ function matchInner() {
     const r = MT.room;
     return `<div class="pl-mt-st"><b>${r.pub ? '公开房间' : '私人房间'} · 邀请码 <span class="pl-mt-code" translate="no">${esc(r.code)}</span></b><span>${rule(r)}</span>
       <span>${r.members.map((x) => `${shipChip(x.ship)} <b translate="no">${esc(x.name)}</b>`).join(' ')}</span>
-      <button type="button" class="btn btn-ghost btn-sm" data-pl-mx>关闭房间</button></div>${err}`;
+      ${r.host ? (r.members.length >= 2 ? `<button type="button" class="btn btn-primary btn-sm" data-pl-mstart>开始</button>` : '<span class="text-muted">等待对手加入…</span>') : '<span class="text-muted">等待房主开始…</span>'}
+      <button type="button" class="btn btn-ghost btn-sm" data-pl-mx>${r.host ? '关闭房间' : '退出房间'}</button></div>${err}`;
   }
   const mode = S.set.mmode || '1v1', cap = MATCH_CAPS.includes(S.set.mcap) ? S.set.mcap : MATCH_CAPS[0];
   const seg = (label, attr, list, cur) => `<label>${label}</label><div class="segmented" role="group" aria-label="${label}">${list.map(([v, l]) => `<button type="button" ${attr}="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
@@ -1198,9 +1199,11 @@ function roomsInner() {
   // 我的船级别不同的房间进不去：灰掉，悬停说明
   const mine = bracketOf(ctx.data.types.get(S.set.ship)?.group);
   return list.map((r) => {
-    const why = r.bracket !== mine ? `你的船是${MATCH_BRACKETS[mine]?.name || '不能参赛的舰船'}，这个房间要${MATCH_BRACKETS[r.bracket]?.name}` : MT.state !== 'idle' ? '先取消正在进行的匹配或房间' : '';
-    return `<div class="pl-rrow${r.bracket !== mine ? ' off' : ''}"><span class="pl-rown">${shipChip(r.ship)}<b translate="no">${esc(r.owner)}</b></span><span>${esc(r.mode)}</span><span>${esc(MATCH_BRACKETS[r.bracket]?.name || r.bracket)}</span><span>${capName(r.cap)}</span><span>${SKILL_NAME[r.skills] || ''}</span><span>1 / 2</span>
-      <span><button type="button" class="btn btn-primary btn-sm" data-pl-mjoin="${esc(r.code)}"${why ? ` disabled title="${esc(why)}"` : ''}>加入房间</button></span></div>`;
+    const n = r.n || 1;
+    const why = r.bracket !== mine ? `你的船是${MATCH_BRACKETS[mine]?.name || '不能参赛的舰船'}，这个房间要${MATCH_BRACKETS[r.bracket]?.name}` : n >= 2 ? '房间已满，等房主开始' : MT.state !== 'idle' ? '先取消正在进行的匹配或房间' : '';
+    const act = r.mine ? '<span class="text-muted">我的房间</span>' : `<button type="button" class="btn btn-primary btn-sm" data-pl-mjoin="${esc(r.code)}"${why ? ` disabled title="${esc(why)}"` : ''}>加入房间</button>`;
+    return `<div class="pl-rrow${r.bracket !== mine && !r.mine ? ' off' : ''}"><span class="pl-rown">${shipChip(r.ship)}<b translate="no">${esc(r.owner)}</b></span><span>${esc(r.mode)}</span><span>${esc(MATCH_BRACKETS[r.bracket]?.name || r.bracket)}</span><span>${capName(r.cap)}</span><span>${SKILL_NAME[r.skills] || ''}</span><span>${n} / 2</span>
+      <span>${act}</span></div>`;
   }).join('');
 }
 // 打开「匹配对战」页签：连上服务器，每 5 秒刷新一次公开房间
@@ -1452,6 +1455,7 @@ function onClick(e) {
   if ((x = t.closest('[data-pl-mc]'))) { S.set.mcap = Number(x.dataset.plMc); save(); MH.onState(); return; }
   if (t.closest('[data-pl-mq]')) { matchGo('queue'); return; }
   if (t.closest('[data-pl-mr]')) { matchGo('room'); return; }
+  if (t.closest('[data-pl-mstart]')) { MT.err = ''; matchSend({ op: 'start' }); return; }
   if (t.closest('[data-pl-mj]')) { const code = root.querySelector('[data-pl-mcode]')?.value.trim().toUpperCase(); if (code) matchGo('join', code); return; }
   if (t.closest('[data-pl-mx]')) { matchSend({ op: 'cancel' }); return; }
   if (t.closest('[data-pl-exit]')) {

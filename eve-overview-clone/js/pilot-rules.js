@@ -367,14 +367,14 @@ export function makeRules(S, H) {
     if (c.cmd !== 'stop' && P.speed === 0) P.speed = 1;
     return true;
   }
-  // 速度表：0～1；停着的时候拉速度朝船头方向（在动就按当前方向）飞
+  // 速度表：0～1；停着的时候拉速度朝船头方向（引擎记录的朝向 hv；在动就按当前方向）飞
   function setSpeed(frac) {
     const P = S.me?.pilot;
     if (!P) return;
     if (S.me.warp) { log('跃迁中不能改变速度', 'bad'); return; }
     if (frac <= 0) { cmd({ cmd: 'stop', tgt: null }); return; }
     P.speed = frac;
-    if (P.cmd === 'stop') { const fw = Math.hypot(...S.me.vel) > 1 ? S.me.vel : S.me.face; const l = Math.hypot(...fw) || 1; Object.assign(P, { cmd: 'dir', dir: fw.map((x) => x / l) }); }
+    if (P.cmd === 'stop') { const fw = Math.hypot(...S.me.vel) > 1 ? S.me.vel : S.me.hv || S.me.face; const l = Math.hypot(...fw) || 1; Object.assign(P, { cmd: 'dir', dir: fw.map((x) => x / l) }); }
   }
   function setDrones(on) {
     const u = S.me;

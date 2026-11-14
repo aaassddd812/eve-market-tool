@@ -88,6 +88,16 @@ const scale = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
 const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
 const norm = (a) => { const l = len(a) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+// 单位向量 h 朝单位向量 d 转过两者夹角的 f（在两者所在的平面里转；正好反向时绕水平轴转）
+function turnToward(h, d, f) {
+  const c = Math.max(-1, Math.min(1, h[0] * d[0] + h[1] * d[1] + h[2] * d[2])), th = Math.acos(c);
+  if (th < 1e-6) return d.slice();
+  let p = [d[0] - h[0] * c, d[1] - h[1] * c, d[2] - h[2] * c];
+  if (len(p) < 1e-6) p = len([h[2], 0, -h[0]]) > 1e-6 ? [h[2], 0, -h[0]] : [1, 0, 0];
+  p = norm(p);
+  const w = th * f, cw = Math.cos(w), sw = Math.sin(w);
+  return norm([h[0] * cw + p[0] * sw, h[1] * cw + p[1] * sw, h[2] * cw + p[2] * sw]);
+}
 const cap = (a, m) => { const l = len(a); return l > m ? scale(a, m / l) : a; };
 
 // 定位：logi 后勤 / carrier 航母 / ewar 电子战 / tackle 拦截 / drone 无人机船 / dps 输出
@@ -175,6 +185,7 @@ export function createBattle(sides, opt) {
         warp: from ? { t0: B.t, to: pos.slice(), from: add(pos, scale(from, WARP_FROM)) } : null
       };
       if (u.warp) { u.pos = u.warp.from.slice(); u.vel = scale(from, -WARP_FROM / WARP_IN); }
+      u.st0 = tpl;
       units.push(u);
       if (rec) rec.units.push({ side, ship: row.ship, row: row.id, radius: tpl.radius, born: B.t, fx: tpl.guns.map((g) => g.fx || null), gm: tpl.guns.map((g) => g.m ?? -1), rack: tpl.rack || [], vel: tpl.vel, cap: tpl.cap.max, ew: ewList(tpl) });
     }
@@ -251,7 +262,7 @@ export function createBattle(sides, opt) {
   // 同一套代码、同一个种子，正常情况下两边本来就一样；不同浏览器的数学函数末位可能不同，靠这个拉回来
   B.snap = () => ({
     t: B.t, rs: rand.get(),
-    u: units.map((u) => [u.alive ? 1 : 0, u.pos, u.vel, u.face, u.hp, u.cap, u.guns.map((g) => [g.next, g.ammo, g.reloadUntil, g.last])]),
+    u: units.map((u) => [u.alive ? 1 : 0, u.pos, u.vel, u.face, u.hp, u.cap, u.guns.map((g) => [g.next, g.ammo, g.reloadUntil, g.last]), u.hv || null]),
     k: kills.map((k) => [k.at, k.unit, k.by]),
   });
   B.applySnap = (S0) => {
@@ -260,6 +271,7 @@ export function createBattle(sides, opt) {
       const u = units[i];
       if (!u) return;
       u.pos = x[1].slice(); u.vel = x[2].slice(); u.face = x[3].slice(); u.hp = x[4].slice(); u.cap = x[5];
+      if (x[7]) u.hv = x[7].slice();
       x[6].forEach((g, k) => { const st = u.guns[k]; if (st) [st.next, st.ammo, st.reloadUntil, st.last] = g; });
       if (!x[0] && u.alive) { u.alive = false; u.r.lost += 1; u.r.killTimes.push(Math.ceil(B.t)); }
       else if (x[0] && !u.alive) { u.alive = true; u.r.lost -= 1; }
@@ -618,6 +630,7 @@ export function createBattle(sides, opt) {
       }
       u.pos = add(w.from, scale(w.dir, x.s));
       u.vel = scale(w.dir, x.v);
+      u.hv = w.dir.slice();
     }
     // 跃迁进场：减速落地
     for (const u of units) {
@@ -626,6 +639,7 @@ export function createBattle(sides, opt) {
       const p = add(u.warp.to, scale(sub(u.warp.from, u.warp.to), (1 - s) ** 3));
       u.vel = scale(sub(p, u.pos), 1 / DT);
       u.pos = p;
+      if (len(u.vel) > 1e-6) u.hv = norm(u.vel);
       if (s >= 1) { u.warp = null; u.vel = scale(norm(u.vel), 100); }
     }
     const alive = units.filter((u) => ready(u) && !u.isDrone);
@@ -673,6 +687,12 @@ export function createBattle(sides, opt) {
       for (const u of alive) {
         const D = goal.get(u);
         const a = 1 - Math.exp(-h / Math.max(0.5, u.t.tau));
+        // 朝向（只给画面用，不影响战斗）：客户端船头朝向是单独按角速度积分的，不是速度方向（停着也是慢慢转过去）。
+        //   这里每步把船头到目标方向剩下的角度转掉 a（和速度同一个惯性时间常数）：小角度转弯和速度方向的变化一样快，
+        //   大角度掉头平滑地转过去（不会像速度那样先缩到 0 再翻过去）；没有目标方向（停船）时保持
+        const dl = len(D);
+        if (!u.hv) u.hv = len(u.vel) > 1e-6 ? norm(u.vel) : norm(u.face || [0, 0, 1]);
+        if (dl > 1e-6) u.hv = turnToward(u.hv, [D[0] / dl, D[1] / dl, D[2] / dl], a);
         u.vel = [u.vel[0] + (D[0] - u.vel[0]) * a, u.vel[1] + (D[1] - u.vel[1]) * a, u.vel[2] + (D[2] - u.vel[2]) * a];
         u.pos = [u.pos[0] + u.vel[0] * h, u.pos[1] + u.vel[1] * h, u.pos[2] + u.vel[2] * h];
       }
@@ -1004,6 +1024,8 @@ export function createBattle(sides, opt) {
       u.cloakWarp = Boolean(c?.warp);
       if (c) bit(u, c.m);
     }
+    // 跃迁中的船不在 alive 里（不结算装备），隐秘行动隐形装置带着隐形跃迁时仍记为开着，否则画面会在跃迁途中解除隐形、落地再隐形一次
+    for (const u of units) if (u.alive && u.warp && u.cloak && u.cloakM != null) bit(u, u.cloakM);
     for (const v of units) if (v.target?.cloak) { v.target = null; v.lock = v.lockAll = 0; }
   }
   // 超级航母脉冲波投射器（doomsdayAOE*）：对目标开，预热 warn 秒后在目标当时的位置生成半径 radius 的力场，持续 life 秒；
@@ -1072,9 +1094,32 @@ export function createBattle(sides, opt) {
   }
   // ---------- 一步 ----------
   let shots = [];
+  // 属性模板换了（玩家关 / 开装备、换弹；电脑船被扰频换成推进器关着的属性）：武器、注入器、维修、中和 / 吸电等的计时状态
+  //   按装备序号 m 对回新模板的顺序（新模板少了或多了几门炮时，下标会错位，多出来的那门没有状态 → 引擎报错、对局中断）；新出现的装备从头开始
+  const mkGun = (g) => ({ next: B.t, ammo: g.ammo, reloadUntil: 0, last: -1e9, spool: 0, on: null });
+  const STATE_LISTS = [
+    ['guns', (t) => t.guns, mkGun], ['inj', (t) => t.injectors || [], (x) => ({ next: 0, ammo: x.ammo, reloadUntil: 0 })],
+    ['lrep', (t) => t.localReps || [], () => ({ next: B.t, ammo: 0, reloadUntil: 0, pend: 0 })], ['rrep', (t) => t.remote, () => ({ end: 0, tgt: null })],
+    ['drain', (t) => [...t.neuts, ...t.noses], () => ({ next: 0 })], ['aoe', (t) => [...L(t, 'smarts'), ...L(t, 'bursts')], () => ({ next: B.t })], ['rcn', (t) => L(t, 'rcaps'), () => ({ next: 0 })],
+  ];
+  function syncState(u) {
+    const t0 = u.st0;
+    if (!t0 || t0 === u.t || u.isDrone) return;
+    u.st0 = u.t;
+    for (const [key, list, mk] of STATE_LISTS) {
+      const st = u[key];
+      if (!st) continue;
+      const a = list(t0), b = list(u.t);
+      if (a === b) continue;
+      const by = new Map();
+      a.forEach((x, k) => { if (st[k] && x.m != null) by.set(x.m, st[k]); });
+      u[key] = b.map((x, k) => (x.m != null ? by.get(x.m) : st[k]) || (key === 'lrep' ? { ...mk(x), ammo: x.ammo } : mk(x)));
+    }
+  }
   B.step = () => {
     if (B.done) return;
     const t = B.t;
+    for (const u of units) if (u.alive) syncState(u);
     shots = [];
     // 预设的舰队支援：到时间自动进场
     for (const s of support) if (!s.fired && s.at != null && t >= s.at) { s.fired = true; B.deploy(s.side, s); }
@@ -1183,7 +1228,7 @@ export function createBattle(sides, opt) {
       const off = u.r.row.unitOff;
       if (!off || u.pilot) continue;
       const want = u.scram ? off : u.r.row.unit;
-      if (u.t !== want) u.t = want;
+      if (u.t !== want) { u.t = want; syncState(u); }
     }
     for (const u of alive) { u.velMult = 1; u.sigMult = 1; u.scanMult = 1; u.rangeMult = 1; u.optMult = u.fallMult = u.trackMult = u.mvelMult = u.flightMult = u.erMult = u.evMult = 1; }
     for (const [v, l] of webs) v.velMult = stack(l, true);
@@ -1432,9 +1477,10 @@ export function createBattle(sides, opt) {
     // 位置用双精度：跃迁动辄几个 AU，单精度只剩十几公里的精度；wp：0 正常 / 1 对准跃迁中 / 2 跃迁中
     const pos = new Float64Array(n * 3), hp = new Uint8Array(n * 3), tg = new Int32Array(n).fill(-1), wp = new Uint8Array(n);
     const spd = new Float32Array(n), cp = new Uint8Array(n), act = new Uint32Array(n), rld = new Uint32Array(n), fire = new Uint32Array(n), lk = new Uint8Array(n);
-    const dr = [], rr = [];
+    const dr = [], rr = [], hd = new Float32Array(n * 3);
     units.forEach((u, i) => {
       pos[i * 3] = u.pos[0]; pos[i * 3 + 1] = u.pos[1]; pos[i * 3 + 2] = u.pos[2];
+      if (u.hv) { const l = len(u.hv) || 1; hd[i * 3] = u.hv[0] / l; hd[i * 3 + 1] = u.hv[1] / l; hd[i * 3 + 2] = u.hv[2] / l; }
       if (!u.alive) return;
       u.rrep?.forEach((st, j) => { if (st.tgt?.alive) rr.push(i, st.tgt.i, u.t.remote[j].m); });
       for (const [x, m] of u.aOut || []) if (x.alive) rr.push(i, x.i, m);
@@ -1455,7 +1501,7 @@ export function createBattle(sides, opt) {
       for (const q of u.squads) if (q.pos) dr.push(i, q.pos[0], q.pos[1], q.pos[2], 4 + q.f.cls, q.f.type || 0);
       u.rld = 0;
     });
-    rec.frames.push({ t: B.t, pos, hp, tg, shots, spd, cp, act, rld, fire, lk, wp, dr: Float64Array.from(dr), rr: Int32Array.from(rr), pa: primary.A ? primary.A.i : -1, pb: primary.B ? primary.B.i : -1 });
+    rec.frames.push({ t: B.t, pos, hd, hp, tg, shots, spd, cp, act, rld, fire, lk, wp, dr: Float64Array.from(dr), rr: Int32Array.from(rr), pa: primary.A ? primary.A.i : -1, pb: primary.B ? primary.B.i : -1 });
   }
   timeline.push(point());
   if (rec) {

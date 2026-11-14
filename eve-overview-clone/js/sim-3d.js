@@ -1651,7 +1651,7 @@ export function createView(host, hooks = {}, opt = {}) {
   // 跟踪（客户端 SetAsCameraInterest）：镜头留在跟随的船上，转到让被跟踪的物体一直在船的正前方；手动拖镜头就停
   let track = -1;
   const tmp = new THREE.Object3D();
-  const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3();
+  const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3(), vD = new THREE.Vector3();
   const drawn = [];      // 本帧每艘船的位置（千米，悬停 / 选中用）
   const heading = [];    // 每艘船最后的朝向（停下 / 成为残骸后保持）
   const bank = [], bankT = [];   // 每艘船当前侧倾角（弧度）和上次更新的时间
@@ -1694,6 +1694,17 @@ export function createView(host, hooks = {}, opt = {}) {
       (a.pos[i * 3 + 1] + (b.pos[i * 3 + 1] - a.pos[i * 3 + 1]) * f - ORG[1]) * KM,
       (a.pos[i * 3 + 2] + (b.pos[i * 3 + 2] - a.pos[i * 3 + 2]) * f - ORG[2]) * KM);
     return out;
+  }
+  // 船头方向（引擎记录的 hd，单位向量）：两帧之间线性插值再归一化；没有记录返回 null
+  function hdAt(i, t, out) {
+    const F = rec.frames, dt = rec.dt;
+    const k = Math.max(0, Math.min(F.length - 1, Math.floor(t / dt)));
+    const a = F[k].hd, b = F[Math.min(F.length - 1, k + 1)].hd || a;
+    if (!a || i * 3 >= a.length) return null;
+    const f = Math.max(0, Math.min(1, (t - F[k].t) / dt));
+    out.set(a[i * 3] + (b[i * 3] - a[i * 3]) * f, a[i * 3 + 1] + (b[i * 3 + 1] - a[i * 3 + 1]) * f, a[i * 3 + 2] + (b[i * 3 + 2] - a[i * 3 + 2]) * f);
+    const l = out.length();
+    return l > 1e-6 ? out.multiplyScalar(1 / l) : null;
   }
   const frameAt = (t) => rec.frames[Math.max(0, Math.min(rec.frames.length - 1, Math.floor(t / rec.dt)))];
 
@@ -1744,8 +1755,10 @@ export function createView(host, hooks = {}, opt = {}) {
       if (!alive && rec.units[i].drone) continue;   // 无人机被打爆不留残骸（只有爆炸）
       const q = posAt(i, t + rec.dt, vB) || p;
       if (!heading[i]) heading[i] = new THREE.Quaternion();
-      if (alive && q.distanceToSquared(p) > 1e-12) {
-        tmp.position.copy(p); tmp.lookAt(q); heading[i].copy(tmp.quaternion);
+      // 朝向：引擎记录的船头方向（hd，和速度分开积分，停着也会慢慢转）；旧记录 / 无人机没有 → 用速度方向
+      const h = alive ? hdAt(i, t, vD) : null;
+      if (h || (alive && q.distanceToSquared(p) > 1e-12)) {
+        tmp.position.copy(p); tmp.lookAt(h ? vD.add(p) : q); heading[i].copy(tmp.quaternion);
         // 转弯侧倾：客户端没有（姿态由服务器下发），这里按水平转向角速度近似：bank = clamp(-2 × ω, ±30°)，平滑进出弯
         const o = posAt(i, Math.max(0, t - rec.dt), vC);
         let target = 0;
