@@ -9,7 +9,7 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v35';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v37';
 import { loadShipIndex } from './sim-ships.js?v=v11';
 import { warpShake } from './sim-warp.js?v=3';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v9';
@@ -19,6 +19,7 @@ import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=5';
 import * as SC from './pilot-scan.js?v=6';
+import * as ST from './pilot-site.js?v=5';
 
 let ctx = null;
 let root = null;
@@ -32,7 +33,7 @@ const SKIES = ['a01', 'c01', 'g01', 'm01'];
 const SKY_NAME = { '': '随机', a01: '艾玛', c01: '加达里', g01: '盖伦特', m01: '米玛塔尔' };
 const DT = 0.5;
 const S = {
-  set: { ship: 0, fit: 'kb', foes: [], allies: [], dist: 30, sky: '', tac: true, tab: 'solo', ptab: 'rec', mmode: '1v1', mcap: MATCH_CAPS[0], mskill: 'esi', mroomf: '', mpub: true, pfit: null, pid: '' },
+  set: { ship: 0, fit: 'kb', foes: [], allies: [], dist: 30, sky: '', tac: true, tab: 'solo', ptab: 'rec', mmode: '1v1', mcap: MATCH_CAPS[0], mskill: 'esi', mroomf: '', mpub: true, pfit: null, pid: '', mode: 'free', site: '' },
   b: null, me: null, on: null, off: null, prop: -1, view: null, raf: 0, last: 0, t: 0, paused: false, sel: -1, keys: new Set(),
   names: [], brk: [], log: [], ended: false, loading: false, orbit: 0, keep: 0, ovAt: 0
 };
@@ -96,12 +97,18 @@ export function initPilot(context) {
     menu: (items, e) => { hideHint(); closeMenus(); S.cm = items; cmenuAt(e); }, unitMenu: (v) => unitMenu(v), warpTo: (tgt, d) => warpTo(tgt, d),
     log: (t, k) => pushLog(t, k), openWin: (id, show) => toggleWin(id, show ? true : undefined),
   });
+  ST.initSite({
+    S, ctx, esc, tr, log: (t, k) => pushLog(t, k), msg: (t) => { pushLog(t, 'sys'); quickMsg(t); },
+    finish: (won, text) => { S.siteEnd = { won, text }; end(); }, fade: () => siteFade(),
+    approach: (i) => celApproach(i), envFx: (list) => { S.envFx = list; S.view?.setEnvFx?.(list); },
+  });
   const saved = ctx.store.getJSON(KEY, null);
   const ot = Number(ctx.store.getJSON(OV_KEY, 0));
   S.ovTab = ot >= 0 && ot < OV_TABS.length ? ot : 0;
   if (saved && typeof saved === 'object') Object.assign(S.set, { ship: Number(saved.ship) || 0, fit: saved.fit || 'kb', foes: Array.isArray(saved.foes) ? saved.foes : [], dist: DISTS.includes(saved.dist) ? saved.dist : 30, sky: SKIES.includes(saved.sky) ? saved.sky : '', tac: saved.tac !== false, mmode: saved.mmode === '2v2' ? '2v2' : '1v1', mcap: MATCH_CAPS.includes(saved.mcap) ? saved.mcap : MATCH_CAPS[0],
     tab: ['match', 'tut'].includes(saved.tab) ? saved.tab : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
     pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
+    mode: ['ded', 'abyss'].includes(saved.mode) ? saved.mode : 'free', site: typeof saved.site === 'string' ? saved.site : '',
     allies: Array.isArray(saved.allies) ? saved.allies.filter((a) => a && Number(a.ship)).slice(0, 8).map((a) => ({ ship: Number(a.ship), fit: typeof a.fit === 'string' ? a.fit : 'kb', count: Math.max(1, Math.min(20, Number(a.count) || 1)) })) : [] });
   const hud = ctx.store.getJSON(HUD_KEY, null);
   if (hud && typeof hud === 'object') for (const k of Object.keys(HUD_DEF)) if (k in hud) S.hud[k] = hud[k] ? 1 : 0;
@@ -335,6 +342,7 @@ function fitChoices(ship) {
 function renderSetup() {
   stopLoop();
   disposeView();
+  if (S.envSave) { ctx.FE.setEnv(S.envSave); S.envSave = null; }
   const ship = S.set.ship;
   const fits = fitChoices(ship);
   if (!fits.some(([k]) => k === S.set.fit)) S.set.fit = 'kb';
@@ -358,7 +366,17 @@ function renderSetup() {
           </div>
           <div class="pl-search"><input type="search" class="pi-input" placeholder="搜索船名加队友" data-pl-q="ally" autocomplete="off"><div class="pl-results" data-pl-res="ally" hidden></div></div>
         </div>`;
-  const solo = `<div class="pl-setup-grid">
+  const mode = S.set.mode;
+  const modeSeg = `<div class="pl-field pl-span"><label>模式</label><div class="segmented" role="group" aria-label="模式">${[['free', '自由对战'], ['ded', '死亡空间'], ['abyss', '深渊']].map(([k, l]) => `<button type="button" data-pl-mode="${k}" class="${mode === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>`;
+  const siteGrid = `<div class="pl-setup-grid">
+        ${modeSeg}
+        <div class="pl-field pl-span"><label>${mode === 'abyss' ? '深渊' : '复合体'}</label><div id="plSites">${S.npcReady ? ST.siteSetupHtml(mode, S.set.site) : '<p class="text-muted">正在加载 NPC 数据…</p>'}</div></div>
+        ${sideField}
+      </div>
+      <div class="pl-setup-foot"><button type="button" class="btn btn-primary" data-pl-go${S.loading || !S.npcReady ? ' disabled' : ''}>${S.loading ? '准备中…' : '起飞'}</button></div>`;
+  if (mode !== 'free' && !S.npcReady) ST.loadNpcData().then((d) => { S.npcReady = Boolean(d); if (!d) ctx.showToast('NPC 数据加载失败', 'error', 4000); if (root.querySelector('#plSetup')) renderSetup(); });
+  const solo = mode !== 'free' ? siteGrid : `<div class="pl-setup-grid">
+        ${modeSeg}
         <div class="pl-field pl-span"><label>预设场景</label><div id="plPresets">${presetInner()}</div></div>
         ${sideField}
         <div class="pl-field">
@@ -453,6 +471,7 @@ async function fitFor(ship, key) {
 }
 async function launch() {
   if (S.loading) return;
+  if (S.set.mode !== 'free') { launchSite(); return; }
   S.tut = null;
   tutStop();
   S.loading = true;
@@ -488,6 +507,58 @@ async function launch() {
     renderSetup();
     ctx.showToast('起飞失败：' + error.message, 'error', 4000);
   }
+}
+// 场景（pilot-site.js）：死亡空间复合体 / 深渊。没有开局敌人，进房间按刷怪表刷 NPC；深渊没有天体
+async function launchSite() {
+  const def = ST.siteById(S.set.site) || ST.siteById(ST.siteDefault(S.set.mode));
+  if (!def) return;
+  S.tut = null;
+  tutStop();
+  S.loading = true;
+  S.fitView = null;
+  renderSetup();
+  try {
+    await ST.loadNpcData();
+    // 舰船限制：深渊巡洋舰版只能 1 艘巡洋舰（不含 T3 战略巡洋）；死亡空间不允许旗舰
+    const grp = ctx.data.types.get(S.set.ship)?.group;
+    if (def.allow && !def.allow.includes(grp)) throw new Error('深渊（巡洋舰）只允许巡洋舰进入，不含战略巡洋舰');
+    if (def.deny?.includes(grp)) throw new Error('这个复合体不允许旗舰进入');
+    if (def.solo && S.set.allies.length) throw new Error('深渊（巡洋舰）只能 1 艘船进入，先移除队友');
+    // 天气：深渊天气对玩家的加成走装配计算的环境效果（和装配页的天象同一套），飞完还原
+    S.envSave = ctx.FE.getEnv().slice();
+    ctx.FE.setEnv(def.kind === 'abyss' && def.weather ? [def.weather] : []);
+    const fit = await fitFor(S.set.ship, S.set.fit);
+    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true });
+    S.fitLabel = mine.row.label || fit?.name || '';
+    if (!mine.row.unit) throw new Error('这个装配算不出属性');
+    const allies = [], cache = new Map();
+    for (const a of S.set.allies) {
+      const k = a.ship + '|' + a.fit;
+      if (!cache.has(k)) cache.set(k, (async () => { const f = a.fit === 'kb' ? null : await fitFor(a.ship, a.fit); return ctx.pilotRow(a.ship, f ? ctx.normalize(f) : null, f?.name || ''); })());
+      const r = await cache.get(k);
+      if (r.row.unit) allies.push({ ...r.row, id: 'a' + allies.length, count: a.count });
+    }
+    await loadSys();
+    S.loading = false;
+    start(mine, [], allies, { dist: 0, cel: def.kind === 'abyss' ? [] : null, sky: def.sky, msg: def.kind === 'abyss' ? '已进入深渊空间' : '已到达复合体入口', site: true });
+    S.b.hold = true;   // 敌人打光了也不结束，由场景判定（清完最后一个房间 / 起源导管）
+    ST.siteStart(def);
+    for (let i = S.names.length; i < S.b.units.length; i++) S.names.push(typeName(S.b.units[i].r.row.ship));
+  } catch (error) {
+    S.loading = false;
+    if (S.envSave) { ctx.FE.setEnv(S.envSave); S.envSave = null; }
+    renderSetup();
+    ctx.showToast('起飞失败：' + error.message, 'error', 4000);
+  }
+}
+// 深渊导管：画面闪一下白（客户端过导管是一段跃迁隧道动画，这里简化成淡入淡出）
+function siteFade() {
+  const stage = root?.querySelector('#plStage');
+  if (!stage) return;
+  const el = document.createElement('div');
+  el.className = 'pl-fade';
+  stage.appendChild(el);
+  setTimeout(() => el.remove(), 1200);
 }
 // 练习（pilot-tutor.js）：固定的船和装配，训练目标只有船体
 const hullFit = (ship) => ({ id: null, name: '', ship, slots: { high: [], mid: [], low: [], rig: [], sub: [] }, drones: [], implants: [] });
@@ -529,13 +600,16 @@ async function launchTut(id) {
 }
 function start(mine, foes, allies = [], o = {}) {
   S.match = null;
+  S.site = o.site ? {} : null;   // 场景：先占个位（窗口按它决定开不开），进画面后 siteStart 填上
+  S.siteEnd = null;
+  S.envFx = null;
   R = RL;
   RL.setRand(Math.random);
   const me = { ...mine.row, id: 'me', count: 1 };
   me.unit = R.prep(mine);
   // 星空先定下来：天体（星系）跟着星空走
-  S.sky = SKIES.includes(S.set.sky) ? S.set.sky : SKIES[Math.floor(Math.random() * SKIES.length)];
-  const b = createBattle({ A: [me, ...allies], B: foes }, { cel: celOf(SYS?.systems?.[S.sky], SYS?.types, window.I18N?.lang === 'en' ? SYS?.typesEn : null), dist: o.dist ?? S.set.dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: 3600, record: true, droneUnits: true, seed: (Math.random() * 2 ** 31) | 0, onHit: logHit, onDrain: logDrain });
+  S.sky = o.sky || (SKIES.includes(S.set.sky) ? S.set.sky : SKIES[Math.floor(Math.random() * SKIES.length)]);
+  const b = createBattle({ A: [me, ...allies], B: foes }, { cel: o.cel || celOf(SYS?.systems?.[S.sky], SYS?.types, window.I18N?.lang === 'en' ? SYS?.typesEn : null), dist: o.dist ?? S.set.dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: 3600, record: true, droneUnits: true, seed: (Math.random() * 2 ** 31) | 0, onHit: logHit, onDrain: logDrain });
   S.b = b;
   const calc = mine.row.calc;
   const maxLocks = Math.max(1, Math.min(calc?.ship?.attr(192) || 5, calc?.char?.attr(192) || 5));
@@ -588,6 +662,8 @@ const WINS = [
   { id: 'ov', title: '总览', icon: 'overview', w: 400, h: 330, r: 10, y: 186, nokill: true },
   { id: 'drones', title: '无人机', icon: 'drones', w: 400, h: 216, r: 10, y: 524, nokill: true, need: () => S.on?.drones?.length > 0 },
   { id: 'ship', title: '舰船属性', icon: 'fitting', w: 270, h: 300, x: 56, y: 96, closed: true },
+  // 场景（死亡空间 / 深渊）：当前房间、深渊计时、天气
+  { id: 'site', title: '地点', icon: 'info', w: 300, h: 140, x: 56, y: 96, need: () => Boolean(S.site) },
   { id: 'log', title: '日志', icon: 'log', w: 420, h: 200, x: 56, y: 410, closed: true },
   // 舰队（有队友时才有）：舰队窗口、单独拖出来的广播窗口、关注列表
   { id: 'fleet', title: '舰队', icon: 'fleet', w: 300, h: 300, x: 56, y: 400, more: true, need: () => FL.fleetOn() },
@@ -606,6 +682,7 @@ const winBody = {
   ov: () => `<div class="pl-ov-tabs">${OV_TABS.map(([n, , c], i) => `<button type="button" data-pl-ovtab="${i}" style="--c:${c}"${i === S.ovTab ? ' class="on"' : ''}>${n}</button>`).join('')}<i class="pl-ov-line"></i></div><div class="pl-ov-body"><table style="width:${ovCols().reduce((a, b) => a + b, 0)}px"><colgroup>${ovCols().map((w) => `<col style="width:${w}px">`).join('')}</colgroup><thead><tr><th></th><th class="srt">距离<img src="${UI}eveicon/system_icons/caret_up_16px.png?v=1" alt=""><i class="pl-ovsc" data-ov-scale="1"></i></th><th>名字<i class="pl-ovsc" data-ov-scale="2"></i></th><th>类型<i class="pl-ovsc" data-ov-scale="3"></i></th><th>速度 (m/s)<i class="pl-ovsc" data-ov-scale="4"></i></th></tr></thead><tbody id="plOv"></tbody></table></div>`,
   drones: () => '<div id="plDrones"></div>',
   ship: () => '<div id="plShip"></div>',
+  site: () => '<div id="plSite"></div>',
   log: () => '<div class="pl-log" id="plLog"></div>',
   fleet: () => FL.fleetBody(),
   bc: () => FL.bcBody(),
@@ -949,7 +1026,7 @@ function renderStage() {
   FL.renderFleet(true);
   SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v78').then((m) => {
+  import('./sim-3d.js?v=v80').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -986,6 +1063,7 @@ function renderStage() {
     S.view.draw(0, {});
     S.view.setOwnSide?.(S.me?.side);
     S.view.follow(S.me?.i ?? 0);
+    if (S.envFx) S.view.setEnvFx?.(S.envFx);   // 场景房间的边界 / 气云 / 天气云层（视图是异步建的，进房间时可能还没好）
     applyTac();
   }).catch(() => { S.noView = tr('3D 画面加载失败'); });
   startLoop();
@@ -1133,7 +1211,11 @@ function tick(now) {
     drawTargets();
     updateRack();
     updStance();
-    if (now - S.ovAt > 500) { S.ovAt = now; if (S.fleet && !S.match) FL.fleetTick(); renderOverview(); renderSel(true); renderDrones(); FL.renderFleet(); SC.renderDscan(); SC.renderProbe(); refreshTip(); ovLine(); }
+    if (now - S.ovAt > 500) {
+      S.ovAt = now;
+      const sb = S.site && root.querySelector('#plSite');
+      if (sb) { const h = ST.siteInfoHtml(); if (sb.dataset.h !== h) { sb.dataset.h = h; sb.innerHTML = h; } }
+      if (S.fleet && !S.match) FL.fleetTick(); renderOverview(); renderSel(true); renderDrones(); FL.renderFleet(); SC.renderDscan(); SC.renderProbe(); refreshTip(); ovLine(); }
     drawMsgs(now);
     const nc = root.querySelector('#plNeoClock');
     if (nc) { const v = new Date().toISOString().slice(11, 16); if (nc.textContent !== v) nc.textContent = v; }
@@ -1169,7 +1251,18 @@ Object.assign(BUFF_INFO, {
   td: ['ewTrackingDisrupt', '5_64_7', '被索敌扰断'], gd: ['ewGuidanceDisrupt', '5_64_17', '被制导干扰'],
   rt: ['remoteTracking', '74_64_8', '强化跟踪'], rc: ['energyTransfer', '1_64_2', '能量传输'], rb: ['sensorBooster', '3_64_9', '感应增强'],
 });
-const BUFF_DEF = new Set(['rs', 'ra', 'rh', 'rt', 'rc', 'rb', ...Object.values(BURST_SLOT)]);
+// 深渊天气、气云、塔（客户端 Slot_Weather_* / Slot_Aoe*，图标 appConst.iconWeather* 21903~21907 / iconAoe* 21936~21941 → ui/texture/icons/statuseffects/*）
+Object.assign(BUFF_INFO, {
+  wxElec: ['weatherElectricStorm', 'statuseffects/weatherlightning', '电子风暴'], wxDark: ['weatherDarkness', 'statuseffects/weatherdarkness', '暗物质场'],
+  wxCaustic: ['weatherCausticToxin', 'statuseffects/weathercaustic', '异种粒子风暴'], wxXenon: ['weatherXenonGas', 'statuseffects/weatherxenongas', '伽玛射线余波'],
+  wxInfernal: ['weatherInfernal', 'statuseffects/weatherinfernal', '等离子火焰风暴'],
+  aoeBio: ['aoeBioluminescenceCloud', 'statuseffects/bioluminescence', '生物荧光气云'], aoeCaustic: ['aoeCausticCloud', 'statuseffects/causticcloud', '超光速云'],
+  aoeFilament: ['aoeFilamentCloud', 'statuseffects/filamentcloud', '纤维云'], aoePD: ['aoePointDefense', 'statuseffects/pointdefensebattery', '反无人机/-导弹定点防御'],
+  aoePulse: ['aoePulsePlatform', 'statuseffects/pulsebattery', '追踪辅助脉冲'],
+});
+// 客户端 OFFENSIVE_SLOTS 只有电子战那几种，天气 / 气云 / 塔都不在里面 → 和遥修一样按非进攻样式
+const SITE_SLOTS = ['wxElec', 'wxDark', 'wxCaustic', 'wxXenon', 'wxInfernal', 'aoeBio', 'aoeCaustic', 'aoeFilament', 'aoePD', 'aoePulse'];
+const BUFF_DEF = new Set(['rs', 'ra', 'rh', 'rt', 'rc', 'rb', ...Object.values(BURST_SLOT), ...SITE_SLOTS]);
 // 自己身上还有效的脉冲波加成：槽位 → { buffs: Map(加成 → 数值，同种取最强), end: 最晚到期, dur }
 function burstsOnMe() {
   const out = new Map(), t = S.b.t;
@@ -1258,6 +1351,7 @@ function renderBuffs() {
   S.ewar = ew;
   // 脉冲波加成和遥修一样是友方格子，倒计时圈显示加成还剩多久
   if (u.alive) for (const [k, b] of burstsOnMe()) ew.set(k, { from: new Map(), fail: new Map(), jam: { t0: b.end - b.dur, end: b.end }, burst: b });
+  if (S.site) for (const [k, rows] of ST.siteBuffs(u)) ew.set(k, { from: new Map(), fail: new Map(), rows });
   const have = new Map([...box.children].map((x) => [x.dataset.k, x]));
   for (const [k, el] of have) if (!ew.has(k)) el.remove();
   for (const [k, e] of ew) {
@@ -1277,7 +1371,7 @@ function renderBuffs() {
     const rows = (m) => [...m].sort((a, b) => b[1] - a[1]).map(([v, c]) => `${c}x  ${S.names[v.i]}`);
     // 脉冲波：每种加成一行「数值 名称 剩余时间」（BuffHintProvider.GetDbuffHintItemList）
     const bRows = e.burst ? [...e.burst.buffs].map(([id, v]) => `${ctx.FE.buffText(ctx.data, [[id, v]])[0] || ''}  ${tr(fmtLeft(e.burst.end - S.b.t))}`) : [];
-    const tip = [buffHint(k), ...rows(e.from), ...(e.fail.size ? [tr('失败的尝试'), ...rows(e.fail)] : []), ...bRows].join('\n');
+    const tip = [buffHint(k), ...rows(e.from), ...(e.fail.size ? [tr('失败的尝试'), ...rows(e.fail)] : []), ...bRows, ...(e.rows || [])].join('\n');
     if (el.title !== tip) el.title = tip;
     // 倒计时圈（ModuleEffectTimer，倒数模式，白 0.65；电子战按钮用橙 1,0.3,0、遥修用青 0,0.8,0.8）：只有干扰（OnJamStart）有
     const tm = el.querySelector('.tm');
@@ -1291,6 +1385,7 @@ function renderBuffs() {
 function afterStep() {
   const u = S.me;
   if (!u) return;
+  if (S.site) ST.siteTick();   // 场景刷怪放在前面：新刷的 NPC 下面一起起名字
   // 放出的无人机成为新单位：名字就是型号名（客户端总览一样）
   for (let i = S.names.length; i < S.b.units.length; i++) S.names.push(typeName(S.b.units[i].r.row.ship));
   flushHits();
@@ -1455,7 +1550,9 @@ function end() {
   if (!box) return;
   if (S.match) { matchEndBox(box); return; }
   const kills = S.b.kills.filter((k) => k.side === 'B' && !k.drone).length;
-  box.innerHTML = `<div class="pl-win pl-w pl-end-win"><h3>${won ? '敌人全部被消灭' : '你的船被摧毁了'}</h3>
+  const title = S.site ? (won && S.siteEnd?.won ? S.siteEnd.text : won ? '时间到' : '你的船被摧毁了') : won ? '敌人全部被消灭' : '你的船被摧毁了';
+  box.innerHTML = `<div class="pl-win pl-w pl-end-win"><h3>${title}</h3>
+    ${S.site?.def ? `<p>${esc(window.I18N?.lang === 'en' ? S.site.def.en : S.site.def.name)} · ${ST.siteSummary()}</p>` : ''}
     <p>用时 ${Math.floor(S.b.t / 60)} 分 ${Math.round(S.b.t % 60)} 秒 · 击毁 ${kills} 艘 · 造成伤害 ${ctx.formatNumber(Math.round(S.me.r.dealt))} · 受到伤害 ${ctx.formatNumber(Math.round(S.me.r.taken))}</p>
     <div><button type="button" class="btn btn-primary" data-pl-restart>再来一次</button> <button type="button" class="btn btn-ghost" data-pl-exit>返回设置</button></div></div>`;
 }
@@ -1473,7 +1570,7 @@ function warpTo(tgt, dist = warpD()) {
   renderSel();
 }
 // 天体：总览图标（客户端 brackets 按组）、到表面的距离
-const CEL_BRK = { 6: 'sun', 7: 'planet', 8: 'moon', 9: 'asteroidbelt', 10: 'stargate', 15: 'station' };
+const CEL_BRK = { 6: 'sun', 7: 'planet', 8: 'moon', 9: 'asteroidbelt', 10: 'stargate', 15: 'station', 366: 'warpgate' };
 const celIcon = (c) => `${UI}shared/brackets/${CEL_BRK[c.group] || 'planet'}.png?v=1`;
 const celDist = (u, c) => Math.max(0, Math.hypot(c.pos[0] - u.pos[0], c.pos[1] - u.pos[1], c.pos[2] - u.pos[2]) - (c.radius || 0) - u.t.radius);
 function pickCel(i, e) {
@@ -1612,6 +1709,10 @@ function onClick(e) {
   if ((x = t.closest('[data-pl-drones]'))) { setDrones(x.dataset.plDrones === '1'); return; }
   if ((x = t.closest('[data-pl-dist]'))) { S.set.dist = Number(x.dataset.plDist); save(); renderSetup(); return; }
   if (t.closest('[data-pl-go]')) { launch(); return; }
+  const md = t.closest('[data-pl-mode]');
+  if (md) { S.set.mode = md.dataset.plMode; if (S.set.mode !== 'free' && ST.siteById(S.set.site)?.kind !== S.set.mode) S.set.site = ST.siteDefault(S.set.mode); save(); renderSetup(); return; }
+  const sc = t.closest('[data-pl-site]');
+  if (sc) { S.set.site = sc.dataset.plSite; save(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site); return; }
   if ((x = t.closest('[data-pl-tutsel]'))) { S.set.tutSel = x.dataset.plTutsel; save(); renderSetup(); return; }
   if ((x = t.closest('[data-pl-tut]'))) { S.set.tutSel = x.dataset.plTut; save(); S.b = null; launchTut(x.dataset.plTut); return; }
   if ((x = t.closest('[data-pl-mm]'))) { S.set.mmode = x.dataset.plMm; save(); MH.onState(); return; }
@@ -2799,7 +2900,7 @@ function renderOverview() {
   // PVP 页签：只列敌方舰船——天体、空间站、友军、无人机都不列（按用户的游戏内 PVP 页签）
   const pvp = ovPvp();
   const list = S.b.units.filter((v) => v !== u && v.alive && !v.warp && onGrid(v) && (!pvp || v.side !== u.side) && ovShows(v.r.row.ship)).map((v) => ({ k: 'u' + v.i, v, d: surf(u, v) }));
-  if (!pvp) (S.b.cel || []).forEach((c, i) => { if (ovShowsGroup(c.group)) list.push({ k: 'c' + i, c, ci: i, d: celDist(u, c) }); });
+  if (!pvp) (S.b.cel || []).forEach((c, i) => { if (ovShowsGroup(c.group) && (!c.site || celDist(u, c) <= GRID)) list.push({ k: 'c' + i, c, ci: i, d: celDist(u, c) }); });
   // 太空中的无人机（敌我都有）也列出来，只看不点
   for (const o of S.b.units) {
     if (!o.alive || pvp) continue;
@@ -3001,6 +3102,7 @@ function unitMenu(v, bare = false) {
 function celMenu(i) {
   const c = S.b?.cel[i], u = S.me, items = [];
   if (!c || !u?.pilot) return items;
+  items.push(...ST.gateItems(i));
   const far = celDist(u, c) >= 150000;
   if (far) items.push(['跃迁至', warpSub((d) => warpTo({ cel: i }, d)), { fn: () => warpTo({ cel: i }) }], ...FL.warpItems({ cel: i }));
   else items.push(['接近', () => celApproach(i)]);

@@ -329,6 +329,7 @@ export function createBattle(sides, opt) {
       const off = sub(u.pos, c.pos), d = len(off);
       return add(c.pos, scale(d > 1 ? scale(off, 1 / d) : [1, 0, 0], c.land || c.radius || 0));
     }
+    if (w.pos) return w.pos.slice();
     return w.u?.alive && !w.u.warp ? w.u.pos.slice() : null;
   };
   const warpGap = (u, w, pt) => Math.max(0, len(sub(pt, u.pos)) - u.t.radius - (w.u ? w.u.t.radius : 0));
@@ -344,6 +345,26 @@ export function createBattle(sides, opt) {
     if (u.pointed > u.t.stab) return 'scram';
     Object.assign(P, { cmd: 'warp', wp: { ...w, dist: Math.max(0, Math.min(100000, dist)), t0: B.t }, tgt: null, pt: null, dir: null });
     return true;
+  };
+  // 加速门（驾驶模拟的死亡空间）：激活后不用对准、不耗电，直接跃迁到 pos（下一个口袋的落点）；name 为跃迁提示里的目的地名
+  B.gateWarp = (u, pos, name = '') => {
+    const P = u.pilot;
+    if (!P || !u.alive) return 'gone';
+    if (u.warp) return 'warping';
+    if (u.pointed > u.t.stab) return 'scram';
+    P.wp = { pos: pos.slice(), dist: 0, t0: B.t, gate: true, name };
+    warpStart(u);
+    return u.warp ? true : 'gone';
+  };
+  // 瞬移（深渊导管）：直接换到 pos，速度清零、解除锁定；放出去的无人机留在原地
+  B.teleport = (u, pos) => {
+    if (!u?.alive) return;
+    u.pos = pos.slice();
+    u.vel = [0, 0, 0];
+    u.warp = null;
+    if (u.pilot) { for (const v of [...u.pilot.locks.keys()]) B.unlock(u, v); Object.assign(u.pilot, { cmd: 'stop', tgt: null, wp: null, pt: null, dir: null }); }
+    u.target = null;
+    events.push({ t: B.t, kind: 'teleport', unit: u.i, side: u.side, pos: pos.slice() });
   };
   // 对准进度（客户端 spaceMgr：min(速度/75%, (cos+1)/1.99)^3）：HUD 进度条用
   B.alignProgress = (u) => {
@@ -361,7 +382,7 @@ export function createBattle(sides, opt) {
     const dir = norm(sub(pt, u.pos));
     const end = add(pt, scale(dir, -w.dist));   // 落点 = 目标点沿来向退 dist 米
     let D = len(sub(end, u.pos));
-    const per = u.t.warpCap * u.t.mass / AU;   // 每米耗电
+    const per = w.gate ? 0 : u.t.warpCap * u.t.mass / AU;   // 每米耗电（加速门不耗电）
     if (capOn && per > 0) {
       const can = Math.max(0, u.cap) / per;
       if (can < D) { D = can; (P.msgs ||= []).push({ k: 'warpLowCap' }); }
@@ -370,7 +391,7 @@ export function createBattle(sides, opt) {
     if (D < 1000) { P.cmd = 'stop'; P.wp = null; return; }
     for (const v of [...P.locks.keys()]) B.unlock(u, v);
     const c = warpCurve(D, u.t.warp, len(u.vel), u.t.vel * u.velMult);
-    u.warp = { go: true, t0: B.t + DT, from: u.pos.slice(), dir, D, c, name: w.cel != null ? B.cel[w.cel]?.name : w.u?.r.row.label || '' };
+    u.warp = { go: true, t0: B.t + DT, from: u.pos.slice(), dir, D, c, name: w.cel != null ? B.cel[w.cel]?.name : w.name || w.u?.r.row.label || '' };
     P.cmd = 'stop';
     P.wp = null;
     (P.msgs ||= []).push({ k: 'warpStart' });
@@ -552,7 +573,7 @@ export function createBattle(sides, opt) {
     if (P.cmd === 'point' && P.pt) {
       const off = sub(P.pt, u.pos), d = len(off);
       if (d < Math.max(10, u.t.radius * 0.2)) { P.cmd = 'stop'; P.pt = null; return [0, 0, 0]; }
-      return scale(norm(off), Math.min(V, d / Math.max(0.5, u.t.tau)));
+      return scale(norm(off), Math.min(V, d / Math.max(0.5, u.t.tau * (u.tauMult ?? 1))));
     }
     if (!v || P.cmd === 'stop') { if (P.cmd !== 'stop' && P.cmd !== 'dir') P.cmd = 'stop'; return [0, 0, 0]; }
     if (P.cmd === 'approach') {
@@ -693,7 +714,7 @@ export function createBattle(sides, opt) {
     for (let s = 0; s < SUB; s++) {
       for (const u of alive) {
         const D = goal.get(u);
-        const a = 1 - Math.exp(-h / Math.max(0.5, u.t.tau));
+        const a = 1 - Math.exp(-h / Math.max(0.5, u.t.tau * (u.tauMult ?? 1)));
         // 朝向（只给画面用，不影响战斗）：客户端船头朝向是单独按角速度积分的，不是速度方向（停着也是慢慢转过去）。
         //   这里每步把船头到目标方向剩下的角度转掉 a（和速度同一个惯性时间常数）：小角度转弯和速度方向的变化一样快，
         //   大角度掉头平滑地转过去（不会像速度那样先缩到 0 再翻过去）；没有目标方向（停船）时保持
@@ -720,15 +741,50 @@ export function createBattle(sides, opt) {
       left = left.map((x) => x * (1 - used));
     }
     v.r.taken += dealt;
-    u.r.dealt += dealt;
+    if (u) u.r.dealt += dealt;
     if (v.hp[2] <= 1e-6) {
       v.alive = false;
       v.r.lost += 1;
       v.r.killTimes.push(Math.ceil(B.t));
-      kills.push({ t: Math.ceil(B.t), at: B.t, side: v.side, ship: v.r.row.ship, row: v.r, unit: v.i, by: u.isDrone ? u.owner.i : u.i, drone: Boolean(v.isDrone) });
+      kills.push({ t: Math.ceil(B.t), at: B.t, side: v.side, ship: v.r.row.ship, row: v.r, unit: v.i, by: !u ? -1 : u.isDrone ? u.owner.i : u.i, drone: Boolean(v.isDrone) });
     }
     return dealt;
   }
+  // 环境区域（驾驶模拟的深渊云团 / 塔，dogma 里是 AOE 信标的 dbuff）：{ pos, r, unit?（塔被打掉就失效）, mods: { sig, vel, agi, track, sbAmt, sbDur }（乘数）,
+  //   dmg: [电磁, 热能, 动能, 爆炸]（每 cycle 秒打一次区域里的无人机和 droneFrig 标记的 NPC） }
+  B.zones = [];
+  function zoneStep(alive, t) {
+    for (const u of alive) { u.tauMult = 1; u.sbAmt = 1; u.sbDur = 1; }
+    for (const z of B.zones) {
+      if (z.unit && !z.unit.alive) continue;
+      const fire = z.dmg && t >= (z.next ?? 0);
+      if (fire) z.next = t + (z.cycle || 2);
+      for (const v of alive) {
+        if (v.warp || len(sub(v.pos, z.pos)) > z.r) continue;
+        const m = z.mods || {};
+        if (m.sig) v.sigMult *= m.sig;
+        if (m.vel) v.velMult *= m.vel;
+        if (m.agi) v.tauMult *= m.agi;
+        if (m.track) v.trackMult *= m.track;
+        if (m.sbAmt) v.sbAmt *= m.sbAmt;
+        if (m.sbDur) v.sbDur *= m.sbDur;
+        if (fire && (v.isDrone || v.droneFrig)) hit(null, v, z.dmg);
+      }
+    }
+  }
+  // 环境伤害（驾驶模拟的深渊出界、计时结束）：不计抗性，依次扣护盾、装甲、结构；amt = Infinity 直接摧毁
+  B.hurt = (v, amt) => {
+    if (!v?.alive) return;
+    let left = amt;
+    for (let l = 0; l < 3 && left > 0; l++) { const x = Math.min(v.hp[l], left); v.hp[l] -= x; left -= x; v.r.taken += x; }
+    if (v.hp[2] <= 1e-6) {
+      v.hp = [0, 0, 0];
+      v.alive = false;
+      v.r.lost += 1;
+      v.r.killTimes.push(Math.ceil(B.t));
+      kills.push({ t: Math.ceil(B.t), at: B.t, side: v.side, ship: v.r.row.ship, row: v.r, unit: v.i, by: -1, drone: Boolean(v.isDrone) });
+    }
+  };
   const engaged = (u, v) => u.jam <= B.t && surf(u, v) <= u.t.lockRange * u.rangeMult && u.lock <= 0;
   const bit = (u, m, on = true) => { if (on && m != null && m >= 0 && m < 32) u.act |= 1 << m; };
   // 这一步开始了新周期的装备（回放画周期进度圈）
@@ -1201,6 +1257,13 @@ export function createBattle(sides, opt) {
     pilotLocks(alive);
     // 玩家开着的装备才运转
     const on = (u, x) => !u.pilot || u.pilot.on.has(x.m);
+    // NPC 旧式实体效果（sim-npc.js 的 chance）：每个周期开头按几率决定这个周期生不生效
+    const lucky = (u, x) => {
+      if (x.chance == null) return true;
+      const st = (u.ewc ||= new Map()).get(x) || { next: 0, on: false };
+      if (t >= st.next) { st.next = t + (x.cycle || 5); st.on = rand() < x.chance; u.ewc.set(x, st); }
+      return st.on;
+    };
     for (const u of alive) {
       const v = u.target;
       if (!v?.alive || !engaged(u, v)) continue;
@@ -1208,12 +1271,13 @@ export function createBattle(sides, opt) {
       // 跃迁扰断 / 扰频：一直开着（不受电子战开关影响，决定对方能不能跑）
       // 强度 ≥ 2 的是跃迁扰频器：同时让对方的微型跃迁推进器停机、开不起来
       // 聚焦脚本的跃迁扰断力场（focus）：单目标、强度视为无穷，只禁跃迁，不关微型跃迁推进器 / 微跳
-      for (const x of u.t.points) if (on(u, x) && d <= x.range) { const ok = u.ratio > 0.5; v.pointed += x.str * (ok ? 1 : 0); if (ok && x.str >= 2 && !x.focus) v.scram = true; bit(u, x.m); }
+      // noScram：NPC 的跃迁扰断（旧式 warpScrambleForEntity 强度 2 也只禁跃迁，不关微型跃迁推进器）
+      for (const x of u.t.points) if (on(u, x) && d <= x.range && lucky(u, x)) { const ok = u.ratio > 0.5; v.pointed += x.str * (ok ? 1 : 0); if (ok && x.str >= 2 && !x.focus && !x.noScram) v.scram = true; bit(u, x.m); }
       if (opt.ewar) {
-        for (const w of u.t.webs) { if (!on(u, w)) continue; const e = rangeEff(w, d); put(webs, v, w.v * k * e); bit(u, w.m, e > 0.01); }
-        for (const p of u.t.paints) { if (!on(u, p)) continue; const e = rangeEff(p, d); put(paints, v, p.v * k * e); bit(u, p.m, e > 0.01); }
-        for (const x of u.t.damps) { if (!on(u, x)) continue; const e = k * rangeEff(x, d); put(dScan, v, x.scan * e); put(dRange, v, x.lock * e); bit(u, x.m, e > 0.01); }
-        for (const x of L(u.t, 'tds')) { if (!on(u, x)) continue; const e = k * rangeEff(x, d); putW(v, 'opt', x.opt * e); putW(v, 'fall', x.fall * e); putW(v, 'track', x.track * e); bit(u, x.m, e > 0.01); }
+        for (const w of u.t.webs) { if (!on(u, w) || !lucky(u, w)) continue; const e = rangeEff(w, d); put(webs, v, w.v * k * e); bit(u, w.m, e > 0.01); }
+        for (const p of u.t.paints) { if (!on(u, p) || !lucky(u, p)) continue; const e = rangeEff(p, d); put(paints, v, p.v * k * e); bit(u, p.m, e > 0.01); }
+        for (const x of u.t.damps) { if (!on(u, x) || !lucky(u, x)) continue; const e = k * rangeEff(x, d); put(dScan, v, x.scan * e); put(dRange, v, x.lock * e); bit(u, x.m, e > 0.01); }
+        for (const x of L(u.t, 'tds')) { if (!on(u, x) || !lucky(u, x)) continue; const e = k * rangeEff(x, d); putW(v, 'opt', x.opt * e); putW(v, 'fall', x.fall * e); putW(v, 'track', x.track * e); bit(u, x.m, e > 0.01); }
         for (const x of L(u.t, 'gds')) { if (!on(u, x)) continue; const e = k * rangeEff(x, d); putW(v, 'mvel', x.mvel * e); putW(v, 'flight', x.flight * e); putW(v, 'ev', x.ev * e); putW(v, 'er', x.er * e); bit(u, x.m, e > 0.01); }
         u.t.ecms.forEach((e, i) => {
           if (!on(u, e)) return;
@@ -1239,6 +1303,7 @@ export function createBattle(sides, opt) {
           if (e <= 0.01) return;
           if (t >= st.next) {
             st.next = nextCycle(st.next, t, x.cycle);
+            if (x.chance != null && rand() >= x.chance) return;
             fired(u, x.m);
             const amt = Math.max(0, Math.min(v.cap, x.amt * k * e));
             if (nos) {
@@ -1275,11 +1340,12 @@ export function createBattle(sides, opt) {
     // 同一属性的加成和减益各自排序算叠加惩罚（dogma 里正负分开），再相乘
     const both = (l) => stack(l.filter((x) => x < 0), true) * stack(l.filter((x) => x > 0), false);
     for (const [v, o] of wd) for (const [k, l] of Object.entries(o)) v[k + 'Mult'] = both(l);
+    if (B.zones.length) zoneStep(alive, t);
 
     // 没有输出舰船的一方：剩下的船开始撤离
     for (const side of SIDES) {
       const mine = alive.filter((u) => u.side === side);
-      if (mine.length && !mine.some((u) => (u.t.dps > 0 || u.pilot) && !u.escaping) && !units.some((u) => u.alive && u.warp && u.side === side) && !jumps.some((j) => j.side === side)) for (const u of mine) if (!u.escaping && !u.pilot) u.escaping = t || DT;
+      if (mine.length && !mine.some((u) => (u.t.dps > 0 || u.pilot) && !u.escaping) && !units.some((u) => u.alive && u.warp && u.side === side) && !jumps.some((j) => j.side === side)) for (const u of mine) if (!u.escaping && !u.pilot && !u.t.stay) u.escaping = t || DT;
     }
     move();
     // 玩家跃迁：对准完成（速度 ≥ 75%、航向偏差 ≤ 5°）就起跳
@@ -1423,8 +1489,10 @@ export function createBattle(sides, opt) {
           bit(u, x.m);
           if (t < st.next) return;
           if (st.pend) { u.hp[x.layer] = Math.min(u.t.max[x.layer], u.hp[x.layer] + st.pend); st.pend = 0; }
-          const ov = u.pilot?.ovl?.has(x.m), amt = x.amt * (ov ? 1 + (x.ovA || 0) : 1);
-          st.next = nextCycle(st.next, t, x.cycle * (ov ? 1 + (x.ovC || 0) : 1));
+          const sb = x.layer === 0 ? (u.sbAmt ?? 1) : 1, sd = x.layer === 0 ? (u.sbDur ?? 1) : 1;   // 纤维云：护盾回充增量器回充量 / 持续时间
+          const ov = u.pilot?.ovl?.has(x.m), amt = x.amt * sb * (ov ? 1 + (x.ovA || 0) : 1);
+          st.next = nextCycle(st.next, t, x.cycle * sd * (ov ? 1 + (x.ovC || 0) : 1));
+          if (x.skip && rand() < x.skip) return;   // NPC 旧式维修：这个周期延迟了，不修
           fired(u, x.m);
           if (x.layer === 0) u.hp[0] = Math.min(u.t.max[0], u.hp[0] + amt);
           else st.pend = amt;

@@ -7,6 +7,10 @@
 //     客户端 station.py / stargate.py 和舰船一样按 graphicID 拼 SOF DNA。给了 pilot-systems.json 就只转里面出现的类型（可再加 --only）；
 //     index.cel 记 { typeID: 模型键 }（不进 index.types，免得被当成舰船）。模型半径 2–60 km，贴图建议 --max 1024
 //     例：node --max-old-space-size=6000 convert.mjs --celestials ../../pilot-systems.json --max 1024 --cache <新建的空目录>
+//   --npc <npc-data.json>：不转舰船，改转驾驶模拟场景里的 NPC（舰船、岗哨、建筑；SDE 里 published=false，不看 published），
+//     NPC 用的也是 SOF 船体（graphicID → hull:faction:race），进 index.types；加速轨道 / 导管（组 366）进 index.cel。
+//     --gates 17831,47685：另外加上这些加速轨道类型（死亡空间的门在场景里没写类型，用通用的 17831）
+//     例：node --max-old-space-size=6000 convert.mjs --npc ../../npc-data.json --gates 17831 --max 1024 --cache <新建的空目录>
 //   --cache <目录>：下载缓存放这里（默认 tools/ship-models/.cache）
 //
 // 流程（只用公开资源，不需要客户端）：
@@ -214,7 +218,12 @@ async function main() {
   const celIn = typeof args.celestials === 'string'
     ? new Set(Object.values(JSON.parse(readFileSync(resolve(args.celestials), 'utf8')).systems).flatMap((s) => (s.cel || []).filter((r) => CEL.has(r[1])).map((r) => r[2])))
     : null;
-  const ships = CEL
+  // --npc：场景 NPC + 加速轨道
+  const NPC = args.npc ? new Set([...Object.keys(JSON.parse(readFileSync(resolve(args.npc), 'utf8')).npc).map(Number), ...String(args.gates || '').split(',').filter(Boolean).map(Number)]) : null;
+  const GATE_GROUP = 366;
+  const ships = NPC
+    ? allTypes.filter((t) => NPC.has(t._key) && (!ONLY || ONLY.has(t._key)))
+    : CEL
     ? allTypes.filter((t) => CEL.has(t.groupID) && (!celIn || celIn.has(t._key)) && (!ONLY || ONLY.has(t._key)))
     : allTypes.filter((t) => t.published && CATS.has(groups.get(t.groupID)?.categoryID) && (!ONLY || ONLY.has(t._key)));
   // 通用残骸（每个尺寸取一个代表类型就够，外观都一样）
@@ -289,6 +298,14 @@ async function main() {
       index.models[key] = { r: model.r };
       if (WRECK_SIZE[hull]) { (index.wrecks ||= {})[WRECK_SIZE[hull]] = key; ok++; continue; }
       if (CEL) { for (const t of types) (index.cel ||= {})[t._key] = key; ok++; continue; }
+      if (NPC) {
+        for (const t of types) {
+          if (t.groupID === GATE_GROUP) (index.cel ||= {})[t._key] = key;
+          else index.types[t._key] = { m: key, b: bracketOf(groups.get(t.groupID)?.name?.en, model.cat), npc: 1 };
+        }
+        ok++;
+        continue;
+      }
       for (const t of types) index.types[t._key] = { m: key, b: bracketOf(groups.get(t.groupID)?.name?.en, model.cat) };
       ok++;
       if (ok % 20 === 0) log('模型', ok, '/', byDna.size);

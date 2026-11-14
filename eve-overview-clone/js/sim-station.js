@@ -1,4 +1,4 @@
-// ===== 驾驶模拟的空间站、星门模型 =====
+// ===== 驾驶模拟的空间站、星门、加速轨道模型 =====
 // 客户端 station.py / stargate.py：和舰船一样按 graphicID 拼 SOF DNA 装配模型，所以这里直接用舰船那套
 //   （tools/ship-models/convert.mjs --celestials 转出的 ship-models/，index.cel：typeID → 外观键；sim-ships.js 的加载和 quad 材质），
 //   受同一个恒星方向光照。客户端加载后播 NormalLoop 动画、挂交通 / 宣传 / 灯光等子模型（SOF hull.children），这里只画静态船体 + 发光贴图。
@@ -25,7 +25,7 @@ export function createStations(scene, opt = {}) {
     list = [];
     gen++;
     for (const c of cel || []) {
-      if (c.group !== 10 && c.group !== 15) continue;
+      if (c.group !== 10 && c.group !== 15 && c.group !== 366) continue;   // 366：加速轨道 / 深渊导管（驾驶模拟场景）
       list.push({ c, state: 'wait', mesh: null, yaw: (hash(`${c.name}|${c.type}`) / 4294967296) * Math.PI * 2 });
     }
   }

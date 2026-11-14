@@ -7,7 +7,7 @@ import * as FE from './fit-engine.js?v=v45';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
 import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
-import { initSim, mountSim, pilotRow, pilotShipSearch, fitBody as simFitBody } from './fit-sim.js?v=v121';
+import { initSim, mountSim, pilotRow, pilotShipSearch, fitBody as simFitBody } from './fit-sim.js?v=v125';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v13';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle, skPilot } from './skeleton.js?v=v18';
@@ -172,7 +172,7 @@ export async function showPilot(root) {
   toolInit?.();
   await MU.loadMuta().catch(() => {});
   if (!pilotMod) {
-    pilotMod = await import('./pilot.js?v=v122');
+    pilotMod = await import('./pilot.js?v=v128');
     pilotMod.initPilot({ get data() { return F.data; }, FE, shipSearch: pilotShipSearch, savedFits, normalize,
       // 无人机一架都没激活时按带宽激活（不改原装配）
       pilotRow: (ship, fit, label, o) => pilotRow(ship, fit, label, (f) => { if (f?.drones?.length && !f.drones.some((d) => d.active)) autoActivateDrones(f); }, o),
@@ -1647,8 +1647,8 @@ function cloudHtml() {
 
 // 天象：星系环境（虫洞 / 超阈限风暴 / 三神裔入侵等，同时只有一个）、泰坦天象发生器、主权稳定发生器（同时只有一个）、势力战争与活动效果
 // 选中的对所有装配生效（智能装配、战场模拟也按它算）
-const ENV_CATS = [['wh', '虫洞'], ['storm', '超阈限风暴'], ['space', '星系环境'], ['titan', '泰坦天象发生器'], ['sov', '主权升级'], ['fw', '势力战争'], ['event', '活动']];
-const ENV_ONE = { wh: 'system', storm: 'system', space: 'system', sov: 'sov' };   // 同组只能选一个，选新的替换旧的
+const ENV_CATS = [['wh', '虫洞'], ['storm', '超阈限风暴'], ['abyss', '深渊天气'], ['space', '星系环境'], ['titan', '泰坦天象发生器'], ['sov', '主权升级'], ['fw', '势力战争'], ['event', '活动']];
+const ENV_ONE = { wh: 'system', storm: 'system', abyss: 'system', space: 'system', sov: 'sov' };   // 同组只能选一个，选新的替换旧的
 const ENV_SHOW = 6;   // 效果超过这么多条时折叠
 const envOpen = new Set();
 const envName = (e) => (window.I18N?.lang === 'en' ? e.en || e.name : e.name);

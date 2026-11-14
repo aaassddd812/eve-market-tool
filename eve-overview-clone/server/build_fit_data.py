@@ -156,7 +156,7 @@ def build_dbuffs(z):
 # 输出 env：
 #   items: { id: [中文名, 英文名, 分类, [[func, domain, 被修改属性, 运算, 数值, 分组或技能, 适用名单], ...], [[中文说明, 英文说明], ...]] }
 #   lists: { 名单: [包含的舰船 ID 或 null（全部舰船）, 排除的舰船 ID] }
-# 分类：wh 虫洞、storm 超阈限风暴、space 其他星系环境（三神裔入侵、波赫文等）、titan 泰坦天象发生器、sov 主权升级、fw 势力战争、event 活动
+# 分类：wh 虫洞、storm 超阈限风暴、abyss 深渊天气、space 其他星系环境（三神裔入侵、波赫文等）、titan 泰坦天象发生器、sov 主权升级、fw 势力战争、event 活动
 # 效果信标（虫洞、风暴、入侵）按类型自身的 dogma 效果（数值取信标属性）；泰坦天象发生器与星系范围效果（systemWideEffects）按 dbuff 定义（数值随 dbuff 给出）
 WH_STAR = {'Pulsar': ['脉冲星', 'Pulsar'], 'Black Hole': ['黑洞', 'Black Hole'], 'Cataclysmic Variable': ['激变变星', 'Cataclysmic Variable'],
            'Magnetar': ['磁星', 'Magnetar'], 'Red Giant': ['红巨星', 'Red Giant'], 'Wolf Rayet': ['沃尔夫-拉叶星', 'Wolf-Rayet']}
@@ -171,6 +171,9 @@ ENV_NAMES = {   # SDE 里没有正式名称（DO NOT TRANSLATE）的，两条合
 }
 ENV_FW = [92536, 92605, 92606, 92607, 90144, 90145, 90146, 90147]
 TITAN_PG = 1815
+# 深渊天气：信标类型名是开发代号（darkness_weather_1 …），正式名称取深渊环境分组 1983 里同种天气的类型；1～3 为强度档（弱 / 中 / 强）
+ABYSS_WEATHER = {'darkness': 47863, 'electric_storm': 47865, 'caustic_toxin': 47862, 'xenon_gas': 47866, 'infernal': 47864}
+ABYSS_LEVEL = [['弱', 'Weak'], ['中', 'Medium'], ['强', 'Strong']]
 OPS = {'PreAssignment': -1, 'PreMul': 0, 'PreDiv': 1, 'ModAdd': 2, 'ModSub': 3, 'PostMul': 4, 'PostDiv': 5, 'PostPercent': 6, 'PostAssignment': 7}
 # 主权中心的稳定发生器没有 dogma 数据，按游戏内说明（与深渊同名天气相似）
 SOV = {
@@ -248,6 +251,15 @@ def build_env(z, all_types, groups, attrs_all, effects_all):
             items[tid] = [zh(t['name']), n, ENV_SPACE[tid], beacon_mods(tid) + wide_mods(tid)]
         elif tid in ENV_FW:
             items[tid] = [zh(t['name']), n, 'fw', beacon_mods(tid) + wide_mods(tid)]
+        elif (m := re.match(r'(\w+)_weather_([123])$', n)) and m.group(1) in ABYSS_WEATHER:
+            # 每个天气信标两组加成：属性 2468 / 2470 是 dbuff ID，2469 / 2471 是数值（同泰坦天象发生器）
+            vals = {a['attributeID']: a['value'] for a in dogma.get(tid, {}).get('dogmaAttributes', [])}
+            mods = []
+            for ida, va in ((2468, 2469), (2470, 2471)):
+                if vals.get(ida):
+                    mods += buff_mods(int(vals[ida]), vals.get(va, 0))
+            w, lv = all_types[ABYSS_WEATHER[m.group(1)]]['name'], ABYSS_LEVEL[int(m.group(2)) - 1]
+            items[tid] = [f'{zh(w)} · {lv[0]}', f'{en(w)} · {lv[1]}', 'abyss', mods]
         elif t['groupID'] == TITAN_PG and t.get('published'):
             vals = {a['attributeID']: a['value'] for a in dogma.get(tid, {}).get('dogmaAttributes', [])}
             mods = []

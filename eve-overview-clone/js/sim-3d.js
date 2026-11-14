@@ -18,6 +18,7 @@ import { createFx } from './sim-fx.js?v=v35';
 import { createCelestials, sunLight } from './sim-cel.js?v=7';
 import { createWarpTunnel } from './sim-warp.js?v=3';
 import { createFlare } from './sim-flare.js?v=3';
+import { createEnvFx } from './sim-env.js?v=2';
 
 const WRECK = new THREE.Color(0x8a9099);
 const WHITE = new THREE.Color(1, 1, 1), OWN_COL = new THREE.Color(0.7, 0.7, 0.7);
@@ -45,6 +46,43 @@ const CEL_BRK = { 6: 'shared/brackets/sun.png', 7: 'shared/brackets/planet.png',
 const BLOOM = { sizeScale: 4, brightness: 0.2, size: [0.3, 1, 2, 10, 30, 64], tint: [0.3465, 0.138, 0.1176, 0.066, 0.066, 0.061] };
 const EXPO = { influence: 1, middleValue: 0.55, minExposure: -3.7, maxExposure: 10, minLuminance: 0.4649, maxLuminance: 10, minBrightness: 0.9, maxBrightness: 0.98, increaseSpeed: 2, decreaseSpeed: 1.5 };   // Tr2PPDynamicExposureEffect 类默认值
 const TONE = { A: 0.125, B: 0.25, C: 0.1, D: 0.15, E: 0.021, F: 0.3, W: 2.5 };   // shoulderStrength、linearStrength、linearAngle、toeStrength、toeNumerator、toeDenominator、whiteScale
+// 区域调色（客户端 dx9/postprocess/environmentvolumes/envvol_*.black → Tr2PostProcessAttributes，tonemapping 着色器的 COLOR_CORRECTION 分支执行）
+// 文件里没写的字段 = 不调（6500 K、偏色 0、饱和度 / 对比度 1、增益 1）；gamma / offset 这几个文件里都没有
+export const GRADES = {
+  amarr: { temp: 7500, tint: 0.25, sat: 0.9, contrast: 1.05, gain: [1.15, 1.15, 0.7] },
+  caldari: { temp: 5500, tint: 0.1, contrast: 1.05, gain: [0.85, 0.85, 1.3] },
+  gallente: { tint: 0.1, contrast: 1.05, gain: [0.85, 1.175, 0.975] },
+  minmatar: { tint: 0.25, gain: [1.2, 0.9, 0.9] },
+  concord: { temp: 6000, tint: 0.3, sat: 0.8, contrast: 1.05, gain: [0.85, 0.925, 1.225] },
+};
+// 白平衡矩阵：照 tonemapping 反汇编（色温 ≠ 6500 或偏色 ≠ 0 才做）——日光 / 普朗克轨迹求源白点（< 4000 K 用普朗克），
+// 沿等温线按偏色 × 0.05 挪，再 Bradford 色适应到 D65，前后是 sRGB ↔ XYZ。返回 3×3（行主序），作用在线性 sRGB 上
+function whiteBalance(T, tint) {
+  if (T === 6500 && !tint) return null;
+  const inv = 1 / (T * 1.000556);
+  let x = T <= 6996.10791 ? 0.244063 + inv * (99.11 + inv * (2967800 - inv * 4607000064)) : 0.23704 + inv * (247.48 + inv * (1901800 - inv * 2006400000));
+  let y = -3 * x * x + 2.87 * x - 0.275;
+  const T2 = T * T;
+  // 反汇编只显示 6 位小数（0.000154 等），系数用普朗克轨迹近似式（Krystek）的全精度值
+  const u = (0.860117757 + 1.54118254e-4 * T + 1.28641212e-7 * T2) / (1 + 8.42420235e-4 * T + 7.08145163e-7 * T2);
+  const v = (0.317398726 + 4.22806245e-5 * T + 4.20481691e-8 * T2) / (1 - 2.89741816e-5 * T + 1.61456053e-7 * T2);
+  const den = 2 * u - 8 * v + 4, px = 3 * u / den, py = 2 * v / den;
+  if (T < 4000) { x = px; y = py; }
+  const ud = (-1137581184 - 1916156.25 * T - 1.53177 * T2) / (1412139.875 + 1189.62 * T + T2) ** 2;
+  const vd = (1974715392 - 705674 * T - 308.607 * T2) / (6193636 - 179.456 * T + T2) ** 2;
+  const n = Math.hypot(ud, vd), u2 = u - (vd / n) * tint * 0.05, v2 = v + (ud / n) * tint * 0.05;
+  const d2 = 2 * u2 - 8 * v2 + 4;
+  x += 3 * u2 / d2 - px; y += 2 * v2 / d2 - py;
+  const W = [x / Math.max(y, 0), 1, (1 - x - y) / y];
+  const mul = (a, b) => a.map((r) => [0, 1, 2].map((j) => r[0] * b[0][j] + r[1] * b[1][j] + r[2] * b[2][j]));
+  const BR = [[0.8951, 0.2664, -0.1614], [-0.7502, 1.7135, 0.0367], [0.0389, -0.0685, 1.0296]];
+  const BI = [[0.986993, -0.147054, 0.159963], [0.432305, 0.51836, 0.049291], [-0.008529, 0.040043, 0.968487]];
+  const S2X = [[0.412391, 0.357584, 0.180481], [0.212639, 0.715169, 0.072192], [0.019331, 0.119195, 0.950532]];
+  const X2S = [[3.24097, -1.537383, -0.498611], [-0.969244, 1.875968, 0.041555], [0.05563, -0.203977, 1.056972]];
+  const cone = BR.map((r) => r[0] * W[0] + r[1] * W[1] + r[2] * W[2]), D65 = [0.941379, 1.040436, 1.089767];
+  const D = [0, 1, 2].map((i) => [0, 1, 2].map((j) => (i === j ? D65[i] / cone[i] : 0)));
+  return mul(X2S, mul(BI, mul(D, mul(BR, S2X))));
+}
 function createPost(renderer) {
   const gl = renderer.getContext();
   if (!renderer.capabilities.isWebGL2 || !(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))) return null;
@@ -76,8 +114,10 @@ function createPost(renderer) {
       gl_FragColor = vec4(second > 0.5 ? o * tint + texture2D(last, vUv).rgb : o, 1.0);
     }`);
   // 扭曲缓冲（跃迁隧道的 warptunneldistortion 等写入的屏幕偏移，单位像素）：合成时按它挪动场景的采样位置
-  const tone = mk({ scene: { value: null }, bloom: { value: null }, expo: { value: null }, useExpo: { value: 0 }, useBloom: { value: 1 }, dist: { value: null }, useDist: { value: 0 }, inv: { value: new THREE.Vector2() } },
-    `uniform sampler2D scene, bloom, expo, dist; uniform float useExpo, useBloom, useDist; uniform vec2 inv; varying vec2 vUv;
+  const tone = mk({ scene: { value: null }, bloom: { value: null }, expo: { value: null }, useExpo: { value: 0 }, useBloom: { value: 1 }, dist: { value: null }, useDist: { value: 0 }, inv: { value: new THREE.Vector2() },
+    useCC: { value: 0 }, useWB: { value: 0 }, wb: { value: new THREE.Matrix3() }, cc: { value: new THREE.Vector4(1, 1, 1, 0) }, gain: { value: new THREE.Vector3(1, 1, 1) }, offset: { value: new THREE.Vector3() } },
+    `uniform sampler2D scene, bloom, expo, dist; uniform float useExpo, useBloom, useDist, useCC, useWB; uniform vec2 inv; varying vec2 vUv;
+    uniform mat3 wb; uniform vec4 cc; uniform vec3 gain, offset;   // cc = 饱和度、对比度、gamma
     const float A = ${TONE.A.toFixed(4)}, B = ${TONE.B.toFixed(4)}, C = ${TONE.C.toFixed(4)}, D = ${TONE.D.toFixed(4)}, E = ${TONE.E.toFixed(4)}, F = ${TONE.F.toFixed(4)}, W = ${TONE.W.toFixed(4)};
     vec3 U(vec3 x) { return (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F; }
     void main() {
@@ -95,6 +135,15 @@ function createPost(renderer) {
       vec3 b = texture2D(bloom, vUv).rgb * useBloom;
       float exposure = useExpo > 0.5 ? ${EXPO.middleValue.toFixed(4)} / mix(0.5, texture2D(expo, vec2(0.0625, 0.5)).r, ${EXPO.influence.toFixed(4)}) : 1.0;
       c = (c + max(U(2.0 * b), 0.0) * wInv) * exposure;
+      if (useCC > 0.5) {
+        // 调色（反汇编顺序）：白平衡 → 饱和度（亮度权重 0.272229 / 0.674082 / 0.053690）→ 对比度（以 0.18 为中点的幂）→ gamma → 增益 + 偏移
+        if (useWB > 0.5) c = wb * c;
+        float l = dot(c, vec3(0.272229, 0.674082, 0.053690));
+        c = max(mix(vec3(l), c, cc.x), 0.0);
+        c = pow(c * 5.555555, vec3(cc.y)) * 0.18;
+        c = pow(c, vec3(1.0 / cc.z));
+        c = c * gain + offset;
+      }
       c = max(U(2.0 * max(c, 0.0)), 0.0) * wInv;
       c = mix(1.055 * pow(c, vec3(0.416667)) - 0.055, c * 12.92, vec3(lessThan(c, vec3(0.003131))));
       c += fract(dot(gl_FragCoord.xy, vec2(0.754878, 0.569840))) * 0.003922 - 0.001961;
@@ -295,7 +344,19 @@ function createPost(renderer) {
     draw(tone, null);
   }
   const blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); blackTex.needsUpdate = true;
-  return { render, dispose() { for (const t of [sceneRT, distRT, ...mips, ...ups]) t?.dispose(); expo?.dispose(); } };
+  // 区域调色：g = GRADES 里的一项或 null（不调）
+  function setGrade(g) {
+    const u = tone.uniforms;
+    u.useCC.value = g ? 1 : 0;
+    if (!g) return;
+    const m = whiteBalance(g.temp ?? 6500, g.tint ?? 0);
+    u.useWB.value = m ? 1 : 0;
+    if (m) u.wb.value.set(...m[0], ...m[1], ...m[2]);   // Matrix3.set 按行主序
+    u.cc.value.set(g.sat ?? 1, g.contrast ?? 1, g.gamma ?? 1, 0);
+    u.gain.value.fromArray(g.gain || [1, 1, 1]);
+    u.offset.value.fromArray(g.offset || [0, 0, 0]);
+  }
+  return { render, setGrade, dispose() { for (const t of [sceneRT, distRT, ...mips, ...ups]) t?.dispose(); expo?.dispose(); } };
 }
 
 export function createView(host, hooks = {}, opt = {}) {
@@ -1373,6 +1434,7 @@ export function createView(host, hooks = {}, opt = {}) {
   }
   // 开火特效；P 是给特效模块的查询接口
   const fx = createFx(scene, renderer, { tex: opt.fx });
+  let envFx = null;   // 深渊环境特效（sim-env.js）：第一次 setEnvFx 时才建
   const atV = [];
   // 每帧模型循环结束后把炮塔实例写进各自的 InstancedMesh
   const lastModel = () => { let l = null; for (const m of models.values()) if (m.state === 'ok' && m.mesh) l = m; return l; };
@@ -2365,8 +2427,12 @@ export function createView(host, hooks = {}, opt = {}) {
       else { sun.position.set(0.6, 0.5, 0.35); sky.material.uniforms.sun.value.set(0.6, 0.5, 0.35).normalize(); }
     },
     draw,
-    render() { watchPerf(); controls.update(); dynFov(); sky.position.copy(camera.position); bg.position.copy(camera.position); if (rec?.cel?.length) celUpdate(); const shook = warpFrame(); const hi = post && level === 'high'; flare?.update(ORG, !hi); if (hi) post.render(scene, camera, [tunnel?.distScene, ckDist], flare?.draw); else { renderer.setRenderTarget(null); renderer.render(scene, camera); flare?.draw(); } if (shook) camera.quaternion.copy(shakeQ); drawLabels(); },
+    render() { watchPerf(); controls.update(); dynFov(); sky.position.copy(camera.position); bg.position.copy(camera.position); if (rec?.cel?.length) celUpdate(); const shook = warpFrame(); const hi = post && level === 'high'; flare?.update(ORG, !hi); envFx?.update(camera, ORG, performance.now() / 1000, controls.target); if (hi) post.render(scene, camera, [tunnel?.distScene, ckDist], flare?.draw); else { renderer.setRenderTarget(null); renderer.render(scene, camera); flare?.draw(); } if (shook) camera.quaternion.copy(shakeQ); drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
+    // 深渊环境特效：list 见 sim-env.js（边界泡 / 云团 / 天气云层）；空数组清掉
+    // 区域调色：GRADES 的键（amarr / caldari / gallente / minmatar / concord）或 null
+    setGrade(k) { post?.setGrade(GRADES[k] || null); },
+    setEnvFx(list) { (envFx ||= createEnvFx(scene, `${opt.fx || 'assets/eveui/fx/'}env/`)).set(list); },
     // 自己在哪一方（匹配对战里可能在 B 方）：自己这方画蓝色、对面画红色
     setOwnSide(s) { ownSide = s === 'B' ? 'B' : 'A'; },
     setDirector(on) { director = on; dirLast = 0; if (on) { follow = -1; flyTo = null; } },
@@ -2418,6 +2484,6 @@ export function createView(host, hooks = {}, opt = {}) {
       for (const m of models.values()) if (m.state !== 'loading') done++;
       return { index: Boolean(shipIndex), done, total: models.size, sky: skyState !== 'loading', fx: fx.ready() };
     },
-    dispose() { ro.disconnect(); document.removeEventListener('visibilitychange', onVis); fx.dispose(); for (const m of models.values()) m.mesh?.dispose(); renderer.dispose(); renderer.forceContextLoss?.(); renderer.domElement.remove(); lbl.remove(); }
+    dispose() { ro.disconnect(); document.removeEventListener('visibilitychange', onVis); fx.dispose(); envFx?.dispose(); for (const m of models.values()) m.mesh?.dispose(); renderer.dispose(); renderer.forceContextLoss?.(); renderer.domElement.remove(); lbl.remove(); }
   };
 }

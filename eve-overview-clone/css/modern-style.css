@@ -2230,7 +2230,7 @@ td.loc {
 .region-owner > i { width: 22px; height: 22px; border-radius: 4px; background: var(--bg-tertiary); }
 .region-owner span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .region-owner b { font-weight: 600; font-size: 0.75rem; color: var(--text-muted); }
-.region-desc { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-primary); font-size: 0.8125rem; line-height: 1.7; color: var(--text-secondary); white-space: pre-line; }
+.region-desc { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border-primary); font-size: 0.8125rem; line-height: 1.7; color: var(--text-secondary); }
 
 /* ===== 击杀记录（zKillboard）===== */
 .kb-empty { padding: var(--spacing-lg) 0; text-align: center; }
@@ -10209,3 +10209,21 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-ps-bot .size { flex: 1; max-width: 120px; min-width: 60px; display: flex; flex-direction: column; font-size: 12px; color: rgba(255, 255, 255, 0.75); }
 .pl-ps-go { width: 100px; margin-left: auto; }
 .pl-ds-list tbody td { height: 20px; line-height: 20px; padding-top: 0; padding-bottom: 0; }
+/* 驾驶模拟 · 场景（死亡空间 / 深渊）：设置页卡片、地点窗口、导管过场 */
+.pl-sites { display: flex; flex-wrap: wrap; gap: 6px; }
+.pl-site-card { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 14px; border: 0; border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.06); color: var(--text-primary); text-align: left; cursor: pointer; font: inherit; transition: background var(--transition-fast); }
+.pl-site-card b { font-size: 0.84rem; font-weight: 600; }
+.pl-site-card span { font-size: 0.72rem; color: var(--text-muted); }
+.pl-site-card:hover { background: rgba(255, 255, 255, 0.1); }
+.pl-site-card.on { background: rgba(88, 160, 220, 0.3); }
+.pl-site-detail { margin-top: 8px; padding: 10px 14px; border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.04); font-size: 0.8rem; line-height: 1.5; color: var(--text-secondary); }
+.pl-site-detail p { margin: 0 0 6px; }
+.pl-site-detail p:last-child { margin-bottom: 0; }
+.pl-site-detail b { color: var(--text-primary); font-weight: 600; }
+.pl-site-detail a { color: var(--accent-primary); }
+.pl-site { display: flex; flex-direction: column; gap: 3px; padding: 6px 8px; font-size: 12px; color: rgba(255, 255, 255, 0.75); }
+.pl-site b { color: #fff; font-size: 13px; font-weight: 600; }
+.pl-site-t { font-variant-numeric: tabular-nums; }
+.pl-site-t.bad { color: #e06c5a; }
+.pl-fade { position: absolute; inset: 0; z-index: 57; pointer-events: none; background: #fff; animation: pl-fade 1.2s ease-out forwards; }
+@keyframes pl-fade { 0% { opacity: 0; } 25% { opacity: 0.85; } 100% { opacity: 0; } }

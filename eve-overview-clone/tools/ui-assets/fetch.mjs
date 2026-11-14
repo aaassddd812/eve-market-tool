@@ -3,6 +3,7 @@
 // 用法：node fetch.mjs [--out <输出目录>] [--sky a01,c01,g01,m01] [--fx]
 //   --sky：同时转换这几张游戏星空（dx9/scene/universe/<名>_cube.*）到 sky/<名>/（星云、反射立方体、场景参数）和 sky/stars.webp
 //          （bc6h.mjs + sky.py，需要 Pillow、numpy，以及 tools/ship-models 装好的依赖）
+//          深渊空间的星空：--sky abyssal/ad03_A,abyssal/ad04_B（客户端 dx9/scene/abyssal/ad01~06_A~C_cube，SDE graphicID 22041~22214）
 //   --fx：同时转换武器 / 爆炸特效贴图（texture/fx/ 下的 DDS）到 fx/（fx.py，需要 Pillow、numpy）
 //
 // 和 tools/ship-models/convert.mjs 一样只用公开资源：binaries.eveonline.com 取当前客户端版本 → resfileindex，
@@ -82,6 +83,8 @@ const FILES = [
   // 受到的电子战 / 遥修提示条图标（appConst.iconModule* → SDE icons 表）
   ...['76_64_1', '4_64_9', '12_64_6', '4_64_12', '4_64_11', '56_64_1', '1_64_3', '12_64_4', '1_64_16', 'remote_armor_repair', 'remote_hull_repairer', '5_64_7', '5_64_17', '74_64_8', '1_64_2'].map((n) => `ui/texture/icons/${n}.png`),
   // 指挥脉冲波加成（buffBarConst.BUFF_SLOT_ICONS → appConst.iconShieldBurst 等 → SDE icons 表）
+  // 深渊天气 / 云 / 塔（buffBarConst Slot_Weather* / Slot_Aoe* → appConst.iconWeather* / iconAoe* → SDE icons 21903–21941）
+  ...['weatherlightning', 'weatherxenongas', 'weathercaustic', 'weatherdarkness', 'weatherinfernal', 'bioluminescence', 'causticcloud', 'filamentcloud', 'pointdefensebattery', 'pulsebattery'].map((n) => `ui/texture/icons/statuseffects/${n}.png`),
   ...['Shield', 'Armor', 'Info', 'Skirmish', 'Mining', 'Expedition'].map((n) => `ui/texture/icons/modules/fleetboost_${n.toLowerCase()}base.png`),
   // HUD 提示：电容（capacitorContainer ui_1_64_1）、护盾 / 装甲 / 结构（hpGauges 1_64_13 / 1_64_9 / 2_64_12）
   ...['1_64_1', '1_64_13', '1_64_9', '2_64_12'].map((n) => `ui/texture/icons/${n}.png`),
@@ -166,9 +169,10 @@ if (args.sky) {
   const py = (...a) => { const r = spawnSync('python3', ['-I', join(HERE, 'sky.py'), ...a], { stdio: 'inherit' }); if (r.status) throw new Error('星空转换失败 ' + a.join(' ')); };
   const starsOut = join(OUT, 'sky', 'stars.webp');
   for (const name of String(args.sky).split(',').filter(Boolean)) {
-    const k = `dx9/scene/universe/${name}_cube`;
+    // 名字带目录的（abyssal/ad03_A）：深渊空间的场景在 dx9/scene/abyssal/ 下，输出目录用小写文件名（sky/ad03_a）
+    const k = name.includes('/') ? `dx9/scene/${name.toLowerCase()}_cube` : `dx9/scene/universe/${name}_cube`;
     if (!INDEX.has(k + '.dds')) { log('没有这张星空', name); continue; }
-    const dir = join(OUT, 'sky', name);
+    const dir = join(OUT, 'sky', name.split('/').pop().toLowerCase());
     if (existsSync(join(dir, 'scene.json')) && !args.force) continue;
     mkdirSync(dir, { recursive: true });
     const black = (await CjsBlackFormat.read(new Uint8Array(await fetchBuf(RES + INDEX.get(k + '.black'))))).object;
@@ -179,7 +183,8 @@ if (args.sky) {
       nebulaIntensity: black.nebulaIntensity ?? null, reflectionIntensity: black.reflectionIntensity ?? null, ambientColor: r4(black.ambientColor && Array.from(black.ambientColor)),
       alphaBlend1: r4(cp.AlphaBlend1), alphaBlend2: r4(cp.AlphaBlend2), starParameters: r4(cp.StarParameters), tint: r4(cp.Tint), nebulaScaling: r4(cp.NebulaScaling),
     }));
-    const neb = join(tmp, name + '.dds'), f32 = join(tmp, name + '.f32'), rf = join(tmp, name + '_refl.dds');
+    const nm = name.split('/').pop();
+    const neb = join(tmp, nm + '.dds'), f32 = join(tmp, nm + '.f32'), rf = join(tmp, nm + '_refl.dds');
     writeFileSync(neb, await fetchBuf(RES + INDEX.get(k + '.dds')));
     const r = spawnSync('node', [join(HERE, 'bc6h.mjs'), neb, f32], { stdio: 'inherit' });
     if (r.status) throw new Error('星云解码失败 ' + name);
