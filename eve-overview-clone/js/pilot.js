@@ -13,7 +13,7 @@ import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v30';
 import { loadShipIndex } from './sim-ships.js?v=v11';
 import { warpShake } from './sim-warp.js?v=3';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v4';
-import { bindUnit, pilotUnit } from './sim-unit.js?v=v4';
+import { bindUnit, pilotUnit } from './sim-unit.js?v=v5';
 import { buildMatch, stepMatch } from './match-sim.js?v=v4';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 
@@ -799,7 +799,7 @@ function renderStage() {
   sw?.addEventListener('pointerout', onHintOut);
   sw?.addEventListener('contextmenu', onSelCtx);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v70').then((m) => {
+  import('./sim-3d.js?v=v72').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {

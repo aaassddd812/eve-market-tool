@@ -19,7 +19,8 @@ let X = null;   // industry.js 传入：ctx, D, F, C, BP, T, tName, invFor, job,
 const PLAN_KEY = 'eve-industry-plan';
 const LEVEL_MUL = [0, 105, 250, 595, 1414, 3360, 8000, 19000, 45255, 107700, 256000];
 const SK = { science: 3402, research: 3403, metallurgy: 3409, advIndustry: 3388 };
-const P = { items: [], build: [], slots: 10, rslots: 10, islots: 10, lanes: 'manual', auto: true, stock: 'none', stockLoc: 'all', running: true, copy: true, paste: '', tab: 'plan' };
+// assign：任务键 → 指定的产线（'c:人物 ID' = 这个人物任意空闲的线；'l:产线 ID' = 某条线）；charOff：不参与的人物；charMax：人物各类产线最多用几条
+const P = { items: [], build: [], slots: 10, rslots: 10, islots: 10, lanes: 'manual', auto: true, stock: 'none', stockLoc: 'all', running: true, copy: true, paste: '', tab: 'plan', assign: {}, charOff: [], charMax: {} };
 const FOLD = {};   // 计算器里折叠卡片的展开状态（本次会话内）
 const S = { assets: null, assetsErr: null, assetsBusy: false, owned: null, ownedLoading: null, chars: null, charsLoading: null };   // chars：按人物分配产线时各角色的产线数与进行中的任务
 
@@ -27,14 +28,19 @@ export function initPlan(api) {
   X = api;
   Object.assign(P, X.ctx.store.getJSON(PLAN_KEY, {}) || {});
   P.items = (P.items || []).filter((it) => X.BP(it.pid));
+  // 每个产品一个固定编号（任务键用，删掉前面的产品不会让指定的产线错位）
+  let u = Math.max(0, ...P.items.map((it) => it.uid || 0));
+  for (const it of P.items) if (!it.uid) it.uid = ++u;
+  P.assign ||= {}; P.charOff ||= []; P.charMax ||= {};
 }
-const savePlan = () => X.ctx.store.setJSON(PLAN_KEY, { items: P.items, build: P.build, slots: P.slots, rslots: P.rslots, islots: P.islots, lanes: P.lanes, auto: P.auto, stock: P.stock, stockLoc: P.stockLoc, running: P.running, copy: P.copy, paste: P.paste, tab: P.tab });
+const nextUid = () => Math.max(0, ...P.items.map((it) => it.uid || 0)) + 1;
+const savePlan = () => X.ctx.store.setJSON(PLAN_KEY, { items: P.items, build: P.build, slots: P.slots, rslots: P.rslots, islots: P.islots, lanes: P.lanes, auto: P.auto, stock: P.stock, stockLoc: P.stockLoc, running: P.running, copy: P.copy, paste: P.paste, tab: P.tab, assign: P.assign, charOff: P.charOff, charMax: P.charMax });
 export const planCount = () => P.items.length;
 
 function newItem(pid, { runs = 1, me = null, te = null, invent = null, dec = 0 } = {}) {
   const b = X.BP(pid);
   const inv = b[5] === 'm' && X.invFor(pid);
-  return { pid, runs: Math.max(1, runs), me: b[5] === 'r' ? 0 : me ?? (inv && invent !== false ? null : X.F.me), te: b[5] === 'r' ? 0 : te ?? (inv && invent !== false ? null : X.F.te), invent: inv ? invent !== false : false, dec };
+  return { uid: nextUid(), pid, runs: Math.max(1, runs), me: b[5] === 'r' ? 0 : me ?? (inv && invent !== false ? null : X.F.me), te: b[5] === 'r' ? 0 : te ?? (inv && invent !== false ? null : X.F.te), invent: inv ? invent !== false : false, dec };
 }
 export function addToPlan(pid, opts = {}) {
   if (!X.BP(pid)) return;
@@ -346,7 +352,7 @@ function planCompute() {
     const n = P.auto ? 1 : Math.max(1, Math.min(it.split || 1, q.runs));
     for (let k = 0; k < n; k++) {
       const runs = Math.floor(q.runs / n) + (k < q.runs % n ? 1 : 0);
-      jobs.push({ pid: it.pid, runs, secs: q.j.secs * runs / q.runs, cost: q.j.cost * runs / q.runs, act: q.act, depth: 0, me: q.me, te: q.te, top: i, batch: n > 1 ? k + 1 : 0, batches: n, fac: q.j.fac, facId: q.j.facId, mats: q.j.items.map((m) => m.id), per: q.j.items.map((m) => [m.id, m.qty / q.runs]) });
+      jobs.push({ key: `t${it.uid}:${n > 1 ? k + 1 : 0}`, pid: it.pid, runs, secs: q.j.secs * runs / q.runs, cost: q.j.cost * runs / q.runs, act: q.act, depth: 0, me: q.me, te: q.te, top: i, batch: n > 1 ? k + 1 : 0, batches: n, fac: q.j.fac, facId: q.j.facId, mats: q.j.items.map((m) => m.id), per: q.j.items.map((m) => [m.id, m.qty / q.runs]) });
     }
     // 发明任务
     if (q.inv) {
@@ -354,13 +360,13 @@ function planCompute() {
       const n95 = left ? attemptsFor(left, q.inv.prob) : 0;
       if (Number.isFinite(n95) && n95 > 0) {
         const per = [...q.inv.dcs.map(([id, c]) => [id, c]), ...(it.dec ? [[it.dec, 1]] : [])];
-        jobs.push({ pid: it.pid, bp: q.inv.t1bp, runs: n95, secs: q.inv.secs * n95, cost: q.inv.jobCost * n95, act: 'i', depth: -1, top: i, fac: q.inv.fac, facId: q.inv.facId, mats: per.map(([id]) => id), per, inv: true });
+        jobs.push({ key: `i${it.uid}`, pid: it.pid, bp: q.inv.t1bp, runs: n95, secs: q.inv.secs * n95, cost: q.inv.jobCost * n95, act: 'i', depth: -1, top: i, fac: q.inv.fac, facId: q.inv.facId, mats: per.map(([id]) => id), per, inv: true });
         // 每次发明用掉 T1 拷贝的 1 个流程：拷贝 ⌈次数 ÷ 每份最多流程⌉ 份（P.copy 关掉 = 已经有拷贝）
         const t1 = P.copy ? t1Prod(q.inv.t1bp) : null;
         const sj = t1 ? scienceJob(t1, 'copy', n95) : null;
         if (sj) {
           const max = Math.max(1, X.BP(t1)[4] || 1);
-          jobs.push({ pid: it.pid, bp: q.inv.t1bp, runs: Math.ceil(n95 / max), copyRuns: Math.min(max, n95), secs: sj.secs, cost: sj.cost, act: 'c', depth: -2, top: i, fac: sj.fac, facId: sj.facId, mats: [], per: [], copy: true });
+          jobs.push({ key: `y${it.uid}`, pid: it.pid, bp: q.inv.t1bp, runs: Math.ceil(n95 / max), copyRuns: Math.min(max, n95), secs: sj.secs, cost: sj.cost, act: 'c', depth: -2, top: i, fac: sj.fac, facId: sj.facId, mats: [], per: [], copy: true });
         }
         const inv = [...q.inv.dcs.map(([id, c]) => [id, c * n95]), ...(it.dec ? [[it.dec, n95]] : [])];
         for (const [id, c] of inv) { const b = buy.get(id) || { need: 0, to: new Set(), inv: true }; b.need += c; b.to.add(q.inv.fac); buy.set(id, b); }
@@ -391,7 +397,7 @@ function planCompute() {
     const own = b[5] === 'r' ? null : ownedBp(id);
     const me = b[5] === 'r' ? 0 : own?.me ?? X.F.subMe, te = b[5] === 'r' ? 0 : own?.te ?? 0;
     const j = job(id, runs, me, te, undefined, 'comp');
-    jobs.push({ pid: id, runs, secs: j.secs, cost: j.cost, act: b[5], depth: d, me, te, own: Boolean(own), extra: Math.floor(runs * b[1] - want), fac: j.fac, facId: j.facId, mats: j.items.map((m) => m.id), per: j.items.map((m) => [m.id, m.qty / runs]) });
+    jobs.push({ key: `c${id}`, pid: id, runs, secs: j.secs, cost: j.cost, act: b[5], depth: d, me, te, own: Boolean(own), extra: Math.floor(runs * b[1] - want), fac: j.fac, facId: j.facId, mats: j.items.map((m) => m.id), per: j.items.map((m) => [m.id, m.qty / runs]) });
     for (const m of j.items) addNeed(m.id, m.qty, j.fac);
   }
   let matCost = 0;
@@ -464,17 +470,21 @@ function jobStatus(bars, built) {
 // 并扣掉进行中的任务（产线到任务结束才空出来）
 function laneDefs() {
   const KIND = { m: '制造', r: '反应', i: '科研' };
-  const manual = (kind, n) => Array.from({ length: Math.max(1, n) }, (_, i) => ({ t: 0, busy: 0, label: `${KIND[kind]} ${i + 1}` }));
-  const chars = P.lanes === 'chars' ? (S.chars || []).filter((c) => !c.err) : [];
+  const manual = (kind, n) => Array.from({ length: Math.max(1, n) }, (_, i) => ({ id: `-:${kind}:${i + 1}`, t: 0, busy: 0, label: `${KIND[kind]} ${i + 1}` }));
+  const chars = P.lanes === 'chars' ? (S.chars || []).filter((c) => !c.err && charOn(c.id)) : [];
   if (!chars.length) return { m: manual('m', P.slots), r: manual('r', P.rslots), i: manual('i', P.islots), byChar: false };
   const lanes = (kind) => chars.flatMap((c) => {
-    const n = c[kind] || 0;
+    const n = charLanes(c, kind);
     const busy = (kind === 'r' ? c.busyR : kind === 'i' ? c.busyI || [] : c.busyM).slice().sort((a, b) => a - b);
-    return Array.from({ length: n }, (_, i) => ({ t: busy[i] || 0, busy: busy[i] || 0, who: c.name, label: `${c.name} · ${KIND[kind]} ${i + 1}` }));
+    return Array.from({ length: n }, (_, i) => ({ id: `${c.id}:${kind}:${i + 1}`, t: busy[i] || 0, busy: busy[i] || 0, who: c.id, label: `${c.name} · ${KIND[kind]} ${i + 1}` }));
   });
   const r = lanes('r');
   return { m: lanes('m'), r: r.length ? r : manual('r', P.rslots), i: lanes('i'), byChar: true };
 }
+
+// 人物参不参与、各类产线用几条（不超过技能给的条数）
+const charOn = (id) => !P.charOff.includes(id);
+const charLanes = (c, kind) => Math.max(0, Math.min(c[kind] || 0, P.charMax[c.id]?.[kind] ?? Infinity));
 
 // 自动拆分（同一层、同一种产线的任务）：目标时长 T = max(最长的单个流程, (这层总耗时 + 各产线还要忙的时间) ÷ 产线数)，
 // 比 T 长的多流程任务拆成 ⌈耗时 ÷ T⌉ 批（不超过流程数和产线数），流程数尽量平均；时间、安装费按流程数分摊。
@@ -502,20 +512,41 @@ function schedule(jobs) {
   const lanes = { m: defs.m.map((l) => ({ ...l })), r: defs.r.map((l) => ({ ...l })), i: defs.i.map((l) => ({ ...l })) };
   const kindOf = (j) => (j.inv || j.copy ? 'i' : j.act === 'r' ? 'r' : 'm');
   const out = [];
+  // 手动指定的产线（P.assign）：只在指定的人物 / 那条线上挑；指定的已经不存在（人物不参与、条数改少、换了模式）→ 照常自动排并标出来
+  const cand = (j) => {
+    const a = P.assign[j.key], ls = lanes[kindOf(j)];
+    if (!a) return null;
+    const ok = ls.map((l, i) => i).filter((i) => (a.startsWith('l:') ? ls[i].id === a.slice(2) : String(ls[i].who) === a.slice(2)));
+    return ok.length ? ok : [];
+  };
   const place = (j, from) => {
     const kind = kindOf(j);
     const ls = lanes[kind];
-    let k = 0;
-    for (let i = 1; i < ls.length; i++) if (Math.max(ls[i].t, from) < Math.max(ls[k].t, from)) k = i;
+    const c = cand(j);
+    const pool = c?.length ? c : ls.map((l, i) => i);
+    let k = pool[0];
+    for (const i of pool) if (Math.max(ls[i].t, from) < Math.max(ls[k].t, from)) k = i;
     const start = Math.max(ls[k].t, from);
     ls[k].t = start + j.secs;
-    out.push({ ...j, kind, lane: k, laneLabel: ls[k].label, start, end: start + j.secs });
+    out.push({ ...j, kind, lane: k, laneId: ls[k].id, laneLabel: ls[k].label, start, end: start + j.secs, pinned: Boolean(c?.length), lost: Boolean(c && !c.length) });
     return start + j.secs;
+  };
+  // 自动拆分：指定到某条线的不拆；指定到某个人物的只按他的线拆；其余按全部空闲产线拆
+  const split = (list, kind, barrier) => {
+    if (!P.auto || !list.length) return list;
+    const free = [], res = [];
+    for (const j of list) {
+      const c = cand(j);
+      if (!c?.length) free.push(j);
+      else if (P.assign[j.key].startsWith('l:')) res.push(j);
+      else res.push(...autoSplit([j], c.map((i) => lanes[kind][i]), barrier));
+    }
+    return [...autoSplit(free, lanes[kind], barrier), ...res];
   };
   // 发明一开始就在科研产线上做（和组件同时），记下每个产品发明完成的时间
   // 先拷贝 T1 蓝图，拷完才发明
   const invEnd = new Map(), copyEnd = new Map();
-  const sci = (list) => (!lanes.i.length ? [] : P.auto ? autoSplit(list, lanes.i, 0) : list).sort((a, b) => b.secs - a.secs);
+  const sci = (list) => (!lanes.i.length ? [] : split(list, 'i', 0)).sort((a, b) => b.secs - a.secs);
   for (const j of sci(jobs.filter((j) => j.copy))) copyEnd.set(j.top, Math.max(copyEnd.get(j.top) || 0, place(j, 0)));
   for (const j of sci(jobs.filter((j) => j.inv))) invEnd.set(j.top, Math.max(invEnd.get(j.top) || 0, place(j, copyEnd.get(j.top) || 0)));
   const levels = [...new Set(jobs.filter((j) => !j.inv && !j.copy).map((j) => j.depth))].sort((a, b) => b - a);
@@ -523,7 +554,7 @@ function schedule(jobs) {
   for (const d of levels) {
     let levelEnd = barrier;
     let list = jobs.filter((j) => !j.inv && !j.copy && j.depth === d);
-    if (P.auto) list = ['m', 'r'].flatMap((kind) => autoSplit(list.filter((j) => kindOf(j) === kind), lanes[kind], barrier));
+    if (P.auto) list = ['m', 'r'].flatMap((kind) => split(list.filter((j) => kindOf(j) === kind), kind, barrier));
     list.sort((a, b) => b.secs - a.secs);
     for (const j of list) levelEnd = Math.max(levelEnd, place(j, d === 0 ? Math.max(barrier, invEnd.get(j.top) || 0) : barrier));
     barrier = levelEnd;
@@ -531,13 +562,13 @@ function schedule(jobs) {
   // 已有任务占着的产线也画出来
   const busy = [];
   for (const kind of ['m', 'r', 'i']) lanes[kind].forEach((l, k) => { if (l.busy) busy.push({ kind, lane: k, laneLabel: l.label, end: l.busy }); });
-  return { bars: out, busy, byChar: defs.byChar, noLab: !lanes.i.length && jobs.some((j) => j.inv || j.copy), span: Math.max(barrier, ...out.map((b) => b.end), ...busy.map((b) => b.end)) };
+  return { bars: out, busy, lanes, byChar: defs.byChar, noLab: !lanes.i.length && jobs.some((j) => j.inv || j.copy), span: Math.max(barrier, ...out.map((b) => b.end), ...busy.map((b) => b.end)) };
 }
 
 // 正在造的：各已绑定角色（没有多角色时用当前令牌）进行中 / 已完成未交付的制造、反应任务，产出算作库存
 async function loadRunning() {
   const accounts = X.ctx.esiAccountList?.() || [];
-  const list = accounts.length ? accounts.map((a) => ({ id: a.id, get: (path) => X.ctx.esiAccountFetch(a.id, path) }))
+  const list = accounts.length ? accounts.filter((a) => charOn(a.id)).map((a) => ({ id: a.id, get: (path) => X.ctx.esiAccountFetch(a.id, path) }))
     : X.ctx.hasEsiToken() ? [{ id: X.ctx.readToken()?.character_id, get: (path) => X.ctx.esiAuthFetch(path) }] : [];
   const map = new Map();
   let jobs = 0, fails = 0;
@@ -658,7 +689,7 @@ function drawPlan(body, tabs) {
       <td class="num">${num(j.runs)}${j.inv ? ' 次' : j.copy ? ' 份' : ''}</td><td class="num pi-hide-sm">${j.act === 'r' || j.inv || j.copy ? '—' : `${j.me} / ${j.te}${j.own ? '<small class="hc-sub">我的蓝图</small>' : ''}`}</td>
       <td class="num">${X.fmtTime(j.secs)}</td><td class="num pi-hide-sm">${isk(j.cost)}</td>
       ${facs.size > 1 ? `<td class="pi-hide-sm">${esc(j.fac || '')}</td>` : ''}
-      <td class="num pi-hide-sm">${esc(j.laneLabel)} 号线 · ${j.start ? X.fmtTime(j.start) + ' 后' : '立即'}</td>
+      <td class="pi-hide-sm ind-assign">${assignSel(j, r.schedule.lanes)}<small class="hc-sub${j.lost ? ' warn' : ''}">${j.lost ? '指定的产线已不可用，已自动安排 · ' : ''}${esc(j.laneLabel)} · ${j.start ? X.fmtTime(j.start) + ' 后' : '立即'}</small></td>
       <td class="${cls}" title="${esc(tipOf(j))}">${st}</td></tr>`;
   }).join('');
   const isPi = (id) => [42, 43].includes(X.D.data.groups[X.T(id)[2]]?.[1]);   // 行星资源 / 行星产品
@@ -695,6 +726,26 @@ function drawPlan(body, tabs) {
       ${r.fromStock.size ? `<p class="pi-note">组件用库存${P.running && S.running?.size ? ' / 在造产出' : ''}抵掉：${[...r.fromStock].map(([id, q]) => `${esc(X.tName(id))} ×${num(q)}`).join('、')}</p>` : ''}</div>`;
 }
 
+// 任务安排在哪：自动；按人物时可指定人物（他任意空闲的线）或某条线；手动条数时可指定某条线
+function assignSel(j, lanes) {
+  const { esc } = X.ctx;
+  const ls = lanes[j.kind] || [];
+  const cur = P.assign[j.key] || '';
+  const opt = (v, l) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
+  const whos = [...new Set(ls.map((l) => l.who).filter((w) => w != null))];
+  let html = opt('', '自动安排');
+  if (whos.length) {
+    for (const w of whos) {
+      const mine = ls.filter((l) => l.who === w);
+      const name = S.chars?.find((c) => c.id === w)?.name || String(w);
+      html += `<optgroup label="${esc(name)}">${opt('c:' + w, `${name} · 任意空闲的线`)}${mine.map((l) => opt('l:' + l.id, l.label)).join('')}</optgroup>`;
+    }
+  } else html += ls.map((l) => opt('l:' + l.id, l.label)).join('');
+  // 指定的已经不在了：仍显示出来，方便改回
+  if (cur && !html.includes(`value="${esc(cur)}" selected`)) html += `<option value="${esc(cur)}" selected>（已不可用）</option>`;
+  return `<select class="pi-input ind-assign-sel" data-plan-assign="${esc(j.key)}" title="指定这个任务在哪个人物 / 哪条产线上造${j.batches > 1 ? '（同一任务拆出的各批一起）' : ''}">${html}</select>`;
+}
+
 function lanesHtml() {
   const accounts = X.ctx.esiAccountList?.() || [];
   const auto = `<label class="pi-inline" title="多流程的任务（成品和自制组件）按空闲产线自动拆成几批同时造，尽量缩短总时间；关掉后成品按「分批」手动拆，组件不拆"><input type="checkbox" class="ka-switch" data-plan-auto${P.auto ? ' checked' : ''}><span>自动拆分</span></label>`;
@@ -707,10 +758,13 @@ function charsHtml() {
   if (P.lanes !== 'chars' || !(X.ctx.esiAccountList?.() || []).length) return '';
   const { esc } = X.ctx;
   if (!S.chars) return '<p class="text-muted">读取中…</p>';
+  // 每个人物：参不参与（不参与的产线不排、在造的任务不抵库存）；各类产线用几条（最多到技能给的条数）
+  const lane = (c, k, name, busy) => (c[k] ? `<label class="ind-char-n">${name}<input type="number" class="pi-input ind-plan-num" min="0" max="${c[k]}" value="${charLanes(c, k)}" data-plan-charmax="${c.id}" data-k="${k}"${charOn(c.id) ? '' : ' disabled'}><small>/ ${c[k]} 条${busy.length ? `，${Math.min(busy.length, c[k])} 条在忙` : ''}</small></label>` : `<span class="ind-char-n text-muted">不能${name}</span>`);
   const rows = S.chars.map((c) => c.err
     ? `<li class="is-err"><b>${esc(c.name)}</b><span>${esc(c.err)}，不参与分配</span></li>`
-    : `<li><b>${esc(c.name)}</b><span>制造 ${c.m} 条${c.busyM.length ? `（${Math.min(c.busyM.length, c.m)} 条在忙）` : ''} · 科研 ${c.i} 条${c.busyI?.length ? `（${Math.min(c.busyI.length, c.i)} 条在忙）` : ''} · ${c.r ? `反应 ${c.r} 条${c.busyR.length ? `（${Math.min(c.busyR.length, c.r)} 条在忙）` : ''}` : '不能反应'}${c.jobsErr ? ` · <small>${esc(c.jobsErr)}</small>` : ''}</span></li>`).join('');
-  const noR = S.chars.every((c) => c.err || !c.r);
+    : `<li class="${charOn(c.id) ? '' : 'is-off'}"><label class="ind-char-on"><input type="checkbox" class="ka-switch" data-plan-charon="${c.id}"${charOn(c.id) ? ' checked' : ''}><b>${esc(c.name)}</b></label>
+      <span>${charOn(c.id) ? `${lane(c, 'm', '制造', c.busyM)}${lane(c, 'i', '科研', c.busyI || [])}${lane(c, 'r', '反应', c.busyR)}${c.jobsErr ? `<small>${esc(c.jobsErr)}</small>` : ''}` : '<span class="text-muted">不参与：产线不排任务，在造的任务也不抵库存</span>'}</span></li>`).join('');
+  const noR = S.chars.every((c) => c.err || !charOn(c.id) || !charLanes(c, 'r'));
   return `<ul class="ind-chars">${rows}</ul><p class="pi-note">${noR ? `无人能做反应，按手动 ${P.rslots} 条算。` : ''}<button type="button" class="link-btn" data-plan-chars>重新读取</button></p>`;
 }
 
@@ -895,6 +949,22 @@ export function onPlanEvent(e) {
     if (n) { P[n.dataset.planNum] = Math.min(100, Math.max(1, Math.round(Number(t.value) || 1))); savePlan(); return 'plan'; }
     if (t.matches('[data-plan-paste]')) { P.paste = t.value; savePlan(); return 'plan'; }
     if (t.matches('[data-plan-loc]')) { P.stockLoc = t.value; savePlan(); return 'plan'; }
+    if (t.matches('[data-plan-assign]')) { if (t.value) P.assign[t.dataset.planAssign] = t.value; else delete P.assign[t.dataset.planAssign]; savePlan(); return 'plan'; }
+    if (t.matches('[data-plan-charon]')) {
+      const id = Number(t.dataset.planCharon);
+      P.charOff = t.checked ? P.charOff.filter((x) => x !== id) : [...new Set([...P.charOff, id])];
+      S.running = null;   // 在造的任务要按参与的人物重读
+      savePlan();
+      return 'plan';
+    }
+    if (t.matches('[data-plan-charmax]')) {
+      const id = Number(t.dataset.planCharmax), c = S.chars?.find((x) => x.id === id);
+      const k = t.dataset.k, v = Math.max(0, Math.min(c?.[k] ?? 50, Math.round(Number(t.value) || 0)));
+      P.charMax[id] = { ...(P.charMax[id] || {}), [k]: v };
+      if (c && v >= c[k]) delete P.charMax[id][k];   // 用满 = 不限制（技能升级后自动跟上）
+      savePlan();
+      return 'plan';
+    }
   }
   return null;
 }

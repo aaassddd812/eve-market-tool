@@ -81,8 +81,15 @@ function createPost(renderer) {
     const float A = ${TONE.A.toFixed(4)}, B = ${TONE.B.toFixed(4)}, C = ${TONE.C.toFixed(4)}, D = ${TONE.D.toFixed(4)}, E = ${TONE.E.toFixed(4)}, F = ${TONE.F.toFixed(4)}, W = ${TONE.W.toFixed(4)};
     vec3 U(vec3 x) { return (x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F) - E / F; }
     void main() {
-      vec2 uv = useDist > 0.5 ? vUv + texture2D(dist, vUv).xy * inv : vUv;
-      vec3 c = texture2D(scene, uv).rgb;
+      vec4 dd = useDist > 0.5 ? texture2D(dist, vUv) : vec4(0.0);
+      vec3 c;
+      if (dd.z > 0.002) {
+        // 隐形扭曲层写的（b = 1/256 × 层数，a = Σ色散系数）：照客户端 postprocess/distortion，R / G / B 按 1、0.5 + 0.5k、k 倍偏移分开采样，
+        //   k = 1 − a / (b × 256)；偏移后的位置不在扭曲区里就不偏
+        vec2 o = dd.xy * inv, u0 = vUv + o;
+        float k = 1.0 - dd.w / (dd.z * 256.0);
+        c = texture2D(dist, u0).z >= 0.0039 ? vec3(texture2D(scene, u0).r, texture2D(scene, vUv + o * (0.5 + 0.5 * k)).g, texture2D(scene, vUv + o * k).b) : texture2D(scene, vUv).rgb;
+      } else c = texture2D(scene, vUv + dd.xy * inv).rgb;
       c = mix(pow(abs(c + 0.055) * 0.947867, vec3(2.4)), c * 0.077399, vec3(lessThan(c, vec3(0.04045))));
       float wInv = 1.0 / U(vec3(W)).x;
       vec3 b = texture2D(bloom, vUv).rgb * useBloom;
@@ -242,19 +249,22 @@ function createPost(renderer) {
     return Math.min(64, t.length / 4);
   }
   const draw = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(qs, qc); };
-  // distScene：有可见内容时先画进扭曲缓冲（清成 0，加色叠加）；after：场景画完后往场景缓冲里再叠加的东西（恒星镜头光晕）
-  function render(scene, camera, distScene, after) {
+  // distScenes：扭曲层场景（一个或数组），有可见内容时依次画进扭曲缓冲（先清成 0）；after：场景画完后往场景缓冲里再叠加的东西（恒星镜头光晕）
+  function render(scene, camera, distScenes, after) {
     const v = renderer.getDrawingBufferSize(new THREE.Vector2());
     resize(v.x, v.y);
     renderer.setRenderTarget(sceneRT);
     renderer.render(scene, camera);
     after?.();
-    const useDist = Boolean(distScene?.children.some((o) => o.visible));
+    const ds = [].concat(distScenes || []).filter((x) => x?.children.some((o) => o.visible));
+    const useDist = ds.length > 0;
     if (useDist) {
-      const cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha();
+      const cc = renderer.getClearColor(new THREE.Color()), ca = renderer.getClearAlpha(), ac = renderer.autoClear;
       renderer.setRenderTarget(distRT);
       renderer.setClearColor(0x000000, 0); renderer.clear();
-      renderer.render(distScene, camera);
+      renderer.autoClear = false;
+      for (const x of ds) renderer.render(x, camera);
+      renderer.autoClear = ac;
       renderer.setClearColor(cc, ca);
     }
     tone.uniforms.dist.value = useDist ? distRT.texture : blackTex; tone.uniforms.useDist.value = useDist ? 1 : 0;
@@ -693,45 +703,196 @@ export function createView(host, hooks = {}, opt = {}) {
   };
   for (const h of Object.values(HFX)) h.len = h.keys[h.keys.length - 1][0];
   Object.assign(HFX, HFX3);
-  // 隐形装置（effects.Cloak → fisfx/cloaking/cloaking.black，EveMeshOverlayEffect）。客户端曲线：
-  //   CloakAmount 0 → 1.13（4.9 秒，线性）绑到船的 clipSphereFactor（从一个损伤定位点开始溶解）；FresnelTweaker 0.35 → 1.3（3.01 秒）→ 0.35（6 秒，Hermite）绑到叠加层 F.y
-  //   解除隐形（effects.Uncloak）= 同一组曲线倒着放（scale −1，从 6 秒开始）；别人的船去掉加色 / 扭曲层（只剩溶解），自己的船保留
-  // 这里简化：溶解没做（CloakAmount ≥ 1 时整船不画，之前照常画）；fxcloakv5 的六边形 / 噪声层、扭曲层、过渡层没移植，
-  //   只画 CloakWaves_widefresnel 的菲涅尔（F = 16, 曲线, 0.25；FxColor）+ CloakColor 的底色，菲涅尔公式借用上面的 skinned_fxv3
-  HFX.ck = { ghost: true, len: 6 };
-  const CK_FRES = [[0, 0.35, 0, 0.009, 2], [3.01, 1.3, -0.028, -0.028, 2], [6, 0.35, -0.012, 0, 2]];
-  let ghostMat = null;
-  function cloakMat() {
-    return (ghostMat ||= new THREE.ShaderMaterial({
-      uniforms: { time: { value: 0 } },
-      vertexShader: `varying vec3 vN, vV, vCol;
-        #include <common>
-        #include <logdepthbuf_pars_vertex>
-        void main() {
-          mat4 im = modelMatrix * instanceMatrix;
-          vec4 wp = im * vec4(position, 1.0);
-          vN = mat3(im) * normal; vV = normalize(cameraPosition - wp.xyz);
-          vCol = vec3(0.0);
-          #ifdef USE_INSTANCING_COLOR
-          vCol = instanceColor;
-          #endif
-          gl_Position = projectionMatrix * viewMatrix * wp;
-          #include <logdepthbuf_vertex>
-        }`,
-      fragmentShader: `varying vec3 vN, vV, vCol;
-        #include <common>
-        #include <logdepthbuf_pars_fragment>
+  // ---------- 隐形 / 解除隐形 ----------
+  // 客户端：effects.Cloak / Uncloak（eve/client/script/environment/effects/cloaking.py）往船上挂 EveMeshOverlayEffect
+  //   fisfx/cloaking/cloaking.black（effects.json：Cloak / Uncloak → graphicID 21040；CloakingCovertOps → 21015 cloaking_pentagon；
+  //   CloakingPrototype → 21030 cloaking_triangle），时长都是 6000 ms。
+  // 曲线（.black 的 curveSet，Tr2CurveScalar）：
+  //   CloakAmount 0 → 1.13（0–4.9 秒线性，之后保持）→ 船的 clipSphereFactor（溶解球半径系数）
+  //   ActivationAmount 1 → 0（0–6 秒线性）→ activationStrength（EveMobile.DisplayChildren：> 0.5 才画炮塔 / 尾焰 / 子物体）
+  //   FresnelTweaker 0.35 → 1.3 → 0.35（Hermite，6 秒循环）→ CloakColor 层的 FresnelFactors.y
+  //   Calibration ±0.1（60 秒循环：0–4.5 秒 +0.1，5–59 秒 −0.1）→ 扭曲层 DistortionFactors.x
+  //   Uncloak：curveSet.scale = −1，从 min(已隐形时长, 6) 倒着放；6 秒后 Stop（clipSphereFactor = 0、activationStrength = 1、移除叠加层）
+  // 溶解（EveSpaceObject2.PrepareShaderData）：球心 = 随机一个 damage 定位点 + 包围球心；Rn = 包围球半径 + |定位点|，
+  //   半径 = clipSphereFactor × Rn × (1 + min(1, |定位点| / Rn))，传给着色器的是带符号的半径²。
+  //   船体（quadv5）丢掉球内的像素；叠加层（fxcloakv5 / fxcloakdistortionv5）丢掉球外的像素（只在溶掉的部分画）。
+  // 层：transparentEffects 3 层 fxtransitionv5（溶解边缘的噪声亮带，Alpha 混合，不裁剪）；
+  //   additiveEffects 2 层 fxcloakv5（CloakWaves_widefresnel 噪声波纹 + CloakColor 菲涅尔底色）；distortionEffects 1 层 fxcloakdistortionv5（屏幕空间六边形折射）。
+  //   别人的船：cloaking.py Prepare 里删掉 additive / distortion（只剩溶解 + 边缘亮带，溶完就完全看不见）；自己的船全保留。
+  const CK_FRES = [[0, 0.35, 0, 0.0091782, 2], [3.00966, 1.3, -0.027964, -0.0281446, 2], [6, 0.35, -0.0118492, 0, 2]];
+  const ckLin = (a) => a.map(([t, v]) => [t, v, 0, 0, 1]);
+  // 变体（.black 之间只差这些常量）：hex = DistortionMap，hx = HexFactors.x，dhy = 扭曲层 HexFactors.y，cal = Calibration 曲线，
+  //   wf / wc = CloakWaves 的 FresnelFactors / FxColor（三角 / 五边形版没写 FresnelFactors，用着色器默认值 (1, 1, 0, 0)），
+  //   cf = CloakColor 的 FresnelFactors.x / .z，bt = NoiseTransition_BrightAndTight 的 FxColor
+  const CK_VAR = {
+    '': { hex: 'hexes_128', hx: 80, dhy: 0.66, cal: ckLin([[0, 0.1], [4.5, 0.1], [5, -0.1], [59, -0.1], [60, 0.1]]), wf: [16, 0.36462, 0.25], wc: [0.42745, 0.46275, 0.48235], cf: [0.1, 0], bt: [1.62353, 2.98824, 6] },
+    p: { hex: 'pentagons_01', hx: 40, dhy: 1.25, cal: ckLin([[0, 0.22], [4.5, 0.22], [5, -0.25], [59, -0.25], [60, 0.2]]), wf: [1, 1, 0], wc: [0.42745, 0.46275, 0.47843], cf: [1, 0], bt: [6, 5.31765, 4.02353] },
+    t: { hex: 'trilens_01', hx: 40, dhy: 0.66, cal: ckLin([[0, 0.175], [4.66, 0.175], [5, -0.242], [59, -0.242], [60, 0.175]]), wf: [1, 1, 0], wc: [0.42745, 0.46275, 0.47843], cf: [1, 0], bt: [1.57647, 5.52941, 6] },
+  };
+  const ckTexs = {};
+  const ckTex = (n, mip = true, wrap = THREE.RepeatWrapping) => {
+    if (!ckTexs[n]) {
+      const tx = new THREE.TextureLoader().load(`${fxDir}cloak/${n}.png?v=1`);
+      tx.flipY = false;   // 按 DirectX 的 uv（v 向下）采样
+      tx.wrapS = tx.wrapT = wrap; tx.generateMipmaps = mip;
+      tx.minFilter = mip ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter; tx.magFilter = THREE.LinearFilter;
+      ckTexs[n] = tx;
+    }
+    return ckTexs[n];
+  };
+  const ckVp = new THREE.Vector2(1, 1), ckTime = { value: 0 };
+  const ckDist = new THREE.Scene();   // 扭曲层单独一个场景，后处理画进扭曲缓冲
+  // 每个实例：ckC = 溶解球（模型空间，客户端坐标：x 取反）xyz + 带符号半径²；ckP = (FresnelTweaker, Calibration, 包围球半径 m, 是否自己的船)
+  const CK_VS = `in vec4 ckC, ckP;
+    out vec3 vP, vN, vV; out vec4 vC, vPar;
+    #include <common>
+    #include <logdepthbuf_pars_vertex>
+    void main() {
+      mat4 im = modelMatrix * instanceMatrix;
+      vec4 wp = im * vec4(position, 1.0);
+      vP = vec3(-position.x, position.y, position.z); vC = ckC; vPar = ckP;
+      vN = mat3(im) * normal; vV = cameraPosition - wp.xyz;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+      #include <logdepthbuf_vertex>
+    }`;
+  const ckHead = () => `precision highp sampler3D;
+    in vec3 vP, vN, vV; in vec4 vC, vPar;
+    out vec4 outColor;
+    #include <common>
+    #include <logdepthbuf_pars_fragment>
+    ${SRGB_GLSL}
+    // 屏幕 uv（DirectX：左上为原点）× HexFactors.x，横向再乘宽高比 × HexFactors.y
+    vec2 hexUv(vec4 HX, vec2 vp) { vec2 s = vec2(gl_FragCoord.x / vp.x, 1.0 - gl_FragCoord.y / vp.y) * HX.x; s.x *= vp.x / vp.y * HX.y; return s; }`;
+  const ckV4 = (a) => new THREE.Vector4(a[0], a[1], a[2] ?? 0, a[3] ?? 0);
+  const ckMatCache = {};
+  function ckMats(v) {
+    if (ckMatCache[v]) return ckMatCache[v];
+    const V = CK_VAR[v], hexMap = ckTex(V.hex);
+    const base = { glslVersion: THREE.GLSL3, vertexShader: CK_VS, depthWrite: false };
+    // fxtransitionv5（像素着色器反汇编）：3 次体积噪声 smoothstep 后按 0.3 / 0.5 / 0.2 相加 = N；
+    //   u = saturate(N + (|p − 球心| − 半径) / (NoiseFactors.x × R × 0.1))；输出 FxColor，α = GradientMap(u).r × (半径 ≥ 0.001)
+    //   客户端场景缓冲存 sRGB 编码值，这两种着色器结尾都不做线性 → sRGB，原样输出（之前多套了一层编码，0.13 变成 0.40，船发白）
+    const trans = (col, nf) => new THREE.ShaderMaterial({ ...base,
+      uniforms: { nz: { value: noise3 }, grad: { value: ckTex('gradient', false, THREE.ClampToEdgeWrapping) }, NF: { value: ckV4(nf) }, col: { value: new THREE.Vector3(...col) }, time: ckTime },
+      fragmentShader: `${ckHead()}
+        uniform sampler3D nz; uniform sampler2D grad; uniform vec4 NF; uniform vec3 col; uniform float time;
+        float ss(float x) { x = clamp(x, 0.0, 1.0); return x * x * (3.0 - 2.0 * x); }
         void main() {
           #include <logdepthbuf_fragment>
-          float d = clamp(dot(vV, normalize(vN)) - 0.25, 0.0, 1.0);
-          float fres = pow(1.0 - d, 16.0) * vCol.x;
-          gl_FragColor = vec4(fres * vec3(0.4275, 0.4627, 0.4824) + vec3(0.0118, 0.0196, 0.0235), 1.0);
+          float R = vPar.z, s = NF.y * R, ts = NF.w * time;
+          float n = ss(texture(nz, (vP * 1.1113 + ts) / s).r) * 0.3 + ss(texture(nz, (vP * 0.5113 + ts) / s).r) * 0.5 + ss(texture(nz, (vP * 2.1113 + ts) / s).r) * 0.2;
+          float rad = sqrt(abs(vC.w));
+          float u = clamp(n + (length(vP - vC.xyz) - rad) / (NF.x * R * 0.1), 0.0, 1.0);
+          outColor = vec4(col, texture(grad, vec2(u, 0.5)).r * step(0.001, rad));
         }`,
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    }));
+      transparent: true, blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+    });
+    // fxcloakv5（像素着色器反汇编）：只画溶解球内；Layer1 uv = (|p − 球心|² / R², 噪声 × NoiseFactors.z + p.z / R) × Layer1Transform + 滚动，
+    //   再加屏幕空间六边形偏移 × HexFactors.z + 0.5；颜色 = Layer1.r⁴ × FxColor + 菲涅尔 × (六边形.x × HexFactors.z + 0.5) × 0.2
+    const add = (L) => new THREE.ShaderMaterial({ ...base,
+      uniforms: { nz: { value: noise3 }, hexMap: { value: hexMap }, l1Map: { value: L.map ? ckTex(L.map) : whiteTex }, F: { value: ckV4(L.F) }, L1T: { value: ckV4(L.l1t) }, L1S: { value: ckV4(L.l1s) },
+        HX: { value: ckV4([V.hx, 0.66, 0.05]) }, NF: { value: ckV4(L.nf) }, col: { value: new THREE.Vector3(...L.col) }, tweak: { value: L.tweak ? 1 : 0 }, vp: { value: ckVp }, time: ckTime },
+      fragmentShader: `${ckHead()}
+        uniform sampler3D nz; uniform sampler2D hexMap, l1Map; uniform vec4 F, L1T, L1S, HX, NF; uniform vec3 col; uniform float tweak, time; uniform vec2 vp;
+        void main() {
+          #include <logdepthbuf_fragment>
+          vec3 q = vP - vC.xyz; float d2 = dot(q, q);
+          if (vPar.w < 0.5 || sign(vC.w) * d2 - vC.w > 0.0) discard;
+          float R = vPar.z, n = texture(nz, vP / (NF.y * R)).r;
+          vec2 uv = vec2(d2 / (R * R), n * NF.z + vP.z / R) * L1T.xy + L1T.zw + L1S.xy * time + L1S.zw;
+          vec2 h = texture(hexMap, hexUv(HX, vp)).xy * 2.0 - 1.0;
+          float l = texture(l1Map, uv + h * HX.z + 0.5).r; l *= l; l *= l;
+          float fr = pow(1.0 - min(abs(dot(normalize(vV), normalize(vN)) - F.z), 1.0), F.x) * (tweak > 0.5 ? vPar.x : F.y);
+          outColor = vec4(vec3(fr * (h.x * HX.z + 0.5) * 0.2) + l * col, 1.0);
+        }`,
+      transparent: true, blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
+    });
+    // fxcloakdistortionv5：只画溶解球内；输出 (六边形.xy × 2 − 1) × DistortionFactors.x + 0.5，b = 1/256，a = DistortionFactors.y。
+    //   合成（postprocess/distortion）：偏移 uv = (rg − 0.5) × 2 × MAX_DISTORTION_OFFSET(默认 64) / 屏幕像素 → 这里直接写像素偏移（y 向下取反）
+    const dist = new THREE.ShaderMaterial({ ...base,
+      uniforms: { hexMap: { value: hexMap }, HX: { value: ckV4([V.hx, V.dhy]) }, dfy: { value: 0.125 }, vp: { value: ckVp } },
+      fragmentShader: `${ckHead()}
+        uniform sampler2D hexMap; uniform vec4 HX; uniform float dfy; uniform vec2 vp;
+        void main() {
+          #include <logdepthbuf_fragment>
+          vec3 q = vP - vC.xyz;
+          if (vPar.w < 0.5 || sign(vC.w) * dot(q, q) - vC.w > 0.0) discard;
+          vec2 o = (texture(hexMap, hexUv(HX, vp)).xy * 2.0 - 1.0) * vPar.y * 128.0;
+          outColor = vec4(o.x, -o.y, 0.00390625, dfy);
+        }`,
+      depthTest: false, blending: THREE.NoBlending,
+    });
+    // 加色层：客户端是溶解球内所有正面都加上去（看得到船体内部结构，像玻璃）
+    return (ckMatCache[v] = {
+      tr: [trans([0.89725, 1.00431, 1.3], [1.333, 0.4, 0, 0]), trans([0.82824, 0.92706, 1.2], [0.5, 0.5, 1, 0]), trans(V.bt, [0.25, 0.666, 0, 0])],
+      add: [
+        add({ F: V.wf, l1t: [0.239277, 0.75, 0, 0], l1s: [-0.024, -0.027, 0.2333, -0.2333], col: V.wc, nf: [1.4466, 6.04442, 0.29914], map: 'noise_02' }),
+        add({ F: [V.cf[0], 0, V.cf[1]], l1t: [1, 1, 0, 0], l1s: [0, 0, 0, 0], col: [0.011765, 0.019608, 0.023529], nf: [1, 1, 1], tweak: true }),
+      ],
+      dist,
+    });
+  }
+  // 溶解中的船体：模型材质的副本，按实例的溶解球丢掉球内像素（quadv5：sign(r²)·|p − 球心|² − r² < 0 → discard），光照不动
+  function ckHullMat(src) {
+    const mm = src.clone();
+    mm.onBeforeCompile = (sh, r) => {
+      src.onBeforeCompile(sh, r);
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 ckC; varying vec4 vCkC; varying vec3 vCkP;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCkP = vec3(-position.x, position.y, position.z); vCkC = ckC;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec4 vCkC; varying vec3 vCkP;')
+        .replace('void main() {', 'void main() {\n{ vec3 ckQ = vCkP - vCkC.xyz; if (sign(vCkC.w) * dot(ckQ, ckQ) - vCkC.w < 0.0) discard; }');
+    };
+    mm.customProgramCacheKey = () => 'eve-quad5-ck';
+    return mm;
+  }
+  // 一个模型一个变体一套：共用几何的顶点数据 + 自己的实例属性；船体、3 层过渡、2 层加色在主场景，扭曲层在 ckDist
+  function ckBundle(m, v) {
+    m.ck ||= {};
+    if (m.ck[v]) return m.ck[v];
+    const src = m.def.geometry, g = new THREE.BufferGeometry(), cap = Math.max(1, m.units.length);
+    for (const k in src.attributes) g.setAttribute(k, src.attributes[k]);
+    g.setIndex(src.index);
+    for (const gr of src.groups) g.addGroup(gr.start, gr.count, gr.materialIndex);
+    for (const k of ['ckC', 'ckP']) g.setAttribute(k, new THREE.InstancedBufferAttribute(new Float32Array(cap * 4), 4).setUsage(THREE.DynamicDrawUsage));
+    const M = ckMats(v);
+    m.ckHull ||= m.def.materials.map(ckHullMat);
+    const mk = (mat, order, sc = scene) => {
+      const o = new THREE.InstancedMesh(g, mat, cap);
+      o.instanceMatrix.setUsage(THREE.DynamicDrawUsage); o.frustumCulled = false; o.renderOrder = order; o.count = 0;
+      sc.add(o);
+      return o;
+    };
+    const b = { g, cap, n: 0, meshes: [mk(m.ckHull, 0), ...M.tr.map((x, k) => mk(x, 2 + k)), ...M.add.map((x, k) => mk(x, 6 + k)), mk(M.dist, 0, ckDist)] };
+    for (let k = 0; k < cap; k++) b.meshes[0].setColorAt(k, new THREE.Color(1, 1, 1));
+    return (m.ck[v] = b);
+  }
+  function ckDrop(m) {
+    for (const b of Object.values(m.ck || {})) { for (const o of b.meshes) { o.parent?.remove(o); o.dispose(); } b.g.dispose(); }
+    m.ck = null;
+    for (const x of m.ckHull || []) x.dispose();
+    m.ckHull = null;
+  }
+  // 一艘溶解中的船加进本模型的隐形实例
+  const ckCen = [0, 0, 0];
+  function ckPush(m, ck, mat) {
+    const b = ckBundle(m, ck.v), def = m.def, k = b.n++;
+    if (k >= b.cap) { b.n--; return; }
+    const D = def.loc?.damage, L = D?.length ? D[ck.seed % D.length] : [0, 0, 0], c = def.c || [0, 0, 0], R = def.r || 50;
+    const lo = Math.hypot(L[0], L[1], L[2]), Rn = R + lo, rad = ck.f * Rn * (1 + Math.min(1, lo / Rn));
+    for (let q = 0; q < 3; q++) ckCen[q] = L[q] + c[q];
+    b.g.attributes.ckC.array.set([ckCen[0], ckCen[1], ckCen[2], rad * rad], k * 4);
+    b.g.attributes.ckP.array.set([ck.fy, ck.cal, R, ck.self ? 1 : 0], k * 4);
+    for (const o of b.meshes) o.setMatrixAt(k, mat);
+  }
+  function ckFlush(m) {
+    for (const b of Object.values(m.ck || {})) {
+      for (const o of b.meshes) { o.count = b.n; o.visible = b.n > 0; o.instanceMatrix.needsUpdate = true; }
+      if (b.meshes[0].instanceColor) b.meshes[0].instanceColor.needsUpdate = true;
+      b.g.attributes.ckC.needsUpdate = b.g.attributes.ckP.needsUpdate = true;
+      b.n = 0;
+    }
   }
   // 别人跃迁时船模型藏起来（WarpFlashOut 起跳闪光时隐藏，WarpFlashIn 落地闪光时再出现；短于 4 万 km 的跃迁不藏）
-  const WARP_HID = { hidden: true, fy: 0 };
   let warpEv = null, warpEvN = -1, warpEvR = null;
   function warpHidden(i, t) {
     const ev = rec.events || [];
@@ -740,23 +901,48 @@ export function createView(host, hooks = {}, opt = {}) {
     for (const e of warpEv) if (e.unit === i && t >= e.tOut && t < e.tIn) return true;
     return false;
   }
-  // 第 i 艘船的隐形状态：{ hidden（整船不画）, fy（菲涅尔曲线值）}；没开 / 早已解除 → null
+  // 隐形装置连续开着的帧区间（往回找起点；按船缓存，避免每帧从头扫）
+  const ckRun = [];
+  function runStart(i, bitm, k) {
+    const F = rec.frames, c = ckRun[i]?.rec === rec && ckRun[i].bit === bitm ? ckRun[i] : null;
+    if (c && k >= c.s && k <= c.e) return c.s;
+    let b = k;
+    while (b > 0 && F[b - 1].act?.[i] & bitm) {
+      if (c && b - 1 >= c.s && b - 1 <= c.e) { b = c.s; break; }
+      b--;
+    }
+    ckRun[i] = { rec, bit: bitm, s: b, e: c && c.s === b ? Math.max(c.e, k) : k };
+    return b;
+  }
+  // 曲线求值，最后一键之后循环（Tr2CurveExtrapolation.CYCLE），第一键之前保持
+  function curveCyc(K, a) {
+    const t0 = K[0][0], len = K[K.length - 1][0] - t0;
+    return curveAt(K, a > t0 + len ? t0 + ((a - t0) % len) : a);
+  }
+  // 第 i 艘船的隐形状态：{ f = clipSphereFactor, act = activationStrength, fy = FresnelTweaker, cal = Calibration, self, v = 变体, seed = 选定位点用 }；
+  //   没开 / 解除隐形已播完 → null
   function cloakAt(i, t) {
     const rack = rec.units[i].rack || [];
     const j = rack.findIndex((x) => x.hfx === 'ck');
     if (j < 0 || j >= 32) return null;
     const F = rec.frames, dt = rec.dt, k = Math.max(0, Math.min(F.length - 1, Math.floor(t / dt))), bitm = 1 << j;
-    let a;
-    if (F[k].act?.[i] & bitm) a = hfxAge(i, j, t, { loop: true, len: 1e9 });
-    else {
+    let a, s;
+    if (F[k].act?.[i] & bitm) {
+      s = runStart(i, bitm, k);
+      a = t - (F[s].t - dt);
+    } else {
       let b = 0;
       const n = Math.ceil(6 / dt) + 1;
       while (b < n && F[k - b] && !(F[k - b].act?.[i] & bitm)) b++;
       if (b >= n || !F[k - b]) return null;
-      a = 6 - (t - F[k - b].t);   // 倒着放
-      if (a <= 0) return null;
+      const ko = k - b, since = t - F[ko].t;
+      if (since >= 6) return null;
+      s = runStart(i, bitm, ko);
+      a = Math.min(F[ko].t - (F[s].t - dt), 6) - since;   // Uncloak：PlayFrom(min(已播时长, 6))，scale = −1
     }
-    return { hidden: Math.min(1.13, 1.13 * a / 4.9) >= 1, fy: curveAt(CK_FRES, Math.min(a, 6)) };
+    const v = CK_VAR[rack[j].ckv] ? rack[j].ckv : '';
+    return { f: 1.13 * Math.min(1, Math.max(0, a / 4.9)), act: Math.min(1, Math.max(0, 1 - a / 6)), fy: curveCyc(CK_FRES, a), cal: curveCyc(CK_VAR[v].cal, a),
+      self: i === (hooks.self?.() ?? -1), v, seed: (Math.imul(s + 1, 2654435761) ^ Math.imul(i + 7, 40503)) >>> 0 };
   }
   // 曲线求值：[时间, 值, 左切线, 右切线, 插值]；插值 1 = 线性，2 = Hermite（用前一键的右切线、后一键的左切线）
   function curveAt(K, t) {
@@ -843,7 +1029,6 @@ export function createView(host, hooks = {}, opt = {}) {
     if (hfxMats[kind]) return hfxMats[kind];
     const [, base, pass] = /^(\w+?)(?:#(\d))?$/.exec(kind);
     if (HFX[base]?.passes) return fx3dMat(HFX[base].passes[+pass || 0], def);
-    if (HFX[base]?.ghost) return cloakMat();   // 每个模型一份（模型中心 / 半径不同）
     const h = HFX[kind];
     return (hfxMats[kind] = new THREE.ShaderMaterial({
       uniforms: { t1: { value: hullTex(h.l1) }, t2: { value: hullTex(h.l2) }, tm: { value: hullTex(h.mask) || whiteTex },
@@ -904,8 +1089,9 @@ export function createView(host, hooks = {}, opt = {}) {
     return -1;
   }
   function build(m) {
-    if (m.hfx) for (const x of Object.values(m.hfx)) { scene.remove(x); x.dispose(); if (x.material !== ghostMat && !Object.values(hfxMats).includes(x.material)) x.material.dispose(); }
+    if (m.hfx) for (const x of Object.values(m.hfx)) { scene.remove(x); x.dispose(); if (!Object.values(hfxMats).includes(x.material)) x.material.dispose(); }
     m.hfx = {};
+    ckDrop(m);
     if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); }
     m.mesh = new THREE.InstancedMesh(m.def.geometry, m.def.materials, m.units.length);
     m.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -1605,6 +1791,7 @@ export function createView(host, hooks = {}, opt = {}) {
     const white = new THREE.Color(1, 1, 1), dark = new THREE.Color(0.22, 0.2, 0.2);
     const bp = [], bc = [], bs = [], fl = [], gw = [];
     const hfxNow = performance.now() / 1000;
+    ckTime.value = hfxNow; renderer.getDrawingBufferSize(ckVp);
     for (const m of models.values()) {
       if (m.state !== 'ok' || !m.mesh) continue;
       let c = 0;
@@ -1619,28 +1806,29 @@ export function createView(host, hooks = {}, opt = {}) {
         // 残骸不转：客户端 Wreck.SetBallRotation 直接沿用爆掉那艘船的姿态（yaw/pitch/roll），之后静止
         tmp.scale.setScalar(KM);
         tmp.updateMatrix();
-        const ck = d.alive && !m.wreck ? (warpHidden(i, t) ? WARP_HID : cloakAt(i, t)) : null;
-        if (!ck?.hidden) {
+        const wh = d.alive && !m.wreck && warpHidden(i, t);
+        const ck = d.alive && !m.wreck && !wh ? cloakAt(i, t) : null;
+        // 隐形：溶解中（或自己的船隐形期间）画进隐形实例（裁剪过的船体 + 过渡 / 加色 / 扭曲层）；别人的船溶完（CloakAmount 到 1.13）什么都不画
+        if (ck && (ck.self || ck.f < 1.129)) ckPush(m, ck, tmp.matrix);
+        else if (!wh && !ck) {
           m.mesh.setMatrixAt(c, tmp.matrix);
           m.mesh.setColorAt(c, d.alive || m.wreck ? white : dark);
           c++;
         }
-        if (d.alive && !m.wreck && !ck?.hidden) for (const mt of mountsOf(i, m.def)) {
+        // 炮塔 / 尾焰：activationStrength ≤ 0.5 时不画（EveMobile.DisplayChildren）
+        const kids = !wh && !(ck && ck.act <= 0.5);
+        if (d.alive && !m.wreck && kids) for (const mt of mountsOf(i, m.def)) {
           const tm = tModels.get(mt.k);
           if (tm?.state === 'ok') tm.list.push(new THREE.Matrix4().multiplyMatrices(tmp.matrix, mt.mat));
         }
         // 船身叠加特效：同一种特效多件装备取最亮的
-        if (d.alive && ck !== WARP_HID) {
+        if (d.alive && !wh && !(ck && ck.f >= 1)) {
           const rack = rec.units[i].rack || [];
           const best = {};
           for (let j = 0; j < rack.length && j < 32; j++) {
             const kind = rack[j].hfx;
             if (!kind || !HFX[kind]) continue;
             const H = HFX[kind];
-            if (H.ghost) {   // 隐形：亮度曲线值放进实例颜色
-              if (ck) best[kind] = new THREE.Color(ck.fy, 0, 0);
-              continue;
-            }
             if (H.passes) {   // fx3dv5 类：实例颜色带曲线值（亮度、UvOffset）；开着时每个模块周期从头播一次（10 秒曲线，周期 17.5 秒）
               const age = hfxAge(i, j, t, { loop: true, len: rack[j].cycle || H.len });
               if (age < 0 || age >= H.len) continue;
@@ -1666,7 +1854,7 @@ export function createView(host, hooks = {}, opt = {}) {
             o.userData.n++;
           }
         }
-        if (d.alive && !ck?.hidden) {
+        if (d.alive && kids) {
           // 强度：当前速度 / 最大速度（客户端 FitBoosters 把 maxVelocity 交给引擎；引擎内部的强度曲线未知，这里直接用速度比，开推进器时超过 1）
           const u = rec.units[i], sp = F.spd ? F.spd[i] : 0;
           // 跃迁中（客户端 ship.EnterWarp）：boosters.warpIntensity = 1，强度固定为 1，换跃迁颜色（warpGlowColor / warpHaloColor / WarpColor0）
@@ -1696,6 +1884,7 @@ export function createView(host, hooks = {}, opt = {}) {
       m.mesh.count = c;
       m.mesh.instanceMatrix.needsUpdate = true;
       if (m.mesh.instanceColor) m.mesh.instanceColor.needsUpdate = true;
+      ckFlush(m);
       if (m === lastModel()) flushTurrets();
       for (const o of Object.values(m.hfx || {})) {
         o.count = o.userData.n;
@@ -2042,7 +2231,11 @@ export function createView(host, hooks = {}, opt = {}) {
       heading.length = 0; bank.length = 0; bankT.length = 0;
       mounts.length = 0;
       for (const tm of tModels.values()) { tm.list.length = 0; if (tm.mesh) tm.mesh.count = 0; }
-      for (const m of models.values()) if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); }
+      for (const m of models.values()) {
+        if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); }
+        for (const x of Object.values(m.hfx || {})) { scene.remove(x); x.dispose(); }
+        ckDrop(m);
+      }
       models.clear();
       ORG[0] = ORG[1] = ORG[2] = 0;
       followAt = null;
@@ -2053,7 +2246,7 @@ export function createView(host, hooks = {}, opt = {}) {
       else { sun.position.set(0.6, 0.5, 0.35); sky.material.uniforms.sun.value.set(0.6, 0.5, 0.35).normalize(); }
     },
     draw,
-    render() { watchPerf(); controls.update(); dynFov(); sky.position.copy(camera.position); bg.position.copy(camera.position); if (rec?.cel?.length) celUpdate(); const shook = warpFrame(); const hi = post && level === 'high'; flare?.update(ORG, !hi); if (hi) post.render(scene, camera, tunnel?.distScene, flare?.draw); else { renderer.setRenderTarget(null); renderer.render(scene, camera); flare?.draw(); } if (shook) camera.quaternion.copy(shakeQ); drawLabels(); },
+    render() { watchPerf(); controls.update(); dynFov(); sky.position.copy(camera.position); bg.position.copy(camera.position); if (rec?.cel?.length) celUpdate(); const shook = warpFrame(); const hi = post && level === 'high'; flare?.update(ORG, !hi); if (hi) post.render(scene, camera, [tunnel?.distScene, ckDist], flare?.draw); else { renderer.setRenderTarget(null); renderer.render(scene, camera); flare?.draw(); } if (shook) camera.quaternion.copy(shakeQ); drawLabels(); },
     setLabels(on) { labels = on; drawLabels(); },
     // 自己在哪一方（匹配对战里可能在 B 方）：自己这方画蓝色、对面画红色
     setOwnSide(s) { ownSide = s === 'B' ? 'B' : 'A'; },

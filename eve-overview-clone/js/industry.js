@@ -21,7 +21,7 @@
 //          × 蓝图要求的专属技能（industry-data 的 skt：T2 要求的工程学 / 物理学、高级舰船建造研究等每级 1%）× 制造植入体（BX-801/802/804）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME, serverKey } from './server.js?v=s4';
-import * as Plan from './ind-plan.js?v=v14';
+import * as Plan from './ind-plan.js?v=v15';
 import * as Chain from './ind-chain.js?v=5';
 import * as IS from './ind-structs.js?v=4';
 import { skPage } from './skeleton.js?v=v17';

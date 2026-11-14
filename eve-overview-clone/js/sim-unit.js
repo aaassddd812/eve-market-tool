@@ -30,6 +30,10 @@ const CLOAK_EFFECTS = ['cloaking', 'cloakingWarpSafe', 'cloakingPrototype'];
 // 脉冲波投射器的效果名 → 种类
 const AOE_FIELD = { doomsdayAOEWeb: 'web', doomsdayAOENeut: 'neut', doomsdayAOEPaint: 'paint', doomsdayAOETrack: 'track', doomsdayAOEGuide: 'guide', doomsdayAOEDamp: 'damp', doomsdayAOEBubble: 'bubble', doomsdayAOEECM: 'ecm' };
 const hullFx = (t) => { for (const n of effName(t)) if (HULL_FX[n]) return HULL_FX[n]; return ''; };
+// 隐形特效变体（effects.json：effects.CloakingCovertOps → graphicID 21015 cloaking_pentagon，effects.CloakingPrototype → 21030 cloaking_triangle，
+//   普通隐形装置 effects.Cloaking 本身不带画面，画面是 effects.Cloak → 21040 cloaking）
+const CLOAK_GFX = { cloakingWarpSafe: 'p', cloakingPrototype: 't' };
+const cloakGfx = (t) => { for (const n of effName(t)) if (CLOAK_GFX[n]) return CLOAK_GFX[n]; return ''; };
 const SENSOR_TYPES = ['雷达', '光雷达', '磁力', '引力'];
 const ECM_STR = [241, 239, 240, 238];   // ECM 对雷达 / 光雷达 / 磁力 / 引力的干扰强度（与 FE.AT.sensors 顺序一致）
 // 武器开火特效（3D 视图用）：种类按装备组 / 名字，颜色按弹药（激光按晶体波段，导弹爆炸按主伤害类型），大小按弹药尺寸 / 导弹爆炸半径
@@ -83,7 +87,7 @@ function unitTemplate(row) {
   const idx = new Map();
   for (const s of SLOT_ORDER) for (const m of calc.modules.filter((x) => x.slot === s).sort((a, b) => a.index - b.index)) {
     idx.set(m, rack.length);
-    rack.push({ type: m.type.id, key: `${s}:${m.index}`, hfx: hullFx(m.type), slot: s, state: m.state, charge: m.charge?.type.id || 0, off: forcedOff(row.fit.slots[s]?.[m.index]) || '', cycle: (m.attr(FE.AT.duration) || m.attr(FE.AT.speed)) / 1000 || 0, reload: (m.attr(1795) || 0) / 1000,
+    rack.push({ type: m.type.id, key: `${s}:${m.index}`, hfx: hullFx(m.type), ...(hullFx(m.type) === 'ck' ? { ckv: cloakGfx(m.type) } : {}), slot: s, state: m.state, charge: m.charge?.type.id || 0, off: forcedOff(row.fit.slots[s]?.[m.index]) || '', cycle: (m.attr(FE.AT.duration) || m.attr(FE.AT.speed)) / 1000 || 0, reload: (m.attr(1795) || 0) / 1000,
       // 每个周期开头扣的电容（capacitorNeed）、最远作用距离（maxRange）、失准范围（falloffEffectiveness）—— 玩家开装备时检查用
       cap: Math.max(0, m.attr(FE.AT.capNeed) || 0), rng: m.attr(FE.AT.maxRange) || 0, fall: m.attr(2044) || 0, heat: { abs: m.attr(1180) || 0, dmg: m.attr(1211) || 0, hp: m.attr(9) || 40, spd: (m.attr(1223) || 0) / 100 },
       // 指挥脉冲波：给的加成（warfareBuffNID / Value）、加成持续时间（buffDuration）、弹药组（决定 buff 栏哪一格）
