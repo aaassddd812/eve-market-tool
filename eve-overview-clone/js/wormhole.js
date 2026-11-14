@@ -6,7 +6,7 @@
 // 求救：被困在虫洞里的玩家用绑定角色发求救（留言、悬赏、联系方式），所在星系由服务器读角色位置，48 小时过期（/api/kb/wh/sos）。
 // 数据：wh-data.json 由 build_wormholes.mjs 生成（CCP SDE + anoik.is 的固定出口）；星图跳数用当前服务器的 map-data。
 import { SERVER, IS_TQ } from './server.js?v=s4';
-import { skPage } from './skeleton.js?v=v17';
+import { skPage } from './skeleton.js?v=v18';
 
 let ctx = null;   // esc, formatISK, formatNumber, showToast, store, loadKillboard, planPi, resolveTypeNames, accounts, accountToken, openEsiBind
 const $ = (id) => document.getElementById(id);

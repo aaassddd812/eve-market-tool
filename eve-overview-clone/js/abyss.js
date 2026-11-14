@@ -6,7 +6,7 @@
 // 地址栏：#abyss（上次的类型）· #abyss/t/<类型>?筛选（与 /api/v1/abyssal/list 的参数相同，可收藏分享）· #abyss/m/<物品ID> · #abyss/appraise · #abyss/stats
 // 只有宁静服：价格来自宁静服合同。
 import { SERVER, IS_TQ } from './server.js?v=s4';
-import { skPage, skGrid } from './skeleton.js?v=v17';
+import { skPage, skGrid } from './skeleton.js?v=v18';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, getHubPrices, fetchESI, game, openDynamicItem,
            // loadAbyssal() -> abyssal.js 模块, dogmaNames() -> { attrs, units }, fmtAttr(v, unit, units), closeDrawer

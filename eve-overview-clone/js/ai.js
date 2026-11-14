@@ -5,7 +5,7 @@
 // 流式返回（NDJSON：{t: 文字增量} … {done: 结果}），回答边生成边显示。
 // 循环：请求一步 → 有工具调用就逐个执行、把结果追加为 tool 消息 → 再请求，直到模型不再调用工具（最多 MAX_STEPS 步）。
 // 对话记在本机（CHAT_KEY），自己的接口设置记在 LLM_KEY（API Key 只保存在本机浏览器，随请求经本站转发，不保存）。
-import * as BS from './bazaar-skills.js?v=12';
+import * as BS from './bazaar-skills.js?v=13';
 import * as JP from './jump-planner.js?v=v17';
 
 let ctx;   // esc, showToast, store, formatISK, formatNumber, server, fetchESI, esiAuthFetchPaged, hasEsiToken, tokenInfo,

@@ -1,10 +1,10 @@
-import { skCards, skRows, skToolbar, skTitle, skPage } from './skeleton.js?v=v17';
+import { skCards, skRows, skToolbar, skTitle, skPage, skPilot } from './skeleton.js?v=v18';
 import * as CS from './cloud-sync.js?v=2';
 import * as TF from './trade-fees.js?v=v6';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v45';
 import * as SM from './struct-markets.js?v=v8';
-import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v20';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v21';
 import * as AH from './alert-host.js?v=v6';
 import * as AP from './alert-push.js?v=v13';
 import * as BN from './back-nav.js?v=v1';
@@ -695,7 +695,7 @@ function showPageSkeleton(view) {
 // 主权规划：首次进入时加载
 let sovLoading = null;
 function loadSovModule() {
-  if (!sovLoading) sovLoading = import('./sov.js?v=v9').then((m) => {
+  if (!sovLoading) sovLoading = import('./sov.js?v=v10').then((m) => {
     m.initSov({
       esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
       getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -718,7 +718,7 @@ async function openSov() {
 // 虫洞：首次进入时加载
 let whLoading = null;
 function loadWormholeModule() {
-  if (!whLoading) whLoading = import('./wormhole.js?v=v6').then((m) => {
+  if (!whLoading) whLoading = import('./wormhole.js?v=v7').then((m) => {
     m.initWormhole({
       esc, formatISK, formatNumber, showToast, store, loadKillboard, resolveTypeNames, accountToken,
       accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
@@ -743,7 +743,7 @@ async function openWormhole() {
 // 广场（招新 / 组队 / 集市 / 其他）：首次进入时加载
 let plazaLoading = null;
 function loadPlazaModule() {
-  if (!plazaLoading) plazaLoading = import('./plaza.js?v=v4').then((m) => {
+  if (!plazaLoading) plazaLoading = import('./plaza.js?v=v5').then((m) => {
     m.initPlaza({
       esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, accountToken, valuation, openTicket, game: gameActions,
       accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
@@ -773,7 +773,7 @@ async function openPlaza() {
 // AI 助手：首次进入时加载；工具在浏览器里执行（装配引擎、击杀记录接口、ESI）
 let aiLoading = null;
 function loadAiModule() {
-  if (!aiLoading) aiLoading = import('./ai.js?v=v22').then((m) => {
+  if (!aiLoading) aiLoading = import('./ai.js?v=v23').then((m) => {
     m.initAi({
       esc, formatISK, formatNumber, showToast, copyText, store, server: SERVER, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -813,7 +813,7 @@ async function openAi() {
 // 深渊市场（MutaMarket 数据）：首次进入时加载
 let abyssLoading = null;
 function loadAbyssModule() {
-  if (!abyssLoading) abyssLoading = import('./abyss.js?v=v5').then((m) => {
+  if (!abyssLoading) abyssLoading = import('./abyss.js?v=v6').then((m) => {
     m.initAbyss({
       esc, formatISK, formatNumber, showToast, copyText, store, resolveTypeNames, getHubPrices: getJitaPrices, fetchESI,
       game: gameActions, openDynamicItem, loadAbyssal, dogmaNames, fmtAttr,
@@ -826,7 +826,7 @@ function loadAbyssModule() {
 // 角色交易（宁静服：官方论坛 Character Bazaar）：首次进入时加载
 let bazaarLoading = null;
 function loadBazaarModule() {
-  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v20').then((m) => {
+  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v21').then((m) => {
     m.initBazaar({ esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices: getLiveHubPrices, fitData: () => loadFittingModule().then((f) => f.fitData()), closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       // 曙光服角色挂售：已绑定的角色与各自的令牌
       copyText, accountToken, openEsiBind: () => { switchView('profile'); openEsiModal(); },
@@ -855,7 +855,7 @@ async function openAbyss() {
 // 教程：首次进入时加载
 let guidesLoading = null;
 function loadGuidesModule() {
-  if (!guidesLoading) guidesLoading = import('./guides.js?v=v12').then((m) => {
+  if (!guidesLoading) guidesLoading = import('./guides.js?v=v13').then((m) => {
     m.initGuides({ esc, debounce, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); } });
     return m;
   }).catch((error) => { guidesLoading = null; throw error; });
@@ -874,7 +874,7 @@ async function openGuides() {
 // 战争（势力战争 + 军团战争）：首次进入时加载
 let warLoading = null;
 function loadWarModule() {
-  if (!warLoading) warLoading = import('./war.js?v=v15').then((m) => {
+  if (!warLoading) warLoading = import('./war.js?v=v16').then((m) => {
     m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
     return m;
   }).catch((error) => { warLoading = null; throw error; });
@@ -949,7 +949,7 @@ async function getHubSellOrders(ids) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v69').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v70').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, getCharacterImplants, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -977,7 +977,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v20').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v21').then((m) => {
     m.initLp({ addToCart, industry: loadIndustryModule,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
@@ -1118,7 +1118,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v68').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v69').then((m) => {
     m.initPi({ addToCart, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
@@ -1152,7 +1152,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v260').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v288').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -1186,7 +1186,11 @@ async function openSimPage(restored = false) {
 }
 
 // 驾驶模拟（pilot.js）：与装配页共用装配模块和数据
+// 骨架：装配模块和数据还没到时先按设置页布局画（上次停留的页签，pilot.js 存在 eve-pilot.tab）
+const pilotTab = () => { const t = store.getJSON('eve-pilot', null)?.tab; return ['match', 'tut'].includes(t) ? t : 'solo'; };
 async function openPilotPage() {
+  const el = $('pilotMain');
+  if (el && !el.children.length) el.innerHTML = skPilot(pilotTab());
   try {
     const m = await loadFittingModule();
     if (!location.hash.startsWith('#fly')) history.replaceState(null, '', location.pathname + '#fly');
@@ -1303,7 +1307,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v108').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v109').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1349,7 +1353,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v54').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v55').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText,
       killRadial: async (km) => (await loadFittingModule()).killRadial(km)
@@ -5880,7 +5884,7 @@ async function bindWalletChart(box) {
 // 个人中心 · 技能：首次打开时加载
 let skillsLoading = null;
 function loadSkillsModule() {
-  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v35').then((m) => {
+  if (!skillsLoading) skillsLoading = import('./skills-page.js?v=v36').then((m) => {
     m.initSkills({ esc, formatNumber, esiAuthFetch, store, showPlan: async (el, opt) => (await loadFittingModule()).showPlan(el, false, opt) });
     return m;
   }).catch((error) => { skillsLoading = null; throw error; });
@@ -5890,7 +5894,7 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v11').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v12').then((m) => {
     m.initProfileMore({
       allChars, esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
@@ -5928,7 +5932,7 @@ function loadOrderWatch() {
 // 个人中心 · 交易记录与盈亏：首次打开时加载
 let tradesLoading = null;
 function loadTradesModule() {
-  if (!tradesLoading) tradesLoading = import('./trades.js?v=v8').then((m) => {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v9').then((m) => {
     m.initTrades({
       esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard,

@@ -9,13 +9,16 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v31';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v35';
 import { loadShipIndex } from './sim-ships.js?v=v11';
 import { warpShake } from './sim-warp.js?v=3';
-import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v5';
-import { bindUnit, pilotUnit } from './sim-unit.js?v=v5';
-import { buildMatch, stepMatch } from './match-sim.js?v=v5';
+import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v9';
+import { bindUnit, pilotUnit } from './sim-unit.js?v=v8';
+import { buildMatch, stepMatch } from './match-sim.js?v=v9';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
+import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
+import * as FL from './pilot-fleet.js?v=5';
+import * as SC from './pilot-scan.js?v=6';
 
 let ctx = null;
 let root = null;
@@ -47,8 +50,11 @@ const RM = {
   toggleOverload: (m) => mAct({ a: 'ov', m }),
   setAmmo: (m, type) => mAct({ a: 'ammo', m, type }),
   reloadMods: (list) => mAct({ a: 'reload', list }),
+  setRepeat: (m, on) => mAct({ a: 'repeat', m, on }),
+  setAutoReload: (m, on) => mAct({ a: 'autoreload', m, on }),
   setSpeed: (f) => mAct({ a: 'speed', f }),
   setDrones: (on) => (S.me?.alive && S.me.drones.length ? mAct({ a: 'drones', on }) : false),
+  setMode: (k) => (S.me?.alive && S.modes?.[k] && S.modes[k] !== S.mode && !RL.modeLeft() ? mAct({ a: 'mode', k }) : false),
   setRackOverload: (r, on) => mAct({ a: 'rov', r, on }),
   toggleRackOverload: (r) => mAct({ a: 'rov', r }),
   cmd: (c) => (S.me?.alive ? mAct({ a: 'cmd', cmd: c.cmd, u: c.tgt ? c.tgt.i : undefined, dist: c.dist, dir: c.dir, pt: c.pt }) : false),
@@ -62,12 +68,40 @@ const loadSys = () => (sysP ||= fetch('pilot-systems.json?v=2').then((r) => (r.o
 export function initPilot(context) {
   ctx = context;
   loadSys();
+  initTutor({
+    S, root: () => root, esc, tr, store: ctx.store, view: () => S.view,
+    guns: () => (S.on?.guns || []).map((g) => g.m),
+    gunSel: () => { const g = S.on?.guns?.[0]; return g ? `[data-pl-mod="${R.masterOf(g.m)}"]` : null; },
+    ovlSel: () => { const g = S.on?.guns?.[0]; return g ? `[data-pl-ovl="${R.masterOf(g.m)}"]` : null; },
+    typeName, img: IMG, log: (text, kind) => pushLog(text, kind),
+    onFinish: () => { S.ended = true; S.endAt = S.t; },
+    fleetReset: (o) => { FL.fleetReset(o); FL.renderFleet(true); },
+    broadcast: (k, o) => FL.broadcast(k, o),
+    watch: (u) => { FL.watchAdd(u, true); toggleWin('watch', true); },
+    winOpen: (id) => { const w = root?.querySelector(`[data-win="${id}"]`); return Boolean(w && !w.hidden); },
+    scan: () => SC.scanState(), setSigs: (l) => SC.setSigs(l),
+  });
+  FL.initFleet({
+    S, root: () => root, esc, tr, UI, typeName, icon: (v) => typeIcon(v.r.row.ship, S.brk[v.i] || 'frigate'),
+    pick: (i, e) => pickUnit(i, e), lock: (v) => lockUnit(v), warpTo: (tgt, d) => warpTo(tgt, d),
+    menu: (items, e) => { hideHint(); closeMenus(); S.cm = items; cmenuAt(e); }, unitMenu: (v, bare) => unitMenu(v, bare),
+    sysName: () => SYS?.systems?.[S.sky]?.name || '', log: (t, k) => pushLog(t, k),
+    groupName: (id) => ctx.data.groups.get(ctx.data.types.get(id)?.group)?.name || '', warpD: () => warpD(), setWarpD: (d) => ctx.store.setJSON(WARPD_KEY, d),
+    alignTo: (tgt) => alignTo(tgt), openWin: (id) => toggleWin(id, true),
+  });
+  SC.initScan({
+    S, root: () => root, esc, tr, UI, typeName, data: () => ctx.data, typeImg: (id) => IMG(id, 'icon', 32), fmtDist, AU,
+    ovShows: (t) => ovShows(t), ovShowsGroup: (g) => ovShowsGroup(g), icon: (v) => typeIcon(v.r.row.ship, S.brk[v.i] || 'frigate'),
+    iconOf: (t) => typeIcon(t, 'dronelightscout'), celIcon: (c) => celIcon(c), pick: (i, e) => pickUnit(i, e), pickCel: (i, e) => pickCel(i, e),
+    menu: (items, e) => { hideHint(); closeMenus(); S.cm = items; cmenuAt(e); }, unitMenu: (v) => unitMenu(v), warpTo: (tgt, d) => warpTo(tgt, d),
+    log: (t, k) => pushLog(t, k), openWin: (id, show) => toggleWin(id, show ? true : undefined),
+  });
   const saved = ctx.store.getJSON(KEY, null);
   const ot = Number(ctx.store.getJSON(OV_KEY, 0));
   S.ovTab = ot >= 0 && ot < OV_TABS.length ? ot : 0;
   if (saved && typeof saved === 'object') Object.assign(S.set, { ship: Number(saved.ship) || 0, fit: saved.fit || 'kb', foes: Array.isArray(saved.foes) ? saved.foes : [], dist: DISTS.includes(saved.dist) ? saved.dist : 30, sky: SKIES.includes(saved.sky) ? saved.sky : '', tac: saved.tac !== false, mmode: saved.mmode === '2v2' ? '2v2' : '1v1', mcap: MATCH_CAPS.includes(saved.mcap) ? saved.mcap : MATCH_CAPS[0],
-    tab: saved.tab === 'match' ? 'match' : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
-    pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '',
+    tab: ['match', 'tut'].includes(saved.tab) ? saved.tab : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
+    pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
     allies: Array.isArray(saved.allies) ? saved.allies.filter((a) => a && Number(a.ship)).slice(0, 8).map((a) => ({ ship: Number(a.ship), fit: typeof a.fit === 'string' ? a.fit : 'kb', count: Math.max(1, Math.min(20, Number(a.count) || 1)) })) : [] });
   const hud = ctx.store.getJSON(HUD_KEY, null);
   if (hud && typeof hud === 'object') for (const k of Object.keys(HUD_DEF)) if (k in hud) S.hud[k] = hud[k] ? 1 : 0;
@@ -222,6 +256,7 @@ const HUD_DEF = { passive: 1, empty: 0, readout: 0, pct: 1, tips: 1, lockMods: 0
 S.hud = { ...HUD_DEF };
 const esc = (s) => ctx.esc(String(s ?? ''));
 const typeName = (id) => ctx.data.types.get(id)?.name || '';
+const flyShip = () => S.me?.r?.row.ship || S.set.ship;   // 正在开的船（练习里是固定的裂谷级）
 const active = () => Boolean(root?.offsetParent) && !document.hidden;
 
 // ---------- 游戏界面贴图 ----------
@@ -361,8 +396,8 @@ function renderSetup() {
       </div>`;
   root.innerHTML = `<div class="pl-page"><section class="pl-setup" id="plSetup">
     <div class="pl-win pl-w pl-big">
-      <div class="pl-win-head"><h3>驾驶模拟</h3><div class="segmented pl-tabs" role="tablist">${[['solo', '单人'], ['match', '匹配对战']].map(([k, l]) => `<button type="button" role="tab" data-pl-tab="${k}" class="${tab === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
-      ${tab === 'match' ? match : solo}
+      <div class="pl-win-head"><h3>驾驶模拟</h3><div class="segmented pl-tabs" role="tablist">${[['solo', '单人'], ['tut', '练习'], ['match', '匹配对战']].map(([k, l]) => `<button type="button" role="tab" data-pl-tab="${k}" class="${tab === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
+      ${tab === 'match' ? match : tab === 'tut' ? tutListHtml(S.set.tutSel, S.loading) : solo}
     </div>
   </section></div>`;
   if (tab === 'match') matchTab();
@@ -383,6 +418,7 @@ function driveAlly(i) {
 const shipChip = (id) => `<span class="pl-chip"><img src="${IMG(id, 'icon', 32)}" alt="" loading="lazy"><b>${esc(typeName(id))}</b></span>`;
 
 function onInput(e) {
+  if (SC.scanInput(e)) return;
   const q = e.target.closest('[data-pl-q]');
   if (e.target.matches('[data-pl-pq]')) {
     PUB.q = e.target.value;
@@ -399,6 +435,7 @@ function onInput(e) {
 }
 function onChange(e) {
   const t = e.target;
+  if (FL.fleetChange(e) || SC.scanChange(e)) return;
   if (t.matches('[data-pl-fit]')) { S.set.fit = t.value; save(); }
   if (t.matches('[data-pl-afit]')) { const a = S.set.allies[Number(t.dataset.plAfit)]; if (a) { a.fit = t.value; save(); } }
   if (t.matches('[data-pl-acount]')) { const a = S.set.allies[Number(t.dataset.plAcount)]; if (a) { a.count = Math.max(1, Math.min(20, Math.round(Number(t.value)) || 1)); save(); } }
@@ -416,6 +453,8 @@ async function fitFor(ship, key) {
 }
 async function launch() {
   if (S.loading) return;
+  S.tut = null;
+  tutStop();
   S.loading = true;
   S.fitView = null;
   renderSetup();
@@ -450,7 +489,45 @@ async function launch() {
     ctx.showToast('起飞失败：' + error.message, 'error', 4000);
   }
 }
-function start(mine, foes, allies = []) {
+// 练习（pilot-tutor.js）：固定的船和装配，训练目标只有船体
+const hullFit = (ship) => ({ id: null, name: '', ship, slots: { high: [], mid: [], low: [], rig: [], sub: [] }, drones: [], implants: [] });
+async function launchTut(id) {
+  const sp = tutSpec(id);
+  if (!sp || S.loading) return;
+  S.tut = id;
+  tutStop();
+  S.loading = true;
+  S.fitView = null;
+  renderSetup();
+  try {
+    const mine = await ctx.pilotRow(sp.fit.ship, ctx.normalize(sp.fit), '练习', { self: true });
+    S.fitLabel = '练习';
+    if (!mine.row.unit) throw new Error('这个装配算不出属性');
+    // 训练目标：只有船体（同型共用一份）；会还手的敌船带自己的装配
+    // ally: true 的是队友（和我同一边）
+    const foes = [], allies = [], cache = new Map();
+    for (const [k, x] of sp.targets.entries()) {
+      const key = x.fit ? 'f' + k : x.ship;
+      if (!cache.has(key)) cache.set(key, ctx.pilotRow(x.ship, ctx.normalize(x.fit || hullFit(x.ship)), x.ally ? '队友' : '训练目标'));
+      const r = await cache.get(key);
+      if (r.row.unit) (x.ally ? allies : foes).push({ ...r.row, id: (x.ally ? 'a' : 'f') + k, count: 1 });
+    }
+    await loadSys();
+    S.loading = false;
+    start(mine, foes, allies, { dist: 20, msg: '开始练习', fleet: sp.L.fleet?.virt ? { virt: sp.L.fleet.virt } : null });
+    S.b.hold = true;   // 敌船打光了也不结束（后面可能还有步骤），由练习判定结束
+    // 武器编成一组（游戏里装上同型武器时会提示编组），F1 一起开
+    const g = (S.on.guns || []).map((x) => x.m);
+    if (g.length > 1) { R.setGroups([[g[0], g.slice(1)]]); renderRack(); }
+    tutBegin(id);
+  } catch (error) {
+    S.loading = false;
+    S.tut = null;
+    renderSetup();
+    ctx.showToast('起飞失败：' + error.message, 'error', 4000);
+  }
+}
+function start(mine, foes, allies = [], o = {}) {
   S.match = null;
   R = RL;
   RL.setRand(Math.random);
@@ -458,15 +535,16 @@ function start(mine, foes, allies = []) {
   me.unit = R.prep(mine);
   // 星空先定下来：天体（星系）跟着星空走
   S.sky = SKIES.includes(S.set.sky) ? S.set.sky : SKIES[Math.floor(Math.random() * SKIES.length)];
-  const b = createBattle({ A: [me, ...allies], B: foes }, { cel: celOf(SYS?.systems?.[S.sky], SYS?.types, window.I18N?.lang === 'en' ? SYS?.typesEn : null), dist: S.set.dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: 3600, record: true, droneUnits: true, seed: (Math.random() * 2 ** 31) | 0, onHit: logHit, onDrain: logDrain });
+  const b = createBattle({ A: [me, ...allies], B: foes }, { cel: celOf(SYS?.systems?.[S.sky], SYS?.types, window.I18N?.lang === 'en' ? SYS?.typesEn : null), dist: o.dist ?? S.set.dist, moveA: 'orbit', moveB: 'orbit', focus: 'weak', logi: true, ewar: true, cap: true, max: 3600, record: true, droneUnits: true, seed: (Math.random() * 2 ** 31) | 0, onHit: logHit, onDrain: logDrain });
   S.b = b;
   const calc = mine.row.calc;
   const maxLocks = Math.max(1, Math.min(calc?.ship?.attr(192) || 5, calc?.char?.attr(192) || 5));
   R.bind(0, maxLocks);
   // 玩家放在 A 方出发点，开局对着敌人
   S.names = b.units.map((u, i) => (i === 0 ? tr('我') : `${typeName(u.r.row.ship)} ${b.units.filter((x, k) => k <= i && x.r === u.r).length}`));
+  FL.fleetReset(o.fleet || {});
   rackInit();
-  enter(`${typeName(S.set.ship)} 已就位，敌人在 ${S.set.dist} km 外`);
+  enter(o.msg || `${typeName(S.set.ship)} 已就位，敌人在 ${S.set.dist} km 外`);
 }
 // 进入飞行画面（单机、匹配共用）
 function enter(msg) {
@@ -474,6 +552,7 @@ function enter(msg) {
   const pref = Math.round((S.on.pref || 5000) / 500) * 500;
   S.orbit = S.orbit || Math.min(pref, 20000);
   S.keep = S.keep || pref;
+  SC.scanReset();
   loadBrk();
   loadShipIndex().then((ix) => { S.brk = S.b ? S.b.units.map((u) => ix?.types?.[u.r.row.ship]?.b || 'frigate') : []; renderOverview(true); });
   renderStage();
@@ -509,8 +588,17 @@ const WINS = [
   { id: 'ov', title: '总览', icon: 'overview', w: 400, h: 330, r: 10, y: 186, nokill: true },
   { id: 'drones', title: '无人机', icon: 'drones', w: 400, h: 216, r: 10, y: 524, nokill: true, need: () => S.on?.drones?.length > 0 },
   { id: 'ship', title: '舰船属性', icon: 'fitting', w: 270, h: 300, x: 56, y: 96, closed: true },
-  { id: 'log', title: '日志', icon: 'log', w: 420, h: 200, x: 56, y: 410, closed: true }
+  { id: 'log', title: '日志', icon: 'log', w: 420, h: 200, x: 56, y: 410, closed: true },
+  // 舰队（有队友时才有）：舰队窗口、单独拖出来的广播窗口、关注列表
+  { id: 'fleet', title: '舰队', icon: 'fleet', w: 300, h: 300, x: 56, y: 400, more: true, need: () => FL.fleetOn() },
+  { id: 'bc', title: '广播', icon: 'fleet', w: 300, h: 220, x: 362, y: 480, need: () => FL.fleetOn() },
+  { id: 'watch', title: '关注列表', icon: 'fleet', w: 240, h: 150, r: 420, y: 10, closed: true, need: () => FL.fleetOn() },
+  { id: 'fcomp', title: '舰队编制', icon: 'fleet', w: 560, h: 300, x: 380, y: 120, closed: true, need: () => FL.fleetOn() },
+  // 扫描器（客户端窗口默认大小：定向 400×350、探针 400×400；探针扫描器上面多了一张小星系图，加高）
+  { id: 'dscan', title: '定向扫描器', ico: 'eveicon/product_icons/directional_scanner_64px.png', w: 400, h: 350, r: 420, y: 170, closed: true },
+  { id: 'probe', title: '探针扫描器', ico: 'eveicon/product_icons/probe_scanner_64px.png', w: 1000, h: 600, x: 330, y: 60, closed: true }
 ];
+const winIcon = (w) => (w.ico ? `${UI}${w.ico}?v=1` : `${UI}windowicons/${w.icon}.png?v=1`);
 const WIN_KEY = 'eve-pilot-wins';
 const winBody = {
   ctl: () => `<div class="pl-ctl"><button type="button" class="pl-btn" data-pl-exit>返回设置</button>${S.match ? '' : '<button type="button" class="pl-btn" data-pl-pause>暂停</button><button type="button" class="pl-btn" data-pl-restart>重来</button>'}<button type="button" class="pl-btn" data-pl-full>${document.fullscreenElement ? '退出全屏' : '全屏'}</button><span class="pl-clock" id="plClock"></span></div>`,
@@ -518,11 +606,19 @@ const winBody = {
   ov: () => `<div class="pl-ov-tabs">${OV_TABS.map(([n, , c], i) => `<button type="button" data-pl-ovtab="${i}" style="--c:${c}"${i === S.ovTab ? ' class="on"' : ''}>${n}</button>`).join('')}<i class="pl-ov-line"></i></div><div class="pl-ov-body"><table style="width:${ovCols().reduce((a, b) => a + b, 0)}px"><colgroup>${ovCols().map((w) => `<col style="width:${w}px">`).join('')}</colgroup><thead><tr><th></th><th class="srt">距离<img src="${UI}eveicon/system_icons/caret_up_16px.png?v=1" alt=""><i class="pl-ovsc" data-ov-scale="1"></i></th><th>名字<i class="pl-ovsc" data-ov-scale="2"></i></th><th>类型<i class="pl-ovsc" data-ov-scale="3"></i></th><th>速度 (m/s)<i class="pl-ovsc" data-ov-scale="4"></i></th></tr></thead><tbody id="plOv"></tbody></table></div>`,
   drones: () => '<div id="plDrones"></div>',
   ship: () => '<div id="plShip"></div>',
-  log: () => '<div class="pl-log" id="plLog"></div>'
+  log: () => '<div class="pl-log" id="plLog"></div>',
+  fleet: () => FL.fleetBody(),
+  bc: () => FL.bcBody(),
+  watch: () => FL.watchBody(),
+  fcomp: () => FL.compBody(),
+  dscan: () => SC.dsBody(),
+  probe: () => SC.psBody()
 };
 function winLayout() {
   let saved = {};
   try { saved = ctx.store.getJSON(WIN_KEY, {}) || {}; } catch { /* 默认 */ }
+  // 探针扫描器改成「星系图 + 面板」后窗口变宽：旧版存下来的窄尺寸不用
+  if (saved.probe && saved.probe.w < 700) { delete saved.probe.w; delete saved.probe.h; }
   return saved;
 }
 function saveWins() {
@@ -583,13 +679,13 @@ function ovAutoFit(k) {
 }
 function winsHtml() {
   return WINS.filter((w) => !w.need || w.need()).map((w) => `<div class="pl-w pl-win-${w.id}${w.id === 'ov' ? ' pl-ov' : ''}${w.nokill ? ' nokill' : ''}" data-win="${w.id}" hidden>
-    <div class="pl-wh" data-win-drag><img class="pl-wi" src="${UI}windowicons/${w.icon}.png?v=1" alt=""><span${w.id === 'ov' ? ' id="plOvTitle"' : ''}>${w.id === 'ov' ? ovTitle() : w.title}</span>
-      <button type="button" data-win-lock title="锁定窗口"><img src="${UI}classes/window/btnunlock.png?v=1" alt=""></button><button type="button" data-win-min title="最小化"><img src="${UI}eveicon/system_icons/minimize_16px.png?v=1" alt=""></button>${w.nokill ? '' : `<button type="button" data-win-close title="关闭"><img src="${UI}classes/window/btnclose.png?v=1" alt=""></button>`}</div>
+    <div class="pl-wh" data-win-drag><img class="pl-wi" src="${winIcon(w)}" alt=""><span${w.id === 'ov' ? ' id="plOvTitle"' : ''}>${w.id === 'ov' ? ovTitle() : w.id === 'fleet' ? esc(tr(FL.fleetTitle())) : w.title}</span>
+      ${w.more ? `<button type="button" data-win-more title="更多"><img src="${UI}eveicon/system_icons/more_vertical_16px.png?v=1" alt=""></button>` : ''}<button type="button" data-win-lock title="锁定窗口"><img src="${UI}classes/window/btnunlock.png?v=1" alt=""></button><button type="button" data-win-min title="最小化"><img src="${UI}eveicon/system_icons/minimize_16px.png?v=1" alt=""></button>${w.nokill ? '' : `<button type="button" data-win-close title="关闭"><img src="${UI}classes/window/btnclose.png?v=1" alt=""></button>`}</div>
     <div class="pl-wbody">${winBody[w.id]()}</div>
     ${WIN_RS.map((d) => `<i class="pl-wrs ${d}" data-win-resize="${d}"></i>`).join('')}</div>`).join('');
 }
 function neocomHtml() {
-  return `<nav class="pl-neo" aria-label="窗口"><span class="pl-neo-eve"><img src="${UI}shared/hamburgermenu_large.png?v=1" alt=""></span>${WINS.filter((w) => !w.need || w.need()).map((w) => `<button type="button" data-win-open="${w.id}" title="${w.title}"><img src="${UI}windowicons/${w.icon}.png?v=1" alt=""></button>`).join('')}
+  return `<nav class="pl-neo" aria-label="窗口"><span class="pl-neo-eve"><img src="${UI}shared/hamburgermenu_large.png?v=1" alt=""></span>${WINS.filter((w) => !w.need || w.need()).map((w) => `<button type="button" data-win-open="${w.id}" title="${w.title}"><img src="${winIcon(w)}" alt=""></button>`).join('')}
     <button type="button" data-win-reset title="窗口恢复默认位置" class="pl-neo-reset"><img src="${UI}windowicons/navigation.png?v=1" alt=""></button><time class="pl-neo-clock" id="plNeoClock" title="EVE 时间"></time></nav>`;
 }
 // 按保存的位置（没有就用默认）摆放，并限制在画面里
@@ -669,6 +765,15 @@ function syncNeo() {
   }
 }
 let zTop = 10;
+// 窗口置顶：层级只在 10–40 之间（超了按现有前后顺序重新排），教程、右键菜单、提示这些浮层固定在 40 以上，永远压在窗口上面
+function raiseWin(win) {
+  if (zTop >= 40) {
+    const ws = [...root.querySelectorAll('[data-win]')].sort((a, b) => (Number(a.style.zIndex) || 0) - (Number(b.style.zIndex) || 0));
+    zTop = 10;
+    for (const w of ws) w.style.zIndex = w === win ? '' : ++zTop;
+  }
+  win.style.zIndex = ++zTop;
+}
 // 当前窗口（最后点过的）：顶边主题色线 + 标题变亮，和客户端一样同一时间只有一个
 function setActWin(win) {
   for (const el of root.querySelectorAll('[data-win].is-act')) if (el !== win) el.classList.remove('is-act');
@@ -679,7 +784,7 @@ function snap(v, list) { for (const x of list) if (Math.abs(v - x) < 8) return x
 function onWinPointer(e) {
   const win = e.target.closest('[data-win]');
   if (!win) return;
-  win.style.zIndex = ++zTop;
+  raiseWin(win);
   setActWin(win);
   const sc = e.target.closest('[data-ov-scale]');
   if (sc) { onOvScale(e, sc); return; }
@@ -725,8 +830,10 @@ function toggleWin(id, show) {
   const el = root.querySelector(`[data-win="${id}"]`);
   if (!el) return;
   el.hidden = show == null ? !el.hidden : !show;
-  if (!el.hidden) { el.style.zIndex = ++zTop; setActWin(el); moveWin(el, Number(el.dataset.hx ?? el.offsetLeft), Number(el.dataset.hy ?? el.offsetTop), true); }
+  if (!el.hidden) { raiseWin(el); setActWin(el); moveWin(el, Number(el.dataset.hx ?? el.offsetLeft), Number(el.dataset.hy ?? el.offsetTop), true); }
   if (id === 'log' && !el.hidden) renderLog();
+  if (id === 'dscan' && !el.hidden) { SC.renderDscan(true); SC.dscan(); }
+  if (id === 'probe' && !el.hidden) SC.renderProbe(true);
   syncNeo();
   saveWins();
 }
@@ -740,12 +847,45 @@ const HUD_BTNS = [
   [0, 16, 'classes/shipui/iconcameragrid.png', '启用战术视角（模拟中不可用）'],
   [28, 32, 'icons/44_32_42.png', '开/关战术视图（Ctrl + D）', 'tac'],
   [0, 48, 'classes/shipui/iconcameraorbit.png', '启用环绕视角', 'orbit'],
-  [28, 64, 'classes/sensorsuite/radar.png', '扫描器（模拟中不可用）', 'scan'],
+  [28, 64, 'classes/sensorsuite/radar.png', '扫描器', 'scan'],
   [0, 80, 'classes/shipui/iconcamerafirstperson.png', '启用第一人称视角（模拟中不可用）'],
   [28, 96, 'icons/44_32_12.png', '开启/关闭自动导航（模拟中不可用）']
 ];
 function hudBtnsHtml() {
-  return `<div class="pl-hbtns">${HUD_BTNS.map(([col, top, icon, tip, id]) => `<button type="button" class="pl-hbtn${id === 'orbit' || (id === 'tac' && S.set.tac) ? ' on' : ''}${id ? '' : ' na'}"${id === 'tac' ? ' data-pl-tac' : ''} style="right:${col}px;top:${top}px" title="${tip}" aria-label="${tip}"><i></i><img src="${UI}${icon}?v=1" alt="">${id === 'scan' ? `<img class="sw" src="${UI}classes/sensorsuite/radar_sweep.png?v=1" alt="">` : ''}</button>`).join('')}</div>`;
+  return `<div class="pl-hbtns">${HUD_BTNS.map(([col, top, icon, tip, id]) => `<button type="button" class="pl-hbtn${id === 'orbit' || (id === 'tac' && S.set.tac) ? ' on' : ''}${id ? '' : ' na'}"${id === 'tac' ? ' data-pl-tac' : ''}${id === 'scan' ? ' data-pl-scanbtn' : ''} style="right:${col}px;top:${top}px" title="${tip}" aria-label="${tip}"><i></i><img src="${UI}${icon}?v=1" alt="">${id === 'scan' ? `<img class="sw" src="${UI}classes/sensorsuite/radar_sweep.png?v=1" alt="">` : ''}</button>`).join('')}</div>`;
+}
+// 舰船模式按钮（客户端 StanceButtons / ShipStanceButton）：装备栏左边一列，36×36 的 LeftSideButton，第 k 个在 left 10×(k%2)、top 40×k；
+// 整列在船体面板中心右边 66（SLOTS_CONTAINER_LEFT + 4 − 8），竖直居中往下 1，有模式时装备栏往右让 32。
+// 当前模式亮 utilBtnGlow；切换后另外几个图标半透明，冷却计时（ShipModuleReactivationTimer：黑底 + 18 段虚线圈，按剩余时间缩短）
+// 是最后加进按钮的子元素，客户端里画在底座下面
+const STANCE_ICON = ['defense', 'sharpshooter', 'propulsion'];
+const stanceName = (id) => ctx.FE.modeLabel(ctx.data, id);
+function renderStance() {
+  const el = root.querySelector('#plStance');
+  if (!el) return;
+  const list = S.modes || [];
+  root.querySelector('#plHud')?.classList.toggle('stance', list.length > 0);
+  el.innerHTML = list.map((id, k) => {
+    const tip = `${stanceName(id)}（Shift + ${k + 1}）`;
+    return id ? `<button type="button" class="pl-hbtn pl-stb" data-pl-stance="${k}" style="left:${10 * (k % 2)}px;top:${40 * k}px" title="${esc(tip)}" aria-label="${esc(tip)}"><s></s><u></u><i></i><img src="${UI}hud/stance_icon_${STANCE_ICON[k]}.png?v=1" alt=""></button>` : '';
+  }).join('');
+  S.stanceK = null;
+  updStance();
+}
+function updStance() {
+  const el = root.querySelector('#plStance');
+  if (!el || !S.modes?.length) return;
+  const left = RL.modeLeft(), p = left > 0 ? left / (S.modeCd || 1) : 0;
+  const key = S.mode + '|' + (p > 0);
+  if (key !== S.stanceK) {
+    S.stanceK = key;
+    for (const b of el.querySelectorAll('[data-pl-stance]')) {
+      const on = S.modes[Number(b.dataset.plStance)] === S.mode;
+      b.classList.toggle('on', on);
+      b.classList.toggle('cd', p > 0 && !on);
+    }
+  }
+  if (p > 0) el.style.setProperty('--p', p.toFixed(4));
 }
 function renderStage() {
   disposeView();
@@ -761,6 +901,7 @@ function renderStage() {
       <button type="button" class="pl-spd" data-pl-spd="stop" title="停船（Ctrl + 空格）"><img src="${UI}classes/shipui/minus.png?v=1" alt=""></button>
       <button type="button" class="pl-spd max" data-pl-spd="max" title="全速"><img src="${UI}classes/shipui/plus.png?v=1" alt=""></button>
       <div class="pl-rack" id="plRack"></div>
+      <div class="pl-stance" id="plStance"></div>
       ${hudBtnsHtml()}
       <button type="button" class="pl-hudopt" data-pl-hudopt title="选项" aria-label="选项"><img src="${UI}icons/73_16_50.png?v=1" alt=""></button>
       <div class="pl-buffs" id="plBuffs"></div>
@@ -770,7 +911,7 @@ function renderStage() {
     <div class="pl-end" id="plEnd" hidden></div>
     <div class="pl-loading" id="plLoading"><div class="pl-loading-box">
       <div class="pl-spin"><img src="${UI}classes/loadingwheel/spinner.png?v=1" alt=""></div>
-      <b>${esc(typeName(S.set.ship))}</b><span id="plLoadTxt">正在准备战场…</span>
+      <b>${esc(typeName(flyShip()))}</b><span id="plLoadTxt">正在准备战场…</span>
       <div class="pl-loadbar"><i id="plLoadBar"></i></div></div></div>
   </section></div>`;
   S.sky = sky;
@@ -779,6 +920,7 @@ function renderStage() {
   renderDrones();
   resetMsgs();
   renderRack();
+  renderStance();
   renderSel();
   root.querySelector('#plHud').addEventListener('click', onHudClick);
   const hc = root.querySelector('#plHudC');
@@ -798,8 +940,16 @@ function renderStage() {
   sw?.addEventListener('pointerover', onHintOver);
   sw?.addEventListener('pointerout', onHintOut);
   sw?.addEventListener('contextmenu', onSelCtx);
+  // 舰队窗口、总览行的右键菜单；舰队成员拖进关注列表
+  const stg = root.querySelector('#plStage');
+  stg.addEventListener('contextmenu', onStageCtx);
+  stg.addEventListener('dragstart', (e) => FL.fleetDragStart(e));
+  stg.addEventListener('dragover', (e) => FL.fleetDragOver(e));
+  stg.addEventListener('drop', (e) => FL.fleetDrop(e));
+  FL.renderFleet(true);
+  SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v73').then((m) => {
+  import('./sim-3d.js?v=v78').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -967,6 +1117,7 @@ function tick(now) {
       S.t += dt;
       // 引擎比画面领先一步（画面在两帧之间插值）
       for (let n = 0; b.t < S.t + DT && !b.done && n < 8; n++) { beforeStep(); b.step(); afterStep(); }
+      if (S.tut) tutTick();
       if (b.done || !S.me.alive) end();
     } else if (S.ended && !S.paused && S.t - S.endAt < 6) {
       // 结束后画面再走几秒：放完爆炸，2.5 秒后弹出结算
@@ -981,7 +1132,8 @@ function tick(now) {
     updHudTip();
     drawTargets();
     updateRack();
-    if (now - S.ovAt > 500) { S.ovAt = now; renderOverview(); renderSel(true); renderDrones(); refreshTip(); ovLine(); }
+    updStance();
+    if (now - S.ovAt > 500) { S.ovAt = now; if (S.fleet && !S.match) FL.fleetTick(); renderOverview(); renderSel(true); renderDrones(); FL.renderFleet(); SC.renderDscan(); SC.renderProbe(); refreshTip(); ovLine(); }
     drawMsgs(now);
     const nc = root.querySelector('#plNeoClock');
     if (nc) { const v = new Date().toISOString().slice(11, 16); if (nc.textContent !== v) nc.textContent = v; }
@@ -1037,7 +1189,8 @@ function burstsOnMe() {
 // 剩余时间（客户端 FormatTimeIntervalShortWritten：「1分 5秒」）
 const fmtLeft = (sec) => { const s0 = Math.max(0, Math.ceil(sec)), m = Math.floor(s0 / 60); return m ? `${m}分 ${s0 % 60}秒` : `${s0}秒`; };
 const buffIcon = (k) => `${UI}icons/${BUFF_INFO[k][1]}.png?v=1`;
-const buffHint = (k) => tr(BUFF_INFO[k][2]);   // 总览里 tr 是行变量，这里另起名字
+const buffHint = (k) => tr(BUFF_INFO[k][2]);
+const bcHint = (k) => tr(FL.bcName(k));   // 同上：总览行里 tr 被行变量遮住   // 总览里 tr 是行变量，这里另起名字
 // 客户端 tactical.jammersByJammingType：服务器发来 EWAR 通知才算（ECM 只有干扰成功的周期才有）
 function ewarOnMe(u) {
   const out = new Map();   // 种类 → { from: Map(单位 → 装备件数), fail: Map（ECM 没干扰上的）, jam: 最近一次干扰 {t0, end} }
@@ -1233,6 +1386,7 @@ async function matchGo(kind, code = '') {
 }
 // 服务器配好对局：按对局信息建同样的战斗（同一个种子、同样的装配和技能），画面用驾驶模拟的
 function startMatchView(m) {
+  S.fleet = null;   // 对战里不做舰队广播（广播不经过服务器）
   // 星系文件还没读到：读完再建（这段时间服务器发来的步数先存着）（天体要和服务器一样，否则跃迁指令会算出不同的结果）
   if (!SYS && !m.noSys) { S.matchWait = []; loadSys().then(() => { const q = S.matchWait; S.matchWait = null; startMatchView({ ...m, noSys: true }); if (S.match) S.match.q.push(...q); }); return; }
   stopLoop();
@@ -1295,6 +1449,7 @@ function end() {
   if (S.ended) return;
   S.ended = true;
   S.endAt = S.t;
+  if (S.tut && tutEnd()) return;
   const won = S.me.alive;
   const box = root.querySelector('#plEnd');
   if (!box) return;
@@ -1326,7 +1481,8 @@ function pickCel(i, e) {
   if (!c) return;
   S.sel = -1;
   S.selC = i;
-  if (S.keys.has('s')) warpTo({ cel: i });
+  if (S.keys.has('v')) SC.scanToward(c.pos);   // V + 点击：只朝那个方向扫，镜头不动
+  else if (S.keys.has('s')) warpTo({ cel: i });
   else if (S.keys.has('q')) celApproach(i);
   renderSel();
   renderOverview(true);
@@ -1393,6 +1549,8 @@ function pickUnit(i, e) {
     if ((e?.ctrlKey || e?.metaKey) && e?.shiftKey) act('unlock', v);
     else if (e?.ctrlKey || e?.metaKey) lockUnit(v);
     else if (e?.altKey) act('look', v);
+    else if (S.keys.has('x') && S.fleet) FL.broadcast('target', { u: v });
+    else if (S.keys.has('v')) SC.scanToward(v.pos);   // V + 点击：只朝那个方向扫，镜头不动
     else if (S.keys.has('c')) act('track', v);
     else if (S.keys.has('s')) act('warp', v);
     else if (S.keys.has('q')) cmd({ cmd: 'approach', tgt: v });
@@ -1405,6 +1563,7 @@ function pickUnit(i, e) {
 // 主动装备但驾驶模拟没做（不在可开关列表里）：点了给提示，不再没反应；真正的被动装备客户端点了也没反应
 const unsupported = (m) => { const x = S.on?.rack?.[m]; return Boolean(x && !toggleable().has(m) && ctx.data.types.get(x.type)?.activatable); };
 const toggleModule = (m, e) => {
+  if (S.me?.alive && SC.rackLaunch(m)) return;
   if (S.me?.alive && unsupported(m) && !e?.shiftKey) { const x = S.on.rack[m]; pushLog(`驾驶模拟里暂不支持启动${typeName(x.type)}`, 'bad'); return; }
   R.toggleModule(m, Boolean(e?.shiftKey));
 };
@@ -1414,6 +1573,8 @@ const { canActivate, activate, cycleOf, cycStart, toggleable } = R;
 function onClick(e) {
   const t = e.target;
   let x;
+  if (S.fleet && t.closest?.('[data-win="fleet"], [data-win="bc"], [data-win="watch"], [data-win="fcomp"]') && FL.fleetClick(e)) return;
+  if (S.scan && t.closest?.('[data-win="dscan"], [data-win="probe"]') && SC.scanClick(e)) return;
   if ((x = t.closest('[data-pl-pick]'))) {
     const [who, id] = x.dataset.plPick.split(':');
     if (who === 'me') { S.set.ship = Number(id); S.set.fit = 'kb'; } else if (who === 'ally') { if (S.set.allies.length < 8) S.set.allies.push({ ship: Number(id), fit: 'kb', count: 1 }); } else S.set.foes.push({ ship: Number(id), count: 1 });
@@ -1451,6 +1612,8 @@ function onClick(e) {
   if ((x = t.closest('[data-pl-drones]'))) { setDrones(x.dataset.plDrones === '1'); return; }
   if ((x = t.closest('[data-pl-dist]'))) { S.set.dist = Number(x.dataset.plDist); save(); renderSetup(); return; }
   if (t.closest('[data-pl-go]')) { launch(); return; }
+  if ((x = t.closest('[data-pl-tutsel]'))) { S.set.tutSel = x.dataset.plTutsel; save(); renderSetup(); return; }
+  if ((x = t.closest('[data-pl-tut]'))) { S.set.tutSel = x.dataset.plTut; save(); S.b = null; launchTut(x.dataset.plTut); return; }
   if ((x = t.closest('[data-pl-mm]'))) { S.set.mmode = x.dataset.plMm; save(); MH.onState(); return; }
   if ((x = t.closest('[data-pl-mc]'))) { S.set.mcap = Number(x.dataset.plMc); save(); MH.onState(); return; }
   if (t.closest('[data-pl-mq]')) { matchGo('queue'); return; }
@@ -1461,9 +1624,10 @@ function onClick(e) {
   if (t.closest('[data-pl-exit]')) {
     // 匹配对战还没结束：认输（船算被击毁），等服务器发结果
     if (S.match && !S.ended) { if (confirm(tr('认输并结束这一局？'))) matchSend({ op: 'leave' }); return; }
+    if (S.tut) { S.set.tab = 'tut'; S.tut = null; tutStop(); }
     S.b = null; S.me = null; S.match = null; R = RL; renderSetup(); return;
   }
-  if (t.closest('[data-pl-restart]')) { if (S.match) return; S.b = null; launch(); return; }
+  if (t.closest('[data-pl-restart]')) { if (S.match) return; S.b = null; if (S.tut) launchTut(S.tut); else launch(); return; }
   if (t.closest('[data-pl-full]')) { toggleFull(); return; }
   if ((x = t.closest('[data-pl-pause]')) && S.match) return;
   if ((x = t.closest('[data-pl-pause]'))) { S.paused = !S.paused; x.textContent = tr(S.paused ? '继续' : '暂停'); x.classList.toggle('on', S.paused); return; }
@@ -1520,16 +1684,24 @@ function act(a, v = S.selC >= 0 ? null : S.b?.units[S.sel]) {
 }
 function onKey(e) {
   if (!S.b || !active() || !root.querySelector('#plStage')) return;
+  if (e.type === 'keydown' && FL.fleetInputKey(e)) return;
   if (e.target.closest?.('input, textarea, select')) return;
   const k = e.key.toLowerCase();
   if (k === 'control') { S.ctrl = e.type === 'keydown'; cursorMode(); return; }
-  if (e.type === 'keyup') { S.keys.delete(k); if (k === 'q' && S.mv?.state === 'xz') mvAbort(); cursorMode(); return; }
+  if (e.type === 'keyup') { S.keys.delete(k); if (k === 'q' && S.mv?.state === 'xz') mvAbort(); SC.scanKeyUp(k); cursorMode(); return; }
+  if (!e.repeat && SC.scanKey(e, k)) return;
   if (['c', 's'].includes(k) && !e.ctrlKey && !e.metaKey && !e.altKey) { S.keys.add(k); return; }
+  // 舰队快捷键（客户端默认）：Z 广播发现敌舰；按住 X 点目标 = 广播锁定
+  if (S.fleet && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && FL.fleetKey(k)) return;
+  if (S.fleet && k === 'x' && !e.ctrlKey && !e.metaKey && !e.altKey) { S.keys.add(k); return; }
   if (['q', 'w', 'e'].includes(k) && !e.ctrlKey && !e.metaKey) { S.keys.add(k); if (k === 'q' && S.mxy && !S.mv) mvStart(); cursorMode(); return; }
   if (k === 'd' && (e.ctrlKey || e.metaKey) && !e.altKey) { e.preventDefault(); toggleTac(); return; }
   if (e.shiftKey && k === 'f') { e.preventDefault(); setDrones(true); return; }
   if (e.shiftKey && k === 'r') { e.preventDefault(); setDrones(false); return; }
   if (k === ' ' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); cmd({ cmd: 'stop', tgt: null }); return; }
+  // 舰船模式：Shift + 1 / 2 / 3（客户端 CmdSetDefenceStance / CmdSetSniperStance / CmdSetSpeedStance）
+  const sd = /^Digit([1-3])$/.exec(e.code || '');
+  if (sd && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && S.modes?.length) { e.preventDefault(); setMode(Number(sd[1]) - 1); return; }
   // F1–F8 高槽，Alt + F1–F8 中槽，Ctrl + F1–F8 低槽（和游戏一样）
   const f = /^f([1-8])$/.exec(k);
   if (f) {
@@ -1548,6 +1720,10 @@ function setSpeed(frac) {
   if (frac >= 1) { const v = S.me.t.vel * S.me.velMult; indTemp('舰船全速设置', `速度变为${v >= 100 ? Math.floor(v).toLocaleString('en-US') : v.toFixed(2)} m/s`); }
 }
 function onHudClick(e) {
+  // 扫描器按钮：选定向扫描器 / 探针扫描器
+  if (e.target.closest('[data-pl-scanbtn]')) { hideHint(); closeMenus(); S.cm = [['定向扫描器 (Alt + D)', () => toggleWin('dscan', true)], ['探针扫描器 (Alt + P)', () => toggleWin('probe', true)]]; cmenuAt(e); return; }
+  const st = e.target.closest('[data-pl-stance]');
+  if (st) { setMode(Number(st.dataset.plStance)); return; }
   const b = e.target.closest('[data-pl-spd]');
   if (b) { setSpeed(b.dataset.plSpd === 'max' ? 1 : 0); return; }
   const c = root.querySelector('#plHudC'), r = c.getBoundingClientRect();
@@ -1813,7 +1989,7 @@ const slotCount = (r) => S.calc?.ship?.attr({ high: 14, mid: 13, low: 12 }[r]) |
 const chargeOf = (i) => S.charges?.[i] ?? S.on?.rack[i]?.charge ?? 0;
 function closeMenus() {
   root?.querySelector('.pl-umenu')?.remove();
-  root?.querySelector('.pl-cmenu')?.remove();
+  for (const m of root?.querySelectorAll('.pl-cmenu') || []) m.remove();
   S.cm = null;
 }
 const hudMenuHtml = () => HUD_OPTS.map((o) => (!o ? '<hr>' : `<button type="button" class="pl-um-e${o[2] && !S.hud[o[2]] ? ' off' : ''}" data-pl-hudset="${o[0]}"><img src="${UI}classes/utilmenu/checkbox${S.hud[o[0]] ? 'active' : 'inactive'}.png?v=1" alt=""><span>${o[1]}</span></button>`)).join('');
@@ -1992,6 +2168,9 @@ function openModMenu(i, e) {
   for (const c of ammo) if (c.id !== cur) items.push([esc(typeName(c.id)), () => setAmmo(m, c.id)]);
   if (cur) items.push([`重新加载 (${esc(typeName(cur))})`, () => reloadMods(members(m))]);
   if (ammo.length) items.push(['装填所有', () => reloadMods(S.on.guns.map((g) => g.m).filter((x) => x != null))]);
+  // 客户端：装弹药的装备有「启用自动装载 / 停止自动装填」；能循环的装备有「启用 / 停止自动循环」
+  if (cur || R.ammoState?.(m)) items.push(S.noReload?.has(m) ? ['启用自动装载', () => R.setAutoReload(m, true)] : ['停止自动装填', () => R.setAutoReload(m, false)]);
+  if (R.canRepeat?.(m)) items.push(S.repeatOff?.has(m) ? ['启用自动循环', () => R.setRepeat(m, true)] : ['停止自动循环', () => R.setRepeat(m, false)]);
   if (canOverload(m) && !S.hud.lockOvl && !S.rk.burnt.has(m)) {
     items.push(null);
     items.push([S.rk.ovl.has(m) ? '关闭超载' : '开启超载', () => toggleOverload(m)]);
@@ -2014,8 +2193,14 @@ function openModMenu(i, e) {
   el.style.left = `${Math.round(x)}px`;
   el.style.top = `${Math.round(y)}px`;
 }
+// 菜单项：[文字, 函数] / [文字, [子菜单项…]]（▸，悬停展开）/ [文字, 函数, { on: 勾选状态, off: 灰掉 }]；null = 分隔线
+// k：路径「2」「2.1」…
+function menuItem(k) { let list = S.cm, it = null; for (const i of String(k).split('.').map(Number)) { it = list?.[i]; list = Array.isArray(it?.[1]) ? it[1] : null; } return it; }
 function runMenu(k) {
-  const f = S.cm?.[k]?.[1];
+  const it = menuItem(k);
+  if (!it || it[2]?.off || it[2]?.lbl) return;
+  const f = Array.isArray(it[1]) ? it[2]?.fn : it[1];
+  if (!f) return;
   closeMenus();
   f?.();
 }
@@ -2026,6 +2211,10 @@ function ungroup(m) {
   placeFreed(sl);
   rackSave();
   renderRack();
+}
+// 舰船模式切换（冷却中、已经是这个模式就不动）
+function setMode(k) {
+  if (R.setMode(k)) updStance();
 }
 // 换弹药：整组一起换，换上就开始装填（重新装填时间），装填期间不开火
 function setAmmo(m, type) {
@@ -2050,7 +2239,7 @@ const posOf = (i) => { for (const r of RACKS) { const n = S.rk.order[r].indexOf(
 const rackMods = (r) => RACKS.flatMap((x) => S.rk.order[x]).filter((i) => i >= 0 && S.on.rack[i].slot === r);
 function rackInit() {
   const rack = S.on.rack || [];
-  const key = `${S.set.ship}:${S.set.fit}:${rack.map((m) => `${m.type}/${m.charge}`).join(',')}`;
+  const key = `${flyShip()}:${S.tut ? 'tut' : S.set.fit}:${rack.map((m) => `${m.type}/${m.charge}`).join(',')}`;
   const order = {};
   RACKS.forEach((r) => {
     const o = Array(8).fill(-1);
@@ -2247,8 +2436,11 @@ function updateRack() {
       if (em) em.textContent = g.ammo < Infinity ? (rld ? '' : st.ammo) : '';
     } else {
       // 电容注入器、辅助维修：有弹药数和装填
+      // 电容注入器、辅助维修、拦截泡发射器：有弹药数和装填
       const ik = (u.t.injectors || []).findIndex((x) => x.m === i), lk = ik < 0 ? (u.t.localReps || []).findIndex((x) => x.m === i && x.ammo < Infinity) : -1;
-      const x = ik >= 0 ? u.t.injectors[ik] : lk >= 0 ? u.t.localReps[lk] : null, st = ik >= 0 ? u.inj[ik] : lk >= 0 ? u.lrep[lk] : null;
+      const dk = ik < 0 && lk < 0 ? (u.t.dictors || []).findIndex((x) => x.m === i) : -1;
+      const x = ik >= 0 ? u.t.injectors[ik] : lk >= 0 ? u.t.localReps[lk] : dk >= 0 ? u.t.dictors[dk] : null;
+      const st = ik >= 0 ? u.inj[ik] : lk >= 0 ? u.lrep[lk] : dk >= 0 ? u.dict?.[dk] || { ammo: x.ammo, reloadUntil: 0, next: 0 } : null;
       if (x) {
         rld = st.reloadUntil > t;
         if (rld) rp = 1 - (st.reloadUntil - t) / x.reload;
@@ -2652,11 +2844,13 @@ function renderOverview() {
       const img = tr.cells[0].querySelector('img'), src = typeIcon(v.r.row.ship, S.brk[v.i] || 'frigate');
       if (img.getAttribute('src') !== src) img.setAttribute('src', src);
       // 对我用着的电子战 / 遥修：行右侧 16px 图标（客户端 UpdateEwar，TORIGHT）
+      // 舰队广播（锁定 / 维修目标 / 需要维修…）：最前面放一个广播图标
       const ew = [...(S.ewar || new Map())].filter(([, e]) => e.from.has(v)).map(([k]) => k).join(',');
+      const bk = FL.markOf(v);
       const box = tr.cells[4].lastChild;
-      if (box.dataset.ew !== ew) {
-        box.dataset.ew = ew;
-        box.innerHTML = ew ? ew.split(',').map((k) => `<img src="${buffIcon(k)}" alt="" title="${esc(buffHint(k))}">`).join('') : '';
+      if (box.dataset.ew !== ew + '|' + (bk || '')) {
+        box.dataset.ew = ew + '|' + (bk || '');
+        box.innerHTML = (bk ? `<img src="${FL.markIcon(bk)}" alt="" title="${esc(bcHint(bk))}">` : '') + (ew ? ew.split(',').map((k) => `<img src="${buffIcon(k)}" alt="" title="${esc(buffHint(k))}">`).join('') : '');
       }
     }
     if (x.c) tr.classList.toggle('sel', x.ci === S.selC);
@@ -2765,9 +2959,69 @@ function warpMenu(e, off) {
   const cur = warpD();
   S.cm = [
     ...(off ? [] : WARP_DISTS.map((d) => [`跃迁至 ${km(d)}内${d === cur ? '（默认）' : ''}`, () => tgt && warpTo(tgt, d)])),
-    ['设置默认距离', () => { S.cm = WARP_DISTS.map((d) => [`${km(d)}内${d === cur ? ' ✓' : ''}`, () => ctx.store.setJSON(WARPD_KEY, d)]); cmenuAt(e); }]
+    ['设置默认距离', () => { S.cm = WARP_DISTS.map((d) => [`${km(d)}内${d === cur ? ' ✓' : ''}`, () => ctx.store.setJSON(WARPD_KEY, d)]); cmenuAt(e); }],
+    ...(off || !tgt ? [] : FL.warpItems(tgt, tgt.cel == null && FL.isFleetMember(tgt)))
   ];
   cmenuAt(e);
+}
+// 右键总览里的船：锁定、接近、环绕、保持距离，远处的可以跃迁；有舰队时加广播、关注列表（客户端 menusvc 里的同名条目）
+// 「跃迁至」子菜单（menusvc.WarpToMenu）：七个距离 + 设置默认距离；点「跃迁至」本身按默认距离跃迁
+function warpSub(fn) {
+  const cur = warpD(), km = (d) => (d ? `${d / 1000} km` : '0 m');
+  return [...WARP_DISTS.map((d) => [`${km(d)}内`, () => fn(d)]), null, ['设置默认距离', WARP_DISTS.map((d) => [km(d), () => ctx.store.setJSON(WARPD_KEY, d), { on: d === cur }])]];
+}
+// 朝向该处（客户端 AlignTo）：船头转向目标方向
+function alignTo(tgt) {
+  const p = tgt?.cel != null ? S.b?.cel[tgt.cel]?.pos : tgt?.pos, u = S.me;
+  if (!p || !u?.alive) return;
+  const off = p.map((x, k) => x - u.pos[k]), l = Math.hypot(...off) || 1;
+  if (R.cmd({ cmd: 'dir', dir: off.map((x) => x / l), tgt: null })) pushLog(`正在朝向${tgt.cel != null ? S.b.cel[tgt.cel].name : S.names[tgt.i]}`, 'sys');
+}
+// bare：舰队窗口成员行用，只要舰船操作（舰队条目另给）
+function unitMenu(v, bare = false) {
+  const items = [], P = S.me?.pilot;
+  if (!P || !v) return items;
+  if (v !== S.me && v.alive) {
+    items.push(P.locks.has(v) ? ['解除目标锁定', () => act('unlock', v)] : ['锁定目标', () => lockUnit(v)]);
+    // 跃迁（menusvc._CelestialMenu）：150 km 外才有；舰队成员的船用「跃迁至该成员」那套带领跃迁文字
+    if (surf(S.me, v) >= 150000 && !v.warp) {
+      items.push(['跃迁至', warpSub((d) => warpTo(v, d)), { fn: () => warpTo(v) }]);
+      if (!bare) items.push(...FL.warpItems(v, FL.isFleetMember(v)));
+    }
+    items.push(['接近', () => cmd({ cmd: 'approach', tgt: v })], ['环绕', () => cmd({ cmd: 'orbit', tgt: v, dist: S.orbit })], ['保持距离', () => cmd({ cmd: 'keep', tgt: v, dist: S.keep })]);
+    if (surf(S.me, v) >= 150000) items.push(['朝向该处', () => alignTo(v)]);
+  }
+  if (bare) return items;
+  const f = FL.fleetMenu(v);
+  if (f.length && items.length) items.push(null);
+  items.push(...f);
+  return items;
+}
+// 右键天体（menusvc._CelestialMenu 的顺序）：跃迁至 ▸、带领跃迁、接近、朝向该处、广播：跃迁到 / 朝向该处
+function celMenu(i) {
+  const c = S.b?.cel[i], u = S.me, items = [];
+  if (!c || !u?.pilot) return items;
+  const far = celDist(u, c) >= 150000;
+  if (far) items.push(['跃迁至', warpSub((d) => warpTo({ cel: i }, d)), { fn: () => warpTo({ cel: i }) }], ...FL.warpItems({ cel: i }));
+  else items.push(['接近', () => celApproach(i)]);
+  items.push(['朝向该处', () => alignTo({ cel: i })]);
+  if (S.fleet) items.push([FL.bcName('warp'), () => FL.broadcast('warp', { cel: i })], [FL.bcName('align'), () => FL.broadcast('align', { cel: i })]);
+  return items;
+}
+function onStageCtx(e) {
+  if (S.fleet && FL.fleetCtx(e)) return;
+  if (SC.scanCtx(e)) return;
+  const ct = e.target.closest?.('#plOv tr[data-pl-ovc]');
+  if (ct) { e.preventDefault(); hideHint(); closeMenus(); S.cm = celMenu(Number(ct.dataset.plOvc)); if (S.cm.length) cmenuAt(e); return; }
+  const tr0 = e.target.closest?.('#plOv tr[data-pl-ov]');
+  if (!tr0) return;
+  const v = S.b?.units[Number(tr0.dataset.plOv)];
+  if (!v) return;
+  e.preventDefault();
+  hideHint();
+  closeMenus();
+  S.cm = unitMenu(v);
+  if (S.cm.length) cmenuAt(e);
 }
 // 右键自己的船（客户端 menusvc._CelestialMenu 里对自己船给的条目，按原顺序）：停止舰船、重置视角
 function selfMenu(e) {
@@ -2777,16 +3031,37 @@ function selfMenu(e) {
   cmenuAt(e);
 }
 function cmenuAt(e) {
-  root?.querySelector('.pl-cmenu')?.remove();
+  for (const m of root?.querySelectorAll('.pl-cmenu') || []) m.remove();
+  const stage = root.querySelector('#plStage'), st = stage.getBoundingClientRect();
+  cmenuBuild(S.cm, '', e.clientX - st.left, e.clientY - st.top - 8, 0);
+}
+function cmenuBuild(list, path, x, y, depth, anchorW = 0) {
   const stage = root.querySelector('#plStage'), st = stage.getBoundingClientRect();
   const el = document.createElement('div');
   el.className = 'pl-cmenu';
-  el.innerHTML = S.cm.map(([l], i) => `<button type="button" data-pl-cm="${i}">${esc(tr(l))}</button>`).join('');
+  el.dataset.depth = depth;
+  el.innerHTML = list.map((it, i) => {
+    if (!it) return i === 0 || !list[i - 1] || !list.slice(i + 1).some(Boolean) ? '' : '<hr>';   // 连续 / 开头 / 结尾的分隔线不画
+    const k = path ? `${path}.${i}` : `${i}`, sub = Array.isArray(it[1]), o = it[2] || {};
+    if (o.lbl) return `<div class="lbl">${esc(tr(it[0]))}</div>`;
+    const chk = o.on != null ? `<img class="ck" src="${UI}classes/utilmenu/checkbox${o.on ? 'active' : 'inactive'}.png?v=1" alt="">` : o.radio != null ? `<img class="ck" src="${UI}classes/utilmenu/radiobutton${o.radio ? 'active' : 'inactive'}.png?v=1" alt="">` : '';
+    return `<button type="button" class="${sub ? 'sub' : ''}${o.off ? ' off' : ''}" data-pl-cm="${k}">${chk}<span>${esc(tr(it[0]))}</span>${sub ? '<i>▸</i>' : ''}</button>`;
+  }).join('');
   stage.appendChild(el);
-  let x = e.clientX - st.left, y = e.clientY - st.top - 8;
-  if (x + el.offsetWidth > st.width) x -= el.offsetWidth + 2;
-  el.style.left = `${Math.round(x)}px`;
+  if (x + el.offsetWidth > st.width) x -= el.offsetWidth + 2 + anchorW;
+  el.style.left = `${Math.round(Math.max(0, x))}px`;
   el.style.top = `${Math.round(Math.max(0, Math.min(st.height - el.offsetHeight, y)))}px`;
+  // 悬停有子菜单的项：在右边展开（同级的其他子菜单收起）
+  el.addEventListener('pointerover', (ev) => {
+    const b = ev.target.closest('button[data-pl-cm]');
+    if (!b) return;
+    for (const m of root.querySelectorAll('.pl-cmenu')) if (Number(m.dataset.depth) > depth && m.dataset.from !== b.dataset.plCm) m.remove();
+    if (!b.classList.contains('sub') || root.querySelector(`.pl-cmenu[data-from="${b.dataset.plCm}"]`)) return;
+    const r = b.getBoundingClientRect();
+    const c = cmenuBuild(menuItem(b.dataset.plCm)[1], b.dataset.plCm, r.right - st.left + 2, r.top - st.top - 8, depth + 1, r.width + 4);
+    c.dataset.from = b.dataset.plCm;
+  });
+  return el;
 }
 function qtyPopup(which) {
   const [lo, hi] = which === 'orbit' ? [500, 1000000] : [50, 1000000];
@@ -3001,7 +3276,7 @@ function renderShip() {
   const t = S.on, off = S.off;
   const row = (k, v) => `<tr><th>${k}</th><td>${v}</td></tr>`;
   const n = (x, d = 0) => ctx.formatNumber(Number(x.toFixed(d)));
-  box.innerHTML = `<div class="pl-ship-head"><img src="${IMG(S.set.ship, 'render', 64)}" alt=""><div><b>${esc(typeName(S.set.ship))}</b><span>${esc(S.fitLabel || '')}</span></div></div>
+  box.innerHTML = `<div class="pl-ship-head"><img src="${IMG(flyShip(), 'render', 64)}" alt=""><div><b>${esc(typeName(flyShip()))}</b><span>${esc(S.fitLabel || '')}</span></div></div>
     <table class="pl-kv">
       ${row('输出（DPS）', n(t.dps || 0))}
       ${row('有效血量（EHP）', n(t.ehp || 0))}

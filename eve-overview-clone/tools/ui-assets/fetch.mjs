@@ -42,6 +42,12 @@ const DIRS = [
   'ui/texture/classes/button/',          // 按钮：切角底板、边框、悬停光
   'ui/texture/classes/framewithpointer/', // 提示框（带指针的底板）
   'ui/texture/classes/utilmenu/',        // 小菜单（船体面板选项）：勾选框、分隔
+  'ui/texture/classes/fleet/broadcast/16/', // 舰队广播图标（16 / 32 像素）
+  'ui/texture/classes/fleet/broadcast/32/',
+  ...['point', 'sphere', 'plane', 'wall', 'arrow', 'relative'].map((n) => `ui/texture/classes/fleet/fleetformations/${n}formation.png`),   // 舰队阵型按钮
+  'ui/texture/classes/fleet/defaultsquad.png',   // 默认中队标记
+  'ui/texture/classes/probescanner/16/',   // 探针扫描器：强度 / 偏差 / 时长、收回探针
+  'ui/texture/classes/probescanner/32/',   // 探针阵型按钮
   'ui/cursor/'                           // 鼠标指针（含 _x2 / _x3 高清版）
 ];
 // 单个文件
@@ -57,7 +63,19 @@ const FILES = [
   'ui/texture/loadingwheel.png', 'ui/texture/loadingwheel_full.png',
   // 装配页侧栏「有装配的船」筛选：游戏装配浏览器的个人 / 社区装配筛选图标、舰船图标
   'ui/texture/windowicons/member.png', 'ui/texture/classes/fitting/tabcommunityfits.png', 'ui/texture/classes/fitting/tabfittings.png',
-  'ui/texture/shared/hamburgermenu_large.png',   // Neocom 顶上的 EVE 菜单
+  'ui/texture/shared/hamburgermenu_large.png',
+  // 舰队窗口：窗口图标、职务图标（舰队 / 联队 / 中队指挥官、统帅）、广播范围、最近广播、维修目标
+  'ui/texture/windowicons/fleet.png',
+  // 扫描器：定向扫描器、探针扫描器窗口图标；探针结果「跃迁至」
+  'ui/texture/eveicon/product_icons/directional_scanner_64px.png', 'ui/texture/eveicon/product_icons/probe_scanner_64px.png', 'ui/texture/icons/44_32_18.png',
+  // 扫描按钮忙碌时的流动箭头；星系图：扫描结果标记、对准镜头 / 扫描锥 / 回到自己 / 俯视 / 侧视按钮；停靠面板关闭 / 浮动按钮
+  'ui/texture/classes/industry/centerbar/arrows.png', 'ui/texture/classes/industry/centerbar/arrowmask.png',
+  ...['scanresultlocation', 'alignwithcamera', 'dscanicon', 'focusicon', 'topview', 'sideview', 'solarsystemmap'].map((n) => `ui/texture/classes/mapview/${n}.png`),
+  'ui/texture/classes/dockpanel/closebutton.png', 'ui/texture/classes/dockpanel/floatbutton.png', 'ui/texture/shared/circulargradient.png',
+  ...['73_16_17', '73_16_18', '73_16_19', '73_16_20', '73_16_27', '73_16_28', '73_16_29', '73_16_47', '44_32_29'].map((n) => `ui/texture/icons/${n}.png`),
+  'ui/texture/eveicon/system_icons/heal_first_aid_16px.png', 'ui/texture/eveicon/system_icons/settings_16px.png',   // Neocom 顶上的 EVE 菜单
+  // 舰船模式按钮（战术驱逐舰等，客户端 ShipStanceButton）：防御 / 高速 / 狙击，放在 hud/ 下
+  ...['defense', 'propulsion', 'sharpshooter'].map((n) => `ui/hud/stance_icon_${n}.png`),
   'ui/texture/icons/73_16_251.png', 'ui/texture/icons/73_16_252.png',   // 装备栏「全部编组 / 取消编组」
   ...['56_64_5', 'target_killed', 'target_killed_skull'].map((n) => `ui/texture/icons/${n}.png`),   // 锁定目标：无人机图标、击毁标记
   ...['44_32_10', '44_32_12', '44_32_42'].map((n) => `ui/texture/icons/${n}.png`),   // HUD 左边按钮：货舱、自动驾驶、战术叠加层
@@ -74,6 +92,12 @@ const FILES = [
   // 装备提示（ModuleButtonTooltip）各行的图标：射程、伤害、属性（SDE dogmaAttributes.iconID → icons）；船体面板选项按钮
   ...['22_32_15', '26_64_1', '81_64_16', '1_64_7', '2_64_7', '1_64_11', '22_32_7', '22_32_23', '22_32_22', '22_32_13', '22_32_12', '22_32_11', '22_32_9', '22_32_10', '3_64_9', '22_32_14', '22_32_21', '73_16_50', '4_64_9', '4_64_12', '8_64_9', '8_64_10', '8_64_11'].map((n) => `ui/texture/icons/${n}.png`),
   ...['electromagnetic', 'thermal', 'kinetic', 'explosive'].map((n) => `ui/texture/classes/damagetypes/${n}.png`),   // 战斗日志伤害类型
+  // 练习（新手教程）：客户端 UiPointer 指引框（边框、箭头、光晕、侧条、闪光）、太空物体高亮圈，任务面板（InfoPanelOperations）图标、进度条
+  ...['highlightbox', 'highlightboxarrow', 'highlightboxarrowglow', 'highlightringglow'].map((n) => `ui/texture/classes/highlighttool/${n}.png`),
+  ...['highlightarrow_loop', 'highlightring_intro', 'highlightring_loop'].map((n) => `ui/texture/classes/highlighttool/${n}.webm`),
+  ...['sidedecoration', 'sidedecorationglow', 'aurawindowglow'].map((n) => `ui/texture/classes/conversationui/${n}.png`),
+  ...['operationsicon_main', 'quitoperation_icon', 'progress_bar_solid', 'progress_bar_stroke'].map((n) => `ui/texture/classes/infopanels/${n}.png`),
+  ...['tracker_kill', 'tracker_check'].map((n) => `ui/texture/classes/missiontracker/${n}.png`),
   'ui/fonts/evesansneue-regular.otf', 'ui/fonts/evesansneue-bold.otf', 'ui/fonts/evesansneue-condensed.otf'
 ];
 
@@ -118,7 +142,7 @@ const want = new Set(FILES.filter((f) => INDEX.has(f)));
 for (const k of INDEX.keys()) for (const d of DIRS) if (k.startsWith(d) && !k.slice(d.length).includes('/') && /\.png$/.test(k)) want.add(k);
 const list = [...want].sort();
 let done = 0, skip = 0;
-const outOf = (k) => join(OUT, k.startsWith('ui/fonts/') ? 'fonts/' + k.slice(9) : k.startsWith('ui/cursor/') ? 'cursor/' + k.slice(10) : k.slice('ui/texture/'.length));
+const outOf = (k) => join(OUT, k.startsWith('ui/fonts/') ? 'fonts/' + k.slice(9) : k.startsWith('ui/cursor/') ? 'cursor/' + k.slice(10) : k.startsWith('ui/hud/') ? 'hud/' + k.slice(7) : k.slice('ui/texture/'.length));
 let i = 0;
 await Promise.all(Array.from({ length: 8 }, async () => {
   while (i < list.length) {

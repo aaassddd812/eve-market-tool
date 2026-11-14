@@ -140,6 +140,13 @@ export function createBattle(sides, opt) {
   const missiles = [];
   const dooms = [];   // 预热中 / 正在出伤的末日武器
   const events = [];   // 增援、点名集火、撤离（回放与日志用）
+  // 弹药打空：自动装填（客户端默认开）；玩家驾驶的装备装填后不会自己接着循环（要再开一次），关了自动装填的就停在 0 发
+  const outOfAmmo = (u, st, x, t) => {
+    if (u.pilot) { u.pilot.on.delete(x.m); if (u.pilot.noReload?.has(x.m)) { st.ammo = 0; return; } }
+    st.ammo = x.ammo;
+    st.reloadUntil = st.next = t + x.reload;
+  };
+  const empty = (u, st, x) => x.ammo < Infinity && st.ammo <= 0 && Boolean(u.pilot);
   const primary = { A: null, B: null };
   const spawn = { A: [-opt.dist * 500, 0, 0], B: [opt.dist * 500, 0, 0] };
   const timeline = [];
@@ -974,6 +981,31 @@ export function createBattle(sides, opt) {
   }
   // 微型跃迁引擎（只有玩家用）：开启后预热一个周期，然后沿船头朝向跳 mjdJumpRange（停船时保持最后的朝向）；被扰频开不起来 / 预热中被扰频就失败；
   // 跳完装备进入重启延迟（P.cool：装备序号 → 可再开的时间）
+  // 拦截泡（拦截舰的拦截泡发射器）：开一次发射一枚探针，在发射时自己的位置展开一个泡，留在原地 life 秒；
+  // 泡里所有船（包括放泡的自己）都跃迁不了。弹药打完自动装填（装填完不会自己再发射）
+  const dictorLive = [];
+  B.dictorBubbles = dictorLive;
+  function dictorStep(alive, t) {
+    for (const u of alive) {
+      const P = u.pilot, ds = L(u.t, 'dictors');
+      if (!P || !ds.length) continue;
+      u.dict ||= ds.map((x) => ({ ammo: x.ammo, reloadUntil: 0, next: 0 }));
+      ds.forEach((x, j) => {
+        const st = u.dict[j];
+        if (st.reloadUntil > t) { u.rld |= 1 << (x.m ?? 31); return; }
+        if (!P.on.has(x.m)) return;
+        bit(u, x.m);
+        if (t < st.next) return;
+        st.next = t + x.cycle;
+        fired(u, x.m);
+        dictorLive.push({ pos: u.pos.slice(), r: x.range, t0: t, end: t + x.life, by: u.i });
+        events.push({ t, kind: 'bubble', unit: u.i, pos: u.pos.slice(), r: x.range, life: x.life });
+        if (--st.ammo <= 0) outOfAmmo(u, st, x, t);
+      });
+    }
+    for (let k = dictorLive.length - 1; k >= 0; k--) if (dictorLive[k].end <= t) dictorLive.splice(k, 1);
+    for (const b of dictorLive) for (const v of units) if (ready(v) && len(sub(v.pos, b.pos)) <= b.r) v.pointed += 100;
+  }
   function mjdStep(alive, t) {
     for (const u of alive) {
       const P = u.pilot;
@@ -1011,9 +1043,10 @@ export function createBattle(sides, opt) {
       if (c && nearAny(u)) { P.on.delete(c.m); (P.msgs ||= []).push({ k: 'decloak', i: c.m }); c = null; }
       if (c && !u.cloak) {
         for (const v of [...P.locks.keys()]) B.unlock(u, v);
-        // 开隐形时其他装备全部停下（客户端：隐形状态下装备不能运转）
-        for (const i of [...P.on]) if (i !== c.m) P.on.delete(i);
+        // 开隐形时其他装备停下（客户端：隐形状态下装备不能运转）；P.cloakKeep 里的（推进器等非攻击性装备）由驾驶模拟跑完这一轮再停
+        for (const i of [...P.on]) if (i !== c.m && !P.cloakKeep?.has(i)) P.on.delete(i);
         u.cloakM = c.m;
+        u.cloakT0 = t;
       }
       if (!c && u.cloak) {
         const x = cl.find((y) => y.m === u.cloakM) || cl[0];
@@ -1138,12 +1171,13 @@ export function createBattle(sides, opt) {
         const st = u.inj[j];
         if (st.reloadUntil > t) { u.rld |= 1 << (x.m ?? 31); return; }
         if (!u.pilot.on.has(x.m)) return;
+        if (empty(u, st, x)) { u.pilot.on.delete(x.m); return; }
         bit(u, x.m);
         if (t < st.next) return;
         st.next = nextCycle(st.next, t, x.cycle);
         fired(u, x.m);
         u.cap = Math.min(c.max, u.cap + x.bonus);
-        if (--st.ammo <= 0) { st.ammo = x.ammo; st.reloadUntil = st.next = t + x.reload; }
+        if (--st.ammo <= 0) outOfAmmo(u, st, x, t);
       });
       // 玩家驾驶的船：不按整套装配的平均耗电扣，而是每件开着的装备在自己每个周期开头扣一次（和客户端一样）；
       // 电容不够 → 这件装备停下；不带失准的指向性装备（扰频 / 扰断等）目标超出最远距离 → 周期结束时停下
@@ -1218,6 +1252,7 @@ export function createBattle(sides, opt) {
       }
     }
     areaStep(alive, t, on);
+    dictorStep(alive, t);
     for (const w of units) w.fieldsOn = null;
     fieldStart(alive, t);
     fieldApply(t, put, putW, webs, paints, dScan, dRange);
@@ -1252,7 +1287,7 @@ export function createBattle(sides, opt) {
       const P = u.pilot;
       if (!P || P.cmd !== 'warp' || !P.wp || !u.alive || u.warp) continue;
       const pt = warpPoint(u, P.wp), V = u.t.vel * u.velMult, sp = len(u.vel);
-      if (pt && sp >= V * 0.75 && sp > 0 && dot(scale(u.vel, 1 / sp), norm(sub(pt, u.pos))) >= ALIGN_COS) warpStart(u);
+      if (pt && !(u.cloak && !u.cloakWarp) && sp >= V * 0.75 && sp > 0 && dot(scale(u.vel, 1 / sp), norm(sub(pt, u.pos))) >= ALIGN_COS) warpStart(u);
     }
     // 对准完成、没被扰断的离场
     for (const u of alive) {
@@ -1278,6 +1313,7 @@ export function createBattle(sides, opt) {
       u.t.guns.forEach((g, k) => {
         const st = u.guns[k];
         if (t < st.next || st.reloadUntil > t || !on(u, g)) return;
+        if (empty(u, st, g)) { u.pilot.on.delete(g.m); return; }
         // 目标远在射程外：不开火（等距离合适）
         if (d > g.reach * (g.turret && !g.vorton ? 1.6 : 1)) { st.next = t; T.outRange += DT / u.t.guns.length; return; }
         if (capOn && g.capNeed > 0) {
@@ -1335,7 +1371,7 @@ export function createBattle(sides, opt) {
           missiles.push(m);
           if (rec) { m.rec = { f: u.i, to: v.i, t0: t, t1: null, hit: false, k }; rec.missiles.push(m.rec); }
         }
-        if (g.ammo < Infinity && --st.ammo <= 0) { st.ammo = g.ammo; st.reloadUntil = st.next = t + g.reload; }
+        if (g.ammo < Infinity && --st.ammo <= 0) outOfAmmo(u, st, g, t);
       });
     }
     // 武器运转：一个周期内开过火、没在装填
@@ -1383,6 +1419,7 @@ export function createBattle(sides, opt) {
           if (st.reloadUntil > t) { u.rld |= 1 << (x.m ?? 31); return; }
           if (u.ratio < 0.5 && !x.charged) return;
           if (u.pilot && !u.pilot.on.has(x.m)) { if (st.pend) { u.hp[x.layer] = Math.min(u.t.max[x.layer], u.hp[x.layer] + st.pend); st.pend = 0; } return; }
+          if (empty(u, st, x)) { u.pilot.on.delete(x.m); return; }
           bit(u, x.m);
           if (t < st.next) return;
           if (st.pend) { u.hp[x.layer] = Math.min(u.t.max[x.layer], u.hp[x.layer] + st.pend); st.pend = 0; }
@@ -1391,7 +1428,7 @@ export function createBattle(sides, opt) {
           fired(u, x.m);
           if (x.layer === 0) u.hp[0] = Math.min(u.t.max[0], u.hp[0] + amt);
           else st.pend = amt;
-          if (x.ammo < Infinity && --st.ammo <= 0) { st.ammo = x.ammo; st.reloadUntil = st.next = t + x.reload; }
+          if (x.ammo < Infinity && --st.ammo <= 0) outOfAmmo(u, st, x, t);
         });
       } else for (let l = 0; l < 3; l++) if (u.t.local[l] && u.hp[l] < u.t.max[l]) u.hp[l] = Math.min(u.t.max[l], u.hp[l] + u.t.local[l] * u.ratio * DT);
       const C = u.t.regenC, tau = u.t.regenTau;
@@ -1416,6 +1453,24 @@ export function createBattle(sides, opt) {
           if (amt > 0) { a.hp[rep.layer] += amt; u.r.repaired += amt; shots.push(u.i, a.i, 2, -1); }
         });
         if (u.jam > t) { u.rl?.clear(); continue; }
+        // 玩家驾驶：和客户端一样手动——锁定队友、选中（当前目标）、开遥修；每个周期开始时修当前目标
+        if (u.pilot) {
+          const P = u.pilot, a = P.active;
+          u.t.remote.forEach((rep, j) => {
+            const st = u.rrep[j];
+            if (st.tgt) { bit(u, rep.m); return; }
+            if (!P.on.has(rep.m) || !a?.alive || a === u || a.side !== u.side || P.locks.get(a) !== 0) return;
+            if (rangeEff(rep, surf(u, a)) < 0.05) return;
+            st.tgt = a;
+            st.end = t + rep.cycle;
+            pend.set(a, (pend.get(a) || 0) + rep.amt);
+            u.repTarget = a;
+            fired(u, rep.m);
+            bit(u, rep.m);
+          });
+          if (u.repTarget && !u.rrep.some((st) => st.tgt === u.repTarget)) u.repTarget = u.rrep.find((st) => st.tgt)?.tgt || null;
+          continue;
+        }
         const layer = u.t.remote[0].layer;
         const reach = Math.max(...u.t.remote.map((x) => x.range + x.falloff));
         const R = Math.min(reach, u.t.lockRange * u.rangeMult);
@@ -1456,7 +1511,8 @@ export function createBattle(sides, opt) {
     B.t = t + DT;
     const pending = support.some((s) => !s.fired && s.at != null) || jumps.length > 0;
     const left = { A: units.some((u) => u.alive && u.side === 'A' && !u.isDrone), B: units.some((u) => u.alive && u.side === 'B' && !u.isDrone) };
-    if (((!left.A || !left.B) && !pending) || B.t >= opt.max) B.done = true;
+    // B.hold（驾驶模拟的练习）：一方打光了也不结束，由练习自己判定结束
+    if (((!left.A || !left.B) && !pending && !B.hold) || B.t >= opt.max) B.done = true;
     record();
   };
 

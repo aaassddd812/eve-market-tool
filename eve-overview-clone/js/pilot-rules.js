@@ -11,8 +11,8 @@ export const surf = (u, v) => Math.max(0, Math.hypot(v.pos[0] - u.pos[0], v.pos[
 const AU = 149597870700;
 export const fmtDist = (m) => (m < 10000 ? `${Math.round(m).toLocaleString('en-US')} m` : m < 0.1 * AU ? `${Math.round(m / 1000).toLocaleString('en-US')} km` : `${(m / AU).toFixed(1)} AU`);
 // 指向性装备（要对着目标开的电子战），开之前 / 每个周期要查距离
-const TARGETED = ['points', 'webs', 'paints', 'damps', 'ecms', 'neuts', 'noses', 'tds', 'gds', 'rcaps', 'rsbs', 'rtcs', 'fields'];
-const TOGGLE = ['webs', 'points', 'paints', 'damps', 'ecms', 'neuts', 'noses', 'localReps', 'remote', 'injectors', 'smarts', 'bursts', 'tds', 'gds', 'rcaps', 'rsbs', 'rtcs', 'mjds', 'bubbles', 'fields'];
+const TARGETED = ['remote', 'points', 'webs', 'paints', 'damps', 'ecms', 'neuts', 'noses', 'tds', 'gds', 'rcaps', 'rsbs', 'rtcs', 'fields'];
+const TOGGLE = ['webs', 'points', 'paints', 'damps', 'ecms', 'neuts', 'noses', 'localReps', 'remote', 'injectors', 'smarts', 'bursts', 'tds', 'gds', 'rcaps', 'rsbs', 'rtcs', 'mjds', 'bubbles', 'fields', 'dictors'];
 
 export function makeRules(S, H) {
   const log = (text, kind = '') => H.log?.(text, kind);
@@ -32,17 +32,28 @@ export function makeRules(S, H) {
     // 自己身上的主动装备（推进器、抗性、感应增强器、跟踪电脑、损控等）：和游戏一样默认关着，玩家点了才开；开关时整船属性换成对应组合
     S.auto = (S.on.rack || []).map((_, k) => k).filter((k) => k === S.prop || (S.on.alwaysOn & (1 << k)));
     // 立体炸弹、ECM 脉冲、跃迁扰断力场、微跳：不用目标，目标没了也不停
-    S.selfMods = new Set([...S.auto, ...['smarts', 'bursts', 'bubbles', 'mjds'].flatMap((k) => (S.on[k] || []).map((x) => x.m))]);
+    S.selfMods = new Set([...S.auto, ...['smarts', 'bursts', 'bubbles', 'mjds', 'dictors'].flatMap((k) => (S.on[k] || []).map((x) => x.m))]);
+    // 自动循环（客户端 GetRepeatCount）：能循环的装备默认开，玩家可以在右键菜单里关；disallowRepeatingActivation 的只跑一轮
+    // 自动装填（客户端 autoreload，默认开）：关了的弹药打空就停在 0 发
+    S.repeatOff = new Set();
+    S.noReload = new Set();
     S.ovCache = new Map();
     S.charges = {};
     S.bexp = new Map();   // 指挥脉冲波：每个周期开头把加成刷新到「这一轮开始 + buffDuration」，停了以后加成留到时间到为止
     S.calc = mine.row.calc;
-    return S.variant(S.auto);
+    // 舰船模式：modes = [防御 / 主, 狙击 / 次级, 高速 / 三级] 的类型，mode = 当前模式，modeCd = 切换冷却（秒），modeAt = 上次切换的战斗时间
+    S.modes = mine.modes || [];
+    S.mode = mine.mode || 0;
+    S.modeCd = mine.modeCd || 10;
+    S.modeAt = -Infinity;
+    return S.variant(S.auto, {}, S.mode);
   }
   // 第二步（S.b 建好后）：接管第 i 个单位；grp = 存下来的编组
   function bind(i, maxLocks, grp) {
     S.me = S.b.takeControl(i, maxLocks);
     S.modOn = new Map();
+    S.cloakRun = new Map();
+    S.me.pilot.noReload = S.noReload;
     // 指向性装备（要对着目标开的电子战），开之前 / 每个周期要查距离
     S.me.pilot.targeted = new Set(TARGETED.flatMap((k) => (S.me.t[k] || []).map((x) => x.m)));
     S.lastAct = null;
@@ -94,15 +105,15 @@ export function makeRules(S, H) {
   // 主动装备开关：换成对应的属性（速度、信号半径、抗性、锁定、电容消耗…）；停用后这一轮跑完才失效
   function beforeStep() {
     const u = S.me;
-    if (!u?.alive || (!S.auto?.length && !Object.keys(S.charges || {}).length)) return;
+    if (!u?.alive || (!S.auto?.length && !Object.keys(S.charges || {}).length && !S.modes?.length)) return;
     const P = u.pilot, t = S.b.t;
     const isOn = (i) => P.on.has(i) || (S.rk?.deact.get(i)?.end > t) || S.bexp?.get(i) > t;
     const off = S.auto.filter((i) => !isOn(i));
-    let x = S.variant(off, S.charges || {});
+    let x = S.variant(off, S.charges || {}, S.mode);
     // 推进器超载：速度加成那一段按 overloadSpeedFactorBonus 放大
     if (S.prop >= 0 && isOn(S.prop) && S.rk?.ovl.has(S.prop)) {
-      const k = off.join(',');
-      if (!S.ovCache.has(k)) { const base = S.variant([...off, S.prop], S.charges || {}), b = S.rk.heat[S.prop].spd; S.ovCache.set(k, { ...x, vel: base.vel + (x.vel - base.vel) * (1 + b) }); }
+      const k = off.join(',') + '|' + S.mode;
+      if (!S.ovCache.has(k)) { const base = S.variant([...off, S.prop], S.charges || {}, S.mode), b = S.rk.heat[S.prop].spd; S.ovCache.set(k, { ...x, vel: base.vel + (x.vel - base.vel) * (1 + b) }); }
       x = S.ovCache.get(k);
     }
     u.t = x;
@@ -135,9 +146,25 @@ export function makeRules(S, H) {
     if (!u?.alive) return false;
     if (u.warp) return false;
     const r = S.b.warpTo(u, tgt, dist);
-    if (r === true) return true;
+    if (r === true) { propStopForWarp(); return true; }
     log({ near: '你所处的距离不适合跃迁', scram: '有外部因素禁止你的跃迁引擎执行该指令。', cloak: '隐形时无法跃迁。', gone: '你的跃迁引擎无法定位目标' }[r] || '你的跃迁引擎无法定位目标', 'bad');
     return false;
+  }
+  // 下了跃迁指令：推进器 / 微跳跑完这一轮就停（不能中途停）；停下后最大速度掉回去，速度够 75% 立刻起跳（假隐跳就靠这个）
+  function propStopForWarp() {
+    const u = S.me, P = u.pilot, rk = S.rk, t = now();
+    if (!rk) return;
+    const stop = new Set([...(u.t.mjds || []).map((y) => y.m), ...(S.prop >= 0 ? members(S.prop) : [])]);
+    let off = false;
+    for (const m of [...P.on]) {
+      if (!stop.has(m)) continue;
+      const cyc = cycleOf(m), t0 = cycStart(m, t);
+      if (cyc > 0 && t0 != null && t - t0 < cyc) rk.deact.set(m, { t0, cyc, end: t0 + cyc });
+      P.on.delete(m);
+      S.cloakRun?.delete(m);
+      off = true;
+    }
+    if (off) log('某些已激活的装备会干扰跃迁流程，因此在跃迁进行前这些装备被自动关闭。', 'bad');
   }
   function afterStep() {
     const u = S.me;
@@ -158,6 +185,7 @@ export function makeRules(S, H) {
       }
     }
     rackStep();
+    if (u.alive) { cloakRunStep(); onceStep(); }
     // 指挥脉冲波：开着的每轮开头刷新加成到期时间
     const bt = S.b.t;
     if (u.alive) for (const i of Pm.on) {
@@ -224,7 +252,8 @@ export function makeRules(S, H) {
       for (const x of grp) {
         const cyc = cycleOf(x);
         const t0 = cycStart(x, t);
-        if (cyc > 0 && t0 != null && t - t0 < cyc) rk.deact.set(x, { t0, cyc, end: t0 + cyc });
+        // 隐形装置关掉是立刻生效的（不等这一轮）
+        if (cyc > 0 && t0 != null && t - t0 < cyc && !(u.t.cloaks || []).some((y) => y.m === x)) rk.deact.set(x, { t0, cyc, end: t0 + cyc });
         P.on.delete(x);
       }
       return;
@@ -254,7 +283,7 @@ export function makeRules(S, H) {
       // 官方提示原文（#260089 / #260090）：被别人锁定、自己锁着目标都不能隐形
       if (S.b.units.some((v) => v.alive && v !== u && ((v.target === u && v.lock <= 0) || v.pilot?.locks?.get(u) === 0))) { log('当你被别人锁定时，无法将飞船隐形。', 'bad'); return false; }
       if (P.locks.size) { log('当你有锁定的目标时，无法将飞船隐形。', 'bad'); return false; }
-    } else if (u.cloak) for (const y of u.t.cloaks || []) P.on.delete(y.m);
+    } else if (u.cloak && !cloakGrace(m)) for (const y of u.t.cloaks || []) P.on.delete(y.m);
     const g = u.t.guns.find((y) => y.m === m);
     const need = g ? g.capNeed : (u.t.localReps || []).some((y) => y.m === m && y.charged) ? 0 : x.cap || 0;
     if (need > 0 && u.cap < need) { log(`${typeName(x.type)}需要${need.toFixed(1)}单位电荷。电容器只有${Math.max(0, u.cap).toFixed(1)}单位。`, 'bad'); return false; }
@@ -264,14 +293,44 @@ export function makeRules(S, H) {
     }
     return true;
   }
+  // 隐形时的非攻击性装备（推进器、抗性、本地维修等，不含微跳）：开隐形前已经在跑的跑完这一轮；
+  // 开隐形后 5 秒内还能开，同样只跑一轮（EVE University「Cloaking」：Non-offensive modules can be activated during the first 5 seconds of cloaking）
+  const CLOAK_GRACE = 5;
+  const quiet = (m) => !(S.me.t.cloaks || []).some((y) => y.m === m) && !(S.me.t.mjds || []).some((y) => y.m === m)
+    && (m === S.prop || S.auto.includes(m) || [...(S.me.t.localReps || []), ...(S.me.t.injectors || [])].some((y) => y.m === m));
+  const cloakGrace = (m) => quiet(m) && S.me.cloak && S.b.t - (S.me.cloakT0 ?? -1e9) <= CLOAK_GRACE;
   function activate(m) {
     if (!canActivate(m)) return;
-    const P = S.me.pilot;
+    const u = S.me, P = u.pilot, t = now();
+    const cl = (u.t.cloaks || []).some((y) => y.m === m);
+    if (cl) {
+      // 开隐形：正在跑的非攻击性装备留下，跑完这一轮
+      P.cloakKeep = new Set();
+      for (const i of P.on) {
+        if (!quiet(i)) continue;
+        const cyc = cycleOf(i), t0 = cycStart(i, t);
+        if (!(cyc > 0) || t0 == null) continue;
+        P.cloakKeep.add(i);
+        S.cloakRun.set(i, t0 + cyc);
+      }
+    }
+    // 隐形装置已经按下、引擎还没结算到（同一帧里接着开推进器）：算作隐形后马上开
+    const pend = !cl && !u.cloak && (u.t.cloaks || []).some((y) => P.on.has(y.m));
     for (const x of members(m)) {
       if (S.rk.burnt.has(x)) continue;
       P.on.add(x);
-      S.modOn.set(x, now());
+      S.modOn.set(x, t);
+      if (cl) continue;
+      if (pend && quiet(x)) (P.cloakKeep ||= new Set()).add(x);
+      if ((pend && quiet(x)) || (u.cloak && cloakGrace(x))) S.cloakRun.set(x, t + (cycleOf(x) || 0));
     }
+  }
+  // 隐形中：留下的装备这一轮跑完就停（不再进下一轮）；解除隐形后照常循环
+  function cloakRunStep() {
+    const u = S.me, P = u.pilot;
+    if (!S.cloakRun?.size) return;
+    if (!u.cloak) { S.cloakRun.clear(); P.cloakKeep = null; return; }
+    for (const [i, end] of S.cloakRun) if (S.b.t >= end - 1e-6) { P.on.delete(i); S.cloakRun.delete(i); }
   }
   const cycleOf = (i) => {
     const u = S.me, g = u.t.guns.find((x) => x.m === i);
@@ -325,19 +384,70 @@ export function makeRules(S, H) {
     log(`正在为${typeName(S.on.rack[m].type)}装填${typeName(type)}`, 'sys');
     reloadMods(members(m), true);
   }
+  // ---------- 舰船模式 ----------
+  // k = 第几个模式（0 防御 / 主、1 狙击 / 次级、2 高速 / 三级）；切换后 modeCd 秒内不能再切（客户端 stanceSwitchTime）
+  const modeLeft = () => Math.max(0, S.modeAt + S.modeCd - S.b.t);
+  function setMode(k) {
+    const id = S.modes?.[k];
+    if (!S.me?.alive || !id || id === S.mode || modeLeft() > 0) return false;
+    S.mode = id;
+    S.modeAt = S.b.t;
+    S.ovCache.clear();
+    beforeStep();
+    changed('mode');
+    return true;
+  }
+  // 装填：武器、电容注电器、辅助维修、拦截泡发射器；装填时装备停下，装填完不会自己接着循环（要再开一次）
+  function ammoState(x) {
+    const u = S.me;
+    for (const [list, sts] of [[u.t.guns, u.guns], [u.t.injectors || [], u.inj], [(u.t.localReps || []).filter((y) => y.charged), null], [u.t.dictors || [], u.dict]]) {
+      const k = list.findIndex((y) => y.m === x);
+      if (k < 0) continue;
+      const st = sts ? sts[k] : u.lrep[(u.t.localReps || []).indexOf(list[k])];
+      return st ? { x: list[k], st } : null;
+    }
+    return null;
+  }
   function reloadMods(list, quiet = false) {
-    const u = S.me, t = S.b.t;
+    const u = S.me, P = u.pilot, t = S.b.t;
     let n = 0;
-    for (const x of list) {
-      const k = u.t.guns.findIndex((g) => g.m === x);
-      if (k < 0 || !u.guns[k]) continue;
-      const g = u.t.guns[k], st = u.guns[k];
-      if (!Number.isFinite(g.ammo) && !quiet) continue;
-      st.ammo = g.ammo;
-      st.reloadUntil = st.next = t + (g.reload || 10);
+    for (const m of list) {
+      const a = ammoState(m);
+      if (!a) continue;
+      if (!Number.isFinite(a.x.ammo) && !quiet) continue;
+      a.st.ammo = a.x.ammo;
+      a.st.reloadUntil = a.st.next = t + (a.x.reload || 10);
+      P.on.delete(m);
+      S.rk?.wait.delete(m);
       n++;
     }
     if (n && !quiet) log('重新装填', 'sys');
+  }
+  // 右键菜单：启用 / 停止自动循环、自动装填（整组一起改）
+  const canRepeat = (m) => (S.on.rack[m]?.cycle || 0) > 0 && !S.on.rack[m]?.norep && !(S.on.cloaks || []).some((y) => y.m === m) && !(S.on.mjds || []).some((y) => y.m === m);
+  function setRepeat(m, on) { for (const x of members(m)) { if (on) S.repeatOff.delete(x); else S.repeatOff.add(x); } }
+  function setAutoReload(m, on) { for (const x of members(m)) { if (on) S.noReload.delete(x); else S.noReload.add(x); } }
+  // 不自动循环的装备（disallowRepeatingActivation 或玩家关了自动循环）：这一轮跑完就停
+  function onceStep() {
+    const u = S.me, P = u.pilot, t = S.b.t;
+    for (const m of [...P.on]) {
+      const r = S.on.rack[m];
+      if (!r || !(r.norep || S.repeatOff.has(m)) || (S.on.mjds || []).some((y) => y.m === m) || (S.on.cloaks || []).some((y) => y.m === m)) continue;
+      const gk = u.t.guns.findIndex((g) => g.m === m);
+      let t0, cyc;
+      if (gk >= 0) {
+        // 武器：开了以后打出第一发，这一轮从那一发算
+        const st = u.guns[gk], on0 = S.modOn.get(m) ?? t;
+        if (st.last < on0 - 1e-6) continue;
+        t0 = st.last; cyc = u.t.guns[gk].cycle;
+      } else {
+        t0 = S.modOn.get(m);
+        cyc = cycleOf(m);
+        if (t0 == null || !(cyc > 0)) continue;
+      }
+      if (S.rk && t < t0 + cyc) S.rk.deact.set(m, { t0, cyc, end: t0 + cyc });
+      P.on.delete(m);
+    }
   }
   // ---------- 锁定、飞行、无人机 ----------
   function lock(v) {
@@ -386,7 +496,7 @@ export function makeRules(S, H) {
   return {
     prep, bind, rackInit, syncGroupState, setGroups, masterOf, members, canOverload, isGun, sameKind,
     beforeStep, afterStep, rackStep, toggleModule, canActivate, activate, cycleOf, cycStart, toggleable,
-    toggleOverload, setRackOverload, toggleRackOverload, setAmmo, reloadMods, lock, unlock, cmd, setSpeed, setDrones, changed, warpTo,
+    toggleOverload, setRackOverload, toggleRackOverload, setAmmo, setMode, modeLeft, reloadMods, setRepeat, setAutoReload, canRepeat, ammoState, lock, unlock, cmd, setSpeed, setDrones, changed, warpTo,
     setRand: (f) => { rand = f || Math.random; },
   };
 }
@@ -436,6 +546,8 @@ export function cleanOp(a, nUnits, nRack, nCel = 0) {
     case 'reload': return Array.isArray(a.list) && a.list.length <= nRack && a.list.every((x) => idx(x, nRack)) ? { a: 'reload', list: [...new Set(a.list)] } : null;
     case 'speed': return fin(a.f) ? { a: 'speed', f: Math.max(0, Math.min(1, a.f)) } : null;
     case 'drones': return { a: 'drones', on: Boolean(a.on) };
+    case 'mode': return idx(a.k, 3) ? { a: 'mode', k: a.k } : null;
+    case 'repeat': case 'autoreload': return idx(a.m, nRack) ? { a: a.a, m: a.m, on: Boolean(a.on) } : null;
     case 'warp': {
       if ((a.u == null) === (a.c == null)) return null;
       if (a.u != null && !idx(a.u, nUnits)) return null;
@@ -469,6 +581,9 @@ export function applyOp(R, S, a) {
     case 'reload': return R.reloadMods(a.list);
     case 'speed': return R.setSpeed(a.f);
     case 'drones': return R.setDrones(a.on);
+    case 'mode': return R.setMode(a.k);
+    case 'repeat': return R.setRepeat(a.m, a.on);
+    case 'autoreload': return R.setAutoReload(a.m, a.on);
     case 'warp': return R.warpTo(a.c != null ? { cel: a.c } : U(a.u), a.dist);
     case 'rov': return a.on == null ? R.toggleRackOverload(a.r) : R.setRackOverload(a.r, a.on);
     case 'groups': return R.setGroups(a.list);
@@ -484,11 +599,14 @@ export function applyOp(R, S, a) {
   }
 }
 // 每个玩家装备栏里服务器说了算的部分（过热掷骰的结果）：客户端每步之后覆盖
-export const rackSnap = (S) => (S.rk ? { b: [...S.rk.burnt], h: S.rk.h.slice(), d: [...S.rk.dmg] } : null);
+export const rackSnap = (S) => (S.rk ? { b: [...S.rk.burnt], h: S.rk.h.slice(), d: [...S.rk.dmg], ...(S.modes?.length ? { m: S.mode, ma: Number.isFinite(S.modeAt) ? S.modeAt : null } : {}) } : null);
 export function applyRackSnap(S, x) {
   if (!S.rk || !x) return;
   const P = S.me.pilot;
   for (const i of x.b) if (!S.rk.burnt.has(i)) { S.rk.burnt.add(i); S.rk.ovl.delete(i); P.on.delete(i); }
   S.rk.h = x.h.slice();
   S.rk.dmg = new Map(x.d);
+  // 舰船模式（当前模式、上次切换时间）
+  if (x.m && S.modes?.includes(x.m) && x.m !== S.mode) { S.mode = x.m; S.ovCache?.clear(); }
+  if (x.m) S.modeAt = x.ma ?? -Infinity;
 }

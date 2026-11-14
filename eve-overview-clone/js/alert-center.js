@@ -10,7 +10,7 @@
 
 import * as AM from './alert-mail.js?v=v8';
 import * as AP from './alert-push.js?v=v13';
-import { skText } from './skeleton.js?v=v17';
+import { skText } from './skeleton.js?v=v18';
 
 let deps = null;   // { loadKill, loadIntel, loadLocal, loadOv, loadSos, esc, showToast, host（服务器托管用，见 alert-host.js）}
 let modal = null;

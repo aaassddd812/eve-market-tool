@@ -499,6 +499,7 @@ export function createView(host, hooks = {}, opt = {}) {
       env = pm.fromCubemap(reflS).texture;
       reflS.dispose();
       tunnel?.setEnv(refl);
+      bubbleEnv = refl;
       pm.dispose();
       envI = sc.reflectionIntensity ?? 1;
       for (const set of [models, tModels, dModels]) for (const m of set.values()) for (const mt of m.def?.materials || []) { mt.envMap = env; mt.envMapIntensity = envI; mt.needsUpdate = true; }
@@ -1266,6 +1267,110 @@ export function createView(host, hooks = {}, opt = {}) {
   const flash = new THREE.Points(flashGeo, bstMat);
   flash.frustumCulled = false;
   scene.add(flash);
+  // 拦截泡（引擎事件 kind 'bubble'：位置、半径、持续时间）
+  // 照客户端特效 fisfx/generic/warp_disruption/warp_disruption_probe.black（拦截泡探针 22778 的 graphicID 3018）重写：
+  //   球体（客户端 sphere4k.gr2，这里用 three 的球）+ 着色器 warpdisruptionbubble.fx（按 dx11 反汇编逐条翻译）
+  //   材质参数：Color (0.998, 1.428, 2.839, 1.67)、BrightnessParams (随机 24–42, 86, 0.333, 0)、Fresnel (反射, 18, 边缘, 粗糙 0.1)、
+  //            LayerParams 用着色器默认 (100, 100, 0.3, 50)，MaskMap = lightningwcaustics_01a
+  //   曲线 play_start：Bubble_Scaler 0 → 0.3 s 500 → 2 s 5500 → 3.5 s 6450 → 7 s 6500（÷ 6500 = 展开比例）；
+  //            EdgeFadeIn → Fresnel.z（× 0.42）、ReflectionFadeIn → Fresnel.x（× 1.334）；
+  //            LayerOffsets = (随机 0–0.5 + TextureScaler) × (−1.0005, 0.84225, 0.6855)；800 秒转一圈；柏林噪声轻微抖动
+  //   特效按 20 km 半径做的，客户端按实际半径缩放；球网格半径 = 20000 / 2047500（最终缩放）
+  // 没做的：粒子闪光（Particle_Flare 刚展开时的一下）、Bubble_Color 颜色曲线（不确定怎么套，用材质里存的固定颜色）
+  const BUB_R0 = 20000 / 2047500;
+  const crv = (k, t) => { if (t <= k[0][0]) return k[0][1]; for (let i = 1; i < k.length; i++) if (t <= k[i][0]) { const [t0, v0] = k[i - 1], [t1, v1] = k[i], u = (t - t0) / (t1 - t0), h = u * u * (3 - 2 * u); return v0 + (v1 - v0) * h; } return k[k.length - 1][1]; };
+  const BUB_SCALE = [[0, 0], [0.3, 500], [2, 5500], [3.5, 6450], [7, 6500]];
+  const BUB_EDGE = [[0, 0], [1.567, 0.487], [7, 1]], BUB_REFL = [[0, 0], [0.857, 0.501], [2.578, 1]], BUB_TEX = [[0, 0.1], [3.229, 0.946], [7, 1]];
+  const bubTex = new THREE.TextureLoader().load(`${fxDir}cfx/tex/lightningwcaustics_01a.png?v=1`);
+  bubTex.wrapS = bubTex.wrapT = THREE.RepeatWrapping;
+  bubTex.colorSpace = THREE.NoColorSpace;
+  const bubbleMat = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.NormalBlending,
+    uniforms: {
+      MaskMap: { value: bubTex }, Env: { value: null }, hasEnv: { value: 0 }, envI: { value: 1 },
+      LayerOffsets: { value: new THREE.Vector4() }, LayerParams: { value: new THREE.Vector4(100, 100, 0.3, 50) },
+      BrightnessParams: { value: new THREE.Vector4(30, 86, 0.333, 0) }, Color: { value: new THREE.Vector4(0.998, 1.428, 2.839, 1.67) },
+      Fresnel: { value: new THREE.Vector4(0, 18, 0, 0.1) }, sunDir: { value: new THREE.Vector3(0, -1, 0) }, sunCol: { value: new THREE.Color(1, 1, 1) },
+      r0: { value: BUB_R0 }, fade: { value: 1 },
+    },
+    vertexShader: `uniform float r0; varying vec3 vL; varying vec3 vNo; varying vec3 vNw; varying vec3 vW; varying float vD;
+      void main() {
+        vL = position * r0; vNo = normal;
+        vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vNw = normalize(mat3(modelMatrix) * normal);
+        vec4 mv = viewMatrix * w; vD = -mv.z * 1000.0;   // 场景单位是 km，着色器里的距离按米
+        gl_Position = projectionMatrix * mv;
+      }`,
+    // 逐条对应反汇编：三平面采样（每个平面两层 R、A 相乘再开方，按局部法线平方加权）、G 通道噪声、近处淡出、
+    // 菲涅尔（x 反射、y 光照、z 边缘）、环境反射、太阳高光（背面直接加 1 = 透光）、× (1 − 边缘) × Color 截到 0–1、线性 → sRGB
+    fragmentShader: `uniform sampler2D MaskMap; uniform samplerCube Env; uniform float hasEnv, envI, fade;
+      uniform vec4 LayerOffsets, LayerParams, BrightnessParams, Color, Fresnel; uniform vec3 sunDir, sunCol;
+      varying vec3 vL; varying vec3 vNo; varying vec3 vNw; varying vec3 vW; varying float vD;
+      vec2 ra(vec2 uv) { vec4 t = texture2D(MaskMap, uv); return t.ra; }
+      float s2l(float c) { return c < 0.04045 ? c * 0.0773994 : pow((c + 0.055) * 0.947867, 2.4); }
+      vec3 l2s(vec3 c) { return mix(pow(c, vec3(0.416667)) * 1.055 - 0.055, c * 12.92, vec3(lessThan(c, vec3(0.0031308)))); }
+      void main() {
+        float f = LayerParams.x; vec4 LO = LayerOffsets;
+        vec2 xy = sqrt(ra(vL.xy * f + LO.yx) * ra(vL.xy * f + LO.zx));
+        vec2 yz = sqrt(ra(vL.yz * f + LO.xy) * ra(vL.yz * f + LO.yz));
+        vec2 xz = sqrt(ra(vL.xz * f + LO.yx) * ra(vL.xz * f + LO.zy));
+        float fs = gl_FrontFacing ? -1.0 : 1.0;
+        vec3 n = normalize(vNo) * fs, w = n * n;
+        vec2 m = xy * w.z + yz * w.x + xz * w.y;
+        float b = BrightnessParams.x;
+        float nz = texture2D(MaskMap, vL.xz * b + 0.12).g * w.y + texture2D(MaskMap, vL.yz * b + 0.3).g * w.x + texture2D(MaskMap, vL.xy * b + 0.7).g * w.z;
+        float a = s2l(m.y), c = nz * m.x * (gl_FrontFacing ? 1.0 : BrightnessParams.z);
+        float near = pow(clamp(vD / LayerParams.y, 0.0, 1.0), LayerParams.z);
+        float caus = mix(a, c, near) * BrightnessParams.y;
+        float cA = clamp(vD / LayerParams.w, 0.0, 1.0) * caus;
+        vec3 N = normalize(vNw) * fs, V = normalize(vW - cameraPosition);
+        float d = dot(V, N);
+        vec3 fr = pow(vec3(clamp(1.0 - d, 0.0, 1.0)), Fresnel.xyz);
+        vec3 R = -(V - 2.0 * d * N);
+        vec3 env = hasEnv > 0.5 ? textureCube(Env, vec3(-R.x, R.y, R.z)).rgb : vec3(0.015, 0.02, 0.03);
+        env = pow(env, vec3(2.2)) * envI;
+        vec3 col = env * fr.x + cA;
+        vec3 L = normalize(sunDir);
+        float nl = clamp(dot(L, N), 0.0, 1.0);
+        vec3 H = normalize(L + V);
+        float p = exp2((1.0 - Fresnel.w) * 10.0 + 1.0);
+        float spec = gl_FrontFacing ? pow(clamp(dot(N, H), 0.0, 1.0), p) * (p + 1.0) * 0.5 : 0.0;
+        float lt = ((gl_FrontFacing ? 0.0 : 1.0) + spec) * fr.y * nl;
+        vec4 o = vec4(col + lt * sunCol, cA) * (1.0 - fr.z);
+        o = clamp(o * Color, 0.0, 1.0);
+        gl_FragColor = vec4(l2s(max(o.rgb, 0.0)), o.a * fade);
+      }`,
+  });
+  let bubbleEnv = null;   // 场景反射立方体（天空换了就更新）
+  const bubbleGeo = new THREE.SphereGeometry(1, 96, 48), bubbles = [];
+  const bubRand = (e, k) => { const x = Math.sin((e.t * 97.13 + (e.pos?.[0] || 0) * 0.0131 + k * 13.7)) * 43758.5453; return x - Math.floor(x); };
+  const perlin1 = (x) => { const i = Math.floor(x), f = x - i, g = (n) => { const s = Math.sin(n * 127.1) * 43758.5453; return (s - Math.floor(s)) * 2 - 1; }; const u = f * f * (3 - 2 * f); return (g(i) * f) * (1 - u) + (g(i + 1) * (f - 1)) * u; };
+  function drawBubbles(t) {
+    let c = 0;
+    for (const e of rec.events || []) {
+      if (e.kind !== 'bubble' || !e.pos) continue;
+      const age = t - e.t;
+      if (age < 0 || age > e.life || c >= 8) continue;
+      const m = bubbles[c] || (bubbles[c] = Object.assign(new THREE.Mesh(bubbleGeo, bubbleMat.clone()), { frustumCulled: false, renderOrder: 5 }));
+      if (!m.parent) scene.add(m);
+      m.visible = true;
+      m.position.set((e.pos[0] - ORG[0]) * KM, (e.pos[1] - ORG[1]) * KM, (e.pos[2] - ORG[2]) * KM);
+      // 展开：Bubble_Scaler 曲线；抖动：柏林噪声（offset 1、scale 0.1、speed 0.1，每个轴不同相位）；800 秒绕 Y 转一圈
+      const g = crv(BUB_SCALE, age) / 6500, R = Math.max(0.001, e.r * KM * g) / (BUB_R0 * 2047500 / 20000);
+      m.scale.set(R * (1 + 0.1 * perlin1(age * 0.1 + 1.3)), R * (1 + 0.1 * perlin1(age * 0.1 + 7.1)), R * (1 + 0.1 * perlin1(age * 0.1 + 3.7)));
+      m.rotation.y = (age / 800) * Math.PI * 2;
+      const u = m.material.uniforms;
+      const lo = bubRand(e, 1) * 0.5 + crv(BUB_TEX, age);
+      u.LayerOffsets.value.set(lo * -1.0005, lo * 0.84225, lo * 0.6855, 0);
+      u.BrightnessParams.value.x = 24 + bubRand(e, 2) * 18;
+      u.Fresnel.value.set(crv(BUB_REFL, age) * 1.334, 18, crv(BUB_EDGE, age) * 0.42, 0.1);
+      u.Env.value = bubbleEnv; u.hasEnv.value = bubbleEnv ? 1 : 0; u.envI.value = envI;
+      u.sunDir.value.copy(sun.position).normalize().negate();   // 光照方向：从太阳照过来
+      u.sunCol.value.copy(sun.color);
+      u.fade.value = Math.min(1, (e.life - age) / 1);   // 最后 1 秒淡出（客户端回收时直接删掉）
+      c++;
+    }
+    for (let k = c; k < bubbles.length; k++) bubbles[k].visible = false;
+  }
   // 开火特效；P 是给特效模块的查询接口
   const fx = createFx(scene, renderer, { tex: opt.fx });
   const atV = [];
@@ -2033,6 +2138,7 @@ export function createView(host, hooks = {}, opt = {}) {
     }
     fx.update(t, P, opt.kills);
     drawTac();
+    drawBubbles(t);
     // 诱导进场闪光：进场后 4 秒内先亮后暗
     {
       const fp = flashGeo.attributes.position.array, fc = flashGeo.attributes.color.array, fs = flashGeo.attributes.size.array;
@@ -2286,8 +2392,19 @@ export function createView(host, hooks = {}, opt = {}) {
       const l = vA.length();
       if (l > 15000) vA.multiplyScalar(15000 / l);   // 远处（天体）：只要方向
       vA.add(camera.position).project(camera); if (vA.z > 1) return null; return [(vA.x + 1) / 2 * host.clientWidth, (1 - vA.y) / 2 * host.clientHeight]; },
+    // 同上，但在镜头后面 / 画面外时也给一个方向：镜头后面的点把方向翻过来推到画面外（练习的高亮圈贴边用）
+    projectEdge(p) {
+      vA.set((p[0] - ORG[0]) * KM, (p[1] - ORG[1]) * KM, (p[2] - ORG[2]) * KM).sub(camera.position);
+      const l = vA.length();
+      if (l > 15000) vA.multiplyScalar(15000 / l);
+      vA.add(camera.position).project(camera);
+      let x = vA.x, y = vA.y;
+      if (vA.z > 1) { const m = Math.max(Math.abs(x), Math.abs(y)) || 1; x = -x / m * 2; y = -y / m * 2; }
+      return [(x + 1) / 2 * host.clientWidth, (1 - y) / 2 * host.clientHeight]; },
     // 第 i 艘船这一帧画在哪（米）
     drawnPos(i) { const p = drawn[i]; return p ? [p.x / KM + ORG[0], p.y / KM + ORG[1], p.z / KM + ORG[2]] : null; },
+    // 镜头相对注视点：dir = 单位方向，d = 距离（千米）（练习：看玩家有没有转动、缩放镜头）
+    camInfo() { const v = vA.copy(camera.position).sub(controls.target), d = v.length() || 1; return { d, dir: [v.x / d, v.y / d, v.z / d] }; },
     // 镜头离跟随的船的距离（千米）
     zoomTo(km) { const d = vA.copy(camera.position).sub(controls.target); camera.position.copy(controls.target).addScaledVector(d.normalize(), km); },
     following: () => follow,

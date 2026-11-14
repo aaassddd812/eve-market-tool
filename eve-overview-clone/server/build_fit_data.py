@@ -23,6 +23,7 @@ import sys
 import zipfile
 
 CATEGORIES = {6, 7, 8, 16, 18, 20, 32, 87}    # 舰船、装备、弹药、技能、无人机、植入体、子系统、铁骑舰载机
+SHIP_MODES = 1306                             # 舰船模式（防御 / 狙击 / 高速）
 FUNCS = {'ItemModifier': 0, 'LocationModifier': 1, 'LocationGroupModifier': 2,
          'LocationRequiredSkillModifier': 3, 'OwnerRequiredSkillModifier': 4}
 DOMAINS = {'itemID': 0, 'shipID': 1, 'charID': 2, 'otherID': 3, 'structureID': 4, 'targetID': 5, 'target': 5}
@@ -60,7 +61,8 @@ def main(src, dst):
     for t in read(z, 'types.jsonl'):
         all_types[t['_key']] = t
         g = groups.get(t['groupID'])
-        if t.get('published') and g and g['categoryID'] in CATEGORIES and g.get('published', True):
+        # 战术驱逐舰等的舰船模式（分组 1306 舰船模式切换器）在 SDE 里是未发布的，但驾驶模拟 / 装配要用它的加成，照样收录
+        if (t.get('published') or t['groupID'] == SHIP_MODES) and g and g['categoryID'] in CATEGORIES and g.get('published', True):
             types[t['_key']] = t
     CHARACTER = 1373                                  # 角色本身（同时锁定数、导弹伤害倍数等基础属性）
     dogma = {d['_key']: d for d in read(z, 'typeDogma.jsonl') if d['_key'] in types or d['_key'] == CHARACTER}

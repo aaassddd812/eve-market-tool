@@ -18,7 +18,7 @@
 //   /corporations/{id}/structures/skyhooks[/{id}]：天钩所在行星、是否在产出、试剂库存
 //   /sovereignty/systems：各星系主权联盟与军事 / 工业 / 战略等级（国服没有，用旧的 /sovereignty/map/ 只取联盟）
 import { SERVER, IS_TQ } from './server.js?v=s4';
-import { skPage } from './skeleton.js?v=v17';
+import { skPage } from './skeleton.js?v=v18';
 
 let ctx;   // esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem, getEsiToken, hasEsiToken, tokenInfo, hasScopeGroup, scopeNeededHtml, getHubPrices, closeDrawer
 const $ = (id) => document.getElementById(id);

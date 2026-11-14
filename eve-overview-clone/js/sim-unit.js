@@ -28,6 +28,7 @@ const HULL_FX = { shieldBoosting: 'sb', fueledShieldBoosting: 'sb', armorRepair:
   emergencyHullEnergizer: 'hi', cloaking: 'ck', cloakingWarpSafe: 'ck', cloakingPrototype: 'ck' };
 const CLOAK_EFFECTS = ['cloaking', 'cloakingWarpSafe', 'cloakingPrototype'];
 // 脉冲波投射器的效果名 → 种类
+const DICTOR_LAUNCHER = 589;   // 拦截泡发射器组
 const AOE_FIELD = { doomsdayAOEWeb: 'web', doomsdayAOENeut: 'neut', doomsdayAOEPaint: 'paint', doomsdayAOETrack: 'track', doomsdayAOEGuide: 'guide', doomsdayAOEDamp: 'damp', doomsdayAOEBubble: 'bubble', doomsdayAOEECM: 'ecm' };
 const hullFx = (t) => { for (const n of effName(t)) if (HULL_FX[n]) return HULL_FX[n]; return ''; };
 // 隐形特效变体（effects.json：effects.CloakingCovertOps → graphicID 21015 cloaking_pentagon，effects.CloakingPrototype → 21030 cloaking_triangle，
@@ -81,13 +82,15 @@ function unitTemplate(row) {
   const res = ['shield', 'armor', 'hull'].map((k) => FE.RESIST[k].map((a) => ship.attr(a)));
   const remote = [], webs = [], paints = [], neuts = [], noses = [], damps = [], ecms = [], points = [], localReps = [], injectors = [];
   // 其余主动装备：立体炸弹 smarts、ECM 脉冲 bursts、跟踪 / 制导扰断 tds / gds、远程电容传输 rcaps、远程感应增强 rsbs、远程跟踪 rtcs、微型跃迁引擎 mjds、跃迁扰断力场 bubbles
-  const smarts = [], bursts = [], tds = [], gds = [], rcaps = [], rsbs = [], rtcs = [], mjds = [], bubbles = [], cloaks = [], fields = [];
+  const smarts = [], bursts = [], tds = [], gds = [], rcaps = [], rsbs = [], rtcs = [], mjds = [], bubbles = [], cloaks = [], fields = [], dictors = [];
   // 装备栏（状态面板用）：高、中、低槽；m 为在装备栏里的序号，引擎按序号记录每件装备是否在运转
   const rack = [];
   const idx = new Map();
   for (const s of SLOT_ORDER) for (const m of calc.modules.filter((x) => x.slot === s).sort((a, b) => a.index - b.index)) {
     idx.set(m, rack.length);
     rack.push({ type: m.type.id, key: `${s}:${m.index}`, hfx: hullFx(m.type), ...(hullFx(m.type) === 'ck' ? { ckv: cloakGfx(m.type) } : {}), slot: s, state: m.state, charge: m.charge?.type.id || 0, off: forcedOff(row.fit.slots[s]?.[m.index]) || '', cycle: (m.attr(FE.AT.duration) || m.attr(FE.AT.speed)) / 1000 || 0, reload: (m.attr(1795) || 0) / 1000,
+      // disallowRepeatingActivation（1014）：客户端不让这类装备自动循环（拦截泡发射器、微跳、扫描器、炸弹发射器等），开一次只跑一轮
+      norep: m.attr(1014) === 1 ? 1 : 0,
       // 每个周期开头扣的电容（capacitorNeed）、最远作用距离（maxRange）、失准范围（falloffEffectiveness）—— 玩家开装备时检查用
       cap: Math.max(0, m.attr(FE.AT.capNeed) || 0), rng: m.attr(FE.AT.maxRange) || 0, fall: m.attr(2044) || 0, heat: { abs: m.attr(1180) || 0, dmg: m.attr(1211) || 0, hp: m.attr(9) || 40, spd: (m.attr(1223) || 0) / 100 },
       // 指挥脉冲波：给的加成（warfareBuffNID / Value）、加成持续时间（buffDuration）、弹药组（决定 buff 栏哪一格）
@@ -115,6 +118,13 @@ function unitTemplate(row) {
     const range = m.attr(FE.AT.maxRange), falloff = m.attr(2044) || 0;
     const k = idx.get(m);
     const mark = () => used.add(m);
+    // 拦截泡发射器（拦截舰，launcherGroup 589）：每次发射一枚跃迁干扰探针，在发射时自己的位置展开一个泡，
+    // 半径 = 探针的 warpScrambleRange（103），存在 explosionDelay（281）；泡里的船（包括自己）都跃迁不了。弹药数 = 容量 / 探针体积，打完装填 reloadTime
+    if (m.type.group === DICTOR_LAUNCHER) {
+      if (m.charge) dictors.push({ m: k, range: m.charge.attr(103) || 20000, life: (m.charge.attr(281) || 120000) / 1000, cycle: dur || 5, ammo: loads(m) || 1, reload: (m.attr(1795) || 60000) / 1000 });
+      mark();
+      continue;
+    }
     // 跃迁扰断 / 扰频（拦截泡不算）：强度累加，超过对方跃迁稳定就走不掉
     if (m.attr(105) > 0 && range > 0 && !names.includes('warpDisruptSphere')) { points.push({ str: m.attr(105), range, cycle: dur, m: k }); mark(); }
     // 跃迁扰断力场装了聚焦脚本：不再是泡泡，变成要锁定的单目标扰断（射程按脚本改过的 maxRange，脚本自带 24 km），强度视为无穷、不关微型跃迁推进器
@@ -173,7 +183,7 @@ function unitTemplate(row) {
     else if (names.includes('warpDisruptSphere')) { bubbles.push({ range: m.attr(103) || 0, str: m.attr(105) || 100, cycle: dur, m: k }); mark(); }
   }
   // 每门武器（空间模拟逐发计算）；fx 给 3D 视图画开火特效：伤害按弹药四种伤害的比例分配到这一发的总伤害
-  const guns = stats.weapons.map((w) => {
+  const guns = stats.weapons.filter((w) => w.module.type.group !== DICTOR_LAUNCHER).map((w) => {
     const m = w.module, c = m.charge, turret = Boolean(m.type.turret);
     used.add(m);
     // 末日武器：每个循环（5 分钟左右）打一发，命中即满伤害
@@ -247,7 +257,7 @@ function unitTemplate(row) {
     lockRange: stats.targeting.range, sensor: stats.targeting.sensor, sensorIdx: Math.max(0, SENSOR_TYPES.indexOf(stats.targeting.sensorType)),
     local: [d.reps.shield, d.reps.armor, d.reps.hull], localReps, regenC: d.shield.hp, regenTau: d.shield.hp && stats.defense.passiveRegen ? 2.5 * d.shield.hp / stats.defense.passiveRegen : 0,
     cap: { max: cap.capacity, tau: cap.recharge, use: Math.max(0, cap.usage), other: Math.max(0, cap.usage - gunCap), otherNoInj: Math.max(0, cap.usage - gunCap + injectors.reduce((t, x) => t + x.bonus * x.ammo / (x.cycle * x.ammo + x.reload), 0)) },
-    injectors, remote, webs, paints, neuts, noses, damps, ecms, smarts, bursts, tds, gds, rcaps, rsbs, rtcs, mjds, bubbles, cloaks, fields, ehp: d.ehp, rack, alwaysOn
+    injectors, remote, webs, paints, neuts, noses, damps, ecms, smarts, bursts, tds, gds, rcaps, rsbs, rtcs, mjds, bubbles, cloaks, fields, dictors, ehp: d.ehp, rack, alwaysOn
   };
 }
 
@@ -309,20 +319,26 @@ export function pilotUnit(fit0, { skills = 'max', heat = false, bursts = [], sel
   const { FE, data } = ctx;
   const fit = { ...fit0, slots: Object.fromEntries(Object.entries(fit0.slots || {}).map(([k, l]) => [k, (l || []).map((m) => (m && m.state === 'online' && data.types.get(m.type)?.activatable ? { ...m, state: 'active' } : m))])) };
   const keep = O;
-  const run = (o) => { O = { ...base, cloakOk: self, ...o }; try { return buildUnit(fit, { skills, heat, bursts }); } finally { O = keep; } };
+  // 舰船模式（战术驱逐舰等）：没指定就用第一个（防御 / 主模式）；variant 的第三个参数可以换模式
+  const modes = data.modes?.get(fit0.ship) || [];
+  const mode0 = FE.modeOf(data, fit0);
+  const run = (o, mode = mode0) => { O = { ...base, cloakOk: self, ...o }; try { return buildUnit(mode ? { ...fit, mode } : fit, { skills, heat, bursts }); } finally { O = keep; } };
   const off = run({ prop: false }).unit;
   const on = run({ prop: true });
   const rack = on.unit?.rack || [], cache = new Map();
   const prop = rack.findIndex((m) => { const t = data.types.get(m.type); return t?.attrs.has(FE.AT.speedBoostFactor) && t.attrs.has(FE.AT.massAddition); });
-  const variant = (list, charges = {}) => {
+  const variant = (list, charges = {}, mode = mode0) => {
     const keys = [...new Set(list)].filter((i) => rack[i]).sort((a, b) => a - b);
     const ch = Object.entries(charges).filter(([i, c]) => rack[i] && c && c !== rack[i].charge).sort((a, b) => a[0] - b[0]);
-    const k = keys.join(',') + '|' + ch.map(([i, c]) => `${i}=${c}`).join(',');
-    if (!keys.length && !ch.length) return on.unit;
-    if (!cache.has(k)) cache.set(k, run({ prop: true, offKeys: new Set(keys.map((i) => rack[i].key)), chargeOv: new Map(ch.map(([i, c]) => [rack[i].key, Number(c)])) }).unit || on.unit);
+    const md = modes.includes(mode) ? mode : mode0;
+    const k = keys.join(',') + '|' + ch.map(([i, c]) => `${i}=${c}`).join(',') + '|' + md;
+    if (!keys.length && !ch.length && md === mode0) return on.unit;
+    if (!cache.has(k)) cache.set(k, run({ prop: true, offKeys: new Set(keys.map((i) => rack[i].key)), chargeOv: new Map(ch.map(([i, c]) => [rack[i].key, Number(c)])) }, md).unit || on.unit);
     return cache.get(k);
   };
   const mwd = prop >= 0 && (data.types.get(rack[prop].type)?.attrs.get(FE.AT.signatureRadiusBonus) || 0) > 0;
-  return { ...on, fit, off, prop, variant, mwd };
+  // modes = 这条船的模式 [防御 / 主, 狙击 / 次级, 高速 / 三级]，mode = 开局模式，modeCd = 切换冷却（秒，舰船属性 1985 stanceSwitchTime）
+  const modeCd = (on.calc?.ship.attr(1985) || 10000) / 1000;
+  return { ...on, fit, off, prop, variant, mwd, modes, mode: mode0, modeCd };
 }
 export { forcedOff, unitTemplate, applyBursts, BURSTS, BURST_MULT, mean, REACTIVATION_DELAY };

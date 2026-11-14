@@ -8,7 +8,7 @@
 // 自填成本（本机，按角色）：自己造的、很早以前买的东西没有买入记录，可以给物品填每件成本，
 //   填了就按「卖出量 × (卖出均价 − 成本)」算这个物品的利润（替代配对）。
 // 每日现金流：成交明细按本地日期汇总每天卖出额、买入额，减去当天实缴税费得净现金流。
-import { skCards, skToolbar, skRows } from './skeleton.js?v=v17';
+import { skCards, skToolbar, skRows } from './skeleton.js?v=v18';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
            // resolveStructureNames, locationName, gameImage, valuationCard, tokenInfo, hasScope, selectItem, isActive

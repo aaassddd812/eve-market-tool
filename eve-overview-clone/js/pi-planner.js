@@ -8,7 +8,7 @@
 import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, canSaveToGame, saveToGame, SPACING } from './pi-editor.js?v=v24';
 import { angle } from './pi-globe.js?v=v19r12';
 import { SERVER, HUB } from './server.js?v=s4';
-import { skPage, skRows } from './skeleton.js?v=v17';
+import { skPage, skRows } from './skeleton.js?v=v18';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, store, getHubPrices(ids) -> Map(id -> {sell, buy}), getMarketPriceMap
 const $ = (id) => document.getElementById(id);

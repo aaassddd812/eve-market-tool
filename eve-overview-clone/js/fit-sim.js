@@ -10,9 +10,9 @@
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失；
 // 「AT 赛」（sim-at.js）可选这一届联盟锦标赛已打过的比赛，双方选手各一行带进来（蓝队 A 方、红队 B 方），战场上像比赛直播一样显示两队名单与血条。
 import { commonFit } from './fit-kb.js?v=v30';
-import { createBattle, simulate } from './sim-engine.js?v=v31';
+import { createBattle, simulate } from './sim-engine.js?v=v35';
 import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
-import { bindUnit, buildUnit, pilotUnit, forcedOff, BURSTS, BURST_MULT, mean } from './sim-unit.js?v=v5';
+import { bindUnit, buildUnit, pilotUnit, forcedOff, BURSTS, BURST_MULT, mean } from './sim-unit.js?v=v8';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
 const $ = (id) => document.getElementById(id);
@@ -538,7 +538,7 @@ function mountView(host) {
   host.classList.remove('is-off');
   host.closest('.sim-stage')?.classList.remove('is-off');
   loadBar(0, 0);
-  import('./sim-3d.js?v=v73').then((m) => {
+  import('./sim-3d.js?v=v78').then((m) => {
     if (BT.host !== host || !host.isConnected) return;
     BT.view = m.createView(host, {
       onPick: (i) => { BT.sel = i; updateBattleUi(); },
@@ -2535,6 +2535,6 @@ export async function pilotRow(ship, fit = null, label = '', prep = null, o = {}
   Object.assign(row, { fit: r.fit, calc: r.calc, stats: r.stats, unit: r.unit });
   // 微型跃迁推进器：被扰频时要关掉；电脑船换成 off 的属性（sim-engine）
   if (r.mwd) row.unitOff = r.off;
-  return { row, off: r.off, prop: r.prop, variant: r.variant, mwd: r.mwd };
+  return { row, off: r.off, prop: r.prop, variant: r.variant, mwd: r.mwd, modes: r.modes, mode: r.mode, modeCd: r.modeCd };
 }
 export { shipSearch as pilotShipSearch };

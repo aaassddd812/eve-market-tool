@@ -9,7 +9,7 @@
 // 列表：「全部」按分类分区显示（每类最新几条 +「查看全部」），也可以切到单个分类或「我的」；发帖是单独一页，先选分类再填表。
 // 地址栏：#plaza · #plaza/<类型> · #plaza/new[/<类型>] · #plaza/new/market/<合同ID>/<角色ID>（合同页「挂到广场」）· #plaza/recruit/corp/<军团ID> · #plaza/p/<帖子ID>
 import { SERVER } from './server.js?v=s4';
-import { skPage } from './skeleton.js?v=v17';
+import { skPage } from './skeleton.js?v=v18';
 
 let ctx = null;   // esc, formatISK, formatNumber, showToast, copyText, store, accounts, accountToken, openEsiBind, game, resolveTypeNames, valuation, openTicket, currentFit, openFit, gotoFit
 const $ = (id) => document.getElementById(id);

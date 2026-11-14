@@ -3,7 +3,7 @@
 // 一次请求即返回完整击杀邮件（受害者、攻击者、物品）及 zKill 估值（zkb）。
 // 按 zKillboard 的使用约定：请求串行、间隔发送，结果缓存 5 分钟。
 import { SERVER, IS_TQ, HUB, NO_KB_MESSAGE, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
-import { skCards, skRows, skEntityHead, skTitle } from './skeleton.js?v=v17';
+import { skCards, skRows, skEntityHead, skTitle } from './skeleton.js?v=v18';
 import { fullIn } from './eve-time.js?v=v1';
 import * as ST from './standings.js?v=v6';
 

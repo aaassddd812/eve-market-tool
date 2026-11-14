@@ -7,7 +7,7 @@
 //   归零后自动重新读取并就地更新（至少间隔 60 秒，避免 ESI 缓存未及时更新时反复请求）。
 import { esiUrl, SERVER } from './server.js?v=s4';
 import * as ST from './standings.js?v=v6';
-import { skPage } from './skeleton.js?v=v17';
+import { skPage } from './skeleton.js?v=v18';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 
 let ctx;   // esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem

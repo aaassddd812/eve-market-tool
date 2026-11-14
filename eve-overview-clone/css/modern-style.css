@@ -7247,6 +7247,11 @@ td .sov-auto-tag { margin-left: 4px; }
   .ip-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 .fit-cloud-row { flex-wrap: wrap; }
+.fit-modes button { display: inline-flex; align-items: center; gap: 6px; }
+.fit-mode-ic { width: 18px; height: 18px; flex: none; background: currentColor; -webkit-mask: var(--ic) center / contain no-repeat; mask: var(--ic) center / contain no-repeat; }
+.fit-mode-ic.is-defense { --ic: url("../assets/eveui/hud/stance_icon_defense.png?v=1"); }
+.fit-mode-ic.is-sharpshooter { --ic: url("../assets/eveui/hud/stance_icon_sharpshooter.png?v=1"); }
+.fit-mode-ic.is-propulsion { --ic: url("../assets/eveui/hud/stance_icon_propulsion.png?v=1"); }
 .fit-cloud-skills { display: flex; flex-wrap: wrap; gap: 4px; flex-basis: 100%; order: 1; padding-left: 36px; }
 .fit-cloud-skills span { padding: 2px 7px; border-radius: 6px; font-size: 0.6875rem; color: var(--text-muted); background: var(--bg-tertiary); }
 .fit-cloud-skills i { font-style: normal; }
@@ -9310,7 +9315,7 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-setup .pl-win.pl-big { width: min(1180px, 100%); font-size: 1rem; }
 .pl-big .pl-win-head { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; padding: 18px 28px; }
 .pl-big .pl-win-head h3 { margin: 0; font-size: 1.4rem; }
-.pl-tabs button, .pl-ptabs button { height: 34px; padding: 0 18px; font-size: 0.95rem; }
+.pl-tabs button, .pl-ptabs button, .pl-tut-lv button { height: 34px; padding: 0 18px; font-size: 0.95rem; }
 .pl-big .pl-setup-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px 36px; padding: 26px 28px; align-items: start; }
 .pl-big .pl-span { grid-column: 1 / -1; }
 .pl-big .pl-field > label, .pl-big #plMatch > label { display: block; margin: 0 0 10px; font-size: 0.85rem; letter-spacing: 0.06em; color: #8fa0b0; }
@@ -9680,6 +9685,110 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-end-win { width: min(480px, calc(100% - 32px)); padding: 22px; text-align: center; }
 .pl-end-win h3 { margin: 0 0 10px; color: #f2f5f8; }
 .pl-end-win p { color: #9aa7b4; font-size: 0.86rem; }
+/* 练习（pilot-tutor.js）：设置页沿用战场模拟的 sim-opts / sim-scene / sim-start；飞行中的提示框、指引箭头 */
+.pl-tut-page { display: grid; gap: 14px; padding: 26px 28px 8px; }
+.pl-tut-page .sim-opt-label { width: 72px; }
+.pl-tut-page .sim-scene { min-width: 110px; }
+.pl-tut-lv { justify-self: start; }
+.pl-tut-page .sim-scene b span:first-child { color: var(--text-muted); font-weight: 400; }
+.pl-tut-page .sim-scene.active b span:first-child { color: inherit; }
+.pl-tut-steps0 { margin: 0; padding-left: 1.4em; font-size: 0.8125rem; line-height: 1.7; color: var(--text-primary); }
+.pl-tut-meta { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: var(--text-muted); }
+.pl-tut-star { font-style: normal; color: var(--warning); letter-spacing: 0.08em; }
+.pl-end-win p.pl-tut-star { color: var(--warning); font-size: 1.1rem; }
+.pl-end-win p.pl-tut-star span { font-size: 0.8rem; letter-spacing: 0; }
+@media (max-width: 900px) { .pl-tut-page { padding: 18px 16px 4px; } .pl-tut-page .sim-opt-label { width: 100%; } }
+/* 练习的任务面板：照客户端 InfoPanelOperations（透明底；顶行 28 高，左边 56 宽放图标，标题 16px；当前目标前面 32 像素的目标图标；保持进度条 28 高） */
+.pl-ip { position: absolute; left: 52px; top: 96px; z-index: 45; width: 312px; max-width: calc(100% - 64px); pointer-events: none;
+  color: rgba(255, 255, 255, 0.75); font-size: 12px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8); animation: pl-ip-in 0.3s ease-out; }
+@keyframes pl-ip-in { from { opacity: 0; translate: 5px 0; } }
+.pl-ip-top { display: flex; align-items: center; height: 28px; }
+.pl-ip-ic { display: flex; justify-content: flex-end; align-items: center; width: 56px; flex: none; }
+.pl-ip-ic img { width: 18px; height: 18px; margin-right: 5px; opacity: 0.9; }
+.pl-ip-h { flex: 1; min-width: 0; font-size: 16px; font-weight: 400; line-height: 28px; color: rgba(255, 255, 255, 0.9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-ip-x { pointer-events: auto; display: flex; align-items: center; justify-content: center; width: 22px; height: 22px; margin-right: 0; padding: 0; border: 0; background: none; cursor: pointer; opacity: 0.6; transition: opacity 0.15s; }
+.pl-ip-x:hover { opacity: 1; }
+.pl-ip-x img { width: 12px; height: 12px; }
+.pl-ip-main { padding: 4px 0 10px 56px; }
+.pl-ip-op { display: flex; gap: 4px; align-items: baseline; font-size: 14px; color: rgba(255, 255, 255, 0.9); }
+.pl-ip-op em { margin-left: auto; font-style: normal; font-size: 12px; color: rgba(255, 255, 255, 0.5); font-variant-numeric: tabular-nums; }
+.pl-ip-obj { display: flex; gap: 0; align-items: flex-start; margin-top: 6px; animation: pl-ip-in 0.3s ease-out; }
+.pl-ip-oi { display: flex; align-items: center; justify-content: center; flex: none; width: 32px; height: 32px; margin-left: -36px; margin-right: 4px; }
+.pl-ip-oi img { width: 24px; height: 24px; opacity: 0.6; }
+.pl-ip-ot { padding-top: 8px; line-height: 16px; color: rgba(255, 255, 255, 0.9); }
+.pl-ip-bar { position: relative; height: 28px; margin-top: 6px; overflow: hidden; background: rgba(0, 0, 0, 0.35); }
+.pl-ip-bar i { position: absolute; left: -2px; top: 0; bottom: 0; width: 0; opacity: 0.5; background: #58a7bf;
+  -webkit-mask-box-image: url("../assets/eveui/classes/infopanels/progress_bar_solid.png") 0 10 0 2 stretch; transition: width 0.2s linear; }
+.pl-ip-bar > span { position: relative; display: block; padding: 6px 12px 6px 6px; line-height: 16px; color: rgba(255, 255, 255, 0.9); font-variant-numeric: tabular-nums; }
+/* 完成 / 失败：面板里显示成绩和按钮（按钮用「模拟控制」窗口同款 .pl-btn） */
+.pl-ip-obj.ok .pl-ip-oi img { opacity: 0.9; }
+.pl-ip-obj.fail .pl-ip-ot { color: #ff8b6b; }
+.pl-ip-p { margin: 6px 0 0; line-height: 16px; font-variant-numeric: tabular-nums; }
+.pl-ip-p .pl-tut-star { color: var(--warning, #f0b429); }
+.pl-ip-note { color: rgba(255, 255, 255, 0.5); }
+.pl-ip-btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; pointer-events: auto; }
+.pl-ip-meta { display: flex; flex-wrap: wrap; gap: 2px 10px; margin-top: 6px; color: rgba(255, 255, 255, 0.5); font-variant-numeric: tabular-nums; }
+
+/* 指引框：照客户端 UiPointer（uihighlighting）。框 = highlightBox 边框（角 2）+ 背景模糊，外面一圈 auraWindowGlow 光晕（角 32、外扩 16、叠加），
+   顶边中间一道 sideDecoration 亮条，出现时上下展开 0.1 秒、白光闪两下、文字淡入，之后 buttonDown 光扫过（3 秒一次）；
+   箭头 = HighlightArrow_Loop 视频（24×32，染成 172,213,241，叠加）+ 箭头光晕（36×28，0,86,141，亮度 1.5 ↔ 0.5 呼吸）。
+   data-dir：r = 框在元素左边、箭头在右边指向右；l 相反；u = 框在元素下方、箭头朝上；d = 框在元素上方、箭头朝下；n = 没有箭头 */
+.pl-uip { position: absolute; z-index: 46; pointer-events: none; transition: opacity 0.5s; font-size: 12px; }
+.pl-uip.is-hover, .pl-sop.is-hover { opacity: 0.5; }
+.pl-uip-tr { position: relative; animation: pl-uip-open 0.1s linear; }
+@keyframes pl-uip-open { from { transform: scaleY(0); } }
+.pl-uip[data-dir="r"] .pl-uip-tr { padding-right: 24px; }
+.pl-uip[data-dir="l"] .pl-uip-tr { padding-left: 24px; }
+.pl-uip[data-dir="u"] .pl-uip-tr { padding-top: 24px; }
+.pl-uip[data-dir="d"] .pl-uip-tr { padding-bottom: 24px; }
+.pl-uip-bg { position: absolute; inset: 0; }
+.pl-uip[data-dir="r"] .pl-uip-bg { right: 24px; }
+.pl-uip[data-dir="l"] .pl-uip-bg { left: 24px; }
+.pl-uip[data-dir="u"] .pl-uip-bg { top: 24px; }
+.pl-uip[data-dir="d"] .pl-uip-bg { bottom: 24px; }
+.pl-uip-aura { position: absolute; inset: -16px; border-image: url("../assets/eveui/classes/conversationui/aurawindowglow.png") 32 fill / 32px stretch; mix-blend-mode: plus-lighter; }
+.pl-uip-frame { position: absolute; inset: 0; border-image: url("../assets/eveui/classes/highlighttool/highlightbox.png") 2 fill / 2px stretch; -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+.pl-uip-in { position: relative; min-height: 36px; box-sizing: border-box; }
+.pl-uip-side, .pl-uip-sideg { position: absolute; left: 50%; transform: rotate(90deg); mix-blend-mode: plus-lighter;
+  -webkit-mask: var(--m) center / 100% 100% no-repeat; mask: var(--m) center / 100% 100% no-repeat; }
+.pl-uip-side { --m: url("../assets/eveui/classes/conversationui/sidedecoration.png"); top: -15.5px; width: 3px; height: 36px; margin-left: -1.5px; background: rgb(172, 213, 241); }
+.pl-uip-sideg { --m: url("../assets/eveui/classes/conversationui/sidedecorationglow.png"); top: -15.5px; width: 23px; height: 56px; margin-left: -11.5px; background: rgb(0, 86, 141); }
+.pl-uip-blink { position: absolute; inset: 0; background: #fff; opacity: 0; mix-blend-mode: plus-lighter; animation: pl-uip-blink 0.1s linear 2; }
+@keyframes pl-uip-blink { from { opacity: 0.75; } to { opacity: 0; } }
+.pl-uip-swoop { position: absolute; inset: 0; opacity: 0.5; mix-blend-mode: plus-lighter; background: linear-gradient(151deg, transparent 40%, rgba(255, 255, 255, 0.55) 50%, transparent 60%) 120% 0 / 300% 100% no-repeat;
+  -webkit-mask: url("../assets/eveui/classes/neocom/buttondown.png") center / 100% 100%; mask: url("../assets/eveui/classes/neocom/buttondown.png") center / 100% 100%; animation: pl-uip-swoop 3s linear 1.4s infinite; }
+@keyframes pl-uip-swoop { from { background-position: 120% 0; } 40%, to { background-position: -20% 0; } }
+.pl-uip-c { position: relative; display: flex; align-items: flex-start; padding: 10px; animation: pl-uip-fade 0.3s 0.1s both; }
+@keyframes pl-uip-fade { from { opacity: 0; } }
+.pl-uip-icon { flex: none; width: 48px; height: 48px; margin-right: 8px; }
+.pl-uip-txt { text-align: center; }
+.pl-uip-txt b { display: block; font-size: 14px; font-weight: 400; line-height: 18px; color: rgb(191, 214, 239); }
+.pl-uip-txt hr { height: 1px; margin: 4px 0; border: 0; background: rgb(128, 177, 222); opacity: 0.3; }
+.pl-uip-txt p { position: relative; top: 4px; margin: 0 0 0 2px; width: calc(100% - 4px); line-height: 15px; color: rgba(255, 255, 255, 0.75); }
+.pl-uip-arrow { position: absolute; width: 24px; height: 32px; object-fit: fill; filter: url(#plUipTint); mix-blend-mode: plus-lighter; }
+.pl-uip-glow { position: absolute; background: rgb(0, 86, 141); mix-blend-mode: plus-lighter; animation: pl-uip-glow 1.5s ease-in-out infinite;
+  -webkit-mask: url("../assets/eveui/classes/highlighttool/highlightboxarrowglow.png") center / 100% 100%; mask: url("../assets/eveui/classes/highlighttool/highlightboxarrowglow.png") center / 100% 100%; }
+@keyframes pl-uip-glow { 50% { opacity: 0.33; } }
+.pl-uip[data-dir="r"] .pl-uip-arrow { right: 0; top: calc(50% - 15px); }
+.pl-uip[data-dir="l"] .pl-uip-arrow { left: 0; top: calc(50% - 15px); transform: rotate(180deg); }
+.pl-uip[data-dir="u"] .pl-uip-arrow { left: calc(50% - 12px); top: -4px; transform: rotate(-90deg); }
+.pl-uip[data-dir="d"] .pl-uip-arrow { left: calc(50% - 12px); bottom: -4px; transform: rotate(90deg); }
+.pl-uip[data-dir="r"] .pl-uip-glow { right: 8px; top: calc(50% - 17px); width: 28px; height: 36px; }
+.pl-uip[data-dir="l"] .pl-uip-glow { left: 8px; top: calc(50% - 17px); width: 28px; height: 36px; transform: rotate(180deg); }
+.pl-uip[data-dir="u"] .pl-uip-glow { left: calc(50% - 18px); top: 12px; width: 36px; height: 28px; transform: rotate(-90deg); }
+.pl-uip[data-dir="d"] .pl-uip-glow { left: calc(50% - 18px); bottom: 12px; width: 36px; height: 28px; transform: rotate(90deg); }
+/* 太空中的船：高亮圈（HighlightRing 片头 → 循环视频 100×100 + 光晕，叠加）、飘着的说明框、细线（0.8 像素，172,213,241） */
+.pl-sop { position: absolute; inset: 0; z-index: 46; pointer-events: none; transition: opacity 0.5s; }
+.pl-sop[hidden] { display: none; }
+.pl-sop-br { position: absolute; width: 0; height: 0; }
+.pl-sop-br video, .pl-sop-glow { position: absolute; left: -50px; top: -50px; width: 100px; height: 100px; }
+.pl-sop-loop { opacity: 0; }
+.pl-sop-intro[hidden] + .pl-sop-loop { opacity: 1; }
+.pl-sop-glow { background: url("../assets/eveui/classes/highlighttool/highlightringglow.png") center / 100% 100%; mix-blend-mode: plus-lighter; }
+.pl-sop-ln { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.pl-sop-ln line { stroke: rgb(172, 213, 241); stroke-width: 0.8; }
+.pl-sop-box { position: absolute; }
+
 @media (max-width: 900px) {
   .pl-hud { transform: scale(0.78); transform-origin: bottom center; }
 }
@@ -9715,7 +9824,26 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-hbtn.na { cursor: default; }
 .pl-hbtn .sw { animation: pl-radar 4s linear infinite; }
 @keyframes pl-radar { to { transform: rotate(360deg); } }
-@media (max-width: 900px) { .pl-hbtn.na, .pl-hbtn:not([data-pl-tac]) { display: none; } }
+@media (max-width: 900px) { .pl-hbtn.na, .pl-hbtn:not([data-pl-tac], .pl-stb) { display: none; } }
+/* 舰船模式按钮（StanceButtons）：圆心右边 66、竖直居中往下 1 的 40×120 一列；有模式时装备栏往右让 32 */
+.pl-hud.stance .pl-rack { left: 94px; }
+.pl-stance { position: absolute; left: 66px; bottom: 39px; width: 46px; height: 120px; z-index: 4; pointer-events: none; }
+.pl-stance:empty { display: none; }
+.pl-stb { background: none; overflow: visible; pointer-events: auto; }
+.pl-stb > u { grid-area: 1 / 1; width: 36px; height: 36px; pointer-events: none; background: url("../assets/eveui/classes/shipui/utilbtnbaseandshadow.png?v=1") center / 100% 100% no-repeat; }
+.pl-stb > img { transition: opacity 0.2s; }
+.pl-stb.cd > img { opacity: 0.5; }
+/* 冷却计时（ShipModuleReactivationTimer，在底座下面）：slotSolidBackground 黑底（按钮的 1.28 倍），18 段虚线圈（每段 16°、空 4°，从正下方顺时针），
+   半径 15、线宽 6、白 0.3，剩下的部分随冷却缩短，透明度 1 ↔ 0.6 来回 1.5 秒 */
+.pl-stb > s { display: none; grid-area: 1 / 1; width: 46px; height: 46px; pointer-events: none; place-items: center;
+  background: #000; -webkit-mask: url("../assets/eveui/classes/shipui/slotsolidbackground.png?v=1") center / 100% 100% no-repeat; mask: url("../assets/eveui/classes/shipui/slotsolidbackground.png?v=1") center / 100% 100% no-repeat; }
+.pl-stb.cd > s { display: grid; }
+.pl-stb > s::after { content: ""; width: 36px; height: 36px; animation: pl-stcd 1.5s ease-in-out infinite alternate;
+  background: repeating-conic-gradient(from 182deg, rgba(255, 255, 255, 0.3) 0 16deg, transparent 16deg 20deg);
+  -webkit-mask: radial-gradient(circle, transparent 11.5px, #000 12px 17.5px, transparent 18px), conic-gradient(from 180deg, #000 calc(var(--p, 0) * 360deg), transparent 0);
+  -webkit-mask-composite: source-in; mask: radial-gradient(circle, transparent 11.5px, #000 12px 17.5px, transparent 18px), conic-gradient(from 180deg, #000 calc(var(--p, 0) * 360deg), transparent 0);
+  mask-composite: intersect; }
+@keyframes pl-stcd { from { opacity: 1; } to { opacity: 0.6; } }
 /* 鼠标指针：游戏客户端的指针贴图（热点 16, 15；高分屏用 _x2）*/
 .pl-stage {
   --cur-default: url("../assets/eveui/cursor/cursor00.png?v=1") 16 15, default;
@@ -9771,6 +9899,11 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-um-e.off { opacity: 0.35; cursor: default; }
 .pl-um-e.off:hover { background: none; }
 .pl-cmenu { max-height: 70%; overflow-y: auto; }
+.pl-cmenu button > span { flex: 1; }
+.pl-cmenu button > i { font-style: normal; margin-left: 12px; opacity: 0.6; }
+.pl-cmenu button .ck { width: 16px; height: 16px; flex: none; }
+.pl-cmenu button.off { opacity: 0.35; cursor: default; }
+.pl-cmenu button.off:hover { background: none; }
 /* 屏幕通知框（客户端 QuickMessage）：300 宽居中，MenuUnderlay 底，新消息闪一下 */
 .pl-qmsg { position: absolute; left: 50%; z-index: 58; width: 300px; margin-left: -150px; padding: 8px; box-sizing: border-box; background: rgba(11, 10, 18, 0.85);
   -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); pointer-events: none; overflow: hidden; }
@@ -9885,3 +10018,194 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-ind-bar s { display: block; height: 100%; width: 0; background: rgba(255, 255, 255, 0.85); text-decoration: none; transition: width 0.25s linear; }
 .pl-ov tr.cel td { color: rgba(255, 255, 255, 0.8); }
 .pl-sel-top img.cel { width: 32px; height: 32px; margin: 8px; object-fit: contain; image-rendering: auto; }
+
+/* ---------- 驾驶模拟 · 舰队窗口 / 广播 / 关注列表（客户端 fleetwindow、FleetBroadcastCont、WatchListPanel） ---------- */
+.pl-fl-tabs button { color: rgba(255, 255, 255, 0.5); }
+.pl-fl-tabs button.on { color: #fff; box-shadow: inset 0 -1px 0 #58a7bf; }
+.pl-fl-main { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+/* 标题（FleetHeader）：上行「名称 (人数)」粗体小字、下行指挥官；有展开箭头；自己是指挥官 → 底色 (0, 0.5, 0, 0.1)；自己在这一级 → 箭头染绿 */
+.pl-fl-h { position: relative; display: flex; align-items: center; gap: 4px; min-height: 28px; padding: 2px 8px 2px 4px; color: rgba(255, 255, 255, 0.9); font-size: 12px; cursor: default; user-select: none; }
+.pl-fl-h .tx { flex: 1; min-width: 0; }
+.pl-fl-h .t1 { display: flex; align-items: center; gap: 4px; }
+.pl-fl-h .t1 b { font-size: 9px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; white-space: nowrap; }
+.pl-fl-h .t1 b.empty { color: rgba(255, 255, 255, 0.53); }
+.pl-fl-h .t1 input { width: 120px; height: 16px; padding: 0 4px; border: 0; background: rgba(255, 255, 255, 0.1); color: #fff; font-size: 11px; }
+.pl-fl-h .t2 { color: rgba(255, 255, 255, 0.47); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-fl-h .t2 .pl-fl-cmd { color: rgba(255, 255, 255, 0.9); cursor: pointer; }
+.pl-fl-h.mine { background: rgba(0, 128, 0, 0.1); }
+.pl-fl-h .ex { flex: none; width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid rgba(255, 255, 255, 0.6); transition: transform 0.15s; cursor: pointer; }
+.pl-fl-h.shut .ex { transform: rotate(-90deg); }
+.pl-fl-h.my .ex { border-top-color: rgba(0, 128, 0, 0.8); }
+.pl-fl-h:hover { background-color: rgba(255, 255, 255, 0.04); }
+.pl-fl-h.mine:hover { background-color: rgba(0, 128, 0, 0.14); }
+.pl-fl-h .auto, .pl-fl-none .auto { width: 16px; height: 16px; vertical-align: middle; margin-left: 4px; }
+.pl-fl-h.drop, .pl-fl-m.drop { background: rgba(255, 0, 0, 0.25); }
+.pl-fl-h .roles, .pl-fl-m .roles { flex: none; display: flex; gap: 4px; }
+.pl-fl-h .roles img, .pl-fl-m .roles img { width: 16px; height: 16px; }
+/* 队员（FleetMember）：只显示名字 + 职务图标；自己那行底色 (0, 0.5, 0, 0.15) */
+.pl-fl-m { display: flex; align-items: center; gap: 6px; height: 20px; padding-right: 8px; font-size: 12px; color: rgba(255, 255, 255, 0.9); cursor: pointer; user-select: none; }
+.pl-fl-m span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; }
+.pl-fl-m.me { background: rgba(0, 128, 0, 0.15); }
+.pl-fl-m.sel { background: rgba(255, 255, 255, 0.1); }
+.pl-fl-m:hover, .pl-fl-w:hover { background-color: rgba(255, 255, 255, 0.06); }
+.pl-fl-m.dead, .pl-fl-w.dead { opacity: 0.4; }
+.pl-fl-tabs { position: relative; }
+.pl-fl-myrole { margin-left: auto; display: flex; align-items: center; gap: 4px; padding-right: 4px; }
+.pl-fl-myrole img { width: 16px; height: 16px; }
+.pl-fl-form { padding: 8px; font-size: 12px; color: rgba(255, 255, 255, 0.8); line-height: 1.5; }
+.pl-fl-form h3 { margin: 0 0 4px; font-size: 16px; font-weight: 400; color: #fff; }
+.pl-fl-form p { margin: 0 0 8px; }
+.pl-fl-forms { display: flex; gap: 2px; padding: 8px 6px; }
+.pl-fl-forms button { width: 34px; height: 34px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 2px; background: rgba(255, 255, 255, 0.05); cursor: pointer; opacity: 0.7; }
+.pl-fl-forms button:hover { opacity: 1; background: rgba(255, 255, 255, 0.1); }
+.pl-fl-forms button.on { opacity: 1; background: rgba(88, 167, 191, 0.3); }
+.pl-fl-forms img { width: 26px; height: 26px; }
+.pl-fl-comp { height: calc(100% - 26px); overflow: auto; font-size: 12px; color: rgba(255, 255, 255, 0.85); }
+.pl-fl-comp .help { margin: 4px 6px; color: rgba(255, 255, 255, 0.5); }
+.pl-fl-comp .cnt { margin: 4px 6px; text-align: right; color: rgba(255, 255, 255, 0.5); }
+.pl-fl-comp table { width: 100%; border-collapse: collapse; }
+.pl-fl-comp th { position: sticky; top: 0; padding: 2px 6px; background: rgba(30, 30, 30, 0.95); color: rgba(255, 255, 255, 0.6); font-weight: 400; text-align: left; white-space: nowrap; }
+.pl-fl-comp td { padding: 1px 6px; white-space: nowrap; }
+.pl-fl-comp td.r { text-align: right; }
+.pl-fl-comp tbody tr:hover { background: rgba(255, 255, 255, 0.06); }
+.pl-cmenu .lbl { padding: 2px 4px; color: rgba(255, 255, 255, 0.45); font-size: 11px; white-space: nowrap; }
+.pl-wh [data-win-more] img { width: 16px; height: 16px; }
+.pl-fl-none { padding: 4px 8px; font-size: 13px; color: rgba(255, 255, 255, 0.5); }
+.pl-fl-hh { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 6px; }
+.pl-fl-hh select { flex: 1; min-width: 0; height: 24px; border: 0; border-radius: 0; background: rgba(255, 255, 255, 0.08); color: #fff; font-size: 12px; }
+.pl-fl-hh select option { background: #1b1f22; }
+.pl-fl-hh .pl-btn { flex: none; }
+.pl-fl-list { flex: 1; min-height: 0; overflow-y: auto; }
+.pl-fl-ev { display: flex; align-items: center; gap: 4px; min-height: 20px; padding: 0 6px; font-size: 12px; color: rgba(255, 255, 255, 0.85); }
+.pl-fl-ev img, .pl-fl-ev i { flex: none; width: 16px; height: 16px; }
+.pl-fl-bar { flex: none; background: rgba(255, 255, 255, 0.04); }
+.pl-fl-ban { position: relative; display: flex; align-items: center; height: 18px; padding-left: 26px; font-size: 12px; color: rgba(255, 255, 255, 0.9); cursor: default; }
+.pl-fl-ban .ic { position: absolute; left: 4px; top: 1px; width: 16px; height: 16px; }
+.pl-fl-ban .ic.flash { animation: plFlFlash 0.7s 3; }
+@keyframes plFlFlash { 50% { opacity: 0.15; } }
+.pl-fl-ban > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pl-fl-ban > span.none { color: #999; }
+.pl-fl-ban .arw { flex: none; width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.7; }
+.pl-fl-ban .arw:hover { opacity: 1; }
+.pl-fl-ban .arw img { width: 16px; height: 16px; transform: rotate(180deg); transition: transform 0.2s; }
+.pl-fl-ban .arw.open img { transform: none; }
+.pl-fl-btns { display: flex; align-items: center; gap: 4px; padding: 2px 4px 4px; }
+.pl-fl-btns.s16 { gap: 8px; }
+.pl-fl-btns button { display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.8; }
+.pl-fl-btns button:hover { opacity: 1; }
+.pl-fl-btns.s16 button img { width: 16px; height: 16px; }
+.pl-fl-btns.s32 button img { width: 32px; height: 32px; }
+.pl-fl-btns .scope { margin-left: auto; }
+.pl-fl-btns .scope img, .pl-fl-btns .gear img { width: 16px; height: 16px; }
+.pl-fl-btns .gear { width: 24px; height: 24px; }
+.pl-fl-watch { height: 100%; overflow-y: auto; }
+.pl-fl-w { display: flex; align-items: center; gap: 4px; height: 20px; padding: 0 4px; font-size: 13px; color: rgba(255, 255, 255, 0.9); cursor: pointer; user-select: none; }
+.pl-fl-w.sel { background: rgba(255, 255, 255, 0.1); }
+.pl-fl-w .sh { flex: none; width: 16px; height: 16px; }
+.pl-fl-w > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
+.pl-fl-w .bc { flex: none; width: 20px; display: grid; place-items: center; }
+.pl-fl-w .bc img { width: 16px; height: 16px; }
+.pl-fl-w .hp { flex: none; width: 78px; display: flex; gap: 2px; }
+.pl-fl-w .hp b { width: 22px; height: 8px; background: linear-gradient(90deg, #b0b0b0 calc(var(--f) * 100%), #991f24 0); }
+.pl-fl-none.drop { white-space: normal; line-height: 1.5; }
+
+/* ---------- 驾驶模拟 · 扫描器（定向扫描器 / 探针扫描器） ---------- */
+.pl-ds-top { flex: none; display: flex; align-items: center; justify-content: space-between; height: 26px; padding: 0 8px; font-size: 13px; color: rgba(255, 255, 255, 0.9); }
+.pl-ds-top .flt { font-size: 12px; color: rgba(255, 255, 255, 0.55); }
+.pl-ds-list { position: relative; flex: 1; min-height: 40px; overflow: auto; }
+.pl-ds-list table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.pl-ds-list th { position: sticky; top: 0; z-index: 1; height: 22px; padding: 0 6px; background: #1d2124; color: rgba(255, 255, 255, 0.6); font-size: 12px; font-weight: 400; text-align: left; white-space: nowrap; }
+.pl-ds-list td { height: 20px; padding: 0 6px; color: rgba(255, 255, 255, 0.9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-ds-list td img { width: 16px; height: 16px; vertical-align: middle; }
+.pl-ds-list tr[data-ds-k], .pl-ds-list tr[data-ps-k] { cursor: pointer; }
+.pl-ds-list tbody tr:hover { background: rgba(255, 255, 255, 0.06); }
+.pl-ds-list .r { text-align: right; }
+.pl-ds-none { padding: 6px 8px; font-size: 13px; color: rgba(255, 255, 255, 0.5); }
+/* 扫完的绿色扫光：从右往左收（COLOR_DSCAN = 0.225, 0.75, 0.5） */
+.pl-ds-list.sweep::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, rgba(57, 191, 128, 0) 0%, rgba(57, 191, 128, 0.25) 100%); animation: plDsSweep 1.7s ease-out forwards; transform-origin: right; }
+@keyframes plDsSweep { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+.pl-ds-bot { flex: none; display: flex; align-items: flex-end; gap: 10px; padding: 6px 8px 8px; }
+.pl-ds-bot .half { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.pl-ds-bot .lbl { display: flex; align-items: center; gap: 6px; height: 18px; font-size: 12px; color: rgba(255, 255, 255, 0.75); white-space: nowrap; }
+.pl-ds-bot input[type="text"] { width: 0; flex: 1; min-width: 40px; height: 18px; padding: 0 4px; border: 0; border-radius: 0; background: rgba(255, 255, 255, 0.08); color: #fff; font-size: 12px; }
+.pl-ds-bot .unit { flex: none; height: 18px; padding: 0 4px; border: 0; border-radius: 0; background: none; box-shadow: none; color: rgba(255, 255, 255, 0.75); font-size: 12px; cursor: pointer; }
+.pl-ds-bot .unit:hover { color: #fff; }
+/* 滑条（客户端 carbonui Slider：条高 10、上下各留 5；底 = 1 像素 #303030 边 + 黑 60%，圆角 3；刻度 1×6 #305665；拖柄 4×8 #58A7BF，悬停发光、按下变白） */
+.pl-sl { --x: 0; position: relative; height: 20px; margin-top: 1px; cursor: pointer; touch-action: none; }
+.pl-sl::before { content: ''; position: absolute; left: 0; right: 0; top: 5px; height: 10px; box-sizing: border-box; border: 1px solid #303030; border-radius: 3px; background: rgba(0, 0, 0, 0.6); }
+.pl-sl .tk i { position: absolute; top: 7px; width: 1px; height: 6px; left: calc(var(--n) * (100% - 4px) + 2px); background: #305665; }
+.pl-sl .hd { position: absolute; top: 4px; width: 12px; height: 12px; left: calc(var(--x) * (100% - 4px) - 4px); display: grid; place-items: center; }
+.pl-sl .hd i { width: 4px; height: 8px; background: #58a7bf; transition: background 0.3s, box-shadow 0.5s; }
+.pl-sl:hover .hd i { box-shadow: 0 0 6px 1px rgba(88, 167, 191, 0.9); transition: box-shadow 0.1s; }
+.pl-sl.drag .hd i { background: #fff; box-shadow: 0 0 4px 1px rgba(255, 255, 255, 0.6); transition: background 0.1s; }
+/* 扫描 / 分析按钮：忙碌时流动的箭头（客户端 Button.busy：arrows.png 横向平铺、arrowMask.png 遮罩，2 秒移动 1/3 张图） */
+.pl-busybtn { position: relative; overflow: hidden; }
+.pl-busybtn > span { position: relative; }
+.pl-busybtn::before { content: ''; position: absolute; inset: 0; opacity: 0; background: #58a7bf;
+  -webkit-mask: url(../assets/eveui/classes/industry/centerbar/arrows.png?v=1) 0 0 / auto 100% repeat-x, url(../assets/eveui/classes/industry/centerbar/arrowmask.png?v=1) 0 0 / 100% 100% no-repeat;
+  -webkit-mask-composite: source-in; mask-composite: intersect; transition: opacity 0.3s; }
+.pl-busybtn.busy::before { opacity: 1; animation: plBusyArrows 2s linear infinite; }
+.pl-busybtn.busy:disabled { opacity: 1; color: rgba(255, 255, 255, 0.45); }
+@keyframes plBusyArrows { from { -webkit-mask-position: calc(var(--bh, 24px) * -4 / 3) 0, 0 0; } to { -webkit-mask-position: 0 0, 0 0; } }
+.pl-ds-go, .pl-ps-go { flex: none; min-width: 72px; height: 28px; --bh: 28px; }
+.pl-ds-go:disabled, .pl-ps-go:disabled { opacity: 0.45; cursor: default; }
+/* 探针扫描器 = 恒星系图（左）+ 扫描面板（右，宽 362） */
+[data-win="probe"] .pl-wbody { container-type: inline-size; }
+.pl-ps-wrap { flex: 1 !important; min-height: 0; display: flex; }
+.pl-ps-map { position: relative; flex: 1; min-width: 0; background: #05070a; overflow: hidden; }
+.pl-ps-map canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+.pl-ps-side { flex: 0 0 362px; min-width: 0; display: flex; flex-direction: column; background: rgba(20, 24, 28, 0.6); }
+.pl-ps-side > .pl-ps-list { flex: 1; }
+@container (max-width: 640px) { .pl-ps-wrap { flex-direction: column; } .pl-ps-side { flex: 1 1 auto; } .pl-ps-map { flex: 0 0 45%; } }
+.pl-sm-ov { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.pl-sm-mk { position: absolute; left: 0; top: 0; display: flex; align-items: center; gap: 3px; white-space: nowrap; font-size: 11px; color: rgba(255, 255, 255, 0.55); }
+.pl-sm-mk img { width: 16px; height: 16px; margin: -8px 0 0 -8px; opacity: 0.75; }
+.pl-sm-mk.cel span { margin-top: -8px; }
+.pl-sm-mk.sun span { margin: -6px 0 0 8px; color: rgba(255, 220, 160, 0.7); }
+.pl-sm-mk.me img { opacity: 1; }
+.pl-sm-mk.res { pointer-events: auto; cursor: pointer; color: rgba(255, 255, 255, 0.85); }
+.pl-sm-mk.res i, .pl-ps-list .ri { display: block; width: 16px; height: 16px; background: var(--c); -webkit-mask: url(../assets/eveui/classes/mapview/scanresultlocation.png?v=1) center / 16px 16px no-repeat; }
+.pl-sm-mk.res i { margin: -8px 0 0 -8px; }
+.pl-sm-mk.res span { margin-top: -8px; text-shadow: 0 0 3px #000; }
+.pl-sm-mk.res.sel span { color: #fff; }
+.pl-sm-tools { position: absolute; top: 6px; left: 6px; display: flex; gap: 2px; }
+.pl-sm-tools button { width: 26px; height: 26px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: rgba(0, 0, 0, 0.35); box-shadow: none; cursor: pointer; opacity: 0.7; }
+.pl-sm-tools button:hover { opacity: 1; background: rgba(255, 255, 255, 0.1); }
+.pl-sm-tools img { width: 16px; height: 16px; }
+.pl-sm-views { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); display: flex; gap: 0; }
+.pl-sm-views button { width: 46px; height: 46px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.6; }
+.pl-sm-views button:hover { opacity: 1; }
+.pl-sm-views img { width: 46px; height: 46px; }
+.pl-sm-hint { position: absolute; left: 8px; top: 38px; font-size: 11px; color: rgba(255, 255, 255, 0.35); pointer-events: none; }
+.pl-ps-list.busy table { opacity: 0.5; }
+.pl-ps-list tr.new { animation: plPsNew 1s ease-out; }
+@keyframes plPsNew { from { background-color: rgba(115, 240, 255, 0.3); } to { background-color: transparent; } }
+/* 结果行：底部 2 像素信号条（这次涨的部分更亮） */
+.pl-ps-list tbody tr { background-image: var(--bar); background-size: 100% 2px; background-position: 0 100%; background-repeat: no-repeat; }
+.pl-ps-list tbody tr.sel { background-color: rgba(88, 167, 191, 0.2); }
+.pl-ps-list .wp { width: 22px; height: 18px; display: inline-grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; vertical-align: middle; }
+.pl-ps-list .wp img { width: 22px; height: 22px; }
+.pl-ps-list .wp.blink { animation: plPsBlink 0.4s 3; }
+@keyframes plPsBlink { 50% { opacity: 0.2; } }
+.pl-ps-bot { flex: none; display: flex; flex-direction: column; gap: 4px; padding: 4px 8px 8px; }
+.pl-ps-bot .r1 { display: flex; align-items: center; gap: 8px; height: 24px; font-size: 12px; color: rgba(255, 255, 255, 0.85); }
+.pl-ps-bot .pr { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0; white-space: nowrap; }
+.pl-ps-bot .pr img { width: 24px; height: 24px; }
+.pl-ps-bot .pr em { font-style: normal; color: rgba(255, 255, 255, 0.6); }
+.pl-ps-bot .bon { display: flex; align-items: center; gap: 6px; color: rgba(255, 255, 255, 0.6); }
+.pl-ps-bot .bon > span { display: flex; align-items: center; gap: 3px; }
+.pl-ps-bot .bon img { width: 16px; height: 16px; opacity: 0.5; }
+.pl-ps-bot .bon b { font-weight: 400; }
+.pl-ps-bot .ic { width: 20px; height: 20px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.8; }
+.pl-ps-bot .ic:hover { opacity: 1; }
+.pl-ps-bot .ic.off { opacity: 0.3; pointer-events: none; }
+.pl-ps-bot .ic img { width: 16px; height: 16px; }
+.pl-ps-bot .r2 { display: flex; align-items: center; gap: 8px; height: 32px; }
+.pl-ps-bot .forms { display: flex; gap: 2px; }
+.pl-ps-bot .forms button { width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.85; }
+.pl-ps-bot .forms button:hover { opacity: 1; background: rgba(255, 255, 255, 0.08); }
+.pl-ps-bot .forms button.na { opacity: 0.3; cursor: default; }
+.pl-ps-bot .forms img { width: 32px; height: 32px; }
+.pl-ps-bot .size { flex: 1; max-width: 120px; min-width: 60px; display: flex; flex-direction: column; font-size: 12px; color: rgba(255, 255, 255, 0.75); }
+.pl-ps-go { width: 100px; margin-left: auto; }
+.pl-ds-list tbody td { height: 20px; line-height: 20px; padding-top: 0; padding-bottom: 0; }

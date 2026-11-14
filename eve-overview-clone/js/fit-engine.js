@@ -43,6 +43,18 @@ export const RESIST = {
 export const DAMAGE = [AT.em, AT.thermal, AT.kinetic, AT.explosive];
 
 export const CAT = { ship: 6, module: 7, charge: 8, skill: 16, drone: 18, implant: 20, subsystem: 32, fighter: 87 };
+export const GROUP_SHIP_MODE = 1306;   // 舰船模式切换器
+// 装配实际处在的舰船模式：fit.mode 是这条船的模式就用它，否则第一个；这条船没有模式时为 0
+// 模式的通用名（不带舰船名）：防御 / 狙击 / 高速，蛇鹈号是主 / 次级 / 三级
+export function modeLabel(data, id) {
+  const en = data.types.get(id)?.en || '';
+  const k = ['Defense', 'Sharpshooter', 'Propulsion', 'Primary', 'Secondary', 'Tertiary'].findIndex((w) => en.includes(` ${w} Mode`));
+  return k >= 0 ? ['防御模式', '狙击模式', '高速模式', '主模式', '次级模式', '三级模式'][k] : data.types.get(id)?.name || '';
+}
+export function modeOf(data, fit) {
+  const list = data.modes?.get(fit?.ship) || [];
+  return list.includes(fit?.mode) ? fit.mode : list[0] || 0;
+}
 const EXEMPT = new Set([CAT.ship, CAT.charge, CAT.skill, CAT.implant, CAT.subsystem]);   // 不受叠加惩罚的来源
 const EFFECT = { passive: 0, active: 1, target: 2, online: 4, overload: 5 };
 const STATE_RANK = { offline: 0, online: 1, active: 2, overload: 3 };
@@ -104,6 +116,17 @@ function parse(raw) {
     byName.set(name.toLowerCase(), t);
     if (en) byName.set(en.toLowerCase(), t);
   }
+  // 舰船模式（战术驱逐舰、贼鸥号、蛇鹈号）：舰船 -> [防御 / 主, 狙击 / 次级, 高速 / 三级]，按模式英文名前缀对上舰船英文名
+  const modes = new Map();
+  const MODE_ORDER = [/ (Defense|Primary) Mode$/, / (Sharpshooter|Secondary) Mode$/, / (Propulsion|Tertiary) Mode$/];
+  for (const t of types.values()) {
+    if (t.group !== GROUP_SHIP_MODE || !t.en) continue;
+    const k = MODE_ORDER.findIndex((re) => re.test(t.en));
+    const ship = k >= 0 && byName.get(t.en.replace(MODE_ORDER[k], '').toLowerCase());
+    if (!ship || ship.category !== CAT.ship) continue;
+    if (!modes.has(ship.id)) modes.set(ship.id, []);
+    modes.get(ship.id)[k] = t.id;
+  }
   for (const m of markets.values()) if (m.parent && markets.has(m.parent)) markets.get(m.parent).children.push(m);
   for (const t of types.values()) if (t.market && markets.has(t.market)) markets.get(t.market).types.push(t);
   const skills = [...types.values()].filter((t) => t.category === CAT.skill);
@@ -127,7 +150,7 @@ function parse(raw) {
   const envLists = new Map(Object.entries(raw.env?.lists || {}).map(([id, [inc, exc]]) => [Number(id), { inc: inc && new Set(inc), exc: new Set(exc) }]));
   // 舰队加成（dbuff）：id -> { name, en, op, max 取最大 / 最小, mods: [[func, 被修改属性, 分组或技能]] }
   const dbuffs = new Map(Object.entries(raw.dbuffs || {}).map(([id, [name, en, op, max, mods]]) => [Number(id), { id: Number(id), name, en, op, max: !!max, mods }]));
-  return { attrs, effects, groups, markets, types, byName, skills, char, cloud, hulls, env, envLists, dbuffs };
+  return { attrs, effects, groups, markets, types, byName, skills, char, cloud, hulls, env, envLists, dbuffs, modes };
 }
 
 function slotOf(t) {
@@ -140,7 +163,7 @@ class Item {
   constructor(data, type, kind, base = null) {
     this.data = data;
     this.type = type;
-    this.kind = kind;                 // ship / module / charge / drone / skill / implant / char
+    this.kind = kind;                 // ship / mode / module / charge / drone / skill / implant / char
     this.base = base || type?.attrs || new Map();
     this.mods = new Map();            // 属性 -> [{ op, src, srcAttr, value, fn }]
     this.memo = new Map();
@@ -344,6 +367,9 @@ export function computeFit(data, fit, skills = 'max', { alone = false } = {}) {
     skillItems.push(new Item(data, t, 'skill', base));
   }
   const implants = (fit.implants || []).map((id) => data.types.get(id)).filter(Boolean).map((t) => new Item(data, t, 'implant'));
+  // 舰船模式：只认这条船自己的模式，没指定时和游戏里一样处在第一个模式（防御 / 主模式）；效果都是被动的，按普通物品施加
+  const modeT = data.types.get(modeOf(data, fit)) || null;
+  const modeItems = modeT ? [new Item(data, modeT, 'mode')] : [];
   const modules = [];
   const charges = [];
   for (const slot of SLOTS) {
@@ -422,7 +448,7 @@ export function computeFit(data, fit, skills = 'max', { alone = false } = {}) {
     return effect.category === EFFECT.passive;
   };
 
-  const all = [ship, ...modules, ...charges, ...drones, ...implants, ...skillItems];
+  const all = [ship, ...modeItems, ...modules, ...charges, ...drones, ...implants, ...skillItems];
   const bursts = [];   // 开着的指挥脉冲波 / 天象发生器：最后统一施加加成
   for (const item of all) {
     const exempt = EXEMPT.has(item.category);

@@ -6,8 +6,8 @@
 // 挂单 30 天后自动下架，卖家重新提交即续期并刷新快照。技能分析与其他服共用 bazaar-skills.js。
 // 地址栏：#bazaar · #bazaar/s/<角色ID> · #bazaar/sell
 import { SERVER, HUB_NAME, eveImage } from './server.js?v=s4';
-import { skPage } from './skeleton.js?v=v17';
-import * as BS from './bazaar-skills.js?v=12';
+import { skPage } from './skeleton.js?v=v18';
+import * as BS from './bazaar-skills.js?v=13';
 
 let ctx;   // 另有 esiAccounts() -> [{ id, name }]、accountToken(id)、openEsiBind()、copyText(text, label)
 const $ = (id) => document.getElementById(id);

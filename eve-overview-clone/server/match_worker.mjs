@@ -92,6 +92,7 @@ function cleanFit(f, ship, open = false) {
     if (same) { same.count += n; same.active += on; } else fit.drones.push({ type: t.id, count: n, active: on });
   }
   if (open) fit.implants = (Array.isArray(f.implants) ? f.implants : []).slice(0, 12).map(Number).filter((id) => data.types.get(id)?.category === FE.CAT.implant);
+  if (data.modes?.get(ship.id)?.includes(Number(f.mode))) fit.mode = Number(f.mode);   // 开局的舰船模式
   return fit;
 }
 function check({ fit: f, levels }) {

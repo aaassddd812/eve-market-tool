@@ -6,8 +6,8 @@
 // 技能分析与宁静服共用 bazaar-skills.js（藏宝阁只给技能等级，技能点按等级推算）。
 // 地址栏：#bazaar · #bazaar/c/<藏宝阁订单号>
 import { HUB_NAME, eveImage } from './server.js?v=s4';
-import { skPage } from './skeleton.js?v=v17';
-import * as BS from './bazaar-skills.js?v=12';
+import { skPage } from './skeleton.js?v=v18';
+import * as BS from './bazaar-skills.js?v=13';
 
 let ctx;
 const $ = (id) => document.getElementById(id);

@@ -5,7 +5,7 @@
 //   舰队  /characters/{id}/fleet/ → /fleets/{fleet_id}/members/（「舰队」权限，读成员需要是舰队指挥）
 //   军团  /characters/{id}/roles/ + 军团钱包 / 订单 / 工业 / 建筑 / 月矿 / 资产（「军团管理」权限，且需相应军团职位）
 // 数据按角色缓存 5 分钟，切换角色时清空。
-import { skCards, skRows } from './skeleton.js?v=v17';
+import { skCards, skRows } from './skeleton.js?v=v18';
 import * as ST from './standings.js?v=v6';
 
 let ctx;

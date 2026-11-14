@@ -3,14 +3,14 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v42';
+import * as FE from './fit-engine.js?v=v45';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
 import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
-import { initSim, mountSim, pilotRow, pilotShipSearch, fitBody as simFitBody } from './fit-sim.js?v=v111';
+import { initSim, mountSim, pilotRow, pilotShipSearch, fitBody as simFitBody } from './fit-sim.js?v=v121';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v13';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
-import { skCards, skRows, skTitle } from './skeleton.js?v=v17';
+import { skCards, skRows, skTitle, skPilot } from './skeleton.js?v=v18';
 import { makeFloat, pinBtn, closeBtn } from './float-pop.js?v=3';
 import { SERVER } from './server.js?v=s4';
 import { serverExtra } from './server-extra.js?v=3';
@@ -162,7 +162,7 @@ export async function showSim(root, restored = false) {
 // 驾驶模拟页（独立菜单）：开一艘船打 NPC，用战场模拟的引擎、3D 画面和装配计算
 let pilotMod = null;
 export async function showPilot(root) {
-  if (!F.data && !root.dataset.ready) root.innerHTML = skTitle(16) + skCards(2);
+  if (!F.data && !root.dataset.ready && !root.children.length) { const t = app.store.getJSON('eve-pilot', null)?.tab; root.innerHTML = skPilot(['match', 'tut'].includes(t) ? t : 'solo'); }
   try {
     await ensureData();
   } catch (error) {
@@ -172,7 +172,7 @@ export async function showPilot(root) {
   toolInit?.();
   await MU.loadMuta().catch(() => {});
   if (!pilotMod) {
-    pilotMod = await import('./pilot.js?v=v96');
+    pilotMod = await import('./pilot.js?v=v122');
     pilotMod.initPilot({ get data() { return F.data; }, FE, shipSearch: pilotShipSearch, savedFits, normalize,
       // 无人机一架都没激活时按带宽激活（不改原装配）
       pilotRow: (ship, fit, label, o) => pilotRow(ship, fit, label, (f) => { if (f?.drones?.length && !f.drones.some((d) => d.active)) autoActivateDrones(f); }, o),
@@ -398,6 +398,7 @@ function normalize(f) {
   for (const s of FE.SLOTS) fit.slots[s] = (f.slots?.[s] || []).map((m) => (m && F.data.types.has(m.type) ? { type: m.type, state: m.state || 'online', charge: F.data.types.has(m.charge) ? m.charge : null, ...cleanMut(m.mut, m.abyssal) } : null));
   fit.drones = (f.drones || []).filter((d) => F.data.types.has(d.type)).map((d) => ({ type: d.type, count: d.count || 1, active: d.active || 0 }));
   fit.implants = (f.implants || []).filter((id) => F.data.types.has(id));
+  if (F.data.modes.get(fit.ship)?.includes(f.mode)) fit.mode = f.mode;   // 舰船模式（战术驱逐舰等），没有就是第一个
   return fit;
 }
 
@@ -1587,6 +1588,7 @@ function renderFit() {
         : notFive.length ? skillPop(notFive, `还有 ${notFive.length} 项没到 5 级`, `${F.esi.name} 还没到 5 级的技能`)
         : F.skillMode === 'esi' && F.esi ? '<span class="fit-ok">技能满足</span>' : impact ? '<span class="fit-ok">影响属性的技能都已 5 级</span>' : ''}
     </div>
+    ${modeHtml()}
     ${fitView() === 'radial' ? radialHtml(shipType, st) : problemsHtml(st.problems) + slotRows}
     ${dronesHtml()}
     ${implantsHtml(bound)}
@@ -1613,6 +1615,15 @@ function skillPop(list, label, title) {
 }
 
 // 曙光云计算：选择放进「云」的舰船，同船级（T1 / T2 / 帝国海军型还要同种族）的舰船获得它们的云计算技能加成；带宽上限 100，装满即止
+// 舰船模式（战术驱逐舰、贼鸥号、蛇鹈号）：同时只处在一个模式，图标取自游戏舰船界面的模式按钮
+const MODE_ICON = ['defense', 'sharpshooter', 'propulsion'];
+function modeHtml() {
+  const list = F.data.modes.get(F.fit.ship) || [];
+  if (!list.length) return '';
+  const cur = FE.modeOf(F.data, F.fit);
+  return `<section class="fit-slots"><h4>舰船模式<span>驾驶时 Shift + 1 / 2 / 3 切换</span></h4>
+    <div class="segmented fit-modes" role="group" aria-label="舰船模式">${list.map((id, k) => (id ? `<button type="button" data-fit-mode="${id}" class="${id === cur ? 'active' : ''}" aria-pressed="${id === cur}"><i class="fit-mode-ic is-${MODE_ICON[k]}"></i>${app.esc(FE.modeLabel(F.data, id))}</button>` : '')).join('')}</div></section>`;
+}
 function cloudHtml() {
   if (!F.data.cloud?.size) return '';
   const info = FE.cloudInfo(F.data, F.fit.ship);
@@ -2353,6 +2364,7 @@ async function onMainClick(e) {
   if (el('[data-fit-skillplan]')) { queuePlan({ ship: F.fit.ship, fit: F.fit, label: F.fit.name ? `装配：${F.fit.name}` : '装配页当前装配' }); app.openPlan(); return; }
   if ((x = el('[data-fit-graph]'))) { openTool(openGraph); return; }
   if ((x = el('[data-fit-all]'))) { setAllStates(x.dataset.fitAll === 'on'); return; }
+  if ((x = el('[data-fit-mode]'))) { F.fit.mode = Number(x.dataset.fitMode); recompute(); return; }
   if ((x = el('[data-fit-clear]'))) { clearModules(); return; }
   if ((x = el('[data-fit-remove]'))) {
     const { slot, index } = parseRef(x.dataset.fitRemove);
@@ -2791,6 +2803,7 @@ function parseEft(text) {
     const mut = ref != null ? MU.mutFromRef(refs.get(ref), t.id) : null;
     if (mut) t = type(mut.type) || t;
     if (t.category === FE.CAT.implant) { fit.implants.push(t.id); continue; }
+    if (t.group === FE.GROUP_SHIP_MODE) { fit.mode = t.id; continue; }   // 舰船模式（Pyfa 等工具导出的 EFT 里可能有）
     if (!t.slot) continue;
     const ct = chargeName ? findType(chargeName) : null;
     fit.slots[t.slot].push({ type: t.id, state: offline ? 'offline' : defaultState(t), charge: ct?.id || null, ...(mut ? { mut: mut.mut } : {}) });
@@ -3233,7 +3246,8 @@ function toCompact(f) {
     s: f.ship, n: f.name || undefined,
     m: Object.fromEntries(FE.SLOTS.filter((s) => f.slots[s].length).map((s) => [s, f.slots[s].map((m) => (m ? [m.type, m.charge || 0, STATE_CODE[m.state], ...(m.mut ? [[m.mut.base, m.mut.mutator, m.mut.attrs]] : [])] : 0))])),
     d: f.drones.length ? f.drones.map((d) => [d.type, d.count, d.active]) : undefined,
-    i: f.implants.length ? f.implants : undefined
+    i: f.implants.length ? f.implants : undefined,
+    o: f.mode || undefined
   }));
 }
 function fromCompact(c) {
@@ -3242,6 +3256,7 @@ function fromCompact(c) {
   for (const s of FE.SLOTS) fit.slots[s] = (c.m?.[s] || []).map((x) => (x ? { type: x[0], charge: x[1] || null, state: CODE_STATE[x[2]] || 'online', ...(x[3] ? { mut: { base: x[3][0], mutator: x[3][1], attrs: x[3][2] } } : {}) } : null));
   fit.drones = (c.d || []).map(([t, count, active]) => ({ type: t, count, active }));
   fit.implants = c.i || [];
+  if (c.o) fit.mode = c.o;
   return fit;
 }
 // 广场发「装配」帖：当前装配（紧凑格式）与摘要；没有装配时为 null

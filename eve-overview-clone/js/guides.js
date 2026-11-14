@@ -6,7 +6,7 @@
 // - 视频：站内嵌入 B 站 / YouTube 播放器，附原视频链接；EVE Academy 官方视频带本站翻译的中文字幕（guides/academy-*.json）
 // 收录时逐条打开核对过（2026-10）；B 站视频注明发布日期，旧视频的界面和数值可能和现在不同
 
-import { skText } from './skeleton.js?v=v17';
+import { skText } from './skeleton.js?v=v18';
 
 let ctx = null;
 const $ = (id) => document.getElementById(id);

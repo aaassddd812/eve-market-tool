@@ -1,4 +1,4 @@
-EVE client build 3693310
+EVE client build 3698585
 素材版权归 CCP，仅供本站驾驶模拟画面使用。
 
 tactical/anchor.png、tactical/arrow_tactical.png：由客户端 res:/ui/inflight/tactical/{anchor,arrow_tactical}.dds 用 Pillow 转成 PNG（原样，不改像素）。

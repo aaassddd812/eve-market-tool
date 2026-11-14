@@ -2,7 +2,7 @@
 // 按游戏技能分组列出全部 512 个技能（块状网格，技能组与组内技能可按名称 / 技能点排序）：已训练等级、生效等级（Alpha 克隆受限时较低）、技能点、训练队列中的目标等级，
 // 未学的技能灰显。数据：ESI /skills/（个人中心已读取）、/skillqueue/（需要 esi-skills.read_skillqueue.v1），skill-data.json（build_industry.mjs 生成）。
 // 角色属性：ESI /attributes/（esi-skills.read_skills.v1）。训练速度 = 主属性 + 副属性 / 2（技能点 / 分钟），据此估算每个技能升到下一级的时间。
-import { skCards, skRows } from './skeleton.js?v=v17';
+import { skCards, skRows } from './skeleton.js?v=v18';
 import { serverExtra } from './server-extra.js?v=3';
 
 let ctx;   // esc, formatNumber, esiAuthFetch, store, showPlan
