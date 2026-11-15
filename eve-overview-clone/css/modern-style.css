@@ -2492,6 +2492,8 @@ td.loc {
 .kb-feed-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; scroll-margin-top: 12px; }
 .kb-feed-head .kb-section-title, .kb-feed-head .info-section-title { margin: 0; }
 .kb-feed-head .info-section-title::after { display: none; }
+.kb-feed-head .kb-feed-refresh { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.kb-feed-head .kb-feed-refresh svg { width: 14px; height: 14px; }
 .kb-filters { display: flex; flex-wrap: wrap; gap: 6px; flex: 1; }
 .kb-filter-hint { font-size: 0.75rem; color: var(--text-muted); }
 .kb-chip {

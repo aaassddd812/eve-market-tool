@@ -341,7 +341,26 @@ function fitChoices(ship) {
   out.push(['hull', '空船（无装备）']);
   return out;
 }
+// 设置页整页重画（innerHTML）时保住滚动位置：页面和 root 外层可滚动的容器都记下来，画完还原（不然选船、改装配会跳回网页顶部）
+function keepScroll(fn) {
+  const els = [document.scrollingElement || document.documentElement];
+  for (let e = root?.parentElement; e && e !== document.body; e = e.parentElement) if (e.scrollHeight > e.clientHeight) els.push(e);
+  const pos = els.map((e) => [e, e.scrollTop, e.scrollLeft]);
+  // 设置页自己就是滚动容器（#plSetup 和里面的窗口），会被整个换掉：按选择器记，画完找新的那个还原
+  const inner = ['#plSetup', '#plSetup .pl-win'].map((q) => { const e = root.querySelector(q); return e ? [q, e.scrollTop] : null; }).filter(Boolean);
+  fn();
+  const back = () => {
+    for (const [e, t, l] of pos) if (e.scrollTop !== t || e.scrollLeft !== l) { e.scrollTop = t; e.scrollLeft = l; }
+    for (const [q, t] of inner) { const e = root.querySelector(q); if (e && e.scrollTop !== t) e.scrollTop = t; }
+  };
+  back();
+  requestAnimationFrame(back);   // 图片等撑开高度后再还原一次
+}
 function renderSetup() {
+  if (root?.querySelector('#plSetup')) return keepScroll(renderSetupNow);
+  renderSetupNow();
+}
+function renderSetupNow() {
   stopLoop();
   disposeView();
   if (S.envSave) { ctx.FE.setEnv(S.envSave); S.envSave = null; }

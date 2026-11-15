@@ -79,8 +79,8 @@ function api(path) {
   return request(path);
 }
 
-async function request(path) {
-  const res = await fetch(API + path + (SRV ? (path.includes('?') ? '&' : '?') + SRV : ''));
+async function request(path, init) {
+  const res = await fetch(API + path + (SRV ? (path.includes('?') ? '&' : '?') + SRV : ''), init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || '击杀记录服务 ' + res.status);
   return data;
@@ -1038,6 +1038,7 @@ async function renderEntity(kind, id) {
       <div class="segmented" role="group">
         ${[['all', '全部'], ['kills', '击杀'], ['losses', '损失']].map(([v, l]) => `<button data-entity-side="${v}" class="${v === 'all' ? 'active' : ''}">${l}</button>`).join('')}
       </div>
+      <button class="btn btn-ghost btn-sm kb-feed-refresh" id="kbEntityRefresh" title="重新读取最新的击杀记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新</span></button>
     </div>
     <div id="kbEntityFeed">${skRows(8)}</div>
     <button class="btn kb-more" id="kbEntityMore" hidden>加载更多</button>`;
@@ -1050,6 +1051,7 @@ async function renderEntity(kind, id) {
     if (p && links) links.insertAdjacentHTML('afterbegin', `<a class="btn btn-primary kb-recruit" href="#plaza/p/${p.id}">招新中</a>`);
   }).catch(() => {});
   $('kbEntityMore').addEventListener('click', () => loadEntityFeed(false));
+  $('kbEntityRefresh').addEventListener('click', () => loadEntityFeed(true, true));
   loadEntityFeed(true);
   if (kind === 'character') loadPilotBattles(id);
 }
@@ -1406,9 +1408,11 @@ function renderMembers() {
 }
 
 // 加载更多期间重复点击会被忽略；切换全部 / 击杀 / 损失时旧请求作废
-async function loadEntityFeed(reset) {
+async function loadEntityFeed(reset, fresh = false) {
   const e = S.entity;
   if (!e || (!reset && e.busy)) return;
+  const rb = $('kbEntityRefresh');
+  if (rb) { rb.disabled = true; rb.classList.add('spinning'); }
   const seq = e.seq = (e.seq || 0) + 1;
   e.busy = true;
   const box = $('kbEntityFeed');
@@ -1417,7 +1421,8 @@ async function loadEntityFeed(reset) {
   if (e.cursor) q.set('cursor', e.cursor);
   setMoreBusy($('kbEntityMore'), true, e.cursor);
   try {
-    const data = await api('feed?' + q);
+    // 刷新：不用预取的结果，也不用浏览器缓存
+    const data = fresh ? await request('feed?' + q, { cache: 'no-cache' }) : await api('feed?' + q);
     absorbNames(data.names);
     await loadTypes(typesOf(data.kills));
     if (S.entity !== e || seq !== e.seq) return;
@@ -1432,6 +1437,8 @@ async function loadEntityFeed(reset) {
     if (seq === e.seq) {
       e.busy = false;
       setMoreBusy($('kbEntityMore'), false);
+      const rb2 = $('kbEntityRefresh');
+      if (rb2) { rb2.disabled = false; rb2.classList.remove('spinning'); }
     }
   }
 }
