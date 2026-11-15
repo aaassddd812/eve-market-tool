@@ -2227,7 +2227,7 @@ export function createView(host, hooks = {}, opt = {}) {
     if (brkOf) for (let c = 0; c < cels.count(); c++) {
       const p = cels.pos(c), cc = rec.cel[c];
       if (!p || (hooks.celShown && !hooks.celShown(c))) continue;
-      const k = brSlot(CEL_BRK[cc.group] || CEL_BRK[7]);
+      const k = brSlot(cc.brk || CEL_BRK[cc.group] || CEL_BRK[7]);   // brk：单个天体自己的图标（残骸有物品 / 已拾取）
       if (k < 0) continue;
       const on = c === (opt.selC ?? -1) || c === hoverC;
       ip.push(p.x, p.y, p.z); it.push(on ? 1 : 0.78, on ? 1 : 0.8, on ? 1 : 0.84, on ? 1 : 0.8); ii.push(k);

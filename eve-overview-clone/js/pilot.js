@@ -19,7 +19,8 @@ import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=6';
 import * as SC from './pilot-scan.js?v=6';
-import * as ST from './pilot-site.js?v=9';
+import * as ST from './pilot-site.js?v=15';
+import * as CG from './pilot-cargo.js?v=2';
 
 let ctx = null;
 let root = null;
@@ -103,7 +104,11 @@ export function initPilot(context) {
     approach: (i) => celApproach(i), envFx: (list) => { S.envFx = list; S.view?.setEnvFx?.(list); },
     // 深渊过导管：客户端 JumpOutAbyssalBetween 的跃迁隧道过场（sim-jump.js）；没有 3D 画面就返回 false，调用方退回淡入淡出
     jumpFx: (i, cb) => { if (!S.view?.abyssJump) return false; S.jumpFx = S.view.abyssJump(i, cb); return true; },
+    openLoot: (i) => CG.openLoot(i), wreck: () => renderOverview(true),
+    rerender: () => { const box = root?.querySelector('#plSites'); if (box) keepScroll(() => { box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx); }); },
   });
+  CG.initCargo({ S, ctx, esc, tr, UI, IMG, ST, root: () => root, toggleWin: (id, show) => toggleWin(id, show), msg: (t) => { pushLog(t, 'bad'); quickMsg(t); },
+    wreckEmpty: (i) => { ST.wreckEmptied(i); renderOverview(true); } });
   const saved = ctx.store.getJSON(KEY, null);
   const ot = Number(ctx.store.getJSON(OV_KEY, 0));
   S.ovTab = ot >= 0 && ot < OV_TABS.length ? ot : 0;
@@ -531,7 +536,11 @@ async function launch() {
 }
 // 场景（pilot-site.js）：死亡空间复合体 / 深渊。没有开局敌人，进房间按刷怪表刷 NPC；深渊没有天体
 async function launchSite() {
-  const def = ST.siteInstance(ST.siteById(S.set.site) || ST.siteById(ST.siteDefault(S.set.mode)), S.set.abyWx);
+  const base = ST.siteById(S.set.site) || ST.siteById(ST.siteDefault(S.set.mode));
+  if (!base) return;
+  // 深渊：先读战利品表（抽实跑要用），再生成这一趟的房间
+  if (base.kind === 'abyss') await ST.loadLoot();
+  const def = ST.siteInstance(base, S.set.abyWx);
   if (!def) return;
   S.tut = null;
   tutStop();
@@ -650,6 +659,7 @@ function enter(msg) {
   S.orbit = S.orbit || Math.min(pref, 20000);
   S.keep = S.keep || pref;
   SC.scanReset();
+  CG.cargoInit(S.calc);
   loadBrk();
   loadShipIndex().then((ix) => { S.brk = S.b ? S.b.units.map((u) => ix?.types?.[u.r.row.ship]?.b || 'frigate') : []; renderOverview(true); });
   renderStage();
@@ -688,6 +698,9 @@ const WINS = [
   // 场景（死亡空间 / 深渊）：当前房间、深渊计时、天气
   { id: 'site', title: '地点', icon: 'info', w: 300, h: 140, x: 56, y: 96, need: () => Boolean(S.site) },
   { id: 'log', title: '日志', icon: 'log', w: 420, h: 200, x: 56, y: 410, closed: true },
+  // 货柜舱（客户端库存窗口，列表视图）；残骸货柜（打开残骸时弹出，标题换成残骸名）
+  { id: 'cargo', title: '货柜舱', ico: 'windowicons/cargo.png', w: 440, h: 260, x: 340, y: 96, closed: true },
+  { id: 'loot', title: '货柜', ico: 'windowicons/cargocontainer.png', w: 440, h: 240, x: 340, y: 370, closed: true, need: () => S.set.mode === 'abyss' && !S.match && !S.tut },
   // 舰队（有队友时才有）：舰队窗口、单独拖出来的广播窗口、关注列表
   { id: 'fleet', title: '舰队', icon: 'fleet', w: 300, h: 300, x: 56, y: 400, more: true, need: () => FL.fleetOn() },
   { id: 'bc', title: '广播', icon: 'fleet', w: 300, h: 220, x: 362, y: 480, need: () => FL.fleetOn() },
@@ -707,6 +720,8 @@ const winBody = {
   ship: () => '<div id="plShip"></div>',
   site: () => '<div id="plSite"></div>',
   log: () => '<div class="pl-log" id="plLog"></div>',
+  cargo: () => CG.cargoBody(),
+  loot: () => CG.lootBody(),
   fleet: () => FL.fleetBody(),
   bc: () => FL.bcBody(),
   watch: () => FL.watchBody(),
@@ -932,6 +947,8 @@ function toggleWin(id, show) {
   el.hidden = show == null ? !el.hidden : !show;
   if (!el.hidden) { raiseWin(el); setActWin(el); moveWin(el, Number(el.dataset.hx ?? el.offsetLeft), Number(el.dataset.hy ?? el.offsetTop), true); }
   if (id === 'log' && !el.hidden) renderLog();
+  if (id === 'cargo' && !el.hidden) CG.renderCargo();
+  if (id === 'loot') { if (el.hidden) S.lootCel = -1; else CG.renderLoot(); }
   if (id === 'dscan' && !el.hidden) { SC.renderDscan(true); SC.dscan(); }
   if (id === 'probe' && !el.hidden) SC.renderProbe(true);
   syncNeo();
@@ -943,7 +960,7 @@ function toggleWin(id, show) {
 // 两列错开排：右列（COL1）战术视角 / 环绕视角 / 第一人称视角，左列（COL2 = 28）货柜舱 / 战术视图 / 扫描器 / 自动导航，行距 16。
 // 整簇右边缘在面板中心左边 80、竖直居中再往下 15。模拟里只有战术视图能用，环绕视角是当前视角（亮着）
 const HUD_BTNS = [
-  [28, 0, 'icons/44_32_10.png', '打开当前舰船货柜舱（模拟中不可用）'],
+  [28, 0, 'icons/44_32_10.png', '货舱和挂舱', 'cargo'],   // 客户端 OpenCargoHoldOfActiveShip（Tooltips/Hud/CargoHold），默认没有快捷键
   [0, 16, 'classes/shipui/iconcameragrid.png', '启用战术视角（模拟中不可用）'],
   [28, 32, 'icons/44_32_42.png', '开/关战术视图（Ctrl + D）', 'tac'],
   [0, 48, 'classes/shipui/iconcameraorbit.png', '启用环绕视角', 'orbit'],
@@ -952,7 +969,7 @@ const HUD_BTNS = [
   [28, 96, 'icons/44_32_12.png', '开启/关闭自动导航（模拟中不可用）']
 ];
 function hudBtnsHtml() {
-  return `<div class="pl-hbtns">${HUD_BTNS.map(([col, top, icon, tip, id]) => `<button type="button" class="pl-hbtn${id === 'orbit' || (id === 'tac' && S.set.tac) ? ' on' : ''}${id ? '' : ' na'}"${id === 'tac' ? ' data-pl-tac' : ''}${id === 'scan' ? ' data-pl-scanbtn' : ''} style="right:${col}px;top:${top}px" title="${tip}" aria-label="${tip}"><i></i><img src="${UI}${icon}?v=1" alt="">${id === 'scan' ? `<img class="sw" src="${UI}classes/sensorsuite/radar_sweep.png?v=1" alt="">` : ''}</button>`).join('')}</div>`;
+  return `<div class="pl-hbtns">${HUD_BTNS.map(([col, top, icon, tip, id]) => `<button type="button" class="pl-hbtn${id === 'orbit' || (id === 'tac' && S.set.tac) ? ' on' : ''}${id ? '' : ' na'}"${id === 'tac' ? ' data-pl-tac' : ''}${id === 'scan' ? ' data-pl-scanbtn' : ''}${id === 'cargo' ? ' data-pl-cargobtn' : ''} style="right:${col}px;top:${top}px" title="${tip}" aria-label="${tip}"><i></i><img src="${UI}${icon}?v=1" alt="">${id === 'scan' ? `<img class="sw" src="${UI}classes/sensorsuite/radar_sweep.png?v=1" alt="">` : ''}</button>`).join('')}</div>`;
 }
 // 舰船模式按钮（客户端 StanceButtons / ShipStanceButton）：装备栏左边一列，36×36 的 LeftSideButton，第 k 个在 left 10×(k%2)、top 40×k；
 // 整列在船体面板中心右边 66（SLOTS_CONTAINER_LEFT + 4 − 8），竖直居中往下 1，有模式时装备栏往右让 32。
@@ -1046,13 +1063,14 @@ function renderStage() {
   // 舰队窗口、总览行的右键菜单；舰队成员拖进关注列表
   const stg = root.querySelector('#plStage');
   stg.addEventListener('contextmenu', onStageCtx);
+  CG.bindDrag(stg);   // 残骸窗口的一行拖到货柜舱窗口
   stg.addEventListener('dragstart', (e) => FL.fleetDragStart(e));
   stg.addEventListener('dragover', (e) => FL.fleetDragOver(e));
   stg.addEventListener('drop', (e) => FL.fleetDrop(e));
   FL.renderFleet(true);
   SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v89').then((m) => {
+  import('./sim-3d.js?v=v90').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -1064,8 +1082,8 @@ function renderStage() {
       self: () => S.me?.i ?? -1,
       onPickCel: (c, e) => { if (S.mv) mvAbort(); pickCel(c, e); },
       onDblCel: (c) => celDbl(c),
-      celShown: (c) => { const x = S.b?.cel[c]; return Boolean(x) && !ovPvp() && ovShowsGroup(x.group); },
-      unitShown: (i) => { const v = S.b?.units[i]; return !v || onGrid(v); },
+      celShown: (c) => { const x = S.b?.cel[c]; return Boolean(x) && !ovPvp() && ovShowsGroup(x.group) && !ST.celHidden(x); },
+      unitShown: (i) => { const v = S.b?.units[i]; return !v || (onGrid(v) && !(v.lootBox && !v.alive)); },
       celName: (c) => { const x = S.b?.cel[c]; return x && S.me ? `${x.name}  ${fmtDist(celDist(S.me, x))}` : ''; },
       onFollowDbl: false,
       nameOf: (i) => (i === S.sel ? S.names[i] : ''),
@@ -1133,22 +1151,26 @@ function checkLoad(now) {
 
 // ---------- 战术视图（Ctrl + D）：射程取主武器（最远的那组）的最佳射程 / 失准范围，锁定距离 ----------
 // 战术视图（客户端 tacticalOverlay）：平时只画锁定距离；鼠标停在装备上时画这件装备的最佳 / 失准距离；当前目标的竖线是白色
-function applyTac() {
+function applyTac(quiet = false) {
   if (!S.view?.setTactical) return;
   root.querySelector('[data-pl-tac]')?.classList.toggle('on', S.set.tac);
   if (!S.set.tac) { S.view.setTactical(null); return; }
-  const u = S.on, m = S.tacMod;
+  const u = S.me?.t || S.on, m = S.tacMod;   // 当前属性（换弹药 / 模式后的射程）
   let opt = 0, fall = 0;
   if (m != null && u) {
     const g = u.guns.find((x) => x.m === m);
-    if (g) { opt = g.turret && !g.vorton ? g.opt || 0 : g.reach || 0; fall = g.turret && !g.vorton ? g.fall || 0 : 0; }
+    const me = S.me, M = (k) => me?.[k] ?? 1;   // 实时系数（干扰、塔）
+    if (g) { opt = g.turret && !g.vorton ? (g.opt || 0) * M('optMult') : (g.reach || 0) * (g.turret ? 1 : M('mvelMult') * M('flightMult')); fall = g.turret && !g.vorton ? (g.fall || 0) * M('fallMult') : 0; }
     else for (const k of ['webs', 'points', 'paints', 'damps', 'ecms', 'neuts', 'noses', 'remote']) {
       const x = (u[k] || []).find((y) => y.m === m);
       if (x) { opt = x.range || 0; fall = x.falloff || 0; break; }
     }
   }
   const act = S.me?.pilot?.active;
-  S.view.setTactical({ center: 0, opt: opt / 1000, fall: fall / 1000, lock: (u?.lockRange || 0) / 1000, interest: act?.alive ? act.i : -1, aggr: tacAggr });
+  const key = [opt, fall, u?.lockRange, S.me?.rangeMult, act?.alive ? act.i : -1].join('|');
+  if (quiet && key === S.tacKey) return;
+  S.tacKey = key;
+  S.view.setTactical({ center: 0, opt: opt / 1000, fall: fall / 1000, lock: (u?.lockRange || 0) * (S.me?.rangeMult ?? 1) / 1000, interest: act?.alive ? act.i : -1, aggr: tacAggr });
 }
 // 战术视图里「有敌意」的物体（客户端 tacticalOverlay._aggressorStates：我锁着 / 正在锁的、锁定我 / 攻击我的）——速度箭头会闪、并画直冲我来的红箭头
 function tacAggr(i) {
@@ -1258,6 +1280,8 @@ function tick(now) {
       S.ovAt = now;
       const sb = S.site && root.querySelector('#plSite');
       if (sb) { const h = ST.siteInfoHtml(); if (sb.dataset.h !== h) { sb.dataset.h = h; sb.innerHTML = h; } }
+      if (S.set.tac) applyTac(true);   // 射程 / 锁定距离随干扰、塔、换弹药变
+      if (!root.querySelector('[data-win="ship"]')?.hidden) renderShip();
       if (S.fleet && !S.match) FL.fleetTick(); renderOverview(); renderSel(true); renderDrones(); FL.renderFleet(); SC.renderDscan(); SC.renderProbe(); refreshTip(); ovLine(); }
     drawMsgs(now);
     const nc = root.querySelector('#plNeoClock');
@@ -1429,6 +1453,7 @@ function afterStep() {
   const u = S.me;
   if (!u) return;
   if (S.site) ST.siteTick();   // 场景刷怪放在前面：新刷的 NPC 下面一起起名字
+  if (S.lootCel >= 0) CG.cargoTick();
   // 放出的无人机成为新单位：名字就是型号名（客户端总览一样）
   for (let i = S.names.length; i < S.b.units.length; i++) S.names.push(typeName(S.b.units[i].r.row.ship));
   flushHits();
@@ -1614,7 +1639,7 @@ function warpTo(tgt, dist = warpD()) {
 }
 // 天体：总览图标（客户端 brackets 按组）、到表面的距离
 const CEL_BRK = { 6: 'sun', 7: 'planet', 8: 'moon', 9: 'asteroidbelt', 10: 'stargate', 15: 'station', 366: 'warpgate' };
-const celIcon = (c) => `${UI}shared/brackets/${CEL_BRK[c.group] || 'planet'}.png?v=1`;
+const celIcon = (c) => (c.brk ? `${UI}${c.brk}?v=1` : `${UI}shared/brackets/${CEL_BRK[c.group] || 'planet'}.png?v=1`);
 const celDist = (u, c) => Math.max(0, Math.hypot(c.pos[0] - u.pos[0], c.pos[1] - u.pos[1], c.pos[2] - u.pos[2]) - (c.radius || 0) - u.t.radius);
 function pickCel(i, e) {
   const c = S.b?.cel[i];
@@ -1623,7 +1648,7 @@ function pickCel(i, e) {
   S.selC = i;
   if (S.keys.has('v')) SC.scanToward(c.pos);   // V + 点击：只朝那个方向扫，镜头不动
   else if (S.keys.has('s')) warpTo({ cel: i });
-  else if (S.keys.has('d') && ST.gateItems(i).length) ST.activate(i);   // D + 点击：激活加速轨道（CmdDockOrJumpOrActivateGate）
+  else if (S.keys.has('d') && ['gate', 'conduit'].includes(ST.gateOf(i)?.kind)) ST.activate(i);   // D + 点击：激活加速轨道（CmdDockOrJumpOrActivateGate）
   else if (S.keys.has('q')) celApproach(i);
   renderSel();
   renderOverview(true);
@@ -1716,6 +1741,7 @@ function onClick(e) {
   let x;
   if (S.fleet && t.closest?.('[data-win="fleet"], [data-win="bc"], [data-win="watch"], [data-win="fcomp"]') && FL.fleetClick(e)) return;
   if (S.scan && t.closest?.('[data-win="dscan"], [data-win="probe"]') && SC.scanClick(e)) return;
+  if (t.closest?.('[data-win="loot"]') && CG.cargoClick(e)) return;
   if ((x = t.closest('[data-pl-pick]'))) {
     const [who, id] = x.dataset.plPick.split(':');
     if (who === 'me') { S.set.ship = Number(id); S.set.fit = 'kb'; } else if (who === 'ally') { if (S.set.allies.length < 8) S.set.allies.push({ ship: Number(id), fit: 'kb', count: 1 }); } else S.set.foes.push({ ship: Number(id), count: 1 });
@@ -1755,6 +1781,7 @@ function onClick(e) {
   if (t.closest('[data-pl-go]')) { launch(); return; }
   const md = t.closest('[data-pl-mode]');
   if (md) { S.set.mode = md.dataset.plMode; if (S.set.mode !== 'free' && ST.siteById(S.set.site)?.kind !== S.set.mode) S.set.site = ST.siteDefault(S.set.mode); save(); renderSetup(); return; }
+  if (t.closest('[data-pl-aby-more]')) { ST.toggleAbyssPool(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx); return; }
   const awx = t.closest('[data-pl-aby-wx]');
   if (awx) { S.set.abyWx = awx.dataset.plAbyWx; save(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx); return; }
   const sc = t.closest('[data-pl-site]');
@@ -1815,6 +1842,7 @@ function act(a, v = S.selC >= 0 ? null : S.b?.units[S.sel]) {
     if (a === 'warp') warpTo({ cel: S.selC });
     if (a === 'approach') celApproach(S.selC);
     if (a === 'gate') ST.activate(S.selC);
+    if (a === 'loot') ST.openCargo(S.selC);
     renderSel();
     return;
   }
@@ -1868,6 +1896,8 @@ function setSpeed(frac) {
   if (frac >= 1) { const v = S.me.t.vel * S.me.velMult; indTemp('舰船全速设置', `速度变为${v >= 100 ? Math.floor(v).toLocaleString('en-US') : v.toFixed(2)} m/s`); }
 }
 function onHudClick(e) {
+  // 货舱和挂舱按钮：开 / 关货柜舱窗口
+  if (e.target.closest('[data-pl-cargobtn]')) { toggleWin('cargo'); return; }
   // 扫描器按钮：选定向扫描器 / 探针扫描器
   if (e.target.closest('[data-pl-scanbtn]')) { hideHint(); closeMenus(); S.cm = [['定向扫描器 (Alt + D)', () => toggleWin('dscan', true)], ['探针扫描器 (Alt + P)', () => toggleWin('probe', true)]]; cmenuAt(e); return; }
   const st = e.target.closest('[data-pl-stance]');
@@ -2177,8 +2207,10 @@ const RES_ATTR = [[984, '22_32_12', '电磁伤害抗性加成'], [985, '22_32_11
 // 装备在算好的装配里对应的那件（取带技能加成后的属性）
 // 超载中的装备：取「这件超载」时算出来的属性（客户端提示读的是超载效果生效后的 dogma 属性）
 const calcMod = (i) => {
-  const k = S.on.rack[i]?.key;
-  const c = S.rk?.ovl.has(i) && S.ovCalc ? S.ovCalc(k, chargeOf(i), S.mode || undefined) : S.calc;
+  const k = S.on.rack[i]?.key, ch = chargeOf(i), ov = Boolean(S.rk?.ovl.has(i));
+  // 超载、换了弹药、换了舰船模式：按现在的状态重算（弹药改射程 / 伤害 / 跟踪等，提示要跟着变）
+  const dirty = ov || (ch && ch !== S.on.rack[i]?.charge) || Boolean(S.mode);
+  const c = dirty && S.ovCalc ? S.ovCalc(k, ch, S.mode || undefined, ov) : S.calc;
   return c?.modules.find((m) => `${m.slot}:${m.index}` === k) || null;
 };
 const shortcutOf = (i) => { const p = posOf(masterOf(i)); return p ? (p[0] === 'high' ? `F${p[1] + 1}` : p[0] === 'mid' ? `Alt-F${p[1] + 1}` : `Ctrl-F${p[1] + 1}`) : ''; };
@@ -2210,8 +2242,11 @@ function modTipHtml(i) {
   // 射程
   const gk = u.t.guns.findIndex((g) => g.m === i), g = gk >= 0 ? u.t.guns[gk] : null;
   const launcher = g && !g.turret, turret = Boolean(t?.turret) || (g && g.turret);
-  const range = launcher ? g.reach : A(ctx.FE.AT.maxRange);
-  const fall = turret ? A(ctx.FE.AT.falloff) : A(2044);
+  // 武器的射程取当前在用的属性（u.t 随弹药 / 模式 / 开关的装备重算）
+  // 再乘引擎里的实时系数（跟踪干扰 / 制导干扰、深渊塔和气云）—— 客户端提示显示的是被这些效果改过的属性
+  const gt = g && g.turret && !g.vorton, M = (k) => u[k] ?? 1;
+  const range = launcher ? g.reach * M('mvelMult') * M('flightMult') : gt ? g.opt * M('optMult') : A(ctx.FE.AT.maxRange);
+  const fall = gt ? g.fall * M('fallMult') : turret ? A(ctx.FE.AT.falloff) : A(2044);
   if (range > 0) {
     const R = fmtDist(range), F = fmtDist(range + fall);
     const txt = launcher ? `最大飞行距离<br>${R}` : turret ? (fall > 1 ? `有效距离 ${F}<br>最佳距离 ${R}` : `最佳射程 ${R}`) : t?.group === 72 ? `效果范围 ${R}` : fall > 1 ? `有效距离 ${F}<br>最佳距离 ${R}` : `有效距离 ${R}`;
@@ -2233,7 +2268,7 @@ function modTipHtml(i) {
   else if (grp === 71) perTime(ICO('2_64_7'), '每{d} 中和{a} GJ', A(97));
   else if (grp === 62 || grp === 1199) perTime(ICO('1_64_11'), '每{d} 修复{a} HP', A(84) * (ch && grp === 1199 ? A(1886) || 1 : 1));
   else if (grp === 63) perTime(ICO('1_64_11'), '每{d} {a} HP', A(83));
-  else if (grp === 40 || grp === 1156) perTime(ICO('22_32_7'), '每{d} 增加{a} HP', A(68));
+  else if (grp === 40 || grp === 1156) row(ICO('22_32_7'), '每{d} 增加{a} HP'.replace('{d}', fmtSec(A(73) * (u.sbDur ?? 1) / 1000)).replace('{a}', fmtN(A(68) * (u.sbAmt ?? 1))));   // 纤维云：回充量 / 周期（引擎 sbAmt / sbDur）
   else if (grp === 41) perTime(ICO('22_32_7'), '每{d} 传输{a} HP', A(68));
   else if (grp === 325) perTime(ICO('1_64_11'), '每{d} 修复{a} HP', A(84));
   else if (grp === 585) perTime(ICO('1_64_11'), '每{d} {a} HP', A(83));
@@ -2243,8 +2278,8 @@ function modTipHtml(i) {
     row(ICO('22_32_22'), `跟踪速度加成：${fmtN(A(767))}%`);
   } else if (grp === 46 && S.prop >= 0) {
     const off = S.auto.filter((x) => !S.me.pilot.on.has(x) && x !== S.prop);
-    const v0 = S.variant([...off, S.prop]).vel * u.velMult;
-    let v1 = S.variant(off).vel * u.velMult;
+    const v0 = S.variant([...off, S.prop], S.charges || {}, S.mode || undefined).vel * u.velMult;
+    let v1 = S.variant(off, S.charges || {}, S.mode || undefined).vel * u.velMult;
     if (S.rk.ovl.has(S.prop)) v1 = v0 + (v1 - v0) * (1 + (S.rk.heat[S.prop]?.spd || 0));   // 超载：速度加成那一段按 overloadSpeedFactorBonus 放大（同 pilot-rules）
     row(ICO('22_32_13'), `停用时最大速度：${fmtN(v0, 1)} m/s<br>启用时最大速度：${fmtN(v1, 1)} m/s`);
   } else if (grp === 65) row(ICO('22_32_13'), `降低目标舰船速度 ${fmtN(Math.abs(A(20)))}%`);
@@ -2262,7 +2297,7 @@ function modTipHtml(i) {
     if (A(309)) pct('22_32_15', A(309), '最大锁定范围加成');
   } else if (grp === 379) pct('22_32_14', A(554), '信号半径修正值');
   // 跟踪速度
-  if (A(160)) row(ICO('22_32_22'), `炮台跟踪速度: ${fmtN(A(160), 2)}`);
+  if (A(160)) row(ICO('22_32_22'), `炮台跟踪速度: ${fmtN(A(160) * (turret ? u.trackMult ?? 1 : 1), 2)}`);   // 跟踪干扰、深渊追踪塔
   // 状态（客户端 GetTextForCurrentStateForDogmaItem：颜色 主动 (0.55,0.87,0.13)、过载 (1,0.17,0.15)、在线 0.6 灰）
   const on = S.me.pilot.on.has(i), ovl = S.rk.ovl.has(i);
   const [txt, col] = !active ? ['启用被动装备', '#999'] : on ? (ovl ? ['过载的装备', '#ff2b26'] : ['主动装备', '#8cde21']) : ['启用装备', '#999'];
@@ -2947,7 +2982,7 @@ function renderOverview() {
   // PVP 页签：只列敌方舰船——天体、空间站、友军、无人机都不列（按用户的游戏内 PVP 页签）
   const pvp = ovPvp();
   const list = S.b.units.filter((v) => v !== u && v.alive && !v.warp && onGrid(v) && (!pvp || v.side !== u.side) && ovShows(v.r.row.ship)).map((v) => ({ k: 'u' + v.i, v, d: surf(u, v) }));
-  if (!pvp) (S.b.cel || []).forEach((c, i) => { if (ovShowsGroup(c.group) && (!c.site || celDist(u, c) <= GRID)) list.push({ k: 'c' + i, c, ci: i, d: celDist(u, c) }); });
+  if (!pvp) (S.b.cel || []).forEach((c, i) => { if (ovShowsGroup(c.group) && !ST.celHidden(c) && (!c.site || celDist(u, c) <= GRID)) list.push({ k: 'c' + i, c, ci: i, d: celDist(u, c) }); });
   // 太空中的无人机（敌我都有）也列出来，只看不点
   for (const o of S.b.units) {
     if (!o.alive || pvp) continue;
@@ -3029,7 +3064,10 @@ function selActs(v) {
     // 客户端对天体也列出整排按钮（不能用的变灰）；这里环绕、保持距离、锁定、观察、跟踪对天体还没做
     const acts = SEL_ACTS.map((a) => ({ ...a, off: a.k === 'approach' ? '' : a.k === 'warp' ? (near ? a.off : '') : '驾驶模拟里对天体暂不支持' }));
     // 加速轨道 / 深渊导管（客户端 selectedItemConst：groupWarpGate → UI/Inflight/ActivateGate，图标 jump_to，排在接近、跃迁至之后）
-    if (ST.gateItems(v.cel).length) acts.splice(2, 0, { k: 'gate', n: '激活加速轨道', ic: 'jump_to', key: 'D' });
+    const gk = ST.gateOf(v.cel)?.kind;
+    if (gk === 'gate' || gk === 'conduit') acts.splice(2, 0, { k: 'gate', n: '激活加速轨道', ic: 'jump_to', key: 'D' });
+    // 残骸（selectedItemConst：groupWreck → UI/Commands/OpenCargo，图标 open_cargo）
+    if (ST.wreckOf(v.cel)) acts.splice(2, 0, { k: 'loot', n: '打开货柜', ic: 'open_cargo', key: '' });
     return acts;
   }
   return SEL_ACTS.map((a) => {
@@ -3190,7 +3228,7 @@ function selfMenu(e) {
 //   相邻两项组不同就画分隔线，手写的分隔线（None）也一起排到最前，等于不起作用。
 //   图标：ICON_BY_ACTIONID 里有的动作画 16px 图标（观察、重置视角在黑名单里不画），广播条目带广播图标。
 const CM_GROUP = { 跃迁至: 1, 接近: 1, 环绕: 1, 保持距离: 1, 朝向该处: 1, 观察: 1, 跟踪: 1, 重置视角: 1, 停止舰船: 1, 锁定目标: 1, 解除目标锁定: 1, 激活加速轨道: 1, 舰队: 7 };
-const CM_ICON = { 跃迁至: 'warp_to', 接近: 'approach', 环绕: 'orbit', 保持距离: 'keep_at_distance', 朝向该处: 'align_to', 锁定目标: 'target', 解除目标锁定: 'target', 激活加速轨道: 'jump_to' };
+const CM_ICON = { 跃迁至: 'warp_to', 接近: 'approach', 环绕: 'orbit', 保持距离: 'keep_at_distance', 朝向该处: 'align_to', 锁定目标: 'target', 解除目标锁定: 'target', 激活加速轨道: 'jump_to', 打开货柜: 'open_cargo' };
 const cmGroup = (t) => CM_GROUP[t] ?? (t.startsWith('带领') ? 4 : -1);   // 带领舰队跃迁…：FLEETGROUP
 // 条目第三项可带 { g: 组在 menuHierarchy 里的序号, ic: 图标, warn: DESTRUCTIVEGROUP 的橙色感叹号组图标 }
 function clientMenu(items) {
@@ -3451,20 +3489,31 @@ function setDrones(on) {
 function renderShip() {
   const box = root?.querySelector('#plShip'), u = S.me;
   if (!box || !u) return;
-  const t = S.on, off = S.off;
+  // 当前状态（装备开关、弹药、舰船模式、深渊天气都在 u.t 里），再乘引擎的实时系数（网 / 标记 / 抑阻、气云 / 塔）
+  const t = u.t, M = (k) => u[k] ?? 1;
   const row = (k, v) => `<tr><th>${k}</th><td>${v}</td></tr>`;
-  const n = (x, d = 0) => ctx.formatNumber(Number(x.toFixed(d)));
-  box.innerHTML = `<div class="pl-ship-head"><img src="${IMG(flyShip(), 'render', 64)}" alt=""><div><b>${esc(typeName(flyShip()))}</b><span>${esc(S.fitLabel || '')}</span></div></div>
+  const n = (x, d = 0) => ctx.formatNumber(Number((x || 0).toFixed(d)));
+  // 推进器关 / 开两档：同装备提示的算法（超载按 overloadSpeedFactorBonus 放大速度加成那一段）
+  let pv = null;
+  if (S.prop >= 0 && S.variant) {
+    const off = S.auto.filter((x) => !u.pilot.on.has(x) && x !== S.prop), ch = S.charges || {}, md = S.mode || undefined;
+    const a = S.variant([...off, S.prop], ch, md), b = S.variant(off, ch, md);
+    let v1 = b.vel;
+    if (S.rk?.ovl.has(S.prop)) v1 = a.vel + (b.vel - a.vel) * (1 + (S.rk.heat[S.prop]?.spd || 0));
+    pv = { v0: a.vel * M('velMult'), v1: v1 * M('velMult'), s0: a.sig * M('sigMult'), s1: b.sig * M('sigMult') };
+  }
+  const html = `<div class="pl-ship-head"><img src="${IMG(flyShip(), 'render', 64)}" alt=""><div><b>${esc(typeName(flyShip()))}</b><span>${esc(S.fitLabel || '')}</span></div></div>
     <table class="pl-kv">
-      ${row('输出（DPS）', n(t.dps || 0))}
-      ${row('有效血量（EHP）', n(t.ehp || 0))}
-      ${row('最大速度', S.prop >= 0 ? `${n(off.vel)} m/s · 推进器开 ${n(t.vel)} m/s` : `${n(t.vel)} m/s`)}
-      ${row('信号半径', S.prop >= 0 ? `${n(off.sig)} m · 推进器开 ${n(t.sig)} m` : `${n(t.sig)} m`)}
-      ${row('对准时间', `${n(t.align || 0, 1)} 秒`)}
-      ${row('锁定距离', fmtDist(t.lockRange))}
-      ${row('扫描分辨率', `${n(t.scanRes)} mm`)}
+      ${row('输出（DPS）', n(t.dps))}
+      ${row('有效血量（EHP）', n(t.ehp))}
+      ${row('最大速度', pv ? `${n(pv.v0)} m/s · 推进器开 ${n(pv.v1)} m/s` : `${n(t.vel * M('velMult'))} m/s`)}
+      ${row('信号半径', pv ? `${n(pv.s0)} m · 推进器开 ${n(pv.s1)} m` : `${n(t.sig * M('sigMult'))} m`)}
+      ${row('对准时间', `${((t.align || 0) * M('tauMult')).toFixed(1)} 秒`)}
+      ${row('锁定距离', fmtDist((t.lockRange || 0) * M('rangeMult')))}
+      ${row('扫描分辨率', `${n(t.scanRes * M('scanMult'))} mm`)}
       ${row('同时锁定', `${u.pilot.maxLocks} 个`)}
       ${row('电容', `${n(t.cap.max)} GJ`)}
     </table>`;
+  if (box.dataset.h !== html) { box.dataset.h = html; box.innerHTML = html; }
 }
 export const debugPilot = () => S;   // 调试用（控制台查看驾驶模拟状态）

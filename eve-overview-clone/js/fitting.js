@@ -7,7 +7,7 @@ import * as FE from './fit-engine.js?v=v45';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
 import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
-import { initSim, mountSim, pilotRow, pilotShipSearch, fitBody as simFitBody } from './fit-sim.js?v=v135';
+import { initSim, mountSim, pilotRow, pilotShipSearch, fitBody as simFitBody } from './fit-sim.js?v=v136';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v13';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle, skPilot } from './skeleton.js?v=v18';
@@ -172,11 +172,12 @@ export async function showPilot(root) {
   toolInit?.();
   await MU.loadMuta().catch(() => {});
   if (!pilotMod) {
-    pilotMod = await import('./pilot.js?v=v147');
+    pilotMod = await import('./pilot.js?v=v154');
     pilotMod.initPilot({ get data() { return F.data; }, FE, shipSearch: pilotShipSearch, savedFits, normalize,
       // 无人机一架都没激活时按带宽激活（不改原装配）
       pilotRow: (ship, fit, label, o) => pilotRow(ship, fit, label, (f) => { if (f?.drones?.length && !f.drones.some((d) => d.active)) autoActivateDrones(f); }, o),
       hasEsi: () => app.hasEsiToken(), esiFits: loadEsiFitList, getFit: () => F.fit,
+      prices: () => app.getMarketPriceMap(),   // 全服均价（货柜舱 / 残骸窗口的预估价格，客户端 GetAveragePrice）
       // 匹配对战：ESI 令牌（服务器用它核实角色、读真实技能）
       getEsiToken: () => app.getEsiToken(),
       // 「查看装配」：和战场模拟装配详情同一套内容；「在装配页打开」同战场模拟

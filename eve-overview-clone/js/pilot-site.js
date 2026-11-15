@@ -26,7 +26,7 @@ const KM = 1000;
 
 // ---------- NPC 数据 ----------
 let ND = null, ndP = null;
-export const loadNpcData = () => (ndP ||= fetch('npc-data.json?v=3').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => {
+export const loadNpcData = () => (ndP ||= fetch('npc-data.json?v=4').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => {
   ND = d;
   // NPC 类型挂进装配数据的类型表：名字、总览图标（按组）、过滤、选中物体窗口都照舰船那套走
   const types = H.ctx.data?.types;
@@ -37,6 +37,20 @@ export const loadNpcData = () => (ndP ||= fetch('npc-data.json?v=3').then((r) =>
   }
   return d;
 }));
+// ---------- 深渊战利品（abyss-loot.json：Abyssal.Space 实跑，每趟各房间的贮藏 / 节点 + 整趟拿到的东西）----------
+let LD = null, ldLoad = null;
+export const loadLoot = () => (ldLoad ||= fetch('abyss-loot.json?v=2').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => (LD = d)));
+export const lootItem = (t) => LD?.items?.[t] || null;   // [中文名, 英文名, 体积, 组中文, 组英文]
+// 抽一趟：同等级同天气的实跑；这个天气记录太少（< 5 趟）就用同等级全部天气
+const LOOT_MIN = 5;
+function lootRun(tier, wx) {
+  const all = LD?.tiers?.[tier];
+  if (!all?.length) return null;
+  const same = all.filter((r) => r.w === wx);
+  return { run: pick(same.length >= LOOT_MIN ? same : all), anyWx: same.length < LOOT_MIN, n: same.length >= LOOT_MIN ? same.length : all.length };
+}
+export const lootStat = (tier, wx) => { const all = LD?.tiers?.[tier] || []; const same = all.filter((r) => r.w === wx).length; return { all: all.length, same }; };
+export const lootReady = () => Boolean(LD);
 const EN = () => window.I18N?.lang === 'en';
 const L = (o, k = 'name') => (EN() && o[k + 'En'] != null ? o[k + 'En'] : EN() && k === 'name' && o.en ? o.en : o[k]);   // 场景、门的英文名
 // 层：死亡空间第 0 层是入口（只有入口加速轨道），进去是第 1 层、第 2 层…；深渊从第 1 层开始（客户端「空间层」）
@@ -133,13 +147,21 @@ export function siteInstance(def, wxName) {
   const wx = def.wx[wxName] || def.wx[pick(Object.keys(def.wx))];
   const li = randInt(0, wx.b.length - 1);
   const types = Object.entries(def.objs);
+  const wxKey = Object.keys(def.wx).find((k) => def.wx[k] === wx);
+  // 战利品：抽一趟同等级同天气的实跑 —— 每层的贮藏 / 节点照那趟的（第 N 层 = 那趟的第 N 个房间），
+  // 整趟拿到的东西一堆一堆随机分进这些容器（怎么分是模拟自己定的，实跑数据只有整趟总数）
+  const lr = def.tier ? lootRun(def.tier, wxKey) : null;
+  const conts = def.rooms.map((_, ri) => (lr ? lr.run.c[ri] || [] : [47951]).map((type) => ({ type, loot: [] })));
+  const flat = conts.flat();
+  if (lr && flat.length) for (const [t, q] of lr.run.g) pick(flat).loot.push([t, q]);
   const rooms = def.rooms.map((_, ri) => {
     // 有实测出现次数（n）的按次数加权
     const sp = def.pool[0].n ? def.pool[pickW(def.pool.map((x) => x.n))] : pick(def.pool);
     const last = ri === def.rooms.length - 1;
     const objs = [
       { key: 'c', kind: 'conduit', type: last ? 47686 : 47685, at: [0, 0, 25], lock: 'room', exit: last },
-      { key: 'cache', kind: 'struct', type: 47951, at: [12, 0, 5] },
+      // 贮藏 / 节点：位置是自己定的（实跑数据没有坐标），散在口袋中间一带
+      ...conts[ri].map((c, n) => ({ key: 'L' + n, kind: 'struct', type: c.type, at: [randInt(-15, 15), randInt(-3, 3), randInt(-8, 18)], ...(lr ? { loot: c.loot } : {}) })),
     ];
     const want = [];
     if (Math.random() < 0.6) want.push('cloud');
@@ -156,7 +178,7 @@ export function siteInstance(def, wxName) {
     });
     return { spawn: [0, 0, -25], waves: rollRoom(sp), objs, clearMsg: '导管已开启', spawnId: sp.id, f: sp.f, room: sp.name, note: sp.note, inf: sp.inf };
   });
-  return { ...def, weather: wx.b[li], wxLv: def.lv[li], cover: wx.cover, sky: pick(def.skies), rooms };
+  return { ...def, weather: wx.b[li], wxLv: def.lv[li], cover: wx.cover, sky: pick(def.skies), rooms, loot: lr ? { anyWx: lr.anyWx, n: lr.n, total: lr.run.g.length } : null };
 }
 export function siteStart(def) {
   const { S } = H;
@@ -173,6 +195,15 @@ export function siteStart(def) {
         const n = ND?.npc?.[o.type];
         R.objs.set(o.key, { cel: S.b.cel.length });
         S.b.cel.push({ name: n ? (EN() ? n.n[1] : n.n[0]) : String(o.type), group: n?.g || 1971, type: o.type, typeName: n ? (EN() ? n.n[1] : n.n[0]) : '', pos: at(R, o.at), radius: o.r, land: 0, site: { room: k, key: o.key, kind: 'cloud' } });
+        continue;
+      }
+      if (o.loot) {
+        // 残骸（客户端：容器被打掉后换成残骸类型，组 186 Wreck，「打开货柜」拿东西）：建筑不会动，位置先定好；打掉前不显示
+        const wt = Number(LD?.wreck?.[o.type]) || 0, wn = lootItem(wt);
+        R.wreck ||= new Map();
+        R.wreck.set(o.key, S.b.cel.length);
+        S.b.cel.push({ name: wn ? (EN() ? wn[1] : wn[0]) : String(wt), group: 186, type: wt, typeName: wn ? (EN() ? wn[1] : wn[0]) : '', pos: at(R, o.at), radius: 0, land: 0,
+          site: { room: k, key: o.key, kind: 'wreck', dead: false, loot: o.loot.map(([t, q]) => ({ t, q })) } });
         continue;
       }
       if (o.kind !== 'gate' && o.kind !== 'conduit') continue;
@@ -209,7 +240,7 @@ function enterRoom(k, first = false) {
     const row = npcRow(o.type, st.env);
     if (!row) continue;
     const [u] = deployNpc(S.me.side === 'A' ? 'B' : 'A', row, 1, at(R, o.at));
-    if (u) { u.siteObj = o.key; R.objs.set(o.key, { unit: u }); }
+    if (u) { u.siteObj = o.key; if (o.loot) u.lootBox = true; R.objs.set(o.key, { unit: u }); }
   }
   // 气云 / 塔的作用范围（引擎 B.zones：范围内所有舰船，敌我都算；塔被打掉就失效）
   S.b.zones.length = 0;
@@ -259,7 +290,7 @@ export function siteTick() {
   if (st.nav) {
     const c = S.b.cel[st.nav.i];
     if (!S.me.alive || S.me.warp || S.me.pilot?.cmd !== 'point') st.nav = null;
-    else if (c && gateDist(c, S.me) <= GATE_RANGE) activate(st.nav.i);
+    else if (c && gateDist(c, S.me) <= GATE_RANGE) { const { i, loot } = st.nav; if (loot) { st.nav = null; H.openLoot?.(i); } else activate(i); }
   }
   // 跃迁落地 → 进房间
   if (!S.me.warp && st.pend != null) {
@@ -278,6 +309,10 @@ export function siteTick() {
       R.waves.set(w.key, { units, at: S.b.t });
       if (w.msg) H.msg(w.msg);
       if (w.boss) for (const u of units) u.siteBoss = true;
+    }
+    if (R.wreck) for (const [key, ci] of R.wreck) {
+      const u = R.objs.get(key)?.unit, c = S.b.cel[ci];
+      if (u && !u.alive && !c.site.dead) { c.site.dead = true; c.radius = u.t.radius || 0; c.pos = u.pos.slice(); c.brk = wreckBrk(c.site); H.wreck?.(ci); }
     }
     if (!R.done && roomClear(R)) {
       R.done = true;
@@ -306,9 +341,25 @@ export function siteTick() {
 
 // ---------- 加速门 / 导管 ----------
 export function gateOf(i) { return H.S.b?.cel?.[i]?.site || null; }
+// 残骸：打掉前不显示（总览、画面图标）
+export const celHidden = (c) => c?.site?.kind === 'wreck' && !c.site.dead;
+const wreckBrk = (w) => `shared/brackets/${w.loot.length ? 'wrecknpc' : 'wrecklootednpc'}.png`;
+export function wreckEmptied(i) { const c = H.S.b?.cel[i]; if (c?.site?.kind === 'wreck') c.brk = wreckBrk(c.site); }
+export const wreckOf = (i) => { const g = gateOf(i); return g?.kind === 'wreck' && g.dead ? g : null; };
+// 打开货柜（客户端 menusvc.OpenCargo → GetCloseAndTryCommand：不在 2,500 m 内先飞过去，到了再打开）
+export function openCargo(i) {
+  const { S } = H;
+  const c = S.b?.cel[i], me = S.me;
+  if (!wreckOf(i) || !me?.alive) return;
+  if (gateDist(c, me) > GATE_RANGE) { H.approach(i); S.site.nav = { i, loot: true }; return; }
+  S.site.nav = null;
+  H.openLoot?.(i);
+}
+export const lootRange = (i) => { const c = H.S.b?.cel[i]; return Boolean(c && H.S.me && gateDist(c, H.S.me) <= GATE_RANGE); };
 // 右键天体菜单的额外项
 export function gateItems(i) {
   const g = gateOf(i);
+  if (g?.kind === 'wreck') return g.dead ? [['打开货柜', () => openCargo(i)]] : [];   // UI/Commands/OpenCargo
   if (!g || (g.kind !== 'gate' && g.kind !== 'conduit')) return [];
   // 客户端 menusvc：加速轨道和深渊导管都是 UI/Inflight/ActivateGate「激活加速轨道」
   return [['激活加速轨道', () => activate(i)]];
@@ -427,6 +478,16 @@ export function siteSetupHtml(kind, sel, wxSel) {
     </div>`;
 }
 // 深渊设置页：等级卡片 + 天气选择 + 这个等级的刷怪池（每层从里面随机抽）
+// 刷怪池默认只列每种组合的短名，点「展开」才列全部船名和数量（换等级、换天气都保持）
+let abyOpen = false;
+export const toggleAbyssPool = () => { abyOpen = !abyOpen; };
+// 战利品说明：数据来源 + 分箱是模拟自己随机分的；这一级还没有数据就说没有
+function lootLine(cur) {
+  if (!LD) { loadLoot().then(() => H.rerender?.()); return ''; }
+  const n = LD.tiers?.[cur.tier]?.length || 0;
+  return n ? `<p class="text-muted"><b>战利品：</b>每趟抽 Abyssal.Space 上一次同等级同天气的实跑（共 ${n} 趟），拿到的东西照那趟；贮藏 / 节点也照那趟，东西随机分进各个容器（实跑只记整趟总数）。右键残骸「打开货柜」，船体面板左边「货舱和挂舱」看货柜舱和预估价格。</p>`
+    : '<p class="text-muted"><b>战利品：</b>这一级还没有实跑数据，暂不掉落。</p>';
+}
 function abyssSetupHtml(list, cur, wxSel) {
   const { esc } = H;
   const wxKeys = Object.keys(cur.wx);
@@ -437,12 +498,16 @@ function abyssSetupHtml(list, cur, wxSel) {
   // 实测统计（parts）：每个 NPC 写实测出现过的数量范围；护卫写出现概率
   const sep = EN() ? ', ' : '、';
   const range = (h) => { const ks = h.map((v, k) => (v ? k : -1)).filter((k) => k > 0); return ks.length ? (ks[0] === ks[ks.length - 1] ? ks[0] : `${ks[0]}-${ks[ks.length - 1]}`) : 0; };
-  const pct = (x) => `${Math.round(x * 100)}%`;
+  const pct = (x) => (x > 0 && x < 0.005 ? '<1%' : `${Math.round(x * 100)}%`);
   const partHtml = (pt) => pt.g.map(([t, h]) => `${esc(npcName(t))} ×${range(h)}`).join(sep);
   const totalN = cur.pool.reduce((a, sp) => a + (sp.n || 0), 0);
   const spHtml = (sp) => (sp.parts
     ? `<p><b>${esc(sp.name)}</b><em>（${pct(sp.n / totalN)}，每房 ${sp.parts[0].tot[0]}-${sp.parts[0].tot[1]} 艘）</em>${partHtml(sp.parts[0])}${sp.parts.slice(1).map((pt) => `<span><em>${pct(pt.p)} 带${esc(pt.esc)}护卫（${pt.tot[0]}-${pt.tot[1]} 艘）：</em>${partHtml(pt)}</span>`).join('')}</p>`
     : `<p>${groups(sp)}${sp.max ? `<em>（每房最多 ${sp.max} 艘）</em>` : ''}${sp.inf ? ' <i>推断</i>' : ''}${sp.note ? `<span>${esc(sp.note)}</span>` : ''}</p>`);
+  // 收起时每种组合只写一个短名：实测房间类型写名字和占比；资料表写第一组的船名（多组加「等」）
+  const brief = (sp) => (sp.parts
+    ? `<span class="pl-aby-chip">${esc(sp.name)}<em>${pct(sp.n / totalN)}</em></span>`
+    : `<span class="pl-aby-chip">${[...new Set(sp.g[0][2])].slice(0, 2).map((t) => esc(npcName(t))).join(' / ')}${sp.g.length > 1 ? '<em>等</em>' : ''}</span>`);
   const fac = new Map();
   for (const sp of cur.pool) { if (!fac.has(sp.f)) fac.set(sp.f, []); fac.get(sp.f).push(sp); }
   return `<div class="pl-sites">${list.map((s) => `<button type="button" class="pl-site-card${s === cur ? ' on' : ''}" data-pl-site="${esc(s.id)}"><b>${esc(L(s))}</b><span>${esc(L(s, 'sub') || '')}</span></button>`).join('')}</div>
@@ -452,13 +517,14 @@ function abyssSetupHtml(list, cur, wxSel) {
       <p><b>天气：</b>${esc(EN() ? w.en : w.name)}，强度 ${cur.lv.join('% 或 ')}%（随机）<span>（玩家和 NPC 都受影响）</span></p>
       ${env?.desc?.length ? `<p class="text-muted">最强一档：${env.desc.map((d) => esc(d[EN() ? 1 : 0])).join('；')}</p>` : ''}
       <p><b>时限：</b>${Math.round(cur.time / 60)} 分钟 · <b>层数：</b>${layerCount(cur)} · <b>导管：</b>清完房间里的敌人后开启</p>
-      ${cur.stat
-        ? `<p><b>房间：</b>按 Abyssal.Space 上 ${cur.stat[0]} 次 T6 巡洋舰实跑（${cur.stat[1]} 个房间）归纳出 ${cur.pool.length} 类房间；每层按实测出现比例抽一类，每种船的数量按实测频率抽；塔的数量和种类也照实测，气云随机</p>`
-        : `<p><b>房间：</b>每层从下面 ${cur.pool.length} 种组合里随机抽一种，数量在区间里随机；气云、塔随机出现（等级越高塔越常见）</p>`}
-      <div class="pl-aby-pool">${[...fac].map(([f, sps]) => `<div><b>${esc(f)}</b>${sps.map(spHtml).join('')}</div>`).join('')}</div>
+      ${lootLine(cur)}
+      ${abyOpen
+        ? `<div class="pl-aby-pool">${[...fac].map(([f, sps]) => `<div><b>${esc(f)}</b>${sps.map(spHtml).join('')}</div>`).join('')}</div>
       ${cur.pool.some((sp) => sp.inf) ? '<p class="text-muted">标「推断」的组合资料里没有：照 T5 同类组合换成 T6 版本的 NPC（数量没改）</p>' : ''}
-      <p class="text-muted">星空：客户端深渊场景 ad0${cur.tier}（编号对应等级是推断）</p>
-      ${cur.src ? `<p class="text-muted">刷怪资料：${cur.src.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(new URL(u).hostname)}${new URL(u).pathname.length > 1 ? ` · ${esc(decodeURIComponent(new URL(u).pathname.split('/').pop()).replace(/_/g, ' '))}` : ''}</a>`).join('、')}</p>` : ''}
+      <p class="text-muted">星空：客户端深渊场景 ad0${cur.tier}（编号对应等级是推断）</p>`
+        : `<div class="pl-aby-pool pl-aby-brief">${[...fac].map(([f, sps]) => `<div><b>${esc(f)}</b><p>${sps.map(brief).join('')}</p></div>`).join('')}</div>`}
+      <button type="button" class="btn btn-ghost btn-sm pl-aby-more" data-pl-aby-more>${abyOpen ? '收起' : `展开全部 ${cur.pool.length} 种组合（船名和数量）`}</button>
+      ${abyOpen && cur.src ? `<p class="text-muted">刷怪资料：${cur.src.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(new URL(u).hostname)}${new URL(u).pathname.length > 1 ? ` · ${esc(decodeURIComponent(new URL(u).pathname.split('/').pop()).replace(/_/g, ' '))}` : ''}</a>`).join('、')}</p>` : ''}
     </div>`;
 }
 export const siteDefault = (kind) => SITES.find((s) => s.kind === kind)?.id || '';
