@@ -2500,7 +2500,8 @@ export function createView(host, hooks = {}, opt = {}) {
   }
   let down = null;
   const el = renderer.domElement;
-  el.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
+  let rdown = null;   // 右键按下的位置：右键拖动（平移镜头）后不弹菜单
+  el.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; if (e.button === 2) rdown = down; });
   el.addEventListener('pointerup', (e) => {
     if (placing && down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) {
       const p = planePoint(e.clientX, e.clientY);
@@ -2512,7 +2513,7 @@ export function createView(host, hooks = {}, opt = {}) {
     down = null;
   });
   // 右键：把鼠标下的船 / 天体交给外面（自己船的右键菜单等）
-  el.addEventListener('contextmenu', (e) => { if (placing) return; const p = pick(e); hooks.onCtx?.(p.i, p.c, e); });
+  el.addEventListener('contextmenu', (e) => { if (placing) return; if (rdown && Math.hypot(e.clientX - rdown[0], e.clientY - rdown[1]) >= 6) { e.preventDefault(); return; } const p = pick(e); hooks.onCtx?.(p.i, p.c, e); });
   el.addEventListener('dblclick', (e) => {
     const pk = pick(e), i = pk.i;
     if (pk.c >= 0 && hooks.onDblCel) { hooks.onDblCel(pk.c, e); return; }

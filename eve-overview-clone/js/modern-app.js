@@ -1152,7 +1152,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v329').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v330').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -4753,6 +4753,7 @@ async function loadCharacterData() {
   if (myCharacterId() !== id) return;   // 读取期间切换了角色，丢弃旧角色的数据
   state.characterData = Object.fromEntries(entries);
   state.contracts = null;
+  state.corpContracts = null;
   state.contractItems.clear();
   state.contractBids.clear();
   state.characterData.assets = assets;
@@ -6025,11 +6026,15 @@ const CONTRACT_STATUS_GROUPS = [
   ['expired', '已过期'], ['closed', '已取消 / 拒绝 / 失败']
 ];
 const CONTRACT_ROLES = [['all', '全部合同'], ['issuer', '我发起的'], ['acceptor', '我接受的'], ['assignee', '指派给我的']];
+// 军团合同（「军团合同」权限，/corporations/{id}/contracts/）：角色按军团算——代表军团发起 / 军团接受 / 指派给军团
+const CORP_CONTRACT_ROLES = [['all', '全部合同'], ['issuer', '军团发起的'], ['acceptor', '军团接受的'], ['assignee', '指派给军团的']];
+const CONTRACT_SOURCES = [['me', '个人合同'], ['corp', '军团合同']];
 
 state.contracts = null;              // 合同列表（或 { __error }）
 state.contractItems = new Map();     // contract_id -> items
 state.contractBids = new Map();      // contract_id -> bids
-state.contractView = { type: 'all', status: 'all', role: 'all', id: null };
+state.corpContracts = null;          // 军团合同列表（或 { __error }），每份带 _corp
+state.contractView = { type: 'all', status: 'all', role: 'all', id: null, src: 'me' };
 
 function myCharacterId() {
   return (state.esiToken || readEsiToken())?.character_id;
@@ -6050,6 +6055,12 @@ function contractStatusPill(c) {
 
 function contractRoles(c, me) {
   const roles = [];
+  if (c._corp) {
+    if (c.issuer_corporation_id === me && c.for_corporation) roles.push('issuer');
+    if (c.acceptor_id === me) roles.push('acceptor');
+    if (c.assignee_id === me) roles.push('assignee');
+    return roles;
+  }
   if (c.issuer_id === me) roles.push('issuer');
   if (c.acceptor_id === me) roles.push('acceptor');
   if (c.assignee_id === me) roles.push('assignee');
@@ -6086,34 +6097,63 @@ async function loadContractsImpl() {
     state.contracts = { __error: error.message };
     return;
   }
+  await resolveContractParties(state.contracts);
+}
+// 当前角色所在军团（角色资料里有就用，没有读公开接口）
+async function myCorpId() {
+  const me = myCharacterId();
+  const ch = state.characterData?.character;
+  if (ch?.corporation_id) return ch.corporation_id;   // 换角色时 characterData 会清空重读
+  const info = await fetchESI('/characters/' + me + '/');
+  return info.corporation_id;
+}
+function loadCorpContracts() {
+  if (!state.corpContractsLoading) state.corpContractsLoading = loadCorpContractsImpl().finally(() => { state.corpContractsLoading = null; });
+  return state.corpContractsLoading;
+}
+async function loadCorpContractsImpl() {
+  try {
+    const corp = await myCorpId();
+    const list = await esiAuthFetchPaged('/corporations/' + corp + '/contracts/');
+    state.corpContracts = list.map((c) => ({ ...c, _corp: corp }));
+  } catch (error) {
+    state.corpContracts = { __error: error.status === 403 ? '没有「军团合同」权限，或军团不允许读取' : error.message };
+    return;
+  }
+  await resolveContractParties(state.corpContracts);
+}
+async function resolveContractParties(contracts) {
   // 玩家/军团/联盟名称保留原名；地点用官方中文站名，玩家建筑尝试读取名称
-  const parties = state.contracts.flatMap((c) => [c.issuer_id, c.acceptor_id, c.assignee_id, c.issuer_corporation_id])
+  const parties = contracts.flatMap((c) => [c.issuer_id, c.acceptor_id, c.assignee_id, c.issuer_corporation_id])
     .filter((id) => id && !officialName(id) && !state.esiNames.has(id));
   const named = await resolveNames(parties);
   for (const [key, value] of named.names) state.esiNames.set(key, value);
-  await ST.lookupIds(state.contracts.flatMap((c) => [c.issuer_id, c.acceptor_id]));   // 对方声望（发起人 / 接受人一定是角色）
-  await resolveStructureNames(state.contracts.flatMap((c) => [c.start_location_id, c.end_location_id]));
+  await ST.lookupIds(contracts.flatMap((c) => [c.issuer_id, c.acceptor_id]));   // 对方声望（发起人 / 接受人一定是角色）
+  await resolveStructureNames(contracts.flatMap((c) => [c.start_location_id, c.end_location_id]));
 }
 
 async function renderContractsTab(box) {
-  if (!state.contracts || state.contractsLoading) {
+  const corp = state.contractView.src === 'corp';
+  if (corp && !hasScopeGroup('corpContracts')) { renderContractList(box); return; }
+  if (corp ? !state.corpContracts || state.corpContractsLoading : !state.contracts || state.contractsLoading) {
     box.innerHTML = skCards(4, 'contract-grid') + skToolbar(4) + skRows(10);
-    await loadContracts();
-    if (activeProfileTab() !== 'contracts') return;
+    await (corp ? loadCorpContracts() : loadContracts());
+    if (activeProfileTab() !== 'contracts' || (state.contractView.src === 'corp') !== corp) return;
   }
-  if (state.contracts.__error) {
-    box.innerHTML = '<p class="text-muted">合同读取失败或权限不足：' + esc(state.contracts.__error) + '</p>';
-    return;
-  }
-  const contract = state.contractView.id != null && state.contracts.find((c) => c.contract_id === state.contractView.id);
+  const src = corp ? state.corpContracts : state.contracts;
+  if (src.__error) { renderContractList(box); return; }
+  const contract = state.contractView.id != null && src.find((c) => c.contract_id === state.contractView.id);
   if (contract) await renderContractDetail(box, contract);
   else { state.contractView.id = null; renderContractList(box); }
 }
 
 function renderContractList(box) {
-  const me = myCharacterId();
   const view = state.contractView;
-  const all = [...state.contracts].sort((a, b) => new Date(b.date_issued) - new Date(a.date_issued));
+  const corp = view.src === 'corp';
+  const noScope = corp && !hasScopeGroup('corpContracts');
+  const src = noScope ? [] : (corp ? state.corpContracts : state.contracts) || [];
+  const me = corp ? src[0]?._corp : myCharacterId();
+  const all = (src.__error ? [] : [...src]).sort((a, b) => new Date(b.date_issued) - new Date(a.date_issued));
   const byRoleStatus = all.filter((c) =>
     (view.role === 'all' || contractRoles(c, me).includes(view.role)) &&
     (view.status === 'all' || contractStatusKey(c) === view.status));
@@ -6127,7 +6167,8 @@ function renderContractList(box) {
 
   const rows = list.map((c) => {
     const roles = contractRoles(c, me);
-    const roleText = roles.includes('issuer') ? '我发起' : roles.includes('acceptor') ? '我接受' : roles.includes('assignee') ? '指派给我' : '';
+    const roleText = corp ? (roles.includes('issuer') ? '军团发起' : roles.includes('acceptor') ? '军团接受' : roles.includes('assignee') ? '指派给军团' : '')
+      : roles.includes('issuer') ? '我发起' : roles.includes('acceptor') ? '我接受' : roles.includes('assignee') ? '指派给我' : '';
     const counterpart = roles.includes('issuer') ? (c.acceptor_id || c.assignee_id) : c.issuer_id;
     return `<tr class="contract-row" data-contract-id="${c.contract_id}" tabindex="0">
         <td><span class="pill type-${c.type}">${esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))}</span></td>
@@ -6147,30 +6188,34 @@ function renderContractList(box) {
         types.map((t) => `<button data-ctype="${t}" class="${view.type === t ? 'active' : ''}">${CONTRACT_TYPE_ZH[t]} <span class="seg-count">${counts[t] || 0}</span></button>`).join('') +
       '</div>' +
       '<span class="toolbar-spacer"></span>' +
-      select('contractRole', CONTRACT_ROLES, view.role) +
+      select('contractSrc', CONTRACT_SOURCES, view.src) +
+      select('contractRole', corp ? CORP_CONTRACT_ROLES : CONTRACT_ROLES, view.role) +
       select('contractStatus', CONTRACT_STATUS_GROUPS, view.status) +
     '</div>' +
-    (list.length
+    (noScope ? scopeNeededHtml('corpContracts', '查看军团合同')
+      : src.__error ? '<p class="text-muted">合同读取失败或权限不足：' + esc(src.__error) + '</p>'
+      : list.length
       ? '<div class="table-scroll"><table class="pc-mini-table contract-table"><thead><tr>' +
           '<th>类别</th><th>合同</th><th>状态</th><th>对方</th><th class="num">金额</th><th>地点</th><th class="num">发布</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table></div>'
       : '<p class="text-muted">没有符合条件的合同</p>') +
     '<p class="text-muted valuation-note" title="ESI 只返回最近 30 天">共 ' + all.length + ' 份合同</p>';
 
+  $('contractSrc').addEventListener('change', (e) => { view.src = e.target.value; view.id = null; renderContractsTab(box); });
   $('contractRole').addEventListener('change', (e) => { view.role = e.target.value; renderContractList(box); });
   $('contractStatus').addEventListener('change', (e) => { view.status = e.target.value; renderContractList(box); });
 }
 
 async function loadContractDetailData(c) {
-  const me = myCharacterId();
+  const base = c._corp ? '/corporations/' + c._corp + '/contracts/' + c.contract_id : '/characters/' + myCharacterId() + '/contracts/' + c.contract_id;
   const jobs = [];
   if (!state.contractItems.has(c.contract_id)) {
-    jobs.push(esiAuthFetch('/characters/' + me + '/contracts/' + c.contract_id + '/items/')
+    jobs.push(esiAuthFetch(base + '/items/')
       .then((items) => state.contractItems.set(c.contract_id, items))
       .catch((error) => state.contractItems.set(c.contract_id, { __error: error.message })));
   }
   if (c.type === 'auction' && !state.contractBids.has(c.contract_id)) {
-    jobs.push(esiAuthFetch('/characters/' + me + '/contracts/' + c.contract_id + '/bids/')
+    jobs.push(esiAuthFetch(base + '/bids/')
       .then((bids) => state.contractBids.set(c.contract_id, bids))
       .catch(() => state.contractBids.set(c.contract_id, [])));
   }

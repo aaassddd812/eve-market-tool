@@ -17,10 +17,11 @@ import { bindUnit, pilotUnit } from './sim-unit.js?v=v8';
 import { buildMatch, stepMatch } from './match-sim.js?v=v11';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
-import * as FL from './pilot-fleet.js?v=6';
-import * as SC from './pilot-scan.js?v=6';
+import * as FL from './pilot-fleet.js?v=7';
+import * as SC from './pilot-scan.js?v=7';
 import * as ST from './pilot-site.js?v=21';
 import * as CG from './pilot-cargo.js?v=2';
+import * as OS from './pilot-ovset.js?v=1';
 
 let ctx = null;
 let root = null;
@@ -93,7 +94,7 @@ export function initPilot(context) {
   });
   SC.initScan({
     S, root: () => root, esc, tr, UI, typeName, data: () => ctx.data, typeImg: (id) => IMG(id, 'icon', 32), fmtDist, AU,
-    ovShows: (t) => ovShows(t), ovShowsGroup: (g) => ovShowsGroup(g), icon: (v) => typeIcon(v.r.row.ship, S.brk[v.i] || 'frigate'),
+    ovShows: (t, p) => ovShows(t, p), ovShowsGroup: (g, p) => ovShowsGroup(g, p), presetOpts: () => OS.presetOptions(), presetName: (p) => OS.presetName(p || ovPreset()), store: ctx.store, icon: (v) => typeIcon(v.r.row.ship, S.brk[v.i] || 'frigate'),
     iconOf: (t) => typeIcon(t, 'dronelightscout'), celIcon: (c) => celIcon(c), pick: (i, e) => pickUnit(i, e), pickCel: (i, e) => pickCel(i, e),
     menu: (items, e) => { hideHint(); closeMenus(); S.cm = items; cmenuAt(e); }, unitMenu: (v) => unitMenu(v), warpTo: (tgt, d) => warpTo(tgt, d),
     log: (t, k) => pushLog(t, k), openWin: (id, show) => toggleWin(id, show ? true : undefined),
@@ -109,9 +110,12 @@ export function initPilot(context) {
   });
   CG.initCargo({ S, ctx, esc, tr, UI, IMG, ST, root: () => root, toggleWin: (id, show) => toggleWin(id, show), msg: (t) => { pushLog(t, 'bad'); quickMsg(t); },
     wreckEmpty: (i) => { ST.wreckEmptied(i); renderOverview(true); } });
+  // 总览页签 / 预设（自己改过的记在本机）
+  OS.initOvSet({ S, store: ctx.store, esc, tr, UI, root: () => root, defaults: () => ovPresets, presetNames: () => OV_PRESET, presetLabel: (p) => tr(OV_PRESET[p] || p),
+    groupName: (g) => ovGroupName(g), openWin: (id) => toggleWin(id, true), changed: (tabsToo) => ovChanged(tabsToo) });
   const saved = ctx.store.getJSON(KEY, null);
   const ot = Number(ctx.store.getJSON(OV_KEY, 0));
-  S.ovTab = ot >= 0 && ot < OV_TABS.length ? ot : 0;
+  S.ovTab = ot >= 0 && ot < OS.tabs().length ? ot : 0;
   if (saved && typeof saved === 'object') Object.assign(S.set, { ship: Number(saved.ship) || 0, fit: saved.fit || 'kb', foes: Array.isArray(saved.foes) ? saved.foes : [], dist: DISTS.includes(saved.dist) ? saved.dist : 30, sky: SKIES.includes(saved.sky) ? saved.sky : '', tac: saved.tac !== false, mmode: saved.mmode === '2v2' ? '2v2' : '1v1', mcap: MATCH_CAPS.includes(saved.mcap) ? saved.mcap : MATCH_CAPS[0],
     tab: ['match', 'tut'].includes(saved.tab) ? saved.tab : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
     pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', boost: Array.isArray(saved.boost) ? saved.boost.map(Number).filter(Boolean).slice(0, 16) : Array.isArray(saved.imp) ? saved.imp.map(Number).filter(Boolean) : null, tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
@@ -520,7 +524,7 @@ function sideMsg(side) {
 const shipChip = (id) => `<span class="pl-chip"><img src="${IMG(id, 'icon', 32)}" alt="" loading="lazy"><b>${esc(typeName(id))}</b></span>`;
 
 function onInput(e) {
-  if (SC.scanInput(e)) return;
+  if (SC.scanInput(e) || OS.input(e)) return;
   const q = e.target.closest('[data-pl-q]');
   if (e.target.matches('[data-pl-pq]')) {
     PUB.q = e.target.value;
@@ -537,7 +541,7 @@ function onInput(e) {
 }
 function onChange(e) {
   const t = e.target;
-  if (FL.fleetChange(e) || SC.scanChange(e)) return;
+  if (FL.fleetChange(e) || SC.scanChange(e) || OS.change2(e)) return;
   if (t.matches('[data-pl-fit]')) { S.set.fit = t.value; save(); renderSetup(); }   // 植入体跟着装配变
   if (t.matches('[data-pl-afit]')) { const a = S.set.allies[Number(t.dataset.plAfit)]; if (a) { a.fit = t.value; save(); } }
   if (t.matches('[data-pl-acount]')) { const a = S.set.allies[Number(t.dataset.plAcount)]; if (a) { a.count = Math.max(1, Math.min(20, Math.round(Number(t.value)) || 1)); save(); } }
@@ -752,7 +756,9 @@ const typeIcon = (type, fb) => { const p = brkPath(type); return p ? `${UI}${p}?
 const WINS = [
   { id: 'ctl', title: '模拟控制', icon: 'settings', w: 300, h: 74, x: 56, y: 10 },
   { id: 'sel', title: '选中的物体', icon: 'info', w: 400, h: 168, r: 10, y: 10, nokill: true },
-  { id: 'ov', title: '总览', icon: 'overview', w: 400, h: 330, r: 10, y: 186, nokill: true },
+  { id: 'ov', title: '总览', icon: 'overview', w: 400, h: 330, r: 10, y: 186, nokill: true, more: true },
+  // 总览设置（客户端 OverviewSettingsWnd 默认 520×600；从总览「更多」菜单打开，Neocom 上没有）
+  { id: 'ovset', title: '总览设置', icon: 'overview', w: 520, h: 600, x: 340, y: 40, closed: true, noneo: true },
   { id: 'drones', title: '无人机', icon: 'drones', w: 400, h: 216, r: 10, y: 524, nokill: true, need: () => S.on?.drones?.length > 0 },
   { id: 'ship', title: '舰船属性', icon: 'fitting', w: 270, h: 300, x: 56, y: 96, closed: true },
   // 场景（死亡空间 / 深渊）：当前房间、深渊计时、天气
@@ -775,7 +781,7 @@ const WIN_KEY = 'eve-pilot-wins';
 const winBody = {
   ctl: () => `<div class="pl-ctl"><button type="button" class="pl-btn" data-pl-exit>返回设置</button>${S.match ? '' : '<button type="button" class="pl-btn" data-pl-pause>暂停</button><button type="button" class="pl-btn" data-pl-restart>重来</button>'}<button type="button" class="pl-btn" data-pl-full>${document.fullscreenElement ? '退出全屏' : '全屏'}</button><span class="pl-clock" id="plClock"></span></div>`,
   sel: () => '<div id="plSel"></div>',
-  ov: () => `<div class="pl-ov-tabs">${OV_TABS.map(([n, , c], i) => `<button type="button" data-pl-ovtab="${i}" style="--c:${c}"${i === S.ovTab ? ' class="on"' : ''}>${n}</button>`).join('')}<i class="pl-ov-line"></i></div><div class="pl-ov-body"><table style="width:${ovCols().reduce((a, b) => a + b, 0)}px"><colgroup>${ovCols().map((w) => `<col style="width:${w}px">`).join('')}</colgroup><thead><tr><th></th><th class="srt">距离<img src="${UI}eveicon/system_icons/caret_up_16px.png?v=1" alt=""><i class="pl-ovsc" data-ov-scale="1"></i></th><th>名字<i class="pl-ovsc" data-ov-scale="2"></i></th><th>类型<i class="pl-ovsc" data-ov-scale="3"></i></th><th>速度 (m/s)<i class="pl-ovsc" data-ov-scale="4"></i></th></tr></thead><tbody id="plOv"></tbody></table></div>`,
+  ov: () => `<div class="pl-ov-tabs">${ovTabsHtml()}</div><div class="pl-ov-body"><table style="width:${ovCols().reduce((a, b) => a + b, 0)}px"><colgroup>${ovCols().map((w) => `<col style="width:${w}px">`).join('')}</colgroup><thead><tr><th></th><th class="srt">距离<img src="${UI}eveicon/system_icons/caret_up_16px.png?v=1" alt=""><i class="pl-ovsc" data-ov-scale="1"></i></th><th>名字<i class="pl-ovsc" data-ov-scale="2"></i></th><th>类型<i class="pl-ovsc" data-ov-scale="3"></i></th><th>速度 (m/s)<i class="pl-ovsc" data-ov-scale="4"></i></th></tr></thead><tbody id="plOv"></tbody></table></div>`,
   drones: () => '<div id="plDrones"></div>',
   ship: () => '<div id="plShip"></div>',
   site: () => '<div id="plSite"></div>',
@@ -787,7 +793,8 @@ const winBody = {
   watch: () => FL.watchBody(),
   fcomp: () => FL.compBody(),
   dscan: () => SC.dsBody(),
-  probe: () => SC.psBody()
+  probe: () => SC.psBody(),
+  ovset: () => OS.body()
 };
 function winLayout() {
   let saved = {};
@@ -854,13 +861,13 @@ function ovAutoFit(k) {
 }
 function winsHtml() {
   return WINS.filter((w) => !w.need || w.need()).map((w) => `<div class="pl-w pl-win-${w.id}${w.id === 'ov' ? ' pl-ov' : ''}${w.nokill ? ' nokill' : ''}" data-win="${w.id}" hidden>
-    <div class="pl-wh" data-win-drag><img class="pl-wi" src="${winIcon(w)}" alt=""><span${w.id === 'ov' ? ' id="plOvTitle"' : ''}>${w.id === 'ov' ? ovTitle() : w.id === 'fleet' ? esc(tr(FL.fleetTitle())) : w.title}</span>
-      ${w.more ? `<button type="button" data-win-more title="更多"><img src="${UI}eveicon/system_icons/more_vertical_16px.png?v=1" alt=""></button>` : ''}<button type="button" data-win-lock title="锁定窗口"><img src="${UI}classes/window/btnunlock.png?v=1" alt=""></button><button type="button" data-win-min title="最小化"><img src="${UI}eveicon/system_icons/minimize_16px.png?v=1" alt=""></button>${w.nokill ? '' : `<button type="button" data-win-close title="关闭"><img src="${UI}classes/window/btnclose.png?v=1" alt=""></button>`}</div>
+    <div class="pl-wh${w.id === 'fleet' ? ' tabs' : ''}" data-win-drag><img class="pl-wi" src="${winIcon(w)}" alt="">${w.id === 'fleet' ? FL.fleetTabsHtml() : `<span${w.id === 'ov' ? ' id="plOvTitle"' : ''}>${w.id === 'ov' ? ovTitle() : w.title}</span>`}
+      ${winBtns(w)}</div>
     <div class="pl-wbody">${winBody[w.id]()}</div>
     ${WIN_RS.map((d) => `<i class="pl-wrs ${d}" data-win-resize="${d}"></i>`).join('')}</div>`).join('');
 }
 function neocomHtml() {
-  return `<nav class="pl-neo" aria-label="窗口"><span class="pl-neo-eve"><img src="${UI}shared/hamburgermenu_large.png?v=1" alt=""></span>${WINS.filter((w) => !w.need || w.need()).map((w) => `<button type="button" data-win-open="${w.id}" title="${w.title}"><img src="${winIcon(w)}" alt=""></button>`).join('')}
+  return `<nav class="pl-neo" aria-label="窗口"><span class="pl-neo-eve"><img src="${UI}shared/hamburgermenu_large.png?v=1" alt=""></span>${WINS.filter((w) => !w.noneo && (!w.need || w.need())).map((w) => `<button type="button" data-win-open="${w.id}" title="${w.title}"><img src="${winIcon(w)}" alt=""></button>`).join('')}
     <button type="button" data-win-reset title="窗口恢复默认位置" class="pl-neo-reset"><img src="${UI}windowicons/navigation.png?v=1" alt=""></button><time class="pl-neo-clock" id="plNeoClock" title="EVE 时间"></time></nav>`;
 }
 // 按保存的位置（没有就用默认）摆放，并限制在画面里
@@ -889,13 +896,21 @@ document.addEventListener('fullscreenchange', () => {
 });
 
 // 锁定窗口：标题栏锁图标换成「已锁」，不能拖动和缩放
+// 标题栏按钮照客户端 WindowControls：核心按钮（关闭、最小化；锁定只在锁住时算核心，显示一把锁）放标题栏，
+// 其余（没锁时的「锁定窗口大小及位置」）收进「⋮」，⋮ 菜单里先窗口操作、再隔一条线放窗口自己的选项（GetMenuMoreOptions）
+const winBtns = (w) => `<button type="button" data-win-more title="${esc(tr('更多'))}"><img src="${UI}eveicon/system_icons/more_vertical_16px.png?v=1" alt=""></button><button type="button" data-win-lock title="${esc(tr('解锁窗口大小及位置'))}" hidden><img src="${UI}eveicon/system_icons/locked_16px.png?v=1" alt=""></button><button type="button" data-win-min title="${esc(tr('最小化'))}"><img src="${UI}eveicon/system_icons/minimize_16px.png?v=1" alt=""></button>${w.nokill ? '' : `<button type="button" data-win-close title="${esc(tr('关闭'))}"><img src="${UI}eveicon/system_icons/close_16px.png?v=1" alt=""></button>`}`;
 function lockWin(el, on) {
   if (!el) return;
   el.classList.toggle('locked', on);
   const b = el.querySelector('[data-win-lock]');
-  if (!b) return;
-  b.title = tr(on ? '解锁窗口' : '锁定窗口');
-  b.querySelector('img').src = `${UI}classes/window/${on ? 'btnlock' : 'btnunlock'}.png?v=1`;
+  if (b) b.hidden = !on;
+}
+function winMoreMenu(win, e) {
+  const id = win.dataset.win, locked = win.classList.contains('locked');
+  const items = [[locked ? '解锁窗口大小及位置' : '锁定窗口大小及位置', () => { lockWin(win, !locked); saveWins(); }, { ic: `${UI}eveicon/system_icons/${locked ? 'locked' : 'unlocked'}_16px.png?v=1` }]];
+  const extra = id === 'ov' ? OS.moreMenu() : id === 'fleet' ? FL.moreMenu() : [];
+  if (extra.length) items.push(null, ...extra);
+  hideHint(); closeMenus(); S.cm = items; cmenuAt(e);
 }
 function placeWins(reset = false) {
   const stage = root.querySelector('#plStage');
@@ -1011,6 +1026,7 @@ function toggleWin(id, show) {
   if (id === 'loot') { if (el.hidden) S.lootCel = -1; else CG.renderLoot(); }
   if (id === 'dscan' && !el.hidden) { SC.renderDscan(true); SC.dscan(); }
   if (id === 'probe' && !el.hidden) SC.renderProbe(true);
+  if (id === 'ovset' && !el.hidden) OS.render();
   syncNeo();
   saveWins();
 }
@@ -1130,7 +1146,7 @@ function renderStage() {
   FL.renderFleet(true);
   SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v90').then((m) => {
+  import('./sim-3d.js?v=v91').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -1149,7 +1165,14 @@ function renderStage() {
       nameOf: (i) => (i === S.sel ? S.names[i] : ''),
       onHover: (i) => { S.hoverShip = i >= 0; cursorMode(); },
       onTrack: () => renderSel(),
-      onCtx: (i, c, e) => { if (!S.mv && S.me && i === S.me.i) { e.preventDefault(); selfMenu(e); } }
+      // 右键太空里的物体：自己的船 → 停止 / 重置视角；别的船、天体 → 和总览里右键一样的菜单
+      onCtx: (i, c, e) => {
+        if (S.mv || !S.me) return;
+        if (i === S.me.i) { e.preventDefault(); selfMenu(e); return; }
+        const items = i >= 0 ? unitMenu(S.b?.units[i]) : c >= 0 ? celMenu(c) : [];
+        if (!items.length) return;
+        e.preventDefault(); hideHint(); closeMenus(); S.cm = items; cmenuAt(e);
+      }
     }, { brackets: brkPath, ui: UI, quality: 'auto', skybox: `${UI}sky/${S.sky}/`, fx: `${UI}fx/`, post: true, fov: 1.0 });   // 客户端环绕镜头 default_fov = 1.0 弧度（「镜头动态移动」关着时）
     if (!S.view) { S.noView = tr('这个浏览器不支持 3D（WebGL）'); return; }
     // 指定空间点航行（客户端 navigation.py + positionalControl）：按住 Q、鼠标在太空里且没按键时开始；左键拖动（转镜头）取消；
@@ -1800,9 +1823,13 @@ const { canActivate, activate, cycleOf, cycStart, toggleable } = R;
 function onClick(e) {
   const t = e.target;
   let x;
+  if ((x = t.closest?.('[data-win-more]'))) { winMoreMenu(x.closest('[data-win]'), e); return; }
   if (S.fleet && t.closest?.('[data-win="fleet"], [data-win="bc"], [data-win="watch"], [data-win="fcomp"]') && FL.fleetClick(e)) return;
   if (S.scan && t.closest?.('[data-win="dscan"], [data-win="probe"]') && SC.scanClick(e)) return;
   if (t.closest?.('[data-win="loot"]') && CG.cargoClick(e)) return;
+  if (t.closest?.('[data-win="ovset"], .pl-os-pop') && OS.click(e)) return;
+  if (t.closest?.('[data-pl-ovadd]')) { OS.addTabPopup(); return; }
+  if (t.closest?.('[data-pl-ovmore]')) { ovTabsMenu(e); return; }
   if ((x = t.closest('[data-pl-pick]'))) {
     const [who, id] = x.dataset.plPick.split(':');
     if (who === 'boost') addBoost(Number(id)); else if (who === 'me') { S.set.ship = Number(id); S.set.fit = 'kb'; } else if (who === 'ally') { if (S.set.allies.length < 8) S.set.allies.push({ ship: Number(id), fit: 'kb', count: 1 }); } else S.set.foes.push({ ship: Number(id), count: 1 });
@@ -1925,6 +1952,7 @@ function act(a, v = S.selC >= 0 ? null : S.b?.units[S.sel]) {
 function onKey(e) {
   if (!S.b || !active() || !root.querySelector('#plStage')) return;
   if (e.type === 'keydown' && FL.fleetInputKey(e)) return;
+  if (e.type === 'keydown' && OS.keydown(e)) return;
   if (e.target.closest?.('input, textarea, select')) return;
   const k = e.key.toLowerCase();
   if (k === 'control') { S.ctrl = e.type === 'keydown'; cursorMode(); return; }
@@ -2990,7 +3018,7 @@ function drawMarks() {
 // 分页和颜色照游戏里的默认总览；每页按游戏默认总览配置（assets/eveui/overview-default.json，
 // 由 tools/ui-assets/overview.py 从客户端的 old_default 数据生成）里对应预设的物品组过滤
 // 页签名和颜色照游戏截图（玩家常用的那套总览，颜色按截图取色，没选中的也不压暗）；标题里的预设名是客户端 old_default 预设的本地化名（overview/default/const.py preset_name_ids）
-const OV_TABS = [['通用', 'default', '#00cc99'], ['采矿', 'defaultmining', '#ff6600'], ['跃迁到', 'defaultwarpto', '#3399ff'], ['刷怪', 'defaultall', '#ff0000'], ['PVP', 'defaultpvp', '#ffff00'], ['可拾取', 'defaultloot', '#66ff00'], ['打捞', 'defaultdrones', '#668b8b'], ['天体/行星海关', 'defaultwarpto', '#cd950c']];
+// 页签（名字、预设、颜色）可以在总览设置里改，见 pilot-ovset.js；默认那套在 OS.DEFAULT_TABS
 const OV_PRESET = { default: '通用', defaultmining: '采矿', defaultwarpto: '跃迁到', defaultall: '全部', defaultpvp: 'PVP', defaultloot: '拾取', defaultdrones: '无人机' };
 const OV_KEY = 'eve-pilot-ovtab';
 let ovPresets = null, ovLoad = null;
@@ -2999,7 +3027,25 @@ const loadOvPresets = () => (ovLoad ||= fetch(`${UI}overview-default.json?v=1`).
   renderOverview();
 }).catch(() => { ovPresets = {}; }));
 // UI/Tactical/OverviewCaption：「总览 ({preset})」
-const ovTitle = () => `${tr('总览')} (${tr(OV_PRESET[OV_TABS[S.ovTab ?? 0][1]])})`;
+const ovPreset = () => OS.tabs()[S.ovTab ?? 0]?.[1] || 'default';
+const ovTitle = () => `${tr('总览')} (${OS.presetName(ovPreset())})`;
+// 页签栏末尾的「+」（OverviewWindow：tabGroup.AddButton(eveicon.add) → 添加标签窗口）；教程里不给
+const ovTabsHtml = () => `${OS.tabs().map(([n, , c], i) => `<button type="button" data-pl-ovtab="${i}" style="--c:${esc(c)}"${i === S.ovTab ? ' class="on"' : ''}>${esc(n)}</button>`).join('')}<i class="pl-ov-line"></i><span class="pl-ov-trail"><span class="pl-ov-tb" data-pl-ovmore hidden><img src="${UI}eveicon/system_icons/expand_more_16px.png?v=1" alt=""></span>${S.tut ? '' : `<span class="pl-ov-tb" data-pl-ovadd title="${esc(tr('添加标签'))}"><img src="${UI}eveicon/system_icons/add_16px.png?v=1" alt=""></span>`}</span>`;
+// 物品组名（右键「添加…到总览」用）：总览设置的组表里有就用它，没有用装配数据的组名
+let ovGroupNames = null;
+fetch(`${UI}overview-groups.json?v=1`).then((r) => (r.ok ? r.json() : null)).then((d) => { ovGroupNames = new Map(); for (const c of d?.cats || []) for (const g of c.g) if (!Array.isArray(g[0])) ovGroupNames.set(g[0], g); }).catch(() => {});
+const ovGroupName = (g) => { const x = ovGroupNames?.get(g); return x ? (window.I18N?.lang === 'en' ? x[2] : x[1]) : ctx.data.groups.get(g)?.name || String(g); };
+// 预设 / 页签改了：页签栏、标题、总览列表、太空里的图标、设置窗口都刷新
+function ovChanged(tabsToo) {
+  if (S.ovTab >= OS.tabs().length) S.ovTab = 0;
+  if (tabsToo) { const bar = root?.querySelector('.pl-ov-tabs'); if (bar) bar.innerHTML = ovTabsHtml(); ovLine(); }
+  const t = root?.querySelector('#plOvTitle');
+  if (t) t.textContent = ovTitle();
+  const body = root?.querySelector('#plOv');
+  if (body) body.textContent = '';
+  renderOverview();
+  OS.render();
+}
 function setOvTab(i) {
   S.ovTab = i;
   ctx.store.setJSON(OV_KEY, i);
@@ -3013,23 +3059,69 @@ function setOvTab(i) {
   renderOverview();
 }
 // 页签下的选中线（客户端 TabGroup：1px，激活窗口 #58A7BF、否则 #B0B0B0，0.05 ~ 0.15 秒滑过去）
+// 页签排版照 carbonui TabGroup._update_tab_sizes：间距 24，排不下先把间距往 12 收，再把最宽的页签往窄里压（最窄 20）；
+// 压到最窄还放不下，就藏掉选中页签后面放不下的、再从前面藏，末尾出「∨」按钮（TabOverflowMenuButton）列出全部页签
+const TAB_SP = 24, TAB_MINSP = 12, TAB_MINW = 20;
 function ovLine() {
-  const bar = root?.querySelector('.pl-ov-tabs'), on = bar?.querySelector('button.on'), ln = bar?.querySelector('.pl-ov-line');
-  if (!on || !ln) return;
-  // 标签间距 24，排不下时往 12 收
-  bar.style.gap = '24px';
-  const n = bar.querySelectorAll('button').length;
-  if (bar.scrollWidth > bar.clientWidth && n > 1) bar.style.gap = `${Math.max(12, 24 - Math.ceil((bar.scrollWidth - bar.clientWidth) / (n - 1)))}px`;
-  ln.style.left = `${on.offsetLeft}px`;
-  ln.style.width = `${on.offsetWidth}px`;
+  const bar = root?.querySelector('.pl-ov-tabs'), ln = bar?.querySelector('.pl-ov-line');
+  if (!bar || !ln || !bar.clientWidth) return;
+  const tabs = [...bar.querySelectorAll('[data-pl-ovtab]')], trail = bar.querySelector('.pl-ov-trail'), more = bar.querySelector('[data-pl-ovmore]');
+  for (const b of tabs) { b.hidden = false; b.style.width = ''; b.classList.remove('cut'); }
+  if (more) more.hidden = true;
+  bar.style.gap = '0px';
+  const nat = tabs.map((b) => b.offsetWidth);
+  const hasTrail = Boolean(trail?.querySelector('[data-pl-ovadd]'));
+  const W = bar.clientWidth - (parseFloat(getComputedStyle(bar).paddingLeft) || 0) - (parseFloat(getComputedStyle(bar).paddingRight) || 0);
+  let avail = W - (trail?.offsetWidth || 0);
+  const small = (i) => Math.min(TAB_MINW, nat[i]);
+  const minTotal = tabs.reduce((a, b, i) => a + small(i), 0) + (tabs.length - 1 + (hasTrail ? 1 : 0)) * TAB_MINSP;
+  let vis = tabs.map((b, i) => i);
+  if (minTotal > avail && more) {
+    more.hidden = false;
+    avail = W - trail.offsetWidth;
+    const sel = S.ovTab ?? 0;
+    let acc = TAB_MINSP, out = false, last = 0, first = 0;
+    tabs.forEach((b, i) => {
+      const sp = i ? TAB_MINSP : 0;
+      out = out || acc + sp + small(i) > avail;
+      if (out && i > sel) { b.hidden = true; return; }
+      acc += sp + small(i); last = i;
+    });
+    for (let i = 0; i < tabs.length; i++) {
+      if (acc <= avail || i === last) break;
+      tabs[i].hidden = true; acc -= small(i) + TAB_MINSP; first = i + 1;
+    }
+    vis = vis.filter((i) => i >= first && i <= last && !tabs[i].hidden);
+  }
+  const spaces = vis.length - 1 + (hasTrail || (more && !more.hidden) ? 1 : 0);
+  let over = Math.max(vis.reduce((a, i) => a + nat[i], 0) + spaces * TAB_SP - avail, 0);
+  let gaps = spaces * TAB_SP;
+  if (over > 0) { const g2 = Math.max(gaps - over, spaces * TAB_MINSP); over -= gaps - g2; gaps = g2; }
+  if (over > 0) {
+    // 从最宽的往下削平（每个不低于 20）：找水位 L，使 Σ max(0, 宽 − max(L, 20)) = 超出量
+    let lo = 0, hi = Math.max(...vis.map((i) => nat[i]));
+    for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; const cut = vis.reduce((a, i) => a + Math.max(0, nat[i] - Math.max(m, small(i))), 0); if (cut > over) lo = m; else hi = m; }
+    for (const i of vis) if (nat[i] > Math.max(hi, small(i))) { tabs[i].style.width = `${Math.floor(Math.max(hi, small(i)))}px`; tabs[i].classList.add('cut'); }
+  }
+  bar.style.gap = `${spaces > 0 ? gaps / spaces : TAB_SP}px`;
+  const on = bar.querySelector('button.on:not([hidden])');
+  ln.style.display = on ? '' : 'none';
+  if (on) { ln.style.left = `${on.offsetLeft}px`; ln.style.width = `${on.offsetWidth}px`; }
+}
+// 「∨」：列出全部页签，选中的高亮
+function ovTabsMenu(e) {
+  hideHint(); closeMenus();
+  S.cm = OS.tabs().map(([n], i) => [n, () => setOvTab(i), i === (S.ovTab ?? 0) ? { hi: true } : {}]);
+  cmenuAt(e);
 }
 // 同一网格（引擎 GRID，约 8000 km，船心距离）：总览和太空里的图标只显示这个范围内的船
 const onGrid = (v) => !S.me || v === S.me || Math.hypot(v.pos[0] - S.me.pos[0], v.pos[1] - S.me.pos[1], v.pos[2] - S.me.pos[2]) <= GRID;
-const ovPvp = () => OV_TABS[S.ovTab ?? 0][1] === 'defaultpvp';
+const ovPvp = () => ovPreset() === 'defaultpvp';
 // 这一页显示不显示某个类型（配置还没加载完时全显示）
-const ovShows = (type) => ovShowsGroup(ctx.data.types.get(type)?.group);
-const ovShowsGroup = (g) => {
-  const set = ovPresets?.[OV_TABS[S.ovTab ?? 0][1]];
+// p：指定筛选条件（定向扫描的「显示结果」），不给就用当前页签的
+const ovShows = (type, p) => ovShowsGroup(ctx.data.types.get(type)?.group, p);
+const ovShowsGroup = (g, p) => {
+  const set = ovPresets ? OS.groupsOf(p || ovPreset()) : null;
   return !set || set.has(g);
 };
 const surf = (u, v) => Math.max(0, Math.hypot(v.pos[0] - u.pos[0], v.pos[1] - u.pos[1], v.pos[2] - u.pos[2]) - u.t.radius - (v.t?.radius || 0));
@@ -3250,6 +3342,8 @@ function unitMenu(v, bare = false) {
     items.push(P.locks.has(v) ? ['解除目标锁定', () => act('unlock', v)] : ['锁定目标', () => lockUnit(v)]);
   }
   if (bare) return items;
+  // 总览可见性（menusvc：OfferToggleOverviewVisibility → overviewMenuUtil.GetToggleEntry）
+  if (v !== S.me) items.push(OS.toggleEntry(ctx.data.types.get(v.r.row.ship)?.group));
   items.push(...FL.fleetMenu(v));
   return clientMenu(items);
 }
@@ -3263,11 +3357,15 @@ function celMenu(i) {
   else items.push(['接近', () => celApproach(i)], ['环绕', () => cmd({ cmd: 'orbit', cel: i, dist: S.orbit })], ['保持距离', () => cmd({ cmd: 'keep', cel: i, dist: S.keep })]);
   items.push(['朝向该处', () => alignTo({ cel: i })]);
   if (S.fleet) items.push([FL.bcName('warp'), () => FL.broadcast('warp', { cel: i })], [FL.bcName('align'), () => FL.broadcast('align', { cel: i })]);
+  items.push(OS.toggleEntry(c.group));
   return clientMenu(items);
 }
 function onStageCtx(e) {
   if (S.fleet && FL.fleetCtx(e)) return;
   if (SC.scanCtx(e)) return;
+  // 右键总览页签：筛选条件 ▸ / 更改名称 / 删除标签
+  const tb = e.target.closest?.('[data-pl-ovtab]');
+  if (tb) { e.preventDefault(); hideHint(); closeMenus(); S.cm = OS.tabMenu(Number(tb.dataset.plOvtab)); if (S.cm.length) cmenuAt(e); return; }
   const ct = e.target.closest?.('#plOv tr[data-pl-ovc]');
   if (ct) { e.preventDefault(); hideHint(); closeMenus(); S.cm = celMenu(Number(ct.dataset.plOvc)); if (S.cm.length) cmenuAt(e); return; }
   const tr0 = e.target.closest?.('#plOv tr[data-pl-ov]');
@@ -3325,7 +3423,7 @@ function cmenuBuild(list, path, x, y, depth, anchorW = 0) {
     const chk = o.on != null ? `<img class="ck" src="${UI}classes/utilmenu/checkbox${o.on ? 'active' : 'inactive'}.png?v=1" alt="">` : o.radio != null ? `<img class="ck" src="${UI}classes/utilmenu/radiobutton${o.radio ? 'active' : 'inactive'}.png?v=1" alt="">` : '';
     // 组图标（MenuEntryView.ConstructGroupIcon）：底圆按组色，上面叠白色符号
     const mi = !icons ? '' : o.warn ? `<em class="mi gi warn"><img src="${UI}classes/menu/exclamationmark.png?v=1" alt=""></em>` : o.ic ? `<img class="mi" src="${o.ic}" alt="">` : '<em class="mi"></em>';
-    return `<button type="button" class="${sub ? 'sub' : ''}${o.off ? ' off' : ''}" data-pl-cm="${k}">${mi}${chk}<span>${esc(tr(it[0]))}</span>${sub ? `<img class="ar" src="${UI}icons/1_16_14.png?v=1" alt="">` : ''}</button>`;
+    return `<button type="button" class="${sub ? 'sub' : ''}${o.off ? ' off' : ''}${o.hi ? ' hi' : ''}" data-pl-cm="${k}">${mi}${chk}<span>${esc(tr(it[0]))}</span>${sub ? `<img class="ar" src="${UI}icons/1_16_14.png?v=1" alt="">` : ''}</button>`;
   }).join('');
   stage.appendChild(el);
   if (x + el.offsetWidth > st.width) x -= el.offsetWidth + 2 + anchorW;

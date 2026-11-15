@@ -9411,8 +9411,9 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-tgt-w img { width: var(--sz, 32px); height: var(--sz, 32px); }
 /* 窗口照当前客户端（Photon）：背后场景模糊、轻微压暗，保留场景色调（实拍录像里窗口后面的空间站白色区域透出来约 0.5~0.6 倍亮度、模糊很重，色相不变）；
    1px 白边（不透明度 0.1）；当前窗口顶边一条 1px 主题色线（#58A7BF，0.5）；紧凑标题栏 32px，标题 12px，当前窗口白 0.9、其余白 0.5 */
-.pl-w { --pl-accent: #58a7bf; --pl-tint: 48, 86, 101; position: relative; pointer-events: auto; background: rgba(10, 10, 10, 0.08);
-  -webkit-backdrop-filter: blur(20px) brightness(0.62); backdrop-filter: blur(20px) brightness(0.62); }
+/* 客户端窗口底比太空暗得多（截图里即使压在星云上也只有 20–30 的亮度）：模糊 + 压暗 + 一层深色 */
+.pl-w { --pl-accent: #58a7bf; --pl-tint: 48, 86, 101; position: relative; pointer-events: auto; background: rgba(10, 12, 14, 0.45);
+  -webkit-backdrop-filter: blur(20px) brightness(0.5); backdrop-filter: blur(20px) brightness(0.5); }
 .pl-w::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
 .pl-w::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px; z-index: 3; pointer-events: none; background: var(--pl-accent); opacity: 0; transition: opacity 0.4s; }
 .pl-w.is-act::before { opacity: 0.5; }
@@ -9567,6 +9568,16 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-wh button { width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; opacity: 0.5; }
 .pl-wh button:hover { opacity: 1; }
 .pl-wh button img { width: 16px; height: 16px; }
+.pl-wh button[hidden] { display: none; }
+/* 舰队窗口：TabNavigationWindowHeader —— 窗口图标 + 页签（选中白字、底下 #58A7BF 线），没有标题文字 */
+.pl-wh.tabs .pl-wi { display: block; flex: none; width: 20px; height: 20px; opacity: 0.75; }
+.pl-wh .pl-fl-tabs { flex: 1; display: flex; align-items: stretch; gap: 16px; min-width: 0; height: 32px; overflow: hidden; margin-left: 6px; }
+.pl-wh .pl-fl-tabs button { position: relative; width: auto; height: 32px; display: flex; align-items: center; flex: none; padding: 0; opacity: 1; color: rgba(255, 255, 255, 0.5); font-size: 14px; white-space: nowrap; cursor: pointer; }
+.pl-wh .pl-fl-tabs button:hover { color: rgba(255, 255, 255, 0.85); }
+.pl-wh .pl-fl-tabs button.on { color: #fff; }
+.pl-wh .pl-fl-tabs button.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: 3px; height: 1px; background: #b0b0b0; }
+.pl-w.is-act .pl-wh .pl-fl-tabs button.on::after { background: #58a7bf; box-shadow: 0 0 4px rgba(88, 167, 191, 0.75); }
+.pl-wh .pl-fl-tabs button[hidden] { display: none; }
 .pl-w.locked .pl-wrs { display: none; }
 .pl-w.locked .pl-wh { cursor: default; }
 .pl-wbody { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
@@ -9854,6 +9865,17 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-stage .pl-ov th, .pl-stage .pl-ov td { border: 0; line-height: 17px; }
 .pl-stage .pl-ov th { line-height: 24px; }
 .pl-stage .pl-ov td { padding-top: 0; padding-bottom: 0; }
+/* 模拟画面里不吃网站（含 EVE 皮肤）的通用表格 / 输入框样式：td 7px 12px + 底线、皮肤的 tbody td 上下 10px、表头加粗、
+   下拉框 / 输入框最小高 34px + 描边圆角 + 黑底 —— 这些会把定向扫描、舰队等窗口撑高、加上分隔线 */
+.pl-stage td, .pl-stage thead th { border-bottom: 0; }
+.pl-stage tbody tr:hover { background: none; }
+html[data-skin="eve"] .pl-stage tbody td { padding-top: 0; padding-bottom: 0; }
+html[data-skin="eve"]:not([data-theme="light"]) .pl-stage thead th { font-weight: 400; color: rgba(255, 255, 255, 0.5); }
+html[data-skin="eve"]:not([data-theme="light"]) .pl-stage select:not(.region-select),
+html[data-skin="eve"]:not([data-theme="light"]) .pl-stage input[type="text"]:not(.region-select),
+html[data-skin="eve"]:not([data-theme="light"]) .pl-stage input[type="search"]:not(.region-select),
+html[data-skin="eve"]:not([data-theme="light"]) .pl-stage input[type="number"]:not(.region-select) { min-height: 0; border: 0; border-radius: 0; background-color: rgba(255, 255, 255, 0.08); }
+html[data-skin="eve"]:not([data-theme="light"]) .pl-stage input:focus, html[data-skin="eve"]:not([data-theme="light"]) .pl-stage select:focus { box-shadow: none; outline: none; }
 html[data-skin="eve"] .pl-stage .pl-ov td { padding-top: 0; padding-bottom: 0; height: 17px; font-size: 12px; }
 .pl-stage .pl-inv th, .pl-stage .pl-inv td, html[data-skin="eve"] .pl-stage .pl-inv td { padding-top: 0; padding-bottom: 0; border: 0; line-height: 22px; font-size: 12px; }
 html[data-skin="eve"] .pl-stage .pl-ov th { padding-top: 0; padding-bottom: 0; height: 24px; font-size: 12px; font-weight: 400; color: rgba(255, 255, 255, 0.5); text-transform: none; letter-spacing: 0; }
@@ -9961,7 +9983,7 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 /* UtilMenu：底色 #0b0a12，内边距 8，条目左 4、高 = 字高 + 4 */
 .pl-umenu, .pl-cmenu { position: absolute; z-index: 60; padding: 8px; min-width: 160px; background: rgba(11, 10, 18, 0.96); border-radius: 2px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6); color: #ddd; font-size: 12px; pointer-events: auto; }
-.pl-umenu hr, .pl-cmenu hr { border: 0; height: 1px; margin: 6px 0; background: rgba(255, 255, 255, 0.1); }
+.pl-umenu hr, .pl-cmenu hr { border: 0; height: 1px; margin: 7px 0; background: rgba(255, 255, 255, 0.1); }
 .pl-um-e, .pl-cmenu button { display: flex; align-items: center; gap: 4px; width: 100%; padding: 2px 4px; border: 0; background: none; color: inherit;
   font: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
 .pl-um-e img { width: 16px; height: 16px; flex: none; }
@@ -10161,10 +10183,13 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-cmenu .lbl { padding: 2px 4px; color: rgba(255, 255, 255, 0.45); font-size: 11px; white-space: nowrap; }
 .pl-wh [data-win-more] img { width: 16px; height: 16px; }
 .pl-fl-none { padding: 4px 8px; font-size: 13px; color: rgba(255, 255, 255, 0.5); }
-.pl-fl-hh { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 6px; }
-.pl-fl-hh select { flex: 1; min-width: 0; height: 24px; border: 0; border-radius: 0; background: rgba(255, 255, 255, 0.08); color: #fff; font-size: 12px; }
+.pl-fl-hh { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px; }
+.pl-fl-hh select { flex: none; width: 145px; min-width: 0; height: 24px; border: 0; border-radius: 0; background: rgba(255, 255, 255, 0.08); color: #fff; font-size: 12px; }
 .pl-fl-hh select option { background: #1b1f22; }
 .pl-fl-hh .pl-btn { flex: none; }
+.pl-fl-clr { flex: none; height: 22px; padding: 0 8px; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 0; background: none; color: rgba(255, 255, 255, 0.85); font: inherit; font-size: 12px; cursor: pointer; }
+.pl-fl-clr:hover { border-color: rgba(255, 255, 255, 0.5); color: #fff; }
+.pl-fl-hint { padding: 16px 8px; font-size: 18px; text-align: center; color: rgba(255, 255, 255, 0.5); }
 .pl-fl-list { flex: 1; min-height: 0; overflow-y: auto; }
 .pl-fl-ev { display: flex; align-items: center; gap: 4px; min-height: 20px; padding: 0 6px; font-size: 12px; color: rgba(255, 255, 255, 0.85); }
 .pl-fl-ev img, .pl-fl-ev i { flex: none; width: 16px; height: 16px; }
@@ -10177,8 +10202,9 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-fl-ban > span.none { color: #999; }
 .pl-fl-ban .arw { flex: none; width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.7; }
 .pl-fl-ban .arw:hover { opacity: 1; }
-.pl-fl-ban .arw img { width: 16px; height: 16px; transform: rotate(180deg); transition: transform 0.2s; }
-.pl-fl-ban .arw.open img { transform: none; }
+/* 客户端 broadcastExpanderIcon：arrowUp 画 7px，按钮显示着时转 180°（朝下） */
+.pl-fl-ban .arw img { width: 7px; height: 7px; transform: none; transition: transform 0.2s; }
+.pl-fl-ban .arw.open img { transform: rotate(180deg); }
 .pl-fl-btns { display: flex; align-items: center; gap: 4px; padding: 2px 4px 4px; }
 .pl-fl-btns.s16 { gap: 8px; }
 .pl-fl-btns button { display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.8; }
@@ -10200,12 +10226,16 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-fl-none.drop { white-space: normal; line-height: 1.5; }
 
 /* ---------- 驾驶模拟 · 扫描器（定向扫描器 / 探针扫描器） ---------- */
-.pl-ds-top { flex: none; display: flex; align-items: center; justify-content: space-between; height: 26px; padding: 0 8px; font-size: 13px; color: rgba(255, 255, 255, 0.9); }
-.pl-ds-top .flt { font-size: 12px; color: rgba(255, 255, 255, 0.55); }
+.pl-ds-top { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 4px; height: 28px; margin-bottom: 2px; padding: 0 8px 0 10px; font-size: 13px; color: rgba(255, 255, 255, 0.9); }
+/* 筛选框（FilterBox）：紧凑高 24、最宽 120；ComboUnderlay = 1 像素白 10% 边 + 黑 10% 底；右边 7 像素 arrowDown，半透明 */
+.pl-ds-top .flt { flex: 0 1 auto; display: flex; align-items: center; max-width: 120px; min-width: 0; height: 24px; padding: 0 5px; border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 2px; background: rgba(0, 0, 0, 0.1); color: rgba(255, 255, 255, 0.75); font: inherit; font-size: 12px; cursor: pointer; }
+.pl-ds-top .flt span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; }
+.pl-ds-top .flt img { flex: none; width: 7px; height: 7px; margin-left: 5px; opacity: 0.5; }
+.pl-ds-top .flt:hover { border-color: rgba(255, 255, 255, 0.2); color: #fff; }
 .pl-ds-list { position: relative; flex: 1; min-height: 40px; overflow: auto; }
 .pl-ds-list table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
 .pl-ds-list th { position: sticky; top: 0; z-index: 1; height: 22px; padding: 0 6px; background: #1d2124; color: rgba(255, 255, 255, 0.6); font-size: 12px; font-weight: 400; text-align: left; white-space: nowrap; }
-.pl-ds-list td { height: 20px; padding: 0 6px; color: rgba(255, 255, 255, 0.9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pl-ds-list td { height: 18px; padding: 0 6px; color: rgba(255, 255, 255, 0.9); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pl-ds-list td img { width: 16px; height: 16px; vertical-align: middle; }
 .pl-ds-list tr[data-ds-k], .pl-ds-list tr[data-ps-k] { cursor: pointer; }
 .pl-ds-list tbody tr:hover { background: rgba(255, 255, 255, 0.06); }
@@ -10214,12 +10244,22 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 /* 扫完的绿色扫光：从右往左收（COLOR_DSCAN = 0.225, 0.75, 0.5） */
 .pl-ds-list.sweep::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, rgba(57, 191, 128, 0) 0%, rgba(57, 191, 128, 0.25) 100%); animation: plDsSweep 1.7s ease-out forwards; transform-origin: right; }
 @keyframes plDsSweep { from { transform: scaleX(1); } to { transform: scaleX(0); } }
-.pl-ds-bot { flex: none; display: flex; align-items: flex-end; gap: 10px; padding: 6px 8px 8px; }
-.pl-ds-bot .half { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.pl-ds-bot .lbl { display: flex; align-items: center; gap: 6px; height: 18px; font-size: 12px; color: rgba(255, 255, 255, 0.75); white-space: nowrap; }
-.pl-ds-bot input[type="text"] { width: 0; flex: 1; min-width: 40px; height: 18px; padding: 0 4px; border: 0; border-radius: 0; background: rgba(255, 255, 255, 0.08); color: #fff; font-size: 12px; }
-.pl-ds-bot .unit { flex: none; height: 18px; padding: 0 4px; border: 0; border-radius: 0; background: none; box-shadow: none; color: rgba(255, 255, 255, 0.75); font-size: 12px; cursor: pointer; }
-.pl-ds-bot .unit:hover { color: #fff; }
+/* 底栏（bottomCont + WindowSegmentUnderlay）：左右两半各一行输入 / 标签 + 一条滑条，右边扫描按钮 */
+.pl-ds-bot { flex: none; display: flex; align-items: flex-end; gap: 8px; margin-top: 8px; padding: 6px 8px 6px; background: rgba(255, 255, 255, 0.04); }
+.pl-ds-bot .half { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0; container-type: inline-size; }
+.pl-ds-bot .lbl { display: flex; align-items: center; gap: 4px; height: 24px; font-size: 13px; color: rgba(255, 255, 255, 0.9); white-space: nowrap; }
+/* 「范围」字样：这半边不到 150 宽就藏（DistanceEditCont：rangeLabel.display = width > 150） */
+@container (max-width: 150px) { .pl-ds-bot .rl { display: none; } }
+/* 范围输入框（InputUnderlay：1 像素白 5% 边 + 黑 10% 底）+ 右边上下两个 7 像素小箭头（numericControlsCont 宽 10，右边留 8） */
+.pl-ds-num { flex: 1; min-width: 40px; display: flex; align-items: center; height: 24px; border: 1px solid rgba(255, 255, 255, 0.05); background: rgba(0, 0, 0, 0.1); }
+.pl-stage .pl-ds-bot .pl-ds-num input[type="text"]:not(.region-select) { width: 0; flex: 1; min-width: 0; height: 22px; padding: 0 0 0 7px; border: 0; border-radius: 0; background: none; color: #fff; font-size: 13px; }
+.pl-ds-num .sp { flex: none; display: flex; flex-direction: column; width: 10px; margin: 0 8px 0 2px; opacity: 0.75; }
+.pl-ds-num .sp button { display: grid; place-items: center; width: 10px; height: 9px; padding: 0; border: 0; background: none; cursor: pointer; }
+.pl-ds-num .sp img { width: 7px; height: 7px; }
+.pl-ds-num .sp button:hover img { filter: brightness(1.6); }
+/* 单位切换：紧凑幽灵按钮（AU / km） */
+.pl-ds-bot .unit { flex: none; height: 24px; min-width: 32px; padding: 0 6px; border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 0; background: none; box-shadow: none; color: rgba(255, 255, 255, 0.9); font-size: 13px; cursor: pointer; }
+.pl-ds-bot .unit:hover { border-color: rgba(255, 255, 255, 0.35); background: rgba(255, 255, 255, 0.05); color: #fff; }
 /* 滑条（客户端 carbonui Slider：条高 10、上下各留 5；底 = 1 像素 #303030 边 + 黑 60%，圆角 3；刻度 1×6 #305665；拖柄 4×8 #58A7BF，悬停发光、按下变白） */
 .pl-sl { --x: 0; position: relative; height: 20px; margin-top: 1px; cursor: pointer; touch-action: none; }
 .pl-sl::before { content: ''; position: absolute; left: 0; right: 0; top: 5px; height: 10px; box-sizing: border-box; border: 1px solid #303030; border-radius: 3px; background: rgba(0, 0, 0, 0.6); }
@@ -10298,7 +10338,7 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-ps-bot .forms img { width: 32px; height: 32px; }
 .pl-ps-bot .size { flex: 1; max-width: 120px; min-width: 60px; display: flex; flex-direction: column; font-size: 12px; color: rgba(255, 255, 255, 0.75); }
 .pl-ps-go { width: 100px; margin-left: auto; }
-.pl-ds-list tbody td { height: 20px; line-height: 20px; padding-top: 0; padding-bottom: 0; }
+.pl-ds-list tbody td { height: 18px; line-height: 18px; padding-top: 0; padding-bottom: 0; }
 /* 驾驶模拟 · 场景（死亡空间 / 深渊）：设置页卡片、地点窗口、导管过场 */
 .pl-sites { display: flex; flex-wrap: wrap; gap: 6px; }
 .pl-site-card { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 14px; border: 0; border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.06); color: var(--text-primary); text-align: left; cursor: pointer; font: inherit; transition: background var(--transition-fast); }
@@ -10331,5 +10371,65 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-site-lt { display: flex; flex-direction: column; gap: 1px; font-variant-numeric: tabular-nums; }
 .pl-site-lt i { font-style: normal; color: rgba(255, 255, 255, 0.5); }
 .pl-site-lt i.on { color: rgba(255, 255, 255, 0.85); }
+/* 总览设置（客户端 OverviewSettingsWnd）：标签 / 过滤条件 */
+.pl-os { display: flex; flex-direction: column; height: 100%; min-height: 0; font-size: 12px; color: rgba(255, 255, 255, 0.85); }
+.pl-os-tabs { flex: none; display: flex; gap: 24px; height: 28px; margin: 0 8px; box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1); }
+.pl-os-tabs button { padding: 0; border: 0; background: none; color: rgba(255, 255, 255, 0.5); font: inherit; font-weight: 700; cursor: pointer; }
+.pl-os-tabs button.on { color: #fff; box-shadow: inset 0 -1px 0 #58a7bf; }
+.pl-os-body { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 8px; overflow: auto; }
+/* 皮肤里的通用输入框样式（min-height 34px、描边）比较具体，这里多压一层 */
+.pl-w .pl-os .pl-os-body input[type="text"]:not(.region-select), .pl-w .pl-os .pl-os-body input[type="search"]:not(.region-select), .pl-w .pl-os .pl-os-body select:not(.region-select) { height: 24px; padding: 0 6px; border: 0; border-radius: 0; background: rgba(255, 255, 255, 0.08); color: #fff; font: inherit; }
+.pl-os select option { background: #1b1f22; }
+.pl-w .pl-os .pl-os-body input:not(.region-select), .pl-w .pl-os .pl-os-body select:not(.region-select) { box-sizing: border-box; min-height: 0; line-height: normal; }
+.pl-os-thead, .pl-os-trow { display: grid; grid-template-columns: 28px minmax(0, 1fr) minmax(0, 1fr) 24px; gap: 8px; align-items: center; }
+.pl-os-thead { margin-bottom: 4px; color: rgba(255, 255, 255, 0.75); }
+.pl-os-trow { margin-bottom: 6px; }
+.pl-os-trow input[type="color"] { width: 24px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer; }
+.pl-os-trow .x { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer; opacity: 0.7; }
+.pl-os-trow .x:hover:not(:disabled) { opacity: 1; }
+.pl-os-trow .x:disabled { opacity: 0.2; cursor: default; }
+.pl-os-btns { flex: none; display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.pl-os-lbl { margin: 2px 0 4px; font-size: 14px; color: #fff; }
+.pl-os-top { flex: none; display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.pl-os-top select { flex: 0 1 220px; min-width: 0; }
+.pl-os-top .q { margin-left: auto; width: 150px; }
+.pl-os-sub { flex: none; display: flex; gap: 16px; height: 22px; margin: 4px 0 8px; box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1); }
+.pl-os-sub span.on { color: #fff; font-weight: 700; box-shadow: inset 0 -1px 0 #58a7bf; }
+.pl-os-list { flex: 1; min-height: 120px; overflow: auto; background: rgba(0, 0, 0, 0.25); }
+.pl-os-ch, .pl-os-g { display: flex; align-items: center; gap: 4px; width: 100%; height: 22px; padding: 0 6px; border: 0; background: none; color: rgba(255, 255, 255, 0.5); font: inherit; text-align: left; cursor: pointer; }
+.pl-os-ch { background: rgba(255, 255, 255, 0.04); margin-bottom: 1px; }
+.pl-os-ch:hover, .pl-os-g:hover { background: rgba(255, 255, 255, 0.08); }
+.pl-os-ch.some { color: rgba(255, 255, 255, 0.9); }
+.pl-os-ch.all { color: #58a7bf; }
+.pl-os-ch em { margin-left: auto; font-style: normal; }
+.pl-os-ch .ar { width: 16px; height: 14px; transition: transform 0.1s; }
+.pl-os-ch .ar.on { transform: rotate(90deg); }
+.pl-os-g { padding-left: 26px; color: rgba(255, 255, 255, 0.85); }
+.pl-os-g img { width: 16px; height: 16px; }
+.pl-os-saveas { flex: none; display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.pl-os-saveas input { flex: 1; min-width: 0; }
+.pl-os-saveas em { flex-basis: 100%; font-style: normal; color: #e06c5a; }
+.pl-os-saveas { flex-wrap: wrap; }
+.pl-os-wait { color: rgba(255, 255, 255, 0.5); }
+.pl-wbody > .pl-os { flex: 1; }
+.pl-ov-tabs button { overflow: hidden; text-overflow: clip; }
+.pl-ov-tabs button[hidden] { display: none; }
+/* 挤窄的页签：文字右端淡出（标签的 fadeout），不是硬切 */
+.pl-ov-tabs button.cut { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 14px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 14px), transparent); }
+.pl-ov-trail { flex: none; display: flex; align-items: center; }
+.pl-ov-tb { display: flex; align-items: center; justify-content: center; width: 24px; height: 32px; cursor: pointer; opacity: 0.6; }
+.pl-ov-tb[hidden] { display: none; }
+.pl-ov-tb:hover { opacity: 1; }
+.pl-cmenu button.hi span { color: #58a7bf; }
+/* 起名小窗（客户端 NamePopup / AddTabPopup） */
+.pl-os-pop { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, 0.35); }
+.pl-os-popw { display: flex; flex-direction: column; gap: 10px; width: 360px; max-width: calc(100% - 32px); padding: 0 16px 16px; background: rgba(20, 24, 27, 0.97); box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6); font-size: 12px; color: rgba(255, 255, 255, 0.85); }
+.pl-os-popw .hd { display: flex; align-items: center; height: 28px; margin: 0 -8px 0 0; color: rgba(255, 255, 255, 0.9); }
+.pl-os-popw .hd button { margin-left: auto; padding: 4px; border: 0; background: none; cursor: pointer; }
+.pl-os-popw p { margin: 0; color: rgba(255, 255, 255, 0.6); line-height: 1.5; }
+.pl-os-popw label { display: flex; flex-direction: column; gap: 6px; }
+.pl-os-popw .btns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.pl-stage .pl-os-pop .pl-os-popw input:not(.region-select), .pl-stage .pl-os-pop .pl-os-popw select:not(.region-select) { box-sizing: border-box; height: 24px; min-height: 0; padding: 0 6px; border: 0; border-radius: 0; background: rgba(255, 255, 255, 0.08); color: #fff; font: inherit; line-height: normal; }
+.pl-os-popw select option { background: #1b1f22; }
 .pl-fade { position: absolute; inset: 0; z-index: 57; pointer-events: none; background: #fff; animation: pl-fade 1.2s ease-out forwards; }
 @keyframes pl-fade { 0% { opacity: 0; } 25% { opacity: 0.85; } 100% { opacity: 0; } }

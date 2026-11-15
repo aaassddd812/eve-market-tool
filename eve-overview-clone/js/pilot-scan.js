@@ -22,10 +22,15 @@ const ANGLES = [5, 15, 30, 60, 90, 180, 360];
 const DS_COOL = 1500;   // THROTTLE_TIME：扫完 1.5 秒后才能再扫
 const DS_SWEEP = 1700;  // 列表上的绿色扫光 1.7 秒
 
+// 「显示结果」选的筛选条件（客户端 settings.user.ui scanner_presetInUse；null = 当前的总览过滤器）
+const DS_PRESET_KEY = 'eve-pilot-dsflt';
+const dsPresetSaved = () => { const p = H.store?.getJSON?.(DS_PRESET_KEY, null); return typeof p === 'string' ? p : null; };
+// 结果按筛选条件过滤（客户端 UpdateScroll：扫描结果留着，换筛选条件只重新过滤）
+const dsShown = (d) => d.res.filter((r) => r.all || (r.t ? H.ovShows(r.t, d.preset) : H.ovShowsGroup(r.g, d.preset)));
 export function scanReset() {
   const S = H.S;
   S.scan = {
-    d: { km: DS_MAX(), unit: 'AU', angle: 90, res: null, filtered: 0, cool: 0, at: 0, pend: false, n: 0, last: null },
+    d: { km: DS_MAX(), unit: 'AU', angle: 90, preset: dsPresetSaved(), res: null, filtered: 0, cool: 0, at: 0, pend: false, n: 0, last: null },
     p: { probes: [], inLauncher: PROBES, step: 5, form: null, center: null, sigs: [], res: new Map(), busyUntil: 0, scans: 0, sel: null, cel: new Map() },
   };
 }
@@ -45,7 +50,6 @@ export function dscan(dirIn) {
   d.pend = false;
   const dir = dirIn || lookDir(), cosA = Math.cos((d.angle / 2) * Math.PI / 180), maxM = d.km * 1000;
   const rows = [];
-  let filtered = 0;
   const seen = (pos, r = 0) => {
     const v = sub(pos, me.pos), l = len(v);
     const dist = Math.max(0, l - r - me.t.radius);
@@ -58,8 +62,7 @@ export function dscan(dirIn) {
     if (u === me || !u.alive) continue;
     const dist = seen(u.pos, u.t.radius);
     if (dist < 0) continue;
-    if (!H.ovShows(u.r.row.ship)) { filtered++; continue; }
-    rows.push({ k: 'u' + u.i, icon: H.icon(u), name: S.names[u.i], type: H.typeName(u.r.row.ship), dist });
+    rows.push({ k: 'u' + u.i, t: u.r.row.ship, icon: H.icon(u), name: S.names[u.i], type: H.typeName(u.r.row.ship), dist });
   }
   // 太空中的无人机、自己的探针
   for (const o of S.b.units) {
@@ -68,33 +71,35 @@ export function dscan(dirIn) {
       if (!dr.pos || dr.e) continue;
       const dist = seen(dr.pos);
       if (dist < 0) continue;
-      if (!H.ovShows(dr.g.type)) { filtered++; continue; }
-      rows.push({ k: '', icon: H.iconOf(dr.g.type), name: H.typeName(dr.g.type), type: H.typeName(dr.g.type), dist });
+      rows.push({ k: '', t: dr.g.type, icon: H.iconOf(dr.g.type), name: H.typeName(dr.g.type), type: H.typeName(dr.g.type), dist });
     }
   }
   for (const pr of S.scan.p.probes) {
     const dist = seen(pr.pos);
     if (dist < 0) continue;
-    rows.push({ k: '', icon: H.typeImg(PROBE), name: H.typeName(PROBE), type: H.typeName(PROBE), dist });
+    rows.push({ k: '', all: true, icon: H.typeImg(PROBE), name: H.typeName(PROBE), type: H.typeName(PROBE), dist });
   }
   // 天体
   (S.b.cel || []).forEach((c, i) => {
     if (!c.group) return;   // 扫描出来的信号地点不在定向扫描里
     const dist = seen(c.pos, c.radius || 0);
     if (dist < 0) return;
-    if (!H.ovShowsGroup(c.group)) { filtered++; return; }
-    rows.push({ k: 'c' + i, icon: H.celIcon(c), name: c.name, type: c.typeName || '', dist });
+    rows.push({ k: 'c' + i, g: c.group, icon: H.celIcon(c), name: c.name, type: c.typeName || '', dist });
   });
   // 默认排序：第一个排序值（客户端 sortValues 的第一项是组名，这里用类型名代替），再按距离
   rows.sort((a, b) => a.type.localeCompare(b.type, 'zh') || a.dist - b.dist);
-  Object.assign(d, { res: rows, filtered, at: now, n: d.n + 1, last: { angle: d.angle, km: d.km, units: rows.filter((r) => r.k[0] === 'u').map((r) => Number(r.k.slice(1))) } });
+  Object.assign(d, { res: rows, at: now, n: d.n + 1 });
+  d.last = { angle: d.angle, km: d.km, units: dsShown(d).filter((r) => r.k[0] === 'u').map((r) => Number(r.k.slice(1))) };
   renderDscan(true);
   return true;
 }
-export const dsBody = () => `<div class="pl-ds-top"><span>${esc0('扫描结果')}</span><span class="flt" data-ds-flt></span></div>
+// 客户端 DirectionalScannerPalette：上面「扫描结果」+ 右边筛选框（FilterBox：已过滤N个 (筛选条件名) ▾）；
+// 下面一条（WindowSegmentUnderlay 底）：范围输入框（带上下小箭头）+ 幽灵按钮 AU/km，角度，两条滑条，扫描按钮
+// 恒星系图那三个图标按钮（与视角同步 / 显示扫描锥体 / 恒星系图）模拟里没有
+export const dsBody = () => `<div class="pl-ds-top"><span>${esc0('扫描结果')}</span><button type="button" class="flt" data-ds-flt><span></span><img src="${H.UI}classes/neocom/arrowdown.png?v=1" alt=""></button></div>
   <div class="pl-ds-list" data-ds-list></div>
   <div class="pl-ds-bot">
-    <div class="half"><div class="lbl">${esc0('范围')}<input type="text" data-ds-range inputmode="decimal"><button type="button" class="unit" data-ds-unit></button></div>${slHtml('ds-r')}</div>
+    <div class="half"><div class="lbl"><span class="rl">${esc0('范围')}</span><span class="pl-ds-num"><input type="text" data-ds-range inputmode="decimal"><span class="sp"><button type="button" data-ds-step="1"><img src="${H.UI}shared/up.png?v=1" alt=""></button><button type="button" data-ds-step="-1"><img src="${H.UI}shared/down.png?v=1" alt=""></button></span></span><button type="button" class="unit" data-ds-unit></button></div>${slHtml('ds-r')}</div>
     <div class="half"><div class="lbl" data-ds-alab></div>${slHtml('ds-a')}</div>
     <button type="button" class="pl-btn pl-busybtn pl-ds-go" data-ds-scan title="${esc0('定向扫描')} (V)\n${esc0('扫描朝向')}：V + ${esc0('点击')}"><span>${esc0('扫描')}</span></button>
   </div>`;
@@ -116,16 +121,21 @@ export function renderDscan(force = false) {
   w.querySelector('[data-ds-unit]').textContent = d.unit === 'AU' ? 'AU' : 'km';
   slRender(w, 'ds-r'); slRender(w, 'ds-a');
   w.querySelector('[data-ds-alab]').textContent = `${H.tr('角度')}: ${d.dragAngle ?? d.angle}°`;
-  const flt = w.querySelector('[data-ds-flt]');
-  const ft = d.res ? `${H.tr(`已过滤${d.filtered}个`)}` : '';
-  if (flt.textContent !== ft) { flt.textContent = ft; flt.title = H.tr('当前的总览过滤器'); }
+  // 筛选框窄（maxWidth 120），放不下的字截掉；还没扫过显示「-」
+  // 结果列表：扫描次数、筛选条件、总览配置变了才重画（OnOverviewPresetSaved 也会重新过滤）
   const list = w.querySelector('[data-ds-list]');
   list.classList.toggle('sweep', now - d.at < DS_SWEEP);
-  if (!force && list.dataset.n === String(d.n)) return;
-  list.dataset.n = d.n;
+  const key = `${d.n}|${d.preset}|${H.presetName(d.preset)}`;
+  if (!force && list.dataset.n === key) return;
+  list.dataset.n = key;
+  const shown = d.res ? dsShown(d) : null;
+  d.filtered = d.res ? d.res.length - shown.length : 0;
+  const flt = w.querySelector('[data-ds-flt]');
+  const ft = d.res ? `${H.tr(`已过滤${d.filtered}个`)} (${H.presetName(d.preset)})` : '-';
+  if (flt.firstChild.textContent !== ft) { flt.firstChild.textContent = ft; flt.title = ft; }
   const { esc, fmtDist } = H;
-  list.innerHTML = !d.res ? '' : d.res.length
-    ? `<table><colgroup><col style="width:22px"><col><col><col style="width:84px"></colgroup><thead><tr><th></th><th>${esc0('名字')}</th><th>${esc0('类型')}</th><th>${esc0('距离')}</th></tr></thead><tbody>${d.res.map((r) => `<tr${r.k ? ` data-ds-k="${r.k}"` : ''}><td><img src="${r.icon}" alt=""></td><td>${esc(r.name)}</td><td>${esc(r.type)}</td><td>${esc(fmtDist(r.dist))}</td></tr>`).join('')}</tbody></table>`
+  list.innerHTML = !shown ? '' : shown.length
+    ? `<table><colgroup><col style="width:22px"><col><col><col style="width:84px"></colgroup><thead><tr><th></th><th>${esc0('名字')}</th><th>${esc0('类型')}</th><th>${esc0('距离')}</th></tr></thead><tbody>${shown.map((r) => `<tr${r.k ? ` data-ds-k="${r.k}"` : ''}><td><img src="${r.icon}" alt=""></td><td>${esc(r.name)}</td><td>${esc(r.type)}</td><td>${esc(fmtDist(r.dist))}</td></tr>`).join('')}</tbody></table>`
     : `<div class="pl-ds-none">${esc0('无扫描结果')}</div>`;
 }
 function setRange(km, scan = true) { const d = H.S.scan.d; d.km = Math.max(10, Math.min(DS_MAX(), km)); renderDscan(); if (scan) dscan(); }
@@ -412,6 +422,16 @@ export function scanClick(e) {
   const t = e.target;
   let x;
   if ((x = t.closest('[data-ds-scan]'))) { dscan(); return true; }
+  // 范围框的上下小箭头：按当前单位 ±1（ChangeNumericValue），只改数不扫描（OnEditChanging）
+  if ((x = t.closest('[data-ds-step]'))) { const d = S.scan.d, u = d.unit === 'AU' ? AU_KM() : 1; setRange(d.km + Number(x.dataset.dsStep) * u, false); return true; }
+  // 筛选框：「显示结果」单选列表（LoadFilterTooltipPanel：当前的总览过滤器 + 自定义 + 默认筛选条件）
+  if ((x = t.closest('[data-ds-flt]'))) {
+    const d = S.scan.d;
+    const pick = (p) => () => { d.preset = p; H.store?.setJSON?.(DS_PRESET_KEY, p); renderDscan(true); };
+    const opts = [['当前的总览过滤器', null], ...H.presetOpts()];
+    H.menu([['显示结果', null, { lbl: true }], ...opts.map(([n, p]) => [n, pick(p), { radio: p === d.preset }])], e);
+    return true;
+  }
   if ((x = t.closest('[data-ds-unit]'))) { S.scan.d.unit = S.scan.d.unit === 'AU' ? 'km' : 'AU'; renderDscan(); return true; }
   if ((x = t.closest('[data-ps-form]'))) { formation(x.dataset.psForm); renderProbe(true); return true; }
   if ((x = t.closest('[data-ps-center]'))) { const p = S.scan.p; if (p.probes.length) { p.center = S.me.pos.slice(); place(); } return true; }

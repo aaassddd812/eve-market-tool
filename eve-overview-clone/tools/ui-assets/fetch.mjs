@@ -52,7 +52,7 @@ const DIRS = [
   'ui/cursor/'                           // 鼠标指针（含 _x2 / _x3 高清版）
 ];
 // 单个文件
-const SHARED = ['frame', 'framehover', 'windowframe', 'windowshadow', 'windowshapeandshadow', 'windowbuttongradient', 'windowbuttonshadow'].map((n) => `ui/texture/shared/${n}.png`);
+const SHARED = ['frame', 'framehover', 'windowframe', 'windowshadow', 'windowshapeandshadow', 'windowbuttongradient', 'windowbuttonshadow', 'up', 'down'].map((n) => `ui/texture/shared/${n}.png`);
 const CONTROL = ['approach', 'orbit', 'keep_at_distance', 'warp_to', 'align_to', 'target', 'look_at', 'show_info', 'launch_drones', 'recall_drones', 'engage_target', 'return_and_orbit', 'camera_track', 'camera_untrack', 'jump_to'];
 const FILES = [
   ...SHARED,
@@ -90,7 +90,7 @@ const FILES = [
   ...['1_64_1', '1_64_13', '1_64_9', '2_64_12'].map((n) => `ui/texture/icons/${n}.png`),
   'ui/texture/eveicon/system_icons/caret_up_16px.png', 'ui/texture/eveicon/system_icons/caret_down_16px.png',   // 总览表头排序箭头
   // 窗口标题栏「⋮ / —」、总览「+ 添加标签」、无人机分组展开箭头；选中物体窗口反向动作（解除锁定 / 重置视角）叠加图
-  ...['more_vertical', 'minimize', 'add', 'caret_right', 'hourglass'].map((n) => `ui/texture/eveicon/system_icons/${n}_16px.png`),
+  ...['more_vertical', 'minimize', 'add', 'caret_right', 'hourglass', 'checkmark', 'filter', 'expand_more', 'locked', 'unlocked', 'close'].map((n) => `ui/texture/eveicon/system_icons/${n}_16px.png`),
   'ui/texture/icons/44_32_8.png',
   // 装备提示（ModuleButtonTooltip）各行的图标：射程、伤害、属性（SDE dogmaAttributes.iconID → icons）；船体面板选项按钮
   ...['22_32_15', '26_64_1', '81_64_16', '1_64_7', '2_64_7', '1_64_11', '22_32_7', '22_32_23', '22_32_22', '22_32_13', '22_32_12', '22_32_11', '22_32_9', '22_32_10', '3_64_9', '22_32_14', '22_32_21', '73_16_50', '4_64_9', '4_64_12', '8_64_9', '8_64_10', '8_64_11'].map((n) => `ui/texture/icons/${n}.png`),

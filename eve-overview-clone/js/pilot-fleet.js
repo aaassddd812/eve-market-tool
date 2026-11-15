@@ -55,7 +55,7 @@ function newFleet(keys, fc) {
     wings: [{ id: 1, name: null, cmd: null, squads: [{ id: 1, name: null, cmd: null, mem: keys.filter((k) => k !== fc) }] }],
     shut: new Set(), flat: false, left: false, edit: null,
     opt: { warp: true, conduit: true, regroup: true }, form: 'point', scope: 'all', hide: new Set(), ignore: new Set(), sent: { k: null, t: -1e9 },
-    hist: [], mem: [], last: null, flashAt: 0, mark: new Map(), watch: [], tab: 'fleet', filter: 'all', btns: true, cool: new Map(), ctab: 'comp',
+    hist: [], mem: [], last: null, flashAt: 0, mark: new Map(), watch: [], tab: 'fleet', filter: 'bc', btns: true, cool: new Map(), ctab: 'comp',
   };
 }
 // opt.virt：不在场上的成员（例如在别处指挥的队长）[{ name, ship, fc }]；opt.fc：场上哪个单位是舰队指挥官（单位序号）
@@ -353,9 +353,11 @@ export function fleetTitle() {
   if (p.r === 'wc') return `舰队(${n}个成员) / ${wingName(p.w)}`;
   return `舰队(${n}个成员) / ${wingName(p.w)} / ${squadName(p.s, p.w)}`;
 }
+// 页签在标题栏里（客户端 FleetWindow 用 TabNavigationWindowHeader：窗口图标 + 页签，没有标题文字）：
+// 舰队 / 广播 / 阵型；客户端还有的重生、广告、搜寻舰队模拟里没有
+export const fleetTabsHtml = () => `<span class="pl-fl-tabs"><button type="button" data-fl-tab="fleet">${H.esc(H.tr('舰队'))}</button><button type="button" data-fl-tab="bc">${H.esc(H.tr('广播'))}</button><button type="button" data-fl-tab="form">${H.esc(H.tr('阵型'))}</button></span>`;
 export function fleetBody() {
-  return `<div class="pl-ov-tabs pl-fl-tabs"><button type="button" data-fl-tab="fleet" style="--c:#fff">我的舰队</button><button type="button" data-fl-tab="bc" style="--c:#fff">广播</button><button type="button" data-fl-tab="form" style="--c:#fff">阵型</button><span class="pl-fl-myrole" data-fl-myrole></span></div>
-    <div class="pl-fl-main" data-fl-main="fleet"></div>${barHtml()}`;
+  return `<div class="pl-fl-main" data-fl-main="fleet"></div>${barHtml()}`;
 }
 export const bcBody = () => `<div class="pl-fl-main" data-fl-main="bc"></div>${barHtml()}`;
 export const watchBody = () => '<div class="pl-fl-watch" data-fl-watch></div>';
@@ -366,8 +368,6 @@ const barHtml = () => '<div class="pl-fl-bar" data-fl-bar><div class="pl-fl-ban"
 export function renderFleet() {
   const root = H.root(), S = H.S, F = S.fleet;
   if (!root || !F) return;
-  const title = root.querySelector('[data-win="fleet"] .pl-wh span');
-  if (title && title.textContent !== H.tr(fleetTitle())) title.textContent = H.tr(fleetTitle());
   for (const b of root.querySelectorAll('[data-fl-tab]')) { b.classList.toggle('on', b.dataset.flTab === F.tab); b.hidden = F.left && b.dataset.flTab !== 'fleet'; }
   const role = root.querySelector('[data-fl-myrole]');
   if (role) { const h = myRoleHtml(); if (role.dataset.k !== h) { role.dataset.k = h; role.innerHTML = h; } }
@@ -457,7 +457,8 @@ function histHtml() {
   const list = F.filter === 'bc' ? F.hist : F.filter === 'mem' ? F.mem : [...F.hist, ...F.mem];
   const sel = `<select data-fl-filter>${opts.map(([v, l]) => `<option value="${v}"${v === F.filter ? ' selected' : ''}>${esc(tr(l))}</option>`).join('')}</select>`;
   const lines = list.map((e) => `<div class="pl-fl-ev"${e.k ? ` data-fl-ev="${F.hist.indexOf(e)}"` : ''}>${e.k ? `<img src="${bcIcon(e.k)}" alt="">` : '<i></i>'}<span>${esc(e.t)} - ${esc(tr(e.label))}</span></div>`).join('');
-  return `<div class="pl-fl-hh">${sel}<button type="button" class="pl-btn" data-fl-clear>${esc(tr('清除历史记录'))}</button></div><div class="pl-fl-list">${lines || `<div class="pl-fl-none">${esc(tr('尚未发生任何事件'))}</div>`}</div>`;
+  // 客户端 BroadcastHistoryPanel：紧凑下拉框（宽 145，默认「广播历史记录」）+ 右边幽灵按钮「清除」；没有记录时列表中间一行大字提示
+  return `<div class="pl-fl-hh">${sel}<button type="button" class="pl-fl-clr" data-fl-clear>${esc(tr('清除'))}</button></div><div class="pl-fl-list">${lines || `<div class="pl-fl-hint">${esc(tr('尚未发生任何事件'))}</div>`}</div>`;
 }
 // 底部广播条：最近一条（图标 44_32_29 收到新广播闪 3 下）+ 折叠箭头；按钮行：显示的按钮 × 40 + 50 放得下用 32 像素图标；右边接收范围图标、设定齿轮
 function renderBar(el) {
@@ -592,7 +593,7 @@ function headerMenu(id) {
   return out;
 }
 // 窗口「更多」菜单（fleetwindow.GetFleetMenuTop）
-function moreMenu() {
+export function moreMenu() {
   const F = H.S.fleet;
   if (F.left) return [['组建舰队', formFleet]];
   const out = [['离开舰队', leave]];
@@ -657,7 +658,6 @@ export function fleetClick(e) {
   if (!F) return false;
   const t = e.target;
   let x;
-  if ((x = t.closest('[data-win-more]'))) { H.menu(moreMenu(), e); return true; }
   if ((x = t.closest('[data-fl-tab]'))) { F.tab = x.dataset.flTab; renderFleet(true); return true; }
   if ((x = t.closest('[data-fl-ctab]'))) { F.ctab = x.dataset.flCtab; renderFleet(true); return true; }
   if ((x = t.closest('[data-fl-formfleet]'))) { formFleet(); return true; }
