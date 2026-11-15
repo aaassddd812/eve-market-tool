@@ -1313,8 +1313,9 @@ class Workers:
                 log.info("卖价估值补齐：%s 存档处理完", day)
                 time.sleep(20)
         # 逐条：存档里没有的（当天存档还没出、zKill 后补录的）和国服
-        while True:
-            rows = c.execute("SELECT id, hash FROM killmails WHERE value_sell IS NULL AND hash IS NOT NULL ORDER BY time DESC LIMIT 200").fetchall()
+        # 限速：ESI killmails 组配额 3600/15 分钟，补算最多用一半，剩下的留给用户查击杀详情
+        for _batch in range(20):                     # 单次最多 20 批（50 条/批），跑完回外层睡 10 分钟
+            rows = c.execute("SELECT id, hash FROM killmails WHERE value_sell IS NULL AND hash IS NOT NULL ORDER BY time DESC LIMIT 50").fetchall()
             if not rows:
                 break
             self.store.state["sell_backfill"] = f"逐条补，剩 {self.sell_pending()} 条"
@@ -1325,12 +1326,12 @@ class Workers:
                     return round(self.store.km_value(km, self.store.price_sell), 2), r[0]
                 except Exception:
                     return None
-            with concurrent.futures.ThreadPoolExecutor(4) as pool:
+            with concurrent.futures.ThreadPoolExecutor(1) as pool:
                 got = [x for x in pool.map(one, rows) if x]
             self.sell_update(got)
             if len(got) < len(rows) // 2:
-                break                                # ESI 大面积失败：下一轮再试
-            time.sleep(3)
+                break                                # ESI 大面积失败（多半是 429 限流）：睡满配额窗口再试
+            time.sleep(15)
         # 没有 hash、取不到原文的只能按中间价（查询里 COALESCE 退回 value）
         return self.sell_pending()
 
