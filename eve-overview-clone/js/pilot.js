@@ -993,6 +993,7 @@ function renderStage() {
   root.innerHTML = `<div class="pl-page"><section class="pl-stage" id="plStage">
     <div class="pl-3d" id="pl3d"><p class="pl-3d-load" id="plLoad" hidden></p></div>
     <canvas class="pl-marks" id="plMarks"></canvas>
+    <div class="pl-tcur" id="plTcur" hidden><i></i><i></i><i></i><i></i></div>
     ${neocomHtml()}
     <div class="pl-targets" id="plTargets"></div>
     ${winsHtml()}
@@ -1025,6 +1026,8 @@ function renderStage() {
   root.querySelector('#plHud').addEventListener('click', onHudClick);
   const hc = root.querySelector('#plHudC');
   hc.addEventListener('pointermove', onHudMove);
+  // 鼠标在舰船 HUD（电容环、装备架）上：瞄准十字线隐藏（HUD 外框不接鼠标，按实际接到事件的元素判断）
+  root.querySelector('#plStage')?.addEventListener('pointermove', (e) => { S.overHud = Boolean(e.target.closest?.('#plHud')); });
   hc.addEventListener('pointerleave', hideHudTip);
   const rk = root.querySelector('#plRack');
   rk.addEventListener('dragstart', onRackDragStart);
@@ -1075,6 +1078,7 @@ function renderStage() {
     // 鼠标离开太空且第一点还没定时取消；右键取消
     host.addEventListener('pointermove', (e) => {
       S.mxy = [e.clientX, e.clientY];
+      S.tcXY = S.mxy;   // 瞄准十字线跟着太空里的鼠标（客户端 InflightLayer.OnMouseMove 更新 tcursor 位置；鼠标到窗口上停在最后的位置）
       if (S.mv && (e.buttons & 1) && S.mvDown && Math.hypot(e.clientX - S.mvDown[0], e.clientY - S.mvDown[1]) >= 6) { mvAbort(); return; }
       if (!S.mv && !e.buttons && S.keys.has('q')) mvStart();
     });
@@ -1202,10 +1206,24 @@ function startLoop() {
   S.raf = requestAnimationFrame(tick);
 }
 function stopLoop() { cancelAnimationFrame(S.raf); S.raf = 0; }
+// 瞄准十字线（客户端 InflightLayer.sr.tcursor）：有装备在等你点目标时（targetMgr.OrderTarget → ShowTargetingCursor）显示，
+// 等的装备都取消 / 开起来了就隐藏；鼠标进到舰船 HUD 上也隐藏（shipUI.OnMouseEnter → HideTargetingCursor）。
+// 四条 1 像素的线（Line 默认色 白 15%），离鼠标 10 像素起，横竖贯穿整个画面
+function tcursor() {
+  const el = root.querySelector('#plTcur');
+  if (!el) return;
+  const show = Boolean(S.rk?.wait?.size && S.tcXY && !S.overHud && S.me?.alive);
+  if (el.hidden === show) el.hidden = !show;
+  if (show) {
+    const r = el.parentElement.getBoundingClientRect();
+    el.style.transform = `translate(${S.tcXY[0] - r.left - 1}px, ${S.tcXY[1] - r.top}px)`;
+  }
+}
 function tick(now) {
   S.raf = 0;
   const b = S.b;
   if (!b || !root.querySelector('#plStage')) return;
+  tcursor();
   const dt = Math.min(0.25, (now - S.last) / 1000);   // 掉帧时也按真实时间走（最多补 0.25 秒）
   S.last = now;
   if (active()) {

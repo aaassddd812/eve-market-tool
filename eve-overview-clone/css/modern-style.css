@@ -9885,6 +9885,7 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
   --cur-ns: url("../assets/eveui/cursor/cursor17.png?v=1") 16 15, ns-resize;
   --cur-lock: url("../assets/eveui/cursor/cursor05.png?v=1") 16 15, crosshair;
   --cur-move: url("../assets/eveui/cursor/cursor33.png?v=1") 16 15, crosshair;
+  --cur-space: url("../assets/eveui/cursor/cursor12.png?v=1") 16 15, crosshair;
 }
 @media (min-resolution: 1.5dppx) {
   .pl-stage {
@@ -9898,9 +9899,19 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
     --cur-nesw: image-set(url("../assets/eveui/cursor/cursor13.png?v=1") 1x, url("../assets/eveui/cursor/cursor13_x2.png?v=1") 2x) 16 15, nesw-resize;
     --cur-lock: image-set(url("../assets/eveui/cursor/cursor05.png?v=1") 1x, url("../assets/eveui/cursor/cursor05_x2.png?v=1") 2x) 16 15, crosshair;
     --cur-move: image-set(url("../assets/eveui/cursor/cursor33.png?v=1") 1x, url("../assets/eveui/cursor/cursor33_x2.png?v=1") 2x) 16 15, crosshair;
+    --cur-space: image-set(url("../assets/eveui/cursor/cursor12.png?v=1") 1x, url("../assets/eveui/cursor/cursor12_x2.png?v=1") 2x) 16 15, crosshair;
   }
 }
 .pl-stage, .pl-stage * { cursor: var(--cur-default); }
+/* 太空里：客户端 InflightLayer 有右键菜单（GetMenu）没有 OnClick → uicore._GetCursorForItem 给 UICURSOR_HASMENU（cursor12，带菜单角标的十字）*/
+.pl-stage .pl-3d, .pl-stage .pl-3d * { cursor: var(--cur-space); }
+.pl-tcur { position: absolute; left: 0; top: 0; width: 1px; height: 1px; pointer-events: none; }
+.pl-tcur[hidden] { display: none; }
+.pl-tcur i { position: absolute; display: block; background: rgba(255, 255, 255, 0.15); }
+.pl-tcur i:nth-child(1) { left: 10px; top: 0; width: 3000px; height: 1px; }
+.pl-tcur i:nth-child(2) { right: 10px; top: 0; width: 3000px; height: 1px; }
+.pl-tcur i:nth-child(3) { left: 0; top: 10px; width: 1px; height: 3000px; }
+.pl-tcur i:nth-child(4) { left: 0; bottom: 10px; width: 1px; height: 3000px; }
 .pl-stage :is(button, .pl-mod, .pl-tgt), .pl-stage .pl-ov tr { cursor: var(--cur-hand); }
 .pl-stage .pl-mod.passive, .pl-stage .pl-dr-sec .pl-btn:disabled { cursor: var(--cur-default); }
 .pl-stage :is(input, textarea) { cursor: var(--cur-ibeam); }
