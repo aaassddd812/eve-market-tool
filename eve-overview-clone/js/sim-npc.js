@@ -121,6 +121,11 @@ export function npcUnit(n, msl = {}) {
     local: [0, 0, 0], localReps, regenC: max[0], regenTau: max[0] ? sec(479, 0) : 0,
     cap: { max: A(482), tau: sec(55, 0), use: capUse, other: capUse, otherNoInj: capUse },
     injectors: [], remote, webs, paints, neuts, noses, damps, ecms, smarts, bursts: [], tds, gds, rcaps: [], rsbs: [], rtcs: [], mjds: [], bubbles: [], cloaks: [], fields: [], dictors: [],
+    atkDelay: A(476) > 0 ? [A(475), A(476)] : null,
+    aggroR: A(247),   // entityAttackRange：和锁定距离取大的，敌人进这个距离才开始算攻击延迟
+    // 巡航 / 追击（SDE）：平时按 entityCruiseSpeed(508) 飞；离目标超过 entityChaseMaxDistance(665) 时等 entityChaseMaxDelay(580)
+    // 后开「最大速度」（假 MWD），最长 entityChaseMaxDuration(582)，期间信号半径 × entityMaxVelocitySignatureRadiusMultiplier(1133)
+    chase: A(508) > 0 && A(508) < vel ? { cruise: A(508) / vel, dist: A(665, 2500), delay: A(580, 5000) / 1000, delayP: A(581, 1), dur: A(582, 5000) / 1000, durP: A(583, 1), sig: A(1133, 6) } : null,   // 旧式 NPC 攻击延迟（毫秒，SDE entityAttackDelayMin / Max）
     ehp, rack: [], alwaysOn: 0, hp0: hp0.some((h, l) => h < max[l]) ? hp0 : null,
     npc: true, stay: true, bounty: A(481)
   };

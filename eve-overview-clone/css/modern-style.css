@@ -2547,6 +2547,13 @@ td.loc {
 .kb-member { display: inline-flex; align-items: center; gap: 8px; }
 .kb-member img { border-radius: 4px; background: #0d1219; }
 .kb-members th.sortable::after { content: '⇅'; }
+.kb-sort { cursor: pointer; user-select: none; transition: color var(--transition-fast); }
+.kb-sort + .kb-sort { margin-left: 12px; }
+.kb-sort:hover { color: var(--text-primary); }
+.kb-sort::after { content: '⇅'; margin-left: 3px; opacity: 0.35; font-size: 0.7rem; }
+.kb-sort.sorted { color: var(--accent-primary); }
+.kb-sort.sorted[data-dir="asc"]::after { content: '↑'; opacity: 1; }
+.kb-sort.sorted[data-dir="desc"]::after { content: '↓'; opacity: 1; }
 .kb-mini-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: var(--spacing-lg); }
 .kb-mini-panel { padding: 10px 12px; border: 1px solid var(--border-primary); border-radius: var(--radius-md); background: var(--bg-secondary); }
 .kb-mini-panel h5 { margin-bottom: 6px; font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); }

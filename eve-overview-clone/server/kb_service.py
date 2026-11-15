@@ -12,7 +12,7 @@
 接口（除钱包存档外只读，仅监听 127.0.0.1，由 nginx 反代 /api/kb/）
   GET /api/kb/status                          数据覆盖范围与运行状态
   GET /api/kb/gank?system=&days=30            高安疑似强爆：某星系的次数、各时段出现概率、主要团伙；不带 system 时为强爆最多的高安星系
-  GET /api/kb/feed?cursor=&limit=&ship=&system=&constellation=&region=&character=&corporation=&alliance=&side=&min=&space=&solo=&npc=&gank=
+  GET /api/kb/feed?cursor=&limit=&ship=&system=&constellation=&region=&character=&corporation=&alliance=&side=&min=&space=&solo=&npc=&gank=&sort=time|value&dir=desc|asc
                                               击杀列表（最新在前）；side=kills|losses|all
                                               本地只保留 --days 天；带筛选条件时翻完本地记录后自动改为实时查询 zKillboard（不入库）
   GET /api/kb/live?after=N                    实时收录的新击杀（星图闪烁 / 弹幕），返回新的游标
@@ -655,6 +655,9 @@ class Store:
         # 卖价估值：新入库的击杀同时算好；旧记录由 Workers.sell_backfill_loop 逐条向 ESI 重取补齐
         if "value_sell" not in {r[1] for r in conn.execute("PRAGMA table_info(killmails)")}:
             conn.execute("ALTER TABLE killmails ADD COLUMN value_sell REAL")
+        # 击杀列表按价值排序（/feed?sort=value）：中间价 / 卖价口径各一个索引（第一次建要扫一遍表）
+        conn.execute("CREATE INDEX IF NOT EXISTS km_val ON killmails(value)")
+        conn.execute("CREATE INDEX IF NOT EXISTS km_vsell ON killmails(COALESCE(value_sell, value))")
         conn.commit()
         self.prices = {}
         self.adjusted = {}
@@ -2204,6 +2207,26 @@ class Api:
         # 国服没有 zKillboard，只有本地收录的记录
         path = None if q.get("_local") or fine or self.store.server != "tq" else zkill_path(q, side, ship_side)
         cursor = q.get("cursor") or ""
+        # 排序：默认时间从近到远（可以接着查 zKillboard）；按价值、时间从远到近只查本地保留期内的（游标 s:键值:id）
+        sort = "value" if q.get("sort") == "value" else "time"
+        asc = q.get("dir") == "asc"
+        if sort == "value" or asc:
+            col = f"{V}" if sort == "value" else "time"
+            op, order = (">", "ASC") if asc else ("<", "DESC")
+            if cursor:
+                if not cursor.startswith("s:"):
+                    raise ValueError("cursor 无效")
+                _, key, kid = cursor.split(":")
+                key = float(key) if sort == "value" else int(key)
+                where.append(f"({col} {op} ? OR ({col} = ? AND id {op} ?))")
+                args += [key, key, int(kid)]
+            sql = f"SELECT {SUMMARY_COLS}, {col} FROM killmails {'WHERE ' + ' AND '.join(where) if where else ''} ORDER BY {col} {order}, id {order} LIMIT ?"
+            rows = self.store.conn().execute(sql, args + [limit]).fetchall()
+            kills = [row_summary(r[:-1]) for r in rows]
+            out = {"kills": kills, "cursor": f"s:{rows[-1][-1]!r}:{rows[-1][0]}" if len(rows) == limit else None, "names": self.with_names(kills)}
+            if len(rows) < limit:
+                out["notice"] = "sort_local" if self.store.server == "tq" else "global_end"
+            return out
         if cursor.startswith("z:"):
             if not path:
                 raise ValueError("cursor 无效")

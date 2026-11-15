@@ -425,6 +425,18 @@ export function createBattle(sides, opt) {
   const relock = (u, v) => lockTime(u.t.scanRes * u.scanMult, v.t.sig * v.sigMult);
   // 开始锁定：记下总锁定时间（回放显示锁定进度）
   const setLock = (u, v) => { u.lock = u.lockAll = relock(u, v); };
+  // 旧式 NPC（死亡空间等）的攻击延迟：SDE entityAttackDelayMin / Max（毫秒）—— 第一次有敌人可打时，等这之间的随机一段时间才开始选目标、锁定
+  //   计时从敌人进入它的锁定距离 / 攻击范围（entityAttackRange，取大的）开始；别的房间里的 NPC 不提前计时
+  const napping = (u, foes) => {
+    const d = u.t.atkDelay;
+    if (!d) return false;
+    if (u.wake == null) {
+      const R = Math.max(u.t.aggroR || 0, u.t.lockRange);
+      if (!foes.some((v) => surf(u, v) <= R)) return true;
+      u.wake = B.t + (d[0] + rand() * (d[1] - d[0])) / 1000;
+    }
+    return B.t < u.wake;
+  };
   const attacks = (u) => u.t.dps > 0 || u.t.webs.length || u.t.paints.length || u.t.neuts.length || u.t.noses.length || u.t.damps.length || u.t.ecms.length || L(u.t, 'tds').length || L(u.t, 'gds').length;
   const speedOf = (u) => len(u.vel);
   // 相对角速度（弧度 / 秒）：相对速度垂直于连线的分量 / 中心距离；a、b 为 { pos, vel }
@@ -460,11 +472,11 @@ export function createBattle(sides, opt) {
     const enemies = units.filter((u) => ready(u) && u.side !== side && !u.isDrone && !u.cloak && units.some((w) => w.side === side && ready(w) && !w.pilot && center(w, u) <= GRID));
     // 无人机实体（驾驶模拟）：没有舰船可打时才打；有舰船时，闲着的攻击者有一定概率去打在打本方的无人机
     const foeDrones = units.filter((u) => ready(u) && u.side !== side && u.isDrone);
-    if (!enemies.length && foeDrones.length) { for (const u of units) if (ready(u) && u.side === side && attacks(u) && !u.pilot && !u.target?.alive) { u.target = foeDrones[Math.floor(rand() * foeDrones.length)]; setLock(u, u.target); } return; }
+    if (!enemies.length && foeDrones.length) { for (const u of units) if (ready(u) && u.side === side && attacks(u) && !u.pilot && !u.target?.alive && !napping(u, foeDrones)) { u.target = foeDrones[Math.floor(rand() * foeDrones.length)]; setLock(u, u.target); } return; }
     if (!enemies.length) return;
     const p = primary[side];
     if (p && !p.alive) primary[side] = null;
-    const attackers = units.filter((u) => ready(u) && u.side === side && attacks(u) && !u.pilot);
+    const attackers = units.filter((u) => ready(u) && u.side === side && attacks(u) && !u.pilot && !napping(u, enemies));
     if (primary[side]) {
       for (const u of attackers) if (u.target !== primary[side]) { u.target = primary[side]; setLock(u, u.target); }
       return;
@@ -508,6 +520,28 @@ export function createBattle(sides, opt) {
       load.set(best, load.get(best) + 1);
       u.target = best;
       setLock(u, best);
+    }
+  }
+
+  // NPC 巡航 / 追击（sim-npc 的 chase）：平时巡航速度；离目标太远时（等一段延迟后）开最大速度追一阵，信号半径跟着放大
+  // 延迟 / 时长：按「几率」取满值，否则取 0 ~ 满值之间随机
+  function chaseStep(alive, t) {
+    for (const u of alive) {
+      const c = u.t.chase;
+      if (!c || u.pilot) continue;
+      const st = u.chs || (u.chs = { on: false, until: 0, at: null });
+      const tg = u.target?.alive && ready(u.target) ? u.target : null;
+      const far = Boolean(tg) && surf(u, tg) > c.dist;
+      if (st.on && (t >= st.until || !far)) { st.on = false; st.at = null; }
+      if (!st.on) {
+        if (!far) st.at = null;
+        else {
+          if (st.at == null) st.at = t + (rand() < c.delayP ? c.delay : rand() * c.delay);
+          if (t >= st.at) { st.on = true; st.until = t + (rand() < c.durP ? c.dur : rand() * c.dur); }
+        }
+      }
+      if (st.on) u.sigMult *= c.sig;
+      else u.velMult *= c.cruise;
     }
   }
 
@@ -1341,6 +1375,7 @@ export function createBattle(sides, opt) {
     const both = (l) => stack(l.filter((x) => x < 0), true) * stack(l.filter((x) => x > 0), false);
     for (const [v, o] of wd) for (const [k, l] of Object.entries(o)) v[k + 'Mult'] = both(l);
     if (B.zones.length) zoneStep(alive, t);
+    chaseStep(alive, t);
 
     // 没有输出舰船的一方：剩下的船开始撤离
     for (const side of SIDES) {

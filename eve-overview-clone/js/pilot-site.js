@@ -10,7 +10,7 @@
 // 深渊：计时 20 分钟（到点舰船被摧毁）、每个房间有边界（出界受伤）、天气（玩家和 NPC 都受影响）、导管 2,500 m 内激活；
 //   最后一个房间的起源导管把你送回普通空间 = 完成。
 import { SITES } from './pilot-sites.js?v=7';
-import { npcUnit } from './sim-npc.js?v=4';
+import { npcUnit } from './sim-npc.js?v=6';
 
 let H = null;   // 钩子：{ S, ctx, esc, tr, log(text, kind), msg(text), finish(won, text), FE }
 export function initSite(hooks) { H = hooks; }
@@ -144,7 +144,8 @@ function rollRoom(sp) {
 }
 export function siteInstance(def, wxName) {
   if (!def?.pool) return def;
-  const wx = def.wx[wxName] || def.wx[pick(Object.keys(def.wx))];
+  // 没选过天气时用设置卡上默认高亮的那个（第一个），别随机（以前卡上亮电子、进去却随机成别的）
+  const wx = def.wx[wxName] || def.wx[Object.keys(def.wx)[0]];
   const li = randInt(0, wx.b.length - 1);
   const types = Object.entries(def.objs);
   const wxKey = Object.keys(def.wx).find((k) => def.wx[k] === wx);

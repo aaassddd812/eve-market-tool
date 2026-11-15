@@ -164,14 +164,27 @@ const FEED_NOTICE = {
     if (IS_TQ) return fineOn() ? `价值 / 空间 / 单刷 / NPC 筛选只查本站最近 ${keptDays()} 天` : `仅存 ${keptDays()} 天，加舰船或地点筛选可查更早`;
     return S.status?.since ? `${SERVER.full}从 ${new Date(S.status.since).toLocaleDateString('zh-CN')} 起收录，没有更早的记录` : '没有更早的记录';
   },
-  zkill_limit: 'zKillboard 最多查 2 万条，请缩小范围'
+  zkill_limit: 'zKillboard 最多查 2 万条，请缩小范围',
+  get sort_local() { return `按价值或按时间从远到近排序只查本站最近 ${keptDays()} 天`; }
 };
+// 表头排序（价值 / 时间，点一下切换方向）：默认时间从近到远；排序由服务器做（/feed?sort=&dir=），所以翻页也对
+const SORT_DEF = { key: 'time', dir: 'desc' };
+const sortOn = (st) => st && (st.key !== SORT_DEF.key || st.dir !== SORT_DEF.dir);
+function sortParams(q, st) {
+  if (sortOn(st)) { q.set('sort', st.key); q.set('dir', st.dir); }
+  return q;
+}
+function nextSort(st, key) {
+  return st?.key === key ? { key, dir: st.dir === 'desc' ? 'asc' : 'desc' } : { key, dir: 'desc' };
+}
+const sortHead = (st) => [['value', '价值'], ['time', '时间']].map(([k, label]) =>
+  `<span class="kb-sort${st.key === k ? ' sorted' : ''}" data-feed-sort="${k}" data-dir="${st.key === k ? st.dir : ''}" role="button" tabindex="0">${label}</span>`).join('');
 
 function feedTable(kills, opts = {}) {
   const note = FEED_NOTICE[opts.notice] ? `<p class="text-muted kb-note">${FEED_NOTICE[opts.notice]}</p>` : '';
   if (!kills.length) return (opts.notice === 'zkill_limit' ? '' : '<p class="text-muted kb-empty">没有符合条件的击杀记录</p>') + note;
   return `<div class="table-scroll"><table class="pc-mini-table kb-table"><thead><tr>
-      ${opts.me ? '<th>类型</th>' : ''}<th>舰船</th><th>受害者</th><th>最后一击</th><th>地点</th><th class="num">价值</th>
+      ${opts.me ? '<th>类型</th>' : ''}<th>舰船</th><th>受害者</th><th>最后一击</th><th>地点</th><th class="num">${opts.sort ? sortHead(opts.sort) : '价值'}</th>
     </tr></thead><tbody>${feedRows(kills, opts)}</tbody></table></div>${note}`;
 }
 
@@ -333,7 +346,7 @@ function feedQuery() {
   if (f.solo) q.set('solo', 1);
   if (f.npc) q.set('npc', 0);
   if (f.gank) q.set('gank', 1);
-  return q;
+  return sortParams(q, S.feedSort);
 }
 const fineOn = () => !!(S.fine.min || S.fine.space || S.fine.solo || S.fine.npc || S.fine.gank);
 
@@ -447,7 +460,7 @@ async function loadFeed(reset) {
     S.feed = S.feed.concat(data.kills);
     S.cursor = data.cursor;
     S.feedNotice = data.notice;
-    box.innerHTML = feedTable(S.feed, { notice: data.notice });
+    box.innerHTML = feedTable(S.feed, { notice: data.notice, sort: S.feedSort || SORT_DEF });
     $('kbMore').hidden = !S.cursor;
   } catch (error) {
     if (seq === S.feedSeq && $('kbFeed')) box.innerHTML = '<p class="text-muted kb-empty">读取失败：' + app.esc(error.message) + '</p>';
@@ -480,6 +493,7 @@ async function pollLive() {
   } catch { /* 下次再试 */ } finally { live.busy = false; }
 }
 async function freshFeed() {
+  if (sortOn(S.feedSort)) return;   // 按价值 / 时间正序排时新击杀不往最前面插
   const seq = S.feedSeq;
   const q = feedQuery();
   q.set('limit', 30);
@@ -495,7 +509,7 @@ async function freshFeed() {
   if (seq !== S.feedSeq || !$('kbFeed')) return;
   S.feed = newer.concat(S.feed);
   if (!top) S.cursor = data.cursor;
-  $('kbFeed').innerHTML = feedTable(S.feed, { notice: S.feedNotice });
+  $('kbFeed').innerHTML = feedTable(S.feed, { notice: S.feedNotice, sort: S.feedSort || SORT_DEF });
   $('kbMore').hidden = !S.cursor;
 }
 
@@ -1417,7 +1431,7 @@ async function loadEntityFeed(reset, fresh = false) {
   e.busy = true;
   const box = $('kbEntityFeed');
   if (reset) { e.feed = []; e.cursor = null; box.innerHTML = skRows(10); }
-  const q = new URLSearchParams({ [e.kind]: e.id, side: e.side, limit: 50 });
+  const q = sortParams(new URLSearchParams({ [e.kind]: e.id, side: e.side, limit: 50 }), e.fsort);
   if (e.cursor) q.set('cursor', e.cursor);
   setMoreBusy($('kbEntityMore'), true, e.cursor);
   try {
@@ -1429,7 +1443,7 @@ async function loadEntityFeed(reset, fresh = false) {
     e.feed = e.feed.concat(data.kills);
     e.cursor = data.cursor;
     const key = { character: 'character_id', corporation: 'corporation_id', alliance: 'alliance_id' }[e.kind];
-    box.innerHTML = feedTable(e.feed, { me: { key, id: e.id }, notice: data.notice });
+    box.innerHTML = feedTable(e.feed, { me: { key, id: e.id }, notice: data.notice, sort: e.fsort || SORT_DEF });
     $('kbEntityMore').hidden = !e.cursor;
   } catch (error) {
     if (S.entity === e && seq === e.seq) box.innerHTML = '<p class="text-muted kb-empty">读取失败：' + app.esc(error.message) + '</p>';
@@ -1775,6 +1789,12 @@ export function initKbPage(context) {
       S.lb[key] = value;
       renderBoardControls();
       loadBoard();
+      return;
+    }
+    const fs = e.target.closest('[data-feed-sort]');
+    if (fs) {
+      if (fs.closest('#kbEntityFeed') && S.entity) { S.entity.fsort = nextSort(S.entity.fsort || SORT_DEF, fs.dataset.feedSort); loadEntityFeed(true); }
+      else if (fs.closest('#kbFeed')) { S.feedSort = nextSort(S.feedSort || SORT_DEF, fs.dataset.feedSort); loadFeed(true); }
       return;
     }
     const sort = e.target.closest('[data-sort]');

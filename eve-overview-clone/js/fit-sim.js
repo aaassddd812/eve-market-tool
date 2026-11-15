@@ -10,7 +10,7 @@
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失；
 // 「AT 赛」（sim-at.js）可选这一届联盟锦标赛已打过的比赛，双方选手各一行带进来（蓝队 A 方、红队 B 方），战场上像比赛直播一样显示两队名单与血条。
 import { commonFit } from './fit-kb.js?v=v30';
-import { createBattle, simulate } from './sim-engine.js?v=v38';
+import { createBattle, simulate } from './sim-engine.js?v=v40';
 import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
 import { bindUnit, buildUnit, pilotUnit, forcedOff, BURSTS, BURST_MULT, mean } from './sim-unit.js?v=v8';
 

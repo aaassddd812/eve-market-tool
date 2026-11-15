@@ -9,7 +9,7 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v38';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v40';
 import { loadShipIndex } from './sim-ships.js?v=v18';
 import { warpShake } from './sim-warp.js?v=3';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v11';
@@ -19,7 +19,7 @@ import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=6';
 import * as SC from './pilot-scan.js?v=6';
-import * as ST from './pilot-site.js?v=17';
+import * as ST from './pilot-site.js?v=20';
 import * as CG from './pilot-cargo.js?v=2';
 
 let ctx = null;
@@ -115,7 +115,7 @@ export function initPilot(context) {
   if (saved && typeof saved === 'object') Object.assign(S.set, { ship: Number(saved.ship) || 0, fit: saved.fit || 'kb', foes: Array.isArray(saved.foes) ? saved.foes : [], dist: DISTS.includes(saved.dist) ? saved.dist : 30, sky: SKIES.includes(saved.sky) ? saved.sky : '', tac: saved.tac !== false, mmode: saved.mmode === '2v2' ? '2v2' : '1v1', mcap: MATCH_CAPS.includes(saved.mcap) ? saved.mcap : MATCH_CAPS[0],
     tab: ['match', 'tut'].includes(saved.tab) ? saved.tab : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
     pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', boost: Array.isArray(saved.boost) ? saved.boost.map(Number).filter(Boolean).slice(0, 16) : Array.isArray(saved.imp) ? saved.imp.map(Number).filter(Boolean) : null, tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
-    mode: ['ded', 'abyss'].includes(saved.mode) ? saved.mode : 'free', site: typeof saved.site === 'string' ? saved.site : '',
+    mode: ['ded', 'abyss'].includes(saved.mode) ? saved.mode : 'free', site: typeof saved.site === 'string' ? saved.site : '', abyWx: typeof saved.abyWx === 'string' ? saved.abyWx : '',
     allies: Array.isArray(saved.allies) ? saved.allies.filter((a) => a && Number(a.ship)).slice(0, 8).map((a) => ({ ship: Number(a.ship), fit: typeof a.fit === 'string' ? a.fit : 'kb', count: Math.max(1, Math.min(20, Number(a.count) || 1)) })) : [] });
   const hud = ctx.store.getJSON(HUD_KEY, null);
   if (hud && typeof hud === 'object') for (const k of Object.keys(HUD_DEF)) if (k in hud) S.hud[k] = hud[k] ? 1 : 0;
