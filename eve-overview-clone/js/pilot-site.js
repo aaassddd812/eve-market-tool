@@ -222,6 +222,9 @@ function enterRoom(k, first = false) {
   const { S } = H;
   const st = S.site, R = st.rooms[k];
   if (!R) return;
+  // 每层计时：上一层在这里结束
+  const P = st.rooms[st.room];
+  if (P && !P.t1) P.t1 = S.b.t;
   st.room = k;
   R.entered = true;
   R.t0 = S.b.t;
@@ -317,6 +320,7 @@ export function siteTick() {
     }
     if (!R.done && roomClear(R)) {
       R.done = true;
+      R.tDone = S.b.t;
       if (R.def.clearMsg) H.msg(R.def.clearMsg);
     }
     // 死亡空间完成：最后一个房间的 win 条件（一般是打掉头目），没写就是清完房间
@@ -432,6 +436,8 @@ function finish(won) {
   const st = S.site;
   if (st.end) return;
   st.end = S.b.t;
+  const C = st.rooms[st.room];
+  if (C && !C.t1) C.t1 = S.b.t;
   H.finish(won, won ? (st.abyss ? '已返回普通空间' : '复合体已完成') : '');
 }
 // 结算框里的额外一行
@@ -439,8 +445,18 @@ export function siteSummary() {
   const st = H.S.site;
   if (!st) return '';
   const k = st.rooms.filter((r) => r.entered && !r.def.entry).length;
-  return `到达第 ${k} 层 / 共 ${layerCount(st.def)} 层${st.bounty ? ` · 赏金 ${H.ctx.formatNumber(Math.round(st.bounty))} ISK` : ''}`;
+  const lt = layerTimes(st);
+  return `到达第 ${k} 层 / 共 ${layerCount(st.def)} 层${st.bounty ? ` · 赏金 ${H.ctx.formatNumber(Math.round(st.bounty))} ISK` : ''}${lt.length ? `<br>${lt.map(layerTimeText).join(EN() ? '; ' : '；')}` : ''}`;
 }
+// 每层计时：在这层待了多久（进层 → 离开；还在这层就算到现在），清完敌人用了多久
+const mmss = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+function layerTimes(st) {
+  const now = H.S.b.t;
+  return st.rooms.map((R, k) => (R.entered && !R.def.entry
+    ? { n: layerNo(st, k), t: (R.t1 || st.end || now) - R.t0, clr: R.tDone ? R.tDone - R.t0 : null, cur: k === st.room && !R.t1 }
+    : null)).filter(Boolean);
+}
+const layerTimeText = (l) => `${EN() ? `Pocket ${l.n}` : `第 ${l.n} 层`} ${mmss(l.t)}${l.clr != null ? ` · ${EN() ? 'cleared in' : '清完'} ${mmss(l.clr)}` : ''}`;
 // 地点窗口（客户端信息面板的「当前地点」）：房间进度、深渊计时、天气
 export function siteInfoHtml() {
   const { S, esc } = H;
@@ -454,6 +470,7 @@ export function siteInfoHtml() {
   return `<div class="pl-site"><b>${esc(L(st.def))}</b>
     <span>${esc(roomName(st, st.room))}</span><span>共 ${layerCount(st.def)} 层</span>
     ${st.abyss ? `<span class="pl-site-t${left < 120 ? ' bad' : ''}">剩余时间 ${mm}</span>` : ''}
+    ${(() => { const lt = layerTimes(st); return lt.length ? `<span class="pl-site-lt">${lt.map((l) => `<i${l.cur ? ' class="on"' : ''}>${layerTimeText(l)}</i>`).join('')}</span>` : ''; })()}
     ${wx.length ? `<span>天气：${wx.map((e) => esc(window.I18N?.lang === 'en' ? e.en : e.name)).join('、')}</span>` : ''}
     <span>${alive ? `敌人 ${alive}` : R?.done ? '房间已清理' : ''}</span></div>`;
 }

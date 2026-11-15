@@ -10328,5 +10328,8 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-site b { color: #fff; font-size: 13px; font-weight: 600; }
 .pl-site-t { font-variant-numeric: tabular-nums; }
 .pl-site-t.bad { color: #e06c5a; }
+.pl-site-lt { display: flex; flex-direction: column; gap: 1px; font-variant-numeric: tabular-nums; }
+.pl-site-lt i { font-style: normal; color: rgba(255, 255, 255, 0.5); }
+.pl-site-lt i.on { color: rgba(255, 255, 255, 0.85); }
 .pl-fade { position: absolute; inset: 0; z-index: 57; pointer-events: none; background: #fff; animation: pl-fade 1.2s ease-out forwards; }
 @keyframes pl-fade { 0% { opacity: 0; } 25% { opacity: 0.85; } 100% { opacity: 0; } }
