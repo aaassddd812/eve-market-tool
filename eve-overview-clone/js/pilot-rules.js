@@ -470,9 +470,19 @@ export function makeRules(S, H) {
     log(`解除锁定 ${nameOf(v)}`, 'sys');
   }
   // 飞行指令：{ cmd: stop|approach|orbit|keep|dir|point, tgt, dist, dir, point }
+  // 天体当移动目标（环绕 / 保持距离 / 接近星门、加速轨道、深渊导管等）：引擎按「位置 + 半径、不动」的目标处理，每个天体一份
+  const celTgts = new Map();
+  function celTgt(i) {
+    const k = S.b?.cel?.[i];
+    if (!k) return null;
+    let t = celTgts.get(k);
+    if (!t) { t = { alive: true, cel: i, pos: k.pos, vel: [0, 0, 0], t: { radius: k.radius || 0 } }; celTgts.set(k, t); }
+    return t;
+  }
   function cmd(c) {
     const P = S.me?.pilot;
     if (!P || !S.me.alive || S.me.warp) return false;
+    if (c.cel != null) { const t = celTgt(c.cel); if (!t) return false; c = { ...c, tgt: t }; delete c.cel; }
     if (P.cmd === 'warp') P.wp = null;   // 别的飞行指令取消正在对准的跃迁
     Object.assign(P, c);
     if (c.cmd !== 'stop' && P.speed === 0) P.speed = 1;
@@ -562,6 +572,7 @@ export function cleanOp(a, nUnits, nRack, nCel = 0) {
       if (!CMDS.includes(a.cmd)) return null;
       const o = { a: 'cmd', cmd: a.cmd };
       if (a.u != null) { if (!idx(a.u, nUnits)) return null; o.u = a.u; }
+      if (a.c != null) { if (!idx(a.c, nCel) || a.u != null || !['approach', 'orbit', 'keep'].includes(a.cmd)) return null; o.c = a.c; }
       if (a.dist != null) { if (!fin(a.dist)) return null; o.dist = Math.max(0, Math.min(300000, a.dist)); }
       if (a.cmd === 'dir') { if (!vec(a.dir)) return null; const l = Math.hypot(...a.dir) || 1; o.dir = a.dir.map((x) => x / l); }
       if (a.cmd === 'point') { if (!vec(a.pt)) return null; o.pt = a.pt.slice(); }
@@ -589,7 +600,7 @@ export function applyOp(R, S, a) {
     case 'rov': return a.on == null ? R.toggleRackOverload(a.r) : R.setRackOverload(a.r, a.on);
     case 'groups': return R.setGroups(a.list);
     case 'cmd': {
-      const c = { cmd: a.cmd, tgt: U(a.u) };
+      const c = a.c != null ? { cmd: a.cmd, cel: a.c } : { cmd: a.cmd, tgt: U(a.u) };
       if (a.dist != null) c.dist = a.dist;
       if (a.dir) c.dir = a.dir;
       if (a.pt) c.pt = a.pt;

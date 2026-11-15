@@ -9320,6 +9320,7 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-results { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); max-height: 300px; overflow: auto; padding: 4px; border-radius: 8px; background: #161c25; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5); }
 .pl-results button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 6px 8px; border: 0; border-radius: 6px; background: none; color: inherit; text-align: left; cursor: pointer; }
 .pl-results button:hover { background: rgba(255, 255, 255, 0.08); }
+.pl-results button small { margin-left: auto; opacity: 0.6; font-size: 0.8rem; }
 .pl-results img { width: 24px; height: 24px; }
 .pl-setup-foot { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 14px 20px 18px; }
 /* 预设场景：圆角填充小卡片（选中的高亮底色），我的预设带删除 */

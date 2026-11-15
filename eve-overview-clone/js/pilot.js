@@ -12,9 +12,9 @@
 import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v38';
 import { loadShipIndex } from './sim-ships.js?v=v18';
 import { warpShake } from './sim-warp.js?v=3';
-import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v10';
+import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v11';
 import { bindUnit, pilotUnit } from './sim-unit.js?v=v8';
-import { buildMatch, stepMatch } from './match-sim.js?v=v10';
+import { buildMatch, stepMatch } from './match-sim.js?v=v11';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=6';
@@ -59,7 +59,7 @@ const RM = {
   setMode: (k) => (S.me?.alive && S.modes?.[k] && S.modes[k] !== S.mode && !RL.modeLeft() ? mAct({ a: 'mode', k }) : false),
   setRackOverload: (r, on) => mAct({ a: 'rov', r, on }),
   toggleRackOverload: (r) => mAct({ a: 'rov', r }),
-  cmd: (c) => (S.me?.alive ? mAct({ a: 'cmd', cmd: c.cmd, u: c.tgt ? c.tgt.i : undefined, dist: c.dist, dir: c.dir, pt: c.pt }) : false),
+  cmd: (c) => (S.me?.alive ? mAct({ a: 'cmd', cmd: c.cmd, u: c.tgt ? c.tgt.i : undefined, c: c.cel, dist: c.dist, dir: c.dir, pt: c.pt }) : false),
   syncGroupState: () => mAct({ a: 'groups', list: [...S.rk.grp] }),
   warpTo: (tgt, dist) => (S.me?.alive && !S.me.warp ? mAct({ a: 'warp', ...(tgt?.cel != null ? { c: tgt.cel } : { u: tgt.i }), dist }) : false),
 };
@@ -114,7 +114,7 @@ export function initPilot(context) {
   S.ovTab = ot >= 0 && ot < OV_TABS.length ? ot : 0;
   if (saved && typeof saved === 'object') Object.assign(S.set, { ship: Number(saved.ship) || 0, fit: saved.fit || 'kb', foes: Array.isArray(saved.foes) ? saved.foes : [], dist: DISTS.includes(saved.dist) ? saved.dist : 30, sky: SKIES.includes(saved.sky) ? saved.sky : '', tac: saved.tac !== false, mmode: saved.mmode === '2v2' ? '2v2' : '1v1', mcap: MATCH_CAPS.includes(saved.mcap) ? saved.mcap : MATCH_CAPS[0],
     tab: ['match', 'tut'].includes(saved.tab) ? saved.tab : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
-    pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', imp: Array.isArray(saved.imp) ? saved.imp.map(Number).filter(Boolean).slice(0, 16) : null, tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
+    pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', boost: Array.isArray(saved.boost) ? saved.boost.map(Number).filter(Boolean).slice(0, 16) : Array.isArray(saved.imp) ? saved.imp.map(Number).filter(Boolean) : null, tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
     mode: ['ded', 'abyss'].includes(saved.mode) ? saved.mode : 'free', site: typeof saved.site === 'string' ? saved.site : '',
     allies: Array.isArray(saved.allies) ? saved.allies.filter((a) => a && Number(a.ship)).slice(0, 8).map((a) => ({ ship: Number(a.ship), fit: typeof a.fit === 'string' ? a.fit : 'kb', count: Math.max(1, Math.min(20, Number(a.count) || 1)) })) : [] });
   const hud = ctx.store.getJSON(HUD_KEY, null);
@@ -460,42 +460,57 @@ function driveAlly(i) {
   renderSetup();
 }
 // ---------- 植入体 / 增效剂 ----------
-// 装在角色身上（客户端：植入体 / 增效剂都在角色上，不属于装配），换船、换装配来源都一样；匹配对战服务器不收植入体，只用于单人
-// S.set.imp：第一次用时从装配页当前装配带过来；同一个植入体槽位（331）/ 增效剂槽位（1087）只能有一个
+// 植入体：取自所选装配（装配页 / 我的装配 / 分享的装配里带的；击杀记录常见装配和空船没有）
+// 增效剂：在这里选（S.set.boost，第一次用时从装配页当前装配带过来），可以选多个，同一个增效剂槽位（1087）只能有一个；
+// 匹配对战服务器不收植入体 / 增效剂，只用于单人
 const IMP_SLOT = 331, BOOST_SLOT = 1087;
 const impSlot = (t) => (!t ? null : t.attrs.has(IMP_SLOT) ? ['i', t.attrs.get(IMP_SLOT)] : t.attrs.has(BOOST_SLOT) ? ['b', t.attrs.get(BOOST_SLOT)] : null);
-function myImps() {
-  if (!Array.isArray(S.set.imp)) S.set.imp = (ctx.getFit?.()?.implants || []).slice();
-  S.set.imp = S.set.imp.filter((id) => impSlot(ctx.data?.types.get(id)));
-  return S.set.imp;
+const isBoost = (id) => impSlot(ctx.data?.types.get(id))?.[0] === 'b';
+const isImp = (id) => impSlot(ctx.data?.types.get(id))?.[0] === 'i';
+const bySlot = (a, b) => impSlot(ctx.data.types.get(a))[1] - impSlot(ctx.data.types.get(b))[1];
+// 所选装配里的植入体（不用等装配读完：这几种来源都在本地）
+function fitImps(ship = S.set.ship, key = S.set.fit) {
+  let f = null;
+  if (key === 'current') f = ctx.getFit?.();
+  else if (key === 'pub') f = S.set.pfit?.fit;
+  else if (key.startsWith('saved:')) f = ctx.savedFits().find((x) => String(x.id) === key.slice(6));
+  else if (key.startsWith('esi:')) f = (S.esiFits || []).find((x) => String(x.esiId) === key.slice(4));
+  return f?.ship === ship ? (f.implants || []).filter(isImp).sort(bySlot) : [];
 }
-function addImp(id) {
+function myBoosts() {
+  if (!Array.isArray(S.set.boost)) S.set.boost = (ctx.getFit?.()?.implants || []).filter(isBoost);
+  S.set.boost = S.set.boost.filter(isBoost);
+  return S.set.boost;
+}
+function addBoost(id) {
   const s = impSlot(ctx.data.types.get(id));
-  if (!s) return;
-  S.set.imp = myImps().filter((x) => { const y = impSlot(ctx.data.types.get(x)); return !(y[0] === s[0] && y[1] === s[1]); });
-  S.set.imp.push(id);
-  S.set.imp.sort((a, b) => { const x = impSlot(ctx.data.types.get(a)), y = impSlot(ctx.data.types.get(b)); return x[0].localeCompare(y[0]) || x[1] - y[1]; });
+  if (s?.[0] !== 'b') return;
+  S.set.boost = myBoosts().filter((x) => impSlot(ctx.data.types.get(x))[1] !== s[1]);
+  S.set.boost.push(id);
+  S.set.boost.sort(bySlot);
 }
-function impSearch(q) {
+function boostSearch(q) {
   const k = q.toLowerCase(), out = [];
   for (const t of ctx.data.types.values()) {
-    if (t.category !== ctx.FE.CAT.implant || !impSlot(t)) continue;
+    if (t.category !== ctx.FE.CAT.implant || impSlot(t)?.[0] !== 'b') continue;
     if (t.name.toLowerCase().includes(k) || (t.en || '').toLowerCase().includes(k)) out.push(t);
-    if (out.length >= 30) break;
+    if (out.length >= 40) break;
   }
-  return out;
+  return out.sort((a, b) => bySlot(a.id, b.id));
 }
 function impField() {
-  const list = myImps();
-  const fromFit = (ctx.getFit?.()?.implants || []).length, esiOk = ctx.hasEsi?.() && ctx.getImplants;
-  const chips = list.map((id) => {
+  const imps = fitImps(), boosts = myBoosts();
+  const chip = (id, rm) => {
     const [k, n] = impSlot(ctx.data.types.get(id));
-    return `<span class="pl-chip pl-imp"><img src="${IMG(id, 'icon', 32)}" alt="" loading="lazy"><b>${esc(typeName(id))}</b><small>${esc(tr(k === 'i' ? `植入体槽位 ${n}` : `增效剂槽位 ${n}`))}</small><button type="button" data-pl-imprm="${id}" aria-label="${esc(tr('移除'))}">×</button></span>`;
-  }).join('');
-  return `<div class="pl-imps"><div class="pl-imps-head"><span>${esc(tr('植入体 / 增效剂'))}</span>${fromFit ? `<button type="button" class="link-btn" data-pl-impfit>${esc(tr('从装配页带入'))}</button>` : ''}${esiOk ? `<button type="button" class="link-btn" data-pl-impesi>${esc(tr('导入当前角色的植入体'))}</button>` : ''}${list.length ? `<button type="button" class="link-btn" data-pl-impclr>${esc(tr('清空'))}</button>` : ''}</div>
-            ${chips ? `<div class="pl-imp-list">${chips}</div>` : ''}
-            <div class="pl-search"><input type="search" class="pi-input" placeholder="${esc(tr('搜索植入体或增效剂'))}" data-pl-q="imp" autocomplete="off"><div class="pl-results" data-pl-res="imp" hidden></div></div>
-            ${list.some((id) => impSlot(ctx.data.types.get(id))[0] === 'b') ? `<p class="pl-imp-note">${esc(tr('增效剂的副作用起飞时按副作用几率各掷一次，中了的才生效'))}</p>` : ''}</div>`;
+    return `<span class="pl-chip pl-imp"><img src="${IMG(id, 'icon', 32)}" alt="" loading="lazy"><b>${esc(typeName(id))}</b><small>${esc(tr(k === 'i' ? `植入体槽位 ${n}` : `增效剂槽位 ${n}`))}</small>${rm ? `<button type="button" data-pl-boostrm="${id}" aria-label="${esc(tr('移除'))}">×</button>` : ''}</span>`;
+  };
+  return `<div class="pl-imps">
+            <div class="pl-imps-head"><span>${esc(tr('植入体'))}</span></div>
+            ${imps.length ? `<div class="pl-imp-list">${imps.map((id) => chip(id, false)).join('')}</div>` : `<p class="pl-imp-note">${esc(tr('所选装配里没有植入体'))}</p>`}
+            <div class="pl-imps-head"><span>${esc(tr('增效剂'))}</span>${boosts.length ? `<button type="button" class="link-btn" data-pl-boostclr>${esc(tr('清空'))}</button>` : ''}</div>
+            ${boosts.length ? `<div class="pl-imp-list">${boosts.map((id) => chip(id, true)).join('')}</div>` : ''}
+            <div class="pl-search"><input type="search" class="pi-input" placeholder="${esc(tr('搜索增效剂（每个槽位一个）'))}" data-pl-q="boost" autocomplete="off"><div class="pl-results" data-pl-res="boost" hidden></div></div>
+            ${boosts.length ? `<p class="pl-imp-note">${esc(tr('增效剂的副作用起飞时按副作用几率各掷一次，中了的才生效'))}</p>` : ''}</div>`;
 }
 // 起飞后：中了的增效剂副作用记进日志（惩罚属性名 = SDE 属性显示名）
 const SIDE_NAME = { 1141: '装甲值惩罚', 1142: '装甲维修量惩罚', 1143: '护盾容量惩罚', 1144: '炮塔最佳射程惩罚', 1145: '炮塔跟踪速度惩罚', 1146: '炮塔失准范围惩罚', 1147: '爆炸速度惩罚', 1148: '导弹速度惩罚', 1149: '导弹爆炸半径惩罚', 1150: '电容容量惩罚', 1151: '速度惩罚', 616: '护盾回充惩罚' };
@@ -515,15 +530,15 @@ function onInput(e) {
   }
   if (q) {
     const box = root.querySelector(`[data-pl-res="${q.dataset.plQ}"]`);
-    const list = !q.value.trim() ? [] : q.dataset.plQ === 'imp' ? impSearch(q.value.trim()) : ctx.shipSearch(q.value.trim());
+    const list = !q.value.trim() ? [] : q.dataset.plQ === 'boost' ? boostSearch(q.value.trim()) : ctx.shipSearch(q.value.trim());
     box.hidden = !list.length;
-    box.innerHTML = list.map((t) => `<button type="button" data-pl-pick="${q.dataset.plQ}:${t.id}"><img src="${IMG(t.id, 'icon', 32)}" alt="" loading="lazy">${esc(t.name)}</button>`).join('');
+    box.innerHTML = list.map((t) => `<button type="button" data-pl-pick="${q.dataset.plQ}:${t.id}"><img src="${IMG(t.id, 'icon', 32)}" alt="" loading="lazy">${esc(t.name)}${q.dataset.plQ === 'boost' ? `<small>${esc(tr(`增效剂槽位 ${impSlot(t)[1]}`))}</small>` : ''}</button>`).join('');
   }
 }
 function onChange(e) {
   const t = e.target;
   if (FL.fleetChange(e) || SC.scanChange(e)) return;
-  if (t.matches('[data-pl-fit]')) { S.set.fit = t.value; save(); }
+  if (t.matches('[data-pl-fit]')) { S.set.fit = t.value; save(); renderSetup(); }   // 植入体跟着装配变
   if (t.matches('[data-pl-afit]')) { const a = S.set.allies[Number(t.dataset.plAfit)]; if (a) { a.fit = t.value; save(); } }
   if (t.matches('[data-pl-acount]')) { const a = S.set.allies[Number(t.dataset.plAcount)]; if (a) { a.count = Math.max(1, Math.min(20, Math.round(Number(t.value)) || 1)); save(); } }
   if (t.matches('[data-pl-count]')) { const f = S.set.foes[Number(t.dataset.plCount)]; if (f) { f.count = Math.max(1, Math.min(20, Math.round(Number(t.value)) || 1)); save(); } }
@@ -548,7 +563,7 @@ async function launch() {
   renderSetup();
   try {
     const fit = await fitFor(S.set.ship, S.set.fit);
-    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true, implants: myImps(), boosters: true });
+    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true, boosters: myBoosts() });
     S.fitLabel = mine.row.label || fit?.name || '';
     if (!mine.row.unit) throw new Error('这个装配算不出属性');
     // 同型敌人只算一次装配
@@ -602,7 +617,7 @@ async function launchSite() {
     S.envSave = ctx.FE.getEnv().slice();
     ctx.FE.setEnv(def.kind === 'abyss' && def.weather ? [def.weather] : []);
     const fit = await fitFor(S.set.ship, S.set.fit);
-    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true, implants: myImps(), boosters: true });
+    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true, boosters: myBoosts() });
     S.fitLabel = mine.row.label || fit?.name || '';
     if (!mine.row.unit) throw new Error('这个装配算不出属性');
     const allies = [], cache = new Map();
@@ -1695,6 +1710,7 @@ function pickCel(i, e) {
   else if (S.keys.has('s')) warpTo({ cel: i });
   else if (S.keys.has('d') && ['gate', 'conduit'].includes(ST.gateOf(i)?.kind)) ST.activate(i);   // D + 点击：激活加速轨道（CmdDockOrJumpOrActivateGate）
   else if (S.keys.has('q')) celApproach(i);
+  else if ((S.keys.has('w') || S.keys.has('e')) && celDist(S.me, c) < 150000) cmd(S.keys.has('w') ? { cmd: 'orbit', cel: i, dist: S.orbit } : { cmd: 'keep', cel: i, dist: S.keep });
   renderSel();
   renderOverview(true);
 }
@@ -1743,10 +1759,10 @@ function warpInd() {
 // ---------- 指令 ----------
 function cmd(c) {
   if (!R.cmd(c)) return;
-  const v = c.tgt;
+  const v = c.tgt, nm = c.cel != null ? S.b.cel[c.cel]?.name : v ? S.names[v.i] : '';
   if (c.cmd === 'stop') indTemp('舰船正在停止');
   const what = { stop: '停船', approach: '靠近', orbit: '环绕', keep: '保持距离', dir: '朝选定方向飞行', point: '飞往指定位置' }[c.cmd];
-  pushLog(v ? `${what} ${S.names[v.i]}${c.cmd === 'orbit' || c.cmd === 'keep' ? ` · ${fmtDist(c.dist)}` : ''}` : what, 'sys');
+  pushLog(nm ? `${what} ${nm}${c.cmd === 'orbit' || c.cmd === 'keep' ? ` · ${fmtDist(c.dist)}` : ''}` : what, 'sys');
   renderSel();
 }
 const lockUnit = (v) => R.lock(v);
@@ -1789,19 +1805,13 @@ function onClick(e) {
   if (t.closest?.('[data-win="loot"]') && CG.cargoClick(e)) return;
   if ((x = t.closest('[data-pl-pick]'))) {
     const [who, id] = x.dataset.plPick.split(':');
-    if (who === 'imp') addImp(Number(id)); else if (who === 'me') { S.set.ship = Number(id); S.set.fit = 'kb'; } else if (who === 'ally') { if (S.set.allies.length < 8) S.set.allies.push({ ship: Number(id), fit: 'kb', count: 1 }); } else S.set.foes.push({ ship: Number(id), count: 1 });
+    if (who === 'boost') addBoost(Number(id)); else if (who === 'me') { S.set.ship = Number(id); S.set.fit = 'kb'; } else if (who === 'ally') { if (S.set.allies.length < 8) S.set.allies.push({ ship: Number(id), fit: 'kb', count: 1 }); } else S.set.foes.push({ ship: Number(id), count: 1 });
     save();
     renderSetup();
     return;
   }
-  if ((x = t.closest('[data-pl-imprm]'))) { S.set.imp = myImps().filter((id) => id !== Number(x.dataset.plImprm)); save(); renderSetup(); return; }
-  if (t.closest('[data-pl-impclr]')) { S.set.imp = []; save(); renderSetup(); return; }
-  if (t.closest('[data-pl-impfit]')) { S.set.imp = []; for (const id of ctx.getFit?.()?.implants || []) addImp(id); save(); renderSetup(); return; }
-  if (t.closest('[data-pl-impesi]')) {
-    ctx.getImplants().then((ids) => { S.set.imp = []; for (const id of ids || []) addImp(Number(id)); save(); renderSetup(); ctx.showToast(tr(`已导入 ${S.set.imp.length} 个植入体`), 'success'); })
-      .catch((err) => ctx.showToast(tr('读取植入体失败：') + err.message, 'error'));
-    return;
-  }
+  if ((x = t.closest('[data-pl-boostrm]'))) { S.set.boost = myBoosts().filter((id) => id !== Number(x.dataset.plBoostrm)); save(); renderSetup(); return; }
+  if (t.closest('[data-pl-boostclr]')) { S.set.boost = []; save(); renderSetup(); return; }
   if ((x = t.closest('[data-pl-drive]'))) { driveAlly(Number(x.dataset.plDrive)); return; }
   if ((x = t.closest('[data-pl-adel]'))) { S.set.allies.splice(Number(x.dataset.plAdel), 1); save(); renderSetup(); return; }
   if (t.closest('[data-pl-mdel]')) { const a = S.set.allies[0]; if (a) { Object.assign(S.set, { ship: a.ship, fit: a.fit }); if (a.count > 1) a.count--; else S.set.allies.shift(); save(); renderSetup(); } return; }
@@ -1894,6 +1904,7 @@ function act(a, v = S.selC >= 0 ? null : S.b?.units[S.sel]) {
   if (!v && S.selC >= 0 && S.b?.cel[S.selC]) {
     if (a === 'warp') warpTo({ cel: S.selC });
     if (a === 'approach') celApproach(S.selC);
+    if ((a === 'orbit' || a === 'keep') && celDist(S.me, S.b.cel[S.selC]) < 150000) cmd({ cmd: a, cel: S.selC, dist: a === 'orbit' ? S.orbit : S.keep });
     if (a === 'gate') ST.activate(S.selC);
     if (a === 'loot') ST.openCargo(S.selC);
     renderSel();
@@ -3114,8 +3125,8 @@ function selActs(v) {
   const P = S.me.pilot;
   if (v?.cel != null) {
     const near = celDist(S.me, S.b.cel[v.cel]) < 150000;
-    // 客户端对天体也列出整排按钮（不能用的变灰）；这里环绕、保持距离、锁定、观察、跟踪对天体还没做
-    const acts = SEL_ACTS.map((a) => ({ ...a, off: a.k === 'approach' ? '' : a.k === 'warp' ? (near ? a.off : '') : '驾驶模拟里对天体暂不支持' }));
+    // 客户端对天体也列出整排按钮（不能用的变灰）：接近、跃迁至；150 km 内可以环绕 / 保持距离（星门、加速轨道、深渊导管等）；锁定、观察、跟踪对天体还没做
+    const acts = SEL_ACTS.map((a) => ({ ...a, off: a.k === 'approach' ? '' : a.k === 'warp' ? (near ? a.off : '') : a.k === 'orbit' || a.k === 'keep' ? (near ? '' : '距离太远，不能那样做。') : '驾驶模拟里对天体暂不支持' }));
     // 加速轨道 / 深渊导管（客户端 selectedItemConst：groupWarpGate → UI/Inflight/ActivateGate，图标 jump_to，排在接近、跃迁至之后）
     const gk = ST.gateOf(v.cel)?.kind;
     if (gk === 'gate' || gk === 'conduit') acts.splice(2, 0, { k: 'gate', n: '激活加速轨道', ic: 'jump_to', key: 'D' });
@@ -3249,7 +3260,7 @@ function celMenu(i) {
   items.push(...ST.gateItems(i));
   const far = celDist(u, c) >= 150000;
   if (far) items.push(['跃迁至', warpSub((d) => warpTo({ cel: i }, d)), { fn: () => warpTo({ cel: i }) }], ...FL.warpItems({ cel: i }));
-  else items.push(['接近', () => celApproach(i)]);
+  else items.push(['接近', () => celApproach(i)], ['环绕', () => cmd({ cmd: 'orbit', cel: i, dist: S.orbit })], ['保持距离', () => cmd({ cmd: 'keep', cel: i, dist: S.keep })]);
   items.push(['朝向该处', () => alignTo({ cel: i })]);
   if (S.fleet) items.push([FL.bcName('warp'), () => FL.broadcast('warp', { cel: i })], [FL.bcName('align'), () => FL.broadcast('align', { cel: i })]);
   return clientMenu(items);

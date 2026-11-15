@@ -2530,10 +2530,13 @@ export async function pilotRow(ship, fit = null, label = '', prep = null, o = {}
   // 装配里「在线」（关着）的主动装备也算进来，开关组合（variant）：sim-unit pilotUnit（匹配服务器同一份）
   const so = S.sideOpt.A || sideDefaults();
   const skills = so.skills === 'esi' && S.esiSkills ? S.esiSkills.levels : 'max';
-  // 驾驶员自己的植入体 / 增效剂（装在角色身上，换哪套装配都一样）；增效剂副作用按几率掷一次
+  // 增效剂：植入体用装配里的，增效剂换成驾驶模拟里选的（o.boosters）；副作用按几率各掷一次
   let side = [];
-  if (o.implants) row.fit = { ...row.fit, implants: o.implants.filter((id) => ctx.data.types.has(id)) };
-  if (o.boosters) ({ fit: row.fit, side } = rollSideFx(row.fit, skills));
+  if (o.boosters) {
+    const boost = (id) => ctx.data.types.get(id)?.attrs.has(1087);
+    row.fit = { ...row.fit, implants: [...(row.fit.implants || []).filter((id) => !boost(id)), ...o.boosters.filter(boost)] };
+    ({ fit: row.fit, side } = rollSideFx(row.fit, skills));
+  }
   bindUnit(ctx, S.opt);
   const r = pilotUnit(row.fit, { skills, heat: so.heat, bursts: so.bursts, self: !!o.self, base: S.opt });
   Object.assign(row, { fit: r.fit, calc: r.calc, stats: r.stats, unit: r.unit });
