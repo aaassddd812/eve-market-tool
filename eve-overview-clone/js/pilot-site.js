@@ -9,8 +9,8 @@
 //   门可限制舰船（ships：允许的舰船分组 ID），不合规的船激活失败（客户端提示「你的舰船不能使用这个加速门」）。
 // 深渊：计时 20 分钟（到点舰船被摧毁）、每个房间有边界（出界受伤）、天气（玩家和 NPC 都受影响）、导管 2,500 m 内激活；
 //   最后一个房间的起源导管把你送回普通空间 = 完成。
-import { SITES } from './pilot-sites.js?v=6';
-import { npcUnit } from './sim-npc.js?v=3';
+import { SITES } from './pilot-sites.js?v=7';
+import { npcUnit } from './sim-npc.js?v=4';
 
 let H = null;   // 钩子：{ S, ctx, esc, tr, log(text, kind), msg(text), finish(won, text), FE }
 export function initSite(hooks) { H = hooks; }
@@ -26,7 +26,7 @@ const KM = 1000;
 
 // ---------- NPC 数据 ----------
 let ND = null, ndP = null;
-export const loadNpcData = () => (ndP ||= fetch('npc-data.json?v=4').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => {
+export const loadNpcData = () => (ndP ||= fetch('npc-data.json?v=5').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => {
   ND = d;
   // NPC 类型挂进装配数据的类型表：名字、总览图标（按组）、过滤、选中物体窗口都照舰船那套走
   const types = H.ctx.data?.types;

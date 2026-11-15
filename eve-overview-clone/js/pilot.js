@@ -9,7 +9,7 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v37';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v38';
 import { loadShipIndex } from './sim-ships.js?v=v18';
 import { warpShake } from './sim-warp.js?v=3';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v10';
@@ -19,7 +19,7 @@ import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=6';
 import * as SC from './pilot-scan.js?v=6';
-import * as ST from './pilot-site.js?v=15';
+import * as ST from './pilot-site.js?v=17';
 import * as CG from './pilot-cargo.js?v=2';
 
 let ctx = null;
@@ -114,7 +114,7 @@ export function initPilot(context) {
   S.ovTab = ot >= 0 && ot < OV_TABS.length ? ot : 0;
   if (saved && typeof saved === 'object') Object.assign(S.set, { ship: Number(saved.ship) || 0, fit: saved.fit || 'kb', foes: Array.isArray(saved.foes) ? saved.foes : [], dist: DISTS.includes(saved.dist) ? saved.dist : 30, sky: SKIES.includes(saved.sky) ? saved.sky : '', tac: saved.tac !== false, mmode: saved.mmode === '2v2' ? '2v2' : '1v1', mcap: MATCH_CAPS.includes(saved.mcap) ? saved.mcap : MATCH_CAPS[0],
     tab: ['match', 'tut'].includes(saved.tab) ? saved.tab : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
-    pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
+    pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', imp: Array.isArray(saved.imp) ? saved.imp.map(Number).filter(Boolean).slice(0, 16) : null, tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
     mode: ['ded', 'abyss'].includes(saved.mode) ? saved.mode : 'free', site: typeof saved.site === 'string' ? saved.site : '',
     allies: Array.isArray(saved.allies) ? saved.allies.filter((a) => a && Number(a.ship)).slice(0, 8).map((a) => ({ ship: Number(a.ship), fit: typeof a.fit === 'string' ? a.fit : 'kb', count: Math.max(1, Math.min(20, Number(a.count) || 1)) })) : [] });
   const hud = ctx.store.getJSON(HUD_KEY, null);
@@ -387,7 +387,7 @@ function renderSetupNow() {
   const sideField = `<div class="pl-field">
           <label>我方</label>
           <div class="pl-foes">
-            <div class="pl-ally on"><div class="pl-foe">${shipChip(ship)}<span class="pl-drive">驾驶中</span><button type="button" class="btn btn-ghost btn-sm" data-pl-view="me">查看装配</button>${S.set.allies.length ? '<button type="button" class="btn btn-ghost btn-sm" data-pl-mdel>移除</button>' : ''}</div>${fitSel(ship, S.set.fit, 'data-pl-fit')}</div>
+            <div class="pl-ally on"><div class="pl-foe">${shipChip(ship)}<span class="pl-drive">驾驶中</span><button type="button" class="btn btn-ghost btn-sm" data-pl-view="me">查看装配</button>${S.set.allies.length ? '<button type="button" class="btn btn-ghost btn-sm" data-pl-mdel>移除</button>' : ''}</div>${fitSel(ship, S.set.fit, 'data-pl-fit')}${impField()}</div>
             ${S.set.allies.map((a, i) => `<div class="pl-ally"><div class="pl-foe">${shipChip(a.ship)}<input type="number" class="pi-input" min="1" max="20" value="${a.count}" data-pl-acount="${i}" aria-label="数量"><button type="button" class="btn btn-ghost btn-sm" data-pl-drive="${i}">改为驾驶</button><button type="button" class="btn btn-ghost btn-sm" data-pl-view="a:${i}">查看装配</button><button type="button" class="btn btn-ghost btn-sm" data-pl-adel="${i}">移除</button></div>${fitSel(a.ship, a.fit, `data-pl-afit="${i}"`)}</div>`).join('')}
           </div>
           <div class="pl-search"><input type="search" class="pi-input" placeholder="搜索船名加队友" data-pl-q="ally" autocomplete="off"><div class="pl-results" data-pl-res="ally" hidden></div></div>
@@ -459,6 +459,49 @@ function driveAlly(i) {
   save();
   renderSetup();
 }
+// ---------- 植入体 / 增效剂 ----------
+// 装在角色身上（客户端：植入体 / 增效剂都在角色上，不属于装配），换船、换装配来源都一样；匹配对战服务器不收植入体，只用于单人
+// S.set.imp：第一次用时从装配页当前装配带过来；同一个植入体槽位（331）/ 增效剂槽位（1087）只能有一个
+const IMP_SLOT = 331, BOOST_SLOT = 1087;
+const impSlot = (t) => (!t ? null : t.attrs.has(IMP_SLOT) ? ['i', t.attrs.get(IMP_SLOT)] : t.attrs.has(BOOST_SLOT) ? ['b', t.attrs.get(BOOST_SLOT)] : null);
+function myImps() {
+  if (!Array.isArray(S.set.imp)) S.set.imp = (ctx.getFit?.()?.implants || []).slice();
+  S.set.imp = S.set.imp.filter((id) => impSlot(ctx.data?.types.get(id)));
+  return S.set.imp;
+}
+function addImp(id) {
+  const s = impSlot(ctx.data.types.get(id));
+  if (!s) return;
+  S.set.imp = myImps().filter((x) => { const y = impSlot(ctx.data.types.get(x)); return !(y[0] === s[0] && y[1] === s[1]); });
+  S.set.imp.push(id);
+  S.set.imp.sort((a, b) => { const x = impSlot(ctx.data.types.get(a)), y = impSlot(ctx.data.types.get(b)); return x[0].localeCompare(y[0]) || x[1] - y[1]; });
+}
+function impSearch(q) {
+  const k = q.toLowerCase(), out = [];
+  for (const t of ctx.data.types.values()) {
+    if (t.category !== ctx.FE.CAT.implant || !impSlot(t)) continue;
+    if (t.name.toLowerCase().includes(k) || (t.en || '').toLowerCase().includes(k)) out.push(t);
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+function impField() {
+  const list = myImps();
+  const fromFit = (ctx.getFit?.()?.implants || []).length, esiOk = ctx.hasEsi?.() && ctx.getImplants;
+  const chips = list.map((id) => {
+    const [k, n] = impSlot(ctx.data.types.get(id));
+    return `<span class="pl-chip pl-imp"><img src="${IMG(id, 'icon', 32)}" alt="" loading="lazy"><b>${esc(typeName(id))}</b><small>${esc(tr(k === 'i' ? `植入体槽位 ${n}` : `增效剂槽位 ${n}`))}</small><button type="button" data-pl-imprm="${id}" aria-label="${esc(tr('移除'))}">×</button></span>`;
+  }).join('');
+  return `<div class="pl-imps"><div class="pl-imps-head"><span>${esc(tr('植入体 / 增效剂'))}</span>${fromFit ? `<button type="button" class="link-btn" data-pl-impfit>${esc(tr('从装配页带入'))}</button>` : ''}${esiOk ? `<button type="button" class="link-btn" data-pl-impesi>${esc(tr('导入当前角色的植入体'))}</button>` : ''}${list.length ? `<button type="button" class="link-btn" data-pl-impclr>${esc(tr('清空'))}</button>` : ''}</div>
+            ${chips ? `<div class="pl-imp-list">${chips}</div>` : ''}
+            <div class="pl-search"><input type="search" class="pi-input" placeholder="${esc(tr('搜索植入体或增效剂'))}" data-pl-q="imp" autocomplete="off"><div class="pl-results" data-pl-res="imp" hidden></div></div>
+            ${list.some((id) => impSlot(ctx.data.types.get(id))[0] === 'b') ? `<p class="pl-imp-note">${esc(tr('增效剂的副作用起飞时按副作用几率各掷一次，中了的才生效'))}</p>` : ''}</div>`;
+}
+// 起飞后：中了的增效剂副作用记进日志（惩罚属性名 = SDE 属性显示名）
+const SIDE_NAME = { 1141: '装甲值惩罚', 1142: '装甲维修量惩罚', 1143: '护盾容量惩罚', 1144: '炮塔最佳射程惩罚', 1145: '炮塔跟踪速度惩罚', 1146: '炮塔失准范围惩罚', 1147: '爆炸速度惩罚', 1148: '导弹速度惩罚', 1149: '导弹爆炸半径惩罚', 1150: '电容容量惩罚', 1151: '速度惩罚', 616: '护盾回充惩罚' };
+function sideMsg(side) {
+  for (const x of side || []) pushLog(tr(`增效剂副作用：${typeName(x.booster)} · ${SIDE_NAME[x.attr] || x.attr} ${x.value > 0 ? '+' : ''}${Math.round(x.value * 10) / 10}%`), 'sys');
+}
 const shipChip = (id) => `<span class="pl-chip"><img src="${IMG(id, 'icon', 32)}" alt="" loading="lazy"><b>${esc(typeName(id))}</b></span>`;
 
 function onInput(e) {
@@ -472,7 +515,7 @@ function onInput(e) {
   }
   if (q) {
     const box = root.querySelector(`[data-pl-res="${q.dataset.plQ}"]`);
-    const list = q.value.trim() ? ctx.shipSearch(q.value.trim()) : [];
+    const list = !q.value.trim() ? [] : q.dataset.plQ === 'imp' ? impSearch(q.value.trim()) : ctx.shipSearch(q.value.trim());
     box.hidden = !list.length;
     box.innerHTML = list.map((t) => `<button type="button" data-pl-pick="${q.dataset.plQ}:${t.id}"><img src="${IMG(t.id, 'icon', 32)}" alt="" loading="lazy">${esc(t.name)}</button>`).join('');
   }
@@ -505,7 +548,7 @@ async function launch() {
   renderSetup();
   try {
     const fit = await fitFor(S.set.ship, S.set.fit);
-    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true });
+    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true, implants: myImps(), boosters: true });
     S.fitLabel = mine.row.label || fit?.name || '';
     if (!mine.row.unit) throw new Error('这个装配算不出属性');
     // 同型敌人只算一次装配
@@ -528,6 +571,7 @@ async function launch() {
     await loadSys();
     S.loading = false;
     start(mine, foes, allies);
+    sideMsg(mine.side);
   } catch (error) {
     S.loading = false;
     renderSetup();
@@ -558,7 +602,7 @@ async function launchSite() {
     S.envSave = ctx.FE.getEnv().slice();
     ctx.FE.setEnv(def.kind === 'abyss' && def.weather ? [def.weather] : []);
     const fit = await fitFor(S.set.ship, S.set.fit);
-    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true });
+    const mine = await ctx.pilotRow(S.set.ship, fit ? ctx.normalize(fit) : null, fit?.name || '', { self: true, implants: myImps(), boosters: true });
     S.fitLabel = mine.row.label || fit?.name || '';
     if (!mine.row.unit) throw new Error('这个装配算不出属性');
     const allies = [], cache = new Map();
@@ -572,6 +616,7 @@ async function launchSite() {
     S.loading = false;
     start(mine, [], allies, { dist: 0, cel: def.kind === 'abyss' ? [] : null, sky: def.sky, msg: def.kind === 'abyss' ? '已进入深渊空间' : '已到达复合体入口', site: true });
     S.b.hold = true;   // 敌人打光了也不结束，由场景判定（清完最后一个房间 / 起源导管）
+    sideMsg(mine.side);
     ST.siteStart(def);
     for (let i = S.names.length; i < S.b.units.length; i++) S.names.push(typeName(S.b.units[i].r.row.ship));
   } catch (error) {
@@ -1744,9 +1789,17 @@ function onClick(e) {
   if (t.closest?.('[data-win="loot"]') && CG.cargoClick(e)) return;
   if ((x = t.closest('[data-pl-pick]'))) {
     const [who, id] = x.dataset.plPick.split(':');
-    if (who === 'me') { S.set.ship = Number(id); S.set.fit = 'kb'; } else if (who === 'ally') { if (S.set.allies.length < 8) S.set.allies.push({ ship: Number(id), fit: 'kb', count: 1 }); } else S.set.foes.push({ ship: Number(id), count: 1 });
+    if (who === 'imp') addImp(Number(id)); else if (who === 'me') { S.set.ship = Number(id); S.set.fit = 'kb'; } else if (who === 'ally') { if (S.set.allies.length < 8) S.set.allies.push({ ship: Number(id), fit: 'kb', count: 1 }); } else S.set.foes.push({ ship: Number(id), count: 1 });
     save();
     renderSetup();
+    return;
+  }
+  if ((x = t.closest('[data-pl-imprm]'))) { S.set.imp = myImps().filter((id) => id !== Number(x.dataset.plImprm)); save(); renderSetup(); return; }
+  if (t.closest('[data-pl-impclr]')) { S.set.imp = []; save(); renderSetup(); return; }
+  if (t.closest('[data-pl-impfit]')) { S.set.imp = []; for (const id of ctx.getFit?.()?.implants || []) addImp(id); save(); renderSetup(); return; }
+  if (t.closest('[data-pl-impesi]')) {
+    ctx.getImplants().then((ids) => { S.set.imp = []; for (const id of ids || []) addImp(Number(id)); save(); renderSetup(); ctx.showToast(tr(`已导入 ${S.set.imp.length} 个植入体`), 'success'); })
+      .catch((err) => ctx.showToast(tr('读取植入体失败：') + err.message, 'error'));
     return;
   }
   if ((x = t.closest('[data-pl-drive]'))) { driveAlly(Number(x.dataset.plDrive)); return; }

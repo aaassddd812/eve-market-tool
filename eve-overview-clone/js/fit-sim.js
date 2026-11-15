@@ -10,7 +10,7 @@
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失；
 // 「AT 赛」（sim-at.js）可选这一届联盟锦标赛已打过的比赛，双方选手各一行带进来（蓝队 A 方、红队 B 方），战场上像比赛直播一样显示两队名单与血条。
 import { commonFit } from './fit-kb.js?v=v30';
-import { createBattle, simulate } from './sim-engine.js?v=v37';
+import { createBattle, simulate } from './sim-engine.js?v=v38';
 import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
 import { bindUnit, buildUnit, pilotUnit, forcedOff, BURSTS, BURST_MULT, mean } from './sim-unit.js?v=v8';
 
@@ -2530,6 +2530,10 @@ export async function pilotRow(ship, fit = null, label = '', prep = null, o = {}
   // 装配里「在线」（关着）的主动装备也算进来，开关组合（variant）：sim-unit pilotUnit（匹配服务器同一份）
   const so = S.sideOpt.A || sideDefaults();
   const skills = so.skills === 'esi' && S.esiSkills ? S.esiSkills.levels : 'max';
+  // 驾驶员自己的植入体 / 增效剂（装在角色身上，换哪套装配都一样）；增效剂副作用按几率掷一次
+  let side = [];
+  if (o.implants) row.fit = { ...row.fit, implants: o.implants.filter((id) => ctx.data.types.has(id)) };
+  if (o.boosters) ({ fit: row.fit, side } = rollSideFx(row.fit, skills));
   bindUnit(ctx, S.opt);
   const r = pilotUnit(row.fit, { skills, heat: so.heat, bursts: so.bursts, self: !!o.self, base: S.opt });
   Object.assign(row, { fit: r.fit, calc: r.calc, stats: r.stats, unit: r.unit });
@@ -2546,6 +2550,23 @@ export async function pilotRow(ship, fit = null, label = '', prep = null, o = {}
     }
     return ovCache.get(k);
   };
-  return { row, off: r.off, prop: r.prop, variant: r.variant, mwd: r.mwd, modes: r.modes, mode: r.mode, modeCd: r.modeCd, ovCalc };
+  return { row, off: r.off, prop: r.prop, variant: r.variant, mwd: r.mwd, modes: r.modes, mode: r.mode, modeCd: r.modeCd, ovCalc, side };
+}
+// 增效剂副作用：每个副作用效果按增效剂上的几率属性（boosterEffectChance1..5，技能「神经毒素恢复」会降低）各掷一次；
+// 返回 { fit（sideFx 列出中了的）, side: [{ booster, attr（惩罚属性）, value（%） }] }
+function rollSideFx(fit, skills) {
+  const { FE, data } = ctx;
+  const calc = (fit.implants || []).length ? FE.computeFit(data, { ...fit, sideFx: [] }, skills) : null;
+  const on = [], side = [];
+  for (const it of calc?.implants || []) {
+    for (const eid of it.type.effects) {
+      const ch = FE.SIDE_FX.get(eid);
+      if (!ch || Math.random() >= it.attr(ch)) continue;
+      on.push(`${it.type.id}:${eid}`);
+      const attr = data.effects.get(eid)?.mods?.[0]?.[3];
+      side.push({ booster: it.type.id, attr, value: attr ? it.attr(attr) : 0 });
+    }
+  }
+  return { fit: { ...fit, sideFx: on }, side };
 }
 export { shipSearch as pilotShipSearch };

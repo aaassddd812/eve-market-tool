@@ -177,7 +177,7 @@ export function createBattle(sides, opt) {
       const n = norm([(rand() - 0.5) * 0.4, rand() < 0.5 ? 1 : -1, (rand() - 0.5) * 0.4]);
       const u = {
         i: units.length, side, r, t: tpl, role: roleOf(tpl), pos, vel: [0, 0, 0], face, orbitN: n, alive: true, born: B.t, escaping: 0, escaped: false, pointed: 0,
-        hp: tpl.max.slice(), target: null, lock: 0, repTarget: null, repLock: 0, slot: p,
+        hp: (tpl.hp0 || tpl.max).slice(), target: null, lock: 0, repTarget: null, repLock: 0, slot: p,
         cap: tpl.cap.max, ratio: 1, jam: 0, ecmNext: tpl.ecms.map((_, k) => k), scanMult: 1, rangeMult: 1, velMult: 1, sigMult: 1, act: 0, rld: 0,
         guns: tpl.guns.map((g, k) => ({ next: B.t + rand() * Math.min(2, g.cycle) + k * 0.05, ammo: g.ammo, reloadUntil: 0, last: -1e9, spool: 0, on: null })),
         inj: (tpl.injectors || []).map((x) => ({ next: 0, ammo: x.ammo, reloadUntil: 0 })),

@@ -64,6 +64,9 @@ const CYCLE_ATTRS = [51, 73, 3115, 2397, 2398, 2399, 2400];
 const PENALTY = (i) => Math.exp(-((i / 2.67) ** 2));
 const SLOT_EFFECT = { 12: 'high', 13: 'mid', 11: 'low', 2663: 'rig', 3772: 'sub' };
 export const SLOTS = ['high', 'mid', 'low', 'rig', 'sub'];
+// 增效剂副作用：SDE dogmaEffects 里带 fittingUsageChanceAttributeID 的 12 个效果（效果 → 几率属性 boosterEffectChance1..5）。
+// 游戏里注射时按几率各自掷一次，没中的不生效；装配里默认都不算，fit.sideFx = ['增效剂类型:效果', ...] 列出中了的
+export const SIDE_FX = new Map([[2735, 1091], [2736, 1091], [2737, 1089], [2739, 1092], [2741, 1093], [2745, 1090], [2746, 1090], [2747, 1092], [2748, 1093], [2749, 1093], [2791, 1093], [4970, 1089]]);
 
 // ---------- 数据 ----------
 let DATA = null;
@@ -449,12 +452,14 @@ export function computeFit(data, fit, skills = 'max', { alone = false } = {}) {
   };
 
   const all = [ship, ...modeItems, ...modules, ...charges, ...drones, ...implants, ...skillItems];
+  const sideOn = new Set(fit.sideFx || []);
   const bursts = [];   // 开着的指挥脉冲波 / 天象发生器：最后统一施加加成
   for (const item of all) {
     const exempt = EXEMPT.has(item.category);
     for (const eid of item.type.effects) {
       const effect = data.effects.get(eid);
       if (!effect || !active(item, effect)) continue;
+      if (item.kind === 'implant' && SIDE_FX.has(eid) && !sideOn.has(`${item.type.id}:${eid}`)) continue;
       if (BUFF_EFFECTS.has(effect.name)) { bursts.push(item); continue; }
       if (special(effect, item, { ship, exempt, shipItems, ownedItems })) continue;
       // 损伤控制（damageControl）的抗性加成不参与叠加惩罚（独立组）

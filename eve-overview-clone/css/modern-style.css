@@ -10019,6 +10019,16 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-ally { padding: 8px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.04); }
 .pl-ally.on { background: rgba(88, 160, 220, 0.16); }
 .pl-ally select { margin-top: 8px; }
+.pl-imps { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.pl-imps-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 0.85rem; color: var(--text-secondary, #9aa4b2); }
+.pl-imps-head span { margin-right: auto; }
+.pl-imp-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.pl-big .pl-chip.pl-imp { font-size: 0.85rem; padding-right: 6px; }
+.pl-big .pl-chip.pl-imp img { width: 26px; height: 26px; }
+.pl-imp small { opacity: 0.6; }
+.pl-imp button { border: 0; background: rgba(255, 255, 255, 0.08); color: inherit; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; line-height: 1; }
+.pl-imp button:hover { background: rgba(255, 255, 255, 0.18); }
+.pl-imp-note { margin: 0; font-size: 0.8rem; opacity: 0.65; }
 .pl-drive { padding: 2px 10px; border-radius: 999px; background: rgba(88, 160, 220, 0.35); color: #e8f2ff; font-size: 0.8rem; }
 .pl-big .pl-mt-st { flex-direction: column; align-items: flex-start; }
 /* 装配页 · 舰船页：顶上的装配来源筛选（图标按钮，可多选），有装配的船可以展开 */

@@ -35,6 +35,9 @@ export function npcUnit(n, msl = {}) {
   const sec = (k, d = 0) => (A(k) || d) / 1000;
   let m = 0;   // 装备序号（引擎按它记周期 / 特效位）
   const max = [A(263), A(265), Math.max(1, A(9))];
+  // 出生时不满血：SDE 里有些 NPC（深渊勒沙克、流浪者、迪斯帕鲁部队、德雷卡瓦等）带 shieldCharge(264) / armorDamage(266) / damage(3)，
+  // 服务器按这些属性给出生时的血量：护盾 = shieldCharge，装甲 = armorHP − armorDamage，结构 = hp − damage（都是绝对值）
+  const hp0 = [264 in n.a ? Math.min(max[0], A(264)) : max[0], Math.max(0, max[1] - A(266)), Math.max(1, max[2] - A(3))];
   const res = RES.map((l) => l.map((a) => A(a, 1)));
   const guns = [];
   const turret = (kind) => {
@@ -118,7 +121,7 @@ export function npcUnit(n, msl = {}) {
     local: [0, 0, 0], localReps, regenC: max[0], regenTau: max[0] ? sec(479, 0) : 0,
     cap: { max: A(482), tau: sec(55, 0), use: capUse, other: capUse, otherNoInj: capUse },
     injectors: [], remote, webs, paints, neuts, noses, damps, ecms, smarts, bursts: [], tds, gds, rcaps: [], rsbs: [], rtcs: [], mjds: [], bubbles: [], cloaks: [], fields: [], dictors: [],
-    ehp, rack: [], alwaysOn: 0,
+    ehp, rack: [], alwaysOn: 0, hp0: hp0.some((h, l) => h < max[l]) ? hp0 : null,
     npc: true, stay: true, bounty: A(481)
   };
 }
