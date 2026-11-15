@@ -41,6 +41,7 @@ export function makeRules(S, H) {
     S.charges = {};
     S.bexp = new Map();   // 指挥脉冲波：每个周期开头把加成刷新到「这一轮开始 + buffDuration」，停了以后加成留到时间到为止
     S.calc = mine.row.calc;
+    S.ovCalc = mine.ovCalc || null;   // 装备提示：超载时的属性（fit-sim pilotRow）
     // 舰船模式：modes = [防御 / 主, 狙击 / 次级, 高速 / 三级] 的类型，mode = 当前模式，modeCd = 切换冷却（秒），modeAt = 上次切换的战斗时间
     S.modes = mine.modes || [];
     S.mode = mine.mode || 0;

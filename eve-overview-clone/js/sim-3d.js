@@ -13,12 +13,16 @@
 // 观察者视角：拖动旋转、滚轮 / 双指缩放、右键 / 双指拖动平移；悬停显示舰船，点击选中，双击镜头跟随（手动转动镜头会退出导播，hooks.onDirector）。
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
-import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS } from './sim-ships.js?v=v11';
+import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS, SHIP_TIME } from './sim-ships.js?v=v18';
 import { createFx } from './sim-fx.js?v=v35';
-import { createCelestials, sunLight } from './sim-cel.js?v=7';
+import { createCelestials, sunLight } from './sim-cel.js?v=14';
 import { createWarpTunnel } from './sim-warp.js?v=3';
 import { createFlare } from './sim-flare.js?v=3';
-import { createEnvFx } from './sim-env.js?v=2';
+import { createEnvFx } from './sim-env.js?v=3';
+import { createSSAO, SSAO_LAYER, SHIP_AO } from './sim-ssao.js?v=1';
+import { updateShipLights, clearShipLights, SHIP_LIGHTS } from './sim-lights.js?v=5';
+import { createReflection } from './sim-reflect.js?v=1';
+import { createJumpFx, createJumpSequence, createShaker, shakeBehavior, linearCurve } from './sim-jump.js?v=1';
 
 const WRECK = new THREE.Color(0x8a9099);
 const WHITE = new THREE.Color(1, 1, 1), OWN_COL = new THREE.Color(0.7, 0.7, 0.7);
@@ -33,17 +37,24 @@ const CEL_BRK = { 6: 'shared/brackets/sun.png', 7: 'shared/brackets/planet.png',
 
 // ── 后处理（照客户端 Tr2PostProcessRenderer 的流程和 postprocess/downsample、upsample、tonemapping 着色器）──
 // 场景画进半浮点缓冲，里面存 sRGB 编码值（和客户端一样：船体 quadv5、尾焰等着色器结尾自己做线性 → sRGB）。
-// 泛光：逐级减半降采样 6 次（13 点滤波）→ 每级横向、纵向高斯模糊，半径 = 该级最长边 × sizeScale × stepNSize × 0.01 →
-//       从最粗一级往上加，每级乘 stepNTint × brightness ÷ 6。
-// 合成：场景解码成线性；泛光过 Uncharted2 曲线后加上去；乘曝光；再过 Uncharted2：U(2c) ÷ U(W)；sRGB 编码；加抖动。
-// 数值是 Tr2PPBloomEffect / Tr2PPTonemappingEffect 的默认值（EVE 只走 Uncharted2 分支，default postprocess.black 里的 slope / toe 等是 ACES 参数、EVE 不用）。
+// 泛光（实机 RenderDoc 抓帧，五帧一致）：半分辨率 postprocess/highpassfilter —— 取 2×2 个双线性采样里亮度最低的一个（防闪点），
+//       亮度 < 阈值 0.66（sRGB 编码值上算）就是 0，否则 线性色 × (1 − 阈值 ÷ 亮度) × 0.333；
+//       再 postprocess/blur 横、纵各一遍（20 次双线性采样 ≈ 39 点高斯，偏移以半分辨率像素计）。
+// 合成：场景解码成线性；泛光 × 0.2 后过 Uncharted2 曲线加上去；乘曝光；再过 Uncharted2：U(2c) ÷ U(W)；sRGB 编码；加抖动。
+//       曲线参数、曝光中值、泛光强度和抓帧里 tonemapping 的常量缓冲一致。
+// 之后（抓帧顺序）：postprocess/cas 锐化（十字 5 点、按绿色通道定强度，锐度 0.5 → peak = −1/6.5）→ postprocess/filmgrain 胶片颗粒。
 // 动态曝光（Tr2PostProcessRenderer::RenderDynamicExposure，照 ccpwgl2 的 WebGL 实现）：
 //   每个像素 sRGB 解码、Rec.709 亮度，按 ln(亮度) 在 ln(minLuminance)~ln(maxLuminance) 间分 64 桶 →
 //   取像素数 0.9 / 0.98 分位上的亮度（桶内插值），平均 = 两者中点；scale = clamp(0.5 ÷ 平均, 2^minExposure, 2^maxExposure)，目标 = 0.5 ÷ scale；
 //   在平方根空间按 1 − e^(−速度 × dt) 追目标（变亮 increaseSpeed，变暗 decreaseSpeed）；
 //   合成时曝光 = middleValue ÷ mix(0.5, 适应值, influence)（tonemapping 动态曝光分支的反汇编）。
 //   需要浮点混合（EXT_float_blend）；没有时曝光固定为 1。
-const BLOOM = { sizeScale: 4, brightness: 0.2, size: [0.3, 1, 2, 10, 30, 64], tint: [0.3465, 0.138, 0.1176, 0.066, 0.066, 0.061] };
+const BLOOM = { threshold: 0.66, scale: 0.333, brightness: 0.2 };   // 抓帧：highpassfilter cb0[0].xy、tonemapping cb0[0].w
+// blur 着色器里的权重 / 偏移表（立即数常量缓冲）
+const BLUR_TAPS = [[0.000614, -18.178738], [0.003546, -16.346853], [0.009435, -14.401047], [0.018573, -12.427081], [0.031174, -10.442309], [0.047406, -8.45229], [0.067412, -6.459331], [0.091315, -4.464563], [0.119225, -2.468604], [0.151241, -0.471819],
+  [0.134714, 1.470298], [0.104763, 3.466706], [0.078869, 5.462127], [0.056929, 7.45609], [0.038827, 9.447771], [0.02443, 11.435579], [0.013583, 13.41602], [0.0061, 15.379678], [0.001734, 17.290693], [0.00011, 19]];
+const CAS_PEAK = -1 / 6.5;   // cas cb0[1].x
+const GRAIN = { colorAmount: 0.6, size: 1.25, intensity: 0.0008, mid: 0.65, range: 0.2, power: 3 };   // filmgrain cb0[0]、cb0[1]（power = −cb0[1].y）
 const EXPO = { influence: 1, middleValue: 0.55, minExposure: -3.7, maxExposure: 10, minLuminance: 0.4649, maxLuminance: 10, minBrightness: 0.9, maxBrightness: 0.98, increaseSpeed: 2, decreaseSpeed: 1.5 };   // Tr2PPDynamicExposureEffect 类默认值
 const TONE = { A: 0.125, B: 0.25, C: 0.1, D: 0.15, E: 0.021, F: 0.3, W: 2.5 };   // shoulderStrength、linearStrength、linearAngle、toeStrength、toeNumerator、toeDenominator、whiteScale
 // 区域调色（客户端 dx9/postprocess/environmentvolumes/envvol_*.black → Tr2PostProcessAttributes，tonemapping 着色器的 COLOR_CORRECTION 分支执行）
@@ -83,7 +94,7 @@ function whiteBalance(T, tint) {
   const D = [0, 1, 2].map((i) => [0, 1, 2].map((j) => (i === j ? D65[i] / cone[i] : 0)));
   return mul(X2S, mul(BI, mul(D, mul(BR, S2X))));
 }
-function createPost(renderer) {
+function createPost(renderer, fxDir) {
   const gl = renderer.getContext();
   if (!renderer.capabilities.isWebGL2 || !(gl.getExtension('EXT_color_buffer_float') || gl.getExtension('EXT_color_buffer_half_float'))) return null;
   const VS = 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
@@ -92,26 +103,25 @@ function createPost(renderer) {
   quad.frustumCulled = false;
   const qs = new THREE.Scene(); qs.add(quad);
   const qc = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  // postprocess/downsample（LUNINANCE_PRESERVE_OFF）：中间 4 点 ×0.125，外围 4 组 2×2 各 ×0.03125
-  const down = mk({ tex: { value: null }, inv: { value: new THREE.Vector2() } }, `uniform sampler2D tex; uniform vec2 inv; varying vec2 vUv;
-    vec3 T(float x, float y) { return texture2D(tex, vUv + vec2(x, y) * inv).rgb; }
+  // postprocess/highpassfilter：inv = 1 ÷ 输出尺寸
+  const high = mk({ tex: { value: null }, inv: { value: new THREE.Vector2() } }, `uniform sampler2D tex; uniform vec2 inv; varying vec2 vUv;
+    const vec3 L = vec3(0.299, 0.587, 0.114);
     void main() {
-      vec3 c = T(0.0, 0.0), a = T(-2.0, -2.0), b = T(0.0, -2.0), d = T(2.0, -2.0), e = T(-2.0, 0.0), f = T(2.0, 0.0), g = T(-2.0, 2.0), h = T(0.0, 2.0), i = T(2.0, 2.0);
-      vec3 o = (T(-1.0, -1.0) + T(1.0, -1.0) + T(-1.0, 1.0) + T(1.0, 1.0)) * 0.125;
-      o += ((a + b + e + c) + (d + b + c + f) + (g + e + c + h) + (i + f + h + c)) * 0.03125;
-      gl_FragColor = vec4(o, 1.0);
+      vec3 c = texture2D(tex, vUv).rgb; float l = dot(L, c);
+      vec3 s; float k;
+      s = texture2D(tex, vUv + vec2(inv.x, 0.0)).rgb; k = sqrt(dot(L, s * s)); if (k < l) { c = s; l = k; }
+      s = texture2D(tex, vUv + vec2(0.0, inv.y)).rgb; k = sqrt(dot(L, s * s)); if (k < l) { c = s; l = k; }
+      s = texture2D(tex, vUv + inv).rgb; k = sqrt(dot(L, s * s)); if (k < l) { c = s; l = k; }
+      const float T = ${BLOOM.threshold.toFixed(4)};
+      vec3 lin = mix(pow(abs(c + 0.055) * 0.947867, vec3(2.4)), c * 0.077399, vec3(lessThan(c, vec3(0.04045))));
+      gl_FragColor = vec4(l < T ? vec3(0.0) : lin * max(1.0 - T / l, 0.0) * ${BLOOM.scale.toFixed(4)}, 1.0);
     }`);
-  // postprocess/upsample：高斯多点采样；第二遍（纵向）= 模糊结果 × 权重 + 更粗一级
-  const up = mk({ tex: { value: null }, last: { value: null }, dir: { value: new THREE.Vector2() }, taps: { value: new Float32Array(256) }, count: { value: 0 }, tint: { value: new THREE.Vector3() }, second: { value: 0 } },
-    `uniform sampler2D tex, last; uniform vec2 dir; uniform vec4 taps[64]; uniform int count; uniform vec3 tint; uniform float second; varying vec2 vUv;
+  // postprocess/blur：dir = 方向 × (1 ÷ 尺寸)
+  const blur = mk({ tex: { value: null }, dir: { value: new THREE.Vector2() } }, `uniform sampler2D tex; uniform vec2 dir; varying vec2 vUv;
     void main() {
       vec3 o = vec3(0.0);
-      for (int k = 0; k < 64; k++) {
-        if (k >= count) break;
-        vec4 t = taps[k];
-        o += texture2D(tex, vUv + dir * t.y).rgb * t.x + texture2D(tex, vUv + dir * t.w).rgb * t.z;
-      }
-      gl_FragColor = vec4(second > 0.5 ? o * tint + texture2D(last, vUv).rgb : o, 1.0);
+      ${BLUR_TAPS.map(([w, x]) => `o += texture2D(tex, vUv + dir * ${x.toFixed(6)}).rgb * ${w.toFixed(6)};`).join('\n      ')}
+      gl_FragColor = vec4(o, 1.0);
     }`);
   // 扭曲缓冲（跃迁隧道的 warptunneldistortion 等写入的屏幕偏移，单位像素）：合成时按它挪动场景的采样位置
   const tone = mk({ scene: { value: null }, bloom: { value: null }, expo: { value: null }, useExpo: { value: 0 }, useBloom: { value: 1 }, dist: { value: null }, useDist: { value: 0 }, inv: { value: new THREE.Vector2() },
@@ -132,7 +142,7 @@ function createPost(renderer) {
       } else c = texture2D(scene, vUv + dd.xy * inv).rgb;
       c = mix(pow(abs(c + 0.055) * 0.947867, vec3(2.4)), c * 0.077399, vec3(lessThan(c, vec3(0.04045))));
       float wInv = 1.0 / U(vec3(W)).x;
-      vec3 b = texture2D(bloom, vUv).rgb * useBloom;
+      vec3 b = texture2D(bloom, vUv).rgb * (useBloom * ${BLOOM.brightness.toFixed(4)});
       float exposure = useExpo > 0.5 ? ${EXPO.middleValue.toFixed(4)} / mix(0.5, texture2D(expo, vec2(0.0625, 0.5)).r, ${EXPO.influence.toFixed(4)}) : 1.0;
       c = (c + max(U(2.0 * b), 0.0) * wInv) * exposure;
       if (useCC > 0.5) {
@@ -147,7 +157,36 @@ function createPost(renderer) {
       c = max(U(2.0 * max(c, 0.0)), 0.0) * wInv;
       c = mix(1.055 * pow(c, vec3(0.416667)) - 0.055, c * 12.92, vec3(lessThan(c, vec3(0.003131))));
       c += fract(dot(gl_FragCoord.xy, vec2(0.754878, 0.569840))) * 0.003922 - 0.001961;
-      gl_FragColor = vec4(c, 1.0);
+      gl_FragColor = vec4(clamp(c, 0.0, 1.0), 1.0);
+    }`);
+  // postprocess/cas + postprocess/filmgrain（客户端两遍，这里合成一遍：两者都是逐像素的）
+  //   颗粒：屏幕像素 ÷ 1.25 + 1000，按每帧随机角度旋转，B 样条双三次采样噪声图（512²，重复）；
+  //   每通道 smoothstep((n − 0.45) ÷ 0.4)，按 0.6 向三通道平均靠拢（彩色颗粒）；强度 = 0.0008 × (1 − 线性色)³，加到线性色上
+  //   随机角度：客户端 = hash(uint(时间 × 1024)) × 小常数（反汇编只显示 0.000000，看不出具体值），这里每帧取均匀随机角
+  const grainTex = new THREE.TextureLoader().load(`${fxDir}post/film_grain_noise.png?v=1`);
+  grainTex.wrapS = grainTex.wrapT = THREE.RepeatWrapping; grainTex.generateMipmaps = false; grainTex.minFilter = grainTex.magFilter = THREE.LinearFilter; grainTex.colorSpace = THREE.NoColorSpace;
+  const fin = mk({ tex: { value: null }, grain: { value: grainTex }, inv: { value: new THREE.Vector2() }, rot: { value: new THREE.Vector2(1, 0) } },
+    `uniform sampler2D tex, grain; uniform vec2 inv, rot; varying vec2 vUv;
+    vec3 T(float x, float y) { return texture2D(tex, vUv + vec2(x, y) * inv).rgb; }
+    vec3 bicubic(vec2 p) {
+      p -= 0.5; vec2 i = floor(p), f = p - i, f2 = f * f, f3 = f2 * f;
+      vec2 w0 = (-f3 + 3.0 * f2 - 3.0 * f + 1.0) / 6.0, w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0, w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0, w3 = f3 / 6.0;
+      vec2 g0 = w0 + w1, g1 = w2 + w3, h0 = w1 / g0 - 0.5, h1 = w3 / g1 + 1.5;
+      vec4 q = (vec4(i.x + h0.x, i.y + h0.y, i.x + h1.x, i.y + h1.y) + 0.5) / 512.0;
+      return g0.y * (g0.x * texture2D(grain, q.xy).rgb + g1.x * texture2D(grain, q.zy).rgb) + g1.y * (g0.x * texture2D(grain, q.xw).rgb + g1.x * texture2D(grain, q.zw).rgb);
+    }
+    void main() {
+      vec3 c = T(0.0, 0.0), l = T(-1.0, 0.0), r = T(1.0, 0.0), u = T(0.0, -1.0), d = T(0.0, 1.0);
+      float mn = min(min(min(c.g, r.g), l.g), min(u.g, d.g)), mx = max(max(max(c.g, r.g), l.g), max(u.g, d.g));
+      float w = sqrt(clamp(min(mn, 1.0 - mx) / max(mx, 1e-5), 0.0, 1.0)) * ${CAS_PEAK.toFixed(6)};
+      c = clamp((w * (l + r + u + d) + c) / (4.0 * w + 1.0), 0.0, 1.0);
+      vec2 p = gl_FragCoord.xy / ${GRAIN.size.toFixed(4)} + 1000.0;
+      vec3 n = bicubic(vec2(p.x * rot.x - p.y * rot.y, p.x * rot.y + p.y * rot.x));
+      n = clamp((n - ${(GRAIN.mid - GRAIN.range).toFixed(4)}) / ${(2 * GRAIN.range).toFixed(4)}, 0.0, 1.0); n = n * n * (3.0 - 2.0 * n);
+      float avg = dot(n, vec3(1.0 / 3.0)); n = mix(vec3(avg), n, ${GRAIN.colorAmount.toFixed(4)});
+      vec3 lin = mix(pow(abs(c + 0.055) * 0.947867, vec3(2.4)), c * 0.077399, vec3(lessThan(c, vec3(0.04045))));
+      lin = clamp(n * clamp(pow(max(1.0 - lin, 1e-6), vec3(${GRAIN.power.toFixed(1)})) * ${GRAIN.intensity}, 0.0, 1.0) + lin, 0.0, 1.0);
+      gl_FragColor = vec4(mix(1.055 * pow(lin, vec3(0.416667)) - 0.055, lin * 12.92, vec3(lessThan(lin, vec3(0.003131)))), 1.0);
     }`);
   // 动态曝光：直方图（64 × 1 浮点，每像素一个点加色混合）→ 测量（8 × 1，前后两帧来回读写）
   const expo = (() => {
@@ -261,41 +300,18 @@ function createPost(renderer) {
       dispose() { hist.dispose(); for (const b of buf) b.dispose(); gl.deleteProgram(prog); gl.deleteVertexArray(vao); },
     };
   })();
-  let sceneRT = null, distRT = null, mips = [], ups = [], size = '';
+  let sceneRT = null, distRT = null, toneRT = null, bloomRT = [], size = '';
   const rt = (w, h, o = {}) => new THREE.WebGLRenderTarget(Math.max(1, w), Math.max(1, h), { type: THREE.HalfFloatType, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false, ...o });
   function resize(w, h) {
     if (`${w}x${h}` === size) return;
     size = `${w}x${h}`;
-    for (const t of [sceneRT, distRT, ...mips, ...ups]) t?.dispose();
+    for (const t of [sceneRT, distRT, toneRT, ...bloomRT]) t?.dispose();
     sceneRT = rt(w, h, { depthBuffer: true, samples: 4 });
     distRT = rt(w, h);
+    toneRT = rt(w, h, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    bloomRT = [rt(Math.trunc(w / 2), Math.trunc(h / 2)), rt(Math.trunc(w / 2), Math.trunc(h / 2))];
     // 标准材质往这个缓冲里写 sRGB 编码值（three 只对 XR 渲染目标按贴图色彩空间输出）
     sceneRT.isXRRenderTarget = true; sceneRT.texture.colorSpace = THREE.SRGBColorSpace;
-    mips = []; ups = [];
-    let k = 0.5;
-    for (let i = 0; i < 6; i++, k *= 0.5) {
-      if (Math.trunc(Math.min(w, h) * k) === 0) break;
-      mips.push(rt(Math.trunc(w * k), Math.trunc(h * k))); ups.push(rt(Math.trunc(w * k), Math.trunc(h * k)));
-    }
-  }
-  // GaussianData.calculateGaussianPassParameters：每两个相邻像素并成一次线性采样
-  function gauss(radius, norm, out) {
-    const R = Math.min(Math.max(radius, 0.0001), 127), ir = Math.ceil(R);
-    const nd = (x) => Math.exp(-Math.PI * 5 * (x * x / (R * R)));
-    const t = [];
-    let sum = 0;
-    for (let i = -ir; i <= ir; i += 2) {
-      const w = nd(i), ow = i === ir ? 0 : nd(i + 1), sw = w + ow;
-      if (sw === 0) continue;
-      const off = (i + ow / sw) * norm;
-      sum += sw;
-      if (off < -1 || off > 1) continue;
-      t.push(sw, off);
-    }
-    if ((t.length / 2) % 2) t.push(0, 0);
-    out.fill(0);
-    for (let k = 0; k < t.length && k < 256; k += 2) { out[k] = t[k] / sum; out[k + 1] = t[k + 1]; }
-    return Math.min(64, t.length / 4);
   }
   const draw = (mat, target) => { quad.material = mat; renderer.setRenderTarget(target); renderer.render(qs, qc); };
   // distScenes：扭曲层场景（一个或数组），有可见内容时依次画进扭曲缓冲（先清成 0）；after：场景画完后往场景缓冲里再叠加的东西（恒星镜头光晕）
@@ -318,30 +334,19 @@ function createPost(renderer) {
     }
     tone.uniforms.dist.value = useDist ? distRT.texture : blackTex; tone.uniforms.useDist.value = useDist ? 1 : 0;
     tone.uniforms.inv.value.set(1 / v.x, 1 / v.y);
-    // 降采样
-    let src = sceneRT;
-    for (const m of mips) { down.uniforms.tex.value = src.texture; down.uniforms.inv.value.set(1 / src.width, 1 / src.height); draw(down, m); src = m; }
-    // 升采样：先全部横向，再从粗到细纵向
-    const U = up.uniforms, n = mips.length, rad = (i) => Math.max(mips[i].width, mips[i].height) * BLOOM.sizeScale * BLOOM.size[i] * 0.01;
-    for (let i = n - 1; i >= 0; i--) {
-      U.tex.value = mips[i].texture; U.second.value = 0; U.dir.value.set(1, 0);
-      U.count.value = gauss(rad(i), 1 / mips[i].width, U.taps.value);
-      draw(up, ups[i]);
-    }
-    let last = null;
-    for (let i = n - 1; i >= 0; i--) {
-      U.tex.value = ups[i].texture; U.last.value = last ? last.texture : null; U.second.value = 1; U.dir.value.set(0, 1);
-      U.count.value = gauss(rad(i), 1 / mips[i].height, U.taps.value);
-      U.tint.value.setScalar(last || i === n - 1 ? BLOOM.tint[i] * BLOOM.brightness / 6 : 0);
-      if (!last) U.last.value = blackTex;
-      draw(up, mips[i]);
-      last = mips[i];
-    }
-    tone.uniforms.scene.value = sceneRT.texture; tone.uniforms.bloom.value = last ? last.texture : blackTex; tone.uniforms.useBloom.value = last ? 1 : 0;
+    // 泛光：高通到半分辨率 → 横向 → 纵向
+    const [b0, b1] = bloomRT;
+    high.uniforms.tex.value = sceneRT.texture; high.uniforms.inv.value.set(1 / b0.width, 1 / b0.height); draw(high, b0);
+    blur.uniforms.tex.value = b0.texture; blur.uniforms.dir.value.set(1 / b0.width, 0); draw(blur, b1);
+    blur.uniforms.tex.value = b1.texture; blur.uniforms.dir.value.set(0, 1 / b0.height); draw(blur, b0);
+    tone.uniforms.scene.value = sceneRT.texture; tone.uniforms.bloom.value = b0.texture; tone.uniforms.useBloom.value = 1;
     let ex = null;
     try { ex = expo?.run(sceneRT) || null; } catch (e) { console.warn('dynamic exposure', e); }
     tone.uniforms.expo.value = ex || blackTex; tone.uniforms.useExpo.value = ex ? 1 : 0;
-    draw(tone, null);
+    draw(tone, toneRT);
+    const a = Math.random() * Math.PI * 2;
+    fin.uniforms.tex.value = toneRT.texture; fin.uniforms.inv.value.set(1 / v.x, 1 / v.y); fin.uniforms.rot.value.set(Math.cos(a), Math.sin(a));
+    draw(fin, null);
   }
   const blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); blackTex.needsUpdate = true;
   // 区域调色：g = GRADES 里的一项或 null（不调）
@@ -356,7 +361,7 @@ function createPost(renderer) {
     u.gain.value.fromArray(g.gain || [1, 1, 1]);
     u.offset.value.fromArray(g.offset || [0, 0, 0]);
   }
-  return { render, setGrade, dispose() { for (const t of [sceneRT, distRT, ...mips, ...ups]) t?.dispose(); expo?.dispose(); } };
+  return { render, setGrade, dispose() { for (const t of [sceneRT, distRT, toneRT, ...bloomRT]) t?.dispose(); grainTex.dispose(); expo?.dispose(); } };
 }
 
 export function createView(host, hooks = {}, opt = {}) {
@@ -375,7 +380,12 @@ export function createView(host, hooks = {}, opt = {}) {
   renderer.setPixelRatio(dpr);
   renderer.setClearColor(0x04060b, 1);
   // 后处理（泛光 + 色调映射）：驾驶模拟打开（opt.post），只在高画质档用
-  const post = opt.post ? createPost(renderer) : null;
+  const post = opt.post ? createPost(renderer, opt.fx || 'assets/eveui/fx/') : null;
+  // 船体 SSAO（客户端 Tr2SSAO / CACAO）：只在高画质档
+  const ssao = post ? createSSAO(renderer) : null, ssaoV = new THREE.Vector2();
+  const lightList = [];
+  // 动态反射立方体（客户端 Tr2ReflectionProbe）：只在高画质档
+  const refl = post ? createReflection(renderer) : null;
   host.prepend(renderer.domElement);
   renderer.domElement.className = 'sim-3d-canvas';
   // 舰船名：叠在 3D 画面上的 2D 画布，写在图标右边
@@ -409,7 +419,9 @@ export function createView(host, hooks = {}, opt = {}) {
     const c = e.map((x) => 1.5 * (1 - s * (mx - x) / (mx - mn || 1)));   // 同色相、饱和度 s、明度 1.5
     sun.color.setRGB(c[0], c[1], c[2]);
   }
-  sun.position.set(0.6, 0.5, 0.35);
+  const sunDir = new THREE.Vector3(0.6, 0.5, 0.35);   // 指向恒星的方向（阴影要挪动 sun.position / target，方向单独存）
+  sun.position.copy(sunDir);
+  scene.add(sun.target);
   const amb = new THREE.AmbientLight(0x8090b0, 0.25);
   scene.add(sun, amb);
   // 天体（驾驶模拟，rec.cel）：恒星、行星、卫星；有恒星时方向光改成真实的恒星方向
@@ -418,26 +430,87 @@ export function createView(host, hooks = {}, opt = {}) {
   const flare = opt.fx ? createFlare(renderer, scene, camera, `${opt.fx}lensflare/`) : null;
   // 跃迁隧道（驾驶模拟：hooks.warpFx() 给出自己船的跃迁状态）
   const tunnel = opt.fx && hooks.warpFx ? createWarpTunnel(scene, `${opt.fx}warp/`) : null;
-  let shakeN = 0;
-  const shakeQ = new THREE.Quaternion(), shakeE = new THREE.Euler(), shakeR = new THREE.Quaternion();
-  function warpFrame() {
+  // 环绕镜头的抖动（evecamera/shaker.py 的 ShakeController + baseSpaceCamera._UpdateCameraNoiseOffset，见 sim-jump.js createShaker）
+  const orbitShake = createShaker(), shakeQ = new THREE.Quaternion(), shakeV = new THREE.Vector3();
+  let warpShakeT = -1;
+  function warpFrame(now, dt, noShake) {
     const ws = tunnel ? hooks.warpFx() : null;
     tunnel?.update(camera, ws);
-    // 镜头抖动（Warp.py ShakeCamera）：每秒重发一次「0.5 秒升到 2 × 强度、5 秒降到 0」→ 近似为平滑跟随 2 × 强度；
-    // 客户端 shaker 的噪声频率和幅度换算没拿到，这里按每单位 0.01 弧度的平滑噪声（推断）
-    shakeN += ((ws ? 2 * ws.shake : 0) - shakeN) * 0.08;
-    if (shakeN < 1e-4) return false;
-    const t = performance.now() / 1000, k = shakeN * 0.01;
-    shakeE.set(k * (Math.sin(t * 57.1) * 0.6 + Math.sin(t * 23.3 + 1.7) * 0.4), k * (Math.sin(t * 61.7 + 0.5) * 0.6 + Math.sin(t * 19.9 + 2.9) * 0.4), 0);
+    // Warp.py ShakeCamera：跃迁循环里每次（旧版隧道 warptunnel.black 每 SleepSim(1000)）重发行为 'Warp'：
+    //   scaleCurve 线性 (0, 镜头当前 noiseScale) (0.5, 2 × shakeFactor) (5, 0)，没有 dampCurve → noiseDamp = 1.1；
+    //   循环结束 EndWarpShake → EndCameraShake('Warp')。shakeFactor = ws.shake（0.7 × rumbleFactor，sim-warp.js warpShake）
+    if (ws) {
+      if (warpShakeT < 0 || now - warpShakeT >= 1000) {
+        warpShakeT = now;
+        orbitShake.shake(shakeBehavior('Warp', { scaleCurve: linearCurve([[0, orbitShake.noiseScale], [0.5, 2 * ws.shake], [5, 0]]) }), now);
+      }
+    } else if (warpShakeT >= 0) { warpShakeT = -1; orbitShake.end('Warp', now); }
+    if (noShake) return false;
+    // 偏移加在注视点上（_AddToAtOffset），画完这一帧再把镜头朝向复原
+    const off = orbitShake.offset(now, dt, camera.position, controls.target, shakeV);
+    if (!off) return false;
     shakeQ.copy(camera.quaternion);
-    camera.quaternion.multiply(shakeR.setFromEuler(shakeE));
+    camera.lookAt(off.add(controls.target));
     return true;
   }
+  // 恒星阴影（Tr2ShadowMap.cpp）：客户端是 2048 边长的级联阴影，固定分割 SetStaticShadowSplits（每级远端 25、75、150 … 1228800 米），
+  //   每级取该段视锥的 8 个角，在光源空间求包围盒：半径 = ceil(最远两角距离 / 2)（米），中心 x、y 按纹素（2 × 半径 / 2048）取整防闪烁，
+  //   z 同样 中心 ± 半径（往太阳方向拉长的那行被注释掉了）。这里只做镜头注视点所在的那一级（盖住看着的那艘船），别的距离不投影；
+  //   客户端之后还有屏幕空间的 PCF（9 个旋转抖动 + 时间滤波）和降噪，这里用 three 的 PCFSoft 代替
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  sun.shadow.mapSize.set(2048, 2048);
+  const SPLITS = [25, 75, 150, 300, 600, 1200, 2400, 4800, 9600, 19200, 38400, 76800, 153600, 307200, 614400, 1228800];
+  const shM = new THREE.Matrix4(), shMi = new THREE.Matrix4(), shC = Array.from({ length: 8 }, () => new THREE.Vector3()), shV = new THREE.Vector3(), shO = new THREE.Vector3();
+  function fitShadow(on) {
+    if (sun.castShadow !== on) sun.castShadow = on;
+    const L = shV.copy(sunDir).normalize();
+    if (!on) { sun.position.copy(L); sun.target.position.set(0, 0, 0); sun.target.updateMatrixWorld(); return; }
+    const D = camera.position.distanceTo(controls.target) * 1000;
+    let k = SPLITS.findIndex((z) => z >= D);
+    if (k < 0) k = SPLITS.length - 1;
+    const zs = [k ? SPLITS[k - 1] : camera.near * 1000, SPLITS[k]], th = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+    camera.updateMatrixWorld();
+    let n = 0;
+    for (const z of zs) for (const sx of [-1, 1]) for (const sy of [-1, 1]) shC[n++].set(sx * z * th * camera.aspect, sy * z * th, -z).multiplyScalar(1 / 1000).applyMatrix4(camera.matrixWorld);
+    // 光源空间：从恒星方向看向原点（和 three 的阴影相机同一个基，up = +Y）
+    shM.lookAt(L, shO.set(0, 0, 0), camera.up.clone().set(0, 1, 0));
+    shMi.copy(shM).transpose();
+    let maxD = 0;
+    const lo = [Infinity, Infinity, Infinity], hi2 = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < 8; i++) {
+      for (let j = i + 1; j < 8; j++) maxD = Math.max(maxD, shC[i].distanceTo(shC[j]));
+      const p = shO.copy(shC[i]).applyMatrix4(shMi);
+      for (let q = 0; q < 3; q++) { lo[q] = Math.min(lo[q], p.getComponent(q)); hi2[q] = Math.max(hi2[q], p.getComponent(q)); }
+    }
+    const R = Math.ceil(maxD * 1000 / 2) / 1000, tex = 2 * R / 2048;   // 千米
+    const c = shO.set((lo[0] + hi2[0]) / 2, (lo[1] + hi2[1]) / 2, (lo[2] + hi2[2]) / 2);
+    c.x = Math.floor(c.x / tex + 0.5) * tex; c.y = Math.floor(c.y / tex + 0.5) * tex;
+    c.applyMatrix4(shM);
+    sun.target.position.copy(c); sun.target.updateMatrixWorld();
+    sun.position.copy(c).addScaledVector(L, 2 * R);
+    const cam = sun.shadow.camera;
+    cam.left = -R; cam.right = R; cam.top = R; cam.bottom = -R; cam.near = R; cam.far = 3 * R;
+    cam.updateProjectionMatrix();
+    sun.shadow.normalBias = tex * 1.5;
+    sun.shadow.bias = -0.0002;
+  }
+  // 换环境反射贴图（只在变了时改材质）
+  function setEnvTex(t) {
+    if (!t || env === t) return;
+    env = t;
+    for (const set of [models, tModels, dModels]) for (const m of set.values()) for (const mt of m.def?.materials || []) { mt.envMap = t; mt.needsUpdate = true; }
+  }
+  const reflMats = () => { const a = []; for (const set of [models, tModels, dModels]) for (const m of set.values()) for (const mt of m.def?.materials || []) a.push(mt); return a; };
+  let reflSave = null;
+  // 画反射面时：材质反射强度压到 min(0.8, 1/强度²)（EveSpaceScene::GetReflectionIntensityInReflections），关掉 SSAO 和船体点光（它们按主视角算的）
+  const reflBefore = () => { reflSave = [SHIP_AO.on.value, SHIP_LIGHTS.n.value]; SHIP_AO.on.value = 0; SHIP_LIGHTS.n.value = 0; const k = envI ? Math.min(0.8, 1 / (envI * envI)) : 0; for (const mt of reflMats()) mt.envMapIntensity = k; };
+  const reflAfter = () => { SHIP_AO.on.value = reflSave[0]; SHIP_LIGHTS.n.value = reflSave[1]; for (const mt of reflMats()) mt.envMapIntensity = envI; };
   function celUpdate() {
     const d = cels.update(camera, ORG);
-    if (d) { sun.position.copy(d); sky.material.uniforms.sun.value.copy(d); }
+    if (d) { sunDir.copy(d); sky.material.uniforms.sun.value.copy(d); }
   }
-  let env = null, envI = 1;   // 环境反射贴图、强度（场景的 reflectionIntensity）
+  let env = null, envI = 1, envStatic = null;   // 环境反射贴图（高画质档换成动态立方体）、强度（场景的 reflectionIntensity）；envStatic：星系的 _refl 立方体
   // 载入模型时套上当前的环境反射（星空晚到时下面统一换）
   const loadModel = (k) => loadShipModel(k, renderer, env).then((def) => { if (def) for (const mt of def.materials) { mt.envMap = env; mt.envMapIntensity = envI; } return def; });
   {
@@ -455,6 +528,7 @@ export function createView(host, hooks = {}, opt = {}) {
     g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
     s.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
     env = pm.fromScene(s, 0.02).texture;
+    envStatic = env;
     pm.dispose();
   }
 
@@ -558,6 +632,7 @@ export function createView(host, hooks = {}, opt = {}) {
       reflS.colorSpace = THREE.SRGBColorSpace;
       reflS.needsUpdate = true;
       env = pm.fromCubemap(reflS).texture;
+      envStatic = env;
       reflS.dispose();
       tunnel?.setEnv(refl);
       bubbleEnv = refl;
@@ -575,11 +650,11 @@ export function createView(host, hooks = {}, opt = {}) {
   const brGeo = new THREE.BufferGeometry();
   let brCap = 0;
   const brMat = new THREE.ShaderMaterial({
-    uniforms: { atlas: { value: null }, grid: { value: new THREE.Vector2(brkOf ? BR_COLS : BRACKETS.length, brkOf ? BR_COLS : 1) }, size: { value: iconPx * dpr } },
+    uniforms: { atlas: { value: null }, grid: { value: new THREE.Vector2(brkOf ? BR_COLS : BRACKETS.length, brkOf ? BR_COLS : 1) }, size: { value: iconPx * dpr }, fade: { value: 1 } },
     vertexShader: `attribute vec4 tint; attribute float icon; varying vec4 vTint; varying float vIcon; uniform float size;
       void main() { vTint = tint; vIcon = icon; gl_PointSize = size; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: `uniform sampler2D atlas; uniform vec2 grid; varying vec4 vTint; varying float vIcon;
-      void main() { vec4 t = texture2D(atlas, (vec2(mod(vIcon, grid.x), floor(vIcon / grid.x)) + gl_PointCoord) / grid); if (t.a * vTint.a < 0.02) discard; gl_FragColor = vec4(t.rgb * vTint.rgb, t.a * vTint.a); }`,
+    fragmentShader: `uniform sampler2D atlas; uniform vec2 grid; uniform float fade; varying vec4 vTint; varying float vIcon;
+      void main() { vec4 t = texture2D(atlas, (vec2(mod(vIcon, grid.x), floor(vIcon / grid.x)) + gl_PointCoord) / grid); if (t.a * vTint.a * fade < 0.02) discard; gl_FragColor = vec4(t.rgb * vTint.rgb, t.a * vTint.a * fade); }`,
     transparent: true, depthTest: false, depthWrite: false,
   });
   const brPts = new THREE.Points(brGeo, brMat);
@@ -897,6 +972,7 @@ export function createView(host, hooks = {}, opt = {}) {
   // 溶解中的船体：模型材质的副本，按实例的溶解球丢掉球内像素（quadv5：sign(r²)·|p − 球心|² − r² < 0 → discard），光照不动
   function ckHullMat(src) {
     const mm = src.clone();
+    mm.defines = { ...src.defines };   // clone 只复制 STANDARD，推进器区的 EVE_HEAT 要带上
     mm.onBeforeCompile = (sh, r) => {
       src.onBeforeCompile(sh, r);
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute vec4 ckC; varying vec4 vCkC; varying vec3 vCkP;')
@@ -904,7 +980,7 @@ export function createView(host, hooks = {}, opt = {}) {
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec4 vCkC; varying vec3 vCkP;')
         .replace('void main() {', 'void main() {\n{ vec3 ckQ = vCkP - vCkC.xyz; if (sign(vCkC.w) * dot(ckQ, ckQ) - vCkC.w < 0.0) discard; }');
     };
-    mm.customProgramCacheKey = () => 'eve-quad5-ck';
+    mm.customProgramCacheKey = () => src.customProgramCacheKey() + '-ck';
     return mm;
   }
   // 一个模型一个变体一套：共用几何的顶点数据 + 自己的实例属性；船体、3 层过渡、2 层加色在主场景，扭曲层在 ckDist
@@ -1159,6 +1235,7 @@ export function createView(host, hooks = {}, opt = {}) {
     m.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     m.mesh.setColorAt(0, new THREE.Color(1, 1, 1));
     m.mesh.frustumCulled = false;
+    m.mesh.castShadow = m.mesh.receiveShadow = true; m.mesh.layers.enable(SSAO_LAYER);
     scene.add(m.mesh);
   }
   // 引擎尾焰
@@ -1425,7 +1502,7 @@ export function createView(host, hooks = {}, opt = {}) {
       u.BrightnessParams.value.x = 24 + bubRand(e, 2) * 18;
       u.Fresnel.value.set(crv(BUB_REFL, age) * 1.334, 18, crv(BUB_EDGE, age) * 0.42, 0.1);
       u.Env.value = bubbleEnv; u.hasEnv.value = bubbleEnv ? 1 : 0; u.envI.value = envI;
-      u.sunDir.value.copy(sun.position).normalize().negate();   // 光照方向：从太阳照过来
+      u.sunDir.value.copy(sunDir).normalize().negate();   // 光照方向：从太阳照过来
       u.sunCol.value.copy(sun.color);
       u.fade.value = Math.min(1, (e.life - age) / 1);   // 最后 1 秒淡出（客户端回收时直接删掉）
       c++;
@@ -1448,6 +1525,7 @@ export function createView(host, hooks = {}, opt = {}) {
         tm.mesh = new THREE.InstancedMesh(tm.def.geometry, tm.def.materials, tm.cap);
         tm.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
         tm.mesh.frustumCulled = false;
+        tm.mesh.castShadow = tm.mesh.receiveShadow = true; tm.mesh.layers.enable(SSAO_LAYER);
         scene.add(tm.mesh);
       }
       if (!tm.mesh) continue;
@@ -1489,11 +1567,11 @@ export function createView(host, hooks = {}, opt = {}) {
   ringGeo.setAttribute('tint', new THREE.BufferAttribute(new Float32Array(4 * 8), 4));
   ringGeo.setAttribute('rad', new THREE.BufferAttribute(new Float32Array(8), 1));
   const ringMat = new THREE.ShaderMaterial({
-    uniforms: { dpr: { value: dpr } },
+    uniforms: { dpr: { value: dpr }, fade: brMat.uniforms.fade },
     vertexShader: `attribute vec4 tint; attribute float rad; varying vec4 vTint; varying float vR; uniform float dpr;
       void main() { vTint = tint; vR = rad * dpr; gl_PointSize = vR * 2.0 + 4.0 * dpr; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: `varying vec4 vTint; varying float vR; uniform float dpr;
-      void main() { float d = length(gl_PointCoord - 0.5) * (vR * 2.0 + 4.0 * dpr); float a = 1.0 - smoothstep(0.35 * dpr, 0.9 * dpr, abs(d - vR)); if (a < 0.02) discard; gl_FragColor = vec4(vTint.rgb, vTint.a * a); }`,
+    fragmentShader: `varying vec4 vTint; varying float vR; uniform float dpr, fade;
+      void main() { float d = length(gl_PointCoord - 0.5) * (vR * 2.0 + 4.0 * dpr); float a = (1.0 - smoothstep(0.35 * dpr, 0.9 * dpr, abs(d - vR))) * fade; if (a < 0.02) discard; gl_FragColor = vec4(vTint.rgb, vTint.a * a); }`,
     transparent: true, depthTest: false, depthWrite: false,
   });
   const ringPts = new THREE.Points(ringGeo, ringMat);
@@ -1759,11 +1837,54 @@ export function createView(host, hooks = {}, opt = {}) {
   function dynFov() {
     if (!opt.dynFov && !opt.fov) return;
     const prop = Math.max(0, Math.min(1, camera.position.distanceTo(controls.target) * 1000 / 800000));
-    const fov = THREE.MathUtils.radToDeg(opt.dynFov ? 0.55 + prop ** 0.35 * 0.55 : opt.fov);
+    setFov(THREE.MathUtils.radToDeg(opt.dynFov ? 0.55 + prop ** 0.35 * 0.55 : opt.fov));
+  }
+  function setFov(fov) {
     if (Math.abs(fov - camera.fov) < 1e-3) return;
     camera.fov = fov;
     camera.updateProjectionMatrix();
     bstMat.uniforms.scale.value = host.clientHeight * dpr / 2 / Math.tan(THREE.MathUtils.degToRad(fov / 2));
+  }
+  // ── 深渊口袋之间过导管的过场（sim-jump.js；view.abyssJump）──
+  // 过场期间镜头由 createJumpSequence 接管（CAM_JUMP → 回到环绕镜头），交还后恢复 OrbitControls
+  let jumpFx = null, jump = null, lastRender = 0;
+  const vJ = new THREE.Vector3();
+  const toScene = (w, out) => out.set((w.x - ORG[0]) * KM, (w.y - ORG[1]) * KM, (w.z - ORG[2]) * KM);
+  function jumpFrame(dt) {
+    if (!jump) return null;
+    const si = hooks.self?.() ?? -1, d = drawn[si];
+    const f = jump.seq.frame(dt, d ? [d.x / KM + ORG[0], d.y / KM + ORG[1], d.z / KM + ORG[2]] : null);
+    jump.f = f;
+    jump.hide = f.hideShip ? si : -1;
+    jump.ship = d ? { pos: new THREE.Vector3(d.x, d.y, d.z), quat: heading[si] || new THREE.Quaternion() } : null;
+    // FadeUIOut / FadeUIIn：总览图标层（图标、选中圈、名字）
+    brMat.uniforms.fade.value = f.ui;
+    lbl.style.opacity = f.ui < 1 ? String(f.ui) : '';
+    if (f.cam) {
+      toScene(f.cam.eye, camera.position);
+      camera.lookAt(toScene(f.cam.at, vJ));
+      setFov(THREE.MathUtils.radToDeg(f.cam.fov));
+    }
+    if (f.released && !jump.handed) {
+      // 交还镜头：注视点 = 自己的船（环绕镜头的 at）
+      jump.handed = true;
+      if (f.cam) controls.target.copy(toScene(f.cam.at, vJ));
+      controls.enabled = jump.ctl;
+    }
+    if (f.done) endJump();
+    return f.cam ? f : null;
+  }
+  function endJump() {
+    if (!jump) return;
+    jump.seq.cancel(); jump.run.dispose();
+    if (!jump.handed) {
+      controls.enabled = jump.ctl;
+      const d = drawn[hooks.self?.() ?? -1];
+      if (d) controls.target.set(d.x, d.y, d.z);
+    }
+    brMat.uniforms.fade.value = 1;
+    lbl.style.opacity = '';
+    jump = null;
   }
   const perf = { t0: 0, last: 0, n: 0, slow: 0 };
   // 自动画质：每 2 秒算一次帧率，连续两次低于 24 帧就降到低画质（切到别的标签页、中间停过 3 秒以上的重新算）
@@ -1968,10 +2089,10 @@ export function createView(host, hooks = {}, opt = {}) {
     }
     if (director && follow < 0) directorStep();
     // 模型实例
-    const white = new THREE.Color(1, 1, 1), dark = new THREE.Color(0.22, 0.2, 0.2);
+    const white = new THREE.Color(1, 1, 1), dark = new THREE.Color(0.22, 0.2, 0), live = new THREE.Color();
     const bp = [], bc = [], bs = [], fl = [], gw = [];
     const hfxNow = performance.now() / 1000;
-    ckTime.value = hfxNow; renderer.getDrawingBufferSize(ckVp);
+    ckTime.value = SHIP_TIME.value = hfxNow; renderer.getDrawingBufferSize(ckVp);
     for (const m of models.values()) {
       if (m.state !== 'ok' || !m.mesh) continue;
       let c = 0;
@@ -1986,13 +2107,16 @@ export function createView(host, hooks = {}, opt = {}) {
         // 残骸不转：客户端 Wreck.SetBallRotation 直接沿用爆掉那艘船的姿态（yaw/pitch/roll），之后静止
         tmp.scale.setScalar(KM);
         tmp.updateMatrix();
-        const wh = d.alive && !m.wreck && warpHidden(i, t);
+        const wh = d.alive && !m.wreck && (warpHidden(i, t) || i === (jump?.hide ?? -1));   // 过导管：自己的船 0.88–5 秒藏起来
         const ck = d.alive && !m.wreck && !wh ? cloakAt(i, t) : null;
         // 隐形：溶解中（或自己的船隐形期间）画进隐形实例（裁剪过的船体 + 过渡 / 加色 / 扭曲层）；别人的船溶完（CloakAmount 到 1.13）什么都不画
         if (ck && (ck.self || ck.f < 1.129)) ckPush(m, ck, tmp.matrix);
         else if (!wh && !ck) {
           m.mesh.setMatrixAt(c, tmp.matrix);
-          m.mesh.setColorAt(c, d.alive || m.wreck ? white : dark);
+          // 实例颜色 r = 变暗、g = shipData.y、b = 推进器亮度（船体热光开关，sim-ships.js）：活船按速度比（同下面喷口强度），残骸 1（非 EveShip2，引擎默认 1）
+          if (d.alive && !m.wreck) { const sp = F.spd ? F.spd[i] : 0; live.setRGB(1, 1, F.wp && F.wp[i] === 2 ? 1 : Math.min(1, sp / Math.max(1, rec.units[i].vel || 1))); }
+          m.mesh.setColorAt(c, d.alive && !m.wreck ? live : m.wreck ? white : dark);
+          if (m.def.bl) { if (!m.wf || m.wf.length < m.mesh.instanceMatrix.count) m.wf = new Uint8Array(m.mesh.instanceMatrix.count); m.wf[c] = d.alive && !m.wreck && F.wp && F.wp[i] === 2 ? 1 : 0; }   // 推进器灯换跃迁半径 / 颜色（sim-lights.js）
           c++;
         }
         // 炮塔 / 尾焰：activationStrength ≤ 0.5 时不画（EveMobile.DisplayChildren）
@@ -2163,7 +2287,7 @@ export function createView(host, hooks = {}, opt = {}) {
       if (m.state !== 'ok') continue;
       const L = dPos.get(k) || [];
       const cnt = L.length / 7;
-      if (cnt > m.cap) { m.cap = Math.ceil(cnt * 1.5) + 4; if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); } m.mesh = new THREE.InstancedMesh(m.def.geometry, m.def.materials, m.cap); m.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.mesh.frustumCulled = false; scene.add(m.mesh); }
+      if (cnt > m.cap) { m.cap = Math.ceil(cnt * 1.5) + 4; if (m.mesh) { scene.remove(m.mesh); m.mesh.dispose(); } m.mesh = new THREE.InstancedMesh(m.def.geometry, m.def.materials, m.cap); m.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage); m.mesh.castShadow = m.mesh.receiveShadow = true; m.mesh.layers.enable(SSAO_LAYER); m.mesh.frustumCulled = false; scene.add(m.mesh); }
       if (!m.mesh) continue;
       for (let c = 0; c < cnt; c++) {
         tmp.position.set(L[c * 7], L[c * 7 + 1], L[c * 7 + 2]);
@@ -2424,10 +2548,54 @@ export function createView(host, hooks = {}, opt = {}) {
       flare?.set(r?.cel);
       const st = cels.sunType();
       if (st != null) { const c = sunLight(st); sun.color.setRGB(c[0], c[1], c[2]); }
-      else { sun.position.set(0.6, 0.5, 0.35); sky.material.uniforms.sun.value.set(0.6, 0.5, 0.35).normalize(); }
+      else { sunDir.set(0.6, 0.5, 0.35); sky.material.uniforms.sun.value.set(0.6, 0.5, 0.35).normalize(); }
     },
     draw,
-    render() { watchPerf(); controls.update(); dynFov(); sky.position.copy(camera.position); bg.position.copy(camera.position); if (rec?.cel?.length) celUpdate(); const shook = warpFrame(); const hi = post && level === 'high'; flare?.update(ORG, !hi); envFx?.update(camera, ORG, performance.now() / 1000, controls.target); if (hi) post.render(scene, camera, [tunnel?.distScene, ckDist], flare?.draw); else { renderer.setRenderTarget(null); renderer.render(scene, camera); flare?.draw(); } if (shook) camera.quaternion.copy(shakeQ); drawLabels(); },
+    render() {
+      watchPerf();
+      const now = performance.now(), dt = Math.min(0.1, Math.max(0.001, lastRender ? (now - lastRender) / 1000 : 1 / 60));
+      lastRender = now;
+      const jf = jumpFrame(dt);   // 过导管：镜头由过场接管
+      if (!jf) { controls.update(); dynFov(); }
+      sky.position.copy(camera.position); bg.position.copy(camera.position);
+      if (rec?.cel?.length) celUpdate();
+      const shook = warpFrame(now, dt, Boolean(jf));
+      const hi = post && level === 'high';
+      fitShadow(hi);
+      if (jump?.f) jump.run.update(jump.f.t, camera, jump.ship, hi);
+      flare?.update(ORG, !hi); envFx?.update(camera, ORG, now / 1000, controls.target);
+      if (hi && refl && skyState !== 'loading') setEnvTex(refl.update(scene, camera, [brPts, flPts, ringPts, tacDisc], reflBefore, reflAfter)); else setEnvTex(envStatic);
+      // 船体灯（sim-lights.js）：只在高画质档
+      if (hi) { renderer.getDrawingBufferSize(ssaoV); lightList.length = 0; for (const mm of [models, dModels]) for (const m of mm.values()) if (m.state === 'ok' && m.mesh && m.def.lights) lightList.push(m); updateShipLights(lightList, camera, ssaoV.x, ssaoV.y, performance.now() / 1000); } else clearShipLights();
+      if (hi && ssao) { renderer.getDrawingBufferSize(ssaoV); ssao.run(scene, camera, ssaoV.x, ssaoV.y); } else ssao?.off();
+      if (hi) post.render(scene, camera, [tunnel?.distScene, ckDist, jumpFx?.distScene], flare?.draw); else { renderer.setRenderTarget(null); renderer.render(scene, camera); flare?.draw(); }
+      if (shook) camera.quaternion.copy(shakeQ);
+      drawLabels();
+    },
+    // 深渊口袋之间过导管（客户端 effects.JumpOutAbyssalBetween）：ci = rec.cel 里导管的序号；
+    //   cb.onMid()：ApplyDestinationScene 那一刻（3.7 秒）；cb.onEnd()：Stop 那一刻（5 秒，船重新显示）；隧道留到 7.5 秒，镜头 7.6 秒前后交还
+    //   返回 { cancel() }：立刻结束过场（不再调回调）
+    abyssJump(ci, cb = {}) {
+      const c = rec?.cel?.[ci];
+      if (!c?.pos || !opt.fx) return { cancel() {} };
+      endJump();
+      jumpFx ||= createJumpFx(scene, `${opt.fx}jump/`);
+      // 导管：模型包围球半径（舰船索引）；朝向照 sim-station.js 摆模型的 yaw（名字 | 类型 的 FNV 散列）
+      const gateR = shipIndex?.models?.[shipIndex?.cel?.[c.type]]?.r || c.radius || 5000;
+      let h = 2166136261;
+      const hk = `${c.name}|${c.type}`;
+      for (let k = 0; k < hk.length; k++) h = Math.imul(h ^ hk.charCodeAt(k), 16777619);
+      const yaw = ((h >>> 0) / 4294967296) * Math.PI * 2;
+      const si = hooks.self?.() ?? -1;
+      const w = (v) => [v.x / KM + ORG[0], v.y / KM + ORG[1], v.z / KM + ORG[2]];
+      const fov0 = THREE.MathUtils.degToRad(camera.fov);
+      const seq = createJumpSequence({ gate: c.pos, gateYaw: yaw, gateR, at0: w(controls.target), eye0: w(camera.position), fov0, fovTarget: opt.fov || fov0, onMid: cb.onMid, onEnd: cb.onEnd });
+      const run = jumpFx.run({ gateYaw: yaw, shipR: si >= 0 && rec.units[si] ? radiusOf(si) : 0.05 });
+      jump = { seq, run, hide: -1, ctl: controls.enabled, handed: false, f: null, ship: null };
+      controls.enabled = false;
+      const me = jump;
+      return { cancel() { if (jump === me) endJump(); } };
+    },
     setLabels(on) { labels = on; drawLabels(); },
     // 深渊环境特效：list 见 sim-env.js（边界泡 / 云团 / 天气云层）；空数组清掉
     // 区域调色：GRADES 的键（amarr / caldari / gallente / minmatar / concord）或 null
@@ -2484,6 +2652,6 @@ export function createView(host, hooks = {}, opt = {}) {
       for (const m of models.values()) if (m.state !== 'loading') done++;
       return { index: Boolean(shipIndex), done, total: models.size, sky: skyState !== 'loading', fx: fx.ready() };
     },
-    dispose() { ro.disconnect(); document.removeEventListener('visibilitychange', onVis); fx.dispose(); envFx?.dispose(); for (const m of models.values()) m.mesh?.dispose(); renderer.dispose(); renderer.forceContextLoss?.(); renderer.domElement.remove(); lbl.remove(); }
+    dispose() { endJump(); jumpFx?.dispose(); ro.disconnect(); document.removeEventListener('visibilitychange', onVis); fx.dispose(); envFx?.dispose(); ssao?.dispose(); refl?.dispose(); for (const m of models.values()) m.mesh?.dispose(); renderer.dispose(); renderer.forceContextLoss?.(); renderer.domElement.remove(); lbl.remove(); }
   };
 }

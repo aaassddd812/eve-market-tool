@@ -7,7 +7,7 @@ import * as FE from './fit-engine.js?v=v45';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
 import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
-import { initSim, mountSim, pilotRow, pilotShipSearch, fitBody as simFitBody } from './fit-sim.js?v=v125';
+import { initSim, mountSim, pilotRow, pilotShipSearch, fitBody as simFitBody } from './fit-sim.js?v=v135';
 import { initPlan, mountPlan, queuePlan, planQueue } from './skill-plan.js?v=v13';
 import { initGraph, openGraph } from './fit-graph.js?v=v5';
 import { skCards, skRows, skTitle, skPilot } from './skeleton.js?v=v18';
@@ -172,7 +172,7 @@ export async function showPilot(root) {
   toolInit?.();
   await MU.loadMuta().catch(() => {});
   if (!pilotMod) {
-    pilotMod = await import('./pilot.js?v=v128');
+    pilotMod = await import('./pilot.js?v=v141');
     pilotMod.initPilot({ get data() { return F.data; }, FE, shipSearch: pilotShipSearch, savedFits, normalize,
       // 无人机一架都没激活时按带宽激活（不改原装配）
       pilotRow: (ship, fit, label, o) => pilotRow(ship, fit, label, (f) => { if (f?.drones?.length && !f.drones.some((d) => d.active)) autoActivateDrones(f); }, o),
@@ -717,9 +717,11 @@ function renderBrowser() {
     const open = F.tab === 'charge' && chargeForTypes().length ? !F.chargeShut.has(key) : F.open.has(key) || (roots.length === 1 && depth === 0) || (F.tab === 'ship' && F.fitSrc.size > 0);
     const kids = m.children.filter((c) => count.get(c.id)).sort(byName);
     const items = m.types.filter((t) => typeSet.has(t.id)).sort(byMeta);
+    // 和市场目录一样：分类图标 + 计数胶囊 + 子级缩进连接线（个性化设置的「目录图标 / 连接线」开关同样生效）
+    const ic = groupIcon(m);
     return `<div class="fit-group${open ? ' open' : ''}">
-      <button class="fit-group-head" data-fit-group="${key}" style="padding-left:${8 + depth * 12}px"><svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>${app.esc(m.name)}<span>${count.get(m.id)}</span></button>
-      ${open ? kids.map((c) => group(c, depth + 1)).join('') + (items.length ? `<div class="fit-list" style="--depth:${depth + 1}">${items.map(rowOf).join('')}</div>` : '') : ''}
+      <button class="fit-group-head" data-fit-group="${key}"><svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>${ic ? `<img class="tree-icon tree-cat-icon" src="${IMG(ic)}" alt="" width="20" height="20" loading="lazy" draggable="false">` : ''}<b>${app.esc(m.name)}</b><span>${count.get(m.id)}</span></button>
+      ${open ? `<div class="fit-group-kids">${kids.map((c) => group(c, depth + 1)).join('') + (items.length ? `<div class="fit-list">${items.map(rowOf).join('')}</div>` : '')}</div>` : ''}
     </div>`;
   };
   box.innerHTML = head.join('') + (roots.length || noMarket.length
@@ -728,6 +730,13 @@ function renderBrowser() {
   loadRowPrices();
 }
 
+// 市场分组图标：和市场目录同一个取法（分组含子分组里物品 ID 最小的那件的图标），按分组缓存
+const groupIconCache = new Map();
+function groupIcon(m) {
+  if (!groupIconCache.has(m.id)) groupIconCache.set(m.id, Math.min(...m.types.map((t) => t.id), ...m.children.map(groupIcon).filter(Boolean), Infinity));
+  const v = groupIconCache.get(m.id);
+  return Number.isFinite(v) ? v : 0;
+}
 const byName = (a, b) => a.name.localeCompare(b.name, 'zh');
 const byMeta = (a, b) => (a.meta || 1) - (b.meta || 1) || a.name.localeCompare(b.name, 'zh');
 

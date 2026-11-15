@@ -318,6 +318,8 @@ function nearCel(u) {
 export const markOf = (u) => H.S.fleet?.mark.get(u.i) || null;
 export const markIcon = (k) => bcIcon(k);
 export const bcName = (k) => BC[k]?.[1] || '';
+// 右键菜单里的广播条目：按文字找图标（客户端 MenuEntryData 的 texturePath = iconsByBroadcastType）
+export const bcIconOf = (name) => { const k = Object.keys(BC).find((x) => BC[x][1] === name); return k ? bcIcon(k) : null; };
 // 快捷键：Z 发现敌舰；按住 X 点目标 = 广播锁定（客户端 CmdFleetBroadcast_EnemySpotted / CmdSendBroadcast_Target）
 export function fleetKey(k) {
   if (!inFleet()) return false;

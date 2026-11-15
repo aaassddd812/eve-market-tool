@@ -10,16 +10,16 @@
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
 import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v37';
-import { loadShipIndex } from './sim-ships.js?v=v11';
+import { loadShipIndex } from './sim-ships.js?v=v18';
 import { warpShake } from './sim-warp.js?v=3';
-import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v9';
+import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v10';
 import { bindUnit, pilotUnit } from './sim-unit.js?v=v8';
-import { buildMatch, stepMatch } from './match-sim.js?v=v9';
+import { buildMatch, stepMatch } from './match-sim.js?v=v10';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
-import * as FL from './pilot-fleet.js?v=5';
+import * as FL from './pilot-fleet.js?v=6';
 import * as SC from './pilot-scan.js?v=6';
-import * as ST from './pilot-site.js?v=5';
+import * as ST from './pilot-site.js?v=6';
 
 let ctx = null;
 let root = null;
@@ -101,6 +101,8 @@ export function initPilot(context) {
     S, ctx, esc, tr, log: (t, k) => pushLog(t, k), msg: (t) => { pushLog(t, 'sys'); quickMsg(t); },
     finish: (won, text) => { S.siteEnd = { won, text }; end(); }, fade: () => siteFade(),
     approach: (i) => celApproach(i), envFx: (list) => { S.envFx = list; S.view?.setEnvFx?.(list); },
+    // 深渊过导管：客户端 JumpOutAbyssalBetween 的跃迁隧道过场（sim-jump.js）；没有 3D 画面就返回 false，调用方退回淡入淡出
+    jumpFx: (i, cb) => { if (!S.view?.abyssJump) return false; S.jumpFx = S.view.abyssJump(i, cb); return true; },
   });
   const saved = ctx.store.getJSON(KEY, null);
   const ot = Number(ctx.store.getJSON(OV_KEY, 0));
@@ -603,6 +605,8 @@ function start(mine, foes, allies = [], o = {}) {
   S.site = o.site ? {} : null;   // 场景：先占个位（窗口按它决定开不开），进画面后 siteStart 填上
   S.siteEnd = null;
   S.envFx = null;
+  S.jumpFx?.cancel();
+  S.jumpFx = null;
   R = RL;
   RL.setRand(Math.random);
   const me = { ...mine.row, id: 'me', count: 1 };
@@ -1026,7 +1030,7 @@ function renderStage() {
   FL.renderFleet(true);
   SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v80').then((m) => {
+  import('./sim-3d.js?v=v89').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -1069,6 +1073,8 @@ function renderStage() {
   startLoop();
 }
 function disposeView() {
+  S.jumpFx?.cancel();
+  S.jumpFx = null;
   S.view?.dispose();
   S.view = null;
   S.ready = false;
@@ -1580,6 +1586,7 @@ function pickCel(i, e) {
   S.selC = i;
   if (S.keys.has('v')) SC.scanToward(c.pos);   // V + 点击：只朝那个方向扫，镜头不动
   else if (S.keys.has('s')) warpTo({ cel: i });
+  else if (S.keys.has('d') && ST.gateItems(i).length) ST.activate(i);   // D + 点击：激活加速轨道（CmdDockOrJumpOrActivateGate）
   else if (S.keys.has('q')) celApproach(i);
   renderSel();
   renderOverview(true);
@@ -1768,6 +1775,7 @@ function act(a, v = S.selC >= 0 ? null : S.b?.units[S.sel]) {
   if (!v && S.selC >= 0 && S.b?.cel[S.selC]) {
     if (a === 'warp') warpTo({ cel: S.selC });
     if (a === 'approach') celApproach(S.selC);
+    if (a === 'gate') ST.activate(S.selC);
     renderSel();
     return;
   }
@@ -1791,7 +1799,7 @@ function onKey(e) {
   if (k === 'control') { S.ctrl = e.type === 'keydown'; cursorMode(); return; }
   if (e.type === 'keyup') { S.keys.delete(k); if (k === 'q' && S.mv?.state === 'xz') mvAbort(); SC.scanKeyUp(k); cursorMode(); return; }
   if (!e.repeat && SC.scanKey(e, k)) return;
-  if (['c', 's'].includes(k) && !e.ctrlKey && !e.metaKey && !e.altKey) { S.keys.add(k); return; }
+  if (['c', 's', 'd'].includes(k) && !e.ctrlKey && !e.metaKey && !e.altKey) { S.keys.add(k); return; }
   // 舰队快捷键（客户端默认）：Z 广播发现敌舰；按住 X 点目标 = 广播锁定
   if (S.fleet && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat && FL.fleetKey(k)) return;
   if (S.fleet && k === 'x' && !e.ctrlKey && !e.metaKey && !e.altKey) { S.keys.add(k); return; }
@@ -2128,7 +2136,12 @@ const DMG_ATTR = [['22_32_12', '电磁伤害'], ['22_32_10', '热能伤害'], ['
 // 抗性加成：电磁、爆炸、动能、热能（RESISTANCE_BONUS_ATTRIBUTES 984 / 985 / 986 / 987）
 const RES_ATTR = [[984, '22_32_12', '电磁伤害抗性加成'], [985, '22_32_11', '爆炸伤害抗性加成'], [986, '22_32_9', '动能伤害抗性加成'], [987, '22_32_10', '热能伤害抗性加成']];
 // 装备在算好的装配里对应的那件（取带技能加成后的属性）
-const calcMod = (i) => { const k = S.on.rack[i]?.key; return S.calc?.modules.find((m) => `${m.slot}:${m.index}` === k) || null; };
+// 超载中的装备：取「这件超载」时算出来的属性（客户端提示读的是超载效果生效后的 dogma 属性）
+const calcMod = (i) => {
+  const k = S.on.rack[i]?.key;
+  const c = S.rk?.ovl.has(i) && S.ovCalc ? S.ovCalc(k, chargeOf(i), S.mode || undefined) : S.calc;
+  return c?.modules.find((m) => `${m.slot}:${m.index}` === k) || null;
+};
 const shortcutOf = (i) => { const p = posOf(masterOf(i)); return p ? (p[0] === 'high' ? `F${p[1] + 1}` : p[0] === 'mid' ? `Alt-F${p[1] + 1}` : `Ctrl-F${p[1] + 1}`) : ''; };
 function ammoLeft(i) {
   const u = S.me;
@@ -2167,9 +2180,11 @@ function modTipHtml(i) {
   }
   // 每秒伤害 + 伤害类型（武器有弹药时）
   if (g && chargeable && !g.doomsday) {
-    const dps = g.volley / g.cycle * n, max = g.spool ? dps * g.spool.max : 0;
+    // 超载：伤害 × (1 + overloadDamageModifier)、周期 × (1 + overloadRofBonus)（和 sim-engine 开火一致）
+    const ov = S.rk.ovl.has(i), dk = ov ? 1 + (g.ovD || 0) : 1, ck = ov ? 1 + (g.ovR || 0) : 1;
+    const dps = g.volley * dk / (g.cycle * ck) * n, max = g.spool ? dps * g.spool.max : 0;
     row(ICO(launcher ? '81_64_16' : '26_64_1'), max ? `每秒伤害为${fmtN(dps, 1)}-${fmtN(max, 1)}` : `DPS ${fmtN(dps, 1)}`);
-    const dm = g.dmg.map((x, k) => [k, x * n]).filter(([, x]) => x > 0);
+    const dm = g.dmg.map((x, k) => [k, x * n * dk]).filter(([, x]) => x > 0);
     if (dm.length === 1) row(ICO(DMG_ATTR[dm[0][0]][0]), `${fmtN(dm[0][1])} HP ${DMG_ATTR[dm[0][0]][1]}`);
     else if (dm.length) { row('', '伤害输出', '', ' head'); rows.push(`<div class="r vals"><i></i><span>${dm.map(([k, x]) => `<em><img src="${ICO(DMG_ATTR[k][0])}" alt="">${fmtN(x)} HP</em>`).join('')}</span></div>`); }
   }
@@ -2189,7 +2204,9 @@ function modTipHtml(i) {
     row(ICO('22_32_22'), `跟踪速度加成：${fmtN(A(767))}%`);
   } else if (grp === 46 && S.prop >= 0) {
     const off = S.auto.filter((x) => !S.me.pilot.on.has(x) && x !== S.prop);
-    const v0 = S.variant([...off, S.prop]).vel * u.velMult, v1 = S.variant(off).vel * u.velMult;
+    const v0 = S.variant([...off, S.prop]).vel * u.velMult;
+    let v1 = S.variant(off).vel * u.velMult;
+    if (S.rk.ovl.has(S.prop)) v1 = v0 + (v1 - v0) * (1 + (S.rk.heat[S.prop]?.spd || 0));   // 超载：速度加成那一段按 overloadSpeedFactorBonus 放大（同 pilot-rules）
     row(ICO('22_32_13'), `停用时最大速度：${fmtN(v0, 1)} m/s<br>启用时最大速度：${fmtN(v1, 1)} m/s`);
   } else if (grp === 65) row(ICO('22_32_13'), `降低目标舰船速度 ${fmtN(Math.abs(A(20)))}%`);
   else if (grp === 52) row(ICO('4_64_9'), `跃迁干扰强度：${fmtN(A(105))}`);
@@ -2263,36 +2280,27 @@ function ammoChoices(i) {
 function openModMenu(i, e) {
   hideTip();
   closeMenus();
+  // 客户端 ShipModuleButton.GetMenu 的顺序，再经 clientMenu 按组排：
+  //   自动装填 / 自动循环 / 超载三项不在组表里（排最前）→ 弹药与装填（ACTIONSGROUP）→ 清空装备组（DESTRUCTIVEGROUP，橙色感叹号）
+  //   超载开关带图标（开 circle_plus、关 pause）；装上线 / 下线、修理、显示信息模拟里没有
   const items = [];
   const m = masterOf(i), cur = chargeOf(m);
   const ammo = ammoChoices(m);
-  for (const c of ammo) if (c.id !== cur) items.push([esc(typeName(c.id)), () => setAmmo(m, c.id)]);
-  if (cur) items.push([`重新加载 (${esc(typeName(cur))})`, () => reloadMods(members(m))]);
-  if (ammo.length) items.push(['装填所有', () => reloadMods(S.on.guns.map((g) => g.m).filter((x) => x != null))]);
-  // 客户端：装弹药的装备有「启用自动装载 / 停止自动装填」；能循环的装备有「启用 / 停止自动循环」
+  for (const c of ammo) if (c.id !== cur) items.push([typeName(c.id), () => setAmmo(m, c.id), { g: 1 }]);
+  if (cur) items.push([`重新加载 (${typeName(cur)})`, () => reloadMods(members(m)), { g: 1 }]);
+  if (ammo.length) items.push(['装填所有', () => reloadMods(S.on.guns.map((g) => g.m).filter((x) => x != null)), { g: 1 }]);
   if (cur || R.ammoState?.(m)) items.push(S.noReload?.has(m) ? ['启用自动装载', () => R.setAutoReload(m, true)] : ['停止自动装填', () => R.setAutoReload(m, false)]);
   if (R.canRepeat?.(m)) items.push(S.repeatOff?.has(m) ? ['启用自动循环', () => R.setRepeat(m, true)] : ['停止自动循环', () => R.setRepeat(m, false)]);
   if (canOverload(m) && !S.hud.lockOvl && !S.rk.burnt.has(m)) {
-    items.push(null);
-    items.push([S.rk.ovl.has(m) ? '关闭超载' : '开启超载', () => toggleOverload(m)]);
-    const r = S.on.rack[m].slot;
+    const on = S.rk.ovl.has(m), r = S.on.rack[m].slot;
+    items.push([on ? '关闭超载' : '开启超载', () => toggleOverload(m), { ic: `${UI}eveicon/system_icons/${on ? 'pause' : 'circle_plus'}_16px.png?v=1` }]);
     items.push(['超载整级槽位', () => setRackOverload(r, true)]);
     items.push(['关闭超载整级槽位', () => setRackOverload(r, false)]);
   }
-  if (S.rk.grp.get(m)?.length) { items.push(null); items.push(['清空装备组', () => ungroup(m)]); }
+  if (S.rk.grp.get(m)?.length) items.push(['清空装备组', () => ungroup(m), { g: 17, warn: true }]);
   if (!items.length) return;
-  if (items[0] === null) items.shift();
-  S.cm = items;
-  const stage = root.querySelector('#plStage'), st = stage.getBoundingClientRect();
-  const el = document.createElement('div');
-  el.className = 'pl-cmenu';
-  el.innerHTML = items.map((x, k) => (x ? `<button type="button" data-pl-cm="${k}">${x[0]}</button>` : '<hr>')).join('');
-  stage.appendChild(el);
-  let x = e.clientX - st.left, y = e.clientY - st.top - 8;
-  if (x + el.offsetWidth > st.width) x -= el.offsetWidth + 2;
-  y = Math.max(0, Math.min(st.height - el.offsetHeight, y));
-  el.style.left = `${Math.round(x)}px`;
-  el.style.top = `${Math.round(y)}px`;
+  S.cm = clientMenu(items);
+  cmenuAt(e);
 }
 // 菜单项：[文字, 函数] / [文字, [子菜单项…]]（▸，悬停展开）/ [文字, 函数, { on: 勾选状态, off: 灰掉 }]；null = 分隔线
 // k：路径「2」「2.1」…
@@ -2980,7 +2988,10 @@ function selActs(v) {
   if (v?.cel != null) {
     const near = celDist(S.me, S.b.cel[v.cel]) < 150000;
     // 客户端对天体也列出整排按钮（不能用的变灰）；这里环绕、保持距离、锁定、观察、跟踪对天体还没做
-    return SEL_ACTS.map((a) => ({ ...a, off: a.k === 'approach' ? '' : a.k === 'warp' ? (near ? a.off : '') : '驾驶模拟里对天体暂不支持' }));
+    const acts = SEL_ACTS.map((a) => ({ ...a, off: a.k === 'approach' ? '' : a.k === 'warp' ? (near ? a.off : '') : '驾驶模拟里对天体暂不支持' }));
+    // 加速轨道 / 深渊导管（客户端 selectedItemConst：groupWarpGate → UI/Inflight/ActivateGate，图标 jump_to，排在接近、跃迁至之后）
+    if (ST.gateItems(v.cel).length) acts.splice(2, 0, { k: 'gate', n: '激活加速轨道', ic: 'jump_to', key: 'D' });
+    return acts;
   }
   return SEL_ACTS.map((a) => {
     if (a.k === 'warp') a = { ...a, off: surf(S.me, v) < 150000 ? a.off : '' };
@@ -3083,7 +3094,6 @@ function unitMenu(v, bare = false) {
   const items = [], P = S.me?.pilot;
   if (!P || !v) return items;
   if (v !== S.me && v.alive) {
-    items.push(P.locks.has(v) ? ['解除目标锁定', () => act('unlock', v)] : ['锁定目标', () => lockUnit(v)]);
     // 跃迁（menusvc._CelestialMenu）：150 km 外才有；舰队成员的船用「跃迁至该成员」那套带领跃迁文字
     if (surf(S.me, v) >= 150000 && !v.warp) {
       items.push(['跃迁至', warpSub((d) => warpTo(v, d)), { fn: () => warpTo(v) }]);
@@ -3091,12 +3101,16 @@ function unitMenu(v, bare = false) {
     }
     items.push(['接近', () => cmd({ cmd: 'approach', tgt: v })], ['环绕', () => cmd({ cmd: 'orbit', tgt: v, dist: S.orbit })], ['保持距离', () => cmd({ cmd: 'keep', tgt: v, dist: S.keep })]);
     if (surf(S.me, v) >= 150000) items.push(['朝向该处', () => alignTo(v)]);
+    // 观察 / 设为镜头关注（跟踪）、锁定：_CelestialMenu 里排在移动指令后面（同属 ACTIONSGROUP）
+    if (!bare) {
+      items.push(S.view?.following?.() === v.i ? ['重置视角', () => act('look0', v)] : ['观察', () => act('look', v)]);
+      if (S.view?.tracking?.() !== v.i) items.push(['跟踪', () => act('track', v)]);
+    }
+    items.push(P.locks.has(v) ? ['解除目标锁定', () => act('unlock', v)] : ['锁定目标', () => lockUnit(v)]);
   }
   if (bare) return items;
-  const f = FL.fleetMenu(v);
-  if (f.length && items.length) items.push(null);
-  items.push(...f);
-  return items;
+  items.push(...FL.fleetMenu(v));
+  return clientMenu(items);
 }
 // 右键天体（menusvc._CelestialMenu 的顺序）：跃迁至 ▸、带领跃迁、接近、朝向该处、广播：跃迁到 / 朝向该处
 function celMenu(i) {
@@ -3108,7 +3122,7 @@ function celMenu(i) {
   else items.push(['接近', () => celApproach(i)]);
   items.push(['朝向该处', () => alignTo({ cel: i })]);
   if (S.fleet) items.push([FL.bcName('warp'), () => FL.broadcast('warp', { cel: i })], [FL.bcName('align'), () => FL.broadcast('align', { cel: i })]);
-  return items;
+  return clientMenu(items);
 }
 function onStageCtx(e) {
   if (S.fleet && FL.fleetCtx(e)) return;
@@ -3129,8 +3143,26 @@ function onStageCtx(e) {
 function selfMenu(e) {
   hideHint();
   closeMenus();
-  S.cm = [['停止舰船', () => cmd({ cmd: 'stop', tgt: null })], ['重置视角', () => S.view?.follow(S.me?.i ?? 0)]];
+  S.cm = clientMenu([['停止舰船', () => cmd({ cmd: 'stop', tgt: null })], ['重置视角', () => S.view?.follow(S.me?.i ?? 0)]]);
   cmenuAt(e);
+}
+// 太空物体右键菜单照客户端排（carbonui menuDataFactory.CreateMenuDataWithEntries，组和图标见 menuUtil / actionConst）：
+//   每项按所属组在 menuHierarchy 里的位置稳定排序，不在组表里的（舰队广播、邀请加入舰队等）算 −1 排最前；
+//   相邻两项组不同就画分隔线，手写的分隔线（None）也一起排到最前，等于不起作用。
+//   图标：ICON_BY_ACTIONID 里有的动作画 16px 图标（观察、重置视角在黑名单里不画），广播条目带广播图标。
+const CM_GROUP = { 跃迁至: 1, 接近: 1, 环绕: 1, 保持距离: 1, 朝向该处: 1, 观察: 1, 跟踪: 1, 重置视角: 1, 停止舰船: 1, 锁定目标: 1, 解除目标锁定: 1, 激活加速轨道: 1, 舰队: 7 };
+const CM_ICON = { 跃迁至: 'warp_to', 接近: 'approach', 环绕: 'orbit', 保持距离: 'keep_at_distance', 朝向该处: 'align_to', 锁定目标: 'target', 解除目标锁定: 'target', 激活加速轨道: 'jump_to' };
+const cmGroup = (t) => CM_GROUP[t] ?? (t.startsWith('带领') ? 4 : -1);   // 带领舰队跃迁…：FLEETGROUP
+// 条目第三项可带 { g: 组在 menuHierarchy 里的序号, ic: 图标, warn: DESTRUCTIVEGROUP 的橙色感叹号组图标 }
+function clientMenu(items) {
+  const list = items.filter(Boolean).map((it, n) => ({ it, n, g: it[2]?.g ?? cmGroup(it[0]) })).sort((a, b) => a.g - b.g || a.n - b.n);
+  const out = [];
+  list.forEach(({ it, g }, k) => {
+    if (k && g !== list[k - 1].g) out.push(null);
+    const ic = it[2]?.ic || (CM_ICON[it[0]] ? `${UI}eveicon/control_icons/${CM_ICON[it[0]]}_16px.png?v=1` : FL.bcIconOf(it[0]));
+    out.push(ic ? [it[0], it[1], { ...(it[2] || {}), ic }] : it);
+  });
+  return out;
 }
 function cmenuAt(e) {
   for (const m of root?.querySelectorAll('.pl-cmenu') || []) m.remove();
@@ -3142,12 +3174,17 @@ function cmenuBuild(list, path, x, y, depth, anchorW = 0) {
   const el = document.createElement('div');
   el.className = 'pl-cmenu';
   el.dataset.depth = depth;
+  // 有一项带图标，整列文字都给图标让位（MenuData.GetIconSize：任一项有图标就 16）
+  const icons = list.some((it) => it?.[2]?.ic || it?.[2]?.warn);
+  el.classList.toggle('ic', icons);
   el.innerHTML = list.map((it, i) => {
     if (!it) return i === 0 || !list[i - 1] || !list.slice(i + 1).some(Boolean) ? '' : '<hr>';   // 连续 / 开头 / 结尾的分隔线不画
     const k = path ? `${path}.${i}` : `${i}`, sub = Array.isArray(it[1]), o = it[2] || {};
     if (o.lbl) return `<div class="lbl">${esc(tr(it[0]))}</div>`;
     const chk = o.on != null ? `<img class="ck" src="${UI}classes/utilmenu/checkbox${o.on ? 'active' : 'inactive'}.png?v=1" alt="">` : o.radio != null ? `<img class="ck" src="${UI}classes/utilmenu/radiobutton${o.radio ? 'active' : 'inactive'}.png?v=1" alt="">` : '';
-    return `<button type="button" class="${sub ? 'sub' : ''}${o.off ? ' off' : ''}" data-pl-cm="${k}">${chk}<span>${esc(tr(it[0]))}</span>${sub ? '<i>▸</i>' : ''}</button>`;
+    // 组图标（MenuEntryView.ConstructGroupIcon）：底圆按组色，上面叠白色符号
+    const mi = !icons ? '' : o.warn ? `<em class="mi gi warn"><img src="${UI}classes/menu/exclamationmark.png?v=1" alt=""></em>` : o.ic ? `<img class="mi" src="${o.ic}" alt="">` : '<em class="mi"></em>';
+    return `<button type="button" class="${sub ? 'sub' : ''}${o.off ? ' off' : ''}" data-pl-cm="${k}">${mi}${chk}<span>${esc(tr(it[0]))}</span>${sub ? `<img class="ar" src="${UI}icons/1_16_14.png?v=1" alt="">` : ''}</button>`;
   }).join('');
   stage.appendChild(el);
   if (x + el.offsetWidth > st.width) x -= el.offsetWidth + 2 + anchorW;

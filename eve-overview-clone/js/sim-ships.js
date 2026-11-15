@@ -4,6 +4,8 @@
 // 材质照搬游戏的 quadv5 着色：材质遮罩按 0、⅓、⅔、1 四档混合 4 种阵营材质（颜色、反光色、光泽），
 // 反照率贴图（sRGB）× 材质颜色；x 贴图打包了 粗糙度 / 材质遮罩 / 发光 / 灰尘（灰尘客户端出货着色器不用）。没有转换文件时返回 null，战场只显示图标。
 import * as THREE from './vendor/three/three.module.min.js';
+import { SHIP_AO } from './sim-ssao.js?v=1';
+import { SHIP_LIGHTS, PL_MAX, IES_TEX } from './sim-lights.js?v=5';
 
 const BASE = 'ship-models/';
 let indexP = null;
@@ -75,9 +77,13 @@ const v3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 //         常量 1.041667 / 0.475 / 0.018229 / 0.25、−0.015625 / 0.75、exp2(−9.28·NdotV)），没有 three 的多次散射补偿；
 //         镜面再乘地平线遮挡 saturate(1 + 10·(1 − R²)·dot(几何法线, 反射方向))（第 905–907 行）
 //   直射：同一个 10·(1 − R²) 因子乘 dot(几何法线, 光方向)（第 974–975 行）；漫反射 × (1 − F)（第 966–973 行，F 用 L·H）
+//   两层（实机船壳 PS 2f06fc / 推进器区 4ad4c7 反汇编，RenderDoc 抓帧）：主层和灰尘层各算一遍完整光照（直射 + 环境），
+//   最终 = 主层 × (1 − x)³ + 灰尘层 × x。下面把 three 的两个光照函数改名成单层版本，外面包一层按 eveWA / eveWB 加权；
+//   灰尘层的环境镜面按它自己的粗糙度另取一次（客户端也是按灰尘层粗糙度另算立方体 mip）
 const EVE_LIGHTS = (() => {
   let c = THREE.ShaderChunk.lights_physical_pars_fragment;
   const fnAt = (name) => { const i = c.indexOf(`void ${name}(`); return [i, c.indexOf('\n}', i) + 2]; };
+  { const k = c.indexOf('};', c.indexOf('struct PhysicalMaterial')) + 2; c = c.slice(0, k) + '\nPhysicalMaterial eveMB; float eveWA = 1.0, eveWB = 0.0;' + c.slice(k); }
   let [i, j] = fnAt('RE_IndirectSpecular_Physical');
   c = c.slice(0, i) + `void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradiance, const in vec3 clearcoatRadiance, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
 	float g = 1.0 - material.roughness * material.roughness;
@@ -94,49 +100,152 @@ const EVE_LIGHTS = (() => {
       'vec3 irradiance = dotNL * directLight.color * saturate( 1.0 + 10.0 * ( 1.0 - material.roughness * material.roughness ) * dot( eveGeoN, directLight.direction ) );')
     .replace('reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor );',
       'reflectedLight.directDiffuse += irradiance * BRDF_Lambert( material.diffuseColor ) * ( 1.0 - F_Schlick( material.specularColor, material.specularF90, saturate( dot( directLight.direction, normalize( directLight.direction + geometryViewDir ) ) ) ) );');
-  return c.slice(0, i) + body + c.slice(j);
+  c = c.slice(0, i) + body + c.slice(j);
+  const ARGS = 'const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal';
+  c = c.replace('void RE_Direct_Physical(', 'void eveDirect1(').replace('void RE_IndirectSpecular_Physical(', 'void eveIndirect1(');
+  const k = c.indexOf('#define RE_Direct');
+  return c.slice(0, k) + `void RE_Direct_Physical( const in IncidentLight directLight, ${ARGS}, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
+	ReflectedLight a = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) ), b = a;
+	eveDirect1( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, a );
+	if ( eveWB > 0.0 ) eveDirect1( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, eveMB, b );
+	reflectedLight.directDiffuse += a.directDiffuse * eveWA + b.directDiffuse * eveWB;
+	reflectedLight.directSpecular += a.directSpecular * eveWA + b.directSpecular * eveWB;
+}
+void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradiance, const in vec3 clearcoatRadiance, ${ARGS}, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
+	ReflectedLight a = ReflectedLight( vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ), vec3( 0.0 ) ), b = a;
+	eveIndirect1( radiance, irradiance, clearcoatRadiance, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, a );
+	if ( eveWB > 0.0 ) {
+		vec3 radB = radiance;
+		#ifdef USE_ENVMAP
+			radB = getIBLRadiance( geometryViewDir, geometryNormal, eveMB.roughness );
+		#endif
+		eveIndirect1( radB, irradiance, clearcoatRadiance, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, eveMB, b );
+	}
+	reflectedLight.indirectDiffuse += a.indirectDiffuse * eveWA + b.indirectDiffuse * eveWB;
+	reflectedLight.indirectSpecular += a.indirectSpecular * eveWA + b.indirectSpecular * eveWB;
+}
+` + c.slice(k);
 })();
 
 // onBeforeCompile 拿到的是没展开的 #include，要改块里的行得先把块文本取出来再替换
 const NORMAL_MAPS = THREE.ShaderChunk.normal_fragment_maps.replace('vec3 mapN = texture2D( normalMap, vNormalMapUv ).xyz * 2.0 - 1.0;',
   'vec3 mapN = vec3( ( texture2D( normalMap, vNormalMapUv ).xy + 0.002 ) * 2.0 - 1.0, 1.0 );');
 
-function material(area, maps, env) {
+// 船体共用贴图（assets/eveui/fx/ship/，客户端 res:/dx9/model/shared/dirtdetailnoise.dds（DustNoiseMap）、res:/texture/global/noise.dds（HeatGlowNoiseMap））
+const FX = 'assets/eveui/fx/ship/';
+let shared = null;
+const sharedTex = (renderer) => (shared ||= { dust: texture(FX + 'dirtdetailnoise.png?v=1', renderer), heat: texture(FX + 'noise.png?v=1', renderer) });
+// 着色器时间（秒，客户端 PerSceneData 的时间 cb2[21].x）：sim-3d 每帧写
+export const SHIP_TIME = { value: 0 };
+// 推进器区热光（quadheatv5）每种材质的 HeatGlowData：x = 跟推进器亮度开关（1）/ 常亮（0），y = 噪声滚动速度，z = 噪声 UV 缩放，w = 扭曲量。
+//   旧转换文件里没有，按 SOF 里最常见的 area_booster 默认值
+const HEAT_DEF = [1, 0.025, 4, 0.002];
+
+function material(area, maps, env, sh) {
+  const heat = area.kind === 'heat';
   const m = new THREE.MeshStandardMaterial({ map: maps.a || WHITE, normalMap: maps.n || null, envMap: env, envMapIntensity: 1, metalness: 0, roughness: 1 });
   const u = {
     eveX: { value: maps.x || PLAIN },
     eveD: { value: area.mtl.map((x) => v3(x.d)) },
     eveF: { value: area.mtl.map((x) => v3(x.f)) },
+    eveU: { value: area.mtl.map((x) => v3(x.u || [0, 0, 0])) },
     eveG: { value: new THREE.Vector4(...area.mtl.map((x) => x.g)) },
-    eveGlow: { value: v3(area.glow || [0, 0, 0]).multiplyScalar(0.22) },
+    eveGlow: { value: v3((heat ? area.heat : area.glow) || [0, 0, 0]) },
+    eveHD: { value: area.mtl.map((x) => new THREE.Vector4(...(x.h || HEAT_DEF))) },
+    eveDust: { value: sh.dust || WHITE }, eveHN: { value: sh.heat || WHITE },
+    eveDirt: { value: 0 },      // shipData.z = dirtLevel：引擎默认 0，只有玩家船按 dirtTime 算（这里没有这个数据）
+    eveTime: SHIP_TIME,
+    eveAO: SHIP_AO.tex, eveAOOn: SHIP_AO.on,
+    eveLN: SHIP_LIGHTS.n, eveLP: SHIP_LIGHTS.p, eveLC: SHIP_LIGHTS.c, eveLD: SHIP_LIGHTS.d, eveLE: SHIP_LIGHTS.e, eveIES: { value: IES_TEX },
   };
-  // 材质（quadv5 出货变体）：4 档材质权重 = saturate(1.031915 − |MaterialMap − {0,⅓,⅔,1}| × 3.191489)；
-  //   漫反射 = 反照率 × Σ权重·MtlNDiffuseColor，F0 = Σ权重·MtlNFresnelColor，光泽 = RoughnessMap × Σ权重·MtlNGloss，粗糙度 = 1 − 光泽。
-  //   MtlNDustDiffuseColor / DirtMap / DustNoiseMap 只在 V5_DEBUG 变体（带 switch 的调试视图）里出现，最终颜色不用，这里也不用（x 贴图的 a 通道不读）。
-  //   法线：(NormalMap.xy + 0.002) × 2 − 1，直接加到顶点法线上（切线 × x + 副切线 × y + 法线）再归一化，不重建 z（第 757–765 行）
+  // 材质（实机船壳 PS）：4 档材质权重 = saturate(1.031915 − |MaterialMap − {0,⅓,⅔,1}| × 3.191489)；
+  //   主层：漫反射 = 反照率 × Σ权重·MtlNDiffuseColor，F0 = Σ权重·MtlNFresnelColor，光泽 = RoughnessMap × Σ权重·MtlNGloss，粗糙度 = 1 − 光泽。
+  //     （PaintMaskMap（_p3）× GeneralData.x 会把主层往 不着色 / F0 0.039 / 光泽 0.4 拉；出厂外观的 _p3 抽查 16 艘几乎全黑（SKIN 才用），没转换，不做）
+  //   灰尘层：噪声 n = DustNoiseMap(UV × 20) + 0.5；漫反射 = 反照率 × Σ权重·MtlNDustDiffuseColor × n.x，F0 = (0.019, 0.017, 0.014) × n.y，
+  //     粗糙度 = saturate(1 − RoughnessMap × n.z × 0.4)；混合量 x = saturate(DirtMap × n.w / (1 − dirtLevel))，最终 = 主层 ×(1 − x)³ + 灰尘层 × x
+  //   法线：(NormalMap.xy + 0.002) × 2 − 1，直接加到顶点法线上（切线 × x + 副切线 × y + 法线）再归一化，不重建 z
+  //   发光：船壳 = GeneralGlowColor × GlowMap^2.4 × shipData.y（ActivationStrength，平时 1）；
+  //     推进器区（quadheatv5）= GeneralHeatGlowColor × 开关 × GlowMap(UV 加噪声扭曲)^2.4 × shipData.y，
+  //     开关 = saturate(1 + HD.x ×(saturate((推进器亮度 − 0.005) × 66.67) − 1))，扭曲 = (噪声(UV + HD.y·t)·HD.z × 噪声(UV − HD.y·t)·HD.z − 0.5) × HD.w × 开关
+  //   实例颜色：r = 变暗（死船 0.22），g = shipData.y，b = 推进器亮度（EveShip2::GetPerObjectData，封顶 1；只看是否 > 0.02）
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform sampler2D eveX; uniform vec3 eveD[4]; uniform vec3 eveF[4]; uniform vec4 eveG; uniform vec3 eveGlow; vec3 eveGeoN;')
+      .replace('#include <common>', `#include <common>
+        uniform sampler2D eveX, eveDust, eveHN; uniform vec3 eveD[4]; uniform vec3 eveF[4]; uniform vec3 eveU[4]; uniform vec4 eveG; uniform vec3 eveGlow; uniform vec4 eveHD[4];
+        uniform float eveDirt, eveTime; vec3 eveGeoN; uniform sampler2D eveAO; uniform float eveAOOn;
+        uniform int eveLN; uniform vec4 eveLP[${PL_MAX}]; uniform vec4 eveLC[${PL_MAX}]; uniform vec4 eveLD[${PL_MAX}]; uniform vec4 eveLE[${PL_MAX}]; uniform sampler2D eveIES;`)
       .replace('#include <lights_physical_pars_fragment>', EVE_LIGHTS)
       .replace('#include <map_fragment>', `#include <map_fragment>
+        vec3 eAlb = diffuseColor.rgb;
         vec4 eP = texture2D(eveX, vMapUv);
+        vec4 eN = texture2D(eveDust, vMapUv * 20.0) + 0.5;
         vec4 eW = clamp(1.0319149 - abs(eP.g - vec4(0.0, 0.3333333, 0.6666667, 1.0)) * 3.1914894, 0.0, 1.0);
         vec3 eF0 = eW.x * eveF[0] + eW.y * eveF[1] + eW.z * eveF[2] + eW.w * eveF[3];
+        vec3 eDust = eW.x * eveU[0] + eW.y * eveU[1] + eW.z * eveU[2] + eW.w * eveU[3];
+        vec4 eHD = eW.x * eveHD[0] + eW.y * eveHD[1] + eW.z * eveHD[2] + eW.w * eveHD[3];
         float eGloss = dot(eW, eveG);
         diffuseColor.rgb *= eW.x * eveD[0] + eW.y * eveD[1] + eW.z * eveD[2] + eW.w * eveD[3];`)
+      .replace('#include <color_fragment>', `float eLive = 1.0, eBoost = 1.0;
+        #if defined( USE_INSTANCING_COLOR )
+          diffuseColor.rgb *= vColor.r; eAlb *= vColor.r; eLive = vColor.g; eBoost = vColor.b;
+        #elif defined( USE_COLOR )
+          diffuseColor.rgb *= vColor;
+        #endif`)
       .replace('#include <normal_fragment_maps>', 'eveGeoN = nonPerturbedNormal;\n' + NORMAL_MAPS)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(1.0 - eGloss * eP.r, 0.0, 1.0);')
       .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = 0.0;')
-      .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\nmaterial.specularColor = eF0; material.specularF90 = 1.0;')
+      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
+        material.specularColor = eF0; material.specularF90 = 1.0;
+        eveMB = material;
+        eveMB.diffuseColor = eAlb * eDust * eN.x;
+        eveMB.specularColor = vec3(0.019, 0.017, 0.014) * eN.y;
+        eveMB.roughness = min(max(clamp(1.0 - eP.r * eN.z * 0.4, 0.0, 1.0), 0.0525) + geometryRoughness, 1.0);
+        eveWB = clamp(eP.a * eN.w / (1.0 - eveDirt), 0.0, 1.0);
+        eveWA = (1.0 - eveWB) * (1.0 - eveWB) * (1.0 - eveWB);`)
+      // 船体灯（sim-lights.js；实机船壳 PS 2f06fc 的灯循环）：距离 d、半径 R 都按米，
+      //   衰减 = saturate((1/(d+0.001) − 1/(R+0.001)) / (1000 − 1/(R+0.001))) × 1000（约 1/d，到 R 归零），
+      //   聚光灯 × saturate((cos − cos外)/(cos内 − cos外))²（有 IES 灯型再 × 曲线(0.5 − 0.5·cos)），颜色 ×(1 − 模糊)，模糊 = clamp(内半径 / d, 0, 0.8)，
+      //   粗糙度 α = min(α + 模糊⁴, 1)（两层各自加），然后和太阳同一套直射光照（RE_Direct）
+      .replace('#include <lights_fragment_maps>', `for (int i = 0; i < ${PL_MAX}; i++) {
+          if (i >= eveLN) break;
+          vec3 lv = eveLP[i].xyz - geometryPosition;
+          float ld = length(lv) * 1000.0, lR = eveLP[i].w;
+          if (ld >= lR) continue;
+          vec3 lL = normalize(lv);
+          float lF = clamp(eveLC[i].w / ld, 0.0, 0.8);
+          float lA = clamp((1.0 / (ld + 0.001) - 1.0 / (lR + 0.001)) / (999.999939 - 1.0 / (lR + 0.001)), 0.0, 1.0) * 999.999939;
+          if (eveLD[i].w > 0.0) {
+            float lc = dot(eveLD[i].xyz, lL), lt = clamp((lc - eveLD[i].w) / (eveLE[i].x - eveLD[i].w), 0.0, 1.0); lA *= lt * lt;
+            if (eveLE[i].y > 0.5) lA *= textureLod(eveIES, vec2(0.5 - 0.5 * lc, (eveLE[i].y - 0.5) / 32.0), 0.0).r;   // IES 灯型（sim-lights.js IES_TEX 第 y − 1 行）
+          }
+          if (lA <= 0.0) continue;
+          directLight.color = eveLC[i].rgb * lA * (1.0 - lF); directLight.direction = lL; directLight.visible = true;
+          float lF4 = lF * lF * lF * lF, rA = material.roughness, rB = eveMB.roughness;
+          material.roughness = sqrt(min(rA * rA + lF4, 1.0)); eveMB.roughness = sqrt(min(rB * rB + lF4, 1.0));
+          RE_Direct(directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight);
+          material.roughness = rA; eveMB.roughness = rB;
+        }
+        #include <lights_fragment_maps>`)
+      // SSAO（sim-ssao.js）：客户端最终颜色 = 光照 × AO，再雾、再加发光
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        if (eveAOOn > 0.5) {
+          float eAO = texelFetch(eveAO, ivec2(gl_FragCoord.xy), 0).r;
+          reflectedLight.directDiffuse *= eAO; reflectedLight.directSpecular *= eAO;
+          reflectedLight.indirectDiffuse *= eAO; reflectedLight.indirectSpecular *= eAO;
+        }`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        float eLive = 1.0;
-        #if defined( USE_INSTANCING_COLOR )
-          eLive = vColor.g;
-        #endif
-        totalEmissiveRadiance += eveGlow * pow(eP.b, 2.4) * eLive;`);
+        #ifdef EVE_HEAT
+          float eOn = clamp(1.0 + eHD.x * (clamp((eBoost - 0.005) * 66.66667, 0.0, 1.0) - 1.0), 0.0, 1.0);
+          vec2 eH1 = texture2D(eveHN, (vMapUv + eHD.y * eveTime) * eHD.z).xy, eH2 = texture2D(eveHN, (vMapUv - eHD.y * eveTime) * eHD.z).xy;
+          float eGl = texture2D(eveX, vMapUv + eHD.w * eOn * (eH1 * eH2 - 0.5)).b;
+          totalEmissiveRadiance += eveGlow * eOn * pow(eGl, 2.4) * eLive;
+        #else
+          totalEmissiveRadiance += eveGlow * pow(eP.b, 2.4) * eLive;
+        #endif`);
   };
-  m.customProgramCacheKey = () => 'eve-quad5';
+  if (heat) m.defines.EVE_HEAT = '';   // 保留 three 自带的 STANDARD
+  m.customProgramCacheKey = () => (heat ? 'eve-quad5h' : 'eve-quad5');
   return m;
 }
 
@@ -159,12 +268,12 @@ export function loadShipModel(key, renderer, env) {
         let count = 0;
         for (let k = a.index; k < a.index + a.count && tri[k]; k++) count += tri[k][1];
         const t = (c) => (a.tex.has.includes(c) || c === 'x' ? texture(`${BASE}t/${a.tex.k}_${c}.webp`, renderer, c === 'a') : null);
-        const [ta, tn, tx] = await Promise.all([t('a'), t('n'), t('x')]);
+        const [ta, tn, tx, dust, heat] = await Promise.all([t('a'), t('n'), t('x'), sharedTex(renderer).dust, sharedTex(renderer).heat]);
         g.addGroup(first * 3, count * 3, mats.length);
-        mats.push(material(a, { a: ta, n: tn, x: tx }, env));
+        mats.push(material(a, { a: ta, n: tn, x: tx }, env, { dust, heat }));
       }
       if (!mats.length) return null;
-      return { geometry: g, materials: mats, r: def.r, c: def.c || [0, 0, 0], ext: g.userData.ext || null, boosters: def.boosters || [], boosterColor: def.boosterColor, bst: def.bst || null, loc: def.loc || {}, se: def.se || null };
+      return { geometry: g, materials: mats, r: def.r, c: def.c || [0, 0, 0], ext: g.userData.ext || null, boosters: def.boosters || [], boosterColor: def.boosterColor, bst: def.bst || null, loc: def.loc || {}, se: def.se || null, lights: def.lights || null, bl: def.bl || null, ies: def.ies || null, anim: def.anim || null };
     })());
   }
   return modelCache.get(key);

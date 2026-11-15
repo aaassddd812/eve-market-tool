@@ -1227,7 +1227,7 @@ function imageModel() {
       // 最贵的几次损失：在曲线上画圈
       marks: order.flatMap((s) => cd.cum[s].slice(1).map((p) => [p[0], p[1], p[2][4], s])).sort((a, b) => b[2] - a[2]).slice(0, 6)
     },
-    footer: '击杀数据按吉他中间价估值',
+    footer: `击杀数据按吉他${window.__kbPriceSell ? '卖价' : '中间价'}估值`,
     generated: '生成于 ' + fmtTime(Math.floor(Date.now() / 1000)) + ' ' + tzLabel()
   };
 }

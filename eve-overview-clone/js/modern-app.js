@@ -1152,7 +1152,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v294').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v308').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -1307,7 +1307,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v109').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v111').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1353,7 +1353,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v55').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v56').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText,
       killRadial: async (km) => (await loadFittingModule()).killRadial(km)
@@ -3787,8 +3787,22 @@ const PREFS = [
   ['skin', '新页面', ['default', 'eve'], true],   // 默认开；关掉（default）才回老界面
   ['mapZoom', '星图反转鼠标方向', ['normal', 'reverse'], false],   // 只反转滚轮缩放
   ['treeLines', '显示分类目录连接线', ['off', 'on'], true],
-  ['treeIcons', '市场目录显示分类与物品图标', ['off', 'on'], true]
+  ['treeIcons', '市场目录显示分类与物品图标', ['off', 'on'], true],
+  ['kbPrice', '击杀估价按吉他卖价（不勾按吉他中间价）', ['mid', 'sell'], false]   // 全站击杀记录、会战、星图实时击杀、预警的价值口径（服务器按 price=sell 换算）
 ];
+// 击杀估价口径：给本站击杀记录服务（/api/kb/）的 GET 请求统一带上 price=sell，各页面不用各自处理
+let kbFetchWrapped = false;
+function wrapKbFetch() {
+  if (kbFetchWrapped) return;
+  kbFetchWrapped = true;
+  const inner = window.fetch;
+  window.fetch = function (input, init) {
+    if (window.__kbPriceSell && typeof input === 'string' && input.includes('/api/kb/') && !/[?&]price=/.test(input) && (!init || !init.method || init.method === 'GET')) {
+      input += (input.includes('?') ? '&' : '?') + 'price=sell';
+    }
+    return inner.call(this, input, init);
+  };
+}
 function applyPrefs(p = store.getJSON('eve-prefs', {})) {
   // 「EVE 风格」界面：首帧由 index-v2.html 头部脚本先设好；这里处理在设置里切换
   if (p.skin !== 'default') {
@@ -3797,12 +3811,18 @@ function applyPrefs(p = store.getJSON('eve-prefs', {})) {
   } else delete document.documentElement.dataset.skin;
   document.documentElement.classList.toggle('no-tree-lines', p.treeLines === 'off');
   document.documentElement.classList.toggle('no-tree-icons', p.treeIcons === 'off');
+  const sell = p.kbPrice === 'sell';
+  wrapKbFetch();
+  if (Boolean(window.__kbPriceSell) !== sell) {
+    window.__kbPriceSell = sell;
+    window.dispatchEvent(new Event('kb-price'));   // 击杀记录页等按新口径重新读取
+  }
 }
 function renderPrefs() {
   const p = store.getJSON('eve-prefs', {});
   $('prefsBody').innerHTML = PREFS.map(([key, title, vals, dflt]) => `<label class="prefs-row">
       <input type="checkbox" data-pref="${key}"${(p[key] ? p[key] === vals[1] : dflt) ? ' checked' : ''}>
-      <b class="prefs-title">${title}</b>
+      <b class="prefs-title">${key === 'kbPrice' && SERVER.id !== 'tq' ? title.replaceAll('吉他', '交易中心') : title}</b>
     </label>`).join('') + menuLayoutHtml();
 }
 function togglePrefs(show = $('prefsModal').hidden) {

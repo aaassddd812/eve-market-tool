@@ -419,7 +419,7 @@ function draw() {
       <td><div class="ls-pilot"><img src="${D.eveImage('characters/' + p.id + '/portrait', 64)}" alt="" width="28" height="28" loading="lazy">
         <span>${ST.badge(entOf(p))}${link('character', p.id, p.name)}
         ${tags(p).map(([l, title, cls]) => `<i class="ls-tag${cls ? ' ' + cls : ''}" title="${esc(title)}">${l}</i>`).join('')}</span></div></td>
-      <td class="ls-org">${p.alliance ? `<span title="联盟">${esc(orgName(p.alliance))}</span>` : ''}<small>${esc(orgName(p.corp))}</small></td>
+      <td class="ls-org">${p.alliance ? `<span title="联盟"><img src="${D.eveImage('alliances/' + p.alliance + '/logo', 32)}" alt="" width="18" height="18" loading="lazy">${esc(orgName(p.alliance))}</span>` : ''}${p.corp ? `<small title="军团"><img src="${D.eveImage('corporations/' + p.corp + '/logo', 32)}" alt="" width="16" height="16" loading="lazy">${esc(orgName(p.corp))}</small>` : ''}</td>
       ${D.kb ? `<td><span class="ls-threat ${t.level}">${t.label}</span></td>
       <td class="num">${s ? s.kills : '—'}</td><td class="num">${s ? s.losses : '—'}</td>
       <td class="num ls-hide-sm">${s && s.kills + s.losses ? Math.round(t.ratio * 100) + '%' : '—'}</td>

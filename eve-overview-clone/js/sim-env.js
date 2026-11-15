@@ -158,7 +158,7 @@ function yawPitchRoll(yaw, pitch, roll) {
   const sy = Math.sin(yaw / 2), cy = Math.cos(yaw / 2), sp = Math.sin(pitch / 2), cp = Math.cos(pitch / 2), sr = Math.sin(roll / 2), cr = Math.cos(roll / 2);
   return [sy * cp * sr + cy * sp * cr, sy * cp * cr - cy * sp * sr, cy * cp * sr - sy * sp * cr, cy * cp * cr + sy * sp * sr];
 }
-function curveValue(c, time) {
+export function curveValue(c, time) {
   if (!c) return 0;
   switch (c._type) {
     case 'Tr2CurveScalar': return scalarCurve(c, time);
@@ -168,8 +168,15 @@ function curveValue(c, time) {
     }
     case 'TriPerlinCurve': {
       c._start ??= perlinStartOffset();
-      const n = perlinFractal((time + c._start) * (c.speed ?? 1), c.alpha ?? 1.1, c.beta ?? 2, c.n ?? 3);
+      // 层数：.black 里写作 N（解析器原样保留），默认 3
+      const n = perlinFractal((time + c._start) * (c.speed ?? 1), c.alpha ?? 1.1, c.beta ?? 2, c.N ?? c.n ?? 3);
       return (n + 1) / 2 * (c.scale ?? 1) + (c.offset ?? 0);
+    }
+    // 三路表达式（expressionX/Y/Z，空表达式取 0）：结果是 [x, y, z]
+    case 'Tr2CurveVector3Expression': {
+      if (!c._fns) c._fns = ['expressionX', 'expressionY', 'expressionZ'].map((k) => { try { return c[k] ? compileExpr(c[k]) : () => 0; } catch (e) { console.warn(e.message); return () => 0; } });
+      const ctx = { curve: c, time, vars: { time } };
+      return c._fns.map((f) => Number(f(ctx)) || 0);
     }
     case 'Tr2CurveEulerRotation': return yawPitchRoll(curveValue(c.yaw, time), curveValue(c.pitch, time), curveValue(c.roll, time));
     default: return c.currentValue ?? c.value ?? 0;
@@ -177,7 +184,7 @@ function curveValue(c, time) {
 }
 // 绑定：属性路径读写（value / value.x / rotation / brightness / display …）
 const COMP = { x: 0, y: 1, z: 2, w: 3, r: 0, g: 1, b: 2, a: 3 };
-function applyBinding(b) {
+export function applyBinding(b) {
   const src = b.sourceObject, dst = b.destinationObject;
   if (!src || !dst || !b.sourceAttribute || !b.destinationAttribute) return;
   const s = b.scale ?? 1, off = b.offset || [0, 0, 0, 0];
@@ -187,7 +194,7 @@ function applyBinding(b) {
   const [k, c] = b.destinationAttribute.split('.');
   if (c != null) {
     if (!Array.isArray(dst[k])) dst[k] = [0, 0, 0, 0];
-    dst[k][COMP[c]] = (Array.isArray(v) ? v[0] : v) * s + off[COMP[c]];
+    dst[k][COMP[c]] = (Array.isArray(v) ? v[0] : v) * s + (off[0] ?? 0);   // 单分量拷贝用 offset.x（照 TriValueBinding._applyCopyPlan），不是目标分量对应的那一格
   } else if (Array.isArray(v)) dst[k] = v.map((x, i) => x * s + (off[i] ?? 0));
   else if (Array.isArray(dst[k])) dst[k] = dst[k].map((_, i) => v * s + (off[i] ?? 0));
   else dst[k] = v * s + off[0];

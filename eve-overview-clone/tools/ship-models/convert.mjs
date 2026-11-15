@@ -168,6 +168,86 @@ async function writeGeometry(resPath, file) {
   return { n, tris: idx.length / 3, min, max };
 }
 
+// ── 船体灯（客户端 Tr2LightManager 的点光 / 聚光灯，SOF 搭船时挂上的）──
+// 来源：船体灯组（hullLightSets → Tr2PointLight / Tr2SpotLight）、精灵组 / 聚光灯组 / 面片组 / 精灵线 / 光雾挂件上的灯（横幅灯颜色运行时取横幅图，不导）。
+// 每盏一行：[x, y, z（船体坐标，米）, 半径, 内半径, r, g, b（颜色 × 亮度，未乘半径）, 方向 xyz（聚光灯：旋转 × (0, 0, −1)）, cos 外角, cos 内角（点光 0）, 类型, 参数 ×4]
+//   类型 0 常亮；1 精灵闪烁：半径、内半径 × Blink(频率, 相位, 最小, 最大)；2 面片渐变：亮度 × Fade(类型, 频率, 相位)；3 亮度 × 推进器增益（boosterGainInfluence）
+//   只要照表面的（flags & 1，AFFECTS_SURFACES）；噪声闪动（noiseAmplitude）全部数据都是 0，不导
+const avgColor = new Map();
+async function texAverage(path) {
+  // 面片组灯色 × 四张贴图的平均色（TriTextureRes::GetAverageColor；没贴图 = 1）
+  if (!path) return [1, 1, 1];
+  const k = path.toLowerCase();
+  if (!avgColor.has(k)) {
+    let c = [1, 1, 1];
+    if (hasRes(k)) {
+      try {
+        await getRes(k);
+        const r = spawnSync('python3', ['-I', '-c', 'import sys\nfrom PIL import Image\nim = Image.open(sys.argv[1]).convert("RGB")\nh = im.histogram()\nn = im.size[0] * im.size[1]\nprint(*[sum(i * h[c * 256 + i] for i in range(256)) / n / 255 for c in range(3)])', cacheFile(k)], { encoding: 'utf8' });
+        if (r.status === 0) c = r.stdout.trim().split(/\s+/).map(Number);
+        else log('贴图平均色读取失败', k, (r.stderr || '').slice(-200));
+      } catch (e) { log('贴图平均色下载失败', k, e.message); }
+    }
+    avgColor.set(k, c);
+  }
+  return avgColor.get(k);
+}
+const saturateColor = (c, s) => { if (s === 1) return c; const g = c[0] * 0.299 + c[1] * 0.587 + c[2] * 0.114; return c.map((x) => g + (x - g) * Math.max(0, s)); };
+function quatDir(q) {   // 旋转 (0, 0, −1)
+  const [x, y, z, w] = Array.from(q || [0, 0, 0, 1]);
+  return [-(2 * (x * z + w * y)), -(2 * (y * z - w * x)), -(1 - 2 * (x * x + y * y))];
+}
+// IES 灯型（Tr2LightProfileRes）：1024×1 R16F 的 .dds，横坐标 u = 0.5 − 0.5·cos(与灯轴夹角)；这里降到 128 点
+async function iesProfile(path) {
+  try {
+    if (!hasRes(path)) return null;
+    const b = Buffer.from(await getRes(path));
+    if (b.toString('latin1', 0, 4) !== 'DDS ') return null;
+    const off = b.toString('latin1', 84, 88) === 'DX10' ? 148 : 128;
+    const w = b.readUInt32LE(16), hh = b.readUInt32LE(12);
+    if (w !== 1024 || hh !== 1) { log('IES 尺寸不对', path, w, hh); return null; }
+    const half = (u) => { const e = (u >> 10) & 31, f = u & 1023, sg = u >> 15 ? -1 : 1; return sg * (e === 0 ? f / 1024 * 2 ** -14 : e === 31 ? (f ? NaN : Infinity) : (1 + f / 1024) * 2 ** (e - 15)); };
+    const out = [];
+    for (let i = 0; i < 128; i++) { let a = 0; for (let k = 0; k < 8; k++) a += half(b.readUInt16LE(off + (i * 8 + k) * 2)); out.push(+(a / 8).toFixed(4)); }
+    return out;
+  } catch (e) { log('IES 读取失败', path, e.message); return null; }
+}
+async function lightsOf(v) {
+  const ids = new Map();
+  const walk = (o) => { if (!o || typeof o !== 'object' || ArrayBuffer.isView(o)) return; if (o._id != null) ids.set(o._id, o); for (const x of Object.values(o)) walk(x); };
+  walk(v);
+  const deref = (p) => (p && p._ref != null ? ids.get(p._ref) : p);
+  const out = [];
+  const push = (d, kind = 0, prm = [0, 0, 0, 0], mul = null, sat = 1) => {
+    if (!d || !((d.flags ?? 1) & 1)) return;
+    let c = Array.from(d.color || [0, 0, 0]).slice(0, 3).map(Number);
+    if (mul) c = c.map((x, i) => x * mul[i]);
+    c = saturateColor(c, sat).map((x) => x * Number(d.brightness ?? 1));
+    const R = Number(d.radius) || 0;
+    if (!(R > 0) || Math.max(...c) <= 0) return;
+    const spot = Number(d.outerAngle) > 0;
+    const p = Array.from(d.position || [0, 0, 0]);
+    out.push([...p, R, Number(d.innerRadius) || 0, ...c, ...(spot ? quatDir(d.rotation) : [0, 0, 0]),
+      spot ? Math.cos(d.outerAngle * Math.PI / 180) : 0, spot ? Math.cos((d.innerAngle || 0) * Math.PI / 180) : 0, kind, ...prm].map((x) => +(+x).toFixed(4)));
+  };
+  for (const L of v.lights || []) push(L.lightData || L);
+  for (const at of v.attachments || []) {
+    const ls = at.lights || [];
+    if (!ls.length) continue;
+    if (at._type === 'EveSpriteSet' || at._type === 'EveSpriteLineSet') for (const L of ls) push(L.lightData, 1, [L.blinkRate || 0, L.blinkPhase || 0, L.minScale ?? 1, L.maxScale ?? 1]);
+    else if (at._type === 'EveSpotlightSet' || at._type === 'EveHazeSet') for (const L of ls) push(L.lightData, L.boosterGainInfluence ? 3 : 0);
+    else if (at._type === 'EvePlaneSet') {
+      const avg = [1, 1, 1];
+      for (const p of [at.layerMap1Parameter, at.layerMap2Parameter, at.imageMapParameter, at.maskMapParameter]) {
+        const a = await texAverage(deref(p)?.resourcePath);
+        for (let i = 0; i < 3; i++) avg[i] *= a[i];
+      }
+      for (const L of ls) push(L.lightData, L.fadeType ? 2 : 0, [L.fadeType || 0, L.blinkRate || 0, L.blinkPhase || 0, 0], avg, L.saturation ?? 1);
+    }
+  }
+  return out;
+}
+
 // ── 材质参数 ──
 const PARAMS = ['DiffuseColor', 'FresnelColor', 'Gloss', 'DustDiffuseColor'];
 const shaderKind = (p) => { const f = String(p).toLowerCase(); if (!/\/quad\//.test(f)) return null; if (/glass/.test(f)) return 'glass'; if (/heat/.test(f)) return 'heat'; return 'quad'; };
@@ -178,7 +258,7 @@ function areaOf(a, forceQuad = false) {
   const cp = Object.fromEntries((e.constParameters || []).map((p) => [p.name, Array.from(p.value || [])]));
   const rs = Object.fromEntries((e.resources || []).map((r) => [r.name, r.resourcePath]));
   const r4 = (x) => (x || [0, 0, 0, 0]).slice(0, 3).map((y) => +(+y).toFixed(5));
-  const mtl = [1, 2, 3, 4].map((i) => ({ d: r4(cp[`Mtl${i}DiffuseColor`]), f: r4(cp[`Mtl${i}FresnelColor`]), g: +((cp[`Mtl${i}Gloss`] || [0])[0]).toFixed(4), u: r4(cp[`Mtl${i}DustDiffuseColor`]) }));
+  const mtl = [1, 2, 3, 4].map((i) => ({ d: r4(cp[`Mtl${i}DiffuseColor`]), f: r4(cp[`Mtl${i}FresnelColor`]), g: +((cp[`Mtl${i}Gloss`] || [0])[0]).toFixed(4), u: r4(cp[`Mtl${i}DustDiffuseColor`]), ...(cp[`Mtl${i}HeatGlowData`] ? { h: cp[`Mtl${i}HeatGlowData`].slice(0, 4).map((y) => +(+y).toFixed(5)) } : {}) }));   // h：推进器区（quadheatv5）热光参数
   const tex = { a: rs.AlbedoMap, n: rs.NormalMap, r: rs.RoughnessMap, m: rs.MaterialMap, g: rs.GlowMap, d: rs.DirtMap };
   for (const k of Object.keys(tex)) if (!tex[k] || !hasRes(tex[k]) || /\/global\/(black|white|flat|grey)/.test(tex[k])) delete tex[k];
   return { name: a.name, kind, index: a.index ?? 0, count: a.count ?? 1, mtl, glow: r4(cp.GeneralGlowColor), heat: r4(cp.GeneralHeatGlowColor), tex };
@@ -194,6 +274,56 @@ async function main() {
   log('读取 SOF 数据…');
   const black = await CjsBlackFormat.read(new Uint8Array(await getRes('res:/dx9/model/spaceobjectfactory/data.black')));
   const sof = await S.EveSOF.Create({ black: black.object, resFileIndex: [...INDEX.keys()] });
+  // --lights-stats：统计所有船体 SOF 里带灯（light / bannerLight）的挂件
+  if (args['lights-stats']) {
+    const st = {}; const ex = {};
+    for (const n of sof.dataMgr.ListHullDataNames()) {
+      const hd = await sof.GetHullData(n);
+      for (const k of ['spriteSets', 'hullLightSets', 'spotlightSets', 'planeSets', 'spriteLineSets', 'hazeSets']) for (const set of hd?.[k] || []) for (const it of set.items || []) {
+        const L = it.light || it.lights?.length;
+        st[k] ||= { items: 0, lit: 0, hulls: new Set() }; st[k].items++;
+        if (L) { st[k].lit++; st[k].hulls.add(n); ex[k] ||= JSON.stringify(it, (kk, v) => (ArrayBuffer.isView(v) ? Array.from(v).map((x) => +(+x).toFixed(3)) : v)).slice(0, 800); }
+      }
+      if ((hd?.hullLightSets || []).some((s) => s.items?.length)) { st.hls ||= { n: 0, hulls: new Set() }; st.hls.n++; st.hls.hulls.add(n); ex.hls ||= JSON.stringify(hd.hullLightSets, (kk, v) => (ArrayBuffer.isView(v) ? Array.from(v) : v)).slice(0, 1500); }
+    }
+    for (const [k, v] of Object.entries(st)) console.log(k, v.items, v.lit, v.hulls?.size, v.n, [...(v.hulls || [])].slice(0, 12).join(' '));
+    console.log(JSON.stringify(ex, null, 1));
+    return;
+  }
+  // --child-stats：统计所有船体子特效（children 总是挂的 + childSets primary）里的灯（只下载 .black，不写模型；不代阵营色，颜色不准，只看数量）
+  if (args['child-stats']) {
+    const jobs = {};
+    const names = sof.dataMgr.ListHullDataNames();
+    await pool(names, 8, async (n) => {
+      const hd = await sof.GetHullData(n);
+      const items = [...(hd?.children || []).filter((c) => (c.groupIndex ?? -1) === -1), ...(hd?.childSets || []).filter((cs) => cs.visibilityGroupName === 'primary').flatMap((cs) => cs.items || [])];
+      const seenC = new Set(), files = [];
+      for (const it of items) {
+        const bp = String(it.redFilePath || '').toLowerCase().replace(/\.red$/, '.black');
+        const t = Array.from(it.translation || [0, 0, 0]), r = Array.from(it.rotation || [0, 0, 0, 1]), sc = Array.from(it.scaling || [1, 1, 1]);
+        const sig = bp + JSON.stringify([t, r, sc]);
+        if (!bp || seenC.has(sig) || !hasRes(bp)) continue;
+        seenC.add(sig);
+        try { await getRes(bp); files.push({ file: cacheFile(bp), t, r, s: sc }); } catch (e) { log('子特效下载失败', bp, e.message); }
+      }
+      if (files.length) jobs[n] = { files, cs: [] };
+    });
+    const r = spawnSync(process.execPath, [join(HERE, 'child-lights.mjs')], { input: JSON.stringify(jobs), encoding: 'utf8', maxBuffer: 1 << 30, cwd: HERE });
+    if (r.stderr) log('读取失败', r.stderr.trim().split('\n').length, r.stderr.trim().split('\n')[0].slice(0, 200));
+    const got = JSON.parse(r.stdout || '{}');
+    const hulls = {}, types = {}, unh = {}, ies = new Set(); let lights = 0, noise = 0, anim = 0, spot = 0, nodes = 0; const animH = {};
+    for (const [h, g] of Object.entries(got)) {
+      for (const [t, c] of Object.entries(g.types)) types[t] = (types[t] || 0) + c;
+      for (const [t, c] of Object.entries(g.unhandled || {})) unh[t] = (unh[t] || 0) + c;
+      for (const L of g.lights) { lights++; if (L.na) noise++; if (L.a) anim++; if (L.dir) spot++; if (L.ies) ies.add(L.ies); }
+      nodes += g.graph?.n.length || 0;
+      if (g.lights.length) hulls[h] = g.lights.length;
+      if (g.lights.some((L) => L.a)) animH[h] = g.lights.filter((L) => L.a).length;
+    }
+    console.log(JSON.stringify({ hullsTotal: names.length, hullsWithChildLights: Object.keys(hulls).length, lights, spot, noise, anim, graphNodes: nodes, iesProfiles: ies.size, types, unhandled: unh }));
+    writeFileSync(join(OUT, '..', 'child-light-hulls.json'), JSON.stringify({ hulls, animH }));
+    return;
+  }
   // --probe 外观DNA：只打印这艘船的喷口参数（不写文件），排查用
   if (args.probe) {
     const v = await sof.BuildValuesFromDNA(String(args.probe));
@@ -203,6 +333,9 @@ async function main() {
     const hd = await sof.GetHullData(String(args.probe).split(':')[0]);
     console.log('hull keys', Object.keys(hd || {}).join(','));
     for (const k of ['children', 'childSets']) console.log(k, JSON.stringify(hd?.[k], (kk, v) => (ArrayBuffer.isView(v) ? undefined : v)).slice(0, 1500));
+    if (args.mat) for (const a of [...(v.mesh?.opaqueAreas || []), ...(v.mesh?.transparentAreas || [])]) console.log(a.name, a.effect?.effectFilePath, JSON.stringify((a.effect?.constParameters || []).map((x) => [x.name, Array.from(x.value || []).map((y) => +(+y).toFixed(4))])), JSON.stringify((a.effect?.resources || []).map((r) => [r.name, r.resourcePath])));
+    if (args.lights) console.log('LIGHTS', JSON.stringify(await lightsOf(v)).slice(0, 3000));
+    if (args.lights) for (const k of ['spriteSets', 'hullLightSets', 'spotlightSets', 'planeSets', 'spriteLineSets', 'hazeSets', 'bannerSets', 'banners']) console.log('LIGHT', k, JSON.stringify(hd?.[k], (kk, v) => (ArrayBuffer.isView(v) ? Array.from(v).map((x) => +(+x).toFixed(3)) : v)).slice(0, 3000));
     for (const k of Object.keys(hd || {})) if (/locator/i.test(k)) console.log(k, JSON.stringify(hd[k], (kk, v) => (ArrayBuffer.isView(v) ? Array.from(v).map((x) => +(+x).toFixed(2)) : v)).slice(0, 1500));
     return;
   }
@@ -248,6 +381,7 @@ async function main() {
   const index = existsSync(join(OUT, 'index.json')) ? JSON.parse(readFileSync(join(OUT, 'index.json'), 'utf8')) : { types: {}, models: {} };
   const geoDone = new Map();
   const locCache = new Map();
+  const childCache = new Map();   // 船体 → { jobs: [{ file, t, r, s }], keys: [外观键] }：子特效（.red / .black）里的灯，全部模型写完后统一读（child-lights.mjs）
   const texJobs = new Map();
   let ok = 0, bad = 0;
   for (const [dna, types] of byDna) {
@@ -261,7 +395,7 @@ async function main() {
         const file = join(OUT, 'g', hull + '.bin');
         geoDone.set(geo, existsSync(file) ? JSON.parse(readFileSync(file).subarray(8, 8 + readFileSync(file).readUInt32LE(4)).toString().trim().replace(/\0+$/, '')) : await writeGeometry(geo, file));
       }
-      const areas = [...(v.mesh.opaqueAreas || []), ...(v.mesh.transparentAreas || [])].map(areaOf).filter(Boolean);
+      const areas = [...(v.mesh.opaqueAreas || []), ...(v.mesh.transparentAreas || [])].map((a) => areaOf(a)).filter(Boolean);   // 不能直接 .map(areaOf)：下标会被当成 forceQuad
       for (const a of areas) {
         const set = JSON.stringify(a.tex);
         const tk = md5(set);
@@ -288,11 +422,42 @@ async function main() {
         locCache.set(hull, { file, keys: [] });
       }
       locCache.get(hull).keys.push(key);
+      // 子特效：船体 children 里 groupIndex −1（总是挂）的 + childSets 里 visibilityGroupName 为 primary（默认可见组）的，同一文件同一变换只算一次
+      if (!childCache.has(hull)) {
+        const items = [...(hd?.children || []).filter((c) => (c.groupIndex ?? -1) === -1), ...(hd?.childSets || []).filter((cs) => cs.visibilityGroupName === 'primary').flatMap((cs) => cs.items || [])];
+        const jobs = [], seenC = new Set();
+        for (const it of items) {
+          const bp = String(it.redFilePath || '').toLowerCase().replace(/\.red$/, '.black');
+          const t = Array.from(it.translation || [0, 0, 0]), r = Array.from(it.rotation || [0, 0, 0, 1]), sc = Array.from(it.scaling || [1, 1, 1]);
+          const sig = bp + JSON.stringify([t, r, sc]);
+          if (!bp || seenC.has(sig) || !hasRes(bp)) continue;
+          seenC.add(sig);
+          try { await getRes(bp); jobs.push({ file: cacheFile(bp), t, r, s: sc }); } catch (e) { log('子特效下载失败', bp, e.message); }
+        }
+        childCache.set(hull, { jobs, keys: [] });
+      }
+      childCache.get(hull).keys.push([key, dna]);
+      const lights = await lightsOf(v);
+      // 推进器灯（EveBoosterSet2::Add / EveBoosterUtilities AddBoosterLights）：每个喷口一盏点光，位置 = 喷口矩阵 × (0, 0, −lightOffset)，
+      //   基础半径 = max(|X 轴|, |Y 轴|) × lightScale；运行时 半径 × lerp(lightRadius, lightWarpRadius, 跃迁) × 推进强度，颜色 lerp(lightColor, lightWarpColor, 跃迁) × 闪动
+      //   行：kind 4，p0 = 相位（客户端 GenerateBoosterLightPhase 是 128 × rand；这里由外观键 + 序号哈希出来，重跑不变）
+      let bl = null;
+      if ((+BS.lightRadius > 0 || +BS.lightWarpRadius > 0) && (BS.items || []).length) {
+        bl = { r: +BS.lightRadius || 0, c: rgb(BS.lightColor), wr: +BS.lightWarpRadius || 0, wc: rgb(BS.lightWarpColor), fa: +(+BS.lightFlickerAmplitude || 0).toFixed(4), ff: +(+BS.lightFlickerFrequency || 0).toFixed(4) };
+        const off = +BS.lightOffset || 0;
+        for (const [bi, b] of BS.items.entries()) {
+          const m = b.transform;
+          const p = [m[12] - m[8] * off, m[13] - m[9] * off, m[14] - m[10] * off];
+          const R = Math.max(Math.hypot(m[0], m[1], m[2]), Math.hypot(m[4], m[5], m[6])) * (b.lightScale ?? 1);
+          if (R > 0) lights.push([...p, R, 0, 1, 1, 1, 0, 0, 0, 0, 0, 4, (parseInt(md5(key + bi).slice(0, 6), 16) / 0xffffff) * 128, 0, 0, 0].map((x) => +(+x).toFixed(4)));
+        }
+      }
       const model = {
         dna, geo: `g/${hull}.bin`, r: +(+v.boundingSphereRadius).toFixed(1), c: Array.from(v.boundingSphereCenter || [0, 0, 0]).map((x) => +(+x).toFixed(1)),
         areas, boosters, bst, loc, boosterColor: Array.from(v.boosters?.glowColor || [0.01, 0.02, 0.03]).slice(0, 3), cat: hd?.category || '',
         // 护盾外形椭球（SOF 船体 shapeEllipsoidCenter / Radius，客户端护盾受击特效贴在它上面）：[中心 xyz, 半轴 xyz]，米，船体坐标
         se: hd?.shapeEllipsoidRadius ? [...Array.from(hd.shapeEllipsoidCenter || [0, 0, 0]), ...Array.from(hd.shapeEllipsoidRadius)].map((x) => +(+x).toFixed(1)) : null,
+        ...(lights.length ? { lights } : {}), ...(bl ? { bl } : {}),
       };
       writeFileSync(join(OUT, 'm', key + '.json'), JSON.stringify(model));
       index.models[key] = { r: model.r };
@@ -329,6 +494,61 @@ async function main() {
         for (const k of v.keys) { const f = join(OUT, 'm', k + '.json'); const m = JSON.parse(readFileSync(f, 'utf8')); m.loc = got[h]; writeFileSync(f, JSON.stringify(m)); n++; }
       }
       log('定位点写入', n, '个外观');
+    }
+  }
+  // 子特效里的灯（child-lights.mjs：换算到船体坐标、按阵营色表求颜色、曲线动画）：
+  //   有噪声的是 kind 5（p0..p2 = noiseAmplitude、noiseFrequency、noiseOctaves）；带 IES 灯型的在第 19 列放 m.ies 里的序号 + 1
+  //   （m.ies：[[路径, 128 点强度]]，点 i 对应 u = (i + 0.5)/128，u = 0.5 − 0.5·cos）；
+  //   颜色 / 亮度 / 半径随曲线变的灯另记在 m.anim：{ sets, n（js/sim-curves.js 的绑定图）, la: [[行号, 绑定, 静态色, 静态亮度, 静态半径, 静态内半径, parentScale]] }
+  {
+    const csCache = new Map(), jobs = {};
+    for (const [, v] of childCache) {
+      if (!v.jobs.length) continue;
+      for (const [k, dna] of v.keys) {
+        if (!csCache.has(dna)) { let cs = []; try { cs = ((await sof.CreateDna(dna))?.GetColorSet() || []).map((c) => Array.from(c || [0, 0, 0, 0]).map(Number)); } catch (e) { log('阵营色表读取失败', dna, e.message); } csCache.set(dna, cs); }
+        jobs[k] = { files: v.jobs, cs: csCache.get(dna) };
+      }
+    }
+    const r = Object.keys(jobs).length ? spawnSync(process.execPath, [join(HERE, 'child-lights.mjs')], { input: JSON.stringify(jobs), encoding: 'utf8', maxBuffer: 1 << 30, cwd: HERE }) : { status: 0, stdout: '{}' };
+    if (r.status !== 0) log('子特效灯读取出错', (r.stderr || '').slice(0, 500));
+    else {
+      if (r.stderr) log('子特效灯：部分文件读取失败', r.stderr.trim().split('\n').length, '个，例如', r.stderr.trim().split('\n')[0].slice(0, 200));
+      const got = JSON.parse(r.stdout || '{}');
+      const iesCache = new Map();
+      const st = { models: 0, lights: 0, anim: 0, noise: 0, ies: 0, types: {}, unhandled: {} };
+      for (const [k, g] of Object.entries(got)) {
+        const f = join(OUT, 'm', k + '.json');
+        if (!existsSync(f)) continue;
+        for (const [t, c] of Object.entries(g.types)) st.types[t] = (st.types[t] || 0) + c;
+        for (const [t, c] of Object.entries(g.unhandled || {})) st.unhandled[t] = (st.unhandled[t] || 0) + c;
+        const m = JSON.parse(readFileSync(f, 'utf8'));
+        // 上面这次已重写过模型文件（只含 SOF 挂件的灯和推进器灯），子特效的灯接在后面
+        const rows = m.lights || [], ies = [], la = [];
+        let added = 0;
+        for (const L of g.lights) {
+          if (!(L.R > 0) || (!L.a && Math.max(...L.c) <= 0)) continue;
+          let pi = 0;
+          if (L.ies && L.dir) {
+            if (!iesCache.has(L.ies)) iesCache.set(L.ies, await iesProfile(L.ies));
+            const prof = iesCache.get(L.ies);
+            if (prof) { let at = ies.findIndex((x) => x[0] === L.ies); if (at < 0) at = ies.push([L.ies, prof]) - 1; pi = at + 1; st.ies++; }
+          }
+          const noise = L.na !== 0;
+          if (noise) st.noise++;
+          const row = [...L.p, L.R, L.ri, ...L.c, ...(L.dir || [0, 0, 0]), L.co, L.ci, noise ? 5 : 0, ...(noise ? [L.na, L.nf, L.no, 0] : [0, 0, 0, 0])];
+          if (pi) row.push(pi);
+          if (L.a) { la.push([rows.length, L.a.b, L.a.c0, L.a.br0, L.a.R0, L.a.ri0, L.a.ps]); st.anim++; }
+          rows.push(row.map((x) => +(+x).toFixed(4)));
+          added++;
+        }
+        if (!added) continue;
+        st.models++; st.lights += added;
+        m.lights = rows;
+        if (ies.length) m.ies = ies;
+        if (la.length && g.graph) m.anim = { ...g.graph, la };
+        writeFileSync(f, JSON.stringify(m));
+      }
+      log('子特效灯：', st.models, '个外观，', st.lights, '盏（随曲线变', st.anim, '，噪声', st.noise, '，IES', st.ies, '）类型', JSON.stringify(st.types), '未支持的曲线类型', JSON.stringify(st.unhandled));
     }
   }
 

@@ -3,7 +3,7 @@
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v18';
-import { initBr, renderBr } from './kb-br.js?v=v48';
+import { initBr, renderBr } from './kb-br.js?v=v49';
 import { gankSystemHtml, GANK_NOTE } from './kb-gank.js?v=v1';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
@@ -16,9 +16,14 @@ let app, kb;
 const API = '/api/kb/';
 const IMG = (path, size) => eveImage(path, size);   // 国服人物头像、军团 / 联盟图标在网易图片服务器
 const SRV = IS_TQ ? '' : 'server=' + SERVER.id;
-const VALUE_LABEL = IS_TQ ? '吉他中间价估值' : `${HUB.hub.name} 中间价估值`;
-const CN_PRICE_NOTE = `单项与总价值按${HUB.hub.name} 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取${SERVER.full}全服均价）。`;
-const PRICE_NOTE = !IS_TQ ? CN_PRICE_NOTE : '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）；旗舰等吉他没有卖单的物品，按全服公开合同扣除附带物品后的最低价估算。';
+// 估价口径跟着站点设置「击杀估价按吉他卖价」（modern-app 的 kbPrice，请求统一带 price=sell）
+const SELL = () => Boolean(window.__kbPriceSell);
+const HUB_NAME = IS_TQ ? '吉他' : HUB.hub.name;
+const valueLabel = () => `${HUB_NAME}${IS_TQ ? '' : ' '}${SELL() ? '卖价' : '中间价'}估值`;
+const CN_PRICE_NOTE_MID = `单项与总价值按${HUB.hub.name} 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取${SERVER.full}全服均价）。`;
+// 卖价口径：较早的击杀在后台补算卖价估值之前，暂按中间价
+const SELL_NOTE = `单项与总价值按${IS_TQ ? '吉他海4' : HUB.hub.name} 最低卖价估算（没有卖单时${IS_TQ ? '取全服公开合同最低价或全服均价' : '取全服均价'}）；较早的击杀还在后台补算卖价，补齐前按中间价。可在右上角个性化设置里切换。`;
+const PRICE_NOTE_MID = !IS_TQ ? CN_PRICE_NOTE_MID : '单项与总价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价）；旗舰等吉他没有卖单的物品，按全服公开合同扣除附带物品后的最低价估算。';
 const KIND_ZH = { character: '人物', corporation: '军团', alliance: '联盟' };
 // 子页面顶部的返回按钮，与战场统计页同款
 // 返回按钮：本次在击杀页里是从别的页（人物 / 军团 / 联盟、排行、会战…）点进来的，就退回上一页（浏览器后退，滚动位置等由各页自己处理）；
@@ -48,7 +53,7 @@ function noteTrail() {
 const S = {
   names: new Map(),          // 玩家角色 / 军团 / 联盟原名
   types: new Map(),
-  filters: { ships: [], locs: [], ents: [] },   // 首页击杀列表筛选，可多选：舰船 { id, name }、地点 { kind, id, name }、人物 / 军团 / 联盟 { kind, id, name }
+  filters: { ships: [], locs: [], ents: [], shipSide: 'losses' },   // shipSide：舰船筛选看「被击毁」(losses) 还是「参与击杀」(kills)   // 首页击杀列表筛选，可多选：舰船 { id, name }、地点 { kind, id, name }、人物 / 军团 / 联盟 { kind, id, name }
   fine: { min: 0, space: '', solo: false, npc: false, gank: false },   // 细筛选：最低价值、空间、单刷、排除 NPC 击杀、疑似强爆（只查本站收录）
   gank: { days: 30, seq: 0 },   // 高安强爆面板：统计天数、请求序号（只渲染最新一次）
   feed: [], cursor: null, feedSeq: 0, boardSeq: 0,
@@ -176,7 +181,7 @@ function openKill(id) {
   const focus = S.entity && ['character', 'corporation', 'alliance'].includes(S.entity.kind) ? { kind: S.entity.kind, id: Number(S.entity.id) } : null;
   kb.openKill(null, {
     focus,
-    priceNote: !IS_TQ ? CN_PRICE_NOTE : '总价值、掉落与摧毁价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价；旗舰等吉他没有卖单的物品按全服公开合同最低价）。',
+    priceNote: SELL() ? SELL_NOTE : !IS_TQ ? CN_PRICE_NOTE_MID : '总价值、掉落与摧毁价值按吉他海4 最低卖价与最高收购价的中间值估算（缺一侧时取另一侧，均无时取全服均价；旗舰等吉他没有卖单的物品按全服公开合同最低价）。',
     load: async () => {
       const data = await api('kill/' + id);
       absorbNames(data.names);
@@ -188,7 +193,7 @@ function openKill(id) {
           zkb: {
             totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed,
             solo: players.length === 1, npc: !players.length, awox: false, locationID: null,
-            valueLabel: VALUE_LABEL
+            valueLabel: valueLabel()
           }
         },
         prices: new Map(Object.entries(data.prices).map(([k, v]) => [Number(k), v]))
@@ -212,6 +217,11 @@ async function renderHome() {
       <section class="kb-section kb-feed-panel">
         <div class="kb-feed-head">
           <h3 class="kb-section-title">全部击杀记录</h3>
+          <div class="search-box kb-feed-search">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input type="search" id="kbFeedSearch" placeholder="筛选舰船 / 星系 / 星座 / 星域" autocomplete="off" spellcheck="false" aria-label="按舰船或地点筛选击杀记录">
+            <div class="kb-suggest" id="kbFeedSuggest" hidden></div>
+          </div>
           <div class="kb-filters" id="kbFilters"></div>
           <button class="btn btn-ghost" id="kbRefresh" title="刷新">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新</span>
@@ -230,6 +240,15 @@ async function renderHome() {
       </aside>
     </div>`;
   $('kbRefresh').addEventListener('click', () => { loadFeed(true); loadSummary(); });
+  // 击杀记录自己的搜索框：只搜舰船 / 星系 / 星座 / 星域（本地数据），选中就加进下面的筛选
+  const fin = $('kbFeedSearch');
+  const feedSearch = () => { const q = fin.value.trim().toLowerCase(); if (q.length < 1) { $('kbFeedSuggest').hidden = true; return; } renderSuggest({ ...localSearch(q), entities: [] }, true); };
+  fin.addEventListener('input', app.debounce(feedSearch, 120));
+  fin.addEventListener('focus', feedSearch);
+  fin.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { fin.value = ''; $('kbFeedSuggest').hidden = true; }
+    if (e.key === 'Enter') { $('kbFeedSuggest').querySelector('.kb-suggest-item')?.click(); e.preventDefault(); }
+  });
   startLive();
   $('kbMore').addEventListener('click', () => loadFeed(false));
   renderFilters();
@@ -251,7 +270,7 @@ async function loadSummary() {
       <div class="kb-summary-cards">
         <div class="valuation-card is-sell"><span class="valuation-label">最近 24 小时总损失</span>
           <strong class="valuation-value">${app.formatISK(day.value)}<span class="unit">ISK</span></strong>
-          <span class="valuation-detail">${VALUE_LABEL}</span></div>
+          <span class="valuation-detail">${valueLabel()}</span></div>
         <div class="valuation-card"><span class="valuation-label">击毁舰船</span>
           <strong class="valuation-value">${app.formatNumber(day.count - day.pods)}<span class="unit">艘</span></strong>
           <span class="valuation-detail">另有 ${app.formatNumber(day.pods)} 个太空舱</span></div>
@@ -305,6 +324,7 @@ function feedQuery() {
   // 同一类多选之间是「或」：几种船、几个地点、几个人里任一个；不同类之间是「且」
   const put = (key, list) => { if (list.length) q.set(key, list.map((x) => x.id).join(',')); };
   put('ship', f0.ships);
+  if (f0.ships.length && f0.shipSide === 'kills') q.set('ship_side', 'kills');
   for (const k of ['system', 'constellation', 'region']) put(k, f0.locs.filter((x) => x.kind === k));
   for (const k of ['character', 'corporation', 'alliance']) put(k, f0.ents.filter((x) => x.kind === k));
   const f = S.fine;
@@ -483,6 +503,8 @@ function renderFilters() {
   const chips = [];
   const f = S.filters;
   const x = (key, id) => `<button data-clear-filter="${key}:${id}" aria-label="移除">×</button>`;
+  // 舰船筛选的方向：这型船被击毁的击杀邮件 / 有人开这型船参与的击杀
+  if (f.ships.length) chips.push(`<span class="kb-seg kb-ship-side" role="group" aria-label="舰船筛选方向">${[['losses', '被击毁', '这型船是受害者（损失记录）'], ['kills', '参与击杀', '有人开这型船参与了击杀']].map(([k, l, tip]) => `<button type="button" data-ship-side="${k}" class="${f.shipSide === k ? 'active' : ''}" aria-pressed="${f.shipSide === k}" title="${tip}">${l}</button>`).join('')}</span>`);
   for (const s of f.ships) chips.push(`<span class="kb-chip"><img src="${IMG(`types/${s.id}/icon`, 32)}" alt="" width="16" height="16">${app.esc(s.name)}${x('ships', s.id)}</span>`);
   for (const l of f.locs) chips.push(`<span class="kb-chip">${{ region: '星域', constellation: '星座' }[l.kind] || '星系'} · ${app.esc(l.name)}${x('locs', l.id)}</span>`);
   for (const e of f.ents) chips.push(`<span class="kb-chip"><img src="${avatar(e.kind, e.id, 32)}" alt="" width="16" height="16">${app.esc(e.name)}${x('ents', e.id)}</span>`);
@@ -491,9 +513,24 @@ function renderFilters() {
 }
 
 // 筛选：add 加进同类（搜索框里逐个选，可多选）；set 只留这一个（点列表里的星系名等）；remove 去掉一个；all 全部清空
+function closeFeedSearch() {
+  const fin = $('kbFeedSearch');
+  if (fin) { fin.value = ''; $('kbFeedSuggest').hidden = true; }
+}
+// 顶部搜索选了舰船 / 地点：页面不换，滚到下方击杀记录并闪一下，让人知道结果在这里
+function revealFeed() {
+  requestAnimationFrame(() => {
+    const panel = document.querySelector('.kb-feed-panel');
+    if (!panel) return;
+    panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    panel.classList.remove('kb-flash');
+    void panel.offsetWidth;
+    panel.classList.add('kb-flash');
+  });
+}
 function setFilter(key, op, item) {
   const f = S.filters;
-  if (key === 'all') { f.ships = []; f.locs = []; f.ents = []; }
+  if (key === 'all') { f.ships = []; f.locs = []; f.ents = []; f.shipSide = 'losses'; }
   else if (op === 'remove') f[key] = f[key].filter((x) => x.id !== item);
   else if (op === 'set') f[key] = [item];
   else if (!f[key].some((x) => x.id === item.id)) f[key] = [...f[key], item];
@@ -762,7 +799,7 @@ function renderRankTable() {
       <tbody>${body || `<tr><td colspan="7" class="text-muted kb-empty">${r.filter ? `没有名称包含「${app.esc(r.filter)}」的${kind}` : '暂无数据'}</td></tr>`}</tbody>
     </table></div>
     ${pagerHtml(r.page, pages)}
-    <p class="text-muted valuation-note" title="${detail ? '每次击杀只计一次；效率 = 击毁 ÷（击毁 + 损失）；所属为最近一次出现时的军团 / 联盟。' : ''}${PRICE_NOTE}">价值为估算值</p>`;
+    <p class="text-muted valuation-note" title="${detail ? '每次击杀只计一次；效率 = 击毁 ÷（击毁 + 损失）；所属为最近一次出现时的军团 / 联盟。' : ''}${SELL() ? SELL_NOTE : PRICE_NOTE_MID}">价值为估算值</p>`;
 }
 
 // 导出 CSV：服务端分页（每次最多 100 条），按当前筛选从第 1 名起连续读取，最多导出前 EXPORT_MAX 名
@@ -1140,7 +1177,7 @@ function entityImageModel(e) {
   return {
     kind, kindLabel: KIND_ZH[kind], kindEn: KIND_EN[kind], round: kind === 'character',
     name: info.name || stats.name || partyName(id), avatar: avatar(kind, id, 256), subs, chips,
-    days: Math.round(stats.days || 30), valueLabel: VALUE_LABEL,
+    days: Math.round(stats.days || 30), valueLabel: valueLabel(),
     recent: {
       kills: num(stats.kills), losses: num(stats.losses), destroyed: isk(stats.destroyed), lost: isk(stats.lost), solo: num(stats.solo_kills), eff,
       finalBlows: stats.final_blows != null ? num(stats.final_blows) : null,
@@ -1156,7 +1193,7 @@ function entityImageModel(e) {
       icon: avatar(memberKind, s.id, 64), round: memberKind === 'character', name: s.name || partyName(s.id),
       detail: `参与击杀 ${num(s.kills)} · 损失 ${num(s.losses)}`, value: isk(s.destroyed)
     })),
-    footer: VALUE_LABEL,
+    footer: valueLabel(),
     generated: '生成于 ' + fullIn(Math.floor(Date.now() / 1000), 'cn') + ' UTC+8'
   };
 }
@@ -1239,7 +1276,7 @@ function entityParts(kind, id, { stats, info, lifetime, history }) {
       ${card('ISK 效率', lEff == null ? '—' : lEff.toFixed(1) + '%', '危险度 ' + (lifetime.dangerRatio ?? '—') + '% · 团战 ' + (lifetime.gangRatio ?? '—') + '%', 'is-total')}
     </div>`;
   }
-  const recentCards = `<h4 class="info-section-title${lifetimeCards ? ' section-gap' : ''}">最近 30 天<small>（${VALUE_LABEL}）</small></h4><div class="valuation-grid">
+  const recentCards = `<h4 class="info-section-title${lifetimeCards ? ' section-gap' : ''}">最近 30 天<small>（${valueLabel()}）</small></h4><div class="valuation-grid">
       ${card('参与击杀', app.formatNumber(stats.kills) + '<span class="unit">次</span>', '单刷 ' + app.formatNumber(stats.solo_kills) + ' 次', 'is-buy')}
       ${stats.final_blows != null ? card('最后一击', app.formatNumber(stats.final_blows) + '<span class="unit">次</span>', stats.kills ? '占参与击杀 ' + (stats.final_blows / stats.kills * 100).toFixed(0) + '%' : '', 'is-buy') : ''}
       ${card('损失', app.formatNumber(stats.losses) + '<span class="unit">次</span>', '', 'is-sell')}
@@ -1467,8 +1504,8 @@ function localSearch(q) {
   return { ships: pick(app.shipTypes(), 6), systems: pick(systems, 6), constellations: pick(constellations, 4), regions: pick(regions, 4) };
 }
 
-function renderSuggest({ entities, ships, systems, constellations, regions, aff }) {
-  const box = $('kbSuggest');
+function renderSuggest({ entities, ships, systems, constellations, regions, aff }, feed = false) {
+  const box = $(feed ? 'kbFeedSuggest' : 'kbSuggest');
   const group = (title, items) => items.length ? `<div class="kb-suggest-group">${title}</div>` + items.join('') : '';
   const ents = entities || [];
   const orgIcon = (k, oid) => oid ? `<img class="kb-suggest-org" src="${avatar(k, oid, 32)}" alt="" width="18" height="18" loading="lazy" title="${app.esc((k === 'alliance' ? '联盟：' : '军团：') + partyName(oid))}">` : '';
@@ -1476,13 +1513,15 @@ function renderSuggest({ entities, ships, systems, constellations, regions, aff 
   const byKind = (kind) => ents.filter((e) => e.category === kind).slice(0, 6).map((e) =>
     `<div class="kb-suggest-row"><button class="kb-suggest-item" data-pick-entity="${kind}:${e.id}"><img src="${avatar(kind, e.id, 32)}" alt="" width="22" height="22" loading="lazy"><span>${app.esc(e.name)}</span>${orgsOf(kind, e.id)}<small>${KIND_ZH[kind]}统计</small></button>
       <button class="kb-suggest-add" data-add-entity="${kind}:${e.id}" data-name="${app.esc(e.name)}" title="加入击杀列表筛选（可以选多个）">＋ 筛选</button></div>`);
-  const html =
-    (entities === null ? '<div class="kb-suggest-group">人物 / 军团 / 联盟 · 搜索中…</div>' :
-      group('人物', byKind('character')) + group('军团', byKind('corporation')) + group('联盟', byKind('alliance'))) +
-    group('舰船', ships.map((s) => `<button class="kb-suggest-item" data-pick-ship="${s.id}"><img src="${IMG(`types/${s.id}/icon`, 32)}" alt="" width="22" height="22" loading="lazy"><span>${app.esc(s.name)}</span><small>筛选击杀记录</small></button>`)) +
+  const ents2 = feed ? '' : entities === null ? '<div class="kb-suggest-group">人物 / 军团 / 联盟 · 搜索中…</div>' :
+    group('人物', byKind('character')) + group('军团', byKind('corporation')) + group('联盟', byKind('alliance'));
+  const places = group('舰船', ships.map((s) => `<button class="kb-suggest-item" data-pick-ship="${s.id}"><img src="${IMG(`types/${s.id}/icon`, 32)}" alt="" width="22" height="22" loading="lazy"><span>${app.esc(s.name)}</span><small>${feed ? '舰船' : '筛选下方击杀记录'}</small></button>`)) +
     group('星系', systems.map((s) => { const l = kb.systemLabel(s.id); return `<button class="kb-suggest-item" data-pick-location="system:${s.id}"><i style="background:${l.color}"></i><span>${app.esc(s.name)} <b style="color:${l.color}">${l.secText}</b></span><small>${app.esc(l.region)}</small></button>`; })) +
     group('星座', constellations.map((r) => `<button class="kb-suggest-item" data-pick-location="constellation:${r.id}"><i></i><span>${app.esc(r.name)}</span></button>`)) +
     group('星域', regions.map((r) => `<button class="kb-suggest-item" data-pick-location="region:${r.id}"><i></i><span>${app.esc(r.name)}</span></button>`));
+  // 顶部搜索：人物 / 军团 / 联盟会打开统计页；舰船和地点不换页，只加到下方「全部击杀记录」的筛选里，先说清楚
+  const note = !feed && places ? '<p class="kb-suggest-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12l7 7 7-7"/></svg>舰船、星系、星座、星域不换页，结果显示在下方「全部击杀记录」里</p>' : '';
+  const html = ents2 + note + places;
   box.innerHTML = html || '<p class="legend-empty">没有找到匹配项</p>';
   box.hidden = false;
 }
@@ -1515,7 +1554,7 @@ function route() {
 
 // ---------- 本地分析：频道成员名单 / 定向扫描（local-scan.js，首次打开时加载）----------
 async function renderLocalScan() {
-  const m = await import('./local-scan.js?v=v18');
+  const m = await import('./local-scan.js?v=v19');
   if (!location.hash.startsWith('#kb/local')) return;
   m.renderLocal($('kbMain'), {
     esc: app.esc, formatISK: app.formatISK, formatNumber: app.formatNumber, resolveNames: app.resolveNames, esiUrl: app.esiUrl, eveImage: IMG,
@@ -1621,7 +1660,10 @@ export function initKbPage(context) {
     else if (it.dataset.pickLocation) pushHistory('loc', it.dataset.pickLocation, name);
     else pushHistory('entity', it.dataset.pickEntity || it.dataset.addEntity, name);
   });
-  document.addEventListener('click', (e) => { if (!e.target.closest('.kb-search')) $('kbSuggest').hidden = true; });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.kb-search')) $('kbSuggest').hidden = true;
+    if (!e.target.closest('.kb-feed-search') && $('kbFeedSuggest')) $('kbFeedSuggest').hidden = true;
+  });
 
   $('kbView').addEventListener('click', (e) => {
     const addEnt = e.target.closest('[data-add-entity]');
@@ -1684,23 +1726,34 @@ export function initKbPage(context) {
       e.preventDefault();
       const [kind, id] = (loc.dataset.location || loc.dataset.pickLocation).split(':');
       const name = kind === 'system' ? kb.systemLabel(Number(id)).name : partyName(Number(id));
+      const fromTop = Boolean(loc.closest('#kbSuggest'));
       input.value = '';
       $('kbSuggest').hidden = true;
+      closeFeedSearch();
       setFilter('locs', loc.dataset.pickLocation ? 'add' : 'set', { kind, id: Number(id), name });
+      if (fromTop) revealFeed();
       return;
     }
     const ship = e.target.closest('[data-pick-ship]');
     if (ship) {
       const id = Number(ship.dataset.pickShip);
+      const fromTop = Boolean(ship.closest('#kbSuggest'));
       input.value = '';
       $('kbSuggest').hidden = true;
+      closeFeedSearch();
       setFilter('ships', 'add', { id, name: app.shipTypes().find((s) => s.id === id)?.name || typeName(id) });
+      if (fromTop) revealFeed();
       return;
     }
     const gd = e.target.closest('[data-gank-days]');
     if (gd) { S.gank.days = Number(gd.dataset.gankDays); loadGank(); return; }
     const fine = e.target.closest('[data-fine]');
     if (fine) { setFine(fine.dataset.fine); return; }
+    const sideBtn = e.target.closest('[data-ship-side]');
+    if (sideBtn) {
+      if (S.filters.shipSide !== sideBtn.dataset.shipSide) { S.filters.shipSide = sideBtn.dataset.shipSide; renderFilters(); loadFeed(true); }
+      return;
+    }
     const clear = e.target.closest('[data-clear-filter]');
     if (clear) { const [key, id] = clear.dataset.clearFilter.split(':'); setFilter(key, 'remove', Number(id)); return; }
     if (e.target.closest('[data-kb-home]')) {
@@ -1757,4 +1810,6 @@ export function initKbPage(context) {
     if (e.key === 'Enter' && e.target.matches('.kb-row')) openKill(Number(e.target.dataset.kill));
   });
   window.addEventListener('popstate', () => { if (!$('kbView').hidden && location.hash.startsWith('#kb')) route(); });
+  // 设置里换了击杀估价口径：丢掉预取的数据，正在看击杀页就按新口径重新读取
+  window.addEventListener('kb-price', () => { prefetched.clear(); if (!$('kbView').hidden && location.hash.startsWith('#kb')) route(); });
 }

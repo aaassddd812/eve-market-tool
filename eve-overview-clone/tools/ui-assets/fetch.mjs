@@ -53,7 +53,7 @@ const DIRS = [
 ];
 // 单个文件
 const SHARED = ['frame', 'framehover', 'windowframe', 'windowshadow', 'windowshapeandshadow', 'windowbuttongradient', 'windowbuttonshadow'].map((n) => `ui/texture/shared/${n}.png`);
-const CONTROL = ['approach', 'orbit', 'keep_at_distance', 'warp_to', 'align_to', 'target', 'look_at', 'show_info', 'launch_drones', 'recall_drones', 'engage_target', 'return_and_orbit', 'camera_track', 'camera_untrack'];
+const CONTROL = ['approach', 'orbit', 'keep_at_distance', 'warp_to', 'align_to', 'target', 'look_at', 'show_info', 'launch_drones', 'recall_drones', 'engage_target', 'return_and_orbit', 'camera_track', 'camera_untrack', 'jump_to'];
 const FILES = [
   ...SHARED,
   // 窗口图标（Neocom、窗口标题栏）

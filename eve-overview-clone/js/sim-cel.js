@@ -8,7 +8,7 @@
 //   这里先用程序化着色：按行星类型配色的分形噪声地表 / 气态条带、晨昏线、向阳边缘的大气辉光（配色是近似的，不是客户端数据）。
 // 空间站、星门：近处画游戏模型（sim-station.js）；小行星带：没有模型，只有总览图标（sim-3d 画）。
 import * as THREE from './vendor/three/three.module.min.js';
-import { createStations } from './sim-station.js?v=2';
+import { createStations } from './sim-station.js?v=9';
 
 const KM = 1 / 1000;
 const NEAR = 15000;   // 千米：再远就按比例拉近
@@ -17,8 +17,12 @@ const SUN_COL = { 45037: [5, 3.765, 2.608], 3799: [5, 4.451, 4.902], 3800: [6, 3
 const SUN_DEF = [5, 4.470588, 3.235294];
 // 有镜头光晕数据的恒星类型（和 sim-flare.js 的 FLARE_OF_SUN 一致）
 const FLARED = new Set([45037, 3799, 3800]);
-// 远处照船的光：同色相、饱和度减半、明度 1.5（客户端 sun.py 的 sunDiffuseColor）
+// 恒星 graphicID 的 albedoColor（只有粉色系恒星有；3799 = sun_pink_sun_small_01a）
+const SUN_ALB = { 3799: [2, 1.8118, 1.9608] };
+// 远处照船的光（客户端 sun.py 的 sunDiffuseColor = sunColorFar）：有 albedoColor 就直接用它（实机抓帧 (1.942, 1.855, 2.014) 即此），
+//   没有就取发光色的同色相、饱和度减半、明度 1.5。近处按距离往发光色插值的那部分（几个 AU 外不到 1%）不做
 export function sunLight(type) {
+  if (SUN_ALB[type]) return SUN_ALB[type].slice();
   const e = SUN_COL[type] || SUN_DEF, mx = Math.max(...e), mn = Math.min(...e), s = (mx - mn) / mx * 0.5;
   return e.map((x) => 1.5 * (1 - s * (mx - x) / (mx - mn || 1)));
 }

@@ -260,8 +260,11 @@ export function activate(i) {
   const T = st.rooms[g.to];
   if (!T) return;
   if (st.abyss) {
-    H.fade?.();
-    enterRoom(g.to);
+    // 客户端 JumpOutAbyssalBetween：看导管 → 进隧道 → 3.7 秒换到下一层（ApplyDestinationScene）→ 5 秒船重新出现
+    if (st.jumping) return;
+    st.jumping = true;
+    const to = g.to, go = () => { if (S.site === st) enterRoom(to); };
+    if (!H.jumpFx?.(i, { onMid: go, onEnd: () => { st.jumping = false; } })) { st.jumping = false; H.fade?.(); go(); }
     return;
   }
   const r = S.b.gateWarp(me, T.pos, roomName(st, g.to));

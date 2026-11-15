@@ -538,7 +538,7 @@ function mountView(host) {
   host.classList.remove('is-off');
   host.closest('.sim-stage')?.classList.remove('is-off');
   loadBar(0, 0);
-  import('./sim-3d.js?v=v80').then((m) => {
+  import('./sim-3d.js?v=v89').then((m) => {
     if (BT.host !== host || !host.isConnected) return;
     BT.view = m.createView(host, {
       onPick: (i) => { BT.sel = i; updateBattleUi(); },
@@ -2535,6 +2535,17 @@ export async function pilotRow(ship, fit = null, label = '', prep = null, o = {}
   Object.assign(row, { fit: r.fit, calc: r.calc, stats: r.stats, unit: r.unit });
   // 微型跃迁推进器：被扰频时要关掉；电脑船换成 off 的属性（sim-engine）
   if (r.mwd) row.unitOff = r.off;
-  return { row, off: r.off, prop: r.prop, variant: r.variant, mwd: r.mwd, modes: r.modes, mode: r.mode, modeCd: r.modeCd };
+  // 装备提示用：这件装备（槽位:序号）超载、装着这种弹药、这个舰船模式时整套装配的属性（同一份技能；按组合缓存）
+  const ovCache = new Map();
+  const ovCalc = (key, charge, mode = r.mode) => {
+    const k = `${key}|${charge || ''}|${mode || ''}`;
+    if (!ovCache.has(k)) {
+      const [s, i] = String(key).split(':');
+      const slots = { ...r.fit.slots, [s]: (r.fit.slots[s] || []).map((m, j) => (m && j === +i ? { ...m, state: 'overload', ...(charge ? { charge } : {}) } : m)) };
+      ovCache.set(k, ctx.FE.computeFit(ctx.data, { ...r.fit, slots, ...(mode ? { mode } : {}) }, skills));
+    }
+    return ovCache.get(k);
+  };
+  return { row, off: r.off, prop: r.prop, variant: r.variant, mwd: r.mwd, modes: r.modes, mode: r.mode, modeCd: r.modeCd, ovCalc };
 }
 export { shipSearch as pilotShipSearch };

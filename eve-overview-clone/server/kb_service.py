@@ -552,6 +552,43 @@ def iso(ts):
 
 
 # ---------------------------------------------------------------- 存储
+# ---------------- 击杀估价口径：中间价（默认，value 列）/ 卖价（value_sell 列，旧记录后台补齐前为 NULL，退回中间价）
+# 每个请求在 Handler.api 里按查询参数 price=sell 设好本线程的口径；SQL 里写 {V} / {KV}（k.别名）/ {SUMMARY_COLS}，格式化时按口径展开
+PRICE_MODE = threading.local()
+
+
+def sell_mode():
+    return getattr(PRICE_MODE, "sell", False)
+
+
+class _ByMode:
+    """f-string 里按当前线程的估价口径展开成不同 SQL 片段"""
+    def __init__(self, mid, sell):
+        self.mid, self.sell = mid, sell
+
+    def __format__(self, spec):
+        return self.sell if sell_mode() else self.mid
+
+    __str__ = lambda self: self.__format__("")
+
+
+def keep_mode(fn):
+    """交给后台线程的计算沿用当前请求的估价口径"""
+    m = sell_mode()
+
+    def run(*a, **k):
+        PRICE_MODE.sell = m
+        try:
+            return fn(*a, **k)
+        finally:
+            PRICE_MODE.sell = False
+    return run
+
+
+V = _ByMode("value", "COALESCE(value_sell, value)")
+KV = _ByMode("k.value", "COALESCE(k.value_sell, k.value)")
+
+
 SCHEMA = """
 PRAGMA auto_vacuum=INCREMENTAL;
 PRAGMA journal_mode=WAL;
@@ -573,6 +610,7 @@ CREATE INDEX IF NOT EXISTS att_char ON attackers(char, time);
 CREATE INDEX IF NOT EXISTS att_corp ON attackers(corp, time);
 CREATE INDEX IF NOT EXISTS att_alliance ON attackers(alliance, time);
 CREATE INDEX IF NOT EXISTS att_km ON attackers(km);
+CREATE INDEX IF NOT EXISTS att_ship ON attackers(ship, time);
 CREATE TABLE IF NOT EXISTS names(id INTEGER PRIMARY KEY, name TEXT, category TEXT, lname TEXT);
 CREATE TABLE IF NOT EXISTS prices(type_id INTEGER PRIMARY KEY, sell REAL, buy REAL, avg REAL);
 -- 各贸易中心与全宇宙（hub = 0）的最低卖价 / 最高收购价
@@ -614,6 +652,9 @@ class Store:
         conn.executescript(SCHEMA)
         if "dmg" not in {r[1] for r in conn.execute("PRAGMA table_info(attackers)")}:
             conn.execute("ALTER TABLE attackers ADD COLUMN dmg INTEGER")
+        # 卖价估值：新入库的击杀同时算好；旧记录由 Workers.sell_backfill_loop 逐条向 ESI 重取补齐
+        if "value_sell" not in {r[1] for r in conn.execute("PRAGMA table_info(killmails)")}:
+            conn.execute("ALTER TABLE killmails ADD COLUMN value_sell REAL")
         conn.commit()
         self.prices = {}
         self.adjusted = {}
@@ -716,17 +757,44 @@ class Store:
             return avg
         return one or avg or 0.0
 
-    def item_value(self, item):
+    # ---------------- 卖价估值：吉他（国服为本服交易中心）最低卖价
+    def price_sell(self, type_id, contracts=True):
+        p = self.prices.get(type_id)
+        cp = self.contract_prices.get(type_id) if contracts else None
+        if not p:
+            return cp or 0.0
+        sell, buy, avg = p
+        if sell:
+            # 天价卖单（远高于全服均价）当挂单异常，改用均价；和中间价口径的处理一致
+            if avg and buy and sell > buy * 10 and sell > avg * 10:
+                return avg
+            return sell
+        if cp:                                   # 不能上市场的物品（旗舰等）：公开合同最低价
+            return cp
+        if buy and avg and buy * 10 < avg:
+            return avg
+        return buy or avg or 0.0
+
+    def price_by_mode(self, type_id, contracts=True):
+        return self.price_sell(type_id, contracts) if sell_mode() else self.price(type_id, contracts)
+
+    def item_value(self, item, price=None):
+        price = price or self.price
         qty = (item.get("quantity_destroyed") or 0) + (item.get("quantity_dropped") or 0)
-        unit = 0.0 if item.get("singleton") == 2 else self.price(item["item_type_id"])  # 蓝图副本不计价
+        unit = 0.0 if item.get("singleton") == 2 else price(item["item_type_id"])  # 蓝图副本不计价
         total = unit * qty
         for child in item.get("items") or []:
-            total += self.item_value(child)
+            total += self.item_value(child, price)
         return total
 
-    def km_value(self, km):
+    def km_value(self, km, price=None):
+        price = price or self.price
         v = km["victim"]
-        return self.price(v["ship_type_id"]) + sum(self.item_value(it) for it in v.get("items") or [])
+        return price(v["ship_type_id"]) + sum(self.item_value(it, price) for it in v.get("items") or [])
+
+    def km_values(self, km):
+        """(中间价估值, 卖价估值)"""
+        return self.km_value(km), self.km_value(km, self.price_sell)
 
     # ---------------- 写入
     def ingest(self, kms, live=False):
@@ -758,7 +826,7 @@ class Store:
                 players = [a for a in attackers if a.get("character_id")]
                 km_rows.append((
                     kid, km_hash, t, km["solar_system_id"], self.system_regions.get(km["solar_system_id"]),
-                    v["ship_type_id"], self.km_value(km), len(attackers), int(len(players) == 1), int(not players),
+                    v["ship_type_id"], *self.km_values(km), len(attackers), int(len(players) == 1), int(not players),
                     v.get("character_id"), v.get("corporation_id"), v.get("alliance_id"),
                     final.get("character_id"), final.get("corporation_id"), final.get("alliance_id"), final.get("ship_type_id")))
                 for a in players:
@@ -776,7 +844,8 @@ class Store:
                     for eid in (a.get("character_id"), a.get("corporation_id"), a.get("alliance_id")):
                         if eid and eid not in self.known_names:
                             self.pending_names.add(eid)
-            c.executemany("INSERT OR IGNORE INTO killmails VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", km_rows)
+            c.executemany("INSERT OR IGNORE INTO killmails(id, hash, time, system_id, region_id, ship_type, value, value_sell, attackers, solo, npc, "
+                          "v_char, v_corp, v_alliance, f_char, f_corp, f_alliance, f_ship) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", km_rows)
             c.executemany("INSERT INTO attackers(km, time, char, corp, alliance, ship, dmg) VALUES(?,?,?,?,?,?,?)", att_rows)
             c.executemany("INSERT OR REPLACE INTO km_fits(id, ship, time, fit) VALUES(?,?,?,?)", fit_rows)
             c.commit()
@@ -787,7 +856,9 @@ class Store:
                     if row[2] >= fresh:          # zKill 偶尔补录多年前的击杀，不当作“新击杀”推送
                         self.live_n += 1
                         # 带上 hash：击杀预警的游戏内邮件要用 killReport:ID:HASH 链接
-                        self.live_buf.append((self.live_n, {**row_summary(row[:1] + row[2:]), "hash": row[1], "att": live_att.get(row[0], ([], []))[0], "ao": live_att.get(row[0], ([], []))[1]}))
+                        # row：id, hash, time, …, value, value_sell, …；row_summary 要的是 id, time, …, value, attackers…（去掉 hash 与 value_sell）
+                        self.live_buf.append((self.live_n, {**row_summary(row[:1] + row[2:7] + row[8:]), "value_sell": round(row[7] or 0, 2),
+                                                            "hash": row[1], "att": live_att.get(row[0], ([], []))[0], "ao": live_att.get(row[0], ([], []))[1]}))
         return added
 
     def prune(self):
@@ -817,7 +888,7 @@ class Workers:
             self.prices_ready.set()
 
     def start(self):
-        for target in (self.price_loop, self.contract_loop, self.bp_contract_loop, self.backfill, self.live_loop, self.names_loop):
+        for target in (self.price_loop, self.contract_loop, self.bp_contract_loop, self.backfill, self.live_loop, self.names_loop, self.sell_backfill_loop):
             threading.Thread(target=target, daemon=True).start()
 
     # ---- 价格：伏尔戈全量订单 → 吉他 4-4 最低卖 / 最高收；随后读全宇宙订单 → 其余贸易中心与全宇宙的最低卖 / 最高收
@@ -1035,14 +1106,14 @@ class Workers:
             kid, km_hash, old = row
             try:
                 km, _ = get_json(f"{ESI}/killmails/{kid}/{km_hash}/", timeout=20, retries=2)
-                return kid, self.store.km_value(km), old
+                return kid, self.store.km_values(km), old
             except Exception:
                 return kid, None, old
 
         with concurrent.futures.ThreadPoolExecutor(8) as pool:
-            results = [r for r in pool.map(revalue, rows) if r[1] is not None and abs(r[1] - r[2]) > 1]
+            results = [r for r in pool.map(revalue, rows) if r[1] is not None and abs(r[1][0] - r[2]) > 1]
         with self.store.write_lock:
-            c.executemany("UPDATE killmails SET value = ? WHERE id = ?", [(round(v, 2), kid) for kid, v, _ in results])
+            c.executemany("UPDATE killmails SET value = ?, value_sell = ? WHERE id = ?", [(round(v[0], 2), round(v[1], 2), kid) for kid, v, _ in results])
             c.commit()
         return len(results)
 
@@ -1182,6 +1253,87 @@ class Workers:
         self.store.prune()
         self.store.state["backfill"] = "完成"
 
+    # ---- 卖价估值补齐：value_sell 列加上之前入库的击杀（入库时只算了中间价，原文不保存）
+    # 国际服先按天用 EVE Ref 存档整天补（一天一个包，比逐条请求 ESI 省得多），存档里没有的、以及国服，逐条向 ESI 取原文。
+    # 按当前价格估值（不是入库那天的价格）；慢慢跑，不和实时收录抢资源
+    def sell_backfill_loop(self):
+        self.prices_ready.wait()
+        time.sleep(120)
+        while True:
+            try:
+                left = self.sell_backfill_once()
+            except Exception:
+                log.exception("卖价估值补齐失败")
+                left = 1
+            self.store.state["sell_backfill"] = f"剩 {left} 条" if left else "完成"
+            time.sleep(600 if left else 6 * 3600)
+
+    def sell_pending(self):
+        return self.store.conn().execute("SELECT COUNT(*) FROM killmails WHERE value_sell IS NULL").fetchone()[0]
+
+    def sell_update(self, rows):
+        if not rows:
+            return
+        with self.store.write_lock:
+            c = self.store.conn()
+            c.executemany("UPDATE killmails SET value_sell = ? WHERE id = ? AND value_sell IS NULL", rows)
+            c.commit()
+
+    def sell_backfill_once(self):
+        c = self.store.conn()
+        if not self.sell_pending():
+            return 0
+        if self.store.server == "tq":
+            days = [r[0] for r in c.execute("SELECT DISTINCT time / 86400 FROM killmails WHERE value_sell IS NULL ORDER BY 1 DESC")]
+            for d in days:
+                day = dt.date(1970, 1, 1) + dt.timedelta(days=d)
+                if self.store.meta(f"sellfill:{day}"):
+                    continue
+                need = {r[0] for r in c.execute("SELECT id FROM killmails WHERE time >= ? AND time < ? AND value_sell IS NULL", (d * 86400, d * 86400 + 86400))}
+                self.store.state["sell_backfill"] = f"按 EVE Ref 存档补 {day}（{len(need)} 条）"
+                try:
+                    body, _ = http_get(EVEREF.format(year=day.year, date=day.isoformat()), timeout=180)
+                except Exception as e:
+                    log.warning("卖价补齐：EVE Ref %s 不可用：%s", day, e)
+                    continue
+                rows = []
+                with tarfile.open(fileobj=io.BytesIO(body), mode="r:bz2") as tar:
+                    for member in tar:
+                        if not member.isfile() or not member.name.endswith(".json"):
+                            continue
+                        km = json.load(tar.extractfile(member))
+                        if km.get("killmail_id") in need:
+                            rows.append((round(self.store.km_value(km, self.store.price_sell), 2), km["killmail_id"]))
+                            if len(rows) >= 2000:
+                                self.sell_update(rows)
+                                rows = []
+                self.sell_update(rows)
+                del body
+                self.store.meta(f"sellfill:{day}", 1)
+                log.info("卖价估值补齐：%s 存档处理完", day)
+                time.sleep(20)
+        # 逐条：存档里没有的（当天存档还没出、zKill 后补录的）和国服
+        while True:
+            rows = c.execute("SELECT id, hash FROM killmails WHERE value_sell IS NULL AND hash IS NOT NULL ORDER BY time DESC LIMIT 200").fetchall()
+            if not rows:
+                break
+            self.store.state["sell_backfill"] = f"逐条补，剩 {self.sell_pending()} 条"
+
+            def one(r):
+                try:
+                    km, _ = get_json(self.store.esi_url(f"/killmails/{r[0]}/{r[1]}/"), timeout=20, retries=2)
+                    return round(self.store.km_value(km, self.store.price_sell), 2), r[0]
+                except Exception:
+                    return None
+            with concurrent.futures.ThreadPoolExecutor(4) as pool:
+                got = [x for x in pool.map(one, rows) if x]
+            self.sell_update(got)
+            if len(got) < len(rows) // 2:
+                break                                # ESI 大面积失败：下一轮再试
+            time.sleep(3)
+        # 没有 hash、取不到原文的只能按中间价（查询里 COALESCE 退回 value）
+        return self.sell_pending()
+
     # ---- 实时：zKillboard R2Z2 优先，不可用时轮询各星域
     def live_loop(self):
         if self.live_mode == "off":
@@ -1290,7 +1442,7 @@ class CnWorkers(Workers):
         self.pending = collections.deque(maxlen=CN_PENDING)
 
     def start(self):
-        for target in (self.price_loop, self.queue_loop, self.ingest_loop, self.names_loop):
+        for target in (self.price_loop, self.queue_loop, self.ingest_loop, self.names_loop, self.sell_backfill_loop):
             threading.Thread(target=target, daemon=True).start()
 
     def refresh_prices(self):
@@ -1379,7 +1531,8 @@ class CnWorkers(Workers):
 
 
 # ---------------------------------------------------------------- 查询
-SUMMARY_COLS = "id, time, system_id, region_id, ship_type, value, attackers, solo, npc, v_char, v_corp, v_alliance, f_char, f_corp, f_alliance, f_ship"
+SUMMARY_COLS = _ByMode("id, time, system_id, region_id, ship_type, value, attackers, solo, npc, v_char, v_corp, v_alliance, f_char, f_corp, f_alliance, f_ship",
+                       "id, time, system_id, region_id, ship_type, COALESCE(value_sell, value), attackers, solo, npc, v_char, v_corp, v_alliance, f_char, f_corp, f_alliance, f_ship")
 ENTITY_COL = {"character": ("v_char", "char"), "corporation": ("v_corp", "corp"), "alliance": ("v_alliance", "alliance")}
 
 
@@ -1400,7 +1553,7 @@ def id_list(q, key):
     return [int(x) for x in str(q.get(key) or "").split(",") if x.strip()][:50]
 
 
-def zkill_path(q, side):
+def zkill_path(q, side, ship_side="losses"):
     """把列表筛选条件换成 zKillboard 查询路径；没有任何筛选时返回 None（zKillboard 不支持全局翻页）。
     多选（同一类里多个，或地点 / 人物各混了几种）zKillboard 表达不了「或」，也返回 None，只查本地收录"""
     for group in (("ship",), ("system", "constellation", "region"), tuple(ENTITY_COL)):
@@ -1410,6 +1563,14 @@ def zkill_path(q, side):
     if not mods:
         return None
     entity = any(q.get(k) for k in ENTITY_COL)
+    # zKillboard 的 kills/ losses/ 前缀对路径里全部实体（含 shipTypeID）一起生效；
+    # 舰船要按方向筛（本地 ship 是受害者舰船 / ship_side=kills 是攻击者舰船），人物又要另一个方向时表达不了，只查本地
+    if q.get("ship"):
+        if entity and side in ("kills", "losses") and side != ship_side:
+            return None
+        if entity and side not in ("kills", "losses"):
+            return None
+        return ship_side + "/" + mods
     prefix = side + "/" if entity and side in ("kills", "losses") else ""
     return prefix + mods
 
@@ -1476,6 +1637,7 @@ class Api:
         return self.names_for(ids)
 
     def cached(self, key, fn, force=False):
+        key = (key, sell_mode())                 # 中间价 / 卖价两种口径分开缓存
         hit = self.store.cache.get(key)
         if hit and not force and time.time() - hit[0] < CACHE_TTL:
             return hit[1]
@@ -1493,6 +1655,13 @@ class Api:
                     for by in ENTITY_COL:
                         for metric in ("value", "count"):
                             self.leaderboard({"side": side, "by": by, "metric": metric, "days": "30", "limit": "20"}, force=True)
+                # 卖价口径：首页两块也预先算好（排行按需再算）
+                PRICE_MODE.sell = True
+                try:
+                    self.summary({"hours": "24"}, force=True)
+                    self.top({"days": "7", "limit": "14"}, force=True)
+                finally:
+                    PRICE_MODE.sell = False
             except Exception:
                 log.exception("预计算失败")
             time.sleep(CACHE_TTL - 60)
@@ -1514,6 +1683,8 @@ class Api:
         else:
             items = [x for x in buf if x[0] > after][-50:]
         kills = [k for _, k in items]
+        if sell_mode():
+            kills = [{**k, "value": k.get("value_sell", k["value"])} for k in kills]
         return {"cursor": latest, "kills": kills, "names": self.with_names(kills)}
 
     # GET /battles?window=60&min=20：疑似会战（时间窗内同一星系被击毁的舰船数，不含太空舱、NPC 击杀与价值 < BATTLE_MIN_VALUE 的击杀）；
@@ -1538,7 +1709,7 @@ class Api:
                     if start - t > BATTLE_GAP:
                         break
                     start = t
-                r = c.execute(f"""SELECT region_id, COUNT(*), SUM(value), MIN(time), MAX(time) FROM killmails
+                r = c.execute(f"""SELECT region_id, COUNT(*), SUM({V}), MIN(time), MAX(time) FROM killmails
                                   WHERE system_id = ? AND {base}""", (sys_id, start)).fetchone()
                 if r[1] >= min_kills:
                     rows.append((sys_id, start) + tuple(r))
@@ -1558,24 +1729,24 @@ class Api:
                                                          WHERE km IN ({km_sql}) GROUP BY e""", (sys_id, since)):
                     if eid:
                         side_of(eid, is_alliance)["kills"] = n
-                for eid, is_alliance, n, v in c.execute(f"""SELECT COALESCE(v_alliance, v_corp) e, v_alliance IS NOT NULL, COUNT(*), SUM(value) FROM killmails
+                for eid, is_alliance, n, v in c.execute(f"""SELECT COALESCE(v_alliance, v_corp) e, v_alliance IS NOT NULL, COUNT(*), SUM({V}) FROM killmails
                                                             WHERE system_id = ? AND {base} GROUP BY e""", (sys_id, since)):
                     if eid:
                         side = side_of(eid, is_alliance)
                         side["losses"], side["lost"] = n, round(v or 0, 2)
                 top_sides = sorted(sides.values(), key=lambda x: x["kills"] + x["losses"], reverse=True)[:4]
-                top = c.execute(f"SELECT id, ship_type, value FROM killmails WHERE system_id = ? AND {base} ORDER BY value DESC LIMIT 1",
+                top = c.execute(f"SELECT id, ship_type, {V} FROM killmails WHERE system_id = ? AND {base} ORDER BY {V} DESC LIMIT 1",
                                 (sys_id, since)).fetchone()
                 ids += [x["id"] for x in top_sides]
                 out.append({"system_id": sys_id, "region_id": region, "kills": kills, "value": round(value or 0, 2),
                             "start": iso(start), "end": iso(end), "pilots": pilots, "sides": top_sides,
                             "top": {"id": top[0], "ship_type_id": top[1], "value": round(top[2] or 0, 2)} if top else None})
             return {"window": window, "min": min_kills, "battles": out, "names": self.names_for(ids)}
-        hit = self.store.cache.get(("battles", window, min_kills))
+        hit = self.store.cache.get(("battles", window, min_kills, sell_mode()))
         if hit and time.time() - hit[0] < BATTLE_CACHE:   # 多个页面同时轮询时短时间内复用结果
             return hit[1]
         value = run()
-        self.store.cache[("battles", window, min_kills)] = (time.time(), value)
+        self.store.cache[("battles", window, min_kills, sell_mode())] = (time.time(), value)
         return value
 
     # GET /battles/history?days=30：最近 N 天全部疑似会战（同一星系相邻击杀间隔 ≤ 20 分钟连成一段，段内任意 60 分钟击毁 ≥ 20 艘才算；口径同 /battles）。
@@ -1584,20 +1755,20 @@ class Api:
     # 每方统计势力、人数、损失（艘 / ISK）、击毁（艘 / ISK），战损比 = 击毁 ÷（击毁 + 损失）。结果缓存 10 分钟，过期后先返回旧结果、后台重算。
     def battle_history(self, q):
         days = min(max(int(q.get("days", 30)), 1), 30)
-        key = ("battle_history", days)
+        key = ("battle_history", days, sell_mode())
         hit = self.bh_cache.get(key)
         if hit and time.time() - hit[0] < BATTLE_HISTORY_CACHE:
             return hit[1]
         if hit:
             with self.bh_lock:
-                if not self.bh_busy.get(days):
-                    self.bh_busy[days] = True
+                if not self.bh_busy.get(key):
+                    self.bh_busy[key] = True
                     def bg():
                         try:
                             self.bh_cache[key] = (time.time(), self._battle_history(days))
                         finally:
-                            self.bh_busy[days] = False
-                    threading.Thread(target=bg, daemon=True).start()
+                            self.bh_busy[key] = False
+                    threading.Thread(target=keep_mode(bg), daemon=True).start()
             return hit[1]
         with self.bh_lock:
             hit = self.bh_cache.get(key)   # 另一个请求可能刚算完
@@ -1610,7 +1781,7 @@ class Api:
     def _battle_history(self, days):
         c = self.store.conn()
         since = int(time.time() - days * 86400)
-        rows = c.execute(f"""SELECT id, time, system_id, region_id, ship_type, value, v_char, COALESCE(v_alliance, v_corp), v_alliance IS NOT NULL
+        rows = c.execute(f"""SELECT id, time, system_id, region_id, ship_type, {V}, v_char, COALESCE(v_alliance, v_corp), v_alliance IS NOT NULL
                              FROM killmails WHERE time >= ? AND npc = 0 AND ship_type NOT IN (670, 33328) AND value >= {BATTLE_MIN_VALUE}
                              ORDER BY system_id, time""", (since,)).fetchall()
         # 按星系切段
@@ -1640,7 +1811,7 @@ class Api:
             # 这样列表里分出的几方和点进「战场统计」后自动分出的一致；损失 / 击毁统计仍只算会战口径的击杀
             t0 = seg[0][1] // 60 * 60 - 600
             t1 = -(-seg[-1][1] // 60) * 60 + 600
-            full = c.execute("""SELECT id, v_char, COALESCE(v_alliance, v_corp), v_alliance IS NOT NULL, value FROM killmails
+            full = c.execute(f"""SELECT id, v_char, COALESCE(v_alliance, v_corp), v_alliance IS NOT NULL, {V} FROM killmails
                                 WHERE system_id = ? AND time >= ? AND time < ? AND npc = 0""", (seg[0][2], t0, t1)).fetchall()
             kms = [r[0] for r in full]
             att = collections.defaultdict(list)    # km -> [(char, 势力, 是否联盟)]
@@ -1748,7 +1919,7 @@ class Api:
         days = min(max(int(q.get("days", 180)), 1), 180)
         if self.store.retention:
             days = min(days, self.store.retention)
-        key = (cid, days)
+        key = (cid, days, sell_mode())
         if not hasattr(self, "pb_cache"):
             self.pb_cache = collections.OrderedDict()   # 按人物缓存，最多 500 个
         hit = self.pb_cache.get(key)
@@ -1757,7 +1928,7 @@ class Api:
         c = self.store.conn()
         since = int(time.time() - days * 86400)
         ev = []   # (时间, 星系, 击杀 id, 舰船, 是否损失, 价值, 势力, 势力是否联盟)
-        for km, t, sysid, ship, val, ent, is_al in c.execute("""SELECT id, time, system_id, ship_type, value, COALESCE(v_alliance, v_corp), v_alliance IS NOT NULL FROM killmails
+        for km, t, sysid, ship, val, ent, is_al in c.execute(f"""SELECT id, time, system_id, ship_type, {V}, COALESCE(v_alliance, v_corp), v_alliance IS NOT NULL FROM killmails
                                                           WHERE v_char = ? AND time >= ? AND npc = 0""", (cid, since)):
             ev.append((t, sysid, km, ship, True, val or 0, ent, is_al))
         for km, t, sysid, ship, ent, is_al in c.execute("""SELECT a.km, a.time, k.system_id, a.ship, COALESCE(a.alliance, a.corp), a.alliance IS NOT NULL FROM attackers a JOIN killmails k ON k.id = a.km
@@ -1774,7 +1945,7 @@ class Api:
             clusters.append(cur)
         out, ids = [], []
         for cl in clusters:
-            rows = c.execute(f"""SELECT id, time, system_id, region_id, ship_type, value FROM killmails
+            rows = c.execute(f"""SELECT id, time, system_id, region_id, ship_type, {V} FROM killmails
                                  WHERE system_id = ? AND time >= ? AND time <= ? AND npc = 0 AND ship_type NOT IN (670, 33328) AND value >= {BATTLE_MIN_VALUE}
                                  ORDER BY time""", (cl[0][1], cl[0][0] - 6 * 3600, cl[-1][0] + 6 * 3600)).fetchall()
             segs, seg = [], []
@@ -1837,7 +2008,7 @@ class Api:
             raise ValueError("结束时间必须晚于开始时间")
         if end - start > BR_MAX_HOURS * 3600:
             raise ValueError(f"时间段最长 {BR_MAX_HOURS} 小时")
-        key = ("br", tuple(systems), start, end)
+        key = ("br", tuple(systems), start, end, sell_mode())
         hit = self.store.cache.get(key)
         # 已经结束的时间段结果不会再变，缓存久一点；包含当前时间的只缓存 30 秒
         ttl = CACHE_TTL if end < time.time() - 3600 else 30
@@ -1845,7 +2016,7 @@ class Api:
             return hit[1]
         c = self.store.conn()
         marks = ",".join("?" * len(systems))
-        rows = c.execute(f"""SELECT id, time, system_id, ship_type, value, v_char, v_corp, v_alliance, hash, f_char FROM killmails
+        rows = c.execute(f"""SELECT id, time, system_id, ship_type, {V}, v_char, v_corp, v_alliance, hash, f_char FROM killmails
                              WHERE system_id IN ({marks}) AND time >= ? AND time < ? AND npc = 0
                              ORDER BY time LIMIT ?""", (*systems, start, end, BR_MAX_KILLS + 1)).fetchall()
         truncated = len(rows) > BR_MAX_KILLS
@@ -1977,7 +2148,11 @@ class Api:
         where, args = [], []
         marks = lambda n: ",".join("?" * n)
         ships = id_list(q, "ship")
-        if ships:
+        # 舰船筛选的方向：losses（默认）= 这型船被击毁；kills = 有人开这型船参与了击杀（玩家攻击者）
+        ship_side = "kills" if q.get("ship_side") == "kills" else "losses"
+        if ships and ship_side == "kills":
+            where.append(f"id IN (SELECT km FROM attackers WHERE ship IN ({marks(len(ships))}))"); args += ships
+        elif ships:
             where.append(f"ship_type IN ({marks(len(ships))})"); args += ships
         # 地点可多选（星系 / 星座 / 星域混选），任一个都算
         locs, loc_args = [], []
@@ -1995,7 +2170,7 @@ class Api:
         # 细筛选（只查本地收录的记录，不转向 zKillboard）：最低价值、单刷、排除 NPC 击杀、空间类型
         fine = False
         if q.get("min"):
-            where.append("value>=?"); args.append(float(q["min"])); fine = True
+            where.append(f"{V}>=?"); args.append(float(q["min"])); fine = True
         if q.get("solo") == "1":
             where.append("solo=1"); fine = True
         if q.get("npc") == "0":
@@ -2026,7 +2201,7 @@ class Api:
             where.append("(" + " OR ".join(ents) + ")"); args += ent_args
         # 开放接口（_local）只查本地保留期内的记录，不转向 zKillboard
         # 国服没有 zKillboard，只有本地收录的记录
-        path = None if q.get("_local") or fine or self.store.server != "tq" else zkill_path(q, side)
+        path = None if q.get("_local") or fine or self.store.server != "tq" else zkill_path(q, side, ship_side)
         cursor = q.get("cursor") or ""
         if cursor.startswith("z:"):
             if not path:
@@ -2135,7 +2310,7 @@ class Api:
         return {
             "id": km["killmail_id"], "time": km["killmail_time"], "system_id": km["solar_system_id"],
             "region_id": self.store.system_regions.get(km["solar_system_id"]), "ship_type_id": v["ship_type_id"],
-            "value": round(self.store.km_value(km), 2), "attackers": len(attackers), "solo": len(players) == 1, "npc": not players,
+            "value": round(self.store.km_value(km, self.store.price_by_mode), 2), "attackers": len(attackers), "solo": len(players) == 1, "npc": not players,
             "victim": {"character_id": v.get("character_id"), "corporation_id": v.get("corporation_id"), "alliance_id": v.get("alliance_id")},
             "final": {"character_id": final.get("character_id"), "corporation_id": final.get("corporation_id"),
                       "alliance_id": final.get("alliance_id"), "ship_type_id": final.get("ship_type_id")},
@@ -2149,7 +2324,7 @@ class Api:
 
         def run():
             rows = self.store.conn().execute(
-                f"SELECT {SUMMARY_COLS} FROM killmails WHERE time >= ? ORDER BY value DESC LIMIT ?",
+                f"SELECT {SUMMARY_COLS} FROM killmails WHERE time >= ? ORDER BY {V} DESC LIMIT ?",
                 (int(time.time() - days * 86400), limit)).fetchall()
             kills = [row_summary(r) for r in rows]
             return {"kills": kills, "names": self.with_names(kills)}
@@ -2185,7 +2360,7 @@ class Api:
         sid = int(q["system"])
         since, span = self.gank_span(days)
         c = self.store.conn()
-        rows = c.execute(f"SELECT k.id, k.time, k.value, k.ship_type FROM killmails k WHERE k.system_id=? AND k.time>=? AND {GANK_EXISTS.format(k='k')} "
+        rows = c.execute(f"SELECT k.id, k.time, {KV}, k.ship_type FROM killmails k WHERE k.system_id=? AND k.time>=? AND {GANK_EXISTS.format(k='k')} "
                          "ORDER BY k.time DESC", (sid, since)).fetchall()
         hours = [set() for _ in range(24)]
         week = [[0] * 24 for _ in range(7)]
@@ -2222,21 +2397,22 @@ class Api:
                 "names": self.names_for([g["id"] for g in out_groups])}
 
     def gank_hotspots(self, days):
-        hit = self.gank_hot.get(days)
+        key = (days, sell_mode())
+        hit = self.gank_hot.get(key)
         if hit and time.time() - hit[0] < GANK_HOT_TTL:
             return hit[1]
         with self.gank_lock:
-            busy = days in self.gank_busy
-            self.gank_busy.add(days)
+            busy = key in self.gank_busy
+            self.gank_busy.add(key)
         if not busy:
             def bg():
                 try:
-                    self.gank_hot[days] = (time.time(), self._gank_hotspots(days))
+                    self.gank_hot[key] = (time.time(), self._gank_hotspots(days))
                 except Exception:
                     log.exception("统计高安强爆热点失败")
                 finally:
-                    self.gank_busy.discard(days)
-            threading.Thread(target=bg, daemon=True).start()
+                    self.gank_busy.discard(key)
+            threading.Thread(target=keep_mode(bg), daemon=True).start()
         return hit[1] if hit else {"computing": True}
 
     def _gank_hotspots(self, days):
@@ -2245,7 +2421,7 @@ class Api:
         c = self.store.conn()
         # 从 NPC 击毁的玩家舰船出发，找同星系、前后几分钟内他参与的玩家击杀（比逐条判断全部击杀快得多）
         # CROSS JOIN 固定连接顺序：SQLite 自己选的顺序会全表扫 attackers，慢上百倍
-        rows = c.execute("""SELECT DISTINCT k.id, k.system_id, k.time, k.value FROM killmails x
+        rows = c.execute(f"""SELECT DISTINCT k.id, k.system_id, k.time, {KV} FROM killmails x
             CROSS JOIN attackers a ON a.char=x.v_char AND a.time BETWEEN x.time-600 AND x.time+600
             CROSS JOIN killmails k ON k.id=a.km
             WHERE x.npc=1 AND x.v_char IS NOT NULL AND x.time>=? AND k.system_id=x.system_id AND k.npc=0""", (since - 600,)).fetchall()
@@ -2269,15 +2445,15 @@ class Api:
             now = int(time.time())
             since = now - hours * 3600
             c = self.store.conn()
-            n, total = c.execute("SELECT COUNT(*), COALESCE(SUM(value), 0) FROM killmails WHERE time >= ?", (since,)).fetchone()
+            n, total = c.execute(f"SELECT COUNT(*), COALESCE(SUM({V}), 0) FROM killmails WHERE time >= ?", (since,)).fetchone()
             buckets = [{"hour": iso(since + i * 3600), "count": 0, "value": 0.0} for i in range(hours)]
             for idx, cnt, val in c.execute(
-                    "SELECT (time - ?) / 3600 AS b, COUNT(*), SUM(value) FROM killmails WHERE time >= ? GROUP BY b", (since, since)):
+                    f"SELECT (time - ?) / 3600 AS b, COUNT(*), SUM({V}) FROM killmails WHERE time >= ? GROUP BY b", (since, since)):
                 if 0 <= idx < hours:
                     buckets[idx]["count"], buckets[idx]["value"] = cnt, round(val, 2)
             pods = c.execute("SELECT COUNT(*) FROM killmails WHERE time >= ? AND ship_type IN (670, 33328)", (since,)).fetchone()[0]
             regions = [{"region_id": r, "count": cnt, "value": round(v, 2)} for r, cnt, v in c.execute(
-                "SELECT region_id, COUNT(*), SUM(value) FROM killmails WHERE time >= ? GROUP BY region_id ORDER BY SUM(value) DESC LIMIT 5", (since,))]
+                f"SELECT region_id, COUNT(*), SUM({V}) FROM killmails WHERE time >= ? GROUP BY region_id ORDER BY SUM({V}) DESC LIMIT 5", (since,))]
             return {"hours": hours, "count": n, "value": round(total, 2), "pods": pods, "buckets": buckets, "regions": regions}
         return self.cached(("summary", hours), run, force)
 
@@ -2302,7 +2478,7 @@ class Api:
             if detail and out:
                 extra_ids = self.leaderboard_detail(out, by, side, since)
                 c = self.store.conn()
-                n, total = c.execute("SELECT COUNT(*), COALESCE(SUM(value), 0) FROM killmails WHERE time >= ?", (since,)).fetchone()
+                n, total = c.execute(f"SELECT COUNT(*), COALESCE(SUM({V}), 0) FROM killmails WHERE time >= ?", (since,)).fetchone()
                 result["total"] = {"count": n, "value": round(total, 2)}
             names = self.names_for([r["id"] for r in out] + extra_ids)
             for r in out:
@@ -2318,15 +2494,15 @@ class Api:
         order = "n" if metric == "count" else "v"
         tail = f"ORDER BY {order} DESC" + (" LIMIT ?" if limit else "")
         if side == "losses":
-            return f"SELECT {vcol}, COUNT(*) n, SUM(value) v FROM killmails WHERE time >= ? AND {vcol} IS NOT NULL GROUP BY {vcol} {tail}"
+            return f"SELECT {vcol}, COUNT(*) n, SUM({V}) v FROM killmails WHERE time >= ? AND {vcol} IS NOT NULL GROUP BY {vcol} {tail}"
         return f"""SELECT eid, COUNT(*) n, SUM(value) v FROM (
-                    SELECT DISTINCT a.km, a.{acol} AS eid, k.value FROM attackers a NOT INDEXED JOIN killmails k ON k.id = a.km
+                    SELECT DISTINCT a.km, a.{acol} AS eid, {KV} AS value FROM attackers a NOT INDEXED JOIN killmails k ON k.id = a.km
                     WHERE a.time >= ? AND a.{acol} IS NOT NULL)
                   GROUP BY eid {tail}"""
 
     # 完整排名（不限条数），供分页；只在内存里保留最近用过的几种组合
     def leaderboard_full(self, days, side, by, metric, force=False):
-        key = (days, side, by, metric)
+        key = (days, side, by, metric, sell_mode())
         with self.lb_lock:
             hit = self.lb_full.get(key)
             if hit and not force and time.time() - hit[0] < CACHE_TTL:
@@ -2366,7 +2542,7 @@ class Api:
                 r["name"] = names.get(r["id"])
             if first:
                 first["name"] = names.get(first["id"])
-            n, total = c.execute("SELECT COUNT(*), COALESCE(SUM(value), 0) FROM killmails WHERE time >= ?", (since,)).fetchone()
+            n, total = c.execute(f"SELECT COUNT(*), COALESCE(SUM({V}), 0) FROM killmails WHERE time >= ?", (since,)).fetchone()
             return {"side": side, "by": by, "metric": metric, "days": days, "offset": offset, "limit": limit, "q": text,
                     "entities": len(ids), "matched": len(idx), "first": first,
                     "side_total": {"count": int(sum(counts)), "value": round(sum(values), 2)},
@@ -2382,10 +2558,10 @@ class Api:
         marks = ",".join("?" * len(ids))
         kills = {eid: (n, v) for eid, n, v in c.execute(
             f"""SELECT eid, COUNT(*), SUM(value) FROM (
-                  SELECT DISTINCT a.km, a.{acol} AS eid, k.value FROM attackers a JOIN killmails k ON k.id = a.km
+                  SELECT DISTINCT a.km, a.{acol} AS eid, {KV} AS value FROM attackers a JOIN killmails k ON k.id = a.km
                   WHERE a.{acol} IN ({marks}) AND a.time >= ?) GROUP BY eid""", (*ids, since))}
         losses = {eid: (n, v) for eid, n, v in c.execute(
-            f"SELECT {vcol}, COUNT(*), SUM(value) FROM killmails WHERE {vcol} IN ({marks}) AND time >= ? GROUP BY {vcol}", (*ids, since))}
+            f"SELECT {vcol}, COUNT(*), SUM({V}) FROM killmails WHERE {vcol} IN ({marks}) AND time >= ? GROUP BY {vcol}", (*ids, since))}
         # 最近一次出现时的所属（受害者与攻击者两边取较晚的一条；SQLite 的 MAX() 聚合会带出同一行的其它列）
         aff = {}
         if by != "alliance":
@@ -2443,9 +2619,9 @@ class Api:
             since = int(time.time() - days * 86400)
             vcol, acol = ENTITY_COL[kind]
             c = self.store.conn()
-            losses, lost = c.execute(f"SELECT COUNT(*), COALESCE(SUM(value),0) FROM killmails WHERE {vcol}=? AND time >= ?", (eid, since)).fetchone()
+            losses, lost = c.execute(f"SELECT COUNT(*), COALESCE(SUM({V}),0) FROM killmails WHERE {vcol}=? AND time >= ?", (eid, since)).fetchone()
             kills, destroyed = c.execute(
-                f"SELECT COUNT(*), COALESCE(SUM(value),0) FROM killmails WHERE time >= ? AND id IN (SELECT km FROM attackers WHERE {acol}=? AND time >= ? AND char IS NOT NULL)",
+                f"SELECT COUNT(*), COALESCE(SUM({V}),0) FROM killmails WHERE time >= ? AND id IN (SELECT km FROM attackers WHERE {acol}=? AND time >= ? AND char IS NOT NULL)",
                 (since, eid, since)).fetchone()
             solo = c.execute(f"SELECT COUNT(*) FROM killmails WHERE time >= ? AND solo=1 AND id IN (SELECT km FROM attackers WHERE {acol}=? AND time >= ? AND char IS NOT NULL)",
                              (since, eid, since)).fetchone()[0]
@@ -2462,11 +2638,11 @@ class Api:
                 stats = {}
                 for mid, n, v in c.execute(
                         f"""SELECT eid, COUNT(*), SUM(value) FROM (
-                              SELECT DISTINCT a.km, a.{mcol} AS eid, k.value FROM attackers a JOIN killmails k ON k.id = a.km
+                              SELECT DISTINCT a.km, a.{mcol} AS eid, {KV} AS value FROM attackers a JOIN killmails k ON k.id = a.km
                               WHERE a.{acol}=? AND a.time >= ? AND a.char IS NOT NULL AND a.{mcol} IS NOT NULL)
                             GROUP BY eid""", (eid, since)):
                     stats[mid] = {"id": mid, "kills": n, "destroyed": round(v or 0, 2), "losses": 0, "lost": 0.0}
-                for mid, n, v in c.execute(f"SELECT {mv}, COUNT(*), SUM(value) FROM killmails WHERE {vcol}=? AND time >= ? AND {mv} IS NOT NULL GROUP BY {mv}", (eid, since)):
+                for mid, n, v in c.execute(f"SELECT {mv}, COUNT(*), SUM({V}) FROM killmails WHERE {vcol}=? AND time >= ? AND {mv} IS NOT NULL GROUP BY {mv}", (eid, since)):
                     s = stats.setdefault(mid, {"id": mid, "kills": 0, "destroyed": 0.0, "losses": 0, "lost": 0.0})
                     s["losses"], s["lost"] = n, round(v or 0, 2)
                 names = self.names_for(list(stats))
@@ -2485,9 +2661,9 @@ class Api:
             result["systems"] = [{"system_id": r, "count": n} for r, n in systems]
             # 最贵的击杀与损失（分享图片用）
             result["top_losses"] = [row_summary(r) for r in c.execute(
-                f"SELECT {SUMMARY_COLS} FROM killmails WHERE {vcol}=? AND time >= ? ORDER BY value DESC LIMIT 5", (eid, since))]
+                f"SELECT {SUMMARY_COLS} FROM killmails WHERE {vcol}=? AND time >= ? ORDER BY {V} DESC LIMIT 5", (eid, since))]
             result["top_kills"] = [row_summary(r) for r in c.execute(
-                f"SELECT {SUMMARY_COLS} FROM killmails WHERE time >= ? AND id IN (SELECT km FROM attackers WHERE {acol}=? AND time >= ? AND char IS NOT NULL) ORDER BY value DESC LIMIT 5",
+                f"SELECT {SUMMARY_COLS} FROM killmails WHERE time >= ? AND id IN (SELECT km FROM attackers WHERE {acol}=? AND time >= ? AND char IS NOT NULL) ORDER BY {V} DESC LIMIT 5",
                 (since, eid, since))]
             result["names"] = self.with_names(result["top_kills"] + result["top_losses"])
             result["name"] = self.names_for([eid]).get(eid)
@@ -2506,7 +2682,7 @@ class Api:
         out, todo = {}, []
         with self.pilot_lock:
             for cid in ids:
-                hit = self.pilot_cache.get(cid)
+                hit = self.pilot_cache.get((cid, sell_mode()))
                 if hit and now - hit[0] < CACHE_TTL:
                     out[cid] = hit[1]
                 else:
@@ -2515,9 +2691,9 @@ class Api:
         for cid in todo:
             sub = "SELECT km FROM attackers WHERE char=? AND time >= ?"
             kills, destroyed, solo, gang, last_k = c.execute(
-                f"SELECT COUNT(*), COALESCE(SUM(value),0), COALESCE(SUM(solo),0), AVG(attackers), MAX(time) FROM killmails WHERE time >= ? AND id IN ({sub})",
+                f"SELECT COUNT(*), COALESCE(SUM({V}),0), COALESCE(SUM(solo),0), AVG(attackers), MAX(time) FROM killmails WHERE time >= ? AND id IN ({sub})",
                 (since, cid, since)).fetchone()
-            losses, lost, last_l = c.execute("SELECT COUNT(*), COALESCE(SUM(value),0), MAX(time) FROM killmails WHERE v_char=? AND time >= ?", (cid, since)).fetchone()
+            losses, lost, last_l = c.execute(f"SELECT COUNT(*), COALESCE(SUM({V}),0), MAX(time) FROM killmails WHERE v_char=? AND time >= ?", (cid, since)).fetchone()
             # 全部开过的船（前端按舰船分组判断角色定位：诱导 / 轻拦 / 重拦 / 火力 / 后勤 / 特种；前 3 种显示为常用船）
             ships = c.execute("SELECT ship, COUNT(DISTINCT km) n FROM attackers WHERE char=? AND time >= ? AND ship IS NOT NULL GROUP BY ship ORDER BY n DESC LIMIT 40",
                               (cid, since)).fetchall()
@@ -2536,7 +2712,7 @@ class Api:
                    "recent_losses": [[i, h] for i, h in lr]}
             out[cid] = row
             with self.pilot_lock:
-                self.pilot_cache[cid] = (now, row)
+                self.pilot_cache[(cid, sell_mode())] = (now, row)
                 while len(self.pilot_cache) > PILOT_CACHE:
                     self.pilot_cache.popitem(last=False)
         return {"days": 30, "pilots": {str(cid): out[cid] for cid in ids}}
@@ -2557,12 +2733,12 @@ class Api:
         since = int(time.time() - days * 86400)
         conn = self.store.conn()
         if kills:
-            rows = conn.execute(f"SELECT id, hash, time, value FROM killmails WHERE ship_type=? AND id IN ({','.join('?' * len(kills))}) ORDER BY time DESC",
+            rows = conn.execute(f"SELECT id, hash, time, {V} FROM killmails WHERE ship_type=? AND id IN ({','.join('?' * len(kills))}) ORDER BY time DESC",
                                 (ship, *kills)).fetchall()
             total = len(rows)
         else:
             total = conn.execute("SELECT COUNT(*) FROM killmails WHERE ship_type=? AND time>=?", (ship, since)).fetchone()[0]
-            rows = conn.execute("SELECT id, hash, time, value FROM killmails WHERE ship_type=? AND time>=? ORDER BY time DESC LIMIT ?",
+            rows = conn.execute(f"SELECT id, hash, time, {V} FROM killmails WHERE ship_type=? AND time>=? ORDER BY time DESC LIMIT ?",
                                 (ship, since, limit)).fetchall()
         have = {}
         if rows:
@@ -2642,7 +2818,7 @@ class Api:
         def build():
             since = int(time.time()) - days * 86400
             rows = self.store.conn().execute(
-                "SELECT system_id, COUNT(*), SUM(value), SUM(npc), MAX(time) FROM killmails "
+                f"SELECT system_id, COUNT(*), SUM({V}), SUM(npc), MAX(time) FROM killmails "
                 "WHERE time >= ? AND system_id >= 31000000 AND system_id < 32000000 GROUP BY system_id", (since,)).fetchall()
             return {"days": days, "updated": iso(time.time()), "fields": ["kills", "value", "npc_kills", "last"],
                     "systems": {str(r[0]): [r[1], round(r[2] or 0), r[3] or 0, iso(r[4])] for r in rows}}
@@ -2697,7 +2873,8 @@ class Api:
         return {"updated": updated, "all": {str(t): [v["o"][0][0] if v["o"] else None, v["c"][0][0] if v["c"] else None] for t, v in data.items()}}
 
     def kill(self, kid, q):
-        row = self.store.conn().execute("SELECT value, hash FROM killmails WHERE id=?", (kid,)).fetchone()
+        row = self.store.conn().execute("SELECT value, hash, value_sell FROM killmails WHERE id=?", (kid,)).fetchone()
+        stored = row is not None
         # 本地不存击杀原文（省空间），详情按需从 ESI 获取；ESI 的击杀邮件永不变化，放进内存缓存
         with self.km_lock:
             km = self.km_cache.get(kid)
@@ -2714,13 +2891,24 @@ class Api:
                 km = data[0]
                 with self.km_lock:
                     self.km_cache[kid] = km
-            row = (self.store.km_value(km), (km.get("zkb") or {}).get("hash"))
+            row = (self.store.km_value(km, self.store.price_by_mode), (km.get("zkb") or {}).get("hash"), None)
         elif km is None:
             km, _ = get_json(self.store.esi_url(f"/killmails/{kid}/{row[1]}/"), timeout=20, retries=2)
             with self.km_lock:
                 self.km_cache[kid] = km
                 while len(self.km_cache) > KM_CACHE:
                     self.km_cache.popitem(last=False)
+        # 已入库、还没补上卖价估值的：原文都拿到了，顺手补上（后台补齐任务就少一条）
+        if stored and row[2] is None:
+            sell = round(self.store.km_value(km, self.store.price_sell), 2)
+            with self.store.write_lock:
+                c = self.store.conn()
+                c.execute("UPDATE killmails SET value_sell = ? WHERE id = ? AND value_sell IS NULL", (sell, kid))
+                c.commit()
+            row = (row[0], row[1], sell)
+        if stored and sell_mode():
+            row = (row[2], row[1], row[2])   # 卖价口径：用库里的卖价估值（入库时的价格），和列表里显示的一致
+        price = self.store.price_by_mode
         types = {km["victim"]["ship_type_id"]}
         dropped = destroyed = 0.0
 
@@ -2728,17 +2916,17 @@ class Api:
             nonlocal dropped, destroyed
             for it in items:
                 types.add(it["item_type_id"])
-                unit = 0.0 if it.get("singleton") == 2 else self.store.price(it["item_type_id"])
+                unit = 0.0 if it.get("singleton") == 2 else price(it["item_type_id"])
                 dropped += unit * (it.get("quantity_dropped") or 0)
                 destroyed += unit * (it.get("quantity_destroyed") or 0)
                 walk(it.get("items") or [])
         walk(km["victim"].get("items") or [])
-        destroyed += self.store.price(km["victim"]["ship_type_id"])  # 船体视为摧毁
+        destroyed += price(km["victim"]["ship_type_id"])  # 船体视为摧毁
         ids = [km["victim"].get(k) for k in ("character_id", "corporation_id", "alliance_id")]
         for a in km.get("attackers") or []:
             ids += [a.get("character_id"), a.get("corporation_id"), a.get("alliance_id")]
         return {"killmail": km, "hash": row[1], "value": round(row[0] or 0, 2), "dropped": round(dropped, 2), "destroyed": round(destroyed, 2),
-                "prices": {t: round(self.store.price(t), 2) for t in types}, "names": self.names_for(ids)}
+                "prices": {t: round(price(t), 2) for t in types}, "price_mode": "sell" if sell_mode() else "mid", "names": self.names_for(ids)}
 
 
 # ---------------------------------------------------------------- 制造计算（开放接口用，公式与前端 js/industry.js 一致，技能按全 5 级）
@@ -9506,6 +9694,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.send_json(500, {"error": "服务器内部错误"})
 
         def do_POST(self):
+            PRICE_MODE.sell = False
             # 钱包成交存档、设置云同步；其余是唯一的写入型开放接口：深渊装备导入 / 刷新估价（转发到 MutaMarket，按 IP 单独限流）
             url = urllib.parse.urlparse(self.path)
             if url.path.startswith("/api/kb/relay/"):
@@ -9611,6 +9800,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
 
         def do_GET(self):
             url = urllib.parse.urlparse(self.path)
+            PRICE_MODE.sell = False                   # 长连接复用线程：每个请求从默认口径开始
             if url.path.startswith("/api/kb/relay/"):
                 return self.relay("GET")
             if url.path == "/api/v1" or url.path.startswith("/api/v1/"):
@@ -9631,6 +9821,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
             q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
             parts = [p for p in url.path[len("/api/kb/"):].split("/") if p]
             key = "/".join(parts)
+            PRICE_MODE.sell = q.get("price") == "sell"   # 击杀估价口径（站点全局设置），本请求内的查询都按它
             try:
                 if key in KB_ROUTES:
                     return self.send_json(200, kb[kb_server(q)][key](q))
