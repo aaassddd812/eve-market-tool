@@ -113,8 +113,10 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
 .sw{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:0}
 
 /* 底部 */
-.hourly{height:210px}
+.hourly{height:344px}
 #hourChart{flex:1}
+.nu-head{font-size:12px;color:var(--sub);margin:4px 4px 0;font-weight:600}
+#newUserChart{flex:0 0 148px}
 .hlg{display:flex;align-items:center;gap:6px}
 .hlg .dl{cursor:pointer;user-select:none;padding:1px 7px;border:1px solid transparent;border-radius:4px;transition:opacity .2s,border-color .2s}
 .hlg .dl:hover{border-color:var(--line)}
@@ -228,6 +230,8 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
 <section class="card panel hourly">
   <h2>近24小时按小时访问 <span class="extra hlg"><span class="dl" id="lgToday" data-day="today"><i class="sw" style="background:var(--orange)"></i>今天</span><span class="dl" id="lgYest" data-day="yesterday"><i class="sw" style="background:rgba(246,130,31,.3)"></i>昨天</span><span class="rq"><i class="dash"></i>请求</span></span></h2>
   <div id="hourChart"></div>
+  <div class="nu-head">新用户 · 每小时首次出现的浏览器</div>
+  <div id="newUserChart"></div>
 </section>
 
 <script src="static/echarts.min.js?v=2"></script>
@@ -259,6 +263,7 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
   var mapChart = echarts.init($('map'), null, {renderer:'canvas'});
   var provChart = echarts.init($('provBar'));
   var hourChart = echarts.init($('hourChart'));
+  var ncChart = echarts.init($('newUserChart'));
   var mapReady = false;
 
   fetch('static/china.json?v=2').then(function(r){ return r.json(); }).then(function(geo){
@@ -323,6 +328,18 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
     $('lgToday').classList.toggle('off', day === 'yesterday');
     $('lgYest').classList.toggle('off', day === 'today');
   }
+  ncChart.setOption({
+    grid:{left:8, right:8, top:10, bottom:0, containLabel:true},
+    tooltip: Object.assign({trigger:'axis', axisPointer:{type:'line', lineStyle:{color:'rgba(22,22,26,.18)', width:1}}, formatter:function(ps){
+      var x = hourly[ps[0].dataIndex]; if (!x) return '';
+      return '<b>' + (x.day === 'today' ? '今天' : '昨天') + ' ' + x.hour + '时</b><br/>新用户 <span style="font-family:'+MONO+'">' + (x.newu || 0) + '</span>';
+    }}, tip),
+    xAxis:{type:'category', axisLine:{show:false}, axisTick:{show:false}, axisLabel:{show:false}, data:[]},
+    yAxis:{type:'value', splitNumber:2, axisLine:{show:false}, axisTick:{show:false}, axisLabel:{color:C.axis, fontSize:10}},
+    series:[{id:'newu', name:'新用户', type:'line', smooth:.35, showSymbol:true, symbol:'circle', symbolSize:4,
+      lineStyle:{width:2, color:'#2f9e6e'}, itemStyle:{color:'#2f9e6e'}, areaStyle:{color:'rgba(47,158,110,.10)'}, data:[]}]
+  });
+
   hourChart.setOption({
     grid:{left:8, right:8, top:16, bottom:2, containLabel:true},
     tooltip: Object.assign({trigger:'axis', axisPointer:{type:'line', lineStyle:{color:'rgba(22,22,26,.18)', width:1}}, formatter:function(ps){
@@ -364,13 +381,14 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
   // 容器尺寸会随数据填充（热门页面、实时流等）在首次渲染后变化，仅监听 window.resize 不够：
   // provChart 在 init 时容器偏高，canvas 被定成 445px，之后容器缩到 ~130px 只露出前 2 行。
   // 用 ResizeObserver 跟随容器实际尺寸重算 canvas，并按新高度重排省份条数。
-  window.addEventListener('resize', function(){ mapChart.resize(); provChart.resize(); hourChart.resize(); });
+  window.addEventListener('resize', function(){ mapChart.resize(); provChart.resize(); hourChart.resize(); ncChart.resize(); });
   if (window.ResizeObserver){
     var ro = new ResizeObserver(function(entries){
       entries.forEach(function(en){
         var el = en.target;
         if (el.id === 'map') mapChart.resize();
         else if (el.id === 'hourChart') hourChart.resize();
+        else if (el.id === 'newUserChart') ncChart.resize();
         else if (el.id === 'provBar'){ provChart.resize(); if (last) renderProv(last); }
       });
     });
@@ -467,6 +485,8 @@ header{display:flex;flex-wrap:wrap;gap:6px 16px;align-items:center;justify-conte
     hourChart.setOption({xAxis:{data:hourly.map(function(x){ return x.date + ' ' + x.hour; })},
       series:[{id:'u_yesterday', data:pick('yesterday','users', true)}, {id:'r_yesterday', data:pick('yesterday','requests', true)},
               {id:'u_today', data:pick('today','users')}, {id:'r_today', data:pick('today','requests')}]});
+    ncChart.setOption({xAxis:{data:hourly.map(function(x){ return x.date + ' ' + x.hour; })},
+      series:[{id:'newu', data:hourly.map(function(x){ return x.newu || 0; })}]});
   }
 
   var BZ = false;

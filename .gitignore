@@ -28,3 +28,4 @@ screen/known_ips.json
 screen/*.log
 screen/new_events.jsonl
 screen/cids.json
+screen/cid_new.jsonl

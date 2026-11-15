@@ -21,7 +21,8 @@ CST = timezone(timedelta(hours=8))
 DAU_TOTAL = "/opt/eve/stats/dau_total.json"
 KNOWN_IPS = os.path.join(BASE, "known_ips.json")
 NEW_EVENTS = os.path.join(BASE, "new_events.jsonl")
-CID_FILE = os.path.join(BASE, "cids.json")          # 浏览器匿名ID名册（真实使用人数）   # 新 IP 发现时刻持久化，重启后 new_count_24h 不丢
+CID_FILE = os.path.join(BASE, "cids.json")
+CID_NEW_FILE = os.path.join(BASE, "cid_new.jsonl")   # 新用户（cid首次出现）时刻，按小时画图用          # 浏览器匿名ID名册（真实使用人数）   # 新 IP 发现时刻持久化，重启后 new_count_24h 不丢
 
 BOT = re.compile(r"bot|spider|crawl|curl|wget|python|go-http|httpclient|axios|okhttp|monitor|headless|scrapy|java/|masscan|zgrab|deepseek-harness|skill-learning|eve-codex|eve-industry", re.I)
 LINE = re.compile(r'^(\S+) \S+ \S+ \[([^\]]+)\] "(\S+) (\S+)[^"]*" (\d+) \S+ "([^"]*)" "([^"]*)"')
@@ -253,6 +254,7 @@ class RealIPMap:
         self.geo = geo
         self.map = {}          # key_ip -> (real_ip, ts)
         self.cids = self._load_cids()   # cid -> last_ts（浏览器持久匿名ID，统计真实使用人数）
+        self.cid_new_times = self._load_cid_new()   # cid 首次出现时刻（近48h），新用户小时图用
         self.hits = {}         # key_ip -> deque[float]  （每分钟速率）
         self._last_clean = 0
 
@@ -274,6 +276,13 @@ class RealIPMap:
 
     def record_cid(self, cid):
         now = time.time()
+        if cid not in self.cids:                      # 新浏览器：记时刻供小时图
+            self.cid_new_times.append(now)
+            try:
+                with open(CID_NEW_FILE, "a") as f:
+                    f.write("%.3f\n" % now)
+            except Exception:
+                pass
         with self.lock:
             self.cids[cid] = now
         try:
@@ -284,6 +293,14 @@ class RealIPMap:
             _o.replace(tmp, CID_FILE)
         except Exception:
             pass
+
+    def _load_cid_new(self):
+        try:
+            lim = time.time() - 48 * 3600
+            with open(CID_NEW_FILE) as f:
+                return deque(sorted(float(x) for x in f if x.strip() and float(x) >= lim))
+        except Exception:
+            return deque()
 
     def _load_cids(self):
         try:
@@ -656,12 +673,19 @@ class Stats:
 
                     recent_nbz.append(recent[-1])
             today = datetime.fromtimestamp(now, CST).date()
+            while self.realip.cid_new_times and self.realip.cid_new_times[0] < now - self.WINDOW:
+                self.realip.cid_new_times.popleft()
+            nb_h = {}
+            for ts in self.realip.cid_new_times:
+                k = int(ts) // 3600
+                nb_h[k] = nb_h.get(k, 0) + 1
             hourly = []
             for h in range(now // 3600 - 23, now // 3600 + 1):
                 dt = datetime.fromtimestamp(h * 3600, CST)
                 hourly.append({"hour": dt.hour, "date": dt.strftime("%Y-%m-%d"),
                                "day": "today" if dt.date() == today else "yesterday",
-                               "users": len(self.hour_ips.get(h, ())), "requests": self.hour_req.get(h, 0)})
+                               "users": len(self.hour_ips.get(h, ())), "requests": self.hour_req.get(h, 0),
+                               "newu": nb_h.get(h, 0)})
             peak, peak_t = self.peak()
             total_srv = sum(tot.srv.values())
             return {
