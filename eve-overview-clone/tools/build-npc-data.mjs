@@ -16,6 +16,13 @@ const { SITES } = await import(pathToFileURL(join(HERE, '../js/pilot-sites.js'))
 const want = new Set(), dun = new Set();
 for (const s of SITES) {
   if (s.dungeon) dun.add(s.dungeon);
+  // 深渊按等级的场景：刷怪池、气云 / 塔候选、导管和蛋（房间在运行时随机生成）
+  for (const sp of s.pool || []) {
+    for (const [, , ids] of sp.g || []) for (const t of ids) want.add(t);
+    for (const pt of sp.parts || []) for (const [t] of pt.g) want.add(t);   // T6 实测统计的房间
+  }
+  for (const t of Object.keys(s.objs || {})) want.add(Number(t));
+  if (s.pool) for (const t of [47685, 47686, 47951]) want.add(t);
   for (const r of s.rooms) {
     for (const o of r.objs || []) if (o.type) want.add(o.type);
     for (const w of r.waves || []) for (const [t] of w.npcs) want.add(t);

@@ -9,7 +9,7 @@
 //   门可限制舰船（ships：允许的舰船分组 ID），不合规的船激活失败（客户端提示「你的舰船不能使用这个加速门」）。
 // 深渊：计时 20 分钟（到点舰船被摧毁）、每个房间有边界（出界受伤）、天气（玩家和 NPC 都受影响）、导管 2,500 m 内激活；
 //   最后一个房间的起源导管把你送回普通空间 = 完成。
-import { SITES } from './pilot-sites.js?v=4';
+import { SITES } from './pilot-sites.js?v=6';
 import { npcUnit } from './sim-npc.js?v=3';
 
 let H = null;   // 钩子：{ S, ctx, esc, tr, log(text, kind), msg(text), finish(won, text), FE }
@@ -26,7 +26,7 @@ const KM = 1000;
 
 // ---------- NPC 数据 ----------
 let ND = null, ndP = null;
-export const loadNpcData = () => (ndP ||= fetch('npc-data.json?v=1').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => {
+export const loadNpcData = () => (ndP ||= fetch('npc-data.json?v=3').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => {
   ND = d;
   // NPC 类型挂进装配数据的类型表：名字、总览图标（按组）、过滤、选中物体窗口都照舰船那套走
   const types = H.ctx.data?.types;
@@ -82,6 +82,82 @@ function deployNpc(side, row, count, pos) {
 
 // ---------- 进场 ----------
 // 场景状态 S.site：{ def, room（当前房间序号）, rooms: [{ pos, entered, t0, waves: Map(key → { units, at }), objs: Map(key → 单位或天体序号), done }], t0（开始时间）, end }
+// 深渊：每个等级一个场景（pool = 这个等级的刷怪池），开纤维时随机出这一趟的 3 个房间、天气强度、星空、气云 / 塔
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+// 按权重抽：w[k] = 第 k 项的权重
+const pickW = (w) => { let r = Math.random() * w.reduce((a, b) => a + b, 0); for (let k = 0; k < w.length; k++) if ((r -= w[k]) < 0) return k; return w.length - 1; };
+// 实测统计的房间（T6，parts）：主体每个 NPC 按实测数量频率抽，总数要落在实测范围里、并且有这类房间的标志舰；护卫按实测概率整组出现
+function rollParts(sp) {
+  const out = [];
+  sp.parts.forEach((pt, pi) => {
+    if (pi && Math.random() >= pt.p) return;
+    let n = null;
+    for (let k = 0; k < 60; k++) {
+      const c = pt.g.map(([, h]) => pickW(h));
+      const tot = c.reduce((a, b) => a + b, 0);
+      if (tot >= pt.tot[0] && tot <= pt.tot[1] && (!pt.need?.length || pt.g.some(([t], i) => c[i] && pt.need.includes(t)))) { n = c; break; }
+      if (!n && tot) n = c;   // 一直不满足就用最后一次有船的
+    }
+    pt.g.forEach(([t], i) => { if (n?.[i]) out.push([t, n[i]]); });
+  });
+  return out.map(([t, c], gi) => {
+    const a = 2 * Math.PI * gi / out.length + 0.4;
+    return { key: 'w' + gi, on: 'enter', at: [Math.round(Math.sin(a) * 40) / 10, 0, 25 + Math.round(Math.cos(a) * 40) / 10], npcs: [[t, c]] };
+  });
+}
+function rollRoom(sp) {
+  if (sp.parts) return rollParts(sp);
+  const n = sp.g.map(([a, b]) => randInt(a, b));
+  // 资料写了「每房最多几艘」的：超了就从能减的组里随机减
+  const cap = sp.max || Infinity;
+  for (let tot = n.reduce((x, y, i) => x + (sp.g[i][3] ? 0 : y), 0); tot > cap; tot--) {
+    const can = n.map((c, i) => (c > sp.g[i][0] && !sp.g[i][3] ? i : -1)).filter((i) => i >= 0);
+    if (!can.length) break;
+    n[pick(can)]--;
+  }
+  // 一艘都没抽到：随便一组给 1 艘
+  if (!n.some((c, i) => c && !sp.g[i][3])) { const i = pick(sp.g.map((g, i) => (g[3] ? -1 : i)).filter((i) => i >= 0)); n[i] = 1; }
+  const waves = [];
+  sp.g.forEach(([, , ids, opt], gi) => {
+    if (!n[gi]) return;
+    const m = new Map();
+    for (let k = 0; k < n[gi]; k++) { const t = pick(ids); m.set(t, (m.get(t) || 0) + 1); }
+    const a = 2 * Math.PI * gi / sp.g.length + 0.4;
+    waves.push({ key: 'w' + gi, on: 'enter', at: [Math.round(Math.sin(a) * 40) / 10, 0, 25 + Math.round(Math.cos(a) * 40) / 10], npcs: [...m], ...(opt ? { opt: true } : {}) });
+  });
+  return waves;
+}
+export function siteInstance(def, wxName) {
+  if (!def?.pool) return def;
+  const wx = def.wx[wxName] || def.wx[pick(Object.keys(def.wx))];
+  const li = randInt(0, wx.b.length - 1);
+  const types = Object.entries(def.objs);
+  const rooms = def.rooms.map((_, ri) => {
+    // 有实测出现次数（n）的按次数加权
+    const sp = def.pool[0].n ? def.pool[pickW(def.pool.map((x) => x.n))] : pick(def.pool);
+    const last = ri === def.rooms.length - 1;
+    const objs = [
+      { key: 'c', kind: 'conduit', type: last ? 47686 : 47685, at: [0, 0, 25], lock: 'room', exit: last },
+      { key: 'cache', kind: 'struct', type: 47951, at: [12, 0, 5] },
+    ];
+    const want = [];
+    if (Math.random() < 0.6) want.push('cloud');
+    if (Math.random() < 0.3) want.push('cloud');
+    // 塔：有实测分布（towers：每房几座、各类型出现次数）就照实测，没有就按等级概率出 0-1 座
+    if (def.towers) { const tt = Object.keys(def.towers.types); for (let k = pickW(def.towers.hist); k > 0; k--) want.push(['tower', tt[pickW(tt.map((t) => def.towers.types[t]))]]); }
+    else if (Math.random() < def.tower) want.push('tower');
+    want.forEach((w, oi) => {
+      const kind = Array.isArray(w) ? w[0] : w;
+      const [t, o] = Array.isArray(w) ? [w[1], def.objs[w[1]]] : pick(types.filter(([, o]) => o.kind === kind));
+      // 塔放在导管附近（敌人那边），气云在口袋中间一带
+      const p = kind === 'tower' ? [randInt(-12, 12), 0, randInt(12, 26)] : [randInt(-10, 10), 0, randInt(-8, 12)];
+      objs.push({ key: 'z' + oi, kind, type: Number(t), at: p, r: o.r, zone: o.zone, slot: o.slot });
+    });
+    return { spawn: [0, 0, -25], waves: rollRoom(sp), objs, clearMsg: '导管已开启', spawnId: sp.id, f: sp.f, room: sp.name, note: sp.note, inf: sp.inf };
+  });
+  return { ...def, weather: wx.b[li], wxLv: def.lv[li], cover: wx.cover, sky: pick(def.skies), rooms };
+}
 export function siteStart(def) {
   const { S } = H;
   const abyss = def.kind === 'abyss';
@@ -143,7 +219,7 @@ function enterRoom(k, first = false) {
     S.b.zones.push({ pos: at(R, o.at), r: o.r, mods, dmg, cycle, buffs, slot: o.slot, unit: R.objs.get(o.key)?.unit || null });
   }
   H.envFx?.(roomFx(R));
-  if (!R.def.entry) H.log(`进入第 ${layerNo(st, k)} 层`, 'sys');
+  if (!R.def.entry) H.log(`进入第 ${layerNo(st, k)} 层${R.def.room || R.def.f ? ` · ${R.def.room || R.def.f}` : ''}`, 'sys');
 }
 
 // 条件
@@ -330,11 +406,12 @@ export function siteInfoHtml() {
     <span>${alive ? `敌人 ${alive}` : R?.done ? '房间已清理' : ''}</span></div>`;
 }
 // 设置页：场景卡片 + 详情
-export function siteSetupHtml(kind, sel) {
+export function siteSetupHtml(kind, sel, wxSel) {
   const { esc } = H;
   const list = SITES.filter((s) => s.kind === kind);
   const cur = list.find((s) => s.id === sel) || list[0];
   if (!cur) return '<p class="text-muted">还没有场景</p>';
+  if (cur.pool) return abyssSetupHtml(list, cur, wxSel);
   const info = dungeonInfo(cur.dungeon);
   const npcs = new Map();
   for (const r of cur.rooms) for (const w of r.waves || []) for (const [t, n] of w.npcs) npcs.set(t, (npcs.get(t) || 0) + n);
@@ -347,6 +424,41 @@ export function siteSetupHtml(kind, sel) {
       ${cur.time ? `<p><b>时限：</b>${Math.round(cur.time / 60)} 分钟</p><p><b>导管：</b>清完房间里的敌人后开启</p>` : ''}
       <p><b>层数：</b>${layerCount(cur)}${cur.kind === 'ded' ? '（另有入口）' : ''} · <b>敌人：</b>${[...npcs].map(([t, n]) => `${esc(npcName(t))} ×${n}`).join('、') || '—'}</p>
       ${cur.src ? `<p class="text-muted">刷怪资料：${cur.src.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(new URL(u).hostname)}</a>`).join('、')}</p>` : ''}
+    </div>`;
+}
+// 深渊设置页：等级卡片 + 天气选择 + 这个等级的刷怪池（每层从里面随机抽）
+function abyssSetupHtml(list, cur, wxSel) {
+  const { esc } = H;
+  const wxKeys = Object.keys(cur.wx);
+  const wk = cur.wx[wxSel] ? wxSel : wxKeys[0];
+  const w = cur.wx[wk];
+  const env = H.ctx.data.env?.get(w.b[w.b.length - 1]);
+  const groups = (sp) => sp.g.map(([a, b, ids, opt]) => `${[...new Set(ids)].map((t) => esc(npcName(t))).join(' / ')} ×${a === b ? a : `${a}-${b}`}${opt ? '<em>（不用清）</em>' : ''}`).join(EN() ? ', ' : '、');
+  // 实测统计（parts）：每个 NPC 写实测出现过的数量范围；护卫写出现概率
+  const sep = EN() ? ', ' : '、';
+  const range = (h) => { const ks = h.map((v, k) => (v ? k : -1)).filter((k) => k > 0); return ks.length ? (ks[0] === ks[ks.length - 1] ? ks[0] : `${ks[0]}-${ks[ks.length - 1]}`) : 0; };
+  const pct = (x) => `${Math.round(x * 100)}%`;
+  const partHtml = (pt) => pt.g.map(([t, h]) => `${esc(npcName(t))} ×${range(h)}`).join(sep);
+  const totalN = cur.pool.reduce((a, sp) => a + (sp.n || 0), 0);
+  const spHtml = (sp) => (sp.parts
+    ? `<p><b>${esc(sp.name)}</b><em>（${pct(sp.n / totalN)}，每房 ${sp.parts[0].tot[0]}-${sp.parts[0].tot[1]} 艘）</em>${partHtml(sp.parts[0])}${sp.parts.slice(1).map((pt) => `<span><em>${pct(pt.p)} 带${esc(pt.esc)}护卫（${pt.tot[0]}-${pt.tot[1]} 艘）：</em>${partHtml(pt)}</span>`).join('')}</p>`
+    : `<p>${groups(sp)}${sp.max ? `<em>（每房最多 ${sp.max} 艘）</em>` : ''}${sp.inf ? ' <i>推断</i>' : ''}${sp.note ? `<span>${esc(sp.note)}</span>` : ''}</p>`);
+  const fac = new Map();
+  for (const sp of cur.pool) { if (!fac.has(sp.f)) fac.set(sp.f, []); fac.get(sp.f).push(sp); }
+  return `<div class="pl-sites">${list.map((s) => `<button type="button" class="pl-site-card${s === cur ? ' on' : ''}" data-pl-site="${esc(s.id)}"><b>${esc(L(s))}</b><span>${esc(L(s, 'sub') || '')}</span></button>`).join('')}</div>
+    <div class="pl-sites pl-aby-wx">${wxKeys.map((k) => `<button type="button" class="pl-site-card${k === wk ? ' on' : ''}" data-pl-aby-wx="${esc(k)}"><b>${esc(EN() ? cur.wx[k].en : cur.wx[k].name)}</b></button>`).join('')}</div>
+    <div class="pl-site-detail">
+      <p><b>舰船限制：</b>${esc(L(cur, 'ships'))}</p>
+      <p><b>天气：</b>${esc(EN() ? w.en : w.name)}，强度 ${cur.lv.join('% 或 ')}%（随机）<span>（玩家和 NPC 都受影响）</span></p>
+      ${env?.desc?.length ? `<p class="text-muted">最强一档：${env.desc.map((d) => esc(d[EN() ? 1 : 0])).join('；')}</p>` : ''}
+      <p><b>时限：</b>${Math.round(cur.time / 60)} 分钟 · <b>层数：</b>${layerCount(cur)} · <b>导管：</b>清完房间里的敌人后开启</p>
+      ${cur.stat
+        ? `<p><b>房间：</b>按 Abyssal.Space 上 ${cur.stat[0]} 次 T6 巡洋舰实跑（${cur.stat[1]} 个房间）归纳出 ${cur.pool.length} 类房间；每层按实测出现比例抽一类，每种船的数量按实测频率抽；塔的数量和种类也照实测，气云随机</p>`
+        : `<p><b>房间：</b>每层从下面 ${cur.pool.length} 种组合里随机抽一种，数量在区间里随机；气云、塔随机出现（等级越高塔越常见）</p>`}
+      <div class="pl-aby-pool">${[...fac].map(([f, sps]) => `<div><b>${esc(f)}</b>${sps.map(spHtml).join('')}</div>`).join('')}</div>
+      ${cur.pool.some((sp) => sp.inf) ? '<p class="text-muted">标「推断」的组合资料里没有：照 T5 同类组合换成 T6 版本的 NPC（数量没改）</p>' : ''}
+      <p class="text-muted">星空：客户端深渊场景 ad0${cur.tier}（编号对应等级是推断）</p>
+      ${cur.src ? `<p class="text-muted">刷怪资料：${cur.src.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(new URL(u).hostname)}${new URL(u).pathname.length > 1 ? ` · ${esc(decodeURIComponent(new URL(u).pathname.split('/').pop()).replace(/_/g, ' '))}` : ''}</a>`).join('、')}</p>` : ''}
     </div>`;
 }
 export const siteDefault = (kind) => SITES.find((s) => s.kind === kind)?.id || '';

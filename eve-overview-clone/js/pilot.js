@@ -19,7 +19,7 @@ import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=6';
 import * as SC from './pilot-scan.js?v=6';
-import * as ST from './pilot-site.js?v=6';
+import * as ST from './pilot-site.js?v=9';
 
 let ctx = null;
 let root = null;
@@ -372,7 +372,7 @@ function renderSetup() {
   const modeSeg = `<div class="pl-field pl-span"><label>模式</label><div class="segmented" role="group" aria-label="模式">${[['free', '自由对战'], ['ded', '死亡空间'], ['abyss', '深渊']].map(([k, l]) => `<button type="button" data-pl-mode="${k}" class="${mode === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>`;
   const siteGrid = `<div class="pl-setup-grid">
         ${modeSeg}
-        <div class="pl-field pl-span"><label>${mode === 'abyss' ? '深渊' : '复合体'}</label><div id="plSites">${S.npcReady ? ST.siteSetupHtml(mode, S.set.site) : '<p class="text-muted">正在加载 NPC 数据…</p>'}</div></div>
+        <div class="pl-field pl-span"><label>${mode === 'abyss' ? '深渊' : '复合体'}</label><div id="plSites">${S.npcReady ? ST.siteSetupHtml(mode, S.set.site, S.set.abyWx) : '<p class="text-muted">正在加载 NPC 数据…</p>'}</div></div>
         ${sideField}
       </div>
       <div class="pl-setup-foot"><button type="button" class="btn btn-primary" data-pl-go${S.loading || !S.npcReady ? ' disabled' : ''}>${S.loading ? '准备中…' : '起飞'}</button></div>`;
@@ -512,7 +512,7 @@ async function launch() {
 }
 // 场景（pilot-site.js）：死亡空间复合体 / 深渊。没有开局敌人，进房间按刷怪表刷 NPC；深渊没有天体
 async function launchSite() {
-  const def = ST.siteById(S.set.site) || ST.siteById(ST.siteDefault(S.set.mode));
+  const def = ST.siteInstance(ST.siteById(S.set.site) || ST.siteById(ST.siteDefault(S.set.mode)), S.set.abyWx);
   if (!def) return;
   S.tut = null;
   tutStop();
@@ -1718,8 +1718,10 @@ function onClick(e) {
   if (t.closest('[data-pl-go]')) { launch(); return; }
   const md = t.closest('[data-pl-mode]');
   if (md) { S.set.mode = md.dataset.plMode; if (S.set.mode !== 'free' && ST.siteById(S.set.site)?.kind !== S.set.mode) S.set.site = ST.siteDefault(S.set.mode); save(); renderSetup(); return; }
+  const awx = t.closest('[data-pl-aby-wx]');
+  if (awx) { S.set.abyWx = awx.dataset.plAbyWx; save(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx); return; }
   const sc = t.closest('[data-pl-site]');
-  if (sc) { S.set.site = sc.dataset.plSite; save(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site); return; }
+  if (sc) { S.set.site = sc.dataset.plSite; save(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx); return; }
   if ((x = t.closest('[data-pl-tutsel]'))) { S.set.tutSel = x.dataset.plTutsel; save(); renderSetup(); return; }
   if ((x = t.closest('[data-pl-tut]'))) { S.set.tutSel = x.dataset.plTut; save(); S.b = null; launchTut(x.dataset.plTut); return; }
   if ((x = t.closest('[data-pl-mm]'))) { S.set.mmode = x.dataset.plMm; save(); MH.onState(); return; }
