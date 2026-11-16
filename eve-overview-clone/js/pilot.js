@@ -9,7 +9,7 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v41';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v42';
 import { loadShipIndex } from './sim-ships.js?v=v19';
 import { warpShake } from './sim-warp.js?v=4';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v11';
@@ -19,7 +19,7 @@ import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=7';
 import * as SC from './pilot-scan.js?v=7';
-import * as ST from './pilot-site.js?v=22';
+import * as ST from './pilot-site.js?v=23';
 import * as CG from './pilot-cargo.js?v=2';
 import * as OS from './pilot-ovset.js?v=1';
 
@@ -35,7 +35,7 @@ const SKIES = ['a01', 'c01', 'g01', 'm01'];
 const SKY_NAME = { '': '随机', a01: '艾玛', c01: '加达里', g01: '盖伦特', m01: '米玛塔尔' };
 const DT = 0.5;
 const S = {
-  set: { ship: 0, fit: 'kb', foes: [], allies: [], dist: 30, sky: '', tac: true, tab: 'solo', ptab: 'rec', mmode: '1v1', mcap: MATCH_CAPS[0], mskill: 'esi', mroomf: '', mpub: true, pfit: null, pid: '', mode: 'free', site: '' },
+  set: { ship: 0, fit: 'kb', foes: [], allies: [], dist: 30, sky: '', tac: true, tab: 'solo', ptab: 'rec', mmode: '1v1', mcap: MATCH_CAPS[0], mskill: 'esi', mroomf: '', mpub: true, pfit: null, pid: '', mode: 'free', site: '', cheat: false, abyGm: {}, gmo: {} },
   b: null, me: null, on: null, off: null, prop: -1, view: null, raf: 0, last: 0, t: 0, paused: false, sel: -1, keys: new Set(),
   names: [], brk: [], log: [], ended: false, loading: false, orbit: 0, keep: 0, ovAt: 0
 };
@@ -106,7 +106,7 @@ export function initPilot(context) {
     // 深渊过导管：客户端 JumpOutAbyssalBetween 的跃迁隧道过场（sim-jump.js）；没有 3D 画面就返回 false，调用方退回淡入淡出
     jumpFx: (i, cb) => { if (!S.view?.abyssJump) return false; S.jumpFx = S.view.abyssJump(i, cb); return true; },
     openLoot: (i) => CG.openLoot(i), wreck: () => renderOverview(true),
-    rerender: () => { const box = root?.querySelector('#plSites'); if (box) keepScroll(() => { box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx); }); },
+    rerender: () => { const box = root?.querySelector('#plSites'); if (box) keepScroll(() => { box.innerHTML = sitesHtml(); }); },
   });
   CG.initCargo({ S, ctx, esc, tr, UI, IMG, ST, root: () => root, toggleWin: (id, show) => toggleWin(id, show), msg: (t) => { pushLog(t, 'bad'); quickMsg(t); },
     wreckEmpty: (i) => { ST.wreckEmptied(i); renderOverview(true); } });
@@ -120,6 +120,7 @@ export function initPilot(context) {
     tab: ['match', 'tut'].includes(saved.tab) ? saved.tab : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
     pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', boost: Array.isArray(saved.boost) ? saved.boost.map(Number).filter(Boolean).slice(0, 16) : Array.isArray(saved.imp) ? saved.imp.map(Number).filter(Boolean) : null, tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
     mode: ['ded', 'abyss'].includes(saved.mode) ? saved.mode : 'free', site: typeof saved.site === 'string' ? saved.site : '', abyWx: typeof saved.abyWx === 'string' ? saved.abyWx : '',
+    cheat: saved.cheat === true, abyGm: gmPickClean(saved.abyGm), gmo: saved.gmo && typeof saved.gmo === 'object' ? Object.fromEntries(GM_TOGGLES.map((k) => [k, saved.gmo[k] === true])) : {},
     allies: Array.isArray(saved.allies) ? saved.allies.filter((a) => a && Number(a.ship)).slice(0, 8).map((a) => ({ ship: Number(a.ship), fit: typeof a.fit === 'string' ? a.fit : 'kb', count: Math.max(1, Math.min(20, Number(a.count) || 1)) })) : [] });
   const hud = ctx.store.getJSON(HUD_KEY, null);
   if (hud && typeof hud === 'object') for (const k of Object.keys(HUD_DEF)) if (k in hud) S.hud[k] = hud[k] ? 1 : 0;
@@ -128,6 +129,20 @@ export function initPilot(context) {
   window.addEventListener('blur', () => { S.keys.clear(); S.ctrl = false; cursorMode(); });
 }
 const save = () => ctx.store.setJSON(KEY, S.set);
+// 深渊自选刷怪（作弊）存下来的格式：{ 场景 id: { lv: 天气强度序号, rooms: [{ sp: 组合 id, n: { NPC 类型: 艘数 } }] } }
+function gmPickClean(o) {
+  const out = {};
+  if (!o || typeof o !== 'object') return out;
+  for (const [id, g] of Object.entries(o)) {
+    if (!g || typeof g !== 'object') continue;
+    const rooms = Array.isArray(g.rooms) ? g.rooms.slice(0, 5).map((r) => ({ sp: typeof r?.sp === 'string' ? r.sp : '',
+      n: Object.fromEntries(Object.entries(r?.n && typeof r.n === 'object' ? r.n : {}).filter(([t, c]) => Number(t) > 0 && Number.isFinite(Number(c))).map(([t, c]) => [t, Math.max(0, Math.min(50, Math.round(Number(c))))])) })) : [];
+    out[id] = { lv: Number.isInteger(g.lv) ? g.lv : -1, rooms };
+  }
+  return out;
+}
+// 设置页的场景卡片（开了作弊的深渊多一块自选刷怪）
+const sitesHtml = () => ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx, S.set.cheat ? S.set.abyGm : null);
 // 预设场景：内置几个常见对局（我的船用击杀记录常见装配），玩家也能把当前设置存成自己的预设（存在本机）
 const PRESET_KEY = 'eve-pilot-presets';
 const PRESETS = [
@@ -397,13 +412,15 @@ function renderSetupNow() {
           <div class="pl-search"><input type="search" class="pi-input" placeholder="搜索船名加队友" data-pl-q="ally" autocomplete="off"><div class="pl-results" data-pl-res="ally" hidden></div></div>
         </div>`;
   const mode = S.set.mode;
+  // 作弊：进去后多一个「GM 工具」窗口；深渊还能在上面自选每层刷什么
+  const cheatBox = `<label class="pi-check pl-cheat"><input type="checkbox" data-pl-cheat${S.set.cheat ? ' checked' : ''}><span>开启作弊</span></label>${S.set.cheat ? `<span class="text-muted">${mode === 'abyss' ? '进去后有 GM 工具（无敌、刷怪、跳层…）；上面可以自选每层刷什么' : '进去后有 GM 工具（无敌、刷怪、瞬移…）'}</span>` : ''}`;
   const modeSeg = `<div class="pl-field pl-span"><label>模式</label><div class="segmented" role="group" aria-label="模式">${[['free', '自由对战'], ['ded', '死亡空间'], ['abyss', '深渊']].map(([k, l]) => `<button type="button" data-pl-mode="${k}" class="${mode === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>`;
   const siteGrid = `<div class="pl-setup-grid">
         ${modeSeg}
-        <div class="pl-field pl-span"><label>${mode === 'abyss' ? '深渊' : '复合体'}</label><div id="plSites">${S.npcReady ? ST.siteSetupHtml(mode, S.set.site, S.set.abyWx) : '<p class="text-muted">正在加载 NPC 数据…</p>'}</div></div>
+        <div class="pl-field pl-span"><label>${mode === 'abyss' ? '深渊' : '复合体'}</label><div id="plSites">${S.npcReady ? sitesHtml() : '<p class="text-muted">正在加载 NPC 数据…</p>'}</div></div>
         ${sideField}
       </div>
-      <div class="pl-setup-foot"><button type="button" class="btn btn-primary" data-pl-go${S.loading || !S.npcReady ? ' disabled' : ''}>${S.loading ? '准备中…' : '起飞'}</button></div>`;
+      <div class="pl-setup-foot"><button type="button" class="btn btn-primary" data-pl-go${S.loading || !S.npcReady ? ' disabled' : ''}>${S.loading ? '准备中…' : '起飞'}</button>${cheatBox}</div>`;
   if (mode !== 'free' && !S.npcReady) ST.loadNpcData().then((d) => { S.npcReady = Boolean(d); if (!d) ctx.showToast('NPC 数据加载失败', 'error', 4000); if (root.querySelector('#plSetup')) renderSetup(); });
   const solo = mode !== 'free' ? siteGrid : `<div class="pl-setup-grid">
         ${modeSeg}
@@ -423,7 +440,7 @@ function renderSetupNow() {
           <div class="segmented" role="group" aria-label="星空">${Object.entries(SKY_NAME).map(([k, l]) => `<button type="button" data-pl-sky="${k}" class="${S.set.sky === k ? 'active' : ''}">${l}</button>`).join('')}</div>
         </div>
       </div>
-      <div class="pl-setup-foot"><button type="button" class="btn btn-primary" data-pl-go${S.loading ? ' disabled' : ''}>${S.loading ? '准备中…' : '起飞'}</button></div>`;
+      <div class="pl-setup-foot"><button type="button" class="btn btn-primary" data-pl-go${S.loading ? ' disabled' : ''}>${S.loading ? '准备中…' : '起飞'}</button>${cheatBox}</div>`;
   // 大厅布局：左边房间列表（筛选 + 表格 + 邀请码），右边我的出战（船、规则、快速匹配、开房间）
   const match = `<div class="pl-lobby">
         <section class="pl-lobby-main">
@@ -525,6 +542,7 @@ const shipChip = (id) => `<span class="pl-chip"><img src="${IMG(id, 'icon', 32)}
 
 function onInput(e) {
   if (SC.scanInput(e) || OS.input(e)) return;
+  if (e.target.matches('[data-pl-gmq]')) { gmSearch(e.target.value); return; }
   const q = e.target.closest('[data-pl-q]');
   if (e.target.matches('[data-pl-pq]')) {
     PUB.q = e.target.value;
@@ -546,6 +564,30 @@ function onChange(e) {
   if (t.matches('[data-pl-afit]')) { const a = S.set.allies[Number(t.dataset.plAfit)]; if (a) { a.fit = t.value; save(); } }
   if (t.matches('[data-pl-acount]')) { const a = S.set.allies[Number(t.dataset.plAcount)]; if (a) { a.count = Math.max(1, Math.min(20, Math.round(Number(t.value)) || 1)); save(); } }
   if (t.matches('[data-pl-count]')) { const f = S.set.foes[Number(t.dataset.plCount)]; if (f) { f.count = Math.max(1, Math.min(20, Math.round(Number(t.value)) || 1)); save(); } }
+  if (t.matches('[data-pl-cheat]')) { S.set.cheat = t.checked; save(); renderSetup(); return; }
+  if (t.matches('[data-pl-gm-lv], [data-pl-gm-sp], [data-pl-gm-n]')) { gmPickChange(t); return; }
+  if (t.matches('[data-pl-gm-pool]')) { S.gmPool = t.value; return; }
+}
+// 深渊自选刷怪（设置页）：换组合时清掉之前填的数量
+function gmPickChange(t) {
+  const id = (ST.siteById(S.set.site) || ST.siteById(ST.siteDefault('abyss')))?.id;
+  if (!id) return;
+  const g = (S.set.abyGm[id] ||= { lv: -1, rooms: [] });
+  if (t.matches('[data-pl-gm-lv]')) g.lv = Number(t.value);
+  else if (t.matches('[data-pl-gm-sp]')) {
+    const ri = Number(t.dataset.plGmSp);
+    g.rooms[ri] = { sp: t.value, n: {} };
+    for (let k = 0; k < ri; k++) g.rooms[k] ||= { sp: '', n: {} };
+    const box = root.querySelector('#plSites');
+    if (box) keepScroll(() => { box.innerHTML = sitesHtml(); });
+  } else {
+    const [ri, type] = t.dataset.plGmN.split(':');
+    const r = g.rooms[Number(ri)];
+    if (!r) return;
+    if (t.value.trim() === '') delete r.n[type];
+    else { r.n[type] = Math.max(0, Math.min(50, Math.round(Number(t.value)) || 0)); t.value = r.n[type]; }
+  }
+  save();
 }
 
 // ---------- 起飞 ----------
@@ -603,7 +645,7 @@ async function launchSite() {
   if (!base) return;
   // 深渊：先读战利品表（抽实跑要用），再生成这一趟的房间
   if (base.kind === 'abyss') await ST.loadLoot();
-  const def = ST.siteInstance(base, S.set.abyWx);
+  const def = ST.siteInstance(base, S.set.abyWx, S.set.cheat ? S.set.abyGm[base.id] : null);
   if (!def) return;
   S.tut = null;
   tutStop();
@@ -714,6 +756,10 @@ function start(mine, foes, allies = [], o = {}) {
   S.names = b.units.map((u, i) => (i === 0 ? tr('我') : `${typeName(u.r.row.ship)} ${b.units.filter((x, k) => k <= i && x.r === u.r).length}`));
   FL.fleetReset(o.fleet || {});
   rackInit();
+  // 作弊（单人设置里勾的，练习不算）：GM 工具窗口；自由对战敌人打光了也不自动结束（还能接着刷）
+  S.gm = S.set.cheat && !S.tut ? { ...Object.fromEntries(GM_TOGGLES.map((k) => [k, Boolean(S.set.gmo?.[k])])), speed: 1 } : null;
+  S.gmFoes = true;
+  if (S.gm && !o.site) b.hold = true;
   enter(o.msg || `${typeName(S.set.ship)} 已就位，敌人在 ${S.set.dist} km 外`);
 }
 // 进入飞行画面（单机、匹配共用）
@@ -764,6 +810,8 @@ const WINS = [
   // 场景（死亡空间 / 深渊）：当前房间、深渊计时、天气
   { id: 'site', title: '地点', icon: 'info', w: 300, h: 140, x: 56, y: 96, need: () => Boolean(S.site) },
   { id: 'log', title: '日志', icon: 'log', w: 420, h: 200, x: 56, y: 410, closed: true },
+  // 作弊（单人设置里勾了才有）
+  { id: 'gm', title: 'GM 工具', icon: 'settings', w: 340, h: 420, x: 362, y: 10, need: () => Boolean(S.gm) },
   // 货柜舱（客户端库存窗口，列表视图）；残骸货柜（打开残骸时弹出，标题换成残骸名）
   { id: 'cargo', title: '货柜舱', ico: 'windowicons/cargo.png', w: 440, h: 260, x: 340, y: 96, closed: true },
   { id: 'loot', title: '货柜', ico: 'windowicons/cargocontainer.png', w: 440, h: 240, x: 340, y: 370, closed: true, need: () => S.set.mode === 'abyss' && !S.match && !S.tut },
@@ -786,6 +834,7 @@ const winBody = {
   ship: () => '<div id="plShip"></div>',
   site: () => '<div id="plSite"></div>',
   log: () => '<div class="pl-log" id="plLog"></div>',
+  gm: () => `<div class="pl-gm"><div id="plGmBtns"></div><div class="pl-gm-sec"><label>刷敌人</label><div class="pl-gm-row"><input type="search" placeholder="搜索舰船或 NPC" data-pl-gmq autocomplete="off"><input type="number" min="1" max="20" value="1" data-pl-gmc aria-label="数量" title="数量"></div><div class="pl-gm-res" id="plGmRes"></div></div></div>`,
   cargo: () => CG.cargoBody(),
   loot: () => CG.lootBody(),
   fleet: () => FL.fleetBody(),
@@ -1131,6 +1180,7 @@ function renderStage() {
   renderRack();
   renderStance();
   renderSel();
+  renderGm();
   root.querySelector('#plHud').addEventListener('click', onHudClick);
   const hc = root.querySelector('#plHudC');
   hc.addEventListener('pointermove', onHudMove);
@@ -1356,9 +1406,10 @@ function tick(now) {
     }
     if (S.match && !S.ended) matchFrame(dt);
     else if (!S.paused && !S.ended) {
-      S.t += dt;
+      const sp = S.gm?.speed || 1;   // 作弊：时间流速
+      S.t += dt * sp;
       // 引擎比画面领先一步（画面在两帧之间插值）
-      for (let n = 0; b.t < S.t + DT && !b.done && n < 8; n++) { beforeStep(); b.step(); afterStep(); }
+      for (let n = 0; b.t < S.t + DT && !b.done && n < 8 * sp; n++) { beforeStep(); b.step(); afterStep(); }
       if (S.tut) tutTick();
       if (b.done || !S.me.alive) end();
     } else if (S.ended && !S.paused && S.t - S.endAt < 6) {
@@ -1379,6 +1430,7 @@ function tick(now) {
       S.ovAt = now;
       const sb = S.site && root.querySelector('#plSite');
       if (sb) { const h = ST.siteInfoHtml(); if (sb.dataset.h !== h) { sb.dataset.h = h; sb.innerHTML = h; } }
+      if (S.gm) renderGm();
       if (S.set.tac) applyTac(true);   // 射程 / 锁定距离随干扰、塔、换弹药变
       if (!root.querySelector('[data-win="ship"]')?.hidden) renderShip();
       if (S.fleet && !S.match) FL.fleetTick(); renderOverview(); renderSel(true); renderDrones(); FL.renderFleet(); SC.renderDscan(); SC.renderProbe(); refreshTip(); ovLine(); }
@@ -1391,7 +1443,7 @@ function tick(now) {
   S.raf = requestAnimationFrame(tick);
 }
 // 主动装备开关：换成对应的属性（速度、信号半径、抗性、锁定、电容消耗…）；停用后这一轮跑完才失效
-const beforeStep = () => R.beforeStep();
+const beforeStep = () => { if (S.gm) gmStep(); R.beforeStep(); };
 // ---------- 受到的电子战 / 遥修（客户端 buffBarContainer + buffButtons）----------
 // 船体面板上方居中（top = SHIP_UI_HEIGHT 200，高 44）；每格 SLOT_WIDTH 48 × ICON_SIZE 40，图标 40 居中；
 // 叠三层贴图：shadow（白 0.25）、slot_base（ewarBarUnderlayClean，加色 0.2）、slot_gradient（ewarBarUnderlayGrad，加色 0.25）；
@@ -1563,6 +1615,137 @@ function afterStep() {
   if (prev !== u.pilot.active && S.set.tac) applyTac();
   for (const k of S.b.kills.slice(S.killN || 0)) pushLog(k.unit === u.i ? '你的船被摧毁了' : `${S.names[k.unit]} 被摧毁`, k.side === u.side ? 'bad' : 'good');
   S.killN = S.b.kills.length;
+  if (S.gm) {
+    gmStep();
+    // 自由对战（作弊不自动结束）：敌人打光了提示一次，再刷了敌人又会提示
+    if (!S.site && S.b.hold) { const left = S.b.units.some((v) => v.alive && v.side !== u.side && !v.isDrone); if (!left && S.gmFoes) pushLog('敌人已全部消灭（作弊模式不自动结束，可以接着刷敌人，或者返回设置）', 'sys'); S.gmFoes = left; }
+  }
+}
+// ---------- 作弊（GM 工具窗口）----------
+// 开关：无敌（不受任何伤害，深渊出界、计时到点也不会死）、无限电容、无限弹药（打空不用装填）、不会过热（超载不积热、不烧毁）
+const GM_TOGGLES = ['god', 'cap', 'ammo', 'heat'];
+function gmStep() {
+  const g = S.gm, u = S.me;
+  if (!g || !u?.alive) return;
+  u.god = g.god;
+  u.infAmmo = g.ammo;
+  if (g.cap) u.cap = u.t.cap.max;
+  if (g.heat && S.rk) { S.rk.h.fill(0); S.rk.dmg.clear(); }
+}
+const gmSelUnit = () => { const v = S.sel >= 0 ? S.b?.units[S.sel] : null; return v && v !== S.me && v.alive ? v : null; };
+const gmFoe = (v) => v && v.alive && v.side !== S.me.side && !v.lootBox;
+// 瞬移目标：选中的单位或天体；场景里只能是这一层（房间）里的东西，免得把船带出房间（房间之间相隔很远，进房间要走门 / 导管）
+function gmTpTarget() {
+  const v = gmSelUnit(), c = v ? null : S.b?.cel[S.selC];
+  const p = v ? v.pos : c?.pos;
+  if (!p) return null;
+  const R = S.site?.rooms?.[S.site.room];
+  if (R && Math.hypot(p[0] - R.pos[0], p[1] - R.pos[1], p[2] - R.pos[2]) > 1e6) return null;
+  return { p, r: v ? v.t.radius : c.radius || 0, name: v ? S.names[v.i] : c.name };
+}
+// 结构（有没有场景段、刷怪池）变了才整个重画；平时只改按钮的开关 / 可用状态（整个重画会把正按着的按钮换掉，点击就丢了）
+function renderGm() {
+  const box = root?.querySelector('#plGmBtns'), g = S.gm;
+  if (!box || !g || !S.b) return;
+  const st = S.site?.rooms ? S.site : null;
+  const pool = st?.abyss ? ST.gmPool() : [];
+  const key = `${st ? (st.abyss ? 'a' : 'd') : ''}|${pool.length}`;
+  if (box.dataset.k !== key) {
+    box.dataset.k = key;
+    if (pool.length && !pool.some((x) => x.id === S.gmPool)) S.gmPool = pool[0].id;
+    const fac = new Map();
+    for (const x of pool) { if (!fac.has(x.f)) fac.set(x.f, []); fac.get(x.f).push(x); }
+    const tg = (k, l, tip) => `<button type="button" class="pl-btn" data-pl-gm="${k}" title="${tip}">${l}</button>`;
+    box.innerHTML = `<div class="pl-gm-sec"><label>状态</label><div class="pl-gm-row">${tg('god', '无敌', '不受任何伤害（深渊出界、计时到点也不会被摧毁）')}${tg('cap', '无限电容', '电容一直是满的')}${tg('ammo', '无限弹药', '弹药打空不用装填')}${tg('heat', '不会过热', '超载不积热、不会烧毁')}</div></div>
+    <div class="pl-gm-sec"><label>操作</label><div class="pl-gm-row">${tg('heal', '修满', '护盾、装甲、结构、电容回满，修好烧毁的装备和无人机')}${tg('kill', '消灭目标', '消灭选中的物体（没选就是当前目标）')}${tg('killall', '消灭所有敌人', '消灭所有敌对单位（不含战利品容器）')}${tg('tp', '瞬移到选中', st ? '瞬移到选中的物体旁边（只能是这一层里的）' : '瞬移到选中的物体旁边')}</div></div>
+    <div class="pl-gm-sec"><label>时间流速</label><div class="pl-gm-row">${[1, 2, 4].map((v) => `<button type="button" class="pl-btn" data-pl-gm-spd="${v}">×${v}</button>`).join('')}</div></div>
+    ${st ? `<div class="pl-gm-sec"><label>${st.abyss ? '深渊' : '复合体'}</label><div class="pl-gm-row"><button type="button" class="pl-btn" data-pl-gm="next" title="${st.abyss ? '不用清怪、不用飞到导管，直接过导管' : '直接落到下一个房间'}"></button>${st.abyss ? tg('time', '计时 +5 分钟', '深渊剩余时间加 5 分钟') : ''}</div>
+      ${pool.length ? `<div class="pl-gm-row"><select data-pl-gm-pool aria-label="刷怪组合">${[...fac].map(([f, l]) => `<optgroup label="${esc(f)}">${l.map((x) => `<option value="${esc(x.id)}"${x.id === S.gmPool ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</optgroup>`).join('')}</select>${tg('wave', '刷出这组', '在这一层追加这组怪（数量照实测随机），清掉才开导管')}</div>` : ''}</div>` : ''}`;
+  }
+  const tgt = gmSelUnit() || S.me?.pilot?.active, over = Boolean(st?.end);
+  const off = { kill: !gmFoe(tgt), tp: !gmTpTarget(), next: over, time: over, wave: over };
+  for (const el of box.querySelectorAll('[data-pl-gm]')) {
+    const k = el.dataset.plGm;
+    if (GM_TOGGLES.includes(k)) el.classList.toggle('on', Boolean(g[k]));
+    else if (el.disabled !== Boolean(off[k])) el.disabled = Boolean(off[k]);
+  }
+  for (const el of box.querySelectorAll('[data-pl-gm-spd]')) el.classList.toggle('on', g.speed === Number(el.dataset.plGmSpd));
+  const nx = box.querySelector('[data-pl-gm="next"]');
+  const lab = st?.rooms[st.room + 1] ? '去下一层' : '直接完成';
+  if (nx && nx.dataset.l !== lab) { nx.dataset.l = lab; nx.textContent = lab; }
+}
+function gmAct(k) {
+  const g = S.gm, u = S.me, b = S.b;
+  if (!g || !b || S.ended) return;
+  if (GM_TOGGLES.includes(k)) {
+    g[k] = !g[k];
+    S.set.gmo = { ...S.set.gmo, [k]: g[k] };
+    save();
+    gmStep();
+    renderGm();
+    return;
+  }
+  if (!u?.alive) return;
+  if (k === 'heal') {
+    for (let l = 0; l < 3; l++) u.hp[l] = u.t.max[l];
+    u.cap = u.t.cap.max;
+    if (S.rk) { S.rk.h.fill(0); S.rk.dmg.clear(); S.rk.burnt.clear(); }
+    for (const d of u.drones || []) { const m = d.g?.ent?.max; if (d.hp && m && !(d.e && !d.e.alive)) m.forEach((v, l) => { d.hp[l] = v; }); }
+    renderRack();
+    renderDrones();
+    pushLog('舰船、装备和无人机已修满', 'sys');
+  } else if (k === 'kill') {
+    const v = gmSelUnit() || u.pilot?.active;
+    if (gmFoe(v)) b.hurt(v, Infinity);
+  } else if (k === 'killall') {
+    for (const v of b.units) if (gmFoe(v)) b.hurt(v, Infinity);
+  } else if (k === 'tp') {
+    const T = gmTpTarget();
+    if (!T) return;
+    const { p } = T, d = [u.pos[0] - p[0], u.pos[1] - p[1], u.pos[2] - p[2]], L = Math.hypot(...d) || 1;
+    const r = T.r + u.t.radius + 2500;
+    b.teleport(u, [p[0] + d[0] / L * r, p[1] + d[1] / L * r, p[2] + d[2] / L * r]);
+    if (S.site) S.site.nav = null;
+    pushLog(`已瞬移到 ${T.name} 旁边`, 'sys');
+  } else if (k === 'next') ST.gmNext();
+  else if (k === 'time') { ST.gmTime(300); pushLog('深渊计时 +5 分钟', 'sys'); }
+  else if (k === 'wave') { const n = ST.gmAddWaves(S.gmPool); if (n) pushLog(`这一层追加刷出 ${n} 艘`, 'sys'); }
+  renderGm();
+}
+// 刷敌人：搜到的舰船（击杀记录常见装配）或 NPC，刷在自己船头前方 20 km
+function gmSearch(q) {
+  const box = root.querySelector('#plGmRes');
+  if (!box) return;
+  const s = q.trim();
+  if (s && !ST.npcReady()) ST.loadNpcData().then(() => { const el = root?.querySelector('[data-pl-gmq]'); if (el && el.value.trim() === s) gmSearch(s); });
+  const list = !s ? [] : [...ctx.shipSearch(s).slice(0, 8).map((t) => ({ k: 's', id: t.id, name: t.name })), ...ST.npcSearch(s).slice(0, 8).map((t) => ({ k: 'n', id: t.id, name: t.name }))];
+  box.innerHTML = list.map((t) => `<button type="button" data-pl-gmsp="${t.k}:${t.id}"><img src="${IMG(t.id, 'icon', 32)}" alt="" loading="lazy"><span>${esc(t.name)}</span>${t.k === 'n' ? '<small>NPC</small>' : ''}</button>`).join('');
+}
+async function gmSpawn(kind, id) {
+  const u = S.me, b = S.b;
+  if (!S.gm || !b || !u?.alive || S.ended) return;
+  const n = Math.max(1, Math.min(20, Math.round(Number(root.querySelector('[data-pl-gmc]')?.value)) || 1));
+  const side = u.side === 'A' ? 'B' : 'A';
+  let units = [];
+  const at = () => { const f = u.face || [1, 0, 0]; return [u.pos[0] + f[0] * 20000, u.pos[1] + f[1] * 20000, u.pos[2] + f[2] * 20000]; };
+  try {
+    if (kind === 'n') {
+      await ST.loadNpcData();
+      if (S.b !== b) return;
+      units = ST.gmDeployNpc(side, id, n, at());
+    } else {
+      const r = await ctx.pilotRow(id);
+      if (S.b !== b) return;
+      if (!r?.row?.unit) throw new Error('这艘船算不出属性');
+      const n0 = b.units.length;
+      b.deploy(side, { rows: [{ row: { ...r.row, id: 'gm' + id }, count: n }], pos: at(), mode: 'here', name: r.row.label || '' });
+      units = b.units.slice(n0);
+    }
+  } catch (error) { ctx.showToast('刷出失败：' + error.message, 'error', 4000); return; }
+  // 舰船照开局的叫法编号（「裂谷级 3」）；NPC 和场景里刷的一样只写名字
+  for (let i = S.names.length; i < b.units.length; i++) { const v = b.units[i]; S.names.push(kind === 's' && !v.isDrone ? `${typeName(v.r.row.ship)} ${b.units.filter((x, k) => k <= i && !x.isDrone && x.r.row.ship === v.r.row.ship).length}` : typeName(v.r.row.ship)); }
+  if (units.length) { S.gmFoes = true; pushLog(`刷出 ${typeName(id)} ×${units.length}`, 'sys'); }
+  renderOverview(true);
 }
 // ---------- 匹配对战（服务器 server/match_service.mjs；每一步怎么走见 match-sim.js）----------
 const MODE_NAME = { '1v1': '1v1', '2v2': '2v2' };
@@ -1656,6 +1839,7 @@ function startMatchView(m) {
   S.fitView = null;
   bindUnit(ctx, {});
   S.match = { mid: m.mid, you: m.you, info: m.info, q: [], go: Boolean(m.started), sent: false, res: null };
+  S.gm = null;
   try { sessionStorage.setItem(LIVE_KEY, m.mid); } catch { /* 隐私模式 */ }
   S.sky = matchSky(m.info.seed);
   const M = buildMatch({ pilotUnit, createBattle, systems: SYS, en: window.I18N?.lang === 'en' }, m.info, (p) => (p === m.you ? { S, R: RL } : null), { onHit: logHit, onDrain: logDrain });
@@ -1887,11 +2071,11 @@ function onClick(e) {
   if (t.closest('[data-pl-go]')) { launch(); return; }
   const md = t.closest('[data-pl-mode]');
   if (md) { S.set.mode = md.dataset.plMode; if (S.set.mode !== 'free' && ST.siteById(S.set.site)?.kind !== S.set.mode) S.set.site = ST.siteDefault(S.set.mode); save(); renderSetup(); return; }
-  if (t.closest('[data-pl-aby-more]')) { ST.toggleAbyssPool(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx); return; }
+  if (t.closest('[data-pl-aby-more]')) { ST.toggleAbyssPool(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = sitesHtml(); return; }
   const awx = t.closest('[data-pl-aby-wx]');
-  if (awx) { S.set.abyWx = awx.dataset.plAbyWx; save(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx); return; }
+  if (awx) { S.set.abyWx = awx.dataset.plAbyWx; save(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = sitesHtml(); return; }
   const sc = t.closest('[data-pl-site]');
-  if (sc) { S.set.site = sc.dataset.plSite; save(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = ST.siteSetupHtml(S.set.mode, S.set.site, S.set.abyWx); return; }
+  if (sc) { S.set.site = sc.dataset.plSite; save(); const box = root.querySelector('#plSites'); if (box) box.innerHTML = sitesHtml(); return; }
   if ((x = t.closest('[data-pl-tutsel]'))) { S.set.tutSel = x.dataset.plTutsel; save(); renderSetup(); return; }
   if ((x = t.closest('[data-pl-tut]'))) { S.set.tutSel = x.dataset.plTut; save(); S.b = null; launchTut(x.dataset.plTut); return; }
   if ((x = t.closest('[data-pl-mm]'))) { S.set.mmode = x.dataset.plMm; save(); MH.onState(); return; }
@@ -1909,6 +2093,9 @@ function onClick(e) {
   }
   if (t.closest('[data-pl-restart]')) { if (S.match) return; S.b = null; if (S.tut) launchTut(S.tut); else launch(); return; }
   if (t.closest('[data-pl-full]')) { toggleFull(); return; }
+  if ((x = t.closest('[data-pl-gm]'))) { gmAct(x.dataset.plGm); return; }
+  if ((x = t.closest('[data-pl-gm-spd]'))) { if (S.gm) { S.gm.speed = Number(x.dataset.plGmSpd) || 1; renderGm(); } return; }
+  if ((x = t.closest('[data-pl-gmsp]'))) { const [k, id] = x.dataset.plGmsp.split(':'); gmSpawn(k, Number(id)); return; }
   if ((x = t.closest('[data-pl-pause]')) && S.match) return;
   if ((x = t.closest('[data-pl-pause]'))) { S.paused = !S.paused; x.textContent = tr(S.paused ? '继续' : '暂停'); x.classList.toggle('on', S.paused); return; }
   if ((x = t.closest('[data-pl-hudopt]'))) { toggleHudMenu(x); return; }

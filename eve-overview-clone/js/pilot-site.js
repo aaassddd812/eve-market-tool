@@ -104,7 +104,8 @@ const pickW = (w) => { let r = Math.random() * w.reduce((a, b) => a + b, 0); for
 // 实测统计的房间（T6，parts）：主体每个 NPC 按实测数量频率抽，总数要落在实测范围里、并且有这类房间的标志舰；护卫按实测概率整组出现
 function rollParts(sp) {
   const out = [];
-  sp.parts.forEach((pt, pi) => {
+  // 实测主体数量下限可以是 0（那些房间只有护卫）：主体抽到 0、护卫也没出现就是空房间，真实口袋不会这样，重抽
+  for (let tries = 0; tries < 30 && !out.length; tries++) sp.parts.forEach((pt, pi) => {
     if (pi && Math.random() >= pt.p) return;
     let n = null;
     for (let k = 0; k < 60; k++) {
@@ -115,10 +116,23 @@ function rollParts(sp) {
     }
     pt.g.forEach(([t], i) => { if (n?.[i]) out.push([t, n[i]]); });
   });
-  return out.map(([t, c], gi) => {
-    const a = 2 * Math.PI * gi / out.length + 0.4;
-    return { key: 'w' + gi, on: 'enter', at: [Math.round(Math.sin(a) * 40) / 10, 0, 25 + Math.round(Math.cos(a) * 40) / 10], npcs: [[t, c]] };
+  return layout(out.map(([t, c]) => [[[t, c]]]));
+}
+// 一组一波，绕导管一圈摆开：list = [[npcs, opt?]]；pre = 波次 key 前缀（作弊追加的波次用别的前缀，免得和原来的重名）
+function layout(list, pre = 'w') {
+  return list.map(([npcs, opt], gi) => {
+    const a = 2 * Math.PI * gi / list.length + 0.4;
+    return { key: pre + gi, on: 'enter', at: [Math.round(Math.sin(a) * 40) / 10, 0, 25 + Math.round(Math.cos(a) * 40) / 10], npcs, ...(opt ? { opt: true } : {}) };
   });
+}
+// 作弊自选数量：fix = { NPC 类型: 艘数 }，写了的照写的（0 = 不要），没写的照抽到的
+function fixWaves(waves, fix) {
+  const set = Object.entries(fix || {}).map(([t, c]) => [Number(t), Math.max(0, Math.min(50, Math.round(Number(c)) || 0))]).filter(([t]) => t);
+  if (!set.length) return waves;
+  const has = new Set(set.map(([t]) => t));
+  const list = waves.map((w) => [w.npcs.filter(([t]) => !has.has(t)), w.opt]).filter(([n]) => n.length);
+  for (const [t, c] of set) if (c > 0) list.push([[[t, c]]]);
+  return layout(list);
 }
 function rollRoom(sp) {
   if (sp.parts) return rollParts(sp);
@@ -142,11 +156,21 @@ function rollRoom(sp) {
   });
   return waves;
 }
-export function siteInstance(def, wxName) {
+// 组合里所有 NPC（设置页作弊列数量用）：[[类型, 实测数量范围文字]]
+function spTypes(sp) {
+  const out = new Map();
+  const txt = (lo, hi) => (lo === hi ? String(hi) : `${lo}-${hi}`);
+  // 护卫整组按概率出现，主体里的 NPC 实测有 0 艘的时候：下限都是 0
+  if (sp.parts) sp.parts.forEach((pt, pi) => pt.g.forEach(([t, h]) => { const ks = h.map((v, k) => (v ? k : -1)).filter((k) => k > 0); if (!out.has(t) && ks.length) out.set(t, txt(pi || h[0] ? 0 : ks[0], ks[ks.length - 1])); }));
+  else sp.g.forEach(([a, b, ids]) => { for (const t of new Set(ids)) if (!out.has(t)) out.set(t, `0-${b}`); });
+  return [...out];
+}
+// gm（开了作弊才有）：{ lv: 天气强度序号（-1 随机）, rooms: [{ sp: 组合 id（空 = 随机）, n: { NPC 类型: 艘数 } }] }
+export function siteInstance(def, wxName, gm = null) {
   if (!def?.pool) return def;
   // 没选过天气时用设置卡上默认高亮的那个（第一个），别随机（以前卡上亮电子、进去却随机成别的）
   const wx = def.wx[wxName] || def.wx[Object.keys(def.wx)[0]];
-  const li = randInt(0, wx.b.length - 1);
+  const li = gm?.lv >= 0 && gm.lv < wx.b.length ? gm.lv : randInt(0, wx.b.length - 1);
   const types = Object.entries(def.objs);
   const wxKey = Object.keys(def.wx).find((k) => def.wx[k] === wx);
   // 战利品：抽一趟同等级同天气的实跑 —— 每层的贮藏 / 节点照那趟的（第 N 层 = 那趟的第 N 个房间），
@@ -156,8 +180,9 @@ export function siteInstance(def, wxName) {
   const flat = conts.flat();
   if (lr && flat.length) for (const [t, q] of lr.run.g) pick(flat).loot.push([t, q]);
   const rooms = def.rooms.map((_, ri) => {
-    // 有实测出现次数（n）的按次数加权
-    const sp = def.pool[0].n ? def.pool[pickW(def.pool.map((x) => x.n))] : pick(def.pool);
+    // 有实测出现次数（n）的按次数加权；作弊选了组合的用选的
+    const gp = gm?.rooms?.[ri], chosen = gp?.sp ? def.pool.find((x) => x.id === gp.sp) : null;
+    const sp = chosen || (def.pool[0].n ? def.pool[pickW(def.pool.map((x) => x.n))] : pick(def.pool));
     const last = ri === def.rooms.length - 1;
     const objs = [
       { key: 'c', kind: 'conduit', type: last ? 47686 : 47685, at: [0, 0, 25], lock: 'room', exit: last },
@@ -177,7 +202,7 @@ export function siteInstance(def, wxName) {
       const p = kind === 'tower' ? [randInt(-12, 12), 0, randInt(12, 26)] : [randInt(-10, 10), 0, randInt(-8, 12)];
       objs.push({ key: 'z' + oi, kind, type: Number(t), at: p, r: o.r, zone: o.zone, slot: o.slot });
     });
-    return { spawn: [0, 0, -25], waves: rollRoom(sp), objs, clearMsg: '导管已开启', spawnId: sp.id, f: sp.f, room: sp.name, note: sp.note, inf: sp.inf };
+    return { spawn: [0, 0, -25], waves: chosen ? fixWaves(rollRoom(sp), gp.n) : rollRoom(sp), objs, clearMsg: '导管已开启', spawnId: sp.id, f: sp.f, room: sp.name, note: sp.note, inf: sp.inf };
   });
   return { ...def, weather: wx.b[li], wxLv: def.lv[li], cover: wx.cover, sky: pick(def.skies), rooms, loot: lr ? { anyWx: lr.anyWx, n: lr.n, total: lr.run.g.length } : null };
 }
@@ -332,7 +357,7 @@ export function siteTick() {
   if (st.abyss) {
     // 深渊计时：到点舰船被摧毁
     const left = (st.def.time || 1200) - (S.b.t - st.t0);
-    if (left <= 0 && S.me.alive) { H.log('跃迁力场崩塌，你的舰船被摧毁了', 'bad'); S.b.hurt(S.me, Infinity); return; }
+    if (left <= 0 && S.me.alive && !S.me.god) { H.log('跃迁力场崩塌，你的舰船被摧毁了', 'bad'); S.b.hurt(S.me, Infinity); return; }
     // 崩塌警告（客户端 UI/Abyss/AbyssalCollapseWarning*）：剩 60 / 30 / 10 秒时各提示一次（提示的时间点是自己定的）
     for (const w of [60, 30, 10]) if (left <= w && !(st.warned ||= new Set()).has(w)) { st.warned.add(w); H.msg(`跃迁力场崩塌警告：距灾难性的跃迁力场崩塌还有${w}秒`); }
     // 边界：出了房间半径，每秒按结构比例受伤（客户端只说「出界会受到伤害」，数值拿不准）
@@ -403,6 +428,57 @@ export function activate(i) {
   if (r === true) { st.pend = g.to; H.msg('加速轨道正在启动。'); }   // 客户端 UI/Sessions/AreUsingAccelerationGate
   else if (r === 'scram') H.msg('你的舰船被跃迁扰断，无法激活加速轨道');
 }
+
+// ---------- 作弊（GM 工具）----------
+// 直接去下一层：深渊照过导管的过场（不管锁没锁、离多远）；死亡空间直接落到下一个房间；已经是最后一层就算完成
+export function gmNext() {
+  const { S } = H;
+  const st = S.site;
+  if (!st?.rooms || st.end || st.jumping || !S.me?.alive) return false;
+  const k = st.room + 1;
+  if (!st.rooms[k]) { H.log(st.abyss ? '通过起源导管返回普通空间' : '复合体已完成', 'good'); finish(true); return true; }
+  st.nav = null;
+  st.pend = null;
+  if (st.abyss) {
+    const ci = st.rooms[st.room].objs.get('c')?.cel;
+    st.jumping = true;
+    const go = () => { if (S.site === st) enterRoom(k); };
+    if (ci == null || !H.jumpFx?.(ci, { onMid: go, onEnd: () => { st.jumping = false; } })) { st.jumping = false; H.fade?.(); go(); }
+  } else { H.fade?.(); enterRoom(k, true); }
+  return true;
+}
+// 深渊计时加减（秒）
+export function gmTime(sec) { const st = H.S.site; if (st?.abyss && !st.end) { st.t0 += sec; st.warned?.clear(); } }
+// 这一层的刷怪池（深渊）：[{ id, f, name }]
+export const gmPool = () => { const st = H.S.site; return st?.abyss ? st.def.pool.map((sp) => ({ id: sp.id, f: sp.f, name: sp.name || brief0(sp) })) : []; };
+const brief0 = (sp) => [...new Set(sp.g?.[0]?.[2] || [])].slice(0, 2).map(npcName).join(' / ');
+// 在当前这一层追加一组刷怪（照实测随机抽数量）：作为这一层的新波次，要清掉才开导管
+export function gmAddWaves(id) {
+  const { S } = H;
+  const st = S.site, R = st?.rooms?.[st.room], sp = st?.def.pool?.find((x) => x.id === id);
+  if (!R || !sp || st.end) return 0;
+  st.gmN = (st.gmN || 0) + 1;
+  const waves = layout(rollRoom(sp).map((w) => [w.npcs, w.opt]), `g${st.gmN}w`);
+  R.def.waves.push(...waves);
+  R.done = false;
+  return waves.reduce((n, w) => n + w.npcs.reduce((a, [, c]) => a + c, 0), 0);
+}
+// 刷 NPC（GM 工具搜到的 NPC）：环境效果跟着当前场景的天气
+export function gmDeployNpc(side, type, count, pos) {
+  const row = npcRow(type, H.S.site?.env || []);
+  return row ? deployNpc(side, row, count, pos) : [];
+}
+// 按名字搜 NPC（中英文都行）
+export function npcSearch(q) {
+  if (!ND || !q) return [];
+  const s = q.toLowerCase(), out = [];
+  for (const [k, n] of Object.entries(ND.npc)) {
+    if (n.n[0].toLowerCase().includes(s) || n.n[1].toLowerCase().includes(s)) out.push({ id: Number(k), name: npcName(Number(k)) });
+    if (out.length >= 12) break;
+  }
+  return out;
+}
+export const npcReady = () => Boolean(ND);
 
 // 增益栏（客户端 buffBarConst）：深渊天气一直在；气云 / 塔在范围里才有。返回 [[槽位, 提示里的数值行]]
 const WX_SLOT = { electricstorm: 'wxElec', darkness: 'wxDark', caustictoxin: 'wxCaustic', xenongas: 'wxXenon', infernal: 'wxInfernal' };
@@ -482,12 +558,13 @@ export function siteInfoHtml() {
     <span>${alive ? `敌人 ${alive}` : R?.done ? '房间已清理' : ''}</span></div>`;
 }
 // 设置页：场景卡片 + 详情
-export function siteSetupHtml(kind, sel, wxSel) {
+// gm：开了作弊时传 { 场景 id: 自选刷怪 }（深渊设置页多一块「自选刷怪」）
+export function siteSetupHtml(kind, sel, wxSel, gm = null) {
   const { esc } = H;
   const list = SITES.filter((s) => s.kind === kind);
   const cur = list.find((s) => s.id === sel) || list[0];
   if (!cur) return '<p class="text-muted">还没有场景</p>';
-  if (cur.pool) return abyssSetupHtml(list, cur, wxSel);
+  if (cur.pool) return abyssSetupHtml(list, cur, wxSel, gm);
   const info = dungeonInfo(cur.dungeon);
   const npcs = new Map();
   for (const r of cur.rooms) for (const w of r.waves || []) for (const [t, n] of w.npcs) npcs.set(t, (npcs.get(t) || 0) + n);
@@ -513,7 +590,23 @@ function lootLine(cur) {
   return n ? `<p class="text-muted"><b>战利品：</b>每趟抽 Abyssal.Space 上一次同等级同天气的实跑（共 ${n} 趟），拿到的东西照那趟；贮藏 / 节点也照那趟，东西随机分进各个容器（实跑只记整趟总数）。右键残骸「打开货柜」，船体面板左边「货舱和挂舱」看货柜舱和预估价格。</p>`
     : '<p class="text-muted"><b>战利品：</b>这一级还没有实跑数据，暂不掉落。</p>';
 }
-function abyssSetupHtml(list, cur, wxSel) {
+// 作弊自选：天气强度、每层的组合（按阵营分组），选了组合再列它的 NPC 填数量（空着照实测随机，0 = 不要）
+function gmPickHtml(cur, g) {
+  const { esc } = H;
+  const totalN = cur.pool.reduce((a, sp) => a + (sp.n || 0), 0);
+  const fac = new Map();
+  for (const sp of cur.pool) { if (!fac.has(sp.f)) fac.set(sp.f, []); fac.get(sp.f).push(sp); }
+  const room = (ri) => {
+    const gp = g.rooms?.[ri] || {}, sp = gp.sp ? cur.pool.find((x) => x.id === gp.sp) : null;
+    const opts = [...fac].map(([f, sps]) => `<optgroup label="${esc(f)}">${sps.map((x) => `<option value="${esc(x.id)}"${x === sp ? ' selected' : ''}>${esc(x.name || brief0(x))}${x.n && totalN ? `（${Math.round(x.n / totalN * 100)}%）` : ''}</option>`).join('')}</optgroup>`).join('');
+    const ns = sp ? spTypes(sp).map(([t, r]) => `<label class="pl-gm-n"><span>${esc(npcName(t))}</span><input type="number" class="pi-input" min="0" max="50" placeholder="${esc(r)}" value="${gp.n?.[t] ?? ''}" data-pl-gm-n="${ri}:${t}"></label>`).join('') : '';
+    return `<div class="pl-gm-room"><div class="pl-gm-rh"><b>${EN() ? `Pocket ${ri + 1}` : `第 ${ri + 1} 层`}</b><select class="plain-select" data-pl-gm-sp="${ri}"><option value="">随机</option>${opts}</select></div>${ns ? `<div class="pl-gm-ns">${ns}</div>` : ''}</div>`;
+  };
+  return `<div class="pl-gm-pick"><p><b>自选刷怪（作弊）</b><span class="text-muted">数量空着照实测随机，填 0 就不刷</span></p>
+    <div class="pl-gm-rh"><span>天气强度</span><select class="plain-select" data-pl-gm-lv><option value="-1">随机</option>${cur.lv.map((v, i) => `<option value="${i}"${g.lv === i ? ' selected' : ''}>${v}%</option>`).join('')}</select></div>
+    ${cur.rooms.map((_, ri) => room(ri)).join('')}</div>`;
+}
+function abyssSetupHtml(list, cur, wxSel, gm) {
   const { esc } = H;
   const wxKeys = Object.keys(cur.wx);
   const wk = cur.wx[wxSel] ? wxSel : wxKeys[0];
@@ -543,6 +636,7 @@ function abyssSetupHtml(list, cur, wxSel) {
       ${env?.desc?.length ? `<p class="text-muted">最强一档：${env.desc.map((d) => esc(d[EN() ? 1 : 0])).join('；')}</p>` : ''}
       <p><b>时限：</b>${Math.round(cur.time / 60)} 分钟 · <b>层数：</b>${layerCount(cur)} · <b>导管：</b>清完房间里的敌人后开启</p>
       ${lootLine(cur)}
+      ${gm ? gmPickHtml(cur, gm[cur.id] || {}) : ''}
       ${abyOpen
         ? `<div class="pl-aby-pool">${[...fac].map(([f, sps]) => `<div><b>${esc(f)}</b>${sps.map(spHtml).join('')}</div>`).join('')}</div>
       ${cur.pool.some((sp) => sp.inf) ? '<p class="text-muted">标「推断」的组合资料里没有：照 T5 同类组合换成 T6 版本的 NPC（数量没改）</p>' : ''}

@@ -142,6 +142,7 @@ export function createBattle(sides, opt) {
   const events = [];   // 增援、点名集火、撤离（回放与日志用）
   // 弹药打空：自动装填（客户端默认开）；玩家驾驶的装备装填后不会自己接着循环（要再开一次），关了自动装填的就停在 0 发
   const outOfAmmo = (u, st, x, t) => {
+    if (u.infAmmo) { st.ammo = x.ammo; return; }   // 驾驶模拟作弊：无限弹药（不用装填）
     if (u.pilot) { u.pilot.on.delete(x.m); if (u.pilot.noReload?.has(x.m)) { st.ammo = 0; return; } }
     st.ammo = x.ammo;
     st.reloadUntil = st.next = t + x.reload;
@@ -763,7 +764,7 @@ export function createBattle(sides, opt) {
 
   // ---------- 伤害 ----------
   function hit(u, v, dmg) {
-    if (!v.alive) return 0;
+    if (!v.alive || v.god) return 0;   // god：驾驶模拟作弊的无敌
     let left = dmg.slice(), dealt = 0;
     for (let layer = 0; layer < 3 && left; layer++) {
       const eff = left.reduce((s, x, k) => s + x * v.t.res[layer][k], 0);
@@ -826,7 +827,7 @@ export function createBattle(sides, opt) {
   }
   // 环境伤害（驾驶模拟的深渊出界、计时结束）：不计抗性，依次扣护盾、装甲、结构；amt = Infinity 直接摧毁
   B.hurt = (v, amt) => {
-    if (!v?.alive) return;
+    if (!v?.alive || v.god) return;
     let left = amt;
     for (let l = 0; l < 3 && left > 0; l++) { const x = Math.min(v.hp[l], left); v.hp[l] -= x; left -= x; v.r.taken += x; }
     if (v.hp[2] <= 1e-6) {
