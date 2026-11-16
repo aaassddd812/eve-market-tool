@@ -9,7 +9,7 @@
 //   节点 EveChild*（T·R·S，修饰器 TranslateWithCamera / Billboard2D，display 隐藏子树）；
 //   CPU 粒子 Tr2ParticleSystem + Tr2DynamicEmitter（随机均匀 / 球壳生成器，死亡 / 生存期发射器）；
 //   GPU 粒子 Tr2GpuUniqueEmitter（客户端在计算着色器里模拟，这里按 emit / update 着色器的算法在 CPU 上模拟，quads 着色器画）。
-// 坐标：客户端是左手系，世界原点是自己的船（ego）。先在「客户端坐标（米，绝对）」里算完，渲染时减去 ego、沿 X 镜像、换成千米放进场景。
+// 坐标：场景坐标 = 客户端坐标（右手系，见 sim-ships.js），客户端世界原点是自己的船（ego）。先按米（绝对坐标）算完，渲染时减去 ego、换成千米放进场景。
 // 不做的：点光源对舰船的照明（Tr2PointLight）、雾体积（按无雾）、星云渗色（NEBULA_BLEEDING）、粒子排序。详见报告。
 // 网格和贴图版权归 CCP。
 import * as THREE from './vendor/three/three.module.min.js';
@@ -981,7 +981,6 @@ export function createEnvFx(scene, base) {
 
   // ── 每帧：曲线 → 节点矩阵 → 粒子 → 网格 ──
   const mA = new THREE.Matrix4(), mB = new THREE.Matrix4(), qA = new THREE.Quaternion(), vA = new THREE.Vector3(), vB = new THREE.Vector3();
-  const MIRROR = new THREE.Matrix4().makeScale(-1, 1, 1);
   function updateInst(inst, ctx) {
     const { time, camA, egoA, axes } = ctx;
     if (inst.t0 === null) inst.t0 = time;
@@ -1085,13 +1084,12 @@ export function createEnvFx(scene, base) {
       const O = ORG || [0, 0, 0];
       const toSim = (v) => [v.x / KM + O[0], v.y / KM + O[1], v.z / KM + O[2]];
       const camS = toSim(camera.position), egoS = ego ? toSim(ego) : camS;
-      const mir = (p) => [-p[0], p[1], p[2]];
-      const camA = mir(camS), egoA = mir(egoS);
-      // 客户端坐标（相对 ego）→ 场景：沿 X 镜像、米换千米、平移到 ego 在场景里的位置
-      const toScene = new THREE.Matrix4().makeTranslation((egoS[0] - O[0]) * KM, (egoS[1] - O[1]) * KM, (egoS[2] - O[2]) * KM).multiply(new THREE.Matrix4().makeScale(-KM, KM, KM));
+      const camA = camS, egoA = egoS;
+      // 客户端坐标（相对 ego）→ 场景：米换千米、平移到 ego 在场景里的位置
+      const toScene = new THREE.Matrix4().makeTranslation((egoS[0] - O[0]) * KM, (egoS[1] - O[1]) * KM, (egoS[2] - O[2]) * KM).multiply(new THREE.Matrix4().makeScale(KM, KM, KM));
       camera.updateMatrixWorld();
       const cm = camera.matrixWorld.elements;
-      const axes = [[-cm[0], cm[1], cm[2]], [-cm[4], cm[5], cm[6]], [-cm[8], cm[9], cm[10]]].map((a) => { const l = Math.hypot(...a) || 1; return a.map((x) => x / l); });
+      const axes = [[cm[0], cm[1], cm[2]], [cm[4], cm[5], cm[6]], [cm[8], cm[9], cm[10]]].map((a) => { const l = Math.hypot(...a) || 1; return a.map((x) => x / l); });
       // GPU 粒子的裁剪：客户端坐标（相对 ego）→ 镜头空间（米）
       const viewM = new THREE.Matrix4().multiplyMatrices(camera.matrixWorldInverse, toScene).premultiply(new THREE.Matrix4().makeScale(1 / KM, 1 / KM, 1 / KM));
       const pe = camera.projectionMatrix.elements, p00 = pe[0], p11 = pe[5];
@@ -1107,7 +1105,7 @@ export function createEnvFx(scene, base) {
           inst = instantiate(d, e);
           // 天气云层的放置：给了 pos 用 pos，否则用边界泡中心，再没有用当时 ego 的位置
           const p = e.pos || (e.kind === 'cover' ? bnd?.pos || egoS : [0, 0, 0]);
-          inst.posA = mir(p);
+          inst.posA = [p[0], p[1], p[2]];
           insts.set(k, inst);
         }
         updateInst(inst, ctx);

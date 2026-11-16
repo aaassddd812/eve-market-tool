@@ -74,7 +74,7 @@ const TRANS_FS = `
     float streak = clamp(cap * m * v2.z, 0.0, 1.0);
     float alpha = clamp(edge * cap + max(streak, a0), 0.0, 1.0);
     float rk = alpha > 0.0 ? cap * edge / alpha : 0.0;
-    vec3 col = hasRefl > 0.5 ? textureCube(refl, vec3(-rd.x, rd.y, rd.z)).rgb * rk : vec3(0.0);
+    vec3 col = hasRefl > 0.5 ? textureCube(refl, rd).rgb * rk : vec3(0.0);   // 按世界方向直接取（场景坐标 = 客户端坐标）
     col += texture2D(tunnelMap, v2.xy).rgb * diffuse.rgb * cap;
     vec4 sh = mix(redShift, blueShift, step(0.5, v)) * mf2.w;
     float ic = 1.0 - cap;

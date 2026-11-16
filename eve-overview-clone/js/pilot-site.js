@@ -414,11 +414,18 @@ export function siteBuffs(u) {
     const e = H.ctx.data.env?.get(st.def.weather);
     out.set(WX_SLOT[st.def.cover], (e?.desc || []).map((d) => d[EN() ? 1 : 0]));
   }
+  // 几团同类气云 / 塔重叠：同一种加成只取一个值（dbuff 取最大 / 最小），和引擎一致
+  const bySlot = new Map();
   for (const z of S.b.zones) {
     if (!z.slot || (z.unit && !z.unit.alive) || Math.hypot(u.pos[0] - z.pos[0], u.pos[1] - z.pos[1], u.pos[2] - z.pos[2]) > z.r) continue;
-    const rows = H.ctx.FE.buffText(H.ctx.data, z.buffs || []);
-    out.set(z.slot, [...(out.get(z.slot) || []), ...rows.filter((x) => !out.get(z.slot)?.includes(x))]);
+    let m = bySlot.get(z.slot);
+    if (!m) bySlot.set(z.slot, (m = new Map()));
+    for (const [id, v] of z.buffs || []) {
+      const b = H.ctx.data.dbuffs?.get(id), old = m.get(id);
+      if (old === undefined || (b?.max ? v > old : v < old)) m.set(id, v);
+    }
   }
+  for (const [slot, m] of bySlot) out.set(slot, H.ctx.FE.buffText(H.ctx.data, [...m]));
   return out;
 }
 // 房间的环境特效（sim-env.js）：深渊边界泡、气云、天气云层

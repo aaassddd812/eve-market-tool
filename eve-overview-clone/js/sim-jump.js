@@ -7,15 +7,14 @@
 //   evecamera/shaker.py、evecamera/animation.py、ui/camera/{baseCamera,baseSpaceCamera,jumpCamera,shipOrbitCamera}.py。
 // 着色器照客户端 effect.dx11 的反汇编：jumptransition/jumptunneltransparent、jumptunneldistortion、specialfx/flarequad、
 //   specialfx/ubershadertwosided（同 sim-cfx.js 的 uber2）。
-// 坐标：客户端左手系，场景 = 客户端沿 X 镜像，单位千米；这里先在客户端坐标里算矩阵，再左乘镜像放进场景。
+// 坐标：场景坐标 = 客户端坐标（右手系，见 sim-ships.js），单位千米。
 // 网格和贴图版权归 CCP。
 import * as THREE from './vendor/three/three.module.min.js';
-import { curveValue, applyBinding } from './sim-env.js?v=3';
+import { curveValue, applyBinding } from './sim-env.js?v=4';
 
 const KM = 1 / 1000;
 const LOG_V = '#include <common>\n#include <logdepthbuf_pars_vertex>\n';
 const LOG_F = '#include <common>\n#include <logdepthbuf_pars_fragment>\n';
-const MIRROR = new THREE.Matrix4().makeScale(-1, 1, 1);
 
 // ── 时间线（毫秒，0 = JumpOutAbyssalBetween.Start）──
 export const JUMP_T = {
@@ -208,9 +207,8 @@ const TUN_FS = `${LOG_F} uniform float T; uniform sampler2D GlowMap, HeightMap, 
     float q = 2.0 * abs(v2.z - 0.5); q *= q;
     float bulge = 1.0 - q * q;
     vec3 col = bulge * Diffuse.rgb * (texture2D(DiffuseMap, v2.xy).rgb + texture2D(DiffuseMap, v1.zw).rgb * h) + glow * (a0 * bulge) * (a0 * bulge);
-    // 星云：立方体贴图（夹边）；客户端方向 = 场景方向的 X 取反
-    vec3 nd = normalize(v3);
-    vec3 neb = textureCube(NebulaMap, vec3(-nd.x, nd.y, nd.z), -1.0).rgb;
+    // 星云：立方体贴图（夹边），按世界方向直接取
+    vec3 neb = textureCube(NebulaMap, normalize(v3), -1.0).rgb;
     gl_FragColor = vec4(mix(neb, col, sstep((v2.z - NC.x) / (NC.y - NC.x))), a0 * NC.w + (1.0 - NC.w));
   }`;
 // jumptunneldistortion.fx：两遍（ADD 写 +o / MAX、REVSUBTRACT 写 −o / MAX → 净 2o / MAX，z = 1/256，w = DistortionFactors.y）
@@ -463,7 +461,6 @@ export function createJumpFx(scene, base) {
   const mA = new THREE.Matrix4(), mB = new THREE.Matrix4(), mC = new THREE.Matrix4(), qA = new THREE.Quaternion(), qB = new THREE.Quaternion();
   const vA = new THREE.Vector3(), vB = new THREE.Vector3();
   const camC = new THREE.Vector3(), rightC = new THREE.Vector3(), upC = new THREE.Vector3(), fwdC = new THREE.Vector3();
-  const mirrorV = (v) => v.set(-v.x, v.y, v.z);
   // EveChildModifierBillboard3D（fixed = false）：Billboard2D（3×3 换成逆视图矩阵的三个轴 × 原轴长）→ DistanceBase 对齐矩阵，out = billboard · align（align 先作用）
   const bbA = new THREE.Matrix4(), cf = new THREE.Vector3(), rt = new THREE.Vector3(), up = new THREE.Vector3(), rr = new THREE.Vector3();
   const intoBasis = (out, v, e) => out.set(v.x * e[0] + v.y * e[1] + v.z * e[2], v.x * e[4] + v.y * e[5] + v.z * e[6], v.x * e[8] + v.y * e[9] + v.z * e[10]);
@@ -488,8 +485,8 @@ export function createJumpFx(scene, base) {
     let inst = null, dead = false, t0 = null;
     const st = { bgSlot: true };   // 已经切过的时间点
     load().then((d) => { if (d && !dead) inst = instance(d); });
-    // 导管旋转（客户端）：场景里绕 Y 转 yaw → 客户端 (0, sin(−yaw/2), 0, cos(yaw/2))
-    const gateQ = new THREE.Quaternion(0, Math.sin(-o.gateYaw / 2), 0, Math.cos(o.gateYaw / 2));
+    // 导管旋转：绕 Y 转 yaw（和 sim-station.js 摆的模型一致）
+    const gateQ = new THREE.Quaternion(0, Math.sin(o.gateYaw / 2), 0, Math.cos(o.gateYaw / 2));
     return {
       // t：过场时间（毫秒，JUMP_T 的 0 点 = createJumpSequence 开始）；camera：已经摆好的镜头；ship：{ pos（场景）, quat（场景）} 或 null；hi：高画质
       update(t, camera, ship, hi) {
@@ -510,8 +507,8 @@ export function createJumpFx(scene, base) {
           const jt = inst.tunRoot;
           qA.copy(gateQ).multiply(qB.fromArray(jt.rotation || [0, 0, 0, 1]));
           mA.compose(vA.set(0, 0, 0), qA, vB.fromArray(jt.scaling || [1, 1, 1]).multiplyScalar(KM));
-          // 场景矩阵 = 镜像 · 客户端矩阵；根节点的世界平移 = 镜头位置（场景里），再乘子节点 Tunnel 的局部平移
-          const W = inst.tunMat.uniforms.uW.value.multiplyMatrices(MIRROR, mA);
+          // 根节点的世界平移 = 镜头位置，再乘子节点 Tunnel 的局部平移
+          const W = inst.tunMat.uniforms.uW.value.copy(mA);
           W.elements[12] = camera.position.x; W.elements[13] = camera.position.y; W.elements[14] = camera.position.z;
           const tr = inst.tunNode.translation || [0, 0, 0];
           W.multiply(mB.makeTranslation(tr[0], tr[1], tr[2]));
@@ -528,22 +525,20 @@ export function createJumpFx(scene, base) {
         inst.wm.visible = Boolean(showFx && hi);   // HideOnLQ：displayFilter 3（SHADER_HIGHMID）
         if (showFx) {
           inst.outSets.apply(now);
-          // 镜头（客户端坐标）：位置、右 / 上 / 前三个轴（场景镜头的轴沿 X 镜像；three 的镜头看 −Z）
+          // 镜头：位置、右 / 上 / 前三个轴（three 的镜头看 −Z）
           camera.updateMatrixWorld();
           const ce = camera.matrixWorld.elements;
-          mirrorV(camC.copy(camera.position));
-          mirrorV(rightC.set(ce[0], ce[1], ce[2]).normalize());
-          mirrorV(upC.set(ce[4], ce[5], ce[6]).normalize());
-          mirrorV(fwdC.set(-ce[8], -ce[9], -ce[10]).normalize());
-          // 船：客户端旋转 = 镜像 · 场景旋转 · 镜像
+          camC.copy(camera.position);
+          rightC.set(ce[0], ce[1], ce[2]).normalize();
+          upC.set(ce[4], ce[5], ce[6]).normalize();
+          fwdC.set(-ce[8], -ce[9], -ce[10]).normalize();
           mC.makeRotationFromQuaternion(ship.quat);
-          mC.premultiply(MIRROR).multiply(MIRROR);
-          mA.makeTranslation(-ship.pos.x, ship.pos.y, ship.pos.z).multiply(mC).multiply(mB.makeScale(o.shipR, o.shipR, o.shipR));
+          mA.makeTranslation(ship.pos.x, ship.pos.y, ship.pos.z).multiply(mC).multiply(mB.makeScale(o.shipR, o.shipR, o.shipR));
           const rs = inst.roter.scaling || [1, 1, 1];
           mA.multiply(mB.makeScale(rs[0], rs[1], rs[2]));   // Roter 的世界矩阵（外层容器、HideOnLQ 都是单位矩阵）
           // QuadFlare：中心 = 父矩阵 × 自己的平移（0）；角点按局部矩阵左上 2×2 × 父矩阵三轴之和的长度 / √3
           const q = inst.quad, fu = inst.fqMat.uniforms, pe = mA.elements, qs = q.scaling || [1, 1, 1];
-          fu.uCenter.value.set(-pe[12], pe[13], pe[14]);
+          fu.uCenter.value.set(pe[12], pe[13], pe[14]);
           fu.uAxes.value.set(qs[0], 0, 0, qs[1]);
           fu.uScale.value = Math.hypot(pe[0] + pe[4] + pe[8], pe[1] + pe[5] + pe[9], pe[2] + pe[6] + pe[10]) * 0.57735;
           const c = q.color || [1, 1, 1, 1], b = q.brightness ?? 1;
@@ -551,7 +546,6 @@ export function createJumpFx(scene, base) {
           // 涡旋网格：局部缩放 15.53 → Billboard3D → 场景
           const ws = inst.worm.scaling || [1, 1, 1];
           billboard3D(mB.copy(mA).multiply(mC.makeScale(ws[0], ws[1], ws[2])), inst.wm.matrix);
-          inst.wm.matrix.premultiply(MIRROR);
           inst.wm.matrixWorld.copy(inst.wm.matrix);
           const u = inst.wU;
           u.time.value = T;

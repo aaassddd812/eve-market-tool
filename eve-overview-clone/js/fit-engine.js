@@ -194,6 +194,15 @@ class Item {
   }
 }
 
+// 某个属性上参与叠加惩罚的百分比加成（后百分比链、非豁免），按小数返回（+30% → 0.3）；属性本身不受惩罚返回 null。
+// 驾驶模拟用：深渊气云 / 塔的加成要和这些排进同一条链重新算
+export function penFracs(item, attrId) {
+  if (!item) return [];
+  const meta = item.data.attrs.get(attrId);
+  if (!meta || meta.stackable) return null;
+  return (item.mods.get(attrId) || []).filter((m) => m.op === OP.postPercent && !m.exempt).map((m) => modValue(m) / 100).filter((x) => x);
+}
+
 function modValue(m) {
   return m.fn ? m.fn() : m.src.attr(m.srcAttr);
 }
@@ -538,8 +547,9 @@ function special(effect, item, { ship, exempt, shipItems, ownedItems }) {
     case 'moduleBonusAfterburner':
     case 'moduleBonusMicrowarpdrive': {
       // 推进器：先加质量，再按 速度系数 × 推力 ÷ 质量 提升最大速度；微跃推进器另有信号半径膨胀
+      // 速度提升走「后乘」那条链（pyfa penaltyGroup='postMul'），不和超载喷射器、纳米纤维这些百分比加成互相惩罚；信号膨胀在百分比链里
       ship.addMod(AT.mass, { op: OP.modAdd, src: item, srcAttr: AT.massAddition, exempt });
-      ship.addMod(AT.maxVelocity, { op: OP.postPercent, src: item, exempt, fn: () => item.attr(AT.speedFactor) * item.attr(AT.speedBoostFactor) / ship.attr(AT.mass) });
+      ship.addMod(AT.maxVelocity, { op: OP.postMul, src: item, exempt, fn: () => 1 + item.attr(AT.speedFactor) * item.attr(AT.speedBoostFactor) / ship.attr(AT.mass) / 100 });
       if (effect.name === 'moduleBonusMicrowarpdrive') ship.addMod(AT.signatureRadius, { op: OP.postPercent, src: item, srcAttr: AT.signatureRadiusBonus, exempt });
       return true;
     }

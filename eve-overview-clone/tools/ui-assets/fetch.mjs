@@ -5,13 +5,14 @@
 //          （bc6h.mjs + sky.py，需要 Pillow、numpy，以及 tools/ship-models 装好的依赖）
 //          深渊空间的星空：--sky abyssal/ad03_A,abyssal/ad04_B（客户端 dx9/scene/abyssal/ad01~06_A~C_cube，SDE graphicID 22041~22214）
 //   --fx：同时转换武器 / 爆炸特效贴图（texture/fx/ 下的 DDS）到 fx/（fx.py，需要 Pillow、numpy）
+//   --starfield：同时转换近处闪烁星精灵（EveStarfield）的图集 / 调色板到 fx/starfield/，镜头周围尘埃（dustfield）的贴图到 fx/dustfield/（sky.py）
 //
 // 和 tools/ship-models/convert.mjs 一样只用公开资源：binaries.eveonline.com 取当前客户端版本 → resfileindex，
 // 再从 resources.eveonline.com 下载需要的界面贴图（客户端里本来就是 PNG，不用转换）和 EVE Sans Neue 字体。
 // 输出路径 = res:/ui/texture/ 之后的路径（字体放在 fonts/），例如 assets/eveui/classes/shipui/gauge1.png。
 //
 // 素材与字体版权归 CCP，仅供本站驾驶模拟画面使用。
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { gunzipSync } from 'node:zlib';
@@ -158,9 +159,9 @@ await Promise.all(Array.from({ length: 8 }, async () => {
   }
 }));
 // 游戏星空（客户端 EveSpaceScene：dx9/scene/universe/<名>_cube.black）：
-//   sky/<名>/{px..nz}.webp 星云（BC6H HDR，bc6h.mjs 解码 → sky.py 按 sRGB 编码）、sky/<名>/refl/ 反射立方体（RGB 环境反射，A 分配星点层），
+//   sky/<名>/{px..nz}.avif / .webp 星云（BC6H HDR，bc6h.mjs 解码 → sky.py 按 sRGB 编码；已有星空缺 AVIF 时只补 AVIF）、sky/<名>/refl/ 反射立方体（RGB 环境反射，A 分配星点层），
 //   sky/<名>/scene.json 场景参数（nebulaIntensity、reflectionIntensity、背景着色器的 AlphaBlend / StarParameters / Tint），
-//   sky/stars.webp 星点平铺图（各星空共用）
+//   sky/stars.webp 星点平铺图（各星空共用）+ stars-mips.webp（DDS 自带的其余各层 mip）
 if (args.sky) {
   await import('../ship-models/node_modules/@carbonenginejs/runtime/dist/trinity/index.js');
   const { CjsBlackFormat } = await import('../ship-models/node_modules/@carbonenginejs/runtime/dist/resource/formats/black/index.js');
@@ -173,7 +174,17 @@ if (args.sky) {
     const k = name.includes('/') ? `dx9/scene/${name.toLowerCase()}_cube` : `dx9/scene/universe/${name}_cube`;
     if (!INDEX.has(k + '.dds')) { log('没有这张星空', name); continue; }
     const dir = join(OUT, 'sky', name.split('/').pop().toLowerCase());
-    if (existsSync(join(dir, 'scene.json')) && !args.force) continue;
+    const nm = name.split('/').pop();
+    const neb = join(tmp, nm + '.dds'), f32 = join(tmp, nm + '.f32'), rf = join(tmp, nm + '_refl.dds');
+    const decode = async () => {
+      writeFileSync(neb, await fetchBuf(RES + INDEX.get(k + '.dds')));
+      const r = spawnSync('node', [join(HERE, 'bc6h.mjs'), neb, f32], { stdio: 'inherit' });
+      if (r.status) throw new Error('星云解码失败 ' + name);
+    };
+    if (existsSync(join(dir, 'scene.json')) && !args.force) {
+      if (!existsSync(join(dir, 'px.avif'))) { await decode(); py('nebula-avif', f32, dir); rmSync(f32, { force: true }); }   // 浮点文件 400 MB，用完就删
+      continue;
+    }
     mkdirSync(dir, { recursive: true });
     const black = (await CjsBlackFormat.read(new Uint8Array(await fetchBuf(RES + INDEX.get(k + '.black'))))).object;
     const cp = Object.fromEntries((black.backgroundEffect?.constParameters || []).map((p) => [p.name, Array.from(p.value)]));
@@ -183,16 +194,13 @@ if (args.sky) {
       nebulaIntensity: black.nebulaIntensity ?? null, reflectionIntensity: black.reflectionIntensity ?? null, ambientColor: r4(black.ambientColor && Array.from(black.ambientColor)),
       alphaBlend1: r4(cp.AlphaBlend1), alphaBlend2: r4(cp.AlphaBlend2), starParameters: r4(cp.StarParameters), tint: r4(cp.Tint), nebulaScaling: r4(cp.NebulaScaling),
     }));
-    const nm = name.split('/').pop();
-    const neb = join(tmp, nm + '.dds'), f32 = join(tmp, nm + '.f32'), rf = join(tmp, nm + '_refl.dds');
-    writeFileSync(neb, await fetchBuf(RES + INDEX.get(k + '.dds')));
-    const r = spawnSync('node', [join(HERE, 'bc6h.mjs'), neb, f32], { stdio: 'inherit' });
-    if (r.status) throw new Error('星云解码失败 ' + name);
+    await decode();
     py('nebula', f32, dir);
+    rmSync(f32, { force: true });
     writeFileSync(rf, await fetchBuf(RES + INDEX.get(k + '_refl.dds')));
     py('refl', rf, join(dir, 'refl'));
     const star = (rs.StarMap || '').toLowerCase().replace(/^res:\//, '');
-    if (star && INDEX.has(star) && (!existsSync(starsOut) || args.force)) {
+    if (star && INDEX.has(star) && (!existsSync(starsOut) || !existsSync(starsOut.replace(/\.webp$/, '-mips.webp')) || args.force)) {
       const sf = join(tmp, 'stars.dds');
       writeFileSync(sf, await fetchBuf(RES + INDEX.get(star)));
       py('stars', sf, starsOut);
@@ -217,6 +225,31 @@ if (args.fx && (!existsSync(join(OUT, 'fx', 'turret.webp')) || args.force)) {
   }
   const r = spawnSync('python3', ['-I', join(HERE, 'fx.py'), tmp, join(OUT, 'fx')], { stdio: 'inherit' });
   if (r.status) throw new Error('特效贴图转换失败');
+}
+// 近处闪烁星精灵（客户端 sceneManager._PrepareBackgroundLandscapes 挂的 res:/dx9/scene/starfield/spritestars.red，EveStarfield）的贴图 → fx/starfield/
+if (args.starfield && (!existsSync(join(OUT, 'fx', 'starfield', 'starcolors.png')) || args.force)) {
+  const tmp = join(tmpdir(), 'eve-starfield');
+  mkdirSync(tmp, { recursive: true });
+  const src = {};
+  for (const n of ['staratlas', 'starcolors']) {
+    const k = `dx9/scene/starfield/${n}.dds`;
+    if (!INDEX.has(k)) throw new Error('没有 ' + k);
+    writeFileSync((src[n] = join(tmp, n + '.dds')), await fetchBuf(RES + INDEX.get(k)));
+  }
+  const r = spawnSync('python3', ['-I', join(HERE, 'sky.py'), 'starfield', src.staratlas, src.starcolors, join(OUT, 'fx', 'starfield')], { stdio: 'inherit' });
+  if (r.status) throw new Error('星精灵贴图转换失败');
+}
+// 镜头周围的太空尘埃（sceneManager.ApplySolarsystemAttributes 挂的 res:/dx9/scene/dustfield.red）：dustfield.fx 的 TexMap → fx/dustfield/whiteglobe.png
+if (args.starfield && (!existsSync(join(OUT, 'fx', 'dustfield', 'whiteglobe.png')) || args.force)) {
+  const k = 'texture/particle/whiteglobe.dds';
+  if (!INDEX.has(k)) throw new Error('没有 ' + k);
+  const tmp = join(tmpdir(), 'eve-dustfield');
+  mkdirSync(tmp, { recursive: true });
+  const src = join(tmp, 'whiteglobe.dds');
+  writeFileSync(src, await fetchBuf(RES + INDEX.get(k)));
+  mkdirSync(join(OUT, 'fx', 'dustfield'), { recursive: true });
+  const r = spawnSync('python3', ['-I', join(HERE, 'sky.py'), 'tex', src, join(OUT, 'fx', 'dustfield', 'whiteglobe.png')], { stdio: 'inherit' });
+  if (r.status) throw new Error('尘埃贴图转换失败');
 }
 writeFileSync(join(OUT, 'BUILD.txt'), `EVE client build ${build}\n素材版权归 CCP，仅供本站驾驶模拟画面使用。\n\ntactical/anchor.png、tactical/arrow_tactical.png：由客户端 res:/ui/inflight/tactical/{anchor,arrow_tactical}.dds 用 Pillow 转成 PNG（原样，不改像素）。\n`);
 log('下载', done, '已有', skip, '共', list.length, '→', OUT);

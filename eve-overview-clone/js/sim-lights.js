@@ -7,7 +7,7 @@
 //     IES 灯型（Tr2LightProfileRes 1024×1 曲线，着色器按 u = 0.5 − 0.5·cos 取样后乘进衰减）。
 //   推进器灯（EveBoosterUtilities AddBoosterLights）：每个喷口一盏，半径 × lerp(lightRadius, lightWarpRadius, 跃迁) × 推进强度，
 //     颜色 lerp(lightColor, lightWarpColor, 跃迁) × 闪动（ComputeBoosterLightFlicker：128 项随机表线性插值）。
-//   坐标：模型几何载入时镜像了 X（sim-ships.js），灯的位置、方向也镜像。
+//   坐标：模型局部坐标原样用（米），和几何一样不镜像。
 //   子特效灯的颜色由转换器按阵营色表求好（EveChildInheritProperties → Tr2CurveColorMixer，阵营灯 Tr2FactionLight）。
 //   子特效里自动播放的曲线集驱动的颜色 / 亮度 / 半径（Tr2CurveScalar / Tr2CurveColor / Mixer / 表达式）：按 sim-curves.js 逐帧求值。
 //   没做：灯光的阴影（客户端「阴影 高」时部分灯有阴影图集）、要游戏逻辑触发才播放的曲线集（playOnLoad false，用静态值）、Tr2TexturedPointLight。
@@ -107,7 +107,7 @@ export function updateShipLights(list, camera, w, h, t) {
           cr = (bl.c[0] * (1 - warp) + bl.wc[0] * warp) * f; cg = (bl.c[1] * (1 - warp) + bl.wc[1] * warp) * f; cb = (bl.c[2] * (1 - warp) + bl.wc[2] * warp) * f;
         } else if (l[13] === 5) k *= ((perlin1D_22((t + c * 7.31) * l[15], l[16]) + 1) / 2) * l[14];
         if (R <= 0 || k <= 0) continue;
-        W.set(-l[0], l[1], l[2]).applyMatrix4(M);
+        W.set(l[0], l[1], l[2]).applyMatrix4(M);
         const Rk = R * s;
         sph.set(W, Rk);
         if (!frustum.intersectsSphere(sph)) continue;
@@ -144,7 +144,7 @@ export function updateShipLights(list, camera, w, h, t) {
     U.c.value[i].set(q.r * Math.PI, q.g * Math.PI, q.b * Math.PI, q.inner);
     if (l[11] > 0) {
       N3.setFromMatrix4(q.M);
-      D.set(-l[8], l[9], l[10]).applyMatrix3(N3).transformDirection(camera.matrixWorldInverse);
+      D.set(l[8], l[9], l[10]).applyMatrix3(N3).transformDirection(camera.matrixWorldInverse);
       U.d.value[i].set(D.x, D.y, D.z, l[11]);
       U.e.value[i].set(l[12], q.ies, 0, 0);
     } else U.d.value[i].set(0, 0, 0, 0);
