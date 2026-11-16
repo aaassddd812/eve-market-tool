@@ -135,10 +135,15 @@ function gameHtml(text) {
   return out + '</span>'.repeat(open) + (bold ? '</b>' : '');
 }
 
-function formatISK(value) {
+// 个性化设置「价格缩写」（eve-prefs.iskShort，默认开）：关掉后全站价格显示完整数字（240M → 240,000,000）；
+// short = true 时总是缩写（图表坐标轴刻度，完整数字太宽）
+let iskFull = null;
+const isIskFull = () => iskFull ?? (iskFull = store.getJSON('eve-prefs', {})?.iskShort === 'off');
+function formatISK(value, short = false) {
   if (value === null || value === undefined || isNaN(value)) return '—';
   const num = parseFloat(value);
   const abs = Math.abs(num);
+  if (!short && isIskFull()) return num.toLocaleString('zh-CN', { maximumFractionDigits: abs >= 1e6 ? 0 : 2 });   // 百万以上的分没有意义
   if (abs >= 1e12) return `${(num / 1e12).toFixed(2)}T`;
   if (abs >= 1e9) return `${(num / 1e9).toFixed(2)}B`;
   if (abs >= 1e6) return `${(num / 1e6).toFixed(2)}M`;
@@ -826,8 +831,8 @@ function loadAbyssModule() {
 // 角色交易（宁静服：官方论坛 Character Bazaar）：首次进入时加载
 let bazaarLoading = null;
 function loadBazaarModule() {
-  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v21').then((m) => {
-    m.initBazaar({ esc, formatNumber, formatISK, showToast, fetchESI, store, getLivePrices: getLiveHubPrices, fitData: () => loadFittingModule().then((f) => f.fitData()), closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
+  if (!bazaarLoading) bazaarLoading = import('./bazaar.js?v=v22').then((m) => {
+    m.initBazaar({ esc, formatNumber, formatISK, iskFull: isIskFull, showToast, fetchESI, store, getLivePrices: getLiveHubPrices, fitData: () => loadFittingModule().then((f) => f.fitData()), closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       // 曙光服角色挂售：已绑定的角色与各自的令牌
       copyText, accountToken, openEsiBind: () => { switchView('profile'); openEsiModal(); },
       esiAccounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name || String(a.character_id) })) });
@@ -949,7 +954,7 @@ async function getHubSellOrders(ids) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v70').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v71').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, getCharacterImplants, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -1059,7 +1064,7 @@ async function openCourier() {
 // 合同（公开合同存档 + 我的个人 / 军团 / 联盟合同）：首次进入时加载
 let contractsLoading = null;
 function loadContractsModule() {
-  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v10').then((m) => {
+  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v11').then((m) => {
     m.initContracts({
       esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, officialName, locationName, loadNpcNames, typeName,
       valuation, valuationCard, store, game: gameActions, regions: REGIONS, marketRegions: () => state.marketRegions, loadMarketRegions,
@@ -1152,7 +1157,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v333').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v334').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -1307,7 +1312,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v113').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v114').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -2230,7 +2235,7 @@ function initItemPopups() {
     openItem: (id) => { switchView('market'); selectItem(id); },
     loadPanel: async () => {
       if (itemPanelModule) return itemPanelModule;
-      const m = await import('./item-panel.js?v=3');
+      const m = await import('./item-panel.js?v=4');
       m.initItemPanel({
         esc, formatISK, formatPrice, formatNumber, cssVar, showToast, locationName, resolveStructureNames,
         server: SERVER.id, regions: REGIONS, globalRegion: GLOBAL_MARKET_REGION, isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -3532,13 +3537,13 @@ function renderChart() {
         x: { grid: { display: false }, ticks: { color: textColor, maxTicksLimit: 10, maxRotation: 0, font: { size: 11 } } },
         y: {
           position: 'left', grid: { color: gridColor },
-          ticks: { color: textColor, font: { size: 11 }, callback: (v) => formatISK(v) }
+          ticks: { color: textColor, font: { size: 11 }, callback: (v) => formatISK(v, true) }
         },
         y1: {
           position: 'right', grid: { drawOnChartArea: false }, beginAtZero: true,
           // 成交量柱只占下方约三分之一，避免遮住价格线
           suggestedMax: Math.max(...rows.map((d) => d.volume)) * 3,
-          ticks: { color: textColor, font: { size: 11 }, callback: (v) => formatISK(v) }
+          ticks: { color: textColor, font: { size: 11 }, callback: (v) => formatISK(v, true) }
         }
       }
     }
@@ -3788,7 +3793,8 @@ const PREFS = [
   ['mapZoom', '星图反转鼠标方向', ['normal', 'reverse'], false],   // 只反转滚轮缩放
   ['treeLines', '显示分类目录连接线', ['off', 'on'], true],
   ['treeIcons', '市场目录显示分类与物品图标', ['off', 'on'], true],
-  ['kbPrice', '击杀估价按吉他卖价（不勾按吉他中间价）', ['mid', 'sell'], false]   // 全站击杀记录、会战、星图实时击杀、预警的价值口径（服务器按 price=sell 换算）
+  ['kbPrice', '击杀估价按吉他卖价（不勾按吉他中间价）', ['mid', 'sell'], false],   // 全站击杀记录、会战、星图实时击杀、预警的价值口径（服务器按 price=sell 换算）
+  ['iskShort', '价格缩写（如 240.00M，不勾显示完整数字）', ['off', 'on'], true]   // formatISK；切换后刷新页面
 ];
 // 击杀估价口径：给本站击杀记录服务（/api/kb/）的 GET 请求统一带上 price=sell，各页面不用各自处理
 let kbFetchWrapped = false;
@@ -3811,6 +3817,7 @@ function applyPrefs(p = store.getJSON('eve-prefs', {})) {
   } else delete document.documentElement.dataset.skin;
   document.documentElement.classList.toggle('no-tree-lines', p.treeLines === 'off');
   document.documentElement.classList.toggle('no-tree-icons', p.treeIcons === 'off');
+  iskFull = p.iskShort === 'off';
   const sell = p.kbPrice === 'sell';
   wrapKbFetch();
   if (Boolean(window.__kbPriceSell) !== sell) {
@@ -3872,6 +3879,8 @@ function initPrefs() {
     applyPrefs(p);
     // 打开「EVE 风格界面」时切到深色（这套界面按深色设计；之后仍可用主题按钮换浅色）
     if (box.dataset.pref === 'skin' && box.checked && state.theme !== 'dark') { store.set('eve-theme', 'dark'); applyTheme('dark'); }
+    // 价格缩写：各页面已经画好的数字不会自己变，刷新一次全部按新格式
+    if (box.dataset.pref === 'iskShort') location.reload();
   });
 }
 
@@ -6028,7 +6037,20 @@ const CONTRACT_STATUS_GROUPS = [
 const CONTRACT_ROLES = [['all', '全部合同'], ['issuer', '我发起的'], ['acceptor', '我接受的'], ['assignee', '指派给我的']];
 // 军团合同（「军团合同」权限，/corporations/{id}/contracts/）：角色按军团算——代表军团发起 / 军团接受 / 指派给军团
 const CORP_CONTRACT_ROLES = [['all', '全部合同'], ['issuer', '军团发起的'], ['acceptor', '军团接受的'], ['assignee', '指派给军团的']];
-const CONTRACT_SOURCES = [['me', '个人合同'], ['corp', '军团合同']];
+// 联盟合同：ESI 没有联盟合同接口，列的是个人与军团接口里可见范围为联盟的（去重）；军团接口也会带上这些，它们只归联盟，不算军团合同
+const ALLY_CONTRACT_ROLES = [['all', '全部合同'], ['issuer', '我发起的'], ['acceptor', '我接受的']];
+const CONTRACT_SOURCES = [['me', '个人合同'], ['corp', '军团合同'], ['alliance', '联盟合同']];
+const contractRoleOpts = (src) => (src === 'corp' ? CORP_CONTRACT_ROLES : src === 'alliance' ? ALLY_CONTRACT_ROLES : CONTRACT_ROLES);
+// 当前来源的合同列表（或 { __error }）；没读过时为 null
+function contractSource(src) {
+  if (src === 'me') return state.contracts;
+  const corp = state.corpContracts;
+  if (src === 'corp') return corp && !corp.__error ? corp.filter((c) => c.availability !== 'alliance') : corp;
+  const lists = [state.contracts, hasScopeGroup('corpContracts') ? corp : null].filter(Array.isArray);
+  if (!lists.length) return state.contracts?.__error ? state.contracts : corp?.__error ? corp : null;
+  const seen = new Set();
+  return lists.flat().filter((c) => c.availability === 'alliance' && !seen.has(c.contract_id) && seen.add(c.contract_id));
+}
 
 state.contracts = null;              // 合同列表（或 { __error }）
 state.contractItems = new Map();     // contract_id -> items
@@ -6053,9 +6075,10 @@ function contractStatusPill(c) {
   return `<span class="pill status-${key}">${esc(text)}</span>`;
 }
 
-function contractRoles(c, me) {
+// asCorp：按军团算（军团合同）；联盟合同不管来自哪个接口都按自己算
+function contractRoles(c, me, asCorp = Boolean(c._corp)) {
   const roles = [];
-  if (c._corp) {
+  if (asCorp) {
     if (c.issuer_corporation_id === me && c.for_corporation) roles.push('issuer');
     if (c.acceptor_id === me) roles.push('acceptor');
     if (c.assignee_id === me) roles.push('assignee');
@@ -6133,14 +6156,20 @@ async function resolveContractParties(contracts) {
 }
 
 async function renderContractsTab(box) {
-  const corp = state.contractView.src === 'corp';
-  if (corp && !hasScopeGroup('corpContracts')) { renderContractList(box); return; }
-  if (corp ? !state.corpContracts || state.corpContractsLoading : !state.contracts || state.contractsLoading) {
+  const view = state.contractView.src;
+  const corpScope = hasScopeGroup('corpContracts');
+  if (view === 'corp' && !corpScope) { renderContractList(box); return; }
+  // 联盟合同要个人和军团两份（没有军团权限时只读个人）
+  const loads = [
+    view !== 'corp' && (!state.contracts || state.contractsLoading) && loadContracts,
+    view !== 'me' && corpScope && (!state.corpContracts || state.corpContractsLoading) && loadCorpContracts
+  ].filter(Boolean);
+  if (loads.length) {
     box.innerHTML = skCards(4, 'contract-grid') + skToolbar(4) + skRows(10);
-    await (corp ? loadCorpContracts() : loadContracts());
-    if (activeProfileTab() !== 'contracts' || (state.contractView.src === 'corp') !== corp) return;
+    await Promise.all(loads.map((f) => f()));
+    if (activeProfileTab() !== 'contracts' || state.contractView.src !== view) return;
   }
-  const src = corp ? state.corpContracts : state.contracts;
+  const src = contractSource(view) || [];
   if (src.__error) { renderContractList(box); return; }
   const contract = state.contractView.id != null && src.find((c) => c.contract_id === state.contractView.id);
   if (contract) await renderContractDetail(box, contract);
@@ -6151,11 +6180,11 @@ function renderContractList(box) {
   const view = state.contractView;
   const corp = view.src === 'corp';
   const noScope = corp && !hasScopeGroup('corpContracts');
-  const src = noScope ? [] : (corp ? state.corpContracts : state.contracts) || [];
-  const me = corp ? src[0]?._corp : myCharacterId();
+  const src = noScope ? [] : contractSource(view.src) || [];
+  const me = corp ? state.corpContracts?.[0]?._corp : myCharacterId();
   const all = (src.__error ? [] : [...src]).sort((a, b) => new Date(b.date_issued) - new Date(a.date_issued));
   const byRoleStatus = all.filter((c) =>
-    (view.role === 'all' || contractRoles(c, me).includes(view.role)) &&
+    (view.role === 'all' || contractRoles(c, me, corp).includes(view.role)) &&
     (view.status === 'all' || contractStatusKey(c) === view.status));
   const counts = { all: byRoleStatus.length };
   byRoleStatus.forEach((c) => { counts[c.type] = (counts[c.type] || 0) + 1; });
@@ -6166,13 +6195,13 @@ function renderContractList(box) {
     options.map(([v, label]) => `<option value="${v}"${v === value ? ' selected' : ''}>${label}</option>`).join('') + '</select>';
 
   const rows = list.map((c) => {
-    const roles = contractRoles(c, me);
+    const roles = contractRoles(c, me, corp);
     const roleText = corp ? (roles.includes('issuer') ? '军团发起' : roles.includes('acceptor') ? '军团接受' : roles.includes('assignee') ? '指派给军团' : '')
       : roles.includes('issuer') ? '我发起' : roles.includes('acceptor') ? '我接受' : roles.includes('assignee') ? '指派给我' : '';
     const counterpart = roles.includes('issuer') ? (c.acceptor_id || c.assignee_id) : c.issuer_id;
     return `<tr class="contract-row" data-contract-id="${c.contract_id}" tabindex="0">
         <td><span class="pill type-${c.type}">${esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))}</span></td>
-        <td class="contract-title"><strong><span class="pill type-${c.type} type-inline">${esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))}</span>${esc(c.title || '（无标题）')}</strong><span class="cell-sub">#${c.contract_id}${roleText ? ' · ' + roleText : ''}</span></td>
+        <td class="contract-title"><strong><span class="pill type-${c.type} type-inline">${esc(zhLabel(CONTRACT_TYPE_ZH, c.type, c.type))}</span>${esc(c.title || '（无标题）')}</strong><span class="cell-sub">#${c.contract_id}${roleText ? ' · <span>' + roleText + '</span>' : ''}</span></td>
         <td>${contractStatusPill(c)}</td>
         <td>${counterpart ? (counterpart === c.issuer_id || counterpart === c.acceptor_id ? ST.badge(ST.entById(counterpart)) : '') + esc(displayName(counterpart)) : '<span class="muted-cell">—</span>'}</td>
         <td class="num">${contractAmount(c)}</td>
@@ -6189,7 +6218,7 @@ function renderContractList(box) {
       '</div>' +
       '<span class="toolbar-spacer"></span>' +
       select('contractSrc', CONTRACT_SOURCES, view.src) +
-      select('contractRole', corp ? CORP_CONTRACT_ROLES : CONTRACT_ROLES, view.role) +
+      select('contractRole', contractRoleOpts(view.src), view.role) +
       select('contractStatus', CONTRACT_STATUS_GROUPS, view.status) +
     '</div>' +
     (noScope ? scopeNeededHtml('corpContracts', '查看军团合同')
@@ -6199,9 +6228,14 @@ function renderContractList(box) {
           '<th>类别</th><th>合同</th><th>状态</th><th>对方</th><th class="num">金额</th><th>地点</th><th class="num">发布</th>' +
         '</tr></thead><tbody>' + rows + '</tbody></table></div>'
       : '<p class="text-muted">没有符合条件的合同</p>') +
-    '<p class="text-muted valuation-note" title="ESI 只返回最近 30 天">共 ' + all.length + ' 份合同</p>';
+    '<p class="text-muted valuation-note" title="ESI 只返回最近 30 天">共 ' + all.length + ' 份合同' +
+      (view.src === 'alliance' ? (hasScopeGroup('corpContracts') ? ' · 个人与军团合同里可见范围为联盟的' : ' · 没有「军团合同」权限，只列出个人合同里可见范围为联盟的 <button type="button" class="link-btn" data-scope-rebind="corpContracts">重新授权</button>') : '') + '</p>';
 
-  $('contractSrc').addEventListener('change', (e) => { view.src = e.target.value; view.id = null; renderContractsTab(box); });
+  $('contractSrc').addEventListener('change', (e) => {
+    view.src = e.target.value; view.id = null;
+    if (!contractRoleOpts(view.src).some(([v]) => v === view.role)) view.role = 'all';
+    renderContractsTab(box);
+  });
   $('contractRole').addEventListener('change', (e) => { view.role = e.target.value; renderContractList(box); });
   $('contractStatus').addEventListener('change', (e) => { view.status = e.target.value; renderContractList(box); });
 }
@@ -7083,8 +7117,8 @@ let charAlertsLoading = null;
 function initCharAlerts() {
   const check = () => {
     if (charAlertsLoading || !['skill', 'job', 'pi', 'sold', 'contract'].some((s) => AP.wants(s))) return;
-    charAlertsLoading = import('./char-alerts.js?v=v4').then((m) => m.initCharAlerts({
-      esiAuthFetch, ensureEsiToken, fetchESI, typeName, resolveTypeNames, store, serverKey, showToast,
+    charAlertsLoading = import('./char-alerts.js?v=v5').then((m) => m.initCharAlerts({
+      esiAuthFetch, ensureEsiToken, fetchESI, typeName, resolveTypeNames, store, serverKey, showToast, iskFull: isIskFull,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
       sysName: (id) => officialName(id) || String(id),

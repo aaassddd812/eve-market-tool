@@ -4207,6 +4207,10 @@ html.pie-open { overflow: hidden; }
 .ind-inputs { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
 .ind-inputs .pi-num { width: 110px; }
 .ind-invent { align-self: center; }
+.ind-inputs .pi-input:disabled { opacity: 0.6; cursor: not-allowed; }
+.ind-melock { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 12px; border: 0; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-secondary); font: inherit; font-size: 0.75rem; white-space: nowrap; cursor: pointer; }
+.ind-melock:hover { color: var(--text-primary); }
+.ind-melock.open { background: var(--accent-soft); color: var(--accent-primary); }
 .ind-stats { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .ind-stats b small { font-size: 0.6875rem; color: var(--text-muted); font-weight: 400; }
 .ind-stat-loss { background: color-mix(in srgb, var(--sell-color) 13%, transparent) !important; }
@@ -9138,6 +9142,8 @@ html[data-skin="eve"]:not([data-theme="light"]) .stat-card,
 html[data-skin="eve"]:not([data-theme="light"]) .valuation-card,
 html[data-skin="eve"]:not([data-theme="light"]) .kb-hours,
 html[data-skin="eve"]:not([data-theme="light"]) .kb-top-card { border-color: transparent; }
+/* 弹窗（合同详情等）底色也是 --bg-secondary，卡片没了描边会和底色连成一片：弹窗里的卡片用页面里小卡片的炭黑 */
+html[data-skin="eve"]:not([data-theme="light"]) .modal-content :is(.stat-card, .valuation-card) { background: var(--bg-primary); }
 @media (min-width: 769px) {
   html[data-skin="eve"] tbody td { padding-top: 10px; padding-bottom: 10px; }
 

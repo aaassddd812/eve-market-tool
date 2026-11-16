@@ -202,8 +202,8 @@ function drawDepth(M, canvas, books) {
         tooltip: { ...B.tooltip, callbacks: { title: (it) => ctx.formatPrice(it[0].parsed.x) + ' ISK', label: (c) => tr(`${c.dataset.label}：${ctx.formatNumber(c.parsed.y)}`) } }
       },
       scales: {
-        x: { type: 'linear', min: lo, max: hi, grid: { color: B.grid }, ticks: { color: B.text, font: { size: 11 }, maxTicksLimit: 8, callback: (v) => ctx.formatISK(v) } },
-        y: { beginAtZero: true, grid: { color: B.grid }, ticks: { color: B.text, font: { size: 11 }, callback: (v) => ctx.formatISK(v) } }
+        x: { type: 'linear', min: lo, max: hi, grid: { color: B.grid }, ticks: { color: B.text, font: { size: 11 }, maxTicksLimit: 8, callback: (v) => ctx.formatISK(v, true) } },
+        y: { beginAtZero: true, grid: { color: B.grid }, ticks: { color: B.text, font: { size: 11 }, callback: (v) => ctx.formatISK(v, true) } }
       }
     }
   }));
@@ -385,8 +385,8 @@ function drawHistory(M, canvas, series, days, mine) {
       },
       scales: {
         x: { grid: { display: false }, ticks: { color: B.text, maxTicksLimit: 10, maxRotation: 0, font: { size: 11 }, callback(v) { const d = this.getLabelForValue(v); return dense ? d.slice(2, 7) : d.slice(5); } } },
-        y: { position: 'left', grid: { color: B.grid }, ticks: { color: B.text, font: { size: 11 }, callback: (v) => ctx.formatISK(v) } },
-        y1: { position: 'right', beginAtZero: true, suggestedMax: maxVol * 3, grid: { drawOnChartArea: false }, ticks: { color: B.text, font: { size: 11 }, callback: (v) => ctx.formatISK(v) } }
+        y: { position: 'left', grid: { color: B.grid }, ticks: { color: B.text, font: { size: 11 }, callback: (v) => ctx.formatISK(v, true) } },
+        y1: { position: 'right', beginAtZero: true, suggestedMax: maxVol * 3, grid: { drawOnChartArea: false }, ticks: { color: B.text, font: { size: 11 }, callback: (v) => ctx.formatISK(v, true) } }
       }
     }
   });

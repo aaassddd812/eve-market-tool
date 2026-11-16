@@ -4,6 +4,7 @@
 //   过期 = 到期后消失且没人出价；撤单重发 = 同一发起人在同一份快照里发了物品完全相同的新合同。
 // 我的合同（绑定 ESI）：个人 /characters/{id}/contracts/，军团 /corporations/{id}/contracts/（「军团合同」权限）。
 //   ESI 没有联盟合同接口，「联盟」列出的是这两处里可见范围为联盟的合同（指派给联盟、但自己与军团都不是发起方 / 接受方的合同读不到）。
+//   军团接口也会返回可见范围为联盟的合同，这些只归「联盟」，不在「军团」里重复。
 
 import * as ST from './standings.js?v=v6';
 
@@ -222,7 +223,7 @@ async function loadEsi(kind, force) {
         renderBody();
         return;
       }
-      list = kind === 'corp' ? out.filter((c) => c._src === 'corp' || c.availability === 'corporation' || c.issuer_corporation_id === me.corp && c.for_corporation)
+      list = kind === 'corp' ? out.filter((c) => c.availability !== 'alliance' && (c._src === 'corp' || c.availability === 'corporation' || c.issuer_corporation_id === me.corp && c.for_corporation))
         : out.filter((c) => c.availability === 'alliance');
     } else {
       list = (await ctx.esiAuthFetchPaged(`/characters/${me.id}/contracts/`)).map((c) => ({ ...c, _src: 'me' }));

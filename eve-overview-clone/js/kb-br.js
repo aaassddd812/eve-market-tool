@@ -897,7 +897,7 @@ export function niceAxis(v, n = 4) {
   return { step, max: step * Math.ceil(Math.max(v, 1) * 1.04 / step) };
 }
 // 刻度上的 ISK：去掉多余的 0（10.00B → 10B）
-const axisIsk = (v) => (v ? ctx.app.formatISK(v).replace(/\.?0+(?=[KMBT]?$)/, '') : '0');
+const axisIsk = (v) => (v ? ctx.app.formatISK(v, true).replace(/\.?0+(?=[KMBT]?$)/, '') : '0');
 
 function timelineBox() {
   return `<div class="kb-br-chart" id="brChart">

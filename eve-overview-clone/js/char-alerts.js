@@ -39,6 +39,7 @@ function sync() {
 const ts = (v) => Date.parse(v) || 0;
 const fmt = (v) => Number(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const isk = (v) => {
+  if (ctx.iskFull?.()) return fmt(v);   // 个性化设置关了价格缩写
   for (const [n, u] of [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']]) if (Math.abs(v) >= n) return (v / n).toFixed(2) + u;
   return fmt(v);
 };

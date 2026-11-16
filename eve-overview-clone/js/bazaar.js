@@ -139,7 +139,7 @@ function ago(iso) {
 }
 const fullTime = (iso) => (iso ? new Date(iso).toLocaleString('zh-CN', { hour12: false }) : '');
 const spText = (v) => (v == null ? '' : (v >= 100 ? Math.round(v) : +v.toFixed(1)) + 'M SP');
-const iskText = (v) => (v == null ? '' : +v.toFixed(1) + 'B ISK');
+const iskText = (v) => (v == null ? '' : ctx.iskFull?.() ? ctx.formatISK(v * 1e9) + ' ISK' : +v.toFixed(1) + 'B ISK');   // v 以 B 计；个性化设置关了价格缩写时显示完整数字
 
 // ---------- 侧边栏：类型、排序、技能点范围、交易须知 ----------
 function filtered() {

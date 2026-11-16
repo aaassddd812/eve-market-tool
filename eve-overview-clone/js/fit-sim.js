@@ -372,10 +372,10 @@ function insightsHtml(R) {
     ${line('纸面 DPS', (f) => f.paper, num)}
     ${line('命中率', (f) => f.app, pct, true, '实际打到目标身上的伤害 / 锁定后可以打出的纸面伤害（射程、命中、电容不足都会拉低）')}
     ${line('平均有效输出', (f) => f.dps, (v) => num(v) + '/s', true, '扣掉抗性后实际造成的伤害 ÷ 交战时长')}
-    ${line('总 EHP', (f) => f.ehp, ctx.formatISK)}
+    ${line('总 EHP', (f) => f.ehp, (v) => ctx.formatISK(v, true))}
     ${anyOf('reps') || F.A.reps || F.B.reps ? line('遥修抵消承伤', (f) => (f.taken ? f.reps / f.taken : 0), pct, true, '遥修修回的 HP / 受到的伤害') : ''}
     ${anyOf('capped') ? line('电容见底时间', (f) => f.capped, pct, false, '电容不够、耗电装备只能部分运转的时间占比（艘·秒）') : ''}
-    ${F.A.drained || F.B.drained ? line('中和 / 吸走电容', (f) => f.drained, (v) => ctx.formatISK(v) + ' GJ') : ''}
+    ${F.A.drained || F.B.drained ? line('中和 / 吸走电容', (f) => f.drained, (v) => ctx.formatISK(v, true) + ' GJ') : ''}
     ${anyOf('jammed') ? line('被 ECM 干扰', (f) => f.jammed, pct, false) : ''}
     ${anyOf('noRange') ? line('锁定距离不够', (f) => f.noRange, pct, false, '交战距离超过锁定距离、锁不上目标的时间占比') : ''}
     ${anyOf('outRange') ? line('射程外', (f) => f.outRange, pct, false, '目标在武器射程外、没法开火的时间占比（还在接近或被风筝）') : ''}
@@ -876,8 +876,8 @@ function paintScore() {
     if (total) {
       share = loss.A.v / total;
       const unit = loss.isk ? ' ISK' : ' EHP';
-      pa = ctx.formatISK(loss.A.v) + unit;
-      pb = ctx.formatISK(loss.B.v) + unit;
+      pa = ctx.formatISK(loss.A.v, !loss.isk) + unit;   // EHP 不是价格，总是缩写
+      pb = ctx.formatISK(loss.B.v, !loss.isk) + unit;
     }
     q('.sim-sb-pct .m').textContent = total ? ':' : '损失';
     q('.sim-sb-pct').title = 'A 方损失 : B 方损失';
@@ -1454,7 +1454,7 @@ function renderSides() {
     return `<section class="sim-side sim-side-${s.toLowerCase()}">
       <header class="sim-side-head">
         <h4><span class="sim-badge">${s} 方</span>${tot.ships} 艘${tot.loading ? `<small class="sim-loading">读取装配 ${list.length - tot.loading} / ${list.length}</small>` : ''}</h4>
-        <div class="sim-side-stats"><span>纸面 <b>${ctx.formatNumber(Math.round(tot.dps))}</b> DPS</span><span><b>${ctx.formatISK(tot.ehp)}</b> EHP</span>${tot.reps ? `<span>遥修 <b>${ctx.formatNumber(Math.round(tot.reps))}</b>/s</span>` : ''}</div>
+        <div class="sim-side-stats"><span>纸面 <b>${ctx.formatNumber(Math.round(tot.dps))}</b> DPS</span><span><b>${ctx.formatISK(tot.ehp, true)}</b> EHP</span>${tot.reps ? `<span>遥修 <b>${ctx.formatNumber(Math.round(tot.reps))}</b>/s</span>` : ''}</div>
       </header>
       ${sideOptsHtml(s)}
       <div class="sim-add">

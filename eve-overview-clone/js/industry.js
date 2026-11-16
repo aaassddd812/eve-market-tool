@@ -503,10 +503,12 @@ function calc() {
   if (bpMode === 'bpo' && bpoPrice == null) bpMode = 'none';
   const useManual = bpMode === 'manual' && manual;
   const inv = canInvent && !useManual ? invention(pid, C.dec) : null;
-  // 默认 ME / TE：自己买的蓝图 > 发明拷贝 > 按合同拷贝时取那份拷贝 > 设置里的默认值
-  const bpcRow = bpMode === 'bpc' ? bp.bpc[0] : null;
-  const me = act === 'r' ? 0 : C.me ?? (useManual && manual.me != null ? manual.me : inv ? inv.me : bpcRow ? bpcRow[3] : F.me);
-  const te = act === 'r' ? 0 : C.te ?? (useManual && manual.te != null ? manual.te : inv ? inv.te : bpcRow ? bpcRow[4] : F.te);
+  // ME / TE 锁定（C.me、C.te 都是 null）时跟随默认：自己买的蓝图填了的 > 发明拷贝 > 制造设置的默认 ME / TE（和利润排行一致）；
+  // 解锁后用 C.me / C.te，只对当前产品生效
+  const meSrc = act === 'r' ? null : useManual && (manual.me != null || manual.te != null) ? 'manual' : inv ? 'inv' : 'set';
+  const me = act === 'r' ? 0 : C.me ?? (useManual && manual.me != null ? manual.me : inv ? inv.me : F.me);
+  const te = act === 'r' ? 0 : C.te ?? (useManual && manual.te != null ? manual.te : inv ? inv.te : F.te);
+  const meLocked = C.me == null && C.te == null;
   const runs = Math.max(1, C.runs);
   const j = job(pid, runs, me, te);
   // 两遍：第一遍收集要化矿的材料，解出最便宜的矿石组合后第二遍按化矿单价计成本、画层次图
@@ -557,7 +559,7 @@ function calc() {
   const profitNoBp = profit + bpCost;
   const payPrice = useManual ? manual.price : bpoPrice;
   const payback = payPrice != null && profitNoBp > 0 ? Math.ceil(payPrice / (profitNoBp / runs)) : null;
-  return { pid, act, me, te, runs, j, rows, raw, matCost, g: out.g, lp, inv, invCost, bp, bpoPrice, bpcPerRun, bpMode, bpCost, manual, manualPerRun, payback, total, unitPrice, revenue, profit, perUnit: total / j.out };
+  return { pid, act, me, te, meSrc, meLocked, runs, j, rows, raw, matCost, g: out.g, lp, inv, invCost, bp, bpoPrice, bpcPerRun, bpMode, bpCost, manual, manualPerRun, payback, total, unitPrice, revenue, profit, perUnit: total / j.out };
 }
 
 // ---------- 页面框架 ----------
@@ -903,8 +905,9 @@ function drawCalc() {
       </div>
       <div class="ind-inputs">
         <div class="pi-num"><span>流程数</span><input type="number" class="pi-input" min="1" max="100000" value="${r.runs}" data-ind-calc="runs"></div>
-        ${r.act === 'm' ? `<div class="pi-num"><span>蓝图 ME</span><input type="number" class="pi-input" min="0" max="10" value="${r.me}" data-ind-calc="me"></div>
-        <div class="pi-num"><span>蓝图 TE</span><input type="number" class="pi-input" min="0" max="20" step="2" value="${r.te}" data-ind-calc="te"></div>` : ''}
+        ${r.act === 'm' ? `<div class="pi-num"><span>蓝图 ME</span><input type="number" class="pi-input" min="0" max="10" value="${r.me}" data-ind-calc="me"${r.meLocked ? ' disabled' : ''}></div>
+        <div class="pi-num"><span>蓝图 TE</span><input type="number" class="pi-input" min="0" max="20" step="2" value="${r.te}" data-ind-calc="te"${r.meLocked ? ' disabled' : ''}></div>
+        ${meLockBtn(r)}` : ''}
         ${invFor(r.pid) ? `<label class="pi-check ind-invent"><input type="checkbox" data-ind-calc="invent"${C.invent ? ' checked' : ''}><span>计入发明成本</span></label>` : ''}
       </div>
       <div class="pi-stats ind-stats">
@@ -948,6 +951,14 @@ function drawCalc() {
   requestAnimationFrame(restoreScrolls);
   requestAnimationFrame(() => requestAnimationFrame(restoreScrolls));
   setTimeout(restoreScrolls, 150);
+}
+
+// 计算器 ME / TE 的锁：锁定时跟随默认（制造设置 / 发明拷贝 / 我买的蓝图），解锁后单独改这个产品
+function meLockBtn(r) {
+  const LOCK = { set: ['跟随设置', '跟随制造设置里的默认 ME / TE；点一下解锁，单独改这个产品'], inv: ['按发明拷贝', '按发明出的拷贝算（随解码器变）；点一下解锁，单独改这个产品'], manual: ['按我的蓝图', '按「我买的蓝图」里填的 ME / TE；点一下解锁，单独改这个产品'] };
+  const [label, tip] = r.meLocked ? LOCK[r.meSrc] || LOCK.set : ['已解锁', '已解锁，只改这个产品；点一下锁定，恢复默认'];
+  const icon = r.meLocked ? '<path d="M8 11V7a4 4 0 0 1 8 0v4"/>' : '<path d="M8 11V7a4 4 0 0 1 7.75-1.4"/>';
+  return `<button type="button" class="ind-melock${r.meLocked ? '' : ' open'}" data-ind-melock aria-pressed="${r.meLocked}" title="${tip}"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/>${icon}</svg><span>${label}</span></button>`;
 }
 
 // 蓝图价格卡片：市场 / 合同 / NPC 价格，下面选蓝图成本怎么计；「我买的蓝图」可填总价、流程数、ME / TE，或从合同拷贝一键带入
@@ -1560,6 +1571,13 @@ function planResult(res) {
 
 function onClick(e) {
   if (planResult(F.tab === 'calc' ? Plan.onCalcEvent(e) : Plan.onPlanEvent(e))) return;
+  if (e.target.closest('[data-ind-melock]')) {
+    // 解锁：从当前值开始改；锁定：清掉，恢复跟随默认
+    if (C.me == null && C.te == null) { const r = calc(); C.me = r.me; C.te = r.te; } else { C.me = null; C.te = null; }
+    drawCalc();
+    if (C.me != null) $('indCalc')?.querySelector('[data-ind-calc="me"]')?.focus();
+    return;
+  }
   if (e.target.closest('[data-ind-addplan]')) {
     const r = calc();
     Plan.addToPlan(r.pid, { runs: r.runs, me: C.me, te: C.te, invent: Boolean(r.inv), dec: C.dec });
@@ -1760,7 +1778,7 @@ function onChange(e) {
     else {
       const lim = k === 'me' ? 10 : 20;
       cur[k] = t.value.trim() === '' ? null : Math.max(0, Math.min(lim, Math.round(Number(t.value) || 0)));
-      C[k] = null;
+      C.me = null; C.te = null;   // 重新锁定，按刚填的 ME / TE 算
     }
     setBpCost(C.pid, cur.price > 0 || cur.me != null || cur.te != null ? cur : null);
     C.bpMode = 'manual';
