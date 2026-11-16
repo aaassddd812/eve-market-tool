@@ -787,8 +787,17 @@ export function createBattle(sides, opt) {
   // 环境区域（驾驶模拟的深渊云团 / 塔，dogma 里是 AOE 信标的 dbuff）：{ pos, r, unit?（塔被打掉就失效）, mods: { sig, vel, agi, track, sbAmt, sbDur }（乘数）,
   //   dmg: [电磁, 热能, 动能, 爆炸]（每 cycle 秒打一次区域里的无人机和 droneFrig 标记的 NPC） }
   B.zones = [];
-  function zoneStep(alive, t) {
+  // 同一种加成几团重叠只算一个值（dbuff 的合并方式：速度 81、惯性 80 取最小，信号 79、跟踪 84、护盾回充 88 / 89 取最大）
+  const ZONE_MIN = new Set(['vel', 'agi']);
+  // 一条属性的叠加惩罚：加成、减益各自从强到弱排（dogma 正负分开），小数列表（+300% → 3）
+  const chain = (l) => stack(l.filter((x) => x < 0), true) * stack(l.filter((x) => x > 0), false);
+  // 区域加成和同属性的其他百分比加成排进同一条链：装备的（模板 pen）、电子战的（网子 / 标记器 / 跟踪扰断与远程跟踪），
+  // 结果 ÷ 装备那条链本身（模板数值里已经算过）
+  // pen：null = 属性本身不受惩罚（直接乘），没有（电脑船、无人机）= 没有装备加成
+  const inChain = (pen, ewar, z) => (pen === null ? chain([...ewar]) * z : chain([...(pen || []), ...ewar, z - 1]) / chain([...(pen || [])]));
+  function zoneStep(alive, t, webs, paints, wd) {
     for (const u of alive) { u.tauMult = 1; u.sbAmt = 1; u.sbDur = 1; }
+    const got = new Map();
     for (const z of B.zones) {
       if (z.unit && !z.unit.alive) continue;
       const fire = z.dmg && t >= (z.next ?? 0);
@@ -796,14 +805,23 @@ export function createBattle(sides, opt) {
       for (const v of alive) {
         if (v.warp || len(sub(v.pos, z.pos)) > z.r) continue;
         const m = z.mods || {};
-        if (m.sig) v.sigMult *= m.sig;
-        if (m.vel) v.velMult *= m.vel;
-        if (m.agi) v.tauMult *= m.agi;
-        if (m.track) v.trackMult *= m.track;
-        if (m.sbAmt) v.sbAmt *= m.sbAmt;
-        if (m.sbDur) v.sbDur *= m.sbDur;
+        let g = got.get(v);
+        for (const k in m) {
+          if (!m[k]) continue;
+          if (!g) got.set(v, (g = {}));
+          g[k] = g[k] == null ? m[k] : ZONE_MIN.has(k) ? Math.min(g[k], m[k]) : Math.max(g[k], m[k]);
+        }
         if (fire && (v.isDrone || v.droneFrig)) hit(null, v, z.dmg);
       }
+    }
+    for (const [v, g] of got) {
+      const pen = v.t.pen || {};
+      if (g.vel) v.velMult = inChain(pen.vel, webs.get(v) || [], g.vel);
+      if (g.sig) v.sigMult = inChain(pen.sig, paints.get(v) || [], g.sig);
+      if (g.track) v.trackMult = inChain(pen.track, wd.get(v)?.track || [], g.track);
+      if (g.agi) v.tauMult = inChain(pen.agi, [], g.agi);
+      if (g.sbAmt) v.sbAmt = g.sbAmt;
+      if (g.sbDur) v.sbDur = g.sbDur;
     }
   }
   // 环境伤害（驾驶模拟的深渊出界、计时结束）：不计抗性，依次扣护盾、装甲、结构；amt = Infinity 直接摧毁
@@ -1374,7 +1392,7 @@ export function createBattle(sides, opt) {
     // 同一属性的加成和减益各自排序算叠加惩罚（dogma 里正负分开），再相乘
     const both = (l) => stack(l.filter((x) => x < 0), true) * stack(l.filter((x) => x > 0), false);
     for (const [v, o] of wd) for (const [k, l] of Object.entries(o)) v[k + 'Mult'] = both(l);
-    if (B.zones.length) zoneStep(alive, t);
+    if (B.zones.length) zoneStep(alive, t, webs, paints, wd);
     chaseStep(alive, t);
 
     // 没有输出舰船的一方：剩下的船开始撤离

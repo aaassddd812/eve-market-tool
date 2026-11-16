@@ -9,17 +9,17 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v40';
-import { loadShipIndex } from './sim-ships.js?v=v18';
-import { warpShake } from './sim-warp.js?v=3';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v41';
+import { loadShipIndex } from './sim-ships.js?v=v19';
+import { warpShake } from './sim-warp.js?v=4';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v11';
-import { bindUnit, pilotUnit } from './sim-unit.js?v=v8';
+import { bindUnit, pilotUnit } from './sim-unit.js?v=v9';
 import { buildMatch, stepMatch } from './match-sim.js?v=v11';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=7';
 import * as SC from './pilot-scan.js?v=7';
-import * as ST from './pilot-site.js?v=21';
+import * as ST from './pilot-site.js?v=22';
 import * as CG from './pilot-cargo.js?v=2';
 import * as OS from './pilot-ovset.js?v=1';
 
@@ -67,7 +67,7 @@ const RM = {
 
 // 星系天体（跃迁目的地，tools/pilot-systems.py 生成）：页面一加载就预读，起飞 / 匹配开局前要用
 let SYS = null, sysP = null;
-const loadSys = () => (sysP ||= fetch('pilot-systems.json?v=2').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => (SYS = d)));
+const loadSys = () => (sysP ||= fetch('pilot-systems.json?v=3').then((r) => (r.ok ? r.json() : null)).catch(() => null).then((d) => (SYS = d)));
 export function initPilot(context) {
   ctx = context;
   loadSys();
@@ -859,6 +859,20 @@ function ovAutoFit(k) {
   applyOvCols(ws);
   saveOvCols(ws);
 }
+// 窗口边距模式（carbonui/window/settings.py WindowMarginModeStorage）：默认「自动」= 桌面高 < 1080 用紧凑（内容边距 8）、否则标准（16）；
+// 这里的「桌面」就是模拟画面（全屏时 = 屏幕），变了就重排总览页签
+let marginRO = null;
+function watchMargin(st) {
+  marginRO?.disconnect();
+  if (!st) return;
+  const sync = () => {
+    const m = st.clientHeight < 1080 ? 'compact' : 'normal';
+    if (st.dataset.margin !== m) { st.dataset.margin = m; ovLine(); }
+  };
+  sync();
+  marginRO = new ResizeObserver(sync);
+  marginRO.observe(st);
+}
 function winsHtml() {
   return WINS.filter((w) => !w.need || w.need()).map((w) => `<div class="pl-w pl-win-${w.id}${w.id === 'ov' ? ' pl-ov' : ''}${w.nokill ? ' nokill' : ''}" data-win="${w.id}" hidden>
     <div class="pl-wh${w.id === 'fleet' ? ' tabs' : ''}" data-win-drag><img class="pl-wi" src="${winIcon(w)}" alt="">${w.id === 'fleet' ? FL.fleetTabsHtml() : `<span${w.id === 'ov' ? ' id="plOvTitle"' : ''}>${w.id === 'ov' ? ovTitle() : w.title}</span>`}
@@ -1108,6 +1122,7 @@ function renderStage() {
       <b>${esc(typeName(flyShip()))}</b><span id="plLoadTxt">正在准备战场…</span>
       <div class="pl-loadbar"><i id="plLoadBar"></i></div></div></div>
   </section></div>`;
+  watchMargin(root.querySelector('#plStage'));
   S.sky = sky;
   placeWins();
   renderShip();
@@ -1146,7 +1161,7 @@ function renderStage() {
   FL.renderFleet(true);
   SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v91').then((m) => {
+  import('./sim-3d.js?v=v92').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -1173,7 +1188,8 @@ function renderStage() {
         if (!items.length) return;
         e.preventDefault(); hideHint(); closeMenus(); S.cm = items; cmenuAt(e);
       }
-    }, { brackets: brkPath, ui: UI, quality: 'auto', skybox: `${UI}sky/${S.sky}/`, fx: `${UI}fx/`, post: true, fov: 1.0 });   // 客户端环绕镜头 default_fov = 1.0 弧度（「镜头动态移动」关着时）
+    }, { brackets: brkPath, ui: UI, quality: 'auto', skybox: `${UI}sky/${S.sky}/`, fx: `${UI}fx/`, post: true, fov: 1.0,
+      starfield: SYS?.systems?.[S.sky] ? { seed: SYS.systems[S.sky].con, sec: SYS.systems[S.sky].sec } : null });   // 近处闪烁星精灵：星座 ID 做种子（深渊等非已知空间没有）   // 客户端环绕镜头 default_fov = 1.0 弧度（「镜头动态移动」关着时）
     if (!S.view) { S.noView = tr('这个浏览器不支持 3D（WebGL）'); return; }
     // 指定空间点航行（客户端 navigation.py + positionalControl）：按住 Q、鼠标在太空里且没按键时开始；左键拖动（转镜头）取消；
     // 鼠标离开太空且第一点还没定时取消；右键取消

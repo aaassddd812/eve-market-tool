@@ -8,7 +8,7 @@
 //   这里先用程序化着色：按行星类型配色的分形噪声地表 / 气态条带、晨昏线、向阳边缘的大气辉光（配色是近似的，不是客户端数据）。
 // 空间站、星门：近处画游戏模型（sim-station.js）；小行星带：没有模型，只有总览图标（sim-3d 画）。
 import * as THREE from './vendor/three/three.module.min.js';
-import { createStations } from './sim-station.js?v=9';
+import { createStations } from './sim-station.js?v=10';
 
 const KM = 1 / 1000;
 const NEAR = 15000;   // 千米：再远就按比例拉近

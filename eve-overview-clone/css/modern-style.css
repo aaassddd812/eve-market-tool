@@ -9307,6 +9307,9 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-main { flex: 1; min-width: 0; position: relative; overflow: auto; background: #05070b; }
 .pl-page { position: absolute; inset: 0; color: #d6dde5; }
 .pl-stage { font-family: "EVE Sans Neue", system-ui, sans-serif; }
+/* 窗口边距（Window.content_padding）：标准 16、紧凑 8；模式「自动」= 桌面高 < 1080 用紧凑（carbonui/window/settings.py），pilot.js 按舞台高度设 data-margin */
+.pl-stage { --wpad: 16px; }
+.pl-stage[data-margin="compact"] { --wpad: 8px; }
 .pl-setup { position: absolute; inset: 0; display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; overflow: auto;
   background: radial-gradient(ellipse at 30% 20%, rgba(60, 90, 130, 0.35), transparent 60%), radial-gradient(ellipse at 80% 80%, rgba(110, 60, 40, 0.25), transparent 55%), #05070b; }
 .pl-win { width: min(760px, 100%); }
@@ -9417,21 +9420,23 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-w::after { content: ""; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
 .pl-w::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px; z-index: 3; pointer-events: none; background: var(--pl-accent); opacity: 0; transition: opacity 0.4s; }
 .pl-w.is-act::before { opacity: 0.5; }
-.pl-wh { display: flex; align-items: center; gap: 6px; height: 32px; padding: 0 6px 0 8px; font-size: 12px; color: rgba(255, 255, 255, 0.5); transition: color 0.3s; }
+.pl-wh { display: flex; align-items: center; gap: 0; height: 32px; padding: 0 calc(var(--wpad) - 4px) 0 var(--wpad); font-size: 12px; color: rgba(255, 255, 255, 0.5); transition: color 0.3s; }
 .pl-w.is-act .pl-wh { color: rgba(255, 255, 255, 0.9); }
 .pl-wh .pl-wi { display: none; }
-.pl-wh span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pl-wh span { flex: 1; min-width: 0; margin-right: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-wb { width: 16px; height: 16px; opacity: 0.45; }
 /* 选中的物体（客户端 selectedItemWnd）：
    空：左 16、上 18 一行「没有选择物体」，EveCaptionMedium 20px、白 0.5；
    有：上面图标列（64px，左右 8、上 2）+ 名字（行高 24）/ 距离，EveLabelMedium 14px 白 0.9；底下按钮行（WindowSegmentUnderlay 底），按钮 32、间距 4 */
 #plSel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.pl-sel-empty { margin: 18px 0 0 16px; width: 256px; font: 400 20px/1.1 "EVE Sans Neue", system-ui, sans-serif; letter-spacing: -0.01em; color: rgba(255, 255, 255, 0.5); }
-.pl-sel-top { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 2px 8px 0; overflow: hidden; }
+.pl-sel-empty { margin: 18px 0 0 var(--wpad); width: 256px; font: 400 20px/1.1 "EVE Sans Neue", system-ui, sans-serif; letter-spacing: -0.01em; color: rgba(255, 255, 255, 0.5); }
+.pl-sel-top { flex: 1; min-height: 0; display: flex; gap: 8px; padding: 0 var(--wpad); overflow: hidden; }
+.pl-sel-top > img:first-child { margin-top: 2px; }
 .pl-sel-top > img { width: 64px; height: 64px; flex: none; }
 .pl-sel-txt { display: flex; flex-direction: column; min-width: 0; font-size: 14px; line-height: 20px; color: rgba(255, 255, 255, 0.9); }
 .pl-sel-txt b { font-weight: 400; line-height: 24px; white-space: nowrap; overflow: hidden; text-overflow: clip; }
-.pl-sel-acts { flex: none; display: flex; gap: 4px; padding: 8px; background: rgba(255, 255, 255, 0.03); }
+.pl-sel-acts { flex: none; display: flex; gap: 4px; padding: var(--wpad); background: rgba(var(--pl-tint), 0.05); transition: background-color 0.3s; }
+.pl-w.is-act .pl-sel-acts, .pl-w.is-act .pl-ds-bot { background: rgba(var(--pl-tint), 0.2); }
 .pl-sel-acts button { position: relative; width: 32px; height: 32px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; cursor: pointer; opacity: 0.75; transition: opacity 0.15s; }
 .pl-sel-acts button:hover { opacity: 1; }
 .pl-sel-acts button[aria-disabled="true"] { opacity: 0.25; cursor: default; }
@@ -9456,14 +9461,16 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-ov { flex: 1; min-height: 140px; display: flex; flex-direction: column; }
 /* 总览（客户端 overviewWindow / OverviewScrollEntry / SortHeaders / TabGroup）：
    标签页 高 32、13px 常规体、标签间距 24、无底色；未选 0.5 白、选中 / 悬停 0.9；选中下方 1px 主题色线（#58A7BF，带光）；整排下面 1px 白 0.1 分隔线 */
-.pl-ov-tabs { position: relative; display: flex; gap: 24px; overflow: hidden; height: 32px; margin: 0 8px; font-size: 12px; font-weight: 700; box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1); }
+.pl-ov-tabs { position: relative; display: flex; gap: 24px; overflow: hidden; flex: none; height: 32px; margin: 0 0 8px; padding: 0 calc(var(--wpad) - 4px) 0 var(--wpad); font-size: 12px; font-weight: 700; box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.1); }
 .pl-ov-tabs button { position: relative; flex: 0 0 auto; padding: 0; border: 0; background: none; color: var(--c); font: inherit; white-space: nowrap; }
 .pl-ov-line { position: absolute; bottom: 0; left: 0; width: 0; height: 1px; background: #b0b0b0; pointer-events: none; transition: left 0.15s ease-out, width 0.15s ease-out, background-color 0.3s; }
 .pl-w.is-act .pl-ov-line { background: #58a7bf; box-shadow: 0 0 4px rgba(88, 167, 191, 0.75); }
 /* 总览标题：游戏截图里总览是窗口堆叠里的一页，标题按页签样式画（约 16px，下面 1px 选中线 + 整排白 0.1 分隔线） */
 .pl-win-ov .pl-wh > button:first-of-type { margin-left: auto; }
+/* 页签整排往上提 8 压进标题栏底部（overviewWindow._get_tab_group_padding 顶 -8）；标题栏留在上层，按钮照样可点 */
+.pl-win-ov .pl-wh { position: relative; z-index: 1; margin-bottom: -8px; }
 .pl-ov tr.none td { color: rgba(255, 255, 255, 0.5); text-align: left !important; cursor: default; }
-.pl-ov-body { flex: 1; overflow: auto; padding: 0 0 8px; }
+.pl-ov-body { flex: 1; overflow: auto; padding: 0 var(--wpad) var(--wpad); }
 /* 行：高 24、13px、白 0.9、字影 (1,1) 黑 0.6；列内边距 8；距离 / 速度靠右 */
 .pl-ov table { border-collapse: collapse; font-size: 12px; table-layout: fixed; }
 /* 表头：高 24、11px 宽体、白 0.5（悬停 0.9），无底色、无分隔线；排序箭头 16×16 靠右 */
@@ -9565,7 +9572,7 @@ html[data-skin="eve"] .ai-send { border-radius: var(--radius-lg); }
 .pl-w.min .pl-wbody, .pl-w.min .pl-wrs { display: none; }
 .pl-wh { flex: none; cursor: move; touch-action: none; user-select: none; }
 .pl-wi { width: 16px; height: 16px; opacity: 0.85; }
-.pl-wh button { width: 18px; height: 18px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; opacity: 0.5; }
+.pl-wh button { flex: none; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; background: none; cursor: pointer; opacity: 0.5; }
 .pl-wh button:hover { opacity: 1; }
 .pl-wh button img { width: 16px; height: 16px; }
 .pl-wh button[hidden] { display: none; }
@@ -10245,7 +10252,7 @@ html[data-skin="eve"] .pl-stage .pl-ov th:hover { color: rgba(255, 255, 255, 0.9
 .pl-ds-list.sweep::after { content: ''; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, rgba(57, 191, 128, 0) 0%, rgba(57, 191, 128, 0.25) 100%); animation: plDsSweep 1.7s ease-out forwards; transform-origin: right; }
 @keyframes plDsSweep { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 /* 底栏（bottomCont + WindowSegmentUnderlay）：左右两半各一行输入 / 标签 + 一条滑条，右边扫描按钮 */
-.pl-ds-bot { flex: none; display: flex; align-items: flex-end; gap: 8px; margin-top: 8px; padding: 6px 8px 6px; background: rgba(255, 255, 255, 0.04); }
+.pl-ds-bot { flex: none; display: flex; align-items: flex-end; gap: 8px; margin-top: 8px; padding: 6px 8px 6px; background: rgba(var(--pl-tint), 0.05); transition: background-color 0.3s; }
 .pl-ds-bot .half { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 0; container-type: inline-size; }
 .pl-ds-bot .lbl { display: flex; align-items: center; gap: 4px; height: 24px; font-size: 13px; color: rgba(255, 255, 255, 0.9); white-space: nowrap; }
 /* 「范围」字样：这半边不到 150 宽就藏（DistanceEditCont：rangeLabel.display = width > 150） */

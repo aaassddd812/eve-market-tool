@@ -257,7 +257,10 @@ function unitTemplate(row) {
     lockRange: stats.targeting.range, sensor: stats.targeting.sensor, sensorIdx: Math.max(0, SENSOR_TYPES.indexOf(stats.targeting.sensorType)),
     local: [d.reps.shield, d.reps.armor, d.reps.hull], localReps, regenC: d.shield.hp, regenTau: d.shield.hp && stats.defense.passiveRegen ? 2.5 * d.shield.hp / stats.defense.passiveRegen : 0,
     cap: { max: cap.capacity, tau: cap.recharge, use: Math.max(0, cap.usage), other: Math.max(0, cap.usage - gunCap), otherNoInj: Math.max(0, cap.usage - gunCap + injectors.reduce((t, x) => t + x.bonus * x.ammo / (x.cycle * x.ammo + x.reload), 0)) },
-    injectors, remote, webs, paints, neuts, noses, damps, ecms, smarts, bursts, tds, gds, rcaps, rsbs, rtcs, mjds, bubbles, cloaks, fields, dictors, ehp: d.ehp, rack, alwaysOn
+    injectors, remote, webs, paints, neuts, noses, damps, ecms, smarts, bursts, tds, gds, rcaps, rsbs, rtcs, mjds, bubbles, cloaks, fields, dictors, ehp: d.ehp, rack, alwaysOn,
+    // 速度 / 惯性 / 信号半径 / 炮塔跟踪上，装备（和舰队加成）参与叠加惩罚的百分比加成：深渊气云、塔的加成要和它们排进同一条链
+    pen: { vel: FE.penFracs(ship, FE.AT.maxVelocity), agi: FE.penFracs(ship, 70), sig: FE.penFracs(ship, 552),
+      track: FE.penFracs(stats.weapons.map((w) => w.module).find((m) => m.attr(FE.AT.trackingSpeed) > 0), FE.AT.trackingSpeed) }
   };
 }
 

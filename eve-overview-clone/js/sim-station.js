@@ -7,13 +7,14 @@
 //   这里按天体名字 + typeID 做种子取一个固定的偏航角，俯仰、滚转取 0（推断）。
 //   客户端还有一份「永远朝向恒星」的类型表（TYPES_THAT_ALWAYS_FACE_THE_SUN），本地拿不到内容，没有照做。
 import * as THREE from './vendor/three/three.module.min.js';
-import { loadShipIndex } from './sim-ships.js?v=v18';
+import { loadShipIndex } from './sim-ships.js?v=v19';
 
 const KM = 1 / 1000;
 const SHOW = 10000;   // 千米：客户端远裁剪面
 const LOAD = 12000;   // 千米：进入这个距离开始下载模型
 
-// scene：three 场景；opt.load(外观键) → Promise<模型>（sim-3d 的 loadModel，带环境反射）；opt.env() → [环境贴图, 强度]
+// scene：three 场景；opt.load(外观键) → Promise<模型>（sim-3d 的 loadModel，带环境反射）；opt.env() → [环境贴图, 强度]；
+//   opt.shade(外观, 世界坐标（米）, 镜头距离（千米）)：每帧给看得见的站算二次光照（sim-3d → sim-shl.js）
 export function createStations(scene, opt = {}) {
   const group = new THREE.Group();
   scene.add(group);
@@ -43,6 +44,7 @@ export function createStations(scene, opt = {}) {
       o.mesh.frustumCulled = false;
       o.mesh.visible = false;
       o.mats = def.materials;
+      o.def = def;
       group.add(o.mesh);
       o.state = 'ok';
     }).catch(() => { o.state = 'none'; });
@@ -60,6 +62,7 @@ export function createStations(scene, opt = {}) {
       o.mesh.visible = d < SHOW;
       if (!o.mesh.visible) continue;
       o.mesh.position.set((p[0] - ORG[0]) * KM, (p[1] - ORG[1]) * KM, (p[2] - ORG[2]) * KM);
+      opt.shade?.(o.def, p, d);
       // 星空（环境反射）比模型晚到时补上
       if (env && o.mats[0]?.envMap !== env) for (const mt of o.mats) { mt.envMap = env; mt.envMapIntensity = envI; mt.needsUpdate = true; }
     }

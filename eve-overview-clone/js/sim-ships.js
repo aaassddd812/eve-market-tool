@@ -5,7 +5,7 @@
 // 反照率贴图（sRGB）× 材质颜色；x 贴图打包了 粗糙度 / 材质遮罩 / 发光 / 灰尘（灰尘客户端出货着色器不用）。没有转换文件时返回 null，战场只显示图标。
 import * as THREE from './vendor/three/three.module.min.js';
 import { SHIP_AO } from './sim-ssao.js?v=1';
-import { SHIP_LIGHTS, PL_MAX, IES_TEX } from './sim-lights.js?v=5';
+import { SHIP_LIGHTS, PL_MAX, IES_TEX } from './sim-lights.js?v=6';
 
 const BASE = 'ship-models/';
 let indexP = null;
@@ -35,7 +35,10 @@ WHITE.needsUpdate = true;
 const PLAIN = new THREE.DataTexture(new Uint8Array([160, 0, 0, 0]), 1, 1);   // 缺 x 贴图时：中等光泽、第 1 种材质、不发光
 PLAIN.needsUpdate = true;
 
-// 几何：游戏是左手坐标，镜像 X 并翻转三角形绕序，船头仍朝 +Z
+// 几何：照原样用（船头朝 +Z）。客户端世界是右手系、和 three 同一套约定（实机抓帧 frame32757：船体世界矩阵行列式 +1，
+//   投影 w = −z_view，船壳光栅态 CullMode.Front + FrontCounterClockwise = false 即剔除屏幕上顺时针的面；
+//   af5_t2 的三角形 7540 / 7554 按逆时针朝外），所以几何、挂点、灯、特效都不镜像。
+//   天体坐标就是 SDE 坐标（抓帧里的太阳方向和 1DH-SX 血袭者空间站的 SDE 坐标对得上，误差 0.16°）
 const geoCache = new Map();
 function geometry(url) {
   if (!geoCache.has(url)) {
@@ -51,11 +54,9 @@ function geometry(url) {
       const idx = take(head.i32 ? Uint32Array : Uint16Array, head.tris * 3);
       const nf = new Float32Array(n * 3), tf = new Float32Array(n * 4);
       for (let i = 0; i < n; i++) {
-        pos[i * 3] = -pos[i * 3];
-        nf[i * 3] = -nrm[i * 4] / 127; nf[i * 3 + 1] = nrm[i * 4 + 1] / 127; nf[i * 3 + 2] = nrm[i * 4 + 2] / 127;
-        tf[i * 4] = -tan[i * 4] / 127; tf[i * 4 + 1] = tan[i * 4 + 1] / 127; tf[i * 4 + 2] = tan[i * 4 + 2] / 127; tf[i * 4 + 3] = -Math.sign(tan[i * 4 + 3] || 1);
+        nf[i * 3] = nrm[i * 4] / 127; nf[i * 3 + 1] = nrm[i * 4 + 1] / 127; nf[i * 3 + 2] = nrm[i * 4 + 2] / 127;
+        tf[i * 4] = tan[i * 4] / 127; tf[i * 4 + 1] = tan[i * 4 + 1] / 127; tf[i * 4 + 2] = tan[i * 4 + 2] / 127; tf[i * 4 + 3] = Math.sign(tan[i * 4 + 3] || 1);
       }
-      for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; }
       const g = new THREE.BufferGeometry();
       g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
       g.setAttribute('normal', new THREE.BufferAttribute(nf, 3));
@@ -80,10 +81,12 @@ const v3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
 //   两层（实机船壳 PS 2f06fc / 推进器区 4ad4c7 反汇编，RenderDoc 抓帧）：主层和灰尘层各算一遍完整光照（直射 + 环境），
 //   最终 = 主层 × (1 − x)³ + 灰尘层 × x。下面把 three 的两个光照函数改名成单层版本，外面包一层按 eveWA / eveWB 加权；
 //   灰尘层的环境镜面按它自己的粗糙度另取一次（客户端也是按灰尘层粗糙度另算立方体 mip）
+//   二次光照 SH（每物体 ShLighting[7]，sim-shl.js 算）：漫反射环境 = 立方体 + max(SH(N), 0) / π（第 133–146 行，带常数项）；
+//     镜面 = 立方体 × 地平线遮挡 + max(SH'(R), 0) × α / (5 − 4α)（第 105–120 行，SH' 不带常数项，α = 粗糙度²），再一起 × E；N、R 是世界方向
 const EVE_LIGHTS = (() => {
   let c = THREE.ShaderChunk.lights_physical_pars_fragment;
   const fnAt = (name) => { const i = c.indexOf(`void ${name}(`); return [i, c.indexOf('\n}', i) + 2]; };
-  { const k = c.indexOf('};', c.indexOf('struct PhysicalMaterial')) + 2; c = c.slice(0, k) + '\nPhysicalMaterial eveMB; float eveWA = 1.0, eveWB = 0.0;' + c.slice(k); }
+  { const k = c.indexOf('};', c.indexOf('struct PhysicalMaterial')) + 2; c = c.slice(0, k) + '\nPhysicalMaterial eveMB; float eveWA = 1.0, eveWB = 0.0; vec3 eveShD = vec3( 0.0 ), eveShS = vec3( 0.0 );' + c.slice(k); }
   let [i, j] = fnAt('RE_IndirectSpecular_Physical');
   c = c.slice(0, i) + `void RE_IndirectSpecular_Physical( const in vec3 radiance, const in vec3 irradiance, const in vec3 clearcoatRadiance, const in vec3 geometryPosition, const in vec3 geometryNormal, const in vec3 geometryViewDir, const in vec3 geometryClearcoatNormal, const in PhysicalMaterial material, inout ReflectedLight reflectedLight ) {
 	float g = 1.0 - material.roughness * material.roughness;
@@ -91,8 +94,9 @@ const EVE_LIGHTS = (() => {
 	float a0 = t.x * min( t.y, exp2( -9.28 * saturate( dot( geometryNormal, geometryViewDir ) ) ) ) + t.z;
 	vec3 E = saturate( material.specularColor * ( t.w - a0 ) + a0 );
 	float hz = saturate( 1.0 + 10.0 * g * dot( eveGeoN, reflect( - geometryViewDir, geometryNormal ) ) );
-	reflectedLight.indirectSpecular += radiance * hz * E;
-	reflectedLight.indirectDiffuse += material.diffuseColor * ( 1.0 - E ) * irradiance * RECIPROCAL_PI;
+	float a = material.roughness * material.roughness;
+	reflectedLight.indirectSpecular += ( radiance * hz + eveShS * a / ( 5.0 - 4.0 * a ) ) * E;
+	reflectedLight.indirectDiffuse += material.diffuseColor * ( 1.0 - E ) * ( irradiance + eveShD ) * RECIPROCAL_PI;
 }` + c.slice(j);
   [i, j] = fnAt('RE_Direct_Physical');
   const body = c.slice(i, j)
@@ -141,7 +145,7 @@ export const SHIP_TIME = { value: 0 };
 //   旧转换文件里没有，按 SOF 里最常见的 area_booster 默认值
 const HEAT_DEF = [1, 0.025, 4, 0.002];
 
-function material(area, maps, env, sh) {
+function material(area, maps, env, sh, shl) {
   const heat = area.kind === 'heat';
   const m = new THREE.MeshStandardMaterial({ map: maps.a || WHITE, normalMap: maps.n || null, envMap: env, envMapIntensity: 1, metalness: 0, roughness: 1 });
   const u = {
@@ -157,6 +161,7 @@ function material(area, maps, env, sh) {
     eveTime: SHIP_TIME,
     eveAO: SHIP_AO.tex, eveAOOn: SHIP_AO.on,
     eveLN: SHIP_LIGHTS.n, eveLP: SHIP_LIGHTS.p, eveLC: SHIP_LIGHTS.c, eveLD: SHIP_LIGHTS.d, eveLE: SHIP_LIGHTS.e, eveIES: { value: IES_TEX },
+    eveSH: shl.sh, eveShK: shl.k,
   };
   // 材质（实机船壳 PS）：4 档材质权重 = saturate(1.031915 − |MaterialMap − {0,⅓,⅔,1}| × 3.191489)；
   //   主层：漫反射 = 反照率 × Σ权重·MtlNDiffuseColor，F0 = Σ权重·MtlNFresnelColor，光泽 = RoughnessMap × Σ权重·MtlNGloss，粗糙度 = 1 − 光泽。
@@ -170,11 +175,31 @@ function material(area, maps, env, sh) {
   //   实例颜色：r = 变暗（死船 0.22），g = shipData.y，b = 推进器亮度（EveShip2::GetPerObjectData，封顶 1；只看是否 > 0.02）
   m.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, u);
+    // 二次光照的接收者强度：实例化（舰船、残骸、无人机、炮塔）按实例属性 eveShI，单个网格（空间站）按统一量 eveShK；
+    //   在顶点着色器里选好传给片元（three 的片元着色器不定义 USE_INSTANCING）
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+        uniform float eveShK; varying float vShI;
+        #ifdef USE_INSTANCING
+          attribute float eveShI;
+        #endif`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        #ifdef USE_INSTANCING
+          vShI = eveShI;
+        #else
+          vShI = eveShK;
+        #endif`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform sampler2D eveX, eveDust, eveHN; uniform vec3 eveD[4]; uniform vec3 eveF[4]; uniform vec3 eveU[4]; uniform vec4 eveG; uniform vec3 eveGlow; uniform vec4 eveHD[4];
         uniform float eveDirt, eveTime; vec3 eveGeoN; uniform sampler2D eveAO; uniform float eveAOOn;
-        uniform int eveLN; uniform vec4 eveLP[${PL_MAX}]; uniform vec4 eveLC[${PL_MAX}]; uniform vec4 eveLD[${PL_MAX}]; uniform vec4 eveLE[${PL_MAX}]; uniform sampler2D eveIES;`)
+        uniform int eveLN; uniform vec4 eveLP[${PL_MAX}]; uniform vec4 eveLC[${PL_MAX}]; uniform vec4 eveLD[${PL_MAX}]; uniform vec4 eveLE[${PL_MAX}]; uniform sampler2D eveIES;
+        uniform vec4 eveSH[7]; varying float vShI;
+        vec3 eveShEval(vec3 d, float c) {
+          vec4 n = vec4(d, c), q = d.yzzx * d.xyzz;
+          vec3 r = vec3(dot(eveSH[0], n), dot(eveSH[1], n), dot(eveSH[2], n)) + vec3(dot(eveSH[3], q), dot(eveSH[4], q), dot(eveSH[5], q)) + eveSH[6].xyz * (d.x * d.x - d.y * d.y);
+          return max(r, 0.0);
+        }`)
       .replace('#include <lights_physical_pars_fragment>', EVE_LIGHTS)
       .replace('#include <map_fragment>', `#include <map_fragment>
         vec3 eAlb = diffuseColor.rgb;
@@ -186,11 +211,11 @@ function material(area, maps, env, sh) {
         vec4 eHD = eW.x * eveHD[0] + eW.y * eveHD[1] + eW.z * eveHD[2] + eW.w * eveHD[3];
         float eGloss = dot(eW, eveG);
         diffuseColor.rgb *= eW.x * eveD[0] + eW.y * eveD[1] + eW.z * eveD[2] + eW.w * eveD[3];`)
+      // three r160 的片元着色器有实例颜色时只定义 USE_COLOR（USE_INSTANCING_COLOR 只在顶点着色器里）；
+      //   船体材质不开 vertexColors，所以这里的 vColor 只会是实例颜色，不能当 RGB 直接乘（b = 推进器亮度，停船时是 0）
       .replace('#include <color_fragment>', `float eLive = 1.0, eBoost = 1.0;
-        #if defined( USE_INSTANCING_COLOR )
+        #if defined( USE_COLOR )
           diffuseColor.rgb *= vColor.r; eAlb *= vColor.r; eLive = vColor.g; eBoost = vColor.b;
-        #elif defined( USE_COLOR )
-          diffuseColor.rgb *= vColor;
         #endif`)
       .replace('#include <normal_fragment_maps>', 'eveGeoN = nonPerturbedNormal;\n' + NORMAL_MAPS)
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = clamp(1.0 - eGloss * eP.r, 0.0, 1.0);')
@@ -226,7 +251,14 @@ function material(area, maps, env, sh) {
           RE_Direct(directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight);
           material.roughness = rA; eveMB.roughness = rB;
         }
-        #include <lights_fragment_maps>`)
+        #include <lights_fragment_maps>
+        {
+          float eK = vShI;
+          if (eK > 0.0) {
+            eveShD = eveShEval(normalize((vec4(geometryNormal, 0.0) * viewMatrix).xyz), 1.0) * eK;
+            eveShS = eveShEval(normalize((vec4(reflect(-geometryViewDir, geometryNormal), 0.0) * viewMatrix).xyz), 0.0) * eK;
+          }
+        }`)
       // SSAO（sim-ssao.js）：客户端最终颜色 = 光照 × AO，再雾、再加发光
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
         if (eveAOOn > 0.5) {
@@ -262,6 +294,8 @@ export function loadShipModel(key, renderer, env) {
       g.clearGroups();
       const tri = src.userData.areas;
       const mats = [];
+      // 二次光照（sim-shl.js）：每个外观一份 7 行系数，sim-3d / sim-station 每帧写；k = 非实例化网格的接收者强度
+      const shl = { sh: { value: Array.from({ length: 7 }, () => new THREE.Vector4()) }, k: { value: 0 } };
       for (const a of def.areas) {
         const first = tri[a.index]?.[0];
         if (first == null) continue;
@@ -270,10 +304,10 @@ export function loadShipModel(key, renderer, env) {
         const t = (c) => (a.tex.has.includes(c) || c === 'x' ? texture(`${BASE}t/${a.tex.k}_${c}.webp`, renderer, c === 'a') : null);
         const [ta, tn, tx, dust, heat] = await Promise.all([t('a'), t('n'), t('x'), sharedTex(renderer).dust, sharedTex(renderer).heat]);
         g.addGroup(first * 3, count * 3, mats.length);
-        mats.push(material(a, { a: ta, n: tn, x: tx }, env, { dust, heat }));
+        mats.push(material(a, { a: ta, n: tn, x: tx }, env, { dust, heat }, shl));
       }
       if (!mats.length) return null;
-      return { geometry: g, materials: mats, r: def.r, c: def.c || [0, 0, 0], ext: g.userData.ext || null, boosters: def.boosters || [], boosterColor: def.boosterColor, bst: def.bst || null, loc: def.loc || {}, se: def.se || null, lights: def.lights || null, bl: def.bl || null, ies: def.ies || null, anim: def.anim || null };
+      return { geometry: g, materials: mats, r: def.r, c: def.c || [0, 0, 0], ext: g.userData.ext || null, boosters: def.boosters || [], boosterColor: def.boosterColor, bst: def.bst || null, loc: def.loc || {}, se: def.se || null, lights: def.lights || null, bl: def.bl || null, ies: def.ies || null, anim: def.anim || null, shl };
     })());
   }
   return modelCache.get(key);

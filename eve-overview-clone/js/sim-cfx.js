@@ -9,14 +9,14 @@
 // 着色器照客户端 effect.dx11 的反汇编：ubershader（默认分支：两张滚动贴图 × 遮罩 × 颜色 × 菲涅尔，任一张为 0 就丢弃）、
 //   ubershadertwosided（同上，菲涅尔按顶点）、ubershadercube（扰动法线后反射取立方体贴图）、lensflares/flare（按半径查渐变）。
 //   additiveAreas = RM_ALPHA_ADDITIVE（ONE, ONE，不乘 alpha）、transparentAreas = RM_ALPHA（SRCALPHA, INVSRCALPHA），见 Tr2EffectStateManager；剔除按着色器的渲染状态（CULLMODE）。
-// 坐标：客户端是左手系，场景里的船已沿 X 镜像，这里先在客户端坐标（米）里算完，再乘镜像和千米换算放进场景。
+// 坐标：场景坐标 = 客户端坐标（右手系，见 sim-ships.js），这里先按米算完，再换成千米放进场景。
 // 网格和贴图版权归 CCP。
 import * as THREE from './vendor/three/three.module.min.js';
 
 const KM = 1 / 1000;
 const LOG_V = '#include <common>\n#include <logdepthbuf_pars_vertex>\n';
 const LOG_F = '#include <common>\n#include <logdepthbuf_pars_fragment>\n';
-const TO_SCENE = new THREE.Matrix4().makeScale(-KM, KM, KM);   // 客户端（米）→ 场景（千米，X 镜像）
+const TO_SCENE = new THREE.Matrix4().makeScale(KM, KM, KM);   // 客户端（米）→ 场景（千米）
 
 // ── 曲线 ──
 const hermite = (v0, t0, v1, t1, s) => { const s2 = s * s, s3 = s2 * s; return v0 * (2 * s3 - 3 * s2 + 1) + t0 * (s3 - 2 * s2 + s) + v1 * (3 * s2 - 2 * s3) + t1 * (s3 - s2); };
@@ -195,7 +195,7 @@ const SHADERS = {
       vec4 a = texture2D(DiffuseMap1, vUv * TextureTransform1.zw + TextureTransform1.xy + TextureScroll1.xy * time + TextureScroll1.zw)
              * texture2D(DiffuseMap2, vUv * TextureTransform2.zw + TextureTransform2.xy + TextureScroll2.xy * time + TextureScroll2.zw) * texture2D(MaskMap, vUv);
       vec3 r = reflect(camF, normalize(a.rgb * ScaleAlongNormal + normalize(vN)));
-      gl_FragColor = vec4(textureCube(MainCubeMap, vec3(-r.x, r.y, r.z)).rgb, a.a) * DiffuseColor;
+      gl_FragColor = vec4(textureCube(MainCubeMap, r).rgb, a.a) * DiffuseColor;
     }` },
   // lensflares/flare.fx：CULLMODE = 1（不剔除）
   flare: { side: THREE.DoubleSide, clamp: ['GradientMap'], vs: uberVS, fs: `${LOG_F} uniform sampler2D GradientMap; uniform vec4 DiffuseColor; uniform float Brightness; varying vec2 vUv;
@@ -388,7 +388,7 @@ export function createClientFx(scene, base) {
   const ID = new THREE.Matrix4();
   let frame = 0;
   const S1 = new THREE.Vector3(), S2 = new THREE.Vector3(), sv = new THREE.Vector3(), dv = new THREE.Vector3(), V0 = new THREE.Vector3(), FW = new THREE.Vector3(), Y1 = new THREE.Vector3(0, 1, 0), ONE = new THREE.Vector3(1, 1, 1), SQ = new THREE.Vector3(), QS = new THREE.Quaternion(), mW = new THREE.Matrix4();
-  const toEve = (out, p) => out.set(-p.x / KM, p.y / KM, p.z / KM);
+  const toEve = (out, p) => out.set(p.x / KM, p.y / KM, p.z / KM);
   const ctx = { eye: new THREE.Vector3(), right: new THREE.Vector3(), up: new THREE.Vector3(), back: new THREE.Vector3(), fov: 1, lowQ: false };
 
   return {
@@ -406,9 +406,9 @@ export function createClientFx(scene, base) {
       time.value = t;
       toEve(ctx.eye, camera.position);
       const r = vA.setFromMatrixColumn(camera.matrixWorld, 0);
-      ctx.right.set(-r.x, r.y, r.z);
-      r.setFromMatrixColumn(camera.matrixWorld, 1); ctx.up.set(-r.x, r.y, r.z);
-      r.setFromMatrixColumn(camera.matrixWorld, 2); ctx.back.set(-r.x, r.y, r.z);
+      ctx.right.copy(r);
+      r.setFromMatrixColumn(camera.matrixWorld, 1); ctx.up.copy(r);
+      r.setFromMatrixColumn(camera.matrixWorld, 2); ctx.back.copy(r);
       ctx.fov = THREE.MathUtils.degToRad(camera.fov || 60);
       camera.getWorldDirection(camF.value);
       ctx.lowQ = lowQ;
@@ -451,11 +451,11 @@ export function createClientFx(scene, base) {
           transformNode(root.stretchObject, mW.compose(sv, QS, SQ.set(1, 1, len)), ctx);
         }
       } else {
-        // ShipEffect：放在目标船位置，按目标半径缩放（transformFlags 未知，见说明）；o.rot = 跟船转（FX_TF_ROTATION_BALL，场景朝向换到客户端的镜像坐标）
-        // o.dir：朝向 = 从 (0,0,1) 转到这个方向（场景坐标，换到客户端坐标再算）；o.S：三轴缩放 [x, y, z]
+        // ShipEffect：放在目标船位置，按目标半径缩放（transformFlags 未知，见说明）；o.rot = 跟船转（FX_TF_ROTATION_BALL）
+        // o.dir：朝向 = 从 (0,0,1) 转到这个方向；o.S：三轴缩放 [x, y, z]
         toEve(dv, o.dst);
-        if (o.dir) QS.setFromUnitVectors(FW.set(0, 0, 1), V0.set(-o.dir.x, o.dir.y, o.dir.z).normalize());
-        else if (o.rot) QS.set(o.rot.x, -o.rot.y, -o.rot.z, o.rot.w); else QS.identity();
+        if (o.dir) QS.setFromUnitVectors(FW.set(0, 0, 1), V0.copy(o.dir).normalize());
+        else if (o.rot) QS.copy(o.rot); else QS.identity();
         if (o.S) SQ.set(o.S[0], o.S[1], o.S[2]); else SQ.setScalar(o.R || 1);
         transformNode(root, mW.compose(dv, QS, SQ), ctx);
       }

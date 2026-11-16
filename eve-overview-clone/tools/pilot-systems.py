@@ -5,7 +5,7 @@
 #   空间站中文名取自站点的 npc-names-zh.json（stations 表）
 #
 # 每张游戏星空（assets/eveui/sky/）配一个同一种族的真实星系；坐标以恒星为原点（米，和 SDE 一样）。
-# 输出：{ systems: { 星空: { id, name, sec, fight: 交战点（第一个星门外侧）, cel: [[名字, 组, 类型, x, y, z, 半径, 0 km 落点离中心距离, 英文名], …] } }, types: { 类型: 中文名 } }
+# 输出：{ systems: { 星空: { id, name, sec, con: 星座 ID（近处闪烁星精灵的随机种子，客户端 sceneManager._PrepareBackgroundLandscapes）, fight: 交战点（第一个星门外侧）, cel: [[名字, 组, 类型, x, y, z, 半径, 0 km 落点离中心距离, 英文名], …] } }, types: { 类型: 中文名 } }
 #   英文名照客户端英文格式拼（SDE 英文名）：「Jita - Star」「Jita IV - Moon 4」「Jita IV - Asteroid Belt 1」「Stargate (Perimeter)」
 #   「<卫星 / 行星> - <军团> <业务>」（useOperationName 为假时不带业务名）
 #
@@ -98,7 +98,7 @@ for sky, sid in SYSTEMS.items():
     gp = g0[3:6]
     d = sum(x * x for x in gp) ** 0.5 or 1
     fight = [round(gp[k] - gp[k] / d * (g0[6] + 30000)) for k in range(3)]
-    out[sky] = {'id': sid, 'name': sname, 'sec': round(s['securityStatus'], 2), 'fight': fight, 'cel': cel}
+    out[sky] = {'id': sid, 'name': sname, 'sec': round(s['securityStatus'], 2), 'con': s['constellationID'], 'fight': fight, 'cel': cel}
     print(sky, sname, len(cel), '个天体', '交战点在', g0[0], '外 30 km')
 
 used = {c[2] for x in out.values() for c in x['cel']}
