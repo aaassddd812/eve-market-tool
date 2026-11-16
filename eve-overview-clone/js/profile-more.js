@@ -4,9 +4,12 @@
 //   研究  /characters/{id}/agents_research/（「研究代理人」权限）：研究点数 = 余数 + 每日点数 × 开始以来的天数
 //   舰队  /characters/{id}/fleet/ → /fleets/{fleet_id}/members/（「舰队」权限，读成员需要是舰队指挥）
 //   军团  /characters/{id}/roles/ + 军团钱包 / 订单 / 工业 / 建筑 / 月矿 / 资产（「军团管理」权限，且需相应军团职位）
+//         建筑：点开一行看装配——军团资产里装在建筑上的物品（总监，表格先出、装配后台读），按槽位列出，
+//         并按 ind-rigs.json（SDE）算船体与改装件的工业加成（乘建筑所在星系的安全等级倍数）和化矿率
 // 数据按角色缓存 5 分钟，切换角色时清空。
 import { skCards, skRows } from './skeleton.js?v=v18';
 import * as ST from './standings.js?v=v6';
+import * as IS from './ind-structs.js?v=5';
 
 let ctx;
 const cache = new Map();   // `${tab}:${key}` -> { id, at, promise }
@@ -16,6 +19,7 @@ const CORP_VIEWS = [
   ['structures', '建筑', '空间站管理员'], ['moons', '月矿', '空间站管理员'], ['assets', '资产', '总监']
 ];
 const S = { corpView: 'wallets', fleetView: 'ships' };
+const SF_OPEN = new Set();   // 军团建筑表里展开了装配的建筑
 const SKILL_INFOMORPH = 33399;   // 意识同步：每级缩短跳跃克隆冷却 1 小时
 
 export function initProfileMore(context) {
@@ -296,10 +300,19 @@ const CORP_LOAD = {
     return { jobs, types, names };
   },
   structures: async (corp) => {
-    const list = await ctx.esiAuthFetchPaged(`/corporations/${corp}/structures/?language=zh`, 5);
+    const [list] = await Promise.all([ctx.esiAuthFetchPaged(`/corporations/${corp}/structures/?language=zh`, 5), IS.loadRigs().catch(() => {})]);
     const types = await ctx.resolveTypeNames(list.map((s) => s.type_id));
+    const secs = new Map(await Promise.all([...new Set(list.map((s) => s.system_id))].map(async (id) => [id, (await ctx.fetchESI(`/universe/systems/${id}/`).catch(() => null))?.security_status ?? null])));
     await ctx.resolveStructureNames(list.map((s) => s.structure_id)).catch(() => {});
-    return { list, types };
+    const d = { list, types, secs, fits: null, fitErr: '' };
+    // 装配读军团资产（需要总监、可能很多页），不挡表格：读完再画一次
+    d.fitsP = !ctx.hasScope('esi-assets.read_corporation_assets.v1') ? Promise.resolve().then(() => { d.fitErr = 'scope'; })
+      : IS.corpFittings(ctx, corp, true).then(async (fits) => {
+        const names = await ctx.resolveTypeNames(list.flatMap((s) => (fits.get(s.structure_id) || []).map((x) => x.t)));
+        for (const [k, v] of names) d.types.set(k, v);
+        d.fits = fits;
+      }, (e) => { d.fitErr = e.status === 403 || /403/.test(e.message) ? 'role' : e.message || 'error'; });
+    return d;
   },
   moons: async (corp) => {
     const list = await ctx.esiAuthFetch(`/corporation/${corp}/mining/extractions/`);
@@ -353,15 +366,24 @@ function corpBody(view, d) {
   if (view === 'structures') {
     if (!d.list.length) return '<p class="text-muted">军团没有建筑</p>';
     const soon = d.list.filter((s) => s.fuel_expires && new Date(s.fuel_expires) - Date.now() < 7 * 86400e3);
+    const note = d.fitErr === 'scope' ? '授权里没有军团资产权限，读不到装配，只列出服务与船体加成（个人中心重新绑定 ESI 时勾选「军团管理」）'
+      : d.fitErr === 'role' ? '读不到军团资产（需要总监职位），只列出服务与船体加成'
+      : d.fitErr ? '军团资产读取失败：' + d.fitErr : '';
     return '<div class="valuation-grid">' + ctx.valuationCard('建筑', d.list.length + ' 座', '') +
       ctx.valuationCard('燃料不足 7 天', soon.length + ' 座', '', soon.length ? 'is-sell' : 'is-buy') + '</div>' +
+      `<p class="text-muted valuation-note">点开一行查看装配与加成${note ? ' · ' + esc(note) : ''}</p>` +
       table(['建筑', '类型', '星系', '燃料', '状态', '服务'], [...d.list].sort((a, b) => (a.fuel_expires ? new Date(a.fuel_expires) : Infinity) - (b.fuel_expires ? new Date(b.fuel_expires) : Infinity)).map((s) => {
         const ms = s.fuel_expires ? new Date(s.fuel_expires) - Date.now() : null;
         const fuel = ms == null ? '<span class="muted-cell">无燃料 / 低功率</span>' : `<span class="${ms < 3 * 86400e3 ? 'down' : ms < 7 * 86400e3 ? 'warn-text' : 'up'}">${left(ms)}</span><span class="cell-sub">${esc(fmtDate(s.fuel_expires))}</span>`;
         const services = (s.services || []).map((x) => `<span class="pill${x.state === 'online' ? ' buy' : ''}">${esc(x.name)}</span>`).join(' ');
-        return tr([`<b>${esc(s.name || locationName(s.structure_id))}</b>`, esc(d.types.get(s.type_id) || s.type_id), `<button class="link-btn" data-map-sys="${s.system_id}">${esc(ctx.officialName(s.system_id) || s.system_id)}</button>`,
-          fuel, esc(STRUCT_STATE[s.state] || s.state) + (s.state_timer_end ? `<span class="cell-sub">计时 ${esc(fmtDate(s.state_timer_end))}</span>` : ''), services || '—']);
-      }), 'trade-table');
+        const sec = d.secs?.get(s.system_id);
+        const open = SF_OPEN.has(s.structure_id);
+        return `<tr class="sf-tr${open ? ' open' : ''}" data-sf-open="${s.structure_id}" aria-expanded="${open}">` + [
+          `<span class="sf-name">${CHEVRON}<b>${esc(s.name || locationName(s.structure_id))}</b></span>`, esc(d.types.get(s.type_id) || s.type_id),
+          `<button class="link-btn" data-map-sys="${s.system_id}">${esc(ctx.officialName(s.system_id) || s.system_id)}</button>${sec != null ? ` <span class="text-muted">${fmtSec(sec)}</span>` : ''}`,
+          fuel, esc(STRUCT_STATE[s.state] || s.state) + (s.state_timer_end ? `<span class="cell-sub">计时 ${esc(fmtDate(s.state_timer_end))}</span>` : ''), services || '—'
+        ].map((c) => `<td>${c}</td>`).join('') + `</tr><tr class="sf-detail-row"${open ? '' : ' hidden'}><td colspan="6">${fitDetail(s, d)}</td></tr>`;
+      }), 'trade-table sf-table');
   }
   if (view === 'moons') {
     if (!d.list.length) return '<p class="text-muted">没有进行中的月矿提取</p>';
@@ -372,6 +394,67 @@ function corpBody(view, d) {
     }), 'trade-table');
   }
   return '';
+}
+
+// ---------- 建筑装配与加成 ----------
+const CHEVRON = '<svg class="category-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>';
+const SLOT_GROUPS = [['HiSlot', '高槽'], ['MedSlot', '中槽'], ['LoSlot', '低槽'], ['RigSlot', '改装件'], ['ServiceSlot', '服务槽'], ['QuantumCoreRoom', '量子核心'], ['FighterTube', '舰载机发射管']];
+const ACT_ZH = { m: '制造', r: '反应', i: '发明', c: '拷贝', me: '材料研究', te: '时间研究' };
+const KIND_ZH = { me: '材料', te: '时间', cost: '费用' };
+const SEC_ZH = ['高安', '低安', '00 / 虫洞'];
+const fmtSec = (v) => (v == null ? '' : (v > 0 && v < 0.05 ? 0.1 : Math.round(v * 10) / 10).toFixed(1));
+const yPct = (v) => (v * 100).toFixed(2).replace(/0$/, '').replace(/\.0$/, '') + '%';
+const minus = (v) => `−${String(v).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')}%`;
+// 工业加成文字：[[活动, 种类, 减免 %]] → 「制造 材料 −2% · 时间 −20%」，活动相同的合在一起，数值相同的活动也合在一起
+function indText(list) {
+  const byAct = new Map();
+  for (const [a, k, v] of list) { if (!v) continue; if (!byAct.has(a)) byAct.set(a, []); byAct.get(a).push([k, v]); }
+  const byText = new Map();
+  for (const [a, kinds] of byAct) {
+    const t = kinds.sort((x, y) => Object.keys(KIND_ZH).indexOf(x[0]) - Object.keys(KIND_ZH).indexOf(y[0])).map(([k, v]) => `<span>${KIND_ZH[k]}</span> ${minus(v)}`).join(' · ');
+    if (!byText.has(t)) byText.set(t, []);
+    byText.get(t).push(ACT_ZH[a] || a);
+  }
+  // 每个词单独一个元素，英文界面逐个翻译
+  return [...byText].map(([t, acts]) => `<span class="sf-bonus-item"><b>${acts.map((a) => `<span>${esc(a)}</span>`).join(' / ')}</b> ${t}</span>`).join('');
+}
+const RP_ZH = { o: '矿石', m: '卫星矿', i: '冰矿' };
+function fitDetail(s, d) {
+  const sec = d.secs.get(s.system_id);
+  const hull = IS.hullOf(s.type_id);
+  const items = d.fits?.get(s.structure_id) || [];
+  const icon = (t) => `<img src="${ctx.gameImage('types/' + t + '/icon', 32)}" alt="" width="20" height="20" loading="lazy">`;
+  const name = (t) => esc(d.types.get(Number(t)) || 'Type ' + t);
+  // 槽位
+  const rows = [];
+  const rigIds = [];
+  for (const [flag, label] of SLOT_GROUPS) {
+    const list = items.filter((x) => x.f.replace(/\d+$/, '') === flag).sort((a, b) => a.f.localeCompare(b.f) || b.q - a.q);
+    if (!list.length) continue;
+    if (flag === 'RigSlot') {
+      rows.push(`<div class="sf-row"><span>${label}</span><div class="sf-rigs">${list.map((x) => {
+        rigIds.push(x.t);
+        const e = IS.rigEffects(x.t, sec);
+        const txt = e ? [indText(e.ind), e.rp ? `<span class="sf-bonus-item"><b>化矿</b> ${e.rp[1].split('').map((c) => `<span>${RP_ZH[c]}</span>`).join(' / ')} ${yPct(e.rp[0])}</span>` : ''].join('') : '';
+        return `<div class="sf-rig"><span class="trade-item">${icon(x.t)}${name(x.t)}</span>${txt ? `<div class="sf-bonus">${txt}${e && e.k !== 1 ? `<small class="text-muted" title="已乘安全等级倍数"><span>${esc(SEC_ZH[IS.secCol(sec)])}</span> ×${e.k}</small>` : ''}</div>` : ''}</div>`;
+      }).join('')}</div></div>`);
+      continue;
+    }
+    rows.push(`<div class="sf-row"><span>${label}</span><div class="sf-items">${list.map((x) => `<span class="trade-item">${icon(x.t)}${name(x.t)}${x.q > 1 ? ` <small class="text-muted">× ${ctx.formatNumber(x.q)}</small>` : ''}</span>`).join('')}</div></div>`);
+  }
+  if (!d.fits) rows.push(`<p class="text-muted">${d.fitErr ? '读不到装配' : '读取装配…'}</p>`);
+  else if (!items.length) rows.push('<p class="text-muted">资产里没有这座建筑的装配</p>');
+  // 加成：船体 + 化矿（装了提炼设施，或读不到装配时船体有化矿加成 / 服务里有精炼）
+  const bonus = [];
+  const hb = Object.entries(hull?.b || {}).flatMap(([a, row]) => row.map((v, i) => [a, ['me', 'te', 'cost'][i], v]));
+  if (hb.length) bonus.push(`<div class="sf-row"><span>船体</span><div class="sf-bonus">${indText(hb)}</div></div>`);
+  const canRp = d.fits ? items.some((x) => IS.isRpService(x.t)) : (s.services || []).some((x) => /reprocess|精炼|提炼/i.test(x.name || ''));
+  if (canRp && IS.rigData()) {
+    const b = IS.reprocBase(s.type_id, rigIds, sec);
+    bonus.push(`<div class="sf-row"><span>化矿</span><div class="sf-bonus"><span class="sf-bonus-item">${['矿石', '卫星矿', '冰矿'].map((l, i) => `<span>${l}</span> <b class="up">${yPct(b.ore[i])}</b>`).join(' · ')}</span><small class="text-muted">${['不含技能', hull?.rp ? `含船体 +${hull.rp}%` : '', d.fits ? '' : '改装件未计入'].filter(Boolean).join(' · ')}</small></div></div>`);
+  }
+  if (!bonus.length && !rigIds.some((t) => { const e = IS.rigEffects(t, sec); return e && (e.ind.length || e.rp); })) bonus.push('<p class="text-muted">没有工业 / 化矿加成</p>');
+  return `<div class="sf-detail"><div><div class="sf-sub">装配</div>${rows.join('')}</div>${bonus.length ? `<div><div class="sf-sub">建筑加成</div>${bonus.join('')}</div>` : ''}</div>`;
 }
 
 // 军团资产：按所选交易中心估值
@@ -409,6 +492,7 @@ async function renderCorp(box) {
     const d = await cached('corp:' + view, () => CORP_LOAD[view](base.corp));
     const alive = () => still('corp', id) && S.corpView === view;
     if (alive()) { if (view === 'assets') await corpAssets(d, body, alive); else body.innerHTML = corpBody(view, d); }
+    if (d.fitsP && !d.fits && !d.fitErr) { await d.fitsP; if (alive()) body.innerHTML = corpBody(view, d); }
   } catch (error) {
     if (!still('corp', id) || S.corpView !== view) return;
     const need = CORP_VIEWS.find((v) => v[0] === view)[2];
@@ -501,6 +585,16 @@ export async function renderMore(tab, box) {
       if (e.target.closest('[data-mail-reload]')) { M.list = []; M.labels = null; M.open = 0; renderMail(box); return; }
       const sys = e.target.closest('[data-map-sys]');
       if (sys) { ctx.openMapSystem(Number(sys.dataset.mapSys)); return; }
+      const sf = e.target.closest('[data-sf-open]');
+      if (sf) {
+        const id = Number(sf.dataset.sfOpen);
+        const open = !SF_OPEN.has(id);
+        if (open) SF_OPEN.add(id); else SF_OPEN.delete(id);
+        sf.classList.toggle('open', open);
+        sf.setAttribute('aria-expanded', open);
+        sf.nextElementSibling.hidden = !open;
+        return;
+      }
       const dest = e.target.closest('[data-game-dest]');
       if (dest) ctx.game.waypoint(Number(dest.dataset.gameDest));
     });

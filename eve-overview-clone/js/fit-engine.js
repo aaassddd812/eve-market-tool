@@ -641,7 +641,7 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
     weapon.volley += volley;
     dmg.forEach((x, i) => { weapon.types[i] += x / cycle; });
     weapons.push({
-      module: m, dps, volley, spool,
+      module: m, dps, volley, dmg, spool,
       range: m.type.turret ? m.attr(AT.maxRange) : m.charge.attr(AT.maxVelocity) * m.charge.attr(AT.explosionDelay) / 1000,
       falloff: m.type.turret ? m.attr(AT.falloff) : 0
     });

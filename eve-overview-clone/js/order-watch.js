@@ -15,7 +15,7 @@
 //   卖单：每件到手 = 价格扣销售税 − 累计费用 / 总量，有收单成交记录时和平均收购成本比。
 //   改单以价格变化为准（游戏里改单必须改价）。
 
-import * as TF from './trade-fees.js?v=v6';
+import * as TF from './trade-fees.js?v=v7';
 import * as AP from './alert-push.js?v=v13';
 import { L } from './alert-mail.js?v=v8';
 

@@ -3,7 +3,7 @@
 // 技能可选「全部 5 级」或「已绑定角色的技能」；装配保存在本机，支持 EFT 文本导入导出与分享链接，
 // 绑定 ESI 后可读取 / 保存游戏内的装配（esi-fittings.read_fittings.v1 / write_fittings.v1）。
 // 智能装配（fit-auto.js）按目标与约束自动搜索装配；击杀记录装配（fit-kb.js）列出这艘船最近阵亡时的常见装配。
-import * as FE from './fit-engine.js?v=v47';
+import * as FE from './fit-engine.js?v=v48';
 import * as MU from './fit-mutate.js?v=v4';
 import { initAutoFit, openAutoFit, openImplantAdvisor, counterFit, cancelCounterFit, aiAutoFit } from './fit-auto.js?v=v33';
 import { initKbFits, openKbFits, openPlazaFits, commonFit } from './fit-kb.js?v=v30';
@@ -595,7 +595,7 @@ function visible(t) {
   if (F.tab === 'ship' && F.fitSrc.size && !fitsOf(t.id).length) return false;
   const shipType = F.fit && type(F.fit.ship);
   if (F.tab === 'module') {
-    if (F.slotFilter && t.slot !== F.slotFilter) return false;
+    if (F.slotFilter && t.slot !== F.slotFilter && !(F.slotFilter === 'rig' && !F.target && t.slot === 'sub')) return false;
     if (F.onlyFits && shipType) {
       if (FE.cannotFit(F.data, shipType, t)) return false;
       if (t.slot === 'sub' && !F.stats?.slots.sub) return false;
@@ -689,10 +689,14 @@ function renderBrowser() {
   if ((F.tab === 'module' || F.tab === 'drone' || F.tab === 'charge') && !cur.length) {
     head.push(`<label class="fit-only"><input type="checkbox" data-fit-only${F.onlyFits ? ' checked' : ''}>只显示${F.tab === 'charge' ? '已装配武器可用的弹药' : '能装到当前舰船的'}</label>`);
   }
-  // 装备按槽位筛选（点装配里的空槽位也会切到对应槽位）
+  // 装备按槽位筛选（点装配里的空槽位也会切到对应槽位）：和游戏装配浏览器一样是低 / 中 / 高槽、改装件四个图标按钮（改装件含子系统），
+  // 再点一次已选中的取消筛选
   if (F.tab === 'module') {
-    const slots = FE.SLOTS.filter((s) => !F.stats || F.stats.slots[s] || F.slotFilter === s);
-    head.push(`<div class="fit-slot-tabs">${[[null, '全部'], ...slots.map((s) => [s, FE.SLOT_NAME[s]])].map(([s, n]) => `<button type="button" class="${F.slotFilter === s ? 'active' : ''}" data-fit-slot-tab="${s || ''}">${n}</button>`).join('')}</div>`);
+    head.push(`<div class="fit-src-bar fit-slot-tabs" role="group" aria-label="按槽位筛选">${SLOT_FILTERS.map(([s, icon]) => {
+      const on = F.slotFilter === s || (s === 'rig' && F.slotFilter === 'sub');
+      const label = s === 'rig' ? '改装件 / 子系统' : FE.SLOT_NAME[s];
+      return `<button type="button" class="fit-src${on ? ' active' : ''}" data-fit-slot-tab="${on ? '' : s}" aria-pressed="${on}" title="${label}" aria-label="${label}"><i class="fit-src-i fit-slot-i" style="-webkit-mask-image:url(${icon});mask-image:url(${icon})"></i></button>`;
+    }).join('')}</div>`);
   }
   if (F.query) {
     const q = F.query;
@@ -750,6 +754,8 @@ const SRC_ICON = {
   plaza: '<i class="fit-src-i" style="-webkit-mask-image:url(assets/eveui/classes/fitting/tabcommunityfits.png);mask-image:url(assets/eveui/classes/fitting/tabcommunityfits.png)"></i>'
 };
 const FIT_SRC = { saved: '我的装配', esi: '游戏装配（ESI）', plaza: '广场装配' };
+// 装备页的槽位筛选：游戏装配浏览器的筛选图标（res:/UI/Texture/classes/Fitting/filterIcon*.png），顺序同游戏
+const SLOT_FILTERS = [['low', 'lowslot'], ['mid', 'mediumslot'], ['high', 'highslot'], ['rig', 'rigslot']].map(([s, f]) => [s, `assets/eveui/classes/fitting/filtericon${f}.png`]);
 const FS = { esi: null, esiBusy: false, esiChar: 0, plaza: null, plazaAt: 0, plazaBusy: false };
 function loadFitSources() {
   // 游戏装配：绑定了 ESI 才读（和「游戏装配」窗口同一份缓存）
@@ -935,6 +941,8 @@ function initTypeInfo() {
   infoFloat.el.addEventListener('click', (e) => {
     const m = e.target.closest('[data-fi-market]');
     if (m) { infoFloat.close(); app.openItem?.(Number(m.dataset.fiMarket)); return; }
+    const fs = e.target.closest('[data-fi-fit]');
+    if (fs) { infoFloat.close(); openShip(Number(fs.dataset.fiFit)); return; }
     const sw = e.target.closest('[data-fi-swap]');
     if (sw) { if (swapType(Number($('fitInfoBody').dataset.id), Number(sw.dataset.fiSwap))) infoFloat.close(); return; }
     const tab = e.target.closest('[data-fi-tab]');
@@ -943,7 +951,7 @@ function initTypeInfo() {
 }
 
 async function openTypeInfo(id, src = null) {
-  const t = type(id);
+  const t = infoType(id);
   if (!t) return;
   const body = $('fitInfoBody');
   const tabNow = body.dataset.open ? body.querySelector('[data-fi-tab].active')?.dataset.fiTab : null;
@@ -951,7 +959,7 @@ async function openTypeInfo(id, src = null) {
   if (infoFloat.id !== id) return;   // 读数据期间换了别的物品
   body.dataset.id = String(id);
   F.infoSrc = sourceType(src) === id ? src : null;
-  body.innerHTML = infoHtml(t, names, info, tabNow, Boolean(F.infoSrc), DRAG_CATS.has(t.category));
+  body.innerHTML = infoHtml(t, names, info, tabNow, Boolean(F.infoSrc), DRAG_CATS.has(t.category) && !t.ext, true);
   body.dataset.open = '1';
   body.querySelector('.fi-panes').scrollTop = 0;
   if (t.market) fillInfoPrice(id);
@@ -968,16 +976,69 @@ function infoDesc(id) {
     return text || (lang === 'en' ? 'No description' : '没有描述');
   }).catch(() => '描述读取失败');
 }
+// 装配数据里没有的物品（矿物、蓝图、材料等，市场详情页打开）：按 ESI 的物品属性显示，没有加成 / 衍生
+const EXT = new Map();   // id -> 物品（与装配数据同样的字段，ext = true）| Promise
+const infoType = (id) => type(id) || (EXT.get(id)?.id ? EXT.get(id) : null);
+function extType(id) {
+  if (EXT.has(id)) return Promise.resolve(EXT.get(id));
+  const lang = window.I18N?.lang === 'en' ? 'en' : 'zh';
+  const get = (path) => app.fetchESI(path, { headers: { 'Accept-Language': lang } });
+  const p = get(`/universe/types/${id}/`).then(async (d) => {
+    const g = await get(`/universe/groups/${d.group_id}/`).catch(() => null);
+    const attrs = new Map((d.dogma_attributes || []).map((a) => [a.attribute_id, a.value]));
+    const t = { id, name: d.name || String(id), en: '', group: d.group_id, groupName: g?.name || '', category: g?.category_id, market: d.market_group_id || 0,
+      meta: attrs.get(1692) || 1, attrs, effects: [], skills: FE.AT.reqSkills.map(([sk, l]) => [attrs.get(sk), attrs.get(l) || 0]).filter(([sk]) => sk), ext: true };
+    EXT.set(id, t);
+    return t;
+  });
+  EXT.set(id, p);
+  p.catch(() => EXT.delete(id));
+  return p;
+}
+// 其他页面（市场物品详情页）打开物品详情悬浮窗
+export async function openInfo(id, anchor = null) {
+  await ensureData();
+  if (!type(id)) await extType(id);
+  infoFloat.open(id, { anchor, pinned: true });
+}
+// 舰船在装配页查看：已在装配页就直接换船，否则记下、切到装配页时载入（有这艘船上次没保存的草稿就载入草稿）
+const fitVisible = () => F.ready && !document.getElementById('fitView')?.hidden;
+let pendingShip = 0;
+export function openShip(id) {
+  if (fitVisible()) { if (type(id)) setShip(id); return; }
+  pendingShip = id;
+  app.openFit();
+}
+function loadPendingShip() {
+  const id = pendingShip;
+  pendingShip = 0;
+  if (!id || type(id)?.category !== FE.CAT.ship) return false;
+  if (!F.fit) {
+    const saved = app.store.getJSON(CURRENT_KEY, null);
+    if (saved && F.data.types.has(saved.ship)) F.fit = normalize(saved);
+  }
+  if (F.fit?.ship !== id) {
+    stashDraft(F.fit);
+    const draft = takeDraft(id);
+    F.fit = draft || newFit(id);
+    if (draft) app.showToast(`已载入${type(id).name}上次未保存的装配`, 'info', 3000);
+  }
+  F.selected = null;
+  F.slotFilter = null;
+  if (F.tab === 'ship') { F.tab = 'module'; renderBrowserTabs(); }
+  return true;
+}
+
 // 悬浮窗（float-detail.html）里的物品详情：主页面生成整页内容推过去（描述已填好，没有「替换」）
 export async function typeDetail(id) {
   await ensureData();
-  const t = type(id);
+  const t = type(id) || await extType(id).catch(() => null);
   if (!t) throw new Error('没有这个物品的数据');
   const [names, info, desc] = await Promise.all([dogmaNames(), fitInfo(), infoDesc(id), t.market ? Promise.race([wantPrices([id]), new Promise((r) => setTimeout(r, 4000))]) : null]);
   const html = infoHtml(t, names, info, null, false).replace('<div class="pi-loading">读取描述…</div>', app.esc(desc));
   return { title: t.name, html: `<div class="fi-pop fi-float">${html}</div>` };
 }
-function infoHtml(t, names, info, tabNow, canSwap, drag = false) {
+function infoHtml(t, names, info, tabNow, canSwap, drag = false, inPage = false) {
   const id = t.id;
   const meta = metaTag(t);
   const isShip = t.category === FE.CAT.ship;
@@ -1002,10 +1063,11 @@ function infoHtml(t, names, info, tabNow, canSwap, drag = false) {
   const pane = (key, html) => `<div class="fi-pane${key === first ? ' active' : ''}" data-fi-pane="${key}">${html}</div>`;
   return `<div class="fi-head">
       <img src="${IMG(id, isShip ? 'render' : 'icon', 128)}" alt="" width="72" height="72"${drag ? ` class="fi-drag" data-fit-drag="${id}" draggable="false" title="按住拖到装配的槽位上"` : ''}>
-      <div class="fi-title"><span>${app.esc(F.data.groups.get(t.group)?.name || '')}${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${t.attrs.get(633) ? `<small>衍生等级 ${t.attrs.get(633)}</small>` : ''}</span>
+      <div class="fi-title"><span>${app.esc(F.data.groups.get(t.group)?.name || t.groupName || '')}${meta ? `<em class="fit-meta is-${meta[1]}">${meta[0]}</em>` : ''}${t.attrs.get(633) ? `<small>衍生等级 ${t.attrs.get(633)}</small>` : ''}</span>
         <h4>${app.esc(t.name)}</h4>${t.en && t.en !== t.name ? `<small translate="no">${app.esc(t.en)}</small>` : ''}
         ${t.market ? `<div class="fi-price" data-fi-price="${id}">${infoPriceHtml(id)}</div>` : ''}</div>
-      ${t.market ? `<button type="button" class="btn btn-ghost btn-sm" data-fi-market="${id}">市场价格</button>` : ''}
+      <div class="fi-acts">${t.market ? `<button type="button" class="btn btn-ghost btn-sm" data-fi-market="${id}">市场价格</button>` : ''}
+      ${inPage && isShip && !t.ext && !(F.fit?.ship === id && fitVisible()) ? `<button type="button" class="btn btn-ghost btn-sm" data-fi-fit="${id}">在装配页查看</button>` : ''}</div>
     </div>
     <div class="segmented fi-tabs">${tabs.map(([k, l]) => `<button type="button" data-fi-tab="${k}" class="${k === first ? 'active' : ''}">${l}</button>`).join('')}</div>
     <div class="fi-panes">${pane('attrs', attrsHtml)}
@@ -1985,8 +2047,27 @@ async function modTipHtml(ref) {
     rows.push([fuel ? `${label}（${fuel.name}）` : label + tick, unit === 1 ? dist(v) : fuel ? app.formatNumber(v) : infoValue(a, v, unit, names.units), cls]);
   }
   if (!rows.length) return '';
+  const dl = (list) => `<dl>${list.map(([k, v, cls]) => `<dt>${app.esc(k)}</dt><dd${cls ? ` class="${cls}"` : ''}>${v}</dd>`).join('')}</dl>`;
   return `<div class="fit-mtip-head"><img src="${IMG(t.id)}" alt="" width="24" height="24"><b>${app.esc(t.name)}</b>${m.state === 'overload' ? '<em>超载</em>' : ''}</div>
-    <dl>${rows.map(([k, v, cls]) => `<dt>${app.esc(k)}</dt><dd${cls ? ` class="${cls}"` : ''}>${v}</dd>`).join('')}</dl>`;
+    ${dl(rows)}${w && item.charge ? chargeTipHtml(w, item.charge, names, dl) : ''}`;
+}
+// 武器悬停提示里的「弹药」一节：每发各类伤害（已乘炮台伤害倍数或导弹伤害技能、递增），
+// 以及弹药自身受技能 / 舰船 / 装备加成后的属性（导弹、炸弹的飞行速度、飞行时间、爆炸半径、爆炸速度）；和弹药基础属性比，变好标绿、变差标红。
+// 炮台弹药的射程、跟踪、电容等倍数已经算进上面的装备属性
+const CHARGE_TIP_ATTRS = [37, 281, 654, 653];
+function chargeTipHtml(w, c, names, dl) {
+  const rows = [];
+  FE.DAMAGE.forEach((a, i) => { if (w.dmg?.[i] > 0) rows.push([`${names.attrs[a]?.[0] || a}（每发）`, app.formatNumber(Math.round(w.dmg[i] * 10) / 10)]); });
+  for (const a of CHARGE_TIP_ATTRS) {
+    const base = c.type.attrs.get(a);
+    if (!base || !names.attrs[a]) continue;
+    const v = c.attr(a);
+    const [label, unit, highGood] = names.attrs[a];
+    const cls = Math.abs(v - base) <= Math.abs(base) * 1e-6 ? '' : (highGood ? v > base : v < base) ? 'is-up' : 'is-down';
+    rows.push([label, unit === 1 ? dist(v) : infoValue(a, v, unit, names.units), cls]);
+  }
+  if (!rows.length) return '';
+  return `<div class="fit-mtip-sub"><img src="${IMG(c.type.id)}" alt="" width="20" height="20"><span>已装填</span><b>${app.esc(c.type.name)}</b></div>${dl(rows)}`;
 }
 // 无人机 / 舰载机的悬浮窗：伤害（已算技能、船体和装备加成）、射程、速度、耐久、带宽等；变好标绿、变差标红（和基础属性比）
 const DRONE_TIP_ATTRS = [64, 51, 54, 158, 160, 37, 508, 620, 552, 263, 265, 9, 77, 1272];
@@ -3017,7 +3098,7 @@ function loadPendingFit() {
 }
 
 function loadPending() {
-  return loadPendingFit() || loadPendingKill() || loadPendingEft();
+  return loadPendingFit() || loadPendingKill() || loadPendingEft() || loadPendingShip();
 }
 
 function loadPendingEft() {

@@ -6,8 +6,9 @@
 // 卖出税费：默认按技能（制造页的技能设置：会计学减销售税，产物挂卖单时加经纪人关系后的中介费，挂收单买材料也加中介费），也可手动填。
 // 全服排行：所有 LP 商店兑换项（按 offer 去重）的 ISK/LP 排行，前列可用吉他行情精算。
 // 我的 LP：ESI 角色忠诚点（esi-characters.read_loyalty.v1），按各军团最佳兑换估算价值。
+// 物品商人：活动代币等在太空里的物品商人处兑换的配方，按代币列出能换什么、每个代币值多少 ISK，以及怎么换到这个代币（仅宁静服）。
 // 价格：全服均价（一次请求，立即可用）或吉他卖单 / 收单（按物品逐个读取，有缓存）。
-// 数据：lp-data.json 由 build_lp.mjs 生成（ESI /loyalty/stores + SDE 中文名）。
+// 数据：lp-data.json 由 build_lp.mjs 生成（ESI /loyalty/stores + SDE 中文名）；item-trader.json 由 build_item_trader.mjs 生成（客户端兑换配方）。
 import { SERVER, HUB, HUB_NAME, eveImage } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v18';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
@@ -22,16 +23,19 @@ const LOGO = (id, size = 32) => eveImage(`corporations/${id}/logo`, size);
 const RANK_LIMIT = 200;
 const ROMAN = ['0', 'I', 'II', 'III', 'IV', 'V'];
 const REFINE_TOP = 40;
+// 物品商人兑换配方来自宁静服客户端资源；国服客户端的配方不同，暂时只有宁静服
+const TRADE_URL = SERVER.id === 'tq' ? 'item-trader.json?v=1' : null;
 
 const TABS = [
   ['store', 'LP 商店', '<path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v11h16V9"/><path d="M3 9h18"/><path d="M9 20v-6h6v6"/>'],
   ['rank', '全服排行', '<path d="M3 20h18"/><path d="M6 16V10M12 16V5M18 16v-8"/>'],
-  ['mine', '我的 LP', '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>']
-];
+  ['mine', '我的 LP', '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>'],
+  ['trade', '物品商人', '<path d="M16 3l4 4-4 4"/><path d="M20 7H4"/><path d="M8 21l-4-4 4-4"/><path d="M4 17h16"/>']
+].filter(([k]) => k !== 'trade' || TRADE_URL);
 
 const D = { loading: null, data: null, avg: new Map(), bpAll: null, bpLoading: null, offersByType: new Map(), corpById: new Map(), corpsByOffer: new Map(), history: new Map() };
-const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, taxMode: 'skill', kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all', bp: 'make' };
-const S = { times: new Map(), q: '', rankQ: '', sideQ: '', open: new Set(), loadingJita: null, progress: '', refined: new Set(), mine: null, mineError: null, mineLoading: false, rendered: '', mkt: undefined, mktLoading: null };
+const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, taxMode: 'skill', kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all', bp: 'make', token: 0, tSort: 'per', tDir: 'desc', tGroup: 'all' };
+const S = { times: new Map(), q: '', rankQ: '', sideQ: '', tQ: '', open: new Set(), tOpen: new Set(), loadingJita: null, progress: '', refined: new Set(), mine: null, mineError: null, mineLoading: false, rendered: '', mkt: undefined, mktLoading: null };
 const jita = new Map();   // 吉他行情 id -> { sell, buy }
 // 制造页模块（industry.js）：蓝图制造的材料、安装费、所需技能与按技能的税费；加载完之前按旧算法（材料效率 0、无安装费、手动税费）
 let IND = null, indLoading = null;
@@ -61,6 +65,9 @@ export function initLp(context) {
   if (!SORT_DIR[F.sort]) { F.sort = 'iskLp'; F.dir = 'desc'; }
   if (F.dir !== 'asc' && F.dir !== 'desc') F.dir = SORT_DIR[F.sort];
   if (F.bp !== 'bpc' || !SERVER.kb) F.bp = 'make';
+  if (!T_SORT_DIR[F.tSort]) { F.tSort = 'per'; F.tDir = 'desc'; }
+  if (F.tDir !== 'asc' && F.tDir !== 'desc') F.tDir = T_SORT_DIR[F.tSort];
+  if (F.tab === 'trade' && !TRADE_URL) F.tab = 'store';
   // 个人中心切换角色：「我的 LP」重新读取
   window.addEventListener('eve-account-change', () => { S.mine = null; S.mineError = null; });
 }
@@ -72,9 +79,10 @@ const SORT_KEY = {
   revenue: (r) => (r.v.missing ? null : r.v.revenue), profit: (r) => (r.v.missing ? null : r.v.profit), iskLp: (r) => (r.v.missing ? null : r.v.iskLp),
   daily: (r) => volOf(r.o)?.daily ?? null, turnover: (r) => volOf(r.o)?.isk ?? null
 };
-const sortTh = (key, label, cls = '') => {
-  const on = F.sort === key;
-  return `<th class="sortable${cls ? ' ' + cls : ''}${on ? ' sorted' : ''}" data-lp-sort="${key}" data-dir="${on ? F.dir : ''}" aria-sort="${on ? (F.dir === 'asc' ? 'ascending' : 'descending') : 'none'}" tabindex="0">${label}</th>`;
+// trade：物品商人表格（排序单独记）
+const sortTh = (key, label, cls = '', trade = false) => {
+  const on = (trade ? F.tSort : F.sort) === key, dir = trade ? F.tDir : F.dir;
+  return `<th class="sortable${cls ? ' ' + cls : ''}${on ? ' sorted' : ''}" data-lp-${trade ? 'tsort' : 'sort'}="${key}" data-dir="${on ? dir : ''}" aria-sort="${on ? (dir === 'asc' ? 'ascending' : 'descending') : 'none'}" tabindex="0">${label}</th>`;
 };
 const save = () => ctx.store.setJSON(STORE_KEY, F);
 
@@ -101,22 +109,28 @@ function loadData() {
   return D.loading;
 }
 
-const tName = (id) => D.data.names[id] || String(id);
+const tName = (id) => D.data?.names[id] || TD.data?.names[id] || String(id);
 const offer = (id) => {
   const o = D.data.offers[id];
   return { id: Number(id), type: o[0], qty: o[1], lp: o[2], isk: o[3], ak: o[4], req: o[5], bp: D.data.bp[o[0]] || null };
 };
 const corpName = (id) => D.corpById.get(id)?.name || String(id);
 
-// 某个物品的单价：side = sell / buy / avg；吉他价缺失时回落到全服均价
-function price(id, side) {
+// 某个物品的单价：side = sell / buy / avg。先用交易中心实时行情（逐个读取），其次交易中心快照（与制造页利润排行同一份，全部物品），
+// 都没有时回落到全服均价（标 ≈）。
+// strict：产物卖给收单时只认收单价——行情读到了但没有收单就是卖不掉，不拿卖单价或均价代替（与制造页利润排行一致）
+function price(id, side, strict) {
   if (side !== 'avg') {
-    const p = jita.get(id)?.[side];
-    if (p) return { v: p, src: 'jita' };
+    const j = jita.get(id);
+    const live = j && (j.sell !== undefined || j.buy !== undefined) ? j : null;   // 读取失败的记成 {}
+    const p = live ? live[side] : S.mkt?.get(id)?.[side];
+    if (p > 0) return { v: p, src: live ? 'jita' : 'mkt' };
+    if (strict && (live || S.mkt)) return { v: null, src: 'none' };
   }
   const a = D.avg.get(id);
   return a ? { v: a, src: 'avg' } : { v: null, src: null };
 }
+const prodStrict = () => F.price === 'buy';
 
 // 公开合同里各蓝图的最低价：type_id -> [原图价, 拷贝每流程价]（只有宁静服有合同数据）
 function loadBpAll() {
@@ -128,36 +142,43 @@ function loadBpAll() {
 }
 const bpcRun = (o) => D.bpAll?.get(o.type)?.[1] ?? null;
 
-// 兑换项估值；mode：蓝图兑换品按 make（制造后卖产物）还是 bpc（直接卖蓝图，合同价）算，默认跟估价设置
-function valueOf(o, mode = F.bp) {
-  let missing = false, approx = false;
-  const use = (id, side) => {
-    const p = price(id, side);
-    if (p.v == null) missing = true;
-    else if (side !== 'avg' && p.src === 'avg') approx = true;
+// 估值时逐个取价并记下：缺价格（missing）、用了全服均价（approx，显示 ≈）、卖给收单但没有收单（noBuy）
+function pricer() {
+  const st = { missing: false, approx: false, noBuy: false };
+  st.use = (id, side, strict) => {
+    const p = price(id, side, strict);
+    if (p.v == null) { st.missing = true; if (p.src === 'none') st.noBuy = true; }
+    else if (side !== 'avg' && p.src === 'avg') st.approx = true;
     return p.v || 0;
   };
+  return st;
+}
+
+// 兑换项估值；mode：蓝图兑换品按 make（制造后卖产物）还是 bpc（直接卖蓝图，合同价）算，默认跟估价设置
+function valueOf(o, mode = F.bp) {
+  const pc = pricer(), use = pc.use;
+  let bpcMissing = false;
   // 税费只算在卖出的产物上；制造材料是买入成本，计入花费
   let unit, keep = 1 - sellTaxPct() / 100, matCost = 0, jobCost = 0, mk = null;
   if (o.bp && mode === 'bpc') {
     unit = bpcRun(o);
-    if (unit == null) { missing = true; unit = 0; }
+    if (unit == null) { bpcMissing = true; unit = 0; }
     keep = 1;   // 合同出售不扣销售税
   } else if (o.bp) {
     const [pid, pq, mats] = o.bp;
-    unit = use(pid, F.price) * pq;
+    unit = use(pid, F.price, prodStrict()) * pq;
     mk = makeOf(o);
     // 有制造页数据时：材料按设施 / 改装件加成后的数量，另加安装费；否则材料效率 0、不计安装费
     if (mk) { matCost = mk.items.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0); jobCost = mk.jobCost; }
     else matCost = mats.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0) * o.qty;
-  } else unit = use(o.type, F.price);
+  } else unit = use(o.type, F.price, prodStrict());
   const revenue = unit * o.qty * keep;
   const fee = 1 + buyFeePct() / 100;
   const reqCost = o.req.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0) * fee;
   matCost *= fee;
   const cost = o.isk + reqCost + matCost + jobCost;
   const profit = revenue - cost;
-  return { revenue, reqCost, matCost, jobCost, mk, cost, profit, iskLp: o.lp ? profit / o.lp : null, missing, approx, mode: o.bp ? mode : null };
+  return { revenue, reqCost, matCost, jobCost, mk, cost, profit, iskLp: o.lp ? profit / o.lp : null, missing: pc.missing || bpcMissing, approx: pc.approx, noBuy: pc.noBuy, mode: o.bp ? mode : null };
 }
 
 function offerTypes(o) {
@@ -235,20 +256,22 @@ function fillVolumes(body, rows) {
 // 预加载（modern-app.js：悬停导航按钮或常用页面空闲时调用），只取数据不渲染，打开页面时直接用
 export async function preload() {
   await loadData();
+  if (F.tab === 'trade') { await loadTrade(); return; }
   // 默认的「LP 商店」标签页：顺便取当前军团商店里物品的交易中心行情（页面已打开时取完刷新）
   if (F.tab === 'store' && needsJita() && !S.loadingJita) await loadJita((D.data.stores[F.corp] || []).map(offer).flatMap(offerTypes), () => { if (F.tab === 'store' && $('lpBody')) refreshBody(); });
 }
 
 export async function showLp(hash = location.hash) {
   const main = $('lpMain');
-  if (!D.data) main.innerHTML = skPage({ tabs: 3, rows: 10 });
+  if (!D.data) main.innerHTML = skPage({ tabs: TABS.length, rows: 10 });
   await loadData();
   if (IND) IND.lpEnv().then(() => { if ($('lpSettings')) { renderSettings(); refreshBody(); } }).catch(() => {});   // 制造页的技能设置可能改过
   else loadInd();     // 制造页设置：蓝图制造的材料加成、安装费、所需技能，按技能的税费
   loadBpAll();   // 蓝图兑换品的合同价（详情里两种算法对比、「直接卖蓝图」模式用）
-  const m = /^#lp(?:\/(store|rank|mine))?(?:\/(\d+))?/.exec(hash || '');
-  if (m?.[1]) F.tab = m[1];
+  const m = /^#lp(?:\/(store|rank|mine|trade))?(?:\/(\d+))?/.exec(hash || '');
+  if (m?.[1] && (m[1] !== 'trade' || TRADE_URL)) F.tab = m[1];
   if (m?.[1] === 'store' && m[2] && D.corpById.has(Number(m[2]))) F.corp = Number(m[2]);
+  if (F.tab === 'trade' && m?.[1] === 'trade' && m[2]) F.token = Number(m[2]);   // 数据读到后不是代币的换成默认（curToken）
   if (!main.dataset.ready) {
     main.dataset.ready = '1';
     main.innerHTML = `
@@ -265,6 +288,10 @@ export async function showLp(hash = location.hash) {
     main.addEventListener('input', onInput);
     const side = $('lpSide');
     side.addEventListener('click', onSideClick);
+    // 图标最终没读到（涂装许可证等图片服务器上没有图标；/icon 失败换 /bp 重试的那次不会传到这里）：隐藏破图
+    const hideBroken = (e) => { if (e.target.tagName === 'IMG') e.target.classList.add('broken'); };
+    main.addEventListener('error', hideBroken, true);
+    side.addEventListener('error', hideBroken, true);
     let t = 0;
     $('lpSideSearch').addEventListener('input', (e) => { clearTimeout(t); t = setTimeout(() => { S.sideQ = e.target.value.trim(); renderSide(); }, 150); });
     renderSettings();
@@ -276,22 +303,24 @@ export async function showLp(hash = location.hash) {
   else { setHash(); if (F.tab === 'mine' && !S.mine && !S.mineLoading && ctx.hasEsiToken()) renderTab(); }
 }
 
-const stateKey = () => F.tab + ':' + (F.tab === 'store' ? F.corp : '');
+const stateKey = () => F.tab + ':' + (F.tab === 'store' ? F.corp : F.tab === 'trade' ? F.token : '');
 
 function setHash() {
   if ($('lpView').hidden) return;   // 后台读完行情重绘时不改其他页面的地址
-  const h = F.tab === 'store' ? `#lp/store/${F.corp}` : `#lp/${F.tab}`;
+  const h = F.tab === 'store' ? `#lp/store/${F.corp}` : F.tab === 'trade' && F.token ? `#lp/trade/${F.token}` : `#lp/${F.tab}`;
   if (location.hash !== h) history.replaceState(null, '', location.pathname + h);
 }
 
 function renderTab() {
   document.querySelectorAll('[data-lp-tab]').forEach((b) => b.classList.toggle('active', b.dataset.lpTab === F.tab));
+  if (F.tab === 'trade' && TD.data) curToken();
   setHash();
   S.rendered = stateKey();
   renderSide();
   const body = $('lpBody');
   if (F.tab === 'store') renderStore(body);
   else if (F.tab === 'rank') renderRank(body);
+  else if (F.tab === 'trade') renderTrade(body);
   else renderMine(body);
 }
 
@@ -322,7 +351,7 @@ function needsJita() { return F.price !== 'avg' || F.mat !== 'avg'; }
 
 function priceNote(rows) {
   if (!needsJita()) return '全服均价估算';
-  if (S.loadingJita) return `<span data-lp-progress>${S.progress || `读取${HUB_NAME}行情…`}</span>（暂用全服均价）`;
+  if (S.loadingJita) return `<span data-lp-progress>${S.progress || `读取${HUB_NAME}行情…`}</span>${S.mkt ? '（暂用行情快照）' : '（暂用全服均价）'}`;
   const approx = rows.some((r) => r.v.approx);
   return HUB_NAME + '实时行情' + (approx ? '（≈ 为全服均价）' : '');
 }
@@ -397,16 +426,18 @@ function buyListHtml(o) {
     </div></div>`;
 }
 
+// 明细表：一行物品 · 数量 · 价值（side 为空时不估价；nameHtml 可替换名称，如链到其他代币）；合计行；分组标题
+function dRow(id, q, side, strict = false, nameHtml = null) {
+  const p = side ? price(id, side, strict) : null;
+  return `<tr><td><span class="lp-item"><img src="${ICON(id)}" data-item-pop="${id}" alt="" width="24" height="24" loading="lazy"><span>${nameHtml ?? ctx.esc(tName(id))}</span></span></td><td class="num">${ctx.formatNumber(q)}</td>
+      <td class="num">${!p ? '' : p.v == null ? (p.src === 'none' ? '没有收单' : '无价格') : (side !== 'avg' && p.src === 'avg' ? '≈' : '') + ctx.formatISK(p.v * q)}</td></tr>`;
+}
+const dSum = (label, value, cls = '') => `<tr class="lp-sum${cls}"><td colspan="2">${label}</td><td class="num">${value}</td></tr>`;
+const dHead = (label, extra = '') => `<tr class="lp-group"><td colspan="3">${label}${extra ? `<span class="lp-pill">${extra}</span>` : ''}</td></tr>`;
+
 function offerDetail(o, v) {
   const esc = ctx.esc, isk = ctx.formatISK, num = ctx.formatNumber;
-  // 明细表一行：物品 · 数量 · 价值
-  const row = (id, q, side, icon = ICON(id)) => {
-    const p = side ? price(id, side) : null;
-    return `<tr><td><span class="lp-item"><img src="${icon}"${side ? ` data-item-pop="${id}"` : ''} alt="" width="24" height="24" loading="lazy"><span>${esc(tName(id))}</span></span></td><td class="num">${num(q)}</td>
-      <td class="num">${!p ? '' : p.v == null ? '无价格' : (side !== 'avg' && p.src === 'avg' ? '≈' : '') + isk(p.v * q)}</td></tr>`;
-  };
-  const sum = (label, value, cls = '') => `<tr class="lp-sum${cls}"><td colspan="2">${label}</td><td class="num">${value}</td></tr>`;
-  const head = (label, extra = '') => `<tr class="lp-group"><td colspan="3">${label}${extra ? `<span class="lp-pill">${extra}</span>` : ''}</td></tr>`;
+  const row = dRow, sum = dSum, head = dHead;
   const corps = D.corpsByOffer.get(o.id) || [];
   const pid = o.bp ? o.bp[0] : o.type;
   const good = (x) => (x.missing || x.iskLp == null ? '' : x.iskLp >= 0 ? ' up' : ' down');
@@ -425,7 +456,7 @@ function offerDetail(o, v) {
       const off = mode === 'bpc' && !SERVER.kb;
       return `<button type="button" class="lp-mode${v.mode === mode ? ' active' : ''}" data-lp-set="bp" data-v="${mode}"${off ? ` disabled title="${esc(SERVER.full)}没有合同数据"` : ''}>
         <span class="lp-mode-title">${title}</span>
-        <b class="lp-mode-val${good(x)}">${off ? '—' : mode === 'bpc' && !D.bpAll ? '读取合同价…' : x.missing ? (mode === 'bpc' ? '合同里没有在售' : '缺少价格') : `${num(Math.round(x.iskLp))} <small>ISK/LP</small>`}</b></button>`;
+        <b class="lp-mode-val${good(x)}">${off ? '—' : mode === 'bpc' && !D.bpAll ? '读取合同价…' : x.missing ? (mode === 'bpc' ? '合同里没有在售' : x.noBuy ? '没有收单' : '缺少价格') : `${num(Math.round(x.iskLp))} <small>ISK/LP</small>`}</b></button>`;
     };
     modes = `<div class="lp-modes">${opt('make', '制造后卖产物')}${opt('bpc', '直接卖蓝图')}</div>`;
   }
@@ -435,7 +466,7 @@ function offerDetail(o, v) {
     const [, pq, mats] = o.bp;
     const n = o.qty;
     const mk = v.mk;
-    rows = head('产出', `${num(n)} 流程 · 材料效率 0`) + row(pid, pq * n, F.price) + sum(`扣除税费 ${pct(sellTaxPct())}% 后`, v.missing ? '—' : isk(v.revenue))
+    rows = head('产出', `${num(n)} 流程 · 材料效率 0`) + row(pid, pq * n, F.price, prodStrict()) + sum(`扣除税费 ${pct(sellTaxPct())}% 后`, v.missing ? '—' : isk(v.revenue))
       + head('制造材料', mk ? '含设施加成' : '') + (mk ? mk.items : mats.map(([m, q]) => [m, q * n])).map(([m, q]) => row(m, q, F.mat)).join('') + sum(`材料合计${buyFeePct() ? `（含中介费 ${pct(buyFeePct())}%）` : ''}`, isk(v.matCost));
     if (mk) {
       const t = IND.lpSettings();
@@ -448,7 +479,7 @@ function offerDetail(o, v) {
     const run = bpcRun(o);
     rows = head('直接卖蓝图', run != null ? `每流程 ${isk(run)}` : '') + `<tr><td><span class="lp-item"><img src="${BPC_ICON(o.type)}" alt="" width="24" height="24" loading="lazy"><span>${esc(tName(o.type))}</span></span></td><td class="num">${num(o.qty)} 流程</td><td class="num">${run == null ? '合同里没有在售' : isk(run * o.qty)}</td></tr>`;
   } else {
-    rows = head('产出') + row(o.type, o.qty, F.price) + sum(`扣除税费 ${pct(sellTaxPct())}% 后`, v.missing ? '—' : isk(v.revenue));
+    rows = head('产出') + row(o.type, o.qty, F.price, prodStrict()) + sum(`扣除税费 ${pct(sellTaxPct())}% 后`, v.missing ? '—' : isk(v.revenue));
   }
   if (o.req.length) rows += head('兑换所需物品') + o.req.map(([m, q]) => row(m, q, F.mat)).join('') + sum(`物品合计${buyFeePct() ? `（含中介费 ${pct(buyFeePct())}%）` : ''}`, isk(v.reqCost));
   const main = `<div class="lp-sec lp-main"><table class="lp-dtable"><thead><tr><th>物品</th><th class="num">数量</th><th class="num">价值</th></tr></thead><tbody>${rows}</tbody></table></div>`;
@@ -463,10 +494,11 @@ function offerDetail(o, v) {
 
 const tableHead = () => `<thead><tr><th class="lp-hide-sm">#</th>${sortTh('name', '兑换品')}${sortTh('lp', 'LP', 'num')}${sortTh('iskCost', 'ISK 费用', 'num lp-hide-md')}${sortTh('req', '物品 / 材料', 'num lp-hide-md')}${sortTh('revenue', '产物价值', 'num pi-hide-sm')}${sortTh('profit', '利润', 'num lp-hide-sm')}${sortTh('iskLp', 'ISK/LP', 'num')}${S.mkt ? sortTh('daily', `<span title="${HUB_NAME} 30 天日均成交量">日均成交</span>`, 'num lp-hide-sm') + sortTh('turnover', `<span title="${HUB_NAME} 30 天日均成交量 × 30 天成交均价">日均成交额</span>`, 'num lp-hide-sm') : '<th class="num lp-hide-sm">日均成交</th><th class="num lp-hide-sm">日均成交额</th>'}</tr></thead>`;
 
-function sortRows(rows) {
-  const mul = F.dir === 'asc' ? 1 : -1;
-  if (F.sort === 'name') return rows.sort((a, b) => mul * tName(a.o.type).localeCompare(tName(b.o.type), 'zh'));
-  const key = (S.mkt || !['daily', 'turnover'].includes(F.sort) ? SORT_KEY[F.sort] : null) || SORT_KEY.iskLp;
+function sortRows(rows, trade = false) {
+  const [sort, dir, keys, def] = trade ? [F.tSort, F.tDir, T_SORT_KEY, 'per'] : [F.sort, F.dir, SORT_KEY, 'iskLp'];
+  const mul = dir === 'asc' ? 1 : -1;
+  if (sort === 'name') return rows.sort((a, b) => mul * tName(a.o.type).localeCompare(tName(b.o.type), 'zh'));
+  const key = (S.mkt || !['daily', 'turnover'].includes(sort) ? keys[sort] : null) || keys[def];
   // 没有价格的始终排在最后
   return rows.sort((a, b) => {
     const x = key(a), y = key(b);
@@ -542,10 +574,11 @@ function renderRank(body) {
   const sel = `<div class="pi-inline"><span>势力</span><select class="pi-input lp-faction" data-lp-faction>${facOpts.map(([v, l]) => `<option value="${v}"${String(F.faction) === String(v) ? ' selected' : ''}>${ctx.esc(l)}</option>`).join('')}</select></div>`;
   const refineIds = top.slice(0, REFINE_TOP).flatMap((r) => offerTypes(r.o));
   const refined = !needsJita() || refineIds.every((id) => jita.has(id));
+  const someLive = top.slice(0, REFINE_TOP).some((r) => jita.has(pidOf(r.o)));   // 精算过（排名变了还有没精算的）
   body.innerHTML = `
     <div class="pi-card ind-rank-filters">
       ${filterBar('rankQ', sel)}
-      <p class="pi-note">${needsJita() && !refined && !S.loadingJita ? '全服均价估算' : priceNote(top.slice(0, REFINE_TOP))}
+      <p class="pi-note">${needsJita() && !refined && !S.loadingJita && !someLive ? (S.mkt ? `${HUB_NAME}行情快照` : '全服均价估算') : priceNote(top.slice(0, REFINE_TOP))}
         ${needsJita() && !refined ? `<button class="btn btn-ghost ind-refine" data-lp-refine ${S.loadingJita ? 'disabled' : ''}>${S.loadingJita ? '精算中…' : `用${HUB_NAME}行情精算前 ${REFINE_TOP} 名`}</button>` : ''}
         · 共 ${rows.length} 项${rows.length > RANK_LIMIT ? `，显示前 ${RANK_LIMIT}` : ''}
         ${rows.length ? exportBtnHtml('data-lp-export') : ''}</p>
@@ -555,9 +588,21 @@ function renderRank(body) {
   fillVolumes(body, top);
 }
 
+// 用交易中心实时行情精算前 REFINE_TOP 名：精算后排名会变（比如卖给收单时没有收单的掉下去），新进前列的再精算，最多 5 轮
+async function refineRank() {
+  if (S.loadingJita) return;
+  for (let round = 0; round < 5; round++) {
+    const ids = rankRows().slice(0, REFINE_TOP).flatMap((r) => offerTypes(r.o)).filter((id) => !jita.has(id));
+    if (!ids.length) break;
+    const run = loadJita(ids, () => { if (F.tab === 'rank') refreshBody(); });
+    if (F.tab === 'rank') refreshBody();
+    await run;
+  }
+}
+
 // 导出 CSV：当前筛选与排序下的全部兑换项（不只显示的前 RANK_LIMIT 名）；ISK 为原始数值，无价格的留空
 function exportRank() {
-  const src = (v) => (v.missing ? '无价格' : needsJita() && !v.approx ? HUB_NAME + '行情' : '全服均价');
+  const src = (v) => (v.missing ? (v.noBuy ? '没有收单' : '无价格') : needsJita() && !v.approx ? HUB_NAME + '行情' : '全服均价');
   const val = (v, k) => (v.missing ? null : v[k]);
   const corps = (o) => D.corpsByOffer.get(o.id) || [];
   const n = exportCsv('LP 全服排行', [
@@ -582,6 +627,191 @@ function exportRank() {
   ], rankRows().map((r, i) => ({ ...r, i })));
   ctx.showToast(`已导出 ${n} 行`, 'success', 1800);
 }
+
+// ---------- 物品商人 ----------
+// 活动代币（血色收割的变异血液样本、帝国战役凭证等）在太空里的物品商人处兑换，ESI 没有这份列表；配方取自客户端（item-trader.json）。
+// 表里是客户端的全部配方，哪个商人现在开放哪些由服务器决定（生成时已去掉含未发布物品的旧活动配方）。
+// 每个代币价值 =（交付物品价值（扣税）− 其他所需物品 − ISK）÷ 所需代币数；「获得方式」是交付这个代币的配方，按每个代币的成本排。
+const TD = { loading: null, data: null, uses: new Map(), gets: new Map(), byId: new Map() };
+// 客户端物品商人窗口的分组名（recipeUtil.py）；客户端不认识的分组归入「其他」
+const TRADE_GROUP = { SHIP_BLUEPRINTS: '舰船蓝图', MODULES_AMMO: '装备和弹药蓝图', SKINR: 'SKINR组件', SKILLBOOKS: '技能书', DRONES: '无人机', SKINS: '涂装', BOOSTERS: '增效剂', BACKGROUNDS: '背景', MUTAPLASMIDS: '突变质体' };
+const tradeGroup = (g) => TRADE_GROUP[g] || '其他';
+const T_SORT_DIR = { name: 'asc', tq: 'asc', other: 'asc', revenue: 'desc', per: 'desc', daily: 'desc', turnover: 'desc' };
+const T_SORT_KEY = {
+  tq: (r) => r.v.tq, other: (r) => r.v.other,
+  revenue: (r) => (r.v.missing ? null : r.v.revenue), per: (r) => (r.v.missing ? null : r.v.per),
+  daily: (r) => volOf(r.o)?.daily ?? null, turnover: (r) => volOf(r.o)?.isk ?? null
+};
+
+function loadTrade() {
+  if (!TD.loading && TRADE_URL) {
+    TD.loading = fetch(TRADE_URL).then((r) => { if (!r.ok) throw new Error('物品商人数据 ' + r.status); return r.json(); }).then((d) => {
+      const add = (m, k, r) => { if (!m.has(k)) m.set(k, []); m.get(k).push(r); };
+      for (const [id, group, isk, ins, outs] of d.recipes) {
+        const r = { id, group, isk, ins, outs };
+        TD.byId.set(id, r);
+        ins.forEach(([t]) => add(TD.uses, t, r));
+        outs.forEach(([t]) => { if (d.tokens[t]) add(TD.gets, t, r); });
+      }
+      TD.data = d;
+    }).catch((error) => { TD.loading = null; throw error; });
+  }
+  return TD.loading || Promise.resolve();
+}
+// 当前代币：没选过或数据里没有时用兑换项最多的那个
+function curToken() {
+  if (!TD.uses.has(F.token)) F.token = [...TD.uses].sort((a, b) => b[1].length - a[1].length)[0]?.[0] || 0;
+  return F.token;
+}
+const tradeTypes = (r) => [...r.ins, ...r.outs].map(([id]) => id);
+// 名称：是其他代币时链到那个代币
+const tokLink = (id, cur) => (id !== cur && TD.uses.has(id) ? `<button type="button" class="lp-tok-link" data-lp-token="${id}" title="查看这个代币能换什么">${ctx.esc(tName(id))}</button>` : ctx.esc(tName(id)));
+
+// 用代币兑换一次：交付物品价值（扣税）、除这个代币以外的花费（其他物品含中介费 + ISK）、每个代币价值
+function tradeValue(r, token) {
+  const pc = pricer();
+  const revenue = r.outs.reduce((t, [id, q]) => t + pc.use(id, F.price, prodStrict()) * q, 0) * (1 - sellTaxPct() / 100);
+  const other = r.ins.filter(([id]) => id !== token).reduce((t, [id, q]) => t + pc.use(id, F.mat) * q, 0) * (1 + buyFeePct() / 100) + r.isk;
+  const tq = r.ins.find(([id]) => id === token)?.[1] || 0;
+  return { revenue, other, tq, per: tq ? (revenue - other) / tq : null, missing: pc.missing, approx: pc.approx, noBuy: pc.noBuy };
+}
+// 换到这个代币：所需物品（含中介费）+ ISK，摊到每个代币
+function tradeCost(r, token) {
+  const pc = pricer();
+  const cost = r.ins.reduce((t, [id, q]) => t + pc.use(id, F.mat) * q, 0) * (1 + buyFeePct() / 100) + r.isk;
+  const oq = r.outs.find(([id]) => id === token)?.[1] || 0;
+  return { cost, oq, per: oq ? cost / oq : null, missing: pc.missing, approx: pc.approx };
+}
+
+// 说明文字：转义后把 [[sys:星系ID|名称]] 换成星图链接
+const descHtml = (s) => ctx.esc(s).replace(/\[\[sys:(\d+)\|([^\]]*)\]\]/g, '<a href="#map=$1" class="kb-link">$2</a>');
+
+const tradeHead = () => `<thead><tr><th class="lp-hide-sm">#</th>${sortTh('name', '兑换品', '', true)}${sortTh('tq', '所需代币', 'num', true)}${sortTh('other', '其他花费', 'num lp-hide-md', true)}${sortTh('revenue', '交付价值', 'num pi-hide-sm', true)}${sortTh('per', '每个代币价值', 'num', true)}${S.mkt ? sortTh('daily', `<span title="${HUB_NAME} 30 天日均成交量">日均成交</span>`, 'num lp-hide-sm', true) + sortTh('turnover', `<span title="${HUB_NAME} 30 天日均成交量 × 30 天成交均价">日均成交额</span>`, 'num lp-hide-sm', true) : '<th class="num lp-hide-sm">日均成交</th><th class="num lp-hide-sm">日均成交额</th>'}</tr></thead>`;
+
+function tradeRow({ r, v, o }, i, token) {
+  const esc = ctx.esc, isk = ctx.formatISK, num = ctx.formatNumber;
+  const open = S.tOpen.has(r.id);
+  const others = r.ins.filter(([id]) => id !== token);
+  const extra = [...others.map(([id, q]) => `${esc(tName(id))} ×${num(q)}`), ...(r.isk ? [`ISK ${isk(r.isk)}`] : [])];
+  const cls = v.missing || v.per == null ? '' : v.per >= 0 ? 'pi-profit' : 'down';
+  return `
+    <tr data-lp-topen="${r.id}" class="${open ? 'active' : ''}" title="点击展开明细">
+      <td class="pi-rank lp-hide-sm">${i + 1}</td>
+      <td><div class="pi-prod"><img src="${ICON(o.type)}" data-item-pop="${o.type}" alt="" width="28" height="28" loading="lazy"><span>${r.outs.map(([id, q]) => esc(tName(id)) + (q > 1 ? `<small>×${num(q)}</small>` : '')).join('、')}<small class="lp-grp">${tradeGroup(r.group)}</small></span></div>
+        ${extra.length ? `<div class="lp-corps">另需 ${extra.join('、')}</div>` : ''}</td>
+      <td class="num">${num(v.tq)}</td>
+      <td class="num lp-hide-md">${extra.length ? isk(v.other) : '—'}</td>
+      <td class="num pi-hide-sm">${v.missing ? '—' : isk(v.revenue)}</td>
+      <td class="num ${cls}">${v.missing || v.per == null ? (v.noBuy ? '没有收单' : '—') : (v.approx ? '≈' : '') + isk(v.per)}</td>
+      ${volCells(o, i)}
+    </tr>${open ? `<tr class="lp-detail-row"><td colspan="8">${tradeDetail(r, v, token)}</td></tr>` : ''}`;
+}
+
+function tradeDetail(r, v, token) {
+  const isk = ctx.formatISK, num = ctx.formatNumber;
+  const good = v.missing || v.per == null ? '' : v.per >= 0 ? ' up' : ' down';
+  const tile = (label, value, sub = '', cls = '') => `<div class="lp-tile${cls}"><span>${label}</span><b>${value}</b>${sub ? `<small>${sub}</small>` : ''}</div>`;
+  const others = r.ins.filter(([id]) => id !== token);
+  const tiles = `<div class="lp-tiles">
+    ${tile('每个代币价值', v.missing || v.per == null ? '—' : isk(v.per), `${num(v.tq)} × ${ctx.esc(tName(token))}${v.approx ? ' · ≈ 含全服均价' : ''}`, good)}
+    ${tile('交付价值', v.missing ? '—' : isk(v.revenue), `已扣税费 ${pct(sellTaxPct())}%`)}
+    ${tile('其他花费', others.length || r.isk ? isk(v.other) : '—', others.length && r.isk ? '物品 + ISK' : others.length ? '其他物品' : r.isk ? 'ISK' : '只需代币')}
+    ${(() => {
+      // 对比：不兑换、直接把代币卖掉（按产物卖出价，扣税费）
+      const p = price(token, F.price, prodStrict());
+      return p.v == null ? tile('直接卖代币', '—', p.src === 'none' ? '没有收单' : '市场上没有价格')
+        : tile('直接卖代币', isk(p.v * (1 - sellTaxPct() / 100)), `每个${p.src === 'avg' && F.price !== 'avg' ? ' · ≈ 含全服均价' : ''} · 已扣税费 ${pct(sellTaxPct())}%`);
+    })()}
+  </div>`;
+  let rows = dHead('物品交付') + r.outs.map(([id, q]) => dRow(id, q, F.price, prodStrict(), tokLink(id, token))).join('') + dSum(`扣除税费 ${pct(sellTaxPct())}% 后`, v.missing ? '—' : isk(v.revenue));
+  rows += dHead('需要物品') + dRow(token, v.tq, null) + others.map(([id, q]) => dRow(id, q, F.mat, false, tokLink(id, token))).join('')
+    + (r.isk ? `<tr><td>ISK</td><td></td><td class="num">${isk(r.isk)}</td></tr>` : '')
+    + (others.length || r.isk ? dSum(`其他花费${others.length && buyFeePct() ? `（物品含中介费 ${pct(buyFeePct())}%）` : ''}`, isk(v.other)) : '');
+  const main = `<div class="lp-sec lp-main"><table class="lp-dtable"><thead><tr><th>物品</th><th class="num">数量</th><th class="num">价值</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  const tip = '复制后在游戏「市场 → 批量购买」里粘贴';
+  const side = `<div class="lp-side">
+    <div class="lp-sec lp-buy"><h4>采购</h4><div class="lp-acts">
+      <button type="button" class="lp-act primary" data-lp-tcart="${r.id}"><span>所需物品加入购物车</span><small>${r.ins.length} 项</small></button>
+      <button type="button" class="lp-act" data-lp-tcopy="${r.id}" title="${tip}"><span>复制所需物品</span><small>${r.ins.length} 项</small></button>
+    </div></div>
+    <button type="button" class="lp-act lp-market-btn" data-lp-market="${r.outs[0][0]}" title="${ctx.esc(tName(r.outs[0][0]))}"><span>在市场中心查看交付物品</span><span aria-hidden="true">→</span></button>
+  </div>`;
+  return `<div class="lp-detail2">${tiles}<div class="lp-body">${main}${side}</div></div>`;
+}
+
+// 获得方式：交付这个代币的配方（多是战役上交：矿石、情报换凭证），按每个代币成本从低到高
+function getsCard(token) {
+  const list = (TD.gets.get(token) || []).map((r) => ({ r, v: tradeCost(r, token) }))
+    .sort((a, b) => (a.v.missing - b.v.missing) || (a.v.per ?? 0) - (b.v.per ?? 0));
+  if (!list.length) return '';
+  const esc = ctx.esc, isk = ctx.formatISK, num = ctx.formatNumber;
+  return `<div class="pi-card"><div class="pi-card-head"><h3>获得方式</h3><span class="text-muted">在物品商人处用下面的物品换${esc(tName(token))}</span></div>
+    <div class="pi-table-wrap lp-table-wrap"><table class="pi-table lp-table">
+      <thead><tr><th class="lp-hide-sm">#</th><th>需要物品</th><th class="num">交付数量</th><th class="num">花费</th><th class="num">每个代币成本</th></tr></thead>
+      <tbody>${list.map(({ r, v }, i) => `
+        <tr><td class="pi-rank lp-hide-sm">${i + 1}</td>
+          <td><div class="pi-prod"><img src="${ICON(r.ins[0][0])}" data-item-pop="${r.ins[0][0]}" alt="" width="28" height="28" loading="lazy"><span>${r.ins.map(([id, q]) => tokLink(id, token) + `<small>×${num(q)}</small>`).join('、')}${r.isk ? `<small>ISK ${isk(r.isk)}</small>` : ''}</span></div></td>
+          <td class="num">${num(v.oq)}</td>
+          <td class="num">${v.missing ? '—' : isk(v.cost)}</td>
+          <td class="num">${v.missing || v.per == null ? '—' : (v.approx ? '≈' : '') + isk(v.per)}</td></tr>`).join('')}</tbody></table></div></div>`;
+}
+
+function renderTrade(body) {
+  if (!TD.data) {
+    body.innerHTML = '<div class="pi-loading">读取物品商人数据…</div>';
+    loadTrade().then(() => { if (F.tab === 'trade') refreshBody(); })
+      .catch((error) => { if (F.tab === 'trade' && $('lpBody') === body) body.innerHTML = `<div class="pi-card"><p class="text-muted">物品商人数据读取失败：${ctx.esc(error.message)}</p></div>`; });
+    return;
+  }
+  const token = curToken();
+  const uses = TD.uses.get(token) || [];
+  const gets = TD.gets.get(token) || [];
+  if (needsJita() && !S.loadingJita) {
+    const ids = [token, ...uses.flatMap(tradeTypes), ...gets.flatMap(tradeTypes)];
+    if (ids.some((id) => !jita.has(id))) loadJita(ids, () => { if (F.tab === 'trade') refreshBody(); });
+  }
+  const groups = [...new Set(uses.map((r) => tradeGroup(r.group)))].sort((a, b) => a.localeCompare(b, 'zh'));
+  if (F.tGroup !== 'all' && !groups.includes(F.tGroup)) F.tGroup = 'all';
+  const q = S.tQ.toLowerCase();
+  const rows = sortRows(uses
+    .filter((r) => (F.tGroup === 'all' || tradeGroup(r.group) === F.tGroup) && (!q || tradeTypes(r).some((id) => tName(id).toLowerCase().includes(q))))
+    .map((r) => ({ r, v: tradeValue(r, token), o: { type: r.outs[0][0], bp: null } })), true);
+  const info = TD.data.tokens[token] || [];
+  const desc = window.I18N?.lang === 'en' ? info[2] || info[1] : info[1];
+  const isk = ctx.formatISK;
+  const quote = (side) => { const p = price(token, side, true); return p.v == null ? '—' : (p.src === 'avg' ? '≈' : '') + isk(p.v); };
+  body.innerHTML = `
+    <div class="pi-card lp-store-head lp-tok-head">
+      <img src="${ICON(token, 64)}" data-item-pop="${token}" alt="" width="48" height="48">
+      <div><h3>${ctx.esc(tName(token))}</h3>
+        <p class="text-muted lp-tok-meta">${info[0] ? `<span>${ctx.esc(info[0])}</span>` : ''}<span>${uses.length} 个兑换项</span>${gets.length ? `<span>${gets.length} 种获得方式</span>` : ''}<span>${HUB_NAME}卖单 <b>${quote('sell')}</b></span><span>${HUB_NAME}收单 <b>${quote('buy')}</b></span></p>
+        ${desc ? `<p class="lp-tok-desc">${descHtml(desc)}</p>` : ''}</div>
+    </div>
+    <div class="pi-card ind-rank-filters">
+      <div class="ind-rank-row">
+        <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input type="search" data-lp-q="tQ" placeholder="筛选兑换品" value="${ctx.esc(S.tQ)}" spellcheck="false" aria-label="筛选兑换品"></div>
+        ${groups.length > 1 ? `<div class="pi-inline lp-tgroups"><span>分组</span>${seg('tGroup', [['all', '全部'], ...groups.map((g) => [g, g])], F.tGroup)}</div>` : ''}
+      </div>
+      <p class="pi-note">${priceNote(rows)} · 配方取自游戏客户端，哪个物品商人现在开放哪些兑换以游戏里为准</p>
+    </div>
+    <div class="pi-card"><div class="pi-table-wrap lp-table-wrap"><table class="pi-table lp-table">${tradeHead()}
+      <tbody>${rows.map((x, i) => tradeRow(x, i, token)).join('') || '<tr><td colspan="8" class="text-muted">没有符合条件的兑换项</td></tr>'}</tbody></table></div></div>
+    ${getsCard(token)}`;
+  fillVolumes(body, rows);
+}
+
+function openToken(id, q = '') {
+  F.token = id;
+  F.tab = 'trade';
+  F.tGroup = 'all';
+  S.tQ = q;
+  save();
+  renderTab();
+  document.querySelector('#lpView .kb-scroll')?.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+const tradeLines = (r) => r.ins.map(([id, q]) => `${tName(id)}\t${q}`);
 
 // ---------- 我的 LP ----------
 async function loadMine() {
@@ -667,6 +897,10 @@ function renderSide() {
   const el = $('lpSide');
   if (!el || !D.data) return;
   const nav = `<nav class="ind-side-nav">${TABS.map(([k, l, icon]) => `<button type="button" class="profile-nav-btn${F.tab === k ? ' active' : ''}" data-side-tab="${k}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg>${l}</button>`).join('')}</nav>`;
+  const search = $('lpSideSearch');
+  const ph = F.tab === 'trade' ? ['搜索代币 / 兑换品', '搜索代币或兑换品'] : ['搜索军团 / 兑换品', '搜索军团或兑换品'];
+  if (search && search.dataset.mode !== F.tab) { search.dataset.mode = F.tab; search.placeholder = ph[0]; search.setAttribute('aria-label', ph[1]); }
+  if (F.tab === 'trade') { renderTradeSide(el, nav); return; }
   const item = (c) => `<button type="button" class="ind-side-item${F.tab === 'store' && c.id === F.corp ? ' active' : ''}" data-side-corp="${c.id}"><img src="${LOGO(c.id)}" alt="" width="22" height="22" loading="lazy"><span>${ctx.esc(c.name)}</span><small>${(D.data.stores[c.id] || []).length}</small></button>`;
   if (S.sideQ) {
     const q = S.sideQ.toLowerCase();
@@ -699,6 +933,50 @@ function renderSide() {
   el.querySelectorAll('.ind-side-cat > summary').forEach((s) => { if (opened.has(s.firstChild?.textContent)) s.parentElement.open = true; });
 }
 
+// 物品商人侧栏：代币按市场分组（血色收割资产、活动资产…），分组按兑换项总数排；搜索时列出匹配的代币和兑换品
+function renderTradeSide(el, nav) {
+  if (!TD.data) {
+    el.innerHTML = nav + '<p class="ind-side-empty">读取物品商人数据…</p>';
+    loadTrade().then(() => { if (F.tab === 'trade') renderSide(); }).catch(() => {});
+    return;
+  }
+  const esc = ctx.esc;
+  curToken();
+  const n = (id) => TD.uses.get(id).length;
+  const item = (id) => `<button type="button" class="ind-side-item${id === F.token ? ' active' : ''}" data-side-token="${id}"><img src="${ICON(id)}" alt="" width="22" height="22" loading="lazy"><span>${esc(tName(id))}</span><small>${n(id)}</small></button>`;
+  const all = [...TD.uses.keys()].sort((a, b) => n(b) - n(a) || tName(a).localeCompare(tName(b), 'zh'));
+  if (S.sideQ) {
+    const q = S.sideQ.toLowerCase();
+    const toks = all.filter((id) => tName(id).toLowerCase().includes(q));
+    const items = [];
+    const seen = new Set();
+    for (const r of TD.byId.values()) {
+      for (const [o] of r.outs) {
+        if (items.length < 40 && !seen.has(o) && tName(o).toLowerCase().includes(q)) { seen.add(o); items.push([o, r.ins[0][0]]); }
+      }
+    }
+    el.innerHTML = nav +
+      `<div class="ind-side-section"><h4>代币 <small>${toks.length}</small></h4>${toks.map(item).join('') || '<p class="ind-side-empty">没有匹配的代币</p>'}</div>` +
+      `<div class="ind-side-section"><h4>兑换品 <small>${items.length >= 40 ? '前 40 个' : items.length}</small></h4>${items.map(([o, t]) => `<button type="button" class="ind-side-item" data-side-titem="${t}" data-q="${esc(tName(o))}" title="${esc(tName(t))}"><img src="${ICON(o)}" data-item-pop="${o}" alt="" width="22" height="22" loading="lazy"><span>${esc(tName(o))}</span><small>${esc(tName(t))}</small></button>`).join('') || '<p class="ind-side-empty">没有匹配的兑换品</p>'}</div>`;
+    return;
+  }
+  const byGroup = new Map();
+  for (const id of all) {
+    const g = TD.data.tokens[id]?.[0] || '其他';
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push(id);
+  }
+  const total = (list) => list.reduce((t, id) => t + n(id), 0);
+  const cur = TD.data.tokens[F.token]?.[0] || '其他';
+  const opened = new Set([...el.querySelectorAll('.ind-side-cat[open] > summary')].map((s) => s.firstChild?.textContent));
+  el.innerHTML = nav + `<div class="ind-side-section"><h4>代币</h4>${[...byGroup].sort((a, b) => total(b[1]) - total(a[1])).map(([g, list]) => `
+    <details class="ind-side-cat"${g === cur ? ' open' : ''}>
+      <summary>${esc(g)}<small>${list.length}</small></summary>
+      <div class="ind-side-items">${list.map(item).join('')}</div>
+    </details>`).join('')}</div>`;
+  el.querySelectorAll('.ind-side-cat > summary').forEach((s) => { if (opened.has(s.firstChild?.textContent)) s.parentElement.open = true; });
+}
+
 function openCorp(id) {
   F.corp = id;
   F.tab = 'store';
@@ -713,6 +991,10 @@ function onSideClick(e) {
   if (tab) { F.tab = tab.dataset.sideTab; save(); renderTab(); ctx.closeDrawer?.(); return; }
   const corp = e.target.closest('[data-side-corp]');
   if (corp) { openCorp(Number(corp.dataset.sideCorp)); ctx.closeDrawer?.(); return; }
+  const tok = e.target.closest('[data-side-token]');
+  if (tok) { openToken(Number(tok.dataset.sideToken)); ctx.closeDrawer?.(); return; }
+  const tItem = e.target.closest('[data-side-titem]');
+  if (tItem) { openToken(Number(tItem.dataset.sideTitem), tItem.dataset.q || ''); ctx.closeDrawer?.(); return; }
   const it = e.target.closest('[data-side-item]');
   if (it) { F.tab = 'rank'; F.faction = 'all'; S.rankQ = it.dataset.sideItem; save(); renderTab(); ctx.closeDrawer?.(); }
 }
@@ -730,6 +1012,36 @@ function onClick(e) {
     refreshBody();
     return;
   }
+  const tSort = e.target.closest('[data-lp-tsort]');
+  if (tSort) {
+    const k = tSort.dataset.lpTsort;
+    F.tDir = F.tSort === k ? (F.tDir === 'asc' ? 'desc' : 'asc') : T_SORT_DIR[k];
+    F.tSort = k;
+    save();
+    refreshBody();
+    return;
+  }
+  const tok = e.target.closest('[data-lp-token]');
+  if (tok) { openToken(Number(tok.dataset.lpToken)); return; }
+  const tCart = e.target.closest('[data-lp-tcart]');
+  if (tCart) {
+    const r = TD.byId.get(Number(tCart.dataset.lpTcart));
+    if (r) ctx.addToCart(r.ins.map(([id, qty]) => ({ id, qty, name: tName(id) })));
+    return;
+  }
+  const tCopy = e.target.closest('[data-lp-tcopy]');
+  if (tCopy) {
+    const r = TD.byId.get(Number(tCopy.dataset.lpTcopy));
+    if (r) ctx.copyText(tradeLines(r).join('\n'), `已复制 ${r.ins.length} 项，在游戏市场「批量购买」里粘贴`);
+    return;
+  }
+  const tRow = e.target.closest('[data-lp-topen]');
+  if (tRow) {
+    const id = Number(tRow.dataset.lpTopen);
+    if (S.tOpen.has(id)) S.tOpen.delete(id); else S.tOpen.add(id);
+    refreshBody();
+    return;
+  }
   const set = e.target.closest('[data-lp-set]');
   if (set) {
     F[set.dataset.lpSet] = set.dataset.v;
@@ -739,12 +1051,7 @@ function onClick(e) {
     refreshBody();
     return;
   }
-  if (e.target.closest('[data-lp-refine]')) {
-    const ids = rankRows().slice(0, REFINE_TOP).flatMap((r) => offerTypes(r.o));
-    loadJita(ids, () => { if (F.tab === 'rank') refreshBody(); });
-    refreshBody();
-    return;
-  }
+  if (e.target.closest('[data-lp-refine]')) { refineRank(); return; }
   if (e.target.closest('[data-lp-export]')) { exportRank(); return; }
   if (e.target.closest('[data-lp-mine-reload]')) { S.mine = null; S.mineError = null; refreshBody(); return; }
   const max = e.target.closest('[data-lp-max]');

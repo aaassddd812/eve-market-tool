@@ -172,18 +172,38 @@ export function flipProfit(buyPrice, sellPrice) {
 }
 
 // 化矿率（估价页与倒卖排行的化矿排行共用）：skill 为物品的专属处理技能（0 = 碎铁处理）；
-// rp 是估价页的化矿设置 { station: npc / athanor / tatara, rig: 0 / 1 / 3, sec: h / l / n, imp: 植入体 %, tax: 再处理税 % }
+// rp 是估价页的化矿设置 { mode, station, rig, sec, imp 植入体 %, tax 再处理税 %, extra 其它加成 %, loc / here 指定建筑 / 当前位置 }
+//   mode type（按类型）：station npc / athanor / tatara，rig 0 / 1(T1) / 3(T2)，sec h / l / n（高安 / 低安 / 00 与虫洞）
+//   mode pick / here：用 loc / here 里存好的基础化矿率 base [矿石, 卫星矿, 冰矿] 与 scrap（选建筑、改改装件时由估价页按 SDE 算好）
+// 建筑（SDE）：提炼设施三类化矿率默认 50%；改装件把对应类别设为 51% / 53% × 安全等级倍数（高安 1、低安 1.06、00 1.12），
+//   没有改装件就是 50%（不吃安全等级）；再乘船体加成（阿塔诺 2%、塔塔拉 5.5%）。碎铁（装备等）只看提炼设施本身的 50% 与碎铁处理技术。
+// NPC 空间站：基础化矿率按空间站（多数 50%，部分 25%–40%），碎铁也按它。
+// 技能：× (1 + 提炼学概论 3%) × (1 + 提炼效率理论 2%) × (1 + 对应矿石处理 2%) × (1 + 植入体)；其它加成最后乘在矿石类上。
 export const REPROC_SKILL = { reproc: 3385, eff: 3389, scrap: 12196 };
 export const REPROC_SEC = { h: 0, l: 0.06, n: 0.12 };
 const REPROC_STRUCT = { athanor: 0.02, tatara: 0.055 };
+// 处理技能 → 提炼设施上的类别（SDE：冰矿 refiningYieldIce、五种卫星矿 refiningYieldMoonOres，其余矿石 refiningYieldNormalOres）
+export const reprocCat = (skill) => (skill === 18025 ? 2 : skill >= 46152 && skill <= 46156 ? 1 : 0);
+// 地点的基础化矿率（不含技能）：{ ore: [矿石, 卫星矿, 冰矿], scrap }
+export function reprocBase(rp) {
+  const loc = rp.mode === 'pick' ? rp.loc : rp.mode === 'here' ? rp.here : null;
+  if (rp.mode === 'pick' || rp.mode === 'here') {
+    const b = Array.isArray(loc?.base) && loc.base.length === 3 && loc.base.every(Number.isFinite) ? loc.base : [0.5, 0.5, 0.5];
+    return { ore: b, scrap: Number.isFinite(loc?.scrap) ? loc.scrap : 0.5 };
+  }
+  if (!REPROC_STRUCT[rp.station]) return { ore: [0.5, 0.5, 0.5], scrap: 0.5 };
+  const v = (rp.rig ? (50 + rp.rig) / 100 * (1 + (REPROC_SEC[rp.sec] || 0)) : 0.5) * (1 + REPROC_STRUCT[rp.station]);
+  return { ore: [v, v, v], scrap: 0.5 };
+}
 export function reprocYield(skill, rp) {
-  if (!skill) return 0.5 * (1 + 0.02 * level(REPROC_SKILL.scrap));
-  const base = rp.station === 'npc' ? 50 : (50 + rp.rig) * (1 + REPROC_SEC[rp.sec]) * (1 + REPROC_STRUCT[rp.station]);
-  return base / 100 * (1 + 0.03 * level(REPROC_SKILL.reproc)) * (1 + 0.02 * level(REPROC_SKILL.eff)) * (1 + 0.02 * level(skill)) * (1 + rp.imp / 100);
+  const b = reprocBase(rp);
+  if (!skill) return b.scrap * (1 + 0.02 * level(REPROC_SKILL.scrap));
+  return b.ore[reprocCat(skill)] * (1 + 0.03 * level(REPROC_SKILL.reproc)) * (1 + 0.02 * level(REPROC_SKILL.eff)) * (1 + 0.02 * level(skill))
+    * (1 + (Number(rp.imp) || 0) / 100) * (1 + (Number(rp.extra) || 0) / 100);
 }
 // 估价页保存的化矿设置（没设置过用 NPC 空间站）
 export function reprocSettings() {
-  const d = { station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0 };
+  const d = { mode: 'type', station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0, extra: 0 };
   try { return { ...d, ...(JSON.parse(localStorage.getItem('eve-appraisal-v1'))?.rp || {}) }; } catch { return d; }
 }
 

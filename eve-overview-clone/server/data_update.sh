@@ -88,6 +88,9 @@ if [ "$MODE" = tq ]; then
   deploy map-data.json npc-names-zh.json npc-data.json npc-corp-faction.json npc-bp.json pi-data.json reprocess-data.json \
          sov-data.json type-volume.json ind-rigs.json dogma-attr-zh.json industry-data.json skill-data.json mutaplasmid-data.json \
          wh-data.json lp-data.json fit-data.json fit-info.json catalog.json type-names-zh.json i18n/names-en.json
+  # 物品商人兑换配方（LP 商店页「物品商人」）：取自 CCP 资源服务器上的客户端文件，下载或解析失败不影响其他数据，站点沿用旧版
+  log build_item_trader
+  if (cd "$REPO" && node build_item_trader.mjs "$SDE" > /dev/null); then deploy item-trader.json; else log "物品商人数据生成失败，沿用旧版"; fi
   rm -rf "$WORK/sde-old"
   log "国服数据按新的宁静数据重算"
   update_cn

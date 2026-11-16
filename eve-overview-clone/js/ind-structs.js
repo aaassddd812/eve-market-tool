@@ -8,10 +8,13 @@
 //      扫描：军团建筑（/corporations/{id}/structures/，需军团职位）、你制造任务用过的建筑、跳跃规划发现的你能停靠的建筑
 //   3. 军团建筑在有军团资产权限（董事）时，从军团资产里读改装件：位置 = 建筑、栏位 RigSlot0–2
 // 按服务器存在本地，令牌只在浏览器里。
+// 估价页化矿设置、个人中心「建筑装配」也用这里：建筑列表（useStore 后不依赖制造页）、化矿基础化矿率 reprocBase、
+//   军团建筑装配 corpFittings（军团资产里装在建筑上的物品，按军团缓存 5 分钟）、改装件加成说明 rigEffects。
 import { serverKey } from './server.js?v=s4';
 import * as JP from './jump-planner.js?v=v17';
 
 let X = null;   // industry.js 传入：ctx, D, sysLabel, onChange(列表或数值变化后重算)
+let STORE = null;   // 本地存储（制造页 initStructs 或其它页面 useStore 传入）
 const RD = { data: null, loading: null };
 let list = null;   // [{ key, id, name, type, system, rigs: [typeId], tax: { m, r, i }, src: 'manual'|'esi'|'corp', rigSrc }]
 const KEY = () => serverKey('eve-ind-structs');
@@ -22,10 +25,11 @@ const CORP_STRUCT_SCOPE = 'esi-corporations.read_structures.v1';
 // 页面翻译不处理 textarea，占位文字自己翻
 const tr = (s) => (window.I18N?.lang === 'en' && window.I18N.t ? window.I18N.t(s) : s);
 
-export function initStructs(x) { X = x; }
+export function initStructs(x) { X = x; STORE = x.ctx.store; }
+export function useStore(store) { if (!STORE) STORE = store; }
 export function loadRigs() {
   if (!RD.loading) {
-    RD.loading = fetch('ind-rigs.json?v=1').then((r) => (r.ok ? r.json() : Promise.reject(new Error('ind-rigs.json ' + r.status))))
+    RD.loading = fetch('ind-rigs.json?v=2').then((r) => (r.ok ? r.json() : Promise.reject(new Error('ind-rigs.json ' + r.status))))
       .then((d) => { RD.data = d; }).catch((e) => { RD.loading = null; throw e; });
   }
   return RD.loading;
@@ -34,10 +38,10 @@ const ready = () => Boolean(RD.data);
 const hull = (s) => RD.data?.hulls[s.type];
 
 function all() {
-  if (!list) list = (X.ctx.store.getJSON(KEY(), []) || []).filter((s) => s && s.key);
+  if (!list) list = (STORE.getJSON(KEY(), []) || []).filter((s) => s && s.key);
   return list;
 }
-function save() { X.ctx.store.setJSON(KEY(), list); }
+function save() { STORE.setJSON(KEY(), list); }
 export const structs = () => (ready() ? all().filter((s) => hull(s)) : []);
 export const get = (key) => structs().find((s) => s.key === key) || null;
 export const canDo = (s, act) => (CAN[hull(s)?.g] || []).includes(act);
@@ -49,7 +53,7 @@ function inFilter(f, gid, cid) {
   const x = RD.data.filters[f];
   return Boolean(x && (x.g.includes(gid) || x.c.includes(cid)));
 }
-const secCol = (sec) => (sec >= 0.45 ? 0 : sec > 0 ? 1 : 2);
+export const secCol = (sec) => (sec >= 0.45 ? 0 : sec > 0 ? 1 : 2);
 
 // 建筑 s 做活动 act（m 制造 / r 反应 / i 发明 / c 拷贝 / me / te 研究）时对某产品的总减免 %
 // gid / cid：产品的分组与大类；不传时只算船体（以及不限产品的改装件）
@@ -76,12 +80,65 @@ export const taxOf = (s, act, fallback) => {
   return v == null || v === '' ? fallback : Number(v);
 };
 
-// 可装在这座建筑上的工业改装件（尺寸与分组都要对）
-function rigOptions(s) {
+// 可装在这座建筑上的改装件（尺寸与分组都要对）；rp = true 只要化矿改装件
+function rigOptions(s, rp = false) {
   const h = hull(s);
   if (!h) return [];
-  return Object.entries(RD.data.rigs).filter(([, r]) => r.size === h.size && r.fit.includes(h.g))
+  return Object.entries(RD.data.rigs).filter(([, r]) => r.size === h.size && r.fit.includes(h.g) && (!rp || r.rp))
     .map(([id, r]) => [Number(id), r.n]).sort((a, b) => a[1].localeCompare(b[1], 'zh'));
+}
+export const rpRigOptions = (type) => rigOptions({ type }, true);
+
+// ---------- 化矿与装配（不依赖制造页） ----------
+export const rigData = () => RD.data;
+export const hullOf = (type) => RD.data?.hulls[type] || null;
+export const isRpService = (type) => Boolean(RD.data?.rpSvc?.includes(Number(type)));
+// 建筑的基础化矿率（不含技能，SDE）：提炼设施三类（矿石 / 卫星矿 / 冰矿）默认 50%，化矿改装件把对应类别设为 数值 × 安全等级倍数
+//   （同类有多个取最高），再乘船体加成；碎铁固定 50%。type 建筑类型，rigs 改装件，sec 星系安全等级
+export function reprocBase(type, rigs, sec) {
+  const col = secCol(sec ?? 0.5);
+  const base = [0.5, 0.5, 0.5], set = [false, false, false];
+  for (const rid of rigs || []) {
+    const r = RD.data?.rigs[rid];
+    if (!r?.rp) continue;
+    const v = r.rp[0] * (r.sec[col] ?? 1);
+    ['o', 'm', 'i'].forEach((c, i) => { if (r.rp[1].includes(c)) { base[i] = set[i] ? Math.max(base[i], v) : v; set[i] = true; } });
+  }
+  const k = 1 + (RD.data?.hulls[type]?.rp || 0) / 100;
+  return { ore: base.map((v) => Math.round(v * k * 1e6) / 1e6), scrap: 0.5 };
+}
+// 改装件加成（乘好安全等级倍数）：工业 [[活动, 种类, 减免 %]]（同种取最大），化矿 [化矿率, 类别] 或 null
+export function rigEffects(rid, sec) {
+  const r = RD.data?.rigs[rid];
+  if (!r) return null;
+  const k = r.sec[secCol(sec ?? 0.5)] ?? 1;
+  const best = new Map();
+  for (const [a, kind, v] of r.m) { const key = a + ':' + kind; best.set(key, Math.max(best.get(key) || 0, v)); }
+  return {
+    ind: [...best].map(([key, v]) => [...key.split(':'), Math.round(v * k * 100) / 100]),
+    rp: r.rp ? [Math.round(r.rp[0] * k * 1e4) / 1e4, r.rp[1]] : null,
+    k
+  };
+}
+// 军团建筑装配：军团资产里位置是建筑本身、栏位为各槽位的物品（含装填的弹药）。需要军团资产权限与总监职位；按军团缓存 5 分钟
+// 返回 Map(位置 ID -> [{ t 类型, f 栏位, q 数量 }])（军团舰船的装配也在里面，调用方按建筑 ID 取）
+export const FIT_FLAG = /^(HiSlot|MedSlot|LoSlot|RigSlot|ServiceSlot|FighterTube)\d$|^QuantumCoreRoom$/;
+const FITS = new Map();   // 军团 ID -> { at, promise }
+export function corpFittings(c, corp, fresh = false) {
+  const hit = FITS.get(corp);
+  if (!fresh && hit && Date.now() - hit.at < 5 * 60e3) return hit.promise;
+  const promise = c.esiAuthFetchPaged(`/corporations/${corp}/assets/`, 50).then((assets) => {
+    const out = new Map();
+    for (const a of assets || []) {
+      if (!FIT_FLAG.test(a.location_flag || '')) continue;
+      if (!out.has(a.location_id)) out.set(a.location_id, []);
+      out.get(a.location_id).push({ t: a.type_id, f: a.location_flag, q: a.quantity || 1 });
+    }
+    return out;
+  });
+  FITS.set(corp, { at: Date.now(), promise });
+  promise.catch(() => { if (FITS.get(corp)?.promise === promise) FITS.delete(corp); });
+  return promise;
 }
 
 function upsert(item) {
@@ -157,13 +214,11 @@ async function corpStructs() {
     if (!hasScope(ASSET_SCOPE)) rigErr = '没有军团资产权限';
     else {
       try {
-        const ids = new Set(mine.map((s) => s.structure_id));
-        const assets = await X.ctx.esiAuthFetchPaged(`/corporations/${corp}/assets/`, 50);
+        const fits = await corpFittings(X.ctx, corp, true);
         rigs = new Map();
-        for (const a of assets) {
-          if (!ids.has(a.location_id) || !/^RigSlot\d/.test(a.location_flag || '')) continue;
-          if (!rigs.has(a.location_id)) rigs.set(a.location_id, []);
-          rigs.get(a.location_id).push(a.type_id);
+        for (const s of mine) {
+          const r = (fits.get(s.structure_id) || []).filter((x) => /^RigSlot\d/.test(x.f)).map((x) => x.t);
+          if (r.length) rigs.set(s.structure_id, r);
         }
       } catch (e) { rigErr = e.status === 403 ? '读不到军团资产（需要董事职位）' : '军团资产读取失败'; }
     }

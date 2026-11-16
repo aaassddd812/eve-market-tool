@@ -1,6 +1,6 @@
 import { skCards, skRows, skToolbar, skTitle, skPage, skPilot } from './skeleton.js?v=v18';
 import * as CS from './cloud-sync.js?v=2';
-import * as TF from './trade-fees.js?v=v6';
+import * as TF from './trade-fees.js?v=v7';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v45';
 import * as SM from './struct-markets.js?v=v8';
@@ -954,7 +954,7 @@ async function getHubSellOrders(ids) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v71').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v72').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, getCharacterImplants, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -982,7 +982,7 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v21').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v23').then((m) => {
     m.initLp({ addToCart, industry: loadIndustryModule,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
       getHubPrices: getJitaPrices,
@@ -1064,7 +1064,7 @@ async function openCourier() {
 // 合同（公开合同存档 + 我的个人 / 军团 / 联盟合同）：首次进入时加载
 let contractsLoading = null;
 function loadContractsModule() {
-  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v12').then((m) => {
+  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v13').then((m) => {
     m.initContracts({
       esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, officialName, locationName, loadNpcNames, typeName,
       valuation, valuationCard, store, game: gameActions, regions: REGIONS, marketRegions: () => state.marketRegions, loadMarketRegions,
@@ -1094,7 +1094,7 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v23').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v24').then((m) => {
     m.initAppraisal({ addToCart, favStar: favStarHtml,
       structs: { readable: SM.readableStructs, hasScope: SM.hasStructScope, open: SM.openStructManager, market: (id) => structureMarket(id, SM.PICKED_PAGES) },
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
@@ -1103,7 +1103,11 @@ function loadAppraisalModule() {
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       getCharacterSkills, getCharacterImplants,
       openEsiBind: () => { switchView('profile'); openEsiModal(); },
-      loadAbyssal
+      loadAbyssal,
+      // 化矿地点（指定建筑 / 当前位置）
+      fetchESI, esiAuthFetch, esiAuthFetchPaged, structureNameMap, saveStructureNames, loadNpcNames, officialName,
+      readToken: () => state.esiToken || readEsiToken(),
+      hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope)
     });
     return m;
   }).catch((error) => { appraisalLoading = null; throw error; });
@@ -1157,7 +1161,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v335').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v337').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -2207,6 +2211,9 @@ async function selectItem(typeId, { updateHash = true } = {}) {
   document.title = `${entry.type.name} · EVE 市场总览`;
   renderBreadcrumb(entry.groupId);
   syncLossesTab(entry.groupId);
+  // 舰船可在装配页打开；公开合同存档只有宁静服有
+  $('fitShipBtn').hidden = rootGroupId(entry.groupId) !== SHIP_ROOT_GROUP;
+  $('contractSearchBtn').hidden = !SERVER.kb;
   if (state.contentTab === 'hubs') renderHubCompare($('hubsBody'), typeId);
   updateFavButton();
   pushRecent(typeId);
@@ -5924,7 +5931,7 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v12').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v14').then((m) => {
     m.initProfileMore({
       allChars, esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
@@ -5941,7 +5948,7 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v23').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v24').then((m) => {
     m.initOrderWatch({
       esc, formatISK, formatPrice, formatNumber, showToast, copyText, addToCart, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -6925,6 +6932,27 @@ function openCartModal() {
 function initCartButton() {
   $('cartBtn')?.addEventListener('click', openCartModal);
   $('cartAddItem')?.addEventListener('click', () => { if (state.selectedItem) addToCart([{ id: state.selectedItem.id, qty: 1, name: state.selectedItem.name }]); });
+  // 物品详情（装配页的详情悬浮窗）、在合同中搜索、舰船在装配页查看
+  $('itemInfoBtn')?.addEventListener('click', (e) => {
+    const id = state.selectedItem?.id;
+    if (!id) return;
+    const btn = e.currentTarget;
+    loadFittingModule().then((m) => m.openInfo(id, btn)).catch((error) => showToast('物品详情读取失败：' + error.message, 'error', 3000));
+  });
+  $('contractSearchBtn')?.addEventListener('click', async () => {
+    const it = state.selectedItem;
+    if (!it) return;
+    try {
+      const m = await loadContractsModule();
+      m.searchItem(it.id, it.name);
+      history.pushState(null, '', location.pathname + '#contracts');
+      switchView('contracts');
+    } catch (error) { showToast('合同页加载失败：' + error.message, 'error', 3000); }
+  });
+  $('fitShipBtn')?.addEventListener('click', () => {
+    const id = state.selectedItem?.id;
+    if (id) loadFittingModule().then((m) => m.openShip(id)).catch((error) => showToast('装配页加载失败：' + error.message, 'error', 3000));
+  });
   window.addEventListener('storage', (e) => { if (e.key === CART_KEY) syncCartBadge(); });
   syncCartBadge();
 }

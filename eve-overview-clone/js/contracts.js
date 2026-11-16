@@ -473,6 +473,15 @@ async function renderDetail(d) {
 }
 
 // ---------------- 入口
+// 市场物品详情页「在合同中搜索」：公开合同「在售」按这个物品筛选（物品框填上名称，其他筛选清空）
+export function searchItem(id, name) {
+  if (!ctx.archive) return false;
+  S.tab = 'open'; S.item = name || ''; S.itemIds = [id]; S.q = ''; S.type = ''; S.region = 0; S.sort = '';
+  save();
+  if ($('ctMain')?.dataset.ready) { renderTabs(); renderFilters(); loadPublic(); }
+  return true;
+}
+
 export async function showContracts() {
   const main = $('ctMain');
   if (main.dataset.ready) {

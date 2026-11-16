@@ -4,15 +4,18 @@
 // 技能与交易税费用全站共用的 trade-fees.js（市场详情、资产估值同一套设置）：卖给收单只交销售税，挂卖单另交中介费。
 // 每 m³ 价值：单价 ÷ 包装体积（type-volume.json，与倒卖排行同一份），挖矿、搬运时比较哪种更值钱。
 // 化矿估价：按 reprocess-data.json（build_reprocess.mjs 从 SDE 生成）算再处理产出，技能可自定义或读取已绑定角色。
-//   矿石 / 冰矿 / 卫星矿：(50 + 改装件) × (1 + 安全等级) × (1 + 建筑加成) × (1 + 提炼学概论 3%) × (1 + 提炼效率理论 2%) × (1 + 对应矿石处理 2%) × (1 + 植入体)
-//   NPC 空间站基础 50%，不吃改装件 / 建筑 / 安全等级加成；其它物品按碎铁处理：50% × (1 + 碎铁处理技术 2%)。
+//   公式见 trade-fees.js 的 reprocYield：地点的基础化矿率（按矿石 / 卫星矿 / 冰矿分开）× 技能 × 植入体 × 其它加成；碎铁按地点本身 × 碎铁处理技术。
+//   地点三种选法：按类型（NPC 空间站 / 阿塔诺 / 塔塔拉 + 改装件 + 安全等级）、指定建筑（NPC 空间站或玩家建筑）、当前位置（角色停靠的地方）。
+//   NPC 空间站的基础化矿率与税读 ESI 空间站资料；玩家建筑的改装件：手动改过的 > 军团资产（总监）> 制造页「我的建筑」，点重新读取时不算手动的。
 // 识别格式：制表符或两个以上空格分列，第一列物品名（游戏复制的名称后可能带 *），第二列数量；
 // 也支持「名称 x 数量」「数量 x 名称」「名称 数量」和单独一行物品名。
 import { SERVER } from './server.js?v=s4';
-import * as TF from './trade-fees.js?v=v6';
+import * as TF from './trade-fees.js?v=v7';
+import * as IS from './ind-structs.js?v=5';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation, loadVolumes,
-          // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind, loadAbyssal() -> abyssal.js 模块
+          // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind, loadAbyssal() -> abyssal.js 模块,
+          // 化矿地点：fetchESI, esiAuthFetch, esiAuthFetchPaged, readToken, hasScope(scope), structureNameMap, saveStructureNames, loadNpcNames, officialName
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-appraisal-v1';
 const ICON = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
@@ -20,8 +23,11 @@ const ICON = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
 // ratio：比例 %，算出来的小计、合计、税后都再乘上它（比如收购按 90%），单价保持市场原价
 const A = { names: null, loading: null, orders: new Map(), result: null, hub: SERVER.regions[0].id, view: 'market', rp: null, rpLoading: null, char: null, ratio: 100, cmp: [], cmpState: new Map() };
 
-// 化矿设置：station npc / athanor / tatara；rig 0 / 1(T1) / 3(T2)；sec h / l / n（高安 / 低安 / 00 与虫洞）；imp 植入体加成 %；tax 再处理税 %
-const S = { station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0 };
+// 化矿设置：mode type 按类型 / pick 指定建筑 / here 当前位置
+//   按类型：station npc / athanor / tatara；rig 0 / 1(T1) / 3(T2)；sec h / l / n（高安 / 低安 / 00 与虫洞）
+//   loc 指定的建筑、here 当前位置：{ k: 'npc' | 'st', id, key, name, sys, sec, type, eff, take, svc, rigs, rigSrc, fit, base, scrap }（见 locBase）
+//   imp 植入体加成 %；tax 再处理税 %；extra 其它加成 %（手动，乘在矿石 / 卫星矿 / 冰矿上）
+const S = { mode: 'type', station: 'npc', rig: 0, sec: 'h', imp: 0, tax: 0, extra: 0, loc: null, here: null };
 const SKILL = TF.REPROC_SKILL;
 const level = TF.level, fees = TF.fees, pct2 = TF.pct2;
 const SEC = TF.REPROC_SEC;
@@ -41,6 +47,9 @@ export function initAppraisal(context) {
     if (r.sec in SEC) S.sec = r.sec;
     if ([0, 1, 2, 4].includes(r.imp)) S.imp = r.imp;
     if (Number.isFinite(r.tax)) S.tax = Math.min(100, Math.max(0, r.tax));
+    if (['type', 'pick', 'here'].includes(r.mode)) S.mode = r.mode;
+    if (Number.isFinite(r.extra)) S.extra = Math.min(100, Math.max(-50, r.extra));
+    for (const k of ['loc', 'here']) if (validLoc(r[k])) S[k] = r[k];
     // 旧版把技能与税费存在估价页里，迁移到共用设置
     if (!TF.hasSaved() && (r.src || r.lv || r.market)) TF.update({ src: r.src, all: r.all, lv: r.lv || {}, market: r.market, fac: r.fac, corp: r.corp, broker: r.broker });
   }
@@ -518,7 +527,8 @@ function reprocHtml(R, rp) {
       <td class="num ap-sell">${cp(m.sell == null ? null : m.qty * m.sell)}</td>
     </tr>`).join('');
   const notes = [ratioNote()].filter(Boolean);
-  notes.push(`化矿率：${rp.oreYield != null ? `矿石 / 冰矿 ${rp.oreYield} · ` : ''}碎铁 ${pct(yieldFor(0))}（${S.station === 'npc' ? 'NPC 空间站' : S.station === 'athanor' ? '阿塔诺' : '塔塔拉'}${TF.settings().src === 'char' ? (TF.character() ? ' · ' + ctx.esc(TF.character().name) + ' 的技能' : ' · <span class="ap-warn">角色技能未读取，按 0 级算</span>') : ''}）`);
+  notes.push(`化矿率：${rp.oreYield != null ? `矿石 / 冰矿 ${rp.oreYield} · ` : ''}碎铁 ${pct(yieldFor(0))}（${locLabel()}${TF.settings().src === 'char' ? (TF.character() ? ' · ' + ctx.esc(TF.character().name) + ' 的技能' : ' · <span class="ap-warn">角色技能未读取，按 0 级算</span>') : ''}）`);
+  if (locWarn()) notes.push(`<span class="ap-warn">${ctx.esc(locWarn() + '，上面按能化矿算')}</span>`);
   if (S.tax) notes.push(`已扣再处理税 ${S.tax}%（约 ${fmtK(rp.taxTotal)}）`);
   if (rp.leftover.length) notes.push(`${rp.leftover.length} 种有零头化不掉：${rp.leftover.slice(0, 4).map((r) => ctx.esc(r.name)).join('、')}${rp.leftover.length > 4 ? ' 等' : ''}`);
   if (rp.skip.length) notes.push(`${rp.skip.length} 种不能化矿：${rp.skip.slice(0, 6).map((r) => ctx.esc(r.name)).join('、')}${rp.skip.length > 6 ? ' 等' : ''}`);
@@ -580,17 +590,291 @@ function skillsHtml() {
   return TF.skillFormHtml([['交易', TF.TRADE_SKILLS], ['化矿', A.rp ? named([...BASE_SKILLS, ...oreSkills]) : []]]);
 }
 
+// ---------- 化矿地点：指定建筑 / 当前位置 ----------
+const ASSET_SCOPE = 'esi-assets.read_corporation_assets.v1';
+const CORP_ST_SCOPE = 'esi-corporations.read_structures.v1';
+const LOC_SCOPE = 'esi-location.read_location.v1';
+// q 搜索词；corp 我的军团；corpList 军团建筑（空间站管理员）；npc NPC 空间站 [[id, 名称]]；here* 当前位置读取状态；busy / err 指定建筑读取状态
+const P = { q: '', corp: null, corpList: null, corpLoading: null, npc: null, hereBusy: false, hereMsg: '', hereAt: 0, busy: false, err: '' };
+const validLoc = (l) => Boolean(l && typeof l === 'object' && (l.k === 'npc' || l.k === 'st') && (l.id > 0 || l.key));
+const curLoc = () => (S.mode === 'pick' ? S.loc : S.mode === 'here' ? S.here : null);
+const yPct = (v) => (v * 100).toFixed(2).replace(/0$/, '').replace(/\.0$/, '') + '%';
+const fmtSec = (v) => (v == null ? '' : (v > 0 && v < 0.05 ? 0.1 : Math.round(v * 10) / 10).toFixed(1));
+const SEC_NAME = ['高安', '低安', '00 / 虫洞'];
+
+function myCorp() {
+  const t = ctx.readToken?.();
+  if (!t?.access_token) return Promise.resolve(0);
+  if (P.corp?.cid !== t.character_id) P.corp = { cid: t.character_id, p: ctx.fetchESI(`/characters/${t.character_id}/`).then((c) => c.corporation_id || 0).catch(() => 0) };
+  return P.corp.p;
+}
+const secCache = new Map();
+function sysSec(id) {
+  if (!id) return Promise.resolve(null);
+  if (!secCache.has(id)) secCache.set(id, ctx.fetchESI(`/universe/systems/${id}/`).then((x) => x.security_status ?? null).catch(() => { secCache.delete(id); return null; }));
+  return secCache.get(id);
+}
+// 地点的基础化矿率（不含技能）：NPC 空间站按空间站；玩家建筑按船体与化矿改装件（ind-structs.js）
+function locBase(L) {
+  if (L.k === 'npc') {
+    const e = Number.isFinite(L.eff) ? L.eff : 0.5;
+    L.base = [e, e, e];
+    L.scrap = e;
+  } else if (IS.rigData()) {
+    const b = IS.reprocBase(L.type, L.rigs, L.sec);
+    L.base = b.ore;
+    L.scrap = b.scrap;
+  }
+  return L;
+}
+const stationTax = (L) => Math.round((L.take ?? 0.05) * 1e4) / 100;
+async function npcLoc(id) {
+  const st = await ctx.fetchESI(`/universe/stations/${id}/`);
+  return locBase({
+    k: 'npc', id, name: ctx.officialName?.(id) || st.name, sys: st.system_id, type: st.type_id,
+    eff: st.reprocessing_efficiency ?? 0.5, take: st.reprocessing_stations_take ?? 0.05, svc: (st.services || []).includes('reprocessing-plant')
+  });
+}
+// 玩家建筑的化矿改装件：之前手动改过的（fresh = 点了重新读取时不算）> 军团资产里装在这座建筑上的（总监）> 制造页「我的建筑」里填的
+async function readRigs(L, fresh = false) {
+  L.rigErr = '';
+  L.fit = null;
+  const onlyRp = (list) => list.filter((id) => IS.rigData()?.rigs[id]?.rp);
+  const prev = [S.loc, S.here].find((x) => x?.k === 'st' && ((L.id && x.id === L.id) || (L.key && x.key === L.key)) && x.rigSrc === 'manual');
+  if (prev && !fresh) { L.rigs = prev.rigs.slice(); L.rigSrc = 'manual'; L.fit = prev.fit ?? null; return locBase(L); }
+  if (L.id && ctx.hasScope?.(ASSET_SCOPE)) {
+    try {
+      const corp = await myCorp();
+      const f = corp ? (await IS.corpFittings(ctx, corp, fresh)).get(L.id) : null;
+      if (f) {
+        L.rigs = onlyRp(f.filter((x) => /^RigSlot/.test(x.f)).map((x) => x.t));
+        L.fit = f.some((x) => IS.isRpService(x.t));
+        L.rigSrc = 'esi';
+        return locBase(L);
+      }
+    } catch (e) { if (e.status === 403 || /403/.test(e.message)) L.rigErr = '读不到军团资产（需要总监职位）'; }
+  }
+  const saved = IS.structs().find((s) => (L.id && s.id === L.id) || (L.key && s.key === L.key));
+  if (prev) { L.rigs = prev.rigs.slice(); L.rigSrc = 'manual'; }
+  else if (saved && onlyRp(saved.rigs || []).length) { L.rigs = onlyRp(saved.rigs); L.rigSrc = 'list'; }
+  else { L.rigs = []; L.rigSrc = ''; }
+  return locBase(L);
+}
+// 玩家建筑：名称 / 类型 / 星系先用列表里的，没有就读 ESI（要能停靠）
+async function structLoc(id, hint = null, fresh = false) {
+  let { name = '', type = 0, sys = 0, key = '' } = hint || {};
+  if (id && (!type || !sys)) {
+    const v = ctx.structureNameMap?.()?.get(id);
+    if (v?.n && v.t && v.s) ({ n: name, t: type, s: sys } = v);
+    else {
+      let info;
+      try { info = await ctx.esiAuthFetch(`/universe/structures/${id}/`); } catch (e) { throw new Error(/403/.test(e.message) || e.status === 403 ? '没有这座建筑的停靠权限' : e.message); }
+      ({ name, type_id: type, solar_system_id: sys } = info);
+      ctx.structureNameMap?.()?.set(id, { n: name, s: sys, t: type, at: Date.now() });
+      ctx.saveStructureNames?.();
+    }
+  }
+  if (!IS.hullOf(type)) throw new Error('这座建筑装不了提炼设施');
+  const L = { k: 'st', id: id || 0, key: key || (id ? String(id) : ''), name: name || IS.hullOf(type).n, type, sys, sec: await sysSec(sys) };
+  return readRigs(L, fresh);
+}
+// 军团建筑（选建筑时列出来）：需要「军团管理」里的建筑权限与空间站管理员职位，读不到就不列
+function loadCorpList() {
+  if (P.corpLoading || !ctx.hasScope?.(CORP_ST_SCOPE)) return P.corpLoading;
+  P.corpLoading = myCorp().then((corp) => (corp ? ctx.esiAuthFetchPaged(`/corporations/${corp}/structures/`, 5) : []))
+    .then((list) => { P.corpList = (list || []).filter((s) => IS.hullOf(s.type_id)); }, () => { P.corpList = []; });
+  return P.corpLoading;
+}
+async function readHere(force = false) {
+  if (P.hereBusy || (!force && Date.now() - P.hereAt < 60e3)) return;
+  const t = ctx.readToken?.();
+  if (!t?.access_token) { P.hereMsg = ''; renderPanels(); return; }
+  if (!ctx.hasScope?.(LOC_SCOPE)) { P.hereMsg = '授权里没有位置权限，请在个人中心重新绑定 ESI'; renderPanels(); return; }
+  P.hereBusy = true; P.hereMsg = ''; renderPanels();
+  try {
+    await Promise.all([loadRigsData(), loadCorpList()]);
+    const loc = await ctx.esiAuthFetch(`/characters/${t.character_id}/location/`);
+    P.hereAt = Date.now();
+    if (loc.station_id) {
+      const moved = !(S.here?.k === 'npc' && S.here.id === loc.station_id);
+      S.here = await npcLoc(loc.station_id);
+      if (moved) S.tax = stationTax(S.here);
+    } else if (loc.structure_id) {
+      const c = (P.corpList || []).find((x) => x.structure_id === loc.structure_id);
+      S.here = await structLoc(loc.structure_id, c ? { name: c.name, type: c.type_id, sys: c.system_id } : null, force);
+    } else {
+      S.here = null;
+      P.hereMsg = [t.character_name || '', '在太空中，没有停靠', ctx.officialName?.(loc.solar_system_id) || String(loc.solar_system_id)].filter(Boolean).join(' · ');
+    }
+  } catch (e) { P.hereMsg = '读取当前位置失败：' + e.message; }
+  P.hereBusy = false;
+  save();
+  renderRp();
+}
+async function pickLoc(kind, id, key = '') {
+  closeLocPop();
+  P.busy = true; P.err = ''; renderPanels();
+  try {
+    await loadRigsData();
+    if (kind === 'npc') {
+      S.loc = await npcLoc(id);
+      S.tax = stationTax(S.loc);
+    } else {
+      const s = key ? IS.structs().find((x) => x.key === key) : null;
+      const c = (P.corpList || []).find((x) => x.structure_id === id);
+      const hint = s ? { name: s.name, type: s.type, sys: s.system, key: s.key } : c ? { name: c.name, type: c.type_id, sys: c.system_id } : null;
+      S.loc = await structLoc(id || s?.id || 0, hint);
+    }
+    S.mode = 'pick';
+  } catch (e) { P.err = '读取失败：' + e.message; }
+  P.busy = false;
+  save();
+  renderRp();
+}
+async function reloadLoc() {
+  if (S.mode === 'here') { readHere(true); return; }
+  const L = S.loc;
+  if (!L) return;
+  P.busy = true; P.err = ''; renderPanels();
+  try {
+    await loadRigsData();
+    S.loc = L.k === 'npc' ? await npcLoc(L.id) : await structLoc(L.id, { name: L.name, type: L.type, sys: L.sys, key: L.key }, true);
+  } catch (e) { P.err = '读取失败：' + e.message; }
+  P.busy = false;
+  save();
+  renderRp();
+}
+let rigsLoading = null;
+function loadRigsData() {
+  IS.useStore(ctx.store);
+  if (!rigsLoading) rigsLoading = IS.loadRigs().then(() => {
+    // 改装件数据到了：之前存下的建筑按最新数据重算
+    for (const L of [S.loc, S.here]) if (L?.k === 'st') locBase(L);
+  }).catch((e) => { rigsLoading = null; throw e; });
+  return rigsLoading;
+}
+
+// 选建筑：我的建筑（制造页）、军团建筑、读过的玩家建筑、NPC 空间站，可搜索；也可以贴建筑 ID 或游戏内链接
+function locPopHtml(q = '') {
+  const { esc } = ctx;
+  const lq = q.trim().toLowerCase();
+  const hit = (s) => !lq || String(s || '').toLowerCase().includes(lq);
+  const hullName = (t) => IS.hullOf(t)?.n || '';
+  const sysName = (id) => ctx.officialName?.(id) || '';
+  const btn = (v, name, sub, st) => `<button type="button" data-ap-loc="${esc(v)}">${st ? '<i></i>' : ''}<span>${esc(name)}${sub ? `<small>${esc(sub)}</small>` : ''}</span></button>`;
+  const mine = IS.rigData() ? IS.structs().filter((s) => hit(s.name || hullName(s.type)) || hit(sysName(s.system))) : [];
+  const seen = new Set(mine.map((s) => s.id).filter(Boolean));
+  const corp = (P.corpList || []).filter((s) => !seen.has(s.structure_id) && (hit(s.name) || hit(sysName(s.system_id))));
+  corp.forEach((s) => seen.add(s.structure_id));
+  const known = lq.length >= 2 && IS.rigData() ? [...(ctx.structureNameMap?.() || [])].filter(([id, v]) => v?.n && IS.hullOf(v.t) && !seen.has(id) && hit(v.n)).slice(0, 20) : [];
+  const npc = lq.length >= 2 && P.npc ? P.npc.filter(([, n]) => hit(n)).slice(0, 30) : [];
+  const idm = q.match(/showinfo:\d+\/\/(\d{8,})/) || q.match(/^\s*(\d{8,})\s*$/);
+  const id = idm ? Number(idm[1]) : 0;
+  const idBtn = id >= 60000000 && id < 64000000 ? btn('npc:' + id, `NPC 空间站 ${id}`, '按 ID 读取') : id >= 1e12 ? btn('st:' + id, `玩家建筑 ${id}`, '按 ID 读取（要能停靠）', true) : '';
+  const groups = [
+    idBtn && `<div class="ap-cmp-group">按 ID</div>${idBtn}`,
+    mine.length && `<div class="ap-cmp-group">我的建筑（制造页）</div>${mine.map((s) => btn((s.id ? 'st:' + s.id : 'st:0') + ':' + s.key, s.name || hullName(s.type), [hullName(s.type), sysName(s.system)].filter(Boolean).join(' · '), true)).join('')}`,
+    corp.length && `<div class="ap-cmp-group">军团建筑</div>${corp.map((s) => btn('st:' + s.structure_id, s.name, [hullName(s.type_id), sysName(s.system_id)].filter(Boolean).join(' · '), true)).join('')}`,
+    known.length && `<div class="ap-cmp-group">玩家建筑</div>${known.map(([sid, v]) => btn('st:' + sid, v.n, hullName(v.t), true)).join('')}`,
+    npc.length && `<div class="ap-cmp-group">NPC 空间站</div>${npc.map(([sid, n]) => btn('npc:' + sid, n, '')).join('')}`
+  ].filter(Boolean);
+  return `<input type="search" class="cr-input" data-ap-loc-q placeholder="${esc(tr('搜索 NPC 空间站 / 玩家建筑，或贴建筑 ID'))}" value="${esc(q)}" autocomplete="off">
+    <div class="ap-cmp-list">${groups.join('') || `<p class="text-muted">${lq.length >= 2 ? '没有匹配的地点' : '输入至少两个字搜索 NPC 空间站和读过的玩家建筑'}</p>`}</div>`;
+}
+function openLocPop(btn) {
+  closeLocPop();
+  P.q = '';
+  const pop = document.createElement('div');
+  pop.className = 'ap-loc-pop';
+  const draw = () => {
+    const q = pop.querySelector('[data-ap-loc-q]')?.value ?? P.q;
+    pop.innerHTML = locPopHtml(q);
+    const inp = pop.querySelector('[data-ap-loc-q]');
+    inp.focus();
+    inp.setSelectionRange(q.length, q.length);
+  };
+  pop.innerHTML = locPopHtml(P.q);
+  btn.closest('.ap-loc-pick').append(pop);
+  pop.querySelector('[data-ap-loc-q]').focus();
+  pop.addEventListener('input', (e) => { if (e.target.matches('[data-ap-loc-q]')) { P.q = e.target.value; draw(); } });
+  // NPC 空间站名称表、改装件数据、军团建筑读完后刷新列表
+  Promise.all([
+    P.npc ? null : ctx.loadNpcNames?.().then((d) => { P.npc = Object.entries(d?.stations || {}).map(([id, n]) => [Number(id), n]); }),
+    loadRigsData().catch(() => {}), loadCorpList()
+  ]).then(() => { if (pop.isConnected) draw(); });
+}
+function closeLocPop() { document.querySelector('.ap-loc-pop')?.remove(); }
+document.addEventListener('click', (e) => { if (!e.target.closest?.('.ap-loc-pop, [data-ap-loc-open]')) closeLocPop(); });
+// 页面翻译不处理 placeholder，这里自己翻
+const tr = (s) => (window.I18N?.lang === 'en' && window.I18N.t ? window.I18N.t(s) : s);
+
+// 选中地点的说明卡片：类型 / 星系 / 基础化矿率；玩家建筑带改装件（可手动改）。指定建筑时名称已在选择按钮上，卡片里不重复
+function locCardHtml(L, named = false) {
+  const { esc } = ctx;
+  const sys = L.sys ? `${esc(ctx.officialName?.(L.sys) || '')}${L.sec != null ? ` ${fmtSec(L.sec)}` : ''}` : '';
+  const warn = [];
+  let info, rigs = '';
+  if (L.k === 'npc') {
+    info = ['NPC 空间站', sys, `基础化矿率 ${yPct(L.base?.[0] ?? 0.5)}`, `基础税 ${stationTax(L)}%`].filter(Boolean).join(' · ');
+    if (L.svc === false) warn.push('这个空间站没有精炼服务，不能化矿');
+  } else {
+    const h = IS.hullOf(L.type);
+    info = [h?.n || '', sys, L.sec != null ? SEC_NAME[IS.secCol(L.sec)] : '', h?.rp ? `船体化矿 +${h.rp}%` : ''].filter(Boolean).join(' · ');
+    const opts = IS.rigData() ? IS.rpRigOptions(L.type) : [];
+    const sel = (i) => `<select class="cr-input" data-ap-rig="${i}" aria-label="化矿改装件 ${i + 1}"><option value="">无化矿改装件</option>${opts.map(([id, n]) => `<option value="${id}"${L.rigs?.[i] === id ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>`;
+    const src = { esi: '改装件读自军团资产', list: '改装件来自制造页「我的建筑」', manual: '改装件为手动选择' }[L.rigSrc] || (L.rigErr ? '' : '读不到这座建筑的装配，改装件请手动选');
+    rigs = `<div class="ap-loc-rigs">${[0, 1, 2].map(sel).join('')}</div>${[L.rigErr, src].filter(Boolean).map((t) => `<small>${esc(t)}</small>`).join('')}`;
+    if (L.fit === false) warn.push('军团资产里这座建筑没有装提炼设施，不能化矿');
+  }
+  const b = L.base || [0.5, 0.5, 0.5];
+  const reload = '<button type="button" class="icon-btn small" data-ap-loc-reload title="重新读取" aria-label="重新读取"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg></button>';
+  return `<div class="ap-loc">
+      ${named ? `<div class="ap-loc-name"><b>${esc(L.name)}</b></div><small>${info}</small>` : `<div class="ap-loc-name"><small>${info}</small>${reload}</div>`}
+      ${rigs}
+      <div class="ap-loc-yield"><span>矿石 <b>${yPct(b[0])}</b></span><span>卫星矿 <b>${yPct(b[1])}</b></span><span>冰矿 <b>${yPct(b[2])}</b></span><small>不含技能</small></div>
+      ${warn.map((w) => `<small class="ap-warn">${esc(w)}</small>`).join('')}
+    </div>`;
+}
+function hereHtml() {
+  const { esc } = ctx;
+  if (!ctx.hasEsiToken()) return '<p class="ap-rp-tip">绑定 ESI 后读取角色当前停靠的空间站或建筑 <button type="button" class="link-btn" data-ap-bind>去绑定</button></p>';
+  const t = ctx.readToken?.();
+  const head = `<div class="ap-rp-row"><span>${esc(t?.character_name || '')}</span><button type="button" class="btn btn-ghost btn-sm" data-ap-loc-reload${P.hereBusy ? ' disabled' : ''}>${P.hereBusy ? '读取中…' : '重新读取位置'}</button></div>`;
+  return head + (P.hereMsg ? `<p class="ap-rp-tip ap-warn">${esc(P.hereMsg)}</p>` : '') + (S.here && !P.hereMsg ? locCardHtml(S.here, true) : '');
+}
+function locLabel() {
+  if (S.mode === 'type') return S.station === 'npc' ? 'NPC 空间站' : S.station === 'athanor' ? '阿塔诺' : '塔塔拉';
+  const L = curLoc();
+  return L ? ctx.esc(L.name) : S.mode === 'here' ? '当前位置未读到，按 50% 算' : '未选建筑，按 50% 算';
+}
+// 地点不能化矿时的提示（结果页）
+function locWarn() {
+  const L = curLoc();
+  if (L?.k === 'npc' && L.svc === false) return '这个空间站没有精炼服务';
+  if (L?.k === 'st' && L.fit === false) return '这座建筑没有装提炼设施';
+  return '';
+}
+
 function rpHtml() {
   const npc = S.station === 'npc';
-  return `
-    <div class="ap-rp-row"><span>地点</span>${segHtml('station', [['npc', 'NPC 空间站'], ['athanor', '阿塔诺'], ['tatara', '塔塔拉']])}</div>
+  const mode = `<div class="ap-rp-row"><span>地点</span>${segHtml('mode', [['type', '按类型'], ['pick', '指定建筑'], ['here', '当前位置']])}</div>`;
+  let body;
+  if (S.mode === 'type') {
+    body = `
+    <div class="ap-rp-row"><span>类型</span>${segHtml('station', [['npc', 'NPC 空间站'], ['athanor', '阿塔诺'], ['tatara', '塔塔拉']])}</div>
     <div class="ap-rp-row"><span>改装件</span>${segHtml('rig', [[0, '无'], [1, 'T1'], [3, 'T2']], npc)}</div>
-    <div class="ap-rp-row"><span>安全等级</span>${segHtml('sec', [['h', '高安'], ['l', '低安'], ['n', '00 / 虫洞']], npc)}</div>
+    <div class="ap-rp-row"><span>安全等级</span>${segHtml('sec', [['h', '高安'], ['l', '低安'], ['n', '00 / 虫洞']], npc || !S.rig)}</div>`;
+  } else if (S.mode === 'pick') {
+    body = `<div class="ap-loc-pick"><button type="button" class="cr-input ap-loc-btn" data-ap-loc-open${P.busy ? ' disabled' : ''}><span>${P.busy ? '读取中…' : S.loc ? ctx.esc(S.loc.name) : '选择 NPC 空间站或玩家建筑…'}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div>
+      ${P.err ? `<p class="ap-rp-tip ap-warn">${ctx.esc(P.err)}</p>` : ''}${S.loc ? locCardHtml(S.loc) : ''}`;
+  } else body = hereHtml();
+  return `${mode}${body}
     <div class="cr-fields">
       <label><span>植入体</span><select class="cr-input" data-ap-imp aria-label="提炼植入体">${[[0, '无'], [1, 'RX-801 +1%'], [2, 'RX-802 +2%'], [4, 'RX-804 +4%']].map(([v, l]) => `<option value="${v}"${S.imp === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
       <label><span>再处理税 %</span><input class="cr-input" type="number" min="0" max="100" step="0.1" value="${S.tax}" data-ap-tax aria-label="再处理税"></label>
+      <label title="手动加的化矿率加成，乘在矿石 / 卫星矿 / 冰矿上（比如装配读不到时补上）"><span>其它加成 %</span><input class="cr-input" type="number" min="-50" max="100" step="0.1" value="${S.extra}" data-ap-extra aria-label="其它加成"></label>
     </div>
-    <p class="ap-rp-tip" title="改装件、建筑与安全等级加成只作用于矿石 / 冰矿 / 卫星矿；装备等按碎铁处理技术算">NPC 空间站声望 0 时再处理税约 5%</p>`;
+    <p class="ap-rp-tip" title="改装件、建筑与安全等级加成只作用于矿石 / 冰矿 / 卫星矿；装备等按碎铁处理技术算">${S.mode === 'type' ? 'NPC 空间站声望 0 时再处理税约 5%' : '选 NPC 空间站时再处理税按该站基础税率（声望 0）填好，可以改'}</p>`;
 }
 
 function updateSummaries() {
@@ -635,7 +919,7 @@ export function showAppraisal() {
     if ($('apHub')) $('apHub').value = String(cur);
     if (A.result) appraise();
   }
-  if (main.dataset.ready) return;
+  if (main.dataset.ready) { if (S.mode === 'here') readHere(); return; }
   main.dataset.ready = '1';
   main.innerHTML = `
     <section class="ap-page">
@@ -730,7 +1014,16 @@ export function showAppraisal() {
       S[k] = k === 'rig' ? Number(b.dataset.v) : b.dataset.v;
       save();
       renderRp();
+      if (k === 'mode' && S.mode === 'here') readHere(true);
+      if (k === 'mode' && S.mode !== 'type') loadRigsData().then(renderPanels, () => {});
+      return;
     }
+    const open = e.target.closest('[data-ap-loc-open]');
+    if (open && !open.disabled) { if (document.querySelector('.ap-loc-pop')) closeLocPop(); else openLocPop(open); return; }
+    const pick = e.target.closest('[data-ap-loc]');
+    if (pick) { const [k, id, key] = pick.dataset.apLoc.split(':'); pickLoc(k, Number(id), key || ''); return; }
+    if (e.target.closest('[data-ap-loc-reload]')) { reloadLoc(); return; }
+    if (e.target.closest('[data-ap-bind]')) ctx.openEsiBind?.();
   });
   TF.bindForm(settings);
   // 共用设置在任何页面改动后都刷新估价（页面隐藏时也只是重算 HTML）
@@ -739,7 +1032,16 @@ export function showAppraisal() {
     const t = e.target;
     if (t.matches('[data-ap-imp]')) S.imp = Number(t.value);
     else if (t.matches('[data-ap-tax]')) S.tax = Math.min(100, Math.max(0, Number(t.value) || 0));
-    else return;
+    else if (t.matches('[data-ap-extra]')) S.extra = Math.min(100, Math.max(-50, Number(t.value) || 0));
+    else if (t.matches('[data-ap-rig]')) {
+      const L = curLoc();
+      if (!L || L.k !== 'st') return;
+      const rigs = [0, 1, 2].map((i) => L.rigs?.[i] || 0);
+      rigs[Number(t.dataset.apRig)] = Number(t.value) || 0;
+      L.rigs = rigs.filter(Boolean);
+      L.rigSrc = 'manual';
+      locBase(L);
+    } else return;
     save();
     renderRp();
   });
@@ -747,5 +1049,7 @@ export function showAppraisal() {
   if (TF.settings().src === 'char') TF.loadCharacter(true).then(syncImplants);
   loadReprocess().then(() => renderRp())
     .catch((e) => { $('apRpBody').innerHTML = `<div class="ap-warn">化矿数据载入失败：${ctx.esc(e.message)}</div>`; });
+  if (S.mode !== 'type') loadRigsData().then(() => (A.rp ? renderRp() : null), () => {});
+  if (S.mode === 'here') readHere();
   loadNames().catch(() => {});
 }

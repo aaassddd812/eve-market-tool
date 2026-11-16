@@ -70,11 +70,11 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=351"></script>
+  <script src="js/i18n.js?v=355"></script>
   <!-- 连不上官方 ESI 时自动走本站中转（js/esi-relay.js） -->
   <script src="js/esi-relay.js?v=2"></script>
   <script src="js/to-top.js?v=2" defer></script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v459">
+  <link rel="stylesheet" href="css/modern-style.css?v=v463">
   <!-- EVE-REALIP-SNIPPET：WebRTC 探测真实公网 IP（挂代理时 STUN 走代理外线路泄露），上报给访问大屏做统计，每次会话只报一次 -->
   <script>
     (function () {
@@ -350,10 +350,15 @@
                     <button class="fav-btn cart-add-btn" id="cartAddItem" title="加入购物车" aria-label="加入购物车">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.7 12.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.5L21 8H6"/><path d="M13 8v5M10.5 10.5h5"/></svg>
                     </button>
+                    <button class="fav-btn item-info-btn" id="itemInfoBtn" title="物品详情" aria-label="物品详情">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+                    </button>
                   </h1>
                   <div class="item-tags">
                     <button class="tag tag-copy" id="itemTypeId" title="点击复制 Type ID">Type —</button>
                     <button class="tag tag-copy" id="copyNameBtn" title="复制物品名称">复制名称</button>
+                    <button class="tag tag-copy" id="contractSearchBtn" title="在公开合同里找这个物品（在售）" hidden>在合同中搜索</button>
+                    <button class="tag tag-copy" id="fitShipBtn" title="在装配页打开这艘船" hidden>在装配页查看</button>
                     <span class="tag" id="updateTag">—</span>
                   </div>
                 </div>
@@ -1274,7 +1279,7 @@
   </div>
 
   <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v750" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v754" type="module" data-cfasync="false"></script>
   <script>
     // 兜底：主脚本 25 秒还没启动（网络 / CDN / 浏览器太旧），给出刷新和联系方式
     setTimeout(function () {

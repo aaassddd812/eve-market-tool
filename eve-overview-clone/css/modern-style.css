@@ -765,13 +765,15 @@ img.broken { opacity: 0; }
 
 .detail-header {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
-  gap: var(--spacing-lg);
+  gap: var(--spacing-md) var(--spacing-lg);
   margin-bottom: var(--spacing-lg);
 }
 
-.item-info { display: flex; align-items: center; gap: var(--spacing-md); flex: 1; min-width: 0; }
+/* 右边按钮放不下时整体换到下一行，物品名不被挤成一列 */
+.item-info { display: flex; align-items: center; gap: var(--spacing-md); flex: 1; min-width: min(100%, 360px); }
 
 .item-icon {
   width: 64px;
@@ -3167,10 +3169,9 @@ button, a, [role="button"], .kb-row, .map-result { -webkit-tap-highlight-color: 
 .fit-browser > .fit-group { margin: 0 8px; }
 .fit-only { display: flex; align-items: center; gap: 6px; padding: 6px 14px 8px; font-size: 0.75rem; color: var(--text-secondary); cursor: pointer; }
 .fit-only input { accent-color: var(--accent-primary); }
-.fit-slot-tabs { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 12px 8px; }
-.fit-slot-tabs button { padding: 3px 10px; border: 0; border-radius: 999px; background: var(--bg-tertiary); color: var(--text-secondary); font: inherit; font-size: 0.75rem; cursor: pointer; }
-.fit-slot-tabs button:hover { color: var(--text-primary); }
-.fit-slot-tabs button.active { background: var(--accent-soft); color: var(--accent-primary); font-weight: 600; }
+/* 装备页槽位筛选：图标按钮（样式同舰船页的装配来源筛选 .fit-src）；游戏图标 128px 里图形只占中间一半，按 32px 显示 */
+.fit-src-bar.fit-slot-tabs { padding: 0 12px 8px; }
+.fit-src-i.fit-slot-i { width: 30px; height: 30px; -webkit-mask-size: 32px; mask-size: 32px; }
 /* 弹药页：已装武器一排，点了只看它的弹药 */
 .fit-charge-mods { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; }
 .fit-charge-mods button { position: relative; display: grid; place-items: center; min-width: 36px; height: 36px; padding: 0 8px; border: 0; border-radius: 8px; background: var(--bg-tertiary); color: var(--text-secondary); font: inherit; font-size: 0.75rem; cursor: pointer; }
@@ -3237,6 +3238,8 @@ html.no-tree-lines .fit-group-kids { border-left: 0; padding-left: 0; margin-lef
 .fi-title > span small { font-size: inherit; }
 .fi-title h4 { font-size: 1.125rem; font-weight: 650; line-height: 1.3; }
 .fi-title > small { font-size: 0.75rem; color: var(--text-muted); }
+.fi-acts { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.fi-acts:empty { display: none; }
 .fi-tabs { margin-bottom: 12px; flex-shrink: 0; }
 .fi-pane { display: none; }
 .fi-pane.active { display: block; }
@@ -3340,6 +3343,10 @@ html.no-tree-lines .fit-group-kids { border-left: 0; padding-left: 0; margin-lef
 .fit-mtip dd { margin: 0; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
 .fit-mtip dd.is-up { color: var(--success); }
 .fit-mtip dd.is-down { color: var(--danger); }
+.fit-mtip-sub { display: flex; align-items: center; gap: 6px; margin: 12px 0 6px; }
+.fit-mtip-sub img { flex: none; border-radius: 4px; }
+.fit-mtip-sub span { flex: none; color: var(--text-muted); font-size: 12px; }
+.fit-mtip-sub b { min-width: 0; font-weight: 600; line-height: 1.3; }
 .fit-drag-ghost { position: fixed; left: 0; top: 0; z-index: 10000; width: 40px; height: 40px; border-radius: 9px; background: #0d1219; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); pointer-events: none; opacity: 0.92; }
 body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-select: none; }
 .fi-var-main[data-fit-drag] { cursor: grab; }
@@ -4431,6 +4438,12 @@ html.pie-open { overflow: hidden; }
 .lp-store-head h3 { font-size: 1.125rem; font-weight: 700; }
 .lp-store-head p { margin-top: 2px; font-size: 0.8125rem; }
 .lp-store-head b { color: var(--accent-primary); }
+/* 物品商人：代币说明（星系链到星图）、配方里链到其他代币 */
+.lp-tok-head { align-items: flex-start; }
+.lp-tok-meta span + span::before { content: ' · '; }
+.lp-store-head .lp-tok-desc { margin-top: 8px; max-width: 72ch; font-size: 0.8125rem; line-height: 1.6; color: var(--text-secondary); white-space: pre-line; }
+.lp-tok-link { padding: 0; border: 0; background: none; font: inherit; color: var(--accent-primary); text-align: left; cursor: pointer; }
+.lp-tok-link:hover { text-decoration: underline; }
 .lp-search { flex: 1 1 200px; max-width: 280px; }
 .lp-search input { width: 100%; }
 .lp-tax { width: 110px; }
@@ -4458,11 +4471,15 @@ html.pie-open { overflow: hidden; }
 .lp-mine-summary b { font-size: 1.25rem; font-variant-numeric: tabular-nums; }
 .lp-mine-summary .btn { margin-left: auto; }
 @media (max-width: 1280px) { .lp-hide-md { display: none; } }
+/* 物品商人：分组按钮多，放不下时换行；手机上兑换品名后的分组标签不显示（上面能按分组筛选） */
+.ind-rank-row .lp-tgroups { flex: 0 1 auto; min-width: 0; }
+.lp-tgroups .segmented { flex-wrap: wrap; }
 @media (max-width: 768px) {
   .lp-hide-sm { display: none; }
   .lp-search { max-width: none; }
   .lp-table > tbody > tr > td:nth-child(2) { min-width: 150px; }
   .lp-corps { margin-left: 0; }
+  .lp-table .pi-prod small.lp-grp { display: none; }
 }
 
 /* ===== 服务器切换（顶栏）===== */
@@ -4645,6 +4662,27 @@ span.ap-cp:hover { background: var(--accent-soft); }
 .ap-table tfoot .ap-net td { padding-top: 0; font-weight: 400; font-size: 0.75rem; }
 .ap-stats small em:not([class]) { color: var(--text-secondary); }
 .ap-rp-tip { margin: 0; font-size: 0.6875rem; line-height: 1.6; color: var(--text-muted); }
+#apRpBody > .ap-rp-row:first-child .ap-seg { max-width: 300px; }   /* 地点：按类型 / 指定建筑 / 当前位置，英文较长 */
+.ap-loc-pick { position: relative; }
+.ap-loc-btn { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; text-align: left; cursor: pointer; }
+.ap-loc-btn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ap-loc-btn svg { width: 14px; height: 14px; flex: none; color: var(--text-muted); }
+.ap-loc-pop { position: absolute; top: calc(100% + 6px); left: 0; right: 0; z-index: 40; display: flex; flex-direction: column; gap: 8px; padding: 10px; border-radius: var(--radius-lg); background: var(--bg-elevated); box-shadow: var(--shadow-lg); }
+.ap-loc-pop .cr-input { width: 100%; }
+.ap-loc-pop .ap-cmp-list button span { display: flex; flex-direction: column; min-width: 0; }
+.ap-loc-pop .ap-cmp-list button small { font-size: 0.6875rem; color: var(--text-muted); }
+.ap-loc-pop .ap-cmp-list > p { margin: 4px 8px; font-size: 0.75rem; }
+.ap-loc { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--bg-tertiary); font-size: 0.75rem; color: var(--text-muted); }
+.ap-loc-name { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ap-loc-name b { min-width: 0; overflow-wrap: anywhere; font-size: 0.8125rem; font-weight: 600; color: var(--text-primary); }
+.ap-loc-name small { flex: 1; min-width: 0; }
+.ap-loc-name .icon-btn { flex: none; }
+.ap-loc-name .icon-btn svg { width: 14px; height: 14px; }
+.ap-loc-rigs { display: flex; flex-direction: column; gap: 4px; }
+.ap-loc-rigs .cr-input { width: 100%; font-size: 0.75rem; }
+.ap-loc-yield { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; }
+.ap-loc-yield b { color: var(--buy-color); font-variant-numeric: tabular-nums; }
+.ap-loc-yield small { font-size: 0.6875rem; }
 .ap-sub { margin: 16px 0 8px; font-size: 0.875rem; font-weight: 600; }
 .ap-tag { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.6875rem; background: var(--bg-tertiary); color: var(--text-muted); }
 .ap-tag-rp { background: color-mix(in srgb, var(--buy-color) 15%, transparent); color: var(--buy-color); }
@@ -4963,6 +5001,27 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .clone-head span { color: var(--text-secondary); }
 .clone-head .link-btn { margin-left: auto; color: var(--accent-primary); }
 .corp-roles { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.8125rem; color: var(--text-secondary); }
+/* 个人中心 · 建筑装配 */
+.sf-tr { cursor: pointer; }
+.sf-tr:hover td { background: var(--bg-hover); }
+.sf-tr.open td { background: var(--bg-tertiary); }
+.sf-name { display: inline-flex; align-items: center; gap: 4px; }
+.sf-name .category-chevron { flex: none; width: 14px; height: 14px; color: var(--text-muted); transition: transform var(--transition-fast); }
+.sf-tr.open .sf-name .category-chevron { transform: rotate(90deg); }
+.sf-detail-row > td { padding: 10px 14px 14px 32px; white-space: normal; }
+.sf-detail { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 10px 32px; }
+.sf-detail > div { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sf-detail p { margin: 0; font-size: 0.8125rem; }
+.sf-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; align-items: start; font-size: 0.8125rem; }
+.sf-row > span { font-size: 0.75rem; line-height: 20px; color: var(--text-muted); }
+.sf-items { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+.sf-rigs { display: flex; flex-direction: column; gap: 6px; }
+.sf-rig { display: flex; flex-direction: column; gap: 2px; }
+.sf-bonus { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; font-size: 0.75rem; line-height: 20px; color: var(--text-secondary); }
+.sf-rig .sf-bonus { padding-left: 26px; }
+.sf-bonus-item b { font-weight: 600; color: var(--text-primary); }
+.sf-bonus small { font-size: 0.6875rem; }
+.sf-sub { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); }
 .warn-text { color: var(--warning, #f59e0b); }
 
 /* 技能页 · 属性 */
@@ -6325,7 +6384,7 @@ td .sov-auto-tag { margin-left: 4px; }
 .cart-btn { position: relative; }
 .cart-btn .cart-count { position: absolute; top: 2px; right: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; font-size: 0.625rem; font-style: normal; font-weight: 700; line-height: 16px; text-align: center; color: #fff; background: var(--accent-primary); display: none; }
 .cart-btn.has-items .cart-count { display: block; }
-.cart-add-btn:hover { color: var(--accent-primary); }
+.cart-add-btn:hover, .item-info-btn:hover { color: var(--accent-primary); }
 .cart-modal { max-width: 860px; }
 .cart-modal .modal-body { display: flex; flex-direction: column; gap: 10px; }
 .cart-bar, .cart-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
@@ -8137,6 +8196,12 @@ html.rail-mini .rail-group + .rail-group { margin-top: 4px; padding-top: 4px; bo
   #profileData .trade-table td:nth-child(5) { grid-area: 3 / 1; }
   #profileData .trade-table td:nth-child(6) { grid-area: 3 / 2; text-align: right; }
   #profileData .trade-table td:nth-child(7) { display: none; }
+  #profileData .sf-table td::before { content: none !important; }
+  #profileData .sf-table tr.sf-tr td { background: none !important; }
+  #profileData .sf-table tr.sf-tr.open { background: var(--bg-tertiary); }
+  #profileData .sf-table tr.sf-detail-row { display: block; padding: 0 12px 12px; }
+  #profileData .sf-table tr.sf-detail-row[hidden] { display: none; }
+  #profileData .sf-table tr.sf-detail-row > td { padding: 0 !important; }
 
   /* 资产总估值的空间站表：空间站 / 物品数 | 卖价 · 收价；其余估值列收起 */
   #profileData .station-summary td:nth-child(1) { grid-area: 1 / 1 / 2 / 3; font-weight: 500; }
