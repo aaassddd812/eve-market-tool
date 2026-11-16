@@ -1064,7 +1064,7 @@ async function openCourier() {
 // 合同（公开合同存档 + 我的个人 / 军团 / 联盟合同）：首次进入时加载
 let contractsLoading = null;
 function loadContractsModule() {
-  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v11').then((m) => {
+  if (!contractsLoading) contractsLoading = import('./contracts.js?v=v12').then((m) => {
     m.initContracts({
       esc, formatISK, formatPrice, formatNumber, fetchESI, resolveTypeNames, resolveNames, officialName, locationName, loadNpcNames, typeName,
       valuation, valuationCard, store, game: gameActions, regions: REGIONS, marketRegions: () => state.marketRegions, loadMarketRegions,
@@ -1157,7 +1157,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v334').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v335').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -6037,7 +6037,9 @@ const CONTRACT_STATUS_GROUPS = [
 const CONTRACT_ROLES = [['all', '全部合同'], ['issuer', '我发起的'], ['acceptor', '我接受的'], ['assignee', '指派给我的']];
 // 军团合同（「军团合同」权限，/corporations/{id}/contracts/）：角色按军团算——代表军团发起 / 军团接受 / 指派给军团
 const CORP_CONTRACT_ROLES = [['all', '全部合同'], ['issuer', '军团发起的'], ['acceptor', '军团接受的'], ['assignee', '指派给军团的']];
-// 联盟合同：ESI 没有联盟合同接口，列的是个人与军团接口里可见范围为联盟的（去重）；军团接口也会带上这些，它们只归联盟，不算军团合同
+// 联盟合同：ESI 没有联盟合同接口，列的是个人与军团接口里给联盟的合同（去重）；军团接口也会带上这些，它们只归联盟，不算军团合同。
+// 「给联盟」= 可见范围为联盟，或指派对象就是自己的联盟（游戏里「私人」合同填联盟名，可见范围不是 alliance）
+const isAllyContract = (c) => c.availability === 'alliance' || (state.contractAlly != null && c.assignee_id === state.contractAlly);
 const ALLY_CONTRACT_ROLES = [['all', '全部合同'], ['issuer', '我发起的'], ['acceptor', '我接受的']];
 const CONTRACT_SOURCES = [['me', '个人合同'], ['corp', '军团合同'], ['alliance', '联盟合同']];
 const contractRoleOpts = (src) => (src === 'corp' ? CORP_CONTRACT_ROLES : src === 'alliance' ? ALLY_CONTRACT_ROLES : CONTRACT_ROLES);
@@ -6045,17 +6047,18 @@ const contractRoleOpts = (src) => (src === 'corp' ? CORP_CONTRACT_ROLES : src ==
 function contractSource(src) {
   if (src === 'me') return state.contracts;
   const corp = state.corpContracts;
-  if (src === 'corp') return corp && !corp.__error ? corp.filter((c) => c.availability !== 'alliance') : corp;
+  if (src === 'corp') return corp && !corp.__error ? corp.filter((c) => !isAllyContract(c)) : corp;
   const lists = [state.contracts, hasScopeGroup('corpContracts') ? corp : null].filter(Array.isArray);
   if (!lists.length) return state.contracts?.__error ? state.contracts : corp?.__error ? corp : null;
   const seen = new Set();
-  return lists.flat().filter((c) => c.availability === 'alliance' && !seen.has(c.contract_id) && seen.add(c.contract_id));
+  return lists.flat().filter((c) => isAllyContract(c) && !seen.has(c.contract_id) && seen.add(c.contract_id));
 }
 
 state.contracts = null;              // 合同列表（或 { __error }）
 state.contractItems = new Map();     // contract_id -> items
 state.contractBids = new Map();      // contract_id -> bids
 state.corpContracts = null;          // 军团合同列表（或 { __error }），每份带 _corp
+state.contractAlly = null;           // 当前角色的联盟（读合同时一起读），分联盟合同用
 state.contractView = { type: 'all', status: 'all', role: 'all', id: null, src: 'me' };
 
 function myCharacterId() {
@@ -6115,20 +6118,21 @@ function loadContracts() {
 async function loadContractsImpl() {
   const me = myCharacterId();
   try {
-    state.contracts = await esiAuthFetchPaged('/characters/' + me + '/contracts/');
+    const [list, aff] = await Promise.all([esiAuthFetchPaged('/characters/' + me + '/contracts/'), myAffil().catch(() => null)]);
+    state.contractAlly = aff?.alliance ?? null;
+    state.contracts = list;
   } catch (error) {
     state.contracts = { __error: error.message };
     return;
   }
   await resolveContractParties(state.contracts);
 }
-// 当前角色所在军团（角色资料里有就用，没有读公开接口）
-async function myCorpId() {
-  const me = myCharacterId();
+// 当前角色所在军团与联盟（角色资料里有就用，没有读公开接口）
+async function myAffil() {
   const ch = state.characterData?.character;
-  if (ch?.corporation_id) return ch.corporation_id;   // 换角色时 characterData 会清空重读
-  const info = await fetchESI('/characters/' + me + '/');
-  return info.corporation_id;
+  if (ch?.corporation_id) return { corp: ch.corporation_id, alliance: ch.alliance_id || null };   // 换角色时 characterData 会清空重读
+  const info = await fetchESI('/characters/' + myCharacterId() + '/');
+  return { corp: info.corporation_id, alliance: info.alliance_id || null };
 }
 function loadCorpContracts() {
   if (!state.corpContractsLoading) state.corpContractsLoading = loadCorpContractsImpl().finally(() => { state.corpContractsLoading = null; });
@@ -6136,7 +6140,8 @@ function loadCorpContracts() {
 }
 async function loadCorpContractsImpl() {
   try {
-    const corp = await myCorpId();
+    const { corp, alliance } = await myAffil();
+    state.contractAlly = alliance;
     const list = await esiAuthFetchPaged('/corporations/' + corp + '/contracts/');
     state.corpContracts = list.map((c) => ({ ...c, _corp: corp }));
   } catch (error) {
@@ -6229,7 +6234,7 @@ function renderContractList(box) {
         '</tr></thead><tbody>' + rows + '</tbody></table></div>'
       : '<p class="text-muted">没有符合条件的合同</p>') +
     '<p class="text-muted valuation-note" title="ESI 只返回最近 30 天">共 ' + all.length + ' 份合同' +
-      (view.src === 'alliance' ? (hasScopeGroup('corpContracts') ? ' · 个人与军团合同里可见范围为联盟的' : ' · 没有「军团合同」权限，只列出个人合同里可见范围为联盟的 <button type="button" class="link-btn" data-scope-rebind="corpContracts">重新授权</button>') : '') + '</p>';
+      (view.src === 'alliance' ? (hasScopeGroup('corpContracts') ? ' · 个人与军团合同里给联盟的' : ' · 没有「军团合同」权限，只列出个人合同里给联盟的 <button type="button" class="link-btn" data-scope-rebind="corpContracts">重新授权</button>') : '') + '</p>';
 
   $('contractSrc').addEventListener('change', (e) => {
     view.src = e.target.value; view.id = null;

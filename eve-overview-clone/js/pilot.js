@@ -19,7 +19,7 @@ import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=7';
 import * as SC from './pilot-scan.js?v=7';
-import * as ST from './pilot-site.js?v=23';
+import * as ST from './pilot-site.js?v=24';
 import * as CG from './pilot-cargo.js?v=2';
 import * as OS from './pilot-ovset.js?v=1';
 

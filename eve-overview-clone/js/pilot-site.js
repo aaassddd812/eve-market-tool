@@ -583,11 +583,11 @@ export function siteSetupHtml(kind, sel, wxSel, gm = null) {
 // 刷怪池默认只列每种组合的短名，点「展开」才列全部船名和数量（换等级、换天气都保持）
 let abyOpen = false;
 export const toggleAbyssPool = () => { abyOpen = !abyOpen; };
-// 战利品说明：数据来源 + 分箱是模拟自己随机分的；这一级还没有数据就说没有
+// 战利品：先读实跑数据；这一级还没有数据时提示暂不掉落（有数据时不再写说明）
 function lootLine(cur) {
   if (!LD) { loadLoot().then(() => H.rerender?.()); return ''; }
   const n = LD.tiers?.[cur.tier]?.length || 0;
-  return n ? `<p class="text-muted"><b>战利品：</b>每趟抽 Abyssal.Space 上一次同等级同天气的实跑（共 ${n} 趟），拿到的东西照那趟；贮藏 / 节点也照那趟，东西随机分进各个容器（实跑只记整趟总数）。右键残骸「打开货柜」，船体面板左边「货舱和挂舱」看货柜舱和预估价格。</p>`
+  return n ? ''
     : '<p class="text-muted"><b>战利品：</b>这一级还没有实跑数据，暂不掉落。</p>';
 }
 // 作弊自选：天气强度、每层的组合（按阵营分组），选了组合再列它的 NPC 填数量（空着照实测随机，0 = 不要）
@@ -602,7 +602,7 @@ function gmPickHtml(cur, g) {
     const ns = sp ? spTypes(sp).map(([t, r]) => `<label class="pl-gm-n"><span>${esc(npcName(t))}</span><input type="number" class="pi-input" min="0" max="50" placeholder="${esc(r)}" value="${gp.n?.[t] ?? ''}" data-pl-gm-n="${ri}:${t}"></label>`).join('') : '';
     return `<div class="pl-gm-room"><div class="pl-gm-rh"><b>${EN() ? `Pocket ${ri + 1}` : `第 ${ri + 1} 层`}</b><select class="plain-select" data-pl-gm-sp="${ri}"><option value="">随机</option>${opts}</select></div>${ns ? `<div class="pl-gm-ns">${ns}</div>` : ''}</div>`;
   };
-  return `<div class="pl-gm-pick"><p><b>自选刷怪（作弊）</b><span class="text-muted">数量空着照实测随机，填 0 就不刷</span></p>
+  return `<div class="pl-gm-pick"><p><b>自选刷怪（作弊）</b></p>
     <div class="pl-gm-rh"><span>天气强度</span><select class="plain-select" data-pl-gm-lv><option value="-1">随机</option>${cur.lv.map((v, i) => `<option value="${i}"${g.lv === i ? ' selected' : ''}>${v}%</option>`).join('')}</select></div>
     ${cur.rooms.map((_, ri) => room(ri)).join('')}</div>`;
 }
