@@ -916,6 +916,7 @@ export function createBattle(sides, opt) {
       const raw = mult ? g.dmg.map((x) => x * mult) : g.dmg;
       const got = mult ? (T.applied += g.volley * mult, hit(u, go, raw)) : 0;
       onHit?.({ f: u, v: go, type: g.type, mult, dmg: got, raw, drone: true });
+      if (rec && d.e) dshots.push(d.e.i, go.i, mult ? 1 : 0);
     }
   }
   // 舰载机：中队飞到目标、环绕攻击（导弹公式）
@@ -1236,6 +1237,7 @@ export function createBattle(sides, opt) {
   }
   // ---------- 一步 ----------
   let shots = [];
+  let dshots = [];   // 无人机实体开火（驾驶模拟）：无人机单位序号、目标、命中 0/1；只给原生引擎画炮塔开火用（客户端无人机也是炮塔开火）
   // 属性模板换了（玩家关 / 开装备、换弹；电脑船被扰频换成推进器关着的属性）：武器、注入器、维修、中和 / 吸电等的计时状态
   //   按装备序号 m 对回新模板的顺序（新模板少了或多了几门炮时，下标会错位，多出来的那门没有状态 → 引擎报错、对局中断）；新出现的装备从头开始
   const mkGun = (g) => ({ next: B.t, ammo: g.ammo, reloadUntil: 0, last: -1e9, spool: 0, on: null });
@@ -1263,6 +1265,7 @@ export function createBattle(sides, opt) {
     const t = B.t;
     for (const u of units) if (u.alive) syncState(u);
     shots = [];
+    dshots = [];
     // 预设的舰队支援：到时间自动进场
     for (const s of support) if (!s.fired && s.at != null && t >= s.at) { s.fired = true; B.deploy(s.side, s); }
     cynoStep();
@@ -1489,7 +1492,7 @@ export function createBattle(sides, opt) {
           // 制导扰断：发射时按开火方当时的导弹速度 / 飞行时间 / 爆炸半径 / 爆炸速度倍数
           const m = { u, v, pos: u.pos.slice(), life: g.flight * u.flightMult, g, t0: t, ovF, mv: u.mvelMult, er: u.erMult, ev: u.evMult };
           missiles.push(m);
-          if (rec) { m.rec = { f: u.i, to: v.i, t0: t, t1: null, hit: false, k }; rec.missiles.push(m.rec); }
+          if (rec) { m.rec = { f: u.i, to: v.i, t0: t, t1: null, hit: false, k, v: g.mvel * (m.mv || 1) }; rec.missiles.push(m.rec); }
         }
         if (g.ammo < Infinity && --st.ammo <= 0) outOfAmmo(u, st, g, t);
       });
@@ -1679,7 +1682,7 @@ export function createBattle(sides, opt) {
       for (const q of u.squads) if (q.pos) dr.push(i, q.pos[0], q.pos[1], q.pos[2], 4 + q.f.cls, q.f.type || 0);
       u.rld = 0;
     });
-    rec.frames.push({ t: B.t, pos, hd, hp, tg, shots, spd, cp, act, rld, fire, lk, wp, dr: Float64Array.from(dr), rr: Int32Array.from(rr), pa: primary.A ? primary.A.i : -1, pb: primary.B ? primary.B.i : -1 });
+    rec.frames.push({ t: B.t, pos, hd, hp, tg, shots, spd, cp, act, rld, fire, lk, wp, dr: Float64Array.from(dr), rr: Int32Array.from(rr), ds: Int32Array.from(dshots), pa: primary.A ? primary.A.i : -1, pb: primary.B ? primary.B.i : -1 });
   }
   timeline.push(point());
   if (rec) {

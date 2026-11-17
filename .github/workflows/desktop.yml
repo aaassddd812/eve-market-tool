@@ -1,5 +1,7 @@
 # 桌面版（Windows）与安卓版：编译安装包、下载器与 APK，发布到公开仓库 aaassddd812/eve-tool-desktop 的 Releases
 # 触发：推送标签 desktop-v1.2.3（版本号取自标签），或在 Actions 页手动运行（版本号取自 tauri.conf.json）
+#   手动运行时勾选「只打测试包」：只编译 Windows 安装包，放在这次运行的 Artifacts（windows）里自己下载，
+#   不编安卓、不发布，已装的用户不会收到自动更新
 # 需要仓库 Secret：
 #   RELEASE_TOKEN               对 eve-tool-desktop 有 Contents 读写权限的 Fine-grained token
 #   ANDROID_KEYSTORE_B64        安卓签名密钥（jks 文件的 base64）
@@ -21,6 +23,11 @@ on:
   schedule:
     - cron: '0 20 * * 0'     # 每周一凌晨 4 点（北京时间）预热一次，缓存 7 天不用会被清掉
   workflow_dispatch:
+    inputs:
+      test:
+        description: 只打 Windows 测试包（不发布、不触发自动更新）
+        type: boolean
+        default: false
 
 env:
   RELEASE_REPO: aaassddd812/eve-tool-desktop
@@ -112,6 +119,7 @@ jobs:
           path: out/*
 
   android:
+    if: ${{ !inputs.test }}
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.ver.outputs.version }}
@@ -171,7 +179,7 @@ jobs:
 
   release:
     needs: [windows, android]
-    if: ${{ !cancelled() && (startsWith(github.ref, 'refs/tags/desktop-v') || github.event_name == 'workflow_dispatch') && (needs.windows.result == 'success' || needs.android.result == 'success') }}
+    if: ${{ !cancelled() && !inputs.test && (startsWith(github.ref, 'refs/tags/desktop-v') || github.event_name == 'workflow_dispatch') && (needs.windows.result == 'success' || needs.android.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

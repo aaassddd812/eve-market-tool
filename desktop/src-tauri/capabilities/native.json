@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "native",
+  "description": "只有主窗口：下载、启动原生引擎（CCP 开源引擎 trinity，可选组件），战场 / 驾驶模拟每帧把船位、相机发过去（native.rs）",
+  "windows": ["main"],
+  "remote": {
+    "urls": [
+      "https://eve.navexor.top/*"
+    ]
+  },
+  "permissions": [
+    "allow-native-status",
+    "allow-native-install",
+    "allow-native-uninstall",
+    "allow-native-start",
+    "allow-native-send",
+    "allow-native-poll",
+    "allow-native-stop"
+  ]
+}

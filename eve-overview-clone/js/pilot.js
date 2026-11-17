@@ -9,7 +9,7 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v42';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v43';
 import { loadShipIndex } from './sim-ships.js?v=v19';
 import { warpShake } from './sim-warp.js?v=4';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v11';
@@ -22,6 +22,7 @@ import * as SC from './pilot-scan.js?v=7';
 import * as ST from './pilot-site.js?v=24';
 import * as CG from './pilot-cargo.js?v=2';
 import * as OS from './pilot-ovset.js?v=1';
+import * as NE from './native-engine.js?v=v2';
 
 let ctx = null;
 let root = null;
@@ -30,12 +31,15 @@ const UI = 'assets/eveui/';
 const IMG = (id, kind = 'icon', size = 64) => `https://images.evetech.net/types/${id}/${kind}?size=${size}`;
 const tr = (t) => (window.I18N?.lang === 'en' && window.I18N.t ? window.I18N.t(t) : t);   // 画在画布上的文字不走自动翻译
 const DISTS = [10, 20, 30, 50, 80];
+// 原生引擎画质：自动 = 和客户端一样按显卡型号分档（host/gfx.py，桌面版传给原生进程的 EVE_GFX）
+const GFX_LEVELS = ['auto', 'high', 'medium', 'low'];
+const GFX_LABELS = ['自动', '高', '中', '低'];
 // 游戏星空（dx9/scene/universe，tools/ui-assets/fetch.mjs --sky 转换）：艾玛、加达里、盖伦特、米玛塔尔区域各一张
 const SKIES = ['a01', 'c01', 'g01', 'm01'];
 const SKY_NAME = { '': '随机', a01: '艾玛', c01: '加达里', g01: '盖伦特', m01: '米玛塔尔' };
 const DT = 0.5;
 const S = {
-  set: { ship: 0, fit: 'kb', foes: [], allies: [], dist: 30, sky: '', tac: true, tab: 'solo', ptab: 'rec', mmode: '1v1', mcap: MATCH_CAPS[0], mskill: 'esi', mroomf: '', mpub: true, pfit: null, pid: '', mode: 'free', site: '', cheat: false, abyGm: {}, gmo: {} },
+  set: { ship: 0, fit: 'kb', foes: [], allies: [], dist: 30, sky: '', tac: true, tab: 'solo', ptab: 'rec', mmode: '1v1', mcap: MATCH_CAPS[0], mskill: 'esi', mroomf: '', mpub: true, pfit: null, pid: '', mode: 'free', site: '', cheat: false, abyGm: {}, gmo: {}, render: 'web', gfx: 'auto' },
   b: null, me: null, on: null, off: null, prop: -1, view: null, raf: 0, last: 0, t: 0, paused: false, sel: -1, keys: new Set(),
   names: [], brk: [], log: [], ended: false, loading: false, orbit: 0, keep: 0, ovAt: 0
 };
@@ -120,7 +124,7 @@ export function initPilot(context) {
     tab: ['match', 'tut'].includes(saved.tab) ? saved.tab : 'solo', mskill: saved.mskill === 'max' ? 'max' : 'esi', mroomf: ['1v1', '2v2'].includes(saved.mroomf) ? saved.mroomf : '', ptab: ['rec', 'mine', 'pub'].includes(saved.ptab) ? saved.ptab : 'rec', mpub: saved.mpub !== false,
     pfit: saved.pfit?.fit?.ship ? saved.pfit : null, pid: saved.pid || '', boost: Array.isArray(saved.boost) ? saved.boost.map(Number).filter(Boolean).slice(0, 16) : Array.isArray(saved.imp) ? saved.imp.map(Number).filter(Boolean) : null, tutSel: typeof saved.tutSel === 'string' ? saved.tutSel : '',
     mode: ['ded', 'abyss'].includes(saved.mode) ? saved.mode : 'free', site: typeof saved.site === 'string' ? saved.site : '', abyWx: typeof saved.abyWx === 'string' ? saved.abyWx : '',
-    cheat: saved.cheat === true, abyGm: gmPickClean(saved.abyGm), gmo: saved.gmo && typeof saved.gmo === 'object' ? Object.fromEntries(GM_TOGGLES.map((k) => [k, saved.gmo[k] === true])) : {},
+    cheat: saved.cheat === true, abyGm: gmPickClean(saved.abyGm), render: saved.render === 'native' ? 'native' : 'web', gfx: GFX_LEVELS.includes(saved.gfx) ? saved.gfx : 'auto', gmo: saved.gmo && typeof saved.gmo === 'object' ? Object.fromEntries(GM_TOGGLES.map((k) => [k, saved.gmo[k] === true])) : {},
     allies: Array.isArray(saved.allies) ? saved.allies.filter((a) => a && Number(a.ship)).slice(0, 8).map((a) => ({ ship: Number(a.ship), fit: typeof a.fit === 'string' ? a.fit : 'kb', count: Math.max(1, Math.min(20, Number(a.count) || 1)) })) : [] });
   const hud = ctx.store.getJSON(HUD_KEY, null);
   if (hud && typeof hud === 'object') for (const k of Object.keys(HUD_DEF)) if (k in hud) S.hud[k] = hud[k] ? 1 : 0;
@@ -412,6 +416,13 @@ function renderSetupNow() {
           <div class="pl-search"><input type="search" class="pi-input" placeholder="搜索船名加队友" data-pl-q="ally" autocomplete="off"><div class="pl-results" data-pl-res="ally" hidden></div></div>
         </div>`;
   const mode = S.set.mode;
+  // 画面：网页渲染（three.js）或原生引擎（桌面版 1.0.18 起的可选组件，CCP 开源引擎 trinity，见 nativeStart）
+  const renderField = NE.supported() ? `<div class="pl-field">
+          <label>画面</label>
+          <div class="segmented" role="group" aria-label="画面">${[['web', '网页渲染'], ['native', '原生引擎']].map(([k, l]) => `<button type="button" data-pl-render="${k}" class="${S.set.render === k ? 'active' : ''}">${l}</button>`).join('')}</div>
+          ${S.set.render === 'native' ? `<div class="segmented" role="group" aria-label="原生引擎画质">${GFX_LEVELS.map((k, i) => `<button type="button" data-pl-gfx="${k}" class="${S.set.gfx === k ? 'active' : ''}"${i ? '' : ' title="和客户端一样按显卡型号选高 / 中 / 低档"'}>${GFX_LABELS[i]}</button>`).join('')}</div>
+          <span class="text-muted" id="plNativeNote">${esc(S.nativeNote || '用 CCP 开源的游戏引擎另开一个窗口画这一局，镜头和这里同步（实验功能，第一次使用要下载约 120 MB；没装 EVE 客户端时，画面资源还要边用边下载，约 250 MB）')}</span>` : ''}
+        </div>` : '';
   // 作弊：进去后多一个「GM 工具」窗口；深渊还能在上面自选每层刷什么
   const cheatBox = `<label class="pi-check pl-cheat"><input type="checkbox" data-pl-cheat${S.set.cheat ? ' checked' : ''}><span>开启作弊</span></label>${S.set.cheat ? `<span class="text-muted">${mode === 'abyss' ? '进去后有 GM 工具（无敌、刷怪、跳层…）；上面可以自选每层刷什么' : '进去后有 GM 工具（无敌、刷怪、瞬移…）'}</span>` : ''}`;
   const modeSeg = `<div class="pl-field pl-span"><label>模式</label><div class="segmented" role="group" aria-label="模式">${[['free', '自由对战'], ['ded', '死亡空间'], ['abyss', '深渊']].map(([k, l]) => `<button type="button" data-pl-mode="${k}" class="${mode === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>`;
@@ -419,6 +430,7 @@ function renderSetupNow() {
         ${modeSeg}
         <div class="pl-field pl-span"><label>${mode === 'abyss' ? '深渊' : '复合体'}</label><div id="plSites">${S.npcReady ? sitesHtml() : '<p class="text-muted">正在加载 NPC 数据…</p>'}</div></div>
         ${sideField}
+        ${renderField}
       </div>
       <div class="pl-setup-foot"><button type="button" class="btn btn-primary" data-pl-go${S.loading || !S.npcReady ? ' disabled' : ''}>${S.loading ? '准备中…' : '起飞'}</button>${cheatBox}</div>`;
   if (mode !== 'free' && !S.npcReady) ST.loadNpcData().then((d) => { S.npcReady = Boolean(d); if (!d) ctx.showToast('NPC 数据加载失败', 'error', 4000); if (root.querySelector('#plSetup')) renderSetup(); });
@@ -439,6 +451,7 @@ function renderSetupNow() {
           <label>星空</label>
           <div class="segmented" role="group" aria-label="星空">${Object.entries(SKY_NAME).map(([k, l]) => `<button type="button" data-pl-sky="${k}" class="${S.set.sky === k ? 'active' : ''}">${l}</button>`).join('')}</div>
         </div>
+        ${renderField}
       </div>
       <div class="pl-setup-foot"><button type="button" class="btn btn-primary" data-pl-go${S.loading ? ' disabled' : ''}>${S.loading ? '准备中…' : '起飞'}</button>${cheatBox}</div>`;
   // 大厅布局：左边房间列表（筛选 + 表格 + 邀请码），右边我的出战（船、规则、快速匹配、开房间）
@@ -1211,7 +1224,7 @@ function renderStage() {
   FL.renderFleet(true);
   SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v92').then((m) => {
+  import('./sim-3d.js?v=v94').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -1259,10 +1272,54 @@ function renderStage() {
     S.view.follow(S.me?.i ?? 0);
     if (S.envFx) S.view.setEnvFx?.(S.envFx);   // 场景房间的边界 / 气云 / 天气云层（视图是异步建的，进房间时可能还没好）
     applyTac();
+    nativeStart();
   }).catch(() => { S.noView = tr('3D 画面加载失败'); });
   startLoop();
 }
+// 原生引擎（桌面版可选组件，native-engine.js）：选了「原生引擎」时另开一个 CCP 开源引擎（trinity）的窗口画这一局，
+// 镜头、船位等每帧从这里的 3D 视图同步过去（sim-3d nativeOut）；飞行界面不加任何东西。
+// 组件在设置页选中时就开始下载 / 检查新版本（进度写在选项下面），起飞时还没好就等它好了再接上
+function nativePrepare() {
+  if (S.nativeJob) return S.nativeJob;
+  const note = (txt) => { S.nativeNote = txt; const el = root?.querySelector('#plNativeNote'); if (el) el.textContent = txt; };
+  S.nativeJob = (async () => {
+    const st = await NE.status();
+    note(st.installed ? '检查组件版本' : '准备下载');
+    let ver = st.installed;
+    try {
+      ver = await NE.install((d) => {
+        if (d.stage === 'download' && d.total) note(`下载 ${Math.floor((d.done / d.total) * 100)}%`);
+        else if (d.stage === 'verify') note('校验中');
+        else if (d.stage === 'extract') note('解压中');
+      });
+    } catch (e) {
+      if (!st.installed) { note(`原生引擎：${e?.message || e}`); throw e; }   // 查不到新版本（离线等）就用已装的
+    }
+    S.nativeVer = ver;
+    note(`原生引擎已就绪（${ver}）`);
+    return ver;
+  })().finally(() => { S.nativeJob = null; });
+  return S.nativeJob;
+}
+async function nativeStart() {
+  if (S.set.render !== 'native' || !NE.supported() || NE.running()) return;
+  const view = S.view;
+  try {
+    if (!S.nativeVer) await nativePrepare();
+    if (!view || S.view !== view) return;   // 等下载时已经退出这一局
+    await NE.connect(view, {
+      gfx: S.set.gfx,
+      // 原生窗口关了 / 崩了：画面本来就还在网页里画，提示一句（出错时「提交工单」附上原生引擎日志）
+      onExit: (m) => { if (m) { const [t, k, d] = NE.exitNotice(m); ctx.showToast(t, k, k === 'error' ? 10000 : 4000, d); } },
+      onWarn: (t) => ctx.showToast(t, 'info', 6000),
+    });
+  } catch (e) {
+    const [t, k, d] = NE.errorNotice(e);
+    ctx.showToast(t, k, 10000, d);
+  }
+}
 function disposeView() {
+  NE.disconnect();
   S.jumpFx?.cancel();
   S.jumpFx = null;
   S.view?.dispose();
@@ -2060,6 +2117,8 @@ function onClick(e) {
   if (t.closest('[data-pl-fvclose]') || t.matches('.pl-fitview')) { S.fitView = null; renderFitView(); return; }
   if (t.closest('[data-pl-fvopen]')) { const d = fitViews.get(S.fitView?.k); if (d?.row?.fit) { S.fitView = null; ctx.openInFitting(ctx.normalize(JSON.parse(JSON.stringify(d.row.fit)))); } return; }
   if ((x = t.closest('[data-pl-sky]'))) { S.set.sky = x.dataset.plSky; save(); renderSetup(); return; }
+  if ((x = t.closest('[data-pl-gfx]'))) { S.set.gfx = x.dataset.plGfx; save(); renderSetup(); return; }
+  if ((x = t.closest('[data-pl-render]'))) { S.set.render = x.dataset.plRender; save(); renderSetup(); if (S.set.render === 'native') nativePrepare().catch(() => {}); return; }
   if ((x = t.closest('[data-win-open]'))) { toggleWin(x.dataset.winOpen); return; }
   if (t.closest('[data-pl-tac]')) { toggleTac(); return; }
   if (t.closest('[data-win-reset]')) { ctx.store.setJSON(WIN_KEY, {}); placeWins(true); return; }

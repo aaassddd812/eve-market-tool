@@ -15,6 +15,13 @@ Windows 10 / 11 桌面程序与安卓 App（Tauri 2，Windows 用系统自带的
   窗口里调 `float_drag`（拖动标题栏）、`float_pass`（鼠标穿透）、`float_close`、`float_focus_main`（点了详情切回主窗口）。远程网页调自定义命令要在 `build.rs` 的 AppManifest 里登记，
   再在 `capabilities/default.json` 放行 `allow-float-*`。主窗口真正关掉（退出）时整个程序退出。
 - 自动更新（仅桌面，`lib.rs` 的 `check_update`）：启动时读 Releases 最新版的 `latest.json`（失败再读走 ghfast 镜像的 `latest-mirror.json`），版本比当前新就弹窗「现在更新 / 以后再说」，确认后下载安装包、校验签名、静默安装并重启；查不到更新或网络不通就静默跳过。网页内容本来就是线上最新的，只有壳（Rust、插件、权限）改动时才需要发新版。
+- 原生引擎（仅 Windows 桌面，1.0.18 起，`src/native.rs`）：驾驶模拟开始前的设置里可选「原生引擎」（战场模拟 3D 画面也有按钮，网页 `js/native-engine.js`），用 CCP 开源的 trinity 引擎另开一个窗口画同一场战斗。
+  组件第一次用时下载（约 120 MB）：`native_install` 读公开仓库 Release `native` 的 `eve-native.json`（`{version,proto,desktop,url,size,sha256}`，url 必须是 `https://github.com/` 开头；连不上走 ghfast 镜像；`desktop` 比本机桌面版新时不装，提示先更新桌面版），
+  用系统自带的 `curl.exe` 下载、校验大小和 SHA256、`tar.exe` 解压到应用数据目录 `native\pkg-<版本>`（`current.txt` 记当前版本，换版本时沿用旧的 `cache\` 模型缓存）；
+  `native_status` 报版本和下载进度；`native_start` 启动组件里的 `host\bridge.py`（随机口令，只连本机端口），`native_send` 转发网页每帧的相机和船位，`native_poll` 取回状态，`native_stop` / 主窗口关闭时结束进程；`native_uninstall` 删掉整个组件。
+  组件包由 eve-market-tool 的 `native-engine` 分支 CI 生成和发布（见那边的 README）。命令登记在 `build.rs`，权限只给主窗口（`capabilities/native.json`）。
+  测试：设环境变量 `EVE_NATIVE_PKG` 指向一个现成的组件目录（和组件包同样的布局：`host\bridge.py`、`rt\bin\exefile*.exe`，比如 CI 在本机组装的 `F:\eve-ci\viewer-latest`），
+  桌面版就直接用它，不下载、不查新版本（版本显示 `local`），不用先发布组件。
 - `downloader/Downloader.cs`：下载器（.NET Framework 4.x WinForms，约 60 KB）。从 `aaassddd812/eve-tool-desktop` 的最新 Release 下载 `EVE-Tool-Setup.exe` 并启动安装；GitHub 连不上时依次改用 ghfast.top、gh-proxy.com 镜像；校验文件头与大小。
   网站「桌面版」弹窗提供的是 `eve-overview-clone/downloads/EVE-Tool-Downloader.exe`（Linux 上可用 `mcs -target:winexe -out:… -win32icon:src-tauri/icons/icon.ico -r:System.Windows.Forms.dll -r:System.Drawing.dll downloader/Downloader.cs` 重新编译）。
 
@@ -29,5 +36,9 @@ Windows 10 / 11 桌面程序与安卓 App（Tauri 2，Windows 用系统自带的
 4. 自动更新签名：`TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容）与 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`。私钥放在服务器 `/root/study/EVEonlineHelp/eve-updater-signing/`，公钥写在 `tauri.conf.json` 的 `plugins.updater.pubkey`；私钥丢了已安装的桌面版就再也收不到更新（只能重新下载安装）。
 
 发版：推送标签 `desktop-v1.0.0`（版本号取自标签，必须比上一版大，桌面版才会提示更新），或在 Actions 页手动运行 `desktop`。
+只想自己先试：手动运行时勾选「只打 Windows 测试包」，安装包在这次运行的 Artifacts（`windows`）里，不编安卓、不发布，用户不会收到更新。
+测试包装过的机器不会自动更新到同一个版本号，正式发版用更大的版本号（或手动重装）。
 
 本地检查 Rust 代码（不链接）：`cargo check --target x86_64-pc-windows-msvc`（需要 `llvm-rc`）。
+依赖里的 `ring` 要用 C 编译器编：Linux 上可以把 `clang` 链接成 `clang-cl` 当 MSVC 编译器，再给几个空的 C 头文件（`assert.h`、`string.h`、`stdlib.h`，只为通过预处理），
+`CC_x86_64_pc_windows_msvc=<clang-cl> AR_x86_64_pc_windows_msvc=llvm-lib CFLAGS_x86_64_pc_windows_msvc="/I<头文件目录>" cargo check --offline --target x86_64-pc-windows-msvc`。

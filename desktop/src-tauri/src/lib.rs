@@ -5,12 +5,15 @@
 // 本地红名在桌面版由 local_grab 直接截 EVE 窗口（capture.rs），不走浏览器共享屏幕（那样 Windows 会给游戏窗口加一圈黄框）。
 // 日志预警在桌面版由 logs_* 命令自动找、读 EVE 日志文件夹（logs.rs），不用在浏览器里选文件夹、每次重新授权。
 // 托盘：点主窗口 ✕ 先问最小化到托盘还是退出，可记住选择（tray.rs）。
+// 原生引擎（可选组件，native.rs）：战场 / 驾驶模拟可以另开一个 CCP 开源引擎 trinity 渲染的窗口，网页每帧把船位、相机发过去。
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
 #[cfg(desktop)]
 mod capture;
 #[cfg(desktop)]
 mod logs;
+#[cfg(desktop)]
+mod native;
 #[cfg(desktop)]
 mod pi_tpl;
 #[cfg(desktop)]
@@ -52,7 +55,7 @@ pub fn run() {
         // 自动更新：启动时查 GitHub 发布仓库的 latest.json，有新版就弹窗询问
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, float_detail, update_check, capture::local_grab, capture::local_windows, logs::logs_dir, logs::logs_list, logs::logs_stat, logs::logs_read, pi_tpl::pi_tpl_save, tray::close_choice])
+        .invoke_handler(tauri::generate_handler![float_open, float_pass, float_drag, float_close, float_focus_main, float_detail, update_check, capture::local_grab, capture::local_windows, logs::logs_dir, logs::logs_list, logs::logs_stat, logs::logs_read, pi_tpl::pi_tpl_save, tray::close_choice, native::native_status, native::native_install, native::native_uninstall, native::native_start, native::native_send, native::native_poll, native::native_stop])
         // 点主窗口 ✕：按设置藏到托盘 / 退出 / 先问（tray.rs）；主窗口真的关掉就退出（悬浮窗不单独留着）
         .on_window_event(|w, e| {
             if w.label() != "main" {
@@ -60,7 +63,10 @@ pub fn run() {
             }
             match e {
                 tauri::WindowEvent::CloseRequested { api, .. } => tray::on_close(w, api),
-                tauri::WindowEvent::Destroyed => tauri::Manager::app_handle(w).exit(0),
+                tauri::WindowEvent::Destroyed => {
+                    native::shutdown();
+                    tauri::Manager::app_handle(w).exit(0)
+                }
                 _ => {}
             }
         });

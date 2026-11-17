@@ -10,9 +10,10 @@
 // 战场统计（kb-br.js）可把一场会战双方的实际出场舰船带进来（openSim(preset)），结果旁边对照实际损失；
 // 「AT 赛」（sim-at.js）可选这一届联盟锦标赛已打过的比赛，双方选手各一行带进来（蓝队 A 方、红队 B 方），战场上像比赛直播一样显示两队名单与血条。
 import { commonFit } from './fit-kb.js?v=v30';
-import { createBattle, simulate } from './sim-engine.js?v=v42';
+import { createBattle, simulate } from './sim-engine.js?v=v43';
 import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
 import { bindUnit, buildUnit, pilotUnit, forcedOff, BURSTS, BURST_MULT, mean } from './sim-unit.js?v=v9';
+import * as NE from './native-engine.js?v=v2';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
 const $ = (id) => document.getElementById(id);
@@ -520,6 +521,7 @@ function renderBattle() {
         <button type="button" class="btn btn-ghost btn-sm" data-bt-finish title="不看过程，直接算到结束">直接出结果</button>
         <button type="button" class="btn btn-ghost btn-sm" data-bt-restart title="回到开局（手动进场的支援与点名清空）">重新开始</button>
         <label class="sim-bt-q" title="自动：画面卡顿时自动降低画质（低画质不画星云、按 1 倍像素渲染）"><span>画质</span><select class="plain-select" data-bt-quality>${QUALITY.map(([v, l]) => `<option value="${v}"${BT.quality === v ? ' selected' : ''}>${l}</option>`).join('')}</select></label>
+        ${NE.supported() ? `<button type="button" class="btn btn-ghost btn-sm${NE.running() ? ' on' : ''}" data-bt-native title="用 CCP 开源的游戏引擎（trinity）另开一个窗口画同一场战斗，镜头和这里同步（实验功能，第一次使用要下载约 120 MB）">${NE.running() ? '关闭原生引擎' : '原生引擎'}</button>` : ''}
       </div>
       <div class="sim-bt-reinf"><button type="button" class="btn btn-ghost btn-sm" data-bt-reinf="A">A 方舰队支援</button><button type="button" class="btn btn-ghost btn-sm" data-bt-reinf="B">B 方舰队支援</button></div>
       <div class="sim-bt-pop" id="simBtPop" hidden></div>
@@ -538,7 +540,7 @@ function mountView(host) {
   host.classList.remove('is-off');
   host.closest('.sim-stage')?.classList.remove('is-off');
   loadBar(0, 0);
-  import('./sim-3d.js?v=v92').then((m) => {
+  import('./sim-3d.js?v=v94').then((m) => {
     if (BT.host !== host || !host.isConnected) return;
     BT.view = m.createView(host, {
       onPick: (i) => { BT.sel = i; updateBattleUi(); },
@@ -578,10 +580,64 @@ function loadBar(done, total) {
   el.querySelector('small').textContent = total ? `${done} / ${total}` : '';
 }
 function disposeView() {
+  NE.disconnect();
   BT.placing = null;
   BT.view?.dispose();
   BT.view = null;
   BT.host = null;
+}
+// 原生引擎（桌面版可选组件，native-engine.js）：另开一个 CCP 开源引擎渲染的窗口，船位、镜头每帧从这里的 3D 画面同步过去。
+// 没下载过：第一次点按钮先问（再点一次确认），下载时按钮上显示进度；开着时按钮显示组好几艘船 / 模型转换进度，再点关闭
+async function toggleNative(btn) {
+  // 面板可能重画，按钮换了新的元素：每次都找当前那个
+  const cur = () => (btn.isConnected ? btn : document.querySelector('[data-bt-native]') || btn);
+  const label = (txt) => { btn = cur(); btn.textContent = txt; };
+  if (NE.running()) { NE.disconnect(); return; }
+  if (BT.nativeBusy) return;
+  if (!BT.view) { ctx.showToast('先打开 3D 画面，再开原生引擎', 'info', 4000); return; }
+  BT.nativeBusy = true;
+  try {
+    const st = await NE.status();
+    const progress = (d) => {
+      if (d.stage === 'download' && d.total) label(`下载 ${Math.floor((d.done / d.total) * 100)}%`);
+      else if (d.stage === 'verify') label('校验中');
+      else if (d.stage === 'extract') label('解压中');
+    };
+    if (!st.installed) {
+      if (!BT.nativeArmed) {
+        BT.nativeArmed = true;
+        label('下载约 120 MB？再点一次');
+        setTimeout(() => { if (BT.nativeArmed) { BT.nativeArmed = false; if (!NE.running()) label('原生引擎'); } }, 6000);
+        return;
+      }
+      BT.nativeArmed = false;
+      label('准备下载');
+      await NE.install(progress);
+    } else {
+      // 装过：先看有没有新版本（已是最新时只读一下版本清单就返回），有就带进度更新；查不到（离线等）就用已装的
+      label('检查组件版本');
+      try { await NE.install(progress); } catch { /* 用已装的版本 */ }
+    }
+    label('启动中…');
+    await NE.connect(BT.view, {
+      onStatus: (m) => { if (NE.running()) label(m.busy ? `转换模型 ${m.busy.replace(/^\D+/, '')}` : `关闭原生引擎（${m.built}/${m.ships}）`); },
+      onExit: (m) => {
+        cur().classList.remove('on');
+        label('原生引擎');
+        if (m) { const [t, k, d] = NE.exitNotice(m); ctx.showToast(t, k, k === 'error' ? 10000 : 4000, d); }
+      },
+      onWarn: (t) => ctx.showToast(t, 'info', 6000),
+    });
+    cur().classList.add('on');
+    label('关闭原生引擎');
+  } catch (e) {
+    const [t, k, d] = NE.errorNotice(e);
+    ctx.showToast(t, k, 10000, d);
+    cur().classList.remove('on');
+    label('原生引擎');
+  } finally {
+    BT.nativeBusy = false;
+  }
 }
 function startLoop() {
   if (BT.raf) return;
@@ -1133,6 +1189,7 @@ function onBattleClick(e) {
   if (el('[data-bt-finish]')) { finishNow(); return true; }
   if (el('[data-bt-restart]')) { newBattle(); renderResult(); return true; }
   if (el('[data-bt-3d]')) { BT.want3d = true; if (BT.host) mountView(BT.host); return true; }
+  if ((x = el('[data-bt-native]'))) { toggleNative(x); return true; }
   if (el('[data-bt-names]')) { BT.names = !BT.names; syncTool('names', BT.names); BT.view?.setLabels(BT.names); return true; }
   if (el('[data-bt-dir]')) { BT.director = !BT.director; syncTool('dir', BT.director); BT.view?.setDirector(BT.director); return true; }
   if (el('[data-bt-cam]')) { BT.view?.resetCamera(); updateBattleUi(); return true; }

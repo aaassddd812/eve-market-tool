@@ -1,6 +1,6 @@
 [package]
 name = "eve-tool-desktop"
-version = "1.0.17"
+version = "1.0.18"
 description = "EVE 辅助工具桌面版 / 安卓版"
 edition = "2021"
 
@@ -24,6 +24,8 @@ tauri-plugin-window-state = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-dialog = "2"
+# 原生引擎组件包校验（native.rs）
+sha2 = "0.10"
 
 # 本地红名截 EVE 窗口（capture.rs）
 [target.'cfg(windows)'.dependencies]

@@ -1984,6 +1984,144 @@ export function createView(host, hooks = {}, opt = {}) {
   let track = -1;
   const tmp = new THREE.Object3D();
   const vA = new THREE.Vector3(), vB = new THREE.Vector3(), vC = new THREE.Vector3(), vD = new THREE.Vector3();
+  // 原生引擎（桌面版可选组件，native-engine.js → 桌面版 → eve-native host/bridge.py）：网页还是模拟的“大脑”，原生进程只负责画。
+  //   位置单位米（场景坐标 × 1000，浮动原点和这里一样），坐标系同客户端 = three。
+  //   清单（变了才发）：舰船 { id, dna（舰船索引外观键 hull.faction.race 换成冒号）, type, vmax, r, me（自己的船）, tur: [[挂点号, 炮塔模型键, 装备序号, 装备类型, 弹药类型]] }、
+  //     残骸 { id: 'w' + 舰船序号, dna, kind: 'wreck', of: 舰船 id }（船爆了以后才有）、
+  //     无人机实体（驾驶模拟放出去的，是单独的单位）{ id: 单位序号, dna, kind: 'drone', type, vmax, r }、
+  //     战场模拟的无人机 / 舰载机（不是单位，按每帧的 dr 画）{ id: 'd' + 母舰 + '.' + 序号, dna, kind: 'drone', type }
+  //     （type 原生那边查客户端图形表：爆炸、无人机炮塔；vmax 推进器亮度；r 半径，导弹瞄准用）
+  //   每帧：t（模拟时间，秒）、相机 + 每个物体 [id, x, y, z, qx, qy, qz, qw, 可见, 目标 id, 开着的装备（位掩码，装备序号）, 护盾, 装甲, 结构（剩余比例）]
+  //   事件（不能丢，单独发）：['shot', 开火方, 目标, 装备序号, 命中 0/1]（无人机实体的装备序号 0）、
+  //     ['missile', 开火方, 目标, 装备序号, 弹药类型, 编号, 导弹速度 m/s]、['missileEnd', 编号, 命中 0/1]、['kill', id]；时间往回拨（重放、拖进度条）时不补发
+  let nativeSink = null, nativeSig = '', nativeT = -1, nativeMis = 0;
+  const nativeOpen = new Map();   // 已发出、还没结束的导弹：rec.missiles 的序号 → 编号
+  const nDir = new THREE.Vector3(), nUp = new THREE.Vector3(), nQ = new THREE.Quaternion(), nM = new THREE.Matrix4();
+  const dnaOf = (k) => k.replace(/\./g, ':');
+  // 和 sim-fx.js 的 hash 一样：同一发炮弹在两边算出同一个开火时刻
+  const hashT = (a, b = 0, c = 0) => { let h = (a * 374761393 + b * 668265263 + c * 2147483647) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  let nativeKillList = [];
+  function nativeOut() {
+    if (!nativeSink || !rec || !shipIndex) return;
+    const t = lastDrawT, F = frameAt(t), n = rec.units.length;
+    const list = [], rows = [];
+    const tur = shipIndex.turrets || {};
+    const me = hooks.self?.() ?? -1;
+    const hpOf = (i) => (F.hp && i * 3 + 2 < F.hp.length ? [F.hp[i * 3] / 200, F.hp[i * 3 + 1] / 200, F.hp[i * 3 + 2] / 200] : [1, 1, 1]);
+    for (let i = 0; i < n; i++) {
+      const u = rec.units[i];
+      const k = keyOf(i);
+      if (!k) continue;
+      const d = drawn[i], q = heading[i];
+      const shown = !hooks.unitShown || hooks.unitShown(i) !== false;
+      if (u.drone) list.push({ id: String(i), dna: dnaOf(k), kind: 'drone', type: u.ship, vmax: u.vel || 0, r: u.radius || 0 });
+      else {
+        // 炮塔（客户端 TurretSet.FitTurrets：高槽第 N 个装备挂到 locator_turret_N*）
+        const tl = [];
+        (u.rack || []).forEach((r, ri) => { if (r.slot === 'high' && tur[r.type]) tl.push([Number(String(r.key).split(':')[1]) + 1, tur[r.type], ri, r.type, r.charge || 0]); });
+        list.push({ id: String(i), dna: dnaOf(k), type: u.ship, vmax: u.vel || 0, r: u.radius || 0, ...(i === me ? { me: 1 } : {}), ...(tl.length ? { tur: tl } : {}) });
+      }
+      const vis = d && d.alive && shown && !warpHidden(i, t) ? 1 : 0;
+      const pos = d ? [d.x * 1000, d.y * 1000, d.z * 1000] : [0, 0, 0];
+      const qq = q ? [q.x, q.y, q.z, q.w] : [0, 0, 0, 1];
+      rows.push([String(i), ...pos, ...qq, vis, d?.alive && F.tg && F.tg[i] >= 0 ? String(F.tg[i]) : '', d?.alive && F.act ? F.act[i] : 0, ...hpOf(i)]);
+      // 残骸：船爆了以后在原地换成残骸（朝向保持最后的朝向）；无人机不留残骸
+      const w = d && !d.alive && !u.drone ? wreckKeyOf(i) : null;
+      if (w) {
+        list.push({ id: 'w' + i, dna: dnaOf(w), kind: 'wreck', of: String(i) });
+        rows.push(['w' + i, ...pos, ...qq, shown ? 1 : 0, '', 0, 1, 1, 1]);
+      }
+    }
+    // 战场模拟的无人机 / 舰载机：同 draw 里的插值（前后两帧按顺序对上就插值，朝向 = 移动方向）
+    if (F.dr) {
+      const F2 = rec.frames[Math.min(rec.frames.length - 1, Math.floor(t / rec.dt) + 1)];
+      const fk = F2 === F ? 0 : Math.max(0, Math.min(1, (t - F.t) / (F2.t - F.t || 1)));
+      const seen = new Map();
+      for (let j = 0; j < F.dr.length; j += 6) {
+        const o = F.dr[j], type = F.dr[j + 5], key = shipIndex.types?.[type]?.m;
+        if (!key || !drawn[o]?.alive) continue;
+        const c = seen.get(o) || 0;
+        seen.set(o, c + 1);
+        const id = `d${o}.${c}`;
+        const same = F2.dr[j] === o && F2.dr[j + 5] === type;
+        const p = [0, 1, 2].map((a) => (F.dr[j + 1 + a] + (same ? (F2.dr[j + 1 + a] - F.dr[j + 1 + a]) * fk : 0) - ORG[a]) * KM * 1000);
+        nQ.identity();
+        if (same) {
+          vA.set(F2.dr[j + 1] - F.dr[j + 1], F2.dr[j + 2] - F.dr[j + 2], F2.dr[j + 3] - F.dr[j + 3]);
+          if (vA.lengthSq() > 1e-6) nQ.setFromRotationMatrix(nM.lookAt(vB.set(0, 0, 0), vA.negate(), vC.set(0, 1, 0)));
+        }
+        list.push({ id, dna: dnaOf(key), kind: 'drone', type });
+        rows.push([id, ...p, nQ.x, nQ.y, nQ.z, nQ.w, 1, '', 0, 1, 1, 1]);
+      }
+    }
+    const sig = list.map((x) => `${x.id}=${x.dna}${x.me ? '*' : ''}${x.tur ? '+' + x.tur.map((y) => y.join('/')).join(';') : ''}`).join(',');
+    if (sig !== nativeSig) { nativeSig = sig; nativeSink.ships(list); }
+    // 事件：上次发到的时间之后、这次画到的时间之前
+    const ev = [];
+    if (nativeT >= 0 && t > nativeT && t - nativeT < 5) {
+      const dt = rec.dt;
+      for (let k = Math.floor(nativeT / dt); k <= Math.floor(t / dt); k++) {
+        const fr = rec.frames[k];
+        if (!fr) continue;
+        const sh = fr.shots || [];
+        for (let j = 0; j < sh.length; j += 4) {
+          const from = sh[j], to = sh[j + 1], kind = sh[j + 2], g = sh[j + 3];
+          if (kind > 1) continue;   // 遥修、冲击波另算
+          const tf = fr.t - dt + hashT(k * 977 + j, 11) * dt;   // 和 sim-fx 一样把一帧里的开火摊开
+          if (tf <= nativeT || tf > t) continue;
+          const fx = rec.units[from]?.fx?.[g];
+          if (!fx || fx.w === 'missile' || fx.w === 'doom') continue;
+          ev.push(['shot', String(from), String(to), rec.units[from].gm?.[g] ?? -1, kind]);
+        }
+        const ds = fr.ds || [];
+        for (let j = 0; j < ds.length; j += 3) {
+          const tf = fr.t - dt + hashT(k * 977 + j, 13) * dt;
+          if (tf > nativeT && tf <= t) ev.push(['shot', String(ds[j]), String(ds[j + 1]), 0, ds[j + 2]]);
+        }
+      }
+      const M = rec.missiles || [];
+      for (let j = M.length - 1; j >= 0 && M[j].t0 > nativeT - 60; j--) {
+        const m = M[j];
+        if (m.t0 > nativeT && m.t0 <= t && !nativeOpen.has(j)) {
+          const ri = rec.units[m.f]?.gm?.[m.k] ?? -1;
+          nativeOpen.set(j, ++nativeMis);
+          ev.push(['missile', String(m.f), String(m.to), ri, rec.units[m.f]?.rack?.[ri]?.charge || 0, nativeMis, m.v || 0]);
+        }
+      }
+      for (const [j, id] of nativeOpen) {
+        const m = M[j];
+        if (!m) { nativeOpen.delete(j); continue; }
+        if (m.t1 != null && m.t1 <= t) { ev.push(['missileEnd', id, m.hit ? 1 : 0]); nativeOpen.delete(j); }
+        else if (t - m.t0 > 60) nativeOpen.delete(j);
+      }
+      for (const x of nativeKillList) if (x.at > nativeT && x.at <= t) ev.push(['kill', String(x.unit)]);
+      // 跃迁（引擎事件 kind 'warp'）：进入 / 退出跃迁（推进器 warpIntensity）；别人的起跳 / 落地闪光（短于 4 万 km 不播，同 warpFlashes）
+      const pm = (i) => (drawn[i] ? [drawn[i].x * 1000, drawn[i].y * 1000, drawn[i].z * 1000] : []);
+      for (const e of rec.events || []) {
+        if (e.kind !== 'warp') continue;
+        const id = String(e.unit), flash = e.tOut != null && e.unit !== me && e.D >= 4e7;
+        if (e.t > nativeT && e.t <= t) ev.push(['warp', id, 1]);
+        if (flash && e.tOut > nativeT && e.tOut <= t) ev.push(['warpOut', id, ...e.dir, ...pm(e.unit)]);
+        if (e.tIn != null && e.tIn > nativeT && e.tIn <= t) {
+          if (flash) ev.push(['warpIn', id, ...pm(e.unit)]);
+          ev.push(['warp', id, 0]);
+        }
+      }
+    } else nativeOpen.clear();
+    nativeT = t;
+    if (ev.length) nativeSink.fx(ev);
+    const e = camera.position;
+    camera.getWorldDirection(nDir);
+    nUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+    const ws = hooks.warpFx?.();   // 自己的船在跃迁中：原生那边画跃迁隧道（方向、速度比例同网页的隧道）
+    nativeSink.frame({
+      ...(ws ? { warp: [ws.dir[0], ws.dir[1], ws.dir[2], ws.sf] } : {}),
+      st: t,   // 模拟时间（"t" 是消息类型，不能重名）
+      cam: { eye: [e.x * 1000, e.y * 1000, e.z * 1000], target: [(e.x + nDir.x) * 1000, (e.y + nDir.y) * 1000, (e.z + nDir.z) * 1000],
+        up: [nUp.x, nUp.y, nUp.z], fov: THREE.MathUtils.degToRad(camera.fov) },
+      ships: rows,
+    });
+  }
   const drawn = [];      // 本帧每艘船的位置（千米，悬停 / 选中用）
   const heading = [];    // 每艘船最后的朝向（停下 / 成为残骸后保持）
   const bank = [], bankT = [];   // 每艘船当前侧倾角（弧度）和上次更新的时间
@@ -2068,6 +2206,7 @@ export function createView(host, hooks = {}, opt = {}) {
     resize();
     const F = frameAt(t);
     lastDrawT = t;
+    nativeKillList = opt.kills || [];
     sel = opt.sel ?? -1;
     selC = opt.selC ?? -1;
     const n = rec.units.length;
@@ -2636,6 +2775,13 @@ export function createView(host, hooks = {}, opt = {}) {
       if (hi) post.render(scene, camera, [tunnel?.distScene, ckDist, jumpFx?.distScene], flare?.draw); else { renderer.setRenderTarget(null); renderer.render(scene, camera); flare?.draw(); }
       if (shook) camera.quaternion.copy(shakeQ);
       drawLabels();
+      nativeOut();
+    },
+    // 原生引擎：sink = { frame, ships, scene }（native-engine.js），null 断开；nativeScene() 给原生引擎用的星系场景
+    setNative(sink) { nativeSink = sink; nativeSig = ''; nativeT = -1; nativeOpen.clear(); },
+    nativeScene() {
+      const id = opt.skybox ? String(opt.skybox).replace(/\/+$/, '').split('/').pop() : '';
+      return /^[a-z0-9_]+$/i.test(id) ? `res:/dx9/scene/universe/${id.toLowerCase()}_cube.red` : null;
     },
     // 深渊口袋之间过导管（客户端 effects.JumpOutAbyssalBetween）：ci = rec.cel 里导管的序号；
     //   cb.onMid()：ApplyDestinationScene 那一刻（3.7 秒）；cb.onEnd()：Stop 那一刻（5 秒，船重新显示）；隧道留到 7.5 秒，镜头 7.6 秒前后交还

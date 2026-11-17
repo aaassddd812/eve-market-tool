@@ -953,10 +953,11 @@ dependencies = [
 
 [[package]]
 name = "eve-tool-desktop"
-version = "1.0.9"
+version = "1.0.18"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

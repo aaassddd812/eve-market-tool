@@ -215,8 +215,8 @@ const ICONS = {
 };
 
 // 第二个参数兼容旧调用 showToast(msg, 4000)
-// 报错提示带「提交工单」按钮（停留更久），点开「定制」弹窗并预填报错内容
-function showToast(message, kindOrDuration = 'info', duration = 2600) {
+// 报错提示带「提交工单」按钮（停留更久），点开「定制」弹窗并预填报错内容；detail 只附在工单里（比如原生引擎的日志），提示上不显示
+function showToast(message, kindOrDuration = 'info', duration = 2600, detail = '') {
   let kind = kindOrDuration;
   if (typeof kindOrDuration === 'number') { duration = kindOrDuration; kind = 'info'; }
   const stack = $('toastStack');
@@ -226,7 +226,7 @@ function showToast(message, kindOrDuration = 'info', duration = 2600) {
   el.querySelector('span').textContent = message;
   if (kind === 'error') {
     el.insertAdjacentHTML('beforeend', '<button type="button" class="toast-act">提交工单</button>');
-    el.querySelector('.toast-act').addEventListener('click', () => { el.remove(); openTicket('bug', (window.I18N?.lang === 'en' ? 'Error: ' : '报错：') + message); });
+    el.querySelector('.toast-act').addEventListener('click', () => { el.remove(); openTicket('bug', (window.I18N?.lang === 'en' ? 'Error: ' : '报错：') + message + (detail ? '\n\n' + detail : '')); });
     duration = Math.max(duration, 7000);
   }
   stack.appendChild(el);
@@ -1161,7 +1161,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v337').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v340').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
