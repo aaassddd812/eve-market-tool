@@ -113,7 +113,22 @@ jobs:
           }
           Get-ChildItem out | ForEach-Object { "{0}  {1:N0} bytes  sha256 {2}" -f $_.Name, $_.Length, (Get-FileHash $_.FullName).Hash }
 
+      # 测试包：不走 artifact（私有仓库构件存储配额经常被其他项目占满），直接传公开仓库的 prerelease，每次覆盖
+      - name: 发布测试包
+        if: ${{ inputs.test }}
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: ${{ env.RELEASE_REPO }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+          tag_name: desktop-test
+          name: Windows 测试包
+          body: 手动运行「只打 Windows 测试包」的产物，每次覆盖。安装前建议退出旧客户端。
+          files: out/EVE-Tool-Setup.exe
+          prerelease: true
+          make_latest: false
+
       - uses: actions/upload-artifact@v4
+        if: ${{ !inputs.test }}
         with:
           name: windows
           path: out/*
