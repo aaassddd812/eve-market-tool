@@ -10,7 +10,7 @@
 // 坐标：场景坐标 = 客户端坐标（右手系，见 sim-ships.js），单位千米。
 // 网格和贴图版权归 CCP。
 import * as THREE from './vendor/three/three.module.min.js';
-import { curveValue, applyBinding } from './sim-env.js?v=4';
+import { curveValue, applyBinding } from './sim-env.js?v=5';
 
 const KM = 1 / 1000;
 const LOG_V = '#include <common>\n#include <logdepthbuf_pars_vertex>\n';

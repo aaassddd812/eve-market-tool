@@ -5,7 +5,7 @@
 // 反照率贴图（sRGB）× 材质颜色；x 贴图打包了 粗糙度 / 材质遮罩 / 发光 / 灰尘（灰尘客户端出货着色器不用）。没有转换文件时返回 null，战场只显示图标。
 import * as THREE from './vendor/three/three.module.min.js';
 import { SHIP_AO } from './sim-ssao.js?v=1';
-import { SHIP_LIGHTS, PL_MAX, IES_TEX } from './sim-lights.js?v=6';
+import { SHIP_LIGHTS, PL_MAX, IES_TEX } from './sim-lights.js?v=7';
 
 const BASE = 'ship-models/';
 let indexP = null;

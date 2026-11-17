@@ -13,19 +13,19 @@
 // 观察者视角：拖动旋转、滚轮 / 双指缩放、右键 / 双指拖动平移；悬停显示舰船，点击选中，双击镜头跟随（手动转动镜头会退出导播，hooks.onDirector）。
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
-import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS, SHIP_TIME } from './sim-ships.js?v=v19';
-import { createFx } from './sim-fx.js?v=v36';
-import { createCelestials, sunLight } from './sim-cel.js?v=15';
-import { createWarpTunnel } from './sim-warp.js?v=4';
+import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS, SHIP_TIME } from './sim-ships.js?v=v20';
+import { createFx } from './sim-fx.js?v=v37';
+import { createCelestials, sunLight } from './sim-cel.js?v=16';
+import { createWarpTunnel } from './sim-warp.js?v=5';
 import { createFlare } from './sim-flare.js?v=3';
-import { createEnvFx } from './sim-env.js?v=4';
+import { createEnvFx } from './sim-env.js?v=5';
 import { createSSAO, SSAO_LAYER, SHIP_AO } from './sim-ssao.js?v=1';
-import { updateShipLights, clearShipLights, SHIP_LIGHTS } from './sim-lights.js?v=6';
+import { updateShipLights, clearShipLights, SHIP_LIGHTS } from './sim-lights.js?v=7';
 import { createReflection } from './sim-reflect.js?v=1';
-import { createJumpFx, createJumpSequence, createShaker, shakeBehavior, linearCurve } from './sim-jump.js?v=2';
-import { createStarfield, starCount } from './sim-stars.js?v=1';
-import { createDustfield } from './sim-dust.js?v=1';
-import { createSecondaryLighting, shIntensity } from './sim-shl.js?v=1';
+import { createJumpFx, createJumpSequence, createShaker, shakeBehavior, linearCurve } from './sim-jump.js?v=3';
+import { createStarfield, starCount } from './sim-stars.js?v=2';
+import { createDustfield } from './sim-dust.js?v=2';
+import { createSecondaryLighting, shIntensity } from './sim-shl.js?v=2';
 
 const WRECK = new THREE.Color(0x8a9099);
 const WHITE = new THREE.Color(1, 1, 1), OWN_COL = new THREE.Color(0.7, 0.7, 0.7);

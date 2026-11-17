@@ -7,7 +7,7 @@
 //   这里按天体名字 + typeID 做种子取一个固定的偏航角，俯仰、滚转取 0（推断）。
 //   客户端还有一份「永远朝向恒星」的类型表（TYPES_THAT_ALWAYS_FACE_THE_SUN），本地拿不到内容，没有照做。
 import * as THREE from './vendor/three/three.module.min.js';
-import { loadShipIndex } from './sim-ships.js?v=v19';
+import { loadShipIndex } from './sim-ships.js?v=v20';
 
 const KM = 1 / 1000;
 const SHOW = 10000;   // 千米：客户端远裁剪面

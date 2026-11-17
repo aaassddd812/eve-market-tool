@@ -12,7 +12,7 @@
 //   柔光 / 星芒 / 光环用游戏的粒子贴图，火球和爆炸按游戏的 9 × 9 帧爆炸序列逐帧播放，光束横截面用游戏的光束贴图。
 //   贴图加载完之前（或加载失败）用程序画的图集。ready() 告诉调用方贴图是否已就绪（加载失败也算就绪）。
 import * as THREE from './vendor/three/three.module.min.js';
-import { createClientFx } from './sim-cfx.js?v=v8';
+import { createClientFx } from './sim-cfx.js?v=v9';
 
 const KM = 1 / 1000;
 const SIZE_M = [0, 1, 2, 4, 10];                 // 武器尺寸（小 / 中 / 大 / 超大）→ 宽度倍数

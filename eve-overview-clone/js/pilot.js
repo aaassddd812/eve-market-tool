@@ -10,10 +10,10 @@
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
 import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v43';
-import { loadShipIndex } from './sim-ships.js?v=v19';
-import { warpShake } from './sim-warp.js?v=4';
+import { loadShipIndex } from './sim-ships.js?v=v20';
+import { warpShake } from './sim-warp.js?v=5';
 import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v11';
-import { bindUnit, pilotUnit } from './sim-unit.js?v=v9';
+import { bindUnit, pilotUnit } from './sim-unit.js?v=v10';
 import { buildMatch, stepMatch } from './match-sim.js?v=v11';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
@@ -1224,7 +1224,7 @@ function renderStage() {
   FL.renderFleet(true);
   SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v94').then((m) => {
+  import('./sim-3d.js?v=v95').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {

@@ -12,7 +12,7 @@
 import { commonFit } from './fit-kb.js?v=v30';
 import { createBattle, simulate } from './sim-engine.js?v=v43';
 import { initAt, openAt, loadAtData } from './sim-at.js?v=v1';
-import { bindUnit, buildUnit, pilotUnit, forcedOff, BURSTS, BURST_MULT, mean } from './sim-unit.js?v=v9';
+import { bindUnit, buildUnit, pilotUnit, forcedOff, BURSTS, BURST_MULT, mean } from './sim-unit.js?v=v10';
 import * as NE from './native-engine.js?v=v2';
 
 let ctx;   // data, FE, getFit, savedFits, parseEft, normalize, esc, formatNumber, formatISK, showToast, store, hasEsi, esiFits, openInFitting
@@ -540,7 +540,7 @@ function mountView(host) {
   host.classList.remove('is-off');
   host.closest('.sim-stage')?.classList.remove('is-off');
   loadBar(0, 0);
-  import('./sim-3d.js?v=v94').then((m) => {
+  import('./sim-3d.js?v=v95').then((m) => {
     if (BT.host !== host || !host.isConnected) return;
     BT.view = m.createView(host, {
       onPick: (i) => { BT.sel = i; updateBattleUi(); },
