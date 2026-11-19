@@ -7,11 +7,15 @@
 // 净利润再减去同期实际缴纳的税费。只买没卖（囤货）或只卖没买（卖资产）的部分不计入配对利润。
 // 自填成本（本机，按角色）：自己造的、很早以前买的东西没有买入记录，可以给物品填每件成本，
 //   填了就按「卖出量 × (卖出均价 − 成本)」算这个物品的利润（替代配对）。
+// 默认成本（用户工单：默认买入价 = 收单价 × 95%，比例可改）：只卖出、没有买入记录、也没自填成本的物品，按默认交易中心（吉他海4；
+//   曙光服索巴色基）现在的最高收购价 × 比例算每件成本，和市场中心同一份价格（交易中心价格缓存，1 小时内的）。
+//   ESI 没有过去某天的收购价，所以不分哪天卖的都按现在的价。设置存本机（eve-trade-defcost { on, pct }），默认开、95%。
 // 每日现金流：成交明细按本地日期汇总每天卖出额、买入额，减去当天实缴税费得净现金流。
 import { skCards, skToolbar, skRows } from './skeleton.js?v=v18';
+import { SERVER } from './server.js?v=s4';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
-           // resolveStructureNames, locationName, gameImage, valuationCard, tokenInfo, hasScope, selectItem, isActive
+           // resolveStructureNames, locationName, gameImage, valuationCard, tokenInfo, hasScope, selectItem, isActive, getJitaPrices
 const S = { id: null, data: null, loading: null, view: 'items', q: '', sort: 'profit', dir: 'desc', matchedOnly: false, side: 'all' };   // 点表头排序，同一列再点换方向；side：成交明细 / 历史订单按买入 / 卖出筛选
 const sideOk = (isBuy) => S.side === 'all' || (S.side === 'buy') === !!isBuy;
 const ROW_LIMIT = 300;
@@ -25,6 +29,33 @@ function setCost(id, v) {
   if (v > 0) mine[id] = v; else delete mine[id];
   all[S.id] = mine;
   try { localStorage.setItem(COST_KEY, JSON.stringify(all)); } catch { /* 存不了就只在这次有效 */ }
+}
+
+const DEF_KEY = 'eve-trade-defcost';
+function defSet() {
+  let v = {};
+  try { v = JSON.parse(localStorage.getItem(DEF_KEY)) || {}; } catch { /* 用默认 */ }
+  const pct = Number(v.pct);
+  return { on: v.on !== false, pct: pct >= 1 && pct <= 200 ? pct : 95 };
+}
+function saveDef(patch) {
+  try { localStorage.setItem(DEF_KEY, JSON.stringify({ ...defSet(), ...patch })); } catch { /* 存不了就只在这次有效 */ }
+}
+const HUB = SERVER.regions[0];
+const P = { buy: new Map(), tried: new Set(), loading: null };   // 默认交易中心现在的最高收购价
+// 要默认成本的物品：只卖出、没买入、没自填成本
+const needDef = (r, own) => r.sellQty > 0 && !r.buyQty && !own[r.id];
+// 读这些物品的收购价，读完重画（每个物品只试一次，刷新时重来）
+function ensureDefPrices(box, items) {
+  if (!defSet().on || P.loading || !ctx.getJitaPrices) return;
+  const own = costs();
+  const ids = items.filter((r) => needDef(r, own) && !P.tried.has(r.id)).map((r) => r.id);
+  if (!ids.length) return;
+  ids.forEach((id) => P.tried.add(id));
+  P.loading = ctx.getJitaPrices(ids, null, { maxAge: 3600e3 })
+    .then((m) => { for (const [id, v] of m) if (v.buy > 0) P.buy.set(id, v.buy); })
+    .catch(() => {})
+    .finally(() => { P.loading = null; if (ctx.isActive() && S.data) render(box, S.data); });
 }
 
 export function initTrades(context) {
@@ -75,12 +106,18 @@ function summarize(data) {
     else { r.sellQty += t.quantity; r.sellIsk += isk; sellIsk += isk; sellN += 1; }
   }
   const own = costs();
+  const def = defSet();
+  let defN = 0;
   for (const r of byType.values()) {
     r.avgBuy = r.buyQty ? r.buyIsk / r.buyQty : null;
     r.avgSell = r.sellQty ? r.sellIsk / r.sellQty : null;
     r.cost = own[r.id] || null;
-    r.matched = r.cost && r.sellQty ? r.sellQty : Math.min(r.buyQty, r.sellQty);
-    const base = r.cost || r.avgBuy;
+    r.hubBuy = def.on && needDef(r, own) ? P.buy.get(r.id) || null : null;
+    r.defCost = r.hubBuy ? r.hubBuy * def.pct / 100 : null;
+    if (r.defCost) defN += 1;
+    const fixed = r.cost || r.defCost;
+    r.matched = fixed && r.sellQty ? r.sellQty : Math.min(r.buyQty, r.sellQty);
+    const base = fixed || r.avgBuy;
     r.profit = r.matched ? r.matched * (r.avgSell - base) : null;
     r.margin = r.matched && base ? (r.avgSell - base) / base : null;
   }
@@ -94,7 +131,7 @@ function summarize(data) {
   }
   const items = [...byType.values()];
   const profit = items.reduce((t, r) => t + (r.profit || 0), 0);
-  return { items, buyIsk, sellIsk, buyN, sellN, tax, broker, profit, since };
+  return { items, buyIsk, sellIsk, buyN, sellN, tax, broker, profit, since, defN, def };
 }
 
 const typeName = (data, id) => data.types.get(Number(id)) || 'Type ' + id;
@@ -135,9 +172,9 @@ function itemsTable(data, sum) {
       ${th('name', '物品')}${th('buy', '买入')}${th('sell', '卖出')}${th('profit', '配对利润')}${th('margin', '毛利率')}${th('volume', '成交额')}${th('recent', '最近成交')}
     </tr></thead><tbody>${list.slice(0, ROW_LIMIT).map((r) => `<tr>
       <td>${itemCell(data, r.id)}</td>
-      <td>${r.buyQty ? formatNumber(r.buyQty) + ' × ' + formatPrice(r.avgBuy) : '<span class="muted-cell">—</span>'}${r.sellQty ? `<button type="button" class="link-btn cell-sub" data-trade-cost="${r.id}" title="自己造的或以前买的，填每件成本来算利润">${r.cost ? '成本 ' + formatPrice(r.cost) : '填成本'}</button>` : ''}</td>
+      <td>${r.buyQty ? formatNumber(r.buyQty) + ' × ' + formatPrice(r.avgBuy) : '<span class="muted-cell">—</span>'}${r.sellQty ? `<button type="button" class="link-btn cell-sub" data-trade-cost="${r.id}" title="${r.defCost && !r.cost ? `没有买入记录：按${esc(HUB.hub.name)}最高收购价 ${formatPrice(r.hubBuy)} × ${sum.def.pct}% 估算；点击填自己的成本` : '自己造的或以前买的，填每件成本来算利润'}">${r.cost ? '成本 ' + formatPrice(r.cost) : r.defCost ? '默认成本 ' + formatPrice(r.defCost) : '填成本'}</button>` : ''}</td>
       <td>${r.sellQty ? formatNumber(r.sellQty) + ' × ' + formatPrice(r.avgSell) : '<span class="muted-cell">—</span>'}</td>
-      <td>${r.profit == null ? '<span class="muted-cell">' + (r.buyQty ? '只买入' : '只卖出') + '</span>' : signed(r.profit) + (r.cost ? '<span class="cell-sub">按填的成本</span>' : r.matched < Math.max(r.buyQty, r.sellQty) ? `<span class="cell-sub">配对 ${formatNumber(r.matched)} 件</span>` : '')}</td>
+      <td>${r.profit == null ? '<span class="muted-cell">' + (r.buyQty ? '只买入' : '只卖出') + '</span>' : signed(r.profit) + (r.cost ? '<span class="cell-sub">按填的成本</span>' : r.defCost ? '<span class="cell-sub">按默认成本</span>' : r.matched < Math.max(r.buyQty, r.sellQty) ? `<span class="cell-sub">配对 ${formatNumber(r.matched)} 件</span>` : '')}</td>
       <td>${r.margin == null ? '<span class="muted-cell">—</span>' : `<span class="${r.margin >= 0 ? 'up' : 'down'}">${(r.margin * 100).toFixed(1)}%</span>`}</td>
       <td>${formatISK(r.buyIsk + r.sellIsk)}</td>
       <td>${esc(fmtTime(r.last))}</td></tr>`).join('')}</tbody></table></div>` +
@@ -220,6 +257,7 @@ const bodyHtml = (data, sum) => (S.view === 'tx' ? txTable(data) : S.view === 'o
 function render(box, data) {
   const { esc, formatISK, formatNumber, valuationCard } = ctx;
   const sum = summarize(data);
+  ensureDefPrices(box, sum.items);   // 先发请求，这次画出来就带「正在读取收购价」
   const fees = sum.tax + sum.broker;
   const days = Math.max(1, Math.round((Date.now() - sum.since) / 86400e3));
   const views = [['items', '物品盈亏', sum.items.length], ['days', '每日现金流', null], ['tx', '成交明细', data.transactions.length], ['orders', '历史订单', data.orders.length]];
@@ -228,7 +266,7 @@ function render(box, data) {
       valuationCard('买入总额', formatISK(sum.buyIsk) + ' ISK', formatNumber(sum.buyN) + ' 笔成交', 'is-sell') +
       valuationCard('卖出总额', formatISK(sum.sellIsk) + ' ISK', formatNumber(sum.sellN) + ' 笔成交', 'is-buy') +
       valuationCard('已缴税费', formatISK(fees) + ' ISK', '销售税 ' + formatISK(sum.tax) + ' · 中介费 ' + formatISK(sum.broker)) +
-      valuationCard('配对利润', (sum.profit >= 0 ? '' : '−') + formatISK(Math.abs(sum.profit)) + ' ISK', '', sum.profit >= 0 ? 'is-buy' : 'is-sell') +
+      valuationCard('配对利润', (sum.profit >= 0 ? '' : '−') + formatISK(Math.abs(sum.profit)) + ' ISK', sum.defN ? `含 ${sum.defN} 种按默认成本` : '', sum.profit >= 0 ? 'is-buy' : 'is-sell') +
       valuationCard('扣税费后', (sum.profit - fees >= 0 ? '' : '−') + formatISK(Math.abs(sum.profit - fees)) + ' ISK', '', 'is-total') +
     '</div>' +
     '<div class="valuation-toolbar section-gap">' +
@@ -237,7 +275,9 @@ function render(box, data) {
       '</div>' +
       (S.view === 'days' ? '' : '<div class="station-filter search-box trade-filter"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>' +
         `<input type="search" data-trade-q placeholder="筛选物品" autocomplete="off" aria-label="筛选物品" value="${esc(S.q)}"></div>`) +
-      (S.view === 'items' ? `<label class="bz-check"><input type="checkbox" data-trade-matched${S.matchedOnly ? ' checked' : ''}>只看有配对利润</label>` : '') +
+      (S.view === 'items' ? `<label class="bz-check"><input type="checkbox" data-trade-matched${S.matchedOnly ? ' checked' : ''}>只看有配对利润</label>` +
+        `<span class="trade-def" title="没有买入记录、也没填成本的物品，按${esc(HUB.hub.name)}现在的最高收购价 × 这个比例算每件成本"><label class="bz-check"><input type="checkbox" data-trade-def${sum.def.on ? ' checked' : ''}>默认成本：收购价 ×</label>` +
+        `<input type="number" class="pi-input" data-trade-pct min="1" max="200" step="1" value="${sum.def.pct}" aria-label="默认成本比例"${sum.def.on ? '' : ' disabled'}>%${P.loading ? '<small>正在读取收购价…</small>' : ''}</span>` : '') +
       (S.view === 'tx' || S.view === 'orders' ? '<div class="segmented" role="group" aria-label="买卖方向">' +
         [['all', '全部'], ['buy', '买入'], ['sell', '卖出']].map(([v, l]) => `<button type="button" data-trade-side="${v}" class="${S.side === v ? 'active' : ''}">${l}</button>`).join('') + '</div>' : '') +
       '<span class="toolbar-spacer"></span>' +
@@ -271,7 +311,7 @@ function bind(box) {
     }
     const type = e.target.closest('[data-trade-type]');
     if (type) { ctx.selectItem(Number(type.dataset.tradeType)); return; }
-    if (e.target.closest('[data-trade-reload]')) renderTrades(box, true);
+    if (e.target.closest('[data-trade-reload]')) { P.tried.clear(); P.buy.clear(); renderTrades(box, true); }
   });
   // 填成本：回车或离开输入框就保存（清空 = 删除），重画
   const saveCost = (inp) => { if (!inp.isConnected) return; setCost(Number(inp.dataset.tradeCostIn), Number(inp.value) || 0); render(box, S.data); };
@@ -285,9 +325,14 @@ function bind(box) {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('th[data-trade-sort]')) { e.preventDefault(); sortBy(box, e.target.dataset.tradeSort); }
   });
   box.addEventListener('change', (e) => {
-    if (!ctx.isActive() || !S.data || !e.target.matches('[data-trade-matched]')) return;
-    S.matchedOnly = e.target.checked;
-    render(box, S.data);
+    if (!ctx.isActive() || !S.data) return;
+    if (e.target.matches('[data-trade-matched]')) { S.matchedOnly = e.target.checked; render(box, S.data); return; }
+    if (e.target.matches('[data-trade-def]')) { saveDef({ on: e.target.checked }); render(box, S.data); return; }
+    if (e.target.matches('[data-trade-pct]')) {
+      const v = Math.round(Number(e.target.value));
+      if (v >= 1 && v <= 200) saveDef({ pct: v });
+      render(box, S.data);
+    }
   });
   box.addEventListener('input', (e) => {
     if (!ctx.isActive() || !S.data || !e.target.matches('[data-trade-q]')) return;

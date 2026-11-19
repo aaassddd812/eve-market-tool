@@ -4977,6 +4977,10 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .trade-item img { width: 20px; height: 20px; border-radius: 3px; flex: none; }
 .trade-loc { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .trade-filter { width: 200px; margin: 0; }
+.trade-def { display: inline-flex; align-items: center; gap: 2px; font-size: 0.8125rem; color: var(--text-secondary); }
+.trade-def .bz-check { padding-right: 4px; }
+.trade-def .pi-input { width: 60px; height: 30px; padding: 0 6px; }
+.trade-def small { margin-left: 6px; color: var(--text-muted); }
 .empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 12px; }
 .tf-modal .cr-fields .cr-input[data-tf-hub], .ap-rp .cr-fields .cr-input[data-tf-hub] { width: 260px; max-width: 70%; text-align: left; }
 
@@ -5303,6 +5307,12 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .ka-badge.loss { background: var(--danger); }
 .ka-card.watch { border-color: var(--accent-primary); box-shadow: 0 8px 28px color-mix(in srgb, var(--accent-primary) 35%, transparent); }
 .ka-card.watch .ka-head { color: var(--accent-primary); }
+/* 高价值播报（kill-alert.js bigCard）：金色填充卡片，不闪红边、不跳动 */
+.ka-card.big { border-color: transparent; background: color-mix(in srgb, #f5b301 14%, var(--bg-secondary)); box-shadow: 0 8px 28px rgba(245, 179, 1, 0.28); animation: ka-in 0.25s ease-out; }
+.ka-card.big .ka-head { color: #d99a00; }
+.ka-badge.big { background: #d99a00; }
+.ka-big-v { margin-left: auto; font-size: 0.9375rem; color: var(--text-primary); white-space: nowrap; }
+.ka-card.big .ka-close { margin-left: 0; }
 
 /* 势力战争 · 刷新倒计时 */
 .fw-refresh { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 22px; margin-bottom: 14px; padding: 10px 14px; border: 1px solid var(--border-primary); border-radius: var(--radius-md, 8px); background: var(--bg-secondary); font-size: 0.8125rem; }
@@ -8039,54 +8049,55 @@ td .sov-auto-tag { margin-left: 4px; }
   .sim-battle:fullscreen .sim-bt-pop { top: 84px; max-height: calc(100% - 210px); }
 }
 
-/* ===== 桌面版（html.is-desktop）：菜单栏在左侧竖排，底部是工具按钮，可收起成只留图标 ===== */
-html.is-desktop .header-actions > .hm { display: flex; min-width: 0; }
-html.is-desktop .header-actions > .hm > .hm-dots { width: 100%; height: 36px; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-secondary); }
-html.is-desktop .header-actions > .hm > .hm-dots:hover, html.is-desktop .header-actions > .hm.open > .hm-dots { background: var(--bg-hover); color: var(--text-primary); }
-html.is-desktop.rail-mini .header-actions > .hm > .hm-dots { height: 34px; }
-html.is-desktop { --header-h: 0px; --rail-w: 212px; }
-html.is-desktop.rail-mini { --rail-w: 64px; }
-html.is-desktop .app-shell { flex-direction: row; }
-html.is-desktop .app-body { min-width: 0; }   /* 左右排时主区域不能被里面最宽的内容撑开（否则窗口窄时右边的内容被截掉） */
-html.is-desktop .app-header { width: var(--rail-w); height: auto; flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 10px 10px; border-bottom: 0; border-right: 1px solid var(--border-primary); transition: width var(--transition-fast); }
-html.is-desktop .header-brand { padding: 2px 6px 4px; }
-html.is-desktop .app-header .header-brand .brand-name { display: inline; }
-html.is-desktop .header-nav { flex-direction: column; gap: 1px; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; margin: 0 -4px; padding: 0 4px; }
-html.is-desktop .app-header .nav-btn { width: 100%; height: 34px; padding: 0 12px; gap: 12px; }
-html.is-desktop .app-header .nav-btn span { display: inline; overflow: hidden; text-overflow: ellipsis; }
-html.is-desktop .header-actions { flex: none; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; padding-top: 10px; border-top: 1px solid var(--border-primary); }
-html.is-desktop .server-switch { grid-column: 1 / -1; }
+/* ===== 桌面版（html.is-desktop）：菜单栏默认在左侧竖排（html.desk-rail），底部是工具按钮，可收起成只留图标；个性化设置可改回顶部（和网页版一样，不加 desk-rail）===== */
+html.desk-rail .header-actions > .hm { display: flex; min-width: 0; }
+html.desk-rail .header-actions > .hm > .hm-dots { width: 100%; height: 36px; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-secondary); }
+html.desk-rail .header-actions > .hm > .hm-dots:hover, html.desk-rail .header-actions > .hm.open > .hm-dots { background: var(--bg-hover); color: var(--text-primary); }
+html.desk-rail.rail-mini .header-actions > .hm > .hm-dots { height: 34px; }
+html.desk-rail { --header-h: 0px; --rail-w: 212px; }
+html.desk-rail.rail-mini { --rail-w: 64px; }
+html.desk-rail .app-shell { flex-direction: row; }
+html.desk-rail .app-body { min-width: 0; }   /* 左右排时主区域不能被里面最宽的内容撑开（否则窗口窄时右边的内容被截掉） */
+html.desk-rail .app-header { width: var(--rail-w); height: auto; flex-direction: column; align-items: stretch; gap: 12px; padding: 14px 10px 10px; border-bottom: 0; border-right: 1px solid var(--border-primary); transition: width var(--transition-fast); }
+html.desk-rail .header-brand { padding: 2px 6px 4px; }
+html.desk-rail .app-header .header-brand .brand-name { display: inline; }
+html.desk-rail .header-nav { flex-direction: column; gap: 1px; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; margin: 0 -4px; padding: 0 4px; }
+html.desk-rail .app-header .nav-btn { width: 100%; height: 34px; padding: 0 12px; gap: 12px; }
+html.desk-rail .app-header .nav-btn span { display: inline; overflow: hidden; text-overflow: ellipsis; }
+html.desk-rail .header-actions { flex: none; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; padding-top: 10px; border-top: 1px solid var(--border-primary); }
+html.desk-rail .server-switch { grid-column: 1 / -1; }
 /* 底部工具按钮：四列等宽的圆角方块，样式统一（API、联系作者不再单独描边 / 着色） */
-html.is-desktop .header-actions > .icon-btn { width: auto; height: 36px; padding: 0; gap: 0; border: 0; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.8125rem; font-weight: 600; letter-spacing: 0; }
-html.is-desktop .header-actions > .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
-html.is-desktop .header-actions > .icon-btn svg { width: 18px; height: 18px; }
-html.is-desktop .header-actions > .icon-btn.contact-btn { color: var(--accent-primary); }
-html.is-desktop .server-status { width: 100%; min-width: 0; overflow: hidden; }
-html.is-desktop .server-status .status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-html.is-desktop .app-header .server-status .status-text { display: inline; }
-html.is-desktop .server-menu { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
-html.is-desktop .icon-btn.api-link span, html.is-desktop .contact-btn span { display: none; }
-html.is-desktop .hm-box .icon-btn.api-link .hm-label, html.is-desktop .hm-box .contact-btn .hm-label { display: inline; }
-html.is-desktop .desktop-dl-btn, html.is-desktop .menu-btn { display: none !important; }
+html.desk-rail .header-actions > .icon-btn { width: auto; height: 36px; padding: 0; gap: 0; border: 0; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-secondary); font-size: 0.8125rem; font-weight: 600; letter-spacing: 0; }
+html.desk-rail .header-actions > .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+html.desk-rail .header-actions > .icon-btn svg { width: 18px; height: 18px; }
+html.desk-rail .header-actions > .icon-btn.contact-btn { color: var(--accent-primary); }
+html.desk-rail .server-status { width: 100%; min-width: 0; overflow: hidden; }
+html.desk-rail .server-status .status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.desk-rail .app-header .server-status .status-text { display: inline; }
+html.desk-rail .server-menu { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
+html.desk-rail .icon-btn.api-link span, html.desk-rail .contact-btn span { display: none; }
+html.desk-rail .hm-box .icon-btn.api-link .hm-label, html.desk-rail .hm-box .contact-btn .hm-label { display: inline; }
+html.is-desktop .desktop-dl-btn, html.desk-rail .menu-btn { display: none !important; }
 /* 检查更新：一整行，右边是当前版本号；检查时图标转圈 */
-html.is-desktop .header-actions > .icon-btn.rail-update { grid-column: 1 / -1; justify-content: flex-start; gap: 8px; padding: 0 12px; }
-html.is-desktop .rail-update span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-html.is-desktop .rail-update small { margin-left: auto; flex: none; color: var(--text-muted); font-weight: 500; }
+html.desk-rail .header-actions > .icon-btn.rail-update { grid-column: 1 / -1; justify-content: flex-start; gap: 8px; padding: 0 12px; }
+html.desk-rail .rail-update span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.desk-rail .rail-update small { margin-left: auto; flex: none; color: var(--text-muted); font-weight: 500; }
 html.is-desktop .rail-update.busy svg { animation: rail-spin 0.9s linear infinite; }
+html.is-desktop:not(.desk-rail) .rail-update span, html.is-desktop:not(.desk-rail) .rail-update small { display: none; }   /* 菜单栏在顶部时只留图标，版本号在悬停提示里 */
 @keyframes rail-spin { to { transform: rotate(360deg); } }
-html.is-desktop.rail-mini .header-actions > .icon-btn.rail-update { justify-content: center; padding: 0; }
-html.is-desktop.rail-mini .rail-update span, html.is-desktop.rail-mini .rail-update small { display: none; }
-html.is-desktop.rail-mini .app-header { padding: 14px 8px 10px; }
-html.is-desktop.rail-mini .app-header .header-brand .brand-name,
-html.is-desktop.rail-mini .app-header .nav-btn span,
-html.is-desktop.rail-mini .server-status .server-name,
-html.is-desktop.rail-mini .app-header .server-status .status-text,
-html.is-desktop.rail-mini .server-status .server-caret { display: none; }
-html.is-desktop.rail-mini .header-brand { justify-content: center; padding: 2px 0 4px; }
-html.is-desktop.rail-mini .app-header .nav-btn { justify-content: center; padding: 0; }
-html.is-desktop.rail-mini .header-actions { grid-template-columns: 1fr; gap: 4px; }
-html.is-desktop.rail-mini .header-actions > .icon-btn { height: 34px; }
-html.is-desktop.rail-mini .server-status { width: 100%; padding: 0; justify-content: center; }
+html.desk-rail.rail-mini .header-actions > .icon-btn.rail-update { justify-content: center; padding: 0; }
+html.desk-rail.rail-mini .rail-update span, html.desk-rail.rail-mini .rail-update small { display: none; }
+html.desk-rail.rail-mini .app-header { padding: 14px 8px 10px; }
+html.desk-rail.rail-mini .app-header .header-brand .brand-name,
+html.desk-rail.rail-mini .app-header .nav-btn span,
+html.desk-rail.rail-mini .server-status .server-name,
+html.desk-rail.rail-mini .app-header .server-status .status-text,
+html.desk-rail.rail-mini .server-status .server-caret { display: none; }
+html.desk-rail.rail-mini .header-brand { justify-content: center; padding: 2px 0 4px; }
+html.desk-rail.rail-mini .app-header .nav-btn { justify-content: center; padding: 0; }
+html.desk-rail.rail-mini .header-actions { grid-template-columns: 1fr; gap: 4px; }
+html.desk-rail.rail-mini .header-actions > .icon-btn { height: 34px; }
+html.desk-rail.rail-mini .server-status { width: 100%; padding: 0; justify-content: center; }
 
 /* 下载弹窗：只列下载项 */
 .desktop-content { max-width: 420px; }
@@ -8100,8 +8111,8 @@ html.is-desktop.rail-mini .server-status { width: 100%; padding: 0; justify-cont
 .dl-item small { font-size: 0.75rem; color: var(--text-muted); }
 .dl-mirror { align-self: flex-end; font-size: 0.75rem; color: var(--text-muted); }
 .dl-mirror:hover { color: var(--accent-primary); }
-html.is-desktop .header-nav::-webkit-scrollbar { display: block; width: 6px; }
-html.is-desktop .header-nav::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--border-primary); }
+html.desk-rail .header-nav::-webkit-scrollbar { display: block; width: 6px; }
+html.desk-rail .header-nav::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--border-primary); }
 /* 桌面版左侧菜单分组 */
 .rail-group { display: flex; flex-direction: column; gap: 1px; }
 .rail-group + .rail-group { margin-top: 8px; }
@@ -9133,17 +9144,17 @@ html[data-skin="eve"]:not([data-theme="light"]) .search-box input:focus { backgr
 /* 顶栏：更深的底色，导航字更大，选中项是顶部一条青蓝色横线（不再是底色块） */
 html[data-skin="eve"]:not([data-theme="light"]) .app-header, html[data-skin="eve"]:not([data-theme="light"]) .mobile-tabbar { background: #111315; }
 @media (min-width: 769px) {
-  html[data-skin="eve"]:not(.is-desktop) { --header-h: 64px; }
-  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn,
-  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn-more { position: relative; height: 64px; border-radius: 0; font-size: 0.9375rem; background: none; }
-  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn:hover,
-  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn-more:hover { background: var(--bg-hover); }
-  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn.active,
-  html[data-skin="eve"]:not(.is-desktop) .nav-more:has(.nav-btn.active) > .nav-btn-more { background: none; color: var(--text-primary); }
-  html[data-skin="eve"]:not(.is-desktop) .app-header .nav-btn.active::before,
-  html[data-skin="eve"]:not(.is-desktop) .nav-more:has(.nav-btn.active) > .nav-btn-more::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--accent-primary); }
-  html[data-skin="eve"]:not(.is-desktop) .app-header .hm-items .nav-btn { height: 36px; }
-  html[data-skin="eve"]:not(.is-desktop) .app-header .hm-items .nav-btn.active::before { top: 6px; bottom: 6px; right: auto; width: 3px; height: auto; }
+  html[data-skin="eve"]:not(.desk-rail) { --header-h: 64px; }
+  html[data-skin="eve"]:not(.desk-rail) .app-header .nav-btn,
+  html[data-skin="eve"]:not(.desk-rail) .app-header .nav-btn-more { position: relative; height: 64px; border-radius: 0; font-size: 0.9375rem; background: none; }
+  html[data-skin="eve"]:not(.desk-rail) .app-header .nav-btn:hover,
+  html[data-skin="eve"]:not(.desk-rail) .app-header .nav-btn-more:hover { background: var(--bg-hover); }
+  html[data-skin="eve"]:not(.desk-rail) .app-header .nav-btn.active,
+  html[data-skin="eve"]:not(.desk-rail) .nav-more:has(.nav-btn.active) > .nav-btn-more { background: none; color: var(--text-primary); }
+  html[data-skin="eve"]:not(.desk-rail) .app-header .nav-btn.active::before,
+  html[data-skin="eve"]:not(.desk-rail) .nav-more:has(.nav-btn.active) > .nav-btn-more::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--accent-primary); }
+  html[data-skin="eve"]:not(.desk-rail) .app-header .hm-items .nav-btn { height: 36px; }
+  html[data-skin="eve"]:not(.desk-rail) .app-header .hm-items .nav-btn.active::before { top: 6px; bottom: 6px; right: auto; width: 3px; height: auto; }
 }
 /* 主按钮：实心青蓝 */
 html[data-skin="eve"]:not([data-theme="light"]) .btn-primary { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; }

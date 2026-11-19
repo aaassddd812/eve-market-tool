@@ -51,9 +51,11 @@ FUNCS = {'ItemModifier': 0, 'LocationModifier': 1, 'LocationGroupModifier': 2,
          'LocationRequiredSkillModifier': 3, 'OwnerRequiredSkillModifier': 4}
 DOMAINS = {'itemID': 0, 'shipID': 1, 'charID': 2, 'otherID': 3, 'structureID': 4, 'targetID': 5, 'target': 5}
 BASE_FIELDS = {'mass': 4, 'capacity': 38, 'volume': 161, 'radius': 162}
-# 限定可装配舰船的属性（canFitShipGroup01… / canFitShipType1…，与 fit-engine.js 的 AT.canFitShipGroup / canFitShipType 相同）
+# 限定可装配舰船的属性（canFitShipGroup01… / canFitShipType1…）；另按属性名认（CAN_FIT_RE），
+# 国服有宁静服没有的编号，如 5405 canFitShipType20（大型压缩装置靠它允许抹香鲸级装配）；fit-engine.js 同样按属性名认
 CAN_FIT = {1298, 1299, 1300, 1301, 1872, 1879, 1880, 1881, 2065, 2396, 2476, 2477, 2478, 2479, 2480, 2481, 2482, 2483, 2484, 2485,
-           1302, 1303, 1304, 1305, 1944, 2103, 2463, 2486, 2487, 2488, 2758}
+           1302, 1303, 1304, 1305, 1944, 2103, 2463, 2486, 2487, 2488, 2758, 5948}
+CAN_FIT_RE = re.compile(r'^canFitShip(Group|Type)\d+$')
 SKILL_ATTRS = {'rank': 275, 'pri': 180, 'sec': 181}
 ADAPT_GROUPS = {4160, 4196}   # 舰船适性、云计算（曙光）
 CLOUD_GROUP = 4196
@@ -517,12 +519,22 @@ def build(ds, sde, tq_ids):
         if changed or sorted(effs) != sorted(old[6]):
             patch[t] = [changed, effs if sorted(effs) != sorted(old[6]) else None]
     # 宁静服也有、限定舰船的装备：国服常把独有舰船加进可装配名单（如 ★提亚玛特级能装重型熵能分解者），只补这几项属性
-    can_fit_ids = sorted(int(k) for k, v in fit['types'].items() if fit['groups'].get(str(v[2]), [0, 0])[1] != 6 and any(str(x) in v[5] for x in CAN_FIT))
-    for t, d in zip(can_fit_ids, cache.many([f'{CN}/universe/types/{t}/?{q}&language=zh' for t in can_fit_ids])):
+    can_fit = CAN_FIT | {int(k) for k, v in fit['attrs'].items() if CAN_FIT_RE.match(v[3] if len(v) > 3 else '')}
+    can_fit_ids = sorted(int(k) for k, v in fit['types'].items() if fit['groups'].get(str(v[2]), [0, 0])[1] != 6 and any(str(x) in v[5] for x in can_fit))
+    can_fit_cn = list(zip(can_fit_ids, cache.many([f'{CN}/universe/types/{t}/?{q}&language=zh' for t in can_fit_ids])))
+    # 国服独有的可装配属性编号：读属性定义，按名字认出来，定义一并写进 fit.attrs（前端按名字识别）
+    unknown = sorted({x['attribute_id'] for _, d in can_fit_cn if d for x in d.get('dogma_attributes', [])}
+                     - {int(k) for k in fit['attrs']} - set(out_attrs) - can_fit)
+    for a, v in zip(unknown, cache.many([f'{CN}/dogma/attributes/{a}/?{q}' for a in unknown])):
+        if v and CAN_FIT_RE.match(v.get('name', '')):
+            can_fit.add(a)
+            out_attrs[a] = [num(v.get('default_value', 0)), 1 if v.get('stackable', True) else 0, 1 if v.get('high_is_good', True) else 0, v['name']]
+    can_fit |= {a for a, v in out_attrs.items() if CAN_FIT_RE.match(v[3])}
+    for t, d in can_fit_cn:
         if not d:
             continue
         old = fit['types'][str(t)][5]
-        a = {str(x['attribute_id']): num(x['value']) for x in d.get('dogma_attributes', []) if x['attribute_id'] in CAN_FIT}
+        a = {str(x['attribute_id']): num(x['value']) for x in d.get('dogma_attributes', []) if x['attribute_id'] in can_fit}
         changed = {k: v for k, v in sorted(a.items(), key=lambda kv: int(kv[0])) if old.get(k) != v}
         if changed:
             patch[t] = [changed, None]

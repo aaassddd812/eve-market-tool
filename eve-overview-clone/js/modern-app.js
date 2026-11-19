@@ -333,6 +333,8 @@ document.addEventListener('input', (e) => { if (e.isComposing || window.__imeCom
 
 // ===== 视图切换 =====
 const IS_DESKTOP = document.documentElement.classList.contains('is-desktop');
+// 桌面版菜单栏在左侧竖排（index-v2.html 头部脚本加 desk-rail）；个性化设置「桌面版菜单栏放在顶部」时不加，和网页版一样
+const DESK_RAIL = document.documentElement.classList.contains('desk-rail');
 let fitNav = () => {};   // initNavigation 里赋值：重新计算顶栏哪些入口只留图标
 function syncNavActive() {
   const arb = state.currentView === 'market' && !$('arbView').hidden;
@@ -367,8 +369,9 @@ function initNavigation() {
   const header = document.querySelector('.app-header');
   const nav = document.querySelector('.header-nav');
   if (!header || !nav) return;
-  if (IS_DESKTOP) { fitNav = initRail(header, nav); fitNav(); initNavMore(header, null); return; }   // 桌面版：菜单在左侧分组竖排，不用收图标
+  if (DESK_RAIL) { fitNav = initRail(header, nav); fitNav(); initNavMore(header, null); return; }   // 桌面版：菜单在左侧分组竖排，不用收图标
   initNavMore(header, nav);
+  if (IS_DESKTOP) initUpdateBtn(header);   // 桌面版菜单栏放在顶部时，「检查更新」是右侧一个图标按钮
   const over = () => nav.scrollWidth > nav.clientWidth + 1;
   const fit = () => {
     const btns = [...nav.querySelectorAll(':scope > .nav-btn')];   // 「更多工具」里的不占顶栏宽度
@@ -527,7 +530,7 @@ function initNavMore(header, nav) {
   // 「⋯」放在留在外面的按钮后面（桌面版的收起菜单、更新按钮之前）
   const last = [...actions.children].filter((c) => [...MENU.acts.values()].includes(c) || c.classList.contains('server-switch')).pop();
   last.after(more);
-  hoverMenu(more, more.firstElementChild, more.querySelector('.hm-panel'), IS_DESKTOP ? 'up' : 'right');
+  hoverMenu(more, more.firstElementChild, more.querySelector('.hm-panel'), DESK_RAIL ? 'up' : 'right');
   applyMenuLayout();
 }
 
@@ -544,7 +547,7 @@ function menuLayoutHtml() {
   return `<section class="ml-section"><div class="ml-head"><b class="prefs-title">菜单布局</b><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-ml-reset>恢复默认</button></div>
     <p class="ml-tip">拖动排序，或点一下在两栏之间移动</p>
     ${MENU.nav ? board('nav', '功能入口', '顶栏', '更多工具', st.nav, st.navAll, navLabel) : ''}
-    ${board('act', '小按钮', IS_DESKTOP ? '菜单底部' : '顶栏右侧', '⋯ 菜单', st.act, st.actAll, actLabel)}</section>`;
+    ${board('act', '小按钮', DESK_RAIL ? '菜单底部' : '顶栏右侧', '⋯ 菜单', st.act, st.actAll, actLabel)}</section>`;
 }
 function saveMenuZone(kind) {
   const keys = [...$('prefsBody').querySelectorAll(`[data-ml-zone="${kind}:out"] .ml-chip`)].map((c) => c.dataset.mlKey);
@@ -1161,7 +1164,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v342').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v343').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -3755,7 +3758,7 @@ function initUpdateBtn(header) {
   const up = document.createElement('button');
   up.type = 'button';
   up.className = 'icon-btn rail-update';
-  up.title = '检查更新';
+  up.title = `检查更新（当前 v${ver}）`;
   up.setAttribute('aria-label', '检查更新');
   up.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg><span>检查更新</span><small translate="no">v${esc(ver)}</small>`;
   up.addEventListener('click', async () => {
@@ -3794,14 +3797,15 @@ function initContact() {
 }
 
 // ===== 个性化设置（右上角滑块按钮）=====
-// 存在 eve-prefs（云同步会带上）；每项一个勾选框：键、名称、[不勾选的值, 勾选的值]、默认是否勾选
+// 存在 eve-prefs（云同步会带上）；每项一个勾选框：键、名称、[不勾选的值, 勾选的值]、默认是否勾选、[只在满足条件时显示]
 const PREFS = [
   ['skin', '新页面', ['default', 'eve'], true],   // 默认开；关掉（default）才回老界面
   ['mapZoom', '星图反转鼠标方向', ['normal', 'reverse'], false],   // 只反转滚轮缩放
   ['treeLines', '显示分类目录连接线', ['off', 'on'], true],
   ['treeIcons', '市场目录显示分类与物品图标', ['off', 'on'], true],
   ['kbPrice', '击杀估价按吉他卖价（不勾按吉他中间价）', ['mid', 'sell'], false],   // 全站击杀记录、会战、星图实时击杀、预警的价值口径（服务器按 price=sell 换算）
-  ['iskShort', '价格缩写（如 240.00M，不勾显示完整数字）', ['off', 'on'], true]   // formatISK；切换后刷新页面
+  ['iskShort', '价格缩写（如 240.00M，不勾显示完整数字）', ['off', 'on'], true],   // formatISK；切换后刷新页面
+  ['deskNav', '桌面版菜单栏放在顶部（和网页版一样）', ['side', 'top'], false, () => IS_DESKTOP]   // 只在桌面版显示；index-v2.html 头部脚本读它决定加不加 desk-rail，切换后刷新页面
 ];
 // 击杀估价口径：给本站击杀记录服务（/api/kb/）的 GET 请求统一带上 price=sell，各页面不用各自处理
 let kbFetchWrapped = false;
@@ -3834,7 +3838,7 @@ function applyPrefs(p = store.getJSON('eve-prefs', {})) {
 }
 function renderPrefs() {
   const p = store.getJSON('eve-prefs', {});
-  $('prefsBody').innerHTML = PREFS.map(([key, title, vals, dflt]) => `<label class="prefs-row">
+  $('prefsBody').innerHTML = PREFS.filter(([, , , , show]) => !show || show()).map(([key, title, vals, dflt]) => `<label class="prefs-row">
       <input type="checkbox" data-pref="${key}"${(p[key] ? p[key] === vals[1] : dflt) ? ' checked' : ''}>
       <b class="prefs-title">${key === 'kbPrice' && SERVER.id !== 'tq' ? title.replaceAll('吉他', '交易中心') : title}</b>
     </label>`).join('') + menuLayoutHtml();
@@ -3887,7 +3891,7 @@ function initPrefs() {
     // 打开「EVE 风格界面」时切到深色（这套界面按深色设计；之后仍可用主题按钮换浅色）
     if (box.dataset.pref === 'skin' && box.checked && state.theme !== 'dark') { store.set('eve-theme', 'dark'); applyTheme('dark'); }
     // 价格缩写：各页面已经画好的数字不会自己变，刷新一次全部按新格式
-    if (box.dataset.pref === 'iskShort') location.reload();
+    if (box.dataset.pref === 'iskShort' || box.dataset.pref === 'deskNav') location.reload();   // 桌面版菜单栏换位置：左侧菜单是重新排过的，刷新最省事
   });
 }
 
@@ -5969,10 +5973,10 @@ function loadOrderWatch() {
 // 个人中心 · 交易记录与盈亏：首次打开时加载
 let tradesLoading = null;
 function loadTradesModule() {
-  if (!tradesLoading) tradesLoading = import('./trades.js?v=v9').then((m) => {
+  if (!tradesLoading) tradesLoading = import('./trades.js?v=v10').then((m) => {
     m.initTrades({
       esc, formatISK, formatPrice, formatNumber, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
-      resolveStructureNames, locationName, officialName, gameImage, valuationCard,
+      resolveStructureNames, locationName, officialName, gameImage, valuationCard, getJitaPrices,
       tokenInfo: () => state.esiToken || readEsiToken(),
       hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
       selectItem: (typeId) => { switchView('market'); selectItem(typeId); },
@@ -6999,7 +7003,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v44').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v45').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -7131,7 +7135,7 @@ function initKillAlerts() {
   $('killAlertBtn').addEventListener('click', () => openAlertCenter());
   // 已开启的话页面打开即开始检测
   let on = false;
-  try { const t = JSON.parse(localStorage.getItem(KILL_ALERT_KEY) || '{}'); on = t.on === true || (t.watchOn === true && t.watch?.length > 0) || (t.regionOn === true && t.regions?.length > 0); } catch { /* 忽略 */ }
+  try { const t = JSON.parse(localStorage.getItem(KILL_ALERT_KEY) || '{}'); on = t.on === true || (t.watchOn === true && t.watch?.length > 0) || (t.regionOn === true && t.regions?.length > 0) || t.bigOn === true; } catch { /* 忽略 */ }
   if (on) loadKillAlert().catch(() => {});
   if (store.getJSON(SOS_WATCH_KEY, {})?.on) loadSosWatch().catch(() => {});
 }

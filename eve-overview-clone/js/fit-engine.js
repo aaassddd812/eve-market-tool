@@ -153,7 +153,10 @@ function parse(raw) {
   const envLists = new Map(Object.entries(raw.env?.lists || {}).map(([id, [inc, exc]]) => [Number(id), { inc: inc && new Set(inc), exc: new Set(exc) }]));
   // 舰队加成（dbuff）：id -> { name, en, op, max 取最大 / 最小, mods: [[func, 被修改属性, 分组或技能]] }
   const dbuffs = new Map(Object.entries(raw.dbuffs || {}).map(([id, [name, en, op, max, mods]]) => [Number(id), { id: Number(id), name, en, op, max: !!max, mods }]));
-  return { attrs, effects, groups, markets, types, byName, skills, char, cloud, hulls, env, envLists, dbuffs, modes };
+  // 限定可装配舰船的属性：除了固定编号，再按属性名认（国服有宁静服没有的编号，如 5405 canFitShipType20，大型压缩装置靠它允许抹香鲸级装配）
+  const fitAttrs = (re, list) => [...new Set([...list, ...[...attrs].filter(([, a]) => re.test(a.name || '')).map(([id]) => id)])];
+  const canFit = { groups: fitAttrs(/^canFitShipGroup\d+$/, AT.canFitShipGroup), types: fitAttrs(/^canFitShipType\d+$/, AT.canFitShipType) };
+  return { attrs, effects, groups, markets, types, byName, skills, char, cloud, hulls, env, envLists, dbuffs, modes, canFit };
 }
 
 function slotOf(t) {
@@ -700,13 +703,14 @@ export function fitStats(calc, { profile = [0.25, 0.25, 0.25, 0.25] } = {}) {
     mining.waste += waste;
     return { amount, cycle, crit, critBonus, wasteChance, yps, waste };
   };
+  // 按物品实际用的属性判断：突变 / 深渊采矿器的类型本身不带开采量，开采量在原装备属性里（见上面 Item 的 base）
   for (const m of activeMods) {
-    if (!m.type.attrs.has(AT.miningAmount)) continue;
+    if (!m.base.has(AT.miningAmount)) continue;
     const r = mine(m, 1);
     if (r) { mining.modules += r.yps; mining.miners.push({ module: m, ...r }); }
   }
   for (const d of drones) {
-    if (!d.active || !d.type.attrs.has(AT.miningAmount)) continue;
+    if (!d.active || !d.base.has(AT.miningAmount)) continue;
     const r = mine(d, d.active);
     if (r) mining.drones += r.yps;
   }
@@ -1029,8 +1033,8 @@ export function cannotFit(data, shipType, t, ship = null) {
     const fits = t.attrs.get(AT.fitsToShipType);
     if (fits && fits !== shipType.id) return '只能装配在 ' + (data.types.get(fits)?.name || '指定舰船') + ' 上';
   }
-  const groups = AT.canFitShipGroup.map((a) => t.attrs.get(a)).filter(Boolean);
-  const types = AT.canFitShipType.map((a) => t.attrs.get(a)).filter(Boolean);
+  const groups = (data.canFit?.groups || AT.canFitShipGroup).map((a) => t.attrs.get(a)).filter(Boolean);
+  const types = (data.canFit?.types || AT.canFitShipType).map((a) => t.attrs.get(a)).filter(Boolean);
   if ((groups.length || types.length) && !groups.includes(shipType.group) && !types.includes(shipType.id)) return '不能装配在这类舰船上';
   return null;
 }
