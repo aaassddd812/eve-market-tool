@@ -273,7 +273,7 @@ mark {
   padding: 0 10px;
   font-size: 0.8125rem;
   color: var(--text-secondary);
-  background: var(--bg-tertiary);
+  background: transparent;   /* 和购物车、铃铛一样平时不带底色，悬停 / 展开时才有（button.server-status:hover） */
   border-radius: var(--radius-md);   /* 和顶栏其它按钮一样的圆角（新页面皮肤里是小方角） */
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
