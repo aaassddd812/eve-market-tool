@@ -1283,9 +1283,11 @@ function initServerSwitch() {
     $('esiPrivacyNote').textContent = '经本站转发到网易登录（不记录），令牌只存本机';
     $('esiCallbackNote').textContent = '粘贴地址栏完整地址（几分钟内有效）';
   }
-  menu.innerHTML = SERVER_LIST.map((x) =>
+  // 每行：服务器名 + 说明，当前服务器名字高亮、右侧打勾
+  const CHECK = '<svg class="sm-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>';
+  menu.innerHTML = '<div class="server-menu-head">切换服务器</div>' + SERVER_LIST.map((x) =>
     `<button type="button" role="menuitemradio" aria-checked="${x.id === SERVER.id}" data-switch-server="${x.id}">` +
-      `<b>${esc(x.full)}</b><small>${esc(x.sub)}</small></button>`).join('');
+      `<span class="sm-text"><b>${esc(x.full)}</b><small>${esc(x.sub)}</small></span>${CHECK}</button>`).join('');
   const toggle = (open) => {
     menu.hidden = !open;
     btn.setAttribute('aria-expanded', String(open));

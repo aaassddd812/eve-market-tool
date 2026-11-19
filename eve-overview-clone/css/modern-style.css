@@ -268,27 +268,27 @@ mark {
 .server-status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   height: 32px;
-  padding: 0 12px;
+  padding: 0 10px;
   font-size: 0.8125rem;
   color: var(--text-secondary);
   background: var(--bg-tertiary);
-  border-radius: 999px;
+  border-radius: var(--radius-md);   /* 和顶栏其它按钮一样的圆角（新页面皮肤里是小方角） */
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 
 .status-dot {
-  width: 8px;
-  height: 8px;
+  flex: none;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--success);
-  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.2);
   animation: pulse-dot 2.4s ease-in-out infinite;
 }
 
-.server-status.offline .status-dot { background: var(--danger); box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.2); animation: none; }
+.server-status.offline .status-dot { background: var(--danger); animation: none; }
 
 @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 
@@ -4488,50 +4488,42 @@ button.server-status { border: 0; font: inherit; cursor: pointer; transition: ba
 button.server-status:hover, button.server-status[aria-expanded="true"] { background: var(--bg-hover); color: var(--text-primary); }
 button.server-status:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 .server-status .server-name { font-weight: 600; color: var(--text-primary); }
-.server-status .server-caret { width: 12px; height: 12px; margin-left: -2px; opacity: 0.7; flex-shrink: 0; }
+.server-status .server-caret { width: 12px; height: 12px; margin-left: -1px; opacity: 0.6; flex-shrink: 0; transition: transform var(--transition-fast); }
+button.server-status[aria-expanded="true"] .server-caret { transform: rotate(180deg); }
 :root[data-server="serenity"] .server-status .server-name { color: var(--warning); }
-.server-menu {
+.server-menu {   /* 和「更多工具」「⋯」下拉同一套：填充底色 + 阴影（新页面深色另有近黑底和暗边，见皮肤部分） */
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
   z-index: 1200;
-  min-width: 200px;
-  padding: 4px;
+  min-width: 220px;
+  padding: 6px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-primary);
-  border-radius: 10px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
 }
+.server-menu-head { padding: 4px 10px 6px; font-size: 0.75rem; color: var(--text-muted); }
 .server-menu button {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  padding: 8px 12px 8px 30px;
-  position: relative;
+  padding: 8px 10px;
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: none;
   color: var(--text-primary);
   font: inherit;
   text-align: left;
   cursor: pointer;
 }
+.server-menu .sm-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .server-menu button b { font-size: 0.875rem; font-weight: 600; }
 .server-menu button small { font-size: 0.75rem; color: var(--text-muted); }
-.server-menu button:hover, .server-menu button:focus-visible { background: var(--bg-tertiary); outline: none; }
-.server-menu button[aria-checked="true"]::before {
-  content: '';
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  width: 8px;
-  height: 8px;
-  margin-top: -4px;
-  border-radius: 50%;
-  background: var(--accent-primary);
-}
+.server-menu .sm-check { flex: none; width: 16px; height: 16px; color: var(--accent-primary); visibility: hidden; }
+.server-menu button[aria-checked="true"] b { color: var(--accent-primary); }
+.server-menu button[aria-checked="true"] .sm-check { visibility: visible; }
+.server-menu button:hover, .server-menu button:focus-visible { background: var(--bg-hover); outline: none; }
 .server-unsupported { min-height: 50vh; }
 @media (max-width: 480px) {
   .server-status .server-caret { display: none; }
@@ -8075,6 +8067,8 @@ html.desk-rail .server-status { width: 100%; min-width: 0; overflow: hidden; }
 html.desk-rail .server-status .status-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html.desk-rail .app-header .server-status .status-text { display: inline; }
 html.desk-rail .server-menu { top: auto; bottom: calc(100% + 6px); left: 0; right: auto; }
+html.desk-rail .server-status .server-caret { margin-left: auto; transform: rotate(180deg); }   /* 菜单往上弹：箭头朝上，展开时朝下 */
+html.desk-rail button.server-status[aria-expanded="true"] .server-caret { transform: none; }
 html.desk-rail .icon-btn.api-link span, html.desk-rail .contact-btn span { display: none; }
 html.desk-rail .hm-box .icon-btn.api-link .hm-label, html.desk-rail .hm-box .contact-btn .hm-label { display: inline; }
 html.is-desktop .desktop-dl-btn, html.desk-rail .menu-btn { display: none !important; }
@@ -9267,7 +9261,7 @@ html[data-skin="eve"] .kb-section-title { font-size: 1.25rem; }
 html[data-skin="eve"] .mobile-title { font-size: 1.1875rem; }
 
 /* ===== EVE 风格：「更多工具」下拉 ===== */
-html[data-skin="eve"]:not([data-theme="light"]) .hm-box { background: #0f1113; border: 1px solid #2c3136; }
+html[data-skin="eve"]:not([data-theme="light"]) .hm-box, html[data-skin="eve"]:not([data-theme="light"]) .server-menu { background: #0f1113; border: 1px solid #2c3136; }
 html[data-skin="eve"] .nav-more-panel .hm-group h5 { font-family: 'Smiley Sans Oblique', 'MiSans VF', sans-serif; font-weight: 400; font-size: 0.9375rem; color: var(--accent-primary); }
 
 /* EVE 风格：AI 助手输入框——整块近黑底灰框（里面的文本框不再单独套黑底和描边） */
