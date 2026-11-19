@@ -2744,6 +2744,8 @@ export function createView(host, hooks = {}, opt = {}) {
     },
     draw,
     render() {
+      // 原生界面模式：整局画在原生窗口里，这里只把船位、事件交过去，不再画
+      if (nativeSink?.ui) { nativeOut(); return; }
       watchPerf();
       const now = performance.now(), dt = Math.min(0.1, Math.max(0.001, lastRender ? (now - lastRender) / 1000 : 1 / 60));
       lastRender = now;

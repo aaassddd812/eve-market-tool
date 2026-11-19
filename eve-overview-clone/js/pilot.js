@@ -22,7 +22,7 @@ import * as SC from './pilot-scan.js?v=7';
 import * as ST from './pilot-site.js?v=24';
 import * as CG from './pilot-cargo.js?v=2';
 import * as OS from './pilot-ovset.js?v=1';
-import * as NE from './native-engine.js?v=v2';
+import * as NE from './native-engine.js?v=v3';
 
 let ctx = null;
 let root = null;
@@ -1224,7 +1224,7 @@ function renderStage() {
   FL.renderFleet(true);
   SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v95').then((m) => {
+  import('./sim-3d.js?v=v96').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -1301,14 +1301,19 @@ function nativePrepare() {
   })().finally(() => { S.nativeJob = null; });
   return S.nativeJob;
 }
+const nativeUiFlag = () => { try { return localStorage.getItem('eve-native-ui') === '1'; } catch { return false; } };
 async function nativeStart() {
   if (S.set.render !== 'native' || !NE.supported() || NE.running()) return;
   const view = S.view;
   try {
     if (!S.nativeVer) await nativePrepare();
     if (!view || S.view !== view) return;   // 等下载时已经退出这一局
+    S.nObjSig = S.nTgtKey = null;   // 新连上的原生窗口要收到整份括号清单
     await NE.connect(view, {
       gfx: S.set.gfx,
+      // 界面模式（整局在原生窗口里，开发中）：先只给本机开了 localStorage eve-native-ui = 1 的用，界面做齐了再放到设置里
+      ui: nativeUiFlag(),
+      onAct: nativeAct,
       // 原生窗口关了 / 崩了：画面本来就还在网页里画，提示一句（出错时「提交工单」附上原生引擎日志）
       onExit: (m) => { if (m) { const [t, k, d] = NE.exitNotice(m); ctx.showToast(t, k, k === 'error' ? 10000 : 4000, d); } },
       onWarn: (t) => ctx.showToast(t, 'info', 6000),
@@ -1399,7 +1404,7 @@ function cursorMode() {
 
 // ---------- HUD 上方的动作提示（客户端 shipHud/action_indication）：宽 800 居中、在 HUD 上面 8 像素，
 // 标题白色发光（可闪一下）+ 正文灰白，出现 / 消失 0.3 秒；临时提示 2 秒。按住快捷键的提示优先，其次临时提示 ----------
-const IND = { short: null, temp: null, warp: null, tTimer: 0, sTimer: 0, cur: null };
+const IND = { short: null, temp: null, warp: null, tTimer: 0, sTimer: 0, cur: null, blinks: 0 };
 function indTemp(cap, text = '', blink = true) {
   IND.temp = { cap, text };
   clearTimeout(IND.tTimer);
@@ -1419,21 +1424,33 @@ function indUpdate(blink) {
   const d = IND.short || IND.warp || IND.temp;
   if (d && d !== IND.cur) {
     el.querySelector('b').textContent = tr(d.cap);
-    el.querySelector('p').textContent = d.text ? tr(d.text) : '';
+    el.querySelector('p').textContent = indLines(d).join('\n');
     el.querySelector('.pl-ind-bar').hidden = d.prog == null;
   }
   IND.cur = d;
   el.classList.toggle('on', Boolean(d));
-  if (blink && d) { const b = el.querySelector('b'); b.classList.remove('blink'); void b.offsetWidth; b.classList.add('blink'); }
+  if (blink && d) { const b = el.querySelector('b'); b.classList.remove('blink'); void b.offsetWidth; b.classList.add('blink'); IND.blinks++; }
+}
+// 正文各行（客户端跃迁提示 = 「目的地：…<br>距离：…」）
+const indLines = (d) => [d.text ? tr(d.text) : '', d.dist != null ? tr(`距离：${fmtDist(d.dist)}`) : ''].filter(Boolean);
+// 原生窗口里的同一个提示（hud.py ActionIndication）：b 是闪光计数，变了原生那边闪一下
+function nativeInd() {
+  const d = IND.cur;
+  return d ? { cap: tr(d.cap), text: indLines(d), icon: d.icon || null, prog: d.prog ?? null, b: IND.blinks } : null;
 }
 
 // ---------- 主循环：实时推进引擎，画 3D、界面 ----------
 function startLoop() {
-  if (S.raf) return;
+  if (S.raf || S.rafTo) return;
   S.last = performance.now();
   S.raf = requestAnimationFrame(tick);
 }
-function stopLoop() { cancelAnimationFrame(S.raf); S.raf = 0; }
+function stopLoop() { cancelAnimationFrame(S.raf); clearTimeout(S.rafTo); S.raf = S.rafTo = 0; }
+// 下一帧：平时跟着画面刷新；原生界面模式下网页被游戏窗口挡住 / 最小化时 requestAnimationFrame 会停，模拟改用定时器接着跑
+function nextFrame() {
+  if (NE.uiMode() && document.hidden) S.rafTo = setTimeout(() => tick(performance.now()), 16);
+  else S.raf = requestAnimationFrame(tick);
+}
 // 瞄准十字线（客户端 InflightLayer.sr.tcursor）：有装备在等你点目标时（targetMgr.OrderTarget → ShowTargetingCursor）显示，
 // 等的装备都取消 / 开起来了就隐藏；鼠标进到舰船 HUD 上也隐藏（shipUI.OnMouseEnter → HideTargetingCursor）。
 // 四条 1 像素的线（Line 默认色 白 15%），离鼠标 10 像素起，横竖贯穿整个画面
@@ -1448,7 +1465,7 @@ function tcursor() {
   }
 }
 function tick(now) {
-  S.raf = 0;
+  S.raf = S.rafTo = 0;
   const b = S.b;
   if (!b || !root.querySelector('#plStage')) return;
   tcursor();
@@ -1458,7 +1475,7 @@ function tick(now) {
     if (!S.ready && !checkLoad(now)) {
       // 加载中：时钟不走，画面照常画（触发模型加载、预热着色器）
       if (S.view) { S.view.draw(0, { sel: -1, kills: [] }); S.view.render(); }
-      S.raf = requestAnimationFrame(tick);
+      nextFrame();
       return;
     }
     if (S.match && !S.ended) matchFrame(dt);
@@ -1476,6 +1493,7 @@ function tick(now) {
     }
     const t = S.ended ? Math.min(S.t, S.endAt + 6) : Math.min(S.t, b.t);
     if (S.view) { S.view.draw(t, { sel: S.sel, selC: S.selC, kills: b.kills }); S.view.render(); }
+    if (NE.uiMode()) { NE.hud(nativeHudState()); nativeSpace(now); }
     drawMarks();
     warpInd();
     drawHud();
@@ -1497,7 +1515,7 @@ function tick(now) {
     const c = root.querySelector('#plClock');
     if (c) c.textContent = `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
   }
-  S.raf = requestAnimationFrame(tick);
+  nextFrame();
 }
 // 主动装备开关：换成对应的属性（速度、信号半径、抗性、锁定、电容消耗…）；停用后这一轮跑完才失效
 const beforeStep = () => { if (S.gm) gmStep(); R.beforeStep(); };
@@ -1557,6 +1575,7 @@ function burstsOnMe() {
 // 剩余时间（客户端 FormatTimeIntervalShortWritten：「1分 5秒」）
 const fmtLeft = (sec) => { const s0 = Math.max(0, Math.ceil(sec)), m = Math.floor(s0 / 60); return m ? `${m}分 ${s0 % 60}秒` : `${s0}秒`; };
 const buffIcon = (k) => `${UI}icons/${BUFF_INFO[k][1]}.png?v=1`;
+const buffRes = (k) => (BUFF_INFO[k] ? `res:/ui/texture/icons/${BUFF_INFO[k][1]}.png` : null);   // 原生总览用客户端资源路径
 const buffHint = (k) => tr(BUFF_INFO[k][2]);
 const bcHint = (k) => tr(FL.bcName(k));   // 同上：总览行里 tr 被行变量遮住   // 总览里 tr 是行变量，这里另起名字
 // 客户端 tactical.jammersByJammingType：服务器发来 EWAR 通知才算（ECM 只有干扰成功的周期才有）
@@ -2032,7 +2051,7 @@ function warpInd() {
     const bar = el.querySelector('.pl-ind-bar');
     bar.hidden = d.prog == null;
     if (d.prog != null) bar.firstChild.style.width = `${Math.round(d.prog * 100)}%`;
-    el.querySelector('p').textContent = tr(d.text) + (d.dist != null ? `  ${fmtDist(d.dist)}` : '');
+    el.querySelector('p').textContent = indLines(d).join('\n');
   }
 }
 
@@ -2946,53 +2965,62 @@ function onRackDrop(e) {
   rackSave();
   renderRack();
 }
+// 装备 i 在画面时间 t 的循环状态（网页装备栏 updateRack 和原生界面 nativeHudState 共用）：
+// on 开着、busy 停用中（这一轮走完才停）、rld 装填中、p 循环进度 0..1、rp 装填进度、qty 弹药数（'' 不显示，undefined 没有弹药）、
+// c0 / cd 这一轮（装填）的开始时间和时长（原生界面按模拟时间自己转圈；cd 0 = 不画圈）
+function modCycle(i, t) {
+  const u = S.me, P = u.pilot, rk = S.rk;
+  const deact = rk.deact.get(i);
+  const busy = Boolean(deact && deact.end > t && u.alive);
+  // 周期进度：武器按下次开火时间，其它按开启时刻
+  const gk = u.t.guns.findIndex((g) => g.m === i);
+  let p = 0, rld = false, rp = 0, qty, c0 = 0, cd = 0;
+  if (gk >= 0) {
+    const st = u.guns[gk], g = u.t.guns[gk];
+    rld = st.reloadUntil > t;
+    if (rld) { rp = 1 - (st.reloadUntil - t) / g.reload; c0 = st.reloadUntil - g.reload; cd = g.reload; }
+    else if (P.on.has(i) && t - st.last < g.cycle * 1.3 + DT) {
+      // 引擎已经算到下一发（画面还没到）：画面上还是上一轮在走
+      const cyc = Math.max(0.1, st.next - st.last);
+      const base = t >= st.last ? st.last : st.last - cyc;
+      p = Math.max(0, Math.min(1, (t - base) / cyc));
+      c0 = base; cd = cyc;
+    }
+    qty = g.ammo < Infinity ? (rld ? '' : st.ammo) : '';
+  } else {
+    // 电容注入器、辅助维修、拦截泡发射器：有弹药数和装填
+    const ik = (u.t.injectors || []).findIndex((x) => x.m === i), lk = ik < 0 ? (u.t.localReps || []).findIndex((x) => x.m === i && x.ammo < Infinity) : -1;
+    const dk = ik < 0 && lk < 0 ? (u.t.dictors || []).findIndex((x) => x.m === i) : -1;
+    const x = ik >= 0 ? u.t.injectors[ik] : lk >= 0 ? u.t.localReps[lk] : dk >= 0 ? u.t.dictors[dk] : null;
+    const st = ik >= 0 ? u.inj[ik] : lk >= 0 ? u.lrep[lk] : dk >= 0 ? u.dict?.[dk] || { ammo: x.ammo, reloadUntil: 0, next: 0 } : null;
+    if (x) {
+      rld = st.reloadUntil > t;
+      if (rld) { rp = 1 - (st.reloadUntil - t) / x.reload; c0 = st.reloadUntil - x.reload; cd = x.reload; }
+      qty = rld ? '' : st.ammo;
+    }
+    if (!rld && P.on.has(i)) {
+      // 没有持续时间的装备（隐形装置：效果没有 durationAttributeID）只有开 / 关两态，不画周期圈（客户端 DoActivateRampsThread：duration ≤ 0 直接返回）
+      const cyc = x?.cycle || S.on.rack[i]?.cycle || 0;
+      if (x && st.next > 0) { p = Math.max(0, Math.min(1, 1 - (st.next - t) / cyc)); c0 = st.next - cyc; cd = cyc; }
+      else if (cyc > 0) { const t0 = S.modOn.get(i) ?? t; p = (((t - t0) % cyc) + cyc) % cyc / cyc; c0 = t0; cd = cyc; }
+    }
+  }
+  // 停用中：红光闪到这一轮结束，圈接着走完
+  if (busy) { p = Math.max(0, Math.min(1, (t - deact.t0) / deact.cyc)); c0 = deact.t0; cd = deact.cyc; }
+  return { on: P.on.has(i), busy, rld, rp, p, qty, c0, cd };
+}
 function updateRack() {
   const box = root.querySelector('#plRack'), u = S.me;
   if (!box || !u || !S.rk) return;
   // 用画面时间（比引擎慢不到一步、逐帧连续）算进度，圈是平滑转的
-  const t = Math.min(S.t, S.b.t), P = u.pilot, rk = S.rk;
+  const t = Math.min(S.t, S.b.t), rk = S.rk;
   for (const b of box.querySelectorAll('.pl-mod')) {
     const i = Number(b.dataset.plMod);
-    const on = P.on.has(i) || (b.classList.contains('auto') && u.alive);
-    const deact = rk.deact.get(i);
-    const busy = Boolean(deact && deact.end > t && u.alive);
-    // 周期进度：武器按下次开火时间，其它按开启时刻
-    const gk = u.t.guns.findIndex((g) => g.m === i);
-    let p = 0, rld = false, rp = 0;
-    if (gk >= 0) {
-      const st = u.guns[gk], g = u.t.guns[gk];
-      rld = st.reloadUntil > t;
-      if (rld) rp = 1 - (st.reloadUntil - t) / g.reload;
-      else if (P.on.has(i) && t - st.last < g.cycle * 1.3 + DT) {
-        // 引擎已经算到下一发（画面还没到）：画面上还是上一轮在走
-        const cyc = Math.max(0.1, st.next - st.last);
-        const base = t >= st.last ? st.last : st.last - cyc;
-        p = Math.max(0, Math.min(1, (t - base) / cyc));
-      }
-      const em = b.querySelector('em span');
-      if (em) em.textContent = g.ammo < Infinity ? (rld ? '' : st.ammo) : '';
-    } else {
-      // 电容注入器、辅助维修：有弹药数和装填
-      // 电容注入器、辅助维修、拦截泡发射器：有弹药数和装填
-      const ik = (u.t.injectors || []).findIndex((x) => x.m === i), lk = ik < 0 ? (u.t.localReps || []).findIndex((x) => x.m === i && x.ammo < Infinity) : -1;
-      const dk = ik < 0 && lk < 0 ? (u.t.dictors || []).findIndex((x) => x.m === i) : -1;
-      const x = ik >= 0 ? u.t.injectors[ik] : lk >= 0 ? u.t.localReps[lk] : dk >= 0 ? u.t.dictors[dk] : null;
-      const st = ik >= 0 ? u.inj[ik] : lk >= 0 ? u.lrep[lk] : dk >= 0 ? u.dict?.[dk] || { ammo: x.ammo, reloadUntil: 0, next: 0 } : null;
-      if (x) {
-        rld = st.reloadUntil > t;
-        if (rld) rp = 1 - (st.reloadUntil - t) / x.reload;
-        const em = b.querySelector('em span');
-        if (em) em.textContent = rld ? '' : st.ammo;
-      }
-      if (!rld && P.on.has(i)) {
-        // 没有持续时间的装备（隐形装置：效果没有 durationAttributeID）只有开 / 关两态，不画周期圈（客户端 DoActivateRampsThread：duration ≤ 0 直接返回）
-        const cyc = x?.cycle || S.on.rack[i]?.cycle || 0;
-        if (x && st.next > 0) p = Math.max(0, Math.min(1, 1 - (st.next - t) / cyc));
-        else if (cyc > 0) { const t0 = S.modOn.get(i) ?? t; p = (((t - t0) % cyc) + cyc) % cyc / cyc; }
-      }
-    }
-    // 停用中：红光闪到这一轮结束，圈接着走完
-    if (busy) p = Math.max(0, Math.min(1, (t - deact.t0) / deact.cyc));
+    const c = modCycle(i, t);
+    const on = c.on || (b.classList.contains('auto') && u.alive);
+    const { busy, rld, rp, p } = c;
+    const em = b.querySelector('em span');
+    if (em && c.qty !== undefined) em.textContent = c.qty;
     const burnt = rk.burnt.has(i);
     b.classList.toggle('on', on && u.alive && !busy && !burnt);
     b.classList.toggle('busy', busy);
@@ -3018,6 +3046,164 @@ function updateRack() {
   }
   const ga = box.querySelector('[data-pl-grpall]');
   if (ga) { const g = canGroupAll(); ga.classList.toggle('un', !g); ga.title = g ? '全部编组同型号武器' : '取消全部编组'; }
+}
+// 原生界面（桌面版原生引擎的界面模式，见 nativeStart）：飞船 HUD 要的状态，字段见 eve-native host/hud.py 开头。
+// 和网页装备栏同一套数据（S.rk 的排列 / 编组 / 超载、modCycle 的循环状态）；装备循环的 c0 用模拟时间，原生窗口自己转圈
+function nativeHudState() {
+  const u = S.me, rk = S.rk;
+  if (!u || !rk || !S.on) return null;
+  const t = Math.min(S.t, S.b.t), rack = S.on.rack || [], tog = toggleable();
+  const mods = [];
+  RACKS.forEach((r, ri) => rk.order[r].forEach((i, n) => {
+    if (i < 0 || masterOf(i) !== i || (!tog.has(i) && !S.hud.passive)) return;
+    const c = modCycle(i, t), burnt = rk.burnt.has(i);
+    const act = !u.alive ? 'idle' : c.rld ? 'reload' : c.busy ? 'deactivating' : c.on && !burnt ? 'active' : 'idle';
+    mods.push({
+      i, r: ri, n, type: chargeOf(i) || rack[i].type, on: burnt ? 0 : 1, act, c0: c.c0, cd: c.cd,
+      qty: chargeOf(i) && c.qty !== undefined ? (c.qty === '' ? null : Number(c.qty) || 0) : null,
+      grp: members(i).length, ovl: canOverload(i) ? (rk.ovl.has(i) ? 1 : 0) : null, tog: tog.has(i) ? 1 : 0,
+    });
+  }));
+  const rkov = {};
+  RACKS.forEach((r, ri) => {
+    const list = rackMods(r).filter((i) => canOverload(i) && !rk.burnt.has(i));
+    if (rackMods(r).some((i) => canOverload(i))) rkov[ri] = list.length > 0 && list.every((i) => rk.ovl.has(i)) ? 1 : 0;
+  });
+  const v = Math.hypot(...u.vel);
+  return {
+    hp: [0, 1, 2].map((l) => (u.t.max[l] ? Math.max(0, Math.min(1, u.hp[l] / u.t.max[l])) : 0)),
+    cap: [Math.max(0, u.cap), u.t.cap.max || 0], v, vmax: u.t.vel * u.velMult, warp: u.warp?.go ? 1 : 0,
+    heat: (rk.h || [0, 0, 0]).slice(0, 3), mods, rkov,
+    grpall: groupableSets().some((x) => x.length > 1) ? (canGroupAll() ? 'group' : 'ungroup') : null,
+    btn: { orbit: 1, tactical: S.set.tac ? 1 : 0, cargo: 0 }, readout: S.hud.readout ? 1 : 0, pct: S.hud.pct ? 1 : 0,
+    ind: nativeInd(),
+  };
+}
+// 原生窗口里的太空括号 / 目标栏（space.py）：物体清单变了才发；选中 / 锁定 / 威胁 / 距离每秒 4 次，选中、锁定、威胁变了马上发
+function nativeObjs() {
+  const u = S.me;
+  return S.b.units.map((v, i) => {
+    const type = v.r.row.ship;
+    if (!v.alive) return v.isDrone ? null : { id: 'w' + i, brk: 'shared/brackets/wreck.png', name: `${typeName(type)}残骸`, cat: 'wreck' };
+    const own = v === u;
+    return { id: String(i), brk: brkPath(type) || 'shared/brackets/frigate_16.png', name: S.names[i] || typeName(type), ship: typeName(type), type,
+      flag: own ? 0 : v.side === u.side ? 1 : 2, cat: v.isDrone ? 'drone' : 'ship', ...(own ? { own: 1 } : {}) };
+  }).filter(Boolean);
+}
+function nativeTgtState() {
+  const u = S.me, P = u.pilot, id = (v) => String(v.i);
+  // 锁定中：[id, 开始的模拟时间, 总时长]（P.locks 是相对 S.b.t 的剩余秒数；原生按帧里的模拟时间倒数）
+  const locking = [];
+  for (const [v, left] of P.locks) if (left > 0) { const all = P.lockAll.get(v) || left; locking.push([id(v), S.b.t - all + left, all]); }
+  const range = (u.t.lockRange || 0) * (u.rangeMult ?? 1), dist = {}, threat = {}, inr = [];
+  for (const v of S.b.units) {
+    if (!v.alive || v === u) continue;
+    const d = surf(u, v);
+    dist[id(v)] = Math.round(d);
+    if (d <= range) inr.push(id(v));
+    // 锁着我 = 1（黄环）、在打我 = 2（红环），同总览
+    const pl = v.pilot?.locks.get(u);
+    const on = v.pilot ? (pl == null ? 0 : pl > 0 ? 1 : 2) : v.target === u ? (v.lock > 0 ? 1 : 2) : 0;
+    if (on) threat[id(v)] = on;
+  }
+  // 作用在当前目标上的装备（同 drawTargets）：类型 ID，无人机 = −1
+  const w = {}, a = P.active;
+  if (a && u.alive) {
+    const mods = [...P.on].filter((m) => !S.selfMods.has(m) && masterOf(m) === m && !(u.t.localReps || []).some((x) => x.m === m) && !(u.t.injectors || []).some((x) => x.m === m));
+    const t = mods.map((m) => S.on.rack[m].type);
+    if (u.drones?.some((x) => x.pos && x.target === a)) t.push(-1);
+    if (t.length) w[id(a)] = t;
+  }
+  return { sel: S.sel >= 0 && S.selC < 0 ? String(S.sel) : null, active: a ? id(a) : null, locking, locked: (S.lockOrder || []).map(id),
+    dead: [...(S.tgtDead?.keys() || [])].map(id), threat, inr, dist, w };
+}
+// 原生总览（wnd.py OverviewWnd）：页签、预设名、行（同网页 ovList）；行的锁定 / 威胁原生从 tgt 状态拿
+function nativeOvState() {
+  const u = S.me, rows = [];
+  if (!ovPresets) loadOvPresets();
+  for (const x of ovList()) {
+    const v = x.v;
+    if (v) {
+      const own = v.side === u.side;
+      const ew = [...(S.ewar || new Map())].filter(([, e]) => e.from.has(v)).map(([k]) => buffRes(k)).filter(Boolean);
+      rows.push({ id: String(v.i), brk: brkPath(v.r.row.ship) || 'shared/brackets/frigate_16.png', flag: own ? 1 : 2, bg: own ? [0.6, 0.15, 0.9] : null,
+        name: S.names[v.i], type: typeName(v.r.row.ship), d: x.d, v: Math.hypot(...v.vel), ew });
+    } else if (x.c) {
+      rows.push({ id: 'c' + x.ci, brk: x.c.brk || `shared/brackets/${CEL_BRK[x.c.group] || 'planet'}.png`, name: x.c.name, type: x.c.typeName || '', d: x.d, v: 0 });
+    } else {
+      const mine = x.o === u;
+      rows.push({ id: x.k, brk: brkPath(x.dr.g.type) || 'shared/brackets/dronelightscout.png', ic: mine ? [0.7, 0.7, 0.7] : null,
+        flag: mine ? null : x.o.side === u.side ? 1 : 2, name: typeName(x.dr.g.type), type: typeName(x.dr.g.type), d: x.d, v: Math.hypot(...x.dr.vel) });
+    }
+  }
+  return { tabs: OS.tabs().map(([n, , c]) => [n, c]), tab: S.ovTab ?? 0, preset: OS.presetName(ovPreset()), add: !S.tut,
+    sel: S.selC >= 0 ? 'c' + S.selC : S.sel >= 0 && S.b.units[S.sel] !== u ? String(S.sel) : null, rows };
+}
+// 原生「选中的物体」（wnd.py SelectedItemWnd）：名字、距离、按钮（同网页 selActs）
+function nativeSelState() {
+  const u = S.me, c = S.selC >= 0 ? S.b.cel?.[S.selC] : null, v = S.b.units[S.sel];
+  // rev：只有舰船那边算出来的 true 才叠复位图（天体那边 rev 还是 SEL_ACTS 里的反向动作定义）
+  const btn = (a) => ({ k: a.k, ic: a.ic, n: a.n, key: a.key || '', off: a.off || '', rev: a.rev === true });
+  if (c) return { id: 'c' + S.selC, name: c.name, d: celDist(u, c), type: c.type, brk: c.brk || `shared/brackets/${CEL_BRK[c.group] || 'planet'}.png`, acts: selActs({ cel: S.selC }).map(btn) };
+  if (!v || v === u || !v.alive) return { id: null };
+  return { id: String(v.i), name: S.names[v.i], d: surf(u, v), type: v.r.row.ship, acts: selActs(v).map(btn) };
+}
+function nativeSpace(now) {
+  if (!S.b || !S.me?.pilot) return;
+  const objs = nativeObjs(), sig = JSON.stringify(objs);
+  const o = sig !== S.nObjSig ? objs : null;
+  S.nObjSig = sig;
+  const st = nativeTgtState(), k = JSON.stringify([st.sel, st.active, st.locking.map((x) => x[0]), st.locked, st.dead, st.threat]);
+  if (o || k !== S.nTgtKey || now - (S.nTgtAt || 0) > 250) { S.nTgtKey = k; S.nTgtAt = now; NE.space(o, st); }
+  // 总览、选中物体：选中 / 页签变了马上发，否则 4 次每秒（客户端选中物体 500 毫秒刷新、总览数值 0.5 秒脉冲）
+  const wk = JSON.stringify([S.sel, S.selC, S.ovTab, P_lockKey()]);
+  if (wk !== S.nWndKey || now - (S.nWndAt || 0) > 250) { S.nWndKey = wk; S.nWndAt = now; NE.windows(nativeSelState(), nativeOvState()); }
+}
+const P_lockKey = () => [...S.me.pilot.locks.keys()].map((v) => v.i).join(',');
+// 原生窗口里的界面操作（hud.py / space.py 的 send）：交给和网页界面同一套处理
+function nativeAct(m) {
+  if (!S.b || !S.me) return;
+  // 太空括号 / 目标栏：单击 = 选中（按着战斗命令键 = 对应命令，同 pickUnit），已锁定的同时设为当前目标；
+  // 括号双击（客户端 1 秒内第二下）= 选中 + 接近（按着修饰键或战斗命令键时不接近，客户端 IsSomeCombatCommandLoaded）
+  if (m.a === 'ovtab') { setOvTab(Number(m.i) || 0); return; }
+  // 选中物体的按钮（同网页按钮：不可用的不响应）
+  if (m.a === 'selact') {
+    const v = S.selC >= 0 ? { cel: S.selC } : S.b.units[S.sel];
+    const a = v && selActs(v).find((x) => x.k === m.k);
+    if (a && !a.off) act(a.k);
+    return;
+  }
+  // 总览里的天体行：单击同 pickCel，双击 150 km 内接近、再远对准（celDbl）
+  if ((m.a === 'pick' || m.a === 'dbl') && String(m.id ?? '').startsWith('c')) {
+    const ci = Number(String(m.id).slice(1));
+    if (!S.b.cel?.[ci]) return;
+    const e = { shiftKey: Boolean(m.shift), ctrlKey: Boolean(m.ctrl), altKey: Boolean(m.alt) };
+    if (m.a === 'dbl') celDbl(ci); else pickCel(ci, e);
+    return;
+  }
+  if (m.a === 'pick' || m.a === 'dbl' || m.a === 'tgt') {
+    const sid = String(m.id ?? '');
+    if (sid.startsWith('d')) return;    // 太空中的无人机：只看不点（同网页总览）
+    const i = Number(sid.startsWith('w') ? sid.slice(1) : sid), v = S.b.units[i];
+    if (!v) return;
+    const e = { shiftKey: Boolean(m.shift), ctrlKey: Boolean(m.ctrl), altKey: Boolean(m.alt) };
+    pickUnit(i, e);
+    const P = S.me.pilot;
+    if (m.a !== 'dbl' && P.locks.has(v)) { P.active = v; renderSel(); }
+    if (m.a === 'dbl' && v.alive && v !== S.me && !e.shiftKey && !e.ctrlKey && !e.altKey && !S.keys.size) cmd({ cmd: 'approach', tgt: v });
+    return;
+  }
+  const i = Number(m.i);
+  if (m.a === 'mod') toggleModule(i, { shiftKey: Boolean(m.shift) });
+  else if (m.a === 'ovl') toggleOverload(i);
+  else if (m.a === 'rkov') toggleRackOverload(RACKS[Number(m.r)]);
+  else if (m.a === 'grpall') groupAll();
+  else if (m.a === 'speed') setSpeed(Math.max(0, Math.min(1, Number(m.f) || 0)));
+  else if (m.a === 'stop') setSpeed(0);
+  else if (m.a === 'max') setSpeed(1);
+  else if (m.a === 'btn' && m.b === 'tactical') toggleTac();
+  else return;
+  updateRack();
 }
 // 每步模拟之后：等目标的装备在有了当前目标时启动；超载的装备产生热量、按周期受热损，耐久打完就烧毁
 
@@ -3391,11 +3577,9 @@ const AU = 149597870700;
 // 游戏的距离写法：1 万米以内按米，往上按整公里，再远按天文单位
 const fmtDist = (m) => (m < 10000 ? `${Math.round(m).toLocaleString('en-US')} m` : m < 0.1 * AU ? `${Math.round(m / 1000).toLocaleString('en-US')} km` : `${(m / AU).toFixed(1)} AU`);
 // 原地更新每一行（不整表重画，点击不会落空）；顺序变了才重新排
-function renderOverview() {
-  const body = root.querySelector('#plOv'), u = S.me;
-  if (!body || !u) return;
-  if (!ovPresets) loadOvPresets();
-  const P = u.pilot;
+// 总览列哪些（网页表格和原生总览共用）：[{k, v 舰船 | c 天体 + ci | dr 无人机 + o 主人, d 表面距离}]，按距离排
+function ovList() {
+  const u = S.me;
   // 舰船：只列同一网格里的（客户端只知道自己周围的球，别的网格上的船要扫描才找得到）；天体按页签的物品组过滤（「跃迁到」等）
   // PVP 页签：只列敌方舰船——天体、空间站、友军、无人机都不列（按用户的游戏内 PVP 页签）
   const pvp = ovPvp();
@@ -3407,6 +3591,14 @@ function renderOverview() {
     o.drones.forEach((dr, n) => { if (dr.pos && !dr.e && ovShows(dr.g.type) && Math.hypot(dr.pos[0] - u.pos[0], dr.pos[1] - u.pos[1], dr.pos[2] - u.pos[2]) <= GRID) list.push({ k: `d${o.i}-${n}`, dr, o, d: surf(u, { pos: dr.pos }) }); });
   }
   list.sort((a, b) => a.d - b.d);
+  return list;
+}
+function renderOverview() {
+  const body = root.querySelector('#plOv'), u = S.me;
+  if (!body || !u) return;
+  if (!ovPresets) loadOvPresets();
+  const P = u.pilot;
+  const list = ovList();
   // 什么都没有：一行「没有发现任何东西」（UI/Common/NothingFound）
   if (!list.length) {
     if (body.firstElementChild?.dataset.k !== 'none') body.innerHTML = `<tr class="none" data-k="none"><td colspan="5">${esc(tr('没有发现任何东西'))}</td></tr>`;
@@ -3767,7 +3959,9 @@ function logDrain(h) {
   const mod = typeName(h.f.t.rack?.[h.m]?.type);
   const amt = Math.round(h.amt);
   const what = h.nos ? (out ? `+${amt} GJ 能量吸取自` : `-${amt} GJ 能量被吸取至`) : `${amt} GJ 能量被中和`;
-  M.queue.push({ at: performance.now(), e: { html: `<b class="${out ? 'out' : 'in'}">${esc(what)}</b> <strong>${esc(S.names[other.i] || '')}</strong><span>${esc(` - ${mod}`)}</span>` } });
+  const col = out ? [0, 1, 1, 1] : [0.8, 0, 0, 1];
+  M.queue.push({ at: performance.now(), e: { html: `<b class="${out ? 'out' : 'in'}">${esc(what)}</b> <strong>${esc(S.names[other.i] || '')}</strong><span>${esc(` - ${mod}`)}</span>`,
+    runs: { num: null, icons: [], runs: [[what, MS_N, true, col], [' ', MS_N, false, MS_NORMAL], [S.names[other.i] || '', MS_N, true, MS_WHITE], [` - ${mod}`, MS_N, false, MS_NORMAL]] } } });
   pushLog(`${what} ${S.names[other.i] || ''} - ${mod}`, out ? 'good' : 'neg');
 }
 // 每步模拟结束：把这一步合好的行放进队列
@@ -3790,6 +3984,19 @@ function msgHtml(e) {
   const icons = TYPE_ORDER.filter((k) => e.raw[k] > 0).map((k) => `<img src="${UI}classes/damagetypes/${DMG_TYPES[k]}.png?v=1" alt="">`).join('');
   return `<b class="${e.dir}">${Math.round(e.dmg)}</b> ${icons ? `<em>${icons}</em> ` : ''}<small>${e.dir === 'out' ? '对' : '来自'}</small> <strong>${n(e.name)}</strong><span>${n(` - ${e.weapon}${e.missile ? '' : ` - ${Q_NAMES[e.q]}`}`)}</span>`;
 }
+// 原生飘字（msgs.py）：同一行拆成 数字 / 图标 / 正文 三段，每段 [文字, 字号, 粗体, rgba]。照客户端 uilog 的拼法：
+// 数字 = <color 青 / 红><b>N</b> + 空格；正文 = 模板（「对 / 来自」小 2 号 + 淡白 0x77，名字白色粗体）+ 「 - 武器 - 命中质量」（小号淡白）
+const MS_N = 12, MS_S = 10, MS_FAINT = [1, 1, 1, 0x77 / 255], MS_WHITE = [1, 1, 1, 1], MS_NORMAL = [1, 1, 1, 0.75];
+function msgRuns(e) {
+  if (e.runs) return e.runs;
+  if (!e.hits) return { num: null, icons: [], runs: [[e.dir === 'out' ? (e.shots > 1 ? `你的一组${e.weapon}完全没有打中${e.name}` : `你的${e.weapon}完全没有打中${e.name}`) : e.drone ? `${e.name}的${e.weapon}完全没有击中你` : `${e.name}完全没有打中你`, MS_N, false, MS_NORMAL]] };
+  const col = e.dir === 'out' ? [0, 1, 1, 1] : [0.8, 0, 0, 1];
+  return {
+    num: [[String(Math.round(e.dmg)), MS_N, true, col], [' ', MS_N, false, col]],
+    icons: TYPE_ORDER.filter((k) => e.raw[k] > 0).map((k) => `res:/ui/texture/classes/damagetypes/${DMG_TYPES[k]}.png`),
+    runs: [[e.dir === 'out' ? '对' : '来自', MS_S, false, MS_FAINT], [' ', MS_N, false, MS_FAINT], [e.name, MS_N, true, MS_WHITE], [` - ${e.weapon}${e.missile ? '' : ` - ${Q_NAMES[e.q]}`}`, MS_S, false, MS_FAINT]],
+  };
+}
 const ease = (x) => x * x * (3 - 2 * x);
 const lineOff = (l, now) => l.from + (l.to - l.from) * ease(Math.min(1, Math.max(0, (now - l.moveAt) / l.moveT)));
 const lineAlpha = (l, now) => {
@@ -3809,6 +4016,7 @@ function drawMsgs(now) {
   if (M.queue.length && M.lastOut === now) {
     const busy = M.recent.reduce((a, b) => a + b, 0) > 8;
     const { e } = M.queue.shift();
+    if (NE.uiMode()) NE.dmsg(msgRuns(e));   // 原生窗口里显示（动画在 msgs.py 里照客户端做）
     while (M.lines.length < MSG.max) { const el = document.createElement('div'); el.className = 'pl-dmsg-l'; box.append(el); M.lines.push({ el, shown: false }); }
     for (const l of M.lines) if (l.shown && now > l.born && lineAlpha(l, now) <= 0) l.shown = false;
     const slot = M.lines.find((l) => !l.shown) || M.lines.reduce((a, b) => (b.to > a.to ? b : a));
