@@ -10,7 +10,8 @@
 import gzip, glob, json, os, re, sys
 from datetime import datetime, timedelta, timezone
 
-LOGS = sorted(glob.glob("/var/log/nginx/eve.access.log*"), reverse=True)
+_all_logs = sorted(glob.glob("/var/log/nginx/eve.access.log*"), reverse=True)
+LOGS = _all_logs if os.environ.get("DAU_FULL") else _all_logs[:3]   # 日常只扫最新3个（流量大了全扫要30分钟+）；DAU_FULL=1 全量回填
 OUT = "/opt/eve/stats/dau.json"
 CST = timezone(timedelta(hours=8))
 BOT = re.compile(r"bot|spider|crawl|curl|wget|python|go-http|httpclient|axios|okhttp|monitor|headless|scrapy|java/|masscan|zgrab|deepseek-harness|skill-learning|eve-codex|eve-industry", re.I)
