@@ -33,8 +33,12 @@ function fmt(sec) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// 云同步登录凭据（管理员按同步账号认：服务器校验用户名 + 登录密钥）
+function syncCred() {
+  try { const s = JSON.parse(localStorage.getItem('eve-sync-v1')) || null; return s && s.user && s.auth ? { user: s.user, auth: s.auth } : null; } catch { return null; }
+}
 async function api(path, body) {
-  const res = await fetch('/api/kb/feedback' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const res = await fetch('/api/kb/feedback' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...(syncCred() || {}), ...body }) });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) { const e = new Error(data.error || 'HTTP ' + res.status); e.status = res.status; throw e; }
   return data;
@@ -287,7 +291,7 @@ export function initFeedback(context) {
   $('feedbackTabs').addEventListener('click', onClick);
   render();
   // 只有站长 IP 会得到 200：显示「工单管理」
-  fetch('/api/kb/feedback/admin/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+  fetch('/api/kb/feedback/admin/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(syncCred() || {}) })
     .then((r) => { if (r.ok) { S.isAdmin = true; render(); loadAdminOpen().catch(() => {}); } }).catch(() => {});
   // 有提交过的工单：打开页面时查一次有没有新回复；之后定时查
   if (read(TICKETS_KEY, []).length) setTimeout(() => { S.polled = Date.now(); loadMine().catch(() => {}); }, 3000);

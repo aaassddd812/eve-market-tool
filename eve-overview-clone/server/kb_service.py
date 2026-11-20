@@ -9032,6 +9032,19 @@ class Feedback:
             c.commit()
 
     # ---------- 站长 ----------
+    def admin_ok(self, ip, body):
+        # 站长：白名单 IP（EVE_FEEDBACK_ADMIN_IPS），或云同步账号（EVE_FEEDBACK_ADMIN_USER，默认 wbw5780）的登录密钥
+        if self.admin_ip(ip):
+            return True
+        want = (os.environ.get("EVE_FEEDBACK_ADMIN_USER") or "wbw5780").strip().lower()
+        if not want or not isinstance(body, dict):
+            return False
+        try:
+            user, auth = self.sync.params(body)
+            return user == want and bool(self.sync.check(user, auth))
+        except Exception:
+            return False
+
     def admin_ip(self, ip):
         try:
             addr = ipaddress.ip_address(ip.split("%")[0])
@@ -9603,23 +9616,36 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.send_json(404, {"error": "not found"})
             ip = self.client_ip()
             admin = op.startswith("admin/")
-            if admin and not api.feedback.admin_ip(ip):
-                return self.send_json(404, {"error": "not found"})
-            if op == "admin/check":   # 只有站长 IP 能走到这里：网页据此显示「工单管理」
+            body = None
+            if admin:
+                # 管理操作先读 body：除了站长 IP，还认云同步账号（登录密钥在 body.user / body.auth 里）
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    if not 0 < length <= 16384:
+                        raise ValueError
+                    body = json.loads(self.rfile.read(length))
+                    if not isinstance(body, dict):
+                        raise ValueError
+                except ValueError:
+                    return self.send_json(400, {"error": "请求体应为 JSON"})
+                if not api.feedback.admin_ok(ip, body):
+                    return self.send_json(404, {"error": "not found"})
+            if op == "admin/check":   # 站长（IP 或云同步账号）能走到这里：网页据此显示「工单管理」
                 return self.send_json(200, {"admin": True})
             if not admin:
                 ok, _, retry = (feedback_read_limiter if op == "mine" else feedback_limiter).take(ip)
                 if not ok:
                     return self.send_json(429, {"error": f"提交太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
-            try:
-                length = int(self.headers.get("Content-Length") or 0)
-                if not 0 < length <= 16384:
-                    raise ValueError
-                body = json.loads(self.rfile.read(length))
-                if not isinstance(body, dict):
-                    raise ValueError
-            except ValueError:
-                return self.send_json(400, {"error": "请求体应为 JSON"})
+            if body is None:
+                try:
+                    length = int(self.headers.get("Content-Length") or 0)
+                    if not 0 < length <= 16384:
+                        raise ValueError
+                    body = json.loads(self.rfile.read(length))
+                    if not isinstance(body, dict):
+                        raise ValueError
+                except ValueError:
+                    return self.send_json(400, {"error": "请求体应为 JSON"})
             try:
                 if admin:
                     return self.send_json(200, api.feedback.admin(op[6:], body))
@@ -10059,6 +10085,7 @@ def main():
     api.plaza = Plaza(store, api.wallet)
     api.push = AlertPush()
     api.feedback = Feedback(store, api.push)
+    api.feedback.sync = api.sync
     api.lite = LiteStats(store)
     abyssal = Abyssal(store)
     abyssal.model = store.abyssal_model

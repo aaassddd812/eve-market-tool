@@ -637,6 +637,8 @@ function initViewHashTracking() {
 }
 
 function switchView(view) {
+  const documentRoot = document.documentElement;
+  if (documentRoot.dataset.nativePilot) documentRoot.classList.toggle('native-pilot-window', view === 'pilot');
   const prev = state.currentView;
   if (prev !== view) viewScroll[prev] = saveScroll(prev);
   // restored：回到离开时的状态，各页面据此不再重新渲染
@@ -1164,7 +1166,7 @@ async function openPi() {
 // 模拟装配：模块与数据（约 450 KB 压缩后）首屏后空闲时预加载，或首次进入时加载
 let fittingLoading = null;
 function loadFittingModule() {
-  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v343').then((m) => {
+  if (!fittingLoading) fittingLoading = import('./fitting.js?v=v352').then((m) => {
     m.initFitting({ addToCart,
       esc, formatNumber, formatISK, showToast, copyText, store, debounce, getMarketPriceMap, getInsurance, valuation, fetchESI,
       getCharacterSkills, getCharacterImplants, getCurrentShip, esiFetch: esiAuthFetch, getEsiToken: ensureEsiToken,
@@ -3790,7 +3792,7 @@ function initDesktopDl() {
 
 function initContact() {
   $('contactBtn').addEventListener('click', () => toggleContact(true));
-  feedbackModule = import('./feedback.js?v=v4').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
+  feedbackModule = import('./feedback.js?v=v5').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
   $('contactModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-close-contact]')) { toggleContact(false); return; }
     const b = e.target.closest('[data-contact-copy]');
