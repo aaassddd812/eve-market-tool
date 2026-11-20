@@ -5883,6 +5883,13 @@ class MapKills:
 FW_POLL = 5 * 60
 FW_KEEP = 3 * 86400
 FW_WINDOW = 6 * 3600
+# 海盗叛乱（只有宁静）：CCP 官网 Frontlines 页面用的公开数据（CloudFront 缓存 150 秒；不允许浏览器跨域读，由这里中转），同一轮询里每 5 分钟读一次。
+# 接口 GET /api/v1/fw/insurgency?server=：每个海盗势力当前（或刚结束）的一场叛乱：阶段、海盗 FOB、胜利所需星系数、各星系腐蚀 / 镇压进度。
+#   官方数据的 startDateTime 是「预告」开始的时间（转入进行中后不变），endDateTime 一直是空的，游戏里进行中的叛乱也不显示结束时间；
+#   所以这里记下每场叛乱各阶段第一次出现的时间：亲眼看到「预告 → 进行中」才给出 active_since（误差约一个轮询周期加 CDN 缓存），结束同理。
+INSURGENCY_URL = "https://www.eveonline.com/api/warzone/insurgency"
+INSURGENCY_KEEP = 120 * 86400
+INSURGENCY_DONE = ("PIRATE_VICTORY", "ANTI_PIRATE_VICTORY", "NO_WINNER")
 
 
 class FwTracker:
@@ -5890,10 +5897,13 @@ class FwTracker:
         self.store = store
         self.lock = threading.Lock()
         self.cache = {}         # server -> 接口结果
+        self.ins = None         # 海盗叛乱接口结果
+        self.ins_lock = threading.Lock()
         c = store.conn()
         with store.write_lock:
             c.execute("CREATE TABLE IF NOT EXISTS fw_snap(server TEXT, system_id INTEGER, at INTEGER, vp INTEGER, threshold INTEGER, occupier INTEGER, contested TEXT,"
                       " PRIMARY KEY(server, system_id, at)) WITHOUT ROWID")
+            c.execute("CREATE TABLE IF NOT EXISTS insurgency_seen(campaign INTEGER, state TEXT, at INTEGER, PRIMARY KEY(campaign, state)) WITHOUT ROWID")
             c.commit()
 
     def start(self):
@@ -5906,6 +5916,10 @@ class FwTracker:
                     self.poll(server)
                 except Exception as e:
                     log.warning("势力战争快照（%s）失败：%s", server, e)
+            try:
+                self.insurgency_fetch()
+            except Exception as e:
+                log.warning("海盗叛乱数据读取失败：%s", e)
             time.sleep(FW_POLL)
 
     def poll(self, server):
@@ -5978,6 +5992,72 @@ class FwTracker:
         with self.lock:
             self.cache[server] = out
         return out
+
+    # ---------- 海盗叛乱（只有宁静）----------
+    def insurgency_fetch(self):
+        """读一次官网叛乱数据，记下每场叛乱各阶段第一次出现的时间，返回整理好的接口结果"""
+        data, _ = get_json(INSURGENCY_URL, timeout=30, retries=2)
+        if not isinstance(data, list):
+            raise ValueError("叛乱数据格式不对")
+        now = int(time.time())
+        c = self.store.conn()
+        with self.store.write_lock:
+            c.executemany("INSERT OR IGNORE INTO insurgency_seen VALUES (?,?,?)",
+                          [(x["campaignId"], x["state"], now) for x in data if x.get("campaignId") and x.get("state")])
+            c.execute("DELETE FROM insurgency_seen WHERE at < ?", (now - INSURGENCY_KEEP,))
+            c.commit()
+        seen = collections.defaultdict(dict)
+        ids = [x["campaignId"] for x in data if x.get("campaignId")]
+        if ids:
+            for cid, state, at in c.execute(f"SELECT campaign, state, at FROM insurgency_seen WHERE campaign IN ({','.join('?' * len(ids))})", ids):
+                seen[cid][state] = at
+        iso = lambda s: calendar.timegm(time.strptime(s[:19], "%Y-%m-%dT%H:%M:%S")) if s else None
+        campaigns = []
+        for x in data:
+            s = seen.get(x.get("campaignId"), {})
+            state = x.get("state")
+            # 前一阶段也在记录里，才说明亲眼看到了阶段变化；否则第一次出现的时间只是本站开始记录的时间
+            active = s.get("ACTIVE") if "FORECAST" in s else None
+            ended = s.get(state) if state in INSURGENCY_DONE and "ACTIVE" in s else None
+            campaigns.append({
+                "campaign_id": x.get("campaignId"), "pirate_faction_id": x.get("pirateFactionId"), "state": state,
+                "forecast_start": iso(x.get("startDateTime")), "active_since": active, "ended": ended,
+                "corruption_required": x.get("corruptionThresHold"), "suppression_required": x.get("suppressionThresHold"),
+                "fob_system_id": (x.get("originSolarSystem") or {}).get("id"),
+                "systems": [{"system_id": (i.get("solarSystem") or {}).get("id"),
+                             "corruption": i.get("corruptionPercentage"), "corruption_stage": i.get("corruptionState"),
+                             "suppression": i.get("suppressionPercentage"), "suppression_stage": i.get("suppressionState"),
+                             "owner_faction_id": (i.get("solarSystem") or {}).get("ownerFactionId"),
+                             "occupier_faction_id": (i.get("solarSystem") or {}).get("occupierFactionId")}
+                            for i in x.get("insurgencies") or []]})
+        out = {"server": "tq", "updated": now, "source": INSURGENCY_URL, "campaigns": campaigns}
+        with self.lock:
+            self.ins = out
+        return out
+
+    def insurgency(self, q):
+        server = q.get("server") or "tq"
+        if server not in ARB_SERVERS:
+            raise ValueError("server 只能是 " + " / ".join(ARB_SERVERS))
+        if server != "tq":
+            return {"server": server, "updated": None, "campaigns": [], "note": "国服没有公开的叛乱数据"}
+        with self.lock:
+            hit = self.ins
+        if hit and time.time() - hit["updated"] < FW_POLL + 60:
+            return hit
+        # 后台轮询没开（演示环境）或最近几次读失败：现读一次，失败就退回上一份
+        with self.ins_lock:
+            with self.lock:
+                hit = self.ins
+            if hit and time.time() - hit["updated"] < FW_POLL + 60:
+                return hit
+            try:
+                return self.insurgency_fetch()
+            except Exception as e:
+                log.warning("海盗叛乱数据读取失败：%s", e)
+                if hit:
+                    return {**hit, "stale": True}
+                raise ValueError("暂时读不到叛乱数据")
 
 
 # ---------------------------------------------------------------- 本站观察成交量
@@ -7396,7 +7476,8 @@ class Hosted:
         self.sos_at = 0
         self.battle_at = 0
         self.graphs = {}          # server -> 星门图：(星系 ID -> 下标, 邻接表, 星系表)；曙光服用自己的 map-data-infinity.json
-        self.names = None         # 物品 ID -> (中文名, 英文名)
+        self.names = None         # 物品 ID -> 中文名（load_names 读入）
+        self.cn_names = {}        # 国服 -> { 宁静中文: 国服中文 }
         self.pool = concurrent.futures.ThreadPoolExecutor(4, thread_name_prefix="hosted")
         self.market = {}          # (server, 星域, 物品, buy|sell) -> (时间, 订单)；多个角色共用
         self.structs = {}         # (server, 建筑) -> (时间, 订单)
@@ -7814,7 +7895,7 @@ class Hosted:
         """物品中文名（type-names-zh.json，缺的用 fit-data.json）、中文 → 英文（i18n/names-en.json）、虫洞星系名（wh-data.json）"""
         if self.names is not None:
             return
-        zh, en, wh = {}, {}, {}
+        zh, en, wh, cn = {}, {}, {}, {}
         for name, fn in (("fit-data.json", lambda d: zh.update({int(k): v[0] for k, v in d["types"].items()})),
                          ("type-names-zh.json", lambda d: zh.update({int(k): v for k, v in d.items()})),
                          ("i18n/names-en.json", en.update),
@@ -7823,15 +7904,23 @@ class Hosted:
                 fn(self.industry._load(name))
             except Exception:  # noqa: BLE001
                 log.warning("托管预警：读不到 %s，相关名称用 ID", name)
-        self.names, self.en_names, self.wh_names = zh, en, wh
+        # 国服订阅的中文消息：宁静中文与国服不同的名称换成国服的（cn-names-<服>.json，build_cn_extra.py 生成）
+        for srv in ("serenity", "infinity"):
+            try:
+                cn[srv] = self.industry._load(f"cn-names-{srv}.json").get("names") or {}
+            except Exception:  # noqa: BLE001
+                cn[srv] = {}
+        self.names, self.en_names, self.wh_names, self.cn_names = zh, en, wh, cn
 
-    def tr(self, zh, en):
-        return self.en_names.get(zh, zh) if en else zh
+    def tr(self, zh, en, server=None):
+        if en:
+            return self.en_names.get(zh, zh)
+        return self.cn_names.get(server, {}).get(zh, zh) if server else zh
 
-    def type_name(self, tid, en):
+    def type_name(self, tid, en, server=None):
         self.load_names()
         n = self.names.get(tid)
-        return self.tr(n, en) if n else f"Type {tid}"
+        return self.tr(n, en, server) if n else f"Type {tid}"
 
     def map(self, server):
         server = "infinity" if server == "infinity" else "tq"
@@ -7849,7 +7938,7 @@ class Hosted:
         self.load_names()
         index, _, systems = self.map(server)
         i = index.get(sid)
-        return self.tr(systems[i][1], en) if i is not None else self.wh_names.get(sid) or str(sid)
+        return self.tr(systems[i][1], en, server) if i is not None else self.wh_names.get(sid) or str(sid)
 
     def jumps_from(self, server, sid, limit):
         index, adj, systems = self.map(server)
@@ -7923,7 +8012,7 @@ class Hosted:
                     continue
             if names is None:
                 names = api.with_names(kills)
-            ship = self.type_name(x["ship_type_id"], en)
+            ship = self.type_name(x["ship_type_id"], en, sub["server"])
             victim = names.get(x["victim"].get("character_id")) or names.get(x["victim"].get("corporation_id")) or ""
             sysn = self.sys_name(sub["server"], x["system_id"], en)
             jumps = sub["range"].get(x["system_id"])
@@ -8013,7 +8102,7 @@ class Hosted:
             i = index.get(b["system_id"])
             region = self.region_names(sub["server"]).get(systems[i][6]) if i is not None else ""
             sysn = self.sys_name(sub["server"], b["system_id"], en)
-            where = sysn + ((f" ({self.tr(region, True)})" if en else f"（{region}）") if region else "")
+            where = sysn + ((f" ({self.tr(region, True)})" if en else f"（{self.tr(region, False, sub['server'])}）") if region else "")
             sides = [names.get(str(x["id"])) or names.get(x["id"]) for x in b.get("sides", [])[:2]]
             sides = [x for x in sides if x]
             text = (f"{tier[3]} · {where} · {b['kills']} ships destroyed in {HOSTED_BATTLE_WINDOW} min · ~{b['pilots']} pilots · {_isk(b['value'])} ISK lost" if en
@@ -8108,7 +8197,7 @@ class Hosted:
             if alerted.get(oid) == best:
                 continue
             alerted[oid] = best
-            name = self.type_name(o["type_id"], en)
+            name = self.type_name(o["type_id"], en, sub["server"])
             where = self.sys_name(sub["server"], sid, en) if sid else ""
             text = (f"{name}: {'buy' if buy else 'sell'} order {_price(o['price'])} undercut, best {_price(best)}" if en
                     else f"{name}：{'收单' if buy else '卖单'} {_price(o['price'])} 被压，对手 {_price(best)}") + (f" · {where}" if where else "")
@@ -8134,7 +8223,7 @@ class Hosted:
             if not (v <= a["price"] if a["op"] == "le" else v >= a["price"]):
                 continue
             done.add(a["key"])
-            name = self.type_name(a["type"], en)
+            name = self.type_name(a["type"], en, sub["server"])
             hub = self.sys_name(sub["server"], a["system"], en) if a["system"] else ""
             op = "≤" if a["op"] == "le" else "≥"
             text = (f"{name}: {hub + ' ' if hub else ''}{'buy' if a['side'] == 'buy' else 'sell'} price {_price(v)} ({op} {_price(a['price'])})" if en
@@ -8193,7 +8282,7 @@ class Hosted:
             return
         done = [k for k, t in st["q"].items() if cur.get(k, t) <= now]
         if done:
-            names = [f"{self.type_name(int(k.split(':')[0]), en)} {'level ' if en else ''}{k.split(':')[1]}{'' if en else ' 级'}" for k in done[:8]]
+            names = [f"{self.type_name(int(k.split(':')[0]), en, sub['server'])} {'level ' if en else ''}{k.split(':')[1]}{'' if en else ' 级'}" for k in done[:8]]
             self.enqueue(sub, "skill", self.who(sub, en) + ("Skill trained: " if en else "技能练完：") + ("、" if not en else ", ").join(names)
                          + ((f" and {len(done) - 8} more" if en else f" 等 {len(done)} 个") if len(done) > 8 else ""))
         if nxt["empty"] and not st.get("empty"):
@@ -8217,7 +8306,7 @@ class Hosted:
             return
         for j in [j for j in ready if j["job_id"] not in set(seen)]:
             act = HOSTED_ACT.get(j.get("activity_id"), ("工业任务", "Industry job"))[en]
-            name = self.type_name(j.get("product_type_id") or j.get("blueprint_type_id"), en)
+            name = self.type_name(j.get("product_type_id") or j.get("blueprint_type_id"), en, sub["server"])
             where = self.loc_name(sub, j.get("facility_id") or j.get("station_id"), en)
             text = (f"{act} done: {name} ×{j.get('runs', 1)}" if en else f"{act}完成：{name} ×{j.get('runs', 1)}") + (f" · {where}" if where else "")
             self.enqueue(sub, "job", self.who(sub, en) + text)
@@ -8286,7 +8375,7 @@ class Hosted:
             del gone[oid]
             if h.get("state") == "cancelled":
                 continue
-            name, side = self.type_name(p[2], en), ("buy" if p[3] else "sell") if en else ("收单" if p[3] else "卖单")
+            name, side = self.type_name(p[2], en, sub["server"]), ("buy" if p[3] else "sell") if en else ("收单" if p[3] else "卖单")
             where = self.loc_name(sub, p[5], en)
             total, left, price = h.get("volume_total") or p[4], h.get("volume_remain", 0), h.get("price") or p[1]
             if left == 0:
@@ -9167,6 +9256,7 @@ def open_routes(api, industry, abyssal=None):
         (("blueprints", "prices"), "bp_prices", bp_prices),
         (("hubs", "arbitrage"), "hub_arbitrage", lambda q: api.arb.snapshot(q)),
         (("fw", "trend"), "fw_trend", lambda q: api.fw.trend(q)),
+        (("fw", "insurgency"), "fw_insurgency", lambda q: api.fw.insurgency(q)),
         (("map", "kills"), "map_kills", lambda q: api.mapk.totals(q)),
         (("wormholes", "activity"), "wh_activity", api.wh_activity),
         (("wormholes", "systems", "{n}"), "wh_system", lambda q, sid: api.wh_system(sid, q)),

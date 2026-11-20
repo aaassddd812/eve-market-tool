@@ -17,6 +17,7 @@
   fit:     { attrs, effects, groups, markets, types }                       只含 fit-data.json 里没有的条目
   skills:  { skills: { id: [中文名, 英文名, 分组, 倍数, 主属性, 副属性, 描述] }, groups: { id: 名称 } }
 另把这些物品、分组的英文名并入 i18n/names-en.json（同时写一份 i18n/names-en-cn.json，build_names_en.py 重建时会再并入）。
+另写 cn-names-<服>.json：宁静也有的物品、星系、势力、分组等在国服的中文名不同时，{ 宁静中文: 国服中文 }（见 build_names）。
 
 曙光另有两套舰船加成（技能未发布，照样收录到 fit.types，不进技能页）：
   舰船适性（技能组 4160）：技能把数值加到舰船的 shipAdaption* 属性上，舰船再用自己的效果加到装甲 / 抗性等；
@@ -412,7 +413,8 @@ def build(ds, sde, tq_ids):
     skill_data = json.load(open(os.path.join(ROOT, 'skill-data.json')))
     cache = Cache(ds)
     q = f'datasource={ds}'
-    listed = all_ids(CN, ds) - tq_ids
+    cn_all = all_ids(CN, ds)
+    listed = cn_all - tq_ids
     extra = sorted(listed | (new_ids(CN, ds, listed) - tq_ids))
     zh = dict(zip(extra, cache.many([f'{CN}/universe/types/{t}/?{q}&language=zh' for t in extra])))
     zh = {k: v for k, v in zh.items() if v and (v.get('published') or v.get('group_id') in ADAPT_GROUPS)}
@@ -574,7 +576,161 @@ def build(ds, sde, tq_ids):
     print(f'{ds}: 独有物品 {len(ids)} · 目录分组 {len(out_cat)} · 装配物品 {len(out_types)}（舰船 {ships}）· 技能 {len(sk)}'
           f' · 新效果 {len(out_eff)}（丢弃无法推断的修正 {dropped} 条）· 新属性 {len(out_attrs)} · 补丁 {len(patch)} · 舰船加成 {len(bonus)}'
           + (f' · 适性 1 级技能 {len(adapt["max1"])} · 云计算 {len(adapt["cloud"])}' if adapt else ''))
+    build_names(ds, cache, cn_all)
     return names_en
+
+
+# ---------- 国服中文名：与宁静不同的名称 ----------
+# 站点数据大多由宁静 SDE 生成；国服有些物品、星系、势力、分组、技能说明的中文不一样（如「贫铀弹」→「硬钼弹」、「古斯塔斯海盗」→「古斯塔斯游寇」）。
+# 按 ID 和网易 ESI 比较，写成 cn-names-<服>.json：{ server, names: { 宁静中文: 国服中文 } }，前端（js/i18n.js）在中文模式切到该服时把数据文件里的整串换掉，
+# 托管预警（kb_service.py）发给国服订阅的消息也照这份换。同一个宁静中文在国服对应多个名字的（不同 ID 改名不一样）不换，避免张冠李戴。
+# 来源：物品（type-names-zh / fit-data / skill-data / npc-data）、NPC 名称表（星系、星座、星域、NPC 军团、NPC 角色）用 /universe/names/ 每次 1000 个；
+#   势力名称与说明 /universe/factions/；星域说明 /universe/regions/{id}/；物品分组 /universe/groups/{id}/；市场分组 /markets/groups/{id}/；技能说明 /universe/types/{id}/。
+#   空间站名称网易 ESI 只给英文：按「星系名开头 + NPC 军团名」把其中国服改了名的部分换掉。
+NAMES_BATCH = 1000
+
+
+def post_names(ds, ids):
+    """/universe/names/ 批量查国服中文名；任何一批失败就整体放弃（返回 None），免得只换了一部分"""
+    out = {}
+    def one(chunk):
+        for attempt in range(4):
+            try:
+                req = urllib.request.Request(f'{CN}/universe/names/?datasource={ds}', data=json.dumps(chunk).encode(),
+                                             headers={'User-Agent': 'EVE-Market-Tool build_cn_extra', 'Content-Type': 'application/json'})
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    error_budget(r.headers)
+                    return json.load(r)
+            except urllib.error.HTTPError as e:
+                error_budget(e.headers)
+                if e.code == 404:   # 有国服不存在的 ID（调用方已按国服清单过滤，正常不会出现）
+                    return None
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(3 * (attempt + 1))
+        return None
+    ids = sorted(set(ids))
+    with cf.ThreadPoolExecutor(4) as ex:
+        for res in ex.map(one, [ids[i:i + NAMES_BATCH] for i in range(0, len(ids), NAMES_BATCH)]):
+            if res is None:
+                return None
+            for x in res:
+                out[x['id']] = x['name']
+    return out
+
+
+def build_names(ds, cache, cn_types):
+    q = f'datasource={ds}'
+    load = lambda name: json.load(open(os.path.join(ROOT, name), encoding='utf-8'))
+    tz, fit, skills, npc, catalog = load('type-names-zh.json'), load('fit-data.json'), load('skill-data.json'), load('npc-data.json'), load('catalog.json')
+    npc_names, mapd = load('npc-names-zh.json'), load('map-data.json')
+    pairs = []   # (宁静中文, 国服中文)
+
+    def pair_up(tq_of, cn_of):
+        for k, tq in tq_of.items():
+            cn = cn_of.get(k)
+            if tq and cn:
+                pairs.append((tq, cn))
+
+    # 物品：站点数据里出现的宁静中文名（同一个 ID 各文件里一般相同）
+    tq_types = collections.defaultdict(set)
+    for k, v in tz.items():
+        tq_types[int(k)].add(v)
+    for k, v in fit['types'].items():
+        tq_types[int(k)].add(v[0])
+    for k, v in skills['skills'].items():
+        tq_types[int(k)].add(v[0])
+    for table in ('npc', 'msl'):
+        for k, v in npc.get(table, {}).items():
+            tq_types[int(k)].add(v['n'][0])
+    ids = [t for t in tq_types if t in cn_types]
+    cn = post_names(ds, ids)
+    if cn is None:
+        print(f'{ds}: 国服物品中文名读取失败，本次不更新 cn-names')
+        return
+    for t in ids:
+        for tq in tq_types[t]:
+            pair_up({0: tq}, {0: cn.get(t)})
+    # NPC 名称表：星系、星座、星域、NPC 军团、NPC 角色（空间站另算）
+    diff_sys, diff_corp = {}, {}
+    for table in ('systems', 'constellations', 'regions', 'corporations', 'characters'):
+        tq = {int(k): v for k, v in npc_names.get(table, {}).items()}
+        got = post_names(ds, list(tq))
+        if got is None:
+            print(f'{ds}: 国服 {table} 中文名读取失败，本次不更新 cn-names')
+            return
+        pair_up(tq, got)
+        if table == 'systems':
+            diff_sys = {tq[k]: got[k] for k in tq if got.get(k) and got[k] != tq[k]}
+        if table == 'corporations':
+            diff_corp = {tq[k]: got[k] for k in tq if got.get(k) and got[k] != tq[k]}
+    # 空间站：「星系名 …」开头的星系、名字里的 NPC 军团按国服名换
+    for name in npc_names.get('stations', {}).values():
+        new = name
+        for a, b in diff_sys.items():
+            if new.startswith(a + ' '):
+                new = b + new[len(a):]
+        for a, b in diff_corp.items():
+            new = new.replace(a, b)
+        pairs.append((name, new))
+    # 势力：名称与说明（map-data 的势力表）
+    facs, _ = fetch(f'{CN}/universe/factions/?{q}&language=zh')
+    if not facs:
+        print(f'{ds}: 国服势力读取失败，本次不更新 cn-names')
+        return
+    cn_fac = {f['faction_id']: f for f in facs}
+    for k, v in mapd.get('factions', {}).items():
+        f = cn_fac.get(int(k))
+        if f:
+            pairs.append((v.get('name'), f.get('name')))
+            pairs.append((v.get('description'), f.get('description')))
+    # 星域说明
+    regions = [r for r in mapd.get('regions', []) if len(r) > 3 and r[3]]
+    for r, v in zip(regions, cache.many([f'{CN}/universe/regions/{r[0]}/?{q}&language=zh' for r in regions])):
+        if v:
+            pairs.append((r[3], v.get('description')))
+    # 物品分组（装配数据、技能页、NPC）：只查国服有的分组，404 也算 ESI 错误额度
+    cn_groups = set()
+    page = 1
+    while True:
+        got, h = fetch(f'{CN}/universe/groups/?{q}&page={page}')
+        cn_groups |= set(got or [])
+        if not h or page >= int(h.get('x-pages') or 1):
+            break
+        page += 1
+    tq_groups = {int(k): v[0] for k, v in fit['groups'].items()}
+    tq_groups.update({int(k): v for k, v in skills['groups'].items()})
+    for v in npc.get('npc', {}).values():
+        if v.get('g') and v.get('gn'):
+            tq_groups.setdefault(int(v['g']), v['gn'][0])
+    gids = sorted(g for g in tq_groups if g in cn_groups)
+    for g, v in zip(gids, cache.many([f'{CN}/universe/groups/{g}/?{q}&language=zh' for g in gids])):
+        if v:
+            pairs.append((tq_groups[g], v.get('name')))
+    # 市场分组（物品目录、装配侧栏）
+    cn_markets, _ = fetch(f'{CN}/markets/groups/?{q}')
+    cn_markets = set(cn_markets or [])
+    tq_markets = {g['id']: g['name'] for g in catalog['groups']}
+    tq_markets.update({int(k): v[0] for k, v in fit['markets'].items()})
+    mids = sorted(m for m in tq_markets if m in cn_markets)
+    for m, v in zip(mids, cache.many([f'{CN}/markets/groups/{m}/?{q}&language=zh' for m in mids])):
+        if v:
+            pairs.append((tq_markets[m], v.get('name')))
+    # 技能说明（技能页）
+    sids = sorted(int(k) for k in skills['skills'] if int(k) in cn_types)
+    for s, v in zip(sids, cache.many([f'{CN}/universe/types/{s}/?{q}&language=zh' for s in sids])):
+        if v and v.get('description'):
+            pairs.append((skills['skills'][str(s)][6], v['description']))
+    # 同一个宁静中文在国服只对应一个名字才换
+    seen = collections.defaultdict(set)
+    for tq, cnn in pairs:
+        if tq and cnn:
+            seen[tq].add(cnn)
+    names = {tq: next(iter(v)) for tq, v in sorted(seen.items()) if len(v) == 1 and next(iter(v)) != tq}
+    clash = sum(1 for v in seen.values() if len(v) > 1)
+    if write_if_changed(os.path.join(ROOT, f'cn-names-{ds}.json'), {'server': ds, 'names': names}):
+        UPDATED.append(f'cn-names-{ds}')
+    print(f'{ds}: 国服中文与宁静不同 {len(names)} 条（对比 {len(seen)} 条，一名多译不换 {clash} 条）')
 
 
 def cloud_table():

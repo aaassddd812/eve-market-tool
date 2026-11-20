@@ -6303,6 +6303,40 @@ td .sov-auto-tag { margin-left: 4px; }
 .fw-next b { color: var(--warning, #f59e0b); margin-left: 4px; }
 .fw-trend-note { margin: -4px 0 10px; font-size: 0.75rem; color: var(--text-muted); }
 .fw-next .link-btn, .fw-front-meta .link-btn { color: var(--accent-primary); }
+.fw-ins-grid { margin-bottom: 12px; }
+/* 海盗叛乱：腐蚀照游戏用绿色、镇压用白色；浅色主题换成看得清的深色 */
+.fw-ins { --ins-c: #8ef30d; --ins-s: #f1f1f1; }
+[data-theme="light"] .fw-ins { --ins-c: #3f7d00; --ins-s: #64748b; }
+.fw-ins-state { flex: none; padding: 1px 8px; border-radius: 10px; font-size: 0.6875rem; line-height: 18px; color: var(--text-muted); background: var(--bg-tertiary); white-space: nowrap; }
+.fw-ins-state.on { color: var(--warning); background: rgba(245, 158, 11, 0.14); }
+.fw-ins-time, .fw-ins-goal { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.fw-ins-time > span { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-radius: var(--radius-sm); background: var(--bg-tertiary); min-width: 0; }
+.fw-ins-time em, .fw-ins-goal em { font-style: normal; font-size: 0.6875rem; color: var(--text-muted); }
+.fw-ins-time b { font-size: 0.9375rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fw-ins-time small { font-size: 0.6875rem; color: var(--text-secondary); }
+.fw-ins-tz { font-style: normal; font-size: 0.625rem; font-weight: 400; color: var(--text-muted); margin-left: 4px; }
+.fw-ins-goal > div { display: grid; grid-template-columns: 1fr auto; gap: 4px 8px; align-items: baseline; min-width: 0; }
+.fw-ins-goal b { font-size: 0.8125rem; font-variant-numeric: tabular-nums; }
+.fw-ins-goal .fw-ins-bar { grid-column: 1 / -1; width: auto; }
+.fw-ins-bar { display: block; width: 56px; height: 6px; border-radius: 3px; background: var(--bg-hover); overflow: hidden; flex: none; }
+.fw-ins-bar u { display: block; height: 100%; }
+.fw-ins-bar.c u { background: var(--ins-c); }
+.fw-ins-bar.s u { background: var(--ins-s); }
+.fw-ins-sys li { gap: 6px; }
+.fw-board li.fw-ins-th { background: none; padding-top: 0; padding-bottom: 0; font-size: 0.6875rem; color: var(--text-muted); }
+.fw-ins-name { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+.fw-ins-name .fw-name { flex: 0 1 auto; }
+.fw-ins-m { display: inline-flex; align-items: center; gap: 4px; flex: none; min-width: 132px; }
+.fw-ins-m b { width: 38px; text-align: right; font-size: 0.75rem; }
+.fw-board .fw-ins-m small { min-width: 34px; }
+.fw-board small.fw-ins-fob { color: var(--danger); font-weight: 600; }
+.fw-ins-more summary { cursor: pointer; font-size: 0.75rem; color: var(--accent-primary); margin: 2px 0 4px; }
+@media (max-width: 520px) {
+  .fw-ins-m { width: auto; }
+  .fw-ins-m .fw-ins-bar { width: 28px; }
+  .fw-board .fw-ins-m small { display: none; }
+  .fw-ins-time b { font-size: 0.875rem; }
+}
 /* 近 30 天疑似会战（#kb/battles） */
 .kb-bh-entry { height: 28px; padding: 0 10px; font-size: 0.75rem; margin-left: auto; }
 .kb-bh-select { height: 32px; width: auto; }

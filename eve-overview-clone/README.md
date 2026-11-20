@@ -108,6 +108,7 @@ eve-overview-clone/
 ├── map-data.json        # 星图静态数据（build_map.mjs 生成，宁静 / 晨曦共用）
 ├── map-data-infinity.json # 曙光服星图（build_map_esi.mjs 从曙光 ESI 生成）
 ├── cn-extra-serenity.json / cn-extra-infinity.json # 晨曦 / 曙光独有的舰船、装备、技能等（server/build_cn_extra.py 从国服 ESI 生成）
+├── cn-names-serenity.json / cn-names-infinity.json # 宁静中文 → 国服中文（两边译名不同的物品、星系、势力等；同一脚本生成）
 ├── js/server-extra.js   # 切到国服时加载上面的文件，并把国服独有物品的图标换到网易图片服务器
 ├── npc-names-zh.json    # 官方中文名称表（build_npc_names.mjs 生成）
 ├── npc-data.json        # NPC 人物 / 代理人驻地（build_npc.mjs 由 SDE 生成，星图搜索 NPC 用）
@@ -564,6 +565,11 @@ node build_lp.mjs <SDE 解压目录>   # 输出 eve-overview-clone/lp-data.json
 - **预计时间**：击杀记录服务后台每 5 分钟看一次三个服的 `/fw/systems/`，ESI 每更新一次（约 30 分钟）就记一份各星系胜利点快照（`fw_snap` 表，保留 3 天），
   `GET /api/v1/fw/trend?server=` 按最近 6 小时推进速度估算到达阈值的时间。战线卡片显示「预计最快进入可被夺取」的星系、24 小时内易主的星系，
   前线星系后标「≈X 小时满」/「回落中」/「停滞」/「可被夺取 已 X 小时」；服务刚启动时要攒两次 ESI 更新（约 1 小时）才有数。只作参考，游戏没有公开倒计时
+- **海盗叛乱进度**：ESI 没有叛乱数据，击杀记录服务每 5 分钟读一次 CCP 官网 Frontlines 用的 `https://www.eveonline.com/api/warzone/insurgency`（没有跨域头，浏览器读不了，由服务器中转），
+  `GET /api/v1/fw/insurgency?server=tq` 返回每个海盗势力的一场叛乱：状态（预告 / 进行中 / 海盗势力获胜 / 反海盗势力胜利 / 无胜利方）、海盗FOB、目标（腐蚀 / 镇压满阶段的星系数）和各星系腐蚀 / 镇压进度与阶段。
+  官网只给预告开始时间（`startDateTime`，进入进行中以后也不变，`endDateTime` 一直为空），时间按 24.01 补丁（2026-09-22）后的规则推算：预告 48 小时，进行中最长 7 天，一方先达成目标就提前结束；
+  服务第一次看到「进行中」「已结束」时记在 `insurgency_seen` 表里，有记录就用记录的时间。卡片显示「预计开打 / 开打」「最晚结束」（进行中带倒计时）、目标进度条和星系列表（前 8 个，其余折叠）。
+  只有宁静服有数据，国服显示「国服没有公开的叛乱进度」
 - **刷新倒计时**（v59）：势力战争页顶部显示「战场（星系争夺进度）」与「阵营统计与排行榜」的下次刷新倒计时和数据生成时间，
   取自 ESI 响应的 `Expires` / `Last-Modified`（CORS 安全响应头，宁静与网易都能读）。星系争夺进度约每 30 分钟更新，阵营统计每天结算一次（缓存按整点刷新）。
   倒计时归零 5 秒后自动在后台重新读取并就地替换（两次至少隔 60 秒），更新后倒计时条闪一下
@@ -632,6 +638,17 @@ CCP 的 SDE 里没有这些物品，`server/build_cn_extra.py` 从网易 ESI 读
 - **图标**：这些物品在 images.evetech.net 上没有图标，加载失败时自动换成网易图片服务器（晨曦 `image.evepc.163.com`、曙光 `image-infinity.evepc.163.com`，`/Type/<ID>_32|64.png`）
 - **加成的局限**：ESI 的效果修正不带「对哪个技能 / 分组的装备生效」，脚本按效果名（如 `ShipBonusMedHybridTurretDmg` → 中型混合炮台）和 SDE 里同类修正推断；推断不出来的修正丢弃（晨曦约 120 条、曙光约 140 条，少算一个加成，好过加错地方），所以少数国服舰船的数值会和游戏里有出入
 - **更新**：`python3 server/build_cn_extra.py <SDE 解压目录>`（在 eve-overview-clone 下运行；ESI 结果缓存在 `server/.cn-cache/`，重跑只请求新物品），之后把 `server-extra.js` 里 `cn-extra-*.json?v=` 加一，并同步改 `fit-engine.js`、`skills-page.js`、`modern-app.js` 引用的 `server-extra.js?v=`
+
+### 国服中文名（cn-names）
+
+国服（网易）的中文译名有不少和宁静服不一样（如「科马克改良型索敌计算机」→「科尔马克氏改良型索敌计算机」、「扎尔扎克」→「荒渊」、「古斯塔斯海盗」→「古斯塔斯游寇」）。网易没有公开 SDE，站点数据都是按宁静 SDE 生成的，所以切到晨曦 / 曙光时按国服 ESI 换名：
+
+- **生成**：`build_cn_extra.py` 顺带生成 `cn-names-<服>.json`（`{server, names: {宁静中文: 国服中文}}`），只收两边不同的。来源：物品名（先按国服 `/universe/types/` 清单过滤，再 `/universe/names/` 每次 1000 个，避免 404 消耗 ESI 错误额度）、星系 / 星座 / 星域 / NPC 军团 / NPC 角色、势力名称与说明、星域说明、物品分组、市场分组、技能说明；空间站名网易只给英文，按「星系名开头 + NPC 军团名」换掉国服改过的部分
+- **一名多译不换**：同一个宁静中文在国服对应多个名字（不同 ID 改得不一样）的不换（各约 20 条），免得张冠李戴；任何一批读取失败就整份不更新
+- **前端**：`i18n.js` 在中文界面、服务器为晨曦 / 曙光时包一层 `fetch`，读物品目录、装配、地图、NPC、工业、技能等数据文件时按整串精确替换（和英文界面换英文名同一个办法）；`cn-extra-*.json` 本来就是国服数据，不换。宁静服和英文界面不受影响
+- **托管预警**：`kb_service.py` 启动时读这两个文件，发给国服订阅的消息里的物品名、星系名、星域名同样换成国服中文
+- **局限**：属性名称、舰船加成说明（`fit-info`）网易 ESI 没有中文来源，仍是宁静中文；空间站名里的服务设施部分不换
+- **更新**：每天的国服数据任务（`data_update.sh` 的 `update_cn`）会重新生成；前端固定用 `?v=1` 加 `no-cache` 读取（每次向服务器确认是否有新版），不用改版本号
 
 ## 行星工业（v19）
 

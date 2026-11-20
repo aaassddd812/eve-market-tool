@@ -9,7 +9,7 @@
 (function () {
   'use strict';
   var KEY = 'eve-lang';
-  var VER = '362';
+  var VER = '363';
   var CN_TZ = /^Asia\/(Shanghai|Chongqing|Chungking|Harbin|Urumqi|Kashgar|Hong_Kong|Macau|Macao|Taipei)$/;
 
   function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
@@ -58,6 +58,40 @@
     } catch (e) { /* 地址解析不了照常请求 */ }
     return baseFetch(input, init);
   };
+
+  // ---------- 国服（晨曦 / 曙光）中文：数据文件里与宁静中文不同的名称换成国服的 ----------
+  // 站点数据大多按宁静 SDE 生成，国服有些物品、星系、势力、分组、技能说明的中文不一样（如「贫铀弹」→「硬钼弹」、「古斯塔斯海盗」→「古斯塔斯游寇」）。
+  // server/build_cn_extra.py 按 ID 与网易 ESI 比对，生成 cn-names-<服>.json（{ 宁静中文: 国服中文 }），这里把完全相同的字符串换掉。
+  // 国服自己生成的 cn-extra-<服>.json 本来就是国服名称，不处理；英文模式按宁静中文查英文名，也不处理；宁静服不加载。
+  var SRV = store('eve-server');
+  if (LANG !== 'en' && (SRV === 'serenity' || SRV === 'infinity')) {
+    var CN_DATA = /\/(catalog|map-data(-\w+)?|npc-[\w-]+|type-names-zh|fit-data|fit-info|industry-data|skill-data|sov-data|wh-data|pi-data|lp-data(-\w+)?|reprocess-data|mutaplasmid-data|item-trader|ind-rigs|ov-types|abyss-loot)\.json$/;
+    var CN = {};
+    var cnP = baseFetch('cn-names-' + SRV + '.json?v=1', { cache: 'no-cache' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { CN = (d && d.names) || {}; }, function () { /* 读不到就不换 */ });
+    var swapCn = function (o) {
+      if (typeof o === 'string') { var v = CN[o]; return v != null ? v : o; }
+      if (Array.isArray(o)) { for (var i = 0; i < o.length; i++) o[i] = swapCn(o[i]); return o; }
+      if (o && typeof o === 'object') { for (var k in o) o[k] = swapCn(o[k]); return o; }
+      return o;
+    };
+    var cnFetch = window.fetch;
+    window.fetch = function (input, init) {
+      var url;
+      try { url = new URL(typeof input === 'string' ? input : input.url, location.href); } catch (e) { return cnFetch(input, init); }
+      if (url.origin !== location.origin || !CN_DATA.test(url.pathname) || (init && init.method && init.method !== 'GET')) return cnFetch(input, init);
+      return Promise.all([cnFetch(input, init), cnP]).then(function (a) {
+        var res = a[0];
+        if (!res.ok || (res.headers.get('content-type') || '').indexOf('json') < 0 || !Object.keys(CN).length) return res;
+        return res.clone().json().then(function (body) {
+          var h = new Headers(res.headers);
+          h.delete('content-length'); h.delete('content-encoding');
+          return new Response(JSON.stringify(swapCn(body)), { status: res.status, statusText: res.statusText, headers: h });
+        }).catch(function () { return res; });
+      });
+    };
+  }
   if (LANG !== 'en') return;
 
   // ---------- 英文模式 ----------

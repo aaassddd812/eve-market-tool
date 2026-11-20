@@ -882,7 +882,7 @@ async function openGuides() {
 // 战争（势力战争 + 军团战争）：首次进入时加载
 let warLoading = null;
 function loadWarModule() {
-  if (!warLoading) warLoading = import('./war.js?v=v16').then((m) => {
+  if (!warLoading) warLoading = import('./war.js?v=v17').then((m) => {
     m.initWar({ esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem });
     return m;
   }).catch((error) => { warLoading = null; throw error; });

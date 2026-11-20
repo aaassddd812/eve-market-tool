@@ -9,6 +9,7 @@ import { esiUrl, SERVER } from './server.js?v=s4';
 import * as ST from './standings.js?v=v6';
 import { skPage } from './skeleton.js?v=v18';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
+import { isoIn, tzLabel } from './eve-time.js?v=v1';
 
 let ctx;   // esc, formatISK, formatNumber, fetchESI, resolveNames, officialName, eveImage, valuationCard, loadKillboard, killmailWithValue, getMarketPriceMap, openMapSystem
 const S = { tab: 'fw', board: 'characters', metric: 'kills', period: 'last_week', warFilter: 'active', wars: [], warIds: [], nextMax: null, warLoading: false };
@@ -49,18 +50,20 @@ async function esiTimed(path) {
 
 async function loadFw() {
   return once('fw', async () => {
-    const [statsR, wars, systemsR, boards, table, trend] = await Promise.all([
+    const [statsR, wars, systemsR, boards, table, trend, insurgency] = await Promise.all([
       esiTimed('/fw/stats/'), ctx.fetchESI('/fw/wars/'), esiTimed('/fw/systems/').catch(() => ({ data: [], expires: 0, modified: 0 })),
       Promise.all(['', 'characters/', 'corporations/'].map((p) => ctx.fetchESI('/fw/leaderboards/' + p).catch(() => null))),
       fetch('./npc-corp-faction.json?v=2').then((r) => r.json()).catch(() => ({ factions: {} })),
-      fetch('/api/v1/fw/trend?server=' + SERVER.id).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+      fetch('/api/v1/fw/trend?server=' + SERVER.id).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      // 海盗叛乱只有宁静服有公开数据（服务器中转 CCP 官网 Frontlines 的数据）
+      SERVER.id === 'tq' ? fetch('/api/v1/fw/insurgency?server=tq').then((r) => (r.ok ? r.json() : null)).catch(() => null) : null
     ]);
     factionNames = table.factions || {};
     const [factions, characters, corporations] = boards;
     const ids = [];
     for (const b of [characters, corporations]) for (const m of ['kills', 'victory_points']) for (const p of ['yesterday', 'last_week', 'active_total']) for (const x of b?.[m]?.[p] || []) ids.push(x.character_id || x.corporation_id);
     await nameAll(ids);
-    return { stats: statsR.data, wars, systems: systemsR.data, trend, boards: { factions, characters, corporations },
+    return { stats: statsR.data, wars, systems: systemsR.data, trend, insurgency, boards: { factions, characters, corporations },
       timing: { systems: { expires: systemsR.expires, modified: systemsR.modified }, stats: { expires: statsR.expires, modified: statsR.modified } } };
   });
 }
@@ -105,6 +108,7 @@ function startTicker() {
     if (!d?.timing) return;
     const now = Date.now();
     document.querySelectorAll('[data-fw-cd]').forEach((el) => { el.textContent = cd(d.timing[el.dataset.fwCd].expires - now); });
+    document.querySelectorAll('[data-ins-at]').forEach((el) => { const t = insLeft(Number(el.dataset.insAt), el.dataset.insFmt); if (el.textContent !== t) el.textContent = t; });
     // 任一项到期（多等 5 秒让 ESI 缓存更新）→ 后台重新读取，读完就地替换，不显示加载状态
     const due = Object.values(d.timing).some((t) => t.expires && now > t.expires + 5e3);
     if (due && !autoBusy && now - lastAuto > 60e3) {
@@ -206,6 +210,75 @@ function trendNote(trend) {
   if ((trend.snapshots || 0) < 2) return ['⏱ 约 1 小时后显示预计时间', '服务器刚开始记录胜利点，攒够两次 ESI 更新后显示'];
   return [`⏱ 预计时间按近 ${trend.window_hours} 小时速度估算，仅供参考`, `服务器每次 ESI 更新记一笔，已记录 ${trend.snapshots} 次，自 ${clock(trend.since * 1000)} 起；不是游戏里的倒计时`];
 }
+// ---------- 海盗叛乱（服务器 /api/v1/fw/insurgency，中转 CCP 官网 Frontlines 的数据，只有宁静服）----------
+// 官方数据没有结束时间（游戏里进行中的叛乱也不显示）；startDateTime 是「预告」开始的时间。按 24.01 补丁（2026-09-22）的规则推算：
+//   预告约 48 小时后开打，开打后最长 7 天；一方先完成目标就提前结束。服务器亲眼看到「预告 → 进行中」时用它记下的开打时间（active_since）。
+// 用词照客户端：古斯塔斯叛乱 / 天使叛乱、腐蚀 / 镇压、阶段{n}、海盗FOB、预告、海盗势力获胜 / 反海盗势力胜利 / 无胜利方
+const INS_FORECAST = 48 * 3600, INS_MAX = 7 * 86400;
+const INS_NAME = { 500010: '古斯塔斯叛乱', 500011: '天使叛乱' };
+const INS_STATE = { FORECAST: '预告', ACTIVE: '进行中', PIRATE_VICTORY: '海盗势力获胜', ANTI_PIRATE_VICTORY: '反海盗势力胜利', NO_WINNER: '无胜利方' };
+const insSpan = (sec) => {
+  const m = Math.max(1, Math.round(sec / 60)), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
+  return d ? `${d} 天 ${h} 小时` : h ? `${h} 小时 ${m % 60} 分` : `${m} 分钟`;
+};
+function insLeft(at, fmt) {
+  const s = at - Date.now() / 1000;
+  if (fmt === 'in') return s > 0 ? `约 ${insSpan(s)}后` : '即将开打';
+  return s > 0 ? `还剩 ${insSpan(s)}` : '已到时间，等待结算';
+}
+const insWhen = (sec) => (sec ? isoIn(sec).slice(5, 16).replace('T', ' ') : '—');
+function insCard(c, sysName) {
+  const active = c.active_since || (c.forecast_start ? c.forecast_start + INS_FORECAST : null);
+  const end = active ? active + INS_MAX : null;
+  const done = c.state !== 'FORECAST' && c.state !== 'ACTIVE';
+  const cell = (label, value, note, tip = '') => `<span${tip ? ` title="${esc(tip)}"` : ''}><em>${label}</em><b>${value}</b>${note ? `<small>${note}</small>` : ''}</span>`;
+  const tz = `<i class="fw-ins-tz">${tzLabel()}</i>`;
+  let times;
+  if (c.state === 'FORECAST') {
+    times = cell('预计开打', insWhen(active) + tz, `<span data-ins-at="${active}" data-ins-fmt="in">${insLeft(active, 'in')}</span>`, `预告开始于 ${insWhen(c.forecast_start)}，预告约 48 小时`)
+      + cell('最晚结束', insWhen(end) + tz, '开打后最长 7 天');
+  } else if (c.state === 'ACTIVE') {
+    times = cell('开打', insWhen(active) + tz, c.active_since ? '本站记录' : '按预告 48 小时推算', `预告开始于 ${insWhen(c.forecast_start)}`)
+      + cell('最晚结束', insWhen(end) + tz, `<span data-ins-at="${end}" data-ins-fmt="left">${insLeft(end, 'left')}</span>`, '开打后最长 7 天；一方先完成目标会提前结束');
+  } else {
+    // 已结束：结果在右上角。没赶上结束时刻的，超时（无胜利方）就是开打后 7 天整
+    const at = c.ended || (c.state === 'NO_WINNER' ? end : null);
+    times = cell('开打', insWhen(active) + tz, c.active_since ? '本站记录' : '按预告 48 小时推算', `预告开始于 ${insWhen(c.forecast_start)}`)
+      + cell('结束', at ? insWhen(at) + tz : '—', c.ended ? '本站记录' : at ? '按 7 天上限推算' : '叛乱已结束');
+  }
+  const full = (k) => c.systems.filter((s) => s[k] >= 100).length;
+  const goal = (label, n, need, cls, tip) => {
+    const pct = need ? Math.min(100, (n / need) * 100) : 0;
+    return `<div title="${esc(tip)}"><em>${label}</em><b>${n} / ${need ?? '—'}</b><i class="fw-ins-bar ${cls}"><u style="width:${pct.toFixed(1)}%"></u></i></div>`;
+  };
+  const rows = [...c.systems].sort((a, b) => (b.corruption - a.corruption) || (b.suppression - a.suppression));
+  const pct = (v) => (v >= 100 ? '100' : v >= 10 ? Math.round(v) : v > 0 ? v.toFixed(1).replace(/\.0$/, '') : '0') + '%';
+  const meter = (v, stage, cls) => `<span class="fw-ins-m"><i class="fw-ins-bar ${cls}"><u style="width:${Math.min(100, v || 0).toFixed(1)}%"></u></i><b>${pct(v || 0)}</b><small>阶段${stage ?? 0}</small></span>`;
+  const li = (s) => `<li><span class="fw-ins-name"><button class="link-btn fw-name" data-fw-sys="${s.system_id}">${esc(sysName(s.system_id))}</button>${s.system_id === c.fob_system_id ? '<small class="fw-ins-fob">FOB</small>' : ''}</span>
+      ${meter(s.corruption, s.corruption_stage, 'c')}${meter(s.suppression, s.suppression_stage, 's')}</li>`;
+  const SHOW = 8;
+  const head = `<li class="fw-ins-th" aria-hidden="true"><span class="fw-ins-name">星系</span><span class="fw-ins-m">腐蚀</span><span class="fw-ins-m">镇压</span></li>`;
+  return `<div class="fw-front fw-ins">
+      <div class="fw-front-head"><span class="fw-side">${logo('corporations', c.pirate_faction_id, 28)}<b>${esc(INS_NAME[c.pirate_faction_id] || nameOf(c.pirate_faction_id))}</b></span>
+        <span class="fw-ins-state ${done ? 'done' : c.state === 'ACTIVE' ? 'on' : ''}">${esc(INS_STATE[c.state] || c.state)}</span></div>
+      <div class="fw-ins-time">${times}</div>
+      <p class="fw-front-meta">海盗FOB：${c.fob_system_id ? `<button class="link-btn" data-fw-sys="${c.fob_system_id}">${esc(sysName(c.fob_system_id))}</button>` : '—'}${done ? (c.state === 'NO_WINNER' ? ' · 到时间双方都没完成目标' : '') : ' · 一方先完成目标就提前结束'}</p>
+      <div class="fw-ins-goal">
+        ${goal(`被${esc(nameOf(c.pirate_faction_id))}完全腐化的星系`, full('corruption'), c.corruption_required, 'c', '达到这个数海盗势力获胜')}
+        ${goal('被国民卫队完全压制的星系', full('suppression'), c.suppression_required, 's', '达到这个数后海盗FOB可以被攻击（装甲增强 2–4 小时），摧毁 FOB 反海盗势力胜利')}
+      </div>
+      ${rows.length ? `<ol class="fw-board fw-ins-sys">${head}${rows.slice(0, SHOW).map(li).join('')}</ol>
+        ${rows.length > SHOW ? `<details class="fw-ins-more"><summary>其余 ${rows.length - SHOW} 个星系</summary><ol class="fw-board fw-ins-sys">${rows.slice(SHOW).map(li).join('')}</ol></details>` : ''}` : ''}
+    </div>`;
+}
+function insurgencyHtml(d) {
+  const list = (d.insurgency?.campaigns || []).filter((c) => c && c.systems)
+    .sort((a, b) => rank(a.pirate_faction_id) - rank(b.pirate_faction_id));
+  if (!list.length) return '';
+  const sysName = (id) => ctx.officialName(id) || String(id);
+  return `<div class="fw-front-grid fw-ins-grid">${list.map((c) => insCard(c, sysName)).join('')}</div>`;
+}
+
 const FW_COLOR = { 500001: '#4a9fdc', 500002: '#c8553d', 500003: '#d9a93a', 500004: '#4fb37a', 500010: '#8e9aa6', 500011: '#b5653a' };
 const EMPIRE = new Set([500001, 500002, 500003, 500004]);
 const fwColor = (id) => FW_COLOR[id] || '#888';
@@ -223,7 +296,8 @@ function frontsHtml(d) {
     seen.add(key);
     fronts.push({ a: pair[0], b: pair[1], empire: EMPIRE.has(pair[0]) && EMPIRE.has(pair[1]) });
   }
-  if (!fronts.length) return '';
+  const ins = insurgencyHtml(d);
+  if (!fronts.length && !ins) return '';
   fronts.sort((x, y) => (y.empire - x.empire) || rank(x.a) - rank(y.a) || rank(x.b) - rank(y.b));
   const side = (id, right) => `<span class="fw-side${right ? ' right' : ''}">${logo('corporations', id, 28)}<b>${esc(nameOf(id))}</b></span>`;
   // 双色拔河条：左右两边各占比例
@@ -266,7 +340,8 @@ function frontsHtml(d) {
   return `<section class="fw-fronts"><div class="fw-fronts-head"><h3>${fronts.length} 条战线</h3><small class="text-muted">数据为阵营总数（含其它战线）</small></div>
     <p class="fw-trend-note" title="${esc(tnTip)}">${tnText}</p>
     ${empires.length ? `<div class="fw-front-grid">${empires.map(card).join('')}</div>` : ''}
-    ${pirates.length ? `<p class="fw-front-sub">海盗叛乱战线 <small class="text-muted">ESI 无争夺进度</small></p><div class="fw-front-grid pirate">${pirates.map(card).join('')}</div>` : ''}</section>`;
+    ${pirates.length || ins ? `<p class="fw-front-sub">海盗叛乱战线 <small class="text-muted">${ins ? '叛乱进度来自 CCP 官网，每 5 分钟更新' : SERVER.id === 'tq' ? '暂时读不到叛乱进度' : '国服没有公开的叛乱进度'}</small></p>${ins}
+      ${pirates.length ? `<div class="fw-front-grid pirate">${pirates.map(card).join('')}</div>` : ''}` : ''}</section>`;
 }
 
 // ---------- 军团战争 ----------
