@@ -11,7 +11,7 @@
 // 也支持「名称 x 数量」「数量 x 名称」「名称 数量」和单独一行物品名。
 import { SERVER } from './server.js?v=s4';
 import * as TF from './trade-fees.js?v=v7';
-import * as IS from './ind-structs.js?v=5';
+import * as IS from './ind-structs.js?v=6';
 
 let ctx;   // esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap, getTypeIndex() -> Map(id -> { type }), valuation, loadVolumes,
           // hasEsiToken, getCharacterSkills, getCharacterImplants, openEsiBind, loadAbyssal() -> abyssal.js 模块,

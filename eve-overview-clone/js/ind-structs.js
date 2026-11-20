@@ -29,7 +29,7 @@ export function initStructs(x) { X = x; STORE = x.ctx.store; }
 export function useStore(store) { if (!STORE) STORE = store; }
 export function loadRigs() {
   if (!RD.loading) {
-    RD.loading = fetch('ind-rigs.json?v=2').then((r) => (r.ok ? r.json() : Promise.reject(new Error('ind-rigs.json ' + r.status))))
+    RD.loading = fetch('ind-rigs.json?v=3').then((r) => (r.ok ? r.json() : Promise.reject(new Error('ind-rigs.json ' + r.status))))
       .then((d) => { RD.data = d; }).catch((e) => { RD.loading = null; throw e; });
   }
   return RD.loading;

@@ -5,11 +5,13 @@
 //   舰队  /characters/{id}/fleet/ → /fleets/{fleet_id}/members/（「舰队」权限，读成员需要是舰队指挥）
 //   军团  /characters/{id}/roles/ + 军团钱包 / 订单 / 工业 / 建筑 / 月矿 / 资产（「军团管理」权限，且需相应军团职位）
 //         建筑：点开一行看装配——军团资产里装在建筑上的物品（总监，表格先出、装配后台读），按槽位列出，
-//         并按 ind-rigs.json（SDE）算船体与改装件的工业加成（乘建筑所在星系的安全等级倍数）和化矿率
+//         并按 ind-rigs.json（SDE）算船体与改装件的工业加成（乘建筑所在星系的安全等级倍数）和化矿率；
+//         「统一添油」（fuel-plan.js）：这次带的燃料块分给各建筑，让加完以后一起到期
 // 数据按角色缓存 5 分钟，切换角色时清空。
 import { skCards, skRows } from './skeleton.js?v=v18';
 import * as ST from './standings.js?v=v6';
-import * as IS from './ind-structs.js?v=5';
+import * as IS from './ind-structs.js?v=6';
+import * as FP from './fuel-plan.js?v=1';
 
 let ctx;
 const cache = new Map();   // `${tab}:${key}` -> { id, at, promise }
@@ -24,6 +26,7 @@ const SKILL_INFOMORPH = 33399;   // 意识同步：每级缩短跳跃克隆冷�
 
 export function initProfileMore(context) {
   ctx = context;
+  FP.initFuelPlan({ ...context, left, fmtDate });
   window.addEventListener('eve-account-change', () => cache.clear());
 }
 
@@ -304,7 +307,7 @@ const CORP_LOAD = {
     const types = await ctx.resolveTypeNames(list.map((s) => s.type_id));
     const secs = new Map(await Promise.all([...new Set(list.map((s) => s.system_id))].map(async (id) => [id, (await ctx.fetchESI(`/universe/systems/${id}/`).catch(() => null))?.security_status ?? null])));
     await ctx.resolveStructureNames(list.map((s) => s.structure_id)).catch(() => {});
-    const d = { list, types, secs, fits: null, fitErr: '' };
+    const d = { corp, list, types, secs, fits: null, fitErr: '' };
     // 装配读军团资产（需要总监、可能很多页），不挡表格：读完再画一次
     d.fitsP = !ctx.hasScope('esi-assets.read_corporation_assets.v1') ? Promise.resolve().then(() => { d.fitErr = 'scope'; })
       : IS.corpFittings(ctx, corp, true).then(async (fits) => {
@@ -371,6 +374,8 @@ function corpBody(view, d) {
       : d.fitErr ? '军团资产读取失败：' + d.fitErr : '';
     return '<div class="valuation-grid">' + ctx.valuationCard('建筑', d.list.length + ' 座', '') +
       ctx.valuationCard('燃料不足 7 天', soon.length + ' 座', '', soon.length ? 'is-sell' : 'is-buy') + '</div>' +
+      (FP.isOpen(d.corp) ? FP.html(d, d.corp)
+        : `<div class="valuation-toolbar section-gap fuel-bar"><button class="btn" data-fuel-toggle="${d.corp}" aria-expanded="false">统一添油</button><span class="text-muted">算这次带的燃料块每座建筑加多少，让下次一起到期</span></div>`) +
       `<p class="text-muted valuation-note">点开一行查看装配与加成${note ? ' · ' + esc(note) : ''}</p>` +
       table(['建筑', '类型', '星系', '燃料', '状态', '服务'], [...d.list].sort((a, b) => (a.fuel_expires ? new Date(a.fuel_expires) : Infinity) - (b.fuel_expires ? new Date(b.fuel_expires) : Infinity)).map((s) => {
         const ms = s.fuel_expires ? new Date(s.fuel_expires) - Date.now() : null;
@@ -472,6 +477,7 @@ async function corpAssets(d, body, alive) {
     (d.list.length > 200 ? `<p class="text-muted valuation-note">仅显示估值前 200 种</p>` : '');
 }
 
+let corpPaint = null;   // 军团当前视图的重画函数
 async function renderCorp(box) {
   const id = me();
   if (!ctx.hasScopeGroup('corp')) { box.innerHTML = ctx.scopeNeededHtml('corp', '查看军团数据'); return; }
@@ -490,9 +496,12 @@ async function renderCorp(box) {
   const body = box.querySelector('[data-corp-body]');
   try {
     const d = await cached('corp:' + view, () => CORP_LOAD[view](base.corp));
-    const alive = () => still('corp', id) && S.corpView === view;
-    if (alive()) { if (view === 'assets') await corpAssets(d, body, alive); else body.innerHTML = corpBody(view, d); }
-    if (d.fitsP && !d.fits && !d.fitErr) { await d.fitsP; if (alive()) body.innerHTML = corpBody(view, d); }
+    const alive = () => still('corp', id) && S.corpView === view && body.isConnected;
+    // 统一添油改了设置也用它重画（保住正在打字的输入框）
+    const paint = () => { if (!alive()) return; FP.keepFocus(body, () => { body.innerHTML = corpBody(view, d); }); FP.update(body); };
+    corpPaint = paint;
+    if (alive()) { if (view === 'assets') await corpAssets(d, body, alive); else paint(); }
+    if (d.fitsP && !d.fits && !d.fitErr) { await d.fitsP; paint(); }
   } catch (error) {
     if (!still('corp', id) || S.corpView !== view) return;
     const need = CORP_VIEWS.find((v) => v[0] === view)[2];
@@ -585,6 +594,9 @@ export async function renderMore(tab, box) {
       if (e.target.closest('[data-mail-reload]')) { M.list = []; M.labels = null; M.open = 0; renderMail(box); return; }
       const sys = e.target.closest('[data-map-sys]');
       if (sys) { ctx.openMapSystem(Number(sys.dataset.mapSys)); return; }
+      const fuel = e.target.closest('[data-fuel-toggle]');
+      if (fuel && corpPaint) { FP.toggle(Number(fuel.dataset.fuelToggle) || undefined); corpPaint(); return; }
+      if (corpPaint && FP.onClick(e, box, corpPaint)) return;
       const sf = e.target.closest('[data-sf-open]');
       if (sf) {
         const id = Number(sf.dataset.sfOpen);
@@ -598,6 +610,8 @@ export async function renderMore(tab, box) {
       const dest = e.target.closest('[data-game-dest]');
       if (dest) ctx.game.waypoint(Number(dest.dataset.gameDest));
     });
+    // 统一添油：输入时只重算结果，不重画输入框
+    box.addEventListener('input', (e) => FP.onInput(e, box));
     // 切换估值价格来源
     box.addEventListener('change', (e) => {
       const src = e.target.closest('[data-val-src]');

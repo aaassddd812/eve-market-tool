@@ -5019,6 +5019,44 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .sf-bonus small { font-size: 0.6875rem; }
 .sf-sub { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); }
 .warn-text { color: var(--warning, #f59e0b); }
+/* 个人中心 · 军团建筑：统一添油（fuel-plan.js） */
+.fuel-bar { margin-bottom: 0; }
+.fuel-bar .text-muted { font-size: 0.8125rem; }
+.fuel-plan { display: flex; flex-direction: column; gap: 12px; margin-bottom: 28px; }
+.fuel-plan > .table-scroll { margin-top: 0; }
+.fuel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: var(--spacing-lg); }
+.fuel-head h3 { font-size: 1rem; font-weight: 700; }
+.fuel-head .text-muted { font-size: 0.8125rem; }
+.fuel-ctl { display: flex; align-items: center; gap: 12px 16px; flex-wrap: wrap; }
+.fuel-in { display: inline-flex; align-items: center; gap: 8px; font-size: 0.875rem; color: var(--text-secondary); }
+.fuel-in .pi-input { width: 170px; height: 34px; font-size: 0.875rem; font-variant-numeric: tabular-nums; }
+.fuel-plan .valuation-grid { margin: 0; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.fuel-plan [data-fuel-sum] > p { margin: 0; font-size: 0.8125rem; }
+.fuel-table td { vertical-align: middle; }
+.fuel-table td:first-child, .fuel-table th:first-child { width: 36px; padding-right: 0; }
+.fuel-table .fuel-num { width: 100px; height: 34px; padding: 0 8px; font-variant-numeric: tabular-nums; }
+.fuel-table .cell-sub .link-btn { font-size: inherit; padding: 0 2px; }
+.fuel-table tr.off td:not(:first-child) { opacity: 0.45; }
+.fuel-table .fuel-add b { font-size: 0.9375rem; color: var(--accent-primary); }
+.fuel-manual { display: inline-flex; align-items: center; gap: 4px; }
+.fuel-manual .pi-input { width: 190px; height: 34px; }
+.fuel-left { display: inline-flex; align-items: center; gap: 4px; }
+.fuel-left .cr-input { width: auto; height: 34px; }
+.fuel-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fuel-plan > .valuation-note { margin: 0; }
+@media (max-width: 768px) {
+  .fuel-plan .valuation-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .fuel-in .pi-input { width: 140px; }
+  /* 手机：上面卡片已有统一到期，表里不再列「加完到期」；名称换行，让「添加」不用横着滑 */
+  .fuel-table th:last-child, .fuel-table td:last-child { display: none; }
+  .fuel-table th, .fuel-table td { padding-left: 8px; padding-right: 8px; }
+  .fuel-table td { white-space: normal; }
+  .fuel-table td:first-child, .fuel-table th:first-child { width: 24px; padding-right: 0; }
+  .fuel-table td:nth-child(2) { min-width: 96px; }
+  .fuel-table .fuel-num { width: 72px; }
+  .fuel-table .cell-sub { white-space: normal; }
+  .fuel-manual .pi-input { width: 110px; }
+}
 
 /* 技能页 · 属性 */
 .sk-attrs { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; font-size: 0.8125rem; }

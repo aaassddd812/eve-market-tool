@@ -12,6 +12,9 @@
 //   rigs[].rp   化矿改装件 [化矿率, 'o' 矿石 'm' 卫星矿 'i' 冰矿]：把提炼设施对应类别的化矿率设为 该值 × 安全等级倍数（sec）；
 //               没有改装件时提炼设施是 50%，不吃安全等级倍数
 //   rpSvc       提炼设施（服务模块）类型：建筑装配里有它才能化矿
+// 燃料（个人中心军团建筑「统一添油」）：
+//   fuel.svc    服务模块 -> { n, en, g 分组, h 每小时燃料块（serviceModuleFuelAmount） }（含未发布的预装模块，如梅特诺克斯的钻探模块）
+//   fuel.hull   建筑类型 -> { n, en, g, b: { 服务模块分组: 减免 % }（负数，按百分比改每小时燃料）, pre 预装的服务模块（FLEX 建筑、梅特诺克斯） }
 //
 // 数据来源：industryModifierSources（谁对哪个活动的哪种数值生效、按哪个过滤器）、industryTargetFilters、
 //   typeDogma（数值），dogmaEffects（改装件属性 → 建筑属性的对应关系）
@@ -43,6 +46,9 @@ const RP_CAT = { 2444: "o", 2445: "m", 2448: "i" };   // refiningYieldNormalOres
 const RP_RIG_VALUE = 717;                              // refiningYieldMultiplier
 const RP_HULL_BONUS = 2722;                            // strRefiningYieldBonus
 const RIG_CATEGORY = 66;                               // 建筑改装件、服务模块都在「建筑装备」大类
+const STRUCT_CATEGORY = 65;                            // 建筑
+const SVC_FUEL = 2109;                                 // serviceModuleFuelAmount：服务模块每小时消耗的燃料块
+const PREFIT_SVC = 2792;                               // preFitServiceSlot0：FLEX 建筑、梅特诺克斯自带的服务模块
 
 const sources = new Map();
 await eachLine("industryModifierSources", (o) => sources.set(o._key, o));
@@ -52,7 +58,7 @@ await eachLine("industryTargetFilters", (o) => { filters[o._key] = { n: o.name, 
 const groupCat = new Map();
 await eachLine("groups", (o) => groupCat.set(o._key, o.categoryID));
 const types = new Map();
-await eachLine("types", (o) => { if (sources.has(o._key) || HULL_GROUPS.has(o.groupID) || groupCat.get(o.groupID) === RIG_CATEGORY) types.set(o._key, o); });
+await eachLine("types", (o) => { if (sources.has(o._key) || HULL_GROUPS.has(o.groupID) || [RIG_CATEGORY, STRUCT_CATEGORY].includes(groupCat.get(o.groupID))) types.set(o._key, o); });
 const dogma = new Map();
 const effectsOf = new Map();
 await eachLine("typeDogma", (o) => {
@@ -77,11 +83,28 @@ const round = (v) => Math.round(v * 10000) / 10000;
 const hulls = {};
 const rigs = {};
 const rpSvc = [];
+const fuel = { svc: {}, hull: {} };
 for (const [id, t] of types) {
-  if (t.published === false) continue;
   const attrs = dogma.get(id) || {};
-  const src = sources.get(id);
   const name = { n: t.name?.zh || t.name?.en || "", en: t.name?.en || "" };
+  const cat = groupCat.get(t.groupID);
+  // 服务模块耗油：预装模块没发布也要收（梅特诺克斯的钻探模块）
+  if (cat === RIG_CATEGORY && attrs[SVC_FUEL] > 0) fuel.svc[id] = { ...name, g: t.groupID, h: round(attrs[SVC_FUEL]) };
+  if (t.published === false) continue;
+  if (cat === STRUCT_CATEGORY) {
+    // 建筑对某组服务模块的燃料减免：LocationGroupModifier 改服务模块的 serviceModuleFuelAmount，PostPercent
+    const b = {};
+    for (const eid of effectsOf.get(id) || []) {
+      for (const mi of effects.get(eid)?.modifierInfo || []) {
+        if (mi.modifiedAttributeID !== SVC_FUEL || mi.func !== "LocationGroupModifier" || attrs[mi.modifyingAttributeID] == null) continue;
+        if (mi.operation !== 6) throw new Error(`建筑 ${id} 燃料加成不是百分比（operation ${mi.operation}）`);
+        b[mi.groupID] = round(attrs[mi.modifyingAttributeID]);
+      }
+    }
+    if (Object.keys(b).length || attrs[PREFIT_SVC]) fuel.hull[id] = { ...name, g: t.groupID, ...(Object.keys(b).length ? { b } : {}), ...(attrs[PREFIT_SVC] ? { pre: attrs[PREFIT_SVC] } : {}) };
+  }
+  if (cat === STRUCT_CATEGORY && !HULL_GROUPS.has(t.groupID)) continue;
+  const src = sources.get(id);
   if (HULL_GROUPS.has(t.groupID)) {
     const b = {};
     for (const [act, kinds] of Object.entries(src || {})) {
@@ -127,7 +150,9 @@ for (const [id, t] of types) {
   };
 }
 
-const out = { source: "CCP SDE industryModifierSources", generatedAt: new Date().toISOString(), hulls, rigs, filters, rpSvc };
+for (const h of Object.values(fuel.hull)) if (h.pre && !fuel.svc[h.pre]) throw new Error(`预装服务模块 ${h.pre} 没有耗油数据`);
+const out = { source: "CCP SDE industryModifierSources", generatedAt: new Date().toISOString(), hulls, rigs, filters, rpSvc, fuel };
 await writeFile(new URL("./eve-overview-clone/ind-rigs.json", import.meta.url), JSON.stringify(out));
 const nRp = Object.values(rigs).filter((r) => r.rp).length;
-console.log(`建筑 ${Object.keys(hulls).length} 种，改装件 ${Object.keys(rigs).length} 种（化矿 ${nRp}），过滤器 ${Object.keys(filters).length} 个，提炼设施 ${rpSvc.length} 种`);
+console.log(`建筑 ${Object.keys(hulls).length} 种，改装件 ${Object.keys(rigs).length} 种（化矿 ${nRp}），过滤器 ${Object.keys(filters).length} 个，提炼设施 ${rpSvc.length} 种，` +
+  `耗油服务模块 ${Object.keys(fuel.svc).length} 种、有燃料减免 / 预装模块的建筑 ${Object.keys(fuel.hull).length} 种`);

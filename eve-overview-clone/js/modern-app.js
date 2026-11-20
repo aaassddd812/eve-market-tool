@@ -957,7 +957,7 @@ async function getHubSellOrders(ids) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v72').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v73').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, getCharacterImplants, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -1097,7 +1097,7 @@ async function openContracts() {
 // 估价（市场 / 化矿）：首次进入时加载
 let appraisalLoading = null;
 function loadAppraisalModule() {
-  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v24').then((m) => {
+  if (!appraisalLoading) appraisalLoading = import('./appraisal.js?v=v25').then((m) => {
     m.initAppraisal({ addToCart, favStar: favStarHtml,
       structs: { readable: SM.readableStructs, hasScope: SM.hasStructScope, open: SM.openStructManager, market: (id) => structureMarket(id, SM.PICKED_PAGES) },
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESIPaged, getMarketPriceMap,
@@ -5937,11 +5937,11 @@ function loadSkillsModule() {
 // 个人中心 · 克隆 / 挖矿 / 研究 / 舰队 / 军团：首次打开时加载
 let moreLoading = null;
 function loadMoreModule() {
-  if (!moreLoading) moreLoading = import('./profile-more.js?v=v14').then((m) => {
+  if (!moreLoading) moreLoading = import('./profile-more.js?v=v15').then((m) => {
     m.initProfileMore({
       allChars, esc, formatISK, formatPrice, formatNumber, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       resolveStructureNames, locationName, officialName, gameImage, valuationCard, valuation, getCharacterSkills, getMarketPriceMap,
-      openMapSystem, game: gameActions, hasScopeGroup, scopeNeededHtml,
+      openMapSystem, game: gameActions, hasScopeGroup, scopeNeededHtml, store, showToast,
       tokenInfo: () => state.esiToken || readEsiToken(),
       hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),
       isActive: (tab) => state.currentView === 'profile' && activeProfileTab() === tab
