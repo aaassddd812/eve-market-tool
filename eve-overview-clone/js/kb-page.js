@@ -255,13 +255,14 @@ async function renderHome() {
   $('kbRefresh').addEventListener('click', () => { loadFeed(true); loadSummary(); });
   // 击杀记录自己的搜索框：只搜舰船 / 星系 / 星座 / 星域（本地数据），选中就加进下面的筛选
   const fin = $('kbFeedSearch');
-  const feedSearch = () => { const q = fin.value.trim().toLowerCase(); if (q.length < 1) { $('kbFeedSuggest').hidden = true; return; } renderSuggest({ ...localSearch(q), entities: [] }, true); };
+  const feedSearch = () => { const q = fin.value.trim().toLowerCase(); if (q.length < 1) { renderHistory(true); return; } renderSuggest({ ...localSearch(q), entities: [] }, true); };
   fin.addEventListener('input', app.debounce(feedSearch, 120));
   fin.addEventListener('focus', feedSearch);
   fin.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { fin.value = ''; $('kbFeedSuggest').hidden = true; }
-    if (e.key === 'Enter') { $('kbFeedSuggest').querySelector('.kb-suggest-item')?.click(); e.preventDefault(); }
+    if (e.key === 'Enter') { if (fin.value.trim()) $('kbFeedSuggest').querySelector('.kb-suggest-item')?.click(); e.preventDefault(); }
   });
+  $('kbFeedSuggest').addEventListener('click', (e) => historyClick(e, true, fin));
   startLive();
   $('kbMore').addEventListener('click', () => loadFeed(false));
   renderFilters();
@@ -1481,21 +1482,41 @@ async function runSearch(text) {
   renderSuggest({ ...local, entities, aff });
 }
 
-// 搜索历史：点过的建议项（人物 / 军团 / 联盟 / 舰船 / 星系 / 星座 / 星域），存在本机，输入框为空时显示
-const HIST_KEY = 'eve-kb-search-hist', HIST_MAX = 12;
-function loadHistory() {
-  try { const v = JSON.parse(localStorage.getItem(HIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
+// 搜索历史：点过的建议项（人物 / 军团 / 联盟 / 舰船 / 星系 / 星座 / 星域），存在本机，输入框为空时显示。
+// 顶部搜索和下方「全部击杀记录」的搜索框（只有舰船 / 地点）各记各的（feed = 下方那个）
+const HIST_KEY = 'eve-kb-search-hist', FEED_HIST_KEY = 'eve-kb-feed-hist', HIST_MAX = 12;
+function loadHistory(feed = false) {
+  try { const v = JSON.parse(localStorage.getItem(feed ? FEED_HIST_KEY : HIST_KEY) || '[]'); return Array.isArray(v) ? v : []; } catch { return []; }
 }
-function saveHistory(list) {
-  try { localStorage.setItem(HIST_KEY, JSON.stringify(list.slice(0, HIST_MAX))); } catch { /* 隐私模式等 */ }
+function saveHistory(list, feed = false) {
+  try { localStorage.setItem(feed ? FEED_HIST_KEY : HIST_KEY, JSON.stringify(list.slice(0, HIST_MAX))); } catch { /* 隐私模式等 */ }
 }
-function pushHistory(attr, value, name) {
+function pushHistory(attr, value, name, feed = false) {
   if (!name) return;
-  saveHistory([{ a: attr, v: value, n: name }, ...loadHistory().filter((h) => !(h.a === attr && h.v === value))]);
+  saveHistory([{ a: attr, v: value, n: name }, ...loadHistory(feed).filter((h) => !(h.a === attr && h.v === value))], feed);
 }
-function renderHistory() {
-  const box = $('kbSuggest');
-  const list = loadHistory();
+// 建议框里的点击：删除 / 清空历史就地处理（返回 true），点了建议项就记进历史（随后照常由击杀页总的点击处理筛选）
+function historyClick(e, feed, input) {
+  const del = e.target.closest('[data-hist-del]');
+  if (del || e.target.closest('[data-hist-clear]')) {
+    e.stopPropagation();
+    saveHistory(del ? loadHistory(feed).filter((_, i) => i !== Number(del.dataset.histDel)) : [], feed);
+    renderHistory(feed);
+    input.focus();
+    return true;
+  }
+  const it = e.target.closest('[data-pick-entity], [data-add-entity], [data-pick-ship], [data-pick-location]');
+  if (!it) return false;
+  const name = it.dataset.name || it.querySelector('span')?.firstChild?.textContent.trim();
+  if (it.dataset.pickShip) pushHistory('ship', it.dataset.pickShip, name, feed);
+  else if (it.dataset.pickLocation) pushHistory('loc', it.dataset.pickLocation, name, feed);
+  else if (!feed) pushHistory('entity', it.dataset.pickEntity || it.dataset.addEntity, name);
+  return false;
+}
+function renderHistory(feed = false) {
+  const box = $(feed ? 'kbFeedSuggest' : 'kbSuggest');
+  if (!box) return;
+  const list = loadHistory(feed);
   if (!list.length) { box.hidden = true; return; }
   const row = (h, i) => {
     let icon = '<i></i>', tag = '';
@@ -1665,22 +1686,7 @@ export function initKbPage(context) {
   });
   input.addEventListener('focus', () => runSearch(input.value));
   // 记下点过的建议项（在击杀页总的点击处理之前），历史里的删除 / 清空按钮也在这里处理
-  $('kbSuggest').addEventListener('click', (e) => {
-    const del = e.target.closest('[data-hist-del]');
-    if (del || e.target.closest('[data-hist-clear]')) {
-      e.stopPropagation();
-      saveHistory(del ? loadHistory().filter((_, i) => i !== Number(del.dataset.histDel)) : []);
-      renderHistory();
-      input.focus();
-      return;
-    }
-    const it = e.target.closest('[data-pick-entity], [data-add-entity], [data-pick-ship], [data-pick-location]');
-    if (!it) return;
-    const name = it.dataset.name || it.querySelector('span')?.firstChild?.textContent.trim();
-    if (it.dataset.pickShip) pushHistory('ship', it.dataset.pickShip, name);
-    else if (it.dataset.pickLocation) pushHistory('loc', it.dataset.pickLocation, name);
-    else pushHistory('entity', it.dataset.pickEntity || it.dataset.addEntity, name);
-  });
+  $('kbSuggest').addEventListener('click', (e) => historyClick(e, false, input));
   document.addEventListener('click', (e) => {
     if (!e.target.closest('.kb-search')) $('kbSuggest').hidden = true;
     if (!e.target.closest('.kb-feed-search') && $('kbFeedSuggest')) $('kbFeedSuggest').hidden = true;
