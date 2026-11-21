@@ -1,5 +1,5 @@
 // ===== 本地日志（右上角铃铛「预警」弹窗的第二个标签页）：敌情频道预警、频道关键词监控、游戏日志监控 =====
-// 默认关闭。桌面版自动找到 EVE 日志文件夹（Documents\EVE\logs，壳的 logs_* 命令）；网页版由用户主动选择后，浏览器用 File System Access API 只读地读取聊天记录（Chatlogs）与游戏日志（Gamelogs）：
+// 默认关闭。桌面版点「开始读取」后自动找到 EVE 日志文件夹（Documents\EVE\logs，壳的 logs_* 命令）；网页版由用户主动选择后，浏览器用 File System Access API 只读地读取聊天记录（Chatlogs）与游戏日志（Gamelogs）：
 //   文件只在本机浏览器里读取，不会上传；只有电脑版 Chrome / Edge（86 以上）等 Chromium 浏览器支持，Firefox、Safari 和手机浏览器不支持。
 //   文件夹授权保存在本浏览器（IndexedDB），下次打开网页时浏览器可能要求再点一次「恢复监听」重新授权。
 // 敌情频道：勾选的频道里有人报星系名 → 判断与我的距离（星门跳数）→ 在范围内时提示音 / 网页卡片 / 系统通知，星图上标红；
@@ -16,6 +16,8 @@
 //   也可以选「大模型」：玩家自己填接口（OpenAI Chat / OpenAI Responses / Anthropic 协议、地址、Key，模型从上游列表里选），
 //   设置只存在本浏览器（开了云同步时加密同步），每次翻译随请求经本站服务器转发给该接口，服务器不保存。
 // 悬浮窗（float-feed.js）：「日志预警」显示最近消息（敌情 / 关键词 / 游戏日志），「频道翻译」显示译文；有新预警时悬浮窗切到「日志预警」。
+// 桌面版（宁静服）打开软件时不自动读取（MANUAL）：不找文件夹、不恢复监听，要用户点「开始读取」（或打开总开关）才开始，这次打开里一直读，下次打开再点；
+//   「开启本地日志监听」开关显示这次是不是在读。网页版本来就要浏览器授权，照旧。
 // 国服（晨曦、曙光）的桌面版不读取本地日志（LOCKED）：不自动找文件夹、不恢复监听，文件夹按钮和总开关变灰不能点；设置照旧保存，切回宁静服还按原来的来。宁静服和网页版不变。
 
 import * as AM from './alert-mail.js?v=v8';
@@ -47,6 +49,7 @@ const subs = new Set();
 // 桌面版（1.0.14 起）：壳的 logs_* 命令自动找、读「文档\EVE\logs」，不用选文件夹、不用每次重新授权
 const IPC = window.__EVE_DESKTOP__ ? window.__TAURI_INTERNALS__ : null;
 const LOCKED = Boolean(IPC) && !IS_TQ;
+const MANUAL = Boolean(IPC) && !LOCKED;
 export const supported = () => typeof window.showDirectoryPicker === 'function' || Boolean(IPC);
 export const settings = () => T;
 export function onChange(fn) { subs.add(fn); }
@@ -118,6 +121,12 @@ export async function initIntel(context) {
   ST.onStandings(renderPanel);
   AM.registerSource('intel', { label: '本地日志', on: () => !LOCKED && T.mail, set: (on) => update({ mail: on }) });
   if (!supported() || LOCKED) return;
+  // 桌面版：先不碰日志（不调 logs_*）；自己选过文件夹的只从 IndexedDB 取出来，等用户点「开始读取」
+  if (MANUAL) {
+    if (T.picked) S.dir = await idbGet('dir');
+    if (T.on) S.status = '还没开始读取：点「开始读取」';
+    return;
+  }
   // 桌面版优先用自动找到的文件夹；用户自己选过别的文件夹（picked）就用选的
   const auto = await nativeDir();
   S.dir = (!T.picked && auto) || (await idbGet('dir')) || auto;
@@ -163,10 +172,19 @@ async function resume(gesture) {
   let perm = await S.dir.queryPermission({ mode: 'read' }).catch(() => 'denied');
   if (perm !== 'granted' && gesture) perm = await S.dir.requestPermission({ mode: 'read' }).catch(() => 'denied');
   S.perm = perm;
-  if (perm !== 'granted') { setStatus('需重新授权：点「恢复监听」'); return; }
+  if (perm !== 'granted') { setStatus(MANUAL ? '没有读取权限：点「开始读取」重新授权' : '需重新授权：点「恢复监听」'); return; }
   await resolveDirs(S.dir);
   await scan(true);
   start();
+}
+
+// 桌面版「开始读取」：用户点了才找文件夹、开始监听（自己选过文件夹的就用选的）
+async function startReading() {
+  if (S.dir && !S.dir.native) { if (!T.on) { T.on = true; save(); } resume(true); return; }
+  const d = await nativeDir();
+  if (d) { useNative(d); return; }
+  ctx.showToast('没有找到 EVE 日志文件夹（文档\\EVE\\logs），请手动选择', 'error', 5000);
+  notify();
 }
 
 function stop() {
@@ -459,14 +477,14 @@ function publishFloat() {
     floatTimer = 0;
     const on = T.on && S.timer !== 0;
     FF.publish('intel', {
-      on: !LOCKED && T.on, locked: LOCKED, status: status().text,
+      on: !LOCKED && T.on, locked: LOCKED, idle: MANUAL && T.on && !S.timer, status: status().text,
       items: S.reports.slice(0, 40).map((r) => ({
         key: sigOf(r), type: r.type, clear: r.clear, jumps: r.jumps, system: r.system || 0, name: r.name || '', kw: r.kw || '',
         who: r.who, msg: r.msg, channel: r.channel, at: r.at || +r.time, alert: Boolean(r.alert)
       }))
     });
     FF.publish('chat', {
-      on: on && T.trOn, need: LOCKED ? 'locked' : !T.trOn ? 'off' : !T.on ? 'log' : '', status: S.trErr || (on && T.trOn ? `正在翻译 ${trChanText()}${TR_VIA[S.trVia] || ''}` : ''),
+      on: on && T.trOn, need: LOCKED ? 'locked' : !T.trOn ? 'off' : !T.on ? 'log' : MANUAL && !S.timer ? 'start' : '', status: S.trErr || (on && T.trOn ? `正在翻译 ${trChanText()}${TR_VIA[S.trVia] || ''}` : ''),
       items: S.trans.slice(0, 60).map((m) => ({ key: m.key, at: m.time, channel: m.channel, who: m.who, msg: m.msg, text: m.text, lang: m.lang }))
     });
   }, 150);
@@ -743,13 +761,14 @@ function drawPanel() {
   for (const c of T.trChannels) if (!trChans.includes(c)) trChans.push(c);
   const here = S.here ? `${sysName(S.here)}（${{ esi: 'ESI 角色位置', local: '本地频道日志', manual: '手动设置' }[S.hereFrom] || ''}）` : '未知（所有敌情都提醒）';
   const ago = (t) => { const m = Math.floor((Date.now() - t) / 60e3); return m < 1 ? '刚刚' : m + ' 分钟前'; };
+  const idle = MANUAL && !S.timer;   // 桌面版这次还没开始读（或停了）
   return `
     <div class="ka-top"><span class="ka-status${status().on ? ' on' : ''}"><i></i>${ctx.esc(status().text)}</span>${FF.buttonHtml('intel')}</div>
     <p class="ka-note">只在本机读取日志，不会上传</p>
     ${sec('日志文件夹', `<div class="ka-list">
-      <div class="ka-opt"><span><b translate="no">${S.dir ? ctx.esc(S.dir.name) : '未选择'}</b><small>${S.dir ? `${S.dir.native ? '自动找到 · ' : ''}聊天记录 ${S.chat ? '✓' : '✗'} · 游戏日志 ${S.game ? '✓' : '✗'}` : IPC ? '没有自动找到，请手动选择 EVE 日志文件夹' : `选 <code>${window.I18N?.lang === 'en' ? 'Documents' : '文档'}\\EVE\\logs</code>`}</small></span>
-        <span class="ka-ctl">${S.dir && S.perm !== 'granted' ? '<button class="btn btn-ghost btn-sm" data-in-resume>恢复监听</button>' : ''}${IPC && !S.dir?.native ? '<button class="btn btn-ghost btn-sm" data-in-auto>自动识别</button>' : ''}<button class="btn btn-primary btn-sm" data-in-pick>${S.dir ? '重新选择' : '选择文件夹'}</button></span></div>
-      ${sw('on', '开启本地日志监听')}
+      <div class="ka-opt"><span><b${S.dir ? ' translate="no"' : ''}>${S.dir ? ctx.esc(S.dir.name) : '未选择'}</b><small>${idle ? (S.dir ? '打开软件时不自动读取，点「开始读取」开始监听' : '打开软件时不自动读取，点「开始读取」自动找 EVE 日志文件夹') : S.dir ? `${S.dir.native ? '自动找到 · ' : ''}聊天记录 ${S.chat ? '✓' : '✗'} · 游戏日志 ${S.game ? '✓' : '✗'}` : IPC ? '没有自动找到，请手动选择 EVE 日志文件夹' : `选 <code>${window.I18N?.lang === 'en' ? 'Documents' : '文档'}\\EVE\\logs</code>`}</small></span>
+        <span class="ka-ctl">${idle ? '<button class="btn btn-primary btn-sm" data-in-start>开始读取</button>' : S.dir && S.perm !== 'granted' ? '<button class="btn btn-ghost btn-sm" data-in-resume>恢复监听</button>' : ''}${IPC && (MANUAL ? S.dir && !S.dir.native : !S.dir?.native) ? '<button class="btn btn-ghost btn-sm" data-in-auto>自动识别</button>' : ''}<button class="btn ${idle ? 'btn-ghost' : 'btn-primary'} btn-sm" data-in-pick>${S.dir ? '重新选择' : '选择文件夹'}</button></span></div>
+      ${MANUAL ? `<label class="ka-opt"><span><b>开启本地日志监听</b></span><input type="checkbox" class="ka-switch" data-in-set="on"${S.timer ? ' checked' : ''}></label>` : sw('on', '开启本地日志监听')}
     </div>`)}
     ${sec('敌情频道', `<div class="ka-list">
       <div class="ka-opt ka-stack"><div class="intel-chans">${chans.length ? chans.map((c) => `<label class="ka-chip toggle${T.channels.includes(c) ? ' on' : ''}"><input type="checkbox" data-in-chan="${ctx.esc(c)}"${T.channels.includes(c) ? ' checked' : ''} hidden>${ctx.esc(c)}</label>`).join('')
@@ -847,6 +866,7 @@ async function onClick(e) {
   if (LOCKED) return;
   const t = (sel) => e.target.closest(sel);
   if (t('[data-in-pick]')) { pickFolder(); return; }
+  if (t('[data-in-start]')) { startReading(); return; }
   if (t('[data-in-auto]')) { nativeDir().then((d) => (d ? useNative(d) : ctx.showToast('没有找到 EVE 日志文件夹（文档\\EVE\\logs），请手动选择', 'error', 5000))); return; }
   if (t('[data-in-resume]')) {
     if (!T.on) { T.on = true; save(); }
@@ -888,6 +908,7 @@ async function onChangeEvt(e) {
       const p = await Notification.requestPermission().catch(() => 'denied');
       if (p !== 'granted') { set.checked = false; ctx.showToast('浏览器没有允许通知', 'error'); return; }
     }
+    if (key === 'on' && set.checked && MANUAL) { startReading(); return; }
     if (key === 'on' && set.checked && !S.dir) {
       const d = await nativeDir();
       if (d) { useNative(d); return; }
