@@ -8185,6 +8185,7 @@ html.desk-rail.rail-mini .server-status { width: 100%; padding: 0; justify-conte
 /* 下载弹窗：只列下载项 */
 .desktop-content { max-width: 420px; }
 .desktop-body { display: flex; flex-direction: column; gap: 8px; }
+.dl-item.is-off { pointer-events: none; opacity: .45; filter: grayscale(1); }
 .dl-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-primary); text-decoration: none; }
 .dl-item:hover { background: var(--bg-hover); }
 .dl-item > svg { flex: none; width: 22px; height: 22px; color: var(--accent-primary); }

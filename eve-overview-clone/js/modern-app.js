@@ -3789,6 +3789,18 @@ function initDesktopDl() {
   const modal = $('desktopModal');
   if (!modal) return;
   $('desktopDlBtn').addEventListener('click', () => { modal.hidden = false; });
+  // 国服（晨曦 / 曙光）：桌面客户端暂时下架（封号风险，见公告），下载框里置灰
+  if (SERVER.id === 'serenity' || SERVER.id === 'infinity') {
+    const win = modal.querySelector('.dl-item');
+    if (win) {
+      win.classList.add('is-off');
+      win.removeAttribute('href');
+      win.removeAttribute('download');
+      win.setAttribute('aria-disabled', 'true');
+      const small = win.querySelector('small');
+      if (small) small.textContent = '国服暂缓下载（封号风险，见公告）';
+    }
+  }
   modal.addEventListener('click', (e) => { if (e.target.closest('.modal-backdrop, [data-close-desktop]')) modal.hidden = true; });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) modal.hidden = true; });
 }
