@@ -806,7 +806,7 @@ function lockedPanel() {
   return `
     <div class="ka-top"><span class="ka-status"><i></i>${ctx.esc(status().text)}</span></div>
     <p class="ka-note">晨曦、曙光服的桌面版不读取 EVE 本地日志，切到宁静服可以用</p>
-    ${sec('日志文件夹', `<div class="ka-list intel-locked">
+    ${sec('日志文件夹', `<div class="ka-list ka-locked">
       <div class="ka-opt"><span><b>未选择</b><small>不自动识别，也不能手动选择</small></span>
         <span class="ka-ctl"><button class="btn btn-ghost btn-sm" disabled>自动识别</button><button class="btn btn-primary btn-sm" disabled>选择文件夹</button></span></div>
       <label class="ka-opt"><span><b>开启本地日志监听</b></span><input type="checkbox" class="ka-switch" disabled></label>

@@ -135,7 +135,7 @@ const CLS = { red: '红', orange: '橙', none: '白', friend: '友', pending: '�
 function renderLocal(d, body, foot) {
   const items = d.items || [];
   const flashed = lastTop.local || (lastTop.local = new Set());
-  body.innerHTML = (d.on ? '' : '<p class="fl-warn">本地红名没有开启：在主窗口右上角铃铛「本地红名」里点「开始」</p>')
+  body.innerHTML = (d.locked ? '<p class="fl-warn">国服桌面版不能用本地红名</p>' : d.on ? '' : '<p class="fl-warn">本地红名没有开启：在主窗口右上角铃铛「本地红名」里点「开始」</p>')
     + (d.on && d.clipped ? '<p class="fl-warn">有名字显示不全：把游戏里本地频道的成员列表拉宽一点</p>' : '')
     + (items.length ? `<ul class="fl-list">${items.map((p) => {
       const isNew = p.fresh && (p.cls === 'red' || p.cls === 'orange') && !flashed.has(p.key);

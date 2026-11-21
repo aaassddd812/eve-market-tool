@@ -10,6 +10,8 @@
 // 自己：已绑定 ESI 的角色名、名单里手动点「这是我」的名字，以及没有图标却和本地友方同联盟 / 同军团的人（游戏里只有自己那一行没有图标），不报警。
 // 提醒方式：提示音、网页卡片、系统通知、企业微信 / 邮箱（alert-push.js）、悬浮窗（float-feed.js 的 local 一栏）。
 // 设置存在 eve-localwatch-v1（不分服务器）。共享画面每次打开网页都要重新选择（浏览器规定），不会自动恢复。
+// 国服（晨曦、曙光）的桌面版不能用本地红名（LOCKED）：不截游戏画面、不列 EVE 窗口，「开始」按钮和各开关变灰不能点；设置照旧保存，切回宁静服还按原来的来。宁静服和网页版不变。
+// 总览预警（ov-watch.js）自己截画面，不受影响。
 
 import * as AP from './alert-push.js?v=v13';
 import * as ST from './standings.js?v=v6';
@@ -30,6 +32,7 @@ const OCR_BASE = new URL('./vendor/tesseract/', import.meta.url).href;
 const WHITE = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -\'.';
 const CLS = { red: '红名', orange: '橙名', friend: '友方', none: '白名', pending: '…' };
 const subs = new Set();
+const LOCKED = Boolean(window.__EVE_DESKTOP__ && window.__TAURI_INTERNALS__) && !IS_TQ;
 
 try { Object.assign(T, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch { /* 忽略 */ }
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(T)); } catch { /* 忽略 */ } };
@@ -86,6 +89,7 @@ const STATE_TEXT = {
   noframe: '没有收到画面', lost: '本地列表不见了，正在重新找…', locked: '监视中'
 };
 export function status() {
+  if (LOCKED) return { on: false, alert: false, text: '国服桌面版不能用本地红名' };
   const on = running();
   const reds = S.rows.filter((r) => r.cls === 'red' || r.cls === 'orange').length;
   let text = on ? STATE_TEXT[S.state] || S.state : '本地红名未开启';
@@ -96,7 +100,7 @@ export function status() {
 
 // ---------- 开始 / 停止 ----------
 async function start() {
-  if (running()) return;
+  if (LOCKED || running()) return;
   if (!supported()) { ctx.showToast(whyNot(), 'error', 5000); return; }
   if (tauri()) { await listWindows(); return; }
   let stream;
@@ -127,6 +131,7 @@ async function start() {
 // 桌面版：列出所有 EVE 窗口让用户选（多开时知道监视的是哪个号），每个窗口截一张缩略图；
 // 1.0.7 及更早的客户端没有 local_windows：不选，自动找
 async function listWindows() {
+  if (LOCKED) return;
   let list;
   try { list = await tauri().invoke('local_windows'); }
   catch { S.hwnd = 0; S.winName = ''; startWorker(true); return; }
@@ -144,6 +149,7 @@ async function listWindows() {
   }
 }
 function useWindow(id) {
+  if (LOCKED) return;
   const w = S.wins?.find((x) => x.id === id);
   if (!w) return;
   if (w.minimized) { ctx.showToast('这个窗口最小化了：先把游戏窗口还原，再点「刷新」', 'info', 5000); return; }
@@ -491,7 +497,7 @@ export function floatData() {
   const moreRed = T.withName && T.onlyHostile ? Math.max(0, c.red - listed((x) => x === 'red' || x === 'orange')) : 0;
   const moreWhite = T.withName && T.onlyHostile ? Math.max(0, c.white - listed((x) => x === 'none')) : 0;
   return {
-    on: st.on, status: st.text, clipped: S.clipped && T.withName, n: S.rows.length,
+    on: st.on, locked: LOCKED, status: st.text, clipped: S.clipped && T.withName, n: S.rows.length,
     hidden: T.withName && T.onlyHostile ? Math.max(0, all.length - people.length - moreRed - moreWhite) : 0,
     colorOnly: !T.withName, reds: c.red, whites: c.white, moreRed, moreWhite,
     items: people.map((p) => ({
@@ -600,6 +606,7 @@ function optionsHtml() {
 }
 
 function drawPanel() {
+  if (LOCKED) return lockedPanel();
   if (!supported()) return `<p class="ka-warn">${whyNot()}</p>`;
   const esc = ctx.esc;
   const st = status();
@@ -641,12 +648,27 @@ function drawPanel() {
     ${sec('最近报警', S.log.length ? `<ul class="ka-history">${S.log.map((r) => `<li><span class="ka-badge${r.cls === 'red' ? '' : ' clear'}">${r.cls === 'red' ? '红名' : '白名'}</span><span translate="no">${esc(r.names.join('、') || '…')}</span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有报警</p>')}`;
 }
 
+// 国服桌面版：只留「监视」一栏，「开始」和报警开关变灰不能点，其余设置不显示
+function lockedPanel() {
+  const off = (label, sub) => `<label class="ka-opt"><span><b>${label}</b><small>${sub}</small></span><input type="checkbox" class="ka-switch" disabled></label>`;
+  return `
+    <div class="ka-top"><span class="ka-status"><i></i>${ctx.esc(status().text)}</span></div>
+    <p class="ka-note">晨曦、曙光服的桌面版不截取 EVE 游戏画面，本地红名用不了，切到宁静服可以用</p>
+    ${sec('监视', `<div class="ka-list ka-locked">
+      <div class="ka-opt"><span><b>监视游戏画面</b><small>不截取游戏画面，也不能手动开始</small></span>
+        <span class="ka-ctl"><button class="btn btn-primary btn-sm" disabled>开始</button></span></div>
+      ${off('红名报警', '声望恶劣、敌对')}
+      ${off('橙名报警', '声望不良、嫌犯、罪犯')}
+    </div>`)}`;
+}
+
 export function mountPanel(el, opts) {
   if (panel) return;
   panel = el;
   shell = opts;
   AP.bindSwitch(panel);
   panel.addEventListener('click', (e) => {
+    if (LOCKED) return;
     const t = (sel) => e.target.closest(sel);
     if (t('[data-lw-start]')) start();
     else if (t('[data-lw-win]')) useWindow(Number(t('[data-lw-win]').dataset.lwWin));
@@ -665,7 +687,7 @@ export function mountPanel(el, opts) {
   });
   panel.addEventListener('change', async (e) => {
     const s = e.target.closest('[data-lw-set]');
-    if (!s) return;
+    if (!s || LOCKED) return;
     const key = s.dataset.lwSet;
     if (key === 'notify' && s.checked && window.Notification && Notification.permission !== 'granted') {
       const p = await Notification.requestPermission().catch(() => 'denied');

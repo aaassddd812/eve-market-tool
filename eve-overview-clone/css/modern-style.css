@@ -5269,9 +5269,9 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 .ka-note { margin: 0; font-size: 0.75rem; color: var(--text-muted); }
 .ka-warn { margin: 0; padding: 8px 12px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--warning, #f59e0b) 12%, transparent); font-size: 0.75rem; color: var(--warning, #f59e0b); }
 /* 国服桌面版不读取本地日志（intel.js）：文件夹按钮、总开关变灰，不能点 */
-.intel-locked .ka-opt { cursor: not-allowed; }
-.intel-locked .btn:disabled, html[data-skin="eve"]:not([data-theme="light"]) .intel-locked .btn:disabled { background: var(--bg-tertiary); border-color: var(--border-primary); color: var(--text-muted); box-shadow: none; opacity: 1; cursor: not-allowed; }
-.intel-locked .ka-switch:disabled { background: var(--border-primary); opacity: 0.6; cursor: not-allowed; }
+.ka-locked .ka-opt { cursor: not-allowed; }
+.ka-locked .btn:disabled, html[data-skin="eve"]:not([data-theme="light"]) .ka-locked .btn:disabled { background: var(--bg-tertiary); border-color: var(--border-primary); color: var(--text-muted); box-shadow: none; opacity: 1; cursor: not-allowed; }
+.ka-locked .ka-switch:disabled { background: var(--border-primary); opacity: 0.6; cursor: not-allowed; }
 .ka-empty { margin: 0; padding: 10px 2px; font-size: 0.75rem; color: var(--text-muted); }
 .ka-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .ka-modal .ka-sec .btn { height: 32px; padding: 0 12px; font-size: 0.8125rem; }

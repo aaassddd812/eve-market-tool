@@ -8,7 +8,7 @@
 // 报警：某一行命中开着的规则、而这个名字现在的行数比之前报过的多（新刷出来的），就报；这个名字从总览消失 1 分钟后再出现会再报。
 // 提醒方式：提示音、网页卡片、系统通知、消息推送（alert-push.js 的 ov）。设置存在 eve-ovwatch-v1（不分服务器）。
 import * as AP from './alert-push.js?v=v13';
-import * as LW from './local-watch.js?v=v30';
+import * as LW from './local-watch.js?v=v31';
 
 let ctx;   // esc, showToast
 const KEY = 'eve-ovwatch-v1';

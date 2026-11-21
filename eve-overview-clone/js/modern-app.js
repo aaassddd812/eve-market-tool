@@ -6994,7 +6994,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v30').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v31').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -7070,7 +7070,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v30').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v31').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
@@ -7086,7 +7086,7 @@ function loadLocal() {
 // ===== 总览预警（ov-watch.js）：看总览的类型一列，出现设定的东西就报警；点到标签页时才加载 =====
 let ovModule = null;
 function loadOv() {
-  if (!ovModule) ovModule = import('./ov-watch.js?v=8').then((m) => {
+  if (!ovModule) ovModule = import('./ov-watch.js?v=9').then((m) => {
     m.initOvWatch({ esc, showToast });
     const sync = () => { alertState.ov = m.status(); syncAlertBtn(); };
     m.onChange(sync);
