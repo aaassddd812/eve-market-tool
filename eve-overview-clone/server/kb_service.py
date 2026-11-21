@@ -2065,7 +2065,7 @@ class Api:
     # POST /br/km：按指定的击杀统计（粘贴的游戏内击杀链接、击杀列表里勾选的）。body {kills: [[id, hash 或 null], …]}
     # 返回和 /br 相同的紧凑数组；库里有的直接用（含伤害补齐），没有的：带 hash 的向 ESI 取原文（宁静服也认 zKillboard 缓存），
     # 不带 hash 的宁静服向 zKillboard 查少量几条。取到的原文只放内存缓存，不入库。没有玩家攻击者的（NPC 击杀）不统计。
-    # not_found：没取到的击杀 ID；over：超出单次取原文上限没去取的条数；npc：跳过的 NPC 击杀条数
+    # not_found：没取到的击杀 ID；over / over_ids：超出单次取原文上限没去取的条数和 ID；npc / npc_ids：跳过的 NPC 击杀条数和 ID
     def br_km(self, body):
         items = body.get("kills") if isinstance(body, dict) else None
         if not isinstance(items, list) or not items:
@@ -2092,7 +2092,7 @@ class Api:
             for r in c.execute(f"""SELECT id, time, system_id, ship_type, {V}, v_char, v_corp, v_alliance, hash, f_char, npc FROM killmails
                                    WHERE id IN ({','.join('?' * len(part))})""", part):
                 db[r[0]] = r
-        npc = sum(1 for r in db.values() if r[10])
+        npc_ids = [r[0] for r in db.values() if r[10]]     # NPC 击杀（没有玩家攻击者）不算
         rows = [r for r in db.values() if not r[10]]
         rid = [r[0] for r in rows]
 
@@ -2112,7 +2112,7 @@ class Api:
         kills = [[r[0], r[1], r[2], r[3], round(r[4] or 0, 2), r[5], r[6], r[7], att.get(r[0], []), r[9] or 0] for r in rows]
         # 库里没有的：取原文（内存缓存 → ESI（带 hash）→ zKillboard（宁静服、不带 hash，限几条））
         rest = [k for k in kids if k not in db]
-        not_found, over = [], 0
+        not_found, over_ids = [], []
         cached = {}
         with self.km_lock:
             for k in rest:
@@ -2121,13 +2121,13 @@ class Api:
         esi = [k for k in rest if k not in cached and want[k]]
         zk = [k for k in rest if k not in cached and not want[k]]
         if len(esi) > BR_KM_FETCH:
-            over += len(esi) - BR_KM_FETCH
+            over_ids += esi[BR_KM_FETCH:]
             esi = esi[:BR_KM_FETCH]
         if self.store.server != "tq":
             not_found += zk     # 国服没有 zKillboard，没有 hash 就取不到原文
             zk = []
         elif len(zk) > BR_KM_ZKILL:
-            over += len(zk) - BR_KM_ZKILL
+            over_ids += zk[BR_KM_ZKILL:]
             zk = zk[:BR_KM_ZKILL]
         fails = [0]
 
@@ -2166,7 +2166,7 @@ class Api:
             atts = km.get("attackers") or []
             players = [a for a in atts if a.get("character_id")]
             if not players:
-                npc += 1
+                npc_ids.append(k)
                 continue
             v = km["victim"]
             fin = next((a for a in atts if a.get("final_blow")), atts[0])
@@ -2183,7 +2183,7 @@ class Api:
         times = [x[1] for x in kills]
         return {"systems": sorted({x[2] for x in kills}), "start": min(times) if times else 0, "end": max(times) + 60 if times else 0,
                 "kills": kills, "truncated": False, "dmg_missing": missing, "retention_days": self.store.retention, "names": self.names_for(ids),
-                "km": True, "not_found": sorted(not_found), "over": over, "npc": npc}
+                "km": True, "not_found": sorted(not_found), "over": len(over_ids), "over_ids": sorted(over_ids), "npc": len(npc_ids), "npc_ids": sorted(npc_ids)}
 
     # GET /locate?system=ID&x=&y=&z=：击杀位置最近的天体（星门 / 空间站 / 行星 / 卫星 / 小行星带 / 恒星）及距离（米）
     def locate(self, q):
@@ -2469,7 +2469,7 @@ class Api:
             "victim": {"character_id": v.get("character_id"), "corporation_id": v.get("corporation_id"), "alliance_id": v.get("alliance_id")},
             "final": {"character_id": final.get("character_id"), "corporation_id": final.get("corporation_id"),
                       "alliance_id": final.get("alliance_id"), "ship_type_id": final.get("ship_type_id")},
-            "archive": True,
+            "archive": True, "hash": (km.get("zkb") or {}).get("hash"),   # 战场统计「按指定的击杀」从这里勾选时带上，缓存挤掉后还能向 ESI 取
         }
 
     # GET /top

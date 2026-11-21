@@ -1324,7 +1324,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v118').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v119').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1337,6 +1337,8 @@ function loadKbPageModule() {
         switchView('sim');
       },
       getNpcNames: () => state.npcNames,
+      // 已绑定的角色（战场统计「添加击杀」里的「我的角色」快捷筛选）
+      esiAccounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name || String(a.character_id) })),
       plazaRecruit: (corpId) => loadPlazaModule().then((m) => m.recruitOf(corpId)),
       // 市场分类「舰船」下的全部舰船（搜索用）
       shipTypes: () => {

@@ -19,6 +19,10 @@ const KM_HASH_KEY = 'eve-br-km-hash';
 const BR = {
   mode: 'area',              // area 按星系和时间 / km 按指定的击杀
   km: new Map(),             // 按击杀统计：击杀 ID -> hash（不知道时为 null）
+  kmInfo: new Map(),         // 已知的击杀摘要（列表显示用）：ID -> { t, sys, ship, value, vc, vcorp, va }
+  kmMiss: new Map(),         // 统计不了的：ID -> nf 没取到 / npc NPC 击杀 / over 一次取不了这么多
+  kmLoading: new Set(),      // 正在读取摘要的击杀
+  kmAll: false,              // 已添加列表显示全部
   picked: [],                // 搜索添加的星系（总是选中）
   checked: new Set(),        // 勾选的邻近星系
   jumps: 1,
@@ -74,7 +78,7 @@ function defaultRange() {
 // ---------- 按击杀统计：认击杀链接、记 hash ----------
 // 认这几种：游戏里击杀报告的「复制外部击杀链接」（ESI 地址 …/killmails/ID/hash/，国服是网易 ESI）、聊天 / 邮件里的击杀链接（killReport:ID:hash）、
 //   zKillboard 的击杀链接（zkillboard.com/kill/ID/，没有 hash）、本站击杀链接（#kb/kill/ID）
-export function parseKillLinks(text) {
+export function parseKillLinks(text, { ids = false } = {}) {
   const out = new Map();
   const add = (id, h) => {
     id = Number(id);
@@ -87,6 +91,8 @@ export function parseKillLinks(text) {
   for (const m of s.matchAll(/killReport:(\d+):([0-9a-f]{40})/gi)) add(m[1], m[2]);
   for (const m of s.matchAll(/zkillboard\.com\/kill\/(\d+)/gi)) add(m[1]);
   for (const m of s.matchAll(/#kb\/kill\/(\d+)/gi)) add(m[1]);
+  // 「粘贴链接或 ID」：单独的一串数字也当击杀 ID（前后不是字母数字、不在链接里）
+  if (ids) for (const m of s.matchAll(/(^|[^\w/:#.=-])(\d{6,12})(?![\w/:.-])/g)) add(m[2]);
   return out;
 }
 function savedHashes() {
@@ -113,6 +119,36 @@ function addKills(map) {
   saveHashes();
   return added;
 }
+
+// 击杀摘要：击杀列表（/feed）的一行、/br/km 返回的紧凑数组
+const infoFromFeed = (k) => ({ t: Date.parse(k.time) / 1000, sys: k.system_id, ship: k.ship_type_id, value: k.value, vc: k.victim?.character_id, vcorp: k.victim?.corporation_id, va: k.victim?.alliance_id });
+function absorbKm(d) {
+  for (const [list, why] of [[d.not_found, 'nf'], [d.npc_ids, 'npc'], [d.over_ids, 'over']]) for (const id of list || []) BR.kmMiss.set(id, why);
+  for (const k of d.kills || []) {
+    BR.kmInfo.set(k[0], { t: k[1], sys: k[2], ship: k[3], value: k[4], vc: k[5], vcorp: k[6], va: k[7] });
+    BR.kmMiss.delete(k[0]);
+  }
+}
+// 粘贴进来的击杀：先向服务读一次摘要（本站没有的顺便向 ESI 取原文，服务端会缓存，生成统计时就快了），列表里马上能看到是哪条、哪条取不到
+async function previewKm(ids) {
+  ids = ids.filter((id) => !BR.kmInfo.has(id) && !BR.kmLoading.has(id));
+  if (!ids.length) return;
+  ids.forEach((id) => BR.kmLoading.add(id));
+  redrawKm();
+  try {
+    const d = await requestKm(ids);
+    ctx.absorbNames(d.names);
+    await fillNames(d);
+    await ctx.loadTypes(d.kills.map((k) => k[3]));
+    absorbKm(d);
+  } catch (error) {
+    ctx.app.showToast('读取击杀失败：' + error.message, 'error', 4000);
+  } finally {
+    ids.forEach((id) => BR.kmLoading.delete(id));
+    redrawKm();
+  }
+}
+const redrawKm = () => { if (BR.mode === 'km' && $('brForm') && location.hash.startsWith('#kb/br')) kmForm(); };
 
 // ---------- 路由 ----------
 export function parseHash(hash) {
@@ -143,6 +179,7 @@ function selectedSystems() {
 
 // 进入战场统计页：hash 带参数时直接生成统计
 export async function renderBr(hash) {
+  closePicker();
   const p = parseHash(hash) || {};
   if (p.km?.length) {
     // 按击杀统计的链接：hash 先用这次添加时记下的，再用本标签页存的
@@ -199,26 +236,34 @@ function sysName(id) {
 const modeRow = () => `<div class="kb-br-row">
       <label class="kb-br-label">统计方式</label>
       <div class="kb-br-field"><div class="segmented kb-br-mode" role="group" aria-label="统计方式">
-        ${[['area', '按星系和时间'], ['km', '按击杀链接']].map(([k, l]) => `<button type="button" data-br-mode="${k}" class="${BR.mode === k ? 'active' : ''}">${l}</button>`).join('')}
+        ${[['area', '按星系和时间'], ['km', '按指定的击杀']].map(([k, l]) => `<button type="button" data-br-mode="${k}" class="${BR.mode === k ? 'active' : ''}">${l}</button>`).join('')}
       </div></div>
     </div>`;
-// 输入框（textarea）的属性 i18n 不会自动翻译：这里先翻好
 // 星系名列表：英文用逗号；按击杀统计时星系可能很多，超过 max 个只列前面的
 const sysNames = (ids, max) => {
   const sep = window.I18N?.lang === 'en' ? ', ' : '、';
   const n = ids.map((id) => ctx.kb.systemLabel(id).name);
   return n.length > max ? `${n.slice(0, max).join(sep)} 等 ${n.length} 个星系` : n.join(sep);
 };
+// 输入框（textarea）的属性 i18n 不会自动翻译：这里先翻好
 const tt = (s) => ctx.app.esc(window.I18N?.t ? window.I18N.t(s) : s);
+const ICON_PLUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>';
+const ICON_X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+
+// 「按指定的击杀」：添加击杀（弹窗：从击杀记录里搜索勾选 / 粘贴链接或 ID）+ 已添加的击杀列表（可逐条移除）
+const KM_LIST = 200;   // 已添加列表先画多少行
+const MISS_TEXT = { nf: '没取到：本站没有这条击杀、链接里也没有 hash', npc: 'NPC 击杀（没有玩家攻击者），不算', over: '本站没有、一次取不了这么多，没有统计' };
 function kmForm() {
   const n = BR.km.size;
   $('brForm').innerHTML = `${modeRow()}
     <div class="kb-br-row">
       <label class="kb-br-label">击杀</label>
       <div class="kb-br-field">
-        <textarea id="brKmText" class="cr-input kb-br-kmtext" rows="4" spellcheck="false" autocomplete="off" aria-label="${tt('粘贴击杀链接')}"
-          placeholder="${tt('粘贴游戏里的击杀链接，一次可以粘贴很多条：击杀报告里的「复制外部击杀链接」、聊天或邮件里的击杀链接、zKillboard 或本站的击杀链接都认')}"></textarea>
-        <div class="kb-br-kmline">${n ? `<span>已添加 ${n} 条击杀</span><button type="button" class="link-btn" data-br-km-clear>清空</button>` : '<span class="text-muted">还没有添加击杀</span>'}<span class="kb-br-kmhint text-muted" id="brKmHint"></span></div>
+        <div class="kb-br-kmbar">
+          <button type="button" class="btn btn-sm" data-br-km-add>${ICON_PLUS}<span>添加击杀</span></button>
+          ${n ? `<span class="text-muted">已添加 ${n} 条击杀</span><button type="button" class="link-btn" data-br-km-clear>清空</button>` : ''}
+        </div>
+        ${n ? kmList() : '<p class="kb-br-kmempty text-muted">可以从击杀记录里按人物、军团、联盟、舰船、星系搜索后勾选，也可以粘贴游戏里的击杀链接或击杀 ID（一行一条，或一次粘贴很多条）</p>'}
       </div>
     </div>
     <div class="kb-br-actions">
@@ -226,18 +271,298 @@ function kmForm() {
       <span class="text-muted">一次最多 ${KM_MAX} 条；也可以在击杀记录列表里点「多选」勾选击杀</span>
     </div>`;
 }
-// 粘贴框：认出击杀链接就加进去并清空输入框；什么都没认出来时提示一句
-function takeKmText(el) {
-  const text = el.value;
-  if (!text.trim()) { $('brKmHint').textContent = ''; return; }
-  const found = parseKillLinks(text);
-  if (!found.size) { $('brKmHint').textContent = '没认出击杀链接'; return; }
+function kmList() {
+  const esc = ctx.app.esc;
+  const at = (id) => BR.kmInfo.get(id)?.t ?? Infinity;   // 还不知道是哪条的放最前面
+  const ids = [...BR.km.keys()].sort((a, b) => at(b) - at(a) || b - a);
+  const shown = BR.kmAll ? ids : ids.slice(0, KM_LIST);
+  const rows = shown.map((id) => {
+    const x = BR.kmInfo.get(id), miss = BR.kmMiss.get(id);
+    const del = `<button type="button" class="kb-br-kmdel" data-br-km-del="${id}" title="移除" aria-label="移除">×</button>`;
+    if (!x) return `<div class="kb-br-kmrow wait"><span class="kb-br-kmwait"><span class="kb-br-kmid">#${id}</span><span class="${miss ? 'kb-br-kmwhy' : 'text-muted'}">${miss ? MISS_TEXT[miss] : BR.kmLoading.has(id) ? '读取中…' : '生成统计后显示'}</span></span>${del}</div>`;
+    const who = x.vc || x.vcorp, org = x.va || (x.vc ? x.vcorp : 0);
+    return `<div class="kb-br-kmrow${miss ? ' off' : ''}">
+      <button type="button" class="kb-br-kmkill" data-kill="${id}" title="查看击杀详情"><img src="${ctx.IMG(`types/${x.ship}/icon`, 32)}" alt="" width="28" height="28" loading="lazy"><span><strong>${esc(ctx.typeName(x.ship))}</strong><small translate="no">${esc(ctx.partyName(who))}${org ? ' · ' + esc(ctx.partyName(org)) : ''}</small></span></button>
+      <span class="kb-br-kmsys"><span>${sysName(x.sys)}</span>${miss ? `<small class="kb-br-kmwhy">${MISS_TEXT[miss]}</small>` : ''}</span>
+      <span class="kb-br-kmtime">${fmtTime(x.t)}</span>
+      <span class="kb-br-kmval">${ctx.app.formatISK(x.value)}</span>${del}</div>`;
+  }).join('');
+  const more = ids.length > shown.length ? `<button type="button" class="link-btn kb-br-kmmore" data-br-km-all>显示全部 ${ids.length} 条</button>` : '';
+  return `<div class="kb-br-kmlist">${rows}</div>${more}`;
+}
+
+// ---------- 添加击杀（弹窗）----------
+// 从击杀记录选：和击杀列表同一个接口（/feed），按人物 / 军团 / 联盟 / 舰船 / 星系 / 星座 / 星域筛选（同一类之间是「或」，不同类之间是「且」），
+//   可从某个时间往前看（游标从那个时间开始）；勾选后加进去。粘贴链接或 ID：认击杀链接，也认单独的击杀 ID
+const P = { tab: 'feed', f: [], until: 0, feed: [], cursor: null, busy: false, loaded: false, seq: 0, sseq: 0, sel: new Map() };
+const PK_LOC = { system: '星系', constellation: '星座', region: '星域' };
+const PASTE_TIP = '粘贴击杀链接或击杀 ID，一行一条，或一次粘贴很多条';
+function closePicker() { const m = $('brPick'); if (m) m.hidden = true; }
+function openPicker() {
+  const m = $('brPick') || buildPicker();
+  P.sel.clear();
+  m.hidden = false;
+  drawPicker();
+  if (P.tab === 'feed' && !P.loaded && !P.busy) loadPick(true);
+  requestAnimationFrame(() => (P.tab === 'feed' ? $('bpSearch') : $('bpText'))?.focus());
+}
+function buildPicker() {
+  const m = document.createElement('div');
+  m.className = 'modal';
+  m.id = 'brPick';
+  m.hidden = true;
+  m.setAttribute('role', 'dialog');
+  m.setAttribute('aria-modal', 'true');
+  m.setAttribute('aria-labelledby', 'bpTitle');
+  m.innerHTML = `<div class="modal-backdrop" data-bp-close></div>
+    <div class="modal-content kb-bp-modal">
+      <div class="modal-header"><h3 id="bpTitle">添加击杀</h3><button class="modal-close" data-bp-close aria-label="关闭">${ICON_X}</button></div>
+      <div class="kb-bp-tabs"><div class="segmented" role="tablist">
+        <button type="button" role="tab" data-bp-tab="feed">从击杀记录选</button><button type="button" role="tab" data-bp-tab="paste">粘贴链接或 ID</button>
+      </div></div>
+      <div class="modal-body kb-bp-body">
+        <div class="kb-bp-pane" data-bp-pane="feed">
+          <div class="search-box kb-br-search kb-bp-search">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+            <input type="search" id="bpSearch" placeholder="搜索人物 / 军团 / 联盟 / 舰船 / 星系 / 星座 / 星域" autocomplete="off" spellcheck="false" aria-label="筛选击杀">
+            <div class="kb-suggest" id="bpSuggest" hidden></div>
+          </div>
+          <div class="kb-bp-opts" id="bpOpts"></div>
+          <div id="bpFeed"></div>
+          <button type="button" class="btn kb-more" id="bpMore" data-bp-more hidden>加载更多</button>
+        </div>
+        <div class="kb-bp-pane" data-bp-pane="paste" hidden>
+          <textarea id="bpText" class="cr-input kb-br-kmtext" rows="8" spellcheck="false" autocomplete="off" aria-label="${tt('粘贴击杀链接或击杀 ID')}" placeholder="${tt(PASTE_TIP)}"></textarea>
+          <p class="kb-bp-tip text-muted">认得：游戏击杀报告里「复制外部击杀链接」、聊天或邮件里的击杀链接、zKillboard 或本站的击杀链接、单独的击杀 ID。</p>
+          <p class="kb-bp-tip text-muted">本站没有的击杀要靠链接里的 hash 向 ESI 取：国服请用击杀报告里的「复制外部击杀链接」；只有击杀 ID 的，宁静服从 zKillboard 补（一次最多 20 条）。</p>
+        </div>
+      </div>
+      <div class="kb-bp-foot" id="bpFoot"></div>
+    </div>`;
+  document.body.appendChild(m);
+  m.addEventListener('click', (e) => {
+    const el = (sel) => e.target.closest(sel);
+    let x;
+    if (!el('.kb-bp-search') && $('bpSuggest')) $('bpSuggest').hidden = true;
+    if (el('[data-bp-close]')) { closePicker(); return; }
+    if ((x = el('[data-bp-tab]'))) {
+      P.tab = x.dataset.bpTab;
+      drawPicker();
+      if (P.tab === 'feed' && !P.loaded && !P.busy) loadPick(true);
+      (P.tab === 'feed' ? $('bpSearch') : $('bpText')).focus();
+      return;
+    }
+    if ((x = el('[data-bp-add]'))) { const [kind, id] = x.dataset.bpAdd.split(':'); pickFilter(kind, Number(id), x.dataset.name); return; }
+    if ((x = el('[data-bp-rm]'))) {
+      if (x.dataset.bpRm === 'all') P.f = [];
+      else { const [kind, id] = x.dataset.bpRm.split(':'); P.f = P.f.filter((f) => !(f.kind === kind && f.id === Number(id))); }
+      drawOpts();
+      loadPick(true);
+      return;
+    }
+    if ((x = el('[data-bp-me]'))) {
+      const id = Number(x.dataset.bpMe);
+      if (P.f.some((f) => f.kind === 'character' && f.id === id)) P.f = P.f.filter((f) => !(f.kind === 'character' && f.id === id));
+      else P.f.push({ kind: 'character', id, name: x.dataset.name });
+      drawOpts();
+      loadPick(true);
+      return;
+    }
+    if (el('[data-bp-until-clear]')) { P.until = 0; drawOpts(); loadPick(true); return; }
+    if (el('[data-bp-more]')) { loadPick(false); return; }
+    if (el('[data-bp-all]')) {
+      for (const k of P.feed) {
+        if (BR.km.size + P.sel.size >= KM_MAX) break;
+        if (!BR.km.has(k.id) && !k.npc) P.sel.set(k.id, k);
+      }
+      drawPickFeed();
+      drawFoot();
+      return;
+    }
+    if (el('[data-bp-none]')) { P.sel.clear(); drawPickFeed(); drawFoot(); return; }
+    if (el('[data-bp-ok]')) { commitPick(); return; }
+    if (el('[data-bp-paste]')) { commitPaste(); return; }
+    const row = el('tr[data-bp-kill]');
+    if (row) { e.preventDefault(); togglePickRow(row); }
+  });
+  m.addEventListener('input', ctx.app.debounce((e) => { if (e.target.id === 'bpSearch') pickSearch(e.target.value); }, 200));
+  m.addEventListener('focusin', (e) => { if (e.target.id === 'bpSearch' && e.target.value.trim().length >= 2) pickSearch(e.target.value); });
+  m.addEventListener('change', (e) => {
+    if (e.target.id !== 'bpUntil') return;
+    const v = e.target.value ? fromInput(e.target.value) : 0;
+    P.until = Number.isFinite(v) ? v : 0;
+    $('bpUntilTail').innerHTML = untilTail();
+    loadPick(true);
+  });
+  m.addEventListener('keydown', (e) => {
+    if (e.target.id === 'bpSearch' && e.key === 'Enter') { e.preventDefault(); $('bpSuggest').querySelector('[data-bp-add]')?.click(); }
+    if (e.target.matches?.('tr[data-bp-kill]') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); togglePickRow(e.target); }
+    if (e.target.id === 'bpText' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); commitPaste(); }
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || m.hidden) return;
+    e.stopImmediatePropagation();
+    if (!$('bpSuggest').hidden) $('bpSuggest').hidden = true; else closePicker();
+  }, true);
+  window.addEventListener('popstate', closePicker);
+  return m;
+}
+function drawPicker() {
+  const m = $('brPick');
+  m.querySelectorAll('[data-bp-tab]').forEach((b) => { const on = b.dataset.bpTab === P.tab; b.classList.toggle('active', on); b.setAttribute('aria-selected', String(on)); });
+  m.querySelectorAll('[data-bp-pane]').forEach((p) => { p.hidden = p.dataset.bpPane !== P.tab; });
+  if (P.tab === 'feed') { drawOpts(); drawPickFeed(); $('bpMore').hidden = !P.cursor; }
+  drawFoot();
+}
+const untilTail = () => `<span class="text-muted">${tzLabel()}</span>${P.until ? '<button type="button" class="link-btn" data-bp-until-clear>不限</button>' : '<span class="text-muted">不填就从最新的开始</span>'}`;
+function drawOpts() {
+  const esc = ctx.app.esc;
+  const me = ctx.app.esiAccounts?.() || [];
+  const on = (id) => P.f.some((f) => f.kind === 'character' && f.id === id);
+  const icon = (x) => (x.kind === 'ship' ? ctx.IMG(`types/${x.id}/icon`, 32) : ctx.KIND_ZH[x.kind] ? ctx.avatar(x.kind, x.id, 32) : '');
+  const chips = P.f.map((x) => `<span class="kb-chip">${icon(x) ? `<img src="${icon(x)}" alt="" width="16" height="16">` : ''}${PK_LOC[x.kind] ? PK_LOC[x.kind] + ' · ' : ''}<span translate="no">${esc(x.name)}</span><button type="button" data-bp-rm="${x.kind}:${x.id}" aria-label="移除">×</button></span>`).join('');
+  $('bpOpts').innerHTML = `
+    ${me.length ? `<div class="kb-bp-line"><span class="text-muted">我的角色</span>${me.map((c) => `<button type="button" class="kb-bp-me${on(c.id) ? ' active' : ''}" data-bp-me="${c.id}" data-name="${esc(c.name)}" aria-pressed="${on(c.id)}"><img src="${ctx.avatar('character', c.id, 32)}" alt="" width="20" height="20"><span translate="no">${esc(c.name)}</span></button>`).join('')}</div>` : ''}
+    <div class="kb-bp-line kb-bp-until"><span class="text-muted">截至</span><input type="datetime-local" id="bpUntil" step="60" value="${P.until ? toInput(P.until) : ''}" aria-label="截至时间"><span id="bpUntilTail" class="kb-bp-line">${untilTail()}</span></div>
+    ${chips ? `<div class="kb-filters">${chips}${P.f.length > 1 ? '<button type="button" class="kb-chip kb-chip-clear" data-bp-rm="all">清空</button>' : ''}</div>` : ''}`;
+}
+async function pickSearch(text) {
+  const box = $('bpSuggest');
+  const q = text.trim().toLowerCase();
+  if (q.length < 2) { ++P.sseq; box.hidden = true; return; }
+  const seq = ++P.sseq;
+  const local = ctx.localSearch(q);
+  drawPickSuggest(local, null);
+  let ents = [];
+  try { ents = (await ctx.request('search?q=' + encodeURIComponent(q))).results || []; } catch { /* 服务不可用时只显示本地结果 */ }
+  if (seq === P.sseq) drawPickSuggest(local, ents);
+}
+function drawPickSuggest(local, ents) {
+  const esc = ctx.app.esc;
+  const group = (title, items) => (items.length ? `<div class="kb-suggest-group">${title}</div>${items.join('')}` : '');
+  const img = (src) => `<img src="${src}" alt="" width="22" height="22" loading="lazy">`;
+  const item = (kind, id, name, icon, sub) => `<button type="button" class="kb-suggest-item" data-bp-add="${kind}:${id}" data-name="${esc(name)}">${icon}<span translate="no">${esc(name)}</span><small>${sub}</small></button>`;
+  const byKind = (kind) => (ents || []).filter((e) => e.category === kind).slice(0, 6).map((e) => item(kind, e.id, e.name, img(ctx.avatar(kind, e.id, 32)), ctx.KIND_ZH[kind]));
+  const html = (ents === null ? '<div class="kb-suggest-group">人物 / 军团 / 联盟 · 搜索中…</div>' : group('人物', byKind('character')) + group('军团', byKind('corporation')) + group('联盟', byKind('alliance')))
+    + group('舰船', local.ships.map((x) => item('ship', x.id, x.name, img(ctx.IMG(`types/${x.id}/icon`, 32)), '舰船')))
+    + group('星系', local.systems.map((x) => { const l = ctx.kb.systemLabel(x.id); return `<button type="button" class="kb-suggest-item" data-bp-add="system:${x.id}" data-name="${esc(x.name)}"><i style="background:${l.color}"></i><span>${esc(x.name)} <b style="color:${l.color}">${l.secText}</b></span><small>${esc(l.region)}</small></button>`; }))
+    + group('星座', local.constellations.map((x) => item('constellation', x.id, x.name, '<i></i>', '星座')))
+    + group('星域', local.regions.map((x) => item('region', x.id, x.name, '<i></i>', '星域')));
+  const box = $('bpSuggest');
+  box.innerHTML = html || '<p class="legend-empty">没有找到匹配项</p>';
+  box.hidden = false;
+}
+function pickFilter(kind, id, name) {
+  if (!P.f.some((f) => f.kind === kind && f.id === id)) P.f.push({ kind, id, name });
+  $('bpSearch').value = '';
+  $('bpSuggest').hidden = true;
+  drawOpts();
+  loadPick(true);
+}
+async function loadPick(reset) {
+  if (!reset && P.busy) return;
+  const seq = ++P.seq;
+  P.busy = true;
+  const more = $('bpMore');
+  if (reset) { P.feed = []; P.cursor = null; $('bpFeed').innerHTML = '<div class="kb-br-loading"><span class="spinner"></span>正在读取击杀记录…</div>'; more.hidden = true; }
+  else { more.disabled = true; more.textContent = String(P.cursor).startsWith('z:') ? '正在查询 zKillboard…' : '加载中…'; }
+  try {
+    const q = new URLSearchParams({ limit: 50 });
+    for (const k of ['ship', 'system', 'constellation', 'region', 'character', 'corporation', 'alliance']) {
+      const ids = P.f.filter((f) => f.kind === k).map((f) => f.id);
+      if (ids.length) q.set(k, ids.join(','));
+    }
+    // 「截至」：游标就是「时间:击杀 ID」，从那一分钟的末尾往前翻
+    const cursor = reset ? (P.until ? `${P.until + 59}:999999999999` : '') : P.cursor;
+    if (cursor) q.set('cursor', cursor);
+    const data = await ctx.request('feed?' + q);
+    ctx.absorbNames(data.names);
+    await ctx.loadTypes(data.kills.map((k) => k.ship_type_id));
+    if (seq !== P.seq) return;
+    P.feed = P.feed.concat(data.kills);
+    P.cursor = data.cursor;
+    P.loaded = true;
+    drawPickFeed();
+  } catch (error) {
+    if (seq === P.seq) $('bpFeed').innerHTML = `<p class="kb-empty text-muted">读取失败：${ctx.app.esc(error.message)}</p>`;
+  } finally {
+    if (seq === P.seq) { P.busy = false; more.disabled = false; more.textContent = '加载更多'; more.hidden = !P.cursor; }
+  }
+}
+function drawPickFeed() {
+  const box = $('bpFeed');
+  if (!box || (P.busy && !P.feed.length)) return;
+  if (!P.feed.length) { box.innerHTML = P.loaded ? '<p class="kb-empty text-muted">没有符合条件的击杀记录</p>' : ''; return; }
+  const esc = ctx.app.esc;
+  const rows = P.feed.map((k) => {
+    const added = BR.km.has(k.id), on = P.sel.has(k.id);
+    const v = k.victim || {}, sys = ctx.kb.systemLabel(k.system_id);
+    const org = v.alliance_id || (v.character_id ? v.corporation_id : 0);
+    return `<tr class="kb-row${on ? ' picked' : ''}${added ? ' added' : ''}${k.npc ? ' npc' : ''}" data-bp-kill="${k.id}" tabindex="0">
+      <td class="kb-pick"><input type="checkbox" tabindex="-1" aria-label="选中"${on || added ? ' checked' : ''}${added || k.npc ? ' disabled' : ''}></td>
+      <td class="kb-ship"><span class="kb-ship-inner"><img src="${ctx.IMG(`types/${k.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
+        <span><strong>${esc(ctx.typeName(k.ship_type_id))}</strong>${added ? '<span class="kb-tag">已添加</span>' : ''}${k.npc ? '<span class="kb-tag npc">NPC</span>' : ''}</span></span></td>
+      <td class="kb-party"><strong translate="no">${esc(ctx.partyName(v.character_id || v.corporation_id))}</strong><span class="cell-sub" translate="no">${org ? esc(ctx.partyName(org)) : ''}</span></td>
+      <td class="kb-loc"><strong>${sysName(k.system_id)}</strong><span class="cell-sub">${esc(sys.region || '')}</span></td>
+      <td class="num kb-value"><strong>${ctx.app.formatISK(k.value)}</strong><span class="cell-sub">${fmtTime(Date.parse(k.time) / 1000)}</span></td>
+    </tr>`;
+  }).join('');
+  box.innerHTML = `<div class="table-scroll"><table class="pc-mini-table kb-table kb-picking kb-bp-table"><thead><tr>
+      <th class="kb-pick"></th><th>舰船</th><th>受害者</th><th>地点</th><th class="num">价值</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+function togglePickRow(row) {
+  const id = Number(row.dataset.bpKill);
+  const k = P.feed.find((x) => x.id === id);
+  if (!k || BR.km.has(id)) return;
+  if (k.npc) { ctx.app.showToast('NPC 击杀（没有玩家攻击者）不算战场统计', 'info'); return; }
+  if (P.sel.has(id)) P.sel.delete(id);
+  else if (BR.km.size + P.sel.size >= KM_MAX) { ctx.app.showToast(`最多 ${KM_MAX} 条`, 'info'); return; }
+  else P.sel.set(id, k);
+  const on = P.sel.has(id);
+  row.classList.toggle('picked', on);
+  const box = row.querySelector('.kb-pick input');
+  if (box) box.checked = on;
+  drawFoot();
+}
+function drawFoot() {
+  const f = $('bpFoot');
+  if (!f) return;
+  if (P.tab === 'paste') {
+    f.innerHTML = '<span class="kb-bp-hint" id="bpHint"></span><button type="button" class="btn btn-primary" data-bp-paste>添加</button>';
+    return;
+  }
+  const n = P.sel.size;
+  f.innerHTML = `<span class="kb-bp-hint">${n ? `已勾选 ${n} 条` : '点击击杀来勾选'}</span>
+    <button type="button" class="btn btn-ghost btn-sm" data-bp-all>全选已加载的</button>${n ? '<button type="button" class="btn btn-ghost btn-sm" data-bp-none>清空勾选</button>' : ''}
+    <button type="button" class="btn btn-primary" data-bp-ok${n ? '' : ' disabled'}>${n ? `添加 ${n} 条` : '添加'}</button>`;
+}
+function commitPick() {
+  let added = 0;
+  for (const [id, k] of P.sel) {
+    if (BR.km.has(id)) continue;
+    if (BR.km.size >= KM_MAX) break;
+    BR.km.set(id, k.hash || null);
+    BR.kmInfo.set(id, infoFromFeed(k));
+    added += 1;
+  }
+  saveHashes();
+  P.sel.clear();
+  closePicker();
+  kmForm();
+  if (added) ctx.app.showToast(`已添加 ${added} 条击杀`, 'success');
+}
+function commitPaste() {
+  const el = $('bpText');
+  const found = parseKillLinks(el.value, { ids: true });
+  if (!found.size) { $('bpHint').textContent = el.value.trim() ? '没认出击杀链接或击杀 ID' : '先粘贴击杀链接或击杀 ID'; el.focus(); return; }
   const before = BR.km.size;
   const added = addKills(found);
-  kmForm();
   const full = BR.km.size >= KM_MAX && before + found.size > KM_MAX;
+  el.value = '';
+  closePicker();
+  kmForm();
   ctx.app.showToast(added ? `已添加 ${added} 条击杀${full ? `（最多 ${KM_MAX} 条，多出来的没加）` : ''}` : '这些击杀已经添加过了', added ? 'success' : 'info');
-  $('brKmText')?.focus();
+  previewKm([...found.keys()].filter((id) => BR.km.has(id)));
 }
 
 function renderForm() {
@@ -293,7 +618,6 @@ function renderForm() {
 function bindForm() {
   const form = $('brForm');
   form.addEventListener('input', ctx.app.debounce((e) => { if (e.target.id === 'brSystem') suggest(e.target.value); }, 150));
-  form.addEventListener('input', ctx.app.debounce((e) => { if (e.target.id === 'brKmText') takeKmText(e.target); }, 250));
   form.addEventListener('keydown', (e) => {
     if (e.target.id === 'brSystem' && e.key === 'Enter') { e.preventDefault(); $('brSuggest').querySelector('[data-br-pick]')?.click(); }
     if (e.target.id === 'brSystem' && e.key === 'Escape') $('brSuggest').hidden = true;
@@ -315,7 +639,10 @@ function bindForm() {
     const el = (sel) => e.target.closest(sel);
     let x;
     if ((x = el('[data-br-mode]'))) { if (BR.mode !== x.dataset.brMode) { BR.mode = x.dataset.brMode; renderForm(); } return; }
-    if (el('[data-br-km-clear]')) { BR.km.clear(); kmForm(); return; }
+    if (el('[data-br-km-add]')) { openPicker(); return; }
+    if (el('[data-br-km-clear]')) { BR.km.clear(); BR.kmAll = false; kmForm(); return; }
+    if ((x = el('[data-br-km-del]'))) { BR.km.delete(Number(x.dataset.brKmDel)); kmForm(); return; }
+    if (el('[data-br-km-all]')) { BR.kmAll = true; kmForm(); return; }
     if ((x = el('[data-br-pick]'))) {
       const id = Number(x.dataset.brPick);
       if (!BR.picked.includes(id)) BR.picked.push(id);
@@ -365,7 +692,7 @@ function suggest(text) {
 
 function go() {
   if (BR.mode === 'km') {
-    if (!BR.km.size) { ctx.app.showToast('先粘贴击杀链接', 'error'); return; }
+    if (!BR.km.size) { ctx.app.showToast('先添加击杀', 'error'); return; }
     BR.side.clear();
     history.pushState(null, '', hashFor(false));
     loadResult({ km: [...BR.km.keys()], a: [], b: [], c: [], d: [] });
@@ -414,7 +741,7 @@ async function loadResult(p) {
     BR.data = data;
     BR.key = key;
     ctx.absorbNames(data.names);
-    if (km) await fillNames(data);
+    if (km) { await fillNames(data); absorbKm(data); }
     const types = new Set();
     for (const k of data.kills) { types.add(k[3]); for (const a of k[8]) if (a[3]) types.add(a[3]); }
     await ctx.loadTypes([...types]);
@@ -432,6 +759,7 @@ async function loadResult(p) {
     history.replaceState(null, '', hashFor());
   }
   renderResult();
+  if (km) redrawKm();
   refreshDamage();
 }
 
