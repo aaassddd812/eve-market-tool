@@ -1,6 +1,6 @@
 // ===== 击杀详情、人物 / 军团 / 联盟页的分享图片 =====
 // 纯 Canvas 绘制；配色、图片加载、画法小工具与弹窗在 share-image.js。数据模型由 killboard.js / kb-page.js 整理好传进来。
-import { W, THEMES, loadImages, rr, alpha, makeCanvas, crop, painter, qrSize } from './share-image.js?v=9';
+import { W, SCALE, THEMES, loadImages, rr, alpha, makeCanvas, crop, painter, qrSize } from './share-image.js?v=10';
 
 const PAD = 40, IW = W - PAD * 2, GAP = 20;
 // 安全等级颜色（页面里是 CSS 变量，画布读不了，按图片配色取）
@@ -48,27 +48,234 @@ function chipRows(P, list, x, maxX) {
 }
 
 // ---------------------------------------------------------------- 击杀
+// 一行行的画法（精简图和完整长图共用）
+function killRows(g, C, P, images) {
+  return {
+    head(gr, x, cy, cont) {
+      const label = cont ? gr.label + '（续）' : gr.label;
+      P.text(label, x, cy + 20, { size: 13, weight: 700, color: C.sub });
+      if (!cont) P.text(gr.count, x + P.measure(label, 13, 700) + 8, cy + 20, { size: 12, color: C.muted });
+    },
+    item(it, x, cy, w) {
+      if (it.dropped) { rr(g, x - 8, cy + 1, w + 16, 34, 9); g.fillStyle = alpha(C.good, 0.1); g.fill(); }
+      P.pic(images.get(it.icon), x, cy + 4, 28, 6);
+      const qw = it.qty !== '1' ? P.measure(`×${it.qty}`, 13, 600) + 8 : 0;
+      const pw = it.part ? P.measure(it.part, 12, 600) + 14 : 0;
+      const nw = P.text(it.name, x + 40, cy + 23, { size: 14, weight: 500, color: it.dropped ? C.good : C.text, max: w - 40 - 110 - qw - pw });
+      if (qw) P.text(`×${it.qty}`, x + 40 + nw + 8, cy + 23, { size: 13, weight: 600, color: C.muted });
+      if (it.part) P.text(it.part, x + w - 100, cy + 23, { size: 12, weight: 600, color: C.good, align: 'right' });
+      if (it.value) P.text(it.value, x + w, cy + 23, { size: 13, color: C.sub, align: 'right' });
+    },
+    attacker(a, x, cy, w) {
+      P.pic(images.get(a.avatar), x, cy + 6, 38, a.round ? 19 : 8);
+      if (a.ship) P.pic(images.get(a.ship), x + w - 118, cy + 9, 30, 6);
+      const tw = w - 50 - 128;
+      const nx = x + 50 + P.text(a.name, x + 50, cy + 21, { size: 14, weight: 700, max: tw - (a.final ? 70 : 0) });
+      if (a.final) {
+        const fw = P.measure('最后一击', 11, 700) + 14;
+        rr(g, nx + 8, cy + 8, fw, 18, 9);
+        g.fillStyle = alpha(C.gold, 0.16);
+        g.fill();
+        P.text('最后一击', nx + 15, cy + 21, { size: 11, weight: 700, color: C.gold });
+      }
+      P.text(a.party, x + 50, cy + 38, { size: 12, color: C.muted, max: tw });
+      P.bar(x + 50, cy + 45, tw, 4, a.share, C.a);
+      P.text(a.damage, x + w, cy + 24, { size: 14, weight: 700, align: 'right' });
+      P.text(a.pct, x + w, cy + 41, { size: 12, color: C.muted, align: 'right' });
+    },
+    party(p, x, cy, w) {
+      P.pic(images.get(p.logo), x, cy + 6, 32, 8);
+      const tw = w - 44 - 70;
+      const pw = P.text(p.pilots, x + 44 + tw, cy + 20, { size: 12, color: C.muted, align: 'right' });
+      P.text(p.name, x + 44, cy + 20, { size: 14, weight: 600, max: tw - pw - 12 });
+      P.bar(x + 44, cy + 29, tw, 6, p.share, C.a);
+      P.text(p.pct, x + w, cy + 28, { size: 14, weight: 700, align: 'right' });
+    },
+    ship(s, sx, sy, sw) {
+      rr(g, sx, sy, sw, 36, 10);
+      g.fillStyle = C.panel2;
+      g.fill();
+      P.pic(images.get(s.icon), sx + 4, sy + 4, 28, 6);
+      P.text(s.name, sx + 40, sy + 23, { size: 13, weight: 600, max: sw - 40 - 44 });
+      P.text('×' + s.count, sx + sw - 10, sy + 23, { size: 13, weight: 700, color: C.sub, align: 'right' });
+    }
+  };
+}
+
+// 精简图（默认）：左列装配与物品，右列攻击者（前 10 名）、攻击方势力、攻击方舰船
+function shortBody(m) {
+  const leftH = 64 + m.groups.reduce((s, gr) => s + 30 + gr.items.length * 36 + (gr.more ? 24 : 0) + 8, 0) + 8;
+  const shipRows = Math.ceil(m.ships.length / 2);
+  const rightH = 64 + m.attackers.length * 54 + (m.moreAttackers ? 26 : 0) +
+    (m.parties.length ? 66 + m.parties.length * 44 : 0) + (shipRows ? 66 + shipRows * 42 : 0) + 14;
+  const ch = Math.max(leftH, rightH, 120);
+  return {
+    h: ch,
+    draw(g, C, P, R, y) {
+      const lw = 640, rw = IW - lw - GAP;
+      P.card(PAD, y, lw, ch);
+      let x = PAD + 24, w = lw - 48;
+      P.title('装配与物品', x, y + 38, { color: C.b, right: '绿色为掉落', rightX: x + w });
+      let cy = y + 56;
+      if (!m.groups.length) P.text('没有物品', x, cy + 26, { size: 13, color: C.muted });
+      for (const gr of m.groups) {
+        R.head(gr, x, cy);
+        cy += 30;
+        for (const it of gr.items) { R.item(it, x, cy, w); cy += 36; }
+        if (gr.more) { P.text(`另有 ${gr.more} 种物品`, x + 40, cy + 16, { size: 12, color: C.muted }); cy += 24; }
+        cy += 8;
+      }
+
+      // ---------- 攻击者 ----------
+      const rx0 = PAD + lw + GAP;
+      P.card(rx0, y, rw, ch);
+      x = rx0 + 24; w = rw - 48;
+      P.title(`攻击者 ${m.attackerCount}`, x, y + 38, { color: C.a, right: '伤害', rightX: x + w });
+      cy = y + 56;
+      for (const a of m.attackers) { R.attacker(a, x, cy, w); cy += 54; }
+      if (m.moreAttackers) { P.text(`另有 ${m.moreAttackers} 名攻击者`, x + 50, cy + 16, { size: 12, color: C.muted }); cy += 26; }
+      // 攻击方势力
+      if (m.parties.length) {
+        cy += 18;
+        g.fillStyle = C.line;
+        g.fillRect(x, cy, w, 1);
+        P.title('攻击方势力', x, cy + 34, { color: C.a, right: '伤害占比', rightX: x + w });
+        cy += 48;
+        for (const p of m.parties) { R.party(p, x, cy, w); cy += 44; }
+      }
+      // 攻击方舰船：两列
+      if (shipRows) {
+        cy += 18;
+        g.fillStyle = C.line;
+        g.fillRect(x, cy, w, 1);
+        P.title('攻击方舰船', x, cy + 34, { color: C.a });
+        cy += 48;
+        const sw = (w - 16) / 2;
+        m.ships.forEach((s, i) => R.ship(s, x + (i % 2) * (sw + 16), cy + Math.floor(i / 2) * 42, sw));
+      }
+      return y + ch;
+    }
+  };
+}
+
+// 完整长图：装配与物品、攻击者、攻击方势力、攻击方舰船各占一整行卡片，里面分两三列（先排满左列再排右列）
+const LONG_MAX = 30000;   // 图片最高（逻辑像素）；攻击者特别多的大型击杀超出时只列伤害最高的一部分
+const IX = PAD + 24, IIW = IW - 48, CGAP = 32;
+function longBody(m) {
+  const colW = (n, gap = CGAP) => (IIW - gap * (n - 1)) / n;
+  // 装配与物品：分组标题、物品行按顺序排成两列，左右差不多高；右列从一组中间开始时补一行「（续）」标题
+  const lines = [];
+  for (const gr of m.groups) {
+    lines.push({ h: 30, head: gr });
+    for (const it of gr.items) lines.push({ h: 36, it, gr });
+    lines.push({ h: 8 });
+  }
+  const total = lines.reduce((s, l) => s + l.h, 0);
+  let cut = lines.length, acc = 0;
+  for (let i = 0; i < lines.length; i++) { if (acc + lines[i].h / 2 >= total / 2) { cut = i; break; } acc += lines[i].h; }
+  while (cut > 0 && lines[cut - 1].head) cut--;
+  const left = lines.slice(0, cut), right = lines.slice(cut);
+  while (right.length && !right[0].head && !right[0].it) right.shift();
+  if (right[0]?.it) right.unshift({ h: 30, head: right[0].gr, cont: true });
+  const colH = (list) => list.reduce((s, l) => s + l.h, 0);
+  const itemsH = 56 + (m.groups.length ? Math.max(colH(left), colH(right)) : 40) + 10;
+  const shipRows = Math.ceil(m.ships.length / 3);
+  const partyRows = Math.ceil(m.parties.length / 2);
+  const shipsH = shipRows ? 56 + shipRows * 42 + 12 : 0;
+  const partiesH = partyRows ? 56 + partyRows * 44 + 10 : 0;
+  // 攻击者：放不下时只列伤害最高的（最后一击总要在里面）
+  const fixed = itemsH + (partiesH ? GAP + partiesH : 0) + (shipsH ? GAP + shipsH : 0) + GAP + 56 + 14 + 26;
+  const maxRows = Math.max(10, Math.floor((LONG_MAX - 600 - fixed) / 54));
+  let attackers = m.attackers;
+  if (Math.ceil(attackers.length / 2) > maxRows) {
+    attackers = attackers.slice(0, maxRows * 2);
+    const final = m.attackers.find((a) => a.final);
+    if (final && !attackers.includes(final)) attackers[attackers.length - 1] = final;
+  }
+  const more = m.attackerCount - attackers.length;
+  const atkRows = Math.ceil(attackers.length / 2);
+  const atkH = 56 + atkRows * 54 + (more ? 26 : 0) + 14;
+  const cols = (list, n, rowH, x0, y0, w, draw, gap = CGAP) => {
+    const per = Math.ceil(list.length / n);
+    list.forEach((r, i) => draw(r, x0 + Math.floor(i / per) * (w + gap), y0 + (i % per) * rowH, w));
+  };
+  return {
+    h: itemsH + GAP + atkH + (partiesH ? GAP + partiesH : 0) + (shipsH ? GAP + shipsH : 0),
+    draw(g, C, P, R, y) {
+      // ---------- 装配与物品 ----------
+      P.card(PAD, y, IW, itemsH);
+      P.title('装配与物品', IX, y + 38, { color: C.b, right: '绿色为掉落', rightX: IX + IIW });
+      const w2 = colW(2);
+      if (!m.groups.length) P.text('没有物品', IX, y + 82, { size: 13, color: C.muted });
+      [left, right].forEach((list, c) => {
+        const x = IX + c * (w2 + CGAP);
+        let cy = y + 56;
+        for (const l of list) {
+          if (l.head) R.head(l.head, x, cy, l.cont);
+          else if (l.it) R.item(l.it, x, cy, w2);
+          cy += l.h;
+        }
+      });
+      y += itemsH + GAP;
+      // ---------- 攻击者 ----------
+      P.card(PAD, y, IW, atkH);
+      P.title(`攻击者 ${m.attackerCount}`, IX, y + 38, { color: C.a, right: '伤害', rightX: IX + IIW });
+      cols(attackers, 2, 54, IX, y + 56, w2, R.attacker);
+      if (more) P.text(`另有 ${more} 名攻击者（图片太长，只列出伤害最高的 ${attackers.length} 名）`, IX + 50, y + 56 + atkRows * 54 + 16, { size: 12, color: C.muted });
+      y += atkH;
+      // ---------- 攻击方势力 ----------
+      if (partiesH) {
+        y += GAP;
+        P.card(PAD, y, IW, partiesH);
+        P.title(`攻击方势力 ${m.parties.length}`, IX, y + 38, { color: C.a, right: '伤害占比', rightX: IX + IIW });
+        cols(m.parties, 2, 44, IX, y + 56, w2, R.party);
+        y += partiesH;
+      }
+      // ---------- 攻击方舰船 ----------
+      if (shipsH) {
+        y += GAP;
+        P.card(PAD, y, IW, shipsH);
+        P.title(`攻击方舰船 ${m.ships.length}`, IX, y + 38, { color: C.a });
+        cols(m.ships, 3, 42, IX, y + 56, colW(3, 16), R.ship, 16);
+        y += shipsH;
+      }
+      return y;
+    }
+  };
+}
+
+// 完整长图的画布：高度按内容算，尽量 2 倍像素；太长时降低倍数（浏览器画布单边最多约 32000 像素，面积也有上限）
+function longCanvas(H) {
+  const scale = Math.max(1, Math.min(SCALE, 32000 / H, Math.sqrt(64e6 / (W * H))));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(W * scale);
+  canvas.height = Math.ceil(H * scale);
+  const g = canvas.getContext('2d');
+  g.scale(scale, scale);
+  g.textBaseline = 'alphabetic';
+  return { canvas, g };
+}
+
+// m.full：完整长图（killboard.js 整理好全部物品、攻击者、势力和舰船）
 export async function renderKillImage(m, theme = 'light') {
   const C = THEMES[theme] || THEMES.light;
   const images = await loadImages([m.render, m.victim.avatar, m.victim.corpLogo, m.victim.allianceLogo,
     ...m.groups.flatMap((gr) => gr.items.map((it) => it.icon)), ...m.attackers.flatMap((a) => [a.avatar, a.ship]),
     ...m.parties.map((p) => p.logo), ...m.ships.map((s) => s.icon)]);
-  const { canvas, g } = makeCanvas(4000);
-  const P = painter(g, C);
+  // 先用一块小画布量文字、算总高度，再建画布（完整长图的高度要先算出来）
+  const MP = painter(document.createElement('canvas').getContext('2d'), C);
 
   const x0 = PAD + 24 + 252 + 32, xr = W - PAD - 28;
   const chips = [{ text: `${m.system.name} ${m.system.sec}`, dot: secColor(C, m.system.level) }, ...(m.system.region ? [{ text: m.system.region }] : []),
     ...(m.station ? [{ text: m.station }] : []), ...(m.near ? [{ text: m.near }] : []),
     { text: m.time }, { text: m.eveTime }, { text: `${m.attackerCount} 名攻击者` }, { text: `承受伤害 ${m.damage}` }, ...m.tags.map((t) => ({ text: t, fg: C.b, bg: alpha(C.b, 0.12) }))];
-  const crow = chipRows(P, chips, x0, xr);
+  const crow = chipRows(MP, chips, x0, xr);
   const HERO = Math.max(300, 150 + crow * 38 + 112);
-  // 左列：装配分组；右列：攻击者
-  const leftH = 64 + m.groups.reduce((s, gr) => s + 30 + gr.items.length * 36 + (gr.more ? 24 : 0) + 8, 0) + 8;
-  const shipRows = Math.ceil(m.ships.length / 2);
-  const rightH = 64 + m.attackers.length * 54 + (m.moreAttackers ? 26 : 0) +
-    (m.parties.length ? 66 + m.parties.length * 44 : 0) + (shipRows ? 66 + shipRows * 42 : 0) + 14;
+  const body = m.full ? longBody(m) : shortBody(m);
   const top = Math.max(92, 40 + qrSize(m.url) + 24);   // 页眉右边的二维码比标签高，主卡片相应下移
-  const H = top + HERO + GAP + Math.max(leftH, rightH, 120) + 90;
+  const H = top + HERO + GAP + body.h + (m.full ? 80 : 90);
+  const { canvas, g } = m.full ? longCanvas(H) : makeCanvas(4000);
+  const P = painter(g, C);
   P.background(H, C.b, C.a);
   P.header('击杀报告 · KILLMAIL', 40, C.b, m.url);
 
@@ -111,98 +318,10 @@ export async function renderKillImage(m, theme = 'light') {
   if (dw > 0) { rr(g, bx, ky + 26, Math.max(14, dw), 14, 7); g.fillStyle = C.good; g.fill(); }
   if (m.valueNote) P.text(m.valueNote, bx + bw, ky + 62, { size: 12, color: C.muted, align: 'right', max: bw });
 
-  // ---------- 装配与物品 ----------
-  const y = top + HERO + GAP;
-  const lw = 640, rw = IW - lw - GAP;
-  const ch = Math.max(leftH, rightH, 120);
-  P.card(PAD, y, lw, ch);
-  let x = PAD + 24, w = lw - 48;
-  P.title('装配与物品', x, y + 38, { color: C.b, right: '绿色为掉落', rightX: x + w });
-  let cy = y + 56;
-  if (!m.groups.length) P.text('没有物品', x, cy + 26, { size: 13, color: C.muted });
-  for (const gr of m.groups) {
-    P.text(gr.label, x, cy + 20, { size: 13, weight: 700, color: C.sub });
-    P.text(gr.count, x + P.measure(gr.label, 13, 700) + 8, cy + 20, { size: 12, color: C.muted });
-    cy += 30;
-    for (const it of gr.items) {
-      if (it.dropped) { rr(g, x - 8, cy + 1, w + 16, 34, 9); g.fillStyle = alpha(C.good, 0.1); g.fill(); }
-      P.pic(images.get(it.icon), x, cy + 4, 28, 6);
-      const qw = it.qty !== '1' ? P.measure(`×${it.qty}`, 13, 600) + 8 : 0;
-      const pw = it.part ? P.measure(it.part, 12, 600) + 14 : 0;
-      const nw = P.text(it.name, x + 40, cy + 23, { size: 14, weight: 500, color: it.dropped ? C.good : C.text, max: w - 40 - 110 - qw - pw });
-      if (qw) P.text(`×${it.qty}`, x + 40 + nw + 8, cy + 23, { size: 13, weight: 600, color: C.muted });
-      if (it.part) P.text(it.part, x + w - 100, cy + 23, { size: 12, weight: 600, color: C.good, align: 'right' });
-      if (it.value) P.text(it.value, x + w, cy + 23, { size: 13, color: C.sub, align: 'right' });
-      cy += 36;
-    }
-    if (gr.more) { P.text(`另有 ${gr.more} 种物品`, x + 40, cy + 16, { size: 12, color: C.muted }); cy += 24; }
-    cy += 8;
-  }
-
-  // ---------- 攻击者 ----------
-  const rx0 = PAD + lw + GAP;
-  P.card(rx0, y, rw, ch);
-  x = rx0 + 24; w = rw - 48;
-  P.title(`攻击者 ${m.attackerCount}`, x, y + 38, { color: C.a, right: '伤害', rightX: x + w });
-  cy = y + 56;
-  for (const a of m.attackers) {
-    P.pic(images.get(a.avatar), x, cy + 6, 38, a.round ? 19 : 8);
-    if (a.ship) P.pic(images.get(a.ship), x + w - 118, cy + 9, 30, 6);
-    const tw = w - 50 - 128;
-    let nx = x + 50 + P.text(a.name, x + 50, cy + 21, { size: 14, weight: 700, max: tw - (a.final ? 70 : 0) });
-    if (a.final) {
-      const fw = P.measure('最后一击', 11, 700) + 14;
-      rr(g, nx + 8, cy + 8, fw, 18, 9);
-      g.fillStyle = alpha(C.gold, 0.16);
-      g.fill();
-      P.text('最后一击', nx + 15, cy + 21, { size: 11, weight: 700, color: C.gold });
-    }
-    P.text(a.party, x + 50, cy + 38, { size: 12, color: C.muted, max: tw });
-    P.bar(x + 50, cy + 45, tw, 4, a.share, C.a);
-    P.text(a.damage, x + w, cy + 24, { size: 14, weight: 700, align: 'right' });
-    P.text(a.pct, x + w, cy + 41, { size: 12, color: C.muted, align: 'right' });
-    cy += 54;
-  }
-  if (m.moreAttackers) { P.text(`另有 ${m.moreAttackers} 名攻击者`, x + 50, cy + 16, { size: 12, color: C.muted }); cy += 26; }
-  // 攻击方势力
-  if (m.parties.length) {
-    cy += 18;
-    g.fillStyle = C.line;
-    g.fillRect(x, cy, w, 1);
-    P.title('攻击方势力', x, cy + 34, { color: C.a, right: '伤害占比', rightX: x + w });
-    cy += 48;
-    for (const p of m.parties) {
-      P.pic(images.get(p.logo), x, cy + 6, 32, 8);
-      const tw = w - 44 - 70;
-      const pw = P.text(p.pilots, x + 44 + tw, cy + 20, { size: 12, color: C.muted, align: 'right' });
-      P.text(p.name, x + 44, cy + 20, { size: 14, weight: 600, max: tw - pw - 12 });
-      P.bar(x + 44, cy + 29, tw, 6, p.share, C.a);
-      P.text(p.pct, x + w, cy + 28, { size: 14, weight: 700, align: 'right' });
-      cy += 44;
-    }
-  }
-  // 攻击方舰船：两列
-  if (shipRows) {
-    cy += 18;
-    g.fillStyle = C.line;
-    g.fillRect(x, cy, w, 1);
-    P.title('攻击方舰船', x, cy + 34, { color: C.a });
-    cy += 48;
-    const sw = (w - 16) / 2;
-    m.ships.forEach((s, i) => {
-      const sx = x + (i % 2) * (sw + 16), sy = cy + Math.floor(i / 2) * 42;
-      rr(g, sx, sy, sw, 36, 10);
-      g.fillStyle = C.panel2;
-      g.fill();
-      P.pic(images.get(s.icon), sx + 4, sy + 4, 28, 6);
-      P.text(s.name, sx + 40, sy + 23, { size: 13, weight: 600, max: sw - 40 - 44 });
-      P.text('×' + s.count, sx + sw - 10, sy + 23, { size: 13, weight: 700, color: C.sub, align: 'right' });
-    });
-  }
-
-  const fy = y + ch + 44;
+  // ---------- 装配与物品、攻击者 ----------
+  const fy = body.draw(g, C, P, killRows(g, C, P, images), top + HERO + GAP) + 44;
   P.footer(m.footer, m.generated, fy);
-  return crop(canvas, fy + 36);
+  return m.full ? canvas : crop(canvas, fy + 36);
 }
 
 // ---------------------------------------------------------------- 人物 / 军团 / 联盟

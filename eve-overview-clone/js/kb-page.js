@@ -3,7 +3,7 @@
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v18';
-import { initBr, renderBr } from './kb-br.js?v=v50';
+import { initBr, renderBr } from './kb-br.js?v=v51';
 import { gankSystemHtml, GANK_NOTE } from './kb-gank.js?v=v1';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
@@ -1219,7 +1219,7 @@ let shareModules = null;
 function shareEntity() {
   const e = S.entity;
   if (!e?.stats) return;
-  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=10'), import('./share-image.js?v=9')]);
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=11'), import('./share-image.js?v=10')]);
   const model = entityImageModel(e);
   shareModules.then(([{ renderEntityImage }, { openShareModal, shareUrl }]) => openShareModal({
     title: `分享${KIND_ZH[e.kind]}图片`, app,

@@ -3,6 +3,8 @@
 // 有新的站长回复时「定制」按钮和「我的工单」上出现红点。「工单管理」只在服务器 EVE_FEEDBACK_ADMIN_IPS 里的 IP 访问时出现，
 // 可查看全部工单、回复、改状态；有新工单或提交者追加说明（待处理且比上次看过更新）时同样在「定制」按钮和「工单管理」上提醒。
 // 页面开着时每 5 分钟（切回页面时）查一次，新增时弹提示。
+// 「公告」「公告管理」两个标签页的内容和弹窗在 notice.js。
+import * as notice from './notice.js?v=v1';
 const TICKETS_KEY = 'eve-feedback-tickets';
 const SEEN_KEY = 'eve-feedback-seen';
 const ADMIN_SEEN_KEY = 'eve-feedback-admin-seen';
@@ -110,8 +112,8 @@ async function loadMine() {
 
 // ---------- 渲染 ----------
 function tabsHtml() {
-  const tabs = [['contact', '联系作者'], ['new', '提交工单'], ['mine', '我的工单']];
-  if (S.isAdmin) tabs.push(['admin', '工单管理']);
+  const tabs = [['contact', '联系作者'], ['new', '提交工单'], ['mine', '我的工单'], ['notice', '公告']];
+  if (S.isAdmin) tabs.push(['admin', '工单管理'], ['nadmin', '公告管理']);
   return tabs.map(([k, l]) => `<button type="button" role="tab" data-fb-tab="${k}"${S.tab === k ? ' class="active" aria-selected="true"' : ''}>${l}</button>`).join('');
 }
 function formHtml() {
@@ -175,7 +177,8 @@ function render() {
   const contact = S.tab === 'contact';
   $('contactInfo').hidden = !contact;
   box.hidden = contact;
-  box.innerHTML = contact ? '' : S.tab === 'mine' ? mineHtml() : S.tab === 'admin' ? adminHtml() : formHtml();
+  box.innerHTML = contact ? '' : S.tab === 'mine' ? mineHtml() : S.tab === 'admin' ? adminHtml()
+    : S.tab === 'notice' ? notice.listHtml() : S.tab === 'nadmin' ? notice.adminHtml() : formHtml();
   syncDot();
 }
 
@@ -199,6 +202,8 @@ function switchTab(tab) {
       .catch((error) => { S.mine = S.mine || []; ctx.showToast('加载工单失败：' + error.message, 'error'); if (S.tab === 'mine') render(); });
   }
   if (tab === 'admin') loadAdmin();
+  if (tab === 'notice') notice.refresh();
+  if (tab === 'nadmin') notice.loadAdmin();
 }
 
 // ---------- 事件 ----------
@@ -250,7 +255,8 @@ async function adminAct(id, body, btn) {
 
 function onClick(e) {
   const tab = e.target.closest('[data-fb-tab]');
-  if (tab) { if (tab.dataset.fbTab !== 'admin' || S.isAdmin) switchTab(tab.dataset.fbTab); return; }
+  if (tab) { if (!['admin', 'nadmin'].includes(tab.dataset.fbTab) || S.isAdmin) switchTab(tab.dataset.fbTab); return; }
+  if (notice.onClick(e)) return;
   const kind = e.target.closest('[data-fb-kind]');
   if (kind) {
     S.kind = kind.dataset.fbKind;
@@ -263,6 +269,7 @@ function onClick(e) {
   if (set) adminAct(Number(set.closest('[data-fb-admin]').dataset.fbAdmin), { status: set.dataset.fbSet }, set);
 }
 function onSubmit(e) {
+  if (notice.onSubmit(e)) return;
   const form = e.target;
   e.preventDefault();
   if (form.matches('[data-fb-form]')) submit(form);
@@ -276,6 +283,7 @@ function onSubmit(e) {
   }
 }
 function onInput(e) {
+  if (notice.onInput(e)) return;
   const form = e.target.closest('[data-fb-form]');
   if (!form) return;
   if (e.target.name === 'text') { S.draft = e.target.value; form.querySelector('[data-fb-count]').textContent = `${S.draft.length} / 2000`; }
@@ -290,6 +298,8 @@ export function initFeedback(context) {
   box.addEventListener('input', onInput);
   $('feedbackTabs').addEventListener('click', onClick);
   render();
+  // 公告：内容变了时只在正看着对应标签页时重画
+  notice.initNotice({ esc: ctx.esc, showToast: ctx.showToast, server: ctx.server, servers: ctx.servers || [], cred: syncCred, rerender: (tab) => { if (S.tab === tab) render(); } });
   // 只有站长 IP 会得到 200：显示「工单管理」
   fetch('/api/kb/feedback/admin/check', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(syncCred() || {}) })
     .then((r) => { if (r.ok) { S.isAdmin = true; render(); loadAdminOpen().catch(() => {}); } }).catch(() => {});

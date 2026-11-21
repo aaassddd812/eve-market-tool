@@ -377,13 +377,13 @@ export function nearestOf(kill) {
 
 // ---------- 分享图片 ----------
 // 装配槽位全部列出；无人机、货舱等其他舱室按价值取前 6 种
+// full（「完整长图」）：全部物品（含集装箱里的东西）、全部攻击者、全部攻击方势力与舰船，图片按内容变长
 const FIT_SLOTS = new Set(['high', 'mid', 'low', 'rig', 'sub']);
-function killImageModel(k, val, near) {
+function killImageModel(k, val, near, full = false) {
   const v = k.victim, z = k.zkb, sys = systemLabel(k.solar_system_id);
   const mid = (t) => { const p = val.price(t) || {}; return p.sell && p.buy ? (p.sell + p.buy) / 2 : p.sell || p.buy || 0; };
   const groups = new Map(SLOT_GROUPS.map(([key, label]) => [key, { key, label, items: new Map(), count: 0 }]));
-  for (const it of v.items || []) {
-    const gr = groups.get(slotGroup(it.flag));
+  const add = (gr, it) => {
     const qty = (it.quantity_dropped || 0) + (it.quantity_destroyed || 0);
     const key = it.item_type_id + (it.singleton === 2 ? ':bpc' : '');
     const row = gr.items.get(key) || gr.items.set(key, { type: it.item_type_id, qty: 0, dropped: 0, value: 0 }).get(key);
@@ -391,10 +391,12 @@ function killImageModel(k, val, near) {
     row.dropped += it.quantity_dropped || 0;
     row.value += it.singleton === 2 ? 0 : mid(it.item_type_id) * qty;
     gr.count += qty;
-  }
+    if (full) for (const sub of it.items || []) add(gr, sub);   // 集装箱里的东西算进同一个舱室
+  };
+  for (const it of v.items || []) add(groups.get(slotGroup(it.flag)), it);
   const total = k.attackers.reduce((s, a) => s + (a.damage_done || 0), 0) || 1;
   const atk = [...k.attackers].sort((a, b) => (b.damage_done || 0) - (a.damage_done || 0));
-  const top = atk.slice(0, 10);
+  const top = full ? atk : atk.slice(0, 10);
   const final = atk.find((a) => a.final_blow);
   if (final && !top.includes(final)) top[top.length - 1] = final;   // 最后一击总要列出
   const now = Math.floor(Date.now() / 1000);
@@ -418,7 +420,7 @@ function killImageModel(k, val, near) {
     groups: [...groups.values()].filter((gr) => gr.items.size).map((gr) => {
       let rows = [...gr.items.values()];
       let more = 0;
-      if (!FIT_SLOTS.has(gr.key)) { rows.sort((a, b) => b.value - a.value); more = Math.max(0, rows.length - 6); rows = rows.slice(0, 6); }
+      if (!FIT_SLOTS.has(gr.key)) { rows.sort((a, b) => b.value - a.value); if (!full) { more = Math.max(0, rows.length - 6); rows = rows.slice(0, 6); } }
       return {
         label: gr.label, count: app.formatNumber(gr.count), more,
         items: rows.map((r) => ({
@@ -436,16 +438,17 @@ function killImageModel(k, val, near) {
       final: !!a.final_blow, damage: app.formatNumber(a.damage_done || 0), pct: ((a.damage_done || 0) / total * 100).toFixed(1) + '%', share: (a.damage_done || 0) / total
     })),
     moreAttackers: Math.max(0, k.attackers.length - top.length),
-    parties: attackerParties(k.attackers, total),
+    parties: attackerParties(k.attackers, total, full),
     ships: [...k.attackers.reduce((m, a) => (a.ship_type_id ? m.set(a.ship_type_id, (m.get(a.ship_type_id) || 0) + 1) : m), new Map())]
-      .sort((a, b) => b[1] - a[1]).slice(0, 8).map(([t, n]) => ({ icon: img(`types/${t}/icon`, 64), name: typeName(t), count: n })),
+      .sort((a, b) => b[1] - a[1]).slice(0, full ? Infinity : 8).map(([t, n]) => ({ icon: img(`types/${t}/icon`, 64), name: typeName(t), count: n })),
+    full,
     footer: `击杀 #${k.killmail_id}`,
     generated: '生成于 ' + fullIn(now, 'cn') + ' UTC+8'
   };
 }
 
-// 攻击方势力：按联盟（没有联盟按军团 / NPC 势力）合并，取伤害最多的 6 个
-function attackerParties(list, total) {
+// 攻击方势力：按联盟（没有联盟按军团 / NPC 势力）合并，取伤害最多的 6 个（完整长图全部列出）
+function attackerParties(list, total, full = false) {
   const m = new Map();
   for (const a of list) {
     const id = a.alliance_id || a.corporation_id || a.faction_id;
@@ -454,7 +457,7 @@ function attackerParties(list, total) {
     p.pilots += 1;
     p.dmg += a.damage_done || 0;
   }
-  return [...m.values()].sort((a, b) => b.dmg - a.dmg || b.pilots - a.pilots).slice(0, 6).map((p) => ({
+  return [...m.values()].sort((a, b) => b.dmg - a.dmg || b.pilots - a.pilots).slice(0, full ? Infinity : 6).map((p) => ({
     name: partyName(p.id), logo: img(`${p.kind}/${p.id}/logo`, 64), pilots: p.pilots + ' 名飞行员', share: p.dmg / total, pct: (p.dmg / total * 100).toFixed(1) + '%'
   }));
 }
@@ -463,16 +466,20 @@ let shareModules = null;
 function shareKill() {
   const args = shownArgs;
   if (!args) return;
-  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=10'), import('./share-image.js?v=9')]);
+  if (!shareModules) shareModules = Promise.all([import('./kb-card-image.js?v=11'), import('./share-image.js?v=10')]);
   shareModules.then(async ([{ renderKillImage }, { openShareModal, shareUrl }]) => {
     const [val, near] = await Promise.all([killValuation(args.kill), nearestOf(args.kill)]);
     const k = args.kill;
     // 二维码：有本站击杀记录服务的服务器扫码打开本站这条击杀
-    const model = { ...killImageModel(k, val, near), url: SERVER.kb ? shareUrl('#kb/kill/' + k.killmail_id) : null };
+    const url = SERVER.kb ? shareUrl('#kb/kill/' + k.killmail_id) : null;
+    const model = { ...killImageModel(k, val, near), url };
+    let long = null;   // 完整长图的数据：第一次切过去时再整理
     openShareModal({
       title: '分享击杀图片', app,
       fileName: `击杀-${typeName(k.victim.ship_type_id)}-${k.killmail_id}.png`,
-      render: (theme) => renderKillImage(model, theme),
+      // 默认精简（装配全列、其他舱室前 6 种、攻击者前 10 名）；切到「完整长图」列出全部掉落物、攻击者和他们的军团联盟
+      toggle: { label: '完整长图', off: '精简', title: '列出全部物品、攻击者和攻击方军团联盟，图片会变长', suffix: '-完整' },
+      render: (theme, opt) => renderKillImage(opt?.full ? (long ||= { ...killImageModel(k, val, near, true), url }) : model, theme),
       link: SERVER.kb ? () => `https://zkillboard.com/kill/${k.killmail_id}/` : SERVER.kbSite ? () => kbSiteLink('kill', k.killmail_id) : null
     });
   }).catch((error) => {

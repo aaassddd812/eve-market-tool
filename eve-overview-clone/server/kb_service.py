@@ -62,6 +62,8 @@
   POST /api/kb/lite/ping                      收益助手（lite/ 独立程序）启动上报 {iid, ver, server}，统计使用人数
   GET  /api/kb/lite/stats                     收益助手使用人数：仅 EVE_FEEDBACK_ADMIN_IPS 里的 IP（命令行 --lite-stats 同样内容）
   POST /api/kb/feedback/admin/{check,list,reply,status}  站长查看全部工单、回复、改状态：仅 EVE_FEEDBACK_ADMIN_IPS 里的 IP
+  GET  /api/kb/notice?server=                 站点公告：发给这个服（或全部服务器）、没撤回也没过截止时间的，最新的在前；网页没看过的弹窗提示
+  POST /api/kb/notice/admin/{list,save,off,delete}  站长发布 / 修改 / 撤回 / 删除公告：和工单管理一样，站长 IP 或云同步站长账号
   POST /api/kb/hosted/{start,update,status,stop}  服务器托管预警：网页关掉后由本服务检查击杀预警 / 虫洞求救 / 订单被压价，推送到企业微信 / 邮箱
                                               （用户单独授权，刷新令牌与推送账号加密保存，凭证管理；见 Hosted）
  POST /api/kb/ai/{info,chat}                 AI 助手：本站模型（环境变量 EVE_AI_*）或玩家自己的接口，工具在浏览器里执行
@@ -9121,6 +9123,126 @@ class Feedback:
             conn.close()
 
 
+# ---------------------------------------------------------------- 站点公告
+# 站长（EVE_FEEDBACK_ADMIN_IPS 里的 IP）在网页「联系 → 公告管理」里发布：标题 + 内容（可附英文版，英文界面优先显示），
+# 发给全部服务器或指定的几个服（servers 为空 = 全部，以后新加的服也算在内）；可设截止时间（过了就不再显示），可撤回 / 恢复、删除。
+# 访客打开网站时读 GET /api/kb/notice?server=，浏览器按「id:rev」记看过的，没看过的弹窗提示；
+# 修改时勾「重新弹给所有人」会把 rev 加一，看过旧版的人也会再弹一次。
+NOTICE_SERVERS = tuple(ARB_SERVERS)
+NOTICE_TITLE_MAX = 60
+NOTICE_TEXT_MAX = 2000
+NOTICE_LIST = 20                # 公开接口最多返回几条
+NOTICE_CACHE = 30               # 公开接口按服缓存秒数（每次打开网站都会读一次；站长改动时立即清掉）
+NOTICE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS notice(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, body TEXT, title_en TEXT, body_en TEXT,
+  servers TEXT, created INTEGER, updated INTEGER, until INTEGER, rev INTEGER DEFAULT 1, off INTEGER DEFAULT 0);
+"""
+NOTICE_COLS = "id, title, body, title_en, body_en, servers, created, updated, until, rev, off"
+
+
+class Notice:
+    def __init__(self, store):
+        self.store = store
+        self.cache = {}
+        self.lock = threading.Lock()
+        c = store.conn()
+        with store.write_lock:
+            c.executescript(NOTICE_SCHEMA)
+            c.commit()
+
+    @staticmethod
+    def row(r):
+        nid, title, body, title_en, body_en, servers, created, updated, until, rev, off = r
+        return {"id": nid, "rev": rev or 1, "title": title, "body": body or "", "title_en": title_en or "", "body_en": body_en or "",
+                "servers": [x for x in (servers or "").split(",") if x], "created": created, "updated": updated, "until": until,
+                "off": bool(off)}
+
+    def items(self, q):
+        server = q.get("server") if q.get("server") in NOTICE_SERVERS else "tq"
+        now = int(time.time())
+        with self.lock:
+            hit = self.cache.get(server)
+            if hit and now - hit[0] < NOTICE_CACHE and (not hit[2] or now < hit[2]):
+                return hit[1]
+        rows = self.store.conn().execute(f"SELECT {NOTICE_COLS} FROM notice WHERE off=0 AND (until IS NULL OR until>?) ORDER BY created DESC, id DESC",
+                                         (now,)).fetchall()
+        items = []
+        for r in map(self.row, rows):
+            if not r["servers"] or server in r["servers"]:
+                r.pop("off")
+                items.append(r)
+        items = items[:NOTICE_LIST]
+        expire = min((x["until"] for x in items if x["until"]), default=0)   # 有公告快到截止时间：到点就不再用缓存
+        out = {"server": server, "items": items}
+        with self.lock:
+            self.cache[server] = (now, out, expire)
+        return out
+
+    @staticmethod
+    def nid_of(v):
+        if type(v) is not int or v <= 0:
+            raise ValueError("公告编号不对")
+        return v
+
+    def admin(self, op, body):
+        c = self.store.conn()
+        if op == "list":
+            rows = c.execute(f"SELECT {NOTICE_COLS} FROM notice ORDER BY created DESC, id DESC LIMIT 100").fetchall()
+            return {"items": [self.row(r) for r in rows], "servers": list(NOTICE_SERVERS), "now": int(time.time())}
+        now = int(time.time())
+        if op == "save":
+            clean = Feedback.clean
+            title = clean(body.get("title"), NOTICE_TITLE_MAX, "标题")
+            text = clean(body.get("body"), NOTICE_TEXT_MAX, "内容")   # 保留换行，其余控制字符换成空格
+            title_en = clean(body.get("title_en"), NOTICE_TITLE_MAX, "英文标题")
+            body_en = clean(body.get("body_en"), NOTICE_TEXT_MAX, "英文内容")
+            title, title_en = " ".join(title.split()), " ".join(title_en.split())   # 标题只占一行
+            if len(title) < 2:
+                raise ValueError("请先写标题")
+            servers = body.get("servers") or []
+            if not isinstance(servers, list) or any(x not in NOTICE_SERVERS for x in servers):
+                raise ValueError("服务器不对")
+            servers = [x for x in NOTICE_SERVERS if x in servers]
+            if len(servers) == len(NOTICE_SERVERS):
+                servers = []
+            until = body.get("until")
+            if until is not None and (type(until) is not int or until <= now):
+                raise ValueError("截止时间应晚于现在")
+            nid = body.get("id")
+            with self.store.write_lock:
+                if nid is None:
+                    cur = c.execute("INSERT INTO notice(title, body, title_en, body_en, servers, created, updated, until, rev, off) VALUES(?,?,?,?,?,?,?,?,1,0)",
+                                    (title, text, title_en, body_en, ",".join(servers), now, now, until))
+                    nid = cur.lastrowid
+                    log.info("发布公告 #%s：%s（%s）", nid, title, ",".join(servers) or "全部服务器")
+                else:
+                    nid = self.nid_of(nid)
+                    bump = 1 if body.get("repop") is True else 0
+                    cur = c.execute("UPDATE notice SET title=?, body=?, title_en=?, body_en=?, servers=?, updated=?, until=?, rev=COALESCE(rev, 1)+? WHERE id=?",
+                                    (title, text, title_en, body_en, ",".join(servers), now, until, bump, nid))
+                    if not cur.rowcount:
+                        raise ValueError("没有这条公告")
+                    log.info("修改公告 #%s%s", nid, "（重新弹窗）" if bump else "")
+                c.commit()
+        elif op in ("off", "delete"):
+            nid = self.nid_of(body.get("id"))
+            with self.store.write_lock:
+                if op == "off":
+                    cur = c.execute("UPDATE notice SET off=?, updated=? WHERE id=?", (1 if body.get("off") is not False else 0, now, nid))
+                else:
+                    cur = c.execute("DELETE FROM notice WHERE id=?", (nid,))
+                if not cur.rowcount:
+                    raise ValueError("没有这条公告")
+                c.commit()
+            log.info("%s公告 #%s", "删除" if op == "delete" else "撤回" if body.get("off") is not False else "恢复", nid)
+        else:
+            raise ValueError("not found")
+        with self.lock:
+            self.cache.clear()
+        row = c.execute(f"SELECT {NOTICE_COLS} FROM notice WHERE id=?", (nid,)).fetchone()
+        return {"ok": True, "item": self.row(row) if row else None}
+
+
 # ---------------------------------------------------------------- 收益助手（lite/ 独立程序）使用人数
 # 程序每次启动 POST /api/kb/lite/ping {iid, ver, server}：iid 是安装时随机生成的 ID（不含角色、账号信息，也不记 IP），
 # 只用来数有多少台电脑在用、每天多少人打开。站长查看：GET /api/kb/lite/stats（仅 EVE_FEEDBACK_ADMIN_IPS），
@@ -9348,7 +9470,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
               "bazaar/skillset": bazaar.skillset, "bazaar/cbg/skillset": cbg.skillset,
               "bazaar/sale": lambda q: api.sale.items(q), "bazaar/sale/detail": lambda q: api.sale.detail(q),
               "bazaar/sale/skillset": lambda q: api.sale.skillset(q), "wh/sos": lambda q: api.sos.items(q),
-              "plaza": lambda q: api.plaza.items(q)}
+              "plaza": lambda q: api.plaza.items(q), "notice": lambda q: api.notice.items(q)}
     kb = {s: kb_routes(a) for s, a in apis.items()}
 
     def kb_server(q):
@@ -9667,6 +9789,30 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("工单错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
+        def notice(self, path):
+            # 站点公告管理（同源调用）：和工单管理同一套站长判断（站长 IP，或云同步账号的登录密钥在 body.user / body.auth 里），别人看到 404
+            op = path[len("/api/kb/notice/"):]
+            if op not in ("admin/list", "admin/save", "admin/off", "admin/delete"):
+                return self.send_json(404, {"error": "not found"})
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 32768:
+                    raise ValueError
+                body = json.loads(self.rfile.read(length))
+                if not isinstance(body, dict):
+                    raise ValueError
+            except ValueError:
+                return self.send_json(400, {"error": "请求体应为 JSON"})
+            if not api.feedback.admin_ok(self.client_ip(), body):
+                return self.send_json(404, {"error": "not found"})
+            try:
+                return self.send_json(200, api.notice.admin(op[6:], body))
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e)})
+            except Exception:
+                log.exception("公告错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
         def hosted(self, path):
             # 服务器托管预警；令牌、机器人 key、邮箱授权码不写日志
             op = path[len("/api/kb/hosted/"):]
@@ -9855,6 +10001,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.hosted(url.path.rstrip("/"))
             if url.path.rstrip("/") == "/api/kb/feedback" or url.path.startswith("/api/kb/feedback/"):
                 return self.feedback(url.path.rstrip("/"))
+            if url.path.startswith("/api/kb/notice/"):
+                return self.notice(url.path.rstrip("/"))
             if url.path.rstrip("/") == "/api/kb/lite/ping":
                 return self.lite_ping()
             if url.path.rstrip("/") in ("/api/kb/translate", "/api/kb/translate/models"):
@@ -10086,6 +10234,7 @@ def main():
     api.push = AlertPush()
     api.feedback = Feedback(store, api.push)
     api.feedback.sync = api.sync
+    api.notice = Notice(store)
     api.lite = LiteStats(store)
     abyssal = Abyssal(store)
     abyssal.model = store.abyssal_model

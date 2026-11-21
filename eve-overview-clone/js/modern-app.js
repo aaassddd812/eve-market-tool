@@ -15,6 +15,7 @@ import * as FF from './float-feed.js?v=v11';
 import { SERVER, SERVER_LIST, IS_TQ, HUB_NAME, setServer, serverKey, esiUrl, eveImage, kbSiteLink } from './server.js?v=s4';
 import { serverExtra, cnTypeImage } from './server-extra.js?v=3';
 import { initItemPop, openItemPop } from './item-pop.js?v=6';
+import * as SR from './side-resize.js?v=v1';
 
 // ===== 配置与常量 =====
 const IMAGE_BASE = 'https://images.evetech.net/types';
@@ -1323,7 +1324,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v115').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v116').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1369,7 +1370,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v56').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v57').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText,
       killRadial: async (km) => (await loadFittingModule()).killRadial(km)
@@ -1532,6 +1533,8 @@ function initSidebar() {
       if (dx < -60 && Math.abs(dx) > Math.abs(dy) * 1.5) closeDrawer();
     }, { passive: true });
   }
+  // 桌面端：拖侧栏右边缘调宽窄，每个侧栏各自记住（side-resize.js；「个性化」里一键恢复默认）
+  SR.initSideResize(Object.values(SIDEBARS).map((s) => s.id));
 
   $('profileSidebarCollapse').addEventListener('click', () => toggleSidebar('profile'));
   $('profileSidebarReopen').addEventListener('click', () => toggleSidebar('profile'));
@@ -3792,7 +3795,7 @@ function initDesktopDl() {
 
 function initContact() {
   $('contactBtn').addEventListener('click', () => toggleContact(true));
-  feedbackModule = import('./feedback.js?v=v5').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id }); return m; });
+  feedbackModule = import('./feedback.js?v=v6').then((m) => { m.initFeedback({ esc, showToast, server: SERVER.id, servers: SERVER_LIST.map((s) => ({ id: s.id, name: s.name })) }); return m; });
   $('contactModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-close-contact]')) { toggleContact(false); return; }
     const b = e.target.closest('[data-contact-copy]');
@@ -3845,7 +3848,13 @@ function renderPrefs() {
   $('prefsBody').innerHTML = PREFS.filter(([, , , , show]) => !show || show()).map(([key, title, vals, dflt]) => `<label class="prefs-row">
       <input type="checkbox" data-pref="${key}"${(p[key] ? p[key] === vals[1] : dflt) ? ' checked' : ''}>
       <b class="prefs-title">${key === 'kbPrice' && SERVER.id !== 'tq' ? title.replaceAll('吉他', '交易中心') : title}</b>
-    </label>`).join('') + menuLayoutHtml();
+    </label>`).join('') + sideWidthHtml() + menuLayoutHtml();
+}
+// 侧栏宽度：拖侧栏右边缘调的宽度各自记住，这里一键全部恢复默认（手机上侧栏是抽屉，不显示）
+function sideWidthHtml() {
+  if (MOBILE_QUERY.matches) return '';
+  return `<div class="prefs-row prefs-act"><span class="prefs-title"><b>侧栏宽度</b><small>拖侧栏右边缘调宽窄，会自动记住；双击边缘恢复这一个</small></span>
+    <button type="button" class="btn btn-ghost btn-sm" data-side-reset${SR.hasCustomWidth() ? '' : ' disabled'}>全部恢复默认</button></div>`;
 }
 function togglePrefs(show = $('prefsModal').hidden) {
   $('prefsModal').hidden = !show;
@@ -3884,6 +3893,7 @@ function initPrefs() {
   $('prefsBtn').addEventListener('click', () => togglePrefs(true));
   $('prefsModal').addEventListener('click', (e) => {
     if (e.target.closest('.modal-backdrop, [data-close-prefs]')) togglePrefs(false);
+    if (e.target.closest('[data-side-reset]')) { SR.resetSideWidths(); renderPrefs(); showToast('所有侧栏已恢复默认宽度', 'success'); }
   });
   $('prefsModal').addEventListener('change', (e) => {
     const box = e.target.closest('[data-pref]');
@@ -6984,7 +6994,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v29').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v30').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),

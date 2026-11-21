@@ -306,10 +306,11 @@ const SHARE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 export { SHARE_ICON };
 
 // 预览弹窗：先打开再生成；可切换浅色 / 深色（重新绘制），下载、复制图片、复制链接
-// opts: { title, fileName, render(theme) → Promise<canvas>, link?: () => string, app: { esc, showToast, copyText } }
+// opts: { title, fileName, render(theme, { full }) → Promise<canvas>, link?: () => string, app: { esc, showToast, copyText },
+//   toggle?: { label, off, title, suffix }：多一组「精简 / 完整」切换（击杀图片的「完整长图」），默认精简，每次打开都从精简开始；完整时下载的文件名加 suffix }
 export function openShareModal(opts) {
   const { app } = opts;
-  let theme = shareTheme(), blob = null, url = '', seq = 0;
+  let theme = shareTheme(), blob = null, url = '', seq = 0, full = false;
   const canCopy = !!(navigator.clipboard && window.ClipboardItem);
   const modal = document.createElement('div');
   modal.className = 'modal share-image-modal';
@@ -337,6 +338,10 @@ export function openShareModal(opts) {
             <button type="button" data-theme-pick="light">浅色</button>
             <button type="button" data-theme-pick="dark">深色</button>
           </div>
+          ${opts.toggle ? `<div class="segmented" role="group" aria-label="${app.esc(opts.toggle.label)}"${opts.toggle.title ? ` title="${app.esc(opts.toggle.title)}"` : ''}>
+            <button type="button" data-full-pick="0">${app.esc(opts.toggle.off || '精简')}</button>
+            <button type="button" data-full-pick="1">${app.esc(opts.toggle.label)}</button>
+          </div>` : ''}
           <span class="text-muted">滚轮 / 双指缩放，拖动查看细节；手机上可长按图片保存</span>
           ${opts.link ? '<button class="btn btn-ghost" data-link>复制链接</button>' : ''}
           ${canCopy ? '<button class="btn btn-ghost" data-copy disabled>复制图片</button>' : ''}
@@ -349,7 +354,8 @@ export function openShareModal(opts) {
   const zoomBar = modal.querySelector('.share-image-zoom'), zoomLabel = zoomBar.querySelector('[data-zoom="fit"]');
   // 预览：默认整张图缩放到弹窗内完整显示；滚轮 / 双指 / 按钮缩放（以光标或双指中点为中心），放大后拖动平移，双击在适应与 2 倍之间切换
   const view = { img: null, nw: 0, nh: 0, s: 1, x: 0, y: 0, fit: 1 };
-  const fitScale = () => Math.min(box.clientWidth / view.nw, box.clientHeight / view.nh);
+  // 很长的图（击杀「完整长图」）整张缩进窗口只剩一条细线：「适应」改成按宽度铺满，拖动往下看
+  const fitScale = () => (view.nh > view.nw * 3 ? Math.min(box.clientWidth / view.nw, 1) : Math.min(box.clientWidth / view.nw, box.clientHeight / view.nh));
   const apply = () => {
     if (!view.img) return;
     const bw = box.clientWidth, bh = box.clientHeight, w = view.nw * view.s, h = view.nh * view.s;
@@ -424,6 +430,8 @@ export function openShareModal(opts) {
   const draw = async () => {
     const my = ++seq;
     modal.querySelectorAll('[data-theme-pick]').forEach((b) => b.classList.toggle('active', b.dataset.themePick === theme));
+    modal.querySelectorAll('[data-full-pick]').forEach((b) => b.classList.toggle('active', (b.dataset.fullPick === '1') === full));
+    const name = full && opts.toggle?.suffix ? opts.fileName.replace(/\.png$/, '') + opts.toggle.suffix + '.png' : opts.fileName;   // 图好了再换下载文件名
     box.className = `share-image-preview theme-${theme}`;
     stage.className = `share-image-stage theme-${theme}`;
     busy.hidden = false;
@@ -433,7 +441,7 @@ export function openShareModal(opts) {
     setBusy('正在准备数据…', 3);
     try {
       progress = (d, t) => setBusy(t ? `正在加载头像与图标 ${d} / ${t}` : '正在准备数据…', 5 + (t ? d / t : 0) * 85);
-      const canvas = await opts.render(theme);
+      const canvas = await opts.render(theme, { full });
       progress = null;
       setBusy('正在绘制并导出图片…', 95);
       const next = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
@@ -452,10 +460,11 @@ export function openShareModal(opts) {
       const same = view.img && view.nw === canvas.width && view.nh === canvas.height;
       view.img = img; view.nw = canvas.width; view.nh = canvas.height;
       box.replaceChildren(img);
-      if (!same) { view.fit = fitScale(); view.s = view.fit; }
+      if (!same) { view.fit = fitScale(); view.s = view.fit; view.x = view.y = 0; }   // 换了尺寸：从顶部开始看
       apply();
       zoomBar.hidden = false;
       dl.href = url;
+      dl.download = name;
       dl.classList.remove('is-disabled');
       modal.querySelector('[data-copy]')?.removeAttribute('disabled');
     } catch (error) {
@@ -474,6 +483,13 @@ export function openShareModal(opts) {
     if (z) {
       if (z.dataset.zoom === 'fit') zoomTo(view.fit);
       else zoomTo(view.s * (z.dataset.zoom === '1' ? 1.25 : 0.8));
+      return;
+    }
+    const fp = e.target.closest('[data-full-pick]');
+    if (fp) {
+      if ((fp.dataset.fullPick === '1') === full) return;
+      full = fp.dataset.fullPick === '1';
+      draw();
       return;
     }
     const pick = e.target.closest('[data-theme-pick]');

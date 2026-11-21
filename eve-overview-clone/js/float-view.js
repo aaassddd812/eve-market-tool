@@ -166,7 +166,7 @@ function renderIntel(d, body, foot) {
   lastTop.intel = top;
   const badge = (r) => (r.type !== 'intel' ? `<span>${r.type === 'kw' ? '关键词' : '日志'}</span>` : r.clear ? '<span>平安</span>' : r.jumps == null ? '<span>敌情</span>' : r.jumps === 0 ? '<span>本星系</span>' : `${r.jumps} <span>跳</span>`);
   const tone = (r) => (r.type === 'intel' ? (r.clear ? ' kill' : r.jumps != null && r.jumps <= 1 ? ' near' : r.alert ? ' warn' : '') : ' warn');
-  body.innerHTML = (d.on ? '' : '<p class="fl-warn">本地日志监听没有开启：在主窗口右上角铃铛「本地日志」里开启</p>')
+  body.innerHTML = (d.locked ? '<p class="fl-warn">国服桌面版不读取本地日志</p>' : d.on ? '' : '<p class="fl-warn">本地日志监听没有开启：在主窗口右上角铃铛「本地日志」里开启</p>')
     + (items.length ? `<ul class="fl-list">${items.map((r, i) => `<li class="fl-kill${tone(r)}${i === 0 && fresh ? ' new' : ''}${r.system ? ' click' : ''}"${r.system ? ` data-fl-sys="${r.system}"` : ''}>
         <span class="fl-badge">${badge(r)}</span>
         <span class="fl-main">${r.system ? `<b translate="no">${esc(r.name)}</b> ` : r.kw ? `<b translate="no">${esc(r.kw)}</b> ` : ''}${r.who ? `<span translate="no">${esc(r.who)}</span>${EN ? ': ' : '：'}` : ''}<span translate="no">${esc(r.msg)}</span></span>
@@ -181,7 +181,7 @@ function renderChat(d, body, foot) {
   const top = items[0]?.key;
   const fresh = top && lastTop.chat !== undefined && top !== lastTop.chat;
   lastTop.chat = top;
-  const warn = d.need === 'off' ? '频道翻译没有开启：在主窗口右上角铃铛「本地日志」里开启'
+  const warn = d.need === 'locked' ? '国服桌面版不读取本地日志' : d.need === 'off' ? '频道翻译没有开启：在主窗口右上角铃铛「本地日志」里开启'
     : d.need === 'log' ? '本地日志监听没有开启：在主窗口右上角铃铛「本地日志」里开启' : '';
   body.innerHTML = (warn ? `<p class="fl-warn">${warn}</p>` : '')
     + (items.length ? `<ul class="fl-list">${items.map((m, i) => `<li class="fl-chat${i === 0 && fresh ? ' new' : ''}">

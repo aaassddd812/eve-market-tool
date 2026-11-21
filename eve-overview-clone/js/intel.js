@@ -16,11 +16,13 @@
 //   也可以选「大模型」：玩家自己填接口（OpenAI Chat / OpenAI Responses / Anthropic 协议、地址、Key，模型从上游列表里选），
 //   设置只存在本浏览器（开了云同步时加密同步），每次翻译随请求经本站服务器转发给该接口，服务器不保存。
 // 悬浮窗（float-feed.js）：「日志预警」显示最近消息（敌情 / 关键词 / 游戏日志），「频道翻译」显示译文；有新预警时悬浮窗切到「日志预警」。
+// 国服（晨曦、曙光）的桌面版不读取本地日志（LOCKED）：不自动找文件夹、不恢复监听，文件夹按钮和总开关变灰不能点；设置照旧保存，切回宁静服还按原来的来。宁静服和网页版不变。
 
 import * as AM from './alert-mail.js?v=v8';
 import * as AP from './alert-push.js?v=v13';
 import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
+import { IS_TQ } from './server.js?v=s4';
 
 let ctx;   // esc, showToast, gateGraph, bfsJumps, esiAuthFetch, tokenInfo, hasScope, esiUrl, openMapSystem
 const KEY = 'eve-intel-v1';
@@ -44,6 +46,7 @@ const LOCAL_NAMES = ['local', '本地'];
 const subs = new Set();
 // 桌面版（1.0.14 起）：壳的 logs_* 命令自动找、读「文档\EVE\logs」，不用选文件夹、不用每次重新授权
 const IPC = window.__EVE_DESKTOP__ ? window.__TAURI_INTERNALS__ : null;
+const LOCKED = Boolean(IPC) && !IS_TQ;
 export const supported = () => typeof window.showDirectoryPicker === 'function' || Boolean(IPC);
 export const settings = () => T;
 export function onChange(fn) { subs.add(fn); }
@@ -51,7 +54,8 @@ function notify() { for (const fn of subs) { try { fn(); } catch (e) { console.e
 function load() { try { Object.assign(T, JSON.parse(localStorage.getItem(KEY) || '{}')); } catch { /* 忽略 */ } T.llm = { ...DEFAULTS.llm, ...T.llm }; }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(T)); } catch { /* 忽略 */ } }
 function setStatus(t) { S.status = t; notify(); }
-export const status = () => ({ on: T.on && S.timer !== 0, mail: T.mail, alert: Date.now() - S.lastAlert < 60e3, text: S.status || (T.on ? '' : '本地日志监听未开启') });
+export const status = () => (LOCKED ? { on: false, mail: false, alert: false, text: '国服桌面版不读取本地日志' }
+  : { on: T.on && S.timer !== 0, mail: T.mail, alert: Date.now() - S.lastAlert < 60e3, text: S.status || (T.on ? '' : '本地日志监听未开启') });
 
 // ---------- IndexedDB：保存文件夹句柄 ----------
 function idb(mode, fn) {
@@ -72,7 +76,7 @@ const idbSet = (k, v) => idb('readwrite', (st) => st.put(v, k)).catch(() => null
 
 // ---------- 桌面版：壳自动找到的日志文件夹，包成和浏览器文件夹句柄一样的接口（entries / getFile / slice），扫描、轮询照旧 ----------
 async function nativeDir() {
-  if (!IPC) return null;
+  if (!IPC || LOCKED) return null;
   let path = null;
   try { path = await IPC.invoke('logs_dir'); } catch { return null; }   // 旧客户端没有这个命令
   if (!path) return null;
@@ -112,8 +116,8 @@ export async function initIntel(context) {
   AM.onMailChange(renderPanel);
   AP.onPushChange(renderPanel);
   ST.onStandings(renderPanel);
-  AM.registerSource('intel', { label: '本地日志', on: () => T.mail, set: (on) => update({ mail: on }) });
-  if (!supported()) return;
+  AM.registerSource('intel', { label: '本地日志', on: () => !LOCKED && T.mail, set: (on) => update({ mail: on }) });
+  if (!supported() || LOCKED) return;
   // 桌面版优先用自动找到的文件夹；用户自己选过别的文件夹（picked）就用选的
   const auto = await nativeDir();
   S.dir = (!T.picked && auto) || (await idbGet('dir')) || auto;
@@ -134,7 +138,7 @@ async function resolveDirs(dir) {
 }
 
 async function pickFolder() {
-  if (!supported()) return;
+  if (!supported() || LOCKED) return;
   try {
     const dir = await window.showDirectoryPicker({ id: 'eve-logs', mode: 'read', startIn: 'documents' });
     await resolveDirs(dir);
@@ -154,6 +158,7 @@ async function pickFolder() {
 
 // 恢复监听：需要用户点击才能弹出授权（gesture = true）
 async function resume(gesture) {
+  if (LOCKED) { notify(); return; }
   if (!S.dir) { setStatus('还没有选择日志文件夹'); return; }
   let perm = await S.dir.queryPermission({ mode: 'read' }).catch(() => 'denied');
   if (perm !== 'granted' && gesture) perm = await S.dir.requestPermission({ mode: 'read' }).catch(() => 'denied');
@@ -170,7 +175,7 @@ function stop() {
 }
 function start() {
   stop();
-  if (!T.on || S.perm !== 'granted') { notify(); return; }
+  if (LOCKED || !T.on || S.perm !== 'granted') { notify(); return; }
   S.timer = setInterval(poll, POLL);
   S.scanTimer = setInterval(() => scan(false), SCAN);
   pollLocation();
@@ -454,14 +459,14 @@ function publishFloat() {
     floatTimer = 0;
     const on = T.on && S.timer !== 0;
     FF.publish('intel', {
-      on: T.on, status: status().text,
+      on: !LOCKED && T.on, locked: LOCKED, status: status().text,
       items: S.reports.slice(0, 40).map((r) => ({
         key: sigOf(r), type: r.type, clear: r.clear, jumps: r.jumps, system: r.system || 0, name: r.name || '', kw: r.kw || '',
         who: r.who, msg: r.msg, channel: r.channel, at: r.at || +r.time, alert: Boolean(r.alert)
       }))
     });
     FF.publish('chat', {
-      on: on && T.trOn, need: !T.trOn ? 'off' : !T.on ? 'log' : '', status: S.trErr || (on && T.trOn ? `正在翻译 ${trChanText()}${TR_VIA[S.trVia] || ''}` : ''),
+      on: on && T.trOn, need: LOCKED ? 'locked' : !T.trOn ? 'off' : !T.on ? 'log' : '', status: S.trErr || (on && T.trOn ? `正在翻译 ${trChanText()}${TR_VIA[S.trVia] || ''}` : ''),
       items: S.trans.slice(0, 60).map((m) => ({ key: m.key, at: m.time, channel: m.channel, who: m.who, msg: m.msg, text: m.text, lang: m.lang }))
     });
   }, 150);
@@ -728,6 +733,7 @@ function renderPanel() {
 }
 
 function drawPanel() {
+  if (LOCKED) return lockedPanel();
   if (!supported()) {
     return '<p class="ka-warn">当前浏览器不支持，请用电脑版 Chrome 或 Edge</p>';
   }
@@ -795,6 +801,18 @@ function drawPanel() {
       <span>${r.system ? `<b>${ctx.esc(r.name)}</b> ` : ''}${r.who ? ST.badge(ST.entByName(r.who)) + ctx.esc(r.who + '：') : ''}${ctx.esc(r.msg)}<small> · ${ctx.esc(r.channel)}</small></span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有消息</p>')}`;
 }
 
+// 国服桌面版：只留文件夹一栏，按钮和总开关变灰不能点，其余设置不显示
+function lockedPanel() {
+  return `
+    <div class="ka-top"><span class="ka-status"><i></i>${ctx.esc(status().text)}</span></div>
+    <p class="ka-note">晨曦、曙光服的桌面版不读取 EVE 本地日志，切到宁静服可以用</p>
+    ${sec('日志文件夹', `<div class="ka-list intel-locked">
+      <div class="ka-opt"><span><b>未选择</b><small>不自动识别，也不能手动选择</small></span>
+        <span class="ka-ctl"><button class="btn btn-ghost btn-sm" disabled>自动识别</button><button class="btn btn-primary btn-sm" disabled>选择文件夹</button></span></div>
+      <label class="ka-opt"><span><b>开启本地日志监听</b></span><input type="checkbox" class="ka-switch" disabled></label>
+    </div>`)}`;
+}
+
 // 把标签页挂到弹窗里（只挂一次）；opts：{ close() 关掉弹窗, isOpen(el) 这个标签页是否正显示 }
 export function mountPanel(el, opts) {
   if (panel) return;
@@ -826,6 +844,7 @@ function addWord(key, value) {
 }
 
 async function onClick(e) {
+  if (LOCKED) return;
   const t = (sel) => e.target.closest(sel);
   if (t('[data-in-pick]')) { pickFolder(); return; }
   if (t('[data-in-auto]')) { nativeDir().then((d) => (d ? useNative(d) : ctx.showToast('没有找到 EVE 日志文件夹（文档\\EVE\\logs），请手动选择', 'error', 5000))); return; }
@@ -861,6 +880,7 @@ async function onClick(e) {
 }
 
 async function onChangeEvt(e) {
+  if (LOCKED) return;
   const set = e.target.closest('[data-in-set]');
   if (set) {
     const key = set.dataset.inSet;
