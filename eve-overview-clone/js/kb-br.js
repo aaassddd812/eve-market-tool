@@ -713,7 +713,10 @@ function go() {
 // 按击杀统计：本站没有的击杀带上 hash，服务端向 ESI 取原文
 function requestKm(ids) {
   return ctx.request('br/km', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kills: ids.map((id) => [id, BR.km.get(id) || null]) }) })
-    .then((data) => ({ ...data, ids }));
+    .then((data) => ({ ...data, ids }), (error) => {
+      // 网页先更新、击杀记录服务还没重启时没有这个接口
+      throw error.status === 404 ? new Error('击杀记录服务还没更新，暂时不能按指定的击杀统计，请稍后再试') : error;
+    });
 }
 // 服务端名字表里没有的人物 / 军团 / 联盟（向 ESI 取原文的击杀里常有）：浏览器再向 ESI 查一次
 async function fillNames(data) {

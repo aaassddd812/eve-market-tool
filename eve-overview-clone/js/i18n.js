@@ -9,7 +9,7 @@
 (function () {
   'use strict';
   var KEY = 'eve-lang';
-  var VER = '369';
+  var VER = '370';
   var CN_TZ = /^Asia\/(Shanghai|Chongqing|Chungking|Harbin|Urumqi|Kashgar|Hong_Kong|Macau|Macao|Taipei)$/;
 
   function store(k, v) { try { if (v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); } catch (e) { return null; } }
@@ -135,7 +135,10 @@
     for (var i = 0; i < parts.length; i++) {
       // 句首 / 句尾的占位符允许为空：模板里变量常放在单独的标签里，文字节点只剩前后的字
       if (i % 2 && numOnly) { src += '([-+]?[\\d.,]+(?:\\s*[A-Za-z%]{1,3})?)'; order.push(Number(parts[i])); }
-      else if (i % 2) { src += (i === 1 && !parts[0]) || (i === parts.length - 2 && !parts[parts.length - 1]) ? '([\\s\\S]*?)' : '([\\s\\S]+?)'; order.push(Number(parts[i])); } else src += esc(parts[i]).replace(/ /g, '\\s*');
+      else if (i % 2) { src += (i === 1 && !parts[0]) || (i === parts.length - 2 && !parts[parts.length - 1]) ? '([\\s\\S]*?)' : '([\\s\\S]+?)'; order.push(Number(parts[i])); }
+      // 两个占位符之间只隔空格（「卖出{0} {1}」）：空格必须有，否则前一个占位符只吃到一个字（「sell R ecursive」）
+      else if (i > 0 && i < parts.length - 1 && /^ +$/.test(parts[i])) src += '\\s+';
+      else src += esc(parts[i]).replace(/ /g, '\\s*');
     }
     var re = new RegExp(src + '$');
     var pat = { re: re, order: order, val: val, lit: key.replace(/\{\d+\}|\s/g, '').length };

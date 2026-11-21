@@ -2006,8 +2006,13 @@ function moduleNote(item) {
   // 采矿器：最终数值（含突变、晶体、技能、船体、舰队脉冲）
   const mn = F.stats.mining.miners.find((x) => x.module === item);
   if (mn) return `单次 ${fmt(mn.amount)} m³ · 循环 ${mn.cycle.toFixed(1)} 秒 · ${mn.yps.toFixed(1)} m³/s`;
+  // 探针发射器：装填探针的扫描强度（手机上没有悬停提示，直接写在行里）
+  if (item.type.group === PROBE_LAUNCHER_GROUP && item.charge?.attr(AT_PROBE_STRENGTH)) return `扫描强度 ${Math.round(item.charge.attr(AT_PROBE_STRENGTH))} 点`;
   return '';
 }
+
+// 探针发射器（游戏 const.groupScanProbeLauncher）与探针的扫描强度属性（baseSensorStrength，已算技能、发射器、改装件、植入体、舰船加成）
+const PROBE_LAUNCHER_GROUP = 481, AT_PROBE_STRENGTH = 1371;
 
 // 已装配的主动装备（开启 / 超载时）悬停显示最终属性（含技能、舰船、超载与舰队加成），和游戏里装备栏的悬停提示一样
 // 只列这件装备本身带的效果属性；伤害只在装备自身有伤害时显示（末日武器、立体炸弹），炮台导弹另显示 DPS
@@ -2017,7 +2022,9 @@ async function modTipHtml(ref) {
   const { slot, index } = parseRef(ref);
   const m = F.fit.slots[slot]?.[index];
   const t = m && type(m.type);
-  if (!t || (t.activatable && m.state !== 'active' && m.state !== 'overload')) return '';
+  // 探针发射器和游戏一样不管开没开都显示（游戏装备栏悬停提示里的扫描强度）
+  const probe = t?.group === PROBE_LAUNCHER_GROUP && m.charge;
+  if (!t || (t.activatable && m.state !== 'active' && m.state !== 'overload' && !probe)) return '';
   const item = F.calc.modules.find((x) => x.slot === slot && x.index === index);
   if (!item) return '';
   const names = await dogmaNames();
@@ -2043,10 +2050,20 @@ async function modTipHtml(ref) {
     const tick = FE.DAMAGE.includes(a) && t.attrs.get(2264) ? '（每跳）' : '';
     rows.push([fuel ? `${label}（${fuel.name}）` : label + tick, unit === 1 ? dist(v) : fuel ? app.formatNumber(v) : infoValue(a, v, unit, names.units), cls]);
   }
-  if (!rows.length) return '';
+  const probeHtml = probe && item.charge ? probeTipHtml(item.charge, names) : '';
+  if (!rows.length && !probeHtml) return '';
   const dl = (list) => `<dl>${list.map(([k, v, cls]) => `<dt>${app.esc(k)}</dt><dd${cls ? ` class="${cls}"` : ''}>${v}</dd>`).join('')}</dl>`;
-  return `<div class="fit-mtip-head"><img src="${IMG(t.id)}" alt="" width="24" height="24"><b>${app.esc(t.name)}</b>${m.state === 'overload' ? '<em>超载</em>' : ''}</div>
-    ${dl(rows)}${w && item.charge ? chargeTipHtml(w, item.charge, names, dl) : ''}`;
+  return `<div class="fit-mtip-head"><img src="${IMG(t.id)}" alt="" width="24" height="24"><b>${app.esc(t.name)}</b>${m.state === 'overload' ? '<em>超载</em>' : m.state === 'offline' ? '<em>离线</em>' : ''}</div>
+    ${rows.length ? dl(rows) : ''}${w && item.charge ? chargeTipHtml(w, item.charge, names, dl) : ''}${probeHtml}`;
+}
+// 探针发射器悬停提示里的探针一节：和游戏一样显示「扫描强度基数：N 点」（取整），比探针基础值高标绿；
+// 单独的「N 点」不能加通用翻译（别处的「点」是几点钟），英文直接写 points
+function probeTipHtml(c, names) {
+  const v = c.attr(AT_PROBE_STRENGTH), base = c.type.attrs.get(AT_PROBE_STRENGTH);
+  if (!v) return '';
+  const cls = Math.abs(v - base) <= Math.abs(base) * 1e-6 ? '' : v > base ? 'is-up' : 'is-down';
+  return `<div class="fit-mtip-sub"><img src="${IMG(c.type.id)}" alt="" width="20" height="20"><span>已装填</span><b>${app.esc(c.type.name)}</b></div>
+    <dl><dt>${app.esc(names.attrs[AT_PROBE_STRENGTH]?.[0] || '扫描强度')}</dt><dd${cls ? ` class="${cls}"` : ''}>${Math.round(v)}${window.I18N?.lang === 'en' ? ' points' : ' 点'}</dd></dl>`;
 }
 // 武器悬停提示里的「弹药」一节：每发各类伤害（已乘炮台伤害倍数或导弹伤害技能、递增），
 // 以及弹药自身受技能 / 舰船 / 装备加成后的属性（导弹、炸弹的飞行速度、飞行时间、爆炸半径、爆炸速度）；和弹药基础属性比，变好标绿、变差标红。

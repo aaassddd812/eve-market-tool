@@ -305,8 +305,8 @@ function factoryLayout(dem, rate, nPlanets, code, radius = 5000) {
   let cpu = lpC, power = lpP;
   const counts = [];
   for (const [out, n] of dem.fac) {
-    const c = Math.ceil(n * rate / nPlanets - 1e-9);
-    if (!c) continue;
+    if (!(n * rate > 0)) continue;
+    const c = Math.max(1, Math.ceil(n * rate / nPlanets - 1e-9));
     const [fc, fp] = struct(pt[facClass(out)]);
     cpu += c * (fc + LINK[0]);
     power += c * (fp + LINK[1]);
@@ -332,8 +332,8 @@ function hostLoad(dem, rate, m, radius) {
   let cpu = 0, power = 0;
   const counts = [];
   for (const [out, n] of dem.fac) {
-    const c = Math.ceil(n * rate / m - 1e-9);
-    if (!c) continue;
+    if (!(n * rate > 0)) continue;
+    const c = Math.max(1, Math.ceil(n * rate / m - 1e-9));
     const [fc, fp] = struct(pt[facClass(out)]);
     cpu += c * (fc + LINK[0]);
     power += c * (fp + LINK[1]);
@@ -485,8 +485,9 @@ function buyLayout(dem, rate, hubs, code, radius, why = {}) {
   let cpu = hubs * lpC + (hubs - 1) * hubLink[0], power = hubs * lpP + (hubs - 1) * hubLink[1];
   const counts = [];
   for (const [out, n] of dem.fac) {
-    const c = Math.ceil(n * rate / hubs - 1e-9);
-    if (!c) continue;
+    // 产量再小，链上每种工厂也至少要 1 个：向上取整成 0 会把 P3 / P4 工厂整个漏掉，二分出接近 0 的「可行」产量
+    if (!(n * rate > 0)) continue;
+    const c = Math.max(1, Math.ceil(n * rate / hubs - 1e-9));
     if (!pt[facClass(out)]) { why.kind = 'fac'; return null; }
     const [fc, fp] = struct(pt[facClass(out)]);
     cpu += hubs * c * (fc + LINK[0]);
@@ -523,7 +524,6 @@ function planBuy(product, area) {
   // 指定了买哪一级原料：只算这一级；产品不比它高就做不了
   const L = F.buyLevel || 0;
   if (L && tier <= L) return { product, error: `买 P${L} 只能加工 P${L + 1} 及以上的产品` };
-  let best = null;
   const byTier = new Map();   // 每个买入层级的最优方案：成交量限制可能让第二名反超（applyMarketDepth 里再比一次）
   for (let buyTier = L || tier - 1; buyTier >= (L || Math.max(0, tier - 3)); buyTier--) {
     const dem = { ...buyDemand(product, buyTier), product };
@@ -549,12 +549,14 @@ function planBuy(product, area) {
         tax: day * (exportTax(product) + [...dem.buy].reduce((t, [id, q]) => t + q * importTax(id), 0)),
         profit: day * unit, unitCost, surplus: []
       };
-      if (!best || plan.profit > best.profit) best = plan;
-      if (!byTier.get(buyTier) || plan.profit > byTier.get(buyTier).profit) byTier.set(buyTier, plan);
+      // 同一买料等级每单位利润相同，产量最高的就是收益最高的；亏本时也按满产，不能挑产量最小的
+      if (!byTier.get(buyTier) || plan.rate > byTier.get(buyTier).rate) byTier.set(buyTier, plan);
     }
   }
-  if (!best) return { product, error: '放不下加工设施，或原料没有行情' };
-  best.alts = [...byTier.values()].filter((p) => p !== best && p.profit > 0);
+  const tiers = [...byTier.values()];
+  if (!tiers.length) return { product, error: '放不下加工设施，或原料没有行情' };
+  const best = tiers.reduce((a, b) => (b.profit > a.profit ? b : a));
+  best.alts = tiers.filter((p) => p !== best && p.profit > 0);
   return best;
 }
 
@@ -1537,7 +1539,8 @@ async function run() {
     // 缩减后排名会变：直到前 20 名都按成交量核对过
     for (let todo; (todo = plans.slice(0, 20).filter((p) => !p.error && !p.depthChecked)).length;) {
       await applyMarketDepth(todo);
-      plans = plans.filter((p) => p.error || p.profit > 0).sort((a, b) => b.profit - a.profit);
+      // 指定了产品时亏本也照样显示（标出亏本），不要只显示「没有可行方案」
+      plans = plans.filter((p) => F.target || p.error || p.profit > 0).sort((a, b) => b.profit - a.profit);
     }
   }
   R.plans = plans;
@@ -1687,7 +1690,9 @@ function renderDetail() {
       ${plan.wanted ? `<p class="pi-note warn" title="卖出、买入各不超过日成交的 ${F.share}%；其余行星可做别的产品（见「多产品组合」）">受成交量限制，只用 ${plan.planets} / ${plan.wanted} 颗行星</p>` : ''}
       <p class="pi-note" id="piDepth"></p>`;
   })() : '';
-  const surplus = buyNote + (plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '')
+  // 指定的产品按现在的行情做是亏本的
+  const lossNote = plan.profit < 0 ? `<p class="pi-note warn">按${hubName()}现在的行情这样做是亏本的${plan.strategy === 'buy' ? '：买入的原料加上海关税比卖出的产品还贵，可以试试「自产（采集）」' : ''}</p>` : '';
+  const surplus = lossNote + buyNote + (plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '')
     + (plan.strategy === 'raw' ? `<p class="pi-note">P0 体积大：每颗星每天约 ${ctx.formatNumber(Math.round(plan.rate / plan.planets * 24 * (commodity(plan.product)[3] || 0.01)))} m³</p>` : '')
     + (plan.strategy === 'hybrid' ? `<p class="pi-note" title="采集星电网吃紧、CPU 富余，每颗只少放一两个采集头；需要把其他 P1 运到这些星">加工设施平摊在 ${plan.m} 颗采集星上</p>` : '');
 

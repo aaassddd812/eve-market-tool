@@ -3,7 +3,7 @@
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v18';
-import { initBr, renderBr } from './kb-br.js?v=v54';
+import { initBr, renderBr } from './kb-br.js?v=v55';
 import { gankSystemHtml, GANK_NOTE } from './kb-gank.js?v=v1';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
@@ -83,7 +83,12 @@ function api(path) {
 async function request(path, init) {
   const res = await fetch(API + path + (SRV ? (path.includes('?') ? '&' : '?') + SRV : ''), init);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || '击杀记录服务 ' + res.status);
+  if (!res.ok) {
+    // 错误可能是字符串，也可能是 { code, message }（接口不存在时服务端走开放接口的格式）
+    const e = new Error((typeof data.error === 'string' ? data.error : data.error?.message) || '击杀记录服务 ' + res.status);
+    e.status = res.status;
+    throw e;
+  }
   return data;
 }
 
