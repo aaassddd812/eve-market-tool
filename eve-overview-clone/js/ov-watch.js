@@ -7,8 +7,10 @@
 //   总览列宽不够时名字会被截断（「科波斯 红衣主」），按前缀也算；最像的几个候选级别不一致时算「不确定」，不按级别报警（关键词规则照样看）。
 // 报警：某一行命中开着的规则、而这个名字现在的行数比之前报过的多（新刷出来的），就报；这个名字从总览消失 1 分钟后再出现会再报。
 // 提醒方式：提示音、网页卡片、系统通知、消息推送（alert-push.js 的 ov）。设置存在 eve-ovwatch-v1（不分服务器）。
+// 国服（晨曦、曙光）的桌面版不能用总览预警（LOCKED，和本地红名一样）：不截游戏画面、不列 EVE 窗口，「开始」按钮变灰不能点；设置照旧保存。宁静服和网页版不变。
 import * as AP from './alert-push.js?v=v13';
 import * as LW from './local-watch.js?v=v31';
+import { IS_TQ } from './server.js?v=s4';
 
 let ctx;   // esc, showToast
 const KEY = 'eve-ovwatch-v1';
@@ -42,6 +44,7 @@ const S = {
   rows: [], seen: new Map(), alerted: new Map(), log: [], ms: 0, size: null, pick: null
 };
 const subs = new Set();
+const LOCKED = Boolean(window.__EVE_DESKTOP__ && window.__TAURI_INTERNALS__) && !IS_TQ;
 
 export function initOvWatch(context) {
   ctx = context;
@@ -57,6 +60,7 @@ export const supported = () => Boolean(LW.shared.tauri() || navigator.mediaDevic
 
 const STATE_TEXT = { off: '未开启', starting: '正在启动…', needrect: '请框选总览的「类型」一列', watching: '监视中', noframe: '没有收到画面' };
 export function status() {
+  if (LOCKED) return { on: false, alert: false, text: '国服桌面版不能用总览预警' };
   const on = running();
   let text = on ? STATE_TEXT[S.state] || S.state : '总览预警未开启';
   if (on && S.state === 'noframe' && S.native) text = S.grabErr === 'minimized' ? 'EVE 窗口最小化了，截不到画面' : S.grabErr === 'covered' ? 'EVE 窗口被挡住了：把游戏窗口放到前面' : '截不到 EVE 窗口的画面';
@@ -118,7 +122,7 @@ function hit(r, e) {
 
 // ---------- 开始 / 停止 ----------
 async function start() {
-  if (running()) return;
+  if (LOCKED || running()) return;
   if (!supported()) { ctx.showToast('这个浏览器不能共享画面：请用电脑版 Chrome / Edge，或桌面版', 'error', 5000); return; }
   loadTypes().catch(() => {});
   const sh = LW.shared;
@@ -149,6 +153,7 @@ async function start() {
   }
 }
 async function listWindows() {
+  if (LOCKED) return;
   let list;
   try { list = await LW.shared.tauri().invoke('local_windows'); } catch { S.hwnd = 0; startWorker(true); return; }
   if (!list.length) { ctx.showToast('没找到 EVE 窗口：先打开游戏', 'error', 5000); return; }
@@ -157,6 +162,7 @@ async function listWindows() {
   notify();
 }
 function useWindow(w) {
+  if (LOCKED) return;
   if (w.minimized) { ctx.showToast('这个窗口最小化了：先把游戏窗口还原', 'info', 5000); return; }
   S.hwnd = w.id; S.winName = w.name || w.title; S.wins = null;
   startWorker(true);
@@ -385,6 +391,7 @@ function renderPanel() {
   sc.scrollTop = top;
 }
 function drawPanel() {
+  if (LOCKED) return lockedPanel();
   const esc = ctx.esc;
   if (!supported()) return '<p class="ka-warn">这个浏览器不能共享画面：请用电脑版 Chrome / Edge，或桌面版</p>';
   const st = status();
@@ -425,12 +432,24 @@ function drawPanel() {
     ${sec('最近报警', S.log.length ? `<ul class="ka-history">${S.log.map((r) => `<li><span class="ka-badge">${esc(r.rule)}</span><span>${esc(r.names.join('、'))}</span><small>${ago(r.at)}</small></li>`).join('')}</ul>` : '<p class="ka-empty">还没有报警</p>')}`;
 }
 
+// 国服桌面版：只留「监视」一栏，「开始」变灰不能点，其余设置不显示
+function lockedPanel() {
+  return `
+    <div class="ka-top"><span class="ka-status"><i></i>${ctx.esc(status().text)}</span></div>
+    <p class="ka-note">晨曦、曙光服的桌面版不截取 EVE 游戏画面，总览预警用不了，切到宁静服可以用</p>
+    ${sec('监视', `<div class="ka-list ka-locked">
+      <div class="ka-opt"><span><b>监视游戏画面</b><small>不截取游戏画面，也不能手动开始</small></span>
+        <span class="ka-ctl"><button class="btn btn-primary btn-sm" disabled>开始</button></span></div>
+    </div>`)}`;
+}
+
 export function mountPanel(el, opts) {
   if (panel) return;
   panel = el;
   shell = opts;
   AP.bindSwitch(panel);
   panel.addEventListener('click', (e) => {
+    if (LOCKED) return;
     const t = (sel) => e.target.closest(sel);
     if (t('[data-ov-start]')) start();
     else if (t('[data-ov-stop]')) stop();
@@ -451,6 +470,7 @@ export function mountPanel(el, opts) {
   });
   panel.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.matches('[data-ov-new-kw]')) { e.preventDefault(); addRule(); } });
   panel.addEventListener('change', async (e) => {
+    if (LOCKED) return;
     const s = e.target.closest('[data-ov-set]');
     if (s) {
       const key = s.dataset.ovSet;

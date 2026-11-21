@@ -7098,7 +7098,7 @@ function loadLocal() {
 // ===== 总览预警（ov-watch.js）：看总览的类型一列，出现设定的东西就报警；点到标签页时才加载 =====
 let ovModule = null;
 function loadOv() {
-  if (!ovModule) ovModule = import('./ov-watch.js?v=9').then((m) => {
+  if (!ovModule) ovModule = import('./ov-watch.js?v=10').then((m) => {
     m.initOvWatch({ esc, showToast });
     const sync = () => { alertState.ov = m.status(); syncAlertBtn(); };
     m.onChange(sync);
