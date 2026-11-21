@@ -352,10 +352,10 @@ export function openShareModal(opts) {
   const box = modal.querySelector('.share-image-preview'), stage = modal.querySelector('.share-image-stage'), busy = modal.querySelector('.share-image-busy');
   const dl = modal.querySelector('[data-download]');
   const zoomBar = modal.querySelector('.share-image-zoom'), zoomLabel = zoomBar.querySelector('[data-zoom="fit"]');
-  // 预览：默认整张图缩放到弹窗内完整显示；滚轮 / 双指 / 按钮缩放（以光标或双指中点为中心），放大后拖动平移，双击在适应与 2 倍之间切换
+  // 预览：默认整张图缩放到弹窗内完整显示（击杀「完整长图」也一样）；滚轮 / 双指 / 按钮缩放（以光标或双指中点为中心），放大后拖动平移，
+  //   双击在适应与 2 倍之间切换——很长的图 2 倍还太小，双击直接放大到宽度铺满弹窗，方便往下拖着看
   const view = { img: null, nw: 0, nh: 0, s: 1, x: 0, y: 0, fit: 1 };
-  // 很长的图（击杀「完整长图」）整张缩进窗口只剩一条细线：「适应」改成按宽度铺满，拖动往下看
-  const fitScale = () => (view.nh > view.nw * 3 ? Math.min(box.clientWidth / view.nw, 1) : Math.min(box.clientWidth / view.nw, box.clientHeight / view.nh));
+  const fitScale = () => Math.min(box.clientWidth / view.nw, box.clientHeight / view.nh);
   const apply = () => {
     if (!view.img) return;
     const bw = box.clientWidth, bh = box.clientHeight, w = view.nw * view.s, h = view.nh * view.s;
@@ -392,7 +392,8 @@ export function openShareModal(opts) {
   box.addEventListener('dblclick', (e) => {
     if (!view.img) return;
     const r = box.getBoundingClientRect();
-    zoomTo(view.s > view.fit * 1.001 ? view.fit : view.fit * 2, e.clientX - r.left, e.clientY - r.top);
+    const wide = view.nh > view.nw * 3 ? Math.min(box.clientWidth / view.nw, 1) : 0;
+    zoomTo(view.s > view.fit * 1.001 ? view.fit : Math.max(view.fit * 2, wide), e.clientX - r.left, e.clientY - r.top);
   });
   // 拖动 / 双指缩放
   const pts = new Map();
@@ -460,7 +461,7 @@ export function openShareModal(opts) {
       const same = view.img && view.nw === canvas.width && view.nh === canvas.height;
       view.img = img; view.nw = canvas.width; view.nh = canvas.height;
       box.replaceChildren(img);
-      if (!same) { view.fit = fitScale(); view.s = view.fit; view.x = view.y = 0; }   // 换了尺寸：从顶部开始看
+      if (!same) { view.fit = fitScale(); view.s = view.fit; view.x = view.y = 0; }   // 换了尺寸（精简 / 完整长图）：重新缩放到完整显示
       apply();
       zoomBar.hidden = false;
       dl.href = url;

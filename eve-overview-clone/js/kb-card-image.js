@@ -1,6 +1,6 @@
 // ===== 击杀详情、人物 / 军团 / 联盟页的分享图片 =====
 // 纯 Canvas 绘制；配色、图片加载、画法小工具与弹窗在 share-image.js。数据模型由 killboard.js / kb-page.js 整理好传进来。
-import { W, SCALE, THEMES, loadImages, rr, alpha, makeCanvas, crop, painter, qrSize } from './share-image.js?v=10';
+import { W, SCALE, THEMES, loadImages, rr, alpha, makeCanvas, crop, painter, qrSize } from './share-image.js?v=11';
 
 const PAD = 40, IW = W - PAD * 2, GAP = 20;
 // 安全等级颜色（页面里是 CSS 变量，画布读不了，按图片配色取）
