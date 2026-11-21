@@ -2250,6 +2250,14 @@ td.loc {
 .kb-row { cursor: pointer; }
 .kb-row:hover td { background: var(--accent-soft) !important; }
 .kb-row:focus-visible { outline: 2px solid var(--accent-primary); outline-offset: -2px; }
+/* 击杀列表多选（拿选中的击杀做战场统计） */
+.kb-table th.kb-pick, .kb-table td.kb-pick { width: 34px; padding-right: 0; text-align: center; }
+.kb-pick input { pointer-events: none; width: 15px; height: 15px; accent-color: var(--accent-primary); vertical-align: middle; }
+.kb-row.picked td { background: var(--accent-soft); }
+.kb-pick-btn.active { background: var(--accent-soft); color: var(--accent-primary); }
+.kb-pickbar { position: sticky; bottom: 12px; z-index: 5; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 10px; padding: 10px 14px;
+  border-radius: var(--radius-lg); background: var(--bg-tertiary); box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28); font-size: 0.8125rem; }
+.kb-pickbar > span { margin-right: auto; }
 .kb-ship { min-width: 180px; }
 .kb-ship-inner { display: flex; align-items: center; gap: 10px; }
 .kb-ship img { border-radius: 6px; background: #0d1219; flex-shrink: 0; }
@@ -2692,6 +2700,9 @@ td.loc {
 .modal-close svg { width: 18px; height: 18px; }
 .modal-head-actions { display: flex; align-items: center; gap: 4px; margin-left: auto; }
 .modal-head-actions .kill-share-btn svg { width: 17px; height: 17px; }
+.modal-head-actions .kill-game-btn { gap: 6px; margin-right: 4px; white-space: nowrap; }
+.modal-head-actions .kill-game-btn svg { width: 15px; height: 15px; }
+@media (max-width: 520px) { .modal-head-actions .kill-game-btn span { display: none; } }
 .kb-share-btn { gap: 6px; }
 .kb-share-btn svg { width: 15px; height: 15px; }
 
@@ -3568,6 +3579,14 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 .kb-br-chip b { font-weight: 600; }
 .kb-br-chip button { width: 20px; height: 20px; border-radius: 50%; color: var(--text-muted); }
 .kb-br-chip button:hover { background: var(--bg-hover); color: var(--text-primary); }
+/* 战场统计 · 按击杀链接 */
+.kb-br-kmtext { width: 100%; min-height: 96px; resize: vertical; font: inherit; font-size: 0.8125rem; line-height: 1.5; }
+.kb-br-kmline { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 0.8125rem; }
+.kb-br-kmhint { margin-left: auto; }
+.kb-br-kmnote { margin: 6px 0 0; font-size: 0.75rem; color: var(--text-muted); }
+.kb-br-kmnote.empty { text-align: center; }
+.kb-br-kmnote span { display: block; }
+.kb-br-kmtag::after { content: " · "; }
 .kb-br-near-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; font-size: 0.8125rem; }
 .kb-br-near-head .text-muted { font-size: 0.75rem; }
 .kb-br-near { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 10px; max-height: 220px; overflow-y: auto; padding: 4px 0; }

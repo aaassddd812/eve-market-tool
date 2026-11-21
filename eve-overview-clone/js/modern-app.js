@@ -1324,7 +1324,7 @@ function openKbPage(restored = false) {
 
 let kbPageLoading = null;
 function loadKbPageModule() {
-  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v117').then((m) => {
+  if (!kbPageLoading) kbPageLoading = import('./kb-page.js?v=v118').then((m) => {
     m.initKbPage({
       esiUrl, esc, formatISK, formatNumber, officialName, loadNpcNames, resolveNames, resolveTypeNames,
       fetchESI, debounce, showToast, copyText, loadKillboard, openMapSystem,
@@ -1370,9 +1370,10 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v58').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v59').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText,
+      game: gameActions,
       killRadial: async (km) => (await loadFittingModule()).killRadial(km)
     });
     killboardModule = m;
@@ -2713,10 +2714,12 @@ document.addEventListener('click', (e) => {
 });
 
 // ===== 游戏内操作（esi-ui.*）：网页上点一下，游戏客户端里生效（角色需在线）=====
-async function gameUi(path, params, okText) {
+async function gameUi(path, params, okText, json) {
   if (!hasScopeGroup('ui')) { openEsiModal('ui'); showToast('需要「游戏内操作」权限', 'error', 4000); return false; }
   try {
-    await esiAuthFetch(path + '?' + new URLSearchParams(params), { method: 'POST' });
+    const body = typeof json === 'function' ? await json() : json;
+    await esiAuthFetch(path + (params ? '?' + new URLSearchParams(params) : ''),
+      body ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : { method: 'POST' });
     showToast(okText, 'success');
     return true;
   } catch (error) {
@@ -2743,7 +2746,10 @@ const gameActions = {
   },
   market: (typeId) => gameUi('/ui/openwindow/marketdetails/', { type_id: typeId }, '已在游戏里打开市场详情'),
   contract: (contractId) => gameUi('/ui/openwindow/contract/', { contract_id: contractId }, '已在游戏里打开合同窗口'),
-  info: (targetId) => gameUi('/ui/openwindow/information/', { target_id: targetId }, '已在游戏里打开信息窗口')
+  info: (targetId) => gameUi('/ui/openwindow/information/', { target_id: targetId }, '已在游戏里打开信息窗口'),
+  // 游戏里新建一封邮件（不发送）：标题、正文（游戏邮件的富文本写法）填好，收件人默认是当前绑定的角色自己
+  mail: ({ subject, body, to, okText }) => gameUi('/ui/openwindow/newmail/', null, okText || '已在游戏里打开新邮件',
+    async () => ({ subject, body, recipients: to || [(await ensureEsiToken()).character_id] }))
 };
 
 // 星系 → 星域（map-data.json 与星图共用缓存）

@@ -3,7 +3,7 @@
 // 所有价值按吉他海4 最低卖价与最高收购价的中间值估算。人物的生涯统计来自 zKillboard。
 // 国服（晨曦 / 曙光）：同一服务按 server= 分库，数据来自 CEVE 市场 KM 广播，从接入起累计；没有 zKillboard，按各服主贸易中心估值。
 import { skCards, skRows, skTopCards, skBoard, skSummary, skEntityHead, skTitle, skToolbar } from './skeleton.js?v=v18';
-import { initBr, renderBr } from './kb-br.js?v=v52';
+import { initBr, renderBr } from './kb-br.js?v=v53';
 import { gankSystemHtml, GANK_NOTE } from './kb-gank.js?v=v1';
 import { initKbCharts, hoursChart, drawHours, monthsChart, drawMonths, heatChart, drawHeat } from './kb-charts.js?v=v3';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
@@ -61,6 +61,7 @@ const S = {
   rank: null,                // 完整排行榜：{ side, by, metric, days, sort, filter, data, seq }
   bh: null,                  // 近 30 天会战：{ days, size, sec, region, q, sort, shown, data }
   entity: null,              // { kind, id, stats, info, lifetime, side, feed, cursor, sort }
+  pick: null,                // 多选（拿选中的击杀做战场统计）：选中的击杀 ID（Set），不在多选时为 null
   status: null
 };
 
@@ -132,17 +133,19 @@ function timeAgo(iso) {
 }
 
 // ---------- 列表 ----------
-function feedRows(kills, { me } = {}) {
+function feedRows(kills, { me, pick } = {}) {
   let divided = false;
   return kills.map((k) => {
     const v = k.victim, f = k.final;
     // 宁静服本站只保留 --days 天（默认半年），更早的记录是实时向 zKillboard 查询的（不入库），用分隔行标出
     const divider = k.archive && !divided
-      ? (divided = true, `<tr class="kb-divider"><td colspan="${me ? 6 : 5}">以下为 ${keptDays()} 天前的记录（zKillboard）</td></tr>`)
+      ? (divided = true, `<tr class="kb-divider"><td colspan="${(me ? 6 : 5) + (pick ? 1 : 0)}">以下为 ${keptDays()} 天前的记录（zKillboard）</td></tr>`)
       : '';
     const sys = kb.systemLabel(k.system_id);
     const side = me ? (v[me.key] === me.id ? 'loss' : 'kill') : null;
-    return `${divider}<tr class="kb-row" data-kill="${k.id}" tabindex="0">
+    const on = pick?.has(k.id);
+    return `${divider}<tr class="kb-row${on ? ' picked' : ''}" data-kill="${k.id}" tabindex="0">
+        ${pick ? `<td class="kb-pick"><input type="checkbox" tabindex="-1" aria-label="选中"${on ? ' checked' : ''}></td>` : ''}
         ${side ? `<td class="kb-side"><span class="pill ${side === 'loss' ? 'sell' : 'buy'}">${side === 'loss' ? '损失' : '击杀'}</span></td>` : ''}
         <td class="kb-ship"><span class="kb-ship-inner"><img src="${IMG(`types/${k.ship_type_id}/icon`, 64)}" alt="" width="32" height="32" loading="lazy">
           <span><strong>${app.esc(typeName(k.ship_type_id))}</strong>${k.solo ? '<span class="kb-tag solo">单刷</span>' : ''}${k.npc ? '<span class="kb-tag npc">NPC</span>' : ''}</span></span></td>
@@ -183,9 +186,65 @@ const sortHead = (st) => [['value', '价值'], ['time', '时间']].map(([k, labe
 function feedTable(kills, opts = {}) {
   const note = FEED_NOTICE[opts.notice] ? `<p class="text-muted kb-note">${FEED_NOTICE[opts.notice]}</p>` : '';
   if (!kills.length) return (opts.notice === 'zkill_limit' ? '' : '<p class="text-muted kb-empty">没有符合条件的击杀记录</p>') + note;
-  return `<div class="table-scroll"><table class="pc-mini-table kb-table"><thead><tr>
-      ${opts.me ? '<th>类型</th>' : ''}<th>舰船</th><th>受害者</th><th>最后一击</th><th>地点</th><th class="num">${opts.sort ? sortHead(opts.sort) : '价值'}</th>
+  return `<div class="table-scroll"><table class="pc-mini-table kb-table${opts.pick ? ' kb-picking' : ''}"><thead><tr>
+      ${opts.pick ? '<th class="kb-pick"></th>' : ''}${opts.me ? '<th>类型</th>' : ''}<th>舰船</th><th>受害者</th><th>最后一击</th><th>地点</th><th class="num">${opts.sort ? sortHead(opts.sort) : '价值'}</th>
     </tr></thead><tbody>${feedRows(kills, opts)}</tbody></table></div>${note}`;
+}
+
+// ---------- 多选：勾选击杀列表里的几条，拿它们做战场统计（#kb/br/km/…，kb-br.js 的「按击杀链接」）----------
+const PICK_MAX = 1000;
+const pickedList = () => (S.entity ? S.entity.feed : S.feed) || [];
+function redrawPick() {
+  const e = S.entity;
+  const key = e && { character: 'character_id', corporation: 'corporation_id', alliance: 'alliance_id' }[e.kind];
+  if (e && $('kbEntityFeed') && e.feed?.length) $('kbEntityFeed').innerHTML = feedTable(e.feed, { me: { key, id: e.id }, notice: e.notice, sort: e.fsort || SORT_DEF, pick: S.pick });
+  else if (!e && $('kbFeed') && S.feed.length) $('kbFeed').innerHTML = feedTable(S.feed, { notice: S.feedNotice, sort: S.feedSort || SORT_DEF, pick: S.pick });
+  document.querySelectorAll('#kbMain [data-kb-pick]').forEach((b) => { b.classList.toggle('active', Boolean(S.pick)); b.textContent = S.pick ? '退出多选' : '多选'; });
+  pickBar();
+}
+function pickBar() {
+  const bar = document.querySelector('#kbMain .kb-pickbar');
+  if (!bar) return;
+  bar.hidden = !S.pick;
+  if (!S.pick) return;
+  const n = S.pick.size;
+  bar.innerHTML = `<span>${n ? `已选 ${n} 条击杀` : '点列表里的击杀来勾选'}</span>
+    <button type="button" class="btn btn-ghost btn-sm" data-pick-all>全选已加载的</button>${n ? '<button type="button" class="btn btn-ghost btn-sm" data-pick-none>清空</button>' : ''}
+    <button type="button" class="btn btn-primary btn-sm" data-pick-br${n ? '' : ' disabled'}>生成战场统计</button>
+    <button type="button" class="btn btn-ghost btn-sm" data-pick-exit>取消</button>`;
+}
+function togglePick(row) {
+  const id = Number(row.dataset.kill);
+  if (S.pick.has(id)) S.pick.delete(id);
+  else if (S.pick.size >= PICK_MAX) { app.showToast(`最多选 ${PICK_MAX} 条`, 'info'); return; }
+  else S.pick.add(id);
+  const on = S.pick.has(id);
+  row.classList.toggle('picked', on);
+  const box = row.querySelector('.kb-pick input');
+  if (box) box.checked = on;
+  pickBar();
+}
+// 多选模式下的点击：行 = 勾选 / 取消；底部条上的按钮。处理了返回 true
+function pickClick(e) {
+  if (e.target.closest('[data-kb-pick]')) { S.pick = S.pick ? null : new Set(); redrawPick(); return true; }
+  if (!S.pick) return false;
+  if (e.target.closest('[data-pick-exit]')) { S.pick = null; redrawPick(); return true; }
+  if (e.target.closest('[data-pick-none]')) { S.pick.clear(); redrawPick(); return true; }
+  if (e.target.closest('[data-pick-all]')) {
+    for (const k of pickedList()) { if (S.pick.size >= PICK_MAX) break; S.pick.add(k.id); }
+    redrawPick();
+    return true;
+  }
+  if (e.target.closest('[data-pick-br]')) {
+    if (!S.pick.size) return true;
+    const ids = [...S.pick];
+    S.pick = null;
+    navigate('#kb/br/km/' + ids.join(','));
+    return true;
+  }
+  const row = e.target.closest('tr.kb-row[data-kill]');
+  if (row && row.closest('#kbFeed, #kbEntityFeed')) { e.preventDefault(); togglePick(row); return true; }
+  return false;
 }
 
 // 打开击杀详情：从服务读取完整击杀邮件与逐项中间价
@@ -204,7 +263,7 @@ function openKill(id) {
         kill: {
           ...km,
           zkb: {
-            totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed,
+            hash: data.hash, totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed,
             solo: players.length === 1, npc: !players.length, awox: false, locationID: null,
             valueLabel: valueLabel()
           }
@@ -236,6 +295,7 @@ async function renderHome() {
             <div class="kb-suggest" id="kbFeedSuggest" hidden></div>
           </div>
           <div class="kb-filters" id="kbFilters"></div>
+          <button class="btn btn-ghost kb-pick-btn" data-kb-pick title="勾选几条击杀，拿它们做战场统计">多选</button>
           <button class="btn btn-ghost" id="kbRefresh" title="刷新">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新</span>
           </button>
@@ -244,6 +304,7 @@ async function renderHome() {
         <div id="kbGank" hidden></div>
         <div id="kbFeed">${skRows(10)}</div>
         <button class="btn kb-more" id="kbMore" hidden>加载更多</button>
+        <div class="kb-pickbar" hidden></div>
       </section>
       <aside class="kb-section kb-board">
         <div class="kb-board-head"><h3 class="kb-section-title">排行榜 · 最近 30 天</h3>
@@ -461,7 +522,7 @@ async function loadFeed(reset) {
     S.feed = S.feed.concat(data.kills);
     S.cursor = data.cursor;
     S.feedNotice = data.notice;
-    box.innerHTML = feedTable(S.feed, { notice: data.notice, sort: S.feedSort || SORT_DEF });
+    box.innerHTML = feedTable(S.feed, { notice: data.notice, sort: S.feedSort || SORT_DEF, pick: S.pick });
     $('kbMore').hidden = !S.cursor;
   } catch (error) {
     if (seq === S.feedSeq && $('kbFeed')) box.innerHTML = '<p class="text-muted kb-empty">读取失败：' + app.esc(error.message) + '</p>';
@@ -510,7 +571,7 @@ async function freshFeed() {
   if (seq !== S.feedSeq || !$('kbFeed')) return;
   S.feed = newer.concat(S.feed);
   if (!top) S.cursor = data.cursor;
-  $('kbFeed').innerHTML = feedTable(S.feed, { notice: S.feedNotice, sort: S.feedSort || SORT_DEF });
+  $('kbFeed').innerHTML = feedTable(S.feed, { notice: S.feedNotice, sort: S.feedSort || SORT_DEF, pick: S.pick });
   $('kbMore').hidden = !S.cursor;
 }
 
@@ -1053,10 +1114,12 @@ async function renderEntity(kind, id) {
       <div class="segmented" role="group">
         ${[['all', '全部'], ['kills', '击杀'], ['losses', '损失']].map(([v, l]) => `<button data-entity-side="${v}" class="${v === 'all' ? 'active' : ''}">${l}</button>`).join('')}
       </div>
+      <button class="btn btn-ghost btn-sm kb-pick-btn" data-kb-pick title="勾选几条击杀，拿它们做战场统计">多选</button>
       <button class="btn btn-ghost btn-sm kb-feed-refresh" id="kbEntityRefresh" title="重新读取最新的击杀记录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg><span>刷新</span></button>
     </div>
     <div id="kbEntityFeed">${skRows(8)}</div>
-    <button class="btn kb-more" id="kbEntityMore" hidden>加载更多</button>`;
+    <button class="btn kb-more" id="kbEntityMore" hidden>加载更多</button>
+    <div class="kb-pickbar" hidden></div>`;
   mountMonthly(main, lifetime);
   foldSections(main);
   if (stats.members) renderMembers();
@@ -1444,7 +1507,8 @@ async function loadEntityFeed(reset, fresh = false) {
     e.feed = e.feed.concat(data.kills);
     e.cursor = data.cursor;
     const key = { character: 'character_id', corporation: 'corporation_id', alliance: 'alliance_id' }[e.kind];
-    box.innerHTML = feedTable(e.feed, { me: { key, id: e.id }, notice: data.notice, sort: e.fsort || SORT_DEF });
+    e.notice = data.notice;
+    box.innerHTML = feedTable(e.feed, { me: { key, id: e.id }, notice: data.notice, sort: e.fsort || SORT_DEF, pick: S.pick });
     $('kbEntityMore').hidden = !e.cursor;
   } catch (error) {
     if (S.entity === e && seq === e.seq) box.innerHTML = '<p class="text-muted kb-empty">读取失败：' + app.esc(error.message) + '</p>';
@@ -1577,6 +1641,7 @@ function navigate(hash) {
 let routed = false;
 function route() {
   routed = true;
+  S.pick = null;   // 换页面就退出多选
   noteTrail();
   const m = /^#kb\/(character|corporation|alliance)\/(\d+)/.exec(location.hash);
   $('kbSuggest').hidden = true;
@@ -1661,7 +1726,8 @@ export function initKbPage(context) {
   initKbCharts(app);
   initBr({
     get app() { return app; }, get kb() { return kb; },
-    request, absorbNames, partyName, typeName, loadTypes, avatar, entityLink, IMG
+    request, absorbNames, partyName, typeName, loadTypes, avatar, entityLink, IMG,
+    hasName: (id) => S.names.has(id) || Boolean(app.officialName(id))
   });
   app.battles()?.then((m) => {
     if (!m) return;
@@ -1693,6 +1759,7 @@ export function initKbPage(context) {
   });
 
   $('kbView').addEventListener('click', (e) => {
+    if (pickClick(e)) return;
     const addEnt = e.target.closest('[data-add-entity]');
     if (addEnt) {
       const [kind, id] = addEnt.dataset.addEntity.split(':');
@@ -1840,7 +1907,10 @@ export function initKbPage(context) {
     }
   });
   $('kbView').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target.matches('.kb-row')) openKill(Number(e.target.dataset.kill));
+    if (e.key === 'Enter' && e.target.matches('.kb-row')) {
+      if (S.pick && e.target.closest('#kbFeed, #kbEntityFeed')) togglePick(e.target);
+      else openKill(Number(e.target.dataset.kill));
+    }
   });
   window.addEventListener('popstate', () => { if (!$('kbView').hidden && location.hash.startsWith('#kb')) route(); });
   // 设置里换了击杀估价口径：丢掉预取的数据，正在看击杀页就按新口径重新读取

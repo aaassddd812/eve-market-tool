@@ -2,6 +2,8 @@
 // 选择星系（可勾选星门邻近星系）与时间段，向击杀记录服务读取期间全部玩家击杀与攻击者，
 // 按联盟（无联盟时按军团）汇总，自动推测 A / B 双方阵营（可手动调整，多方混战时可加 C / D 方），统计各方人数、损失、舰船组成与损失明细。
 // 路由：#kb/br（设置）、#kb/br/<星系,…>/<开始>-<结束>[/<A 方,…>/<B 方,…>[/<C 方,…>[/<D 方,…>]]]（时间为 Unix 秒，可分享）
+// 也可以按指定的击杀统计（「按击杀链接」：粘贴游戏里的击杀链接，或在击杀列表里多选）：#kb/br/km/<击杀 ID,…>[/<A 方,…>/…]，
+//   数据来自 POST /api/kb/br/km；击杀的 hash 不放进链接（太长），记在本标签页的 sessionStorage，本站没有的击杀靠它向 ESI 取原文
 import { initReplay, mountReplay, stopReplay, resizeReplay } from './kb-br-replay.js?v=v6';
 import { getTz, setTz, tzLabel, isoIn, parseIn } from './eve-time.js?v=v1';
 let ctx;                       // kb-page 提供的工具：app, kb, request, absorbNames, partyName, typeName, loadTypes, avatar, entityLink, IMG
@@ -12,7 +14,11 @@ const MAX_HOURS = 72;
 const QUICK = [1, 3, 6, 12, 24, 72];
 
 const NARROW_KEY = 'eve-br-narrow';
+const KM_MAX = 1000;       // 按击杀统计：一次最多多少条（和服务端 BR_KM_MAX 一致）
+const KM_HASH_KEY = 'eve-br-km-hash';
 const BR = {
+  mode: 'area',              // area 按星系和时间 / km 按指定的击杀
+  km: new Map(),             // 按击杀统计：击杀 ID -> hash（不知道时为 null）
   picked: [],                // 搜索添加的星系（总是选中）
   checked: new Set(),        // 勾选的邻近星系
   jumps: 1,
@@ -65,8 +71,56 @@ function defaultRange() {
   return [end - 3 * 3600, end];
 }
 
+// ---------- 按击杀统计：认击杀链接、记 hash ----------
+// 认这几种：游戏里击杀报告的「复制外部击杀链接」（ESI 地址 …/killmails/ID/hash/，国服是网易 ESI）、聊天 / 邮件里的击杀链接（killReport:ID:hash）、
+//   zKillboard 的击杀链接（zkillboard.com/kill/ID/，没有 hash）、本站击杀链接（#kb/kill/ID）
+export function parseKillLinks(text) {
+  const out = new Map();
+  const add = (id, h) => {
+    id = Number(id);
+    if (!(id > 0)) return;
+    if (h) out.set(id, h.toLowerCase());
+    else if (!out.has(id)) out.set(id, null);
+  };
+  const s = String(text || '');
+  for (const m of s.matchAll(/killmails\/(\d+)\/([0-9a-f]{40})/gi)) add(m[1], m[2]);
+  for (const m of s.matchAll(/killReport:(\d+):([0-9a-f]{40})/gi)) add(m[1], m[2]);
+  for (const m of s.matchAll(/zkillboard\.com\/kill\/(\d+)/gi)) add(m[1]);
+  for (const m of s.matchAll(/#kb\/kill\/(\d+)/gi)) add(m[1]);
+  return out;
+}
+function savedHashes() {
+  try { return JSON.parse(sessionStorage.getItem(KM_HASH_KEY) || '{}') || {}; } catch { return {}; }
+}
+function saveHashes() {
+  try {
+    const o = savedHashes();
+    for (const [id, h] of BR.km) if (h) o[id] = h;
+    const keys = Object.keys(o);
+    for (const k of keys.slice(0, Math.max(0, keys.length - 5000))) delete o[k];
+    sessionStorage.setItem(KM_HASH_KEY, JSON.stringify(o));
+  } catch { /* 隐私模式：只在内存里 */ }
+}
+// 加进要统计的击杀；返回新加了几条
+function addKills(map) {
+  let added = 0;
+  for (const [id, h] of map) {
+    if (BR.km.has(id)) { if (h && !BR.km.get(id)) BR.km.set(id, h); continue; }
+    if (BR.km.size >= KM_MAX) break;
+    BR.km.set(id, h);
+    added += 1;
+  }
+  saveHashes();
+  return added;
+}
+
 // ---------- 路由 ----------
 export function parseHash(hash) {
+  const k = /^#kb\/br\/km\/([\d,]+)(?:\/([\d,]*|-)\/([\d,]*|-)(?:\/([\d,]*|-))?(?:\/([\d,]*|-))?)?/.exec(hash);
+  if (k) {
+    const ids = (v) => (v && v !== '-' ? v.split(',').map(Number).filter(Boolean) : []);
+    return { km: [...new Set(ids(k[1]))].slice(0, KM_MAX), a: ids(k[2]), b: ids(k[3]), c: ids(k[4]), d: ids(k[5]) };
+  }
   const m = /^#kb\/br(?:\/([\d,]+)\/(\d+)-(\d+)(?:\/([\d,]*|-)\/([\d,]*|-)(?:\/([\d,]*|-))?(?:\/([\d,]*|-))?)?)?/.exec(hash);
   if (!m) return null;
   const ids = (v) => (v && v !== '-' ? v.split(',').map(Number).filter(Boolean) : []);
@@ -75,7 +129,7 @@ export function parseHash(hash) {
 
 function hashFor(withSides = true) {
   const systems = selectedSystems();
-  let h = `#kb/br/${systems.join(',')}/${BR.start}-${BR.end}`;
+  let h = BR.mode === 'km' ? `#kb/br/km/${[...BR.km.keys()].join(',')}` : `#kb/br/${systems.join(',')}/${BR.start}-${BR.end}`;
   if (withSides && BR.side.size) {
     const list = (s) => [...BR.side].filter(([, v]) => v === s).map(([id]) => id).join(',') || '-';
     h += '/' + sidesUsed().map(list).join('/');
@@ -90,7 +144,13 @@ function selectedSystems() {
 // 进入战场统计页：hash 带参数时直接生成统计
 export async function renderBr(hash) {
   const p = parseHash(hash) || {};
-  if (p.systems?.length) {
+  if (p.km?.length) {
+    // 按击杀统计的链接：hash 先用这次添加时记下的，再用本标签页存的
+    const saved = savedHashes();
+    BR.mode = 'km';
+    BR.km = new Map(p.km.map((id) => [id, BR.km.get(id) || saved[id] || null]));
+  } else if (p.systems?.length) {
+    BR.mode = 'area';
     // 链接里的第一个星系作为已添加星系，其余在 2 跳内的作为勾选的邻近星系，更远的也作为已添加星系
     const [first, ...rest] = p.systems;
     const near = new Map(ctx.kb.systemNeighbors(first, 2).map((n) => [n.id, n.jumps]));
@@ -99,9 +159,8 @@ export async function renderBr(hash) {
     BR.jumps = [...BR.checked].some((id) => near.get(id) === 2) ? 2 : 1;
     BR.start = p.start;
     BR.end = p.end;
-  } else if (!BR.start) {
-    [BR.start, BR.end] = defaultRange();
   }
+  if (!BR.start) [BR.start, BR.end] = defaultRange();
   const main = $('kbMain');
   main.innerHTML = `
     <section class="kb-br">
@@ -117,7 +176,7 @@ export async function renderBr(hash) {
   renderForm();
   bindForm();
   bindDocument();
-  if (p.systems?.length) await loadResult(p);
+  if (p.km?.length || p.systems?.length) await loadResult(p);
 }
 
 // ---------- 设置表单 ----------
@@ -137,13 +196,58 @@ function sysName(id) {
   return `${ctx.app.esc(l.name)} <b style="color:${l.color}">${l.secText}</b>`;
 }
 
+const modeRow = () => `<div class="kb-br-row">
+      <label class="kb-br-label">统计方式</label>
+      <div class="kb-br-field"><div class="segmented kb-br-mode" role="group" aria-label="统计方式">
+        ${[['area', '按星系和时间'], ['km', '按击杀链接']].map(([k, l]) => `<button type="button" data-br-mode="${k}" class="${BR.mode === k ? 'active' : ''}">${l}</button>`).join('')}
+      </div></div>
+    </div>`;
+// 输入框（textarea）的属性 i18n 不会自动翻译：这里先翻好
+// 星系名列表：英文用逗号；按击杀统计时星系可能很多，超过 max 个只列前面的
+const sysNames = (ids, max) => {
+  const sep = window.I18N?.lang === 'en' ? ', ' : '、';
+  const n = ids.map((id) => ctx.kb.systemLabel(id).name);
+  return n.length > max ? `${n.slice(0, max).join(sep)} 等 ${n.length} 个星系` : n.join(sep);
+};
+const tt = (s) => ctx.app.esc(window.I18N?.t ? window.I18N.t(s) : s);
+function kmForm() {
+  const n = BR.km.size;
+  $('brForm').innerHTML = `${modeRow()}
+    <div class="kb-br-row">
+      <label class="kb-br-label">击杀</label>
+      <div class="kb-br-field">
+        <textarea id="brKmText" class="cr-input kb-br-kmtext" rows="4" spellcheck="false" autocomplete="off" aria-label="${tt('粘贴击杀链接')}"
+          placeholder="${tt('粘贴游戏里的击杀链接，一次可以粘贴很多条：击杀报告里的「复制外部击杀链接」、聊天或邮件里的击杀链接、zKillboard 或本站的击杀链接都认')}"></textarea>
+        <div class="kb-br-kmline">${n ? `<span>已添加 ${n} 条击杀</span><button type="button" class="link-btn" data-br-km-clear>清空</button>` : '<span class="text-muted">还没有添加击杀</span>'}<span class="kb-br-kmhint text-muted" id="brKmHint"></span></div>
+      </div>
+    </div>
+    <div class="kb-br-actions">
+      <button class="btn btn-primary" data-br-go${n ? '' : ' disabled'}>生成战场统计</button>
+      <span class="text-muted">一次最多 ${KM_MAX} 条；也可以在击杀记录列表里点「多选」勾选击杀</span>
+    </div>`;
+}
+// 粘贴框：认出击杀链接就加进去并清空输入框；什么都没认出来时提示一句
+function takeKmText(el) {
+  const text = el.value;
+  if (!text.trim()) { $('brKmHint').textContent = ''; return; }
+  const found = parseKillLinks(text);
+  if (!found.size) { $('brKmHint').textContent = '没认出击杀链接'; return; }
+  const before = BR.km.size;
+  const added = addKills(found);
+  kmForm();
+  const full = BR.km.size >= KM_MAX && before + found.size > KM_MAX;
+  ctx.app.showToast(added ? `已添加 ${added} 条击杀${full ? `（最多 ${KM_MAX} 条，多出来的没加）` : ''}` : '这些击杀已经添加过了', added ? 'success' : 'info');
+  $('brKmText')?.focus();
+}
+
 function renderForm() {
+  if (BR.mode === 'km') { kmForm(); return; }
   const near = BR.picked.length ? neighborsOf(BR.picked, BR.jumps) : [];
   // 切换跳数后不在范围内的勾选项移除
   const nearIds = new Set(near.map((n) => n.id));
   for (const id of BR.checked) if (!nearIds.has(id)) BR.checked.delete(id);
   const hours = (BR.end - BR.start) / 3600;
-  $('brForm').innerHTML = `
+  $('brForm').innerHTML = `${modeRow()}
     <div class="kb-br-row">
       <label class="kb-br-label">星系</label>
       <div class="kb-br-field">
@@ -189,6 +293,7 @@ function renderForm() {
 function bindForm() {
   const form = $('brForm');
   form.addEventListener('input', ctx.app.debounce((e) => { if (e.target.id === 'brSystem') suggest(e.target.value); }, 150));
+  form.addEventListener('input', ctx.app.debounce((e) => { if (e.target.id === 'brKmText') takeKmText(e.target); }, 250));
   form.addEventListener('keydown', (e) => {
     if (e.target.id === 'brSystem' && e.key === 'Enter') { e.preventDefault(); $('brSuggest').querySelector('[data-br-pick]')?.click(); }
     if (e.target.id === 'brSystem' && e.key === 'Escape') $('brSuggest').hidden = true;
@@ -209,6 +314,8 @@ function bindForm() {
   form.addEventListener('click', (e) => {
     const el = (sel) => e.target.closest(sel);
     let x;
+    if ((x = el('[data-br-mode]'))) { if (BR.mode !== x.dataset.brMode) { BR.mode = x.dataset.brMode; renderForm(); } return; }
+    if (el('[data-br-km-clear]')) { BR.km.clear(); kmForm(); return; }
     if ((x = el('[data-br-pick]'))) {
       const id = Number(x.dataset.brPick);
       if (!BR.picked.includes(id)) BR.picked.push(id);
@@ -257,6 +364,13 @@ function suggest(text) {
 }
 
 function go() {
+  if (BR.mode === 'km') {
+    if (!BR.km.size) { ctx.app.showToast('先粘贴击杀链接', 'error'); return; }
+    BR.side.clear();
+    history.pushState(null, '', hashFor(false));
+    loadResult({ km: [...BR.km.keys()], a: [], b: [], c: [], d: [] });
+    return;
+  }
   const systems = selectedSystems();
   if (!systems.length) { ctx.app.showToast('请先选择星系', 'error'); return; }
   if (systems.length > MAX_SYSTEMS) { ctx.app.showToast(`最多选择 ${MAX_SYSTEMS} 个星系`, 'error'); return; }
@@ -269,18 +383,38 @@ function go() {
 }
 
 // ---------- 读取与汇总 ----------
+// 按击杀统计：本站没有的击杀带上 hash，服务端向 ESI 取原文
+function requestKm(ids) {
+  return ctx.request('br/km', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ kills: ids.map((id) => [id, BR.km.get(id) || null]) }) })
+    .then((data) => ({ ...data, ids }));
+}
+// 服务端名字表里没有的人物 / 军团 / 联盟（向 ESI 取原文的击杀里常有）：浏览器再向 ESI 查一次
+async function fillNames(data) {
+  const ids = new Set();
+  for (const k of data.kills) { [k[5], k[6], k[7]].forEach((x) => x && ids.add(x)); for (const a of k[8]) a.slice(0, 3).forEach((x) => x && ids.add(x)); }
+  const miss = [...ids].filter((id) => !ctx.hasName(id));
+  for (let i = 0; i < miss.length; i += 1000) {
+    const r = await ctx.app.resolveNames(miss.slice(i, i + 1000)).catch(() => null);
+    const o = {};
+    r?.names?.forEach((n, id) => { o[id] = n; });
+    ctx.absorbNames(o);
+  }
+}
+
 async function loadResult(p) {
   const box = $('brResult');
-  box.innerHTML = `<div class="kb-br-loading"><span class="spinner"></span>正在读取击杀记录…</div>`;
-  const key = `${p.systems.join(',')}|${p.start}|${p.end}`;
+  const km = p.km?.length ? p.km : null;
+  box.innerHTML = `<div class="kb-br-loading"><span class="spinner"></span>${km ? `正在读取 ${km.length} 条击杀…本站没有的要向 ESI 取，条数多时要等一会儿` : '正在读取击杀记录…'}</div>`;
+  const key = km ? 'km|' + km.join(',') : `${p.systems.join(',')}|${p.start}|${p.end}`;
   try {
-    let data = BR.key === key && BR.data ? BR.data : await ctx.request(`br?systems=${p.systems.join(',')}&start=${p.start}&end=${p.end}`);
+    let data = BR.key === key && BR.data ? BR.data : km ? await requestKm(km) : await ctx.request(`br?systems=${p.systems.join(',')}&start=${p.start}&end=${p.end}`);
     // 开始时间早于本站保存期限：整段改由浏览器直接从 zKillboard 读取，只放在本页内存里，服务器不存
-    if (!data.zk && beyondRetention(data, p.start)) data = await zkBattle(p, data, box);
+    if (!km && !data.zk && beyondRetention(data, p.start)) data = await zkBattle(p, data, box);
     if (BR.key !== key) BR.zkAll = false;
     BR.data = data;
     BR.key = key;
     ctx.absorbNames(data.names);
+    if (km) await fillNames(data);
     const types = new Set();
     for (const k of data.kills) { types.add(k[3]); for (const a of k[8]) if (a[3]) types.add(a[3]); }
     await ctx.loadTypes([...types]);
@@ -370,8 +504,9 @@ function refreshDamage() {
     if (BR.key !== key || BR.data !== d || !shown()) return;
     let data;
     try {
-      data = await ctx.request(`br?systems=${d.systems.join(',')}&start=${d.start}&end=${d.end}`);
+      data = d.km ? await requestKm(d.ids) : await ctx.request(`br?systems=${d.systems.join(',')}&start=${d.start}&end=${d.end}`);
       ctx.absorbNames(data.names);
+      if (d.km) await fillNames(data);
       await ctx.loadTypes([...new Set(data.kills.flatMap((k) => [k[3], ...k[8].map((a) => a[3])]))]);
     } catch { return; }
     if (BR.key !== key || BR.data !== d || !shown()) return;
@@ -492,7 +627,8 @@ function renderResult() {
   const box = $('brResult');
   if (!d.kills.length) {
     const old = d.retention_days && d.start < Date.now() / 1000 - d.retention_days * 86400;   // 0 = 永久保存（国服）
-    box.innerHTML = `<p class="kb-empty text-muted">${d.zk ? '没有玩家击杀（zKillboard 上也没有）' : `没有玩家击杀${old ? `（仅存 ${d.retention_days - 1} 天）` : ''}`}</p>`;
+    box.innerHTML = d.km ? `<p class="kb-empty text-muted">没有统计到玩家击杀</p>${kmNote(d, true)}`
+      : `<p class="kb-empty text-muted">${d.zk ? '没有玩家击杀（zKillboard 上也没有）' : `没有玩家击杀${old ? `（仅存 ${d.retention_days - 1} 天）` : ''}`}</p>`;
     return;
   }
   const sides = sidesUsed();
@@ -502,12 +638,13 @@ function renderResult() {
   const total = d.kills.reduce((s, k) => s + k[4], 0);
   const pilots = new Set([...BR.pilotParty.keys()]).size;
   const unassigned = [...BR.parties.values()].filter((p) => !BR.side.get(p.id)).sort((a, b) => b.pilots.size - a.pilots.size || b.lost - a.lost);
-  const sysList = d.systems.map((id) => ctx.kb.systemLabel(id).name).join('、');
+  const sysList = sysNames(d.systems, MAX_SYSTEMS);
   box.innerHTML = `
     <div class="kb-br-summary">
       <div class="kb-br-title">
         <strong>${ctx.app.esc(sysList)}</strong>
-        <span class="text-muted">${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()} · ${d.kills.length} 次击杀 · ${ctx.app.formatNumber(pilots)} 名飞行员 · 总损失 ${ctx.app.formatISK(total)} ISK${d.truncated ? ' · 击杀过多，只统计前 5000 条' : ''}${d.zk ? '<span class="kb-br-zk">超出本站保存期限，数据实时取自 zKillboard（价值为 zKillboard 估值）</span>' : ''}</span>
+        <span class="text-muted">${d.km ? '<span class="kb-br-kmtag">按指定的击杀统计</span>' : ''}${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()} · ${d.kills.length} 次击杀 · ${ctx.app.formatNumber(pilots)} 名飞行员 · 总损失 ${ctx.app.formatISK(total)} ISK${d.truncated ? ' · 击杀过多，只统计前 5000 条' : ''}${d.zk ? '<span class="kb-br-zk">超出本站保存期限，数据实时取自 zKillboard（价值为 zKillboard 估值）</span>' : ''}</span>
+        ${d.km ? kmNote(d) : ''}
       </div>
       <div class="kb-br-tools">
         <div class="segmented kb-br-width" role="group" aria-label="宽度">
@@ -553,6 +690,17 @@ function renderResult() {
   if (BR.replay) mountReplay($('brReplay'), replayModel(sides, stats)); else stopReplay();
   drawTimeline();
   observeChart();
+}
+
+// 按击杀统计：没取到的、没去取的、NPC 击杀各几条
+function kmNote(d, empty = false) {
+  const nf = d.not_found?.length || 0;
+  const parts = [];
+  if (nf) parts.push(`${nf} 条没取到（本站没有这条击杀、链接里也没有 hash；国服请用游戏击杀报告里的「复制外部击杀链接」）`);
+  if (d.over) parts.push(`${d.over} 条本站没有、一次取不了这么多，没有统计`);
+  if (d.npc) parts.push(`${d.npc} 条是 NPC 击杀（没有玩家攻击者），不算`);
+  if (!parts.length) return '';
+  return `<p class="kb-br-kmnote${empty ? ' empty' : ''}">${parts.map((x) => `<span>${x}</span>`).join('')}</p>`;
 }
 
 // 损失对比：以双方 ISK 损失比为主体，下面是 ISK 占比条与舰船 / 人数等对比条
@@ -1154,7 +1302,7 @@ function openSim() {
   // 本方这型船没阵亡时，可以借用对方同型船的阵亡装配
   for (const [me, other] of [[A, B], [B, A]]) for (const r of me.rows) r.killsOther = (other.kills.get(r.ship) || []).slice(0, 60);
   if (!A.rows.length || !B.rows.length) { ctx.app.showToast('两方都要有舰船才能模拟', 'info'); return; }
-  const sys = BR.data.systems.map((id) => ctx.kb.systemLabel(id).name).join('、');
+  const sys = sysNames(BR.data.systems, 4);
   ctx.app.openBattleSim({ title: `${sys} ${fmtTime(BR.data.start)}`, a: A.rows, b: B.rows, real: { A: A.lost, B: B.lost } });
 }
 
@@ -1172,7 +1320,6 @@ function imageModel() {
   const isk = ctx.app.formatISK, num = ctx.app.formatNumber;
   const pilots = BR.pilotParty.size;
   const total = d.kills.reduce((sum, k) => sum + k[4], 0);
-  const names = d.systems.map((id) => ctx.kb.systemLabel(id).name);
   // 参战玩家：每方按参与击杀、损失排序取前 PLAYERS_IMG 名
   const org = new Map(pilotRows().map((r) => [r.char, r]));   // 所属：最后一次出现时的军团 / 联盟
   const logo = (kind, id) => (id ? { name: ctx.partyName(id) || '', logo: ctx.avatar(kind, id, 32) } : null);
@@ -1213,7 +1360,7 @@ function imageModel() {
   const perPilot = (st) => (st.pilots.size ? st.lost / st.pilots.size : 0);
   const cmp = (label, a, b, f = num) => ({ label, a, b, aText: f(a), bText: f(b) });
   return {
-    title: names.length > 4 ? `${names.slice(0, 4).join('、')} 等 ${names.length} 个星系` : names.join('、'),
+    title: sysNames(d.systems, 4),
     meta: [`${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()}`, `${d.kills.length} 次击杀`, `${num(pilots)} 名飞行员`, `总损失 ${isk(total)} ISK`],
     order, sides: Object.fromEntries(order.map((s) => [s, side(stats[s], s)])),
     ratio: info.ratio, verdict: info.verdict, winner: info.winner,
@@ -1239,7 +1386,7 @@ function shareImage() {
   const name = `战场统计-${ctx.kb.systemLabel(BR.data.systems[0]).name}-${fmtTime(BR.data.start).replace(/[: ]/g, '')}.png`;
   imageModule.then(([{ renderBrImage }, { openShareModal, shareUrl }]) => openShareModal({
     title: '分享战况图片', fileName: name, app: ctx.app,
-    render: (theme) => renderBrImage({ ...model, url: shareUrl(hashFor()) }, theme),
+    render: (theme) => renderBrImage({ ...model, url: hashFor().length > 900 ? null : shareUrl(hashFor()) }, theme),   // 按击杀统计的链接太长放不进二维码
     link: () => location.origin + location.pathname + hashFor()
   })).catch((error) => {
     imageModule = null;

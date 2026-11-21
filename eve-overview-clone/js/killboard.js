@@ -28,6 +28,7 @@ export function initKillboard(context) {
     const fit = e.target.closest('[data-kill-tab]');
     if (fit) switchKillTab(fit.dataset.killTab);
     if (e.target.closest('[data-share-kill]') && shownKill) { shareKill(); return; }
+    if (e.target.closest('[data-kill-game]') && shownKill) { openInGame(); return; }
     // 去装配页查看：关闭弹窗，在模拟装配中打开这艘船与击杀时的装配
     const go = e.target.closest('[data-kill-fit]');
     if (go && shownKill && !go.disabled) {
@@ -293,6 +294,7 @@ export async function openKill(kill, options = {}) {
   const body = $('killBody');
   modal.hidden = false;
   $('killShare').hidden = true;
+  $('killGame').hidden = true;
   body.innerHTML = skEntityHead() + skCards(3) + skTitle(12) + skRows(8, { img: 24 });
   try {
     if (options.load) ({ kill, prices: options.prices } = await options.load());
@@ -304,6 +306,7 @@ export async function openKill(kill, options = {}) {
     shownKill = kill;
     mountKillRadial(kill);
     $('killShare').hidden = false;
+    $('killGame').hidden = !kill.zkb?.hash || !app.game?.mail;
     nearestOf(kill).then((near) => {
       const el = currentKill === token && body.querySelector('[data-kill-near]');
       if (el && near) { el.textContent = near.text; el.hidden = false; }
@@ -338,7 +341,7 @@ async function loadServiceKill(id) {
   const km = data.killmail;
   const players = (km.attackers || []).filter((a) => a.character_id);
   return {
-    kill: { ...km, zkb: { totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed, solo: players.length === 1, npc: !players.length, awox: false, locationID: null, valueLabel: `${IS_TQ ? '吉他' : HUB.hub.name + ' '}${data.price_mode === 'sell' ? '卖价' : '中间价'}估值` } },
+    kill: { ...km, zkb: { hash: data.hash, totalValue: data.value, droppedValue: data.dropped, destroyedValue: data.destroyed, solo: players.length === 1, npc: !players.length, awox: false, locationID: null, valueLabel: `${IS_TQ ? '吉他' : HUB.hub.name + ' '}${data.price_mode === 'sell' ? '卖价' : '中间价'}估值` } },
     prices: new Map(Object.entries(data.prices).map(([k, v]) => [Number(k), v]))
   };
 }
@@ -485,6 +488,26 @@ function shareKill() {
   }).catch((error) => {
     shareModules = null;
     app.showToast('生成图片失败：' + error.message, 'error', 4000);
+  });
+}
+
+// 在游戏里打开：ESI 在游戏客户端里新建一封邮件，正文是这条击杀的链接（点开就是游戏里的击杀报告），收件人是自己，不会发送。
+// 链接写法和游戏里的一样：<a href="killReport:击杀ID:hash">；角色要在线、要有「游戏内操作」权限（modern-app 的 game.mail 里检查）
+const mailEsc = (t) => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+function openInGame() {
+  const k = shownKill, hash = k?.zkb?.hash;
+  if (!hash || !app.game?.mail) return;
+  const en = window.I18N?.lang === 'en';
+  const v = k.victim;
+  const who = names.get(v.character_id) || names.get(v.corporation_id) || '';
+  const ship = typeName(v.ship_type_id);
+  const sys = systemLabel(k.solar_system_id);
+  const when = String(k.killmail_time || '').slice(0, 16).replace('T', ' ');
+  const label = en ? `Kill: ${who ? who + ' ' : ''}(${ship})` : `击杀：${who}（${ship}）`;
+  app.game.mail({
+    subject: (en ? 'Kill report: ' : '击杀报告：') + ship + (who ? ' · ' + who : ''),
+    body: `<font size="12" color="#bfffffff"><a href="killReport:${k.killmail_id}:${hash}">${mailEsc(label)}</a><br>${mailEsc(`${sys.name} ${sys.secText} · ${when} EVE`)}</font>`,
+    okText: '已在游戏里打开新邮件：收件人是你自己，正文是这条击杀，没有发送'
   });
 }
 

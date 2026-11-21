@@ -17,6 +17,7 @@
                                               本地只保留 --days 天；带筛选条件时翻完本地记录后自动改为实时查询 zKillboard（不入库）
   GET /api/kb/live?after=N                    实时收录的新击杀（星图闪烁 / 弹幕），返回新的游标
   GET /api/kb/br?systems=1,2&start=T&end=T     战场统计：指定星系与时间段（Unix 秒）内的全部玩家击杀及攻击者（前端按联盟分阵营统计）
+  POST /api/kb/br/km[?server=]                 战场统计：按指定的击杀（粘贴的游戏内击杀链接、列表里选中的击杀）统计，body {kills: [[id, hash], …]}
   GET /api/kb/battles?window=60&min=20        疑似会战：时间窗（分钟）内同一星系被击毁舰船数 ≥ min（不含太空舱与 1000 万 ISK 以下的击杀）
   GET /api/kb/battles/history?days=30         最近 N 天全部疑似会战，含双方阵营划分、损失 / 击毁与战损比（缓存 10 分钟）
   GET /api/kb/battles/pilot?character=ID&days=180  这个人物最近 N 天参加过的会战（受本地保留期限制，返回实际天数）
@@ -286,6 +287,11 @@ BR_MAX_SYSTEMS = 30           # 战场统计：最多星系数
 BR_MAX_HOURS = 72             # 战场统计：最长时间段
 BR_MAX_KILLS = 5000           # 战场统计：最多击杀数
 BR_CACHE_KEEP = 50            # 战场统计：内存中保留的查询结果数
+BR_KM_MAX = 1000              # 按击杀统计：一次最多多少条击杀
+BR_KM_FETCH = 300             # 按击杀统计：库里没有、要向 ESI 取原文的最多多少条（带 hash 的）
+BR_KM_ZKILL = 20              # 按击杀统计：库里没有、也没带 hash 的，宁静服最多向 zKillboard 查多少条（zKillboard 要排队，每条约 1 秒）
+BR_KM_FAILS = 10              # 按击杀统计：ESI 连续失败这么多次就不再取（国服 ESI 每 IP 每分钟最多 100 次错误）
+BR_KM_RATE = 20               # 按击杀统计：每 IP 每分钟次数（令牌桶）
 BR_DMG_WAIT = 12              # 战场统计：旧击杀缺伤害时向 ESI 补，最多等这么多秒，没补完的在后台继续
 BATTLE_CACHE = 5              # 会战结果缓存（秒），前端与实时击杀同为 6 秒轮询
 BATTLE_MIN_VALUE = 10_000_000  # 会战只统计价值 ≥ 1000 万 ISK 的击杀（过滤小船 / 诱饵等刷数）
@@ -2055,6 +2061,129 @@ class Api:
         for k in br_keys[:-BR_CACHE_KEEP]:
             self.store.cache.pop(k, None)
         return value
+
+    # POST /br/km：按指定的击杀统计（粘贴的游戏内击杀链接、击杀列表里勾选的）。body {kills: [[id, hash 或 null], …]}
+    # 返回和 /br 相同的紧凑数组；库里有的直接用（含伤害补齐），没有的：带 hash 的向 ESI 取原文（宁静服也认 zKillboard 缓存），
+    # 不带 hash 的宁静服向 zKillboard 查少量几条。取到的原文只放内存缓存，不入库。没有玩家攻击者的（NPC 击杀）不统计。
+    # not_found：没取到的击杀 ID；over：超出单次取原文上限没去取的条数；npc：跳过的 NPC 击杀条数
+    def br_km(self, body):
+        items = body.get("kills") if isinstance(body, dict) else None
+        if not isinstance(items, list) or not items:
+            raise ValueError("缺少击杀")
+        want = {}
+        for it in items[:BR_KM_MAX * 2]:
+            try:
+                kid = int(it[0] if isinstance(it, list) else it)
+            except (TypeError, ValueError, IndexError):
+                continue
+            h = it[1] if isinstance(it, list) and len(it) > 1 else None
+            h = h.lower() if isinstance(h, str) and re.fullmatch(r"[0-9a-fA-F]{40}", h) else None
+            if kid > 0 and (kid not in want or (h and not want[kid])):
+                want[kid] = h
+        if not want:
+            raise ValueError("没有认出击杀")
+        if len(want) > BR_KM_MAX:
+            raise ValueError(f"一次最多统计 {BR_KM_MAX} 条击杀")
+        c = self.store.conn()
+        kids = sorted(want)
+        db = {}
+        for i in range(0, len(kids), 900):
+            part = kids[i:i + 900]
+            for r in c.execute(f"""SELECT id, time, system_id, ship_type, {V}, v_char, v_corp, v_alliance, hash, f_char, npc FROM killmails
+                                   WHERE id IN ({','.join('?' * len(part))})""", part):
+                db[r[0]] = r
+        npc = sum(1 for r in db.values() if r[10])
+        rows = [r for r in db.values() if not r[10]]
+        rid = [r[0] for r in rows]
+
+        def load_attackers():
+            att = collections.defaultdict(list)
+            for i in range(0, len(rid), 900):
+                part = rid[i:i + 900]
+                for km, char, corp, alliance, ship, dmg in c.execute(
+                        f"SELECT km, char, corp, alliance, ship, dmg FROM attackers WHERE km IN ({','.join('?' * len(part))})", part):
+                    att[km].append([char, corp, alliance, ship, dmg])
+            return att
+        att = load_attackers()
+        nodmg = [r for r in rows if r[8] and any(a[4] is None for a in att.get(r[0], ()))]
+        if nodmg and self.fill_damage(nodmg):
+            att = load_attackers()
+        missing = sum(1 for r in rows if r[8] and any(a[4] is None for a in att.get(r[0], ())))
+        kills = [[r[0], r[1], r[2], r[3], round(r[4] or 0, 2), r[5], r[6], r[7], att.get(r[0], []), r[9] or 0] for r in rows]
+        # 库里没有的：取原文（内存缓存 → ESI（带 hash）→ zKillboard（宁静服、不带 hash，限几条））
+        rest = [k for k in kids if k not in db]
+        not_found, over = [], 0
+        cached = {}
+        with self.km_lock:
+            for k in rest:
+                if k in self.km_cache:
+                    cached[k] = self.km_cache[k]
+        esi = [k for k in rest if k not in cached and want[k]]
+        zk = [k for k in rest if k not in cached and not want[k]]
+        if len(esi) > BR_KM_FETCH:
+            over += len(esi) - BR_KM_FETCH
+            esi = esi[:BR_KM_FETCH]
+        if self.store.server != "tq":
+            not_found += zk     # 国服没有 zKillboard，没有 hash 就取不到原文
+            zk = []
+        elif len(zk) > BR_KM_ZKILL:
+            over += len(zk) - BR_KM_ZKILL
+            zk = zk[:BR_KM_ZKILL]
+        fails = [0]
+
+        def get_esi(k):
+            if fails[0] >= BR_KM_FAILS:
+                return k, None
+            try:
+                km, _ = get_json(self.store.esi_url(f"/killmails/{k}/{want[k]}/"), timeout=20, retries=2, fatal=(400, 404, 422))
+                fails[0] = 0
+                return k, km if isinstance(km, dict) and km.get("victim") else None
+            except Exception:
+                fails[0] += 1
+                return k, None
+        got = dict(cached)
+        if esi:
+            with concurrent.futures.ThreadPoolExecutor(8) as pool:
+                for k, km in pool.map(get_esi, esi):
+                    if km:
+                        got[k] = km
+                    else:
+                        not_found.append(k)
+        for k in zk:
+            data = zkill_get(f"killID/{k}/")
+            km = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) and data[0].get("victim") else None
+            if km:
+                got[k] = km
+            else:
+                not_found.append(k)
+        with self.km_lock:
+            for k, km in got.items():
+                self.km_cache[k] = km
+                self.km_cache.move_to_end(k)
+            while len(self.km_cache) > KM_CACHE:
+                self.km_cache.popitem(last=False)
+        for k, km in got.items():
+            atts = km.get("attackers") or []
+            players = [a for a in atts if a.get("character_id")]
+            if not players:
+                npc += 1
+                continue
+            v = km["victim"]
+            fin = next((a for a in atts if a.get("final_blow")), atts[0])
+            kills.append([k, epoch(km["killmail_time"]), km["solar_system_id"], v["ship_type_id"], round(self.store.km_value(km, self.store.price_by_mode), 2),
+                          v.get("character_id"), v.get("corporation_id"), v.get("alliance_id"),
+                          [[a["character_id"], a.get("corporation_id"), a.get("alliance_id"), a.get("ship_type_id"), a.get("damage_done") or 0] for a in players],
+                          fin.get("character_id") or 0])
+        kills.sort(key=lambda x: (x[1], x[0]))
+        ids = set()
+        for x in kills:
+            ids.update(x[5:8])
+            for a in x[8]:
+                ids.update(a[:3])
+        times = [x[1] for x in kills]
+        return {"systems": sorted({x[2] for x in kills}), "start": min(times) if times else 0, "end": max(times) + 60 if times else 0,
+                "kills": kills, "truncated": False, "dmg_missing": missing, "retention_days": self.store.retention, "names": self.names_for(ids),
+                "km": True, "not_found": sorted(not_found), "over": over, "npc": npc}
 
     # GET /locate?system=ID&x=&y=&z=：击杀位置最近的天体（星门 / 空间站 / 行星 / 卫星 / 小行星带 / 恒星）及距离（米）
     def locate(self, q):
@@ -9489,6 +9618,7 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
     feedback_limiter = RateLimiter(FEEDBACK_RATE)
     feedback_posts = WindowLimiter(*FEEDBACK_POSTS)
     feedback_read_limiter = RateLimiter(30)
+    br_km_limiter = RateLimiter(BR_KM_RATE)
     lite_limiter = RateLimiter(6)          # 收益助手启动上报：每个 IP 每分钟 6 次（网吧 / 同一出口多台电脑也够）
     chat_tr_limiter = RateLimiter(CHAT_TR_RATE)
     ai_limiter = RateLimiter(AI_RATE * 3)
@@ -9789,6 +9919,27 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 log.exception("工单错误")
                 return self.send_json(500, {"error": "服务器内部错误"})
 
+        def br_km(self, q):
+            # 战场统计 · 按指定的击杀（同源调用）：库里没有的要向 ESI 取原文，按 IP 限流
+            ok, _, retry = br_km_limiter.take(self.client_ip())
+            if not ok:
+                return self.send_json(429, {"error": f"请求太频繁，请 {retry} 秒后再试"}, {"Retry-After": str(retry)})
+            try:
+                srv = kb_server(q)
+                length = int(self.headers.get("Content-Length") or 0)
+                if not 0 < length <= 262144:
+                    raise ValueError("请求体应为 JSON")
+                try:
+                    body = json.loads(self.rfile.read(length))
+                except ValueError:
+                    raise ValueError("请求体应为 JSON") from None
+                return self.send_json(200, apis[srv].br_km(body))
+            except ValueError as e:
+                return self.send_json(400, {"error": str(e) or "请求体应为 JSON"})
+            except Exception:
+                log.exception("按击杀统计错误")
+                return self.send_json(500, {"error": "服务器内部错误"})
+
         def notice(self, path):
             # 站点公告管理（同源调用）：和工单管理同一套站长判断（站长 IP，或云同步账号的登录密钥在 body.user / body.auth 里），别人看到 404
             op = path[len("/api/kb/notice/"):]
@@ -10003,6 +10154,8 @@ def make_handler(api, static_dir, industry, abyssal, cn_apis=None, bazaar=None, 
                 return self.feedback(url.path.rstrip("/"))
             if url.path.startswith("/api/kb/notice/"):
                 return self.notice(url.path.rstrip("/"))
+            if url.path.rstrip("/") == "/api/kb/br/km":
+                return self.br_km(dict(urllib.parse.parse_qsl(url.query)))
             if url.path.rstrip("/") == "/api/kb/lite/ping":
                 return self.lite_ping()
             if url.path.rstrip("/") in ("/api/kb/translate", "/api/kb/translate/models"):

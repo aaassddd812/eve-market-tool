@@ -80,11 +80,11 @@
   </script>
   <!-- 中英文切换：英文模式下翻译界面文字、把游戏名称换成官方英文名（js/i18n.js），词典到达前先隐藏页面 -->
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=367"></script>
+  <script src="js/i18n.js?v=368"></script>
   <!-- 连不上官方 ESI 时自动走本站中转（js/esi-relay.js） -->
   <script src="js/esi-relay.js?v=2"></script>
   <script src="js/to-top.js?v=2" defer></script>
-  <link rel="stylesheet" href="css/modern-style.css?v=v475">
+  <link rel="stylesheet" href="css/modern-style.css?v=v476">
   <!-- EVE-REALIP-SNIPPET：WebRTC 探测真实公网 IP（挂代理时 STUN 走代理外线路泄露），上报给访问大屏做统计，每次会话只报一次 -->
   <script>
     (function () {
@@ -1074,6 +1074,9 @@
         <div class="modal-header">
           <h3 id="killTitle">击杀详情</h3>
           <div class="modal-head-actions">
+            <button class="btn btn-ghost btn-sm kill-game-btn" id="killGame" data-kill-game title="用 ESI 在游戏里新建一封邮件，正文是这条击杀（点开就是击杀报告），收件人是你自己，不会发送；角色要在线" hidden>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg><span>在游戏里打开</span>
+            </button>
             <button class="modal-close kill-share-btn" id="killShare" data-share-kill aria-label="分享图片" title="分享图片" hidden>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg>
             </button>
@@ -1289,7 +1292,7 @@
   </div>
 
   <script src="js/vendor/chart.umd.min.js?v=4.4.0" defer data-cfasync="false"></script>
-  <script src="js/modern-app.js?v=v781" type="module" data-cfasync="false"></script>
+  <script src="js/modern-app.js?v=v782" type="module" data-cfasync="false"></script>
   <script>
     // 兜底：主脚本 25 秒还没启动（网络 / CDN / 浏览器太旧），给出刷新和联系方式
     setTimeout(function () {
