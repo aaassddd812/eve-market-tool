@@ -325,11 +325,8 @@ function pickPreviews() {
 function pickViewOnce() {
   let have = null;
   try { have = localStorage.getItem(VIEW_KEY); } catch { return; }   // 存不了就不弹（每次都会弹）
-  // 老用户（弹框出现前就有存下的视图）也强制看一次选择框，预选当前在用的；手动切换过视图开关的不再打扰
-  let picked = null;
-  try { picked = localStorage.getItem('eve-fit-view-picked'); } catch {}
-  if ((have && picked) || $('fitViewPick') || $('fitView')?.hidden) return;
-  let pick = have || (MOBILE() ? 'list' : 'radial');
+  if (have || $('fitViewPick') || $('fitView')?.hidden) return;      // 只对第一次进装配页（还没选过视图）的人弹
+  let pick = MOBILE() ? 'list' : 'radial';
   const prev = pickPreviews();
   // 预览里是真的装配界面（带按钮），卡片不能再用 <button> 包
   const card = (k, title, sub, note) => `<div class="fvp-card${pick === k ? ' is-on' : ''}" data-fvp="${k}" role="button" tabindex="0" aria-pressed="${pick === k}">
@@ -353,7 +350,7 @@ function pickViewOnce() {
       <div class="fvp-foot"><button type="button" class="btn btn-primary" data-fvp-save>保存并关闭</button></div>
     </div>`;
   const save = () => {
-    try { localStorage.setItem(VIEW_KEY, pick); localStorage.setItem('eve-fit-view-picked', '1'); } catch { /* 忽略 */ }
+    try { localStorage.setItem(VIEW_KEY, pick); } catch { /* 忽略 */ }
     box.remove();
     document.removeEventListener('keydown', onKey, true);
     if (F.fit) renderFit();
@@ -2546,7 +2543,7 @@ async function onMainClick(e) {
   if ((x = el('[data-fit-cloud-remove]'))) { saveCloud(FE.cloudInfo(F.data, F.fit.ship).map((c) => c.ship.id).filter((id) => id !== Number(x.dataset.fitCloudRemove))); return; }
   if ((x = el('[data-fit-implant-remove]'))) { F.fit.implants = F.fit.implants.filter((id) => id !== Number(x.dataset.fitImplantRemove)); recompute(); return; }
   if ((x = el('[data-fit-view]'))) {
-    try { localStorage.setItem(VIEW_KEY, x.dataset.fitView); localStorage.setItem('eve-fit-view-picked', '1'); } catch { /* 忽略 */ }
+    try { localStorage.setItem(VIEW_KEY, x.dataset.fitView); } catch { /* 忽略 */ }
     renderFit();
     return;
   }
