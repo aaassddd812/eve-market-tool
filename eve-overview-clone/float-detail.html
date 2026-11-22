@@ -24,7 +24,7 @@
     })();
   </script>
   <style>html.i18n-pending body { visibility: hidden; }</style>
-  <script src="js/i18n.js?v=373"></script>
+  <script src="js/i18n.js?v=374"></script>
   <!-- 连不上官方 ESI 时自动走本站中转（js/esi-relay.js） -->
   <script src="js/esi-relay.js?v=2"></script>
   <link rel="stylesheet" href="css/modern-style.css?v=v447">
@@ -42,10 +42,32 @@
     .fi-float { width: auto; height: auto; }
     .fi-float .fi-panes { margin: 0; padding: 0; overflow: visible; }
     .fi-float .fi-head img { width: 56px; height: 56px; }
-    /* 击杀详情：窄窗口里舰船图下面的「在 zKillboard 查看」放到整行 */
-    .fd-body .kb-ship-col { display: contents; }
-    .fd-body .kb-ship-render { grid-row: 1; grid-column: 1; }
-    .fd-body .kb-ship-actions { grid-row: 99; grid-column: 1 / -1; }
+    /* 击杀详情（killboard.js renderKillFloat）：头部压成几行，先看攻击者（哪些军团 / 联盟、开什么船），装配与物品在第二个标签 */
+    .kbf-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; }
+    .kbf-ship { border-radius: 8px; background: var(--bg-tertiary); }
+    .kbf-who { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+    .kbf-who b, .kbf-who small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kbf-who b { font-size: 0.9375rem; }
+    .kbf-who small { color: var(--text-muted); font-size: 0.75rem; }
+    .kbf-val { text-align: right; white-space: nowrap; }
+    .kbf-val b { font-size: 1.125rem; font-variant-numeric: tabular-nums; }
+    .kbf-val small { margin-left: 3px; color: var(--text-muted); font-size: 0.6875rem; }
+    .kbf-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 12px; margin-top: 8px; color: var(--text-secondary); font-size: 0.75rem; }
+    .kbf-sum { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; padding: 8px 10px; border-radius: 8px; background: var(--bg-secondary); }
+    .kbf-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 0.75rem; }
+    .kbf-row em { margin-right: 2px; font-style: normal; color: var(--text-muted); }
+    .kbf-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; padding: 2px 6px; border-radius: 6px; background: var(--bg-tertiary); }
+    .kbf-chip > span, .kbf-chip > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .kbf-chip img { flex: none; border-radius: 3px; }
+    .kbf-chip b { flex: none; color: var(--text-secondary); font-weight: 600; }
+    .kbf-more { color: var(--text-muted); }
+    .kbf .kb-tabs { margin: 12px 0 8px; }
+    /* 攻击者名字太长时省略名字，「最后一击」标签留着 */
+    .kbf .kb-attacker-main strong { display: flex; align-items: center; min-width: 0; }
+    .kbf .kb-attacker-main strong > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .kbf .kb-attacker-main strong > .kb-tag { flex: none; }
+    .kbf-values { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+    .kbf-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
     /* 人物详情 */
     .kb-float .kb-entity-head { flex-wrap: wrap; gap: 12px; }
     .kb-float .kb-entity-head img { width: 56px; height: 56px; }

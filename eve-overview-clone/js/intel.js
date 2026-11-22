@@ -15,13 +15,13 @@
 //   舰船、装备等由服务器的术语表处理。浏览器不直连翻译服务。
 //   也可以选「大模型」：玩家自己填接口（OpenAI Chat / OpenAI Responses / Anthropic 协议、地址、Key，模型从上游列表里选），
 //   设置只存在本浏览器（开了云同步时加密同步），每次翻译随请求经本站服务器转发给该接口，服务器不保存。
-// 悬浮窗（float-feed.js）：「日志预警」显示最近消息（敌情 / 关键词 / 游戏日志），「频道翻译」显示译文；有新预警时悬浮窗切到「日志预警」。
+// 悬浮窗（float-feed.js）：「日志预警」显示最近消息（敌情只列预警范围内的，按现在的位置算；关键词 / 游戏日志），「频道翻译」显示译文；有新预警时悬浮窗切到「日志预警」。
 // 桌面版（宁静服）打开软件时不自动读取（MANUAL）：不找文件夹、不恢复监听，要用户点「开始读取」（或打开总开关）才开始，这次打开里一直读，下次打开再点；
 //   「开启本地日志监听」开关显示这次是不是在读。网页版本来就要浏览器授权，照旧。
 // 国服（晨曦、曙光）的桌面版不读取本地日志（LOCKED）：不自动找文件夹、不恢复监听，文件夹按钮和总开关变灰不能点；设置照旧保存，切回宁静服还按原来的来。宁静服和网页版不变。
 
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v13';
+import * as AP from './alert-push.js?v=v14';
 import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
 import { IS_TQ } from './server.js?v=s4';
@@ -476,11 +476,13 @@ function publishFloat() {
   floatTimer = setTimeout(() => {   // 一次处理多行时合并成一次推送
     floatTimer = 0;
     const on = T.on && S.timer !== 0;
+    // 悬浮窗只列预警范围内的敌情（按现在的位置算；位置未知时列出提醒过的）；范围外的只在主窗口「最近消息」里
+    const near = (r) => r.type !== 'intel' || (S.here == null ? r.alert : r.jumps != null && r.jumps <= T.jumps);
     FF.publish('intel', {
-      on: !LOCKED && T.on, locked: LOCKED, idle: MANUAL && T.on && !S.timer, status: status().text,
-      items: S.reports.slice(0, 40).map((r) => ({
+      on: !LOCKED && T.on, locked: LOCKED, idle: MANUAL && T.on && !S.timer, status: status().text, range: S.here == null ? null : T.jumps,
+      items: S.reports.filter(near).slice(0, 40).map((r) => ({
         key: sigOf(r), type: r.type, clear: r.clear, jumps: r.jumps, system: r.system || 0, name: r.name || '', kw: r.kw || '',
-        who: r.who, msg: r.msg, channel: r.channel, at: r.at || +r.time, alert: Boolean(r.alert)
+        who: r.who, msg: r.msg, channel: r.channel, at: r.at || +r.time, alert: Boolean(r.alert), mark: markOf(r)
       }))
     });
     FF.publish('chat', {
@@ -488,6 +490,15 @@ function publishFloat() {
       items: S.trans.slice(0, 60).map((m) => ({ key: m.key, at: m.time, channel: m.channel, who: m.who, msg: m.msg, text: m.text, lang: m.lang }))
     });
   }, 150);
+}
+// 消息里要加粗的那一段（星系名或关键词）：[开始, 长度]；原文里找不到（按编号前缀认出的星系、正则没命中原文）就是 null
+function markOf(r) {
+  const msg = String(r.msg || ''), low = msg.toLowerCase();
+  const at = (w) => { const i = w ? low.indexOf(w.toLowerCase()) : -1; return i >= 0 ? [i, w.length] : null; };
+  if (r.type === 'intel') return at(r.name) || at(S.names?.en.get(r.system));
+  const re = /^\/(.+)\/([a-z]*)$/.exec(r.kw || '');
+  if (!re) return at(r.kw);
+  try { const m = new RegExp(re[1], re[2].includes('i') ? re[2] : re[2] + 'i').exec(msg); return m?.[0] ? [m.index, m[0].length] : null; } catch { return null; }
 }
 const TR_VIA = { youdao: ' · 有道翻译', google: ' · 谷歌翻译', llm: ' · 大模型' };
 const trChanText = () => (T.trAll ? '全部频道' : T.trChannels.length + ' 个频道');
@@ -561,16 +572,18 @@ function findSystems(msg) {
 
 // ---------- 我的位置 ----------
 async function pollLocation() {
-  let id = null, from = '';
+  let id = null, from = '', esiFail = false;
   const token = ctx.tokenInfo();
   if (T.useLoc && token && ctx.hasScope(LOC_SCOPE)) {
-    try { id = (await ctx.esiAuthFetch('/characters/' + token.character_id + '/location/')).solar_system_id; from = 'esi'; } catch { /* 用其他方式 */ }
+    try { id = (await ctx.esiAuthFetch('/characters/' + token.character_id + '/location/')).solar_system_id; from = 'esi'; } catch { esiFail = true; }
   }
   if (!id && T.useLoc && S.localHere.size) {
     const last = [...S.localHere.values()].sort((a, b) => b.at - a.at)[0];
     id = last.id; from = 'local';
   }
   if (!id && T.home) { await ensureNames().catch(() => {}); id = systemId(T.home); from = id ? 'manual' : ''; }
+  // ESI 一时没取到（网络、令牌刷新）又没有别的来源：先按上次的位置算，不当成「位置未知」把所有敌情都报出来
+  if (!id && esiFail && S.here) return;
   if (id !== S.here) {
     S.here = id;
     S.graph = S.graph || await ctx.gateGraph();

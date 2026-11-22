@@ -27,13 +27,14 @@
 
 import { SERVER, IS_TQ, serverKey, esiUrl, kbSiteLink } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v13';
+import * as AP from './alert-push.js?v=v14';
 import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
 
 let ctx;   // esc, formatISK, showToast, eveImage, esiAuthFetch, tokenInfo, hasScope, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, openKill, openEsiModal
 const KEY = serverKey('eve-kill-alert-v1');
-const DEFAULTS = { on: false, jumps: 3, mail: true, web: false, sound: false, notify: false, pods: true, watchOn: false, watch: [],   // watch: [{ id, name, kind: character|corporation|alliance, mode: both|kills|losses }]
+// 默认什么都不开：总开关、游戏内邮件都关着；打开总开关后默认用网页特效提醒（和本地日志、本地红名的网页卡片一样）
+const DEFAULTS = { on: false, jumps: 3, mail: false, web: true, sound: false, notify: false, pods: true, watchOn: false, watch: [],   // watch: [{ id, name, kind: character|corporation|alliance, mode: both|kills|losses }]
   minValue: 0, classes: [], maxAge: 0, regionOn: false, regions: [], offlineMute: true,   // classes: 舰船类别（市场分组 ID），空 = 全部；regions: [{ id, name }]
   attSt: ['friend', 'neutral', 'hostile'],   // 攻击者声望：攻击者里有这些归类（standings.js）的才提醒，三个都选 = 不过滤
   bigOn: false, bigMin: 1e9, bigWeb: true, bigSound: false, bigNotify: false };   // 高价值播报：门槛、弹卡片、提示音、系统通知
@@ -100,13 +101,35 @@ function floatData() {
     items: st.history.map(floatItem)
   };
 }
+// 两行：第一行星系、舰船、价值（place / near / ship / val），第二行谁被几个人打掉（sub）；zh / en 整句给旧版悬浮窗页面用
 const floatItem = (a) => ({
   key: a.id + ':' + a.at, id: a.id, open: Boolean(a.id && !a.hourly), at: a.at, muted: Boolean(a.muted),
   badge: a.big ? '高价值' : a.watch ? (a.watch.role === 'loss' ? '损失' : '击杀') : a.region ? '星域' : a.jumps === 0 ? '本星系' : a.jumps + ' 跳',
   tone: a.big ? 'warn' : a.watch ? (a.watch.role === 'loss' ? 'loss' : 'kill') : !a.region && a.jumps <= 1 ? 'near' : '',
   zh: describe(a), en: describeEn(a), value: a.value ? ctx.formatISK(a.value) + ' ISK' : '',
+  place: a.systemName || '', ship: a.hourly ? '' : a.ship || '', val: a.value ? ctx.formatISK(a.value) : '',
+  // 标签不是跳数的（高价值、人物关注、星域）跳数写在星系后面
+  near: (a.big || a.watch || a.region) && a.jumps != null ? { zh: a.jumps === 0 ? '本星系' : a.jumps + ' 跳', en: jumpsEn(a.jumps) } : null,
+  sub: floatSub(a),
   who: a.victim || '', hist: a.hist ? floatHist(a.hist, a.id) : null
 });
+// 第二行：「Zu Tsang 被 12 人击杀（敌对 3）」；人物关注写关注的是谁；星域监控、高价值播报前面带星域
+function floatSub(a) {
+  if (a.hourly) return { zh: `过去一小时新增击杀 ${a.added} 次`, en: `${a.added} new kills in the past hour` };
+  const n = a.attackers || 0;
+  const by = { zh: n ? `被 ${n} 人击杀` : '被击杀', en: n ? `killed by ${n}` : 'killed' };
+  let zh, en;
+  if (a.watch?.role === 'loss') { zh = `关注的 ${whoOf(a.watch)} ${by.zh}`; en = `${a.watch.name} ${by.en}`; }
+  else if (a.watch) { zh = `关注的 ${whoOf(a.watch)} 参与击杀${a.victim ? '，受害者 ' + a.victim : ''}`; en = `${a.watch.name} on the kill${a.victim ? ', victim ' + a.victim : ''}`; }
+  else { zh = (a.victim ? a.victim + ' ' : '') + by.zh; en = (a.victim ? a.victim + ' ' : '') + by.en; }
+  const st = a.st ? ST.GROUPS.filter(([g]) => a.st[g]) : [];
+  if (st.length) {
+    zh += `（${st.map(([g, l]) => l + ' ' + a.st[g]).join('、')}）`;
+    en += ` (${st.map(([g]) => a.st[g] + ' ' + ST_EN[g]).join(', ')})`;
+  }
+  const area = a.region || a.regionName || '';
+  return area ? { zh: area + ' · ' + zh, en: area + ' · ' + en } : { zh, en };
+}
 // 历史里去掉这条预警本身
 const floatHist = (h, self) => ({
   kills: h.kills, losses: h.losses, destroyed: ctx.formatISK(h.destroyed), lost: ctx.formatISK(h.lost), solo: h.solo,

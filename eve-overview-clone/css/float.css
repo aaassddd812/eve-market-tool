@@ -102,12 +102,20 @@ html.fl-passing .fl-btn[data-fl-pass] { background: var(--accent); color: #fff; 
 .fl-list li.fl-price.new { animation-name: fl-flash-ok; }
 @keyframes fl-flash-ok { 0%, 40% { background: rgba(34, 197, 94, 0.32); } 100% { background: var(--ok-soft); } }
 
-/* 受害者近 30 天历史（最新一条默认展开） */
+/* 击杀预警 / 日志预警：每条两行——第一行要点（星系、舰船、价值 / 消息原文）和时间，第二行谁被几个人打掉 / 报告人和频道 */
+.fl-kill.fl-two { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 1px; }
+.fl-two .fl-main { grid-column: 2; }
+.fl-two .fl-badge { min-width: 48px; text-align: center; }
+.fl-two .fl-when { grid-column: 3; grid-row: 1; justify-self: end; white-space: nowrap; margin-top: 2px; }
+.fl-two .fl-sub { grid-column: 2; min-width: 0; overflow-wrap: anywhere; color: var(--text-2); }
+.fl-isk { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* 受害者近 30 天历史：点「近 30 天」展开 */
+.fl-hist-btn { grid-column: 3; grid-row: 2; justify-self: end; align-self: start; display: inline-flex; align-items: center; gap: 2px; padding: 0 4px; border: 0; border-radius: 4px; background: none; color: var(--muted); font: inherit; font-size: 11px; line-height: 16px; white-space: nowrap; cursor: pointer; }
+.fl-hist-btn:hover { background: var(--card-hover); color: var(--text-2); }
+.fl-hist-btn svg { transition: transform 0.15s; }
+.fl-hist-btn[aria-expanded="true"] svg { transform: rotate(180deg); }
 .fl-hist { grid-column: 1 / -1; margin-top: 6px; border-radius: 6px; background: var(--card); }
-.fl-hist-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; width: 100%; padding: 5px 26px 5px 8px; position: relative; border: 0; background: none; color: var(--text-2); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; border-radius: 6px; }
-.fl-hist-sum:hover { background: var(--card-hover); }
-.fl-hist-sum svg { position: absolute; right: 6px; top: 7px; width: 13px; height: 13px; color: var(--muted); transition: transform 0.15s; }
-.fl-hist.open .fl-hist-sum svg { transform: rotate(180deg); }
+.fl-hist-stat { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding: 5px 8px; color: var(--text-2); font-size: 11.5px; }
 .fl-hist-who { font-weight: 600; color: var(--text); }
 .fl-k { color: var(--ok); font-weight: 600; }
 .fl-l { color: var(--danger); font-weight: 600; }

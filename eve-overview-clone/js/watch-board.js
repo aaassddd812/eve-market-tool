@@ -9,7 +9,7 @@
 //   服务器托管（alert-host.js）：监控中的提醒交给服务器（hostedAlerts），网页关掉也查；每条提醒的 key 含启用时间，重新启用算新的一条。
 import { loadHubs } from './hub-compare.js?v=v15';
 import * as FF from './float-feed.js?v=v11';
-import * as AP from './alert-push.js?v=v13';
+import * as AP from './alert-push.js?v=v14';
 import { L } from './alert-mail.js?v=v8';
 
 let ctx = null;   // isGlobal, fetchESI, fetchESIPaged, regions, esc, formatISK, formatPrice, formatNumber, showToast, typeName, iconUrl, openItem, favorites, toggleFavorite, store, isActive, openPush

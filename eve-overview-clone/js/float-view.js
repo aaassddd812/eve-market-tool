@@ -26,8 +26,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const invoke = (cmd, args) => ipc?.invoke(cmd, args).catch(() => {});
 
 const data = {};
-const expanded = new Set();   // 手动展开了历史的预警（最新一条默认展开）
-const collapsed = new Set();  // 手动收起的
+const expanded = new Set();   // 展开了受害者历史的预警
 let lastTop = {};      // kind -> 上次显示的第一条（新来的闪一下）
 let gotAny = false;
 // 别的悬浮窗（桌面版每种内容可以各开一个窗口）正在显示什么：窗口 id -> { kind, at }
@@ -97,37 +96,45 @@ function render() {
   else renderPrice(d, body, foot);
 }
 
+// 每条两行：第一行星系、舰船、价值，第二行谁被几个人打掉；受害者近 30 天战绩点「近 30 天」才展开
+const L = (x) => (x ? (EN ? x.en : x.zh) : '');
 function renderKill(d, body, foot) {
   const items = d.items || [];
   const top = items[0]?.key;
   const fresh = top && lastTop.kill !== undefined && top !== lastTop.kill;
   lastTop.kill = top;
   body.innerHTML = (d.on ? '' : '<p class="fl-warn">击杀预警没有开启：在主窗口右上角铃铛里开启</p>')
-    + (items.length ? `<ul class="fl-list">${items.map((a, i) => `<li class="fl-kill${a.tone ? ' ' + a.tone : ''}${i === 0 && fresh ? ' new' : ''}${a.open ? ' click' : ''}"${a.open ? ` data-fl-kill="${a.id}"` : ''}>
-        <span class="fl-badge">${esc(a.badge)}</span>
-        <span class="fl-main"${EN ? ' translate="no"' : ''}>${esc(EN ? a.en : a.zh)}</span>
-        <small>${a.value ? `<b translate="no">${esc(a.value)}</b> · ` : ''}${a.muted ? '<span>离线未提醒</span> · ' : ''}<span>${ago(a.at)}</span></small>
-        ${histHtml(a, i === 0)}</li>`).join('')}</ul>`
+    + (items.length ? `<ul class="fl-list">${items.map((a, i) => killRow(a, i === 0 && fresh)).join('')}</ul>`
       : '<p class="fl-empty">还没有预警</p>');
   foot.textContent = d.on ? d.status || '' : '';
 }
+function killRow(a, isNew) {
+  const open = Boolean(a.hist) && expanded.has(a.key);
+  // 旧版主页面推来的只有整句（zh / en）
+  const head = a.sub ? `<b translate="no">${esc(a.place)}</b>${a.near ? `<span translate="no">${esc(EN ? ` (${a.near.en})` : `（${a.near.zh}）`)}</span>` : ''}${a.ship ? ` · <span translate="no">${esc(a.ship)}</span>` : ''}${a.val ? ` · <b class="fl-isk" translate="no">${esc(a.val)}</b>` : ''}`
+    : `<span translate="no">${esc(EN ? a.en : a.zh)}</span>`;
+  const sub = [a.sub ? `<span translate="no">${esc(L(a.sub))}</span>` : a.value ? `<b translate="no">${esc(a.value)}</b>` : '', a.muted ? '<span>离线未提醒</span>' : ''].filter(Boolean).join(' · ');
+  return `<li class="fl-kill fl-two${a.tone ? ' ' + a.tone : ''}${isNew ? ' new' : ''}${a.open ? ' click' : ''}"${a.open ? ` data-fl-kill="${a.id}"` : ''}>
+    <span class="fl-badge">${esc(a.badge)}</span>
+    <span class="fl-main">${head}</span>
+    <small class="fl-when">${ago(a.at)}</small>
+    ${sub ? `<small class="fl-sub">${sub}</small>` : ''}
+    ${a.hist ? `<button type="button" class="fl-hist-btn" data-fl-exp="${esc(a.key)}" aria-expanded="${open}" title="受害者近 30 天的击杀与损失"><span>近 30 天</span><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>` : ''}
+    ${open ? histHtml(a) : ''}</li>`;
+}
 
-// 受害者近 30 天历史：统计一行 + 最近 5 条击杀 / 损失（点击在主窗口打开）
-function histHtml(a, first) {
+// 受害者近 30 天历史（展开后）：击杀 / 损失统计、常开的船、最近 5 条击杀 / 损失（点击看详情）
+function histHtml(a) {
   const h = a.hist;
-  if (!h) return '';
-  const open = expanded.has(a.key) || (first && !collapsed.has(a.key));
-  const sum = `<span class="fl-hist-who" translate="no">${esc(a.who)}</span> <span>近 30 天</span>
+  const sum = `<div class="fl-hist-stat"><span class="fl-hist-who" translate="no">${esc(a.who)}</span>
     <span class="fl-k"><span>击杀</span> ${h.kills}</span><small translate="no">${esc(h.destroyed)}</small>
-    <span class="fl-l"><span>损失</span> ${h.losses}</span><small translate="no">${esc(h.lost)}</small>`;
+    <span class="fl-l"><span>损失</span> ${h.losses}</span><small translate="no">${esc(h.lost)}</small></div>`;
   const ships = h.ships.length ? `<div class="fl-hist-ships"><span>常开</span> ${h.ships.map(([n, c]) => `<span class="fl-chip"><span translate="no">${esc(n)}</span> ×${c}</span>`).join('')}</div>` : '';
   const rows = h.recent.length ? `<ul class="fl-hist-list">${h.recent.map((r) => `<li${r.id ? ` class="click" data-fl-kill="${r.id}"` : ''}>
       <span class="fl-tag ${r.loss ? 'l' : 'k'}">${r.loss ? '损失' : '击杀'}</span>
       <span class="fl-hist-main"><span translate="no">${esc(r.ship)}</span>${r.other ? `<small> · <span>${r.loss ? '击杀者' : '受害者'}</span> <span translate="no">${esc(r.other)}</span></small>` : ''}</span>
       <small class="fl-hist-meta"><span translate="no">${esc(r.system)}</span>${r.value ? ` · <b translate="no">${esc(r.value)}</b>` : ''} · <span>${ago(r.at)}</span></small></li>`).join('')}</ul>` : '<p class="fl-hist-none">近期没有其他记录</p>';
-  return `<div class="fl-hist${open ? ' open' : ''}">
-    <button type="button" class="fl-hist-sum" data-fl-exp="${esc(a.key)}" aria-expanded="${open}">${sum}<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button>
-    ${open ? ships + rows : ''}</div>`;
+  return `<div class="fl-hist open">${sum}${ships}${rows}</div>`;
 }
 
 // 本地名单：红 / 橙在前；每人一行所属与近 30 天击杀记录，新进本地的闪一下（点击在主窗口打开人物页）
@@ -167,12 +174,21 @@ function renderIntel(d, body, foot) {
   const badge = (r) => (r.type !== 'intel' ? `<span>${r.type === 'kw' ? '关键词' : '日志'}</span>` : r.clear ? '<span>平安</span>' : r.jumps == null ? '<span>敌情</span>' : r.jumps === 0 ? '<span>本星系</span>' : `${r.jumps} <span>跳</span>`);
   const tone = (r) => (r.type === 'intel' ? (r.clear ? ' kill' : r.jumps != null && r.jumps <= 1 ? ' near' : r.alert ? ' warn' : '') : ' warn');
   body.innerHTML = (d.locked ? '<p class="fl-warn">国服桌面版不读取本地日志</p>' : d.idle ? '<p class="fl-warn">本地日志还没开始读取：在主窗口右上角铃铛「本地日志」里点「开始读取」</p>' : d.on ? '' : '<p class="fl-warn">本地日志监听没有开启：在主窗口右上角铃铛「本地日志」里开启</p>')
-    + (items.length ? `<ul class="fl-list">${items.map((r, i) => `<li class="fl-kill${tone(r)}${i === 0 && fresh ? ' new' : ''}${r.system ? ' click' : ''}"${r.system ? ` data-fl-sys="${r.system}"` : ''}>
+    + (items.length ? `<ul class="fl-list">${items.map((r, i) => `<li class="fl-kill fl-two${tone(r)}${i === 0 && fresh ? ' new' : ''}${r.system ? ' click' : ''}"${r.system ? ` data-fl-sys="${r.system}"` : ''}>
         <span class="fl-badge">${badge(r)}</span>
-        <span class="fl-main">${r.system ? `<b translate="no">${esc(r.name)}</b> ` : r.kw ? `<b translate="no">${esc(r.kw)}</b> ` : ''}${r.who ? `<span translate="no">${esc(r.who)}</span>${EN ? ': ' : '：'}` : ''}<span translate="no">${esc(r.msg)}</span></span>
-        <small><span translate="no">${esc(r.channel)}</span> · <span>${ago(r.at)}</span></small></li>`).join('')}</ul>`
+        <span class="fl-main" translate="no">${msgHtml(r)}</span>
+        <small class="fl-when">${ago(r.at)}</small>
+        <small class="fl-sub">${r.who ? `<span translate="no">${esc(r.who)}</span> · ` : ''}<span translate="no">${esc(r.channel)}</span></small></li>`).join('')}</ul>`
       : '<p class="fl-empty">还没有消息</p>');
-  foot.textContent = d.status || '';
+  // 只列预警范围内的敌情（主窗口「最近消息」里有全部）
+  foot.innerHTML = [d.status ? `<span>${esc(d.status)}</span>` : '', d.on && d.range != null ? `<span>只显示 ${d.range} 跳内的敌情</span>` : ''].filter(Boolean).join(' · ');
+}
+// 消息原文，星系名 / 关键词在原文里加粗（mark = [开始, 长度]）；原文里找不到（例如按编号前缀认出的星系）就加粗写在前面
+function msgHtml(r) {
+  const m = r.mark;
+  if (m && m[0] >= 0 && m[1] > 0 && m[0] + m[1] <= r.msg.length) return `${esc(r.msg.slice(0, m[0]))}<b>${esc(r.msg.slice(m[0], m[0] + m[1]))}</b>${esc(r.msg.slice(m[0] + m[1]))}`;
+  const lead = r.system ? r.name : r.kw;
+  return `${lead ? `<b>${esc(lead)}</b> ` : ''}${esc(r.msg)}`;
 }
 
 // 频道翻译：译文在上、原文在下
@@ -363,8 +379,7 @@ document.addEventListener('click', (e) => {
   const exp = e.target.closest('[data-fl-exp]');
   if (exp) {
     const k = exp.dataset.flExp;
-    const open = exp.getAttribute('aria-expanded') === 'true';
-    if (open) { expanded.delete(k); collapsed.add(k); } else { collapsed.delete(k); expanded.add(k); }
+    if (expanded.has(k)) expanded.delete(k); else expanded.add(k);
     render();
     return;
   }

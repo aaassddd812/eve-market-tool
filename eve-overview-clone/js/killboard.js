@@ -331,7 +331,7 @@ export async function killDetail(id, valSrc = '') {
   if (valSrc) app.valuation.set(valSrc);
   const { kill } = await loadServiceKill(id);
   const [val] = await Promise.all([killValuation(kill), prepareKills([kill], { attackers: 'all' })]);
-  return { title: typeName(kill.victim.ship_type_id) + ' · 击杀详情', html: renderKill(kill, val, servicePriceNote()) };
+  return { title: typeName(kill.victim.ship_type_id) + ' · 击杀详情', html: renderKillFloat(kill, val, servicePriceNote(), valSrc ? 'fit' : 'attackers') };
 }
 async function loadServiceKill(id) {
   const res = await fetch('/api/kb/kill/' + id + (IS_TQ ? '' : '?server=' + SERVER.id));
@@ -563,23 +563,78 @@ function itemRows(items, val, depth = 0) {
   }).join('');
 }
 
-function renderKill(k, val, priceNote, focus = null) {
-  const isFocus = (a) => Boolean(focus?.id && a[focus.kind + '_id'] === focus.id);
-  const v = k.victim;
-  const z = k.zkb;
-  const sys = systemLabel(k.solar_system_id);
-  const station = z.locationID && app.officialName(z.locationID);
-
-  // 装配分组
+// 装配分组
+function fitGroups(v, val) {
   const groups = new Map(SLOT_GROUPS.map(([key, label]) => [key, { label, items: [] }]));
   for (const it of v.items || []) groups.get(slotGroup(it.flag)).items.push(it);
-  const fit = [...groups.values()].filter((g) => g.items.length).map((g) =>
+  return [...groups.values()].filter((g) => g.items.length).map((g) =>
     `<section class="kb-fit-group"><h5>${g.label}<span>${g.items.length}</span></h5>${itemRows(g.items, val)}</section>`).join('')
     || '<p class="text-muted">没有物品</p>';
+}
 
-  // 攻击者
+// 悬浮窗里的击杀详情（窄窗口）：头部压成几行，先看攻击者——哪些军团 / 联盟、开什么船、每个人的伤害；装配与物品放第二个标签。
+// tab：先显示哪个标签（换估值来源是在装配标签里换的，重新生成后还停在装配）
+function renderKillFloat(k, val, priceNote, tab = 'attackers') {
+  const v = k.victim, z = k.zkb, sys = systemLabel(k.solar_system_id);
+  const n = k.attackers.length;
+  const count = (key) => {
+    const m = new Map();
+    for (const a of k.attackers) { const x = key(a); if (x) m.set(x, (m.get(x) || 0) + 1); }
+    return [...m].sort((a, b) => b[1] - a[1]);
+  };
+  const orgs = count((a) => (a.alliance_id ? 'alliance:' + a.alliance_id : a.corporation_id ? 'corporation:' + a.corporation_id : a.faction_id ? 'faction:' + a.faction_id : ''));
+  const ships = count((a) => a.ship_type_id || 0);
+  const more = (list, max) => (list.length > max ? `<span class="kbf-more">+${list.length - max}</span>` : '');
+  const orgChip = ([key, c]) => {
+    const [kind, id] = key.split(':');
+    const logo = `<img src="${img(`${kind === 'alliance' ? 'alliances' : 'corporations'}/${id}/logo`, 32)}" alt="" width="16" height="16" loading="lazy">`;
+    return `<span class="kbf-chip">${logo}${kind === 'faction' ? app.esc(partyName(Number(id))) : partyLink(kind, Number(id))}<b>×${c}</b></span>`;
+  };
+  const shipChip = ([t, c]) => `<span class="kbf-chip"><img src="${img(`types/${t}/icon`, 32)}" alt="" width="18" height="18" loading="lazy"><span translate="no">${app.esc(typeName(t))}</span><b>×${c}</b></span>`;
+  const sec = Math.floor(Date.parse(k.killmail_time) / 1000);
+  const link = SERVER.kb ? `<a class="btn btn-ghost btn-sm" href="https://zkillboard.com/kill/${k.killmail_id}/" target="_blank" rel="noopener">在 zKillboard 查看 ↗</a>`
+    : SERVER.kbSite ? `<a class="btn btn-ghost btn-sm" href="${kbSiteLink('kill', k.killmail_id)}" target="_blank" rel="noopener">在${app.esc(SERVER.kbSite.name)}查看 ↗</a>` : '';
+  const on = (t) => (t === tab ? ' class="active"' : '');
+  return `<div class="kbf">
+    <div class="kbf-head">
+      <img class="kbf-ship" src="${img(`types/${v.ship_type_id}/icon`, 64)}" alt="" width="44" height="44">
+      <div class="kbf-who">
+        <b>${stOf(v)}${v.character_id ? partyLink('character', v.character_id) : partyLink('corporation', v.corporation_id)}</b>
+        <small>${v.character_id && v.corporation_id ? partyLink('corporation', v.corporation_id) : ''}${v.alliance_id ? `${v.character_id ? ' · ' : ''}${partyLink('alliance', v.alliance_id)}` : ''}</small>
+      </div>
+      <div class="kbf-val"><b>${app.formatISK(z.totalValue)}</b><small>ISK</small></div>
+    </div>
+    <div class="kbf-facts">
+      <span>${app.esc(sys.name)} <b style="color:${sys.color}">${sys.secText}</b>${sys.region ? ' · ' + app.esc(sys.region) : ''}</span>
+      <span>${timeAgo(k.killmail_time)}${Number.isFinite(sec) ? ` · ${fullIn(sec, 'cn')} <small class="kb-tz">UTC+8</small>` : ''}</span>
+      ${killTags(z) ? `<span class="kb-tags">${killTags(z)}</span>` : ''}
+    </div>
+    <div class="kbf-sum">
+      <div class="kbf-row"><em>攻击者 ${n}</em>${orgs.slice(0, 4).map(orgChip).join('')}${more(orgs, 4)}</div>
+      ${ships.length ? `<div class="kbf-row"><em>舰船</em>${ships.slice(0, 5).map(shipChip).join('')}${more(ships, 5)}</div>` : ''}
+    </div>
+    <div class="segmented kb-tabs">
+      <button data-kill-tab="attackers"${on('attackers')}>攻击者（${n}）</button>
+      <button data-kill-tab="fit"${on('fit')}>装配与物品</button>
+    </div>
+    <div class="kb-pane" data-pane="attackers"${tab === 'attackers' ? '' : ' hidden'}>${attackerRows(k)}</div>
+    <div class="kb-pane" data-pane="fit"${tab === 'fit' ? '' : ' hidden'}>
+      <div class="kbf-values">
+        <div class="kb-split"><span class="kb-dropped">掉落 ${app.formatISK(z.droppedValue)}</span><span class="kb-destroyed">摧毁 ${app.formatISK(z.destroyedValue)}</span></div>
+        <div class="kb-hubval">${app.valuation.select('data-val-src', val.region)}
+          <span class="kb-hubval-row"><span>最低卖价 <b>${app.formatISK(val.sell)}</b></span><span>最高收价 <b>${app.formatISK(val.buy)}</b></span></span></div>
+        ${z.valueLabel ? `<span class="kb-value-note">${app.esc(z.valueLabel)}</span>` : ''}
+      </div>
+      <div class="kb-fit-list"><div class="kb-fit-cols"><span>最低卖价</span><span>最高收价</span></div>${fitGroups(v, val)}<p class="valuation-note" title="${app.esc(priceNote || (SERVER.kb ? '总价值为 zKillboard 估值' : '总价值按 ESI 全服均价估算'))}">按${app.esc(val.region.hub.name)}估值</p></div>
+      <div class="kbf-actions">${link}${app.openKillFit ? '<button class="btn btn-primary btn-sm" data-kill-fit title="在模拟装配中打开这艘船与击杀时的装配">去装配页查看</button>' : ''}</div>
+    </div>
+  </div>`;
+}
+
+// 攻击者列表（最后一击在前，其余按伤害）
+function attackerRows(k, isFocus = () => false) {
   const total = k.attackers.reduce((s, a) => s + (a.damage_done || 0), 0) || 1;
-  const attackers = [...k.attackers].sort((a, b) => (b.final_blow - a.final_blow) || (b.damage_done - a.damage_done)).map((a) => {
+  return [...k.attackers].sort((a, b) => (b.final_blow - a.final_blow) || (b.damage_done - a.damage_done)).map((a) => {
     const avatar = a.character_id ? img(`characters/${a.character_id}/portrait`, 64)
       : a.corporation_id ? img(`corporations/${a.corporation_id}/logo`, 64)
         : a.faction_id ? img(`corporations/${a.faction_id}/logo`, 64) : img(`types/${a.ship_type_id}/icon`, 64);
@@ -601,6 +656,17 @@ function renderKill(k, val, priceNote, focus = null) {
         <div class="kb-attacker-dmg"><b>${app.formatNumber(a.damage_done)}</b><small>${pct.toFixed(1)}%</small></div>
       </div>`;
   }).join('');
+}
+
+function renderKill(k, val, priceNote, focus = null) {
+  const isFocus = (a) => Boolean(focus?.id && a[focus.kind + '_id'] === focus.id);
+  const v = k.victim;
+  const z = k.zkb;
+  const sys = systemLabel(k.solar_system_id);
+  const station = z.locationID && app.officialName(z.locationID);
+
+  const fit = fitGroups(v, val);
+  const attackers = attackerRows(k, isFocus);
 
   return `
     <div class="kb-head">

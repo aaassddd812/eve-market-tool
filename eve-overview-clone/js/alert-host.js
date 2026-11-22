@@ -26,7 +26,7 @@ const SRC_ZH = Object.fromEntries(SRC.map(([k, l]) => [k, l]));
 
 let deps;   // esc, showToast, render, channels, lang；modern-app.js 给的 authLink, authFinish, killSettings, sosSettings, battleSettings, priceAlerts, shipTypes
 let H = null;   // 已托管：{ char, name, secret, src, scopes }
-const S = { pick: new Set(['kill', 'sos', 'order']), agree: false, step: false, busy: '', status: null, error: '', synced: '' };
+const S = { pick: new Set(), agree: false, step: false, busy: '', status: null, error: '', synced: '' };
 try { H = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch { /* 忽略 */ }
 if (H) S.pick = new Set(H.src);
 

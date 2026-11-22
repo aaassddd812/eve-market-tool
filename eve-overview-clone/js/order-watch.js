@@ -16,7 +16,7 @@
 //   改单以价格变化为准（游戏里改单必须改价）。
 
 import * as TF from './trade-fees.js?v=v7';
-import * as AP from './alert-push.js?v=v13';
+import * as AP from './alert-push.js?v=v14';
 import { L } from './alert-mail.js?v=v8';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, showToast, copyText, addToCart, fetchESI, fetchESIPaged, esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, typeName, locationName, resolveTypeNames, selectItem, store, serverKey, isActive, openPush
