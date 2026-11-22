@@ -9,7 +9,7 @@
 // 「消息推送」（alert-push.js）：企业微信、邮箱、Server酱、PushPlus、钉钉、飞书、Bark。
 
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v14';
+import * as AP from './alert-push.js?v=v15';
 import { skText } from './skeleton.js?v=v18';
 
 let deps = null;   // { loadKill, loadIntel, loadLocal, loadOv, loadSos, esc, showToast, host（服务器托管用，见 alert-host.js）}

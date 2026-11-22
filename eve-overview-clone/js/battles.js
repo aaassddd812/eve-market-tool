@@ -1,11 +1,11 @@
 // ===== 会战监测 =====
 // 每 6 秒（与星图实时击杀同频）向击杀记录服务查询疑似会战（60 分钟内同一星系被击毁 ≥ 20 艘舰船，不含太空舱、NPC 击杀与 10M ISK 以下的击杀；20 分钟没有新击杀即视为结束），
-// 按规模分为小型 / 中型 / 大型三档；每场会战只弹出一次提醒（记录在浏览器本地，刷新页面也不会再弹），5 秒后自动消失。
+// 按规模分为小型 / 中型 / 大型三档；弹窗提醒默认关，打开后每场会战只弹出一次提醒（记录在浏览器本地，刷新页面也不会再弹），5 秒后自动消失。
 // 击杀记录页与星图通过 onBattles() 订阅。未部署击杀记录服务（404）时自动停用。国服按 server= 查各自的击杀库。
 // 提醒规模（min）：只提醒这一档及以上的会战（弹窗和推送都按它）；没到这一档的不记为已提醒，打大了再提醒。
 // 企业微信 / 邮箱（alert-push.js 的「会战」，默认不推）：新会战推一行文字；有渠道要推时后台标签页也接着查。
 import { SERVER, IS_TQ } from './server.js?v=s4';
-import * as AP from './alert-push.js?v=v14';
+import * as AP from './alert-push.js?v=v15';
 import { L } from './alert-mail.js?v=v8';
 
 let app;
@@ -19,7 +19,7 @@ export const BATTLE_TIERS = [
   { key: 'medium', name: '中型会战', min: 50, rank: 2 },
   { key: 'small', name: '小型会战', min: BATTLE_MIN, rank: 1 }
 ];
-const DEFAULTS = { on: true, min: 'small' };
+const DEFAULTS = { on: false, min: 'small' };   // 弹窗提醒默认关，用户自己打开
 const TIER_EN = { large: 'Large battle', medium: 'Medium battle', small: 'Small battle' };
 const SEEN_KEY = 'eve-battle-alerted';   // 已提醒过的会战：星系 -> 首次提醒时间
 const SEEN_TTL = 6 * 3600e3;             // 6 小时内同一星系不再提醒（会战结束后过一段时间重新开打才算新会战）
@@ -62,7 +62,7 @@ export function setBattleSettings(patch) {
 export function initBattles(context) {
   app = context;
   const saved = app.store.getJSON(KEY, {}) || {};
-  B.settings = { on: saved.on !== false, min: BATTLE_TIERS.some((t) => t.key === saved.min) ? saved.min : 'small' };   // 旧版本保存的时间窗口 / 阈值不再使用
+  B.settings = { on: saved.on === true, min: BATTLE_TIERS.some((t) => t.key === saved.min) ? saved.min : 'small' };   // 旧版本保存的时间窗口 / 阈值不再使用
   loadSeen();
   document.addEventListener('visibilitychange', () => { if (!document.hidden) poll(); });
   poll();

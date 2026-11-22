@@ -13,7 +13,7 @@
 // 国服（晨曦、曙光）的桌面版不能用本地红名（LOCKED）：不截游戏画面、不列 EVE 窗口，「开始」按钮和各开关变灰不能点；设置照旧保存，切回宁静服还按原来的来。宁静服和网页版不变。
 // 总览预警（ov-watch.js）自己截画面，不受影响。
 
-import * as AP from './alert-push.js?v=v14';
+import * as AP from './alert-push.js?v=v15';
 import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
 import { SERVER, IS_TQ } from './server.js?v=s4';

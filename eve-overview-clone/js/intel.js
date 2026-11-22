@@ -21,7 +21,7 @@
 // 国服（晨曦、曙光）的桌面版不读取本地日志（LOCKED）：不自动找文件夹、不恢复监听，文件夹按钮和总开关变灰不能点；设置照旧保存，切回宁静服还按原来的来。宁静服和网页版不变。
 
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v14';
+import * as AP from './alert-push.js?v=v15';
 import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
 import { IS_TQ } from './server.js?v=s4';

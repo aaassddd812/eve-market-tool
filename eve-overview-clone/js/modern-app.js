@@ -4,9 +4,9 @@ import * as TF from './trade-fees.js?v=v7';
 import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
 import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v45';
 import * as SM from './struct-markets.js?v=v8';
-import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v22';
-import * as AH from './alert-host.js?v=v7';
-import * as AP from './alert-push.js?v=v14';
+import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v23';
+import * as AH from './alert-host.js?v=v8';
+import * as AP from './alert-push.js?v=v15';
 import * as BN from './back-nav.js?v=v1';
 import { initMobileNav, syncMobileNav } from './mobile-nav.js?v=v7';
 import { initMobileProfile, profileEntered } from './mobile-profile.js?v=v1';
@@ -1368,7 +1368,7 @@ let kbPageModule = null;
 // ===== 会战监测：全站提醒，击杀记录页与星图订阅 =====
 let battlesPromise = null;
 function initBattleWatch() {
-  battlesPromise = import('./battles.js?v=v20r23').then((m) => {
+  battlesPromise = import('./battles.js?v=v20r24').then((m) => {
     m.initBattles({ store, loadKillboard, esc, formatISK, officialName, openMapSystem, openKbSystem });
     return m;
   }).catch((error) => { console.error('会战监测加载失败:', error); return null; });
@@ -2271,7 +2271,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v27').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v28').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),
@@ -6098,7 +6098,7 @@ function loadMoreModule() {
 // 个人中心 · 我的订单（改单小助手 + 订单变化报告）：打开订单页或开了后台监控时加载
 let orderWatchLoading = null;
 function loadOrderWatch() {
-  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v25').then((m) => {
+  if (!orderWatchLoading) orderWatchLoading = import('./order-watch.js?v=v26').then((m) => {
     m.initOrderWatch({
       esc, formatISK, formatPrice, formatNumber, showToast, copyText, addToCart, fetchESI, fetchESIPaged, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -7126,7 +7126,7 @@ function syncAlertBtn() {
 // ===== 本地日志 · 敌情预警（intel.js）：默认关闭；开启过的话页面打开时加载并尝试恢复监听 =====
 let intelModule = null;
 function loadIntel() {
-  if (!intelModule) intelModule = import('./intel.js?v=v33').then(async (m) => {
+  if (!intelModule) intelModule = import('./intel.js?v=v34').then(async (m) => {
     await m.initIntel({
       esc, showToast, gateGraph, bfsJumps, esiAuthFetch, esiUrl, openMapSystem,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -7149,7 +7149,7 @@ function initIntelButton() {
 const KILL_ALERT_KEY = serverKey('eve-kill-alert-v1');
 let killAlertModule = null;
 function loadKillAlert() {
-  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v46').then((m) => {
+  if (!killAlertModule) killAlertModule = import('./kill-alert.js?v=v47').then((m) => {
     m.initKillAlert({
       esc, formatISK, showToast, esiAuthFetch, gateGraph, bfsJumps, resolveTypeNames, resolveNames, officialName, eveImage,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -7202,7 +7202,7 @@ function shipClassOf(typeId) {
 // ===== 本地红名（local-watch.js）：共享游戏画面看本地频道，出现红名报警；点到标签页或打开悬浮窗时才加载 =====
 let localModule = null;
 function loadLocal() {
-  if (!localModule) localModule = import('./local-watch.js?v=v32').then((m) => {
+  if (!localModule) localModule = import('./local-watch.js?v=v33').then((m) => {
     m.initLocalWatch({
       esc, showToast, resolveNames, resolveTypeNames,
       selfNames: () => readEsiAccounts().map((a) => a.character_name).filter(Boolean)
@@ -7218,7 +7218,7 @@ function loadLocal() {
 // ===== 总览预警（ov-watch.js）：看总览的类型一列，出现设定的东西就报警；点到标签页时才加载 =====
 let ovModule = null;
 function loadOv() {
-  if (!ovModule) ovModule = import('./ov-watch.js?v=11').then((m) => {
+  if (!ovModule) ovModule = import('./ov-watch.js?v=12').then((m) => {
     m.initOvWatch({ esc, showToast });
     const sync = () => { alertState.ov = m.status(); syncAlertBtn(); };
     m.onChange(sync);
@@ -7232,7 +7232,7 @@ function loadOv() {
 const SOS_WATCH_KEY = serverKey('eve-sos-watch-v1');
 let sosModule = null;
 function loadSosWatch() {
-  if (!sosModule) sosModule = import('./sos-watch.js?v=v11').then((m) => {
+  if (!sosModule) sosModule = import('./sos-watch.js?v=v12').then((m) => {
     m.initSosWatch({
       esc, formatISK, showToast, resolveNames, esiAuthFetch,
       tokenInfo: () => state.esiToken || readEsiToken(),
@@ -7300,7 +7300,7 @@ let charAlertsLoading = null;
 function initCharAlerts() {
   const check = () => {
     if (charAlertsLoading || !['skill', 'job', 'pi', 'sold', 'contract'].some((s) => AP.wants(s))) return;
-    charAlertsLoading = import('./char-alerts.js?v=v6').then((m) => m.initCharAlerts({
+    charAlertsLoading = import('./char-alerts.js?v=v7').then((m) => m.initCharAlerts({
       esiAuthFetch, ensureEsiToken, fetchESI, typeName, resolveTypeNames, store, serverKey, showToast, iskFull: isIskFull,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       hasScope: (scope) => hasScope(state.esiToken || readEsiToken(), scope),

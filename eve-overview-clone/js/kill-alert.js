@@ -27,7 +27,7 @@
 
 import { SERVER, IS_TQ, serverKey, esiUrl, kbSiteLink } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v8';
-import * as AP from './alert-push.js?v=v14';
+import * as AP from './alert-push.js?v=v15';
 import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
 
