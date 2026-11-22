@@ -678,6 +678,64 @@ function restoreScroll(list) {
   }
 }
 
+// ===== 改东西后不弹回顶部（全站统一）=====
+// 很多页面改一个设置就整块重画：先换成「读取中…」/ 骨架占位，页面一下变矮，浏览器把滚动位置压到顶，读完画回来人已经在顶上了。
+// 统一处理：在页面主滚动区里点按钮、改输入后，这块区域里一有改动，先在内容末尾临时垫一块空白（::after，高度 = 改之前的
+// 可滚动高度，见 modern-style.css「改东西后不弹回顶部」；不用 padding：会把弹性布局里的滚动区本身撑高）再量高度，
+// 滚动位置就不会被压；内容画回来够高了马上撤掉（同一帧里撤，看不出来）。内容确实变短了（筛选后结果少了）、
+// 0.3 秒内没有占位在读取，也撤掉，按正常回到能到的位置。换了页面（# 后的路径变了）或这块区域被隐藏时立刻撤掉；最长 8 秒。
+// 只垫高度、不设滚动位置，页面代码主动滚到哪（翻页滚到表格顶等）照常生效。
+const KEEP_SCROLLERS = '.kb-scroll, .main-content, .fit-scroll, .profile-scroll';
+const KEEP_LOADING = '.pi-loading, .sk, .spinner, .loading-block, .kb-br-loading, [aria-busy="true"]';
+const KEEP_CLICKABLE = 'button, a, input, select, textarea, label, summary, [role="button"], [role="tab"], [tabindex]';
+let keepG = null;
+const hashPath = () => location.hash.split('?')[0];
+function keepRelease() {
+  const g = keepG;
+  if (!g) return;
+  keepG = null;
+  g.mo.disconnect();
+  clearTimeout(g.idle);
+  clearTimeout(g.max);
+  if (g.padOn) g.sc.style.removeProperty('--keep-pad');
+}
+// 0.3 秒没动静：还在读取（有占位）就接着等，否则撤掉
+function keepIdle(g) {
+  clearTimeout(g.idle);
+  g.idle = setTimeout(() => { if (keepG === g) { if (g.sc.querySelector(KEEP_LOADING)) keepIdle(g); else keepRelease(); } }, 300);
+}
+function keepOnMutate() {
+  const g = keepG;
+  if (!g) return;
+  if (!g.sc.isConnected || hashPath() !== g.hash) { keepRelease(); return; }
+  // 先垫再量：量布局会触发重排，没垫就会在这一下被压到顶
+  if (!g.padOn) { g.sc.style.setProperty('--keep-pad', `${g.floor}px`); g.padOn = true; }
+  if (!g.sc.getClientRects().length) { keepRelease(); return; }
+  if (g.sc.scrollHeight - g.floor >= g.top + g.sc.clientHeight) { g.sc.style.removeProperty('--keep-pad'); g.padOn = false; }
+  keepIdle(g);
+}
+function keepStart(e) {
+  const t = e.target;
+  if (!(t instanceof Element)) return;
+  const sc = t.closest(KEEP_SCROLLERS);
+  if (!sc || sc.scrollTop < 40) return;
+  // 点的是按钮、链接、输入框或带 data-* 的可点元素才算「改东西」
+  if (e.type === 'click' && !t.closest(KEEP_CLICKABLE)) {
+    let el = t;
+    while (el && el !== sc && !Object.keys(el.dataset || {}).length) el = el.parentElement;
+    if (!el || el === sc) return;
+  }
+  keepRelease();
+  const g = { sc, top: sc.scrollTop, floor: sc.scrollHeight, hash: hashPath(), padOn: false };
+  g.mo = new MutationObserver(keepOnMutate);
+  g.mo.observe(sc, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'class'] });
+  g.max = setTimeout(keepRelease, 8000);
+  keepG = g;
+  keepIdle(g);
+}
+document.addEventListener('click', keepStart, true);
+document.addEventListener('change', keepStart, true);
+
 // 页面内部改地址（选中星系、切换标签等）时随时记下当前视图的 hash；后退 / 前进到别的视图时也不会丢
 function noteViewHash() {
   if (ownsHash(state.currentView, location.hash)) viewHashes[state.currentView] = location.hash;

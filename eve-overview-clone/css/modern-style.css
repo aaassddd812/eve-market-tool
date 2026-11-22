@@ -2407,6 +2407,8 @@ td.loc {
 
 /* ===== 击杀记录页 ===== */
 .kb-scroll { flex: 1; min-width: 0; overflow-y: auto; }
+/* 改东西后不弹回顶部（modern-app.js keepStart）：页面整块重画期间在主滚动区内容末尾临时垫一块空白，滚动位置不被压到顶 */
+:is(.kb-scroll, .main-content, .fit-scroll, .profile-scroll)[style*="--keep-pad"]::after { content: ''; display: block; height: var(--keep-pad); pointer-events: none; }
 .kb-wrap { max-width: 1480px; margin: 0 auto; padding: var(--spacing-lg) var(--spacing-xl) var(--spacing-xl); }
 .kb-topbar { display: flex; align-items: center; gap: 16px; margin-bottom: var(--spacing-md); flex-wrap: wrap; }
 .kb-search { position: relative; flex: 1; max-width: 560px; height: 40px; background: var(--bg-secondary); }
