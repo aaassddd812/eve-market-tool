@@ -239,13 +239,67 @@ function showToast(message, kindOrDuration = 'info', duration = 2600, detail = '
   }, duration);
 }
 
+// ---------- 复制 ----------
+// 安卓应用和不少手机 App 的内置浏览器（系统 WebView）不给网页写剪贴板的权限，navigator.clipboard.writeText 直接被拒。
+// 启动时给 writeText 包一层：被拒或没有这个接口时退回旧的 execCommand('copy')（点击后几秒内仍算用户操作，WebView 里能用），
+// 各页面直接调 navigator.clipboard.writeText 的地方都跟着生效
+function legacyCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.readOnly = true;
+  ta.setAttribute('aria-hidden', 'true');
+  ta.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;padding:0;border:0;opacity:0;font-size:16px;';
+  const active = document.activeElement;
+  document.body.append(ta);
+  ta.select();
+  ta.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch { ok = false; }
+  ta.remove();
+  if (active && active !== document.body && typeof active.focus === 'function') active.focus({ preventScroll: true });
+  return ok;
+}
+(function patchClipboard() {
+  const fallback = (text) => (legacyCopy(String(text)) ? Promise.resolve() : Promise.reject(new DOMException('copy blocked', 'NotAllowedError')));
+  try {
+    const cb = navigator.clipboard;
+    if (!cb) { Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: fallback } }); return; }
+    const native = typeof cb.writeText === 'function' ? cb.writeText.bind(cb) : null;
+    cb.writeText = native ? (text) => native(text).catch(() => fallback(text)) : fallback;
+  } catch { /* 改不了就保持原样 */ }
+})();
+
 async function copyText(text, label = '已复制') {
   try {
     await navigator.clipboard.writeText(String(text));
     showToast(label + '：' + text, 'success', 1800);
   } catch {
-    showToast('浏览器阻止了复制，请手动复制', 'error');
+    manualCopy(String(text));
   }
+}
+// 两种方式都复制不了：弹框把内容选中，让用户自己长按复制（电脑上 Ctrl+C）
+function manualCopy(text) {
+  let modal = $('copyModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.className = 'modal';
+    modal.id = 'copyModal';
+    modal.setAttribute('role', 'dialog');
+    modal.setAttribute('aria-modal', 'true');
+    modal.innerHTML = `<div class="modal-backdrop" data-copy-close></div><div class="modal-content copy-modal">
+      <div class="modal-header"><h3>手动复制</h3><button class="modal-close" data-copy-close aria-label="关闭"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div>
+      <div class="modal-body"><p class="copy-modal-tip">浏览器不允许网页直接复制，请长按下面的内容选择「复制」（电脑上按 Ctrl+C）</p>
+      <textarea id="copyModalText" class="cr-input" rows="4" readonly spellcheck="false"></textarea></div></div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => { if (e.target.closest('[data-copy-close]')) modal.hidden = true; });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.hidden) { e.stopImmediatePropagation(); modal.hidden = true; } }, true);
+    // 复制完（Ctrl+C / 长按菜单）自动关掉
+    modal.addEventListener('copy', () => setTimeout(() => { modal.hidden = true; showToast('已复制', 'success', 1500); }, 0));
+  }
+  const ta = $('copyModalText');
+  ta.value = text;
+  modal.hidden = false;
+  requestAnimationFrame(() => { ta.focus({ preventScroll: true }); ta.select(); });
 }
 
 // ESI 偶尔返回 502 / 503 / 504（官方服务器一时超时或繁忙），隔一会儿重试两次；仍失败给出可读的说明

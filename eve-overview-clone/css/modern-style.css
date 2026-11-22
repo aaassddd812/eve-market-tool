@@ -5173,6 +5173,10 @@ button.cr-row:focus-visible { outline: 2px solid var(--accent-primary); outline-
 /* 突变装备属性 */
 .dyn-btn { cursor: pointer; color: var(--accent-primary); background: var(--accent-soft); border: none; font-size: 0.6875rem; }
 .dyn-modal { max-width: 620px; }
+/* 手动复制（浏览器不许网页写剪贴板时） */
+.copy-modal { max-width: 520px; }
+.copy-modal-tip { margin: 0 0 10px; font-size: 0.8125rem; color: var(--text-secondary); line-height: 1.6; }
+#copyModalText { width: 100%; min-height: 96px; resize: vertical; font-family: inherit; word-break: break-all; }
 .dyn-meta { font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 10px; }
 
 /* ===== 深渊装备估价（MutaMarket）===== */
