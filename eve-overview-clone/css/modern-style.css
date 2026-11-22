@@ -6215,9 +6215,22 @@ td .sov-auto-tag { margin-left: 4px; }
 .ind-char-n .pi-input { width: 52px; }
 .ind-assign-sel { max-width: 220px; font-size: 0.75rem; }
 .ind-assign .hc-sub.warn { color: var(--warning); }
+/* 制造规划「蓝图」统计：小字另起一行，表格窄一些；手机上去掉图标，状态列不用横向滑动就能看到 */
+.ind-bp-table td .hc-sub { display: block; margin-left: 0; }
+@media (max-width: 768px) {
+  .ind-bp-table .pi-prod img { display: none; }
+  .ind-bp-table th, .ind-bp-table td { padding-left: 6px; padding-right: 6px; }
+}
 .ind-gantt.by-char .ind-gantt-row { grid-template-columns: 150px minmax(480px, 1fr); }
 .ind-gantt.by-char .ind-gantt-label { overflow: hidden; text-overflow: ellipsis; }
 .ind-gantt-bar.busy { background: repeating-linear-gradient(135deg, var(--bg-elevated) 0 6px, var(--bg-hover) 6px 12px); color: var(--text-muted); border-color: var(--border-primary); }
+/* 时间轴拖动微调：任务条可拖（触屏长按），拖动中浮起；能放的产线底色变亮；拖过 / 指定过产线的条右上角一个小点 */
+.ind-gantt-bar[data-bk] { cursor: grab; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+.ind-gantt-bar.is-drag { cursor: grabbing; z-index: 5; opacity: 0.9; box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45); }
+.ind-gantt-dragging, .ind-gantt-dragging * { cursor: grabbing !important; }
+.ind-gantt-row.is-drop .ind-gantt-track { background: color-mix(in srgb, var(--accent-primary) 22%, var(--bg-tertiary)); }
+.ind-gantt-bar.is-pin { padding-right: 12px; }
+.ind-gantt-bar.is-pin::after { content: ''; position: absolute; top: 4px; right: 4px; width: 5px; height: 5px; border-radius: 50%; background: #fff; opacity: 0.85; }
 .ind-pi-link { margin-left: 6px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--success) 40%, transparent); border-radius: 999px; background: transparent; color: var(--success); font-size: 0.6875rem; line-height: 16px; cursor: pointer; }
 .ind-pi-link:hover { background: color-mix(in srgb, var(--success) 12%, transparent); }
 

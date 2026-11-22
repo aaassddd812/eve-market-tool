@@ -21,7 +21,7 @@
 //          × 蓝图要求的专属技能（industry-data 的 skt：T2 要求的工程学 / 物理学、高级舰船建造研究等每级 1%）× 制造植入体（BX-801/802/804）
 //   发明成功率 = 基础 × (1 + 科学技能之和/30 + 加密技能/40) × 解码器倍数；发明安装费以产品 EIV 的 2% 为基数
 import { SERVER, HUB, HUB_NAME, serverKey } from './server.js?v=s4';
-import * as Plan from './ind-plan.js?v=v15';
+import * as Plan from './ind-plan.js?v=v17';
 import * as Chain from './ind-chain.js?v=5';
 import * as IS from './ind-structs.js?v=6';
 import { skPage } from './skeleton.js?v=v18';
@@ -603,7 +603,8 @@ export async function showIndustry(hash = location.hash, restored = false) {
     planReady = true;
     Chain.initChain({ ctx, BP, T, tName, matPrice, ICON, F, HUB: HUB_NAME, vol: (id) => D.vols?.[id], volReady: () => Boolean(D.vols) });
     IS.initStructs({ ctx, D, F, sysLabel, onChange: () => { renderSettings(); refresh(); } });
-    Plan.initPlan({ server: SERVER.id, BP_ICON, ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, facTaxOf, SCC, ICON, selectProduct, renderTab, sysSec, secMul, myBp, impPct });
+    Plan.initPlan({ server: SERVER.id, BP_ICON, ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, facTaxOf, SCC, ICON, selectProduct, renderTab, sysSec, secMul, myBp, impPct,
+      npcBp: (bpId) => (NPC.data ? NPC.data.bp[bpId] || null : undefined), loadNpc });
   }
   await Promise.all([ensureSkills(), IS.loadRigs().catch(() => {})]);
   const m = /^#ind(?:\/(calc|rank|where|mine|plan|npc))?(?:\/(\d+))?/.exec(hash || '');
@@ -1434,7 +1435,7 @@ function bpTable(rows, limit = 0) {
   const all = rows.slice().sort((a, b) => (b.ph ?? -Infinity) - (a.ph ?? -Infinity) || name(a.b.type_id).localeCompare(name(b.b.type_id), 'zh'));
   const list = limit ? all.slice(0, limit) : all;
   return `<div class="pi-table-wrap ind-rank-wrap"><table class="pi-table"><thead><tr><th>蓝图</th><th>类型</th><th class="num">ME / TE</th><th class="num">剩余流程</th><th class="num pi-hide-sm">单个成本</th><th class="num pi-hide-sm">每流程利润</th><th class="num">每小时利润</th><th></th></tr></thead><tbody>${list.map(({ b, pid, perUnit, profit, ph }) => `<tr${pid ? ` data-ind-pick="${pid}" data-me="${b.material_efficiency}" data-te="${b.time_efficiency}" title="按这张蓝图的 ME / TE 打开计算器"` : ''}>
-    <td><div class="pi-prod"><img src="${BP_ICON(b.type_id, 32, b.runs !== -1)}" alt="" width="24" height="24" loading="lazy"><span>${esc(name(b.type_id))}${b.quantity > 1 ? `<small>×${num(b.quantity)}</small>` : ''}</span></div></td>
+    <td><div class="pi-prod"><img src="${BP_ICON(b.type_id, 32, b.runs !== -1)}" alt="" width="24" height="24" loading="lazy"><span${window.I18N?.lang === 'en' && T(b.type_id)[1] ? ` translate="no">${esc(T(b.type_id)[1])}` : `>${esc(name(b.type_id))}`}${b.quantity > 1 ? `<small>×${num(b.quantity)}</small>` : ''}</span></div></td>
     <td>${b.runs === -1 ? '原图' : '拷贝'}</td><td class="num">${b.material_efficiency} / ${b.time_efficiency}</td>
     <td class="num">${b.runs === -1 ? '∞' : num(b.runs)}</td>
     <td class="num pi-hide-sm">${perUnit != null ? isk(perUnit) : '—'}</td>

@@ -9,20 +9,26 @@
 //   按制造 / 反应产线数排出的时间轴（「自动拆分」：多流程的任务——成品和自制组件都算——按空闲产线自动拆成几批同时造），购物清单可复制；「库存可造」按现有材料反推能造什么（工业清库）；
 // 「粘贴配装」：游戏装配窗口复制的 EFT 文本拆成舰船、装备、无人机 / 货舱物品，能造的按 件数 × 份数 ÷ 每流程产出（向上取整）加入规划，
 //   已在规划里的产品直接加流程；没有蓝图的（势力、官员装备等）列出来。
+// 产线时间轴可以拖动微调：任务条拖到同类的另一条产线、或前后挪动，记下指定的产线（P.assign，自动拆出的批按「任务键#批号」单独记）
+//   和想要的开工时间（P.prio，只用来排先后），重新排产时依赖关系照旧；双击任务条或「恢复自动安排」清掉。
+// 「蓝图」统计：规划里每张要用的蓝图（成品 / 组件 / 反应 / 拷贝用的原图 / 发明用的 T1 拷贝 / 发明出来的 T2 拷贝）要多少流程、
+//   按时间轴同时开几个任务（一张蓝图一次只能在一个任务里，同时开几个就要几张），和已绑定的各角色 + 军团蓝图（都读不到时用粘贴导入的）对比，
+//   标出没有的、不够的；NPC 有卖原图的给出价格并能跳到「NPC 蓝图」看在哪买。
 // 军团蓝图（esi-corporations.read_blueprints.v1，游戏里要董事职位）：/corporations/{id}/blueprints/，同样的蓝图（类型、ME、TE、流程、机库）合并计数；
 //   机库分部名称读 /corporations/{id}/divisions/（有军团管理权限时），缓存 5 分钟。「只看我有的蓝图」也算上军团蓝图。
 // 「我的工业」蓝图的成本与每小时利润、一键加入规划；利润排行的「技能够造」「我有蓝图」筛选。
 // 研究公式：第 n 级时间 = 蓝图基础研究时间 × 等级倍数[n] ÷ 105（倍数 105、250、595、1414、3360、8000、19000、45255、107700、256000），
 //   技能冶金学（ME）/ 研究（TE）/ 科学（拷贝）每级 −5%、高级工业理论每级 −3%，植入体 MY / RR / SC，工程复合体同制造的时间加成；
 //   费用按产品 EIV × 2% × 时间倍数 ×（研究 / 拷贝指数 × (1 − 建筑减免) + 设施税 + 4% SCC）估算。
-let X = null;   // industry.js 传入：ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, BP_ICON, selectProduct, renderTab, save, sysSec, secMul, myBp
+let X = null;   // industry.js 传入：ctx, D, F, C, BP, T, tName, invFor, job, invention, calc, matPrice, matFee, prodPrice, sellFee, loadJita, fmtTime, lvl, facilityFor, facTax, SCC, ICON, BP_ICON, selectProduct, renderTab, save, sysSec, secMul, myBp, npcBp（NPC 卖的原图 [价格, 军团]，没读完为 undefined）, loadNpc
 const PLAN_KEY = 'eve-industry-plan';
 const LEVEL_MUL = [0, 105, 250, 595, 1414, 3360, 8000, 19000, 45255, 107700, 256000];
 const SK = { science: 3402, research: 3403, metallurgy: 3409, advIndustry: 3388 };
-// assign：任务键 → 指定的产线（'c:人物 ID' = 这个人物任意空闲的线；'l:产线 ID' = 某条线）；charOff：不参与的人物；charMax：人物各类产线最多用几条
-const P = { items: [], build: [], slots: 10, rslots: 10, islots: 10, lanes: 'manual', auto: true, stock: 'none', stockLoc: 'all', running: true, copy: true, paste: '', tab: 'plan', assign: {}, charOff: [], charMax: {} };
+// assign：任务键（自动拆出的批为「任务键#批号」）→ 指定的产线（'c:人物 ID' = 这个人物任意空闲的线；'l:产线 ID' = 某条线）；
+// prio：拖动时放下的开工时间（秒，只用来排先后）；charOff：不参与的人物；charMax：人物各类产线最多用几条
+const P = { items: [], build: [], slots: 10, rslots: 10, islots: 10, lanes: 'manual', auto: true, stock: 'none', stockLoc: 'all', running: true, copy: true, paste: '', tab: 'plan', assign: {}, prio: {}, charOff: [], charMax: {} };
 const FOLD = {};   // 计算器里折叠卡片的展开状态（本次会话内）
-const S = { assets: null, assetsErr: null, assetsBusy: false, owned: null, ownedLoading: null, chars: null, charsLoading: null };   // chars：按人物分配产线时各角色的产线数与进行中的任务
+const S = { assets: null, assetsErr: null, assetsBusy: false, owned: null, ownedLoading: null, chars: null, charsLoading: null, bpStock: null, bpStockLoading: null };   // bpStock：「蓝图」统计用的我有的蓝图   // chars：按人物分配产线时各角色的产线数与进行中的任务
 
 export function initPlan(api) {
   X = api;
@@ -31,10 +37,10 @@ export function initPlan(api) {
   // 每个产品一个固定编号（任务键用，删掉前面的产品不会让指定的产线错位）
   let u = Math.max(0, ...P.items.map((it) => it.uid || 0));
   for (const it of P.items) if (!it.uid) it.uid = ++u;
-  P.assign ||= {}; P.charOff ||= []; P.charMax ||= {};
+  P.assign ||= {}; P.prio ||= {}; P.charOff ||= []; P.charMax ||= {};
 }
 const nextUid = () => Math.max(0, ...P.items.map((it) => it.uid || 0)) + 1;
-const savePlan = () => X.ctx.store.setJSON(PLAN_KEY, { items: P.items, build: P.build, slots: P.slots, rslots: P.rslots, islots: P.islots, lanes: P.lanes, auto: P.auto, stock: P.stock, stockLoc: P.stockLoc, running: P.running, copy: P.copy, paste: P.paste, tab: P.tab, assign: P.assign, charOff: P.charOff, charMax: P.charMax });
+const savePlan = () => X.ctx.store.setJSON(PLAN_KEY, { items: P.items, build: P.build, slots: P.slots, rslots: P.rslots, islots: P.islots, lanes: P.lanes, auto: P.auto, stock: P.stock, stockLoc: P.stockLoc, running: P.running, copy: P.copy, paste: P.paste, tab: P.tab, assign: P.assign, prio: P.prio, charOff: P.charOff, charMax: P.charMax });
 export const planCount = () => P.items.length;
 
 function newItem(pid, { runs = 1, me = null, te = null, invent = null, dec = 0 } = {}) {
@@ -500,21 +506,29 @@ function autoSplit(list, ls, barrier) {
     if (n === 1) { out.push(j); continue; }
     for (let k = 0; k < n; k++) {
       const runs = Math.floor(j.runs / n) + (k < j.runs % n ? 1 : 0);
-      out.push({ ...j, runs, secs: j.secs * runs / j.runs, cost: j.cost * runs / j.runs, extra: k ? 0 : j.extra, batch: k + 1, batches: n });
+      out.push({ ...j, bkey: `${j.key}#${k + 1}`, runs, secs: j.secs * runs / j.runs, cost: j.cost * runs / j.runs, extra: k ? 0 : j.extra, batch: k + 1, batches: n });
     }
   }
   return out;
 }
 
-// 时间轴：深层（先要造的组件）先排，每层等上一层全部完成；每个任务放到最早空出来的产线
+// 时间轴：深层（先要造的组件）先排，每层等上一层全部完成；每个任务放到最早空出来的产线。
+// 拖动过的任务（P.prio）：先照常排一遍，再按「拖到的开工时间 / 其他任务排出的开工时间」排先后重放一遍（开工仍取那条线最早空出来的时候）
+const bk = (j) => j.bkey || j.key;
 function schedule(jobs) {
+  const first = scheduleOnce(jobs, null);
+  if (!first.bars.some((b) => P.prio[bk(b)] != null)) return first;
+  return scheduleOnce(jobs, new Map(first.bars.map((b) => [bk(b), P.prio[bk(b)] ?? b.start])));
+}
+function scheduleOnce(jobs, order) {
   const defs = laneDefs();
   const lanes = { m: defs.m.map((l) => ({ ...l })), r: defs.r.map((l) => ({ ...l })), i: defs.i.map((l) => ({ ...l })) };
   const kindOf = (j) => (j.inv || j.copy ? 'i' : j.act === 'r' ? 'r' : 'm');
   const out = [];
   // 手动指定的产线（P.assign）：只在指定的人物 / 那条线上挑；指定的已经不存在（人物不参与、条数改少、换了模式）→ 照常自动排并标出来
+  const pinOf = (j) => P.assign[bk(j)] || P.assign[j.key];
   const cand = (j) => {
-    const a = P.assign[j.key], ls = lanes[kindOf(j)];
+    const a = pinOf(j), ls = lanes[kindOf(j)];
     if (!a) return null;
     const ok = ls.map((l, i) => i).filter((i) => (a.startsWith('l:') ? ls[i].id === a.slice(2) : String(ls[i].who) === a.slice(2)));
     return ok.length ? ok : [];
@@ -528,7 +542,7 @@ function schedule(jobs) {
     for (const i of pool) if (Math.max(ls[i].t, from) < Math.max(ls[k].t, from)) k = i;
     const start = Math.max(ls[k].t, from);
     ls[k].t = start + j.secs;
-    out.push({ ...j, kind, lane: k, laneId: ls[k].id, laneLabel: ls[k].label, start, end: start + j.secs, pinned: Boolean(c?.length), lost: Boolean(c && !c.length) });
+    out.push({ ...j, bkey: bk(j), kind, lane: k, laneId: ls[k].id, laneLabel: ls[k].label, start, end: start + j.secs, pinned: Boolean(c?.length), lost: Boolean(c && !c.length) });
     return start + j.secs;
   };
   // 自动拆分：指定到某条线的不拆；指定到某个人物的只按他的线拆；其余按全部空闲产线拆
@@ -538,7 +552,7 @@ function schedule(jobs) {
     for (const j of list) {
       const c = cand(j);
       if (!c?.length) free.push(j);
-      else if (P.assign[j.key].startsWith('l:')) res.push(j);
+      else if (pinOf(j).startsWith('l:')) res.push(j);
       else res.push(...autoSplit([j], c.map((i) => lanes[kind][i]), barrier));
     }
     return [...autoSplit(free, lanes[kind], barrier), ...res];
@@ -546,7 +560,10 @@ function schedule(jobs) {
   // 发明一开始就在科研产线上做（和组件同时），记下每个产品发明完成的时间
   // 先拷贝 T1 蓝图，拷完才发明
   const invEnd = new Map(), copyEnd = new Map();
-  const sci = (list) => (!lanes.i.length ? [] : split(list, 'i', 0)).sort((a, b) => b.secs - a.secs);
+  // 先后：有拖动过的按 order（同一时间时拖动过的在前），否则长的先排
+  const cmp = order ? (a, b) => (order.get(bk(a)) ?? Infinity) - (order.get(bk(b)) ?? Infinity) || (P.prio[bk(b)] != null) - (P.prio[bk(a)] != null) || b.secs - a.secs
+    : (a, b) => b.secs - a.secs;
+  const sci = (list) => (!lanes.i.length ? [] : split(list, 'i', 0)).sort(cmp);
   for (const j of sci(jobs.filter((j) => j.copy))) copyEnd.set(j.top, Math.max(copyEnd.get(j.top) || 0, place(j, 0)));
   for (const j of sci(jobs.filter((j) => j.inv))) invEnd.set(j.top, Math.max(invEnd.get(j.top) || 0, place(j, copyEnd.get(j.top) || 0)));
   const levels = [...new Set(jobs.filter((j) => !j.inv && !j.copy).map((j) => j.depth))].sort((a, b) => b - a);
@@ -555,7 +572,7 @@ function schedule(jobs) {
     let levelEnd = barrier;
     let list = jobs.filter((j) => !j.inv && !j.copy && j.depth === d);
     if (P.auto) list = ['m', 'r'].flatMap((kind) => split(list.filter((j) => kindOf(j) === kind), kind, barrier));
-    list.sort((a, b) => b.secs - a.secs);
+    list.sort(cmp);
     for (const j of list) levelEnd = Math.max(levelEnd, place(j, d === 0 ? Math.max(barrier, invEnd.get(j.top) || 0) : barrier));
     barrier = levelEnd;
   }
@@ -615,9 +632,39 @@ async function loadChars() {
   return S.chars;
 }
 
+// 「蓝图」统计用的我有的蓝图：已绑定的各角色（参与规划的；只有当前令牌时用它）+ 军团蓝图，角色蓝图都没读到时用粘贴导入的。
+// 按蓝图类型汇总原图张数、拷贝张数、拷贝剩余流程（ESI quantity > 0 是一叠没动过的原图）
+const BP_SCOPE = 'esi-characters.read_blueprints.v1';
+async function loadBpStock() {
+  const ctx = X.ctx;
+  const accounts = (ctx.esiAccountList?.() || []).filter((a) => charOn(a.id));
+  const list = [];
+  const src = { chars: 0, noScope: 0, fail: 0, corp: false, pasted: false };
+  const read = async (id, token) => {
+    if (!ctx.hasScope(token, BP_SCOPE)) { src.noScope += 1; return; }
+    try { list.push(...((await ctx.esiAuthFetchPaged(`/characters/${id}/blueprints/`, 20, id)) || [])); src.chars += 1; } catch { src.fail += 1; }
+  };
+  if (accounts.length) await Promise.all(accounts.map((a) => read(a.id, a)));
+  else if (ctx.hasEsiToken()) { const tk = ctx.readToken(); await read(tk.character_id, tk); }
+  const corp = await loadCorpBps();
+  if (corp?.list) { list.push(...corp.list); src.corp = true; }
+  const pasted = src.chars ? null : pastedBps();
+  if (pasted) { list.push(...pasted.list); src.pasted = true; }
+  const map = new Map();
+  for (const b of list) {
+    const n = b.quantity > 0 ? b.quantity : 1;
+    const h = map.get(b.type_id) || { bpo: 0, bpc: 0, runs: 0 };
+    if (b.runs === -1) h.bpo += n; else { h.bpc += n; h.runs += Math.max(0, b.runs || 0) * n; }
+    map.set(b.type_id, h);
+  }
+  S.bpStock = { map, src, ready: Boolean(src.chars || src.corp || src.pasted) };
+  return S.bpStock;
+}
+
 // ---------- 规划页 ----------
+const planTabs = () => `<div class="segmented ind-plan-tabs">${[['plan', '制造规划'], ['stock', '库存可造']].map(([k, l]) => `<button type="button" data-plan-tab="${k}" class="${P.tab === k ? 'active' : ''}">${l}</button>`).join('')}</div>`;
 export async function renderPlan(body) {
-  const tabs = `<div class="segmented ind-plan-tabs">${[['plan', '制造规划'], ['stock', '库存可造']].map(([k, l]) => `<button type="button" data-plan-tab="${k}" class="${P.tab === k ? 'active' : ''}">${l}</button>`).join('')}</div>`;
+  const tabs = planTabs();
   if (P.stock === 'esi' && !S.assets && !S.assetsErr && X.ctx.hasEsiToken()) {
     body.innerHTML = tabs + '<div class="pi-loading">读取角色资产…</div>';
     await loadAssets();
@@ -632,6 +679,12 @@ export async function renderPlan(body) {
   }
   // 自己的蓝图（组件按它的 ME / TE 算）：后台读，读完重画
   if (!S.owned && (X.ctx.hasEsiToken() || pastedBps()) && !S.ownedLoading) loadOwned().then(() => { if (X.F.tab === 'plan' && P.tab === 'plan') X.renderTab(); }).catch(() => {});
+  // 「蓝图」统计：各角色 + 军团蓝图、NPC 卖的原图，后台读，读完重画
+  if (P.items.length && !S.bpStock && !S.bpStockLoading && (X.ctx.hasEsiToken() || (X.ctx.esiAccountList?.() || []).length || pastedBps())) {
+    S.bpStockLoading = loadBpStock().catch(() => { S.bpStock = { map: new Map(), src: { chars: 0, noScope: 0, fail: 1 }, ready: false }; })
+      .finally(() => { S.bpStockLoading = null; if (X.F.tab === 'plan' && P.tab === 'plan') X.renderTab(); });
+  }
+  if (P.items.length && X.npcBp(0) === undefined && !S.npcWait) { S.npcWait = true; X.loadNpc().then(() => { if (X.F.tab === 'plan' && P.tab === 'plan') X.renderTab(); }); }
   if (P.lanes === 'chars' && !S.chars && P.items.length && (X.ctx.esiAccountList?.() || []).length) {
     body.innerHTML = tabs + '<div class="pi-loading">读取各角色技能与工业任务…</div>';
     if (!S.charsLoading) S.charsLoading = loadChars().finally(() => { S.charsLoading = null; });
@@ -715,8 +768,9 @@ function drawPlan(body, tabs) {
       ${buildChips ? `<div class="ind-plan-build"><span class="text-muted">组件（点击切换自制 / 购买）：</span><div>${buildChips}</div></div>` : ''}
     </div>
     ${inventHtml(r)}
+    ${bpHtml(r)}
     ${stockSourceHtml()}
-    <div class="pi-card"><div class="pi-card-head"><h3>产线时间轴</h3>${lanesHtml()}</div>
+    <div class="pi-card"><div class="pi-card-head"><h3>产线时间轴</h3>${lanesHtml()}${unpinHtml(r.schedule)}</div>
       ${charsHtml()}
       ${ganttHtml(r.schedule)}</div>
     <div class="pi-card"><div class="pi-card-head"><h3>产线启动清单</h3><span class="text-muted">按开工顺序</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-copy="jobs">复制清单</button></div>
@@ -724,13 +778,15 @@ function drawPlan(body, tabs) {
     <div class="pi-card"><div class="pi-card-head"><h3>购物清单</h3><span class="text-muted">${r.shop.filter((s) => s.toBuy).length} 种要买${piShop.length ? ` · 其中行星工业产品 ${piShop.length} 种共 ${isk(piShop.reduce((t, x) => t + x.toBuy * x.unit, 0))}` : ''}</span><span class="toolbar-spacer"></span><button type="button" class="btn btn-ghost btn-sm" data-plan-copy="shop" title="可粘贴到游戏多重购买">复制清单</button><button type="button" class="btn btn-ghost btn-sm" data-plan-cart title="要买的材料加入购物车">加入购物车</button></div>
       <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>材料</th><th class="num">需要</th>${deduct ? '<th class="num">库存抵扣</th>' : ''}<th class="num">要买</th><th class="num">费用</th>${shopFacs.size > 1 ? '<th class="pi-hide-sm">送到</th>' : ''}</tr></thead><tbody>${shopRows}</tbody></table></div>
       ${r.fromStock.size ? `<p class="pi-note">组件用库存${P.running && S.running?.size ? ' / 在造产出' : ''}抵掉：${[...r.fromStock].map(([id, q]) => `${esc(X.tName(id))} ×${num(q)}`).join('、')}</p>` : ''}</div>`;
+  S.body = body;
+  bindGantt(body);
 }
 
 // 任务安排在哪：自动；按人物时可指定人物（他任意空闲的线）或某条线；手动条数时可指定某条线
 function assignSel(j, lanes) {
   const { esc } = X.ctx;
   const ls = lanes[j.kind] || [];
-  const cur = P.assign[j.key] || '';
+  const k = bk(j), cur = P.assign[k] || P.assign[j.key] || '';
   const opt = (v, l) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
   const whos = [...new Set(ls.map((l) => l.who).filter((w) => w != null))];
   let html = opt('', '自动安排');
@@ -743,7 +799,7 @@ function assignSel(j, lanes) {
   } else html += ls.map((l) => opt('l:' + l.id, l.label)).join('');
   // 指定的已经不在了：仍显示出来，方便改回
   if (cur && !html.includes(`value="${esc(cur)}" selected`)) html += `<option value="${esc(cur)}" selected>（已不可用）</option>`;
-  return `<select class="pi-input ind-assign-sel" data-plan-assign="${esc(j.key)}" title="指定这个任务在哪个人物 / 哪条产线上造${j.batches > 1 ? '（同一任务拆出的各批一起）' : ''}">${html}</select>`;
+  return `<select class="pi-input ind-assign-sel" data-plan-assign="${esc(k)}" title="指定这个任务在哪个人物 / 哪条产线上造">${html}</select>`;
 }
 
 function lanesHtml() {
@@ -792,22 +848,225 @@ function inventHtml(r) {
     <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>产品</th><th class="num">需要拷贝</th><th class="num">已发明</th><th class="num">已成功</th><th class="num pi-hide-sm">成功率</th><th class="num">进度</th><th class="num">还要发明</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
+// ---------- 蓝图统计 ----------
+// 规划要用的蓝图按蓝图类型合并：runs 制造 / 反应流程，copyJobs / copies 拷贝任务数和要拷的份数（拷贝只能用原图），
+// invRuns 发明要用掉的 T1 拷贝流程（没排拷贝任务时要自己已有），t2 发明出来的 T2 拷贝；
+// par 按时间轴同时在做的任务数（一张蓝图一次只能在一个任务里，同时开几个就要几张）
+const maxOverlap = (spans) => {
+  const ev = spans.flatMap(([s, e]) => [[s, 1], [e, -1]]).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let c = 0, m = 0;
+  for (const [, d] of ev) { c += d; m = Math.max(m, c); }
+  return m;
+};
+function bpNeeds(r) {
+  const map = new Map();
+  const get = (bpId, pid) => {
+    if (!map.has(bpId)) map.set(bpId, { bpId, pid, uses: new Set(), forIds: new Set(), runs: 0, copyJobs: 0, copies: 0, invAll: 0, invRuns: 0, t2: null, spans: [] });
+    return map.get(bpId);
+  };
+  for (const { it, q } of r.on) {
+    if (!q.inv) continue;
+    const e = get(X.BP(it.pid)[0], it.pid);
+    const need = Math.ceil(q.runs / q.inv.runs);
+    e.uses.add('t2');
+    e.t2 ||= { need: 0, runs: 0, left: 0, per: q.inv.runs };
+    e.t2.need += need; e.t2.runs += q.runs; e.t2.left += Math.max(0, need - (it.invGot || 0));
+  }
+  for (const j of r.jobs) {
+    if (j.copy || j.inv) {
+      const e = get(j.bp, t1Prod(j.bp) || j.pid);
+      e.uses.add('inv');
+      e.forIds.add(j.pid);
+      if (j.copy) { e.copyJobs += 1; e.copies += j.runs; } else e.invAll += j.runs;
+      continue;
+    }
+    if (j.depth === 0 && r.items[j.top]?.q.inv) continue;   // T2 成品用发明出来的拷贝（上面算了）
+    const e = get(X.BP(j.pid)[0], j.pid);
+    e.uses.add(j.act === 'r' ? 'r' : j.depth > 0 ? 'comp' : 'prod');
+    e.runs += j.runs;
+  }
+  for (const b of r.schedule.bars) {
+    if (b.inv || (!b.copy && b.depth === 0 && r.items[b.top]?.q.inv)) continue;
+    const e = map.get(b.copy ? b.bp : X.BP(b.pid)[0]);
+    if (e) e.spans.push([b.start, b.end]);
+  }
+  for (const e of map.values()) {
+    if (!e.copyJobs) e.invRuns = e.invAll;   // 没排拷贝任务：发明用的拷贝要自己已经有
+    e.par = Math.max(e.runs || e.copyJobs ? 1 : 0, maxOverlap(e.spans));
+  }
+  return [...map.values()];
+}
+// 我有的够不够（h 为空 = 没读到我有的蓝图）；miss：none 完全没有、short 有但不够
+const BP_TIP = {
+  slots: '一张蓝图一次只能在一个任务里，同时开几个任务就要几张。可以用原图多拷几份，或者在「产线时间轴」关掉自动拆分',
+  orig: '拷贝只能用原图',
+  runs: '拷贝剩下的流程加起来不够'
+};
+function bpState(e, h) {
+  const num = X.ctx.formatNumber;
+  if (e.t2 && e.uses.size === 1) {
+    if (h && h.runs >= e.t2.runs) return { text: '已够', cls: 'up', tip: '已有的 T2 拷贝流程够了，可以在「发明进度」里填上已成功的张数，就不用再发明' };
+    return e.t2.left ? { text: `发明 ${num(e.t2.left)} 张`, cls: '', tip: '在「发明进度」里按 95% 把握算了要发明几次' } : { text: '已够', cls: 'up', tip: '已经发明够了' };
+  }
+  if (!h) return null;
+  if (!h.bpo && !h.bpc) return { text: '还没有', cls: 'down', miss: 'none' };
+  const short = [], tips = [];
+  if (e.copyJobs && !h.bpo) { short.push('缺原图'); tips.push(BP_TIP.orig); }
+  const copyNeed = (h.bpo ? 0 : e.runs) + e.invRuns;   // 要用拷贝出的流程：没有原图时的制造流程 + 发明用掉的
+  const runsShort = copyNeed > h.runs;
+  if (runsShort) { short.push(`拷贝还差 ${num(copyNeed - h.runs)} 流程`); tips.push(BP_TIP.runs); }
+  if (e.par > h.bpo + h.bpc && !(runsShort && !h.bpo)) { short.push(`还差 ${num(e.par - h.bpo - h.bpc)} 张蓝图`); tips.push(BP_TIP.slots); }
+  if (!short.length) return { text: '已够', cls: 'up' };
+  return { text: short.join(' · '), parts: short, cls: short[0] === '缺原图' ? 'down' : 'warn', miss: 'short', tip: tips.join(' · ') };
+}
+// 蓝图名：英文界面直接用英文名（T2 蓝图不在英文名称表里，按中文逐段翻会拼错），并标上不翻译
+const bpName = (id) => (window.I18N?.lang === 'en' && X.T(id)?.[1]) || X.tName(id);
+function bpHtml(r) {
+  const { esc, formatISK: isk, formatNumber: num } = X.ctx;
+  const list = bpNeeds(r);
+  if (!list.length) return '';
+  const st = S.bpStock, ready = Boolean(st?.ready), src = st?.src || {};
+  const rows = list.map((e) => {
+    const h = ready ? st.map.get(e.bpId) || { bpo: 0, bpc: 0, runs: 0 } : null;
+    return { e, h, s: bpState(e, h) };
+  });
+  const rank = (x) => (x.s?.miss === 'none' ? 0 : x.s?.miss === 'short' ? 1 : x.s?.cls === 'up' ? 3 : 2);
+  rows.sort((a, b) => rank(a) - rank(b) || bpName(a.e.bpId).localeCompare(bpName(b.e.bpId), 'zh'));
+  const none = rows.filter((x) => x.s?.miss === 'none'), short = rows.filter((x) => x.s?.miss === 'short');
+  S.lastBps = [...none, ...short];
+  const npcOf = (x) => (x.s?.miss === 'none' || x.s?.text.includes('缺原图') ? X.npcBp(x.e.bpId) || null : null);
+  const npc = rows.map(npcOf).filter(Boolean);
+  const USE = { prod: '成品', comp: '组件', r: '反应', inv: '发明用', t2: '发明得到' };
+  const dots = (list) => list.filter(Boolean).map((x) => `<span>${x}</span>`).join(' · ');   // 每段单独翻译（整行一起翻会被宽泛的句式误配）
+  const body = rows.map(({ e, h, s }) => {
+    const t2 = e.t2 && e.uses.size === 1;
+    const need = t2 ? `拷贝 ${num(e.t2.need)} 张<small class="hc-sub">每张 ${num(e.t2.per)} 流程</small>`
+      : [e.runs ? `${num(e.runs)} 流程${e.par > 1 ? `<small class="hc-sub">同时 ${num(e.par)} 个任务</small>` : ''}` : '',
+        e.copyJobs ? `原图${e.par > 1 && !e.runs ? ` ${num(e.par)} 张` : ''}<small class="hc-sub">拷 ${num(e.copies)} 份给发明</small>` : '',
+        e.invRuns ? `拷贝 ${num(e.invRuns)} 流程<small class="hc-sub">发明 ${num(e.invRuns)} 次</small>` : ''].filter(Boolean).join('<br>');
+    const have = !ready ? (S.bpStockLoading ? '…' : '—') : !h.bpo && !h.bpc ? '—'
+      : [h.bpo ? `原图 ×${num(h.bpo)}` : '', h.bpc ? `拷贝 ×${num(h.bpc)}<small class="hc-sub">共 ${num(h.runs)} 流程</small>` : ''].filter(Boolean).join('<br>');
+    const n = npcOf({ e, s });
+    return `<tr>
+      <td><div class="pi-prod"><img src="${X.BP_ICON(e.bpId, 32, t2)}" alt="" width="24" height="24" loading="lazy"><span translate="no">${esc(bpName(e.bpId))}</span></div></td>
+      <td class="pi-hide-sm">${Object.keys(USE).filter((u) => e.uses.has(u)).map((u) => USE[u] + (u === 'inv' ? `<small class="hc-sub">${[...e.forIds].map((id) => esc(X.tName(id))).join(' · ')}</small>` : '')).join('<br>')}</td>
+      <td class="num">${need}</td><td class="num">${have}</td>
+      <td class="${s?.cls || ''}"${s?.tip ? ` title="${esc(s.tip)}"` : ''}>${s ? (s.parts ? dots(s.parts) : s.text) : '—'}${n ? `<small class="hc-sub"><button type="button" class="link-btn" data-npc-bp="${e.bpId}" title="在「NPC 蓝图」里看哪些空间站有卖">NPC 卖 ${isk(n[0])}</button></small>` : s?.miss === 'none' && X.invFor(e.pid) ? '<small class="hc-sub">可以发明</small>' : ''}</td></tr>`;
+  }).join('');
+  const head = dots([`用到 ${num(list.length)} 种`, ...(ready ? (none.length || short.length ? [none.length ? `缺 ${num(none.length)} 种` : '', short.length ? `${num(short.length)} 种不够` : ''] : ['都有了']) : [S.bpStockLoading ? '读取蓝图…' : ''])]);
+  const who = src.chars ? (src.corp ? `按 ${num(src.chars)} 个角色和军团的蓝图算` : `按 ${num(src.chars)} 个角色的蓝图算`)
+    : src.pasted ? (src.corp ? '按粘贴的蓝图列表和军团的蓝图算' : '按粘贴的蓝图列表算') : src.corp ? '按军团的蓝图算' : '';
+  const warn = [src.noScope ? (X.server === 'infinity' ? '曙光服不支持蓝图权限' : `${num(src.noScope)} 个角色没授权读取蓝图`) : '', src.fail ? `${num(src.fail)} 个角色读取失败` : ''];
+  const notes = [
+    ready ? `<p class="pi-note">${dots([who, ...warn])}</p>`
+      : !S.bpStockLoading ? `<p class="pi-note">${dots([...warn, X.server === 'infinity' ? '在「我的工业」粘贴游戏里的蓝图列表，就能对比出缺几张' : '绑定 ESI 并授权读取蓝图，或者在「我的工业」粘贴游戏里的蓝图列表，就能对比出缺几张'])} <button type="button" class="link-btn" data-ind-tab="mine">去粘贴</button></p>` : '',
+    rows.some((x) => x.e.par > 1) ? `<p class="pi-note">${BP_TIP.slots}</p>` : '',
+    npc.length ? `<p class="pi-note">缺的原图 NPC 有卖 ${num(npc.length)} 种，各买一张共 ${isk(npc.reduce((t, x) => t + x[0], 0))}</p>` : ''
+  ].join('');
+  return `<div class="pi-card"><div class="pi-card-head"><h3>蓝图</h3><span class="text-muted">${head}</span><span class="toolbar-spacer"></span>${st && !S.bpStockLoading ? '<button type="button" class="btn btn-ghost btn-sm" data-plan-bpreload>重新读取</button>' : ''}${S.lastBps.length ? '<button type="button" class="btn btn-ghost btn-sm" data-plan-copy="bps" title="复制没有的和不够的蓝图">复制缺的</button>' : ''}</div>
+    <div class="pi-table-wrap"><table class="pi-table ind-bp-table"><thead><tr><th>蓝图</th><th class="pi-hide-sm">用途</th><th class="num">需要</th><th class="num">我有</th><th>状态</th></tr></thead><tbody>${body}</tbody></table></div>${notes}</div>`;
+}
+
+// 时间轴：用到的每类产线全部列出来（空的线也能拖进去）；任务条可以拖动（见 bindGantt）
 function ganttHtml(sch) {
   const { esc } = X.ctx;
   if (!sch.span) return '<p class="text-muted">没有任务</p>';
-  const lanes = new Map();
-  const laneOf = (b) => { const key = b.kind + b.lane; if (!lanes.has(key)) lanes.set(key, { kind: b.kind, lane: b.lane, label: b.laneLabel, bars: [], busy: 0 }); return lanes.get(key); };
-  for (const b of sch.bars) laneOf(b).bars.push(b);
-  for (const b of sch.busy) laneOf(b).busy = b.end;
-  const ORD = { i: 0, r: 1, m: 2 };
-  const list = [...lanes.values()].sort((a, b) => (a.kind === b.kind ? a.lane - b.lane : ORD[a.kind] - ORD[b.kind]));
+  const kinds = ['i', 'r', 'm'].filter((k) => sch.bars.some((b) => b.kind === k) || sch.busy.some((b) => b.kind === k));
   const ticks = 6;
   const axis = Array.from({ length: ticks + 1 }, (_, i) => `<span style="left:${(i / ticks) * 100}%">${X.fmtTime(sch.span * i / ticks)}</span>`).join('');
-  return `<div class="ind-gantt${sch.byChar ? ' by-char' : ''}">${list.map((l) => `<div class="ind-gantt-row"><span class="ind-gantt-label" title="${esc(l.label)}">${esc(l.label)}</span><div class="ind-gantt-track">
-      ${l.busy ? `<i class="ind-gantt-bar busy" style="left:0;width:${Math.max(0.6, (l.busy / sch.span) * 100)}%" title="已有任务 · ${X.fmtTime(l.busy)} 后空出">已有任务</i>` : ''}
-      ${l.bars.map((b) => `<i class="ind-gantt-bar ${b.copy ? 'cp' : b.inv ? 'inv' : 'd' + Math.min(b.depth, 3)}" style="left:${(b.start / sch.span) * 100}%;width:${Math.max(0.6, (b.secs / sch.span) * 100)}%" title="${b.copy ? '拷贝 ' + esc(X.tName(b.bp)) + ' ' : b.inv ? '发明 ' : ''}${esc(X.tName(b.pid))} ×${b.runs}${b.inv ? ' 次' : b.copy ? ' 份' : ''} · ${X.fmtTime(b.secs)}${b.fac ? ' · ' + esc(b.fac) : ''}">${b.copy ? '拷贝 · ' : b.inv ? '发明 · ' : ''}${esc(X.tName(b.pid))}</i>`).join('')}</div></div>`).join('')}
+  const bar = (b) => {
+    const k = bk(b), pin = Boolean(P.assign[k] || P.prio[k] != null);
+    // 每段先各自翻译再拼（整句交给自动翻译会被「{0} 小时{1}」这类宽泛句式误配）
+    const tip = [`${b.copy ? '拷贝 ' + X.tName(b.bp) + ' ' : b.inv ? '发明 ' : ''}${X.tName(b.pid)} ×${b.runs}${b.inv ? ' 次' : b.copy ? ' 份' : ''}`, X.fmtTime(b.secs), b.fac,
+      pin ? '拖动可换产线、调整先后，双击恢复自动' : '拖动可换产线、调整先后'].filter(Boolean).map((x) => esc(tr(x))).join(' · ');
+    return `<i class="ind-gantt-bar ${b.copy ? 'cp' : b.inv ? 'inv' : 'd' + Math.min(b.depth, 3)}${pin ? ' is-pin' : ''}" data-bk="${esc(k)}" style="left:${(b.start / sch.span) * 100}%;width:${Math.max(0.6, (b.secs / sch.span) * 100)}%" title="${tip}">${b.copy ? '拷贝 · ' : b.inv ? '发明 · ' : ''}${esc(X.tName(b.pid))}</i>`;
+  };
+  const rows = kinds.flatMap((kind) => sch.lanes[kind].map((l, i) => {
+    const busy = sch.busy.find((b) => b.kind === kind && b.lane === i)?.end || 0;
+    return `<div class="ind-gantt-row" data-lane="${esc(l.id)}" data-kind="${kind}"><span class="ind-gantt-label" title="${esc(l.label)}">${esc(l.label)}</span><div class="ind-gantt-track">
+      ${busy ? `<i class="ind-gantt-bar busy" style="left:0;width:${Math.max(0.6, (busy / sch.span) * 100)}%" title="已有任务 · ${X.fmtTime(busy)} 后空出">已有任务</i>` : ''}
+      ${sch.bars.filter((b) => b.kind === kind && b.lane === i).map(bar).join('')}</div></div>`;
+  }));
+  return `<div class="ind-gantt${sch.byChar ? ' by-char' : ''}" data-span="${sch.span}">${rows.join('')}
     <div class="ind-gantt-row"><span class="ind-gantt-label"></span><div class="ind-gantt-axis">${axis}</div></div></div>
-    <p class="pi-note">组件逐层先造${sch.bars.some((b) => b.inv) ? `，${sch.bars.some((b) => b.copy) ? '先拷 T1 蓝图再发明，' : ''}发明和组件同时在科研产线上做，T2 成品等发明完成才开工` : ''}${P.auto ? '，多流程的任务按空闲产线自动拆批' : ''}${sch.byChar ? '，已扣除进行中的任务' : ''}${sch.noLab ? '。没有角色能做科研，发明没排进时间轴' : ''}</p>`;
+    ${sch.noLab ? '<p class="pi-note warn">没有角色能做科研，发明没排进时间轴</p>' : ''}`;
+}
+// 拖动过 / 指定过产线的任务还在规划里时，给「恢复自动安排」
+function unpinHtml(sch) {
+  const on = sch.bars.some((b) => P.assign[bk(b)] || P.assign[b.key] || P.prio[bk(b)] != null);
+  return on ? '<button type="button" class="btn btn-ghost btn-sm" data-plan-unpin title="清掉拖动和指定的产线，全部按自动排">恢复自动安排</button>' : '';
+}
+
+// 时间轴拖动：鼠标按住拖（移动 4 像素以上才算拖），触屏长按 0.35 秒再拖（不然就是滚动页面）。
+// 只能放到同类产线（制造 / 反应 / 科研）；放下时记下产线和条的左端对应的开工时间，然后重画
+function bindGantt(body) {
+  if (body.__gantt) return;
+  body.__gantt = true;
+  let d = null;
+  const start = () => {
+    d.on = true;
+    d.bar.classList.add('is-drag');
+    body.classList.add('ind-gantt-dragging');
+    try { d.bar.setPointerCapture(d.id); } catch { /* 忽略 */ }
+  };
+  body.addEventListener('pointerdown', (e) => {
+    const bar = e.target.closest('.ind-gantt-bar[data-bk]');
+    if (!bar || e.button > 0 || d) return;
+    const track = bar.parentElement, row = bar.closest('.ind-gantt-row');
+    const br = bar.getBoundingClientRect(), tr = track.getBoundingClientRect();
+    d = { bar, track, row, kind: row.dataset.kind, id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, left: br.left - tr.left, width: br.width, on: false, target: null, touch: e.pointerType === 'touch', timer: 0 };
+    if (d.touch) d.timer = setTimeout(() => { if (d && !d.on) start(); }, 350);
+    else e.preventDefault();   // 鼠标拖动时不选中文字
+  });
+  body.addEventListener('pointermove', (e) => {
+    if (!d || e.pointerId !== d.id) return;
+    const dx = e.clientX - d.x0, dy = e.clientY - d.y0;
+    if (!d.on) {
+      if (d.touch) { if (Math.hypot(dx, dy) > 8) { clearTimeout(d.timer); d = null; } return; }   // 长按前就动了：是在滚动
+      if (Math.hypot(dx, dy) < 4) return;
+      start();
+    }
+    const rows = [...d.bar.closest('.ind-gantt').querySelectorAll('.ind-gantt-row[data-lane]')];
+    const hit = rows.find((r) => { const b = r.getBoundingClientRect(); return e.clientY >= b.top && e.clientY < b.bottom; });
+    const ok = hit && hit.dataset.kind === d.kind ? hit : null;
+    if (d.target !== ok) { d.target?.classList.remove('is-drop'); ok?.classList.add('is-drop'); d.target = ok; }
+    d.dx = Math.max(-d.left, Math.min(d.track.clientWidth - d.left - d.width, dx));
+    const y = (ok || d.row).getBoundingClientRect().top - d.row.getBoundingClientRect().top;
+    d.bar.style.transform = `translate(${d.dx}px, ${y}px)`;
+  });
+  const finish = (e, commit) => {
+    if (!d || e.pointerId !== d.id) return;
+    clearTimeout(d.timer);
+    const x = d;
+    d = null;
+    if (!x.on) return;
+    body.classList.remove('ind-gantt-dragging');
+    x.target?.classList.remove('is-drop');
+    if (!commit || !x.target) { x.bar.style.transform = ''; x.bar.classList.remove('is-drag'); return; }
+    const span = Number(x.bar.closest('.ind-gantt').dataset.span) || 0;
+    const k = x.bar.dataset.bk;
+    P.assign[k] = 'l:' + x.target.dataset.lane;
+    P.prio[k] = Math.max(0, (x.left + x.dx) / Math.max(1, x.track.clientWidth) * span);
+    savePlan();
+    redrawPlan();
+  };
+  body.addEventListener('pointerup', (e) => finish(e, true));
+  body.addEventListener('pointercancel', (e) => finish(e, false));
+  body.addEventListener('touchmove', (e) => { if (d?.on) e.preventDefault(); }, { passive: false });   // 拖动时不滚动页面
+  body.addEventListener('contextmenu', (e) => { if (d && e.target.closest('.ind-gantt-bar[data-bk]')) e.preventDefault(); });
+  body.addEventListener('dblclick', (e) => {
+    const bar = e.target.closest('.ind-gantt-bar[data-bk]');
+    const k = bar?.dataset.bk;
+    if (!k || (!P.assign[k] && P.prio[k] == null)) return;
+    delete P.assign[k];
+    delete P.prio[k];
+    savePlan();
+    redrawPlan();
+  });
+}
+// 只重画规划（不重读行情，页面不闪）
+function redrawPlan() {
+  if (S.body?.isConnected && X.F.tab === 'plan' && P.tab === 'plan') drawPlan(S.body, planTabs());
 }
 
 function stockSourceHtml() {
@@ -919,6 +1178,8 @@ export function onPlanEvent(e) {
     const ln = t.closest('[data-plan-lanes]');
     if (ln) { P.lanes = ln.dataset.planLanes; savePlan(); return 'plan'; }
     if (t.closest('[data-plan-chars]')) { S.chars = null; return 'plan'; }
+    if (t.closest('[data-plan-unpin]')) { P.assign = {}; P.prio = {}; savePlan(); return 'plan'; }
+    if (t.closest('[data-plan-bpreload]')) { S.bpStock = null; S.corpBps = null; return 'plan'; }
     const pi = t.closest('[data-plan-pi]');
     if (pi) { location.hash = '#pi/' + pi.dataset.planPi; return 'none'; }
     const bld = t.closest('[data-plan-build]');
@@ -929,7 +1190,9 @@ export function onPlanEvent(e) {
     }
     const copy = t.closest('[data-plan-copy]');
     if (copy && S.lastPlan) {
-      const text = copy.dataset.planCopy === 'shop'
+      const kind = copy.dataset.planCopy;
+      const text = kind === 'bps' ? (S.lastBps || []).map((x) => `${bpName(x.e.bpId)}\t${x.s.text.split(' · ').map(tr).join(' · ')}`).join('\n')
+        : kind === 'shop'
         ? S.lastPlan.shop.filter((s) => s.toBuy).map((s) => `${X.tName(s.id)}\t${s.toBuy}`).join('\n')
         : S.lastPlan.schedule.bars.slice().sort((a, b) => a.start - b.start).map((j) => `${j.inv || j.copy ? X.tName(j.bp) : X.tName(j.pid)}\t${j.runs} ${j.inv ? '次' : j.copy ? `份 × ${j.copyRuns} 流程` : '流程'}\t${j.copy ? '拷贝' : j.inv ? '发明' : j.act === 'r' ? '反应' : '制造'}\t${X.fmtTime(j.secs)}\t${j.laneLabel}\t${j.fac || ''}`).join('\n');
       navigator.clipboard.writeText(text).then(() => X.ctx.showToast('已复制', 'success')).catch(() => X.ctx.showToast('浏览器阻止了复制', 'error'));
@@ -949,11 +1212,17 @@ export function onPlanEvent(e) {
     if (n) { P[n.dataset.planNum] = Math.min(100, Math.max(1, Math.round(Number(t.value) || 1))); savePlan(); return 'plan'; }
     if (t.matches('[data-plan-paste]')) { P.paste = t.value; savePlan(); return 'plan'; }
     if (t.matches('[data-plan-loc]')) { P.stockLoc = t.value; savePlan(); return 'plan'; }
-    if (t.matches('[data-plan-assign]')) { if (t.value) P.assign[t.dataset.planAssign] = t.value; else delete P.assign[t.dataset.planAssign]; savePlan(); return 'plan'; }
+    if (t.matches('[data-plan-assign]')) {
+      const k = t.dataset.planAssign;
+      if (t.value) P.assign[k] = t.value;
+      else { delete P.assign[k]; delete P.prio[k]; delete P.assign[k.split('#')[0]]; }   // 自动安排：连同拖动的先后、整个任务的指定一起清掉
+      savePlan();
+      return 'plan';
+    }
     if (t.matches('[data-plan-charon]')) {
       const id = Number(t.dataset.planCharon);
       P.charOff = t.checked ? P.charOff.filter((x) => x !== id) : [...new Set([...P.charOff, id])];
-      S.running = null;   // 在造的任务要按参与的人物重读
+      S.running = null; S.bpStock = null;   // 在造的任务、蓝图统计要按参与的人物重读
       savePlan();
       return 'plan';
     }
@@ -1121,7 +1390,7 @@ export const pastedBps = () => {
 export function savePastedBps(list) {
   if (list?.length) X.ctx.store.setJSON(bpsKey(), { list, at: Date.now() });
   else X.ctx.store.remove(bpsKey());
-  S.owned = null; S.ownedBps = null; S.ownedLoading = null; S.ownedErr = null; S.mineLoaded = false;
+  S.owned = null; S.ownedBps = null; S.ownedLoading = null; S.ownedErr = null; S.mineLoaded = false; S.bpStock = null;
 }
 
 export const owned = (pid) => Boolean(S.owned?.has(pid));
