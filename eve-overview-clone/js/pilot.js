@@ -9,12 +9,12 @@
 //   Ctrl + D = 战术视图（距离网格、武器射程、竖线，默认打开）。
 // 起飞后先显示加载画面（游戏的转圈贴图 + 进度条），等舰船模型、星空、特效贴图、界面贴图都加载完才开始计时；
 // 特效用游戏的粒子 / 爆炸序列 / 光束贴图（sim-fx.js opt.tex）；鼠标指针用游戏的指针贴图（css .pl-stage）。
-import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v43';
+import { createBattle, GRID, AU as AU_M } from './sim-engine.js?v=v44';
 import { loadShipIndex } from './sim-ships.js?v=v20';
 import { warpShake } from './sim-warp.js?v=5';
-import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v11';
-import { bindUnit, pilotUnit } from './sim-unit.js?v=v10';
-import { buildMatch, stepMatch } from './match-sim.js?v=v11';
+import { makeRules, applyRackSnap, MATCH_CAPS, MATCH_BRACKETS, bracketOf, celOf, matchSky } from './pilot-rules.js?v=v12';
+import { bindUnit, pilotUnit } from './sim-unit.js?v=v11';
+import { buildMatch, stepMatch } from './match-sim.js?v=v12';
 import { MT, matchConnect, matchSend, fetchPresets, fetchPreset } from './pilot-match.js?v=v4';
 import { initTutor, tutListHtml, tutSpec, tutBegin, tutTick, tutEnd, tutStop } from './pilot-tutor.js?v=v20';
 import * as FL from './pilot-fleet.js?v=7';
@@ -2977,31 +2977,35 @@ function modCycle(i, t) {
   let p = 0, rld = false, rp = 0, qty, c0 = 0, cd = 0;
   if (gk >= 0) {
     const st = u.guns[gk], g = u.t.guns[gk];
-    rld = st.reloadUntil > t;
+    // 打出最后一发的这一轮走完（rldFrom）才开始装填，这一轮照常转圈
+    const last = st.rldFrom > t;
+    rld = st.reloadUntil > t && !last;
     if (rld) { rp = 1 - (st.reloadUntil - t) / g.reload; c0 = st.reloadUntil - g.reload; cd = g.reload; }
     else if (P.on.has(i) && t - st.last < g.cycle * 1.3 + DT) {
       // 引擎已经算到下一发（画面还没到）：画面上还是上一轮在走
-      const cyc = Math.max(0.1, st.next - st.last);
+      const cyc = Math.max(0.1, (st.rldFrom > st.last ? st.rldFrom : st.next) - st.last);
       const base = t >= st.last ? st.last : st.last - cyc;
       p = Math.max(0, Math.min(1, (t - base) / cyc));
       c0 = base; cd = cyc;
     }
-    qty = g.ammo < Infinity ? (rld ? '' : st.ammo) : '';
+    qty = g.ammo < Infinity ? (rld ? '' : last ? 0 : st.ammo) : '';
   } else {
     // 电容注入器、辅助维修、拦截泡发射器：有弹药数和装填
     const ik = (u.t.injectors || []).findIndex((x) => x.m === i), lk = ik < 0 ? (u.t.localReps || []).findIndex((x) => x.m === i && x.ammo < Infinity) : -1;
     const dk = ik < 0 && lk < 0 ? (u.t.dictors || []).findIndex((x) => x.m === i) : -1;
     const x = ik >= 0 ? u.t.injectors[ik] : lk >= 0 ? u.t.localReps[lk] : dk >= 0 ? u.t.dictors[dk] : null;
     const st = ik >= 0 ? u.inj[ik] : lk >= 0 ? u.lrep[lk] : dk >= 0 ? u.dict?.[dk] || { ammo: x.ammo, reloadUntil: 0, next: 0 } : null;
+    const last = Boolean(x && st.rldFrom > t);   // 最后一轮还没走完
     if (x) {
-      rld = st.reloadUntil > t;
+      rld = st.reloadUntil > t && !last;
       if (rld) { rp = 1 - (st.reloadUntil - t) / x.reload; c0 = st.reloadUntil - x.reload; cd = x.reload; }
-      qty = rld ? '' : st.ammo;
+      qty = rld ? '' : last ? 0 : st.ammo;
     }
     if (!rld && P.on.has(i)) {
       // 没有持续时间的装备（隐形装置：效果没有 durationAttributeID）只有开 / 关两态，不画周期圈（客户端 DoActivateRampsThread：duration ≤ 0 直接返回）
       const cyc = x?.cycle || S.on.rack[i]?.cycle || 0;
-      if (x && st.next > 0) { p = Math.max(0, Math.min(1, 1 - (st.next - t) / cyc)); c0 = st.next - cyc; cd = cyc; }
+      const end = last ? st.rldFrom : st.next;
+      if (x && end > 0) { p = Math.max(0, Math.min(1, 1 - (end - t) / cyc)); c0 = end - cyc; cd = cyc; }
       else if (cyc > 0) { const t0 = S.modOn.get(i) ?? t; p = (((t - t0) % cyc) + cyc) % cyc / cyc; c0 = t0; cd = cyc; }
     }
   }

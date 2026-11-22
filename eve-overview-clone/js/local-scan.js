@@ -404,9 +404,11 @@ function groupsHtml(kind) {
     </ul>${list.length > 15 ? `<p class="text-muted">另有 ${list.length - 15} 个${kind === 'alliance' ? '联盟' : '军团'}</p>` : ''}`;
 }
 
-function draw() {
+// 只在本地分析正显示着时重画（force：打开本地分析时画第一遍）。S.box 是击杀页公共的内容区（kbMain），离开本地分析后
+// 这里换成了首页、人物页等；声望更新（窗口切回前台会重读）、分析和查击杀位置的结果晚回来时，都不能再把它盖成本地分析
+function draw(force = false) {
   const box = S.box;
-  if (!box) return;
+  if (!box || (!force && !box.querySelector('.ls-input'))) return;
   const ta = box.querySelector('[data-ls-text]');
   const keep = ta ? ta.value : S.text;
   const shown = S.pilots.filter((p) => !hidden(p)).sort(SORTS[S.sort] || SORTS.threat);
@@ -465,8 +467,8 @@ function draw() {
 export function renderLocal(box, deps) {
   D = deps;
   S.box = box;
-  draw();
-  if (!S.stBound) { S.stBound = true; ST.onStandings(() => { if (S.box?.isConnected) draw(); }); }
+  draw(true);
+  if (!S.stBound) { S.stBound = true; ST.onStandings(() => draw()); }
   if (box.dataset.lsBound) return;
   box.dataset.lsBound = '1';
   box.addEventListener('click', (e) => {

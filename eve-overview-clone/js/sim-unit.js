@@ -133,7 +133,7 @@ function unitTemplate(row) {
     const ancillary = names.includes('fueledShieldBoosting') || names.includes('fueledArmorRepair');
     const fuel = ancillary && m.charge ? loads(m) : 0;
     const localRep = (layer, amt) => { localReps.push({ layer, amt, cycle: dur || 5, m: k, ammo: fuel > 0 ? fuel : Infinity, reload: (m.attr(1795) || 60000) / 1000, charged: fuel > 0, ovA: ((layer === 0 ? m.attr(1231) : m.attr(1230)) || 0) / 100, ovC: (m.attr(1206) || 0) / 100 }); mark(); };
-    // 电容注入器：每个周期开始时注入弹药的电量；弹舱打空装填 10 秒（驾驶模拟逐次算，其它按平均耗电）
+    // 电容注入器：每个周期开始时注入弹药的电量；弹舱打空装填 10 秒（引擎逐次注入）
     if (names.includes('powerBooster')) {
       const bonus = m.charge ? m.charge.attr(FE.AT.capacitorBonus) : 0;
       if (bonus > 0) injectors.push({ bonus, cycle: dur || 12, m: k, ammo: loads(m) || 1, reload: 10 });
@@ -245,6 +245,12 @@ function unitTemplate(row) {
   const reach = best ? (best.vorton ? best.reach : best.turret ? best.opt + best.fall : best.reach * 0.95) : pref;
   const cap = stats.capacitor;
   const gunCap = guns.reduce((t, g) => t + g.capNeed / (g.cycle || 1), 0);
+  // 本地维修、遥修在引擎里逐周期扣电（周期开头电容不够就等），电容注入器逐次注入：平均耗电 other 里不算它们
+  // （辅助维修装了弹药不耗电，装配计算的耗电里算了它，这里一起扣掉）
+  for (const x of localReps) x.cap = x.charged ? 0 : rack[x.m]?.cap || 0;
+  for (const x of remote) x.cap = rack[x.m]?.cap || 0;
+  const repCap = [...localReps, ...remote].reduce((t, x) => t + (rack[x.m]?.cap || 0) / (x.cycle || 1), 0);
+  const injAvg = injectors.reduce((t, x) => t + x.bonus * x.ammo / (x.cycle * x.ammo + x.reload), 0);
   return {
     guns, drones, fighters, fighter: stats.weapon.fighter, pref: Math.max(1000, pref), reach: Math.max(1500, reach),
     points, align: stats.navigation.align || 5, stab: Math.abs(ship.attr(104) || 0),
@@ -256,7 +262,8 @@ function unitTemplate(row) {
     sig: stats.navigation.signature, vel: stats.navigation.velocity, scanRes: stats.targeting.scanRes,
     lockRange: stats.targeting.range, sensor: stats.targeting.sensor, sensorIdx: Math.max(0, SENSOR_TYPES.indexOf(stats.targeting.sensorType)),
     local: [d.reps.shield, d.reps.armor, d.reps.hull], localReps, regenC: d.shield.hp, regenTau: d.shield.hp && stats.defense.passiveRegen ? 2.5 * d.shield.hp / stats.defense.passiveRegen : 0,
-    cap: { max: cap.capacity, tau: cap.recharge, use: Math.max(0, cap.usage), other: Math.max(0, cap.usage - gunCap), otherNoInj: Math.max(0, cap.usage - gunCap + injectors.reduce((t, x) => t + x.bonus * x.ammo / (x.cycle * x.ammo + x.reload), 0)) },
+    cap: { max: cap.capacity, tau: cap.recharge, use: Math.max(0, cap.usage), other: Math.max(0, cap.usage - gunCap - repCap + injAvg), otherNoInj: Math.max(0, cap.usage - gunCap + injAvg),
+      want: Math.max(0, ...localReps.map((x) => x.cap), ...remote.map((x) => x.cap), ...guns.map((g) => g.capNeed || 0)) },   // 最贵的一次激活：电容低于它时注入器不管溢不溢出都注
     injectors, remote, webs, paints, neuts, noses, damps, ecms, smarts, bursts, tds, gds, rcaps, rsbs, rtcs, mjds, bubbles, cloaks, fields, dictors, ehp: d.ehp, rack, alwaysOn,
     // 速度 / 惯性 / 信号半径 / 炮塔跟踪上，装备（和舰队加成）参与叠加惩罚的百分比加成：深渊气云、塔的加成要和它们排进同一条链
     pen: { vel: FE.penFracs(ship, FE.AT.maxVelocity), agi: FE.penFracs(ship, 70), sig: FE.penFracs(ship, 552),

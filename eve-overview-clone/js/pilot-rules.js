@@ -418,6 +418,7 @@ export function makeRules(S, H) {
       if (!Number.isFinite(a.x.ammo) && !quiet) continue;
       a.st.ammo = a.x.ammo;
       a.st.reloadUntil = a.st.next = t + (a.x.reload || 10);
+      a.st.rldFrom = t; a.st.offPend = false;   // 手动装填：马上开始（引擎里自动装填要等最后一轮走完）
       P.on.delete(m);
       S.rk?.wait.delete(m);
       n++;

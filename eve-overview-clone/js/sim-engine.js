@@ -17,6 +17,7 @@
 //   岗哨无人机不动。舰载机按中队飞到目标、在环绕距离上攻击，伤害按导弹公式（爆炸半径 / 速度，衰减系数 = ln 衰减因子 / ln 衰减灵敏度），
 //   超出最佳射程按失准范围衰减；导弹技能同样计算（不计弹药次数）。无人机、舰载机不会被击落。
 // 弹药：打完一个弹夹要装填（装填时间按装备属性）；频率晶体不需要装填。武器每次开火扣电容，电容不够就等。
+// 电容：本地维修、遥修在每个周期开头扣电容，不够就等；电容注入器逐次注入（不会溢出时就注），其余装备按平均耗电扣。
 // 维修按周期结算：本地护盾维修在周期开始时生效，装甲 / 结构维修与遥修在周期结束时生效；中和、吸电在周期开始时生效。
 // 网子、标记、阻尼、ECM、中和、吸电、遥修都按两船实际距离与衰减范围算，同类效果有叠加惩罚。
 // 伤害依次扣护盾、装甲、结构，每层按四种伤害的抗性分别计算。
@@ -140,14 +141,24 @@ export function createBattle(sides, opt) {
   const missiles = [];
   const dooms = [];   // 预热中 / 正在出伤的末日武器
   const events = [];   // 增援、点名集火、撤离（回放与日志用）
-  // 弹药打空：自动装填（客户端默认开）；玩家驾驶的装备装填后不会自己接着循环（要再开一次），关了自动装填的就停在 0 发
+  // 弹药打空：自动装填（客户端默认开）；玩家驾驶的装备装填后不会自己接着循环（要再开一次），关了自动装填的就停在 0 发。
+  // 和客户端一样，打出最后一发的这一轮照常走完，装备停下时才开始装填（shipmodulebutton OnEffect：效果停了、弹药为 0 → AutoReload）：
+  //   rldFrom = 这一轮结束（调用前 st.next 已排到下一轮开头），装填到 rldFrom + 装填时间；玩家的装备这一轮走完才关（offPend）
   const outOfAmmo = (u, st, x, t) => {
     if (u.infAmmo) { st.ammo = x.ammo; return; }   // 驾驶模拟作弊：无限弹药（不用装填）
-    if (u.pilot) { u.pilot.on.delete(x.m); if (u.pilot.noReload?.has(x.m)) { st.ammo = 0; return; } }
+    const from = Math.max(t, st.next || 0);
+    st.rldFrom = from;
+    if (u.pilot) { st.offPend = true; if (u.pilot.noReload?.has(x.m)) { st.ammo = 0; return; } }
     st.ammo = x.ammo;
-    st.reloadUntil = st.next = t + x.reload;
+    st.reloadUntil = st.next = from + x.reload;
   };
-  const empty = (u, st, x) => x.ammo < Infinity && st.ammo <= 0 && Boolean(u.pilot);
+  // 正在装填（最后一轮已经走完）；顺带把这一轮走完的玩家装备关掉
+  const reloading = (u, st, x, t) => {
+    const last = st.rldFrom > t;
+    if (st.offPend && !last) { st.offPend = false; u.pilot?.on.delete(x.m); }
+    return st.reloadUntil > t && !last;
+  };
+  const empty = (u, st, x) => x.ammo < Infinity && st.ammo <= 0 && Boolean(u.pilot) && !(st.rldFrom > B.t);
   const primary = { A: null, B: null };
   const spawn = { A: [-opt.dist * 500, 0, 0], B: [opt.dist * 500, 0, 0] };
   const timeline = [];
@@ -270,7 +281,7 @@ export function createBattle(sides, opt) {
   // 同一套代码、同一个种子，正常情况下两边本来就一样；不同浏览器的数学函数末位可能不同，靠这个拉回来
   B.snap = () => ({
     t: B.t, rs: rand.get(),
-    u: units.map((u) => [u.alive ? 1 : 0, u.pos, u.vel, u.face, u.hp, u.cap, u.guns.map((g) => [g.next, g.ammo, g.reloadUntil, g.last]), u.hv || null]),
+    u: units.map((u) => [u.alive ? 1 : 0, u.pos, u.vel, u.face, u.hp, u.cap, u.guns.map((g) => [g.next, g.ammo, g.reloadUntil, g.last, g.rldFrom || 0, g.offPend ? 1 : 0]), u.hv || null]),
     k: kills.map((k) => [k.at, k.unit, k.by]),
   });
   B.applySnap = (S0) => {
@@ -280,7 +291,7 @@ export function createBattle(sides, opt) {
       if (!u) return;
       u.pos = x[1].slice(); u.vel = x[2].slice(); u.face = x[3].slice(); u.hp = x[4].slice(); u.cap = x[5];
       if (x[7]) u.hv = x[7].slice();
-      x[6].forEach((g, k) => { const st = u.guns[k]; if (st) [st.next, st.ammo, st.reloadUntil, st.last] = g; });
+      x[6].forEach((g, k) => { const st = u.guns[k]; if (st) { [st.next, st.ammo, st.reloadUntil, st.last] = g; st.rldFrom = g[4] || 0; st.offPend = Boolean(g[5]); } });
       if (!x[0] && u.alive) { u.alive = false; u.r.lost += 1; u.r.killTimes.push(Math.ceil(B.t)); }
       else if (x[0] && !u.alive) { u.alive = true; u.r.lost -= 1; }
     });
@@ -840,6 +851,8 @@ export function createBattle(sides, opt) {
   };
   const engaged = (u, v) => u.jam <= B.t && surf(u, v) <= u.t.lockRange * u.rangeMult && u.lock <= 0;
   const bit = (u, m, on = true) => { if (on && m != null && m >= 0 && m < 32) u.act |= 1 << m; };
+  // 这一步电容见底（平均耗电付不起，或维修 / 遥修等电容）：每艘船每步只记一次
+  const capLow = (u) => { if (!u.capLow) { u.capLow = true; tally[u.side].capped += DT; } };
   // 这一步开始了新周期的装备（回放画周期进度圈）
   const fired = (u, m) => { if (m != null && m >= 0 && m < 32) u.fire |= 1 << m; };
 
@@ -1102,7 +1115,7 @@ export function createBattle(sides, opt) {
       u.dict ||= ds.map((x) => ({ ammo: x.ammo, reloadUntil: 0, next: 0 }));
       ds.forEach((x, j) => {
         const st = u.dict[j];
-        if (st.reloadUntil > t) { u.rld |= 1 << (x.m ?? 31); return; }
+        if (reloading(u, st, x, t)) { u.rld |= 1 << (x.m ?? 31); return; }
         if (!P.on.has(x.m)) return;
         bit(u, x.m);
         if (t < st.next) return;
@@ -1274,18 +1287,25 @@ export function createBattle(sides, opt) {
     // 电容：回充，再付非武器装备的耗电（武器开火、中和 / 吸电时单独扣）
     for (const u of alive) {
       tally[u.side].unitSec += DT;
+      u.capLow = false;
       const c = u.t.cap;
       if (!capOn) { u.ratio = 1; u.cap = c.max; continue; }
       if (c.max && c.tau) { const x = Math.max(0.01, u.cap / c.max); u.cap = Math.min(c.max, u.cap + 10 * c.max / c.tau * (Math.sqrt(x) - x) * DT); }
-      // 玩家驾驶的船：电容注入器逐次注入（开着才注、打空装填），耗电里不再算它的平均值
-      const inj = u.pilot ? u.t.injectors || [] : [];
-      inj.forEach((x, j) => {
+      // 电容注入器逐次注入（打空装填），耗电里不算它的平均值：玩家驾驶的船开着才注；
+      // 电脑船照装配页的电容模拟（pyfa）——注进去不会溢出就注，电容不够开下一件装备时也注
+      (u.t.injectors || []).forEach((x, j) => {
         const st = u.inj[j];
-        if (st.reloadUntil > t) { u.rld |= 1 << (x.m ?? 31); return; }
-        if (!u.pilot.on.has(x.m)) return;
-        if (empty(u, st, x)) { u.pilot.on.delete(x.m); return; }
-        bit(u, x.m);
-        if (t < st.next) return;
+        if (reloading(u, st, x, t)) { u.rld |= 1 << (x.m ?? 31); return; }
+        if (u.pilot) {
+          if (!u.pilot.on.has(x.m)) return;
+          if (empty(u, st, x)) { u.pilot.on.delete(x.m); return; }
+          bit(u, x.m);
+          if (t < st.next) return;
+        } else {
+          if (t < st.next) { bit(u, x.m); return; }
+          if (u.cap + x.bonus > c.max && !(u.cap < (c.want || 0))) return;   // 电容不够开最贵的那件装备时，溢出也注
+          bit(u, x.m);
+        }
         st.next = nextCycle(st.next, t, x.cycle);
         fired(u, x.m);
         u.cap = Math.min(c.max, u.cap + x.bonus);
@@ -1294,9 +1314,10 @@ export function createBattle(sides, opt) {
       // 玩家驾驶的船：不按整套装配的平均耗电扣，而是每件开着的装备在自己每个周期开头扣一次（和客户端一样）；
       // 电容不够 → 这件装备停下；不带失准的指向性装备（扰频 / 扰断等）目标超出最远距离 → 周期结束时停下
       if (u.pilot) { pilotCycles(u, t); u.ratio = 1; continue; }
+      // 电脑船：其余装备（抗性、推进器、电子战等）按平均耗电扣；本地维修、遥修在各自周期开头另扣（不够就等）
       const use = c.other * DT;
       if (use <= 0) { u.ratio = 1; continue; }
-      if (u.cap >= use) { u.cap -= use; u.ratio = 1; } else { u.ratio = Math.max(0, u.cap) / use; u.cap = 0; tally[u.side].capped += DT; }
+      if (u.cap >= use) { u.cap -= use; u.ratio = 1; } else { u.ratio = Math.max(0, u.cap) / use; u.cap = 0; capLow(u); }
     }
     // 一直开着的装备（抗性、推进器、损控等）：电容够就算运转
     for (const u of alive) if (u.ratio > 0.5) u.act |= u.t.alwaysOn || 0;
@@ -1427,7 +1448,7 @@ export function createBattle(sides, opt) {
       if (!u.alive) continue;
       const v = u.target;
       const T = tally[u.side];
-      u.guns.forEach((st, k) => { if (st.reloadUntil > t) u.rld |= 1 << (u.t.guns[k].m ?? 31); });
+      u.guns.forEach((st, k) => { if (reloading(u, st, u.t.guns[k], t)) u.rld |= 1 << (u.t.guns[k].m ?? 31); });
       if (!v?.alive || !ready(v)) continue;
       if (u.jam > t) { T.jammed += DT; setLock(u, v); continue; }
       const d = surf(u, v);
@@ -1443,7 +1464,7 @@ export function createBattle(sides, opt) {
           if (u.cap < g.capNeed) {
             // 玩家：电容不够开这一炮 → 这门炮停下（客户端「电容器只有 … 单位」）
             if (u.pilot) { u.pilot.on.delete(g.m); (u.pilot.msgs ||= []).push({ k: 'cap', i: g.m, need: g.capNeed, got: u.cap }); }
-            st.next = t + DT; T.capped += DT / u.t.guns.length; return;
+            st.next = t + DT; capLow(u); return;
           }
           u.cap -= g.capNeed;
         }
@@ -1498,7 +1519,7 @@ export function createBattle(sides, opt) {
       });
     }
     // 武器运转：一个周期内开过火、没在装填
-    for (const u of alive) u.guns.forEach((st, k) => bit(u, u.t.guns[k].m, t - st.last < u.t.guns[k].cycle + DT && st.reloadUntil <= t));
+    for (const u of alive) u.guns.forEach((st, k) => bit(u, u.t.guns[k].m, t - st.last < u.t.guns[k].cycle + DT && !reloading(u, st, u.t.guns[k], t)));
     for (const u of alive) { if (!u.alive) continue; if (u.drones.length) droneStep(u, t); if (u.squads.length) fighterStep(u, t); }
     if (opt.droneUnits) for (const u of units) if (!u.alive && !u.isDrone) for (const d of u.drones) if (d.e) droneHide(d);
     // 末日武器：到点打一跳；开火方或目标没了就作废
@@ -1539,13 +1560,20 @@ export function createBattle(sides, opt) {
       if (L?.length) {
         L.forEach((x, j) => {
           const st = u.lrep[j];
-          if (st.reloadUntil > t) { u.rld |= 1 << (x.m ?? 31); return; }
-          if (u.ratio < 0.5 && !x.charged) return;
-          if (u.pilot && !u.pilot.on.has(x.m)) { if (st.pend) { u.hp[x.layer] = Math.min(u.t.max[x.layer], u.hp[x.layer] + st.pend); st.pend = 0; } return; }
+          // 装填中：最后一轮的装甲 / 结构维修在那一轮结束时照常生效
+          if (reloading(u, st, x, t)) { if (st.pend) { u.hp[x.layer] = Math.min(u.t.max[x.layer], u.hp[x.layer] + st.pend); st.pend = 0; } u.rld |= 1 << (x.m ?? 31); return; }
+          // 电脑船：每个周期开头扣这件维修的电容，不够就等（不亮、不修）；玩家驾驶的船在 pilotCycles 里扣过了；
+          // NPC 的维修没有逐件耗电（need 为空），看平均耗电够不够
+          const need = u.pilot || !capOn ? 0 : x.cap;
+          if (need == null && u.ratio < 0.5 && !x.charged) return;
+          const land = () => { if (st.pend) { u.hp[x.layer] = Math.min(u.t.max[x.layer], u.hp[x.layer] + st.pend); st.pend = 0; } };
+          if (u.pilot && !u.pilot.on.has(x.m)) { land(); return; }
           if (empty(u, st, x)) { u.pilot.on.delete(x.m); return; }
+          if (need > 0 && t >= st.next && u.cap < need) { land(); capLow(u); return; }
           bit(u, x.m);
           if (t < st.next) return;
-          if (st.pend) { u.hp[x.layer] = Math.min(u.t.max[x.layer], u.hp[x.layer] + st.pend); st.pend = 0; }
+          land();
+          if (need > 0) u.cap -= need;
           const sb = x.layer === 0 ? (u.sbAmt ?? 1) : 1, sd = x.layer === 0 ? (u.sbDur ?? 1) : 1;   // 纤维云：护盾回充增量器回充量 / 持续时间
           const ov = u.pilot?.ovl?.has(x.m), amt = x.amt * sb * (ov ? 1 + (x.ovA || 0) : 1);
           st.next = nextCycle(st.next, t, x.cycle * sd * (ov ? 1 + (x.ovC || 0) : 1));
@@ -1615,7 +1643,9 @@ export function createBattle(sides, opt) {
         u.t.remote.forEach((rep, j) => {
           const st = u.rrep[j];
           if (st.tgt) { bit(u, rep.m); return; }
-          if (u.ratio < 0.5 || (u.pilot && !u.pilot.on.has(rep.m))) return;
+          // 周期开头扣这件遥修的电容，不够就等；NPC 的遥修没有逐件耗电（cap 为空），看平均耗电够不够
+          const need = capOn ? rep.cap : 0;
+          if (need == null && u.ratio < 0.5) return;
           let best = null, bf = 0.995;
           for (const [x, left] of rl) {
             if (left > 0 || rangeEff(rep, surf(u, x)) < 0.05) continue;
@@ -1623,6 +1653,7 @@ export function createBattle(sides, opt) {
             if (f < bf) { bf = f; best = x; }
           }
           if (!best) return;
+          if (need > 0) { if (u.cap < need) { capLow(u); return; } u.cap -= need; }
           st.tgt = best;
           st.end = t + rep.cycle;
           pend.set(best, (pend.get(best) || 0) + rep.amt);
