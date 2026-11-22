@@ -247,10 +247,25 @@ export function killCompactHtml(kills) {
     </button>`).join('');
 }
 
+// 击杀记录服务（/api/kb/feed）的摘要行 → 列表要的样子（只有受害者和最后一击）；点开时按 ID 向服务读完整击杀（service）
+export function fromServiceRows(rows, rowNames = {}) {
+  for (const [k, v] of Object.entries(rowNames || {})) if (v) names.set(Number(k), v);
+  return rows.map((r) => ({
+    killmail_id: r.id, killmail_time: r.time, solar_system_id: r.system_id, service: true,
+    victim: { ...r.victim, ship_type_id: r.ship_type_id },
+    attackers: r.final ? [{ ...r.final, final_blow: true }] : [],
+    zkb: { totalValue: r.value, solo: r.solo, npc: r.npc }
+  }));
+}
+
 // 列表点击 → 详情；kills 用于按 ID 查找
 export function bindKillClicks(container, kills, opts = {}) {
   const byId = new Map(kills.map((k) => [k.killmail_id, k]));
-  const open = (el) => { const k = byId.get(Number(el.dataset.kill)); if (k) openKill(k, { focus: opts.focus }); };
+  const open = (el) => {
+    const k = byId.get(Number(el.dataset.kill));
+    if (k?.service) openServiceKill(k.killmail_id);
+    else if (k) openKill(k, { focus: opts.focus });
+  };
   container.addEventListener('click', (e) => { const el = e.target.closest('[data-kill]'); if (el && container.contains(el)) open(el); });
   container.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter') return;

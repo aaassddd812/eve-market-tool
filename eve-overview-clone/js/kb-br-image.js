@@ -3,16 +3,60 @@
 import { W, SCALE, THEMES, loadImages, rr, fit, font, alpha, siteMark, qrMark, qrSize } from './share-image.js?v=11';
 
 const PAD = 40, IW = W - PAD * 2, GAP = 20;
+// 完整长图最高（逻辑像素）：超出时先把每方舰船损失限到 TOPS_CUT 艘，还不够再按剩下的高度限玩家行数（每方至少 30 名），
+// 截掉的写「另有 N 人（图片太长…）」；长图的像素倍数按画布上限往下调（浏览器画布单边最多约 32000 像素，面积也有上限）
+const LONG_MAX = 30000, TOPS_CUT = 30;
 
+// m.full：完整长图（kb-br.js 的 imageModel(true)：全部玩家、全部舰船损失）
 export async function renderBrImage(m, theme = 'light') {
   const C = THEMES[theme] || THEMES.light;
   const family = getComputedStyle(document.body).fontFamily || 'sans-serif';
-  // 预加载图片
   const order = m.order;          // ['A', 'B'] 或三方、四方
+  // 下面按高度截短时会改列表：复制一份，不动传进来的（换主题时还要再画）
+  m = { ...m, sides: Object.fromEntries(order.map((s) => [s, { ...m.sides[s], players: { ...m.sides[s].players } }])) };
   const multi = order.length > 2;
   const urls = new Set();
+  for (const s of order) m.sides[s].parties.forEach((p) => urls.add(p.logo));
+  // 先定好高度（截短在加载图片之前，截掉的人不用下载头像）
+  const layout = () => {
+    const pairs = [];
+    const per = order.length === 3 ? 3 : 2;
+    for (let i = 0; i < order.length; i += per) {
+      const pr = order.slice(i, i + per), sd = pr.map((x) => m.sides[x]);
+      const rows = Math.max(...sd.map((x) => x.parties.length), 1);
+      const more = sd.some((x) => x.more);
+      const tops = Math.max(...sd.map((x) => x.top.length));
+      const tmore = sd.some((x) => x.topMore);
+      const prow = Math.max(...sd.map((x) => x.players.list.length));
+      const pmore = sd.some((x) => x.players.more);
+      pairs.push({ sides: pr, rows, more, tops, prow, colW: (IW - GAP * (per - 1)) / per,
+        SIDE: 72 + rows * 50 + (more ? 22 : 0) + (tops ? 58 + tops * 46 + (tmore ? 26 : 0) : 0) + 12,
+        PLAY: prow ? 70 + prow * 40 + (pmore ? 30 : 0) + 12 : 0 });
+    }
+    return pairs;
+  };
+  const HERO = 292, TILE = multi ? 0 : 100, CHART = 300;
+  const height = (pairs) => Math.max(200, PAD + qrSize(m.url) + 32) + HERO + GAP + (TILE ? TILE + GAP : 0) + CHART + pairs.reduce((t, q) => t + GAP + q.SIDE + (q.PLAY ? GAP + q.PLAY : 0), 0) + 180;
+  let pairs = layout();
+  let H = height(pairs);
+  if (m.full && H > LONG_MAX) {
+    for (const s of order) {
+      const st = m.sides[s];
+      if (st.top.length > TOPS_CUT) { st.topMore = st.top.length - TOPS_CUT; st.top = st.top.slice(0, TOPS_CUT); }
+    }
+    pairs = layout();
+    H = height(pairs);
+  }
+  if (m.full && H > LONG_MAX) {
+    const cap = Math.max(30, Math.floor((LONG_MAX - (H - pairs.reduce((t, q) => t + q.prow * 40, 0))) / 40 / pairs.length));
+    for (const s of order) {
+      const p = m.sides[s].players;
+      if (p.list.length > cap) { p.more += p.list.length - cap; p.list = p.list.slice(0, cap); p.cut = true; }
+    }
+    pairs = layout();
+    H = height(pairs);
+  }
   for (const s of order) {
-    m.sides[s].parties.forEach((p) => urls.add(p.logo));
     m.sides[s].top.forEach((k) => urls.add(k.icon));
     m.sides[s].players.list.forEach((p) => { urls.add(p.avatar); urls.add(p.corp?.logo); urls.add(p.alliance?.logo); p.ships.forEach((u) => urls.add(u)); });
   }
@@ -20,27 +64,13 @@ export async function renderBrImage(m, theme = 'light') {
   const EXTRA = theme === 'dark' ? { C: '#22a565', D: '#a25ddc' } : { C: '#1c9a5c', D: '#8e4fd0' };
   const color = (s) => (s === 'A' ? C.a : s === 'B' ? C.b : EXTRA[s]);
 
-  // 势力 / 玩家卡片：两方、三方都放一行并排（三方时卡片窄，玩家卡片省掉伤害与舰船两栏），四方分两行；同一行等高
-  const pairs = [];
-  const per = order.length === 3 ? 3 : 2;
-  for (let i = 0; i < order.length; i += per) {
-    const pr = order.slice(i, i + per), sd = pr.map((x) => m.sides[x]);
-    const rows = Math.max(...sd.map((x) => x.parties.length), 1);
-    const more = sd.some((x) => x.more);
-    const tops = Math.max(...sd.map((x) => x.top.length));
-    const prow = Math.max(...sd.map((x) => x.players.list.length));
-    const pmore = sd.some((x) => x.players.more);
-    pairs.push({ sides: pr, rows, more, tops, colW: (IW - GAP * (per - 1)) / per,
-      SIDE: 72 + rows * 50 + (more ? 22 : 0) + (tops ? 58 + tops * 46 : 0) + 12,
-      PLAY: prow ? 70 + prow * 40 + (pmore ? 30 : 0) + 12 : 0 });
-  }
-  const HERO = 292, TILE = multi ? 0 : 100, CHART = 300;
-  const H = Math.max(200, PAD + qrSize(m.url) + 32) + HERO + GAP + (TILE ? TILE + GAP : 0) + CHART + pairs.reduce((t, q) => t + GAP + q.SIDE + (q.PLAY ? GAP + q.PLAY : 0), 0) + 180;
+  // 势力 / 玩家卡片：两方、三方都放一行并排（三方时卡片窄，玩家卡片省掉伤害与舰船两栏），四方分两行；同一行等高（layout 在上面）
+  const SC = m.full ? Math.max(1, Math.min(SCALE, 32000 / H, Math.sqrt(64e6 / (W * H)))) : SCALE;
   const canvas = document.createElement('canvas');
-  canvas.width = W * SCALE;
-  canvas.height = H * SCALE;
+  canvas.width = Math.round(W * SC);
+  canvas.height = Math.ceil(H * SC);
   const g = canvas.getContext('2d');
-  g.scale(SCALE, SCALE);
+  g.scale(SC, SC);
   g.textBaseline = 'alphabetic';
 
   // 背景：底色 + 左上蓝、右上红的光晕
@@ -458,7 +488,7 @@ export async function renderBrImage(m, theme = 'light') {
       g.textAlign = 'left';
       g.fillStyle = C.sub;
       g.font = font(700, 14, family);
-      g.fillText('最贵损失', x, cy);
+      g.fillText(m.topTitle || '最贵损失', x, cy);
       cy += 14;
       for (const k of st.top) {
         pic(images.get(k.icon), x, cy, 36, 8);
@@ -474,6 +504,12 @@ export async function renderBrImage(m, theme = 'light') {
         g.font = font(700, 15, family);
         g.fillText(k.value, x + w, cy + 23);
         cy += 46;
+      }
+      if (st.topMore) {
+        g.textAlign = 'left';
+        g.fillStyle = C.muted;
+        g.font = font(400, 12, family);
+        g.fillText(`另有 ${st.topMore} 艘`, x + 48, cy + 14);
       }
     }
   };
@@ -546,7 +582,7 @@ export async function renderBrImage(m, theme = 'light') {
       g.textAlign = 'left';
       g.fillStyle = C.muted;
       g.font = font(400, 12, family);
-      g.fillText(`另有 ${st.more} 人`, x + 42, cy + 22);
+      g.fillText(st.cut ? `另有 ${st.more} 人（图片太长，只列出前 ${st.list.length} 名）` : `另有 ${st.more} 人`, x + 42, cy + 22);
     }
   };
   // 每两方一组：势力卡片一行、参战玩家一行
@@ -573,8 +609,8 @@ export async function renderBrImage(m, theme = 'light') {
   // 按实际内容高度裁剪
   const out = document.createElement('canvas');
   const h = Math.min(H, Math.ceil(fy + 36));
-  out.width = W * SCALE;
-  out.height = h * SCALE;
+  out.width = canvas.width;
+  out.height = Math.ceil(h * SC);
   out.getContext('2d').drawImage(canvas, 0, 0);
   return out;
 }

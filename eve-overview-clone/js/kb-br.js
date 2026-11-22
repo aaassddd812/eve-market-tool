@@ -1640,8 +1640,10 @@ function openSim() {
 // ---------- 分享图片 ----------
 const PERCENT = (v) => (v * 100).toFixed(1) + '%';
 const PLAYERS_IMG = 30;   // 分享图片每方最多列出的玩家
+const PARTIES_FULL = 40;  // 完整长图每方最多列出的势力（精简图 6 个）
 
-function imageModel() {
+// full：完整长图，列出全部参战玩家、全部舰船损失（不含太空舱）和最多 PARTIES_FULL 个势力；太长时 kb-br-image.js 再按图片高度截掉一部分
+function imageModel(full = false) {
   const d = BR.data;
   const order = sidesUsed();
   const stats = Object.fromEntries(order.map((s) => [s, sideStats(s)]));
@@ -1657,9 +1659,10 @@ function imageModel() {
   const players = (s) => {
     const list = [...BR.pilotStats.keys()].filter((c) => BR.side.get(BR.pilotParty.get(c)) === s);
     list.sort((a, b) => BR.pilotStats.get(b).kills.size - BR.pilotStats.get(a).kills.size || BR.pilotStats.get(b).lost - BR.pilotStats.get(a).lost);
+    const n = full ? list.length : PLAYERS_IMG;
     return {
-      more: Math.max(0, list.length - PLAYERS_IMG),
-      list: list.slice(0, PLAYERS_IMG).map((c) => {
+      more: Math.max(0, list.length - n),
+      list: list.slice(0, n).map((c) => {
         const st = BR.pilotStats.get(c), party = BR.pilotParty.get(c);
         return {
           name: ctx.partyName(c) || String(c), party: party ? ctx.partyName(party) || '' : '', avatar: ctx.avatar('character', c, 64),
@@ -1677,11 +1680,11 @@ function imageModel() {
     destroyedText: isk(st.destroyed),
     effText: st.destroyed + st.lost ? PERCENT(st.destroyed / (st.destroyed + st.lost)) : '—',
     share: lostAll ? st.lost / lostAll : 1 / order.length, shareText: PERCENT(lostAll ? st.lost / lostAll : 1 / order.length),
-    parties: st.parties.slice(0, 6).map((p) => ({
+    parties: st.parties.slice(0, full ? PARTIES_FULL : 6).map((p) => ({
       name: ctx.partyName(p.id), logo: ctx.avatar(p.kind, p.id, 64), pilots: p.pilots.size, kills: p.kills.size, lost: p.lost, lostText: isk(p.lost)
     })),
-    more: Math.max(0, st.parties.length - 6),
-    top: st.losses.filter((k) => !PODS.has(k[3])).slice(0, 10).map((k) => ({
+    more: Math.max(0, st.parties.length - (full ? PARTIES_FULL : 6)),
+    top: st.losses.filter((k) => !PODS.has(k[3])).slice(0, full ? Infinity : 10).map((k) => ({
       ship: ctx.typeName(k[3]), icon: ctx.IMG(`types/${k[3]}/icon`, 64), value: isk(k[4]) + ' ISK',
       pilot: [k[5] ? ctx.partyName(k[5]) : '', k[7] || k[6] ? ctx.partyName(k[7] || k[6]) : ''].filter(Boolean).join(' · ')
     }))
@@ -1691,6 +1694,7 @@ function imageModel() {
   const perPilot = (st) => (st.pilots.size ? st.lost / st.pilots.size : 0);
   const cmp = (label, a, b, f = num) => ({ label, a, b, aText: f(a), bText: f(b) });
   return {
+    full, topTitle: full ? '全部舰船损失' : '最贵损失',
     title: sysNames(d.systems, 4),
     meta: [`${fmtTime(d.start)} – ${fmtTime(d.end)} ${tzLabel()}`, `${d.kills.length} 次击杀`, `${num(pilots)} 名飞行员`, `总损失 ${isk(total)} ISK`],
     order, sides: Object.fromEntries(order.map((s) => [s, side(stats[s], s)])),
@@ -1712,12 +1716,15 @@ function imageModel() {
 
 let imageModule = null;
 function shareImage() {
-  if (!imageModule) imageModule = Promise.all([import('./kb-br-image.js?v=v32'), import('./share-image.js?v=11')]);
+  if (!imageModule) imageModule = Promise.all([import('./kb-br-image.js?v=v33'), import('./share-image.js?v=11')]);
   const model = imageModel();
+  let long = null;   // 完整长图第一次切过去时才整理
   const name = `战场统计-${ctx.kb.systemLabel(BR.data.systems[0]).name}-${fmtTime(BR.data.start).replace(/[: ]/g, '')}.png`;
   imageModule.then(([{ renderBrImage }, { openShareModal, shareUrl }]) => openShareModal({
     title: '分享战况图片', fileName: name, app: ctx.app,
-    render: (theme) => renderBrImage({ ...model, url: hashFor().length > 900 ? null : shareUrl(hashFor()) }, theme),   // 按击杀统计的链接太长放不进二维码
+    // 默认精简（每方前 6 个势力、最贵 10 艘损失、前 30 名玩家）；「完整长图」列出全部玩家和舰船损失
+    toggle: { label: '完整长图', off: '精简', title: '列出全部势力、舰船损失和参战玩家，图片会变长', suffix: '-完整' },
+    render: (theme, opt) => renderBrImage({ ...(opt?.full ? (long ||= imageModel(true)) : model), url: hashFor().length > 900 ? null : shareUrl(hashFor()) }, theme),   // 按击杀统计的链接太长放不进二维码
     link: () => location.origin + location.pathname + hashFor()
   })).catch((error) => {
     imageModule = null;

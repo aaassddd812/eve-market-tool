@@ -5,9 +5,13 @@
 //      按参与击杀时开的船的舰船分组判断角色定位（轻拦 / 重拦 / 火力 / 后勤 / 特种 / 旗舰，见 ROLES）；
 //      「诱导」看最近 3 次损失的 ESI 原文里装没装诱导力场发生器（击杀记录里攻击者只有船型，看不到装配）；
 //      最近一次击杀读 ESI 原文坐标找星系内最近的天体（「星系 · 星门（Jita）127 km」，本站 /api/kb/locate）；
-//   3. 按联盟 / 军团统计人数，点一下可以隐藏（比如自己人），隐藏名单存在本浏览器。
+//   3. 按联盟 / 军团统计人数，点一下可以隐藏（比如自己人），隐藏名单存在本浏览器。统计跟着筛选走：筛掉的人不算，
+//      隐藏了的联盟里的军团不再列出（隐藏了的军团也不算进所属联盟）；隐藏的那一项自己留着（变淡），好点「显示」恢复。
+//      全部联盟 / 军团都列出来，超过一屏的在框里滚动，鼠标按住拖动也能滚。
 //   4. 已绑定 ESI 且授权了联系人时，名字前显示声望（standings.js），并统计敌对 / 中立 / 友方人数；
 //      勾选「按声望筛掉」后名单里不显示选中声望的人（默认同军团、同联盟），选择存在本浏览器。
+//   5. 名单上方的筛选：按名字 / 军团 / 联盟搜索，按威胁、定位（轻拦、后勤、诱导、单挑等）筛，同一类可多选（任一符合就显示）；
+//      只在本次分析里有效，不保存。上面的人数、联盟 / 军团统计也按筛选后的人算。
 // 国服没有公开击杀数据，只显示所属势力分布。
 // 定向扫描结果：扫描窗口里 Ctrl+A、Ctrl+C，每行「类型 ID<Tab>名称<Tab>类型<Tab>距离」（旧客户端没有类型 ID，按类型名用 /universe/ids/ 查）。
 //   类型所属的分组（舰船类别）与大类用 ESI /universe/types/、/universe/groups/ 查，缓存在本浏览器（eve-dscan-types-v1）；
@@ -17,7 +21,8 @@ import * as ST from './standings.js?v=v6';
 let D;   // esc, formatISK, formatNumber, resolveNames, esiUrl, eveImage, kb, loadTypes, systemName, typeName, fetchESI, copyText, nearest（killboard.js 的 nearestOf）
 const IGNORE_KEY = 'eve-local-ignore-v1';
 const MAX = 1000;
-const S = { text: '', mode: '', pilots: [], orgs: new Map(), scan: null, status: '', sort: 'threat', ignore: new Set(), busy: false, at: null, box: null };
+const S = { text: '', mode: '', pilots: [], orgs: new Map(), scan: null, status: '', sort: 'threat', ignore: new Set(), busy: false, at: null, box: null,
+  f: { q: '', threat: new Set(), role: new Set() } };   // f：名单上方的筛选（搜索、威胁、定位），不保存
 try { S.ignore = new Set(JSON.parse(localStorage.getItem(IGNORE_KEY) || '[]')); } catch { /* 忽略 */ }
 const saveIgnore = () => { try { localStorage.setItem(IGNORE_KEY, JSON.stringify([...S.ignore])); } catch { /* 忽略 */ } };
 // 按声望筛掉：on 是否勾选，cls 要筛掉的声望（standings.js 的 of().cls；自己算同军团）
@@ -333,7 +338,7 @@ function lastKillHtml(p) {
   const [id, , at, system] = lk;
   // 星系名已经单独显示：行星 / 卫星 / 小行星带去掉开头的星系名（「VI」写成「行星 VI」）
   const where = (l) => { const sys = D.systemName(system); const rest = l.label.startsWith(sys + ' ') ? l.label.slice(sys.length + 1) : l.label; return l.kind === 'planet' && rest !== l.label ? '行星 ' + rest : rest; };
-  const near = p.loc && !p.loc.none ? `<small>距 ${esc(where(p.loc))}：${esc(p.loc.distance)}</small>` : p.loc ? '' : '<small class="text-muted">定位中…</small>';
+  const near = p.loc && !p.loc.none ? `<small title="${esc(where(p.loc))}">距 ${esc(where(p.loc))}：${esc(p.loc.distance)}</small>` : p.loc ? '' : '<small class="text-muted">定位中…</small>';
   return `<a class="kb-link" href="#kb/kill/${id}" title="${esc(ago(at))}">${esc(D.systemName(system))}</a>${near}`;
 }
 
@@ -348,11 +353,12 @@ function threat(p) {
   return { score, ratio, level, label: { none: '无记录', high: '高', mid: '中', low: '低' }[level] };
 }
 
+const isSolo = (s) => Boolean(s && s.solo >= 3 && s.solo >= s.kills * 0.2);
 function tags(p) {
   const s = p.st, out = [];
   if (!s) return out;
   for (const r of roles(p)) out.push([r.label, r.title, 'role-' + r.key]);
-  if (s.solo >= 3 && s.solo >= s.kills * 0.2) out.push(['单挑', '近 30 天单人击杀 ' + s.solo + ' 次']);
+  if (isSolo(s)) out.push(['单挑', '近 30 天单人击杀 ' + s.solo + ' 次']);
   if (s.kills + s.losses && s.losses >= s.kills * 2 && s.losses >= 3) out.push(['常被打', '近 30 天损失 ' + s.losses + ' 次']);
   return out;
 }
@@ -376,6 +382,63 @@ const orgName = (id) => (id ? S.orgs.get(id) || 'ID ' + id : '');
 const stCls = (p) => { const c = ST.of(entOf(p))?.cls; return c === 'self' ? 'corp' : c; };
 const stfHidden = (p) => S.stf.on && ST.ready() && S.stf.cls.has(stCls(p));
 const hidden = (p) => S.ignore.has(p.alliance) || S.ignore.has(p.corp) || stfHidden(p);
+
+// ---------- 名单筛选 ----------
+const F_THREAT = [['high', '高'], ['mid', '中'], ['low', '低'], ['none', '无记录']];
+const F_ROLE = [['tackle', '轻拦'], ['htackle', '重拦'], ['dps', '火力'], ['logi', '后勤'], ['special', '特种'], ['cap', '旗舰'], ['cyno', '诱导'], ['solo', '单挑']];
+const roleKeys = (p) => { const k = roles(p).map((r) => r.key); if (isSolo(p.st)) k.push('solo'); return k; };
+const fActive = () => Boolean(S.f.q.trim() || S.f.threat.size || S.f.role.size);
+// skip：算某一类按钮上的人数时不看这一类自己的选择
+function fMatch(p, skip = '') {
+  const q = S.f.q.trim().toLowerCase();
+  if (q && ![p.name, orgName(p.corp), orgName(p.alliance)].some((x) => x && x.toLowerCase().includes(q))) return false;
+  if (skip !== 'threat' && S.f.threat.size && !S.f.threat.has(threat(p).level || 'none')) return false;
+  if (skip !== 'role' && S.f.role.size && !roleKeys(p).some((k) => S.f.role.has(k))) return false;
+  return true;
+}
+function filterHtml(total) {
+  const pool = S.pilots.filter((p) => !hidden(p));
+  const chips = (kind, list, key) => {
+    const n = {};
+    for (const p of pool) if (fMatch(p, kind)) for (const k of key(p)) n[k] = (n[k] || 0) + 1;
+    const sel = S.f[kind];
+    return list.map(([k, l]) => `<button type="button" class="ka-chip toggle${sel.has(k) ? ' on' : ''}${n[k] ? '' : ' zero'}" data-ls-f="${kind}:${k}" aria-pressed="${sel.has(k)}">${l}<small>${n[k] || 0}</small></button>`).join('');
+  };
+  return `<div class="ls-filter">
+    <input type="search" class="ls-q" data-ls-q value="${esc(S.f.q)}" placeholder="筛选角色 / 军团 / 联盟" spellcheck="false" autocomplete="off">
+    ${D.kb ? `<div class="ls-fgroup"><em>威胁</em>${chips('threat', F_THREAT, (p) => [threat(p).level || 'none'])}</div>
+    <div class="ls-fgroup"><em>定位</em>${chips('role', F_ROLE, roleKeys)}</div>` : ''}
+    ${fActive() ? `<button type="button" class="btn btn-ghost btn-sm" data-ls-fclear>清除筛选</button><span class="text-muted">显示 ${total} / ${S.pilots.length} 个角色</span>` : ''}
+  </div>`;
+}
+
+// 联盟 / 军团列表按住拖动滚动（滚动条、滚轮、触屏照常）；拖过了就不算点击
+const DRAG = { el: null, y: 0, top: 0, moved: false };
+function bindDrag(box) {
+  box.addEventListener('pointerdown', (e) => {
+    const ul = e.target.closest('.ls-groups[data-ls-kind]');
+    if (!ul || e.pointerType !== 'mouse' || e.button !== 0 || ul.scrollHeight <= ul.clientHeight || e.target.closest('button')) return;
+    Object.assign(DRAG, { el: ul, kind: ul.dataset.lsKind, y: e.clientY, top: ul.scrollTop, moved: false });
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (!DRAG.el) return;
+    const dy = e.clientY - DRAG.y;
+    if (!DRAG.moved && Math.abs(dy) < 4) return;
+    // 拖动中重画过（查到击杀位置会刷新）就换成新的列表
+    if (!DRAG.el.isConnected) DRAG.el = box.querySelector(`.ls-groups[data-ls-kind="${DRAG.kind}"]`) || DRAG.el;
+    DRAG.moved = true;
+    DRAG.el.classList.add('dragging');
+    DRAG.el.scrollTop = DRAG.top - dy;
+  });
+  window.addEventListener('pointerup', () => {
+    if (!DRAG.el) return;
+    DRAG.el.classList.remove('dragging');
+    if (DRAG.moved) setTimeout(() => { DRAG.moved = false; }, 0);
+    DRAG.el = null;
+  });
+  box.addEventListener('click', (e) => { if (DRAG.moved && e.target.closest('.ls-groups')) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
+  box.addEventListener('dragstart', (e) => { if (e.target.closest?.('.ls-groups[data-ls-kind]')) e.preventDefault(); });
+}
 function stfHtml() {
   if (!ST.ready()) return '';
   const n = S.stf.on ? S.pilots.filter(stfHidden).length : 0;
@@ -384,10 +447,13 @@ function stfHtml() {
     ${n ? `<span class="text-muted">已筛掉 ${n} 人</span>` : ''}</div>`;
 }
 
-function groupsHtml(kind) {
+// base：按声望筛掉、名单筛选之后的人（隐藏在这里处理：隐藏了的联盟里的军团不列，隐藏了的军团不算进联盟；隐藏的那一项自己留着）
+function groupsHtml(kind, base) {
   const counts = new Map();
-  for (const p of S.pilots) {
+  for (const p of base) {
     const id = kind === 'alliance' ? p.alliance : p.corp;
+    const other = kind === 'alliance' ? p.corp : p.alliance;
+    if (other && S.ignore.has(other) && !S.ignore.has(id)) continue;
     const key = id || 0;
     const g = counts.get(key) || { id: key, n: 0, kills: 0 };
     g.n++;
@@ -396,12 +462,13 @@ function groupsHtml(kind) {
   }
   const list = [...counts.values()].sort((a, b) => b.n - a.n);
   const max = list[0]?.n || 1;
-  return `<ul class="ls-groups">${list.slice(0, 15).map((g) => `<li class="${g.id && S.ignore.has(g.id) ? 'ignored' : ''}">
+  if (!list.length) return '<p class="text-muted ls-gempty">—</p>';
+  return `<ul class="ls-groups ls-gscroll" data-ls-kind="${kind}">${list.map((g) => `<li class="${g.id && S.ignore.has(g.id) ? 'ignored' : ''}">
       ${g.id ? `<img src="${D.eveImage((kind === 'alliance' ? 'alliances/' : 'corporations/') + g.id + '/logo', 32)}" alt="" width="20" height="20" loading="lazy">` : '<i></i>'}
       <span class="ls-gname">${g.id ? ST.badge(kind === 'alliance' ? { alliance: g.id } : { corp: g.id }) + link(kind, g.id, orgName(g.id)) : kind === 'alliance' ? '无联盟' : '—'}</span>
       <span class="ls-bar"><em style="width:${(g.n / max) * 100}%"></em></span><b>${g.n}</b>
       ${g.id ? `<button class="btn btn-ghost btn-sm" data-ls-ignore="${g.id}" title="${S.ignore.has(g.id) ? '在名单里重新显示' : '在名单里隐藏（比如自己人）'}">${S.ignore.has(g.id) ? '显示' : '隐藏'}</button>` : ''}</li>`).join('')}
-    </ul>${list.length > 15 ? `<p class="text-muted">另有 ${list.length - 15} 个${kind === 'alliance' ? '联盟' : '军团'}</p>` : ''}`;
+    </ul>`;
 }
 
 // 只在本地分析正显示着时重画（force：打开本地分析时画第一遍）。S.box 是击杀页公共的内容区（kbMain），离开本地分析后
@@ -411,7 +478,12 @@ function draw(force = false) {
   if (!box || (!force && !box.querySelector('.ls-input'))) return;
   const ta = box.querySelector('[data-ls-text]');
   const keep = ta ? ta.value : S.text;
-  const shown = S.pilots.filter((p) => !hidden(p)).sort(SORTS[S.sort] || SORTS.threat);
+  // 重画会换掉整块内容：记下筛选框的光标、联盟 / 军团列表滚到哪了，画完放回去
+  const act = document.activeElement;
+  const qSel = act && box.contains(act) && act.matches('[data-ls-q]') ? [act.selectionStart, act.selectionEnd] : null;
+  const gTop = Object.fromEntries([...box.querySelectorAll('.ls-groups[data-ls-kind]')].map((u) => [u.dataset.lsKind, u.scrollTop]));
+  const base = S.pilots.filter((p) => !stfHidden(p) && fMatch(p));   // 联盟 / 军团统计用（隐藏在 groupsHtml 里处理）
+  const shown = base.filter((p) => !hidden(p)).sort(SORTS[S.sort] || SORTS.threat);
   const lv = { high: 0, mid: 0, low: 0, none: 0 };
   for (const p of shown) { const t = threat(p); if (t.level) lv[t.level]++; }
   const th = (key, label, cls = '') => `<th class="${cls}"><button class="link-btn${S.sort === key ? ' active' : ''}" data-ls-sort="${key}">${label}${S.sort === key ? ' ↓' : ''}</button></th>`;
@@ -419,9 +491,9 @@ function draw(force = false) {
     const t = threat(p), s = p.st;
     return `<tr>
       <td><div class="ls-pilot"><img src="${D.eveImage('characters/' + p.id + '/portrait', 64)}" alt="" width="28" height="28" loading="lazy">
-        <span>${ST.badge(entOf(p))}${link('character', p.id, p.name)}
+        <span class="ls-pn" title="${esc(p.name)}">${ST.badge(entOf(p))}${link('character', p.id, p.name)}
         ${tags(p).map(([l, title, cls]) => `<i class="ls-tag${cls ? ' ' + cls : ''}" title="${esc(title)}">${l}</i>`).join('')}</span></div></td>
-      <td class="ls-org">${p.alliance ? `<span title="联盟"><img src="${D.eveImage('alliances/' + p.alliance + '/logo', 32)}" alt="" width="18" height="18" loading="lazy">${esc(orgName(p.alliance))}</span>` : ''}${p.corp ? `<small title="军团"><img src="${D.eveImage('corporations/' + p.corp + '/logo', 32)}" alt="" width="16" height="16" loading="lazy">${esc(orgName(p.corp))}</small>` : ''}</td>
+      <td class="ls-org">${p.alliance ? `<span title="${esc(orgName(p.alliance))}"><img src="${D.eveImage('alliances/' + p.alliance + '/logo', 32)}" alt="" width="18" height="18" loading="lazy"><bdi>${esc(orgName(p.alliance))}</bdi></span>` : ''}${p.corp ? `<small title="${esc(orgName(p.corp))}"><img src="${D.eveImage('corporations/' + p.corp + '/logo', 32)}" alt="" width="16" height="16" loading="lazy"><bdi>${esc(orgName(p.corp))}</bdi></small>` : ''}</td>
       ${D.kb ? `<td><span class="ls-threat ${t.level}">${t.label}</span></td>
       <td class="num">${s ? s.kills : '—'}</td><td class="num">${s ? s.losses : '—'}</td>
       <td class="num ls-hide-sm">${s && s.kills + s.losses ? Math.round(t.ratio * 100) + '%' : '—'}</td>
@@ -446,23 +518,28 @@ function draw(force = false) {
     <section class="kb-section ls-card">
       <div class="ls-summary">
         <div><b>${S.pilots.length}</b><small>名角色${shown.length < S.pilots.length ? `（显示 ${shown.length}）` : ''}</small></div>
-        <div><b>${new Set(S.pilots.map((p) => p.alliance).filter(Boolean)).size}</b><small>个联盟</small></div>
-        <div><b>${new Set(S.pilots.map((p) => p.corp)).size}</b><small>个军团</small></div>
+        <div><b>${nAlliances(S.pilots)}</b><small>个联盟${shown.length < S.pilots.length ? `（显示 ${nAlliances(shown)}）` : ''}</small></div>
+        <div><b>${nCorps(S.pilots)}</b><small>个军团${shown.length < S.pilots.length ? `（显示 ${nCorps(shown)}）` : ''}</small></div>
         ${ST.ready() ? (() => { const n = { friend: 0, neutral: 0, hostile: 0 }; for (const p of shown) n[ST.group(entOf(p))]++;
           return `<div class="ls-lv"><b class="st-n-hostile">${n.hostile}</b><small>敌对</small></div><div class="ls-lv"><b>${n.neutral}</b><small>中立</small></div><div class="ls-lv"><b class="st-n-friend">${n.friend}</b><small>友方</small></div>`; })() : ''}
         ${D.kb ? `<div class="ls-lv"><b class="high">${lv.high}</b><small>高威胁</small></div><div class="ls-lv"><b class="mid">${lv.mid}</b><small>中威胁</small></div>
         <div><b>${D.formatNumber(shown.reduce((t, p) => t + (p.st?.kills || 0), 0))}</b><small>近 30 天击杀合计</small></div>` : ''}
       </div>
       ${stfHtml()}
-      <div class="ls-cols"><div><h3 class="ls-h">联盟</h3>${groupsHtml('alliance')}</div><div><h3 class="ls-h">军团</h3>${groupsHtml('corporation')}</div></div>
+      <div class="ls-cols"><div><h3 class="ls-h">联盟</h3>${groupsHtml('alliance', base)}</div><div><h3 class="ls-h">军团</h3>${groupsHtml('corporation', base)}</div></div>
     </section>
     <section class="kb-section ls-card">
+      ${filterHtml(shown.length)}
       <div class="table-scroll"><table class="data-table ls-table"><thead><tr>${th('name', '角色')}${th('org', '联盟 / 军团')}
         ${D.kb ? `${th('threat', '威胁')}${th('kills', '击杀', 'num')}${th('losses', '损失', 'num')}<th class="num ls-hide-sm" title="击杀 ÷（击杀 + 损失）">击杀占比</th><th class="num ls-hide-sm" title="参与的击杀平均有多少名玩家">平均同伙</th><th class="ls-hide-sm">常用船</th><th title="最近一次参与击杀的星系，和击杀位置离最近天体（星门、空间站、行星等）的距离">最近击杀位置</th><th class="ls-hide-md">常去星系</th>${th('last', '最近活跃', 'num')}` : ''}
-      </tr></thead><tbody>${rows}</tbody></table></div>
+      </tr></thead><tbody>${rows || `<tr><td colspan="${D.kb ? 11 : 2}" class="ls-none">没有符合筛选条件的角色</td></tr>`}</tbody></table></div>
       ${D.kb ? '<p class="ka-note" title="威胁按击杀数、击杀占比与单挑次数估算">近 30 天击杀统计，威胁仅供参考</p>' : ''}
     </section>` : ''}`;
+  for (const u of box.querySelectorAll('.ls-groups[data-ls-kind]')) u.scrollTop = gTop[u.dataset.lsKind] || 0;
+  if (qSel) { const q = box.querySelector('[data-ls-q]'); if (q) { q.focus({ preventScroll: true }); q.setSelectionRange(...qSel); } }
 }
+const nAlliances = (list) => new Set(list.map((p) => p.alliance).filter(Boolean)).size;
+const nCorps = (list) => new Set(list.map((p) => p.corp)).size;
 
 export function renderLocal(box, deps) {
   D = deps;
@@ -481,11 +558,20 @@ export function renderLocal(box, deps) {
     const sf = e.target.closest('[data-ls-stf]');
     if (sf) { const k = sf.dataset.lsStf; if (S.stf.cls.has(k)) S.stf.cls.delete(k); else S.stf.cls.add(k); saveStf(); draw(); return; }
     if (e.target.closest('[data-ls-unignore]')) { S.ignore.clear(); saveIgnore(); draw(); return; }
+    const ff = e.target.closest('[data-ls-f]');
+    if (ff) { const [kind, k] = ff.dataset.lsF.split(':'); const set = S.f[kind]; if (set.has(k)) set.delete(k); else set.add(k); draw(); return; }
+    if (e.target.closest('[data-ls-fclear]')) { S.f = { q: '', threat: new Set(), role: new Set() }; draw(); return; }
     if (e.target.closest('[data-ls-copy]') && S.scan) D.copyText(scanSummaryText(scanStats()));
   });
   box.addEventListener('change', (e) => {
     if (e.target.matches('[data-ls-stf-on]')) { S.stf.on = e.target.checked; saveStf(); draw(); }
   });
+  // 筛选框：打字停 0.15 秒再重画；输入法拼字时不重画（会打断拼字），拼完再画
+  let qTimer = 0;
+  const onQ = (e) => { S.f.q = e.target.value; clearTimeout(qTimer); qTimer = setTimeout(() => draw(), 150); };
+  box.addEventListener('input', (e) => { if (e.target.matches('[data-ls-q]') && !e.isComposing) onQ(e); });
+  box.addEventListener('compositionend', (e) => { if (e.target.matches('[data-ls-q]')) onQ(e); });
+  bindDrag(box);
   box.addEventListener('paste', (e) => {
     if (!e.target.matches('[data-ls-text]')) return;
     // 粘贴后自动分析（输入框原本为空时）

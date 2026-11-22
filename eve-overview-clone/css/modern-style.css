@@ -6611,11 +6611,16 @@ td .sov-auto-tag { margin-left: 4px; }
 .ls-groups b { width: 28px; text-align: right; font-variant-numeric: tabular-nums; }
 .ls-table td { vertical-align: middle; }
 /* flex 放在格子里面的一层：td 本身设 flex 会脱离表格布局，行高和分隔线跟其他列对不齐 */
-.ls-pilot { display: flex; align-items: center; gap: 8px; min-width: 170px; }
+.ls-pilot { display: flex; align-items: center; gap: 8px; }
+/* 名字、联盟、军团都有最大宽度，超出用省略号截断（鼠标放上去看全名），1920 宽的全屏一行放得下所有列 */
+.ls-pn { display: flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap; }
+.ls-pn > a { min-width: 0; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.ls-pn .ls-tag { flex: none; margin-left: 0; }
 .ls-pilot img { border-radius: 4px; flex: none; }
 .ls-tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; font-size: 0.6875rem; font-style: normal; color: var(--text-secondary); background: var(--bg-hover); }
 .ls-org { font-size: 0.8125rem; }
-.ls-org span, .ls-org small { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.ls-org span, .ls-org small { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 190px; white-space: nowrap; }
+.ls-org bdi { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .ls-org small { color: var(--text-muted); margin-top: 2px; }
 .ls-org img { flex-shrink: 0; border-radius: 3px; background: var(--bg-tertiary); }
 .ls-threat { display: inline-block; min-width: 36px; padding: 1px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; text-align: center; color: var(--text-muted); background: var(--bg-tertiary); }
@@ -6632,7 +6637,26 @@ td .sov-auto-tag { margin-left: 4px; }
 .ls-tag.role-special { color: #cc5de8; background: color-mix(in srgb, #cc5de8 16%, transparent); }
 .ls-tag.role-cap { color: #ff922b; background: color-mix(in srgb, #ff922b 16%, transparent); }
 .ls-lastkill { font-size: 0.8125rem; white-space: nowrap; }
-.ls-lastkill small { display: block; color: var(--text-muted); font-size: 0.75rem; }
+.ls-lastkill small { display: block; max-width: 210px; overflow: hidden; text-overflow: ellipsis; color: var(--text-muted); font-size: 0.75rem; }
+/* 列间距收窄（两头留原来的边距） */
+.ls-table th, .ls-table td { padding-left: 7px; padding-right: 7px; }
+.ls-table th:first-child, .ls-table td:first-child { padding-left: 16px; }
+.ls-table th:last-child, .ls-table td:last-child { padding-right: 16px; }
+.ls-table td.ls-none { padding: 24px 16px; text-align: center; color: var(--text-muted); }
+/* 名单筛选：搜索 + 威胁 / 定位按钮（同一类可多选） */
+.ls-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-bottom: 12px; }
+.ls-q { width: 220px; height: 32px; padding: 0 10px; border: 1px solid var(--border-primary); border-radius: var(--radius-sm); background: var(--bg-tertiary); color: var(--text-primary); font: inherit; font-size: 0.8125rem; }
+.ls-q:focus { outline: none; border-color: var(--accent-primary); }
+.ls-fgroup { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.ls-fgroup > em { font-style: normal; font-size: 0.75rem; color: var(--text-muted); }
+.ls-filter .ka-chip small { margin-left: 5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.ls-filter .ka-chip.on small { color: inherit; }
+.ls-filter .ka-chip.zero:not(.on) { opacity: 0.45; }
+/* 联盟 / 军团全部列出：超过框高（约 12 行）在框里滚动，鼠标按住可以拖动 */
+.ls-gscroll { max-height: min(560px, 65vh); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; cursor: grab; }
+.ls-gscroll.dragging { cursor: grabbing; user-select: none; }
+.ls-gscroll a, .ls-gscroll button { cursor: pointer; }
+.ls-gempty { font-size: 0.8125rem; }
 .ls-ships img { border-radius: 3px; margin-right: 2px; vertical-align: middle; }
 /* 本地分析：结果放在卡片里（与其他页面一致） */
 .ls-card { padding: 14px 16px; border: 1px solid var(--border-primary); border-radius: var(--radius-lg); background: var(--bg-secondary); }
@@ -6649,8 +6673,10 @@ td .sov-auto-tag { margin-left: 4px; }
 .ds-tag.logi { color: var(--success); }
 .ds-copy { margin: 0 0 12px; }
 .ds-copy .text-muted { font-size: 0.75rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+/* 1920 屏开 150% 缩放（约 1280 宽）也放得下：截断宽度再收一点 */
+@media (max-width: 1400px) { .ls-pn > a { max-width: 120px; } .ls-org span, .ls-org small { max-width: 150px; } .ls-lastkill small { max-width: 155px; } }
 @media (max-width: 900px) { .ls-cols { grid-template-columns: minmax(0, 1fr); } .ls-hide-md { display: none; } }
-@media (max-width: 640px) { .ls-hide-sm { display: none; } }
+@media (max-width: 640px) { .ls-hide-sm { display: none; } .ls-q { width: 100%; } }
 .map-ext { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin-top: 10px; font-size: 0.8125rem; }
 .map-ext span { color: var(--text-muted); font-size: 0.75rem; }
 .map-ext a { color: var(--accent-primary); }

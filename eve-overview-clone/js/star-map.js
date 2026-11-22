@@ -2904,13 +2904,10 @@ function renderSystemInfo(s) {
     </div>
     ${extLinks('system', s.id)}
     ${SERVER.kb && secDisplay(s.sec) >= 0.5 ? '<div id="mapGank"></div>' : ''}
-    ${SERVER.kb ? `<div class="map-kills">
-      <div class="map-kills-head"><span>最近击杀</span><a href="https://zkillboard.com/system/${s.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
-      <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
-    </div>` : ''}`;
+    ${killsBox('最近击杀', `system/${s.id}/`)}`;
   $('mapInfo').hidden = false;
   renderAgents(s);
-  if (SERVER.kb) loadPanelKills(`systemID/${s.id}/`, (kills) => kills.slice(0, 8), () => M.selected === s.i);
+  loadPanelKills({ system: s.id, limit: 8 }, (kills) => kills, () => M.selected === s.i);
   if ($('mapGank')) loadMapGank(s);
 }
 
@@ -2968,12 +2965,25 @@ function renderAgents(s) {
   if (focus) box.querySelector('.agent-row.focus')?.scrollIntoView({ block: 'nearest' });
 }
 
-// 详情面板中的击杀列表（zKillboard），面板已切换时丢弃结果
-async function loadPanelKills(path, pick, stillValid) {
+// 详情面板中的击杀列表：查本站击杀记录服务（/api/kb/feed），和击杀预警、星图实时击杀是同一份实时收录的数据，刚出的击杀马上能看到
+// （直接查 zKillboard 的话，它的接口结果最长缓存 1 小时）；宁静服本地保留期内没有的，由服务接着查 zKillboard 更早的记录。
+// 国服按 server= 查各自的库（CEVE 市场 KM 广播），服务没有这个服的数据就去掉这一栏。面板已切换时丢弃结果
+const killsBox = (title, zk) => (SERVER.kb || SERVER.kbSite ? `<div class="map-kills">
+      <div class="map-kills-head"><span>${title}</span>${SERVER.kb ? `<a href="https://zkillboard.com/${zk}" target="_blank" rel="noopener">zKillboard ↗</a>` : ''}</div>
+      <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
+    </div>` : '');
+async function loadPanelKills(query, pick, stillValid) {
   const box = () => $('mapKillList');
+  if (!box()) return;
   try {
     const kb = await app.loadKillboard();
-    const kills = pick(await kb.fetchZkill(path));
+    const res = await fetch('/api/kb/feed?' + new URLSearchParams(query) + (SERVER.id === 'tq' ? '' : '&server=' + SERVER.id));
+    if (!res.ok) {
+      if (!SERVER.kb && (res.status === 400 || res.status === 404)) { if (stillValid()) box()?.closest('.map-kills')?.remove(); return; }
+      throw new Error((await res.json().catch(() => ({}))).error || '击杀记录服务 ' + res.status);
+    }
+    const data = await res.json();
+    const kills = pick(kb.fromServiceRows(data.kills || [], data.names));
     if (!stillValid() || !box()) return;
     await kb.prepareKills(kills);
     if (!stillValid() || !box()) return;
@@ -3037,14 +3047,11 @@ function selectRegion(id) {
       `<div class="region-owner">${owner ? `<img src="${ownerLogo(owner)}" alt="" width="22" height="22">` : '<i></i>'}<span>${app.esc(ownerName(owner))}</span><b>${n}</b></div>`).join('')}</div></div>
     <div class="map-info-actions"><button class="btn" data-hl-region="${r.id}">高亮该星域</button></div>
     ${extLinks('region', r.id)}
-    ${SERVER.kb ? `<div class="map-kills">
-      <div class="map-kills-head"><span>最近大额击杀</span><a href="https://zkillboard.com/region/${r.id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
-      <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
-    </div>` : ''}
+    ${killsBox('最近大额击杀', `region/${r.id}/`)}
     ${r.description ? `<p class="region-desc">${app.esc(r.description)}</p>` : ''}`;
   $('mapInfo').hidden = false;
   M.infoRegion = id;
-  if (SERVER.kb) loadPanelKills(`regionID/${id}/`, (kills) => [...kills].sort((a, b) => b.zkb.totalValue - a.zkb.totalValue).slice(0, 6),
+  loadPanelKills({ region: id, limit: 200 }, (kills) => [...kills].sort((a, b) => b.zkb.totalValue - a.zkb.totalValue).slice(0, 6),
     () => M.selected == null && M.infoRegion === id && !$('mapInfo').hidden);
   invalidate();
 }
@@ -3104,13 +3111,10 @@ function renderIncursionInfo(inc) {
       <button class="btn btn-ghost" data-game-dest="${staging.id}" data-game-name="${app.esc(staging.name)}" title="在游戏里把集结星系设为自动导航目的地（角色需在线）">游戏内设目的地</button>
       <button class="btn btn-ghost" data-copy="${app.esc(staging.name)}">复制集结星系</button>` : ''}
     </div>
-    ${SERVER.kb ? `<div class="map-kills">
-      <div class="map-kills-head"><span>星座最近击杀</span><a href="https://zkillboard.com/constellation/${inc.constellation_id}/" target="_blank" rel="noopener">zKillboard ↗</a></div>
-      <div class="map-kill-list" id="mapKillList"><p class="legend-empty">载入中…</p></div>
-    </div>` : ''}`;
+    ${killsBox('星座最近击杀', `constellation/${inc.constellation_id}/`)}`;
   $('mapInfo').hidden = false;
   const cid = inc.constellation_id;
-  if (SERVER.kb) loadPanelKills(`constellationID/${cid}/`, (kills) => kills.slice(0, 8),
+  loadPanelKills({ constellation: cid, limit: 8 }, (kills) => kills,
     () => M.selected == null && M.infoIncursion === cid && !$('mapInfo').hidden);
 }
 
