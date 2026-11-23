@@ -28,6 +28,7 @@
 import { SERVER, IS_TQ, serverKey, esiUrl, kbSiteLink } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v8';
 import * as AP from './alert-push.js?v=v15';
+import * as SND from './alert-sound.js?v=v1';
 import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
 
@@ -660,40 +661,10 @@ function bigCard(a) {
   while (cards.children.length > 4) cards.lastChild.remove();
   setTimeout(() => card.remove(), 20e3);
 }
-// 播报的提示音：两声柔和的正弦波（预警的方波太吓人）
-function chime() {
-  try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    [660, 990].forEach((f, i) => {
-      const o = ac.createOscillator(), g = ac.createGain();
-      o.type = 'sine'; o.frequency.value = f;
-      const t0 = ac.currentTime + i * 0.14;
-      g.gain.setValueAtTime(0.0001, t0);
-      g.gain.exponentialRampToValueAtTime(0.1, t0 + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.4);
-      o.connect(g).connect(ac.destination);
-      o.start(t0); o.stop(t0 + 0.42);
-    });
-    setTimeout(() => ac.close(), 1500);
-  } catch { /* 浏览器不允许自动播放时忽略 */ }
-}
+// 播报的提示音：默认两声柔和的正弦波（预警的方波太吓人）；声音和音量在个性化设置里换（alert-sound.js）
+function chime() { SND.play('big', 2); }
 
-function beep(urgent) {
-  try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    const tones = urgent ? [880, 660, 880, 660] : [880, 660];
-    tones.forEach((f, i) => {
-      const o = ac.createOscillator(), g = ac.createGain();
-      o.type = 'square'; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, ac.currentTime + i * 0.18);
-      g.gain.exponentialRampToValueAtTime(0.12, ac.currentTime + i * 0.18 + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + i * 0.18 + 0.16);
-      o.connect(g).connect(ac.destination);
-      o.start(ac.currentTime + i * 0.18); o.stop(ac.currentTime + i * 0.18 + 0.17);
-    });
-    setTimeout(() => ac.close(), 1500);
-  } catch { /* 浏览器不允许自动播放时忽略 */ }
-}
+function beep(urgent) { SND.play('kill', urgent ? 4 : 2); }
 
 // 测试：网页提醒（特效、提示音、系统通知中开着的）/ 游戏内邮件
 export function test(kind) {
@@ -795,7 +766,7 @@ function drawPanel() {
       ${T.mail ? AM.pickerHtml('kill') : ''}
       ${AP.switchHtml('kill')}
       ${sw('web', '网页特效', '', '屏幕边缘红色闪烁 + 右上角预警卡片')}
-      ${sw('sound', '提示音', '', '有新预警时播放提示音，本星系的更急促')}
+      ${sw('sound', '提示音', '<button type="button" class="link-btn" data-open-prefs="sound">换声音、调音量</button>', '有新预警时播放提示音，本星系的更急促')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
       ${sw('offlineMute', '角色离线时不提醒', S.online === false ? '角色当前离线' : S.online ? '角色当前在线' : '', '每分钟读一次角色在线状态，离线期间的预警只记在「最近预警」里，不发邮件、不弹特效、不响提示音')}
       ${T.offlineMute && token && !ctx.hasScope(ONLINE_SCOPE) ? '<p class="ka-warn" title="esi-location.read_online.v1">缺少在线状态权限，暂照常提醒</p>' : ''}
@@ -814,7 +785,7 @@ function drawPanel() {
       ${sw('bigOn', '开启高价值播报', '', '本服任何价值达到门槛的击杀都弹出提醒，不需要绑定 ESI；不发游戏邮件、不推送，不受下面的过滤条件影响')}
       <label class="ka-opt"${IS_TQ ? ' title="宁静服参考：10 亿以上每天约 460 条（平均 3 分钟一条），50 亿以上约 30 条，100 亿以上约 7 条"' : ''}><span><b>播报门槛</b></span><select class="cr-input" data-ka-num="bigMin" aria-label="播报门槛">${opts(BIG_VALUES, T.bigMin)}</select></label>
       ${sw('bigWeb', '弹出卡片', '', '右上角弹出金色卡片，点开看击杀详情，20 秒后自己消失')}
-      ${sw('bigSound', '提示音', '', '和预警的提示音不一样，柔和一些')}
+      ${sw('bigSound', '提示音', '<button type="button" class="link-btn" data-open-prefs="sound">换声音、调音量</button>', '默认和预警的提示音不一样，柔和一些')}
       ${sw('bigNotify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-ka-test="big">测试播报</button></div>`)}

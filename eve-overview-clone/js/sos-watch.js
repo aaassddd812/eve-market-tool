@@ -9,6 +9,7 @@
 import { SERVER, serverKey } from './server.js?v=s4';
 import * as AM from './alert-mail.js?v=v8';
 import * as AP from './alert-push.js?v=v15';
+import * as SND from './alert-sound.js?v=v1';
 
 let ctx;   // esc, formatISK, showToast, resolveNames, accounts, tokenInfo, hasScope, openEsiBind, openWhSystem
 const KEY = serverKey('eve-sos-watch-v1');
@@ -164,21 +165,8 @@ function webAlert(x) {
   while (box.children.length > 4) box.lastElementChild.remove();
   setTimeout(() => card.remove(), 45e3);
 }
-function beep() {
-  try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    [660, 880, 660].forEach((f, i) => {
-      const o = ac.createOscillator(), g = ac.createGain();
-      o.type = 'sine'; o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, ac.currentTime + i * 0.2);
-      g.gain.exponentialRampToValueAtTime(0.15, ac.currentTime + i * 0.2 + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, ac.currentTime + i * 0.2 + 0.18);
-      o.connect(g).connect(ac.destination);
-      o.start(ac.currentTime + i * 0.2); o.stop(ac.currentTime + i * 0.2 + 0.19);
-    });
-    setTimeout(() => ac.close(), 1500);
-  } catch { /* 浏览器不允许自动播放时忽略 */ }
-}
+// 提示音：声音和音量在个性化设置里换（alert-sound.js）
+function beep() { SND.play('sos', 3); }
 // 游戏内邮件：合并、限速（与击杀预警共用发信间隔）
 function queueMail(list) {
   if (!AM.canMail()) return;
@@ -231,7 +219,7 @@ function renderPanel() {
       ${T.mail ? AM.pickerHtml('sos') : ''}
       ${AP.switchHtml('sos')}
       ${sw('web', '网页弹窗', '', '右下角弹出求救卡片')}
-      ${sw('sound', '提示音')}
+      ${sw('sound', '提示音', '<button type="button" class="link-btn" data-open-prefs="sound">换声音、调音量</button>')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
     </div>
     <div class="ka-actions"><button class="btn btn-ghost btn-sm" data-sw-test>测试网页提醒</button></div>`)}

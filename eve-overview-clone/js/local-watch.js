@@ -14,6 +14,7 @@
 // 总览预警（ov-watch.js）自己截画面，不受影响。
 
 import * as AP from './alert-push.js?v=v15';
+import * as SND from './alert-sound.js?v=v1';
 import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
 import { SERVER, IS_TQ } from './server.js?v=s4';
@@ -333,19 +334,8 @@ function raise(list) {
   if (T.withName) setTimeout(later, 200); else later();
 }
 
-function beep(n) {
-  try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    for (let i = 0; i < n; i++) {
-      const o = ac.createOscillator(), g = ac.createGain();
-      o.type = 'square'; o.frequency.value = i % 2 ? 660 : 990;
-      const t0 = ac.currentTime + i * 0.16;
-      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.09, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
-      o.connect(g).connect(ac.destination); o.start(t0); o.stop(t0 + 0.15);
-    }
-    setTimeout(() => ac.close(), 1500);
-  } catch { /* 浏览器不允许自动播放 */ }
-}
+// 提示音：有红名 4 声、其他 2 声；声音和音量在个性化设置里换（alert-sound.js）
+function beep(n) { SND.play('local', n); }
 
 let layer = null;
 function card(entry) {
@@ -632,7 +622,7 @@ function drawPanel() {
       ${sw('withName', '色块 + 人物名一起预警', '关掉就只看色块：颜色确认了马上报警', '开着时等名字和所属查完（最多 2 秒）再报，并排除自己和友方；关掉报得快，但颜色认错的友方也会报')}
     </div>`)}
     ${sec('提醒方式', `<div class="ka-list">
-      ${sw('sound', '提示音')}
+      ${sw('sound', '提示音', '<button type="button" class="link-btn" data-open-prefs="sound">换声音、调音量</button>')}
       ${sw('web', '网页卡片', '', '右上角弹出卡片')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
       ${AP.switchHtml('local')}

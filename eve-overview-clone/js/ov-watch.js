@@ -9,7 +9,8 @@
 // 提醒方式：提示音、网页卡片、系统通知、消息推送（alert-push.js 的 ov）。设置存在 eve-ovwatch-v1（不分服务器）。
 // 国服（晨曦、曙光）的桌面版不能用总览预警（LOCKED，和本地红名一样）：不截游戏画面、不列 EVE 窗口，「开始」按钮变灰不能点；设置照旧保存。宁静服和网页版不变。
 import * as AP from './alert-push.js?v=v15';
-import * as LW from './local-watch.js?v=v33';
+import * as SND from './alert-sound.js?v=v1';
+import * as LW from './local-watch.js?v=v34';
 import { IS_TQ } from './server.js?v=s4';
 
 let ctx;   // esc, showToast
@@ -296,19 +297,8 @@ function raise(list, test = false) {
   }
   if (!test) AP.push('ov', { sig: 'ov|' + at + '|' + names.join(','), text: `${title} · ${names.join('、')}` });
 }
-function beep() {
-  try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    for (let i = 0; i < 3; i++) {
-      const o = ac.createOscillator(), g = ac.createGain();
-      o.type = 'triangle'; o.frequency.value = i % 2 ? 520 : 780;
-      const t0 = ac.currentTime + i * 0.2;
-      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
-      o.connect(g).connect(ac.destination); o.start(t0); o.stop(t0 + 0.19);
-    }
-    setTimeout(() => ac.close(), 1500);
-  } catch { /* 浏览器不允许自动播放 */ }
-}
+// 提示音：声音和音量在个性化设置里换（alert-sound.js）
+function beep() { SND.play('ov', 3); }
 let layer = null;
 function card(entry) {
   if (!layer) {
@@ -419,7 +409,7 @@ function drawPanel() {
           <button type="button" class="btn btn-primary btn-sm" data-ov-add>添加</button></div></div>
       <div class="ka-actions"><button type="button" class="btn btn-ghost btn-sm" data-ov-reset>恢复默认规则</button></div></div>`)}
     ${sec('提醒方式', `<div class="ka-list">
-      ${sw('sound', '提示音')}
+      ${sw('sound', '提示音', '<button type="button" class="link-btn" data-open-prefs="sound">换声音、调音量</button>')}
       ${sw('web', '网页卡片', '', '右上角弹出卡片')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
       ${AP.switchHtml('ov')}

@@ -22,6 +22,7 @@
 
 import * as AM from './alert-mail.js?v=v8';
 import * as AP from './alert-push.js?v=v15';
+import * as SND from './alert-sound.js?v=v1';
 import * as ST from './standings.js?v=v6';
 import * as FF from './float-feed.js?v=v11';
 import { IS_TQ } from './server.js?v=s4';
@@ -696,20 +697,8 @@ async function flushMail() {
   return AM.sendMail('intel', subject, body);
 }
 
-function beep(jumps) {
-  try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    const n = jumps <= 1 ? 4 : jumps <= 3 ? 3 : 2;
-    for (let i = 0; i < n; i++) {
-      const o = ac.createOscillator(), g = ac.createGain();
-      o.type = 'sawtooth'; o.frequency.value = i % 2 ? 520 : 780;
-      const t0 = ac.currentTime + i * 0.2;
-      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.1, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.18);
-      o.connect(g).connect(ac.destination); o.start(t0); o.stop(t0 + 0.19);
-    }
-    setTimeout(() => ac.close(), 1500);
-  } catch { /* 浏览器不允许自动播放 */ }
-}
+// 提示音：越近响得越多（1 跳内 4 声、3 跳内 3 声、更远 2 声）；声音和音量在个性化设置里换（alert-sound.js）
+function beep(jumps) { SND.play('intel', jumps <= 1 ? 4 : jumps <= 3 ? 3 : 2); }
 
 let layer = null;
 function card(title, body, r) {
@@ -793,7 +782,7 @@ function drawPanel() {
       <label class="ka-opt" title="星图上的红 / 绿标记多久后消失"><span><b>星图标记保留</b></span><select class="cr-input" data-in-num="expire">${[5, 10, 15, 30, 60].map((m) => `<option value="${m}"${T.expire === m ? ' selected' : ''}>${m} 分钟</option>`).join('')}</select></label>
     </div>`)}
     ${sec('提醒方式', `<div class="ka-list">
-      ${sw('sound', '提示音', '', '越近响得越急')}
+      ${sw('sound', '提示音', '<button type="button" class="link-btn" data-open-prefs="sound">换声音、调音量</button>', '越近响得越急')}
       ${sw('web', '网页卡片', '', '右上角弹出敌情卡片，点击在星图查看')}
       ${sw('notify', '系统通知', '', '浏览器在后台时也能看到（需要允许通知）')}
       ${sw('mail', '游戏内邮件', '', '发 EVE 邮件（每分钟最多一封，多条合并），需要绑定 ESI')}

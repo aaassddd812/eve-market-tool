@@ -17,6 +17,7 @@
 
 import * as TF from './trade-fees.js?v=v7';
 import * as AP from './alert-push.js?v=v15';
+import * as SND from './alert-sound.js?v=v1';
 import { L } from './alert-mail.js?v=v8';
 
 let ctx;   // esc, formatISK, formatPrice, formatNumber, showToast, copyText, addToCart, fetchESI, fetchESIPaged, esiAuthFetch, ensureEsiToken, hasEsiToken, hasScope, typeName, locationName, resolveTypeNames, selectItem, store, serverKey, isActive, openPush
@@ -440,14 +441,6 @@ function notify(list) {
     });
   }
 }
-function beep() {
-  try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ac.createOscillator(), g = ac.createGain();
-    o.frequency.value = 880; g.gain.value = 0.08;
-    o.connect(g); g.connect(ac.destination);
-    o.start(); o.stop(ac.currentTime + 0.25);
-    o.onended = () => ac.close();
-  } catch { /* 忽略 */ }
-}
+// 提示音：声音和音量在个性化设置里换（alert-sound.js）
+function beep() { SND.play('order', 1); }
 export const watchState = () => ({ bg: SET.bg, under: (S.rows || []).filter((r) => r.state === 'under').length, at: S.checkedAt });

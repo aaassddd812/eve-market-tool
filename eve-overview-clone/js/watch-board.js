@@ -10,6 +10,7 @@
 import { loadHubs } from './hub-compare.js?v=v15';
 import * as FF from './float-feed.js?v=v11';
 import * as AP from './alert-push.js?v=v15';
+import * as SND from './alert-sound.js?v=v1';
 import { L } from './alert-mail.js?v=v8';
 
 let ctx = null;   // isGlobal, fetchESI, fetchESIPaged, regions, esc, formatISK, formatPrice, formatNumber, showToast, typeName, iconUrl, openItem, favorites, toggleFavorite, store, isActive, openPush
@@ -425,13 +426,5 @@ function startBackground() {
   }, POLL);
 }
 
-function beep() {
-  try {
-    const ac = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ac.createOscillator(), g = ac.createGain();
-    o.frequency.value = 660; g.gain.value = 0.08;
-    o.connect(g); g.connect(ac.destination);
-    o.start(); o.stop(ac.currentTime + 0.3);
-    o.onended = () => ac.close();
-  } catch { /* 忽略 */ }
-}
+// 提示音：声音和音量在个性化设置里换（alert-sound.js）
+function beep() { SND.play('watch', 1); }
