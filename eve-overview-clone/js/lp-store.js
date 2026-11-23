@@ -8,6 +8,8 @@
 // 我的 LP：ESI 角色忠诚点（esi-characters.read_loyalty.v1），按各军团最佳兑换估算价值。
 // 物品商人：活动代币等在太空里的物品商人处兑换的配方，按代币列出能换什么、每个代币值多少 ISK，以及怎么换到这个代币（仅宁静服）。
 // 价格：全服均价（一次请求，立即可用）或吉他卖单 / 收单（按物品逐个读取，有缓存）。
+// 均价比例：卖单 / 收单各选最优价或前 1% / 5% / 10% / 25% 均价——卖单从便宜往贵、收单从高往低累计到交易中心挂单总量的这个比例，
+//          取加权均价（不被个别离谱挂单带偏）；要逐个物品读交易中心全部挂单（getLiveHubPrices），全服排行只精算前列。
 // 数据：lp-data.json 由 build_lp.mjs 生成（ESI /loyalty/stores + SDE 中文名）；item-trader.json 由 build_item_trader.mjs 生成（客户端兑换配方）。
 import { SERVER, HUB, HUB_NAME, eveImage } from './server.js?v=s4';
 import { skPage } from './skeleton.js?v=v18';
@@ -34,9 +36,15 @@ const TABS = [
 ].filter(([k]) => k !== 'trade' || TRADE_URL);
 
 const D = { loading: null, data: null, avg: new Map(), bpAll: null, bpLoading: null, offersByType: new Map(), corpById: new Map(), corpsByOffer: new Map(), history: new Map() };
-const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, taxMode: 'skill', kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all', bp: 'make', token: 0, tSort: 'per', tDir: 'desc', tGroup: 'all' };
+const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', sellPct: 0, buyPct: 0, tax: 3.4, taxMode: 'skill', kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all', bp: 'make', token: 0, tSort: 'per', tDir: 'desc', tGroup: 'all' };
 const S = { times: new Map(), q: '', rankQ: '', sideQ: '', tQ: '', open: new Set(), tOpen: new Set(), loadingJita: null, progress: '', refined: new Set(), mine: null, mineError: null, mineLoading: false, rendered: '', mkt: undefined, mktLoading: null };
-const jita = new Map();   // 吉他行情 id -> { sell, buy }
+const jita = new Map();   // 吉他行情 id -> { sell, buy, sp?, bp? }（sp / bp：前 PCTS 各比例的卖单 / 收单均价）
+// 均价比例（%）：0 = 最优价（最低卖价 / 最高收价）；其余与 modern-app.js 的 DEPTH_PCTS 一一对应
+const PCTS = [1, 5, 10, 25];
+const depthOn = () => (F.sellPct > 0 && (F.price === 'sell' || F.mat === 'sell')) || (F.buyPct > 0 && (F.price === 'buy' || F.mat === 'buy'));
+const depthTried = new Set();   // 已按挂单明细读过的物品（读取失败的也算，不反复重试）
+// 这个物品还要读行情：没读过，或要按均价比例估价但还没读过挂单明细
+const needLive = (id) => !jita.has(id) || (depthOn() && !depthTried.has(id));
 // 制造页模块（industry.js）：蓝图制造的材料、安装费、所需技能与按技能的税费；加载完之前按旧算法（材料效率 0、无安装费、手动税费）
 let IND = null, indLoading = null;
 function loadInd() {
@@ -68,6 +76,7 @@ export function initLp(context) {
   if (!T_SORT_DIR[F.tSort]) { F.tSort = 'per'; F.tDir = 'desc'; }
   if (F.tDir !== 'asc' && F.tDir !== 'desc') F.tDir = T_SORT_DIR[F.tSort];
   if (F.tab === 'trade' && !TRADE_URL) F.tab = 'store';
+  for (const k of ['sellPct', 'buyPct']) F[k] = PCTS.includes(Number(F[k])) ? Number(F[k]) : 0;
   // 个人中心切换角色：「我的 LP」重新读取
   window.addEventListener('eve-account-change', () => { S.mine = null; S.mineError = null; });
 }
@@ -123,7 +132,9 @@ function price(id, side, strict) {
   if (side !== 'avg') {
     const j = jita.get(id);
     const live = j && (j.sell !== undefined || j.buy !== undefined) ? j : null;   // 读取失败的记成 {}
-    const p = live ? live[side] : S.mkt?.get(id)?.[side];
+    // 选了均价比例且读过挂单明细：用前 N% 均价（没有挂单时为 null，和最优价一样按没有价格处理）
+    const k = PCTS.indexOf(side === 'sell' ? F.sellPct : F.buyPct), deep = k >= 0 && live?.[side === 'sell' ? 'sp' : 'bp'];
+    const p = deep ? deep[k] : live ? live[side] : S.mkt?.get(id)?.[side];
     if (p > 0) return { v: p, src: live ? 'jita' : 'mkt' };
     if (strict && (live || S.mkt)) return { v: null, src: 'none' };
   }
@@ -189,15 +200,20 @@ function offerTypes(o) {
 
 // 读取吉他行情（逐个物品），完成后重绘
 function loadJita(ids, done) {
-  const need = [...new Set(ids)].filter((id) => !jita.has(id));
+  const need = [...new Set(ids)].filter(needLive);
   if (!need.length) return Promise.resolve();
+  const deep = depthOn();
   const run = (async () => {
-    const map = await ctx.getHubPrices(need, (n, total) => {
+    // 按均价比例估价要每个物品的全部挂单（逐个读 ESI）；否则用交易中心价格（宁静服一次批量）
+    const map = await (deep ? ctx.getLiveHubPrices : ctx.getHubPrices)(need, (n, total) => {
       S.progress = `读取${HUB_NAME}行情 ${n}/${total}`;
       const el = document.querySelector('[data-lp-progress]');
       if (el) el.textContent = S.progress;
     }).catch(() => new Map());
-    for (const id of need) jita.set(id, map.get(id) || {});
+    for (const id of need) {
+      jita.set(id, map.get(id) || jita.get(id) || {});   // 挂单明细没读到时保留已有的最优价
+      if (deep) depthTried.add(id);
+    }
   })();
   S.loadingJita = run;
   return run.finally(() => {
@@ -326,17 +342,22 @@ function renderTab() {
 
 const seg = (name, items, cur) => `<div class="segmented" role="group">${items.map(([v, l]) => `<button type="button" data-lp-set="${name}" data-v="${v}" class="${String(cur) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
 const PRICE_ZH = { sell: HUB_NAME + '卖单', buy: HUB_NAME + '收单', avg: '全服均价' };
+const pctField = (key, label, hint) => `<div class="pi-field"><label>${label}</label>${seg(key, [[0, '最优价'], ...PCTS.map((p) => [p, p + '%'])], F[key])}<small class="pi-hint">${hint}</small></div>`;
+// 估价设置摘要里的均价比例（单独的元素，不打断摘要那一句的翻译）
+const pctSummary = () => [['sellPct', '卖单'], ['buyPct', '收单']].filter(([k]) => F[k]).map(([k, l]) => `<span class="lp-sum-sep"> · </span><span>${l}前 ${F[k]}% 均价</span>`).join('');
 const BP_ZH = { make: '制造后卖产物', bpc: '直接卖蓝图（合同价）' };
 
 // ---------- 设置 ----------
 function renderSettings() {
   const el = $('lpSettings');
   el.innerHTML = `
-    <summary><b>估价设置</b><span class="text-muted">产物按${PRICE_ZH[F.price]} · 材料按${PRICE_ZH[F.mat]} · 税费 ${pct(sellTaxPct())}%${skillTax() ? '（按技能）' : ''} · 蓝图${BP_ZH[F.bp]}</span></summary>
+    <summary><b>估价设置</b><span class="text-muted">产物按${PRICE_ZH[F.price]} · 材料按${PRICE_ZH[F.mat]} · 税费 ${pct(sellTaxPct())}%${skillTax() ? '（按技能）' : ''} · 蓝图${BP_ZH[F.bp]}${pctSummary()}</span></summary>
     <div class="ind-set-grid">
       <div class="pi-field"><label>产物卖出价</label>${seg('price', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.price)}
         </div>
       <div class="pi-field"><label>所需物品 / 蓝图材料买入价</label>${seg('mat', [['sell', PRICE_ZH.sell], ['buy', PRICE_ZH.buy], ['avg', PRICE_ZH.avg]], F.mat)}</div>
+      ${pctField('sellPct', '卖单均价比例', '卖单从便宜往贵累计到挂单总量的这个比例，取加权均价；最优价 = 最低卖价')}
+      ${pctField('buyPct', '收单均价比例', '收单从高往低累计到挂单总量的这个比例，取加权均价；最优价 = 最高收价')}
       <div class="pi-field"><label>卖出税费</label>${seg('taxMode', [['skill', '按技能'], ['manual', '手动']], F.taxMode === 'manual' ? 'manual' : 'skill')}
         ${F.taxMode === 'manual' ? `<div class="pi-inline"><input type="number" class="pi-input lp-tax" data-lp-tax min="0" max="30" step="0.1" value="${F.tax}"><span>%</span></div>`
           : IND ? (() => { const t = IND.lpSettings(); return `<small class="pi-hint">销售税 ${pct(t.salesTax)}%${F.price === 'buy' ? '' : ` + 中介费 ${pct(t.brokerFee)}%（挂卖单）`}${F.mat === 'buy' ? ` · 挂收单买材料加中介费 ${pct(t.brokerFee)}%` : ''} · ${t.skills === 'esi' ? '按角色技能' : t.skills === 'esi-missing' ? '未绑定角色，按全 5 级' : '技能全 5 级'}（<a href="#ind" class="kb-link">制造页设置</a>）</small>`; })()
@@ -535,7 +556,7 @@ function renderStore(body) {
   const all = (D.data.stores[F.corp] || []).map(offer);
   if (needsJita() && !S.loadingJita) {
     const ids = all.flatMap(offerTypes);
-    if (ids.some((id) => !jita.has(id))) loadJita(ids, () => { if (F.tab === 'store') refreshBody(); });
+    if (ids.some(needLive)) loadJita(ids, () => { if (F.tab === 'store') refreshBody(); });
   }
   const mine = S.mine?.find((x) => x.corporation_id === F.corp);
   const rows = storeRows();
@@ -573,7 +594,7 @@ function renderRank(body) {
   const facOpts = [['all', '全部势力'], ...Object.entries(D.data.factions)];
   const sel = `<div class="pi-inline"><span>势力</span><select class="pi-input lp-faction" data-lp-faction>${facOpts.map(([v, l]) => `<option value="${v}"${String(F.faction) === String(v) ? ' selected' : ''}>${ctx.esc(l)}</option>`).join('')}</select></div>`;
   const refineIds = top.slice(0, REFINE_TOP).flatMap((r) => offerTypes(r.o));
-  const refined = !needsJita() || refineIds.every((id) => jita.has(id));
+  const refined = !needsJita() || !refineIds.some(needLive);
   const someLive = top.slice(0, REFINE_TOP).some((r) => jita.has(pidOf(r.o)));   // 精算过（排名变了还有没精算的）
   body.innerHTML = `
     <div class="pi-card ind-rank-filters">
@@ -592,7 +613,7 @@ function renderRank(body) {
 async function refineRank() {
   if (S.loadingJita) return;
   for (let round = 0; round < 5; round++) {
-    const ids = rankRows().slice(0, REFINE_TOP).flatMap((r) => offerTypes(r.o)).filter((id) => !jita.has(id));
+    const ids = rankRows().slice(0, REFINE_TOP).flatMap((r) => offerTypes(r.o)).filter(needLive);
     if (!ids.length) break;
     const run = loadJita(ids, () => { if (F.tab === 'rank') refreshBody(); });
     if (F.tab === 'rank') refreshBody();
@@ -768,7 +789,7 @@ function renderTrade(body) {
   const gets = TD.gets.get(token) || [];
   if (needsJita() && !S.loadingJita) {
     const ids = [token, ...uses.flatMap(tradeTypes), ...gets.flatMap(tradeTypes)];
-    if (ids.some((id) => !jita.has(id))) loadJita(ids, () => { if (F.tab === 'trade') refreshBody(); });
+    if (ids.some(needLive)) loadJita(ids, () => { if (F.tab === 'trade') refreshBody(); });
   }
   const groups = [...new Set(uses.map((r) => tradeGroup(r.group)))].sort((a, b) => a.localeCompare(b, 'zh'));
   if (F.tGroup !== 'all' && !groups.includes(F.tGroup)) F.tGroup = 'all';
@@ -1044,9 +1065,10 @@ function onClick(e) {
   }
   const set = e.target.closest('[data-lp-set]');
   if (set) {
-    F[set.dataset.lpSet] = set.dataset.v;
+    const key = set.dataset.lpSet;
+    F[key] = key === 'sellPct' || key === 'buyPct' ? Number(set.dataset.v) : set.dataset.v;
     save();
-    if (['price', 'mat', 'bp', 'taxMode'].includes(set.dataset.lpSet)) renderSettings();
+    if (['price', 'mat', 'bp', 'taxMode', 'sellPct', 'buyPct'].includes(key)) renderSettings();
     if (set.dataset.lpSet === 'bp') loadBpAll();
     refreshBody();
     return;

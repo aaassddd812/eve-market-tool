@@ -1023,7 +1023,9 @@ async function getJitaPrices(ids, onProgress, { maxAge, region } = {}) {
 }
 
 // 实时行情：和市场中心同一份订单（ESI，5 分钟缓存），取默认交易中心空间站的最低卖 / 最高收；同时更新交易中心价格缓存。
-// 逐个物品读 ESI，只用于物品不多的场合（制造计算器、利润排行精算）
+// 另带 sp / bp：卖单 / 收单前 1% / 5% / 10% / 25% 均价（DEPTH_PCTS，LP 商店的「均价比例」用；不存进价格缓存）。
+// 逐个物品读 ESI，只用于物品不多的场合（制造计算器、利润排行精算、LP 商店按均价比例估价）
+const DEPTH_PCTS = [0.01, 0.05, 0.1, 0.25];
 async function getLiveHubPrices(ids, onProgress) {
   const hub = REGIONS[0];
   const out = new Map();
@@ -1036,13 +1038,14 @@ async function getLiveHubPrices(ids, onProgress) {
       try {
         const orders = await regionOrders(id, global ? GLOBAL_MARKET_REGION : hub.id);
         const e = { sell: null, buy: null, at: Date.now() };
+        const sells = [], buys = [];
         for (const o of orders) {
           if (!global && o.location_id !== hub.hub.id) continue;
-          if (o.is_buy_order) e.buy = e.buy === null ? o.price : Math.max(e.buy, o.price);
-          else e.sell = e.sell === null ? o.price : Math.min(e.sell, o.price);
+          if (o.is_buy_order) { e.buy = e.buy === null ? o.price : Math.max(e.buy, o.price); buys.push(o); }
+          else { e.sell = e.sell === null ? o.price : Math.min(e.sell, o.price); sells.push(o); }
         }
         state.hubPriceCache.set(hub.id + ':' + id, { ...e, med: hubPrice(hub, id)?.med || null });
-        out.set(id, e);
+        out.set(id, { ...e, sp: DEPTH_PCTS.map((p) => topPercentAvg(sells, true, p)), bp: DEPTH_PCTS.map((p) => topPercentAvg(buys, false, p)) });
       } catch { /* 读不到的物品不给价格 */ }
       onProgress?.(++done, ids.length);
     }
@@ -1101,10 +1104,10 @@ async function openIndustry(restored = false) {
 // LP 商店：首次进入时加载
 let lpLoading = null;
 function loadLpModule() {
-  if (!lpLoading) lpLoading = import('./lp-store.js?v=v23').then((m) => {
+  if (!lpLoading) lpLoading = import('./lp-store.js?v=v25').then((m) => {
     m.initLp({ addToCart, industry: loadIndustryModule,
       esc, formatISK, formatNumber, showToast, copyText, store, fetchESI, getMarketPriceMap, esiAuthFetch, ensureEsiToken,
-      getHubPrices: getJitaPrices,
+      getHubPrices: getJitaPrices, getLiveHubPrices,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
       closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); }
     });
