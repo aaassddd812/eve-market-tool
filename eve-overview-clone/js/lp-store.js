@@ -5,6 +5,8 @@
 //          制造按「制造」页的设置（industry.js 的 lpMake）：星系指数、设施与改装件的材料加成、安装费（含设施税与 SCC 附加费），并列出制造所需技能。
 // 卖出税费：默认按技能（制造页的技能设置：会计学减销售税，产物挂卖单时加经纪人关系后的中介费，挂收单买材料也加中介费），也可手动填。
 // 全服排行：所有 LP 商店兑换项（按 offer 去重）的 ISK/LP 排行，前列可用吉他行情精算。
+// 比例：表格同时列出挂单比例（产物挂卖单，扣销售税和中介费）和收单比例（产物直接卖给收单，只扣销售税），
+//      两个比例都能填区间（最低–最高）筛选，并显示各有多少项落在区间里（LP 商店和全服排行共用）。
 // 我的 LP：ESI 角色忠诚点（esi-characters.read_loyalty.v1），按各军团最佳兑换估算价值。
 // 物品商人：活动代币等在太空里的物品商人处兑换的配方，按代币列出能换什么、每个代币值多少 ISK，以及怎么换到这个代币（仅宁静服）。
 // 价格：全服均价（一次请求，立即可用）或吉他卖单 / 收单（按物品逐个读取，有缓存）。
@@ -34,7 +36,7 @@ const TABS = [
 ].filter(([k]) => k !== 'trade' || TRADE_URL);
 
 const D = { loading: null, data: null, avg: new Map(), bpAll: null, bpLoading: null, offersByType: new Map(), corpById: new Map(), corpsByOffer: new Map(), history: new Map() };
-const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, taxMode: 'skill', kind: 'all', sort: 'iskLp', dir: 'desc', faction: 'all', bp: 'make', token: 0, tSort: 'per', tDir: 'desc', tGroup: 'all' };
+const F = { tab: 'store', corp: 1000035, price: 'sell', mat: 'sell', tax: 3.4, taxMode: 'skill', kind: 'all', sort: 'iskSell', dir: 'desc', rng: null, faction: 'all', bp: 'make', token: 0, tSort: 'per', tDir: 'desc', tGroup: 'all' };
 const S = { times: new Map(), q: '', rankQ: '', sideQ: '', tQ: '', open: new Set(), tOpen: new Set(), loadingJita: null, progress: '', refined: new Set(), mine: null, mineError: null, mineLoading: false, rendered: '', mkt: undefined, mktLoading: null };
 const jita = new Map();   // 吉他行情 id -> { sell, buy }
 // 制造页模块（industry.js）：蓝图制造的材料、安装费、所需技能与按技能的税费；加载完之前按旧算法（材料效率 0、无安装费、手动税费）
@@ -48,11 +50,11 @@ function loadInd() {
   return indLoading;
 }
 const skillTax = () => F.taxMode !== 'manual' && IND;
-// 卖出税费 %（产物）与买材料的中介费 %
-function sellTaxPct() {
+// 卖出税费 %（产物；side 为卖出方式，卖给收单不交中介费）与买材料的中介费 %
+function sellTaxPct(side = F.price) {
   if (!skillTax()) return F.tax;
   const t = IND.lpSettings();
-  return t.salesTax + (F.price === 'buy' ? 0 : t.brokerFee);
+  return t.salesTax + (side === 'buy' ? 0 : t.brokerFee);
 }
 const buyFeePct = () => (skillTax() && F.mat === 'buy' ? IND.lpSettings().brokerFee : 0);
 const pct = (x) => Math.round(x * 100) / 100;
@@ -61,8 +63,10 @@ const makeOf = (o) => (o.bp && IND ? IND.lpMake(o.bp[0], o.qty) : null);
 export function initLp(context) {
   ctx = context;
   Object.assign(F, ctx.store.getJSON(STORE_KEY, {}) || {});
-  if (F.sort === 'isk') F.sort = 'iskLp';                   // 旧版排序按钮
-  if (!SORT_DIR[F.sort]) { F.sort = 'iskLp'; F.dir = 'desc'; }
+  if (F.sort === 'isk' || F.sort === 'iskLp') F.sort = F.price === 'buy' ? 'iskBuy' : 'iskSell';   // 旧版只有一列 ISK/LP
+  if (!SORT_DIR[F.sort]) { F.sort = 'iskSell'; F.dir = 'desc'; }
+  const r = F.rng || {};
+  F.rng = Object.fromEntries(['sell', 'buy'].map((k) => [k, Array.isArray(r[k]) ? [0, 1].map((i) => String(r[k][i] ?? '')) : ['', '']]));
   if (F.dir !== 'asc' && F.dir !== 'desc') F.dir = SORT_DIR[F.sort];
   if (F.bp !== 'bpc' || !SERVER.kb) F.bp = 'make';
   if (!T_SORT_DIR[F.tSort]) { F.tSort = 'per'; F.tDir = 'desc'; }
@@ -73,10 +77,12 @@ export function initLp(context) {
 }
 
 // 表头排序（与市场中心订单簿一致）：点击表头按该列排序，再点一次反向；首次点击用该列更有用的方向
-const SORT_DIR = { name: 'asc', lp: 'asc', iskCost: 'asc', req: 'asc', revenue: 'desc', profit: 'desc', iskLp: 'desc', daily: 'desc', turnover: 'desc' };
+const SORT_DIR = { name: 'asc', lp: 'asc', iskCost: 'asc', req: 'asc', revenue: 'desc', profit: 'desc', iskSell: 'desc', iskBuy: 'desc', daily: 'desc', turnover: 'desc' };
+const ratioOf = (v, side) => (v[side].missing ? null : v[side].iskLp);
 const SORT_KEY = {
   lp: (r) => r.o.lp, iskCost: (r) => r.o.isk, req: (r) => r.v.reqCost + r.v.matCost,
-  revenue: (r) => (r.v.missing ? null : r.v.revenue), profit: (r) => (r.v.missing ? null : r.v.profit), iskLp: (r) => (r.v.missing ? null : r.v.iskLp),
+  revenue: (r) => (r.v.missing ? null : r.v.revenue), profit: (r) => (r.v.missing ? null : r.v.profit),
+  iskSell: (r) => ratioOf(r.v, 'sell'), iskBuy: (r) => ratioOf(r.v, 'buy'),
   daily: (r) => volOf(r.o)?.daily ?? null, turnover: (r) => volOf(r.o)?.isk ?? null
 };
 // trade：物品商人表格（排序单独记）
@@ -154,31 +160,38 @@ function pricer() {
   return st;
 }
 
-// 兑换项估值；mode：蓝图兑换品按 make（制造后卖产物）还是 bpc（直接卖蓝图，合同价）算，默认跟估价设置
+// 兑换项估值；mode：蓝图兑换品按 make（制造后卖产物）还是 bpc（直接卖蓝图，合同价）算，默认跟估价设置。
+// 产物按估价设置的卖出价算利润；另外按挂卖单（sell）和卖给收单（buy）各算一次 ISK/LP（表格的挂单比例 / 收单比例），花费只算一次
 function valueOf(o, mode = F.bp) {
   const pc = pricer(), use = pc.use;
-  let bpcMissing = false;
   // 税费只算在卖出的产物上；制造材料是买入成本，计入花费
-  let unit, keep = 1 - sellTaxPct() / 100, matCost = 0, jobCost = 0, mk = null;
-  if (o.bp && mode === 'bpc') {
-    unit = bpcRun(o);
-    if (unit == null) { bpcMissing = true; unit = 0; }
-    keep = 1;   // 合同出售不扣销售税
-  } else if (o.bp) {
-    const [pid, pq, mats] = o.bp;
-    unit = use(pid, F.price, prodStrict()) * pq;
+  let matCost = 0, jobCost = 0, mk = null;
+  if (o.bp && mode !== 'bpc') {
     mk = makeOf(o);
     // 有制造页数据时：材料按设施 / 改装件加成后的数量，另加安装费；否则材料效率 0、不计安装费
     if (mk) { matCost = mk.items.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0); jobCost = mk.jobCost; }
-    else matCost = mats.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0) * o.qty;
-  } else unit = use(o.type, F.price, prodStrict());
-  const revenue = unit * o.qty * keep;
+    else matCost = o.bp[2].reduce((t, [m, q]) => t + use(m, F.mat) * q, 0) * o.qty;
+  }
   const fee = 1 + buyFeePct() / 100;
   const reqCost = o.req.reduce((t, [m, q]) => t + use(m, F.mat) * q, 0) * fee;
   matCost *= fee;
   const cost = o.isk + reqCost + matCost + jobCost;
-  const profit = revenue - cost;
-  return { revenue, reqCost, matCost, jobCost, mk, cost, profit, iskLp: o.lp ? profit / o.lp : null, missing: pc.missing || bpcMissing, approx: pc.approx, noBuy: pc.noBuy, mode: o.bp ? mode : null };
+  // 产物按某种卖法（side = sell / buy / avg）的价值与利润；卖给收单时只认收单价
+  const sale = (side) => {
+    const sp = pricer();
+    let unit, keep = 1 - sellTaxPct(side) / 100, bpcMissing = false;
+    if (o.bp && mode === 'bpc') {
+      unit = bpcRun(o);
+      if (unit == null) { bpcMissing = true; unit = 0; }
+      keep = 1;   // 合同出售不扣销售税
+    } else if (o.bp) unit = sp.use(o.bp[0], side, side === 'buy') * o.bp[1];
+    else unit = sp.use(o.type, side, side === 'buy');
+    const revenue = unit * o.qty * keep, profit = revenue - cost;
+    return { revenue, profit, iskLp: o.lp ? profit / o.lp : null, missing: pc.missing || sp.missing || bpcMissing, approx: pc.approx || sp.approx, noBuy: sp.noBuy };
+  };
+  const main = sale(F.price);
+  return { ...main, reqCost, matCost, jobCost, mk, cost, mode: o.bp ? mode : null,
+    sell: F.price === 'sell' ? main : sale('sell'), buy: F.price === 'buy' ? main : sale('buy') };
 }
 
 function offerTypes(o) {
@@ -352,7 +365,7 @@ function needsJita() { return F.price !== 'avg' || F.mat !== 'avg'; }
 function priceNote(rows) {
   if (!needsJita()) return '全服均价估算';
   if (S.loadingJita) return `<span data-lp-progress>${S.progress || `读取${HUB_NAME}行情…`}</span>${S.mkt ? '（暂用行情快照）' : '（暂用全服均价）'}`;
-  const approx = rows.some((r) => r.v.approx);
+  const approx = rows.some((r) => r.v.approx || r.v.sell.approx || r.v.buy.approx);
   return HUB_NAME + '实时行情' + (approx ? '（≈ 为全服均价）' : '');
 }
 
@@ -362,7 +375,6 @@ function offerRow(r, i, { showCorp = false } = {}) {
   const esc = ctx.esc, isk = ctx.formatISK;
   const open = S.open.has(o.id);
   const corps = D.corpsByOffer.get(o.id) || [];
-  const cls = v.iskLp == null || v.missing ? '' : v.iskLp >= 0 ? 'pi-profit' : 'down';
   return `
     <tr data-lp-open="${o.id}" class="${open ? 'active' : ''}" title="点击展开明细">
       <td class="pi-rank lp-hide-sm">${i + 1}</td>
@@ -373,9 +385,14 @@ function offerRow(r, i, { showCorp = false } = {}) {
       <td class="num lp-hide-md">${o.req.length || v.matCost ? isk(v.reqCost + v.matCost) : '—'}</td>
       <td class="num pi-hide-sm">${v.missing ? '—' : isk(v.revenue)}</td>
       <td class="num lp-hide-sm">${v.missing ? '—' : isk(v.profit)}</td>
-      <td class="num ${cls}">${v.missing || v.iskLp == null ? '—' : (v.approx ? '≈' : '') + ctx.formatNumber(Math.round(v.iskLp))}</td>
+      ${ratioCell(v.sell)}${ratioCell(v.buy)}
       ${volCells(o, i)}
-    </tr>${open ? `<tr class="lp-detail-row"><td colspan="10">${offerDetail(o, v)}</td></tr>` : ''}`;
+    </tr>${open ? `<tr class="lp-detail-row"><td colspan="${COLS}">${offerDetail(o, v)}</td></tr>` : ''}`;
+}
+// 挂单比例 / 收单比例一格；没有收单的写明（卖给收单卖不掉）
+function ratioCell(x) {
+  if (x.missing || x.iskLp == null) return `<td class="num text-muted"${x.noBuy ? ' title="没有收单"' : ''}>—</td>`;
+  return `<td class="num ${x.iskLp >= 0 ? 'pi-profit' : 'down'}">${x.approx ? '≈' : ''}${ctx.formatNumber(Math.round(x.iskLp))}</td>`;
 }
 
 // ---------- 复制采购清单（游戏「市场 → 批量购买」可直接粘贴）----------
@@ -492,10 +509,11 @@ function offerDetail(o, v) {
   return `<div class="lp-detail2">${tiles}${modes}<div class="lp-body">${main}${side}</div></div>`;
 }
 
-const tableHead = () => `<thead><tr><th class="lp-hide-sm">#</th>${sortTh('name', '兑换品')}${sortTh('lp', 'LP', 'num')}${sortTh('iskCost', 'ISK 费用', 'num lp-hide-md')}${sortTh('req', '物品 / 材料', 'num lp-hide-md')}${sortTh('revenue', '产物价值', 'num pi-hide-sm')}${sortTh('profit', '利润', 'num lp-hide-sm')}${sortTh('iskLp', 'ISK/LP', 'num')}${S.mkt ? sortTh('daily', `<span title="${HUB_NAME} 30 天日均成交量">日均成交</span>`, 'num lp-hide-sm') + sortTh('turnover', `<span title="${HUB_NAME} 30 天日均成交量 × 30 天成交均价">日均成交额</span>`, 'num lp-hide-sm') : '<th class="num lp-hide-sm">日均成交</th><th class="num lp-hide-sm">日均成交额</th>'}</tr></thead>`;
+const COLS = 11;
+const tableHead = () => `<thead><tr><th class="lp-hide-sm">#</th>${sortTh('name', '兑换品')}${sortTh('lp', 'LP', 'num')}${sortTh('iskCost', 'ISK 费用', 'num lp-hide-md')}${sortTh('req', '物品 / 材料', 'num lp-hide-md')}${sortTh('revenue', '产物价值', 'num pi-hide-sm')}${sortTh('profit', '利润', 'num lp-hide-sm')}${sortTh('iskSell', '<span title="每 LP 换多少 ISK：产物挂卖单卖出">挂单比例</span>', 'num')}${sortTh('iskBuy', '<span title="每 LP 换多少 ISK：产物直接卖给收单">收单比例</span>', 'num')}${S.mkt ? sortTh('daily', `<span title="${HUB_NAME} 30 天日均成交量">日均成交</span>`, 'num lp-hide-sm') + sortTh('turnover', `<span title="${HUB_NAME} 30 天日均成交量 × 30 天成交均价">日均成交额</span>`, 'num lp-hide-sm') : '<th class="num lp-hide-sm">日均成交</th><th class="num lp-hide-sm">日均成交额</th>'}</tr></thead>`;
 
 function sortRows(rows, trade = false) {
-  const [sort, dir, keys, def] = trade ? [F.tSort, F.tDir, T_SORT_KEY, 'per'] : [F.sort, F.dir, SORT_KEY, 'iskLp'];
+  const [sort, dir, keys, def] = trade ? [F.tSort, F.tDir, T_SORT_KEY, 'per'] : [F.sort, F.dir, SORT_KEY, 'iskSell'];
   const mul = dir === 'asc' ? 1 : -1;
   if (sort === 'name') return rows.sort((a, b) => mul * tName(a.o.type).localeCompare(tName(b.o.type), 'zh'));
   const key = (S.mkt || !['daily', 'turnover'].includes(sort) ? keys[sort] : null) || keys[def];
@@ -513,12 +531,54 @@ function matchQ(o, q) {
   return tName(o.type).toLowerCase().includes(s) || (o.bp && tName(o.bp[0]).toLowerCase().includes(s)) || String(o.type) === q;
 }
 
-function filterBar(qKey, extra = '') {
+function filterBar(qKey, extra = '', n = null) {
   return `<div class="ind-rank-row">
       <div class="search-box lp-search"><svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         <input type="search" data-lp-q="${qKey}" placeholder="筛选兑换品" value="${ctx.esc(S[qKey])}" spellcheck="false" aria-label="筛选兑换品"></div>
       <div class="pi-inline"><span>类型</span>${seg('kind', [['all', '全部'], ['item', '物品'], ['bp', '蓝图']], F.kind)}</div>
       ${extra}
+    </div>${rangeBar(n)}`;
+}
+
+// ---------- 比例区间 ----------
+// F.rng = { sell: [最低, 最高], buy: [...] }，存输入框原文（打到一半的「-」不会被清掉），用的时候再解析；空 = 不限
+const RNG_ZH = { sell: '挂单比例', buy: '收单比例' };
+const rngNum = (t) => { const x = String(t).replace(/[,，\s]/g, ''); return x && Number.isFinite(Number(x)) ? Number(x) : null; };
+function rngOf(side) {
+  const [a, b] = F.rng[side].map(rngNum);
+  return a != null && b != null && a > b ? [b, a] : [a, b];
+}
+const rngOn = (side) => rngOf(side).some((x) => x != null);
+// 按表格显示的整数比较（显示 1,500 的算进 1500 起的区间）
+function inRng(side, v) {
+  const [a, b] = rngOf(side), x = ratioOf(v, side);
+  if (x == null) return false;
+  const r = Math.round(x);
+  return (a == null || r >= a) && (b == null || r <= b);
+}
+// 按区间筛选（list 已按类型 / 搜索 / 势力筛过）；n 记下各区间内的项数：sell / buy 各自满足的、both 两个都满足的（= 表格行数）
+function ranged(list) {
+  const on = { sell: rngOn('sell'), buy: rngOn('buy') };
+  const n = { sell: 0, buy: 0, both: 0, on };
+  const rows = list.filter((r) => {
+    const s = !on.sell || inRng('sell', r.v), b = !on.buy || inRng('buy', r.v);
+    if (on.sell && s) n.sell++;
+    if (on.buy && b) n.buy++;
+    return s && b;
+  });
+  n.both = rows.length;
+  return Object.assign(rows, { n });
+}
+function rangeBar(n) {
+  if (!n) return '';
+  const box = (side) => {
+    const [a, b] = F.rng[side];
+    const inp = (i, v, ph) => `<input type="text" inputmode="decimal" class="pi-input lp-rng-in" data-lp-rng="${side}:${i}" value="${ctx.esc(v)}" placeholder="${ph}" aria-label="${RNG_ZH[side]}${ph}" spellcheck="false" autocomplete="off">`;
+    return `<div class="pi-inline lp-rng"><span title="${side === 'sell' ? '每 LP 换多少 ISK：产物挂卖单卖出' : '每 LP 换多少 ISK：产物直接卖给收单'}">${RNG_ZH[side]}</span>${inp(0, a, '下限')}<span class="lp-rng-dash">–</span>${inp(1, b, '上限')}${n.on[side] ? `<b class="lp-rng-n">${n[side]} 项</b>` : ''}</div>`;
+  };
+  return `<div class="ind-rank-row lp-rngs">${box('sell')}${box('buy')}
+      ${n.on.sell && n.on.buy ? `<span class="lp-rng-both">同时满足 ${n.both} 项</span>` : ''}
+      ${n.on.sell || n.on.buy ? '<button type="button" class="link-btn" data-lp-rng-clear>清除</button>' : ''}
     </div>`;
 }
 
@@ -527,7 +587,7 @@ const kindOk = (o) => F.kind === 'all' || (F.kind === 'bp' ? !!o.bp : !o.bp);
 // ---------- LP 商店 ----------
 function storeRows() {
   const ids = D.data.stores[F.corp] || [];
-  return sortRows(ids.map(offer).filter((o) => kindOk(o) && matchQ(o, S.q)).map((o) => ({ o, v: valueOf(o) })));
+  return sortRows(ranged(ids.map(offer).filter((o) => kindOk(o) && matchQ(o, S.q)).map((o) => ({ o, v: valueOf(o) }))));
 }
 
 function renderStore(body) {
@@ -546,11 +606,11 @@ function renderStore(body) {
         <p class="text-muted">${ctx.esc(D.data.factions[corp?.faction] || '')} · ${all.length} 个兑换项${mine ? ` · 你有 <b>${ctx.formatNumber(mine.loyalty_points)}</b> LP` : ''}</p></div>
     </div>
     <div class="pi-card ind-rank-filters">
-      ${filterBar('q')}
+      ${filterBar('q', '', rows.n)}
       <p class="pi-note">${priceNote(rows)}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap lp-table-wrap"><table class="pi-table lp-table">${tableHead()}
-      <tbody>${rows.map((r, i) => offerRow(r, i)).join('') || '<tr><td colspan="10" class="text-muted">没有符合条件的兑换项</td></tr>'}</tbody></table></div></div>`;
+      <tbody>${rows.map((r, i) => offerRow(r, i)).join('') || `<tr><td colspan="${COLS}" class="text-muted">没有符合条件的兑换项</td></tr>`}</tbody></table></div></div>`;
   fillVolumes(body, rows);
 }
 
@@ -564,7 +624,7 @@ function rankRows() {
     if (fac && !(D.corpsByOffer.get(o.id) || []).some((c) => D.corpById.get(c)?.faction === fac)) continue;
     list.push({ o, v: valueOf(o) });
   }
-  return sortRows(list);
+  return sortRows(ranged(list));
 }
 
 function renderRank(body) {
@@ -577,14 +637,14 @@ function renderRank(body) {
   const someLive = top.slice(0, REFINE_TOP).some((r) => jita.has(pidOf(r.o)));   // 精算过（排名变了还有没精算的）
   body.innerHTML = `
     <div class="pi-card ind-rank-filters">
-      ${filterBar('rankQ', sel)}
+      ${filterBar('rankQ', sel, rows.n)}
       <p class="pi-note">${needsJita() && !refined && !S.loadingJita && !someLive ? (S.mkt ? `${HUB_NAME}行情快照` : '全服均价估算') : priceNote(top.slice(0, REFINE_TOP))}
         ${needsJita() && !refined ? `<button class="btn btn-ghost ind-refine" data-lp-refine ${S.loadingJita ? 'disabled' : ''}>${S.loadingJita ? '精算中…' : `用${HUB_NAME}行情精算前 ${REFINE_TOP} 名`}</button>` : ''}
         · 共 ${rows.length} 项${rows.length > RANK_LIMIT ? `，显示前 ${RANK_LIMIT}` : ''}
         ${rows.length ? exportBtnHtml('data-lp-export') : ''}</p>
     </div>
     <div class="pi-card"><div class="pi-table-wrap lp-table-wrap"><table class="pi-table lp-table">${tableHead()}
-      <tbody>${top.map((r, i) => offerRow(r, i, { showCorp: true })).join('') || '<tr><td colspan="10" class="text-muted">没有符合条件的兑换项</td></tr>'}</tbody></table></div></div>`;
+      <tbody>${top.map((r, i) => offerRow(r, i, { showCorp: true })).join('') || `<tr><td colspan="${COLS}" class="text-muted">没有符合条件的兑换项</td></tr>`}</tbody></table></div></div>`;
   fillVolumes(body, top);
 }
 
@@ -621,6 +681,8 @@ function exportRank() {
     ['产物价值', (r) => val(r.v, 'revenue')],
     ['利润', (r) => val(r.v, 'profit')],
     ['ISK/LP', (r) => val(r.v, 'iskLp')],
+    ['挂单比例', (r) => ratioOf(r.v, 'sell')],
+    ['收单比例', (r) => ratioOf(r.v, 'buy')],
     ['日均成交', (r) => (volOf(r.o) ? Math.round(volOf(r.o).daily * 10) / 10 : null)],
     ['日均成交额', (r) => (volOf(r.o) ? Math.round(volOf(r.o).isk) : null)],
     ['价格来源', (r) => src(r.v)]
@@ -881,12 +943,14 @@ function renderMine(body) {
 function refreshBody() {
   const scroller = document.querySelector('#lpView .kb-scroll');
   const top = scroller?.scrollTop || 0;
-  const focus = document.activeElement?.dataset?.lpQ;
-  const caret = focus ? document.activeElement.selectionStart : null;
+  // 正在输入的搜索框 / 比例区间框重绘后接着输入
+  const ae = document.activeElement, ds = ae?.dataset || {};
+  const focus = ds.lpQ ? `[data-lp-q="${ds.lpQ}"]` : ds.lpRng ? `[data-lp-rng="${ds.lpRng}"]` : null;
+  const caret = focus ? ae.selectionStart : null;
   renderTab();
   if (scroller) scroller.scrollTop = top;
   if (focus) {
-    const input = document.querySelector(`[data-lp-q="${focus}"]`);
+    const input = document.querySelector(focus);
     input?.focus();
     if (caret != null) input?.setSelectionRange(caret, caret);
   }
@@ -1051,6 +1115,7 @@ function onClick(e) {
     refreshBody();
     return;
   }
+  if (e.target.closest('[data-lp-rng-clear]')) { F.rng = { sell: ['', ''], buy: ['', ''] }; save(); refreshBody(); return; }
   if (e.target.closest('[data-lp-refine]')) { refineRank(); return; }
   if (e.target.closest('[data-lp-export]')) { exportRank(); return; }
   if (e.target.closest('[data-lp-mine-reload]')) { S.mine = null; S.mineError = null; refreshBody(); return; }
@@ -1099,6 +1164,14 @@ function onChange(e) {
 
 let qTimer = 0;
 function onInput(e) {
+  const rng = e.target.dataset?.lpRng;
+  if (rng) {
+    const [side, i] = rng.split(':');
+    F.rng[side][Number(i)] = e.target.value.trim();
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => { save(); refreshBody(); }, 300);
+    return;
+  }
   const key = e.target.dataset?.lpQ;
   if (!key) return;
   S[key] = e.target.value.trim();
