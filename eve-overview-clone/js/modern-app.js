@@ -1072,7 +1072,7 @@ async function getHubSellOrders(ids) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v75').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v76').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, getCharacterImplants, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,

@@ -6072,6 +6072,7 @@ td .hc-sub { display: inline; margin-left: 6px; }
 .ind-plan-tabs { margin-bottom: 12px; }
 .ind-plan-num { width: 64px; padding: 2px 6px; text-align: right; }
 .ind-plan-items .ind-plan-num { width: 52px; }
+.ind-plan-items .ind-plan-num[data-k="runs"] { width: 76px; }   /* 流程最多 100000，6 位数要放得下 */
 .ind-plan-items .ind-plan-on { width: 44px; }
 .ind-plan-items .ind-plan-on .ka-switch { display: block; }
 .ind-plan-act { white-space: nowrap; text-align: right; }
@@ -6215,8 +6216,15 @@ td .sov-auto-tag { margin-left: 4px; }
 .ind-char-on { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .ind-char-n { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .ind-char-n .pi-input { width: 52px; }
-.ind-assign-sel { max-width: 220px; font-size: 0.75rem; }
+.ind-assign-sel { max-width: 220px; min-width: 140px; font-size: 0.75rem; }
+/* 安排：产线和开工时间另起一行（下拉框占满一格，小字跟在后面会压到状态列） */
+.ind-assign .hc-sub { display: block; margin: 2px 0 0; }
 .ind-assign .hc-sub.warn { color: var(--warning); }
+/* 启动清单的分批：空着时灰色数字（占位）是自动拆出的批数 */
+.ind-fix .ind-plan-num { width: 52px; }
+.ind-fix .hc-sub { display: block; margin: 2px 0 0; }
+/* 启动清单的小字（组件层级、第几批、多出几个）另起一行，表格窄一些，1500 宽也不用横向滑动 */
+.ind-jobs td .hc-sub { display: block; margin-left: 0; }
 /* 制造规划「蓝图」统计：小字另起一行，表格窄一些；手机上去掉图标，状态列不用横向滑动就能看到 */
 .ind-bp-table td .hc-sub { display: block; margin-left: 0; }
 @media (max-width: 768px) {
