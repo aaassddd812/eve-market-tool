@@ -1224,7 +1224,7 @@ function renderStage() {
   FL.renderFleet(true);
   SC.bindScanWin(stg);
   requestAnimationFrame(ovLine);
-  import('./sim-3d.js?v=v96').then((m) => {
+  import('./sim-3d.js?v=v97').then((m) => {
     const host = root.querySelector('#pl3d');
     if (!host || !S.b) return;
     S.view = m.createView(host, {
@@ -3004,7 +3004,7 @@ function modCycle(i, t) {
     if (!rld && P.on.has(i)) {
       // 没有持续时间的装备（隐形装置：效果没有 durationAttributeID）只有开 / 关两态，不画周期圈（客户端 DoActivateRampsThread：duration ≤ 0 直接返回）
       const cyc = x?.cycle || S.on.rack[i]?.cycle || 0;
-      const end = last ? st.rldFrom : st.next;
+      const end = !x ? 0 : last ? st.rldFrom : st.next;   // 没有弹药的装备（推进器、损控、装甲维修…）st 是 null，按开启时刻算
       if (x && end > 0) { p = Math.max(0, Math.min(1, 1 - (end - t) / cyc)); c0 = end - cyc; cd = cyc; }
       else if (cyc > 0) { const t0 = S.modOn.get(i) ?? t; p = (((t - t0) % cyc) + cyc) % cyc / cyc; c0 = t0; cd = cyc; }
     }

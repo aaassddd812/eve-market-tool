@@ -12,7 +12,7 @@
 //   柔光 / 星芒 / 光环用游戏的粒子贴图，火球和爆炸按游戏的 9 × 9 帧爆炸序列逐帧播放，光束横截面用游戏的光束贴图。
 //   贴图加载完之前（或加载失败）用程序画的图集。ready() 告诉调用方贴图是否已就绪（加载失败也算就绪）。
 import * as THREE from './vendor/three/three.module.min.js';
-import { createClientFx } from './sim-cfx.js?v=v9';
+import { createClientFx } from './sim-cfx.js?v=v10';
 
 const KM = 1 / 1000;
 const SIZE_M = [0, 1, 2, 4, 10];                 // 武器尺寸（小 / 中 / 大 / 超大）→ 宽度倍数
@@ -918,6 +918,24 @@ export function createFx(scene, renderer, opt = {}) {
       iDir.needsUpdate = iCol.needsUpdate = true;
     },
     ready: () => ccpReady,
+    // 开局预热（加载画面里每帧问一次，true = 好了）：这一局记录里出现的装备类客户端特效（电子战光束、范围类、微跳）先加载并各建一份常驻实例，
+    // 拦截泡发生器的球也先建好（不可见），着色器由 sim-3d 统一在加载画面里编译（renderer.compile 会遍历到不可见的物体）
+    warm(rec) {
+      let ok = true;
+      (rec?.units || []).forEach((u, i) => {
+        for (const [, kind] of u.ew || []) {
+          if (kind === 'bubble') {
+            if (!bubbles.has(i)) { const b = new THREE.Mesh(bubbleGeo, bubbleMat); b.renderOrder = 3; b.visible = false; scene.add(b); bubbles.set(i, b); }
+            continue;
+          }
+          if (!cfx) continue;
+          const file = CFX.has(kind) ? CFX_FILE[kind] || kind : AREA.test(kind) ? kind : null;
+          if (file && !cfx.warm(file)) ok = false;
+          if (kind === 'mjd' && !cfx.warm('mjdjump')) ok = false;
+        }
+      });
+      return ok;
+    },
     dispose() { cfx?.dispose(); for (const b of bubbles.values()) scene.remove(b); for (const b of fieldMeshes.values()) { scene.remove(b); b.material.dispose(); } bubbleGeo.dispose(); bubbleMat.dispose(); tex.dispose(); for (const t of [cSpr, cExp, cBeam, cTur, cShd, cRamp, cFire]) t.value?.dispose(); ribbons.mesh.geometry.dispose(); sprites.mesh.geometry.dispose(); ewBeams.mesh.geometry.dispose(); shieldGeo.dispose(); },
   };
 }

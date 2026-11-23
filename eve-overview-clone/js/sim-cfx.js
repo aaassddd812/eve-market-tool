@@ -257,7 +257,7 @@ export function createClientFx(scene, base) {
       await Promise.all([...ts].map(async (n) => { d.tex[n] = await tex(n, cubes.has(n)); }));
       d.json = j.root;
       d.ok = true;
-    }).catch(() => { d.ok = false; });
+    }).catch(() => { d.ok = false; }).finally(() => { d.done = true; });
     return d;
   }
 
@@ -385,6 +385,8 @@ export function createClientFx(scene, base) {
   }
 
   const live = new Map();
+  // 预热用的常驻实例（每类一份，不画、不回收）：见 warm()
+  const keep = new Map();
   const ID = new THREE.Matrix4();
   let frame = 0;
   const S1 = new THREE.Vector3(), S2 = new THREE.Vector3(), sv = new THREE.Vector3(), dv = new THREE.Vector3(), V0 = new THREE.Vector3(), FW = new THREE.Vector3(), Y1 = new THREE.Vector3(0, 1, 0), ONE = new THREE.Vector3(1, 1, 1), SQ = new THREE.Vector3(), QS = new THREE.Quaternion(), mW = new THREE.Matrix4();
@@ -481,7 +483,20 @@ export function createClientFx(scene, base) {
         if (frame - inst.seen > 600) drop(key);
       }
     },
-    dispose() { for (const k of [...live.keys()]) drop(k); },
+    // 开局预热（加载画面里每帧问一次）：这一类先加载，好了建一份常驻实例（网格不可见、不进 live），返回 true = 加载完了（失败也算）。
+    // 常驻实例让 renderer.compile 在加载画面里就编好这类特效的着色器；它也一直占着这些程序——live 里的实例 600 帧没播会释放材质，
+    // 最后一个用户释放时 three 会删掉程序，下次再开装备又得重新编译、再卡一下
+    warm(kind) {
+      const d = load(kind);
+      if (!d.done) return false;
+      if (d.ok && !keep.has(kind)) keep.set(kind, instantiate(d));
+      return true;
+    },
+    dispose() {
+      for (const k of [...live.keys()]) drop(k);
+      for (const inst of keep.values()) for (const x of inst.meshes) { scene.remove(x.m); x.m.material.dispose(); }
+      keep.clear();
+    },
   };
   function drop(key) {
     const inst = live.get(key);

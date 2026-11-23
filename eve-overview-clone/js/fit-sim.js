@@ -540,7 +540,7 @@ function mountView(host) {
   host.classList.remove('is-off');
   host.closest('.sim-stage')?.classList.remove('is-off');
   loadBar(0, 0);
-  import('./sim-3d.js?v=v96').then((m) => {
+  import('./sim-3d.js?v=v97').then((m) => {
     if (BT.host !== host || !host.isConnected) return;
     BT.view = m.createView(host, {
       onPick: (i) => { BT.sel = i; updateBattleUi(); },

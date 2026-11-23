@@ -14,7 +14,7 @@
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
 import { loadShipIndex, loadShipModel, bracketAtlas, BRACKETS, DRONE_BRACKETS, SHIP_TIME } from './sim-ships.js?v=v20';
-import { createFx } from './sim-fx.js?v=v37';
+import { createFx } from './sim-fx.js?v=v38';
 import { createCelestials, sunLight } from './sim-cel.js?v=16';
 import { createWarpTunnel } from './sim-warp.js?v=5';
 import { createFlare } from './sim-flare.js?v=3';
@@ -1243,6 +1243,21 @@ export function createView(host, hooks = {}, opt = {}) {
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     }));
   }
+  // 一个模型一种叠加特效一个实例网格（常驻场景，没有船在播时数量 0）
+  const hfxWhite = new THREE.Color(1, 1, 1);
+  function hfxMesh(m, kind) {
+    let o = m.hfx[kind];
+    if (!o) {
+      o = m.hfx[kind] = new THREE.InstancedMesh(m.def.geometry, hfxMat(kind, m.def), m.units.length);
+      o.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      o.setColorAt(0, hfxWhite);
+      o.frustumCulled = false; o.renderOrder = 2;
+      o.count = 0;
+      o.userData.n = 0;
+      scene.add(o);
+    }
+    return o;
+  }
   const hfxColor = new THREE.Color();
   function hfxCurve(h, age) {
     const K = h.keys;
@@ -1267,6 +1282,56 @@ export function createView(host, hooks = {}, opt = {}) {
       if (fr.fire?.[i] & bitm) return t - (fr.t - dt);
     }
     return -1;
+  }
+  // ---------- 开局预热装备特效的着色器 ----------
+  // 装备特效的材质平时不画（炮台弹道 / 电子战光束 / 精灵批、护盾受击、客户端 .black 装备特效、船身叠加层、隐形层），
+  // three 第一次画到它时才编译着色器程序，那一帧整个卡住（软件渲染实测每个程序 0.15–1.7 秒，显卡上也有几十到几百毫秒），开装备时就是一顿。
+  // 加载画面里（loadState 每帧调用）：
+  //   1. 客户端装备特效先加载，每类建一份常驻实例（sim-fx / sim-cfx warm；和模型一起加载）；
+  //   2. 模型都好了以后，这一局有船装了的船身叠加层 / 隐形层，实例网格先建好（本来就常驻场景，数量 0）；
+  //   3. renderer.compile 把主场景和扭曲层场景（含不可见的物体）编一遍——绑定的渲染目标决定程序变体：主场景缓冲、反射面都是 sRGB，
+  //      和不绑定（画到屏幕）同一套；扭曲缓冲是线性的，另绑一个线性的小缓冲；
+  //   4. 等驱动在后台编完（KHR_parallel_shader_compile，最多 15 秒），再取一次 uniform 表（第一次用时 three 要查编译结果，没编完就得同步等），
+  //      材质用到的贴图也先传上去
+  //   出错（比如上下文丢了）就跳过预热，不挡开局
+  let warmSt = 0, warmMats = null, warmT0 = 0;
+  // all：模型都加载完了（叠加层要用船的几何体）；客户端特效的素材不等模型，第一次调用就开始加载
+  function warmStep(all) {
+    if (warmSt === 3) return true;
+    if (!rec) return false;
+    try { return warmRun(all); } catch (e) { console.warn('fx warm-up', e); warmMats = null; warmSt = 3; return true; }
+  }
+  function warmRun(all) {
+    if (warmSt === 0) {
+      // 客户端特效的素材每帧都问（第一次就开始加载，不等模型）；都到了、模型也都好了才往下走
+      const got = fx.warm(rec);
+      if (!got || !all) return false;
+      for (const m of models.values()) {
+        if (m.state !== 'ok' || !m.mesh || m.wreck) continue;
+        for (const i of m.units) for (const r of rec.units[i]?.rack || []) {
+          const H = r?.hfx && HFX[r.hfx];
+          if (H) for (const k of H.passes ? H.passes.map((_, p) => `${r.hfx}#${p}`) : [r.hfx]) hfxMesh(m, k);
+          if (r?.hfx === 'ck') ckBundle(m, CK_VAR[r.ckv] ? r.ckv : '');
+        }
+      }
+      const rt0 = renderer.getRenderTarget(), lin = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false });
+      renderer.setRenderTarget(null);
+      const mats = new Set(renderer.compile(scene, camera));
+      renderer.setRenderTarget(lin);
+      for (const mt of renderer.compile(ckDist, camera)) mats.add(mt);
+      renderer.setRenderTarget(rt0);
+      lin.dispose();
+      warmMats = [...mats];
+      warmSt = 1; warmT0 = performance.now();
+    }
+    const prog = (mt) => renderer.properties.get(mt).currentProgram;
+    if (!warmMats.every((mt) => prog(mt)?.isReady() ?? true) && performance.now() - warmT0 < 15000) return false;
+    for (const mt of warmMats) {
+      prog(mt)?.getUniforms();
+      for (const v of [...Object.values(mt), ...Object.values(mt.uniforms || {}).map((u) => u?.value)]) if (v?.isTexture && !v.isRenderTargetTexture) renderer.initTexture(v);
+    }
+    warmMats = null; warmSt = 3;
+    return true;
   }
   function build(m) {
     if (m.hfx) for (const x of Object.values(m.hfx)) { scene.remove(x); x.dispose(); if (!Object.values(hfxMats).includes(x.material)) x.material.dispose(); }
@@ -2332,15 +2397,7 @@ export function createView(host, hooks = {}, opt = {}) {
             if (col && (!best[kind] || col.r + col.g + col.b > best[kind].r + best[kind].g + best[kind].b)) best[kind] = col.clone();
           }
           for (const kind in best) {
-            let o = m.hfx[kind];
-            if (!o) {
-              o = m.hfx[kind] = new THREE.InstancedMesh(m.def.geometry, hfxMat(kind, m.def), m.units.length);
-              o.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-              o.setColorAt(0, white);
-              o.frustumCulled = false; o.renderOrder = 2;
-              o.userData.n = 0;
-              scene.add(o);
-            }
+            const o = hfxMesh(m, kind);
             o.setMatrixAt(o.userData.n, tmp.matrix);
             o.setColorAt(o.userData.n, best[kind]);
             o.userData.n++;
@@ -2721,6 +2778,7 @@ export function createView(host, hooks = {}, opt = {}) {
   return {
     setRecord(r) {
       rec = r;
+      warmSt = 0; warmMats = null;
       lastT = -1;
       lastN = -1;
       follow = -1;
@@ -2860,11 +2918,12 @@ export function createView(host, hooks = {}, opt = {}) {
     tracking: () => track,
     setTactical(cfg) { tac = cfg || null; drawTac(); },
     tacLabels,
-    // 加载进度：舰船索引、模型（已完成 / 总数，加载失败也算完成）、星空、特效贴图
+    // 加载进度：舰船索引、模型（已完成 / 总数，加载失败也算完成）、星空、特效贴图和特效着色器预热（warmStep）
     loadState() {
       let done = 0;
       for (const m of models.values()) if (m.state !== 'loading') done++;
-      return { index: Boolean(shipIndex), done, total: models.size, sky: skyState !== 'loading', fx: fx.ready() };
+      const all = Boolean(shipIndex) && models.size > 0 && done === models.size;
+      return { index: Boolean(shipIndex), done, total: models.size, sky: skyState !== 'loading', fx: warmStep(all) && fx.ready() };
     },
     dispose() { endJump(); jumpFx?.dispose(); ro.disconnect(); document.removeEventListener('visibilitychange', onVis); fx.dispose(); envFx?.dispose(); ssao?.dispose(); refl?.dispose(); stars?.dispose(); dust?.dispose(); for (const m of models.values()) m.mesh?.dispose(); renderer.dispose(); renderer.forceContextLoss?.(); renderer.domElement.remove(); lbl.remove(); }
   };
