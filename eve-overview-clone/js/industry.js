@@ -26,7 +26,7 @@ import * as Chain from './ind-chain.js?v=5';
 import * as IS from './ind-structs.js?v=6';
 import { skPage } from './skeleton.js?v=v18';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
-import { loadVolumes } from './hub-compare.js?v=v15';
+import { loadVolumes } from './hub-compare.js?v=v16';
 let ctx;   // esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI, getHubPrices, getCharacterSkills, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken, hasEsiToken, closeDrawer
 const $ = (id) => document.getElementById(id);
 const STORE_KEY = 'eve-industry-v1';

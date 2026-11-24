@@ -1,8 +1,8 @@
 import { skCards, skRows, skToolbar, skTitle, skPage, skPilot } from './skeleton.js?v=v18';
 import * as CS from './cloud-sync.js?v=2';
 import * as TF from './trade-fees.js?v=v7';
-import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v15';
-import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v45';
+import { initHubCompare, renderHubCompare, refreshHubCompare, loadVolumes, loadHubs } from './hub-compare.js?v=v16';
+import { initHubRank, showHubRank, refreshHubRank, prefetchHubRank } from './hub-rank.js?v=v46';
 import * as SM from './struct-markets.js?v=v8';
 import { initAlertCenter, openAlertCenter, setTabState } from './alert-center.js?v=v23';
 import * as AH from './alert-host.js?v=v8';
@@ -1076,7 +1076,7 @@ async function getHubSellOrders(ids) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v76').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v77').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, getCharacterImplants, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -2275,7 +2275,7 @@ function openArb({ updateHash = true } = {}) {
 // 自选看板（#watch）：收藏物品的各交易中心价格与到价提醒（watch-board.js，首次打开或开了后台提醒时加载）
 let watchLoading = null;
 function loadWatchBoard() {
-  if (!watchLoading) watchLoading = import('./watch-board.js?v=v29').then((m) => {
+  if (!watchLoading) watchLoading = import('./watch-board.js?v=v30').then((m) => {
     m.initWatchBoard({
       regions: REGIONS, esc, formatISK, formatPrice, formatNumber, showToast, store, fetchESI, fetchESIPaged,
       isGlobal: (t) => GLOBAL_MARKET_TYPES.has(Number(t)),

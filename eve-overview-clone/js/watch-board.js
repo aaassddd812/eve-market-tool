@@ -7,7 +7,7 @@
 // 悬浮窗（float-feed.js）：到价提醒列表推给悬浮窗（pubFloat）；悬浮窗开着时后台照样每 5 分钟查一次价（不用开「后台监控到价」）。
 // 企业微信 / 邮箱（alert-push.js 的「到价提醒」）：触发时推一行；有渠道要推时网页开着就在后台查（同「后台监控到价」）。
 //   服务器托管（alert-host.js）：监控中的提醒交给服务器（hostedAlerts），网页关掉也查；每条提醒的 key 含启用时间，重新启用算新的一条。
-import { loadHubs } from './hub-compare.js?v=v15';
+import { loadHubs } from './hub-compare.js?v=v16';
 import * as FF from './float-feed.js?v=v11';
 import * as AP from './alert-push.js?v=v15';
 import * as SND from './alert-sound.js?v=v1';

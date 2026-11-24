@@ -5954,6 +5954,10 @@ td .hc-sub { display: inline; margin-left: 6px; }
 .hc-best { font-weight: 600; }
 .hc-table td.hc-best.down { background: color-mix(in srgb, var(--sell-color) 10%, transparent); }
 .hc-table td.hc-best.up { background: color-mix(in srgb, var(--buy-color) 10%, transparent); }
+/* 行末 ×：暂时删除这个地点（表头「恢复删除的地点」找回） */
+.hc-table td.hc-del, .hc-table th.hc-del { width: 1%; padding-left: 0; padding-right: 4px; text-align: right; }
+.hc-table .hr-hide { opacity: 0.55; }
+.hc-table tr:hover .hr-hide, .hc-table .hr-hide:focus-visible { opacity: 1; }
 .hc-arrow { color: var(--text-muted); margin: 0 4px; }
 .hc-loss td { opacity: 0.6; }
 .hc-note { margin: 0; font-size: 0.75rem; line-height: 1.6; color: var(--text-muted); }

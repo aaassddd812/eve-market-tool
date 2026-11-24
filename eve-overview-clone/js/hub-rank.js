@@ -40,7 +40,7 @@
 // 按当前舰船规划（planHaul）：读角色正在开的船（装配页按装配与技能算出货舱容量），在当前筛选出来的路线里装满一船：
 //   见下方 planHaul 的说明；没绑定 ESI 时可以手填货舱容量。
 // 分类：打开倒卖排行时市场中心侧栏的物品目录换成分类列表（#arbSide），显示每个分类符合条件的物品数。
-import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, oddTip, routeTags, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v15';
+import { calcRoutes, ROUTE_SORT, MODES, MED_DAYS, usesHist, devTip, oddTip, routeTags, daysLabel, setHubMode, modePicker, modeClick, loadVolumes, freight, setFreight, freightHtml } from './hub-compare.js?v=v16';
 import { exportCsv, exportBtnHtml } from './csv-export.js?v=2';
 
 let ctx = null;   // server, regions, esc, formatISK, formatPrice, formatNumber, TF, typeName, category, isGlobal, iconUrl, openItemPop, openItem

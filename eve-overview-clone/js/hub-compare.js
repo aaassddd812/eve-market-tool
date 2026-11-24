@@ -11,6 +11,7 @@
 //   体积来自 type-volume.json（build_volumes.mjs 由 SDE 生成）。运费默认 0（不计），可按快递报价填写。
 // 全部物品一起比的排行在 hub-rank.js（数据由击杀记录服务汇总）。
 // 我的建筑市场（struct-markets.js，需绑定 ESI）：勾选的玩家建筑排在交易中心后面一起算路线；建筑没有自己的成交历史，日均成交与均价用所在星域的。
+// 删除地点：行情表行末 × 暂时删掉一个交易中心 / 建筑（opts.hide 存空间站 / 建筑 ID，所有物品通用），倒卖路线也不算它；表头「恢复删除的地点」一键全部找回。
 let ctx = null;
 const cache = new Map();   // typeId -> { at, promise }
 const TTL = 5 * 60e3;
@@ -27,10 +28,11 @@ const HIST = { m: '中位价', l: '最低价', h: '最高价' };
 const DEV = 0.2;   // 现价偏离成交价 20% 以上标出来
 export const daysLabel = (n) => (Number(n) === 1 ? '24 小时' : `${n} 天`);
 export const usesHist = (mode) => /[mlh]/.test(mode);
-const opts = { mode: 'sb', med: 7, sort: 'profit', m3: 0, collat: 0 };
+const opts = { mode: 'sb', med: 7, sort: 'profit', m3: 0, collat: 0, hide: [] };
 try { Object.assign(opts, JSON.parse(localStorage.getItem('eve-hub-compare') || '{}')); } catch { /* 用默认 */ }
 if (!MODES.some(([k]) => k === opts.mode)) opts.mode = 'sb';   // 旧设置 buy / sell
 if (!MED_DAYS.includes(Number(opts.med))) opts.med = 7;
+opts.hide = Array.isArray(opts.hide) ? opts.hide.map(Number).filter(Boolean) : [];
 const persist = () => { try { localStorage.setItem('eve-hub-compare', JSON.stringify(opts)); } catch { /* 无痕模式 */ } };
 
 export function initHubCompare(context) {
@@ -44,6 +46,7 @@ export function initHubCompare(context) {
   });
 }
 let lastBox = null;
+let shown = null;   // 上次画出来的 { typeId, hubs, vol }：删除 / 恢复地点时直接重画
 
 // 勾选的玩家建筑：每座一行，和交易中心同样的字段（星域历史与交易中心同星域时直接借用）
 const structCache = new Map();   // typeId -> { at, promise }
@@ -238,15 +241,19 @@ function routes(hubs, vol) {
   return calcRoutes(list, opts.mode, ctx.TF.fees(), { vol, ...freight() }).sort((x, y) => key(y) - key(x) || y.margin - x.margin);
 }
 
-function html(hubs, vol) {
+const locId = (h) => h.region.hub.id;   // 交易中心空间站 / 玩家建筑 ID
+function html(all, vol) {
   const { esc, formatISK, formatPrice, formatNumber, TF } = ctx;
   const f = TF.fees();
+  const hidden = new Set(opts.hide);
+  const hubs = all.filter((h) => !hidden.has(locId(h))), gone = all.filter((h) => hidden.has(locId(h)));
   const live = hubs.filter((h) => !h.failed);
   const minSell = Math.min(...live.map((h) => h.sell ?? Infinity));
   const maxBuy = Math.max(...live.map((h) => h.buy ?? -Infinity));
   const name = (h) => esc(h.label || h.region.hub.name.split(' ')[0].replace(/海\d+$/, '') || h.region.name);
   const num = (v) => v == null ? '<span class="muted-cell">—</span>' : formatPrice(v);
   const histCols = [...new Set([opts.mode[0], opts.mode[1]])].filter((c) => HIST[c]);
+  const del = (h) => `<td class="hc-del"><button type="button" class="hr-hide" data-hc-hide="${locId(h)}" title="暂时删除这个地点（倒卖路线也不算它），点上方「恢复删除的地点」一键找回" aria-label="删除">×</button></td>`;
   const hubRows = hubs.map((h) => `<tr${h.struct ? ' class="hc-struct"' : ''}>
       <td><b>${name(h)}</b><small class="hc-sub">${h.struct ? '玩家建筑 · ' : ''}${esc(h.region.name)}</small></td>
       ${h.failed ? `<td colspan="${6 + histCols.length}" class="muted-cell">ESI 读取失败</td>` : `
@@ -256,7 +263,8 @@ function html(hubs, vol) {
       <td class="num">${h.buyQty ? formatNumber(h.buyQty) : '—'}</td>
       ${histCols.map((c) => `<td class="num">${num(h.stats?.[opts.med]?.[c] ?? null)}</td>`).join('')}
       <td class="num">${h.daily ? formatNumber(Math.round(h.daily)) : '—'}</td>
-      <td class="num">${h.daily && h.avg ? formatISK(h.daily * h.avg) : '—'}</td>`}</tr>`).join('');
+      <td class="num">${h.daily && h.avg ? formatISK(h.daily * h.avg) : '—'}</td>`}${del(h)}</tr>`).join('')
+    || `<tr><td colspan="${8 + histCols.length}" class="muted-cell">地点都删除了，点上方「恢复删除的地点」找回</td></tr>`;
   const list = routes(live, vol);
   const fr = freight();
   const shipOn = fr.m3 > 0 || fr.collat > 0;
@@ -275,11 +283,12 @@ function html(hubs, vol) {
   return `<div class="hc-wrap">
     <div class="hc-head"><h3>交易中心行情</h3><span class="toolbar-spacer"></span>
       <button class="btn btn-ghost btn-sm" data-hc-fees title="调整技能与税费">${esc(TF.summary())}</button>
+      ${gone.length ? `<button class="btn btn-ghost btn-sm" data-hc-unhide title="已删除：${gone.map(name).join('、')}">恢复删除的地点（${gone.length}）</button>` : ''}
       <button class="btn btn-ghost btn-sm" data-hc-reload>刷新</button>
       ${ctx.structs ? `<button class="btn btn-ghost btn-sm" data-hc-structs title="把你有权限的玩家建筑市场加入比价（需绑定 ESI）">玩家建筑市场${ctx.structs.count() ? `（${ctx.structs.count()}）` : ''}</button>` : ''}
       ${ctx.openRank ? '<button class="btn btn-ghost btn-sm" data-hc-rank title="所有物品一起比，按利润排行">全部物品排行</button>' : ''}</div>
     <div class="table-scroll"><table class="pc-mini-table hc-table"><thead><tr>
-      <th>交易中心</th><th class="num">最低卖价</th><th class="num">卖单量</th><th class="num">最高收价</th><th class="num">收单量</th>${histCols.map((c) => `<th class="num">${daysLabel(opts.med)}${HIST[c]}</th>`).join('')}<th class="num">日均成交（星域）</th><th class="num">日均成交额</th>
+      <th>交易中心</th><th class="num">最低卖价</th><th class="num">卖单量</th><th class="num">最高收价</th><th class="num">收单量</th>${histCols.map((c) => `<th class="num">${daysLabel(opts.med)}${HIST[c]}</th>`).join('')}<th class="num">日均成交（星域）</th><th class="num">日均成交额</th><th class="hc-del" aria-label="删除"></th>
     </tr></thead><tbody>${hubRows}</tbody></table></div>
     <div class="hc-head"><h3>倒卖利润（税后）</h3><span class="toolbar-spacer"></span>
       ${seg('sort', [['profit', '预计利润'], ['margin', '利润率'], ['unit', '每件利润'], ['m3', '每立方利润']])}</div>
@@ -287,7 +296,7 @@ function html(hubs, vol) {
     <div class="hc-ship">${freightHtml('hc')}<span class="text-muted">包装体积 ${vol ? formatNumber(vol) + ' m³' : '未知'}</span></div>
     ${routeRows ? `<div class="table-scroll"><table class="pc-mini-table hc-table"><thead><tr>
       <th>路线（买入 → 卖出）</th><th class="num">买入价</th><th class="num">卖出价</th><th class="num">每件税后利润</th>${shipOn ? '<th class="num">每件运费</th>' : ''}<th class="num">利润率</th><th class="num">每立方利润</th><th class="num">可做数量</th><th class="num">预计利润</th>
-    </tr></thead><tbody>${routeRows}</tbody></table></div>` : '<p class="text-muted">订单不足，算不出倒卖利润</p>'}
+    </tr></thead><tbody>${routeRows}</tbody></table></div>` : hubs.length ? '<p class="text-muted">订单不足，算不出倒卖利润</p>' : ''}
     <p class="hc-note" title="卖单收：直接买最低卖单；收单收：按最高收价挂收单（付中介费 ${TF.pct2(f.broker)}）；收单出：直接卖给最高收单（销售税 ${TF.pct2(f.sales)}）；卖单出：按最低卖价挂卖单（销售税 + 中介费）；中位价 / 最低价 / 最高价收出：按近 ${daysLabel(opts.med)}的成交价挂单（付中介费），成交价偏离 30 天均价超过 60%–140% 的不用（乱价成交），现价偏离挂单价 20% 以上标「现价偏离」。买入、卖出方式可以任意组合。可做数量：直接成交按最优价 5% 以内的订单深度，挂单按星域日均成交 10%；挂单价偏离星域 30 天成交均价太多（收单低于 60%、卖单高于 140%）的路线不列出。">${pos.length ? `${pos.length} 条路线有利润` : '没有盈利的路线'} · ${shipOn ? `跨中心路线已扣运费（${formatNumber(fr.m3)} ISK/m³ + 抵押 ${fr.collat}%）` : '未计运费'}</p>
   </div>`;
 }
@@ -302,10 +311,11 @@ export async function renderHubCompare(box, typeId) {
     const [hubs, vols] = await Promise.all([load(typeId), loadVolumes()]);
     if (Number(box.dataset.type) !== typeId) return;
     box.innerHTML = html(hubs, vols[typeId] || 0);
+    shown = { typeId, hubs, vol: vols[typeId] || 0 };
     // 玩家建筑读得慢（整座建筑的订单），先显示交易中心，读完再补上
     if (ctx.structs?.count()) {
       const rows = await loadStructRows(typeId, hubs).catch(() => []);
-      if (Number(box.dataset.type) === typeId && rows.length) box.innerHTML = html([...hubs, ...rows], vols[typeId] || 0);
+      if (Number(box.dataset.type) === typeId && rows.length) { shown = { typeId, hubs: [...hubs, ...rows], vol: vols[typeId] || 0 }; box.innerHTML = html(shown.hubs, shown.vol); }
     }
   } catch (e) {
     if (Number(box.dataset.type) === typeId) box.innerHTML = `<p class="text-muted">读取失败：${ctx.esc(e.message)}</p>`;
@@ -321,6 +331,13 @@ export async function renderHubCompare(box, typeId) {
       if (s) opts.sort = s.dataset.hcSort;
       persist();
       renderHubCompare(box, id);
+      return;
+    }
+    const hide = e.target.closest('[data-hc-hide]');
+    if (hide || e.target.closest('[data-hc-unhide]')) {
+      opts.hide = hide ? [...new Set([...opts.hide, Number(hide.dataset.hcHide)])] : [];
+      persist();
+      if (shown?.typeId === id) box.innerHTML = html(shown.hubs, shown.vol); else renderHubCompare(box, id);
       return;
     }
     if (e.target.closest('[data-hc-fees]')) { ctx.TF.openFeeDialog(); return; }
