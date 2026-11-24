@@ -3941,6 +3941,7 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 .pi-stats b { font-size: 1.0625rem; font-variant-numeric: tabular-nums; }
 .pi-stats .pi-stat-main { background: color-mix(in srgb, var(--buy-color) 13%, transparent); }
 .pi-stats .pi-stat-main b { color: var(--buy-color); }
+.pi-stats.pi-stats-6 { grid-template-columns: repeat(6, minmax(0, 1fr)); }   /* 买料加工填了快递费：多一格 */
 .pi-detail h4 { font-size: 0.8125rem; color: var(--text-secondary); margin-bottom: 8px; }
 .pi-chain { display: flex; flex-direction: column; gap: 6px; }
 .pi-chain-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -3993,12 +3994,13 @@ body.fit-dragging, body.fit-dragging * { cursor: grabbing !important; user-selec
 @media (max-width: 1100px) {
   .pi-layout { grid-template-columns: 1fr; }
   .pi-form { position: static; }
-  .pi-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .pi-stats, .pi-stats.pi-stats-6 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 768px) {
   .pi-hide-sm { display: none; }
-  .pi-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pi-stats, .pi-stats.pi-stats-6 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pi-stats .pi-stat-main { grid-column: 1 / -1; }
+  .pi-stats.pi-stats-6 .pi-stat-main { grid-column: auto; }   /* 六格正好排满三行 */
   .pi-chars, .pi-tpls { grid-template-columns: 1fr; }
 }
 

@@ -4,6 +4,8 @@
 // ESI 只有读取殖民地的接口，不能写入模板，所以模板通过「复制到剪贴板」或「下载 .json」导入游戏。
 // 买料加工的补货周期：固定（12 小时 – 3 天或自定义小时数，产量受发射平台容量限制），或「自动」（工厂按 CPU / 电网建满，
 // 再按原料、产品体积与发射平台容量算出最长补货周期）；方案详情的「补货清单」给出每次补货要买的原料数量，可一键购买。
+// 买料加工的快递费：原料从交易中心运到工厂星、产品运回交易中心都按「每立方运费 × 体积 + 抵押费率 × 货值」算进每单位成本（默认 0 不计），
+// 所以也影响买哪一级原料（P1 体积大、运费高）。
 // 数据：pi-data.json（build_pi.mjs 从 SDE 生成），map-data.json（星系、星门、星域）。
 import { initPiEditor, openTemplateEditor, drawThumb, templateText, downloadTemplate, canSaveToGame, saveToGame, SPACING } from './pi-editor.js?v=v24';
 import { angle } from './pi-globe.js?v=v19r12';
@@ -61,6 +63,8 @@ const F = {               // 表单状态（保存在本地）
   buyLevel: 0,            // 买料加工买哪一级原料：0 自动（P0–P3 里比较取收益最高的），1 / 2 / 3 = 只买 P1 / P2 / P3
   restock: 24,            // 买料加工的补货周期（小时），0 = 自动（按发射平台容量算最长周期）
   share: 10,              // 买料加工的成交量上限（占日成交 %），0 不限
+  shipM3: 0,              // 买料加工的快递费：每立方运费（ISK/m³），原料运去、产品运回都算；0 不计
+  shipCollat: 0,          // 买料加工的快递抵押费率（% × 货值）
   ecus: 0,                // 采集星的采集控制器个数，0 = 自动（采集头放到 CPU / 电网上限）
   ecuYield: 0,            // 每个采集控制器的实际产量（P0/小时，游戏里采集程序显示的），0 = 按资源丰度估算
   outTier: 0,             // 自动推荐只排某一级的最终产物：0 不限（收益最高的），1–4 = 只看 P1–P4
@@ -460,6 +464,13 @@ const inPriceOf = (id) => {
   const p = R.prices.get(id);
   return (F.inPrice === 'buy' ? p?.buy : p?.sell) ?? p?.avg ?? 0;
 };
+// 每单位产品的快递费：原料运到工厂星 + 产品运回交易中心，每立方运费 × 体积 + 抵押费率 × 货值（原料按买价、产品按售价）
+function shipOf(dem, product, outPrice) {
+  if (!F.shipM3 && !F.shipCollat) return 0;
+  let m3 = vol(product), value = outPrice;
+  for (const [id, q] of dem.buy) { m3 += q * vol(id); value += q * inPriceOf(id); }
+  return m3 * F.shipM3 + value * F.shipCollat / 100;
+}
 
 // 产品 1 单位/小时：buyTier 及以下的原料买入，其余自己加工
 function buyDemand(product, buyTier) {
@@ -528,9 +539,10 @@ function planBuy(product, area) {
   for (let buyTier = L || tier - 1; buyTier >= (L || Math.max(0, tier - 3)); buyTier--) {
     const dem = { ...buyDemand(product, buyTier), product };
     if ([...dem.buy.keys()].some((id) => !inPriceOf(id))) continue;   // 买不到的原料
-    // 每单位产品的利润：售价 − 原料 − 出口税 − 原料进口税
+    // 每单位产品的利润：售价 − 原料 − 出口税 − 原料进口税 − 快递费
     const unitCost = [...dem.buy].reduce((t, [id, q]) => t + q * (inPriceOf(id) + importTax(id)), 0);
-    const unit = outPrice - exportTax(product) - unitCost;
+    const unitShip = shipOf(dem, product, outPrice);
+    const unit = outPrice - exportTax(product) - unitCost - unitShip;
     for (let hubs = 1; hubs <= MAX_HUBS; hubs++) {
       const r = maxBuyRate(dem, hubs, code, radius);
       if (r <= 0) continue;
@@ -547,6 +559,7 @@ function planBuy(product, area) {
         revenue: day * outPrice,
         cost: day * [...dem.buy].reduce((t, [id, q]) => t + q * inPriceOf(id), 0),
         tax: day * (exportTax(product) + [...dem.buy].reduce((t, [id, q]) => t + q * importTax(id), 0)),
+        ship: day * unitShip,
         profit: day * unit, unitCost, surplus: []
       };
       // 同一买料等级每单位利润相同，产量最高的就是收益最高的；亏本时也按满产，不能挑产量最小的
@@ -1326,6 +1339,7 @@ function bindSide() {
   }, true);
 }
 
+const shipTip = () => `原料从${hubName()}运到工厂星、产品运回${hubName()}都按这个算：每立方运费 × 体积 + 抵押费率 × 货值。按快递报价填写，空着或 0 表示不计`;
 // 补货周期选项：0 = 自动（按发射平台容量能撑的最长时间）
 const RESTOCKS = [[0, '自动'], [12, '半天'], [24, '1 天'], [48, '2 天'], [72, '3 天']];
 function renderForm() {
@@ -1396,7 +1410,9 @@ function renderForm() {
       <div class="pi-inline"><span>售价</span>${seg('price', [['sell', hubName() + '卖单'], ['buy', hubName() + '收单']], F.price)}</div>
       <div class="pi-inline"><span>补货周期</span>${seg('restock', RESTOCKS, RESTOCKS.some(([h]) => h === F.restock) ? F.restock : '')}</div>
       <div class="pi-inline"><span>或自定义</span><input type="number" class="pi-input pi-tax" min="1" max="720" step="1" value="${RESTOCKS.some(([h]) => h === F.restock) ? '' : F.restock}" placeholder="如 30" data-pi-num="restock" aria-label="自定义补货周期（小时）"><span>小时补一次</span></div>
-      <div class="pi-inline"><span>成交上限</span>${seg('share', [[5, '5%'], [10, '10%'], [20, '20%'], [0, '不限']], F.share)}</div>` : `
+      <div class="pi-inline"><span>成交上限</span>${seg('share', [[5, '5%'], [10, '10%'], [20, '20%'], [0, '不限']], F.share)}</div>
+      <div class="pi-inline pi-ship" title="${shipTip()}"><span>快递费</span><input type="number" class="pi-input pi-tax" min="0" step="50" value="${F.shipM3 || ''}" placeholder="0" data-pi-num="shipM3" aria-label="快递费（ISK/m³）"><span>ISK/m³</span></div>
+      <div class="pi-inline pi-ship" title="${shipTip()}"><span>快递抵押</span><input type="number" class="pi-input pi-tax" min="0" max="100" step="0.5" value="${F.shipCollat || ''}" placeholder="0" data-pi-num="shipCollat" aria-label="快递抵押费率（%）"><span>%</span></div>` : `
       <div class="pi-inline"><span>资源丰度</span>${seg('rich', Object.entries(RICHNESS).map(([k, [, label]]) => [k, label]), F.rich)}</div>
       <div class="pi-inline" title="采集星直接产出的等级：P2 / P3 = 一颗星采齐所需的全部原料、在本星加工好再出口；自动 = 比较各种方案取收益最高的"><span>每星产出</span>${seg('level', [[0, '自动'], [1, 'P1'], [2, 'P2'], [3, 'P3']], F.level || 0)}</div>
       <div class="pi-inline"><span>采集器</span>${seg('ecus', [[0, '自动'], [1, '1 个'], [2, '2 个'], [3, '3 个']], F.ecus)}</div>
@@ -1468,10 +1484,12 @@ function bind() {
     else if (t.dataset.piSec) F.sec[t.dataset.piSec] = t.checked;
     else if (t.dataset.piNum) {
       if (t.dataset.piNum === 'restock' && !t.value) return;
-      const lim = { chars: [1, 30], perChar: [1, 6], cc: [0, 5], tax: [0, 100], restock: [1, 720], ecuYield: [0, 1e6] }[t.dataset.piNum];
+      const lim = { chars: [1, 30], perChar: [1, 6], cc: [0, 5], tax: [0, 100], restock: [1, 720], ecuYield: [0, 1e6], shipM3: [0, 1e6], shipCollat: [0, 100] }[t.dataset.piNum];
       const v = Math.min(lim[1], Math.max(lim[0], Number(t.value) || 0));
-      F[t.dataset.piNum] = t.dataset.piNum === 'tax' ? v : Math.round(v);
+      F[t.dataset.piNum] = ['tax', 'shipM3', 'shipCollat'].includes(t.dataset.piNum) ? v : Math.round(v);
       t.value = F[t.dataset.piNum];
+      // 快递费：改完马上重算（空着 / 0 显示为空）
+      if (t.dataset.piNum === 'shipM3' || t.dataset.piNum === 'shipCollat') { if (!v) t.value = ''; saveForm(); if (R.area) run(); return; }
       if (t.dataset.piNum === 'restock' || t.dataset.piNum === 'ecuYield') { if (!F.ecuYield) t.value = ''; saveForm(); renderForm(); if (R.area) run(); return; }
     } else return;
     saveForm();
@@ -1691,7 +1709,7 @@ function renderDetail() {
       <p class="pi-note" id="piDepth"></p>`;
   })() : '';
   // 指定的产品按现在的行情做是亏本的
-  const lossNote = plan.profit < 0 ? `<p class="pi-note warn">按${hubName()}现在的行情这样做是亏本的${plan.strategy === 'buy' ? '：买入的原料加上海关税比卖出的产品还贵，可以试试「自产（采集）」' : ''}</p>` : '';
+  const lossNote = plan.profit < 0 ? `<p class="pi-note warn">按${hubName()}现在的行情这样做是亏本的${plan.strategy === 'buy' ? `：买入的原料加上海关税${plan.ship ? '、快递费' : ''}比卖出的产品还贵，可以试试「自产（采集）」` : ''}</p>` : '';
   const surplus = lossNote + buyNote + (plan.surplus.length ? `<p class="pi-note">另售 ${plan.surplus.map(([id, r]) => `${ctx.esc(cName(id))} ${ctx.formatNumber(Math.round(r * 24))}/天`).join('、')}</p>` : '')
     + (plan.strategy === 'raw' ? `<p class="pi-note">P0 体积大：每颗星每天约 ${ctx.formatNumber(Math.round(plan.rate / plan.planets * 24 * (commodity(plan.product)[3] || 0.01)))} m³</p>` : '')
     + (plan.strategy === 'hybrid' ? `<p class="pi-note" title="采集星电网吃紧、CPU 富余，每颗只少放一两个采集头；需要把其他 P1 运到这些星">加工设施平摊在 ${plan.m} 颗采集星上</p>` : '');
@@ -1747,11 +1765,12 @@ function renderDetail() {
         <img src="${ICON(plan.product, 64)}" alt="" width="48" height="48">
         <div><h3>${ctx.esc(cName(plan.product))}</h3><span class="text-muted">${TIER_NAMES[tierOf(plan.product)]} · ${strategyLabel(plan)}</span></div>
       </div>
-      <div class="pi-stats">
+      <div class="pi-stats${plan.ship ? ' pi-stats-6' : ''}">
         <div><span>日产量</span><b>${ctx.formatNumber(Math.round(plan.rate * 24))}</b></div>
         <div><span>日收入</span><b>${ctx.formatISK(plan.revenue)}</b></div>
         ${plan.strategy === 'buy' ? `<div><span>原料成本</span><b>${ctx.formatISK(plan.cost)}</b></div>` : ''}
         <div><span>海关税</span><b>${ctx.formatISK(plan.tax)}</b></div>
+        ${plan.ship ? `<div title="原料运到工厂星、产品运回${hubName()}：${ctx.formatNumber(F.shipM3)} ISK/m³ + 抵押 ${F.shipCollat}%"><span>快递费</span><b>${ctx.formatISK(plan.ship)}</b></div>` : ''}
         <div class="pi-stat-main"><span>日净收益</span><b>${ctx.formatISK(plan.profit)}</b></div>
         ${plan.strategy === 'buy' ? '' : `<div><span>月净收益</span><b>${ctx.formatISK(plan.profit * 30)}</b></div>`}
       </div>
@@ -1805,7 +1824,7 @@ function restockCard(plan) {
       <div class="pi-card-head pf-card-head"><h3>补货清单</h3><span class="toolbar-spacer"></span>
         <button type="button" class="btn btn-primary btn-sm" data-pi-restock="cart">一键购买${many ? `（${plan.planets} 颗星）` : ''}</button>
         <button type="button" class="btn btn-ghost btn-sm" data-pi-restock="copy">复制批量购买清单</button></div>
-      <p class="pi-note" title="${plan.hubs} 个发射平台共 ${ctx.formatNumber(cap)} m³，最多撑 ${durH(plan.maxCycle)}">${F.restock ? '' : '自动：'}每 ${durH(plan.cycle)}补一次 · 每星装入 ${ctx.formatNumber(Math.round(inM3))} m³ 原料（${pct(inM3)}），取出 ${ctx.formatNumber(Math.round(out))} 个产品（${pct(outM3)}）</p>
+      <p class="pi-note" title="${plan.hubs} 个发射平台共 ${ctx.formatNumber(cap)} m³，最多撑 ${durH(plan.maxCycle)}">${F.restock ? '' : '自动：'}每 ${durH(plan.cycle)}补一次 · 每星装入 ${ctx.formatNumber(Math.round(inM3))} m³ 原料（${pct(inM3)}），取出 ${ctx.formatNumber(Math.round(out))} 个产品（${pct(outM3)}）${plan.ship ? ` · 每次快递费约 ${ctx.formatISK(plan.ship / 24 * plan.cycle)}${many ? `（${plan.planets} 颗星）` : ''}` : ''}</p>
       <table class="pf-table"><thead><tr><th>原料</th><th>每颗星</th>${many ? `<th>${plan.planets} 颗星合计</th>` : ''}<th>体积 m³</th><th>金额</th></tr></thead><tbody>
         ${items.map((x) => `<tr><td><img src="${ICON(x.id)}" alt="" width="24" height="24" loading="lazy"><span>${ctx.esc(cName(x.id))}</span><small>P${tierOf(x.id)}</small></td><td>${ctx.formatNumber(x.per)}</td>${many ? `<td><b>${ctx.formatNumber(x.all)}</b></td>` : ''}<td>${ctx.formatNumber(Math.round(x.all * vol(x.id)))}</td><td>${ctx.formatISK(x.all * inPriceOf(x.id))}</td></tr>`).join('')}
       </tbody><tfoot><tr><td>合计</td><td></td>${many ? '<td></td>' : ''}<td>${ctx.formatNumber(Math.round(items.reduce((t, x) => t + x.all * vol(x.id), 0)))}</td><td>${ctx.formatISK(cost)}</td></tr></tfoot></table>
@@ -1875,7 +1894,7 @@ async function capByDepth(plan) {
   }
   const k = cap / plan.planets;
   plan.wanted = plan.planets;
-  for (const key of ['rate', 'revenue', 'cost', 'tax', 'profit']) plan[key] *= k;
+  for (const key of ['rate', 'revenue', 'cost', 'tax', 'ship', 'profit']) if (plan[key] != null) plan[key] *= k;
   plan.planets = plan.factories = cap;
 }
 
