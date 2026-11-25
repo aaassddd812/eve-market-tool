@@ -1257,7 +1257,7 @@ function close() {
   if (m) m.hidden = true;
 }
 
-// 交战目标：体型与距离用卡片选，底下一句话总结会怎么挑武器
+// 交战目标：体型与距离用卡片选（体型的说明放在鼠标提示里）
 const AIM_TARGETS = [
   ['any', '不限', '面板 DPS'],
   ['frigate', '小船', '护卫 / 驱逐'],
@@ -1273,15 +1273,9 @@ const AIM_RANGES = [
   ['xlong', '100 km', '']
 ];
 function aimHtml() {
-  const card = (k, [v, title, sub]) => `<button type="button" class="fa-opt${A[k] === v ? ' active' : ''}" data-fa-set="${k}" data-v="${v}"><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</button>`;
-  const t = ctx.FE.TARGETS[A.target], d = RANGES[A.range];
-  const parts = [];
-  if (t) parts.push(`目标 ${t.sig} m / ${t.vel} m/s`);
-  if (d) parts.push(`${d / 1000} km`);
-  const summary = parts.length ? `按有效 DPS 挑武器：${parts.join(' · ')}` : '按面板 DPS 挑武器';
+  const card = (k, [v, title, sub]) => `<button type="button" class="fa-opt${A[k] === v ? ' active' : ''}" data-fa-set="${k}" data-v="${v}"${sub ? ` title="${sub}"` : ''}><b>${title}</b></button>`;
   return `<div class="fa-field"><label>目标体型</label><div class="fa-opts">${AIM_TARGETS.map((o) => card('target', o)).join('')}</div></div>
-    <div class="fa-field"><label>交战距离</label><div class="fa-opts">${AIM_RANGES.map((o) => card('range', o)).join('')}</div></div>
-    <p class="fa-aim">${summary}</p>`;
+    <div class="fa-field"><label>交战距离</label><div class="fa-opts">${AIM_RANGES.map((o) => card('range', o)).join('')}</div></div>`;
 }
 
 // 要加强的属性：按装配页属性栏的分组排（火力 / 防御 / 电容 / 机动 / 锁定 / 其他），attr 为点击用的 data 属性
@@ -1298,39 +1292,22 @@ function renderForm() {
   const esc = ctx.esc;
   const ship = ctx.data.types.get(ctx.getFit().ship);
   const seg = (k, items) => `<div class="segmented">${items.map(([v, l]) => `<button type="button" data-fa-set="${k}" data-v="${v}" class="${String(A[k]) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
-  const hint = (text) => (text ? `<p class="fa-hint">${text}</p>` : '');
-  const field = (label, body, help = '') => `<div class="fa-field">${label ? `<label>${label}</label>` : ''}${body}${hint(help)}</div>`;
+  const field = (label, body) => `<div class="fa-field">${label ? `<label>${label}</label>` : ''}${body}</div>`;
   const section = (title, body) => `<section class="fa-sec"><h4>${title}</h4>${body}</section>`;
   const bound = Boolean(ctx.esiLevels());
   const P = shipProfile(ship);
   ensureUtils(ship);
   const roles = A.role === 'combat' ? [] : P.roles;
   const job = roles.find((r) => ['logi', 'mining', 'hauler'].includes(r));
-  const NAME = { shield: '护盾', armor: '装甲', active: '主动抗', passive: '被动抗' };
-
-  // 「自动」实际会怎么配：按这艘船算出来写在选项下面
-  const tank = A.tank === 'auto' ? autoTank(ship) : { tank: A.tank };
-  const resist = A.resist === 'auto' ? (tank.tank === 'shield' ? 'active' : 'passive') : A.resist;
-  const repAuto = P.rep && !job;
-  const auto = (text) => `<b>自动 →</b> ${text}`;
-  const help = {
-    mineTarget: A.mineTarget === 'ore' ? '默认装简单小行星晶体' : '',
-    tank: A.tank === 'auto' ? auto(`${NAME[tank.tank]}坦克（${tank.why}）`) : '',
-    resist: A.resist === 'auto' ? auto(NAME[resist]) : A.resist === 'active' ? '耗电容' : '',
-    selfRep: A.selfRep === 'auto' ? auto(repAuto ? '配维修（有维修加成）' : '一般不配') : A.selfRep === 'yes' ? '刷怪等持久战用，配维修装备' : '',
-    skills: A.skills === 'esi' ? '只用角色能装的装备' : ''
-  };
-
   $('faForm').innerHTML = `
     <div class="fa-ship"><img src="${IMG(ship.id)}" alt="" width="32" height="32"><b>${esc(ship.name)}</b>${P.roles.map((r) => `<span class="fa-role">${ROLE_NAME[r]}</span>`).join('')}</div>
     ${P.labels.length ? `<div class="fa-bonus"><span>舰船加成</span>${P.labels.map((l) => `<em>${esc(l)}</em>`).join('')}</div>` : ''}
     ${P.roles.length ? section('舰船定位', field('', seg('role', [['auto', '按加成：' + P.roles.map((r) => ROLE_NAME[r]).join(' / ')], ['combat', '当普通战斗船']]), )
-      + (roles.includes('mining') ? field('采矿对象', seg('mineTarget', [['ore', '矿石'], ['ice', '冰矿'], ['gas', '气云']]), help.mineTarget) : '')) : ''}
-    ${job ? section('要加强的属性', `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量' }[job]}配装，其余兼顾坦克</p>${focusHtml('data-fa-extra', extraSet())}<p class="fa-hint">另外想加强的属性，可不选</p>`)
-      : section('要加强的属性 <small>和装配页属性栏对应，可多选</small>', `${focusHtml('data-fa-focus', focusSet())}<p class="fa-hint">如 DPS + 最大速度（风筝）、锁定距离 + 扫描分辨率；没选的 DPS、EHP、速度仍稍微兼顾</p>`)}
-    ${section('功能装备 <small>先放好，其余槽位按要加强的属性填</small>', utilsHtml(ship, P))}
+      + (roles.includes('mining') ? field('采矿对象', seg('mineTarget', [['ore', '矿石'], ['ice', '冰矿'], ['gas', '气云']])) : '')) : ''}
+    ${section('要加强的属性', job ? focusHtml('data-fa-extra', extraSet()) : focusHtml('data-fa-focus', focusSet()))}
+    ${section('功能装备', utilsHtml(ship, P))}
     ${job ? '' : section('打什么目标', aimHtml())}
-    ${section('最低要求 <small>填 0 表示不限</small>', `<div class="fa-grid3">
+    ${section('最低要求', `<div class="fa-grid3">
         <label class="fa-num"><span>DPS</span><input type="number" min="0" step="10" value="${A.minDps}" data-fa-num="minDps"></label>
         <label class="fa-num"><span>EHP</span><input type="number" min="0" step="1000" value="${A.minEhp}" data-fa-num="minEhp"></label>
         <label class="fa-num"><span>速度 m/s</span><input type="number" min="0" step="50" value="${A.minSpeed}" data-fa-num="minSpeed"></label>
@@ -1338,15 +1315,15 @@ function renderForm() {
       <div class="fa-checks">
         <label class="pi-check"><input type="checkbox" data-fa-check="capStable"${A.capStable ? ' checked' : ''}><span>电容稳定</span></label>
       </div>`)}
-    ${section('坦克', field('坦克类型', seg('tank', [['auto', '自动'], ['shield', '护盾'], ['armor', '装甲']]), help.tank)
-      + field('抗性', seg('resist', [['auto', '自动'], ['active', '主动抗'], ['passive', '被动抗']]), help.resist)
-      + field('自修', seg('selfRep', [['auto', '自动'], ['yes', '自修'], ['no', '不自修']]), help.selfRep))}
-    ${section('武器与装备', field('武器', seg('weapon', [['auto', '自动'], ['turret', '炮台'], ['missile', '导弹'], ['drone', '仅无人机'], ['none', '不装武器']]), A.weapon === 'none' ? '不装武器和无人机，槽位全按坦克 / 速度 / 功能装备配' : '')
+    ${section('坦克', field('坦克类型', seg('tank', [['auto', '自动'], ['shield', '护盾'], ['armor', '装甲']]))
+      + field('抗性', seg('resist', [['auto', '自动'], ['active', '主动抗'], ['passive', '被动抗']]))
+      + field('自修', seg('selfRep', [['auto', '自动'], ['yes', '自修'], ['no', '不自修']])))}
+    ${section('武器与装备', field('武器', seg('weapon', [['auto', '自动'], ['turret', '炮台'], ['missile', '导弹'], ['drone', '仅无人机'], ['none', '不装武器']]))
       + field('装备等级', seg('meta', [['t1', 'T1'], ['t2', '+T2'], ['faction', '+势力'], ['deadspace', '+死亡空间'], ['officer', '+官员']])))}
     ${section('植入体', `<div class="fa-checks"><label class="pi-check"><input type="checkbox" data-fa-check="implants"${A.implants ? ' checked' : ''}><span>同时推荐植入体</span></label></div>`
-      + (A.implants ? field('植入体预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fa-num="impBudget"><span>百万 ISK</span></div>`, '按全服均价，0 为不限') : ''))}
-    ${section('预算与技能', field('预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="10" value="${A.budget}" data-fa-num="budget"><span>百万 ISK</span></div>`, '不含船，按全服均价，0 为不限')
-      + field('技能', seg('skills', [['max', '全 5 级'], ['esi', bound || ctx.hasEsi() ? '按角色' : '按角色（未绑定）']]), help.skills))}
+      + (A.implants ? field('植入体预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fa-num="impBudget"><span>百万 ISK</span></div>`) : ''))}
+    ${section('预算与技能', field('预算', `<div class="fa-unit"><input type="number" class="fa-input" min="0" step="10" value="${A.budget}" data-fa-num="budget"><span>百万 ISK</span></div>`)
+      + field('技能', seg('skills', [['max', '全 5 级'], ['esi', bound || ctx.hasEsi() ? '按角色' : '按角色（未绑定）']])))}
     <button type="submit" class="btn btn-primary fa-go">${S.running ? '计算中…' : '开始装配'}</button>`;
 }
 
@@ -1542,15 +1519,11 @@ function renderImpForm() {
   const seg = (k, items) => `<div class="segmented">${items.map(([v, l]) => `<button type="button" data-fi-set="${k}" data-v="${v}" class="${String(A[k]) === String(v) ? 'active' : ''}">${l}</button>`).join('')}</div>`;
   const section = (title, body) => `<section class="fa-sec"><h4>${title}</h4>${body}</section>`;
   const bound = Boolean(ctx.esiLevels());
-  const mods = ctx.FE.SLOTS.reduce((n, s) => n + (fit.slots[s] || []).filter(Boolean).length, 0);
-  const cur = (fit.implants || []).length;
   $('fiForm').innerHTML = `
     <div class="fa-ship"><img src="${IMG(ship.id)}" alt="" width="32" height="32"><b>${esc(ship.name)}</b>${P.roles.map((r) => `<span class="fa-role">${ROLE_NAME[r]}</span>`).join('')}</div>
-    <p class="fa-note">${mods ? `当前 ${mods} 件装备${cur ? `，${cur} 个植入体（套用后替换）` : ''}` : '还没有装备，建议先装好'}</p>
-    ${job ? section('要加强的属性', `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量与起跳时间' }[job]}挑植入体，其次是坦克</p>${focusHtml('data-fi-extra', extraSet())}<p class="fa-hint">另外想加强的属性，可不选</p>`)
-      : section('要加强的属性 <small>和装配页属性栏对应，可多选</small>', `${focusHtml('data-fi-focus', focusSet())}<p class="fa-hint">如跃迁速度、起跳时间、锁定距离；没选的 DPS、EHP、速度仍稍微兼顾</p>`)}
-    ${section('预算与技能', `<div class="fa-field"><label>植入体预算</label><div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fi-num="impBudget"><span>百万 ISK</span></div><p class="fa-hint">按全服均价，0 为不限</p></div>
-      <div class="fa-field"><label>技能</label>${seg('skills', [['max', '全 5 级'], ['esi', bound || ctx.hasEsi() ? '按角色' : '按角色（未绑定）']])}${A.skills === 'esi' ? '<p class="fa-hint">只推荐技能够用的植入体</p>' : ''}</div>`)}
+    ${section('要加强的属性', job ? focusHtml('data-fi-extra', extraSet()) : focusHtml('data-fi-focus', focusSet()))}
+    ${section('预算与技能', `<div class="fa-field"><label>植入体预算</label><div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fi-num="impBudget"><span>百万 ISK</span></div></div>
+      <div class="fa-field"><label>技能</label>${seg('skills', [['max', '全 5 级'], ['esi', bound || ctx.hasEsi() ? '按角色' : '按角色（未绑定）']])}</div>`)}
     <button type="submit" class="btn btn-primary fa-go">${IS.running ? '计算中…' : '推荐植入体'}</button>`;
 }
 
