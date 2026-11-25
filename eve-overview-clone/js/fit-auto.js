@@ -1,8 +1,10 @@
 // ===== 智能装配 =====
-// 按侧重（输出 / 坦克 / 速度，可组合）、功能装备（扰断、扰频、停滞网、中和、诱导、加成电子战，可组合）
+// 按要加强的属性（和装配页属性栏对应：DPS、齐射、EHP、护盾回充、电容、速度、起跳、跃迁、信号半径、锁定距离、扫描分辨率、感应强度、锁定数、货柜，可多选）、
+// 功能装备（扰断、扰频、停滞网、中和、诱导、加成电子战，可组合）
 // 与约束（最低 DPS、EHP、速度、电容稳定、预算、装备等级、技能）自动搜索装配。
 // 打分完全交给装配引擎（computeFit + fitStats，与游戏规则一致），搜索流程：
-//   1. 候选：按船、装备等级、技能、预算筛选；同一族（分组 + 尺寸）只留「允许范围内最好的」与「最省 CPU / 电网的」两档
+//   1. 候选：按船、装备等级、技能、预算筛选；同一族（分组 + 尺寸）只留「允许范围内最好的」与「最省 CPU / 电网的」两档；
+//      选了的属性（如跃迁速度、锁定距离）能被哪些中 / 低槽装备和改装件提升，就把它们也加进候选
 //   2. 武器：逐个试装满安装座（配最高伤害弹药），取 DPS 最高的两种方案；有无人机挂舱时同时装上最好的无人机
 //   3. 贪心：中 / 低 / 改装件轮流放入让得分提升最多、且资源装得下的装备；装不下时尝试加 CPU / 电网辅助装备后再填
 //   4. 替换：逐格尝试换成其他候选，直到不再变好
@@ -15,19 +17,56 @@ const $ = (id) => document.getElementById(id);
 const KEY = 'eve-fit-auto-v1';
 const IMG = (id) => `https://images.evetech.net/types/${id}/icon?size=32`;
 
-// 侧重：可多选，选中的按全权重打分，没选的只做次要项（都不选时按输出）
-const FOCUS = [['dps', '输出'], ['tank', '坦克'], ['speed', '速度']];
-const FOCUS_W = { dps: [1, 0.15], tank: [1, 0.15], speed: [1.2, 0.05] };
-// 功能装备：先放好再按侧重填其余槽位；默认按舰船加成勾选（换船时重置）
+// 要加强的属性：和装配页属性栏对应（火力 / 防御 / 电容 / 机动 / 锁定 / 其他），可多选。
+// 普通战斗船按选中的属性打分（A.focus，至少一项）；后勤 / 采矿 / 运输船按本职指标打分，另外想加强的属性可不选（A.extra）。
+// 每项按对数计分（提升同样的比例加同样的分），w 为选中时的权重；没选时 DPS / EHP / 速度仍按 minor 稍微兼顾，其余不计。
+// less：越小越好；zero：可能为 0，按 ln(x + 1) 计；gun：要装武器；
+// ship：舰船上的属性 ID → 1 越大越好 / −1 越小越好，能提升它的中 / 低槽装备和改装件会加进候选（buildCandidates 的 improves）
+const capSecs = (c) => (c.stable ? 3600 * (1 + c.level) : c.lasts || 0);   // 电容：稳定时按 1 小时 ×（1 + 稳定百分比），否则按可维持秒数
+const FOCUS = [
+  { k: 'dps', l: 'DPS', sec: '火力', w: 1, minor: 0.15, zero: true, gun: true, v: (r) => r.dps },
+  { k: 'volley', l: '齐射伤害', sec: '火力', w: 1, zero: true, gun: true, v: (r) => r.st.weapon.volley, f: (r) => ctx.formatNumber(Math.round(r.st.weapon.volley)) },
+  { k: 'tank', l: 'EHP', sec: '防御', w: 1, minor: 0.15, zero: true, v: (r) => r.tankV },
+  { k: 'regen', l: '护盾回充', sec: '防御', w: 1, zero: true, v: (r) => r.st.defense.passiveRegen, f: (r) => `${r.st.defense.passiveRegen.toFixed(1)}<small> HP/s</small>`, ship: { 263: 1, 479: -1 } },
+  { k: 'cap', l: '电容', sec: '电容', w: 1, zero: true, v: (r) => capSecs(r.st.capacitor), ship: { 482: 1, 55: -1 },
+    f: (r) => `<span class="${r.st.capacitor.stable ? 'good' : 'bad'}">${r.st.capacitor.stable ? (r.st.capacitor.level * 100).toFixed(0) + '%' : Math.round(r.st.capacitor.lasts / 60) + ' 分'}</span>` },
+  { k: 'speed', l: '最大速度', sec: '机动', w: 1.2, minor: 0.05, zero: true, v: (r) => r.speed },
+  { k: 'align', l: '起跳时间', sec: '机动', w: 1, less: true, v: (r) => r.st.navigation.align, f: (r) => `${r.st.navigation.align.toFixed(1)}<small> 秒</small>`, ship: { 70: -1 } },
+  { k: 'warp', l: '跃迁速度', sec: '机动', w: 1, v: (r) => r.st.navigation.warp, f: (r) => `${r.st.navigation.warp.toFixed(2)}<small> AU/s</small>`, ship: { 600: 1 } },
+  { k: 'sig', l: '信号半径', sec: '机动', w: 1, less: true, v: (r) => r.st.navigation.signature, f: (r) => `${Math.round(r.st.navigation.signature)}<small> m</small>`, ship: { 552: -1 } },
+  { k: 'lock', l: '锁定距离', sec: '锁定', w: 1, v: (r) => r.st.targeting.range, f: (r) => `${(r.st.targeting.range / 1000).toFixed(1)}<small> km</small>`, ship: { 76: 1 } },
+  { k: 'scan', l: '扫描分辨率', sec: '锁定', w: 1, v: (r) => r.st.targeting.scanRes, f: (r) => `${Math.round(r.st.targeting.scanRes)}<small> mm</small>`, ship: { 564: 1 } },
+  { k: 'sensor', l: '感应强度', sec: '锁定', w: 1, v: (r) => r.st.targeting.sensor, f: (r) => r.st.targeting.sensor.toFixed(1), ship: { 208: 1, 209: 1, 210: 1, 211: 1 } },
+  { k: 'targets', l: '最大锁定数', sec: '锁定', w: 1, v: (r) => r.st.targeting.maxTargets, f: (r) => String(r.st.targeting.maxTargets), ship: { 192: 1 } },
+  { k: 'cargo', l: '货柜舱', sec: '其他', w: 1, zero: true, v: (r) => r.cargo, f: (r) => `${ctx.formatNumber(Math.round(r.cargo))}<small> m³</small>`, ship: { 38: 1 } }
+];
+const FOCUS_BY = Object.fromEntries(FOCUS.map((f) => [f.k, f]));
+const JOBS = ['logi', 'mining', 'hauler'];   // 按本职指标配装的定位
+const keepFocus = (list) => (list || []).filter((k) => FOCUS_BY[k] && !(FOCUS_BY[k].gun && A.weapon === 'none'));
+// 普通战斗船至少一项：都不选时按 DPS，不装武器时按 EHP
+const focusSet = () => {
+  const s = new Set(keepFocus(A.focus?.length ? A.focus : ['dps']));
+  if (!s.size) s.add(A.weapon === 'none' ? 'tank' : 'dps');
+  return s;
+};
+const extraSet = () => new Set(keepFocus(A.extra));
+// 这次搜索要加强的属性（ROLES 由 setupScoring 设好）
+const wantSet = () => (JOBS.some((j) => ROLES.has(j)) ? extraSet() : focusSet());
+// 一项属性的得分：对数，越小越好的取负
+const focusTerm = (f, r) => { const v = Math.max(0, f.v(r) || 0); const x = f.zero ? ln(v) : Math.log(Math.max(v, 1e-3)); return f.less ? -x : x; };
+// 一条修改让属性变大（true）/ 变小（false）/ 不变（null），op 同装配引擎（0 preMul … 6 postPercent）
+function raises(op, v) {
+  if (v == null || !Number.isFinite(v)) return null;
+  if (op === 0 || op === 4) return v === 1 ? null : v > 1;
+  if (op === 1 || op === 5) return v === 1 ? null : v < 1;
+  if (op === 2 || op === 6) return v === 0 ? null : v > 0;
+  if (op === 3) return v === 0 ? null : v < 0;
+  return null;
+}
+// 功能装备：先放好再按要加强的属性填其余槽位；默认按舰船加成勾选（换船时重置）
 const UTILS = [['point', '扰断', '跃迁扰断器，长点'], ['scram', '扰频', '跃迁扰频器，短点，关微曲'], ['web', '停滞网', ''], ['neut', '中和', '能量中和器'], ['cyno', '诱导', '诱导力场发生器（能装隐秘诱导的用隐秘诱导）'], ['ewar', '电子战', '本船加成的电子战装备']];
 const CYNO = 658;
 const UTIL_NAME = Object.fromEntries(UTILS.map(([k, l]) => [k, l]));
-// 不装武器时「输出」不算侧重（只剩它时改按坦克）
-const focusSet = () => {
-  const s = new Set(A.focus?.length ? A.focus : ['dps']);
-  if (A.weapon === 'none') { s.delete('dps'); if (!s.size) s.add('tank'); }
-  return s;
-};
 // 装备等级逐级放宽：T1 → T2 → 势力（含故事线）→ 死亡空间 → 官员
 const METAS = { t1: [0, 1], t2: [0, 1, 2], faction: [0, 1, 2, 3, 4], deadspace: [0, 1, 2, 3, 4, 6], officer: [0, 1, 2, 3, 4, 5, 6] };
 // 参与搜索的装备分组（其余如扫描、采矿、电子战等不影响打分的不参与）
@@ -64,7 +103,7 @@ const ROLE_NAME = { logi: '后勤', ewar: '电子战', tackle: '拦截', mining:
 const ATTR_ZH = { 38: '货柜容量', 263: '护盾容量', 265: '装甲值', 9: '结构值', 37: '速度', 70: '敏捷', 600: '跃迁速度', 552: '信号半径', 479: '护盾回充', 482: '电容容量', 55: '电容回充', 76: '锁定距离' };
 const SHIELD_SELF = [263, 479, 271, 272, 273, 274], ARMOR_SELF = [265, 267, 268, 269, 270];
 
-const A = { focus: ['dps'], utils: [], utilsShip: 0, tank: 'auto', resist: 'auto', selfRep: 'auto', weapon: 'auto', meta: 't2', budget: 0, minDps: 0, minEhp: 0, minSpeed: 0, capStable: false, skills: 'max', role: 'auto', mineTarget: 'ore', target: 'any', range: 'any', implants: false, impBudget: 500 };
+const A = { focus: ['dps'], extra: [], utils: [], utilsShip: 0, tank: 'auto', resist: 'auto', selfRep: 'auto', weapon: 'auto', meta: 't2', budget: 0, minDps: 0, minEhp: 0, minSpeed: 0, capStable: false, skills: 'max', role: 'auto', mineTarget: 'ore', target: 'any', range: 'any', implants: false, impBudget: 500 };
 // 交战距离（米），0 为不看距离
 const RANGES = { any: 0, close: 5000, mid: 20000, long: 50000, xlong: 100000 };
 const S = { running: false, cancel: false, results: [] };
@@ -231,14 +270,18 @@ function evaluate(fit) {
   const { remote, mining } = roleMetrics(calc);
   const cargo = st.cargo || 0;
   let score;
+  const m = { st, dps, tankV, speed, active, cargo };
   // 后勤 / 采矿 / 运输：以本职指标为主，其余兼顾坦克
   if (ROLES.has('logi')) score = ln(remote) + 0.4 * ln(tankV) + 0.05 * ln(speed);
   else if (ROLES.has('mining')) score = ln(mining * 100) + 0.3 * ln(tankV) + 0.05 * ln(speed);
   else if (ROLES.has('hauler')) score = ln(cargo) + 0.3 * ln(tankV) + 0.1 * ln(speed) - 0.1 * ln(st.navigation.align);
   else {
-    const f = focusSet(), w = (k) => (k === 'dps' && A.weapon === 'none' ? 0 : FOCUS_W[k][f.has(k) ? 0 : 1]);
-    score = w('dps') * ln(dps) + w('tank') * ln(tankV) + w('speed') * ln(speed);
+    const f = focusSet();
+    score = 0;
+    for (const d of FOCUS) { const w = f.has(d.k) ? d.w : d.minor || 0; if (w && !(d.gun && A.weapon === 'none')) score += w * focusTerm(d, m); }
   }
+  // 后勤 / 采矿 / 运输船：另外想加强的属性
+  if (JOBS.some((j) => ROLES.has(j))) for (const k of extraSet()) score += FOCUS_BY[k].w * focusTerm(FOCUS_BY[k], m);
   // 约束：不满足时大幅扣分（差得越多扣得越多）
   const short = (v, min) => (min > 0 && v < min ? 2 + 5 * (1 - v / min) : 0);
   let penalty = short(dps, A.minDps) + short(ehp, A.minEhp) + short(speed, A.minSpeed);
@@ -250,7 +293,7 @@ function evaluate(fit) {
   if (A.budget > 0 && cost > A.budget * 1e6) penalty += 2 + 5 * (cost / (A.budget * 1e6) - 1);
   // 极小的价格项：效果相同的组合取便宜的，不影响实际效果的比较
   const thrift = 1e-5 * ln(cost / 1e6);
-  return { st, ok, score: score + extra - penalty - thrift, met: penalty === 0, cost, dps, paper, ehp, speed, active, remote, mining, cargo, align: st.navigation.align };
+  return { st, ok, score: score + extra - penalty - thrift, met: penalty === 0, cost, dps, paper, ehp, tankV, speed, active, remote, mining, cargo, align: st.navigation.align };
 }
 
 // ---------- 候选 ----------
@@ -264,6 +307,10 @@ function buildCandidates(shipType, tankType, resistMode = 'active') {
   const usable = (t) => t.market && metas.includes(t.meta ?? 1) && !/^Civilian /.test(t.en || '') && (prices.get(t.id) || 0) <= budget &&
     (!levels || t.skills.every(([s, l]) => (levels.get(s) || 0) >= l));
   const fits = (t) => usable(t) && !FE.cannotFit(data, shipType, t);
+  // 选了的属性：能提升舰船上这项属性的中 / 低槽装备和改装件也加进候选（如信号放大器、惯性稳定器、跃迁改装件），改装件不受 RIG_EXCLUDE 限制
+  const want = new Map();
+  for (const k of wantSet()) for (const [a, dir] of Object.entries(FOCUS_BY[k].ship || {})) want.set(Number(a), dir > 0);
+  const improves = (t) => want.size > 0 && t.effects.some((e) => (data.effects.get(e)?.mods || []).some(([func, domain, attr, src, op]) => func === 0 && domain === 1 && want.has(attr) && raises(op, t.attrs.get(src)) === want.get(attr)));
   // 同分组、属性完全相同的（如各势力同款装备、同款弹药）只留最便宜的；没有价格的排在后面
   const all = sameStatsCheapest([...data.types.values()].filter(usable), prices);
   const metaRank = (t) => ({ 2: 50, 6: 60, 5: 70, 4: 40, 3: 30 }[t.meta] || 10);
@@ -307,9 +354,9 @@ function buildCandidates(shipType, tankType, resistMode = 'active') {
     // 采矿船加采矿改良设备，运输船加扩充货柜舱与货柜改装件
     if (slot === 'low' && ROLES.has('mining') && A.mineTarget !== 'gas') groups.add(MINING_UPGRADE);
     if (slot === 'low' && ROLES.has('hauler')) groups.add(CARGO_EXP);
-    const rigBad = (t) => slot === 'rig' && RIG_EXCLUDE.test(t.en || '') && !(ROLES.has('hauler') && /Cargohold Optimization/i.test(t.en || ''));
+    const rigBad = (t) => slot === 'rig' && RIG_EXCLUDE.test(t.en || '') && !(ROLES.has('hauler') && /Cargohold Optimization/i.test(t.en || '')) && !improves(t);
     const mineOk = (t) => t.group !== MINING_UPGRADE || (A.mineTarget === 'ice') === /Ice|Harvester/i.test(t.en || '');
-    const list = all.filter((t) => t.slot === slot && groups.has(t.group) && fits(t) && !rigBad(t) && mineOk(t));
+    const list = all.filter((t) => t.slot === slot && (groups.has(t.group) || improves(t)) && fits(t) && !rigBad(t) && mineOk(t));
     bySlot[slot] = slot === 'rig' ? list : prune(list);   // 改装件在下面按族挑 T2 / T1
   }
   // 定位装备：同一族（分组 + 尺寸）只留最好的一件，尺寸交给装配时按 CPU / 电网挑
@@ -736,7 +783,7 @@ function setupScoring(shipType) {
   DIST = ENEMY ? ENEMY.dist : RANGES[A.range] || 0;
   const P = shipProfile(shipType);
   ROLES = new Set(A.role === 'combat' ? [] : P.roles);
-  const fighting = !['logi', 'mining', 'hauler'].some((r) => ROLES.has(r));
+  const fighting = !JOBS.some((r) => ROLES.has(r));
   SELF_REP = A.selfRep === 'auto' && P.rep && fighting ? 'yes' : A.selfRep;
   return { P, fighting };
 }
@@ -939,7 +986,7 @@ export async function counterFit({ fit, enemy, skills = 'max', onProgress }) {
   S.cancel = false;
   BASE = fit; ENEMY = enemy; SKILLS = skills;
   // 按普通战斗船配（输出 + 坦克），功能装备按舰船加成，不看装配页设的最低要求、目标体型
-  Object.assign(A, { focus: ['dps', 'tank'], utils: defaultUtils(ctx.data.types.get(fit.ship)), utilsShip: fit.ship, tank: 'auto', resist: 'auto', selfRep: 'auto', weapon: 'auto',
+  Object.assign(A, { focus: ['dps', 'tank'], extra: [], utils: defaultUtils(ctx.data.types.get(fit.ship)), utilsShip: fit.ship, tank: 'auto', resist: 'auto', selfRep: 'auto', weapon: 'auto',
     minDps: 0, minEhp: 0, minSpeed: 0, capStable: false, role: 'auto', target: 'any', range: 'any', implants: false });
   try {
     const out = await search((n) => onProgress?.(n));
@@ -969,7 +1016,7 @@ export async function aiAutoFit({ ship, fixed = [], focus = ['dps'], utils = nul
   S.cancel = false;
   BASE = { id: null, name: '', ship, slots: { high: [], mid: [], low: [], rig: [], sub: [] }, drones: [], implants: [] };
   SKILLS = skills; FIXED = fixed;
-  Object.assign(A, { focus, utils: utils || defaultUtils(shipType), utilsShip: ship, tank, resist: 'auto', selfRep: 'auto', weapon, meta, budget,
+  Object.assign(A, { focus, extra: [], utils: utils || defaultUtils(shipType), utilsShip: ship, tank, resist: 'auto', selfRep: 'auto', weapon, meta, budget,
     minDps, minEhp, minSpeed, capStable, role: 'auto', target: 'any', range: 'any', implants: false });
   try {
     const out = await search((n) => onProgress?.(n));
@@ -1010,7 +1057,7 @@ function implantCandidates() {
 }
 
 // 植入体单独装上时最明显的变化（相对没有植入体），用于说明「这个植入体有什么用」
-const EFFECT_KEYS = [['dps', 'DPS'], ['ehp', 'EHP'], ['active', '主动坦'], ['remote', '远程维修'], ['mining', '采矿'], ['cargo', '货柜'], ['speed', '速度']];
+const EFFECT_KEYS = [['dps', 'DPS'], ['ehp', 'EHP'], ['active', '每秒维修量'], ['remote', '远程维修'], ['mining', '采矿'], ['cargo', '货柜'], ['speed', '速度']];
 function effectText(r, r0) {
   const out = [];
   for (const [k, label] of EFFECT_KEYS) {
@@ -1020,6 +1067,14 @@ function effectText(r, r0) {
   }
   if (r0.align > 0 && r.align < r0.align * 0.999) out.push([1 - r.align / r0.align, `起跳 −${((1 - r.align / r0.align) * 100).toFixed(1)}%`]);
   if (r.st.capacitor.stable && !r0.st.capacitor.stable) out.push([0.05, '电容稳定']);
+  // 其余属性栏里的属性（跃迁速度、锁定距离、信号半径等）；电容只在本来就不稳定、装上也不稳定时比可维持时间
+  for (const f of FOCUS) {
+    if (['dps', 'tank', 'speed', 'cargo', 'align'].includes(f.k) || (f.k === 'cap' && (r0.st.capacitor.stable || r.st.capacitor.stable))) continue;
+    const a = f.v(r0), b = f.v(r);
+    if (!(a > 0) || !(b > 0)) continue;
+    const d = f.less ? 1 - b / a : b / a - 1;
+    if (d > 0.001) out.push([d, `${f.l} ${f.less ? '−' : '+'}${(d * 100).toFixed(1)}%`]);
+  }
   return out.sort((a, b) => b[0] - a[0]).slice(0, 2).map((x) => x[1]).join('，') || '小幅提升';
 }
 
@@ -1149,6 +1204,9 @@ function implantPlanHtml(p, i, applyAttr) {
   const r = p.r, b = p.base;
   const pct = (k) => (b[k] > 0 && r[k] / b[k] - 1 > 0.0005 ? `<small class="up"> +${((r[k] / b[k] - 1) * 100).toFixed(1)}%</small>` : '');
   const roles = [...ROLES];
+  // 选了要加强、下面没有固定显示的属性
+  const fpct = (f) => { const a = f.v(b), c = f.v(r); const d = a > 0 ? (f.less ? 1 - c / a : c / a - 1) : 0; return d > 0.0005 ? `<small class="up"> ${f.less ? '−' : '+'}${(d * 100).toFixed(1)}%</small>` : ''; };
+  const wanted = [...wantSet()].filter((k) => FOCUS_BY[k].f && k !== 'align').map((k) => FOCUS_BY[k]);
   const stats = [
     roles.includes('logi') ? `<div><span>远程维修</span><b>${r.remote.toFixed(0)}${pct('remote')}</b></div>` : '',
     roles.includes('mining') ? `<div><span>采矿</span><b>${(r.mining * 60).toFixed(0)}<small> m³/分</small>${pct('mining')}</b></div>` : '',
@@ -1156,8 +1214,9 @@ function implantPlanHtml(p, i, applyAttr) {
     r.paper >= 1 ? `<div><span>DPS</span><b>${r.dps.toFixed(0)}${pct('dps')}</b></div>` : '',
     `<div><span>EHP</span><b>${num(Math.round(r.ehp))}${pct('ehp')}</b></div>`,
     `<div><span>速度</span><b>${r.speed.toFixed(0)}${pct('speed')}</b></div>`,
-    r.active > b.active * 1.001 ? `<div><span>主动坦</span><b>${r.active.toFixed(0)}${pct('active')}</b></div>` : '',
-    `<div><span>起跳</span><b>${r.align.toFixed(1)}<small> 秒</small>${b.align > r.align * 1.0005 ? `<small class="up"> −${((1 - r.align / b.align) * 100).toFixed(1)}%</small>` : ''}</b></div>`,
+    r.active > b.active * 1.001 ? `<div title="每秒能修回多少有效血量（护盾回充 + 维修装备）"><span>每秒维修量</span><b>${r.active.toFixed(0)}<small> EHP</small>${pct('active')}</b></div>` : '',
+    `<div><span>起跳时间</span><b>${r.align.toFixed(1)}<small> 秒</small>${b.align > r.align * 1.0005 ? `<small class="up"> −${((1 - r.align / b.align) * 100).toFixed(1)}%</small>` : ''}</b></div>`,
+    ...wanted.map((f) => `<div><span>${f.l}</span><b>${f.f(r)}${fpct(f)}</b></div>`),
     `<div><span>植入体估价</span><b>${p.cost ? isk(p.cost) : '—'}</b></div>`
   ].join('');
   const rows = p.items.map((x) => `<div class="fa-imp-row"><span class="fa-imp-slot">${x.slot}</span><img src="${IMG(x.id)}" alt="" width="24" height="24" loading="lazy"><span class="fa-imp-name">${esc(data.types.get(x.id)?.name || x.id)}<small>${esc(x.effect)}</small></span><span class="fa-imp-cost">${x.cost ? isk(x.cost) : '—'}</span></div>`).join('');
@@ -1225,6 +1284,16 @@ function aimHtml() {
     <p class="fa-aim">${summary}</p>`;
 }
 
+// 要加强的属性：按装配页属性栏的分组排（火力 / 防御 / 电容 / 机动 / 锁定 / 其他），attr 为点击用的 data 属性
+function focusHtml(attr, cur) {
+  const secs = [...new Set(FOCUS.map((f) => f.sec))];
+  return `<div class="fa-attrs">${secs.map((sec) => `<span class="fa-attrs-sec">${sec}</span><div class="fa-utils">${FOCUS.filter((f) => f.sec === sec).map((f) => {
+    const off = f.gun && A.weapon === 'none';
+    return `<button type="button" class="fa-util${cur.has(f.k) ? ' active' : ''}" ${attr}="${f.k}" aria-pressed="${cur.has(f.k)}"${off ? ' disabled title="已选「不装武器」"' : ''}>${f.l}</button>`;
+  }).join('')}</div>`).join('')}</div>`;
+}
+const jobOf = (ship) => (A.role === 'combat' ? [] : shipProfile(ship).roles).find((r) => JOBS.includes(r));
+
 function renderForm() {
   const esc = ctx.esc;
   const ship = ctx.data.types.get(ctx.getFit().ship);
@@ -1257,9 +1326,9 @@ function renderForm() {
     ${P.labels.length ? `<div class="fa-bonus"><span>舰船加成</span>${P.labels.map((l) => `<em>${esc(l)}</em>`).join('')}</div>` : ''}
     ${P.roles.length ? section('舰船定位', field('', seg('role', [['auto', '按加成：' + P.roles.map((r) => ROLE_NAME[r]).join(' / ')], ['combat', '当普通战斗船']]), )
       + (roles.includes('mining') ? field('采矿对象', seg('mineTarget', [['ore', '矿石'], ['ice', '冰矿'], ['gas', '气云']]), help.mineTarget) : '')) : ''}
-    ${section('侧重', job ? `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量' }[job]}配装，其余兼顾坦克</p>`
-      : `<div class="fa-goals">${FOCUS.map(([k, l]) => `<button type="button" class="fa-goal${focusSet().has(k) ? ' active' : ''}" data-fa-focus="${k}" aria-pressed="${focusSet().has(k)}"${k === 'dps' && A.weapon === 'none' ? ' disabled title="已选「不装武器」"' : ''}><b>${l}</b></button>`).join('')}</div><p class="fa-hint">可多选组合，如输出 + 速度（风筝）、坦克 + 速度</p>`)}
-    ${section('功能装备 <small>先放好，其余槽位按侧重填</small>', utilsHtml(ship, P))}
+    ${job ? section('要加强的属性', `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量' }[job]}配装，其余兼顾坦克</p>${focusHtml('data-fa-extra', extraSet())}<p class="fa-hint">另外想加强的属性，可不选</p>`)
+      : section('要加强的属性 <small>和装配页属性栏对应，可多选</small>', `${focusHtml('data-fa-focus', focusSet())}<p class="fa-hint">如 DPS + 最大速度（风筝）、锁定距离 + 扫描分辨率；没选的 DPS、EHP、速度仍稍微兼顾</p>`)}
+    ${section('功能装备 <small>先放好，其余槽位按要加强的属性填</small>', utilsHtml(ship, P))}
     ${job ? '' : section('打什么目标', aimHtml())}
     ${section('最低要求 <small>填 0 表示不限</small>', `<div class="fa-grid3">
         <label class="fa-num"><span>DPS</span><input type="number" min="0" step="10" value="${A.minDps}" data-fa-num="minDps"></label>
@@ -1283,7 +1352,7 @@ function renderForm() {
 
 // 侧重、功能装备是多选：点一下切换（侧重至少留一个）
 function toggleIn(key, v) {
-  const set = new Set(key === 'focus' ? focusSet() : A[key] || []);
+  const set = new Set(key === 'focus' ? focusSet() : key === 'extra' ? extraSet() : A[key] || []);
   if (set.has(v)) { if (key !== 'focus' || set.size > 1) set.delete(v); } else set.add(v);
   A[key] = [...set];
   ctx.store.setJSON(KEY, A);
@@ -1321,6 +1390,8 @@ function onClick(e) {
   if (e.target.closest('[data-fa-close]') || e.target.classList.contains('modal-backdrop')) { close(); return; }
   const fo = e.target.closest('[data-fa-focus]');
   if (fo) { toggleIn('focus', fo.dataset.faFocus); renderForm(); return; }
+  const ex = e.target.closest('[data-fa-extra]');
+  if (ex) { toggleIn('extra', ex.dataset.faExtra); renderForm(); return; }
   const ut = e.target.closest('[data-fa-util]');
   if (ut) { toggleIn('utils', ut.dataset.faUtil); renderForm(); return; }
   const set = e.target.closest('[data-fa-set]');
@@ -1338,7 +1409,8 @@ function onClick(e) {
     const r = S.results[Number(apply.dataset.faApply)];
     const fit = clone(r.fit);
     for (const s of ctx.FE.SLOTS) for (const m of fit.slots[s]) if (m) delete m.fixed;
-    fit.name = `智能装配 · ${FOCUS.filter(([k]) => focusSet().has(k)).map(([, l]) => l).join(' + ')}`;
+    const job = jobOf(ctx.data.types.get(ctx.getFit().ship));
+    fit.name = `智能装配 · ${[...(job ? [ROLE_NAME[job]] : []), ...FOCUS.filter((f) => (job ? extraSet() : focusSet()).has(f.k)).map((f) => f.l)].join(' + ')}`;
     if (!A.implants) fit.implants = [...(ctx.getFit().implants || [])];
     ctx.applyFit(fit);
     close();
@@ -1380,6 +1452,8 @@ function renderResults(results, { tankType, resistMode, roles, placed, selfRep }
   const box = $('faResults');
   if (!results.length) { box.innerHTML = '<div class="fa-empty">没有找到可行的装配</div>'; return; }
   const name = (id) => data.types.get(id)?.name || id;
+  // 选了要加强、上面没有固定显示的属性（电容固定显示；运输船的货柜也是）
+  const wanted = [...wantSet()].filter((k) => FOCUS_BY[k].f && k !== 'cap' && !(k === 'cargo' && roles.includes('hauler'))).map((k) => FOCUS_BY[k]);
   const aimed = A.target !== 'any' || A.range !== 'any';
   const aimText = aimed ? '对' + (A.target !== 'any' ? ctx.FE.TARGETS[A.target].name : '任意目标') + (A.range !== 'any' ? ` @ ${RANGES[A.range] / 1000} km` : '') + ' · ' : '';
   const roleText = roles.length || placed.length ? roles.map((r) => ROLE_NAME[r]).join(' / ') + (placed.length ? `（预留${placed.join('、')}）` : '') + ' · ' : '';
@@ -1408,7 +1482,8 @@ function renderResults(results, { tankType, resistMode, roles, placed, selfRep }
         <div><span>EHP</span><b>${num(Math.round(r.ehp))}</b></div>
         <div><span>速度</span><b>${r.speed.toFixed(0)}</b></div>
         <div><span>电容</span><b class="${st.capacitor.stable ? 'good' : 'bad'}">${st.capacitor.stable ? (st.capacitor.level * 100).toFixed(0) + '%' : Math.round(st.capacitor.lasts / 60) + ' 分'}</b></div>
-        ${SELF_REP === 'yes' ? `<div><span>主动坦</span><b>${r.active.toFixed(0)}</b></div>` : ''}
+        ${SELF_REP === 'yes' ? `<div title="每秒能修回多少有效血量（护盾回充 + 维修装备）"><span>每秒维修量</span><b>${r.active.toFixed(0)}<small> EHP</small></b></div>` : ''}
+        ${wanted.map((f) => `<div><span>${f.l}</span><b>${f.f(r)}</b></div>`).join('')}
         <div><span>估价</span><b>${r.cost ? isk(r.cost) : '—'}</b></div>
       </div>
       ${groups}
@@ -1472,8 +1547,8 @@ function renderImpForm() {
   $('fiForm').innerHTML = `
     <div class="fa-ship"><img src="${IMG(ship.id)}" alt="" width="32" height="32"><b>${esc(ship.name)}</b>${P.roles.map((r) => `<span class="fa-role">${ROLE_NAME[r]}</span>`).join('')}</div>
     <p class="fa-note">${mods ? `当前 ${mods} 件装备${cur ? `，${cur} 个植入体（套用后替换）` : ''}` : '还没有装备，建议先装好'}</p>
-    ${section('侧重', job ? `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量与起跳时间' }[job]}挑植入体，其次是坦克</p>`
-      : `<div class="fa-goals">${FOCUS.map(([k, l]) => `<button type="button" class="fa-goal${focusSet().has(k) ? ' active' : ''}" data-fi-focus="${k}" aria-pressed="${focusSet().has(k)}"${k === 'dps' && A.weapon === 'none' ? ' disabled title="已选「不装武器」"' : ''}><b>${l}</b></button>`).join('')}</div><p class="fa-hint">可多选组合，如输出 + 速度（风筝）、坦克 + 速度</p>`)}
+    ${job ? section('要加强的属性', `<p class="fa-note">${ROLE_NAME[job]}船按${{ logi: '远程维修量', mining: '采矿量', hauler: '货柜容量与起跳时间' }[job]}挑植入体，其次是坦克</p>${focusHtml('data-fi-extra', extraSet())}<p class="fa-hint">另外想加强的属性，可不选</p>`)
+      : section('要加强的属性 <small>和装配页属性栏对应，可多选</small>', `${focusHtml('data-fi-focus', focusSet())}<p class="fa-hint">如跃迁速度、起跳时间、锁定距离；没选的 DPS、EHP、速度仍稍微兼顾</p>`)}
     ${section('预算与技能', `<div class="fa-field"><label>植入体预算</label><div class="fa-unit"><input type="number" class="fa-input" min="0" step="50" value="${A.impBudget}" data-fi-num="impBudget"><span>百万 ISK</span></div><p class="fa-hint">按全服均价，0 为不限</p></div>
       <div class="fa-field"><label>技能</label>${seg('skills', [['max', '全 5 级'], ['esi', bound || ctx.hasEsi() ? '按角色' : '按角色（未绑定）']])}${A.skills === 'esi' ? '<p class="fa-hint">只推荐技能够用的植入体</p>' : ''}</div>`)}
     <button type="submit" class="btn btn-primary fa-go">${IS.running ? '计算中…' : '推荐植入体'}</button>`;
@@ -1483,6 +1558,8 @@ function onImpClick(e) {
   if (e.target.closest('[data-fi-close]') || e.target.classList.contains('modal-backdrop')) { closeImp(); return; }
   const fo = e.target.closest('[data-fi-focus]');
   if (fo) { toggleIn('focus', fo.dataset.fiFocus); renderImpForm(); return; }
+  const ex = e.target.closest('[data-fi-extra]');
+  if (ex) { toggleIn('extra', ex.dataset.fiExtra); renderImpForm(); return; }
   const set = e.target.closest('[data-fi-set]');
   if (set) {
     const k = set.dataset.fiSet;

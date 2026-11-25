@@ -4431,13 +4431,14 @@ html.pie-open { overflow: hidden; }
 .fa-unit span { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 0.75rem; color: var(--text-muted); pointer-events: none; }
 .fa-field .segmented { display: flex; flex-wrap: wrap; }
 .fa-field .segmented button { flex: 1 1 auto; min-width: 0; padding: 0 6px; white-space: nowrap; }
-.fa-goals { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
-.fa-goal, .fa-util { display: flex; align-items: center; justify-content: center; gap: 4px; padding: 8px 10px; border: 0; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-primary); font: inherit; cursor: pointer; }
-.fa-goal b { font-size: 0.8125rem; }
-.fa-goal:hover, .fa-util:hover { background: var(--bg-hover); }
-.fa-goal.active, .fa-util.active { background: var(--accent-soft); color: var(--accent-primary); }
-.fa-goal:disabled { opacity: .4; cursor: not-allowed; }
+.fa-util { display: flex; align-items: center; justify-content: center; gap: 4px; padding: 8px 10px; border: 0; border-radius: var(--radius-md); background: var(--bg-tertiary); color: var(--text-primary); font: inherit; cursor: pointer; }
+.fa-util:hover { background: var(--bg-hover); }
+.fa-util.active { background: var(--accent-soft); color: var(--accent-primary); }
+.fa-util:disabled { opacity: .4; cursor: not-allowed; }
 .fa-utils { display: flex; flex-wrap: wrap; gap: 6px; }
+/* 要加强的属性：左边是装配页属性栏的分组名，右边是可多选的属性 */
+.fa-attrs { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 10px; align-items: center; }
+.fa-attrs-sec { font-size: 0.75rem; color: var(--text-muted); }
 .fa-util { padding: 6px 12px; font-size: 0.8125rem; }
 .fa-util small { font-size: 0.625rem; padding: 0 5px; border-radius: 999px; background: color-mix(in srgb, var(--accent-primary) 18%, transparent); color: var(--accent-primary); }
 .fa-opts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; }
