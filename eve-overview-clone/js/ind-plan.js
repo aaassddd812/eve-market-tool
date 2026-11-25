@@ -89,11 +89,11 @@ function attemptsFor(k, p, conf = 0.95) {
   }
   return Math.ceil(k / p * 2);
 }
-// 平均要发明几次：还差的拷贝数 ÷ 成功率，四舍五入（至少 k 次）
+// 平均要发明几次：还差的拷贝数 ÷ 成功率，不是整数就进一位（44% 开 1 张：1 ÷ 0.44 = 2.27 → 3 次；减个小数防 1 ÷ 0.5 算成 2.0000001 进到 3）
 function attemptsAvg(k, p) {
   if (p >= 1) return k;
   if (p <= 0) return Infinity;
-  return Math.max(k, Math.round(k / p));
+  return Math.max(k, Math.ceil(k / p - 1e-9));
 }
 // 制造规划排几次发明、买多少数据核心 / 解码器：「发明进度」里选按平均（默认，P.invConf 'avg'）或按 95% 把握（'p95'）；成本都按平均算
 const planAttempts = (k, p) => (P.invConf === 'p95' ? attemptsFor(k, p) : attemptsAvg(k, p));
@@ -876,7 +876,7 @@ function inventHtml(r) {
       <td class="num">${left ? `还差 ${num(left)} 张` : '<span class="up">已够</span>'}</td>
       <td class="num"${left && Number.isFinite(alt) ? ` title="${P.invConf === 'p95' ? `平均约 ${num(alt)} 次` : `想有 95% 把握要 ${num(alt)} 次`}"` : ''}>${left ? `${Number.isFinite(n) ? num(n) : '—'} 次<small class="hc-sub">约 ${isk(n * q.inv.attempt)}</small>` : '—'}</td></tr>`;
   }).join('');
-  return `<div class="pi-card"><div class="pi-card-head"><h3>发明进度</h3><div class="segmented" role="group" title="按平均：还差的拷贝数 ÷ 成功率（四舍五入），运气差时要补开几次；按 95% 把握：开这么多次有 95% 的可能凑够，多买些数据核心和解码器。只影响排几次发明和买多少料，成本都按平均算">${[['avg', '按平均'], ['p95', '按 95% 把握']].map(([k, l]) => `<button type="button" data-plan-invconf="${k}" class="${(P.invConf === 'p95' ? 'p95' : 'avg') === k ? 'active' : ''}">${l}</button>`).join('')}</div><span class="toolbar-spacer"></span><label class="pi-inline" title="每次发明用掉 T1 蓝图拷贝的 1 个流程。打开：规划里加上拷贝任务（时间和费用）；关掉：已经有足够的拷贝"><input type="checkbox" class="ka-switch" data-plan-copyon${P.copy ? ' checked' : ''}><span>自己拷 T1 蓝图</span></label></div>
+  return `<div class="pi-card"><div class="pi-card-head"><h3>发明进度</h3><div class="segmented" role="group" title="按平均：还差的拷贝数 ÷ 成功率，不是整数就进一位，运气差时要补开几次；按 95% 把握：开这么多次有 95% 的可能凑够，多买些数据核心和解码器。只影响排几次发明和买多少料，成本都按平均算">${[['avg', '按平均'], ['p95', '按 95% 把握']].map(([k, l]) => `<button type="button" data-plan-invconf="${k}" class="${(P.invConf === 'p95' ? 'p95' : 'avg') === k ? 'active' : ''}">${l}</button>`).join('')}</div><span class="toolbar-spacer"></span><label class="pi-inline" title="每次发明用掉 T1 蓝图拷贝的 1 个流程。打开：规划里加上拷贝任务（时间和费用）；关掉：已经有足够的拷贝"><input type="checkbox" class="ka-switch" data-plan-copyon${P.copy ? ' checked' : ''}><span>自己拷 T1 蓝图</span></label></div>
     <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>产品</th><th class="num">需要拷贝</th><th class="num">已发明</th><th class="num">已成功</th><th class="num pi-hide-sm">成功率</th><th class="num">进度</th><th class="num">还要发明</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
