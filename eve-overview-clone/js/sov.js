@@ -677,7 +677,7 @@ function detailHtml(R) {
   const devs = o?.dev ? `<span class="sov-dev" title="军事 / 工业 / 战略等级（0–5）">军事 ${o.dev[0] ?? '–'} · 工业 ${o.dev[1] ?? '–'} · 战略 ${o.dev[2] ?? '–'}${o.capital ? ' · 首都' : ''}</span>` : '';
   const net = (k) => r.res[k] - r.fuel[k];
   return `<div class="sov-sys-head"><h3><a href="#map=${id}" data-sov-map="${id}">${esc(s.name)}</a></h3>
-      <span class="text-muted">${esc(D.consts.get(s.cons)?.name)} · ${esc(D.regions.get(s.region))} · ${s.sec.toFixed(1)}</span>
+      <span class="text-muted">${esc(D.consts.get(s.cons)?.name)} · ${esc(D.regions.get(s.region))} · ${(Math.sign(s.sec) * Math.round(Math.abs(s.sec) * 10) / 10 || 0).toFixed(1)}</span>
       ${o ? `<span class="sov-owner">${esc(ownerName(o))}</span>${devs}` : (D.owners ? '<span class="text-muted">无主</span>' : '')}
       <span class="toolbar-spacer"></span>${P.auto ? '' : '<button class="btn btn-ghost btn-sm" data-sov-auto>一键规划</button>'}<button class="btn btn-ghost btn-sm" data-sov-remove="${id}">移出规划</button></div>
     <div class="pi-stats sov-stats">

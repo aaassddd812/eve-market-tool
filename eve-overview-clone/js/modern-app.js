@@ -819,7 +819,7 @@ function showPageSkeleton(view) {
 // 主权规划：首次进入时加载
 let sovLoading = null;
 function loadSovModule() {
-  if (!sovLoading) sovLoading = import('./sov.js?v=v10').then((m) => {
+  if (!sovLoading) sovLoading = import('./sov.js?v=v11').then((m) => {
     m.initSov({
       esc, formatNumber, formatISK, showToast, store, fetchESI, resolveNames, openMapSystem,
       getEsiToken: ensureEsiToken, hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -842,7 +842,7 @@ async function openSov() {
 // 虫洞：首次进入时加载
 let whLoading = null;
 function loadWormholeModule() {
-  if (!whLoading) whLoading = import('./wormhole.js?v=v7').then((m) => {
+  if (!whLoading) whLoading = import('./wormhole.js?v=v8').then((m) => {
     m.initWormhole({
       esc, formatISK, formatNumber, showToast, store, loadKillboard, resolveTypeNames, accountToken,
       accounts: () => readEsiAccounts().map((a) => ({ id: a.character_id, name: a.character_name, scopes: Array.isArray(a.scopes) ? a.scopes : String(a.scopes || '').split(/\s+/) })),
@@ -897,7 +897,7 @@ async function openPlaza() {
 // AI 助手：首次进入时加载；工具在浏览器里执行（装配引擎、击杀记录接口、ESI）
 let aiLoading = null;
 function loadAiModule() {
-  if (!aiLoading) aiLoading = import('./ai.js?v=v23').then((m) => {
+  if (!aiLoading) aiLoading = import('./ai.js?v=v24').then((m) => {
     m.initAi({
       esc, formatISK, formatNumber, showToast, copyText, store, server: SERVER, fetchESI, esiAuthFetch, esiAuthFetchPaged, resolveTypeNames, resolveNames,
       hasEsiToken: () => Boolean((state.esiToken || readEsiToken())?.access_token),
@@ -1076,7 +1076,7 @@ async function getHubSellOrders(ids) {
 // 制造：首次进入时加载
 let industryLoading = null;
 function loadIndustryModule() {
-  if (!industryLoading) industryLoading = import('./industry.js?v=v79').then((m) => {
+  if (!industryLoading) industryLoading = import('./industry.js?v=v80').then((m) => {
     m.initIndustry({ addToCart, allChars,
       esc, formatISK, formatNumber, formatPrice, showToast, copyText, store, fetchESI,
       getHubPrices: getJitaPrices, getLiveHubPrices, getHubSellOrders, getCharacterSkills, getCharacterImplants, esiAuthFetch, esiAuthFetchPaged, ensureEsiToken,
@@ -1142,7 +1142,7 @@ async function openEftFit(text) {
 // 快递合同：首次进入时加载
 let courierLoading = null;
 function loadCourierModule() {
-  if (!courierLoading) courierLoading = import('./courier.js?v=v14').then((m) => {
+  if (!courierLoading) courierLoading = import('./courier.js?v=v15').then((m) => {
     m.initCourier({
       esc, formatISK, formatNumber, showToast, copyText, store, esiAuthFetch, officialName, loadNpcNames, resolveNames, openMapSystem, openEftFit, game: gameActions,
       // 公开拍卖（快递页的「拍卖」模式，auctions.js 首次切换时加载）
@@ -1249,7 +1249,7 @@ async function openAppraisal() {
 // 行星工业规划：首次进入时加载
 let piLoading = null;
 function loadPiModule() {
-  if (!piLoading) piLoading = import('./pi-planner.js?v=v71').then((m) => {
+  if (!piLoading) piLoading = import('./pi-planner.js?v=v72').then((m) => {
     m.initPi({ addToCart, closeDrawer: () => { if (MOBILE_QUERY.matches) closeDrawer(); },
       esc, formatISK, formatNumber, showToast, store, getMarketPriceMap, fetchESI,
       // 我的殖民地（pi-colonies.js，展开时才加载）
@@ -1488,7 +1488,7 @@ async function openKbPageImpl(restored) {
 let killboardModule = null;
 let killboardLoading = null;
 function loadKillboard() {
-  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v61').then((m) => {
+  if (!killboardLoading) killboardLoading = import('./killboard.js?v=v62').then((m) => {
     m.initKillboard({
       esc, formatISK, formatNumber, loadNpcNames, officialName, resolveNames, resolveTypeNames, getMarketPriceMap, openKillFit, valuation, showToast, copyText,
       game: gameActions,
@@ -1504,7 +1504,7 @@ function loadKillboard() {
 let starMapModule = null;
 let starMapLoading = null;
 function loadStarMapModule() {
-  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v67').then((m) => {
+  if (!starMapLoading) starMapLoading = import('./star-map.js?v=v68').then((m) => {
     m.initStarMap({
       fetchESI, esc, formatNumber, formatISK, loadNpcNames, officialName, resolveNames, resolveTypeNames,
       showToast, copyText, store, debounce, isTypingTarget, getMarketPriceMap,

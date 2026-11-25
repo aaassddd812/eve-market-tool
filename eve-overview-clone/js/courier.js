@@ -106,9 +106,10 @@ function loadGraph() {
   return graphPromise;
 }
 
+// 与游戏一致：四舍五入到 0.1，00 显示负数，极低的正安等显示为 0.1
 function secDisplay(sec) {
-  if (sec > 0 && sec < 0.05) return 0.1;   // 与游戏一致：极低的正安等显示为 0.1
-  return Math.max(0, Math.round(sec * 10) / 10);
+  if (sec > 0 && sec < 0.05) return 0.1;
+  return Math.sign(sec) * Math.round(Math.abs(sec) * 10) / 10 || 0;
 }
 // 0 高安 / 1 低安 / 2 00（波赫文按 00 算）
 function secClass(sec, region) {

@@ -839,7 +839,7 @@ async function renderThera(body) {
     type: (r) => r.x.wh_type || null, size: (r) => (SIZE_ORDER.includes(r.x.max_ship_size) ? SIZE_ORDER.indexOf(r.x.max_ship_size) : null),
     left: (r) => r.x.remaining_hours ?? null, jumps: (r) => r.jumps
   });
-  const secTxt = (sec) => { const v = sec > 0 && sec < 0.05 ? 0.1 : Math.max(0, Math.round(sec * 10) / 10); return `<b class="${v >= 0.45 ? 'up' : v > 0 ? 'warn' : 'down'}">${v.toFixed(1)}</b>`; };
+  const secTxt = (sec) => { const v = sec > 0 && sec < 0.05 ? 0.1 : Math.sign(sec) * Math.round(Math.abs(sec) * 10) / 10 || 0; return `<b class="${v >= 0.45 ? 'up' : v > 0 ? 'warn' : 'down'}">${v.toFixed(1)}</b>`; };
   const hub = (x) => x.out_system_id === 31000005 ? '席拉' : x.out_system_id === 30002086 ? '图尔努尔' : esc(x.out_system_name);
   body.innerHTML = `<div class="pi-card ind-rank-filters"><div class="ind-rank-row">
       <div class="pi-inline"><span>从</span><input type="search" class="pi-input wh-origin" data-wh-origin list="whOriginList" placeholder="输入所在星系（中文名，回车）" value="${esc(S.origin)}" spellcheck="false" aria-label="出发星系"></div>

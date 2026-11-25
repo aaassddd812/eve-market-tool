@@ -1159,7 +1159,7 @@ const TOOLS = {
     const stops = [a, ...order, b];
     const ids = [a.id];
     for (let i = 1; i < stops.length; i++) ids.push(...(await leg(stops[i - 1].id, stops[i].id)).slice(1));
-    const sec = (s) => Math.round(Math.max(0, s.sec) * 10) / 10;
+    const sec = (s) => (s.sec > 0 && s.sec < 0.05 ? 0.1 : Math.sign(s.sec) * Math.round(Math.abs(s.sec) * 10) / 10 || 0);
     const cls = (s) => (sec(s) >= 0.5 ? '高安' : sec(s) > 0 ? '低安' : '00');
     const counts = { 高安: 0, 低安: 0, '00': 0 };
     const list = ids.map((id) => {

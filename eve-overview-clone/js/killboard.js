@@ -181,7 +181,7 @@ export function systemLabel(id) {
   const sys = systemTable.get(id);
   const name = app.officialName(id) || '星系 ' + id;
   if (!sys) return { name, sec: null, secText: '虫洞', color: '#9b7bd4', region: '' };
-  const d = sys.sec > 0 && sys.sec < 0.05 ? 0.1 : Math.max(0, Math.round(sys.sec * 10) / 10);
+  const d = sys.sec > 0 && sys.sec < 0.05 ? 0.1 : Math.sign(sys.sec) * Math.round(Math.abs(sys.sec) * 10) / 10 || 0;   // 00 显示负数，与游戏一致
   const color = d >= 0.5 ? 'var(--buy-color)' : d > 0 ? 'var(--warning)' : 'var(--sell-color)';
   return { name, sec: d, secText: d.toFixed(1), color, region: sys.region };
 }

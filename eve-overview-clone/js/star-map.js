@@ -103,13 +103,16 @@ const INCURSION_STATE_ZH = { established: '已建立', mobilizing: '动员中', 
 // ---------- 工具 ----------
 const $ = (id) => document.getElementById(id);
 
+// 与客户端一致（maputils.GetRoundedSecurityStatus）：四舍五入到 0.1、远离零取整，00 显示负数（如 -0.4），-0.0 记 0.0；极低的正安等显示为 0.1
 function secDisplay(sec) {
-  if (sec > 0 && sec < 0.05) return 0.1;   // 与游戏一致：极低的正安等显示为 0.1
-  return Math.max(0, Math.round(sec * 10) / 10);
+  if (sec > 0 && sec < 0.05) return 0.1;
+  return Math.sign(sec) * Math.round(Math.abs(sec) * 10) / 10 || 0;
 }
+// 配色 / 图例分档：0.0 及以下都按 0.0
+const secKey = (sec) => Math.max(0, secDisplay(sec)).toFixed(1);
 
 function secColor(sec) {
-  return SEC_COLORS[secDisplay(sec).toFixed(1)];
+  return SEC_COLORS[secKey(sec)];
 }
 
 function secClass(sec) {
@@ -1062,9 +1065,9 @@ function renderLegend() {
 
   if (M.layer === 'security') {
     const counts = {};
-    for (const s of M.systems) { const k = secDisplay(s.sec).toFixed(1); counts[k] = (counts[k] || 0) + 1; }
+    for (const s of M.systems) { const k = secKey(s.sec); counts[k] = (counts[k] || 0) + 1; }
     for (const k of SEC_KEYS) {
-      const set = new Set(M.systems.filter((s) => secDisplay(s.sec).toFixed(1) === k).map((s) => s.i));
+      const set = new Set(M.systems.filter((s) => secKey(s.sec) === k).map((s) => s.i));
       add('sec:' + k, set);
       rows.push(legendRow({ color: SEC_COLORS[k], label: k + (k === '0.0' ? ' 及以下（00）' : Number(k) >= 0.5 ? ' 高安' : ' 低安'), count: counts[k] || 0, key: 'sec:' + k }));
     }

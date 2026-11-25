@@ -141,12 +141,12 @@ const commodity = (id) => D.pi.commodities[id] || ['Type ' + id, '', 0, 0];
 const cName = (id) => commodity(id)[0];
 const tierOf = (id) => commodity(id)[2];
 
-// 安全等级显示（与星图一致：0.0–0.05 之间显示为 0.1）
+// 安全等级显示（与星图一致：0.0–0.05 之间显示为 0.1，00 显示负数）
 function secInfo(sec) {
-  const d = sec > 0 && sec < 0.05 ? 0.1 : Math.max(0, Math.round(sec * 10) / 10);
+  const d = sec > 0 && sec < 0.05 ? 0.1 : Math.sign(sec) * Math.round(Math.abs(sec) * 10) / 10 || 0;
   const cls = d >= 0.5 ? 'high' : d > 0 ? 'low' : 'null';
   const color = cls === 'high' ? 'var(--buy-color)' : cls === 'low' ? 'var(--warning)' : 'var(--sell-color)';
-  return { text: sec < 0 && sec <= -0.99 ? '-1.0' : d.toFixed(1), cls, color };
+  return { text: d.toFixed(1), cls, color };
 }
 
 function planetName(sys, p) { return `${sys.name} ${ROMAN[p.index] || p.index}`; }

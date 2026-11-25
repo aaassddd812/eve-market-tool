@@ -185,9 +185,9 @@ const BP = (pid) => D.data.bp[pid];
 const invFor = (pid) => (BP(pid) ? D.data.inv[BP(pid)[0]] : null);
 
 function secInfo(sec) {
-  const d = sec > 0 && sec < 0.05 ? 0.1 : Math.max(0, Math.round(sec * 10) / 10);
+  const d = sec > 0 && sec < 0.05 ? 0.1 : Math.sign(sec) * Math.round(Math.abs(sec) * 10) / 10 || 0;   // 00 显示负数，与游戏一致
   const color = d >= 0.5 ? 'var(--buy-color)' : d > 0 ? 'var(--warning)' : 'var(--sell-color)';
-  return { text: sec <= -0.99 ? '-1.0' : d.toFixed(1), color, cls: d >= 0.5 ? 'high' : d > 0 ? 'low' : 'null' };
+  return { text: d.toFixed(1), color, cls: d >= 0.5 ? 'high' : d > 0 ? 'low' : 'null' };
 }
 const sysLabel = (id) => {
   const s = D.sys.get(id);
