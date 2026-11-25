@@ -1,5 +1,5 @@
 // 制造页的扩展功能（由 industry.js 调用，复用它的计算函数）：
-// 计算器里的「解码器对比」（每种解码器的总成本 / 利润，标出最优）与「发明次数」（按二项分布，约 95% 把握拿到所需拷贝要发明几次）、
+// 计算器里的「解码器对比」（每种解码器的总成本 / 利润，标出最优）与「发明次数」（平均几次，以及按二项分布约 95% 把握拿到所需拷贝要发明几次，两种各要多少数据核心 / 解码器）、
 //   「材料效率影响」（ME 0–10 的成本与利润）、「研究与拷贝」（ME / TE 研究到目标等级、拷贝的时间与费用，以及研究后每流程省多少、几个流程回本）；
 // 「制造规划」页：多个产品一起规划——组件可选自制并逐级展开汇总，扣除库存（ESI 资产或粘贴），产线启动清单（每个任务的流程数与时间），
 //   每个产品可以停用（it.off：已经造好挂单、只想留着看成本的），停用的照样算成本 / 利润，但不进购物清单、产线和合计，
@@ -27,7 +27,7 @@ const SK = { science: 3402, research: 3403, metallurgy: 3409, advIndustry: 3388 
 // assign：任务键（自动拆出的批为「任务键#批号」）→ 指定的产线（'c:人物 ID' = 这个人物任意空闲的线；'l:产线 ID' = 某条线）；
 // prio：拖动时放下的开工时间（秒，只用来排先后）；charOff：不参与的人物；charMax：人物各类产线最多用几条；
 // fix：手动分批，任务键（成品「t编号:0」、组件「c产品」）→ 拆成几个任务，不管开没开自动拆分都照它拆
-const P = { items: [], build: [], slots: 10, rslots: 10, islots: 10, lanes: 'manual', auto: true, stock: 'none', stockLoc: 'all', running: true, copy: true, paste: '', tab: 'plan', assign: {}, prio: {}, fix: {}, charOff: [], charMax: {} };
+const P = { items: [], build: [], slots: 10, rslots: 10, islots: 10, lanes: 'manual', auto: true, stock: 'none', stockLoc: 'all', running: true, copy: true, invConf: 'avg', paste: '', tab: 'plan', assign: {}, prio: {}, fix: {}, charOff: [], charMax: {} };
 const FOLD = {};   // 计算器里折叠卡片的展开状态（本次会话内）
 const S = { assets: null, assetsErr: null, assetsBusy: false, owned: null, ownedLoading: null, chars: null, charsLoading: null, bpStock: null, bpStockLoading: null };   // bpStock：「蓝图」统计用的我有的蓝图   // chars：按人物分配产线时各角色的产线数与进行中的任务
 
@@ -49,7 +49,7 @@ export function initPlan(api) {
   }
 }
 const nextUid = () => Math.max(0, ...P.items.map((it) => it.uid || 0)) + 1;
-const savePlan = () => X.ctx.store.setJSON(PLAN_KEY, { items: P.items, build: P.build, slots: P.slots, rslots: P.rslots, islots: P.islots, lanes: P.lanes, auto: P.auto, stock: P.stock, stockLoc: P.stockLoc, running: P.running, copy: P.copy, paste: P.paste, tab: P.tab, assign: P.assign, prio: P.prio, fix: P.fix, charOff: P.charOff, charMax: P.charMax });
+const savePlan = () => X.ctx.store.setJSON(PLAN_KEY, { items: P.items, build: P.build, slots: P.slots, rslots: P.rslots, islots: P.islots, lanes: P.lanes, auto: P.auto, stock: P.stock, stockLoc: P.stockLoc, running: P.running, copy: P.copy, invConf: P.invConf, paste: P.paste, tab: P.tab, assign: P.assign, prio: P.prio, fix: P.fix, charOff: P.charOff, charMax: P.charMax });
 export const planCount = () => P.items.length;
 
 function newItem(pid, { runs = 1, me = null, te = null, invent = null, dec = 0 } = {}) {
@@ -89,6 +89,14 @@ function attemptsFor(k, p, conf = 0.95) {
   }
   return Math.ceil(k / p * 2);
 }
+// 平均要发明几次：还差的拷贝数 ÷ 成功率，四舍五入（至少 k 次）
+function attemptsAvg(k, p) {
+  if (p >= 1) return k;
+  if (p <= 0) return Infinity;
+  return Math.max(k, Math.round(k / p));
+}
+// 制造规划排几次发明、买多少数据核心 / 解码器：「发明进度」里选按平均（默认，P.invConf 'avg'）或按 95% 把握（'p95'）；成本都按平均算
+const planAttempts = (k, p) => (P.invConf === 'p95' ? attemptsFor(k, p) : attemptsAvg(k, p));
 
 export function calcExtrasHtml(r) {
   return [r.inv ? decryptorHtml(r) : '', meHtml(r), researchHtml(r)].join('');
@@ -107,8 +115,9 @@ function decryptorHtml(r) {
   // 发明次数：要造 r.runs 个流程需要几份拷贝
   const inv = r.inv;
   const copies = Math.ceil(r.runs / inv.runs);
-  const expect = Math.ceil(copies / inv.prob);
+  const expect = attemptsAvg(copies, inv.prob);
   const n95 = attemptsFor(copies, inv.prob);
+  const mats = (n) => (Number.isFinite(n) ? inv.dcs.map(([id, q]) => esc(X.tName(id)) + ' ×' + X.ctx.formatNumber(q * n)).join(window.I18N?.lang === 'en' ? ', ' : '、') + (X.C.dec ? `，解码器 ×${X.ctx.formatNumber(n)}` : '') : '—');
   return `<div class="pi-card"><div class="pi-card-head"><h3>解码器对比</h3><span class="text-muted">按 ${r.runs} 个流程</span></div>
     <div class="pi-table-wrap"><table class="pi-table ind-dec-table"><thead><tr><th>解码器</th><th class="num">成功率</th><th class="num">拷贝流程</th><th class="num">ME / TE</th><th class="num pi-hide-sm">发明 / 流程</th><th class="num">单个成本</th><th class="num">总利润</th><th class="num pi-hide-sm">每小时利润</th><th></th></tr></thead><tbody>
     ${rows.map(({ dec, q, ph }) => `<tr class="${dec === X.C.dec ? 'active' : ''}">
@@ -118,8 +127,7 @@ function decryptorHtml(r) {
       <td class="num ${q.profit >= 0 ? 'up' : 'down'}">${isk(q.profit)}</td><td class="num pi-hide-sm">${isk(ph)}</td>
       <td>${dec === X.C.dec ? '<span class="text-muted">当前</span>' : `<button type="button" class="link-btn" data-plan-dec="${dec}">使用</button>`}</td></tr>`).join('')}
     </tbody></table></div>
-    <p class="pi-note">需 ${copies} 份拷贝，平均发明 ${expect} 次；95% 把握开 <b>${Number.isFinite(n95) ? n95 : '—'}</b> 次发明
-      （${inv.dcs.map(([id, q]) => esc(X.tName(id)) + ' ×' + X.ctx.formatNumber(q * (Number.isFinite(n95) ? n95 : expect))).join('、')}${X.C.dec ? `，解码器 ×${Number.isFinite(n95) ? n95 : expect}` : ''}）</p></div>`;
+    <p class="pi-note">需 ${copies} 份拷贝，平均发明 <b>${Number.isFinite(expect) ? expect : '—'}</b> 次（${mats(expect)}）；95% 把握开 <b>${Number.isFinite(n95) ? n95 : '—'}</b> 次（${mats(n95)}）。成本按平均算</p></div>`;
 }
 
 function meHtml(r) {
@@ -348,7 +356,7 @@ function stockMap() {
 // ---------- 规划计算 ----------
 // 供应顺序：库存（资产 / 粘贴）+ 正在造的产出（ESI 工业任务，P.running）→ 自制组件 → 购买。
 // 每个任务记下在哪座建筑造（job().fac），购物清单按用到它的建筑列出「送到」。
-// T2 产品还要发明：按「发明进度」里还差的拷贝数、95% 把握算发明次数，排到科研产线上，成品等发明完成才开工；
+// T2 产品还要发明：按「发明进度」里还差的拷贝数算发明次数（默认按平均，可选按 95% 把握，planAttempts），排到科研产线上，成品等发明完成才开工；
 // 数据核心、解码器列进购物清单（费用已含在发明成本里，不重复计入材料费）。
 function planCompute() {
   const { BP, job } = X;
@@ -368,18 +376,18 @@ function planCompute() {
     // 发明任务
     if (q.inv) {
       const left = Math.max(0, Math.ceil(q.runs / q.inv.runs) - (it.invGot || 0));
-      const n95 = left ? attemptsFor(left, q.inv.prob) : 0;
-      if (Number.isFinite(n95) && n95 > 0) {
+      const n = left ? planAttempts(left, q.inv.prob) : 0;
+      if (Number.isFinite(n) && n > 0) {
         const per = [...q.inv.dcs.map(([id, c]) => [id, c]), ...(it.dec ? [[it.dec, 1]] : [])];
-        jobs.push({ key: `i${it.uid}`, pid: it.pid, bp: q.inv.t1bp, runs: n95, secs: q.inv.secs * n95, cost: q.inv.jobCost * n95, act: 'i', depth: -1, top: i, fac: q.inv.fac, facId: q.inv.facId, mats: per.map(([id]) => id), per, inv: true });
+        jobs.push({ key: `i${it.uid}`, pid: it.pid, bp: q.inv.t1bp, runs: n, secs: q.inv.secs * n, cost: q.inv.jobCost * n, act: 'i', depth: -1, top: i, fac: q.inv.fac, facId: q.inv.facId, mats: per.map(([id]) => id), per, inv: true });
         // 每次发明用掉 T1 拷贝的 1 个流程：拷贝 ⌈次数 ÷ 每份最多流程⌉ 份（P.copy 关掉 = 已经有拷贝）
         const t1 = P.copy ? t1Prod(q.inv.t1bp) : null;
-        const sj = t1 ? scienceJob(t1, 'copy', n95) : null;
+        const sj = t1 ? scienceJob(t1, 'copy', n) : null;
         if (sj) {
           const max = Math.max(1, X.BP(t1)[4] || 1);
-          jobs.push({ key: `y${it.uid}`, pid: it.pid, bp: q.inv.t1bp, runs: Math.ceil(n95 / max), copyRuns: Math.min(max, n95), secs: sj.secs, cost: sj.cost, act: 'c', depth: -2, top: i, fac: sj.fac, facId: sj.facId, mats: [], per: [], copy: true });
+          jobs.push({ key: `y${it.uid}`, pid: it.pid, bp: q.inv.t1bp, runs: Math.ceil(n / max), copyRuns: Math.min(max, n), secs: sj.secs, cost: sj.cost, act: 'c', depth: -2, top: i, fac: sj.fac, facId: sj.facId, mats: [], per: [], copy: true });
         }
-        const inv = [...q.inv.dcs.map(([id, c]) => [id, c * n95]), ...(it.dec ? [[it.dec, n95]] : [])];
+        const inv = [...q.inv.dcs.map(([id, c]) => [id, c * n]), ...(it.dec ? [[it.dec, n]] : [])];
         for (const [id, c] of inv) { const b = buy.get(id) || { need: 0, to: new Set(), inv: true }; b.need += c; b.to.add(q.inv.fac); buy.set(id, b); }
       }
     }
@@ -847,7 +855,7 @@ function charsHtml() {
   return `<ul class="ind-chars">${rows}</ul><p class="pi-note">${noR ? `无人能做反应，按手动 ${P.rslots} 条算。` : ''}<button type="button" class="link-btn" data-plan-chars>重新读取</button></p>`;
 }
 
-// 发明进度：已经发明了多少次、成功几张，按二项分布估算还要再发明几次
+// 发明进度：已经发明了多少次、成功几张，估算还要再发明几次（按平均，或按二项分布 95% 把握）
 function inventHtml(r) {
   const { esc, formatISK: isk, formatNumber: num } = X.ctx;
   const list = r.items.map(({ it, q }, i) => ({ it, q, i })).filter((x) => x.q.inv && !x.it.off);
@@ -856,7 +864,8 @@ function inventHtml(r) {
     const need = Math.ceil(q.runs / q.inv.runs);
     const got = Math.min(it.invGot || 0, 100000), tried = it.invTry || 0;
     const left = Math.max(0, need - got);
-    const n95 = left ? attemptsFor(left, q.inv.prob) : 0;
+    const n = left ? planAttempts(left, q.inv.prob) : 0;
+    const alt = left ? (P.invConf === 'p95' ? attemptsAvg(left, q.inv.prob) : attemptsFor(left, q.inv.prob)) : 0;
     const real = tried ? got / tried : null;
     return `<tr>
       <td><div class="pi-prod"><img src="${X.ICON(it.pid)}" alt="" width="20" height="20" loading="lazy"><span>${esc(X.tName(it.pid))}</span></div></td>
@@ -865,9 +874,9 @@ function inventHtml(r) {
       <td class="num"><input type="number" class="pi-input ind-plan-num" min="0" max="100000" value="${got}" data-plan-item="${i}" data-k="invGot"></td>
       <td class="num pi-hide-sm">${(q.inv.prob * 100).toFixed(1)}%${real != null ? `<small class="hc-sub ${real >= q.inv.prob ? 'up' : 'down'}">实际 ${(real * 100).toFixed(1)}%</small>` : ''}</td>
       <td class="num">${left ? `还差 ${num(left)} 张` : '<span class="up">已够</span>'}</td>
-      <td class="num">${left ? `${num(n95)} 次<small class="hc-sub">约 ${isk(n95 * q.inv.attempt)}</small>` : '—'}</td></tr>`;
+      <td class="num"${left && Number.isFinite(alt) ? ` title="${P.invConf === 'p95' ? `平均约 ${num(alt)} 次` : `想有 95% 把握要 ${num(alt)} 次`}"` : ''}>${left ? `${Number.isFinite(n) ? num(n) : '—'} 次<small class="hc-sub">约 ${isk(n * q.inv.attempt)}</small>` : '—'}</td></tr>`;
   }).join('');
-  return `<div class="pi-card"><div class="pi-card-head"><h3>发明进度</h3><span class="text-muted">按 95% 把握算还要发明几次</span><span class="toolbar-spacer"></span><label class="pi-inline" title="每次发明用掉 T1 蓝图拷贝的 1 个流程。打开：规划里加上拷贝任务（时间和费用）；关掉：已经有足够的拷贝"><input type="checkbox" class="ka-switch" data-plan-copyon${P.copy ? ' checked' : ''}><span>自己拷 T1 蓝图</span></label></div>
+  return `<div class="pi-card"><div class="pi-card-head"><h3>发明进度</h3><div class="segmented" role="group" title="按平均：还差的拷贝数 ÷ 成功率（四舍五入），运气差时要补开几次；按 95% 把握：开这么多次有 95% 的可能凑够，多买些数据核心和解码器。只影响排几次发明和买多少料，成本都按平均算">${[['avg', '按平均'], ['p95', '按 95% 把握']].map(([k, l]) => `<button type="button" data-plan-invconf="${k}" class="${(P.invConf === 'p95' ? 'p95' : 'avg') === k ? 'active' : ''}">${l}</button>`).join('')}</div><span class="toolbar-spacer"></span><label class="pi-inline" title="每次发明用掉 T1 蓝图拷贝的 1 个流程。打开：规划里加上拷贝任务（时间和费用）；关掉：已经有足够的拷贝"><input type="checkbox" class="ka-switch" data-plan-copyon${P.copy ? ' checked' : ''}><span>自己拷 T1 蓝图</span></label></div>
     <div class="pi-table-wrap"><table class="pi-table"><thead><tr><th>产品</th><th class="num">需要拷贝</th><th class="num">已发明</th><th class="num">已成功</th><th class="num pi-hide-sm">成功率</th><th class="num">进度</th><th class="num">还要发明</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
@@ -931,7 +940,7 @@ function bpState(e, h) {
   const num = X.ctx.formatNumber;
   if (e.t2 && e.uses.size === 1) {
     if (h && h.runs >= e.t2.runs) return { text: '已够', cls: 'up', tip: '已有的 T2 拷贝流程够了，可以在「发明进度」里填上已成功的张数，就不用再发明' };
-    return e.t2.left ? { text: `发明 ${num(e.t2.left)} 张`, cls: '', tip: '在「发明进度」里按 95% 把握算了要发明几次' } : { text: '已够', cls: 'up', tip: '已经发明够了' };
+    return e.t2.left ? { text: `发明 ${num(e.t2.left)} 张`, cls: '', tip: P.invConf === 'p95' ? '在「发明进度」里按 95% 把握算了要发明几次' : '在「发明进度」里按平均算了要发明几次' } : { text: '已够', cls: 'up', tip: '已经发明够了' };
   }
   if (!h) return null;
   if (e.uses.has('r')) {
@@ -1208,6 +1217,8 @@ export function onPlanEvent(e) {
     }
     if (t.matches('[data-plan-auto]')) { P.auto = t.checked; savePlan(); return 'plan'; }
     if (t.matches('[data-plan-copyon]')) { P.copy = t.checked; savePlan(); return 'plan'; }
+    const ic = t.closest('[data-plan-invconf]');
+    if (ic) { P.invConf = ic.dataset.planInvconf === 'p95' ? 'p95' : 'avg'; savePlan(); return 'plan'; }
     if (t.matches('[data-plan-running]')) { P.running = t.checked; savePlan(); return 'plan'; }
     if (t.closest('[data-plan-rerun]')) { S.running = null; return 'plan'; }
     const ln = t.closest('[data-plan-lanes]');
